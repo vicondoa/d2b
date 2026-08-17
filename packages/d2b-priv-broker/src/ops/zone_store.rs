@@ -17,9 +17,10 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use d2b_contracts::broker_wire::{OpenZoneStoreResponse, ZoneStoreDisposition};
 use d2b_contracts::v3::storage::{
-    ZoneStoreDescriptorPublicationRequirement, ZoneStoreFilesystemRequirement,
-    ZoneStoreFsyncRequirement, ZoneStoreId, ZoneStoreLockingRequirement, ZoneStorePrincipal,
-    ZoneStoreReplacementDetection, ZoneStoreReplacementPublicationRequirement, ZoneStoreStorageRow,
+    ZoneStoreAuxiliaryDirectory, ZoneStoreDescriptorPublicationRequirement,
+    ZoneStoreDirectoryRepairOwner, ZoneStoreFilesystemRequirement, ZoneStoreFsyncRequirement,
+    ZoneStoreId, ZoneStoreLockingRequirement, ZoneStorePrincipal, ZoneStoreReplacementDetection,
+    ZoneStoreReplacementPublicationRequirement, ZoneStoreStorageRow,
 };
 use d2b_core::bundle_resolver::BundleResolver;
 use nix::fcntl::{FcntlArg, FdFlag, fcntl};
@@ -38,6 +39,8 @@ const ZONE_STORE_PARENT_PREFIX: &str = "zone-store-parent-";
 const ZONE_STORE_MARKER_PREFIX: &str = "zone-store-marker-";
 const DATABASE_NAME: &str = "store.redb";
 const MARKER_NAME: &str = ".d2b-store-marker";
+const AUDIT_DIRECTORY_NAME: &str = "audit";
+const TELEMETRY_DIRECTORY_NAME: &str = "telemetry";
 const MARKER_VERSION: u32 = 1;
 const PARENT_MODE: u32 = 0o750;
 const MARKER_MODE: u32 = 0o640;
@@ -101,6 +104,16 @@ struct ResolvedZoneStoreRow {
     database_name: &'static str,
     marker_name: &'static str,
     identity_marker_id: String,
+    owner_uid: u32,
+    group_gid: u32,
+    mode: u32,
+    audit_directory: ResolvedZoneAuxiliaryDirectory,
+    telemetry_directory: ResolvedZoneAuxiliaryDirectory,
+}
+
+#[derive(Debug, Clone)]
+struct ResolvedZoneAuxiliaryDirectory {
+    name: &'static str,
     owner_uid: u32,
     group_gid: u32,
     mode: u32,
@@ -172,6 +185,16 @@ fn resolve_signed_row(
     let owner_uid = resolve_user(&row.ownership.owner)?;
     let group_gid = resolve_group(&row.ownership.group)?;
     let mode = parse_mode(row.ownership.mode.as_str())?;
+    let audit_directory = resolve_auxiliary_directory(
+        &row.auxiliary_directories.audit,
+        &format!("zone-store-audit-{zone}"),
+        AUDIT_DIRECTORY_NAME,
+    )?;
+    let telemetry_directory = resolve_auxiliary_directory(
+        &row.auxiliary_directories.telemetry,
+        &format!("zone-store-telemetry-{zone}"),
+        TELEMETRY_DIRECTORY_NAME,
+    )?;
 
     let state_root = resolver
         .find_storage_path_spec(STATE_ROOT_STORAGE_ID)
@@ -197,6 +220,31 @@ fn resolve_signed_row(
         owner_uid,
         group_gid,
         mode,
+        audit_directory,
+        telemetry_directory,
+    })
+}
+
+fn resolve_auxiliary_directory(
+    directory: &ZoneStoreAuxiliaryDirectory,
+    expected_id: &str,
+    name: &'static str,
+) -> Result<ResolvedZoneAuxiliaryDirectory, ZoneStoreError> {
+    if directory.directory_id.as_str() != expected_id
+        || directory.owner.as_str() != "d2bd"
+        || directory.group.as_str() != "d2bd"
+        || directory.mode.as_str() != "0700"
+        || directory.repair_owner != ZoneStoreDirectoryRepairOwner::PrivilegedBroker
+    {
+        return Err(ZoneStoreError::InvalidStorageRow(
+            "auxiliary-directory-invariant",
+        ));
+    }
+    Ok(ResolvedZoneAuxiliaryDirectory {
+        name,
+        owner_uid: resolve_user(&directory.owner)?,
+        group_gid: resolve_group(&directory.group)?,
+        mode: parse_mode(directory.mode.as_str())?,
     })
 }
 
@@ -296,6 +344,8 @@ fn open_resolved_row(row: &ResolvedZoneStoreRow) -> Result<ZoneStoreOutcome, Zon
         .ok_or(ZoneStoreError::PathSafetyViolation("state-root-missing"))?;
     let _state_root_fd = open_anchored_directory(state_root, false)?;
     let parent_fd = open_anchored_directory(&row.parent_directory, true)?;
+    provision_auxiliary_directory(&parent_fd, &row.audit_directory)?;
+    provision_auxiliary_directory(&parent_fd, &row.telemetry_directory)?;
     let marker_present = marker_exists(&parent_fd, row.marker_name)?;
     let database_present = database_exists(&parent_fd, row.database_name)?;
 
@@ -305,6 +355,54 @@ fn open_resolved_row(row: &ResolvedZoneStoreRow) -> Result<ZoneStoreOutcome, Zon
         } else {
             ZoneStoreError::DatabaseMissing
         });
+    }
+
+    fn provision_auxiliary_directory(
+        parent: &OwnedFd,
+        directory: &ResolvedZoneAuxiliaryDirectory,
+    ) -> Result<(), ZoneStoreError> {
+        let flags = OFlags::RDONLY | OFlags::DIRECTORY | OFlags::NOFOLLOW | OFlags::CLOEXEC;
+        let fd = match openat(parent, directory.name, flags, Mode::empty()) {
+            Ok(fd) => fd,
+            Err(error) if error == rustix::io::Errno::NOENT => {
+                mkdirat(parent, directory.name, Mode::from_raw_mode(directory.mode))
+                    .map_err(|_| ZoneStoreError::Io("auxiliary-directory-create-failed"))?;
+                fsync(parent).map_err(|_| ZoneStoreError::Io("parent-directory-fsync-failed"))?;
+                openat(parent, directory.name, flags, Mode::empty()).map_err(|error| {
+                    if error == rustix::io::Errno::LOOP || error == rustix::io::Errno::NOTDIR {
+                        ZoneStoreError::PathSafetyViolation("auxiliary-directory-symlink-refused")
+                    } else {
+                        ZoneStoreError::Io("auxiliary-directory-open-failed")
+                    }
+                })?
+            }
+            Err(error)
+                if error == rustix::io::Errno::LOOP || error == rustix::io::Errno::NOTDIR =>
+            {
+                return Err(ZoneStoreError::PathSafetyViolation(
+                    "auxiliary-directory-symlink-refused",
+                ));
+            }
+            Err(_) => return Err(ZoneStoreError::Io("auxiliary-directory-open-failed")),
+        };
+        let stat =
+            fstat(&fd).map_err(|_| ZoneStoreError::Io("auxiliary-directory-fstat-failed"))?;
+        if FileType::from_raw_mode(stat.st_mode) != FileType::Directory {
+            return Err(ZoneStoreError::PathSafetyViolation(
+                "auxiliary-directory-not-directory",
+            ));
+        }
+        fchmod(&fd, Mode::from_raw_mode(directory.mode))
+            .map_err(|_| ZoneStoreError::Io("auxiliary-directory-chmod-failed"))?;
+        nix_fchown(
+            fd.as_raw_fd(),
+            Some(Uid::from_raw(directory.owner_uid)),
+            Some(Gid::from_raw(directory.group_gid)),
+        )
+        .map_err(|_| ZoneStoreError::Io("auxiliary-directory-chown-failed"))?;
+        fsync(&fd).map_err(|_| ZoneStoreError::Io("auxiliary-directory-fsync-failed"))?;
+        fsync(parent).map_err(|_| ZoneStoreError::Io("parent-directory-fsync-failed"))?;
+        Ok(())
     }
 
     let (database_fd, disposition) = if database_present {
@@ -836,6 +934,18 @@ mod tests {
                 owner_uid: owner,
                 group_gid: group,
                 mode: 0o640,
+                audit_directory: ResolvedZoneAuxiliaryDirectory {
+                    name: AUDIT_DIRECTORY_NAME,
+                    owner_uid: owner,
+                    group_gid: group,
+                    mode: 0o700,
+                },
+                telemetry_directory: ResolvedZoneAuxiliaryDirectory {
+                    name: TELEMETRY_DIRECTORY_NAME,
+                    owner_uid: owner,
+                    group_gid: group,
+                    mode: 0o700,
+                },
             },
         )
     }
@@ -850,6 +960,22 @@ mod tests {
                 "group": "d2b-zonert",
                 "mode": "0640",
                 "linkCount": 1
+            },
+            "auxiliaryDirectories": {
+                "audit": {
+                    "directoryId": "zone-store-audit-local-root",
+                    "owner": "d2bd",
+                    "group": "d2bd",
+                    "mode": "0700",
+                    "repairOwner": "privileged-broker"
+                },
+                "telemetry": {
+                    "directoryId": "zone-store-telemetry-local-root",
+                    "owner": "d2bd",
+                    "group": "d2bd",
+                    "mode": "0700",
+                    "repairOwner": "privileged-broker"
+                }
             },
             "filesystem": "regular-file-anchored-fd-relative-no-follow",
             "locking": "ofd-close-on-exec",
@@ -918,7 +1044,17 @@ mod tests {
 
     #[test]
     fn provision_and_reopen_are_idempotent_and_owned() {
-        let (_temp, row) = fixture();
+        let (temp, row) = fixture();
+        fs::set_permissions(
+            temp.path().join("zones/local-root"),
+            fs::Permissions::from_mode(0o750),
+        )
+        .expect("parent mode");
+        let parent_mode = fs::metadata(temp.path().join("zones/local-root"))
+            .expect("parent metadata")
+            .permissions()
+            .mode()
+            & 0o777;
         let first = open_resolved_row(&row).expect("provision");
         assert_eq!(
             first.response.disposition,
@@ -933,6 +1069,22 @@ mod tests {
         let identity = first.response.store_identity.clone();
         let first_stat = fstat(&first.database_fd).expect("database stat");
         drop(first);
+        for name in [AUDIT_DIRECTORY_NAME, TELEMETRY_DIRECTORY_NAME] {
+            let metadata = fs::metadata(temp.path().join("zones/local-root").join(name))
+                .expect("auxiliary directory metadata");
+            assert!(metadata.is_dir());
+            assert_eq!(metadata.uid(), NixUid::current().as_raw());
+            assert_eq!(metadata.gid(), NixGid::current().as_raw());
+            assert_eq!(metadata.permissions().mode() & 0o777, 0o700);
+        }
+        assert_eq!(
+            fs::metadata(temp.path().join("zones/local-root"))
+                .expect("parent metadata")
+                .permissions()
+                .mode()
+                & 0o777,
+            parent_mode
+        );
 
         let second = open_resolved_row(&row).expect("reopen");
         assert_eq!(second.response.disposition, ZoneStoreDisposition::Opened);

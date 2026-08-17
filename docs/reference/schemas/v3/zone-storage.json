@@ -4,6 +4,7 @@
   "description": "Complete closed storage row for one Zone resource store.",
   "type": "object",
   "required": [
+    "auxiliaryDirectories",
     "filesystem",
     "fsync",
     "locking",
@@ -16,6 +17,14 @@
     "zoneStoreId"
   ],
   "properties": {
+    "auxiliaryDirectories": {
+      "description": "Explicit d2bd-owned audit and telemetry directory posture.",
+      "allOf": [
+        {
+          "$ref": "#/definitions/ZoneStoreAuxiliaryDirectories"
+        }
+      ]
+    },
     "filesystem": {
       "description": "Required filesystem capability and path-resolution posture.",
       "allOf": [
@@ -99,6 +108,87 @@
   },
   "additionalProperties": false,
   "definitions": {
+    "ZoneStoreAuxiliaryDirectories": {
+      "description": "Broker-resolved directories used by the Zone runtime's audit and telemetry ports.",
+      "type": "object",
+      "required": [
+        "audit",
+        "telemetry"
+      ],
+      "properties": {
+        "audit": {
+          "description": "Durable authoritative audit directory.",
+          "allOf": [
+            {
+              "$ref": "#/definitions/ZoneStoreAuxiliaryDirectory"
+            }
+          ]
+        },
+        "telemetry": {
+          "description": "Best-effort telemetry receiver directory.",
+          "allOf": [
+            {
+              "$ref": "#/definitions/ZoneStoreAuxiliaryDirectory"
+            }
+          ]
+        }
+      },
+      "additionalProperties": false
+    },
+    "ZoneStoreAuxiliaryDirectory": {
+      "description": "Exact ownership and repair requirements for one Zone auxiliary directory.",
+      "type": "object",
+      "required": [
+        "directoryId",
+        "group",
+        "mode",
+        "owner",
+        "repairOwner"
+      ],
+      "properties": {
+        "directoryId": {
+          "description": "Opaque identifier for the broker-resolved directory.",
+          "allOf": [
+            {
+              "$ref": "#/definitions/ZoneStoreDirectoryId"
+            }
+          ]
+        },
+        "group": {
+          "description": "Required directory group.",
+          "allOf": [
+            {
+              "$ref": "#/definitions/ZoneStorePrincipal"
+            }
+          ]
+        },
+        "mode": {
+          "description": "Required directory mode.",
+          "allOf": [
+            {
+              "$ref": "#/definitions/ZoneStoreFileMode"
+            }
+          ]
+        },
+        "owner": {
+          "description": "Required directory owner.",
+          "allOf": [
+            {
+              "$ref": "#/definitions/ZoneStorePrincipal"
+            }
+          ]
+        },
+        "repairOwner": {
+          "description": "Sole authority allowed to provision or repair this directory.",
+          "allOf": [
+            {
+              "$ref": "#/definitions/ZoneStoreDirectoryRepairOwner"
+            }
+          ]
+        }
+      },
+      "additionalProperties": false
+    },
     "ZoneStoreDescriptorPublicationRequirement": {
       "description": "Required descriptor publication posture.",
       "oneOf": [
@@ -107,6 +197,25 @@
           "type": "string",
           "enum": [
             "owned-descriptor-close-on-exec-verified-before-concurrency"
+          ]
+        }
+      ]
+    },
+    "ZoneStoreDirectoryId": {
+      "description": "Opaque auxiliary Zone-directory identifier resolved only by the storage owner.",
+      "type": "string",
+      "maxLength": 160,
+      "minLength": 1,
+      "pattern": "^[a-z][a-z0-9-]{0,159}$"
+    },
+    "ZoneStoreDirectoryRepairOwner": {
+      "description": "The sole privileged repair authority for broker-provisioned Zone directories.",
+      "oneOf": [
+        {
+          "description": "The privileged broker is the only component allowed to create or repair the declared directory posture.",
+          "type": "string",
+          "enum": [
+            "privileged-broker"
           ]
         }
       ]

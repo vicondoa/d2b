@@ -17,6 +17,22 @@ fn canonical_row() -> Value {
             "mode": "0640",
             "linkCount": 1
         },
+        "auxiliaryDirectories": {
+            "audit": {
+                "directoryId": "zone-store-audit-local-root",
+                "owner": "d2bd",
+                "group": "d2bd",
+                "mode": "0700",
+                "repairOwner": "privileged-broker"
+            },
+            "telemetry": {
+                "directoryId": "zone-store-telemetry-local-root",
+                "owner": "d2bd",
+                "group": "d2bd",
+                "mode": "0700",
+                "repairOwner": "privileged-broker"
+            }
+        },
         "filesystem": "regular-file-anchored-fd-relative-no-follow",
         "locking": "ofd-close-on-exec",
         "marker": {
@@ -55,6 +71,7 @@ fn source_row_rejects_paths_missing_invariants_and_unknown_fields() {
         "storageOwnerPrincipal",
         "parentDirectoryId",
         "ownership",
+        "auxiliaryDirectories",
         "filesystem",
         "locking",
         "marker",
@@ -79,6 +96,18 @@ fn source_row_rejects_paths_missing_invariants_and_unknown_fields() {
         assert!(
             serde_json::from_value::<ZoneStoreStorageRow>(candidate).is_err(),
             "missing ownership invariant {field} must be rejected"
+        );
+    }
+
+    for field in ["audit", "telemetry"] {
+        let mut candidate = canonical_row();
+        candidate["auxiliaryDirectories"][field]
+            .as_object_mut()
+            .unwrap()
+            .remove("repairOwner");
+        assert!(
+            serde_json::from_value::<ZoneStoreStorageRow>(candidate).is_err(),
+            "missing auxiliary directory repair owner must be rejected"
         );
     }
 
@@ -121,6 +150,7 @@ fn generated_schema_is_closed_required_and_path_free() {
         "storageOwnerPrincipal",
         "parentDirectoryId",
         "ownership",
+        "auxiliaryDirectories",
         "filesystem",
         "locking",
         "marker",
@@ -140,6 +170,8 @@ fn generated_schema_is_closed_required_and_path_free() {
     }
     for definition in [
         "ZoneStoreOwnershipInvariant",
+        "ZoneStoreAuxiliaryDirectories",
+        "ZoneStoreAuxiliaryDirectory",
         "ZoneStoreMarkerInvariant",
         "ZoneStorePublicationInvariant",
     ] {
