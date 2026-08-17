@@ -1,4 +1,4 @@
-{ config, lib, pkgs, ... }:
+{ config, lib, pkgs, d2bHostTools, ... }:
 
 let
   clean = builtins.unsafeDiscardStringContext;
@@ -29,32 +29,7 @@ let
   # d2b-wayland-proxy: host-side Wayland proxy.
   # Built from the workspace so the binary path is available for the
   # wayland-proxy DAG node's binaryPath field.
-  packagesSrc = d2bLib.cleanRustPackagesSource ../packages;
-  d2bWaylandProxySourcePackage = pkgs.rustPlatform.buildRustPackage {
-    pname = "d2b-wayland-proxy";
-    version = "0.0.0";
-    src = packagesSrc;
-    cargoLock = {
-      lockFile = ../packages/Cargo.lock;
-      outputHashes."wl-proxy-0.1.2" = "sha256-1yO1zgzSyzQ2DnDMpVxcnI5BsTNvXfzIUS+RNlPj4A8=";
-    };
-    cargoBuildFlags = [ "--package" "d2b-wayland-proxy" ];
-    doCheck = false;
-    postPatch = ''
-      mkdir -p .cargo
-      cat > .cargo/config.toml <<EOF
-[build]
-rustc-wrapper = ""
-EOF
-      rm -f .cargo/rustc-wrapper.sh
-    '';
-    installPhase = ''
-      runHook preInstall
-      install -Dm755 target/x86_64-unknown-linux-gnu/release/d2b-wayland-proxy $out/bin/d2b-wayland-proxy 2>/dev/null \
-        || install -Dm755 target/release/d2b-wayland-proxy $out/bin/d2b-wayland-proxy
-      runHook postInstall
-    '';
-  };
+  d2bWaylandProxySourcePackage = d2bHostTools.waylandProxy;
   # The filter is tied to the checked-out policy implementation and is cheap
   # enough to build in the eval smoke fixtures. Keep it source-built even when
   # other host tools use release prebuilts so missing release assets cannot

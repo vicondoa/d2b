@@ -624,10 +624,8 @@ heavy-lane-host-integration: heavy-lane-guard
 	exit 0; \
 	fi; \
 	echo "test-host-integration: building vmChecks: $$names"; \
-	for name in $$names; do \
-	echo "==> nix build .#vmChecks.$$system.$$name"; \
-	nix build --no-link --print-build-logs ".#vmChecks.$$system.$$name"; \
-	done
+	echo "==> nix build .#vmChecks.$$system.*"; \
+	nix build --no-link --print-build-logs ".#vmChecks.$$system.*"
 ## test-hardware - G-hw: real GPU/YubiKey/hardware-TPM passthrough + full
 ## microVM boot. NixOS host WITH the devices only; CI cannot run this.
 ## Public heavy lanes: acquire a slot, then run the raw work behind the gate.
