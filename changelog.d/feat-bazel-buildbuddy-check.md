@@ -48,6 +48,8 @@
   authority change.
 - Keep Gas City fixture genrules out of `make bazel-check` and fetch
   the locked crate graph before the offline production-closure check.
+- Run the main, broker, and guest-shell-runner make/CI rust leaves
+  through per-leaf Bazel jobs instead of Cargo.
 - Fixed broker guest-control signing tests to use a path-safe test scratch root
   instead of a world-writable host temp directory.
 - Fixed local Bazel runfiles, Rust test-support graphs, stale coverage carriers,

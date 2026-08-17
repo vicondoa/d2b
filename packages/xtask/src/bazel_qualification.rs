@@ -1802,17 +1802,10 @@ fn transfer_summary(samples: &[ProviderSample], u9: &U9Bounds) -> Result<Map<Str
             "qualificationFailure".to_owned(),
             Value::String("provider-transfer-below-u9-bounds".to_owned()),
         );
-    } else if uploaded_p99.is_some_and(|value| value > u9.gross_input_bytes) {
-        output.insert(
-            "qualificationFailure".to_owned(),
-            Value::String("provider-transfer-outside-u9-bounds".to_owned()),
-        );
-    } else if downloaded_p99.is_some_and(|value| value > u9.output_bytes) {
-        output.insert(
-            "qualificationFailure".to_owned(),
-            Value::String("provider-transfer-outside-u9-bounds".to_owned()),
-        );
-    } else if p99.is_some_and(|value| value > upper_bound) {
+    } else if uploaded_p99.is_some_and(|value| value > u9.gross_input_bytes)
+        || downloaded_p99.is_some_and(|value| value > u9.output_bytes)
+        || p99.is_some_and(|value| value > upper_bound)
+    {
         output.insert(
             "qualificationFailure".to_owned(),
             Value::String("provider-transfer-outside-u9-bounds".to_owned()),
@@ -1988,10 +1981,10 @@ fn committed_bytes(root: &Path, relative: &str, context: &str) -> Result<Vec<u8>
         .output()
         .map_err(|error| format!("read committed {context}: {error}"))?;
     if output.status.success() {
-        if test_mode() {
-            if let Ok(working) = fs::read(root.join(path)) {
-                return Ok(working);
-            }
+        if test_mode()
+            && let Ok(working) = fs::read(root.join(path))
+        {
+            return Ok(working);
         }
         return Ok(output.stdout);
     }
@@ -2012,11 +2005,11 @@ fn digest_bytes(bytes: &[u8]) -> String {
 }
 
 fn git_commit(root: &Path) -> Result<String> {
-    if test_mode() {
-        if let Ok(test_commit) = env::var("D2B_QUALIFICATION_TEST_COMMIT") {
-            validate_commit(&test_commit)?;
-            return Ok(test_commit);
-        }
+    if test_mode()
+        && let Ok(test_commit) = env::var("D2B_QUALIFICATION_TEST_COMMIT")
+    {
+        validate_commit(&test_commit)?;
+        return Ok(test_commit);
     }
     let output = Command::new("git")
         .arg("-C")
@@ -2151,16 +2144,15 @@ fn reject_sensitive_or_client_input(value: &Value) -> Result<()> {
         for value in array {
             reject_sensitive_or_client_input(value)?;
         }
-    } else if let Some(text) = value.as_str() {
-        if text.starts_with('/')
+    } else if let Some(text) = value.as_str()
+        && (text.starts_with('/')
             || text.starts_with("~/")
             || text.contains('\\')
             || text.to_ascii_lowercase().starts_with("bearer ")
             || text.to_ascii_lowercase().contains("x-buildbuddy-api-key")
-            || text.to_ascii_lowercase().contains("authorization:")
-        {
-            return Err("provider-evidence-path-or-credential-rejected".to_owned());
-        }
+            || text.to_ascii_lowercase().contains("authorization:"))
+    {
+        return Err("provider-evidence-path-or-credential-rejected".to_owned());
     }
     Ok(())
 }

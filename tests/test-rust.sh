@@ -1145,34 +1145,22 @@ run_fast_lint_gate() {
   log "test-rust fast-lint OK (duration: $((SECONDS - suite_started))s)"
 }
 
+run_bazel_leaf() {
+  local leaf="$1"
+  local profile="${D2B_BAZEL_PROFILE:-remote}"
+  log "--> tests/tools/bazel-check --profile $profile --leaf $leaf"
+  tests/tools/bazel-check --profile "$profile" --leaf "$leaf"
+}
+
 run_main_workspace_gate() {
-  require_nextest "$rust_mode"
   rust_surface_start rust-main-format
-  log "--> cargo fmt --check"
-  cargo fmt --manifest-path "$manifest" --all --check
+  rust_surface_start rust-main-clippy
+  rust_surface_start rust-main-workspace-tests
+  run_bazel_leaf main
   rust_surface_success rust-main-format
-  ok "cargo fmt --check"
-
-# --locked so a stale committed Cargo.lock fails the gate instead of being
-# silently regenerated. flake.nix vendors the committed lockfile, so a lock
-# that cargo quietly rewrites here cannot be reproduced by a Nix build.
-rust_surface_start rust-main-clippy
-log "--> cargo clippy --locked --workspace --all-targets -- -D warnings"
-CARGO_TARGET_DIR="$workspace_target_dir" cargo clippy --jobs "$D2B_RUST_CARGO_JOBS" --locked --manifest-path "$manifest" --workspace "${workspace_clippy_excludes[@]}" --all-targets -- -D warnings
-rust_surface_success rust-main-clippy
-ok "cargo clippy"
-
-rust_surface_start rust-main-workspace-tests
-log "--> cargo nextest run --workspace ${workspace_test_excludes[*]}"
-workspace_test_started=$SECONDS
-CARGO_TARGET_DIR="$workspace_target_dir" cargo nextest run --test-threads "$D2B_RUST_NEXTEST_THREADS" --locked --manifest-path "$manifest" --workspace "${workspace_test_excludes[@]}"
-CARGO_TARGET_DIR="$workspace_target_dir" run_nextest_companions \
-  "main workspace" "$manifest" --locked --workspace "${workspace_test_excludes[@]}"
-ok "workspace tests (duration: $((SECONDS - workspace_test_started))s)"
-
-cleanup_cargo_special_files "workspace cargo test" "$workspace_target_dir"
-cleanup_package_test_scratch "workspace cargo test" "$ROOT/packages/d2bd/target"
-rust_surface_success rust-main-workspace-tests
+  rust_surface_success rust-main-clippy
+  rust_surface_success rust-main-workspace-tests
+  ok "main workspace Bazel tests"
   log "test-rust main-workspace OK (duration: $((SECONDS - suite_started))s)"
 }
 
@@ -1195,43 +1183,21 @@ ok "no-bash-ast-walker (zero Command::new bash-literal sites)"
 }
 
 run_broker_gate() {
-# Broker product member: run the three feature passes (default,
-# layer1-bootstrap, fake-backends) - each on its own target dir - serially. Tests inside each
-# cargo-test process manipulate process-global SIGCHLD/reap state, so do not
-# overlap the three harnesses unless a dedicated isolation review proves it safe.
-# The fail-closed
-# `fake-backends` stream runs the broker's hermetic
-# integration tests (e.g. tests/pidfd_handoff_scm_rights.rs,
-# #![cfg(feature = "fake-backends")], pinned in
-# tests/golden/pinned/pidfd-handoff.txt) that neither the default nor the
-# layer1-bootstrap pass enables - without it those fd-passing tests would not
-# run in the gate at all (the retired tests/pidfd-handoff.sh used --all-features).
-for _stream in "${broker_streams[@]}"; do
-  case "$_stream" in
-    default) _surface=rust-broker-default ;;
-    layer1) _surface=rust-broker-layer1 ;;
-    fakebackends) _surface=rust-broker-fakebackends ;;
-    *) fail "unknown broker stream: $_stream"; exit 1 ;;
-  esac
-  rust_surface_start "$_surface"
-  log "--> broker cargo ($_stream feature pass, serial)"
-  "broker_stream_$_stream"
-  rust_surface_success "$_surface"
-  ok "broker cargo ($_stream feature pass)"
-done
-cleanup_cargo_special_files "broker cargo test" "$broker_target_dir"
-cleanup_cargo_special_files "broker layer1 cargo test" "$broker_layer1_target_dir"
-cleanup_cargo_special_files "broker fake-backends cargo test" "$broker_fakebackends_target_dir"
+  rust_surface_start rust-broker-default
+  rust_surface_start rust-broker-layer1
+  rust_surface_start rust-broker-fakebackends
+  run_bazel_leaf broker
+  rust_surface_success rust-broker-default
+  rust_surface_success rust-broker-layer1
+  rust_surface_success rust-broker-fakebackends
+  ok "broker Bazel tests"
 }
 
 run_guest_shell_runner_gate() {
-require_nextest "$rust_mode"
-rust_surface_start rust-guest-shell-runner
-log "--> guest shell runner cargo (standalone workspace, real-libshpool feature)"
-guest_shell_runner_gate
-ok "guest shell runner cargo"
-cleanup_cargo_special_files "guest shell runner cargo test" "$guest_shell_runner_target_dir"
-rust_surface_success rust-guest-shell-runner
+  rust_surface_start rust-guest-shell-runner
+  run_bazel_leaf guest
+  rust_surface_success rust-guest-shell-runner
+  ok "guest shell runner Bazel tests"
 }
 
 run_schema_reproducibility_gate() {

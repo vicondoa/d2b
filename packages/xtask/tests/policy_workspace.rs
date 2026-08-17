@@ -681,26 +681,22 @@ fn broker_serial_violations(driver: &str, broker_features: &BTreeSet<String>) ->
         }
     }
     for required in [
-        "broker_stream_default",
-        "broker_stream_layer1",
-        "broker_stream_fakebackends",
-        "layer1-bootstrap",
-        "fake-backends",
+        "run_bazel_leaf broker",
+        "rust-broker-default",
+        "rust-broker-layer1",
+        "rust-broker-fakebackends",
     ] {
         if !driver.contains(required) {
             violations.push(format!("broker serial chain is missing `{required}`"));
         }
     }
 
-    let Some(start) = driver
-        .find("for _stream in")
-        .or_else(|| driver.find("broker_stream_default()"))
-    else {
+    let Some(start) = driver.find("run_broker_gate()") else {
         violations.push("broker feature passes have no bounded execution block".to_owned());
         return violations;
     };
     let end = driver[start..]
-        .find("\ncleanup_cargo_special_files")
+        .find("\nrun_guest_shell_runner_gate()")
         .map(|offset| start + offset)
         .unwrap_or(driver.len());
     let block = &driver[start..end];
@@ -708,18 +704,18 @@ fn broker_serial_violations(driver: &str, broker_features: &BTreeSet<String>) ->
     if !ordered_contains(
         driver,
         &[
-            "broker_stream_default",
-            "broker_stream_layer1",
-            "broker_stream_fakebackends",
+            "rust-broker-default",
+            "rust-broker-layer1",
+            "rust-broker-fakebackends",
         ],
     ) {
         violations.push("broker feature passes are not ordered as one chain".to_owned());
     }
     if !code
         .iter()
-        .any(|line| line.contains("for ") && line.contains("broker_stream"))
+        .any(|line| line.contains("run_bazel_leaf") && line.contains("broker"))
     {
-        violations.push("broker feature passes have no serial dispatch loop".to_owned());
+        violations.push("broker feature passes have no serial Bazel leaf".to_owned());
     }
     if code.iter().any(|line| has_background_job(line)) {
         violations.push("broker feature passes must not be backgrounded".to_owned());
@@ -1089,23 +1085,22 @@ fn broker_serial_policy_rejects_a_backgrounded_feature_fixture() {
         .map(str::to_owned)
         .collect::<BTreeSet<_>>();
     let good = r#"
-broker_stream_default() { cargo test; }
-broker_stream_layer1() { cargo test --features layer1-bootstrap; }
-broker_stream_fakebackends() { cargo test --features fake-backends; }
-broker_streams=(default layer1 fakebackends)
-for _stream in "${broker_streams[@]}"; do
-  "broker_stream_$_stream"
-done
-guest_shell_runner_gate() { :; }
+run_broker_gate() {
+  rust_surface_start rust-broker-default
+  rust_surface_start rust-broker-layer1
+  rust_surface_start rust-broker-fakebackends
+  run_bazel_leaf broker
+  rust_surface_success rust-broker-default
+  rust_surface_success rust-broker-layer1
+  rust_surface_success rust-broker-fakebackends
+}
+run_guest_shell_runner_gate() { :; }
 "#;
     assert!(
         broker_serial_violations(good, &features).is_empty(),
         "the positive serial broker fixture must satisfy the policy"
     );
-    let mutated = good.replace(
-        r#""broker_stream_$_stream""#,
-        r#""broker_stream_$_stream" &"#,
-    );
+    let mutated = good.replace("run_bazel_leaf broker", "run_bazel_leaf broker &");
     let violations = broker_serial_violations(&mutated, &features);
     assert!(
         violations

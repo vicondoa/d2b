@@ -187,48 +187,63 @@
       "runsOn": "ubuntu-latest"
     },
     "test-rust-main": {
-      "displayName": "Rust main workspace gate",
+      "displayName": "Bazel main workspace tests",
       "makeTarget": "test-rust-main",
       "localEnv": {
+        "D2B_BAZEL_PROFILE": "remote",
         "D2B_SKIP_FIXTURE_BUILD": "1"
       },
-      "ciKind": "rust",
+      "ciEnv": {
+        "D2B_BAZEL_PROFILE": "local",
+        "D2B_BAZEL_UNTRUSTED": "1"
+      },
+      "ciKind": "bazel",
       "ciJobId": "test-rust-main",
       "ciOnly": true,
       "needs": [
         "tier0"
       ],
-      "timeoutMinutes": 60,
+      "timeoutMinutes": 90,
       "runsOn": "ubuntu-latest"
     },
     "test-rust-broker": {
-      "displayName": "Rust broker workspace gate",
+      "displayName": "Bazel broker tests",
       "makeTarget": "test-rust-broker",
       "localEnv": {
+        "D2B_BAZEL_PROFILE": "remote",
         "D2B_SKIP_FIXTURE_BUILD": "1"
       },
-      "ciKind": "rust",
+      "ciEnv": {
+        "D2B_BAZEL_PROFILE": "local",
+        "D2B_BAZEL_UNTRUSTED": "1"
+      },
+      "ciKind": "bazel",
       "ciJobId": "test-rust-broker",
       "ciOnly": true,
       "needs": [
         "tier0"
       ],
-      "timeoutMinutes": 60,
+      "timeoutMinutes": 90,
       "runsOn": "ubuntu-latest"
     },
     "test-rust-guest-shell-runner": {
-      "displayName": "Rust guest shell runner gate",
+      "displayName": "Bazel guest shell runner tests",
       "makeTarget": "test-rust-guest-shell-runner",
       "localEnv": {
+        "D2B_BAZEL_PROFILE": "remote",
         "D2B_SKIP_FIXTURE_BUILD": "1"
       },
-      "ciKind": "rust",
+      "ciEnv": {
+        "D2B_BAZEL_PROFILE": "local",
+        "D2B_BAZEL_UNTRUSTED": "1"
+      },
+      "ciKind": "bazel",
       "ciJobId": "test-rust-guest-shell-runner",
       "ciOnly": true,
       "needs": [
         "tier0"
       ],
-      "timeoutMinutes": 60,
+      "timeoutMinutes": 90,
       "runsOn": "ubuntu-latest"
     },
     "test-rust-no-bash-ast": {

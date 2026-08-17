@@ -212,12 +212,11 @@ fn reports_action_mnemonic_graph_and_boundary_metrics() {
             .expect("report.semantics"),
         "report.semantics",
     );
-    assert_eq!(
-        semantics
+    assert!(
+        !semantics
             .get("providerBilling")
             .and_then(Value::as_bool)
-            .expect("providerBilling"),
-        false
+            .expect("providerBilling")
     );
 
     let whole_graph = object(
@@ -449,12 +448,11 @@ fn compares_compatible_reports_and_rejects_graph_mismatch() {
         String::from_utf8_lossy(&output.stderr)
     );
     let comparison = read_json(&delta);
-    assert_eq!(
+    assert!(
         comparison
             .get("compatible")
             .and_then(Value::as_bool)
-            .expect("comparison.compatible"),
-        true
+            .expect("comparison.compatible")
     );
     assert_eq!(
         comparison
@@ -1144,10 +1142,10 @@ fn stringify_sizes(value: &mut Value) {
     match value {
         Value::Array(values) => values.iter_mut().for_each(stringify_sizes),
         Value::Object(object) => {
-            if let Some(size) = object.get_mut("sizeBytes") {
-                if let Some(number) = size.as_u64() {
-                    *size = Value::String(number.to_string());
-                }
+            if let Some(size) = object.get_mut("sizeBytes")
+                && let Some(number) = size.as_u64()
+            {
+                *size = Value::String(number.to_string());
             }
             object.values_mut().for_each(stringify_sizes);
         }

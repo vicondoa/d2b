@@ -3,17 +3,17 @@ set -euo pipefail
 
 ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../.." && pwd)"
 PROFILE=""
+LEAF="all"
 SCRATCH="${D2B_BAZEL_CHECK_SCRATCH:-$ROOT/.scratch/bazel-check}"
 # Compile-fail UI suites stay on Cargo; they exceed the default Bazel timeout
 # when many rustc invocations share one worker. Gas City fixture genrules
 # stay out of the default aggregate; they need a user-namespace FHS shell.
-TARGET_SET=(
-  //...
+UI_EXCLUDES=(
   -//packages/d2b-bus/tests/ui/...
   -//packages/d2b-controller-toolkit/tests/ui/...
   -//packages/d2b-resource-api/tests/ui/...
-  -//tests/fixtures/gas-city/...
 )
+TARGET_SET=()
 REDACTION_FAILURE_STATUS=75
 CONFIGURATION_FAILURE_STATUS=76
 
@@ -95,7 +95,7 @@ if [ "$#" -eq 0 ]; then
     printf '%s' "$request" | credential_helper
     exit $?
   fi
-  echo "usage: tests/tools/bazel-check --profile <local|remote|trusted-seed|qualification> [-- bazel flags...]" >&2
+  echo "usage: tests/tools/bazel-check --profile <local|remote|trusted-seed|qualification> [--leaf <all|main|broker|guest>] [-- bazel flags...]" >&2
   exit 2
 fi
 
@@ -108,6 +108,15 @@ while [ "$#" -gt 0 ]; do
       ;;
     --profile=*|--config=*)
       PROFILE="${1#*=}"
+      shift
+      ;;
+    --leaf)
+      [ "$#" -ge 2 ] || { echo "$1 requires a value" >&2; exit 2; }
+      LEAF="$2"
+      shift 2
+      ;;
+    --leaf=*)
+      LEAF="${1#*=}"
       shift
       ;;
     --)
@@ -125,6 +134,35 @@ case "$PROFILE" in
   local|remote|trusted-seed|qualification) ;;
   *)
     echo "profile must be local, remote, trusted-seed, or qualification" >&2
+    exit 2
+    ;;
+esac
+
+case "$LEAF" in
+  all)
+    TARGET_SET=(
+      //...
+      "${UI_EXCLUDES[@]}"
+      -//tests/fixtures/gas-city/...
+    )
+    ;;
+  main)
+    TARGET_SET=(
+      //packages/...
+      //bazel/checks/rust/...
+      "${UI_EXCLUDES[@]}"
+      -//packages/d2b-priv-broker/...
+      -//packages/d2b-guest-shell-runner/...
+    )
+    ;;
+  broker)
+    TARGET_SET=(//packages/d2b-priv-broker/...)
+    ;;
+  guest)
+    TARGET_SET=(//packages/d2b-guest-shell-runner/...)
+    ;;
+  *)
+    echo "leaf must be all, main, broker, or guest" >&2
     exit 2
     ;;
 esac
@@ -165,8 +203,8 @@ fi
 export D2B_BAZEL_BIN="$bazel_bin"
 export D2B_REPO_ROOT="$ROOT"
 export ROOT
-log="$SCRATCH/$PROFILE.log"
-bep="$SCRATCH/$PROFILE.bep.json"
+log="$SCRATCH/$PROFILE.$LEAF.log"
+bep="$SCRATCH/$PROFILE.$LEAF.bep.json"
 
 run_bazel() {
   local profile="$1"
@@ -239,8 +277,8 @@ if [ "$PROFILE" != local ]; then
   fi
   classification="$(xtask "${classification_args[@]}")"
   if printf '%s' "$classification" | jq -e '.retryLocally == true' >/dev/null; then
-    local_log="$SCRATCH/local.log"
-    local_bep="$SCRATCH/local.bep.json"
+    local_log="$SCRATCH/local.$LEAF.log"
+    local_bep="$SCRATCH/local.$LEAF.bep.json"
     echo "BuildBuddy failed before dispatch; retrying the identical target set locally"
     local_status=0
     D2B_BAZEL_QUALIFICATION_ISOLATE_RC=1 \

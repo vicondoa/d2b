@@ -650,10 +650,10 @@ fn parse_action(
         .or_else(|| value_field(payload, &["id", "actionId", "action_id"]))
         .map(value_id)
         .transpose()?;
-    if let Some(source_id) = &source_id {
-        if !seen_ids.insert(source_id.clone()) {
-            return Err(format!("duplicate SpawnExec record id {source_id}"));
-        }
+    if let Some(source_id) = &source_id
+        && !seen_ids.insert(source_id.clone())
+    {
+        return Err(format!("duplicate SpawnExec record id {source_id}"));
     }
     let record_name = source_id
         .as_deref()
@@ -733,10 +733,10 @@ fn parse_action(
 }
 
 fn validate_action_result(payload: &Map<String, Value>, id: &str) -> Result<()> {
-    if let Some(status) = value_field(payload, &["status"]).and_then(Value::as_str) {
-        if !status.is_empty() {
-            return Err(format!("SpawnExec {id} failed with status {status}"));
-        }
+    if let Some(status) = value_field(payload, &["status"]).and_then(Value::as_str)
+        && !status.is_empty()
+    {
+        return Err(format!("SpawnExec {id} failed with status {status}"));
     }
     if let Some(exit_code) = value_field(payload, &["exitCode", "exit_code"]) {
         let exit_code = match exit_code {
@@ -914,12 +914,12 @@ fn parse_artifact(value: &Value, context: &str) -> Result<Artifact> {
                 &["sizeBytes", "size_bytes", "size"],
                 &format!("{context}.digest"),
             )?;
-            if let (Some(artifact_size), Some(digest_size)) = (artifact_size, size) {
-                if artifact_size != digest_size {
-                    return Err(format!(
-                        "{context} has conflicting digest size {digest_size} and artifact size {artifact_size}"
-                    ));
-                }
+            if let (Some(artifact_size), Some(digest_size)) = (artifact_size, size)
+                && artifact_size != digest_size
+            {
+                return Err(format!(
+                    "{context} has conflicting digest size {digest_size} and artifact size {artifact_size}"
+                ));
             }
             if hash.is_empty() {
                 if size == Some(0) || symlink_target.is_some() {
@@ -938,12 +938,12 @@ fn parse_artifact(value: &Value, context: &str) -> Result<Artifact> {
     let size = artifact_size
         .or(digest_size)
         .ok_or_else(|| format!("{context} is missing a digest size"))?;
-    if let Some(digest_size) = digest_size {
-        if digest_size != size {
-            return Err(format!(
-                "{context} has conflicting digest size {digest_size} and artifact size {size}"
-            ));
-        }
+    if let Some(digest_size) = digest_size
+        && digest_size != size
+    {
+        return Err(format!(
+            "{context} has conflicting digest size {digest_size} and artifact size {size}"
+        ));
     }
     Ok(Artifact {
         path,

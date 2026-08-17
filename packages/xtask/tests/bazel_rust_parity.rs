@@ -1030,7 +1030,7 @@ fn rust_coverage_map_is_bidirectional_against_cargo_and_nextest() {
         main_args.push(package.to_owned());
     }
     validate_nextest_inventory(
-        &coverage,
+        coverage,
         "main",
         nextest_suite_keys(&cargo_nextest(&main_args)),
     );
@@ -1075,7 +1075,7 @@ fn rust_coverage_map_is_bidirectional_against_cargo_and_nextest() {
             ],
         ),
     ] {
-        validate_nextest_inventory(&coverage, stream, nextest_suite_keys(&cargo_nextest(&args)));
+        validate_nextest_inventory(coverage, stream, nextest_suite_keys(&cargo_nextest(&args)));
     }
 
     for stream in [

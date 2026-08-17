@@ -257,10 +257,8 @@ fn check_u9(options: &CheckU9Options) -> Result<Value> {
     let report_path = resolve_path(&root, &report_relative);
     let report_bytes = fs::read(&report_path)
         .map_err(|_| "u9-evidence-missing:representative-report".to_owned())?;
-    if options.report.is_none() {
-        if digest_bytes(&report_bytes) != DEFAULT_U9_REPORT_DIGEST {
-            return Err("u9-evidence-stale:report-digest".to_owned());
-        }
+    if options.report.is_none() && digest_bytes(&report_bytes) != DEFAULT_U9_REPORT_DIGEST {
+        return Err("u9-evidence-stale:report-digest".to_owned());
     }
     let report: Value = serde_json::from_slice(&report_bytes)
         .map_err(|_| "u9-evidence-missing:representative-report".to_owned())?;
