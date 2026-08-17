@@ -129,11 +129,10 @@ fn fixture_manifest() -> PathBuf {
     if let Some(path) = std::env::var_os("D2B_EXTERNAL_SEALS_FIXTURE_MANIFEST") {
         return runfile(PathBuf::from(path));
     }
-    PathBuf::from(
-        option_env!("CARGO_MANIFEST_DIR")
-            .expect("Cargo must provide CARGO_MANIFEST_DIR for this fixture"),
-    )
-    .join("tests/ui/external-seals/Cargo.toml")
+    let Some(manifest_dir) = option_env!("CARGO_MANIFEST_DIR") else {
+        panic!("Cargo must provide CARGO_MANIFEST_DIR for this fixture");
+    };
+    PathBuf::from(manifest_dir).join("tests/ui/external-seals/Cargo.toml")
 }
 
 #[test]
