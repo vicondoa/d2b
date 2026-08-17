@@ -207,6 +207,7 @@ impl<'a> LiveTpmEffectExecutor<'a> {
             BrokerResponse::Error(error) => {
                 tracing::warn!(
                     kind = %error.kind,
+                    message = %error.message,
                     vm = %self.vm_id,
                     role = role_id,
                     "TPM runner broker request refused"
