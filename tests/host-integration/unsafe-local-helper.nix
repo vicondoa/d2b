@@ -684,7 +684,7 @@ PY
         "/run/current-system/sw/bin/d2b --zone missing --json "
         "shell status ShellSession/primary "
         ">/run/d2b/missing-zone-shell.log 2>&1 && "
-        "grep -q '\"errorClass\":\"resource-plane-unavailable\"' "
+        "grep -q '\"errorClass\":\"zone-unavailable\"' "
         "/run/d2b/missing-zone-shell.log"
     )
     machine.succeed(
