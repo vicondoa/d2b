@@ -40,6 +40,7 @@ let
     version = "0.0.0-bootstrap";
     dummySrc = dummySource;
     sourceRoot = "d2b-provider-rust-src/packages";
+    cargoToml = ../packages/Cargo.toml;
     inherit cargoLock outputHashes;
     cargoCheckExtraArgs = "--package d2bd";
     cargoBuildExtraArgs = "--package d2bd";
