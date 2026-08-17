@@ -82,11 +82,11 @@ use d2b_contracts::{
 };
 use d2b_core::bundle::Bundle;
 use d2b_core::bundle_resolver::{
-    BundleResolver, intent_id_activation, intent_id_gc_host, intent_id_hosts_host,
-    intent_id_installer_host, intent_id_keys_rotate, intent_id_migrate_host, intent_id_nft_host,
-    intent_id_nm_unmanaged_host, intent_id_rotate_known_host, intent_id_route_env,
-    intent_id_runner, intent_id_sysctl, intent_id_trust, intent_id_usbip_bind,
-    intent_id_usbip_firewall,
+    BundleResolver, intent_id_activation, intent_id_bridge_env, intent_id_gc_host,
+    intent_id_hosts_host, intent_id_installer_host, intent_id_keys_rotate, intent_id_migrate_host,
+    intent_id_nft_host, intent_id_nft_projection_env, intent_id_nm_unmanaged_host,
+    intent_id_rotate_known_host, intent_id_route_env, intent_id_runner, intent_id_sysctl,
+    intent_id_trust, intent_id_usbip_bind, intent_id_usbip_firewall,
 };
 use d2b_core::closures::ClosureMetadata;
 use d2b_core::error::BundleError;
@@ -3986,6 +3986,152 @@ fn dispatch_resource_request(
     }
 }
 
+fn projection_digest_bytes(value: &str) -> Option<[u8; 32]> {
+    let hex = value.strip_prefix("sha256:")?;
+    if hex.len() != 64 {
+        return None;
+    }
+    let mut digest = [0; 32];
+    for (index, byte) in digest.iter_mut().enumerate() {
+        *byte = u8::from_str_radix(&hex[index * 2..index * 2 + 2], 16).ok()?;
+    }
+    Some(digest)
+}
+
+fn resolve_volume_storage_ref(
+    resource: &Value,
+    resolver: &BundleResolver,
+) -> Result<BundleOpId, resource_runtime::ResourceRuntimeError> {
+    let spec = resource
+        .get("spec")
+        .ok_or(resource_runtime::ResourceRuntimeError::RequestInvalid)?;
+    let provider_ref = spec
+        .get("providerRef")
+        .and_then(Value::as_str)
+        .ok_or(resource_runtime::ResourceRuntimeError::RequestInvalid)?;
+    let source = spec
+        .get("source")
+        .and_then(Value::as_object)
+        .ok_or(resource_runtime::ResourceRuntimeError::RequestInvalid)?;
+    let settings = source
+        .get("settings")
+        .and_then(Value::as_object)
+        .ok_or(resource_runtime::ResourceRuntimeError::RequestInvalid)?;
+    let source_kind = settings
+        .get("kind")
+        .and_then(Value::as_str)
+        .ok_or(resource_runtime::ResourceRuntimeError::RequestInvalid)?;
+    let source_policy = settings
+        .get("sourcePolicyId")
+        .and_then(Value::as_str)
+        .ok_or(resource_runtime::ResourceRuntimeError::RequestInvalid)?;
+    let storage_id = match (provider_ref, source_kind, source_policy) {
+        ("Provider/volume-local", "local-path", "state-root" | "default-state") => {
+            "path:state-root"
+        }
+        _ => return Err(resource_runtime::ResourceRuntimeError::ProviderPathUnavailable),
+    };
+    if resolver.find_storage_path_spec(storage_id).is_none() {
+        return Err(resource_runtime::ResourceRuntimeError::ProviderPathUnavailable);
+    }
+    Ok(BundleOpId::new(storage_id))
+}
+
+fn resolve_network_effect_context(
+    resource: &Value,
+    resolver: &BundleResolver,
+) -> Result<NetworkEffectContext, resource_runtime::ResourceRuntimeError> {
+    let spec = resource
+        .get("spec")
+        .ok_or(resource_runtime::ResourceRuntimeError::RequestInvalid)?;
+    let provider_ref = spec
+        .get("providerRef")
+        .and_then(Value::as_str)
+        .ok_or(resource_runtime::ResourceRuntimeError::RequestInvalid)?;
+    if provider_ref != "Provider/network-local" {
+        return Err(resource_runtime::ResourceRuntimeError::ProviderPathUnavailable);
+    }
+    let attachments = spec
+        .get("attachments")
+        .and_then(Value::as_array)
+        .ok_or(resource_runtime::ResourceRuntimeError::RequestInvalid)?;
+    let mut env_name = None;
+    for attachment in attachments {
+        let execution_ref = attachment
+            .get("executionRef")
+            .and_then(Value::as_str)
+            .and_then(|value| value.strip_prefix("Guest/"))
+            .ok_or(resource_runtime::ResourceRuntimeError::RequestInvalid)?;
+        let env = resolver
+            .find_manifest_vm(execution_ref)
+            .and_then(|vm| vm.env.as_deref())
+            .ok_or(resource_runtime::ResourceRuntimeError::ProviderPathUnavailable)?;
+        if env_name.as_deref().is_some_and(|selected| selected != env) {
+            return Err(resource_runtime::ResourceRuntimeError::RequestInvalid);
+        }
+        env_name = Some(env.to_owned());
+    }
+    let env_name = env_name.ok_or(resource_runtime::ResourceRuntimeError::RequestInvalid)?;
+    let env = resolver
+        .find_host_env(&env_name)
+        .ok_or(resource_runtime::ResourceRuntimeError::ProviderPathUnavailable)?;
+    let bridge_id = intent_id_bridge_env(&env_name);
+    let projection_id = intent_id_nft_projection_env(&env_name);
+    if resolver.find_bridge_intent(&bridge_id).is_none() {
+        return Err(resource_runtime::ResourceRuntimeError::ProviderPathUnavailable);
+    }
+    let projection = resolver
+        .find_nft_projection_intent(&projection_id)
+        .ok_or(resource_runtime::ResourceRuntimeError::ProviderPathUnavailable)?;
+    let nm_id = intent_id_nm_unmanaged_host();
+    if resolver.find_nm_unmanaged_intent(&nm_id).is_none()
+        || resolver.find_hosts_intent(&intent_id_hosts_host()).is_none()
+    {
+        return Err(resource_runtime::ResourceRuntimeError::ProviderPathUnavailable);
+    }
+    let route_ids = resolver
+        .route_intent_ids()
+        .filter(|id| id.starts_with(&format!("route:env:{env_name}:")))
+        .map(|id| BundleOpId::new(id.to_owned()))
+        .collect::<Vec<_>>();
+    if route_ids
+        .iter()
+        .any(|id| resolver.find_route_intent(id.as_str()).is_none())
+    {
+        return Err(resource_runtime::ResourceRuntimeError::ProviderPathUnavailable);
+    }
+    let sysctl_ids = resolver
+        .sysctl_intent_ids()
+        .filter(|id| id.starts_with(&format!("sysctl:env:{env_name}:")))
+        .map(|id| BundleOpId::new(id.to_owned()))
+        .collect::<Vec<_>>();
+    if sysctl_ids
+        .iter()
+        .any(|id| resolver.find_sysctl_intent(id.as_str()).is_none())
+    {
+        return Err(resource_runtime::ResourceRuntimeError::ProviderPathUnavailable);
+    }
+    let generation = resolver
+        .installed_generation_identity()
+        .and_then(|identity| ResourceBundleGenerationId::parse(identity.as_str().to_owned()).ok())
+        .ok_or(resource_runtime::ResourceRuntimeError::ProviderPathUnavailable)?;
+    let projection_digest = projection_digest_bytes(&projection.desired_hash)
+        .ok_or(resource_runtime::ResourceRuntimeError::ProviderPathUnavailable)?;
+    Ok(NetworkEffectContext::new(
+        ScopeId::new(format!("env:{env_name}")),
+        VmId::new(format!("sys-{env_name}-net")),
+        BundleOpId::new(bridge_id),
+        BundleOpId::new(projection_id),
+        BundleOpId::new(nm_id),
+        BundleOpId::new(intent_id_hosts_host()),
+        route_ids,
+        sysctl_ids,
+        generation,
+        projection_digest,
+        resolver.host.site.allow_unsafe_east_west,
+    ))
+}
+
 fn dispatch_wave6_resource_reconcile(
     state: &ServerState,
     peer: &PeerIdentity,
@@ -4027,13 +4173,16 @@ fn dispatch_wave6_resource_reconcile(
         .get("operationId")
         .and_then(Value::as_str)
         .unwrap_or("wave6-public-reconcile");
+    let resolver = load_bundle_resolver(state)
+        .map_err(|_| resource_runtime::ResourceRuntimeError::ProviderPathUnavailable)?;
 
     let effect = match resource_type {
         "Volume" => {
+            let storage_ref = resolve_volume_storage_ref(&resource, &resolver)?;
             let response = dispatch_broker_request_as(
                 state,
                 BrokerRequest::ReconcileStorageScope(BrokerReconcileStorageScopeRequest {
-                    storage_ref: BundleOpId::new("path:state-root"),
+                    storage_ref,
                     apply: true,
                     tracing_span_id: None,
                 }),
@@ -4057,7 +4206,7 @@ fn dispatch_wave6_resource_reconcile(
             }
         }
         "Network" => {
-            reconcile_wave6_network_effect(state, peer, runtime, &uid)?;
+            reconcile_wave6_network_effect(state, peer, &resolver, &uid, &resource)?;
             "network-bridge-reconciled"
         }
         "Device" => {
@@ -4102,7 +4251,9 @@ fn dispatch_wave6_resource_reconcile(
                     );
                     resource_runtime::ResourceRuntimeError::ProviderPathUnavailable
                 })?;
-            if !providers.has_active_role(guest_vm, "ch-runner") {
+            if providers.has_active_role(guest_vm, "ch-runner") {
+                "cloud-hypervisor-adopted"
+            } else {
                 block_on_future(providers.launch_node(guest_vm, &node, Duration::from_secs(30)))
                     .map_err(|error| {
                         tracing::warn!(
@@ -4112,8 +4263,8 @@ fn dispatch_wave6_resource_reconcile(
                         );
                         resource_runtime::ResourceRuntimeError::ProviderPathUnavailable
                     })?;
+                "cloud-hypervisor-started"
             }
-            "cloud-hypervisor-adopted"
         }
         _ => unreachable!(),
     };
@@ -4132,28 +4283,11 @@ fn dispatch_wave6_resource_reconcile(
 fn reconcile_wave6_network_effect(
     state: &ServerState,
     peer: &PeerIdentity,
-    runtime: &resource_runtime::ZoneResourceRuntime,
+    resolver: &BundleResolver,
     uid: &ResourceUid,
+    resource: &Value,
 ) -> Result<(), resource_runtime::ResourceRuntimeError> {
-    let resolver = load_bundle_resolver(state)
-        .map_err(|_| resource_runtime::ResourceRuntimeError::ProviderPathUnavailable)?;
-    let generation = resolver
-        .installed_generation_identity()
-        .and_then(|identity| ResourceBundleGenerationId::parse(identity.as_str().to_owned()).ok())
-        .ok_or(resource_runtime::ResourceRuntimeError::ProviderPathUnavailable)?;
-    let context = NetworkEffectContext::new(
-        ScopeId::new(format!("env:{}", runtime.zone().as_str())),
-        VmId::new("sys-work-net"),
-        BundleOpId::new("bridge:env:work"),
-        BundleOpId::new("nft-projection:env:work"),
-        BundleOpId::new("nm-unmanaged:host"),
-        BundleOpId::new("hosts:host"),
-        vec![BundleOpId::new("route:env:work:0")],
-        Vec::new(),
-        generation,
-        [0; 32],
-        false,
-    );
+    let context = resolve_network_effect_context(resource, resolver)?;
     let port =
         network_effect_port::production_port(state, broker_caller_role_for_peer(peer), context);
     block_on_future(port.create_bridges(uid))
