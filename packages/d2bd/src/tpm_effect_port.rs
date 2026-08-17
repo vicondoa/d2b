@@ -169,7 +169,7 @@ impl<'a> LiveTpmEffectExecutor<'a> {
         ),
         TpmEffectError,
     > {
-        crate::dispatch_broker_request_with_fds_timeout_as(
+        let result = crate::dispatch_broker_request_with_fds_timeout_as(
             self.state,
             BrokerRequest::SpawnRunner(SpawnRunnerRequest {
                 vm_id: self.vm_id.clone(),
@@ -192,11 +192,25 @@ impl<'a> LiveTpmEffectExecutor<'a> {
             }),
             self.caller_role.clone(),
             timeout,
-        )
-        .map_err(|_| TpmEffectError::Transient)
-        .and_then(|(response, fds)| match response {
+        );
+        let (response, fds) = result.map_err(|error| {
+            tracing::warn!(
+                ?error,
+                vm = %self.vm_id,
+                role = role_id,
+                "TPM runner broker request failed"
+            );
+            TpmEffectError::Transient
+        })?;
+        match response {
             BrokerResponse::SpawnRunner(response) => Ok((response, fds)),
-            BrokerResponse::Error(_) => {
+            BrokerResponse::Error(error) => {
+                tracing::warn!(
+                    kind = %error.kind,
+                    vm = %self.vm_id,
+                    role = role_id,
+                    "TPM runner broker request refused"
+                );
                 crate::close_received_fds(&fds);
                 Err(TpmEffectError::SpawnRejected)
             }
@@ -204,7 +218,7 @@ impl<'a> LiveTpmEffectExecutor<'a> {
                 crate::close_received_fds(&fds);
                 Err(TpmEffectError::SpawnRejected)
             }
-        })
+        }
     }
 
     fn cleanup_failed_start(
