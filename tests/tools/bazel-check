@@ -194,9 +194,23 @@ run_bazel() {
   set -e
   if ! redact_file "$log_path" || ! redact_file "$bep_path"; then
     echo "bazel-check: evidence redaction failed; refusing to publish the run" >&2
+    emit_captured_output "$log_path" "bazel $profile log"
+    emit_captured_output "$bep_path" "bazel $profile BEP"
     return "$REDACTION_FAILURE_STATUS"
   fi
   return "$status"
+}
+
+emit_captured_output() {
+  local path="$1"
+  local label="$2"
+  if [ -s "$path" ]; then
+    printf '%s\n' "----- ${label} (${path}) -----" >&2
+    cat "$path" >&2
+    printf '%s\n' "----- end ${label} -----" >&2
+  else
+    printf '%s\n' "bazel-check: ${label} is empty or missing (${path})" >&2
+  fi
 }
 
 initial_status=0
@@ -237,12 +251,15 @@ if [ "$PROFILE" != local ]; then
       exit "$local_status"
     fi
     printf '%s\n' "bazel-check: local fallback failed"
+    emit_captured_output "$local_log" "bazel local fallback log"
     exit 1
   fi
   printf '%s\n' "$classification"
   printf '%s\n' "bazel-check: remote failure after dispatch or non-infrastructure failure; refusing local retry" >&2
+  emit_captured_output "$log" "bazel $PROFILE log"
   exit 1
 fi
 
 printf '%s\n' "bazel-check: local execution failed" >&2
+emit_captured_output "$log" "bazel local log"
 exit 1

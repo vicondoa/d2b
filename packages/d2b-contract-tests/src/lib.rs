@@ -188,17 +188,17 @@ pub fn repo_files(roots: &[&str]) -> Vec<String> {
         ])
         .args(roots)
         .output();
-    if let Ok(output) = output {
-        if output.status.success() {
-            return output
-                .stdout
-                .split(|byte| *byte == 0 || *byte == b'\n')
-                .filter(|entry| !entry.is_empty())
-                .filter_map(|entry| String::from_utf8(entry.to_vec()).ok())
-                .collect::<BTreeSet<_>>()
-                .into_iter()
-                .collect();
-        }
+    if let Ok(output) = output
+        && output.status.success()
+    {
+        return output
+            .stdout
+            .split(|byte| *byte == 0 || *byte == b'\n')
+            .filter(|entry| !entry.is_empty())
+            .filter_map(|entry| String::from_utf8(entry.to_vec()).ok())
+            .collect::<BTreeSet<_>>()
+            .into_iter()
+            .collect();
     }
 
     let mut files = BTreeSet::new();

@@ -38,6 +38,14 @@
 - Fixed default-config Bazel Rust tests to carry Cargo dev-dependency feature
   variants transitively, including d2bd's `test-support` dependencies.
 - Fixed upstream Gazelle idempotence for hand-owned Bazel package BUILD files.
+- Print the redacted Bazel log from `make bazel-check` when the
+  aggregate fails, instead of only a one-line status.
+- Create the broker test scratch root before opening audit logs so
+  Cargo and Bazel share the same parent directory contract.
+- Collapse the contract-test repo-file scan so workspace clippy stays
+  warning-clean.
+- Refresh checked-in package policy inputs after the workspace Cargo
+  authority change.
 - Fixed broker guest-control signing tests to use a path-safe test scratch root
   instead of a world-writable host temp directory.
 - Fixed local Bazel runfiles, Rust test-support graphs, stale coverage carriers,
