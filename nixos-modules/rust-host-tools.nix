@@ -22,6 +22,7 @@ let
     strictDeps = true;
     cargoExtraArgs = "--locked";
     doCheck = false;
+    nativeBuildInputs = [ pkgs.protobuf ];
     RUSTC_WRAPPER = "";
     SCCACHE_DIR = "";
   };
