@@ -1469,7 +1469,14 @@ cargo() {
         )
         self.assertEqual(rust_rollup["ciKind"], "rust-rollup")
         for shard in rust_shards:
-            self.assertIn(f"run: make {shard}", workflow)
+            kind = manifest["jobs"][shard]["ciKind"]
+            if kind == "bazel":
+                self.assertIn(
+                    f"nix develop --no-write-lock-file .#bazel -c make {shard}",
+                    workflow,
+                )
+            else:
+                self.assertIn(f"run: make {shard}", workflow)
             self.assertIn(f"{shard}=$result", workflow)
         self.assertNotIn("  test-rust-remaining:", workflow)
         self.assertEqual(workflow.count('[ "$result" = success ] || failed=1'), 7)
