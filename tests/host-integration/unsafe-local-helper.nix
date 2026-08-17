@@ -379,7 +379,7 @@ if True:
         "d2b --zone local-root --json resource list Provider "
         ">/run/d2b-interaction-providers.json"
     )
-    machine.succeed("cat /run/d2b-interaction-providers.json")
+    print(machine.succeed("cat /run/d2b-interaction-providers.json"))
     machine.succeed(
         "jq -e '"
         "(.resources | map(select(.resourceRef == \"Provider/display-wayland\")) | length == 1) and "
