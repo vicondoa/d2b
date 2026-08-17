@@ -262,17 +262,20 @@ pkgs.testers.runNixOSTest {
     machine.wait_for_unit("d2bd.service")
     machine.wait_for_file("/run/d2b/public.sock")
 
-    # The VM runner owns store preparation through its trusted broker path.
-    # Require the two anchored roots to exist, then exercise the real launch
-    # and adoption path rather than treating a read-only probe as a pass.
-    store_fixture = machine.succeed(
-        "test -d /nix/store && test -d /var/lib/d2b/vms && echo ready"
+    # The nested VM must be able to create a TAP before an inner Cloud
+    # Hypervisor process can boot. Probe that host capability explicitly and
+    # report a concrete block instead of waiting for a dead runner.
+    guest_fixture = machine.succeed(
+        "if test -d /nix/store && test -d /var/lib/d2b/vms && "
+        "ip tuntap add d2b-guest-probe mode tap 2>/dev/null; "
+        "then ip tuntap del d2b-guest-probe mode tap 2>/dev/null; echo ready; "
+        "else echo blocked-host; fi"
     ).strip()
-    if store_fixture != "ready":
+    if guest_fixture != "ready":
         print(
-            "BLOCKED: Cloud Hypervisor guest adoption requires a writable "
-            "same-filesystem /nix/store fixture; this runNixOSTest image "
-            "provides a read-only store."
+            "BLOCKED: Cloud Hypervisor guest adoption requires nested TAP and "
+            "delegated cgroup host posture; this runNixOSTest image does not "
+            "provide it."
         )
         machine.succeed("runuser -u alice -- d2b auth status --json >/dev/null")
     else:
