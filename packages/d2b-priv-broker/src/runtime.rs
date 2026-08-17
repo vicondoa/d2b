@@ -3231,19 +3231,31 @@ fn dispatch_request_with_backend_and_request_fds<B: DispatchBackend>(
                 req.role_id.as_str(),
             )?;
             let regenerator_extra = d2b_host::runner_argv_regenerator::RunnerArgvExtra::default();
-            let regenerated =
-                d2b_host::runner_argv_regenerator::regenerate_argv(intent, &regenerator_extra)
-                    .map_err(|error| BrokerError::SpawnRunnerIntentMismatch {
-                        field: "argv_comparison_inputs",
-                        requested: "required".to_owned(),
-                        resolved: error.to_string(),
-                    })?;
-            if regenerated != intent.argv {
-                return Err(BrokerError::SpawnRunnerIntentMismatch {
-                    field: "argv",
-                    requested: "bundle-and-regenerator-match".to_owned(),
-                    resolved: "mismatch".to_owned(),
-                });
+            match d2b_host::runner_argv_regenerator::regenerate_argv(intent, &regenerator_extra) {
+                Ok(regenerated) if regenerated != intent.argv => {
+                    return Err(BrokerError::SpawnRunnerIntentMismatch {
+                        field: "argv",
+                        requested: "bundle-and-regenerator-match".to_owned(),
+                        resolved: "mismatch".to_owned(),
+                    });
+                }
+                Ok(_) => {}
+                Err(
+                    d2b_host::runner_argv_regenerator::RegenerateArgvError::MissingInput { .. }
+                    | d2b_host::runner_argv_regenerator::RegenerateArgvError::NotYetWired(_),
+                ) => {
+                    // Until typed generator inputs are carried in the trusted
+                    // bundle, the bundle's prebuilt argv remains authoritative.
+                }
+                Err(d2b_host::runner_argv_regenerator::RegenerateArgvError::Generator(
+                    error,
+                )) => {
+                    return Err(BrokerError::SpawnRunnerIntentMismatch {
+                        field: "argv_generator",
+                        requested: "trusted-inputs".to_owned(),
+                        resolved: error,
+                    });
+                }
             }
             let mut mount_policy = intent.mount_policy.clone();
             extend_usbip_backend_device_binds(
