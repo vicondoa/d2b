@@ -516,17 +516,6 @@ pkgs.testers.runNixOSTest {
         ".spec.config.guestSources[0].categories == [\"system.info\"]))' "
         "/run/d2b-providers-before.json"
     )
-    guest_effect_ready = machine.succeed(
-        "runuser -u d2bd -- sh -c '"
-        "relative=$(sed -n \"s/^0:://p\" /proc/self/cgroup); "
-        "test -w \"/sys/fs/cgroup''${relative}/cgroup.kill\" && "
-        "echo ready || echo blocked'"
-    ).strip() == "ready"
-    if not guest_effect_ready:
-        print(
-            "BLOCKED: Cloud Hypervisor Guest effect requires the daemon's "
-            "delegated cgroup.kill; this VM does not expose that host posture."
-        )
     acceptance_refs = [
         "Volume/acceptance-volume",
         "Network/acceptance-network",
@@ -543,8 +532,6 @@ pkgs.testers.runNixOSTest {
             f".metadata.revision > 0)' "
             f"/run/d2b-resource-{resource_ref.split('/')[0].lower()}-before.json"
         )
-        if resource_ref == "Guest/acceptance-guest" and not guest_effect_ready:
-            continue
         machine.succeed(
             f"runuser -u alice -- env D2B_PUBLIC_SOCKET=/run/d2b/public.sock "
             f"d2b --zone work --json resource reconcile {resource_ref} "
