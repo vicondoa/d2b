@@ -56,7 +56,8 @@ pkgs.testers.runNixOSTest {
         machine.succeed("runuser -u alice -- d2b auth status --json >/dev/null")
     else:
         machine.succeed(
-            "runuser -u alice -- d2b vm start corp-vm --apply --no-wait-api --json"
+            "runuser -u alice -- d2b guest start corp-vm --zone work "
+            "--apply --no-wait-ready --json"
         )
         machine.wait_until_succeeds(
             "jq -e '.entries[] | select(.vm == \"corp-vm\" and .role == \"ch-runner\")' "
@@ -85,7 +86,9 @@ pkgs.testers.runNixOSTest {
         machine.succeed("systemctl restart d2bd.service")
         machine.wait_for_unit("d2bd.service")
         machine.wait_for_file("/run/d2b/public.sock")
-        machine.succeed("runuser -u alice -- d2b vm status corp-vm --json")
+        machine.succeed(
+            "runuser -u alice -- d2b guest status corp-vm --zone work --json"
+        )
         machine.succeed(f"test -d /proc/{runner_pid}")
         machine.succeed(
             f"test \"$(awk '{{print $22}}' /proc/{runner_pid}/stat)\" = {runner_start}"
@@ -97,7 +100,8 @@ pkgs.testers.runNixOSTest {
             "/var/lib/d2b/daemon-state/pidfd-table.json"
         )
         machine.succeed(
-            "runuser -u alice -- d2b vm stop corp-vm --apply --force --json"
+            "runuser -u alice -- d2b guest stop corp-vm --zone work "
+            "--apply --force --json"
         )
   '';
 }
