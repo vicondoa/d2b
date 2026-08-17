@@ -98,6 +98,7 @@ pkgs.testers.runNixOSTest {
   nodes.machine = d2bLib.d2bDaemonNode {
       writableStore = true;
       extra = { pkgs, ... }: {
+        systemd.services.d2bd.serviceConfig.Delegate = true;
         d2b.vms.corp-vm = lib.mkForce { enable = false; };
         d2b.vms.acceptance-guest = {
           enable = true;
