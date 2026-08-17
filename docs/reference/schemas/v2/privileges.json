@@ -273,6 +273,7 @@
             "migrate",
             "op",
             "realm",
+            "resource",
             "restart",
             "rollback",
             "rotate-known-host",

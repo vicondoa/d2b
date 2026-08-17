@@ -106,6 +106,14 @@ are denied (`defaultForUnknown: deny`).
 > `PrivilegesJson.publicOperations` and the generated
 > `OperationAuthz.operation` enum, but not in the broker-only catalog below.
 
+> **The Zone Resource API is a public daemon operation.** The `resource`
+> operation covers typed Resource API reads and mutations for a selected Zone.
+> It is authorized for `d2b-launcher` and `d2b-admin`, is audited, exposes only
+> metadata-class secrets, and requires the broker conditionally when a Provider
+> effect crosses the privileged boundary. Its provider-specific verbs remain
+> subject to the Zone Role and RoleBinding policy; the operation row only
+> classifies the authenticated local daemon request.
+
 ## Operation catalog (PROTOCOL_VERSION = 5)
 
 The currently implemented broker operation catalog. Every row carries

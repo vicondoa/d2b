@@ -181,6 +181,16 @@ pub const PUBLIC_OPERATION_AUTHZ: &[OperationAuthzRow] = &[
         AuditMode::Yes,
     ),
     row(
+        "resource",
+        "Zone Resource API",
+        "per-Zone",
+        &["d2b-launcher", "d2b-admin"],
+        true,
+        SecretAccess::MetadataOnly,
+        BrokerRequirement::Conditional,
+        AuditMode::Yes,
+    ),
+    row(
         "vm",
         "VM command family",
         "global-or-scoped",

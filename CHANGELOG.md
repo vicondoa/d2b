@@ -133,6 +133,9 @@ deprecations ship one minor release before removal.
 - Added authenticated Zone Resource API lifecycle coverage for Volume, Network,
   Device TPM, and Cloud Hypervisor Guest resources, including dependency-aware
   readiness, daemon-restart adoption, and dependency-safe removal.
+- Added the public Zone Resource API authorization row and generated privileges
+  contract so typed Resource reads and mutations use authenticated daemon
+  admission.
 - Added logical resource-store backup validation before schema migration and
   restore checks that preserve resource identity and retained TPM state.
 
