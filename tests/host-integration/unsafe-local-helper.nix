@@ -91,6 +91,20 @@ if True:
     )
     machine.succeed("systemctl restart d2bd.service")
     machine.wait_for_unit("d2bd.service")
+    machine.wait_until_succeeds(
+        "journalctl -u d2bd.service --no-pager | grep -Eq "
+        "'interaction_runtime_ready[=: ]+true'",
+        timeout=60,
+    )
+    for zone in ["local-root", "other"]:
+        machine.succeed(
+            f"test \"$(stat -c '%U:%G %a' /var/lib/d2b/zones/{zone})\" = "
+            "\"root:d2bd 750\" && "
+            f"test \"$(stat -c '%U:%G %a' /var/lib/d2b/zones/{zone}/audit)\" = "
+            "\"d2bd:d2bd 700\" && "
+            f"test \"$(stat -c '%U:%G %a' /var/lib/d2b/zones/{zone}/telemetry)\" = "
+            "\"d2bd:d2bd 700\""
+        )
     machine.succeed(
         "test -f /etc/d2b/zones/local-root/storage.json && "
         "test -f /etc/d2b/zones/work/storage.json && "

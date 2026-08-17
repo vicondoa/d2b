@@ -118,8 +118,6 @@ let
   };
   testPackagePython = "${testPackage}/bin/python3";
   testPackageScripts = "${testPackage}/share/gas-city-contributor/pack/scripts";
-  generation =
-    builtins.substring 0 32 (builtins.hashString "sha256" (toString testPackage));
 
   credentialProbe = pkgs.writeShellScript "gascity-host-credential-probe" ''
     set -eu
@@ -477,7 +475,7 @@ let
       TERMINAL_ROOT = pathlib.Path(
           os.environ.get("GC_TERMINAL_STATE_ROOT", str(AGENT_STATE / "terminal"))
       )
-      GENERATION = os.environ.get("GC_CITY_GENERATION", "${generation}")
+      GENERATION = os.environ.get("GC_CITY_GENERATION", "fixture-generation")
       PUBLIC_SOCKET = os.environ.get(
           "GC_AGENT_LAUNCHER_SOCKET", "/run/gascity-agent/agent.sock"
       )
@@ -918,7 +916,10 @@ let
           context.write_text(
               json.dumps(
                   {
-                      "generation": os.environ.get("GC_CITY_GENERATION", "${generation}"),
+                      "generation": os.environ.get(
+                          "GC_CITY_GENERATION",
+                          "fixture-generation",
+                      ),
                       "state_schema": "1",
                       "worktree": str(FIXTURE),
                       "next_action": "continue",
@@ -1352,7 +1353,7 @@ let
       )
       module.publish_reserve_breach(
           status,
-          generation="${generation}",
+          generation="reserve-breach-fixture",
           state_schema="1",
       )
       raise SystemExit(1)
@@ -1621,13 +1622,13 @@ pkgs.testers.runNixOSTest {
 
   testScript = ''
     import json
+    import shlex
 
     package = "${testPackage}"
     python = "${testPackagePython}"
     fdproxy = "${testPackage.passthru.runtimeScripts}/bin/gascity-fdproxy"
     envoy = "${testPackage}/bin/envoy"
     ca_bundle = "${testPackage}/etc/ssl/certs/ca-bundle.crt"
-    generation = "${generation}"
     auth = "${relayAuth}"
     launcher_probe = "${launcherProbe}"
     proxy_fixture = "${proxyFixture}"
@@ -1684,6 +1685,22 @@ pkgs.testers.runNixOSTest {
         "/var/lib/gascity-contributor/state/worktrees/planning-run/docs/plans/acp-observation-planning-run.json",
     ]:
         machine.wait_for_file(path)
+
+    generation_entries = [
+        entry.split("=", 1)[1]
+        for entry in shlex.split(
+            machine.succeed(
+                "systemctl show -P Environment gas-city-contributor.service"
+            )
+        )
+        if entry.startswith("GC_CITY_GENERATION=")
+    ]
+    assert len(generation_entries) == 1, (
+        "expected exactly one GC_CITY_GENERATION in the rendered "
+        f"service environment, got {len(generation_entries)}"
+    )
+    generation = generation_entries[0]
+    assert generation, "GC_CITY_GENERATION must be nonempty"
 
     machine.succeed(
         "systemctl start gascity-buildbuddy-envoy-syscall-smoke.service"
