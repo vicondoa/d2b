@@ -15,7 +15,8 @@ let
   '';
   cargoLock = ../packages/Cargo.lock;
   outputHashes = {
-    "wl-proxy-0.1.2" = "sha256-1yO1zgzSyzQ2DnDMpVxcnI5BsTNvXfzIUS+RNlPj4A8=";
+    "git+https://github.com/vicondoa/wl-proxy.git?rev=072945b59fef21a2a8166460454280d543f48772#072945b59fef21a2a8166460454280d543f48772" =
+      "sha256-1yO1zgzSyzQ2DnDMpVxcnI5BsTNvXfzIUS+RNlPj4A8=";
   };
   commonBuildArgs = {
     strictDeps = true;
