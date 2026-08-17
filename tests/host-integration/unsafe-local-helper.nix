@@ -668,6 +668,15 @@ PY
         for session in shell_list["sessions"]
     )
     machine.succeed(
+        "! runuser -u alice -- env D2B_PUBLIC_SOCKET=/run/d2b/public.sock "
+        "XDG_RUNTIME_DIR=/run/user/1000 "
+        "DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/1000/bus "
+        "/run/current-system/sw/bin/d2b --zone missing --json "
+        "shell status ShellSession/primary "
+        ">/run/d2b/missing-zone-shell.log 2>&1"
+    )
+    print(machine.succeed("cat /run/d2b/missing-zone-shell.log"))
+    machine.succeed(
         "! runuser -u alice -- env "
         "D2B_PUBLIC_SOCKET=/run/d2b/public.sock "
         "XDG_RUNTIME_DIR=/run/user/1000 "
