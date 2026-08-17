@@ -150,33 +150,8 @@ if [ -n "${CI:-}" ] || [ -n "${GITHUB_ACTIONS:-}" ] \
 else
   fixture_target_dir="$ROOT/.scratch/rust-test-cache/fixture-contracts"
 fi
-# Separate target dirs for the broker's three concurrent feature passes so they
-# don't lock-contend. They are DETERMINISTIC siblings of the broker target dir
-# (not mktemp): sccache hashes the inherited CARGO_* environment, including
-# CARGO_TARGET_DIR, so a random per-run target dir would change the cache key
-# and defeat cross-run hits. Stable, distinct dirs keep the key stable (cache
-# hits) while still avoiding lock contention. They are gitignored and reused
-# across runs like the default broker/workspace target dirs.
-broker_target_dir=$(d2b_cargo_target_dir broker)
-broker_layer1_target_dir="${broker_target_dir%/}/broker-layer1"
-broker_fakebackends_target_dir="${broker_target_dir%/}/broker-fakebackends"
 guest_shell_runner_target_dir=$(d2b_cargo_target_dir guest-shell-runner)
 no_bash_target_dir="$ROOT/tests/tools/no-bash-ast-walker/target"
-
-# Keep dedicated feature/process-topology crates and fixture-dependent contract
-# crates out of generic workspace tests. Their owning lanes run them with the
-# exact feature, serialization, and fixture contracts below.
-workspace_test_excludes=(
-  --exclude d2b-contract-tests
-  --exclude d2b-priv-broker
-  --exclude d2b-guest-shell-runner
-)
-# Generic clippy still compiles d2b-contract-tests, but broker and guest runner
-# require their dedicated feature contexts.
-workspace_clippy_excludes=(
-  --exclude d2b-priv-broker
-  --exclude d2b-guest-shell-runner
-)
 
 d2b_activate_rust_toolchain_path || true
 export RUSTUP_TOOLCHAIN="${RUSTUP_TOOLCHAIN:-$pinned_channel}"
@@ -690,58 +665,6 @@ run_nextest_companions() {
   ok "$label companions (doctests + $test_targets test targets + $bench_targets bench targets)"
 }
 
-# The privileged broker has three independent feature passes (default,
-# layer1-bootstrap, fake-backends), each on its OWN execution-only target dir.
-# They share the repository-root Cargo authority but nothing with each other. The
-# streams stay serial by default because their tests manipulate process-global
-# signal/reap state; an explicit timing-only opt-in can use their separate target
-# directories. With sccache the shared crates are cache hits across all streams.
-# Running serially in the foreground means a failing stream aborts the gate at
-# the point of failure, with its output already on the gate's own stream.
-#
-# These three streams deliberately stay on `cargo test` rather than moving to
-# cargo-nextest with the rest of the gate. The broker's tests are not
-# process-per-test safe: under nextest, runtime::tests::usbip_bind_* fails with
-# LiveHandler("USB device 1-2.3 is missing required sysfs attr devpath"),
-# because whatever keeps handler selection off live sysfs does not survive being
-# run in its own process. The same test passes under `cargo test` when filtered
-# down to itself alone, so this is a harness-environment dependency rather than
-# a flaky test or an inter-test ordering bug.
-#
-# The cost of not converting is nil: this suite runs 528 tests in about 1.4 s,
-# so nextest's cross-binary parallelism has nothing to win here, and `cargo test`
-# covers doctests and harness=false binaries without needing companions. Making
-# the broker process-per-test safe would mean reworking test setup inside a
-# critical, privileged, protected subsystem for no measurable gain.
-#
-# No stream runs `cargo check` before its `cargo test`. Check and test are
-# distinct compilation modes that share no artifacts, so a check ahead of a test
-# on the same target directory is time spent twice for one result. Measured cold
-# on the layer1 stream: 153 s with the check against 89 s without, for an
-# identical outcome and an unchanged test phase (85 s against 89 s). The
-# fake-backends stream never had one, which is why it was already the fastest.
-broker_stream_default() {
-  cargo metadata --format-version 1 --manifest-path "$broker_manifest" >/dev/null
-  rm -f -- "$broker_target_dir"/debug/deps/socket_activation-* 2>/dev/null || true
-  CARGO_TARGET_DIR="$broker_target_dir" cargo test --jobs "$D2B_RUST_CARGO_JOBS" --manifest-path "$broker_manifest" -p d2b-priv-broker -- --test-threads "$D2B_RUST_NEXTEST_THREADS"
-}
-broker_stream_layer1() {
-  CARGO_TARGET_DIR="$broker_layer1_target_dir" cargo test --jobs "$D2B_RUST_CARGO_JOBS" --manifest-path "$broker_manifest" -p d2b-priv-broker --features layer1-bootstrap -- --test-threads "$D2B_RUST_NEXTEST_THREADS"
-}
-broker_stream_fakebackends() {
-  CARGO_TARGET_DIR="$broker_fakebackends_target_dir" cargo test --jobs "$D2B_RUST_CARGO_JOBS" --manifest-path "$broker_manifest" -p d2b-priv-broker --features fake-backends -- --test-threads "$D2B_RUST_NEXTEST_THREADS"
-}
-broker_streams=(default layer1 fakebackends)
-
-guest_shell_runner_gate() {
-  cargo metadata --format-version 1 --manifest-path "$guest_shell_runner_manifest" >/dev/null
-  CARGO_TARGET_DIR="$guest_shell_runner_target_dir" cargo fmt --manifest-path "$guest_shell_runner_manifest" --package d2b-guest-shell-runner --check
-  CARGO_TARGET_DIR="$guest_shell_runner_target_dir" cargo clippy --jobs "$D2B_RUST_CARGO_JOBS" --manifest-path "$guest_shell_runner_manifest" -p d2b-guest-shell-runner --all-targets --features real-libshpool -- -D warnings
-  CARGO_TARGET_DIR="$guest_shell_runner_target_dir" cargo nextest run --test-threads "$D2B_RUST_NEXTEST_THREADS" --manifest-path "$guest_shell_runner_manifest" -p d2b-guest-shell-runner --features real-libshpool
-  CARGO_TARGET_DIR="$guest_shell_runner_target_dir" run_nextest_companions \
-    "guest shell runner" "$guest_shell_runner_manifest" -p d2b-guest-shell-runner --features real-libshpool
-}
-
 run_fixture_contract_tests() {
   local eval_root system flake_ref eval_rc testname
   local fixture_contract_filter='not binary(video_binary_contract)'
@@ -1198,6 +1121,7 @@ run_guest_shell_runner_gate() {
   run_bazel_leaf guest
   rust_surface_success rust-guest-shell-runner
   ok "guest shell runner Bazel tests"
+  log '"guest shell runner" companions stay on Bazel rust_test/rust_doc_test'
 }
 
 run_schema_reproducibility_gate() {
