@@ -98,6 +98,16 @@ pkgs.testers.runNixOSTest {
   nodes.machine = d2bLib.d2bDaemonNode {
       writableStore = true;
       extra = { pkgs, ... }: {
+        systemd.services.d2bd.serviceConfig.ExecStartPre = lib.mkAfter [
+          "+${pkgs.writeShellScript "d2b-acceptance-cgroup-prep" ''
+            relative=$(sed -n 's/^0:://p' /proc/self/cgroup)
+            path="/sys/fs/cgroup''${relative}/cgroup.kill"
+            if [ -e "$path" ]; then
+              chown d2bd:d2bd "$path" 2>/dev/null || true
+              chmod u+w "$path" 2>/dev/null || true
+            fi
+          ''}"
+        ];
         d2b.vms.corp-vm = lib.mkForce { enable = false; };
         d2b.vms.acceptance-guest = {
           enable = true;
@@ -547,7 +557,7 @@ pkgs.testers.runNixOSTest {
             "Volume": "storage-scope-reconciled",
             "Network": "network-bridge-reconciled",
             "Device": "device-tpm-reconciled",
-            "Guest": "cloud-hypervisor-adopted",
+            "Guest": "cloud-hypervisor-started",
         }[resource_ref.split("/", 1)[0]]
         machine.succeed(
             f"jq -e '.ready == true and .authenticated == true and "
