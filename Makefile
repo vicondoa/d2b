@@ -86,13 +86,14 @@ check-fast: test-unit
 check-tier0:
 	bash tests/tools/tier0-first-pass.sh
 
-## bazel-check - Bazel aggregate used by make check. Locally this defaults to
-##                the BuildBuddy remote profile and falls back to local when
-##                credentials are withheld. CI sets D2B_BAZEL_PROFILE=local.
+## bazel-check - non-crate Bazel tests used by make check. Rust package tests
+##                run from test-rust leaves. Locally this defaults to the
+##                BuildBuddy remote profile. CI sets D2B_BAZEL_PROFILE=local.
 D2B_BAZEL_PROFILE ?= remote
-export D2B_BAZEL_PROFILE
+D2B_BAZEL_LEAF ?= rest
+export D2B_BAZEL_PROFILE D2B_BAZEL_LEAF
 bazel-check:
-	tests/tools/bazel-check --profile "$(D2B_BAZEL_PROFILE)"
+	tests/tools/bazel-check --profile "$(D2B_BAZEL_PROFILE)" --leaf "$(D2B_BAZEL_LEAF)"
 
 # ===========================================================================
 # Umbrella test targets (local / agent development).

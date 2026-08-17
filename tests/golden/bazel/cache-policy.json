@@ -105,7 +105,7 @@
       "tests/tools/buildbuddy-qualification"
     ],
     "allowedSecurityDigests": [
-      "sha256:86e436ef7cafd7b5e5bcdf8164649aba9ec49c5606719e2c4090f965c475913c"
+      "sha256:b7b71466de6936c0f7612ed03ceafbbd67ddb9326c883be084e6d318bb3966b7"
     ],
     "untrustedCredential": "none",
     "trustedCredential": "credential-helper"

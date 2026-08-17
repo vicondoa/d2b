@@ -59,6 +59,8 @@
   local rust leaves keep using BuildBuddy.
 - Avoid clippy `option_env_unwrap` in compile-fail seal fixtures so
   `make test-lint` stays warning-clean.
+- `make bazel-check` now runs only non-crate Bazel tests. Rust package
+  tests run once from the test-rust leaves.
 - Fixed broker guest-control signing tests to use a path-safe test scratch root
   instead of a world-writable host temp directory.
 - Fixed local Bazel runfiles, Rust test-support graphs, stale coverage carriers,

@@ -3,7 +3,7 @@ set -euo pipefail
 
 ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../.." && pwd)"
 PROFILE=""
-LEAF="all"
+LEAF="rest"
 SCRATCH="${D2B_BAZEL_CHECK_SCRATCH:-$ROOT/.scratch/bazel-check}"
 # Compile-fail UI suites stay on Cargo; they exceed the default Bazel timeout
 # when many rustc invocations share one worker. Gas City fixture genrules
@@ -95,7 +95,7 @@ if [ "$#" -eq 0 ]; then
     printf '%s' "$request" | credential_helper
     exit $?
   fi
-  echo "usage: tests/tools/bazel-check --profile <local|remote|trusted-seed|qualification> [--leaf <all|main|broker|guest>] [-- bazel flags...]" >&2
+  echo "usage: tests/tools/bazel-check --profile <local|remote|trusted-seed|qualification> [--leaf <rest|all|main|broker|guest>] [-- bazel flags...]" >&2
   exit 2
 fi
 
@@ -139,6 +139,16 @@ case "$PROFILE" in
 esac
 
 case "$LEAF" in
+  rest)
+    # Non-crate Bazel tests. Rust package tests belong to test-rust leaves.
+    TARGET_SET=(
+      //tests/...
+      //bazel/checks/nix/...
+      //bazel/checks/policy/...
+      //bazel/checks/fixtures/...
+      -//tests/fixtures/gas-city/...
+    )
+    ;;
   all)
     TARGET_SET=(
       //...
@@ -162,7 +172,7 @@ case "$LEAF" in
     TARGET_SET=(//packages/d2b-guest-shell-runner/...)
     ;;
   *)
-    echo "leaf must be all, main, broker, or guest" >&2
+    echo "leaf must be rest, all, main, broker, or guest" >&2
     exit 2
     ;;
 esac
