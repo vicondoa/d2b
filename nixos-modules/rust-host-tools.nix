@@ -38,7 +38,6 @@ let
   cargoArtifacts = craneLib.buildDepsOnly (commonBuildArgs // {
     pname = "d2b-host-tools";
     version = "0.0.0-bootstrap";
-    src = hostSource;
     dummySrc = dummySource;
     sourceRoot = "d2b-provider-rust-src/packages";
     inherit cargoLock outputHashes;
