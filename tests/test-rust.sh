@@ -186,7 +186,13 @@ if [ -z "${D2B_RUST_GATE_IN_NIX_SHELL:-}" ] && ! command -v rustup >/dev/null 2>
   exit "$nested_rust_rc"
 fi
 
-if [ -z "${D2B_RUST_GATE_IN_NIX_SHELL:-}" ] && command -v rustup >/dev/null 2>&1; then
+bazel_leaf=0
+case "$rust_mode" in
+  main-workspace|broker|guest-shell-runner) bazel_leaf=1 ;;
+esac
+
+if [ "$bazel_leaf" -eq 0 ] &&
+  [ -z "${D2B_RUST_GATE_IN_NIX_SHELL:-}" ] && command -v rustup >/dev/null 2>&1; then
   export D2B_RUST_GATE_IN_NIX_SHELL=1
   export D2B_RUST_GATE_BOOTSTRAP_RUSTUP=1
   export RUSTUP_HOME="${RUSTUP_HOME:-$HOME/.rustup}"
@@ -194,7 +200,8 @@ if [ -z "${D2B_RUST_GATE_IN_NIX_SHELL:-}" ] && command -v rustup >/dev/null 2>&1
   rustup toolchain install "$pinned_channel" --profile minimal --component rustfmt --component clippy
 fi
 
-if [ -z "${D2B_RUST_GATE_IN_NIX_SHELL:-}" ] && ! command -v cargo >/dev/null 2>&1; then
+if [ "$bazel_leaf" -eq 0 ] &&
+  [ -z "${D2B_RUST_GATE_IN_NIX_SHELL:-}" ] && ! command -v cargo >/dev/null 2>&1; then
   if ! command -v nix >/dev/null 2>&1; then
     fail "neither cargo nor nix is on PATH; rust gate cannot run"
     exit 1
@@ -344,8 +351,10 @@ else
   fi
 fi
 
-log "--> rust toolchain version"
-assert_pinned_rust_toolchain
+if [ "$bazel_leaf" -eq 0 ]; then
+  log "--> rust toolchain version"
+  assert_pinned_rust_toolchain
+fi
 
 # Test execution runs under cargo-nextest, which executes each test in its own
 # process and parallelises across test binaries rather than one binary at a
