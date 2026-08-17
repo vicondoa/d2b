@@ -25,9 +25,18 @@ let
     "git+https://github.com/vicondoa/wl-proxy.git?rev=072945b59fef21a2a8166460454280d543f48772#072945b59fef21a2a8166460454280d543f48772" =
       "sha256-1yO1zgzSyzQ2DnDMpVxcnI5BsTNvXfzIUS+RNlPj4A8=";
   };
+  cargoVendorDir = craneLib.vendorCargoDeps {
+    inherit cargoLock outputHashes;
+  };
+  brokerCargoLock = ../packages/d2b-priv-broker/Cargo.lock;
+  brokerCargoVendorDir = craneLib.vendorCargoDeps {
+    cargoLock = brokerCargoLock;
+    inherit outputHashes;
+  };
   commonBuildArgs = {
     strictDeps = true;
     cargoExtraArgs = "--locked";
+    inherit cargoVendorDir;
     doCheck = false;
     nativeBuildInputs = [ pkgs.protobuf ];
     RUSTC_WRAPPER = "";
@@ -78,7 +87,8 @@ let
     src = hostSource;
     sourceRoot = "d2b-provider-rust-src/packages/d2b-priv-broker";
     cargoToml = ../packages/d2b-priv-broker/Cargo.toml;
-    cargoLock = ../packages/d2b-priv-broker/Cargo.lock;
+    cargoLock = brokerCargoLock;
+    cargoVendorDir = brokerCargoVendorDir;
     cargoBuildExtraArgs = "--no-default-features";
     installPhaseCommand = installBinaries [ "d2b-priv-broker" ];
   });
