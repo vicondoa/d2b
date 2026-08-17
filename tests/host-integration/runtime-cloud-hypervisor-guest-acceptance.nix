@@ -33,6 +33,47 @@ pkgs.testers.runNixOSTest {
       d2b.site.adminUsers = [ "alice" ];
       environment.variables.D2B_MANIFEST_PATH = config.d2b._manifestJsonPath;
       environment.systemPackages = with pkgs; [ jq iputils ];
+      d2b.zones.local-root.resources.host-system = {
+        type = "Host";
+        spec = {
+          providerRef = "Provider/system-core";
+          defaultDomain = "system";
+          allowedDomains = [ "system" ];
+          budget = { };
+          networkAttachments = [ ];
+          deviceAttachments = [ ];
+          volumeAttachmentDefaults = [ ];
+        };
+      };
+      d2b.zones.work = {
+        parentZone = "local-root";
+        resources = {
+          host-system = {
+            type = "Host";
+            spec = {
+              providerRef = "Provider/system-core";
+              defaultDomain = "system";
+              allowedDomains = [ "system" ];
+              budget = { };
+              networkAttachments = [ ];
+              deviceAttachments = [ ];
+              volumeAttachmentDefaults = [ ];
+            };
+          };
+          corp-vm = {
+            type = "Guest";
+            spec = {
+              providerRef = "Provider/system-core";
+              defaultDomain = "system";
+              allowedDomains = [ "system" ];
+              budget = { };
+              volumeAttachmentDefaults = [ ];
+              networkAttachments = [ ];
+              deviceAttachments = [ ];
+            };
+          };
+        };
+      };
     };
   };
 
