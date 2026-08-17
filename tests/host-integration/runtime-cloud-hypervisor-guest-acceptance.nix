@@ -101,6 +101,7 @@ pkgs.testers.runNixOSTest {
         ''}"
       ];
       d2b.site.adminUsers = [ "alice" ];
+      d2b.vms.corp-vm.env = lib.mkForce null;
       environment.variables.D2B_MANIFEST_PATH = config.d2b._manifestJsonPath;
       environment.systemPackages = with pkgs; [ jq iputils ];
       d2b.artifacts = artifacts;
