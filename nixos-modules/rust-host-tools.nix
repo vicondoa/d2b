@@ -63,7 +63,7 @@ let
       inherit pname cargoArtifacts cargoLock outputHashes;
       version = "0.0.0-bootstrap";
       src = hostSource;
-      sourceRoot = "d2b-host-tools-rust-src/packages";
+      sourceRoot = "d2b-provider-rust-src/packages";
       cargoToml = ../packages + "/${package}/Cargo.toml";
       cargoBuildExtraArgs =
         "--package ${package}"
@@ -76,7 +76,7 @@ let
     version = "0.0.0-bootstrap";
     inherit cargoArtifacts outputHashes;
     src = hostSource;
-    sourceRoot = "d2b-host-tools-rust-src/packages/d2b-priv-broker";
+    sourceRoot = "d2b-provider-rust-src/packages/d2b-priv-broker";
     cargoToml = ../packages/d2b-priv-broker/Cargo.toml;
     cargoLock = ../packages/d2b-priv-broker/Cargo.lock;
     cargoBuildExtraArgs = "--no-default-features";
