@@ -102,10 +102,10 @@ pkgs.testers.runNixOSTest {
         classification = "contractPrivateNonSecret";
         sensitivity = "nonSecret";
       };
-      d2b.zones.local-root.trustedPublishers.d2b-acceptance.signingKey =
-        acceptancePublisherKey;
       d2b.zones = {
-        local-root.resources = {
+        local-root = {
+          trustedPublishers.d2b-acceptance.signingKey = acceptancePublisherKey;
+          resources = {
           alice = {
             type = "User";
             spec = {
@@ -173,6 +173,7 @@ pkgs.testers.runNixOSTest {
                 ];
               };
             };
+          };
           };
         };
         other.parentZone = "local-root";
