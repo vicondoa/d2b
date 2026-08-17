@@ -598,8 +598,6 @@ fn agents_md_defines_reviewed_head_and_guarded_merge_contract() {
         "normal squash",
         "Never use admin, auto-merge, bypass",
         "observed base",
-        "nix/gas-city-contributor/**",
-        "managed authority unchanged",
     ] {
         assert!(
             agents.contains(required),

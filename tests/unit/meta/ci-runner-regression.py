@@ -2961,7 +2961,6 @@ wait
             "policy_provider_crates",
             "policy_resource_mutation_seal",
             "policy_docs",
-            "policy_gas_city",
         ]
 
         self.assertIn(

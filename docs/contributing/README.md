@@ -17,7 +17,6 @@ disagrees with committed, passing code, code wins.
 | [gates-and-lints.md](./gates-and-lints.md) | The heavy-lane semaphore and contributor validation lanes. |
 | [critical-subsystems.md](./critical-subsystems.md) | Invariants for every AGENTS.md critical index subsystem, plus cgroup naming and ownership-marker conventions. |
 | [architecture.md](./architecture.md) | Eval-time naming, sibling flake boundaries, daemon-supervised VM lifecycle, and per-VM behavior. |
-| [gas-city.md](./gas-city.md) | Optional host-native Gas City contributor infrastructure: module deployment, credentials, ACP profiles, sidecars, lifecycle, publication, diagnostics, and live acceptance. |
 
 These files are deliberately **not** auto-loaded by agent harnesses. Loading
 them into every session made AGENTS.md 122KB in the first place. Link to them;

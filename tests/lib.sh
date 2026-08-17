@@ -66,7 +66,6 @@ readonly -a D2B_FIXTURE_INDEPENDENT_POLICY_BINARIES=(
   policy_provider_crates
   policy_resource_mutation_seal
   policy_docs
-  policy_gas_city
 )
 
 d2b_repo_root() {

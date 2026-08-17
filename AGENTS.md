@@ -36,7 +36,7 @@ Use this index, then open the focused document instead of expanding this file.
 | Gates, heavy lanes, and build profiles | [`docs/contributing/gates-and-lints.md`](./docs/contributing/gates-and-lints.md) |
 | Architecture and per-VM features | [`docs/contributing/architecture.md`](./docs/contributing/architecture.md) and [ADR 0015](./docs/adr/0015-daemon-only-clean-break.md) |
 | Critical subsystem invariants | [`docs/contributing/critical-subsystems.md`](./docs/contributing/critical-subsystems.md) |
-| Optional Gas City infrastructure | [`docs/contributing/gas-city.md`](./docs/contributing/gas-city.md) |
+| Contributor Gas City | [Standalone `vicondoa/d2b-gascity` repository](https://github.com/vicondoa/d2b-gascity) |
 
 ## Mandatory contributor-agent workflow
 
@@ -124,8 +124,6 @@ settings or claim atomic base binding.
   container integration. Do not cite an advisory skip as validation evidence.
 - Every code change ships a valid changelog entry or a fragment under
   [`changelog.d/`](./changelog.d/).
-- Leave `nix/gas-city-contributor/**` and its managed authority unchanged;
-  ordinary repo skill policy makes no visibility claim for managed sessions.
 - `main` and `v3` are protected and land only through reviewed pull requests.
   Use short imperative area-prefixed commit subjects and no AI, tool, or model
   attribution.

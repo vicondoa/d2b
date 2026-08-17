@@ -302,17 +302,6 @@ external-vm-kind/slot-source-rejects-busId
 external-vm-kind/source-rejects-busid
 external-vm-kind/source-rejects-busids
 external-vm-kind/source-rejects-relative-image-path
-gas-city-contributor/broad-projection-rejected
-gas-city-contributor/credential-ownership
-gas-city-contributor/disabled-inert
-gas-city-contributor/identities-and-slice
-gas-city-contributor/network-and-firewall
-gas-city-contributor/operator-rules
-gas-city-contributor/publisher-openssl-wiring
-gas-city-contributor/quota-overflow-rejected
-gas-city-contributor/relative-credential-rejected
-gas-city-contributor/roots-and-quotas
-gas-city-contributor/service-topology
 gateway-vm/accepts-multiple-gateways-with-separate-realms-and-envs
 gateway-vm/admits-framework-sys-prefix
 gateway-vm/auto-declared-env-index

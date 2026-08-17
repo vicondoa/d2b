@@ -199,11 +199,9 @@ review outcomes only. Never include AI, tool, or model attribution.
 
 ## Gas City boundary
 
-Gas City is separate managed contributor infrastructure. Do not modify
-`nix/gas-city-contributor/**` or its managed authority as part of ordinary
-repository work, and do not make claims about repo-skill visibility in managed
-sessions. Its focused operating detail is
-[`gas-city.md`](./gas-city.md).
+Contributor Gas City lives in the standalone
+[`vicondoa/d2b-gascity`](https://github.com/vicondoa/d2b-gascity) repository;
+the d2b repository does not vendor its implementation.
 
 
 ## Disk hygiene contract
