@@ -55,12 +55,14 @@ pkgs.testers.runNixOSTest {
           display-wayland = {
             type = "Provider";
             spec = {
+              artifactId = "display-wayland";
               config.runtimeVolumePolicyId = "display-wayland.wlproxy-runtime.v1";
             };
           };
           clipboard-wayland = {
             type = "Provider";
             spec = {
+              artifactId = "clipboard-wayland";
               config = {
                 hostExecutionRef = "Host/host-system";
                 hostUserRef = "User/alice";
@@ -72,6 +74,7 @@ pkgs.testers.runNixOSTest {
           notification-desktop = {
             type = "Provider";
             spec = {
+              artifactId = "notification-desktop";
               config = {
                 hostExecutionRef = "Host/host-system";
                 hostUserRef = "User/alice";
