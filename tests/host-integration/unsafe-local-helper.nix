@@ -114,6 +114,14 @@ pkgs.testers.runNixOSTest {
               osUsername = "alice";
             };
           };
+          d2bd = {
+            type = "User";
+            spec = {
+              displayName = "d2bd";
+              groups = [ ];
+              osUsername = "d2bd";
+            };
+          };
           host-system = {
             type = "Host";
             spec = {
