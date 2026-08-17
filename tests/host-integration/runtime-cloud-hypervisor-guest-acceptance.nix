@@ -276,7 +276,8 @@ pkgs.testers.runNixOSTest {
         machine.succeed("runuser -u alice -- d2b auth status --json >/dev/null")
     else:
         machine.succeed(
-            "runuser -u alice -- d2b --zone work --json "
+            "runuser -u alice -- env D2B_PUBLIC_SOCKET=/run/d2b/public.sock "
+            "d2b --zone work --json "
             "resource reconcile Guest/corp-vm"
         )
         machine.wait_until_succeeds(
@@ -307,7 +308,8 @@ pkgs.testers.runNixOSTest {
         machine.wait_for_unit("d2bd.service")
         machine.wait_for_file("/run/d2b/public.sock")
         machine.succeed(
-            "runuser -u alice -- d2b --zone work --json "
+            "runuser -u alice -- env D2B_PUBLIC_SOCKET=/run/d2b/public.sock "
+            "d2b --zone work --json "
             "resource reconcile Guest/corp-vm | jq -e "
             "'.effect == \"cloud-hypervisor-adopted\"'"
         )
