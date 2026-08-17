@@ -59,6 +59,7 @@ rust_test(
     data = [":d2b-unsafe-local-helper"],
     env = {"CARGO_BIN_EXE_d2b-unsafe-local-helper": "$(rootpath :d2b-unsafe-local-helper)"},
     rustc_env = {"CARGO_BIN_EXE_d2b-unsafe-local-helper": "$(rootpath :d2b-unsafe-local-helper)"},
+    tags = ["local"],
     visibility = ["//visibility:public"],
     deps = [
         ":d2b_unsafe_local_helper",

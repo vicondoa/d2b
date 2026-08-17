@@ -229,6 +229,7 @@ run_bazel() {
   D2B_BAZEL_PROFILE="$profile" "$bazel_bin" "${startup_flags[@]}" test "--config=$profile" \
     --repo_contents_cache= "--build_event_json_file=$bep_path" \
     --build_tests_only \
+    --test_output=errors \
     --test_tag_filters="$tag_filters" \
     --test_env=D2B_REPO_ROOT="$ROOT" \
     --test_env=D2B_BAZEL_BIN="$bazel_bin" \
