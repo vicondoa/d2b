@@ -13,6 +13,76 @@ let
     inherit self;
     inherit lib;
   };
+  acceptancePublisherKey = ''
+    -----BEGIN PUBLIC KEY-----
+    MCowBQYDK2VwAyEA6kpsY+KcUgq+9VB7Ey7F+ZVHdq6+vnuSQh7qaRRG0iw=
+    -----END PUBLIC KEY-----
+  '';
+  providerPackage = pkgs.runCommand "d2b-acceptance-provider" {
+    nativeBuildInputs = [ pkgs.coreutils ];
+  } ''
+    install -Dm644 ${../../tests/fixtures/provider-acceptance/provider-manifest.json} \
+      "$out/share/d2b/provider/provider-manifest.json"
+    install -Dm644 ${../../tests/fixtures/provider-acceptance/config-schema.json} \
+      "$out/share/d2b/provider/config-schema.json"
+    install -d -m755 "$out/share/d2b/provider"
+    install -Dm755 ${pkgs.coreutils}/bin/true \
+      "$out/bin/acceptance-controller"
+    base64 -d ${../../tests/fixtures/provider-acceptance/provider-manifest.sig.b64} \
+      >"$out/share/d2b/provider/provider-manifest.json.sig"
+  '';
+  providerCatalog = {
+    providerName = "acceptance-provider";
+    packageName = "d2b-acceptance-provider";
+    version = "0.0.0";
+    systems = [ "x86_64-linux" ];
+    platform = "x86_64-linux";
+    apiCompatibility = "d2b.zone.v3";
+    serviceCompatibility = "d2bd.resource";
+    signature = "default";
+    rootEpoch = 1;
+    revocationStatus = "clear";
+    denyStatus = "clear";
+    provenanceEvidence = "accepted";
+    sbomEvidence = "accepted";
+    licenseEvidence = "accepted";
+    vulnerabilityEvidence = "accepted";
+    conformanceAttestation = "accepted";
+    supportChannel = "stable";
+    supportContact = "d2b-acceptance@localhost";
+    publisher = "d2b-acceptance";
+    packageDigest = "sha256:1111111111111111111111111111111111111111111111111111111111111111";
+    executableDigest = "sha256:f84125779653dba770042fd2af2bd01299b05ae892c039c497e6b5ce45029d9c";
+    manifestDigest = "sha256:5f8d852ba3ecd89883afdcf2330f3f752eb1d68a572698035177bcd4b8595e6c";
+    componentDigest = "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+    descriptorDigest = "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+    configDigest = "sha256:ccb5a9d66e068ea8f4e205788589675a48e9e3754a840d8ac10120d14238e914";
+  };
+  providerArtifact = {
+    package = providerPackage;
+    type = "provider";
+    catalog = providerCatalog;
+  };
+  acceptanceArtifactCatalogDigest =
+    "sha256:${lib.concatStringsSep "" (lib.replicate 64 "a")}";
+  acceptanceArtifactCatalog = pkgs.writeText "d2b-acceptance-artifact-catalog.json"
+    (builtins.toJSON {
+      schemaVersion = 3;
+      catalogDigest = acceptanceArtifactCatalogDigest;
+      entries = map
+        (artifactId: {
+          inherit artifactId;
+          type = "provider";
+          storePath = "${providerPackage}";
+          packageDigest = providerCatalog.packageDigest;
+          closureDigest = acceptanceArtifactCatalogDigest;
+          closureSize = 0;
+        })
+        [ "acceptance-provider" ];
+    });
+  artifacts = lib.listToAttrs (map
+    (artifactId: lib.nameValuePair artifactId providerArtifact)
+    [ "acceptance-provider" ]);
 in
 pkgs.testers.runNixOSTest {
   name = "d2b-runtime-cloud-hypervisor-guest-acceptance";
@@ -33,6 +103,23 @@ pkgs.testers.runNixOSTest {
       d2b.site.adminUsers = [ "alice" ];
       environment.variables.D2B_MANIFEST_PATH = config.d2b._manifestJsonPath;
       environment.systemPackages = with pkgs; [ jq iputils ];
+      d2b.artifacts = artifacts;
+      d2b._artifactCatalogV3 = lib.mkForce {
+        catalogDigest = acceptanceArtifactCatalogDigest;
+        path = acceptanceArtifactCatalog;
+      };
+      d2b._bundle.extraArtifacts.artifactCatalog = lib.mkForce {
+        data = { schemaVersion = 3; catalogDigest = acceptanceArtifactCatalogDigest; entries = [ ]; };
+        jsonText = builtins.readFile acceptanceArtifactCatalog;
+        path = lib.mkForce acceptanceArtifactCatalog;
+        installFileName = "artifact-catalog.json";
+        classification = "contractPrivateNonSecret";
+        sensitivity = "nonSecret";
+      };
+      d2b.zones.local-root.trustedPublishers.d2b-acceptance.signingKey =
+        acceptancePublisherKey;
+      d2b.zones.work.trustedPublishers.d2b-acceptance.signingKey =
+        acceptancePublisherKey;
       d2b.zones.local-root.resources.host-system = {
         type = "Host";
         spec = {
@@ -62,11 +149,17 @@ pkgs.testers.runNixOSTest {
           };
           volume-local = {
             type = "Provider";
-            spec.config = { };
+            spec = {
+              artifactId = "acceptance-provider";
+              config = { };
+            };
           };
           volume-virtiofs = {
             type = "Provider";
-            spec.config = { };
+            spec = {
+              artifactId = "acceptance-provider";
+              config = { };
+            };
           };
           corp-vm = {
             type = "Guest";
