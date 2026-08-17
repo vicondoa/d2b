@@ -313,6 +313,7 @@
       "displayName": "Require every Rust gate shard to pass",
       "makeTarget": "test-rust",
       "localEnv": {
+        "D2B_BAZEL_PROFILE": "remote",
         "D2B_SKIP_FIXTURE_BUILD": "1"
       },
       "ciKind": "rust-rollup",

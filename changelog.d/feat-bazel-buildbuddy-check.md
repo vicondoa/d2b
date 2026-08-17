@@ -55,6 +55,8 @@
   nested-Bazel tests stay tagged local and off the hermetic leaves.
 - Retry short public-socket frames in zone doctor/support-bundle/audit
   contract tests so CI nextest does not flake on a zero-length recv.
+- Export `D2B_BAZEL_PROFILE=remote` from Make so `make check` and
+  local rust leaves keep using BuildBuddy.
 - Fixed broker guest-control signing tests to use a path-safe test scratch root
   instead of a world-writable host temp directory.
 - Fixed local Bazel runfiles, Rust test-support graphs, stale coverage carriers,

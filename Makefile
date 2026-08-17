@@ -90,6 +90,7 @@ check-tier0:
 ##                the BuildBuddy remote profile and falls back to local when
 ##                credentials are withheld. CI sets D2B_BAZEL_PROFILE=local.
 D2B_BAZEL_PROFILE ?= remote
+export D2B_BAZEL_PROFILE
 bazel-check:
 	tests/tools/bazel-check --profile "$(D2B_BAZEL_PROFILE)"
 
