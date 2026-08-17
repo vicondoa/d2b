@@ -4072,9 +4072,9 @@ fn resolve_network_effect_context(
         env_name = Some(env.to_owned());
     }
     let env_name = env_name.ok_or(resource_runtime::ResourceRuntimeError::RequestInvalid)?;
-    let env = resolver
-        .find_host_env(&env_name)
-        .ok_or(resource_runtime::ResourceRuntimeError::ProviderPathUnavailable)?;
+    if resolver.find_host_env(&env_name).is_none() {
+        return Err(resource_runtime::ResourceRuntimeError::ProviderPathUnavailable);
+    }
     let bridge_id = intent_id_bridge_env(&env_name);
     let projection_id = intent_id_nft_projection_env(&env_name);
     if resolver.find_bridge_intent(&bridge_id).is_none() {
