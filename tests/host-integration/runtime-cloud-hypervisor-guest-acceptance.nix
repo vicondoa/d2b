@@ -135,6 +135,14 @@ pkgs.testers.runNixOSTest {
       d2b.zones.work = {
         parentZone = "local-root";
         resources = {
+          d2bd = {
+            type = "User";
+            spec = {
+              displayName = "d2bd";
+              groups = [ ];
+              osUsername = "d2bd";
+            };
+          };
           host-system = {
             type = "Host";
             spec = {
