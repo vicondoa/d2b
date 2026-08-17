@@ -62,20 +62,20 @@ let
     (builtins.toJSON {
       schemaVersion = 3;
       catalogDigest = acceptanceArtifactCatalogDigest;
-      entries = [
-        {
-          artifactId = "acceptance-provider";
+      entries = map
+        (artifactId: {
+          inherit artifactId;
           type = "provider";
           storePath = "${providerPackage}";
           packageDigest = providerCatalog.packageDigest;
           closureDigest = acceptanceArtifactCatalogDigest;
           closureSize = 0;
-        }
-      ];
+        })
+        [ "acceptance-provider" "volume-local-provider" "volume-virtiofs-provider" ];
     });
-  artifacts = {
-    acceptance-provider = providerArtifact;
-  };
+  artifacts = lib.listToAttrs (map
+    (artifactId: lib.nameValuePair artifactId providerArtifact)
+    [ "acceptance-provider" "volume-local-provider" "volume-virtiofs-provider" ]);
 in
 pkgs.testers.runNixOSTest {
   name = "d2b-unsafe-local-helper";
