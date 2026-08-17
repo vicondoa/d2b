@@ -8,9 +8,10 @@
 { pkgs, self }:
 
 let
+  inherit (pkgs) lib;
   d2bLib = import ./lib.nix {
     inherit self;
-    inherit (pkgs) lib;
+    inherit lib;
   };
 in
 pkgs.testers.runNixOSTest {
@@ -19,6 +20,16 @@ pkgs.testers.runNixOSTest {
   nodes.machine = d2bLib.d2bDaemonNode {
     writableStore = true;
     extra = { config, pkgs, ... }: {
+      systemd.services.d2bd.serviceConfig.ExecStartPre = lib.mkAfter [
+        "+${pkgs.writeShellScript "d2b-runtime-cgroup-prep" ''
+          relative=$(sed -n 's/^0:://p' /proc/self/cgroup)
+          path="/sys/fs/cgroup''${relative}/cgroup.kill"
+          if [ -e "$path" ]; then
+            chown d2bd:d2bd "$path" 2>/dev/null || true
+            chmod u+w "$path" 2>/dev/null || true
+          fi
+        ''}"
+      ];
       d2b.site.adminUsers = [ "alice" ];
       environment.variables.D2B_MANIFEST_PATH = config.d2b._manifestJsonPath;
       environment.systemPackages = with pkgs; [ jq iputils ];
@@ -34,9 +45,9 @@ pkgs.testers.runNixOSTest {
     # this exact target fail-closed rather than claiming a native pass when
     # the runNixOSTest image cannot provide it.
     store_fixture = machine.succeed(
-        "if mkdir -p /nix/store/zz-d2b-vms-test 2>/dev/null && "
-        "mkdir -p /var/lib/d2b/vms && "
-        "mount --bind /nix/store/zz-d2b-vms-test /var/lib/d2b/vms 2>/dev/null; "
+        "if mkdir -p /nix/store/zz-d2b-vms-test /var/lib/d2b/vms 2>/dev/null && "
+        "test -w /nix/store/zz-d2b-vms-test && "
+        "test \"$(stat -c %d /nix/store)\" = \"$(stat -c %d /var/lib/d2b/vms)\"; "
         "then echo ready; else echo skipped-read-only-store; fi"
     ).strip()
     if store_fixture != "ready":
