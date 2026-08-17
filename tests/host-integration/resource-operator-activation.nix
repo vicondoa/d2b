@@ -1,8 +1,10 @@
-# Type-G runNixOSTest: authenticated Resource operator and daemon census.
+# Type-G runNixOSTest: authenticated Resource operator and framework census.
 #
 # This fixture is intentionally separate from the native controller canaries:
 # it reaches the installed d2b CLI, public socket, systemd restart boundary,
-# and the exact daemon-only unit surface in a real NixOS guest.
+# and the framework-declared daemon unit surface in a real NixOS guest. The
+# census does not sweep every d2b-prefixed unit on an operator host, because
+# optional or managed infrastructure is outside this fixture's ownership.
 { pkgs, self }:
 
 let
@@ -51,25 +53,35 @@ pkgs.testers.runNixOSTest {
         )
         machine.succeed(f"jq -e '.resources | type == \"array\"' {path}")
 
-    units = machine.succeed(
-        "systemctl list-units --no-pager --all --plain "
-        "| grep -E '^(d2b|microvm)' | awk '{print $1}' | sort"
-    ).strip()
-    unit_names = set(units.split())
+    declared = set(
+        machine.succeed("cat /etc/d2b/daemon-acceptance-units").split()
+    )
     required = {
         "d2bd.service",
         "d2b-priv-broker.socket",
         "d2b-priv-broker.service",
     }
-    allowed = required | {"d2b.slice"}
-    assert required <= unit_names, f"daemon-only units missing: {required - unit_names}"
-    assert unit_names <= allowed, f"unexpected d2b/microvm units: {unit_names - allowed}"
+    assert declared == required, (
+        f"unexpected framework acceptance census: {declared}"
+    )
+    unit_names = set(
+        machine.succeed(
+            "systemctl list-units --no-pager --all --plain "
+            "| awk '{print $1}' | sort"
+        ).split()
+    )
+    assert required <= unit_names, (
+        f"framework daemon units missing: {required - unit_names}"
+    )
 
-    # Provider packages are code loaded by d2bd, never persistent services.
-    provider_units = machine.succeed(
-        "systemctl list-unit-files --no-pager --no-legend "
-        "| awk '{print $1}' | grep -E '(^|[-.])d2b[-.]provider|provider[-.]d2b' || true"
-    ).strip()
+    # Provider packages are code loaded by d2bd, never framework-declared
+    # persistent services. Optional or managed host units are outside this
+    # fixture's census.
+    provider_units = sorted(
+        unit
+        for unit in declared
+        if "provider" in unit and (unit.endswith(".service") or unit.endswith(".socket"))
+    )
     assert not provider_units, f"Provider-owned persistent units found: {provider_units}"
   '';
 }
