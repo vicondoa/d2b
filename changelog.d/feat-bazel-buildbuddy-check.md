@@ -51,8 +51,8 @@
 - Run the main, broker, and guest-shell-runner make/CI rust leaves
   through per-leaf Bazel jobs instead of Cargo. The Layer-1 rust-shard
   inventory now accepts those Bazel-wrapped make invocations. Per-crate
-  leaves keep exclusive and local-tagged tests. Host unix-socket
-  doctor and shell-supervisor tests stay on the local leaf.
+  leaves keep exclusive broker tests. Host, Cargo-spawning, and
+  nested-Bazel tests stay tagged local and off the hermetic leaves.
 - Fixed broker guest-control signing tests to use a path-safe test scratch root
   instead of a world-writable host temp directory.
 - Fixed local Bazel runfiles, Rust test-support graphs, stale coverage carriers,

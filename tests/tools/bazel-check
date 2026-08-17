@@ -221,9 +221,10 @@ run_bazel() {
     startup_flags=(--nosystem_rc --nohome_rc)
   fi
   set +e
-  local tag_filters="-manual,-gpu,-kvm"
-  if [ "$LEAF" = all ]; then
-    # The aggregate keeps host/process-global tests on the per-crate leaves.
+  # Host, Cargo-spawning, and nested-Bazel tests stay tagged local.
+  # Exclusive broker tests run only on the broker leaf.
+  local tag_filters="-local,-manual,-gpu,-kvm"
+  if [ "$LEAF" != broker ]; then
     tag_filters="-local,-manual,-exclusive,-gpu,-kvm"
   fi
   D2B_BAZEL_PROFILE="$profile" "$bazel_bin" "${startup_flags[@]}" test "--config=$profile" \
