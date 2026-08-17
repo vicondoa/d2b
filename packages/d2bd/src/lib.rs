@@ -3987,15 +3987,7 @@ fn dispatch_resource_request(
 }
 
 fn projection_digest_bytes(value: &str) -> Option<[u8; 32]> {
-    let hex = value.strip_prefix("sha256:")?;
-    if hex.len() != 64 {
-        return None;
-    }
-    let mut digest = [0; 32];
-    for (index, byte) in digest.iter_mut().enumerate() {
-        *byte = u8::from_str_radix(&hex[index * 2..index * 2 + 2], 16).ok()?;
-    }
-    Some(digest)
+    (!value.is_empty()).then(|| Sha256::digest(value.as_bytes()).into())
 }
 
 fn resolve_volume_storage_ref(
@@ -4115,7 +4107,7 @@ fn resolve_network_effect_context(
         .installed_generation_identity()
         .and_then(|identity| ResourceBundleGenerationId::parse(identity.as_str().to_owned()).ok())
         .ok_or(resource_runtime::ResourceRuntimeError::ProviderPathUnavailable)?;
-    let projection_digest = projection_digest_bytes(&projection.desired_hash)
+    let projection_digest = projection_digest_bytes(&projection.script_body)
         .ok_or(resource_runtime::ResourceRuntimeError::ProviderPathUnavailable)?;
     Ok(NetworkEffectContext::new(
         ScopeId::new(format!("env:{env_name}")),
