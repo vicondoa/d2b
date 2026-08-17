@@ -277,7 +277,7 @@ pkgs.testers.runNixOSTest {
     else:
         machine.succeed(
             "runuser -u alice -- d2b --zone work --json "
-            "reconcile Guest/corp-vm"
+            "resource reconcile Guest/corp-vm"
         )
         machine.wait_until_succeeds(
             "jq -e '.entries[] | select(.vm == \"corp-vm\" and .role == \"ch-runner\")' "
@@ -308,7 +308,7 @@ pkgs.testers.runNixOSTest {
         machine.wait_for_file("/run/d2b/public.sock")
         machine.succeed(
             "runuser -u alice -- d2b --zone work --json "
-            "reconcile Guest/corp-vm | jq -e "
+            "resource reconcile Guest/corp-vm | jq -e "
             "'.effect == \"cloud-hypervisor-adopted\"'"
         )
         machine.succeed(f"test -d /proc/{runner_pid}")
