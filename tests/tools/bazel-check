@@ -5,12 +5,14 @@ ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../.." && pwd)"
 PROFILE=""
 SCRATCH="${D2B_BAZEL_CHECK_SCRATCH:-$ROOT/.scratch/bazel-check}"
 # Compile-fail UI suites stay on Cargo; they exceed the default Bazel timeout
-# when many rustc invocations share one worker.
+# when many rustc invocations share one worker. Gas City fixture genrules
+# stay out of the default aggregate; they need a user-namespace FHS shell.
 TARGET_SET=(
   //...
   -//packages/d2b-bus/tests/ui/...
   -//packages/d2b-controller-toolkit/tests/ui/...
   -//packages/d2b-resource-api/tests/ui/...
+  -//tests/fixtures/gas-city/...
 )
 REDACTION_FAILURE_STATUS=75
 CONFIGURATION_FAILURE_STATUS=76
@@ -183,6 +185,7 @@ run_bazel() {
   set +e
   D2B_BAZEL_PROFILE="$profile" "$bazel_bin" "${startup_flags[@]}" test "--config=$profile" \
     --repo_contents_cache= "--build_event_json_file=$bep_path" \
+    --build_tests_only \
     --test_tag_filters=-local,-manual,-exclusive,-gpu,-kvm \
     --test_env=D2B_REPO_ROOT="$ROOT" \
     --test_env=D2B_BAZEL_BIN="$bazel_bin" \

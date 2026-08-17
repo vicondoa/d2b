@@ -188,7 +188,7 @@ fn contains_bazel_facade_invocation(content: &str) -> bool {
                 return true;
             }
         }
-        if shell_command_contains_bazel_facade(&line) {
+        if shell_command_contains_bazel_facade(line) {
             return true;
         }
         index += 1;

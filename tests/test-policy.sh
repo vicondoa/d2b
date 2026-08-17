@@ -164,6 +164,11 @@ run_guest_workspace_guard() {
 run_production_closure_guard() {
   local label="production-closure-recompute"
   log "--> $label"
+  if ! cargo fetch --locked >/dev/null; then
+    fail "$label"
+    rc=1
+    return
+  fi
   if CARGO_TERM_COLOR=never cargo xtask gen-package-policy-inputs --check; then
     ok "$label"
   else

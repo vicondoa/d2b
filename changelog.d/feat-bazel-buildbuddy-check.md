@@ -46,6 +46,8 @@
   warning-clean.
 - Refresh checked-in package policy inputs after the workspace Cargo
   authority change.
+- Keep Gas City fixture genrules out of `make bazel-check` and fetch
+  the locked crate graph before the offline production-closure check.
 - Fixed broker guest-control signing tests to use a path-safe test scratch root
   instead of a world-writable host temp directory.
 - Fixed local Bazel runfiles, Rust test-support graphs, stale coverage carriers,
