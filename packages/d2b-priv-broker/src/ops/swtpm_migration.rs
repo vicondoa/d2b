@@ -481,7 +481,6 @@ fn child_gid_is_trusted(
     Ok(stat.st_mode & libc::S_IFMT == libc::S_IFDIR
         && stat.st_mode & 0o002 == 0
         && stat.st_mode & 0o2000 != 0
-        && stat.st_uid == nix::unistd::geteuid().as_raw()
         && stat.st_gid == child_gid)
 }
 
