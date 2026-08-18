@@ -73,6 +73,7 @@ rust_test(
         "//bazel/remote:BUILD.bazel",
         "//:docs/reference/bazel-buildbuddy.md",
         "//:nix/bazel-worker-image.nix",
+        "//:tests/tools/bazel-check",
         "//:tests/golden/bazel/cache-policy.json",
     ],
     env = {"CARGO_BIN_EXE_xtask": "$(rootpath :xtask)"},

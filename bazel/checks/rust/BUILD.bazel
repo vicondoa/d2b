@@ -338,6 +338,37 @@ test_suite(
     ],
 )
 
+test_suite(
+    name = "portable_rust_local",
+    tests = [
+        "//packages/d2b:host_doctor_contract",
+        "//packages/d2b:zone_doctor_contract",
+        "//packages/d2b-contract-tests:policy_dash_gate",
+        "//packages/d2b-contract-tests:policy_docs",
+        "//packages/d2b-contract-tests:policy_modules",
+        "//packages/d2b-contract-tests:policy_production_closure",
+        "//packages/d2b-contract-tests:policy_provider_crate_layout",
+        "//packages/d2b-guestd:d2b_guestd_test",
+        "//packages/d2b-host:guest_control_token_materializer",
+        "//packages/d2b-resource-store-redb:d2b_resource_store_redb_test",
+        "//packages/d2b-telemetry:d2b_telemetry_test",
+        "//packages/d2b-unsafe-local-helper:d2b_unsafe_local_helper_test",
+        "//packages/d2b-unsafe-local-helper:shell_supervisor",
+        "//packages/d2bd:bundle_tampered_envelope",
+        "//packages/d2bd:d2bd_lib_test",
+        "//packages/d2bd:daemon_socket_acl",
+        "//packages/d2bd:daemon_state_lock",
+        "//packages/d2bd:daemon_state_persistence",
+        "//packages/d2bd:daemon_version_file",
+        "//packages/d2bd:daemon_version_negotiation",
+        "//packages/d2bd:production_binary_policy",
+        "//packages/d2bd:public_status_socket",
+        "//packages/xtask:bazel_evidence",
+        "//packages/xtask:heavy_gate_reexec",
+        "//packages/xtask:xtask_test",
+    ],
+)
+
 filegroup(
     name = "cargo_workspace_sources",
     srcs = [

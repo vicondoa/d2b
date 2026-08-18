@@ -20,8 +20,14 @@
       "actionCount": 59,
       "grossInputBytes": 467137819,
       "uniqueInputBytes": 82452586,
-      "highIoLocal": ["Rustc", "CargoBuildScriptRun"],
-      "included": ["ExtractCargoTomlEnvVars", "TestRunner"]
+      "highIoLocal": [
+        "Rustc",
+        "CargoBuildScriptRun"
+      ],
+      "included": [
+        "ExtractCargoTomlEnvVars",
+        "TestRunner"
+      ]
     },
     "pipelining": {
       "status": "rejected",
@@ -101,11 +107,10 @@
       "MODULE.bazel.lock",
       "bazel/platforms/BUILD.bazel",
       "bazel/remote/BUILD.bazel",
-      "tests/tools/bazel-check",
-      "tests/tools/buildbuddy-qualification"
+      "tests/tools/bazel-check"
     ],
     "allowedSecurityDigests": [
-      "sha256:b7b71466de6936c0f7612ed03ceafbbd67ddb9326c883be084e6d318bb3966b7"
+      "sha256:764ec6cf9a1341e6cb42c0d1a6fde5b0f3b041af7891e80ac2580d05a12ca2f9"
     ],
     "untrustedCredential": "none",
     "trustedCredential": "credential-helper"

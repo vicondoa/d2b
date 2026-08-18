@@ -253,6 +253,15 @@ filegroup(
     visibility = ["//visibility:public"],
 )
 
+filegroup(
+    name = "harness_workspace_sources",
+    srcs = glob(
+        ["harness/**/*"],
+        allow_empty = True,
+    ),
+    visibility = ["//visibility:public"],
+)
+
 # keep
 filegroup(
     name = "third_party_workspace_sources",

@@ -5,13 +5,11 @@ use std::path::PathBuf;
 
 const ALLOWLISTED_WORKFLOWS: &[&str] = &[
     ".github/workflows/eval-with-entra-id.yml",
-    ".github/workflows/pr-eval-shell-tests.yml",
     ".github/workflows/release-host-binaries.yml",
 ];
 
 const V3_PR_GATE_WORKFLOWS: &[&str] = &[
     ".github/workflows/eval-with-entra-id.yml",
-    ".github/workflows/pr-eval-shell-tests.yml",
     ".github/workflows/pr-l1-static-fast.yml",
 ];
 
@@ -252,7 +250,9 @@ fn optional_bazel_facade_stays_out_of_ci_schedulers() {
     assert!(
         workflow.contains("make check-tier0")
             && workflow.contains("make test-policy")
-            && workflow.contains("make check"),
+            && workflow.contains("make test-rust-main")
+            && workflow.contains("make test-flake")
+            && workflow.contains("make test-fixture-contracts"),
         "CI must schedule the fixed Bazel graph through public Make aliases"
     );
     assert!(
@@ -291,7 +291,6 @@ fn ci_uses_make_allowlist_is_intentional_and_bounded() {
         ALLOWLISTED_WORKFLOWS,
         &[
             ".github/workflows/eval-with-entra-id.yml",
-            ".github/workflows/pr-eval-shell-tests.yml",
             ".github/workflows/release-host-binaries.yml",
         ],
         "workflow make-target exceptions must stay reviewed and bounded"

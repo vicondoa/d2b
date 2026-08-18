@@ -33,6 +33,8 @@ test_suite(
         "//packages/d2b-contract-tests:policy_bazel_layout",
         "//packages/d2b-contract-tests:policy_source",
         "//packages/xtask:buildbuddy_config",
+        "//packages/xtask:policy_ci",
+        "//packages/xtask:policy_workspace",
         ":rust_policy",
     ],
 )

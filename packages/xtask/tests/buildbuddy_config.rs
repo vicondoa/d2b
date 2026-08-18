@@ -150,6 +150,15 @@ fn committed_profiles_share_authentication_and_worker_policy() {
         !user_example.contains("x-buildbuddy-api-key"),
         "the user example must not contain a credential header"
     );
+
+    let wrapper = read_text("tests/tools/bazel-check");
+    assert!(
+        wrapper.contains("D2B_BAZEL_FALLBACK_ISOLATE_RC=1")
+            && wrapper.contains("--nosystem_rc")
+            && wrapper.contains("--nohome_rc")
+            && wrapper.contains("local fallback rejects an external workspace Bazel rc"),
+        "the one local fallback must ignore external Bazel rc files"
+    );
 }
 
 #[test]

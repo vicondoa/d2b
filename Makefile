@@ -13,7 +13,7 @@ SHELL := $(CURDIR)/tests/tools/scrub-shell-environment
         bazel-check \
         test test-unit \
         test-lint test-rust test-rust-main \
-        test-rust-broker test-rust-guest-shell-runner test-rust-no-bash-ast \
+        test-rust-broker test-rust-guest-shell-runner test-rust-local test-rust-no-bash-ast \
         test-rust-schema test-rust-inventory test-rust-supply-chain \
         test-cargo-compat \
         test-rust-leaf-main-workspace \
@@ -102,6 +102,7 @@ D2B_BAZEL_MAIN_TARGETS = \
 	-//bazel/checks/rust:d2b_guest_shell_runner_doc_test
 D2B_BAZEL_BROKER_TARGETS = //bazel/checks/rust:portable_rust_broker
 D2B_BAZEL_GUEST_TARGETS = //bazel/checks/rust:portable_rust_guest
+D2B_BAZEL_LOCAL_RUST_TARGETS = //bazel/checks/rust:portable_rust_local
 D2B_BAZEL_POLICY_TARGETS = //bazel/checks/policy:policy_tooling
 D2B_BAZEL_NIX_EVAL_TARGETS = //bazel/checks/nix:nix_evaluation
 D2B_BAZEL_NIX_REALIZED_TARGETS = //bazel/checks/nix:nix_realized
@@ -111,6 +112,7 @@ D2B_BAZEL_COMPLETE_TARGETS = \
 	$(D2B_BAZEL_MAIN_TARGETS) \
 	$(D2B_BAZEL_BROKER_TARGETS) \
 	$(D2B_BAZEL_GUEST_TARGETS) \
+	$(D2B_BAZEL_LOCAL_RUST_TARGETS) \
 	$(D2B_BAZEL_POLICY_TARGETS) \
 	$(D2B_BAZEL_NIX_EVAL_TARGETS) \
 	$(D2B_BAZEL_NIX_REALIZED_TARGETS) \
@@ -147,7 +149,7 @@ test-lint:
 
 ## test-rust - fixed portable Rust, broker, and guest Bazel suites.
 test-rust:
-	$(BAZEL_RUN) $(D2B_BAZEL_MAIN_TARGETS) $(D2B_BAZEL_BROKER_TARGETS) $(D2B_BAZEL_GUEST_TARGETS)
+	$(BAZEL_RUN) $(D2B_BAZEL_MAIN_TARGETS) $(D2B_BAZEL_BROKER_TARGETS) $(D2B_BAZEL_GUEST_TARGETS) $(D2B_BAZEL_LOCAL_RUST_TARGETS)
 
 test-rust-main:
 	D2B_BAZEL_TEST_TAG_FILTERS="-local,-manual,-exclusive,-gpu,-kvm" tests/tools/bazel-check --profile "$(D2B_BAZEL_PROFILE)" -- $(D2B_BAZEL_MAIN_TARGETS)
@@ -157,6 +159,9 @@ test-rust-broker:
 
 test-rust-guest-shell-runner:
 	$(BAZEL_RUN) $(D2B_BAZEL_GUEST_TARGETS)
+
+test-rust-local:
+	$(BAZEL_RUN) $(D2B_BAZEL_LOCAL_RUST_TARGETS)
 
 test-rust-no-bash-ast:
 	$(BAZEL_RUN) //tests/tools/no-bash-ast-walker:no_bash_ast_test
