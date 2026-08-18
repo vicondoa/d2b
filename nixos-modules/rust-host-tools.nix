@@ -14,10 +14,23 @@ let
       "$out/docs/reference/schemas/v3/providers/transport-vsock.transport-binding.json"
   '';
   cargoLock = ../packages/Cargo.lock;
+  # Keep the deps-only derivation keyed to manifests, locks, and Cargo config,
+  # not to application source files. Crane still creates the dummy Rust
+  # sources, but giving it this smaller input prevents .rs edits from changing
+  # the dummy-source derivation itself.
+  cargoManifestSrc = lib.cleanSourceWith {
+    src = packagesSrc;
+    name = "d2b-cargo-manifests";
+    filter = path: type:
+      type == "directory"
+      || lib.hasSuffix "/Cargo.toml" (toString path)
+      || lib.hasSuffix "/Cargo.lock" (toString path)
+      || lib.hasSuffix "/.cargo/config.toml" (toString path);
+  };
   dummySource = pkgs.runCommand "d2b-provider-rust-src" { } ''
     mkdir -p "$out/packages"
     cp -r ${craneLib.mkDummySrc {
-      src = packagesSrc;
+      src = cargoManifestSrc;
       inherit cargoLock;
     }}/. "$out/packages/"
   '';
