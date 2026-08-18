@@ -116,6 +116,14 @@ pkgs.testers.runNixOSTest {
         environment.etc."d2b/acceptance-host-runtime.json".source = hostRuntime;
         d2b.site.adminUsers = [ "alice" ];
         systemd.services.d2bd.serviceConfig.ExecStartPre = lib.mkAfter [
+          "+${pkgs.writeShellScript "d2b-acceptance-hosts-prep" ''
+            if [ -L /etc/hosts ]; then
+              ${pkgs.coreutils}/bin/cat /etc/hosts > /run/d2b-acceptance-hosts
+              ${pkgs.coreutils}/bin/rm -f /etc/hosts
+              ${pkgs.coreutils}/bin/install -o root -g root -m 0644 \
+                /run/d2b-acceptance-hosts /etc/hosts
+            fi
+          ''}"
           "+${pkgs.writeShellScript "d2b-acceptance-host-runtime-prep" ''
             ${pkgs.coreutils}/bin/install -D -o root -g d2bd -m 0640 \
               /etc/d2b/acceptance-host-runtime.json \
