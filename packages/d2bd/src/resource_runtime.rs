@@ -3561,7 +3561,7 @@ async fn load_committed_interaction_identity(
             .map_err(|error| {
                 tracing::error!(
                     zone = %zone.as_str(),
-                    resource = %session_spec.policy_ref().to_canonical_string(),
+                    operation = "interaction-policy-lookup",
                     error = %error,
                     "resource runtime committed Wayland policy lookup failed",
                 );
@@ -3572,7 +3572,7 @@ async fn load_committed_interaction_identity(
         .map_err(|error| {
             tracing::error!(
                 zone = %zone.as_str(),
-                resource = %subject_ref.to_canonical_string(),
+                operation = "interaction-subject-lookup",
                 error = %error,
                 "resource runtime committed interaction subject lookup failed",
             );
@@ -3583,7 +3583,7 @@ async fn load_committed_interaction_identity(
         .map_err(|error| {
             tracing::error!(
                 zone = %zone.as_str(),
-                resource = %host_execution_ref.to_canonical_string(),
+                operation = "interaction-host-lookup",
                 error = %error,
                 "resource runtime committed interaction Host lookup failed",
             );
@@ -3594,7 +3594,7 @@ async fn load_committed_interaction_identity(
         .map_err(|error| {
             tracing::error!(
                 zone = %zone.as_str(),
-                resource = %user_ref.to_canonical_string(),
+                operation = "interaction-user-lookup",
                 error = %error,
                 "resource runtime committed interaction User lookup failed",
             );
@@ -3608,7 +3608,7 @@ async fn load_committed_interaction_identity(
         .map_err(|error| {
             tracing::error!(
                 zone = %zone.as_str(),
-                resource = %display_ref.to_canonical_string(),
+                operation = "display-provider-lookup",
                 error = %error,
                 "resource runtime committed display Provider lookup failed",
             );
@@ -3619,7 +3619,7 @@ async fn load_committed_interaction_identity(
             |error| {
                 tracing::error!(
                     zone = %zone.as_str(),
-                    resource = %display_ref.to_canonical_string(),
+                    operation = "display-provider-validation",
                     error = %error,
                     "resource runtime committed display Provider validation failed",
                 );
