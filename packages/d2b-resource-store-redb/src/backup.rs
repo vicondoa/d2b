@@ -335,7 +335,13 @@ impl LogicalBackup {
     pub fn validate_for_identity(&self, identity: &StoreIdentity) -> Result<(), crate::StoreError> {
         self.validate()?;
         if self.schema_version != PHYSICAL_SCHEMA_VERSION {
-            return Err(integrity("backup-store-identity-mismatch"));
+            return Err(crate::StoreError::new(
+                d2b_resource_store::StoreErrorKind::UpgradeRequired,
+                None,
+                None,
+                RetryClass::Never,
+                "backup-schema-version-unsupported",
+            ));
         }
         self.validate_identity_fields(identity)
     }

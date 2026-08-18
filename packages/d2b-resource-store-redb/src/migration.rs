@@ -1718,6 +1718,26 @@ mod tests {
     }
 
     #[test]
+    fn restore_rejects_a_pre_upgrade_backup_as_upgrade_required() {
+        let (directory, parent_fd, mut marker) = parent();
+        let error =
+            restore_owned(&parent_fd, &mut marker, &pre_upgrade_backup(), &identity()).unwrap_err();
+        assert_eq!(error.kind(), StoreErrorKind::UpgradeRequired);
+        assert_eq!(error.reason_code(), "backup-schema-version-unsupported");
+        assert_eq!(
+            backup::publication_state(
+                &parent_fd,
+                DEFAULT_STAGED_FILE_NAME,
+                DEFAULT_ACTIVE_FILE_NAME,
+                DEFAULT_PRIOR_FILE_NAME
+            )
+            .unwrap(),
+            PublicationState::Empty
+        );
+        drop(directory);
+    }
+
+    #[test]
     fn schema_upgrade_rejects_a_backup_for_another_store_before_staging() {
         let (directory, parent_fd, mut marker) = parent();
         create_current_file(&directory, DEFAULT_ACTIVE_FILE_NAME);

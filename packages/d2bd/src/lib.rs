@@ -4188,9 +4188,9 @@ fn resolve_network_vm_name(
 }
 
 #[derive(Clone)]
-// This compatibility boundary records mutation progress only. It is not a
-// Resource API child-status observer, so the public Network path stays Pending
-// until a durable child-resource controller supplies readiness.
+// This compatibility boundary records the completion of the child mutations
+// it invokes. It is not the readiness authority: each pass commits a typed
+// projection and the next pass reads that projection back from Resource API.
 struct PublicNetworkResourceBoundary {
     state: Arc<Mutex<PublicNetworkResourceState>>,
 }
@@ -4222,7 +4222,6 @@ struct PublicNetworkChildReadiness {
 }
 
 impl PublicNetworkChildReadiness {
-    #[cfg(test)]
     const fn pending() -> Self {
         Self {
             volume_ready: false,
@@ -4238,16 +4237,99 @@ impl PublicNetworkChildReadiness {
             volume_attachment_ready: state.volume_attached,
         }
     }
+
+    #[cfg(test)]
+    const fn ready() -> Self {
+        Self {
+            volume_ready: true,
+            guest_ready: true,
+            volume_attachment_ready: true,
+        }
+    }
+
+    const fn is_ready(self) -> bool {
+        self.volume_ready && self.guest_ready && self.volume_attachment_ready
+    }
 }
 
 impl PublicNetworkResourceBoundary {
-    fn observed_child_readiness(&self) -> Result<PublicNetworkChildReadiness, NetworkEffectError> {
+    fn completed_child_readiness(&self) -> Result<PublicNetworkChildReadiness, NetworkEffectError> {
         let state = self
             .state
             .lock()
             .map_err(|_| NetworkEffectError::ConfigVolume)?;
         Ok(PublicNetworkChildReadiness::from_state(&state))
     }
+}
+
+fn network_child_readiness_projection(readiness: PublicNetworkChildReadiness) -> Value {
+    let phase = |ready| {
+        json!({
+            "phase": if ready { "Ready" } else { "Pending" },
+        })
+    };
+    json!({
+        "configVolume": phase(readiness.volume_ready),
+        "netVm": phase(readiness.guest_ready),
+        "volumeAttachment": phase(readiness.volume_attachment_ready),
+    })
+}
+
+fn network_child_readiness_projection_for_resource(
+    resource: &Value,
+    readiness: PublicNetworkChildReadiness,
+) -> Value {
+    let mut projection = resource
+        .get("status")
+        .and_then(|status| status.get("resource"))
+        .and_then(Value::as_object)
+        .cloned()
+        .unwrap_or_default();
+    let Value::Object(children) = network_child_readiness_projection(readiness) else {
+        unreachable!("Network child readiness projection is an object");
+    };
+    projection.extend(children);
+    Value::Object(projection)
+}
+
+fn network_child_readiness_from_resource(resource: &Value) -> PublicNetworkChildReadiness {
+    let Some(projection) = resource
+        .get("status")
+        .and_then(|status| status.get("resource"))
+        .and_then(Value::as_object)
+    else {
+        return PublicNetworkChildReadiness::pending();
+    };
+    let phase_ready = |name: &str| {
+        projection
+            .get(name)
+            .and_then(|child| child.get("phase"))
+            .and_then(Value::as_str)
+            == Some("Ready")
+    };
+    PublicNetworkChildReadiness {
+        volume_ready: phase_ready("configVolume"),
+        guest_ready: phase_ready("netVm"),
+        volume_attachment_ready: phase_ready("volumeAttachment"),
+    }
+}
+
+fn fetch_public_resource(
+    runtime: &resource_runtime::ZoneResourceRuntime,
+    peer: &PeerIdentity,
+    resource_ref: &ResourceRef,
+) -> Result<Value, resource_runtime::ResourceRuntimeError> {
+    let request = json!({
+        "method": "Get",
+        "service": "d2b.resource.v3",
+        "zoneRef": format!("Zone/{}", runtime.zone().as_str()),
+        "resourceRef": resource_ref.to_canonical_string(),
+    });
+    let resource = block_on_future(runtime.dispatch_public_cli_request(&request, peer.uid))?;
+    if let Some(error) = public_resource_get_error(&resource) {
+        return Err(error);
+    }
+    Ok(resource)
 }
 
 #[cfg(test)]
@@ -4273,6 +4355,51 @@ mod public_network_child_readiness_tests {
 
         state.volume_attached = true;
         assert!(PublicNetworkChildReadiness::from_state(&state).volume_attachment_ready);
+    }
+
+    #[test]
+    fn durable_projection_is_the_only_readiness_observation() {
+        let resource = json!({
+            "status": {
+                "phase": "Ready",
+                "observedGeneration": 3,
+                "resource": {
+                    "netVmRef": "Guest/net-work-net",
+                    "lanBridge": {"phase": "Ready"},
+                    "uplinkBridge": {"phase": "Ready"},
+                    "externalAttachment": null,
+                    "attachments": [],
+                },
+            }
+        });
+        let resource = json!({
+            "status": {
+                "phase": "Ready",
+                "observedGeneration": 3,
+                "resource": network_child_readiness_projection_for_resource(
+                    &resource,
+                    PublicNetworkChildReadiness::ready()
+                ),
+            }
+        });
+        assert_eq!(
+            network_child_readiness_from_resource(&resource),
+            PublicNetworkChildReadiness::ready()
+        );
+        assert_eq!(
+            resource["status"]["resource"]["netVmRef"],
+            "Guest/net-work-net"
+        );
+        assert_eq!(
+            network_child_readiness_from_resource(&json!({
+                "status": {
+                    "phase": "Ready",
+                    "observedGeneration": 3,
+                    "resource": {}
+                }
+            })),
+            PublicNetworkChildReadiness::pending()
+        );
     }
 }
 
@@ -4426,6 +4553,7 @@ fn dispatch_wave6_resource_reconcile(
     let resolver = load_bundle_resolver(state)
         .map_err(|_| resource_runtime::ResourceRuntimeError::ProviderPathUnavailable)?;
 
+    let mut ready = true;
     let effect = match resource_type {
         "Volume" => {
             let storage_ref = resolve_volume_storage_ref(&resource, &resolver)?;
@@ -4462,7 +4590,17 @@ fn dispatch_wave6_resource_reconcile(
                 operation_id,
                 "Pending",
             ))?;
-            reconcile_wave6_network_effect(state, peer, &resolver, &uid, &resource, true)?;
+            ready = reconcile_wave6_network_effect(
+                state,
+                peer,
+                runtime,
+                &resolver,
+                &resource_ref,
+                &uid,
+                &resource,
+                operation_id,
+                true,
+            )?;
             "network-bridge-reconciled"
         }
         "Device" => {
@@ -4524,7 +4662,7 @@ fn dispatch_wave6_resource_reconcile(
                     );
                     resource_runtime::ResourceRuntimeError::ProviderPathUnavailable
                 })?;
-            match adoption {
+            let effect = match adoption {
                 process_provider_runtime::ProviderAdoption::Adopted(_) => {
                     "cloud-hypervisor-adopted"
                 }
@@ -4547,7 +4685,14 @@ fn dispatch_wave6_resource_reconcile(
                     })?;
                     "cloud-hypervisor-started"
                 }
-            }
+            };
+            block_on_future(runtime.persist_public_reconcile_phase(
+                &resource_ref,
+                &uid,
+                operation_id,
+                "Ready",
+            ))?;
+            effect
         }
         _ => unreachable!(),
     };
@@ -4557,7 +4702,7 @@ fn dispatch_wave6_resource_reconcile(
         "effect": effect,
         "operationId": operation_id,
         "providerRef": provider_ref,
-        "ready": true,
+        "ready": ready,
         "resourceRef": resource_ref.to_canonical_string(),
         "resources": [resource],
     }))
@@ -4646,7 +4791,20 @@ fn ensure_guest_networks_reconciled(
                 &network_operation_id,
                 "Pending",
             ))?;
-            reconcile_wave6_network_effect(state, peer, resolver, &network_uid, &network, false)?;
+            let network_ready = reconcile_wave6_network_effect(
+                state,
+                peer,
+                runtime,
+                resolver,
+                &network_ref,
+                &network_uid,
+                &network,
+                &network_operation_id,
+                false,
+            )?;
+            if !network_ready {
+                return Err(resource_runtime::ResourceRuntimeError::ProviderPathUnavailable);
+            }
         }
     }
     Ok(())
@@ -4655,11 +4813,14 @@ fn ensure_guest_networks_reconciled(
 fn reconcile_wave6_network_effect(
     state: &ServerState,
     peer: &PeerIdentity,
+    runtime: &resource_runtime::ZoneResourceRuntime,
     resolver: &BundleResolver,
+    resource_ref: &ResourceRef,
     uid: &ResourceUid,
     resource: &Value,
+    operation_id: &str,
     ensure_host_base: bool,
-) -> Result<(), resource_runtime::ResourceRuntimeError> {
+) -> Result<bool, resource_runtime::ResourceRuntimeError> {
     let caller_role = broker_caller_role_for_peer(peer);
     if ensure_host_base {
         let base_response = dispatch_broker_request_as(
@@ -4782,18 +4943,63 @@ fn reconcile_wave6_network_effect(
     };
     let effects = network_effect_port::production_port(state, caller_role, context);
     let reconciler = NetworkReconciler::new(effects, resources);
-    for _ in 0..MAX_NETWORK_CHILD_READINESS_PASSES {
-        let observed_before = observer
-            .observed_child_readiness()
-            .map_err(|_| resource_runtime::ResourceRuntimeError::ProviderPathUnavailable)?;
+    let mut durable_resource = resource.clone();
+    for pass in 0..MAX_NETWORK_CHILD_READINESS_PASSES {
+        let observed_before = network_child_readiness_from_resource(&durable_resource);
         input.volume_ready = observed_before.volume_ready;
         input.guest_ready = observed_before.guest_ready;
         input.volume_attachment_ready = observed_before.volume_attachment_ready;
         match block_on_future(reconciler.reconcile(&input)) {
-            Ok(ReconcileProgress::Ready) => return Ok(()),
+            Ok(ReconcileProgress::Ready) => {
+                let completed = observer
+                    .completed_child_readiness()
+                    .map_err(|_| resource_runtime::ResourceRuntimeError::ProviderPathUnavailable)?;
+                if !completed.is_ready() {
+                    tracing::warn!(
+                        stage = "network-reconciler",
+                        "Network Provider reported Ready without completing child mutations"
+                    );
+                    return Err(resource_runtime::ResourceRuntimeError::ProviderPathUnavailable);
+                }
+                let projection =
+                    network_child_readiness_projection_for_resource(&durable_resource, completed);
+                let status_operation_id = format!("{operation_id}-network-status-{pass}");
+                block_on_future(runtime.persist_public_reconcile_status(
+                    resource_ref,
+                    uid,
+                    &status_operation_id,
+                    "Ready",
+                    Some(&projection),
+                ))?;
+                durable_resource = fetch_public_resource(runtime, peer, resource_ref)?;
+                let committed_generation = durable_resource
+                    .get("metadata")
+                    .and_then(|metadata| metadata.get("generation"))
+                    .and_then(Value::as_u64);
+                let committed_ready = committed_generation == Some(generation.get())
+                    && durable_resource
+                        .get("status")
+                        .and_then(|status| status.get("phase"))
+                        .and_then(Value::as_str)
+                        == Some("Ready")
+                    && durable_resource
+                        .get("status")
+                        .and_then(|status| status.get("observedGeneration"))
+                        .and_then(Value::as_u64)
+                        == Some(generation.get())
+                    && network_child_readiness_from_resource(&durable_resource).is_ready();
+                if committed_ready {
+                    return Ok(true);
+                }
+                tracing::warn!(
+                    stage = "network-reconciler",
+                    "Network Provider status commit did not produce durable Ready"
+                );
+                return Err(resource_runtime::ResourceRuntimeError::ProviderPathUnavailable);
+            }
             Ok(ReconcileProgress::Pending(_)) => {
                 let observed_after = observer
-                    .observed_child_readiness()
+                    .completed_child_readiness()
                     .map_err(|_| resource_runtime::ResourceRuntimeError::ProviderPathUnavailable)?;
                 if observed_after == observed_before {
                     tracing::warn!(
@@ -4802,6 +5008,28 @@ fn reconcile_wave6_network_effect(
                     );
                     return Err(resource_runtime::ResourceRuntimeError::ProviderPathUnavailable);
                 }
+                let projection = network_child_readiness_projection_for_resource(
+                    &durable_resource,
+                    observed_after,
+                );
+                let status_operation_id = format!("{operation_id}-network-status-{pass}");
+                block_on_future(runtime.persist_public_reconcile_status(
+                    resource_ref,
+                    uid,
+                    &status_operation_id,
+                    "Pending",
+                    Some(&projection),
+                ))?;
+                let committed = fetch_public_resource(runtime, peer, resource_ref)?;
+                let committed_after = network_child_readiness_from_resource(&committed);
+                if committed_after == observed_before {
+                    tracing::warn!(
+                        stage = "network-reconciler",
+                        "Network Provider child readiness was not durably observed"
+                    );
+                    return Err(resource_runtime::ResourceRuntimeError::ProviderPathUnavailable);
+                }
+                durable_resource = committed;
             }
             Ok(progress) => {
                 tracing::warn!(
@@ -5185,6 +5413,17 @@ fn resource_runtime_error_frame(error: resource_runtime::ResourceRuntimeError) -
                 _ => "never",
             },
             "the public Resource API returned a typed error",
+            "follow the typed Resource API error before retrying",
+        ),
+        resource_runtime::ResourceRuntimeError::ResourceStatusUpdateFailed(kind) => (
+            kind.as_str(),
+            match kind {
+                ResourceErrorKind::AuthorizationDenied => "reauthorize",
+                ResourceErrorKind::ResourcePlaneUnavailable => "after-delay",
+                ResourceErrorKind::Backpressure => "immediate",
+                _ => "never",
+            },
+            "the public Resource API refused the status update",
             "follow the typed Resource API error before retrying",
         ),
         _ => (

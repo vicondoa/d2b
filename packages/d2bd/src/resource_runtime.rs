@@ -189,6 +189,9 @@ pub enum ResourceRuntimeError {
     /// The public Resource API returned a typed error while loading a
     /// resource for provider reconciliation.
     ResourceGetFailed(ResourceErrorKind),
+    /// The public Resource API refused a provider status update with a typed
+    /// error.
+    ResourceStatusUpdateFailed(ResourceErrorKind),
     /// The Wave 6 operator acceptance boundary did not converge.
     Wave6AcceptanceFailed,
 }
@@ -228,6 +231,7 @@ impl ResourceRuntimeError {
             Self::IdentityUnbound => "resource-runtime-identity-unbound",
             Self::CapabilityUnavailable => "resource-runtime-capability-unavailable",
             Self::ResourceGetFailed(_) => "resource-runtime-resource-get-failed",
+            Self::ResourceStatusUpdateFailed(_) => "resource-runtime-resource-status-update-failed",
             Self::Wave6AcceptanceFailed => "resource-runtime-wave6-acceptance-failed",
         }
     }
@@ -1443,6 +1447,23 @@ impl ZoneResourceRuntime {
         operation_id: &str,
         phase: &str,
     ) -> Result<(), ResourceRuntimeError> {
+        self.persist_public_reconcile_status(resource_ref, resource_uid, operation_id, phase, None)
+            .await
+    }
+
+    /// Persist a provider phase together with its typed durable projection.
+    ///
+    /// Provider readiness must be observed from this committed projection on
+    /// the next reconcile pass; an in-memory effect port is not an authority
+    /// for restart or dependent-resource admission.
+    pub(crate) async fn persist_public_reconcile_status(
+        &self,
+        resource_ref: &ResourceRef,
+        resource_uid: &ResourceUid,
+        operation_id: &str,
+        phase: &str,
+        resource_projection: Option<&Value>,
+    ) -> Result<(), ResourceRuntimeError> {
         let resource = self
             .backend
             .get(StoreGetRequest {
@@ -1472,6 +1493,7 @@ impl ZoneResourceRuntime {
             .and_then(Value::as_u64);
         if current_phase == Some(phase)
             && current_observed_generation == Some(resource.generation.get())
+            && resource_projection.is_none()
         {
             return Ok(());
         }
@@ -1480,10 +1502,12 @@ impl ZoneResourceRuntime {
             .process_status_client
             .as_ref()
             .ok_or(ResourceRuntimeError::ControllerEndpointUnavailable)?;
-        let current_resource = current
-            .get("status")
-            .and_then(|status| status.get("resource"));
-        persist_resource_status_with_projection(client, &resource, &status, current_resource).await
+        let projection = resource_projection.or_else(|| {
+            current
+                .get("status")
+                .and_then(|status| status.get("resource"))
+        });
+        persist_resource_status_with_projection(client, &resource, &status, projection).await
     }
 
     /// Drive the complete Wave 6 acceptance sequence through the
@@ -4362,7 +4386,9 @@ async fn persist_resource_status_with_projection(
             reason = %error.reason,
             "public Resource status update was refused"
         );
-        return Err(ResourceRuntimeError::StoreReadFailed);
+        return Err(ResourceRuntimeError::ResourceStatusUpdateFailed(
+            resource_error_kind_from_wire(error.kind.enum_value().ok()),
+        ));
     }
     if response.resource.is_none() {
         return Err(ResourceRuntimeError::StoreReadFailed);
