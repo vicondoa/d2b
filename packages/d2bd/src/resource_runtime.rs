@@ -1438,7 +1438,6 @@ impl ZoneResourceRuntime {
     /// API so restart admission can rely on durable observed generation.
     pub(crate) async fn persist_public_reconcile_phase(
         &self,
-        peer_uid: u32,
         resource_ref: &ResourceRef,
         resource_uid: &ResourceUid,
         operation_id: &str,
@@ -1471,9 +1470,11 @@ impl ZoneResourceRuntime {
             return Ok(());
         }
         let status = json!({ "phase": phase });
-        let context = local_operator_subject_context(&self.zone, peer_uid, operation_id)?;
-        let client = self.bind_operator_resource_client(context)?;
-        persist_resource_status(&client, &resource, &status).await
+        let client = self
+            .process_status_client
+            .as_ref()
+            .ok_or(ResourceRuntimeError::ControllerEndpointUnavailable)?;
+        persist_resource_status(client, &resource, &status).await
     }
 
     /// Drive the complete Wave 6 acceptance sequence through the

@@ -4382,7 +4382,6 @@ fn dispatch_wave6_resource_reconcile(
         }
         "Network" => {
             block_on_future(runtime.persist_public_reconcile_phase(
-                peer.uid,
                 &resource_ref,
                 &uid,
                 operation_id,
@@ -4390,7 +4389,6 @@ fn dispatch_wave6_resource_reconcile(
             ))?;
             reconcile_wave6_network_effect(state, peer, &resolver, &uid, &resource, true)?;
             block_on_future(runtime.persist_public_reconcile_phase(
-                peer.uid,
                 &resource_ref,
                 &uid,
                 operation_id,
@@ -4574,7 +4572,6 @@ fn ensure_guest_networks_reconciled(
             let network_operation_id =
                 format!("{operation_id}-network-{}", network_ref.name().as_str());
             block_on_future(runtime.persist_public_reconcile_phase(
-                peer.uid,
                 &network_ref,
                 &network_uid,
                 &network_operation_id,
@@ -4582,7 +4579,6 @@ fn ensure_guest_networks_reconciled(
             ))?;
             reconcile_wave6_network_effect(state, peer, resolver, &network_uid, &network, false)?;
             block_on_future(runtime.persist_public_reconcile_phase(
-                peer.uid,
                 &network_ref,
                 &network_uid,
                 &network_operation_id,
