@@ -27,26 +27,13 @@ rust_library(
 )
 
 rust_library(
-    name = "d2b_session_unix_host_socket",
+    name = "d2b_session_unix_test_support",
     srcs = d2b_session_unix_srcs,
     compile_data = ["Cargo.toml"],
-    crate_features = ["host-socket"],
-    crate_name = "d2b_session_unix",
-    proc_macro_deps = [
-        "@crates//:async-trait",
+    crate_features = [
+        "host-socket",
+        "native-vsock",
     ],
-    visibility = ["//visibility:public"],
-    deps = [
-        "//packages/d2b-contracts:d2b_contracts",
-        "//packages/d2b-session:d2b_session",
-    ] + all_crate_deps(normal = True, cargo_only = True),
-)
-
-rust_library(
-    name = "d2b_session_unix_host_socket_test_support",
-    srcs = d2b_session_unix_srcs,
-    compile_data = ["Cargo.toml"],
-    crate_features = ["host-socket"],
     crate_name = "d2b_session_unix",
     proc_macro_deps = [
         "@crates//:async-trait",

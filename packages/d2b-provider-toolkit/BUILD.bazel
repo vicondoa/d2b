@@ -23,7 +23,7 @@ rust_library(
         "//packages/d2b-contracts:d2b_contracts",
         "//packages/d2b-provider:d2b_provider",
         "//packages/d2b-session:d2b_session",
-        "//packages/d2b-session-unix:d2b_session_unix_host_socket",
+        "//packages/d2b-session-unix:d2b_session_unix",
     ] + all_crate_deps(normal = True, cargo_only = True),
 )
 
@@ -38,7 +38,7 @@ rust_library(
         "//packages/d2b-contracts:d2b_contracts",
         "//packages/d2b-provider:d2b_provider",
         "//packages/d2b-session:d2b_session_test_support",
-        "//packages/d2b-session-unix:d2b_session_unix_host_socket_test_support",
+        "//packages/d2b-session-unix:d2b_session_unix_test_support",
     ] + all_crate_deps(normal = True, cargo_only = True),
 )
 
