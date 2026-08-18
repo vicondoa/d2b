@@ -99,6 +99,10 @@ pkgs.testers.runNixOSTest {
       writableStore = true;
       extra = { pkgs, ... }: {
         boot.kernelModules = [ "br_netfilter" ];
+        networking.nftables.enable = true;
+        networking.nftables.ruleset = lib.mkAfter ''
+          table inet d2b {}
+        '';
         d2b.site.adminUsers = [ "alice" ];
         systemd.services.d2bd.serviceConfig.ExecStartPre = lib.mkAfter [
           "+${pkgs.writeShellScript "d2b-acceptance-cgroup-prep" ''
