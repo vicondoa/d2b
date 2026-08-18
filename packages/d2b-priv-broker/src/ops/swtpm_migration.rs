@@ -470,6 +470,21 @@ fn anchored_paths(paths: &LegacyMigrationPaths) -> Result<AnchoredPaths, LegacyM
     })
 }
 
+fn child_gid_is_trusted(
+    parent: std::os::fd::BorrowedFd<'_>,
+    child_gid: u32,
+) -> std::io::Result<bool> {
+    if child_gid == nix::unistd::getegid().as_raw() {
+        return Ok(true);
+    }
+    let stat = crate::sys::path_safe::fstat_fd(parent)?;
+    Ok(stat.st_mode & libc::S_IFMT == libc::S_IFDIR
+        && stat.st_mode & 0o002 == 0
+        && stat.st_mode & 0o2000 != 0
+        && stat.st_uid == nix::unistd::geteuid().as_raw()
+        && stat.st_gid == child_gid)
+}
+
 fn child_stat(path: &AnchoredPath) -> Result<Option<libc::stat>, LegacyMigrationError> {
     crate::sys::path_safe::fstatat_nofollow(&path.parent, &path.name)
         .map_err(|_| LegacyMigrationError::InventoryInvalid)
@@ -608,7 +623,8 @@ fn read_owned_file(path: &AnchoredPath) -> Result<Option<Vec<u8>>, LegacyMigrati
     if stat.st_mode & libc::S_IFMT != libc::S_IFREG
         || stat.st_mode & 0o7777 != MARKER_MODE
         || stat.st_uid != nix::unistd::geteuid().as_raw()
-        || stat.st_gid != nix::unistd::getegid().as_raw()
+        || !child_gid_is_trusted(path.parent.as_fd(), stat.st_gid)
+            .map_err(|_| LegacyMigrationError::InventoryInvalid)?
     {
         return Err(LegacyMigrationError::ForeignOwner);
     }
@@ -638,7 +654,8 @@ fn read_journal(
     if stat.st_mode & libc::S_IFMT != libc::S_IFREG
         || stat.st_mode & 0o7777 != MARKER_MODE
         || stat.st_uid != nix::unistd::geteuid().as_raw()
-        || stat.st_gid != nix::unistd::getegid().as_raw()
+        || !child_gid_is_trusted(path.parent.as_fd(), stat.st_gid)
+            .map_err(|_| LegacyMigrationError::InventoryInvalid)?
     {
         return Err(LegacyMigrationError::ForeignOwner);
     }
@@ -833,6 +850,8 @@ fn acquire_lock(path: &AnchoredPath) -> Result<MigrationLock, LegacyMigrationErr
     if stat.st_mode & libc::S_IFMT != libc::S_IFREG
         || stat.st_mode & 0o077 != 0
         || stat.st_uid != nix::unistd::geteuid().as_raw()
+        || !child_gid_is_trusted(path.parent.as_fd(), stat.st_gid)
+            .map_err(|_| LegacyMigrationError::InventoryInvalid)?
     {
         return Err(LegacyMigrationError::ForeignOwner);
     }
@@ -872,7 +891,8 @@ fn write_atomic(
         .map_err(|_| LegacyMigrationError::Durability)?;
     if temp_stat.st_mode & libc::S_IFMT != libc::S_IFREG
         || temp_stat.st_uid != nix::unistd::geteuid().as_raw()
-        || temp_stat.st_gid != nix::unistd::getegid().as_raw()
+        || !child_gid_is_trusted(parent.as_fd(), temp_stat.st_gid)
+            .map_err(|_| LegacyMigrationError::Durability)?
         || temp_stat.st_mode & 0o7777 != MARKER_MODE
     {
         let _ = unlinkat(parent.as_fd(), temp.as_str(), AtFlags::empty());
@@ -1739,7 +1759,10 @@ mod tests {
             ),
         )
         .unwrap();
-        assert_eq!(probe(&paths).unwrap(), LegacyInventoryState::NeverProvisioned);
+        assert_eq!(
+            probe(&paths).unwrap(),
+            LegacyInventoryState::NeverProvisioned
+        );
         assert!(!scratch.0.join("swtpm-markers").exists());
     }
 
