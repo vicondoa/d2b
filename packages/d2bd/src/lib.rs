@@ -4361,9 +4361,8 @@ fn dispatch_device_tpm_reconcile_inner(
         .ok()
         .and_then(|plane| plane.clone())
         .ok_or(resource_runtime::ResourceRuntimeError::PlaneUnavailable)?;
-    let runtime = plane.zone(&zone).map_err(|error| {
+    let runtime = plane.zone(&zone).inspect_err(|error| {
         tracing::warn!(?error, zone = %zone.as_str(), "Device TPM reconcile Zone lookup failed");
-        error
     })?;
     let resolver = load_bundle_resolver(state).map_err(|error| {
         tracing::warn!(?error, "Device TPM reconcile bundle resolver unavailable");

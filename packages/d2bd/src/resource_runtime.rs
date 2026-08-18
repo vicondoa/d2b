@@ -914,6 +914,7 @@ impl ZoneResourceRuntime {
         .await
     }
 
+    #[allow(clippy::too_many_arguments)]
     async fn open_with_external_inventory_and_audit(
         zone: ZoneId,
         opened: OpenedZoneStore,
@@ -1130,9 +1131,8 @@ impl ZoneResourceRuntime {
                 store_metadata.current_revision,
                 &bundle_resource_types,
             )
-            .map_err(|error| {
+            .inspect_err(|error| {
                 tracing::error!(zone = %zone.as_str(), error = ?error, "resource runtime policy setup failed");
-                error
             })?;
             authorizer
                 .replace_policy(policy.clone(), &state)
@@ -1158,17 +1158,15 @@ impl ZoneResourceRuntime {
                 state.clone(),
             )
             .await
-            .map_err(|error| {
+            .inspect_err(|error| {
                 tracing::error!(zone = %zone.as_str(), error = ?error, "resource runtime system-core session registration failed");
-                error
             })?;
             process_status_client = Some(Arc::clone(&status_client));
             if let Some(bundle) = desired_bundle.as_ref() {
                 materialize_zone_resource_bundle(&zone, bundle, &store, &status_client)
                     .await
-                    .map_err(|error| {
+                    .inspect_err(|error| {
                         tracing::error!(zone = %zone.as_str(), error = ?error, "resource runtime Zone bundle materialization failed");
-                        error
                     })?;
             } else if bootstrap_provisioned_store
                 && disposition == ZoneStoreDisposition::Provisioned
@@ -1231,9 +1229,8 @@ impl ZoneResourceRuntime {
             let system_core =
                 reconcile_system_core_resources(&zone, &store, Arc::clone(&status_client))
                     .await
-                    .map_err(|error| {
+                    .inspect_err(|error| {
                         tracing::error!(zone = %zone.as_str(), error = ?error, "resource runtime system-core reconciliation failed");
-                        error
                     })?;
             tracing::debug!(
                 zone = %zone.as_str(),
@@ -1291,9 +1288,8 @@ impl ZoneResourceRuntime {
                     aggregate_handler_phase,
                     store_metadata.current_revision.get(),
                 )
-                .map_err(|error| {
+                .inspect_err(|error| {
                     tracing::error!(zone = %zone.as_str(), error = ?error, "resource runtime handler marking failed");
-                    error
                 })?;
                 core.publish_readiness().map_err(|error| {
                     let error = map_startup_error(error);
@@ -3538,13 +3534,12 @@ async fn load_committed_interaction_identity(
         .next()
         .ok_or(ResourceRuntimeError::InteractionConfigurationUnavailable)?;
     let session_spec = committed_wayland_session_spec(zone, current_revision, &session_resource)
-        .map_err(|error| {
+        .inspect_err(|error| {
             tracing::error!(
                 zone = %zone.as_str(),
                 error = %error,
                 "resource runtime committed Wayland session parse failed",
             );
-            error
         })?;
     let subject_ref = session_spec.guest_ref().clone();
     let host_execution_ref = session_spec.host_ref().clone();
@@ -3558,74 +3553,67 @@ async fn load_committed_interaction_identity(
     let _policy_resource =
         committed_resource(zone, store, current_revision, session_spec.policy_ref())
             .await
-            .map_err(|error| {
+            .inspect_err(|error| {
                 tracing::error!(
                     zone = %zone.as_str(),
                     operation = "interaction-policy-lookup",
                     error = %error,
                     "resource runtime committed Wayland policy lookup failed",
                 );
-                error
             })?;
     let subject_uid = committed_resource_uid(zone, store, current_revision, &subject_ref)
         .await
-        .map_err(|error| {
+        .inspect_err(|error| {
             tracing::error!(
                 zone = %zone.as_str(),
                 operation = "interaction-subject-lookup",
                 error = %error,
                 "resource runtime committed interaction subject lookup failed",
             );
-            error
         })?;
     let _host_uid = committed_resource_uid(zone, store, current_revision, &host_execution_ref)
         .await
-        .map_err(|error| {
+        .inspect_err(|error| {
             tracing::error!(
                 zone = %zone.as_str(),
                 operation = "interaction-host-lookup",
                 error = %error,
                 "resource runtime committed interaction Host lookup failed",
             );
-            error
         })?;
     let _user_uid = committed_resource_uid(zone, store, current_revision, &user_ref)
         .await
-        .map_err(|error| {
+        .inspect_err(|error| {
             tracing::error!(
                 zone = %zone.as_str(),
                 operation = "interaction-user-lookup",
                 error = %error,
                 "resource runtime committed interaction User lookup failed",
             );
-            error
         })?;
 
     let display_ref = ResourceRef::parse("Provider/display-wayland")
         .map_err(|_| ResourceRuntimeError::InteractionConfigurationUnavailable)?;
     let display_resource = committed_resource(zone, store, current_revision, &display_ref)
         .await
-        .map_err(|error| {
+        .inspect_err(|error| {
             tracing::error!(
                 zone = %zone.as_str(),
                 operation = "display-provider-lookup",
                 error = %error,
                 "resource runtime committed display Provider lookup failed",
             );
-            error
         })?;
     let (_, _, display_provider_generation, _, _) =
-        committed_provider_spec(zone, current_revision, &display_resource, &display_ref).map_err(
-            |error| {
+        committed_provider_spec(zone, current_revision, &display_resource, &display_ref)
+            .inspect_err(|error| {
                 tracing::error!(
                     zone = %zone.as_str(),
                     operation = "display-provider-validation",
                     error = %error,
                     "resource runtime committed display Provider validation failed",
                 );
-                error
-            },
-        )?;
+            })?;
 
     let mut allowed_guest_sources = BTreeMap::from([(subject_ref.clone(), subject_uid.clone())]);
     let mut clipboard_provider_generation = None;
