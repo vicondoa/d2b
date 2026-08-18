@@ -332,27 +332,23 @@ mod tests {
 
     fn test_socket_path(prefix: &str) -> PathBuf {
         let sequence = SOCKET_SEQUENCE.fetch_add(1, Ordering::Relaxed);
-        let filename = format!(
-            "d2b-otel-{prefix}-{:x}-{:x}.sock",
-            std::process::id(),
-            sequence
-        );
-        let path = [
-            std::env::var_os("XDG_RUNTIME_DIR").map(PathBuf::from),
-            std::env::var_os("TEST_TMPDIR").map(PathBuf::from),
-            Some(std::env::temp_dir()),
-        ]
-        .into_iter()
-        .flatten()
-        .filter(|directory| directory.is_absolute())
-        .map(|directory| directory.join(&filename))
-        .find(|candidate| candidate.as_os_str().len() <= 100)
-        .unwrap_or_else(|| std::env::temp_dir().join(filename));
+        let directory =
+            std::env::temp_dir().join(format!("d2b-o-{:x}-{sequence:x}", std::process::id()));
+        fs::create_dir(&directory).unwrap();
+        let path = directory.join(format!("{prefix}.sock"));
         assert!(
             path.as_os_str().len() <= 100,
             "AF_UNIX test path must leave sockaddr headroom"
         );
         path
+    }
+
+    fn cleanup_socket(path: PathBuf) {
+        let parent = path.parent().map(Path::to_path_buf);
+        let _ = fs::remove_file(path);
+        if let Some(parent) = parent {
+            let _ = fs::remove_dir(parent);
+        }
     }
 
     #[test]
@@ -377,6 +373,8 @@ mod tests {
                 r#"{"signal":"metric","value":{"labels":{"error_class":"none","ingress":"emitter_unix","outcome":"accepted"},"name":"d2b_otel_ingress_policy_total","value":1}}"#,
             )
         );
+        drop(receiver);
+        cleanup_socket(path);
     }
 
     #[test]
@@ -405,6 +403,8 @@ mod tests {
                 .contains("d2b_otel_ingress_policy_total")
         );
         assert_eq!(receiver.dropped(), 1);
+        drop(receiver);
+        cleanup_socket(path);
     }
 
     #[test]
@@ -427,6 +427,8 @@ mod tests {
         assert!(!rendered.contains("secret-token"));
         assert_eq!(receiver.queued(), 0);
         assert_eq!(receiver.dropped(), 1);
+        drop(receiver);
+        cleanup_socket(path);
     }
 
     #[test]
@@ -439,6 +441,6 @@ mod tests {
         drop(receiver);
         assert!(path.exists());
         drop(replacement);
-        let _ = fs::remove_file(path);
+        cleanup_socket(path);
     }
 }

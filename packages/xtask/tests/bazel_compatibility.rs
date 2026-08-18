@@ -273,6 +273,7 @@ fn protobuf_controls_are_pinned_and_reject_archived_or_direct_compilers() {
     let bazelrc = read_repo_file(".bazelrc");
     for required in [
         "common --@protobuf//bazel/toolchains:prefer_prebuilt_protoc",
+        "common --@protobuf//bazel/flags:allow_nonstandard_protoc",
         "common --per_file_copt=external/.*protobuf.*@--PROTOBUF_WAS_NOT_SUPPOSED_TO_BE_BUILT",
         "common --host_per_file_copt=external/.*protobuf.*@--PROTOBUF_WAS_NOT_SUPPOSED_TO_BE_BUILT",
         "common --per_file_copt=external/.*grpc.*@--GRPC_WAS_NOT_SUPPOSED_TO_BE_BUILT",
