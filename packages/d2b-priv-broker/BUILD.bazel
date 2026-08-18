@@ -65,6 +65,7 @@ rust_library(
     srcs = d2b_priv_broker_srcs,
     compile_data = d2b_priv_broker_compile_data,
     crate_features = ["layer1-bootstrap"],
+    crate_name = "d2b_priv_broker",
     visibility = ["//visibility:public"],
     deps = d2b_priv_broker_shared_deps + [
         "//packages/d2b-core:d2b_core",
@@ -90,6 +91,7 @@ rust_library(
     srcs = d2b_priv_broker_srcs,
     compile_data = d2b_priv_broker_compile_data,
     crate_features = ["fake-backends"],
+    crate_name = "d2b_priv_broker",
     visibility = ["//visibility:public"],
     deps = d2b_priv_broker_test_support_deps + [
         "//packages/d2b-core:d2b_core_test_support",

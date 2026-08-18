@@ -549,7 +549,17 @@ mod tests {
             .duration_since(UNIX_EPOCH)
             .unwrap()
             .as_nanos();
-        std::env::temp_dir().join(format!("e-{label}-{nonce}.sock"))
+        let directory = std::env::temp_dir().join(format!("d2b-t-{}-{nonce}", std::process::id()));
+        fs::create_dir(&directory).unwrap();
+        directory.join(format!("e-{label}.sock"))
+    }
+
+    fn cleanup_socket(path: PathBuf) {
+        let parent = path.parent().map(Path::to_path_buf);
+        let _ = fs::remove_file(path);
+        if let Some(parent) = parent {
+            let _ = fs::remove_dir(parent);
+        }
     }
 
     fn redact_frame(frame: &[u8]) -> Result<Vec<u8>, EmitterError> {
@@ -585,7 +595,7 @@ mod tests {
         assert_eq!(&first[..first_len], &one_redacted);
         assert_eq!(&second[..second_len], &two_redacted);
         drop(receiver);
-        let _ = fs::remove_file(path);
+        cleanup_socket(path);
     }
 
     #[test]
@@ -606,7 +616,7 @@ mod tests {
         emitter.emit(Signal::Log, &log).unwrap();
         assert_eq!(emitter.buffered_frames().unwrap(), 1);
         assert_eq!(emitter.drops().metric, 1);
-        let _ = fs::remove_file(path);
+        cleanup_socket(path);
     }
 
     #[test]
@@ -625,7 +635,7 @@ mod tests {
             EmitterError::MetricPolicy(MetricPolicyError::KeyForbidden)
         );
         assert_eq!(emitter.buffered_frames().unwrap(), 0);
-        let _ = fs::remove_file(path);
+        cleanup_socket(path);
     }
 
     #[test]
@@ -646,7 +656,7 @@ mod tests {
             EmitterError::MetricPolicy(MetricPolicyError::KeyForbidden)
         );
         assert_eq!(emitter.buffered_frames().unwrap(), 0);
-        let _ = fs::remove_file(path);
+        cleanup_socket(path);
     }
 
     #[test]
@@ -680,7 +690,7 @@ mod tests {
             ))
         );
         assert_eq!(emitter.buffered_frames().unwrap(), 0);
-        let _ = fs::remove_file(path);
+        cleanup_socket(path);
     }
 
     #[test]
@@ -700,7 +710,7 @@ mod tests {
             emitter.emit(Signal::Metric, &frame).unwrap(),
             EmitOutcome::Buffered
         );
-        let _ = fs::remove_file(path);
+        cleanup_socket(path);
     }
 
     #[test]
@@ -721,7 +731,7 @@ mod tests {
             Err(EmitterError::MetricPolicy(_))
         ));
         assert_eq!(emitter.buffered_frames().unwrap(), 0);
-        let _ = fs::remove_file(path);
+        cleanup_socket(path);
     }
 
     #[test]
@@ -734,7 +744,7 @@ mod tests {
             Err(EmitterError::FrameRedaction)
         );
         assert_eq!(emitter.buffered_frames().unwrap(), 0);
-        let _ = fs::remove_file(path);
+        cleanup_socket(path);
     }
 
     #[test]
@@ -756,7 +766,7 @@ mod tests {
             EmitOutcome::Buffered
         );
         assert_eq!(raw_frame_parse_count(), 1);
-        let _ = fs::remove_file(path);
+        cleanup_socket(path);
     }
 
     #[test]
@@ -768,7 +778,7 @@ mod tests {
             Err(EmitterError::FrameRedaction)
         );
         assert_eq!(emitter.buffered_frames().unwrap(), 0);
-        let _ = fs::remove_file(path);
+        cleanup_socket(path);
     }
 
     #[test]
@@ -788,7 +798,7 @@ mod tests {
             Err(EmitterError::FrameRedaction)
         );
         assert_eq!(emitter.buffered_frames().unwrap(), 0);
-        let _ = fs::remove_file(path);
+        cleanup_socket(path);
     }
 
     #[test]
@@ -803,7 +813,7 @@ mod tests {
             Err(EmitterError::FrameTooLarge)
         );
         assert_eq!(emitter.buffered_frames().unwrap(), 1);
-        let _ = fs::remove_file(path);
+        cleanup_socket(path);
     }
 
     #[test]
@@ -833,7 +843,7 @@ mod tests {
         assert!(!rendered.contains("/private/host/path"));
         assert!(!rendered.contains("secret-token-canary"));
         drop(receiver);
-        let _ = fs::remove_file(path);
+        cleanup_socket(path);
     }
 
     #[test]
@@ -850,6 +860,6 @@ mod tests {
         assert_eq!(emitter.drain().unwrap(), 0);
         assert_eq!(emitter.buffered_frames().unwrap(), 0);
         assert!(emitter.drops().log >= 2);
-        let _ = fs::remove_file(path);
+        cleanup_socket(path);
     }
 }
