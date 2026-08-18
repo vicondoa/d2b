@@ -94,10 +94,7 @@ fn is_excluded_dir(rel: &str) -> bool {
 #[test]
 fn nix_package_source_filters_are_path_segment_based() {
     let files = [
-        "nixos-modules/host-daemon.nix",
-        "nixos-modules/host-broker.nix",
-        "nixos-modules/host-activation.nix",
-        "nixos-modules/processes-json.nix",
+        "nixos-modules/rust-host-tools.nix",
     ];
 
     for rel in files {
