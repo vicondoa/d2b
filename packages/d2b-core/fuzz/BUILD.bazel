@@ -41,7 +41,7 @@ rust_binary(
     visibility = ["//visibility:public"],
     deps = [
         "//packages/d2b-core:d2b_core",
-        "@bazel_only_crates//:bolero",
+        "@crates//:bolero",
         "@crates//:serde_json",
     ],
 )
@@ -60,7 +60,7 @@ rust_binary(
     visibility = ["//visibility:public"],
     deps = [
         "//packages/d2b-core:d2b_core",
-        "@bazel_only_crates//:bolero",
+        "@crates//:bolero",
         "@crates//:serde_json",
     ],
 )
@@ -76,7 +76,7 @@ rust_binary(
     visibility = ["//visibility:public"],
     deps = [
         "//packages/d2b-core:d2b_core",
-        "@bazel_only_crates//:bolero",
+        "@crates//:bolero",
         "@crates//:serde_json",
     ],
 )
@@ -92,7 +92,7 @@ rust_binary(
     visibility = ["//visibility:public"],
     deps = [
         "//packages/d2b-core:d2b_core",
-        "@bazel_only_crates//:bolero",
+        "@crates//:bolero",
     ],
 )
 
@@ -107,7 +107,7 @@ rust_binary(
     visibility = ["//visibility:public"],
     deps = [
         "//packages/d2b-core:d2b_core",
-        "@bazel_only_crates//:bolero",
+        "@crates//:bolero",
         "@crates//:serde_json",
     ],
 )

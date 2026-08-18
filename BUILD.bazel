@@ -1,5 +1,3 @@
-load("@gazelle//:def.bzl", "gazelle", "gazelle_binary")
-
 package(default_visibility = ["//visibility:public"])
 
 test_suite(
@@ -25,35 +23,6 @@ filegroup(
         "docs/reference/schemas/v3/*.json",
         "docs/reference/schemas/v3/providers/*.json",
     ]),
-)
-
-# gazelle:rust_cargo_lockfile Cargo.lock
-# gazelle:rust_crates_prefix @crates//:
-# gazelle:rust_default_edition 2024
-# gazelle:rust_mode generate_from_cargo
-# gazelle:exclude examples/aca-wayland-poc/relay-bridge
-# gazelle:exclude labs/d2b-agentterm
-# gazelle:exclude labs/window-chrome
-# gazelle:exclude labs/wlattach
-# gazelle:exclude nixos-modules/host-activation-helper
-# gazelle:exclude packages/d2b-bus/tests/ui/public-api-mutations
-# gazelle:exclude packages/d2b-core/fuzz
-# gazelle:exclude bazel/checks/rust
-# gazelle:exclude proofs/chunked-stdio-conformance
-# gazelle:exclude proofs/redb-resource-store-spike
-# gazelle:exclude proofs/w0-ch-connect-proof
-# gazelle:exclude proofs/window-identity-chrome
-# gazelle:exclude tests/fixtures/provider-crate-layout
-# gazelle:exclude tests/tools/no-bash-ast-walker
-
-gazelle_binary(
-    name = "gazelle_rust",
-    languages = ["@gazelle_rust//rust_language"],
-)
-
-gazelle(
-    name = "gazelle",
-    gazelle = ":gazelle_rust",
 )
 
 exports_files([

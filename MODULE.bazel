@@ -3,37 +3,49 @@ module(
     version = "3.0.0",
 )
 
-bazel_dep(name = "rules_rust", version = "0.67.0")
+bazel_dep(name = "rules_rs", version = "0.0.105")
+bazel_dep(name = "llvm", version = "0.8.9")
+bazel_dep(name = "rules_nixpkgs_core", version = "0.13.0")
+bazel_dep(name = "aspect_rules_lint", version = "2.7.2")
+bazel_dep(name = "bazel_skylib", version = "1.9.2")
+bazel_dep(name = "bazel_lib", version = "3.7.1")
 bazel_dep(name = "rules_go", version = "0.59.0")
-bazel_dep(name = "gazelle", version = "0.47.0")
-bazel_dep(name = "gazelle_rust", version = "0.1.0")
-bazel_dep(name = "protobuf", version = "33.4")
+bazel_dep(name = "protobuf", version = "34.0.bcr.1")
 bazel_dep(name = "rules_shell", version = "0.6.1")
-bazel_dep(name = "platforms", version = "1.0.0")
+bazel_dep(name = "platforms", version = "1.1.0")
 bazel_dep(name = "toolchains_buildbuddy", version = "0.0.4")
+
+archive_override(
+    module_name = "rules_rs",
+    integrity = "sha256-KE4xcf3WAoxT+UjzUNtEUDEuYcnk/2VBd3ytms8f5gE=",
+    strip_prefix = "rules_rs-0.0.105",
+    urls = ["https://github.com/hermeticbuild/rules_rs/releases/download/v0.0.105/rules_rs-v0.0.105.tar.gz"],
+)
 
 buildbuddy = use_extension("@toolchains_buildbuddy//:extensions.bzl", "buildbuddy")
 
-rust = use_extension("@rules_rust//rust:extensions.bzl", "rust")
-rust.toolchain(
-    edition = "2024",
-    versions = ["1.97.0"],
-)
-use_repo(rust, "rust_toolchains")
-register_toolchains("@rust_toolchains//:all")
+rules_rust = use_extension("@rules_rs//rs:rules_rust.bzl", "rules_rust")
+use_repo(rules_rust, "rules_rust")
 
-crate = use_extension("@rules_rust//crate_universe:extension.bzl", "crate")
+toolchains = use_extension("@rules_rs//rs/toolchains:module_extension.bzl", "toolchains")
+toolchains.toolchain(
+    edition = "2024",
+    version = "1.97.0",
+)
+use_repo(toolchains, "default_rust_toolchains")
+register_toolchains(
+    "@default_rust_toolchains//...",
+    "@llvm//toolchain:all",
+)
+
+crate = use_extension("@rules_rs//rs:extensions.bzl", "crate")
 crate.from_cargo(
     name = "crates",
-    cargo_lockfile = "//:Cargo.lock",
-    manifests = ["//:Cargo.toml"],
+    cargo_lock = "//:Cargo.lock",
+    cargo_toml = "//:Cargo.toml",
+    platform_triples = [
+        "aarch64-unknown-linux-gnu",
+        "x86_64-unknown-linux-gnu",
+    ],
 )
 use_repo(crate, "crates")
-
-bazel_only_crate = use_extension("@rules_rust//crate_universe:extension.bzl", "crate")
-bazel_only_crate.from_cargo(
-    name = "bazel_only_crates",
-    cargo_lockfile = "//bazel/checks/rust:Cargo.lock",
-    manifests = ["//bazel/checks/rust:Cargo.toml"],
-)
-use_repo(bazel_only_crate, "bazel_only_crates")

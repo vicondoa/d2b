@@ -3,14 +3,6 @@ load(":defs.bzl", "rust_doc_carrier")
 
 package(default_visibility = ["//visibility:public"])
 
-exports_files(
-    [
-        "Cargo.lock",
-        "Cargo.toml",
-    ],
-    visibility = ["//visibility:public"],
-)
-
 config_setting(
     name = "broker-layer1",
     define_values = {"d2b_broker_context": "layer1-bootstrap"},
@@ -425,8 +417,6 @@ filegroup(
         "//:.gitignore",
         "//:AGENTS.md",
         "//:BUILD.bazel",
-        "//bazel/checks/rust:Cargo.lock",
-        "//bazel/checks/rust:Cargo.toml",
         "//:CHANGELOG.md",
         "//:Cargo.lock",
         "//:Cargo.toml",
@@ -626,13 +616,6 @@ filegroup(
         "//tests/fixtures/bazel/compat:src/exception.rs",
         "//tests/fixtures/bazel/compat:src/lib.rs",
         "//tests/fixtures/bazel/compat:src/main.rs",
-        "//tests/fixtures/bazel/gazelle:BUILD.bazel",
-        "//tests/fixtures/bazel/gazelle:Cargo.lock",
-        "//tests/fixtures/bazel/gazelle:Cargo.toml",
-        "//tests/fixtures/bazel/gazelle:MODULE.bazel",
-        "//tests/fixtures/bazel/gazelle:src/exception.rs",
-        "//tests/fixtures/bazel/gazelle:src/lib.rs",
-        "//tests/fixtures/bazel/gazelle:src/main.rs",
         "//tests/tools/no-bash-ast-walker:BUILD.bazel",
         "//tests/tools/no-bash-ast-walker:Cargo.lock",
         "//tests/tools/no-bash-ast-walker:Cargo.toml",

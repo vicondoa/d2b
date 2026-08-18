@@ -2,7 +2,7 @@
 
 use std::path::{Path, PathBuf};
 use std::process::Command;
-use std::sync::OnceLock;
+use std::sync::{Mutex, OnceLock};
 
 use serde_json::Value;
 
@@ -22,13 +22,6 @@ fn repo_root() -> PathBuf {
             candidates.push(base.join("_main"));
         }
     }
-    candidates.push(
-        PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .parent()
-            .and_then(Path::parent)
-            .expect("xtask lives under packages/xtask")
-            .to_path_buf(),
-    );
     if let Ok(current_dir) = std::env::current_dir() {
         candidates.push(current_dir);
     }
@@ -42,7 +35,7 @@ fn repo_root() -> PathBuf {
                 && path.join("BUILD.bazel").is_file()
                 && path.join("flake.nix").is_file()
             {
-                return path;
+                return std::fs::canonicalize(&path).unwrap_or(path);
             }
             if !path.pop() {
                 break;
@@ -139,16 +132,10 @@ fn bazel_output_user_root() -> PathBuf {
     if let Some(path) = std::env::var_os("D2B_BAZEL_OUTPUT_USER_ROOT") {
         return PathBuf::from(path);
     }
-    if let Some(path) = std::env::var_os("TEST_TMPDIR") {
-        return PathBuf::from(path).join("d2b-bazel-compat-output");
-    }
-    if let Some(path) = std::env::var_os("XDG_CACHE_HOME") {
-        return PathBuf::from(path).join("d2b-bazel-compat-output");
-    }
-    std::env::var_os("HOME")
-        .map(PathBuf::from)
-        .map(|path| path.join(".cache/d2b-bazel-compat-output"))
-        .unwrap_or_else(|| panic!("D2B_BAZEL_OUTPUT_USER_ROOT or HOME is required"))
+    repo_root()
+        .parent()
+        .map(|path| path.join(".d2b-bazel-compat-output"))
+        .unwrap_or_else(|| panic!("repository parent is required for nested Bazel output"))
 }
 
 fn bazel_test_tool_path() -> String {
@@ -192,12 +179,21 @@ fn resolve_bazel_test_tool_path() -> String {
 }
 
 fn run_bazel_output(arguments: &[&str]) -> std::process::Output {
+    static BAZEL_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+    let _guard = BAZEL_LOCK
+        .get_or_init(|| Mutex::new(()))
+        .lock()
+        .expect("serialize nested Bazel compatibility commands");
     let mut command = Command::new(bazel_binary());
     let tool_path = bazel_test_tool_path();
     let output_root = bazel_output_user_root();
     std::fs::create_dir_all(&output_root).expect("create Bazel compatibility output root");
     command
         .current_dir(repo_root())
+        .env_remove("TEST_TMPDIR")
+        .env_remove("TEST_SRCDIR")
+        .env_remove("RUNFILES_DIR")
+        .env_remove("TEST_WORKSPACE")
         .arg(format!("--output_user_root={}", output_root.display()))
         .arg(arguments.first().expect("Bazel command is non-empty"))
         .arg("--lockfile_mode=error")
@@ -290,8 +286,8 @@ fn protobuf_controls_are_pinned_and_reject_archived_or_direct_compilers() {
 
     let root_module = read_repo_file("MODULE.bazel");
     assert!(
-        root_module.contains("bazel_dep(name = \"protobuf\", version = \"33.4\")"),
-        "the root module must resolve Bazel 9's protobuf 33.4 graph"
+        root_module.contains("bazel_dep(name = \"protobuf\", version = \"34.0.bcr.1\")"),
+        "the root module must resolve the Bazel 9 protobuf graph"
     );
 
     for relative in protobuf_policy_sources() {
@@ -461,17 +457,30 @@ fn bazel_9_2_advertises_stable_credential_helper_for_remote_surfaces() {
 }
 
 #[test]
-fn pins_exact_upstream_bazel_and_unmodified_bzlmod_tools() {
+fn pins_rules_rs_foundation_and_locked_cargo_authority() {
     assert_eq!(read_repo_file(".bazelversion").trim(), "9.2.0");
 
     let root_module = read_repo_file("MODULE.bazel");
     for required in [
         "module(",
-        "bazel_dep(name = \"rules_rust\", version = \"0.67.0\")",
+        "bazel_dep(name = \"rules_rs\", version = \"0.0.105\")",
+        "bazel_dep(name = \"llvm\", version = \"0.8.9\")",
+        "bazel_dep(name = \"rules_nixpkgs_core\", version = \"0.13.0\")",
+        "bazel_dep(name = \"aspect_rules_lint\", version = \"2.7.2\")",
+        "bazel_dep(name = \"bazel_skylib\", version = \"1.9.2\")",
+        "bazel_dep(name = \"bazel_lib\", version = \"3.7.1\")",
         "bazel_dep(name = \"rules_go\", version = \"0.59.0\")",
-        "bazel_dep(name = \"gazelle\", version = \"0.47.0\")",
-        "bazel_dep(name = \"gazelle_rust\", version = \"0.1.0\")",
-        "bazel_dep(name = \"protobuf\", version = \"33.4\")",
+        "bazel_dep(name = \"protobuf\", version = \"34.0.bcr.1\")",
+        "bazel_dep(name = \"rules_shell\", version = \"0.6.1\")",
+        "use_extension(\"@rules_rs//rs:rules_rust.bzl\", \"rules_rust\")",
+        "use_repo(rules_rust, \"rules_rust\")",
+        "toolchains.toolchain(",
+        "version = \"1.97.0\"",
+        "\"@default_rust_toolchains//...\"",
+        "\"@llvm//toolchain:all\"",
+        "use_extension(\"@rules_rs//rs:extensions.bzl\", \"crate\")",
+        "cargo_lock = \"//:Cargo.lock\"",
+        "cargo_toml = \"//:Cargo.toml\"",
     ] {
         assert!(
             root_module.contains(required),
@@ -483,19 +492,39 @@ fn pins_exact_upstream_bazel_and_unmodified_bzlmod_tools() {
         "the migration must not retain a WORKSPACE compatibility path"
     );
     assert!(
-        !root_module.contains("local_path_override")
-            && !root_module.contains("archive_override")
-            && !root_module.contains("patch"),
-        "root MODULE.bazel must use unmodified upstream modules without overrides or patches"
+        root_module.contains("archive_override(")
+            && root_module.contains("module_name = \"rules_rs\"")
+            && root_module.contains(
+                "https://github.com/hermeticbuild/rules_rs/releases/download/v0.0.105/rules_rs-v0.0.105.tar.gz",
+            )
+            && root_module.contains(
+                "sha256-KE4xcf3WAoxT+UjzUNtEUDEuYcnk/2VBd3ytms8f5gE=",
+            ),
+        "root MODULE.bazel must use the pinned official rules_rs release archive"
     );
+    for forbidden in [
+        "bazel_dep(name = \"rules_rust\"",
+        "crate_universe",
+        "bazel_dep(name = \"gazelle\"",
+        "bazel_dep(name = \"gazelle_rust\"",
+    ] {
+        assert!(
+            !root_module.contains(forbidden),
+            "root MODULE.bazel must not retain `{forbidden}`"
+        );
+    }
     let lock = read_repo_file("MODULE.bazel.lock");
     assert!(
-        lock.contains("\"lockFileVersion\"") && lock.contains("@@gazelle_rust+//Cargo.lock"),
-        "Bzlmod must have a checked-in lock with stable external-repository inputs"
+        lock.contains("\"lockFileVersion\"")
+            && lock.contains("@@rules_rs+//rs:extensions.bzl%crate")
+            && lock.contains("@@rules_rs+//rs/toolchains:module_extension.bzl%toolchains"),
+        "Bzlmod must have a checked-in lock for the rules_rs extensions"
     );
     assert!(
-        !lock.contains("FILE:@@//.scratch/"),
-        "Bzlmod lock must not capture checkout-local output paths"
+        !lock.contains("bazel/checks/rust/Cargo.lock")
+            && !lock.contains("bazel_only_crates")
+            && !lock.contains("FILE:@@//.scratch/"),
+        "Bzlmod lock must not capture a second Cargo authority or checkout-local output paths"
     );
 
     let bazelrc = read_repo_file(".bazelrc");
@@ -514,14 +543,20 @@ fn pins_exact_upstream_bazel_and_unmodified_bzlmod_tools() {
 
     let fixture_module = read_repo_file("tests/fixtures/bazel/compat/MODULE.bazel");
     for required in [
-        "use_extension(\"@rules_rust//rust:extensions.bzl\", \"rust\")",
-        "use_extension(\"@rules_rust//crate_universe:extension.bzl\", \"crate\")",
+        "bazel_dep(name = \"rules_rs\", version = \"0.0.105\")",
+        "use_extension(\"@rules_rs//rs:rules_rust.bzl\", \"rules_rust\")",
+        "use_repo(rules_rust, \"rules_rust\")",
+        "use_extension(\"@rules_rs//rs/toolchains:module_extension.bzl\", \"toolchains\")",
+        "version = \"1.97.0\"",
         "crate.from_cargo(",
+        "cargo_lock = \"//:Cargo.lock\"",
+        "cargo_toml = \"//:Cargo.toml\"",
         "use_repo(crate, \"crates\")",
-        "register_toolchains(\"@rust_toolchains//:all\")",
-        "versions = [\"1.97.0\"]",
-        "bazel_dep(name = \"gazelle_rust\", version = \"0.1.0\")",
-        "bazel_dep(name = \"protobuf\", version = \"33.4\")",
+        "register_toolchains(",
+        "\"@default_rust_toolchains//...\"",
+        "\"@llvm//toolchain:all\"",
+        "bazel_dep(name = \"llvm\", version = \"0.8.9\")",
+        "bazel_dep(name = \"protobuf\", version = \"34.0.bcr.1\")",
     ] {
         assert!(
             fixture_module.contains(required),
@@ -529,15 +564,16 @@ fn pins_exact_upstream_bazel_and_unmodified_bzlmod_tools() {
         );
     }
     assert!(
-        !fixture_module.contains("local_path_override")
-            && !fixture_module.contains("archive_override")
-            && !fixture_module.contains("patch"),
-        "compatibility fixture must use unmodified upstream modules without overrides or patches"
+        fixture_module.contains("archive_override(")
+            && !fixture_module.contains("crate_universe")
+            && !fixture_module.contains("gazelle")
+            && !fixture_module.contains("rules_go"),
+        "compatibility fixture must use the rules_rs facade without Gazelle or crate_universe"
     );
 }
 
 #[test]
-fn exact_bazel_version_analyzes_and_runs_the_upstream_compatibility_fixture() {
+fn exact_bazel_version_analyzes_and_runs_the_rules_rs_compatibility_fixture() {
     let version = Command::new(bazel_binary())
         .arg("--version")
         .output()
@@ -564,34 +600,19 @@ fn exact_bazel_version_analyzes_and_runs_the_upstream_compatibility_fixture() {
         "//tests/fixtures/bazel/compat/proto:compat_proto",
     ]);
     assert_prebuilt_proto_action_graph();
-    run_bazel(&[
-        "run",
-        "--noshow_progress",
-        "//tests/fixtures/bazel/compat:gazelle",
-        "--",
-        "-mode=diff",
-        "-index=lazy",
-        "tests/fixtures/bazel/compat",
-    ]);
-    run_bazel(&[
-        "run",
-        "--noshow_progress",
-        "//:gazelle",
-        "--",
-        "-mode=diff",
-        "-index=lazy",
-        "packages",
-        "tests/fixtures/bazel/gazelle",
-    ]);
 
     let generated_build = read_repo_file("tests/fixtures/bazel/compat/BUILD.bazel");
     assert!(
         generated_build.contains("rust_library("),
-        "Gazelle must own ordinary first-party Rust target generation"
+        "the compatibility graph must declare an ordinary first-party Rust target"
     );
     assert!(
         generated_build.contains("explicit_exception"),
-        "Gazelle must preserve the checked-in exceptional target"
+        "the compatibility graph must preserve the checked-in exceptional target"
+    );
+    assert!(
+        generated_build.contains("@crates//:serde_json") && !generated_build.contains("gazelle"),
+        "the compatibility graph must use explicit rules_rs targets and no Gazelle"
     );
 }
 
@@ -599,23 +620,20 @@ fn exact_bazel_version_analyzes_and_runs_the_upstream_compatibility_fixture() {
 fn compatibility_fixture_declares_the_third_party_and_exception_boundaries() {
     let build = read_repo_file("tests/fixtures/bazel/compat/BUILD.bazel");
     assert!(
-        build.contains("@gazelle_rust//rust_language"),
-        "ordinary targets must use the upstream gazelle_rust binary"
+        build.contains("load(\"@rules_rust//rust:defs.bzl\""),
+        "ordinary targets must use the rules_rs-managed rules_rust facade"
     );
     assert!(
-        build.contains("rust_crates_prefix @crates//:")
-            && build.contains("rust_cargo_lockfile Cargo.lock"),
-        "Gazelle must resolve third-party crates through crate_universe"
-    );
-
-    let generated_build = read_repo_file("tests/fixtures/bazel/compat/BUILD.bazel");
-    assert!(
-        generated_build.contains("@crates//:serde_json"),
-        "the compatibility graph must contain a crate_universe dependency"
+        build.contains("@crates//:serde_json"),
+        "explicit targets must resolve third-party crates through rules_rs"
     );
     assert!(
-        generated_build.contains("# keep"),
-        "the explicit exception must carry a Gazelle keep marker"
+        build.contains("# keep"),
+        "the explicit exception must remain checked in"
+    );
+    assert!(
+        !build.contains("gazelle") && !build.contains("crate_universe"),
+        "the compatibility graph must not retain Gazelle or crate_universe directives"
     );
 }
 
@@ -708,7 +726,6 @@ fn compatibility_fixture_rejects_repository_owned_generators_and_overlays() {
     let root_module = read_repo_file("MODULE.bazel");
     for forbidden in [
         "local_path_override",
-        "archive_override",
         "git_override",
         "single_version_override",
         "multiple_version_override",
@@ -725,13 +742,19 @@ fn compatibility_fixture_rejects_repository_owned_generators_and_overlays() {
 
     let build = read_repo_file("tests/fixtures/bazel/compat/BUILD.bazel");
     assert!(
-        build.contains("gazelle_binary(") && build.contains("gazelle("),
-        "the fixture must use upstream Gazelle targets"
+        build.contains("rust_library(") && build.contains("rust_test("),
+        "the fixture must use explicit native Rust targets"
     );
-    for forbidden in ["genrule(", "custom_gazelle", "postprocess"] {
+    for forbidden in [
+        "gazelle",
+        "crate_universe",
+        "genrule(",
+        "custom_generator",
+        "postprocess",
+    ] {
         assert!(
             !build.contains(forbidden),
-            "the fixture must not add a repository-owned generator `{forbidden}`"
+            "the fixture must not retain a generator `{forbidden}`"
         );
     }
 }

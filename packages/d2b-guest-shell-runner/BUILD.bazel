@@ -27,9 +27,9 @@ rust_library(
         "@crates//:thiserror",        "@crates//:serde_json",
     ] + select({
         "//bazel/checks/rust:guest-real-libshpool": [
-            "@bazel_only_crates//:anyhow",
-            "@bazel_only_crates//:clap",
-            "@bazel_only_crates//:libshpool",
+            "@crates//:anyhow",
+            "@crates//:clap",
+            "@crates//:libshpool",
         ],
         "//conditions:default": [
             "@crates//:anyhow",
@@ -50,9 +50,9 @@ rust_binary(
         "@crates//:serde_json",
     ] + select({
         "//bazel/checks/rust:guest-real-libshpool": [
-            "@bazel_only_crates//:anyhow",
-            "@bazel_only_crates//:clap",
-            "@bazel_only_crates//:libshpool",
+            "@crates//:anyhow",
+            "@crates//:clap",
+            "@crates//:libshpool",
         ],
         "//conditions:default": [
             "@crates//:anyhow",

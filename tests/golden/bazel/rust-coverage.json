@@ -6390,30 +6390,6 @@
       "execution": "compile-only"
     },
     {
-      "id": "tests/fixtures/bazel/gazelle/explicit_exception",
-      "label": "//tests/fixtures/bazel/gazelle:explicit_exception",
-      "sources": [
-        "tests/fixtures/bazel/gazelle/src/exception.rs"
-      ],
-      "execution": "compile-only"
-    },
-    {
-      "id": "tests/fixtures/bazel/gazelle/gazelle_layout_fixture",
-      "label": "//tests/fixtures/bazel/gazelle:gazelle_layout_fixture",
-      "sources": [
-        "tests/fixtures/bazel/gazelle/src/lib.rs"
-      ],
-      "execution": "compile-only"
-    },
-    {
-      "id": "tests/fixtures/bazel/gazelle/gazelle_layout_fixture_bin",
-      "label": "//tests/fixtures/bazel/gazelle:gazelle_layout_fixture_bin",
-      "sources": [
-        "tests/fixtures/bazel/gazelle/src/main.rs"
-      ],
-      "execution": "compile-only"
-    },
-    {
       "id": "tests/tools/no-bash-ast-walker/no-bash-ast-walker",
       "label": "//tests/tools/no-bash-ast-walker:no-bash-ast-walker",
       "sources": [

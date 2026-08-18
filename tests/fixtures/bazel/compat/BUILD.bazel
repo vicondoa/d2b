@@ -1,4 +1,3 @@
-load("@gazelle//:def.bzl", "gazelle", "gazelle_binary")
 load("@rules_rust//rust:defs.bzl", "rust_binary", "rust_library", "rust_test")
 
 exports_files(
@@ -20,20 +19,6 @@ filegroup(
         "//tests/fixtures/bazel/compat/proto:compat_policy_sources",
     ],
     visibility = ["//visibility:public"],
-)
-
-# gazelle:rust_cargo_lockfile Cargo.lock
-# gazelle:rust_crates_prefix @crates//:
-# gazelle:rust_mode generate_from_cargo
-
-gazelle_binary(
-    name = "gazelle_rust",
-    languages = ["@gazelle_rust//rust_language"],
-)
-
-gazelle(
-    name = "gazelle",
-    gazelle = ":gazelle_rust",
 )
 
 test_suite(
@@ -64,6 +49,7 @@ rust_test(
     compile_data = ["Cargo.toml"],
     crate = ":bazel_compat_fixture",
     edition = "2024",
+    env_inherit = ["PATH"],
 )
 
 # keep

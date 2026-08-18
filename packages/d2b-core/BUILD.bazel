@@ -131,7 +131,7 @@ rust_test(
     visibility = ["//visibility:public"],
     deps = [
         ":d2b_core",
-        "@bazel_only_crates//:bolero",
+        "@crates//:bolero",
         "@crates//:serde_json",
     ],
 )
@@ -164,7 +164,7 @@ rust_test(
     visibility = ["//visibility:public"],
     deps = [
         ":d2b_core",
-        "@bazel_only_crates//:bolero",
+        "@crates//:bolero",
         "@crates//:serde_json",
     ],
 )
@@ -183,7 +183,7 @@ rust_test(
     visibility = ["//visibility:public"],
     deps = [
         ":d2b_core",
-        "@bazel_only_crates//:bolero",
+        "@crates//:bolero",
         "@crates//:serde_json",
     ],
 )
@@ -202,7 +202,7 @@ rust_test(
     visibility = ["//visibility:public"],
     deps = [
         ":d2b_core",
-        "@bazel_only_crates//:bolero",
+        "@crates//:bolero",
     ],
 )
 
@@ -220,7 +220,7 @@ rust_test(
     visibility = ["//visibility:public"],
     deps = [
         ":d2b_core",
-        "@bazel_only_crates//:bolero",
+        "@crates//:bolero",
         "@crates//:serde_json",
     ],
 )
@@ -241,7 +241,7 @@ rust_test(
     visibility = ["//visibility:public"],
     deps = [
         ":d2b_core",
-        "@bazel_only_crates//:bolero",
+        "@crates//:bolero",
         "@crates//:serde_json",
     ],
 )
