@@ -110,6 +110,9 @@ pkgs.testers.runNixOSTest {
         networking.nftables.ruleset = lib.mkAfter ''
           table inet d2b {}
         '';
+        systemd.tmpfiles.rules = [
+          "d /etc/NetworkManager/conf.d 0755 root root -"
+        ];
         environment.etc."d2b/acceptance-host-runtime.json".source = hostRuntime;
         d2b.site.adminUsers = [ "alice" ];
         systemd.services.d2bd.serviceConfig.ExecStartPre = lib.mkAfter [
