@@ -4618,10 +4618,22 @@ fn reconcile_wave6_network_effect(
     let reconciler = NetworkReconciler::new(effects, resources);
     match block_on_future(reconciler.reconcile(&input)) {
         Ok(ReconcileProgress::Ready) => Ok(()),
-        Ok(ReconcileProgress::Pending(_))
-        | Ok(ReconcileProgress::Requeue(_))
-        | Ok(ReconcileProgress::Blocked(_))
-        | Err(_) => Err(resource_runtime::ResourceRuntimeError::ProviderPathUnavailable),
+        Ok(progress) => {
+            tracing::warn!(
+                stage = "network-reconciler",
+                progress = ?progress,
+                "Network Provider reconcile did not reach Ready"
+            );
+            Err(resource_runtime::ResourceRuntimeError::ProviderPathUnavailable)
+        }
+        Err(error) => {
+            tracing::warn!(
+                stage = "network-reconciler",
+                error = error.code(),
+                "Network Provider reconcile effect failed"
+            );
+            Err(resource_runtime::ResourceRuntimeError::ProviderPathUnavailable)
+        }
     }
 }
 
