@@ -214,7 +214,7 @@ pub fn upgrade_owned_after_backup(
     identity: &StoreIdentity,
     backup: LogicalBackup,
 ) -> Result<MigrationOutcome, StoreError> {
-    backup.validate_for_identity(identity)?;
+    backup.validate_for_upgrade_identity(identity)?;
     upgrade_owned(parent, marker, identity)
 }
 
@@ -1357,6 +1357,23 @@ mod tests {
         empty_backup_for(&identity())
     }
 
+    fn pre_upgrade_backup() -> LogicalBackup {
+        let mut backup = empty_backup();
+        backup.schema_version = 1;
+        let table = backup
+            .tables
+            .iter_mut()
+            .find(|table| table.name == "store_meta")
+            .unwrap();
+        let row = table.rows.first_mut().unwrap();
+        let mut meta: crate::transaction::StoreMeta =
+            crate::transaction::decode(crate::ValueKind::StoreMetaScalar, &row.value).unwrap();
+        meta.schema_version = 1;
+        row.value = crate::transaction::encode(crate::ValueKind::StoreMetaScalar, &meta).unwrap();
+        table.checksum = crate::backup::checksum_rows(&table.rows);
+        backup
+    }
+
     fn empty_backup_for(store_identity: &StoreIdentity) -> LogicalBackup {
         let directory = tempfile::tempdir().unwrap();
         let file = OpenOptions::new()
@@ -1684,7 +1701,7 @@ mod tests {
         let (directory, parent_fd, mut marker) = parent();
         create_current_file(&directory, DEFAULT_ACTIVE_FILE_NAME);
         set_schema_version(&directory, 1);
-        let backup = empty_backup();
+        let backup = pre_upgrade_backup();
         let outcome =
             upgrade_owned_after_backup(&parent_fd, &mut marker, &identity(), backup).unwrap();
         assert_eq!(

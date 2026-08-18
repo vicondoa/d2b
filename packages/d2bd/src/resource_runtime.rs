@@ -1434,6 +1434,47 @@ impl ZoneResourceRuntime {
         Ok(Arc::new(adapter.client()))
     }
 
+    /// Persist a provider reconcile phase through the authenticated Resource
+    /// API so restart admission can rely on durable observed generation.
+    pub(crate) async fn persist_public_reconcile_phase(
+        &self,
+        peer_uid: u32,
+        resource_ref: &ResourceRef,
+        resource_uid: &ResourceUid,
+        operation_id: &str,
+        phase: &str,
+    ) -> Result<(), ResourceRuntimeError> {
+        let resource = self
+            .backend
+            .get(StoreGetRequest {
+                operation: StoreOperationContext {
+                    operation_id: operation_id.to_owned(),
+                    idempotency_key: None,
+                    correlation_id: operation_id.to_owned(),
+                    trace_id: None,
+                    deadline_ms: 30_000,
+                },
+                zone: self.zone.clone(),
+                target: resource_ref.clone(),
+                expected_uid: Some(resource_uid.clone()),
+                projection: StoreProjection::Full,
+            })
+            .await
+            .map_err(|_| ResourceRuntimeError::StoreReadFailed)?;
+        let mut status = serde_json::from_slice::<Value>(&resource.canonical_json)
+            .map_err(|_| ResourceRuntimeError::ResponseInvalid)?
+            .get("status")
+            .cloned()
+            .unwrap_or_else(|| json!({}));
+        if status.get("phase").and_then(Value::as_str) == Some(phase) {
+            return Ok(());
+        }
+        status["phase"] = Value::String(phase.to_owned());
+        let context = local_operator_subject_context(&self.zone, peer_uid, operation_id)?;
+        let client = self.bind_operator_resource_client(context)?;
+        persist_resource_status(&client, &resource, &status).await
+    }
+
     /// Drive the complete Wave 6 acceptance sequence through the
     /// authenticated public Resource API and the production Provider
     /// boundary.

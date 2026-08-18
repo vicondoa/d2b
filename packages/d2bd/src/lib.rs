@@ -17,7 +17,7 @@ use std::os::unix::net::UnixStream;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::{
-    Arc, Mutex, OnceLock,
+    Arc, Mutex,
     atomic::{AtomicU64, Ordering},
     mpsc,
 };
@@ -4381,7 +4381,21 @@ fn dispatch_wave6_resource_reconcile(
             }
         }
         "Network" => {
+            block_on_future(runtime.persist_public_reconcile_phase(
+                peer.uid,
+                &resource_ref,
+                &uid,
+                operation_id,
+                "Pending",
+            ))?;
             reconcile_wave6_network_effect(state, peer, &resolver, &uid, &resource, true)?;
+            block_on_future(runtime.persist_public_reconcile_phase(
+                peer.uid,
+                &resource_ref,
+                &uid,
+                operation_id,
+                "Ready",
+            ))?;
             "network-bridge-reconciled"
         }
         "Device" => {
@@ -4409,7 +4423,14 @@ fn dispatch_wave6_resource_reconcile(
             "device-tpm-reconciled"
         }
         "Guest" => {
-            ensure_guest_networks_reconciled(state, peer, runtime, &resource, &resolver)?;
+            ensure_guest_networks_reconciled(
+                state,
+                peer,
+                runtime,
+                &resource,
+                &resolver,
+                operation_id,
+            )?;
             let guest_vm = resource_ref.name().as_str();
             let providers = state.provider_runtime.process_providers().ok_or_else(|| {
                 tracing::warn!(
@@ -4489,18 +4510,13 @@ fn public_resource_get_error(resource: &Value) -> Option<resource_runtime::Resou
     )
 }
 
-static PUBLIC_NETWORK_READY: OnceLock<Mutex<BTreeMap<ResourceUid, u64>>> = OnceLock::new();
-
-fn public_network_ready() -> &'static Mutex<BTreeMap<ResourceUid, u64>> {
-    PUBLIC_NETWORK_READY.get_or_init(|| Mutex::new(BTreeMap::new()))
-}
-
 fn ensure_guest_networks_reconciled(
     state: &ServerState,
     peer: &PeerIdentity,
     runtime: &resource_runtime::ZoneResourceRuntime,
     guest: &Value,
     resolver: &BundleResolver,
+    operation_id: &str,
 ) -> Result<(), resource_runtime::ResourceRuntimeError> {
     let Some(network_attachments) = guest
         .get("spec")
@@ -4540,20 +4556,38 @@ fn ensure_guest_networks_reconciled(
             .and_then(|metadata| metadata.get("generation"))
             .and_then(Value::as_u64)
             .ok_or(resource_runtime::ResourceRuntimeError::RequestInvalid)?;
-        let ready = {
-            let ready = public_network_ready()
-                .lock()
-                .map_err(|_| resource_runtime::ResourceRuntimeError::ProviderPathUnavailable)?;
-            ready
-                .get(&network_uid)
-                .is_some_and(|observed| *observed == generation)
-        };
+        let ready = network
+            .get("status")
+            .and_then(|status| status.get("phase"))
+            .and_then(Value::as_str)
+            == Some("Ready")
+            && network
+                .get("status")
+                .and_then(|status| status.get("observedGeneration"))
+                .and_then(Value::as_u64)
+                == Some(generation);
         if !ready {
             tracing::warn!(
                 stage = "guest-network-readiness",
                 "Guest Provider is re-running Network reconciliation before launch"
             );
+            let network_operation_id =
+                format!("{operation_id}-network-{}", network_ref.name().as_str());
+            block_on_future(runtime.persist_public_reconcile_phase(
+                peer.uid,
+                &network_ref,
+                &network_uid,
+                &network_operation_id,
+                "Pending",
+            ))?;
             reconcile_wave6_network_effect(state, peer, resolver, &network_uid, &network, false)?;
+            block_on_future(runtime.persist_public_reconcile_phase(
+                peer.uid,
+                &network_ref,
+                &network_uid,
+                &network_operation_id,
+                "Ready",
+            ))?;
         }
     }
     Ok(())
@@ -4567,10 +4601,6 @@ fn reconcile_wave6_network_effect(
     resource: &Value,
     ensure_host_base: bool,
 ) -> Result<(), resource_runtime::ResourceRuntimeError> {
-    public_network_ready()
-        .lock()
-        .map_err(|_| resource_runtime::ResourceRuntimeError::ProviderPathUnavailable)?
-        .remove(uid);
     let caller_role = broker_caller_role_for_peer(peer);
     if ensure_host_base {
         let base_response = dispatch_broker_request_as(
@@ -4693,13 +4723,7 @@ fn reconcile_wave6_network_effect(
     let resources = PublicNetworkResourceBoundary::default();
     let reconciler = NetworkReconciler::new(effects, resources);
     match block_on_future(reconciler.reconcile(&input)) {
-        Ok(ReconcileProgress::Ready) => {
-            public_network_ready()
-                .lock()
-                .map_err(|_| resource_runtime::ResourceRuntimeError::ProviderPathUnavailable)?
-                .insert(uid.clone(), generation.get());
-            Ok(())
-        }
+        Ok(ReconcileProgress::Ready) => Ok(()),
         Ok(progress) => {
             tracing::warn!(
                 stage = "network-reconciler",

@@ -26,8 +26,6 @@ let
   zoneResourceRuntimeTmpfiles = lib.concatMap
     (zoneName: [
       "d ${cfg.site.stateDir}/zones/${zoneName} 0750 root d2bd -"
-      "d ${cfg.site.stateDir}/zones/${zoneName}/audit 0750 d2bd d2bd -"
-      "d ${cfg.site.stateDir}/zones/${zoneName}/telemetry 0750 d2bd d2bd -"
     ])
     zoneResourceRuntimeNames;
   gracefulTimeoutFor = vm:
