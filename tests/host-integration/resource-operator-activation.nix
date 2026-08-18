@@ -463,6 +463,7 @@ pkgs.testers.runNixOSTest {
     start_all()
     machine.wait_for_unit("nftables.service")
     machine.succeed("nft list table inet d2b")
+    machine.succeed("d2b host install --apply --no-start")
     machine.wait_for_unit("d2b-priv-broker.socket")
     machine.wait_for_unit("d2bd.service")
     machine.wait_for_file("/run/d2b/public.sock")
