@@ -194,6 +194,7 @@ fn redaction_failure_never_emits_captured_evidence() {
          done\n\
          printf 'RAW-LOG-SENTINEL\\n'\n\
          printf 'RAW-BEP-SENTINEL\\n' > \"$bep\"\n\
+         printf 'remote execution started authorization: Bearer dispatch-token UNAUTHENTICATED\n'\n\
          exit 1\n",
     );
     write_executable(&xtask, "#!/usr/bin/env bash\nexit 1\n");
@@ -216,6 +217,95 @@ fn redaction_failure_never_emits_captured_evidence() {
     assert!(diagnostics.contains("evidence redaction failed"));
     assert!(!diagnostics.contains("RAW-LOG-SENTINEL"));
     assert!(!diagnostics.contains("RAW-BEP-SENTINEL"));
+    let _ = std::fs::remove_dir_all(scratch);
+}
+
+#[test]
+fn dispatch_evidence_survives_log_redaction_before_classification() {
+    let scratch = repo_root().join(".scratch").join(format!(
+        "bazel-check-dispatch-redaction-test-{}",
+        std::process::id()
+    ));
+    std::fs::create_dir_all(&scratch).expect("create wrapper test scratch");
+    let bazel = scratch.join("bazel");
+    let credential = scratch.join("credential");
+    std::fs::write(&credential, "synthetic-token\n").expect("write credential");
+    write_executable(
+        &bazel,
+        "#!/usr/bin/env bash\n\
+         for arg in \"$@\"; do\n\
+           case \"$arg\" in\n\
+             --build_event_json_file=*) bep=\"${arg#*=}\" ;;\n\
+           esac\n\
+         done\n\
+         printf 'remote execution started authorization: Bearer synthetic-secret UNAUTHENTICATED\\n'\n\
+         printf '{\"id\":{\"started\":{\"uuid\":\"dispatch\"}}}\\n' > \"$bep\"\n\
+         exit 1\n",
+    );
+
+    let output = Command::new("bash")
+        .arg(repo_root().join("tests/tools/bazel-check"))
+        .args(["--profile", "remote", "--", "//:test"])
+        .env("D2B_BAZEL_BIN", &bazel)
+        .env("D2B_XTASK_BIN", env!("CARGO_BIN_EXE_xtask"))
+        .env("D2B_BUILDBUDDY_CREDENTIAL_FILE", &credential)
+        .env("D2B_BAZEL_UNTRUSTED", "0")
+        .env("GITHUB_ACTIONS", "false")
+        .env("D2B_BAZEL_CHECK_SCRATCH", scratch.join("evidence"))
+        .output()
+        .expect("run bazel-check");
+
+    assert!(!output.status.success());
+    let diagnostics = format!(
+        "{}{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(diagnostics.contains("refusing local retry"));
+    assert!(!diagnostics.contains("retrying the identical target set locally"));
+    assert!(!diagnostics.contains("synthetic-secret"));
+    assert!(!diagnostics.contains("dispatch-token"));
+    let _ = std::fs::remove_dir_all(scratch);
+}
+
+#[test]
+fn successful_bazel_requires_a_test_result_event() {
+    let scratch = repo_root().join(".scratch").join(format!(
+        "bazel-check-startup-only-test-{}",
+        std::process::id()
+    ));
+    std::fs::create_dir_all(&scratch).expect("create wrapper test scratch");
+    let bazel = scratch.join("bazel");
+    write_executable(
+        &bazel,
+        "#!/usr/bin/env bash\n\
+         for arg in \"$@\"; do\n\
+           case \"$arg\" in\n\
+             --build_event_json_file=*) bep=\"${arg#*=}\" ;;\n\
+           esac\n\
+         done\n\
+         printf 'startup only\\n'\n\
+         printf '{\"id\":{\"started\":{\"uuid\":\"startup-only\"}}}\\n' > \"$bep\"\n\
+         exit 0\n",
+    );
+
+    let output = Command::new("bash")
+        .arg(repo_root().join("tests/tools/bazel-check"))
+        .args(["--profile", "local", "--", "//:test"])
+        .env("D2B_BAZEL_BIN", &bazel)
+        .env("D2B_XTASK_BIN", env!("CARGO_BIN_EXE_xtask"))
+        .env("D2B_BAZEL_CHECK_SCRATCH", scratch.join("evidence"))
+        .output()
+        .expect("run bazel-check");
+
+    assert!(!output.status.success());
+    let diagnostics = format!(
+        "{}{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(diagnostics.contains("no testResult event"));
+    assert!(!diagnostics.contains("bazel-check: local passed"));
     let _ = std::fs::remove_dir_all(scratch);
 }
 

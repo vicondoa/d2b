@@ -97,6 +97,59 @@ fn only_pre_dispatch_infrastructure_failures_allow_one_local_retry() {
 }
 
 #[test]
+fn ambiguous_worker_and_transport_failures_fail_closed() {
+    let directory = scratch("ambiguous-infrastructure");
+    for (name, log) in [
+        ("worker", "worker unavailable\n"),
+        ("transport", "transport connection reset\n"),
+    ] {
+        let path = directory.join(format!("{name}.log"));
+        std::fs::write(&path, log).expect("write ambiguous failure log");
+        let output = run_xtask(&[
+            "bazel-evidence",
+            "classify-failure",
+            "--log",
+            path.to_str().expect("ambiguous failure path"),
+        ]);
+        assert!(output.status.success());
+        let value: Value = serde_json::from_slice(&output.stdout).expect("classification JSON");
+        assert_eq!(value["retryLocally"], false, "{name} failure retried");
+        assert_eq!(value["maxLocalRetries"], 0);
+    }
+}
+
+#[test]
+fn explicit_pre_dispatch_worker_and_transport_failures_allow_one_retry() {
+    let directory = scratch("explicit-pre-dispatch-infrastructure");
+    for (name, log) in [
+        (
+            "worker",
+            "remote execution not started: worker unavailable\n",
+        ),
+        (
+            "transport",
+            "remote action was not dispatched: transport connection reset\n",
+        ),
+    ] {
+        let path = directory.join(format!("{name}.log"));
+        std::fs::write(&path, log).expect("write pre-dispatch failure log");
+        let output = run_xtask(&[
+            "bazel-evidence",
+            "classify-failure",
+            "--log",
+            path.to_str().expect("pre-dispatch failure path"),
+        ]);
+        assert!(output.status.success());
+        let value: Value = serde_json::from_slice(&output.stdout).expect("classification JSON");
+        assert_eq!(
+            value["retryLocally"], true,
+            "{name} failure was not retried"
+        );
+        assert_eq!(value["maxLocalRetries"], 1);
+    }
+}
+
+#[test]
 fn redaction_removes_plain_encoded_and_split_sentinels_from_evidence() {
     let directory = scratch("redaction");
     let input = directory.join("bep.json");

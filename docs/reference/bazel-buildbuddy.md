@@ -86,8 +86,9 @@ The facade preserves the selected target set when execution changes:
 - untrusted GitHub jobs always select `local`;
 - `trusted-seed` requires `D2B_BAZEL_TRUSTED=1`, `GITHUB_REF=refs/heads/v3`,
   and an allowlisted security digest;
-- a missing-credential, authentication, endpoint, worker, or transport
-  failure before remote dispatch permits one identical local retry;
+- a clearly pre-dispatch missing-credential, authentication, or endpoint
+  failure permits one identical local retry; worker and transport failures
+  require explicit pre-dispatch evidence;
 - analysis, policy, build, test, and post-dispatch failures fail closed.
 
 The trusted security digest covers the committed remote profile, module lock,
@@ -105,12 +106,14 @@ cargo run --quiet --locked -p xtask -- bazel-evidence check-security
 The facade writes redacted logs and BEP output below
 `.scratch/bazel-check/`. `bazel-evidence redact-log` rejects credential keys,
 authorization values, header authentication fields, and configured sentinel
-values before evidence is published. The same redaction applies to local
-fallback output.
+values before evidence is published while preserving safe failure and dispatch
+hints for classification. The same redaction applies to local fallback output.
 
 `bazel-evidence classify-failure` is the typed pre-dispatch fallback
-classifier. It distinguishes infrastructure failures that permit the one
-local retry from post-dispatch or check failures that must fail closed.
+classifier. It distinguishes positively pre-dispatch infrastructure failures
+that permit the one local retry from ambiguous, post-dispatch, or check
+failures that must fail closed. A successful Bazel invocation must also emit
+at least one `testResult` event in its BEP.
 
 Reproduce a failure through the same alias and profile:
 

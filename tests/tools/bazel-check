@@ -154,6 +154,12 @@ JOB="${D2B_BAZEL_JOB:-check}"
 log="$SCRATCH/$PROFILE.$JOB.log"
 bep="$SCRATCH/$PROFILE.$JOB.bep.json"
 
+bep_has_test_result() {
+  local path="$1"
+  [ -s "$path" ] &&
+    jq -e -s 'any(.[]; .testResult != null)' "$path" >/dev/null 2>&1
+}
+
 run_bazel() {
   local profile="$1"
   local log_path="$2"
@@ -183,6 +189,10 @@ run_bazel() {
     >"$log_path" 2>&1
   local status=$?
   set -e
+  if [ "$status" -eq 0 ] && ! bep_has_test_result "$bep_path"; then
+    echo "bazel-check: successful Bazel invocation emitted no testResult event" >&2
+    status=1
+  fi
   if ! redact_file "$log_path" || ! redact_file "$bep_path"; then
     echo "bazel-check: evidence redaction failed; refusing to publish the run" >&2
     emit_captured_metadata "$log_path" "bazel $profile log"

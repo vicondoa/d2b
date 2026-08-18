@@ -163,6 +163,18 @@ filegroup(
 
 # keep
 filegroup(
+    name = "nix_flake_support_sources",
+    srcs = glob(
+        ["completions/**/*"],
+        allow_empty = True,
+    ) + [
+        "deny.toml",
+    ],
+    visibility = ["//visibility:public"],
+)
+
+# keep
+filegroup(
     name = "templates_workspace_sources",
     srcs = glob(
         ["templates/**/*"],

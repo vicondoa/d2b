@@ -12,3 +12,5 @@
   static-binary assertions in the flake checks.
 - Run standalone proof crates from writable per-test workspaces so Bazel
   execution cannot inherit the root Cargo workspace.
+- Fail closed on ambiguous remote fallback failures, preserve dispatch hints
+  through evidence redaction, and require a BEP `testResult` event on success.

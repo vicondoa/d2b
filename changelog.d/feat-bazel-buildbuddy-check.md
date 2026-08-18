@@ -11,6 +11,8 @@
   caching, retries, and aggregation into Bazel.
 - Kept direct Cargo, nextest, doctest, feature, and manual Layer-2 workflows
   available alongside the Bazel graph.
+- Declare package, deny-policy, and shell-completion sources for fixed Nix
+  Bazel inputs so source changes invalidate the corresponding checks.
 
 ### Removed
 
