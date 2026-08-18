@@ -40,6 +40,7 @@ rust_test(
     compile_data = ["Cargo.toml"],
     visibility = ["//visibility:public"],
     deps = [
+        "//packages/d2b-contracts:d2b_contracts",
         ":d2b_provider_transport_vsock",
     ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
 )
@@ -64,6 +65,7 @@ rust_test(
     compile_data = ["Cargo.toml"],
     visibility = ["//visibility:public"],
     deps = [
+        "//packages/d2b-session:d2b_session",
         ":d2b_provider_transport_vsock",
     ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
 )
@@ -124,6 +126,7 @@ rust_test(
     compile_data = ["Cargo.toml"],
     visibility = ["//visibility:public"],
     deps = [
+        "//packages/d2b-contracts:d2b_contracts",
         ":d2b_provider_transport_vsock",
     ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
 )
@@ -136,6 +139,7 @@ rust_test(
     compile_data = ["Cargo.toml"],
     visibility = ["//visibility:public"],
     deps = [
+        "//packages/d2b-contracts:d2b_contracts",
         ":d2b_provider_transport_vsock",
     ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
 )
@@ -160,6 +164,7 @@ rust_test(
     compile_data = ["Cargo.toml"],
     visibility = ["//visibility:public"],
     deps = [
+        "//packages/d2b-contracts:d2b_contracts",
         ":d2b_provider_transport_vsock",
     ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
 )

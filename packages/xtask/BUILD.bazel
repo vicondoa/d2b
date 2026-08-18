@@ -53,7 +53,7 @@ rust_test(
         "D2B_BAZEL_BIN",
         "D2B_BAZEL_TEST_PATH",
     ],
-    tags = ["local", "manual"],
+    tags = ["local"],
     visibility = ["//visibility:public"],
     deps = [] + all_crate_deps(normal_dev = True, cargo_only = True),
 )

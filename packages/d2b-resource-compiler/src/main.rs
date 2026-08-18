@@ -1989,7 +1989,12 @@ mod tests {
                 }
             })
             .unwrap_or_else(|| {
-                Path::new(env!("CARGO_MANIFEST_DIR")).join("../../docs/reference/schemas/v3")
+                std::env::current_dir()
+                    .expect("current directory")
+                    .ancestors()
+                    .map(|root| root.join("docs/reference/schemas/v3"))
+                    .find(|path| path.is_dir())
+                    .expect("resource schemas are discoverable")
             })
     }
 

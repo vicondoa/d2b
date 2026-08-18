@@ -541,7 +541,6 @@ filegroup(
         "//:tests/golden/runner-shape/vsock-relay-argv-minimal.txt",
         "//:tests/host-integration/daemon-restart-vm-survival.nix",
         "//:tests/integration/live/live-vm-smoke.sh",
-        "//:tests/layer1-jobs.json",
         "//:tests/test-nix-unit.sh",
         "//:tests/test-rust.sh",
         "//tests/unit/nix:eval-jobs.nix",

@@ -112,7 +112,10 @@ mod daemon_state_persistence {
             let scrubber = std::env::var_os("D2B_TEST_SCRUB_SHELL_ENVIRONMENT")
                 .map(PathBuf::from)
                 .unwrap_or_else(|| {
-                    Path::new(env!("CARGO_MANIFEST_DIR"))
+                    PathBuf::from(
+                        std::env::var_os("CARGO_MANIFEST_DIR")
+                            .unwrap_or_else(|| ".".into()),
+                    )
                         .join("../../tests/tools/scrub-shell-environment")
                 });
             let output = Command::new(scrubber)

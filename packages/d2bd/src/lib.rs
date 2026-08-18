@@ -152,7 +152,10 @@ pub(crate) fn test_scratch_root() -> PathBuf {
     std::env::var_os("TEST_TMPDIR")
         .or_else(|| std::env::var_os("CARGO_TARGET_TMPDIR"))
         .map(PathBuf::from)
-        .unwrap_or_else(|| PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("target"))
+        .or_else(|| std::env::var_os("CARGO_MANIFEST_DIR").map(PathBuf::from))
+        .or_else(|| std::env::current_dir().ok())
+        .map(|path| path.join("target"))
+        .expect("resolve test scratch root")
 }
 
 use admission::{
@@ -23538,7 +23541,9 @@ mod public_status_tests {
             std::env::var_os("D2BD_HOST_FIXTURE")
                 .map(PathBuf::from)
                 .unwrap_or_else(|| {
-                    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+                    PathBuf::from(
+                        std::env::var_os("CARGO_MANIFEST_DIR").unwrap_or_else(|| ".".into()),
+                    )
                         .join("../../tests/fixtures/deny-unknown/host-valid.json")
                 }),
             &host_path,
@@ -27371,7 +27376,9 @@ mod broker_dispatch_tests {
         std::env::var_os("D2BD_HOST_FIXTURE")
             .map(PathBuf::from)
             .unwrap_or_else(|| {
-                PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+                PathBuf::from(
+                    std::env::var_os("CARGO_MANIFEST_DIR").unwrap_or_else(|| ".".into()),
+                )
                     .join("../../tests/fixtures/deny-unknown/host-valid.json")
             })
     }
@@ -29600,7 +29607,11 @@ mod broker_dispatch_tests {
 
         let store_marker = daemon_state_dir.join("store-marker");
         fs::write(&store_marker, b"ok").expect("write store marker");
-        let short_socket_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("target");
+        let short_socket_dir = std::env::var_os("CARGO_MANIFEST_DIR")
+            .map(PathBuf::from)
+            .or_else(|| std::env::current_dir().ok())
+            .expect("resolve test socket root")
+            .join("target");
         fs::create_dir_all(&short_socket_dir).expect("create short socket dir");
         let socket_id = NEXT_TEST_ID.fetch_add(1, Ordering::Relaxed);
         let share_ro_socket = short_socket_dir.join(format!("vm-start-ro-{socket_id}.sock"));

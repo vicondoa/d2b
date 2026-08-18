@@ -192,7 +192,7 @@ fn scan_with_path(root: &Path, extra_path: Option<&Path>) -> (bool, String) {
 }
 
 fn test_tmpdir() -> PathBuf {
-    option_env!("CARGO_TARGET_TMPDIR")
+    std::env::var_os("CARGO_TARGET_TMPDIR")
         .map(PathBuf::from)
         .filter(|path| path.is_absolute())
         .or_else(|| std::env::var_os("TEST_TMPDIR").map(PathBuf::from))

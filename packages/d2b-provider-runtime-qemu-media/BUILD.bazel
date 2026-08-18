@@ -57,6 +57,7 @@ rust_test(
     compile_data = ["Cargo.toml"],
     visibility = ["//visibility:public"],
     deps = [
+        "//packages/d2b-contracts:d2b_contracts",
         ":d2b_provider_runtime_qemu_media",
     ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
 )
@@ -69,6 +70,7 @@ rust_test(
     compile_data = ["Cargo.toml"],
     visibility = ["//visibility:public"],
     deps = [
+        "//packages/d2b-contracts:d2b_contracts",
         ":d2b_provider_runtime_qemu_media",
     ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
 )
@@ -81,6 +83,7 @@ rust_test(
     compile_data = ["Cargo.toml"],
     visibility = ["//visibility:public"],
     deps = [
+        "//packages/d2b-contracts:d2b_contracts",
         ":d2b_provider_runtime_qemu_media",
     ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
 )
@@ -93,6 +96,7 @@ rust_test(
     compile_data = ["Cargo.toml"],
     visibility = ["//visibility:public"],
     deps = [
+        "//packages/d2b-contracts:d2b_contracts",
         ":d2b_provider_runtime_qemu_media",
     ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
 )
@@ -113,10 +117,13 @@ rust_test(
     name = "qemu_media_integration",
     srcs = [
         "integration/mod.rs",
+        "integration/scaffold.rs",
     ],
     compile_data = ["Cargo.toml"],
+    crate_root = "integration/mod.rs",
     visibility = ["//visibility:public"],
     deps = [
+        "//packages/d2b-contracts:d2b_contracts",
         ":d2b_provider_runtime_qemu_media",
     ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
 )

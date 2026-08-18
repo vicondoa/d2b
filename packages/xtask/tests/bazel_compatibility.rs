@@ -347,7 +347,7 @@ fn nix_surface_pins_the_official_bazel_9_2_0_provider_for_supported_systems() {
         "coreutils",
         "gnugrep",
         "runScript = \"${pkgs.bash}/bin/bash\"",
-        "packages = [ bazel920 pkgs.rustup ]",
+        "packages = [ bazel920 pkgs.rustup pkgs.git ]",
         "bazel = pkgs.mkShellNoCC",
         "export D2B_BAZEL_BIN=\"${bazel920}/bin/bazel\"",
         "export BAZEL_SH=\"${bazelActionShell}/bin/bash\"",

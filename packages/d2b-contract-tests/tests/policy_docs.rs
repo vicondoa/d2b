@@ -14,7 +14,7 @@
 use std::{
     collections::BTreeSet,
     fmt, fs,
-    path::{Component, Path},
+    path::{Component, Path, PathBuf},
     sync::OnceLock,
 };
 
@@ -433,8 +433,14 @@ fn markdown_repo_paths_reject_absolute_and_parent_escape() {
 
 #[test]
 fn markdown_repo_paths_reject_symlink_escape() {
-    let root = Path::new(env!("CARGO_TARGET_TMPDIR")).join("policy-doc-links");
-    let outside = Path::new(env!("CARGO_TARGET_TMPDIR")).join("policy-doc-outside.md");
+    let tempdir = std::env::var_os("CARGO_TARGET_TMPDIR")
+        .or_else(|| std::env::var_os("TEST_TMPDIR"))
+        .or_else(|| std::env::var_os("TMPDIR"))
+        .map(PathBuf::from)
+        .filter(|path| path.is_absolute())
+        .unwrap_or_else(|| std::env::current_dir().expect("current directory"));
+    let root = tempdir.join("policy-doc-links");
+    let outside = tempdir.join("policy-doc-outside.md");
     let _ = fs::remove_dir_all(&root);
     fs::create_dir_all(root.join("docs")).expect("create Markdown link fixture root");
     fs::write(&outside, "outside\n").expect("write outside Markdown fixture");

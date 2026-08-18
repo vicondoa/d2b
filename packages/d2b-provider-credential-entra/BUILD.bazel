@@ -118,11 +118,11 @@ rust_test(
     name = "controller",
     srcs = [
         "tests/controller.rs",
-        "tests/common/**/*.rs",
-    ],
+    ] + glob(["tests/common/**/*.rs"]),
     compile_data = ["Cargo.toml"],
     visibility = ["//visibility:public"],
     deps = [
+        "//packages/d2b-contracts:d2b_contracts",
         ":d2b_provider_credential_entra",
     ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
 )

@@ -3,17 +3,8 @@ set -euo pipefail
 
 ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../.." && pwd)"
 PROFILE=""
-LEAF="rest"
 SCRATCH="${D2B_BAZEL_CHECK_SCRATCH:-$ROOT/.scratch/bazel-check}"
-# Compile-fail UI suites stay on Cargo; they exceed the default Bazel timeout
-# when many rustc invocations share one worker. Gas City fixture genrules
-# stay out of the default aggregate; they need a user-namespace FHS shell.
-UI_EXCLUDES=(
-  -//packages/d2b-bus/tests/ui/...
-  -//packages/d2b-controller-toolkit/tests/ui/...
-  -//packages/d2b-resource-api/tests/ui/...
-)
-TARGET_SET=()
+TARGETS=()
 REDACTION_FAILURE_STATUS=75
 CONFIGURATION_FAILURE_STATUS=76
 
@@ -95,7 +86,7 @@ if [ "$#" -eq 0 ]; then
     printf '%s' "$request" | credential_helper
     exit $?
   fi
-  echo "usage: tests/tools/bazel-check --profile <local|remote|trusted-seed|qualification> [--leaf <rest|all|main|broker|guest>] [-- bazel flags...]" >&2
+  echo "usage: tests/tools/bazel-check --profile <local|remote|trusted-seed|qualification> -- <fixed Bazel target patterns...>" >&2
   exit 2
 fi
 
@@ -110,17 +101,10 @@ while [ "$#" -gt 0 ]; do
       PROFILE="${1#*=}"
       shift
       ;;
-    --leaf)
-      [ "$#" -ge 2 ] || { echo "$1 requires a value" >&2; exit 2; }
-      LEAF="$2"
-      shift 2
-      ;;
-    --leaf=*)
-      LEAF="${1#*=}"
-      shift
-      ;;
     --)
       shift
+      TARGETS=("$@")
+      set --
       break
       ;;
     *)
@@ -130,49 +114,15 @@ while [ "$#" -gt 0 ]; do
   esac
 done
 
+if [ "${#TARGETS[@]}" -eq 0 ]; then
+  echo "at least one fixed Bazel target pattern or label is required after --" >&2
+  exit 2
+fi
+
 case "$PROFILE" in
   local|remote|trusted-seed|qualification) ;;
   *)
     echo "profile must be local, remote, trusted-seed, or qualification" >&2
-    exit 2
-    ;;
-esac
-
-case "$LEAF" in
-  rest)
-    # Non-crate Bazel tests. Rust package tests belong to test-rust leaves.
-    TARGET_SET=(
-      //tests/...
-      //bazel/checks/nix/...
-      //bazel/checks/policy/...
-      //bazel/checks/fixtures/...
-      -//tests/fixtures/gas-city/...
-    )
-    ;;
-  all)
-    TARGET_SET=(
-      //...
-      "${UI_EXCLUDES[@]}"
-      -//tests/fixtures/gas-city/...
-    )
-    ;;
-  main)
-    TARGET_SET=(
-      //packages/...
-      //bazel/checks/rust/...
-      "${UI_EXCLUDES[@]}"
-      -//packages/d2b-priv-broker/...
-      -//packages/d2b-guest-shell-runner/...
-    )
-    ;;
-  broker)
-    TARGET_SET=(//packages/d2b-priv-broker/...)
-    ;;
-  guest)
-    TARGET_SET=(//packages/d2b-guest-shell-runner/...)
-    ;;
-  *)
-    echo "leaf must be rest, all, main, broker, or guest" >&2
     exit 2
     ;;
 esac
@@ -213,8 +163,9 @@ fi
 export D2B_BAZEL_BIN="$bazel_bin"
 export D2B_REPO_ROOT="$ROOT"
 export ROOT
-log="$SCRATCH/$PROFILE.$LEAF.log"
-bep="$SCRATCH/$PROFILE.$LEAF.bep.json"
+JOB="${D2B_BAZEL_JOB:-check}"
+log="$SCRATCH/$PROFILE.$JOB.log"
+bep="$SCRATCH/$PROFILE.$JOB.bep.json"
 
 run_bazel() {
   local profile="$1"
@@ -231,12 +182,7 @@ run_bazel() {
     startup_flags=(--nosystem_rc --nohome_rc)
   fi
   set +e
-  # Host, Cargo-spawning, and nested-Bazel tests stay tagged local.
-  # Exclusive broker tests run only on the broker leaf.
-  local tag_filters="-local,-manual,-gpu,-kvm"
-  if [ "$LEAF" != broker ]; then
-    tag_filters="-local,-manual,-exclusive,-gpu,-kvm"
-  fi
+  local tag_filters="${D2B_BAZEL_TEST_TAG_FILTERS:--manual,-gpu,-kvm}"
   D2B_BAZEL_PROFILE="$profile" "$bazel_bin" "${startup_flags[@]}" test "--config=$profile" \
     --repo_contents_cache= "--build_event_json_file=$bep_path" \
     --build_tests_only \
@@ -244,9 +190,10 @@ run_bazel() {
     --test_tag_filters="$tag_filters" \
     --test_env=D2B_REPO_ROOT="$ROOT" \
     --test_env=D2B_BAZEL_BIN="$bazel_bin" \
+    --test_env=PATH="${D2B_BAZEL_TEST_PATH:-$PATH}" \
     --test_env=BAZEL_SH="${BAZEL_SH:-/bin/bash}" \
     "$@" \
-    -- "${TARGET_SET[@]}" \
+    -- "${TARGETS[@]}" \
     >"$log_path" 2>&1
   local status=$?
   set -e
@@ -294,8 +241,8 @@ if [ "$PROFILE" != local ]; then
   fi
   classification="$(xtask "${classification_args[@]}")"
   if printf '%s' "$classification" | jq -e '.retryLocally == true' >/dev/null; then
-    local_log="$SCRATCH/local.$LEAF.log"
-    local_bep="$SCRATCH/local.$LEAF.bep.json"
+    local_log="$SCRATCH/local.$JOB.log"
+    local_bep="$SCRATCH/local.$JOB.bep.json"
     echo "BuildBuddy failed before dispatch; retrying the identical target set locally"
     local_status=0
     D2B_BAZEL_QUALIFICATION_ISOLATE_RC=1 \

@@ -2641,7 +2641,10 @@ mod tests {
                 .join(workspace)
                 .join("packages/d2bd/src")
         } else {
-            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).to_path_buf()
+            std::env::var_os("CARGO_MANIFEST_DIR")
+                .map(std::path::PathBuf::from)
+                .or_else(|| std::env::current_dir().ok())
+                .expect("resolve daemon source root")
         };
         let mut sources = Vec::new();
         collect_rs_sources(&src_dir, &mut sources);

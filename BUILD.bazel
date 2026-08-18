@@ -1,11 +1,5 @@
 package(default_visibility = ["//visibility:public"])
 
-test_suite(
-    name = "bazel_check",
-    tags = ["manual"],
-    tests = [],
-)
-
 filegroup(
     name = "d2b_cli_contract_inputs",
     srcs = glob([
@@ -56,7 +50,6 @@ exports_files([
     "tests/golden/bazel/cache-policy.json",
     "tests/golden/bazel/eligibility.json",
     "tests/golden/bazel/qualification-schema.json",
-    "tests/layer1-jobs.json",
     "tests/test-rust.sh",
     "MODULE.bazel",
     "MODULE.bazel.lock",

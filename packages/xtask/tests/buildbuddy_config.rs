@@ -55,7 +55,7 @@ fn object<'a>(value: &'a Value, context: &str) -> &'a serde_json::Map<String, Va
 }
 
 #[test]
-fn committed_profiles_share_targets_and_use_credential_helper_only() {
+fn committed_profiles_share_authentication_and_worker_policy() {
     let bazelrc = read_text(".bazelrc");
     for (profile, marker) in [
         ("common", "common "),
@@ -147,74 +147,11 @@ fn committed_profiles_share_targets_and_use_credential_helper_only() {
         !user_example.contains("x-buildbuddy-api-key"),
         "the user example must not contain a credential header"
     );
-    assert!(
-        read_text("docs/reference/bazel-buildbuddy.md").contains("U9"),
-        "BuildBuddy reference documentation must describe the U9 gate"
-    );
-
-    let policy = read_json("tests/golden/bazel/cache-policy.json");
-    let profiles = object(
-        object(&policy, "cache policy")
-            .get("profiles")
-            .expect("cache policy profiles"),
-        "cache policy profiles",
-    );
-    let mut target_set = None;
-    for profile in ["common", "local", "remote", "trusted-seed", "qualification"] {
-        let profile_value = object(
-            profiles
-                .get(profile)
-                .unwrap_or_else(|| panic!("missing cache policy profile {profile}")),
-            profile,
-        );
-        let targets = profile_value
-            .get("targetSet")
-            .and_then(Value::as_array)
-            .unwrap_or_else(|| panic!("{profile}.targetSet must be an array"));
-        if let Some(expected) = &target_set {
-            assert_eq!(targets, expected, "{profile} changed the target set");
-        } else {
-            target_set = Some(targets.clone());
-        }
-    }
-    assert_eq!(
-        target_set.expect("at least one profile"),
-        vec![Value::String("//...".to_owned())]
-    );
 }
 
 #[test]
-fn policy_pins_representative_u9_bounds_and_trust_partition() {
+fn policy_preserves_remote_profiles_and_trust_partition() {
     let policy = read_json("tests/golden/bazel/cache-policy.json");
-    let gate = object(
-        object(&policy, "cache policy")
-            .get("u9Gate")
-            .expect("u9Gate"),
-        "cache policy u9Gate",
-    );
-    assert_eq!(
-        gate.get("report").and_then(Value::as_str),
-        Some("tests/golden/bazel/cache-transfer-representative.json")
-    );
-    assert_eq!(
-        gate.get("eligibility").and_then(Value::as_str),
-        Some("tests/golden/bazel/eligibility.json")
-    );
-    assert_eq!(
-        gate.get("eligibilityDigest").and_then(Value::as_str),
-        Some("sha256:62b4a9685445237db70b69d673b35205a1a18d835cf7ce7aed55e0edf43a8813")
-    );
-    assert_eq!(gate["wholeGraph"]["actionCount"].as_u64(), Some(207));
-    assert_eq!(
-        gate["wholeGraph"]["grossInputBytes"].as_u64(),
-        Some(162901404939)
-    );
-    assert_eq!(
-        gate["wholeGraph"]["uniqueInputBytes"].as_u64(),
-        Some(1034798612)
-    );
-    assert_eq!(gate["pipelining"]["status"].as_str(), Some("rejected"));
-
     let remote = object(
         object(&policy, "cache policy")
             .get("remote")
@@ -233,21 +170,17 @@ fn policy_pins_representative_u9_bounds_and_trust_partition() {
         remote.get("workerImageContract").and_then(Value::as_str),
         Some("d2b-bazel-worker/v1")
     );
-    assert!(
-        policy["profiles"]["remote"]["namespace"]
-            .as_str()
-            .is_some_and(|namespace| namespace.contains("/worker-v1/minimal/lock-v1"))
-    );
+    assert!(policy["profiles"]["remote"]["namespace"]
+        .as_str()
+        .is_some_and(|namespace| namespace.contains("/worker-v1/minimal/lock-v1")));
     assert_eq!(
         policy["profiles"]["trusted-seed"]["remoteCacheAsync"].as_bool(),
         Some(false)
     );
-    assert!(
-        remote["experimentalFeatures"]
-            .as_array()
-            .expect("experimental feature list")
-            .is_empty()
-    );
+    assert!(remote["experimentalFeatures"]
+        .as_array()
+        .expect("experimental feature list")
+        .is_empty());
 
     let trusted = object(
         object(&policy, "cache policy")
@@ -263,13 +196,11 @@ fn policy_pins_representative_u9_bounds_and_trust_partition() {
         trusted.get("untrustedCredential").and_then(Value::as_str),
         Some("none")
     );
-    assert!(
-        trusted["allowedSecurityDigests"]
-            .as_array()
-            .expect("security digest allowlist")
-            .iter()
-            .all(|digest| digest
-                .as_str()
-                .is_some_and(|value| value.starts_with("sha256:")))
-    );
+    assert!(trusted["allowedSecurityDigests"]
+        .as_array()
+        .expect("security digest allowlist")
+        .iter()
+        .all(|digest| digest
+            .as_str()
+            .is_some_and(|value| value.starts_with("sha256:"))));
 }

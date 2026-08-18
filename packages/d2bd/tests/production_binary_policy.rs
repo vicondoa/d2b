@@ -13,7 +13,10 @@ fn production_binary_contains_no_peer_override_surface() {
         "production d2bd must not contain the peer override implementation"
     );
     let source = [
-        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("src/lib.rs"),
+        PathBuf::from(
+            std::env::var_os("CARGO_MANIFEST_DIR").unwrap_or_else(|| ".".into()),
+        )
+        .join("src/lib.rs"),
         env::var_os("D2B_REPO_ROOT")
             .map(PathBuf::from)
             .unwrap_or_default()

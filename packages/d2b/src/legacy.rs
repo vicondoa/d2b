@@ -4837,7 +4837,11 @@ pub(super) fn realm_entrypoints_path() -> PathBuf {
 
 #[cfg(test)]
 pub(super) fn realm_entrypoints_path() -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join(".d2b-test-missing-realm-entrypoints.json")
+    std::env::var_os("CARGO_MANIFEST_DIR")
+        .map(PathBuf::from)
+        .or_else(|| std::env::current_dir().ok())
+        .expect("resolve test realm entrypoints root")
+        .join(".d2b-test-missing-realm-entrypoints.json")
 }
 
 pub(super) fn load_realm_entrypoint_table()

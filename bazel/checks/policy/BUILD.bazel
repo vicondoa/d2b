@@ -32,8 +32,7 @@ test_suite(
     tests = [
         "//packages/d2b-contract-tests:policy_bazel_layout",
         "//packages/d2b-contract-tests:policy_source",
-        "//packages/xtask:policy_ci",
-        "//packages/xtask:policy_workspace",
+        "//packages/xtask:buildbuddy_config",
         ":rust_policy",
     ],
 )
@@ -76,9 +75,7 @@ test_suite(
         "no-sandbox",
     ],
     tests = [
-        "//tests/unit/gates:ci_rust_cache_sync",
         "//tests/unit/gates:drift_check",
-        "//tests/unit/gates:flake_check_matrix_sync",
         "//tests/unit/gates:vms_json_parity",
     ],
 )

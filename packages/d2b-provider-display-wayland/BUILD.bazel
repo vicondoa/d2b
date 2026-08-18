@@ -59,6 +59,7 @@ rust_test(
     crate_features = ['test-support'],
     visibility = ["//visibility:public"],
     deps = [
+        "//packages/d2b-contracts:d2b_contracts",
         ":d2b_provider_display_wayland",
     ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
 )
