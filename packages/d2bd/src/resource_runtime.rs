@@ -1461,15 +1461,16 @@ impl ZoneResourceRuntime {
             })
             .await
             .map_err(|_| ResourceRuntimeError::StoreReadFailed)?;
-        let mut status = serde_json::from_slice::<Value>(&resource.canonical_json)
-            .map_err(|_| ResourceRuntimeError::ResponseInvalid)?
+        let current = serde_json::from_slice::<Value>(&resource.canonical_json)
+            .map_err(|_| ResourceRuntimeError::ResponseInvalid)?;
+        let current_phase = current
             .get("status")
-            .cloned()
-            .unwrap_or_else(|| json!({}));
-        if status.get("phase").and_then(Value::as_str) == Some(phase) {
+            .and_then(|status| status.get("phase"))
+            .and_then(Value::as_str);
+        if current_phase == Some(phase) {
             return Ok(());
         }
-        status["phase"] = Value::String(phase.to_owned());
+        let status = json!({ "phase": phase });
         let context = local_operator_subject_context(&self.zone, peer_uid, operation_id)?;
         let client = self.bind_operator_resource_client(context)?;
         persist_resource_status(&client, &resource, &status).await
