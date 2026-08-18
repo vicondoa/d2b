@@ -4683,6 +4683,44 @@ fn dispatch_wave6_resource_reconcile(
                         );
                         resource_runtime::ResourceRuntimeError::ProviderPathUnavailable
                     })?;
+                    let deadline = Instant::now() + Duration::from_secs(30);
+                    loop {
+                        match block_on_future(providers.probe_node(guest_vm, &node)).map_err(
+                            |error| {
+                                tracing::warn!(
+                                    guest = guest_vm,
+                                    error = %error,
+                                    "Guest Provider liveness probe failed after launch"
+                                );
+                                resource_runtime::ResourceRuntimeError::ProviderPathUnavailable
+                            },
+                        )? {
+                            process_provider_runtime::ProviderLiveness::Alive => break,
+                            process_provider_runtime::ProviderLiveness::Exited => {
+                                tracing::warn!(
+                                    guest = guest_vm,
+                                    "Guest Provider exited before becoming Ready"
+                                );
+                                return Err(
+                                    resource_runtime::ResourceRuntimeError::ProviderPathUnavailable,
+                                );
+                            }
+                            process_provider_runtime::ProviderLiveness::Unknown
+                                if Instant::now() >= deadline =>
+                            {
+                                tracing::warn!(
+                                    guest = guest_vm,
+                                    "Guest Provider liveness remained unknown after launch"
+                                );
+                                return Err(
+                                    resource_runtime::ResourceRuntimeError::ProviderPathUnavailable,
+                                );
+                            }
+                            process_provider_runtime::ProviderLiveness::Unknown => {
+                                std::thread::sleep(Duration::from_millis(25));
+                            }
+                        }
+                    }
                     "cloud-hypervisor-started"
                 }
             };

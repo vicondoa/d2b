@@ -105,7 +105,7 @@ pkgs.testers.runNixOSTest {
   nodes.machine = d2bLib.d2bDaemonNode {
       writableStore = true;
       extra = { pkgs, ... }: {
-        boot.kernelModules = [ "br_netfilter" ];
+        boot.kernelModules = [ "br_netfilter" "tpm_vtpm_proxy" ];
         networking.nftables.enable = true;
         networking.nftables.ruleset = lib.mkAfter ''
           table inet d2b {}
