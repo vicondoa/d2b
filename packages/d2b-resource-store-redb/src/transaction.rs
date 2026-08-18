@@ -1864,7 +1864,7 @@ fn valid_wayland_filter(
         && dmabuf_allow
             .iter()
             .chain(dmabuf_deny)
-            .all(|value| !value.is_empty() && value.chars().count() <= 128)
+            .all(|value| !value.is_empty() && value.chars().count() <= 63)
 }
 
 fn valid_wayland_policy_defaults(defaults: &WaylandPolicyDefaults) -> bool {
@@ -4621,6 +4621,22 @@ mod tests {
         }))
         .unwrap();
         assert!(valid_wayland_session(session));
+
+        let dmabuf_entry = "a".repeat(63);
+        assert!(valid_wayland_filter(
+            &[],
+            &[],
+            &std::collections::BTreeMap::new(),
+            std::slice::from_ref(&dmabuf_entry),
+            &[],
+        ));
+        assert!(!valid_wayland_filter(
+            &[],
+            &[],
+            &std::collections::BTreeMap::new(),
+            &[format!("{dmabuf_entry}a")],
+            &[],
+        ));
     }
 
     #[test]
