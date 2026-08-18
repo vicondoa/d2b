@@ -1,5 +1,5 @@
 load("@crates//:defs.bzl", "all_crate_deps")
-load("@rules_rust//rust:defs.bzl", "rust_binary", "rust_library", "rust_test")
+load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test")
 
 
 exports_files(
@@ -37,11 +37,12 @@ rust_test(
     ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
 )
 
-rust_binary(
+rust_test(
     name = "route_decision",
     srcs = ["benches/route_decision.rs"],
     compile_data = ["Cargo.toml"],
     tags = ["bench"],
+    use_libtest_harness = False,
     visibility = ["//visibility:public"],
     deps = [
         ":d2b_zone_routing",

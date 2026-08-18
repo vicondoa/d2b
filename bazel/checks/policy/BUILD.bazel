@@ -22,8 +22,7 @@ test_suite(
     name = "lint",
     tests = [
         "//packages/d2b-contract-tests:policy_bazel_layout",
-        "//packages/xtask:rust_clippy_test",
-        "//packages/xtask:rustfmt_test",
+        "//packages/xtask:workspace_lint",
     ],
 )
 

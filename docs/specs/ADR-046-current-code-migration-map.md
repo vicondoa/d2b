@@ -832,9 +832,9 @@ D094 execution model:
   fixtures, static artifacts, CI jobs, and manifest entries are **deleted** once
   successor coverage and the §8.2 removal proof pass. Old and new suites never
   run indefinitely.
-- Each such deletion updates `tests/layer1-jobs.json`, the closed gate
-  manifests, the flake/matrix/Nix-unit pins, the generated ledgers, and the CI
-  workflow shards, and adds an absence assertion (the retired selector no longer
+- Each such deletion updates the fixed Bazel suites, closed gate manifests,
+  flake/Nix-unit pins, generated ledgers, and CI jobs, and adds an absence
+  assertion (the retired selector no longer
   appears). This is enforced by the legacy-test retirement generator
   (`ADR046-streamline-023`) and the test-runtime ledger/timing gate
   (`ADR046-streamline-022`/`ADR046-delivery-007`). No new top-level

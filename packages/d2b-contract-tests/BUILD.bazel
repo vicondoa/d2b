@@ -62,6 +62,7 @@ rust_test(
     compile_data = ["Cargo.toml"],
     data = _fixture_data,
     env = _fixture_env,
+    tags = ["local"],
     visibility = ["//visibility:public"],
     deps = [
         ":d2b_contract_tests",
@@ -74,6 +75,7 @@ rust_test(
     compile_data = ["Cargo.toml"],
     data = _fixture_data,
     env = _fixture_env,
+    tags = ["local"],
     visibility = ["//visibility:public"],
     deps = [
         ":d2b_contract_tests",
@@ -87,6 +89,7 @@ rust_test(
     compile_data = ["Cargo.toml"],
     data = _fixture_full_data,
     env = _fixture_full_env,
+    tags = ["local"],
     visibility = ["//visibility:public"],
     deps = [
         ":d2b_contract_tests",
@@ -100,6 +103,7 @@ rust_test(
     compile_data = ["Cargo.toml"],
     data = _fixture_full_data,
     env = _fixture_full_env,
+    tags = ["local"],
     visibility = ["//visibility:public"],
     deps = [
         ":d2b_contract_tests",
@@ -113,6 +117,7 @@ rust_test(
     compile_data = ["Cargo.toml"],
     data = _fixture_data,
     env = _fixture_env,
+    tags = ["local"],
     visibility = ["//visibility:public"],
     deps = [":d2b_contract_tests"] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
 )
@@ -123,6 +128,7 @@ rust_test(
     compile_data = ["Cargo.toml"],
     data = _fixture_full_data,
     env = _fixture_full_env,
+    tags = ["local"],
     visibility = ["//visibility:public"],
     deps = [
         ":d2b_contract_tests",
@@ -136,7 +142,7 @@ rust_test(
     compile_data = ["Cargo.toml"],
     data = _fixture_full_data,
     env = _fixture_full_env,
-    tags = ["manual"],
+    tags = ["local"],
     visibility = ["//visibility:public"],
     deps = [
         ":d2b_contract_tests",
@@ -150,6 +156,7 @@ rust_test(
     compile_data = ["Cargo.toml"],
     data = _fixture_full_data,
     env = _fixture_full_env,
+    tags = ["local"],
     visibility = ["//visibility:public"],
     deps = [
         ":d2b_contract_tests",
@@ -163,6 +170,7 @@ rust_test(
     compile_data = ["Cargo.toml"],
     data = _fixture_full_data,
     env = _fixture_full_env,
+    tags = ["local"],
     visibility = ["//visibility:public"],
     deps = [
         ":d2b_contract_tests",
@@ -589,6 +597,7 @@ rust_test(
     compile_data = ["Cargo.toml"],
     data = _fixture_full_data,
     env = _fixture_full_env,
+    tags = ["local"],
     visibility = ["//visibility:public"],
     deps = [
         ":d2b_contract_tests",
@@ -623,6 +632,7 @@ rust_test(
     compile_data = ["Cargo.toml"],
     data = _fixture_data,
     env = _fixture_env,
+    tags = ["local"],
     visibility = ["//visibility:public"],
     deps = [":d2b_contract_tests"] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
 )
@@ -633,7 +643,7 @@ rust_test(
     compile_data = ["Cargo.toml"],
     data = _fixture_data,
     env = _fixture_env,
-    tags = ["manual"],
+    tags = ["local"],
     visibility = ["//visibility:public"],
     deps = [
         ":d2b_contract_tests",
@@ -668,6 +678,7 @@ rust_test(
     compile_data = ["Cargo.toml"],
     data = _fixture_data,
     env = _fixture_env,
+    tags = ["local"],
     visibility = ["//visibility:public"],
     deps = [
         ":d2b_contract_tests",
@@ -691,6 +702,7 @@ rust_test(
     compile_data = ["Cargo.toml"],
     data = _fixture_data,
     env = _fixture_env,
+    tags = ["local"],
     visibility = ["//visibility:public"],
     deps = [
         ":d2b_contract_tests",
@@ -704,6 +716,7 @@ rust_test(
     compile_data = ["Cargo.toml"],
     data = _fixture_full_data,
     env = _fixture_full_env,
+    tags = ["local"],
     visibility = ["//visibility:public"],
     deps = [
         ":d2b_contract_tests",
@@ -717,7 +730,7 @@ rust_test(
     compile_data = ["Cargo.toml"],
     data = _fixture_data,
     env = _fixture_env,
-    tags = ["manual"],
+    tags = ["local"],
     visibility = ["//visibility:public"],
     deps = [
         ":d2b_contract_tests",
@@ -731,6 +744,7 @@ rust_test(
     compile_data = ["Cargo.toml"],
     data = _fixture_data,
     env = _fixture_env,
+    tags = ["local"],
     visibility = ["//visibility:public"],
     deps = [
         ":d2b_contract_tests",

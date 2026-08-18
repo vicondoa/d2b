@@ -32,7 +32,7 @@ d2b_bus_deps = [
     "//packages/d2b-resource-api:d2b_resource_api",
     "//packages/d2b-resource-store:d2b_resource_store",
     "//packages/d2b-session:d2b_session",
-    "//packages/d2b-session-unix:d2b_session_unix",
+    "//packages/d2b-session-unix:d2b_session_unix_host_socket",
     "//packages/d2b-telemetry:d2b_telemetry",
 ]
 

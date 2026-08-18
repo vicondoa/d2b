@@ -1596,8 +1596,8 @@ keep/adapt/move/delete disposition and a removal gate: the minimum reusable
 semantic assertions migrate into this crate's hermetic `tests/`, and the old
 duplicate tests, shell gates, fixtures, static artifacts, CI jobs, and manifest
 entries are deleted once successor coverage and the removal proof pass -
-updating `tests/layer1-jobs.json`, the closed gate manifests, the
-flake/matrix/Nix-unit pins, the generated ledgers, and the CI workflow shards.
+updating the fixed Bazel suites, closed gate manifests, flake/Nix-unit pins,
+generated ledgers, and CI jobs.
 Old and new suites never run in parallel indefinitely.
 
 ## Hardware tests (explicit and manual only)

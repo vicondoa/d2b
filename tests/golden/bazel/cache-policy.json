@@ -3,41 +3,6 @@
   "targetSet": [
     "//..."
   ],
-  "u9Gate": {
-    "report": "tests/golden/bazel/cache-transfer-representative.json",
-    "eligibility": "tests/golden/bazel/eligibility.json",
-    "eligibilityDigest": "sha256:62b4a9685445237db70b69d673b35205a1a18d835cf7ce7aed55e0edf43a8813",
-    "graphDigest": "sha256:0897be2616a3f790c721ac0ca5c9bd59cbe88aaa025281d9bb7673e1ff123678",
-    "configuration": "local",
-    "platform": "linux-x86_64",
-    "toolchain": "rules_rust",
-    "wholeGraph": {
-      "actionCount": 207,
-      "grossInputBytes": 162901404939,
-      "uniqueInputBytes": 1034798612
-    },
-    "remoteClass": {
-      "actionCount": 59,
-      "grossInputBytes": 467137819,
-      "uniqueInputBytes": 82452586,
-      "highIoLocal": [
-        "Rustc",
-        "CargoBuildScriptRun"
-      ],
-      "included": [
-        "ExtractCargoTomlEnvVars",
-        "TestRunner"
-      ]
-    },
-    "pipelining": {
-      "status": "rejected",
-      "reason": "increased gross inputs and fan-out",
-      "pipelinedGrossInputBytes": 253626359166,
-      "pipelinedUniqueInputBytes": 1083770917,
-      "pipelinedActionCount": 288,
-      "pipelinedFanOutRatio": 234.02211222650848
-    }
-  },
   "profiles": {
     "common": {
       "targetSet": [
@@ -110,7 +75,7 @@
       "tests/tools/bazel-check"
     ],
     "allowedSecurityDigests": [
-      "sha256:764ec6cf9a1341e6cb42c0d1a6fde5b0f3b041af7891e80ac2580d05a12ca2f9"
+      "sha256:472ec0d3e9b89e52d00ed1f5ab08f5ed1569e742b81fcb90e12d99e7af721717"
     ],
     "untrustedCredential": "none",
     "trustedCredential": "credential-helper"
@@ -140,8 +105,7 @@
       "bes",
       "repository",
       "retries",
-      "provider-billed-transfer",
-      "local-u9-bounds"
+      "provider-billed-transfer"
     ],
     "credentialMaterial": "forbidden"
   },

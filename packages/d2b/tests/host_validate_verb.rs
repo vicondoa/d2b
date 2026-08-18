@@ -65,9 +65,7 @@ fn target_tempdir() -> tempfile::TempDir {
         .or_else(|| std::env::var_os("CARGO_TARGET_TMPDIR"))
         .map(PathBuf::from)
         .unwrap_or_else(|| {
-            PathBuf::from(
-                std::env::var_os("CARGO_MANIFEST_DIR").unwrap_or_else(|| ".".into()),
-            )
+            PathBuf::from(std::env::var_os("CARGO_MANIFEST_DIR").unwrap_or_else(|| ".".into()))
                 .join("target")
                 .join("tmp")
                 .join("host-validate-verb")
@@ -86,9 +84,8 @@ fn repo_root() -> PathBuf {
     ) {
         return PathBuf::from(runfiles_dir).join(workspace);
     }
-    let manifest_dir = PathBuf::from(
-        std::env::var_os("CARGO_MANIFEST_DIR").unwrap_or_else(|| ".".into()),
-    );
+    let manifest_dir =
+        PathBuf::from(std::env::var_os("CARGO_MANIFEST_DIR").unwrap_or_else(|| ".".into()));
     manifest_dir
         .parent()
         .and_then(Path::parent)

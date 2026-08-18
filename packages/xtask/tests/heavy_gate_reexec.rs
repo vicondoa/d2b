@@ -39,10 +39,10 @@ struct Scratch {
 impl Scratch {
     fn new(label: &str) -> Self {
         let target = match std::env::var_os("TEST_TMPDIR")
-        .or_else(|| std::env::var_os("CARGO_TARGET_DIR"))
+            .or_else(|| std::env::var_os("CARGO_TARGET_DIR"))
         {
-        Some(dir) => PathBuf::from(dir),
-        None => repository_root().join("target"),
+            Some(dir) => PathBuf::from(dir),
+            None => repository_root().join("target"),
         };
         let sequence = SCRATCH_SEQUENCE.fetch_add(1, Ordering::Relaxed);
         let path = target

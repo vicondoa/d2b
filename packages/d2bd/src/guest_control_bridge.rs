@@ -2645,6 +2645,7 @@ mod tests {
                 .map(std::path::PathBuf::from)
                 .or_else(|| std::env::current_dir().ok())
                 .expect("resolve daemon source root")
+                .join("src")
         };
         let mut sources = Vec::new();
         collect_rs_sources(&src_dir, &mut sources);

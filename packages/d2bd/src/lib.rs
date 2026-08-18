@@ -23544,7 +23544,7 @@ mod public_status_tests {
                     PathBuf::from(
                         std::env::var_os("CARGO_MANIFEST_DIR").unwrap_or_else(|| ".".into()),
                     )
-                        .join("../../tests/fixtures/deny-unknown/host-valid.json")
+                    .join("../../tests/fixtures/deny-unknown/host-valid.json")
                 }),
             &host_path,
         )
@@ -27376,9 +27376,7 @@ mod broker_dispatch_tests {
         std::env::var_os("D2BD_HOST_FIXTURE")
             .map(PathBuf::from)
             .unwrap_or_else(|| {
-                PathBuf::from(
-                    std::env::var_os("CARGO_MANIFEST_DIR").unwrap_or_else(|| ".".into()),
-                )
+                PathBuf::from(std::env::var_os("CARGO_MANIFEST_DIR").unwrap_or_else(|| ".".into()))
                     .join("../../tests/fixtures/deny-unknown/host-valid.json")
             })
     }

@@ -40,7 +40,6 @@ credential_helper() {
     printf '%s\n' '{"headers":{}}'
     return 0
   fi
-  xtask bazel-evidence check-u9 >/dev/null
   if [ "${D2B_BAZEL_UNTRUSTED:-0}" = 1 ] ||
     { [ "${GITHUB_ACTIONS:-false}" = true ] && ! trusted_context; }; then
     printf '%s\n' '{"headers":{}}'
@@ -124,10 +123,6 @@ case "$PROFILE" in
     exit 2
     ;;
 esac
-
-if [ "$PROFILE" != local ]; then
-  xtask bazel-evidence check-u9 >/dev/null
-fi
 
 if [ "$PROFILE" = trusted-seed ]; then
   if ! trusted_context; then

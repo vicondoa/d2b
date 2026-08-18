@@ -949,13 +949,10 @@ crate directory in the workspace and asserts all four paths exist. A missing
 `src/`, `tests/`, `integration/`, or `README.md` in any Provider crate is a
 policy failure in the fixture-dependent contract layer.
 
-The check is routed through the `test-fixture-contracts` entry in
-`tests/layer1-jobs.json` and the corresponding `make test-fixture-contracts`
-target. That manifest job is advisory and skips unless
-`D2B_ENABLE_FIXTURE_BUILD=1` with `D2B_FIXTURES` delivered to its sandbox, so
-this check is not enforcing pull-request evidence until that delivery is wired
-and the manifest classification is promoted. It does not require compiling the
-Provider crate; it inspects the filesystem only.
+The check is routed through `//bazel/checks/fixtures:fixtures_proofs` and the
+corresponding `make test-fixture-contracts` target. Bazel materializes the
+declared Nix fixtures and the pull-request fixture job enforces the check. It
+does not require compiling the Provider crate; it inspects the filesystem only.
 
 #### 4.8.3 README minimum sections
 
@@ -4951,12 +4948,12 @@ Evidence class for all: `main-reuse-source`.
 | --- | --- |
 | Work item ID | `ADR046-pkg-001` |
 | Dependency/owner | ADR046-zone-control-003; workspace policy owner |
-| Current source | `packages/d2b-contract-tests/tests/static_invariants.rs` (hermetic policy test structure - `implemented-and-reachable`); `tests/layer1-jobs.json` (`test-fixture-contracts` manifest entry - `implemented-and-reachable`); `tests/test-rust.sh` (`fixture-contracts` lane and D2B_FIXTURES delivery - `implemented-and-reachable`); AGENTS.md "Naming conventions" section (`<base>-<implementation>` workspace sort rules - `implemented-and-reachable`); `packages/d2b-realm-core/src/ids.rs` `LABEL_PATTERN` / `MAX_ID_LEN` (name regex reused for crate name token validation - `implemented-and-reachable`) |
+| Current source | `packages/d2b-contract-tests/tests/static_invariants.rs` (hermetic policy test structure - `implemented-and-reachable`); `bazel/checks/fixtures/BUILD.bazel` (`fixtures_proofs` suite and declared fixture delivery - `implemented-and-reachable`); AGENTS.md "Naming conventions" section (`<base>-<implementation>` workspace sort rules - `implemented-and-reachable`); `packages/d2b-realm-core/src/ids.rs` `LABEL_PATTERN` / `MAX_ID_LEN` (name regex reused for crate name token validation - `implemented-and-reachable`) |
 | Reuse source | None |
 | Reuse action | create |
 | Destination | `packages/d2b-contract-tests/tests/policy_provider_crate_layout.rs` (new file; executed by the fixture-dependent Rust contract lane when enabled) |
-| Detailed design | Implement `policy_provider_crate_layout.rs` with the following test functions: (1) `every_provider_crate_has_src` - walk `packages/d2b-provider-*/` directories in the workspace, assert each contains `src/`; failure names crate and missing path; (2) `every_provider_crate_has_tests` - assert `tests/` present; (3) `every_provider_crate_has_integration` - assert `integration/` present; (4) `every_provider_crate_has_readme` - assert `README.md` present; (5) `every_provider_readme_has_required_sections` - read `README.md`, check for all nine section headings from §4.8.3 (case-insensitive, after stripping `#` and whitespace); failure names the missing heading(s); (6) `every_integration_file_has_target_declaration` - for each `integration/*.rs` file, scan first 20 lines for exactly one `//! integration-target: (container|host-integration)` declaration; failure names the file and the violation (missing/multiple/invalid value); (7) `non_provider_crates_exempt` - verify the check does not run on non-`d2b-provider-*` crates. All checks are filesystem-only (no compilation). Workspace member list is discovered by parsing `packages/Cargo.toml` `[workspace].members`. Gate: add the new test file to the `d2b-contract-tests` crate covered by the manifest's `test-fixture-contracts` entry |
-| Integration | `make test-fixture-contracts` fails on a §4.8 violation when `D2B_ENABLE_FIXTURE_BUILD=1` and `D2B_FIXTURES` is available. The manifest lane remains advisory until sandbox fixture delivery is wired and its classification is promoted; ADR046-zone-control-003 references §4.8 for Provider package conventions |
+| Detailed design | Implement `policy_provider_crate_layout.rs` with the following test functions: (1) `every_provider_crate_has_src` - walk `packages/d2b-provider-*/` directories in the workspace, assert each contains `src/`; failure names crate and missing path; (2) `every_provider_crate_has_tests` - assert `tests/` present; (3) `every_provider_crate_has_integration` - assert `integration/` present; (4) `every_provider_crate_has_readme` - assert `README.md` present; (5) `every_provider_readme_has_required_sections` - read `README.md`, check for all nine section headings from §4.8.3 (case-insensitive, after stripping `#` and whitespace); failure names the missing heading(s); (6) `every_integration_file_has_target_declaration` - for each `integration/*.rs` file, scan first 20 lines for exactly one `//! integration-target: (container|host-integration)` declaration; failure names the file and the violation (missing/multiple/invalid value); (7) `non_provider_crates_exempt` - verify the check does not run on non-`d2b-provider-*` crates. All checks are filesystem-only (no compilation). Workspace member list is discovered from the root Cargo workspace. Gate: add the new test file to the `d2b-contract-tests` crate covered by `//bazel/checks/fixtures:fixtures_proofs` |
+| Integration | `make test-fixture-contracts` fails on a §4.8 violation with Bazel-declared fixture delivery; ADR046-zone-control-003 references §4.8 for Provider package conventions |
 | Data migration | Additive; no existing `d2b-provider-*` crates in the pre-ADR45 baseline; first Provider crate created must comply from inception |
 | Validation | §15.3 layout conformance tests: `provider-crate-layout-src-required`, `provider-crate-layout-tests-required`, `provider-crate-layout-integration-required`, `provider-crate-layout-readme-required`, `provider-readme-sections-all-present`, `provider-readme-sections-partial-missing`, `provider-integration-target-declared`, `provider-integration-target-unique`, `provider-integration-target-valid-values`, `provider-crate-naming-convention`, `provider-crate-layout-non-provider-exempt` |
 | Removal proof | No existing code removed; additive policy test only |

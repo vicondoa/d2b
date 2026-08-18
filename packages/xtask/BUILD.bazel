@@ -2,9 +2,7 @@ load("@crates//:defs.bzl", "all_crate_deps")
 load(
     "@rules_rust//rust:defs.bzl",
     "rust_binary",
-    "rust_clippy_test",
     "rust_test",
-    "rustfmt_test",
 )
 
 exports_files(
@@ -94,8 +92,6 @@ rust_test(
         "//:Cargo.toml",
         "//:flake.nix",
         "//:tests/golden/bazel/cache-policy.json",
-        "//:tests/golden/bazel/cache-transfer-representative.json",
-        "//:tests/golden/bazel/eligibility.json",
     ],
     env = {"CARGO_BIN_EXE_xtask": "$(rootpath :xtask)"},
     env_inherit = ["D2B_REPO_ROOT", "PATH"],
@@ -215,16 +211,25 @@ rust_test(
     deps = [] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
 )
 
-rustfmt_test(
-    name = "rustfmt_test",
-    targets = [":xtask"],
-    transitive = True,
-)
-
-rust_clippy_test(
-    name = "rust_clippy_test",
-    targets = [":xtask"],
-    transitive = True,
+rust_test(
+    name = "workspace_lint",
+    srcs = ["tests/workspace_lint.rs"],
+    compile_data = ["Cargo.toml"],
+    data = [
+        "//:rust-toolchain.toml",
+        "//bazel/checks/rust:repo_policy_sources",
+        "@rules_rust//rust/toolchain:current_cargo_files",
+    ],
+    env = {
+        "CARGO": "$(rootpath @rules_rust//rust/toolchain:current_cargo_files)",
+    },
+    env_inherit = ["D2B_REPO_ROOT", "PATH"],
+    tags = [
+        "exclusive",
+        "local",
+        "no-sandbox",
+    ],
+    visibility = ["//visibility:public"],
 )
 
 # keep

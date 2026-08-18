@@ -16,7 +16,6 @@ rust_library(
         "//:tests/golden/vms.json-signoz-v7",  # keep
         "Cargo.toml",
     ],
-    crate_features = ["test-support"],
     visibility = ["//visibility:public"],
     deps = [
         "//packages/d2b-realm-core:d2b_realm_core",

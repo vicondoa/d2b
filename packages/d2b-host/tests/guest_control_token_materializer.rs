@@ -20,9 +20,7 @@ impl Scratch {
         let base = std::env::var_os("TEST_TMPDIR")
             .map(PathBuf::from)
             .unwrap_or_else(|| {
-                PathBuf::from(
-                    std::env::var_os("CARGO_MANIFEST_DIR").unwrap_or_else(|| ".".into()),
-                )
+                PathBuf::from(std::env::var_os("CARGO_MANIFEST_DIR").unwrap_or_else(|| ".".into()))
                     .join("target")
                     .join("guest-control-token-materializer-tests")
             });
@@ -55,9 +53,7 @@ impl Drop for Scratch {
 }
 
 fn repo_root() -> PathBuf {
-    PathBuf::from(
-        std::env::var_os("CARGO_MANIFEST_DIR").unwrap_or_else(|| ".".into()),
-    )
+    PathBuf::from(std::env::var_os("CARGO_MANIFEST_DIR").unwrap_or_else(|| ".".into()))
         .join("..")
         .join("..")
         .canonicalize()

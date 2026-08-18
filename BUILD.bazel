@@ -44,8 +44,6 @@ exports_files([
     "BUILD.bazel",
     "tests/golden/bazel/check-coverage.json",
     "tests/golden/bazel/cache-policy.json",
-    "tests/golden/bazel/cache-transfer-representative.json",
-    "tests/golden/bazel/eligibility.json",
     "MODULE.bazel",
     "MODULE.bazel.lock",
     "rust-toolchain.toml",

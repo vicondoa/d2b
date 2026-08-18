@@ -10,9 +10,6 @@ use serde_json::{Map, Value, json};
 use sha2::{Digest, Sha256};
 
 const DEFAULT_POLICY: &str = "tests/golden/bazel/cache-policy.json";
-const DEFAULT_U9_REPORT_DIGEST: &str =
-    "sha256:f0ba0b09fad732efdf4bdd4ce40654e75d099567b72f7dce4338f3bce176a216";
-
 type Result<T> = std::result::Result<T, String>;
 
 pub fn run_cli(args: &[String]) -> ExitCode {
@@ -33,10 +30,6 @@ pub fn run_cli(args: &[String]) -> ExitCode {
 
 fn run(args: &[String]) -> Result<Value> {
     match args.first().map(String::as_str) {
-        Some("check-u9") => {
-            let options = CheckU9Options::parse(&args[1..])?;
-            check_u9(&options)
-        }
         Some("check-security") => {
             let policy = option_path(&args[1..], "--policy")?
                 .unwrap_or_else(|| PathBuf::from(DEFAULT_POLICY));
@@ -88,41 +81,10 @@ fn run(args: &[String]) -> Result<Value> {
 }
 
 fn print_usage() {
-    println!("usage: xtask bazel-evidence check-u9 [--policy <path>] [--report <path>]");
-    println!("       xtask bazel-evidence check-security [--policy <path>]");
+    println!("usage: xtask bazel-evidence check-security [--policy <path>]");
     println!("       xtask bazel-evidence security-digest [--policy <path>]");
     println!("       xtask bazel-evidence classify-failure --log <path> [--dispatch-evidence]");
     println!("       xtask bazel-evidence redact-log --input <path> --output <path>");
-}
-
-struct CheckU9Options {
-    policy: PathBuf,
-    report: Option<PathBuf>,
-}
-
-impl CheckU9Options {
-    fn parse(args: &[String]) -> Result<Self> {
-        reject_unknown_flags(args, &["--policy", "--report"])?;
-        Ok(Self {
-            policy: option_path(args, "--policy")?.unwrap_or_else(|| PathBuf::from(DEFAULT_POLICY)),
-            report: option_path(args, "--report")?,
-        })
-    }
-}
-
-fn reject_unknown_flags(args: &[String], valued: &[&str]) -> Result<()> {
-    let mut index = 0;
-    while index < args.len() {
-        let flag = args[index].as_str();
-        if !valued.contains(&flag) {
-            return Err(format!("unknown option {flag}"));
-        }
-        index += 2;
-        if index > args.len() {
-            return Err(format!("{flag} requires a value"));
-        }
-    }
-    Ok(())
 }
 
 fn option_path(args: &[String], flag: &str) -> Result<Option<PathBuf>> {
@@ -179,136 +141,6 @@ fn object<'a>(value: &'a Value, context: &str) -> Result<&'a Map<String, Value>>
     value
         .as_object()
         .ok_or_else(|| format!("{context} must be an object"))
-}
-
-fn string<'a>(object: &'a Map<String, Value>, key: &str, context: &str) -> Result<&'a str> {
-    object
-        .get(key)
-        .and_then(Value::as_str)
-        .ok_or_else(|| format!("{context}.{key} must be a string"))
-}
-
-fn u64_field(object: &Map<String, Value>, key: &str, context: &str) -> Result<u64> {
-    object
-        .get(key)
-        .and_then(Value::as_u64)
-        .ok_or_else(|| format!("{context}.{key} must be an unsigned integer"))
-}
-
-fn check_u9(options: &CheckU9Options) -> Result<Value> {
-    let root = repo_root();
-    let policy_path = resolve_path(&root, &options.policy);
-    let policy = read_json(&policy_path)?;
-    let policy_object = object(&policy, "cache policy")?;
-    if u64_field(policy_object, "schemaVersion", "cache policy")? != 1 {
-        return Err("u9-evidence-stale:policy-schema".to_owned());
-    }
-    let gate = object(
-        policy_object
-            .get("u9Gate")
-            .ok_or_else(|| "u9-evidence-stale:missing-gate".to_owned())?,
-        "cache policy u9Gate",
-    )?;
-    let eligibility_relative = PathBuf::from(string(gate, "eligibility", "u9Gate")?);
-    let eligibility_path = resolve_path(&root, &eligibility_relative);
-    let eligibility_bytes =
-        fs::read(&eligibility_path).map_err(|_| "u9-evidence-missing:eligibility".to_owned())?;
-    let actual_eligibility_digest = digest_bytes(&eligibility_bytes);
-    let expected_eligibility_digest = string(gate, "eligibilityDigest", "u9Gate")?;
-    if actual_eligibility_digest != expected_eligibility_digest {
-        return Err("u9-evidence-stale:eligibility-digest".to_owned());
-    }
-
-    let report_relative = match &options.report {
-        Some(report) => report.clone(),
-        None => PathBuf::from(string(gate, "report", "u9Gate")?),
-    };
-    let report_path = resolve_path(&root, &report_relative);
-    let report_bytes = fs::read(&report_path)
-        .map_err(|_| "u9-evidence-missing:representative-report".to_owned())?;
-    if options.report.is_none() && digest_bytes(&report_bytes) != DEFAULT_U9_REPORT_DIGEST {
-        return Err("u9-evidence-stale:report-digest".to_owned());
-    }
-    let report: Value = serde_json::from_slice(&report_bytes)
-        .map_err(|_| "u9-evidence-missing:representative-report".to_owned())?;
-    let report_object = object(&report, "representative report")?;
-    if u64_field(report_object, "schemaVersion", "representative report")? != 1
-        || string(report_object, "reportKind", "representative report")? != "representative-summary"
-    {
-        return Err("u9-evidence-stale:report-schema".to_owned());
-    }
-    let source = object(
-        report_object
-            .get("source")
-            .ok_or_else(|| "u9-evidence-stale:report-source".to_owned())?,
-        "representative report source",
-    )?;
-    if string(source, "eligibility", "report source")? != string(gate, "eligibility", "u9Gate")?
-        || string(source, "eligibilityDigest", "report source")? != expected_eligibility_digest
-    {
-        return Err("u9-evidence-stale:eligibility-digest".to_owned());
-    }
-    for (field, context) in [
-        ("graphDigest", "graph"),
-        ("configuration", "configuration"),
-        ("platform", "platform"),
-        ("toolchain", "toolchain"),
-    ] {
-        if source.get(field) != gate.get(field) {
-            return Err(format!("u9-evidence-stale:{context}"));
-        }
-    }
-
-    let report_graph = object(
-        report_object
-            .get("wholeGraph")
-            .ok_or_else(|| "u9-evidence-stale:whole-graph".to_owned())?,
-        "representative report wholeGraph",
-    )?;
-    let expected_graph = object(
-        gate.get("wholeGraph")
-            .ok_or_else(|| "u9-evidence-stale:expected-graph".to_owned())?,
-        "u9Gate wholeGraph",
-    )?;
-    for field in ["actionCount", "grossInputBytes", "uniqueInputBytes"] {
-        if report_graph.get(field) != expected_graph.get(field) {
-            return Err(format!("u9-evidence-stale:whole-graph-{field}"));
-        }
-    }
-
-    let pipelining = object(
-        report_object
-            .get("pipeliningRejected")
-            .ok_or_else(|| "u9-evidence-stale:pipelining".to_owned())?,
-        "representative report pipeliningRejected",
-    )?;
-    let expected_pipelining = object(
-        gate.get("pipelining")
-            .ok_or_else(|| "u9-evidence-stale:expected-pipelining".to_owned())?,
-        "u9Gate pipelining",
-    )?;
-    if pipelining.get("reason") != expected_pipelining.get("reason")
-        || pipelining.get("pipelinedGrossInputBytes")
-            != expected_pipelining.get("pipelinedGrossInputBytes")
-        || pipelining.get("pipelinedUniqueInputBytes")
-            != expected_pipelining.get("pipelinedUniqueInputBytes")
-        || pipelining.get("pipelinedActionCount") != expected_pipelining.get("pipelinedActionCount")
-        || pipelining.get("pipelinedFanOutRatio") != expected_pipelining.get("pipelinedFanOutRatio")
-    {
-        return Err("u9-evidence-stale:pipelining".to_owned());
-    }
-
-    Ok(json!({
-        "status": "pass",
-        "gate": "u9",
-        "report": report_relative,
-        "eligibility": eligibility_relative,
-        "eligibilityDigest": actual_eligibility_digest,
-        "graphDigest": string(source, "graphDigest", "report source")?,
-        "actionCount": u64_field(report_graph, "actionCount", "wholeGraph")?,
-        "grossInputBytes": u64_field(report_graph, "grossInputBytes", "wholeGraph")?,
-        "uniqueInputBytes": u64_field(report_graph, "uniqueInputBytes", "wholeGraph")?,
-    }))
 }
 
 fn security_digest(policy_path: &Path) -> Result<Value> {

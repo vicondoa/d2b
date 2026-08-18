@@ -3,7 +3,7 @@
 use std::path::PathBuf;
 use std::process::{Command, Output};
 
-use serde_json::{Value, json};
+use serde_json::Value;
 
 fn repo_root() -> PathBuf {
     let mut candidates = Vec::new();
@@ -55,53 +55,6 @@ fn scratch(name: &str) -> PathBuf {
     let path = base.join(format!("bazel-evidence-test-{}-{name}", std::process::id()));
     std::fs::create_dir_all(&path).expect("create evidence scratch");
     path
-}
-
-#[test]
-fn current_u9_evidence_is_required_before_remote_use() {
-    let output = run_xtask(&["bazel-evidence", "check-u9"]);
-    assert!(
-        output.status.success(),
-        "U9 evidence check failed: {}",
-        String::from_utf8_lossy(&output.stderr)
-    );
-    let value: Value =
-        serde_json::from_slice(&output.stdout).expect("U9 check emits JSON evidence");
-    assert_eq!(value["status"], "pass");
-    assert_eq!(
-        value["eligibilityDigest"],
-        "sha256:62b4a9685445237db70b69d673b35205a1a18d835cf7ce7aed55e0edf43a8813"
-    );
-}
-
-#[test]
-fn stale_u9_digest_blocks_remote_profiles() {
-    let directory = scratch("stale");
-    let report_path = directory.join("representative.json");
-    let report: Value = serde_json::from_str(
-        &std::fs::read_to_string(
-            repo_root().join("tests/golden/bazel/cache-transfer-representative.json"),
-        )
-        .expect("read representative report"),
-    )
-    .expect("parse representative report");
-    let mut stale = report;
-    stale["source"]["eligibilityDigest"] = json!("sha256:stale");
-    std::fs::write(
-        &report_path,
-        serde_json::to_vec_pretty(&stale).expect("serialize stale report"),
-    )
-    .expect("write stale report");
-
-    let output = run_xtask(&[
-        "bazel-evidence",
-        "check-u9",
-        "--report",
-        report_path.to_str().expect("report path"),
-    ]);
-    assert!(!output.status.success(), "stale evidence must fail closed");
-    let stderr = String::from_utf8_lossy(&output.stderr);
-    assert!(stderr.contains("eligibility-digest"), "{stderr}");
 }
 
 #[test]
