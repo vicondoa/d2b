@@ -4520,6 +4520,31 @@ fn reconcile_wave6_network_effect(
     uid: &ResourceUid,
     resource: &Value,
 ) -> Result<(), resource_runtime::ResourceRuntimeError> {
+    let caller_role = broker_caller_role_for_peer(peer);
+    let base_response = dispatch_broker_request_as(
+        state,
+        BrokerRequest::ApplyNftables(BrokerApplyNftablesRequest {
+            bundle_nft_intent_ref: BundleOpId::new(intent_id_nft_host()),
+            scope_id: ScopeId::new("host"),
+            desired_hash: None,
+            destroy: false,
+            tracing_span_id: None,
+        }),
+        caller_role.clone(),
+    )
+    .map_err(|_| resource_runtime::ResourceRuntimeError::ProviderPathUnavailable)?;
+    match base_response {
+        BrokerResponse::Ack(_) => {}
+        BrokerResponse::Error(error) => {
+            tracing::warn!(
+                broker_kind = %error.kind,
+                broker_operation = %error.operation,
+                "Network Provider host firewall base was refused"
+            );
+            return Err(resource_runtime::ResourceRuntimeError::ProviderPathUnavailable);
+        }
+        _ => return Err(resource_runtime::ResourceRuntimeError::ProviderPathUnavailable),
+    }
     let context = resolve_network_effect_context(resource, resolver).map_err(|error| {
         tracing::warn!(
             stage = "resolve-network-effect-context",
@@ -4612,8 +4637,7 @@ fn reconcile_wave6_network_effect(
         volume_deleted: true,
         attachments: Vec::new(),
     };
-    let effects =
-        network_effect_port::production_port(state, broker_caller_role_for_peer(peer), context);
+    let effects = network_effect_port::production_port(state, caller_role, context);
     let resources = PublicNetworkResourceBoundary::default();
     let reconciler = NetworkReconciler::new(effects, resources);
     match block_on_future(reconciler.reconcile(&input)) {
