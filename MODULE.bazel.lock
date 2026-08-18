@@ -724,27 +724,112 @@
         }
       }
     },
+    "@@rules_nixpkgs_core+//extensions:package.bzl%nix_pkg": {
+      "general": {
+        "bzlTransitiveDigest": "2alEQC7q9PgrArc8ZeI662VmDHLGfuswqnzBJvVDnmg=",
+        "usagesDigest": "6f3lRgiMjLBysWeJGXZcKvEj4vtUKWpW+sjuFii+FBs=",
+        "recordedInputs": [
+          "REPO_MAPPING:,nixpkgs rules_nixpkgs_core++nix_repo+nixpkgs",
+          "REPO_MAPPING:rules_nixpkgs_core+,bazel_skylib bazel_skylib+"
+        ],
+        "generatedRepoSpecs": {
+          "nix": {
+            "repoRuleId": "@@rules_nixpkgs_core+//:nixpkgs.bzl%_nixpkgs_package",
+            "attributes": {
+              "unmangled_name": "nix",
+              "attribute_path": "nix",
+              "nix_file_deps": {},
+              "nix_file_content": "",
+              "repository": "@@rules_nixpkgs_core++nix_repo+nixpkgs//:nixpkgs",
+              "repositories": {},
+              "build_file_content": "",
+              "nixopts": [],
+              "quiet": false,
+              "fail_not_supported": true
+            }
+          },
+          "nix_unit": {
+            "repoRuleId": "@@rules_nixpkgs_core+//:nixpkgs.bzl%_nixpkgs_package",
+            "attributes": {
+              "unmangled_name": "nix_unit",
+              "attribute_path": "nix-unit",
+              "nix_file_deps": {},
+              "nix_file_content": "",
+              "repository": "@@rules_nixpkgs_core++nix_repo+nixpkgs//:nixpkgs",
+              "repositories": {},
+              "build_file_content": "",
+              "nixopts": [],
+              "quiet": false,
+              "fail_not_supported": true
+            }
+          },
+          "nix_eval_jobs": {
+            "repoRuleId": "@@rules_nixpkgs_core+//:nixpkgs.bzl%_nixpkgs_package",
+            "attributes": {
+              "unmangled_name": "nix_eval_jobs",
+              "attribute_path": "nix-eval-jobs",
+              "nix_file_deps": {},
+              "nix_file_content": "",
+              "repository": "@@rules_nixpkgs_core++nix_repo+nixpkgs//:nixpkgs",
+              "repositories": {},
+              "build_file_content": "",
+              "nixopts": [],
+              "quiet": false,
+              "fail_not_supported": true
+            }
+          },
+          "python3": {
+            "repoRuleId": "@@rules_nixpkgs_core+//:nixpkgs.bzl%_nixpkgs_package",
+            "attributes": {
+              "unmangled_name": "python3",
+              "attribute_path": "python3",
+              "nix_file_deps": {},
+              "nix_file_content": "",
+              "repository": "@@rules_nixpkgs_core++nix_repo+nixpkgs//:nixpkgs",
+              "repositories": {},
+              "build_file_content": "",
+              "nixopts": [],
+              "quiet": false,
+              "fail_not_supported": true
+            }
+          }
+        },
+        "moduleExtensionMetadata": {
+          "explicitRootModuleDirectDeps": [
+            "nix",
+            "nix_unit",
+            "nix_eval_jobs",
+            "python3"
+          ],
+          "explicitRootModuleDirectDevDeps": [],
+          "useAllRepos": "NO",
+          "reproducible": false
+        }
+      }
+    },
     "@@rules_nixpkgs_core+//extensions:repository.bzl%nix_repo": {
       "general": {
         "bzlTransitiveDigest": "dTTtWNdwe7E4j77oKh1mHI1qtdxfaVSGSZa1oPf2QjU=",
-        "usagesDigest": "ZjI2xoiQBaRz3qc721Gc+tXJ9FrSWkJDOJeEXWOvz4Q=",
+        "usagesDigest": "8V3o40f7zqrq9D2c7JYm9R9LxRjy+iahva56gT4hJJU=",
         "recordedInputs": [
           "REPO_MAPPING:rules_nixpkgs_core+,bazel_skylib bazel_skylib+"
         ],
         "generatedRepoSpecs": {
           "nixpkgs": {
-            "repoRuleId": "@@rules_nixpkgs_core+//:nixpkgs.bzl%_nixpkgs_http_repository",
+            "repoRuleId": "@@rules_nixpkgs_core+//:nixpkgs.bzl%_nixpkgs_local_repository",
             "attributes": {
               "unmangled_name": "nixpkgs",
-              "url": "https://github.com/NixOS/nixpkgs/archive/refs/tags/24.05.tar.gz",
-              "strip_prefix": "nixpkgs-24.05",
-              "integrity": "",
-              "sha256": "911314b81780f26fdaf87e17174210bdbd40c86bac1795212f257cdc236a1e78"
+              "nix_file_deps": [
+                "@@//:flake.lock"
+              ],
+              "nix_file_content": "let\n  lock = builtins.fromJSON (builtins.readFile ./flake.lock);\n  src = lock.nodes.nixpkgs.locked;\nin\nimport (builtins.fetchTarball {\n  url = \"https://github.com/${src.owner}/${src.repo}/archive/${src.rev}.tar.gz\";\n  sha256 = src.narHash;\n})\n"
             }
           }
         },
         "moduleExtensionMetadata": {
-          "explicitRootModuleDirectDeps": [],
+          "explicitRootModuleDirectDeps": [
+            "nixpkgs"
+          ],
           "explicitRootModuleDirectDevDeps": [],
           "useAllRepos": "NO",
           "reproducible": false

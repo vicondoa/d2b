@@ -22,6 +22,51 @@ archive_override(
     urls = ["https://github.com/hermeticbuild/rules_rs/releases/download/v0.0.105/rules_rs-v0.0.105.tar.gz"],
 )
 
+nix_repo = use_extension(
+    "@rules_nixpkgs_core//extensions:repository.bzl",
+    "nix_repo",
+)
+nix_repo.expr(
+    name = "nixpkgs",
+    expr = """let
+  lock = builtins.fromJSON (builtins.readFile ./flake.lock);
+  src = lock.nodes.nixpkgs.locked;
+in
+import (builtins.fetchTarball {
+  url = "https://github.com/${src.owner}/${src.repo}/archive/${src.rev}.tar.gz";
+  sha256 = src.narHash;
+})
+""",
+    file_deps = ["//:flake.lock"],
+)
+use_repo(nix_repo, "nixpkgs")
+
+nix_packages = use_extension(
+    "@rules_nixpkgs_core//extensions:package.bzl",
+    "nix_pkg",
+)
+nix_packages.attr(
+    name = "nix",
+    attr = "nix",
+    repo = "@nixpkgs",
+)
+nix_packages.attr(
+    name = "nix_unit",
+    attr = "nix-unit",
+    repo = "@nixpkgs",
+)
+nix_packages.attr(
+    name = "nix_eval_jobs",
+    attr = "nix-eval-jobs",
+    repo = "@nixpkgs",
+)
+nix_packages.attr(
+    name = "python3",
+    attr = "python3",
+    repo = "@nixpkgs",
+)
+use_repo(nix_packages, "nix", "nix_unit", "nix_eval_jobs", "python3")
+
 buildbuddy = use_extension("@toolchains_buildbuddy//:extensions.bzl", "buildbuddy")
 
 rules_rust = use_extension("@rules_rs//rs:rules_rust.bzl", "rules_rust")
