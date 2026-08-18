@@ -15,6 +15,8 @@
   available alongside the Bazel graph.
 - Declare package, deny-policy, and shell-completion sources for fixed Nix
   Bazel inputs so source changes invalidate the corresponding checks.
+- Let CI use its native Bash when user namespaces are unavailable while local
+  Bazel development keeps the FHS action shell.
 
 ### Removed
 

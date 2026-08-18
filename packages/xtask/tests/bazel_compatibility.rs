@@ -355,7 +355,7 @@ fn nix_surface_pins_the_official_bazel_9_2_0_provider_for_supported_systems() {
         "packages = [ bazel920 pkgs.rustup pkgs.git ]",
         "bazel = pkgs.mkShellNoCC",
         "export D2B_BAZEL_BIN=\"${bazel920}/bin/bazel\"",
-        "export BAZEL_SH=\"${bazelActionShell}/bin/bash\"",
+        "export BAZEL_SH=",
         "export D2B_BAZEL_TEST_PATH=",
         "bazel-9_2_0-provider-smoke",
     ] {
@@ -646,7 +646,7 @@ fn compatibility_fixture_declares_the_third_party_and_exception_boundaries() {
 fn compatibility_uses_standard_bazel_sh_without_repository_shell_adapter() {
     let flake = read_repo_file("flake.nix");
     assert!(
-        flake.contains("export BAZEL_SH=\"${bazelActionShell}/bin/bash\""),
+        flake.contains("export BAZEL_SH=") && flake.contains("${bazelActionShell}/bin/bash"),
         "the Bazel shell must be supplied through standard BAZEL_SH"
     );
     assert!(

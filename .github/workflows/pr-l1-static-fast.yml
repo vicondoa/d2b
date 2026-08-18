@@ -8,6 +8,9 @@ on:
 permissions:
   contents: read
 
+env:
+  BAZEL_SH: /bin/bash
+
 defaults:
   run:
     shell: sh tests/tools/ci-shell {0}
