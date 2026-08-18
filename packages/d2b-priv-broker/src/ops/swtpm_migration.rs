@@ -474,14 +474,26 @@ fn child_gid_is_trusted(
     parent: std::os::fd::BorrowedFd<'_>,
     child_gid: u32,
 ) -> std::io::Result<bool> {
-    if child_gid == nix::unistd::getegid().as_raw() {
-        return Ok(true);
-    }
     let stat = crate::sys::path_safe::fstat_fd(parent)?;
-    Ok(stat.st_mode & libc::S_IFMT == libc::S_IFDIR
-        && stat.st_mode & 0o002 == 0
-        && stat.st_mode & 0o2000 != 0
-        && stat.st_gid == child_gid)
+    Ok(child_gid_is_trusted_metadata(
+        stat.st_mode,
+        stat.st_gid,
+        nix::unistd::getegid().as_raw(),
+        child_gid,
+    ))
+}
+
+fn child_gid_is_trusted_metadata(
+    parent_mode: libc::mode_t,
+    parent_gid: u32,
+    effective_gid: u32,
+    child_gid: u32,
+) -> bool {
+    child_gid == effective_gid
+        || (parent_mode & libc::S_IFMT == libc::S_IFDIR
+            && parent_mode & 0o002 == 0
+            && parent_mode & 0o2000 != 0
+            && parent_gid == child_gid)
 }
 
 fn child_stat(path: &AnchoredPath) -> Result<Option<libc::stat>, LegacyMigrationError> {
@@ -1635,6 +1647,38 @@ mod tests {
             Path::new("/var/lib/d2b/vms/work/swtpm"),
             Path::new("/var/lib/d2b/vms/work/.d2b-legacy-swtpm.journal"),
             Path::new("/var/lib/d2b/vms/work/.d2b-legacy-swtpm.marker"),
+        ));
+    }
+
+    #[test]
+    fn child_gid_is_trusted_accepts_effective_and_safe_setgid_inheritance_only() {
+        let effective_gid = 100;
+        let inherited_gid = 200;
+        let directory = libc::S_IFDIR;
+
+        assert!(child_gid_is_trusted_metadata(
+            directory | 0o0700,
+            999,
+            effective_gid,
+            effective_gid,
+        ));
+        assert!(child_gid_is_trusted_metadata(
+            directory | 0o2700,
+            inherited_gid,
+            effective_gid,
+            inherited_gid,
+        ));
+        assert!(!child_gid_is_trusted_metadata(
+            directory | 0o2702,
+            inherited_gid,
+            effective_gid,
+            inherited_gid,
+        ));
+        assert!(!child_gid_is_trusted_metadata(
+            directory | 0o0700,
+            inherited_gid,
+            effective_gid,
+            inherited_gid,
         ));
     }
 
