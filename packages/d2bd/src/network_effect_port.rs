@@ -41,6 +41,7 @@ impl<'a> DaemonNetworkBroker<'a> {
                     .map_or("broker-request-rejected", |(_, reason)| reason);
                 tracing::warn!(
                     broker_kind = %error.kind,
+                    broker_operation = %error.operation,
                     broker_reason = %reason,
                     broker_message = %error.message,
                     "Network broker rejected a typed effect request"
