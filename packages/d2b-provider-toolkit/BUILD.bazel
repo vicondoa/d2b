@@ -103,7 +103,7 @@ rust_test(
     data = [":d2b-provider-toolkit"],
     env = {"CARGO_BIN_EXE_d2b-provider-toolkit": "$(rootpath :d2b-provider-toolkit)"},
     rustc_env = {"CARGO_BIN_EXE_d2b-provider-toolkit": "$(rootpath :d2b-provider-toolkit)"},
-    deps = ["//packages/d2b-provider:d2b_provider"] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
+    deps = all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
 )
 
 # keep
