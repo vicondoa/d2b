@@ -19,6 +19,19 @@ rust_library(
     ] + all_crate_deps(normal = True, cargo_only = True),
 )
 
+rust_library(
+    name = "d2b_provider_system_systemd_test_support",
+    srcs = glob(["src/**/*.rs"], allow_empty = True),
+    compile_data = ["Cargo.toml"],
+    crate_name = "d2b_provider_system_systemd",
+    visibility = ["//visibility:public"],
+    deps = [
+        "//packages/d2b-contracts:d2b_contracts_test_support",
+        "//packages/d2b-process-conformance:d2b_process_conformance_test_support",
+        "//packages/d2b-provider-toolkit:d2b_provider_toolkit_test_support",
+    ] + all_crate_deps(normal = True, cargo_only = True),
+)
+
 rust_test(
     name = "conformance",
     srcs = ["tests/conformance.rs"],

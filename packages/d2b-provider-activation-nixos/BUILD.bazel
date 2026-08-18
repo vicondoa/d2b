@@ -16,6 +16,17 @@ rust_library(
     visibility = ["//visibility:public"],
 )
 
+rust_library(
+    name = "d2b_provider_activation_nixos_test_support",
+    srcs = glob(["src/**/*.rs"], allow_empty = True),
+    compile_data = ["Cargo.toml"],
+    deps = [
+        "//packages/d2b-contracts:d2b_contracts_test_support",
+    ] + all_crate_deps(normal = True, cargo_only = True),
+    crate_name = "d2b_provider_activation_nixos",
+    visibility = ["//visibility:public"],
+)
+
 rust_test(
     name = "scaffold",
     srcs = ["tests/scaffold.rs"],

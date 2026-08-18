@@ -57,7 +57,11 @@ fi
 cd "$ROOT"
 export ROOT
 export NIX_CONFIG="${NIX_CONFIG:-experimental-features = nix-command flakes}"
-FLAKE_REF="git+file://$ROOT"
+if [ -n "${D2B_REPO_ROOT:-}" ]; then
+    FLAKE_REF="git+file://$ROOT"
+else
+    FLAKE_REF="$ROOT"
+fi
 SYSTEM=$("$NIX_BIN" eval --raw --impure --expr builtins.currentSystem)
 __SMOKE_ASSIGNMENT__
 __NIX_UNIT_CHECK__

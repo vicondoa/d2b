@@ -25,6 +25,25 @@ rust_library(
     ] + all_crate_deps(normal = True, cargo_only = True),
 )
 
+rust_library(
+    name = "d2b_provider_supervisor_test_support",
+    srcs = glob(["src/**/*.rs"], allow_empty = True),
+    compile_data = [
+        "//packages/d2b-priv-broker:src/live_handlers.rs",  # keep
+        "//packages/d2b-priv-broker:src/runtime.rs",  # keep
+        "Cargo.toml",
+    ],
+    crate_name = "d2b_provider_supervisor",
+    visibility = ["//visibility:public"],
+    deps = [
+        "//packages/d2b-contracts:d2b_contracts_test_support",
+        "//packages/d2b-process:d2b_process_test_support",
+        "//packages/d2b-telemetry:d2b_telemetry_test_support",
+        "//packages/d2b-core:d2b_core_test_support",
+        "//packages/d2b-process-conformance:d2b_process_conformance_test_support",
+    ] + all_crate_deps(normal = True, cargo_only = True),
+)
+
 rust_test(
     name = "production_adapter",
     srcs = ["tests/production_adapter.rs"],

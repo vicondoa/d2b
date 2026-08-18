@@ -16,17 +16,27 @@ rust_library(
         "//:tests/golden/vms.json-signoz-v7",  # keep
         "Cargo.toml",
     ],
-    crate_features = ["test-support"],
     visibility = ["//visibility:public"],
     deps = [
         "//packages/d2b-realm-core:d2b_realm_core",
     ] + all_crate_deps(normal = True, cargo_only = True),
 )
 
-alias(
+rust_library(
     name = "d2b_core_test_support",
-    actual = ":d2b_core",
+    srcs = d2b_core_srcs,
+    compile_data = [
+        "//tests/fixtures:deny-unknown/host-valid.json",  # keep
+        "//:tests/golden/manifest_v04/baseline-vms.json",  # keep
+        "//:tests/golden/vms.json-signoz-v7",  # keep
+        "Cargo.toml",
+    ],
+    crate_features = ["test-support"],
+    crate_name = "d2b_core",
     visibility = ["//visibility:public"],
+    deps = [
+        "//packages/d2b-realm-core:d2b_realm_core",
+    ] + all_crate_deps(normal = True, cargo_only = True),
 )
 
 rust_test(

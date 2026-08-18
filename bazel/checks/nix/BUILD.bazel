@@ -15,6 +15,7 @@ filegroup(
         "//:nix_workspace_sources",
         "//:nixos_modules_workspace_sources",
         "//:packages_workspace_sources",
+        "//:pkgs_workspace_sources",
         "//:rust-toolchain.toml",
         "//packages/d2bd:cargo_workspace_sources",
         "//tests/unit/nix:nix_unit_sources",
@@ -200,7 +201,7 @@ nix_native_test(
 
 nix_native_test(
     name = "flake-eval-aarch64",
-    command = """eval --no-write-lock-file --raw --impure --expr "(import \\"$SMOKE_PATH\\" { pkgs = import (builtins.getFlake \\"$FLAKE_REF\\").inputs.nixpkgs { system = \\"aarch64-linux\\"; }; }).drvPath" >/dev/null""",
+    command = """eval --no-write-lock-file --raw --impure --expr "(import \\"$SMOKE_PATH\\" { flakeRoot = \\"$ROOT\\"; pkgs = import (builtins.getFlake \\"$FLAKE_REF\\").inputs.nixpkgs { system = \\"aarch64-linux\\"; }; }).drvPath" >/dev/null""",
     lane = "flake-aarch64",
     max_kib = 14665373,
     data = [":aarch64_smoke_inputs"],

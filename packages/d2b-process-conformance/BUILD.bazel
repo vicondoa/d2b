@@ -17,6 +17,17 @@ rust_library(
     ] + all_crate_deps(normal = True, cargo_only = True),
 )
 
+rust_library(
+    name = "d2b_process_conformance_test_support",
+    srcs = glob(["src/**/*.rs"], allow_empty = True),
+    compile_data = ["Cargo.toml"],
+    crate_name = "d2b_process_conformance",
+    visibility = ["//visibility:public"],
+    deps = [
+        "//packages/d2b-contracts:d2b_contracts_test_support",
+    ] + all_crate_deps(normal = True, cargo_only = True),
+)
+
 rust_test(
     name = "d2b_process_conformance_test",
     compile_data = ["Cargo.toml"],

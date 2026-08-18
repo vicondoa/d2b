@@ -63,9 +63,63 @@ d2bd_shared_deps = [
 d2bd_test_support_deps = [
     dep
     for dep in d2bd_shared_deps
-    if dep != "//packages/d2b-provider-display-wayland:d2b_provider_display_wayland"
+    if dep not in [
+        "//packages/d2b-audit:d2b_audit",
+        "//packages/d2b-bus:d2b_bus",
+        "//packages/d2b-contracts:d2b_contracts",
+        "//packages/d2b-process-conformance:d2b_process_conformance",
+        "//packages/d2b-process:d2b_process",
+        "//packages/d2b-provider-activation-nixos:d2b_provider_activation_nixos",
+        "//packages/d2b-provider-audio-pipewire:d2b_provider_audio_pipewire",
+        "//packages/d2b-provider-clipboard-wayland:d2b_provider_clipboard_wayland",
+        "//packages/d2b-provider-device-security-key:d2b_provider_device_security_key",
+        "//packages/d2b-provider-device-tpm:d2b_provider_device_tpm",
+        "//packages/d2b-provider-device-usbip:d2b_provider_device_usbip",
+        "//packages/d2b-provider-display-wayland:d2b_provider_display_wayland",
+        "//packages/d2b-provider-network-local:d2b_provider_network_local",
+        "//packages/d2b-provider-notification-desktop:d2b_provider_notification_desktop",
+        "//packages/d2b-provider-runtime-azure-container-apps:d2b_provider_runtime_azure_container_apps",
+        "//packages/d2b-provider:d2b_provider",
+        "//packages/d2b-provider-supervisor:d2b_provider_supervisor",
+        "//packages/d2b-provider-system-core:d2b_provider_system_core",
+        "//packages/d2b-provider-system-minijail:d2b_provider_system_minijail",
+        "//packages/d2b-provider-system-systemd:d2b_provider_system_systemd",
+        "//packages/d2b-provider-transport-azure-relay:d2b_provider_transport_azure_relay",
+        "//packages/d2b-gateway-runtime:d2b_gateway_runtime",
+        "//packages/d2b-resource-api:d2b_resource_api",
+        "//packages/d2b-session:d2b_session",
+        "//packages/d2b-session-unix:d2b_session_unix",
+        "//packages/d2b-resource-store:d2b_resource_store",
+        "//packages/d2b-resource-store-redb:d2b_resource_store_redb",
+    ]
 ] + [
+    "//packages/d2b-audit:d2b_audit_test_support",
+    "//packages/d2b-bus:d2b_bus_test_support",
+    "//packages/d2b-contracts:d2b_contracts_test_support",
+    "//packages/d2b-process-conformance:d2b_process_conformance_test_support",
+    "//packages/d2b-process:d2b_process_test_support",
+    "//packages/d2b-provider-activation-nixos:d2b_provider_activation_nixos_test_support",
+    "//packages/d2b-provider-audio-pipewire:d2b_provider_audio_pipewire_test_support",
+    "//packages/d2b-provider-clipboard-wayland:d2b_provider_clipboard_wayland_test_support",
+    "//packages/d2b-provider-device-security-key:d2b_provider_device_security_key_test_support",
+    "//packages/d2b-provider-device-tpm:d2b_provider_device_tpm_test_support",
+    "//packages/d2b-provider-device-usbip:d2b_provider_device_usbip_test_support",
     "//packages/d2b-provider-display-wayland:d2b_provider_display_wayland_test_support",
+    "//packages/d2b-provider-network-local:d2b_provider_network_local_test_support",
+    "//packages/d2b-provider-notification-desktop:d2b_provider_notification_desktop_test_support",
+    "//packages/d2b-provider-runtime-azure-container-apps:d2b_provider_runtime_azure_container_apps_test_support",
+    "//packages/d2b-provider:d2b_provider_test_support",
+    "//packages/d2b-provider-supervisor:d2b_provider_supervisor_test_support",
+    "//packages/d2b-provider-system-core:d2b_provider_system_core_test_support",
+    "//packages/d2b-provider-system-minijail:d2b_provider_system_minijail_test_support",
+    "//packages/d2b-provider-system-systemd:d2b_provider_system_systemd_test_support",
+    "//packages/d2b-provider-transport-azure-relay:d2b_provider_transport_azure_relay_test_support",
+    "//packages/d2b-gateway-runtime:d2b_gateway_runtime_test_support",
+    "//packages/d2b-resource-api:d2b_resource_api_test_support",
+    "//packages/d2b-session:d2b_session_test_support",
+    "//packages/d2b-session-unix:d2b_session_unix_test_support",
+    "//packages/d2b-resource-store:d2b_resource_store_test_support",
+    "//packages/d2b-resource-store-redb:d2b_resource_store_redb_test_support",
 ]
 
 rust_library(
@@ -96,7 +150,7 @@ rust_library(
     deps = d2bd_test_support_deps + [
         "//packages/d2b-core:d2b_core_test_support",
         "//packages/d2b-core-controller:d2b_core_controller_test_support",
-        "//packages/d2b-host:d2b_host",
+        "//packages/d2b-host:d2b_host_test_support",
     ] + all_crate_deps(normal = True, cargo_only = True),
 )
 
@@ -302,7 +356,10 @@ rust_test(
     ],
     deps = [
         "//packages/d2b-realm-core:d2b_realm_core",
-    ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
+        "//packages/d2b-core:d2b_core_test_support",
+        "//packages/d2b-core-controller:d2b_core_controller_test_support",
+        "//packages/d2b-provider-display-wayland:d2b_provider_display_wayland_test_support",
+    ] + all_crate_deps(normal_dev = True, cargo_only = True),
 )
 
 # keep

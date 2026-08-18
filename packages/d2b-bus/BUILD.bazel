@@ -52,6 +52,29 @@ rust_library(
 )
 
 rust_library(
+    name = "d2b_bus_test_support",
+    srcs = d2b_bus_srcs,
+    compile_data = [
+        "Cargo.toml",
+        "src/transport/unix.rs",
+    ],
+    crate_name = "d2b_bus",
+    proc_macro_deps = [
+        "@crates//:async-trait",
+    ],
+    visibility = ["//visibility:public"],
+    deps = [
+        "//packages/d2b-audit:d2b_audit_test_support",
+        "//packages/d2b-contracts:d2b_contracts_test_support",
+        "//packages/d2b-resource-api:d2b_resource_api_test_support",
+        "//packages/d2b-resource-store:d2b_resource_store_test_support",
+        "//packages/d2b-session:d2b_session_test_support",
+        "//packages/d2b-session-unix:d2b_session_unix_test_support",
+        "//packages/d2b-telemetry:d2b_telemetry_test_support",
+    ] + all_crate_deps(normal = True, cargo_only = True),
+)
+
+rust_library(
     name = "d2b_bus_production_rss_fixture",
     srcs = d2b_bus_srcs,
     compile_data = [

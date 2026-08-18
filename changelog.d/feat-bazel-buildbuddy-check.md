@@ -9,6 +9,8 @@
 
 - Kept public Make aliases and fixed CI jobs while moving Layer-1 scheduling,
   caching, retries, and aggregation into Bazel.
+- Kept production Rust labels free of Cargo's `test-support` feature while
+  retaining explicit same-crate Bazel variants for test-support graphs.
 - Kept direct Cargo, nextest, doctest, feature, and manual Layer-2 workflows
   available alongside the Bazel graph.
 - Declare package, deny-policy, and shell-completion sources for fixed Nix
