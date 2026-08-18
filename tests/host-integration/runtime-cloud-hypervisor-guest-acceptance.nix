@@ -267,8 +267,8 @@ pkgs.testers.runNixOSTest {
     # report a concrete block instead of waiting for a dead runner.
     guest_fixture = machine.succeed(
         "if test -d /nix/store && test -d /var/lib/d2b/vms && "
-        "ip tuntap add d2b-guest-probe mode tap 2>/dev/null; "
-        "then ip tuntap del d2b-guest-probe mode tap 2>/dev/null; echo ready; "
+        "runuser -u d2bd -- ip tuntap add d2b-guest-probe mode tap 2>/dev/null; "
+        "then runuser -u d2bd -- ip tuntap del d2b-guest-probe mode tap 2>/dev/null; echo ready; "
         "else echo blocked-host; fi"
     ).strip()
     if guest_fixture != "ready":
