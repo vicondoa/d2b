@@ -72,7 +72,7 @@ rust_test(
     compile_data = ["Cargo.toml"],
     visibility = ["//visibility:public"],
     deps = [
-        "//packages/d2b-contracts:d2b_contracts",
+        "//packages/d2b-contracts:d2b_contracts_test_support",
         ":d2b_provider_display_wayland_test_support",
     ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
 )
