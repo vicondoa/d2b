@@ -4085,9 +4085,27 @@ fn resolve_network_effect_context(
     {
         return Err(resource_runtime::ResourceRuntimeError::ProviderPathUnavailable);
     }
+    let bridge_names = resolver
+        .host
+        .environments
+        .iter()
+        .find(|environment| environment.env == env_name)
+        .into_iter()
+        .flat_map(|environment| {
+            std::iter::once(environment.bridge.as_str().to_owned()).chain(
+                resolver
+                    .find_manifest_vm(&format!("sys-{env_name}-net"))
+                    .and_then(|vm| vm.bridge.clone()),
+            )
+        })
+        .collect::<BTreeSet<_>>();
     let sysctl_ids = resolver
         .sysctl_intent_ids()
-        .filter(|id| id.starts_with(&format!("sysctl:env:{env_name}:")))
+        .filter(|id| {
+            bridge_names
+                .iter()
+                .any(|bridge| id.starts_with(&format!("sysctl:env:{env_name}:if:{bridge}:")))
+        })
         .map(|id| BundleOpId::new(id.to_owned()))
         .collect::<Vec<_>>();
     if sysctl_ids
