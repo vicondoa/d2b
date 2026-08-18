@@ -4188,6 +4188,9 @@ fn resolve_network_vm_name(
 }
 
 #[derive(Clone)]
+// This compatibility boundary records mutation progress only. It is not a
+// Resource API child-status observer, so the public Network path stays Pending
+// until a durable child-resource controller supplies readiness.
 struct PublicNetworkResourceBoundary {
     state: Arc<Mutex<PublicNetworkResourceState>>,
 }
@@ -4460,12 +4463,6 @@ fn dispatch_wave6_resource_reconcile(
                 "Pending",
             ))?;
             reconcile_wave6_network_effect(state, peer, &resolver, &uid, &resource, true)?;
-            block_on_future(runtime.persist_public_reconcile_phase(
-                &resource_ref,
-                &uid,
-                operation_id,
-                "Ready",
-            ))?;
             "network-bridge-reconciled"
         }
         "Device" => {
@@ -4650,12 +4647,6 @@ fn ensure_guest_networks_reconciled(
                 "Pending",
             ))?;
             reconcile_wave6_network_effect(state, peer, resolver, &network_uid, &network, false)?;
-            block_on_future(runtime.persist_public_reconcile_phase(
-                &network_ref,
-                &network_uid,
-                &network_operation_id,
-                "Ready",
-            ))?;
         }
     }
     Ok(())
@@ -15052,6 +15043,8 @@ async fn open_resource_plane(
     Ok(Arc::new(plane))
 }
 
+const BROKER_AUDIT_EVIDENCE_PAGE_LIMIT: u32 = 16;
+
 #[derive(serde::Deserialize)]
 struct BrokerAuditEvidenceLine {
     #[serde(default)]
@@ -15079,7 +15072,7 @@ fn load_broker_audit_evidence(
                 filter: None,
                 since: None,
                 cursor: cursor.clone(),
-                limit: 1024,
+                limit: BROKER_AUDIT_EVIDENCE_PAGE_LIMIT,
             }),
             BrokerCallerRole::AdminUid {
                 uid: state.daemon_uid,

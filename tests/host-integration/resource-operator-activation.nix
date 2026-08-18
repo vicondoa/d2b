@@ -606,6 +606,11 @@ pkgs.testers.runNixOSTest {
     machine.succeed("systemctl restart d2bd.service")
     machine.wait_for_unit("d2bd.service")
     machine.wait_for_file("/run/d2b/public.sock")
+    machine.wait_until_succeeds(
+        "runuser -u alice -- env D2B_PUBLIC_SOCKET=/run/d2b/public.sock "
+        "d2b --zone work --json resource list Volume >/dev/null",
+        timeout=60,
+    )
     machine.succeed("runuser -u alice -- d2b auth status --json >/run/d2b-auth-after.json")
     for resource_type in ["Volume", "Network", "Device", "Guest"]:
         path = f"/run/d2b-resource-{resource_type.lower()}-after.json"

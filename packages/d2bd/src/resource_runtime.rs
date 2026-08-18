@@ -1466,7 +1466,13 @@ impl ZoneResourceRuntime {
             .get("status")
             .and_then(|status| status.get("phase"))
             .and_then(Value::as_str);
-        if current_phase == Some(phase) {
+        let current_observed_generation = current
+            .get("status")
+            .and_then(|status| status.get("observedGeneration"))
+            .and_then(Value::as_u64);
+        if current_phase == Some(phase)
+            && current_observed_generation == Some(resource.generation.get())
+        {
             return Ok(());
         }
         let status = json!({ "phase": phase });
@@ -1474,7 +1480,10 @@ impl ZoneResourceRuntime {
             .process_status_client
             .as_ref()
             .ok_or(ResourceRuntimeError::ControllerEndpointUnavailable)?;
-        persist_resource_status(client, &resource, &status).await
+        let current_resource = current
+            .get("status")
+            .and_then(|status| status.get("resource"));
+        persist_resource_status_with_projection(client, &resource, &status, current_resource).await
     }
 
     /// Drive the complete Wave 6 acceptance sequence through the
@@ -4236,6 +4245,15 @@ pub(crate) async fn persist_resource_status(
     resource: &StoredResource,
     status: &serde_json::Value,
 ) -> Result<(), ResourceRuntimeError> {
+    persist_resource_status_with_projection(client, resource, status, None).await
+}
+
+async fn persist_resource_status_with_projection(
+    client: &ResourceApiClient<RedbBackend, UnavailableUpgradeDispatcher>,
+    resource: &StoredResource,
+    status: &serde_json::Value,
+    resource_projection: Option<&serde_json::Value>,
+) -> Result<(), ResourceRuntimeError> {
     let mut value = CanonicalJsonValue::parse(&resource.canonical_json)
         .map_err(|_| ResourceRuntimeError::HandlerNotReady)?;
     let root = match &mut value {
@@ -4278,10 +4296,8 @@ pub(crate) async fn persist_resource_status(
             CanonicalJsonValue::String(now.clone()),
         );
     }
-    status.insert(
-        "resource".to_owned(),
-        CanonicalJsonValue::Object(resource_status),
-    );
+    let resource_projection = select_resource_projection(resource_status, resource_projection)?;
+    status.insert("resource".to_owned(), resource_projection);
     let Some(CanonicalJsonValue::Object(update)) = status.get_mut("update") else {
         return Err(ResourceRuntimeError::HandlerNotReady);
     };
@@ -4352,6 +4368,20 @@ pub(crate) async fn persist_resource_status(
         return Err(ResourceRuntimeError::StoreReadFailed);
     }
     Ok(())
+}
+
+fn select_resource_projection(
+    resource_status: BTreeMap<String, CanonicalJsonValue>,
+    resource_projection: Option<&serde_json::Value>,
+) -> Result<CanonicalJsonValue, ResourceRuntimeError> {
+    match resource_projection {
+        Some(resource_projection) => {
+            let bytes = serde_json::to_vec(resource_projection)
+                .map_err(|_| ResourceRuntimeError::HandlerNotReady)?;
+            CanonicalJsonValue::parse(&bytes).map_err(|_| ResourceRuntimeError::HandlerNotReady)
+        }
+        None => Ok(CanonicalJsonValue::Object(resource_status)),
+    }
 }
 
 fn read_bounded(path: impl AsRef<Path>, limit: usize) -> io::Result<String> {
@@ -5558,6 +5588,43 @@ mod tests {
 
     fn test_audit_sink(directory: &std::path::Path, name: &str) -> Arc<AuditSink> {
         Arc::new(AuditSink::open(directory.join(name)).unwrap())
+    }
+
+    #[test]
+    fn phase_only_status_preserves_existing_resource_projection() {
+        let desired = CanonicalJsonValue::parse(br#"{"phase":"Ready"}"#).unwrap();
+        let CanonicalJsonValue::Object(desired) = desired else {
+            panic!("phase status must be an object");
+        };
+        let current = json!({
+            "netVmRef": "Guest/net-work-net",
+            "lanBridge": {"phase": "Ready"},
+            "uplinkBridge": {"phase": "Ready"},
+            "externalAttachment": null,
+            "attachments": [],
+        });
+        let projection = select_resource_projection(desired, Some(&current)).unwrap();
+        assert_eq!(
+            projection.to_canonical_bytes(),
+            CanonicalJsonValue::parse(
+                br#"{"attachments":[],"externalAttachment":null,"lanBridge":{"phase":"Ready"},"netVmRef":"Guest/net-work-net","uplinkBridge":{"phase":"Ready"}}"#,
+            )
+            .unwrap()
+            .to_canonical_bytes()
+        );
+        assert_eq!(
+            select_resource_projection(
+                CanonicalJsonValue::parse(br#"{"phase":"Pending"}"#)
+                    .unwrap()
+                    .as_object()
+                    .unwrap()
+                    .clone(),
+                None,
+            )
+            .unwrap()
+            .to_canonical_bytes(),
+            br#"{"phase":"Pending"}"#
+        );
     }
 
     fn committed_provider_resource(name: &str, artifact_id: &str, config: Value) -> StoredResource {
