@@ -179,9 +179,8 @@ fn resolve_bazel_test_tool_path() -> String {
 }
 
 fn run_bazel_output(arguments: &[&str]) -> std::process::Output {
-    static BAZEL_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+    static BAZEL_LOCK: Mutex<()> = Mutex::new(());
     let _guard = BAZEL_LOCK
-        .get_or_init(|| Mutex::new(()))
         .lock()
         .expect("serialize nested Bazel compatibility commands");
     let mut command = Command::new(bazel_binary());
