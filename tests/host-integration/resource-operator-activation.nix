@@ -98,6 +98,7 @@ pkgs.testers.runNixOSTest {
   nodes.machine = d2bLib.d2bDaemonNode {
       writableStore = true;
       extra = { pkgs, ... }: {
+        boot.kernelModules = [ "br_netfilter" ];
         d2b.site.adminUsers = [ "alice" ];
         systemd.services.d2bd.serviceConfig.ExecStartPre = lib.mkAfter [
           "+${pkgs.writeShellScript "d2b-acceptance-cgroup-prep" ''

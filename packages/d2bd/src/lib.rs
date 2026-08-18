@@ -4534,7 +4534,10 @@ fn reconcile_wave6_network_effect(
         .and_then(|value| value.get("netVmNameOverride"))
         .and_then(Value::as_str)
         .map_or_else(|| format!("sys-{env_name}-net"), ToOwned::to_owned);
-    if resolver.find_guest_closure_out_path(&net_vm_name).is_none() {
+    if !resolver
+        .find_manifest_vm(&net_vm_name)
+        .is_some_and(|vm| vm.is_net_vm)
+    {
         return Err(resource_runtime::ResourceRuntimeError::ProviderPathUnavailable);
     }
     let mdns_enabled = resource
