@@ -3961,6 +3961,13 @@ fn dispatch_resource_request(
         )
         .unwrap_or_else(resource_runtime_error_frame));
     }
+    if request.value().get("method").and_then(Value::as_str) == Some("Reconcile")
+        && !matches!(peer.role, PeerRole::Admin)
+    {
+        return Ok(resource_runtime_error_frame(
+            resource_runtime::ResourceRuntimeError::AuthenticationUnavailable,
+        ));
+    }
     if is_device_tpm_reconcile_request(&request.value()) {
         return Ok(dispatch_device_tpm_reconcile(state, peer, &request.value())
             .unwrap_or_else(resource_runtime_error_frame));
@@ -4058,6 +4065,7 @@ fn resolve_network_effect_context(
         return Err(resource_runtime::ResourceRuntimeError::ProviderPathUnavailable);
     }
     let env_name = resolve_network_env_name(spec, resolver)?;
+    let net_vm_name = resolve_network_vm_name(spec, &env_name)?;
     let bridge_id = intent_id_bridge_env(&env_name);
     let projection_id = intent_id_nft_projection_env(&env_name);
     if resolver.find_bridge_intent(&bridge_id).is_none() {
@@ -4094,7 +4102,7 @@ fn resolve_network_effect_context(
         .flat_map(|environment| {
             std::iter::once(environment.bridge.as_str().to_owned()).chain(
                 resolver
-                    .find_manifest_vm(&format!("sys-{env_name}-net"))
+                    .find_manifest_vm(&net_vm_name)
                     .and_then(|vm| vm.bridge.clone()),
             )
         })
@@ -4122,7 +4130,7 @@ fn resolve_network_effect_context(
         .ok_or(resource_runtime::ResourceRuntimeError::ProviderPathUnavailable)?;
     Ok(NetworkEffectContext::new(
         ScopeId::new(format!("env:{env_name}")),
-        VmId::new(format!("sys-{env_name}-net")),
+        VmId::new(net_vm_name),
         BundleOpId::new(bridge_id),
         BundleOpId::new(projection_id),
         BundleOpId::new(nm_id),
@@ -4164,6 +4172,19 @@ fn resolve_network_env_name(
         return Err(resource_runtime::ResourceRuntimeError::ProviderPathUnavailable);
     }
     Ok(env_name)
+}
+
+fn resolve_network_vm_name(
+    spec: &Value,
+    env_name: &str,
+) -> Result<String, resource_runtime::ResourceRuntimeError> {
+    match spec.get("netVmNameOverride") {
+        Some(value) => value
+            .as_str()
+            .map(ToOwned::to_owned)
+            .ok_or(resource_runtime::ResourceRuntimeError::RequestInvalid),
+        None => Ok(format!("sys-{env_name}-net")),
+    }
 }
 
 #[derive(Default)]
@@ -4360,7 +4381,7 @@ fn dispatch_wave6_resource_reconcile(
             }
         }
         "Network" => {
-            reconcile_wave6_network_effect(state, peer, &resolver, &uid, &resource)?;
+            reconcile_wave6_network_effect(state, peer, &resolver, &uid, &resource, true)?;
             "network-bridge-reconciled"
         }
         "Device" => {
@@ -4388,7 +4409,7 @@ fn dispatch_wave6_resource_reconcile(
             "device-tpm-reconciled"
         }
         "Guest" => {
-            ensure_guest_networks_reconciled(peer, runtime, &resource)?;
+            ensure_guest_networks_reconciled(state, peer, runtime, &resource, &resolver)?;
             let guest_vm = resource_ref.name().as_str();
             let providers = state.provider_runtime.process_providers().ok_or_else(|| {
                 tracing::warn!(
@@ -4475,9 +4496,11 @@ fn public_network_ready() -> &'static Mutex<BTreeMap<ResourceUid, u64>> {
 }
 
 fn ensure_guest_networks_reconciled(
+    state: &ServerState,
     peer: &PeerIdentity,
     runtime: &resource_runtime::ZoneResourceRuntime,
     guest: &Value,
+    resolver: &BundleResolver,
 ) -> Result<(), resource_runtime::ResourceRuntimeError> {
     let Some(network_attachments) = guest
         .get("spec")
@@ -4517,17 +4540,20 @@ fn ensure_guest_networks_reconciled(
             .and_then(|metadata| metadata.get("generation"))
             .and_then(Value::as_u64)
             .ok_or(resource_runtime::ResourceRuntimeError::RequestInvalid)?;
-        let ready = public_network_ready()
-            .lock()
-            .map_err(|_| resource_runtime::ResourceRuntimeError::ProviderPathUnavailable)?
-            .get(&network_uid)
-            .is_some_and(|observed| *observed == generation);
+        let ready = {
+            let ready = public_network_ready()
+                .lock()
+                .map_err(|_| resource_runtime::ResourceRuntimeError::ProviderPathUnavailable)?;
+            ready
+                .get(&network_uid)
+                .is_some_and(|observed| *observed == generation)
+        };
         if !ready {
             tracing::warn!(
                 stage = "guest-network-readiness",
-                "Guest Provider launch refused before Network Provider convergence"
+                "Guest Provider is re-running Network reconciliation before launch"
             );
-            return Err(resource_runtime::ResourceRuntimeError::ProviderPathUnavailable);
+            reconcile_wave6_network_effect(state, peer, resolver, &network_uid, &network, false)?;
         }
     }
     Ok(())
@@ -4539,31 +4565,38 @@ fn reconcile_wave6_network_effect(
     resolver: &BundleResolver,
     uid: &ResourceUid,
     resource: &Value,
+    ensure_host_base: bool,
 ) -> Result<(), resource_runtime::ResourceRuntimeError> {
+    public_network_ready()
+        .lock()
+        .map_err(|_| resource_runtime::ResourceRuntimeError::ProviderPathUnavailable)?
+        .remove(uid);
     let caller_role = broker_caller_role_for_peer(peer);
-    let base_response = dispatch_broker_request_as(
-        state,
-        BrokerRequest::ApplyNftables(BrokerApplyNftablesRequest {
-            bundle_nft_intent_ref: BundleOpId::new(intent_id_nft_host()),
-            scope_id: ScopeId::new("host"),
-            desired_hash: None,
-            destroy: false,
-            tracing_span_id: None,
-        }),
-        caller_role.clone(),
-    )
-    .map_err(|_| resource_runtime::ResourceRuntimeError::ProviderPathUnavailable)?;
-    match base_response {
-        BrokerResponse::Ack(_) => {}
-        BrokerResponse::Error(error) => {
-            tracing::warn!(
-                broker_kind = %error.kind,
-                broker_operation = %error.operation,
-                "Network Provider host firewall base was refused"
-            );
-            return Err(resource_runtime::ResourceRuntimeError::ProviderPathUnavailable);
+    if ensure_host_base {
+        let base_response = dispatch_broker_request_as(
+            state,
+            BrokerRequest::ApplyNftables(BrokerApplyNftablesRequest {
+                bundle_nft_intent_ref: BundleOpId::new(intent_id_nft_host()),
+                scope_id: ScopeId::new("host"),
+                desired_hash: None,
+                destroy: false,
+                tracing_span_id: None,
+            }),
+            caller_role.clone(),
+        )
+        .map_err(|_| resource_runtime::ResourceRuntimeError::ProviderPathUnavailable)?;
+        match base_response {
+            BrokerResponse::Ack(_) => {}
+            BrokerResponse::Error(error) => {
+                tracing::warn!(
+                    broker_kind = %error.kind,
+                    broker_operation = %error.operation,
+                    "Network Provider host firewall base was refused"
+                );
+                return Err(resource_runtime::ResourceRuntimeError::ProviderPathUnavailable);
+            }
+            _ => return Err(resource_runtime::ResourceRuntimeError::ProviderPathUnavailable),
         }
-        _ => return Err(resource_runtime::ResourceRuntimeError::ProviderPathUnavailable),
     }
     let context = resolve_network_effect_context(resource, resolver).inspect_err(|error| {
         tracing::warn!(
@@ -4610,11 +4643,12 @@ fn reconcile_wave6_network_effect(
         .installed_generation_identity()
         .and_then(|identity| ResourceBundleGenerationId::parse(identity.as_str().to_owned()).ok())
         .ok_or(resource_runtime::ResourceRuntimeError::ProviderPathUnavailable)?;
-    let net_vm_name = resource
-        .get("spec")
-        .and_then(|value| value.get("netVmNameOverride"))
-        .and_then(Value::as_str)
-        .map_or_else(|| format!("sys-{env_name}-net"), ToOwned::to_owned);
+    let net_vm_name = resolve_network_vm_name(
+        resource
+            .get("spec")
+            .ok_or(resource_runtime::ResourceRuntimeError::RequestInvalid)?,
+        &env_name,
+    )?;
     if !resolver
         .find_manifest_vm(&net_vm_name)
         .is_some_and(|vm| vm.is_net_vm)
