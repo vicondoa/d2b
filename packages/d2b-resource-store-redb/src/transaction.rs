@@ -1855,6 +1855,7 @@ fn valid_wayland_filter(
     allow_globals.len() <= 128
         && deny_globals.len() <= 128
         && max_versions.len() <= 128
+        && max_versions.values().all(|version| *version > 0)
         && dmabuf_allow.len() <= 64
         && dmabuf_deny.len() <= 64
         && allow_globals
@@ -4635,6 +4636,20 @@ mod tests {
             &[],
             &std::collections::BTreeMap::new(),
             &[format!("{dmabuf_entry}a")],
+            &[],
+        ));
+        assert!(!valid_wayland_filter(
+            &[],
+            &[],
+            &std::collections::BTreeMap::from([("xdg_shell".to_owned(), 0)]),
+            &[],
+            &[],
+        ));
+        assert!(valid_wayland_filter(
+            &[],
+            &[],
+            &std::collections::BTreeMap::from([("xdg_shell".to_owned(), 1)]),
+            &[],
             &[],
         ));
     }

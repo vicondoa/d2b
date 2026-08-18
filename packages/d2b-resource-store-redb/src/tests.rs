@@ -5,7 +5,6 @@ use d2b_audit::{
     AuditHash, AuditRecord, AuditRecordError, AuditRecordFields, AuditSink, DurabilityEvidence,
     DurabilityOutcome, OperationIdentity, ZoneOperationKey, genesis_hash,
 };
-use d2b_contracts::v3::identity::STANDARD_RESOURCE_TYPES;
 use d2b_contracts::v3::{
     CanonicalJsonValue, ConfigurationGeneration, RESOURCE_ENVELOPE_DOMAIN_TAG, ResourceEnvelope,
     ResourceRef, ResourceTypeName, ResourceUid, Timestamp, ZoneId, canonical_digest,
@@ -1566,7 +1565,10 @@ async fn legacy_v1_reopen_backfills_the_catalog_without_losing_resources() {
         .iter()
         .find(|table| table.name == "api_schemas")
         .unwrap();
-    assert_eq!(schemas.rows.len(), STANDARD_RESOURCE_TYPES.len());
+    assert_eq!(
+        schemas.rows.len(),
+        crate::transaction::INSTALLED_SCHEMA_CATALOG.len()
+    );
     assert!(
         store
             .get(StoreGetRequest {
@@ -1598,7 +1600,7 @@ async fn legacy_v1_reopen_backfills_the_catalog_without_losing_resources() {
             .unwrap()
             .rows
             .len(),
-        STANDARD_RESOURCE_TYPES.len()
+        crate::transaction::INSTALLED_SCHEMA_CATALOG.len()
     );
     reopened.shutdown().await.unwrap();
 }
