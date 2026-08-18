@@ -188,6 +188,7 @@ broker request is emitted.
 | Variant | Subject | Scope | Status | Destructive | Secret | Allowed groups | Audit | Default-for-unknown |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- |
 | `ValidateBundle` | bundle | global | live | no | no | `d2b-launcher` + `d2b-admin` | yes | deny |
+| `ResourceActivationAudit` | resource bundle | per Zone | live | no (durability evidence only) | metadata-only | `d2b-admin` | yes | deny |
 | `ExportBrokerAudit` | audit log | global | live | no (read-only export) | no | `d2b-admin` | yes | deny |
 | `CreateOrReconcileUsersGroups` | user/group | global | bootstrap-only | yes | no | `d2b-admin` | yes | deny |
 

@@ -811,6 +811,16 @@ pub const BROKER_OPERATION_AUTHZ: &[OperationAuthzRow] = &[
         AuditMode::Yes,
     ),
     row(
+        "ResourceActivationAudit",
+        "resource-bundle",
+        "per-Zone",
+        &["d2bd"],
+        false,
+        SecretAccess::MetadataOnly,
+        BrokerRequirement::Yes,
+        AuditMode::Yes,
+    ),
+    row(
         "RunHostInstall",
         "installer",
         "global",

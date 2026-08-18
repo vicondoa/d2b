@@ -197,6 +197,7 @@
             "QemuMediaSystemPowerdown",
             "ReadSecretById",
             "ReconcileStorageScope",
+            "ResourceActivationAudit",
             "ResumeBroker",
             "RotateSecretById",
             "RunActivation",

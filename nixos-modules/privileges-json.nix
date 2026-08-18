@@ -847,6 +847,18 @@ let
     "auditMode": "yes"
   },
   {
+    "operation": "ResourceActivationAudit",
+    "subject": "resource-bundle",
+    "scope": "per-Zone",
+    "allowedGroups": [
+      "d2bd"
+    ],
+    "destructive": false,
+    "secretAccess": "metadata-only",
+    "brokerRequired": "yes",
+    "auditMode": "yes"
+  },
+  {
     "operation": "RunHostInstall",
     "subject": "installer",
     "scope": "global",
