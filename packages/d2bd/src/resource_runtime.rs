@@ -4339,7 +4339,15 @@ pub(crate) async fn persist_resource_status(
     request.meta = protobuf::MessageField::some(meta);
     request.mutation = protobuf::MessageField::some(mutation);
     let response = client.update_status(request).await;
-    if response.error.is_some() || response.resource.is_none() {
+    if let Some(error) = response.error.as_ref() {
+        tracing::warn!(
+            error_kind = ?error.kind,
+            reason = %error.reason,
+            "public Resource status update was refused"
+        );
+        return Err(ResourceRuntimeError::StoreReadFailed);
+    }
+    if response.resource.is_none() {
         return Err(ResourceRuntimeError::StoreReadFailed);
     }
     Ok(())
