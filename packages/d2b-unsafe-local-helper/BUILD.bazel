@@ -36,7 +36,10 @@ rust_test(
     srcs = ["tests/shell_supervisor.rs"],
     compile_data = ["Cargo.toml"],
     data = [":d2b-unsafe-local-helper"],
-    env = {"CARGO_BIN_EXE_d2b-unsafe-local-helper": "$(rootpath :d2b-unsafe-local-helper)"},
+    env = {
+        "CARGO_BIN_EXE_d2b-unsafe-local-helper": "$(rootpath :d2b-unsafe-local-helper)",
+        "TMPDIR": "/tmp",
+    },
     rustc_env = {"CARGO_BIN_EXE_d2b-unsafe-local-helper": "$(rootpath :d2b-unsafe-local-helper)"},
     tags = ["local"],
     visibility = ["//visibility:public"],
