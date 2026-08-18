@@ -91,6 +91,13 @@ let
       type = "nixos-system";
     };
   };
+  hostRuntime = pkgs.writeText "d2b-acceptance-host-runtime.json" (builtins.toJSON {
+    schemaVersion = "v1";
+    bundleVersion = 1;
+    generatedAt = "1970-01-01T00:00:00.000Z";
+    nftAppliedHash = null;
+    ifnames = [ ];
+  });
 in
 pkgs.testers.runNixOSTest {
   name = "d2b-resource-operator-activation";
@@ -103,8 +110,14 @@ pkgs.testers.runNixOSTest {
         networking.nftables.ruleset = lib.mkAfter ''
           table inet d2b {}
         '';
+        environment.etc."d2b/acceptance-host-runtime.json".source = hostRuntime;
         d2b.site.adminUsers = [ "alice" ];
         systemd.services.d2bd.serviceConfig.ExecStartPre = lib.mkAfter [
+          "+${pkgs.writeShellScript "d2b-acceptance-host-runtime-prep" ''
+            ${pkgs.coreutils}/bin/install -D -o root -g d2bd -m 0640 \
+              /etc/d2b/acceptance-host-runtime.json \
+              /var/lib/d2b/runtime/host-runtime.json
+          ''}"
           "+${pkgs.writeShellScript "d2b-acceptance-cgroup-prep" ''
             relative=$(sed -n 's/^0:://p' /proc/self/cgroup)
             path="/sys/fs/cgroup''${relative}/cgroup.kill"
@@ -463,7 +476,6 @@ pkgs.testers.runNixOSTest {
     start_all()
     machine.wait_for_unit("nftables.service")
     machine.succeed("nft list table inet d2b")
-    machine.succeed("d2b --zone work host install --apply --no-start")
     machine.wait_for_unit("d2b-priv-broker.socket")
     machine.wait_for_unit("d2bd.service")
     machine.wait_for_file("/run/d2b/public.sock")
