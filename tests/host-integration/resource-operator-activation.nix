@@ -671,6 +671,18 @@ pkgs.testers.runNixOSTest {
     )
     machine.succeed(
         "runuser -u alice -- env D2B_PUBLIC_SOCKET=/run/d2b/public.sock "
+        "d2b --zone work --json resource reconcile Guest/acceptance-guest "
+        ">/run/d2b-reconcile-guest-after-restart.json"
+    )
+    machine.succeed(
+        "jq -e '.ready == true and .authenticated == true and "
+        ".resourceRef == \"Guest/acceptance-guest\" and "
+        "(.effect == \"cloud-hypervisor-adopted\" or "
+        ".effect == \"cloud-hypervisor-started\")' "
+        "/run/d2b-reconcile-guest-after-restart.json"
+    )
+    machine.succeed(
+        "runuser -u alice -- env D2B_PUBLIC_SOCKET=/run/d2b/public.sock "
         "d2b --zone work --json resource list Host "
         ">/run/d2b-host-after.json && "
         "jq -e '.resources[] | select(.type == \"Host\" and .metadata.name == \"host-system\") "
