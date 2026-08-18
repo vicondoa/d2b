@@ -1,3 +1,4 @@
+load("@crates//:defs.bzl", "all_crate_deps")
 load("@rules_rust//rust:defs.bzl", "rust_binary", "rust_library", "rust_test")
 
 exports_files(
@@ -7,33 +8,20 @@ exports_files(
 
 rust_library(
     name = "d2b_exec_runner",
-    srcs = [
-        "src/atomicio.rs",
-        "src/codec.rs",
-        "src/filering.rs",
-        "src/lib.rs",
-        "src/limits.rs",
-        "src/paths.rs",
-        "src/record.rs",
-        "src/spec.rs",
-    ],
+    srcs = glob(["src/**/*.rs"], allow_empty = True),
     compile_data = ["Cargo.toml"],
     visibility = ["//visibility:public"],
 )
 
 rust_binary(
     name = "d2b-exec-runner",
-    srcs = [
-        "src/main.rs",
-        "src/service_mode.rs",
-        "src/tty_helper.rs",
-    ],
+    srcs = glob(["src/**/*.rs"], allow_empty = True),
+    crate_root = "src/main.rs",
     compile_data = ["Cargo.toml"],
     visibility = ["//visibility:public"],
     deps = [
         ":d2b_exec_runner",
-        "@crates//:rustix",
-    ],
+    ] + all_crate_deps(normal = True, cargo_only = True),
 )
 
 rust_test(
@@ -54,7 +42,7 @@ rust_test(
     env = {"CARGO_BIN_EXE_d2b-exec-runner": "$(rootpath :d2b-exec-runner)"},
     rustc_env = {"CARGO_BIN_EXE_d2b-exec-runner": "$(rootpath :d2b-exec-runner)"},
     visibility = ["//visibility:public"],
-    deps = ["@crates//:rustix"],
+    deps = [] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
 )
 
 rust_test(

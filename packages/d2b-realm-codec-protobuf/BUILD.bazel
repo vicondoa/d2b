@@ -1,6 +1,6 @@
+load("@crates//:defs.bzl", "all_crate_deps")
 load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test")
 
-# gazelle:ignore
 
 exports_files(
     ["BUILD.bazel"],
@@ -9,24 +9,21 @@ exports_files(
 
 rust_library(
     name = "d2b_realm_codec_protobuf",
-    srcs = [
-        "src/lib.rs",
-    ],
+    srcs = glob(["src/**/*.rs"], allow_empty = True),
     compile_data = ["Cargo.toml"],
     visibility = ["//visibility:public"],
     deps = [
         "//packages/d2b-contracts:d2b_contracts",
         "//packages/d2b-realm-core:d2b_realm_core",
         "//packages/d2b-realm-provider:d2b_realm_provider",
-        "@crates//:prost",
-    ],
+    ] + all_crate_deps(normal = True, cargo_only = True),
 )
 
 rust_test(
     name = "d2b_realm_codec_protobuf_test",
     compile_data = ["Cargo.toml"],
     crate = ":d2b_realm_codec_protobuf",
-    deps = ["@crates//:serde_json"],
+    deps = [] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
 )
 
 # keep

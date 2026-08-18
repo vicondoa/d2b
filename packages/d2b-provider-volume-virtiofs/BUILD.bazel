@@ -1,6 +1,6 @@
+load("@crates//:defs.bzl", "all_crate_deps")
 load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test")
 
-# gazelle:ignore
 
 exports_files(
     ["BUILD.bazel"],
@@ -9,27 +9,12 @@ exports_files(
 
 rust_library(
     name = "d2b_provider_volume_virtiofs",
-    srcs = [
-        "src/controller.rs",
-        "src/error.rs",
-        "src/export.rs",
-        "src/lib.rs",
-        "src/port.rs",
-        "src/readiness.rs",
-        "src/socket_path.rs",
-        "src/testing.rs",
-        "src/user_ns.rs",
-        "src/virtiofsd_argv.rs",
-        "src/worker.rs",
-    ],
+    srcs = glob(["src/**/*.rs"], allow_empty = True),
     compile_data = ["Cargo.toml"],
     visibility = ["//visibility:public"],
     deps = [
         "//packages/d2b-contracts:d2b_contracts",
-        "@crates//:serde",
-        "@crates//:serde_json",
-        "@crates//:sha2",
-    ],
+    ] + all_crate_deps(normal = True, cargo_only = True),
 )
 
 rust_test(
@@ -40,15 +25,14 @@ rust_test(
     deps = [
         ":d2b_provider_volume_virtiofs",
         "//packages/d2b-contracts:d2b_contracts",
-        "@crates//:serde_json",
-    ],
+    ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
 )
 
 rust_test(
     name = "d2b_provider_volume_virtiofs_test",
     compile_data = ["Cargo.toml"],
     crate = ":d2b_provider_volume_virtiofs",
-    deps = ["//packages/d2b-contracts:d2b_contracts"],
+    deps = ["//packages/d2b-contracts:d2b_contracts"] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
 )
 
 # keep

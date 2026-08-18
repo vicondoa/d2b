@@ -1,6 +1,6 @@
+load("@crates//:defs.bzl", "all_crate_deps")
 load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test")
 
-# gazelle:ignore
 
 exports_files(
     ["BUILD.bazel"],
@@ -12,76 +12,7 @@ exports_files(
     visibility = ["//visibility:public"],
 )
 
-d2b_contracts_srcs = [
-    "src/broker_wire.rs",
-    "src/cli_output.rs",
-    "src/generated/d2b_resource_v3.rs",
-    "src/generated/guest_control.rs",
-    "src/generated/mod.rs",
-    "src/generation_bundle.rs",
-    "src/guest_auth.rs",
-    "src/guest_wire.rs",
-    "src/host_generation.rs",
-    "src/lib.rs",
-    "src/provider_effects/aca.rs",
-    "src/provider_effects/mod.rs",
-    "src/public_wire.rs",
-    "src/resource_proto_formatting_tests.rs",
-    "src/security_key.rs",
-    "src/terminal_wire.rs",
-    "src/types.rs",
-    "src/unsafe_local_wire.rs",
-    "src/usbip.rs",
-    "src/usbip_effect_port.rs",
-    "src/v3/activation_nixos.rs",
-    "src/v3/component_session.rs",
-    "src/v3/credential.rs",
-    "src/v3/credential/service.rs",
-    "src/v3/credential_controller.rs",
-    "src/v3/device.rs",
-    "src/v3/effect_port.rs",
-    "src/v3/emergency_policy.rs",
-    "src/v3/endpoint.rs",
-    "src/v3/error.rs",
-    "src/v3/execution_policy.rs",
-    "src/v3/guest.rs",
-    "src/v3/host.rs",
-    "src/v3/identity.rs",
-    "src/v3/ifname.rs",
-    "src/v3/limits.rs",
-    "src/v3/mod.rs",
-    "src/v3/network.rs",
-    "src/v3/process.rs",
-    "src/v3/provider.rs",
-    "src/v3/provider_registry.rs",
-    "src/v3/quota.rs",
-    "src/v3/resource.rs",
-    "src/v3/resource_bundle.rs",
-    "src/v3/resource_export.rs",
-    "src/v3/resource_import.rs",
-    "src/v3/resource_ref.rs",
-    "src/v3/resource_schema.rs",
-    "src/v3/resource_status.rs",
-    "src/v3/role.rs",
-    "src/v3/role_binding.rs",
-    "src/v3/semantic_services/audio.rs",
-    "src/v3/semantic_services/mod.rs",
-    "src/v3/semantic_services/security_key.rs",
-    "src/v3/semantic_services/telemetry.rs",
-    "src/v3/semantic_services/usb.rs",
-    "src/v3/services.rs",
-    "src/v3/storage.rs",
-    "src/v3/telemetry_frame.rs",
-    "src/v3/telemetry_policy.rs",
-    "src/v3/user.rs",
-    "src/v3/virtiofs_export.rs",
-    "src/v3/volume.rs",
-    "src/v3/volume_state.rs",
-    "src/v3/zone.rs",
-    "src/v3/zone_link.rs",
-    "src/v3/zone_routing.rs",
-    "src/v3/zone_session.rs",
-]
+d2b_contracts_srcs = glob(["src/**/*.rs"], allow_empty = True)
 
 rust_library(
     name = "d2b_contracts",
@@ -94,13 +25,7 @@ rust_library(
     deps = [
         "//packages/d2b-core:d2b_core",
         "//packages/d2b-realm-core:d2b_realm_core",
-        "@crates//:protobuf",
-        "@crates//:schemars",
-        "@crates//:serde",
-        "@crates//:serde_json",
-        "@crates//:sha2",
-        "@crates//:unicode-normalization",
-    ],
+    ] + all_crate_deps(normal = True, cargo_only = True),
 )
 
 rust_library(
@@ -115,13 +40,7 @@ rust_library(
     deps = [
         "//packages/d2b-core:d2b_core_test_support",
         "//packages/d2b-realm-core:d2b_realm_core",
-        "@crates//:protobuf",
-        "@crates//:schemars",
-        "@crates//:serde",
-        "@crates//:serde_json",
-        "@crates//:sha2",
-        "@crates//:unicode-normalization",
-    ],
+    ] + all_crate_deps(normal = True, cargo_only = True),
 )
 
 rust_test(
@@ -135,8 +54,17 @@ rust_test(
     visibility = ["//visibility:public"],
     deps = [
         "//packages/d2b-core:d2b_core",
-        "@crates//:serde_json",
-    ],
+    ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
+)
+
+rust_test(
+    name = "activation_nixos",
+    srcs = ["tests/activation_nixos.rs"],
+    compile_data = ["Cargo.toml"],
+    visibility = ["//visibility:public"],
+    deps = [
+        ":d2b_contracts",
+    ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
 )
 
 rust_test(
@@ -146,8 +74,7 @@ rust_test(
     visibility = ["//visibility:public"],
     deps = [
         ":d2b_contracts",
-        "@crates//:serde_json",
-    ],
+    ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
 )
 
 rust_test(
@@ -157,9 +84,7 @@ rust_test(
     visibility = ["//visibility:public"],
     deps = [
         ":d2b_contracts",
-        "@crates//:protobuf",
-        "@crates//:serde_json",
-    ],
+    ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
 )
 
 rust_test(
@@ -172,8 +97,17 @@ rust_test(
     visibility = ["//visibility:public"],
     deps = [
         ":d2b_contracts",
-        "@crates//:protobuf",
-    ],
+    ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
+)
+
+rust_test(
+    name = "usbip_effect_port",
+    srcs = ["tests/usbip_effect_port.rs"],
+    compile_data = ["Cargo.toml"],
+    visibility = ["//visibility:public"],
+    deps = [
+        ":d2b_contracts",
+    ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
 )
 
 rust_test(
@@ -183,8 +117,17 @@ rust_test(
     visibility = ["//visibility:public"],
     deps = [
         ":d2b_contracts",
-        "@crates//:serde_json",
-    ],
+    ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
+)
+
+rust_test(
+    name = "virtiofs_export",
+    srcs = ["tests/virtiofs_export.rs"],
+    compile_data = ["Cargo.toml"],
+    visibility = ["//visibility:public"],
+    deps = [
+        ":d2b_contracts",
+    ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
 )
 
 rust_test(
@@ -192,9 +135,7 @@ rust_test(
     compile_data = ["Cargo.toml"],
     crate = ":d2b_contracts",
     deps = [
-        "@crates//:protobuf",
-        "@crates//:serde_json",
-    ],
+    ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
 )
 
 # keep

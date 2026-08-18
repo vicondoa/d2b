@@ -1,6 +1,6 @@
+load("@crates//:defs.bzl", "all_crate_deps")
 load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test")
 
-# gazelle:ignore
 
 exports_files(
     ["BUILD.bazel"],
@@ -9,29 +9,14 @@ exports_files(
 
 rust_library(
     name = "d2b_provider_system_systemd",
-    srcs = [
-        "src/adoption.rs",
-        "src/audit.rs",
-        "src/controller.rs",
-        "src/drain.rs",
-        "src/effect_port.rs",
-        "src/error.rs",
-        "src/guest_exec.rs",
-        "src/launch.rs",
-        "src/lib.rs",
-        "src/lifecycle.rs",
-        "src/manifest.rs",
-        "src/metrics.rs",
-        "src/sandbox.rs",
-    ],
+    srcs = glob(["src/**/*.rs"], allow_empty = True),
     compile_data = ["Cargo.toml"],
     visibility = ["//visibility:public"],
     deps = [
         "//packages/d2b-contracts:d2b_contracts",
         "//packages/d2b-process-conformance:d2b_process_conformance",
-        "//packages/d2b-provider-toolkit:d2b_provider_toolkit",        "@crates//:serde",
-        "@crates//:tokio",
-    ],
+        "//packages/d2b-provider-toolkit:d2b_provider_toolkit",
+    ] + all_crate_deps(normal = True, cargo_only = True),
 )
 
 rust_test(
@@ -43,7 +28,7 @@ rust_test(
         ":d2b_provider_system_systemd",
         "//packages/d2b-contracts:d2b_contracts",
         "//packages/d2b-process-conformance:d2b_process_conformance",
-    ],
+    ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
 )
 
 rust_test(
@@ -55,13 +40,50 @@ rust_test(
         ":d2b_provider_system_systemd",
         "//packages/d2b-contracts:d2b_contracts",
         "//packages/d2b-process-conformance:d2b_process_conformance",
-    ],
+    ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
 )
 
 rust_test(
     name = "d2b_provider_system_systemd_test",
     compile_data = ["Cargo.toml"],
     crate = ":d2b_provider_system_systemd",
+)
+
+
+rust_test(
+    name = "boundaries",
+    srcs = [
+        "tests/boundaries.rs",
+    ],
+    compile_data = ["Cargo.toml"],
+    visibility = ["//visibility:public"],
+    deps = [
+        ":d2b_provider_system_systemd",
+    ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
+)
+
+rust_test(
+    name = "controller",
+    srcs = [
+        "tests/controller.rs",
+    ],
+    compile_data = ["Cargo.toml"],
+    visibility = ["//visibility:public"],
+    deps = [
+        ":d2b_provider_system_systemd",
+    ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
+)
+
+rust_test(
+    name = "lifecycle",
+    srcs = [
+        "tests/lifecycle.rs",
+    ],
+    compile_data = ["Cargo.toml"],
+    visibility = ["//visibility:public"],
+    deps = [
+        ":d2b_provider_system_systemd",
+    ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
 )
 
 # keep

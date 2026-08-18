@@ -1,6 +1,6 @@
+load("@crates//:defs.bzl", "all_crate_deps")
 load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test")
 
-# gazelle:ignore
 
 exports_files(
     ["BUILD.bazel"],
@@ -9,22 +9,10 @@ exports_files(
 
 rust_library(
     name = "d2b_provider_network_local",
-    srcs = [
-        "src/artifact.rs",
-        "src/bridge_port.rs",
-        "src/broker.rs",
-        "src/controller.rs",
-        "src/ifname.rs",
-        "src/lib.rs",
-        "src/netlink.rs",
-        "src/nftables.rs",
-        "src/observe.rs",
-        "src/plan.rs",
-        "src/routes.rs",
-    ],
+    srcs = glob(["src/**/*.rs"], allow_empty = True),
     compile_data = ["Cargo.toml"],
     visibility = ["//visibility:public"],
-    deps = ["//packages/d2b-contracts:d2b_contracts"],
+    deps = ["//packages/d2b-contracts:d2b_contracts"] + all_crate_deps(normal = True, cargo_only = True),
 )
 
 rust_test(
@@ -35,7 +23,7 @@ rust_test(
     deps = [
         ":d2b_provider_network_local",
         "//packages/d2b-contracts:d2b_contracts",
-    ],
+    ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
 )
 
 rust_test(
@@ -46,7 +34,7 @@ rust_test(
     deps = [
         ":d2b_provider_network_local",
         "//packages/d2b-contracts:d2b_contracts",
-    ],
+    ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
 )
 
 rust_test(
@@ -60,7 +48,7 @@ rust_test(
     deps = [
         ":d2b_provider_network_local",
         "//packages/d2b-contracts:d2b_contracts",
-    ],
+    ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
 )
 
 rust_test(
@@ -71,7 +59,7 @@ rust_test(
     deps = [
         ":d2b_provider_network_local",
         "//packages/d2b-contracts:d2b_contracts",
-    ],
+    ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
 )
 
 rust_test(
@@ -79,7 +67,7 @@ rust_test(
     srcs = ["tests/telemetry_redaction.rs"],
     compile_data = ["Cargo.toml"],
     visibility = ["//visibility:public"],
-    deps = [":d2b_provider_network_local"],
+    deps = [":d2b_provider_network_local"] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
 )
 
 rust_test(

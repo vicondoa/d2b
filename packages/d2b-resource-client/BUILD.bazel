@@ -1,6 +1,6 @@
+load("@crates//:defs.bzl", "all_crate_deps")
 load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test")
 
-# gazelle:ignore
 
 exports_files(
     ["BUILD.bazel"],
@@ -9,22 +9,12 @@ exports_files(
 
 rust_library(
     name = "d2b_resource_client",
-    srcs = [
-        "src/call.rs",
-        "src/client.rs",
-        "src/dispatch.rs",
-        "src/error.rs",
-        "src/lib.rs",
-        "src/process_attach.rs",
-        "src/target.rs",
-        "src/zone_client.rs",
-    ],
+    srcs = glob(["src/**/*.rs"], allow_empty = True),
     compile_data = ["Cargo.toml"],
     visibility = ["//visibility:public"],
     deps = [
         "//packages/d2b-contracts:d2b_contracts",
-        "@crates//:tokio",
-    ],
+    ] + all_crate_deps(normal = True, cargo_only = True),
 )
 
 rust_test(

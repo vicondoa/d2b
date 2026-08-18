@@ -1,6 +1,6 @@
+load("@crates//:defs.bzl", "all_crate_deps")
 load("@rules_rust//rust:defs.bzl", "rust_binary", "rust_library", "rust_test")
 
-# gazelle:ignore
 
 exports_files(
     [
@@ -12,33 +12,7 @@ exports_files(
 
 rust_library(
     name = "d2b_lib",
-    srcs = [
-        "src/activation.rs",
-        "src/complete.rs",
-        "src/context.rs",
-        "src/dispatch.rs",
-        "src/doctor.rs",
-        "src/endpoint.rs",
-        "src/exec.rs",
-        "src/exec_client.rs",
-        "src/guest.rs",
-        "src/host.rs",
-        "src/host_generation.rs",
-        "src/host_validate.rs",
-        "src/legacy.rs",
-        "src/lib.rs",
-        "src/provider.rs",
-        "src/resource.rs",
-        "src/share.rs",
-        "src/shell.rs",
-        "src/status_read_model.rs",
-        "src/target_routing.rs",
-        "src/terminal_client.rs",
-        "src/zone.rs",
-        "src/zone_audit.rs",
-        "src/zone_doctor.rs",
-        "src/zone_support_bundle.rs",
-    ],
+    srcs = glob(["src/**/*.rs"], allow_empty = True),
     compile_data = [
         "Cargo.toml",
         "src/legacy.rs",
@@ -52,14 +26,7 @@ rust_library(
         "//packages/d2b-realm-core:d2b_realm_core",
         "//packages/d2b-realm-router:d2b_realm_router",
         "//packages/d2b-resource-client:d2b_resource_client",
-        "@crates//:clap",
-        "@crates//:nix",
-        "@crates//:rustix",
-        "@crates//:schemars",
-        "@crates//:serde",
-        "@crates//:serde_json",
-        "@crates//:sha2",
-    ],
+    ] + all_crate_deps(normal = True, cargo_only = True),
 )
 
 rust_binary(
@@ -67,7 +34,7 @@ rust_binary(
     srcs = ["src/main.rs"],
     compile_data = ["Cargo.toml"],
     visibility = ["//visibility:public"],
-    deps = [":d2b_lib"],
+    deps = [":d2b_lib"] + all_crate_deps(normal = True, cargo_only = True),
 )
 
 rust_test(
@@ -84,10 +51,7 @@ rust_test(
     visibility = ["//visibility:public"],
     deps = [
         "//packages/d2b-contracts:d2b_contracts",
-        "@crates//:nix",
-        "@crates//:serde_json",
-        "@crates//:tempfile",
-    ],
+    ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
 )
 
 rust_test(
@@ -100,9 +64,7 @@ rust_test(
     visibility = ["//visibility:public"],
     deps = [
         "//packages/d2b-contracts:d2b_contracts",
-        "@crates//:serde_json",
-        "@crates//:tempfile",
-    ],
+    ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
 )
 
 rust_test(
@@ -114,9 +76,7 @@ rust_test(
     rustc_env = {"CARGO_BIN_EXE_d2b": "$(rootpath :d2b)"},
     visibility = ["//visibility:public"],
     deps = [
-        "@crates//:serde_json",
-        "@crates//:tempfile",
-    ],
+    ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
 )
 
 rust_test(
@@ -132,9 +92,7 @@ rust_test(
     visibility = ["//visibility:public"],
     deps = [
         ":d2b_lib",
-        "@crates//:clap",
-        "@crates//:serde_json",
-    ],
+    ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
 )
 
 rust_test(
@@ -146,10 +104,7 @@ rust_test(
     rustc_env = {"CARGO_BIN_EXE_d2b": "$(rootpath :d2b)"},
     visibility = ["//visibility:public"],
     deps = [
-        "@crates//:rustix",
-        "@crates//:serde_json",
-        "@crates//:tempfile",
-    ],
+    ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
 )
 
 rust_test(
@@ -164,10 +119,7 @@ rust_test(
     rustc_env = {"CARGO_BIN_EXE_d2b": "$(rootpath :d2b)"},
     visibility = ["//visibility:public"],
     deps = [
-        "@crates//:nix",
-        "@crates//:serde_json",
-        "@crates//:tempfile",
-    ],
+    ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
 )
 
 rust_test(
@@ -185,10 +137,7 @@ rust_test(
     deps = [
         "//packages/d2b-contracts:d2b_contracts",
         "//packages/d2b-core:d2b_core",
-        "@crates//:nix",
-        "@crates//:serde_json",
-        "@crates//:tempfile",
-    ],
+    ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
 )
 
 rust_test(
@@ -201,10 +150,7 @@ rust_test(
     tags = ["local"],
     visibility = ["//visibility:public"],
     deps = [
-        "@crates//:nix",
-        "@crates//:serde_json",
-        "@crates//:tempfile",
-    ],
+    ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
 )
 
 rust_test(
@@ -222,9 +168,7 @@ rust_test(
     rustc_env = {"CARGO_BIN_EXE_d2b": "$(rootpath :d2b)"},
     visibility = ["//visibility:public"],
     deps = [
-        "@crates//:serde_json",
-        "@crates//:tempfile",
-    ],
+    ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
 )
 
 rust_test(
@@ -235,7 +179,7 @@ rust_test(
     env = {"CARGO_BIN_EXE_d2b": "$(rootpath :d2b)"},
     rustc_env = {"CARGO_BIN_EXE_d2b": "$(rootpath :d2b)"},
     visibility = ["//visibility:public"],
-    deps = ["@crates//:tempfile"],
+    deps = [] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
 )
 
 rust_test(
@@ -247,9 +191,7 @@ rust_test(
     rustc_env = {"CARGO_BIN_EXE_d2b": "$(rootpath :d2b)"},
     visibility = ["//visibility:public"],
     deps = [
-        "@crates//:serde_json",
-        "@crates//:tempfile",
-    ],
+    ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
 )
 
 rust_test(
@@ -261,9 +203,7 @@ rust_test(
     rustc_env = {"CARGO_BIN_EXE_d2b": "$(rootpath :d2b)"},
     visibility = ["//visibility:public"],
     deps = [
-        "@crates//:serde_json",
-        "@crates//:tempfile",
-    ],
+    ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
 )
 
 rust_test(
@@ -275,9 +215,7 @@ rust_test(
     rustc_env = {"CARGO_BIN_EXE_d2b": "$(rootpath :d2b)"},
     visibility = ["//visibility:public"],
     deps = [
-        "@crates//:serde_json",
-        "@crates//:tempfile",
-    ],
+    ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
 )
 
 rust_test(
@@ -289,9 +227,7 @@ rust_test(
     rustc_env = {"CARGO_BIN_EXE_d2b": "$(rootpath :d2b)"},
     visibility = ["//visibility:public"],
     deps = [
-        "@crates//:serde_json",
-        "@crates//:tempfile",
-    ],
+    ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
 )
 
 rust_test(
@@ -303,11 +239,7 @@ rust_test(
     rustc_env = {"CARGO_BIN_EXE_d2b": "$(rootpath :d2b)"},
     visibility = ["//visibility:public"],
     deps = [
-        "@crates//:nix",
-        "@crates//:serde_json",
-        "@crates//:sha2",
-        "@crates//:tempfile",
-    ],
+    ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
 )
 
 rust_test(
@@ -320,10 +252,7 @@ rust_test(
     tags = ["local"],
     visibility = ["//visibility:public"],
     deps = [
-        "@crates//:nix",
-        "@crates//:serde_json",
-        "@crates//:tempfile",
-    ],
+    ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
 )
 
 rust_test(
@@ -335,10 +264,7 @@ rust_test(
     rustc_env = {"CARGO_BIN_EXE_d2b": "$(rootpath :d2b)"},
     visibility = ["//visibility:public"],
     deps = [
-        "@crates//:nix",
-        "@crates//:serde_json",
-        "@crates//:tempfile",
-    ],
+    ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
 )
 
 rust_test(
@@ -348,7 +274,7 @@ rust_test(
     data = [":d2b"],
     env = {"CARGO_BIN_EXE_d2b": "$(rootpath :d2b)"},
     rustc_env = {"CARGO_BIN_EXE_d2b": "$(rootpath :d2b)"},
-    deps = ["@crates//:nix"],
+    deps = [] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
 )
 
 # keep

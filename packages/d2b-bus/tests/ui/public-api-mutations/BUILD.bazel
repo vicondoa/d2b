@@ -1,7 +1,6 @@
 load("@rules_rust//rust:defs.bzl", "rust_library")
 
 # keep
-# gazelle:ignore
 
 exports_files(["BUILD.bazel"], visibility = ["//visibility:public"])
 

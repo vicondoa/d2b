@@ -1,6 +1,6 @@
+load("@crates//:defs.bzl", "all_crate_deps")
 load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test")
 
-# gazelle:ignore
 
 exports_files(
     ["BUILD.bazel"],
@@ -9,24 +9,13 @@ exports_files(
 
 rust_library(
     name = "d2b_provider_system_minijail",
-    srcs = [
-        "src/adoption.rs",
-        "src/effect_port.rs",
-        "src/effect_result.rs",
-        "src/ephemeral.rs",
-        "src/finalize.rs",
-        "src/launch.rs",
-        "src/lib.rs",
-        "src/manifest.rs",
-        "src/sandbox_compiler.rs",
-        "src/user_ns.rs",
-    ],
+    srcs = glob(["src/**/*.rs"], allow_empty = True),
     compile_data = ["Cargo.toml"],
     visibility = ["//visibility:public"],
     deps = [
         "//packages/d2b-contracts:d2b_contracts",
-        "//packages/d2b-process-conformance:d2b_process_conformance",        "@crates//:serde",
-    ],
+        "//packages/d2b-process-conformance:d2b_process_conformance",
+    ] + all_crate_deps(normal = True, cargo_only = True),
 )
 
 rust_test(
@@ -38,7 +27,7 @@ rust_test(
         ":d2b_provider_system_minijail",
         "//packages/d2b-contracts:d2b_contracts",
         "//packages/d2b-process-conformance:d2b_process_conformance",
-    ],
+    ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
 )
 
 rust_test(
@@ -50,7 +39,44 @@ rust_test(
         ":d2b_provider_system_minijail",
         "//packages/d2b-contracts:d2b_contracts",
         "//packages/d2b-process-conformance:d2b_process_conformance",
+    ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
+)
+
+
+rust_test(
+    name = "ephemeral",
+    srcs = [
+        "tests/ephemeral.rs",
     ],
+    compile_data = ["Cargo.toml"],
+    visibility = ["//visibility:public"],
+    deps = [
+        ":d2b_provider_system_minijail",
+    ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
+)
+
+rust_test(
+    name = "platform_gate",
+    srcs = [
+        "tests/platform_gate.rs",
+    ],
+    compile_data = ["Cargo.toml"],
+    visibility = ["//visibility:public"],
+    deps = [
+        ":d2b_provider_system_minijail",
+    ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
+)
+
+rust_test(
+    name = "sandbox_compilation",
+    srcs = [
+        "tests/sandbox_compilation.rs",
+    ],
+    compile_data = ["Cargo.toml"],
+    visibility = ["//visibility:public"],
+    deps = [
+        ":d2b_provider_system_minijail",
+    ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
 )
 
 # keep

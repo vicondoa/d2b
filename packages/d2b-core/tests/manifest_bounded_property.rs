@@ -92,12 +92,24 @@ fn runfile_path(relative: &str) -> PathBuf {
             return candidate;
         }
     }
-    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .parent()
-        .expect("d2b-core has a package parent")
-        .parent()
-        .expect("d2b-core has a workspace parent")
-        .join(relative)
+    if let Some(srcdir) = std::env::var_os("TEST_SRCDIR") {
+        let workspace = std::env::var_os("TEST_WORKSPACE").unwrap_or_else(|| "_main".into());
+        let candidate = PathBuf::from(srcdir).join(workspace).join(relative);
+        if candidate.exists() {
+            return candidate;
+        }
+    }
+    let mut base = std::env::current_dir().unwrap_or_else(|_| std::env::temp_dir());
+    loop {
+        let candidate = base.join(relative);
+        if candidate.exists() {
+            return candidate;
+        }
+        if !base.pop() {
+            break;
+        }
+    }
+    PathBuf::from(relative)
 }
 
 fn generated_case(rng: &mut XorShift64, case: usize) -> Vec<u8> {

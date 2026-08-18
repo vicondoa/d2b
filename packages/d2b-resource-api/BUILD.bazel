@@ -1,6 +1,6 @@
+load("@crates//:defs.bzl", "all_crate_deps")
 load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test")
 
-# gazelle:ignore
 
 exports_files(
     [
@@ -20,24 +20,7 @@ exports_files(
     visibility = ["//visibility:public"],
 )
 
-d2b_resource_api_srcs = [
-    "src/adapter.rs",
-    "src/admission.rs",
-    "src/authz.rs",
-    "src/client.rs",
-    "src/emergency_gate.rs",
-    "src/error.rs",
-    "src/generated/d2b_resource_v3_ttrpc.rs",
-    "src/generated/mod.rs",
-    "src/identity.rs",
-    "src/lib.rs",
-    "src/metrics.rs",
-    "src/quota_gate.rs",
-    "src/service.rs",
-    "src/store.rs",
-    "src/watch.rs",
-    "src/zone_service.rs",
-]
+d2b_resource_api_srcs = glob(["src/**/*.rs"], allow_empty = True)
 
 rust_library(
     name = "d2b_resource_api",
@@ -56,12 +39,7 @@ rust_library(
         "//packages/d2b-resource-store:d2b_resource_store",
         "//packages/d2b-resource-store-redb:d2b_resource_store_redb",
         "//packages/d2b-telemetry:d2b_telemetry",
-        "@crates//:protobuf",
-        "@crates//:serde_json",
-        "@crates//:sha2",
-        "@crates//:tokio",
-        "@crates//:ttrpc",
-    ],
+    ] + all_crate_deps(normal = True, cargo_only = True),
 )
 
 rust_library(
@@ -82,12 +60,7 @@ rust_library(
         "//packages/d2b-resource-store:d2b_resource_store",
         "//packages/d2b-resource-store-redb:d2b_resource_store_redb",
         "//packages/d2b-telemetry:d2b_telemetry",
-        "@crates//:protobuf",
-        "@crates//:serde_json",
-        "@crates//:sha2",
-        "@crates//:tokio",
-        "@crates//:ttrpc",
-    ],
+    ] + all_crate_deps(normal = True, cargo_only = True),
 )
 
 rust_test(
@@ -117,9 +90,7 @@ rust_test(
     crate = ":d2b_resource_api",
     deps = [
         "//packages/d2b-resource-store:d2b_resource_store",
-        "@crates//:protobuf",
-        "@crates//:tokio",
-    ],
+    ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
 )
 
 # keep

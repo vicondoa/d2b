@@ -1,46 +1,13 @@
+load("@crates//:defs.bzl", "all_crate_deps")
 load("@rules_rust//rust:defs.bzl", "rust_binary", "rust_library", "rust_test")
 
-# gazelle:ignore
 
 exports_files(
     ["BUILD.bazel"],
     visibility = ["//visibility:public"],
 )
 
-d2b_host_srcs = [
-    "src/audio_argv.rs",
-    "src/bridge_port.rs",
-    "src/cgroup.rs",
-    "src/ch_argv.rs",
-    "src/devices.rs",
-    "src/dnsmasq.rs",
-    "src/gpu_argv.rs",
-    "src/hardlink_farm.rs",
-    "src/host_generation.rs",
-    "src/host_prep_dag.rs",
-    "src/ifname.rs",
-    "src/ioctl_policy.rs",
-    "src/lib.rs",
-    "src/media.rs",
-    "src/modules.rs",
-    "src/netlink.rs",
-    "src/nftables.rs",
-    "src/otel_host_bridge_argv.rs",
-    "src/ownership_matrix.rs",
-    "src/qemu_media_argv.rs",
-    "src/routes.rs",
-    "src/runner_argv_regenerator.rs",
-    "src/runner_process.rs",
-    "src/seccomp.rs",
-    "src/ssh_keygen.rs",
-    "src/swtpm_argv.rs",
-    "src/usbip_argv.rs",
-    "src/video_argv.rs",
-    "src/virtiofsd_argv.rs",
-    "src/volume_effect_adapter.rs",
-    "src/vsock_relay_argv.rs",
-    "src/wayland_proxy_argv.rs",
-]
+d2b_host_srcs = glob(["src/**/*.rs"], allow_empty = True)
 
 rust_library(
     name = "d2b_host",
@@ -61,15 +28,7 @@ rust_library(
         "//packages/d2b-contracts:d2b_contracts",
         "//packages/d2b-core:d2b_core",
         "//packages/d2b-host-argv:d2b_host_argv",
-        "@crates//:libc",
-        "@crates//:miniz_oxide",
-        "@crates//:nix",
-        "@crates//:rustix",
-        "@crates//:schemars",
-        "@crates//:serde",
-        "@crates//:serde_json",
-        "@crates//:sha2",
-    ],
+    ] + all_crate_deps(normal = True, cargo_only = True),
 )
 
 rust_library(
@@ -92,15 +51,7 @@ rust_library(
         "//packages/d2b-contracts:d2b_contracts_test_support",
         "//packages/d2b-core:d2b_core_test_support",
         "//packages/d2b-host-argv:d2b_host_argv",
-        "@crates//:libc",
-        "@crates//:miniz_oxide",
-        "@crates//:nix",
-        "@crates//:rustix",
-        "@crates//:schemars",
-        "@crates//:serde",
-        "@crates//:serde_json",
-        "@crates//:sha2",
-    ],
+    ] + all_crate_deps(normal = True, cargo_only = True),
 )
 
 rust_library(
@@ -124,15 +75,7 @@ rust_library(
         "//packages/d2b-contracts:d2b_contracts_test_support",
         "//packages/d2b-core:d2b_core_test_support",
         "//packages/d2b-host-argv:d2b_host_argv",
-        "@crates//:libc",
-        "@crates//:miniz_oxide",
-        "@crates//:nix",
-        "@crates//:rustix",
-        "@crates//:schemars",
-        "@crates//:serde",
-        "@crates//:serde_json",
-        "@crates//:sha2",
-    ],
+    ] + all_crate_deps(normal = True, cargo_only = True),
 )
 
 rust_binary(
@@ -143,13 +86,7 @@ rust_binary(
     deps = [
         ":d2b_host",
         "//packages/d2b-contracts:d2b_contracts",
-        "@crates//:libc",
-        "@crates//:nix",
-        "@crates//:rustix",
-        "@crates//:serde",
-        "@crates//:serde_json",
-        "@crates//:sha2",
-    ],
+    ] + all_crate_deps(normal = True, cargo_only = True),
 )
 
 rust_test(
@@ -162,9 +99,7 @@ rust_test(
     visibility = ["//visibility:public"],
     deps = [
         ":d2b_host_test_support",
-        "@crates//:serde_json",
-        "@crates//:tempfile",
-    ],
+    ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
 )
 
 rust_test(
@@ -176,9 +111,7 @@ rust_test(
     rustc_env = {"CARGO_BIN_EXE_d2b-activation-helper": "$(rootpath :d2b-activation-helper)"},
     visibility = ["//visibility:public"],
     deps = [
-        "@crates//:nix",
-        "@crates//:tempfile",
-    ],
+    ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
 )
 
 rust_test(
@@ -197,7 +130,7 @@ rust_test(
     rustc_env = {"CARGO_BIN_EXE_d2b-activation-helper": "$(rootpath :d2b-activation-helper)"},
     tags = ["local"],
     visibility = ["//visibility:public"],
-    deps = ["@crates//:serde_json"],
+    deps = [] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
 )
 
 rust_test(
@@ -209,9 +142,7 @@ rust_test(
     rustc_env = {"CARGO_BIN_EXE_d2b-activation-helper": "$(rootpath :d2b-activation-helper)"},
     visibility = ["//visibility:public"],
     deps = [
-        "@crates//:tokio",
-        "@crates//:ttrpc",
-    ],
+    ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
 )
 
 rust_test(
@@ -222,7 +153,7 @@ rust_test(
     deps = [
         ":d2b_host_test_support",
         "//packages/d2b-contracts:d2b_contracts_test_support",
-    ],
+    ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
 )
 
 rust_test(
@@ -239,10 +170,7 @@ rust_test(
     },
     rustc_env = {"CARGO_BIN_EXE_d2b-activation-helper": "$(rootpath :d2b-activation-helper)"},
     deps = [
-        "@crates//:nix",
-        "@crates//:serde_json",
-        "@crates//:tempfile",
-    ],
+    ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
 )
 
 # keep

@@ -1,6 +1,6 @@
+load("@crates//:defs.bzl", "all_crate_deps")
 load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test")
 
-# gazelle:ignore
 
 exports_files(
     ["BUILD.bazel"],
@@ -9,9 +9,7 @@ exports_files(
 
 rust_library(
     name = "d2b_contract_tests",
-    srcs = [
-        "src/lib.rs",
-    ],
+    srcs = glob(["src/**/*.rs"], allow_empty = True),
     compile_data = ["Cargo.toml"],
     data = [
         "//:Cargo.toml",
@@ -20,9 +18,7 @@ rust_library(
     visibility = ["//visibility:public"],
     deps = [
         "//packages/d2b-core:d2b_core",
-        "@crates//:serde",
-        "@crates//:serde_json",
-    ],
+    ] + all_crate_deps(normal = True, cargo_only = True),
 )
 
 rust_test(
@@ -30,7 +26,7 @@ rust_test(
     srcs = ["tests/credential_audit.rs"],
     compile_data = ["Cargo.toml"],
     visibility = ["//visibility:public"],
-    deps = ["//packages/d2b-contracts:d2b_contracts"],
+    deps = ["//packages/d2b-contracts:d2b_contracts"] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
 )
 
 rust_test(
@@ -40,8 +36,7 @@ rust_test(
     visibility = ["//visibility:public"],
     deps = [
         "//packages/d2b-contracts:d2b_contracts",
-        "@crates//:serde_json",
-    ],
+    ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
 )
 
 rust_test(
@@ -51,9 +46,7 @@ rust_test(
     visibility = ["//visibility:public"],
     deps = [
         ":d2b_contract_tests",
-        "@crates//:regex",
-        "@crates//:serde_json",
-    ],
+    ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
 )
 
 rust_test(
@@ -65,7 +58,7 @@ rust_test(
     deps = [
         ":d2b_contract_tests",
         "//packages/d2b-host:d2b_host",
-    ],
+    ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
 )
 
 rust_test(
@@ -76,8 +69,7 @@ rust_test(
     deps = [
         ":d2b_contract_tests",
         "//packages/d2b-core:d2b_core",
-        "@crates//:regex",
-    ],
+    ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
 )
 
 rust_test(
@@ -88,8 +80,7 @@ rust_test(
     deps = [
         ":d2b_contract_tests",
         "//packages/d2b-core:d2b_core",
-        "@crates//:regex",
-    ],
+    ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
 )
 
 rust_test(
@@ -98,7 +89,7 @@ rust_test(
     compile_data = ["Cargo.toml"],
     tags = ["manual"],
     visibility = ["//visibility:public"],
-    deps = [":d2b_contract_tests"],
+    deps = [":d2b_contract_tests"] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
 )
 
 rust_test(
@@ -109,8 +100,7 @@ rust_test(
     deps = [
         ":d2b_contract_tests",
         "//packages/d2b-core:d2b_core",
-        "@crates//:regex",
-    ],
+    ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
 )
 
 rust_test(
@@ -122,8 +112,7 @@ rust_test(
     deps = [
         ":d2b_contract_tests",
         "//packages/d2b-core:d2b_core",
-        "@crates//:regex",
-    ],
+    ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
 )
 
 rust_test(
@@ -134,9 +123,7 @@ rust_test(
     deps = [
         ":d2b_contract_tests",
         "//packages/d2b-core:d2b_core",
-        "@crates//:regex",
-        "@crates//:serde_json",
-    ],
+    ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
 )
 
 rust_test(
@@ -147,8 +134,7 @@ rust_test(
     deps = [
         ":d2b_contract_tests",
         "//packages/d2b-core:d2b_core",
-        "@crates//:regex",
-    ],
+    ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
 )
 
 rust_test(
@@ -163,8 +149,7 @@ rust_test(
     visibility = ["//visibility:public"],
     deps = [
         ":d2b_contract_tests",
-        "@crates//:serde_json",
-    ],
+    ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
 )
 
 rust_test(
@@ -174,9 +159,7 @@ rust_test(
     visibility = ["//visibility:public"],
     deps = [
         ":d2b_contract_tests",
-        "@crates//:regex",
-        "@crates//:serde_json",
-    ],
+    ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
 )
 
 rust_test(
@@ -186,9 +169,7 @@ rust_test(
     visibility = ["//visibility:public"],
     deps = [
         ":d2b_contract_tests",
-        "@crates//:regex",
-        "@crates//:serde_json",
-    ],
+    ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
 )
 
 rust_test(
@@ -199,7 +180,7 @@ rust_test(
     env_inherit = ["PATH"],
     tags = ["local"],
     visibility = ["//visibility:public"],
-    deps = [":d2b_contract_tests"],
+    deps = [":d2b_contract_tests"] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
 )
 
 rust_test(
@@ -209,8 +190,7 @@ rust_test(
     visibility = ["//visibility:public"],
     deps = [
         ":d2b_contract_tests",
-        "@crates//:regex",
-    ],
+    ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
 )
 
 rust_test(
@@ -218,7 +198,7 @@ rust_test(
     srcs = ["tests/policy_clipboard.rs"],
     compile_data = ["Cargo.toml"],
     visibility = ["//visibility:public"],
-    deps = [":d2b_contract_tests"],
+    deps = [":d2b_contract_tests"] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
 )
 
 rust_test(
@@ -228,8 +208,7 @@ rust_test(
     visibility = ["//visibility:public"],
     deps = [
         ":d2b_contract_tests",
-        "@crates//:regex",
-    ],
+    ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
 )
 
 rust_test(
@@ -239,8 +218,7 @@ rust_test(
     visibility = ["//visibility:public"],
     deps = [
         ":d2b_contract_tests",
-        "@crates//:regex",
-    ],
+    ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
 )
 
 rust_test(
@@ -250,8 +228,7 @@ rust_test(
     visibility = ["//visibility:public"],
     deps = [
         ":d2b_contract_tests",
-        "@crates//:regex",
-    ],
+    ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
 )
 
 rust_test(
@@ -268,10 +245,7 @@ rust_test(
     visibility = ["//visibility:public"],
     deps = [
         ":d2b_contract_tests",
-        "@crates//:serde",
-        "@crates//:serde_json",
-        "@crates//:sha2",
-    ],
+    ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
 )
 
 rust_test(
@@ -281,8 +255,7 @@ rust_test(
     visibility = ["//visibility:public"],
     deps = [
         ":d2b_contract_tests",
-        "@crates//:regex",
-    ],
+    ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
 )
 
 rust_test(
@@ -292,8 +265,7 @@ rust_test(
     visibility = ["//visibility:public"],
     deps = [
         ":d2b_contract_tests",
-        "@crates//:serde_json",
-    ],
+    ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
 )
 
 rust_test(
@@ -315,9 +287,7 @@ rust_test(
     visibility = ["//visibility:public"],
     deps = [
         ":d2b_contract_tests",
-        "@crates//:regex",
-        "@crates//:serde_json",
-    ],
+    ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
 )
 
 rust_test(
@@ -327,8 +297,7 @@ rust_test(
     visibility = ["//visibility:public"],
     deps = [
         ":d2b_contract_tests",
-        "@crates//:regex",
-    ],
+    ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
 )
 
 rust_test(
@@ -338,8 +307,7 @@ rust_test(
     visibility = ["//visibility:public"],
     deps = [
         ":d2b_contract_tests",
-        "@crates//:regex",
-    ],
+    ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
 )
 
 rust_test(
@@ -349,8 +317,7 @@ rust_test(
     visibility = ["//visibility:public"],
     deps = [
         ":d2b_contract_tests",
-        "@crates//:regex",
-    ],
+    ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
 )
 
 rust_test(
@@ -360,8 +327,7 @@ rust_test(
     visibility = ["//visibility:public"],
     deps = [
         ":d2b_contract_tests",
-        "@crates//:regex",
-    ],
+    ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
 )
 
 rust_test(
@@ -371,8 +337,7 @@ rust_test(
     visibility = ["//visibility:public"],
     deps = [
         ":d2b_contract_tests",
-        "@crates//:regex",
-    ],
+    ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
 )
 
 rust_test(
@@ -382,9 +347,7 @@ rust_test(
     visibility = ["//visibility:public"],
     deps = [
         ":d2b_contract_tests",
-        "@crates//:regex",
-        "@crates//:serde_json",
-    ],
+    ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
 )
 
 rust_test(
@@ -392,7 +355,7 @@ rust_test(
     srcs = ["tests/policy_host_realm_relay.rs"],
     compile_data = ["Cargo.toml"],
     visibility = ["//visibility:public"],
-    deps = [":d2b_contract_tests"],
+    deps = [":d2b_contract_tests"] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
 )
 
 rust_test(
@@ -400,7 +363,7 @@ rust_test(
     srcs = ["tests/policy_l3_pin.rs"],
     compile_data = ["Cargo.toml"],
     visibility = ["//visibility:public"],
-    deps = [":d2b_contract_tests"],
+    deps = [":d2b_contract_tests"] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
 )
 
 rust_test(
@@ -410,8 +373,7 @@ rust_test(
     visibility = ["//visibility:public"],
     deps = [
         ":d2b_contract_tests",
-        "@crates//:regex",
-    ],
+    ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
 )
 
 rust_test(
@@ -421,8 +383,7 @@ rust_test(
     visibility = ["//visibility:public"],
     deps = [
         ":d2b_contract_tests",
-        "@crates//:regex",
-    ],
+    ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
 )
 
 rust_test(
@@ -432,8 +393,7 @@ rust_test(
     visibility = ["//visibility:public"],
     deps = [
         ":d2b_contract_tests",
-        "@crates//:regex",
-    ],
+    ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
 )
 
 rust_test(
@@ -446,10 +406,7 @@ rust_test(
     visibility = ["//visibility:public"],
     deps = [
         ":d2b_contract_tests",
-        "@crates//:regex",
-        "@crates//:serde_json",
-        "@crates//:syn",
-    ],
+    ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
 )
 
 rust_test(
@@ -459,9 +416,7 @@ rust_test(
     visibility = ["//visibility:public"],
     deps = [
         ":d2b_contract_tests",
-        "@crates//:regex",
-        "@crates//:serde_json",
-    ],
+    ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
 )
 
 rust_test(
@@ -469,7 +424,7 @@ rust_test(
     srcs = ["tests/policy_ownership_preflight.rs"],
     compile_data = ["Cargo.toml"],
     visibility = ["//visibility:public"],
-    deps = [":d2b_contract_tests"],
+    deps = [":d2b_contract_tests"] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
 )
 
 rust_test(
@@ -479,8 +434,7 @@ rust_test(
     visibility = ["//visibility:public"],
     deps = [
         ":d2b_contract_tests",
-        "@crates//:regex",
-    ],
+    ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
 )
 
 rust_test(
@@ -493,9 +447,7 @@ rust_test(
     visibility = ["//visibility:public"],
     deps = [
         ":d2b_contract_tests",
-        "@crates//:serde_json",
-        "@crates//:sha2",
-    ],
+    ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
 )
 
 rust_test(
@@ -508,9 +460,7 @@ rust_test(
     visibility = ["//visibility:public"],
     deps = [
         ":d2b_contract_tests",
-        "@crates//:serde",
-        "@crates//:serde_json",
-    ],
+    ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
 )
 
 rust_test(
@@ -518,7 +468,7 @@ rust_test(
     srcs = ["tests/policy_provider_crates.rs"],
     compile_data = ["Cargo.toml"],
     visibility = ["//visibility:public"],
-    deps = [":d2b_contract_tests"],
+    deps = [":d2b_contract_tests"] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
 )
 
 # keep
@@ -529,10 +479,8 @@ rust_library(
     visibility = ["//visibility:public"],
     deps = [
         ":d2b_contract_tests",
-        "@crates//:regex",        "//packages/d2b-core:d2b_core",
-        "@crates//:serde",
-        "@crates//:serde_json",
-    ],
+        "//packages/d2b-core:d2b_core",
+    ] + all_crate_deps(normal = True, cargo_only = True),
 )
 
 rust_test(
@@ -546,7 +494,7 @@ rust_test(
         "Cargo.toml",
     ],
     visibility = ["//visibility:public"],
-    deps = [":d2b_contract_tests"],
+    deps = [":d2b_contract_tests"] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
 )
 
 rust_test(
@@ -556,8 +504,7 @@ rust_test(
     visibility = ["//visibility:public"],
     deps = [
         ":d2b_contract_tests",
-        "@crates//:regex",
-    ],
+    ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
 )
 
 rust_test(
@@ -567,8 +514,7 @@ rust_test(
     visibility = ["//visibility:public"],
     deps = [
         ":d2b_contract_tests",
-        "@crates//:regex",
-    ],
+    ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
 )
 
 rust_test(
@@ -578,9 +524,7 @@ rust_test(
     visibility = ["//visibility:public"],
     deps = [
         ":d2b_contract_tests",
-        "@crates//:regex",
-        "@crates//:serde_json",
-    ],
+    ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
 )
 
 rust_test(
@@ -590,8 +534,7 @@ rust_test(
     visibility = ["//visibility:public"],
     deps = [
         ":d2b_contract_tests",
-        "@crates//:regex",
-    ],
+    ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
 )
 
 rust_test(
@@ -601,8 +544,7 @@ rust_test(
     visibility = ["//visibility:public"],
     deps = [
         ":d2b_contract_tests",
-        "@crates//:regex",
-    ],
+    ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
 )
 
 rust_test(
@@ -613,7 +555,7 @@ rust_test(
     deps = [
         ":d2b_contract_tests",
         "//packages/d2b-core:d2b_core",
-    ],
+    ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
 )
 
 rust_test(
@@ -624,9 +566,7 @@ rust_test(
     deps = [
         ":d2b_contract_tests",
         "//packages/d2b-contracts:d2b_contracts",
-        "@crates//:regex",
-        "@crates//:syn",
-    ],
+    ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
 )
 
 rust_test(
@@ -636,8 +576,7 @@ rust_test(
     visibility = ["//visibility:public"],
     deps = [
         ":d2b_contract_tests",
-        "@crates//:regex",
-    ],
+    ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
 )
 
 rust_test(
@@ -646,7 +585,7 @@ rust_test(
     compile_data = ["Cargo.toml"],
     tags = ["manual"],
     visibility = ["//visibility:public"],
-    deps = [":d2b_contract_tests"],
+    deps = [":d2b_contract_tests"] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
 )
 
 rust_test(
@@ -658,7 +597,7 @@ rust_test(
     deps = [
         ":d2b_contract_tests",
         "//packages/d2b-core:d2b_core",
-    ],
+    ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
 )
 
 rust_test(
@@ -669,8 +608,7 @@ rust_test(
     deps = [
         ":d2b_contract_tests",
         "//packages/d2b-core:d2b_core",
-        "@crates//:serde_json",
-    ],
+    ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
 )
 
 rust_test(
@@ -680,8 +618,7 @@ rust_test(
     visibility = ["//visibility:public"],
     deps = [
         ":d2b_contract_tests",
-        "@crates//:serde_json",
-    ],
+    ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
 )
 
 rust_test(
@@ -692,9 +629,7 @@ rust_test(
     deps = [
         ":d2b_contract_tests",
         "//packages/d2b-core:d2b_core",
-        "@crates//:serde",
-        "@crates//:serde_json",
-    ],
+    ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
 )
 
 rust_test(
@@ -704,8 +639,7 @@ rust_test(
     visibility = ["//visibility:public"],
     deps = [
         ":d2b_contract_tests",
-        "@crates//:serde_json",
-    ],
+    ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
 )
 
 rust_test(
@@ -716,9 +650,7 @@ rust_test(
     deps = [
         ":d2b_contract_tests",
         "//packages/d2b-core:d2b_core",
-        "@crates//:serde",
-        "@crates//:serde_json",
-    ],
+    ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
 )
 
 rust_test(
@@ -729,8 +661,7 @@ rust_test(
     deps = [
         ":d2b_contract_tests",
         "//packages/d2b-core:d2b_core",
-        "@crates//:regex",
-    ],
+    ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
 )
 
 rust_test(
@@ -742,8 +673,7 @@ rust_test(
     deps = [
         ":d2b_contract_tests",
         "//packages/d2b-core:d2b_core",
-        "@crates//:serde_json",
-    ],
+    ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
 )
 
 rust_test(
@@ -754,10 +684,7 @@ rust_test(
     deps = [
         ":d2b_contract_tests",
         "//packages/d2b-core:d2b_core",
-        "@crates//:regex",
-        "@crates//:serde",
-        "@crates//:serde_json",
-    ],
+    ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
 )
 
 rust_test(
@@ -768,8 +695,7 @@ rust_test(
     deps = [
         ":d2b_contract_tests",
         "//packages/d2b-contracts:d2b_contracts",
-        "@crates//:serde_json",
-    ],
+    ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
 )
 
 rust_test(
@@ -777,7 +703,7 @@ rust_test(
     srcs = ["tests/usb_network_scoping.rs"],
     compile_data = ["Cargo.toml"],
     visibility = ["//visibility:public"],
-    deps = [":d2b_contract_tests"],
+    deps = [":d2b_contract_tests"] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
 )
 
 rust_test(
@@ -789,8 +715,7 @@ rust_test(
         ":d2b_contract_tests",
         "//packages/d2b-contracts:d2b_contracts",
         "//packages/d2b-core:d2b_core",
-        "@crates//:serde_json",
-    ],
+    ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
 )
 
 rust_test(
@@ -801,8 +726,7 @@ rust_test(
     deps = [
         ":d2b_contract_tests",
         "//packages/d2b-contracts:d2b_contracts",
-        "@crates//:serde_json",
-    ],
+    ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
 )
 
 rust_test(
@@ -813,8 +737,7 @@ rust_test(
     deps = [
         ":d2b_contract_tests",
         "//packages/d2b-contracts:d2b_contracts",
-        "@crates//:serde_json",
-    ],
+    ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
 )
 
 rust_test(
@@ -825,7 +748,7 @@ rust_test(
     deps = [
         ":d2b_contract_tests",
         "//packages/d2b-core:d2b_core",
-    ],
+    ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
 )
 
 rust_test(
@@ -838,7 +761,7 @@ rust_test(
         "Cargo.toml",
     ],
     visibility = ["//visibility:public"],
-    deps = ["@crates//:serde_json"],
+    deps = [] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
 )
 
 rust_test(
@@ -849,8 +772,7 @@ rust_test(
     deps = [
         ":d2b_contract_tests",
         "//packages/d2b-contracts:d2b_contracts",
-        "@crates//:serde_json",
-    ],
+    ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
 )
 
 # keep

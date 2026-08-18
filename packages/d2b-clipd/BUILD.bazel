@@ -1,6 +1,6 @@
+load("@crates//:defs.bzl", "all_crate_deps")
 load("@rules_rust//rust:defs.bzl", "rust_binary", "rust_library", "rust_test")
 
-# gazelle:ignore
 
 exports_files(
     ["BUILD.bazel"],
@@ -9,41 +9,14 @@ exports_files(
 
 rust_library(
     name = "d2b_clipd",
-    srcs = [
-        "src/audit.rs",
-        "src/fallback.rs",
-        "src/fd.rs",
-        "src/framing.rs",
-        "src/host.rs",
-        "src/lib.rs",
-        "src/niri.rs",
-        "src/notifications.rs",
-        "src/picker.rs",
-        "src/policy.rs",
-        "src/protocol.rs",
-        "src/virtual_keyboard.rs",
-        "src/wayland.rs",
-    ],
+    srcs = glob(["src/**/*.rs"], allow_empty = True),
     compile_data = ["Cargo.toml"],
     visibility = ["//visibility:public"],
     deps = [
         "//packages/d2b-core:d2b_core",
         "//packages/d2b-realm-core:d2b_realm_core",
-        "@crates//:command-fds",
-        "@crates//:log",
-        "@crates//:notify-rust",
-        "@crates//:rustix",
-        "@crates//:serde",
-        "@crates//:serde_json",
-        "@crates//:sha2",
-        "@crates//:thiserror",
-        "@crates//:wayland-client",
-        "@crates//:wayland-protocols",
-        "@crates//:wayland-protocols-misc",
-        "@crates//:wayland-protocols-wlr",        "@crates//:env_logger",
-        "@crates//:html2text",
-        "@crates//:nix",
-    ],
+
+    ] + all_crate_deps(normal = True, cargo_only = True),
 )
 
 rust_binary(
@@ -52,10 +25,7 @@ rust_binary(
     compile_data = ["Cargo.toml"],
     visibility = ["//visibility:public"],
     deps = [
-        "@crates//:env_logger",
-        "@crates//:rustix",
-        "@crates//:wayland-client",
-    ],
+    ] + all_crate_deps(normal = True, cargo_only = True),
 )
 
 rust_binary(
@@ -67,14 +37,7 @@ rust_binary(
         ":d2b_clipd",
         "//packages/d2b-core:d2b_core",
         "//packages/d2b-realm-core:d2b_realm_core",
-        "@crates//:env_logger",
-        "@crates//:html2text",
-        "@crates//:log",
-        "@crates//:nix",
-        "@crates//:rustix",
-        "@crates//:serde",
-        "@crates//:serde_json",
-    ],
+    ] + all_crate_deps(normal = True, cargo_only = True),
 )
 
 rust_test(
@@ -88,7 +51,7 @@ rust_test(
     env = {"CARGO_BIN_EXE_d2b-clipd": "$(rootpath :d2b-clipd)"},
     rustc_env = {"CARGO_BIN_EXE_d2b-clipd": "$(rootpath :d2b-clipd)"},
     visibility = ["//visibility:public"],
-    deps = ["@crates//:serde_json"],
+    deps = [] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
 )
 
 rust_test(
@@ -99,7 +62,7 @@ rust_test(
     env = {"CARGO_BIN_EXE_d2b-clipd": "$(rootpath :d2b-clipd)"},
     rustc_env = {"CARGO_BIN_EXE_d2b-clipd": "$(rootpath :d2b-clipd)"},
     visibility = ["//visibility:public"],
-    deps = ["@crates//:rustix"],
+    deps = [] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
 )
 
 rust_test(
@@ -109,7 +72,7 @@ rust_test(
     data = [":d2b-clipd"],
     env = {"CARGO_BIN_EXE_d2b-clipd": "$(rootpath :d2b-clipd)"},
     rustc_env = {"CARGO_BIN_EXE_d2b-clipd": "$(rootpath :d2b-clipd)"},
-    deps = ["@crates//:serde_json"],
+    deps = [] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
 )
 
 rust_test(

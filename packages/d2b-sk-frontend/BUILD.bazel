@@ -1,3 +1,4 @@
+load("@crates//:defs.bzl", "all_crate_deps")
 load("@rules_rust//rust:defs.bzl", "rust_binary", "rust_test")
 
 exports_files(
@@ -7,19 +8,12 @@ exports_files(
 
 rust_binary(
     name = "d2b-sk-frontend",
-    srcs = [
-        "src/framing.rs",
-        "src/main.rs",
-        "src/uhid.rs",
-        "src/vsock.rs",
-    ],
+    srcs = glob(["src/**/*.rs"], allow_empty = True),
+    crate_root = "src/main.rs",
     compile_data = ["Cargo.toml"],
     visibility = ["//visibility:public"],
     deps = [
-        "@crates//:libc",
-        "@crates//:tokio",
-        "@crates//:tokio-vsock",
-    ],
+    ] + all_crate_deps(normal = True, cargo_only = True),
 )
 
 rust_test(

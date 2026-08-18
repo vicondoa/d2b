@@ -1,3 +1,4 @@
+load("@crates//:defs.bzl", "all_crate_deps")
 load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test")
 
 exports_files(
@@ -7,13 +8,10 @@ exports_files(
 
 rust_library(
     name = "d2b_process",
-    srcs = [
-        "src/backend.rs",
-        "src/lib.rs",
-    ],
+    srcs = glob(["src/**/*.rs"], allow_empty = True),
     compile_data = ["Cargo.toml"],
     visibility = ["//visibility:public"],
-    deps = ["//packages/d2b-process-conformance:d2b_process_conformance"],
+    deps = ["//packages/d2b-process-conformance:d2b_process_conformance"] + all_crate_deps(normal = True, cargo_only = True),
 )
 
 rust_test(

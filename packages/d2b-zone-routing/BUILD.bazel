@@ -1,26 +1,20 @@
+load("@crates//:defs.bzl", "all_crate_deps")
 load("@rules_rust//rust:defs.bzl", "rust_binary", "rust_library", "rust_test")
 
-# gazelle:ignore
 
 exports_files(
     ["BUILD.bazel"],
     visibility = ["//visibility:public"],
 )
 
-d2b_zone_routing_srcs = [
-    "src/engine.rs",
-    "src/lib.rs",
-    "src/resolver.rs",
-    "src/router.rs",
-    "src/service.rs",
-]
+d2b_zone_routing_srcs = glob(["src/**/*.rs"], allow_empty = True)
 
 rust_library(
     name = "d2b_zone_routing",
     srcs = d2b_zone_routing_srcs,
     compile_data = ["Cargo.toml"],
     visibility = ["//visibility:public"],
-    deps = ["//packages/d2b-contracts:d2b_contracts"],
+    deps = ["//packages/d2b-contracts:d2b_contracts"] + all_crate_deps(normal = True, cargo_only = True),
 )
 
 rust_library(
@@ -29,7 +23,7 @@ rust_library(
     compile_data = ["Cargo.toml"],
     crate_name = "d2b_zone_routing",
     visibility = ["//visibility:public"],
-    deps = ["//packages/d2b-contracts:d2b_contracts_test_support"],
+    deps = ["//packages/d2b-contracts:d2b_contracts_test_support"] + all_crate_deps(normal = True, cargo_only = True),
 )
 
 rust_test(
@@ -40,7 +34,7 @@ rust_test(
     deps = [
         ":d2b_zone_routing",
         "//packages/d2b-contracts:d2b_contracts",
-    ],
+    ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
 )
 
 rust_binary(
@@ -52,7 +46,7 @@ rust_binary(
     deps = [
         ":d2b_zone_routing",
         "//packages/d2b-contracts:d2b_contracts",
-    ],
+    ] + all_crate_deps(normal = True, cargo_only = True),
 )
 
 rust_test(

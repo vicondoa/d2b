@@ -1,6 +1,6 @@
+load("@crates//:defs.bzl", "all_crate_deps")
 load("@rules_rust//rust:defs.bzl", "rust_binary", "rust_library", "rust_test")
 
-# gazelle:ignore
 
 exports_files(
     ["BUILD.bazel"],
@@ -9,39 +9,14 @@ exports_files(
 
 rust_library(
     name = "d2b_wayland_proxy",
-    srcs = [
-        "src/attribution.rs",
-        "src/bridge.rs",
-        "src/clipboard.rs",
-        "src/decoration.rs",
-        "src/diag.rs",
-        "src/dmabuf.rs",
-        "src/filter.rs",
-        "src/identity.rs",
-        "src/lib.rs",
-        "src/policy.rs",
-        "src/readiness.rs",
-        "src/terminal.rs",
-    ],
+    srcs = glob(["src/**/*.rs"], allow_empty = True),
     compile_data = ["Cargo.toml"],
     visibility = ["//visibility:public"],
     deps = [
         "//packages/d2b-core:d2b_core",
         "//packages/d2b-realm-core:d2b_realm_core",
-        "@crates//:getrandom-0.2.17",
-        "@crates//:log",
-        "@crates//:nix",
-        "@crates//:rustix",
-        "@crates//:serde",
-        "@crates//:serde_json",
-        "@crates//:sha2",
-        "@crates//:thiserror",
-        "@crates//:uapi",
-        "@crates//:wl-proxy",        "@crates//:clap",
-        "@crates//:libc",
-        "@crates//:env_logger",
-        "@crates//:smallvec",
-    ],
+
+    ] + all_crate_deps(normal = True, cargo_only = True),
 )
 
 rust_binary(
@@ -57,13 +32,7 @@ rust_binary(
         ":d2b_wayland_proxy",
         "//packages/d2b-core:d2b_core",
         "//packages/d2b-realm-core:d2b_realm_core",
-        "@crates//:clap",
-        "@crates//:env_logger",
-        "@crates//:libc",
-        "@crates//:log",
-        "@crates//:rustix",
-        "@crates//:smallvec",
-    ],
+    ] + all_crate_deps(normal = True, cargo_only = True),
 )
 
 rust_test(
@@ -73,7 +42,7 @@ rust_test(
     deps = [
         "//packages/d2b-core:d2b_core",
         "//packages/d2b-realm-core:d2b_realm_core",
-    ],
+    ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
 )
 
 rust_test(

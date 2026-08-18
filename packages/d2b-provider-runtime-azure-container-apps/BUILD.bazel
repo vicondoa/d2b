@@ -1,3 +1,4 @@
+load("@crates//:defs.bzl", "all_crate_deps")
 load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test")
 
 exports_files(
@@ -7,28 +8,13 @@ exports_files(
 
 rust_library(
     name = "d2b_provider_runtime_azure_container_apps",
-    srcs = [
-        "src/audit.rs",
-        "src/controller.rs",
-        "src/deployment_service.rs",
-        "src/gateway_compat.rs",
-        "src/lib.rs",
-        "src/metrics.rs",
-    ],
+    srcs = glob(["src/**/*.rs"], allow_empty = True),
     compile_data = ["Cargo.toml"],
     deps = [
         "//packages/d2b-contracts:d2b_contracts",
         "//packages/d2b-realm-core:d2b_realm_core",
         "//packages/d2b-realm-provider:d2b_realm_provider",
-        "@crates//:serde",
-        "@crates//:serde_json",
-        "@crates//:sha2",
-        "@crates//:tokio",
-        "@crates//:azure_core",
-        "@crates//:azure_identity",
-        "@crates//:reqwest",
-        "@crates//:tracing",
-    ],
+    ] + all_crate_deps(normal = True, cargo_only = True),
     proc_macro_deps = [
         "@crates//:async-trait",
     ],
@@ -40,6 +26,19 @@ rust_test(
     srcs = ["tests/scaffold.rs"],
     compile_data = ["Cargo.toml"],
     visibility = ["//visibility:public"],
+)
+
+
+rust_test(
+    name = "provider_lifecycle",
+    srcs = [
+        "tests/provider_lifecycle.rs",
+    ],
+    compile_data = ["Cargo.toml"],
+    visibility = ["//visibility:public"],
+    deps = [
+        ":d2b_provider_runtime_azure_container_apps",
+    ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
 )
 
 # keep

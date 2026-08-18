@@ -57,7 +57,9 @@ mod manifest_v04_roundtrip {
                     return candidate;
                 }
             }
-            PathBuf::from(env!("CARGO_MANIFEST_DIR")).join(relative)
+            std::env::current_dir()
+                .unwrap_or_else(|_| std::env::temp_dir())
+                .join(relative)
         }
     }
 

@@ -85,9 +85,10 @@ fn installer_bundle_resolver(public_manifest_path: &str) -> BundleResolver {
 
 #[cfg(not(feature = "layer1-bootstrap"))]
 fn writable_artifact_path(name: &str) -> PathBuf {
-    let base = std::env::var_os("CARGO_TARGET_TMPDIR")
+    let base = std::env::var_os("TEST_TMPDIR")
+        .or_else(|| std::env::var_os("CARGO_TARGET_TMPDIR"))
         .map(PathBuf::from)
-        .unwrap_or_else(|| PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("target"));
+        .unwrap_or_else(|| PathBuf::from("target"));
     base.join("w15-install-negative").join(name)
 }
 

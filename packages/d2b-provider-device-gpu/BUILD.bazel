@@ -1,6 +1,6 @@
+load("@crates//:defs.bzl", "all_crate_deps")
 load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test")
 
-# gazelle:ignore
 
 exports_files(
     ["BUILD.bazel"],
@@ -9,31 +9,12 @@ exports_files(
 
 rust_library(
     name = "d2b_provider_device_gpu",
-    srcs = [
-        "src/arbitration.rs",
-        "src/audit.rs",
-        "src/authority.rs",
-        "src/controller.rs",
-        "src/descriptor.rs",
-        "src/effects.rs",
-        "src/lib.rs",
-        "src/probe.rs",
-        "src/process.rs",
-        "src/production.rs",
-        "src/settings.rs",
-        "src/status.rs",
-        "src/telemetry.rs",
-        "src/wire.rs",
-        "src/worker_gpu.rs",
-        "src/worker_video.rs",
-        "src/workers.rs",
-    ],
+    srcs = glob(["src/**/*.rs"], allow_empty = True),
     compile_data = ["Cargo.toml"],
     visibility = ["//visibility:public"],
     deps = [
         "//packages/d2b-contracts:d2b_contracts",
-        "@crates//:serde",
-    ],
+    ] + all_crate_deps(normal = True, cargo_only = True),
 )
 
 rust_test(
@@ -44,7 +25,7 @@ rust_test(
     deps = [
         ":d2b_provider_device_gpu",
         "//packages/d2b-contracts:d2b_contracts",
-    ],
+    ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
 )
 
 rust_test(
@@ -55,8 +36,7 @@ rust_test(
     deps = [
         ":d2b_provider_device_gpu",
         "//packages/d2b-contracts:d2b_contracts",
-        "@crates//:serde_json",
-    ],
+    ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
 )
 
 rust_test(
@@ -67,7 +47,7 @@ rust_test(
     deps = [
         ":d2b_provider_device_gpu",
         "//packages/d2b-contracts:d2b_contracts",
-    ],
+    ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
 )
 
 rust_test(
@@ -75,7 +55,56 @@ rust_test(
     srcs = ["tests/wire_constant_snapshot.rs"],
     compile_data = ["Cargo.toml"],
     visibility = ["//visibility:public"],
-    deps = [":d2b_provider_device_gpu"],
+    deps = [":d2b_provider_device_gpu"] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
+)
+
+
+rust_test(
+    name = "authority_lifecycle",
+    srcs = [
+        "tests/authority_lifecycle.rs",
+    ],
+    compile_data = ["Cargo.toml"],
+    visibility = ["//visibility:public"],
+    deps = [
+        ":d2b_provider_device_gpu",
+    ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
+)
+
+rust_test(
+    name = "probe",
+    srcs = [
+        "tests/probe.rs",
+    ],
+    compile_data = ["Cargo.toml"],
+    visibility = ["//visibility:public"],
+    deps = [
+        ":d2b_provider_device_gpu",
+    ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
+)
+
+rust_test(
+    name = "provider_lifecycle",
+    srcs = [
+        "integration/provider_lifecycle.rs",
+    ],
+    compile_data = ["Cargo.toml"],
+    visibility = ["//visibility:public"],
+    deps = [
+        ":d2b_provider_device_gpu",
+    ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
+)
+
+rust_test(
+    name = "worker_contract",
+    srcs = [
+        "tests/worker_contract.rs",
+    ],
+    compile_data = ["Cargo.toml"],
+    visibility = ["//visibility:public"],
+    deps = [
+        ":d2b_provider_device_gpu",
+    ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
 )
 
 # keep

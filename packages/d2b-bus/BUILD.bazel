@@ -1,6 +1,6 @@
+load("@crates//:defs.bzl", "all_crate_deps")
 load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test")
 
-# gazelle:ignore
 exports_files(
     ["BUILD.bazel"],
     visibility = ["//visibility:public"],
@@ -24,36 +24,7 @@ filegroup(
     visibility = ["//visibility:public"],
 )
 
-d2b_bus_srcs = [
-    "src/audit.rs",
-    "src/authorization.rs",
-    "src/driver.rs",
-    "src/engine.rs",
-    "src/error.rs",
-    "src/lib.rs",
-    "src/lifecycle.rs",
-    "src/metrics.rs",
-    "src/operations.rs",
-    "src/production_rss.rs",
-    "src/registry.rs",
-    "src/relay.rs",
-    "src/router.rs",
-    "src/routing.rs",
-    "src/service_router.rs",
-    "src/session/contract.rs",
-    "src/session/enrollment.rs",
-    "src/session/mod.rs",
-    "src/session/noise_vectors.rs",
-    "src/session/prologue.rs",
-    "src/session/zone_link.rs",
-    "src/session_seam_tests.rs",
-    "src/streams.rs",
-    "src/transport/credit.rs",
-    "src/transport/mod.rs",
-    "src/transport/unix.rs",
-    "src/wire.rs",
-    "src/zone_route.rs",
-]
+d2b_bus_srcs = glob(["src/**/*.rs"], allow_empty = True)
 
 d2b_bus_deps = [
     "//packages/d2b-audit:d2b_audit",
@@ -63,11 +34,6 @@ d2b_bus_deps = [
     "//packages/d2b-session:d2b_session",
     "//packages/d2b-session-unix:d2b_session_unix",
     "//packages/d2b-telemetry:d2b_telemetry",
-    "@crates//:getrandom-0.3.4",
-    "@crates//:serde_json",
-    "@crates//:sha2",
-    "@crates//:snow",
-    "@crates//:tokio",
 ]
 
 # keep
@@ -82,7 +48,7 @@ rust_library(
         "@crates//:async-trait",
     ],
     visibility = ["//visibility:public"],
-    deps = d2b_bus_deps,
+    deps = d2b_bus_deps + all_crate_deps(normal = True, cargo_only = True),
 )
 
 rust_library(
@@ -98,7 +64,7 @@ rust_library(
         "@crates//:async-trait",
     ],
     visibility = ["//visibility:public"],
-    deps = d2b_bus_deps,
+    deps = d2b_bus_deps + all_crate_deps(normal = True, cargo_only = True),
 )
 
 rust_test(
@@ -114,10 +80,7 @@ rust_test(
         "//packages/d2b-resource-api:d2b_resource_api",
         "//packages/d2b-resource-store:d2b_resource_store",
         "//packages/d2b-resource-store-redb:d2b_resource_store_redb",
-        "@crates//:serde_json",
-        "@crates//:tempfile",
-        "@crates//:tokio",
-    ],
+    ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
 )
 
 rust_test(
@@ -135,10 +98,7 @@ rust_test(
     tags = ["local"],
     visibility = ["//visibility:public"],
     deps = [
-        "@crates//:quote",
-        "@crates//:serde_json",
-        "@crates//:syn",
-    ],
+    ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
 )
 
 rust_test(
@@ -155,8 +115,5 @@ rust_test(
         "//packages/d2b-resource-store:d2b_resource_store",
         "//packages/d2b-resource-store-redb:d2b_resource_store_redb",
         "//packages/d2b-telemetry:d2b_telemetry",
-        "@crates//:serde_json",
-        "@crates//:tempfile",
-        "@crates//:tokio",
-    ],
+    ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
 )

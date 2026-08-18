@@ -1,35 +1,19 @@
+load("@crates//:defs.bzl", "all_crate_deps")
 load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test")
 
 exports_files(["BUILD.bazel"], visibility = ["//visibility:public"])
 
 # keep
-# gazelle:ignore
 
 rust_library(
     name = "d2b_provider_system_core",
-    srcs = [
-        "src/audit.rs",
-        "src/bootstrap.rs",
-        "src/error.rs",
-        "src/handler_status.rs",
-        "src/host.rs",
-        "src/host_process_audit.rs",
-        "src/host_reconciler.rs",
-        "src/host_status.rs",
-        "src/lib.rs",
-        "src/manifest.rs",
-        "src/nss.rs",
-        "src/ownership.rs",
-        "src/testing.rs",
-        "src/user.rs",
-    ],
+    srcs = glob(["src/**/*.rs"], allow_empty = True),
     compile_data = ["Cargo.toml"],
     visibility = ["//visibility:public"],
     deps = [
         "//packages/d2b-contracts:d2b_contracts",
-        "@crates//:serde",
-        "@crates//:serde_json",        "@crates//:sha2",
-    ],
+
+    ] + all_crate_deps(normal = True, cargo_only = True),
 )
 
 rust_test(
@@ -40,8 +24,7 @@ rust_test(
     deps = [
         ":d2b_provider_system_core",
         "//packages/d2b-contracts:d2b_contracts",
-        "@crates//:serde_json",
-    ],
+    ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
 )
 
 rust_test(
@@ -57,9 +40,7 @@ rust_test(
     deps = [
         ":d2b_provider_system_core",
         "//packages/d2b-contracts:d2b_contracts",
-        "@crates//:serde",
-        "@crates//:serde_json",
-    ],
+    ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
 )
 
 rust_test(
@@ -70,8 +51,7 @@ rust_test(
     deps = [
         ":d2b_provider_system_core",
         "//packages/d2b-contracts:d2b_contracts",
-        "@crates//:serde_json",
-    ],
+    ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
 )
 
 rust_test(
@@ -82,7 +62,7 @@ rust_test(
     deps = [
         ":d2b_provider_system_core",
         "//packages/d2b-contracts:d2b_contracts",
-    ],
+    ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
 )
 
 rust_test(
@@ -93,16 +73,40 @@ rust_test(
     deps = [
         ":d2b_provider_system_core",
         "//packages/d2b-contracts:d2b_contracts",
-        "@crates//:serde_json",
-    ],
+    ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
 )
 
 rust_test(
     name = "d2b_provider_system_core_test",
     compile_data = ["Cargo.toml"],
     crate = ":d2b_provider_system_core",
-    deps = ["@crates//:serde_json"],
+    deps = [] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
 )
+
+rust_test(
+    name = "provider_boundary",
+    srcs = [
+        "tests/provider_boundary.rs",
+    ],
+    compile_data = ["Cargo.toml"],
+    visibility = ["//visibility:public"],
+    deps = [
+        ":d2b_provider_system_core",
+    ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
+)
+
+rust_test(
+    name = "reconcile_audit",
+    srcs = [
+        "tests/reconcile_audit.rs",
+    ],
+    compile_data = ["Cargo.toml"],
+    visibility = ["//visibility:public"],
+    deps = [
+        ":d2b_provider_system_core",
+    ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
+)
+
 # keep
 filegroup(
     name = "cargo_workspace_sources",

@@ -1,15 +1,13 @@
+load("@crates//:defs.bzl", "all_crate_deps")
 load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test")
 
-# gazelle:ignore
 
 exports_files(
     ["BUILD.bazel"],
     visibility = ["//visibility:public"],
 )
 
-d2b_host_argv_srcs = [
-    "src/lib.rs",
-]
+d2b_host_argv_srcs = glob(["src/**/*.rs"], allow_empty = True)
 
 rust_library(
     name = "d2b_host_argv",
@@ -17,8 +15,7 @@ rust_library(
     compile_data = ["Cargo.toml"],
     visibility = ["//visibility:public"],
     deps = [
-        "@crates//:serde",
-    ],
+    ] + all_crate_deps(normal = True, cargo_only = True),
 )
 
 rust_test(
@@ -26,8 +23,7 @@ rust_test(
     compile_data = ["Cargo.toml"],
     crate = ":d2b_host_argv",
     deps = [
-        "@crates//:serde_json",
-    ],
+    ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
 )
 
 # keep

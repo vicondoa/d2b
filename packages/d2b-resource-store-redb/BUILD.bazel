@@ -1,6 +1,6 @@
+load("@crates//:defs.bzl", "all_crate_deps")
 load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test")
 
-# gazelle:ignore
 
 exports_files(
     ["BUILD.bazel"],
@@ -16,22 +16,7 @@ exports_files(
     visibility = ["//visibility:public"],
 )
 
-d2b_resource_store_redb_srcs = [
-    "src/actor.rs",
-    "src/audit.rs",
-    "src/backup.rs",
-    "src/keys.rs",
-    "src/lib.rs",
-    "src/metrics.rs",
-    "src/migration.rs",
-    "src/ownership.rs",
-    "src/revision_log.rs",
-    "src/schema.rs",
-    "src/tests.rs",
-    "src/tracing.rs",
-    "src/transaction.rs",
-    "src/values.rs",
-]
+d2b_resource_store_redb_srcs = glob(["src/**/*.rs"], allow_empty = True)
 
 rust_library(
     name = "d2b_resource_store_redb",
@@ -49,14 +34,7 @@ rust_library(
         "//packages/d2b-controller-toolkit:d2b_controller_toolkit",
         "//packages/d2b-resource-store:d2b_resource_store",
         "//packages/d2b-telemetry:d2b_telemetry",
-        "@crates//:redb",
-        "@crates//:rustix",
-        "@crates//:serde",
-        "@crates//:serde_json",
-        "@crates//:sha2",
-        "@crates//:tempfile",
-        "@crates//:tokio",
-    ],
+    ] + all_crate_deps(normal = True, cargo_only = True),
 )
 
 rust_library(
@@ -76,14 +54,7 @@ rust_library(
         "//packages/d2b-controller-toolkit:d2b_controller_toolkit_test_support",
         "//packages/d2b-resource-store:d2b_resource_store_test_support",
         "//packages/d2b-telemetry:d2b_telemetry_test_support",
-        "@crates//:redb",
-        "@crates//:rustix",
-        "@crates//:serde",
-        "@crates//:serde_json",
-        "@crates//:sha2",
-        "@crates//:tempfile",
-        "@crates//:tokio",
-    ],
+    ] + all_crate_deps(normal = True, cargo_only = True),
 )
 
 rust_test(
@@ -92,9 +63,7 @@ rust_test(
     crate = ":d2b_resource_store_redb",
     tags = ["local"],
     deps = [
-        "@crates//:serde_json",
-        "@crates//:tempfile",
-    ],
+    ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
 )
 
 # keep

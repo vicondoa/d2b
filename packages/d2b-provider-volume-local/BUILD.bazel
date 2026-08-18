@@ -1,6 +1,6 @@
+load("@crates//:defs.bzl", "all_crate_deps")
 load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test")
 
-# gazelle:ignore
 
 exports_files(
     ["BUILD.bazel"],
@@ -9,43 +9,12 @@ exports_files(
 
 rust_library(
     name = "d2b_provider_volume_local",
-    srcs = [
-        "src/acl.rs",
-        "src/atomic.rs",
-        "src/audit.rs",
-        "src/controller.rs",
-        "src/effect_port.rs",
-        "src/error.rs",
-        "src/exports.rs",
-        "src/finalization.rs",
-        "src/identity.rs",
-        "src/layout.rs",
-        "src/lib.rs",
-        "src/lock.rs",
-        "src/marker.rs",
-        "src/migration.rs",
-        "src/otel.rs",
-        "src/path.rs",
-        "src/port.rs",
-        "src/quota.rs",
-        "src/relocation.rs",
-        "src/sealing.rs",
-        "src/snapshot.rs",
-        "src/source.rs",
-        "src/status.rs",
-        "src/store_view.rs",
-        "src/swtpm_volume.rs",
-        "src/testing.rs",
-        "src/views.rs",
-    ],
+    srcs = glob(["src/**/*.rs"], allow_empty = True),
     compile_data = ["Cargo.toml"],
     visibility = ["//visibility:public"],
     deps = [
         "//packages/d2b-contracts:d2b_contracts",
-        "@crates//:serde",
-        "@crates//:serde_json",
-        "@crates//:sha2",
-    ],
+    ] + all_crate_deps(normal = True, cargo_only = True),
 )
 
 rust_test(
@@ -56,8 +25,7 @@ rust_test(
     deps = [
         ":d2b_provider_volume_local",
         "//packages/d2b-contracts:d2b_contracts",
-        "@crates//:serde_json",
-    ],
+    ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
 )
 
 rust_test(
@@ -68,8 +36,7 @@ rust_test(
     deps = [
         ":d2b_provider_volume_local",
         "//packages/d2b-contracts:d2b_contracts",
-        "@crates//:serde_json",
-    ],
+    ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
 )
 
 rust_test(
@@ -80,7 +47,7 @@ rust_test(
     deps = [
         ":d2b_provider_volume_local",
         "//packages/d2b-contracts:d2b_contracts",
-    ],
+    ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
 )
 
 rust_test(
@@ -91,8 +58,7 @@ rust_test(
     deps = [
         ":d2b_provider_volume_local",
         "//packages/d2b-contracts:d2b_contracts",
-        "@crates//:serde_json",
-    ],
+    ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
 )
 
 rust_test(
@@ -103,7 +69,7 @@ rust_test(
     deps = [
         ":d2b_provider_volume_local",
         "//packages/d2b-contracts:d2b_contracts",
-    ],
+    ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
 )
 
 rust_test(
@@ -114,7 +80,7 @@ rust_test(
     deps = [
         ":d2b_provider_volume_local",
         "//packages/d2b-contracts:d2b_contracts",
-    ],
+    ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
 )
 
 rust_test(
@@ -122,7 +88,7 @@ rust_test(
     srcs = ["tests/relocation_unit.rs"],
     compile_data = ["Cargo.toml"],
     visibility = ["//visibility:public"],
-    deps = [":d2b_provider_volume_local"],
+    deps = [":d2b_provider_volume_local"] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
 )
 
 rust_test(
@@ -133,8 +99,7 @@ rust_test(
     deps = [
         ":d2b_provider_volume_local",
         "//packages/d2b-contracts:d2b_contracts",
-        "@crates//:serde_json",
-    ],
+    ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
 )
 
 rust_test(
@@ -145,8 +110,7 @@ rust_test(
     deps = [
         ":d2b_provider_volume_local",
         "//packages/d2b-contracts:d2b_contracts",
-        "@crates//:serde_json",
-    ],
+    ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
 )
 
 rust_test(
@@ -157,8 +121,7 @@ rust_test(
     deps = [
         ":d2b_provider_volume_local",
         "//packages/d2b-contracts:d2b_contracts",
-        "@crates//:serde_json",
-    ],
+    ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
 )
 
 rust_test(
@@ -169,8 +132,7 @@ rust_test(
     deps = [
         ":d2b_provider_volume_local",
         "//packages/d2b-contracts:d2b_contracts",
-        "@crates//:serde_json",
-    ],
+    ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
 )
 
 rust_test(
@@ -181,8 +143,7 @@ rust_test(
     deps = [
         ":d2b_provider_volume_local",
         "//packages/d2b-contracts:d2b_contracts",
-        "@crates//:serde_json",
-    ],
+    ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
 )
 
 rust_test(
@@ -193,8 +154,7 @@ rust_test(
     deps = [
         ":d2b_provider_volume_local",
         "//packages/d2b-contracts:d2b_contracts",
-        "@crates//:serde_json",
-    ],
+    ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
 )
 
 rust_test(
@@ -205,14 +165,14 @@ rust_test(
     deps = [
         ":d2b_provider_volume_local",
         "//packages/d2b-contracts:d2b_contracts",
-    ],
+    ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
 )
 
 rust_test(
     name = "d2b_provider_volume_local_test",
     compile_data = ["Cargo.toml"],
     crate = ":d2b_provider_volume_local",
-    deps = ["@crates//:serde_json"],
+    deps = [] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
 )
 
 # keep

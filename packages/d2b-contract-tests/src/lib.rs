@@ -118,10 +118,7 @@ pub fn repo_root() -> PathBuf {
     if let Some(root) = env::var_os("D2B_REPO_ROOT") {
         candidates.push(PathBuf::from(root));
     }
-    if let Some(manifest_dir) = option_env!("CARGO_MANIFEST_DIR")
-        .map(PathBuf::from)
-        .or_else(|| env::var_os("CARGO_MANIFEST_DIR").map(PathBuf::from))
-    {
+    if let Some(manifest_dir) = env::var_os("CARGO_MANIFEST_DIR").map(PathBuf::from) {
         candidates.push(manifest_dir.join("..").join(".."));
     }
     for variable in ["TEST_SRCDIR", "RUNFILES_DIR"] {

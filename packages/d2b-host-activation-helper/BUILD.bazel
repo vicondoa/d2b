@@ -1,3 +1,4 @@
+load("@crates//:defs.bzl", "all_crate_deps")
 load("@rules_rust//rust:defs.bzl", "rust_binary", "rust_test")
 
 exports_files(
@@ -10,7 +11,7 @@ rust_binary(
     srcs = ["src/main.rs"],
     compile_data = ["Cargo.toml"],
     visibility = ["//visibility:public"],
-    deps = ["@crates//:libc"],
+    deps = [] + all_crate_deps(normal = True, cargo_only = True),
 )
 
 rust_test(

@@ -1,3 +1,4 @@
+load("@crates//:defs.bzl", "all_crate_deps")
 load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test")
 
 exports_files(
@@ -7,31 +8,158 @@ exports_files(
 
 rust_library(
     name = "d2b_provider_shell_terminal",
-    srcs = [
-        "src/authz.rs",
-        "src/guest_rules.rs",
-        "src/host_rules.rs",
-        "src/lib.rs",
-        "src/migration.rs",
-        "src/observability.rs",
-        "src/process_lifecycle.rs",
-        "src/process_templates.rs",
-        "src/resources/mod.rs",
-        "src/resources/pool.rs",
-        "src/resources/session.rs",
-        "src/service/controller.rs",
-        "src/service/mod.rs",
-        "src/service/supervisor.rs",
-        "src/session/adopt.rs",
-        "src/session/mod.rs",
-        "src/session/ring.rs",
-    ],
+    srcs = glob(["src/**/*.rs"], allow_empty = True),
     compile_data = ["Cargo.toml"],
     deps = [
         "//packages/d2b-contracts:d2b_contracts",
         "//packages/d2b-process-conformance:d2b_process_conformance",
-    ],
+    ] + all_crate_deps(normal = True, cargo_only = True),
     visibility = ["//visibility:public"],
+)
+
+
+rust_test(
+    name = "adoption",
+    srcs = [
+        "tests/adoption.rs",
+    ],
+    compile_data = ["Cargo.toml"],
+    visibility = ["//visibility:public"],
+    deps = [
+        ":d2b_provider_shell_terminal",
+    ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
+)
+
+rust_test(
+    name = "authz",
+    srcs = [
+        "tests/authz.rs",
+    ],
+    compile_data = ["Cargo.toml"],
+    visibility = ["//visibility:public"],
+    deps = [
+        ":d2b_provider_shell_terminal",
+    ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
+)
+
+rust_test(
+    name = "controller_reconcile",
+    srcs = [
+        "tests/controller_reconcile.rs",
+    ],
+    compile_data = ["Cargo.toml"],
+    visibility = ["//visibility:public"],
+    deps = [
+        ":d2b_provider_shell_terminal",
+    ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
+)
+
+rust_test(
+    name = "migration",
+    srcs = [
+        "tests/migration.rs",
+    ],
+    compile_data = ["Cargo.toml"],
+    visibility = ["//visibility:public"],
+    deps = [
+        ":d2b_provider_shell_terminal",
+    ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
+)
+
+rust_test(
+    name = "observability",
+    srcs = [
+        "tests/observability.rs",
+    ],
+    compile_data = ["Cargo.toml"],
+    visibility = ["//visibility:public"],
+    deps = [
+        ":d2b_provider_shell_terminal",
+    ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
+)
+
+rust_test(
+    name = "placement",
+    srcs = [
+        "tests/placement.rs",
+    ],
+    compile_data = ["Cargo.toml"],
+    visibility = ["//visibility:public"],
+    deps = [
+        ":d2b_provider_shell_terminal",
+    ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
+)
+
+rust_test(
+    name = "process_conformance",
+    srcs = [
+        "tests/process_conformance.rs",
+    ],
+    compile_data = ["Cargo.toml"],
+    visibility = ["//visibility:public"],
+    deps = [
+        ":d2b_provider_shell_terminal",
+    ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
+)
+
+rust_test(
+    name = "process_templates",
+    srcs = [
+        "tests/process_templates.rs",
+    ],
+    compile_data = ["Cargo.toml"],
+    visibility = ["//visibility:public"],
+    deps = [
+        ":d2b_provider_shell_terminal",
+    ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
+)
+
+rust_test(
+    name = "resource_schema",
+    srcs = [
+        "tests/resource_schema.rs",
+    ],
+    compile_data = ["Cargo.toml"],
+    visibility = ["//visibility:public"],
+    deps = [
+        ":d2b_provider_shell_terminal",
+    ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
+)
+
+rust_test(
+    name = "ring_buffer",
+    srcs = [
+        "tests/ring_buffer.rs",
+    ],
+    compile_data = ["Cargo.toml"],
+    visibility = ["//visibility:public"],
+    deps = [
+        ":d2b_provider_shell_terminal",
+    ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
+)
+
+rust_test(
+    name = "service_contract",
+    srcs = [
+        "tests/service_contract.rs",
+    ],
+    compile_data = ["Cargo.toml"],
+    visibility = ["//visibility:public"],
+    deps = [
+        ":d2b_provider_shell_terminal",
+    ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
+)
+
+rust_test(
+    name = "supervisor_runtime",
+    srcs = [
+        "tests/supervisor_runtime.rs",
+    ],
+    compile_data = ["Cargo.toml"],
+    visibility = ["//visibility:public"],
+    deps = [
+        ":d2b_provider_shell_terminal",
+    ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
 )
 
 # keep

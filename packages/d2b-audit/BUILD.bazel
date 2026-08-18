@@ -1,23 +1,13 @@
+load("@crates//:defs.bzl", "all_crate_deps")
 load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test")
 
-# gazelle:ignore
 
 exports_files(
     ["BUILD.bazel"],
     visibility = ["//visibility:public"],
 )
 
-d2b_audit_srcs = [
-    "src/export.rs",
-    "src/hash_chain.rs",
-    "src/lib.rs",
-    "src/operation.rs",
-    "src/rate_limit.rs",
-    "src/reconcile.rs",
-    "src/record_types.rs",
-    "src/segment.rs",
-    "src/sink.rs",
-]
+d2b_audit_srcs = glob(["src/**/*.rs"], allow_empty = True)
 
 rust_library(
     name = "d2b_audit",
@@ -26,11 +16,7 @@ rust_library(
     visibility = ["//visibility:public"],
     deps = [
         "//packages/d2b-telemetry:d2b_telemetry",
-        "@crates//:libc",
-        "@crates//:rustix",
-        "@crates//:serde",
-        "@crates//:serde_json",
-    ],
+    ] + all_crate_deps(normal = True, cargo_only = True),
 )
 
 rust_library(
@@ -41,11 +27,7 @@ rust_library(
     visibility = ["//visibility:public"],
     deps = [
         "//packages/d2b-telemetry:d2b_telemetry_test_support",
-        "@crates//:libc",
-        "@crates//:rustix",
-        "@crates//:serde",
-        "@crates//:serde_json",
-    ],
+    ] + all_crate_deps(normal = True, cargo_only = True),
 )
 
 rust_test(

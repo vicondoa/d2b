@@ -52,7 +52,7 @@ pub(crate) fn test_scratch_root() -> std::path::PathBuf {
     let root = std::env::var_os("TEST_TMPDIR")
         .or_else(|| std::env::var_os("CARGO_TARGET_TMPDIR"))
         .map(std::path::PathBuf::from)
-        .unwrap_or_else(|| std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("target"));
+        .unwrap_or_else(|| std::env::temp_dir().join("d2b-priv-broker-tests"));
     std::fs::create_dir_all(&root).expect("create test scratch root");
     root
 }

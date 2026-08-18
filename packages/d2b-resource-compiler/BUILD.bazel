@@ -1,6 +1,6 @@
+load("@crates//:defs.bzl", "all_crate_deps")
 load("@rules_rust//rust:defs.bzl", "rust_binary", "rust_library", "rust_test")
 
-# gazelle:ignore
 
 exports_files(
     ["BUILD.bazel"],
@@ -9,21 +9,14 @@ exports_files(
 
 rust_library(
     name = "d2b_resource_compiler",
-    srcs = [
-        "src/lib.rs",
-        "src/linux.rs",
-    ],
+    srcs = glob(["src/**/*.rs"], allow_empty = True),
     compile_data = ["Cargo.toml"],
     visibility = ["//visibility:public"],
     deps = [
         "//packages/d2b-contracts:d2b_contracts",
         "//packages/d2b-core:d2b_core",
-        "@crates//:base64",
-        "@crates//:ring",
-        "@crates//:rustix",
-        "@crates//:serde_json",
-        "@crates//:sha2",        "@crates//:regex",
-    ],
+
+    ] + all_crate_deps(normal = True, cargo_only = True),
 )
 
 rust_binary(
@@ -34,10 +27,7 @@ rust_binary(
     deps = [
         ":d2b_resource_compiler",
         "//packages/d2b-contracts:d2b_contracts",
-        "@crates//:regex",
-        "@crates//:serde",
-        "@crates//:serde_json",
-    ],
+    ] + all_crate_deps(normal = True, cargo_only = True),
 )
 
 rust_test(
@@ -56,9 +46,7 @@ rust_test(
     rustc_env = {"CARGO_BIN_EXE_d2b-resource-compiler": "$(rootpath :d2b-resource-compiler)"},
     visibility = ["//visibility:public"],
     deps = [
-        "@crates//:serde_json",
-        "@crates//:tempfile",
-    ],
+    ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
 )
 
 rust_test(
@@ -73,10 +61,7 @@ rust_test(
         ":d2b_resource_compiler",
         "//packages/d2b-contracts:d2b_contracts",
         "//packages/d2b-core:d2b_core",
-        "@crates//:base64",
-        "@crates//:ring",
-        "@crates//:serde_json",
-    ],
+    ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
 )
 
 rust_test(
@@ -86,7 +71,7 @@ rust_test(
     data = [":d2b-resource-compiler"],
     env = {"CARGO_BIN_EXE_d2b-resource-compiler": "$(rootpath :d2b-resource-compiler)"},
     rustc_env = {"CARGO_BIN_EXE_d2b-resource-compiler": "$(rootpath :d2b-resource-compiler)"},
-    deps = ["@crates//:tempfile"],
+    deps = [] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
 )
 
 rust_test(

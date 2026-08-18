@@ -1,6 +1,6 @@
+load("@crates//:defs.bzl", "all_crate_deps")
 load("@rules_rust//rust:defs.bzl", "rust_binary", "rust_library", "rust_test")
 
-# gazelle:ignore
 
 exports_files(
     ["BUILD.bazel"],
@@ -14,26 +14,7 @@ exports_files(
 
 rust_library(
     name = "d2b_provider_toolkit",
-    srcs = [
-        "src/agent.rs",
-        "src/audit.rs",
-        "src/bootstrap.rs",
-        "src/conformance.rs",
-        "src/dispatch.rs",
-        "src/error.rs",
-        "src/fakes.rs",
-        "src/fixture.rs",
-        "src/lib.rs",
-        "src/manifest.rs",
-        "src/redaction.rs",
-        "src/registration.rs",
-        "src/runtime.rs",
-        "src/schema.rs",
-        "src/server.rs",
-        "src/session_runtime.rs",
-        "src/testing.rs",
-        "src/values.rs",
-    ],
+    srcs = glob(["src/**/*.rs"], allow_empty = True),
     compile_data = ["Cargo.toml"],
     crate_features = ["unix-transport"],
     visibility = ["//visibility:public"],
@@ -42,10 +23,7 @@ rust_library(
         "//packages/d2b-provider:d2b_provider",
         "//packages/d2b-session:d2b_session",
         "//packages/d2b-session-unix:d2b_session_unix",
-        "@crates//:schemars",
-        "@crates//:serde_json",
-        "@crates//:tokio",
-    ],
+    ] + all_crate_deps(normal = True, cargo_only = True),
 )
 
 rust_binary(
@@ -56,8 +34,7 @@ rust_binary(
     deps = [
         ":d2b_provider_toolkit",
         "//packages/d2b-contracts:d2b_contracts",
-        "@crates//:serde_json",
-    ],
+    ] + all_crate_deps(normal = True, cargo_only = True),
 )
 
 rust_test(
@@ -72,10 +49,7 @@ rust_test(
         ":d2b_provider_toolkit",
         "//packages/d2b-contracts:d2b_contracts",
         "//packages/d2b-provider:d2b_provider",
-        "@crates//:serde_json",
-        "@crates//:sha2",
-        "@crates//:tokio",
-    ],
+    ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
 )
 
 rust_test(
@@ -89,7 +63,7 @@ rust_test(
     deps = [
         ":d2b_provider_toolkit",
         "//packages/d2b-contracts:d2b_contracts",
-    ],
+    ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
 )
 
 rust_test(
@@ -103,7 +77,7 @@ rust_test(
     deps = [
         ":d2b_provider_toolkit",
         "//packages/d2b-contracts:d2b_contracts",
-    ],
+    ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
 )
 
 rust_test(
@@ -113,7 +87,7 @@ rust_test(
     data = [":d2b-provider-toolkit"],
     env = {"CARGO_BIN_EXE_d2b-provider-toolkit": "$(rootpath :d2b-provider-toolkit)"},
     rustc_env = {"CARGO_BIN_EXE_d2b-provider-toolkit": "$(rootpath :d2b-provider-toolkit)"},
-    deps = ["//packages/d2b-provider:d2b_provider"],
+    deps = ["//packages/d2b-provider:d2b_provider"] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
 )
 
 # keep

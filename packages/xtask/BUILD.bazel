@@ -1,3 +1,4 @@
+load("@crates//:defs.bzl", "all_crate_deps")
 load("@rules_rust//rust:defs.bzl", "rust_binary", "rust_test")
 
 exports_files(
@@ -10,39 +11,13 @@ rust_binary(
     srcs = ["src/bin/manifest_v04_check.rs"],
     compile_data = ["Cargo.toml"],
     visibility = ["//visibility:public"],
-    deps = ["//packages/d2b-core:d2b_core"],
+    deps = ["//packages/d2b-core:d2b_core"] + all_crate_deps(normal = True, cargo_only = True),
 )
 
 rust_binary(
     name = "xtask",
-    srcs = [
-        "src/bazel_cache_transfer.rs",
-        "src/bazel_evidence.rs",
-        "src/bazel_qualification.rs",
-        "src/buildbuddy_probe.rs",
-        "src/changelog.rs",
-        "src/delivery/command.rs",
-        "src/delivery/eligibility.rs",
-        "src/delivery/evidence.rs",
-        "src/delivery/history_proof.rs",
-        "src/delivery/mod.rs",
-        "src/delivery/model.rs",
-        "src/delivery/seal.rs",
-        "src/delivery/snapshot.rs",
-        "src/delivery/storage.rs",
-        "src/diagnostic_redaction.rs",
-        "src/gen_resource_schemas.rs",
-        "src/heavy_gate.rs",
-        "src/inventory.rs",
-        "src/main.rs",
-        "src/process_marker_pin.rs",
-        "src/production_closure.rs",
-        "src/provider_crate_policy.rs",
-        "src/provider_packaging.rs",
-        "src/semantic_service_schemas.rs",
-        "src/test_runtime_ledger.rs",
-        "src/zone_schema.rs",
-    ],
+    srcs = glob(["src/**/*.rs"], allow_empty = True),
+    crate_root = "src/main.rs",
     compile_data = [
         "Cargo.toml",
         "src/heavy_gate.rs",
@@ -53,17 +28,7 @@ rust_binary(
         "//packages/d2b-contracts:d2b_contracts",
         "//packages/d2b-core:d2b_core",
         "//packages/d2b-realm-core:d2b_realm_core",
-        "@crates//:clap_complete",
-        "@crates//:clap_mangen",
-        "@crates//:nix",
-        "@crates//:protobuf-codegen",
-        "@crates//:rustix",
-        "@crates//:schemars",
-        "@crates//:serde",
-        "@crates//:serde_json",
-        "@crates//:sha2",
-        "@crates//:ttrpc-codegen",
-    ],
+    ] + all_crate_deps(normal = True, cargo_only = True),
 )
 
 rust_test(
@@ -82,9 +47,9 @@ rust_test(
         "D2B_BAZEL_BIN",
         "D2B_BAZEL_TEST_PATH",
     ],
-    tags = ["local"],
+    tags = ["local", "manual"],
     visibility = ["//visibility:public"],
-    deps = ["@crates//:serde_json"],
+    deps = [] + all_crate_deps(normal_dev = True, cargo_only = True),
 )
 
 rust_test(
@@ -109,7 +74,7 @@ rust_test(
     rustc_env = {"CARGO_BIN_EXE_xtask": "$(rootpath :xtask)"},
     tags = ["local"],
     visibility = ["//visibility:public"],
-    deps = ["@crates//:serde_json"],
+    deps = [] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
 )
 
 rust_test(
@@ -134,7 +99,7 @@ rust_test(
     rustc_env = {"CARGO_BIN_EXE_xtask": "$(rootpath :xtask)"},
     tags = ["local"],
     visibility = ["//visibility:public"],
-    deps = ["@crates//:serde_json"],
+    deps = [] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
 )
 
 rust_test(
@@ -155,7 +120,7 @@ rust_test(
     rustc_env = {"CARGO_BIN_EXE_xtask": "$(rootpath :xtask)"},
     tags = ["local"],
     visibility = ["//visibility:public"],
-    deps = ["@crates//:serde_json"],
+    deps = [] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
 )
 
 rust_test(
@@ -181,7 +146,7 @@ rust_test(
     rustc_env = {"CARGO_BIN_EXE_xtask": "$(rootpath :xtask)"},
     tags = ["local"],
     visibility = ["//visibility:public"],
-    deps = ["@crates//:serde_json"],
+    deps = [] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
 )
 
 rust_test(
@@ -214,7 +179,7 @@ rust_test(
     rustc_env = {"CARGO_BIN_EXE_xtask": "$(rootpath :xtask)"},
     tags = ["local"],
     visibility = ["//visibility:public"],
-    deps = ["@crates//:serde_json"],
+    deps = [] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
 )
 
 rust_test(
@@ -230,7 +195,7 @@ rust_test(
     rustc_env = {"CARGO_BIN_EXE_xtask": "$(rootpath :xtask)"},
     tags = ["local"],
     visibility = ["//visibility:public"],
-    deps = ["@crates//:nix"],
+    deps = [] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
 )
 
 rust_test(
@@ -283,7 +248,7 @@ rust_test(
         "local",
         "no-sandbox",
     ],
-    deps = ["@crates//:serde_json"],
+    deps = [] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
 )
 
 rust_test(
@@ -304,7 +269,7 @@ rust_test(
     env_inherit = ["D2B_REPO_ROOT", "PATH"],
     rustc_env = {"CARGO_BIN_EXE_xtask": "$(rootpath :xtask)"},
     tags = ["local"],
-    deps = ["@crates//:serde_json"],
+    deps = [] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
 )
 
 rust_test(
@@ -313,7 +278,6 @@ rust_test(
     srcs = ["tests/bazel_rust_parity.rs"],
     compile_data = ["Cargo.toml"],
     data = [
-        ":xtask",
         "//:Cargo.toml",
         "//:flake.lock",
         "//:flake.nix",
@@ -326,10 +290,7 @@ rust_test(
         "@rules_rust//rust/toolchain:current_cargo_files",
         "@rules_rust//rust/toolchain:current_rustc_files",
     ],
-    env = {
-        "CARGO": "$(rootpath @rules_rust//rust/toolchain:current_cargo_files)",
-        "CARGO_BIN_EXE_xtask": "$(rootpath :xtask)",
-    },
+    env = {"CARGO": "$(rootpath @rules_rust//rust/toolchain:current_cargo_files)"},
     env_inherit = [
         "BAZEL_SH",
         "D2B_BAZEL_BIN",
@@ -337,10 +298,9 @@ rust_test(
         "D2B_BAZEL_TEST_PATH",
         "PATH",
     ],
-    rustc_env = {"CARGO_BIN_EXE_xtask": "$(rootpath :xtask)"},
     tags = ["local"],
     visibility = ["//visibility:public"],
-    deps = ["@crates//:serde_json"],
+    deps = [] + all_crate_deps(normal_dev = True, cargo_only = True),
 )
 
 rust_test(
@@ -381,7 +341,7 @@ rust_test(
     rustc_env = {"CARGO_BIN_EXE_xtask": "$(rootpath :xtask)"},
     tags = ["local"],
     visibility = ["//visibility:public"],
-    deps = ["@crates//:serde_json"],
+    deps = [] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
 )
 
 # keep

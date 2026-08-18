@@ -56,7 +56,6 @@ exports_files([
     "tests/golden/bazel/cache-policy.json",
     "tests/golden/bazel/eligibility.json",
     "tests/golden/bazel/qualification-schema.json",
-    "tests/golden/bazel/rust-coverage.json",
     "tests/layer1-jobs.json",
     "tests/test-rust.sh",
     "MODULE.bazel",

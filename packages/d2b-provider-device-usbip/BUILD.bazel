@@ -1,6 +1,6 @@
+load("@crates//:defs.bzl", "all_crate_deps")
 load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test")
 
-# gazelle:ignore
 
 exports_files(
     ["BUILD.bazel"],
@@ -9,20 +9,10 @@ exports_files(
 
 rust_library(
     name = "d2b_provider_device_usbip",
-    srcs = [
-        "src/arbitration.rs",
-        "src/busid.rs",
-        "src/controller.rs",
-        "src/firewall.rs",
-        "src/lib.rs",
-        "src/lifecycle.rs",
-        "src/process.rs",
-        "src/production.rs",
-        "src/workers.rs",
-    ],
+    srcs = glob(["src/**/*.rs"], allow_empty = True),
     compile_data = ["Cargo.toml"],
     visibility = ["//visibility:public"],
-    deps = ["//packages/d2b-contracts:d2b_contracts"],
+    deps = ["//packages/d2b-contracts:d2b_contracts"] + all_crate_deps(normal = True, cargo_only = True),
 )
 
 rust_test(
@@ -33,7 +23,7 @@ rust_test(
     deps = [
         ":d2b_provider_device_usbip",
         "//packages/d2b-contracts:d2b_contracts",
-    ],
+    ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
 )
 
 rust_test(
@@ -44,7 +34,7 @@ rust_test(
     deps = [
         ":d2b_provider_device_usbip",
         "//packages/d2b-contracts:d2b_contracts",
-    ],
+    ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
 )
 
 rust_test(
@@ -55,7 +45,7 @@ rust_test(
     deps = [
         ":d2b_provider_device_usbip",
         "//packages/d2b-contracts:d2b_contracts",
-    ],
+    ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
 )
 
 rust_test(
@@ -63,7 +53,7 @@ rust_test(
     srcs = ["tests/explicit_attach_split.rs"],
     compile_data = ["Cargo.toml"],
     visibility = ["//visibility:public"],
-    deps = [":d2b_provider_device_usbip"],
+    deps = [":d2b_provider_device_usbip"] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
 )
 
 rust_test(
@@ -71,7 +61,7 @@ rust_test(
     srcs = ["tests/firewall_marker.rs"],
     compile_data = ["Cargo.toml"],
     visibility = ["//visibility:public"],
-    deps = [":d2b_provider_device_usbip"],
+    deps = [":d2b_provider_device_usbip"] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
 )
 
 rust_test(
@@ -82,7 +72,32 @@ rust_test(
     deps = [
         ":d2b_provider_device_usbip",
         "//packages/d2b-contracts:d2b_contracts",
+    ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
+)
+
+
+rust_test(
+    name = "production_port",
+    srcs = [
+        "tests/production_port.rs",
     ],
+    compile_data = ["Cargo.toml"],
+    visibility = ["//visibility:public"],
+    deps = [
+        ":d2b_provider_device_usbip",
+    ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
+)
+
+rust_test(
+    name = "service_binding_lifecycle",
+    srcs = [
+        "tests/service_binding_lifecycle.rs",
+    ],
+    compile_data = ["Cargo.toml"],
+    visibility = ["//visibility:public"],
+    deps = [
+        ":d2b_provider_device_usbip",
+    ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
 )
 
 # keep

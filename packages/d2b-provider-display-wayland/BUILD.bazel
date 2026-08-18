@@ -1,3 +1,4 @@
+load("@crates//:defs.bzl", "all_crate_deps")
 load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test")
 
 exports_files(
@@ -7,29 +8,13 @@ exports_files(
 
 rust_library(
     name = "d2b_provider_display_wayland",
-    srcs = [
-        "src/audit.rs",
-        "src/controller.rs",
-        "src/descriptor.rs",
-        "src/lib.rs",
-        "src/metrics.rs",
-        "src/policy.rs",
-        "src/portal.rs",
-        "src/principal.rs",
-        "src/process.rs",
-        "src/readiness.rs",
-        "src/runtime.rs",
-        "src/spec.rs",
-    ],
+    srcs = glob(["src/**/*.rs"], allow_empty = True),
     compile_data = ["Cargo.toml"],
     crate_features = ["test-support"],
     deps = [
         "//packages/d2b-contracts:d2b_contracts",
         "//packages/d2b-provider-toolkit:d2b_provider_toolkit",
-        "@crates//:serde",
-        "@crates//:serde_json",
-        "@crates//:sha2",
-    ],
+    ] + all_crate_deps(normal = True, cargo_only = True),
     visibility = ["//visibility:public"],
 )
 
@@ -38,6 +23,56 @@ rust_test(
     srcs = ["tests/scaffold.rs"],
     compile_data = ["Cargo.toml"],
     visibility = ["//visibility:public"],
+)
+
+
+rust_test(
+    name = "lifecycle",
+    srcs = [
+        "tests/lifecycle.rs",
+    ],
+    compile_data = ["Cargo.toml"],
+    visibility = ["//visibility:public"],
+    deps = [
+        ":d2b_provider_display_wayland",
+    ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
+)
+
+rust_test(
+    name = "policy",
+    srcs = [
+        "tests/policy.rs",
+    ],
+    compile_data = ["Cargo.toml"],
+    visibility = ["//visibility:public"],
+    deps = [
+        ":d2b_provider_display_wayland",
+    ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
+)
+
+rust_test(
+    name = "provider_behavior",
+    srcs = [
+        "tests/provider_behavior.rs",
+    ],
+    compile_data = ["Cargo.toml"],
+    crate_features = ['test-support'],
+    visibility = ["//visibility:public"],
+    deps = [
+        ":d2b_provider_display_wayland",
+    ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
+)
+
+rust_test(
+    name = "redaction",
+    srcs = [
+        "tests/redaction.rs",
+    ],
+    compile_data = ["Cargo.toml"],
+    visibility = ["//visibility:public"],
+    deps = [
+        ":d2b_provider_display_wayland",
+    ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
 )
 
 # keep

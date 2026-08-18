@@ -25,13 +25,11 @@ resolution:
 
 - `Cargo.toml` and `Cargo.lock` define the production Rust workspace.
 - `MODULE.bazel` and `MODULE.bazel.lock` pin Bazel modules and
-  `crate_universe` resolution.
-- `crate_universe` exposes third-party Cargo dependencies to Bazel.
-- Upstream `gazelle_rust` maintains ordinary first-party `BUILD.bazel`
-  targets.
-- Explicit `BUILD.bazel` rules cover cases Gazelle cannot express. Every such
-  rule uses a `# keep` or `# gazelle:ignore` marker and is recorded in
-  `bazel/exceptions/manifest.json`.
+  `rules_rs` resolution.
+- `@crates//:defs.bzl` derives third-party Cargo dependencies from the root
+  lockfile through `all_crate_deps()` and `aliases()`.
+- First-party `BUILD.bazel` targets use Cargo-conventional source globs.
+  Explicit entries remain only for first-party edges and true rule exceptions.
 
 Rust source and tests stay in Cargo-standard crate paths. Each crate has its
 own Bazel package and test targets, so Bazel schedules, caches, and reports
@@ -224,25 +222,10 @@ fallback policy used by `make check`.
 For an ordinary Rust crate or test change:
 
 1. Update the Cargo-standard source, test, and manifest files.
-2. Preview Gazelle changes from the pinned Bazel shell:
+2. Run the focused Cargo and Bazel targets, then `make check`.
 
-   ```bash
-   bazel run --config=local //:gazelle -- -mode=diff
-   ```
-
-3. Apply ordinary generated changes:
-
-   ```bash
-   bazel run --config=local //:gazelle
-   ```
-
-4. If Gazelle cannot represent the target, add the smallest explicit rule,
-   preserve it with `# keep` or `# gazelle:ignore`, and update
-   `bazel/exceptions/manifest.json`.
-5. Run the focused Make leaf, then `make check`.
-
-Do not fork or patch Gazelle or Bazel to support a repository-specific target.
-Keep exceptional checked-in rules explicit and reviewable.
+Do not add a repository-owned generator or dependency inventory. Keep
+exceptional checked-in rules explicit and reviewable.
 
 ## Updating dependencies and modules
 

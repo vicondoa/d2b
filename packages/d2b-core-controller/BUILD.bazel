@@ -1,50 +1,11 @@
+load("@crates//:defs.bzl", "all_crate_deps")
 load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test")
 
 exports_files(["BUILD.bazel"], visibility = ["//visibility:public"])
 
 # keep
-# gazelle:ignore
 
-d2b_core_controller_srcs = [
-    "src/api_catalog.rs",
-    "src/audit.rs",
-    "src/authority.rs",
-    "src/authority_persistence.rs",
-    "src/authz.rs",
-    "src/authz_audit.rs",
-    "src/budgets.rs",
-    "src/cleanup.rs",
-    "src/configuration/bundle_apply.rs",
-    "src/configuration/generation_transition.rs",
-    "src/configuration/mod.rs",
-    "src/controllers.rs",
-    "src/coordinator.rs",
-    "src/dependencies.rs",
-    "src/emergency_policy.rs",
-    "src/export_import.rs",
-    "src/export_import_projection.rs",
-    "src/hints.rs",
-    "src/lib.rs",
-    "src/main.rs",
-    "src/metrics.rs",
-    "src/migration.rs",
-    "src/optional_state_admission.rs",
-    "src/owner_reconcile.rs",
-    "src/ownership.rs",
-    "src/provider_effects.rs",
-    "src/providers.rs",
-    "src/quota.rs",
-    "src/rbac.rs",
-    "src/resource_store.rs",
-    "src/runtime.rs",
-    "src/store.rs",
-    "src/tracing.rs",
-    "src/user_session_authority.rs",
-    "src/watches.rs",
-    "src/zone_links.rs",
-    "src/zone_status.rs",
-    "src/zonelink.rs",
-]
+d2b_core_controller_srcs = glob(["src/**/*.rs"], allow_empty = True)
 
 rust_library(
     name = "d2b_core_controller",
@@ -58,11 +19,7 @@ rust_library(
         "//packages/d2b-controller-toolkit:d2b_controller_toolkit",
         "//packages/d2b-telemetry:d2b_telemetry",
         "//packages/d2b-provider-system-core:d2b_provider_system_core",
-        "@crates//:serde",
-        "@crates//:serde_json",
-        "@crates//:sha2",
-        "@crates//:tokio",
-    ],
+    ] + all_crate_deps(normal = True, cargo_only = True),
 )
 
 rust_library(
@@ -78,11 +35,7 @@ rust_library(
         "//packages/d2b-controller-toolkit:d2b_controller_toolkit",
         "//packages/d2b-provider-system-core:d2b_provider_system_core",
         "//packages/d2b-telemetry:d2b_telemetry_test_support",
-        "@crates//:serde",
-        "@crates//:serde_json",
-        "@crates//:sha2",
-        "@crates//:tokio",
-    ],
+    ] + all_crate_deps(normal = True, cargo_only = True),
 )
 
 rust_test(
@@ -93,8 +46,7 @@ rust_test(
     deps = [
         ":d2b_core_controller",
         "//packages/d2b-contracts:d2b_contracts",
-        "@crates//:serde_json",
-    ],
+    ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
 )
 
 rust_test(
@@ -105,7 +57,7 @@ rust_test(
     deps = [
         ":d2b_core_controller",
         "//packages/d2b-contracts:d2b_contracts",
-    ],
+    ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
 )
 
 rust_test(
@@ -116,7 +68,7 @@ rust_test(
     deps = [
         ":d2b_core_controller",
         "//packages/d2b-contracts:d2b_contracts",
-    ],
+    ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
 )
 
 rust_test(
@@ -127,7 +79,7 @@ rust_test(
     deps = [
         ":d2b_core_controller",
         "//packages/d2b-contracts:d2b_contracts",
-    ],
+    ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
 )
 
 rust_test(
@@ -138,7 +90,7 @@ rust_test(
     deps = [
         ":d2b_core_controller",
         "//packages/d2b-contracts:d2b_contracts",
-    ],
+    ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
 )
 
 rust_test(
@@ -149,7 +101,7 @@ rust_test(
     deps = [
         ":d2b_core_controller",
         "//packages/d2b-contracts:d2b_contracts",
-    ],
+    ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
 )
 
 rust_test(
@@ -160,7 +112,7 @@ rust_test(
     deps = [
         ":d2b_core_controller",
         "//packages/d2b-contracts:d2b_contracts",
-    ],
+    ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
 )
 
 rust_test(
@@ -171,7 +123,7 @@ rust_test(
     deps = [
         ":d2b_core_controller",
         "//packages/d2b-contracts:d2b_contracts",
-    ],
+    ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
 )
 
 rust_test(
@@ -179,15 +131,28 @@ rust_test(
     srcs = ["tests/resource_metadata.rs"],
     compile_data = ["Cargo.toml"],
     visibility = ["//visibility:public"],
-    deps = [":d2b_core_controller"],
+    deps = [":d2b_core_controller"] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
 )
 
 rust_test(
     name = "d2b_core_controller_test",
     compile_data = ["Cargo.toml"],
     crate = ":d2b_core_controller",
-    deps = ["@crates//:serde_json"],
+    deps = [] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
 )
+
+rust_test(
+    name = "zone_status",
+    srcs = [
+        "tests/zone_status.rs",
+    ],
+    compile_data = ["Cargo.toml"],
+    visibility = ["//visibility:public"],
+    deps = [
+        ":d2b_core_controller",
+    ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
+)
+
 # keep
 filegroup(
     name = "cargo_workspace_sources",

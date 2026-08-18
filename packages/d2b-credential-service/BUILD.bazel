@@ -1,6 +1,6 @@
+load("@crates//:defs.bzl", "all_crate_deps")
 load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test")
 
-# gazelle:ignore
 
 exports_files(
     ["BUILD.bazel"],
@@ -9,15 +9,10 @@ exports_files(
 
 rust_library(
     name = "d2b_credential_service",
-    srcs = [
-        "src/client.rs",
-        "src/lib.rs",
-        "src/server.rs",
-        "src/service.rs",
-    ],
+    srcs = glob(["src/**/*.rs"], allow_empty = True),
     compile_data = ["Cargo.toml"],
     visibility = ["//visibility:public"],
-    deps = ["//packages/d2b-contracts:d2b_contracts"],
+    deps = ["//packages/d2b-contracts:d2b_contracts"] + all_crate_deps(normal = True, cargo_only = True),
 )
 
 rust_test(
@@ -28,7 +23,7 @@ rust_test(
     deps = [
         ":d2b_credential_service",
         "//packages/d2b-contracts:d2b_contracts",
-    ],
+    ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
 )
 
 rust_test(
@@ -42,7 +37,7 @@ rust_test(
     deps = [
         ":d2b_credential_service",
         "//packages/d2b-contracts:d2b_contracts",
-    ],
+    ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
 )
 
 rust_test(
@@ -53,7 +48,7 @@ rust_test(
     deps = [
         ":d2b_credential_service",
         "//packages/d2b-contracts:d2b_contracts",
-    ],
+    ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
 )
 
 rust_test(
@@ -64,7 +59,7 @@ rust_test(
     deps = [
         ":d2b_credential_service",
         "//packages/d2b-contracts:d2b_contracts",
-    ],
+    ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
 )
 
 # keep

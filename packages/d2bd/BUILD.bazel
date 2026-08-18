@@ -1,6 +1,6 @@
+load("@crates//:defs.bzl", "all_crate_deps")
 load("@rules_rust//rust:defs.bzl", "rust_binary", "rust_library", "rust_test")
 
-# gazelle:ignore
 
 exports_files(
     ["BUILD.bazel"],
@@ -15,68 +15,7 @@ exports_files(
     visibility = ["//visibility:public"],
 )
 
-d2bd_srcs = [
-    "src/activation_resource_runtime.rs",
-    "src/admission.rs",
-    "src/audio_dispatch.rs",
-    "src/audio_host_controller.rs",
-    "src/audio_resource_runtime.rs",
-    "src/authority_persistence.rs",
-    "src/autostart.rs",
-    "src/ch_api.rs",
-    "src/ch_stats.rs",
-    "src/concurrency.rs",
-    "src/console_session.rs",
-    "src/daemon_audit.rs",
-    "src/daemon_version.rs",
-    "src/exec_detached.rs",
-    "src/exec_session.rs",
-    "src/exec_session_real.rs",
-    "src/guest_control_bridge.rs",
-    "src/guest_control_health.rs",
-    "src/guest_control_vsock.rs",
-    "src/host_generation.rs",
-    "src/interaction_composition.rs",
-    "src/kernel_module_check.rs",
-    "src/known_hosts_refresh.rs",
-    "src/lib.rs",
-    "src/metrics.rs",
-    "src/net_route_preflight.rs",
-    "src/net_vm_bundle_gate.rs",
-    "src/network_effect_port.rs",
-    "src/otel_host_bridge_readiness.rs",
-    "src/ownership_preflight.rs",
-    "src/pidfs_probe.rs",
-    "src/process_provider_runtime.rs",
-    "src/process_resource_runtime.rs",
-    "src/provider_effects.rs",
-    "src/provider_registry.rs",
-    "src/provider_shutdown.rs",
-    "src/resource_runtime.rs",
-    "src/security_key.rs",
-    "src/security_key_effect_port.rs",
-    "src/shell_backend.rs",
-    "src/ssh_host_key_preflight.rs",
-    "src/storage_lifecycle.rs",
-    "src/supervisor/dag.rs",
-    "src/supervisor/mod.rs",
-    "src/supervisor/pidfd.rs",
-    "src/supervisor/pidfd_table.rs",
-    "src/supervisor/readiness_liveness.rs",
-    "src/supervisor/state.rs",
-    "src/terminal_session.rs",
-    "src/tpm_effect_port.rs",
-    "src/typed_error.rs",
-    "src/unsafe_local_helper.rs",
-    "src/unsafe_local_terminal.rs",
-    "src/usbip_production.rs",
-    "src/usbip_reconcile_state.rs",
-    "src/usbip_state_machine.rs",
-    "src/usbipd_perenv_autostart.rs",
-    "src/wire.rs",
-    "src/workload_dispatch.rs",
-    "src/workload_target_index.rs",
-]
+d2bd_srcs = glob(["src/**/*.rs"], allow_empty = True)
 
 d2bd_compile_data = [
     "//tests/fixtures:deny-unknown/host-valid.json",  # keep
@@ -119,25 +58,6 @@ d2bd_shared_deps = [
     "//packages/d2b-session-unix:d2b_session_unix",
     "//packages/d2b-resource-store:d2b_resource_store",
     "//packages/d2b-resource-store-redb:d2b_resource_store_redb",
-    "@crates//:arc-swap",
-    "@crates//:getrandom-0.2.17",
-    "@crates//:libc",
-    "@crates//:nix",
-    "@crates//:notify-rust",
-    "@crates//:parking_lot",
-    "@crates//:protobuf",
-    "@crates//:rustix",
-    "@crates//:semver",
-    "@crates//:serde",
-    "@crates//:serde_json",
-    "@crates//:sha2",
-    "@crates//:socket2",
-    "@crates//:subtle",
-    "@crates//:tempfile",
-    "@crates//:tokio",
-    "@crates//:tracing",
-    "@crates//:ttrpc",
-    "@crates//:uzers",
 ]
 
 rust_library(
@@ -153,7 +73,7 @@ rust_library(
         "//packages/d2b-core:d2b_core",
         "//packages/d2b-core-controller:d2b_core_controller",
         "//packages/d2b-host:d2b_host",
-    ],
+    ] + all_crate_deps(normal = True, cargo_only = True),
 )
 
 rust_library(
@@ -169,7 +89,7 @@ rust_library(
         "//packages/d2b-core:d2b_core",
         "//packages/d2b-core-controller:d2b_core_controller",
         "//packages/d2b-host:d2b_host",
-    ],
+    ] + all_crate_deps(normal = True, cargo_only = True),
 )
 
 rust_binary(
@@ -179,10 +99,7 @@ rust_binary(
     visibility = ["//visibility:public"],
     deps = [
         ":d2bd_lib",
-        "@crates//:clap",
-        "@crates//:tokio",
-        "@crates//:tracing-subscriber",
-    ],
+    ] + all_crate_deps(normal = True, cargo_only = True),
 )
 
 rust_test(
@@ -207,11 +124,7 @@ rust_test(
     deps = [
         ":d2bd_lib_test_support",
         "//packages/d2b-core:d2b_core_test_support",
-        "@crates//:nix",
-        "@crates//:rustix",
-        "@crates//:serde_json",
-        "@crates//:tempfile",
-    ],
+    ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
 )
 
 rust_test(
@@ -228,10 +141,7 @@ rust_test(
     tags = ["local"],
     visibility = ["//visibility:public"],
     deps = [
-        "@crates//:nix",
-        "@crates//:serde_json",
-        "@crates//:tempfile",
-    ],
+    ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
 )
 
 rust_test(
@@ -248,11 +158,7 @@ rust_test(
     tags = ["local"],
     visibility = ["//visibility:public"],
     deps = [
-        "@crates//:nix",
-        "@crates//:rustix",
-        "@crates//:serde_json",
-        "@crates//:tempfile",
-    ],
+    ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
 )
 
 rust_test(
@@ -275,10 +181,7 @@ rust_test(
     tags = ["local"],
     visibility = ["//visibility:public"],
     deps = [
-        "@crates//:nix",
-        "@crates//:serde_json",
-        "@crates//:tempfile",
-    ],
+    ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
 )
 
 rust_test(
@@ -297,10 +200,7 @@ rust_test(
     deps = [
         ":d2bd_lib_test_support",
         "//packages/d2b-contracts:d2b_contracts_test_support",
-        "@crates//:nix",
-        "@crates//:serde_json",
-        "@crates//:tempfile",
-    ],
+    ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
 )
 
 rust_test(
@@ -317,10 +217,7 @@ rust_test(
     tags = ["local"],
     visibility = ["//visibility:public"],
     deps = [
-        "@crates//:nix",
-        "@crates//:serde_json",
-        "@crates//:tempfile",
-    ],
+    ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
 )
 
 rust_test(
@@ -359,10 +256,7 @@ rust_test(
     tags = ["local"],
     visibility = ["//visibility:public"],
     deps = [
-        "@crates//:nix",
-        "@crates//:serde_json",
-        "@crates//:tempfile",
-    ],
+    ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
 )
 
 rust_test(
@@ -388,17 +282,7 @@ rust_test(
     ],
     deps = [
         "//packages/d2b-realm-core:d2b_realm_core",
-        "@crates//:libc",
-        "@crates//:nix",
-        "@crates//:protobuf",
-        "@crates//:regex",
-        "@crates//:rustix",
-        "@crates//:sha2",
-        "@crates//:serde_json",
-        "@crates//:tempfile",
-        "@crates//:tokio",
-        "@crates//:tracing-subscriber",
-    ],
+    ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
 )
 
 # keep

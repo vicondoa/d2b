@@ -1,6 +1,6 @@
+load("@crates//:defs.bzl", "all_crate_deps")
 load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test")
 
-# gazelle:ignore
 
 exports_files(
     ["BUILD.bazel"],
@@ -9,34 +9,19 @@ exports_files(
 
 rust_library(
     name = "d2b_process_conformance",
-    srcs = [
-        "src/error.rs",
-        "src/identity.rs",
-        "src/lib.rs",
-        "src/port.rs",
-        "src/process_provider.rs",
-        "src/provider.rs",
-        "src/sandbox.rs",
-        "src/status.rs",
-        "src/suite.rs",
-        "src/terminal.rs",
-        "src/testing.rs",
-        "src/ticket.rs",
-    ],
+    srcs = glob(["src/**/*.rs"], allow_empty = True),
     compile_data = ["Cargo.toml"],
     visibility = ["//visibility:public"],
     deps = [
         "//packages/d2b-contracts:d2b_contracts",
-        "@crates//:serde",
-        "@crates//:serde_json",
-    ],
+    ] + all_crate_deps(normal = True, cargo_only = True),
 )
 
 rust_test(
     name = "d2b_process_conformance_test",
     compile_data = ["Cargo.toml"],
     crate = ":d2b_process_conformance",
-    deps = ["@crates//:serde_json"],
+    deps = [] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
 )
 
 # keep

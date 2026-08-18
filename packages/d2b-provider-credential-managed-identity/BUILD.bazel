@@ -1,25 +1,17 @@
+load("@crates//:defs.bzl", "all_crate_deps")
 load("@rules_rust//rust:defs.bzl", "rust_binary", "rust_library", "rust_test")
 
 exports_files(["BUILD.bazel"], visibility = ["//visibility:public"])
 
 # keep
-# gazelle:ignore
 
 rust_library(
     name = "d2b_provider_credential_managed_identity",
-    srcs = [
-        "src/agent.rs",
-        "src/audit.rs",
-        "src/controller.rs",
-        "src/lib.rs",
-        "src/service.rs",
-        "src/telemetry.rs",
-    ],
+    srcs = glob(["src/**/*.rs"], allow_empty = True),
     compile_data = ["Cargo.toml"],
     visibility = ["//visibility:public"],
     deps = ["//packages/d2b-contracts:d2b_contracts",
-        "@crates//:serde_json",
-    ],
+    ] + all_crate_deps(normal = True, cargo_only = True),
 )
 
 rust_binary(
@@ -27,7 +19,7 @@ rust_binary(
     srcs = ["agent/main.rs"],
     compile_data = ["Cargo.toml"],
     visibility = ["//visibility:public"],
-    deps = [":d2b_provider_credential_managed_identity"],
+    deps = [":d2b_provider_credential_managed_identity"] + all_crate_deps(normal = True, cargo_only = True),
 )
 
 rust_binary(
@@ -35,7 +27,7 @@ rust_binary(
     srcs = ["controller/main.rs"],
     compile_data = ["Cargo.toml"],
     visibility = ["//visibility:public"],
-    deps = [":d2b_provider_credential_managed_identity"],
+    deps = [":d2b_provider_credential_managed_identity"] + all_crate_deps(normal = True, cargo_only = True),
 )
 
 rust_test(
@@ -50,8 +42,7 @@ rust_test(
     deps = [
         ":d2b_provider_credential_managed_identity",
         "//packages/d2b-contracts:d2b_contracts",
-        "@crates//:serde_json",
-    ],
+    ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
 )
 
 rust_test(
@@ -67,7 +58,7 @@ rust_test(
     deps = [
         ":d2b_provider_credential_managed_identity",
         "//packages/d2b-contracts:d2b_contracts",
-    ],
+    ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
 )
 
 rust_test(
@@ -82,7 +73,7 @@ rust_test(
     deps = [
         ":d2b_provider_credential_managed_identity",
         "//packages/d2b-contracts:d2b_contracts",
-    ],
+    ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
 )
 
 rust_test(
@@ -97,7 +88,7 @@ rust_test(
     deps = [
         ":d2b_provider_credential_managed_identity",
         "//packages/d2b-contracts:d2b_contracts",
-    ],
+    ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
 )
 
 rust_test(
@@ -112,7 +103,7 @@ rust_test(
     deps = [
         ":d2b_provider_credential_managed_identity",
         "//packages/d2b-contracts:d2b_contracts",
-    ],
+    ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
 )
 
 rust_test(
@@ -123,7 +114,7 @@ rust_test(
     deps = [
         ":d2b_provider_credential_managed_identity",
         "//packages/d2b-contracts:d2b_contracts",
-    ],
+    ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
 )
 
 rust_test(
@@ -134,7 +125,7 @@ rust_test(
     deps = [
         ":d2b_provider_credential_managed_identity",
         "//packages/d2b-contracts:d2b_contracts",
-    ],
+    ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
 )
 
 rust_test(
@@ -142,6 +133,20 @@ rust_test(
     compile_data = ["Cargo.toml"],
     crate = ":d2b_provider_credential_managed_identity",
 )
+
+rust_test(
+    name = "binding",
+    srcs = [
+        "tests/binding.rs",
+        "tests/common/**/*.rs",
+    ],
+    compile_data = ["Cargo.toml"],
+    visibility = ["//visibility:public"],
+    deps = [
+        ":d2b_provider_credential_managed_identity",
+    ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
+)
+
 # keep
 filegroup(
     name = "cargo_workspace_sources",

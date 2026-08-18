@@ -6,9 +6,6 @@ use std::path::Path;
 use std::process::Command;
 
 use d2b_contract_tests::{read_repo_file, repo_path_exists, repo_root};
-use serde_json::Value;
-
-const EXCEPTION_MANIFEST: &str = "bazel/exceptions/manifest.json";
 const PRODUCT_BUILD_ROOT: &str = "packages";
 const STANDARD_CARGO_SOURCE_GLOBS: [&str; 7] = [
     "\"Cargo.lock\"",
@@ -107,80 +104,6 @@ fn package_build_files() -> BTreeSet<String> {
         .collect()
 }
 
-fn exception_manifest() -> Value {
-    serde_json::from_str(&read_repo_file(EXCEPTION_MANIFEST))
-        .expect("Bazel exception manifest must be valid JSON")
-}
-
-fn exception_paths() -> BTreeSet<String> {
-    exception_manifest()
-        .get("exceptions")
-        .and_then(Value::as_array)
-        .expect("Bazel exception manifest must contain an exceptions array")
-        .iter()
-        .map(|entry| {
-            entry
-                .get("path")
-                .and_then(Value::as_str)
-                .expect("each Bazel exception must declare a path")
-                .to_owned()
-        })
-        .collect()
-}
-
-fn assert_closed_exception_manifest(manifest: &Value) {
-    let entries = manifest
-        .get("exceptions")
-        .and_then(Value::as_array)
-        .expect("Bazel exception manifest must contain an exceptions array");
-    let mut labels = BTreeSet::new();
-    let mut paths = BTreeSet::new();
-    for (index, entry) in entries.iter().enumerate() {
-        let context = format!("exceptions[{index}]");
-        let object = entry
-            .as_object()
-            .unwrap_or_else(|| panic!("{context} must be an object"));
-        let path = object
-            .get("path")
-            .and_then(Value::as_str)
-            .unwrap_or_else(|| panic!("{context}.path must be a string"));
-        let label = object
-            .get("label")
-            .and_then(Value::as_str)
-            .unwrap_or_else(|| panic!("{context}.label must be a string"));
-        let reason = object
-            .get("reason")
-            .and_then(Value::as_str)
-            .unwrap_or_else(|| panic!("{context}.reason must be a string"));
-        let marker = object
-            .get("marker")
-            .and_then(Value::as_str)
-            .unwrap_or_else(|| panic!("{context}.marker must be a string"));
-        assert!(!reason.is_empty(), "{context}.reason must not be empty");
-        assert!(
-            marker.contains("keep"),
-            "{context}.marker must be a keep marker"
-        );
-        assert!(
-            label.starts_with("//") && label.contains(':'),
-            "{context}.label must be an absolute Bazel label"
-        );
-        assert!(
-            labels.insert(label),
-            "duplicate Bazel exception label: {label}"
-        );
-        assert!(paths.insert(path), "duplicate Bazel exception path: {path}");
-        assert!(
-            repo_path_exists(path),
-            "{context} points to missing BUILD file {path}"
-        );
-        assert!(
-            read_repo_file(path).contains(marker),
-            "{context} marker {marker:?} is absent from {path}"
-        );
-    }
-}
-
 fn assert_no_repository_owned_generation(source: &str) {
     for forbidden in [
         "WORKSPACE",
@@ -211,8 +134,6 @@ fn production_bazel_layout_has_one_locked_root_authority() {
         "BUILD.bazel",
         "bazel/platforms/BUILD.bazel",
         "bazel/toolchains/BUILD.bazel",
-        "bazel/exceptions/BUILD.bazel",
-        EXCEPTION_MANIFEST,
     ] {
         assert!(repo_path_exists(path), "missing U3 Bazel surface: {path}");
     }
@@ -346,24 +267,10 @@ fn guest_libshpool_feature_boundary_is_preserved_in_cargo_and_bazel() {
 
     let build = read_repo_file("packages/d2b-guest-shell-runner/BUILD.bazel");
     assert!(
-        build.contains("\"//bazel/checks/rust:guest-real-libshpool\": [")
+        build.contains("name = \"d2b_guest_shell_runner_real_libshpool\"")
+            && build.contains("name = \"d2b-guest-shell-runner-real-libshpool\"")
             && build.contains("@crates//:libshpool"),
         "Bazel real-libshpool context must provide libshpool"
-    );
-    for required in [
-        "@crates//:anyhow",
-        "@crates//:clap",
-        "@crates//:anyhow",
-        "@crates//:clap",
-    ] {
-        assert!(
-            build.contains(required),
-            "guest Bazel feature contexts must declare {required}"
-        );
-    }
-    assert!(
-        build.contains("\"//conditions:default\": ["),
-        "Bazel guest target must have an explicit default dependency context"
     );
     assert!(
         !build.contains("@bazel_only_crates"),
@@ -437,34 +344,6 @@ fn every_root_product_member_uses_standard_cargo_source_globs() {
 }
 
 #[test]
-fn exception_manifest_is_closed() {
-    let manifest = exception_manifest();
-    assert_eq!(
-        manifest.get("version").and_then(Value::as_u64),
-        Some(1),
-        "Bazel exception manifest version must be 1"
-    );
-    assert_closed_exception_manifest(&manifest);
-
-    let listed = exception_paths();
-    for path in package_build_files() {
-        let source = read_repo_file(&path);
-        if source.contains("# keep") {
-            assert!(
-                listed.contains(&path),
-                "hand-written BUILD exception marker is not listed: {path}"
-            );
-        }
-    }
-    for exception in listed {
-        assert!(
-            exception.starts_with("packages/") || exception.starts_with("bazel/"),
-            "Bazel exception escapes the product graph: {exception}"
-        );
-    }
-}
-
-#[test]
 fn package_builds_use_canonical_labels() {
     for path in package_build_files() {
         let source = read_repo_file(&path);
@@ -490,7 +369,6 @@ fn production_bazel_graph_has_no_legacy_workspace_or_generator_escape_hatch() {
     for path in [
         "bazel/platforms/BUILD.bazel",
         "bazel/toolchains/BUILD.bazel",
-        "bazel/exceptions/BUILD.bazel",
     ] {
         assert_no_repository_owned_generation(&read_repo_file(path));
     }
@@ -498,7 +376,7 @@ fn production_bazel_graph_has_no_legacy_workspace_or_generator_escape_hatch() {
 
 #[cfg(test)]
 mod negative_fixtures {
-    use super::{assert_closed_exception_manifest, assert_no_repository_owned_generation};
+    use super::assert_no_repository_owned_generation;
 
     #[test]
     #[should_panic(expected = "repository-owned generation escape hatch")]
@@ -510,20 +388,5 @@ mod negative_fixtures {
     #[should_panic(expected = "repository-owned generation escape hatch")]
     fn custom_generator_escape_hatch_is_rejected() {
         assert_no_repository_owned_generation("custom_generator");
-    }
-
-    #[test]
-    #[should_panic(expected = "marker")]
-    fn exception_without_keep_marker_is_rejected() {
-        let manifest = serde_json::json!({
-            "version": 1,
-            "exceptions": [{
-                "label": "//packages/example:exception",
-                "path": "packages/example/BUILD.bazel",
-                "reason": "fixture",
-                "marker": "generated"
-            }]
-        });
-        assert_closed_exception_manifest(&manifest);
     }
 }

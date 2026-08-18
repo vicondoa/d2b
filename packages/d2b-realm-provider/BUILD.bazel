@@ -1,3 +1,4 @@
+load("@crates//:defs.bzl", "all_crate_deps")
 load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test")
 
 exports_files(
@@ -7,17 +8,7 @@ exports_files(
 
 rust_library(
     name = "d2b_realm_provider",
-    srcs = [
-        "src/capabilities.rs",
-        "src/conformance.rs",
-        "src/credential.rs",
-        "src/error.rs",
-        "src/lib.rs",
-        "src/mock.rs",
-        "src/provider.rs",
-        "src/rate_limit.rs",
-        "src/types.rs",
-    ],
+    srcs = glob(["src/**/*.rs"], allow_empty = True),
     compile_data = ["Cargo.toml"],
     proc_macro_deps = [
         "@crates//:async-trait",
@@ -25,11 +16,7 @@ rust_library(
     visibility = ["//visibility:public"],
     deps = [
         "//packages/d2b-realm-core:d2b_realm_core",
-        "@crates//:schemars",
-        "@crates//:serde",
-        "@crates//:tokio",
-        "@crates//:tracing",
-    ],
+    ] + all_crate_deps(normal = True, cargo_only = True),
 )
 
 rust_test(
@@ -38,9 +25,7 @@ rust_test(
     crate = ":d2b_realm_provider",
     deps = [
         "//packages/d2b-realm-core:d2b_realm_core",
-        "@crates//:serde_json",
-        "@crates//:tokio",
-    ],
+    ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
 )
 
 # keep

@@ -1,46 +1,11 @@
+load("@crates//:defs.bzl", "all_crate_deps")
 load("@rules_rust//rust:defs.bzl", "rust_binary", "rust_library", "rust_test")
 
 exports_files(["BUILD.bazel"], visibility = ["//visibility:public"])
 
 # keep
-# gazelle:ignore
 
-d2b_core_srcs = [
-    "src/allocator_config.rs",
-    "src/audio_policy.rs",
-    "src/base64_codec.rs",
-    "src/bundle.rs",
-    "src/bundle_resolver.rs",
-    "src/closures.rs",
-    "src/configured_argv.rs",
-    "src/console_ring.rs",
-    "src/contract_id.rs",
-    "src/device_usbip_adapter.rs",
-    "src/error.rs",
-    "src/host.rs",
-    "src/host_check.rs",
-    "src/host_generation.rs",
-    "src/host_w3.rs",
-    "src/lib.rs",
-    "src/manifest.rs",
-    "src/manifest_v04.rs",
-    "src/minijail_profile.rs",
-    "src/privileges.rs",
-    "src/privileges_w3.rs",
-    "src/processes.rs",
-    "src/provider_artifact.rs",
-    "src/provider_capabilities.rs",
-    "src/realm_controller_config.rs",
-    "src/realm_workloads_launcher.rs",
-    "src/runtime.rs",
-    "src/static_invariants.rs",
-    "src/storage.rs",
-    "src/storage_lifecycle.rs",
-    "src/sync.rs",
-    "src/test_support.rs",
-    "src/unsafe_local_workloads.rs",
-    "src/workload_identity.rs",
-]
+d2b_core_srcs = glob(["src/**/*.rs"])
 
 rust_library(
     name = "d2b_core",
@@ -55,13 +20,7 @@ rust_library(
     visibility = ["//visibility:public"],
     deps = [
         "//packages/d2b-realm-core:d2b_realm_core",
-        "@crates//:rustix",
-        "@crates//:schemars",
-        "@crates//:semver",
-        "@crates//:serde",
-        "@crates//:serde_json",
-        "@crates//:sha2",
-    ],
+    ] + all_crate_deps(normal = True, cargo_only = True),
 )
 
 rust_library(
@@ -78,13 +37,7 @@ rust_library(
     visibility = ["//visibility:public"],
     deps = [
         "//packages/d2b-realm-core:d2b_realm_core",
-        "@crates//:rustix",
-        "@crates//:schemars",
-        "@crates//:semver",
-        "@crates//:serde",
-        "@crates//:serde_json",
-        "@crates//:sha2",
-    ],
+    ] + all_crate_deps(normal = True, cargo_only = True),
 )
 
 rust_test(
@@ -94,8 +47,7 @@ rust_test(
     visibility = ["//visibility:public"],
     deps = [
         ":d2b_core",
-        "@crates//:serde_json",
-    ],
+    ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
 )
 
 rust_test(
@@ -105,8 +57,7 @@ rust_test(
     visibility = ["//visibility:public"],
     deps = [
         ":d2b_core",
-        "@crates//:serde_json",
-    ],
+    ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
 )
 
 rust_test(
@@ -116,12 +67,7 @@ rust_test(
     visibility = ["//visibility:public"],
     deps = [
         ":d2b_core",
-        "@crates//:nix",
-        "@crates//:rustix",
-        "@crates//:serde_json",
-        "@crates//:sha2",
-        "@crates//:tempfile",
-    ],
+    ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
 )
 
 rust_test(
@@ -131,9 +77,7 @@ rust_test(
     visibility = ["//visibility:public"],
     deps = [
         ":d2b_core",
-        "@crates//:bolero",
-        "@crates//:serde_json",
-    ],
+    ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
 )
 
 rust_test(
@@ -143,11 +87,7 @@ rust_test(
     visibility = ["//visibility:public"],
     deps = [
         ":d2b_core",
-        "@crates//:rustix",
-        "@crates//:serde_json",
-        "@crates//:sha2",
-        "@crates//:tempfile",
-    ],
+    ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
 )
 
 rust_test(
@@ -160,13 +100,14 @@ rust_test(
     crate_root = "//packages/d2b-core/fuzz:src/bin/bundle.rs",
     crate_features = ["fuzz"],
     data = ["//packages/d2b-core/fuzz:corpus"],
+    rustc_env = {"CARGO_MANIFEST_DIR": "."},
     use_libtest_harness = False,
     visibility = ["//visibility:public"],
     deps = [
         ":d2b_core",
         "@crates//:bolero",
         "@crates//:serde_json",
-    ],
+    ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
 )
 
 rust_test(
@@ -179,13 +120,14 @@ rust_test(
     crate_root = "//packages/d2b-core/fuzz:src/bin/host.rs",
     crate_features = ["fuzz"],
     data = ["//packages/d2b-core/fuzz:corpus"],
+    rustc_env = {"CARGO_MANIFEST_DIR": "."},
     use_libtest_harness = False,
     visibility = ["//visibility:public"],
     deps = [
         ":d2b_core",
         "@crates//:bolero",
         "@crates//:serde_json",
-    ],
+    ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
 )
 
 rust_test(
@@ -198,12 +140,14 @@ rust_test(
     crate_root = "//packages/d2b-core/fuzz:src/bin/manifest.rs",
     crate_features = ["fuzz"],
     data = ["//packages/d2b-core/fuzz:corpus"],
+    rustc_env = {"CARGO_MANIFEST_DIR": "."},
     use_libtest_harness = False,
     visibility = ["//visibility:public"],
     deps = [
         ":d2b_core",
         "@crates//:bolero",
-    ],
+        "@crates//:serde_json",
+    ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
 )
 
 rust_test(
@@ -216,13 +160,14 @@ rust_test(
     crate_root = "//packages/d2b-core/fuzz:src/bin/privileges.rs",
     crate_features = ["fuzz"],
     data = ["//packages/d2b-core/fuzz:corpus"],
+    rustc_env = {"CARGO_MANIFEST_DIR": "."},
     use_libtest_harness = False,
     visibility = ["//visibility:public"],
     deps = [
         ":d2b_core",
         "@crates//:bolero",
         "@crates//:serde_json",
-    ],
+    ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
 )
 
 rust_test(
@@ -237,13 +182,14 @@ rust_test(
     ],
     crate_root = "//packages/d2b-core/fuzz:src/bin/core.rs",
     crate_features = ["fuzz"],
+    rustc_env = {"CARGO_MANIFEST_DIR": "."},
     use_libtest_harness = False,
     visibility = ["//visibility:public"],
     deps = [
         ":d2b_core",
         "@crates//:bolero",
         "@crates//:serde_json",
-    ],
+    ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
 )
 
 rust_test(
@@ -254,8 +200,7 @@ rust_test(
     visibility = ["//visibility:public"],
     deps = [
         ":d2b_core",
-        "@crates//:serde_json",
-    ],
+    ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
 )
 
 rust_test(
@@ -266,8 +211,7 @@ rust_test(
     visibility = ["//visibility:public"],
     deps = [
         ":d2b_core",
-        "@crates//:serde_json",
-    ],
+    ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
 )
 
 rust_test(
@@ -277,8 +221,7 @@ rust_test(
     visibility = ["//visibility:public"],
     deps = [
         ":d2b_core",
-        "@crates//:serde_json",
-    ],
+    ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
 )
 
 rust_test(
@@ -288,19 +231,28 @@ rust_test(
     visibility = ["//visibility:public"],
     deps = [
         ":d2b_core",
-        "@crates//:serde_json",
-    ],
+    ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
 )
 
 rust_test(
     name = "d2b_core_test",
     compile_data = ["Cargo.toml"],
     crate = ":d2b_core",
-    deps = [
-        "@crates//:regex",
-        "@crates//:serde_json",
-    ],
+    deps = all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
 )
+
+rust_test(
+    name = "device_usbip_adapter",
+    srcs = [
+        "tests/device_usbip_adapter.rs",
+    ],
+    compile_data = ["Cargo.toml"],
+    visibility = ["//visibility:public"],
+    deps = [
+        ":d2b_core",
+    ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
+)
+
 # keep
 filegroup(
     name = "cargo_workspace_sources",

@@ -1,3 +1,4 @@
+load("@crates//:defs.bzl", "all_crate_deps")
 load("@rules_rust//rust:defs.bzl", "rust_binary", "rust_library", "rust_test")
 
 exports_files(
@@ -7,16 +8,7 @@ exports_files(
 
 rust_library(
     name = "d2b_gateway_runtime",
-    srcs = [
-        "src/aca_workload.rs",
-        "src/audit_jsonl.rs",
-        "src/credential.rs",
-        "src/display_listener.rs",
-        "src/lib.rs",
-        "src/production.rs",
-        "src/relay_compat.rs",
-        "src/waypipe_display.rs",
-    ],
+    srcs = glob(["src/**/*.rs"], allow_empty = True),
     compile_data = ["Cargo.toml"],
     proc_macro_deps = [
         "@crates//:async-trait",
@@ -28,22 +20,7 @@ rust_library(
         "//packages/d2b-provider-transport-azure-relay:d2b_provider_transport_azure_relay",
         "//packages/d2b-realm-core:d2b_realm_core",
         "//packages/d2b-realm-provider:d2b_realm_provider",
-        "@crates//:base64",
-        "@crates//:chacha20poly1305",
-        "@crates//:futures-util",
-        "@crates//:getrandom-0.2.17",
-        "@crates//:libc",
-        "@crates//:rustls",
-        "@crates//:rustls-pki-types",
-        "@crates//:serde",
-        "@crates//:serde_json",
-        "@crates//:sha2",
-        "@crates//:tokio",
-        "@crates//:tokio-tungstenite",
-        "@crates//:tracing",
-        "@crates//:tracing-subscriber",
-        "@crates//:webpki-roots",
-    ],
+    ] + all_crate_deps(normal = True, cargo_only = True),
 )
 
 rust_binary(
@@ -53,10 +30,7 @@ rust_binary(
     visibility = ["//visibility:public"],
     deps = [
         ":d2b_gateway_runtime",
-        "@crates//:serde_json",
-        "@crates//:tracing",
-        "@crates//:tracing-subscriber",
-    ],
+    ] + all_crate_deps(normal = True, cargo_only = True),
 )
 
 rust_binary(
@@ -68,9 +42,7 @@ rust_binary(
         ":d2b_gateway_runtime",
         "//packages/d2b-gateway:d2b_gateway",
         "//packages/d2b-provider-transport-azure-relay:d2b_provider_transport_azure_relay",
-        "@crates//:base64",
-        "@crates//:tokio",
-    ],
+    ] + all_crate_deps(normal = True, cargo_only = True),
 )
 
 rust_test(
@@ -80,10 +52,7 @@ rust_test(
     deps = [
         "//packages/d2b-realm-core:d2b_realm_core",
         "//packages/d2b-realm-provider:d2b_realm_provider",
-        "@crates//:azure_core",
-        "@crates//:tempfile",
-        "@crates//:tokio",
-    ],
+    ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
 )
 
 # keep

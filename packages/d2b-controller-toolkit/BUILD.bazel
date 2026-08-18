@@ -1,3 +1,4 @@
+load("@crates//:defs.bzl", "all_crate_deps")
 load("@rules_rust//rust:defs.bzl", "rust_binary", "rust_library", "rust_test")
 
 exports_files(
@@ -6,18 +7,8 @@ exports_files(
 )
 
 # keep
-# gazelle:ignore
 
-d2b_controller_toolkit_srcs = [
-    "src/context.rs",
-    "src/contract.rs",
-    "src/lib.rs",
-    "src/owner_hints.rs",
-    "src/queue.rs",
-    "src/result.rs",
-    "src/runner.rs",
-    "src/state_migration.rs",
-]
+d2b_controller_toolkit_srcs = glob(["src/**/*.rs"], allow_empty = True)
 
 rust_library(
     name = "d2b_controller_toolkit",
@@ -26,10 +17,7 @@ rust_library(
     visibility = ["//visibility:public"],
     deps = [
         "//packages/d2b-contracts:d2b_contracts",
-        "@crates//:schemars",
-        "@crates//:serde",
-        "@crates//:tokio",
-    ],
+    ] + all_crate_deps(normal = True, cargo_only = True),
 )
 
 rust_library(
@@ -40,10 +28,7 @@ rust_library(
     visibility = ["//visibility:public"],
     deps = [
         "//packages/d2b-contracts:d2b_contracts_test_support",
-        "@crates//:schemars",
-        "@crates//:serde",
-        "@crates//:tokio",
-    ],
+    ] + all_crate_deps(normal = True, cargo_only = True),
 )
 
 rust_test(
@@ -82,10 +67,7 @@ rust_test(
         "//packages/d2b-resource-api:d2b_resource_api",
         "//packages/d2b-resource-store:d2b_resource_store",
         "//packages/d2b-resource-store-redb:d2b_resource_store_redb",
-        "@crates//:serde_json",
-        "@crates//:tempfile",
-        "@crates//:tokio",
-    ],
+    ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
 )
 
 rust_test(
@@ -108,17 +90,14 @@ rust_test(
         "//packages/d2b-resource-api:d2b_resource_api",
         "//packages/d2b-resource-store:d2b_resource_store",
         "//packages/d2b-resource-store-redb:d2b_resource_store_redb",
-        "@crates//:serde_json",
-        "@crates//:tempfile",
-        "@crates//:tokio",
-    ],
+    ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
 )
 
 rust_test(
     name = "d2b_controller_toolkit_test",
     compile_data = ["Cargo.toml"],
     crate = ":d2b_controller_toolkit",
-    deps = ["@crates//:serde_json"],
+    deps = [] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
 )
 
 rust_test(

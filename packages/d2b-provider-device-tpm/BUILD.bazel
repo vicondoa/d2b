@@ -1,23 +1,13 @@
+load("@crates//:defs.bzl", "all_crate_deps")
 load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test")
 
-# gazelle:ignore
 
 exports_files(
     ["BUILD.bazel"],
     visibility = ["//visibility:public"],
 )
 
-d2b_provider_device_tpm_srcs = [
-    "src/controller.rs",
-    "src/lib.rs",
-    "src/migration.rs",
-    "src/resource_controller.rs",
-    "src/resource_effect.rs",
-    "src/resources.rs",
-    "src/runner.rs",
-    "src/state.rs",
-    "src/status.rs",
-]
+d2b_provider_device_tpm_srcs = glob(["src/**/*.rs"], allow_empty = True)
 
 rust_library(
     name = "d2b_provider_device_tpm",
@@ -26,8 +16,8 @@ rust_library(
     visibility = ["//visibility:public"],
     deps = [
         "//packages/d2b-contracts:d2b_contracts",
-        "@crates//:serde",        "@crates//:serde_json",
-    ],
+
+    ] + all_crate_deps(normal = True, cargo_only = True),
 )
 
 rust_library(
@@ -39,8 +29,8 @@ rust_library(
     visibility = ["//visibility:public"],
     deps = [
         "//packages/d2b-contracts:d2b_contracts_test_support",
-        "@crates//:serde",        "@crates//:serde_json",
-    ],
+
+    ] + all_crate_deps(normal = True, cargo_only = True),
 )
 
 rust_test(
@@ -50,8 +40,7 @@ rust_test(
     visibility = ["//visibility:public"],
     deps = [
         ":d2b_provider_device_tpm",
-        "@crates//:serde_json",
-    ],
+    ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
 )
 
 rust_test(
@@ -59,7 +48,7 @@ rust_test(
     srcs = ["tests/controller_state_machine.rs"],
     compile_data = ["Cargo.toml"],
     visibility = ["//visibility:public"],
-    deps = [":d2b_provider_device_tpm_test_support"],
+    deps = [":d2b_provider_device_tpm_test_support"] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
 )
 
 rust_test(
@@ -67,7 +56,20 @@ rust_test(
     srcs = ["tests/fault_swtpm_missing.rs"],
     compile_data = ["Cargo.toml"],
     visibility = ["//visibility:public"],
-    deps = [":d2b_provider_device_tpm_test_support"],
+    deps = [":d2b_provider_device_tpm_test_support"] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
+)
+
+
+rust_test(
+    name = "resource_controller",
+    srcs = [
+        "tests/resource_controller.rs",
+    ],
+    compile_data = ["Cargo.toml"],
+    visibility = ["//visibility:public"],
+    deps = [
+        ":d2b_provider_device_tpm",
+    ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
 )
 
 # keep

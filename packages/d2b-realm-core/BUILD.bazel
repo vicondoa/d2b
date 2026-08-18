@@ -1,3 +1,4 @@
+load("@crates//:defs.bzl", "all_crate_deps")
 load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test")
 
 exports_files(
@@ -12,51 +13,21 @@ exports_files(
 
 rust_library(
     name = "d2b_realm_core",
-    srcs = [
-        "src/access.rs",
-        "src/allocator.rs",
-        "src/allocator_engine.rs",
-        "src/audit.rs",
-        "src/capability.rs",
-        "src/enrollment.rs",
-        "src/error.rs",
-        "src/execution.rs",
-        "src/frame.rs",
-        "src/identity_config.rs",
-        "src/identity_store.rs",
-        "src/ids.rs",
-        "src/lib.rs",
-        "src/migration.rs",
-        "src/mux.rs",
-        "src/node.rs",
-        "src/payload.rs",
-        "src/realm.rs",
-        "src/registry.rs",
-        "src/route_engine.rs",
-        "src/routing.rs",
-        "src/shell.rs",
-        "src/stream.rs",
-        "src/target.rs",
-        "src/token.rs",
-        "src/trace_context.rs",
-        "src/workload.rs",
-    ],
+    srcs = glob(["src/**/*.rs"], allow_empty = True),
     compile_data = [
         "Cargo.toml",
         "tests/fixtures/workload-execution-posture-v1.json",
     ],
     visibility = ["//visibility:public"],
     deps = [
-        "@crates//:schemars",
-        "@crates//:serde",
-    ],
+    ] + all_crate_deps(normal = True, cargo_only = True),
 )
 
 rust_test(
     name = "d2b_realm_core_test",
     compile_data = ["Cargo.toml"],
     crate = ":d2b_realm_core",
-    deps = ["@crates//:serde_json"],
+    deps = [] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
 )
 
 # keep

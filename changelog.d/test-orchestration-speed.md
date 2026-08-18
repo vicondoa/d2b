@@ -11,6 +11,9 @@
 
 ### Changed
 
+- Derive first-party Bazel Rust sources from Cargo-conventional globs and
+  third-party dependencies from the root `rules_rs` lockfile helpers, with
+  explicit feature, doctest, and harness-free companion targets.
 - Use `D2B_RUST_BUDGET` as the supported local Rust budget control. Top-level
   Make `-j` does not cap inner Cargo concurrency; the Rust target derives
   Cargo and nextest quotas from the effective CPU and memory budget.

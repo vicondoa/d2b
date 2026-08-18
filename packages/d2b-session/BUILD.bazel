@@ -1,6 +1,6 @@
+load("@crates//:defs.bzl", "all_crate_deps")
 load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test")
 
-# gazelle:ignore
 
 exports_files(
     ["BUILD.bazel"],
@@ -9,28 +9,7 @@ exports_files(
 
 rust_library(
     name = "d2b_session",
-    srcs = [
-        "src/admission.rs",
-        "src/attachment.rs",
-        "src/audit.rs",
-        "src/bootstrap.rs",
-        "src/cancellation.rs",
-        "src/deadline.rs",
-        "src/driver.rs",
-        "src/engine.rs",
-        "src/error.rs",
-        "src/fragmentation.rs",
-        "src/handshake.rs",
-        "src/lib.rs",
-        "src/lifecycle.rs",
-        "src/metrics.rs",
-        "src/operation.rs",
-        "src/record.rs",
-        "src/scheduler.rs",
-        "src/server.rs",
-        "src/streams.rs",
-        "src/transport.rs",
-    ],
+    srcs = glob(["src/**/*.rs"], allow_empty = True),
     compile_data = ["Cargo.toml"],
     crate_features = ["test-support"],
     proc_macro_deps = [
@@ -42,13 +21,7 @@ rust_library(
         "//packages/d2b-contracts:d2b_contracts",
         "//packages/d2b-resource-api:d2b_resource_api",
         "//packages/d2b-telemetry:d2b_telemetry",
-        "@crates//:futures-util",
-        "@crates//:sha2",
-        "@crates//:snow",
-        "@crates//:tokio",
-        "@crates//:ttrpc",
-        "@crates//:zeroize",
-    ],
+    ] + all_crate_deps(normal = True, cargo_only = True),
 )
 
 rust_test(
@@ -63,8 +36,7 @@ rust_test(
         ":d2b_session",
         "//packages/d2b-contracts:d2b_contracts",
         "//packages/d2b-resource-api:d2b_resource_api",
-        "@crates//:tokio",
-    ],
+    ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
 )
 
 rust_test(
@@ -78,9 +50,7 @@ rust_test(
     deps = [
         ":d2b_session",
         "//packages/d2b-contracts:d2b_contracts",
-        "@crates//:snow",
-        "@crates//:tokio",
-    ],
+    ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
 )
 
 rust_test(
@@ -90,8 +60,7 @@ rust_test(
     visibility = ["//visibility:public"],
     deps = [
         ":d2b_session",
-        "@crates//:snow",
-    ],
+    ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
 )
 
 rust_test(
@@ -99,10 +68,7 @@ rust_test(
     compile_data = ["Cargo.toml"],
     crate = ":d2b_session",
     deps = [
-        "@crates//:protobuf",
-        "@crates//:serde_json",
-        "@crates//:tokio",
-    ],
+    ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
 )
 
 # keep
