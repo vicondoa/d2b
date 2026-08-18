@@ -87,3 +87,15 @@ test_suite(
     name = "runtime_ledger",
     tests = ["//packages/xtask:runtime_ledger_test"],
 )
+
+test_suite(
+    name = "policy_tooling",
+    tests = [
+        "//bazel/checks/meta:tier0",
+        ":changelog",
+        ":drift",
+        ":lint",
+        ":policy",
+        ":runtime_ledger",
+    ],
+)

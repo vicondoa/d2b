@@ -168,7 +168,7 @@ nix_native_test(
 
 nix_native_test(
     name = "flake-eval-x86-realized",
-    command = """build --no-write-lock-file --no-link --print-out-paths "$FLAKE_REF#checks.x86_64-linux.video-binary-contract" >/dev/null && build --no-write-lock-file --no-link --print-out-paths "$FLAKE_REF#checks.x86_64-linux.gas-city-package-smoke" >/dev/null""",
+    command = """build --no-write-lock-file --no-link --print-out-paths "$FLAKE_REF#checks.x86_64-linux.video-binary-contract" "$FLAKE_REF#checks.x86_64-linux.gas-city-package-smoke" "$FLAKE_REF#checks.x86_64-linux.rust-deny" "$FLAKE_REF#checks.x86_64-linux.guest-rust-deny" "$FLAKE_REF#checks.x86_64-linux.rust-audit" >/dev/null""",
     lane = "flake-realized",
     max_kib = 14665373,
     data = [":flake_eval_inputs"],
@@ -245,6 +245,25 @@ alias(
 alias(
     name = "flake_eval_aarch64",
     actual = ":flake-eval-aarch64",
+)
+
+test_suite(
+    name = "nix_evaluation",
+    tests = [
+        ":nix_unit",
+        ":flake-eval-x86",
+        ":flake-eval-x86-outputs",
+    ],
+)
+
+test_suite(
+    name = "nix_realized",
+    tests = [":flake-eval-x86-realized"],
+)
+
+test_suite(
+    name = "nix_aarch64",
+    tests = [":flake-eval-aarch64"],
 )
 
 test_suite(

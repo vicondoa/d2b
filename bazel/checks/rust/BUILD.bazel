@@ -303,6 +303,41 @@ rust_doc_test(
     crate = "//packages/d2b-guest-shell-runner:d2b_guest_shell_runner",
 )
 
+test_suite(
+    name = "portable_rust_broker",
+    tests = [
+        "//bazel/checks/rust:d2b_priv_broker_doc_test",
+        "//packages/d2b-priv-broker:bridge_lifecycle",
+        "//packages/d2b-priv-broker:broker_export_audit",
+        "//packages/d2b-priv-broker:broker_protocol_compatibility",
+        "//packages/d2b-priv-broker:broker_socket_acl",
+        "//packages/d2b-priv-broker:bundle_tampered_broker",
+        "//packages/d2b-priv-broker:d2b_priv_broker_fake_backends_test",
+        "//packages/d2b-priv-broker:d2b_priv_broker_layer1_bootstrap_test",
+        "//packages/d2b-priv-broker:d2b_priv_broker_test",
+        "//packages/d2b-priv-broker:kernel_surface",
+        "//packages/d2b-priv-broker:persistent_tap_lifecycle",
+        "//packages/d2b-priv-broker:pidfd_handoff_scm_rights",
+        "//packages/d2b-priv-broker:pidfd_real_spawner",
+        "//packages/d2b-priv-broker:security_key_broker",
+        "//packages/d2b-priv-broker:socket_activation",
+        "//packages/d2b-priv-broker:w12_fd_passing_response",
+        "//packages/d2b-priv-broker:w15_install_migrate",
+        "//packages/d2b-priv-broker:zone_store",
+    ],
+)
+
+test_suite(
+    name = "portable_rust_guest",
+    tests = [
+        "//bazel/checks/rust:d2b_guest_shell_runner_doc_test",
+        "//packages/d2b-guest-shell-runner:cli",
+        "//packages/d2b-guest-shell-runner:cli-real-libshpool",
+        "//packages/d2b-guest-shell-runner:d2b_guest_shell_runner_real_libshpool_test",
+        "//packages/d2b-guest-shell-runner:d2b_guest_shell_runner_test",
+    ],
+)
+
 filegroup(
     name = "cargo_workspace_sources",
     srcs = [
