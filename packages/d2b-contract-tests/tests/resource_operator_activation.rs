@@ -22,6 +22,10 @@ fn wave6_operator_path_contains_public_api_and_provider_boundary() {
         "guest-provider-binding",
         "d2b_provider_runtime_cloud_hypervisor::PROVIDER_REF",
         "adopt_node",
+        "NetworkReconciler::new",
+        "ReconcileProgress::Ready",
+        "ensure_guest_networks_reconciled",
+        "ResourceGetFailed",
     ] {
         assert!(
             runtime.contains(required) || boundary.contains(required) || daemon.contains(required),

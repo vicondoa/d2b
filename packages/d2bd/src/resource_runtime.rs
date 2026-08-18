@@ -186,6 +186,9 @@ pub enum ResourceRuntimeError {
     IdentityUnbound,
     /// The requested operation is not exposed by the registered service.
     CapabilityUnavailable,
+    /// The public Resource API returned a typed error while loading a
+    /// resource for provider reconciliation.
+    ResourceGetFailed(ResourceErrorKind),
     /// The Wave 6 operator acceptance boundary did not converge.
     Wave6AcceptanceFailed,
 }
@@ -224,6 +227,7 @@ impl ResourceRuntimeError {
             Self::LiveRequestOwners => "resource-runtime-live-request-owners",
             Self::IdentityUnbound => "resource-runtime-identity-unbound",
             Self::CapabilityUnavailable => "resource-runtime-capability-unavailable",
+            Self::ResourceGetFailed(_) => "resource-runtime-resource-get-failed",
             Self::Wave6AcceptanceFailed => "resource-runtime-wave6-acceptance-failed",
         }
     }
@@ -4669,18 +4673,139 @@ fn encode_public_resource(
     Ok(value)
 }
 
-fn public_api_error() -> Value {
-    resource_error_envelope(
-        &ResourceError::new(
-            ResourceErrorKind::ResourcePlaneUnavailable,
-            None,
-            None,
-            RetryClass::Never,
-            ResourceErrorReason::parse("resource API returned an error")
-                .expect("fixed public resource error reason"),
-        )
-        .expect("fixed public resource error"),
+fn public_api_error(error: &wire::ResourceError) -> Value {
+    let kind = resource_error_kind_from_wire(error.kind.enum_value().ok());
+    let retry_class = retry_class_from_wire(error.retry_class.enum_value().ok());
+    let current_revision = matches!(
+        kind,
+        ResourceErrorKind::ResourceConflict
+            | ResourceErrorKind::AuthorizationDenied
+            | ResourceErrorKind::RevisionExpired
     )
+    .then(|| error.current_revision.map(ZoneRevision::new))
+    .flatten();
+    let retry_after_ms = error
+        .retry_after_ms
+        .filter(|delay| (1..=d2b_contracts::v3::MAX_RESOURCE_ERROR_RETRY_AFTER_MS).contains(delay));
+    let retry_class = if retry_after_ms.is_some() {
+        RetryClass::AfterDelay
+    } else if retry_class == RetryClass::AfterDelay {
+        RetryClass::Never
+    } else {
+        retry_class
+    };
+    let reason = ResourceErrorReason::parse("resource API returned a typed error")
+        .expect("fixed public resource error reason");
+    let error = ResourceError::new(kind, current_revision, retry_after_ms, retry_class, reason)
+        .expect("fixed public resource error");
+    resource_error_envelope(&error)
+}
+
+fn resource_error_kind_from_wire(kind: Option<wire::ResourceErrorKind>) -> ResourceErrorKind {
+    match kind {
+        Some(wire::ResourceErrorKind::RESOURCE_ERROR_KIND_RESOURCE_NOT_FOUND) => {
+            ResourceErrorKind::ResourceNotFound
+        }
+        Some(wire::ResourceErrorKind::RESOURCE_ERROR_KIND_RESOURCE_ALREADY_EXISTS) => {
+            ResourceErrorKind::ResourceAlreadyExists
+        }
+        Some(wire::ResourceErrorKind::RESOURCE_ERROR_KIND_RESOURCE_CONFLICT) => {
+            ResourceErrorKind::ResourceConflict
+        }
+        Some(wire::ResourceErrorKind::RESOURCE_ERROR_KIND_RESOURCE_SCHEMA_INVALID) => {
+            ResourceErrorKind::ResourceSchemaInvalid
+        }
+        Some(wire::ResourceErrorKind::RESOURCE_ERROR_KIND_RESOURCE_REF_INVALID) => {
+            ResourceErrorKind::ResourceRefInvalid
+        }
+        Some(wire::ResourceErrorKind::RESOURCE_ERROR_KIND_RESOURCE_OWNER_CYCLE) => {
+            ResourceErrorKind::ResourceOwnerCycle
+        }
+        Some(wire::ResourceErrorKind::RESOURCE_ERROR_KIND_RESOURCE_OWNER_DEPTH) => {
+            ResourceErrorKind::ResourceOwnerDepth
+        }
+        Some(wire::ResourceErrorKind::RESOURCE_ERROR_KIND_RESOURCE_FINALIZER_DENIED) => {
+            ResourceErrorKind::ResourceFinalizerDenied
+        }
+        Some(wire::ResourceErrorKind::RESOURCE_ERROR_KIND_RESOURCE_PROVIDER_UNAVAILABLE) => {
+            ResourceErrorKind::ResourceProviderUnavailable
+        }
+        Some(wire::ResourceErrorKind::RESOURCE_ERROR_KIND_RESOURCE_CONTROLLER_MISMATCH) => {
+            ResourceErrorKind::ResourceControllerMismatch
+        }
+        Some(wire::ResourceErrorKind::RESOURCE_ERROR_KIND_RESOURCE_STATUS_OWNER_MISMATCH) => {
+            ResourceErrorKind::ResourceStatusOwnerMismatch
+        }
+        Some(wire::ResourceErrorKind::RESOURCE_ERROR_KIND_STATUS_OVERSIZE) => {
+            ResourceErrorKind::StatusOversize
+        }
+        Some(wire::ResourceErrorKind::RESOURCE_ERROR_KIND_STATUS_PROVIDER_SCHEMA_INVALID) => {
+            ResourceErrorKind::StatusProviderSchemaInvalid
+        }
+        Some(wire::ResourceErrorKind::RESOURCE_ERROR_KIND_STATUS_PROVIDER_OVERLAP) => {
+            ResourceErrorKind::StatusProviderOverlap
+        }
+        Some(wire::ResourceErrorKind::RESOURCE_ERROR_KIND_SPEC_PROVIDER_SCHEMA_INVALID) => {
+            ResourceErrorKind::SpecProviderSchemaInvalid
+        }
+        Some(wire::ResourceErrorKind::RESOURCE_ERROR_KIND_SPEC_PROVIDER_SHADOW) => {
+            ResourceErrorKind::SpecProviderShadow
+        }
+        Some(wire::ResourceErrorKind::RESOURCE_ERROR_KIND_UNSUPPORTED_CAPABILITY) => {
+            ResourceErrorKind::UnsupportedCapability
+        }
+        Some(wire::ResourceErrorKind::RESOURCE_ERROR_KIND_EXPEDITED_NOT_AUTHORIZED) => {
+            ResourceErrorKind::ExpeditedNotAuthorized
+        }
+        Some(wire::ResourceErrorKind::RESOURCE_ERROR_KIND_EXPEDITED_QUOTA_EXCEEDED) => {
+            ResourceErrorKind::ExpeditedQuotaExceeded
+        }
+        Some(wire::ResourceErrorKind::RESOURCE_ERROR_KIND_EXPEDITED_RECONCILE_PENDING) => {
+            ResourceErrorKind::ExpeditedReconcilePending
+        }
+        Some(wire::ResourceErrorKind::RESOURCE_ERROR_KIND_UPGRADE_REQUIRED) => {
+            ResourceErrorKind::UpgradeRequired
+        }
+        Some(wire::ResourceErrorKind::RESOURCE_ERROR_KIND_ENDPOINT_RESOLVE_DENIED) => {
+            ResourceErrorKind::EndpointResolveDenied
+        }
+        Some(wire::ResourceErrorKind::RESOURCE_ERROR_KIND_RELAY_DENIED) => {
+            ResourceErrorKind::RelayDenied
+        }
+        Some(wire::ResourceErrorKind::RESOURCE_ERROR_KIND_ROLE_RELAY_GRANT_RESTRICTED) => {
+            ResourceErrorKind::RoleRelayGrantRestricted
+        }
+        Some(wire::ResourceErrorKind::RESOURCE_ERROR_KIND_AUTHORIZATION_DENIED) => {
+            ResourceErrorKind::AuthorizationDenied
+        }
+        Some(wire::ResourceErrorKind::RESOURCE_ERROR_KIND_REVISION_EXPIRED) => {
+            ResourceErrorKind::RevisionExpired
+        }
+        Some(wire::ResourceErrorKind::RESOURCE_ERROR_KIND_BACKPRESSURE) => {
+            ResourceErrorKind::Backpressure
+        }
+        Some(wire::ResourceErrorKind::RESOURCE_ERROR_KIND_TIMEOUT) => ResourceErrorKind::Timeout,
+        Some(wire::ResourceErrorKind::RESOURCE_ERROR_KIND_CANCELLED) => {
+            ResourceErrorKind::Cancelled
+        }
+        Some(wire::ResourceErrorKind::RESOURCE_ERROR_KIND_RESOURCE_PLANE_UNAVAILABLE) => {
+            ResourceErrorKind::ResourcePlaneUnavailable
+        }
+        Some(wire::ResourceErrorKind::RESOURCE_ERROR_KIND_INTERNAL_INTEGRITY_FAILURE)
+        | Some(wire::ResourceErrorKind::RESOURCE_ERROR_KIND_UNSPECIFIED)
+        | None => ResourceErrorKind::InternalIntegrityFailure,
+    }
+}
+
+fn retry_class_from_wire(retry_class: Option<wire::RetryClass>) -> RetryClass {
+    match retry_class {
+        Some(wire::RetryClass::RETRY_CLASS_IMMEDIATE) => RetryClass::Immediate,
+        Some(wire::RetryClass::RETRY_CLASS_AFTER_DELAY) => RetryClass::AfterDelay,
+        Some(wire::RetryClass::RETRY_CLASS_REAUTHORIZE) => RetryClass::Reauthorize,
+        Some(wire::RetryClass::RETRY_CLASS_NEVER)
+        | Some(wire::RetryClass::RETRY_CLASS_UNSPECIFIED)
+        | None => RetryClass::Never,
+    }
 }
 
 fn encode_public_get_response(response: wire::GetResponse) -> Result<Value, ResourceRuntimeError> {
@@ -4692,7 +4817,7 @@ fn encode_public_get_response(response: wire::GetResponse) -> Result<Value, Reso
             reason = %error.reason,
             "public Resource Get returned an API error"
         );
-        return Ok(public_api_error());
+        return Ok(public_api_error(error));
     }
     let resource = response
         .resource
@@ -4704,8 +4829,8 @@ fn encode_public_get_response(response: wire::GetResponse) -> Result<Value, Reso
 fn encode_public_list_response(
     response: wire::ListResponse,
 ) -> Result<Value, ResourceRuntimeError> {
-    if response.error.is_some() {
-        return Ok(public_api_error());
+    if let Some(error) = response.error.as_ref() {
+        return Ok(public_api_error(error));
     }
     let resources = response
         .resources
@@ -5869,6 +5994,30 @@ mod tests {
         assert_eq!(envelope["error"]["currentRevision"], 11);
         assert_eq!(envelope["error"]["retryAfterMs"], 250);
         assert_eq!(envelope["error"]["retryClass"], "after-delay");
+    }
+
+    #[test]
+    fn public_api_error_preserves_not_found_and_plane_kinds() {
+        let mut not_found = wire::ResourceError::new();
+        not_found.kind = protobuf::EnumOrUnknown::new(
+            wire::ResourceErrorKind::RESOURCE_ERROR_KIND_RESOURCE_NOT_FOUND,
+        );
+        not_found.retry_class = protobuf::EnumOrUnknown::new(wire::RetryClass::RETRY_CLASS_NEVER);
+        assert_eq!(
+            public_api_error(&not_found)["error"]["kind"],
+            "resource-not-found"
+        );
+
+        let mut unavailable = wire::ResourceError::new();
+        unavailable.kind = protobuf::EnumOrUnknown::new(
+            wire::ResourceErrorKind::RESOURCE_ERROR_KIND_RESOURCE_PLANE_UNAVAILABLE,
+        );
+        unavailable.retry_class =
+            protobuf::EnumOrUnknown::new(wire::RetryClass::RETRY_CLASS_AFTER_DELAY);
+        assert_eq!(
+            public_api_error(&unavailable)["error"]["kind"],
+            "resource-plane-unavailable"
+        );
     }
 
     #[tokio::test]
