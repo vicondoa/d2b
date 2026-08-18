@@ -9,6 +9,7 @@
 fn wave6_operator_path_contains_public_api_and_provider_boundary() {
     let runtime = include_str!("../../d2bd/src/resource_runtime.rs");
     let boundary = include_str!("../../d2bd/src/resource_operator_activation.rs");
+    let daemon = include_str!("../../d2bd/src/lib.rs");
     let integration = include_str!("../../d2bd/tests/resource_operator_activation.rs");
     let effects = include_str!("../../d2bd/tests/zone_provider_acceptance.rs");
 
@@ -18,9 +19,11 @@ fn wave6_operator_path_contains_public_api_and_provider_boundary() {
         "select_wave6_resources",
         "Wave6ProviderBoundary",
         "ResourceApiClient<RedbBackend, UnavailableUpgradeDispatcher>",
+        "guest-provider-binding",
+        "d2b_provider_runtime_cloud_hypervisor::PROVIDER_REF",
     ] {
         assert!(
-            runtime.contains(required) || boundary.contains(required),
+            runtime.contains(required) || boundary.contains(required) || daemon.contains(required),
             "Wave 6 operator contract lost required production marker: {required}"
         );
     }
