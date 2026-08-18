@@ -1698,7 +1698,7 @@ fn validate_active_schema(
             return Err(schema_invalid("provider-schema-not-installed"));
         }
     } else if !validate_qualified_base(envelope)? {
-        return Err(schema_invalid("resource-type-schema-validator-unavailable"));
+        return Err(schema_invalid("resource-base-schema-invalid"));
     }
     Ok(())
 }

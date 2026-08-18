@@ -17,7 +17,7 @@ use d2b_resource_store::{
     PolicySnapshot, PreparedStoreMutation, ResourceMutationKind, StoreGetRequest, StoreListRequest,
     StoreMutation, StoreOperationContext, StoreProjection, StoreSlot, StoreWatchRequest,
 };
-use redb::{Database, Durability, ReadableDatabase, ReadableTable};
+use redb::{Database, Durability, ReadableDatabase, ReadableTable, ReadableTableMetadata};
 use rustix::io::{FdFlags, fcntl_getfd, fcntl_setfd};
 use rustix::net::{
     AddressFamily, SendAncillaryBuffer, SendAncillaryMessage, SendFlags, SocketFlags, SocketType,
@@ -1605,6 +1605,75 @@ async fn legacy_v1_reopen_backfills_the_catalog_without_losing_resources() {
     reopened.shutdown().await.unwrap();
 }
 
+#[tokio::test]
+async fn legacy_v1_reopen_backfills_qualified_schema_rows() {
+    let (directory, file, marker) = provisioned_store();
+    let store_identity = identity();
+    let store = provision_store(file, marker, store_identity.clone())
+        .await
+        .unwrap();
+    store.shutdown().await.unwrap();
+
+    let qualified_types = [
+        "display-wayland.d2bus.org.WaylandPolicy",
+        "display-wayland.d2bus.org.WaylandSession",
+    ]
+    .into_iter()
+    .map(|resource_type| ResourceTypeName::parse(resource_type).unwrap())
+    .collect::<Vec<_>>();
+    let keys = qualified_types
+        .iter()
+        .map(crate::transaction::api_schema_key_for_type)
+        .collect::<Result<Vec<_>, _>>()
+        .unwrap();
+    let legacy_file = OpenOptions::new()
+        .read(true)
+        .write(true)
+        .open(directory.path().join("store.redb"))
+        .unwrap();
+    let database = Database::builder()
+        .create_with_backend(redb::backends::FileBackend::new(legacy_file).unwrap())
+        .unwrap();
+    let mut write = database.begin_write().unwrap();
+    write.set_durability(Durability::Immediate).unwrap();
+    let mut schemas = write.open_table(crate::transaction::API_SCHEMAS).unwrap();
+    for key in &keys {
+        schemas.remove(key.as_slice()).unwrap();
+    }
+    assert_eq!(
+        schemas.len().unwrap(),
+        crate::transaction::STANDARD_SCHEMA_CATALOG.len() as u64
+    );
+    drop(schemas);
+    write.commit().unwrap();
+    drop(database);
+
+    let file = OpenOptions::new()
+        .read(true)
+        .write(true)
+        .open(directory.path().join("store.redb"))
+        .unwrap();
+    let reopened = open_store(file, store_identity).await.unwrap();
+    reopened.shutdown().await.unwrap();
+
+    let file = OpenOptions::new()
+        .read(true)
+        .write(true)
+        .open(directory.path().join("store.redb"))
+        .unwrap();
+    let database = Database::builder()
+        .create_with_backend(redb::backends::FileBackend::new(file).unwrap())
+        .unwrap();
+    let read = database.begin_read().unwrap();
+    let schemas = read.open_table(crate::transaction::API_SCHEMAS).unwrap();
+    assert_eq!(
+        schemas.len().unwrap(),
+        crate::transaction::INSTALLED_SCHEMA_CATALOG.len() as u64
+    );
+    for key in &keys {
+        assert!(schemas.get(key.as_slice()).unwrap().is_some());
+    }
+}
 #[tokio::test]
 async fn empty_existing_store_is_quarantined_without_publication_marker() {
     let (_directory, file) = owned_file();

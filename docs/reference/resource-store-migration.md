@@ -41,7 +41,7 @@ publication and validation have completed.
 
 The registered chain is explicit and finite. The current physical schema is
 version `2`; supported upgrades are `0 -> 1 -> 2`. Version `0` has an
-unversioned metadata record, and version `1` adds the authority lifecycle
+unversioned metadata record, and version `2` adds the authority lifecycle
 shape. Each step copies rows into a new staged database and updates only the
 staged metadata before current-schema validation. The public
 `upgrade_owned_after_backup` entry point consumes an identity-validated
