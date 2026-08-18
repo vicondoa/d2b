@@ -481,9 +481,9 @@ fn redact_text(input: &str) -> String {
             redacted_lines.push(redacted_line(&lower));
             continuation = match state {
                 RedactionContinuation::Unquoted => None,
-                RedactionContinuation::Quoted(quote) => {
-                    (unescaped_quote_count(&lower, quote) % 2 == 0).then_some(state)
-                }
+                RedactionContinuation::Quoted(quote) => unescaped_quote_count(&lower, quote)
+                    .is_multiple_of(2)
+                    .then_some(state),
             };
             continue;
         }
