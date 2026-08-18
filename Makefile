@@ -94,9 +94,6 @@ D2B_BAZEL_MAIN_TARGETS = \
 	-//packages/d2b-bus/tests/ui/... \
 	-//packages/d2b-controller-toolkit/tests/ui/... \
 	-//packages/d2b-resource-api/tests/ui/... \
-	-//packages/xtask:bazel_cache_transfer \
-	-//packages/xtask:bazel_qualification \
-	-//packages/xtask:bazel_inventory \
 	-//packages/xtask:policy_ci \
 	-//packages/xtask:policy_workspace \
 	-//bazel/checks/rust:portable_rust_broker \
@@ -141,7 +138,7 @@ bazel-check:
 	$(BAZEL_RUN) $(D2B_BAZEL_COMPLETE_TARGETS)
 
 # ===========================================================================
-# Sub-targets. Each has a corresponding tests/test-<name>.sh driver.
+# Sub-targets. Each target is a thin alias over one fixed Bazel label set.
 # ===========================================================================
 
 ## test-lint - fixed Bazel lint suite.
@@ -246,7 +243,7 @@ heavy-lane-integration: heavy-lane-guard
 
 ## check-inventory - compatibility alias for the fixed Bazel inventory test.
 check-inventory:
-	$(BAZEL_RUN) //bazel/checks/meta:inventory
+	$(BAZEL_RUN) //packages/xtask:bazel_rust_parity //packages/xtask:bazel_non_rust_parity
 
 ## ledger-regen - regenerate tests/migration-ledger.toml in place for humans.
 ledger-regen:

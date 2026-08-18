@@ -147,6 +147,21 @@ Broker serial feature streams may use explicit execution-only target
 directories, but those directories are cache surfaces rather than workspace
 roots.
 
+### Bazel consumes Cargo authority
+
+The committed Bazel graph consumes the same root Cargo manifests and
+`Cargo.lock`. `rules_rs` supplies Cargo metadata and dependency integration;
+first-party BUILD files record only target edges and maintained exceptions.
+Bazel owns Layer-1 scheduling, caching, retry classification, and aggregation.
+Make aliases and fixed CI jobs are compatibility surfaces over that graph and
+must not introduce a second scheduler, discovery manifest, source inventory,
+or dependency lock.
+
+Direct Cargo, nextest, `cargo test --doc`, feature-context, harness-free,
+fixture, and policy commands remain valid independent development surfaces.
+Their coverage is represented by direct Bazel labels or fixed suite
+membership, not by a shell-owned rollup.
+
 ### Explicit Cargo and Nix selection
 
 The main Cargo gate uses the root workspace and its documented exclusions:

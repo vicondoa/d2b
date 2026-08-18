@@ -459,7 +459,7 @@ export D2B_STATIC_CACHE
 # concurrent git-fetcher flake evals never stat it.
 cd "$ROOT"
 _STATIC_RUST_GATE_OVERLAP=0
-if [ -n "${D2B_STATIC_PARALLEL_RUST:-}" ] && [ -d "$ROOT/packages" ] && [ -x "$ROOT/tests/test-rust.sh" ]; then
+if [ -n "${D2B_STATIC_PARALLEL_RUST:-}" ] && [ -d "$ROOT/packages" ]; then
   _STATIC_RUST_GATE_OVERLAP=1
   log "==> launching make test-rust as background long pole (D2B_STATIC_PARALLEL_RUST=1; fixture lane remains separate)"
   d2b_static_longpole_spawn "make test-rust" env D2B_SKIP_FIXTURE_BUILD=1 make test-rust
@@ -796,7 +796,7 @@ if [ -x "$ROOT/tests/privileges-json-rust-vs-nix-eval.sh" ]; then
 fi
 # Wire orphaned static-eval gates. These were previously not referenced
 # in any CI workflow or aggregator;
-# wired here so ci-coverage.sh structural guard passes.
+# wired here so the retained static aggregate covers the compatibility lane.
 for _gate in \
   broker-socket-activation-eval \
   daemon-autostart-eval \
@@ -808,16 +808,6 @@ for _gate in \
   fi
 done
 unset _gate
-# deliverable-gate-inventory is invoked literally (not via the loop above) so
-# tests/unit/meta/layer1-self-inventory.sh's invocation grep resolves it.
-if [ -x "$ROOT/tests/unit/meta/deliverable-gate-inventory.sh" ]; then
-  d2b_static_parallel_script_gate "tests/unit/meta/deliverable-gate-inventory.sh" "$ROOT/tests/unit/meta/deliverable-gate-inventory.sh"
-fi
-# ci-coverage.sh structural guard (must run after all other tests
-# are registered above so it can verify the full set is wired).
-if [ -x "$ROOT/tests/unit/meta/ci-coverage.sh" ]; then
-  d2b_static_parallel_script_gate "tests/unit/meta/ci-coverage.sh" "$ROOT/tests/unit/meta/ci-coverage.sh"
-fi
 d2b_static_parallel_wait_all
 
 # Gc after smoke-eval + mid-tier eval pool. These two
@@ -1127,17 +1117,6 @@ log "Layer 1 core gates OK"
 # flake checks so adding a new executable Layer-1 tests/*.sh script without
 # wiring it into static.sh fails closed.
 # -----------------------------------------------------------------------------
-d2b_static_gate_begin "tests/unit/meta/layer1-self-inventory.sh" "tests/unit/meta/layer1-self-inventory.sh"
-if [ -x "$ROOT/tests/unit/meta/layer1-self-inventory.sh" ]; then
-  if bash "$ROOT/tests/unit/meta/layer1-self-inventory.sh" >/dev/null 2>&1; then
-    ok "layer1-self-inventory"
-  else
-    bash "$ROOT/tests/unit/meta/layer1-self-inventory.sh" 2>&1 | tail -40 >&2 || true
-    fail "layer1-self-inventory"
-  fi
-fi
-d2b_static_gate_end "tests/unit/meta/layer1-self-inventory.sh"
-
 # -----------------------------------------------------------------------------
 # Rust workspace gate. By default (serial) this runs inline here. When the
 # optional D2B_STATIC_PARALLEL_RUST overlap launched the background long pole, it
@@ -1154,15 +1133,13 @@ elif [ "$_STATIC_RUST_GATE_OVERLAP" -eq 1 ]; then
   d2b_static_longpole_join
 else
   d2b_static_gate_begin "D2B_SKIP_FIXTURE_BUILD=1 make test-rust" "D2B_SKIP_FIXTURE_BUILD=1 make test-rust"
-  if [ -d "$ROOT/packages" ] && [ -x "$ROOT/tests/test-rust.sh" ]; then
+  if [ -d "$ROOT/packages" ]; then
     if D2B_SKIP_FIXTURE_BUILD=1 make test-rust >/dev/null 2>&1; then
       ok "rust-workspace-checks"
     else
       D2B_SKIP_FIXTURE_BUILD=1 make test-rust 2>&1 | tail -80 >&2 || true
       fail "rust-workspace-checks"
     fi
-  elif [ -d "$ROOT/packages" ]; then
-    log "  SKIP: test-rust.sh (not present)"
   else
     log "  no packages/ - skipping rust workspace checks (W0a unstaged)"
   fi

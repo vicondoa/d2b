@@ -47,8 +47,6 @@ const PROTECTED_CODEOWNERS_RULES: &[&str] = &[
     "/nixos-modules/store.nix @vicondoa",
     "/nixos-modules/unsafe-local-helper.nix @vicondoa",
     "/tests/lib.sh @vicondoa",
-    "/tests/test-policy.sh @vicondoa",
-    "/tests/test-rust.sh @vicondoa",
     "/tests/tools/guest-workspace-drift.py @vicondoa",
     "/tests/integration/containers/images/ubuntu-host-check.nix @vicondoa",
     "/tests/unit/smoke/guest-static-consumption-eval.nix @vicondoa",

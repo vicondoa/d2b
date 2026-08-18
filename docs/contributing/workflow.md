@@ -177,13 +177,12 @@ head-changing update, validate the new head and obtain fresh independent
 review. Missing review evidence fails closed to fresh review. No actionable
 finding remains at merge.
 
-The Bazel graph is an enforcing part of Layer-1. Bare local `make check` uses
-BuildBuddy for eligible Bazel leaves, while generated CI runs the same
-non-crate, main-workspace, broker, and guest-shell-runner leaves with local
-Bazel execution and no remote credential. `bazel-check` and `test-rust` own
-non-overlapping leaves so the scheduler does not duplicate crate tests. See
-[Bazel and BuildBuddy](../reference/bazel-buildbuddy.md) for the execution,
-cache, failure, and update contracts.
+The Bazel graph is the single enforcing Layer-1 authority. Bare local
+`make check` uses BuildBuddy for eligible actions, while generated CI runs the
+same fixed target sets with local Bazel execution and no remote credential.
+Make remains a compatibility surface, not a scheduler. See [Bazel and
+BuildBuddy](../reference/bazel-buildbuddy.md) for execution, cache, failure,
+credential, and update contracts.
 
 Review evidence is bound to the repository, PR, review head OID, observed base
 ref and OID, and verdict. It is not reusable after the head changes. A review
@@ -282,9 +281,9 @@ sessions. Its focused operating detail is
   incremental pairs against a nightly LLVM control, ran 5.8 s against 7.0 s:
   a real 17% but 1.2 s in absolute terms, and it cannot enter the gate at
   all, because `rust-toolchain.toml` pins an exact stable release
-  that `tests/test-rust.sh` enforces, so it would mean installing and
+  that the Cargo compatibility checks enforce, so it would mean installing and
   caching a second toolchain in every Rust job. Reopen either only with a
-  measurement, and note the trap: `tests/test-rust.sh` exports `RUSTFLAGS`,
+  measurement, and note the trap: the Rust compatibility checks export `RUSTFLAGS`,
   and that environment variable **replaces** `build.rustflags` rather than
   merging with it, so a linker configured through `rustflags` is silently
   dead there.

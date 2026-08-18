@@ -127,12 +127,12 @@ If the successor is a fail-closed native/contract test, pin its exact
 
 ```
 tests/
-├── static.sh / runner.sh / test-*.sh                         orchestrators (entry points)
+├── static.sh / runner.sh                                      legacy/manual aggregate entry points
 ├── lib.sh / cli-rust-native-common.sh                              shared shell harness
 ├── README.md / AGENTS.md                                           docs (human guide + this file)
 ├── migration-ledger.toml / migration-state.d/                      retirement ledger + records
 ├── golden/ / fixtures/                                             shared test data + fixtures
-├── tools/                                                          runners + codegen/asserter tools
+├── tools/                                                          Bazel facade, runners, codegen, and asserter tools
 ├── unit/
 │   ├── nix/      (cases/, pinned/, eval-cases/)                     type 1 eval cases
 │   ├── smoke/                                                      type 6 smoke/check defs
@@ -150,252 +150,77 @@ tests/
 Types 2-5 (unit/integration/contract/policy-lint) are Rust and live under
 `packages/`, not here.
 
-## Layer-1 orchestration manifest
+## Layer-1 orchestration and Bazel authority
 
-`tests/layer1-jobs.json` is the source of truth for the Layer-1 PR/local gate
-graph. Edit it when changing which `make test-*` targets belong to the
-PR-equivalent gate, then run `make layer1-workflow` to regenerate
-`.github/workflows/pr-l1-static-fast.yml`. `make test-drift` runs
-`make layer1-workflow-check` via the manifest tool and fails if the committed
-workflow was edited by hand or not regenerated.
+Bazel is the sole Layer-1 scheduler. The fixed graph in `BUILD.bazel` and
+`bazel/checks/` owns target selection, dependency ordering, parallelism,
+retry classification, caching, and aggregation. Make targets and the fixed CI
+jobs are compatibility aliases over that graph; they must not grow local
+fan-out, discovery, sharding, or rollup logic.
 
-The generated workflow intentionally exposes one stable final `check` job for
-branch protection. Keep intermediate job/matrix names as generated
-implementation details unless a required-context migration explicitly needs
-them preserved.
+`tests/tools/bazel-check` is the retained execution facade. It selects the
+local, developer-remote, or protected trusted-seed profile, reads credentials
+only through Bazel's credential-helper protocol, withholds credentials from
+untrusted jobs, redacts logs and BEP output, and permits one identical local
+retry only for typed pre-dispatch infrastructure failures. Post-dispatch,
+analysis, policy, build, and test failures fail closed.
 
-### Running the Rust suites
+The direct Cargo and nextest workflows remain supported development surfaces,
+but they do not schedule the Layer-1 graph. Cargo manifests and the root
+`Cargo.lock` own Rust package and dependency facts; `rules_rs` supplies the
+Bazel-side Cargo integration. Do not add a second Cargo lock, source
+inventory, generator, or repository-owned scheduler.
 
-Rust tests execute under `cargo-nextest`. Two surfaces are not nextest
-surfaces, so each workspace runs them explicitly and you must not fold them
-back into a single invocation:
+The fixed CI workflow is committed at
+`.github/workflows/pr-l1-static-fast.yml` and exposes one stable required
+`check` result. Keep its jobs aligned with the public Make aliases. Do not add
+discovery jobs or new inventory files.
 
-- **Doctests.** nextest does not run them. Several here are `compile_fail`
-  capability seals (`AdmittedMutation`, `OwnerIndexMutation`), so dropping
-  them removes a trust boundary without failing anything.
-- **Harness-free test and bench targets.** They expose no nextest execution
-  surface, so nextest builds them but does not run their assertions.
-  `d2b-core-smoke` is a test target and the routing and reaction benchmarks
-  are bench targets; all carry real assertions. The set is derived from
-  `nextest list` zero-case test suites plus Cargo metadata bench targets rather
-  than pinned, and each target is run once with its matching `--test` or
-  optimized `--release --bench` selector, so a new one cannot silently drop
-  out of the gate or turn a performance contract into a debug-build timing.
+### Running the Layer-1 graph
 
-The privileged broker workspace stays on `cargo test`. Its tests are not
-process-per-test safe, and it runs 528 tests in about 1.4 s, so nextest has
-nothing to win there.
-
-`make test-rust` owns the bounded local GNU Make DAG. Its stable leaves cover
-the main format/clippy/workspace, conditional fixture/CLI, broker,
-guest-shell-runner, no-bash AST, schema, supply-chain, stub, and pinned-test
-surfaces. Fixture and CLI leaves use an isolated stable target below
-`.scratch/rust-test-cache`, so they can overlap the main workspace without
-sharing mutable Cargo state; `D2B_SKIP_FIXTURE_BUILD=1` omits them for the
-Layer-1 graph. The focused `make test-rust-main` retains the same conditional
-fixture behavior. Direct `tests/test-rust.sh` calls require exactly one leaf
-mode and must not be used as an aggregate scheduler. The broker passes remain
-serial, and the main workspace, schema, and inventory leaves retain their
-dependency edges.
-
-`make check` schedules `make bazel-check`, which runs the complete local
-`//...` graph. Remote-cache read and write bytes are the BuildBuddy
-provider evidence. Standalone Cargo workflows remain available.
-
-Those dependency edges are warm-local-profile only. CI dispatches main, broker,
-guest, no-bash, schema, inventory and supply-chain Make targets as seven
-separate jobs, each with the full runner budget. When a local aggregate starts
-without `target`, its cold profile restores shared workspace targets.
-It runs fixture, inventory and schema as a full-budget chain so discovery
-reuses all prior builds before schema generation.
-
-The local Rust budget control is `D2B_RUST_BUDGET`, a positive requested upper
-bound. Its automatic cap uses logical CPUs and cache-adjusted available memory,
-reserves 2 GiB for the host, and budgets 3 GiB per heavy job. A visible but
-unreadable cgroup v2 memory controller fails closed to budget 1. Cargo and
-nextest quotas are derived so every active frontier stays within the effective
-budget, including budget 1. Top-level Make `-j` is not the Rust budget knob.
-
-### Nix-unit execution
-
-`make test-nix-unit` uses `nix-eval-jobs --no-instantiate` against the locked
-`nixUnitJobShards.<system>` output for the complete local pass. The underlying
-`nixUnitJobs.<system>` surface still contains exactly one aggregate job per
-current `*.nix` case file, named bijectively as `case-<basename>`, plus the
-`nix-unit` shard/pin integrity job. `nixUnitJobShards.<system>` presents those
-per-file aggregates as one local shard attr at a time, plus the integrity
-shard, so each evaluator process handles one file aggregate rather than the
-whole corpus. The `fileJobs` constructor reuses the same
-`casesFor`/`resultsFor`/failure-report semantics as the seven existing flake
-shard checks, so every file job reports all of its real
-`FAIL <case>: <detail>` lines. No installable is submitted and no derivation
-is realized.
-
-The file-job count and the corpus case count are **derived, not contractual**,
-so this document states the rule rather than a number. The bijection is the
-contract; the cardinality is whatever the corpus currently holds, and the
-pinned case list is what fails closed when it changes. Derive either count
-from the tree:
+Use the public aliases for focused or complete runs:
 
 ```bash
-ls tests/unit/nix/cases/*.nix | wc -l            # file jobs, one per case file
-grep -hvc '^#' tests/unit/nix/pinned/common.txt  # cases present on every system
-grep -hvc '^#' tests/unit/nix/pinned/$(nix eval --raw --impure \
-  --expr builtins.currentSystem).txt             # extra cases on this system
+make check-tier0
+make test-lint
+make check-inventory
+make test-changelog
+make test-rust
+make test-proofs
+make test-flake
+make test-nix-unit
+make test-policy
+make test-drift
+make test-runtime-ledger
+make test-fixture-contracts
+make test-unit
+make check
 ```
 
-The corpus total is **system-dependent**: it is the common pin count plus the
-native-system pin count, so a single hardcoded total would be wrong on at least
-one supported system. Hardcoding either number also puts this file one case
-addition behind the tree, which is how the previous figures went stale.
+Each alias performs one direct Bazel invocation over a fixed target set. The
+individual Bazel labels remain directly runnable for focused reruns. The
+performance target is advisory and is not validation evidence when it reports
+a guarded skip.
 
-The seven existing flake checks remain the stable manifest leaves:
-`nix-unit`, `nix-unit-daemon`, `nix-unit-guest`, `nix-unit-misc`,
-`nix-unit-network`, `nix-unit-runtime`, and `nix-unit-state`.
-The single locked `nixUnitInventory.<system>` output contains sorted
-`caseNames` and sorted `jobNames`, including integrity, and does not force case
-expressions. The runner evaluates it once with a `git+file` flake reference,
-compares result attrs by exact symmetric difference with `jobNames`, and
-compares `caseNames` exactly with `tests/unit/nix/pinned/common.txt` plus the
-native-system pin file. Missing or unexpected names fail closed and retain the
-exact `run make nix-unit-pin` remedy. Do not replace this with a
-repository-specific worker loop or a second scheduler.
+Nix-unit cases keep their existing pins under `tests/unit/nix/pinned/`; after
+adding or removing cases, regenerate only those pins with
+`make nix-unit-pin`. Runtime-ledger census changes use the existing
+`make runtime-ledger-pin` target. Do not add a second inventory or validator.
 
-The target enters `devShells.<system>.nix-unit` once when `nix-eval-jobs` or
-`jq` is missing. That focused shell is a standard `mkShellNoCC` output backed
-by the locked flake inputs; an existing toolchain or development shell runs
-directly. `D2B_NIX_UNIT_JOBS` is retired and returns status 2 with a migration
-message naming `D2B_NIX_UNIT_WORKERS`. Use that bounded operator-intent
-control. Its effective count is capped by four workers, logical CPUs, any
-finite cgroup CPU quota, and available memory after a 3 GiB host reserve at
-the evaluator limit plus 2048 MiB of process and flake overhead per worker.
-The full local runner requests four workers and a 4096 MiB evaluator limit by
-default, but it still keeps at most **two** `nix-eval-jobs` shard processes
-resident at once after those caps are applied. `D2B_NIX_UNIT_MEMORY_MB` may
-set the limit from 512 through 4096 MiB.
-Successful full runs suppress raw JSONL output. Every real `FAIL <case>:
-<detail>` line from an aggregate error is parsed and printed as one concise,
-path-sanitized stderr entry. Repository and home roots become fixed
-placeholders; Nix store hashes are hidden without removing derivation names.
-Source-code template lines such as `${result.name}` are excluded. If an
-aggregate has no real FAIL line, one final fallback diagnostic remains
-attributable to that result attribute.
-Command progress uses the fixed path-free `d2b` flake label.
+### Retained Layer-2 and manual scripts
 
-Nix-unit fixtures must not inherit environments, VMs, components, or rendered
-artifact surfaces that the case does not assert. Keep a schema-only base for
-option/assertion cases and add focused env/VM layers only where the contract
-needs them. Retain at least one full positive and one full negative
-`nixosSystem` integration path per affected module family. Identical scenario
-configurations share one evaluated thunk while preserving one case per
-contract. Cardinality boundaries use three tiers: pure limit/helper checks, a pure
-production counter composed with the helper at boundary rows, and a small
-real-wiring config pinning declarations -> index -> counter -> assertion
-records. Do not force an internal `_index` value or materialize hundreds of
-typed submodules solely to test a fixed count.
-
-`D2B_NIX_UNIT_CHECK` remains the manual single-shard selector. When
-set, the runner discovers that one of the seven stable topical checks, reads
-its per-file jobs from `nixUnitCheckJobShards.<system>`, and instantiates each
-selected job's `drvPath` one at a time before eval-jobs bootstrap or the full
-local resource-accounting path. Hosted CI retains the seven topical check
-names and the per-check matrix because the full eval-jobs path did not fit the
-hosted runner envelope. When
-`D2B_EXECUTION_MANIFEST` is set, enter the shared secure lifecycle before Nix
-discovery or toolchain entry. A full pass records exactly these seven leaves:
-`nix-unit`, `nix-unit-daemon`, `nix-unit-guest`, `nix-unit-misc`,
-`nix-unit-network`, `nix-unit-runtime`, and `nix-unit-state`. A selected pass
-records only its selected leaf. Reuse
-`tests/tools/execution-manifest.pl`; do not weaken its locking, cleanup, or
-interruption handling.
-
-`D2B_EXECUTION_MANIFEST=<path>` opts the Rust aggregate into execution evidence.
-The binding v1 schema and secure lifecycle live in
-[`../docs/reference/test-execution-manifest.md`](../docs/reference/test-execution-manifest.md).
-The prior record is invalidated before dispatch, fragments are same-filesystem
-atomic evidence, and failed or handled-interruption runs publish partial
-status. This evidence supplements source discovery and does not replace
-`make test-policy` or
-`D2B_ENABLE_FIXTURE_BUILD=1 make test-fixture-contracts`.
-
-The complete `test-nix-unit` and `test-flake` runners are protected by
-`tests/tools/peak-rss.py`. The helper samples aggregate process-tree resident
-memory (and uses a baseline-adjusted cgroup reading only when the cgroup is
-dedicated), fails closed when no measurement is available, and reports the
-lane, observed peak, configured maximum, and the likely full-system/closure
-cause. The Nix-unit ceiling is 10,683,720 KiB (8,546,976 KiB post-refresh
-baseline plus 25% deterministic headroom); the flake ceiling is 14,665,373
-KiB (11,732,298 KiB post-refresh local-shard baseline plus 25%). These are fixed
-lane contracts, not operator overrides. Full flake evaluation uses the
-existing local-shard topology with one resident shard by default; this
-isolates evaluated scenarios rather than deleting checks, and the guard
-remains authoritative if a caller requests more concurrency. A regression
-usually means that an eval-only test or module path deep-forced
-`system.build.toplevel`, `pkgs.closureInfo`, derivation realization/IFD, an
-equivalent VM closure, or an overly broad deep evaluation; narrow the
-attr-local fixture, share an evaluated scenario, or stub the evaluation
-boundary instead.
-
-The refreshed `origin/v3` comparison was measured on the same host and
-resident-memory harness. With one Nix-unit worker, v3 completed 46 attributes
-at 18,181,990 KiB in 777 seconds; its default four-worker run crossed a
-30,000,000 KiB protective cap and was terminated. That exceeds the supported
-16 GiB CI envelope and is a mechanical v3 baseline blocker, not acceptable
-growth to normalize. v3's complete monolithic flake run measured 14,583,722
-KiB in 605 seconds. The refreshed run evaluates 83 attributes and 32
-flake checks plus outputs: its Nix-unit peak is 8,563,111 KiB and its flake
-peak is 11,775,682 KiB. Thus the final flake ceiling is only 0.56% above the
-measured v3 flake baseline despite the added checks, while the Nix-unit
-ceiling remains well below the 16 GiB envelope because the repaired graph is
-smaller than the v3 baseline. Added case count is not permission to force VM
-closures.
-
-Tests that shell out to `cargo` cache their scratch trees between runs under
-`.scratch/rust-test-cache/`, keyed on `rustc -vV`, because compiled artifacts
-are not portable across compiler versions. CI restores that directory as one
-cache surface. When adding such a test, key its subtree the same way and reuse
-the compilation but not any output whose freshness the test asserts on.
-
-### External compile-fail test policy
-
-External compile-fail tests are a high-latency exception, not a general API
-visibility test mechanism. Add one only when it proves a downstream type-system
-or trust-boundary property that defining-crate compiler assertions and doctests
-cannot prove. The public capability types have explicit rustdoc `compile_fail`
-examples for every prohibited `Clone`, `Default`, and `From<()>` case, and the
-private `SessionAuthority` trait has an explicit doctest proving it is not
-available downstream. The test comment and changelog entry must state which
-semantic property requires a downstream crate. Do not add fixtures solely for
-private fields, private modules, constructors, sealed public traits, missing
-re-exports, or absent methods; those belong in the defining crate's compiler
-assertions, public contract tests, or a small rustdoc `compile_fail` example.
-
-The resource API external seal retains one forced-`cfg(test)` downstream probe
-because the production boundary differs from the test configuration. Keep new
-cargo-shelling tests under
-`rust-test-cache/` unless their tree is large enough to justify a different
-cache trade, and document that trade.
-
-The runtime ledger's per-test wall-clock ceiling is 60 seconds. A test sample
-above that limit fails the CI gate; shorter advisory thresholds remain
-diagnostic only. Do not add an exception for a slow test without either
-removing the unnecessary work or documenting why the test cannot be split or
-made cheaper.
-
-When a failure reproduces only inside the gate's toolchain environment, use
-`tests/tools/repro-rust-gate-env.sh <command>` instead of re-running the whole
-gate.
+Layer-2 container, VM, live-host, hardware, and performance scripts remain
+manual or conditional surfaces. They run through the documented heavy-gate
+semaphore and are not part of the Bazel Layer-1 scheduler. A shell script may
+remain under `tests/tools/` or `tests/unit/` when it is the subject of a
+native Bazel test, a fixture materializer, a generator, or a Layer-2 lane; it
+must not schedule sibling Layer-1 work.
 
 ### Standalone Rust workspaces
 
-Most Rust crates are members of `Cargo.toml`, but some crates are
-intentionally excluded because they require a distinct safety or dependency
-policy. The privileged broker lives at `packages/d2b-priv-broker/`; the
-persistent-shell feasibility helper lives at
-`packages/d2b-guest-shell-runner/`.
-
-Tests for those excluded workspaces still follow the same taxonomy: Type 2 unit
-tests live under `src/**`, Type 3 binary/integration tests live under
-`packages/<crate>/tests/*.rs`, and Type 6 static/supply-chain assertions live in
-existing `flake.checks.<system>.*` entries. Do not add a new top-level
-`tests/*.sh`; extend the existing Rust/static orchestrators by manifest path.
+Product crates use the repository-root `Cargo.toml` and `Cargo.lock`. The
+privileged broker and guest shell runner retain their explicit Cargo feature
+contexts, while the no-bash walker and compile-fail UI crates retain their
+separate tooling boundaries. Doctests, harness-free binaries, feature
+variants, fixtures, and policy checks must remain visible as direct Cargo and
+Bazel targets.

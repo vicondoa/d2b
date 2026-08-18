@@ -850,7 +850,7 @@ tests.
 Four source-level properties compiler assertions cannot see are enforced by a new
 tree-wide policy lint at
 `packages/d2b-contract-tests/tests/policy_resource_mutation_seal.rs`, wired
-explicitly into `tests/test-policy.sh`. The existing
+explicitly into `make test-policy`. The existing
 `packages/d2b-resource-store/tests/d106_policy.rs` is precedent for the
 assertions, but `tests/AGENTS.md` assigns new Rust scans of source and docs to
 the contract-test policy layer:
@@ -1295,9 +1295,9 @@ describing a control-plane surface. Wave A changes both documents and eleven
 the resource mutation policy lint, so it must run the lane that covers it.
 
 `make test-fixture-contracts` refuses to run unless `D2B_ENABLE_FIXTURE_BUILD`
-is `1`: `tests/test-rust.sh` fails with "fixture-contracts mode requires
+is `1`: the fixture Bazel target fails with "fixture-contracts mode requires
 D2B_ENABLE_FIXTURE_BUILD=1; refusing to report a skipped gate as passing". The
-Layer-1 orchestrator sets it from `tests/layer1-jobs.json`; a hand-run
+fixed Layer-1 workflow sets it in its fixture lane; a hand-run
 stopping condition has to set it too, or it is not a stopping condition.
 
 Done when all of the following hold:
@@ -1343,7 +1343,7 @@ Two file-disjoint scopes, both opening against merged Wave A.
   `packages/d2b-resource-store/src/mutation_seal.rs` for the in-crate
   trait-solver assertions,
   `packages/d2b-contract-tests/tests/policy_resource_mutation_seal.rs`,
-  `tests/test-policy.sh`, and the "Capability mint surface allowlist" rows in
+  `make test-policy`, and the "Capability mint surface allowlist" rows in
   `AGENTS.md` and
   `docs/contributing/critical-subsystems.md`, whose crate lists gain
   `packages/d2b-resource-store/`.

@@ -763,7 +763,7 @@ fn compatibility_fixture_rejects_repository_owned_generators_and_overlays() {
 fn compatibility_metadata_is_valid_json() {
     for relative in [
         "tests/golden/bazel/check-coverage.json",
-        "tests/golden/bazel/eligibility.json",
+        "tests/golden/bazel/cache-policy.json",
     ] {
         let bytes = std::fs::read(repo_root().join(relative))
             .unwrap_or_else(|error| panic!("read {relative}: {error}"));

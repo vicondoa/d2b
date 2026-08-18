@@ -59,31 +59,6 @@ rust_test(
 )
 
 rust_test(
-    name = "bazel_cache_transfer",
-    timeout = "long",
-    srcs = ["tests/bazel_cache_transfer.rs"],
-    compile_data = ["Cargo.toml"],
-    data = [
-        ":xtask",
-        "//:BUILD.bazel",
-        "//:Cargo.toml",
-        "//:flake.nix",
-        "//bazel/cache-transfer:fixtures",
-        "//:tests/golden/bazel/cache-transfer-representative.json",
-        "//:tests/golden/bazel/cache-transfer-schema.json",
-        "//:tests/golden/bazel/eligibility.json",
-    ],
-    env = {
-        "CARGO_BIN_EXE_xtask": "$(rootpath :xtask)",
-    },
-    env_inherit = ["D2B_REPO_ROOT", "PATH"],
-    rustc_env = {"CARGO_BIN_EXE_xtask": "$(rootpath :xtask)"},
-    tags = ["local"],
-    visibility = ["//visibility:public"],
-    deps = [] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
-)
-
-rust_test(
     name = "buildbuddy_config",
     srcs = ["tests/buildbuddy_config.rs"],
     compile_data = ["Cargo.toml"],
@@ -123,65 +98,6 @@ rust_test(
     ],
     env = {"CARGO_BIN_EXE_xtask": "$(rootpath :xtask)"},
     env_inherit = ["D2B_REPO_ROOT", "PATH"],
-    rustc_env = {"CARGO_BIN_EXE_xtask": "$(rootpath :xtask)"},
-    tags = ["local"],
-    visibility = ["//visibility:public"],
-    deps = [] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
-)
-
-rust_test(
-    name = "bazel_qualification",
-    timeout = "long",
-    srcs = ["tests/bazel_qualification.rs"],
-    compile_data = ["Cargo.toml"],
-    data = [
-        ":xtask",
-        "//:BUILD.bazel",
-        "//:Cargo.toml",
-        "//:flake.nix",
-        "//:.bazelrc",
-        "//:tests/golden/bazel/cache-policy.json",
-        "//:tests/golden/bazel/cache-transfer-representative.json",
-        "//:tests/golden/bazel/eligibility.json",
-        "//:tests/golden/bazel/qualification-schema.json",
-    ],
-    env = {
-        "CARGO_BIN_EXE_xtask": "$(rootpath :xtask)",
-    },
-    env_inherit = ["D2B_REPO_ROOT", "PATH"],
-    rustc_env = {"CARGO_BIN_EXE_xtask": "$(rootpath :xtask)"},
-    tags = ["local"],
-    visibility = ["//visibility:public"],
-    deps = [] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
-)
-
-rust_test(
-    name = "bazel_inventory",
-    timeout = "long",
-    srcs = ["tests/bazel_inventory.rs"],
-    compile_data = ["Cargo.toml"],
-    data = [
-        ":xtask",
-        "//:Cargo.toml",
-        "//:proof_workspace_sources",
-        "//bazel/checks/rust:repo_policy_sources",
-        "//packages/d2b-bus/tests/ui/public-api-mutations:BUILD.bazel",
-        "//packages/d2b-bus/tests/ui/public-api-mutations/opaque-claims:BUILD.bazel",
-        "//packages/d2b-controller-toolkit/tests/ui/external-seals:BUILD.bazel",
-        "//packages/d2b-resource-api/tests/ui/external-seals:BUILD.bazel",
-        "@rules_rust//rust/toolchain:current_cargo_files",
-        "@rules_rust//rust/toolchain:current_rustc_files",
-    ],
-    env = {
-        "CARGO_BIN_EXE_xtask": "$(rootpath :xtask)",
-    },
-    env_inherit = [
-        "BAZEL_SH",
-        "D2B_BAZEL_BIN",
-        "D2B_REPO_ROOT",
-        "D2B_BAZEL_TEST_PATH",
-        "PATH",
-    ],
     rustc_env = {"CARGO_BIN_EXE_xtask": "$(rootpath :xtask)"},
     tags = ["local"],
     visibility = ["//visibility:public"],

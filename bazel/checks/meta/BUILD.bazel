@@ -16,7 +16,10 @@ test_suite(
 
 test_suite(
     name = "inventory",
-    tests = ["//packages/xtask:bazel_inventory"],
+    tests = [
+        "//packages/xtask:bazel_rust_parity",
+        "//packages/xtask:bazel_non_rust_parity",
+    ],
 )
 
 test_suite(

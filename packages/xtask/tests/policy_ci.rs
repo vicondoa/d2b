@@ -248,18 +248,19 @@ fn optional_bazel_facade_stays_out_of_ci_schedulers() {
         violations.join("\n")
     );
 
-    let layer1_manifest = read_repo_file("tests/layer1-jobs.json");
+    let workflow = read_repo_file(".github/workflows/pr-l1-static-fast.yml");
     assert!(
-        layer1_manifest.contains("\"ciJobId\": \"bazel-check\""),
-        "CI must schedule a local Bazel aggregate"
+        workflow.contains("make check-tier0")
+            && workflow.contains("make test-policy")
+            && workflow.contains("make check"),
+        "CI must schedule the fixed Bazel graph through public Make aliases"
     );
     assert!(
-        layer1_manifest.contains("\"D2B_BAZEL_PROFILE\": \"local\""),
+        workflow.matches("D2B_BAZEL_PROFILE: local").count() >= 1,
         "CI Bazel must stay on the local profile"
     );
     assert!(
-        !layer1_manifest.contains("remote.buildbuddy.io")
-            && !layer1_manifest.contains("d2b.buildbuddy.io"),
+        !workflow.contains("remote.buildbuddy.io") && !workflow.contains("d2b.buildbuddy.io"),
         "CI must not pin a BuildBuddy endpoint"
     );
 }

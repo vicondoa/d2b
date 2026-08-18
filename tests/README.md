@@ -51,42 +51,36 @@ Rust tests (types 2-5: unit, integration, contract, policy-lint) live under
 
 | Command | Runs | Where |
 |---------|------|-------|
-| `make test-unit` | **post-preflight L1 umbrella** from `tests/layer1-jobs.json`; `make check` also runs the manifest's preflight jobs | local + CI (parallel jobs) |
+| `make test-unit` | complete fixed Bazel Layer-1 development graph | local + CI |
 | `make test` | `test-unit` + `test-integration` | local convenience aggregate; use wider lanes when the changed surface needs them |
-| `make check-tier0` | sub-60s syntax + shellcheck gate | local + CI |
-| `make check-inventory` | fail-closed migration-ledger drift check | local + CI |
-| `make test-lint` | serial fail-fast Rust fmt + local changed-scope clippy + nix-parse + shellcheck; CI leaves clippy to the full Rust shard | local + CI |
+| `make check-tier0` | Bazel compatibility and toolchain policy suite | local + CI |
+| `make check-inventory` | direct Cargo/Bazel parity queries for Rust and non-Rust coverage | local + CI |
+| `make test-lint` | fixed Bazel formatting and lint suite | local + CI |
 | `make test-changelog` | require release notes for code changes and validate every changelog fragment | local + CI |
-| `make test-rust` | bounded Make DAG for the Rust leaves (fmt, clippy, workspace tests, conditional fixture/CLI, broker x3, deny/audit, schema, inventory, and no-bash); fixture/CLI are included once when Nix is available | local + CI |
-| `make test-rust-<leaf>` | seven CI leaf targets (main, broker, guest shell runner, no-bash AST, schema, inventory, supply chain) behind the stable `test-rust` rollup; each receives the full runner budget | CI (local for a focused rerun) |
+| `make test-rust` | fixed Bazel Rust suite with direct Cargo-compatible target coverage | local + CI |
+| `make test-rust-<leaf>` | focused Bazel Rust labels for main, broker, guest shell runner, policy, schema, and supply-chain coverage | CI (local for a focused rerun) |
 | `make test-fixture-contracts` | enforcing eval-rendered lane: materializes `D2B_FIXTURES` from evaluated Nix artifact data, then runs `d2b-contract-tests` and the CLI-contract cases; both lanes set `D2B_ENABLE_FIXTURE_BUILD=1`, and invoking it without that variable fails rather than skipping | local + CI |
 | `make test-proofs` | standalone proofs/ crates | local + CI |
-| `make test-flake` | `nix flake check --no-build` (native system); `D2B_FLAKE_CHECK=<name>` instantiates one check, `D2B_FLAKE_OUTPUTS=1` sweeps non-`checks` outputs, `D2B_FLAKE_LOCAL_SHARDS=1` runs the local bounded shard fan-out | local + CI (x86 sharded per-check matrix; aarch64 PR job runs a lightweight smoke eval) |
-| `make test-flake-list` | emit native-system flake check names as JSON; the partition tool below reads it | source helper |
-| `make test-flake-partition` | emit those names split into the eval, realized, and nix-unit dispatch classes (CI matrix plumbing) | CI (dynamic matrix) |
-| `make test-nix-unit` | sharded nix-unit corpus checks, retained as explicit evidence in the manifest-driven local and CI graph | local + CI |
-| `make test-drift` | drift-check + vms-json-parity + flake-check-matrix-sync | local + CI |
-| `make test-policy` | meta gates (CI coverage, deliverable inventory, etc.) | local + CI |
+| `make test-flake` | fixed Bazel Nix evaluation, realization, output, and aarch64 targets | local + CI |
+| `make test-nix-unit` | fixed Bazel Nix-unit targets with existing case pins | local + CI |
+| `make test-drift` | native generated-artifact and parity checks | local + CI |
+| `make test-policy` | native source, docs, lint, runtime-ledger, and BuildBuddy policy suites | local + CI |
 | `make test-runtime-ledger` | hermetic execution-budget gate: after a warm build, enforces aggregate per-crate process-CPU p95 budgets, fails any individual census test sample over 60 seconds, and reports shorter per-test wall-clock p95s as advisory diagnostics (holds no baseline; makes no historical-regression claim) | local + CI |
 | `make test-performance-budgets` | advisory performance canary; without `D2B_PERF_STABLE=1` it reports `SKIP` and enforces nothing | local + CI |
 | `make test-integration` | type-9 podman container tests | conditional local host lane (podman; not the PR pipeline) |
 | `make test-host-integration` | type-10 runNixOSTest VM checks | conditional local NixOS host lane (KVM; TCG fallback; not the PR pipeline) |
 | `make check-fast` | alias for `test-unit` (backward compat) | local + CI |
-| `make check` | PR-equivalent manifest target set with bounded local parallelism; enforcement classifications come from `tests/layer1-jobs.json` | local |
+| `make check` | complete fixed Bazel graph with fixed CI enforcement | local |
 | `make bazel-check` | Bazel aggregate used by `make check`. Defaults to BuildBuddy remotely; CI forces `D2B_BAZEL_PROFILE=local` | local or remote |
 | `make check-static` | legacy/full-static monolithic gate (`tests/static.sh`) | local |
-| `make layer1-workflow` | regenerate `.github/workflows/pr-l1-static-fast.yml` from `tests/layer1-jobs.json` + template | local |
-| `make layer1-workflow-check` | verify the generated workflow is up to date | local + CI via `make test-drift` |
-| `make flake-matrix-pin` | regenerate the CI flake-check-matrix drift pin after adding/removing a flake check | local |
 | `make nix-unit-pin` | regenerate the nix-unit case-presence pins | local |
 | `make runtime-ledger-pin` | regenerate the runtime-ledger census pin after adding, removing or renaming a timed test | local |
 | `cargo run --manifest-path Cargo.toml -p xtask -- heavy-gate -- env D2B_LIVE=1 bash tests/integration/live/<x>.sh` | type-11 live-host tests, through the heavy-gate semaphore | **manual, against a deployed d2b host** |
 
-`make bazel-check` and `tests/tools/bazel-check --profile local` are
-diagnostic parity entry points, not Layer-1 scheduler replacements. They run
-the same Bazel `//...` graph locally while `make check`, CI, and standalone
-Cargo workflows retain authority. BuildBuddy and qualification profiles are
-opt-in and remain non-qualifying without provider-accounted transfer evidence.
+`make bazel-check` and `tests/tools/bazel-check --profile local` run the same
+fixed Bazel graph locally. Bazel owns Layer-1 scheduling; Make and CI retain
+their public compatibility surfaces, and standalone Cargo workflows remain
+available for direct development.
 
 `make test-policy` includes the fail-closed `guest-workspace-drift` guard. The
 guard checks that the crates copied by `mkGuestRustPackagesSrc`, the members and
@@ -148,223 +142,73 @@ a `d2bd` restart. The USBIP script requires
 `D2B_USBIP_VM=<vm>` and `D2B_USBIP_BUSID=<busid>` and uses only `d2b usb`
 verbs for USB state changes.
 
-`tests/layer1-jobs.json` is the central Layer-1 job graph. In its local phase
-order, the enforcing jobs are `check-tier0`, `check-inventory`, `test-lint`,
-`test-changelog`, `test-rust`, `test-proofs`, `test-flake`, `test-nix-unit`,
-`test-policy`, `test-drift`, `test-runtime-ledger`, and
-`test-fixture-contracts`. The only advisory job is
-`test-performance-budgets`. `make test-unit`
-consumes the same manifest but skips its preflight phase. Re-read the manifest
-rather than assuming this split is fixed.
+The fixed CI workflow at `.github/workflows/pr-l1-static-fast.yml` runs the
+public Make aliases over the Bazel graph and exposes one stable required
+`check` result. The graph keeps `test-performance-budgets` advisory when the
+stable runner is unavailable; a guarded skip is not validation evidence.
 
-Jobs are enforcing by default. The manifest's optional `"enforcement":
-"advisory"` field classifies a job whose successful exit might not represent
-executed checks, and the accompanying `advisoryReason` records why. An advisory
-command still runs, and a nonzero exit still fails the graph, but a guarded
-skip is not a failure. The runner labels such a result `advisory:` rather than
-`ok:` and reports enforcing and advisory counts separately. Do not cite an
-advisory job result as validation evidence for a change.
+The fixture lane is enforcing and local-only. It fails when
+`D2B_ENABLE_FIXTURE_BUILD=1` is absent, materializes its declared fixture
+outputs, and runs the fixture-dependent contract and CLI targets exactly once.
 
-The performance advisory exists because latency budgets require a pinned
-self-hosted runner. `test-performance-budgets` exits successfully with `SKIP`
-unless `D2B_PERF_STABLE=1`; no current project runner provides that stable
-environment. Promotion to enforcing requires provisioning a pinned self-hosted
-runner, setting `D2B_PERF_STABLE=1` there, and removing the `enforcement` and
-`advisoryReason` fields from the job after that wiring lands.
+### Bazel graph execution
 
-The fixture lane is enforcing. It fails when `D2B_ENABLE_FIXTURE_BUILD=1` is
-absent, evaluates both Nix configurations, materializes their artifact data, and
-runs the fixture-dependent contract and CLI tests. The Layer-1 `test-rust` job
-excludes those surfaces; run `make test-fixture-contracts` to validate
-`d2b-contract-tests` and its fixture-dependent policy layer. Selected hermetic
-policy files may have separate
-enforcing entrypoints under `test-policy`; the shared list in `tests/lib.sh` is
-excluded from the fixture lane so those repository scans execute once. Inspect
-that target before citing one.
+The Layer-1 graph is fixed in `BUILD.bazel` and `bazel/checks/`. Bazel owns
+selection, dependency ordering, parallelism, retry classification, caching,
+and aggregation. Every public `make test-*` alias is a thin direct Bazel
+invocation, and every fixed CI job runs the same graph with the local profile.
+Individual labels remain available for focused reruns.
 
-### Rust DAG budget and execution evidence
+Cargo manifests and the root `Cargo.lock` remain authoritative for Rust
+membership, dependencies, features, and direct Cargo or nextest workflows.
+`rules_rs` supplies the Bazel Cargo integration. Do not add a second Cargo
+lock, source inventory, generator, discovery job, or shell scheduler.
 
-`make test-rust` is the aggregate Rust entrypoint for the non-fixture leaves.
-GNU Make schedules its
-explicit leaves with `--keep-going` and `--output-sync=target`, so independent
-leaves continue after a failure and each target's output remains grouped. The
-broker feature passes stay serial. Fixture/CLI work uses an isolated stable
-target below `.scratch/rust-test-cache`, so it can overlap the main workspace
-without sharing mutable Cargo state. The complete frontier remains bounded by
-the requested Rust budget.
-Direct calls to `tests/test-rust.sh` require one explicit leaf mode. Run
-`make test-fixture-contracts` separately for the complete fixture-dependent
-contract and policy coverage.
+`tests/tools/bazel-check` retains the BuildBuddy security boundary. It uses
+Bazel's credential helper, withholds credentials from untrusted work, redacts
+logs and BEP output, and retries the identical target set locally only for a
+typed pre-dispatch infrastructure failure. Post-dispatch and test failures
+fail closed. Provider measurements do not define a second acceptance gate.
 
-Before that aggregate starts, local `make check` runs `make test-lint`
-serially. Its changed-package clippy reports common failures before the long
-parallel phase and warms the later full workspace gate.
-
-CI invokes one Make target per Rust leaf, so local-only dependency edges do
-not repeat schema or inventory work in the main and broker jobs. A cold local
-aggregate (detected when `target` is absent) restores the shared
-workspace target layout. Fixture, inventory and schema then run as a full-budget
-chain so discovery
-reuses all prior builds before schema generation. Warm local runs retain the
-parallel isolated-target profile.
-
-Use `D2B_RUST_BUDGET=<positive-integer>` to request a Rust budget. It is an
-upper bound, not a host-capacity bypass. The default is the smaller of logical
-CPUs and a memory cap derived from `MemAvailable` plus cache-adjusted finite
-cgroup v2 `memory.max` or `memory.high` allowance. The calculation reserves
-2 GiB for the host and budgets 3 GiB per heavy job. If visible cgroup v2
-controller state cannot be read, the gate warns and fails closed to budget 1.
-Cargo jobs and nextest test threads are assigned quotas whose every active
-frontier remains within the effective budget, including budget 1. Top-level
-Make `-j` does not replace this control.
-
-Set `D2B_EXECUTION_MANIFEST` to opt into deterministic execution evidence:
+The complete local and CI surfaces are:
 
 ```bash
-D2B_EXECUTION_MANIFEST=.scratch/test-rust-executed.json make test-rust
+make check-tier0
+make test-lint
+make check-inventory
+make test-changelog
+make test-rust
+make test-proofs
+make test-flake
+make test-nix-unit
+make test-policy
+make test-drift
+make test-runtime-ledger
+make test-fixture-contracts
+make test-unit
+make check
 ```
 
-The v1 schema and lifecycle are documented in
-[`../docs/reference/test-execution-manifest.md`](../docs/reference/test-execution-manifest.md).
-The previous manifest is removed before dispatch, complete fragments are
-published atomically, and handled failures or interruptions publish partial
-evidence without stale success. A manifest is diagnostic evidence and does not
-replace source inventory, `make test-policy`, or
-`D2B_ENABLE_FIXTURE_BUILD=1 make test-fixture-contracts`.
+### Nix-unit and retained pins
 
-### Nix-unit runner
+`make test-nix-unit` runs the fixed Nix-unit Bazel targets. Cases remain
+one-to-one with the existing files under `tests/unit/nix/cases/`, and their
+pinned case lists remain under `tests/unit/nix/pinned/`. Run `make nix-unit-pin`
+after changing cases. The runtime-ledger census uses the existing
+`make runtime-ledger-pin` target when its governed test set changes.
 
-`make test-nix-unit` uses the established `nix-eval-jobs` runner with
-`--no-instantiate` against the locked `nixUnitJobShards.<system>` flake
-output for the complete local pass. The underlying `nixUnitJobs.<system>`
-surface still contains one aggregate attr per current `*.nix` case file, plus
-the `nix-unit` shard/pin integrity attr. File jobs use stable names of the
-form `case-<basename>`, and `nixUnitJobShards.<system>` presents them one
-local shard attr at a time plus the integrity shard. Each file job
-reuses the same `casesFor`/`resultsFor`/failure-report constructor as the
-seven topical `checks.<system>` leaves, so it reports every
-`FAIL <case>: <detail>` from its file without submitting installables to the
-daemon or realizing derivations.
+No secondary execution record or provider report is required. The migration
+ledger remains the existing `tests/migration-ledger.toml` generated by
+`make ledger-regen`; retirement records are added only for assertion scripts
+tracked by that ledger.
 
-Neither the file-job count nor the corpus case count is stated here as a
-number. They are derived, the bijection rather than the cardinality is the
-contract, and the corpus total differs per system (the common pin plus the
-native-system pin). `ls tests/unit/nix/cases/*.nix | wc -l` gives the file-job
-count; the pin files under `tests/unit/nix/pinned/` give the case counts. See
-[`tests/AGENTS.md`](./AGENTS.md) for the derivation and why the numbers are
-not pinned in prose.
-The seven topical checks remain the stable manifest leaves:
-`nix-unit`, `nix-unit-daemon`, `nix-unit-guest`, `nix-unit-misc`,
-`nix-unit-network`, `nix-unit-runtime`, and `nix-unit-state`.
-`nixUnitInventory.<system>` is one locked object containing sorted `caseNames`
-and sorted `jobNames`, including the integrity attr. The runner evaluates that
-inventory once, compares `jobNames` exactly with the result attrs, and compares
-`caseNames` exactly with the
-common and native-system pin files. Discovery is empty-set failure, and
-missing or unexpected names still direct operators to `run make nix-unit-pin`.
+### CI and manual lanes
 
-If `nix-eval-jobs` or `jq` is absent, the target makes one guarded re-entry
-through `devShells.<system>.nix-unit`, a focused `mkShellNoCC` output containing
-the locked versions from this flake's `flake.lock`. An existing toolchain or
-development shell with both commands runs directly. `D2B_NIX_UNIT_JOBS` is
-retired and exits with status 2; use
-`D2B_NIX_UNIT_WORKERS=<1..4>` instead. The requested worker count is
-bounded by the CPU cap `min(4, logical CPUs, finite cgroup CPU quota)` and the
-memory cap
-`max(1, floor((effective available MiB - 3072) / (limit + 2048)))`.
-The full local runner requests four workers and a 4096 MiB evaluator limit by
-default, plus 2048 MiB of per-worker process and flake overhead, but the
-runner still keeps at most **two** `nix-eval-jobs` shard processes resident at
-once after those caps are applied.
-Effective available memory is the smaller of `MemAvailable` and the finite
-cgroup allowance after reclaimable file cache. A visible but unreadable cgroup
-controller fails closed to one worker. On the reference 12-CPU, 62-GiB host
-the effective cap preserves four workers.
-`D2B_NIX_UNIT_MEMORY_MB` may set the evaluator limit from 512 through 4096 MiB;
-the 2048 MiB overhead remains reserved. Successful full runs
-suppress raw JSONL output. Every real `FAIL <case>: <detail>` line from an
-aggregate error is printed as one concise, path-sanitized stderr entry.
-Repository and home roots become fixed placeholders; Nix store hashes are
-redacted while derivation names remain visible. Source-code template lines are
-ignored, and an aggregate with no real FAIL line receives one attributable
-fallback diagnostic. Result attributes are
-also compared exactly with the locked file-job names. Command progress uses the
-fixed path-free `d2b` flake label.
-
-`D2B_NIX_UNIT_CHECK=<name>` remains the manual single-shard selector. It
-requires one of the seven discovered aggregate checks, reads that check's
-per-file jobs from `nixUnitCheckJobShards.<system>`, and evaluates those jobs
-one at a time without entering the eval-jobs tool shell or the full local
-resource-accounting path. Hosted CI retains those same seven topical names and
-the per-check matrix because the full eval-jobs path did not fit the hosted
-runner envelope. With execution
-evidence enabled, a full pass publishes exactly the
-seven leaves `nix-unit`, `nix-unit-daemon`, `nix-unit-guest`, `nix-unit-misc`,
-`nix-unit-network`, `nix-unit-runtime`, and `nix-unit-state`; a selected pass
-publishes only its selected leaf.
-
-`.github/workflows/pr-l1-static-fast.yml` is generated from the manifest by
-`make layer1-workflow` and checked by `make layer1-workflow-check` during
-`make test-drift`. CI runs the individual Layer-1 jobs in parallel and exposes
-a stable final `check` rollup job intended for branch protection. Locally,
-`make check` runs each manifest job's `makeTarget` and every
-`extraMakeTargets` entry, so the manifest-declared target set matches the
-pull-request graph. The performance job remains advisory in both places.
-
-The `test-runtime-ledger` job is part of that graph. It warm-builds the pinned
-census, records per-test wall-clock p95s as advisory diagnostics, and enforces
-each crate's aggregate process-CPU p95 budget. Process CPU excludes time the
-test process is descheduled behind unrelated machine load. The closed census
-presently pins one crate and exactly 190 tests, so a vanished or extra test,
-an incomplete or under-repeated run, or an aggregate crate CPU p95 over budget
-fails; a per-test diagnostic-threshold breach does not.
-
-The gate holds no baseline and makes no historical-regression claim. The
-`test-runtime-ledger check` output is authoritative for exact advisory-report
-formatting and selection. Growing the census to a real multi-crate shard
-inventory (with a per-shard budget) and adding a cross-machine reference
-baseline for a true historical-regression gate is the deferred follow-up
-`runtime-ledger-full-census-and-real-shards`. If this description diverges from
-the current `Makefile` target or `tests/layer1-jobs.json`, treat those as
-authoritative and flag the drift for the integrator rather than hand-editing
-the census pin.
-
-The x86 `test-flake` leg is sharded one job per flake check (the classes are
-enumerated at CI time by `make test-flake-partition`; the `test-flake-x86` job
-is a stable aggregator over both shard lanes + the non-`checks` outputs job).
-That partition splits the checks three ways. Checks the driver must *build*
-rather than instantiate run in their own lane, because a build takes minutes
-where an instantiate takes seconds, and queueing one behind a bounded matrix of
-the latter sets the whole run's critical path. The nix-unit corpus checks are
-dropped, because the dedicated Nix-unit lane already builds exactly those and
-instantiating them again is redundant; that lane reads the same partition, so
-the names dropped here are the names it runs. Everything else instantiates in
-the bounded matrix. The tool fails closed if the partition is not total, if the
-enumeration is empty, or if a check named as realized is not in the flake. The
-aarch64
-leg runs only the lightweight `smoke-eval-aarch64.nix` expression. A fail-closed
-drift gate keeps the matrix and smoke wiring in sync with the flake (`make
-flake-matrix-pin` to update its pin). Locally, manifest-driven `make check`
-sets `D2B_FLAKE_LOCAL_SHARDS=1` for `make test-flake` and
-`D2B_SKIP_FIXTURE_BUILD=1` for `make test-rust`, matching the PR Rust job. The
-flake shards do not execute `d2b-contract-tests`; the separate enforcing
-fixture-contract lane runs them with evaluated fixtures and fails rather than skipping. Tune
-`D2B_CHECK_JOBS` and `D2B_FLAKE_JOBS` for host capacity. Run
-`make test-integration` and `make test-host-integration` when the changed
-surface requires container or host coverage; those conditional integration
-tiers are not replaced by PR pipeline jobs.
-
-Useful knobs:
-- `D2B_NO_SCCACHE=1` - disable sccache in the rust gate.
-- `D2B_CI_SCCACHE=1` - opt the rust gate back into sccache under CI (off by
-  default there; `pr-l1-static-fast` sets it and backs `SCCACHE_DIR` with
-  `actions/cache`, using sccache's local-disk backend - never the native GHA
-  backend, which would export `ACTIONS_RUNTIME_TOKEN` into the build env).
-- `D2B_NO_PARALLEL_BROKER=1` - run the broker feature passes serially.
-- The rust gate uses **sccache** (a shared per-crate compilation cache) and
-  runs the broker's three feature passes (default / layer1-bootstrap /
-  fake-backends) concurrently with the main workspace, on deterministic target
-  dirs so the sccache cache key stays stable.
+The fixed workflow is committed at `.github/workflows/pr-l1-static-fast.yml`
+and exposes one stable required `check` result. Intermediate job names are
+implementation details. Layer-2 container, VM, live-host, hardware, and performance scripts
+remain conditional or manual lanes behind the heavy-gate semaphore; they are
+not folded into the Layer-1 Bazel scheduler.
 
 ## Adding a test
 

@@ -363,11 +363,9 @@
 
       # Developer shell: everything the Layer-1 gates need, in one place.
       #
-      # Without this each gate script provisions its own toolchain, which is
-      # why tests/test-rust.sh, tests/test-policy.sh and
-      # tests/tools/assert-pinned-tests.sh each carry their own nix-shell
-      # re-entry and rustup bootstrap. Enter this shell and those paths are
-      # skipped entirely, because the tools they look for are already present.
+      # Without this each focused gate would provision its own toolchain.
+      # Enter this shell once so Bazel, Cargo, Nix, and the policy tools use
+      # the pinned versions throughout the fixed graph.
       #
       # rustup rather than pkgs.rustc: rust-toolchain.toml pins a
       # version nixpkgs does not carry (the pin is 1.97.0; this nixpkgs has

@@ -93,10 +93,7 @@ use d2b_realm_core::{
 mod diagnostic_redaction;
 use schemars::schema::RootSchema;
 
-mod bazel_cache_transfer;
 mod bazel_evidence;
-mod bazel_qualification;
-mod buildbuddy_probe;
 mod changelog;
 mod delivery;
 mod gen_resource_schemas;
@@ -404,17 +401,7 @@ fn main() -> std::process::ExitCode {
             run_inventory(Some(PathBuf::from(output.as_str())))
         }
         [command, rest @ ..] if command == "changelog-fold" => changelog::run_cli(rest),
-        [command, rest @ ..] if command == "buildbuddy-probe" => buildbuddy_probe::run_cli(rest),
         [command, rest @ ..] if command == "bazel-evidence" => bazel_evidence::run_cli(rest),
-        [command, rest @ ..] if command == "bazel-qualification" => {
-            bazel_qualification::run_cli(rest)
-        }
-        [command, rest @ ..] if command == "bazel-cache-transfer" => {
-            bazel_cache_transfer::run_cli(rest)
-        }
-        [command, rest @ ..] if command == "bazel-cache-transfer-report" => {
-            bazel_cache_transfer::run_cli(rest)
-        }
         [command, rest @ ..] if command == "delivery" => delivery::run_cli(rest),
         [command, rest @ ..] if command == "redact-diagnostics" => {
             diagnostic_redaction::run_cli(rest)
@@ -445,7 +432,7 @@ fn main() -> std::process::ExitCode {
         }
         _ => {
             eprintln!(
-                "usage: cargo run --manifest-path Cargo.toml -p xtask -- <gen-schemas|gen-zone-storage-schema|gen-cli-schemas|gen-zone-schemas|gen-zone-nix-options|gen-resource-schemas|gen-error-codes|gen-provider-packaging|gen-semantic-service-schemas|gen-cli-shell-artifacts|gen-guest-proto|gen-guest-ttrpc|gen-resource-proto|gen-resource-ttrpc|gen-daemon-api|gen-package-policy-inputs [--check|--write]|release-notes <version>|adr0035-inventory [--output <path>]|changelog-fold [--check]|buildbuddy-probe [--evidence-file <path>]|bazel-evidence <check-u9|check-security|security-digest|classify-failure|redact-log> ...|bazel-qualification <acceptance|cache|identity|typed-fallback> ...|bazel-cache-transfer [compare] ...|process-marker-pin|check-provider-crate-layout|check-provider-layout|test-runtime-ledger <record|check|lint|help> [options]|redact-diagnostics --repo-root <path> [--home <path>] [--tail-lines <count>]|delivery wave <snapshot|validate-import|seal|merge-target|merge-eligibility|help> [options]|heavy-gate <-- <command> [args...] | verify-slot>>"
+                "usage: cargo run --manifest-path Cargo.toml -p xtask -- <gen-schemas|gen-zone-storage-schema|gen-cli-schemas|gen-zone-schemas|gen-zone-nix-options|gen-resource-schemas|gen-error-codes|gen-provider-packaging|gen-semantic-service-schemas|gen-cli-shell-artifacts|gen-guest-proto|gen-guest-ttrpc|gen-resource-proto|gen-resource-ttrpc|gen-daemon-api|gen-package-policy-inputs [--check|--write]|release-notes <version>|adr0035-inventory [--output <path>]|changelog-fold [--check]|bazel-evidence <check-security|security-digest|classify-failure|redact-log> ...|process-marker-pin|check-provider-crate-layout|check-provider-layout|test-runtime-ledger <record|check|lint|help> [options]|redact-diagnostics --repo-root <path> [--home <path>] [--tail-lines <count>]|delivery wave <snapshot|validate-import|seal|merge-target|merge-eligibility|help> [options]|heavy-gate <-- <command> [args...] | verify-slot>>"
             );
             std::process::ExitCode::FAILURE
         }

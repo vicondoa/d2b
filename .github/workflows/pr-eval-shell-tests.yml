@@ -27,49 +27,9 @@ jobs:
           extra_nix_config: |
             experimental-features = nix-command flakes
 
-      # ---------------------------------------------------------------------------
-      # Static text/grep eval tests.
-      # ---------------------------------------------------------------------------
-      - name: Static eval tests
+      - name: Fixed Bazel policy checks
         run: |
           set -euo pipefail
-          for t in \
-            tests/tools/preflight-disk-space.sh \
-            tests/unit/meta/deliverable-gate-inventory.sh \
-          ; do
-            if [ -f "$t" ]; then
-              echo "==> $t"
-              bash "$t"
-            fi
-          done
-
-      # ---------------------------------------------------------------------------
-      # Nix eval tests - require `nix` on PATH.
-      # ---------------------------------------------------------------------------
-      - name: Nix eval tests
-        run: |
-          set -euo pipefail
-          for t in \
-          ; do
-            if [ -f "$t" ]; then
-              echo "==> $t"
-              bash "$t"
-            fi
-          done
-
-      # ---------------------------------------------------------------------------
-      # Cargo/Rust unit tests - self-bootstrap via `nix shell` when
-      # cargo is not on PATH.  No live daemon, no KVM, no privileged broker.
-      # ---------------------------------------------------------------------------
-      - name: Cargo/Rust eval tests
-        run: |
-          set -euo pipefail
-          for t in \
-            tests/unit/gates/drift-check.sh \
-            tests/tools/stub-no-socket.sh \
-          ; do
-            if [ -f "$t" ]; then
-              echo "==> $t"
-              bash "$t"
-            fi
-          done
+          make check-tier0
+          make test-policy
+          make test-drift

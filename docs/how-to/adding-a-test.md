@@ -1,6 +1,7 @@
 # How to add a test
 
-d2b tests are invoked through **`make` targets** (one per test type). The
+d2b Layer-1 tests are invoked through fixed **Bazel targets** exposed by
+public `make` aliases (one per test type). The
 single rule:
 
 > **Focused evidence is the review requirement.** Run the smallest relevant
@@ -28,23 +29,12 @@ target and where the test lives.
 | Real-kernel runtime behaviour with **no physical device** (broker sockets, cgroups, pidfd, store, network, audit, ACL, swtpm) | **G-host** | `test-host-integration` | `tests/host-integration/*.nix` runNixOSTest VM checks; local NixOS/KVM host/manual pre-PR, not the PR pipeline |
 | Real **device passthrough** (GPU/YubiKey/hardware-TPM) or a **full microVM boot** | **G-hw** | `test-hardware` | a NixOS host **with the devices** - **not runnable in CI** |
 
-### Group F hosted-runner caveat
+### Group F resource caveat
 
-The PR workflow discovers hosted-runner `test-flake` shards with
-`make test-flake-list`, not by blindly sharding every
-`flake.checks.x86_64-linux.*` key. The full static check set remains pinned by
-`tests/golden/flake-check-matrix/x86_64-linux.txt`; the hosted matrix may
-intentionally filter checks that are too large or unstable for GitHub-hosted
-runners.
-
-Today `fixture-smoke-full` is one such check. It is the feature-rich contract
-fixture used by local `make test-unit` / contract-test validation, but the
-nested NixOS graph can make hosted-runner Nix evaluators segfault before they
-produce a typed Nix error. Keep it in `flake.checks` and the pin, validate it
-locally with `make test-unit` (or directly with
-`D2B_FLAKE_CHECK=fixture-smoke-full make test-flake` on a sufficiently large
-host), and only add it back to the hosted dynamic matrix after the evaluator
-failure mode is gone.
+Nix evaluation and realization stay in fixed Bazel targets with declared
+inputs and explicit local-only tags. Keep resource-heavy or fixture-producing
+checks in their existing fixed suite; do not add dynamic discovery or a new
+workflow matrix.
 
 Default when unsure: if it can be expressed as an assertion over a rendered
 artifact, it is **C** (Rust contract test). Ad-hoc bash that shells out to
@@ -53,8 +43,8 @@ artifact, it is **C** (Rust contract test). Ad-hoc bash that shells out to
 ## Fast inner loop (one assertion)
 
 ```bash
-# Contract (C) - reuse the smoke fixture, run one test:
-make test-fixtures                       # builds the fixture, prints D2B_FIXTURES
+# Contract (C) - build the enforcing fixture lane, then run one test:
+make test-fixture-contracts
 D2B_FIXTURES=<that path> cargo nextest run -p d2b-contract-tests -E 'test(my_new_case)'
 
 # Rust logic (A): cargo nextest run -p <crate> -E 'test(my_new_case)'

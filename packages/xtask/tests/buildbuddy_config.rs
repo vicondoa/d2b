@@ -62,7 +62,6 @@ fn committed_profiles_share_authentication_and_worker_policy() {
         ("local", "build:local "),
         ("remote", "build:remote "),
         ("trusted-seed", "build:trusted-seed "),
-        ("qualification", "build:qualification "),
     ] {
         assert!(
             bazelrc.contains(marker),
@@ -120,6 +119,10 @@ fn committed_profiles_share_authentication_and_worker_policy() {
             .any(|line| line.contains("--experimental_") && line.contains("remote")),
         "experimental remote features must remain disabled"
     );
+    assert!(
+        !bazelrc.contains("build:qualification"),
+        "obsolete qualification profile must remain absent"
+    );
     let platforms = read_text("bazel/platforms/BUILD.bazel");
     assert!(
         platforms.matches("d2b-bazel-worker/v1").count() >= 2,
@@ -170,17 +173,21 @@ fn policy_preserves_remote_profiles_and_trust_partition() {
         remote.get("workerImageContract").and_then(Value::as_str),
         Some("d2b-bazel-worker/v1")
     );
-    assert!(policy["profiles"]["remote"]["namespace"]
-        .as_str()
-        .is_some_and(|namespace| namespace.contains("/worker-v1/minimal/lock-v1")));
+    assert!(
+        policy["profiles"]["remote"]["namespace"]
+            .as_str()
+            .is_some_and(|namespace| namespace.contains("/worker-v1/minimal/lock-v1"))
+    );
     assert_eq!(
         policy["profiles"]["trusted-seed"]["remoteCacheAsync"].as_bool(),
         Some(false)
     );
-    assert!(remote["experimentalFeatures"]
-        .as_array()
-        .expect("experimental feature list")
-        .is_empty());
+    assert!(
+        remote["experimentalFeatures"]
+            .as_array()
+            .expect("experimental feature list")
+            .is_empty()
+    );
 
     let trusted = object(
         object(&policy, "cache policy")
@@ -196,11 +203,13 @@ fn policy_preserves_remote_profiles_and_trust_partition() {
         trusted.get("untrustedCredential").and_then(Value::as_str),
         Some("none")
     );
-    assert!(trusted["allowedSecurityDigests"]
-        .as_array()
-        .expect("security digest allowlist")
-        .iter()
-        .all(|digest| digest
-            .as_str()
-            .is_some_and(|value| value.starts_with("sha256:"))));
+    assert!(
+        trusted["allowedSecurityDigests"]
+            .as_array()
+            .expect("security digest allowlist")
+            .iter()
+            .all(|digest| digest
+                .as_str()
+                .is_some_and(|value| value.starts_with("sha256:")))
+    );
 }

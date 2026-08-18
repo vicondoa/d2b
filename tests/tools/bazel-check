@@ -41,15 +41,13 @@ credential_helper() {
     return 0
   fi
   xtask bazel-evidence check-u9 >/dev/null
-
   if [ "${D2B_BAZEL_UNTRUSTED:-0}" = 1 ] ||
     { [ "${GITHUB_ACTIONS:-false}" = true ] && ! trusted_context; }; then
     printf '%s\n' '{"headers":{}}'
     return 0
   fi
 
-  if [ "${D2B_BAZEL_PROFILE:-}" = trusted-seed ] ||
-    [ "${D2B_BAZEL_PROFILE:-}" = qualification ]; then
+  if [ "${D2B_BAZEL_PROFILE:-}" = trusted-seed ]; then
     trusted_context || {
       printf '%s\n' '{"headers":{}}'
       return 0
@@ -86,7 +84,7 @@ if [ "$#" -eq 0 ]; then
     printf '%s' "$request" | credential_helper
     exit $?
   fi
-  echo "usage: tests/tools/bazel-check --profile <local|remote|trusted-seed|qualification> -- <fixed Bazel target patterns...>" >&2
+  echo "usage: tests/tools/bazel-check --profile <local|remote|trusted-seed> -- <fixed Bazel target patterns...>" >&2
   exit 2
 fi
 
@@ -120,24 +118,18 @@ if [ "${#TARGETS[@]}" -eq 0 ]; then
 fi
 
 case "$PROFILE" in
-  local|remote|trusted-seed|qualification) ;;
+  local|remote|trusted-seed) ;;
   *)
-    echo "profile must be local, remote, trusted-seed, or qualification" >&2
+    echo "profile must be local, remote, or trusted-seed" >&2
     exit 2
     ;;
 esac
-
-REQUESTED_PROFILE="$PROFILE"
-QUALIFICATION_RC_ISOLATION=0
-if [ "$REQUESTED_PROFILE" = qualification ]; then
-  QUALIFICATION_RC_ISOLATION=1
-fi
 
 if [ "$PROFILE" != local ]; then
   xtask bazel-evidence check-u9 >/dev/null
 fi
 
-if [ "$PROFILE" = trusted-seed ] || [ "$PROFILE" = qualification ]; then
+if [ "$PROFILE" = trusted-seed ]; then
   if ! trusted_context; then
     echo "trusted BuildBuddy credential withheld: protected v3 and security digest are required"
     PROFILE=local
@@ -171,19 +163,10 @@ run_bazel() {
   local profile="$1"
   local log_path="$2"
   local bep_path="$3"
-  local -a startup_flags=()
   shift 3
-  if [ "$profile" = qualification ] ||
-    [ "${D2B_BAZEL_QUALIFICATION_ISOLATE_RC:-0}" = 1 ]; then
-    [ ! -e "$ROOT/.bazelrc.user" ] || {
-      echo "qualification rejects an external workspace Bazel rc" >&2
-      return "$CONFIGURATION_FAILURE_STATUS"
-    }
-    startup_flags=(--nosystem_rc --nohome_rc)
-  fi
   set +e
   local tag_filters="${D2B_BAZEL_TEST_TAG_FILTERS:--manual,-gpu,-kvm}"
-  D2B_BAZEL_PROFILE="$profile" "$bazel_bin" "${startup_flags[@]}" test "--config=$profile" \
+  D2B_BAZEL_PROFILE="$profile" "$bazel_bin" test "--config=$profile" \
     --repo_contents_cache= "--build_event_json_file=$bep_path" \
     --build_tests_only \
     --test_output=errors \
@@ -219,12 +202,7 @@ emit_captured_output() {
 }
 
 initial_status=0
-if [ "$QUALIFICATION_RC_ISOLATION" -eq 1 ]; then
-  D2B_BAZEL_QUALIFICATION_ISOLATE_RC=1 \
-    run_bazel "$PROFILE" "$log" "$bep" "$@" || initial_status=$?
-else
-  run_bazel "$PROFILE" "$log" "$bep" "$@" || initial_status=$?
-fi
+run_bazel "$PROFILE" "$log" "$bep" "$@" || initial_status=$?
 if [ "$initial_status" -eq 0 ]; then
   printf '%s\n' "bazel-check: $PROFILE passed"
   exit 0
@@ -245,8 +223,7 @@ if [ "$PROFILE" != local ]; then
     local_bep="$SCRATCH/local.$JOB.bep.json"
     echo "BuildBuddy failed before dispatch; retrying the identical target set locally"
     local_status=0
-    D2B_BAZEL_QUALIFICATION_ISOLATE_RC=1 \
-      run_bazel local "$local_log" "$local_bep" "$@" || local_status=$?
+    run_bazel local "$local_log" "$local_bep" "$@" || local_status=$?
     if [ "$local_status" -eq 0 ]; then
       printf '%s\n' "bazel-check: local fallback passed"
       exit 0

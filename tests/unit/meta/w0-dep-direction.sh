@@ -24,7 +24,7 @@
 # verified without the resolver). cargo + jq are resolved from PATH, the
 # rustup toolchain, ~/.cargo, or `nix run nixpkgs#<tool>`.
 #
-# Wired into `make test-policy` (tests/test-policy.sh) and tests/static.sh.
+# Wired into `make test-policy` and tests/static.sh.
 
 set -euo pipefail
 

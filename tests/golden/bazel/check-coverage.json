@@ -1,15 +1,13 @@
 {
   "schemaVersion": 1,
   "source": {
-    "layer1Manifest": "tests/layer1-jobs.json",
-    "makeCheck": "Makefile:check",
-    "rustDriver": "tests/test-rust.sh"
+    "makeCheck": "Makefile:check"
   },
   "surfaces": [
     {
       "id": "layer1:tier0",
       "kind": "layer1-job",
-      "source": "tests/layer1-jobs.json#jobs.tier0",
+      "source": "Makefile:tier0",
       "bazelLabel": "//bazel/checks/meta:tier0",
       "enforcement": "enforcing",
       "executionClass": "local-preflight",
@@ -25,7 +23,6 @@
         "kind": "bazel-test",
         "label": "//bazel/checks/meta:tier0",
         "sources": [
-          "tests/layer1-jobs.json",
           "tests/tools/tier0-first-pass.sh",
           "Makefile"
         ],
@@ -35,7 +32,7 @@
     {
       "id": "layer1:test-lint",
       "kind": "layer1-job",
-      "source": "tests/layer1-jobs.json#jobs.test-lint",
+      "source": "Makefile:test-lint",
       "bazelLabel": "//bazel/checks/policy:lint",
       "enforcement": "enforcing",
       "executionClass": "local-preflight",
@@ -51,9 +48,9 @@
         "kind": "bazel-test",
         "label": "//bazel/checks/policy:lint",
         "sources": [
-          "tests/test-lint.sh",
           "tests/tools/preflight-disk-space.sh",
-          "tests/unit/gates"
+          "tests/unit/gates",
+          "bazel/checks/policy/BUILD.bazel"
         ],
         "remoteCandidate": false
       }
@@ -61,8 +58,8 @@
     {
       "id": "layer1:check-inventory",
       "kind": "layer1-job",
-      "source": "tests/layer1-jobs.json#jobs.check-inventory",
-      "bazelLabel": "//bazel/checks/meta:inventory",
+      "source": "Makefile:check-inventory",
+      "bazelLabel": "//packages/xtask:bazel_non_rust_parity",
       "enforcement": "enforcing",
       "executionClass": "local-preflight",
       "architecture": [
@@ -75,11 +72,10 @@
       },
       "carrier": {
         "kind": "bazel-test",
-        "label": "//bazel/checks/meta:inventory",
+        "label": "//packages/xtask:bazel_non_rust_parity",
         "sources": [
-          "tests/layer1-jobs.json",
           "tests/tools/gen-migration-ledger.sh",
-          "tests/unit/meta/layer1-self-inventory.sh"
+          "packages/xtask/tests/bazel_non_rust_parity.rs"
         ],
         "remoteCandidate": false
       }
@@ -87,7 +83,7 @@
     {
       "id": "layer1:test-changelog",
       "kind": "layer1-job",
-      "source": "tests/layer1-jobs.json#jobs.test-changelog",
+      "source": "Makefile:test-changelog",
       "bazelLabel": "//bazel/checks/policy:changelog",
       "enforcement": "enforcing",
       "executionClass": "remote-candidate",
@@ -111,52 +107,10 @@
       }
     },
     {
-      "id": "layer1:bazel-check",
-      "kind": "layer1-job",
-      "source": "tests/layer1-jobs.json#jobs.bazel-check",
-      "bazelLabel": "//:bazel_check",
-      "enforcement": "enforcing",
-      "executionClass": "remote-candidate",
-      "architecture": [
-        "x86_64-linux",
-        "aarch64-linux"
-      ],
-      "eligibility": {
-        "eligible": true,
-        "localOnlyReason": null
-      },
-      "carrier": {
-        "kind": "bazel-test",
-        "label": "//:bazel_check",
-        "sources": [
-          "tests/tools/bazel-check",
-          "Makefile",
-          "tests/layer1-jobs.json"
-        ],
-        "remoteCandidate": true
-      }
-    },
-    {
-      "id": "layer1:test-rust",
-      "kind": "layer1-job",
-      "source": "tests/layer1-jobs.json#jobs.test-rust",
-      "bazelLabel": "//tests:rust",
-      "enforcement": "enforcing",
-      "executionClass": "remote-candidate",
-      "architecture": [
-        "x86_64-linux",
-        "aarch64-linux"
-      ],
-      "eligibility": {
-        "eligible": true,
-        "localOnlyReason": null
-      }
-    },
-    {
       "id": "layer1:test-proofs",
       "kind": "layer1-job",
-      "source": "tests/layer1-jobs.json#jobs.test-proofs",
-      "bazelLabel": "//bazel/checks/policy:proofs",
+      "source": "Makefile:test-proofs",
+      "bazelLabel": "//bazel/checks/fixtures:fixtures_proofs",
       "enforcement": "enforcing",
       "executionClass": "remote-candidate",
       "architecture": [
@@ -169,9 +123,8 @@
       },
       "carrier": {
         "kind": "bazel-test",
-        "label": "//bazel/checks/policy:proofs",
+        "label": "//bazel/checks/fixtures:fixtures_proofs",
         "sources": [
-          "tests/test-proofs.sh",
           "proofs"
         ],
         "remoteCandidate": true
@@ -180,7 +133,7 @@
     {
       "id": "layer1:test-flake",
       "kind": "layer1-job",
-      "source": "tests/layer1-jobs.json#jobs.test-flake",
+      "source": "Makefile:test-flake",
       "bazelLabel": "//bazel/checks/nix:flake",
       "enforcement": "enforcing",
       "executionClass": "local-integration",
@@ -196,7 +149,6 @@
         "kind": "bazel-test",
         "label": "//bazel/checks/nix:flake",
         "sources": [
-          "tests/test-flake.sh",
           "flake.nix",
           "flake.lock",
           "tests/unit/smoke/guest-static-elf.nix"
@@ -207,7 +159,7 @@
     {
       "id": "layer1:test-nix-unit",
       "kind": "layer1-job",
-      "source": "tests/layer1-jobs.json#jobs.test-nix-unit",
+      "source": "Makefile:test-nix-unit",
       "bazelLabel": "//bazel/checks/nix:nix_unit",
       "enforcement": "enforcing",
       "executionClass": "local-integration",
@@ -223,7 +175,6 @@
         "kind": "bazel-test",
         "label": "//bazel/checks/nix:nix_unit",
         "sources": [
-          "tests/test-nix-unit.sh",
           "tests/unit/nix/eval-jobs.nix",
           "tests/unit/nix/default.nix"
         ],
@@ -233,7 +184,7 @@
     {
       "id": "layer1:test-policy",
       "kind": "layer1-job",
-      "source": "tests/layer1-jobs.json#jobs.test-policy",
+      "source": "Makefile:test-policy",
       "bazelLabel": "//bazel/checks/policy:policy",
       "enforcement": "enforcing",
       "executionClass": "local-preflight",
@@ -249,7 +200,6 @@
         "kind": "bazel-test",
         "label": "//bazel/checks/policy:policy",
         "sources": [
-          "tests/test-policy.sh",
           "packages/d2b-contract-tests/tests/policy_bazel_layout.rs",
           "tests/unit/meta"
         ],
@@ -259,7 +209,7 @@
     {
       "id": "layer1:test-drift",
       "kind": "layer1-job",
-      "source": "tests/layer1-jobs.json#jobs.test-drift",
+      "source": "Makefile:test-drift",
       "bazelLabel": "//bazel/checks/policy:drift",
       "enforcement": "enforcing",
       "executionClass": "local-preflight",
@@ -275,9 +225,7 @@
         "kind": "bazel-test",
         "label": "//bazel/checks/policy:drift",
         "sources": [
-          "tests/unit/gates/drift-check.sh",
-          "tests/unit/gates/flake-check-matrix-sync.sh",
-          "tests/unit/gates/ci-rust-cache-sync.sh"
+          "tests/unit/gates/drift-check.sh"
         ],
         "remoteCandidate": false
       }
@@ -285,7 +233,7 @@
     {
       "id": "layer1:test-runtime-ledger",
       "kind": "layer1-job",
-      "source": "tests/layer1-jobs.json#jobs.test-runtime-ledger",
+      "source": "Makefile:test-runtime-ledger",
       "bazelLabel": "//bazel/checks/policy:runtime_ledger",
       "enforcement": "enforcing",
       "executionClass": "remote-candidate",
@@ -311,7 +259,7 @@
     {
       "id": "layer1:test-performance-budgets",
       "kind": "layer1-job",
-      "source": "tests/layer1-jobs.json#jobs.test-performance-budgets",
+      "source": "Makefile:test-performance-budgets",
       "bazelLabel": "//bazel/checks/meta:performance_budgets",
       "enforcement": "advisory",
       "executionClass": "local-preflight",
@@ -326,8 +274,7 @@
         "kind": "bazel-test",
         "label": "//bazel/checks/meta:performance_budgets",
         "sources": [
-          "tests/unit/gates/performance-budgets.sh",
-          "tests/layer1-jobs.json"
+          "tests/unit/gates/performance-budgets.sh"
         ],
         "remoteCandidate": false
       }
@@ -335,7 +282,7 @@
     {
       "id": "layer1:test-fixture-contracts",
       "kind": "layer1-job",
-      "source": "tests/layer1-jobs.json#jobs.test-fixture-contracts",
+      "source": "Makefile:test-fixture-contracts",
       "bazelLabel": "//bazel/checks/fixtures:contracts",
       "enforcement": "enforcing",
       "executionClass": "local-integration",
@@ -350,252 +297,12 @@
         "kind": "bazel-test",
         "label": "//bazel/checks/fixtures:contracts",
         "sources": [
-          "tests/test-rust.sh",
           "packages/d2b-contract-tests",
           "tests/fixtures"
         ],
         "remoteCandidate": false,
         "fixtureManifest": "tests/fixtures/BUILD.bazel",
         "fixtureState": "declared"
-      }
-    },
-    {
-      "id": "rust:main-workspace",
-      "kind": "rust-workspace",
-      "source": "tests/test-rust.sh#main-workspace",
-      "bazelLabel": "//packages:rust_main_workspace",
-      "enforcement": "enforcing",
-      "executionClass": "remote-candidate",
-      "architecture": [
-        "x86_64-linux",
-        "aarch64-linux"
-      ],
-      "eligibility": {
-        "eligible": true,
-        "localOnlyReason": null
-      }
-    },
-    {
-      "id": "rust:broker-default",
-      "kind": "rust-feature-context",
-      "source": "tests/test-rust.sh#broker_stream_default",
-      "bazelLabel": "//packages/d2b-priv-broker:rust_default",
-      "enforcement": "enforcing",
-      "executionClass": "remote-candidate",
-      "architecture": [
-        "x86_64-linux"
-      ],
-      "eligibility": {
-        "eligible": true,
-        "localOnlyReason": null
-      }
-    },
-    {
-      "id": "rust:broker-layer1",
-      "kind": "rust-feature-context",
-      "source": "tests/test-rust.sh#broker_stream_layer1",
-      "bazelLabel": "//packages/d2b-priv-broker:rust_layer1_bootstrap",
-      "enforcement": "enforcing",
-      "executionClass": "remote-candidate",
-      "architecture": [
-        "x86_64-linux"
-      ],
-      "eligibility": {
-        "eligible": true,
-        "localOnlyReason": null
-      }
-    },
-    {
-      "id": "rust:broker-fakebackends",
-      "kind": "rust-feature-context",
-      "source": "tests/test-rust.sh#broker_stream_fakebackends",
-      "bazelLabel": "//packages/d2b-priv-broker:rust_fake_backends",
-      "enforcement": "enforcing",
-      "executionClass": "remote-candidate",
-      "architecture": [
-        "x86_64-linux"
-      ],
-      "eligibility": {
-        "eligible": true,
-        "localOnlyReason": null
-      }
-    },
-    {
-      "id": "rust:guest-shell-runner-real-libshpool",
-      "kind": "rust-feature-context",
-      "source": "tests/test-rust.sh#guest-shell-runner",
-      "bazelLabel": "//packages/d2b-guest-shell-runner:rust_real_libshpool",
-      "enforcement": "enforcing",
-      "executionClass": "remote-candidate",
-      "architecture": [
-        "x86_64-linux"
-      ],
-      "eligibility": {
-        "eligible": true,
-        "localOnlyReason": null
-      }
-    },
-    {
-      "id": "rust:no-bash-ast",
-      "kind": "rust-policy",
-      "source": "tests/test-rust.sh#no-bash-ast",
-      "bazelLabel": "//tests:rust_no_bash_ast",
-      "enforcement": "enforcing",
-      "executionClass": "remote-candidate",
-      "architecture": [
-        "x86_64-linux",
-        "aarch64-linux"
-      ],
-      "eligibility": {
-        "eligible": true,
-        "localOnlyReason": null
-      }
-    },
-    {
-      "id": "rust:schema-reproducibility",
-      "kind": "rust-policy",
-      "source": "tests/test-rust.sh#schema-reproducibility",
-      "bazelLabel": "//tests:rust_schema_reproducibility",
-      "enforcement": "enforcing",
-      "executionClass": "remote-candidate",
-      "architecture": [
-        "x86_64-linux",
-        "aarch64-linux"
-      ],
-      "eligibility": {
-        "eligible": true,
-        "localOnlyReason": null
-      }
-    },
-    {
-      "id": "rust:inventory-stub",
-      "kind": "rust-policy",
-      "source": "tests/test-rust.sh#inventory-stub",
-      "bazelLabel": "//tests:rust_inventory_stub",
-      "enforcement": "enforcing",
-      "executionClass": "remote-candidate",
-      "architecture": [
-        "x86_64-linux",
-        "aarch64-linux"
-      ],
-      "eligibility": {
-        "eligible": true,
-        "localOnlyReason": null
-      }
-    },
-    {
-      "id": "rust:supply-chain",
-      "kind": "rust-policy",
-      "source": "tests/test-rust.sh#supply-chain",
-      "bazelLabel": "//tests:rust_supply_chain",
-      "enforcement": "enforcing",
-      "executionClass": "remote-candidate",
-      "architecture": [
-        "x86_64-linux",
-        "aarch64-linux"
-      ],
-      "eligibility": {
-        "eligible": true,
-        "localOnlyReason": null
-      }
-    },
-    {
-      "id": "rust:fixture-contracts",
-      "kind": "rust-fixture",
-      "source": "tests/test-rust.sh#fixture-contracts",
-      "bazelLabel": "//packages/d2b-contract-tests:fixture_contracts",
-      "enforcement": "enforcing",
-      "executionClass": "local-integration",
-      "architecture": [
-        "x86_64-linux"
-      ],
-      "eligibility": {
-        "eligible": false,
-        "localOnlyReason": "fixture-realization"
-      }
-    },
-    {
-      "id": "rust:cli-contracts",
-      "kind": "rust-fixture",
-      "source": "tests/test-rust.sh#cli-contracts",
-      "bazelLabel": "//packages/d2b:cli_contracts",
-      "enforcement": "enforcing",
-      "executionClass": "local-integration",
-      "architecture": [
-        "x86_64-linux"
-      ],
-      "eligibility": {
-        "eligible": false,
-        "localOnlyReason": "fixture-realization"
-      }
-    },
-    {
-      "id": "rust:doctests",
-      "kind": "rust-doctest",
-      "source": "tests/test-rust.sh#run_nextest_companions",
-      "bazelLabel": "//packages:rust_doctests",
-      "enforcement": "enforcing",
-      "executionClass": "remote-candidate",
-      "architecture": [
-        "x86_64-linux",
-        "aarch64-linux"
-      ],
-      "eligibility": {
-        "eligible": true,
-        "localOnlyReason": null
-      }
-    },
-    {
-      "id": "rust:harness-free-targets",
-      "kind": "rust-harness-free",
-      "source": "tests/test-rust.sh#nextest_unrunnable_targets",
-      "sources": [
-        "packages/d2b-core/Cargo.toml",
-        "packages/d2b-zone-routing/Cargo.toml",
-        "proofs/redb-resource-store-spike/Cargo.toml"
-      ],
-      "bazelLabel": "//packages:rust_harness_free_targets",
-      "enforcement": "enforcing",
-      "executionClass": "remote-candidate",
-      "architecture": [
-        "x86_64-linux",
-        "aarch64-linux"
-      ],
-      "eligibility": {
-        "eligible": true,
-        "localOnlyReason": null
-      }
-    },
-    {
-      "id": "rust:proof-workspaces",
-      "kind": "rust-proof-workspace",
-      "source": "tests/test-proofs.sh",
-      "bazelLabel": "//proofs:all",
-      "enforcement": "enforcing",
-      "executionClass": "remote-candidate",
-      "architecture": [
-        "x86_64-linux",
-        "aarch64-linux"
-      ],
-      "eligibility": {
-        "eligible": true,
-        "localOnlyReason": null
-      }
-    },
-    {
-      "id": "rust:benches",
-      "kind": "rust-bench",
-      "source": "tests/test-rust.sh#nextest_bench_targets_from_metadata",
-      "bazelLabel": "//packages:rust_benches",
-      "enforcement": "enforcing",
-      "executionClass": "remote-candidate",
-      "architecture": [
-        "x86_64-linux",
-        "aarch64-linux"
-      ],
-      "eligibility": {
-        "eligible": true,
-        "localOnlyReason": null
       }
     }
   ],
@@ -635,16 +342,8 @@
       "label": "//bazel/checks/policy:changelog"
     },
     {
-      "id": "layer1:bazel-check",
-      "label": "//:bazel_check"
-    },
-    {
-      "id": "layer1:test-rust",
-      "label": "//tests:rust"
-    },
-    {
       "id": "layer1:test-proofs",
-      "label": "//bazel/checks/policy:proofs"
+      "label": "//bazel/checks/fixtures:fixtures_proofs"
     },
     {
       "id": "layer1:test-nix-unit",
@@ -653,58 +352,6 @@
     {
       "id": "layer1:test-runtime-ledger",
       "label": "//bazel/checks/policy:runtime_ledger"
-    },
-    {
-      "id": "rust:main-workspace",
-      "label": "//packages:rust_main_workspace"
-    },
-    {
-      "id": "rust:broker-default",
-      "label": "//packages/d2b-priv-broker:rust_default"
-    },
-    {
-      "id": "rust:broker-layer1",
-      "label": "//packages/d2b-priv-broker:rust_layer1_bootstrap"
-    },
-    {
-      "id": "rust:broker-fakebackends",
-      "label": "//packages/d2b-priv-broker:rust_fake_backends"
-    },
-    {
-      "id": "rust:guest-shell-runner-real-libshpool",
-      "label": "//packages/d2b-guest-shell-runner:rust_real_libshpool"
-    },
-    {
-      "id": "rust:no-bash-ast",
-      "label": "//tests:rust_no_bash_ast"
-    },
-    {
-      "id": "rust:schema-reproducibility",
-      "label": "//tests:rust_schema_reproducibility"
-    },
-    {
-      "id": "rust:inventory-stub",
-      "label": "//tests:rust_inventory_stub"
-    },
-    {
-      "id": "rust:supply-chain",
-      "label": "//tests:rust_supply_chain"
-    },
-    {
-      "id": "rust:doctests",
-      "label": "//packages:rust_doctests"
-    },
-    {
-      "id": "rust:harness-free-targets",
-      "label": "//packages:rust_harness_free_targets"
-    },
-    {
-      "id": "rust:proof-workspaces",
-      "label": "//proofs:all"
-    },
-    {
-      "id": "rust:benches",
-      "label": "//packages:rust_benches"
     }
   ],
   "integrationSuccessors": [

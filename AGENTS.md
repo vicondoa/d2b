@@ -135,10 +135,10 @@ settings or claim atomic base binding.
 
 ## Critical subsystem index
 
-`make check` schedules the Bazel aggregate (`make bazel-check`) plus the
-remaining local Layer-1 jobs. Locally the aggregate uses BuildBuddy for
-supported targets. CI runs the same aggregate with the local profile and
-no BuildBuddy. Standalone Cargo workflows remain available.
+`make check` invokes the single fixed Bazel Layer-1 graph. Locally eligible
+actions use BuildBuddy; CI runs the same graph with the local profile and no
+BuildBuddy credential. Make aliases remain public compatibility entry points,
+and standalone Cargo workflows remain available.
 
 The full invariants are in
 [`docs/contributing/critical-subsystems.md`](./docs/contributing/critical-subsystems.md).

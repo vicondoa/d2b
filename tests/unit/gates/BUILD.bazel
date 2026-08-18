@@ -13,39 +13,11 @@ filegroup(
 )
 
 sh_test(
-    name = "ci_rust_cache_sync",
-    srcs = ["ci-rust-cache-sync.sh"],
-    data = [
-        "//:tests_root_sources",
-        "//bazel/checks/rust:repo_policy_sources",
-    ],
-    env_inherit = ["PATH", "ROOT"],
-    tags = [
-        "local",
-        "no-sandbox",
-    ],
-)
-
-sh_test(
     name = "drift_check",
     srcs = ["drift-check.sh"],
     data = [
         "//:nix_workspace_sources",
         "//:nixos_modules_workspace_sources",
-        "//:tests_root_sources",
-        "//bazel/checks/rust:repo_policy_sources",
-    ],
-    env_inherit = ["PATH", "ROOT"],
-    tags = [
-        "local",
-        "no-sandbox",
-    ],
-)
-
-sh_test(
-    name = "flake_check_matrix_sync",
-    srcs = ["flake-check-matrix-sync.sh"],
-    data = [
         "//:tests_root_sources",
         "//bazel/checks/rust:repo_policy_sources",
     ],
