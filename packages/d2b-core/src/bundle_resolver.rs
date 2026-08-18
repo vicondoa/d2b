@@ -1247,8 +1247,7 @@ impl BundleResolver {
         let processes: ProcessesJson = serde_json::from_slice(&processes_bytes).map_err(|e| {
             Error::manifest_parse_error("processes.json", manifest_parse_reason(&e.to_string()))
         })?;
-        let zone_resource_bundles =
-            load_zone_resource_bundles(&bundle, bundle_root, policy)?;
+        let zone_resource_bundles = load_zone_resource_bundles(&bundle, bundle_root, policy)?;
         let storage = load_optional_storage_artifact(&bundle, bundle_root, policy)?;
         let sync = load_optional_sync_artifact(&bundle, bundle_root, policy)?;
         let realm_controllers =
@@ -3177,12 +3176,7 @@ fn load_zone_resource_bundles(
         }
         let zone_path = resolve_bundle_ref(bundle_root, key);
         let bytes = secure_open_and_read(&zone_path, policy)?;
-        verify_artifact_hash(
-            &zone_path,
-            &bytes,
-            bundle.artifact_hashes.as_ref(),
-            key,
-        )?;
+        verify_artifact_hash(&zone_path, &bytes, bundle.artifact_hashes.as_ref(), key)?;
         if bundles.insert(zone_name.to_owned(), bytes).is_some() {
             return Err(Error::manifest_parse_error(
                 "resource-bundle.json",

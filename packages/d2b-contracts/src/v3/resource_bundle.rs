@@ -497,10 +497,12 @@ mod tests {
         .unwrap();
         let bytes = serde_json::to_vec(&bundle).unwrap();
         let value: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
-        assert!(!value["resources"][0]["metadata"]
-            .as_object()
-            .unwrap()
-            .contains_key("ownerRef"));
+        assert!(
+            !value["resources"][0]["metadata"]
+                .as_object()
+                .unwrap()
+                .contains_key("ownerRef")
+        );
         assert_eq!(ResourceBundle::from_json(&bytes).unwrap(), bundle);
     }
 
@@ -542,5 +544,4 @@ mod tests {
         value["resources"][0]["metadata"]["name"] = serde_json::json!("b");
         assert!(ResourceBundle::from_json(&serde_json::to_vec(&value).unwrap()).is_err());
     }
-
 }

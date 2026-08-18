@@ -2098,9 +2098,7 @@ fn dispatch_request_with_backend_and_request_fds<B: DispatchBackend>(
             )?;
             Ok(DispatchResult::no_fds(
                 BrokerResponse::ResourceActivationAudit(
-                    d2b_contracts::broker_wire::ResourceActivationAuditResponse {
-                        recorded: true,
-                    },
+                    d2b_contracts::broker_wire::ResourceActivationAuditResponse { recorded: true },
                 ),
             ))
         }
@@ -3244,9 +3242,7 @@ fn dispatch_request_with_backend_and_request_fds<B: DispatchBackend>(
                     // Until typed generator inputs are carried in the trusted
                     // bundle, the bundle's prebuilt argv remains authoritative.
                 }
-                Err(d2b_host::runner_argv_regenerator::RegenerateArgvError::Generator(
-                    error,
-                )) => {
+                Err(d2b_host::runner_argv_regenerator::RegenerateArgvError::Generator(error)) => {
                     return Err(BrokerError::SpawnRunnerIntentMismatch {
                         field: "argv_generator",
                         requested: "trusted-inputs".to_owned(),
@@ -4279,7 +4275,11 @@ fn dispatch_request_with_backend_and_request_fds<B: DispatchBackend>(
                 (intent.owner_uid, intent.owner_gid),
             )
             .map_err(|error| BrokerError::LiveHandler(error.to_string()))?;
-            tracing::warn!(?paths, probe_only = req.probe_only, "TPM migration paths resolved");
+            tracing::warn!(
+                ?paths,
+                probe_only = req.probe_only,
+                "TPM migration paths resolved"
+            );
             let wire_outcome = if req.probe_only {
                 match crate::ops::swtpm_migration::probe(&paths) {
                     Ok(crate::ops::swtpm_migration::LegacyInventoryState::NeverProvisioned) => {

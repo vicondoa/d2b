@@ -1972,11 +1972,7 @@ fn contains_volume_spec_secret_shape(value: &Value) -> bool {
         return contains_secret_shape_at(value, false);
     };
     object.iter().any(|(key, value)| {
-        if forbidden_key(key)
-            && key != "attachments"
-            && key != "layout"
-            && key != "views"
-        {
+        if forbidden_key(key) && key != "attachments" && key != "layout" && key != "views" {
             return true;
         }
         match key.as_str() {
@@ -2013,13 +2009,10 @@ fn contains_secret_shape_at(value: &Value, allow_path: bool) -> bool {
                 || lower.contains("secret")
         }
         Value::Array(values) => values.iter().any(contains_secret_shape),
-        Value::Object(values) => values
-            .iter()
-            .any(|(key, value)| {
-                (forbidden_key(key)
-                    && !(allow_path && (key == "path" || key == "mountPath")))
-                    || contains_secret_shape_at(value, false)
-            }),
+        Value::Object(values) => values.iter().any(|(key, value)| {
+            (forbidden_key(key) && !(allow_path && (key == "path" || key == "mountPath")))
+                || contains_secret_shape_at(value, false)
+        }),
         Value::Null | Value::Bool(_) | Value::Number(_) => false,
     }
 }
@@ -2391,7 +2384,7 @@ mod tests {
                         "dmabufDeny": []
                     }
                 }
-            })
+            }),
         ];
         let input = CompileInput {
             zone: "local-root".to_owned(),

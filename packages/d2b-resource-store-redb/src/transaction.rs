@@ -889,8 +889,7 @@ pub(crate) fn backfill_schema_catalog(database: &Database) -> Result<(), StoreEr
             let mut types = std::collections::BTreeSet::new();
             for row in table.iter().map_err(integrity)? {
                 let (_key, value) = row.map_err(integrity)?;
-                let schema: ApiSchemaRecord =
-                    decode(ValueKind::ApiSchemaRecord, value.value())?;
+                let schema: ApiSchemaRecord = decode(ValueKind::ApiSchemaRecord, value.value())?;
                 types.insert(schema.resource_type);
             }
             if types.len() != STANDARD_SCHEMA_CATALOG.len()
@@ -1796,10 +1795,11 @@ fn valid_wayland_session(session: WaylandSessionSpec) -> bool {
     session.guest_ref.resource_type().as_str() == "Guest"
         && session.host_ref.resource_type().as_str() == "Host"
         && session.user_ref.resource_type().as_str() == "User"
-        && session.policy_ref.resource_type().as_str()
-            == "display-wayland.d2bus.org.WaylandPolicy"
+        && session.policy_ref.resource_type().as_str() == "display-wayland.d2bus.org.WaylandPolicy"
         && session.cross_domain_trusted
-        && session.reconnect_generation.is_none_or(|generation| generation > 0)
+        && session
+            .reconnect_generation
+            .is_none_or(|generation| generation > 0)
         && valid_wayland_identity(&session.identity)
         && valid_wayland_filter(
             &session.filter.allow_globals,

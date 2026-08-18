@@ -4077,7 +4077,9 @@ fn resolve_network_effect_context(
         .ok_or(resource_runtime::ResourceRuntimeError::ProviderPathUnavailable)?;
     let nm_id = intent_id_nm_unmanaged_host();
     if resolver.find_nm_unmanaged_intent(&nm_id).is_none()
-        || resolver.find_hosts_intent(&intent_id_hosts_host()).is_none()
+        || resolver
+            .find_hosts_intent(&intent_id_hosts_host())
+            .is_none()
     {
         return Err(resource_runtime::ResourceRuntimeError::ProviderPathUnavailable);
     }
@@ -4224,16 +4226,13 @@ fn dispatch_wave6_resource_reconcile(
         }
         "Guest" => {
             let guest_vm = resource_ref.name().as_str();
-            let providers = state
-                .provider_runtime
-                .process_providers()
-                .ok_or_else(|| {
-                    tracing::warn!(
-                        guest = guest_vm,
-                        "Guest Provider process runtime is unavailable"
-                    );
-                    resource_runtime::ResourceRuntimeError::ProviderPathUnavailable
-                })?;
+            let providers = state.provider_runtime.process_providers().ok_or_else(|| {
+                tracing::warn!(
+                    guest = guest_vm,
+                    "Guest Provider process runtime is unavailable"
+                );
+                resource_runtime::ResourceRuntimeError::ProviderPathUnavailable
+            })?;
             let node = providers
                 .node_for_role(guest_vm, "ch-runner")
                 .ok_or_else(|| {
@@ -4372,9 +4371,9 @@ fn dispatch_device_tpm_reconcile_inner(
         resource_runtime::ResourceRuntimeError::ProviderPathUnavailable
     })?;
     tracing::warn!(
-    vm_id,
-    outcome = inventory.as_str(),
-    "Device TPM legacy inventory classified"
+        vm_id,
+        outcome = inventory.as_str(),
+        "Device TPM legacy inventory classified"
     );
     let legacy_intent_anchor =
         trusted_tpm_migration_anchor(&migration_intent, inventory).map_err(|error| {

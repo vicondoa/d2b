@@ -121,9 +121,7 @@ impl Request {
             Self::GatewayDisplay(_) => "gatewayDisplay",
             Self::Workload(_) => "workload",
             Self::Audio(_) => "audio",
-            Self::Resource(request) if request.method() == Some("Reconcile") => {
-                "resourceReconcile"
-            }
+            Self::Resource(request) if request.method() == Some("Reconcile") => "resourceReconcile",
             Self::Resource(_) => "resourceRequest",
         }
     }
