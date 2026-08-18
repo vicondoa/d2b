@@ -22,7 +22,7 @@ use serde_json::{Value, json};
 use std::collections::BTreeMap;
 use std::fs;
 use std::io::{Read, Write};
-use std::os::unix::fs::{FileTypeExt, PermissionsExt};
+use std::os::unix::fs::{FileTypeExt, MetadataExt, PermissionsExt};
 use std::os::unix::net::UnixStream;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
@@ -437,7 +437,17 @@ fn exercise_helper_runtime_reconstruction(scratch: &Scratch, operation_suffix: &
     let create_operation = format!("op-runtime-create-{operation_suffix}");
     let created = runtime
         .shell(attach_request(&create_operation, workload.clone(), false))
-        .unwrap();
+        .unwrap_or_else(|error| {
+            let metadata = fs::symlink_metadata(&scratch.path).expect("scratch metadata");
+            panic!(
+                "shell setup failed: {error:?}; path={}, uid={}, owner={}, mode={:o}, tmpdir={:?}",
+                scratch.path.display(),
+                get_current_uid(),
+                metadata.uid(),
+                metadata.permissions().mode(),
+                std::env::var_os("TMPDIR"),
+            );
+        });
     let (frame, fd) = created.into_parts();
     assert!(matches!(frame, UnsafeLocalHelperToDaemon::TerminalReady(_)));
     let mut terminal = UnixStream::from(fd.expect("terminal fd"));
