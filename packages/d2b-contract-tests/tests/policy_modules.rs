@@ -405,6 +405,8 @@ fn provider_controller_crates() -> Vec<(String, String, String)> {
         .map(|path| {
             if path.is_absolute() {
                 path
+            } else if let Some(runfiles) = std::env::var_os("RUNFILES_DIR") {
+                std::path::PathBuf::from(runfiles).join(path)
             } else {
                 repo_root().join(path)
             }

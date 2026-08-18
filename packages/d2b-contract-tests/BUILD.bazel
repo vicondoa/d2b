@@ -434,7 +434,7 @@ rust_test(
     srcs = ["tests/policy_modules.rs"],
     compile_data = ["Cargo.toml"],
     data = ["@rules_rust//rust/toolchain:current_cargo_files"],
-    env = {"CARGO": "$(rootpath @rules_rust//rust/toolchain:current_cargo_files)"},
+    env = {"CARGO": "$(rlocationpath @rules_rust//rust/toolchain:current_cargo_files)"},
     tags = ["local"],
     visibility = ["//visibility:public"],
     deps = [
@@ -488,7 +488,7 @@ rust_test(
     srcs = ["tests/policy_provider_crate_layout.rs"],
     compile_data = ["Cargo.toml"],
     data = ["@rules_rust//rust/toolchain:current_cargo_files"],
-    env = {"CARGO": "$(rootpath @rules_rust//rust/toolchain:current_cargo_files)"},
+    env = {"CARGO": "$(rlocationpath @rules_rust//rust/toolchain:current_cargo_files)"},
     tags = ["local"],
     visibility = ["//visibility:public"],
     deps = [

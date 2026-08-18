@@ -207,6 +207,8 @@ fn cargo_metadata(root: &Path) -> Result<CargoMetadata, String> {
         .map(|path| {
             if path.is_absolute() {
                 path
+            } else if let Some(runfiles) = std::env::var_os("RUNFILES_DIR") {
+                PathBuf::from(runfiles).join(path)
             } else {
                 repo_root().join(path)
             }

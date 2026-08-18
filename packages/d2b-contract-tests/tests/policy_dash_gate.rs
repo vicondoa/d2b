@@ -963,12 +963,12 @@ fn the_gate_matches_codepoints_and_declares_a_closed_asset_allowlist() {
 #[test]
 fn check_tier0_runs_the_gate() {
     let makefile = read_repo_file("Makefile");
-    let wired = makefile
-        .lines()
-        .any(|line| line.trim_start().starts_with("bash ") && line.contains(GATE));
+    let meta_build = read_repo_file("bazel/checks/meta/BUILD.bazel");
     assert!(
-        wired,
-        "the Makefile `check-tier0` target must run {GATE}; the dash ban has no other gate"
+        makefile.contains("//bazel/checks/meta:tier0")
+            && meta_build.contains("//:tests/tools/tier0-first-pass.sh")
+            && meta_build.contains("name = \"tier0_first_pass\""),
+        "the Makefile `check-tier0` target must route through the Bazel carrier for {GATE}"
     );
 }
 
