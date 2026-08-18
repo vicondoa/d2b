@@ -35,15 +35,9 @@ impl<'a> DaemonNetworkBroker<'a> {
     fn dispatch(&self, request: BrokerRequest) -> Result<(), NetworkBrokerError> {
         match crate::dispatch_broker_request_as(self.state, request, self.caller_role.clone()) {
             Ok(BrokerResponse::Error(error)) => {
-                let reason = error
-                    .message
-                    .split_once("failed: ")
-                    .map_or("broker-request-rejected", |(_, reason)| reason);
                 tracing::warn!(
                     broker_kind = %error.kind,
                     broker_operation = %error.operation,
-                    broker_reason = %reason,
-                    broker_message = %error.message,
                     "Network broker rejected a typed effect request"
                 );
                 Err(map_broker_error(&error.kind, &error.message))

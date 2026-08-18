@@ -11059,16 +11059,6 @@ fn error_response(
     message: &str,
     remediation: &str,
 ) -> BrokerResponse {
-    if kind == "Broker.RequestValidation" {
-        let reason = message
-            .split_once("failed: ")
-            .map_or("broker-request-rejected", |(_, reason)| reason);
-        tracing::warn!(
-            operation,
-            broker_reason = reason,
-            "broker request validation refused"
-        );
-    }
     let message = redact_public_detail(message);
     let remediation = redact_public_detail(remediation);
     #[cfg(feature = "layer1-bootstrap")]
