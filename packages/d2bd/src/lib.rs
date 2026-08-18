@@ -4520,7 +4520,14 @@ fn reconcile_wave6_network_effect(
     uid: &ResourceUid,
     resource: &Value,
 ) -> Result<(), resource_runtime::ResourceRuntimeError> {
-    let context = resolve_network_effect_context(resource, resolver)?;
+    let context = resolve_network_effect_context(resource, resolver).map_err(|error| {
+        tracing::warn!(
+            stage = "resolve-network-effect-context",
+            error = error.code(),
+            "Network Provider path resolution failed"
+        );
+        error
+    })?;
     let mut spec_value = resource
         .get("spec")
         .cloned()
@@ -4529,14 +4536,27 @@ fn reconcile_wave6_network_effect(
         .as_object_mut()
         .ok_or(resource_runtime::ResourceRuntimeError::RequestInvalid)?
         .remove("providerRef");
-    let spec = serde_json::from_value::<NetworkSpec>(spec_value)
-        .map_err(|_| resource_runtime::ResourceRuntimeError::RequestInvalid)?;
+    let spec = serde_json::from_value::<NetworkSpec>(spec_value).map_err(|_| {
+        tracing::warn!(
+            stage = "parse-network-spec",
+            "Network Provider spec is not a valid NetworkSpec"
+        );
+        resource_runtime::ResourceRuntimeError::RequestInvalid
+    })?;
     let env_name = resolve_network_env_name(
         resource
             .get("spec")
             .ok_or(resource_runtime::ResourceRuntimeError::RequestInvalid)?,
         resolver,
-    )?;
+    )
+    .map_err(|error| {
+        tracing::warn!(
+            stage = "resolve-network-environment",
+            error = error.code(),
+            "Network Provider environment resolution failed"
+        );
+        error
+    })?;
     let generation = resource
         .get("metadata")
         .and_then(|metadata| metadata.get("generation"))
@@ -4556,6 +4576,10 @@ fn reconcile_wave6_network_effect(
         .find_manifest_vm(&net_vm_name)
         .is_some_and(|vm| vm.is_net_vm)
     {
+        tracing::warn!(
+            stage = "resolve-network-net-vm",
+            "Network Provider net VM is absent from the trusted manifest"
+        );
         return Err(resource_runtime::ResourceRuntimeError::ProviderPathUnavailable);
     }
     let mdns_enabled = resource
