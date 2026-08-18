@@ -50,11 +50,16 @@ filegroup(
     srcs = [
         "//:Cargo.lock",
         "//:Cargo.toml",
+        "//:docs_workspace_sources",
         "//:flake.lock",
         "//:flake.nix",
         "//:nix_flake_support_sources",
+        "//:nix_workspace_sources",
         "//:nixos_modules_workspace_sources",
+        "//:packages_workspace_sources",
+        "//:pkgs_workspace_sources",
         "//:rust-toolchain.toml",
+        "//:tests_root_sources",
         "//:tests/unit/smoke/smoke-eval-aarch64.nix",
     ],
 )
