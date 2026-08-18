@@ -1,10 +1,10 @@
-# Type-G runNixOSTest: Guest process adoption across a daemon restart.
+# Type-G runNixOSTest: Guest process-adoption preflight.
 #
 # This is the lowest public host selector that can exercise the installed
-# Cloud Hypervisor runner and pidfd recovery state. It is intentionally not a
-# substitute for the native controller acceptance: it proves the production
-# daemon restart/process-adoption boundary when the VM prerequisites are
-# available.
+# Cloud Hypervisor runner and pidfd recovery state. It exercises the production
+# daemon restart/process-adoption boundary when nested VM prerequisites are
+# available; otherwise it records an explicit environment block and does not
+# claim Guest adoption coverage.
 { pkgs, self }:
 
 let
@@ -85,7 +85,7 @@ let
     [ "acceptance-provider" ]);
 in
 pkgs.testers.runNixOSTest {
-  name = "d2b-runtime-cloud-hypervisor-guest-acceptance";
+  name = "d2b-runtime-cloud-hypervisor-guest-preflight";
 
   nodes.machine = d2bLib.d2bDaemonNode {
     writableStore = true;
@@ -264,7 +264,9 @@ pkgs.testers.runNixOSTest {
 
     # The nested VM must be able to create a TAP before an inner Cloud
     # Hypervisor process can boot. Probe that host capability explicitly and
-    # report a concrete block instead of waiting for a dead runner.
+    # report a concrete block instead of waiting for a dead runner. This
+    # preflight is not Guest-adoption evidence when the nested posture is
+    # unavailable.
     guest_fixture = machine.succeed(
         "if test -d /nix/store && test -d /var/lib/d2b/vms && "
         "runuser -u d2bd -- ip tuntap add d2b-guest-probe mode tap 2>/dev/null; "
