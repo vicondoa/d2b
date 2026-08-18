@@ -4157,6 +4157,15 @@ fn dispatch_wave6_resource_reconcile(
         .and_then(|spec| spec.get("providerRef"))
         .and_then(Value::as_str)
         .ok_or(resource_runtime::ResourceRuntimeError::RequestInvalid)?;
+    if resource_type == "Guest"
+        && provider_ref != d2b_provider_runtime_cloud_hypervisor::PROVIDER_REF
+    {
+        tracing::warn!(
+            operation = "guest-provider-binding",
+            "Guest reconcile refused a non-Cloud-Hypervisor Provider",
+        );
+        return Err(resource_runtime::ResourceRuntimeError::CapabilityUnavailable);
+    }
     let uid = resource
         .get("metadata")
         .and_then(|metadata| metadata.get("uid"))

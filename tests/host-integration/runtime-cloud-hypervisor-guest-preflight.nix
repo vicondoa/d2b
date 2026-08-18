@@ -178,10 +178,17 @@ pkgs.testers.runNixOSTest {
               config = { };
             };
           };
+          runtime-cloud-hypervisor = {
+            type = "Provider";
+            spec = {
+              artifactId = "acceptance-provider";
+              config.controllerExecutionRef = "Host/host-system";
+            };
+          };
           corp-vm = {
             type = "Guest";
             spec = {
-              providerRef = "Provider/system-core";
+              providerRef = "Provider/runtime-cloud-hypervisor";
               defaultDomain = "system";
               allowedDomains = [ "system" ];
               budget = { };
@@ -306,7 +313,7 @@ pkgs.testers.runNixOSTest {
             "> /run/d2b-guest-before.json"
         )
         machine.succeed(
-            "jq -e '.resources[] | select(.resourceRef == \"Guest/corp-vm\")' "
+            "jq -e '.resources[] | select(.type == \"Guest\" and .metadata.name == \"corp-vm\")' "
             "/run/d2b-guest-before.json"
         )
 

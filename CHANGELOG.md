@@ -132,7 +132,9 @@ deprecations ship one minor release before removal.
   refusal.
 - Added authenticated Zone Resource API lifecycle coverage for Volume, Network,
   Device TPM, and Cloud Hypervisor Guest resources, including dependency-aware
-  readiness, daemon-restart adoption, and dependency-safe removal.
+  readiness, restart continuity, and dependency-safe removal. Cloud Hypervisor
+  Guest adoption remains an explicit preflight block when nested TAP/cgroup
+  posture is unavailable.
 - Added the public Zone Resource API authorization row and generated privileges
   contract so typed Resource reads and mutations use authenticated daemon
   admission.

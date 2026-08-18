@@ -527,7 +527,7 @@
       "owner": "provider.runtime-cloud-hypervisor",
       "status": "Landed",
       "implementationPath": "packages/d2b-provider-runtime-cloud-hypervisor",
-      "validationProof": "Unit: reconcile state machine, fast-path latency, Process-status adoption observation, multiple/ambiguous-child quarantine with zero effects, absence of pidfd/PID/proc/cgroup APIs from this Provider, and finalize ordering. Integration: nonempty discovery and no-skip build of exact attr `vmChecks.x86_64-linux.runtime-cloud-hypervisor-guest-acceptance` through `make test-host-integration`, proving real KVM boot, the Provider-owned VMM process effect, authenticated guest-control session, and ready Guest state.",
+      "validationProof": "Unit: reconcile state machine, fast-path latency, Process-status adoption observation, multiple/ambiguous-child quarantine with zero effects, absence of pidfd/PID/proc/cgroup APIs from this Provider, and finalize ordering. Integration: exact attr `vmChecks.x86_64-linux.runtime-cloud-hypervisor-guest-preflight` is discovered and built through `make test-host-integration`; it exercises real-KVM Guest adoption only when nested TAP/cgroup prerequisites are available and otherwise records an explicit external block without claiming adoption.",
       "removalProof": "Not applicable (new crate)",
       "sourceState": "Planned"
     },
