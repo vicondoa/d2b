@@ -198,6 +198,11 @@ fn run_bazel_output(arguments: &[&str]) -> std::process::Output {
         .arg(arguments.first().expect("Bazel command is non-empty"))
         .arg("--lockfile_mode=error")
         .arg("--repo_contents_cache=")
+        .arg(format!("--action_env=PATH={tool_path}"))
+        .arg(format!(
+            "--shell_executable={}",
+            std::env::var("BAZEL_SH").expect("BAZEL_SH is set")
+        ))
         .arg(format!(
             "--symlink_prefix={}",
             output_root.join("symlinks/bazel-").display()

@@ -432,7 +432,7 @@
           shellHook = ''
             export D2B_BAZEL_BIN="${bazel920}/bin/bazel"
             export BAZEL_SH="${bazelActionShell}/bin/bash"
-            export D2B_BAZEL_TEST_PATH="${pkgs.bash}/bin:${pkgs.coreutils}/bin:${pkgs.findutils}/bin:${pkgs.gnugrep}/bin:${pkgs.gnused}/bin:${pkgs.git}/bin"
+            export D2B_BAZEL_TEST_PATH="${pkgs.bash}/bin:${pkgs.coreutils}/bin:${pkgs.findutils}/bin:${pkgs.gnugrep}/bin:${pkgs.gnused}/bin:${pkgs.git}/bin:${pkgs.rustup}/bin"
             echo "d2b Bazel compatibility shell: $(${bazel920}/bin/bazel --version)"
           '';
         };

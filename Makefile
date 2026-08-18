@@ -165,7 +165,7 @@ test-rust-schema:
 	$(BAZEL_RUN) //packages/xtask:schema_reproducibility_test
 
 test-rust-inventory:
-	$(BAZEL_RUN) //bazel/checks/meta:inventory
+	$(MAKE) check-tier0
 
 test-rust-supply-chain:
 	$(BAZEL_RUN) //bazel/checks/nix:flake-eval-x86-realized
@@ -243,7 +243,7 @@ heavy-lane-integration: heavy-lane-guard
 
 ## check-inventory - compatibility alias for the fixed Bazel inventory test.
 check-inventory:
-	$(BAZEL_RUN) //packages/xtask:bazel_rust_parity //packages/xtask:bazel_non_rust_parity
+	$(MAKE) check-tier0
 
 ## ledger-regen - regenerate tests/migration-ledger.toml in place for humans.
 ledger-regen:
