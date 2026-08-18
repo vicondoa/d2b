@@ -93,9 +93,7 @@ fn is_excluded_dir(rel: &str) -> bool {
 
 #[test]
 fn nix_package_source_filters_are_path_segment_based() {
-    let files = [
-        "nixos-modules/rust-host-tools.nix",
-    ];
+    let files = ["nixos-modules/rust-host-tools.nix"];
 
     for rel in files {
         let content = read_repo_file(rel);

@@ -625,6 +625,7 @@ fn host_mutation_sources() -> BTreeSet<String> {
                 .into_owned();
             if rel_path.starts_with("nixos-modules/options-")
                 || rel_path == "nixos-modules/processes-json.nix"
+                || rel_path == "nixos-modules/rust-host-tools.nix"
                 || rel_path == "nixos-modules/storage-json.nix"
                 || rel_path == "nixos-modules/sync-json.nix"
             {
