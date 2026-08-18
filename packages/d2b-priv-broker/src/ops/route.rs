@@ -190,7 +190,7 @@ fn apply_with_preflight_from_routes(
     let requested = requested_route_conflict_key(intent);
     if let Some(existing) = observed_routes
         .iter()
-        .find(|route| route.destination == requested.destination && *route != &requested)
+        .find(|route| route_conflicts(route, &requested))
     {
         return Err(ApplyWithPreflightError::ConflictingRoute {
             existing: existing.clone(),
@@ -205,6 +205,14 @@ fn apply_with_preflight_from_routes(
     };
     crate::live_handlers::live_apply_route(executor, ip_binary, verb, &intent.route_spec)
         .map_err(map_live_route_error)
+}
+
+fn route_conflicts(existing: &RouteConflictKey, requested: &RouteConflictKey) -> bool {
+    existing.destination == requested.destination
+        && (existing.via != requested.via
+            || existing.device != requested.device
+            || existing.metric != requested.metric
+            || existing.table != requested.table)
 }
 
 fn map_live_route_error(err: LiveHandlerError) -> ApplyWithPreflightError {
@@ -505,6 +513,27 @@ mod tests {
                     && requested.table == "main"
         ));
         assert!(exec.take_log().is_empty());
+    }
+
+    #[test]
+    fn apply_with_preflight_replaces_same_route_when_only_protocol_differs() {
+        let exec = FakeReconcileExecutor::new();
+        let mut intent = resolved_route_intent(true, None);
+        intent.route_spec = "10.0.0.0/24 dev br-work-up proto static table main".to_owned();
+        apply_with_preflight_from_routes(
+            &exec,
+            Path::new("/usr/sbin/ip"),
+            &intent,
+            &[observed_route(None, "br-work-up", None, "boot")],
+        )
+        .unwrap();
+        assert!(matches!(
+            exec.take_log().as_slice(),
+            [ReconcileOp::IpRoute {
+                verb: IpRouteVerb::Replace,
+                ..
+            }]
+        ));
     }
 
     #[test]
