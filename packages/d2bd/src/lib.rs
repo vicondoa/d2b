@@ -3938,6 +3938,15 @@ fn dispatch_resource_request(
             return Ok(resource_runtime_error_frame(error));
         }
     };
+    if security_key_effect_port::is_reconcile_request(&request.value()) {
+        return Ok(security_key_effect_port::dispatch_reconcile(
+            state,
+            peer,
+            runtime.as_ref(),
+            &request.value(),
+        )
+        .unwrap_or_else(resource_runtime_error_frame));
+    }
     if is_device_tpm_reconcile_request(&request.value()) {
         return Ok(dispatch_device_tpm_reconcile(state, peer, &request.value())
             .unwrap_or_else(resource_runtime_error_frame));
@@ -3960,15 +3969,6 @@ fn dispatch_resource_request(
                 }
             },
         );
-    }
-    if security_key_effect_port::is_reconcile_request(&request.value()) {
-        return Ok(security_key_effect_port::dispatch_reconcile(
-            state,
-            peer,
-            runtime.as_ref(),
-            &request.value(),
-        )
-        .unwrap_or_else(resource_runtime_error_frame));
     }
     if typed_shell {
         return Ok(
@@ -4213,6 +4213,9 @@ fn dispatch_wave6_resource_reconcile(
             "network-bridge-reconciled"
         }
         "Device" => {
+            if provider_ref != d2b_provider_device_tpm::PROVIDER_REF {
+                return Err(resource_runtime::ResourceRuntimeError::CapabilityUnavailable);
+            }
             let owner_ref = resource
                 .get("metadata")
                 .and_then(|metadata| metadata.get("ownerRef"))
@@ -4251,10 +4254,28 @@ fn dispatch_wave6_resource_reconcile(
                     );
                     resource_runtime::ResourceRuntimeError::ProviderPathUnavailable
                 })?;
-            if providers.has_active_role(guest_vm, "ch-runner") {
-                "cloud-hypervisor-adopted"
-            } else {
-                block_on_future(providers.launch_node(guest_vm, &node, Duration::from_secs(30)))
+            let adoption =
+                block_on_future(providers.adopt_node(guest_vm, &node)).map_err(|error| {
+                    tracing::warn!(
+                        guest = guest_vm,
+                        error = %error,
+                        "Guest Provider Cloud Hypervisor adoption failed"
+                    );
+                    resource_runtime::ResourceRuntimeError::ProviderPathUnavailable
+                })?;
+            match adoption {
+                process_provider_runtime::ProviderAdoption::Adopted(_) => {
+                    "cloud-hypervisor-adopted"
+                }
+                process_provider_runtime::ProviderAdoption::Quarantined(_) => {
+                    return Err(resource_runtime::ResourceRuntimeError::ProviderPathUnavailable);
+                }
+                process_provider_runtime::ProviderAdoption::Absent => {
+                    block_on_future(providers.launch_node(
+                        guest_vm,
+                        &node,
+                        Duration::from_secs(30),
+                    ))
                     .map_err(|error| {
                         tracing::warn!(
                             guest = guest_vm,
@@ -4263,7 +4284,8 @@ fn dispatch_wave6_resource_reconcile(
                         );
                         resource_runtime::ResourceRuntimeError::ProviderPathUnavailable
                     })?;
-                "cloud-hypervisor-started"
+                    "cloud-hypervisor-started"
+                }
             }
         }
         _ => unreachable!(),
