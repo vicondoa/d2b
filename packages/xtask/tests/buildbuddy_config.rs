@@ -1,6 +1,10 @@
 #![forbid(unsafe_code)]
 
-use std::path::PathBuf;
+use std::{
+    os::unix::fs::PermissionsExt,
+    path::{Path, PathBuf},
+    process::Command,
+};
 
 use serde_json::Value;
 
@@ -46,6 +50,13 @@ fn read_text(relative: &str) -> String {
 fn read_json(relative: &str) -> Value {
     serde_json::from_str(&read_text(relative))
         .unwrap_or_else(|error| panic!("parse {relative}: {error}"))
+}
+
+fn write_executable(path: &Path, contents: &str) {
+    std::fs::write(path, contents)
+        .unwrap_or_else(|error| panic!("write {}: {error}", path.display()));
+    std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o755))
+        .unwrap_or_else(|error| panic!("chmod {}: {error}", path.display()));
 }
 
 fn object<'a>(value: &'a Value, context: &str) -> &'a serde_json::Map<String, Value> {
@@ -159,6 +170,53 @@ fn committed_profiles_share_authentication_and_worker_policy() {
             && wrapper.contains("local fallback rejects an external workspace Bazel rc"),
         "the one local fallback must ignore external Bazel rc files"
     );
+    assert!(
+        !wrapper.contains("--dispatch-evidence"),
+        "BEP file presence alone must not suppress pre-dispatch fallback"
+    );
+}
+
+#[test]
+fn redaction_failure_never_emits_captured_evidence() {
+    let scratch = repo_root()
+        .join(".scratch")
+        .join(format!("bazel-check-redaction-test-{}", std::process::id()));
+    std::fs::create_dir_all(&scratch).expect("create wrapper test scratch");
+    let bazel = scratch.join("bazel");
+    let xtask = scratch.join("xtask");
+    write_executable(
+        &bazel,
+        "#!/usr/bin/env bash\n\
+         for arg in \"$@\"; do\n\
+           case \"$arg\" in\n\
+             --build_event_json_file=*) bep=\"${arg#*=}\" ;;\n\
+           esac\n\
+         done\n\
+         printf 'RAW-LOG-SENTINEL\\n'\n\
+         printf 'RAW-BEP-SENTINEL\\n' > \"$bep\"\n\
+         exit 1\n",
+    );
+    write_executable(&xtask, "#!/usr/bin/env bash\nexit 1\n");
+
+    let output = Command::new("bash")
+        .arg(repo_root().join("tests/tools/bazel-check"))
+        .args(["--profile", "local", "--", "//:test"])
+        .env("D2B_BAZEL_BIN", &bazel)
+        .env("D2B_XTASK_BIN", &xtask)
+        .env("D2B_BAZEL_CHECK_SCRATCH", scratch.join("evidence"))
+        .output()
+        .expect("run bazel-check");
+
+    assert_eq!(output.status.code(), Some(75));
+    let diagnostics = format!(
+        "{}{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(diagnostics.contains("evidence redaction failed"));
+    assert!(!diagnostics.contains("RAW-LOG-SENTINEL"));
+    assert!(!diagnostics.contains("RAW-BEP-SENTINEL"));
+    let _ = std::fs::remove_dir_all(scratch);
 }
 
 #[test]

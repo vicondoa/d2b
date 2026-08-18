@@ -5,12 +5,15 @@ package(default_visibility = ["//visibility:public"])
 filegroup(
     name = "nix_unit_inputs",
     srcs = [
+        "//:Cargo.lock",
+        "//:Cargo.toml",
         "//:docs_workspace_sources",
         "//:examples_workspace_sources",
         "//:flake.lock",
         "//:flake.nix",
         "//:nix_workspace_sources",
         "//:nixos_modules_workspace_sources",
+        "//:rust-toolchain.toml",
         "//packages/d2bd:cargo_workspace_sources",
         "//tests/unit/nix:nix_unit_sources",
     ],
@@ -19,6 +22,8 @@ filegroup(
 filegroup(
     name = "flake_eval_inputs",
     srcs = [
+        "//:Cargo.lock",
+        "//:Cargo.toml",
         "//:bazel_provider_workspace_sources",
         "//:docs_workspace_sources",
         "//:examples_workspace_sources",
@@ -30,6 +35,7 @@ filegroup(
         "//:packages_workspace_sources",
         "//:pkgs_workspace_sources",
         "//:proof_workspace_sources",
+        "//:rust-toolchain.toml",
         "//:templates_workspace_sources",
         "//:tests_root_sources",
     ],
@@ -38,9 +44,12 @@ filegroup(
 filegroup(
     name = "aarch64_smoke_inputs",
     srcs = [
+        "//:Cargo.lock",
+        "//:Cargo.toml",
         "//:flake.lock",
         "//:flake.nix",
         "//:nixos_modules_workspace_sources",
+        "//:rust-toolchain.toml",
         "//:tests/unit/smoke/smoke-eval-aarch64.nix",
     ],
 )

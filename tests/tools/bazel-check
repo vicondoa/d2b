@@ -185,11 +185,21 @@ run_bazel() {
   set -e
   if ! redact_file "$log_path" || ! redact_file "$bep_path"; then
     echo "bazel-check: evidence redaction failed; refusing to publish the run" >&2
-    emit_captured_output "$log_path" "bazel $profile log"
-    emit_captured_output "$bep_path" "bazel $profile BEP"
+    emit_captured_metadata "$log_path" "bazel $profile log"
+    emit_captured_metadata "$bep_path" "bazel $profile BEP"
     return "$REDACTION_FAILURE_STATUS"
   fi
   return "$status"
+}
+
+emit_captured_metadata() {
+  local path="$1"
+  local label="$2"
+  if [ -f "$path" ]; then
+    printf 'bazel-check: %s retained but suppressed (%s)\n' "$label" "$path" >&2
+  else
+    printf '%s\n' "bazel-check: ${label} is missing (${path})" >&2
+  fi
 }
 
 emit_captured_output() {
@@ -217,9 +227,6 @@ fi
 
 if [ "$PROFILE" != local ]; then
   classification_args=(bazel-evidence classify-failure --log "$log")
-  if [ -s "$bep" ]; then
-    classification_args+=(--dispatch-evidence)
-  fi
   classification="$(xtask "${classification_args[@]}")"
   if printf '%s' "$classification" | jq -e '.retryLocally == true' >/dev/null; then
     local_log="$SCRATCH/local.$JOB.log"
