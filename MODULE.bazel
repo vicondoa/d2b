@@ -65,7 +65,7 @@ nix_packages.attr(
     attr = "python3",
     repo = "@nixpkgs",
 )
-use_repo(nix_packages, "nix", "nix_unit", "nix_eval_jobs", "python3")
+use_repo(nix_packages, "nix", "nix_eval_jobs", "nix_unit", "python3")
 
 buildbuddy = use_extension("@toolchains_buildbuddy//:extensions.bzl", "buildbuddy")
 
@@ -78,6 +78,7 @@ toolchains.toolchain(
     version = "1.97.0",
 )
 use_repo(toolchains, "default_rust_toolchains")
+
 register_toolchains(
     "@default_rust_toolchains//...",
     "@llvm//toolchain:all",
@@ -94,11 +95,56 @@ crate.from_cargo(
     ],
 )
 crate.annotation(
-    crate = "prost-build",
-    version = "0.8.0",
     build_script_env = {
         "PROTOC": "protoc",
         "PROTOC_INCLUDE": ".",
     },
+    crate = "prost-build",
+    version = "0.8.0",
 )
 use_repo(crate, "crates")
+
+proof_crates = use_extension("@rules_rs//rs:extensions.bzl", "crate")
+proof_crates.from_cargo(
+    name = "proof_chunked",
+    cargo_lock = "//proofs/chunked-stdio-conformance:Cargo.lock",
+    cargo_toml = "//proofs/chunked-stdio-conformance:Cargo.toml",
+    platform_triples = [
+        "aarch64-unknown-linux-gnu",
+        "x86_64-unknown-linux-gnu",
+    ],
+)
+proof_crates.from_cargo(
+    name = "proof_redb",
+    cargo_lock = "//proofs/redb-resource-store-spike:Cargo.lock",
+    cargo_toml = "//proofs/redb-resource-store-spike:Cargo.toml",
+    platform_triples = [
+        "aarch64-unknown-linux-gnu",
+        "x86_64-unknown-linux-gnu",
+    ],
+)
+proof_crates.from_cargo(
+    name = "proof_w0_ch_connect",
+    cargo_lock = "//proofs/w0-ch-connect-proof:Cargo.lock",
+    cargo_toml = "//proofs/w0-ch-connect-proof:Cargo.toml",
+    platform_triples = [
+        "aarch64-unknown-linux-gnu",
+        "x86_64-unknown-linux-gnu",
+    ],
+)
+proof_crates.from_cargo(
+    name = "proof_window_identity",
+    cargo_lock = "//proofs/window-identity-chrome:Cargo.lock",
+    cargo_toml = "//proofs/window-identity-chrome:Cargo.toml",
+    platform_triples = [
+        "aarch64-unknown-linux-gnu",
+        "x86_64-unknown-linux-gnu",
+    ],
+)
+use_repo(
+    proof_crates,
+    "proof_chunked",
+    "proof_redb",
+    "proof_w0_ch_connect",
+    "proof_window_identity",
+)

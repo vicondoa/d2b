@@ -29,12 +29,12 @@ rust_test(
         ":cargo_ui_fixtures",
     ],
     env = {
-        "CARGO": "$(rootpath @rules_rust//rust/toolchain:current_cargo_files)",
         "D2B_EXTERNAL_SEALS_CASE": "clone_seal_acceptor",
         "D2B_EXTERNAL_SEALS_FIXTURE_MANIFEST": "$(rootpath :Cargo.toml)",
-        "RUSTC": "$(rootpath @rules_rust//rust/toolchain:current_rustc_files)",
+        "RUSTUP_TOOLCHAIN": "1.97.0",
     },
     env_inherit = ["HOME", "PATH"],
+    tags = ["local", "no-remote-cache", "no-remote-exec", "no-sandbox"],
     visibility = ["//visibility:public"],
 )
 
@@ -50,12 +50,12 @@ rust_test(
         ":cargo_ui_fixtures",
     ],
     env = {
-        "CARGO": "$(rootpath @rules_rust//rust/toolchain:current_cargo_files)",
         "D2B_EXTERNAL_SEALS_CASE": "clone_sealed_mutation",
         "D2B_EXTERNAL_SEALS_FIXTURE_MANIFEST": "$(rootpath :Cargo.toml)",
-        "RUSTC": "$(rootpath @rules_rust//rust/toolchain:current_rustc_files)",
+        "RUSTUP_TOOLCHAIN": "1.97.0",
     },
     env_inherit = ["HOME", "PATH"],
+    tags = ["local", "no-remote-cache", "no-remote-exec", "no-sandbox"],
     visibility = ["//visibility:public"],
 )
 
@@ -71,12 +71,12 @@ rust_test(
         ":cargo_ui_fixtures",
     ],
     env = {
-        "CARGO": "$(rootpath @rules_rust//rust/toolchain:current_cargo_files)",
         "D2B_EXTERNAL_SEALS_CASE": "compare_seal_identities",
         "D2B_EXTERNAL_SEALS_FIXTURE_MANIFEST": "$(rootpath :Cargo.toml)",
-        "RUSTC": "$(rootpath @rules_rust//rust/toolchain:current_rustc_files)",
+        "RUSTUP_TOOLCHAIN": "1.97.0",
     },
     env_inherit = ["HOME", "PATH"],
+    tags = ["local", "no-remote-cache", "no-remote-exec", "no-sandbox"],
     visibility = ["//visibility:public"],
 )
 
@@ -92,12 +92,12 @@ rust_test(
         ":cargo_ui_fixtures",
     ],
     env = {
-        "CARGO": "$(rootpath @rules_rust//rust/toolchain:current_cargo_files)",
         "D2B_EXTERNAL_SEALS_CASE": "debug_format_sealed_mutation",
         "D2B_EXTERNAL_SEALS_FIXTURE_MANIFEST": "$(rootpath :Cargo.toml)",
-        "RUSTC": "$(rootpath @rules_rust//rust/toolchain:current_rustc_files)",
+        "RUSTUP_TOOLCHAIN": "1.97.0",
     },
     env_inherit = ["HOME", "PATH"],
+    tags = ["local", "no-remote-cache", "no-remote-exec", "no-sandbox"],
     visibility = ["//visibility:public"],
 )
 
@@ -113,12 +113,12 @@ rust_test(
         ":cargo_ui_fixtures",
     ],
     env = {
-        "CARGO": "$(rootpath @rules_rust//rust/toolchain:current_cargo_files)",
         "D2B_EXTERNAL_SEALS_CASE": "display_format_seal_identity",
         "D2B_EXTERNAL_SEALS_FIXTURE_MANIFEST": "$(rootpath :Cargo.toml)",
-        "RUSTC": "$(rootpath @rules_rust//rust/toolchain:current_rustc_files)",
+        "RUSTUP_TOOLCHAIN": "1.97.0",
     },
     env_inherit = ["HOME", "PATH"],
+    tags = ["local", "no-remote-cache", "no-remote-exec", "no-sandbox"],
     visibility = ["//visibility:public"],
 )
 
@@ -134,12 +134,12 @@ rust_test(
         ":cargo_ui_fixtures",
     ],
     env = {
-        "CARGO": "$(rootpath @rules_rust//rust/toolchain:current_cargo_files)",
         "D2B_EXTERNAL_SEALS_CASE": "forge_issuer",
         "D2B_EXTERNAL_SEALS_FIXTURE_MANIFEST": "$(rootpath :Cargo.toml)",
-        "RUSTC": "$(rootpath @rules_rust//rust/toolchain:current_rustc_files)",
+        "RUSTUP_TOOLCHAIN": "1.97.0",
     },
     env_inherit = ["HOME", "PATH"],
+    tags = ["local", "no-remote-cache", "no-remote-exec", "no-sandbox"],
     visibility = ["//visibility:public"],
 )
 
@@ -155,12 +155,12 @@ rust_test(
         ":cargo_ui_fixtures",
     ],
     env = {
-        "CARGO": "$(rootpath @rules_rust//rust/toolchain:current_cargo_files)",
         "D2B_EXTERNAL_SEALS_CASE": "forge_sealed_mutation",
         "D2B_EXTERNAL_SEALS_FIXTURE_MANIFEST": "$(rootpath :Cargo.toml)",
-        "RUSTC": "$(rootpath @rules_rust//rust/toolchain:current_rustc_files)",
+        "RUSTUP_TOOLCHAIN": "1.97.0",
     },
     env_inherit = ["HOME", "PATH"],
+    tags = ["local", "no-remote-cache", "no-remote-exec", "no-sandbox"],
     visibility = ["//visibility:public"],
 )
 
@@ -176,12 +176,12 @@ rust_test(
         ":cargo_ui_fixtures",
     ],
     env = {
-        "CARGO": "$(rootpath @rules_rust//rust/toolchain:current_cargo_files)",
         "D2B_EXTERNAL_SEALS_CASE": "implement_mutation_view",
         "D2B_EXTERNAL_SEALS_FIXTURE_MANIFEST": "$(rootpath :Cargo.toml)",
-        "RUSTC": "$(rootpath @rules_rust//rust/toolchain:current_rustc_files)",
+        "RUSTUP_TOOLCHAIN": "1.97.0",
     },
     env_inherit = ["HOME", "PATH"],
+    tags = ["local", "no-remote-cache", "no-remote-exec", "no-sandbox"],
     visibility = ["//visibility:public"],
 )
 
@@ -197,12 +197,12 @@ rust_test(
         ":cargo_ui_fixtures",
     ],
     env = {
-        "CARGO": "$(rootpath @rules_rust//rust/toolchain:current_cargo_files)",
         "D2B_EXTERNAL_SEALS_CASE": "name_seal_authority",
         "D2B_EXTERNAL_SEALS_FIXTURE_MANIFEST": "$(rootpath :Cargo.toml)",
-        "RUSTC": "$(rootpath @rules_rust//rust/toolchain:current_rustc_files)",
+        "RUSTUP_TOOLCHAIN": "1.97.0",
     },
     env_inherit = ["HOME", "PATH"],
+    tags = ["local", "no-remote-cache", "no-remote-exec", "no-sandbox"],
     visibility = ["//visibility:public"],
 )
 
@@ -218,12 +218,12 @@ rust_test(
         ":cargo_ui_fixtures",
     ],
     env = {
-        "CARGO": "$(rootpath @rules_rust//rust/toolchain:current_cargo_files)",
         "D2B_EXTERNAL_SEALS_CASE": "open_sealed_without_acceptor",
         "D2B_EXTERNAL_SEALS_FIXTURE_MANIFEST": "$(rootpath :Cargo.toml)",
-        "RUSTC": "$(rootpath @rules_rust//rust/toolchain:current_rustc_files)",
+        "RUSTUP_TOOLCHAIN": "1.97.0",
     },
     env_inherit = ["HOME", "PATH"],
+    tags = ["local", "no-remote-cache", "no-remote-exec", "no-sandbox"],
     visibility = ["//visibility:public"],
 )
 
@@ -239,11 +239,28 @@ rust_test(
         ":cargo_ui_fixtures",
     ],
     env = {
-        "CARGO": "$(rootpath @rules_rust//rust/toolchain:current_cargo_files)",
         "D2B_EXTERNAL_SEALS_CASE": "reuse_sealed_mutation",
         "D2B_EXTERNAL_SEALS_FIXTURE_MANIFEST": "$(rootpath :Cargo.toml)",
-        "RUSTC": "$(rootpath @rules_rust//rust/toolchain:current_rustc_files)",
+        "RUSTUP_TOOLCHAIN": "1.97.0",
     },
     env_inherit = ["HOME", "PATH"],
+    tags = ["local", "no-remote-cache", "no-remote-exec", "no-sandbox"],
     visibility = ["//visibility:public"],
+)
+
+test_suite(
+    name = "external_seals",
+    tests = [
+        ":clone_seal_acceptor",
+        ":clone_sealed_mutation",
+        ":compare_seal_identities",
+        ":debug_format_sealed_mutation",
+        ":display_format_seal_identity",
+        ":forge_issuer",
+        ":forge_sealed_mutation",
+        ":implement_mutation_view",
+        ":name_seal_authority",
+        ":open_sealed_without_acceptor",
+        ":reuse_sealed_mutation",
+    ],
 )

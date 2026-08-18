@@ -239,6 +239,15 @@ filegroup(
 )
 
 filegroup(
+    name = "pkgs_workspace_sources",
+    srcs = glob(
+        ["pkgs/**/*"],
+        allow_empty = True,
+    ),
+    visibility = ["//visibility:public"],
+)
+
+filegroup(
     name = "tests_workspace_sources",
     srcs = [
         ":tests_root_sources",

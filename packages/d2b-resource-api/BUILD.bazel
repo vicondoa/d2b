@@ -64,27 +64,6 @@ rust_library(
 )
 
 rust_test(
-    name = "external_seals",
-    srcs = ["tests/external_seals.rs"],
-    compile_data = ["Cargo.toml"],
-    data = [
-        "//bazel/checks/rust:cargo_workspace_sources",
-        "//packages/d2b-resource-api/tests/ui/external-seals:Cargo.lock",
-        "//packages/d2b-resource-api/tests/ui/external-seals:Cargo.toml",
-        "//packages/d2b-resource-api/tests/ui/external-seals:cargo_ui_fixtures",
-        "@rules_rust//rust/toolchain:current_cargo_files",
-        "@rules_rust//rust/toolchain:current_rustc_files",
-    ],
-    env = {
-        "D2B_EXTERNAL_SEALS_FIXTURE_MANIFEST": "$(rootpath //packages/d2b-resource-api/tests/ui/external-seals:Cargo.toml)",
-        "CARGO": "$(CARGO)",
-        "RUSTC": "$(RUSTC)",
-    },
-    tags = ["local"],
-    visibility = ["//visibility:public"],
-)
-
-rust_test(
     name = "d2b_resource_api_test",
     compile_data = ["Cargo.toml"],
     crate = ":d2b_resource_api",

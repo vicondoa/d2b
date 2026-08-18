@@ -13,9 +13,8 @@ use std::{
 /// corrupting a shared one.
 fn toolchain_cache_key() -> String {
     let rustc = runfile(
-        option_env!("RUSTC")
+        std::env::var_os("RUSTC")
             .map(PathBuf::from)
-            .or_else(|| std::env::var_os("RUSTC").map(PathBuf::from))
             .unwrap_or_else(|| PathBuf::from("rustc")),
     );
     let version = Command::new(rustc)
@@ -129,7 +128,7 @@ fn fixture_manifest() -> PathBuf {
     if let Some(path) = std::env::var_os("D2B_EXTERNAL_SEALS_FIXTURE_MANIFEST") {
         return runfile(PathBuf::from(path));
     }
-    let Some(manifest_dir) = option_env!("CARGO_MANIFEST_DIR") else {
+    let Some(manifest_dir) = std::env::var_os("CARGO_MANIFEST_DIR") else {
         panic!("Cargo must provide CARGO_MANIFEST_DIR for this fixture");
     };
     PathBuf::from(manifest_dir).join("tests/ui/external-seals/Cargo.toml")
@@ -148,7 +147,7 @@ fn foreign_source_cannot_mint_committed_decision() {
     let repository_root = std::env::var_os("TEST_TMPDIR")
         .map(PathBuf::from)
         .or_else(|| {
-            option_env!("CARGO_MANIFEST_DIR").map(|path| {
+            std::env::var_os("CARGO_MANIFEST_DIR").map(|path| {
                 PathBuf::from(path)
                     .parent()
                     .expect("packages directory")
@@ -171,14 +170,7 @@ fn foreign_source_cannot_mint_committed_decision() {
     let cargo = runfile(
         std::env::var_os("CARGO")
             .map(PathBuf::from)
-            .or_else(|| option_env!("CARGO").map(PathBuf::from))
             .unwrap_or_else(|| PathBuf::from("cargo")),
-    );
-    let rustc = runfile(
-        std::env::var_os("RUSTC")
-            .map(PathBuf::from)
-            .or_else(|| option_env!("RUSTC").map(PathBuf::from))
-            .unwrap_or_else(|| PathBuf::from("rustc")),
     );
     let output = Command::new(cargo)
         .args([
@@ -192,7 +184,7 @@ fn foreign_source_cannot_mint_committed_decision() {
         ])
         .env("CARGO_TARGET_DIR", scratch.path().join("target"))
         .env("TMPDIR", &temp)
-        .env("RUSTC", rustc)
+        .env("RUSTUP_TOOLCHAIN", "1.97.0")
         // Compile the fixture without any rustc wrapper. The repository config
         // sets a caching wrapper, whose client or server can exit nonzero under
         // concurrent cargo invocations; that failure is indistinguishable from

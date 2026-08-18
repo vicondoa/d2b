@@ -41,19 +41,17 @@ fn crate_root() -> PathBuf {
             .join(workspace)
             .join("packages/d2b-bus");
     }
-    option_env!("CARGO_MANIFEST_DIR")
+    std::env::var_os("CARGO_MANIFEST_DIR")
         .map(PathBuf::from)
-        .or_else(|| std::env::var_os("CARGO_MANIFEST_DIR").map(PathBuf::from))
         .unwrap_or_else(|| PathBuf::from(".").join("packages/d2b-bus"))
 }
 
 fn cargo_command() -> Command {
-    let cargo = option_env!("CARGO")
-        .map(str::to_owned)
-        .or_else(|| std::env::var("CARGO").ok())
+    let cargo = std::env::var("CARGO")
+        .ok()
         .unwrap_or_else(|| "cargo".to_owned());
     let mut command = Command::new(cargo);
-    if option_env!("CARGO").is_none() {
+    if std::env::var_os("CARGO").is_none() {
         command.env("RUSTUP_TOOLCHAIN", "1.97.0");
     }
     command

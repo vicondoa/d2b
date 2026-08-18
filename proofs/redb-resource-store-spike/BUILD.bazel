@@ -1,0 +1,99 @@
+load("@proof_redb//:defs.bzl", "all_crate_deps")
+load(
+    "@rules_rust//rust:defs.bzl",
+    "rust_binary",
+    "rust_clippy_test",
+    "rust_doc_test",
+    "rust_library",
+    "rust_test",
+)
+
+package(default_visibility = ["//visibility:public"])
+
+exports_files(["BUILD.bazel", "Cargo.lock", "Cargo.toml"])
+
+_DEPS = [
+    "@proof_redb//:nix",
+    "@proof_redb//:redb",
+    "@proof_redb//:serde",
+    "@proof_redb//:serde_json",
+    "@proof_redb//:tokio",
+]
+
+rust_library(
+    name = "redb_resource_store_spike",
+    srcs = glob(["src/**/*.rs"], allow_empty = True),
+    compile_data = ["Cargo.toml"],
+    crate_name = "redb_resource_store_spike",
+    deps = _DEPS,
+)
+
+rust_test(
+    name = "unit",
+    compile_data = ["Cargo.toml"],
+    crate = ":redb_resource_store_spike",
+    deps = all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
+)
+
+rust_binary(
+    name = "crash_fixture",
+    srcs = ["src/bin/crash-fixture.rs"],
+    compile_data = ["Cargo.toml"],
+    deps = [":redb_resource_store_spike"] + _DEPS,
+)
+
+rust_binary(
+    name = "rss_fixture",
+    srcs = ["src/bin/rss-fixture.rs"],
+    compile_data = ["Cargo.toml"],
+    deps = [":redb_resource_store_spike"] + _DEPS,
+)
+
+rust_test(
+    name = "full_scale_smoke",
+    srcs = ["tests/full_scale.rs"],
+    compile_data = ["Cargo.toml"],
+    deps = [":redb_resource_store_spike"] + _DEPS,
+)
+
+rust_test(
+    name = "full_scale",
+    srcs = ["tests/full_scale.rs"],
+    args = ["--ignored", "--test-threads=1", "--nocapture"],
+    compile_data = ["Cargo.toml"],
+    deps = [":redb_resource_store_spike"] + _DEPS,
+    rustc_flags = ["-Copt-level=3", "-Cdebug-assertions=no"],
+    tags = ["bench", "manual"],
+    timeout = "long",
+)
+
+rust_test(
+    name = "commit_to_handler_bench",
+    srcs = ["benches/commit_to_handler.rs"],
+    compile_data = ["Cargo.toml"],
+    crate_name = "commit_to_handler",
+    deps = [
+        ":redb_resource_store_spike",
+        "@proof_redb//:criterion",
+    ] + _DEPS,
+    rustc_flags = ["-Copt-level=3"],
+    tags = ["bench", "manual"],
+    use_libtest_harness = False,
+)
+
+rust_clippy_test(
+    name = "clippy",
+    targets = [
+        ":commit_to_handler_bench",
+        ":crash_fixture",
+        ":full_scale_smoke",
+        ":redb_resource_store_spike",
+        ":rss_fixture",
+    ],
+    transitive = True,
+)
+
+rust_doc_test(
+    name = "doc",
+    crate = ":redb_resource_store_spike",
+)

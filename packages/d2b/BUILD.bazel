@@ -10,6 +10,16 @@ exports_files(
     visibility = ["//visibility:public"],
 )
 
+_fixture_data = [
+    "//bazel/checks/fixtures:fixture_smoke",
+]
+
+_daemon_data = [
+    "//packages/d2bd:d2bd",
+]
+
+_fixture_daemon_data = _fixture_data + _daemon_data
+
 rust_library(
     name = "d2b_lib",
     srcs = glob(["src/**/*.rs"], allow_empty = True),
@@ -45,8 +55,11 @@ rust_test(
     ],
     compile_data = ["Cargo.toml"],
     crate_root = "tests/audit_contract.rs",
-    data = [":d2b"],
-    env = {"CARGO_BIN_EXE_d2b": "$(rootpath :d2b)"},
+    data = [":d2b"] + _daemon_data,
+    env = {
+        "CARGO_BIN_EXE_d2b": "$(rootpath :d2b)",
+        "D2B_TEST_D2BD_BIN": "$(rootpath //packages/d2bd:d2bd)",
+    },
     rustc_env = {"CARGO_BIN_EXE_d2b": "$(rootpath :d2b)"},
     visibility = ["//visibility:public"],
     deps = [
@@ -71,8 +84,11 @@ rust_test(
     name = "cli_contract",
     srcs = ["tests/cli_contract.rs"],
     compile_data = ["Cargo.toml"],
-    data = [":d2b"],
-    env = {"CARGO_BIN_EXE_d2b": "$(rootpath :d2b)"},
+    data = [":d2b"] + _fixture_data,
+    env = {
+        "CARGO_BIN_EXE_d2b": "$(rootpath :d2b)",
+        "D2B_FIXTURES": "$(rootpath //bazel/checks/fixtures:fixture_smoke)",
+    },
     rustc_env = {"CARGO_BIN_EXE_d2b": "$(rootpath :d2b)"},
     visibility = ["//visibility:public"],
     deps = [
@@ -99,8 +115,11 @@ rust_test(
     name = "cli_json_contract",
     srcs = ["tests/cli_json_contract.rs"],
     compile_data = ["Cargo.toml"],
-    data = [":d2b"],
-    env = {"CARGO_BIN_EXE_d2b": "$(rootpath :d2b)"},
+    data = [":d2b"] + _fixture_data,
+    env = {
+        "CARGO_BIN_EXE_d2b": "$(rootpath :d2b)",
+        "D2B_FIXTURES": "$(rootpath //bazel/checks/fixtures:fixture_smoke)",
+    },
     rustc_env = {"CARGO_BIN_EXE_d2b": "$(rootpath :d2b)"},
     visibility = ["//visibility:public"],
     deps = [
@@ -114,8 +133,11 @@ rust_test(
     data = [
         ":d2b",
         "//:d2b_cli_contract_inputs",
-    ],
-    env = {"CARGO_BIN_EXE_d2b": "$(rootpath :d2b)"},
+    ] + _fixture_data,
+    env = {
+        "CARGO_BIN_EXE_d2b": "$(rootpath :d2b)",
+        "D2B_FIXTURES": "$(rootpath //bazel/checks/fixtures:fixture_smoke)",
+    },
     rustc_env = {"CARGO_BIN_EXE_d2b": "$(rootpath :d2b)"},
     visibility = ["//visibility:public"],
     deps = [
@@ -130,8 +152,12 @@ rust_test(
     ],
     compile_data = ["Cargo.toml"],
     crate_root = "tests/host_check_contract.rs",
-    data = [":d2b"],
-    env = {"CARGO_BIN_EXE_d2b": "$(rootpath :d2b)"},
+    data = [":d2b"] + _fixture_daemon_data,
+    env = {
+        "CARGO_BIN_EXE_d2b": "$(rootpath :d2b)",
+        "D2B_FIXTURES": "$(rootpath //bazel/checks/fixtures:fixture_smoke)",
+        "D2B_TEST_D2BD_BIN": "$(rootpath //packages/d2bd:d2bd)",
+    },
     rustc_env = {"CARGO_BIN_EXE_d2b": "$(rootpath :d2b)"},
     visibility = ["//visibility:public"],
     deps = [
@@ -186,8 +212,11 @@ rust_test(
     name = "status_contract",
     srcs = ["tests/status_contract.rs"],
     compile_data = ["Cargo.toml"],
-    data = [":d2b"],
-    env = {"CARGO_BIN_EXE_d2b": "$(rootpath :d2b)"},
+    data = [":d2b"] + _fixture_data,
+    env = {
+        "CARGO_BIN_EXE_d2b": "$(rootpath :d2b)",
+        "D2B_FIXTURES": "$(rootpath //bazel/checks/fixtures:fixture_smoke)",
+    },
     rustc_env = {"CARGO_BIN_EXE_d2b": "$(rootpath :d2b)"},
     visibility = ["//visibility:public"],
     deps = [
@@ -210,8 +239,11 @@ rust_test(
     name = "usb_contract",
     srcs = ["tests/usb_contract.rs"],
     compile_data = ["Cargo.toml"],
-    data = [":d2b"],
-    env = {"CARGO_BIN_EXE_d2b": "$(rootpath :d2b)"},
+    data = [":d2b"] + _fixture_data,
+    env = {
+        "CARGO_BIN_EXE_d2b": "$(rootpath :d2b)",
+        "D2B_FIXTURES": "$(rootpath //bazel/checks/fixtures:fixture_smoke)",
+    },
     rustc_env = {"CARGO_BIN_EXE_d2b": "$(rootpath :d2b)"},
     visibility = ["//visibility:public"],
     deps = [
@@ -222,8 +254,11 @@ rust_test(
     name = "usb_sk_contract",
     srcs = ["tests/usb_sk_contract.rs"],
     compile_data = ["Cargo.toml"],
-    data = [":d2b"],
-    env = {"CARGO_BIN_EXE_d2b": "$(rootpath :d2b)"},
+    data = [":d2b"] + _fixture_data,
+    env = {
+        "CARGO_BIN_EXE_d2b": "$(rootpath :d2b)",
+        "D2B_FIXTURES": "$(rootpath //bazel/checks/fixtures:fixture_smoke)",
+    },
     rustc_env = {"CARGO_BIN_EXE_d2b": "$(rootpath :d2b)"},
     visibility = ["//visibility:public"],
     deps = [

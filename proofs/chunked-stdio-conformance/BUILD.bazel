@@ -1,0 +1,37 @@
+load("@proof_chunked//:defs.bzl", "all_crate_deps")
+load(
+    "@rules_rust//rust:defs.bzl",
+    "rust_clippy_test",
+    "rust_doc_test",
+    "rust_library",
+    "rust_test",
+)
+
+package(default_visibility = ["//visibility:public"])
+
+exports_files(["BUILD.bazel", "Cargo.lock", "Cargo.toml"])
+
+rust_library(
+    name = "chunked_stdio_conformance",
+    srcs = glob(["src/**/*.rs"], allow_empty = True),
+    compile_data = ["Cargo.toml"],
+    crate_name = "d2b_chunked_stdio_conformance",
+)
+
+rust_test(
+    name = "unit",
+    compile_data = ["Cargo.toml"],
+    crate = ":chunked_stdio_conformance",
+    deps = all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
+)
+
+rust_clippy_test(
+    name = "clippy",
+    targets = [":chunked_stdio_conformance"],
+    transitive = True,
+)
+
+rust_doc_test(
+    name = "doc",
+    crate = ":chunked_stdio_conformance",
+)

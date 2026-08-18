@@ -1,0 +1,41 @@
+load("@proof_w0_ch_connect//:defs.bzl", "all_crate_deps")
+load(
+    "@rules_rust//rust:defs.bzl",
+    "rust_clippy_test",
+    "rust_doc_test",
+    "rust_library",
+    "rust_test",
+)
+
+package(default_visibility = ["//visibility:public"])
+
+exports_files(["BUILD.bazel", "Cargo.lock", "Cargo.toml"])
+
+rust_library(
+    name = "w0_ch_connect_proof",
+    srcs = ["src/lib.rs"],
+    compile_data = ["Cargo.toml"],
+    crate_name = "w0_ch_connect_proof",
+    deps = [
+        "@proof_w0_ch_connect//:tokio",
+        "@proof_w0_ch_connect//:tokio-stream",
+        "@proof_w0_ch_connect//:ttrpc",
+    ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
+)
+
+rust_test(
+    name = "unit",
+    compile_data = ["Cargo.toml"],
+    crate = ":w0_ch_connect_proof",
+)
+
+rust_clippy_test(
+    name = "clippy",
+    targets = [":w0_ch_connect_proof"],
+    transitive = True,
+)
+
+rust_doc_test(
+    name = "doc",
+    crate = ":w0_ch_connect_proof",
+)

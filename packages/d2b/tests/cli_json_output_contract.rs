@@ -139,7 +139,10 @@ fn repo_root() -> PathBuf {
     ) {
         return PathBuf::from(runfiles_dir).join(workspace);
     }
-    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+    PathBuf::from(
+        std::env::var_os("CARGO_MANIFEST_DIR")
+            .unwrap_or_else(|| ".".into()),
+    )
         .parent()
         .and_then(Path::parent)
         .expect("packages/d2b is two levels below the repository root")

@@ -7,6 +7,23 @@ exports_files(
     visibility = ["//visibility:public"],
 )
 
+_fixture_data = [
+    "//bazel/checks/fixtures:fixture_smoke",
+]
+
+_fixture_full_data = _fixture_data + [
+    "//bazel/checks/fixtures:fixture_smoke_full",
+]
+
+_fixture_env = {
+    "D2B_FIXTURES": "$(rootpath //bazel/checks/fixtures:fixture_smoke)",
+}
+
+_fixture_full_env = {
+    "D2B_FIXTURES": "$(rootpath //bazel/checks/fixtures:fixture_smoke)",
+    "D2B_FIXTURES_FULL": "$(rootpath //bazel/checks/fixtures:fixture_smoke_full)",
+}
+
 rust_library(
     name = "d2b_contract_tests",
     srcs = glob(["src/**/*.rs"], allow_empty = True),
@@ -43,6 +60,8 @@ rust_test(
     name = "host_json_drift",
     srcs = ["tests/host_json_drift.rs"],
     compile_data = ["Cargo.toml"],
+    data = _fixture_data,
+    env = _fixture_env,
     visibility = ["//visibility:public"],
     deps = [
         ":d2b_contract_tests",
@@ -53,7 +72,8 @@ rust_test(
     name = "ifname_parity",
     srcs = ["tests/ifname_parity.rs"],
     compile_data = ["Cargo.toml"],
-    tags = ["manual"],
+    data = _fixture_data,
+    env = _fixture_env,
     visibility = ["//visibility:public"],
     deps = [
         ":d2b_contract_tests",
@@ -65,6 +85,8 @@ rust_test(
     name = "minijail_audio_usbip",
     srcs = ["tests/minijail_audio_usbip.rs"],
     compile_data = ["Cargo.toml"],
+    data = _fixture_full_data,
+    env = _fixture_full_env,
     visibility = ["//visibility:public"],
     deps = [
         ":d2b_contract_tests",
@@ -76,6 +98,8 @@ rust_test(
     name = "minijail_gpu",
     srcs = ["tests/minijail_gpu.rs"],
     compile_data = ["Cargo.toml"],
+    data = _fixture_full_data,
+    env = _fixture_full_env,
     visibility = ["//visibility:public"],
     deps = [
         ":d2b_contract_tests",
@@ -87,7 +111,8 @@ rust_test(
     name = "minijail_profiles",
     srcs = ["tests/minijail_profiles.rs"],
     compile_data = ["Cargo.toml"],
-    tags = ["manual"],
+    data = _fixture_data,
+    env = _fixture_env,
     visibility = ["//visibility:public"],
     deps = [":d2b_contract_tests"] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
 )
@@ -96,6 +121,8 @@ rust_test(
     name = "minijail_relay_otel",
     srcs = ["tests/minijail_relay_otel.rs"],
     compile_data = ["Cargo.toml"],
+    data = _fixture_full_data,
+    env = _fixture_full_env,
     visibility = ["//visibility:public"],
     deps = [
         ":d2b_contract_tests",
@@ -107,6 +134,8 @@ rust_test(
     name = "minijail_roles",
     srcs = ["tests/minijail_roles.rs"],
     compile_data = ["Cargo.toml"],
+    data = _fixture_full_data,
+    env = _fixture_full_env,
     tags = ["manual"],
     visibility = ["//visibility:public"],
     deps = [
@@ -119,6 +148,8 @@ rust_test(
     name = "minijail_sk_frontend",
     srcs = ["tests/minijail_sk_frontend.rs"],
     compile_data = ["Cargo.toml"],
+    data = _fixture_full_data,
+    env = _fixture_full_env,
     visibility = ["//visibility:public"],
     deps = [
         ":d2b_contract_tests",
@@ -130,6 +161,8 @@ rust_test(
     name = "minijail_swtpm_video",
     srcs = ["tests/minijail_swtpm_video.rs"],
     compile_data = ["Cargo.toml"],
+    data = _fixture_full_data,
+    env = _fixture_full_env,
     visibility = ["//visibility:public"],
     deps = [
         ":d2b_contract_tests",
@@ -554,6 +587,8 @@ rust_test(
     name = "policy_swtpm_readiness",
     srcs = ["tests/policy_swtpm_readiness.rs"],
     compile_data = ["Cargo.toml"],
+    data = _fixture_full_data,
+    env = _fixture_full_env,
     visibility = ["//visibility:public"],
     deps = [
         ":d2b_contract_tests",
@@ -586,7 +621,8 @@ rust_test(
     name = "privileges_fixture",
     srcs = ["tests/privileges_fixture.rs"],
     compile_data = ["Cargo.toml"],
-    tags = ["manual"],
+    data = _fixture_data,
+    env = _fixture_env,
     visibility = ["//visibility:public"],
     deps = [":d2b_contract_tests"] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
 )
@@ -595,6 +631,8 @@ rust_test(
     name = "privileges_parity",
     srcs = ["tests/privileges_parity.rs"],
     compile_data = ["Cargo.toml"],
+    data = _fixture_data,
+    env = _fixture_env,
     tags = ["manual"],
     visibility = ["//visibility:public"],
     deps = [
@@ -628,6 +666,8 @@ rust_test(
     name = "realm_identity_schema_contract",
     srcs = ["tests/realm_identity_schema_contract.rs"],
     compile_data = ["Cargo.toml"],
+    data = _fixture_data,
+    env = _fixture_env,
     visibility = ["//visibility:public"],
     deps = [
         ":d2b_contract_tests",
@@ -649,6 +689,8 @@ rust_test(
     name = "realm_workload_schema_contract",
     srcs = ["tests/realm_workload_schema_contract.rs"],
     compile_data = ["Cargo.toml"],
+    data = _fixture_data,
+    env = _fixture_env,
     visibility = ["//visibility:public"],
     deps = [
         ":d2b_contract_tests",
@@ -660,6 +702,8 @@ rust_test(
     name = "runner_shape_contract",
     srcs = ["tests/runner_shape_contract.rs"],
     compile_data = ["Cargo.toml"],
+    data = _fixture_full_data,
+    env = _fixture_full_env,
     visibility = ["//visibility:public"],
     deps = [
         ":d2b_contract_tests",
@@ -671,6 +715,8 @@ rust_test(
     name = "static_invariants",
     srcs = ["tests/static_invariants.rs"],
     compile_data = ["Cargo.toml"],
+    data = _fixture_data,
+    env = _fixture_env,
     tags = ["manual"],
     visibility = ["//visibility:public"],
     deps = [
@@ -683,6 +729,8 @@ rust_test(
     name = "storage_sync_contracts",
     srcs = ["tests/storage_sync_contracts.rs"],
     compile_data = ["Cargo.toml"],
+    data = _fixture_data,
+    env = _fixture_env,
     visibility = ["//visibility:public"],
     deps = [
         ":d2b_contract_tests",

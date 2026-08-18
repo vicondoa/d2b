@@ -100,7 +100,6 @@ fn force_resource_boundary_recompile(target: &Path) {
 
 struct CompileFailHarness<'a> {
     cargo: &'a Path,
-    rustc: &'a Path,
     manifest: &'a Path,
     target: &'a Path,
     temp: &'a Path,
@@ -125,7 +124,7 @@ impl CompileFailHarness<'_> {
             .env("D2B_EXTERNAL_SEALS_TARGET", self.target)
             .env("CARGO_ENCODED_RUSTFLAGS", "--cap-lints\u{1f}allow")
             .env("RUSTC_WRAPPER", self.rustc_wrapper)
-            .env("RUSTC", self.rustc)
+            .env("RUSTUP_TOOLCHAIN", "1.97.0")
             .env("RUSTC_WORKSPACE_WRAPPER", "")
             .env("CARGO_BUILD_RUSTC_WRAPPER", "")
             .env("TMPDIR", self.temp)
@@ -162,7 +161,7 @@ impl CompileFailHarness<'_> {
             // reason, so an inherited workspace or config-env wrapper cannot
             // layer that contention back on top of the shim.
             .env("RUSTC_WRAPPER", self.rustc_wrapper)
-            .env("RUSTC", self.rustc)
+            .env("RUSTUP_TOOLCHAIN", "1.97.0")
             .env("RUSTC_WORKSPACE_WRAPPER", "")
             .env("CARGO_BUILD_RUSTC_WRAPPER", "")
             .env("TMPDIR", self.temp)
@@ -235,7 +234,7 @@ fn fixture_manifest() -> PathBuf {
     if let Some(path) = std::env::var_os("D2B_EXTERNAL_SEALS_FIXTURE_MANIFEST") {
         return runfile(PathBuf::from(path));
     }
-    let Some(manifest_dir) = option_env!("CARGO_MANIFEST_DIR") else {
+    let Some(manifest_dir) = std::env::var_os("CARGO_MANIFEST_DIR") else {
         panic!("Cargo must provide CARGO_MANIFEST_DIR for this fixture");
     };
     PathBuf::from(manifest_dir).join("tests/ui/external-seals/Cargo.toml")
@@ -253,7 +252,7 @@ fn dependent_cannot_mint_admission_or_session_capabilities() {
     let repository_root = std::env::var_os("TEST_TMPDIR")
         .map(PathBuf::from)
         .or_else(|| {
-            option_env!("CARGO_MANIFEST_DIR").map(|path| {
+            std::env::var_os("CARGO_MANIFEST_DIR").map(|path| {
                 PathBuf::from(path)
                     .parent()
                     .expect("packages directory")
@@ -331,15 +330,10 @@ exec "$rustc" "$@"
     let cargo = runfile(
         std::env::var_os("CARGO")
             .map(PathBuf::from)
-            .or_else(|| option_env!("CARGO").map(PathBuf::from))
             .unwrap_or_else(|| PathBuf::from("cargo")),
     );
-    let rustc = runfile(PathBuf::from(
-        std::env::var_os("RUSTC").unwrap_or_else(|| "rustc".into()),
-    ));
     let harness = CompileFailHarness {
         cargo: &cargo,
-        rustc: &rustc,
         manifest: &manifest,
         target: &target,
         temp: &temp,

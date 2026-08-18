@@ -52,7 +52,8 @@ pub fn load_manifest_value_from_env() -> serde_json::Value {
 /// (gpu/swtpm/audio/video/usbip/vsock-relay/wayland-proxy/otel-host-bridge)
 /// skip cleanly when this is `None`.
 fn full_fixtures_dir() -> Option<PathBuf> {
-    env::var_os("D2B_FIXTURES_FULL").map(PathBuf::from)
+    let dir = env::var_os("D2B_FIXTURES_FULL").map(PathBuf::from)?;
+    dir.join("bundle.json").is_file().then_some(dir)
 }
 
 fn read_full_fixture(dir: &std::path::Path, name: &str) -> String {

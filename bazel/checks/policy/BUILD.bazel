@@ -1,5 +1,3 @@
-load("@rules_shell//shell:sh_test.bzl", "sh_test")
-
 package(default_visibility = ["//visibility:public"])
 
 filegroup(
@@ -52,27 +50,23 @@ test_suite(
     ],
 )
 
-sh_test(
-    name = "proofs_test",
-    timeout = "long",
-    srcs = ["//:tests/test-proofs.sh"],
-    data = [
-        "//:flake.lock",
-        "//:flake.nix",
-        "//:proof_workspace_sources",
-        "//:rust-toolchain.toml",
-        "//:tests_root_sources",
-    ],
-    env_inherit = ["PATH", "ROOT"],
-    tags = [
-        "local",
-        "no-sandbox",
-    ],
-)
-
 test_suite(
     name = "proofs",
-    tests = [":proofs_test"],
+    tests = [
+        "//proofs/chunked-stdio-conformance:clippy",
+        "//proofs/chunked-stdio-conformance:doc",
+        "//proofs/chunked-stdio-conformance:unit",
+        "//proofs/redb-resource-store-spike:clippy",
+        "//proofs/redb-resource-store-spike:doc",
+        "//proofs/redb-resource-store-spike:full_scale_smoke",
+        "//proofs/redb-resource-store-spike:unit",
+        "//proofs/w0-ch-connect-proof:clippy",
+        "//proofs/w0-ch-connect-proof:doc",
+        "//proofs/w0-ch-connect-proof:unit",
+        "//proofs/window-identity-chrome:clippy",
+        "//proofs/window-identity-chrome:doc",
+        "//proofs/window-identity-chrome:unit",
+    ],
 )
 
 test_suite(

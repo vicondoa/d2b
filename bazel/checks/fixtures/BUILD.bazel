@@ -1,33 +1,87 @@
-load("@rules_shell//shell:sh_test.bzl", "sh_test")
+load(":defs.bzl", "nix_fixture")
 
 package(default_visibility = ["//visibility:public"])
 
-sh_test(
-    name = "contracts_test",
-    timeout = "long",
-    srcs = ["//:tests/test-rust.sh"],
-    args = ["fixture-contracts"],
-    data = [
-        "//:flake.lock",
-        "//:rust-toolchain.toml",
-        "//bazel/checks/rust:repo_policy_sources",
-        "//tests/fixtures:contract_sources",
-    ],
-    env = {
-        "D2B_ENABLE_FIXTURE_BUILD": "1",
-    },
-    env_inherit = ["PATH", "ROOT"],
+_FIXTURE_SOURCES = [
+    "//:bazel_provider_workspace_sources",
+    "//:Cargo.lock",
+    "//:Cargo.toml",
+    "//:docs_workspace_sources",
+    "//:examples_workspace_sources",
+    "//:flake.lock",
+    "//:flake.nix",
+    "//:nix_workspace_sources",
+    "//:nixos_modules_workspace_sources",
+    "//:packages_workspace_sources",
+    "//:pkgs_workspace_sources",
+    "//:proof_workspace_sources",
+    "//:templates_workspace_sources",
+    "//:tests_root_sources",
+    "//:rust-toolchain.toml",
+    "//bazel/checks/rust:repo_policy_sources",
+]
+
+nix_fixture(
+    name = "fixture_smoke",
+    flake = "//:flake.nix",
+    materializer = "//:tests/tools/materialize-eval-fixture.py",
+    nix = "@nix//:bin/nix",
+    python3 = "@python3//:bin/python3",
+    srcs = _FIXTURE_SOURCES,
     tags = [
+        "exclusive",
         "local",
+        "no-remote-cache",
+        "no-remote-exec",
         "no-sandbox",
     ],
+    variant = "minimal",
+)
+
+nix_fixture(
+    name = "fixture_smoke_full",
+    flake = "//:flake.nix",
+    materializer = "//:tests/tools/materialize-eval-fixture.py",
+    nix = "@nix//:bin/nix",
+    python3 = "@python3//:bin/python3",
+    srcs = _FIXTURE_SOURCES,
+    tags = [
+        "exclusive",
+        "local",
+        "no-remote-cache",
+        "no-remote-exec",
+        "no-sandbox",
+    ],
+    variant = "full",
 )
 
 test_suite(
     name = "contracts",
-    tags = [
-        "local",
-        "no-sandbox",
+    tests = [
+        "//packages/d2b:audit_contract",
+        "//packages/d2b:cli_contract",
+        "//packages/d2b:cli_json_contract",
+        "//packages/d2b:cli_json_output_contract",
+        "//packages/d2b:host_check_contract",
+        "//packages/d2b:status_contract",
+        "//packages/d2b:usb_contract",
+        "//packages/d2b:usb_sk_contract",
+        "//packages/d2b-contract-tests:host_json_drift",
+        "//packages/d2b-contract-tests:ifname_parity",
+        "//packages/d2b-contract-tests:minijail_audio_usbip",
+        "//packages/d2b-contract-tests:minijail_gpu",
+        "//packages/d2b-contract-tests:minijail_profiles",
+        "//packages/d2b-contract-tests:minijail_relay_otel",
+        "//packages/d2b-contract-tests:minijail_roles",
+        "//packages/d2b-contract-tests:minijail_sk_frontend",
+        "//packages/d2b-contract-tests:minijail_swtpm_video",
+        "//packages/d2b-contract-tests:policy_swtpm_readiness",
+        "//packages/d2b-contract-tests:privileges_fixture",
+        "//packages/d2b-contract-tests:privileges_parity",
+        "//packages/d2b-contract-tests:realm_identity_schema_contract",
+        "//packages/d2b-contract-tests:realm_workload_schema_contract",
+        "//packages/d2b-contract-tests:runner_shape_contract",
+        "//packages/d2b-contract-tests:static_invariants",
+        "//packages/d2b-contract-tests:storage_sync_contracts",
     ],
-    tests = [":contracts_test"],
 )

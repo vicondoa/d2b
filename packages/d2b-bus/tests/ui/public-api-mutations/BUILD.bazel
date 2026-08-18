@@ -1,4 +1,4 @@
-load("@rules_rust//rust:defs.bzl", "rust_library")
+load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test")
 
 # keep
 
@@ -40,5 +40,19 @@ rust_library(
         "//packages/d2b-bus:d2b_bus",
         "//packages/d2b-bus/tests/ui/public-api-mutations/opaque-claims:opaque_claims",
         "//packages/d2b-session:d2b_session",
+    ],
+)
+
+rust_test(
+    name = "compile",
+    compile_data = ["Cargo.toml"],
+    crate = ":d2b_bus_public_api_mutations",
+)
+
+test_suite(
+    name = "public_api_mutations",
+    tests = [
+        ":compile",
+        "//packages/d2b-bus:public_mint_surface",
     ],
 )
