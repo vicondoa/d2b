@@ -1,5 +1,11 @@
 load("@crates//:defs.bzl", "all_crate_deps")
-load("@rules_rust//rust:defs.bzl", "rust_binary", "rust_test")
+load(
+    "@rules_rust//rust:defs.bzl",
+    "rust_binary",
+    "rust_clippy_test",
+    "rust_test",
+    "rustfmt_test",
+)
 
 exports_files(
     ["BUILD.bazel"],
@@ -253,6 +259,7 @@ rust_test(
 
 rust_test(
     name = "runtime_ledger_test",
+    timeout = "short",
     args = ["test_runtime_ledger::"],
     compile_data = ["Cargo.toml"],
     crate = ":xtask",
@@ -270,6 +277,37 @@ rust_test(
     rustc_env = {"CARGO_BIN_EXE_xtask": "$(rootpath :xtask)"},
     tags = ["local"],
     deps = [] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
+)
+
+rust_test(
+    name = "schema_reproducibility_test",
+    args = ["schema_tests::"],
+    compile_data = ["Cargo.toml"],
+    crate = ":xtask",
+    data = [
+        ":xtask",
+        "//bazel/checks/rust:repo_policy_sources",
+    ],
+    env = {
+        "CARGO_BIN_EXE_xtask": "$(rootpath :xtask)",
+    },
+    env_inherit = ["D2B_REPO_ROOT", "PATH"],
+    rustc_env = {"CARGO_BIN_EXE_xtask": "$(rootpath :xtask)"},
+    tags = ["local"],
+    visibility = ["//visibility:public"],
+    deps = [] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
+)
+
+rustfmt_test(
+    name = "rustfmt_test",
+    targets = [":xtask"],
+    transitive = True,
+)
+
+rust_clippy_test(
+    name = "rust_clippy_test",
+    targets = [":xtask"],
+    transitive = True,
 )
 
 rust_test(

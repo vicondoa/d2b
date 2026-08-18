@@ -1098,20 +1098,13 @@ run_main_workspace_gate() {
 
 run_no_bash_ast_gate() {
 rust_surface_start rust-no-bash-ast
-# no-bash-exec AST layer (ADR 0017): the per-line `Command::new("bash")` scan
-# is covered by d2b-contract-tests/tests/policy_source.rs, but the
-# AST-level walk (which catches cross-line / obfuscated bash-exec sites the
-# per-line regex cannot) lives in the standalone tests/tools/no-bash-ast-walker
-# cargo tool. The retired tests/no-bash-exec-eval.sh ran it via `... all`; run
-# it here so the AST coverage stays gated. Fails closed on any bash-literal
-# Command::new site under packages/.
-log "--> no-bash-ast-walker (ADR 0017 AST-level bash-exec scan)"
+log "--> native no-bash AST test (ADR 0017)"
 CARGO_TARGET_DIR="$no_bash_target_dir" \
-  cargo run --jobs "$D2B_RUST_CARGO_JOBS" --release --quiet \
+  cargo test --quiet \
     --manifest-path "$ROOT/tests/tools/no-bash-ast-walker/Cargo.toml" \
-    -- "$ROOT/packages"
+    --test no_bash_ast
 rust_surface_success rust-no-bash-ast
-ok "no-bash-ast-walker (zero Command::new bash-literal sites)"
+ok "native no-bash AST test"
 }
 
 run_broker_gate() {
@@ -1135,40 +1128,10 @@ run_guest_shell_runner_gate() {
 
 run_schema_reproducibility_gate() {
 rust_surface_start rust-schema-reproducibility
-schema_out="$ROOT/packages/xtask/out"
-schema_out_preexisting=0
-if [ -e "$schema_out" ]; then
-  schema_out_preexisting=1
-fi
-snapshot_schema_out() {
-  if [ ! -d "$schema_out" ]; then
-    return 0
-  fi
-  (
-    cd "$schema_out"
-    find . -type f -print0 \
-      | LC_ALL=C sort -z \
-      | xargs -0 -r sha256sum
-  )
-}
-
-log "--> schema generation reproducibility"
-(cd "$ROOT" && cargo xtask gen-schemas)
-schema_snapshot_1=$(snapshot_schema_out)
-(cd "$ROOT" && cargo xtask gen-schemas)
-schema_snapshot_2=$(snapshot_schema_out)
-if [ "$schema_snapshot_1" != "$schema_snapshot_2" ]; then
-  fail "schema generation reproducibility: cargo xtask gen-schemas output is not reproducible"
-  diff -u \
-    <(printf '%s\n' "$schema_snapshot_1") \
-    <(printf '%s\n' "$schema_snapshot_2") >&2 || true
-  exit 1
-fi
-if [ "$schema_out_preexisting" = "0" ]; then
-  rm -rf -- "$schema_out"
-fi
+log "--> native schema reproducibility and drift tests"
+(cd "$ROOT" && cargo test --locked -p xtask schema_tests::)
 rust_surface_success rust-schema-reproducibility
-ok "schema generation reproducibility"
+ok "native schema reproducibility and drift tests"
 }
 
 run_supply_chain_gate() {
@@ -1176,12 +1139,16 @@ cargo_deny_check() {
   local label="$1" manifest_path="$2" config_path="$3"
   if command -v cargo-deny >/dev/null 2>&1; then
     log "--> cargo deny check ($label)"
-    cargo deny --manifest-path "$manifest_path" check --config "$config_path"
+    (
+      cd "$(dirname "$manifest_path")"
+      cargo deny check --config "$config_path"
+    )
     ok "cargo deny check ($label)"
   elif command -v nix >/dev/null 2>&1; then
     log "--> cargo deny check ($label via nix shell)"
     nix shell --quiet --inputs-from "$ROOT" nixpkgs#cargo-deny --command \
-      cargo deny --manifest-path "$manifest_path" check --config "$config_path"
+      bash -c 'cd "$1" && cargo deny check --config "$2"' -- \
+      "$(dirname "$manifest_path")" "$config_path"
     ok "cargo deny check ($label)"
   else
     fail "cargo deny check cannot run for $label: cargo-deny and nix are unavailable; ADR 0009 does not authorize a waiver"
@@ -1358,10 +1325,13 @@ rust_surface_success rust-audit-guest
 
 run_inventory_stub_gate() {
 rust_surface_start rust-stub-no-socket
-log "--> tests/tools/stub-no-socket.sh"
-bash "$ROOT/tests/tools/stub-no-socket.sh"
+log "--> native Rust no-socket tests"
+CARGO_TARGET_DIR="$workspace_target_dir" \
+  cargo test --locked --manifest-path "$manifest" -p d2b --test stub_no_socket
+CARGO_TARGET_DIR="$workspace_target_dir" \
+  cargo test --locked --manifest-path "$manifest" -p d2bd --test stub_no_socket
 rust_surface_success rust-stub-no-socket
-ok "stub-no-socket"
+ok "native Rust no-socket tests"
 
 # Fail-closed Rust test inventory: every pinned workspace + broker test must
 # still exist (catches a silently-deleted test that would otherwise vanish from

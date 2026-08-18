@@ -66,12 +66,6 @@ fn repo_root() -> PathBuf {
             candidates.push(base.join("_main"));
         }
     }
-    if let Some(manifest_dir) = option_env!("CARGO_MANIFEST_DIR")
-        .map(PathBuf::from)
-        .or_else(|| std::env::var_os("CARGO_MANIFEST_DIR").map(PathBuf::from))
-    {
-        candidates.push(manifest_dir);
-    }
     if let Ok(current_dir) = std::env::current_dir() {
         candidates.push(current_dir);
     }

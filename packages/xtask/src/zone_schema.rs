@@ -1452,17 +1452,7 @@ mod tests {
     use super::*;
 
     fn repo_root() -> PathBuf {
-        if let Some(runfiles) = std::env::var_os("RUNFILES_DIR") {
-            let root = PathBuf::from(runfiles).join("_main");
-            if root.join("Cargo.toml").is_file() {
-                return root;
-            }
-        }
-        Path::new(env!("CARGO_MANIFEST_DIR"))
-            .ancestors()
-            .nth(2)
-            .expect("repo root")
-            .to_path_buf()
+        crate::repo_root().expect("repo root").to_path_buf()
     }
 
     #[test]

@@ -1,6 +1,6 @@
 #![forbid(unsafe_code)]
 
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::process::{Command, Output};
 
 use serde_json::{Value, json};
@@ -10,13 +10,6 @@ fn repo_root() -> PathBuf {
     if let Some(root) = std::env::var_os("D2B_REPO_ROOT") {
         candidates.push(PathBuf::from(root));
     }
-    candidates.push(
-        PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .parent()
-            .and_then(Path::parent)
-            .expect("xtask lives under packages/xtask")
-            .to_path_buf(),
-    );
     for variable in ["TEST_SRCDIR", "RUNFILES_DIR"] {
         if let Some(base) = std::env::var_os(variable).map(PathBuf::from) {
             candidates.push(base.clone());

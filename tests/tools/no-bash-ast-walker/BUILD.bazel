@@ -1,4 +1,5 @@
-load("@rules_rust//rust:defs.bzl", "rust_binary")
+load("@crates//:defs.bzl", "all_crate_deps")
+load("@rules_rust//rust:defs.bzl", "rust_binary", "rust_library", "rust_test")
 
 exports_files(
     ["BUILD.bazel", "Cargo.lock", "Cargo.toml", "src/main.rs"],
@@ -13,7 +14,32 @@ rust_binary(
         "Cargo.toml",
     ],
     visibility = ["//visibility:public"],
-    deps = [
-        "@crates//:syn",
+    deps = [":no_bash_ast_walker"],
+)
+
+rust_library(
+    name = "no_bash_ast_walker",
+    srcs = ["src/lib.rs"],
+    compile_data = [
+        "Cargo.lock",
+        "Cargo.toml",
     ],
+    visibility = ["//visibility:public"],
+    deps = ["@crates//:syn"],
+)
+
+rust_test(
+    name = "no_bash_ast_test",
+    srcs = ["tests/no_bash_ast.rs"],
+    compile_data = [
+        "Cargo.lock",
+        "Cargo.toml",
+    ],
+    data = [
+        "//:Cargo.toml",
+        "//bazel/checks/rust:repo_policy_sources",
+    ],
+    env_inherit = ["D2B_REPO_ROOT", "TEST_SRCDIR", "TEST_WORKSPACE"],
+    visibility = ["//visibility:public"],
+    deps = [":no_bash_ast_walker"] + all_crate_deps(normal_dev = True, cargo_only = True),
 )

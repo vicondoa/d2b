@@ -1392,16 +1392,8 @@ pub(crate) mod tests {
     static NEXT_SCRATCH: AtomicU32 = AtomicU32::new(0);
 
     pub(crate) fn repo_root() -> PathBuf {
-        if let Some(runfiles) = std::env::var_os("RUNFILES_DIR") {
-            let root = PathBuf::from(runfiles).join("_main");
-            if root.join("Cargo.toml").is_file() {
-                return root;
-            }
-        }
-        PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .parent()
-            .and_then(Path::parent)
-            .expect("xtask lives under packages/xtask")
+        crate::repo_root()
+            .expect("xtask has a repository root")
             .to_path_buf()
     }
 

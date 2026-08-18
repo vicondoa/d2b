@@ -185,6 +185,18 @@ rust_test(
 )
 
 rust_test(
+    name = "stub_no_socket",
+    srcs = ["tests/stub_no_socket.rs"],
+    compile_data = ["Cargo.toml"],
+    data = [":d2bd"],
+    env = {"CARGO_BIN_EXE_d2bd": "$(rootpath :d2bd)"},
+    rustc_env = {"CARGO_BIN_EXE_d2bd": "$(rootpath :d2bd)"},
+    tags = ["local"],
+    visibility = ["//visibility:public"],
+    deps = [] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
+)
+
+rust_test(
     name = "daemon_version_file",
     srcs = [
         "tests/common/mod.rs",

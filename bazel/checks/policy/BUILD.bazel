@@ -24,6 +24,8 @@ test_suite(
     name = "lint",
     tests = [
         "//packages/d2b-contract-tests:policy_bazel_layout",
+        "//packages/xtask:rust_clippy_test",
+        "//packages/xtask:rustfmt_test",
     ],
 )
 
@@ -31,8 +33,22 @@ test_suite(
     name = "policy",
     tests = [
         "//packages/d2b-contract-tests:policy_bazel_layout",
+        "//packages/d2b-contract-tests:policy_source",
         "//packages/xtask:policy_ci",
         "//packages/xtask:policy_workspace",
+        ":rust_policy",
+    ],
+)
+
+test_suite(
+    name = "rust_policy",
+    tests = [
+        "//packages/d2b-contract-tests:policy_source",
+        "//tests/tools/no-bash-ast-walker:no_bash_ast_test",
+        "//packages/d2b:stub_no_socket",
+        "//packages/d2bd:stub_no_socket",
+        "//packages/xtask:runtime_ledger_test",
+        "//packages/xtask:schema_reproducibility_test",
     ],
 )
 

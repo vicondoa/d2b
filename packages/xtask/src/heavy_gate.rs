@@ -1650,9 +1650,8 @@ mod tests {
                 .or_else(|| std::env::var_os("CARGO_TARGET_DIR"))
             {
                 Some(dir) => PathBuf::from(dir),
-                None => Path::new(env!("CARGO_MANIFEST_DIR"))
-                    .parent()
-                    .expect("xtask lives inside the workspace root")
+                None => crate::repo_root()
+                    .expect("xtask has a repository root")
                     .join("target"),
             };
             let sequence = SCRATCH_SEQUENCE.fetch_add(1, Ordering::Relaxed);

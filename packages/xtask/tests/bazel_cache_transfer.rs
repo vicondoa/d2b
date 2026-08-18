@@ -10,18 +10,6 @@ fn repo_root() -> PathBuf {
     if let Some(root) = std::env::var_os("D2B_REPO_ROOT") {
         candidates.push(PathBuf::from(root));
     }
-    if let Some(manifest_dir) = option_env!("CARGO_MANIFEST_DIR")
-        .map(PathBuf::from)
-        .or_else(|| std::env::var_os("CARGO_MANIFEST_DIR").map(PathBuf::from))
-    {
-        candidates.push(
-            manifest_dir
-                .parent()
-                .and_then(Path::parent)
-                .expect("xtask lives under packages/xtask")
-                .to_path_buf(),
-        );
-    }
     for variable in ["TEST_SRCDIR", "RUNFILES_DIR"] {
         if let Some(base) = std::env::var_os(variable).map(PathBuf::from) {
             candidates.push(base.clone());

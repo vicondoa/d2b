@@ -195,6 +195,18 @@ rust_test(
 )
 
 rust_test(
+    name = "stub_no_socket",
+    srcs = ["tests/stub_no_socket.rs"],
+    compile_data = ["Cargo.toml"],
+    data = [":d2b"],
+    env = {"CARGO_BIN_EXE_d2b": "$(rootpath :d2b)"},
+    rustc_env = {"CARGO_BIN_EXE_d2b": "$(rootpath :d2b)"},
+    tags = ["local"],
+    visibility = ["//visibility:public"],
+    deps = [] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
+)
+
+rust_test(
     name = "usb_contract",
     srcs = ["tests/usb_contract.rs"],
     compile_data = ["Cargo.toml"],

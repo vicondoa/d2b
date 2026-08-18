@@ -1343,9 +1343,7 @@ mod tests {
             let base = std::env::var_os("TEST_TMPDIR")
                 .map(PathBuf::from)
                 .unwrap_or_else(|| {
-                    Path::new(env!("CARGO_MANIFEST_DIR"))
-                        .ancestors()
-                        .nth(2)
+                    crate::repo_root()
                         .expect("repo root above packages/xtask")
                         .join(".agent-tmp")
                 })

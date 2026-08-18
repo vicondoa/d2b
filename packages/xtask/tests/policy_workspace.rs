@@ -80,13 +80,6 @@ fn repo_root() -> PathBuf {
             candidates.push(base.join("_main"));
         }
     }
-    candidates.push(
-        PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .parent()
-            .and_then(Path::parent)
-            .expect("xtask lives under packages/xtask")
-            .to_path_buf(),
-    );
     if let Ok(current_dir) = std::env::current_dir() {
         candidates.push(current_dir);
     }

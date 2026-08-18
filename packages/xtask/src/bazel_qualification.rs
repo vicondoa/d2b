@@ -2223,40 +2223,9 @@ fn validate_section_shape(
 }
 
 fn repo_root() -> PathBuf {
-    let mut candidates = Vec::new();
-    if let Some(root) = env::var_os("D2B_REPO_ROOT") {
-        candidates.push(PathBuf::from(root));
-    }
-    if let Some(manifest_dir) = option_env!("CARGO_MANIFEST_DIR")
-        .map(PathBuf::from)
-        .or_else(|| env::var_os("CARGO_MANIFEST_DIR").map(PathBuf::from))
-    {
-        candidates.push(
-            manifest_dir
-                .parent()
-                .and_then(Path::parent)
-                .expect("xtask lives under packages/xtask")
-                .to_path_buf(),
-        );
-    }
-    if let Ok(current_dir) = env::current_dir() {
-        candidates.push(current_dir);
-    }
-    for candidate in candidates {
-        let mut path = candidate;
-        loop {
-            if path.join("Cargo.toml").is_file()
-                && path.join("BUILD.bazel").is_file()
-                && path.join("flake.nix").is_file()
-            {
-                return path;
-            }
-            if !path.pop() {
-                break;
-            }
-        }
-    }
-    panic!("repository root with Cargo.toml, BUILD.bazel, and flake.nix is not discoverable")
+    crate::repo_root()
+        .expect("repository root is not discoverable")
+        .to_path_buf()
 }
 
 fn resolve_path(root: &Path, path: &Path) -> PathBuf {

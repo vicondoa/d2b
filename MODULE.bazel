@@ -48,4 +48,12 @@ crate.from_cargo(
         "x86_64-unknown-linux-gnu",
     ],
 )
+crate.annotation(
+    crate = "prost-build",
+    version = "0.8.0",
+    build_script_env = {
+        "PROTOC": "protoc",
+        "PROTOC_INCLUDE": ".",
+    },
+)
 use_repo(crate, "crates")

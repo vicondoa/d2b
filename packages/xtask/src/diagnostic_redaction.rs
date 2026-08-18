@@ -396,9 +396,8 @@ mod tests {
                 .or_else(|| env::var_os("CARGO_TARGET_DIR"))
                 .map(PathBuf::from)
                 .unwrap_or_else(|| {
-                    Path::new(env!("CARGO_MANIFEST_DIR"))
-                        .parent()
-                        .expect("xtask has a workspace parent")
+                    crate::repo_root()
+                        .expect("xtask has a repository root")
                         .join("target")
                 });
             let sequence = SCRATCH_SEQUENCE.fetch_add(1, Ordering::Relaxed);

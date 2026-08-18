@@ -807,26 +807,41 @@ where
 }
 
 fn repo_root() -> Result<&'static Path, Box<dyn std::error::Error>> {
-    if let Some(runfiles) = std::env::var_os("RUNFILES_DIR") {
-        let runfiles_root = PathBuf::from(runfiles).join("_main");
-        if runfiles_root.join("Cargo.toml").is_file() {
-            return Ok(Box::leak(runfiles_root.into_boxed_path()));
+    let mut candidates = Vec::new();
+    for variable in ["D2B_REPO_ROOT", "TEST_SRCDIR", "RUNFILES_DIR"] {
+        if let Some(base) = std::env::var_os(variable).map(PathBuf::from) {
+            candidates.push(base.clone());
+            if let Some(workspace) = std::env::var_os("TEST_WORKSPACE") {
+                candidates.push(base.join(workspace));
+            }
+            candidates.push(base.join("_main"));
         }
     }
-    Path::new(env!("CARGO_MANIFEST_DIR"))
-        .ancestors()
-        .nth(2)
-        .ok_or_else(|| "cannot locate repo root".into())
+    if let Ok(current_dir) = std::env::current_dir() {
+        candidates.push(current_dir);
+    }
+    for candidate in candidates {
+        let mut path = candidate;
+        if path.is_file() {
+            path.pop();
+        }
+        loop {
+            if path.join("Cargo.toml").is_file()
+                && path.join("BUILD.bazel").is_file()
+                && path.join("flake.nix").is_file()
+            {
+                return Ok(Box::leak(path.into_boxed_path()));
+            }
+            if !path.pop() {
+                break;
+            }
+        }
+    }
+    Err("cannot locate repo root".into())
 }
 
-fn gen_schemas() -> Result<Vec<PathBuf>, Box<dyn std::error::Error>> {
-    let repo_root = repo_root()?;
-    let out_dir = repo_root
-        .join("docs/reference/schemas")
-        .join(SCHEMA_VERSION);
-    fs::create_dir_all(&out_dir)?;
-
-    let schemas: [(&str, RootSchema); 20] = [
+fn schema_documents() -> Vec<(&'static str, RootSchema)> {
+    vec![
         ("allocator.json", schemars::schema_for!(AllocatorJson)),
         ("bundle.json", schemars::schema_for!(Bundle)),
         (
@@ -877,8 +892,16 @@ fn gen_schemas() -> Result<Vec<PathBuf>, Box<dyn std::error::Error>> {
         ),
         ("manifest_v04.json", schemars::schema_for!(ManifestV04)),
         ("audio-state.json", schemars::schema_for!(AudioPolicyState)),
-    ];
+    ]
+}
 
+fn gen_schemas() -> Result<Vec<PathBuf>, Box<dyn std::error::Error>> {
+    let repo_root = repo_root()?;
+    let out_dir = repo_root
+        .join("docs/reference/schemas")
+        .join(SCHEMA_VERSION);
+    fs::create_dir_all(&out_dir)?;
+    let schemas = schema_documents();
     write_schemas(&out_dir, &schemas)
 }
 
@@ -1136,15 +1159,19 @@ fn write_schemas(
 ) -> Result<Vec<PathBuf>, Box<dyn std::error::Error>> {
     let mut written = Vec::with_capacity(schemas.len());
     for (file_name, schema) in schemas {
-        let mut schema = schema.clone();
-        schema.meta_schema = Some("https://json-schema.org/draft/2020-12/schema".to_owned());
         let path = out_dir.join(file_name);
-        let mut data = serde_json::to_string_pretty(&schema)?;
-        data.push('\n');
-        fs::write(&path, data)?;
+        fs::write(&path, render_schema(schema)?)?;
         written.push(path);
     }
     Ok(written)
+}
+
+fn render_schema(schema: &RootSchema) -> Result<String, serde_json::Error> {
+    let mut schema = schema.clone();
+    schema.meta_schema = Some("https://json-schema.org/draft/2020-12/schema".to_owned());
+    let mut data = serde_json::to_string_pretty(&schema)?;
+    data.push('\n');
+    Ok(data)
 }
 
 fn gen_daemon_api() -> Result<PathBuf, Box<dyn std::error::Error>> {
@@ -1786,5 +1813,43 @@ mod provider_layout_tests {
         assert!(error.contains("\"crate\":\"d2b-provider-device-fixture\""));
         assert!(error.contains("\"missing\":[\"integration\"]"));
         fs::remove_dir_all(root).unwrap();
+    }
+}
+
+#[cfg(test)]
+mod schema_tests {
+    use super::{SCHEMA_VERSION, render_schema, repo_root, schema_documents};
+    use std::fs;
+
+    #[test]
+    fn schema_generation_is_reproducible() {
+        let first = schema_documents()
+            .iter()
+            .map(|(name, schema)| ((*name).to_owned(), render_schema(schema).unwrap()))
+            .collect::<Vec<_>>();
+        let second = schema_documents()
+            .iter()
+            .map(|(name, schema)| ((*name).to_owned(), render_schema(schema).unwrap()))
+            .collect::<Vec<_>>();
+        assert_eq!(first, second);
+    }
+
+    #[test]
+    fn committed_schemas_match_the_generator() {
+        let root = repo_root().expect("repository root");
+        for (name, schema) in schema_documents() {
+            let path = root
+                .join("docs/reference/schemas")
+                .join(SCHEMA_VERSION)
+                .join(name);
+            let committed = fs::read_to_string(&path)
+                .unwrap_or_else(|error| panic!("{} is unreadable: {error}", path.display()));
+            assert_eq!(
+                committed,
+                render_schema(&schema).unwrap(),
+                "{} drifted",
+                path.display()
+            );
+        }
     }
 }

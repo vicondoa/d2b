@@ -521,6 +521,9 @@ rust_test(
     name = "policy_source",
     srcs = ["tests/policy_source.rs"],
     compile_data = ["Cargo.toml"],
+    data = ["//bazel/checks/rust:repo_policy_sources"],
+    env_inherit = ["D2B_REPO_ROOT"],
+    tags = ["local"],
     visibility = ["//visibility:public"],
     deps = [
         ":d2b_contract_tests",

@@ -39,13 +39,10 @@ struct Scratch {
 impl Scratch {
     fn new(label: &str) -> Self {
         let target = match std::env::var_os("TEST_TMPDIR")
-            .or_else(|| std::env::var_os("CARGO_TARGET_DIR"))
+        .or_else(|| std::env::var_os("CARGO_TARGET_DIR"))
         {
-            Some(dir) => PathBuf::from(dir),
-            None => Path::new(env!("CARGO_MANIFEST_DIR"))
-                .parent()
-                .expect("xtask lives inside the workspace root")
-                .join("target"),
+        Some(dir) => PathBuf::from(dir),
+        None => repository_root().join("target"),
         };
         let sequence = SCRATCH_SEQUENCE.fetch_add(1, Ordering::Relaxed);
         let path = target
@@ -79,11 +76,44 @@ fn runfile_path(relative: &str) -> PathBuf {
             return candidate;
         }
     }
-    Path::new(env!("CARGO_MANIFEST_DIR"))
-        .parent()
-        .and_then(Path::parent)
-        .expect("xtask lives under packages/xtask")
-        .join(relative)
+    repository_root().join(relative)
+}
+
+fn repository_root() -> PathBuf {
+    let mut candidates = Vec::new();
+    if let Some(root) = std::env::var_os("D2B_REPO_ROOT") {
+        candidates.push(PathBuf::from(root));
+    }
+    for variable in ["TEST_SRCDIR", "RUNFILES_DIR"] {
+        if let Some(base) = std::env::var_os(variable).map(PathBuf::from) {
+            candidates.push(base.clone());
+            if let Some(workspace) = std::env::var_os("TEST_WORKSPACE") {
+                candidates.push(base.join(workspace));
+            }
+            candidates.push(base.join("_main"));
+        }
+    }
+    if let Ok(current_dir) = std::env::current_dir() {
+        candidates.push(current_dir);
+    }
+    for candidate in candidates {
+        let mut path = candidate;
+        if path.is_file() {
+            path.pop();
+        }
+        loop {
+            if path.join("Cargo.toml").is_file()
+                && path.join("BUILD.bazel").is_file()
+                && path.join("flake.nix").is_file()
+            {
+                return path;
+            }
+            if !path.pop() {
+                break;
+            }
+        }
+    }
+    panic!("repository root is not discoverable")
 }
 
 /// Drives the shell re-exec self-guard through bash with a stubbed `cargo`
