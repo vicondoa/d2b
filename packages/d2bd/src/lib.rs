@@ -4179,11 +4179,11 @@ fn resolve_network_vm_name(
     env_name: &str,
 ) -> Result<String, resource_runtime::ResourceRuntimeError> {
     match spec.get("netVmNameOverride") {
-        Some(value) => value
+        Some(value) if !value.is_null() => value
             .as_str()
             .map(ToOwned::to_owned)
             .ok_or(resource_runtime::ResourceRuntimeError::RequestInvalid),
-        None => Ok(format!("sys-{env_name}-net")),
+        _ => Ok(format!("sys-{env_name}-net")),
     }
 }
 
