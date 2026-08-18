@@ -80,9 +80,13 @@ let
         })
         [ "acceptance-provider" ];
     });
-  artifacts = lib.listToAttrs (map
-    (artifactId: lib.nameValuePair artifactId providerArtifact)
-    [ "acceptance-provider" ]);
+  artifacts = {
+    acceptance-provider = providerArtifact;
+    acceptance-system = {
+      package = pkgs.writeText "d2b-acceptance-system" "acceptance-system";
+      type = "nixos-system";
+    };
+  };
 in
 pkgs.testers.runNixOSTest {
   name = "d2b-runtime-cloud-hypervisor-guest-preflight";
@@ -189,6 +193,7 @@ pkgs.testers.runNixOSTest {
             type = "Guest";
             spec = {
               providerRef = "Provider/runtime-cloud-hypervisor";
+              systemArtifactId = "acceptance-system";
               defaultDomain = "system";
               allowedDomains = [ "system" ];
               budget = { };
