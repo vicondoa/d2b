@@ -4565,13 +4565,12 @@ fn reconcile_wave6_network_effect(
         }
         _ => return Err(resource_runtime::ResourceRuntimeError::ProviderPathUnavailable),
     }
-    let context = resolve_network_effect_context(resource, resolver).map_err(|error| {
+    let context = resolve_network_effect_context(resource, resolver).inspect_err(|error| {
         tracing::warn!(
             stage = "resolve-network-effect-context",
             error = error.code(),
             "Network Provider path resolution failed"
         );
-        error
     })?;
     let mut spec_value = resource
         .get("spec")
@@ -4594,13 +4593,12 @@ fn reconcile_wave6_network_effect(
             .ok_or(resource_runtime::ResourceRuntimeError::RequestInvalid)?,
         resolver,
     )
-    .map_err(|error| {
+    .inspect_err(|error| {
         tracing::warn!(
             stage = "resolve-network-environment",
             error = error.code(),
             "Network Provider environment resolution failed"
         );
-        error
     })?;
     let generation = resource
         .get("metadata")
