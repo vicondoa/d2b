@@ -4187,9 +4187,17 @@ fn resolve_network_vm_name(
     }
 }
 
-#[derive(Default)]
+#[derive(Clone)]
 struct PublicNetworkResourceBoundary {
-    state: Mutex<PublicNetworkResourceState>,
+    state: Arc<Mutex<PublicNetworkResourceState>>,
+}
+
+impl Default for PublicNetworkResourceBoundary {
+    fn default() -> Self {
+        Self {
+            state: Arc::new(Mutex::new(PublicNetworkResourceState::default())),
+        }
+    }
 }
 
 #[derive(Default)]
@@ -4199,6 +4207,70 @@ struct PublicNetworkResourceState {
     guest_upserted: bool,
     volume_attached: bool,
     agent_upserted: bool,
+}
+
+const MAX_NETWORK_CHILD_READINESS_PASSES: usize = 4;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct PublicNetworkChildReadiness {
+    volume_ready: bool,
+    guest_ready: bool,
+    volume_attachment_ready: bool,
+}
+
+impl PublicNetworkChildReadiness {
+    #[cfg(test)]
+    const fn pending() -> Self {
+        Self {
+            volume_ready: false,
+            guest_ready: false,
+            volume_attachment_ready: false,
+        }
+    }
+
+    const fn from_state(state: &PublicNetworkResourceState) -> Self {
+        Self {
+            volume_ready: state.volume_upserted && state.volume_written,
+            guest_ready: state.guest_upserted,
+            volume_attachment_ready: state.volume_attached,
+        }
+    }
+}
+
+impl PublicNetworkResourceBoundary {
+    fn observed_child_readiness(&self) -> Result<PublicNetworkChildReadiness, NetworkEffectError> {
+        let state = self
+            .state
+            .lock()
+            .map_err(|_| NetworkEffectError::ConfigVolume)?;
+        Ok(PublicNetworkChildReadiness::from_state(&state))
+    }
+}
+
+#[cfg(test)]
+mod public_network_child_readiness_tests {
+    use super::*;
+
+    #[test]
+    fn readiness_is_false_until_each_child_mutation_has_completed() {
+        let mut state = PublicNetworkResourceState::default();
+        assert_eq!(
+            PublicNetworkChildReadiness::from_state(&state),
+            PublicNetworkChildReadiness::pending()
+        );
+
+        state.volume_upserted = true;
+        assert!(!PublicNetworkChildReadiness::from_state(&state).volume_ready);
+        state.volume_written = true;
+        assert!(PublicNetworkChildReadiness::from_state(&state).volume_ready);
+
+        state.guest_upserted = true;
+        assert!(PublicNetworkChildReadiness::from_state(&state).guest_ready);
+        assert!(!PublicNetworkChildReadiness::from_state(&state).volume_attachment_ready);
+
+        state.volume_attached = true;
+        assert!(PublicNetworkChildReadiness::from_state(&state).volume_attachment_ready);
+    }
 }
 
 impl NetworkResourcePort for PublicNetworkResourceBoundary {
@@ -4691,7 +4763,9 @@ fn reconcile_wave6_network_effect(
         .and_then(|value| value.get("enable"))
         .and_then(Value::as_bool)
         .unwrap_or(false);
-    let input = ReconcileInput {
+    let resources = PublicNetworkResourceBoundary::default();
+    let observer = resources.clone();
+    let mut input = ReconcileInput {
         spec: spec.clone(),
         mdns_enabled,
         network_uid: uid.clone(),
@@ -4704,9 +4778,9 @@ fn reconcile_wave6_network_effect(
         peer_networks: Vec::new(),
         user_ready: true,
         host_memory_budget_available: CONFIG_VOLUME_MAX_BYTES * 2,
-        volume_ready: true,
-        guest_ready: true,
-        volume_attachment_ready: true,
+        volume_ready: false,
+        guest_ready: false,
+        volume_attachment_ready: false,
         workload_fds_closed: true,
         agent_deleted: true,
         mdns_deleted: true,
@@ -4716,27 +4790,51 @@ fn reconcile_wave6_network_effect(
         attachments: Vec::new(),
     };
     let effects = network_effect_port::production_port(state, caller_role, context);
-    let resources = PublicNetworkResourceBoundary::default();
     let reconciler = NetworkReconciler::new(effects, resources);
-    match block_on_future(reconciler.reconcile(&input)) {
-        Ok(ReconcileProgress::Ready) => Ok(()),
-        Ok(progress) => {
-            tracing::warn!(
-                stage = "network-reconciler",
-                progress = ?progress,
-                "Network Provider reconcile did not reach Ready"
-            );
-            Err(resource_runtime::ResourceRuntimeError::ProviderPathUnavailable)
-        }
-        Err(error) => {
-            tracing::warn!(
-                stage = "network-reconciler",
-                error = error.code(),
-                "Network Provider reconcile effect failed"
-            );
-            Err(resource_runtime::ResourceRuntimeError::ProviderPathUnavailable)
+    for _ in 0..MAX_NETWORK_CHILD_READINESS_PASSES {
+        let observed_before = observer
+            .observed_child_readiness()
+            .map_err(|_| resource_runtime::ResourceRuntimeError::ProviderPathUnavailable)?;
+        input.volume_ready = observed_before.volume_ready;
+        input.guest_ready = observed_before.guest_ready;
+        input.volume_attachment_ready = observed_before.volume_attachment_ready;
+        match block_on_future(reconciler.reconcile(&input)) {
+            Ok(ReconcileProgress::Ready) => return Ok(()),
+            Ok(ReconcileProgress::Pending(_)) => {
+                let observed_after = observer
+                    .observed_child_readiness()
+                    .map_err(|_| resource_runtime::ResourceRuntimeError::ProviderPathUnavailable)?;
+                if observed_after == observed_before {
+                    tracing::warn!(
+                        stage = "network-reconciler",
+                        "Network Provider child readiness made no progress"
+                    );
+                    return Err(resource_runtime::ResourceRuntimeError::ProviderPathUnavailable);
+                }
+            }
+            Ok(progress) => {
+                tracing::warn!(
+                    stage = "network-reconciler",
+                    progress = ?progress,
+                    "Network Provider reconcile did not reach Ready"
+                );
+                return Err(resource_runtime::ResourceRuntimeError::ProviderPathUnavailable);
+            }
+            Err(error) => {
+                tracing::warn!(
+                    stage = "network-reconciler",
+                    error = error.code(),
+                    "Network Provider reconcile effect failed"
+                );
+                return Err(resource_runtime::ResourceRuntimeError::ProviderPathUnavailable);
+            }
         }
     }
+    tracing::warn!(
+        stage = "network-reconciler",
+        "Network Provider child readiness did not converge"
+    );
+    Err(resource_runtime::ResourceRuntimeError::ProviderPathUnavailable)
 }
 
 fn is_device_tpm_reconcile_request(request: &Value) -> bool {
