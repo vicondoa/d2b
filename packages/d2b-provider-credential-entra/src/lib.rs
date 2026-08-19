@@ -17,7 +17,7 @@ use std::pin::Pin;
 use std::sync::{Arc, Mutex, MutexGuard, TryLockError};
 use std::task::{Context, Poll, Wake, Waker};
 use std::thread::{self, Thread};
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use d2b_contracts::v3::ResourceRef;
 use d2b_contracts::v3::credential::{
@@ -32,10 +32,13 @@ pub use controller::{EntraController, EntraEndpointPolicy, EntraStatusProjection
 pub const PROVIDER_REF: &str = "Provider/credential-entra";
 /// Canonical identity-Guest login Endpoint purpose.
 pub const LOGIN_ENDPOINT_PURPOSE: &str = "credential-entra.d2bus.org/entra-login-token";
+/// Authenticated ComponentSession purpose accepted by this Provider.
+pub const CREDENTIAL_SESSION_PURPOSE: &str = "credential";
 /// Maximum active leases per Provider instance.
 pub const MAX_LOCAL_LEASES: u32 = 256;
 /// Maximum refresh failures retained for one Credential before retry stops.
 pub const MAX_REFRESH_ATTEMPTS: u16 = 3;
+const ABSOLUTE_UNIX_MILLIS_THRESHOLD: u64 = 1_000_000_000_000;
 
 /// Boxed asynchronous result returned by the injected identity-Guest client.
 pub type EntraFuture<'a, T> =
@@ -635,7 +638,14 @@ impl EntraCredentialProvider {
             metadata: record.metadata,
             endpoint_generation: self.placement.endpoint_generation(),
         };
-        Self::poll_client(self.client.revoke_lease(&lease), deadline)?;
+        if let Err(error) = Self::poll_client(self.client.revoke_lease(&lease), deadline)
+            && !matches!(
+                error.code(),
+                CredentialServiceErrorCode::LeaseExpired | CredentialServiceErrorCode::LeaseRevoked
+            )
+        {
+            return Err(error);
+        }
         let mut leases = self.leases.lock().map_err(|_| {
             CredentialServiceError::new(CredentialServiceErrorCode::InvariantFailure)
         })?;
@@ -678,11 +688,74 @@ impl EntraCredentialProvider {
     }
 
     pub(crate) fn operation_deadline(deadline_ms: u64) -> Result<Instant, CredentialServiceError> {
-        Instant::now()
-            .checked_add(Duration::from_millis(deadline_ms))
-            .ok_or_else(|| {
+        Self::time_bound_instant(deadline_ms)
+    }
+
+    pub(crate) fn now_unix_ms() -> u64 {
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|duration| duration.as_millis().min(u128::from(u64::MAX)) as u64)
+            .unwrap_or(0)
+    }
+
+    pub(crate) const fn is_absolute_unix_ms(value_ms: u64) -> bool {
+        value_ms >= ABSOLUTE_UNIX_MILLIS_THRESHOLD
+    }
+
+    pub(crate) fn is_expired_unix_ms(value_ms: u64) -> bool {
+        Self::is_absolute_unix_ms(value_ms) && value_ms <= Self::now_unix_ms()
+    }
+
+    pub(crate) fn time_bound_instant(value_ms: u64) -> Result<Instant, CredentialServiceError> {
+        let now = Instant::now();
+        let now_unix_ms = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map_err(|_| CredentialServiceError::new(CredentialServiceErrorCode::InvariantFailure))?
+            .as_millis()
+            .try_into()
+            .map_err(|_| {
+                CredentialServiceError::new(CredentialServiceErrorCode::InvariantFailure)
+            })?;
+        Self::time_bound_instant_at(value_ms, now, now_unix_ms)
+    }
+
+    pub(crate) fn time_bounds_not_after(
+        later_ms: u64,
+        earlier_ms: u64,
+    ) -> Result<bool, CredentialServiceError> {
+        let now = Instant::now();
+        let now_unix_ms = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map_err(|_| CredentialServiceError::new(CredentialServiceErrorCode::InvariantFailure))?
+            .as_millis()
+            .try_into()
+            .map_err(|_| {
+                CredentialServiceError::new(CredentialServiceErrorCode::InvariantFailure)
+            })?;
+        let later = Self::time_bound_instant_at(later_ms, now, now_unix_ms)?;
+        let earlier = Self::time_bound_instant_at(earlier_ms, now, now_unix_ms)?;
+        Ok(later <= earlier)
+    }
+
+    fn time_bound_instant_at(
+        value_ms: u64,
+        now: Instant,
+        now_unix_ms: u64,
+    ) -> Result<Instant, CredentialServiceError> {
+        if value_ms >= ABSOLUTE_UNIX_MILLIS_THRESHOLD {
+            let remaining_ms = value_ms.checked_sub(now_unix_ms).ok_or_else(|| {
                 CredentialServiceError::new(CredentialServiceErrorCode::DeadlineExceeded)
-            })
+            })?;
+            now.checked_add(Duration::from_millis(remaining_ms))
+                .ok_or_else(|| {
+                    CredentialServiceError::new(CredentialServiceErrorCode::DeadlineExceeded)
+                })
+        } else {
+            now.checked_add(Duration::from_millis(value_ms))
+                .ok_or_else(|| {
+                    CredentialServiceError::new(CredentialServiceErrorCode::DeadlineExceeded)
+                })
+        }
     }
 
     pub(crate) fn poll_client<T>(
@@ -756,6 +829,11 @@ impl EntraCredentialProvider {
         grant: EntraLeaseGrant,
     ) -> Result<CredentialMetadata, CredentialServiceError> {
         if grant.rotation_generation == 0 || grant.expires_at_unix_ms == 0 {
+            return Err(CredentialServiceError::new(
+                CredentialServiceErrorCode::InvariantFailure,
+            ));
+        }
+        if Self::is_expired_unix_ms(grant.expires_at_unix_ms) {
             return Err(CredentialServiceError::new(
                 CredentialServiceErrorCode::InvariantFailure,
             ));
@@ -854,6 +932,21 @@ mod tests {
                 1,
             ),
             Err(EntraProviderError::InvalidPlacement)
+        );
+    }
+
+    #[test]
+    fn operation_deadline_accepts_absolute_unix_milliseconds() {
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_millis() as u64;
+        assert!(EntraCredentialProvider::operation_deadline(now + 1_000).is_ok());
+        assert_eq!(
+            EntraCredentialProvider::operation_deadline(now - 1)
+                .unwrap_err()
+                .code(),
+            CredentialServiceErrorCode::DeadlineExceeded
         );
     }
 }

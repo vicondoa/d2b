@@ -6,6 +6,7 @@ mod audit;
 mod telemetry;
 
 use d2b_contracts::v3::ResourceRef;
+use d2b_contracts::v3::credential::CREDENTIAL_SERVICE_NAME;
 use d2b_contracts::v3::credential::{
     CredentialInteractionState, CredentialLeaseStatus, CredentialMetadata, CredentialServiceError,
     CredentialServiceErrorCode, CredentialStatus,
@@ -21,7 +22,8 @@ use d2b_contracts::v3::credential_controller::{
 use d2b_contracts::v3::{AuthenticatedSubjectContext, Locality};
 
 use crate::{
-    EntraClientState, EntraPlacement, EntraResourceHealth, LOGIN_ENDPOINT_PURPOSE, PROVIDER_REF,
+    CREDENTIAL_SESSION_PURPOSE, EntraClientState, EntraPlacement, EntraResourceHealth,
+    LOGIN_ENDPOINT_PURPOSE, MAX_REFRESH_ATTEMPTS, PROVIDER_REF,
 };
 
 /// Canonical provider-visible Endpoint policy for the Entrablau service.
@@ -75,6 +77,9 @@ impl EntraEndpointPolicy {
             && subject
                 .provider_ref()
                 .is_some_and(|provider| provider == &self.provider_ref)
+            && subject.provider_generation().is_some()
+            && subject.service().as_str() == CREDENTIAL_SERVICE_NAME
+            && subject.session_purpose().as_str() == CREDENTIAL_SESSION_PURPOSE
     }
 }
 
@@ -135,6 +140,9 @@ impl EntraController {
         resource_health: EntraResourceHealth,
         refresh_attempts: u16,
     ) -> Result<EntraStatusProjection, CredentialServiceError> {
+        if refresh_attempts > MAX_REFRESH_ATTEMPTS {
+            return Err(invariant());
+        }
         let lease = metadata
             .map(|metadata| {
                 CredentialLeaseStatus::new(

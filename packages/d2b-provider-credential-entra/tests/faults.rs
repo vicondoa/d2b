@@ -3,13 +3,14 @@ mod common;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, mpsc};
 use std::thread;
-use std::time::Duration;
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use d2b_contracts::v3::Locality;
 use d2b_contracts::v3::ResourceRef;
 use d2b_contracts::v3::credential::{
     CredentialAuthorization, CredentialMethod, CredentialRequest, CredentialResponse,
-    CredentialServiceErrorCode, PlacementBinding, dispatch_authorized_provider,
+    CredentialServiceErrorCode, CredentialSessionBinding, PlacementBinding,
+    dispatch_authorized_provider,
 };
 use d2b_provider_credential_entra::{
     EntraClientError, EntraClientState, EntraConfig, EntraCredentialClient,
@@ -18,8 +19,8 @@ use d2b_provider_credential_entra::{
 };
 
 use common::{
-    Admission, ProviderHarness, admitted, delivery, request, setup, subject_context_for,
-    subject_context_with_bindings,
+    Admission, ProviderHarness, admitted, delivery, delivery_with_component_generation, request,
+    session_binding, setup, subject_context, subject_context_for, subject_context_with_bindings,
 };
 
 #[test]
@@ -34,6 +35,7 @@ fn interaction_required_is_unavailable_not_denied() {
             .code(),
         CredentialServiceErrorCode::ProviderUnavailable
     );
+    assert_eq!(client.issue_calls.load(Ordering::SeqCst), 0);
 }
 
 #[test]
@@ -49,6 +51,130 @@ fn exact_consumer_mismatch_is_denied_before_client_dispatch() {
             .call(CredentialMethod::AcquireToken, request("idem-mismatch"))
             .unwrap_err()
             .code(),
+        CredentialServiceErrorCode::OperationDenied
+    );
+    assert_eq!(client.issue_calls.load(Ordering::SeqCst), 0);
+}
+
+#[test]
+fn missing_authenticated_session_is_denied_before_client_dispatch() {
+    let (provider, client) = setup();
+    let authorization = CredentialAuthorization::new_for_subject(
+        CredentialMethod::AcquireToken,
+        Some(delivery(CredentialMethod::AcquireToken, 1)),
+        subject_context(),
+    )
+    .unwrap();
+
+    assert_eq!(
+        dispatch_authorized_provider(
+            &provider,
+            CredentialMethod::AcquireToken,
+            &request("idem-missing-session"),
+            &authorization,
+        )
+        .unwrap_err()
+        .code(),
+        CredentialServiceErrorCode::OperationDenied
+    );
+    assert_eq!(client.issue_calls.load(Ordering::SeqCst), 0);
+}
+
+#[test]
+fn request_and_session_delivery_bindings_must_match_exactly() {
+    let (provider, client) = setup();
+    let authorization = CredentialAuthorization::new_for_subject(
+        CredentialMethod::AcquireToken,
+        Some(delivery(CredentialMethod::AcquireToken, 1)),
+        subject_context(),
+    )
+    .unwrap()
+    .with_authenticated_session(session_binding())
+    .unwrap();
+    let other_request = CredentialRequest::new(
+        ResourceRef::parse("Credential/other-entra").unwrap(),
+        "operation-other",
+        "idem-other-binding",
+        common::EXPIRY,
+        15_000,
+    )
+    .unwrap();
+
+    assert_eq!(
+        dispatch_authorized_provider(
+            &provider,
+            CredentialMethod::AcquireToken,
+            &other_request,
+            &authorization,
+        )
+        .unwrap_err()
+        .code(),
+        CredentialServiceErrorCode::OperationDenied
+    );
+    assert_eq!(client.issue_calls.load(Ordering::SeqCst), 0);
+}
+
+#[test]
+fn provider_generation_must_match_the_delivery_component_generation() {
+    let (provider, client) = setup();
+    let authorization = CredentialAuthorization::new_for_subject(
+        CredentialMethod::AcquireToken,
+        Some(delivery_with_component_generation(
+            CredentialMethod::AcquireToken,
+            1,
+            2,
+        )),
+        subject_context(),
+    )
+    .unwrap()
+    .with_authenticated_session(session_binding())
+    .unwrap();
+
+    assert_eq!(
+        dispatch_authorized_provider(
+            &provider,
+            CredentialMethod::AcquireToken,
+            &request("idem-generation-binding"),
+            &authorization,
+        )
+        .unwrap_err()
+        .code(),
+        CredentialServiceErrorCode::OperationDenied
+    );
+    assert_eq!(client.issue_calls.load(Ordering::SeqCst), 0);
+}
+
+#[test]
+fn authenticated_session_subject_must_match_the_authorized_subject() {
+    let (provider, client) = setup();
+    let authorization = CredentialAuthorization::new_for_subject(
+        CredentialMethod::AcquireToken,
+        Some(delivery(CredentialMethod::AcquireToken, 1)),
+        subject_context(),
+    )
+    .unwrap()
+    .with_authenticated_session(
+        CredentialSessionBinding::new(
+            subject_context_for(
+                ResourceRef::parse("Provider/other").unwrap(),
+                ResourceRef::parse("Zone/work").unwrap(),
+                Locality::Local,
+            ),
+            common::EXPIRY,
+        )
+        .unwrap(),
+    )
+    .unwrap();
+
+    assert_eq!(
+        dispatch_authorized_provider(
+            &provider,
+            CredentialMethod::AcquireToken,
+            &request("idem-session-subject"),
+            &authorization,
+        )
+        .unwrap_err()
+        .code(),
         CredentialServiceErrorCode::OperationDenied
     );
     assert_eq!(client.issue_calls.load(Ordering::SeqCst), 0);
@@ -198,18 +324,24 @@ fn missing_or_mismatched_authenticated_claims_are_denied_before_client_dispatch(
 
     for (index, (label, execution_ref, provider_ref)) in cases.into_iter().enumerate() {
         let (provider, client) = setup();
+        let authenticated_subject = subject_context_with_bindings(
+            ResourceRef::parse("Provider/runtime-azure-container-apps").unwrap(),
+            ResourceRef::parse("Zone/work").unwrap(),
+            Locality::Local,
+            execution_ref,
+            provider_ref,
+        );
         let authorization = CredentialAuthorization::new_for_subject(
             CredentialMethod::AcquireToken,
             Some(delivery(CredentialMethod::AcquireToken, 1)),
-            subject_context_with_bindings(
-                ResourceRef::parse("Provider/runtime-azure-container-apps").unwrap(),
-                ResourceRef::parse("Zone/work").unwrap(),
-                Locality::Local,
-                execution_ref,
-                provider_ref,
-            ),
+            authenticated_subject.clone(),
         )
         .unwrap();
+        let authorization = authorization
+            .with_authenticated_session(
+                CredentialSessionBinding::new(authenticated_subject, common::EXPIRY).unwrap(),
+            )
+            .unwrap();
 
         assert_eq!(
             dispatch_authorized_provider(
@@ -230,18 +362,24 @@ fn missing_or_mismatched_authenticated_claims_are_denied_before_client_dispatch(
 #[test]
 fn same_credential_name_from_another_zone_is_denied_before_client_dispatch() {
     let (provider, client) = setup();
+    let authenticated_subject = subject_context_with_bindings(
+        ResourceRef::parse("Provider/runtime-azure-container-apps").unwrap(),
+        ResourceRef::parse("Zone/personal").unwrap(),
+        Locality::Local,
+        Some(ResourceRef::parse("Guest/consumer").unwrap()),
+        Some(ResourceRef::parse("Provider/credential-entra").unwrap()),
+    );
     let authorization = CredentialAuthorization::new_for_subject(
         CredentialMethod::AcquireToken,
         Some(delivery(CredentialMethod::AcquireToken, 1)),
-        subject_context_with_bindings(
-            ResourceRef::parse("Provider/runtime-azure-container-apps").unwrap(),
-            ResourceRef::parse("Zone/personal").unwrap(),
-            Locality::Local,
-            Some(ResourceRef::parse("Guest/consumer").unwrap()),
-            Some(ResourceRef::parse("Provider/credential-entra").unwrap()),
-        ),
+        authenticated_subject.clone(),
     )
     .unwrap();
+    let authorization = authorization
+        .with_authenticated_session(
+            CredentialSessionBinding::new(authenticated_subject, common::EXPIRY).unwrap(),
+        )
+        .unwrap();
 
     assert_eq!(
         dispatch_authorized_provider(
@@ -424,6 +562,256 @@ fn committed_remote_refresh_metadata_is_adopted_for_later_recovery() {
 }
 
 #[test]
+fn refresh_rejects_remote_generation_rollback() {
+    let (provider, client) = setup();
+    let server = ProviderHarness::new(&provider, admitted());
+    server
+        .call(
+            CredentialMethod::AcquireToken,
+            request("idem-generation-rollback"),
+        )
+        .unwrap();
+    server
+        .call(
+            CredentialMethod::RefreshToken,
+            request("idem-generation-rollback-first-refresh"),
+        )
+        .unwrap();
+    *client.refresh_generation.lock().unwrap() = 1;
+
+    assert_eq!(
+        server
+            .call(
+                CredentialMethod::RefreshToken,
+                request("idem-generation-rollback-refresh"),
+            )
+            .unwrap_err()
+            .code(),
+        CredentialServiceErrorCode::InvariantFailure
+    );
+    assert_eq!(
+        provider.resource_health(&ResourceRef::parse("Credential/work-entra").unwrap()),
+        Some(d2b_provider_credential_entra::EntraResourceHealth::Degraded)
+    );
+}
+
+#[test]
+fn inspect_persists_remote_revocation_and_degrades_only_that_resource() {
+    let (provider, client) = setup();
+    let server = ProviderHarness::new(&provider, admitted());
+    server
+        .call(
+            CredentialMethod::AcquireToken,
+            request("idem-inspect-revoked"),
+        )
+        .unwrap();
+    *client.inspection.lock().unwrap() = Some(EntraLeaseInspection {
+        state: d2b_contracts::v3::credential::CredentialLeaseState::Revoked,
+        source_version: d2b_contracts::v3::credential::CredentialSourceVersion::parse(
+            "entra-source-revoked",
+        )
+        .unwrap(),
+        rotation_generation: 1,
+        expires_at_unix_ms: common::EXPIRY,
+    });
+
+    assert_eq!(
+        server
+            .call(
+                CredentialMethod::InspectMetadata,
+                request("idem-inspect-revoked-read"),
+            )
+            .unwrap_err()
+            .code(),
+        CredentialServiceErrorCode::LeaseRevoked
+    );
+    assert_eq!(
+        provider.resource_health(&ResourceRef::parse("Credential/work-entra").unwrap()),
+        Some(d2b_provider_credential_entra::EntraResourceHealth::Revoked)
+    );
+}
+
+#[test]
+fn unknown_inspection_is_transient_and_acquire_revokes_before_replacement() {
+    let (provider, client) = setup();
+    let server = ProviderHarness::new(&provider, admitted());
+    server
+        .call(CredentialMethod::AcquireToken, request("idem-unknown-base"))
+        .unwrap();
+    *client.inspection.lock().unwrap() = Some(EntraLeaseInspection {
+        state: d2b_contracts::v3::credential::CredentialLeaseState::Unknown,
+        source_version: d2b_contracts::v3::credential::CredentialSourceVersion::parse(
+            "entra-source-unknown",
+        )
+        .unwrap(),
+        rotation_generation: 1,
+        expires_at_unix_ms: common::EXPIRY,
+    });
+
+    assert_eq!(
+        server
+            .call(
+                CredentialMethod::InspectMetadata,
+                request("idem-unknown-inspect"),
+            )
+            .unwrap_err()
+            .code(),
+        CredentialServiceErrorCode::InvariantFailure
+    );
+    assert_eq!(
+        provider.refresh_retry_state(&ResourceRef::parse("Credential/work-entra").unwrap()),
+        Some((0, d2b_provider_credential_entra::MAX_REFRESH_ATTEMPTS))
+    );
+    server
+        .call(
+            CredentialMethod::AcquireToken,
+            request("idem-unknown-replacement"),
+        )
+        .unwrap();
+    assert_eq!(client.revoke_calls.load(Ordering::SeqCst), 1);
+    assert_eq!(client.issue_calls.load(Ordering::SeqCst), 2);
+}
+
+#[test]
+fn clock_expired_inspection_is_reclaimed_before_acquire_replacement() {
+    let (provider, client) = setup();
+    let server = ProviderHarness::new(&provider, admitted());
+    server
+        .call(CredentialMethod::AcquireToken, request("idem-expired-base"))
+        .unwrap();
+    let now = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_millis() as u64;
+    *client.inspection.lock().unwrap() = Some(EntraLeaseInspection {
+        state: d2b_contracts::v3::credential::CredentialLeaseState::Active,
+        source_version: d2b_contracts::v3::credential::CredentialSourceVersion::parse(
+            "entra-source-expired",
+        )
+        .unwrap(),
+        rotation_generation: 1,
+        expires_at_unix_ms: now - 1,
+    });
+
+    assert_eq!(
+        server
+            .call(
+                CredentialMethod::InspectMetadata,
+                request("idem-expired-inspect"),
+            )
+            .unwrap_err()
+            .code(),
+        CredentialServiceErrorCode::LeaseExpired
+    );
+    assert_eq!(
+        provider.resource_health(&ResourceRef::parse("Credential/work-entra").unwrap()),
+        Some(d2b_provider_credential_entra::EntraResourceHealth::Degraded)
+    );
+    server
+        .call(
+            CredentialMethod::AcquireToken,
+            request("idem-expired-replacement"),
+        )
+        .unwrap();
+    assert_eq!(client.revoke_calls.load(Ordering::SeqCst), 1);
+    assert_eq!(client.issue_calls.load(Ordering::SeqCst), 2);
+}
+
+#[test]
+fn expired_remote_revoke_is_idempotent_for_explicit_revoke() {
+    let (provider, client) = setup();
+    let server = ProviderHarness::new(&provider, admitted());
+    server
+        .call(
+            CredentialMethod::AcquireToken,
+            request("idem-expired-revoke"),
+        )
+        .unwrap();
+    let now = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_millis() as u64;
+    *client.inspection.lock().unwrap() = Some(EntraLeaseInspection {
+        state: d2b_contracts::v3::credential::CredentialLeaseState::Active,
+        source_version: d2b_contracts::v3::credential::CredentialSourceVersion::parse(
+            "entra-source-expired-revoke",
+        )
+        .unwrap(),
+        rotation_generation: 1,
+        expires_at_unix_ms: now - 1,
+    });
+    assert_eq!(
+        server
+            .call(
+                CredentialMethod::InspectMetadata,
+                request("idem-expired-revoke-inspect"),
+            )
+            .unwrap_err()
+            .code(),
+        CredentialServiceErrorCode::LeaseExpired
+    );
+    *client.revoke_error.lock().unwrap() = Some(EntraClientError::LeaseExpired);
+
+    let response = server
+        .call(
+            CredentialMethod::RevokeToken,
+            request("idem-expired-revoke-finalize"),
+        )
+        .unwrap();
+    let CredentialResponse::RevokeToken(response) = response else {
+        panic!("expected revoke response");
+    };
+    assert_eq!(
+        response.metadata.state,
+        d2b_contracts::v3::credential::CredentialLeaseState::Revoked
+    );
+    assert_eq!(client.revoke_calls.load(Ordering::SeqCst), 1);
+}
+
+#[test]
+fn local_revocation_is_terminal_even_when_remote_inspection_is_stale() {
+    let (provider, client) = setup();
+    let server = ProviderHarness::new(&provider, admitted());
+    server
+        .call(
+            CredentialMethod::AcquireToken,
+            request("idem-local-revoked"),
+        )
+        .unwrap();
+    server
+        .call(
+            CredentialMethod::RevokeToken,
+            request("idem-local-revoked-revoke"),
+        )
+        .unwrap();
+    let inspect_calls = client.inspect_calls.load(Ordering::SeqCst);
+    let refresh_calls = client.refresh_calls.load(Ordering::SeqCst);
+
+    assert_eq!(
+        server
+            .call(
+                CredentialMethod::InspectMetadata,
+                request("idem-local-revoked-inspect"),
+            )
+            .unwrap_err()
+            .code(),
+        CredentialServiceErrorCode::LeaseRevoked
+    );
+    assert_eq!(
+        server
+            .call(
+                CredentialMethod::RefreshToken,
+                request("idem-local-revoked-refresh"),
+            )
+            .unwrap_err()
+            .code(),
+        CredentialServiceErrorCode::LeaseRevoked
+    );
+    assert_eq!(client.inspect_calls.load(Ordering::SeqCst), inspect_calls);
+    assert_eq!(client.refresh_calls.load(Ordering::SeqCst), refresh_calls);
+}
+
+#[test]
 fn client_call_stops_at_request_deadline() {
     let client = Arc::new(NeverClient {
         issue_calls: AtomicUsize::new(0),
@@ -471,6 +859,29 @@ fn client_call_stops_at_request_deadline() {
             .code(),
         CredentialServiceErrorCode::DeadlineExceeded
     );
+    assert_eq!(client.issue_calls.load(Ordering::SeqCst), 1);
+}
+
+#[test]
+fn absolute_request_bounds_are_ordered_against_legacy_relative_session_values() {
+    let now = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_millis() as u64;
+    let (provider, client) = setup();
+    let server = ProviderHarness::new(provider, admitted());
+    let request = CredentialRequest::new(
+        ResourceRef::parse("Credential/work-entra").unwrap(),
+        "operation-absolute",
+        "idem-absolute",
+        now + 10_000,
+        now + 5_000,
+    )
+    .unwrap();
+
+    server
+        .call(CredentialMethod::AcquireToken, request)
+        .unwrap();
     assert_eq!(client.issue_calls.load(Ordering::SeqCst), 1);
 }
 
