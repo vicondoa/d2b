@@ -10,3 +10,5 @@
   path checks remain valid on remote workers.
 - Wire the v3 Cloud Hypervisor and Volume provider crates into d2bd's Bazel
   production and test-support closures.
+- Keep broker runtime tests on OS temporary storage so remote Rust artifacts do
+  not embed the BuildBuddy execroot.

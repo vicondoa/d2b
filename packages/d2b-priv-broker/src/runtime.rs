@@ -12749,7 +12749,7 @@ mod tests {
     #[cfg(not(feature = "layer1-bootstrap"))]
     #[test]
     fn executable_identity_accepts_static_wrapper_exec_target() {
-        let root = tempfile::tempdir_in(env!("CARGO_MANIFEST_DIR")).expect("tempdir");
+        let root = tempfile::tempdir().expect("tempdir");
         let wrapper = root.path().join("cloud-hypervisor");
         let real = root.path().join(".cloud-hypervisor-real");
         fs::write(
