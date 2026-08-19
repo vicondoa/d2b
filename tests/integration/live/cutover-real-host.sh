@@ -109,7 +109,7 @@ repo_binding="$D2B_LIVE_REPO_ID=$D2B_LIVE_REPO_ROOT"
 # U5 validates the strict external recovery attestation, writes only its
 # digest-addressed evidence record, and rejects candidate/evidence drift.
 run_validator "qualified recovery evidence" \
-  cargo run --quiet --locked --manifest-path "$ROOT/packages/Cargo.toml" -p xtask -- \
+  cargo run --quiet --locked --manifest-path "$ROOT/Cargo.toml" -p xtask -- \
     delivery wave recovery-import \
     --snapshot "$D2B_LIVE_SNAPSHOT" \
     --attestation "$D2B_LIVE_RECOVERY_ATTESTATION" \
@@ -130,14 +130,14 @@ run_validator "qualified recovery evidence" \
     --state-dir "$D2B_LIVE_STATE_DIR"
 
 run_validator "candidate seal" \
-  cargo run --quiet --locked --manifest-path "$ROOT/packages/Cargo.toml" -p xtask -- \
+  cargo run --quiet --locked --manifest-path "$ROOT/Cargo.toml" -p xtask -- \
     delivery wave seal \
     --snapshot "$D2B_LIVE_SNAPSHOT" \
     --repo "$repo_binding" \
     --state-dir "$D2B_LIVE_STATE_DIR"
 
 run_validator "current merge eligibility" \
-  cargo run --quiet --locked --manifest-path "$ROOT/packages/Cargo.toml" -p xtask -- \
+  cargo run --quiet --locked --manifest-path "$ROOT/Cargo.toml" -p xtask -- \
     delivery wave merge-eligibility \
     --seal "$D2B_LIVE_SEAL" \
     --repo "$repo_binding" \

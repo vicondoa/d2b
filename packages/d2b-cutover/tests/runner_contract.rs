@@ -13,6 +13,10 @@ fn digest(seed: &str) -> Digest {
     Digest::derive("d2b:test:cutover-runner", seed.as_bytes())
 }
 
+fn ensure_scratch_root() {
+    std::fs::create_dir_all(".scratch").expect("create test scratch root");
+}
+
 #[test]
 fn bootstrap_capability_is_single_use_and_rejects_replay() {
     let operation_id = OperationId::new("op-runner-contract").expect("operation id");
@@ -121,6 +125,7 @@ fn destructive_reset_bootstrap_requires_separate_consent() {
 
 #[test]
 fn runner_socket_authority_distinguishes_admin_hold_and_owner_resume() {
+    ensure_scratch_root();
     let capability = BootstrapCapability::new_with_identity(
         OperationId::new("op-socket-auth").expect("operation id"),
         CandidateId::new("candidate-socket-auth").expect("candidate id"),
@@ -201,6 +206,7 @@ fn runner_socket_authority_distinguishes_admin_hold_and_owner_resume() {
 
 #[test]
 fn journal_is_root_only_and_operation_lock_is_ofd_owned() {
+    ensure_scratch_root();
     let operation_id = OperationId::new("op-journal-contract").expect("operation id");
     let candidate_id = CandidateId::new("candidate-journal-contract").expect("candidate id");
     let revision_plan_id =
@@ -268,6 +274,7 @@ fn journal_is_root_only_and_operation_lock_is_ofd_owned() {
 
 #[test]
 fn runner_socket_survives_a_disconnected_client() {
+    ensure_scratch_root();
     let operator_uid = nix::unistd::geteuid().as_raw();
     let operation_id = OperationId::new("op-client-disconnect").expect("operation id");
     let capability = BootstrapCapability::new_with_identity(

@@ -27,7 +27,7 @@ Validate the candidate through the production delivery stages before any host
 mutation:
 
 ```bash
-cargo run --manifest-path packages/Cargo.toml -p xtask -- delivery wave recovery-import \
+cargo run --manifest-path Cargo.toml -p xtask -- delivery wave recovery-import \
   --snapshot <candidate-snapshot> \
   --attestation <external-attestation> \
   --repo <logical-id>=<checkout-root> \
@@ -46,12 +46,12 @@ cargo run --manifest-path packages/Cargo.toml -p xtask -- delivery wave recovery
   --command <qualified-verifier> \
   --state-dir <delivery-state>
 
-cargo run --manifest-path packages/Cargo.toml -p xtask -- delivery wave seal \
+cargo run --manifest-path Cargo.toml -p xtask -- delivery wave seal \
   --snapshot <candidate-snapshot> \
   --repo <logical-id>=<checkout-root> \
   --state-dir <delivery-state>
 
-cargo run --manifest-path packages/Cargo.toml -p xtask -- delivery wave merge-eligibility \
+cargo run --manifest-path Cargo.toml -p xtask -- delivery wave merge-eligibility \
   --seal <candidate-seal> \
   --repo <logical-id>=<checkout-root> \
   --state-dir <delivery-state>

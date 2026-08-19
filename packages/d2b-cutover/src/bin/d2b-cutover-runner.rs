@@ -1167,6 +1167,7 @@ mod tests {
     }
 
     fn runtime_with_audit(label: &str, audit_sink: Box<dyn AuditSink>) -> Runtime {
+        std::fs::create_dir_all(".scratch").expect("create test scratch root");
         let operation_id = d2b_cutover::OperationId::new("op-audit-boundary").expect("operation");
         let candidate_id = CandidateId::new("candidate-audit-boundary").expect("candidate");
         let revision_plan_id =
@@ -1256,6 +1257,7 @@ mod tests {
         d2b_contracts::host_generation::ApplyHostGenerationHandoff,
         Arc<Mutex<Vec<EffectKind>>>,
     ) {
+        std::fs::create_dir_all(".scratch").expect("create test scratch root");
         let operation_id =
             d2b_cutover::OperationId::new(format!("op-apply-sequence-{label}")).expect("operation");
         let candidate_id =

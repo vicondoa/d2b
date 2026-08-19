@@ -332,6 +332,19 @@ rust_test(
 )
 
 rust_test(
+    name = "policy_effectport_boundary",
+    srcs = ["tests/policy_effectport_boundary.rs"],
+    compile_data = ["Cargo.toml"],
+    data = ["//bazel/checks/rust:repo_policy_sources"],
+    env_inherit = ["D2B_REPO_ROOT"],
+    tags = ["no-remote-cache", "no-sandbox"],
+    visibility = ["//visibility:public"],
+    deps = [
+        ":d2b_contract_tests",
+    ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
+)
+
+rust_test(
     name = "policy_efficiency_ratchet",
     srcs = ["tests/policy_efficiency_ratchet.rs"],
     compile_data = ["Cargo.toml"],
@@ -539,6 +552,19 @@ rust_test(
 )
 
 rust_test(
+    name = "policy_spec_vocabulary",
+    srcs = ["tests/policy_spec_vocabulary.rs"],
+    compile_data = ["Cargo.toml"],
+    data = ["//bazel/checks/rust:repo_policy_sources"],
+    env_inherit = ["D2B_REPO_ROOT"],
+    tags = ["no-remote-cache", "no-sandbox"],
+    visibility = ["//visibility:public"],
+    deps = [
+        ":d2b_contract_tests",
+    ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
+)
+
+rust_test(
     name = "policy_restart_adoption",
     srcs = ["tests/policy_restart_adoption.rs"],
     compile_data = ["Cargo.toml"],
@@ -613,6 +639,32 @@ rust_test(
     deps = [
         ":d2b_contract_tests",
         "//packages/d2b-contracts:d2b_contracts",
+    ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
+)
+
+rust_test(
+    name = "policy_test_determinism",
+    srcs = ["tests/policy_test_determinism.rs"],
+    compile_data = ["Cargo.toml"],
+    data = ["//bazel/checks/rust:repo_policy_sources"],
+    env_inherit = ["D2B_REPO_ROOT"],
+    tags = ["no-remote-cache", "no-sandbox"],
+    visibility = ["//visibility:public"],
+    deps = [
+        ":d2b_contract_tests",
+    ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
+)
+
+rust_test(
+    name = "policy_test_placement",
+    srcs = ["tests/policy_test_placement.rs"],
+    compile_data = ["Cargo.toml"],
+    data = ["//bazel/checks/rust:repo_policy_sources"],
+    env_inherit = ["D2B_REPO_ROOT"],
+    tags = ["no-remote-cache", "no-sandbox"],
+    visibility = ["//visibility:public"],
+    deps = [
+        ":d2b_contract_tests",
     ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
 )
 
@@ -721,6 +773,20 @@ rust_test(
     deps = [
         ":d2b_contract_tests",
         "//packages/d2b-core:d2b_core",
+    ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
+)
+
+rust_test(
+    name = "security_matrix_coverage",
+    srcs = ["tests/security_matrix_coverage.rs"],
+    compile_data = ["Cargo.toml"],
+    data = ["//bazel/checks/rust:repo_policy_sources"],
+    env_inherit = ["D2B_REPO_ROOT"],
+    tags = ["no-remote-cache", "no-sandbox"],
+    visibility = ["//visibility:public"],
+    deps = [
+        ":d2b_contract_tests",
+        "//packages/d2b-contracts:d2b_contracts",
     ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
 )
 

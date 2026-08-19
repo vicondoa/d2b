@@ -61,7 +61,6 @@ fn is_executable(_mode: u32) -> bool {
 fn shell_is_taxonomy_member(name: &str, static_source: &str) -> bool {
     name == "lib.sh"
         || name == "static.sh"
-        || name == "layer1-self-inventory.sh"
         || NON_LAYER1_SHELLS.contains(&name)
         || static_source.contains(&format!("tests/{name}"))
         || static_source.contains(&format!("\"{name}\""))
@@ -72,7 +71,7 @@ fn repository_test_taxonomy_forbids_new_ad_hoc_top_level_shell_gates() {
     let agents = read_repo_file("tests/AGENTS.md");
     assert!(agents.contains("New coverage MUST land as a Layer-1 test"));
     assert!(agents.contains("closed set") && agents.contains("a new `tests/*.sh`"));
-    assert!(repo_path_exists("tests/unit/meta/layer1-self-inventory.sh"));
+    assert!(repo_path_exists("tests/unit/meta/BUILD.bazel"));
 
     let static_source = read_repo_file("tests/static.sh");
     let unknown = top_level_executable_shells()

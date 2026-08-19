@@ -132,10 +132,27 @@ fn bazel_output_user_root() -> PathBuf {
     if let Some(path) = std::env::var_os("D2B_BAZEL_OUTPUT_USER_ROOT") {
         return PathBuf::from(path);
     }
-    repo_root()
+    let root = repo_root();
+    let mut base = root
         .parent()
-        .map(|path| path.join(".d2b-bazel-compat-output"))
-        .unwrap_or_else(|| panic!("repository parent is required for nested Bazel output"))
+        .unwrap_or_else(|| panic!("repository parent is required for nested Bazel output"));
+    while has_cargo_ancestor(base) {
+        base = base
+            .parent()
+            .unwrap_or_else(|| panic!("a workspace-free Bazel output parent is required"));
+    }
+    base.join(".d2b-bazel-compat-output")
+}
+
+fn has_cargo_ancestor(path: &Path) -> bool {
+    let mut current = Some(path);
+    while let Some(candidate) = current {
+        if candidate.join("Cargo.toml").is_file() {
+            return true;
+        }
+        current = candidate.parent();
+    }
+    false
 }
 
 fn bazel_test_tool_path() -> String {

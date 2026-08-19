@@ -177,7 +177,7 @@ impl WaveCommand {
                  [--candidate CANDIDATE_ID] [--state-dir DIR]"
             }
             Self::RecoveryImport => {
-                "cargo run --manifest-path packages/Cargo.toml -p xtask -- delivery wave recovery-import \
+                "cargo run --manifest-path Cargo.toml -p xtask -- delivery wave recovery-import \
                  --snapshot PATH --attestation PATH --repo LOGICAL_ID=CHECKOUT_ROOT \
                  --candidate-id CANDIDATE_ID --commit-oid OID --tree-oid OID \
                  --closure-store-path-sha256 DIGEST --bundle-generation GENERATION \
