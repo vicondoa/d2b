@@ -95,8 +95,19 @@ if [ ! -x "$apt_helper" ]; then
 fi
 
 apt_contract_errors=()
+apt_command_pattern='(^|[^[:alnum:]_-])(apt-get|apt)([^[:alnum:]_-]|$)'
+has_direct_apt() {
+  sed -E '/^[[:space:]]*#/d' \
+    | sed ':a;N;$!ba;s/\\\n//g' \
+    | grep -Eq "$apt_command_pattern"
+}
+
+if ! printf '%s\n' 'sudo apt-\' 'get update' | has_direct_apt; then
+  apt_contract_errors+=("CI APT scan: split apt-get command fixture was not detected")
+fi
+
 while IFS= read -r workflow; do
-  if grep -Ev '^[[:space:]]*#' "$workflow" | grep -Eq '(^|[^[:alnum:]_-])(apt-get|apt)([^[:alnum:]_-]|$)'; then
+  if has_direct_apt < "$workflow"; then
     apt_contract_errors+=("${workflow#"$ROOT"/}: contains a direct apt setup")
   fi
 done < <(
@@ -132,9 +143,12 @@ do
   fi
 done
 
-if grep -Eiq \
-  'allow-?unauthenticated|allowinsecure.repositories|allowdowngrade.*insecure|trusted[[:space:]]*=[[:space:]]*yes|verify-(peer|host)[[:space:]]*=[[:space:]]*false|check-valid-until[[:space:]]*=[[:space:]]*false' \
-  "$apt_helper"
+apt_helper_normalized=$(tr -d '[:space:]_:-' < "$apt_helper" | tr '[:upper:]' '[:lower:]')
+if printf '%s\n' "$apt_helper_normalized" \
+  | grep -Eq 'allowunauthenticated|allowinsecurerepositories|allowdowngradetoinsecurerepositories' \
+  || grep -Eiq \
+    'trusted[[:space:]]*=[[:space:]]*yes|verify-(peer|host)[[:space:]]*=[[:space:]]*false|check-valid-until[[:space:]]*=[[:space:]]*false' \
+    "$apt_helper"
 then
   apt_contract_errors+=("tests/tools/ci-apt-install: disables APT authentication or freshness checks")
 fi

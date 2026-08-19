@@ -55,7 +55,8 @@ sudo cp -p -- "$MIRROR_LIST" "$backup"
 
 cleanup() {
   status=$?
-  trap - EXIT HUP INT TERM
+  trap '' HUP INT TERM
+  trap - EXIT
   if ! sudo mv -f -- "$backup" "$MIRROR_LIST"; then
     status=1
   fi
