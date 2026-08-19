@@ -62,7 +62,7 @@ rust_test(
     compile_data = ["Cargo.toml"],
     data = _fixture_data,
     env = _fixture_env,
-    tags = ["local"],
+    tags = ["no-remote-cache"],
     visibility = ["//visibility:public"],
     deps = [
         ":d2b_contract_tests",
@@ -75,7 +75,7 @@ rust_test(
     compile_data = ["Cargo.toml"],
     data = _fixture_data,
     env = _fixture_env,
-    tags = ["local"],
+    tags = ["no-remote-cache"],
     visibility = ["//visibility:public"],
     deps = [
         ":d2b_contract_tests",
@@ -89,7 +89,7 @@ rust_test(
     compile_data = ["Cargo.toml"],
     data = _fixture_full_data,
     env = _fixture_full_env,
-    tags = ["local"],
+    tags = ["no-remote-cache"],
     visibility = ["//visibility:public"],
     deps = [
         ":d2b_contract_tests",
@@ -103,7 +103,7 @@ rust_test(
     compile_data = ["Cargo.toml"],
     data = _fixture_full_data,
     env = _fixture_full_env,
-    tags = ["local"],
+    tags = ["no-remote-cache"],
     visibility = ["//visibility:public"],
     deps = [
         ":d2b_contract_tests",
@@ -117,7 +117,7 @@ rust_test(
     compile_data = ["Cargo.toml"],
     data = _fixture_data,
     env = _fixture_env,
-    tags = ["local"],
+    tags = ["no-remote-cache"],
     visibility = ["//visibility:public"],
     deps = [":d2b_contract_tests"] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
 )
@@ -128,7 +128,7 @@ rust_test(
     compile_data = ["Cargo.toml"],
     data = _fixture_full_data,
     env = _fixture_full_env,
-    tags = ["local"],
+    tags = ["no-remote-cache"],
     visibility = ["//visibility:public"],
     deps = [
         ":d2b_contract_tests",
@@ -142,7 +142,7 @@ rust_test(
     compile_data = ["Cargo.toml"],
     data = _fixture_full_data,
     env = _fixture_full_env,
-    tags = ["local"],
+    tags = ["no-remote-cache"],
     visibility = ["//visibility:public"],
     deps = [
         ":d2b_contract_tests",
@@ -156,7 +156,7 @@ rust_test(
     compile_data = ["Cargo.toml"],
     data = _fixture_full_data,
     env = _fixture_full_env,
-    tags = ["local"],
+    tags = ["no-remote-cache"],
     visibility = ["//visibility:public"],
     deps = [
         ":d2b_contract_tests",
@@ -170,7 +170,7 @@ rust_test(
     compile_data = ["Cargo.toml"],
     data = _fixture_full_data,
     env = _fixture_full_env,
-    tags = ["local"],
+    tags = ["no-remote-cache"],
     visibility = ["//visibility:public"],
     deps = [
         ":d2b_contract_tests",
@@ -219,7 +219,7 @@ rust_test(
     compile_data = ["Cargo.toml"],
     data = ["//bazel/checks/rust:repo_policy_sources"],
     env_inherit = ["PATH"],
-    tags = ["local"],
+    tags = ["no-remote-cache"],
     visibility = ["//visibility:public"],
     deps = [":d2b_contract_tests"] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
 )
@@ -282,7 +282,7 @@ rust_test(
     ],
     env_inherit = ["D2B_REPO_ROOT", "PATH"],
     rustc_env = {"CARGO_TARGET_TMPDIR": "bazel-test-tmp"},
-    tags = ["local", "no-sandbox"],
+    tags = ["no-remote-cache", "no-sandbox"],
     visibility = ["//visibility:public"],
     deps = [
         ":d2b_contract_tests",
@@ -324,7 +324,7 @@ rust_test(
     ],
     rustc_env = {"CARGO_TARGET_TMPDIR": "bazel-test-tmp"},
     env_inherit = ["D2B_REPO_ROOT"],
-    tags = ["local", "no-sandbox"],
+    tags = ["no-remote-cache", "no-sandbox"],
     visibility = ["//visibility:public"],
     deps = [
         ":d2b_contract_tests",
@@ -443,7 +443,7 @@ rust_test(
     compile_data = ["Cargo.toml"],
     data = ["@rules_rust//rust/toolchain:current_cargo_files"],
     env = {"CARGO": "$(rlocationpath @rules_rust//rust/toolchain:current_cargo_files)"},
-    tags = ["local"],
+    tags = ["no-remote-cache"],
     visibility = ["//visibility:public"],
     deps = [
         ":d2b_contract_tests",
@@ -484,7 +484,7 @@ rust_test(
     compile_data = ["Cargo.toml"],
     data = ["//bazel/checks/rust:repo_policy_sources"],
     env_inherit = ["D2B_REPO_ROOT"],
-    tags = ["local", "no-sandbox"],
+    tags = ["no-remote-cache", "no-sandbox"],
     visibility = ["//visibility:public"],
     deps = [
         ":d2b_contract_tests",
@@ -497,7 +497,7 @@ rust_test(
     compile_data = ["Cargo.toml"],
     data = ["@rules_rust//rust/toolchain:current_cargo_files"],
     env = {"CARGO": "$(rlocationpath @rules_rust//rust/toolchain:current_cargo_files)"},
-    tags = ["local"],
+    tags = ["no-remote-cache"],
     visibility = ["//visibility:public"],
     deps = [
         ":d2b_contract_tests",
@@ -564,7 +564,7 @@ rust_test(
     compile_data = ["Cargo.toml"],
     data = ["//bazel/checks/rust:repo_policy_sources"],
     env_inherit = ["D2B_REPO_ROOT"],
-    tags = ["local"],
+    tags = ["no-remote-cache"],
     visibility = ["//visibility:public"],
     deps = [
         ":d2b_contract_tests",
@@ -597,7 +597,7 @@ rust_test(
     compile_data = ["Cargo.toml"],
     data = _fixture_full_data,
     env = _fixture_full_env,
-    tags = ["local"],
+    tags = ["no-remote-cache"],
     visibility = ["//visibility:public"],
     deps = [
         ":d2b_contract_tests",
@@ -632,7 +632,7 @@ rust_test(
     compile_data = ["Cargo.toml"],
     data = _fixture_data,
     env = _fixture_env,
-    tags = ["local"],
+    tags = ["no-remote-cache"],
     visibility = ["//visibility:public"],
     deps = [":d2b_contract_tests"] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
 )
@@ -643,7 +643,7 @@ rust_test(
     compile_data = ["Cargo.toml"],
     data = _fixture_data,
     env = _fixture_env,
-    tags = ["local"],
+    tags = ["no-remote-cache"],
     visibility = ["//visibility:public"],
     deps = [
         ":d2b_contract_tests",
@@ -678,7 +678,7 @@ rust_test(
     compile_data = ["Cargo.toml"],
     data = _fixture_data,
     env = _fixture_env,
-    tags = ["local"],
+    tags = ["no-remote-cache"],
     visibility = ["//visibility:public"],
     deps = [
         ":d2b_contract_tests",
@@ -702,7 +702,7 @@ rust_test(
     compile_data = ["Cargo.toml"],
     data = _fixture_data,
     env = _fixture_env,
-    tags = ["local"],
+    tags = ["no-remote-cache"],
     visibility = ["//visibility:public"],
     deps = [
         ":d2b_contract_tests",
@@ -716,7 +716,7 @@ rust_test(
     compile_data = ["Cargo.toml"],
     data = _fixture_full_data,
     env = _fixture_full_env,
-    tags = ["local"],
+    tags = ["no-remote-cache"],
     visibility = ["//visibility:public"],
     deps = [
         ":d2b_contract_tests",
@@ -730,7 +730,7 @@ rust_test(
     compile_data = ["Cargo.toml"],
     data = _fixture_data,
     env = _fixture_env,
-    tags = ["local"],
+    tags = ["no-remote-cache"],
     visibility = ["//visibility:public"],
     deps = [
         ":d2b_contract_tests",
@@ -744,7 +744,7 @@ rust_test(
     compile_data = ["Cargo.toml"],
     data = _fixture_data,
     env = _fixture_env,
-    tags = ["local"],
+    tags = ["no-remote-cache"],
     visibility = ["//visibility:public"],
     deps = [
         ":d2b_contract_tests",

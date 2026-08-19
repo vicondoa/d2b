@@ -36,7 +36,7 @@ rust_test(
     name = "d2b_telemetry_test",
     compile_data = ["Cargo.toml"],
     crate = ":d2b_telemetry",
-    tags = ["local"],
+    tags = ["no-remote-cache"],
     deps = [] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
 )
 

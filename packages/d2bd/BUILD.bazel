@@ -181,7 +181,7 @@ rust_test(
         "D2BD_HOST_FIXTURE": "$(rootpath //tests/fixtures:deny-unknown/host-valid.json)",
     },
     rustc_env = {"CARGO_BIN_EXE_d2bd": "$(rootpath :d2bd)"},
-    tags = ["local"],
+    tags = ["no-remote-cache"],
     visibility = ["//visibility:public"],
     deps = [
         ":d2bd_lib_test_support",
@@ -200,7 +200,7 @@ rust_test(
     data = [":d2bd"],
     env = {"CARGO_BIN_EXE_d2bd": "$(rootpath :d2bd)"},
     rustc_env = {"CARGO_BIN_EXE_d2bd": "$(rootpath :d2bd)"},
-    tags = ["local"],
+    tags = ["no-remote-cache"],
     visibility = ["//visibility:public"],
     deps = [
     ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
@@ -217,7 +217,7 @@ rust_test(
     data = [":d2bd"],
     env = {"CARGO_BIN_EXE_d2bd": "$(rootpath :d2bd)"},
     rustc_env = {"CARGO_BIN_EXE_d2bd": "$(rootpath :d2bd)"},
-    tags = ["local"],
+    tags = ["no-remote-cache"],
     visibility = ["//visibility:public"],
     deps = [
     ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
@@ -240,7 +240,7 @@ rust_test(
         "D2B_TEST_SCRUB_SHELL_ENVIRONMENT": "$(rootpath //:tests/tools/scrub-shell-environment)",
     },
     rustc_env = {"CARGO_BIN_EXE_d2bd": "$(rootpath :d2bd)"},
-    tags = ["local"],
+    tags = ["no-remote-cache"],
     visibility = ["//visibility:public"],
     deps = [
     ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
@@ -253,7 +253,7 @@ rust_test(
     data = [":d2bd"],
     env = {"CARGO_BIN_EXE_d2bd": "$(rootpath :d2bd)"},
     rustc_env = {"CARGO_BIN_EXE_d2bd": "$(rootpath :d2bd)"},
-    tags = ["local"],
+    tags = ["no-remote-cache"],
     visibility = ["//visibility:public"],
     deps = [] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
 )
@@ -269,7 +269,7 @@ rust_test(
     data = [":d2bd"],
     env = {"CARGO_BIN_EXE_d2bd": "$(rootpath :d2bd)"},
     rustc_env = {"CARGO_BIN_EXE_d2bd": "$(rootpath :d2bd)"},
-    tags = ["local"],
+    tags = ["no-remote-cache"],
     visibility = ["//visibility:public"],
     deps = [
         ":d2bd_lib_test_support",
@@ -288,7 +288,7 @@ rust_test(
     data = [":d2bd"],
     env = {"CARGO_BIN_EXE_d2bd": "$(rootpath :d2bd)"},
     rustc_env = {"CARGO_BIN_EXE_d2bd": "$(rootpath :d2bd)"},
-    tags = ["local"],
+    tags = ["no-remote-cache"],
     visibility = ["//visibility:public"],
     deps = [
     ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
@@ -306,7 +306,7 @@ rust_test(
     env = {"CARGO_BIN_EXE_d2bd": "$(rootpath :d2bd)"},
     env_inherit = ["D2B_REPO_ROOT", "PATH"],
     rustc_env = {"CARGO_BIN_EXE_d2bd": "$(rootpath :d2bd)"},
-    tags = ["local"],
+    tags = ["no-remote-cache"],
     visibility = ["//visibility:public"],
 )
 
@@ -327,7 +327,7 @@ rust_test(
         "D2BD_HOST_FIXTURE": "$(rootpath //tests/fixtures:deny-unknown/host-valid.json)",
     },
     rustc_env = {"CARGO_BIN_EXE_d2bd": "$(rootpath :d2bd)"},
-    tags = ["local"],
+    tags = ["no-remote-cache"],
     visibility = ["//visibility:public"],
     deps = [
     ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),

@@ -174,6 +174,14 @@ fn committed_profiles_share_authentication_and_worker_policy() {
         !wrapper.contains("--dispatch-evidence"),
         "BEP file presence alone must not suppress pre-dispatch fallback"
     );
+    assert!(
+        wrapper.contains("command_flags+=(--shell_executable=/bin/bash)"),
+        "remote Bazel actions must use the worker's shell path"
+    );
+    assert!(
+        wrapper.contains("/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:$test_path"),
+        "remote test runners must receive worker-standard PATH entries"
+    );
 }
 
 #[test]

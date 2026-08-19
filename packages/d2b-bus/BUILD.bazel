@@ -118,7 +118,7 @@ rust_test(
         "tests/public_mint_surface.rs",
     ],
     data = ["//bazel/checks/rust:cargo_workspace_sources"],
-    tags = ["local"],
+    tags = ["no-remote-cache"],
     visibility = ["//visibility:public"],
     deps = [
     ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
