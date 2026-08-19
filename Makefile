@@ -617,15 +617,7 @@ heavy-lane-host-integration: heavy-lane-guard
 	if [ ! -e /dev/kvm ]; then \
 	echo "test-host-integration: /dev/kvm absent - runNixOSTest will fall back to slow TCG emulation"; \
 	fi; \
-	cache_dir="$${SCCACHE_DIR:-$$HOME/.cache/d2b-sccache}"; \
-	mkdir -p "$$cache_dir"; \
-	chmod 1777 "$$cache_dir"; \
-	cache_dir="$$(cd "$$cache_dir" && pwd -P)"; \
-	export SCCACHE_DIR="$$cache_dir"; \
-	echo "test-host-integration: sccache cache: $$cache_dir"; \
 	root="$$(pwd)"; \
-	export D2B_HOST_RUNTIME_PATH="$$root/.scratch/host-int-sccache/no-host-runtime.json"; \
-	rm -f "$$D2B_HOST_RUNTIME_PATH"; \
 	names="$$(nix eval --raw --impure --no-warn-dirty --expr "builtins.concatStringsSep \" \" (builtins.attrNames (builtins.getFlake \"git+file://$$root\").vmChecks.$$system)")"; \
 	if [ -z "$$names" ]; then \
 	echo "test-host-integration: no vmChecks present"; \
@@ -636,8 +628,20 @@ heavy-lane-host-integration: heavy-lane-guard
 	for name in $$names; do \
 	set -- "$$@" ".#vmChecks.$$system.$$name"; \
 	done; \
+	case "$${D2B_HOST_SCCACHE:-}" in \
+	1|yes|true) \
+	cache_dir="$${SCCACHE_DIR:-$${XDG_CACHE_HOME:-$$HOME/.cache}/d2b-sccache}"; \
+	mkdir -p "$$cache_dir"; \
+	chmod 0700 "$$cache_dir"; \
+	cache_dir="$$(cd "$$cache_dir" && pwd -P)"; \
+	echo "test-host-integration: sccache cache: $$cache_dir -> /var/cache/d2b-sccache"; \
+	echo "==> nix build --option extra-sandbox-paths /var/cache/d2b-sccache=$$cache_dir $$*"; \
+	nix build --option extra-sandbox-paths "/var/cache/d2b-sccache=$$cache_dir" --no-link --print-build-logs "$$@";; \
+	*) \
+	echo "test-host-integration: sccache disabled (set D2B_HOST_SCCACHE=1 to enable)"; \
 	echo "==> nix build $$*"; \
-	nix build --impure --option extra-sandbox-paths "$$cache_dir" --no-link --print-build-logs "$$@"
+	nix build --no-link --print-build-logs "$$@";; \
+	esac
 
 ## test-hardware - G-hw: real GPU/YubiKey/hardware-TPM passthrough + full
 ## microVM boot. NixOS host WITH the devices only; CI cannot run this.

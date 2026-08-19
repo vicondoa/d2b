@@ -126,19 +126,16 @@ let
       && [ -d "''${SCCACHE_DIR}" ] \
       && [ -w "''${SCCACHE_DIR}" ] \
       && command -v sccache >/dev/null 2>&1; then
-      # Keep entries writable across Nix's shared build users.
-      umask 0002
       exec sccache "$@"
     fi
     exec "$@"
   '';
 
-  # The wrapper keeps CI and ordinary sandbox builds hermetic when no cache
-  # bind mount is available, while host-integration builds can opt into the
-  # persistent cache by passing SCCACHE_DIR and extra-sandbox-paths. The
-  # host lane evaluates with --impure so this path becomes a fixed derivation
-  # environment value; pure CI evaluation leaves it empty and falls back.
-  sccacheDir = builtins.getEnv "SCCACHE_DIR";
+  # Constant sandbox path so pure CI and host-int realize the same host-tool
+  # derivations. The directory is absent in the default sandbox, so the
+  # wrapper falls back to rustc. Host-int may bind-mount an owner-private
+  # cache here when D2B_HOST_SCCACHE=1.
+  sccacheDir = "/var/cache/d2b-sccache";
   commonBuildArgs = {
     strictDeps = true;
     cargoExtraArgs = "--locked";
