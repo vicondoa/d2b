@@ -61,6 +61,7 @@ rust_test(
     name = "d2b_resource_store_redb_test",
     compile_data = ["Cargo.toml"],
     crate = ":d2b_resource_store_redb",
+    args = ["--test-threads=1"],
     tags = ["no-remote-cache"],
     deps = [
     ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
