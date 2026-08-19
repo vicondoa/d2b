@@ -14,7 +14,8 @@ readonly APT_RETRIES=2
 if [ "${1:-}" = "--self-test" ]; then
   fixture="${AZURE_MIRROR}/$(printf '\t')priority:1"
   rewritten=$(printf '%s\n' "$fixture" | sed -E "s#^${AZURE_MIRROR//./\\.}/?#${CANONICAL_MIRROR}#")
-  if ! printf '%s\n' "$rewritten" | grep -Eq "$CANONICAL_MIRROR_REGEX"; then
+  expected="${CANONICAL_MIRROR}$(printf '\t')priority:1"
+  if [ "$rewritten" != "$expected" ]; then
     echo "APT mirror rewrite did not preserve runner metadata" >&2
     exit 1
   fi
@@ -54,11 +55,8 @@ sudo cp -p -- "$MIRROR_LIST" "$backup"
 
 cleanup() {
   status=$?
-  trap - EXIT
-  if ! sudo cp -p -- "$backup" "$MIRROR_LIST"; then
-    status=1
-  fi
-  if ! sudo rm -f -- "$backup"; then
+  trap - EXIT HUP INT TERM
+  if ! sudo mv -f -- "$backup" "$MIRROR_LIST"; then
     status=1
   fi
   exit "$status"

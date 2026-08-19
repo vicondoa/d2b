@@ -96,7 +96,7 @@ fi
 
 apt_contract_errors=()
 while IFS= read -r workflow; do
-  if grep -Ev '^[[:space:]]*#' "$workflow" | grep -Eq '(^|[^[:alnum:]_-])(apt-get|apt)([[:space:]]|$)'; then
+  if grep -Ev '^[[:space:]]*#' "$workflow" | grep -Eq '(^|[^[:alnum:]_-])(apt-get|apt)([^[:alnum:]_-]|$)'; then
     apt_contract_errors+=("${workflow#"$ROOT"/}: contains a direct apt setup")
   fi
 done < <(
@@ -132,7 +132,10 @@ do
   fi
 done
 
-if grep -Eq 'allow-unauthenticated|trusted=yes|Verify-Peer=false|Check-Valid-Until=false' "$apt_helper"; then
+if grep -Eiq \
+  'allow-?unauthenticated|allowinsecure.repositories|allowdowngrade.*insecure|trusted[[:space:]]*=[[:space:]]*yes|verify-(peer|host)[[:space:]]*=[[:space:]]*false|check-valid-until[[:space:]]*=[[:space:]]*false' \
+  "$apt_helper"
+then
   apt_contract_errors+=("tests/tools/ci-apt-install: disables APT authentication or freshness checks")
 fi
 
