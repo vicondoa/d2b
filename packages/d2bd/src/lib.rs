@@ -4829,18 +4829,17 @@ fn ensure_guest_networks_reconciled(
                 &network_operation_id,
                 "Pending",
             ))?;
-            let network_ready =
-                reconcile_wave6_network_effect(Wave6NetworkEffectRequest {
-                    state,
-                    peer,
-                    runtime,
-                    resolver,
-                    resource_ref: &network_ref,
-                    uid: &network_uid,
-                    resource: &network,
-                    operation_id: &network_operation_id,
-                    ensure_host_base: false,
-                })?;
+            let network_ready = reconcile_wave6_network_effect(Wave6NetworkEffectRequest {
+                state,
+                peer,
+                runtime,
+                resolver,
+                resource_ref: &network_ref,
+                uid: &network_uid,
+                resource: &network,
+                operation_id: &network_operation_id,
+                ensure_host_base: false,
+            })?;
             if !network_ready {
                 return Err(resource_runtime::ResourceRuntimeError::ProviderPathUnavailable);
             }
