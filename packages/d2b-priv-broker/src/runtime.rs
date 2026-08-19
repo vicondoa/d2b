@@ -12755,7 +12755,10 @@ mod tests {
         fs::write(&real, b"trusted executable").expect("write executable");
 
         assert!(executable_paths_match(&real, &wrapper));
-        assert!(!executable_paths_match(&root.path().join("other"), &wrapper));
+        assert!(!executable_paths_match(
+            &root.path().join("other"),
+            &wrapper
+        ));
     }
 
     #[cfg(not(feature = "layer1-bootstrap"))]

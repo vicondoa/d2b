@@ -4590,17 +4590,17 @@ fn dispatch_wave6_resource_reconcile(
                 operation_id,
                 "Pending",
             ))?;
-            ready = reconcile_wave6_network_effect(
+            ready = reconcile_wave6_network_effect(Wave6NetworkEffectRequest {
                 state,
                 peer,
                 runtime,
-                &resolver,
-                &resource_ref,
-                &uid,
-                &resource,
+                resolver: &resolver,
+                resource_ref: &resource_ref,
+                uid: &uid,
+                resource: &resource,
                 operation_id,
-                true,
-            )?;
+                ensure_host_base: true,
+            })?;
             "network-bridge-reconciled"
         }
         "Device" => {
@@ -4829,17 +4829,18 @@ fn ensure_guest_networks_reconciled(
                 &network_operation_id,
                 "Pending",
             ))?;
-            let network_ready = reconcile_wave6_network_effect(
-                state,
-                peer,
-                runtime,
-                resolver,
-                &network_ref,
-                &network_uid,
-                &network,
-                &network_operation_id,
-                false,
-            )?;
+            let network_ready =
+                reconcile_wave6_network_effect(Wave6NetworkEffectRequest {
+                    state,
+                    peer,
+                    runtime,
+                    resolver,
+                    resource_ref: &network_ref,
+                    uid: &network_uid,
+                    resource: &network,
+                    operation_id: &network_operation_id,
+                    ensure_host_base: false,
+                })?;
             if !network_ready {
                 return Err(resource_runtime::ResourceRuntimeError::ProviderPathUnavailable);
             }
@@ -4848,17 +4849,32 @@ fn ensure_guest_networks_reconciled(
     Ok(())
 }
 
-fn reconcile_wave6_network_effect(
-    state: &ServerState,
-    peer: &PeerIdentity,
-    runtime: &resource_runtime::ZoneResourceRuntime,
-    resolver: &BundleResolver,
-    resource_ref: &ResourceRef,
-    uid: &ResourceUid,
-    resource: &Value,
-    operation_id: &str,
+struct Wave6NetworkEffectRequest<'a> {
+    state: &'a ServerState,
+    peer: &'a PeerIdentity,
+    runtime: &'a resource_runtime::ZoneResourceRuntime,
+    resolver: &'a BundleResolver,
+    resource_ref: &'a ResourceRef,
+    uid: &'a ResourceUid,
+    resource: &'a Value,
+    operation_id: &'a str,
     ensure_host_base: bool,
+}
+
+fn reconcile_wave6_network_effect(
+    request: Wave6NetworkEffectRequest<'_>,
 ) -> Result<bool, resource_runtime::ResourceRuntimeError> {
+    let Wave6NetworkEffectRequest {
+        state,
+        peer,
+        runtime,
+        resolver,
+        resource_ref,
+        uid,
+        resource,
+        operation_id,
+        ensure_host_base,
+    } = request;
     let caller_role = broker_caller_role_for_peer(peer);
     if ensure_host_base {
         let base_response = dispatch_broker_request_as(
