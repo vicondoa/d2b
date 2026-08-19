@@ -1,0 +1,333 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "definitions": {
+    "AttestationResult": {
+      "description": "The only accepted final attestation result.",
+      "oneOf": [
+        {
+          "description": "The recovery point qualifies for delivery.",
+          "enum": [
+            "passed"
+          ],
+          "type": "string"
+        }
+      ]
+    },
+    "GitObjectId": {
+      "description": "A full lowercase Git object ID.",
+      "type": "string"
+    },
+    "RecoveryPointKind": {
+      "description": "Recovery point kind accepted by the attestation.",
+      "oneOf": [
+        {
+          "description": "An external full-host snapshot.",
+          "enum": [
+            "full-host-snapshot"
+          ],
+          "type": "string"
+        },
+        {
+          "description": "An external full-host backup.",
+          "enum": [
+            "full-host-backup"
+          ],
+          "type": "string"
+        }
+      ]
+    },
+    "RecoveryQualification": {
+      "additionalProperties": false,
+      "description": "Closed qualification booleans for a full-host recovery point.",
+      "properties": {
+        "affectedArtifactInventoryCovered": {
+          "const": true,
+          "description": "The exact preview inventory is covered.",
+          "type": "boolean"
+        },
+        "bootAndSystemStateCovered": {
+          "const": true,
+          "description": "Boot and system state are covered.",
+          "type": "boolean"
+        },
+        "preservedIdentityStateCovered": {
+          "const": true,
+          "description": "Preserved identity state is covered.",
+          "type": "boolean"
+        },
+        "readOnlyUntilExpiry": {
+          "const": true,
+          "description": "The point remains read-only through expiry.",
+          "type": "boolean"
+        },
+        "sameHostRestoreTarget": {
+          "const": true,
+          "description": "The point restores to this same host.",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "affectedArtifactInventoryCovered",
+        "bootAndSystemStateCovered",
+        "preservedIdentityStateCovered",
+        "readOnlyUntilExpiry",
+        "sameHostRestoreTarget"
+      ],
+      "type": "object"
+    },
+    "Sha256Digest": {
+      "description": "A lowercase SHA-256 digest without a raw locator or path.",
+      "type": "string"
+    },
+    "VerificationMethod": {
+      "description": "External verification mechanism accepted by the attestation.",
+      "oneOf": [
+        {
+          "description": "Snapshot provider readback.",
+          "enum": [
+            "snapshot-readback"
+          ],
+          "type": "string"
+        },
+        {
+          "description": "Backup provider verification.",
+          "enum": [
+            "backup-verify"
+          ],
+          "type": "string"
+        }
+      ]
+    },
+    "VerificationResult": {
+      "description": "The only accepted verification result.",
+      "oneOf": [
+        {
+          "description": "The external provider verified the point.",
+          "enum": [
+            "passed"
+          ],
+          "type": "string"
+        }
+      ]
+    }
+  },
+  "description": "The strict external recovery-point attestation.",
+  "properties": {
+    "artifactKind": {
+      "const": "d2b-recovery-point-attestation",
+      "description": "Fixed artifact kind.",
+      "type": "string"
+    },
+    "attestedAtUnix": {
+      "description": "Time the operator attested to the point.",
+      "format": "uint64",
+      "maximum": 253402300799,
+      "minimum": 0.0,
+      "type": "integer"
+    },
+    "bundleGeneration": {
+      "description": "Opaque bundle generation identity.",
+      "maxLength": 128,
+      "minLength": 1,
+      "pattern": "^[^\\s/\\\\\\u0000-\\u001f]+$",
+      "type": "string"
+    },
+    "candidateId": {
+      "description": "Candidate content identity.",
+      "type": "string"
+    },
+    "capturedAtUnix": {
+      "description": "Time the external point was captured.",
+      "format": "uint64",
+      "maximum": 253402300799,
+      "minimum": 0.0,
+      "type": "integer"
+    },
+    "closureStorePathSha256": {
+      "allOf": [
+        {
+          "$ref": "#/definitions/Sha256Digest"
+        }
+      ],
+      "description": "Digest of the pinned closure store path, never the path itself.",
+      "pattern": "^[a-f0-9]{64}$"
+    },
+    "commitOid": {
+      "allOf": [
+        {
+          "$ref": "#/definitions/GitObjectId"
+        }
+      ],
+      "description": "Exact release commit.",
+      "pattern": "^(?:[a-f0-9]{40}|[a-f0-9]{64})$"
+    },
+    "expiresAtUnix": {
+      "description": "Exact derived expiry.",
+      "format": "uint64",
+      "maximum": 253402300799,
+      "minimum": 0.0,
+      "type": "integer"
+    },
+    "hostIdentitySha256": {
+      "allOf": [
+        {
+          "$ref": "#/definitions/Sha256Digest"
+        }
+      ],
+      "description": "Digest of the same-host identity.",
+      "pattern": "^[a-f0-9]{64}$"
+    },
+    "operatorSubjectSha256": {
+      "allOf": [
+        {
+          "$ref": "#/definitions/Sha256Digest"
+        }
+      ],
+      "description": "Digest of the operator subject.",
+      "pattern": "^[a-f0-9]{64}$"
+    },
+    "previewSha256": {
+      "allOf": [
+        {
+          "$ref": "#/definitions/Sha256Digest"
+        }
+      ],
+      "description": "Digest of the canonical preview bytes.",
+      "pattern": "^[a-f0-9]{64}$"
+    },
+    "previewedAtUnix": {
+      "description": "Time the preview was produced.",
+      "format": "uint64",
+      "maximum": 253402300799,
+      "minimum": 0.0,
+      "type": "integer"
+    },
+    "program": {
+      "description": "Release program identifier.",
+      "enum": [
+        "ADR046",
+        "d2b-3.0"
+      ],
+      "type": "string"
+    },
+    "qualification": {
+      "allOf": [
+        {
+          "$ref": "#/definitions/RecoveryQualification"
+        }
+      ],
+      "description": "Closed qualification set."
+    },
+    "recoveryPointKind": {
+      "allOf": [
+        {
+          "$ref": "#/definitions/RecoveryPointKind"
+        }
+      ],
+      "description": "External recovery point kind."
+    },
+    "recoveryPointLocatorSha256": {
+      "allOf": [
+        {
+          "$ref": "#/definitions/Sha256Digest"
+        }
+      ],
+      "description": "Digest of the opaque external locator.",
+      "pattern": "^[a-f0-9]{64}$"
+    },
+    "restoreInstructionsSha256": {
+      "allOf": [
+        {
+          "$ref": "#/definitions/Sha256Digest"
+        }
+      ],
+      "description": "Digest of the exact restore instructions.",
+      "pattern": "^[a-f0-9]{64}$"
+    },
+    "result": {
+      "allOf": [
+        {
+          "$ref": "#/definitions/AttestationResult"
+        }
+      ],
+      "const": "passed",
+      "description": "Final attestation outcome."
+    },
+    "retentionUntilUnix": {
+      "description": "Read-only retention deadline.",
+      "format": "uint64",
+      "maximum": 253402300799,
+      "minimum": 0.0,
+      "type": "integer"
+    },
+    "schemaVersion": {
+      "const": 1,
+      "description": "Fixed version of the external attestation.",
+      "format": "uint32",
+      "minimum": 0.0,
+      "type": "integer"
+    },
+    "treeOid": {
+      "allOf": [
+        {
+          "$ref": "#/definitions/GitObjectId"
+        }
+      ],
+      "description": "Exact release tree.",
+      "pattern": "^(?:[a-f0-9]{40}|[a-f0-9]{64})$"
+    },
+    "verificationMethod": {
+      "allOf": [
+        {
+          "$ref": "#/definitions/VerificationMethod"
+        }
+      ],
+      "description": "External verification method."
+    },
+    "verificationResult": {
+      "allOf": [
+        {
+          "$ref": "#/definitions/VerificationResult"
+        }
+      ],
+      "const": "passed",
+      "description": "External verification outcome."
+    },
+    "verifiedAtUnix": {
+      "description": "Time the point was externally verified.",
+      "format": "uint64",
+      "maximum": 253402300799,
+      "minimum": 0.0,
+      "type": "integer"
+    }
+  },
+  "required": [
+    "artifactKind",
+    "attestedAtUnix",
+    "bundleGeneration",
+    "candidateId",
+    "capturedAtUnix",
+    "closureStorePathSha256",
+    "commitOid",
+    "expiresAtUnix",
+    "hostIdentitySha256",
+    "operatorSubjectSha256",
+    "previewSha256",
+    "previewedAtUnix",
+    "program",
+    "qualification",
+    "recoveryPointKind",
+    "recoveryPointLocatorSha256",
+    "restoreInstructionsSha256",
+    "result",
+    "retentionUntilUnix",
+    "schemaVersion",
+    "treeOid",
+    "verificationMethod",
+    "verificationResult",
+    "verifiedAtUnix"
+  ],
+  "title": "RecoveryAttestation",
+  "type": "object"
+}
