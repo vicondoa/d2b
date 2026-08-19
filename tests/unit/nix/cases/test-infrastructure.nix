@@ -52,6 +52,10 @@ let
     "docs/reference/schemas/v3/providers/transport-azure-relay.transport-settings.json"
     "docs/reference/schemas/v3/providers/transport-vsock.transport-binding.json"
   ];
+  packagesSrc = d2bLib.cleanRustPackagesSource flakeRoot;
+  hostSourceBlock =
+    builtins.head
+      (lib.splitString "  cargoLock = ../Cargo.lock;" rustHostToolsSource);
   shardEntryLines = builtins.filter
     (line: lib.hasInfix ''"test-infrastructure.nix"'' line)
     (lib.splitString "\n" flakeSource);
@@ -118,10 +122,19 @@ in
       flakeSource = lib.all (path: lib.hasInfix path flakeSource) providerSchemaPaths;
       rustHostToolsSource =
         lib.all (path: lib.hasInfix path rustHostToolsSource) providerSchemaPaths;
+      filteredSourceHasSchemas =
+        lib.all
+          (path: builtins.pathExists (packagesSrc + "/${path}"))
+          providerSchemaPaths;
+      hostSourceDoesNotCopyFilteredSchemas =
+        !(lib.hasInfix ''mkdir -p "$out/docs/reference/schemas/v3/providers"'' hostSourceBlock)
+        && !(lib.hasInfix "cp \${../docs/reference/schemas/v3/providers/" hostSourceBlock);
     };
     expected = {
       flakeSource = true;
       rustHostToolsSource = true;
+      filteredSourceHasSchemas = true;
+      hostSourceDoesNotCopyFilteredSchemas = true;
     };
   };
 

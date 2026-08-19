@@ -7,11 +7,6 @@ let
   hostSource = pkgs.runCommand "d2b-provider-rust-src" { } ''
     mkdir -p "$out"
     cp -r ${packagesSrc}/. "$out/"
-    mkdir -p "$out/docs/reference/schemas/v3/providers"
-    cp ${../docs/reference/schemas/v3/providers/transport-azure-relay.transport-settings.json} \
-      "$out/docs/reference/schemas/v3/providers/transport-azure-relay.transport-settings.json"
-    cp ${../docs/reference/schemas/v3/providers/transport-vsock.transport-binding.json} \
-      "$out/docs/reference/schemas/v3/providers/transport-vsock.transport-binding.json"
   '';
   cargoLock = ../Cargo.lock;
   # Keep the deps-only derivation keyed to manifests, locks, and Cargo config,
