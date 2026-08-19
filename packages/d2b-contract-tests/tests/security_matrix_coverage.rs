@@ -174,3 +174,147 @@ fn minijail_process_ownership_has_parent_reap_and_poll_only_evidence() {
     assert!(adapter.contains("broker_backend_uses_the_production_spawn_wire_and_pidfd_handoff"));
     assert!(adapter.contains("WaitReapOwner::Local"));
 }
+
+#[test]
+fn cutover_reset_contract_rows_have_native_evidence_without_claiming_live_execution() {
+    let contract_evidence: &[(&str, &[&str])] = &[
+        (
+            "packages/d2b-cutover/src/runner.rs",
+            &[
+                "pub enum RunnerPeer",
+                "RUNNER_BOOTSTRAP_FD",
+                "PeerCredentials",
+                "foreign ownership",
+            ],
+        ),
+        (
+            "packages/d2b-cutover/tests/runner_contract.rs",
+            &[
+                "bootstrap_capability_is_single_use_and_rejects_replay",
+                "runner_socket_authority_distinguishes_admin_hold_and_owner_resume",
+                "journal_is_root_only_and_operation_lock_is_ofd_owned",
+            ],
+        ),
+        (
+            "packages/d2bd/src/cutover.rs",
+            &[
+                "LaunchCutoverRunner",
+                "authorize_bound_operator",
+                "bootstrap_fd_index",
+                "cutover preview digest is stale",
+            ],
+        ),
+        (
+            "packages/d2b-cutover/tests/crash_recovery.rs",
+            &[
+                "journal_detects_bit_flip_truncation_reorder_and_request_mismatch",
+                "replay_classes_repeat_reopen_or_quarantine_without_creating_identity",
+                "ForeignOwner",
+            ],
+        ),
+        (
+            "packages/d2b-cutover/tests/state_machine.rs",
+            &[
+                "hold_waits_for_current_atomic_step_and_resume_reuses_operation",
+                "audit_failure_does_not_advance_or_clear_started_effect",
+                "phase_four_rollback_preserves_sources_and_quarantines_staged_destination",
+                "phase_five_rollback_is_refused",
+                "phase_ten_requires_distinct_consent_and_closes_once",
+            ],
+        ),
+        (
+            "packages/d2b-cutover/tests/reset_scope.rs",
+            &[
+                "cutover_capability_does_not_authorize_scoped_reset_effects",
+                "consent_is_single_use_and_cannot_transfer_to_a_new_operation",
+                "reset_request_cannot_be_constructed_from_host_wide_inventory",
+            ],
+        ),
+        (
+            "packages/d2b-contracts/tests/cutover_wire.rs",
+            &[
+                "launch_runner_broker_request_has_no_spawn_runner_shape",
+                "reset_authority_is_distinct_from_cutover_authority",
+            ],
+        ),
+        (
+            "packages/d2b-cutover/src/reset.rs",
+            &[
+                "EffectAllowlist::for_operation",
+                "CutoverFinalization",
+                "ScopedZoneReset",
+            ],
+        ),
+        (
+            "packages/d2b-cutover/src/consent.rs",
+            &["RECOVERY_DOMAIN", "recovery_digest", "FinalizationConsent"],
+        ),
+        (
+            "packages/xtask/src/delivery/recovery.rs",
+            &[
+                "RECOVERY_LOCATOR_DOMAIN",
+                "digest_recovery_locator",
+                "recovery_point_locator_sha256",
+                "recovery_import_uses_existing_evidence_and_is_write_once",
+            ],
+        ),
+        (
+            "packages/d2b-cutover/src/finalize.rs",
+            &[
+                "require_cutover_finalization",
+                "ResetForbidden",
+                "FINALIZATION_PHASE",
+            ],
+        ),
+        (
+            "packages/d2b-cutover/src/bin/d2b-cutover-runner.rs",
+            &[
+                "RunnerCommand::Hold",
+                "RunnerCommand::Resume",
+                "request_hold",
+                "close(fd)",
+                "AuditEvidence::unavailable",
+                "RunnerSocketError::AuditUnavailable",
+            ],
+        ),
+        (
+            "packages/d2b-priv-broker/src/runtime.rs",
+            &[
+                "CAPABILITIES",
+                "LaunchCutoverRunner",
+                "caller_role_is_admin",
+                "requires exactly one bootstrap fd at index 0",
+                "launch_cutover_runner",
+            ],
+        ),
+        (
+            "packages/d2b-contract-tests/tests/policy_daemon.rs",
+            &["daemon_only_unit_census_is_exact_and_providers_do_not_declare_services"],
+        ),
+    ];
+
+    for (path, markers) in contract_evidence {
+        let source = read_repo_file(path);
+        for marker in markers.iter().copied() {
+            assert!(
+                source.contains(marker),
+                "{path} is missing cutover/reset contract marker {marker}"
+            );
+        }
+    }
+
+    let runner = read_repo_file("packages/d2b-cutover/src/bin/d2b-cutover-runner.rs");
+    assert!(
+        runner.contains("AuditEvidence::unavailable"),
+        "U4 live effect execution must remain fail-closed while its audit boundary is blocked"
+    );
+    assert!(
+        !runner.contains("ApplyHostGenerationHandoff"),
+        "U2 must not claim the unfinished U4 live generation handoff"
+    );
+    let u4_changelog = read_repo_file("changelog.d/2026-08-19-u4-cutover-runtime.md");
+    assert!(
+        u4_changelog.contains("trusted Nix registration remains coupled to PR #440"),
+        "U4's live/runtime dependency must remain visibly pending"
+    );
+}

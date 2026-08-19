@@ -965,3 +965,135 @@ fn interaction_payload_surfaces_use_redacted_debug_and_closed_outputs() {
         );
     }
 }
+
+#[test]
+fn credential_zero_secret_coverage_covers_merged_provider_surfaces() {
+    let provider_canaries: &[(&str, &[&str])] = &[
+        (
+            "packages/d2b-provider-credential-entra/tests/canary.rs",
+            &[
+                "process_unique_entra_secret_and_identity_canaries_are_absent_from_rendered_surfaces",
+                "placement_debug",
+                "format!(\"{ambiguous_error:?}\")",
+                "ambiguous_error.to_string()",
+            ],
+        ),
+        (
+            "packages/d2b-provider-credential-managed-identity/tests/canary.rs",
+            &[
+                "process_unique_managed_identity_canaries_are_absent_from_rendered_surfaces",
+                "placement_debug",
+                "format!(\"{ambiguous_error:?}\")",
+                "ambiguous_error.to_string()",
+            ],
+        ),
+        (
+            "packages/d2b-provider-credential-secret-service/tests/canary.rs",
+            &[
+                "process_unique_secret_service_canaries_are_absent_from_every_rendered_surface",
+                "config_debug",
+                "placement_debug",
+                "session_debug",
+                "format!(\"{ambiguous_error:?}\")",
+            ],
+        ),
+    ];
+    for (path, markers) in provider_canaries {
+        let source = read_repo_file(path);
+        for marker in markers.iter().copied() {
+            assert!(
+                source.contains(marker),
+                "{path} is missing zero-secret canary marker {marker}"
+            );
+        }
+    }
+
+    for (path, markers) in [
+        (
+            "packages/d2b-provider-credential-entra/src/audit.rs",
+            [
+                "process_unique_token_and_identity_canaries_never_render",
+                "CredentialAuditDigest::after_authorization",
+            ],
+        ),
+        (
+            "packages/d2b-provider-credential-entra/src/telemetry.rs",
+            [
+                "process_unique_entra_canary_is_rejected_from_closed_values",
+                "validate_collector_fields",
+            ],
+        ),
+    ] {
+        let source = read_repo_file(path);
+        for marker in markers {
+            assert!(
+                source.contains(marker),
+                "{path} is missing Credential observability marker {marker}"
+            );
+        }
+    }
+
+    let managed_identity_binding =
+        read_repo_file("packages/d2b-provider-credential-managed-identity/tests/binding.rs");
+    for marker in [
+        "checkpoints_restore_is_idempotent_and_refreshes_without_secret_material",
+        "checkpoint_debug",
+        "checkpoint-acquire",
+        "Credential/aca-relay-mi",
+    ] {
+        assert!(
+            managed_identity_binding.contains(marker),
+            "managed-identity recovery redaction lost marker {marker}"
+        );
+    }
+
+    let entra_recovery =
+        read_repo_file("packages/d2b-provider-credential-entra/tests/lifecycle.rs");
+    assert!(
+        entra_recovery
+            .contains("ambiguous_replacement_keeps_the_previous_lease_until_explicit_retry"),
+        "Entra recovery redaction coverage is missing"
+    );
+    let entra_faults = read_repo_file("packages/d2b-provider-credential-entra/tests/faults.rs");
+    assert!(
+        entra_faults.contains("committed_remote_refresh_metadata_is_adopted_for_later_recovery"),
+        "Entra recovery adoption coverage is missing"
+    );
+
+    let secret_service_faults =
+        read_repo_file("packages/d2b-provider-credential-secret-service/tests/faults.rs");
+    for marker in [
+        "ambiguous_refresh_uses_adapter_recovery_without_revoking_only_the_old_lease",
+        "disconnect_recovers_an_ambiguous_acquire_without_replaying_issue",
+    ] {
+        assert!(
+            secret_service_faults.contains(marker),
+            "Secret Service recovery redaction coverage lost marker {marker}"
+        );
+    }
+
+    let session_source =
+        read_repo_file("packages/d2b-provider-credential-secret-service/src/lib.rs");
+    for marker in [
+        "SessionKey(<redacted>)",
+        "SecretServiceSessionCapability(<redacted>)",
+        "session_key_and_capability_debug_are_redacted",
+    ] {
+        assert!(
+            session_source.contains(marker),
+            "Secret Service session redaction lost marker {marker}"
+        );
+    }
+
+    let support_test = read_repo_file("packages/d2b/tests/zone_support_bundle_contract.rs");
+    for marker in [
+        "credential-secret-lease",
+        "credential-session-key",
+        "credential-recovery-locator",
+    ] {
+        assert!(
+            support_test.contains(marker),
+            "support-bundle Credential canary lost marker {marker}"
+        );
+    }
+}

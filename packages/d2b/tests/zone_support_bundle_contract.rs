@@ -114,7 +114,12 @@ fn support_bundle_is_admin_only_and_redacts_bounded_status_fields() {
                         "revision": 3,
                         "observedAt": "tick-2"
                     },
-                    "spec": {"credential": "must-not-escape"},
+                    "spec": {
+                        "credential": "must-not-escape",
+                        "lease": "credential-secret-lease",
+                        "session": "credential-session-key",
+                        "recovery": "credential-recovery-locator"
+                    },
                     "status": {
                         "phase": "degraded",
                         "conditions": ["store-quarantined"],
@@ -158,7 +163,10 @@ fn support_bundle_is_admin_only_and_redacts_bounded_status_fields() {
     assert!(bundle.get("spec").is_none());
     assert!(bundle.to_string().find("metadata.name").is_none());
     assert!(!bundle.to_string().contains("secret-resource-name"));
+    assert!(!bundle.to_string().contains("credential-secret-lease"));
     assert!(!bundle.to_string().contains("must-not-escape"));
+    assert!(!bundle.to_string().contains("credential-session-key"));
+    assert!(!bundle.to_string().contains("credential-recovery-locator"));
     assert!(!bundle.to_string().contains("/private"));
 }
 

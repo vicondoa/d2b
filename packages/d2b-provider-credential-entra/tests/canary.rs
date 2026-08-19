@@ -21,6 +21,8 @@ fn process_unique_entra_secret_and_identity_canaries_are_absent_from_rendered_su
     let credential_uid = format!("credential-uid-{nonce}");
     let credential_digest = format!("credential-digest-{nonce}");
     let (provider, client) = setup();
+    let config_debug = format!("{:?}", provider.config());
+    let placement_debug = format!("{:?}", provider.placement());
     let operation_id = format!("{}-{credential_uid}", client.endpoint_canary);
     let idempotency_key = format!("{}-{credential_digest}", client.cookie_canary);
     let request = CredentialRequest::new(
@@ -104,7 +106,29 @@ fn process_unique_entra_secret_and_identity_canaries_are_absent_from_rendered_su
             idempotency_key.clone(),
         ))
     );
+    let (ambiguous_provider, ambiguous_client) = setup();
+    *ambiguous_client.issue_error.lock().unwrap() =
+        Some(d2b_provider_credential_entra::EntraClientError::CompletionUnknown);
+    let ambiguous_error = ProviderHarness::new(ambiguous_provider, admitted())
+        .call(
+            CredentialMethod::AcquireToken,
+            CredentialRequest::new(
+                ResourceRef::parse(&credential_ref).unwrap(),
+                &operation_id,
+                &idempotency_key,
+                common::EXPIRY,
+                15_000,
+            )
+            .unwrap(),
+        )
+        .unwrap_err();
+    assert_eq!(
+        ambiguous_error.code(),
+        CredentialServiceErrorCode::InvariantFailure
+    );
     let surfaces = [
+        config_debug,
+        placement_debug,
         provider_debug,
         request_debug,
         format!("{response:?}"),
@@ -117,6 +141,8 @@ fn process_unique_entra_secret_and_identity_canaries_are_absent_from_rendered_su
         serde_json::to_string(&status).unwrap(),
         format!("{error:?}"),
         error.to_string(),
+        format!("{ambiguous_error:?}"),
+        ambiguous_error.to_string(),
     ];
     let (identity_provider, identity_client) = setup();
     let identity_request = CredentialRequest::new(
