@@ -88,6 +88,56 @@ if [ "${#workflow_shell_errors[@]}" -gt 0 ]; then
   exit 1
 fi
 
+apt_helper="$ROOT/tests/tools/ci-apt-install"
+if [ ! -x "$apt_helper" ]; then
+  echo "FAIL: missing executable CI APT helper $apt_helper" >&2
+  exit 1
+fi
+
+apt_contract_errors=()
+while IFS= read -r workflow; do
+  if grep -Ev '^[[:space:]]*#' "$workflow" | grep -Eq 'apt-get[[:space:]]+(update|install)'; then
+    apt_contract_errors+=("${workflow#"$ROOT"/}: contains a direct apt-get setup")
+  fi
+done < <(
+  find "$WORKFLOW_DIR" -maxdepth 1 -type f \
+    \( -name '*.yml' -o -name '*.yaml' \) -print \
+    | LC_ALL=C sort
+)
+
+for workflow in \
+  "$ROOT/.github/workflows/pr-l1-static-fast.yml" \
+  "$ROOT/.github/workflows/release-host-binaries.yml"
+do
+  if ! grep -Eq 'tests/tools/ci-apt-install[[:space:]]' "$workflow"; then
+    apt_contract_errors+=("${workflow#"$ROOT"/}: does not use the CI APT helper")
+  fi
+done
+
+for required in \
+  'AZURE_MIRROR=.*http://azure.archive.ubuntu.com/ubuntu' \
+  'CANONICAL_MIRROR=.*https://archive.ubuntu.com/ubuntu' \
+  'Acquire::Retries=' \
+  'Acquire::http::Timeout=' \
+  'Acquire::https::Timeout=' \
+  'apt-get .* update' \
+  'apt-get .* install'
+do
+  if ! grep -Eq "$required" "$apt_helper"; then
+    apt_contract_errors+=("tests/tools/ci-apt-install: missing $required")
+  fi
+done
+
+if grep -Eq 'allow-unauthenticated|trusted=yes|Verify-Peer=false|Check-Valid-Until=false' "$apt_helper"; then
+  apt_contract_errors+=("tests/tools/ci-apt-install: disables APT authentication or freshness checks")
+fi
+
+if [ "${#apt_contract_errors[@]}" -gt 0 ]; then
+  echo "FAIL: CI APT mirror coverage is incomplete:" >&2
+  printf '  %s\n' "${apt_contract_errors[@]}" >&2
+  exit 1
+fi
+
 bash "$ROOT/tests/tools/layer1-jobs" self-test
 
 mapfile -t local_job_ids < <(
