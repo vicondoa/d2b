@@ -39,7 +39,6 @@ build:remote --action_env=PATH=/run/current-system/sw/bin:/usr/local/sbin:/usr/l
 build:remote --test_env=PATH=/run/current-system/sw/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 build:remote --strategy=TestRunner=local
 build:remote --remote_download_minimal
-build:remote --test_strategy=standalone
 build:remote --jobs=50
 build:remote --remote_cache_compression
 # Rustc and C build scripts both run on BuildBuddy so locally compiled
@@ -62,7 +61,6 @@ build:trusted-seed --strategy=TestRunner=local
 build:trusted-seed --remote_upload_local_results=true
 build:trusted-seed --remote_cache_async=false
 build:trusted-seed --remote_download_minimal
-build:trusted-seed --test_strategy=standalone
 build:trusted-seed --jobs=50
 build:trusted-seed --remote_cache_compression
 # Build scripts execute remotely with the Ubuntu toolchain.

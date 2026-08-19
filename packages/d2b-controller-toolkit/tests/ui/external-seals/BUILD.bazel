@@ -34,7 +34,7 @@ rust_test(
         "RUSTUP_TOOLCHAIN": "1.97.0",
     },
     env_inherit = ["HOME", "PATH"],
-    tags = ["no-remote-cache", "no-sandbox"],
+    tags = ["exclusive", "no-remote-cache", "no-sandbox"],
     visibility = ["//visibility:public"],
 )
 

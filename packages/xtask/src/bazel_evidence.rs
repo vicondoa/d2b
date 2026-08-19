@@ -358,15 +358,12 @@ fn classify_failure(log: &str, explicit_dispatch_evidence: bool) -> FailureClass
 }
 
 fn classification_value(classification: FailureClassification) -> Value {
-    let retry = classification
-        .kind
-        .is_some_and(|kind| {
-            kind.permits_local_retry(
-                classification.pre_dispatch_evidence,
-                classification.post_dispatch_retryable,
-            )
-        })
-        && (!classification.dispatch_evidence || classification.post_dispatch_retryable);
+    let retry = classification.kind.is_some_and(|kind| {
+        kind.permits_local_retry(
+            classification.pre_dispatch_evidence,
+            classification.post_dispatch_retryable,
+        )
+    }) && (!classification.dispatch_evidence || classification.post_dispatch_retryable);
     let kind = if classification.dispatch_evidence && !retry {
         "post-dispatch-uncertainty".to_owned()
     } else {
