@@ -21,6 +21,7 @@ use d2b_contracts::{
         HostCutoverInventorySummary, HostCutoverOperation, HostCutoverRequest, HostCutoverResponse,
     },
     types::BundleOpId,
+    v3::canonical_json_bytes,
 };
 use d2b_cutover::{
     BootstrapCapability, CandidateId, Consent, CutoverPreview, Digest, HostInventory,
@@ -112,7 +113,7 @@ fn preview(state: &ServerState, request: HostCutoverRequest) -> Result<Value, Ty
         .digest()
         .map_err(|_| invalid("previewDigest"))?
         .to_string();
-    Ok(serde_json::to_value(HostCutoverResponse {
+    encode_response(HostCutoverResponse {
         operation: HostCutoverOperation::Preview,
         operation_id: Some(operation_id.to_string()),
         state: "planned".to_owned(),
@@ -122,7 +123,6 @@ fn preview(state: &ServerState, request: HostCutoverRequest) -> Result<Value, Ty
         mutation_accepted: false,
         inventory: Some(inventory_summary),
     })
-    .expect("typed cutover response serializes"))
 }
 
 fn apply(
@@ -266,7 +266,7 @@ fn apply(
             });
         }
     };
-    Ok(serde_json::to_value(HostCutoverResponse {
+    encode_response(HostCutoverResponse {
         operation: HostCutoverOperation::Apply,
         operation_id: Some(response.operation_id.to_string()),
         state: "planned".to_owned(),
@@ -276,7 +276,6 @@ fn apply(
         mutation_accepted: true,
         inventory: None,
     })
-    .expect("typed cutover response serializes"))
 }
 
 fn reset(
@@ -449,7 +448,7 @@ fn reset(
             });
         }
     };
-    Ok(serde_json::to_value(HostCutoverResponse {
+    encode_response(HostCutoverResponse {
         operation: HostCutoverOperation::Reset,
         operation_id: Some(response.operation_id.to_string()),
         state: "planned".to_owned(),
@@ -459,7 +458,6 @@ fn reset(
         mutation_accepted: true,
         inventory: None,
     })
-    .expect("typed reset response serializes"))
 }
 
 fn observe(state: &ServerState, request: HostCutoverRequest) -> Result<Value, TypedError> {
@@ -483,7 +481,7 @@ fn observe(state: &ServerState, request: HostCutoverRequest) -> Result<Value, Ty
         context: "decode cutover runner status".to_owned(),
         detail: "runner returned no status".to_owned(),
     })?;
-    Ok(serde_json::to_value(HostCutoverResponse {
+    encode_response(HostCutoverResponse {
         operation: request.operation,
         operation_id: Some(status.operation_id.to_string()),
         state: state_label(status.state).to_owned(),
@@ -493,7 +491,15 @@ fn observe(state: &ServerState, request: HostCutoverRequest) -> Result<Value, Ty
         mutation_accepted: false,
         inventory: None,
     })
-    .expect("typed cutover response serializes"))
+}
+
+fn encode_response(response: HostCutoverResponse) -> Result<Value, TypedError> {
+    let bytes = canonical_json_bytes(&response).map_err(|error| TypedError::InternalConfig {
+        detail: format!("hostCutover response is not canonical: {error}"),
+    })?;
+    serde_json::from_slice(&bytes).map_err(|error| TypedError::InternalConfig {
+        detail: format!("hostCutover response decode failed: {error}"),
+    })
 }
 
 fn host_inventory(
@@ -652,6 +658,7 @@ fn now_ms() -> u64 {
 mod tests {
     use super::*;
     use d2b_contracts::public_wire::{HostCutoverOperation, HostCutoverRequest};
+    use d2b_contracts::v3::CanonicalJsonObject;
 
     fn request(operation: HostCutoverOperation, zone: Option<&str>) -> HostCutoverRequest {
         HostCutoverRequest {
@@ -699,5 +706,24 @@ mod tests {
         let wrong = OperatorId::new("uid-2000").expect("operator");
         let error = authorize_bound_operator(1000, &wrong).expect_err("wrong operator");
         assert!(matches!(error, TypedError::AuthzNotAdmin { .. }));
+    }
+
+    #[test]
+    fn cutover_responses_are_canonical_resource_objects() {
+        let value = encode_response(HostCutoverResponse {
+            operation: HostCutoverOperation::Preview,
+            operation_id: Some("cutover-preview".to_owned()),
+            state: "planned".to_owned(),
+            phase: 0,
+            preview_digest: Some("sha256:".to_owned() + &"a".repeat(64)),
+            summary: "mutation-free preview".to_owned(),
+            mutation_accepted: false,
+            inventory: None,
+        })
+        .expect("response");
+        let bytes = serde_json::to_vec(&value).expect("response JSON");
+        CanonicalJsonObject::parse(&bytes).expect("canonical response");
+        assert_eq!(value["operation"], "preview");
+        assert_eq!(value["mutationAccepted"], false);
     }
 }

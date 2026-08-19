@@ -4,6 +4,7 @@ use clap::{Args, Subcommand};
 use d2b_contracts::{
     host_generation::ApplyHostGenerationHandoff,
     public_wire::{HostCutoverOperation, HostCutoverRequest, HostCutoverResetScope},
+    v3::CanonicalJsonValue,
 };
 use d2b_cutover::{RunnerCommand, RunnerPaths, send_command};
 use serde_json::{Map, Value, json};
@@ -900,14 +901,29 @@ fn read_contract_file(
             2,
         ));
     }
-    String::from_utf8(bytes).map(Some).map_err(|_| {
+    let text = String::from_utf8(bytes).map_err(|_| {
         context.failure(
             "ref-invalid",
             &format!("{label} file is not UTF-8"),
             mode,
             2,
         )
-    })
+    })?;
+    canonical_contract_text(text.as_bytes())
+        .map(Some)
+        .map_err(|_| {
+            context.failure(
+                "ref-invalid",
+                &format!("{label} file is not canonical JSON"),
+                mode,
+                2,
+            )
+        })
+}
+
+fn canonical_contract_text(bytes: &[u8]) -> Result<String, ()> {
+    let value = CanonicalJsonValue::parse(bytes).map_err(|_| ())?;
+    String::from_utf8(value.to_canonical_bytes()).map_err(|_| ())
 }
 
 fn cutover_reset(
@@ -955,4 +971,27 @@ fn cutover_reset(
     let value = context.invoke("HostCutover", payload, deadline, mode)?;
     context.emit(&value, mode)?;
     Ok(0)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use d2b_contracts::v3::CanonicalJsonObject;
+
+    #[test]
+    fn cutover_contract_text_is_canonical_before_resource_transport() {
+        let consent = canonical_contract_text(
+            br#"{ "binding": {} }
+"#,
+        )
+        .expect("contract JSON");
+        assert_eq!(consent, r#"{"binding":{}}"#);
+
+        let payload = serde_json::json!({
+            "operation": "apply",
+            "consentJson": consent,
+        });
+        let bytes = serde_json::to_vec(&payload).expect("request JSON");
+        CanonicalJsonObject::parse(&bytes).expect("canonical resource request");
+    }
 }

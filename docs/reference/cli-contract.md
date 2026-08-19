@@ -3443,6 +3443,8 @@ phase-4 disposition boundary; earlier phase skips are refused.
 `rollback --handoff-file` supplies the pre-apply generation handoff when the
 native rollback boundary is at phase 4; the broker restores that typed
 generation before the journal is terminally rolled back.
+JSON evidence files are parsed through the canonical JSON profile and
+normalized before the typed request crosses the Zone resource transport.
 After admission, `status`, `hold`, `resume`, `rollback`, `verify`, and
 `finalize` use the runner-owned Unix socket so they remain available while
 `d2bd` is drained. Verification refuses without authoritative post-activation

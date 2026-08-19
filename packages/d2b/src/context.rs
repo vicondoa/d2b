@@ -2430,6 +2430,115 @@ mod tests {
     }
 
     #[test]
+    fn host_cutover_preview_and_apply_decode_as_canonical_resource_responses() {
+        use d2b_contracts::public_wire::{HostCutoverOperation, HostCutoverResponse};
+
+        for operation in [HostCutoverOperation::Preview, HostCutoverOperation::Apply] {
+            let response = serde_json::to_vec(&HostCutoverResponse {
+                operation,
+                operation_id: Some("cutover-test".to_owned()),
+                state: "planned".to_owned(),
+                phase: 0,
+                preview_digest: Some("sha256:".to_owned() + &"a".repeat(64)),
+                summary: "redaction-safe cutover response".to_owned(),
+                mutation_accepted: matches!(operation, HostCutoverOperation::Apply),
+                inventory: None,
+            })
+            .expect("response JSON");
+            let client = Arc::new(MockClient {
+                requests: Mutex::new(Vec::new()),
+                response,
+            });
+            let zone_path = zone_path("local-root").expect("zone path");
+            let owner = owner_for_zone(&zone_path);
+            let connector = CliZoneConnector {
+                zone_name: "local-root".to_owned(),
+                zone_path: zone_path.clone(),
+                socket_path: PathBuf::from("/run/d2b/public.sock"),
+                service: ZoneServiceKind::Resource,
+                operation: "HostCutover".to_owned(),
+                session_verb: None,
+                handshake_timeout: Duration::from_secs(1),
+                injected: Some(client),
+            };
+            let client = ZoneClient::new(
+                RouteTable::new(vec![RouteRecord::new(
+                    owner.clone(),
+                    TransportKind::LocalUnix,
+                )]),
+                connector,
+            );
+            let target = TargetInput::Service {
+                owner,
+                service: ZoneServiceKind::Resource,
+            };
+            let connection = block_on(client.connect(
+                &target,
+                ZoneServiceKind::Resource,
+                TransportSelection::exact(TransportKind::LocalUnix),
+            ))
+            .expect("connect");
+            let deadline = ZoneContext::deadline(Some("30s")).expect("deadline");
+            let options = call_options(deadline, ResourceVerb::Get).expect("call options");
+            let cancellation = CancellationToken::default();
+            let payload = CanonicalJsonObject::parse(
+                serde_json::to_vec(&json!({
+                    "operation": operation,
+                }))
+                .expect("request JSON")
+                .as_slice(),
+            )
+            .expect("canonical request");
+            let request = ResourceCallOptions::new(payload, false, &cancellation);
+            let decoded =
+                block_on(client.call_connected(&connection, ResourceVerb::Get, options, request))
+                    .expect("canonical response");
+            assert_eq!(
+                decoded.get("operation"),
+                Some(&d2b_contracts::v3::CanonicalJsonValue::String(
+                    serde_json::to_value(operation)
+                        .expect("operation")
+                        .as_str()
+                        .expect("operation string")
+                        .to_owned(),
+                ))
+            );
+        }
+    }
+
+    #[test]
+    fn host_cutover_error_response_remains_typed_and_redacted() {
+        let error = decode_cli_response(
+            br#"{"type":"error","error":{"errorClass":"authorization-denied","retryClass":"never","message":"secret-subject"}}"#,
+        )
+        .expect_err("error response");
+        assert!(matches!(
+            error,
+            ClientError::Remote {
+                kind: ResourceErrorKind::AuthorizationDenied,
+                ..
+            }
+        ));
+        let context = ZoneContext::with_client(
+            "local-root",
+            "/run/d2b/public.sock",
+            Arc::new(MockClient {
+                requests: Mutex::new(Vec::new()),
+                response: br#"{"ok":true}"#.to_vec(),
+            }),
+        )
+        .expect("context");
+        let failure = context.client_failure(error, OutputMode::Json);
+        assert!(!failure.message.contains("secret-subject"));
+        assert!(
+            !failure
+                .rendered_stderr
+                .unwrap_or_default()
+                .contains("secret-subject")
+        );
+    }
+
+    #[test]
     fn direct_socket_overrides_do_not_infer_a_zone_from_an_arbitrary_temp_path() {
         let candidates = socket_candidates(Some("dev"));
         assert_eq!(
