@@ -1,0 +1,84 @@
+#!/usr/bin/env bash
+# Install CI packages without waiting indefinitely on the hosted runner mirror.
+
+set -euo pipefail
+
+readonly MIRROR_LIST=/etc/apt/apt-mirrors.txt
+readonly AZURE_MIRROR=http://azure.archive.ubuntu.com/ubuntu
+readonly CANONICAL_MIRROR=https://archive.ubuntu.com/ubuntu
+readonly AZURE_MIRROR_REGEX="^${AZURE_MIRROR//./\\.}/?([[:space:]]+.*)?$"
+readonly CANONICAL_MIRROR_REGEX="^${CANONICAL_MIRROR//./\\.}/?([[:space:]]+.*)?$"
+readonly APT_TIMEOUT=15
+readonly APT_RETRIES=2
+
+if [ "${1:-}" = "--self-test" ]; then
+  fixture="${AZURE_MIRROR}/$(printf '\t')priority:1"
+  rewritten=$(printf '%s\n' "$fixture" | sed -E "s#^${AZURE_MIRROR//./\\.}/?#${CANONICAL_MIRROR}#")
+  expected="${CANONICAL_MIRROR}$(printf '\t')priority:1"
+  if [ "$rewritten" != "$expected" ]; then
+    echo "APT mirror rewrite did not preserve runner metadata" >&2
+    exit 1
+  fi
+  if printf '%s\n' "$rewritten" | grep -Fq "$AZURE_MIRROR"; then
+    echo "APT mirror rewrite left the Azure mirror selected" >&2
+    exit 1
+  fi
+  exit 0
+fi
+
+if [ "$#" -eq 0 ]; then
+  echo "usage: $0 PACKAGE [PACKAGE ...]" >&2
+  exit 2
+fi
+
+for package in "$@"; do
+  case "$package" in
+    ""|-*)
+      echo "invalid package name: $package" >&2
+      exit 2
+      ;;
+  esac
+done
+
+if [ ! -r "$MIRROR_LIST" ]; then
+  echo "missing APT mirror list: $MIRROR_LIST" >&2
+  exit 1
+fi
+
+if ! sudo grep -Eq "$AZURE_MIRROR_REGEX" "$MIRROR_LIST"; then
+  echo "APT mirror list does not contain the expected Azure mirror" >&2
+  exit 1
+fi
+
+backup="$MIRROR_LIST.d2b.$$"
+sudo cp -p -- "$MIRROR_LIST" "$backup"
+
+cleanup() {
+  status=$?
+  trap '' HUP INT TERM
+  trap - EXIT
+  if ! sudo mv -f -- "$backup" "$MIRROR_LIST"; then
+    status=1
+  fi
+  exit "$status"
+}
+trap cleanup EXIT
+trap 'exit 130' HUP INT TERM
+
+sudo sed -E -i \
+  "s#^${AZURE_MIRROR//./\\.}/?#${CANONICAL_MIRROR}#" \
+  "$MIRROR_LIST"
+
+if ! sudo grep -Eq "$CANONICAL_MIRROR_REGEX" "$MIRROR_LIST"; then
+  echo "failed to select the canonical HTTPS Ubuntu mirror" >&2
+  exit 1
+fi
+
+apt_options=(
+  -o "Acquire::Retries=$APT_RETRIES"
+  -o "Acquire::http::Timeout=$APT_TIMEOUT"
+  -o "Acquire::https::Timeout=$APT_TIMEOUT"
+)
+
+sudo apt-get "${apt_options[@]}" update
+sudo apt-get "${apt_options[@]}" install -y -- "$@"
