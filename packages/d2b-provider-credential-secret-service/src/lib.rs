@@ -10,7 +10,7 @@
 mod controller;
 mod service;
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 use std::future::Future;
 use std::pin::Pin;
@@ -18,7 +18,7 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, TryLockError};
 use std::task::{Context, Poll, Wake, Waker};
 use std::thread::{self, Thread};
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use d2b_contracts::v3::credential::{
     CredentialAuthorization, CredentialLeaseHandle, CredentialLeaseState, CredentialMetadata,
@@ -37,6 +37,7 @@ pub const PROVIDER_REF: &str = "Provider/credential-secret-service";
 pub const MAX_LOCAL_LEASES: u32 = 256;
 /// Maximum bytes in a Secret Service collection alias.
 pub const MAX_COLLECTION_ALIAS_BYTES: usize = 128;
+const ABSOLUTE_UNIX_MS_THRESHOLD: u64 = 1_000_000_000_000;
 
 /// A boxed asynchronous result returned by the injected port.
 pub type SecretServiceFuture<'a, T> =
@@ -47,6 +48,23 @@ pub type SecretServiceFuture<'a, T> =
 pub enum SecretServiceOwner {
     /// The authenticated user-domain process.
     Userd,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub(crate) enum OperationKind {
+    Acquire,
+    Inspect,
+    Refresh,
+    Revoke,
+}
+
+pub(crate) enum SecretServicePollError {
+    Port(SecretServicePortError),
+    Deadline,
+}
+
+fn invariant_error() -> CredentialServiceError {
+    CredentialServiceError::new(CredentialServiceErrorCode::InvariantFailure)
 }
 
 /// Locked-keyring behavior.
@@ -380,6 +398,25 @@ pub trait Oo7SecretServicePort: Send + Sync {
         &self,
         lease: &SecretServiceLeaseRef,
     ) -> SecretServiceFuture<'_, SecretServiceLeaseRevocation>;
+    /// Revoke a lease whose issue completion was ambiguous, using the
+    /// original idempotency key instead of replaying issuance.
+    fn revoke_ambiguous_lease(
+        &self,
+        _request: &SecretServiceLeaseRequest,
+    ) -> SecretServiceFuture<'_, SecretServiceLeaseRevocation> {
+        Box::pin(async { Err(SecretServicePortError::Unavailable) })
+    }
+    /// Revoke the prior and any rotated lease associated with a refresh whose
+    /// completion was ambiguous, using the operation identity without
+    /// replaying refresh.
+    fn revoke_ambiguous_refresh(
+        &self,
+        _lease: &SecretServiceLeaseRef,
+        _operation_id: &str,
+        _idempotency_key: &str,
+    ) -> SecretServiceFuture<'_, SecretServiceLeaseRevocation> {
+        Box::pin(async { Err(SecretServicePortError::Unavailable) })
+    }
 }
 
 #[derive(Clone, PartialEq, Eq)]
@@ -677,6 +714,9 @@ impl SecretServiceCredentialProviderFactory {
             authority: SessionAuthority::new()?,
             sessions: Mutex::new(BTreeMap::new()),
             leases: Mutex::new(BTreeMap::new()),
+            ambiguous_operations: Mutex::new(BTreeSet::new()),
+            ambiguous_acquires: Mutex::new(BTreeMap::new()),
+            ambiguous_refreshes: Mutex::new(BTreeMap::new()),
             mutation_gate: Mutex::new(()),
             finalized: AtomicBool::new(false),
         })
@@ -691,8 +731,15 @@ impl fmt::Debug for SecretServiceCredentialProviderFactory {
 
 #[derive(Clone)]
 struct LeaseRecord {
-    idempotency_key: String,
+    refresh_results: BTreeMap<String, CredentialMetadata>,
     metadata: CredentialMetadata,
+}
+
+#[derive(Clone)]
+struct AmbiguousRefreshRecord {
+    lease: SecretServiceLeaseRef,
+    operation_id: String,
+    idempotency_key: String,
 }
 
 /// Secret Service implementation of the prepared Credential service.
@@ -705,6 +752,9 @@ pub struct SecretServiceCredentialProvider {
     authority: SessionAuthority,
     sessions: Mutex<BTreeMap<SessionKey, ()>>,
     leases: Mutex<BTreeMap<(SessionKey, String), LeaseRecord>>,
+    ambiguous_operations: Mutex<BTreeSet<(SessionKey, String, String, OperationKind)>>,
+    ambiguous_acquires: Mutex<BTreeMap<(SessionKey, String, String), SecretServiceLeaseRequest>>,
+    ambiguous_refreshes: Mutex<BTreeMap<(SessionKey, String, String), AmbiguousRefreshRecord>>,
     mutation_gate: Mutex<()>,
     finalized: AtomicBool,
 }
@@ -855,18 +905,51 @@ impl SecretServiceCredentialProvider {
             .map_err(|_| CredentialServiceError::new(CredentialServiceErrorCode::InvariantFailure))
     }
 
+    pub(crate) fn now_unix_ms() -> u64 {
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|duration| duration.as_millis().min(u128::from(u64::MAX)) as u64)
+            .unwrap_or(0)
+    }
+
+    pub(crate) const fn is_absolute_unix_ms(value: u64) -> bool {
+        value >= ABSOLUTE_UNIX_MS_THRESHOLD
+    }
+
     pub(crate) fn operation_deadline(deadline_ms: u64) -> Result<Instant, CredentialServiceError> {
+        let duration_ms = if Self::is_absolute_unix_ms(deadline_ms) {
+            deadline_ms.saturating_sub(Self::now_unix_ms())
+        } else {
+            deadline_ms
+        };
+        if duration_ms == 0 {
+            return Err(CredentialServiceError::new(
+                CredentialServiceErrorCode::DeadlineExceeded,
+            ));
+        }
         Instant::now()
-            .checked_add(Duration::from_millis(deadline_ms))
+            .checked_add(Duration::from_millis(duration_ms))
             .ok_or_else(|| {
                 CredentialServiceError::new(CredentialServiceErrorCode::DeadlineExceeded)
             })
     }
 
     pub(crate) fn poll_port<T>(
-        mut future: SecretServiceFuture<'_, T>,
+        future: SecretServiceFuture<'_, T>,
         deadline: Instant,
     ) -> Result<T, CredentialServiceError> {
+        Self::poll_port_raw(future, deadline).map_err(|error| match error {
+            SecretServicePollError::Port(error) => Self::map_port_error(error),
+            SecretServicePollError::Deadline => {
+                CredentialServiceError::new(CredentialServiceErrorCode::DeadlineExceeded)
+            }
+        })
+    }
+
+    pub(crate) fn poll_port_raw<T>(
+        mut future: SecretServiceFuture<'_, T>,
+        deadline: Instant,
+    ) -> Result<T, SecretServicePollError> {
         struct ThreadWake(Thread);
         impl Wake for ThreadWake {
             fn wake(self: Arc<Self>) {
@@ -881,24 +964,311 @@ impl SecretServiceCredentialProvider {
         let mut context = Context::from_waker(&waker);
         loop {
             if Instant::now() >= deadline {
-                return Err(CredentialServiceError::new(
-                    CredentialServiceErrorCode::DeadlineExceeded,
-                ));
+                return Err(SecretServicePollError::Deadline);
             }
             match future.as_mut().poll(&mut context) {
-                Poll::Ready(result) => return result.map_err(Self::map_port_error),
+                Poll::Ready(result) => {
+                    return result.map_err(SecretServicePollError::Port);
+                }
                 Poll::Pending => {
-                    let remaining =
-                        deadline
-                            .checked_duration_since(Instant::now())
-                            .ok_or_else(|| {
-                                CredentialServiceError::new(
-                                    CredentialServiceErrorCode::DeadlineExceeded,
-                                )
-                            })?;
+                    let remaining = deadline
+                        .checked_duration_since(Instant::now())
+                        .ok_or(SecretServicePollError::Deadline)?;
+                    if remaining.is_zero() {
+                        return Err(SecretServicePollError::Deadline);
+                    }
                     thread::park_timeout(remaining);
                 }
             }
+        }
+    }
+
+    pub(crate) fn ensure_unlocked(&self, deadline: Instant) -> Result<(), CredentialServiceError> {
+        if Self::poll_port(self.port.state(), deadline)? == SecretServiceState::Locked {
+            return Err(CredentialServiceError::new(
+                CredentialServiceErrorCode::ProviderUnavailable,
+            ));
+        }
+        Self::deadline_remaining(deadline)
+    }
+
+    pub(crate) fn deadline_remaining(deadline: Instant) -> Result<(), CredentialServiceError> {
+        if Instant::now() >= deadline {
+            return Err(CredentialServiceError::new(
+                CredentialServiceErrorCode::DeadlineExceeded,
+            ));
+        }
+        Ok(())
+    }
+
+    pub(crate) fn has_ambiguous_credential(
+        &self,
+        session_key: SessionKey,
+        credential: &str,
+    ) -> Result<bool, CredentialServiceError> {
+        Ok(self
+            .ambiguous_operations
+            .lock()
+            .map_err(|_| invariant_error())?
+            .iter()
+            .any(|(key, candidate, _, _)| *key == session_key && candidate == credential))
+    }
+
+    pub(crate) fn ambiguous_lease_count(&self) -> Result<usize, CredentialServiceError> {
+        let tracked = self
+            .leases
+            .lock()
+            .map_err(|_| invariant_error())?
+            .values()
+            .filter(|record| {
+                matches!(
+                    record.metadata.state,
+                    CredentialLeaseState::Active | CredentialLeaseState::Unknown
+                )
+            })
+            .count();
+        let pending = self
+            .ambiguous_acquires
+            .lock()
+            .map_err(|_| invariant_error())?
+            .len();
+        Ok(tracked.saturating_add(pending))
+    }
+
+    pub(crate) fn mark_ambiguous(
+        &self,
+        session_key: SessionKey,
+        credential: &str,
+        idempotency_key: &str,
+        operation: OperationKind,
+    ) -> Result<(), CredentialServiceError> {
+        self.ambiguous_operations
+            .lock()
+            .map_err(|_| invariant_error())?
+            .insert((
+                session_key,
+                credential.to_owned(),
+                idempotency_key.to_owned(),
+                operation,
+            ));
+        Ok(())
+    }
+
+    pub(crate) fn remember_ambiguous_acquire(
+        &self,
+        session_key: SessionKey,
+        request: SecretServiceLeaseRequest,
+    ) -> Result<(), CredentialServiceError> {
+        let credential = request.credential_ref().to_canonical_string();
+        self.mark_ambiguous(
+            session_key,
+            &credential,
+            request.idempotency_key(),
+            OperationKind::Acquire,
+        )?;
+        self.ambiguous_acquires
+            .lock()
+            .map_err(|_| invariant_error())?
+            .insert(
+                (
+                    session_key,
+                    credential,
+                    request.idempotency_key().to_owned(),
+                ),
+                request,
+            );
+        Ok(())
+    }
+
+    pub(crate) fn remember_ambiguous_refresh(
+        &self,
+        session_key: SessionKey,
+        request: &d2b_contracts::v3::credential::CredentialRequest,
+        lease: SecretServiceLeaseRef,
+    ) -> Result<(), CredentialServiceError> {
+        let credential = request.credential_ref().to_canonical_string();
+        self.mark_ambiguous(
+            session_key,
+            &credential,
+            request.idempotency_key(),
+            OperationKind::Refresh,
+        )?;
+        self.ambiguous_refreshes
+            .lock()
+            .map_err(|_| invariant_error())?
+            .insert(
+                (
+                    session_key,
+                    credential,
+                    request.idempotency_key().to_owned(),
+                ),
+                AmbiguousRefreshRecord {
+                    lease,
+                    operation_id: request.operation_id().to_owned(),
+                    idempotency_key: request.idempotency_key().to_owned(),
+                },
+            );
+        Ok(())
+    }
+
+    pub(crate) fn ambiguous_acquires(
+        &self,
+        session_key: SessionKey,
+    ) -> Result<Vec<(String, String, SecretServiceLeaseRequest)>, CredentialServiceError> {
+        Ok(self
+            .ambiguous_acquires
+            .lock()
+            .map_err(|_| invariant_error())?
+            .iter()
+            .filter(|((key, _, _), _)| *key == session_key)
+            .map(|((_, credential, idempotency), request)| {
+                (credential.clone(), idempotency.clone(), request.clone())
+            })
+            .collect())
+    }
+
+    pub(crate) fn ambiguous_refreshes(
+        &self,
+        session_key: SessionKey,
+    ) -> Result<Vec<(String, String, AmbiguousRefreshRecord)>, CredentialServiceError> {
+        Ok(self
+            .ambiguous_refreshes
+            .lock()
+            .map_err(|_| invariant_error())?
+            .iter()
+            .filter(|((key, _, _), _)| *key == session_key)
+            .map(|((_, credential, idempotency), record)| {
+                (credential.clone(), idempotency.clone(), record.clone())
+            })
+            .collect())
+    }
+
+    pub(crate) fn clear_ambiguous_operation(
+        &self,
+        session_key: SessionKey,
+        credential: &str,
+        idempotency_key: &str,
+        operation: OperationKind,
+    ) -> Result<(), CredentialServiceError> {
+        self.ambiguous_operations
+            .lock()
+            .map_err(|_| invariant_error())?
+            .retain(|(key, candidate, candidate_key, candidate_operation)| {
+                *key != session_key
+                    || candidate != credential
+                    || candidate_key != idempotency_key
+                    || *candidate_operation != operation
+            });
+        Ok(())
+    }
+
+    pub(crate) fn clear_ambiguous_acquire(
+        &self,
+        session_key: SessionKey,
+        credential: &str,
+        idempotency_key: &str,
+    ) -> Result<(), CredentialServiceError> {
+        self.ambiguous_acquires
+            .lock()
+            .map_err(|_| invariant_error())?
+            .remove(&(
+                session_key,
+                credential.to_owned(),
+                idempotency_key.to_owned(),
+            ));
+        self.clear_ambiguous_operation(
+            session_key,
+            credential,
+            idempotency_key,
+            OperationKind::Acquire,
+        )
+    }
+
+    pub(crate) fn clear_ambiguous_refresh(
+        &self,
+        session_key: SessionKey,
+        credential: &str,
+        idempotency_key: &str,
+    ) -> Result<(), CredentialServiceError> {
+        self.ambiguous_refreshes
+            .lock()
+            .map_err(|_| invariant_error())?
+            .remove(&(
+                session_key,
+                credential.to_owned(),
+                idempotency_key.to_owned(),
+            ));
+        self.clear_ambiguous_operation(
+            session_key,
+            credential,
+            idempotency_key,
+            OperationKind::Refresh,
+        )
+    }
+
+    pub(crate) fn clear_ambiguous_session(
+        &self,
+        session_key: SessionKey,
+    ) -> Result<(), CredentialServiceError> {
+        self.ambiguous_operations
+            .lock()
+            .map_err(|_| invariant_error())?
+            .retain(|(key, _, _, _)| *key != session_key);
+        self.ambiguous_acquires
+            .lock()
+            .map_err(|_| invariant_error())?
+            .retain(|(key, _, _), _| *key != session_key);
+        self.ambiguous_refreshes
+            .lock()
+            .map_err(|_| invariant_error())?
+            .retain(|(key, _, _), _| *key != session_key);
+        Ok(())
+    }
+
+    pub(crate) fn clear_ambiguous_for_credential(
+        &self,
+        session_key: SessionKey,
+        credential: &str,
+    ) -> Result<(), CredentialServiceError> {
+        self.ambiguous_operations
+            .lock()
+            .map_err(|_| invariant_error())?
+            .retain(|(key, candidate, _, _)| *key != session_key || candidate != credential);
+        self.ambiguous_acquires
+            .lock()
+            .map_err(|_| invariant_error())?
+            .retain(|(key, candidate, _), _| *key != session_key || candidate != credential);
+        self.ambiguous_refreshes
+            .lock()
+            .map_err(|_| invariant_error())?
+            .retain(|(key, candidate, _), _| *key != session_key || candidate != credential);
+        Ok(())
+    }
+
+    pub(crate) fn has_ambiguous_session(
+        &self,
+        session_key: SessionKey,
+    ) -> Result<bool, CredentialServiceError> {
+        Ok(self
+            .ambiguous_operations
+            .lock()
+            .map_err(|_| invariant_error())?
+            .iter()
+            .any(|(key, _, _, _)| *key == session_key))
+    }
+
+    fn metadata_from_grant(
+        grant: &SecretServiceLeaseGrant,
+        state: CredentialLeaseState,
+        outcome: CredentialOutcomeCode,
+    ) -> CredentialMetadata {
+        CredentialMetadata {
+            lease_handle: grant.lease_handle.clone(),
+            rotation_generation: grant.rotation_generation,
+            source_version: grant.source_version.clone(),
+            expires_at_unix_ms: grant.expires_at_unix_ms,
+            state,
+            outcome,
         }
     }
 
@@ -914,14 +1284,19 @@ impl SecretServiceCredentialProvider {
                 CredentialServiceErrorCode::InvariantFailure,
             ));
         }
-        Ok(CredentialMetadata {
-            lease_handle: grant.lease_handle,
-            rotation_generation: grant.rotation_generation,
-            source_version: grant.source_version,
-            expires_at_unix_ms: grant.expires_at_unix_ms,
-            state: CredentialLeaseState::Active,
-            outcome: CredentialOutcomeCode::Success,
-        })
+        Ok(Self::metadata_from_grant(
+            &grant,
+            CredentialLeaseState::Active,
+            CredentialOutcomeCode::Success,
+        ))
+    }
+
+    pub(crate) fn unknown_metadata(grant: &SecretServiceLeaseGrant) -> CredentialMetadata {
+        Self::metadata_from_grant(
+            grant,
+            CredentialLeaseState::Unknown,
+            CredentialOutcomeCode::Success,
+        )
     }
 }
 
@@ -1064,5 +1439,25 @@ mod tests {
             next_counter(&counter),
             Err(SessionAuthorityError::Exhausted)
         );
+    }
+
+    #[test]
+    fn absolute_deadlines_use_unix_milliseconds() {
+        let now = SecretServiceCredentialProvider::now_unix_ms();
+        let deadline = SecretServiceCredentialProvider::operation_deadline(now + 100);
+        assert!(deadline.is_ok());
+        assert!(
+            SecretServiceCredentialProvider::operation_deadline(now.saturating_sub(1)).is_err()
+        );
+    }
+
+    #[test]
+    fn poll_port_raw_does_not_start_after_deadline() {
+        let deadline = Instant::now();
+        let result = SecretServiceCredentialProvider::poll_port_raw(
+            Box::pin(async { Ok::<_, SecretServicePortError>(SecretServiceState::Unlocked) }),
+            deadline,
+        );
+        assert!(matches!(result, Err(SecretServicePollError::Deadline)));
     }
 }
