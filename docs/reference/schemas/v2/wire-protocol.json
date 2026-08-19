@@ -1365,6 +1365,25 @@
           }
         },
         {
+          "description": "Launch one operation-scoped cutover runner before control-plane drain.\n\nThe request must carry exactly one SCM_RIGHTS bootstrap descriptor. The broker resolves the runner executable from its trusted server configuration and never accepts a path or command over the wire.",
+          "type": "object",
+          "required": [
+            "kind",
+            "payload"
+          ],
+          "properties": {
+            "kind": {
+              "type": "string",
+              "enum": [
+                "LaunchCutoverRunner"
+              ]
+            },
+            "payload": {
+              "$ref": "#/definitions/LaunchCutoverRunnerRequest"
+            }
+          }
+        },
+        {
           "type": "object",
           "required": [
             "kind",
@@ -2958,6 +2977,25 @@
             },
             "payload": {
               "$ref": "#/definitions/ApplyHostGenerationHandoffResponse"
+            }
+          }
+        },
+        {
+          "description": "Result of launching the operation-scoped cutover runner.",
+          "type": "object",
+          "required": [
+            "kind",
+            "payload"
+          ],
+          "properties": {
+            "kind": {
+              "type": "string",
+              "enum": [
+                "LaunchCutoverRunner"
+              ]
+            },
+            "payload": {
+              "$ref": "#/definitions/LaunchCutoverRunnerResponse"
             }
           }
         },
@@ -7240,6 +7278,311 @@
       },
       "additionalProperties": false
     },
+    "HostCutoverInventorySummary": {
+      "description": "Redaction-safe inventory summary for a host-wide preview.",
+      "type": "object",
+      "required": [
+        "complete",
+        "inventoryDigest",
+        "itemCount",
+        "zoneCount"
+      ],
+      "properties": {
+        "complete": {
+          "description": "Whether every configured Zone was observed.",
+          "type": "boolean"
+        },
+        "inventoryDigest": {
+          "description": "Canonical inventory digest.",
+          "type": "string"
+        },
+        "itemCount": {
+          "description": "Number of classified inventory items.",
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0.0
+        },
+        "zoneCount": {
+          "description": "Number of configured Zones included.",
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0.0
+        }
+      },
+      "additionalProperties": false
+    },
+    "HostCutoverOperation": {
+      "description": "Closed host cutover command vocabulary.",
+      "oneOf": [
+        {
+          "description": "Build a mutation-free preview.",
+          "type": "string",
+          "enum": [
+            "preview"
+          ]
+        },
+        {
+          "description": "Read the current redacted status.",
+          "type": "string",
+          "enum": [
+            "status"
+          ]
+        },
+        {
+          "description": "Set an operator hold.",
+          "type": "string",
+          "enum": [
+            "hold"
+          ]
+        },
+        {
+          "description": "Clear a hold and resume.",
+          "type": "string",
+          "enum": [
+            "resume"
+          ]
+        },
+        {
+          "description": "Consume apply consent and launch the runner.",
+          "type": "string",
+          "enum": [
+            "apply"
+          ]
+        },
+        {
+          "description": "Roll back before the native boundary.",
+          "type": "string",
+          "enum": [
+            "rollback"
+          ]
+        },
+        {
+          "description": "Verify every configured Zone.",
+          "type": "string",
+          "enum": [
+            "verify"
+          ]
+        },
+        {
+          "description": "Read-only cutover health diagnostics.",
+          "type": "string",
+          "enum": [
+            "doctor"
+          ]
+        },
+        {
+          "description": "Consume phase-10 consent.",
+          "type": "string",
+          "enum": [
+            "finalize"
+          ]
+        },
+        {
+          "description": "Run a distinct scoped reset.",
+          "type": "string",
+          "enum": [
+            "reset"
+          ]
+        }
+      ]
+    },
+    "HostCutoverRequest": {
+      "description": "One host cutover or scoped-reset command.",
+      "type": "object",
+      "required": [
+        "operation"
+      ],
+      "properties": {
+        "candidateId": {
+          "description": "Candidate identity bound to the request.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "consentDigest": {
+          "description": "Exact apply or finalization consent digest.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "freshConsentDigest": {
+          "description": "Fresh consent used by a non-owner Admin to resume.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "operation": {
+          "description": "Requested operation.",
+          "allOf": [
+            {
+              "$ref": "#/definitions/HostCutoverOperation"
+            }
+          ]
+        },
+        "operationId": {
+          "description": "Existing operation identity for status or continuation.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "operatorId": {
+          "description": "Bound operator identity.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "previewDigest": {
+          "description": "Exact preview digest.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "reason": {
+          "description": "Bounded hold reason.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "recoveryDigest": {
+          "description": "Qualified recovery digest for cutover apply.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "resetScope": {
+          "description": "Scoped reset authority, required only for `reset`.",
+          "anyOf": [
+            {
+              "$ref": "#/definitions/HostCutoverResetScope"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "revisionPlanId": {
+          "description": "Revision-plan identity bound to the request.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "target": {
+          "description": "Opaque target identity for a scoped reset.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "zone": {
+          "description": "Zone selection is forbidden for one-time cutover operations.",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "additionalProperties": false
+    },
+    "HostCutoverResetScope": {
+      "description": "Closed scoped-reset authority vocabulary.",
+      "oneOf": [
+        {
+          "description": "Reset one Zone.",
+          "type": "string",
+          "enum": [
+            "zone"
+          ]
+        },
+        {
+          "description": "Reset one Provider.",
+          "type": "string",
+          "enum": [
+            "provider"
+          ]
+        },
+        {
+          "description": "Reset one Guest.",
+          "type": "string",
+          "enum": [
+            "guest"
+          ]
+        }
+      ]
+    },
+    "HostCutoverResponse": {
+      "description": "Redaction-safe host cutover response.",
+      "type": "object",
+      "required": [
+        "mutationAccepted",
+        "operation",
+        "phase",
+        "state",
+        "summary"
+      ],
+      "properties": {
+        "inventory": {
+          "description": "Inventory summary without paths, secrets, or host identifiers.",
+          "anyOf": [
+            {
+              "$ref": "#/definitions/HostCutoverInventorySummary"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "mutationAccepted": {
+          "description": "Whether this response represents an accepted mutation.",
+          "type": "boolean"
+        },
+        "operation": {
+          "description": "Command that produced this response.",
+          "allOf": [
+            {
+              "$ref": "#/definitions/HostCutoverOperation"
+            }
+          ]
+        },
+        "operationId": {
+          "description": "Opaque operation identity, when one exists.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "phase": {
+          "description": "Current protocol phase number.",
+          "type": "integer",
+          "format": "uint8",
+          "minimum": 0.0
+        },
+        "previewDigest": {
+          "description": "Preview digest, when the operation has a preview.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "state": {
+          "description": "Redacted U3 operation state.",
+          "type": "string"
+        },
+        "summary": {
+          "description": "Redaction-safe summary.",
+          "type": "string"
+        }
+      },
+      "additionalProperties": false
+    },
     "HostDestroyRequest": {
       "description": "Common flags every mutating-verb request carries. The daemon rejects requests that set neither `dry_run` nor `apply`.",
       "type": "object",
@@ -7631,6 +7974,63 @@
           ]
         }
       ]
+    },
+    "LaunchCutoverRunnerRequest": {
+      "description": "Request to launch the one-shot cutover runner.",
+      "type": "object",
+      "required": [
+        "bootstrapFdIndex",
+        "operationId"
+      ],
+      "properties": {
+        "bootstrapFdIndex": {
+          "description": "Required index of the single bootstrap fd attachment.",
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0.0
+        },
+        "operationId": {
+          "description": "Opaque operation identity used to derive runner-owned state.",
+          "type": "string"
+        }
+      },
+      "additionalProperties": false
+    },
+    "LaunchCutoverRunnerResponse": {
+      "description": "Response from the cutover runner launch.",
+      "type": "object",
+      "required": [
+        "operationId",
+        "pid",
+        "startTimeTicks"
+      ],
+      "properties": {
+        "operationId": {
+          "description": "Opaque operation identity.",
+          "type": "string"
+        },
+        "pid": {
+          "description": "Child pid observed at launch.",
+          "type": "integer",
+          "format": "int32"
+        },
+        "pidfdIndex": {
+          "description": "Index of the returned pidfd, when the broker supplies one.",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint32",
+          "minimum": 0.0
+        },
+        "startTimeTicks": {
+          "description": "`/proc/<pid>/stat` start-time captured by the broker.",
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0.0
+        }
+      },
+      "additionalProperties": false
     },
     "LaunchMinijailChildRequest": {
       "description": "The daemon never passes argv, env, uid/gid, caps, seccomp profile path, or any other launch authority across the wire. The broker reads the full launch context from `bundle.vms[vm_id].roles[role_id]` and constructs the minijail exec line itself.",
@@ -9582,6 +9982,25 @@
           }
         },
         {
+          "description": "Host-wide cutover and scoped-reset operation family.",
+          "type": "object",
+          "required": [
+            "kind",
+            "payload"
+          ],
+          "properties": {
+            "kind": {
+              "type": "string",
+              "enum": [
+                "host cutover"
+              ]
+            },
+            "payload": {
+              "$ref": "#/definitions/HostCutoverRequest"
+            }
+          }
+        },
+        {
           "description": "Read the editable guest config working copy of `vm` over the authenticated guest-control bridge and return it as a base64 string. ADMIN-ONLY (it crosses into the guest over the authenticated transport): the daemon enforces `PeerRole::Admin` BEFORE any probe / sign / read. The CLI's `config sync` uses this on guest-control VMs instead of an SSH transfer.",
           "type": "object",
           "required": [
@@ -9853,6 +10272,25 @@
             },
             "payload": {
               "$ref": "#/definitions/HostCheckResponse"
+            }
+          }
+        },
+        {
+          "description": "Host-wide cutover or scoped-reset response.",
+          "type": "object",
+          "required": [
+            "kind",
+            "payload"
+          ],
+          "properties": {
+            "kind": {
+              "type": "string",
+              "enum": [
+                "host cutover"
+              ]
+            },
+            "payload": {
+              "$ref": "#/definitions/HostCutoverResponse"
             }
           }
         },

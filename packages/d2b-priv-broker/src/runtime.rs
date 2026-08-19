@@ -21,6 +21,8 @@ use crate::sys::{owned_fd_from_raw, path_safe, peer_credentials};
 #[cfg(not(feature = "layer1-bootstrap"))]
 use hmac::{Hmac, Mac};
 #[cfg(not(feature = "layer1-bootstrap"))]
+use nix::fcntl::{FcntlArg, FdFlag, fcntl};
+#[cfg(not(feature = "layer1-bootstrap"))]
 use nix::libc;
 #[cfg(not(feature = "layer1-bootstrap"))]
 use nix::sys::socket::{AddressFamily, SockType, socketpair};
@@ -88,12 +90,15 @@ const DEFAULT_REALM_CONTROLLERS_PATH: &str = "/etc/d2b/realm-controllers.json";
 const DEFAULT_REALM_IDENTITY_PATH: &str = "/etc/d2b/realm-identity.json";
 const DEFAULT_STATE_DIR: &str = "/var/lib/d2b";
 const DEFAULT_ACTIVATION_HELPER_PATH: &str = "/run/current-system/sw/bin/d2b-activation-helper";
+const DEFAULT_CUTOVER_RUNNER_PATH: &str = "/run/current-system/sw/bin/d2b-cutover-runner";
+const DEFAULT_CUTOVER_SOCKET_ROOT: &str = "/run/d2b";
 const CAPABILITIES: &[&str] = &[
     "Hello",
     "ValidateBundle",
     "ExportBrokerAudit",
     "MigrateLegacySwtpmState",
     "ApplyHostGenerationHandoff",
+    "LaunchCutoverRunner",
 ];
 const DEFAULT_IPC_REQUESTS_PER_UID_PER_SECOND: u32 = 512;
 const IPC_RATE_LIMIT_WINDOW: Duration = Duration::from_secs(1);
@@ -122,6 +127,9 @@ pub struct ServerConfig {
     /// Trusted target-local activation helper. The daemon never supplies
     /// this path on the wire.
     pub activation_helper_path: PathBuf,
+    /// Trusted one-shot cutover runner. The daemon never supplies this path
+    /// on the wire and the runner is not a persistent systemd unit.
+    pub cutover_runner_path: PathBuf,
     pub d2bd_uid: u32,
     pub d2bd_gid: u32,
     /// Directory for the StoreSync-only observability JSONL export
@@ -482,6 +490,9 @@ where
                 realm_identity_path,
                 state_dir,
                 activation_helper_path,
+                cutover_runner_path: env::var_os("D2B_CUTOVER_RUNNER_PATH")
+                    .map(PathBuf::from)
+                    .unwrap_or_else(|| PathBuf::from(DEFAULT_CUTOVER_RUNNER_PATH)),
                 d2bd_uid: d2bd_uid.unwrap_or(fallback_uid),
                 d2bd_gid: d2bd_gid.unwrap_or(fallback_gid),
                 store_sync_export_dir,
@@ -1862,7 +1873,10 @@ fn dispatch_request(
 
 #[cfg(not(feature = "layer1-bootstrap"))]
 fn request_accepts_fd(request: &BrokerRequest) -> bool {
-    matches!(request, BrokerRequest::OpenPeerPidfdFromAcceptedSocket(_))
+    matches!(
+        request,
+        BrokerRequest::OpenPeerPidfdFromAcceptedSocket(_) | BrokerRequest::LaunchCutoverRunner(_)
+    )
 }
 
 /// Real-wire dispatch. Matches the opaque-ID
@@ -4733,6 +4747,43 @@ fn dispatch_request_with_backend_and_request_fds<B: DispatchBackend>(
                     migrated_vm_count: outcome.migrated_vm_count,
                     notes: outcome.notes,
                 },
+            )))
+        }
+        RealBrokerRequest::LaunchCutoverRunner(req) => {
+            if !caller_role_is_admin(&caller_role) {
+                audit_log
+                    .write_entry_with_caller_ids(
+                        "LaunchCutoverRunner",
+                        caller_uid,
+                        caller_gid,
+                        "denied-refused",
+                        req.operation_id.as_str(),
+                        "unauthorized",
+                    )
+                    .map_err(|error| BrokerError::Protocol(error.to_string()))?;
+                return Err(BrokerError::AuditRequiresAdmin);
+            }
+            if req.bootstrap_fd_index != 0 || request_fds.len() != 1 {
+                return Err(BrokerError::Protocol(
+                    "LaunchCutoverRunner requires exactly one bootstrap fd at index 0".to_owned(),
+                ));
+            }
+            let bootstrap_fd = request_fds
+                .pop()
+                .ok_or_else(|| BrokerError::Protocol("cutover bootstrap fd missing".to_owned()))?;
+            let response = launch_cutover_runner(config, &req, bootstrap_fd)?;
+            audit_log
+                .write_entry_with_caller_ids(
+                    "LaunchCutoverRunner",
+                    caller_uid,
+                    caller_gid,
+                    "callable-success",
+                    req.operation_id.as_str(),
+                    "ok",
+                )
+                .map_err(|error| BrokerError::Protocol(error.to_string()))?;
+            Ok(DispatchResult::no_fds(BrokerResponse::LaunchCutoverRunner(
+                response,
             )))
         }
         RealBrokerRequest::ApplyHostGenerationHandoff(req) => {
@@ -10195,6 +10246,37 @@ fn caller_role_is_admin(caller_role: &CallerRole) -> bool {
     }
 }
 
+#[cfg(not(feature = "layer1-bootstrap"))]
+fn launch_cutover_runner(
+    config: &ServerConfig,
+    request: &d2b_contracts::broker_wire::LaunchCutoverRunnerRequest,
+    bootstrap_fd: OwnedFd,
+) -> Result<d2b_contracts::broker_wire::LaunchCutoverRunnerResponse, BrokerError> {
+    let raw_fd = bootstrap_fd.as_raw_fd();
+    fcntl(raw_fd, FcntlArg::F_SETFD(FdFlag::empty()))
+        .map_err(|error| BrokerError::LiveHandler(format!("cutover bootstrap fd: {error}")))?;
+    let child = std::process::Command::new(&config.cutover_runner_path)
+        .env("D2B_CUTOVER_BOOTSTRAP_FD", raw_fd.to_string())
+        .env("D2B_CUTOVER_STATE_DIR", &config.state_dir)
+        .env("D2B_CUTOVER_SOCKET_DIR", DEFAULT_CUTOVER_SOCKET_ROOT)
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .spawn()
+        .map_err(|error| BrokerError::LiveHandler(format!("cutover runner spawn: {error}")))?;
+    let pid = i32::try_from(child.id())
+        .map_err(|_| BrokerError::LiveHandler("cutover runner pid out of range".to_owned()))?;
+    let start_time_ticks = read_proc_start_time_ticks(pid)?.ok_or_else(|| {
+        BrokerError::LiveHandler("cutover runner exited before identity read".to_owned())
+    })?;
+    Ok(d2b_contracts::broker_wire::LaunchCutoverRunnerResponse {
+        operation_id: request.operation_id.clone(),
+        pid,
+        start_time_ticks,
+        pidfd_index: None,
+    })
+}
+
 impl BrokerError {
     #[allow(clippy::too_many_arguments)]
     fn audit(
@@ -12560,6 +12642,7 @@ mod tests {
             realm_identity_path: root.join("realm-identity.json"),
             state_dir: root.join("state"),
             activation_helper_path: root.join("activation-helper"),
+            cutover_runner_path: root.join("cutover-runner"),
             d2bd_uid: 1000,
             d2bd_gid: Gid::current().as_raw(),
             store_sync_export_dir: root.join("observability").join("store-sync"),

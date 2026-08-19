@@ -395,3 +395,12 @@ Their golden files (`console-deferred.golden`, `audio-deferred.golden`)
 are retired. The Rust `Display` impl for the two remaining deferred verbs
 is verified byte-for-byte against `tests/golden/cli-output/audit-*-deferred.golden`
 and `keys-deferred.golden`.
+## Cutover refusals
+
+The cutover surface fails closed before mutation for incomplete all-Zone
+inventory, stale preview or candidate digests, missing recovery evidence,
+wrong Admin operator binding, unavailable privileged audit durability, active
+holds, unavailable runner sockets, and foreign journal or lock ownership.
+One-time `--zone` selection is a usage error. A broker that has not yet
+received the trusted runner registration returns `broker-unimplemented`; the
+CLI never falls back to a shell command.

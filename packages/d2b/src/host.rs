@@ -1,7 +1,10 @@
 //! Host ResourceType and host-maintenance commands.
 
 use clap::{Args, Subcommand};
+use d2b_contracts::public_wire::{HostCutoverOperation, HostCutoverRequest, HostCutoverResetScope};
+use d2b_cutover::{RunnerCommand, RunnerPaths, send_command};
 use serde_json::{Map, Value, json};
+use std::path::PathBuf;
 
 use crate::{
     CliFailure,
@@ -28,6 +31,7 @@ pub(crate) enum HostCommand {
     Install(HostInstallArgs),
     Reconcile(HostReconcileArgs),
     Validate(HostValidateArgs),
+    Cutover(HostCutoverArgs),
 }
 
 #[derive(Debug, Args, Clone)]
@@ -90,6 +94,73 @@ pub(crate) struct HostReconcileArgs {
     pub(crate) dry_run: bool,
     #[arg(long, conflicts_with = "dry_run")]
     pub(crate) apply: bool,
+}
+
+#[derive(Debug, Args, Clone)]
+pub(crate) struct HostCutoverArgs {
+    #[command(subcommand)]
+    pub(crate) command: HostCutoverCommand,
+}
+
+#[derive(Debug, Subcommand, Clone)]
+pub(crate) enum HostCutoverCommand {
+    Preview(HostCutoverActionArgs),
+    Status(HostCutoverActionArgs),
+    Hold(HostCutoverActionArgs),
+    Resume(HostCutoverActionArgs),
+    Apply(HostCutoverActionArgs),
+    Rollback(HostCutoverActionArgs),
+    Verify(HostCutoverActionArgs),
+    Doctor(HostCutoverActionArgs),
+    Finalize(HostCutoverActionArgs),
+    Reset(HostCutoverResetArgs),
+}
+
+#[derive(Debug, Args, Clone, Default)]
+pub(crate) struct HostCutoverActionArgs {
+    #[arg(long = "operation-id")]
+    pub(crate) operation_id: Option<String>,
+    #[arg(long = "candidate-id")]
+    pub(crate) candidate_id: Option<String>,
+    #[arg(long = "revision-plan-id")]
+    pub(crate) revision_plan_id: Option<String>,
+    #[arg(long = "preview-digest")]
+    pub(crate) preview_digest: Option<String>,
+    #[arg(long = "recovery-digest")]
+    pub(crate) recovery_digest: Option<String>,
+    #[arg(long = "operator-id")]
+    pub(crate) operator_id: Option<String>,
+    #[arg(long = "consent-digest")]
+    pub(crate) consent_digest: Option<String>,
+    #[arg(long = "fresh-consent-digest")]
+    pub(crate) fresh_consent_digest: Option<String>,
+    #[arg(long)]
+    pub(crate) reason: Option<String>,
+}
+
+#[derive(Debug, Args, Clone)]
+pub(crate) struct HostCutoverResetArgs {
+    #[arg(long = "operation-id")]
+    pub(crate) operation_id: Option<String>,
+    #[arg(long = "candidate-id")]
+    pub(crate) candidate_id: Option<String>,
+    #[arg(long = "revision-plan-id")]
+    pub(crate) revision_plan_id: Option<String>,
+    #[arg(long = "preview-digest")]
+    pub(crate) preview_digest: Option<String>,
+    #[arg(long = "consent-digest")]
+    pub(crate) consent_digest: Option<String>,
+    #[arg(long = "scope", value_enum)]
+    pub(crate) scope: HostCutoverResetScopeArg,
+    #[arg(long)]
+    pub(crate) target: String,
+}
+
+#[derive(Debug, Clone, Copy, clap::ValueEnum)]
+pub(crate) enum HostCutoverResetScopeArg {
+    Zone,
+    Provider,
+    Guest,
 }
 
 pub(crate) fn run(
@@ -209,6 +280,7 @@ pub(crate) fn run(
             )
         }
         HostCommand::Reconcile(args) => reconcile(context, args, mode, deadline),
+        HostCommand::Cutover(args) => cutover(context, args, mode, deadline),
     }
 }
 
@@ -455,6 +527,180 @@ fn reconcile(
         deadline,
         mode,
     )?;
+    context.emit(&value, mode)?;
+    Ok(0)
+}
+
+fn cutover(
+    context: &ZoneContext,
+    args: &HostCutoverArgs,
+    mode: OutputMode,
+    deadline: RequestDeadline,
+) -> Result<i32, CliFailure> {
+    let (operation, action) = match &args.command {
+        HostCutoverCommand::Preview(action) => (HostCutoverOperation::Preview, action),
+        HostCutoverCommand::Status(action) => (HostCutoverOperation::Status, action),
+        HostCutoverCommand::Hold(action) => (HostCutoverOperation::Hold, action),
+        HostCutoverCommand::Resume(action) => (HostCutoverOperation::Resume, action),
+        HostCutoverCommand::Apply(action) => (HostCutoverOperation::Apply, action),
+        HostCutoverCommand::Rollback(action) => (HostCutoverOperation::Rollback, action),
+        HostCutoverCommand::Verify(action) => (HostCutoverOperation::Verify, action),
+        HostCutoverCommand::Doctor(action) => (HostCutoverOperation::Doctor, action),
+        HostCutoverCommand::Finalize(action) => (HostCutoverOperation::Finalize, action),
+        HostCutoverCommand::Reset(reset) => {
+            return cutover_reset(context, reset, mode, deadline);
+        }
+    };
+
+    if context.has_explicit_zone()
+        && matches!(
+            operation,
+            HostCutoverOperation::Preview
+                | HostCutoverOperation::Apply
+                | HostCutoverOperation::Verify
+                | HostCutoverOperation::Finalize
+        )
+    {
+        return Err(context.failure(
+            "ref-invalid",
+            "one-time host cutover commands do not accept --zone",
+            mode,
+            2,
+        ));
+    }
+
+    if matches!(
+        operation,
+        HostCutoverOperation::Status | HostCutoverOperation::Hold | HostCutoverOperation::Resume
+    ) && let Some(operation_id) = action.operation_id.as_deref()
+    {
+        let root = std::env::var_os("D2B_CUTOVER_STATE_DIR")
+            .map(PathBuf::from)
+            .unwrap_or_else(|| PathBuf::from("/var/lib/d2b"));
+        let socket_root = std::env::var_os("D2B_CUTOVER_SOCKET_DIR")
+            .map(PathBuf::from)
+            .unwrap_or_else(|| PathBuf::from("/run/d2b"));
+        let operation_id = d2b_cutover::OperationId::new(operation_id.to_owned())
+            .map_err(|_| context.failure("ref-invalid", "invalid operation id", mode, 2))?;
+        let paths = RunnerPaths::new_with_socket_root(root, socket_root, &operation_id);
+        let command = match operation {
+            HostCutoverOperation::Status => RunnerCommand::Status,
+            HostCutoverOperation::Hold => RunnerCommand::Hold {
+                reason: action.reason.clone().ok_or_else(|| {
+                    context.failure("ref-invalid", "hold requires --reason", mode, 2)
+                })?,
+            },
+            HostCutoverOperation::Resume => RunnerCommand::Resume {
+                fresh_consent: action
+                    .fresh_consent_digest
+                    .as_deref()
+                    .map(|digest| d2b_cutover::Digest::parse(digest.to_owned()))
+                    .transpose()
+                    .map_err(|_| {
+                        context.failure("ref-invalid", "invalid fresh consent digest", mode, 2)
+                    })?,
+            },
+            _ => unreachable!(),
+        };
+        match send_command(&paths.socket, &command) {
+            Ok(response) => {
+                let value = serde_json::to_value(response).map_err(|_| {
+                    context.failure(
+                        "internal-error",
+                        "failed to encode runner response",
+                        mode,
+                        1,
+                    )
+                })?;
+                context.emit(&value, mode)?;
+                return Ok(0);
+            }
+            Err(error) if matches!(operation, HostCutoverOperation::Status) => {
+                if mode.is_json() {
+                    context.emit(
+                        &json!({
+                            "operation": "status",
+                            "state": "unavailable",
+                            "summary": "runner status socket unavailable; daemon observation will be attempted",
+                            "detail": error.to_string(),
+                        }),
+                        mode,
+                    )?;
+                }
+            }
+            Err(error) => {
+                return Err(context.failure(
+                    "cutover-runner-unavailable",
+                    &format!("runner socket unavailable: {error}"),
+                    mode,
+                    78,
+                ));
+            }
+        }
+    }
+
+    let request = HostCutoverRequest {
+        operation,
+        operation_id: action.operation_id.clone(),
+        candidate_id: action.candidate_id.clone(),
+        revision_plan_id: action.revision_plan_id.clone(),
+        preview_digest: action.preview_digest.clone(),
+        recovery_digest: action.recovery_digest.clone(),
+        operator_id: action.operator_id.clone(),
+        consent_digest: action.consent_digest.clone(),
+        fresh_consent_digest: action.fresh_consent_digest.clone(),
+        reason: action.reason.clone(),
+        reset_scope: None,
+        target: None,
+        zone: context
+            .has_explicit_zone()
+            .then(|| context.zone_name().to_owned()),
+    };
+    let payload = serde_json::to_value(request).map_err(|_| {
+        context.failure(
+            "internal-error",
+            "failed to encode cutover request",
+            mode,
+            1,
+        )
+    })?;
+    let value = context.invoke("HostCutover", payload, deadline, mode)?;
+    context.emit(&value, mode)?;
+    Ok(0)
+}
+
+fn cutover_reset(
+    context: &ZoneContext,
+    args: &HostCutoverResetArgs,
+    mode: OutputMode,
+    deadline: RequestDeadline,
+) -> Result<i32, CliFailure> {
+    let reset_scope = match args.scope {
+        HostCutoverResetScopeArg::Zone => HostCutoverResetScope::Zone,
+        HostCutoverResetScopeArg::Provider => HostCutoverResetScope::Provider,
+        HostCutoverResetScopeArg::Guest => HostCutoverResetScope::Guest,
+    };
+    let request = HostCutoverRequest {
+        operation: HostCutoverOperation::Reset,
+        operation_id: args.operation_id.clone(),
+        candidate_id: args.candidate_id.clone(),
+        revision_plan_id: args.revision_plan_id.clone(),
+        preview_digest: args.preview_digest.clone(),
+        recovery_digest: None,
+        operator_id: None,
+        consent_digest: args.consent_digest.clone(),
+        fresh_consent_digest: None,
+        reason: None,
+        reset_scope: Some(reset_scope),
+        target: Some(args.target.clone()),
+        zone: context
+            .has_explicit_zone()
+            .then(|| context.zone_name().to_owned()),
+    };
+    let payload = serde_json::to_value(request).map_err(|_| {
+        context.failure("internal-error", "failed to encode reset request", mode, 1)
+    })?;
+    let value = context.invoke("HostCutover", payload, deadline, mode)?;
     context.emit(&value, mode)?;
     Ok(0)
 }

@@ -31,7 +31,7 @@ use crate::{
 pub const REQUEST_DOMAIN: &str = "d2b:cutover:request:v1";
 
 /// Inventory carried by one operation request.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, serde::Deserialize)]
 #[serde(rename_all = "camelCase", tag = "kind", content = "value")]
 pub enum OperationInventory {
     /// Host-wide all-Zone cutover inventory.
@@ -41,7 +41,8 @@ pub enum OperationInventory {
 }
 
 /// Immutable operation request binding.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct OperationRequest {
     operation_id: OperationId,
     operation_kind: OperationKind,

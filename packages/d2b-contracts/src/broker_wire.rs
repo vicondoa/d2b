@@ -32,6 +32,12 @@ pub enum BrokerRequest {
     /// handoff. The broker resolves all host effects from its trusted
     /// installed-generation state; no path or command crosses the wire.
     ApplyHostGenerationHandoff(crate::host_generation::ApplyHostGenerationHandoff),
+    /// Launch one operation-scoped cutover runner before control-plane drain.
+    ///
+    /// The request must carry exactly one SCM_RIGHTS bootstrap descriptor.
+    /// The broker resolves the runner executable from its trusted server
+    /// configuration and never accepts a path or command over the wire.
+    LaunchCutoverRunner(LaunchCutoverRunnerRequest),
     ApplyNftables(ApplyNftablesRequest),
     /// Apply or remove one Provider-owned nftables projection.
     ///
@@ -323,6 +329,31 @@ pub struct ApplyHostGenerationHandoffResponse {
     pub summary: String,
 }
 
+/// Request to launch the one-shot cutover runner.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct LaunchCutoverRunnerRequest {
+    /// Opaque operation identity used to derive runner-owned state.
+    pub operation_id: BundleOpId,
+    /// Required index of the single bootstrap fd attachment.
+    pub bootstrap_fd_index: u32,
+}
+
+/// Response from the cutover runner launch.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct LaunchCutoverRunnerResponse {
+    /// Opaque operation identity.
+    pub operation_id: BundleOpId,
+    /// Child pid observed at launch.
+    pub pid: i32,
+    /// `/proc/<pid>/stat` start-time captured by the broker.
+    pub start_time_ticks: u64,
+    /// Index of the returned pidfd, when the broker supplies one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pidfd_index: Option<u32>,
+}
+
 impl BrokerRequest {
     /// Stable operation name for audit records.
     ///
@@ -333,6 +364,7 @@ impl BrokerRequest {
     pub fn op_name(&self) -> &'static str {
         match self {
             Self::ApplyHostGenerationHandoff(_) => "ApplyHostGenerationHandoff",
+            Self::LaunchCutoverRunner(_) => "LaunchCutoverRunner",
             Self::ApplyNftables(_) => "ApplyNftables",
             Self::ApplyNftablesProjection(_) => "ApplyNftablesProjection",
             Self::ApplyNmUnmanaged(_) => "ApplyNmUnmanaged",
@@ -752,6 +784,15 @@ impl BrokerRequest {
                     request.intent.target_generation
                 ),
             ),
+            Self::LaunchCutoverRunner(request) => (
+                request.operation_id.to_string(),
+                format!(
+                    "{}:{}:{}",
+                    self.op_name(),
+                    request.operation_id,
+                    request.bootstrap_fd_index
+                ),
+            ),
             Self::RunActivation(request) => (
                 request.vm.clone(),
                 format!(
@@ -1110,6 +1151,8 @@ pub struct HelloRequest {
 pub enum BrokerResponse {
     /// Result of one source-to-target generation handoff.
     ApplyHostGenerationHandoff(ApplyHostGenerationHandoffResponse),
+    /// Result of launching the operation-scoped cutover runner.
+    LaunchCutoverRunner(LaunchCutoverRunnerResponse),
     Ack(AckResponse),
     CreatePersistentTap(TapReadyResponse),
     CreateTapFd(TapReadyResponse),

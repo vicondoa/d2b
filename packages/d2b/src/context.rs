@@ -130,6 +130,7 @@ impl std::fmt::Debug for ContextBackend {
 /// The selected Zone and its authenticated-session request facade.
 pub(crate) struct ZoneContext {
     zone_name: String,
+    explicit_zone: bool,
     socket_path: PathBuf,
     zone_path: d2b_contracts::v3::zone_routing::ZonePath,
     backend: ContextBackend,
@@ -140,6 +141,7 @@ impl std::fmt::Debug for ZoneContext {
         formatter
             .debug_struct("ZoneContext")
             .field("zone_name", &self.zone_name)
+            .field("explicit_zone", &self.explicit_zone)
             .field("backend", &self.backend)
             .finish()
     }
@@ -151,6 +153,12 @@ impl ZoneContext {
             .map(PathBuf::from)
             .unwrap_or_else(|| PathBuf::from("/run/d2b/public.sock"));
         Self::from_socket("local-root".to_owned(), socket_path)
+    }
+
+    pub(crate) fn local_only_with_explicit_zone(explicit_zone: bool) -> Self {
+        let mut context = Self::local_only();
+        context.explicit_zone = explicit_zone;
+        context
     }
 
     /// Discover the nearest reachable Zone socket.
@@ -166,6 +174,7 @@ impl ZoneContext {
         let requested_zone = zone_arg
             .map(str::to_owned)
             .or_else(|| env::var("D2B_ZONE").ok().filter(|value| !value.is_empty()));
+        let explicit_zone = requested_zone.is_some();
         let zone_name = requested_zone.as_deref().unwrap_or("local-root").to_owned();
         validate_zone_name(&zone_name)?;
 
@@ -198,6 +207,7 @@ impl ZoneContext {
         let backend = canonical_backend(&selected_zone, &socket_path)?;
         Ok(Self {
             zone_name: selected_zone,
+            explicit_zone,
             socket_path,
             zone_path,
             backend,
@@ -220,6 +230,7 @@ impl ZoneContext {
         backend.injected = Some(session_client);
         Ok(Self {
             zone_name,
+            explicit_zone: false,
             socket_path,
             zone_path,
             backend,
@@ -232,6 +243,7 @@ impl ZoneContext {
             .expect("validated local Zone socket backend");
         Self {
             zone_name,
+            explicit_zone: false,
             socket_path,
             zone_path,
             backend,
@@ -240,6 +252,10 @@ impl ZoneContext {
 
     pub(crate) fn zone_name(&self) -> &str {
         &self.zone_name
+    }
+
+    pub(crate) const fn has_explicit_zone(&self) -> bool {
+        self.explicit_zone
     }
 
     pub(crate) fn zone_ref(&self) -> String {

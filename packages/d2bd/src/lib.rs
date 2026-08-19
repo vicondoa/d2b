@@ -253,6 +253,7 @@ pub mod usbipd_perenv_autostart;
 // resolution, host PipeWire enforcement, and guestd RPC dispatch.
 mod audio_dispatch;
 mod audio_resource_runtime;
+mod cutover;
 mod process_resource_runtime;
 // Host-side audio controller strategy (ADR 0041): typed trait plus
 // PipeWireHostController (wpctl subprocess), QemuAudioController (offline),
@@ -3575,6 +3576,7 @@ fn handle_connection_authorized(
         KnownFeatureFlag::ExportBrokerAudit.wire_value(),
         KnownFeatureFlag::ConfiguredLaunchV1.wire_value(),
         KnownFeatureFlag::UnsafeLocalProviderV1.wire_value(),
+        KnownFeatureFlag::CutoverRunnerV1.wire_value(),
     ];
     let capabilities = advertised_capabilities
         .into_iter()
@@ -3910,6 +3912,7 @@ fn dispatch_request_locked(
         wire::Request::HostReconcile(req) => {
             dispatch_broker_host_reconcile_as(state, req, broker_caller_role_for_peer(peer))
         }
+        wire::Request::HostCutover(req) => cutover::dispatch(state, peer, req),
         wire::Request::ReadGuestConfig(req) => {
             dispatch_read_guest_config(state, broker_caller_role_for_peer(peer), req)
         }
@@ -3944,6 +3947,31 @@ fn dispatch_resource_request(
         return Ok(resource_runtime_error_frame(
             resource_runtime::ResourceRuntimeError::AuthenticationUnavailable,
         ));
+    }
+    if request.method() == Some("HostCutover") {
+        if !matches!(peer.role, PeerRole::Admin) {
+            return Err(TypedError::AuthzNotAdmin {
+                verb: "hostCutover".to_owned(),
+            });
+        }
+        let mut value = request.value();
+        if let Value::Object(object) = &mut value {
+            for key in [
+                "type",
+                "method",
+                "zoneRef",
+                "schemaVersion",
+                "service",
+                "sessionVerb",
+            ] {
+                object.remove(key);
+            }
+        }
+        let cutover =
+            serde_json::from_value(value).map_err(|error| TypedError::WireInvalidFrame {
+                detail: format!("hostCutover request malformed: {error}"),
+            })?;
+        return cutover::dispatch(state, peer, cutover);
     }
     let typed_shell = typed_shell_resource_request(&request.value());
     let runtime = match if typed_shell {

@@ -3403,3 +3403,32 @@ detached state lives in guestd's detached registry).
 | `auth status` | `rust-native` | Auth status is a read-only daemon query that reports caller mapping, socket reachability, and authorization hints. |
 | `exec run/attach/wait/status/list/logs/kill` | `rust-native` | Typed EphemeralProcess Resource operations over the Zone session; no SSH or VM lifecycle alias. |
 | `shell open/attach/list/status/detach/kill` | `rust-native` | Admin-only qualified ShellSession Resource lifecycle plus ProcessAttachClient named streams. Local VMs use authenticated guest-control; unsafe-local uses the exact requester-UID helper and a validated terminal fd. No retired `ShellOp`, SSH, host-shell fallback, root unit, per-VM service, or broker op. |
+
+### Host cutover and scoped reset
+
+The cutover surface is:
+
+```text
+d2b host cutover preview
+d2b host cutover status --operation-id <ID>
+d2b host cutover hold --operation-id <ID> --reason <TEXT>
+d2b host cutover resume --operation-id <ID> [--fresh-consent-digest <DIGEST>]
+d2b host cutover apply --operation-id <ID> --candidate-id <ID> \
+  --revision-plan-id <ID> --preview-digest <DIGEST> \
+  --recovery-digest <DIGEST> --operator-id <ID> --consent-digest <DIGEST>
+d2b host cutover rollback --operation-id <ID>
+d2b host cutover verify --operation-id <ID>
+d2b host cutover doctor --operation-id <ID>
+d2b host cutover finalize --operation-id <ID> --consent-digest <DIGEST>
+d2b host cutover reset --scope <zone|provider|guest> --target <ID>
+```
+
+`preview` is mutation-free and reports only redaction-safe inventory counts
+and canonical digests. One-time cutover `preview`, `apply`, `verify`, and
+`finalize` reject `--zone`; the operation is host-wide. Scoped reset is a
+separate authority and requires its own scope, target, preview, and consent.
+After admission, `status`, `hold`, and `resume` use the runner-owned Unix
+socket so they remain available while `d2bd` is drained. The journal is
+root-owned mode `0600` and is never printed by the CLI. Hold and resume
+advance only after the privileged audit boundary returns durable evidence;
+otherwise they return a typed refusal without changing the journal.

@@ -855,6 +855,17 @@ promoted; they do not write live-host validation evidence.
 | `otel-host-bridge` | (host-scoped) `d2b-otel-host-bridge` | empty (fd-only contract; no AF_VSOCK socket creation) | bind set: `/run/d2b/otel`, CH vsock host socket, `host-egress.sock` (RW listen target); broker rejects bundle intent whose source VM ≠ `observability.vmName` | `packages/d2b-contract-tests/tests/minijail_relay_otel.rs` |
 
 
+## U4 cutover runner admission
+
+`LaunchCutoverRunner` is a narrow pre-drain broker admission operation. It is
+Admin-only, accepts exactly one SCM_RIGHTS bootstrap descriptor, and resolves
+the runner executable from trusted broker configuration. It is not a
+`SpawnRunner` uid-0 exception, does not place the child in a per-VM unit, and
+does not authorize any cutover effect by itself. The current Nix privilege
+registration remains coupled to the host-tool registration change; until that
+registration lands, the broker returns the typed unimplemented result rather
+than accepting a raw path or command.
+
 ## Related ADRs
 
 - [ADR 0015: daemon-only clean break](../adr/0015-daemon-only-clean-break.md) - the architectural decision record that defines the daemon-only root surface of `d2bd` + `d2b-priv-broker`.
