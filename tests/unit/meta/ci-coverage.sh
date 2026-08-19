@@ -96,8 +96,8 @@ fi
 
 apt_contract_errors=()
 while IFS= read -r workflow; do
-  if grep -Ev '^[[:space:]]*#' "$workflow" | grep -Eq 'apt-get[[:space:]]+(update|install)'; then
-    apt_contract_errors+=("${workflow#"$ROOT"/}: contains a direct apt-get setup")
+  if grep -Ev '^[[:space:]]*#' "$workflow" | grep -Eq '(^|[^[:alnum:]_-])(apt-get|apt)([[:space:]]|$)'; then
+    apt_contract_errors+=("${workflow#"$ROOT"/}: contains a direct apt setup")
   fi
 done < <(
   find "$WORKFLOW_DIR" -maxdepth 1 -type f \
@@ -113,6 +113,10 @@ do
     apt_contract_errors+=("${workflow#"$ROOT"/}: does not use the CI APT helper")
   fi
 done
+
+if ! "$apt_helper" --self-test; then
+  apt_contract_errors+=("tests/tools/ci-apt-install: runner mirror-list fixture failed")
+fi
 
 for required in \
   'AZURE_MIRROR=.*http://azure.archive.ubuntu.com/ubuntu' \

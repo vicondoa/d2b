@@ -6,9 +6,24 @@ set -euo pipefail
 readonly MIRROR_LIST=/etc/apt/apt-mirrors.txt
 readonly AZURE_MIRROR=http://azure.archive.ubuntu.com/ubuntu
 readonly CANONICAL_MIRROR=https://archive.ubuntu.com/ubuntu
-readonly AZURE_MIRROR_REGEX="^${AZURE_MIRROR//./\\.}/?$"
+readonly AZURE_MIRROR_REGEX="^${AZURE_MIRROR//./\\.}/?([[:space:]]+.*)?$"
+readonly CANONICAL_MIRROR_REGEX="^${CANONICAL_MIRROR//./\\.}/?([[:space:]]+.*)?$"
 readonly APT_TIMEOUT=15
 readonly APT_RETRIES=2
+
+if [ "${1:-}" = "--self-test" ]; then
+  fixture="${AZURE_MIRROR}/$(printf '\t')priority:1"
+  rewritten=$(printf '%s\n' "$fixture" | sed -E "s#^${AZURE_MIRROR//./\\.}/?#${CANONICAL_MIRROR}#")
+  if ! printf '%s\n' "$rewritten" | grep -Eq "$CANONICAL_MIRROR_REGEX"; then
+    echo "APT mirror rewrite did not preserve runner metadata" >&2
+    exit 1
+  fi
+  if printf '%s\n' "$rewritten" | grep -Fq "$AZURE_MIRROR"; then
+    echo "APT mirror rewrite left the Azure mirror selected" >&2
+    exit 1
+  fi
+  exit 0
+fi
 
 if [ "$#" -eq 0 ]; then
   echo "usage: $0 PACKAGE [PACKAGE ...]" >&2
@@ -52,10 +67,10 @@ trap cleanup EXIT
 trap 'exit 130' HUP INT TERM
 
 sudo sed -E -i \
-  "s#${AZURE_MIRROR_REGEX}#${CANONICAL_MIRROR}#" \
+  "s#^${AZURE_MIRROR//./\\.}/?#${CANONICAL_MIRROR}#" \
   "$MIRROR_LIST"
 
-if ! sudo grep -Fqx "$CANONICAL_MIRROR" "$MIRROR_LIST"; then
+if ! sudo grep -Eq "$CANONICAL_MIRROR_REGEX" "$MIRROR_LIST"; then
   echo "failed to select the canonical HTTPS Ubuntu mirror" >&2
   exit 1
 fi
