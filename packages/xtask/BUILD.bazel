@@ -164,7 +164,7 @@ rust_test(
     env_inherit = ["D2B_REPO_ROOT", "PATH"],
     rustc_env = {"CARGO_BIN_EXE_xtask": "$(rootpath :xtask)"},
     tags = [
-        "local",
+        "no-remote-cache",
         "no-sandbox",
     ],
     deps = [] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),

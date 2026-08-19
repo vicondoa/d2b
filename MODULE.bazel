@@ -102,6 +102,16 @@ crate.annotation(
     crate = "prost-build",
     version = "0.8.0",
 )
+crate.annotation(
+    build_script_env = {"CFLAGS": "-g0"},
+    crate = "ring",
+    version = "0.17.14",
+)
+crate.annotation(
+    build_script_env = {"CFLAGS": "-g0"},
+    crate = "aws-lc-sys",
+    version = "0.44.0",
+)
 use_repo(crate, "crates")
 
 proof_crates = use_extension("@rules_rs//rs:extensions.bzl", "crate")

@@ -179,7 +179,9 @@ fn committed_profiles_share_authentication_and_worker_policy() {
         "remote Bazel actions must use the worker's shell path"
     );
     assert!(
-        wrapper.contains("/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:$test_path"),
+        wrapper.contains(
+            "/run/current-system/sw/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:$test_path",
+        ),
         "remote test runners must receive worker-standard PATH entries"
     );
 }

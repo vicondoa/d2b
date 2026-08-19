@@ -181,7 +181,7 @@ run_bazel() {
   if [ "$profile" != local ]; then
     command_flags+=(--shell_executable=/bin/bash)
     test_bazel_sh=/bin/bash
-    test_path="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:$test_path"
+    test_path="/run/current-system/sw/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:$test_path"
   fi
   D2B_BAZEL_PROFILE="$profile" "$bazel_bin" "${startup_flags[@]}" test "--config=$profile" \
     "${command_flags[@]}" \
@@ -250,7 +250,7 @@ if [ "$PROFILE" != local ]; then
   if printf '%s' "$classification" | jq -e '.retryLocally == true' >/dev/null; then
     local_log="$SCRATCH/local.$JOB.log"
     local_bep="$SCRATCH/local.$JOB.bep.json"
-    echo "BuildBuddy failed before dispatch; retrying the identical target set locally"
+    echo "BuildBuddy failed; retrying the identical target set locally"
     local_status=0
     D2B_BAZEL_FALLBACK_ISOLATE_RC=1 \
       run_bazel local "$local_log" "$local_bep" "$@" || local_status=$?

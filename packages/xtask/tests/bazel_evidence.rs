@@ -150,6 +150,29 @@ fn explicit_pre_dispatch_worker_and_transport_failures_allow_one_retry() {
 }
 
 #[test]
+fn remote_deadline_allows_one_local_retry() {
+    let directory = scratch("post-dispatch-deadline");
+    let path = directory.join("deadline.log");
+    std::fs::write(
+        &path,
+        "remote execution started\nio.grpc.StatusRuntimeException: DEADLINE_EXCEEDED\n",
+    )
+    .expect("write deadline failure log");
+    let output = run_xtask(&[
+        "bazel-evidence",
+        "classify-failure",
+        "--log",
+        path.to_str().expect("deadline failure path"),
+    ]);
+    assert!(output.status.success());
+    let value: Value = serde_json::from_slice(&output.stdout).expect("classification JSON");
+    assert_eq!(value["kind"], "transport");
+    assert_eq!(value["dispatchEvidence"], true);
+    assert_eq!(value["retryLocally"], true);
+    assert_eq!(value["maxLocalRetries"], 1);
+}
+
+#[test]
 fn redaction_removes_plain_encoded_and_split_sentinels_from_evidence() {
     let directory = scratch("redaction");
     let input = directory.join("bep.json");

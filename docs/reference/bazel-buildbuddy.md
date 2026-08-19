@@ -88,7 +88,7 @@ The facade preserves the selected target set when execution changes:
   and an allowlisted security digest;
 - a clearly pre-dispatch missing-credential, authentication, or endpoint
   failure permits one identical local retry; worker and transport failures
-  require explicit pre-dispatch evidence;
+  require explicit pre-dispatch evidence, except for a remote gRPC deadline;
 - analysis, policy, build, test, and post-dispatch failures fail closed.
 
 The trusted security digest covers the committed remote profile, module lock,
@@ -109,11 +109,11 @@ authorization values, header authentication fields, and configured sentinel
 values before evidence is published while preserving safe failure and dispatch
 hints for classification. The same redaction applies to local fallback output.
 
-`bazel-evidence classify-failure` is the typed pre-dispatch fallback
-classifier. It distinguishes positively pre-dispatch infrastructure failures
-that permit the one local retry from ambiguous, post-dispatch, or check
-failures that must fail closed. A successful Bazel invocation must also emit
-at least one `testResult` event in its BEP.
+`bazel-evidence classify-failure` is the typed fallback classifier. It
+distinguishes positively pre-dispatch infrastructure failures, plus a remote
+gRPC deadline, that permit the one local retry from ambiguous, post-dispatch,
+or check failures that must fail closed. A successful Bazel invocation must
+also emit at least one `testResult` event in its BEP.
 
 Reproduce a failure through the same alias and profile:
 

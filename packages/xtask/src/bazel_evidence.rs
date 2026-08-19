@@ -258,10 +258,15 @@ impl FailureKind {
         }
     }
 
-    fn permits_local_retry(self, pre_dispatch_evidence: bool) -> bool {
+    fn permits_local_retry(
+        self,
+        pre_dispatch_evidence: bool,
+        post_dispatch_retryable: bool,
+    ) -> bool {
         match self {
             Self::MissingCredentials | Self::Authentication | Self::Endpoint => true,
-            Self::Worker | Self::Transport => pre_dispatch_evidence,
+            Self::Worker => pre_dispatch_evidence,
+            Self::Transport => pre_dispatch_evidence || post_dispatch_retryable,
             Self::Analysis | Self::Test | Self::Policy | Self::Build => false,
         }
     }
@@ -272,6 +277,7 @@ struct FailureClassification {
     kind: Option<FailureKind>,
     dispatch_evidence: bool,
     pre_dispatch_evidence: bool,
+    post_dispatch_retryable: bool,
 }
 
 fn classify_failure(log: &str, explicit_dispatch_evidence: bool) -> FailureClassification {
@@ -309,6 +315,7 @@ fn classify_failure(log: &str, explicit_dispatch_evidence: bool) -> FailureClass
         || normalized.contains("broken pipe")
         || normalized.contains("connection reset")
         || normalized.contains("deadline exceeded")
+        || normalized.contains("deadline_exceeded")
     {
         Some(FailureKind::Transport)
     } else if normalized.contains("analysis")
@@ -339,19 +346,27 @@ fn classify_failure(log: &str, explicit_dispatch_evidence: bool) -> FailureClass
                     | FailureKind::Endpoint
             )
         );
+    let post_dispatch_retryable = matches!(kind, Some(FailureKind::Transport))
+        && (normalized.contains("deadline exceeded") || normalized.contains("deadline_exceeded"));
 
     FailureClassification {
         kind,
         dispatch_evidence,
         pre_dispatch_evidence,
+        post_dispatch_retryable,
     }
 }
 
 fn classification_value(classification: FailureClassification) -> Value {
     let retry = classification
         .kind
-        .is_some_and(|kind| kind.permits_local_retry(classification.pre_dispatch_evidence))
-        && !classification.dispatch_evidence;
+        .is_some_and(|kind| {
+            kind.permits_local_retry(
+                classification.pre_dispatch_evidence,
+                classification.post_dispatch_retryable,
+            )
+        })
+        && (!classification.dispatch_evidence || classification.post_dispatch_retryable);
     let kind = if classification.dispatch_evidence && !retry {
         "post-dispatch-uncertainty".to_owned()
     } else {

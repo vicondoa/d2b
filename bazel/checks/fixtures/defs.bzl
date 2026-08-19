@@ -23,6 +23,7 @@ def _nix_fixture_impl(ctx):
         ] + [source.path for source in ctx.files.srcs],
         command = """\
 set -eu
+export PATH=/run/current-system/sw/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:$PATH
 nix_bin="$1"
 python_bin="$2"
 flake="$3"
