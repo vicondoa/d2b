@@ -79,6 +79,287 @@ fn duplicate_acquire_is_idempotent() {
 }
 
 #[test]
+fn acquire_with_a_new_key_does_not_orphan_the_existing_lease() {
+    let (provider, port) = setup(64);
+    let server = ProviderHarness::new(provider, Admission);
+    let first = server
+        .call(CredentialMethod::AcquireToken, request("first-key"))
+        .unwrap();
+    let second = server
+        .call(CredentialMethod::AcquireToken, request("second-key"))
+        .unwrap();
+
+    assert_eq!(first, second);
+    assert_eq!(port.issue_calls.load(Ordering::SeqCst), 1);
+    server
+        .call(CredentialMethod::RevokeToken, request("revoke-key"))
+        .unwrap();
+    assert_eq!(port.revoke_calls.load(Ordering::SeqCst), 1);
+}
+
+#[test]
+fn duplicate_refresh_is_idempotent() {
+    let (provider, port) = setup(64);
+    let server = ProviderHarness::new(provider, Admission);
+    server
+        .call(
+            CredentialMethod::AcquireToken,
+            request("idem-acquire-refresh"),
+        )
+        .unwrap();
+
+    let first = server
+        .call(CredentialMethod::RefreshToken, request("same-refresh-key"))
+        .unwrap();
+    let second = server
+        .call(CredentialMethod::RefreshToken, request("same-refresh-key"))
+        .unwrap();
+
+    assert_eq!(first, second);
+    assert_eq!(port.refresh_calls.load(Ordering::SeqCst), 1);
+}
+
+#[test]
+fn an_older_refresh_key_replays_its_original_result() {
+    let (provider, port) = setup(64);
+    let server = ProviderHarness::new(provider, Admission);
+    server
+        .call(
+            CredentialMethod::AcquireToken,
+            request("idem-acquire-old-refresh"),
+        )
+        .unwrap();
+
+    let first = server
+        .call(CredentialMethod::RefreshToken, request("first-refresh-key"))
+        .unwrap();
+    server
+        .call(
+            CredentialMethod::RefreshToken,
+            request("second-refresh-key"),
+        )
+        .unwrap();
+    let replay = server
+        .call(CredentialMethod::RefreshToken, request("first-refresh-key"))
+        .unwrap();
+
+    assert_eq!(replay, first);
+    assert_eq!(port.refresh_calls.load(Ordering::SeqCst), 2);
+}
+
+#[test]
+fn inspect_persists_terminal_state_for_later_revoke() {
+    let (provider, port) = setup(64);
+    let server = ProviderHarness::new(provider, Admission);
+    server
+        .call(
+            CredentialMethod::AcquireToken,
+            request("idem-inspect-terminal"),
+        )
+        .unwrap();
+    *port.inspection.lock().unwrap() = Some(SecretServiceLeaseInspection {
+        state: CredentialLeaseState::Revoked,
+        source_version: CredentialSourceVersion::parse("terminal-source").unwrap(),
+        rotation_generation: 1,
+        expires_at_unix_ms: common::EXPIRY,
+    });
+
+    let inspected = server
+        .call(
+            CredentialMethod::InspectMetadata,
+            request("idem-inspect-terminal-read"),
+        )
+        .unwrap();
+    let CredentialResponse::InspectMetadata(inspected) = inspected else {
+        panic!("inspect response");
+    };
+    assert_eq!(inspected.metadata.state, CredentialLeaseState::Revoked);
+
+    let revoked = server
+        .call(
+            CredentialMethod::RevokeToken,
+            request("idem-inspect-terminal-revoke"),
+        )
+        .unwrap();
+    let CredentialResponse::RevokeToken(revoked) = revoked else {
+        panic!("revoke response");
+    };
+    assert_eq!(
+        revoked.metadata.outcome,
+        CredentialOutcomeCode::AlreadyRevoked
+    );
+    assert_eq!(port.revoke_calls.load(Ordering::SeqCst), 0);
+}
+
+#[test]
+fn inspect_unknown_state_is_fenced_and_cannot_restore_active_metadata() {
+    let (provider, port) = setup(64);
+    let server = ProviderHarness::new(provider, Admission);
+    server
+        .call(
+            CredentialMethod::AcquireToken,
+            request("idem-inspect-unknown"),
+        )
+        .unwrap();
+    *port.inspection.lock().unwrap() = Some(SecretServiceLeaseInspection {
+        state: CredentialLeaseState::Unknown,
+        source_version: CredentialSourceVersion::parse("unknown-source").unwrap(),
+        rotation_generation: 1,
+        expires_at_unix_ms: common::EXPIRY,
+    });
+
+    assert_eq!(
+        server
+            .call(
+                CredentialMethod::InspectMetadata,
+                request("idem-inspect-unknown-read"),
+            )
+            .unwrap_err()
+            .code(),
+        CredentialServiceErrorCode::InvariantFailure
+    );
+    *port.inspection.lock().unwrap() = Some(SecretServiceLeaseInspection {
+        state: CredentialLeaseState::Active,
+        source_version: CredentialSourceVersion::parse("restored-source").unwrap(),
+        rotation_generation: 1,
+        expires_at_unix_ms: common::EXPIRY,
+    });
+    assert_eq!(
+        server
+            .call(
+                CredentialMethod::InspectMetadata,
+                request("idem-inspect-unknown-retry"),
+            )
+            .unwrap_err()
+            .code(),
+        CredentialServiceErrorCode::InvariantFailure
+    );
+    assert_eq!(port.inspect_calls.load(Ordering::SeqCst), 1);
+}
+
+#[test]
+fn inspect_cannot_restore_a_revoked_lease() {
+    let (provider, port) = setup(64);
+    let server = ProviderHarness::new(provider, Admission);
+    server
+        .call(
+            CredentialMethod::AcquireToken,
+            request("idem-inspect-revoked"),
+        )
+        .unwrap();
+    server
+        .call(
+            CredentialMethod::RevokeToken,
+            request("idem-inspect-revoked-revoke"),
+        )
+        .unwrap();
+
+    assert_eq!(
+        server
+            .call(
+                CredentialMethod::InspectMetadata,
+                request("idem-inspect-revoked-read"),
+            )
+            .unwrap_err()
+            .code(),
+        CredentialServiceErrorCode::LeaseRevoked
+    );
+    assert_eq!(port.inspect_calls.load(Ordering::SeqCst), 0);
+}
+
+#[test]
+fn refresh_preflight_terminal_state_is_sticky() {
+    let (provider, port) = setup(64);
+    let server = ProviderHarness::new(provider, Admission);
+    server
+        .call(
+            CredentialMethod::AcquireToken,
+            request("idem-refresh-terminal"),
+        )
+        .unwrap();
+    *port.inspection.lock().unwrap() = Some(SecretServiceLeaseInspection {
+        state: CredentialLeaseState::Revoked,
+        source_version: CredentialSourceVersion::parse("refresh-terminal-source").unwrap(),
+        rotation_generation: 1,
+        expires_at_unix_ms: common::EXPIRY,
+    });
+
+    assert_eq!(
+        server
+            .call(
+                CredentialMethod::RefreshToken,
+                request("idem-refresh-terminal-call"),
+            )
+            .unwrap_err()
+            .code(),
+        CredentialServiceErrorCode::LeaseRevoked
+    );
+    *port.inspection.lock().unwrap() = Some(SecretServiceLeaseInspection {
+        state: CredentialLeaseState::Active,
+        source_version: CredentialSourceVersion::parse("refresh-restored-source").unwrap(),
+        rotation_generation: 1,
+        expires_at_unix_ms: common::EXPIRY,
+    });
+    assert_eq!(
+        server
+            .call(
+                CredentialMethod::InspectMetadata,
+                request("idem-refresh-terminal-read"),
+            )
+            .unwrap_err()
+            .code(),
+        CredentialServiceErrorCode::LeaseRevoked
+    );
+    assert_eq!(port.inspect_calls.load(Ordering::SeqCst), 1);
+}
+
+#[test]
+fn refresh_rotation_mismatch_fences_the_lease() {
+    let (provider, port) = setup(64);
+    let server = ProviderHarness::new(provider, Admission);
+    server
+        .call(
+            CredentialMethod::AcquireToken,
+            request("idem-refresh-generation"),
+        )
+        .unwrap();
+    *port.inspection.lock().unwrap() = Some(SecretServiceLeaseInspection {
+        state: CredentialLeaseState::Active,
+        source_version: CredentialSourceVersion::parse("mismatch-source").unwrap(),
+        rotation_generation: 2,
+        expires_at_unix_ms: common::EXPIRY,
+    });
+
+    assert_eq!(
+        server
+            .call(
+                CredentialMethod::RefreshToken,
+                request("idem-refresh-generation-call"),
+            )
+            .unwrap_err()
+            .code(),
+        CredentialServiceErrorCode::InvariantFailure
+    );
+    *port.inspection.lock().unwrap() = Some(SecretServiceLeaseInspection {
+        state: CredentialLeaseState::Active,
+        source_version: CredentialSourceVersion::parse("mismatch-restored-source").unwrap(),
+        rotation_generation: 1,
+        expires_at_unix_ms: common::EXPIRY,
+    });
+    assert_eq!(
+        server
+            .call(
+                CredentialMethod::InspectMetadata,
+                request("idem-refresh-generation-read"),
+            )
+            .unwrap_err()
+            .code(),
+        CredentialServiceErrorCode::InvariantFailure
+    );
+    assert_eq!(port.inspect_calls.load(Ordering::SeqCst), 1);
+}
+
+#[test]
 fn concurrent_acquires_issue_once() {
     let (entered_tx, entered_rx) = mpsc::channel();
     let port = Arc::new(BlockingPort::new(entered_tx));

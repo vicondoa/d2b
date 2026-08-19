@@ -66,7 +66,13 @@ The port retains credential bytes and Secret Service object paths. Outer
 responses contain only opaque digests and metadata; raw values use a dedicated
 adapter-authorized Noise KK delivery session. The Provider receives that
 binding read-only and cannot select its consumer, audience, route, or limits.
-There is no ambient D-Bus or path fallback.
+There is no ambient D-Bus or path fallback. Mutating completions that are
+unknown at the service boundary, including deadline expiry, are fenced by
+idempotency key and recovered through the adapter during disconnect or
+finalization without replaying issuance or refresh. An unknown lease or
+ambiguous operation cannot be made live again by inspection. Request deadlines
+are interpreted as absolute Unix milliseconds; small relative budgets remain
+accepted for compatibility with hermetic callers.
 
 ## State and telemetry
 

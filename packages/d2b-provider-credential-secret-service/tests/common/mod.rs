@@ -27,7 +27,11 @@ pub struct FakeOo7Port {
     pub inspect_calls: AtomicUsize,
     pub refresh_calls: AtomicUsize,
     pub revoke_calls: AtomicUsize,
+    pub ambiguous_revoke_calls: AtomicUsize,
+    pub ambiguous_refresh_revoke_calls: AtomicUsize,
     pub issue_error: Mutex<Option<SecretServicePortError>>,
+    pub refresh_error: Mutex<Option<SecretServicePortError>>,
+    pub issue_rotation_generation: Mutex<u64>,
     pub observed_request: Mutex<Option<(String, String, String)>>,
     pub credential_canary: String,
     pub object_path_canary: String,
@@ -43,7 +47,11 @@ impl FakeOo7Port {
             inspect_calls: AtomicUsize::new(0),
             refresh_calls: AtomicUsize::new(0),
             revoke_calls: AtomicUsize::new(0),
+            ambiguous_revoke_calls: AtomicUsize::new(0),
+            ambiguous_refresh_revoke_calls: AtomicUsize::new(0),
             issue_error: Mutex::new(None),
+            refresh_error: Mutex::new(None),
+            issue_rotation_generation: Mutex::new(1),
             observed_request: Mutex::new(None),
             credential_canary: format!("secret-service-value-canary-{nonce}"),
             object_path_canary: format!("secret-service-object-path-canary-{nonce}"),
@@ -64,6 +72,7 @@ impl Oo7SecretServicePort for FakeOo7Port {
         self.issue_calls.fetch_add(1, Ordering::SeqCst);
         let error = *self.issue_error.lock().unwrap();
         let expiry = request.requested_expiry_unix_ms();
+        let rotation_generation = *self.issue_rotation_generation.lock().unwrap();
         let secret = self.credential_canary.clone();
         let object_path = self.object_path_canary.clone();
         *self.observed_request.lock().unwrap() = Some((
@@ -79,7 +88,7 @@ impl Oo7SecretServicePort for FakeOo7Port {
             let grant = SecretServiceLeaseGrant {
                 lease_handle: CredentialLeaseHandle::parse(&secret).unwrap(),
                 source_version: CredentialSourceVersion::parse(&object_path).unwrap(),
-                rotation_generation: 1,
+                rotation_generation,
                 expires_at_unix_ms: expiry,
             };
             *inspection.lock().unwrap() = Some(SecretServiceLeaseInspection {
@@ -106,9 +115,13 @@ impl Oo7SecretServicePort for FakeOo7Port {
         lease: &SecretServiceLeaseRef,
     ) -> SecretServiceFuture<'_, SecretServiceLeaseRenewal> {
         self.refresh_calls.fetch_add(1, Ordering::SeqCst);
+        let error = *self.refresh_error.lock().unwrap();
         let expiry = lease.metadata().expires_at_unix_ms;
         let inspection = &self.inspection;
         Box::pin(async move {
+            if let Some(error) = error {
+                return Err(error);
+            }
             let grant = SecretServiceLeaseGrant {
                 lease_handle: CredentialLeaseHandle::parse("secret-service-lease").unwrap(),
                 source_version: CredentialSourceVersion::parse("secret-service-source-2").unwrap(),
@@ -130,6 +143,25 @@ impl Oo7SecretServicePort for FakeOo7Port {
         _lease: &SecretServiceLeaseRef,
     ) -> SecretServiceFuture<'_, SecretServiceLeaseRevocation> {
         self.revoke_calls.fetch_add(1, Ordering::SeqCst);
+        Box::pin(async { Ok(SecretServiceLeaseRevocation::Revoked) })
+    }
+
+    fn revoke_ambiguous_lease(
+        &self,
+        _request: &SecretServiceLeaseRequest,
+    ) -> SecretServiceFuture<'_, SecretServiceLeaseRevocation> {
+        self.ambiguous_revoke_calls.fetch_add(1, Ordering::SeqCst);
+        Box::pin(async { Ok(SecretServiceLeaseRevocation::Revoked) })
+    }
+
+    fn revoke_ambiguous_refresh(
+        &self,
+        _lease: &SecretServiceLeaseRef,
+        _operation_id: &str,
+        _idempotency_key: &str,
+    ) -> SecretServiceFuture<'_, SecretServiceLeaseRevocation> {
+        self.ambiguous_refresh_revoke_calls
+            .fetch_add(1, Ordering::SeqCst);
         Box::pin(async { Ok(SecretServiceLeaseRevocation::Revoked) })
     }
 }
