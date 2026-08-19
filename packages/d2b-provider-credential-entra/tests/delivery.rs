@@ -7,7 +7,10 @@ use d2b_contracts::v3::credential::{
 };
 use d2b_provider_credential_entra::EntraCredentialProvider;
 
-use common::{ProviderHarness, TestAdmission, admitted, delivery, request, setup, subject_context};
+use common::{
+    ProviderHarness, TestAdmission, admitted, delivery, request, session_binding, setup,
+    subject_context,
+};
 
 #[test]
 fn provider_returns_exactly_the_read_only_adapter_binding() {
@@ -49,6 +52,7 @@ impl TestAdmission for FixedAdmission {
             Some(self.authorized.clone()),
             subject_context(),
         )
+        .and_then(|authorization| authorization.with_authenticated_session(session_binding()))
     }
 }
 

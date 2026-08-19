@@ -6,8 +6,9 @@ use std::sync::{Arc, Mutex};
 use d2b_contracts::v3::credential::{
     AudienceToken, CredentialAuthorization, CredentialLeaseHandle, CredentialLeaseState,
     CredentialMethod, CredentialProvider, CredentialRequest, CredentialResponse,
-    CredentialServiceError, CredentialServiceErrorCode, CredentialSourceVersion,
-    DeliveryRouteDigest, DeliverySessionParams, PlacementBinding, dispatch_authorized_provider,
+    CredentialServiceError, CredentialServiceErrorCode, CredentialSessionBinding,
+    CredentialSourceVersion, DeliveryRouteDigest, DeliverySessionParams, PlacementBinding,
+    dispatch_authorized_provider,
 };
 use d2b_contracts::v3::{
     AuthenticatedSubjectContext, BindingDigest, EvidenceClass, Locality, ReconnectGeneration,
@@ -30,6 +31,10 @@ pub struct FakeEntraClient {
     pub inspect_calls: AtomicUsize,
     pub refresh_calls: AtomicUsize,
     pub revoke_calls: AtomicUsize,
+    pub refresh_generation: Mutex<u64>,
+    pub issue_generation: Mutex<Option<u64>>,
+    pub issue_expiry: Mutex<Option<u64>>,
+    pub issue_revoke_error: Mutex<Option<EntraClientError>>,
     pub issue_error: Mutex<Option<EntraClientError>>,
     pub refresh_error: Mutex<Option<EntraClientError>>,
     pub revoke_error: Mutex<Option<EntraClientError>>,
@@ -49,6 +54,10 @@ impl FakeEntraClient {
             inspect_calls: AtomicUsize::new(0),
             refresh_calls: AtomicUsize::new(0),
             revoke_calls: AtomicUsize::new(0),
+            refresh_generation: Mutex::new(2),
+            issue_generation: Mutex::new(None),
+            issue_expiry: Mutex::new(None),
+            issue_revoke_error: Mutex::new(None),
             issue_error: Mutex::new(None),
             refresh_error: Mutex::new(None),
             revoke_error: Mutex::new(None),
@@ -70,7 +79,13 @@ impl EntraCredentialClient for FakeEntraClient {
         self.issue_calls.fetch_add(1, Ordering::SeqCst);
         let error = *self.issue_error.lock().unwrap();
         let state = *self.state.lock().unwrap();
-        let expiry = request.requested_expiry_unix_ms();
+        let expiry = self
+            .issue_expiry
+            .lock()
+            .unwrap()
+            .unwrap_or(request.requested_expiry_unix_ms());
+        let generation = self.issue_generation.lock().unwrap().unwrap_or(1);
+        let issue_revoke_error = *self.issue_revoke_error.lock().unwrap();
         let token = self.token_canary.clone();
         let endpoint = self.endpoint_canary.clone();
         *self.observed_request.lock().unwrap() = Some((
@@ -79,6 +94,7 @@ impl EntraCredentialClient for FakeEntraClient {
             request.idempotency_key().to_owned(),
         ));
         let inspection = &self.inspection;
+        let revoke_error_slot = &self.revoke_error;
         Box::pin(async move {
             if state == EntraClientState::InteractionRequired {
                 return Err(EntraClientError::InteractionRequired);
@@ -86,10 +102,13 @@ impl EntraCredentialClient for FakeEntraClient {
             if let Some(error) = error {
                 return Err(error);
             }
+            if let Some(error) = issue_revoke_error {
+                *revoke_error_slot.lock().unwrap() = Some(error);
+            }
             let grant = EntraLeaseGrant {
                 lease_handle: CredentialLeaseHandle::parse(&token).unwrap(),
                 source_version: CredentialSourceVersion::parse(&endpoint).unwrap(),
-                rotation_generation: 1,
+                rotation_generation: generation,
                 expires_at_unix_ms: expiry,
             };
             *inspection.lock().unwrap() = Some(EntraLeaseInspection {
@@ -115,6 +134,7 @@ impl EntraCredentialClient for FakeEntraClient {
         self.refresh_calls.fetch_add(1, Ordering::SeqCst);
         let error = *self.refresh_error.lock().unwrap();
         let expiry = lease.metadata().expires_at_unix_ms;
+        let generation = *self.refresh_generation.lock().unwrap();
         let inspection = &self.inspection;
         Box::pin(async move {
             if let Some(error) = error {
@@ -123,7 +143,7 @@ impl EntraCredentialClient for FakeEntraClient {
             let grant = EntraLeaseGrant {
                 lease_handle: CredentialLeaseHandle::parse("entra-lease").unwrap(),
                 source_version: CredentialSourceVersion::parse("entra-source-2").unwrap(),
-                rotation_generation: 2,
+                rotation_generation: generation,
                 expires_at_unix_ms: expiry,
             };
             *inspection.lock().unwrap() = Some(EntraLeaseInspection {
@@ -221,7 +241,11 @@ pub fn subject_context_with_bindings(
     if let Some(provider) = provider_ref {
         context = context.with_provider_ref(provider);
     }
-    context
+    context.with_provider_generation(ResourceGeneration::new(1).unwrap())
+}
+
+pub fn session_binding() -> CredentialSessionBinding {
+    CredentialSessionBinding::new(subject_context(), EXPIRY).unwrap()
 }
 
 pub fn request(idempotency: &str) -> CredentialRequest {
@@ -236,16 +260,63 @@ pub fn request(idempotency: &str) -> CredentialRequest {
 }
 
 pub fn delivery(method: CredentialMethod, sequence: u64) -> DeliverySessionParams {
-    DeliverySessionParams::new(
+    delivery_values(
+        method,
         ResourceRef::parse("Credential/work-entra").unwrap(),
+        EXPIRY,
+        15_000,
+        sequence,
+        1,
+    )
+}
+
+pub fn delivery_for_request(
+    method: CredentialMethod,
+    request: &CredentialRequest,
+) -> DeliverySessionParams {
+    delivery_values(
+        method,
+        request.credential_ref().clone(),
+        request.requested_expiry_unix_ms(),
+        request.deadline_unix_ms(),
+        1,
+        1,
+    )
+}
+
+pub fn delivery_with_component_generation(
+    method: CredentialMethod,
+    sequence: u64,
+    component_generation: u64,
+) -> DeliverySessionParams {
+    delivery_values(
+        method,
+        ResourceRef::parse("Credential/work-entra").unwrap(),
+        EXPIRY,
+        15_000,
+        sequence,
+        component_generation,
+    )
+}
+
+fn delivery_values(
+    method: CredentialMethod,
+    credential_ref: ResourceRef,
+    expiry_unix_ms: u64,
+    deadline_unix_ms: u64,
+    sequence: u64,
+    component_generation: u64,
+) -> DeliverySessionParams {
+    DeliverySessionParams::new(
+        credential_ref,
         ResourceUid::parse("123e4567-e89b-42d3-a456-426614174000").unwrap(),
         ResourceGeneration::new(1).unwrap(),
         ResourceRef::parse("Provider/runtime-azure-container-apps").unwrap(),
-        ResourceGeneration::new(1).unwrap(),
+        ResourceGeneration::new(component_generation).unwrap(),
         AudienceToken::parse("azure-resource-manager").unwrap(),
         method.operation_class(),
-        EXPIRY,
-        15_000,
+        expiry_unix_ms,
+        deadline_unix_ms,
         DeliveryRouteDigest::parse(format!("sha256:{}", "b".repeat(64))).unwrap(),
         4_096,
         sequence,
@@ -270,7 +341,7 @@ impl TestAdmission for Admission {
     fn authorize(
         &self,
         method: CredentialMethod,
-        _request: &CredentialRequest,
+        request: &CredentialRequest,
     ) -> Result<CredentialAuthorization, CredentialServiceError> {
         if self.authenticated_consumer
             != ResourceRef::parse("Provider/runtime-azure-container-apps").unwrap()
@@ -281,9 +352,12 @@ impl TestAdmission for Admission {
         }
         CredentialAuthorization::new_for_subject(
             method,
-            method.requires_delivery().then(|| delivery(method, 1)),
+            method
+                .requires_delivery()
+                .then(|| delivery_for_request(method, request)),
             subject_context(),
         )
+        .and_then(|authorization| authorization.with_authenticated_session(session_binding()))
     }
 }
 

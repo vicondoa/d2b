@@ -2,18 +2,22 @@ mod common;
 
 use d2b_contracts::v3::ResourceRef;
 use d2b_contracts::v3::credential::{
-    CredentialInteractionState, CredentialLeaseHandle, CredentialLeaseStatus, CredentialMethod,
-    CredentialRequest, CredentialResponse, CredentialServiceErrorCode, CredentialSourceVersion,
-    CredentialStatus, PlacementBinding, encode_outer,
+    CredentialAuthorization, CredentialInteractionState, CredentialLeaseHandle,
+    CredentialLeaseStatus, CredentialMethod, CredentialRequest, CredentialResponse,
+    CredentialServiceErrorCode, CredentialSourceVersion, CredentialStatus, PlacementBinding,
+    dispatch_authorized_provider, encode_outer,
 };
 
-use common::{ProviderHarness, admitted, setup};
+use common::{
+    ProviderHarness, admitted, delivery as test_delivery, session_binding, setup, subject_context,
+};
 
 #[test]
 fn process_unique_entra_secret_and_identity_canaries_are_absent_from_rendered_surfaces() {
     let nonce = format!("{:x}", std::process::id());
     let credential_name = format!("credential-name-{nonce}");
-    let credential_ref = format!("Credential/{credential_name}");
+    let credential_ref = "Credential/work-entra".to_owned();
+    let identity_credential_ref = format!("Credential/{credential_name}");
     let credential_uid = format!("credential-uid-{nonce}");
     let credential_digest = format!("credential-digest-{nonce}");
     let (provider, client) = setup();
@@ -114,12 +118,51 @@ fn process_unique_entra_secret_and_identity_canaries_are_absent_from_rendered_su
         format!("{error:?}"),
         error.to_string(),
     ];
+    let (identity_provider, identity_client) = setup();
+    let identity_request = CredentialRequest::new(
+        ResourceRef::parse(&identity_credential_ref).unwrap(),
+        &operation_id,
+        &idempotency_key,
+        common::EXPIRY,
+        15_000,
+    )
+    .unwrap();
+    let identity_request_debug = format!("{identity_request:?}");
+    let identity_authorization = CredentialAuthorization::new_for_subject(
+        CredentialMethod::AcquireToken,
+        Some(test_delivery(CredentialMethod::AcquireToken, 1)),
+        subject_context(),
+    )
+    .unwrap()
+    .with_authenticated_session(session_binding())
+    .unwrap();
+    let identity_error = dispatch_authorized_provider(
+        &identity_provider,
+        CredentialMethod::AcquireToken,
+        &identity_request,
+        &identity_authorization,
+    )
+    .unwrap_err();
+    assert_eq!(
+        identity_error.code(),
+        CredentialServiceErrorCode::OperationDenied
+    );
+    assert_eq!(
+        identity_client
+            .issue_calls
+            .load(std::sync::atomic::Ordering::SeqCst),
+        0
+    );
+    let surfaces = surfaces
+        .into_iter()
+        .chain([identity_request_debug, format!("{identity_error:?}")])
+        .collect::<Vec<_>>();
     let markers = [
         client.token_canary.as_str(),
         client.endpoint_canary.as_str(),
         client.cookie_canary.as_str(),
         credential_name.as_str(),
-        credential_ref.as_str(),
+        identity_credential_ref.as_str(),
         credential_uid.as_str(),
         credential_digest.as_str(),
     ];
