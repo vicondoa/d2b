@@ -634,7 +634,7 @@ heavy-lane-host-integration: heavy-lane-guard
 	set -- "$$@" ".#vmChecks.$$system.$$name"; \
 	done; \
 	echo "==> nix build $$*"; \
-	nix build --option extra-sandbox-paths "$$cache_dir" --no-link --print-build-logs "$$@"
+	nix build --impure --option extra-sandbox-paths "$$cache_dir" --no-link --print-build-logs "$$@"
 
 ## test-hardware - G-hw: real GPU/YubiKey/hardware-TPM passthrough + full
 ## microVM boot. NixOS host WITH the devices only; CI cannot run this.

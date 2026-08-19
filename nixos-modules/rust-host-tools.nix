@@ -133,7 +133,10 @@ let
 
   # The wrapper keeps CI and ordinary sandbox builds hermetic when no cache
   # bind mount is available, while host-integration builds can opt into the
-  # persistent cache by passing SCCACHE_DIR and extra-sandbox-paths.
+  # persistent cache by passing SCCACHE_DIR and extra-sandbox-paths. The
+  # host lane evaluates with --impure so this path becomes a fixed derivation
+  # environment value; pure CI evaluation leaves it empty and falls back.
+  sccacheDir = builtins.getEnv "SCCACHE_DIR";
   commonBuildArgs = {
     strictDeps = true;
     cargoExtraArgs = "--locked";
@@ -141,7 +144,7 @@ let
     doCheck = false;
     nativeBuildInputs = [ pkgs.protobuf pkgs.sccache ];
     RUSTC_WRAPPER = rustcWrapper;
-    impureEnvVars = [ "SCCACHE_DIR" ];
+    SCCACHE_DIR = sccacheDir;
   };
 
   cargoArtifacts = craneLib.buildDepsOnly (commonBuildArgs // {
