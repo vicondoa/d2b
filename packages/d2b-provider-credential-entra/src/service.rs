@@ -145,6 +145,17 @@ impl EntraCredentialProvider {
         let key = request.credential_ref().to_canonical_string();
         self.ensure_lifecycle_active(&key)?;
         self.ensure_client_ready(deadline)?;
+        if self
+            .cleanup_leases
+            .lock()
+            .map_err(|_| invariant())?
+            .get(&key)
+            .is_some_and(|records| !records.is_empty())
+        {
+            return Err(CredentialServiceError::new(
+                CredentialServiceErrorCode::ProviderUnavailable,
+            ));
+        }
         let existing = {
             let leases = self.leases.lock().map_err(|_| invariant())?;
             leases.get(&key).cloned()
@@ -156,12 +167,19 @@ impl EntraCredentialProvider {
             .values()
             .filter(|record| record.metadata.state == CredentialLeaseState::Active)
             .count();
-        if let Some(existing) = existing {
-            if existing.metadata.state == CredentialLeaseState::Active
+        if let Some(ref existing) = existing {
+            if existing.pending_acquire_idempotency.as_deref() == Some(request.idempotency_key()) {
+                // An explicit retry of an ambiguous replacement may ask the
+                // identity Guest to resolve its idempotency key.
+            } else if existing.pending_acquire_idempotency.is_some() {
+                return Err(CredentialServiceError::new(
+                    CredentialServiceErrorCode::ProviderUnavailable,
+                ));
+            } else if existing.metadata.state == CredentialLeaseState::Active
                 && existing.idempotency_key == request.idempotency_key()
             {
                 return Ok(CredentialResponse::AcquireToken(DeliveryResponse {
-                    metadata: existing.metadata,
+                    metadata: existing.metadata.clone(),
                     delivery_session_params: delivery,
                 }));
             }
@@ -173,23 +191,6 @@ impl EntraCredentialProvider {
                     CredentialServiceErrorCode::ProviderUnavailable,
                 ));
             }
-            if existing.metadata.state != CredentialLeaseState::Revoked {
-                let lease = EntraLeaseRef {
-                    credential_ref: request.credential_ref().clone(),
-                    metadata: existing.metadata.clone(),
-                    endpoint_generation: self.placement.endpoint_generation(),
-                };
-                if let Err(error) = Self::poll_client(self.client.revoke_lease(&lease), deadline)
-                    && !matches!(
-                        error.code(),
-                        CredentialServiceErrorCode::LeaseExpired
-                            | CredentialServiceErrorCode::LeaseRevoked
-                    )
-                {
-                    return Err(error);
-                }
-            }
-            self.leases.lock().map_err(|_| invariant())?.remove(&key);
         } else if active_leases >= self.config.max_leases() as usize {
             return Err(CredentialServiceError::new(
                 CredentialServiceErrorCode::ProviderUnavailable,
@@ -202,7 +203,22 @@ impl EntraCredentialProvider {
             requested_expiry_unix_ms: request.requested_expiry_unix_ms(),
             endpoint_generation: self.placement.endpoint_generation(),
         };
-        let grant = Self::poll_client(self.client.issue_lease(&client_request), deadline)?;
+        let grant = match Self::poll_client(self.client.issue_lease(&client_request), deadline) {
+            Ok(grant) => grant,
+            Err(error) => {
+                if existing.as_ref().is_some_and(|record| {
+                    record.metadata.state == CredentialLeaseState::Active
+                        && matches!(
+                            error.code(),
+                            CredentialServiceErrorCode::DeadlineExceeded
+                                | CredentialServiceErrorCode::InvariantFailure
+                        )
+                }) {
+                    self.mark_pending_acquire(&key, request.idempotency_key());
+                }
+                return Err(error);
+            }
+        };
         let metadata = match Self::grant_metadata(grant.clone(), request.requested_expiry_unix_ms())
         {
             Ok(metadata) => metadata,
@@ -217,8 +233,34 @@ impl EntraCredentialProvider {
                 return Err(error);
             }
         };
+        if let Some(existing) = existing.as_ref() {
+            if existing.metadata.state != CredentialLeaseState::Revoked {
+                let lease = EntraLeaseRef {
+                    credential_ref: request.credential_ref().clone(),
+                    metadata: existing.metadata.clone(),
+                    endpoint_generation: self.placement.endpoint_generation(),
+                };
+                if let Err(error) = Self::poll_client(self.client.revoke_lease(&lease), deadline)
+                    && !matches!(
+                        error.code(),
+                        CredentialServiceErrorCode::LeaseExpired
+                            | CredentialServiceErrorCode::LeaseRevoked
+                    )
+                {
+                    self.cleanup_uncommitted_grant(
+                        request.credential_ref(),
+                        request.idempotency_key(),
+                        grant,
+                        request.requested_expiry_unix_ms(),
+                        deadline,
+                    );
+                    return Err(error);
+                }
+            }
+        }
         let record = LeaseRecord {
             idempotency_key: request.idempotency_key().to_owned(),
+            pending_acquire_idempotency: None,
             metadata: metadata.clone(),
             refresh_attempts: 0,
             health: crate::EntraResourceHealth::Ready,
@@ -317,10 +359,12 @@ impl EntraCredentialProvider {
                 return Err(error);
             }
         };
+        let pending_acquire_idempotency = record.pending_acquire_idempotency.clone();
         self.leases.lock().map_err(|_| invariant())?.insert(
             key.clone(),
             LeaseRecord {
                 idempotency_key: request.idempotency_key().to_owned(),
+                pending_acquire_idempotency,
                 metadata: metadata.clone(),
                 refresh_attempts: 0,
                 health: crate::EntraResourceHealth::Ready,
@@ -340,49 +384,94 @@ impl EntraCredentialProvider {
         let _mutation = self.mutation_guard()?;
         let key = request.credential_ref().to_canonical_string();
         self.ensure_client_ready(deadline)?;
-        let record = self
+        let primary = self
             .leases
             .lock()
             .map_err(|_| invariant())?
             .get(&key)
+            .cloned();
+        let cleanup_records = self
+            .cleanup_leases
+            .lock()
+            .map_err(|_| invariant())?
+            .get(&key)
             .cloned()
-            .ok_or_else(expired)?;
-        let (outcome, state) = if record.metadata.state == CredentialLeaseState::Revoked {
-            (
-                CredentialOutcomeCode::AlreadyRevoked,
-                CredentialLeaseState::Revoked,
-            )
-        } else {
+            .unwrap_or_default();
+        if primary.is_none() && cleanup_records.is_empty() {
+            return Err(expired());
+        }
+        let mut outcome = primary
+            .as_ref()
+            .filter(|record| record.metadata.state == CredentialLeaseState::Revoked)
+            .map(|_| CredentialOutcomeCode::AlreadyRevoked);
+        if let Some(record) = primary.as_ref() {
+            if record.metadata.state != CredentialLeaseState::Revoked {
+                let lease = EntraLeaseRef {
+                    credential_ref: request.credential_ref().clone(),
+                    metadata: record.metadata.clone(),
+                    endpoint_generation: self.placement.endpoint_generation(),
+                };
+                outcome = Some(
+                    match Self::poll_client(self.client.revoke_lease(&lease), deadline) {
+                        Ok(crate::EntraLeaseRevocation::Revoked) => CredentialOutcomeCode::Revoked,
+                        Ok(crate::EntraLeaseRevocation::AlreadyRevoked) => {
+                            CredentialOutcomeCode::AlreadyRevoked
+                        }
+                        Err(error)
+                            if matches!(
+                                error.code(),
+                                CredentialServiceErrorCode::LeaseExpired
+                                    | CredentialServiceErrorCode::LeaseRevoked
+                            ) =>
+                        {
+                            CredentialOutcomeCode::AlreadyRevoked
+                        }
+                        Err(error) => return Err(error),
+                    },
+                );
+            }
+        }
+        for record in &cleanup_records {
             let lease = EntraLeaseRef {
                 credential_ref: request.credential_ref().clone(),
                 metadata: record.metadata.clone(),
                 endpoint_generation: self.placement.endpoint_generation(),
             };
-            let outcome = match Self::poll_client(self.client.revoke_lease(&lease), deadline) {
-                Ok(crate::EntraLeaseRevocation::Revoked) => CredentialOutcomeCode::Revoked,
-                Ok(crate::EntraLeaseRevocation::AlreadyRevoked) => {
-                    CredentialOutcomeCode::AlreadyRevoked
-                }
+            match Self::poll_client(self.client.revoke_lease(&lease), deadline) {
+                Ok(crate::EntraLeaseRevocation::Revoked)
+                | Ok(crate::EntraLeaseRevocation::AlreadyRevoked) => {}
                 Err(error)
                     if matches!(
                         error.code(),
                         CredentialServiceErrorCode::LeaseExpired
                             | CredentialServiceErrorCode::LeaseRevoked
-                    ) =>
-                {
-                    CredentialOutcomeCode::AlreadyRevoked
-                }
+                    ) => {}
                 Err(error) => return Err(error),
-            };
-            (outcome, CredentialLeaseState::Revoked)
+            }
+        }
+        let metadata = if primary.is_some() {
+            let mut leases = self.leases.lock().map_err(|_| invariant())?;
+            let record = leases.get_mut(&key).ok_or_else(expired)?;
+            record.metadata.state = CredentialLeaseState::Revoked;
+            record.metadata.outcome = outcome.unwrap_or(CredentialOutcomeCode::Revoked);
+            record.pending_acquire_idempotency = None;
+            record.health = crate::EntraResourceHealth::Revoked;
+            record.metadata.clone()
+        } else {
+            let mut metadata = cleanup_records
+                .first()
+                .map(|record| record.metadata.clone())
+                .ok_or_else(expired)?;
+            metadata.state = CredentialLeaseState::Revoked;
+            metadata.outcome = CredentialOutcomeCode::AlreadyRevoked;
+            metadata
         };
-        let mut leases = self.leases.lock().map_err(|_| invariant())?;
-        let record = leases.get_mut(&key).ok_or_else(expired)?;
-        record.metadata.state = state;
-        record.metadata.outcome = outcome;
-        record.health = crate::EntraResourceHealth::Revoked;
+        self.cleanup_leases
+            .lock()
+            .map_err(|_| invariant())?
+            .remove(&key);
         Ok(CredentialResponse::RevokeToken(MetadataResponse {
-            metadata: record.metadata.clone(),
+            metadata,
         }))
     }
 
@@ -501,6 +590,15 @@ impl EntraCredentialProvider {
         }
     }
 
+    fn mark_pending_acquire(&self, key: &str, idempotency_key: &str) {
+        if let Ok(mut leases) = self.leases.lock()
+            && let Some(record) = leases.get_mut(key)
+        {
+            record.pending_acquire_idempotency = Some(idempotency_key.to_owned());
+            record.health = crate::EntraResourceHealth::Degraded;
+        }
+    }
+
     fn cleanup_uncommitted_grant(
         &self,
         credential_ref: &ResourceRef,
@@ -538,16 +636,17 @@ impl EntraCredentialProvider {
         {
             return;
         }
-        if let Ok(mut leases) = self.leases.lock() {
-            leases.insert(
-                credential_ref.to_canonical_string(),
-                LeaseRecord {
+        if let Ok(mut cleanup_leases) = self.cleanup_leases.lock() {
+            cleanup_leases
+                .entry(credential_ref.to_canonical_string())
+                .or_default()
+                .push(LeaseRecord {
                     idempotency_key: idempotency_key.to_owned(),
+                    pending_acquire_idempotency: None,
                     metadata,
                     refresh_attempts: crate::MAX_REFRESH_ATTEMPTS,
                     health: crate::EntraResourceHealth::Degraded,
-                },
-            );
+                });
         }
     }
 }

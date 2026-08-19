@@ -129,6 +129,24 @@ fn finalization_revokes_owned_handles_before_clearing_provider_state() {
         .call(CredentialMethod::AcquireToken, request("idem-finalize"))
         .unwrap();
 
+    let stale_deadline = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_millis() as u64
+        - 1;
+    assert_eq!(
+        provider
+            .revoke_owned_handles(
+                &ResourceRef::parse("Credential/work-entra").unwrap(),
+                stale_deadline,
+            )
+            .unwrap_err()
+            .code(),
+        CredentialServiceErrorCode::DeadlineExceeded
+    );
+    assert_eq!(provider.active_lease_count(), 1);
+    assert_eq!(client.revoke_calls.load(Ordering::SeqCst), 0);
+
     let cleanup = provider
         .revoke_owned_handles(
             &ResourceRef::parse("Credential/work-entra").unwrap(),
@@ -144,11 +162,6 @@ fn finalization_revokes_owned_handles_before_clearing_provider_state() {
         0,
         "finalization must not clear state before owned revocation"
     );
-    let stale_deadline = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap()
-        .as_millis() as u64
-        - 1;
     let retry = provider
         .revoke_owned_handles(
             &ResourceRef::parse("Credential/work-entra").unwrap(),
@@ -291,12 +304,23 @@ fn failed_replacement_acquire_tracks_an_uncommitted_grant_until_cleanup() {
             .code(),
         CredentialServiceErrorCode::InvariantFailure
     );
-    assert_eq!(client.revoke_calls.load(Ordering::SeqCst), 2);
-    assert_eq!(provider.active_lease_count(), 1);
+    assert_eq!(client.revoke_calls.load(Ordering::SeqCst), 1);
+    assert_eq!(provider.active_lease_count(), 2);
     assert_eq!(
         provider.refresh_retry_state(&ResourceRef::parse("Credential/work-entra").unwrap()),
         Some((3, 3))
     );
+    assert_eq!(
+        server
+            .call(
+                CredentialMethod::AcquireToken,
+                request("idem-uncommitted-grant"),
+            )
+            .unwrap_err()
+            .code(),
+        CredentialServiceErrorCode::ProviderUnavailable
+    );
+    assert_eq!(client.issue_calls.load(Ordering::SeqCst), 2);
 
     *client.revoke_error.lock().unwrap() = None;
     let cleanup = provider
@@ -305,10 +329,91 @@ fn failed_replacement_acquire_tracks_an_uncommitted_grant_until_cleanup() {
             15_000,
         )
         .unwrap();
-    assert_eq!(cleanup.revoked, 1);
+    assert_eq!(cleanup.revoked, 2);
     assert_eq!(cleanup.remaining, 0);
     assert_eq!(provider.active_lease_count(), 0);
     assert_eq!(client.revoke_calls.load(Ordering::SeqCst), 3);
+}
+
+#[test]
+fn ambiguous_replacement_keeps_the_previous_lease_until_explicit_retry() {
+    let (provider, client) = setup();
+    let server = ProviderHarness::new(&provider, admitted());
+    server
+        .call(
+            CredentialMethod::AcquireToken,
+            request("idem-before-ambiguous-replacement"),
+        )
+        .unwrap();
+    *client.issue_error.lock().unwrap() = Some(EntraClientError::CompletionUnknown);
+
+    assert_eq!(
+        server
+            .call(
+                CredentialMethod::AcquireToken,
+                request("idem-ambiguous-replacement"),
+            )
+            .unwrap_err()
+            .code(),
+        CredentialServiceErrorCode::InvariantFailure
+    );
+    assert_eq!(provider.active_lease_count(), 1);
+    assert_eq!(client.revoke_calls.load(Ordering::SeqCst), 0);
+    assert_eq!(
+        server
+            .call(
+                CredentialMethod::AcquireToken,
+                request("idem-other-replacement"),
+            )
+            .unwrap_err()
+            .code(),
+        CredentialServiceErrorCode::ProviderUnavailable
+    );
+    assert_eq!(client.issue_calls.load(Ordering::SeqCst), 2);
+    assert_eq!(
+        provider.refresh_retry_state(&ResourceRef::parse("Credential/work-entra").unwrap()),
+        Some((0, d2b_provider_credential_entra::MAX_REFRESH_ATTEMPTS))
+    );
+    assert!(matches!(
+        server
+            .call(
+                CredentialMethod::RefreshToken,
+                request("idem-refresh-during-ambiguous-replacement"),
+            )
+            .unwrap(),
+        CredentialResponse::RefreshToken(_)
+    ));
+    assert_eq!(
+        server
+            .call(
+                CredentialMethod::AcquireToken,
+                request("idem-other-after-refresh"),
+            )
+            .unwrap_err()
+            .code(),
+        CredentialServiceErrorCode::ProviderUnavailable
+    );
+    assert_eq!(client.issue_calls.load(Ordering::SeqCst), 2);
+
+    *client.issue_error.lock().unwrap() = None;
+    assert!(matches!(
+        server
+            .call(
+                CredentialMethod::AcquireToken,
+                request("idem-ambiguous-replacement"),
+            )
+            .unwrap(),
+        CredentialResponse::AcquireToken(_)
+    ));
+    assert_eq!(client.revoke_calls.load(Ordering::SeqCst), 1);
+
+    let cleanup = provider
+        .revoke_owned_handles(
+            &ResourceRef::parse("Credential/work-entra").unwrap(),
+            15_000,
+        )
+        .unwrap();
+    assert_eq!(cleanup.revoked, 1);
 }
 
 struct BlockingClient {

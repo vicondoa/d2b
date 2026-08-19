@@ -10,3 +10,5 @@
   accept Unix-millisecond deadlines, and cap projected retry state.
 - Revoke newly issued leases when replacement validation or local commitment
   fails, retaining degraded cleanup state when remote revocation is ambiguous.
+- Keep proactive refresh available during an ambiguous replacement retry, and
+  keep that replacement idempotency key after a successful refresh.

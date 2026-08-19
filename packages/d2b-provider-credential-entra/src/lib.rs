@@ -448,6 +448,7 @@ impl EntraCredentialProviderFactory {
             consumer_ref: self.consumer_ref,
             client: self.client,
             leases: Mutex::new(BTreeMap::new()),
+            cleanup_leases: Mutex::new(BTreeMap::new()),
             lifecycle: Mutex::new(BTreeMap::new()),
             mutation_gate: Mutex::new(()),
         }
@@ -463,6 +464,7 @@ impl fmt::Debug for EntraCredentialProviderFactory {
 #[derive(Clone)]
 struct LeaseRecord {
     idempotency_key: String,
+    pending_acquire_idempotency: Option<String>,
     metadata: CredentialMetadata,
     refresh_attempts: u16,
     health: EntraResourceHealth,
@@ -501,6 +503,7 @@ pub struct EntraCredentialProvider {
     consumer_ref: ResourceRef,
     client: Arc<dyn EntraCredentialClient>,
     leases: Mutex<BTreeMap<String, LeaseRecord>>,
+    cleanup_leases: Mutex<BTreeMap<String, Vec<LeaseRecord>>>,
     lifecycle: Mutex<BTreeMap<String, EntraLifecycleState>>,
     mutation_gate: Mutex<()>,
 }
@@ -547,33 +550,69 @@ impl EntraCredentialProvider {
 
     /// Return the active lease count without exposing lease identity.
     pub fn active_lease_count(&self) -> u32 {
-        self.leases
+        let primary = self
+            .leases
             .lock()
             .map(|leases| {
                 leases
                     .values()
                     .filter(|record| record.metadata.state == CredentialLeaseState::Active)
-                    .count() as u32
+                    .count()
             })
-            .unwrap_or(0)
+            .unwrap_or(0);
+        let cleanup = self
+            .cleanup_leases
+            .lock()
+            .map(|leases| {
+                leases
+                    .values()
+                    .flatten()
+                    .filter(|record| record.metadata.state == CredentialLeaseState::Active)
+                    .count()
+            })
+            .unwrap_or(0);
+        (primary + cleanup) as u32
     }
 
     /// Return the typed health of one Credential resource.
     pub fn resource_health(&self, credential_ref: &ResourceRef) -> Option<EntraResourceHealth> {
-        self.leases.lock().ok().and_then(|leases| {
-            leases
-                .get(&credential_ref.to_canonical_string())
-                .map(|record| record.health)
-        })
+        let key = credential_ref.to_canonical_string();
+        self.cleanup_leases
+            .lock()
+            .ok()
+            .and_then(|leases| {
+                leases
+                    .get(&key)
+                    .and_then(|records| records.first())
+                    .map(|record| record.health)
+            })
+            .or_else(|| {
+                self.leases
+                    .lock()
+                    .ok()
+                    .and_then(|leases| leases.get(&key).map(|record| record.health))
+            })
     }
 
     /// Return the bounded refresh retry position for one Credential resource.
     pub fn refresh_retry_state(&self, credential_ref: &ResourceRef) -> Option<(u16, u16)> {
-        self.leases.lock().ok().and_then(|leases| {
-            leases
-                .get(&credential_ref.to_canonical_string())
-                .map(|record| (record.refresh_attempts, MAX_REFRESH_ATTEMPTS))
-        })
+        let key = credential_ref.to_canonical_string();
+        self.cleanup_leases
+            .lock()
+            .ok()
+            .and_then(|leases| {
+                leases
+                    .get(&key)
+                    .and_then(|records| records.first())
+                    .map(|record| (record.refresh_attempts, MAX_REFRESH_ATTEMPTS))
+            })
+            .or_else(|| {
+                self.leases.lock().ok().and_then(|leases| {
+                    leases
+                        .get(&key)
+                        .map(|record| (record.refresh_attempts, MAX_REFRESH_ATTEMPTS))
+                })
+            })
     }
 
     /// Revoke all handles owned by one Credential before finalization clears
@@ -590,66 +629,37 @@ impl EntraCredentialProvider {
         }
         let _mutation = self.mutation_guard()?;
         let key = credential_ref.to_canonical_string();
-        {
-            let mut lifecycle = self.lifecycle.lock().map_err(|_| {
-                CredentialServiceError::new(CredentialServiceErrorCode::InvariantFailure)
-            })?;
-            if lifecycle.get(&key) == Some(&EntraLifecycleState::Finalized) {
-                return Ok(EntraOwnedHandleCleanup {
-                    revoked: 0,
-                    remaining: 0,
-                });
-            }
-            lifecycle.insert(key.clone(), EntraLifecycleState::Draining);
-        }
-        let record = self
-            .leases
+        let already_finalized = self
+            .lifecycle
             .lock()
             .map_err(|_| CredentialServiceError::new(CredentialServiceErrorCode::InvariantFailure))?
             .get(&key)
-            .cloned();
-        let Some(record) = record else {
-            self.lifecycle
-                .lock()
-                .map_err(|_| {
-                    CredentialServiceError::new(CredentialServiceErrorCode::InvariantFailure)
-                })?
-                .insert(key, EntraLifecycleState::Finalized);
-            return Ok(EntraOwnedHandleCleanup {
-                revoked: 0,
-                remaining: 0,
-            });
-        };
-        if record.metadata.state == CredentialLeaseState::Revoked {
-            self.lifecycle
-                .lock()
-                .map_err(|_| {
-                    CredentialServiceError::new(CredentialServiceErrorCode::InvariantFailure)
-                })?
-                .insert(key, EntraLifecycleState::Finalized);
+            == Some(&EntraLifecycleState::Finalized);
+        if already_finalized {
             return Ok(EntraOwnedHandleCleanup {
                 revoked: 0,
                 remaining: 0,
             });
         }
         let deadline = Self::operation_deadline(deadline_ms)?;
-        let lease = EntraLeaseRef {
-            credential_ref: credential_ref.clone(),
-            metadata: record.metadata,
-            endpoint_generation: self.placement.endpoint_generation(),
-        };
-        if let Err(error) = Self::poll_client(self.client.revoke_lease(&lease), deadline)
-            && !matches!(
-                error.code(),
-                CredentialServiceErrorCode::LeaseExpired | CredentialServiceErrorCode::LeaseRevoked
-            )
-        {
-            return Err(error);
-        }
-        let mut leases = self.leases.lock().map_err(|_| {
-            CredentialServiceError::new(CredentialServiceErrorCode::InvariantFailure)
-        })?;
-        let Some(record) = leases.get_mut(&key) else {
+        self.lifecycle
+            .lock()
+            .map_err(|_| CredentialServiceError::new(CredentialServiceErrorCode::InvariantFailure))?
+            .insert(key.clone(), EntraLifecycleState::Draining);
+        let primary = self
+            .leases
+            .lock()
+            .map_err(|_| CredentialServiceError::new(CredentialServiceErrorCode::InvariantFailure))?
+            .get(&key)
+            .cloned();
+        let cleanup = self
+            .cleanup_leases
+            .lock()
+            .map_err(|_| CredentialServiceError::new(CredentialServiceErrorCode::InvariantFailure))?
+            .get(&key)
+            .cloned()
+            .unwrap_or_default();
+        if primary.is_none() && cleanup.is_empty() {
             self.lifecycle
                 .lock()
                 .map_err(|_| {
@@ -657,20 +667,53 @@ impl EntraCredentialProvider {
                 })?
                 .insert(key, EntraLifecycleState::Finalized);
             return Ok(EntraOwnedHandleCleanup {
-                revoked: 1,
+                revoked: 0,
                 remaining: 0,
             });
-        };
-        record.metadata.state = CredentialLeaseState::Revoked;
-        record.metadata.outcome = CredentialOutcomeCode::Revoked;
-        record.health = EntraResourceHealth::Revoked;
-        record.refresh_attempts = 0;
+        }
+        let mut revoked = 0;
+        for record in primary.iter().chain(cleanup.iter()) {
+            if record.metadata.state == CredentialLeaseState::Revoked {
+                continue;
+            }
+            let lease = EntraLeaseRef {
+                credential_ref: credential_ref.clone(),
+                metadata: record.metadata.clone(),
+                endpoint_generation: self.placement.endpoint_generation(),
+            };
+            if let Err(error) = Self::poll_client(self.client.revoke_lease(&lease), deadline)
+                && !matches!(
+                    error.code(),
+                    CredentialServiceErrorCode::LeaseExpired
+                        | CredentialServiceErrorCode::LeaseRevoked
+                )
+            {
+                return Err(error);
+            }
+            revoked += 1;
+        }
+        if primary.is_some() {
+            let mut leases = self.leases.lock().map_err(|_| {
+                CredentialServiceError::new(CredentialServiceErrorCode::InvariantFailure)
+            })?;
+            if let Some(record) = leases.get_mut(&key) {
+                record.metadata.state = CredentialLeaseState::Revoked;
+                record.metadata.outcome = CredentialOutcomeCode::Revoked;
+                record.health = EntraResourceHealth::Revoked;
+                record.refresh_attempts = 0;
+                record.pending_acquire_idempotency = None;
+            }
+        }
+        self.cleanup_leases
+            .lock()
+            .map_err(|_| CredentialServiceError::new(CredentialServiceErrorCode::InvariantFailure))?
+            .remove(&key);
         self.lifecycle
             .lock()
             .map_err(|_| CredentialServiceError::new(CredentialServiceErrorCode::InvariantFailure))?
             .insert(key, EntraLifecycleState::Finalized);
         Ok(EntraOwnedHandleCleanup {
-            revoked: 1,
+            revoked,
             remaining: 0,
         })
     }
