@@ -1,9 +1,10 @@
 //! Credential service dispatch for the injected managed identity client.
 
 use d2b_contracts::v3::credential::{
-    CredentialAuthorization, CredentialLeaseState, CredentialMethod, CredentialOutcomeCode,
-    CredentialProvider, CredentialRequest, CredentialResponse, CredentialServiceError,
-    CredentialServiceErrorCode, DeliveryResponse, MetadataResponse,
+    CredentialAuthorization, CredentialLeaseState, CredentialMetadata, CredentialMethod,
+    CredentialOutcomeCode, CredentialProvider, CredentialRequest, CredentialResponse,
+    CredentialServiceError, CredentialServiceErrorCode, CredentialSessionBinding, DeliveryResponse,
+    MetadataResponse,
 };
 
 use crate::{
@@ -60,7 +61,8 @@ impl ManagedIdentityCredentialProvider {
             let records = leases.get(&key);
             if let Some(records) = records
                 && let Some(existing) = records.iter().find(|record| {
-                    record.metadata.state == CredentialLeaseState::Active
+                    !record.cleanup_only
+                        && record.metadata.state == CredentialLeaseState::Active
                         && record.idempotency_key == request.idempotency_key()
                         && Self::same_session(
                             &record.authenticated_subject,
@@ -77,7 +79,8 @@ impl ManagedIdentityCredentialProvider {
                 .into_iter()
                 .flatten()
                 .filter(|record| {
-                    record.metadata.state == CredentialLeaseState::Active
+                    !record.cleanup_only
+                        && record.metadata.state == CredentialLeaseState::Active
                         && Self::same_owner(
                             &record.authenticated_subject,
                             session.authenticated_subject(),
@@ -112,11 +115,13 @@ impl ManagedIdentityCredentialProvider {
                 .into_iter()
                 .flatten()
                 .filter(|record| {
-                    record.metadata.state == CredentialLeaseState::Active
-                        && Self::same_owner(
-                            &record.authenticated_subject,
-                            session.authenticated_subject(),
-                        )
+                    matches!(
+                        record.metadata.state,
+                        CredentialLeaseState::Active | CredentialLeaseState::Expired
+                    ) && Self::same_owner(
+                        &record.authenticated_subject,
+                        session.authenticated_subject(),
+                    )
                 })
                 .cloned()
                 .collect::<Vec<_>>()
@@ -153,8 +158,35 @@ impl ManagedIdentityCredentialProvider {
             rotation_generation,
         };
         let grant = Self::poll_client(self.client.issue_lease(&client_request), deadline)?;
-        let metadata = Self::grant_metadata(grant, requested_expiry, rotation_generation)?;
-        let mut leases = self.leases.lock().map_err(|_| invariant())?;
+        let cleanup_lease = lease_ref_from_grant(request.credential_ref(), &grant);
+        let metadata = match Self::grant_metadata(grant, requested_expiry, rotation_generation) {
+            Ok(metadata) => metadata,
+            Err(error) => {
+                return Err(self.cleanup_or_track_issue(
+                    &key,
+                    request,
+                    session,
+                    cleanup_lease.metadata.clone(),
+                    &cleanup_lease,
+                    deadline,
+                    error,
+                ));
+            }
+        };
+        let mut leases = match self.leases.lock() {
+            Ok(leases) => leases,
+            Err(_) => {
+                return Err(self.cleanup_or_track_issue(
+                    &key,
+                    request,
+                    session,
+                    metadata.clone(),
+                    &cleanup_lease,
+                    deadline,
+                    invariant(),
+                ));
+            }
+        };
         let records = leases.entry(key).or_default();
         records.retain(|record| {
             !Self::same_owner(
@@ -167,11 +199,49 @@ impl ManagedIdentityCredentialProvider {
             metadata: metadata.clone(),
             authenticated_subject: session.authenticated_subject().clone(),
             session_expires_at_unix_ms: session.expires_at_unix_ms(),
+            cleanup_only: false,
         });
         Ok(CredentialResponse::AcquireToken(DeliveryResponse {
             metadata,
             delivery_session_params: delivery,
         }))
+    }
+
+    fn cleanup_or_track_issue(
+        &self,
+        key: &str,
+        request: &CredentialRequest,
+        session: &CredentialSessionBinding,
+        metadata: CredentialMetadata,
+        lease: &ManagedIdentityLeaseRef,
+        deadline: std::time::Instant,
+        error: CredentialServiceError,
+    ) -> CredentialServiceError {
+        if Self::poll_client(self.client.revoke_lease(lease), deadline).is_ok() {
+            return error;
+        }
+        let unresolved = LeaseRecord {
+            idempotency_key: request.idempotency_key().to_owned(),
+            metadata,
+            authenticated_subject: session.authenticated_subject().clone(),
+            session_expires_at_unix_ms: session.expires_at_unix_ms(),
+            cleanup_only: true,
+        };
+        match self.leases.lock() {
+            Ok(mut leases) => {
+                let records = leases.entry(key.to_owned()).or_default();
+                if let Some(existing) = records
+                    .iter_mut()
+                    .find(|existing| Self::same_record_identity(existing, &unresolved))
+                {
+                    *existing = unresolved;
+                } else {
+                    records.push(unresolved);
+                }
+                error
+            }
+            Err(_) => invariant(),
+        }
     }
 
     fn refresh(
@@ -204,10 +274,11 @@ impl ManagedIdentityCredentialProvider {
             let record = records
                 .iter()
                 .find(|record| {
-                    Self::same_session(
-                        &record.authenticated_subject,
-                        session.authenticated_subject(),
-                    )
+                    !record.cleanup_only
+                        && Self::same_session(
+                            &record.authenticated_subject,
+                            session.authenticated_subject(),
+                        )
                 })
                 .ok_or_else(operation_denied)?;
             ensure_active(record)?;
@@ -240,9 +311,38 @@ impl ManagedIdentityCredentialProvider {
             return Err(invariant());
         }
         let grant = Self::poll_client(self.client.refresh_lease(&lease), deadline)?;
-        let metadata =
-            Self::grant_metadata(grant, requested_expiry, record.metadata.rotation_generation)?;
-        self.replace_record(&key, &record, request.idempotency_key(), metadata.clone())?;
+        let cleanup_lease = lease_ref_from_grant(request.credential_ref(), &grant);
+        let metadata = match Self::grant_metadata(
+            grant,
+            requested_expiry,
+            record.metadata.rotation_generation,
+        ) {
+            Ok(metadata) => metadata,
+            Err(error) => {
+                return Err(self.cleanup_or_track_issue(
+                    &key,
+                    request,
+                    session,
+                    cleanup_lease.metadata.clone(),
+                    &cleanup_lease,
+                    deadline,
+                    error,
+                ));
+            }
+        };
+        if let Err(error) =
+            self.replace_record(&key, &record, request.idempotency_key(), metadata.clone())
+        {
+            return Err(self.cleanup_or_track_issue(
+                &key,
+                request,
+                session,
+                metadata.clone(),
+                &cleanup_lease,
+                deadline,
+                error,
+            ));
+        }
         Ok(CredentialResponse::RefreshToken(DeliveryResponse {
             metadata,
             delivery_session_params: delivery,
@@ -270,10 +370,11 @@ impl ManagedIdentityCredentialProvider {
             let record = records
                 .iter()
                 .find(|record| {
-                    Self::same_session(
-                        &record.authenticated_subject,
-                        session.authenticated_subject(),
-                    )
+                    !record.cleanup_only
+                        && Self::same_session(
+                            &record.authenticated_subject,
+                            session.authenticated_subject(),
+                        )
                 })
                 .ok_or_else(operation_denied)?;
             record.clone()
@@ -325,10 +426,11 @@ impl ManagedIdentityCredentialProvider {
             let record = records
                 .iter()
                 .find(|record| {
-                    Self::same_session(
-                        &record.authenticated_subject,
-                        session.authenticated_subject(),
-                    )
+                    !record.cleanup_only
+                        && Self::same_session(
+                            &record.authenticated_subject,
+                            session.authenticated_subject(),
+                        )
                 })
                 .ok_or_else(operation_denied)?;
             ensure_active_or_observable(record)?;
@@ -358,11 +460,13 @@ impl ManagedIdentityCredentialProvider {
             metadata.state = CredentialLeaseState::Expired;
         }
         self.replace_record(&key, &record, request.idempotency_key(), metadata.clone())?;
-        if metadata.state == CredentialLeaseState::Expired {
-            return Err(expired());
-        }
-        if metadata.state == CredentialLeaseState::Revoked {
-            return Err(error_for_state(metadata.state));
+        if matches!(
+            metadata.state,
+            CredentialLeaseState::Expired | CredentialLeaseState::Revoked
+        ) {
+            return Ok(CredentialResponse::InspectMetadata(MetadataResponse {
+                metadata,
+            }));
         }
         Ok(CredentialResponse::InspectMetadata(MetadataResponse {
             metadata,
@@ -417,6 +521,23 @@ fn ensure_active_or_observable(record: &LeaseRecord) -> Result<(), CredentialSer
         | CredentialLeaseState::Expired
         | CredentialLeaseState::Revoked => Ok(()),
         CredentialLeaseState::Unknown => Err(invariant()),
+    }
+}
+
+fn lease_ref_from_grant(
+    credential_ref: &d2b_contracts::v3::ResourceRef,
+    grant: &crate::ManagedIdentityLeaseGrant,
+) -> ManagedIdentityLeaseRef {
+    ManagedIdentityLeaseRef {
+        credential_ref: credential_ref.clone(),
+        metadata: CredentialMetadata {
+            lease_handle: grant.lease_handle.clone(),
+            rotation_generation: grant.rotation_generation,
+            source_version: grant.source_version.clone(),
+            expires_at_unix_ms: grant.expires_at_unix_ms,
+            state: CredentialLeaseState::Active,
+            outcome: CredentialOutcomeCode::Success,
+        },
     }
 }
 

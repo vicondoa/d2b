@@ -7,5 +7,10 @@
   inflating the accepted client rotation generation, and repeated checkpoint
   restore remains occupancy-safe and idempotent.
 - Restricted service admission to local authenticated transports and matching
-  consumer generations, revoked superseded active handles before reacquisition,
-  and kept terminal lease metadata observable without reopening closed leases.
+  consumer generations, revoked superseded active or session-expired handles
+  before reacquisition, ignored cleanup-only records when measuring live
+  occupancy, and kept terminal lease metadata observable without reopening
+  closed leases.
+- Compensated invalid lease grants by revoking the newly issued handle before
+  returning the invariant error, and returned terminal states discovered by a
+  live metadata inspection as observations.

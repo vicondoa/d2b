@@ -43,6 +43,9 @@ pub struct FakeClient {
     pub refresh_calls: AtomicUsize,
     pub revoke_calls: AtomicUsize,
     pub issue_error: Mutex<Option<ManagedIdentityClientError>>,
+    pub issue_expiry_override: Mutex<Option<u64>>,
+    pub refresh_expiry_override: Mutex<Option<u64>>,
+    pub revoke_error: Mutex<Option<ManagedIdentityClientError>>,
     pub observed_request: Mutex<Option<(String, String, String)>>,
     pub token_canary: String,
     pub endpoint_canary: String,
@@ -60,6 +63,9 @@ impl FakeClient {
             refresh_calls: AtomicUsize::new(0),
             revoke_calls: AtomicUsize::new(0),
             issue_error: Mutex::new(None),
+            issue_expiry_override: Mutex::new(None),
+            refresh_expiry_override: Mutex::new(None),
+            revoke_error: Mutex::new(None),
             observed_request: Mutex::new(None),
             token_canary: format!("managed-identity-token-canary-{nonce}"),
             endpoint_canary: format!("managed-identity-endpoint-canary-{nonce}"),
@@ -81,7 +87,11 @@ impl ManagedIdentityCredentialClient for FakeClient {
         self.issue_calls.fetch_add(1, Ordering::SeqCst);
         let error = *self.issue_error.lock().unwrap();
         let state = *self.state.lock().unwrap();
-        let expiry = request.requested_expiry_unix_ms();
+        let expiry = self
+            .issue_expiry_override
+            .lock()
+            .unwrap()
+            .unwrap_or(request.requested_expiry_unix_ms());
         let rotation_generation = request.rotation_generation();
         let token = self.token_canary.clone();
         let endpoint = self.endpoint_canary.clone();
@@ -128,7 +138,11 @@ impl ManagedIdentityCredentialClient for FakeClient {
         lease: &ManagedIdentityLeaseRef,
     ) -> ManagedIdentityFuture<'_, ManagedIdentityLeaseRenewal> {
         self.refresh_calls.fetch_add(1, Ordering::SeqCst);
-        let expiry = lease.metadata().expires_at_unix_ms;
+        let expiry = self
+            .refresh_expiry_override
+            .lock()
+            .unwrap()
+            .unwrap_or(lease.metadata().expires_at_unix_ms);
         let rotation_generation = lease.metadata().rotation_generation;
         let inspection = &self.inspection;
         Box::pin(async move {
@@ -154,13 +168,26 @@ impl ManagedIdentityCredentialClient for FakeClient {
         _lease: &ManagedIdentityLeaseRef,
     ) -> ManagedIdentityFuture<'_, ManagedIdentityLeaseRevocation> {
         self.revoke_calls.fetch_add(1, Ordering::SeqCst);
-        Box::pin(async { Ok(ManagedIdentityLeaseRevocation::Revoked) })
+        let error = *self.revoke_error.lock().unwrap();
+        Box::pin(async move {
+            if let Some(error) = error {
+                return Err(error);
+            }
+            Ok(ManagedIdentityLeaseRevocation::Revoked)
+        })
     }
 }
 
 pub fn setup() -> (ManagedIdentityCredentialProvider, Arc<FakeClient>) {
+    setup_with_max_leases(64)
+}
+
+pub fn setup_with_max_leases(
+    max_leases: u32,
+) -> (ManagedIdentityCredentialProvider, Arc<FakeClient>) {
     let client = Arc::new(FakeClient::new());
-    let config = ManagedIdentityClientConfig::new("client-1234", "azure-imds-aca", 64).unwrap();
+    let config =
+        ManagedIdentityClientConfig::new("client-1234", "azure-imds-aca", max_leases).unwrap();
     let placement = ManagedIdentityPlacement::new(
         PlacementBinding::GuestAgent,
         ResourceRef::parse("Guest/aca-sandbox").unwrap(),

@@ -487,6 +487,7 @@ struct LeaseRecord {
     metadata: CredentialMetadata,
     authenticated_subject: AuthenticatedSubjectContext,
     session_expires_at_unix_ms: u64,
+    cleanup_only: bool,
 }
 
 /// Non-secret restart checkpoint for one managed-identity lease.
@@ -500,6 +501,7 @@ pub struct ManagedIdentityLeaseCheckpoint {
     metadata: CredentialMetadata,
     authenticated_subject: AuthenticatedSubjectContext,
     session_expires_at_unix_ms: u64,
+    cleanup_only: bool,
 }
 
 impl ManagedIdentityLeaseCheckpoint {
@@ -526,6 +528,12 @@ impl ManagedIdentityLeaseCheckpoint {
     /// Return the session expiry captured with this checkpoint.
     pub const fn session_expires_at_unix_ms(&self) -> u64 {
         self.session_expires_at_unix_ms
+    }
+
+    /// Whether this checkpoint exists only to retain an unresolved cleanup
+    /// handle and must not satisfy a caller acquire or lease operation.
+    pub const fn cleanup_only(&self) -> bool {
+        self.cleanup_only
     }
 }
 
@@ -700,7 +708,8 @@ impl ManagedIdentityCredentialProvider {
     ) {
         for records in leases.values_mut() {
             for record in records {
-                if record.metadata.state == CredentialLeaseState::Active
+                if !record.cleanup_only
+                    && record.metadata.state == CredentialLeaseState::Active
                     && (Self::is_expired(record.metadata.expires_at_unix_ms, now_unix_ms)
                         || Self::is_expired(record.session_expires_at_unix_ms, now_unix_ms))
                 {
@@ -715,7 +724,9 @@ impl ManagedIdentityCredentialProvider {
         leases
             .values()
             .flat_map(|records| records.iter())
-            .filter(|record| record.metadata.state == CredentialLeaseState::Active)
+            .filter(|record| {
+                !record.cleanup_only && record.metadata.state == CredentialLeaseState::Active
+            })
             .count()
     }
 
@@ -813,22 +824,13 @@ impl ManagedIdentityCredentialProvider {
         let waker = Waker::from(Arc::new(ThreadWake(thread::current())));
         let mut context = Context::from_waker(&waker);
         loop {
-            if Instant::now() >= deadline {
-                return Err(CredentialServiceError::new(
-                    CredentialServiceErrorCode::DeadlineExceeded,
-                ));
-            }
             match future.as_mut().poll(&mut context) {
                 Poll::Ready(result) => return result.map_err(Self::map_client_error),
                 Poll::Pending => {
-                    let remaining =
-                        deadline
-                            .checked_duration_since(Instant::now())
-                            .ok_or_else(|| {
-                                CredentialServiceError::new(
-                                    CredentialServiceErrorCode::DeadlineExceeded,
-                                )
-                            })?;
+                    let now = Instant::now();
+                    let remaining = deadline.checked_duration_since(now).ok_or_else(|| {
+                        CredentialServiceError::new(CredentialServiceErrorCode::DeadlineExceeded)
+                    })?;
                     thread::park_timeout(remaining);
                 }
             }
@@ -904,6 +906,7 @@ impl ManagedIdentityCredentialProvider {
                     metadata: record.metadata.clone(),
                     authenticated_subject: record.authenticated_subject.clone(),
                     session_expires_at_unix_ms: record.session_expires_at_unix_ms,
+                    cleanup_only: record.cleanup_only,
                 })
             })
             .collect())
@@ -927,11 +930,12 @@ impl ManagedIdentityCredentialProvider {
                 metadata,
                 authenticated_subject,
                 session_expires_at_unix_ms,
+                cleanup_only,
             } = checkpoint;
             if credential_ref.resource_type().as_str() != "Credential"
                 || !self.context_matches_provider(&authenticated_subject)
-                || metadata.rotation_generation == 0
-                || metadata.expires_at_unix_ms == 0
+                || (!cleanup_only
+                    && (metadata.rotation_generation == 0 || metadata.expires_at_unix_ms == 0))
                 || idempotency_key.is_empty()
                 || session_expires_at_unix_ms == 0
             {
@@ -940,7 +944,8 @@ impl ManagedIdentityCredentialProvider {
                 ));
             }
             let mut metadata = metadata;
-            if metadata.state == CredentialLeaseState::Active
+            if !cleanup_only
+                && metadata.state == CredentialLeaseState::Active
                 && (Self::is_expired(metadata.expires_at_unix_ms, now)
                     || Self::is_expired(session_expires_at_unix_ms, now))
             {
@@ -952,13 +957,10 @@ impl ManagedIdentityCredentialProvider {
                 metadata,
                 authenticated_subject,
                 session_expires_at_unix_ms,
+                cleanup_only,
             };
             if let Some((_, existing)) = restored.iter_mut().find(|(existing_key, existing)| {
-                existing_key == &key
-                    && Self::same_owner(
-                        &existing.authenticated_subject,
-                        &record.authenticated_subject,
-                    )
+                existing_key == &key && Self::same_record_identity(existing, &record)
             }) {
                 *existing = record;
             } else {
@@ -976,12 +978,7 @@ impl ManagedIdentityCredentialProvider {
         Self::mark_expired_locked(&mut next, now);
         for (credential_ref, record) in &restored {
             if let Some(records) = next.get_mut(credential_ref) {
-                records.retain(|existing| {
-                    !Self::same_owner(
-                        &existing.authenticated_subject,
-                        &record.authenticated_subject,
-                    )
-                });
+                records.retain(|existing| !Self::same_record_identity(existing, record));
             }
         }
         for (credential_ref, record) in restored {
@@ -1001,10 +998,12 @@ impl ManagedIdentityCredentialProvider {
         let mut deduplicated: Vec<LeaseRecord> = Vec::with_capacity(records.len());
         for record in records.drain(..) {
             if let Some(index) = deduplicated.iter().position(|existing| {
-                Self::same_owner(
-                    &existing.authenticated_subject,
-                    &record.authenticated_subject,
-                )
+                !existing.cleanup_only
+                    && !record.cleanup_only
+                    && Self::same_owner(
+                        &existing.authenticated_subject,
+                        &record.authenticated_subject,
+                    )
             }) {
                 if record.metadata.state == CredentialLeaseState::Active
                     || deduplicated[index].metadata.state != CredentialLeaseState::Active
@@ -1016,6 +1015,17 @@ impl ManagedIdentityCredentialProvider {
             }
         }
         *records = deduplicated;
+    }
+
+    pub(crate) fn same_record_identity(left: &LeaseRecord, right: &LeaseRecord) -> bool {
+        Self::same_owner(&left.authenticated_subject, &right.authenticated_subject)
+            && if left.cleanup_only || right.cleanup_only {
+                left.cleanup_only
+                    && right.cleanup_only
+                    && left.metadata.lease_handle == right.metadata.lease_handle
+            } else {
+                true
+            }
     }
 
     /// Revoke every active handle owned by one authenticated workload.
@@ -1048,11 +1058,13 @@ impl ManagedIdentityCredentialProvider {
                     records
                         .iter()
                         .filter(|record| {
-                            record.metadata.state == CredentialLeaseState::Active
-                                && Self::same_owner(
-                                    &record.authenticated_subject,
-                                    session.authenticated_subject(),
-                                )
+                            matches!(
+                                record.metadata.state,
+                                CredentialLeaseState::Active | CredentialLeaseState::Expired
+                            ) && Self::same_owner(
+                                &record.authenticated_subject,
+                                session.authenticated_subject(),
+                            )
                         })
                         .map(|record| {
                             (
@@ -1134,5 +1146,14 @@ mod tests {
         let config = ManagedIdentityClientConfig::new(&marker, "azure-imds", 64).unwrap();
         assert!(!format!("{config:?}").contains(&marker));
         assert_eq!(config.client_id().as_str(), marker);
+    }
+
+    #[test]
+    fn poll_client_accepts_ready_result_at_deadline() {
+        let future: ManagedIdentityFuture<'_, u8> = Box::pin(async { Ok(7) });
+        assert_eq!(
+            ManagedIdentityCredentialProvider::poll_client(future, Instant::now()).unwrap(),
+            7
+        );
     }
 }
