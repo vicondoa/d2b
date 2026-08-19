@@ -72,7 +72,7 @@ exec "$PYTHON_BIN" "$PEAK_RSS" \
     -- __TOOL__ __COMMAND__
 """
 
-def nix_native_test(name, command, lane, max_kib, data, uses_nix_unit = False, uses_eval_jobs = False, smoke = False):
+def nix_native_test(name, command, lane, max_kib, data, uses_nix_unit = False, uses_eval_jobs = False, smoke = False, timeout = "long"):
     runner = name + "_runner.sh"
     script = _NIX_TEST_SCRIPT
     script = script.replace("__NIX_KEY__", "$(rlocationpath @nix//:bin/nix)")
@@ -145,7 +145,7 @@ def nix_native_test(name, command, lane, max_kib, data, uses_nix_unit = False, u
             "//:tests/unit/smoke/smoke-eval-aarch64.nix",
         ] if smoke else []),
         tags = _NIX_TAGS,
-        timeout = "long",
+        timeout = timeout,
     )
 
 def nix_unit_case_test(case_name, data):

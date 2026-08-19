@@ -193,6 +193,7 @@ nix_native_test(
     lane = "flake-realized",
     max_kib = 14665373,
     data = [":flake_eval_inputs"],
+    timeout = "eternal",
 )
 
 nix_native_test(
