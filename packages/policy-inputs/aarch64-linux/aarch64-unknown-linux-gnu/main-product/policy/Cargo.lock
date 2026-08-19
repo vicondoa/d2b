@@ -1112,6 +1112,15 @@ dependencies = [
 
 
 [[package]]
+name = "d2b-cutover"
+version = "0.0.0-bootstrap"
+dependencies = [
+ "d2b-contracts",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "d2b-exec-runner"
 version = "0.0.0-bootstrap"
 dependencies = [
