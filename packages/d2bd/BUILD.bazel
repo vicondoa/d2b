@@ -45,6 +45,7 @@ d2bd_shared_deps = [
     "//packages/d2b-provider-network-local:d2b_provider_network_local",
     "//packages/d2b-provider-notification-desktop:d2b_provider_notification_desktop",
     "//packages/d2b-provider-runtime-azure-container-apps:d2b_provider_runtime_azure_container_apps",
+    "//packages/d2b-provider-runtime-cloud-hypervisor:d2b_provider_runtime_cloud_hypervisor",
     "//packages/d2b-provider-supervisor:d2b_provider_supervisor",
     "//packages/d2b-provider-system-core:d2b_provider_system_core",
     "//packages/d2b-provider-system-minijail:d2b_provider_system_minijail",
@@ -120,6 +121,7 @@ d2bd_test_support_deps = [
     "//packages/d2b-session-unix:d2b_session_unix_test_support",
     "//packages/d2b-resource-store:d2b_resource_store_test_support",
     "//packages/d2b-resource-store-redb:d2b_resource_store_redb_test_support",
+    "//packages/d2b-provider-volume-local:d2b_provider_volume_local",
 ]
 
 rust_library(

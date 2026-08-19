@@ -8,3 +8,5 @@
   failing after the standard 15-minute test budget.
 - Keep resource-compiler test schema discovery runtime-based so strict Rust
   path checks remain valid on remote workers.
+- Wire the v3 Cloud Hypervisor and Volume provider crates into d2bd's Bazel
+  production and test-support closures.
