@@ -227,8 +227,11 @@ rust_test(
     tags = [
         "exclusive",
         "local",
+        "no-remote-cache",
+        "no-remote-exec",
         "no-sandbox",
     ],
+    exec_compatible_with = ["//bazel/platforms:local_execution"],
     visibility = ["//visibility:public"],
 )
 

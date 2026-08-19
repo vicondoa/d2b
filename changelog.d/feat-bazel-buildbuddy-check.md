@@ -17,6 +17,8 @@
   Bazel inputs so source changes invalidate the corresponding checks.
 - Let CI use its native Bash when user namespaces are unavailable while local
   Bazel development keeps the FHS action shell.
+- Keep local-only lint actions on the host platform while remote actions use
+  the BuildBuddy Ubuntu GCC toolchain.
 
 ### Removed
 
