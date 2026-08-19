@@ -906,3 +906,62 @@ fn telemetry_field_scan_is_multiline_and_comment_safe() {
         "tracing::info!(config_source\n    = \"realm-controllers\");"
     ));
 }
+
+#[test]
+fn interaction_payload_surfaces_use_redacted_debug_and_closed_outputs() {
+    for (path, marker) in [
+        (
+            "packages/d2b-provider-clipboard-wayland/src/history.rs",
+            "impl core::fmt::Debug for ClipboardEntry",
+        ),
+        (
+            "packages/d2b-provider-shell-terminal/src/session/ring.rs",
+            "impl std::fmt::Debug for RingReplay",
+        ),
+        (
+            "packages/d2b-provider-notification-desktop/src/redact.rs",
+            "SanitizedNotification(<redacted>)",
+        ),
+        (
+            "packages/d2b-provider-notification-desktop/src/host_sink.rs",
+            "NotificationProjection(<redacted>)",
+        ),
+        (
+            "packages/d2b-provider-device-security-key/src/session_ring.rs",
+            "impl fmt::Debug for SessionRecord",
+        ),
+        (
+            "packages/d2b-sk-frontend/src/uhid.rs",
+            "UhidEvent::Output(<redacted>)",
+        ),
+    ] {
+        let source = read_repo_file(path);
+        assert!(
+            source.contains(marker),
+            "{path} lost its redacted output seam"
+        );
+    }
+
+    let frontend = read_repo_file("packages/d2b-sk-frontend/src/uhid.rs");
+    assert!(
+        !frontend.contains("#[derive(Debug, Clone)]"),
+        "CTAPHID report-bearing UhidEvent must not regain derived Debug"
+    );
+
+    let notification_metrics =
+        read_repo_file("packages/d2b-provider-notification-desktop/src/metrics.rs");
+    for field in ["summary", "body", "icon", "action", "notification_id"] {
+        assert!(
+            notification_metrics.contains(&format!("\"{field}\"")),
+            "notification telemetry must explicitly reject {field}"
+        );
+    }
+
+    let support_test = read_repo_file("packages/d2b/tests/zone_support_bundle_contract.rs");
+    for canary in ["secret-resource-name", "must-not-escape", "/private"] {
+        assert!(
+            support_test.contains(canary),
+            "support-bundle redaction test lost canary {canary}"
+        );
+    }
+}
