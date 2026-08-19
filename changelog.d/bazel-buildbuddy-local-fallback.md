@@ -12,3 +12,5 @@
   production and test-support closures.
 - Keep broker runtime tests on OS temporary storage so remote Rust artifacts do
   not embed the BuildBuddy execroot.
+- Recompute v3 production-closure lock authorities after the workspace merge
+  and build Nix host tools from the root Cargo workspace.
