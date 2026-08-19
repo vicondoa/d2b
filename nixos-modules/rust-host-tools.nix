@@ -27,6 +27,10 @@ let
       || lib.hasSuffix "/Cargo.lock" (toString path)
       || lib.hasSuffix "/.cargo/config.toml" (toString path);
   };
+  dummyPackages = craneLib.mkDummySrc {
+    src = cargoManifestSrc;
+    inherit cargoLock;
+  };
   dummySource = pkgs.runCommand "d2b-provider-rust-src" { } ''
     mkdir -p "$out"
     cp -r ${craneLib.mkDummySrc {
@@ -34,6 +38,75 @@ let
       inherit cargoLock;
     }}/. "$out/"
   '';
+
+  cratePathName = rel:
+    let
+      trimmed = lib.removeSuffix "/" (lib.removePrefix "./" rel);
+      name = lib.removePrefix "../" trimmed;
+    in
+    if name == trimmed && lib.hasPrefix "/" trimmed
+    then null
+    else name;
+
+  pathDepNames = cargoToml:
+    let
+      parsed = builtins.fromTOML (builtins.readFile cargoToml);
+      collect = attrs:
+        lib.filter (value: builtins.isAttrs value && value ? path)
+          (lib.attrValues attrs);
+      names = map (value: cratePathName value.path) (
+        collect (parsed.dependencies or { })
+        ++ collect (parsed.build-dependencies or { })
+      );
+    in
+    lib.filter (name: name != null && name != "") names;
+
+  crateClosure = package:
+    let
+      go = seen: queue:
+        if queue == [ ] then seen
+        else
+          let
+            name = builtins.head queue;
+            rest = builtins.tail queue;
+          in
+          if builtins.elem name seen then go seen rest
+          else
+            let
+              toml = ../packages + "/${name}/Cargo.toml";
+              deps = if builtins.pathExists toml then pathDepNames toml else [ ];
+            in
+            go (seen ++ [ name ]) (rest ++ deps);
+    in
+    go [ ] [ package ];
+
+  crateSource = name:
+    d2bLib.cleanRustPackagesSource (../packages + "/${name}");
+
+  # Overlay real sources for one package and its path-dep closure onto the
+  # dummy workspace. Each crate is a separate Nix path input so a d2bd edit
+  # does not rebuild wayland-proxy, the resource compiler, or other host tools.
+  mkPackageSource = package:
+    let
+      crates = lib.filter
+        (name: builtins.pathExists (../packages + "/${name}"))
+        (crateClosure package);
+    in
+    pkgs.runCommand "d2b-provider-rust-src-${package}" { } ''
+      mkdir -p "$out/packages"
+      cp -a ${dummySource}/packages/. "$out/packages/"
+      chmod -R u+w "$out/packages"
+      ${lib.concatMapStringsSep "\n" (name: ''
+        rm -rf "$out/packages/${name}"
+        cp -a ${crateSource name} "$out/packages/${name}"
+      '') crates}
+      mkdir -p "$out/docs/reference/schemas/v3/providers"
+      cp ${../docs/reference/schemas/v3/providers/transport-azure-relay.transport-settings.json} \
+        "$out/docs/reference/schemas/v3/providers/transport-azure-relay.transport-settings.json"
+      cp ${../docs/reference/schemas/v3/providers/transport-vsock.transport-binding.json} \
+        "$out/docs/reference/schemas/v3/providers/transport-vsock.transport-binding.json"
+    '';
+
   outputHashes = {
     "git+https://github.com/vicondoa/wl-proxy.git?rev=072945b59fef21a2a8166460454280d543f48772#072945b59fef21a2a8166460454280d543f48772" =
       "sha256-1yO1zgzSyzQ2DnDMpVxcnI5BsTNvXfzIUS+RNlPj4A8=";
@@ -46,17 +119,43 @@ let
     cargoLock = brokerCargoLock;
     inherit outputHashes;
   };
+  hostPackages = [
+    "d2bd"
+    "d2b"
+    "d2b-host"
+    "d2b-host-activation-helper"
+    "d2b-gateway-runtime"
+    "d2b-unsafe-local-helper"
+    "d2b-resource-compiler"
+    "d2b-wayland-proxy"
+  ];
+  hostPackageArgs = lib.concatMapStringsSep " " (package: "--package ${package}") hostPackages;
+
+  rustcWrapper = pkgs.writeShellScript "d2b-sccache-rustc-wrapper" ''
+    if [ -n "''${SCCACHE_DIR:-}" ] \
+      && [ -d "''${SCCACHE_DIR}" ] \
+      && [ -w "''${SCCACHE_DIR}" ] \
+      && command -v sccache >/dev/null 2>&1; then
+      exec sccache "$@"
+    fi
+    exec "$@"
+  '';
+
+  # Constant sandbox path so pure CI and host-int realize the same host-tool
+  # derivations. The directory is absent in the default sandbox, so the
+  # wrapper falls back to rustc. Host-int may bind-mount an owner-private
+  # cache here when D2B_HOST_SCCACHE=1.
+  sccacheDir = "/var/cache/d2b-sccache";
   commonBuildArgs = {
     strictDeps = true;
     cargoExtraArgs = "--locked";
     inherit cargoVendorDir;
     doCheck = false;
-    nativeBuildInputs = [ pkgs.protobuf ];
-    RUSTC_WRAPPER = "";
-    SCCACHE_DIR = "";
+    nativeBuildInputs = [ pkgs.protobuf pkgs.sccache ];
+    RUSTC_WRAPPER = rustcWrapper;
+    SCCACHE_DIR = sccacheDir;
   };
 
-  # Keep dependency compilation independent of application source changes.
   cargoArtifacts = craneLib.buildDepsOnly (commonBuildArgs // {
     pname = "d2b-host-tools";
     version = "0.0.0-bootstrap";
@@ -64,8 +163,21 @@ let
     sourceRoot = "d2b-provider-rust-src";
     cargoToml = ../Cargo.toml;
     inherit cargoLock outputHashes;
-    cargoCheckExtraArgs = "--package d2bd";
-    cargoBuildExtraArgs = "--package d2bd";
+    cargoCheckExtraArgs = hostPackageArgs;
+    cargoBuildExtraArgs = hostPackageArgs;
+  });
+
+  brokerCargoArtifacts = craneLib.buildDepsOnly (commonBuildArgs // {
+    pname = "d2b-priv-broker";
+    version = "0.0.0-bootstrap";
+    dummySrc = dummySource;
+    sourceRoot = "d2b-provider-rust-src";
+    cargoToml = ../Cargo.toml;
+    cargoLock = brokerCargoLock;
+    cargoVendorDir = brokerCargoVendorDir;
+    inherit outputHashes;
+    cargoCheckExtraArgs = "--package d2b-priv-broker --no-default-features";
+    cargoBuildExtraArgs = "--package d2b-priv-broker --no-default-features";
   });
 
   installBinaries = binaries:
@@ -96,10 +208,11 @@ let
   broker = craneLib.buildPackage (commonBuildArgs // {
     pname = "d2b-priv-broker";
     version = "0.0.0-bootstrap";
-    inherit cargoArtifacts outputHashes;
+    cargoArtifacts = brokerCargoArtifacts;
+    inherit outputHashes;
     src = hostSource;
-    sourceRoot = "d2b-provider-rust-src/packages/d2b-priv-broker";
-    cargoToml = ../packages/d2b-priv-broker/Cargo.toml;
+    sourceRoot = "d2b-provider-rust-src";
+    cargoToml = ../Cargo.toml;
     cargoLock = brokerCargoLock;
     cargoVendorDir = brokerCargoVendorDir;
     cargoBuildExtraArgs = "--no-default-features";
