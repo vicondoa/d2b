@@ -619,10 +619,13 @@ heavy-lane-host-integration: heavy-lane-guard
 	fi; \
 	cache_dir="$${SCCACHE_DIR:-$$HOME/.cache/d2b-sccache}"; \
 	mkdir -p "$$cache_dir"; \
+	chmod 1777 "$$cache_dir"; \
 	cache_dir="$$(cd "$$cache_dir" && pwd -P)"; \
 	export SCCACHE_DIR="$$cache_dir"; \
 	echo "test-host-integration: sccache cache: $$cache_dir"; \
 	root="$$(pwd)"; \
+	export D2B_HOST_RUNTIME_PATH="$$root/.scratch/host-int-sccache/no-host-runtime.json"; \
+	rm -f "$$D2B_HOST_RUNTIME_PATH"; \
 	names="$$(nix eval --raw --impure --no-warn-dirty --expr "builtins.concatStringsSep \" \" (builtins.attrNames (builtins.getFlake \"git+file://$$root\").vmChecks.$$system)")"; \
 	if [ -z "$$names" ]; then \
 	echo "test-host-integration: no vmChecks present"; \

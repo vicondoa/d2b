@@ -126,6 +126,8 @@ let
       && [ -d "''${SCCACHE_DIR}" ] \
       && [ -w "''${SCCACHE_DIR}" ] \
       && command -v sccache >/dev/null 2>&1; then
+      # Keep entries writable across Nix's shared build users.
+      umask 0002
       exec sccache "$@"
     fi
     exec "$@"
