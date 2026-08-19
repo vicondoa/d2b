@@ -82,10 +82,34 @@ where
 }
 
 fn corpus_dir(target: &str) -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("fuzz")
-        .join("corpus")
-        .join(target)
+    runfile_path(&format!("packages/d2b-core/fuzz/corpus/{target}"))
+}
+
+fn runfile_path(relative: &str) -> PathBuf {
+    if let Some(runfiles) = std::env::var_os("RUNFILES_DIR") {
+        let candidate = PathBuf::from(runfiles).join("_main").join(relative);
+        if candidate.exists() {
+            return candidate;
+        }
+    }
+    if let Some(srcdir) = std::env::var_os("TEST_SRCDIR") {
+        let workspace = std::env::var_os("TEST_WORKSPACE").unwrap_or_else(|| "_main".into());
+        let candidate = PathBuf::from(srcdir).join(workspace).join(relative);
+        if candidate.exists() {
+            return candidate;
+        }
+    }
+    let mut base = std::env::current_dir().unwrap_or_else(|_| std::env::temp_dir());
+    loop {
+        let candidate = base.join(relative);
+        if candidate.exists() {
+            return candidate;
+        }
+        if !base.pop() {
+            break;
+        }
+    }
+    PathBuf::from(relative)
 }
 
 fn generated_case(rng: &mut XorShift64, case: usize) -> Vec<u8> {

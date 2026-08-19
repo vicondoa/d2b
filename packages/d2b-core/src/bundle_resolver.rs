@@ -3473,7 +3473,9 @@ mod tests {
     }
 
     fn test_root(test_name: &str) -> PathBuf {
-        let base = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("target/bundle-resolver-tests");
+        let base = std::env::var_os("TEST_TMPDIR")
+            .map(PathBuf::from)
+            .unwrap_or_else(|| std::env::temp_dir().join("d2b-bundle-resolver-tests"));
         fs::create_dir_all(&base).expect("create bundle resolver test root");
         let unique = SystemTime::now()
             .duration_since(UNIX_EPOCH)

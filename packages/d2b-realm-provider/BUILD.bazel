@@ -1,0 +1,47 @@
+load("@crates//:defs.bzl", "all_crate_deps")
+load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test")
+
+exports_files(
+    ["BUILD.bazel"],
+    visibility = ["//visibility:public"],
+)
+
+rust_library(
+    name = "d2b_realm_provider",
+    srcs = glob(["src/**/*.rs"], allow_empty = True),
+    compile_data = ["Cargo.toml"],
+    proc_macro_deps = [
+        "@crates//:async-trait",
+    ],
+    visibility = ["//visibility:public"],
+    deps = [
+        "//packages/d2b-realm-core:d2b_realm_core",
+    ] + all_crate_deps(normal = True, cargo_only = True),
+)
+
+rust_test(
+    name = "d2b_realm_provider_test",
+    compile_data = ["Cargo.toml"],
+    crate = ":d2b_realm_provider",
+    deps = [
+        "//packages/d2b-realm-core:d2b_realm_core",
+    ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
+)
+
+# keep
+filegroup(
+    name = "cargo_workspace_sources",
+    srcs = glob(
+        [
+            "Cargo.lock",
+            "Cargo.toml",
+            "benches/**/*.rs",
+            "build.rs",
+            "examples/**/*.rs",
+            "src/**/*.rs",
+            "tests/**/*.rs",
+        ],
+        allow_empty = True,
+    ),
+    visibility = ["//visibility:public"],
+)

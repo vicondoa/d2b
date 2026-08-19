@@ -1,0 +1,36 @@
+load("@rules_shell//shell:sh_test.bzl", "sh_test")
+
+package(default_visibility = ["//visibility:public"])
+
+filegroup(
+    name = "carrier_sources",
+    srcs = [
+        "//:tests_workspace_sources",
+        "//bazel/checks/rust:repo_policy_sources",
+        "//tests/unit/meta:meta_sources",
+    ],
+)
+
+sh_test(
+    name = "tier0_first_pass",
+    srcs = ["//:tests/tools/tier0-first-pass.sh"],
+    data = [":carrier_sources"],
+    env_inherit = ["D2B_REPO_ROOT", "PATH", "ROOT"],
+    tags = [
+        "local",
+        "no-sandbox",
+    ],
+)
+
+test_suite(
+    name = "tier0",
+    tests = [
+        ":tier0_first_pass",
+        "//packages/xtask:bazel_compatibility",
+    ],
+)
+
+test_suite(
+    name = "performance_budgets",
+    tests = ["//tests/unit/gates:performance_budgets"],
+)

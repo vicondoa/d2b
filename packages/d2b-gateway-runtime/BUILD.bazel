@@ -1,0 +1,92 @@
+load("@crates//:defs.bzl", "all_crate_deps")
+load("@rules_rust//rust:defs.bzl", "rust_binary", "rust_library", "rust_test")
+
+exports_files(
+    ["BUILD.bazel"],
+    visibility = ["//visibility:public"],
+)
+
+rust_library(
+    name = "d2b_gateway_runtime",
+    srcs = glob(["src/**/*.rs"], allow_empty = True),
+    compile_data = ["Cargo.toml"],
+    proc_macro_deps = [
+        "@crates//:async-trait",
+    ],
+    visibility = ["//visibility:public"],
+    deps = [
+        "//packages/d2b-gateway:d2b_gateway",
+        "//packages/d2b-provider-runtime-azure-container-apps:d2b_provider_runtime_azure_container_apps",
+        "//packages/d2b-provider-transport-azure-relay:d2b_provider_transport_azure_relay",
+        "//packages/d2b-realm-core:d2b_realm_core",
+        "//packages/d2b-realm-provider:d2b_realm_provider",
+    ] + all_crate_deps(normal = True, cargo_only = True),
+)
+
+rust_library(
+    name = "d2b_gateway_runtime_test_support",
+    srcs = glob(["src/**/*.rs"], allow_empty = True),
+    compile_data = ["Cargo.toml"],
+    crate_name = "d2b_gateway_runtime",
+    proc_macro_deps = [
+        "@crates//:async-trait",
+    ],
+    visibility = ["//visibility:public"],
+    deps = [
+        "//packages/d2b-gateway:d2b_gateway",
+        "//packages/d2b-provider-runtime-azure-container-apps:d2b_provider_runtime_azure_container_apps_test_support",
+        "//packages/d2b-provider-transport-azure-relay:d2b_provider_transport_azure_relay_test_support",
+        "//packages/d2b-realm-core:d2b_realm_core",
+        "//packages/d2b-realm-provider:d2b_realm_provider",
+    ] + all_crate_deps(normal = True, cargo_only = True),
+)
+
+rust_binary(
+    name = "d2b-gateway-enroll",
+    srcs = ["src/bin/d2b-gateway-enroll.rs"],
+    compile_data = ["Cargo.toml"],
+    visibility = ["//visibility:public"],
+    deps = [
+        ":d2b_gateway_runtime",
+    ] + all_crate_deps(normal = True, cargo_only = True),
+)
+
+rust_binary(
+    name = "d2b-gateway-relay",
+    srcs = ["src/bin/d2b-gateway-relay.rs"],
+    compile_data = ["Cargo.toml"],
+    visibility = ["//visibility:public"],
+    deps = [
+        ":d2b_gateway_runtime",
+        "//packages/d2b-gateway:d2b_gateway",
+        "//packages/d2b-provider-transport-azure-relay:d2b_provider_transport_azure_relay",
+    ] + all_crate_deps(normal = True, cargo_only = True),
+)
+
+rust_test(
+    name = "d2b_gateway_runtime_test",
+    compile_data = ["Cargo.toml"],
+    crate = ":d2b_gateway_runtime",
+    deps = [
+        "//packages/d2b-realm-core:d2b_realm_core",
+        "//packages/d2b-realm-provider:d2b_realm_provider",
+    ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
+)
+
+# keep
+filegroup(
+    name = "cargo_workspace_sources",
+    srcs = glob(
+        [
+            "Cargo.lock",
+            "Cargo.toml",
+            "benches/**/*.rs",
+            "build.rs",
+            "examples/**/*.rs",
+            "src/**/*.rs",
+            "tests/**/*.rs",
+        ],
+        allow_empty = True,
+    ),
+    visibility = ["//visibility:public"],
+)

@@ -1,0 +1,82 @@
+load("@crates//:defs.bzl", "all_crate_deps")
+load("@rules_rust//rust:defs.bzl", "rust_binary", "rust_library", "rust_test")
+
+exports_files(
+    ["BUILD.bazel"],
+    visibility = ["//visibility:public"],
+)
+
+rust_library(
+    name = "d2b_exec_runner",
+    srcs = glob(["src/**/*.rs"], allow_empty = True),
+    compile_data = ["Cargo.toml"],
+    visibility = ["//visibility:public"],
+)
+
+rust_binary(
+    name = "d2b-exec-runner",
+    srcs = glob(["src/**/*.rs"], allow_empty = True),
+    crate_root = "src/main.rs",
+    compile_data = ["Cargo.toml"],
+    visibility = ["//visibility:public"],
+    deps = [
+        ":d2b_exec_runner",
+    ] + all_crate_deps(normal = True, cargo_only = True),
+)
+
+rust_test(
+    name = "fail_closed",
+    srcs = ["tests/fail_closed.rs"],
+    compile_data = ["Cargo.toml"],
+    data = [":d2b-exec-runner"],
+    env = {"CARGO_BIN_EXE_d2b-exec-runner": "$(rootpath :d2b-exec-runner)"},
+    rustc_env = {"CARGO_BIN_EXE_d2b-exec-runner": "$(rootpath :d2b-exec-runner)"},
+    visibility = ["//visibility:public"],
+)
+
+rust_test(
+    name = "tty_pty_integration",
+    srcs = ["tests/tty_pty_integration.rs"],
+    compile_data = ["Cargo.toml"],
+    data = [":d2b-exec-runner"],
+    env = {"CARGO_BIN_EXE_d2b-exec-runner": "$(rootpath :d2b-exec-runner)"},
+    rustc_env = {"CARGO_BIN_EXE_d2b-exec-runner": "$(rootpath :d2b-exec-runner)"},
+    visibility = ["//visibility:public"],
+    deps = [] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
+)
+
+rust_test(
+    name = "d2b_exec_runner_test",
+    compile_data = ["Cargo.toml"],
+    crate = ":d2b_exec_runner",
+    data = [":d2b-exec-runner"],
+    env = {"CARGO_BIN_EXE_d2b-exec-runner": "$(rootpath :d2b-exec-runner)"},
+    rustc_env = {"CARGO_BIN_EXE_d2b-exec-runner": "$(rootpath :d2b-exec-runner)"},
+)
+
+rust_test(
+    name = "d2b-exec-runner_test",
+    compile_data = ["Cargo.toml"],
+    crate = ":d2b-exec-runner",
+    data = [":d2b-exec-runner"],
+    env = {"CARGO_BIN_EXE_d2b-exec-runner": "$(rootpath :d2b-exec-runner)"},
+    rustc_env = {"CARGO_BIN_EXE_d2b-exec-runner": "$(rootpath :d2b-exec-runner)"},
+)
+
+# keep
+filegroup(
+    name = "cargo_workspace_sources",
+    srcs = glob(
+        [
+            "Cargo.lock",
+            "Cargo.toml",
+            "benches/**/*.rs",
+            "build.rs",
+            "examples/**/*.rs",
+            "src/**/*.rs",
+            "tests/**/*.rs",
+        ],
+        allow_empty = True,
+    ),
+    visibility = ["//visibility:public"],
+)

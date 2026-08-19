@@ -47,6 +47,16 @@ pub mod protocol;
 pub mod runtime;
 pub mod sys;
 
+#[cfg(test)]
+pub(crate) fn test_scratch_root() -> std::path::PathBuf {
+    let root = std::env::var_os("TEST_TMPDIR")
+        .or_else(|| std::env::var_os("CARGO_TARGET_TMPDIR"))
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(|| std::env::temp_dir().join("d2b-priv-broker-tests"));
+    std::fs::create_dir_all(&root).expect("create test scratch root");
+    root
+}
+
 // Behavioral + regression seccomp BPF tests.
 #[cfg(test)]
 mod seccomp_compile_tests;

@@ -1,0 +1,139 @@
+load("@crates//:defs.bzl", "all_crate_deps")
+load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test")
+
+exports_files(["BUILD.bazel"], visibility = ["//visibility:public"])
+
+# keep
+
+rust_library(
+    name = "d2b_provider_system_core",
+    srcs = glob(["src/**/*.rs"], allow_empty = True),
+    compile_data = ["Cargo.toml"],
+    visibility = ["//visibility:public"],
+    deps = [
+        "//packages/d2b-contracts:d2b_contracts",
+
+    ] + all_crate_deps(normal = True, cargo_only = True),
+)
+
+rust_library(
+    name = "d2b_provider_system_core_test_support",
+    srcs = glob(["src/**/*.rs"], allow_empty = True),
+    compile_data = ["Cargo.toml"],
+    crate_name = "d2b_provider_system_core",
+    visibility = ["//visibility:public"],
+    deps = [
+        "//packages/d2b-contracts:d2b_contracts_test_support",
+    ] + all_crate_deps(normal = True, cargo_only = True),
+)
+
+rust_test(
+    name = "handler_status",
+    srcs = ["tests/handler_status.rs"],
+    compile_data = ["Cargo.toml"],
+    visibility = ["//visibility:public"],
+    deps = [
+        ":d2b_provider_system_core",
+        "//packages/d2b-contracts:d2b_contracts",
+    ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
+)
+
+rust_test(
+    name = "host_posture_contract",
+    srcs = [
+        "src/host_process_audit.rs",  # keep
+        "src/host_reconciler.rs",  # keep
+        "src/host_status.rs",  # keep
+        "tests/host_posture_contract.rs",
+    ],
+    compile_data = ["Cargo.toml"],
+    visibility = ["//visibility:public"],
+    deps = [
+        ":d2b_provider_system_core",
+        "//packages/d2b-contracts:d2b_contracts",
+    ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
+)
+
+rust_test(
+    name = "host_reconciliation",
+    srcs = ["tests/host_reconciliation.rs"],
+    compile_data = ["Cargo.toml"],
+    visibility = ["//visibility:public"],
+    deps = [
+        ":d2b_provider_system_core",
+        "//packages/d2b-contracts:d2b_contracts",
+    ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
+)
+
+rust_test(
+    name = "ownership",
+    srcs = ["tests/ownership.rs"],
+    compile_data = ["Cargo.toml"],
+    visibility = ["//visibility:public"],
+    deps = [
+        ":d2b_provider_system_core",
+        "//packages/d2b-contracts:d2b_contracts",
+    ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
+)
+
+rust_test(
+    name = "user_discovery",
+    srcs = ["tests/user_discovery.rs"],
+    compile_data = ["Cargo.toml"],
+    visibility = ["//visibility:public"],
+    deps = [
+        ":d2b_provider_system_core",
+        "//packages/d2b-contracts:d2b_contracts",
+    ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
+)
+
+rust_test(
+    name = "d2b_provider_system_core_test",
+    compile_data = ["Cargo.toml"],
+    crate = ":d2b_provider_system_core",
+    deps = [] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
+)
+
+rust_test(
+    name = "provider_boundary",
+    srcs = [
+        "tests/provider_boundary.rs",
+    ],
+    compile_data = ["Cargo.toml"],
+    visibility = ["//visibility:public"],
+    deps = [
+        ":d2b_provider_system_core",
+    ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
+)
+
+rust_test(
+    name = "reconcile_audit",
+    srcs = [
+        "tests/reconcile_audit.rs",
+    ],
+    compile_data = ["Cargo.toml"],
+    visibility = ["//visibility:public"],
+    deps = [
+        ":d2b_provider_system_core",
+    ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
+)
+
+# keep
+filegroup(
+    name = "cargo_workspace_sources",
+    srcs = glob([
+        "Cargo.lock",
+        "Cargo.toml",
+        "benches/**/*.rs",
+        "build.rs",
+        "examples/**/*.rs",
+        "integration/**/*",
+        "nix/**/*",
+        "README.md",
+        "src/**/*.rs",
+        "tests/**/*.rs",
+    ],
+        allow_empty = True,
+    ),
+    visibility = ["//visibility:public"],
+)

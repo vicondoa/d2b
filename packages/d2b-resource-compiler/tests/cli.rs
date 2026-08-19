@@ -6,8 +6,23 @@ use serde_json::json;
 use tempfile::tempdir;
 
 fn schema_root() -> String {
-    std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../../docs/reference/schemas/v3")
+    std::env::var_os("D2B_RESOURCE_SCHEMA_ROOT")
+        .map(std::path::PathBuf::from)
+        .map(|path| {
+            if path.extension().is_some() {
+                path.parent().unwrap_or(&path).to_path_buf()
+            } else {
+                path
+            }
+        })
+        .unwrap_or_else(|| {
+            std::env::current_dir()
+                .expect("current directory")
+                .ancestors()
+                .map(|root| root.join("docs/reference/schemas/v3"))
+                .find(|path| path.is_dir())
+                .expect("resource schemas are discoverable")
+        })
         .to_string_lossy()
         .into_owned()
 }

@@ -1,7 +1,7 @@
 //! Immutable candidate snapshot creation (spec section 12.1, work item
 //! `ADR046-delivery-002`).
 //!
-//! `cargo run --manifest-path packages/Cargo.toml -p xtask -- delivery wave snapshot` binds one wave's stack into a single
+//! `cargo run --manifest-path Cargo.toml -p xtask -- delivery wave snapshot` binds one wave's stack into a single
 //! immutable candidate:
 //!
 //! * the exact base commit and head commit of every repository in the wave's
@@ -119,7 +119,7 @@ impl WaveSnapshot {
     }
 }
 
-/// Routes `cargo run --manifest-path packages/Cargo.toml -p xtask -- delivery wave snapshot`.
+/// Routes `cargo run --manifest-path Cargo.toml -p xtask -- delivery wave snapshot`.
 pub fn run(args: &[String]) -> Result<WorkflowOutput> {
     let request = SnapshotRequest::parse(args)?;
     let repository_roots = request.checkout_roots()?;
@@ -1503,7 +1503,7 @@ pub(crate) mod tests {
         args.push("--state-dir".to_owned());
         args.push(
             repo_root()
-                .join("packages/target/should-never-exist-snapshot")
+                .join("target/should-never-exist-snapshot")
                 .display()
                 .to_string(),
         );

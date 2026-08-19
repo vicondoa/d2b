@@ -1056,6 +1056,14 @@ mod tests {
     use crate::hash_chain::genesis_hash;
     use crate::record_types::{AuditRecord, AuditRecordFields, ProcessEffectFields};
 
+    fn writable_manifest_dir() -> std::path::PathBuf {
+        std::env::var_os("TEST_TMPDIR")
+            .map(std::path::PathBuf::from)
+            .or_else(|| std::env::var_os("CARGO_MANIFEST_DIR").map(std::path::PathBuf::from))
+            .or_else(|| std::env::current_dir().ok())
+            .expect("resolve test writable directory")
+    }
+
     fn sample() -> AuditRecord {
         AuditRecord::new(
             1,
@@ -1088,7 +1096,7 @@ mod tests {
     }
 
     fn test_directory(name: &str) -> PathBuf {
-        std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        writable_manifest_dir()
             .join("target")
             .join(format!("d2b-audit-{name}-{}", std::process::id()))
     }
@@ -1113,7 +1121,7 @@ mod tests {
 
     #[test]
     fn names_are_owned_and_rotation_is_size_bounded() {
-        let directory = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        let directory = writable_manifest_dir()
             .join("target")
             .join(format!("d2b-audit-segment-{}", std::process::id()));
         let _ = fs::remove_dir_all(&directory);
@@ -1134,7 +1142,7 @@ mod tests {
 
     #[test]
     fn pruning_ignores_unowned_jsonl_names() {
-        let directory = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        let directory = writable_manifest_dir()
             .join("target")
             .join(format!("d2b-audit-prune-{}", std::process::id()));
         let _ = fs::remove_dir_all(&directory);
@@ -1150,7 +1158,7 @@ mod tests {
     #[test]
     fn pruning_rejects_invalid_owned_artifacts() {
         for kind in ["directory", "symlink"] {
-            let directory = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            let directory = writable_manifest_dir()
                 .join("target")
                 .join(format!("d2b-audit-invalid-{kind}-{}", std::process::id()));
             let _ = fs::remove_dir_all(&directory);
@@ -1169,7 +1177,7 @@ mod tests {
 
     #[test]
     fn pruning_excludes_the_active_segment() {
-        let directory = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        let directory = writable_manifest_dir()
             .join("target")
             .join(format!("d2b-audit-active-{}", std::process::id()));
         let _ = fs::remove_dir_all(&directory);
@@ -1189,7 +1197,7 @@ mod tests {
 
     #[test]
     fn pruning_stops_at_the_first_non_expired_segment() {
-        let directory = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        let directory = writable_manifest_dir()
             .join("target")
             .join(format!("d2b-audit-prefix-{}", std::process::id()));
         let _ = fs::remove_dir_all(&directory);
@@ -1207,7 +1215,7 @@ mod tests {
 
     #[test]
     fn pruning_fails_closed_when_directory_scan_budget_is_exceeded() {
-        let directory = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        let directory = writable_manifest_dir()
             .join("target")
             .join(format!("d2b-audit-scan-budget-{}", std::process::id()));
         let _ = fs::remove_dir_all(&directory);
@@ -1227,7 +1235,7 @@ mod tests {
 
     #[test]
     fn durability_failures_never_report_a_successful_append() {
-        let directory = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        let directory = writable_manifest_dir()
             .join("target")
             .join(format!("d2b-audit-faults-{}", std::process::id()));
         let _ = fs::remove_dir_all(&directory);
@@ -1262,12 +1270,10 @@ mod tests {
 
     #[test]
     fn durable_append_survives_retention_failure_and_reports_degradation() {
-        let directory = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .join("target")
-            .join(format!(
-                "d2b-audit-retention-after-append-{}",
-                std::process::id()
-            ));
+        let directory = writable_manifest_dir().join("target").join(format!(
+            "d2b-audit-retention-after-append-{}",
+            std::process::id()
+        ));
         let _ = fs::remove_dir_all(&directory);
         let injector = FailureInjector::default();
         let mut writer = SegmentWriter::open_at_with_injector(
@@ -1294,12 +1300,10 @@ mod tests {
     #[test]
     fn pending_retention_checkpoint_repairs_on_restart_across_delete_boundaries() {
         for point in [FailurePoint::PruneDelete, FailurePoint::PruneFinalize] {
-            let directory = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-                .join("target")
-                .join(format!(
-                    "d2b-audit-checkpoint-{point:?}-{}",
-                    std::process::id()
-                ));
+            let directory = writable_manifest_dir().join("target").join(format!(
+                "d2b-audit-checkpoint-{point:?}-{}",
+                std::process::id()
+            ));
             let _ = fs::remove_dir_all(&directory);
             let injector = FailureInjector::default();
             let mut writer = SegmentWriter::open_at_with_injector(
@@ -1433,7 +1437,7 @@ mod tests {
 
     #[test]
     fn unverifiable_pending_retention_checkpoint_fails_closed_on_restart() {
-        let directory = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        let directory = writable_manifest_dir()
             .join("target")
             .join(format!("d2b-audit-checkpoint-{}", std::process::id()));
         let _ = fs::remove_dir_all(&directory);
@@ -1452,7 +1456,7 @@ mod tests {
 
     #[test]
     fn utc_day_rotation_occurs_for_an_empty_segment() {
-        let directory = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        let directory = writable_manifest_dir()
             .join("target")
             .join(format!("d2b-audit-day-rotation-{}", std::process::id()));
         let _ = fs::remove_dir_all(&directory);
@@ -1478,7 +1482,7 @@ mod tests {
 
     #[test]
     fn ordinary_append_does_not_run_a_retention_scan() {
-        let directory = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        let directory = writable_manifest_dir()
             .join("target")
             .join(format!("d2b-audit-no-scan-{}", std::process::id()));
         let _ = fs::remove_dir_all(&directory);

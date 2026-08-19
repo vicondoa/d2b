@@ -1,4 +1,9 @@
-use std::{env, fs, path::PathBuf};
+use std::{
+    collections::BTreeSet,
+    env, fs,
+    path::{Path, PathBuf},
+    process::Command,
+};
 
 use d2b_core::bundle::Bundle;
 use d2b_core::bundle_resolver::BundleResolver;
@@ -47,7 +52,8 @@ pub fn load_manifest_value_from_env() -> serde_json::Value {
 /// (gpu/swtpm/audio/video/usbip/vsock-relay/wayland-proxy/otel-host-bridge)
 /// skip cleanly when this is `None`.
 fn full_fixtures_dir() -> Option<PathBuf> {
-    env::var_os("D2B_FIXTURES_FULL").map(PathBuf::from)
+    let dir = env::var_os("D2B_FIXTURES_FULL").map(PathBuf::from)?;
+    dir.join("bundle.json").is_file().then_some(dir)
 }
 
 fn read_full_fixture(dir: &std::path::Path, name: &str) -> String {
@@ -109,11 +115,40 @@ pub fn load_bundle_resolver_from_env() -> BundleResolver {
 
 /// Absolute path to the repository root (two levels up from this crate).
 pub fn repo_root() -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("..")
-        .join("..")
-        .canonicalize()
-        .expect("canonicalize repo root from CARGO_MANIFEST_DIR")
+    let mut candidates = Vec::new();
+    if let Some(root) = env::var_os("D2B_REPO_ROOT") {
+        candidates.push(PathBuf::from(root));
+    }
+    if let Some(manifest_dir) = env::var_os("CARGO_MANIFEST_DIR").map(PathBuf::from) {
+        candidates.push(manifest_dir.join("..").join(".."));
+    }
+    for variable in ["TEST_SRCDIR", "RUNFILES_DIR"] {
+        if let Some(base) = env::var_os(variable).map(PathBuf::from) {
+            candidates.push(base.clone());
+            if let Some(workspace) = env::var_os("TEST_WORKSPACE") {
+                candidates.push(base.join(workspace));
+            }
+            candidates.push(base.join("_main"));
+        }
+    }
+    if let Ok(current_dir) = env::current_dir() {
+        candidates.push(current_dir);
+    }
+    for candidate in candidates {
+        let mut path = candidate;
+        loop {
+            if path.join("Cargo.toml").is_file()
+                && path.join("BUILD.bazel").is_file()
+                && path.join("flake.nix").is_file()
+            {
+                return path;
+            }
+            if !path.pop() {
+                break;
+            }
+        }
+    }
+    panic!("repository root with Cargo.toml and BUILD.bazel is not discoverable");
 }
 
 /// Read a repo-relative file to a string, panicking with a clear message when
@@ -128,4 +163,79 @@ pub fn read_repo_file(rel: &str) -> String {
 /// Whether a repo-relative path exists.
 pub fn repo_path_exists(rel: &str) -> bool {
     repo_root().join(rel).exists()
+}
+
+/// Enumerate repository-relative files for policy scans.
+///
+/// Cargo policy runs use git's tracked plus non-ignored untracked universe.
+/// Bazel tests have the same declared source universe in a runfiles tree but
+/// no `.git` directory, so they fall back to walking those materialized files.
+pub fn repo_files(roots: &[&str]) -> Vec<String> {
+    let root = repo_root();
+    let output = Command::new("git")
+        .arg("-C")
+        .arg(&root)
+        .arg("-c")
+        .arg("core.quotePath=false")
+        .args([
+            "ls-files",
+            "--cached",
+            "--others",
+            "--exclude-standard",
+            "--",
+        ])
+        .args(roots)
+        .output();
+    if let Ok(output) = output
+        && output.status.success()
+    {
+        return output
+            .stdout
+            .split(|byte| *byte == 0 || *byte == b'\n')
+            .filter(|entry| !entry.is_empty())
+            .filter_map(|entry| String::from_utf8(entry.to_vec()).ok())
+            .collect::<BTreeSet<_>>()
+            .into_iter()
+            .collect();
+    }
+
+    let mut files = BTreeSet::new();
+    let scan_roots = if roots.is_empty() {
+        vec![PathBuf::from(".")]
+    } else {
+        roots.iter().map(PathBuf::from).collect()
+    };
+    for relative_root in scan_roots {
+        let path = root.join(&relative_root);
+        collect_runfiles(&root, &path, &mut files);
+    }
+    files.into_iter().collect()
+}
+
+fn collect_runfiles(root: &Path, path: &Path, files: &mut BTreeSet<String>) {
+    let Ok(metadata) = fs::symlink_metadata(path) else {
+        return;
+    };
+    if metadata.file_type().is_symlink() || metadata.is_file() {
+        if let Ok(relative) = path.strip_prefix(root) {
+            files.insert(relative.to_string_lossy().replace('\\', "/"));
+        }
+        return;
+    }
+    if !metadata.is_dir() {
+        return;
+    }
+    let Ok(entries) = fs::read_dir(path) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let child = entry.path();
+        if child
+            .file_name()
+            .is_some_and(|name| name == ".git" || name == "target")
+        {
+            continue;
+        }
+        collect_runfiles(root, &child, files);
+    }
 }

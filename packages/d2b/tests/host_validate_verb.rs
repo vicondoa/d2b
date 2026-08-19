@@ -61,15 +61,16 @@ impl Sandbox {
 }
 
 fn target_tempdir() -> tempfile::TempDir {
-    let base = std::env::var_os("CARGO_TARGET_TMPDIR")
+    let base = std::env::var_os("TEST_TMPDIR")
+        .or_else(|| std::env::var_os("CARGO_TARGET_TMPDIR"))
         .map(PathBuf::from)
         .unwrap_or_else(|| {
-            PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            PathBuf::from(std::env::var_os("CARGO_MANIFEST_DIR").unwrap_or_else(|| ".".into()))
                 .join("target")
                 .join("tmp")
                 .join("host-validate-verb")
         });
-    fs::create_dir_all(&base).expect("mk cargo target temp base");
+    fs::create_dir_all(&base).expect("mk test temp base");
     tempfile::Builder::new()
         .prefix("host-validate-")
         .tempdir_in(base)
@@ -77,7 +78,14 @@ fn target_tempdir() -> tempfile::TempDir {
 }
 
 fn repo_root() -> PathBuf {
-    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    if let (Some(runfiles_dir), Some(workspace)) = (
+        std::env::var_os("RUNFILES_DIR"),
+        std::env::var_os("TEST_WORKSPACE"),
+    ) {
+        return PathBuf::from(runfiles_dir).join(workspace);
+    }
+    let manifest_dir =
+        PathBuf::from(std::env::var_os("CARGO_MANIFEST_DIR").unwrap_or_else(|| ".".into()));
     manifest_dir
         .parent()
         .and_then(Path::parent)
@@ -86,9 +94,7 @@ fn repo_root() -> PathBuf {
 }
 
 fn wave_catalog_section() -> String {
-    let path = repo_root().join("packages/d2b/src/host_validate.rs");
-    let source =
-        fs::read_to_string(&path).unwrap_or_else(|err| panic!("read {}: {err}", path.display()));
+    let source = include_str!("../src/host_validate.rs");
     let start = source
         .find("pub const WAVE_CATALOG")
         .expect("WAVE_CATALOG declaration is present");

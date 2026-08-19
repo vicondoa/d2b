@@ -59,6 +59,16 @@
       nixpkgsFor = forAllSystems (system: import nixpkgs { inherit system; });
       gasCityNixpkgsFor =
         forAllSystems (system: import nixpkgs-gas-city { inherit system; });
+      bazel920For = system:
+        import ./pkgs/bazel-9.2.0 {
+          pkgs = nixpkgsFor.${system};
+        };
+      bazelWorkerImageFor = system:
+        import ./nix/bazel-worker-image.nix {
+          pkgs = nixpkgsFor.${system};
+          bazel = bazel920For system;
+          inherit system;
+        };
 
       # The current Gas City source and the package-only nixpkgs input both
       # require Go 1.26.5. Keep the package set explicit so a future update
@@ -359,13 +369,11 @@
 
       # Developer shell: everything the Layer-1 gates need, in one place.
       #
-      # Without this each gate script provisions its own toolchain, which is
-      # why tests/test-rust.sh, tests/test-policy.sh and
-      # tests/tools/assert-pinned-tests.sh each carry their own nix-shell
-      # re-entry and rustup bootstrap. Enter this shell and those paths are
-      # skipped entirely, because the tools they look for are already present.
+      # Without this each focused gate would provision its own toolchain.
+      # Enter this shell once so Bazel, Cargo, Nix, and the policy tools use
+      # the pinned versions throughout the fixed graph.
       #
-      # rustup rather than pkgs.rustc: packages/rust-toolchain.toml pins a
+      # rustup rather than pkgs.rustc: rust-toolchain.toml pins a
       # version nixpkgs does not carry (the pin is 1.97.0; this nixpkgs has
       # 1.95.0), and rustup reads that file itself. Once the nixpkgs input
       # advances far enough to supply the pinned release, rustup can be dropped
@@ -373,11 +381,22 @@
       devShells = forAllSystems (system: let
         pkgs = nixpkgsFor.${system};
         gasCityContributor = gasCityContributorFor system;
+        bazel920 = bazel920For system;
+        bazelActionShell = pkgs.buildFHSEnv {
+          name = "d2b-bazel-action-shell";
+          executableName = "bash";
+          targetPkgs = fhsPkgs: with fhsPkgs; [
+            bash
+            coreutils
+            gnugrep
+          ];
+          runScript = "${pkgs.bash}/bin/bash";
+        };
       in {
         default = pkgs.mkShell {
           name = "d2b-dev";
           packages = with pkgs; [
-            # Toolchain. rustup resolves packages/rust-toolchain.toml.
+            # Toolchain. rustup resolves rust-toolchain.toml.
             rustup
             stdenv.cc
             # Compiler cache. The cargo configs route rustc through
@@ -396,7 +415,7 @@
           ];
           shellHook = ''
             export SCCACHE_DIR="''${SCCACHE_DIR:-$HOME/.cache/d2b-sccache}"
-            echo "d2b dev shell: rust $(sed -n 's/.*channel = "\(.*\)".*/\1/p' packages/rust-toolchain.toml) via rustup, sccache at $SCCACHE_DIR"
+            echo "d2b dev shell: rust $(sed -n 's/.*channel = "\(.*\)".*/\1/p' rust-toolchain.toml) via rustup, sccache at $SCCACHE_DIR"
           '';
         };
         # Focused shell for the evaluation-only Nix-unit runner. Keeping this
@@ -408,6 +427,20 @@
             nix-eval-jobs
             jq
           ];
+        };
+        # Focused U1 shell: the compatibility proof must use the exact
+        # official Bazel release rather than an ambient or Gas City Bazel.
+        # Only Bazel shell actions enter the standard FHS action shell;
+        # Bazel itself and local tests stay in the caller's environment.
+        bazel = pkgs.mkShellNoCC {
+          name = "d2b-bazel-compat";
+          packages = [ bazel920 pkgs.rustup pkgs.git ];
+          shellHook = ''
+            export D2B_BAZEL_BIN="${bazel920}/bin/bazel"
+            export BAZEL_SH="''${BAZEL_SH:-${bazelActionShell}/bin/bash}"
+            export D2B_BAZEL_TEST_PATH="${pkgs.bash}/bin:${pkgs.coreutils}/bin:${pkgs.findutils}/bin:${pkgs.gnugrep}/bin:${pkgs.gnused}/bin:${pkgs.git}/bin:${pkgs.rustup}/bin"
+            echo "d2b Bazel compatibility shell: $(${bazel920}/bin/bazel --version)"
+          '';
         };
         # Contributor shell: the closure is the only source of executable
         # inputs, so entering this shell does not depend on the host PATH.
@@ -424,6 +457,7 @@
 
       packages = forAllSystems (system: let
         pkgs = nixpkgsFor.${system};
+        bazel920 = bazel920For system;
         gascity = gascityFor system;
         dolt = doltFor system;
         beads = beadsFor system;
@@ -431,6 +465,9 @@
         gasCityContributor = gasCityContributorFor system;
         rustPackagesSrc = pkgs.runCommand "d2b-rust-src" { } ''
           mkdir -p $out/packages
+          cp ${./Cargo.toml} $out/Cargo.toml
+          cp ${./Cargo.lock} $out/Cargo.lock
+          cp ${./deny.toml} $out/deny.toml
           cp -r ${./packages}/. $out/packages/
           mkdir -p $out/docs/reference/schemas/v3/providers
           cp ${./docs/reference/schemas/v3/providers/transport-azure-relay.transport-settings.json} \
@@ -442,9 +479,9 @@
           pname = "d2b-rust-workspace";
           version = "0.0.0-bootstrap";
           src = rustPackagesSrc;
-          sourceRoot = "d2b-rust-src/packages";
+          sourceRoot = "d2b-rust-src";
           cargoLock = {
-            lockFile = ./packages/Cargo.lock;
+            lockFile = ./Cargo.lock;
             outputHashes."wl-proxy-0.1.2" = "sha256-1yO1zgzSyzQ2DnDMpVxcnI5BsTNvXfzIUS+RNlPj4A8=";
           };
           RUSTC_WRAPPER = "";
@@ -494,11 +531,16 @@
           pkgs.pkgsStatic.rustPlatform.buildRustPackage {
             pname = "d2b-guest-shell-runner-static";
             version = "0.0.0-bootstrap";
-            src = ./packages/d2b-guest-shell-runner;
+            src = rustPackagesSrc;
             cargoLock = {
-              lockFile = ./packages/d2b-guest-shell-runner/Cargo.lock;
+              lockFile = ./Cargo.lock;
+              outputHashes."wl-proxy-0.1.2" = "sha256-1yO1zgzSyzQ2DnDMpVxcnI5BsTNvXfzIUS+RNlPj4A8=";
             };
-            cargoBuildFlags = [ "--features" "real-libshpool" ];
+            sourceRoot = "d2b-rust-src";
+            cargoBuildFlags = [
+              "--package" "d2b-guest-shell-runner"
+              "--features" "real-libshpool"
+            ];
             doCheck = false;
             RUSTC_WRAPPER = "";
             SCCACHE_DIR = "";
@@ -626,6 +668,8 @@
         signoz = import ./pkgs/signoz { inherit pkgs; };
         signozOtelCollector = import ./pkgs/signoz-otel-collector { inherit pkgs; };
         signozSchemaMigrator = import ./pkgs/signoz-schema-migrator { inherit pkgs; };
+        bazel-9_2_0 = bazel920;
+        bazel-worker-image = bazelWorkerImageFor system;
         inherit gascity dolt beads copilot gasCityContributor;
         gas-city-contributor = gasCityContributor;
       });
@@ -733,6 +777,7 @@
       # local to this check.
       checks = forAllSystems (system: let
         pkgs = nixpkgsFor.${system};
+        bazel920 = bazel920For system;
         d2bModule = import ./nixos-modules { inherit inputs; };
         mkEval = modules: nixpkgs.lib.nixosSystem {
           inherit system;
@@ -1133,6 +1178,9 @@
         # paths still resolve against the checkout.
         rustPackagesSrc = pkgs.runCommand "d2b-rust-src" { } ''
           mkdir -p $out/packages
+          cp ${./Cargo.toml} $out/Cargo.toml
+          cp ${./Cargo.lock} $out/Cargo.lock
+          cp ${./deny.toml} $out/deny.toml
           cp -r ${./packages}/. $out/packages/
           mkdir -p $out/docs/reference/schemas/v3/providers
           cp ${./docs/reference/schemas/v3/providers/transport-azure-relay.transport-settings.json} \
@@ -1148,9 +1196,9 @@
           pname = "d2b-rust-workspace";
           version = "0.0.0-bootstrap";
           src = rustPackagesSrc;
-          sourceRoot = "d2b-rust-src/packages";
+          sourceRoot = "d2b-rust-src";
           cargoLock = {
-            lockFile = ./packages/Cargo.lock;
+            lockFile = ./Cargo.lock;
             outputHashes."wl-proxy-0.1.2" = "sha256-1yO1zgzSyzQ2DnDMpVxcnI5BsTNvXfzIUS+RNlPj4A8=";
           };
           # Repo-local .cargo/config.toml files set
@@ -1164,23 +1212,18 @@
           SCCACHE_DIR = "";
         } // args);
         rustToolchainChannel =
-          (builtins.fromTOML (builtins.readFile ./packages/rust-toolchain.toml)).toolchain.channel;
+          (builtins.fromTOML (builtins.readFile ./rust-toolchain.toml)).toolchain.channel;
         brokerManifestToml = builtins.fromTOML (builtins.readFile ./packages/d2b-priv-broker/Cargo.toml);
-        mainManifestToml = builtins.fromTOML (builtins.readFile ./packages/Cargo.toml);
+        mainManifestToml = builtins.fromTOML (builtins.readFile ./Cargo.toml);
         assertRustToolchain = ''
           rustc --version | grep -F "${rustToolchainChannel}"
         '';
         assertRustSupplyChainInputs = ''
-          test -f ${rustPackagesSrc}/packages/Cargo.lock
+          test -f ${rustPackagesSrc}/Cargo.lock
           test -f ${rustPackagesSrc}/packages/Cargo.guest.lock
-          test -f ${rustPackagesSrc}/packages/deny.toml
-          test -f ${rustPackagesSrc}/packages/d2b-priv-broker/Cargo.lock
-          test -f ${rustPackagesSrc}/packages/d2b-priv-broker/deny.toml
-          test -f ${rustPackagesSrc}/packages/d2b-guest-shell-runner/Cargo.lock
-          test -f ${rustPackagesSrc}/packages/d2b-guest-shell-runner/deny.toml
+          test -f ${rustPackagesSrc}/deny.toml
           printf '%s\n' '${builtins.toJSON mainManifestToml.workspace.members}' >/dev/null
           printf '%s\n' '${brokerManifestToml.package.name}' >/dev/null
-          printf '%s\n' '${builtins.toJSON brokerManifestToml.workspace}' >/dev/null
         '';
 
         # Pinned RustSec advisory DB snapshot for offline cargo-deny /
@@ -1299,6 +1342,10 @@
         # Unlike the existing eval-only fixture checks, this one deliberately
         # realizes every pinned executable and the immutable pack closure.
         gas-city-package-smoke = gasCityPackageSmokeFor system;
+        bazel-9_2_0-provider-smoke =
+          import ./tests/unit/smoke/bazel-provider.nix {
+            inherit pkgs bazel920 system;
+          };
 
         # Feature-rich fixture for the per-role minijail-validator contract
         # tests. x86_64-linux only (graphics platform gate); on other systems
@@ -1437,40 +1484,10 @@
           '';
         };
 
-        guest-static-elf = pkgs.runCommand "d2b-guest-static-elf" {
-          nativeBuildInputs = [ pkgs.pkgsStatic.binutils ];
-        } ''
-          readelf=${pkgs.pkgsStatic.binutils.bintools}/bin/readelf
-          for bin in \
-            ${self.packages.${system}.d2b-guestd-static}/bin/d2b-guestd \
-            ${self.packages.${system}.d2b-exec-runner-static}/bin/d2b-exec-runner \
-            ${self.packages.${system}.d2b-sk-frontend-static}/bin/d2b-sk-frontend \
-            ${self.packages.${system}.d2b-guest-shell-runner-static}/bin/d2b-guest-shell-runner
-          do
-            test -x "$bin"
-            name="$(basename "$bin")"
-            "$readelf" -h "$bin" >/dev/null
-            "$readelf" -l "$bin" > "$TMPDIR/$name.program-headers"
-            if grep -q 'Requesting program interpreter' "$TMPDIR/$name.program-headers"; then
-              echo "$bin: unexpected ELF interpreter" >&2
-              cat "$TMPDIR/$name.program-headers" >&2
-              exit 1
-            fi
-            if "$readelf" -d "$bin" > "$TMPDIR/$name.dynamic" 2> "$TMPDIR/$name.dynamic.err"; then
-              if grep -q '(NEEDED)' "$TMPDIR/$name.dynamic"; then
-                echo "$bin: unexpected dynamic dependency" >&2
-                cat "$TMPDIR/$name.dynamic" >&2
-                exit 1
-              fi
-            elif ! grep -qi 'no dynamic section' "$TMPDIR/$name.dynamic.err"; then
-              echo "$bin: readelf -d failed unexpectedly" >&2
-              cat "$TMPDIR/$name.dynamic.err" >&2
-              exit 1
-            fi
-          done
-          mkdir -p "$out"
-          echo ok > "$out/guest-static-elf"
-        '';
+        guest-static-elf = import ./tests/unit/smoke/guest-static-elf.nix {
+          inherit system pkgs;
+          flake = self;
+        };
 
         # Build-level determinism proof for the Provider package catalog
         # emitter. The drift gate proves the generator's output matches what is
@@ -1520,9 +1537,9 @@
           printf '%s\n' '${evidence}' > "$out/guest-control-vsock.json"
         '';
 
-        # Real cargo-deny gate: bans, licenses, and sources for both
-        # the main workspace and the broker workspace.  Advisory
-        # checks are handled by rust-audit below (cargo-deny requires
+        # Real cargo-deny gate: bans, licenses, and sources for the
+        # repository-root product workspace. Advisory checks are handled by
+        # rust-audit below (cargo-deny requires
         # a fetchable URL for the advisory DB which is incompatible
         # with the Nix sandbox's no-network constraint).
         #
@@ -1531,14 +1548,8 @@
         # the repo-local .cargo/config.toml enables.
         rust-deny = let
           mainVendor = pkgs.rustPlatform.importCargoLock {
-            lockFile = ./packages/Cargo.lock;
+            lockFile = ./Cargo.lock;
             outputHashes."wl-proxy-0.1.2" = "sha256-1yO1zgzSyzQ2DnDMpVxcnI5BsTNvXfzIUS+RNlPj4A8=";
-          };
-          brokerVendor = pkgs.rustPlatform.importCargoLock {
-            lockFile = ./packages/d2b-priv-broker/Cargo.lock;
-          };
-          guestShellRunnerVendor = pkgs.rustPlatform.importCargoLock {
-            lockFile = ./packages/d2b-guest-shell-runner/Cargo.lock;
           };
           cargoConfig = vendorDir: ''
             [source.crates-io]
@@ -1558,7 +1569,7 @@
           run_deny() {
             local label=$1 src=$2 manifest=$3 vendor_cfg=$4 deny_cfg=$5
             local ws="$TMPDIR/$label"
-            cp -r "$src/packages" "$ws"
+            cp -r "$src/." "$ws"
             chmod -R u+w "$ws"
             # Override all .cargo/config.toml files to disable sccache
             # and enable vendored dependencies.
@@ -1576,19 +1587,7 @@
             "${rustPackagesSrc}" \
             "Cargo.toml" \
             '${cargoConfig mainVendor}' \
-            "${rustPackagesSrc}/packages/deny.toml"
-
-          run_deny "broker" \
-            "${rustPackagesSrc}" \
-            "d2b-priv-broker/Cargo.toml" \
-            '${cargoConfig brokerVendor}' \
-            "${rustPackagesSrc}/packages/d2b-priv-broker/deny.toml"
-
-          run_deny "guest-shell-runner" \
-            "${rustPackagesSrc}" \
-            "d2b-guest-shell-runner/Cargo.toml" \
-            '${cargoConfig guestShellRunnerVendor}' \
-            "${rustPackagesSrc}/packages/d2b-guest-shell-runner/deny.toml"
+            "${rustPackagesSrc}/deny.toml"
 
           echo ok > $out
         '';
@@ -1613,37 +1612,48 @@
           mkdir -p "$ws/.cargo"
           printf '%s\n' '${cargoConfig}' > "$ws/.cargo/config.toml"
           cargo-deny --manifest-path "$ws/Cargo.toml" \
-            check --config "${rustPackagesSrc}/packages/deny.toml" bans licenses sources
+            check             --config "${rustPackagesSrc}/deny.toml" bans licenses sources
           echo ok > "$out"
         '';
 
-        # Real cargo-audit gate: vulnerability scan of every committed lockfile
-        # against the pinned advisory DB snapshot.  Runs offline via
-        # --no-fetch with the bundled git-repo copy of the RustSec DB.
+        # Real cargo-audit gate: vulnerability scan of each checked-in
+        # context policy lock against the pinned advisory DB snapshot. The
+        # filtered locks are audit-only projections; Cargo resolution still
+        # uses the repository-root lock. Advisory ignores, when approved,
+        # are read only from the matching protected context.
         rust-audit = pkgs.runCommand "d2b-rust-audit" {
-          nativeBuildInputs = [ pkgs.cargo-audit ];
+          nativeBuildInputs = [ pkgs.cargo-audit pkgs.jq ];
         } ''
           export HOME="$TMPDIR"
+          policy_root=${rustPackagesSrc}/packages/policy-inputs
+          advisory_policy=$policy_root/advisory-policy.json
           run_audit() {
-            local lock=$1
-            shift
-            echo "==> cargo audit ($(basename "$(dirname "$lock")"))"
+            local lock=$1 context_key=$2 advisory_id
+            shift 2
+            local -a ignores=()
+            if [ -n "$context_key" ]; then
+              while IFS= read -r advisory_id; do
+                [ -n "$advisory_id" ] && ignores+=(--ignore "$advisory_id")
+              done < <(
+                jq -r \
+                  --arg context_key "$context_key" \
+                  '.contexts[$context_key].advisories[]?.id' \
+                  "$advisory_policy"
+              )
+            fi
+            echo "==> cargo audit ($context_key)"
             cargo-audit audit --file "$lock" \
-              --db ${advisoryDbGit} --no-fetch "$@"
+              --db ${advisoryDbGit} --no-fetch \
+              "''${ignores[@]}" "$@"
           }
-          # Build-time wayland-scanner pulls quick-xml 0.39.4; runtime users
-          # were updated away from vulnerable 0.37.x. Remove once
-          # wayland-scanner publishes a release on quick-xml >= 0.41.
-          run_audit ${rustPackagesSrc}/packages/Cargo.lock \
-            --ignore RUSTSEC-2026-0194 \
-            --ignore RUSTSEC-2026-0195
-          run_audit ${rustPackagesSrc}/packages/Cargo.guest.lock
-          run_audit ${rustPackagesSrc}/packages/d2b-priv-broker/Cargo.lock
-          # libshpool 0.11.0 pulls notify 7 -> notify-types -> instant 0.1.13.
-          # Track that feasibility-spike warning explicitly while the helper
-          # evaluates the pinned shpool dependency.
-          run_audit ${rustPackagesSrc}/packages/d2b-guest-shell-runner/Cargo.lock \
-            --ignore RUSTSEC-2024-0384
+          while IFS= read -r lock; do
+            relative="''${lock#"$policy_root"/}"
+            IFS=/ read -r system target context _projection _lock <<< "$relative"
+            run_audit "$lock" "$system/$target/$context"
+          done < <(
+            find "$policy_root" -type f -path '*/policy/Cargo.lock' | LC_ALL=C sort
+          )
+          run_audit ${rustPackagesSrc}/packages/Cargo.guest.lock ""
           echo ok > $out
         '';
 
@@ -1659,7 +1669,7 @@
 
         guest-shell-runner-static-dependency-policy =
           pkgs.runCommand "d2b-guest-shell-runner-static-dependency-policy" { } ''
-            lock=${./packages/d2b-guest-shell-runner/Cargo.lock}
+            lock=${./Cargo.lock}
             if grep -E 'name = "(openssl|openssl-sys|native-tls|libsystemd|systemd|pam-sys|dlopen2)"' "$lock"; then
               echo "guest shell runner lock contains a forbidden dynamic/PAM/systemd dependency" >&2
               exit 1

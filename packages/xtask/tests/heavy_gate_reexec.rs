@@ -38,12 +38,11 @@ struct Scratch {
 
 impl Scratch {
     fn new(label: &str) -> Self {
-        let target = match std::env::var_os("CARGO_TARGET_DIR") {
+        let target = match std::env::var_os("TEST_TMPDIR")
+            .or_else(|| std::env::var_os("CARGO_TARGET_DIR"))
+        {
             Some(dir) => PathBuf::from(dir),
-            None => Path::new(env!("CARGO_MANIFEST_DIR"))
-                .parent()
-                .expect("xtask lives inside the workspace root")
-                .join("target"),
+            None => repository_root().join("target"),
         };
         let sequence = SCRATCH_SEQUENCE.fetch_add(1, Ordering::Relaxed);
         let path = target
@@ -68,6 +67,53 @@ impl Drop for Scratch {
     fn drop(&mut self) {
         let _ = fs::remove_dir_all(&self.path);
     }
+}
+
+fn runfile_path(relative: &str) -> PathBuf {
+    if let Some(runfiles) = std::env::var_os("RUNFILES_DIR") {
+        let candidate = PathBuf::from(runfiles).join("_main").join(relative);
+        if candidate.exists() {
+            return candidate;
+        }
+    }
+    repository_root().join(relative)
+}
+
+fn repository_root() -> PathBuf {
+    let mut candidates = Vec::new();
+    if let Some(root) = std::env::var_os("D2B_REPO_ROOT") {
+        candidates.push(PathBuf::from(root));
+    }
+    for variable in ["TEST_SRCDIR", "RUNFILES_DIR"] {
+        if let Some(base) = std::env::var_os(variable).map(PathBuf::from) {
+            candidates.push(base.clone());
+            if let Some(workspace) = std::env::var_os("TEST_WORKSPACE") {
+                candidates.push(base.join(workspace));
+            }
+            candidates.push(base.join("_main"));
+        }
+    }
+    if let Ok(current_dir) = std::env::current_dir() {
+        candidates.push(current_dir);
+    }
+    for candidate in candidates {
+        let mut path = candidate;
+        if path.is_file() {
+            path.pop();
+        }
+        loop {
+            if path.join("Cargo.toml").is_file()
+                && path.join("BUILD.bazel").is_file()
+                && path.join("flake.nix").is_file()
+            {
+                return path;
+            }
+            if !path.pop() {
+                break;
+            }
+        }
+    }
+    panic!("repository root is not discoverable")
 }
 
 /// Drives the shell re-exec self-guard through bash with a stubbed `cargo`
@@ -103,11 +149,8 @@ fn run_reexec_guard(
     let tools = base.join("tests/tools");
     fs::create_dir_all(&tools).unwrap();
     fs::create_dir_all(base.join("packages")).unwrap();
-    let helper_src = fs::read_to_string(concat!(
-        env!("CARGO_MANIFEST_DIR"),
-        "/../../tests/tools/heavy-gate-reexec.sh"
-    ))
-    .expect("the shipped re-exec helper is readable");
+    let helper_src = fs::read_to_string(runfile_path("tests/tools/heavy-gate-reexec.sh"))
+        .expect("the shipped re-exec helper is readable");
     let helper = tools.join("heavy-gate-reexec.sh");
     fs::write(&helper, helper_src).unwrap();
 
@@ -118,7 +161,7 @@ fn run_reexec_guard(
     fs::set_permissions(&cargo, fs::Permissions::from_mode(0o755)).unwrap();
 
     if plant_redactor {
-        let target = base.join("packages/target/debug");
+        let target = base.join("target/debug");
         fs::create_dir_all(&target).unwrap();
         let xtask = target.join("xtask");
         fs::copy(env!("CARGO_BIN_EXE_xtask"), &xtask).unwrap();

@@ -1,0 +1,142 @@
+{
+  "authority": "context-scoped-advisory-policy",
+  "contexts": {
+    "aarch64-linux/aarch64-unknown-linux-gnu/broker-default-tests": {
+      "advisories": [],
+      "approval": {
+        "expiresAt": "2099-12-31",
+        "marker": "d2b-production-closure-approved/v1",
+        "owner": "@vicondoa",
+        "rationale": "Reviewed Cargo-locked production reachability for this exact system, target, feature, and root context; independent check remains required."
+      }
+    },
+    "aarch64-linux/aarch64-unknown-linux-gnu/broker-fake-backends-tests": {
+      "advisories": [],
+      "approval": {
+        "expiresAt": "2099-12-31",
+        "marker": "d2b-production-closure-approved/v1",
+        "owner": "@vicondoa",
+        "rationale": "Reviewed Cargo-locked production reachability for this exact system, target, feature, and root context; independent check remains required."
+      }
+    },
+    "aarch64-linux/aarch64-unknown-linux-gnu/broker-layer1-bootstrap-tests": {
+      "advisories": [],
+      "approval": {
+        "expiresAt": "2099-12-31",
+        "marker": "d2b-production-closure-approved/v1",
+        "owner": "@vicondoa",
+        "rationale": "Reviewed Cargo-locked production reachability for this exact system, target, feature, and root context; independent check remains required."
+      }
+    },
+    "aarch64-linux/aarch64-unknown-linux-gnu/broker-production": {
+      "advisories": [],
+      "approval": {
+        "expiresAt": "2099-12-31",
+        "marker": "d2b-production-closure-approved/v1",
+        "owner": "@vicondoa",
+        "rationale": "Reviewed Cargo-locked production reachability for this exact system, target, feature, and root context; independent check remains required."
+      }
+    },
+    "aarch64-linux/aarch64-unknown-linux-gnu/main-product": {
+      "advisories": [],
+      "approval": {
+        "expiresAt": "2099-12-31",
+        "marker": "d2b-production-closure-approved/v1",
+        "owner": "@vicondoa",
+        "rationale": "Reviewed Cargo-locked production reachability for this exact system, target, feature, and root context; independent check remains required."
+      }
+    },
+    "aarch64-linux/aarch64-unknown-linux-musl/guest-shell-runner-static": {
+      "advisories": [],
+      "approval": {
+        "expiresAt": "2099-12-31",
+        "marker": "d2b-production-closure-approved/v1",
+        "owner": "@vicondoa",
+        "rationale": "Reviewed Cargo-locked production reachability for this exact system, target, feature, and root context; independent check remains required."
+      }
+    },
+    "aarch64-linux/aarch64-unknown-linux-musl/guestd-static": {
+      "advisories": [],
+      "approval": {
+        "expiresAt": "2099-12-31",
+        "marker": "d2b-production-closure-approved/v1",
+        "owner": "@vicondoa",
+        "rationale": "Reviewed Cargo-locked production reachability for this exact system, target, feature, and root context; independent check remains required."
+      }
+    },
+    "x86_64-linux/x86_64-unknown-linux-gnu/broker-default-tests": {
+      "advisories": [],
+      "approval": {
+        "expiresAt": "2099-12-31",
+        "marker": "d2b-production-closure-approved/v1",
+        "owner": "@vicondoa",
+        "rationale": "Reviewed Cargo-locked production reachability for this exact system, target, feature, and root context; independent check remains required."
+      }
+    },
+    "x86_64-linux/x86_64-unknown-linux-gnu/broker-fake-backends-tests": {
+      "advisories": [],
+      "approval": {
+        "expiresAt": "2099-12-31",
+        "marker": "d2b-production-closure-approved/v1",
+        "owner": "@vicondoa",
+        "rationale": "Reviewed Cargo-locked production reachability for this exact system, target, feature, and root context; independent check remains required."
+      }
+    },
+    "x86_64-linux/x86_64-unknown-linux-gnu/broker-layer1-bootstrap-tests": {
+      "advisories": [],
+      "approval": {
+        "expiresAt": "2099-12-31",
+        "marker": "d2b-production-closure-approved/v1",
+        "owner": "@vicondoa",
+        "rationale": "Reviewed Cargo-locked production reachability for this exact system, target, feature, and root context; independent check remains required."
+      }
+    },
+    "x86_64-linux/x86_64-unknown-linux-gnu/broker-production": {
+      "advisories": [],
+      "approval": {
+        "expiresAt": "2099-12-31",
+        "marker": "d2b-production-closure-approved/v1",
+        "owner": "@vicondoa",
+        "rationale": "Reviewed Cargo-locked production reachability for this exact system, target, feature, and root context; independent check remains required."
+      }
+    },
+    "x86_64-linux/x86_64-unknown-linux-gnu/main-product": {
+      "advisories": [],
+      "approval": {
+        "expiresAt": "2099-12-31",
+        "marker": "d2b-production-closure-approved/v1",
+        "owner": "@vicondoa",
+        "rationale": "Reviewed Cargo-locked production reachability for this exact system, target, feature, and root context; independent check remains required."
+      }
+    },
+    "x86_64-linux/x86_64-unknown-linux-musl/guest-shell-runner-static": {
+      "advisories": [],
+      "approval": {
+        "expiresAt": "2099-12-31",
+        "marker": "d2b-production-closure-approved/v1",
+        "owner": "@vicondoa",
+        "rationale": "Reviewed Cargo-locked production reachability for this exact system, target, feature, and root context; independent check remains required."
+      }
+    },
+    "x86_64-linux/x86_64-unknown-linux-musl/guestd-static": {
+      "advisories": [],
+      "approval": {
+        "expiresAt": "2099-12-31",
+        "marker": "d2b-production-closure-approved/v1",
+        "owner": "@vicondoa",
+        "rationale": "Reviewed Cargo-locked production reachability for this exact system, target, feature, and root context; independent check remains required."
+      }
+    }
+  },
+  "protectedOwnership": {
+    "owner": "@vicondoa",
+    "path": ".github/CODEOWNERS"
+  },
+  "recomputation": {
+    "command": "cargo xtask gen-package-policy-inputs --check",
+    "mode": "independent-locked-metadata-recompute",
+    "trustedApprovalRequired": true
+  },
+  "requiresProtectedReview": true,
+  "schemaVersion": 1
+}

@@ -1,0 +1,19 @@
+package(default_visibility = ["//visibility:public"])
+
+exports_files(["BUILD.bazel"])
+
+filegroup(
+    name = "policy",
+    srcs = [
+        "//:tests/tools/bazel-check",
+        "//:tests/golden/bazel/cache-policy.json",
+        "//:nix/bazel-worker-image.nix",
+    ],
+)
+
+filegroup(
+    name = "platforms",
+    srcs = [
+        "//bazel/platforms:BUILD.bazel",
+    ],
+)

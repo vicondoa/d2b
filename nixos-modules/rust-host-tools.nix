@@ -3,8 +3,17 @@
 let
   d2bLib = import ./lib.nix { inherit lib; };
   craneLib = inputs.crane.mkLib pkgs;
-  packagesSrc = d2bLib.cleanRustPackagesSource ../packages;
-  cargoLock = ../packages/Cargo.lock;
+  packagesSrc = d2bLib.cleanRustPackagesSource ../.;
+  hostSource = pkgs.runCommand "d2b-provider-rust-src" { } ''
+    mkdir -p "$out"
+    cp -r ${packagesSrc}/. "$out/"
+    mkdir -p "$out/docs/reference/schemas/v3/providers"
+    cp ${../docs/reference/schemas/v3/providers/transport-azure-relay.transport-settings.json} \
+      "$out/docs/reference/schemas/v3/providers/transport-azure-relay.transport-settings.json"
+    cp ${../docs/reference/schemas/v3/providers/transport-vsock.transport-binding.json} \
+      "$out/docs/reference/schemas/v3/providers/transport-vsock.transport-binding.json"
+  '';
+  cargoLock = ../Cargo.lock;
   # Keep the deps-only derivation keyed to manifests, locks, and Cargo config,
   # not to application source files. Crane still creates the dummy Rust
   # sources, but giving it this smaller input prevents .rs edits from changing
@@ -23,10 +32,11 @@ let
     inherit cargoLock;
   };
   dummySource = pkgs.runCommand "d2b-provider-rust-src" { } ''
-    mkdir -p "$out/packages"
-    cp -r ${dummyPackages}/. "$out/packages/"
-    chmod -R u+w "$out/packages"
-    cp ${../packages/Cargo.toml} "$out/packages/Cargo.toml"
+    mkdir -p "$out"
+    cp -r ${craneLib.mkDummySrc {
+      src = cargoManifestSrc;
+      inherit cargoLock;
+    }}/. "$out/"
   '';
 
   cratePathName = rel:
@@ -104,7 +114,7 @@ let
   cargoVendorDir = craneLib.vendorCargoDeps {
     inherit cargoLock outputHashes;
   };
-  brokerCargoLock = ../packages/d2b-priv-broker/Cargo.lock;
+  brokerCargoLock = ../Cargo.lock;
   brokerCargoVendorDir = craneLib.vendorCargoDeps {
     cargoLock = brokerCargoLock;
     inherit outputHashes;
@@ -150,8 +160,8 @@ let
     pname = "d2b-host-tools";
     version = "0.0.0-bootstrap";
     dummySrc = dummySource;
-    sourceRoot = "d2b-provider-rust-src/packages";
-    cargoToml = ../packages/Cargo.toml;
+    sourceRoot = "d2b-provider-rust-src";
+    cargoToml = ../Cargo.toml;
     inherit cargoLock outputHashes;
     cargoCheckExtraArgs = hostPackageArgs;
     cargoBuildExtraArgs = hostPackageArgs;
@@ -161,11 +171,13 @@ let
     pname = "d2b-priv-broker";
     version = "0.0.0-bootstrap";
     dummySrc = dummySource;
-    sourceRoot = "d2b-provider-rust-src/packages/d2b-priv-broker";
-    cargoToml = ../packages/d2b-priv-broker/Cargo.toml;
+    sourceRoot = "d2b-provider-rust-src";
+    cargoToml = ../Cargo.toml;
     cargoLock = brokerCargoLock;
     cargoVendorDir = brokerCargoVendorDir;
     inherit outputHashes;
+    cargoCheckExtraArgs = "--package d2b-priv-broker --no-default-features";
+    cargoBuildExtraArgs = "--package d2b-priv-broker --no-default-features";
   });
 
   installBinaries = binaries:
@@ -184,8 +196,8 @@ let
     craneLib.buildPackage (commonBuildArgs // {
       inherit pname cargoArtifacts cargoLock outputHashes;
       version = "0.0.0-bootstrap";
-      src = mkPackageSource package;
-      sourceRoot = "d2b-provider-rust-src-${package}/packages";
+      src = hostSource;
+      sourceRoot = "d2b-provider-rust-src";
       cargoToml = ../packages + "/${package}/Cargo.toml";
       cargoBuildExtraArgs =
         "--package ${package}"
@@ -198,9 +210,9 @@ let
     version = "0.0.0-bootstrap";
     cargoArtifacts = brokerCargoArtifacts;
     inherit outputHashes;
-    src = mkPackageSource "d2b-priv-broker";
-    sourceRoot = "d2b-provider-rust-src-d2b-priv-broker/packages/d2b-priv-broker";
-    cargoToml = ../packages/d2b-priv-broker/Cargo.toml;
+    src = hostSource;
+    sourceRoot = "d2b-provider-rust-src";
+    cargoToml = ../Cargo.toml;
     cargoLock = brokerCargoLock;
     cargoVendorDir = brokerCargoVendorDir;
     cargoBuildExtraArgs = "--no-default-features";

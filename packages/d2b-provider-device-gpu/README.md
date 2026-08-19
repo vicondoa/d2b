@@ -109,7 +109,6 @@ unbounded text.
 ## Build and test
 
 ```bash
-cd packages
 cargo test -p d2b-provider-device-gpu
 cargo nextest run -p d2b-provider-device-gpu
 cargo clippy -p d2b-provider-device-gpu --all-targets -- -D warnings

@@ -39,7 +39,7 @@ struct Scratch {
 
 impl Scratch {
     fn new() -> Self {
-        let root = std::env::temp_dir();
+        let root = PathBuf::from("/tmp");
         let pid = std::process::id();
         for _ in 0..32 {
             let mut random = [0u8; 4];
@@ -72,6 +72,17 @@ struct Supervisor {
     scratch: Scratch,
 }
 
+fn helper_binary() -> PathBuf {
+    let path = PathBuf::from(env!("CARGO_BIN_EXE_d2b-unsafe-local-helper"));
+    if path.is_absolute() {
+        path
+    } else {
+        std::env::current_dir()
+            .expect("test working directory")
+            .join(path)
+    }
+}
+
 impl Supervisor {
     fn start() -> Self {
         let scratch = Scratch::new();
@@ -94,7 +105,7 @@ impl Supervisor {
             "outputRingBytes": 262144
         });
         let encoded = serde_json::to_vec(&spec).unwrap();
-        let mut child = Command::new(env!("CARGO_BIN_EXE_d2b-unsafe-local-helper"))
+        let mut child = Command::new(helper_binary())
             .arg("shell-supervisor")
             .env_clear()
             .stdin(Stdio::piped())
@@ -414,7 +425,7 @@ fn exercise_helper_runtime_reconstruction(scratch: &Scratch, operation_suffix: &
         active: Arc::new(Mutex::new(None)),
     };
     let ledger = scratch.path.join("ledger.json");
-    let binary = PathBuf::from(env!("CARGO_BIN_EXE_d2b-unsafe-local-helper"));
+    let binary = helper_binary();
     let runtime = ScopeRuntime::with_paths_and_executable(
         manager.clone(),
         user.home_dir().to_path_buf(),

@@ -1,0 +1,44 @@
+# keep
+
+load("@rules_rust//rust:defs.bzl", "rust_test")
+
+exports_files(
+    ["BUILD.bazel", "Cargo.lock", "Cargo.toml"],
+    visibility = ["//visibility:public"],
+)
+
+filegroup(
+    name = "cargo_ui_fixtures",
+    srcs = glob([
+        "Cargo.lock",
+        "Cargo.toml",
+        "tests/**/*.rs",
+    ], allow_empty = True),
+    visibility = ["//visibility:public"],
+)
+
+rust_test(
+    name = "forge_committed_decision",
+    srcs = ["//packages/d2b-controller-toolkit:tests/external_seals.rs"],
+    compile_data = ["//packages/d2b-controller-toolkit:Cargo.toml"],
+    data = [
+        "//bazel/checks/rust:cargo_workspace_sources",
+        "@rules_rust//rust/toolchain:current_cargo_files",
+        "@rules_rust//rust/toolchain:current_rustc_files",
+        ":Cargo.toml",
+        ":cargo_ui_fixtures",
+    ],
+    env = {
+        "D2B_EXTERNAL_SEALS_CASE": "forge_committed_decision",
+        "D2B_EXTERNAL_SEALS_FIXTURE_MANIFEST": "$(rootpath :Cargo.toml)",
+        "RUSTUP_TOOLCHAIN": "1.97.0",
+    },
+    env_inherit = ["HOME", "PATH"],
+    tags = ["exclusive", "no-remote-cache", "no-sandbox"],
+    visibility = ["//visibility:public"],
+)
+
+test_suite(
+    name = "external_seals",
+    tests = [":forge_committed_decision"],
+)

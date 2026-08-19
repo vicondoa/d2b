@@ -1,3 +1,8 @@
+exports_files(
+    ["BUILD.bazel"],
+    visibility = ["//visibility:public"],
+)
+
 genrule(
     name = "round_trip_payload",
     outs = ["round_trip_payload.txt"],

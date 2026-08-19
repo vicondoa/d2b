@@ -157,15 +157,15 @@ phase_yubikey_optional() {
 
 phase_cargo_build() {
     log "phase cargo build: workspace + broker"
-    if ! (cd "$ROOT/packages" && \
+    if ! (cd "$ROOT" && \
         env -u RUSTC_WRAPPER nix shell nixpkgs#cargo nixpkgs#rustc nixpkgs#gcc nixpkgs#rustfmt nixpkgs#clippy \
         -c cargo build --workspace 2>&1 | tail -3); then
-        soft_fail_or_skip "cargo build --workspace failed; rerun via tests/test-rust.sh for full diagnostic"
+        soft_fail_or_skip "cargo build --workspace failed; rerun via make test-rust for full diagnostic"
         return 0
     fi
-    if ! (cd "$ROOT/packages/d2b-priv-broker" && \
+    if ! (cd "$ROOT" && \
         env -u RUSTC_WRAPPER nix shell nixpkgs#cargo nixpkgs#rustc nixpkgs#gcc nixpkgs#rustfmt nixpkgs#clippy \
-        -c cargo build 2>&1 | tail -3); then
+        -c cargo build --package d2b-priv-broker 2>&1 | tail -3); then
         soft_fail_or_skip "cargo build d2b-priv-broker failed"
         return 0
     fi
@@ -174,7 +174,7 @@ phase_cargo_build() {
 
 phase_minijail_invariants() {
     log "phase minijail invariants: validate every shipped profile"
-    if ! (cd "$ROOT/packages" && \
+    if ! (cd "$ROOT" && \
         env -u RUSTC_WRAPPER nix shell nixpkgs#cargo nixpkgs#rustc nixpkgs#gcc nixpkgs#rustfmt nixpkgs#clippy \
         -c cargo test -p d2b-core --test d2b-core-smoke \
             bundle_resolver_minijail_profile_validator 2>&1 | tail -10); then
@@ -186,7 +186,7 @@ phase_minijail_invariants() {
 
 phase_bundle_drift() {
     log "phase bundle drift: gen-schemas + gen-daemon-api regen"
-    if ! (cd "$ROOT/packages" && \
+    if ! (cd "$ROOT" && \
         env -u RUSTC_WRAPPER nix shell nixpkgs#cargo nixpkgs#rustc nixpkgs#gcc nixpkgs#rustfmt nixpkgs#clippy \
         -c bash -c 'cargo xtask gen-schemas && cargo xtask gen-daemon-api' \
         2>&1 | tail -5); then
@@ -227,20 +227,20 @@ phase_live_smoke_documentation() {
 [hardware-smoke]      sudo D2B_BROKER_NFT_BINARY=$(which nft) \
 [hardware-smoke]           D2B_BROKER_IP_BINARY=$(which ip) \
 [hardware-smoke]           D2B_BROKER_USBIP_BINARY=$(which usbip) \
-[hardware-smoke]           packages/target/debug/d2bd serve &
+[hardware-smoke]           target/debug/d2bd serve &
 [hardware-smoke]
 [hardware-smoke] 2. Run host install:
 [hardware-smoke]      sudo D2B_NATIVE_ONLY=1 \
-[hardware-smoke]           packages/target/debug/d2b host install --apply
+[hardware-smoke]           target/debug/d2b host install --apply
 [hardware-smoke]
 [hardware-smoke] 3. Bring up the work-vm with GPU:
 [hardware-smoke]      sudo D2B_NATIVE_ONLY=1 \
-[hardware-smoke]           packages/target/debug/d2b vm start work-vm --apply
+[hardware-smoke]           target/debug/d2b vm start work-vm --apply
 [hardware-smoke]
 [hardware-smoke] 4. Once the VM is up, plug in the YubiKey and attach it:
 [hardware-smoke]      sudo d2b usb probe
 [hardware-smoke]      sudo D2B_NATIVE_ONLY=1 \
-[hardware-smoke]           packages/target/debug/d2b usb attach work-vm <busid> --apply
+[hardware-smoke]           target/debug/d2b usb attach work-vm <busid> --apply
 [hardware-smoke]      # `usb probe` lists the daemon-declared busids and
 [hardware-smoke]      # current lock owners; replace <busid> with the host
 [hardware-smoke]      # busid you want to bind to work-vm.

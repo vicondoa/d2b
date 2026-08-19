@@ -763,7 +763,13 @@ fn host_cli_error_golden_table_is_closed_and_complete() {
 }
 
 fn repo_root() -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+    if let (Some(runfiles_dir), Some(workspace)) = (
+        std::env::var_os("RUNFILES_DIR"),
+        std::env::var_os("TEST_WORKSPACE"),
+    ) {
+        return PathBuf::from(runfiles_dir).join(workspace);
+    }
+    PathBuf::from(std::env::var_os("CARGO_MANIFEST_DIR").unwrap_or_else(|| ".".into()))
         .parent()
         .and_then(Path::parent)
         .expect("packages/d2b is two levels below the repository root")

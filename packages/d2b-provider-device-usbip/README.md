@@ -107,7 +107,6 @@ owns post-effect audit records; raw device and firewall data never enter them.
 ## Build and test
 
 ```bash
-cd packages
 cargo check -p d2b-provider-device-usbip
 cargo test -p d2b-provider-device-usbip
 ```

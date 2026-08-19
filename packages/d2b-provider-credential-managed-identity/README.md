@@ -89,8 +89,8 @@ enforces this.
 ## Build and test
 
 ```bash
-cd packages && cargo check -p d2b-provider-credential-managed-identity
-cd packages && cargo test -p d2b-provider-credential-managed-identity --lib --test lifecycle --test conformance --test faults --test canary --test delivery --test placement --test topology
+cargo check -p d2b-provider-credential-managed-identity
+cargo test -p d2b-provider-credential-managed-identity --lib --test lifecycle --test conformance --test faults --test canary --test delivery --test placement --test topology
 make test-integration
 make test-host-integration
 ```

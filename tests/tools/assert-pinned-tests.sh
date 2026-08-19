@@ -12,7 +12,7 @@ if ! command -v cargo >/dev/null 2>&1; then
   # inventory under a compiler that is not the pinned one.
   pinned_channel=$(
     sed -n 's/^[[:space:]]*channel[[:space:]]*=[[:space:]]*"\([^"]\+\)".*/\1/p' \
-      "$ROOT/packages/rust-toolchain.toml" | head -1
+      "$ROOT/rust-toolchain.toml" | head -1
   )
   for candidate in "$HOME"/.rustup/toolchains/"${pinned_channel:-0.0.0}"-*/bin; do
     if [ -x "$candidate/cargo" ]; then
@@ -71,57 +71,32 @@ collect_present() {
     present["${line#* }"]=1
   done
 }
-# Main workspace (packages/Cargo.toml). Include d2b-contract-tests in this
+# Main workspace (Cargo.toml). Include d2b-contract-tests in this
 # single listing even though the ordinary test pass excludes it: the pinned
 # inventory only needs a superset of the tests that each lane executes, and
 # one workspace listing avoids a second Cargo resolution/build pass.
 collect_present < <(
-  cd "$ROOT/packages"
-  cargo nextest list --workspace --message-format oneline
+  cd "$ROOT"
+  cargo nextest list --locked --workspace --message-format oneline
 )
-# Broker workspace (packages/d2b-priv-broker/Cargo.toml) is a SEPARATE
-# cargo workspace, excluded from the main one. Retired canaries pinned
-# ops::device / ops::modprobe #[test]s that live there, so the fail-closed
-# pinned gate must enumerate it too - otherwise those retirements would be
-# silently unguarded against deletion.
+# The broker is a product member of the root workspace. Retired canaries pin
+# ops::device / ops::modprobe #[test]s, so the fail-closed pinned gate must
+# enumerate the broker's feature superset too - otherwise those retirements
+# would be silently unguarded against deletion.
 #
-# `cargo metadata --all-features` (run by `nextest list`) can add a
-# transitive lock entry the committed lock omits (e.g. `itoa` under rustix's
-# full feature set), which would dirty the working tree. Snapshot + restore
-# the broker lock so listing is non-mutating by construction.
-broker_lock="$ROOT/packages/d2b-priv-broker/Cargo.lock"
-broker_lock_backup=""
-restore_broker_lock() {
-  if [ -n "$broker_lock_backup" ] && [ -f "$broker_lock_backup" ]; then
-    cp "$broker_lock_backup" "$broker_lock"
-    rm -f "$broker_lock_backup"
-  fi
-}
-if [ -f "$broker_lock" ]; then
-  broker_lock_backup="$ROOT/tests/.assert-pinned-broker-lock.${BASHPID:-$$}"
-  if [ -e "$broker_lock_backup" ]; then
-    echo "assert-pinned-tests: scratch path already exists: $broker_lock_backup" >&2
-    exit 1
-  fi
-  cp "$broker_lock" "$broker_lock_backup"
-  trap restore_broker_lock EXIT
-fi
 collect_present < <(
-  cd "$ROOT/packages/d2b-priv-broker"
-  # `--features layer1-bootstrap,fake-backends` lists a SUPERSET of the broker
+  cd "$ROOT"
+  # `--package d2b-priv-broker --features layer1-bootstrap,fake-backends`
+  # lists a SUPERSET of the broker
   # test surface: the default real-wire tests, the layer1-bootstrap legacy
   # probe-* + scm_rights_fd_lifecycle fd-passing tests, AND the
   # `#![cfg(feature = "fake-backends")]`-gated hermetic integration tests
   # (e.g. tests/pidfd_handoff_scm_rights.rs). test-rust.sh runs the
   # default, layer1-bootstrap, AND fake-backends broker test passes, so every
   # listed test is actually executed and can be guarded by the pinned gate.
-  cargo nextest list --workspace --features layer1-bootstrap,fake-backends --message-format oneline
+  cargo nextest list --locked --package d2b-priv-broker \
+    --features layer1-bootstrap,fake-backends --message-format oneline
 )
-if [ -n "$broker_lock_backup" ]; then
-  restore_broker_lock
-  broker_lock_backup=""
-  trap - EXIT
-fi
 
 declare -A seen
 total=0

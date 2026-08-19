@@ -1,0 +1,86 @@
+load("@crates//:defs.bzl", "all_crate_deps")
+load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test")
+
+
+exports_files(
+    ["BUILD.bazel"],
+    visibility = ["//visibility:public"],
+)
+
+exports_files(
+    [
+        "Cargo.toml",
+        "src/lib.rs",
+        "src/ownership.rs",
+    ],
+    visibility = ["//visibility:public"],
+)
+
+d2b_resource_store_redb_srcs = glob(["src/**/*.rs"], allow_empty = True)
+
+rust_library(
+    name = "d2b_resource_store_redb",
+    srcs = d2b_resource_store_redb_srcs,
+    compile_data = [
+        "Cargo.toml",
+        "src/actor.rs",
+        "src/lib.rs",
+        "src/transaction.rs",
+    ],
+    visibility = ["//visibility:public"],
+    deps = [
+        "//packages/d2b-audit:d2b_audit",
+        "//packages/d2b-contracts:d2b_contracts",
+        "//packages/d2b-controller-toolkit:d2b_controller_toolkit",
+        "//packages/d2b-resource-store:d2b_resource_store",
+        "//packages/d2b-telemetry:d2b_telemetry",
+    ] + all_crate_deps(normal = True, cargo_only = True),
+)
+
+rust_library(
+    name = "d2b_resource_store_redb_test_support",
+    srcs = d2b_resource_store_redb_srcs,
+    compile_data = [
+        "Cargo.toml",
+        "src/actor.rs",
+        "src/lib.rs",
+        "src/transaction.rs",
+    ],
+    crate_name = "d2b_resource_store_redb",
+    visibility = ["//visibility:public"],
+    deps = [
+        "//packages/d2b-audit:d2b_audit_test_support",
+        "//packages/d2b-contracts:d2b_contracts_test_support",
+        "//packages/d2b-controller-toolkit:d2b_controller_toolkit_test_support",
+        "//packages/d2b-resource-store:d2b_resource_store_test_support",
+        "//packages/d2b-telemetry:d2b_telemetry_test_support",
+    ] + all_crate_deps(normal = True, cargo_only = True),
+)
+
+rust_test(
+    name = "d2b_resource_store_redb_test",
+    compile_data = ["Cargo.toml"],
+    crate = ":d2b_resource_store_redb",
+    args = ["--test-threads=1"],
+    tags = ["no-remote-cache"],
+    deps = [
+    ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
+)
+
+# keep
+filegroup(
+    name = "cargo_workspace_sources",
+    srcs = glob(
+        [
+            "Cargo.lock",
+            "Cargo.toml",
+            "benches/**/*.rs",
+            "build.rs",
+            "examples/**/*.rs",
+            "src/**/*.rs",
+            "tests/**/*.rs",
+        ],
+        allow_empty = True,
+    ),
+    visibility = ["//visibility:public"],
+)

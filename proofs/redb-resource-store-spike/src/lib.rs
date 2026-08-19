@@ -22,8 +22,9 @@ use std::sync::atomic::{AtomicU64, Ordering};
 static NEXT_PATH: AtomicU64 = AtomicU64::new(0);
 
 pub fn fixture_path(label: &str) -> PathBuf {
-    let directory = Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("target")
+    let directory = std::env::var_os("TEST_TMPDIR")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| Path::new("target").to_owned())
         .join("spike-data");
     std::fs::create_dir_all(&directory).expect("create spike data directory");
     directory.join(format!(

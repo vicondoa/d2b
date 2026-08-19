@@ -116,7 +116,6 @@ and session material are excluded from labels and messages.
 ## Build and test
 
 ```bash
-cd packages
 cargo check -p d2b-provider-device-security-key
 cargo test -p d2b-provider-device-security-key
 cargo nextest run -p d2b-provider-device-security-key

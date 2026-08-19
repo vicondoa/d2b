@@ -2043,6 +2043,26 @@ mod tests {
     use super::*;
     use serde_json::json;
 
+    fn schema_root() -> std::path::PathBuf {
+        std::env::var_os("D2B_RESOURCE_SCHEMA_ROOT")
+            .map(std::path::PathBuf::from)
+            .map(|path| {
+                if path.extension().is_some() {
+                    path.parent().unwrap_or(&path).to_path_buf()
+                } else {
+                    path
+                }
+            })
+            .unwrap_or_else(|| {
+                std::env::current_dir()
+                    .expect("current directory")
+                    .ancestors()
+                    .map(|root| root.join("docs/reference/schemas/v3"))
+                    .find(|path| path.is_dir())
+                    .expect("resource schemas are discoverable")
+            })
+    }
+
     fn draft_schema(mut body: Value) -> Value {
         body.as_object_mut().unwrap().insert(
             "$schema".to_owned(),
@@ -2084,7 +2104,7 @@ mod tests {
 
     #[test]
     fn every_committed_v3_schema_passes_integrity_validation() {
-        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../docs/reference/schemas/v3");
+        let root = schema_root();
         let mut count = 0;
         for entry in fs::read_dir(root).unwrap() {
             let path = entry.unwrap().path();
@@ -2284,9 +2304,7 @@ mod tests {
             providers: Vec::new(),
             artifact_catalog_path: None,
             expected_artifact_catalog_digest: None,
-            schema_root: Some(
-                Path::new(env!("CARGO_MANIFEST_DIR")).join("../../docs/reference/schemas/v3"),
-            ),
+            schema_root: Some(schema_root()),
             expected_content_hash: None,
             strict_secrets: false,
         };
@@ -2393,9 +2411,7 @@ mod tests {
             providers: Vec::new(),
             artifact_catalog_path: None,
             expected_artifact_catalog_digest: None,
-            schema_root: Some(
-                Path::new(env!("CARGO_MANIFEST_DIR")).join("../../docs/reference/schemas/v3"),
-            ),
+            schema_root: Some(schema_root()),
             expected_content_hash: None,
             strict_secrets: false,
         };

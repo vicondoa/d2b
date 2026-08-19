@@ -118,6 +118,6 @@ emitted.
 ## Build and test
 
 ```bash
-cd packages && cargo test -p d2b-provider-volume-virtiofs
-cd packages && cargo clippy -p d2b-provider-volume-virtiofs --all-targets
+cargo test -p d2b-provider-volume-virtiofs
+cargo clippy -p d2b-provider-volume-virtiofs --all-targets
 ```

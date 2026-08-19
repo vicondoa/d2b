@@ -32,9 +32,8 @@
 //! ADR 0017 regression invariant is preserved.
 
 use std::collections::BTreeSet;
-use std::process::Command;
 
-use d2b_contract_tests::{read_repo_file, repo_path_exists, repo_root};
+use d2b_contract_tests::{read_repo_file, repo_files, repo_path_exists, repo_root};
 use regex::Regex;
 
 /// Read a repo-relative file, returning `None` when the path is absent or not
@@ -48,34 +47,7 @@ fn read_repo_file_opt(rel: &str) -> Option<String> {
 /// (respects `.gitignore`, so build artifacts under `target/` and Nix `result`
 /// symlinks are excluded) that the original bash gates relied on.
 fn git_listed_files(roots: &[&str]) -> Vec<String> {
-    let root = repo_root();
-    let output = Command::new("git")
-        .arg("-C")
-        .arg(&root)
-        .arg("-c")
-        .arg("core.quotePath=false")
-        .args([
-            "ls-files",
-            "--cached",
-            "--others",
-            "--exclude-standard",
-            "--",
-        ])
-        .args(roots)
-        .output()
-        .expect("run `git ls-files`");
-    assert!(
-        output.status.success(),
-        "git ls-files failed: {}",
-        String::from_utf8_lossy(&output.stderr)
-    );
-    let mut files: BTreeSet<String> = BTreeSet::new();
-    for line in String::from_utf8_lossy(&output.stdout).lines() {
-        if !line.is_empty() {
-            files.insert(line.to_string());
-        }
-    }
-    files.into_iter().collect()
+    repo_files(roots)
 }
 
 /// Whether `rel` lives under an excluded directory component, mirroring the
@@ -104,7 +76,7 @@ fn nix_package_source_filters_are_path_segment_based() {
              packages/d2b-realm-core/src/target.rs"
         );
         assert!(
-            content.contains("d2bLib.cleanRustPackagesSource ../packages"),
+            content.contains("d2bLib.cleanRustPackagesSource ../."),
             "{rel}: package source filters must use the centralized segment-based helper"
         );
     }

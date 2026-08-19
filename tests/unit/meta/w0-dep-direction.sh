@@ -24,13 +24,14 @@
 # verified without the resolver). cargo + jq are resolved from PATH, the
 # rustup toolchain, ~/.cargo, or `nix run nixpkgs#<tool>`.
 #
-# Wired into `make test-policy` (tests/test-policy.sh) and tests/static.sh.
+# Wired into `make test-policy` and tests/static.sh.
 
 set -euo pipefail
 
 HERE=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 ROOT=${ROOT:-$(cd "$HERE/../../.." && pwd)}
 PKGS="$ROOT/packages"
+MANIFEST="$ROOT/Cargo.toml"
 
 rc=0
 note() { printf '  %s\n' "$*" >&2; }
@@ -70,7 +71,7 @@ META=""
 if { [ -n "$CARGO_BIN" ] || [ -n "$NIX_BIN" ]; } \
    && { [ -n "$JQ_BIN" ] || [ -n "$NIX_BIN" ]; }; then
   META="$(run_cargo metadata --no-deps --format-version 1 \
-    --manifest-path "$PKGS/Cargo.toml" 2>/dev/null || true)"
+    --manifest-path "$MANIFEST" 2>/dev/null || true)"
 fi
 if [ -z "$META" ] || ! printf '%s' "$META" | run_jq -e '.packages' >/dev/null 2>&1; then
   violation "cannot run 'cargo metadata' (need cargo + jq, or nix). The \
@@ -86,10 +87,8 @@ is_member() {
 }
 
 # External (non-member) crates a pure contract crate must never depend on.
-# d2b-priv-broker lives in a SEPARATE workspace (excluded from
-# packages/Cargo.toml), so it never appears in the member set - name it
-# explicitly, along with any other d2b-* host/daemon crate caught by the
-# glob in check_dep below.
+# The d2b-* name check below remains explicit so the invariant does not
+# weaken when a host or daemon crate joins the root workspace.
 is_external_forbidden() {
   case "$1" in
     prost | prost-types) return 0 ;;

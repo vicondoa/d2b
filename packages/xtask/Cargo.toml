@@ -10,7 +10,10 @@ license.workspace = true
 workspace = true
 
 [dependencies]
-clap_complete = "4"
+# Keep the generated CLI artifacts compatible with the established
+# positional-value completion contract. clap_complete 4.6.6+ intentionally
+# omits positional usage placeholders from Bash output.
+clap_complete = "=4.6.5"
 clap_mangen = "0.2"
 d2b = { path = "../d2b", version = "0.0.0-bootstrap" }
 d2b-realm-core = { path = "../d2b-realm-core", version = "0.0.0-bootstrap" }
@@ -36,3 +39,6 @@ ttrpc-codegen = "0.6.0"
 schemars.workspace = true
 serde_json.workspace = true
 sha2.workspace = true
+
+[dev-dependencies]
+serde_json.workspace = true

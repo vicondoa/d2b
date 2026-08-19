@@ -5870,7 +5870,7 @@ mod tests {
         // NOT setfacl_fd_safe (which would re-open the path creating a TOCTOU
         // window). The audio socket revocations may use setfacl_fd_safe since
         // a symlink there can only block a deny, not grant access.
-        let src = include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/src/live_handlers.rs"));
+        let src = include_str!("live_handlers.rs");
         // Find the refresh_spawn_runner_acls function body, then the w1-wayland-proxy block.
         let fn_start = src
             .find("fn refresh_spawn_runner_acls")

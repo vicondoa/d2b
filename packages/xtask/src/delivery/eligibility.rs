@@ -48,7 +48,7 @@
 //! integer identifier (42 above is an example); 0 is rejected.
 //!
 //! The complete schema and a precise offline recipe are published through
-//! `cargo run --manifest-path packages/Cargo.toml -p xtask -- delivery wave help` (the `merge-target` stage's `schema`
+//! `cargo run --manifest-path Cargo.toml -p xtask -- delivery wave help` (the `merge-target` stage's `schema`
 //! field), so a contributor can produce the document without reading source.
 //!
 //! ## Recipe
@@ -66,7 +66,7 @@
 //!     material: $s[0].material,
 //!     pull_requests: [ /* one object per pull request */ ]
 //!   }' > merge-target.json
-//! cargo run --manifest-path packages/Cargo.toml -p xtask -- delivery wave merge-target \
+//! cargo run --manifest-path Cargo.toml -p xtask -- delivery wave merge-target \
 //!     --seal   "$SEAL" \
 //!     --target ./merge-target.json \
 //!     --repo   <logical-id>=<checkout-root>
@@ -194,7 +194,7 @@ pub struct EligibilityRecord {
     pub eligible: bool,
 }
 
-/// `cargo run --manifest-path packages/Cargo.toml -p xtask -- delivery wave merge-eligibility`.
+/// `cargo run --manifest-path Cargo.toml -p xtask -- delivery wave merge-eligibility`.
 pub fn run(args: &[String]) -> Result<WorkflowOutput> {
     let mut options = CliOptions::parse(args)?;
     let seal_path = options.required_path("--seal")?;
@@ -209,7 +209,7 @@ pub fn run(args: &[String]) -> Result<WorkflowOutput> {
     evaluate(&candidate, &seal, &target)
 }
 
-/// `cargo run --manifest-path packages/Cargo.toml -p xtask -- delivery wave merge-target`.
+/// `cargo run --manifest-path Cargo.toml -p xtask -- delivery wave merge-target`.
 ///
 /// Captures the wave's current pull-request stack into the candidate as
 /// `merge-target.json`, so `merge-eligibility` has a supported, candidate-
@@ -255,7 +255,7 @@ fn load_target(candidate: &CandidateDir, target_path: Option<&Path>) -> Result<M
         None => candidate.read_json(MERGE_TARGET_FILE).map_err(|error| {
             DeliveryError::usage(format!(
                 "no --target given and no captured merge target at {MERGE_TARGET_FILE}; run \
-                 `cargo run --manifest-path packages/Cargo.toml -p xtask -- delivery wave merge-target` first ({error})"
+                 `cargo run --manifest-path Cargo.toml -p xtask -- delivery wave merge-target` first ({error})"
             ))
         }),
     }

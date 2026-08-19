@@ -483,9 +483,7 @@ mod tests {
     use std::os::unix::fs::symlink;
 
     fn temp_root(name: &str) -> PathBuf {
-        let base = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .join("target")
-            .join("usbip-host-tests");
+        let base = crate::test_scratch_root().join("usbip-host-tests");
         let root = base.join(format!("{}-{}", name, std::process::id()));
         let _ = fs::remove_dir_all(&root);
         fs::create_dir_all(&root).expect("create temp root");

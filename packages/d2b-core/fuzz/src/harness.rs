@@ -35,7 +35,7 @@ pub fn repo_root() -> PathBuf {
 }
 
 pub fn d2b_core_root() -> PathBuf {
-    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let manifest_dir = manifest_dir();
     if manifest_dir.file_name().and_then(|name| name.to_str()) == Some("fuzz") {
         manifest_dir
             .parent()
@@ -48,13 +48,58 @@ pub fn d2b_core_root() -> PathBuf {
 
 #[cfg(feature = "fuzz")]
 pub fn corpus_root() -> PathBuf {
-    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let manifest_dir = manifest_dir();
     let direct = manifest_dir.join("corpus");
     if direct.is_dir() {
         direct
+    } else if let Ok(current_dir) = std::env::current_dir()
+        && current_dir.join("packages/d2b-core/fuzz/corpus").is_dir()
+    {
+        current_dir.join("packages/d2b-core/fuzz/corpus")
+    } else if let Some(path) = ["TEST_SRCDIR", "RUNFILES_DIR"]
+        .into_iter()
+        .filter_map(std::env::var_os)
+        .map(PathBuf::from)
+        .flat_map(|base| {
+            [
+                base.join("_main/packages/d2b-core/fuzz/corpus"),
+                base.join("packages/d2b-core/fuzz/corpus"),
+            ]
+        })
+        .find(|path| path.is_dir())
+    {
+        path
     } else {
         manifest_dir.join("fuzz/corpus")
     }
+}
+
+fn manifest_dir() -> PathBuf {
+    if let Some(path) = std::env::var_os("CARGO_MANIFEST_DIR") {
+        return PathBuf::from(path);
+    }
+    if let Some(path) = ["TEST_SRCDIR", "RUNFILES_DIR"]
+        .into_iter()
+        .filter_map(std::env::var_os)
+        .map(PathBuf::from)
+        .flat_map(|base| {
+            [
+                base.join("_main/packages/d2b-core/fuzz"),
+                base.join("packages/d2b-core/fuzz"),
+            ]
+        })
+        .find(|path| path.join("Cargo.toml").is_file())
+    {
+        return path;
+    }
+    let current_dir = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+    if current_dir
+        .join("packages/d2b-core/fuzz/Cargo.toml")
+        .is_file()
+    {
+        return current_dir.join("packages/d2b-core/fuzz");
+    }
+    current_dir
 }
 
 pub fn run_named_tests(tests: &[(&str, fn())]) {
@@ -118,12 +163,42 @@ where
     F: FnMut(&[u8]) + std::panic::RefUnwindSafe,
 {
     run_corpus(target, |bytes| parser(bytes));
-    bolero::check!(name = target)
-        .with_iterations(runs)
-        .with_max_len(4096)
-        .for_each(|input: &[u8]| {
-            parser(input);
-        });
+    if let Some(test_tmpdir) = env::var_os("TEST_TMPDIR") {
+        let target_dir = PathBuf::from(test_tmpdir).join(format!("d2b-bolero-{target}"));
+        let work_dir = target_dir.join("__fuzz__").join(target);
+        fs::create_dir_all(&work_dir).expect("create writable Bolero work directory");
+        let marker = target_dir.join("target.rs");
+        fs::write(&marker, b"// writable Bazel Bolero target marker\n")
+            .expect("write writable Bolero target marker");
+        let marker = marker
+            .into_os_string()
+            .into_string()
+            .expect("Bazel TEST_TMPDIR path is valid UTF-8");
+        let location = bolero::TargetLocation {
+            package_name: env!("CARGO_PKG_NAME"),
+            manifest_dir: ".",
+            module_path: module_path!(),
+            file: Box::leak(marker.into_boxed_str()),
+            line: line!(),
+            item_path: bolero::__item_path__!(),
+            test_name: Some(target.to_owned()),
+        };
+        if location.should_run() {
+            bolero::test(location)
+                .with_iterations(runs)
+                .with_max_len(4096)
+                .for_each(|input: &[u8]| {
+                    parser(input);
+                });
+        }
+    } else {
+        bolero::check!(name = target)
+            .with_iterations(runs)
+            .with_max_len(4096)
+            .for_each(|input: &[u8]| {
+                parser(input);
+            });
+    }
 }
 
 fn first_filter_arg() -> Option<String> {

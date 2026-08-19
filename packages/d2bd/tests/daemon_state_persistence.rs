@@ -2,7 +2,7 @@ mod common;
 
 mod daemon_state_persistence {
     use std::fs;
-    use std::path::Path;
+    use std::path::PathBuf;
     use std::process::{Command, Stdio};
     use std::time::Duration;
 
@@ -109,8 +109,14 @@ mod daemon_state_persistence {
 
     impl OrphanProcess {
         fn spawn_sleep() -> Self {
-            let scrubber = Path::new(env!("CARGO_MANIFEST_DIR"))
-                .join("../../tests/tools/scrub-shell-environment");
+            let scrubber = std::env::var_os("D2B_TEST_SCRUB_SHELL_ENVIRONMENT")
+                .map(PathBuf::from)
+                .unwrap_or_else(|| {
+                    PathBuf::from(
+                        std::env::var_os("CARGO_MANIFEST_DIR").unwrap_or_else(|| ".".into()),
+                    )
+                    .join("../../tests/tools/scrub-shell-environment")
+                });
             let output = Command::new(scrubber)
                 .arg("-c")
                 .arg("sleep 120 >/dev/null 2>&1 & echo $!")

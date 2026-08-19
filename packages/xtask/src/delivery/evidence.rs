@@ -1,7 +1,7 @@
 //! Validator evidence import (spec section 12.2, work item
 //! `ADR046-delivery-003`).
 //!
-//! `cargo run --manifest-path packages/Cargo.toml -p xtask -- delivery wave validate-import` records that one validator lane
+//! `cargo run --manifest-path Cargo.toml -p xtask -- delivery wave validate-import` records that one validator lane
 //! ran against one candidate and what it returned. Two lanes report into the
 //! same candidate: required GitHub CI and the heavy-gated local and host
 //! validators.
@@ -218,7 +218,7 @@ impl EvidenceRecord {
     }
 }
 
-/// Routes `cargo run --manifest-path packages/Cargo.toml -p xtask -- delivery wave validate-import`.
+/// Routes `cargo run --manifest-path Cargo.toml -p xtask -- delivery wave validate-import`.
 pub fn run(args: &[String]) -> Result<WorkflowOutput> {
     let mut request = ImportRequest::parse(args)?;
     let checkouts = request.checkout_roots()?;
@@ -748,7 +748,7 @@ mod tests {
         );
         assert!(!inside.exists());
 
-        let inside_self = repo_root().join("packages/target/should-never-exist-evidence");
+        let inside_self = repo_root().join("target/should-never-exist-evidence");
         let error = run(&import_args(
             &fixture,
             &snapshot,

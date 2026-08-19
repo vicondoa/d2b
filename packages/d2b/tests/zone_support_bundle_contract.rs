@@ -10,11 +10,19 @@ use serde_json::Value;
 
 fn frame_recv(fd: i32) -> Value {
     let mut bytes = vec![0; 1 << 20];
-    let length = recv(fd, &mut bytes, MsgFlags::empty()).expect("receive frame");
-    assert!(length >= 4);
-    let declared = u32::from_le_bytes(bytes[..4].try_into().unwrap()) as usize;
-    assert_eq!(declared, length - 4);
-    serde_json::from_slice(&bytes[4..length]).expect("frame JSON")
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
+    loop {
+        let length = recv(fd, &mut bytes, MsgFlags::empty()).expect("receive frame");
+        if length >= 4 {
+            let declared = u32::from_le_bytes(bytes[..4].try_into().unwrap()) as usize;
+            assert_eq!(declared, length - 4);
+            return serde_json::from_slice(&bytes[4..length]).expect("frame JSON");
+        }
+        if std::time::Instant::now() >= deadline {
+            panic!("short public-socket frame: {length} bytes");
+        }
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
 }
 
 fn frame_send(fd: i32, value: &Value) {

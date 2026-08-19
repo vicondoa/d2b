@@ -1,0 +1,383 @@
+load("@crates//:defs.bzl", "all_crate_deps")
+load("@rules_rust//rust:defs.bzl", "rust_binary", "rust_library", "rust_test")
+
+
+exports_files(
+    ["BUILD.bazel"],
+    visibility = ["//visibility:public"],
+)
+
+exports_files(
+    [
+        "src/daemon_audit.rs",
+        "src/lib.rs",
+    ],
+    visibility = ["//visibility:public"],
+)
+
+d2bd_srcs = glob(["src/**/*.rs"], allow_empty = True)
+
+d2bd_compile_data = [
+    "//tests/fixtures:deny-unknown/host-valid.json",  # keep
+    "//:tests/golden/manifest_v04/baseline-vms.json",  # keep
+    "Cargo.toml",
+    "src/guest_control_bridge.rs",
+    "src/kernel_module_check.rs",
+    "src/lib.rs",
+]
+
+d2bd_shared_deps = [
+    "//packages/d2b-audit:d2b_audit",
+    "//packages/d2b-bus:d2b_bus",
+    "//packages/d2b-contracts:d2b_contracts",
+    "//packages/d2b-gateway:d2b_gateway",
+    "//packages/d2b-gateway-runtime:d2b_gateway_runtime",
+    "//packages/d2b-process:d2b_process",
+    "//packages/d2b-process-conformance:d2b_process_conformance",
+    "//packages/d2b-provider:d2b_provider",
+    "//packages/d2b-provider-activation-nixos:d2b_provider_activation_nixos",
+    "//packages/d2b-provider-audio-pipewire:d2b_provider_audio_pipewire",
+    "//packages/d2b-provider-clipboard-wayland:d2b_provider_clipboard_wayland",
+    "//packages/d2b-provider-device-security-key:d2b_provider_device_security_key",
+    "//packages/d2b-provider-device-tpm:d2b_provider_device_tpm",
+    "//packages/d2b-provider-device-usbip:d2b_provider_device_usbip",
+    "//packages/d2b-provider-display-wayland:d2b_provider_display_wayland",
+    "//packages/d2b-provider-network-local:d2b_provider_network_local",
+    "//packages/d2b-provider-notification-desktop:d2b_provider_notification_desktop",
+    "//packages/d2b-provider-runtime-azure-container-apps:d2b_provider_runtime_azure_container_apps",
+    "//packages/d2b-provider-runtime-cloud-hypervisor:d2b_provider_runtime_cloud_hypervisor",
+    "//packages/d2b-provider-supervisor:d2b_provider_supervisor",
+    "//packages/d2b-provider-system-core:d2b_provider_system_core",
+    "//packages/d2b-provider-system-minijail:d2b_provider_system_minijail",
+    "//packages/d2b-provider-system-systemd:d2b_provider_system_systemd",
+    "//packages/d2b-provider-transport-azure-relay:d2b_provider_transport_azure_relay",
+    "//packages/d2b-realm-core:d2b_realm_core",
+    "//packages/d2b-realm-provider:d2b_realm_provider",
+    "//packages/d2b-realm-router:d2b_realm_router",
+    "//packages/d2b-resource-api:d2b_resource_api",
+    "//packages/d2b-session:d2b_session",
+    "//packages/d2b-session-unix:d2b_session_unix",
+    "//packages/d2b-resource-store:d2b_resource_store",
+    "//packages/d2b-resource-store-redb:d2b_resource_store_redb",
+]
+
+d2bd_test_support_deps = [
+    dep
+    for dep in d2bd_shared_deps
+    if dep not in [
+        "//packages/d2b-audit:d2b_audit",
+        "//packages/d2b-bus:d2b_bus",
+        "//packages/d2b-contracts:d2b_contracts",
+        "//packages/d2b-process-conformance:d2b_process_conformance",
+        "//packages/d2b-process:d2b_process",
+        "//packages/d2b-provider-activation-nixos:d2b_provider_activation_nixos",
+        "//packages/d2b-provider-audio-pipewire:d2b_provider_audio_pipewire",
+        "//packages/d2b-provider-clipboard-wayland:d2b_provider_clipboard_wayland",
+        "//packages/d2b-provider-device-security-key:d2b_provider_device_security_key",
+        "//packages/d2b-provider-device-tpm:d2b_provider_device_tpm",
+        "//packages/d2b-provider-device-usbip:d2b_provider_device_usbip",
+        "//packages/d2b-provider-display-wayland:d2b_provider_display_wayland",
+        "//packages/d2b-provider-network-local:d2b_provider_network_local",
+        "//packages/d2b-provider-notification-desktop:d2b_provider_notification_desktop",
+        "//packages/d2b-provider-runtime-azure-container-apps:d2b_provider_runtime_azure_container_apps",
+        "//packages/d2b-provider:d2b_provider",
+        "//packages/d2b-provider-supervisor:d2b_provider_supervisor",
+        "//packages/d2b-provider-system-core:d2b_provider_system_core",
+        "//packages/d2b-provider-system-minijail:d2b_provider_system_minijail",
+        "//packages/d2b-provider-system-systemd:d2b_provider_system_systemd",
+        "//packages/d2b-provider-transport-azure-relay:d2b_provider_transport_azure_relay",
+        "//packages/d2b-gateway-runtime:d2b_gateway_runtime",
+        "//packages/d2b-resource-api:d2b_resource_api",
+        "//packages/d2b-session:d2b_session",
+        "//packages/d2b-session-unix:d2b_session_unix",
+        "//packages/d2b-resource-store:d2b_resource_store",
+        "//packages/d2b-resource-store-redb:d2b_resource_store_redb",
+    ]
+] + [
+    "//packages/d2b-audit:d2b_audit_test_support",
+    "//packages/d2b-bus:d2b_bus_test_support",
+    "//packages/d2b-contracts:d2b_contracts_test_support",
+    "//packages/d2b-process-conformance:d2b_process_conformance_test_support",
+    "//packages/d2b-process:d2b_process_test_support",
+    "//packages/d2b-provider-activation-nixos:d2b_provider_activation_nixos_test_support",
+    "//packages/d2b-provider-audio-pipewire:d2b_provider_audio_pipewire_test_support",
+    "//packages/d2b-provider-clipboard-wayland:d2b_provider_clipboard_wayland_test_support",
+    "//packages/d2b-provider-device-security-key:d2b_provider_device_security_key_test_support",
+    "//packages/d2b-provider-device-tpm:d2b_provider_device_tpm_test_support",
+    "//packages/d2b-provider-device-usbip:d2b_provider_device_usbip_test_support",
+    "//packages/d2b-provider-display-wayland:d2b_provider_display_wayland_test_support",
+    "//packages/d2b-provider-network-local:d2b_provider_network_local_test_support",
+    "//packages/d2b-provider-notification-desktop:d2b_provider_notification_desktop_test_support",
+    "//packages/d2b-provider-runtime-azure-container-apps:d2b_provider_runtime_azure_container_apps_test_support",
+    "//packages/d2b-provider:d2b_provider_test_support",
+    "//packages/d2b-provider-supervisor:d2b_provider_supervisor_test_support",
+    "//packages/d2b-provider-system-core:d2b_provider_system_core_test_support",
+    "//packages/d2b-provider-system-minijail:d2b_provider_system_minijail_test_support",
+    "//packages/d2b-provider-system-systemd:d2b_provider_system_systemd_test_support",
+    "//packages/d2b-provider-transport-azure-relay:d2b_provider_transport_azure_relay_test_support",
+    "//packages/d2b-gateway-runtime:d2b_gateway_runtime_test_support",
+    "//packages/d2b-resource-api:d2b_resource_api_test_support",
+    "//packages/d2b-session:d2b_session_test_support",
+    "//packages/d2b-session-unix:d2b_session_unix_test_support",
+    "//packages/d2b-resource-store:d2b_resource_store_test_support",
+    "//packages/d2b-resource-store-redb:d2b_resource_store_redb_test_support",
+    "//packages/d2b-provider-volume-local:d2b_provider_volume_local",
+]
+
+rust_library(
+    name = "d2bd_lib",
+    srcs = d2bd_srcs,
+    compile_data = d2bd_compile_data,
+    crate_name = "d2bd",
+    proc_macro_deps = [
+        "@crates//:async-trait",
+    ],
+    visibility = ["//visibility:public"],
+    deps = d2bd_shared_deps + [
+        "//packages/d2b-core:d2b_core",
+        "//packages/d2b-core-controller:d2b_core_controller",
+        "//packages/d2b-host:d2b_host",
+    ] + all_crate_deps(normal = True, cargo_only = True),
+)
+
+rust_library(
+    name = "d2bd_lib_test_support",
+    srcs = d2bd_srcs,
+    compile_data = d2bd_compile_data,
+    crate_name = "d2bd",
+    proc_macro_deps = [
+        "@crates//:async-trait",
+    ],
+    visibility = ["//visibility:public"],
+    deps = d2bd_test_support_deps + [
+        "//packages/d2b-core:d2b_core_test_support",
+        "//packages/d2b-core-controller:d2b_core_controller_test_support",
+        "//packages/d2b-host:d2b_host_test_support",
+    ] + all_crate_deps(normal = True, cargo_only = True),
+)
+
+rust_binary(
+    name = "d2bd",
+    srcs = ["src/main.rs"],
+    compile_data = ["Cargo.toml"],
+    visibility = ["//visibility:public"],
+    deps = [
+        ":d2bd_lib",
+    ] + all_crate_deps(normal = True, cargo_only = True),
+)
+
+rust_test(
+    name = "bundle_tampered_envelope",
+    srcs = [
+        "tests/bundle_tampered_envelope.rs",
+        "tests/common/mod.rs",
+    ],
+    compile_data = ["Cargo.toml"],
+    crate_root = "tests/bundle_tampered_envelope.rs",
+    data = [
+        ":d2bd",
+        "//tests/fixtures:deny-unknown/host-valid.json",
+    ],
+    env = {
+        "CARGO_BIN_EXE_d2bd": "$(rootpath :d2bd)",
+        "D2BD_HOST_FIXTURE": "$(rootpath //tests/fixtures:deny-unknown/host-valid.json)",
+    },
+    rustc_env = {"CARGO_BIN_EXE_d2bd": "$(rootpath :d2bd)"},
+    tags = ["no-remote-cache"],
+    visibility = ["//visibility:public"],
+    deps = [
+        ":d2bd_lib_test_support",
+        "//packages/d2b-core:d2b_core_test_support",
+    ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
+)
+
+rust_test(
+    name = "daemon_socket_acl",
+    srcs = [
+        "tests/common/mod.rs",
+        "tests/daemon_socket_acl.rs",
+    ],
+    compile_data = ["Cargo.toml"],
+    crate_root = "tests/daemon_socket_acl.rs",
+    data = [":d2bd"],
+    env = {"CARGO_BIN_EXE_d2bd": "$(rootpath :d2bd)"},
+    rustc_env = {"CARGO_BIN_EXE_d2bd": "$(rootpath :d2bd)"},
+    tags = ["no-remote-cache"],
+    visibility = ["//visibility:public"],
+    deps = [
+    ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
+)
+
+rust_test(
+    name = "daemon_state_lock",
+    srcs = [
+        "tests/common/mod.rs",
+        "tests/daemon_state_lock.rs",
+    ],
+    compile_data = ["Cargo.toml"],
+    crate_root = "tests/daemon_state_lock.rs",
+    data = [":d2bd"],
+    env = {"CARGO_BIN_EXE_d2bd": "$(rootpath :d2bd)"},
+    rustc_env = {"CARGO_BIN_EXE_d2bd": "$(rootpath :d2bd)"},
+    tags = ["no-remote-cache"],
+    visibility = ["//visibility:public"],
+    deps = [
+    ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
+)
+
+rust_test(
+    name = "daemon_state_persistence",
+    srcs = [
+        "tests/common/mod.rs",
+        "tests/daemon_state_persistence.rs",
+    ],
+    compile_data = ["Cargo.toml"],
+    crate_root = "tests/daemon_state_persistence.rs",
+    data = [
+        ":d2bd",
+        "//:tests/tools/scrub-shell-environment",
+    ],
+    env = {
+        "CARGO_BIN_EXE_d2bd": "$(rootpath :d2bd)",
+        "D2B_TEST_SCRUB_SHELL_ENVIRONMENT": "$(rootpath //:tests/tools/scrub-shell-environment)",
+    },
+    rustc_env = {"CARGO_BIN_EXE_d2bd": "$(rootpath :d2bd)"},
+    tags = ["no-remote-cache"],
+    visibility = ["//visibility:public"],
+    deps = [
+    ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
+)
+
+rust_test(
+    name = "stub_no_socket",
+    srcs = ["tests/stub_no_socket.rs"],
+    compile_data = ["Cargo.toml"],
+    data = [":d2bd"],
+    env = {"CARGO_BIN_EXE_d2bd": "$(rootpath :d2bd)"},
+    rustc_env = {"CARGO_BIN_EXE_d2bd": "$(rootpath :d2bd)"},
+    tags = ["no-remote-cache"],
+    visibility = ["//visibility:public"],
+    deps = [] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
+)
+
+rust_test(
+    name = "daemon_version_file",
+    srcs = [
+        "tests/common/mod.rs",
+        "tests/daemon_version_file.rs",
+    ],
+    compile_data = ["Cargo.toml"],
+    crate_root = "tests/daemon_version_file.rs",
+    data = [":d2bd"],
+    env = {"CARGO_BIN_EXE_d2bd": "$(rootpath :d2bd)"},
+    rustc_env = {"CARGO_BIN_EXE_d2bd": "$(rootpath :d2bd)"},
+    tags = ["no-remote-cache"],
+    visibility = ["//visibility:public"],
+    deps = [
+        ":d2bd_lib_test_support",
+        "//packages/d2b-contracts:d2b_contracts_test_support",
+    ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
+)
+
+rust_test(
+    name = "daemon_version_negotiation",
+    srcs = [
+        "tests/common/mod.rs",
+        "tests/daemon_version_negotiation.rs",
+    ],
+    compile_data = ["Cargo.toml"],
+    crate_root = "tests/daemon_version_negotiation.rs",
+    data = [":d2bd"],
+    env = {"CARGO_BIN_EXE_d2bd": "$(rootpath :d2bd)"},
+    rustc_env = {"CARGO_BIN_EXE_d2bd": "$(rootpath :d2bd)"},
+    tags = ["no-remote-cache"],
+    visibility = ["//visibility:public"],
+    deps = [
+    ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
+)
+
+rust_test(
+    name = "production_binary_policy",
+    srcs = ["tests/production_binary_policy.rs"],
+    compile_data = ["Cargo.toml"],
+    data = [
+        ":d2bd",
+        "src/lib.rs",
+        "//bazel/checks/rust:repo_policy_sources",
+    ],
+    env = {"CARGO_BIN_EXE_d2bd": "$(rootpath :d2bd)"},
+    env_inherit = ["D2B_REPO_ROOT", "PATH"],
+    rustc_env = {"CARGO_BIN_EXE_d2bd": "$(rootpath :d2bd)"},
+    tags = ["no-remote-cache"],
+    visibility = ["//visibility:public"],
+)
+
+rust_test(
+    name = "public_status_socket",
+    srcs = [
+        "tests/common/mod.rs",
+        "tests/public_status_socket.rs",
+    ],
+    compile_data = ["Cargo.toml"],
+    crate_root = "tests/public_status_socket.rs",
+    data = [
+        ":d2bd",
+        "//tests/fixtures:deny-unknown/host-valid.json",
+    ],
+    env = {
+        "CARGO_BIN_EXE_d2bd": "$(rootpath :d2bd)",
+        "D2BD_HOST_FIXTURE": "$(rootpath //tests/fixtures:deny-unknown/host-valid.json)",
+    },
+    rustc_env = {"CARGO_BIN_EXE_d2bd": "$(rootpath :d2bd)"},
+    tags = ["no-remote-cache"],
+    visibility = ["//visibility:public"],
+    deps = [
+    ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
+)
+
+rust_test(
+    name = "d2bd_lib_test",
+    crate = ":d2bd_lib_test_support",
+    data = [
+        ":cargo_workspace_sources",
+        ":d2bd",
+        "//tests/fixtures:deny-unknown/host-valid.json",
+    ],
+    env = {
+        "CARGO_BIN_EXE_d2bd": "$(rootpath :d2bd)",
+        "D2BD_HOST_FIXTURE": "$(rootpath //tests/fixtures:deny-unknown/host-valid.json)",
+    },
+    env_inherit = ["PATH"],
+    proc_macro_deps = [
+        "@crates//:async-trait",
+    ],
+    rustc_env = {"CARGO_BIN_EXE_d2bd": "$(rootpath :d2bd)"},
+    tags = [
+        "no-remote-cache",
+        "no-sandbox",
+    ],
+    deps = [
+        "//packages/d2b-realm-core:d2b_realm_core",
+        "//packages/d2b-core:d2b_core_test_support",
+        "//packages/d2b-core-controller:d2b_core_controller_test_support",
+        "//packages/d2b-provider-display-wayland:d2b_provider_display_wayland_test_support",
+    ] + all_crate_deps(normal_dev = True, cargo_only = True),
+)
+
+# keep
+filegroup(
+    name = "cargo_workspace_sources",
+    srcs = glob(
+        [
+            "Cargo.lock",
+            "Cargo.toml",
+            "benches/**/*.rs",
+            "build.rs",
+            "examples/**/*.rs",
+            "src/**/*.rs",
+            "tests/**/*.rs",
+        ],
+        allow_empty = True,
+    ),
+    visibility = ["//visibility:public"],
+)

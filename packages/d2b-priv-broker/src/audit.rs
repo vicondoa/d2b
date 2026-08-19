@@ -2070,9 +2070,7 @@ mod tests {
     use super::*;
 
     fn target_scratch_root(prefix: &str) -> PathBuf {
-        let base = std::env::var_os("CARGO_TARGET_TMPDIR")
-            .map(PathBuf::from)
-            .unwrap_or_else(|| PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("target"));
+        let base = crate::test_scratch_root();
         base.join(format!(
             "{prefix}-{}-{}",
             std::process::id(),

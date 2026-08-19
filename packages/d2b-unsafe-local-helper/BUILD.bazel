@@ -1,0 +1,81 @@
+load("@crates//:defs.bzl", "all_crate_deps")
+load("@rules_rust//rust:defs.bzl", "rust_binary", "rust_library", "rust_test")
+
+
+exports_files(
+    ["BUILD.bazel"],
+    visibility = ["//visibility:public"],
+)
+
+rust_library(
+    name = "d2b_unsafe_local_helper",
+    srcs = glob(["src/**/*.rs"], allow_empty = True),
+    compile_data = ["Cargo.toml"],
+    visibility = ["//visibility:public"],
+    deps = [
+        "//packages/d2b-contracts:d2b_contracts",
+        "//packages/d2b-core:d2b_core",
+        "//packages/d2b-realm-core:d2b_realm_core",
+        "//packages/d2b-wayland-proxy:d2b_wayland_proxy",
+
+    ] + all_crate_deps(normal = True, cargo_only = True),
+)
+
+rust_binary(
+    name = "d2b-unsafe-local-helper",
+    srcs = ["src/main.rs"],
+    compile_data = ["Cargo.toml"],
+    visibility = ["//visibility:public"],
+    deps = [
+        ":d2b_unsafe_local_helper",
+    ] + all_crate_deps(normal = True, cargo_only = True),
+)
+
+rust_test(
+    name = "shell_supervisor",
+    srcs = ["tests/shell_supervisor.rs"],
+    compile_data = ["Cargo.toml"],
+    data = [":d2b-unsafe-local-helper"],
+    env = {
+        "CARGO_BIN_EXE_d2b-unsafe-local-helper": "$(rootpath :d2b-unsafe-local-helper)",
+    },
+    rustc_env = {"CARGO_BIN_EXE_d2b-unsafe-local-helper": "$(rootpath :d2b-unsafe-local-helper)"},
+    tags = ["no-remote-cache"],
+    visibility = ["//visibility:public"],
+    deps = [
+        ":d2b_unsafe_local_helper",
+        "//packages/d2b-contracts:d2b_contracts",
+        "//packages/d2b-core:d2b_core",
+        "//packages/d2b-realm-core:d2b_realm_core",
+    ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
+)
+
+rust_test(
+    name = "d2b_unsafe_local_helper_test",
+    compile_data = ["Cargo.toml"],
+    crate = ":d2b_unsafe_local_helper",
+    tags = ["no-remote-cache"],
+    data = [":d2b-unsafe-local-helper"],
+    env = {"CARGO_BIN_EXE_d2b-unsafe-local-helper": "$(rootpath :d2b-unsafe-local-helper)"},
+    rustc_env = {"CARGO_BIN_EXE_d2b-unsafe-local-helper": "$(rootpath :d2b-unsafe-local-helper)"},
+    deps = [
+    ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
+)
+
+# keep
+filegroup(
+    name = "cargo_workspace_sources",
+    srcs = glob(
+        [
+            "Cargo.lock",
+            "Cargo.toml",
+            "benches/**/*.rs",
+            "build.rs",
+            "examples/**/*.rs",
+            "src/**/*.rs",
+            "tests/**/*.rs",
+        ],
+        allow_empty = True,
+    ),
+    visibility = ["//visibility:public"],
+)

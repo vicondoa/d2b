@@ -67,6 +67,6 @@ closed enumerations only.
 ## Build and test
 
 ```bash
-cd packages && cargo test -p d2b-provider-system-minijail
-cd packages && cargo clippy -p d2b-provider-system-minijail --all-targets
+cargo test -p d2b-provider-system-minijail
+cargo clippy -p d2b-provider-system-minijail --all-targets
 ```

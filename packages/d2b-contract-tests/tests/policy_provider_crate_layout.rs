@@ -202,7 +202,19 @@ fn cargo_workspace_members(root: &Path) -> Result<Vec<WorkspaceMember>, String> 
 }
 
 fn cargo_metadata(root: &Path) -> Result<CargoMetadata, String> {
-    let output = Command::new("cargo")
+    let cargo = std::env::var_os("CARGO")
+        .map(PathBuf::from)
+        .map(|path| {
+            if path.is_absolute() {
+                path
+            } else if let Some(runfiles) = std::env::var_os("RUNFILES_DIR") {
+                PathBuf::from(runfiles).join(path)
+            } else {
+                repo_root().join(path)
+            }
+        })
+        .unwrap_or_else(|| "cargo".into());
+    let output = Command::new(cargo)
         .current_dir(root)
         .args([
             "metadata",
@@ -211,11 +223,14 @@ fn cargo_metadata(root: &Path) -> Result<CargoMetadata, String> {
             "1",
             "--manifest-path",
         ])
-        .arg(root.join("packages/Cargo.toml"))
+        .arg(root.join("Cargo.toml"))
         .output()
         .map_err(|_| "provider-crate-layout-metadata-unavailable".to_owned())?;
     if !output.status.success() {
-        return Err("provider-crate-layout-metadata-failed".to_owned());
+        return Err(format!(
+            "provider-crate-layout-metadata-failed: {}",
+            String::from_utf8_lossy(&output.stderr).trim()
+        ));
     }
     serde_json::from_slice(&output.stdout)
         .map_err(|_| "provider-crate-layout-metadata-malformed".to_owned())
@@ -300,11 +315,21 @@ fn diagnostic_name(name: &str) -> String {
 
 fn is_provider_directory(root: &Path, crate_dir: &Path, package_name: &str) -> bool {
     let packages_dir = root.join("packages");
-    crate_dir.parent() == Some(packages_dir.as_path())
-        && crate_dir
-            .file_name()
-            .and_then(|name| name.to_str())
-            .is_some_and(|name| name == package_name)
+    if crate_dir.file_name().and_then(|name| name.to_str()) != Some(package_name) {
+        return false;
+    }
+
+    let expected_dir = packages_dir.join(package_name);
+    if crate_dir == expected_dir {
+        return true;
+    }
+
+    expected_dir
+        .join("Cargo.toml")
+        .canonicalize()
+        .ok()
+        .and_then(|manifest| manifest.parent().map(Path::to_path_buf))
+        .is_some_and(|canonical_dir| canonical_dir == crate_dir)
 }
 
 fn inspect_crate(member: &WorkspaceMember) -> Result<Vec<Violation>, String> {

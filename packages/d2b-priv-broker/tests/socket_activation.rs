@@ -47,6 +47,24 @@ fn scratch_dir() -> TempDir {
     tempfile::tempdir().expect("tempdir")
 }
 
+fn scrub_shell_environment_path() -> PathBuf {
+    if let Some(path) = std::env::var_os("D2B_TEST_SCRUB_SHELL_ENVIRONMENT") {
+        return PathBuf::from(path);
+    }
+
+    let mut root = std::env::current_dir().expect("resolve current directory");
+    loop {
+        let candidate = root.join("tests/tools/scrub-shell-environment");
+        if candidate.is_file() {
+            return candidate;
+        }
+        if !root.pop() {
+            break;
+        }
+    }
+    panic!("tests/tools/scrub-shell-environment is not discoverable");
+}
+
 /// Create a bound, listening `AF_UNIX SOCK_SEQPACKET` socket at `path`.
 fn bind_seqpacket_listen(path: &std::path::Path) -> io::Result<OwnedFd> {
     let fd = socket(
@@ -125,8 +143,7 @@ fn broker_adopts_socket_activated_fd_and_serves_hello() {
          --bundle-path /nonexistent/bundle.json"
     );
 
-    let scrubber =
-        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../tests/tools/scrub-shell-environment");
+    let scrubber = scrub_shell_environment_path();
     let mut broker_proc = Command::new(scrubber)
         .args(["-c", &shell_cmd])
         .env("BROKER", &broker_bin_str)

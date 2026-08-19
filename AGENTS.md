@@ -135,6 +135,11 @@ settings or claim atomic base binding.
 
 ## Critical subsystem index
 
+`make check` invokes the single fixed Bazel Layer-1 graph. Locally eligible
+actions use BuildBuddy; CI runs the same graph with the local profile and no
+BuildBuddy credential. Make aliases remain public compatibility entry points,
+and standalone Cargo workflows remain available.
+
 The full invariants are in
 [`docs/contributing/critical-subsystems.md`](./docs/contributing/critical-subsystems.md).
 Read the relevant section before changing any of these:

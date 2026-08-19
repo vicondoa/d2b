@@ -29,8 +29,8 @@ ROOT=${ROOT:-$(cd "$HERE/../.." && pwd)}
 # source, and a future editor cannot "helpfully" retype a pattern as the
 # character it is looking for.
 DASHES=(
-  $'\u2010' $'\u2011' $'\u2012' $'\u2013' $'\u2014'
-  $'\u2015' $'\u2212' $'\uFE58' $'\uFF0D'
+  $'\xE2\x80\x90' $'\xE2\x80\x91' $'\xE2\x80\x92' $'\xE2\x80\x93' $'\xE2\x80\x94'
+  $'\xE2\x80\x95' $'\xE2\x88\x92' $'\xEF\xB9\x98' $'\xEF\xBC\x8D'
 )
 
 # These are the only repository-owned paths whose upstream agent payloads may
@@ -283,7 +283,7 @@ scan_dashes() {
         done
       }
   else
-    (cd "$root" && find . -name .git -prune -o -name target -prune -o -type f -print0) \
+    (cd "$root" && find . -name .git -prune -o -name target -prune -o \( -type f -o -type l \) -print0) \
       | { while IFS= read -r -d '' f; do files+=("${f#./}"); done; }
   fi
   enum_status=${PIPESTATUS[0]}
@@ -380,7 +380,7 @@ scan_process_markers() {
         done
       }
   else
-    (cd "$root" && find . -name .git -prune -o -name target -prune -o -type f -print0) \
+    (cd "$root" && find . -name .git -prune -o -name target -prune -o \( -type f -o -type l \) -print0) \
       | { while IFS= read -r -d '' f; do files+=("$f"); done; }
   fi
   enum_status=${PIPESTATUS[0]}

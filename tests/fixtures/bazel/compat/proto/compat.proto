@@ -1,0 +1,7 @@
+syntax = "proto3";
+
+package d2b.bazel.compat;
+
+message CompatMessage {
+  string value = 1;
+}

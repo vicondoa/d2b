@@ -1,0 +1,158 @@
+load("@crates//:defs.bzl", "all_crate_deps")
+load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test")
+
+
+exports_files(
+    ["BUILD.bazel"],
+    visibility = ["//visibility:public"],
+)
+
+exports_files(
+    ["proto/v3/credential.proto"],
+    visibility = ["//visibility:public"],
+)
+
+d2b_contracts_srcs = glob(["src/**/*.rs"], allow_empty = True)
+
+rust_library(
+    name = "d2b_contracts",
+    srcs = d2b_contracts_srcs,
+    compile_data = ["Cargo.toml"],
+    proc_macro_deps = [
+        "@crates//:async-trait",
+    ],
+    visibility = ["//visibility:public"],
+    deps = [
+        "//packages/d2b-core:d2b_core",
+        "//packages/d2b-realm-core:d2b_realm_core",
+    ] + all_crate_deps(normal = True, cargo_only = True),
+)
+
+rust_library(
+    name = "d2b_contracts_test_support",
+    srcs = d2b_contracts_srcs,
+    compile_data = ["Cargo.toml"],
+    crate_name = "d2b_contracts",
+    proc_macro_deps = [
+        "@crates//:async-trait",
+    ],
+    visibility = ["//visibility:public"],
+    deps = [
+        "//packages/d2b-core:d2b_core_test_support",
+        "//packages/d2b-realm-core:d2b_realm_core",
+    ] + all_crate_deps(normal = True, cargo_only = True),
+)
+
+rust_test(
+    name = "broker_network_prep",
+    srcs = ["tests/broker_network_prep.rs"],
+    compile_data = [
+        "//tests/fixtures:deny-unknown/host-valid.json",  # keep
+        "//:tests/golden/manifest_v04/baseline-vms.json",  # keep
+        "Cargo.toml",
+    ],
+    visibility = ["//visibility:public"],
+    deps = [
+        "//packages/d2b-core:d2b_core",
+    ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
+)
+
+rust_test(
+    name = "activation_nixos",
+    srcs = ["tests/activation_nixos.rs"],
+    compile_data = ["Cargo.toml"],
+    visibility = ["//visibility:public"],
+    deps = [
+        ":d2b_contracts",
+    ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
+)
+
+rust_test(
+    name = "generation_bundle",
+    srcs = ["tests/generation_bundle.rs"],
+    compile_data = ["Cargo.toml"],
+    visibility = ["//visibility:public"],
+    deps = [
+        ":d2b_contracts",
+    ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
+)
+
+rust_test(
+    name = "guest_proto_bindings",
+    srcs = ["tests/guest_proto_bindings.rs"],
+    compile_data = ["Cargo.toml"],
+    visibility = ["//visibility:public"],
+    deps = [
+        ":d2b_contracts",
+    ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
+)
+
+rust_test(
+    name = "resource_v3_protocol_vectors",
+    srcs = ["tests/resource_v3_protocol_vectors.rs"],
+    compile_data = [
+        "Cargo.toml",
+        "proto/d2b-resource-v3.proto",
+    ],
+    visibility = ["//visibility:public"],
+    deps = [
+        ":d2b_contracts",
+    ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
+)
+
+rust_test(
+    name = "usbip_effect_port",
+    srcs = ["tests/usbip_effect_port.rs"],
+    compile_data = ["Cargo.toml"],
+    visibility = ["//visibility:public"],
+    deps = [
+        ":d2b_contracts",
+    ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
+)
+
+rust_test(
+    name = "version_skew",
+    srcs = ["tests/version_skew.rs"],
+    compile_data = ["Cargo.toml"],
+    visibility = ["//visibility:public"],
+    deps = [
+        ":d2b_contracts",
+    ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
+)
+
+rust_test(
+    name = "virtiofs_export",
+    srcs = ["tests/virtiofs_export.rs"],
+    compile_data = ["Cargo.toml"],
+    visibility = ["//visibility:public"],
+    deps = [
+        ":d2b_contracts",
+    ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
+)
+
+rust_test(
+    name = "d2b_contracts_test",
+    compile_data = ["Cargo.toml"],
+    crate = ":d2b_contracts",
+    deps = [
+    ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
+)
+
+# keep
+filegroup(
+    name = "cargo_workspace_sources",
+    srcs = glob(
+        [
+            "Cargo.lock",
+            "Cargo.toml",
+            "benches/**/*.rs",
+            "build.rs",
+            "examples/**/*.rs",
+            "proto/**/*.proto",
+            "src/**/*.rs",
+            "tests/**/*.rs",
+        ],
+        allow_empty = True,
+    ),
+    visibility = ["//visibility:public"],
+)

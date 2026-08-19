@@ -1,0 +1,251 @@
+load("@crates//:defs.bzl", "all_crate_deps")
+load(
+    "@rules_rust//rust:defs.bzl",
+    "rust_binary",
+    "rust_test",
+)
+
+exports_files(
+    ["BUILD.bazel"],
+    visibility = ["//visibility:public"],
+)
+
+rust_binary(
+    name = "manifest_v04_check",
+    srcs = ["src/bin/manifest_v04_check.rs"],
+    compile_data = ["Cargo.toml"],
+    visibility = ["//visibility:public"],
+    deps = ["//packages/d2b-core:d2b_core"] + all_crate_deps(normal = True, cargo_only = True),
+)
+
+rust_binary(
+    name = "xtask",
+    srcs = glob(["src/**/*.rs"], allow_empty = True),
+    crate_root = "src/main.rs",
+    compile_data = [
+        "Cargo.toml",
+        "src/heavy_gate.rs",
+    ],
+    visibility = ["//visibility:public"],
+    deps = [
+        "//packages/d2b:d2b_lib",
+        "//packages/d2b-contracts:d2b_contracts",
+        "//packages/d2b-core:d2b_core",
+        "//packages/d2b-realm-core:d2b_realm_core",
+    ] + all_crate_deps(normal = True, cargo_only = True),
+)
+
+rust_test(
+    name = "bazel_compatibility",
+    timeout = "long",
+    srcs = ["tests/bazel_compatibility.rs"],
+    compile_data = ["Cargo.toml"],
+    data = [
+        "//bazel/checks/rust:repo_policy_sources",
+        "//tests/fixtures/gas-city/buildbuddy:BUILD.bazel",
+    ],
+    env_inherit = [
+        "BAZEL_SH",
+        "D2B_REPO_ROOT",
+        "PATH",
+        "D2B_BAZEL_BIN",
+        "D2B_BAZEL_TEST_PATH",
+    ],
+    tags = ["no-remote-cache"],
+    visibility = ["//visibility:public"],
+    deps = [] + all_crate_deps(normal_dev = True, cargo_only = True),
+)
+
+rust_test(
+    name = "buildbuddy_config",
+    srcs = ["tests/buildbuddy_config.rs"],
+    compile_data = ["Cargo.toml"],
+    data = [
+        ":xtask",
+        "//:BUILD.bazel",
+        "//:Cargo.toml",
+        "//:.bazelrc",
+        "//:.bazelrc.user.example",
+        "//:flake.nix",
+        "//bazel/platforms:BUILD.bazel",
+        "//bazel/remote:BUILD.bazel",
+        "//:docs/reference/bazel-buildbuddy.md",
+        "//:nix/bazel-worker-image.nix",
+        "//:tests/tools/bazel-check",
+        "//:tests/golden/bazel/cache-policy.json",
+    ],
+    env = {"CARGO_BIN_EXE_xtask": "$(rootpath :xtask)"},
+    env_inherit = ["D2B_REPO_ROOT", "PATH"],
+    rustc_env = {"CARGO_BIN_EXE_xtask": "$(rootpath :xtask)"},
+    tags = ["no-remote-cache"],
+    visibility = ["//visibility:public"],
+    deps = [] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
+)
+
+rust_test(
+    name = "bazel_evidence",
+    srcs = ["tests/bazel_evidence.rs"],
+    compile_data = ["Cargo.toml"],
+    data = [
+        ":xtask",
+        "//:BUILD.bazel",
+        "//:Cargo.toml",
+        "//:flake.nix",
+        "//:tests/golden/bazel/cache-policy.json",
+    ],
+    env = {"CARGO_BIN_EXE_xtask": "$(rootpath :xtask)"},
+    env_inherit = ["D2B_REPO_ROOT", "PATH"],
+    rustc_env = {"CARGO_BIN_EXE_xtask": "$(rootpath :xtask)"},
+    tags = ["no-remote-cache"],
+    visibility = ["//visibility:public"],
+    deps = [] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
+)
+
+rust_test(
+    name = "heavy_gate_reexec",
+    srcs = ["tests/heavy_gate_reexec.rs"],
+    compile_data = ["Cargo.toml"],
+    data = [
+        ":xtask",
+        "//bazel/checks/rust:repo_policy_sources",
+    ],
+    env = {"CARGO_BIN_EXE_xtask": "$(rootpath :xtask)"},
+    env_inherit = ["PATH"],
+    rustc_env = {"CARGO_BIN_EXE_xtask": "$(rootpath :xtask)"},
+    tags = ["no-remote-cache"],
+    visibility = ["//visibility:public"],
+    deps = [] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
+)
+
+rust_test(
+    name = "policy_ci",
+    srcs = ["tests/policy_ci.rs"],
+    compile_data = ["Cargo.toml"],
+    data = [
+        ":xtask",
+        "//bazel/checks/rust:repo_policy_sources",
+    ],
+    env = {"CARGO_BIN_EXE_xtask": "$(rootpath :xtask)"},
+    env_inherit = ["PATH"],
+    rustc_env = {"CARGO_BIN_EXE_xtask": "$(rootpath :xtask)"},
+    tags = ["no-remote-cache"],
+    visibility = ["//visibility:public"],
+)
+
+rust_test(
+    name = "policy_workspace",
+    srcs = ["tests/policy_workspace.rs"],
+    compile_data = ["Cargo.toml"],
+    data = [
+        ":xtask",
+        "//bazel/checks/rust:repo_policy_sources",
+    ],
+    env = {"CARGO_BIN_EXE_xtask": "$(rootpath :xtask)"},
+    env_inherit = ["PATH"],
+    rustc_env = {"CARGO_BIN_EXE_xtask": "$(rootpath :xtask)"},
+    tags = ["no-remote-cache"],
+    visibility = ["//visibility:public"],
+)
+
+rust_test(
+    name = "xtask_test",
+    compile_data = ["Cargo.toml"],
+    crate = ":xtask",
+    data = [
+        ":xtask",
+        "//:rust-toolchain.toml",
+        "//bazel/checks/rust:repo_policy_sources",
+        "@rules_rust//rust/toolchain:current_cargo_files",
+    ],
+    env = {
+        "CARGO": "$(rootpath @rules_rust//rust/toolchain:current_cargo_files)",
+        "CARGO_BIN_EXE_xtask": "$(rootpath :xtask)",
+    },
+    env_inherit = ["D2B_REPO_ROOT", "PATH"],
+    rustc_env = {"CARGO_BIN_EXE_xtask": "$(rootpath :xtask)"},
+    tags = [
+        "no-remote-cache",
+        "no-sandbox",
+    ],
+    deps = [] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
+)
+
+rust_test(
+    name = "runtime_ledger_test",
+    timeout = "short",
+    args = ["test_runtime_ledger::"],
+    compile_data = ["Cargo.toml"],
+    crate = ":xtask",
+    data = [
+        ":xtask",
+        "//:rust-toolchain.toml",
+        "//bazel/checks/rust:repo_policy_sources",
+        "@rules_rust//rust/toolchain:current_cargo_files",
+    ],
+    env = {
+        "CARGO": "$(rootpath @rules_rust//rust/toolchain:current_cargo_files)",
+        "CARGO_BIN_EXE_xtask": "$(rootpath :xtask)",
+    },
+    env_inherit = ["D2B_REPO_ROOT", "PATH"],
+    rustc_env = {"CARGO_BIN_EXE_xtask": "$(rootpath :xtask)"},
+    tags = ["no-remote-cache"],
+    deps = [] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
+)
+
+rust_test(
+    name = "schema_reproducibility_test",
+    args = ["schema_tests::"],
+    compile_data = ["Cargo.toml"],
+    crate = ":xtask",
+    data = [
+        ":xtask",
+        "//bazel/checks/rust:repo_policy_sources",
+    ],
+    env = {
+        "CARGO_BIN_EXE_xtask": "$(rootpath :xtask)",
+    },
+    env_inherit = ["D2B_REPO_ROOT", "PATH"],
+    rustc_env = {"CARGO_BIN_EXE_xtask": "$(rootpath :xtask)"},
+    tags = ["no-remote-cache"],
+    visibility = ["//visibility:public"],
+    deps = [] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
+)
+
+rust_test(
+    name = "workspace_lint",
+    srcs = ["tests/workspace_lint.rs"],
+    compile_data = ["Cargo.toml"],
+    data = [
+        "//:rust-toolchain.toml",
+        "//bazel/checks/rust:repo_policy_sources",
+        "@rules_rust//rust/toolchain:current_cargo_files",
+    ],
+    env = {
+        "CARGO": "$(rootpath @rules_rust//rust/toolchain:current_cargo_files)",
+    },
+    env_inherit = ["D2B_REPO_ROOT", "PATH"],
+    tags = [
+        "exclusive",
+        "no-remote-cache",
+        "no-sandbox",
+    ],
+    visibility = ["//visibility:public"],
+)
+
+# keep
+filegroup(
+    name = "cargo_workspace_sources",
+    srcs = glob(
+        [
+            "Cargo.lock",
+            "Cargo.toml",
+            "benches/**/*.rs",
+            "build.rs",
+            "examples/**/*.rs",
+            "src/**/*.rs",
+            "tests/**/*.rs",
+        ],
+        allow_empty = True,
+    ),
+    visibility = ["//visibility:public"],
+)

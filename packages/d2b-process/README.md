@@ -52,8 +52,8 @@ identity verification.
 ## Build and test
 
 ```bash
-cd packages && cargo test -p d2b-process
-cd packages && cargo clippy -p d2b-process --all-targets
+cargo test -p d2b-process
+cargo clippy -p d2b-process --all-targets
 ```
 
 Real broker, systemd, cgroup, and process-lifecycle scenarios belong to the

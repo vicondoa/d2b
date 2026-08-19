@@ -1,0 +1,91 @@
+load("@crates//:defs.bzl", "all_crate_deps")
+load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test")
+
+
+exports_files(
+    [
+        "BUILD.bazel",
+        "Cargo.toml",
+        "tests/external_seals.rs",
+    ],
+    visibility = ["//visibility:public"],
+)
+
+exports_files(
+    [
+        "src/admission.rs",
+        "src/authz.rs",
+        "src/service.rs",
+    ],
+    visibility = ["//visibility:public"],
+)
+
+d2b_resource_api_srcs = glob(["src/**/*.rs"], allow_empty = True)
+
+rust_library(
+    name = "d2b_resource_api",
+    srcs = d2b_resource_api_srcs,
+    compile_data = [
+        "Cargo.toml",
+        "src/watch.rs",
+    ],
+    proc_macro_deps = [
+        "@crates//:async-trait",
+    ],
+    visibility = ["//visibility:public"],
+    deps = [
+        "//packages/d2b-contracts:d2b_contracts",
+        "//packages/d2b-core-controller:d2b_core_controller",
+        "//packages/d2b-resource-store:d2b_resource_store",
+        "//packages/d2b-resource-store-redb:d2b_resource_store_redb",
+        "//packages/d2b-telemetry:d2b_telemetry",
+    ] + all_crate_deps(normal = True, cargo_only = True),
+)
+
+rust_library(
+    name = "d2b_resource_api_test_support",
+    srcs = d2b_resource_api_srcs,
+    compile_data = [
+        "Cargo.toml",
+        "src/watch.rs",
+    ],
+    crate_name = "d2b_resource_api",
+    proc_macro_deps = [
+        "@crates//:async-trait",
+    ],
+    visibility = ["//visibility:public"],
+    deps = [
+        "//packages/d2b-contracts:d2b_contracts_test_support",
+        "//packages/d2b-core-controller:d2b_core_controller_test_support",
+        "//packages/d2b-resource-store:d2b_resource_store_test_support",
+        "//packages/d2b-resource-store-redb:d2b_resource_store_redb_test_support",
+        "//packages/d2b-telemetry:d2b_telemetry_test_support",
+    ] + all_crate_deps(normal = True, cargo_only = True),
+)
+
+rust_test(
+    name = "d2b_resource_api_test",
+    compile_data = ["Cargo.toml"],
+    crate = ":d2b_resource_api",
+    deps = [
+        "//packages/d2b-resource-store:d2b_resource_store",
+    ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
+)
+
+# keep
+filegroup(
+    name = "cargo_workspace_sources",
+    srcs = glob(
+        [
+            "Cargo.lock",
+            "Cargo.toml",
+            "benches/**/*.rs",
+            "build.rs",
+            "examples/**/*.rs",
+            "src/**/*.rs",
+            "tests/**/*.rs",
+        ],
+        allow_empty = True,
+    ),
+    visibility = ["//visibility:public"],
+)

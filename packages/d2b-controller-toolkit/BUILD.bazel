@@ -1,0 +1,103 @@
+load("@crates//:defs.bzl", "all_crate_deps")
+load("@rules_rust//rust:defs.bzl", "rust_binary", "rust_library", "rust_test")
+
+exports_files(
+    ["BUILD.bazel", "Cargo.toml", "tests/external_seals.rs"],
+    visibility = ["//visibility:public"],
+)
+
+# keep
+
+d2b_controller_toolkit_srcs = glob(["src/**/*.rs"], allow_empty = True)
+
+rust_library(
+    name = "d2b_controller_toolkit",
+    srcs = d2b_controller_toolkit_srcs,
+    compile_data = ["Cargo.toml"],
+    visibility = ["//visibility:public"],
+    deps = [
+        "//packages/d2b-contracts:d2b_contracts",
+    ] + all_crate_deps(normal = True, cargo_only = True),
+)
+
+rust_library(
+    name = "d2b_controller_toolkit_test_support",
+    srcs = d2b_controller_toolkit_srcs,
+    compile_data = ["Cargo.toml"],
+    crate_name = "d2b_controller_toolkit",
+    visibility = ["//visibility:public"],
+    deps = [
+        "//packages/d2b-contracts:d2b_contracts_test_support",
+    ] + all_crate_deps(normal = True, cargo_only = True),
+)
+
+rust_test(
+    name = "production_watch",
+    srcs = [
+        "tests/production_watch.rs",
+        "tests/support/mod.rs",
+    ],
+    compile_data = ["Cargo.toml"],
+    crate_root = "tests/production_watch.rs",
+    visibility = ["//visibility:public"],
+    deps = [
+        ":d2b_controller_toolkit",
+        "//packages/d2b-contracts:d2b_contracts",
+        "//packages/d2b-resource-api:d2b_resource_api",
+        "//packages/d2b-resource-store:d2b_resource_store",
+        "//packages/d2b-resource-store-redb:d2b_resource_store_redb",
+    ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
+)
+
+rust_test(
+    name = "reaction",
+    srcs = [
+        "benches/reaction.rs",
+        "benches/support/reaction.rs",
+    ],
+    compile_data = ["Cargo.toml"],
+    tags = ["bench", "manual"],
+    visibility = ["//visibility:public"],
+    deps = [
+        ":d2b_controller_toolkit",
+        "//packages/d2b-bus:d2b_bus_production_rss_fixture",
+        "//packages/d2b-contracts:d2b_contracts",
+        "//packages/d2b-process:d2b_process",
+        "//packages/d2b-process-conformance:d2b_process_conformance",
+        "//packages/d2b-provider-supervisor:d2b_provider_supervisor",
+        "//packages/d2b-provider-system-minijail:d2b_provider_system_minijail",
+        "//packages/d2b-resource-api:d2b_resource_api",
+        "//packages/d2b-resource-store:d2b_resource_store",
+        "//packages/d2b-resource-store-redb:d2b_resource_store_redb",
+    ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
+)
+
+rust_test(
+    name = "d2b_controller_toolkit_test",
+    compile_data = ["Cargo.toml"],
+    crate = ":d2b_controller_toolkit",
+    deps = [] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
+)
+
+rust_test(
+    name = "reaction_test",
+    compile_data = ["Cargo.toml"],
+    crate = ":reaction",
+    tags = ["manual"],
+)
+# keep
+filegroup(
+    name = "cargo_workspace_sources",
+    srcs = glob([
+        "Cargo.lock",
+        "Cargo.toml",
+        "benches/**/*.rs",
+        "build.rs",
+        "examples/**/*.rs",
+        "src/**/*.rs",
+        "tests/**/*.rs",
+    ],
+        allow_empty = True,
+    ),
+    visibility = ["//visibility:public"],
+)

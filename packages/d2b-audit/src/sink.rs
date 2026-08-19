@@ -449,6 +449,14 @@ mod tests {
         segment::{FailureInjector, FailurePoint},
     };
 
+    fn writable_manifest_dir() -> std::path::PathBuf {
+        std::env::var_os("TEST_TMPDIR")
+            .map(std::path::PathBuf::from)
+            .or_else(|| std::env::var_os("CARGO_MANIFEST_DIR").map(std::path::PathBuf::from))
+            .or_else(|| std::env::current_dir().ok())
+            .expect("resolve test writable directory")
+    }
+
     fn sample(previous_hash: crate::AuditHash) -> AuditRecord {
         AuditRecord::new(
             1,
@@ -476,7 +484,7 @@ mod tests {
 
     #[test]
     fn privileged_writes_are_not_rate_limited() {
-        let directory = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        let directory = writable_manifest_dir()
             .join("target")
             .join(format!("d2b-audit-sink-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&directory);
@@ -495,12 +503,10 @@ mod tests {
 
     #[test]
     fn sink_serializes_each_append_once() {
-        let directory = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .join("target")
-            .join(format!(
-                "d2b-audit-sink-serialization-{}",
-                std::process::id()
-            ));
+        let directory = writable_manifest_dir().join("target").join(format!(
+            "d2b-audit-sink-serialization-{}",
+            std::process::id()
+        ));
         let _ = std::fs::remove_dir_all(&directory);
         let sink = AuditSink::open_with_limits(&directory, 1024, 30, 8).unwrap();
         let record = sample(genesis_hash());
@@ -520,7 +526,7 @@ mod tests {
 
     #[test]
     fn sink_rejects_an_invalid_predecessor_chain() {
-        let directory = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        let directory = writable_manifest_dir()
             .join("target")
             .join(format!("d2b-audit-chain-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&directory);
@@ -545,12 +551,10 @@ mod tests {
             FailurePoint::DataSync,
             FailurePoint::ParentSync,
         ] {
-            let directory = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-                .join("target")
-                .join(format!(
-                    "d2b-audit-sink-fault-{point:?}-{}",
-                    std::process::id()
-                ));
+            let directory = writable_manifest_dir().join("target").join(format!(
+                "d2b-audit-sink-fault-{point:?}-{}",
+                std::process::id()
+            ));
             let _ = std::fs::remove_dir_all(&directory);
             let injector = FailureInjector::default();
             injector.fail_next(point);
@@ -567,12 +571,10 @@ mod tests {
 
     #[test]
     fn startup_retention_rebuilds_chain_head_from_retained_segments() {
-        let directory = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .join("target")
-            .join(format!(
-                "d2b-audit-startup-retention-{}",
-                std::process::id()
-            ));
+        let directory = writable_manifest_dir().join("target").join(format!(
+            "d2b-audit-startup-retention-{}",
+            std::process::id()
+        ));
         let _ = std::fs::remove_dir_all(&directory);
         let record = sample(genesis_hash());
         {
@@ -587,7 +589,7 @@ mod tests {
     #[test]
     fn post_write_failure_rolls_back_chain_and_allows_retry() {
         for point in [FailurePoint::DataSync, FailurePoint::ParentSync] {
-            let directory = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            let directory = writable_manifest_dir()
                 .join("target")
                 .join(format!("d2b-audit-retry-{point:?}-{}", std::process::id()));
             let _ = std::fs::remove_dir_all(&directory);
@@ -610,12 +612,10 @@ mod tests {
 
     #[test]
     fn durable_append_is_success_even_when_automatic_retention_degrades() {
-        let directory = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .join("target")
-            .join(format!(
-                "d2b-audit-retention-success-{}",
-                std::process::id()
-            ));
+        let directory = writable_manifest_dir().join("target").join(format!(
+            "d2b-audit-retention-success-{}",
+            std::process::id()
+        ));
         let _ = std::fs::remove_dir_all(&directory);
         let injector = FailureInjector::default();
         let sink = AuditSink::open_with_injector(&directory, 1, 1, 8, injector.clone()).unwrap();
@@ -647,7 +647,7 @@ mod tests {
 
     #[test]
     fn restart_refuses_a_corrupt_hash_chain() {
-        let directory = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        let directory = writable_manifest_dir()
             .join("target")
             .join(format!("d2b-audit-corrupt-chain-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&directory);
@@ -685,7 +685,7 @@ mod tests {
 
     #[test]
     fn replay_after_append_before_clear_is_idempotent() {
-        let directory = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        let directory = writable_manifest_dir()
             .join("target")
             .join(format!("d2b-audit-idempotent-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&directory);
@@ -740,7 +740,7 @@ mod tests {
 
     #[test]
     fn sink_uses_one_lifetime_writer_lock_per_directory() {
-        let directory = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        let directory = writable_manifest_dir()
             .join("target")
             .join(format!("d2b-audit-single-writer-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&directory);

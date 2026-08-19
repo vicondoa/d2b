@@ -841,10 +841,8 @@ Tasks:
 Primary targets:
 
 - `Makefile`;
-- `tests/test-lint.sh`;
-- `tests/static-fast-tier0.sh`;
-- `tests/test-rust.sh`;
-- `tests/test-drift.sh`;
+- `bazel/checks/`;
+- `tests/tools/bazel-check`;
 - `tests/unit/gates/drift-check.sh`;
 - `tests/unit/meta/*`;
 - `packages/d2b-contract-tests/tests/*`;

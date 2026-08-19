@@ -1,0 +1,277 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../.." && pwd)"
+PROFILE=""
+SCRATCH="${D2B_BAZEL_CHECK_SCRATCH:-$ROOT/.scratch/bazel-check}"
+TARGETS=()
+REDACTION_FAILURE_STATUS=75
+CONFIGURATION_FAILURE_STATUS=76
+
+xtask() {
+  if [ -n "${D2B_XTASK_BIN:-}" ] && [ -x "${D2B_XTASK_BIN}" ]; then
+    D2B_REPO_ROOT="$ROOT" "$D2B_XTASK_BIN" "$@"
+  else
+    D2B_REPO_ROOT="$ROOT" \
+      cargo run --quiet --locked --manifest-path "$ROOT/Cargo.toml" -p xtask -- "$@"
+  fi
+}
+
+redact_file() {
+  local path="$1"
+  [ -f "$path" ] || return 0
+  xtask bazel-evidence redact-log --input "$path" --output "$path" >/dev/null
+}
+
+credential_file() {
+  printf '%s\n' "${D2B_BUILDBUDDY_CREDENTIAL_FILE:-${HOME:-}/.config/d2b/buildbuddy-api-key}"
+}
+
+trusted_context() {
+  [ "${D2B_BAZEL_TRUSTED:-0}" = 1 ] &&
+    [ "${GITHUB_REF:-}" = "refs/heads/v3" ] &&
+    xtask bazel-evidence check-security >/dev/null
+}
+
+credential_helper() {
+  local request token path
+  request="$(cat)"
+  if [[ "$request" != *'"uri"'* ]]; then
+    printf '%s\n' '{"headers":{}}'
+    return 0
+  fi
+  if [ "${D2B_BAZEL_UNTRUSTED:-0}" = 1 ] ||
+    { [ "${GITHUB_ACTIONS:-false}" = true ] && ! trusted_context; }; then
+    printf '%s\n' '{"headers":{}}'
+    return 0
+  fi
+
+  if [ "${D2B_BAZEL_PROFILE:-}" = trusted-seed ]; then
+    trusted_context || {
+      printf '%s\n' '{"headers":{}}'
+      return 0
+    }
+  fi
+
+  path="$(credential_file)"
+  if [ ! -r "$path" ] || [ ! -s "$path" ]; then
+    printf '%s\n' '{"headers":{}}'
+    return 0
+  fi
+  token="$(cat "$path")"
+  case "$token" in
+    *$'\n'*|*$'\r'*|'') printf '%s\n' '{"headers":{}}'; return 0 ;;
+  esac
+
+  # The value is carried on stdin to jq, never in an argument or diagnostic.
+  printf '%s' "$token" |
+    jq -Rs '{headers: {"x-buildbuddy-api-key": [rtrimstr("\n")]}}'
+}
+
+if [ "$#" -ge 1 ] && [ "$1" = get ]; then
+  [ "$#" -eq 1 ] || {
+    echo "credential helper get does not accept extra arguments" >&2
+    exit 2
+  }
+  credential_helper
+  exit $?
+fi
+
+if [ "$#" -eq 0 ]; then
+  request="$(cat)"
+  if [[ "$request" == *'"uri"'* ]]; then
+    printf '%s' "$request" | credential_helper
+    exit $?
+  fi
+  echo "usage: tests/tools/bazel-check --profile <local|remote|trusted-seed> -- <fixed Bazel target patterns...>" >&2
+  exit 2
+fi
+
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+    --profile|--config)
+      [ "$#" -ge 2 ] || { echo "$1 requires a value" >&2; exit 2; }
+      PROFILE="$2"
+      shift 2
+      ;;
+    --profile=*|--config=*)
+      PROFILE="${1#*=}"
+      shift
+      ;;
+    --)
+      shift
+      TARGETS=("$@")
+      set --
+      break
+      ;;
+    *)
+      echo "unknown option $1" >&2
+      exit 2
+      ;;
+  esac
+done
+
+if [ "${#TARGETS[@]}" -eq 0 ]; then
+  echo "at least one fixed Bazel target pattern or label is required after --" >&2
+  exit 2
+fi
+
+case "$PROFILE" in
+  local|remote|trusted-seed) ;;
+  *)
+    echo "profile must be local, remote, or trusted-seed" >&2
+    exit 2
+    ;;
+esac
+
+if [ "$PROFILE" = trusted-seed ]; then
+  if ! trusted_context; then
+    echo "trusted BuildBuddy credential withheld: protected v3 and security digest are required"
+    PROFILE=local
+  fi
+elif [ "${D2B_BAZEL_UNTRUSTED:-0}" = 1 ] ||
+  { [ "${GITHUB_ACTIONS:-false}" = true ] && ! trusted_context; }; then
+  echo "BuildBuddy credential withheld for an untrusted job; retrying locally"
+  PROFILE=local
+elif [ ! -r "$(credential_file)" ] || [ ! -s "$(credential_file)" ]; then
+  echo "BuildBuddy credential unavailable; retrying locally"
+  PROFILE=local
+fi
+
+mkdir -p "$SCRATCH"
+bazel_bin="${D2B_BAZEL_BIN:-}"
+if [ -z "$bazel_bin" ]; then
+  if [ -x /nix/store/8jx5b7y9wbx72scyjdv9mvra8qwmjxz9-bazel-9.2.0/bin/bazel ]; then
+    bazel_bin=/nix/store/8jx5b7y9wbx72scyjdv9mvra8qwmjxz9-bazel-9.2.0/bin/bazel
+  else
+    bazel_bin=bazel
+  fi
+fi
+export D2B_BAZEL_BIN="$bazel_bin"
+export D2B_REPO_ROOT="$ROOT"
+export ROOT
+JOB="${D2B_BAZEL_JOB:-check}"
+log="$SCRATCH/$PROFILE.$JOB.log"
+bep="$SCRATCH/$PROFILE.$JOB.bep.json"
+
+bep_has_test_result() {
+  local path="$1"
+  [ -s "$path" ] &&
+    jq -e -s 'any(.[]; .testResult != null)' "$path" >/dev/null 2>&1
+}
+
+run_bazel() {
+  local profile="$1"
+  local log_path="$2"
+  local bep_path="$3"
+  local -a startup_flags=()
+  shift 3
+  if [ "${D2B_BAZEL_FALLBACK_ISOLATE_RC:-0}" = 1 ]; then
+    [ ! -e "$ROOT/.bazelrc.user" ] || {
+      echo "local fallback rejects an external workspace Bazel rc" >&2
+      return "$CONFIGURATION_FAILURE_STATUS"
+    }
+    startup_flags=(--nosystem_rc --nohome_rc)
+  fi
+  set +e
+  local tag_filters="${D2B_BAZEL_TEST_TAG_FILTERS:--manual,-gpu,-kvm}"
+  local -a command_flags=()
+  local test_bazel_sh="${BAZEL_SH:-/bin/bash}"
+  local test_path="${D2B_BAZEL_TEST_PATH:-$PATH}"
+  if [ "$profile" != local ]; then
+    command_flags+=(--shell_executable=/bin/bash)
+    test_bazel_sh=/bin/bash
+    test_path="/run/current-system/sw/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:$test_path"
+  fi
+  D2B_BAZEL_PROFILE="$profile" "$bazel_bin" "${startup_flags[@]}" test "--config=$profile" \
+    "${command_flags[@]}" \
+    --repo_contents_cache= "--build_event_json_file=$bep_path" \
+    --build_tests_only \
+    --test_output=errors \
+    --test_tag_filters="$tag_filters" \
+    --test_env=D2B_REPO_ROOT="$ROOT" \
+    --test_env=D2B_BAZEL_BIN="$bazel_bin" \
+    --test_env=PATH="$test_path" \
+    --test_env=BAZEL_SH="$test_bazel_sh" \
+    "$@" \
+    -- "${TARGETS[@]}" \
+    >"$log_path" 2>&1
+  local status=$?
+  set -e
+  if [ "$status" -eq 0 ] && ! bep_has_test_result "$bep_path"; then
+    echo "bazel-check: successful Bazel invocation emitted no testResult event" >&2
+    status=1
+  fi
+  if ! redact_file "$log_path" || ! redact_file "$bep_path"; then
+    echo "bazel-check: evidence redaction failed; refusing to publish the run" >&2
+    emit_captured_metadata "$log_path" "bazel $profile log"
+    emit_captured_metadata "$bep_path" "bazel $profile BEP"
+    return "$REDACTION_FAILURE_STATUS"
+  fi
+  return "$status"
+}
+
+emit_captured_metadata() {
+  local path="$1"
+  local label="$2"
+  if [ -f "$path" ]; then
+    printf 'bazel-check: %s retained but suppressed (%s)\n' "$label" "$path" >&2
+  else
+    printf '%s\n' "bazel-check: ${label} is missing (${path})" >&2
+  fi
+}
+
+emit_captured_output() {
+  local path="$1"
+  local label="$2"
+  if [ -s "$path" ]; then
+    printf '%s\n' "----- ${label} (${path}) -----" >&2
+    cat "$path" >&2
+    printf '%s\n' "----- end ${label} -----" >&2
+  else
+    printf '%s\n' "bazel-check: ${label} is empty or missing (${path})" >&2
+  fi
+}
+
+initial_status=0
+run_bazel "$PROFILE" "$log" "$bep" "$@" || initial_status=$?
+if [ "$initial_status" -eq 0 ]; then
+  printf '%s\n' "bazel-check: $PROFILE passed"
+  exit 0
+fi
+if [ "$initial_status" -eq "$REDACTION_FAILURE_STATUS" ] ||
+  [ "$initial_status" -eq "$CONFIGURATION_FAILURE_STATUS" ]; then
+  exit "$initial_status"
+fi
+
+if [ "$PROFILE" != local ]; then
+  classification_args=(bazel-evidence classify-failure --log "$log")
+  classification="$(xtask "${classification_args[@]}")"
+  if printf '%s' "$classification" | jq -e '.retryLocally == true' >/dev/null; then
+    local_log="$SCRATCH/local.$JOB.log"
+    local_bep="$SCRATCH/local.$JOB.bep.json"
+    echo "BuildBuddy failed; retrying the identical target set locally"
+    local_status=0
+    D2B_BAZEL_FALLBACK_ISOLATE_RC=1 \
+      run_bazel local "$local_log" "$local_bep" "$@" || local_status=$?
+    if [ "$local_status" -eq 0 ]; then
+      printf '%s\n' "bazel-check: local fallback passed"
+      exit 0
+    fi
+    if [ "$local_status" -eq "$REDACTION_FAILURE_STATUS" ] ||
+      [ "$local_status" -eq "$CONFIGURATION_FAILURE_STATUS" ]; then
+      exit "$local_status"
+    fi
+    printf '%s\n' "bazel-check: local fallback failed"
+    emit_captured_output "$local_log" "bazel local fallback log"
+    exit 1
+  fi
+  printf '%s\n' "$classification"
+  printf '%s\n' "bazel-check: remote failure after dispatch or non-infrastructure failure; refusing local retry" >&2
+  emit_captured_output "$log" "bazel $PROFILE log"
+  exit 1
+fi
+
+printf '%s\n' "bazel-check: local execution failed" >&2
+emit_captured_output "$log" "bazel local log"
+exit 1

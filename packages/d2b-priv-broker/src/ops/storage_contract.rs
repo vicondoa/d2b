@@ -603,9 +603,7 @@ mod tests {
     }
 
     fn project_scratch(name: &str) -> ScratchDir {
-        let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .join("target")
-            .join("storage-contract-test-scratch");
+        let root = crate::test_scratch_root().join("storage-contract-test-scratch");
         std::fs::create_dir_all(&root).unwrap();
         let dir = root.join(format!(
             "{}-{}",

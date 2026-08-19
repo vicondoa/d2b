@@ -1,0 +1,76 @@
+load("@crates//:defs.bzl", "all_crate_deps")
+load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test")
+
+
+exports_files(
+    ["BUILD.bazel"],
+    visibility = ["//visibility:public"],
+)
+
+exports_files(
+    [
+        "Cargo.toml",
+        "src/lib.rs",
+        "src/mutation_seal.rs",
+    ],
+    visibility = ["//visibility:public"],
+)
+
+d2b_resource_store_srcs = glob(["src/**/*.rs"], allow_empty = True)
+
+rust_library(
+    name = "d2b_resource_store",
+    srcs = d2b_resource_store_srcs,
+    compile_data = ["Cargo.toml"],
+    visibility = ["//visibility:public"],
+    deps = ["//packages/d2b-contracts:d2b_contracts"] + all_crate_deps(normal = True, cargo_only = True),
+)
+
+rust_library(
+    name = "d2b_resource_store_test_support",
+    srcs = d2b_resource_store_srcs,
+    compile_data = ["Cargo.toml"],
+    crate_name = "d2b_resource_store",
+    visibility = ["//visibility:public"],
+    deps = ["//packages/d2b-contracts:d2b_contracts_test_support"] + all_crate_deps(normal = True, cargo_only = True),
+)
+
+rust_test(
+    name = "d106_policy",
+    srcs = ["tests/d106_policy.rs"],
+    compile_data = [
+        "//packages/d2b-resource-api:src/admission.rs",  # keep
+        "//packages/d2b-resource-api:src/authz.rs",  # keep
+        "//packages/d2b-resource-api:src/service.rs",  # keep
+        "//packages/d2b-resource-store-redb:Cargo.toml",  # keep
+        "//packages/d2b-resource-store-redb:src/lib.rs",  # keep
+        "//packages/d2b-resource-store-redb:src/ownership.rs",  # keep
+        "Cargo.toml",
+        "src/lib.rs",
+    ],
+    visibility = ["//visibility:public"],
+)
+
+rust_test(
+    name = "d2b_resource_store_test",
+    compile_data = ["Cargo.toml"],
+    crate = ":d2b_resource_store",
+)
+
+# keep
+filegroup(
+    name = "cargo_workspace_sources",
+    srcs = glob(
+        [
+            "Cargo.lock",
+            "Cargo.toml",
+            "benches/**/*.rs",
+            "build.rs",
+            "examples/**/*.rs",
+            "src/**/*.rs",
+            "tests/**/*.rs",
+        ],
+        allow_empty = True,
+    ),
+    visibility = ["//visibility:public"],
+)

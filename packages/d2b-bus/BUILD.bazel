@@ -1,0 +1,142 @@
+load("@crates//:defs.bzl", "all_crate_deps")
+load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test")
+
+exports_files(
+    ["BUILD.bazel"],
+    visibility = ["//visibility:public"],
+)
+
+filegroup(
+    name = "cargo_workspace_sources",
+    srcs = glob(
+        [
+            "Cargo.lock",
+            "Cargo.toml",
+            "benches/**/*.rs",
+            "build.rs",
+            "examples/**/*.rs",
+            "src/**/*.rs",
+            "tests/**/*.rs",
+            "tests/**/*.txt",
+        ],
+        allow_empty = True,
+    ),
+    visibility = ["//visibility:public"],
+)
+
+d2b_bus_srcs = glob(["src/**/*.rs"], allow_empty = True)
+
+d2b_bus_deps = [
+    "//packages/d2b-audit:d2b_audit",
+    "//packages/d2b-contracts:d2b_contracts",
+    "//packages/d2b-resource-api:d2b_resource_api",
+    "//packages/d2b-resource-store:d2b_resource_store",
+    "//packages/d2b-session:d2b_session",
+    "//packages/d2b-session-unix:d2b_session_unix",
+    "//packages/d2b-telemetry:d2b_telemetry",
+]
+
+# keep
+rust_library(
+    name = "d2b_bus",
+    srcs = d2b_bus_srcs,
+    compile_data = [
+        "Cargo.toml",
+        "src/transport/unix.rs",
+    ],
+    proc_macro_deps = [
+        "@crates//:async-trait",
+    ],
+    visibility = ["//visibility:public"],
+    deps = d2b_bus_deps + all_crate_deps(normal = True, cargo_only = True),
+)
+
+rust_library(
+    name = "d2b_bus_test_support",
+    srcs = d2b_bus_srcs,
+    compile_data = [
+        "Cargo.toml",
+        "src/transport/unix.rs",
+    ],
+    crate_name = "d2b_bus",
+    proc_macro_deps = [
+        "@crates//:async-trait",
+    ],
+    visibility = ["//visibility:public"],
+    deps = [
+        "//packages/d2b-audit:d2b_audit_test_support",
+        "//packages/d2b-contracts:d2b_contracts_test_support",
+        "//packages/d2b-resource-api:d2b_resource_api_test_support",
+        "//packages/d2b-resource-store:d2b_resource_store_test_support",
+        "//packages/d2b-session:d2b_session_test_support",
+        "//packages/d2b-session-unix:d2b_session_unix_test_support",
+        "//packages/d2b-telemetry:d2b_telemetry_test_support",
+    ] + all_crate_deps(normal = True, cargo_only = True),
+)
+
+rust_library(
+    name = "d2b_bus_production_rss_fixture",
+    srcs = d2b_bus_srcs,
+    compile_data = [
+        "Cargo.toml",
+        "src/transport/unix.rs",
+    ],
+    crate_features = ["production-rss-fixture"],
+    crate_name = "d2b_bus",
+    proc_macro_deps = [
+        "@crates//:async-trait",
+    ],
+    visibility = ["//visibility:public"],
+    deps = d2b_bus_deps + all_crate_deps(normal = True, cargo_only = True),
+)
+
+rust_test(
+    name = "production_watch_rss",
+    srcs = ["tests/production_watch_rss.rs"],
+    compile_data = ["Cargo.toml"],
+    crate_features = ["production-rss-fixture"],
+    visibility = ["//visibility:public"],
+    deps = [
+        ":d2b_bus_production_rss_fixture",
+        "//packages/d2b-contracts:d2b_contracts",
+        "//packages/d2b-controller-toolkit:d2b_controller_toolkit",
+        "//packages/d2b-resource-api:d2b_resource_api",
+        "//packages/d2b-resource-store:d2b_resource_store",
+        "//packages/d2b-resource-store-redb:d2b_resource_store_redb",
+    ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
+)
+
+rust_test(
+    name = "public_mint_surface",
+    srcs = ["tests/public_mint_surface.rs"],
+    compile_data = [
+        "Cargo.toml",
+        "tests/approved-capability-api.txt",
+        "tests/approved-capability-trait-impls.txt",
+        "tests/approved-hidden-public-api.txt",
+        "tests/approved-public-api.txt",
+        "tests/public_mint_surface.rs",
+    ],
+    data = ["//bazel/checks/rust:cargo_workspace_sources"],
+    tags = ["no-remote-cache"],
+    visibility = ["//visibility:public"],
+    deps = [
+    ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
+)
+
+rust_test(
+    name = "d2b_bus_test",
+    compile_data = ["Cargo.toml"],
+    crate = ":d2b_bus",
+    proc_macro_deps = [
+        "@crates//:async-trait",
+    ],
+    deps = [
+        "//packages/d2b-audit:d2b_audit",
+        "//packages/d2b-contracts:d2b_contracts",
+        "//packages/d2b-controller-toolkit:d2b_controller_toolkit",
+        "//packages/d2b-resource-store:d2b_resource_store",
+        "//packages/d2b-resource-store-redb:d2b_resource_store_redb",
+        "//packages/d2b-telemetry:d2b_telemetry",
+    ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
+)

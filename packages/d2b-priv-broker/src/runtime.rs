@@ -11751,10 +11751,7 @@ mod tests {
     }
 
     fn test_audit_dir(test_name: &str) -> PathBuf {
-        let base = std::env::var_os("CARGO_TARGET_TMPDIR")
-            .map(PathBuf::from)
-            .unwrap_or_else(|| PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("target"));
-        let root = base.join("runtime-audit-tests");
+        let root = crate::test_scratch_root().join("runtime-audit-tests");
         crate::sys::path_safe::ensure_dir(&root, 0o750, None, None)
             .expect("create audit test root");
         let unique = SystemTime::now()
@@ -12536,10 +12533,7 @@ mod tests {
 
     #[cfg(not(feature = "layer1-bootstrap"))]
     fn prepare_test_usb_sysfs_device(vendor: &str, product: &str, devpath: &str) -> PathBuf {
-        let base = std::env::var_os("CARGO_TARGET_TMPDIR")
-            .map(PathBuf::from)
-            .unwrap_or_else(|| PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("target"));
-        let root = base.join("runtime-usb-sysfs-root");
+        let root = crate::test_scratch_root().join("runtime-usb-sysfs-root");
         TEST_USB_SYSFS_ROOT
             .set(root.clone())
             .unwrap_or_else(|_| assert_eq!(TEST_USB_SYSFS_ROOT.get(), Some(&root)));
@@ -12644,6 +12638,17 @@ mod tests {
     }
 
     #[cfg(not(feature = "layer1-bootstrap"))]
+    fn guest_control_test_root(prefix: &str) -> tempfile::TempDir {
+        let base = crate::test_scratch_root().join("guest-control-tests");
+        crate::sys::path_safe::ensure_dir(&base, 0o750, None, None)
+            .expect("create guest-control test root");
+        tempfile::Builder::new()
+            .prefix(prefix)
+            .tempdir_in(base)
+            .expect("create guest-control test directory")
+    }
+
+    #[cfg(not(feature = "layer1-bootstrap"))]
     fn write_guest_control_token(state_dir: &Path, vm: &str, mode: u32) {
         use std::os::unix::fs::PermissionsExt;
         let dir = state_dir.join(format!("guest-control-{vm}"));
@@ -12688,7 +12693,7 @@ mod tests {
     #[cfg(not(feature = "layer1-bootstrap"))]
     #[test]
     fn guest_control_sign_returns_only_fixed_tag() {
-        let root = tempfile::tempdir_in(env!("CARGO_MANIFEST_DIR")).expect("tempdir");
+        let root = guest_control_test_root("guest-control-sign-");
         let bundle = build_test_bundle(root.path());
         let config = test_server_config(root.path(), &bundle.bundle_path);
         write_guest_control_token(&config.state_dir, "corp-vm", 0o440);
@@ -12706,7 +12711,7 @@ mod tests {
     #[cfg(not(feature = "layer1-bootstrap"))]
     #[test]
     fn guest_control_sign_rejects_role_confusion_and_unsafe_token() {
-        let root = tempfile::tempdir_in(env!("CARGO_MANIFEST_DIR")).expect("tempdir");
+        let root = guest_control_test_root("guest-control-sign-reject-");
         let bundle = build_test_bundle(root.path());
         let config = test_server_config(root.path(), &bundle.bundle_path);
         write_guest_control_token(&config.state_dir, "corp-vm", 0o440);
@@ -12744,7 +12749,7 @@ mod tests {
     #[cfg(not(feature = "layer1-bootstrap"))]
     #[test]
     fn executable_identity_accepts_static_wrapper_exec_target() {
-        let root = tempfile::tempdir_in(env!("CARGO_MANIFEST_DIR")).expect("tempdir");
+        let root = tempfile::tempdir().expect("tempdir");
         let wrapper = root.path().join("cloud-hypervisor");
         let real = root.path().join(".cloud-hypervisor-real");
         fs::write(
@@ -16007,10 +16012,7 @@ mod tests {
         let bundle = build_test_bundle(&root);
         let intent = test_usbip_intent_with_lock(&root, &bundle);
         let _ = take_test_usbip_backend_acl_events();
-        let base = std::env::var_os("CARGO_TARGET_TMPDIR")
-            .map(PathBuf::from)
-            .unwrap_or_else(|| PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("target"));
-        let sysfs_root = base.join("runtime-usb-sysfs-root");
+        let sysfs_root = crate::test_scratch_root().join("runtime-usb-sysfs-root");
         TEST_USB_SYSFS_ROOT
             .set(sysfs_root.clone())
             .unwrap_or_else(|_| assert_eq!(TEST_USB_SYSFS_ROOT.get(), Some(&sysfs_root)));

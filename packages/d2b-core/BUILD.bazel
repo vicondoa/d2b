@@ -1,0 +1,270 @@
+load("@crates//:defs.bzl", "all_crate_deps")
+load("@rules_rust//rust:defs.bzl", "rust_binary", "rust_library", "rust_test")
+
+exports_files(["BUILD.bazel"], visibility = ["//visibility:public"])
+
+# keep
+
+d2b_core_srcs = glob(["src/**/*.rs"])
+
+rust_library(
+    name = "d2b_core",
+    srcs = d2b_core_srcs,
+    compile_data = [
+        "//tests/fixtures:deny-unknown/host-valid.json",  # keep
+        "//:tests/golden/manifest_v04/baseline-vms.json",  # keep
+        "//:tests/golden/vms.json-signoz-v7",  # keep
+        "Cargo.toml",
+    ],
+    visibility = ["//visibility:public"],
+    deps = [
+        "//packages/d2b-realm-core:d2b_realm_core",
+    ] + all_crate_deps(normal = True, cargo_only = True),
+)
+
+rust_library(
+    name = "d2b_core_test_support",
+    srcs = d2b_core_srcs,
+    compile_data = [
+        "//tests/fixtures:deny-unknown/host-valid.json",  # keep
+        "//:tests/golden/manifest_v04/baseline-vms.json",  # keep
+        "//:tests/golden/vms.json-signoz-v7",  # keep
+        "Cargo.toml",
+    ],
+    crate_features = ["test-support"],
+    crate_name = "d2b_core",
+    visibility = ["//visibility:public"],
+    deps = [
+        "//packages/d2b-realm-core:d2b_realm_core",
+    ] + all_crate_deps(normal = True, cargo_only = True),
+)
+
+rust_test(
+    name = "allocator_config",
+    srcs = ["tests/allocator_config.rs"],
+    compile_data = ["Cargo.toml"],
+    visibility = ["//visibility:public"],
+    deps = [
+        ":d2b_core",
+    ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
+)
+
+rust_test(
+    name = "audio-policy",
+    srcs = ["tests/audio_policy.rs"],
+    compile_data = ["Cargo.toml"],
+    visibility = ["//visibility:public"],
+    deps = [
+        ":d2b_core",
+    ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
+)
+
+rust_test(
+    name = "bundle-resolver-tamper",
+    srcs = ["tests/bundle_resolver_tamper.rs"],
+    compile_data = ["Cargo.toml"],
+    visibility = ["//visibility:public"],
+    deps = [
+        ":d2b_core",
+    ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
+)
+
+rust_test(
+    name = "bundle_resolver_runner_intent_parity",
+    srcs = ["tests/bundle_resolver_runner_intent_parity.rs"],
+    compile_data = ["Cargo.toml"],
+    visibility = ["//visibility:public"],
+    deps = [
+        ":d2b_core",
+    ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
+)
+
+rust_test(
+    name = "bundle_resolver_runner_intents",
+    srcs = ["tests/bundle_resolver_runner_intents.rs"],
+    compile_data = ["Cargo.toml"],
+    visibility = ["//visibility:public"],
+    deps = [
+        ":d2b_core",
+    ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
+)
+
+rust_test(
+    name = "d2b-core-fuzz-bundle",
+    srcs = [
+        "//packages/d2b-core/fuzz:src/bin/bundle.rs",  # keep
+        "//packages/d2b-core/fuzz:src/harness.rs",  # keep
+    ],
+    compile_data = ["Cargo.toml"],
+    crate_root = "//packages/d2b-core/fuzz:src/bin/bundle.rs",
+    crate_features = ["fuzz"],
+    data = ["//packages/d2b-core/fuzz:corpus"],
+    rustc_env = {"CARGO_MANIFEST_DIR": "."},
+    use_libtest_harness = False,
+    visibility = ["//visibility:public"],
+    deps = [
+        ":d2b_core",
+        "@crates//:bolero",
+        "@crates//:serde_json",
+    ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
+)
+
+rust_test(
+    name = "d2b-core-fuzz-host",
+    srcs = [
+        "//packages/d2b-core/fuzz:src/bin/host.rs",  # keep
+        "//packages/d2b-core/fuzz:src/harness.rs",  # keep
+    ],
+    compile_data = ["Cargo.toml"],
+    crate_root = "//packages/d2b-core/fuzz:src/bin/host.rs",
+    crate_features = ["fuzz"],
+    data = ["//packages/d2b-core/fuzz:corpus"],
+    rustc_env = {"CARGO_MANIFEST_DIR": "."},
+    use_libtest_harness = False,
+    visibility = ["//visibility:public"],
+    deps = [
+        ":d2b_core",
+        "@crates//:bolero",
+        "@crates//:serde_json",
+    ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
+)
+
+rust_test(
+    name = "d2b-core-fuzz-manifest",
+    srcs = [
+        "//packages/d2b-core/fuzz:src/bin/manifest.rs",  # keep
+        "//packages/d2b-core/fuzz:src/harness.rs",  # keep
+    ],
+    compile_data = ["Cargo.toml"],
+    crate_root = "//packages/d2b-core/fuzz:src/bin/manifest.rs",
+    crate_features = ["fuzz"],
+    data = ["//packages/d2b-core/fuzz:corpus"],
+    rustc_env = {"CARGO_MANIFEST_DIR": "."},
+    use_libtest_harness = False,
+    visibility = ["//visibility:public"],
+    deps = [
+        ":d2b_core",
+        "@crates//:bolero",
+        "@crates//:serde_json",
+    ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
+)
+
+rust_test(
+    name = "d2b-core-fuzz-privileges",
+    srcs = [
+        "//packages/d2b-core/fuzz:src/bin/privileges.rs",  # keep
+        "//packages/d2b-core/fuzz:src/harness.rs",  # keep
+    ],
+    compile_data = ["Cargo.toml"],
+    crate_root = "//packages/d2b-core/fuzz:src/bin/privileges.rs",
+    crate_features = ["fuzz"],
+    data = ["//packages/d2b-core/fuzz:corpus"],
+    rustc_env = {"CARGO_MANIFEST_DIR": "."},
+    use_libtest_harness = False,
+    visibility = ["//visibility:public"],
+    deps = [
+        ":d2b_core",
+        "@crates//:bolero",
+        "@crates//:serde_json",
+    ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
+)
+
+rust_test(
+    name = "d2b-core-smoke",
+    srcs = [
+        "//packages/d2b-core/fuzz:src/bin/core.rs",  # keep
+        "//packages/d2b-core/fuzz:src/harness.rs",  # keep
+    ],
+    compile_data = [
+        "//:tests/golden/vms.json-signoz-v7",  # keep
+        "Cargo.toml",
+    ],
+    crate_root = "//packages/d2b-core/fuzz:src/bin/core.rs",
+    crate_features = ["fuzz"],
+    rustc_env = {"CARGO_MANIFEST_DIR": "."},
+    use_libtest_harness = False,
+    visibility = ["//visibility:public"],
+    deps = [
+        ":d2b_core",
+        "@crates//:bolero",
+        "@crates//:serde_json",
+    ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
+)
+
+rust_test(
+    name = "manifest_bounded_property",
+    srcs = ["tests/manifest_bounded_property.rs"],
+    compile_data = ["Cargo.toml"],
+    data = ["//packages/d2b-core/fuzz:corpus"],
+    visibility = ["//visibility:public"],
+    deps = [
+        ":d2b_core",
+    ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
+)
+
+rust_test(
+    name = "manifest_v04_roundtrip",
+    srcs = ["tests/manifest_v04_roundtrip.rs"],
+    compile_data = ["Cargo.toml"],
+    data = ["//:tests/golden/manifest_v04/baseline-vms.json"],
+    visibility = ["//visibility:public"],
+    deps = [
+        ":d2b_core",
+    ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
+)
+
+rust_test(
+    name = "realm_controller_config",
+    srcs = ["tests/realm_controller_config.rs"],
+    compile_data = ["Cargo.toml"],
+    visibility = ["//visibility:public"],
+    deps = [
+        ":d2b_core",
+    ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
+)
+
+rust_test(
+    name = "runtime_dtos",
+    srcs = ["tests/runtime_dtos.rs"],
+    compile_data = ["Cargo.toml"],
+    visibility = ["//visibility:public"],
+    deps = [
+        ":d2b_core",
+    ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
+)
+
+rust_test(
+    name = "d2b_core_test",
+    compile_data = ["Cargo.toml"],
+    crate = ":d2b_core",
+    deps = all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
+)
+
+rust_test(
+    name = "device_usbip_adapter",
+    srcs = [
+        "tests/device_usbip_adapter.rs",
+    ],
+    compile_data = ["Cargo.toml"],
+    visibility = ["//visibility:public"],
+    deps = [
+        ":d2b_core",
+    ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
+)
+
+# keep
+filegroup(
+    name = "cargo_workspace_sources",
+    srcs = glob([
+        "Cargo.lock",
+        "Cargo.toml",
+        "benches/**/*.rs",
+        "build.rs",
+        "examples/**/*.rs",
+        "src/**/*.rs",
+        "tests/**/*.rs",
+    ],
+        allow_empty = True,
+    ),
+    visibility = ["//visibility:public"],
+)

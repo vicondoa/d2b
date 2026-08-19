@@ -1,3 +1,5 @@
+#![recursion_limit = "256"]
+
 use std::{
     env, fs,
     path::{Path, PathBuf},
@@ -91,12 +93,14 @@ use d2b_realm_core::{
 mod diagnostic_redaction;
 use schemars::schema::RootSchema;
 
+mod bazel_evidence;
 mod changelog;
 mod delivery;
 mod gen_resource_schemas;
 mod heavy_gate;
 mod inventory;
 mod process_marker_pin;
+mod production_closure;
 mod provider_crate_policy;
 mod provider_packaging;
 mod semantic_service_schemas;
@@ -397,11 +401,29 @@ fn main() -> std::process::ExitCode {
             run_inventory(Some(PathBuf::from(output.as_str())))
         }
         [command, rest @ ..] if command == "changelog-fold" => changelog::run_cli(rest),
+        [command, rest @ ..] if command == "bazel-evidence" => bazel_evidence::run_cli(rest),
         [command, rest @ ..] if command == "delivery" => delivery::run_cli(rest),
         [command, rest @ ..] if command == "redact-diagnostics" => {
             diagnostic_redaction::run_cli(rest)
         }
         [command, rest @ ..] if command == "heavy-gate" => heavy_gate::run(rest),
+        [command, rest @ ..] if command == "gen-package-policy-inputs" => {
+            let result = repo_root()
+                .map_err(|error| error.to_string())
+                .and_then(|root| production_closure::run_cli(root, rest));
+            match result {
+                Ok(paths) => {
+                    for path in paths {
+                        println!("{}", path.display());
+                    }
+                    std::process::ExitCode::SUCCESS
+                }
+                Err(error) => {
+                    eprintln!("gen-package-policy-inputs failed: {error}");
+                    std::process::ExitCode::FAILURE
+                }
+            }
+        }
         [command] if command == "process-marker-pin" => run_process_marker_pin(),
         [command] if command == "check-provider-crate-layout" => run_provider_crate_layout(),
         [command] if command == "check-provider-layout" => run_provider_layout(),
@@ -410,7 +432,7 @@ fn main() -> std::process::ExitCode {
         }
         _ => {
             eprintln!(
-                "usage: cargo run --manifest-path packages/Cargo.toml -p xtask -- <gen-schemas|gen-zone-storage-schema|gen-cli-schemas|gen-zone-schemas|gen-zone-nix-options|gen-resource-schemas|gen-error-codes|gen-provider-packaging|gen-semantic-service-schemas|gen-cli-shell-artifacts|gen-guest-proto|gen-guest-ttrpc|gen-resource-proto|gen-resource-ttrpc|gen-daemon-api|release-notes <version>|adr0035-inventory [--output <path>]|changelog-fold [--check]|process-marker-pin|check-provider-crate-layout|check-provider-layout|test-runtime-ledger <record|check|lint|help> [options]|redact-diagnostics --repo-root <path> [--home <path>] [--tail-lines <count>]|delivery wave <snapshot|validate-import|seal|merge-target|merge-eligibility|help> [options]|heavy-gate <-- <command> [args...] | verify-slot>>"
+                "usage: cargo run --manifest-path Cargo.toml -p xtask -- <gen-schemas|gen-zone-storage-schema|gen-cli-schemas|gen-zone-schemas|gen-zone-nix-options|gen-resource-schemas|gen-error-codes|gen-provider-packaging|gen-semantic-service-schemas|gen-cli-shell-artifacts|gen-guest-proto|gen-guest-ttrpc|gen-resource-proto|gen-resource-ttrpc|gen-daemon-api|gen-package-policy-inputs [--check|--write]|release-notes <version>|adr0035-inventory [--output <path>]|changelog-fold [--check]|bazel-evidence <check-security|security-digest|classify-failure|redact-log> ...|process-marker-pin|check-provider-crate-layout|check-provider-layout|test-runtime-ledger <record|check|lint|help> [options]|redact-diagnostics --repo-root <path> [--home <path>] [--tail-lines <count>]|delivery wave <snapshot|validate-import|seal|merge-target|merge-eligibility|help> [options]|heavy-gate <-- <command> [args...] | verify-slot>>"
             );
             std::process::ExitCode::FAILURE
         }
@@ -460,7 +482,7 @@ fn run_provider_layout() -> std::process::ExitCode {
 /// member. Generic helper crates such as `d2b-provider-toolkit` do not match
 /// the Provider crate naming shape and remain outside this check.
 fn check_provider_layout(repo_root: &Path) -> Result<(), String> {
-    let manifest = fs::read_to_string(repo_root.join("packages/Cargo.toml"))
+    let manifest = fs::read_to_string(repo_root.join("Cargo.toml"))
         .map_err(|_| "provider-layout-input-unreadable".to_owned())?;
     let members_start = manifest
         .find("members = [")
@@ -489,7 +511,11 @@ fn check_provider_layout(repo_root: &Path) -> Result<(), String> {
         if !provider_suffix.contains('-') {
             continue;
         }
-        let crate_dir = repo_root.join("packages").join(member_path);
+        let crate_dir = if member_path.starts_with("packages") {
+            repo_root.join(member_path)
+        } else {
+            repo_root.join("packages").join(member_path)
+        };
         let required = ["src", "tests", "integration", "README.md"];
         let missing = required
             .into_iter()
@@ -768,20 +794,41 @@ where
 }
 
 fn repo_root() -> Result<&'static Path, Box<dyn std::error::Error>> {
-    Path::new(env!("CARGO_MANIFEST_DIR"))
-        .ancestors()
-        .nth(2)
-        .ok_or_else(|| "cannot locate repo root".into())
+    let mut candidates = Vec::new();
+    for variable in ["D2B_REPO_ROOT", "TEST_SRCDIR", "RUNFILES_DIR"] {
+        if let Some(base) = std::env::var_os(variable).map(PathBuf::from) {
+            candidates.push(base.clone());
+            if let Some(workspace) = std::env::var_os("TEST_WORKSPACE") {
+                candidates.push(base.join(workspace));
+            }
+            candidates.push(base.join("_main"));
+        }
+    }
+    if let Ok(current_dir) = std::env::current_dir() {
+        candidates.push(current_dir);
+    }
+    for candidate in candidates {
+        let mut path = candidate;
+        if path.is_file() {
+            path.pop();
+        }
+        loop {
+            if path.join("Cargo.toml").is_file()
+                && path.join("BUILD.bazel").is_file()
+                && path.join("flake.nix").is_file()
+            {
+                return Ok(Box::leak(path.into_boxed_path()));
+            }
+            if !path.pop() {
+                break;
+            }
+        }
+    }
+    Err("cannot locate repo root".into())
 }
 
-fn gen_schemas() -> Result<Vec<PathBuf>, Box<dyn std::error::Error>> {
-    let repo_root = repo_root()?;
-    let out_dir = repo_root
-        .join("docs/reference/schemas")
-        .join(SCHEMA_VERSION);
-    fs::create_dir_all(&out_dir)?;
-
-    let schemas: [(&str, RootSchema); 20] = [
+fn schema_documents() -> Vec<(&'static str, RootSchema)> {
+    vec![
         ("allocator.json", schemars::schema_for!(AllocatorJson)),
         ("bundle.json", schemars::schema_for!(Bundle)),
         (
@@ -832,8 +879,16 @@ fn gen_schemas() -> Result<Vec<PathBuf>, Box<dyn std::error::Error>> {
         ),
         ("manifest_v04.json", schemars::schema_for!(ManifestV04)),
         ("audio-state.json", schemars::schema_for!(AudioPolicyState)),
-    ];
+    ]
+}
 
+fn gen_schemas() -> Result<Vec<PathBuf>, Box<dyn std::error::Error>> {
+    let repo_root = repo_root()?;
+    let out_dir = repo_root
+        .join("docs/reference/schemas")
+        .join(SCHEMA_VERSION);
+    fs::create_dir_all(&out_dir)?;
+    let schemas = schema_documents();
     write_schemas(&out_dir, &schemas)
 }
 
@@ -1091,15 +1146,19 @@ fn write_schemas(
 ) -> Result<Vec<PathBuf>, Box<dyn std::error::Error>> {
     let mut written = Vec::with_capacity(schemas.len());
     for (file_name, schema) in schemas {
-        let mut schema = schema.clone();
-        schema.meta_schema = Some("https://json-schema.org/draft/2020-12/schema".to_owned());
         let path = out_dir.join(file_name);
-        let mut data = serde_json::to_string_pretty(&schema)?;
-        data.push('\n');
-        fs::write(&path, data)?;
+        fs::write(&path, render_schema(schema)?)?;
         written.push(path);
     }
     Ok(written)
+}
+
+fn render_schema(schema: &RootSchema) -> Result<String, serde_json::Error> {
+    let mut schema = schema.clone();
+    schema.meta_schema = Some("https://json-schema.org/draft/2020-12/schema".to_owned());
+    let mut data = serde_json::to_string_pretty(&schema)?;
+    data.push('\n');
+    Ok(data)
 }
 
 fn gen_daemon_api() -> Result<PathBuf, Box<dyn std::error::Error>> {
@@ -1717,7 +1776,7 @@ mod provider_layout_tests {
         fs::create_dir_all(crate_dir.join("tests")).unwrap();
         fs::create_dir_all(crate_dir.join("integration")).unwrap();
         fs::write(
-            root.join("packages/Cargo.toml"),
+            root.join("Cargo.toml"),
             "[workspace]\nmembers = [\n    \"d2b-provider-device-fixture\",\n]\n",
         )
         .unwrap();
@@ -1741,5 +1800,43 @@ mod provider_layout_tests {
         assert!(error.contains("\"crate\":\"d2b-provider-device-fixture\""));
         assert!(error.contains("\"missing\":[\"integration\"]"));
         fs::remove_dir_all(root).unwrap();
+    }
+}
+
+#[cfg(test)]
+mod schema_tests {
+    use super::{SCHEMA_VERSION, render_schema, repo_root, schema_documents};
+    use std::fs;
+
+    #[test]
+    fn schema_generation_is_reproducible() {
+        let first = schema_documents()
+            .iter()
+            .map(|(name, schema)| ((*name).to_owned(), render_schema(schema).unwrap()))
+            .collect::<Vec<_>>();
+        let second = schema_documents()
+            .iter()
+            .map(|(name, schema)| ((*name).to_owned(), render_schema(schema).unwrap()))
+            .collect::<Vec<_>>();
+        assert_eq!(first, second);
+    }
+
+    #[test]
+    fn committed_schemas_match_the_generator() {
+        let root = repo_root().expect("repository root");
+        for (name, schema) in schema_documents() {
+            let path = root
+                .join("docs/reference/schemas")
+                .join(SCHEMA_VERSION)
+                .join(name);
+            let committed = fs::read_to_string(&path)
+                .unwrap_or_else(|error| panic!("{} is unreadable: {error}", path.display()));
+            assert_eq!(
+                committed,
+                render_schema(&schema).unwrap(),
+                "{} drifted",
+                path.display()
+            );
+        }
     }
 }

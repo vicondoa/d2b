@@ -35,33 +35,6 @@ successor_ids = []
 exercised_today = "yes"
 
 [[script]]
-name = "tests/unit/meta/ci-coverage.sh"
-group = "H"
-make_target = "test-policy"
-tier = "ci-l1"
-status = "legacy"      # legacy | porting | ported
-successor_ids = []
-exercised_today = "manual"
-
-[[script]]
-name = "tests/unit/meta/deliverable-gate-inventory.sh"
-group = "H"
-make_target = "test-policy"
-tier = "ci-l1"
-status = "legacy"      # legacy | porting | ported
-successor_ids = []
-exercised_today = "yes"
-
-[[script]]
-name = "tests/unit/meta/layer1-self-inventory.sh"
-group = "H"
-make_target = "test-policy"
-tier = "ci-l1"
-status = "legacy"      # legacy | porting | ported
-successor_ids = []
-exercised_today = "yes"
-
-[[script]]
 name = "tests/integration/live/audio.sh"
 group = "GCI"
 make_target = "test-integration"
@@ -134,6 +107,33 @@ successor_ids = []
 exercised_today = "manual"
 
 [[script]]
+name = "tests/unit/meta/ci-coverage.sh"
+group = "H"
+make_target = "test-policy"
+tier = "ci-l1"
+status = "retired"      # legacy | porting | ported | retired
+successor_ids = ["packages/xtask/tests/policy_ci.rs::ci_uses_make_allowlist_is_intentional_and_bounded"]
+exercised_today = "manual"
+
+[[script]]
+name = "tests/unit/meta/deliverable-gate-inventory.sh"
+group = "H"
+make_target = "test-policy"
+tier = "ci-l1"
+status = "retired"      # legacy | porting | ported | retired
+successor_ids = ["packages/xtask/tests/bazel_non_rust_parity.rs::non_rust_layer1_surfaces_have_declared_bazel_carriers"]
+exercised_today = "yes"
+
+[[script]]
+name = "tests/unit/meta/layer1-self-inventory.sh"
+group = "H"
+make_target = "test-policy"
+tier = "ci-l1"
+status = "retired"      # legacy | porting | ported | retired
+successor_ids = ["packages/xtask/tests/bazel_non_rust_parity.rs::non_rust_layer1_surfaces_have_declared_bazel_carriers"]
+exercised_today = "yes"
+
+[[script]]
 name = "tests/unit/meta/pr-checklist-gate.sh"
 group = "H"
 make_target = "test-policy"
@@ -157,7 +157,7 @@ group = "A"
 make_target = "test-rust"
 tier = "ci-l1"
 status = "retired"      # legacy | porting | ported | retired
-successor_ids = ["tests/test-rust.sh (renamed: the comprehensive Rust gate is now the `make test-rust` driver at tests/test-rust.sh - identical fmt/clippy/cargo-test/contract/cli/no-bash-ast/broker/schema-gen/cargo-deny coverage; moved from tests/tools/ to tests/ root so the driver name matches the make target)"]
+successor_ids = ["//packages/... and //bazel/checks/rust/..."]
 exercised_today = "yes"
 
 [[script]]
@@ -1625,5 +1625,77 @@ make_target = "test-policy"
 tier = "ci-l1"
 status = "retired"      # legacy | porting | ported | retired
 successor_ids = ["retired-by-scope: ADR deferral validation removed"]
+exercised_today = "manual"
+
+[[script]]
+name = "tests/test-drift.sh"
+group = "ORCH"
+make_target = "check-tier0"
+tier = "ci-l1"
+status = "retired"      # legacy | porting | ported | retired
+successor_ids = ["//bazel/checks/policy:drift"]
+exercised_today = "manual"
+
+[[script]]
+name = "tests/test-flake-list.sh"
+group = "ORCH"
+make_target = "check-tier0"
+tier = "ci-l1"
+status = "retired"      # legacy | porting | ported | retired
+successor_ids = ["//bazel/checks/nix:flake"]
+exercised_today = "manual"
+
+[[script]]
+name = "tests/test-flake.sh"
+group = "ORCH"
+make_target = "check-tier0"
+tier = "ci-l1"
+status = "retired"      # legacy | porting | ported | retired
+successor_ids = ["//bazel/checks/nix:flake"]
+exercised_today = "manual"
+
+[[script]]
+name = "tests/test-lint.sh"
+group = "ORCH"
+make_target = "check-tier0"
+tier = "ci-l1"
+status = "retired"      # legacy | porting | ported | retired
+successor_ids = ["//bazel/checks/policy:lint"]
+exercised_today = "manual"
+
+[[script]]
+name = "tests/test-nix-unit.sh"
+group = "ORCH"
+make_target = "check-tier0"
+tier = "ci-l1"
+status = "retired"      # legacy | porting | ported | retired
+successor_ids = ["//bazel/checks/nix:nix_unit"]
+exercised_today = "manual"
+
+[[script]]
+name = "tests/test-policy.sh"
+group = "ORCH"
+make_target = "check-tier0"
+tier = "ci-l1"
+status = "retired"      # legacy | porting | ported | retired
+successor_ids = ["//bazel/checks/policy:policy_tooling"]
+exercised_today = "manual"
+
+[[script]]
+name = "tests/test-proofs.sh"
+group = "ORCH"
+make_target = "check-tier0"
+tier = "ci-l1"
+status = "retired"      # legacy | porting | ported | retired
+successor_ids = ["//bazel/checks/fixtures:fixtures_proofs"]
+exercised_today = "manual"
+
+[[script]]
+name = "tests/test-rust.sh"
+group = "ORCH"
+make_target = "check-tier0"
+tier = "ci-l1"
+status = "retired"      # legacy | porting | ported | retired
+successor_ids = ["//packages/... and //bazel/checks/rust/..."]
 exercised_today = "manual"
 

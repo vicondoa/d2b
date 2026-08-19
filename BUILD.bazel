@@ -1,0 +1,293 @@
+package(default_visibility = ["//visibility:public"])
+
+filegroup(
+    name = "d2b_cli_contract_inputs",
+    srcs = glob([
+        "docs/reference/zone-cli-contract.md",
+        "tests/golden/cli-output/*",
+    ]) + [
+        "docs/reference/error-codes.md",
+        "nixos-modules/options-daemon.nix",
+    ],
+)
+
+filegroup(
+    name = "d2b_resource_schemas_v3",
+    srcs = glob([
+        "docs/reference/schemas/v3/*.json",
+        "docs/reference/schemas/v3/providers/*.json",
+    ]),
+)
+
+exports_files([
+    ".bazelrc",
+    ".bazelignore",
+    ".bazelversion",
+    ".bazelrc.user.example",
+    ".config/nextest.toml",
+    ".gitignore",
+    "AGENTS.md",
+    "CHANGELOG.md",
+    "CONTRIBUTING.md",
+    "LICENSE",
+    "Makefile",
+    "README.md",
+    "SECURITY.md",
+    "STRATEGY.md",
+    "Cargo.lock",
+    "Cargo.toml",
+    "packages/Cargo.guest.lock",
+    "flake.lock",
+    "flake.nix",
+    ".github/PULL_REQUEST_TEMPLATE.md",
+    "scripts/changelog-check.sh",
+    "BUILD.bazel",
+    "tests/golden/bazel/check-coverage.json",
+    "tests/golden/bazel/cache-policy.json",
+    "MODULE.bazel",
+    "MODULE.bazel.lock",
+    "rust-toolchain.toml",
+    "nixos-modules/components/observability/dashboards/01-d2b-overview.json",
+    "tests/golden/runner-shape/parity-drift.json",
+    "tests/golden/manifest_v04/baseline-vms.json",
+    "tests/golden/host-json/baseline-host.json",
+    "tests/golden/host-json/ifname-collision.json",
+    "tests/golden/host-json/ifname-too-long.json",
+    "tests/golden/host-json/unknown-field-bridgeportflags.json",
+    "tests/golden/host-json/unknown-field-firewallcoexistence.json",
+    "tests/golden/host-json/unknown-field-ifnamemapping.json",
+    "tests/golden/host-json/unknown-field-kernelmodules.json",
+    "tests/golden/runner-shape/audio-argv-minimal.txt",
+    "tests/golden/runner-shape/gpu-argv-minimal.txt",
+    "tests/golden/runner-shape/otel-host-bridge-argv-minimal.txt",
+    "tests/golden/runner-shape/swtpm-argv-minimal.txt",
+    "tests/golden/runner-shape/usbip-argv-minimal.txt",
+    "tests/golden/runner-shape/video-argv-minimal.txt",
+    "tests/golden/runner-shape/virtiofsd-argv-minimal.txt",
+    "tests/golden/runner-shape/vsock-relay-argv-minimal.txt",
+    "tests/golden/vms.json-signoz-v7",
+    "tests/AGENTS.md",
+    "tests/tools/scrub-shell-environment",
+    "tests/tools/bazel-check",
+    "nix/bazel-worker-image.nix",
+    "tests/README.md",
+    "tests/host-integration/daemon-restart-vm-survival.nix",
+    "tests/integration/live/live-vm-smoke.sh",
+    "specs/002-optimize-test-orchestration/benchmark-results.md",
+    "changelog.d/test-orchestration-speed.md",
+    ".github/CODEOWNERS",
+    "docs/adr/0008-supported-platforms-and-rejected-targets.md",
+    "docs/adr/0015-daemon-only-clean-break.md",
+    "docs/adr/README.md",
+    "docs/explanation/design.md",
+    "docs/how-to/migrate-d2b-v1-0-to-v1-1.md",
+    "docs/reference/cli-contract.md",
+    "nixos-modules/guest-control-token-materialize.py",
+    "docs/reference/cli-output/list.schema.json",
+    "docs/reference/cli-output/status.schema.json",
+    "docs/reference/components-usbip.md",
+    "docs/reference/daemon-api.md",
+    "docs/reference/bazel-buildbuddy.md",
+    "docs/reference/schemas/v3/providers/transport-azure-relay.transport-settings.json",
+    "docs/reference/schemas/v3/providers/transport-vsock.transport-binding.json",
+    "docs/reference/host-prep-dag.md",
+    "docs/reference/manifest-bundle.md",
+    "docs/reference/realm-access-resolver.md",
+    "docs/reference/realm-routing.md",
+    "docs/reference/schemas/v2/allocator.json",
+    "docs/reference/schemas/v2/d2b-realm-core.md",
+    "docs/reference/schemas/v2/processes.json",
+    "docs/reference/schemas/v2/privileges.json",
+    "docs/reference/schemas/v2/realm-controllers.json",
+    "docs/reference/schemas/v2/realm-workloads-launcher-v2.json",
+    "docs/reference/schemas/v2/storage-lifecycle-report.json",
+    "docs/reference/schemas/v2/storage.json",
+    "docs/reference/schemas/v2/sync.json",
+    "docs/reference/schemas/v2/unsafe-local-helper-wire.json",
+    "docs/reference/schemas/v2/unsafe-local-workloads.json",
+    "docs/reference/storage-lifecycle-report.md",
+    "docs/reference/usbip-state-machine.md",
+    "docs/specs/providers/ADR-046-provider-volume-local.md",
+    "nixos-modules/allocator-json.nix",
+    "nixos-modules/bundle-artifacts.nix",
+    "nixos-modules/bundle.nix",
+    "nixos-modules/default.nix",
+    "nixos-modules/gateway-vm.nix",
+    "nixos-modules/guest-control-host.nix",
+    "nixos-modules/guest-control.nix",
+    "nixos-modules/host-activation.d/state-dir-acl.sh",
+    "nixos-modules/host-activation.nix",
+    "nixos-modules/host-daemon.nix",
+    "nixos-modules/host-users.nix",
+    "nixos-modules/host.nix",
+    "nixos-modules/index.nix",
+    "nixos-modules/lib.nix",
+    "nixos-modules/options-daemon.nix",
+    "nixos-modules/options-vms.nix",
+    "nixos-modules/processes-json.nix",
+    "nixos-modules/realm-controller-config-json.nix",
+    "nixos-modules/realm-identity-config-json.nix",
+    "nixos-modules/realm-workloads-launcher-json.nix",
+    "nixos-modules/storage-json.nix",
+    "nixos-modules/store.nix",
+])
+
+filegroup(
+    name = "proof_workspace_sources",
+    srcs = glob(
+        ["proofs/**/*"],
+        allow_empty = True,
+    ),
+    visibility = ["//visibility:public"],
+)
+
+# keep
+filegroup(
+    name = "docs_workspace_sources",
+    srcs = glob(
+        ["docs/**/*"],
+        allow_empty = True,
+    ),
+    visibility = ["//visibility:public"],
+)
+
+# keep
+filegroup(
+    name = "examples_workspace_sources",
+    srcs = glob(
+        ["examples/**/*"],
+        allow_empty = True,
+    ),
+    visibility = ["//visibility:public"],
+)
+
+# keep
+filegroup(
+    name = "nix_flake_support_sources",
+    srcs = glob(
+        ["completions/**/*"],
+        allow_empty = True,
+    ) + [
+        "deny.toml",
+    ],
+    visibility = ["//visibility:public"],
+)
+
+# keep
+filegroup(
+    name = "templates_workspace_sources",
+    srcs = glob(
+        ["templates/**/*"],
+        allow_empty = True,
+    ),
+    visibility = ["//visibility:public"],
+)
+
+# keep
+filegroup(
+    name = "nixos_modules_workspace_sources",
+    srcs = glob(
+        ["nixos-modules/**/*"],
+        allow_empty = True,
+    ),
+    visibility = ["//visibility:public"],
+)
+
+# keep
+filegroup(
+    name = "nix_workspace_sources",
+    srcs = glob(
+        ["nix/**/*"],
+        allow_empty = True,
+    ),
+    visibility = ["//visibility:public"],
+)
+
+# keep
+filegroup(
+    name = "policy_inputs_workspace_sources",
+    srcs = glob(
+        ["packages/policy-inputs/**/*"],
+        allow_empty = True,
+    ),
+    visibility = ["//visibility:public"],
+)
+
+# keep
+filegroup(
+    name = "tests_root_sources",
+    srcs = glob(
+        ["tests/**/*"],
+        allow_empty = True,
+    ),
+    visibility = ["//visibility:public"],
+)
+
+filegroup(
+    name = "packages_workspace_sources",
+    srcs = glob(
+        ["packages/**/*"],
+        allow_empty = True,
+    ),
+    visibility = ["//visibility:public"],
+)
+
+filegroup(
+    name = "pkgs_workspace_sources",
+    srcs = glob(
+        ["pkgs/**/*"],
+        allow_empty = True,
+    ),
+    visibility = ["//visibility:public"],
+)
+
+filegroup(
+    name = "tests_workspace_sources",
+    srcs = [
+        ":tests_root_sources",
+        "//tests/fixtures:contract_sources",
+        "//tests/unit/gates:gate_sources",
+        "//tests/unit/meta:meta_sources",
+        "//tests/unit/nix:nix_unit_sources",
+    ],
+    visibility = ["//visibility:public"],
+)
+
+# keep
+filegroup(
+    name = "github_workspace_sources",
+    srcs = glob(
+        [".github/**/*"],
+        allow_empty = True,
+    ),
+    visibility = ["//visibility:public"],
+)
+
+filegroup(
+    name = "harness_workspace_sources",
+    srcs = glob(
+        ["harness/**/*"],
+        allow_empty = True,
+    ),
+    visibility = ["//visibility:public"],
+)
+
+# keep
+filegroup(
+    name = "third_party_workspace_sources",
+    srcs = glob(
+        ["third_party/**/*"],
+        allow_empty = True,
+    ),
+    visibility = ["//visibility:public"],
+)
+
+# keep
+filegroup(
+    name = "bazel_provider_workspace_sources",
+    srcs = glob(
+        ["pkgs/bazel-9.2.0/**/*"],
+        allow_empty = True,
+    ),
+    visibility = ["//visibility:public"],
+)

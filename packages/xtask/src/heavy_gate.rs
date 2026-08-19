@@ -1570,6 +1570,14 @@ mod tests {
         LOCK_STATE.lock().unwrap_or_else(PoisonError::into_inner)
     }
 
+    fn scan_metadata(path: &Path) -> std::io::Result<fs::Metadata> {
+        if std::env::var_os("RUNFILES_DIR").is_some() {
+            fs::metadata(path)
+        } else {
+            fs::symlink_metadata(path)
+        }
+    }
+
     /// Env var selecting the in-test slot-holder child mode.
     const HOLD_ROOT_ENV: &str = "D2B_HEAVY_GATE_TEST_HOLD_ROOT";
     /// Env var selecting the in-test full-wrapper child mode.
@@ -1638,11 +1646,12 @@ mod tests {
 
     impl Scratch {
         fn new(label: &str) -> Self {
-            let target = match std::env::var_os("CARGO_TARGET_DIR") {
+            let target = match std::env::var_os("TEST_TMPDIR")
+                .or_else(|| std::env::var_os("CARGO_TARGET_DIR"))
+            {
                 Some(dir) => PathBuf::from(dir),
-                None => Path::new(env!("CARGO_MANIFEST_DIR"))
-                    .parent()
-                    .expect("xtask lives inside the workspace root")
+                None => crate::repo_root()
+                    .expect("xtask has a repository root")
                     .join("target"),
             };
             let sequence = SCRATCH_SEQUENCE.fetch_add(1, Ordering::Relaxed);
@@ -3044,7 +3053,7 @@ mod tests {
             if sibling == candidate {
                 continue;
             }
-            let Ok(meta) = fs::symlink_metadata(&sibling) else {
+            let Ok(meta) = scan_metadata(&sibling) else {
                 continue;
             };
             let Some(properties) = entrypoint_properties(&sibling, &meta) else {
@@ -3134,7 +3143,7 @@ mod tests {
             };
             for entry in entries {
                 let path = entry.expect("a readable dir entry").path();
-                let meta = fs::symlink_metadata(&path)
+                let meta = scan_metadata(&path)
                     .unwrap_or_else(|e| panic!("cannot stat {}: {e}", path.display()));
                 if meta.file_type().is_dir() {
                     stack.push(path);
@@ -3170,7 +3179,7 @@ mod tests {
         };
         for entry in entries {
             let path = entry.expect("a readable dir entry").path();
-            let meta = fs::symlink_metadata(&path)
+            let meta = scan_metadata(&path)
                 .unwrap_or_else(|e| panic!("cannot stat {}: {e}", path.display()));
             if meta.file_type().is_dir() {
                 out.extend(collect_heavy_entrypoints(&path));
@@ -3196,10 +3205,7 @@ mod tests {
     /// delegation) fails this test until it is gated.
     #[test]
     fn every_live_and_heavy_entrypoint_routes_through_the_gate() {
-        let root = Path::new(env!("CARGO_MANIFEST_DIR"))
-            .parent()
-            .and_then(Path::parent)
-            .expect("packages/xtask resolves to a repo root");
+        let root = crate::repo_root().expect("packages/xtask resolves to a repo root");
 
         // The shared self-guard the shell entrypoints call. Its presence proves
         // the script asks the wrapper to verify a genuinely-held slot rather
@@ -3257,7 +3263,7 @@ mod tests {
             };
             for entry in entries {
                 let path = entry.expect("a readable dir entry").path();
-                let meta = fs::symlink_metadata(&path)
+                let meta = scan_metadata(&path)
                     .unwrap_or_else(|e| panic!("cannot stat {}: {e}", path.display()));
                 if !meta.file_type().is_dir() {
                     // A file directly under the lane parent. Classify it with
@@ -3374,7 +3380,7 @@ mod tests {
         );
 
         for script in &entrypoints {
-            let meta = fs::symlink_metadata(script)
+            let meta = scan_metadata(script)
                 .unwrap_or_else(|e| panic!("cannot stat {}: {e}", script.display()));
             assert!(
                 meta.permissions().mode() & 0o111 != 0,
@@ -3494,10 +3500,7 @@ mod tests {
     /// with exactly this detection.
     #[test]
     fn out_of_scope_exemption_is_refused_for_a_lane_that_does_heavy_work() {
-        let root = Path::new(env!("CARGO_MANIFEST_DIR"))
-            .parent()
-            .and_then(Path::parent)
-            .expect("packages/xtask resolves to a repo root");
+        let root = crate::repo_root().expect("packages/xtask resolves to a repo root");
         let distro = root.join("tests/integration/distro-matrix");
         let hit = lane_heavy_work_marker(&distro);
         assert!(
@@ -3550,15 +3553,11 @@ mod tests {
     /// treated as an ungated entrypoint so it cannot bypass the census by name.
     #[test]
     fn entrypoint_and_library_are_classified_by_property_not_by_basename() {
-        let root = Path::new(env!("CARGO_MANIFEST_DIR"))
-            .parent()
-            .and_then(Path::parent)
-            .expect("packages/xtask resolves to a repo root");
+        let root = crate::repo_root().expect("packages/xtask resolves to a repo root");
 
         // The real container lib.sh: non-executable and sourced by a sibling.
         let container_lib = root.join("tests/integration/containers/lib.sh");
-        let container_meta =
-            fs::symlink_metadata(&container_lib).expect("the container lib.sh exists");
+        let container_meta = scan_metadata(&container_lib).expect("the container lib.sh exists");
         assert!(
             heavy_entrypoint(&container_lib, &container_meta).is_none(),
             "a sibling-sourced, non-executable lib.sh must classify as a library, not an \

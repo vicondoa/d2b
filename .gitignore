@@ -25,6 +25,11 @@ result
 result-*
 .direnv/
 
+# Bazel workspace output links
+/bazel-*
+.bazelrc.user
+.config/buildbuddy-credential-helper
+
 # Editor
 *.swp
 *.swo
@@ -94,10 +99,11 @@ packages/*/t/
 # CI sccache local-disk backend (restored/saved by actions/cache in test-rust).
 .sccache/
 
-# Broker feature-pass target dirs (deterministic siblings of the broker target
-# dir, kept stable so sccache cache keys don't churn - see tests/test-rust.sh).
-packages/d2b-priv-broker/target-layer1/
-packages/d2b-priv-broker/target-fakebackends/
+# Broker feature-pass target dirs are execution-only Cargo target-dir
+# exceptions under the repository-root target/; they are not workspace
+# authority or independent lockfile roots.
+target/broker-layer1/
+target/broker-fakebackends/
 
 # Scratch space for throwaway probes: one-off crates, parser experiments,
 # and any file written to reason about behaviour rather than to ship it.

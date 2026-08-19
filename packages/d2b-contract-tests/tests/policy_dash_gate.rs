@@ -191,10 +191,17 @@ fn scan_with_path(root: &Path, extra_path: Option<&Path>) -> (bool, String) {
     (output.status.success(), combined)
 }
 
+fn test_tmpdir() -> PathBuf {
+    std::env::var_os("CARGO_TARGET_TMPDIR")
+        .map(PathBuf::from)
+        .filter(|path| path.is_absolute())
+        .or_else(|| std::env::var_os("TEST_TMPDIR").map(PathBuf::from))
+        .or_else(|| std::env::var_os("TMPDIR").map(PathBuf::from))
+        .unwrap_or_else(|| std::env::current_dir().expect("current directory"))
+}
+
 fn fixture_tree(name: &str, body: &str) -> PathBuf {
-    let root = Path::new(env!("CARGO_TARGET_TMPDIR"))
-        .join("dash-gate")
-        .join(name);
+    let root = test_tmpdir().join("dash-gate").join(name);
     let _ = fs::remove_dir_all(&root);
     fs::create_dir_all(root.join("nested")).expect("create fixture tree");
     fs::write(root.join("clean.md"), "A spaced hyphen - like this.\n").expect("write clean file");
@@ -213,9 +220,7 @@ fn make_executable(path: &Path) {
 }
 
 fn git_fixture_tree(name: &str) -> PathBuf {
-    let root = Path::new(env!("CARGO_TARGET_TMPDIR"))
-        .join("dash-gate")
-        .join(name);
+    let root = test_tmpdir().join("dash-gate").join(name);
     let _ = fs::remove_dir_all(&root);
     fs::create_dir_all(&root).expect("create git fixture tree");
     let status = Command::new("git")
@@ -609,9 +614,7 @@ fn assert_claude_alias(root: &Path) {
 }
 
 fn fake_command_dir(name: &str, command: &str, body: &str) -> PathBuf {
-    let directory = Path::new(env!("CARGO_TARGET_TMPDIR"))
-        .join("dash-gate")
-        .join(name);
+    let directory = test_tmpdir().join("dash-gate").join(name);
     let _ = fs::remove_dir_all(&directory);
     fs::create_dir_all(&directory).expect("create fake command directory");
     let path = directory.join(command);
@@ -909,10 +912,17 @@ fn the_gate_matches_codepoints_and_declares_a_closed_asset_allowlist() {
             !gate.contains(*dash),
             "{GATE} must not carry a literal {label}; it would flag its own source"
         );
-        let escape = format!(r"$'\u{}'", label.trim_start_matches("U+"));
+        let mut encoded = [0; 4];
+        let byte_escape = dash
+            .encode_utf8(&mut encoded)
+            .as_bytes()
+            .iter()
+            .map(|byte| format!(r"\x{byte:02X}"))
+            .collect::<String>();
+        let escape = format!("$'{byte_escape}'");
         assert!(
             gate.contains(&escape),
-            "{GATE} must match {label} by codepoint escape ({escape}) so the whole class is \
+            "{GATE} must match {label} by byte escape ({escape}) so the whole class is \
              rejected and the pattern survives editing"
         );
     }
@@ -953,12 +963,12 @@ fn the_gate_matches_codepoints_and_declares_a_closed_asset_allowlist() {
 #[test]
 fn check_tier0_runs_the_gate() {
     let makefile = read_repo_file("Makefile");
-    let wired = makefile
-        .lines()
-        .any(|line| line.trim_start().starts_with("bash ") && line.contains(GATE));
+    let meta_build = read_repo_file("bazel/checks/meta/BUILD.bazel");
     assert!(
-        wired,
-        "the Makefile `check-tier0` target must run {GATE}; the dash ban has no other gate"
+        makefile.contains("//bazel/checks/meta:tier0")
+            && meta_build.contains("//:tests/tools/tier0-first-pass.sh")
+            && meta_build.contains("name = \"tier0_first_pass\""),
+        "the Makefile `check-tier0` target must route through the Bazel carrier for {GATE}"
     );
 }
 

@@ -1,0 +1,2 @@
+status = "retired"
+successor_ids = ["//bazel/checks/policy:policy_tooling"]

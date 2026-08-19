@@ -1,0 +1,192 @@
+load("@crates//:defs.bzl", "all_crate_deps")
+load("@rules_rust//rust:defs.bzl", "rust_binary", "rust_library", "rust_test")
+
+
+exports_files(
+    ["BUILD.bazel"],
+    visibility = ["//visibility:public"],
+)
+
+d2b_host_srcs = glob(["src/**/*.rs"], allow_empty = True)
+
+rust_library(
+    name = "d2b_host",
+    srcs = d2b_host_srcs,
+    compile_data = [
+        "//:tests/golden/runner-shape/audio-argv-minimal.txt",  # keep
+        "//:tests/golden/runner-shape/gpu-argv-minimal.txt",  # keep
+        "//:tests/golden/runner-shape/otel-host-bridge-argv-minimal.txt",  # keep
+        "//:tests/golden/runner-shape/swtpm-argv-minimal.txt",  # keep
+        "//:tests/golden/runner-shape/usbip-argv-minimal.txt",  # keep
+        "//:tests/golden/runner-shape/video-argv-minimal.txt",  # keep
+        "//:tests/golden/runner-shape/virtiofsd-argv-minimal.txt",  # keep
+        "//:tests/golden/runner-shape/vsock-relay-argv-minimal.txt",  # keep
+        "Cargo.toml",
+    ],
+    visibility = ["//visibility:public"],
+    deps = [
+        "//packages/d2b-contracts:d2b_contracts",
+        "//packages/d2b-core:d2b_core",
+        "//packages/d2b-host-argv:d2b_host_argv",
+    ] + all_crate_deps(normal = True, cargo_only = True),
+)
+
+rust_library(
+    name = "d2b_host_test_support",
+    srcs = d2b_host_srcs,
+    compile_data = [
+        "//:tests/golden/runner-shape/audio-argv-minimal.txt",  # keep
+        "//:tests/golden/runner-shape/gpu-argv-minimal.txt",  # keep
+        "//:tests/golden/runner-shape/otel-host-bridge-argv-minimal.txt",  # keep
+        "//:tests/golden/runner-shape/swtpm-argv-minimal.txt",  # keep
+        "//:tests/golden/runner-shape/usbip-argv-minimal.txt",  # keep
+        "//:tests/golden/runner-shape/video-argv-minimal.txt",  # keep
+        "//:tests/golden/runner-shape/virtiofsd-argv-minimal.txt",  # keep
+        "//:tests/golden/runner-shape/vsock-relay-argv-minimal.txt",  # keep
+        "Cargo.toml",
+    ],
+    crate_name = "d2b_host",
+    visibility = ["//visibility:public"],
+    deps = [
+        "//packages/d2b-contracts:d2b_contracts_test_support",
+        "//packages/d2b-core:d2b_core_test_support",
+        "//packages/d2b-host-argv:d2b_host_argv",
+    ] + all_crate_deps(normal = True, cargo_only = True),
+)
+
+rust_library(
+    name = "d2b_host_fake_backends",
+    srcs = d2b_host_srcs,
+    compile_data = [
+        "//:tests/golden/runner-shape/audio-argv-minimal.txt",  # keep
+        "//:tests/golden/runner-shape/gpu-argv-minimal.txt",  # keep
+        "//:tests/golden/runner-shape/otel-host-bridge-argv-minimal.txt",  # keep
+        "//:tests/golden/runner-shape/swtpm-argv-minimal.txt",  # keep
+        "//:tests/golden/runner-shape/usbip-argv-minimal.txt",  # keep
+        "//:tests/golden/runner-shape/video-argv-minimal.txt",  # keep
+        "//:tests/golden/runner-shape/virtiofsd-argv-minimal.txt",  # keep
+        "//:tests/golden/runner-shape/vsock-relay-argv-minimal.txt",  # keep
+        "Cargo.toml",
+    ],
+    crate_features = ["fake-backends"],
+    crate_name = "d2b_host",
+    visibility = ["//visibility:public"],
+    deps = [
+        "//packages/d2b-contracts:d2b_contracts_test_support",
+        "//packages/d2b-core:d2b_core_test_support",
+        "//packages/d2b-host-argv:d2b_host_argv",
+    ] + all_crate_deps(normal = True, cargo_only = True),
+)
+
+rust_binary(
+    name = "d2b-activation-helper",
+    srcs = ["src/bin/d2b-activation-helper.rs"],
+    compile_data = ["Cargo.toml"],
+    visibility = ["//visibility:public"],
+    deps = [
+        ":d2b_host",
+        "//packages/d2b-contracts:d2b_contracts",
+    ] + all_crate_deps(normal = True, cargo_only = True),
+)
+
+rust_test(
+    name = "activation_helper_build_farm",
+    srcs = ["tests/activation_helper_build_farm.rs"],
+    compile_data = ["Cargo.toml"],
+    data = [":d2b-activation-helper"],
+    env = {"CARGO_BIN_EXE_d2b-activation-helper": "$(rootpath :d2b-activation-helper)"},
+    rustc_env = {"CARGO_BIN_EXE_d2b-activation-helper": "$(rootpath :d2b-activation-helper)"},
+    visibility = ["//visibility:public"],
+    deps = [
+        ":d2b_host_test_support",
+    ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
+)
+
+rust_test(
+    name = "activation_helper_fs_posture",
+    srcs = ["tests/activation_helper_fs_posture.rs"],
+    compile_data = ["Cargo.toml"],
+    data = [":d2b-activation-helper"],
+    env = {"CARGO_BIN_EXE_d2b-activation-helper": "$(rootpath :d2b-activation-helper)"},
+    rustc_env = {"CARGO_BIN_EXE_d2b-activation-helper": "$(rootpath :d2b-activation-helper)"},
+    visibility = ["//visibility:public"],
+    deps = [
+    ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
+)
+
+rust_test(
+    name = "guest_control_token_materializer",
+    srcs = ["tests/guest_control_token_materializer.rs"],
+    compile_data = ["Cargo.toml"],
+    data = [
+        ":d2b-activation-helper",
+        "//:nixos-modules/guest-control-token-materialize.py",
+    ],
+    env = {
+        "CARGO_BIN_EXE_d2b-activation-helper": "$(rootpath :d2b-activation-helper)",
+        "D2B_GUEST_CONTROL_TOKEN_MATERIALIZER": "$(rootpath //:nixos-modules/guest-control-token-materialize.py)",
+    },
+    env_inherit = ["PATH"],
+    rustc_env = {"CARGO_BIN_EXE_d2b-activation-helper": "$(rootpath :d2b-activation-helper)"},
+    tags = ["no-remote-cache"],
+    visibility = ["//visibility:public"],
+    deps = [] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
+)
+
+rust_test(
+    name = "guest_vsock_ttrpc_compile",
+    srcs = ["tests/guest_vsock_ttrpc_compile.rs"],
+    compile_data = ["Cargo.toml"],
+    data = [":d2b-activation-helper"],
+    env = {"CARGO_BIN_EXE_d2b-activation-helper": "$(rootpath :d2b-activation-helper)"},
+    rustc_env = {"CARGO_BIN_EXE_d2b-activation-helper": "$(rootpath :d2b-activation-helper)"},
+    visibility = ["//visibility:public"],
+    deps = [
+    ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
+)
+
+rust_test(
+    name = "host_generation",
+    srcs = ["tests/host_generation.rs"],
+    compile_data = ["Cargo.toml"],
+    visibility = ["//visibility:public"],
+    deps = [
+        ":d2b_host_test_support",
+        "//packages/d2b-contracts:d2b_contracts_test_support",
+    ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
+)
+
+rust_test(
+    name = "d2b_host_test",
+    compile_data = ["Cargo.toml"],
+    crate = ":d2b_host_test_support",
+    data = [
+        ":d2b-activation-helper",
+        "//:tests/golden/runner-shape/parity-drift.json",
+    ],
+    env = {
+        "CARGO_BIN_EXE_d2b-activation-helper": "$(rootpath :d2b-activation-helper)",
+        "D2B_RUNNER_SHAPE_PARITY_DRIFT": "$(rootpath //:tests/golden/runner-shape/parity-drift.json)",
+    },
+    rustc_env = {"CARGO_BIN_EXE_d2b-activation-helper": "$(rootpath :d2b-activation-helper)"},
+    deps = [
+    ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
+)
+
+# keep
+filegroup(
+    name = "cargo_workspace_sources",
+    srcs = glob(
+        [
+            "Cargo.lock",
+            "Cargo.toml",
+            "benches/**/*.rs",
+            "build.rs",
+            "examples/**/*.rs",
+            "src/**/*.rs",
+            "tests/**/*.rs",
+        ],
+        allow_empty = True,
+    ),
+    visibility = ["//visibility:public"],
+)

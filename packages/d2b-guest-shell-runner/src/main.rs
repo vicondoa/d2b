@@ -172,6 +172,7 @@ fn run_libshpool_session_command(
 
 #[derive(Clone, Copy)]
 enum ManagementStatus {
+    #[cfg(feature = "real-libshpool")]
     Ok,
     #[cfg(not(feature = "real-libshpool"))]
     Unsupported,
@@ -184,6 +185,7 @@ fn print_management(
     status: ManagementStatus,
 ) -> Result<()> {
     let output = match status {
+        #[cfg(feature = "real-libshpool")]
         ManagementStatus::Ok => ShellManagementOutput::ok(command, name),
         #[cfg(not(feature = "real-libshpool"))]
         ManagementStatus::Unsupported => ShellManagementOutput::unsupported(command, name),
@@ -192,6 +194,7 @@ fn print_management(
         println!("{}", serde_json::to_string(&output)?);
     } else {
         match status {
+            #[cfg(feature = "real-libshpool")]
             ManagementStatus::Ok => println!("{} for '{}' completed", output.command, output.name),
             #[cfg(not(feature = "real-libshpool"))]
             ManagementStatus::Unsupported => println!(

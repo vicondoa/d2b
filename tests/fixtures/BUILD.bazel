@@ -1,0 +1,21 @@
+package(default_visibility = ["//visibility:public"])
+
+exports_files([
+    "BUILD.bazel",
+    "deny-unknown/bundle-invalid.json",
+    "deny-unknown/bundle-valid.json",
+    "deny-unknown/closures-invalid.json",
+    "deny-unknown/closures-valid.json",
+    "deny-unknown/host-valid.json",
+])
+
+filegroup(
+    name = "contract_sources",
+    srcs = glob(
+        [
+            "**/*",
+        ],
+        allow_empty = True,
+        exclude = ["**/BUILD.bazel"],
+    ),
+)

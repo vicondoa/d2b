@@ -17,7 +17,7 @@ mod manifest_v04_roundtrip {
 
     #[test]
     fn baseline_vms_json_round_trips_semantically() {
-        let baseline_path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join(BASELINE_FIXTURE);
+        let baseline_path = runfile_path(BASELINE_FIXTURE);
         let baseline_bytes =
             std::fs::read(&baseline_path).expect("read manifest v04 baseline fixture");
 
@@ -46,6 +46,20 @@ mod manifest_v04_roundtrip {
                 baseline_value,
                 rendered_value
             );
+        }
+
+        fn runfile_path(relative: &str) -> PathBuf {
+            if let Some(runfiles) = std::env::var_os("RUNFILES_DIR") {
+                let candidate = PathBuf::from(runfiles)
+                    .join("_main")
+                    .join("tests/golden/manifest_v04/baseline-vms.json");
+                if candidate.exists() {
+                    return candidate;
+                }
+            }
+            std::env::current_dir()
+                .unwrap_or_else(|_| std::env::temp_dir())
+                .join(relative)
         }
     }
 

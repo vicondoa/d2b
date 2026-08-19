@@ -5,41 +5,16 @@
 //!
 //! These checks intentionally live in the existing Rust policy-test layer rather
 //! than a new shell gate. They scan only git-tracked files, so ignored build
-//! outputs such as `packages/target/` and local scratch artifacts are never
+//! outputs such as `target/` and local scratch artifacts are never
 //! considered.
 
-use std::collections::BTreeSet;
-use std::process::Command;
-
-use d2b_contract_tests::{read_repo_file, repo_root};
+use d2b_contract_tests::{read_repo_file, repo_files, repo_root};
 use regex::Regex;
 
 const PR_TEMPLATE: &str = ".github/PULL_REQUEST_TEMPLATE.md";
 
 fn git_tracked_files(roots: &[&str]) -> Vec<String> {
-    let output = Command::new("git")
-        .arg("-C")
-        .arg(repo_root())
-        .arg("-c")
-        .arg("core.quotePath=false")
-        .args(["ls-files", "-z", "--"])
-        .args(roots)
-        .output()
-        .expect("run `git ls-files -z`");
-    assert!(
-        output.status.success(),
-        "git ls-files failed: {}",
-        String::from_utf8_lossy(&output.stderr)
-    );
-
-    let mut files = BTreeSet::new();
-    for raw in output.stdout.split(|byte| *byte == 0) {
-        if raw.is_empty() {
-            continue;
-        }
-        files.insert(String::from_utf8(raw.to_vec()).expect("tracked paths are UTF-8"));
-    }
-    files.into_iter().collect()
+    repo_files(roots)
 }
 
 fn read_tracked_text_file(rel: &str) -> Option<String> {

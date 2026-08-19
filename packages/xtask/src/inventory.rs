@@ -308,7 +308,7 @@ fn is_nix_file(path: &str) -> bool {
 }
 
 fn is_crate_manifest(path: &str) -> bool {
-    path != "packages/Cargo.toml" && path.starts_with("packages/") && path.ends_with("/Cargo.toml")
+    path != "Cargo.toml" && path.starts_with("packages/") && path.ends_with("/Cargo.toml")
 }
 
 fn file_metric(repo_root: &Path, path: &str) -> Result<FileMetric, Box<dyn std::error::Error>> {
@@ -334,7 +334,7 @@ fn sort_metrics(metrics: &mut [FileMetric]) {
 }
 
 fn workspace_info(repo_root: &Path) -> Result<WorkspaceInfo, Box<dyn std::error::Error>> {
-    let root_manifest = "packages/Cargo.toml";
+    let root_manifest = "Cargo.toml";
     let root_toml = fs::read_to_string(repo_root.join(root_manifest))?;
     Ok(WorkspaceInfo {
         root_manifest: root_manifest.to_owned(),
@@ -512,8 +512,6 @@ fn marker_terms(line_lowercase: &str) -> Vec<&'static str> {
 fn classify_generated_surface(path: &str) -> Option<&'static str> {
     if path == ".github/workflows/pr-l1-static-fast.yml" {
         Some("generated-ci-workflow")
-    } else if path == "tests/layer1-jobs.json" {
-        Some("ci-workflow-source")
     } else if path.starts_with("docs/reference/schemas/") && path.ends_with(".json") {
         Some("contract-schema-json")
     } else if path.starts_with("docs/reference/cli-output/") && path.ends_with(".json") {
@@ -542,12 +540,8 @@ fn classify_generated_surface(path: &str) -> Option<&'static str> {
 fn classify_test_driver_surface(path: &str) -> Option<&'static str> {
     if path == "Makefile" {
         Some("make-targets")
-    } else if path == "tests/layer1-jobs.json" {
-        Some("layer1-job-manifest")
     } else if path.starts_with(".github/workflows/") && path.ends_with(".yml") {
         Some("ci-workflow")
-    } else if path.starts_with("tests/test-") && path.ends_with(".sh") {
-        Some("make-target-driver")
     } else if path == "tests/static.sh" || path == "tests/runner.sh" {
         Some("top-level-shell-driver")
     } else if path.starts_with("tests/tools/") {
@@ -639,8 +633,8 @@ version = "0.0.0"
             Some("contract-schema-json")
         );
         assert_eq!(
-            classify_test_driver_surface("tests/test-rust.sh"),
-            Some("make-target-driver")
+            classify_test_driver_surface("tests/static.sh"),
+            Some("top-level-shell-driver")
         );
     }
 

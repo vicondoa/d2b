@@ -1,0 +1,130 @@
+{
+  "schemaVersion": 1,
+  "targetSet": [
+    "//..."
+  ],
+  "profiles": {
+    "common": {
+      "targetSet": [
+        "//..."
+      ]
+    },
+    "local": {
+      "targetSet": [
+        "//..."
+      ],
+      "execution": "local",
+      "credential": "none"
+    },
+    "remote": {
+      "targetSet": [
+        "//..."
+      ],
+      "execution": "remote",
+      "credential": "credential-helper",
+      "namespace": "d2b/developer/{platform}/{toolchain}/worker-v1/minimal/lock-v1",
+      "remoteDownloadOutputs": "minimal",
+      "workerImageContract": "d2b-bazel-worker/v1"
+    },
+    "trusted-seed": {
+      "targetSet": [
+        "//..."
+      ],
+      "execution": "remote",
+      "credential": "trusted-credential-helper",
+      "namespace": "d2b/trusted-seed/{platform}/{toolchain}/worker-v1/minimal/lock-v1",
+      "remoteDownloadOutputs": "minimal",
+      "workerImageContract": "d2b-bazel-worker/v1",
+      "remoteCacheAsync": false
+    },
+    "qualification": {
+      "targetSet": [
+        "//..."
+      ],
+      "execution": "remote",
+      "credential": "trusted-credential-helper",
+      "namespace": "d2b/qualification/{platform}/{toolchain}/worker-v1/minimal/lock-v1",
+      "remoteDownloadOutputs": "minimal",
+      "workerImageContract": "d2b-bazel-worker/v1"
+    }
+  },
+  "remote": {
+    "provider": "buildbuddy",
+    "endpoint": "grpcs://d2b.buildbuddy.io",
+    "besEndpoint": "grpcs://d2b.buildbuddy.io",
+    "besResultsUrl": "https://d2b.buildbuddy.io/invocation/",
+    "remoteTimeout": "10m",
+    "auth": "credential-helper",
+    "remoteDownloadOutputs": "minimal",
+    "remoteRetries": 0,
+    "workerImageContract": "d2b-bazel-worker/v1",
+    "experimentalFeatures": [],
+    "localCommandOptions": [
+      "--repo_contents_cache="
+    ],
+    "gasCityProxy": "separate"
+  },
+  "trustedInjection": {
+    "protectedRef": "refs/heads/v3",
+    "allowlistedSecurityFiles": [
+      ".bazelrc",
+      "MODULE.bazel",
+      "MODULE.bazel.lock",
+      "bazel/platforms/BUILD.bazel",
+      "bazel/remote/BUILD.bazel",
+      "tests/tools/bazel-check"
+    ],
+    "allowedSecurityDigests": [
+      "sha256:40288848dab58f7227639afdb5c8e51dcf95c87ff8b73b7de78de485476ed608"
+    ],
+    "untrustedCredential": "none",
+    "trustedCredential": "credential-helper"
+  },
+  "fallback": {
+    "identicalTargetSet": true,
+    "maxLocalRetries": 1,
+    "preDispatchKinds": [
+      "missing-credentials",
+      "authentication",
+      "endpoint",
+      "worker",
+      "transport"
+    ],
+    "postDispatchAction": "fail-closed",
+    "analysisAction": "fail-closed",
+    "testAction": "fail-closed",
+    "policyAction": "fail-closed",
+    "buildAction": "fail-closed"
+  },
+  "evidence": {
+    "required": [
+      "action-cache",
+      "cas",
+      "outputs",
+      "stdout-stderr",
+      "bes",
+      "repository",
+      "retries",
+      "provider-billed-transfer"
+    ],
+    "credentialMaterial": "forbidden"
+  },
+  "cacheIdentity": {
+    "branchIndependent": true,
+    "workerImageContract": "d2b-bazel-worker/v1",
+    "partitionKeys": [
+      "architecture",
+      "trust",
+      "toolchain",
+      "platform",
+      "worker-image",
+      "feature-set",
+      "lock"
+    ],
+    "profiles": {
+      "remote": "developer",
+      "trusted-seed": "trusted-seed",
+      "qualification": "qualification"
+    }
+  }
+}

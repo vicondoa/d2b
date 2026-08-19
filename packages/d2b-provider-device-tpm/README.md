@@ -105,7 +105,6 @@ records for the resulting privileged effects.
 ## Build and test
 
 ```bash
-cd packages
 cargo test -p d2b-provider-device-tpm
 cargo nextest run -p d2b-provider-device-tpm
 cargo clippy -p d2b-provider-device-tpm --all-targets -- -D warnings

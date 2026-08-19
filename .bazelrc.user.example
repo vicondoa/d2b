@@ -1,0 +1,6 @@
+# Copy this file to .bazelrc.user and keep the copy private.
+#
+# The helper reads the credential from the operator's protected environment or
+# credential store. It must never receive a token as an argument or write one
+# to stdout except for Bazel's credential-helper protocol response.
+common --credential_helper=d2b.buildbuddy.io=%workspace%/tests/tools/bazel-check

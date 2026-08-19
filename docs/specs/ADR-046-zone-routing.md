@@ -2628,7 +2628,7 @@ The following transitions are NOT simple textual renames:
 | Validation | All v3 baseline route_engine test cases must pass; p95 benchmark gate |
 | Removal proof | Not applicable |
 | Implementation state | Merged |
-| Evidence | `packages/d2b-zone-routing/tests/route_engine_vectors.rs` and `packages/d2b-zone-routing/benches/route_decision.rs` both exist. The vector suite ports the baseline route-engine cases to ZonePath and adds the K0/K1/K2 topology scenario, relay-grant vectors, hop-count boundary vectors, relay budget monotonicity, and refusal ordering. Caveat: the p95 benchmark gate is not met. `benches/route_decision.rs` is declared `harness = false` but no entrypoint runs it: it appears in no `Makefile` target, in no `tests/layer1-jobs.json` job, and `tests/unit/gates/performance-budgets.sh` names no Zone routing budget. An unrun benchmark enforces no latency, and that gate is classified advisory in any case. |
+| Evidence | `packages/d2b-zone-routing/tests/route_engine_vectors.rs` and `packages/d2b-zone-routing/benches/route_decision.rs` both exist. The vector suite ports the baseline route-engine cases to ZonePath and adds the K0/K1/K2 topology scenario, relay-grant vectors, hop-count boundary vectors, relay budget monotonicity, and refusal ordering. The harness-free `//packages/d2b-zone-routing:route_decision` Bazel target executes the benchmark. Caveat: it records benchmark behavior but does not enforce the advisory p95 budget. |
 
 ### ADR046-routing-007
 

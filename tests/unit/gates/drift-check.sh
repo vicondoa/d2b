@@ -30,19 +30,19 @@ fi
 workspace_target_dir="${CARGO_TARGET_DIR:-$(d2b_cargo_target_dir workspace)}"
 xtask_bin="$workspace_target_dir/debug/xtask"
 (
-  cd "$ROOT/packages"
+  cd "$ROOT"
   # Always ask Cargo to refresh xtask in the selected target dir. Cargo reuses
   # cached artifacts when fresh, but this prevents an old repo-local
-  # packages/target/debug/xtask from masking generated schema/docs drift.
+  # target/debug/xtask from masking generated schema/docs drift.
   CARGO_TARGET_DIR="$workspace_target_dir" \
-    cargo build -q --manifest-path "$ROOT/packages/Cargo.toml" -p xtask --bin xtask
+    cargo build -q --manifest-path "$ROOT/Cargo.toml" -p xtask --bin xtask
 )
 
 run_xtask() {
   local subcommand="$1"
   log "--> drift-check: cargo xtask $subcommand"
   (
-    cd "$ROOT/packages"
+    cd "$ROOT"
     "$xtask_bin" "$subcommand"
   )
 }

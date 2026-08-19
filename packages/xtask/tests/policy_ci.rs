@@ -1,17 +1,15 @@
 #![forbid(unsafe_code)]
 
 use std::collections::BTreeSet;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 const ALLOWLISTED_WORKFLOWS: &[&str] = &[
     ".github/workflows/eval-with-entra-id.yml",
-    ".github/workflows/pr-eval-shell-tests.yml",
     ".github/workflows/release-host-binaries.yml",
 ];
 
 const V3_PR_GATE_WORKFLOWS: &[&str] = &[
     ".github/workflows/eval-with-entra-id.yml",
-    ".github/workflows/pr-eval-shell-tests.yml",
     ".github/workflows/pr-l1-static-fast.yml",
 ];
 
@@ -37,6 +35,7 @@ const APPROVED_MAKE_TARGETS: &[&str] = &[
     "test-flake",
     "test-nix-unit",
     "test-policy",
+    "bazel-check",
     "test-integration",
     "test-host-integration",
     "test-hardware",
@@ -45,12 +44,46 @@ const APPROVED_MAKE_TARGETS: &[&str] = &[
     "ledger-regen",
 ];
 
+const RETIRED_BAZEL_AUTHORITY_PATHS: &[&str] = &[
+    "docs/adr/0052-bazel-rust-build-and-test.md",
+    "specs/003-adr052-bazel-rust",
+    "changelog.d/adr052-bazel-rust-testing.md",
+    "changelog.d/adr0054-broker-hub.md",
+    "changelog.d/spec003-adr0054-amend.md",
+];
+
 fn repo_root() -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .parent()
-        .and_then(Path::parent)
-        .expect("xtask lives under packages/xtask")
-        .to_path_buf()
+    let mut candidates = Vec::new();
+    for variable in ["D2B_REPO_ROOT", "TEST_SRCDIR", "RUNFILES_DIR"] {
+        if let Some(base) = std::env::var_os(variable).map(PathBuf::from) {
+            candidates.push(base.clone());
+            if let Some(workspace) = std::env::var_os("TEST_WORKSPACE") {
+                candidates.push(base.join(workspace));
+            }
+            candidates.push(base.join("_main"));
+        }
+    }
+    if let Ok(current_dir) = std::env::current_dir() {
+        candidates.push(current_dir);
+    }
+    for candidate in candidates {
+        let mut path = candidate;
+        if path.is_file() {
+            path.pop();
+        }
+        loop {
+            if path.join("Cargo.toml").is_file()
+                && path.join("BUILD.bazel").is_file()
+                && path.join("flake.nix").is_file()
+            {
+                return path;
+            }
+            if !path.pop() {
+                break;
+            }
+        }
+    }
+    panic!("repository root with Cargo.toml, BUILD.bazel, and flake.nix is not discoverable")
 }
 
 fn workflow_files() -> Vec<String> {
@@ -62,7 +95,10 @@ fn workflow_files() -> Vec<String> {
             let entry = entry.expect("read workflow entry");
             entry.path()
         })
-        .filter(|path| path.extension().is_some_and(|ext| ext == "yml"))
+        .filter(|path| {
+            path.extension()
+                .is_some_and(|ext| ext == "yml" || ext == "yaml")
+        })
         .map(|path| {
             path.strip_prefix(&root)
                 .expect("workflow path under repo root")
@@ -96,6 +132,79 @@ fn calls_approved_make_target(content: &str) -> bool {
     })
 }
 
+fn contains_bazel_facade_invocation(content: &str) -> bool {
+    let mut lines = Vec::new();
+    let mut continued_line = String::new();
+    for line in content.lines() {
+        continued_line.push_str(line.trim_end_matches('\\'));
+        continued_line.push(' ');
+        if !line.trim_end().ends_with('\\') {
+            lines.push(std::mem::take(&mut continued_line));
+        }
+    }
+    if !continued_line.is_empty() {
+        lines.push(continued_line);
+    }
+
+    let mut index = 0;
+    while index < lines.len() {
+        let line = &lines[index];
+        let trimmed = line.trim_start();
+        let run_value = trimmed
+            .strip_prefix("- ")
+            .unwrap_or(trimmed)
+            .strip_prefix("run:")
+            .map(str::trim_start);
+        if let Some(value) = run_value {
+            if value.starts_with('|') || value.starts_with('>') {
+                let key_indent = line.len() - trimmed.len();
+                let mut block = String::new();
+                index += 1;
+                while index < lines.len() {
+                    let candidate = &lines[index];
+                    let candidate_indent = candidate.len() - candidate.trim_start().len();
+                    if !candidate.trim().is_empty() && candidate_indent <= key_indent {
+                        break;
+                    }
+                    block.push_str(candidate.trim_end_matches('\\'));
+                    block.push(' ');
+                    index += 1;
+                }
+                if shell_command_contains_bazel_facade(&block) {
+                    return true;
+                }
+                continue;
+            }
+            if shell_command_contains_bazel_facade(value) {
+                return true;
+            }
+        }
+        if shell_command_contains_bazel_facade(line) {
+            return true;
+        }
+        index += 1;
+    }
+    false
+}
+
+fn shell_command_contains_bazel_facade(command: &str) -> bool {
+    let words = command
+        .split(|character: char| {
+            character.is_whitespace() || matches!(character, ';' | '&' | '|' | '\'' | '"')
+        })
+        .filter(|word| !word.is_empty());
+    let mut has_make = false;
+    let mut has_target = false;
+    for word in words {
+        has_make |= word == "make" || word == "$(MAKE)" || word.ends_with("/make");
+        has_target |= word == "bazel-check";
+        if word.ends_with("tests/tools/bazel-check") {
+            return true;
+        }
+    }
+    has_make && has_target
+}
+
 #[test]
 fn github_workflows_use_make_targets_or_explicit_allowlist() {
     let workflows = workflow_files();
@@ -123,15 +232,94 @@ fn github_workflows_use_make_targets_or_explicit_allowlist() {
 }
 
 #[test]
+fn optional_bazel_facade_stays_out_of_ci_schedulers() {
+    let mut violations = Vec::new();
+    for rel in workflow_files() {
+        let content = read_repo_file(&rel);
+        if content.contains("tests/tools/bazel-check") {
+            violations.push(rel);
+        }
+    }
+    assert!(
+        violations.is_empty(),
+        "CI must call Bazel through make bazel-check, not the facade script:\n{}",
+        violations.join("\n")
+    );
+
+    let workflow = read_repo_file(".github/workflows/pr-l1-static-fast.yml");
+    assert!(
+        workflow.contains("make check-tier0")
+            && workflow.contains("make test-policy")
+            && workflow.contains("make test-rust-main")
+            && workflow.contains("make test-flake")
+            && workflow.contains("make test-fixture-contracts"),
+        "CI must schedule the fixed Bazel graph through public Make aliases"
+    );
+    assert!(
+        workflow.matches("D2B_BAZEL_PROFILE: local").count() >= 1,
+        "CI Bazel must stay on the local profile"
+    );
+    assert!(
+        !workflow.contains("remote.buildbuddy.io") && !workflow.contains("d2b.buildbuddy.io"),
+        "CI must not pin a BuildBuddy endpoint"
+    );
+}
+
+#[test]
+fn bazel_facade_policy_detects_make_variants() {
+    for command in [
+        "make bazel-check",
+        "make  bazel-check",
+        "make --no-print-directory bazel-check",
+        "make \\\n  bazel-check",
+        "tests/tools/bazel-check --profile local",
+        "run: \"make bazel-check\"",
+        "run: >-\n  make\n  bazel-check",
+        "run: |\n  tests/tools/bazel-check --profile local",
+    ] {
+        assert!(
+            contains_bazel_facade_invocation(command),
+            "Bazel facade invocation was not detected: {command:?}"
+        );
+    }
+    assert!(!contains_bazel_facade_invocation("make check-tier0"));
+}
+
+#[test]
 fn ci_uses_make_allowlist_is_intentional_and_bounded() {
     assert_eq!(
         ALLOWLISTED_WORKFLOWS,
         &[
             ".github/workflows/eval-with-entra-id.yml",
-            ".github/workflows/pr-eval-shell-tests.yml",
             ".github/workflows/release-host-binaries.yml",
         ],
         "workflow make-target exceptions must stay reviewed and bounded"
+    );
+}
+
+#[test]
+fn obsolete_bazel_authority_is_deleted() {
+    let root = repo_root();
+    let present = RETIRED_BAZEL_AUTHORITY_PATHS
+        .iter()
+        .filter(|relative| root.join(relative).exists())
+        .copied()
+        .collect::<Vec<_>>();
+    assert!(
+        present.is_empty(),
+        "obsolete Bazel authority paths must be deleted: {}",
+        present.join(", ")
+    );
+
+    let adr_index = read_repo_file("docs/adr/README.md");
+    assert!(
+        !adr_index.contains("0052-bazel-rust-build-and-test.md"),
+        "ADR index must not list deleted ADR 0052"
+    );
+    let makefile = read_repo_file("Makefile");
+    assert!(
+        !makefile.contains("test-bazel-rust"),
+        "obsolete test-bazel-rust aliases must not return"
     );
 }
 

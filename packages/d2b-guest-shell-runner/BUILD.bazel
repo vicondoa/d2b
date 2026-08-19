@@ -1,0 +1,122 @@
+load("@crates//:defs.bzl", "aliases", "all_crate_deps")
+load("@rules_rust//rust:defs.bzl", "rust_binary", "rust_library", "rust_test")
+
+exports_files(
+    ["BUILD.bazel"],
+    visibility = ["//visibility:public"],
+)
+
+
+rust_library(
+    name = "d2b_guest_shell_runner",
+    aliases = aliases(),
+    srcs = glob(["src/**/*.rs"], allow_empty = True),
+    compile_data = ["Cargo.toml"],
+    visibility = ["//visibility:public"],
+    # keep
+    deps = [
+    ] + all_crate_deps(normal = True, cargo_only = True),
+)
+
+rust_library(
+    name = "d2b_guest_shell_runner_real_libshpool",
+    aliases = aliases(),
+    srcs = glob(["src/**/*.rs"], allow_empty = True),
+    compile_data = ["Cargo.toml"],
+    crate_name = "d2b_guest_shell_runner",
+    crate_features = ["real-libshpool"],
+    visibility = ["//visibility:public"],
+    deps = [
+        "@crates//:libshpool",
+    ] + all_crate_deps(normal = True, cargo_only = True),
+)
+
+rust_binary(
+    name = "d2b-guest-shell-runner",
+    aliases = aliases(),
+    srcs = ["src/main.rs"],
+    compile_data = ["Cargo.toml"],
+    visibility = ["//visibility:public"],
+    # keep
+    deps = [
+        ":d2b_guest_shell_runner",
+    ] + all_crate_deps(normal = True, cargo_only = True),
+)
+
+rust_binary(
+    name = "d2b-guest-shell-runner-real-libshpool",
+    aliases = aliases(),
+    srcs = ["src/main.rs"],
+    compile_data = ["Cargo.toml"],
+    crate_features = ["real-libshpool"],
+    visibility = ["//visibility:public"],
+    deps = [
+        ":d2b_guest_shell_runner_real_libshpool",
+        "@crates//:libshpool",
+    ] + all_crate_deps(normal = True, cargo_only = True),
+)
+
+rust_test(
+    name = "cli",
+    aliases = aliases(),
+    srcs = ["tests/cli.rs"],
+    compile_data = ["Cargo.toml"],
+    data = [":d2b-guest-shell-runner"],
+    env = {"CARGO_BIN_EXE_d2b-guest-shell-runner": "$(rootpath :d2b-guest-shell-runner)"},
+    rustc_env = {"CARGO_BIN_EXE_d2b-guest-shell-runner": "$(rootpath :d2b-guest-shell-runner)"},
+    visibility = ["//visibility:public"],
+    deps = [
+    ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
+)
+
+rust_test(
+    name = "cli-real-libshpool",
+    aliases = aliases(),
+    srcs = ["tests/cli.rs"],
+    compile_data = ["Cargo.toml"],
+    crate_features = ["real-libshpool"],
+    data = [":d2b-guest-shell-runner-real-libshpool"],
+    env = {"CARGO_BIN_EXE_d2b-guest-shell-runner": "$(rootpath :d2b-guest-shell-runner-real-libshpool)"},
+    rustc_env = {"CARGO_BIN_EXE_d2b-guest-shell-runner": "$(rootpath :d2b-guest-shell-runner-real-libshpool)"},
+    visibility = ["//visibility:public"],
+    deps = [
+        "@crates//:libshpool",
+    ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
+)
+
+rust_test(
+    name = "d2b_guest_shell_runner_test",
+    aliases = aliases(),
+    compile_data = ["Cargo.toml"],
+    crate = ":d2b_guest_shell_runner",
+    deps = [] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
+)
+
+rust_test(
+    name = "d2b_guest_shell_runner_real_libshpool_test",
+    aliases = aliases(),
+    compile_data = ["Cargo.toml"],
+    crate = ":d2b_guest_shell_runner_real_libshpool",
+    crate_features = ["real-libshpool"],
+    deps = [
+        "@crates//:libshpool",
+    ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
+)
+
+# keep
+filegroup(
+    name = "cargo_workspace_sources",
+    srcs = glob(
+        [
+            "Cargo.lock",
+            "Cargo.toml",
+            "benches/**/*.rs",
+            "build.rs",
+            "examples/**/*.rs",
+            "src/**/*.rs",
+            "tests/**/*.rs",
+        ],
+        allow_empty = True,
+    ),
+    visibility = ["//visibility:public"],
+)

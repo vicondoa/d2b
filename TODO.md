@@ -6,7 +6,7 @@ the top. Move closed items to CHANGELOG and delete from here.
 ## Flake provides no `devShell` → `cargo-ubuntu` CI job and `nix develop` fail
 
 **Symptom.** The `cargo-ubuntu` job in `.github/workflows/pr-cargo-workspace.yml`
-(which runs `cd packages && nix develop --command bash -c 'cargo fmt … &&
+(which runs `nix develop --command bash -c 'cargo fmt … &&
 cargo clippy … && cargo test …'`) fails immediately:
 
 ```

@@ -1,0 +1,30 @@
+load("@rules_shell//shell:sh_test.bzl", "sh_test")
+
+package(default_visibility = ["//visibility:public"])
+
+exports_files(["BUILD.bazel"])
+
+filegroup(
+    name = "meta_sources",
+    srcs = glob(
+        [
+            "*.py",
+            "*.sh",
+        ],
+        allow_empty = True,
+    ),
+)
+
+sh_test(
+    name = "w0_dep_direction",
+    srcs = ["w0-dep-direction.sh"],
+    data = [
+        "//:tests_root_sources",
+        "//bazel/checks/rust:repo_policy_sources",
+    ],
+    env_inherit = ["PATH", "ROOT"],
+    tags = [
+        "local",
+        "no-sandbox",
+    ],
+)

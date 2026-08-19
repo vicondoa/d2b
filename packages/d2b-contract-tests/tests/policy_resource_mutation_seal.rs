@@ -39,6 +39,9 @@ fn repository_files(root: &Path) -> Vec<PathBuf> {
                 panic!("policy scan cannot inspect repository entry: {error}")
             });
             if file_type.is_symlink() {
+                if fs::metadata(&path).is_ok_and(|metadata| metadata.is_file()) {
+                    files.push(path);
+                }
                 continue;
             }
             if file_type.is_dir() {

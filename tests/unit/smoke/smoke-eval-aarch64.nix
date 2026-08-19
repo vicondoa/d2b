@@ -28,7 +28,9 @@
 #
 # Wired into tests/static.sh as a Layer-1 gate.
 
-{ pkgs ? import <nixpkgs> { system = "aarch64-linux"; } }:
+{ pkgs ? import <nixpkgs> { system = "aarch64-linux"; }
+, flakeRoot ? ./../../..
+}:
 
 let
   system = "aarch64-linux";
@@ -36,7 +38,11 @@ let
 
   # Import the flake-as-source via getFlake. Path relative to this
   # file so the test works regardless of caller cwd.
-  flake = builtins.getFlake "git+file://${toString ./../../..}";
+  flake = builtins.getFlake (
+    if builtins.pathExists (flakeRoot + "/.git")
+    then "git+file://${toString flakeRoot}"
+    else toString flakeRoot
+  );
 
   # Cross-evaluate by asking the flake's nixpkgs for an aarch64
   # instance directly, rather than relying on `import <nixpkgs>`

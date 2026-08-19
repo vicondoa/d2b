@@ -1,0 +1,60 @@
+load("@rules_rust//rust:defs.bzl", "rust_binary", "rust_library", "rust_test")
+
+exports_files(
+    [
+        "BUILD.bazel",
+        "Cargo.lock",
+        "Cargo.toml",
+        "MODULE.bazel",
+        "src/exception.rs",
+        "src/lib.rs",
+        "src/main.rs",
+    ],
+    visibility = ["//visibility:public"],
+)
+
+filegroup(
+    name = "compat_policy_sources",
+    srcs = [
+        "//tests/fixtures/bazel/compat/proto:compat_policy_sources",
+    ],
+    visibility = ["//visibility:public"],
+)
+
+test_suite(
+    name = "fixture_test",
+    tests = ["//tests/fixtures/bazel/compat:bazel_compat_fixture_test"],
+)
+
+rust_library(
+    name = "bazel_compat_fixture",
+    srcs = ["src/lib.rs"],
+    compile_data = ["Cargo.toml"],
+    edition = "2024",
+    visibility = ["//visibility:public"],
+    deps = ["@crates//:serde_json"],
+)
+
+rust_binary(
+    name = "compat_fixture",
+    srcs = ["src/main.rs"],
+    compile_data = ["Cargo.toml"],
+    edition = "2024",
+    visibility = ["//visibility:public"],
+    deps = [":bazel_compat_fixture"],
+)
+
+rust_test(
+    name = "bazel_compat_fixture_test",
+    compile_data = ["Cargo.toml"],
+    crate = ":bazel_compat_fixture",
+    edition = "2024",
+    env_inherit = ["PATH"],
+)
+
+# keep
+rust_library(
+    name = "explicit_exception",
+    srcs = ["src/exception.rs"],
+    crate_name = "explicit_exception",
+)

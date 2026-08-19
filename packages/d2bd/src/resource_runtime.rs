@@ -871,17 +871,25 @@ impl ZoneResourceRuntime {
     ) -> Result<Self, ResourceRuntimeError> {
         #[cfg(test)]
         let audit_sink = audit_sink.or_else(|| {
-            let path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-                .join("target")
-                .join(format!(
-                    "d2bd-resource-audit-{}-{}-{}",
-                    zone.as_str(),
-                    std::process::id(),
-                    SystemTime::now()
-                        .duration_since(UNIX_EPOCH)
-                        .map(|duration| duration.as_nanos())
-                        .unwrap_or_default()
-                ));
+            let base = std::env::var_os("TEST_TMPDIR")
+                .map(std::path::PathBuf::from)
+                .unwrap_or_else(|| {
+                    std::env::var_os("CARGO_MANIFEST_DIR")
+                        .map(std::path::PathBuf::from)
+                        .or_else(|| std::env::current_dir().ok())
+                        .expect("resolve resource runtime scratch root")
+                        .join("target")
+                        .join("tmp")
+                });
+            let path = base.join(format!(
+                "d2bd-resource-audit-{}-{}-{}",
+                zone.as_str(),
+                std::process::id(),
+                SystemTime::now()
+                    .duration_since(UNIX_EPOCH)
+                    .map(|duration| duration.as_nanos())
+                    .unwrap_or_default()
+            ));
             AuditSink::open(path).ok().map(Arc::new)
         });
         #[cfg(not(test))]

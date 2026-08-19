@@ -93,13 +93,11 @@ pub struct DaemonFixture {
 
 impl DaemonFixture {
     pub fn new(prefix: &str) -> Self {
-        let parent = PathBuf::from("target/d2bd-integration-tests");
-        fs::create_dir_all(&parent).expect("create d2bd integration temp parent");
         let tmp = Builder::new()
             .prefix(prefix)
-            .tempdir_in(&parent)
+            .tempdir()
             .expect("create d2bd integration tempdir");
-        let root_dir = relative_to_cwd(tmp.path());
+        let root_dir = tmp.path().to_path_buf();
         let run_dir = root_dir.join("run");
         let socket_path = run_dir.join("public.sock");
         let broker_socket_path = run_dir.join("priv.sock");
@@ -139,11 +137,6 @@ impl DaemonFixture {
     pub fn write_config(&self, launcher_users: &[&str], admin_users: &[&str]) {
         write_daemon_config(self, launcher_users, admin_users);
     }
-}
-
-fn relative_to_cwd(path: &Path) -> PathBuf {
-    let cwd = std::env::current_dir().expect("current dir");
-    path.strip_prefix(&cwd).unwrap_or(path).to_path_buf()
 }
 
 fn remove_file_if_present(path: &Path) {

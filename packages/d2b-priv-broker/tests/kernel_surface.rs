@@ -1,7 +1,6 @@
 use std::fs;
 use std::io;
 use std::os::unix::fs::PermissionsExt;
-use std::path::PathBuf;
 use std::process::Command;
 
 use d2b_priv_broker::sys::path_safe;
@@ -10,15 +9,7 @@ use tempfile::TempDir;
 const OPEN_DIR_XDEV_HELPER_ENV: &str = "D2B_OPEN_DIR_XDEV_HELPER";
 
 fn scratch_dir() -> TempDir {
-    let base = std::env::var_os("CARGO_TARGET_TMPDIR")
-        .map(PathBuf::from)
-        .unwrap_or_else(|| {
-            PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-                .join("target")
-                .join("kernel-surface-tests")
-        });
-    fs::create_dir_all(&base).expect("create scratch base");
-    TempDir::new_in(base).expect("tempdir")
+    tempfile::tempdir().expect("tempdir")
 }
 
 #[test]

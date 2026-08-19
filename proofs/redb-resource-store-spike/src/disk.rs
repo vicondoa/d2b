@@ -840,8 +840,9 @@ pub struct CrashCheckpoints {
 }
 
 pub fn crash_database_path(boundary: u8) -> PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("target")
+    std::env::var_os("TEST_TMPDIR")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| Path::new("target").to_owned())
         .join("spike-data")
         .join(format!("crash-{}-{boundary}.redb", std::process::id()))
 }

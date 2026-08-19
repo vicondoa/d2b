@@ -865,7 +865,7 @@ pub(crate) mod fixtures {
                 fingerprint("spec-set", "fixtures/spec-set.json", 1),
                 fingerprint("work-items", "fixtures/work-items.json", 2),
             ],
-            dependency_fingerprints: vec![fingerprint("cargo-lock", "packages/Cargo.lock", 3)],
+            dependency_fingerprints: vec![fingerprint("cargo-lock", "Cargo.lock", 3)],
             contract_fingerprints: vec![fingerprint("privileges", "docs/reference/schemas/v2", 4)],
         }
     }

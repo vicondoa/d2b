@@ -177,6 +177,13 @@ head-changing update, validate the new head and obtain fresh independent
 review. Missing review evidence fails closed to fresh review. No actionable
 finding remains at merge.
 
+The Bazel graph is the single enforcing Layer-1 authority. Bare local
+`make check` uses BuildBuddy for eligible actions, while generated CI runs the
+same fixed target sets with local Bazel execution and no remote credential.
+Make remains a compatibility surface, not a scheduler. See [Bazel and
+BuildBuddy](../reference/bazel-buildbuddy.md) for execution, cache, failure,
+credential, and update contracts.
+
 Review evidence is bound to the repository, PR, review head OID, observed base
 ref and OID, and verdict. It is not reusable after the head changes. A review
 that cannot prove those bindings is missing evidence, not a pass.
@@ -216,7 +223,7 @@ sessions. Its focused operating detail is
   (use the `d2b_flake_ref` helper in `tests/lib.sh`), **never**
   `builtins.getFlake (toString $ROOT)`. A bare path makes Nix use the
   `path:` fetcher, which copies the ENTIRE working tree into the store -
-  including the multi-GiB `packages/target` cargo artifacts (measured:
+  including the multi-GiB `target` cargo artifacts (measured:
   ~36 GB / 5+ min per cold eval, re-triggered every time a cargo build
   churns `target/`). `git+file://` copies only git-tracked files
   (`target/` is gitignored), turning a 5-minute eval into <1 s. Caveats:
@@ -239,10 +246,10 @@ sessions. Its focused operating detail is
   required so volatile files can't race
   `builtins.getFlake (toString $ROOT)` source-capture during flake-eval gates.
 - Rust worktrees do NOT share a cargo target directory. Each worktree
-  keeps its own `packages/target/`; compiled-output dedup across
+  keeps its own `target/`; compiled-output dedup across
   worktrees comes from `sccache` (`$SCCACHE_DIR`, default
   `~/.cache/d2b-sccache`), wired by the `[build] rustc-wrapper` lines in
-  `packages/.cargo/config.toml` and the sibling-workspace configs under
+  `.cargo/config.toml` and the sibling-workspace configs under
   `packages/d2b-priv-broker/`, `packages/d2b-guest-shell-runner/`, and
   `packages/d2b-core/fuzz/`. A shared target dir is deliberately
   avoided: cargo's target-dir lock is workspace-wide, so two worktrees
@@ -273,10 +280,10 @@ sessions. Its focused operating detail is
   mold targets has largely been paid already. Cranelift, over five
   incremental pairs against a nightly LLVM control, ran 5.8 s against 7.0 s:
   a real 17% but 1.2 s in absolute terms, and it cannot enter the gate at
-  all, because `packages/rust-toolchain.toml` pins an exact stable release
-  that `tests/test-rust.sh` enforces, so it would mean installing and
+  all, because `rust-toolchain.toml` pins an exact stable release
+  that the Cargo compatibility checks enforce, so it would mean installing and
   caching a second toolchain in every Rust job. Reopen either only with a
-  measurement, and note the trap: `tests/test-rust.sh` exports `RUSTFLAGS`,
+  measurement, and note the trap: the Rust compatibility checks export `RUSTFLAGS`,
   and that environment variable **replaces** `build.rustflags` rather than
   merging with it, so a linker configured through `rustflags` is silently
   dead there.
@@ -346,7 +353,7 @@ reclamation is needed.
   example; the skip knob is an explicit, reviewable carve-out used only after the retry also fails. Added with the integration merge; re-evaluate once the entra-id input bumps past
   the affected revision.
 - Before `git worktree remove`, delete the worktree's real
-  `packages/target/` (every worktree has one; there is no shared-cache
+  `target/` (every worktree has one; there is no shared-cache
   symlink) so the removal reclaims its multi-GiB build artifacts.
   Rebuilds in a fresh worktree stay cheap because sccache retains the
   compiled outputs.
@@ -369,9 +376,10 @@ reclamation is needed.
 - `nix flake check` now builds real `cargo-deny` + `cargo-audit`
   derivations (via `checks.${system}.rust-deny` / `.rust-audit`).
   Each derivation fetches the pinned RustSec advisory DB snapshot
-  from the Nix store (no network at build time) and runs cargo-deny /
-  cargo-audit against both `packages/Cargo.lock` and
-  `packages/d2b-priv-broker/Cargo.lock`. The advisory DB is a
+  from the Nix store (no network at build time). `rust-deny` checks the root
+  `Cargo.lock`; `rust-audit` checks generated context policy locks derived
+  from it plus the reduced `packages/Cargo.guest.lock` for guest-static. The
+  advisory DB is a
   `fetchFromGitHub` pinned to a specific commit; update the rev + hash
   in `flake.nix` periodically to pick up new advisories. Wall-clock
   impact: seconds per check (no compilation, just lockfile analysis).

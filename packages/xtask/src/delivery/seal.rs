@@ -108,7 +108,7 @@ impl SealRecord {
     }
 }
 
-/// `cargo run --manifest-path packages/Cargo.toml -p xtask -- delivery wave seal`.
+/// `cargo run --manifest-path Cargo.toml -p xtask -- delivery wave seal`.
 pub fn run(args: &[String]) -> Result<WorkflowOutput> {
     let mut options = CliOptions::parse(args)?;
     let snapshot_path = options.required_path("--snapshot")?;

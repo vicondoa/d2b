@@ -1,9 +1,6 @@
 #![forbid(unsafe_code)]
 
-use std::collections::BTreeSet;
-use std::process::Command;
-
-use d2b_contract_tests::repo_root;
+use d2b_contract_tests::{repo_files, repo_root};
 use regex::Regex;
 
 const ADR_0035_EXAMPLE_PATH: &str = "docs/adr/0035-efficiency-and-simplification-roadmap.md";
@@ -15,31 +12,7 @@ const VALID_SURFACES: [&str; 9] = [
 ];
 
 fn git_tracked_files() -> Vec<String> {
-    let root = repo_root();
-    let output = Command::new("git")
-        .arg("-C")
-        .arg(&root)
-        .arg("-c")
-        .arg("core.quotePath=false")
-        .args(["ls-files", "-z", "--"])
-        .output()
-        .expect("run `git ls-files -z`");
-    assert!(
-        output.status.success(),
-        "git ls-files failed: {}",
-        String::from_utf8_lossy(&output.stderr)
-    );
-
-    let mut files = BTreeSet::new();
-    for raw in output.stdout.split(|byte| *byte == 0) {
-        if raw.is_empty() {
-            continue;
-        }
-        if let Ok(rel) = String::from_utf8(raw.to_vec()) {
-            files.insert(rel);
-        }
-    }
-    files.into_iter().collect()
+    repo_files(&[])
 }
 
 fn read_tracked_text_file(rel: &str) -> Option<String> {

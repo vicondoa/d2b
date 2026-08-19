@@ -1561,12 +1561,12 @@ mod tests {
 
     #[test]
     fn census_pin_write_replaces_the_target_without_leaving_a_temp_file() {
-        let target = std::env::var_os("CARGO_TARGET_DIR")
+        let target = std::env::var_os("TEST_TMPDIR")
+            .or_else(|| std::env::var_os("CARGO_TARGET_DIR"))
             .map(PathBuf::from)
             .unwrap_or_else(|| {
-                Path::new(env!("CARGO_MANIFEST_DIR"))
-                    .parent()
-                    .expect("xtask has a workspace parent")
+                crate::repo_root()
+                    .expect("xtask has a repository root")
                     .join("target")
             });
         let sequence = CENSUS_TEMP_COUNTER.fetch_add(1, Ordering::Relaxed);
@@ -1641,9 +1641,13 @@ mod tests {
 
         let id = SCRATCH_ID.fetch_add(1, Ordering::Relaxed);
         let scratch = Scratch(
-            crate::repo_root()
-                .expect("repository root")
-                .join(".scratch")
+            std::env::var_os("TEST_TMPDIR")
+                .map(PathBuf::from)
+                .unwrap_or_else(|| {
+                    crate::repo_root()
+                        .expect("repository root")
+                        .join(".scratch")
+                })
                 .join(format!("runtime-ledger-pin-{}-{id}", std::process::id())),
         );
         let _ = fs::remove_dir_all(&scratch.0);

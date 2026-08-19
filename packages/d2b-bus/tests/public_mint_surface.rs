@@ -32,10 +32,35 @@ const CAPABILITY_TYPE_IDENTITIES: &[&str] = &[
 
 const CLAIM_TYPE_IDENTITIES: &[&str] = &["ResourceRef", "ResourceUid"];
 
+fn crate_root() -> PathBuf {
+    if let (Some(runfiles_dir), Some(workspace)) = (
+        std::env::var_os("RUNFILES_DIR"),
+        std::env::var_os("TEST_WORKSPACE"),
+    ) {
+        return PathBuf::from(runfiles_dir)
+            .join(workspace)
+            .join("packages/d2b-bus");
+    }
+    std::env::var_os("CARGO_MANIFEST_DIR")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| PathBuf::from(".").join("packages/d2b-bus"))
+}
+
+fn cargo_command() -> Command {
+    let cargo = std::env::var("CARGO")
+        .ok()
+        .unwrap_or_else(|| "cargo".to_owned());
+    let mut command = Command::new(cargo);
+    if std::env::var_os("CARGO").is_none() {
+        command.env("RUSTUP_TOOLCHAIN", "1.97.0");
+    }
+    command
+}
+
 #[test]
 #[ignore = "superseded by enforcing defining-crate compiler assertions and compile-fail tests"]
 fn public_api_has_only_the_approved_capability_mint_surface() {
-    let crate_root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let crate_root = crate_root();
     let repository_root = crate_root.parent().unwrap().parent().unwrap();
     let updating = std::env::var_os("D2B_UPDATE_BUS_PUBLIC_API").is_some();
     // Regenerating the approved snapshots must never read a cached render.
@@ -147,7 +172,7 @@ fn public_api_has_only_the_approved_capability_mint_surface() {
 
 #[test]
 fn internal_capability_mint_sites_remain_single_owner() {
-    let crate_root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let crate_root = crate_root();
     let router = fs::read_to_string(crate_root.join("src/router.rs")).expect("read router source");
     assert_eq!(
         source_occurrences(&router, "\n            ComponentSessionAdmission {"),
@@ -169,8 +194,9 @@ fn capability_trait_source_mutations_fail_closed() {
 
 #[test]
 fn workspace_capability_source_globs_are_classified() {
-    let crate_root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-    let manifest = crate_root.parent().unwrap().join("Cargo.toml");
+    let crate_root = crate_root();
+    let repository_root = crate_root.parent().unwrap().parent().unwrap();
+    let manifest = repository_root.join("Cargo.toml");
     for package in workspace_render_packages(&manifest).into_values() {
         source_capability_inventory_with_externals(
             &package.crate_name,
@@ -181,7 +207,7 @@ fn workspace_capability_source_globs_are_classified() {
 }
 
 fn assert_mutation_fixture(workspace_docs: &[DocumentedCrate]) {
-    let crate_root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let crate_root = crate_root();
     let repository_root = crate_root.parent().unwrap().parent().unwrap();
     let fixture = crate_root.join("tests/ui/public-api-mutations");
     // Ephemeral, unlike the workspace render above. The fixture is a small
@@ -314,7 +340,7 @@ fn assert_mutation_fixture(workspace_docs: &[DocumentedCrate]) {
 }
 
 fn assert_trait_impl_mutations(approved: &BTreeSet<String>) {
-    let crate_root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let crate_root = crate_root();
     let router = fs::read_to_string(crate_root.join("src/router.rs"))
         .expect("read router source for trait-implementation mutations");
     assert_trait_impl_mutation_fails(
@@ -1569,7 +1595,7 @@ fn render_workspace_docs(
                     )
                 });
         }
-        let mut command = Command::new(env!("CARGO"));
+        let mut command = cargo_command();
         command
             .args([
                 "doc",
@@ -1650,7 +1676,7 @@ fn rustdoc_inventory_is_library_only() {
 }
 
 fn workspace_render_packages(manifest: &Path) -> BTreeMap<String, RenderPackage> {
-    let metadata = Command::new(env!("CARGO"))
+    let metadata = cargo_command()
         .args([
             "metadata",
             "--quiet",
@@ -1724,7 +1750,7 @@ fn workspace_render_packages(manifest: &Path) -> BTreeMap<String, RenderPackage>
         if let Some(library) = library {
             let crate_name = library["name"].as_str().expect("library target name");
             let mut dependency_features = BTreeSet::new();
-            let mut external_crates = BTreeSet::new();
+            let mut external_crates = BTreeSet::from(["std".to_owned()]);
             let mut workspace_dependencies = BTreeSet::new();
             for dependency in package["dependencies"]
                 .as_array()

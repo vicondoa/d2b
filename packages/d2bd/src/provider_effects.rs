@@ -1132,8 +1132,7 @@ mod tests {
 
     #[test]
     fn persistent_admission_deduplicates_the_same_request_after_restart() {
-        let root = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .join("target")
+        let root = crate::test_scratch_root()
             .join(format!("provider-lifecycle-restart-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&root);
         let path = root.join("lifecycle.json");
@@ -1169,12 +1168,10 @@ mod tests {
 
     #[test]
     fn legacy_generation_migration_preserves_temporal_latest_after_restart() {
-        let root = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .join("target")
-            .join(format!(
-                "provider-lifecycle-legacy-temporal-migration-{}",
-                std::process::id()
-            ));
+        let root = crate::test_scratch_root().join(format!(
+            "provider-lifecycle-legacy-temporal-migration-{}",
+            std::process::id()
+        ));
         let _ = std::fs::remove_dir_all(&root);
         let path = root.join("lifecycle.json");
         let now = now_ms();
@@ -1244,12 +1241,10 @@ mod tests {
 
     #[test]
     fn legacy_generation_migration_rejects_conflicting_same_guest_timestamp_tie() {
-        let root = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .join("target")
-            .join(format!(
-                "provider-lifecycle-legacy-tie-conflict-{}",
-                std::process::id()
-            ));
+        let root = crate::test_scratch_root().join(format!(
+            "provider-lifecycle-legacy-tie-conflict-{}",
+            std::process::id()
+        ));
         let _ = std::fs::remove_dir_all(&root);
         let path = root.join("lifecycle.json");
         let timestamp = now_ms().saturating_sub(100);
@@ -1273,12 +1268,10 @@ mod tests {
 
     #[test]
     fn legacy_generation_migration_orders_identical_timestamp_duplicates_deterministically() {
-        let root = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .join("target")
-            .join(format!(
-                "provider-lifecycle-legacy-tie-duplicates-{}",
-                std::process::id()
-            ));
+        let root = crate::test_scratch_root().join(format!(
+            "provider-lifecycle-legacy-tie-duplicates-{}",
+            std::process::id()
+        ));
         let _ = std::fs::remove_dir_all(&root);
         let path = root.join("lifecycle.json");
         let timestamp = now_ms().saturating_sub(100);
@@ -1318,12 +1311,10 @@ mod tests {
 
     #[test]
     fn legacy_generation_migration_assigns_unique_values_above_mixed_explicit_state() {
-        let root = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .join("target")
-            .join(format!(
-                "provider-lifecycle-legacy-mixed-generations-{}",
-                std::process::id()
-            ));
+        let root = crate::test_scratch_root().join(format!(
+            "provider-lifecycle-legacy-mixed-generations-{}",
+            std::process::id()
+        ));
         let _ = std::fs::remove_dir_all(&root);
         let path = root.join("lifecycle.json");
         let now = now_ms();
@@ -1428,12 +1419,10 @@ mod tests {
 
     #[test]
     fn persistent_admission_reexecutes_pending_when_actual_state_is_not_reached() {
-        let root = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .join("target")
-            .join(format!(
-                "provider-lifecycle-pending-retry-{}",
-                std::process::id()
-            ));
+        let root = crate::test_scratch_root().join(format!(
+            "provider-lifecycle-pending-retry-{}",
+            std::process::id()
+        ));
         let _ = std::fs::remove_dir_all(&root);
         let path = root.join("lifecycle.json");
         let zone = ZoneId::parse("work").expect("Zone");
@@ -1468,12 +1457,10 @@ mod tests {
 
     #[test]
     fn persistent_pending_reconciles_without_effect_when_actual_state_is_reached() {
-        let root = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .join("target")
-            .join(format!(
-                "provider-lifecycle-pending-reconcile-{}",
-                std::process::id()
-            ));
+        let root = crate::test_scratch_root().join(format!(
+            "provider-lifecycle-pending-reconcile-{}",
+            std::process::id()
+        ));
         let _ = std::fs::remove_dir_all(&root);
         let path = root.join("lifecycle.json");
         let zone = ZoneId::parse("work").expect("Zone");
@@ -1504,12 +1491,10 @@ mod tests {
 
     #[test]
     fn persistent_pending_state_unavailable_keeps_retryable_admission() {
-        let root = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .join("target")
-            .join(format!(
-                "provider-lifecycle-pending-unavailable-{}",
-                std::process::id()
-            ));
+        let root = crate::test_scratch_root().join(format!(
+            "provider-lifecycle-pending-unavailable-{}",
+            std::process::id()
+        ));
         let _ = std::fs::remove_dir_all(&root);
         let path = root.join("lifecycle.json");
         let zone = ZoneId::parse("work").expect("Zone");
@@ -1578,12 +1563,10 @@ mod tests {
 
     #[test]
     fn concurrent_opposite_requests_keep_in_flight_rows_until_both_complete() {
-        let root = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .join("target")
-            .join(format!(
-                "provider-lifecycle-concurrent-opposite-{}",
-                std::process::id()
-            ));
+        let root = crate::test_scratch_root().join(format!(
+            "provider-lifecycle-concurrent-opposite-{}",
+            std::process::id()
+        ));
         let _ = std::fs::remove_dir_all(&root);
         let path = root.join("lifecycle.json");
         let zone = ZoneId::parse("work").expect("Zone");
@@ -1733,12 +1716,10 @@ mod tests {
 
     #[test]
     fn completion_persist_failure_releases_execution_for_reconciliation() {
-        let root = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .join("target")
-            .join(format!(
-                "provider-lifecycle-completion-persist-failure-{}",
-                std::process::id()
-            ));
+        let root = crate::test_scratch_root().join(format!(
+            "provider-lifecycle-completion-persist-failure-{}",
+            std::process::id()
+        ));
         let _ = std::fs::remove_dir_all(&root);
         let path = root.join("lifecycle.json");
         let zone = ZoneId::parse("work").expect("Zone");
@@ -1775,12 +1756,10 @@ mod tests {
 
     #[test]
     fn removal_persist_failure_releases_execution_for_retry() {
-        let root = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .join("target")
-            .join(format!(
-                "provider-lifecycle-removal-persist-failure-{}",
-                std::process::id()
-            ));
+        let root = crate::test_scratch_root().join(format!(
+            "provider-lifecycle-removal-persist-failure-{}",
+            std::process::id()
+        ));
         let _ = std::fs::remove_dir_all(&root);
         let path = root.join("lifecycle.json");
         let zone = ZoneId::parse("work").expect("Zone");
@@ -1817,12 +1796,10 @@ mod tests {
 
     #[test]
     fn opposite_admissions_are_serialized_by_latest_desired_generation() {
-        let root = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .join("target")
-            .join(format!(
-                "provider-lifecycle-opposite-generation-{}",
-                std::process::id()
-            ));
+        let root = crate::test_scratch_root().join(format!(
+            "provider-lifecycle-opposite-generation-{}",
+            std::process::id()
+        ));
         let _ = std::fs::remove_dir_all(&root);
         let path = root.join("lifecycle.json");
         let zone = ZoneId::parse("work").expect("Zone");
@@ -1890,12 +1867,10 @@ mod tests {
 
     #[test]
     fn restart_preserves_latest_desired_generation() {
-        let root = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .join("target")
-            .join(format!(
-                "provider-lifecycle-generation-restart-{}",
-                std::process::id()
-            ));
+        let root = crate::test_scratch_root().join(format!(
+            "provider-lifecycle-generation-restart-{}",
+            std::process::id()
+        ));
         let _ = std::fs::remove_dir_all(&root);
         let path = root.join("lifecycle.json");
         let zone = ZoneId::parse("work").expect("Zone");
@@ -1950,12 +1925,10 @@ mod tests {
 
     #[test]
     fn restart_prunes_expired_unowned_pending_rows_for_bounded_recovery() {
-        let root = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .join("target")
-            .join(format!(
-                "provider-lifecycle-expired-recovery-{}",
-                std::process::id()
-            ));
+        let root = crate::test_scratch_root().join(format!(
+            "provider-lifecycle-expired-recovery-{}",
+            std::process::id()
+        ));
         let _ = std::fs::remove_dir_all(&root);
         let path = root.join("lifecycle.json");
         let zone = ZoneId::parse("work").expect("Zone");
@@ -1995,8 +1968,7 @@ mod tests {
 
     #[test]
     fn persistent_start_stop_start_stop_retires_opposite_applied_entries() {
-        let root = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .join("target")
+        let root = crate::test_scratch_root()
             .join(format!("provider-lifecycle-cycles-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&root);
         let zone = ZoneId::parse("work").expect("Zone");
