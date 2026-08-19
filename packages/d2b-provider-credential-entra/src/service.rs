@@ -233,29 +233,29 @@ impl EntraCredentialProvider {
                 return Err(error);
             }
         };
-        if let Some(existing) = existing.as_ref() {
-            if existing.metadata.state != CredentialLeaseState::Revoked {
-                let lease = EntraLeaseRef {
-                    credential_ref: request.credential_ref().clone(),
-                    metadata: existing.metadata.clone(),
-                    endpoint_generation: self.placement.endpoint_generation(),
-                };
-                if let Err(error) = Self::poll_client(self.client.revoke_lease(&lease), deadline)
-                    && !matches!(
-                        error.code(),
-                        CredentialServiceErrorCode::LeaseExpired
-                            | CredentialServiceErrorCode::LeaseRevoked
-                    )
-                {
-                    self.cleanup_uncommitted_grant(
-                        request.credential_ref(),
-                        request.idempotency_key(),
-                        grant,
-                        request.requested_expiry_unix_ms(),
-                        deadline,
-                    );
-                    return Err(error);
-                }
+        if let Some(existing) = existing.as_ref()
+            && existing.metadata.state != CredentialLeaseState::Revoked
+        {
+            let lease = EntraLeaseRef {
+                credential_ref: request.credential_ref().clone(),
+                metadata: existing.metadata.clone(),
+                endpoint_generation: self.placement.endpoint_generation(),
+            };
+            if let Err(error) = Self::poll_client(self.client.revoke_lease(&lease), deadline)
+                && !matches!(
+                    error.code(),
+                    CredentialServiceErrorCode::LeaseExpired
+                        | CredentialServiceErrorCode::LeaseRevoked
+                )
+            {
+                self.cleanup_uncommitted_grant(
+                    request.credential_ref(),
+                    request.idempotency_key(),
+                    grant,
+                    request.requested_expiry_unix_ms(),
+                    deadline,
+                );
+                return Err(error);
             }
         }
         let record = LeaseRecord {
@@ -404,32 +404,32 @@ impl EntraCredentialProvider {
             .as_ref()
             .filter(|record| record.metadata.state == CredentialLeaseState::Revoked)
             .map(|_| CredentialOutcomeCode::AlreadyRevoked);
-        if let Some(record) = primary.as_ref() {
-            if record.metadata.state != CredentialLeaseState::Revoked {
-                let lease = EntraLeaseRef {
-                    credential_ref: request.credential_ref().clone(),
-                    metadata: record.metadata.clone(),
-                    endpoint_generation: self.placement.endpoint_generation(),
-                };
-                outcome = Some(
-                    match Self::poll_client(self.client.revoke_lease(&lease), deadline) {
-                        Ok(crate::EntraLeaseRevocation::Revoked) => CredentialOutcomeCode::Revoked,
-                        Ok(crate::EntraLeaseRevocation::AlreadyRevoked) => {
-                            CredentialOutcomeCode::AlreadyRevoked
-                        }
-                        Err(error)
-                            if matches!(
-                                error.code(),
-                                CredentialServiceErrorCode::LeaseExpired
-                                    | CredentialServiceErrorCode::LeaseRevoked
-                            ) =>
-                        {
-                            CredentialOutcomeCode::AlreadyRevoked
-                        }
-                        Err(error) => return Err(error),
-                    },
-                );
-            }
+        if let Some(record) = primary.as_ref()
+            && record.metadata.state != CredentialLeaseState::Revoked
+        {
+            let lease = EntraLeaseRef {
+                credential_ref: request.credential_ref().clone(),
+                metadata: record.metadata.clone(),
+                endpoint_generation: self.placement.endpoint_generation(),
+            };
+            outcome = Some(
+                match Self::poll_client(self.client.revoke_lease(&lease), deadline) {
+                    Ok(crate::EntraLeaseRevocation::Revoked) => CredentialOutcomeCode::Revoked,
+                    Ok(crate::EntraLeaseRevocation::AlreadyRevoked) => {
+                        CredentialOutcomeCode::AlreadyRevoked
+                    }
+                    Err(error)
+                        if matches!(
+                            error.code(),
+                            CredentialServiceErrorCode::LeaseExpired
+                                | CredentialServiceErrorCode::LeaseRevoked
+                        ) =>
+                    {
+                        CredentialOutcomeCode::AlreadyRevoked
+                    }
+                    Err(error) => return Err(error),
+                },
+            );
         }
         for record in &cleanup_records {
             let lease = EntraLeaseRef {
