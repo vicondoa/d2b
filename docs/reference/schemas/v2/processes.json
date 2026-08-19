@@ -8,6 +8,17 @@
     "vms"
   ],
   "properties": {
+    "cutoverRunner": {
+      "description": "Optional out-of-band host cutover runner contract.",
+      "anyOf": [
+        {
+          "$ref": "#/definitions/CutoverRunnerProcess"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
     "schemaVersion": {
       "description": "Schema version used by this artifact.",
       "type": "string"
@@ -74,6 +85,35 @@
       "maxLength": 160,
       "minLength": 1,
       "pattern": "^[A-Za-z0-9][A-Za-z0-9._:/@+-]*$"
+    },
+    "CutoverRunnerProcess": {
+      "description": "Private process contract for the one-shot cutover runner.",
+      "type": "object",
+      "required": [
+        "binaryPath",
+        "cgroupPlacement",
+        "persistent",
+        "singleBootstrapFd"
+      ],
+      "properties": {
+        "binaryPath": {
+          "description": "Trusted store path installed by the host-tool emitter.",
+          "type": "string"
+        },
+        "cgroupPlacement": {
+          "description": "Closed placement label proving it is outside the VM slice.",
+          "type": "string"
+        },
+        "persistent": {
+          "description": "The runner is never a declared persistent unit.",
+          "type": "boolean"
+        },
+        "singleBootstrapFd": {
+          "description": "The broker transfers exactly one bootstrap descriptor.",
+          "type": "boolean"
+        }
+      },
+      "additionalProperties": false
     },
     "DagEdge": {
       "description": "Directed dependency edge in the per-VM DAG.",

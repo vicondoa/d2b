@@ -30,6 +30,7 @@ const SYSTEMD_UNIT_INTERFACE: &str = "org.freedesktop.systemd1.Unit";
 const SYSTEMD_METHOD_TIMEOUT: Duration = Duration::from_secs(5);
 const IDENTITY_READY_TIMEOUT: Duration = Duration::from_secs(5);
 const IDENTITY_RETRY_INTERVAL: Duration = Duration::from_millis(20);
+const CUTOVER_DAEMON_UNIT: &str = "d2bd.service";
 
 /// Closed failures from the broker-owned systemd effect owner.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -540,6 +541,50 @@ pub fn stop(
             Err(SystemdError::BundleIntent) => return Ok(()),
             Err(error) => return Err(error),
         }
+    }
+}
+
+/// Stop the fixed daemon unit for the cutover drain boundary.
+///
+/// This is deliberately not a general unit operation: the unit name is
+/// compile-time fixed and the broker verifies the unit reaches an inactive
+/// state before reporting drain completion.
+pub fn stop_cutover_daemon() -> Result<(), SystemdError> {
+    let connection = system_connection()?;
+    let manager = manager_proxy(&connection)?;
+    let unit_path = match unit_proxy(&manager, CUTOVER_DAEMON_UNIT) {
+        Ok(path) => path,
+        Err(SystemdError::BundleIntent) => return Ok(()),
+        Err(error) => return Err(error),
+    };
+    let unit = Proxy::new(
+        &connection,
+        SYSTEMD_DESTINATION,
+        unit_path.as_str(),
+        SYSTEMD_UNIT_INTERFACE,
+    )
+    .map_err(|_| SystemdError::Query)?;
+    let active_state: String = unit
+        .get_property("ActiveState")
+        .map_err(|_| SystemdError::Query)?;
+    if active_state == "inactive" || active_state == "failed" {
+        return Ok(());
+    }
+    manager
+        .call_method("StopUnit", &(CUTOVER_DAEMON_UNIT, "replace"))
+        .map_err(|_| SystemdError::Stop)?;
+    let deadline = Instant::now() + IDENTITY_READY_TIMEOUT;
+    loop {
+        let state: String = unit
+            .get_property("ActiveState")
+            .map_err(|_| SystemdError::Query)?;
+        if state == "inactive" || state == "failed" {
+            return Ok(());
+        }
+        if Instant::now() >= deadline {
+            return Err(SystemdError::Timeout);
+        }
+        thread::sleep(IDENTITY_RETRY_INTERVAL);
     }
 }
 

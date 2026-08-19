@@ -214,6 +214,14 @@ in
       description = "Internal typed privileges.json artifact metadata.";
     };
 
+    cutoverRunnerPath = lib.mkOption {
+      type = types.nullOr types.str;
+      default = null;
+      internal = true;
+      visible = false;
+      description = "Internal trusted store path for the one-shot cutover runner.";
+    };
+
     storageJson = lib.mkOption {
       type = artifactModule;
       default = { };

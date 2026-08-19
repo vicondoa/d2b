@@ -58,6 +58,7 @@ fn installer_bundle_resolver(public_manifest_path: &str) -> BundleResolver {
         host_path: "/ignored/host.json".to_owned(),
         processes_path: "/ignored/processes.json".to_owned(),
         privileges_path: "/ignored/privileges.json".to_owned(),
+        cutover_runner_path: None,
         storage_path: None,
         sync_path: None,
         allocator_path: None,
@@ -78,6 +79,7 @@ fn installer_bundle_resolver(public_manifest_path: &str) -> BundleResolver {
     };
     let processes = ProcessesJson {
         schema_version: "v2".to_owned(),
+        cutover_runner: None,
         vms: Vec::new(),
     };
     BundleResolver::from_artifacts(bundle, host, processes, manifest)

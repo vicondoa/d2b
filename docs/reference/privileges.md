@@ -861,10 +861,23 @@ promoted; they do not write live-host validation evidence.
 Admin-only, accepts exactly one SCM_RIGHTS bootstrap descriptor, and resolves
 the runner executable from trusted broker configuration. It is not a
 `SpawnRunner` uid-0 exception, does not place the child in a per-VM unit, and
-does not authorize any cutover effect by itself. The current Nix privilege
-registration remains coupled to the host-tool registration change; until that
-registration lands, the broker returns the typed unimplemented result rather
-than accepting a raw path or command.
+does not authorize any cutover effect by itself. The adapted runner peer may
+use only `CutoverAudit` and `CutoverEffect`; both operations bind the
+operation and capability digests, and the broker reloads the current bundle
+before resolving trusted runner or activation intents. Audit responses are
+returned only after the broker audit file and directory are durable.
+The launch request binds the transferred capability digest in the broker's
+operation registry; later runner requests with a missing, replayed, or
+mismatched or expired digest are refused, including after a broker restart.
+After the HostDrain effect succeeds, the broker enters a persisted
+cutover-window allowlist: only that operation's runner may call
+`CutoverAudit` or `CutoverEffect`; ordinary daemon operations are denied until
+the window is closed. Quarantine, finalization, and durable-Volume destruction
+consume marker-bound opaque payloads; they never accept generic delete or raw
+path requests.
+Recursive removal is descriptor-anchored: it refuses symlinks, foreign owners,
+hardlinks, special files, and device changes, and uses `unlinkat` against the
+opened operation-owned directory.
 
 ## Related ADRs
 

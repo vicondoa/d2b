@@ -19,6 +19,13 @@ in
       description = "Internal: resolved host d2b CLI package.";
     };
 
+    d2bCutoverRunner = lib.mkOption {
+      type = lib.types.nullOr lib.types.package;
+      default = null;
+      internal = true;
+      description = "Internal: resolved one-shot host cutover runner package.";
+    };
+
     d2bd = lib.mkOption {
       type = lib.types.nullOr lib.types.package;
       default = null;

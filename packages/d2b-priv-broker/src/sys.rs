@@ -1519,7 +1519,8 @@ pub mod pidfd_sys {
     use std::ffi::CString;
     use std::io;
     use std::os::fd::{AsFd, AsRawFd, BorrowedFd, FromRawFd, OwnedFd, RawFd};
-    use std::os::unix::fs::{FileTypeExt, MetadataExt};
+    use std::os::unix::ffi::OsStrExt;
+    use std::os::unix::fs::{FileTypeExt, MetadataExt, OpenOptionsExt};
     use std::path::Path;
 
     use d2b_core::minijail_profile::{MountPolicy, NamespaceSet};
@@ -1700,6 +1701,89 @@ pub mod pidfd_sys {
         })
     }
 
+    /// Spawn the one-shot cutover runner into the host cgroup root.
+    ///
+    /// This is deliberately separate from `SpawnRunner`: the runner is a
+    /// root-owned, operation-scoped process outside `d2b.slice`, receives
+    /// exactly one bootstrap fd, and has no VM runner profile or cgroup leaf.
+    /// If atomic `CLONE_INTO_CGROUP` is unavailable, the child is killed and
+    /// the operation fails closed rather than falling back into `d2b.slice`.
+    #[allow(unsafe_code)]
+    pub fn spawn_cutover_runner(
+        binary_path: &Path,
+        state_dir: &Path,
+        socket_dir: &Path,
+        bootstrap_fd: RawFd,
+    ) -> io::Result<SpawnOutcome> {
+        if !binary_path.is_absolute()
+            || !binary_path
+                .to_str()
+                .is_some_and(|path| path.starts_with("/nix/store/"))
+        {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "cutover runner must be a trusted store path",
+            ));
+        }
+        let fd_flags = unsafe { libc::fcntl(bootstrap_fd, libc::F_GETFD) };
+        if fd_flags < 0 || fd_flags & libc::FD_CLOEXEC == 0 {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "cutover bootstrap fd must be close-on-exec",
+            ));
+        }
+        let binary = CString::new(binary_path.as_os_str().as_bytes())
+            .map_err(|_| io::Error::new(io::ErrorKind::InvalidInput, "runner path contains NUL"))?;
+        let argv =
+            [CString::new("d2b-cutover-runner").expect("static cutover runner argv has no NUL")];
+        let env = [
+            CString::new(format!("D2B_CUTOVER_BOOTSTRAP_FD={bootstrap_fd}"))
+                .expect("fd env has no NUL"),
+            CString::new(format!("D2B_CUTOVER_STATE_DIR={}", state_dir.display())).map_err(
+                |_| io::Error::new(io::ErrorKind::InvalidInput, "state path contains NUL"),
+            )?,
+            CString::new(format!("D2B_CUTOVER_SOCKET_DIR={}", socket_dir.display())).map_err(
+                |_| io::Error::new(io::ErrorKind::InvalidInput, "socket path contains NUL"),
+            )?,
+        ];
+        let cgroup_root = std::fs::OpenOptions::new()
+            .read(true)
+            .custom_flags(libc::O_DIRECTORY | libc::O_CLOEXEC | libc::O_NOFOLLOW)
+            .open("/sys/fs/cgroup")?;
+        let mut argv_ptrs = argv.iter().map(|arg| arg.as_ptr()).collect::<Vec<_>>();
+        argv_ptrs.push(std::ptr::null());
+        let mut env_ptrs = env.iter().map(|entry| entry.as_ptr()).collect::<Vec<_>>();
+        env_ptrs.push(std::ptr::null());
+        let binary_ptr = binary.as_ptr();
+        let outcome = clone3_pidfd_or_fork_fallback_with_cgroup(
+            0,
+            Some(cgroup_root.as_raw_fd()),
+            move |placed_in_cgroup| {
+                if !placed_in_cgroup {
+                    return 75;
+                }
+                if unsafe { libc::fcntl(bootstrap_fd, libc::F_SETFD, 0) } < 0 {
+                    return 76;
+                }
+                unsafe {
+                    libc::execve(binary_ptr, argv_ptrs.as_ptr(), env_ptrs.as_ptr());
+                }
+                73
+            },
+        )?;
+        if outcome.used_fork_fallback {
+            unsafe {
+                libc::kill(outcome.pid, libc::SIGKILL);
+            }
+            let _ = reap_cutover_runner_error_child(outcome.pid);
+            return Err(io::Error::new(
+                io::ErrorKind::Unsupported,
+                "atomic out-of-band cgroup placement unavailable",
+            ));
+        }
+        Ok(outcome)
+    }
+
     /// Duplicate an already-owned fd while preserving `FD_CLOEXEC`.
     #[allow(unsafe_code)]
     pub fn dup_fd_cloexec(fd: RawFd) -> io::Result<OwnedFd> {
@@ -1792,6 +1876,32 @@ pub mod pidfd_sys {
                     continue;
                 }
                 return Err(err);
+            }
+        }
+    }
+
+    /// Synchronously reap the cutover runner child when atomic placement
+    /// fails. This stays separate from SpawnRunner's named reaper contract.
+    #[allow(unsafe_code)]
+    fn reap_cutover_runner_error_child(child_pid: i32) -> io::Result<()> {
+        if child_pid <= 0 {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "invalid cutover runner pid",
+            ));
+        }
+        let mut status = 0;
+        loop {
+            let rc = unsafe { libc::waitpid(child_pid, &mut status, 0) };
+            if rc == child_pid {
+                return Ok(());
+            }
+            if rc < 0 {
+                let error = io::Error::last_os_error();
+                if error.raw_os_error() == Some(libc::EINTR) {
+                    continue;
+                }
+                return Err(error);
             }
         }
     }

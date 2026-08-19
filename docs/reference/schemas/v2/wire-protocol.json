@@ -1384,6 +1384,44 @@
           }
         },
         {
+          "description": "Append one durable, operation-scoped cutover audit record.",
+          "type": "object",
+          "required": [
+            "kind",
+            "payload"
+          ],
+          "properties": {
+            "kind": {
+              "type": "string",
+              "enum": [
+                "CutoverAudit"
+              ]
+            },
+            "payload": {
+              "$ref": "#/definitions/CutoverAuditRequest"
+            }
+          }
+        },
+        {
+          "description": "Dispatch one closed operation-scoped cutover or reset effect.",
+          "type": "object",
+          "required": [
+            "kind",
+            "payload"
+          ],
+          "properties": {
+            "kind": {
+              "type": "string",
+              "enum": [
+                "CutoverEffect"
+              ]
+            },
+            "payload": {
+              "$ref": "#/definitions/CutoverEffectRequest"
+            }
+          }
+        },
+        {
           "type": "object",
           "required": [
             "kind",
@@ -2996,6 +3034,44 @@
             },
             "payload": {
               "$ref": "#/definitions/LaunchCutoverRunnerResponse"
+            }
+          }
+        },
+        {
+          "description": "Durable cutover audit publication result.",
+          "type": "object",
+          "required": [
+            "kind",
+            "payload"
+          ],
+          "properties": {
+            "kind": {
+              "type": "string",
+              "enum": [
+                "CutoverAudit"
+              ]
+            },
+            "payload": {
+              "$ref": "#/definitions/CutoverAuditResponse"
+            }
+          }
+        },
+        {
+          "description": "Typed operation-scoped effect result.",
+          "type": "object",
+          "required": [
+            "kind",
+            "payload"
+          ],
+          "properties": {
+            "kind": {
+              "type": "string",
+              "enum": [
+                "CutoverEffect"
+              ]
+            },
+            "payload": {
+              "$ref": "#/definitions/CutoverEffectResponse"
             }
           }
         },
@@ -4680,6 +4756,514 @@
         }
       },
       "additionalProperties": false
+    },
+    "CutoverAuditRequest": {
+      "description": "Request to publish one durable cutover audit transition.",
+      "type": "object",
+      "required": [
+        "operationId",
+        "phase",
+        "requestDigest",
+        "transition"
+      ],
+      "properties": {
+        "operationId": {
+          "description": "Operation identity bound by the runner capability.",
+          "type": "string"
+        },
+        "phase": {
+          "description": "Current U3 phase number.",
+          "type": "integer",
+          "format": "uint8",
+          "minimum": 0.0
+        },
+        "reasonDigest": {
+          "description": "Digest of a bounded hold reason, when present.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "requestDigest": {
+          "description": "Digest of the immutable operation request.",
+          "type": "string"
+        },
+        "transition": {
+          "description": "Closed transition kind.",
+          "allOf": [
+            {
+              "$ref": "#/definitions/CutoverAuditTransition"
+            }
+          ]
+        }
+      },
+      "additionalProperties": false
+    },
+    "CutoverAuditResponse": {
+      "description": "Durable audit publication response.",
+      "type": "object",
+      "required": [
+        "recordId"
+      ],
+      "properties": {
+        "recordId": {
+          "description": "Stable record identity returned only after fsync and directory sync.",
+          "type": "string"
+        }
+      },
+      "additionalProperties": false
+    },
+    "CutoverAuditTransition": {
+      "description": "Closed transition vocabulary for cutover audit publication.",
+      "oneOf": [
+        {
+          "description": "A hold request was durably recorded.",
+          "type": "string",
+          "enum": [
+            "hold-requested"
+          ]
+        },
+        {
+          "description": "A hold clear/resume was durably recorded.",
+          "type": "string",
+          "enum": [
+            "hold-cleared"
+          ]
+        },
+        {
+          "description": "A phase began after its journal record.",
+          "type": "string",
+          "enum": [
+            "phase-started"
+          ]
+        },
+        {
+          "description": "A phase completed after its typed effect.",
+          "type": "string",
+          "enum": [
+            "phase-completed"
+          ]
+        },
+        {
+          "description": "A typed effect began.",
+          "type": "string",
+          "enum": [
+            "effect-started"
+          ]
+        },
+        {
+          "description": "A typed effect completed.",
+          "type": "string",
+          "enum": [
+            "effect-completed"
+          ]
+        },
+        {
+          "description": "A terminal outcome was recorded.",
+          "type": "string",
+          "enum": [
+            "terminal"
+          ]
+        }
+      ]
+    },
+    "CutoverEffectAuthority": {
+      "description": "Closed authority carried by a cutover effect request.",
+      "oneOf": [
+        {
+          "description": "Host-wide cutover authority.",
+          "type": "string",
+          "enum": [
+            "cutover"
+          ]
+        },
+        {
+          "description": "Zone-scoped reset authority.",
+          "type": "string",
+          "enum": [
+            "reset-zone"
+          ]
+        },
+        {
+          "description": "Provider-scoped reset authority.",
+          "type": "string",
+          "enum": [
+            "reset-provider"
+          ]
+        },
+        {
+          "description": "Guest-scoped reset authority.",
+          "type": "string",
+          "enum": [
+            "reset-guest"
+          ]
+        }
+      ]
+    },
+    "CutoverEffectKind": {
+      "description": "Closed effect vocabulary shared with the U3 allowlist.",
+      "type": "string",
+      "enum": [
+        "host-drain",
+        "cutover-disposition",
+        "resource-store-create",
+        "provider-install",
+        "zone-activation",
+        "guest-activation",
+        "verification",
+        "cutover-finalization",
+        "scoped-zone-reset",
+        "scoped-provider-reset",
+        "scoped-guest-reset",
+        "destroy-durable-volume",
+        "preserve-source",
+        "quarantine-destination",
+        "cutover-broker",
+        "closure-activation"
+      ]
+    },
+    "CutoverEffectOutcome": {
+      "description": "Typed effect result.",
+      "type": "string",
+      "enum": [
+        "succeeded",
+        "failed",
+        "ambiguous"
+      ]
+    },
+    "CutoverEffectPayload": {
+      "description": "Typed payloads for cutover effects that reuse existing broker operations.\n\nEvery variant is itself a closed broker request. It carries no host path, command, uid/gid, or free-form mutation text.",
+      "oneOf": [
+        {
+          "type": "object",
+          "required": [
+            "kind"
+          ],
+          "properties": {
+            "kind": {
+              "type": "string",
+              "enum": [
+                "None"
+              ]
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "kind",
+            "payload"
+          ],
+          "properties": {
+            "kind": {
+              "type": "string",
+              "enum": [
+                "Storage"
+              ]
+            },
+            "payload": {
+              "$ref": "#/definitions/ReconcileStorageScopeRequest"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "kind",
+            "payload"
+          ],
+          "properties": {
+            "kind": {
+              "type": "string",
+              "enum": [
+                "ZoneStore"
+              ]
+            },
+            "payload": {
+              "$ref": "#/definitions/OpenZoneStoreRequest"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "kind",
+            "payload"
+          ],
+          "properties": {
+            "kind": {
+              "type": "string",
+              "enum": [
+                "StoreSync"
+              ]
+            },
+            "payload": {
+              "$ref": "#/definitions/StoreSyncRequest"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "kind",
+            "payload"
+          ],
+          "properties": {
+            "kind": {
+              "type": "string",
+              "enum": [
+                "StoreVerify"
+              ]
+            },
+            "payload": {
+              "$ref": "#/definitions/StoreVerifyRequest2"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "kind",
+            "payload"
+          ],
+          "properties": {
+            "kind": {
+              "type": "string",
+              "enum": [
+                "Activation"
+              ]
+            },
+            "payload": {
+              "$ref": "#/definitions/RunActivationRequest"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "kind",
+            "payload"
+          ],
+          "properties": {
+            "kind": {
+              "type": "string",
+              "enum": [
+                "Systemd"
+              ]
+            },
+            "payload": {
+              "$ref": "#/definitions/SystemdUnitRequest"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "kind",
+            "payload"
+          ],
+          "properties": {
+            "kind": {
+              "type": "string",
+              "enum": [
+                "Quarantine"
+              ]
+            },
+            "payload": {
+              "type": "object",
+              "required": [
+                "marker_digest",
+                "source_id",
+                "staged_id"
+              ],
+              "properties": {
+                "marker_digest": {
+                  "type": "string"
+                },
+                "source_id": {
+                  "type": "string"
+                },
+                "staged_id": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "kind",
+            "payload"
+          ],
+          "properties": {
+            "kind": {
+              "type": "string",
+              "enum": [
+                "Finalization"
+              ]
+            },
+            "payload": {
+              "type": "object",
+              "required": [
+                "artifacts",
+                "consent_digest",
+                "disposition_digest"
+              ],
+              "properties": {
+                "artifacts": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/definitions/ArtifactId"
+                  }
+                },
+                "consent_digest": {
+                  "type": "string"
+                },
+                "disposition_digest": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "kind",
+            "payload"
+          ],
+          "properties": {
+            "kind": {
+              "type": "string",
+              "enum": [
+                "DestroyDurableVolume"
+              ]
+            },
+            "payload": {
+              "type": "object",
+              "required": [
+                "consent_digest",
+                "marker_digest",
+                "storage_ref"
+              ],
+              "properties": {
+                "consent_digest": {
+                  "type": "string"
+                },
+                "marker_digest": {
+                  "type": "string"
+                },
+                "storage_ref": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        }
+      ]
+    },
+    "CutoverEffectRequest": {
+      "description": "Typed operation-scoped effect request.",
+      "type": "object",
+      "required": [
+        "authority",
+        "capabilityDigest",
+        "effect",
+        "effectId",
+        "operationId",
+        "phase",
+        "replayClass",
+        "requestDigest"
+      ],
+      "properties": {
+        "authority": {
+          "$ref": "#/definitions/CutoverEffectAuthority"
+        },
+        "capabilityDigest": {
+          "type": "string"
+        },
+        "effect": {
+          "$ref": "#/definitions/CutoverEffectKind"
+        },
+        "effectId": {
+          "type": "string"
+        },
+        "handoff": {
+          "description": "Existing typed generation handoff used only by `ClosureActivation`.",
+          "anyOf": [
+            {
+              "$ref": "#/definitions/ApplyHostGenerationHandoff"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "identity": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "operationId": {
+          "type": "string"
+        },
+        "payload": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/CutoverEffectPayload"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "phase": {
+          "type": "integer",
+          "format": "uint8",
+          "minimum": 0.0
+        },
+        "replayClass": {
+          "$ref": "#/definitions/CutoverReplayClass"
+        },
+        "requestDigest": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false
+    },
+    "CutoverEffectResponse": {
+      "description": "Typed operation-scoped effect response.",
+      "type": "object",
+      "required": [
+        "auditRecordId",
+        "outcome"
+      ],
+      "properties": {
+        "auditRecordId": {
+          "type": "string"
+        },
+        "identity": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "outcome": {
+          "$ref": "#/definitions/CutoverEffectOutcome"
+        }
+      },
+      "additionalProperties": false
+    },
+    "CutoverReplayClass": {
+      "description": "Closed replay behavior for an operation-scoped effect.",
+      "type": "string",
+      "enum": [
+        "repeatable",
+        "reopen-by-journaled-identity",
+        "quarantine-only"
+      ]
     },
     "DelegateCgroupV2Request": {
       "description": "The slice path is pinned by the bundle (`/sys/fs/cgroup/d2b.slice`). It is **not** taken from caller input - the broker reads it from its own bundle copy via `scope_id`.",
@@ -7407,8 +7991,43 @@
             "null"
           ]
         },
+        "consentJson": {
+          "description": "Canonical serialized U3 apply consent.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "destroyDurableVolumes": {
+          "description": "Whether this reset explicitly authorizes durable-Volume destruction.",
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "destructiveConsentDigest": {
+          "description": "Separate destructive reset consent digest.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "destructiveConsentJson": {
+          "description": "Canonical destructive reset consent artifact.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "freshConsentDigest": {
           "description": "Fresh consent used by a non-owner Admin to resume.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "hostDigest": {
+          "description": "Host identity digest bound by the recovery attestation.",
           "type": [
             "string",
             "null"
@@ -7445,6 +8064,13 @@
         },
         "reason": {
           "description": "Bounded hold reason.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "recoveryAttestationJson": {
+          "description": "Canonical serialized qualified recovery attestation.",
           "type": [
             "string",
             "null"
@@ -7980,6 +8606,8 @@
       "type": "object",
       "required": [
         "bootstrapFdIndex",
+        "capabilityDigest",
+        "expiresAtMs",
         "operationId"
       ],
       "properties": {
@@ -7987,6 +8615,16 @@
           "description": "Required index of the single bootstrap fd attachment.",
           "type": "integer",
           "format": "uint32",
+          "minimum": 0.0
+        },
+        "capabilityDigest": {
+          "description": "Digest of the capability transferred over the bootstrap fd. The broker binds this value to the operation before spawning the runner.",
+          "type": "string"
+        },
+        "expiresAtMs": {
+          "description": "Capability expiry copied from the single-use bootstrap.",
+          "type": "integer",
+          "format": "uint64",
           "minimum": 0.0
         },
         "operationId": {

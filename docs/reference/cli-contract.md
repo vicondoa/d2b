@@ -3415,20 +3415,38 @@ d2b host cutover hold --operation-id <ID> --reason <TEXT>
 d2b host cutover resume --operation-id <ID> [--fresh-consent-digest <DIGEST>]
 d2b host cutover apply --operation-id <ID> --candidate-id <ID> \
   --revision-plan-id <ID> --preview-digest <DIGEST> \
-  --recovery-digest <DIGEST> --operator-id <ID> --consent-digest <DIGEST>
+  --recovery-digest <DIGEST> --operator-id <ID> --consent-digest <DIGEST> \
+  --handoff-file <JSON>
 d2b host cutover rollback --operation-id <ID>
 d2b host cutover verify --operation-id <ID>
 d2b host cutover doctor --operation-id <ID>
-d2b host cutover finalize --operation-id <ID> --consent-digest <DIGEST>
-d2b host cutover reset --scope <zone|provider|guest> --target <ID>
+d2b host cutover finalize --operation-id <ID> --consent-file <JSON> \
+  --finalization-file <JSON>
+d2b host cutover reset --scope <zone|provider|guest> --target <ID> \
+  --operation-id <ID> --candidate-id <ID> --revision-plan-id <ID> \
+  --preview-digest <DIGEST> --consent-digest <DIGEST> --consent-file <JSON>
 ```
 
 `preview` is mutation-free and reports only redaction-safe inventory counts
 and canonical digests. One-time cutover `preview`, `apply`, `verify`, and
 `finalize` reject `--zone`; the operation is host-wide. Scoped reset is a
 separate authority and requires its own scope, target, preview, and consent.
-After admission, `status`, `hold`, and `resume` use the runner-owned Unix
-socket so they remain available while `d2bd` is drained. The journal is
+Reset admission binds the scope and target into a distinct operation capability;
+it does not reuse the host-wide cutover capability. Destructive durable-Volume
+reset additionally requires `--destroy-durable-volumes`,
+`--destructive-consent-file`, and its matching digest; the default remains
+Preserve.
+`apply --handoff-file` supplies the existing typed host-generation handoff;
+the CLI first obtains runner admission through `d2bd`, then submits the
+handoff directly to the runner socket once the journal reaches the native
+phase-4 disposition boundary; earlier phase skips are refused.
+`rollback --handoff-file` supplies the pre-apply generation handoff when the
+native rollback boundary is at phase 4; the broker restores that typed
+generation before the journal is terminally rolled back.
+After admission, `status`, `hold`, `resume`, `rollback`, `verify`, and
+`finalize` use the runner-owned Unix socket so they remain available while
+`d2bd` is drained. Verification refuses without authoritative post-activation
+observations rather than inferring health from preview data. The journal is
 root-owned mode `0600` and is never printed by the CLI. Hold and resume
 advance only after the privileged audit boundary returns durable evidence;
 otherwise they return a typed refusal without changing the journal.

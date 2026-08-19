@@ -80,6 +80,7 @@ pub(crate) struct ModernCli {
 }
 
 #[derive(Debug, Subcommand)]
+#[allow(clippy::large_enum_variant)]
 pub(crate) enum ModernCommand {
     Get(GenericGetArgs),
     List(GenericListArgs),

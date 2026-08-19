@@ -271,9 +271,12 @@ fn cutover_reset_contract_rows_have_native_evidence_without_claiming_live_execut
             &[
                 "RunnerCommand::Hold",
                 "RunnerCommand::Resume",
+                "RunnerCommand::Effect",
                 "request_hold",
+                "complete_read_only_prefix",
+                "CutoverEffectPayload",
                 "close(fd)",
-                "AuditEvidence::unavailable",
+                "AuditSinkError::Unavailable",
                 "RunnerSocketError::AuditUnavailable",
             ],
         ),
@@ -282,9 +285,20 @@ fn cutover_reset_contract_rows_have_native_evidence_without_claiming_live_execut
             &[
                 "CAPABILITIES",
                 "LaunchCutoverRunner",
+                "cutover_window_active",
+                "stop_cutover_daemon",
                 "caller_role_is_admin",
                 "requires exactly one bootstrap fd at index 0",
                 "launch_cutover_runner",
+            ],
+        ),
+        (
+            "packages/d2b-priv-broker/src/ops/cutover_artifacts.rs",
+            &[
+                "quarantine_staged_destination",
+                "finalize_legacy_artifacts",
+                "destroy_durable_volume",
+                "source_preserved",
             ],
         ),
         (
@@ -305,16 +319,16 @@ fn cutover_reset_contract_rows_have_native_evidence_without_claiming_live_execut
 
     let runner = read_repo_file("packages/d2b-cutover/src/bin/d2b-cutover-runner.rs");
     assert!(
-        runner.contains("AuditEvidence::unavailable"),
+        runner.contains("AuditSinkError::Unavailable"),
         "U4 live effect execution must remain fail-closed while its audit boundary is blocked"
     );
     assert!(
-        !runner.contains("ApplyHostGenerationHandoff"),
-        "U2 must not claim the unfinished U4 live generation handoff"
+        runner.contains("ApplyHostGenerationHandoff"),
+        "U4 runner must use the typed host-generation handoff effect"
     );
     let u4_changelog = read_repo_file("changelog.d/2026-08-19-u4-cutover-runtime.md");
     assert!(
-        u4_changelog.contains("trusted Nix registration remains coupled to PR #440"),
-        "U4's live/runtime dependency must remain visibly pending"
+        u4_changelog.contains("typed host-generation handoff"),
+        "U4 changelog must describe the completed activation boundary"
     );
 }

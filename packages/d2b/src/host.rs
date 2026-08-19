@@ -1,7 +1,10 @@
 //! Host ResourceType and host-maintenance commands.
 
 use clap::{Args, Subcommand};
-use d2b_contracts::public_wire::{HostCutoverOperation, HostCutoverRequest, HostCutoverResetScope};
+use d2b_contracts::{
+    host_generation::ApplyHostGenerationHandoff,
+    public_wire::{HostCutoverOperation, HostCutoverRequest, HostCutoverResetScope},
+};
 use d2b_cutover::{RunnerCommand, RunnerPaths, send_command};
 use serde_json::{Map, Value, json};
 use std::path::PathBuf;
@@ -20,6 +23,7 @@ pub(crate) struct HostArgs {
 }
 
 #[derive(Debug, Subcommand, Clone)]
+#[allow(clippy::large_enum_variant)]
 pub(crate) enum HostCommand {
     Get(resource::TypedNameArgs),
     List(resource::TypedListArgs),
@@ -132,6 +136,24 @@ pub(crate) struct HostCutoverActionArgs {
     pub(crate) operator_id: Option<String>,
     #[arg(long = "consent-digest")]
     pub(crate) consent_digest: Option<String>,
+    #[arg(long = "consent-file")]
+    pub(crate) consent_file: Option<PathBuf>,
+    #[arg(long = "destructive-consent-digest")]
+    pub(crate) destructive_consent_digest: Option<String>,
+    #[arg(long = "destructive-consent-file")]
+    pub(crate) destructive_consent_file: Option<PathBuf>,
+    #[arg(long = "destroy-durable-volumes")]
+    pub(crate) destroy_durable_volumes: bool,
+    #[arg(long = "recovery-attestation-file")]
+    pub(crate) recovery_attestation_file: Option<PathBuf>,
+    #[arg(long = "handoff-file")]
+    pub(crate) handoff_file: Option<PathBuf>,
+    #[arg(long = "finalization-file")]
+    pub(crate) finalization_file: Option<PathBuf>,
+    #[arg(long = "verification-file")]
+    pub(crate) verification_file: Option<PathBuf>,
+    #[arg(long = "host-digest")]
+    pub(crate) host_digest: Option<String>,
     #[arg(long = "fresh-consent-digest")]
     pub(crate) fresh_consent_digest: Option<String>,
     #[arg(long)]
@@ -150,6 +172,14 @@ pub(crate) struct HostCutoverResetArgs {
     pub(crate) preview_digest: Option<String>,
     #[arg(long = "consent-digest")]
     pub(crate) consent_digest: Option<String>,
+    #[arg(long = "consent-file")]
+    pub(crate) consent_file: Option<PathBuf>,
+    #[arg(long = "destructive-consent-digest")]
+    pub(crate) destructive_consent_digest: Option<String>,
+    #[arg(long = "destructive-consent-file")]
+    pub(crate) destructive_consent_file: Option<PathBuf>,
+    #[arg(long = "destroy-durable-volumes")]
+    pub(crate) destroy_durable_volumes: bool,
     #[arg(long = "scope", value_enum)]
     pub(crate) scope: HostCutoverResetScopeArg,
     #[arg(long)]
@@ -569,9 +599,45 @@ fn cutover(
         ));
     }
 
+    let handoff = match action.handoff_file.as_ref() {
+        Some(path)
+            if matches!(
+                operation,
+                HostCutoverOperation::Apply | HostCutoverOperation::Rollback
+            ) =>
+        {
+            let json = read_contract_file(context, Some(path), "handoff", mode)?
+                .ok_or_else(|| context.failure("ref-invalid", "handoff file is empty", mode, 2))?;
+            Some(
+                serde_json::from_str::<ApplyHostGenerationHandoff>(&json).map_err(|_| {
+                    context.failure(
+                        "ref-invalid",
+                        "handoff file is not a valid typed host-generation handoff",
+                        mode,
+                        2,
+                    )
+                })?,
+            )
+        }
+        Some(_) => {
+            return Err(context.failure(
+                "ref-invalid",
+                "--handoff-file is valid only with cutover apply or rollback",
+                mode,
+                2,
+            ));
+        }
+        None => None,
+    };
+
     if matches!(
         operation,
-        HostCutoverOperation::Status | HostCutoverOperation::Hold | HostCutoverOperation::Resume
+        HostCutoverOperation::Status
+            | HostCutoverOperation::Hold
+            | HostCutoverOperation::Resume
+            | HostCutoverOperation::Rollback
+            | HostCutoverOperation::Verify
+            | HostCutoverOperation::Finalize
     ) && let Some(operation_id) = action.operation_id.as_deref()
     {
         let root = std::env::var_os("D2B_CUTOVER_STATE_DIR")
@@ -600,6 +666,82 @@ fn cutover(
                         context.failure("ref-invalid", "invalid fresh consent digest", mode, 2)
                     })?,
             },
+            HostCutoverOperation::Rollback => RunnerCommand::Rollback {
+                handoff: handoff.clone(),
+            },
+            HostCutoverOperation::Verify => {
+                let observations = read_contract_file(
+                    context,
+                    action.verification_file.as_ref(),
+                    "verification",
+                    mode,
+                )?
+                .ok_or_else(|| {
+                    context.failure(
+                        "ref-invalid",
+                        "verify requires --verification-file",
+                        mode,
+                        2,
+                    )
+                })?;
+                let observations =
+                    serde_json::from_str::<d2b_cutover::RunnerVerificationInput>(&observations)
+                        .map_err(|_| {
+                            context.failure(
+                                "ref-invalid",
+                                "verification file is not a valid observation set",
+                                mode,
+                                2,
+                            )
+                        })?;
+                RunnerCommand::Verify { observations }
+            }
+            HostCutoverOperation::Finalize => {
+                let consent_json =
+                    read_contract_file(context, action.consent_file.as_ref(), "consent", mode)?
+                        .ok_or_else(|| {
+                            context.failure(
+                                "ref-invalid",
+                                "finalize requires --consent-file",
+                                mode,
+                                2,
+                            )
+                        })?;
+                let consent =
+                    d2b_cutover::FinalizationConsent::decode_json(consent_json.as_bytes())
+                        .map_err(|_| {
+                            context.failure(
+                                "ref-invalid",
+                                "consent file is not a valid finalization consent",
+                                mode,
+                                2,
+                            )
+                        })?;
+                let plan_json = read_contract_file(
+                    context,
+                    action.finalization_file.as_ref(),
+                    "finalization",
+                    mode,
+                )?
+                .ok_or_else(|| {
+                    context.failure(
+                        "ref-invalid",
+                        "finalize requires --finalization-file",
+                        mode,
+                        2,
+                    )
+                })?;
+                let plan = serde_json::from_str::<d2b_cutover::FinalizationPlan>(&plan_json)
+                    .map_err(|_| {
+                        context.failure(
+                            "ref-invalid",
+                            "finalization file is not a valid approved disposition plan",
+                            mode,
+                            2,
+                        )
+                    })?;
+                RunnerCommand::Finalize { consent, plan }
+            }
             _ => unreachable!(),
         };
         match send_command(&paths.socket, &command) {
@@ -648,6 +790,17 @@ fn cutover(
         recovery_digest: action.recovery_digest.clone(),
         operator_id: action.operator_id.clone(),
         consent_digest: action.consent_digest.clone(),
+        consent_json: read_contract_file(context, action.consent_file.as_ref(), "consent", mode)?,
+        destructive_consent_digest: None,
+        destructive_consent_json: None,
+        destroy_durable_volumes: None,
+        recovery_attestation_json: read_contract_file(
+            context,
+            action.recovery_attestation_file.as_ref(),
+            "recovery attestation",
+            mode,
+        )?,
+        host_digest: action.host_digest.clone(),
         fresh_consent_digest: action.fresh_consent_digest.clone(),
         reason: action.reason.clone(),
         reset_scope: None,
@@ -665,8 +818,96 @@ fn cutover(
         )
     })?;
     let value = context.invoke("HostCutover", payload, deadline, mode)?;
+    if let Some(handoff) = handoff {
+        let operation_id = value
+            .get("operationId")
+            .and_then(Value::as_str)
+            .ok_or_else(|| {
+                context.failure(
+                    "cutover-runner-unavailable",
+                    "cutover admission returned no operation id",
+                    mode,
+                    78,
+                )
+            })?;
+        let operation_id = d2b_cutover::OperationId::new(operation_id.to_owned())
+            .map_err(|_| context.failure("ref-invalid", "invalid operation id", mode, 2))?;
+        let root = std::env::var_os("D2B_CUTOVER_STATE_DIR")
+            .map(PathBuf::from)
+            .unwrap_or_else(|| PathBuf::from("/var/lib/d2b"));
+        let socket_root = std::env::var_os("D2B_CUTOVER_SOCKET_DIR")
+            .map(PathBuf::from)
+            .unwrap_or_else(|| PathBuf::from("/run/d2b"));
+        let paths = RunnerPaths::new_with_socket_root(root, socket_root, &operation_id);
+        let command = RunnerCommand::Apply { handoff };
+        let mut last_error = None;
+        for _ in 0..20 {
+            match send_command(&paths.socket, &command) {
+                Ok(response) => {
+                    let value = serde_json::to_value(response).map_err(|_| {
+                        context.failure(
+                            "internal-error",
+                            "failed to encode runner response",
+                            mode,
+                            1,
+                        )
+                    })?;
+                    context.emit(&value, mode)?;
+                    return Ok(0);
+                }
+                Err(error) => {
+                    last_error = Some(error);
+                    std::thread::sleep(std::time::Duration::from_millis(25));
+                }
+            }
+        }
+        return Err(context.failure(
+            "cutover-runner-unavailable",
+            &format!(
+                "runner apply socket unavailable: {}",
+                last_error.expect("retry loop records an error")
+            ),
+            mode,
+            78,
+        ));
+    }
     context.emit(&value, mode)?;
     Ok(0)
+}
+
+fn read_contract_file(
+    context: &ZoneContext,
+    path: Option<&PathBuf>,
+    label: &str,
+    mode: OutputMode,
+) -> Result<Option<String>, CliFailure> {
+    let Some(path) = path else {
+        return Ok(None);
+    };
+    let bytes = std::fs::read(path).map_err(|error| {
+        context.failure(
+            "ref-invalid",
+            &format!("unable to read {label} file: {error}"),
+            mode,
+            2,
+        )
+    })?;
+    if bytes.len() > d2b_cutover::MAX_RUNNER_FRAME_BYTES {
+        return Err(context.failure(
+            "ref-invalid",
+            &format!("{label} file exceeds the bounded evidence size"),
+            mode,
+            2,
+        ));
+    }
+    String::from_utf8(bytes).map(Some).map_err(|_| {
+        context.failure(
+            "ref-invalid",
+            &format!("{label} file is not UTF-8"),
+            mode,
+            2,
+        )
+    })
 }
 
 fn cutover_reset(
@@ -689,6 +930,17 @@ fn cutover_reset(
         recovery_digest: None,
         operator_id: None,
         consent_digest: args.consent_digest.clone(),
+        consent_json: read_contract_file(context, args.consent_file.as_ref(), "consent", mode)?,
+        destructive_consent_digest: args.destructive_consent_digest.clone(),
+        destructive_consent_json: read_contract_file(
+            context,
+            args.destructive_consent_file.as_ref(),
+            "destructive consent",
+            mode,
+        )?,
+        destroy_durable_volumes: Some(args.destroy_durable_volumes),
+        recovery_attestation_json: None,
+        host_digest: None,
         fresh_consent_digest: None,
         reason: None,
         reset_scope: Some(reset_scope),

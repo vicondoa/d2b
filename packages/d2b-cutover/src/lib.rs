@@ -38,10 +38,11 @@ pub use preview::{CutoverPreview, PREVIEW_DOMAIN, PreviewError, PreviewInventory
 pub use reset::{EffectAllowlist, EffectCapability, ResetError, ResetInventory, ResetTarget};
 pub use rollback::{NATIVE_ROLLBACK_BOUNDARY, RollbackError, RollbackResult, plan_native_rollback};
 pub use runner::{
-    BootstrapCapability, CapabilityLedger, ConsumedCapability, MAX_BOOTSTRAP_LIFETIME_MS,
-    MAX_RUNNER_FRAME_BYTES, RUNNER_BOOTSTRAP_FD, RUNNER_PROTOCOL_VERSION, RUNNER_SOCKET_TIMEOUT,
-    RunnerBootstrap, RunnerCapabilityError, RunnerCommand, RunnerLockError, RunnerPaths,
-    RunnerPeer, RunnerResponse, RunnerSocket, RunnerSocketError, RunnerStatus,
+    BootstrapCapability, CapabilityLedger, ConsumedCapability, FinalizationArtifact,
+    FinalizationPlan, MAX_BOOTSTRAP_LIFETIME_MS, MAX_RUNNER_FRAME_BYTES, RUNNER_BOOTSTRAP_FD,
+    RUNNER_PROTOCOL_VERSION, RUNNER_SOCKET_TIMEOUT, RunnerBootstrap, RunnerCapabilityError,
+    RunnerCommand, RunnerLockError, RunnerPaths, RunnerPeer, RunnerResponse, RunnerSocket,
+    RunnerSocketError, RunnerStatus, RunnerVerificationInput, RunnerZoneVerification,
     acquire_operation_lock, load_journal, persist_journal, send_command, write_response,
 };
 pub use state_machine::{

@@ -13653,6 +13653,7 @@ mod host_install_dispatch_tests {
         let processes_path = base_dir.join(format!("{unique}.processes.json"));
         let processes = d2b_core::processes::ProcessesJson {
             schema_version: "v2".to_owned(),
+            cutover_runner: None,
             vms: vec![d2b_core::processes::VmProcessDag {
                 workload_identity: None,
                 vm: vm.to_owned(),
@@ -17060,6 +17061,7 @@ mod ssh_spawn_gate {
         let processes_path = base_dir.join(format!("{unique}.processes.json"));
         let processes = d2b_core::processes::ProcessesJson {
             schema_version: "v2".to_owned(),
+            cutover_runner: None,
             vms: vec![d2b_core::processes::VmProcessDag {
                 workload_identity: None,
                 vm: vm.to_owned(),

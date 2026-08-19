@@ -17572,6 +17572,7 @@ fn broker_caller_uid(caller_role: &BrokerCallerRole) -> u32 {
         BrokerCallerRole::AdminUid { uid }
         | BrokerCallerRole::LauncherUid { uid }
         | BrokerCallerRole::RootUid { uid } => *uid,
+        BrokerCallerRole::CutoverRunner { .. } => 0,
         BrokerCallerRole::NotAuthorized => 0,
     }
 }

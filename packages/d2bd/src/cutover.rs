@@ -13,17 +13,20 @@ use std::{
 };
 
 use d2b_contracts::{
-    broker_wire::{BrokerCallerRole, BrokerRequest, BrokerResponse, LaunchCutoverRunnerRequest},
+    broker_wire::{
+        BrokerCallerRole, BrokerRequest, BrokerResponse, CanonicalAuditDigest,
+        LaunchCutoverRunnerRequest,
+    },
     public_wire::{
         HostCutoverInventorySummary, HostCutoverOperation, HostCutoverRequest, HostCutoverResponse,
     },
     types::BundleOpId,
 };
 use d2b_cutover::{
-    BootstrapCapability, CandidateId, CutoverPreview, Digest, HostInventory, InventoryInputItem,
-    InventoryItem, OperationId, OperationKind, OperationRequest, OperationState, OperatorId,
-    RevisionPlanId, RunnerBootstrap, RunnerCommand, RunnerPaths, RunnerStatus, ZoneInventory,
-    send_command,
+    BootstrapCapability, CandidateId, Consent, CutoverPreview, Digest, HostInventory,
+    InventoryInputItem, InventoryItem, OperationId, OperationKind, OperationRequest,
+    OperationState, OperatorId, RecoveryAttestation, ResetInventory, ResetScope, RevisionPlanId,
+    RunnerBootstrap, RunnerCommand, RunnerPaths, RunnerStatus, ZoneInventory, send_command,
 };
 use nix::unistd::{pipe, write};
 use serde_json::Value;
@@ -42,17 +45,24 @@ pub(crate) fn dispatch(
 ) -> Result<Value, TypedError> {
     reject_zone_selection(&request)?;
     match request.operation {
-        HostCutoverOperation::Preview => preview(state, request),
+        HostCutoverOperation::Preview => {
+            if !matches!(peer.role, PeerRole::Admin) {
+                return Err(TypedError::AuthzNotAdmin {
+                    verb: "hostCutover".to_owned(),
+                });
+            }
+            preview(state, request)
+        }
         HostCutoverOperation::Apply => apply(state, peer, request),
         HostCutoverOperation::Status | HostCutoverOperation::Doctor => observe(state, request),
         HostCutoverOperation::Hold
         | HostCutoverOperation::Resume
         | HostCutoverOperation::Rollback
         | HostCutoverOperation::Verify
-        | HostCutoverOperation::Finalize
-        | HostCutoverOperation::Reset => Err(TypedError::InternalConfig {
+        | HostCutoverOperation::Finalize => Err(TypedError::InternalConfig {
             detail: "cutover command must use the runner owner socket after admission".to_owned(),
         }),
+        HostCutoverOperation::Reset => reset(state, peer, request),
     }
 }
 
@@ -132,8 +142,25 @@ fn apply(
     let preview_digest = parse_required_digest(request.preview_digest.as_deref(), "previewDigest")?;
     let recovery_digest =
         parse_required_digest(request.recovery_digest.as_deref(), "recoveryDigest")?;
-    let _consent_digest =
-        parse_required_digest(request.consent_digest.as_deref(), "consentDigest")?;
+    let consent_digest = parse_required_digest(request.consent_digest.as_deref(), "consentDigest")?;
+    let consent_json = request
+        .consent_json
+        .as_deref()
+        .ok_or_else(|| invalid("consentJson"))?;
+    let consent =
+        Consent::decode_json(consent_json.as_bytes()).map_err(|_| invalid("consentJson"))?;
+    if consent.digest().map_err(|_| invalid("consentJson"))? != consent_digest {
+        return Err(invalid("consentDigest"));
+    }
+    let recovery = RecoveryAttestation::decode_json(
+        request
+            .recovery_attestation_json
+            .as_deref()
+            .ok_or_else(|| invalid("recoveryAttestationJson"))?
+            .as_bytes(),
+    )
+    .map_err(|_| invalid("recoveryAttestationJson"))?;
+    let host_digest = parse_required_digest(request.host_digest.as_deref(), "hostDigest")?;
     authorize_bound_operator(peer.uid, &operator_id)?;
     let (inventory, _) = host_inventory(state)?;
     let preview = CutoverPreview::new(
@@ -180,10 +207,17 @@ fn apply(
         lifecycle_gid,
     )
     .map_err(|_| invalid("capability"))?;
+    let capability_digest =
+        CanonicalAuditDigest::parse(capability.binding_digest().as_str().to_owned())
+            .map_err(|_| invalid("capability"))?;
     let bootstrap = RunnerBootstrap {
         capability,
         request: operation,
         preview,
+        consent: Some(consent),
+        destructive_consent: None,
+        recovery: Some(recovery),
+        host_digest: Some(host_digest),
     };
     let bytes = bootstrap
         .canonical_bytes()
@@ -208,6 +242,8 @@ fn apply(
         BrokerRequest::LaunchCutoverRunner(LaunchCutoverRunnerRequest {
             operation_id: BundleOpId::new(operation_id.as_str()),
             bootstrap_fd_index: 0,
+            capability_digest,
+            expires_at_ms: bootstrap.capability.expires_at_ms(),
         }),
         BrokerCallerRole::AdminUid { uid: peer.uid },
         &[read_fd.as_raw_fd()],
@@ -241,6 +277,189 @@ fn apply(
         inventory: None,
     })
     .expect("typed cutover response serializes"))
+}
+
+fn reset(
+    state: &ServerState,
+    peer: &PeerIdentity,
+    request: HostCutoverRequest,
+) -> Result<Value, TypedError> {
+    if !matches!(peer.role, PeerRole::Admin) {
+        return Err(TypedError::AuthzNotAdmin {
+            verb: "hostCutoverReset".to_owned(),
+        });
+    }
+    let operation_id = parse_required_operation_id(request.operation_id.as_deref())?;
+    let candidate_id = parse_required_candidate_id(request.candidate_id.as_deref())?;
+    let revision_plan_id = parse_required_revision_plan_id(request.revision_plan_id.as_deref())?;
+    let preview_digest = parse_required_digest(request.preview_digest.as_deref(), "previewDigest")?;
+    let consent_digest = parse_required_digest(request.consent_digest.as_deref(), "consentDigest")?;
+    let destroy_durable_volumes = request.destroy_durable_volumes.unwrap_or(false);
+    let scope = match request.reset_scope.ok_or_else(|| invalid("resetScope"))? {
+        d2b_contracts::public_wire::HostCutoverResetScope::Zone => ResetScope::Zone,
+        d2b_contracts::public_wire::HostCutoverResetScope::Provider => ResetScope::Provider,
+        d2b_contracts::public_wire::HostCutoverResetScope::Guest => ResetScope::Guest,
+    };
+    let target = request.target.ok_or_else(|| invalid("target"))?;
+    let inventory = ResetInventory::new(scope, target)
+        .map_err(|_| invalid("resetTarget"))?
+        .with_preserve_durable_volumes(!destroy_durable_volumes)
+        .with_destroy_durable_consent(destroy_durable_volumes);
+    let preview = CutoverPreview::new_reset(
+        operation_id.clone(),
+        OperationKind::ScopedReset(scope),
+        candidate_id.clone(),
+        revision_plan_id.clone(),
+        inventory.clone(),
+    )
+    .map_err(|_| invalid("preview"))?;
+    if preview.digest().map_err(|_| invalid("previewDigest"))? != preview_digest {
+        return Err(TypedError::WireUnknownField {
+            detail: "reset preview digest is stale".to_owned(),
+        });
+    }
+    let consent_json = request
+        .consent_json
+        .as_deref()
+        .ok_or_else(|| invalid("consentJson"))?;
+    let consent =
+        Consent::decode_json(consent_json.as_bytes()).map_err(|_| invalid("consentJson"))?;
+    if consent.digest().map_err(|_| invalid("consentJson"))? != consent_digest {
+        return Err(invalid("consentDigest"));
+    }
+    let destructive_consent = if destroy_durable_volumes {
+        let digest = parse_required_digest(
+            request.destructive_consent_digest.as_deref(),
+            "destructiveConsentDigest",
+        )?;
+        let json = request
+            .destructive_consent_json
+            .as_deref()
+            .ok_or_else(|| invalid("destructiveConsentJson"))?;
+        let consent =
+            Consent::decode_json(json.as_bytes()).map_err(|_| invalid("destructiveConsentJson"))?;
+        if consent
+            .digest()
+            .map_err(|_| invalid("destructiveConsentJson"))?
+            != digest
+        {
+            return Err(invalid("destructiveConsentDigest"));
+        }
+        Some(consent)
+    } else {
+        if request.destructive_consent_digest.is_some()
+            || request.destructive_consent_json.is_some()
+        {
+            return Err(invalid("destructiveConsent"));
+        }
+        None
+    };
+    let operator_id = parse_operator_id(&format!("uid-{}", peer.uid))?;
+    let operation = OperationRequest::new_reset(
+        operation_id.clone(),
+        scope,
+        candidate_id,
+        revision_plan_id,
+        operator_id,
+        preview_digest,
+        inventory,
+    )
+    .map_err(|_| invalid("operation"))?;
+    if let Some(consent) = &destructive_consent
+        && consent.binding() != &operation.consent_binding()
+    {
+        return Err(invalid("destructiveConsentBinding"));
+    }
+    let now = now_ms();
+    let nonce = Digest::derive(
+        "d2b:cutover:reset-bootstrap",
+        format!("{}:{}:{}", operation.request_digest(), peer.uid, now).as_bytes(),
+    );
+    let lifecycle_gid =
+        get_group_by_name(&state.config.public_socket_group).map(|group| group.gid());
+    let capability = BootstrapCapability::new_with_identity_and_group(
+        operation_id.clone(),
+        operation.candidate_id().clone(),
+        operation.operator_id().clone(),
+        OperationKind::ScopedReset(scope),
+        nonce,
+        now,
+        now.saturating_add(d2b_cutover::MAX_BOOTSTRAP_LIFETIME_MS),
+        peer.uid,
+        configured_admin_uids(state, peer.uid),
+        lifecycle_gid,
+    )
+    .map_err(|_| invalid("capability"))?;
+    let capability_digest =
+        CanonicalAuditDigest::parse(capability.binding_digest().as_str().to_owned())
+            .map_err(|_| invalid("capability"))?;
+    let bootstrap = RunnerBootstrap {
+        capability,
+        request: operation,
+        preview,
+        consent: Some(consent),
+        destructive_consent,
+        recovery: None,
+        host_digest: None,
+    };
+    let bytes = bootstrap
+        .canonical_bytes()
+        .map_err(|_| invalid("bootstrap"))?;
+    let (read_fd, write_fd) = pipe().map_err(|error| TypedError::InternalIo {
+        context: "create reset bootstrap pipe".to_owned(),
+        detail: error.to_string(),
+    })?;
+    let written = write(&write_fd, &bytes).map_err(|error| TypedError::InternalIo {
+        context: "write reset bootstrap".to_owned(),
+        detail: error.to_string(),
+    })?;
+    if written != bytes.len() {
+        return Err(TypedError::InternalIo {
+            context: "write reset bootstrap".to_owned(),
+            detail: "short bootstrap write".to_owned(),
+        });
+    }
+    drop(write_fd);
+    let (response, received_fds) = dispatch_broker_request_with_optional_request_fds(
+        state,
+        BrokerRequest::LaunchCutoverRunner(LaunchCutoverRunnerRequest {
+            operation_id: BundleOpId::new(operation_id.as_str()),
+            bootstrap_fd_index: 0,
+            capability_digest,
+            expires_at_ms: bootstrap.capability.expires_at_ms(),
+        }),
+        BrokerCallerRole::AdminUid { uid: peer.uid },
+        &[read_fd.as_raw_fd()],
+        std::time::Duration::from_secs(10),
+    )?;
+    drop(read_fd);
+    crate::close_received_fds(&received_fds);
+    let response = match response {
+        BrokerResponse::LaunchCutoverRunner(response) => response,
+        BrokerResponse::Error(error) => {
+            return Err(TypedError::InternalBrokerUnavailable {
+                path: broker_socket_path(state),
+                detail: error.kind,
+            });
+        }
+        _ => {
+            return Err(TypedError::InternalBrokerUnavailable {
+                path: broker_socket_path(state),
+                detail: "reset runner launch response mismatch".to_owned(),
+            });
+        }
+    };
+    Ok(serde_json::to_value(HostCutoverResponse {
+        operation: HostCutoverOperation::Reset,
+        operation_id: Some(response.operation_id.to_string()),
+        state: "planned".to_owned(),
+        phase: 0,
+        preview_digest: request.preview_digest,
+        summary: "scoped reset runner admitted with a distinct capability".to_owned(),
+        mutation_accepted: true,
+        inventory: None,
+    })
+    .expect("typed reset response serializes"))
 }
 
 fn observe(state: &ServerState, request: HostCutoverRequest) -> Result<Value, TypedError> {
@@ -444,6 +663,12 @@ mod tests {
             recovery_digest: None,
             operator_id: None,
             consent_digest: None,
+            consent_json: None,
+            destructive_consent_digest: None,
+            destructive_consent_json: None,
+            destroy_durable_volumes: None,
+            recovery_attestation_json: None,
+            host_digest: None,
             fresh_consent_digest: None,
             reason: None,
             reset_scope: None,

@@ -58,6 +58,8 @@ pub mod exec_reconcile;
 
 // Audit-helper introduced by s2; reusable by s1/s3/s4 going forward.
 pub mod audit_op;
+// Operation-scoped cutover quarantine and finalization markers.
+pub mod cutover_artifacts;
 // Broker-owned source-to-target NixOS generation handoff journal and replay.
 pub mod host_generation_handoff;
 

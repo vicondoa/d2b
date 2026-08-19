@@ -356,10 +356,19 @@ _arguments "${_arguments_options[@]}" : \
 '--recovery-digest=[]:RECOVERY_DIGEST:_default' \
 '--operator-id=[]:OPERATOR_ID:_default' \
 '--consent-digest=[]:CONSENT_DIGEST:_default' \
+'--consent-file=[]:CONSENT_FILE:_files' \
+'--destructive-consent-digest=[]:DESTRUCTIVE_CONSENT_DIGEST:_default' \
+'--destructive-consent-file=[]:DESTRUCTIVE_CONSENT_FILE:_files' \
+'--recovery-attestation-file=[]:RECOVERY_ATTESTATION_FILE:_files' \
+'--handoff-file=[]:HANDOFF_FILE:_files' \
+'--finalization-file=[]:FINALIZATION_FILE:_files' \
+'--verification-file=[]:VERIFICATION_FILE:_files' \
+'--host-digest=[]:HOST_DIGEST:_default' \
 '--fresh-consent-digest=[]:FRESH_CONSENT_DIGEST:_default' \
 '--reason=[]:REASON:_default' \
 '--zone=[Address a declared Zone. Without this flag the nearest local runtime is selected]:ZONE:_default' \
 '--deadline=[Bound all Zone requests and streams]:DURATION:_default' \
+'--destroy-durable-volumes[]' \
 '(--human)--json[Emit the stable JSON envelope]' \
 '(--json)--human[Force human-readable terminal output]' \
 '(--deadline)--no-deadline[Suppress the command default deadline]' \
@@ -376,10 +385,19 @@ _arguments "${_arguments_options[@]}" : \
 '--recovery-digest=[]:RECOVERY_DIGEST:_default' \
 '--operator-id=[]:OPERATOR_ID:_default' \
 '--consent-digest=[]:CONSENT_DIGEST:_default' \
+'--consent-file=[]:CONSENT_FILE:_files' \
+'--destructive-consent-digest=[]:DESTRUCTIVE_CONSENT_DIGEST:_default' \
+'--destructive-consent-file=[]:DESTRUCTIVE_CONSENT_FILE:_files' \
+'--recovery-attestation-file=[]:RECOVERY_ATTESTATION_FILE:_files' \
+'--handoff-file=[]:HANDOFF_FILE:_files' \
+'--finalization-file=[]:FINALIZATION_FILE:_files' \
+'--verification-file=[]:VERIFICATION_FILE:_files' \
+'--host-digest=[]:HOST_DIGEST:_default' \
 '--fresh-consent-digest=[]:FRESH_CONSENT_DIGEST:_default' \
 '--reason=[]:REASON:_default' \
 '--zone=[Address a declared Zone. Without this flag the nearest local runtime is selected]:ZONE:_default' \
 '--deadline=[Bound all Zone requests and streams]:DURATION:_default' \
+'--destroy-durable-volumes[]' \
 '(--human)--json[Emit the stable JSON envelope]' \
 '(--json)--human[Force human-readable terminal output]' \
 '(--deadline)--no-deadline[Suppress the command default deadline]' \
@@ -396,10 +414,19 @@ _arguments "${_arguments_options[@]}" : \
 '--recovery-digest=[]:RECOVERY_DIGEST:_default' \
 '--operator-id=[]:OPERATOR_ID:_default' \
 '--consent-digest=[]:CONSENT_DIGEST:_default' \
+'--consent-file=[]:CONSENT_FILE:_files' \
+'--destructive-consent-digest=[]:DESTRUCTIVE_CONSENT_DIGEST:_default' \
+'--destructive-consent-file=[]:DESTRUCTIVE_CONSENT_FILE:_files' \
+'--recovery-attestation-file=[]:RECOVERY_ATTESTATION_FILE:_files' \
+'--handoff-file=[]:HANDOFF_FILE:_files' \
+'--finalization-file=[]:FINALIZATION_FILE:_files' \
+'--verification-file=[]:VERIFICATION_FILE:_files' \
+'--host-digest=[]:HOST_DIGEST:_default' \
 '--fresh-consent-digest=[]:FRESH_CONSENT_DIGEST:_default' \
 '--reason=[]:REASON:_default' \
 '--zone=[Address a declared Zone. Without this flag the nearest local runtime is selected]:ZONE:_default' \
 '--deadline=[Bound all Zone requests and streams]:DURATION:_default' \
+'--destroy-durable-volumes[]' \
 '(--human)--json[Emit the stable JSON envelope]' \
 '(--json)--human[Force human-readable terminal output]' \
 '(--deadline)--no-deadline[Suppress the command default deadline]' \
@@ -416,10 +443,19 @@ _arguments "${_arguments_options[@]}" : \
 '--recovery-digest=[]:RECOVERY_DIGEST:_default' \
 '--operator-id=[]:OPERATOR_ID:_default' \
 '--consent-digest=[]:CONSENT_DIGEST:_default' \
+'--consent-file=[]:CONSENT_FILE:_files' \
+'--destructive-consent-digest=[]:DESTRUCTIVE_CONSENT_DIGEST:_default' \
+'--destructive-consent-file=[]:DESTRUCTIVE_CONSENT_FILE:_files' \
+'--recovery-attestation-file=[]:RECOVERY_ATTESTATION_FILE:_files' \
+'--handoff-file=[]:HANDOFF_FILE:_files' \
+'--finalization-file=[]:FINALIZATION_FILE:_files' \
+'--verification-file=[]:VERIFICATION_FILE:_files' \
+'--host-digest=[]:HOST_DIGEST:_default' \
 '--fresh-consent-digest=[]:FRESH_CONSENT_DIGEST:_default' \
 '--reason=[]:REASON:_default' \
 '--zone=[Address a declared Zone. Without this flag the nearest local runtime is selected]:ZONE:_default' \
 '--deadline=[Bound all Zone requests and streams]:DURATION:_default' \
+'--destroy-durable-volumes[]' \
 '(--human)--json[Emit the stable JSON envelope]' \
 '(--json)--human[Force human-readable terminal output]' \
 '(--deadline)--no-deadline[Suppress the command default deadline]' \
@@ -436,10 +472,19 @@ _arguments "${_arguments_options[@]}" : \
 '--recovery-digest=[]:RECOVERY_DIGEST:_default' \
 '--operator-id=[]:OPERATOR_ID:_default' \
 '--consent-digest=[]:CONSENT_DIGEST:_default' \
+'--consent-file=[]:CONSENT_FILE:_files' \
+'--destructive-consent-digest=[]:DESTRUCTIVE_CONSENT_DIGEST:_default' \
+'--destructive-consent-file=[]:DESTRUCTIVE_CONSENT_FILE:_files' \
+'--recovery-attestation-file=[]:RECOVERY_ATTESTATION_FILE:_files' \
+'--handoff-file=[]:HANDOFF_FILE:_files' \
+'--finalization-file=[]:FINALIZATION_FILE:_files' \
+'--verification-file=[]:VERIFICATION_FILE:_files' \
+'--host-digest=[]:HOST_DIGEST:_default' \
 '--fresh-consent-digest=[]:FRESH_CONSENT_DIGEST:_default' \
 '--reason=[]:REASON:_default' \
 '--zone=[Address a declared Zone. Without this flag the nearest local runtime is selected]:ZONE:_default' \
 '--deadline=[Bound all Zone requests and streams]:DURATION:_default' \
+'--destroy-durable-volumes[]' \
 '(--human)--json[Emit the stable JSON envelope]' \
 '(--json)--human[Force human-readable terminal output]' \
 '(--deadline)--no-deadline[Suppress the command default deadline]' \
@@ -456,10 +501,19 @@ _arguments "${_arguments_options[@]}" : \
 '--recovery-digest=[]:RECOVERY_DIGEST:_default' \
 '--operator-id=[]:OPERATOR_ID:_default' \
 '--consent-digest=[]:CONSENT_DIGEST:_default' \
+'--consent-file=[]:CONSENT_FILE:_files' \
+'--destructive-consent-digest=[]:DESTRUCTIVE_CONSENT_DIGEST:_default' \
+'--destructive-consent-file=[]:DESTRUCTIVE_CONSENT_FILE:_files' \
+'--recovery-attestation-file=[]:RECOVERY_ATTESTATION_FILE:_files' \
+'--handoff-file=[]:HANDOFF_FILE:_files' \
+'--finalization-file=[]:FINALIZATION_FILE:_files' \
+'--verification-file=[]:VERIFICATION_FILE:_files' \
+'--host-digest=[]:HOST_DIGEST:_default' \
 '--fresh-consent-digest=[]:FRESH_CONSENT_DIGEST:_default' \
 '--reason=[]:REASON:_default' \
 '--zone=[Address a declared Zone. Without this flag the nearest local runtime is selected]:ZONE:_default' \
 '--deadline=[Bound all Zone requests and streams]:DURATION:_default' \
+'--destroy-durable-volumes[]' \
 '(--human)--json[Emit the stable JSON envelope]' \
 '(--json)--human[Force human-readable terminal output]' \
 '(--deadline)--no-deadline[Suppress the command default deadline]' \
@@ -476,10 +530,19 @@ _arguments "${_arguments_options[@]}" : \
 '--recovery-digest=[]:RECOVERY_DIGEST:_default' \
 '--operator-id=[]:OPERATOR_ID:_default' \
 '--consent-digest=[]:CONSENT_DIGEST:_default' \
+'--consent-file=[]:CONSENT_FILE:_files' \
+'--destructive-consent-digest=[]:DESTRUCTIVE_CONSENT_DIGEST:_default' \
+'--destructive-consent-file=[]:DESTRUCTIVE_CONSENT_FILE:_files' \
+'--recovery-attestation-file=[]:RECOVERY_ATTESTATION_FILE:_files' \
+'--handoff-file=[]:HANDOFF_FILE:_files' \
+'--finalization-file=[]:FINALIZATION_FILE:_files' \
+'--verification-file=[]:VERIFICATION_FILE:_files' \
+'--host-digest=[]:HOST_DIGEST:_default' \
 '--fresh-consent-digest=[]:FRESH_CONSENT_DIGEST:_default' \
 '--reason=[]:REASON:_default' \
 '--zone=[Address a declared Zone. Without this flag the nearest local runtime is selected]:ZONE:_default' \
 '--deadline=[Bound all Zone requests and streams]:DURATION:_default' \
+'--destroy-durable-volumes[]' \
 '(--human)--json[Emit the stable JSON envelope]' \
 '(--json)--human[Force human-readable terminal output]' \
 '(--deadline)--no-deadline[Suppress the command default deadline]' \
@@ -496,10 +559,19 @@ _arguments "${_arguments_options[@]}" : \
 '--recovery-digest=[]:RECOVERY_DIGEST:_default' \
 '--operator-id=[]:OPERATOR_ID:_default' \
 '--consent-digest=[]:CONSENT_DIGEST:_default' \
+'--consent-file=[]:CONSENT_FILE:_files' \
+'--destructive-consent-digest=[]:DESTRUCTIVE_CONSENT_DIGEST:_default' \
+'--destructive-consent-file=[]:DESTRUCTIVE_CONSENT_FILE:_files' \
+'--recovery-attestation-file=[]:RECOVERY_ATTESTATION_FILE:_files' \
+'--handoff-file=[]:HANDOFF_FILE:_files' \
+'--finalization-file=[]:FINALIZATION_FILE:_files' \
+'--verification-file=[]:VERIFICATION_FILE:_files' \
+'--host-digest=[]:HOST_DIGEST:_default' \
 '--fresh-consent-digest=[]:FRESH_CONSENT_DIGEST:_default' \
 '--reason=[]:REASON:_default' \
 '--zone=[Address a declared Zone. Without this flag the nearest local runtime is selected]:ZONE:_default' \
 '--deadline=[Bound all Zone requests and streams]:DURATION:_default' \
+'--destroy-durable-volumes[]' \
 '(--human)--json[Emit the stable JSON envelope]' \
 '(--json)--human[Force human-readable terminal output]' \
 '(--deadline)--no-deadline[Suppress the command default deadline]' \
@@ -516,10 +588,19 @@ _arguments "${_arguments_options[@]}" : \
 '--recovery-digest=[]:RECOVERY_DIGEST:_default' \
 '--operator-id=[]:OPERATOR_ID:_default' \
 '--consent-digest=[]:CONSENT_DIGEST:_default' \
+'--consent-file=[]:CONSENT_FILE:_files' \
+'--destructive-consent-digest=[]:DESTRUCTIVE_CONSENT_DIGEST:_default' \
+'--destructive-consent-file=[]:DESTRUCTIVE_CONSENT_FILE:_files' \
+'--recovery-attestation-file=[]:RECOVERY_ATTESTATION_FILE:_files' \
+'--handoff-file=[]:HANDOFF_FILE:_files' \
+'--finalization-file=[]:FINALIZATION_FILE:_files' \
+'--verification-file=[]:VERIFICATION_FILE:_files' \
+'--host-digest=[]:HOST_DIGEST:_default' \
 '--fresh-consent-digest=[]:FRESH_CONSENT_DIGEST:_default' \
 '--reason=[]:REASON:_default' \
 '--zone=[Address a declared Zone. Without this flag the nearest local runtime is selected]:ZONE:_default' \
 '--deadline=[Bound all Zone requests and streams]:DURATION:_default' \
+'--destroy-durable-volumes[]' \
 '(--human)--json[Emit the stable JSON envelope]' \
 '(--json)--human[Force human-readable terminal output]' \
 '(--deadline)--no-deadline[Suppress the command default deadline]' \
@@ -534,10 +615,14 @@ _arguments "${_arguments_options[@]}" : \
 '--revision-plan-id=[]:REVISION_PLAN_ID:_default' \
 '--preview-digest=[]:PREVIEW_DIGEST:_default' \
 '--consent-digest=[]:CONSENT_DIGEST:_default' \
+'--consent-file=[]:CONSENT_FILE:_files' \
+'--destructive-consent-digest=[]:DESTRUCTIVE_CONSENT_DIGEST:_default' \
+'--destructive-consent-file=[]:DESTRUCTIVE_CONSENT_FILE:_files' \
 '--scope=[]:SCOPE:(zone provider guest)' \
 '--target=[]:TARGET:_default' \
 '--zone=[Address a declared Zone. Without this flag the nearest local runtime is selected]:ZONE:_default' \
 '--deadline=[Bound all Zone requests and streams]:DURATION:_default' \
+'--destroy-durable-volumes[]' \
 '(--human)--json[Emit the stable JSON envelope]' \
 '(--json)--human[Force human-readable terminal output]' \
 '(--deadline)--no-deadline[Suppress the command default deadline]' \

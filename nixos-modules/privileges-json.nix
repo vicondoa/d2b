@@ -285,6 +285,18 @@ let
     "auditMode": "yes"
   },
   {
+    "operation": "host cutover",
+    "subject": "host cutover",
+    "scope": "global",
+    "allowedGroups": [
+      "d2b-admin"
+    ],
+    "destructive": true,
+    "secretAccess": "metadata-only",
+    "brokerRequired": "yes",
+    "auditMode": "yes"
+  },
+  {
     "operation": "host prepare",
     "subject": "host",
     "scope": "global",
@@ -1768,6 +1780,42 @@ let
     ],
     "destructive": true,
     "secretAccess": "none",
+    "brokerRequired": "yes",
+    "auditMode": "yes"
+  },
+  {
+    "operation": "LaunchCutoverRunner",
+    "subject": "cutover-runner",
+    "scope": "global",
+    "allowedGroups": [
+      "d2bd"
+    ],
+    "destructive": true,
+    "secretAccess": "metadata-only",
+    "brokerRequired": "yes",
+    "auditMode": "yes"
+  },
+  {
+    "operation": "CutoverAudit",
+    "subject": "cutover-audit",
+    "scope": "global",
+    "allowedGroups": [
+      "d2b-cutover-runner"
+    ],
+    "destructive": false,
+    "secretAccess": "metadata-only",
+    "brokerRequired": "yes",
+    "auditMode": "yes"
+  },
+  {
+    "operation": "CutoverEffect",
+    "subject": "cutover-effect",
+    "scope": "global",
+    "allowedGroups": [
+      "d2b-cutover-runner"
+    ],
+    "destructive": true,
+    "secretAccess": "metadata-only",
     "brokerRequired": "yes",
     "auditMode": "yes"
   },

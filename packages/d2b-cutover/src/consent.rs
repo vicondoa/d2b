@@ -213,7 +213,8 @@ impl ConsentBinding {
 }
 
 /// One single-use apply consent.
-#[derive(Debug)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct Consent {
     binding: ConsentBinding,
     issued_at_ms: u64,
@@ -222,6 +223,27 @@ pub struct Consent {
 }
 
 impl Consent {
+    /// Decode one strict canonical consent artifact.
+    pub fn decode_json(bytes: &[u8]) -> Result<Self, ConsentError> {
+        CanonicalJsonValue::parse(bytes).map_err(ConsentError::CanonicalJson)?;
+        let consent: Self = serde_json::from_slice(bytes).map_err(|_| ConsentError::Json)?;
+        validate_time_window(consent.issued_at_ms, consent.expires_at_ms)?;
+        Ok(consent)
+    }
+
+    /// Compute the digest bound to the apply request.
+    pub fn digest(&self) -> Result<crate::model::Digest, ConsentError> {
+        Ok(crate::model::Digest::derive(
+            "d2b:cutover:consent:v1",
+            &self.canonical_bytes()?,
+        ))
+    }
+
+    /// Render canonical consent bytes.
+    pub fn canonical_bytes(&self) -> Result<Vec<u8>, ConsentError> {
+        canonical_json_bytes(self).map_err(ConsentError::CanonicalJson)
+    }
+
     /// Issue consent for one exact operation binding.
     pub fn issue(
         binding: ConsentBinding,
@@ -297,7 +319,8 @@ impl FinalizationBinding {
 }
 
 /// A separately issued, single-use phase-10 consent.
-#[derive(Debug)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct FinalizationConsent {
     binding: FinalizationBinding,
     issued_at_ms: u64,
@@ -306,6 +329,19 @@ pub struct FinalizationConsent {
 }
 
 impl FinalizationConsent {
+    /// Decode one strict canonical finalization consent artifact.
+    pub fn decode_json(bytes: &[u8]) -> Result<Self, ConsentError> {
+        CanonicalJsonValue::parse(bytes).map_err(ConsentError::CanonicalJson)?;
+        let consent: Self = serde_json::from_slice(bytes).map_err(|_| ConsentError::Json)?;
+        validate_time_window(consent.issued_at_ms, consent.expires_at_ms)?;
+        Ok(consent)
+    }
+
+    /// Render canonical finalization consent bytes.
+    pub fn canonical_bytes(&self) -> Result<Vec<u8>, ConsentError> {
+        canonical_json_bytes(self).map_err(ConsentError::CanonicalJson)
+    }
+
     /// Issue a distinct finalization consent.
     pub fn issue(
         binding: FinalizationBinding,
@@ -319,6 +355,14 @@ impl FinalizationConsent {
             expires_at_ms,
             consumed: false,
         })
+    }
+
+    /// Compute the digest bound to a phase-10 broker effect.
+    pub fn digest(&self) -> Result<Digest, ConsentError> {
+        Ok(Digest::derive(
+            "d2b:cutover:finalization-consent:v1",
+            &self.canonical_bytes()?,
+        ))
     }
 
     /// Consume finalization consent once.

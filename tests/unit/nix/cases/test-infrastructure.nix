@@ -39,6 +39,11 @@ let
   flakeSource = builtins.readFile (flakeRoot + "/flake.nix");
   rustHostToolsSource =
     builtins.readFile (flakeRoot + "/nixos-modules/rust-host-tools.nix");
+  hostBrokerSource =
+    builtins.readFile (flakeRoot + "/nixos-modules/host-broker.nix");
+  bundleSource = builtins.readFile (flakeRoot + "/nixos-modules/bundle.nix");
+  processesSource = builtins.readFile (flakeRoot + "/nixos-modules/processes-json.nix");
+  privilegesSource = builtins.readFile (flakeRoot + "/nixos-modules/privileges-json.nix");
   makefileSource = builtins.readFile (flakeRoot + "/Makefile");
   sccacheSandboxDir = "/var/cache/d2b-sccache";
   providerSchemaPaths = [
@@ -62,6 +67,7 @@ let
     "test-infrastructure/shared-corpus-duplicate-name-rejected"
     "test-infrastructure/own-shard-registration-unique"
     "test-infrastructure/pin-integrity-complete"
+    "test-infrastructure/cutover-runner-host-tool-contract"
   ];
   unpinnedOwnCases =
     lib.filter (name: !(builtins.elem name pinnedNames)) ownCaseNames;
@@ -146,6 +152,30 @@ in
       makefileNoWorldWritableCache = true;
       makefileCacheOptIn = true;
       makefileDefaultBuildIsPure = true;
+    };
+  };
+
+  "test-infrastructure/cutover-runner-host-tool-contract" = {
+    expr = {
+      sourcePackage = lib.hasInfix ''"d2b-cutover"'' rustHostToolsSource;
+      outputPackage = lib.hasInfix "cutoverRunner = mkMainPackage" rustHostToolsSource;
+      brokerPath = lib.hasInfix "D2B_CUTOVER_RUNNER_PATH" hostBrokerSource;
+      bundlePath = lib.hasInfix "cutoverRunnerPath" bundleSource;
+      processContract = lib.hasInfix "cutoverRunner" processesSource;
+      privilegeContract =
+        lib.hasInfix ''"operation": "LaunchCutoverRunner"'' privilegesSource
+        && lib.hasInfix ''"operation": "CutoverAudit"'' privilegesSource
+        && lib.hasInfix ''"operation": "CutoverEffect"'' privilegesSource;
+      noPersistentUnit = !(lib.hasInfix "systemd.services.d2b-cutover" hostBrokerSource);
+    };
+    expected = {
+      sourcePackage = true;
+      outputPackage = true;
+      brokerPath = true;
+      bundlePath = true;
+      processContract = true;
+      privilegeContract = true;
+      noPersistentUnit = true;
     };
   };
 }

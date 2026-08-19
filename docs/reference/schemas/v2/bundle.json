@@ -52,6 +52,13 @@
         "$ref": "#/definitions/BundleClosureRef"
       }
     },
+    "cutoverRunnerPath": {
+      "description": "Trusted store path for the one-shot cutover runner.",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
     "generation": {
       "description": "Generation metadata for auditing drift between Nix output and runtime state.",
       "allOf": [

@@ -2091,6 +2091,24 @@ pub struct HostCutoverRequest {
     /// Exact apply or finalization consent digest.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub consent_digest: Option<String>,
+    /// Canonical serialized U3 apply consent.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub consent_json: Option<String>,
+    /// Separate destructive reset consent digest.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub destructive_consent_digest: Option<String>,
+    /// Canonical destructive reset consent artifact.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub destructive_consent_json: Option<String>,
+    /// Whether this reset explicitly authorizes durable-Volume destruction.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub destroy_durable_volumes: Option<bool>,
+    /// Canonical serialized qualified recovery attestation.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub recovery_attestation_json: Option<String>,
+    /// Host identity digest bound by the recovery attestation.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub host_digest: Option<String>,
     /// Fresh consent used by a non-owner Admin to resume.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub fresh_consent_digest: Option<String>,

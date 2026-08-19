@@ -38,6 +38,10 @@ pub enum BrokerRequest {
     /// The broker resolves the runner executable from its trusted server
     /// configuration and never accepts a path or command over the wire.
     LaunchCutoverRunner(LaunchCutoverRunnerRequest),
+    /// Append one durable, operation-scoped cutover audit record.
+    CutoverAudit(CutoverAuditRequest),
+    /// Dispatch one closed operation-scoped cutover or reset effect.
+    CutoverEffect(CutoverEffectRequest),
     ApplyNftables(ApplyNftablesRequest),
     /// Apply or remove one Provider-owned nftables projection.
     ///
@@ -337,6 +341,11 @@ pub struct LaunchCutoverRunnerRequest {
     pub operation_id: BundleOpId,
     /// Required index of the single bootstrap fd attachment.
     pub bootstrap_fd_index: u32,
+    /// Digest of the capability transferred over the bootstrap fd. The broker
+    /// binds this value to the operation before spawning the runner.
+    pub capability_digest: CanonicalAuditDigest,
+    /// Capability expiry copied from the single-use bootstrap.
+    pub expires_at_ms: u64,
 }
 
 /// Response from the cutover runner launch.
@@ -354,6 +363,221 @@ pub struct LaunchCutoverRunnerResponse {
     pub pidfd_index: Option<u32>,
 }
 
+/// Closed transition vocabulary for cutover audit publication.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "kebab-case")]
+pub enum CutoverAuditTransition {
+    /// A hold request was durably recorded.
+    HoldRequested,
+    /// A hold clear/resume was durably recorded.
+    HoldCleared,
+    /// A phase began after its journal record.
+    PhaseStarted,
+    /// A phase completed after its typed effect.
+    PhaseCompleted,
+    /// A typed effect began.
+    EffectStarted,
+    /// A typed effect completed.
+    EffectCompleted,
+    /// A terminal outcome was recorded.
+    Terminal,
+}
+
+impl CutoverAuditTransition {
+    /// Return the stable audit disposition label.
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::HoldRequested => "hold-requested",
+            Self::HoldCleared => "hold-cleared",
+            Self::PhaseStarted => "phase-started",
+            Self::PhaseCompleted => "phase-completed",
+            Self::EffectStarted => "effect-started",
+            Self::EffectCompleted => "effect-completed",
+            Self::Terminal => "terminal",
+        }
+    }
+}
+
+/// Request to publish one durable cutover audit transition.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct CutoverAuditRequest {
+    /// Operation identity bound by the runner capability.
+    pub operation_id: BundleOpId,
+    /// Current U3 phase number.
+    pub phase: u8,
+    /// Closed transition kind.
+    pub transition: CutoverAuditTransition,
+    /// Digest of the immutable operation request.
+    pub request_digest: CanonicalAuditDigest,
+    /// Digest of a bounded hold reason, when present.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reason_digest: Option<CanonicalAuditDigest>,
+}
+
+/// Durable audit publication response.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct CutoverAuditResponse {
+    /// Stable record identity returned only after fsync and directory sync.
+    pub record_id: CanonicalAuditDigest,
+}
+
+/// Closed authority carried by a cutover effect request.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "kebab-case")]
+pub enum CutoverEffectAuthority {
+    /// Host-wide cutover authority.
+    Cutover,
+    /// Zone-scoped reset authority.
+    ResetZone,
+    /// Provider-scoped reset authority.
+    ResetProvider,
+    /// Guest-scoped reset authority.
+    ResetGuest,
+}
+
+/// Closed effect vocabulary shared with the U3 allowlist.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "kebab-case")]
+pub enum CutoverEffectKind {
+    HostDrain,
+    CutoverDisposition,
+    ResourceStoreCreate,
+    ProviderInstall,
+    ZoneActivation,
+    GuestActivation,
+    Verification,
+    CutoverFinalization,
+    ScopedZoneReset,
+    ScopedProviderReset,
+    ScopedGuestReset,
+    DestroyDurableVolume,
+    PreserveSource,
+    QuarantineDestination,
+    CutoverBroker,
+    ClosureActivation,
+}
+
+/// Typed payloads for cutover effects that reuse existing broker operations.
+///
+/// Every variant is itself a closed broker request. It carries no host path,
+/// command, uid/gid, or free-form mutation text.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(tag = "kind", content = "payload")]
+pub enum CutoverEffectPayload {
+    None,
+    Storage(ReconcileStorageScopeRequest),
+    ZoneStore(OpenZoneStoreRequest),
+    StoreSync(StoreSyncRequest),
+    StoreVerify(StoreVerifyRequest),
+    Activation(RunActivationRequest),
+    Systemd(Box<SystemdUnitRequest>),
+    Quarantine {
+        staged_id: BundleOpId,
+        source_id: BundleOpId,
+        marker_digest: CanonicalAuditDigest,
+    },
+    Finalization {
+        artifacts: Vec<ArtifactId>,
+        disposition_digest: CanonicalAuditDigest,
+        consent_digest: CanonicalAuditDigest,
+    },
+    DestroyDurableVolume {
+        storage_ref: BundleOpId,
+        marker_digest: CanonicalAuditDigest,
+        consent_digest: CanonicalAuditDigest,
+    },
+}
+
+/// Closed replay behavior for an operation-scoped effect.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "kebab-case")]
+pub enum CutoverReplayClass {
+    Repeatable,
+    ReopenByJournaledIdentity,
+    QuarantineOnly,
+}
+
+impl CutoverEffectAuthority {
+    /// Return whether this authority permits the effect kind.
+    pub const fn permits(self, effect: CutoverEffectKind) -> bool {
+        match self {
+            Self::Cutover => !matches!(
+                effect,
+                CutoverEffectKind::ScopedZoneReset
+                    | CutoverEffectKind::ScopedProviderReset
+                    | CutoverEffectKind::ScopedGuestReset
+                    | CutoverEffectKind::DestroyDurableVolume
+            ),
+            Self::ResetZone => matches!(
+                effect,
+                CutoverEffectKind::ScopedZoneReset
+                    | CutoverEffectKind::DestroyDurableVolume
+                    | CutoverEffectKind::PreserveSource
+                    | CutoverEffectKind::QuarantineDestination
+                    | CutoverEffectKind::Verification
+            ),
+            Self::ResetProvider => matches!(
+                effect,
+                CutoverEffectKind::ScopedProviderReset
+                    | CutoverEffectKind::DestroyDurableVolume
+                    | CutoverEffectKind::PreserveSource
+                    | CutoverEffectKind::QuarantineDestination
+                    | CutoverEffectKind::Verification
+            ),
+            Self::ResetGuest => matches!(
+                effect,
+                CutoverEffectKind::ScopedGuestReset
+                    | CutoverEffectKind::DestroyDurableVolume
+                    | CutoverEffectKind::PreserveSource
+                    | CutoverEffectKind::QuarantineDestination
+                    | CutoverEffectKind::Verification
+            ),
+        }
+    }
+}
+
+/// Typed operation-scoped effect request.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct CutoverEffectRequest {
+    pub operation_id: BundleOpId,
+    pub authority: CutoverEffectAuthority,
+    pub phase: u8,
+    pub effect_id: BundleOpId,
+    pub effect: CutoverEffectKind,
+    pub replay_class: CutoverReplayClass,
+    pub request_digest: CanonicalAuditDigest,
+    pub capability_digest: CanonicalAuditDigest,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub identity: Option<BundleOpId>,
+    /// Existing typed generation handoff used only by `ClosureActivation`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub handoff: Option<crate::host_generation::ApplyHostGenerationHandoff>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub payload: Option<CutoverEffectPayload>,
+}
+
+/// Typed effect result.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "kebab-case")]
+pub enum CutoverEffectOutcome {
+    Succeeded,
+    Failed,
+    Ambiguous,
+}
+
+/// Typed operation-scoped effect response.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct CutoverEffectResponse {
+    pub outcome: CutoverEffectOutcome,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub identity: Option<BundleOpId>,
+    pub audit_record_id: CanonicalAuditDigest,
+}
+
 impl BrokerRequest {
     /// Stable operation name for audit records.
     ///
@@ -365,6 +589,8 @@ impl BrokerRequest {
         match self {
             Self::ApplyHostGenerationHandoff(_) => "ApplyHostGenerationHandoff",
             Self::LaunchCutoverRunner(_) => "LaunchCutoverRunner",
+            Self::CutoverAudit(_) => "CutoverAudit",
+            Self::CutoverEffect(_) => "CutoverEffect",
             Self::ApplyNftables(_) => "ApplyNftables",
             Self::ApplyNftablesProjection(_) => "ApplyNftablesProjection",
             Self::ApplyNmUnmanaged(_) => "ApplyNmUnmanaged",
@@ -944,6 +1170,8 @@ impl BrokerRequest {
             Self::ValidateBundle
             | Self::ExportBrokerAudit(_)
             | Self::Hello(_)
+            | Self::CutoverAudit(_)
+            | Self::CutoverEffect(_)
             | Self::PauseBroker
             | Self::PollChildReaped
             | Self::ResumeBroker => return None,
@@ -963,6 +1191,8 @@ impl BrokerRequest {
             Self::OpenPeerPidfdFromAcceptedSocket(_)
                 | Self::ValidateBundle
                 | Self::ExportBrokerAudit(_)
+                | Self::CutoverAudit(_)
+                | Self::CutoverEffect(_)
                 | Self::Hello(_)
                 | Self::PauseBroker
                 | Self::PollChildReaped
@@ -1153,6 +1383,10 @@ pub enum BrokerResponse {
     ApplyHostGenerationHandoff(ApplyHostGenerationHandoffResponse),
     /// Result of launching the operation-scoped cutover runner.
     LaunchCutoverRunner(LaunchCutoverRunnerResponse),
+    /// Durable cutover audit publication result.
+    CutoverAudit(CutoverAuditResponse),
+    /// Typed operation-scoped effect result.
+    CutoverEffect(CutoverEffectResponse),
     Ack(AckResponse),
     CreatePersistentTap(TapReadyResponse),
     CreateTapFd(TapReadyResponse),
@@ -3152,6 +3386,11 @@ pub enum BrokerCallerRole {
     RootUid {
         uid: u32,
     },
+    /// Operation-scoped runner peer admitted only to closed cutover ops.
+    CutoverRunner {
+        operation_id: BundleOpId,
+        capability_digest: CanonicalAuditDigest,
+    },
     #[default]
     NotAuthorized,
 }
@@ -3161,11 +3400,17 @@ impl BrokerCallerRole {
         matches!(self, Self::AdminUid { .. })
     }
 
+    /// Return whether this is the operation-scoped runner peer class.
+    pub fn is_cutover_runner(&self) -> bool {
+        matches!(self, Self::CutoverRunner { .. })
+    }
+
     pub fn for_display(&self) -> &'static str {
         match self {
             Self::AdminUid { .. } => "d2b-admin",
             Self::LauncherUid { .. } => "d2b-launcher",
             Self::RootUid { .. } => "RootUid",
+            Self::CutoverRunner { .. } => "d2b-cutover-runner",
             Self::NotAuthorized => "d2b-not-authorized",
         }
     }
@@ -3429,6 +3674,17 @@ mod tests {
             "d2b-admin"
         );
         assert_eq!(
+            BrokerCallerRole::CutoverRunner {
+                operation_id: BundleOpId::new("op"),
+                capability_digest: CanonicalAuditDigest::parse(
+                    "sha256:".to_owned() + &"a".repeat(64)
+                )
+                .unwrap(),
+            }
+            .for_display(),
+            "d2b-cutover-runner"
+        );
+        assert_eq!(
             BrokerCallerRole::NotAuthorized.for_display(),
             "d2b-not-authorized"
         );
@@ -3440,6 +3696,13 @@ mod tests {
             BrokerCallerRole::AdminUid { uid: 1000 },
             BrokerCallerRole::LauncherUid { uid: 1001 },
             BrokerCallerRole::RootUid { uid: 0 },
+            BrokerCallerRole::CutoverRunner {
+                operation_id: BundleOpId::new("op"),
+                capability_digest: CanonicalAuditDigest::parse(
+                    "sha256:".to_owned() + &"a".repeat(64),
+                )
+                .unwrap(),
+            },
             BrokerCallerRole::NotAuthorized,
         ] {
             let json = serde_json::to_string(&role).unwrap();

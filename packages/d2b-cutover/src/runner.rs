@@ -31,8 +31,9 @@ use nix::{
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    CandidateId, CutoverPhase, CutoverPreview, Digest, EffectAllowlist, Journal, JournalBinding,
-    Operation, OperationId, OperationKind, OperationRequest, OperationState, OperatorId,
+    ArtifactId, CandidateId, Consent, CutoverPhase, CutoverPreview, Digest, EffectAllowlist,
+    EffectId, EffectKind, Journal, JournalBinding, Operation, OperationId, OperationKind,
+    OperationRequest, OperationState, OperatorId, RecoveryAttestation, ReplayClass, StepId, ZoneId,
 };
 
 /// Protocol version for the runner bootstrap and owner socket.
@@ -155,6 +156,14 @@ impl BootstrapCapability {
     /// Render the exact canonical capability bytes.
     pub fn canonical_bytes(&self) -> Result<Vec<u8>, RunnerCapabilityError> {
         canonical_json_bytes(self).map_err(|_| RunnerCapabilityError::CanonicalJson)
+    }
+
+    /// Derive the capability proof presented to an adapted broker.
+    pub fn binding_digest(&self) -> Digest {
+        let bytes = self
+            .canonical_bytes()
+            .expect("validated capability serializes");
+        Digest::derive("d2b:cutover:runner-capability:v1", &bytes)
     }
 
     /// Decode and consume one capability from canonical bytes.
@@ -303,6 +312,60 @@ pub struct RunnerBootstrap {
     pub request: OperationRequest,
     /// Canonical preview used to reconstruct the pure engine.
     pub preview: CutoverPreview,
+    /// Exact single-use apply consent, when this runner is admitted to apply.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub consent: Option<Consent>,
+    /// Separate destructive consent for durable-Volume reset effects.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub destructive_consent: Option<Consent>,
+    /// Qualified external recovery evidence for cutover apply.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub recovery: Option<RecoveryAttestation>,
+    /// Host identity digest bound by the recovery evidence.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub host_digest: Option<Digest>,
+}
+
+/// One approved legacy artifact disposition for phase-10 finalization.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct FinalizationArtifact {
+    /// Opaque artifact identity.
+    pub artifact_id: ArtifactId,
+    /// Digest of the disposition approved by the operation inventory.
+    pub disposition_digest: Digest,
+}
+
+/// Phase-10 finalization payload bound to one operation.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct FinalizationPlan {
+    /// Approved artifact dispositions.
+    pub artifacts: Vec<FinalizationArtifact>,
+}
+
+/// One redaction-safe post-activation Zone observation.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct RunnerZoneVerification {
+    /// Opaque Zone identity.
+    pub zone_id: ZoneId,
+    /// Whether the Zone passed its authoritative checks.
+    pub healthy: bool,
+}
+
+/// Authoritative observations required by phase-9 verification.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct RunnerVerificationInput {
+    /// All configured Zone observations.
+    pub zones: Vec<RunnerZoneVerification>,
+    /// Whether every preserved source remained intact.
+    pub sources_preserved: bool,
+    /// Whether identity digests matched the cutover snapshot.
+    pub identity_digests_match: bool,
+    /// Whether the candidate remains current.
+    pub candidate_current: bool,
 }
 
 impl RunnerBootstrap {
@@ -330,7 +393,46 @@ impl RunnerBootstrap {
         }
         Operation::new(self.request.clone(), &self.preview)
             .map(|_| ())
-            .map_err(|_| RunnerCapabilityError::Request)
+            .map_err(|_| RunnerCapabilityError::Request)?;
+        if self.request.operation_kind().is_cutover() {
+            let Some(consent) = self.consent.as_ref() else {
+                return Err(RunnerCapabilityError::Consent);
+            };
+            let Some(recovery) = self.recovery.as_ref() else {
+                return Err(RunnerCapabilityError::Recovery);
+            };
+            let Some(host_digest) = self.host_digest.as_ref() else {
+                return Err(RunnerCapabilityError::Recovery);
+            };
+            if consent.binding() != &self.request.consent_binding()
+                || recovery
+                    .digest()
+                    .map_err(|_| RunnerCapabilityError::Recovery)?
+                    != *self
+                        .request
+                        .recovery_digest()
+                        .ok_or(RunnerCapabilityError::Recovery)?
+                || recovery.candidate_id() != self.request.candidate_id()
+                || recovery.preview_digest() != self.request.preview_digest()
+                || recovery.operator_id() != self.request.operator_id()
+            {
+                return Err(RunnerCapabilityError::Recovery);
+            }
+            let _ = host_digest;
+        }
+        if matches!(
+            self.request.inventory(),
+            crate::OperationInventory::Reset(inventory)
+                if inventory.allows_destroy_durable_volumes()
+        ) {
+            let Some(consent) = self.destructive_consent.as_ref() else {
+                return Err(RunnerCapabilityError::Consent);
+            };
+            if consent.binding() != &self.request.consent_binding() {
+                return Err(RunnerCapabilityError::Consent);
+            }
+        }
+        Ok(())
     }
 
     /// Render the exact canonical bootstrap bytes.
@@ -403,22 +505,7 @@ impl RunnerPaths {
 
     /// Create the private operation directory with a bounded mode.
     pub fn ensure_directory(&self) -> io::Result<()> {
-        match fs::symlink_metadata(&self.operation_dir) {
-            Ok(metadata) => {
-                if !metadata.is_dir() || metadata.uid() != geteuid().as_raw() {
-                    return Err(io::Error::new(
-                        io::ErrorKind::PermissionDenied,
-                        "cutover operation directory has foreign ownership",
-                    ));
-                }
-            }
-            Err(error) if error.kind() == io::ErrorKind::NotFound => {
-                fs::create_dir_all(&self.operation_dir)?;
-                fs::set_permissions(&self.operation_dir, fs::Permissions::from_mode(0o700))?;
-            }
-            Err(error) => return Err(error),
-        }
-        Ok(())
+        ensure_owned_directory(&self.operation_dir, 0o700)
     }
 
     /// Borrow the operation directory.
@@ -609,6 +696,51 @@ fn canonical_record_values(records: &[u8]) -> io::Result<Vec<CanonicalJsonValue>
 pub enum RunnerCommand {
     /// Read redacted operation status.
     Status,
+    /// Apply one typed closure activation after consent and drain admission.
+    Apply {
+        /// Existing typed host-generation handoff contract.
+        handoff: d2b_contracts::host_generation::ApplyHostGenerationHandoff,
+    },
+    /// Dispatch one closed U3 effect through the adapted broker peer.
+    Effect {
+        /// Stable effect identity.
+        effect_id: EffectId,
+        /// Stable step identity.
+        step_id: StepId,
+        /// Closed U3 effect kind.
+        kind: EffectKind,
+        /// Crash-replay class.
+        replay_class: ReplayClass,
+        /// Phase reached after durable completion.
+        advance_to: Option<CutoverPhase>,
+        /// Existing identity for identity-bearing effects.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        identity: Option<ArtifactId>,
+        /// Typed generation handoff for closure activation.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        handoff: Option<d2b_contracts::host_generation::ApplyHostGenerationHandoff>,
+        /// Existing typed broker operation payload.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        payload: Option<d2b_contracts::broker_wire::CutoverEffectPayload>,
+    },
+    /// Roll back while the native rollback boundary is still open.
+    Rollback {
+        /// Optional typed handoff that restores the pre-apply generation.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        handoff: Option<d2b_contracts::host_generation::ApplyHostGenerationHandoff>,
+    },
+    /// Request phase-9 verification through the runner boundary.
+    Verify {
+        /// Authoritative post-activation observations.
+        observations: RunnerVerificationInput,
+    },
+    /// Consume the separately issued phase-10 finalization consent.
+    Finalize {
+        /// Canonical finalization consent artifact.
+        consent: crate::FinalizationConsent,
+        /// Approved artifact disposition payload.
+        plan: FinalizationPlan,
+    },
     /// Request an operator hold.
     Hold {
         /// Bounded operator reason.
@@ -676,23 +808,45 @@ pub struct RunnerSocket {
     capability: ConsumedCapability,
 }
 
+fn ensure_owned_directory(path: &Path, mode: u32) -> io::Result<()> {
+    let owner = geteuid().as_raw();
+    let mut missing = Vec::new();
+    let mut current = path;
+    loop {
+        match fs::symlink_metadata(current) {
+            Ok(metadata) => {
+                if !metadata.is_dir() || metadata.uid() != owner {
+                    return Err(io::Error::new(
+                        io::ErrorKind::PermissionDenied,
+                        "runner directory has foreign ownership",
+                    ));
+                }
+                break;
+            }
+            Err(error) if error.kind() == io::ErrorKind::NotFound => {
+                missing.push(current.to_path_buf());
+                current = current.parent().ok_or_else(|| {
+                    io::Error::new(
+                        io::ErrorKind::PermissionDenied,
+                        "runner directory has no owned parent",
+                    )
+                })?;
+            }
+            Err(error) => return Err(error),
+        }
+    }
+    for directory in missing.into_iter().rev() {
+        fs::create_dir(&directory)?;
+        fs::set_permissions(&directory, fs::Permissions::from_mode(mode))?;
+    }
+    Ok(())
+}
+
 impl RunnerSocket {
     /// Bind one owner-authenticated socket. Existing foreign paths fail closed.
     pub fn bind(paths: &RunnerPaths, capability: ConsumedCapability) -> io::Result<Self> {
         paths.ensure_directory()?;
-        match fs::symlink_metadata(paths.socket_dir()) {
-            Ok(metadata) if metadata.is_dir() && metadata.uid() == geteuid().as_raw() => {}
-            Ok(_) => {
-                return Err(io::Error::new(
-                    io::ErrorKind::PermissionDenied,
-                    "runner socket directory has foreign ownership",
-                ));
-            }
-            Err(error) if error.kind() == io::ErrorKind::NotFound => {
-                fs::create_dir_all(paths.socket_dir())?;
-            }
-            Err(error) => return Err(error),
-        }
+        ensure_owned_directory(paths.socket_dir(), 0o700)?;
         let socket_dir_metadata = fs::symlink_metadata(paths.socket_dir())?;
         if !socket_dir_metadata.is_dir() || socket_dir_metadata.uid() != geteuid().as_raw() {
             return Err(io::Error::new(
@@ -700,6 +854,7 @@ impl RunnerSocket {
                 "runner socket directory has foreign ownership",
             ));
         }
+
         if let Some(gid) = capability.lifecycle_gid() {
             fs::set_permissions(paths.socket_dir(), fs::Permissions::from_mode(0o710))?;
             chown(
@@ -798,6 +953,23 @@ fn authorize_peer(
     };
     match command {
         RunnerCommand::Status => Ok(peer),
+        RunnerCommand::Apply { .. } => {
+            if matches!(peer, RunnerPeer::Owner) {
+                Ok(peer)
+            } else {
+                Err(RunnerSocketError::OperatorMismatch)
+            }
+        }
+        RunnerCommand::Effect { .. }
+        | RunnerCommand::Rollback { .. }
+        | RunnerCommand::Verify { .. }
+        | RunnerCommand::Finalize { .. } => {
+            if matches!(peer, RunnerPeer::Owner) {
+                Ok(peer)
+            } else {
+                Err(RunnerSocketError::OperatorMismatch)
+            }
+        }
         RunnerCommand::Hold { .. } => Ok(peer),
         RunnerCommand::Resume { fresh_consent } => {
             if matches!(peer, RunnerPeer::Owner) || fresh_consent.is_some() {
@@ -877,6 +1049,10 @@ pub enum RunnerCapabilityError {
     Preview,
     /// The operation request was not accepted by the U3 engine.
     Request,
+    /// Exact apply consent was not present or bound.
+    Consent,
+    /// Qualified recovery evidence was not present or bound.
+    Recovery,
 }
 
 impl std::fmt::Display for RunnerCapabilityError {
@@ -894,6 +1070,8 @@ impl std::fmt::Display for RunnerCapabilityError {
             Self::IdentityMismatch => "cutover bootstrap capability identity mismatch",
             Self::Preview => "cutover bootstrap capability preview mismatch",
             Self::Request => "cutover bootstrap capability request rejected",
+            Self::Consent => "cutover bootstrap apply consent rejected",
+            Self::Recovery => "cutover bootstrap recovery evidence rejected",
         })
     }
 }

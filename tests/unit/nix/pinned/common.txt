@@ -210,6 +210,8 @@ daemon-autostart/librs-broker-vm-starter
 daemon-autostart/librs-config-parallelism-field
 daemon-autostart/librs-pub-mod-autostart
 daemon-autostart/librs-run-startup-autostart
+daemon-autostart/manifest-net-policy
+daemon-autostart/manifest-workload-policy
 daemon-autostart/option-default-3
 daemon-autostart/option-override-7
 daemon-autostart/rs-AutostartConfig
@@ -795,6 +797,7 @@ realm-workloads/unsafe-local-rejects-net-vm-port-forward
 realm-workloads/unsafe-local-rejects-vm-paths-and-options
 realm-workloads/unsafe-local-requires-explicit-opt-in
 requested-vm-config/boot-selector-and-hotplug-source-coexist
+requested-vm-config/cloud-hypervisor-sees-runtime-sockets
 requested-vm-config/dark-env-declared
 requested-vm-config/dark-live-manual-qemu-media
 requested-vm-config/evaluates-without-hardware
@@ -857,6 +860,7 @@ store-overlay-emit/first-op-owner-uid-positive
 store-overlay-emit/first-op-size-bytes
 store-overlay-emit/first-op-target-suffix
 store-overlay-emit/planops-count
+test-infrastructure/cutover-runner-host-tool-contract
 test-infrastructure/host-tools-sccache-contract
 test-infrastructure/own-shard-registration-unique
 test-infrastructure/pin-integrity-complete
