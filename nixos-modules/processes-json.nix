@@ -526,8 +526,10 @@ let
       # mode=0660 (was 0600) so that combined with
       # umask 0o007 from the swtpm role profile and the per-VM
       # /run/d2b/vms/<vm>/ default ACL granting CH's UID rw,
-      # cloud-hypervisor can connect to the TPM control socket
-      # without operator setfacl intervention.
+      # d2bd can use the control socket while Cloud Hypervisor connects to
+      # the separate server socket below.
+      "type=unixio,path=/run/d2b/vms/${name}/tpm-ctrl.sock,mode=0660"
+      "--server"
       "type=unixio,path=/run/d2b/vms/${name}/tpm.sock,mode=0660"
       "--tpm2"
       "--flags"

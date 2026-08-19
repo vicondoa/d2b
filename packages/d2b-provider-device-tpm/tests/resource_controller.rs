@@ -81,7 +81,7 @@ fn controller_finalizes_the_swtpm_process_after_endpoint_watch_failure() {
         TpmResourceOutcome::VolumeRetained
     );
     assert_eq!(effects.stop_calls.load(Ordering::SeqCst), 1);
-    assert_eq!(effects.delete_calls.load(Ordering::SeqCst), 0);
+    assert_eq!(effects.delete_calls.load(Ordering::SeqCst), 1);
     assert!(!controller.finalizer_installed());
 }
 
@@ -164,13 +164,13 @@ fn flush_failure_stops_the_long_lived_process_and_retains_state() {
     );
     assert_eq!(
         effects.events.lock().unwrap().as_slice(),
-        ["volume", "process", "endpoint", "flush"]
+        ["volume", "flush"]
     );
-    assert_eq!(effects.stop_calls.load(Ordering::SeqCst), 1);
+    assert_eq!(effects.stop_calls.load(Ordering::SeqCst), 0);
 }
 
 #[test]
-fn controller_waits_for_the_swtpm_endpoint_before_flushing() {
+fn controller_flushes_before_starting_swtpm_and_waits_for_endpoint() {
     let device = ResourceUid::parse("123e4567-e89b-42d3-a456-426614174000").unwrap();
     let device_ref = ResourceRef::parse("Device/work-tpm").unwrap();
     let execution = ResourceRef::parse("Host/host-system").unwrap();
@@ -183,7 +183,7 @@ fn controller_waits_for_the_swtpm_endpoint_before_flushing() {
     );
     assert_eq!(
         effects.events.lock().unwrap().as_slice(),
-        ["volume", "process", "endpoint", "flush"]
+        ["volume", "flush", "process", "endpoint"]
     );
 }
 

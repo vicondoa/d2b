@@ -25130,6 +25130,7 @@ mod public_status_tests {
                 vsock_host_socket: None,
             },
             runtime,
+            autostart: true,
             security_key: false,
             lifecycle: Default::default(),
             shell: None,

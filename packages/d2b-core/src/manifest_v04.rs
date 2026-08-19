@@ -205,6 +205,13 @@ pub struct VmEntry {
     pub audio: bool,
     pub audio_service: Option<String>,
     pub audio_state_file: Option<String>,
+    /// Whether d2bd should start this VM during its host-boot autostart pass.
+    ///
+    /// Older v6/v7 manifests omitted this field while the daemon used the
+    /// runtime/graphics heuristic. Defaulting to true preserves that legacy
+    /// behavior; current Nix manifests always emit the explicit policy.
+    #[serde(default = "default_autostart")]
+    pub autostart: bool,
     pub bridge: Option<String>,
     pub env: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -234,6 +241,10 @@ pub struct VmEntry {
     pub tpm_socket: Option<String>,
     pub usbip_yubikey: bool,
     pub usbipd_host_ip: Option<String>,
+}
+
+fn default_autostart() -> bool {
+    true
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]

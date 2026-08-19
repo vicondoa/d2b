@@ -585,6 +585,8 @@ pkgs.testers.runNixOSTest {
             f"(.providerRef | startswith(\"Provider/\"))' "
             f"/run/d2b-reconcile-{safe_name}.json"
         )
+        if resource_type == "Device":
+            machine.succeed("test -S /run/d2b/vms/acceptance-guest/tpm.sock")
         if resource_type == "Network":
             machine.succeed(
                 "runuser -u alice -- env D2B_PUBLIC_SOCKET=/run/d2b/public.sock "

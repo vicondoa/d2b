@@ -15,7 +15,7 @@
         "manifestVersion": {
           "type": "integer",
           "const": 7,
-          "description": "Schema version. This document is the v7 schema; the field is locked to `const: 7`. v7 adds per-VM lifecycle.gracefulShutdown metadata so d2bd can apply VM-specific graceful guest-shutdown policy while preserving v6 compatibility during the rollout."
+          "description": "Schema version. This document is the v7 schema; the field is locked to `const: 7`. v7 adds per-VM lifecycle.gracefulShutdown metadata and the additive autostart policy so d2bd can apply VM-specific lifecycle and host-boot policy while preserving v6 compatibility during the rollout."
         }
       }
     },
@@ -340,6 +340,7 @@
         "name",
         "runtime",
         "lifecycle",
+        "autostart",
         "graphics",
         "tpm",
         "usbipYubikey",
@@ -374,6 +375,10 @@
         },
         "lifecycle": {
           "$ref": "#/$defs/vmLifecycle"
+        },
+        "autostart": {
+          "type": "boolean",
+          "description": "Whether d2bd should start this VM during its host-boot autostart pass. Mirrors d2b.vms.<name>.autostart; provider/runtime guards still prevent graphics and qemu-media VMs from starting unattended."
         },
         "graphics": {
           "type": "boolean",

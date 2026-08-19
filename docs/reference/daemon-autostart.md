@@ -44,11 +44,12 @@ workloads):
 2. **Workloads.** Every other VM, sorted by `(env, vm-name)` so
    workloads pin to their env's net VM in plan order.
 
-The daemon currently derives the `autostart` flag heuristically:
-every VM the manifest knows about is autostart-eligible **unless**
-it is a graphics VM (graphics VMs are barred from autostart by
-`nixos-modules/assertions.nix` SWArch-M9 - they have no Wayland
-session at boot).
+The daemon reads the per-VM `autostart` policy from the trusted public
+manifest. The Nix emitter mirrors `d2b.vms.<name>.autostart`; graphics
+VMs and `qemu-media` runtimes remain barred from unattended startup by
+provider guards (`nixos-modules/assertions.nix` also rejects graphics
+VMs with `autostart = true`). Older manifests that omit the additive
+field default to the former heuristic for compatibility.
 
 VMs with `autostart = false` remain in the plan (so a future
 `d2b guest status <name>` can surface the full picture) but

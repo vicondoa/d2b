@@ -65,11 +65,8 @@ pub struct VmAutostartEntry {
     pub env: Option<String>,
     /// True for `sys-<env>-net` VMs (= `VmEntry::is_net_vm`).
     pub is_net_vm: bool,
-    /// True if the VM is an autostart candidate. Today this is
-    /// derived heuristically from bundle shape (every non-graphics VM is
-    /// autostart-eligible - graphics VMs are excluded by `assertions.nix`);
-    /// in the daemon-only bundle the `autostart` flag becomes a first-class
-    /// field and this is read straight off it.
+    /// True if the trusted manifest and provider policy make the VM an
+    /// unattended host-boot autostart candidate.
     pub autostart: bool,
 }
 
@@ -223,10 +220,10 @@ pub trait VmStarter: Send + Sync + 'static {
 /// 2. Every non-net VM, sorted by `(env, vm-name)` so workloads
 ///    pin to their net VM's env in the plan.
 ///
-/// VMs that aren't autostart-eligible (today: VMs the manifest
-/// flags as graphics - see `vm_is_autostart_eligible`) appear in
-/// the plan with `autostart = false`. They are surfaced for
-/// observability but skipped by [`execute_autostart`].
+/// VMs that aren't autostart-eligible (the manifest policy is false,
+/// or a provider guard rejects unattended startup) appear in the plan
+/// with `autostart = false`. They are surfaced for observability but
+/// skipped by [`execute_autostart`].
 pub fn build_autostart_plan(resolver: &BundleResolver) -> AutostartPlan {
     let mut net_entries = Vec::new();
     let mut workload_entries = Vec::new();
@@ -255,11 +252,10 @@ pub fn build_autostart_plan(resolver: &BundleResolver) -> AutostartPlan {
     AutostartPlan { vms }
 }
 
-/// Today's heuristic: every VM the manifest knows about is an
-/// autostart candidate unless it is a graphics VM or a manual-only
-/// qemu-media runtime.
+/// A VM is eligible only when the manifest explicitly opts it into
+/// host-boot autostart and its provider can run unattended.
 fn vm_is_autostart_eligible(vm: &d2b_core::manifest_v04::VmEntry) -> bool {
-    !vm.graphics && vm.runtime.kind != RuntimeKind::QemuMedia
+    vm.autostart && !vm.graphics && vm.runtime.kind != RuntimeKind::QemuMedia
 }
 
 /// Drive a built plan. Net VMs are started first (up to
@@ -548,6 +544,7 @@ mod tests {
                 vsock_host_socket: None,
             },
             runtime,
+            autostart: true,
             security_key: false,
             lifecycle: Default::default(),
             shell: None,
@@ -570,6 +567,15 @@ mod tests {
 
         assert!(!vm_is_autostart_eligible(&qemu_vm));
         assert!(vm_is_autostart_eligible(&nixos_vm));
+    }
+
+    #[test]
+    fn explicit_manifest_autostart_controls_eligibility() {
+        let mut vm = manifest_vm_with_runtime(d2b_core::runtime::RuntimeMetadata::local_nixos());
+
+        assert!(vm_is_autostart_eligible(&vm));
+        vm.autostart = false;
+        assert!(!vm_is_autostart_eligible(&vm));
     }
 
     /// build_autostart_plan: when an env has a sys-net VM plus

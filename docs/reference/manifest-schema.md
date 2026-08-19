@@ -102,6 +102,7 @@ inventory. Private bundle artifacts live beside it and are documented in
        "timeoutSeconds": null
      }
     },
+    "autostart": false,
     "graphics": false,
     "tpm": false,
     "usbipYubikey": false,
@@ -153,6 +154,7 @@ Fields are listed in `nixos-modules/manifest.nix` declaration order.
 | `name` | string | yes | VM name; matches the enclosing top-level key. Pattern `^[a-z][a-z0-9-]*$` (enforced by `nixos-modules/assertions.nix`). |
 | `runtime` | object | yes | Runtime/provider metadata and provider support matrix. Shape: `{ kind, provider: { id, type, driver }, capabilities, operationCapabilities, autostartPolicy, services }`. `operationCapabilities` groups positive operation support by lifecycle/media/display/guest/storage axis; `operationCapabilities.guest.shell` records provider support for the staged persistent-shell operation. `services[]` contains bounded provider-neutral service summaries. `qemu-media` uses provider `local-qemu-media`/driver `qemu`; its supported capabilities are lifecycle/display/USB hotplug, while guest-control, exec, shell, config-sync, SSH, store-sync, keys, and in-guest observability are unsupported. |
 | `lifecycle` | object | yes | Per-VM lifecycle policy. Shape: `{ gracefulShutdown: { enable, timeoutSeconds }, liveActivation: { timeoutSeconds } }`. `gracefulShutdown` controls provider-aware guest shutdown before forced VMM cleanup; its timeout is a nullable 1-600 second per-VM override. `liveActivation.timeoutSeconds` is a nullable 1-3600 second per-VM override for in-guest `switch`/`test`/`rollback`; `null` means the daemon default from `/etc/d2b/daemon-config.json` applies. |
+| `autostart` | boolean | yes | Mirror of `d2b.vms.<name>.autostart`. When true, the VM is eligible for d2bd's host-boot autostart pass; graphics and qemu-media provider guards can still make a VM manual-only. Older v6/v7 manifests may omit this additive field and are treated as opting in for compatibility with the former heuristic. |
 | `graphics` | boolean | yes | Mirror of `d2b.vms.<name>.graphics.enable`. The CLI uses it to pick the launch path. |
 | `tpm` | boolean | yes | Mirror of `d2b.vms.<name>.tpm.enable`. |
 | `usbipYubikey` | boolean | yes | Mirror of `d2b.vms.<name>.usbip.yubikey`. `d2b device usb attach\|detach\|probe` refuses to run when false. |
@@ -211,6 +213,10 @@ Version history:
   provider-aware guest shutdown policy. The daemon accepts v6 manifests during
   the rollout by treating missing lifecycle metadata as `{ enable = true,
   timeoutSeconds = null }` for supported local providers.
+- v7 additive: adds required per-VM `autostart` policy metadata. The daemon
+  accepts older v6/v7 manifests that omit it by preserving the former
+  runtime/graphics autostart heuristic; newly rendered manifests always
+  emit the explicit `d2b.vms.<name>.autostart` value.
 - v7 additive: adds required per-VM `securityKey` capability metadata for the
   CTAPHID security-key proxy.
 

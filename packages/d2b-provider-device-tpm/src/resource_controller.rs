@@ -124,8 +124,9 @@ impl TpmResourceController {
         self.endpoint_ref.as_ref()
     }
 
-    /// Reconciliation creates the Volume, starts and observes the long-lived
-    /// Process, completes the mandatory flush, and then exposes the Endpoint.
+    /// Reconciliation creates the Volume, completes the mandatory pre-start
+    /// flush, starts and observes the long-lived Process, and then exposes
+    /// the Endpoint.
     pub async fn reconcile<P: TpmResourceEffectPort>(
         &mut self,
         port: &P,
@@ -142,6 +143,14 @@ impl TpmResourceController {
             Err(error) => return self.effect_failed(error),
         };
         self.volume_ref = Some(volume.clone());
+        let flush = match port
+            .request_flush_process(&self.device_uid, &self.execution_ref)
+            .await
+        {
+            Ok(value) => value,
+            Err(error) => return self.effect_failed(error),
+        };
+        self.flush_ref = Some(flush);
         let process = match port
             .request_swtpm_process(&self.device_uid, &volume, &self.execution_ref)
             .await
@@ -155,21 +164,6 @@ impl TpmResourceController {
             Err(error) => return self.effect_failed(error),
         };
         self.endpoint_ref = Some(endpoint);
-        let flush = match port
-            .request_flush_process(&self.device_uid, &self.execution_ref)
-            .await
-        {
-            Ok(value) => value,
-            Err(error) => {
-                if let Err(stop_error) = port.stop_swtpm_process(&process).await {
-                    return self.effect_failed(stop_error);
-                }
-                self.process_ref = None;
-                self.endpoint_ref = None;
-                return self.effect_failed(error);
-            }
-        };
-        self.flush_ref = Some(flush);
         self.phase = TpmResourcePhase::Ready;
         Ok(TpmResourceOutcome::Ready)
     }

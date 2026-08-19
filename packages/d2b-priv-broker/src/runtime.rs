@@ -2405,10 +2405,8 @@ fn dispatch_request_with_backend_and_request_fds<B: DispatchBackend>(
                 req.resource_uid.as_ref(),
             );
             let resolver = require_resolver(resolver)?;
-            let intent_id = d2b_core::bundle_resolver::intent_id_runner(
-                req.vm_id.as_str(),
-                req.role_id.as_str(),
-            );
+            let intent_id =
+                runner_intent_id_for_open_pidfd(req.vm_id.as_str(), req.role_id.as_str());
             let intent = resolver.find_runner_intent(&intent_id).ok_or_else(|| {
                 BrokerError::BundleIntentMissing {
                     kind: "runner",
@@ -6191,6 +6189,15 @@ fn runner_registry_key(
 }
 
 #[cfg(not(feature = "layer1-bootstrap"))]
+fn runner_intent_id_for_open_pidfd(vm_id: &str, role_id: &str) -> String {
+    let process_role_id = match role_id {
+        "ch-runner" => "cloud-hypervisor",
+        other => other,
+    };
+    d2b_core::bundle_resolver::intent_id_runner(vm_id, process_role_id)
+}
+
+#[cfg(not(feature = "layer1-bootstrap"))]
 fn registration_matches(
     registration: &RunnerRegistration,
     resource_ref: Option<&d2b_contracts::v3::ResourceRef>,
@@ -6273,10 +6280,19 @@ fn observe_registered_runner(
             "runner process identity changed".to_owned(),
         ));
     }
-    let executable_verified = fs::read_link(format!("/proc/{}/exe", registration.pid))
-        .map(|path| path == registration.binary_path)
-        .unwrap_or(false);
     let cgroup_verified = proc_cgroup_matches(registration.pid, &registration.cgroup_subtree);
+    let executable_path = read_runner_executable(registration.pid);
+    let executable_verified = match executable_path {
+        Ok(ref path) => executable_paths_match(path, &registration.binary_path),
+        Err(ref error) if error.kind() == io::ErrorKind::PermissionDenied => {
+            // A registered pidfd and the broker-owned cgroup are the
+            // executable provenance established by this broker. Linux
+            // resets dumpability when a runner changes uid, so Yama blocks
+            // the redundant /proc/<pid>/exe read without CAP_SYS_PTRACE.
+            pidfd_registered && cgroup_verified
+        }
+        Err(_) => false,
+    };
     Ok(d2b_contracts::broker_wire::ObserveRunnerResponse {
         vm_id: request.vm_id.clone(),
         role_id: request.role_id.clone(),
@@ -6305,8 +6321,11 @@ fn discover_runner_candidate(
         if pid <= 0 || !proc_cgroup_matches(pid, &intent.cgroup_placement.subtree) {
             continue;
         }
-        let executable = fs::read_link(format!("/proc/{pid}/exe")).ok();
-        if executable.as_deref() != Some(intent.binary_path.as_path()) {
+        let executable = read_runner_executable(pid).ok();
+        if !executable
+            .as_deref()
+            .is_some_and(|path| executable_paths_match(path, &intent.binary_path))
+        {
             continue;
         }
         let Some(start_time_ticks) = read_proc_start_time_ticks(pid)? else {
@@ -6338,6 +6357,58 @@ fn discover_runner_candidate(
         cgroup_verified: true,
         executable_verified: true,
     })
+}
+
+#[cfg(not(feature = "layer1-bootstrap"))]
+fn executable_paths_match(actual: &Path, expected: &Path) -> bool {
+    let Some((actual, expected)) = fs::canonicalize(actual)
+        .ok()
+        .zip(fs::canonicalize(expected).ok())
+    else {
+        return false;
+    };
+    if actual == expected {
+        return true;
+    }
+
+    let Ok(script) = fs::read_to_string(&expected) else {
+        return false;
+    };
+    if !script.starts_with("#!") {
+        return false;
+    }
+    let mut target = None;
+    for line in script.lines().map(str::trim) {
+        let Some(exec) = line.strip_prefix("exec \"$here/") else {
+            continue;
+        };
+        let Some((relative, _)) = exec.split_once('"') else {
+            return false;
+        };
+        let relative_path = Path::new(relative);
+        if relative.is_empty()
+            || relative.contains('$')
+            || relative_path
+                .components()
+                .any(|component| !matches!(component, std::path::Component::Normal(_)))
+        {
+            return false;
+        }
+        let Some(parent) = expected.parent() else {
+            return false;
+        };
+        if target.replace(parent.join(relative_path)).is_some() {
+            return false;
+        }
+    }
+    target
+        .and_then(|target| fs::canonicalize(target).ok())
+        .is_some_and(|target| target == actual)
+}
+
+#[cfg(not(feature = "layer1-bootstrap"))]
+fn read_runner_executable(pid: i32) -> io::Result<PathBuf> {
+    fs::read_link(format!("/proc/{pid}/exe"))
 }
 
 #[cfg(not(feature = "layer1-bootstrap"))]
@@ -12231,6 +12302,7 @@ mod tests {
                         vsock_host_socket: Some("/run/d2b/vms/corp-vm/agent-host.sock".to_owned()),
                     },
                     runtime: RuntimeMetadata::local_nixos(),
+                    autostart: true,
                     security_key: false,
                     lifecycle: Default::default(),
                     shell: None,
@@ -12659,6 +12731,44 @@ mod tests {
             ),
             Err(BrokerError::GuestControlSignRefused { .. })
         ));
+    }
+
+    #[cfg(not(feature = "layer1-bootstrap"))]
+    #[test]
+    fn executable_identity_accepts_trusted_symlink_paths() {
+        let expected = Path::new("/proc/self/exe");
+        let actual = fs::read_link(expected).expect("read current executable");
+        assert!(executable_paths_match(&actual, expected));
+    }
+
+    #[cfg(not(feature = "layer1-bootstrap"))]
+    #[test]
+    fn executable_identity_accepts_static_wrapper_exec_target() {
+        let root = tempfile::tempdir_in(env!("CARGO_MANIFEST_DIR")).expect("tempdir");
+        let wrapper = root.path().join("cloud-hypervisor");
+        let real = root.path().join(".cloud-hypervisor-real");
+        fs::write(
+            &wrapper,
+            "#!/bin/sh\nexec \"$here/.cloud-hypervisor-real\" \"$@\"\n",
+        )
+        .expect("write wrapper");
+        fs::write(&real, b"trusted executable").expect("write executable");
+
+        assert!(executable_paths_match(&real, &wrapper));
+        assert!(!executable_paths_match(&root.path().join("other"), &wrapper));
+    }
+
+    #[cfg(not(feature = "layer1-bootstrap"))]
+    #[test]
+    fn open_pidfd_maps_cloud_hypervisor_compat_role_to_bundle_intent() {
+        assert_eq!(
+            runner_intent_id_for_open_pidfd("acceptance-guest", "ch-runner"),
+            "runner:vm:acceptance-guest:role:cloud-hypervisor"
+        );
+        assert_eq!(
+            runner_intent_id_for_open_pidfd("acceptance-guest", "swtpm"),
+            "runner:vm:acceptance-guest:role:swtpm"
+        );
     }
 
     #[cfg(not(feature = "layer1-bootstrap"))]
