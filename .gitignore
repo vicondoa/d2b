@@ -118,3 +118,9 @@ __pycache__/
 # Optional Gas City contributor runtime in a repository-local checkout.
 # Host deployments keep the real state below /var/lib and /run.
 .gc/
+
+# Beads / Dolt files (added by bd init)
+.dolt/
+*.db
+.beads-credential-key
+.beads/proxieddb/
