@@ -532,3 +532,107 @@ fn canonical_step_set_section(doc: &str) -> String {
     }
     out.join("\n")
 }
+
+const NORMAL_ZONE_RUNTIME_FILES: &[&str] = &[
+    "packages/d2b/src/complete.rs",
+    "packages/d2b/src/endpoint.rs",
+    "packages/d2b/src/exec.rs",
+    "packages/d2b/src/guest.rs",
+    "packages/d2b/src/provider.rs",
+    "packages/d2b/src/resource.rs",
+    "packages/d2b/src/share.rs",
+    "packages/d2b/src/shell.rs",
+    "packages/d2b/src/zone.rs",
+    "packages/d2b/src/zone_doctor.rs",
+];
+
+const RETIRED_STATE_MARKERS: &[&str] = &[
+    "LegacyContext::from_env",
+    "load_manifest(",
+    "load_bundle_context(",
+    "D2B_MANIFEST_PATH",
+    "D2B_BUNDLE_PATH",
+    "D2B_STATE_ROOT",
+];
+const RETIRED_STATE_BRIDGE_FILES: &[&str] = &[
+    "packages/d2b/src/activation.rs",
+    "packages/d2b/src/dispatch.rs",
+    "packages/d2b/src/host.rs",
+    "packages/d2b/src/legacy.rs",
+];
+
+fn retired_state_markers(path: &str, source: &str) -> Vec<String> {
+    RETIRED_STATE_MARKERS
+        .iter()
+        .filter(|marker| source.contains(**marker))
+        .map(|marker| format!("{path}: {marker}"))
+        .collect()
+}
+
+#[test]
+fn normal_zone_runtime_does_not_read_retired_state() {
+    let violations = NORMAL_ZONE_RUNTIME_FILES
+        .iter()
+        .flat_map(|path| retired_state_markers(path, &read_repo_file(path)))
+        .collect::<Vec<_>>();
+    assert!(
+        violations.is_empty(),
+        "normal Zone runtime imported a retired-state reader:\n{}",
+        violations.join("\n")
+    );
+}
+
+#[test]
+fn retired_state_readers_remain_in_the_explicit_legacy_seam() {
+    let legacy = read_repo_file("packages/d2b/src/legacy.rs");
+    for marker in [
+        "pub(crate) fn load_manifest",
+        "pub(crate) fn load_bundle_context",
+    ] {
+        assert!(
+            legacy.contains(marker),
+            "the explicit legacy seam lost its bounded reader {marker}"
+        );
+    }
+    assert!(
+        !retired_state_markers(
+            "packages/d2b/src/provider.rs",
+            &read_repo_file("packages/d2b/src/provider.rs")
+        )
+        .iter()
+        .any(|violation| violation.contains("LegacyContext")),
+        "Provider inspection must not regain a legacy-state access seam"
+    );
+}
+
+#[test]
+fn retired_state_access_has_only_declared_bridge_owners() {
+    let owners = git_listed_files(&["packages/d2b/src"])
+        .into_iter()
+        .filter(|path| path.ends_with(".rs"))
+        .filter_map(|path| {
+            let source = read_repo_file_opt(&path)?;
+            (!retired_state_markers(&path, &source).is_empty()).then_some(path)
+        })
+        .collect::<BTreeSet<_>>();
+    let expected = RETIRED_STATE_BRIDGE_FILES
+        .iter()
+        .map(|path| (*path).to_owned())
+        .collect::<BTreeSet<_>>();
+    assert_eq!(
+        owners, expected,
+        "retired-state access escaped its declared bridge owners"
+    );
+}
+
+#[test]
+fn retired_state_policy_rejects_a_new_reader_marker() {
+    let violations = retired_state_markers(
+        "packages/d2b/src/provider.rs",
+        "fn inspect() { let _ = LegacyContext::from_env(); }",
+    );
+    assert_eq!(
+        violations,
+        vec!["packages/d2b/src/provider.rs: LegacyContext::from_env".to_owned()]
+    );
+}

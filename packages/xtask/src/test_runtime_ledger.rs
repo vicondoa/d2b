@@ -731,7 +731,14 @@ pub struct Finding {
 /// Markers that disqualify a source file from the hermetic tier.
 const PLACEMENT_MARKERS: &[(&str, &str)] = &[
     ("thread::sleep", "wall-clock sleep"),
-    ("tokio::time::sleep", "wall-clock sleep"),
+    ("thread::park_timeout", "wall-clock sleep"),
+    ("tokio::time::sleep(", "wall-clock sleep"),
+    ("tokio::time::sleep_until", "wall-clock sleep"),
+    ("tokio::time::interval(", "wall-clock timer"),
+    ("tokio::time::interval_at", "wall-clock timer"),
+    ("tokio::time::timeout", "wall-clock timeout"),
+    ("recv_timeout(", "wall-clock timeout"),
+    ("wait_timeout(", "wall-clock timeout"),
     ("std::process::Command", "process spawn"),
     ("Command::new(", "process spawn"),
     ("TcpStream::", "network access"),
@@ -759,14 +766,14 @@ const CLOCK_MARKERS: &[(&str, &str)] = &[
 
 /// Lints one hermetic-tier source file.
 ///
-/// A line may opt out with a trailing `// runtime-budget-exception:` comment,
-/// which is how a classified bounded crypto or property test declares itself.
+/// A line may opt out of deterministic-clock findings with a trailing
+/// `// runtime-budget-exception:` comment, which is how a classified bounded
+/// crypto or property test declares itself. Placement violations remain
+/// enforced even on an exception line.
 pub fn lint_source(path: &str, text: &str) -> Vec<Finding> {
     let mut findings = Vec::new();
     for (index, line) in text.lines().enumerate() {
-        if line.contains("runtime-budget-exception:") {
-            continue;
-        }
+        let clock_exception = line.contains("runtime-budget-exception:");
         let code = line.split("//").next().unwrap_or(line);
         for (marker, detail) in PLACEMENT_MARKERS {
             if code.contains(marker) || (marker.starts_with("#[") && line.trim() == *marker) {
@@ -778,14 +785,16 @@ pub fn lint_source(path: &str, text: &str) -> Vec<Finding> {
                 });
             }
         }
-        for (marker, detail) in CLOCK_MARKERS {
-            if code.contains(marker) {
-                findings.push(Finding {
-                    path: path.to_string(),
-                    line: index + 1,
-                    rule: "deterministic-clock",
-                    detail: format!("{detail} via `{marker}`"),
-                });
+        if !clock_exception {
+            for (marker, detail) in CLOCK_MARKERS {
+                if code.contains(marker) {
+                    findings.push(Finding {
+                        path: path.to_string(),
+                        line: index + 1,
+                        rule: "deterministic-clock",
+                        detail: format!("{detail} via `{marker}`"),
+                    });
+                }
             }
         }
     }
@@ -1386,6 +1395,28 @@ mod tests {
     }
 
     #[test]
+    fn placement_lint_rejects_all_wall_clock_timer_shapes() {
+        let source = "fn slow() {\n\
+                      tokio::time::interval(Duration::from_millis(1));\n\
+                      tokio::time::interval_at(deadline, Duration::from_millis(1));\n\
+                      tokio::time::sleep_until(deadline);\n\
+                      tokio::time::timeout(Duration::from_secs(1), work);\n\
+                      receiver.recv_timeout(Duration::from_secs(1));\n\
+                      condition.wait_timeout(guard, Duration::from_secs(1));\n\
+                      thread::park_timeout(Duration::from_secs(1));\n\
+                  }\n";
+        let findings = lint_source("packages/x/src/lib.rs", source);
+        assert_eq!(
+            findings
+                .iter()
+                .filter(|finding| finding.rule == "placement")
+                .count(),
+            7,
+            "every wall-clock timer shape must be a placement violation: {findings:?}"
+        );
+    }
+
+    #[test]
     fn placement_lint_rejects_wall_clock_reads_and_hidden_slow_tests() {
         let source = "#[ignore]\n#[test]\nfn t() { let _ = std::time::Instant::now(); }\n";
         let findings = lint_source("packages/x/src/lib.rs", source);
@@ -1401,6 +1432,18 @@ mod tests {
     fn a_classified_exception_comment_opts_a_line_out() {
         let source = "let _ = std::time::Instant::now(); // runtime-budget-exception: bounded crypto vector\n";
         assert!(lint_source("packages/x/src/lib.rs", source).is_empty());
+    }
+
+    #[test]
+    fn a_clock_exception_cannot_hide_a_placement_violation() {
+        let source = "std::thread::sleep(Duration::from_millis(1)); // runtime-budget-exception: bounded crypto vector\n";
+        let findings = lint_source("packages/x/src/lib.rs", source);
+        assert!(
+            findings.iter().any(|finding| {
+                finding.rule == "placement" && finding.detail.contains("wall-clock sleep")
+            }),
+            "a timing exception must not permit wall-clock sleep: {findings:?}"
+        );
     }
 
     #[test]
