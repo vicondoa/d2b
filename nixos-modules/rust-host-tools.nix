@@ -25,6 +25,8 @@ let
   dummySource = pkgs.runCommand "d2b-provider-rust-src" { } ''
     mkdir -p "$out/packages"
     cp -r ${dummyPackages}/. "$out/packages/"
+    chmod -R u+w "$out/packages"
+    cp ${../packages/Cargo.toml} "$out/packages/Cargo.toml"
   '';
 
   cratePathName = rel:
