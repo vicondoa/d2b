@@ -12,7 +12,7 @@
 # CAP_CHOWN outside the cgroup-delegation startup window).
 { inputs }:
 
-{ pkgs, lib, config, ... }:
+{ pkgs, lib, config, d2bHostTools, ... }:
 
 let
   cfg = config.d2b;
@@ -22,33 +22,11 @@ let
     then import ./prebuilt-packages.nix { inherit pkgs lib; }
     else { };
 
-  # filter out `target/` dev caches from the source
-  # so the Nix copy stays small (broker target alone is ~6 GB).
-  packagesSrc = d2bLib.cleanRustPackagesSource ../.;
   inherit (d2bLib) stablePrincipalId;
 
-  brokerSourcePackage = pkgs.rustPlatform.buildRustPackage {
-    pname = "d2b-priv-broker";
-    version =
-      (builtins.fromTOML (builtins.readFile ../packages/d2b-priv-broker/Cargo.toml))
-        .package.version;
-    src = packagesSrc;
-    sourceRoot = "source";
-    cargoLock = {
-      lockFile = ../Cargo.lock;
-    };
-    cargoBuildFlags = [ "--package" "d2b-priv-broker" "--no-default-features" ];
-    doCheck = false;
-    postPatch = ''
-      mkdir -p .cargo
-      cat > .cargo/config.toml <<EOF
-[build]
-rustc-wrapper = ""
-EOF
-      rm -f .cargo/rustc-wrapper.sh
-    '';
+  brokerSourcePackage = d2bHostTools.broker.overrideAttrs (_: {
     meta.description = "d2b privileged broker (uid 0 host-mutation surface)";
-  };
+  });
   brokerPackage = if prebuilt ? "d2b-priv-broker" then prebuilt."d2b-priv-broker" else brokerSourcePackage;
 
   bundleManifestPath =

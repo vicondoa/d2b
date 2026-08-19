@@ -1,40 +1,12 @@
-{ config, lib, pkgs, ... }:
+{ config, lib, pkgs, d2bHostTools, ... }:
 
 let
   cfg = config.d2b;
-  d2bLib = import ./lib.nix { inherit lib; };
   prebuilt =
     if cfg.site.usePrebuiltHostTools
     then import ./prebuilt-packages.nix { inherit pkgs lib; }
     else { };
-  packagesSrc = d2bLib.cleanRustPackagesSource ../.;
-  sourcePackage = pkgs.rustPlatform.buildRustPackage {
-    pname = "d2b-unsafe-local-helper";
-    version = "0.0.0-bootstrap";
-    src = packagesSrc;
-    cargoLock = {
-      lockFile = ../Cargo.lock;
-      outputHashes."wl-proxy-0.1.2" = "sha256-1yO1zgzSyzQ2DnDMpVxcnI5BsTNvXfzIUS+RNlPj4A8=";
-    };
-    cargoBuildFlags = [ "--package" "d2b-unsafe-local-helper" ];
-    doCheck = false;
-    postPatch = ''
-      mkdir -p .cargo
-      cat > .cargo/config.toml <<EOF
-[build]
-rustc-wrapper = ""
-EOF
-      rm -f .cargo/rustc-wrapper.sh
-    '';
-    installPhase = ''
-      runHook preInstall
-      install -Dm755 target/x86_64-unknown-linux-gnu/release/d2b-unsafe-local-helper \
-        $out/bin/d2b-unsafe-local-helper 2>/dev/null \
-        || install -Dm755 target/release/d2b-unsafe-local-helper \
-          $out/bin/d2b-unsafe-local-helper
-      runHook postInstall
-    '';
-  };
+  sourcePackage = d2bHostTools.unsafeLocalHelper;
   helperPackage =
     if prebuilt != null && prebuilt ? "d2b-unsafe-local-helper"
     then prebuilt."d2b-unsafe-local-helper"

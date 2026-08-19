@@ -165,6 +165,7 @@ pub fn upgrade_owned(
     if recover_owned_inner(parent, identity)? != RecoveryOutcome::Clean {
         return Ok(MigrationOutcome::Recovered);
     }
+
     let state = backup::publication_state(
         parent,
         DEFAULT_STAGED_FILE_NAME,
@@ -198,6 +199,23 @@ pub fn upgrade_owned(
         from: source_meta.schema_version,
         to: last.to,
     })
+}
+
+/// Upgrade only after the caller has captured and identity-validated a
+/// logical image of the active store.
+///
+/// The backup is intentionally supplied by value so a storage owner cannot
+/// accidentally advance the physical schema without first crossing the
+/// logical recovery boundary. The active file is still validated by
+/// [`upgrade_owned`] before staged publication.
+pub fn upgrade_owned_after_backup(
+    parent: &File,
+    marker: &mut File,
+    identity: &StoreIdentity,
+    backup: LogicalBackup,
+) -> Result<MigrationOutcome, StoreError> {
+    backup.validate_for_upgrade_identity(identity)?;
+    upgrade_owned(parent, marker, identity)
 }
 
 /// Resume or finalize a publication left by a crash or interrupted owner.
@@ -1336,6 +1354,27 @@ mod tests {
     }
 
     fn empty_backup() -> LogicalBackup {
+        empty_backup_for(&identity())
+    }
+
+    fn pre_upgrade_backup() -> LogicalBackup {
+        let mut backup = empty_backup();
+        backup.schema_version = 1;
+        let table = backup
+            .tables
+            .iter_mut()
+            .find(|table| table.name == "store_meta")
+            .unwrap();
+        let row = table.rows.first_mut().unwrap();
+        let mut meta: crate::transaction::StoreMeta =
+            crate::transaction::decode(crate::ValueKind::StoreMetaScalar, &row.value).unwrap();
+        meta.schema_version = 1;
+        row.value = crate::transaction::encode(crate::ValueKind::StoreMetaScalar, &meta).unwrap();
+        table.checksum = crate::backup::checksum_rows(&table.rows);
+        backup
+    }
+
+    fn empty_backup_for(store_identity: &StoreIdentity) -> LogicalBackup {
         let directory = tempfile::tempdir().unwrap();
         let file = OpenOptions::new()
             .create_new(true)
@@ -1347,9 +1386,8 @@ mod tests {
             .set_cache_size(REDB_CACHE_SIZE)
             .create_with_backend(FileBackend::new(file).unwrap())
             .unwrap();
-        let identity = identity();
-        crate::transaction::initialize(&database, &identity).unwrap();
-        LogicalBackup::from_database(&database, &identity).unwrap()
+        crate::transaction::initialize(&database, store_identity).unwrap();
+        LogicalBackup::from_database(&database, store_identity).unwrap()
     }
 
     fn create_current_file(directory: &tempfile::TempDir, name: &str) {
@@ -1656,6 +1694,62 @@ mod tests {
         );
         let file = open_named_database(&parent_fd, DEFAULT_ACTIVE_FILE_NAME, &identity()).unwrap();
         validate_database(&file, &identity(), Some(CURRENT_PHYSICAL_SCHEMA_VERSION)).unwrap();
+    }
+
+    #[test]
+    fn schema_upgrade_crosses_the_backup_boundary_before_publication() {
+        let (directory, parent_fd, mut marker) = parent();
+        create_current_file(&directory, DEFAULT_ACTIVE_FILE_NAME);
+        set_schema_version(&directory, 1);
+        let backup = pre_upgrade_backup();
+        let outcome =
+            upgrade_owned_after_backup(&parent_fd, &mut marker, &identity(), backup).unwrap();
+        assert_eq!(
+            outcome,
+            MigrationOutcome::Upgraded {
+                from: 1,
+                to: CURRENT_PHYSICAL_SCHEMA_VERSION
+            }
+        );
+        assert!(
+            !directory.path().join(DEFAULT_STAGED_FILE_NAME).exists(),
+            "staged image must not remain after a validated publication"
+        );
+    }
+
+    #[test]
+    fn restore_rejects_a_pre_upgrade_backup_as_upgrade_required() {
+        let (directory, parent_fd, mut marker) = parent();
+        let error =
+            restore_owned(&parent_fd, &mut marker, &pre_upgrade_backup(), &identity()).unwrap_err();
+        assert_eq!(error.kind(), StoreErrorKind::UpgradeRequired);
+        assert_eq!(error.reason_code(), "backup-schema-version-unsupported");
+        assert_eq!(
+            backup::publication_state(
+                &parent_fd,
+                DEFAULT_STAGED_FILE_NAME,
+                DEFAULT_ACTIVE_FILE_NAME,
+                DEFAULT_PRIOR_FILE_NAME
+            )
+            .unwrap(),
+            PublicationState::Empty
+        );
+        drop(directory);
+    }
+
+    #[test]
+    fn schema_upgrade_rejects_a_backup_for_another_store_before_staging() {
+        let (directory, parent_fd, mut marker) = parent();
+        create_current_file(&directory, DEFAULT_ACTIVE_FILE_NAME);
+        set_schema_version(&directory, 1);
+        let backup = empty_backup_for(&other_identity());
+        let error =
+            upgrade_owned_after_backup(&parent_fd, &mut marker, &identity(), backup).unwrap_err();
+        assert_eq!(error.reason_code(), "backup-store-identity-mismatch");
+        assert!(
+            !directory.path().join(DEFAULT_STAGED_FILE_NAME).exists(),
+            "identity refusal must happen before staging"
+        );
     }
 
     #[test]

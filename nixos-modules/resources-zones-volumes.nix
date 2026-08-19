@@ -130,8 +130,10 @@ let
               assertion = exactKeys [
                 "path" "type" "target" "ownerRef" "groupRef" "mode"
                 "noFollow" "createPolicy" "repairPolicy" "cleanupPolicy"
-                "foreignChildPolicy" "accessAcl" "defaultAcl"
-              ] entry;
+                  "foreignChildPolicy" "accessAcl" "defaultAcl" "adoptionPolicy"
+                  "invariants" "leaseClass" "recursive" "restartPolicy"
+                  "sensitivity"
+                ] entry;
               message = "${path} contains an unsupported layout field.";
             }
             {

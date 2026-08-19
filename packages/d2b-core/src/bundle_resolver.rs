@@ -101,6 +101,7 @@ pub struct BundleResolver {
     pub bundle: Bundle,
     pub host: HostJson,
     pub processes: ProcessesJson,
+    zone_resource_bundles: BTreeMap<String, Vec<u8>>,
     pub storage: Option<StorageJson>,
     pub sync: Option<SyncJson>,
     pub realm_controllers: Option<RealmControllersJson>,
@@ -137,6 +138,7 @@ pub struct BundleResolver {
 struct ParsedBundleArtifacts {
     host: HostJson,
     processes: ProcessesJson,
+    zone_resource_bundles: BTreeMap<String, Vec<u8>>,
     storage: Option<StorageJson>,
     sync: Option<SyncJson>,
     realm_controllers: Option<RealmControllersJson>,
@@ -1086,6 +1088,7 @@ impl BundleResolver {
             ParsedBundleArtifacts {
                 host,
                 processes,
+                zone_resource_bundles: BTreeMap::new(),
                 storage: None,
                 sync: None,
                 realm_controllers: None,
@@ -1106,6 +1109,7 @@ impl BundleResolver {
         let ParsedBundleArtifacts {
             host,
             processes,
+            zone_resource_bundles,
             storage,
             sync,
             realm_controllers,
@@ -1147,6 +1151,7 @@ impl BundleResolver {
             bundle,
             host,
             processes,
+            zone_resource_bundles,
             storage,
             sync,
             realm_controllers,
@@ -1200,6 +1205,7 @@ impl BundleResolver {
             ParsedBundleArtifacts {
                 host,
                 processes,
+                zone_resource_bundles: BTreeMap::new(),
                 storage,
                 sync,
                 realm_controllers,
@@ -1241,6 +1247,7 @@ impl BundleResolver {
         let processes: ProcessesJson = serde_json::from_slice(&processes_bytes).map_err(|e| {
             Error::manifest_parse_error("processes.json", manifest_parse_reason(&e.to_string()))
         })?;
+        let zone_resource_bundles = load_zone_resource_bundles(&bundle, bundle_root, policy)?;
         let storage = load_optional_storage_artifact(&bundle, bundle_root, policy)?;
         let sync = load_optional_sync_artifact(&bundle, bundle_root, policy)?;
         let realm_controllers =
@@ -1260,6 +1267,7 @@ impl BundleResolver {
             ParsedBundleArtifacts {
                 host,
                 processes,
+                zone_resource_bundles,
                 storage,
                 sync,
                 realm_controllers,
@@ -1274,6 +1282,15 @@ impl BundleResolver {
 
     pub fn audit_bundle_version(&self) -> &str {
         &self.audit_bundle_version
+    }
+
+    /// Return the verified Nix-authored resource bundle bytes for one Zone.
+    ///
+    /// The bytes were loaded through the same ownership, no-follow, and
+    /// artifact-hash checks as every other private bundle artifact. Parsing
+    /// remains in `d2bd`, which owns the Resource API activation boundary.
+    pub fn zone_resource_bundle_bytes(&self, zone: &str) -> Option<&[u8]> {
+        self.zone_resource_bundles.get(zone).map(Vec::as_slice)
     }
 
     pub fn audit_bundle_hash(&self) -> &str {
@@ -3129,6 +3146,47 @@ fn load_closure_metadata_verified(
     Ok(closures)
 }
 
+/// Load the integrity-pinned per-Zone Resource bundles emitted by Nix.
+///
+/// The bundle index is deliberately kept in `Bundle.artifact_hashes` rather
+/// than added as another compatibility field to `bundle.json`: older
+/// producers can still be parsed, while v3 producers get the same
+/// no-follow/ownership/hash enforcement as every other private artifact.
+fn load_zone_resource_bundles(
+    bundle: &Bundle,
+    bundle_root: &Path,
+    policy: &BundleVerifyPolicy,
+) -> Result<BTreeMap<String, Vec<u8>>, Error> {
+    let mut bundles = BTreeMap::new();
+    let Some(artifact_hashes) = bundle.artifact_hashes.as_ref() else {
+        return Ok(bundles);
+    };
+    for key in artifact_hashes.keys() {
+        let Some(zone_path) = key.strip_prefix("zones/") else {
+            continue;
+        };
+        let Some(zone_name) = zone_path.strip_suffix("/resource-bundle.json") else {
+            continue;
+        };
+        if zone_name.is_empty() || zone_name.contains('/') || zone_name.contains('\\') {
+            return Err(Error::manifest_parse_error(
+                "resource-bundle.json",
+                "Zone resource bundle path is invalid",
+            ));
+        }
+        let zone_path = resolve_bundle_ref(bundle_root, key);
+        let bytes = secure_open_and_read(&zone_path, policy)?;
+        verify_artifact_hash(&zone_path, &bytes, bundle.artifact_hashes.as_ref(), key)?;
+        if bundles.insert(zone_name.to_owned(), bytes).is_some() {
+            return Err(Error::manifest_parse_error(
+                "resource-bundle.json",
+                "duplicate Zone resource bundle",
+            ));
+        }
+    }
+    Ok(bundles)
+}
+
 fn load_optional_storage_artifact(
     bundle: &Bundle,
     bundle_root: &Path,
@@ -3727,6 +3785,7 @@ mod tests {
                         ),
                     },
                     runtime: RuntimeMetadata::local_nixos(),
+                    autostart: true,
                     security_key: false,
                     lifecycle: Default::default(),
                     shell: None,

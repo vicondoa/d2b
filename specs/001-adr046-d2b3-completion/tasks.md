@@ -713,7 +713,7 @@ predicates without taking ownership of Network implementation.
 
 ### Group `wi:ADR-046-provider-runtime-cloud-hypervisor` (7 items)
 
-- [ ] T384 [P] [US2] `ADR046-ch-001` - complete the cloud-hypervisor Provider implementation and its validation surface: `packages/d2b-provider-runtime-cloud-hypervisor/src/controller.rs`, `tests/host-integration/runtime-cloud-hypervisor-guest-acceptance.nix`, the corresponding discovery/build recipe in `Makefile`, and end-to-end real-KVM/guest-control validation through exact attr `vmChecks.x86_64-linux.runtime-cloud-hypervisor-guest-acceptance`
+- [ ] T384 [P] [US2] `ADR046-ch-001` - complete the cloud-hypervisor Provider implementation and its validation surface: `packages/d2b-provider-runtime-cloud-hypervisor/src/controller.rs`, `tests/host-integration/runtime-cloud-hypervisor-guest-preflight.nix`, the corresponding discovery/build recipe in `Makefile`, and end-to-end real-KVM/guest-control validation through exact attr `vmChecks.x86_64-linux.runtime-cloud-hypervisor-guest-preflight`
 - [ ] T385 [US2] `ADR046-ch-002` - `packages/d2b-provider-runtime-cloud-hypervisor/src/bootstrap_graph.rs` (replace)
 - [ ] T386 [US2] `ADR046-ch-003` - `packages/d2b-provider-runtime-cloud-hypervisor/src/vmm_argv.rs` (adapt)
 - [ ] T387 [US2] `ADR046-ch-004` - `packages/d2b-provider-runtime-cloud-hypervisor/nix/` (Nix emitter) (adapt)

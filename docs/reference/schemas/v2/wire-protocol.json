@@ -966,6 +966,23 @@
         "json"
       ]
     },
+    "AuditJoinContext": {
+      "description": "Explicit Zone and operation identity carried with broker requests.",
+      "type": "object",
+      "required": [
+        "operationIdentity",
+        "zoneId"
+      ],
+      "properties": {
+        "operationIdentity": {
+          "type": "string"
+        },
+        "zoneId": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false
+    },
     "AuditRequest": {
       "type": "object",
       "properties": {
@@ -2756,6 +2773,25 @@
           }
         },
         {
+          "description": "Record the broker durability evidence that closes an authenticated resource-bundle activation commit. The request carries only the canonical audit join; the broker does not accept resource rows or caller-selected host effects over this operation.",
+          "type": "object",
+          "required": [
+            "kind",
+            "payload"
+          ],
+          "properties": {
+            "kind": {
+              "type": "string",
+              "enum": [
+                "ResourceActivationAudit"
+              ]
+            },
+            "payload": {
+              "$ref": "#/definitions/ResourceActivationAuditRequest"
+            }
+          }
+        },
+        {
           "type": "object",
           "required": [
             "kind"
@@ -3530,6 +3566,25 @@
             },
             "payload": {
               "$ref": "#/definitions/OpenZoneStoreResponse"
+            }
+          }
+        },
+        {
+          "description": "Response for [`BrokerRequest::ResourceActivationAudit`].",
+          "type": "object",
+          "required": [
+            "kind",
+            "payload"
+          ],
+          "properties": {
+            "kind": {
+              "type": "string",
+              "enum": [
+                "ResourceActivationAudit"
+              ]
+            },
+            "payload": {
+              "$ref": "#/definitions/ResourceActivationAuditResponse"
             }
           }
         },
@@ -10629,6 +10684,32 @@
         },
         "storageRef": {
           "type": "string"
+        }
+      },
+      "additionalProperties": false
+    },
+    "ResourceActivationAuditRequest": {
+      "description": "Authenticated resource-bundle activation audit join. Both identities are broker-derived canonical SHA-256 values; no resource payload or path is accepted over the wire.",
+      "type": "object",
+      "required": [
+        "auditJoin"
+      ],
+      "properties": {
+        "auditJoin": {
+          "$ref": "#/definitions/AuditJoinContext"
+        }
+      },
+      "additionalProperties": false
+    },
+    "ResourceActivationAuditResponse": {
+      "description": "Confirmation that the broker appended the activation durability record.",
+      "type": "object",
+      "required": [
+        "recorded"
+      ],
+      "properties": {
+        "recorded": {
+          "type": "boolean"
         }
       },
       "additionalProperties": false

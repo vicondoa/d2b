@@ -4,45 +4,17 @@
 # consumer's ambient PATH. This keeps the Nix build hermetic and ensures the
 # Rust implementation, its Cargo lock, and the bundle derivation move
 # together.
-{ config, lib, pkgs, ... }:
+{ config, lib, pkgs, d2bHostTools, ... }:
 
 let
-  d2bLib = import ./lib.nix { inherit lib; };
-  packagesSrc = d2bLib.cleanRustPackagesSource ../.;
-  cargoLock = {
-    lockFile = ../Cargo.lock;
-    outputHashes."wl-proxy-0.1.2" =
-      "sha256-1yO1zgzSyzQ2DnDMpVxcnI5BsTNvXfzIUS+RNlPj4A8=";
-  };
-  compilerPackage = pkgs.rustPlatform.buildRustPackage {
-    pname = "d2b-resource-compiler";
-    version = "0.0.0-bootstrap";
-    src = packagesSrc;
-    inherit cargoLock;
-    cargoBuildFlags = [
-      "--package"
-      "d2b-resource-compiler"
-      "--bin"
-      "d2b-resource-compiler"
-    ];
-    doCheck = false;
-    postPatch = ''
-      mkdir -p .cargo
-      printf '%s\n' '[build]' 'rustc-wrapper = ""' > .cargo/config.toml
-      rm -f .cargo/rustc-wrapper.sh
-    '';
-    installPhase = ''
-      runHook preInstall
-      install -Dm755 target/x86_64-unknown-linux-gnu/release/d2b-resource-compiler \
-        "$out/bin/d2b-resource-compiler" 2>/dev/null \
-        || install -Dm755 target/release/d2b-resource-compiler \
-          "$out/bin/d2b-resource-compiler"
-      runHook postInstall
-    '';
-  };
+  compilerPackage = d2bHostTools.resourceCompiler;
 
   resourceTypes = import ./generated/resource-types.nix;
   semanticResourceTypes = import ./generated/semantic-resource-types.nix;
+  providerResourceTypes = [
+    "display-wayland.d2bus.org.WaylandPolicy"
+    "display-wayland.d2bus.org.WaylandSession"
+  ];
   semanticSchemaFileName = resourceType:
     let parts = lib.splitString "." resourceType;
     in "${lib.concatStringsSep "." (lib.init parts)}_${lib.last parts}.schema.json";
@@ -60,6 +32,12 @@ let
         name = semanticSchemaFileName resourceType;
       })
       semanticResourceTypes)
+    ++ (map
+      (resourceType: {
+        path = ../docs/reference/schemas/v3 + "/${semanticSchemaFileName resourceType}";
+        name = semanticSchemaFileName resourceType;
+      })
+      providerResourceTypes)
   );
 in
 {

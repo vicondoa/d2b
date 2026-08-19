@@ -457,7 +457,7 @@ let
         path = "";
         type = "directory";
         ownerRef = "User/d2bd";
-        groupRef = "User/users";
+        groupRef = "User/d2bd";
         mode = "0755";
         accessAcl = [ ];
         defaultAcl = [ ];
@@ -478,7 +478,7 @@ let
         path = "live";
         type = "directory";
         ownerRef = "User/d2bd";
-        groupRef = "User/users";
+        groupRef = "User/d2bd";
         mode = "0755";
         accessAcl = [ ];
         defaultAcl = [ ];
@@ -499,7 +499,7 @@ let
         path = "live/.d2b-marker-${guestName}";
         type = "file";
         ownerRef = "User/d2bd";
-        groupRef = "User/users";
+        groupRef = "User/d2bd";
         mode = "0444";
         accessAcl = [ ];
         defaultAcl = [ ];
@@ -525,7 +525,7 @@ let
         path = "meta";
         type = "directory";
         ownerRef = "User/d2bd";
-        groupRef = "User/users";
+        groupRef = "User/d2bd";
         mode = "0755";
         accessAcl = [ ];
         defaultAcl = [ ];
@@ -551,7 +551,7 @@ let
         path = "meta/generations";
         type = "directory";
         ownerRef = "User/d2bd";
-        groupRef = "User/users";
+        groupRef = "User/d2bd";
         mode = "0755";
         accessAcl = [ ];
         defaultAcl = [ ];
@@ -577,7 +577,7 @@ let
         path = "meta/current";
         type = "symlink";
         ownerRef = "User/d2bd";
-        groupRef = "User/users";
+        groupRef = "User/d2bd";
         mode = "0777";
         target = "generations/0";
         accessAcl = [ ];
@@ -598,7 +598,7 @@ let
         path = "state";
         type = "directory";
         ownerRef = "User/d2bd";
-        groupRef = "User/users";
+        groupRef = "User/d2bd";
         mode = "0700";
         accessAcl = [ ];
         defaultAcl = [ ];
@@ -619,7 +619,7 @@ let
         path = "gcroots";
         type = "directory";
         ownerRef = "User/d2bd";
-        groupRef = "User/users";
+        groupRef = "User/d2bd";
         mode = "0755";
         accessAcl = [ ];
         defaultAcl = [ ];
@@ -645,7 +645,7 @@ let
         path = "sync.lock";
         type = "file";
         ownerRef = "User/d2bd";
-        groupRef = "User/users";
+        groupRef = "User/d2bd";
         mode = "0640";
         accessAcl = [ ];
         defaultAcl = [ ];

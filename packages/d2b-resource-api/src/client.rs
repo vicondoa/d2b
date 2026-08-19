@@ -10,20 +10,20 @@ use crate::{
     service::{ResourceService, TrustedRequest, UpgradeDispatcher},
 };
 
-/// Unregistered resource client whose identity is fixed by a session capability.
-pub struct UnregisteredResourceClient<S, U> {
+/// Authenticated resource client whose identity is fixed by a session capability.
+pub struct ResourceApiClient<S, U> {
     service: Arc<ResourceService<S, U>>,
     subject: Arc<AuthenticatedSubjectContext>,
     state: AuthorizationState,
 }
 
-impl<S, U> core::fmt::Debug for UnregisteredResourceClient<S, U> {
+impl<S, U> core::fmt::Debug for ResourceApiClient<S, U> {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        f.write_str("UnregisteredResourceClient(<redacted>)")
+        f.write_str("ResourceApiClient(<redacted>)")
     }
 }
 
-impl<S, U> UnregisteredResourceClient<S, U>
+impl<S, U> ResourceApiClient<S, U>
 where
     S: ResourceStoreBackend,
     U: UpgradeDispatcher,

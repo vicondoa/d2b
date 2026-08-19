@@ -1,10 +1,10 @@
 use crate::audit::{DurableMutationAudit, resource_mutation_record};
 use crate::metrics::{NoopStoreTelemetry, StoreMetric};
+use crate::transaction::INSTALLED_SCHEMA_CATALOG;
 use d2b_audit::{
     AuditHash, AuditRecord, AuditRecordError, AuditRecordFields, AuditSink, DurabilityEvidence,
     DurabilityOutcome, OperationIdentity, ZoneOperationKey, genesis_hash,
 };
-use d2b_contracts::v3::identity::STANDARD_RESOURCE_TYPES;
 use d2b_contracts::v3::{
     CanonicalJsonValue, ConfigurationGeneration, RESOURCE_ENVELOPE_DOMAIN_TAG, ResourceEnvelope,
     ResourceRef, ResourceTypeName, ResourceUid, Timestamp, ZoneId, canonical_digest,
@@ -17,7 +17,7 @@ use d2b_resource_store::{
     PolicySnapshot, PreparedStoreMutation, ResourceMutationKind, StoreGetRequest, StoreListRequest,
     StoreMutation, StoreOperationContext, StoreProjection, StoreSlot, StoreWatchRequest,
 };
-use redb::{Database, Durability, ReadableDatabase, ReadableTable};
+use redb::{Database, Durability, ReadableDatabase, ReadableTable, ReadableTableMetadata};
 use rustix::io::{FdFlags, fcntl_getfd, fcntl_setfd};
 use rustix::net::{
     AddressFamily, SendAncillaryBuffer, SendAncillaryMessage, SendFlags, SocketFlags, SocketType,
@@ -195,7 +195,23 @@ fn create_seal_body_with_resource(
     canonical_resource: Vec<u8>,
     payload_digest: String,
 ) -> MutationSealBody {
-    let target = ResourceRef::parse(&format!("Host/{name}")).unwrap();
+    create_seal_body_for_type(
+        operation_id,
+        "Host",
+        name,
+        canonical_resource,
+        payload_digest,
+    )
+}
+
+fn create_seal_body_for_type(
+    operation_id: &str,
+    resource_type: &str,
+    name: &str,
+    canonical_resource: Vec<u8>,
+    payload_digest: String,
+) -> MutationSealBody {
+    let target = ResourceRef::parse(&format!("{resource_type}/{name}")).unwrap();
     MutationSealBody {
         mutations: vec![PreparedStoreMutation::new(
             StoreMutation {
@@ -219,7 +235,7 @@ fn create_seal_body_with_resource(
             subject_ref: ResourceRef::parse("Provider/system-core").unwrap(),
             subject_uid: ResourceUid::parse("33333333-3333-4333-8333-333333333333").unwrap(),
             targets: vec![AdmittedAuthorizationTarget {
-                resource_type: ResourceTypeName::parse("Host").unwrap(),
+                resource_type: ResourceTypeName::parse(resource_type).unwrap(),
                 resource_name: Some(target.name().clone()),
                 verb: AdmittedVerb::Create,
                 subresource: None,
@@ -234,6 +250,51 @@ fn create_seal_body_with_resource(
         },
         operation: operation(operation_id),
     }
+}
+
+fn create_provider_resource_body(resource_type: &str, name: &str) -> Vec<u8> {
+    let mut value: serde_json::Value = serde_json::from_slice(&stored_body(name)).unwrap();
+    value["type"] = serde_json::Value::String(resource_type.to_owned());
+    let spec = value["spec"].as_object_mut().unwrap();
+    match resource_type {
+        "Device" => {
+            spec.insert("deviceClass".to_owned(), serde_json::json!("emulated"));
+            spec.insert("arbitration".to_owned(), serde_json::json!("exclusive"));
+            spec.insert("maxConcurrentClaims".to_owned(), serde_json::json!(1));
+            spec.insert("inventory".to_owned(), serde_json::json!({}));
+        }
+        "Volume" => {
+            spec.insert(
+                "source".to_owned(),
+                serde_json::json!({
+                    "executionRef": "Host/host-system",
+                    "settings": {
+                        "kind": "local-path",
+                        "sourcePolicyId": "state-root"
+                    }
+                }),
+            );
+            spec.insert("kind".to_owned(), serde_json::json!("durable"));
+            spec.insert("layout".to_owned(), serde_json::json!([]));
+            spec.insert(
+                "views".to_owned(),
+                serde_json::json!({
+                    "controller": {
+                        "path": "",
+                        "rights": ["read", "write", "traverse"]
+                    }
+                }),
+            );
+            spec.insert("attachments".to_owned(), serde_json::json!([]));
+            spec.insert("quota".to_owned(), serde_json::Value::Null);
+        }
+        other => panic!("provider resource fixture not defined for {other}"),
+    }
+    value["metadata"].as_object_mut().unwrap().remove("uid");
+    let bytes = serde_json::to_vec(&value).unwrap();
+    CanonicalJsonValue::parse(&bytes)
+        .unwrap()
+        .to_canonical_bytes()
 }
 
 fn owned_file() -> (tempfile::TempDir, File) {
@@ -720,7 +781,7 @@ async fn initialized_schema_catalog_is_digest_bound_and_complete() {
         .iter()
         .find(|table| table.name == "api_schemas")
         .expect("schema table");
-    assert_eq!(table.rows.len(), STANDARD_RESOURCE_TYPES.len());
+    assert_eq!(table.rows.len(), INSTALLED_SCHEMA_CATALOG.len());
 
     let mut resource_types = std::collections::BTreeSet::new();
     for row in &table.rows {
@@ -743,7 +804,7 @@ async fn initialized_schema_catalog_is_digest_bound_and_complete() {
     }
     assert_eq!(
         resource_types,
-        STANDARD_RESOURCE_TYPES
+        INSTALLED_SCHEMA_CATALOG
             .into_iter()
             .map(str::to_owned)
             .collect()
@@ -776,6 +837,94 @@ async fn initialized_schema_catalog_is_digest_bound_and_complete() {
             .reason_code(),
         "resource-not-found"
     );
+}
+
+#[tokio::test]
+async fn logical_backup_restore_preserves_device_and_volume_identity_before_adoption() {
+    let (_source_directory, source_file, source_marker) = provisioned_store();
+    let store_identity = identity();
+    let (issuer, source_acceptor) = mutation_seal_pair(store_identity.seal_identity());
+    let source = RedbResourceStore::provision_owned(
+        source_file,
+        source_marker,
+        store_identity.clone(),
+        source_acceptor,
+    )
+    .await
+    .unwrap();
+
+    let mut originals = Vec::new();
+    for (resource_type, name, operation_id) in [
+        ("Device", "tpm-host", "backup-device"),
+        ("Volume", "tpm-host-state", "backup-volume"),
+    ] {
+        let canonical = create_provider_resource_body(resource_type, name);
+        let payload_digest = canonical_digest(RESOURCE_ENVELOPE_DOMAIN_TAG, &canonical);
+        source
+            .commit_verified(issuer.seal(create_seal_body_for_type(
+                operation_id,
+                resource_type,
+                name,
+                canonical,
+                payload_digest,
+            )))
+            .await
+            .unwrap();
+        originals.push(
+            source
+                .get(StoreGetRequest {
+                    operation: operation(&format!("{operation_id}-read")),
+                    zone: ZoneId::parse("work").unwrap(),
+                    target: ResourceRef::parse(&format!("{resource_type}/{name}")).unwrap(),
+                    expected_uid: None,
+                    projection: StoreProjection::Full,
+                })
+                .await
+                .unwrap(),
+        );
+    }
+
+    let backup = source.logical_backup().await.unwrap();
+    assert_eq!(backup.backup_generation, 0);
+    source.shutdown().await.unwrap();
+
+    let (_target_directory, target_file, target_marker) = provisioned_store();
+    let restored = RedbResourceStore::restore_owned(
+        target_file,
+        target_marker,
+        backup,
+        store_identity.clone(),
+        acceptor(&store_identity),
+    )
+    .await
+    .unwrap();
+
+    for original in originals {
+        let restored_resource = restored
+            .get(StoreGetRequest {
+                operation: operation(&format!(
+                    "restore-{}",
+                    original.resource_ref.to_canonical_string()
+                )),
+                zone: ZoneId::parse("work").unwrap(),
+                target: original.resource_ref.clone(),
+                expected_uid: None,
+                projection: StoreProjection::Full,
+            })
+            .await
+            .unwrap();
+        assert_eq!(restored_resource.resource_ref, original.resource_ref);
+        assert_eq!(restored_resource.uid, original.uid);
+        assert_eq!(restored_resource.generation, original.generation);
+        assert_eq!(restored_resource.canonical_json, original.canonical_json);
+        assert_eq!(restored_resource.payload_digest, original.payload_digest);
+    }
+
+    let restored_backup = restored.logical_backup().await.unwrap();
+    assert_eq!(restored_backup.current_revision, 2);
+    assert_eq!(restored_backup.backup_generation, 1);
+    assert_eq!(restored.identity(), &store_identity);
+    restored.shutdown().await.unwrap();
 }
 
 #[tokio::test]
@@ -1416,7 +1565,10 @@ async fn legacy_v1_reopen_backfills_the_catalog_without_losing_resources() {
         .iter()
         .find(|table| table.name == "api_schemas")
         .unwrap();
-    assert_eq!(schemas.rows.len(), STANDARD_RESOURCE_TYPES.len());
+    assert_eq!(
+        schemas.rows.len(),
+        crate::transaction::INSTALLED_SCHEMA_CATALOG.len()
+    );
     assert!(
         store
             .get(StoreGetRequest {
@@ -1448,11 +1600,80 @@ async fn legacy_v1_reopen_backfills_the_catalog_without_losing_resources() {
             .unwrap()
             .rows
             .len(),
-        STANDARD_RESOURCE_TYPES.len()
+        crate::transaction::INSTALLED_SCHEMA_CATALOG.len()
     );
     reopened.shutdown().await.unwrap();
 }
 
+#[tokio::test]
+async fn legacy_v1_reopen_backfills_qualified_schema_rows() {
+    let (directory, file, marker) = provisioned_store();
+    let store_identity = identity();
+    let store = provision_store(file, marker, store_identity.clone())
+        .await
+        .unwrap();
+    store.shutdown().await.unwrap();
+
+    let qualified_types = [
+        "display-wayland.d2bus.org.WaylandPolicy",
+        "display-wayland.d2bus.org.WaylandSession",
+    ]
+    .into_iter()
+    .map(|resource_type| ResourceTypeName::parse(resource_type).unwrap())
+    .collect::<Vec<_>>();
+    let keys = qualified_types
+        .iter()
+        .map(crate::transaction::api_schema_key_for_type)
+        .collect::<Result<Vec<_>, _>>()
+        .unwrap();
+    let legacy_file = OpenOptions::new()
+        .read(true)
+        .write(true)
+        .open(directory.path().join("store.redb"))
+        .unwrap();
+    let database = Database::builder()
+        .create_with_backend(redb::backends::FileBackend::new(legacy_file).unwrap())
+        .unwrap();
+    let mut write = database.begin_write().unwrap();
+    write.set_durability(Durability::Immediate).unwrap();
+    let mut schemas = write.open_table(crate::transaction::API_SCHEMAS).unwrap();
+    for key in &keys {
+        schemas.remove(key.as_slice()).unwrap();
+    }
+    assert_eq!(
+        schemas.len().unwrap(),
+        crate::transaction::STANDARD_SCHEMA_CATALOG.len() as u64
+    );
+    drop(schemas);
+    write.commit().unwrap();
+    drop(database);
+
+    let file = OpenOptions::new()
+        .read(true)
+        .write(true)
+        .open(directory.path().join("store.redb"))
+        .unwrap();
+    let reopened = open_store(file, store_identity).await.unwrap();
+    reopened.shutdown().await.unwrap();
+
+    let file = OpenOptions::new()
+        .read(true)
+        .write(true)
+        .open(directory.path().join("store.redb"))
+        .unwrap();
+    let database = Database::builder()
+        .create_with_backend(redb::backends::FileBackend::new(file).unwrap())
+        .unwrap();
+    let read = database.begin_read().unwrap();
+    let schemas = read.open_table(crate::transaction::API_SCHEMAS).unwrap();
+    assert_eq!(
+        schemas.len().unwrap(),
+        crate::transaction::INSTALLED_SCHEMA_CATALOG.len() as u64
+    );
+    for key in &keys {
+        assert!(schemas.get(key.as_slice()).unwrap().is_some());
+    }
+}
 #[tokio::test]
 async fn empty_existing_store_is_quarantined_without_publication_marker() {
     let (_directory, file) = owned_file();

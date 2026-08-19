@@ -31,9 +31,7 @@ use d2b_provider_activation_nixos::{
     ActivationCaller, ActivationController, CallerRole, GenerationObservation, GenerationPhase,
 };
 use d2b_resource_api::watch::ResourceWatch;
-use d2b_resource_api::{
-    RedbBackend, UnregisteredResourceClient, service::UnavailableUpgradeDispatcher,
-};
+use d2b_resource_api::{RedbBackend, ResourceApiClient, service::UnavailableUpgradeDispatcher};
 use d2b_resource_store::{
     StoreListRequest, StoreOperationContext, StoreProjection, StoreWatchRequest, StoredResource,
 };
@@ -115,8 +113,7 @@ pub(crate) struct ActivationResourceRuntime {
     zone: ZoneId,
     controller: ActivationController,
     records: BTreeMap<ResourceRef, DesiredRecord>,
-    status_client:
-        Option<Arc<UnregisteredResourceClient<RedbBackend, UnavailableUpgradeDispatcher>>>,
+    status_client: Option<Arc<ResourceApiClient<RedbBackend, UnavailableUpgradeDispatcher>>>,
 }
 
 impl core::fmt::Debug for ActivationResourceRuntime {
@@ -142,7 +139,7 @@ impl ActivationResourceRuntime {
 
     pub(crate) fn set_status_client(
         &mut self,
-        status_client: Arc<UnregisteredResourceClient<RedbBackend, UnavailableUpgradeDispatcher>>,
+        status_client: Arc<ResourceApiClient<RedbBackend, UnavailableUpgradeDispatcher>>,
     ) {
         self.status_client = Some(status_client);
     }
@@ -701,7 +698,7 @@ fn civil_from_days(days_since_epoch: i64) -> (i64, i64, i64) {
 }
 
 async fn update_status(
-    client: &UnregisteredResourceClient<RedbBackend, UnavailableUpgradeDispatcher>,
+    client: &ResourceApiClient<RedbBackend, UnavailableUpgradeDispatcher>,
     record: &DesiredRecord,
     phase: ResourcePhase,
     detail: ActivationDetail,
@@ -833,7 +830,7 @@ fn activation_outcome_message(outcome: ActivationOutcomeCode) -> &'static str {
 }
 
 async fn update_finalizers(
-    client: &UnregisteredResourceClient<RedbBackend, UnavailableUpgradeDispatcher>,
+    client: &ResourceApiClient<RedbBackend, UnavailableUpgradeDispatcher>,
     record: &DesiredRecord,
     add: bool,
 ) -> Result<DesiredRecord, ActivationResourceRuntimeError> {
@@ -876,7 +873,7 @@ async fn update_finalizers(
 }
 
 async fn delete_resource(
-    client: &UnregisteredResourceClient<RedbBackend, UnavailableUpgradeDispatcher>,
+    client: &ResourceApiClient<RedbBackend, UnavailableUpgradeDispatcher>,
     record: &DesiredRecord,
 ) -> Result<(), ActivationResourceRuntimeError> {
     let mut mutation = wire::Mutation::new();

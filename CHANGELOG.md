@@ -64,6 +64,82 @@ deprecations ship one minor release before removal.
   blocked on authenticated ComponentSession-to-bus registration, Zone
   registration, store/watch integration, and a corrected whole-process RSS
   rerun.
+- Added opaque Volume effect-port contracts and dependency-safe local Volume
+  finalization.
+- Added strict virtiofs Export contracts and host-side effect-port composition.
+- Added exact Device and holder-bound security-key admission with fail-closed
+  hidraw selection.
+- Added controller-created TPM child-resource contracts and a broker-backed
+  production reconcile path that preserves TPM state.
+- Hardened TPM state before the first flush, routed reconcile through the
+  broker-owned legacy migration journal, and bound launch tickets to the
+  validated state intent.
+- Refused the unbound legacy security-key broker operation and raw hidraw
+  selectors until a bundle-backed stable-selector Provider path is present.
+- Enforced canonical virtiofs Provider identity and mount-path validation.
+- Added authenticated, Zone- and workload-bound Secret Service Credential sessions with opaque lease ownership and disconnect/finalization revocation.
+- Complete the GPU Device Provider lifecycle with Host-global claim
+  admission, opaque worker identities, restart adoption, bounded status and
+  telemetry, and fail-closed broker preflight.
+- Added separate USBIP Service and Binding lifecycle supervision so Guest attachment cleanup completes before owned device unbind and Host-global authority release.
+- Added typed Core bundle projections and daemon broker composition for Host-global USBIP claims, private Binding runners, restart identity checks, and scoped cleanup.
+- Add a typed qemu-media Guest runtime with broker-owned process launch,
+  Host-global KVM admission, QMP health and hotplug handling, restart
+  adoption, ordered finalization, and redacted audit/telemetry projections.
+- Added typed shell pool and session lifecycle contracts with workload-user
+  placement, bounded terminal replay, and restart-safe supervisor adoption.
+- Added authenticated local Unix transport admission with bounded portal ownership and descriptor lifecycle controls.
+- Added Wayland display, desktop notification, and Wayland clipboard Providers
+  with bounded lifecycle state, explicit policy and RBAC, redacted audit and
+  telemetry output, authenticated stream admission, and hermetic tests.
+- Carry sealed typed clipboard and notification configuration through the Zone
+  resource runtime, issue supervisor-authoritative notification source and
+  host-sink receipts, and keep short AF_UNIX telemetry test sockets faithful.
+- Hardened nonce/idempotency cleanup, display principal lifecycle reuse, and
+  clipboard rate-bucket garbage collection.
+- Added canonical compile-safe package scaffolds and flake outputs for the
+  remaining Provider dossiers so each accepted Provider has one workspace and
+  package identity before its behavior is implemented.
+- Added bounded lifecycle providers for Azure Container Apps, Azure virtual
+  machines, Cloud Hypervisor, and Azure Relay, including opaque effect
+  contracts, redacted audit records, bounded telemetry, crash recovery, and
+  hermetic lifecycle coverage.
+- Route Network host effects through the typed broker adapter with
+  generation-fenced persistent TAP realization cleanup and fail-closed
+  NetworkManager ownership checks. Require Core-admitted Host-global
+  physical-NIC claims before external attachment effects.
+- Added typed activation generation, audio PipeWire, system-core, minijail,
+  and systemd Provider boundaries with bounded lifecycle and readiness
+  contracts.
+- Added structured activation helper input/output and production Zone status
+  emission for the system-core Host/User handler pair.
+- Added strict resource-envelope compilation with canonical schema, version,
+  unknown-field, type, required-field, and reference rejection.
+- Added a single Host-global authority startup barrier and an async
+  reservation lifecycle persisted through effect closure and restart recovery.
+- Added the Core-issued TPM migration decision, typed production effect-port
+  adapter, and broker-owned fd-relative journal replay; unbound effects remain
+  fail-closed.
+- Host-install no longer performs an unsealed legacy migration; absence-only
+  state is quarantined until Core supplies the never-provisioned decision.
+- Recovery exposes a sealed external-inventory provenance port; active
+  physical-NIC rows quarantine when that port is not installed.
+- Added the authenticated transport-vsock Provider with replay-safe Guest and
+  Zone session admission, bounded framing, named-stream bridging, and native
+  guest relay lifecycle.
+- Added allocator-only transport settings and integration coverage for CID
+  authority, restart matching, close ordering, redaction, and attachment
+  refusal.
+- Added authenticated Zone Resource API lifecycle coverage for Volume, Network,
+  Device TPM, and Cloud Hypervisor Guest resources, including dependency-aware
+  readiness, restart continuity, and dependency-safe removal. Cloud Hypervisor
+  Guest adoption remains an explicit preflight block when nested TAP/cgroup
+  posture is unavailable.
+- Added the public Zone Resource API authorization row and generated privileges
+  contract so typed Resource reads and mutations use authenticated daemon
+  admission.
+- Added logical resource-store backup validation before schema migration and
+  restore checks that preserve resource identity and retained TPM state.
 
 ### Changed
 
@@ -234,6 +310,35 @@ deprecations ship one minor release before removal.
   corrected with it.
 - Enabled the required Layer-1, eval-shell, and Entra example PR gates for
   changes targeting the `v3` branch as well as `main`.
+- Derive daemon admission from accepted Unix peer credentials and the configured lifecycle group.
+- Reopen Zone stores with their persisted revision metadata while keeping the
+  Resource API fail-closed until registrar-owned ComponentSession routing is
+  registered.
+- Add typed system-core Host and User handler contracts without publishing
+  fabricated readiness.
+- Bound Entra credential acquisition, refresh, authorization, redacted status,
+  bounded degradation, and finalization cleanup to the owning Guest and Zone.
+- Require exact authenticated Guest, Provider, and Zone bindings before any
+  client effect, preserve committed refresh metadata after post-commit
+  validation failures, and prevent finalized credentials from minting again.
+- Reject GPU Device resources on unsupported host platforms during Nix
+  evaluation.
+- Make shared Host-global leases unique, validate GPU/video identities and
+  closure proofs, recover partial restarts without duplicate workers, and
+  reject malformed GPU runner shapes before device opens.
+- Hardened the canonical ACA, Azure VM, Cloud Hypervisor, and Azure Relay
+  Providers with bounded readiness, startup, credential, bootstrap, and
+  reconnect behavior.
+- Treat pause-at-boot as an initial QMP proof and bound greeting timeouts to
+  fresh launches while adopted runners retry through health degradation.
+- Keep a failed fresh-launch generation terminal until finalization so a
+  stopping runner cannot be adopted or reserve device authority again.
+- Bound managed-identity Credential leases to authenticated subject, Zone,
+  workload, Provider session, and bounded expiry state; restart checkpoints
+  remain secret-free and finalization revokes only the owning workload's
+  handles. Reacquisition replaces terminal or stale-session records without
+  inflating the accepted client rotation generation, and repeated checkpoint
+  restore remains occupancy-safe and idempotent.
 
 ### Fixed
 
@@ -247,6 +352,44 @@ deprecations ship one minor release before removal.
 - Made Unix stream and vsock framing cancellation-safe, hardened systemd
   descriptor adoption and socket I/O semantics, redacted identifier debug
   output, and added closed-class observability and operator remediation.
+- Keep shell socket tests within AF_UNIX path limits using private short-lived
+  temporary roots.
+- Kept missing-secret, outage, timeout, status, audit, log, and telemetry outcomes stable and free of credential material or identifiers.
+- Sealed session capability minting behind one provider-owned, non-Clone authority with exact consumer and generation checks; lifecycle fencing now makes admission, inspect, disconnect, and finalization race-safe and drains admitted leases.
+- Keep rejected GPU worker identities owned through finalization so failed
+  starts cannot respawn or release Host-global authority before closure.
+- Fail closed on ambiguous or quarantined GPU restart adoption to prevent
+  duplicate workers.
+- Recovered device TPM workers safely after confirmed stale-process crashes without risking duplicate workers during ambiguous liveness checks.
+- Enforced persisted device ownership, zone, and physical-key exclusivity before opening security-key relays.
+- Preserved typed TPM directory-hardening audit records and established the swtpm control endpoint before initialization.
+- Fixed interaction composition to derive display identity from committed
+  WaylandSession state and authorize multi-Guest clipboard and notification
+  operations against authenticated Provider routes without weakening
+  fail-closed identity checks.
+- Fixed picker materialization to authorize the committed Guest, Zone, and
+  route before consuming its one-use receipt.
+- Fixed display reconciliation to require the committed Wayland observer User
+  and preserve the authenticated display identity across restart reconciliation.
+- Prevented failed bootstrap deliveries, unhealthy guest control, expired
+  leases, and relay socket loss from being reported as ready or leaking
+  session capacity.
+- Keep notification source and host-sink lifecycle tests in the Provider crate
+  so supervisor packaging stays on the closed effect-port allowlist.
+- Resolve interaction ComponentSession Guest subjects and Host execution
+  references from committed Zone resources, and carry committed Provider and
+  controller generations instead of transport-derived identities or
+  generation-one placeholders. Missing or ambiguous committed identity state
+  refuses composition while preserving durable process restart adoption.
+- Cover display reconciliation, notification delivery, and clipboard capture
+  on the production composition path with non-default generations and
+  wrong-Guest refusal.
+- Fixed persistent-shell integration tests failing when nested checkout paths
+  made their Unix socket paths exceed the platform limit.
+- Preserve broker-first host preparation error precedence while retaining
+  bundle validation before v3 NetworkManager effects.
+- Fixed relay finalization, transport close budgeting, degraded observation
+  retention, and end-to-end open deadlines.
 
 ### Security
 
@@ -268,6 +411,8 @@ deprecations ship one minor release before removal.
   overrides, and reports a typed failure instead of ever leaving a proxied
   window unlabelled. Adds the `proofs/window-identity-chrome/` proof for the
   geometry, parts, contrast, and label logic.
+- Require both the Network resource and site-level east-west opt-ins before
+  direct workload forwarding can be enabled.
 
 ## [1.4.1] - 2026-07-12
 

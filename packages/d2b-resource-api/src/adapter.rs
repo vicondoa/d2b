@@ -1,7 +1,7 @@
-//! Unregistered resource dispatch prepared for a future authenticated bus router.
+//! Authenticated Resource API dispatch over a ComponentSession.
 //!
-//! This workspace has no ComponentSession or d2b-bus implementation, so these
-//! generated services have no production registration path.
+//! The Zone runtime binds this adapter only after the d2b-bus session has
+//! authenticated the subject and the live policy has granted `Connect`.
 
 use std::{collections::HashMap, sync::Arc};
 
@@ -11,7 +11,7 @@ use d2b_contracts::resource_proto as wire;
 use crate::{
     ResourceStoreBackend,
     authz::authenticated_relay_hop,
-    client::UnregisteredResourceClient,
+    client::ResourceApiClient,
     generated::d2b_resource_v3_ttrpc,
     identity::AuthenticatedSubjectContext,
     service::{ResourceService, TrustedRequest, UpgradeDispatcher},
@@ -32,31 +32,31 @@ impl std::error::Error for AdapterBindingError {}
 /// Current production reachability of the resource service.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ResourceApiReachability {
-    AwaitingAuthenticatedComponentSessionRouter,
+    RegisteredOnAuthenticatedComponentSession,
 }
 
 pub const RESOURCE_API_REACHABILITY: ResourceApiReachability =
-    ResourceApiReachability::AwaitingAuthenticatedComponentSessionRouter;
+    ResourceApiReachability::RegisteredOnAuthenticatedComponentSession;
 
-/// Session-scoped dispatcher that is intentionally not registered on a server.
-pub struct UnregisteredBusAdapter<S, U> {
+/// Session-scoped dispatcher registered on an authenticated Resource server.
+pub struct ResourceBusAdapter<S, U> {
     service: Arc<ResourceService<S, U>>,
     session: AuthenticatedSubjectContext,
 }
 
-impl<S, U> core::fmt::Debug for UnregisteredBusAdapter<S, U> {
+impl<S, U> core::fmt::Debug for ResourceBusAdapter<S, U> {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        f.write_str("UnregisteredBusAdapter(<redacted>)")
+        f.write_str("ResourceBusAdapter(<redacted>)")
     }
 }
 
-impl<S, U> UnregisteredBusAdapter<S, U>
+impl<S, U> ResourceBusAdapter<S, U>
 where
     S: ResourceStoreBackend,
     U: UpgradeDispatcher,
 {
     /// Seal authenticated identity and policy state to one ComponentSession.
-    pub fn bind_unregistered_session(
+    pub fn bind_component_session(
         service: Arc<ResourceService<S, U>>,
         session: AuthenticatedSubjectContext,
     ) -> Result<Self, AdapterBindingError> {
@@ -64,9 +64,9 @@ where
         Ok(Self { service, session })
     }
 
-    /// Return an explicitly unregistered in-process contract client.
-    pub fn unregistered_client(&self) -> UnregisteredResourceClient<S, U> {
-        UnregisteredResourceClient::from_session_capability(
+    /// Return an explicitly authenticated in-process contract client.
+    pub fn client(&self) -> ResourceApiClient<S, U> {
+        ResourceApiClient::from_session_capability(
             Arc::clone(&self.service),
             Arc::clone(self.session.claims()),
             self.session.authorization_state().clone(),
@@ -86,21 +86,19 @@ where
     }
 }
 
-impl<S, U> UnregisteredBusAdapter<S, U>
+impl<S, U> ResourceBusAdapter<S, U>
 where
     S: ResourceStoreBackend + 'static,
     U: UpgradeDispatcher + 'static,
 {
-    /// Build the generated service map without registering it on a bus server.
-    pub fn unregistered_ttrpc_services(
-        self: Arc<Self>,
-    ) -> HashMap<String, ttrpc::r#async::Service> {
+    /// Build the generated service map for the authenticated session server.
+    pub fn ttrpc_services(self: Arc<Self>) -> HashMap<String, ttrpc::r#async::Service> {
         d2b_resource_v3_ttrpc::create_resource_service(self)
     }
 }
 
 #[async_trait]
-impl<S, U> d2b_resource_v3_ttrpc::ResourceService for UnregisteredBusAdapter<S, U>
+impl<S, U> d2b_resource_v3_ttrpc::ResourceService for ResourceBusAdapter<S, U>
 where
     S: ResourceStoreBackend + 'static,
     U: UpgradeDispatcher + 'static,
@@ -600,12 +598,11 @@ mod tests {
     }
 
     fn denied_adapter()
-    -> Arc<UnregisteredBusAdapter<UnreachableStore, crate::service::UnavailableUpgradeDispatcher>>
-    {
+    -> Arc<ResourceBusAdapter<UnreachableStore, crate::service::UnavailableUpgradeDispatcher>> {
         let (store, authorizer) = UnreachableStore::paired(ApiCatalog::standard(), None);
         let service = Arc::new(ResourceService::new(store, authorizer).unwrap());
         Arc::new(
-            UnregisteredBusAdapter::bind_unregistered_session(
+            ResourceBusAdapter::bind_component_session(
                 service,
                 issue_test_subject(subject(Locality::Local, EvidenceClass::UnixPeer), state()),
             )
@@ -615,7 +612,7 @@ mod tests {
 
     /// A recording adapter paired with the observation log it appends to.
     type RecordingAdapter = (
-        Arc<UnregisteredBusAdapter<RecordingStore, RecordingUpgrade>>,
+        Arc<ResourceBusAdapter<RecordingStore, RecordingUpgrade>>,
         Arc<Mutex<Vec<DispatchObservation>>>,
     );
 
@@ -704,7 +701,7 @@ mod tests {
             Arc::new(ResourceService::with_upgrade(store, Arc::new(authorizer), upgrade).unwrap());
         (
             Arc::new(
-                UnregisteredBusAdapter::bind_unregistered_session(
+                ResourceBusAdapter::bind_component_session(
                     service,
                     issue_test_subject(context, state()),
                 )
@@ -817,12 +814,12 @@ mod tests {
     }
 
     #[test]
-    fn unregistered_service_map_contains_the_exact_thirteen_method_surface() {
+    fn authenticated_service_map_contains_the_exact_thirteen_method_surface() {
         assert_eq!(
             RESOURCE_API_REACHABILITY,
-            ResourceApiReachability::AwaitingAuthenticatedComponentSessionRouter
+            ResourceApiReachability::RegisteredOnAuthenticatedComponentSession
         );
-        let services = denied_adapter().unregistered_ttrpc_services();
+        let services = denied_adapter().ttrpc_services();
         assert_eq!(services.len(), 1);
         let methods = &services["d2b.resource.v3.ResourceService"].methods;
         let actual = methods.keys().cloned().collect::<BTreeSet<_>>();
@@ -853,7 +850,7 @@ mod tests {
 
         let (store, authorizer) = UnreachableStore::paired(ApiCatalog::standard(), None);
         let service = Arc::new(ResourceService::new(store, authorizer).unwrap());
-        let adapter = UnregisteredBusAdapter::bind_unregistered_session(
+        let adapter = ResourceBusAdapter::bind_component_session(
             service,
             issue_test_subject(
                 subject_named(Locality::Local, EvidenceClass::UnixPeer, MARKER),
@@ -862,14 +859,14 @@ mod tests {
         )
         .unwrap();
         let adapter_debug = format!("{adapter:?}");
-        let client_debug = format!("{:?}", adapter.unregistered_client());
+        let client_debug = format!("{:?}", adapter.client());
 
         assert!(!adapter_debug.contains(MARKER), "{adapter_debug}");
         assert!(!client_debug.contains(MARKER), "{client_debug}");
     }
 
     #[tokio::test]
-    async fn unregistered_thirteen_method_adapter_pins_dispatch_targets_counts_and_sentinels() {
+    async fn authenticated_thirteen_method_adapter_pins_dispatch_targets_counts_and_sentinels() {
         let ctx = context();
         let (adapter, calls) = recording_adapter();
 
@@ -1162,7 +1159,7 @@ mod tests {
             (Locality::Remote, EvidenceClass::EnrolledKk),
         ] {
             assert!(
-                UnregisteredBusAdapter::bind_unregistered_session(
+                ResourceBusAdapter::bind_component_session(
                     Arc::clone(&service),
                     issue_test_subject(subject(locality, evidence), state()),
                 )

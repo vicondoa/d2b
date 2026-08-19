@@ -224,7 +224,7 @@ impl LogicalBackup {
         if self.format_version != LOGICAL_BACKUP_FORMAT_VERSION {
             return Err(integrity("backup-format-version-unknown"));
         }
-        if self.schema_version != PHYSICAL_SCHEMA_VERSION {
+        if self.schema_version > PHYSICAL_SCHEMA_VERSION {
             return Err(crate::StoreError::new(
                 d2b_resource_store::StoreErrorKind::UpgradeRequired,
                 None,
@@ -334,11 +334,36 @@ impl LogicalBackup {
     /// Validate the immutable store identity carried by a backup.
     pub fn validate_for_identity(&self, identity: &StoreIdentity) -> Result<(), crate::StoreError> {
         self.validate()?;
+        if self.schema_version != PHYSICAL_SCHEMA_VERSION {
+            return Err(crate::StoreError::new(
+                d2b_resource_store::StoreErrorKind::UpgradeRequired,
+                None,
+                None,
+                RetryClass::Never,
+                "backup-schema-version-unsupported",
+            ));
+        }
+        self.validate_identity_fields(identity)
+    }
+
+    /// Validate a backup before a physical-schema upgrade.
+    ///
+    /// A pre-upgrade logical image is a valid recovery gate for the matching
+    /// live store even though it cannot be restored directly into the current
+    /// physical schema.
+    pub fn validate_for_upgrade_identity(
+        &self,
+        identity: &StoreIdentity,
+    ) -> Result<(), crate::StoreError> {
+        self.validate()?;
+        self.validate_identity_fields(identity)
+    }
+
+    fn validate_identity_fields(&self, identity: &StoreIdentity) -> Result<(), crate::StoreError> {
         if self.store_uuid != identity.store_uuid.as_str()
             || self.zone_name != identity.zone.as_str()
             || self.zone_uid != identity.zone_uid.as_str()
             || self.created_at != identity.created_at
-            || self.schema_version != PHYSICAL_SCHEMA_VERSION
             || self.active_configuration_revision
                 != identity.revisions.active_configuration_revision.get()
             || self.policy_revision != identity.revisions.policy_revision

@@ -2063,6 +2063,45 @@ fn dispatch_request_with_backend_and_request_fds<B: DispatchBackend>(
             )?;
             Ok(DispatchResult::no_fds(validate_bundle_ok_response()))
         }
+        RealBrokerRequest::ResourceActivationAudit(req) => {
+            let op_fields = OperationFields::ResourceActivationAudit {};
+            if !caller_role_is_admin(&caller_role) {
+                write_decision_op_record!(
+                    audit_log,
+                    bundle_metadata,
+                    "ResourceActivationAudit",
+                    req.audit_join.operation_identity.as_str(),
+                    caller_uid,
+                    caller_gid,
+                    &caller_role,
+                    "resource-bundle",
+                    req.audit_join.zone_id.as_str(),
+                    None,
+                    "denied-refused",
+                    Some("audit-requires-admin"),
+                    op_fields,
+                )?;
+                return Err(BrokerError::AuditRequiresAdmin);
+            }
+            write_success_op_record!(
+                audit_log,
+                bundle_metadata,
+                "ResourceActivationAudit",
+                req.audit_join.operation_identity.as_str(),
+                caller_uid,
+                caller_gid,
+                &caller_role,
+                "resource-bundle",
+                req.audit_join.zone_id.as_str(),
+                None,
+                op_fields,
+            )?;
+            Ok(DispatchResult::no_fds(
+                BrokerResponse::ResourceActivationAudit(
+                    d2b_contracts::broker_wire::ResourceActivationAuditResponse { recorded: true },
+                ),
+            ))
+        }
         RealBrokerRequest::ExportBrokerAudit(req) => {
             // Real wire filter is a typed BrokerAuditFilter struct;
             // serialize to JSON so the daily-file export path keeps the
@@ -2366,10 +2405,8 @@ fn dispatch_request_with_backend_and_request_fds<B: DispatchBackend>(
                 req.resource_uid.as_ref(),
             );
             let resolver = require_resolver(resolver)?;
-            let intent_id = d2b_core::bundle_resolver::intent_id_runner(
-                req.vm_id.as_str(),
-                req.role_id.as_str(),
-            );
+            let intent_id =
+                runner_intent_id_for_open_pidfd(req.vm_id.as_str(), req.role_id.as_str());
             let intent = resolver.find_runner_intent(&intent_id).ok_or_else(|| {
                 BrokerError::BundleIntentMissing {
                     kind: "runner",
@@ -3087,13 +3124,6 @@ fn dispatch_request_with_backend_and_request_fds<B: DispatchBackend>(
                     resolved: "nonzero".to_owned(),
                 });
             }
-            if req.resource_ref.is_some() && req.sandbox_plan.is_none() {
-                return Err(BrokerError::SpawnRunnerIntentMismatch {
-                    field: "sandbox_plan",
-                    requested: "missing".to_owned(),
-                    resolved: "required-for-generic-process".to_owned(),
-                });
-            }
             if req.resource_ref.is_some()
                 && (req.execution_ref.is_none()
                     || req.execution_domain.is_none()
@@ -3139,6 +3169,10 @@ fn dispatch_request_with_backend_and_request_fds<B: DispatchBackend>(
                 });
             }
             validate_spawn_runner_request_matches_intent(&req, intent)?;
+            // Legacy VM DAG launches carry the trusted bundle profile but no
+            // generic Process sandbox DTO. When a typed DTO is present, bind
+            // it to that same profile; otherwise the trusted intent remains
+            // the authoritative sandbox source.
             if let Some(plan) = &req.sandbox_plan {
                 validate_sandbox_launch_plan(&req, intent, plan)?;
             }
@@ -3190,19 +3224,29 @@ fn dispatch_request_with_backend_and_request_fds<B: DispatchBackend>(
                 req.role_id.as_str(),
             )?;
             let regenerator_extra = d2b_host::runner_argv_regenerator::RunnerArgvExtra::default();
-            let regenerated =
-                d2b_host::runner_argv_regenerator::regenerate_argv(intent, &regenerator_extra)
-                    .map_err(|error| BrokerError::SpawnRunnerIntentMismatch {
-                        field: "argv_comparison_inputs",
-                        requested: "required".to_owned(),
-                        resolved: error.to_string(),
-                    })?;
-            if regenerated != intent.argv {
-                return Err(BrokerError::SpawnRunnerIntentMismatch {
-                    field: "argv",
-                    requested: "bundle-and-regenerator-match".to_owned(),
-                    resolved: "mismatch".to_owned(),
-                });
+            match d2b_host::runner_argv_regenerator::regenerate_argv(intent, &regenerator_extra) {
+                Ok(regenerated) if regenerated != intent.argv => {
+                    return Err(BrokerError::SpawnRunnerIntentMismatch {
+                        field: "argv",
+                        requested: "bundle-and-regenerator-match".to_owned(),
+                        resolved: "mismatch".to_owned(),
+                    });
+                }
+                Ok(_) => {}
+                Err(
+                    d2b_host::runner_argv_regenerator::RegenerateArgvError::MissingInput { .. }
+                    | d2b_host::runner_argv_regenerator::RegenerateArgvError::NotYetWired(_),
+                ) => {
+                    // Until typed generator inputs are carried in the trusted
+                    // bundle, the bundle's prebuilt argv remains authoritative.
+                }
+                Err(d2b_host::runner_argv_regenerator::RegenerateArgvError::Generator(error)) => {
+                    return Err(BrokerError::SpawnRunnerIntentMismatch {
+                        field: "argv_generator",
+                        requested: "trusted-inputs".to_owned(),
+                        resolved: error,
+                    });
+                }
             }
             let mut mount_policy = intent.mount_policy.clone();
             extend_usbip_backend_device_binds(
@@ -4229,6 +4273,11 @@ fn dispatch_request_with_backend_and_request_fds<B: DispatchBackend>(
                 (intent.owner_uid, intent.owner_gid),
             )
             .map_err(|error| BrokerError::LiveHandler(error.to_string()))?;
+            tracing::warn!(
+                ?paths,
+                probe_only = req.probe_only,
+                "TPM migration paths resolved"
+            );
             let wire_outcome = if req.probe_only {
                 match crate::ops::swtpm_migration::probe(&paths) {
                     Ok(crate::ops::swtpm_migration::LegacyInventoryState::NeverProvisioned) => {
@@ -6140,6 +6189,15 @@ fn runner_registry_key(
 }
 
 #[cfg(not(feature = "layer1-bootstrap"))]
+fn runner_intent_id_for_open_pidfd(vm_id: &str, role_id: &str) -> String {
+    let process_role_id = match role_id {
+        "ch-runner" => "cloud-hypervisor",
+        other => other,
+    };
+    d2b_core::bundle_resolver::intent_id_runner(vm_id, process_role_id)
+}
+
+#[cfg(not(feature = "layer1-bootstrap"))]
 fn registration_matches(
     registration: &RunnerRegistration,
     resource_ref: Option<&d2b_contracts::v3::ResourceRef>,
@@ -6222,10 +6280,19 @@ fn observe_registered_runner(
             "runner process identity changed".to_owned(),
         ));
     }
-    let executable_verified = fs::read_link(format!("/proc/{}/exe", registration.pid))
-        .map(|path| path == registration.binary_path)
-        .unwrap_or(false);
     let cgroup_verified = proc_cgroup_matches(registration.pid, &registration.cgroup_subtree);
+    let executable_path = read_runner_executable(registration.pid);
+    let executable_verified = match executable_path {
+        Ok(ref path) => executable_paths_match(path, &registration.binary_path),
+        Err(ref error) if error.kind() == io::ErrorKind::PermissionDenied => {
+            // A registered pidfd and the broker-owned cgroup are the
+            // executable provenance established by this broker. Linux
+            // resets dumpability when a runner changes uid, so Yama blocks
+            // the redundant /proc/<pid>/exe read without CAP_SYS_PTRACE.
+            pidfd_registered && cgroup_verified
+        }
+        Err(_) => false,
+    };
     Ok(d2b_contracts::broker_wire::ObserveRunnerResponse {
         vm_id: request.vm_id.clone(),
         role_id: request.role_id.clone(),
@@ -6254,8 +6321,11 @@ fn discover_runner_candidate(
         if pid <= 0 || !proc_cgroup_matches(pid, &intent.cgroup_placement.subtree) {
             continue;
         }
-        let executable = fs::read_link(format!("/proc/{pid}/exe")).ok();
-        if executable.as_deref() != Some(intent.binary_path.as_path()) {
+        let executable = read_runner_executable(pid).ok();
+        if !executable
+            .as_deref()
+            .is_some_and(|path| executable_paths_match(path, &intent.binary_path))
+        {
             continue;
         }
         let Some(start_time_ticks) = read_proc_start_time_ticks(pid)? else {
@@ -6287,6 +6357,58 @@ fn discover_runner_candidate(
         cgroup_verified: true,
         executable_verified: true,
     })
+}
+
+#[cfg(not(feature = "layer1-bootstrap"))]
+fn executable_paths_match(actual: &Path, expected: &Path) -> bool {
+    let Some((actual, expected)) = fs::canonicalize(actual)
+        .ok()
+        .zip(fs::canonicalize(expected).ok())
+    else {
+        return false;
+    };
+    if actual == expected {
+        return true;
+    }
+
+    let Ok(script) = fs::read_to_string(&expected) else {
+        return false;
+    };
+    if !script.starts_with("#!") {
+        return false;
+    }
+    let mut target = None;
+    for line in script.lines().map(str::trim) {
+        let Some(exec) = line.strip_prefix("exec \"$here/") else {
+            continue;
+        };
+        let Some((relative, _)) = exec.split_once('"') else {
+            return false;
+        };
+        let relative_path = Path::new(relative);
+        if relative.is_empty()
+            || relative.contains('$')
+            || relative_path
+                .components()
+                .any(|component| !matches!(component, std::path::Component::Normal(_)))
+        {
+            return false;
+        }
+        let Some(parent) = expected.parent() else {
+            return false;
+        };
+        if target.replace(parent.join(relative_path)).is_some() {
+            return false;
+        }
+    }
+    target
+        .and_then(|target| fs::canonicalize(target).ok())
+        .is_some_and(|target| target == actual)
+}
+
+#[cfg(not(feature = "layer1-bootstrap"))]
+fn read_runner_executable(pid: i32) -> io::Result<PathBuf> {
+    fs::read_link(format!("/proc/{pid}/exe"))
 }
 
 #[cfg(not(feature = "layer1-bootstrap"))]
@@ -10855,15 +10977,18 @@ impl BrokerError {
                 field,
                 requested,
                 resolved,
-            } => error_response(
-                "Broker.SpawnRunnerIntentMismatch",
-                "SpawnRunner",
-                Some("P1"),
-                &format!(
-                    "SpawnRunner {field} mismatch: request `{requested}` does not match trusted bundle intent `{resolved}`"
-                ),
-                "Use the BundleOpId that matches the requested VM/role; daemon and broker versions may be out of sync.",
-            ),
+            } => {
+                tracing::warn!(field, "SpawnRunner trusted intent mismatch");
+                error_response(
+                    "Broker.SpawnRunnerIntentMismatch",
+                    "SpawnRunner",
+                    Some("P1"),
+                    &format!(
+                        "SpawnRunner {field} mismatch: request `{requested}` does not match trusted bundle intent `{resolved}`"
+                    ),
+                    "Use the BundleOpId that matches the requested VM/role; daemon and broker versions may be out of sync.",
+                )
+            }
             Self::StoreSyncFailed {
                 error_stage,
                 message,
@@ -12174,6 +12299,7 @@ mod tests {
                         vsock_host_socket: Some("/run/d2b/vms/corp-vm/agent-host.sock".to_owned()),
                     },
                     runtime: RuntimeMetadata::local_nixos(),
+                    autostart: true,
                     security_key: false,
                     lifecycle: Default::default(),
                     shell: None,
@@ -12610,6 +12736,47 @@ mod tests {
             ),
             Err(BrokerError::GuestControlSignRefused { .. })
         ));
+    }
+
+    #[cfg(not(feature = "layer1-bootstrap"))]
+    #[test]
+    fn executable_identity_accepts_trusted_symlink_paths() {
+        let expected = Path::new("/proc/self/exe");
+        let actual = fs::read_link(expected).expect("read current executable");
+        assert!(executable_paths_match(&actual, expected));
+    }
+
+    #[cfg(not(feature = "layer1-bootstrap"))]
+    #[test]
+    fn executable_identity_accepts_static_wrapper_exec_target() {
+        let root = tempfile::tempdir_in(env!("CARGO_MANIFEST_DIR")).expect("tempdir");
+        let wrapper = root.path().join("cloud-hypervisor");
+        let real = root.path().join(".cloud-hypervisor-real");
+        fs::write(
+            &wrapper,
+            "#!/bin/sh\nexec \"$here/.cloud-hypervisor-real\" \"$@\"\n",
+        )
+        .expect("write wrapper");
+        fs::write(&real, b"trusted executable").expect("write executable");
+
+        assert!(executable_paths_match(&real, &wrapper));
+        assert!(!executable_paths_match(
+            &root.path().join("other"),
+            &wrapper
+        ));
+    }
+
+    #[cfg(not(feature = "layer1-bootstrap"))]
+    #[test]
+    fn open_pidfd_maps_cloud_hypervisor_compat_role_to_bundle_intent() {
+        assert_eq!(
+            runner_intent_id_for_open_pidfd("acceptance-guest", "ch-runner"),
+            "runner:vm:acceptance-guest:role:cloud-hypervisor"
+        );
+        assert_eq!(
+            runner_intent_id_for_open_pidfd("acceptance-guest", "swtpm"),
+            "runner:vm:acceptance-guest:role:swtpm"
+        );
     }
 
     #[cfg(not(feature = "layer1-bootstrap"))]

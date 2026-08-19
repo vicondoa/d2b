@@ -106,6 +106,14 @@ are denied (`defaultForUnknown: deny`).
 > `PrivilegesJson.publicOperations` and the generated
 > `OperationAuthz.operation` enum, but not in the broker-only catalog below.
 
+> **The Zone Resource API is a public daemon operation.** The `resource`
+> operation covers typed Resource API reads and mutations for a selected Zone.
+> It is authorized for `d2b-launcher` and `d2b-admin`, is audited, exposes only
+> metadata-class secrets, and requires the broker conditionally when a Provider
+> effect crosses the privileged boundary. Its provider-specific verbs remain
+> subject to the Zone Role and RoleBinding policy; the operation row only
+> classifies the authenticated local daemon request.
+
 ## Operation catalog (PROTOCOL_VERSION = 5)
 
 The currently implemented broker operation catalog. Every row carries
@@ -180,6 +188,7 @@ broker request is emitted.
 | Variant | Subject | Scope | Status | Destructive | Secret | Allowed groups | Audit | Default-for-unknown |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- |
 | `ValidateBundle` | bundle | global | live | no | no | `d2b-launcher` + `d2b-admin` | yes | deny |
+| `ResourceActivationAudit` | resource bundle | per Zone | live | no (durability evidence only) | metadata-only | `d2b-admin` (broker peer: `d2bd`) | yes | deny |
 | `ExportBrokerAudit` | audit log | global | live | no (read-only export) | no | `d2b-admin` | yes | deny |
 | `CreateOrReconcileUsersGroups` | user/group | global | bootstrap-only | yes | no | `d2b-admin` | yes | deny |
 

@@ -22,9 +22,16 @@
 # by host.nix.
 { inputs }:
 
-{ ... }:
+{ config, lib, pkgs, ... }:
 
+let
+  d2bHostTools = import ./rust-host-tools.nix {
+    inherit inputs lib pkgs;
+  };
+in
 {
+  _module.args.d2bHostTools = d2bHostTools;
+
   imports = [
     ./options.nix
     ./host-generation-rebuild-ref.nix

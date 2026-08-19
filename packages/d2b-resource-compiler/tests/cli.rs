@@ -126,6 +126,72 @@ fn cli_strict_secret_mode_fails_closed() {
 }
 
 #[test]
+fn cli_strict_secret_mode_allows_anchored_volume_paths() {
+    let mut input = empty_input();
+    input["resources"] = json!([
+        {
+            "apiVersion": "resources.d2bus.org/v3",
+            "type": "Host",
+            "metadata": {"name": "host-system", "zone": "local-root"},
+            "spec": {
+                "allowedDomains": ["system"],
+                "budget": {},
+                "defaultDomain": "system",
+                "deviceAttachments": [],
+                "networkAttachments": [],
+                "volumeAttachmentDefaults": []
+            }
+        },
+        {
+            "apiVersion": "resources.d2bus.org/v3",
+            "type": "User",
+            "metadata": {"name": "alice", "zone": "local-root"},
+            "spec": {
+                "displayName": "Alice",
+                "groups": [],
+                "osUsername": "alice"
+            }
+        },
+        {
+            "apiVersion": "resources.d2bus.org/v3",
+            "type": "Volume",
+            "metadata": {"name": "state", "zone": "local-root"},
+            "spec": {
+                "attachments": [],
+                "kind": "state",
+                "layout": [{
+                    "accessAcl": [],
+                    "adoptionPolicy": "adopt-with-live-owner-proof",
+                    "cleanupPolicy": "owner-controlled",
+                    "createPolicy": "create-if-never-provisioned",
+                    "defaultAcl": [],
+                    "foreignChildPolicy": "preserve",
+                    "groupRef": "User/alice",
+                    "invariants": [],
+                    "leaseClass": "none",
+                    "mode": "0700",
+                    "noFollow": true,
+                    "ownerRef": "User/alice",
+                    "path": "",
+                    "recursive": false,
+                    "repairPolicy": "exact-owner",
+                    "restartPolicy": "preserve-across-controller-restart",
+                    "sensitivity": "private",
+                    "type": "directory"
+                }],
+                "source": {
+                    "executionRef": "Host/host-system",
+                    "settings": {"kind": "local-path"}
+                },
+                "views": {"controller": {"path": "", "rights": ["read"]}}
+            }
+        }
+    ]);
+    let output = run(&input, true);
+    assert!(output.status.success(), "{output:?}");
+}
+
+#[test]
 fn cli_rejects_unsorted_resources() {
     let mut input = empty_input();
     input["resources"] = json!([

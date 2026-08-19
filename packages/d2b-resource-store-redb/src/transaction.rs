@@ -63,6 +63,120 @@ pub(crate) const UNINTERPRETABLE_REQUEST_DIGEST_REASON: &str =
 
 /// The standard ResourceType catalog bound by a freshly provisioned store.
 pub(crate) const STANDARD_SCHEMA_CATALOG: [&str; 19] = STANDARD_RESOURCE_TYPES;
+/// Qualified interaction ResourceTypes whose schemas are committed with the
+/// production Resource plane and therefore may be persisted in every Zone
+/// store.
+pub(crate) const QUALIFIED_SCHEMA_CATALOG: [&str; 2] = [
+    "display-wayland.d2bus.org.WaylandPolicy",
+    "display-wayland.d2bus.org.WaylandSession",
+];
+/// The complete schema catalog installed in a current physical store.
+pub(crate) const INSTALLED_SCHEMA_CATALOG: [&str; 21] = [
+    "Zone",
+    "ZoneLink",
+    "Provider",
+    "Role",
+    "RoleBinding",
+    "Quota",
+    "EmergencyPolicy",
+    "Host",
+    "Guest",
+    "Process",
+    "EphemeralProcess",
+    "Volume",
+    "Network",
+    "Device",
+    "User",
+    "Credential",
+    "Endpoint",
+    "ResourceExport",
+    "ResourceImport",
+    "display-wayland.d2bus.org.WaylandPolicy",
+    "display-wayland.d2bus.org.WaylandSession",
+];
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct WaylandPolicySpec {
+    allow_globals: Vec<String>,
+    deny_globals: Vec<String>,
+    max_versions: std::collections::BTreeMap<String, u32>,
+    dmabuf_allow: Vec<String>,
+    dmabuf_deny: Vec<String>,
+    defaults: WaylandPolicyDefaults,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct WaylandPolicyDefaults {
+    accelerated_rendering: WaylandPolicyDecision,
+    clipboard_boundary: WaylandClipboardBoundary,
+    high_risk: WaylandPolicyDecision,
+    app_defaults: WaylandPolicyDecision,
+    off_defaults: WaylandPolicyDecision,
+    unclassified: WaylandPolicyDecision,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "lowercase")]
+enum WaylandPolicyDecision {
+    Allow,
+    Deny,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "lowercase")]
+enum WaylandClipboardBoundary {
+    Deny,
+    Virtualize,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct WaylandSessionSpec {
+    guest_ref: ResourceRef,
+    host_ref: ResourceRef,
+    user_ref: ResourceRef,
+    policy_ref: ResourceRef,
+    identity: WaylandDisplayIdentity,
+    cross_domain_trusted: bool,
+    #[serde(default)]
+    reconnect_generation: Option<u64>,
+    virgl_video: bool,
+    filter: WaylandFilterSpec,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct WaylandDisplayIdentity {
+    label: String,
+    active_color: String,
+    inactive_color: String,
+    urgent_color: String,
+    border_enabled: bool,
+    border_width: u32,
+    label_enabled: bool,
+    label_text: Option<String>,
+    label_position: WaylandLabelPosition,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+enum WaylandLabelPosition {
+    TopLeft,
+    TopCenter,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct WaylandFilterSpec {
+    allow_globals: Vec<String>,
+    deny_globals: Vec<String>,
+    max_versions: std::collections::BTreeMap<String, u32>,
+    dmabuf_allow: Vec<String>,
+    dmabuf_deny: Vec<String>,
+    debug_logging: bool,
+}
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -736,7 +850,7 @@ pub(crate) fn initialize(
         .map_err(integrity)?;
     drop(meta);
     let mut schemas = write.open_table(API_SCHEMAS).map_err(integrity)?;
-    for resource_type in STANDARD_SCHEMA_CATALOG {
+    for resource_type in INSTALLED_SCHEMA_CATALOG {
         let schema = api_schema_record(resource_type)?;
         let schema_key = api_schema_key(resource_type)?;
         let schema_value = encode(ValueKind::ApiSchemaRecord, &schema)?;
@@ -765,11 +879,28 @@ pub(crate) fn backfill_schema_catalog(database: &Database) -> Result<(), StoreEr
 
         let table = read.open_table(API_SCHEMAS).map_err(integrity)?;
         let count = table.len().map_err(integrity)?;
-        if count == STANDARD_SCHEMA_CATALOG.len() as u64 {
+        if count == INSTALLED_SCHEMA_CATALOG.len() as u64 {
             return Ok(());
         }
-        if count != 0 {
+        if count != 0 && count != STANDARD_SCHEMA_CATALOG.len() as u64 {
             return Err(integrity("api-schema-catalog-migration-ambiguous"));
+        }
+        if count == STANDARD_SCHEMA_CATALOG.len() as u64 {
+            let mut types = std::collections::BTreeSet::new();
+            for row in table.iter().map_err(integrity)? {
+                let (_key, value) = row.map_err(integrity)?;
+                let schema: ApiSchemaRecord = decode(ValueKind::ApiSchemaRecord, value.value())?;
+                types.insert(schema.resource_type);
+            }
+            if types.len() != STANDARD_SCHEMA_CATALOG.len()
+                || STANDARD_SCHEMA_CATALOG.iter().any(|resource_type| {
+                    !types.contains(
+                        &ResourceTypeName::parse(*resource_type).expect("standard catalog type"),
+                    )
+                })
+            {
+                return Err(integrity("api-schema-catalog-migration-ambiguous"));
+            }
         }
     }
 
@@ -782,15 +913,20 @@ pub(crate) fn backfill_schema_catalog(database: &Database) -> Result<(), StoreEr
     }
     let mut schemas = write.open_table(API_SCHEMAS).map_err(integrity)?;
     let count = schemas.len().map_err(integrity)?;
-    if count == STANDARD_SCHEMA_CATALOG.len() as u64 {
+    if count == INSTALLED_SCHEMA_CATALOG.len() as u64 {
         drop(schemas);
         write.abort().map_err(integrity)?;
         return Ok(());
     }
-    if count != 0 {
+    if count != 0 && count != STANDARD_SCHEMA_CATALOG.len() as u64 {
         return Err(integrity("api-schema-catalog-migration-ambiguous"));
     }
-    for resource_type in STANDARD_SCHEMA_CATALOG {
+    let resource_types = if count == 0 {
+        &INSTALLED_SCHEMA_CATALOG[..]
+    } else {
+        &QUALIFIED_SCHEMA_CATALOG[..]
+    };
+    for resource_type in resource_types {
         let schema = api_schema_record(resource_type)?;
         let key = api_schema_key(resource_type)?;
         let value = encode(ValueKind::ApiSchemaRecord, &schema)?;
@@ -1321,7 +1457,7 @@ struct ZoneLinkCursorRecord {
 }
 
 fn schema_digest_for_type(resource_type: &str) -> Result<String, StoreError> {
-    if !STANDARD_SCHEMA_CATALOG.contains(&resource_type) {
+    if !INSTALLED_SCHEMA_CATALOG.contains(&resource_type) {
         return Err(integrity("api-schema-resource-type-unknown"));
     }
     let descriptor = serde_json::json!({
@@ -1453,9 +1589,9 @@ fn validate_api_schemas(read: &redb::ReadTransaction, _meta: &StoreMeta) -> Resu
         }
         resource_types.insert(schema.resource_type);
     }
-    if table.len().map_err(integrity)? != STANDARD_SCHEMA_CATALOG.len() as u64
-        || resource_types.len() != STANDARD_SCHEMA_CATALOG.len()
-        || STANDARD_SCHEMA_CATALOG.iter().any(|resource_type| {
+    if table.len().map_err(integrity)? != INSTALLED_SCHEMA_CATALOG.len() as u64
+        || resource_types.len() != INSTALLED_SCHEMA_CATALOG.len()
+        || INSTALLED_SCHEMA_CATALOG.iter().any(|resource_type| {
             !resource_types
                 .contains(&ResourceTypeName::parse(*resource_type).expect("standard catalog type"))
         })
@@ -1557,11 +1693,12 @@ fn validate_active_schema(
     {
         return Err(schema_invalid("resource-schema-record-invalid"));
     }
-    if !standard {
-        return Err(schema_invalid("resource-type-schema-validator-unavailable"));
-    }
-    if envelope.spec().provider().is_some() || envelope.status().provider().is_some() {
-        return Err(schema_invalid("provider-schema-not-installed"));
+    if standard {
+        if envelope.spec().provider().is_some() || envelope.status().provider().is_some() {
+            return Err(schema_invalid("provider-schema-not-installed"));
+        }
+    } else if !validate_qualified_base(envelope)? {
+        return Err(schema_invalid("resource-base-schema-invalid"));
     }
     Ok(())
 }
@@ -1627,6 +1764,120 @@ fn validate_standard_base_bytes(resource_type: &str, bytes: &[u8]) -> Result<boo
         return Err(schema_invalid("resource-base-schema-invalid"));
     }
     Ok(true)
+}
+
+fn validate_qualified_base(envelope: &ResourceEnvelope) -> Result<bool, StoreError> {
+    let bytes = envelope.spec().base().to_canonical_bytes();
+    match envelope.resource_type().as_str() {
+        "display-wayland.d2bus.org.WaylandPolicy" => {
+            let policy = serde_json::from_slice::<WaylandPolicySpec>(&bytes).ok();
+            Ok(policy.is_some_and(|policy| {
+                valid_wayland_filter(
+                    &policy.allow_globals,
+                    &policy.deny_globals,
+                    &policy.max_versions,
+                    &policy.dmabuf_allow,
+                    &policy.dmabuf_deny,
+                ) && valid_wayland_policy_defaults(&policy.defaults)
+            }))
+        }
+        "display-wayland.d2bus.org.WaylandSession" => {
+            let session = serde_json::from_slice::<WaylandSessionSpec>(&bytes).ok();
+            Ok(session.is_some_and(valid_wayland_session))
+        }
+        _ => Ok(false),
+    }
+}
+
+fn valid_wayland_session(session: WaylandSessionSpec) -> bool {
+    let _virgl_video = session.virgl_video;
+    let _debug_logging = session.filter.debug_logging;
+    session.guest_ref.resource_type().as_str() == "Guest"
+        && session.host_ref.resource_type().as_str() == "Host"
+        && session.user_ref.resource_type().as_str() == "User"
+        && session.policy_ref.resource_type().as_str() == "display-wayland.d2bus.org.WaylandPolicy"
+        && session.cross_domain_trusted
+        && session
+            .reconnect_generation
+            .is_none_or(|generation| generation > 0)
+        && valid_wayland_identity(&session.identity)
+        && valid_wayland_filter(
+            &session.filter.allow_globals,
+            &session.filter.deny_globals,
+            &session.filter.max_versions,
+            &session.filter.dmabuf_allow,
+            &session.filter.dmabuf_deny,
+        )
+}
+
+fn valid_wayland_identity(identity: &WaylandDisplayIdentity) -> bool {
+    let _presentation = (identity.border_enabled, identity.label_enabled);
+    valid_wayland_label(&identity.label)
+        && valid_wayland_color(&identity.active_color)
+        && valid_wayland_color(&identity.inactive_color)
+        && valid_wayland_color(&identity.urgent_color)
+        && identity.border_width <= 64
+        && matches!(
+            identity.label_position,
+            WaylandLabelPosition::TopLeft | WaylandLabelPosition::TopCenter
+        )
+        && identity
+            .label_text
+            .as_deref()
+            .is_none_or(|text| !text.is_empty() && text.len() <= 64)
+}
+
+fn valid_wayland_label(value: &str) -> bool {
+    !value.is_empty()
+        && value.len() <= 64
+        && value
+            .chars()
+            .next()
+            .is_some_and(|character| character.is_ascii_lowercase())
+        && value.chars().all(|character| {
+            character.is_ascii_lowercase() || character.is_ascii_digit() || character == '-'
+        })
+}
+
+fn valid_wayland_color(value: &str) -> bool {
+    value.len() == 7
+        && value.starts_with('#')
+        && value[1..].bytes().all(|byte| byte.is_ascii_hexdigit())
+}
+
+fn valid_wayland_filter(
+    allow_globals: &[String],
+    deny_globals: &[String],
+    max_versions: &std::collections::BTreeMap<String, u32>,
+    dmabuf_allow: &[String],
+    dmabuf_deny: &[String],
+) -> bool {
+    allow_globals.len() <= 128
+        && deny_globals.len() <= 128
+        && max_versions.len() <= 128
+        && max_versions.values().all(|version| *version > 0)
+        && dmabuf_allow.len() <= 64
+        && dmabuf_deny.len() <= 64
+        && allow_globals
+            .iter()
+            .chain(deny_globals)
+            .all(|value| !value.is_empty() && value.len() <= 63)
+        && dmabuf_allow
+            .iter()
+            .chain(dmabuf_deny)
+            .all(|value| !value.is_empty() && value.chars().count() <= 63)
+}
+
+fn valid_wayland_policy_defaults(defaults: &WaylandPolicyDefaults) -> bool {
+    let _ = (
+        &defaults.accelerated_rendering,
+        &defaults.clipboard_boundary,
+        &defaults.high_risk,
+        &defaults.app_defaults,
+        &defaults.off_defaults,
+        &defaults.unclassified,
+    );
+    true
 }
 
 fn schema_invalid(reason: &'static str) -> StoreError {
@@ -4111,6 +4362,7 @@ pub(crate) fn integrity_reason(reason: &'static str) -> StoreError {
 }
 
 pub(crate) fn durability_failure(_detail: impl core::fmt::Display) -> StoreError {
+    eprintln!("redb durability failure: {_detail}");
     integrity_reason("redb-durability-failure")
 }
 
@@ -4319,6 +4571,87 @@ mod tests {
             .insert(key.as_slice(), value.as_slice())
             .unwrap();
         write.commit().unwrap();
+    }
+
+    #[test]
+    fn qualified_wayland_validator_accepts_schema_defaults() {
+        let policy: WaylandPolicySpec = serde_json::from_value(serde_json::json!({
+            "allowGlobals": [],
+            "denyGlobals": [],
+            "maxVersions": {},
+            "dmabufAllow": [],
+            "dmabufDeny": [],
+            "defaults": {
+                "acceleratedRendering": "deny",
+                "clipboardBoundary": "virtualize",
+                "highRisk": "deny",
+                "appDefaults": "deny",
+                "offDefaults": "deny",
+                "unclassified": "deny"
+            }
+        }))
+        .unwrap();
+        assert!(valid_wayland_policy_defaults(&policy.defaults));
+
+        let session: WaylandSessionSpec = serde_json::from_value(serde_json::json!({
+            "guestRef": "Guest/guest",
+            "hostRef": "Host/host",
+            "userRef": "User/alice",
+            "policyRef": "display-wayland.d2bus.org.WaylandPolicy/policy",
+            "identity": {
+                "label": "session",
+                "activeColor": "#112233",
+                "inactiveColor": "#223344",
+                "urgentColor": "#334455",
+                "borderEnabled": true,
+                "borderWidth": 1,
+                "labelEnabled": true,
+                "labelText": "session",
+                "labelPosition": "top-left"
+            },
+            "crossDomainTrusted": true,
+            "virglVideo": false,
+            "filter": {
+                "allowGlobals": [],
+                "denyGlobals": [],
+                "maxVersions": {},
+                "dmabufAllow": [],
+                "dmabufDeny": [],
+                "debugLogging": false
+            }
+        }))
+        .unwrap();
+        assert!(valid_wayland_session(session));
+
+        let dmabuf_entry = "a".repeat(63);
+        assert!(valid_wayland_filter(
+            &[],
+            &[],
+            &std::collections::BTreeMap::new(),
+            std::slice::from_ref(&dmabuf_entry),
+            &[],
+        ));
+        assert!(!valid_wayland_filter(
+            &[],
+            &[],
+            &std::collections::BTreeMap::new(),
+            &[format!("{dmabuf_entry}a")],
+            &[],
+        ));
+        assert!(!valid_wayland_filter(
+            &[],
+            &[],
+            &std::collections::BTreeMap::from([("xdg_shell".to_owned(), 0)]),
+            &[],
+            &[],
+        ));
+        assert!(valid_wayland_filter(
+            &[],
+            &[],
+            &std::collections::BTreeMap::from([("xdg_shell".to_owned(), 1)]),
+            &[],
+            &[],
+        ));
     }
 
     #[test]

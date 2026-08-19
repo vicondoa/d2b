@@ -30,7 +30,7 @@ pub use provider::{
     CredentialProvider, CredentialStatus, DaemonAccessApi, DaemonAccessTransport, DisplayProvider,
     DurableExecutionProvider, GuestControlEndpointProvider, HostSubstrateProvider,
     InfrastructureProvider, NodeProvider, ObservabilitySinkProvider, PersistentShellProvider,
-    ProtocolCodec, RelayProvider, RuntimeProvider, StreamMux, TransportListener, TransportProvider,
+    ProtocolCodec, RuntimeProvider, StreamMux, TransportListener, TransportProvider,
     WorkloadProvider,
 };
 pub use rate_limit::{CircuitBreakerConfig, CircuitBreakerSnapshot, ProviderCircuitBreaker};

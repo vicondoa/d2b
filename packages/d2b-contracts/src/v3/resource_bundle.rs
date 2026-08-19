@@ -34,11 +34,11 @@ pub const MAX_BUNDLE_FINGERPRINTS: usize = 256;
 pub struct BundleResourceMetadata {
     name: super::ResourceName,
     zone: ZoneId,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     owner_ref: Option<ResourceRef>,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     labels: BTreeMap<String, String>,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     annotations: BTreeMap<String, String>,
 }
 
@@ -481,6 +481,28 @@ mod tests {
         assert_eq!(bundle.resources[0].resource_type().as_str(), "Host");
         assert_eq!(bundle.resources[1].metadata().name().as_str(), "z");
         let bytes = canonical_json_bytes(&bundle).unwrap();
+        assert_eq!(ResourceBundle::from_json(&bytes).unwrap(), bundle);
+    }
+
+    #[test]
+    fn bundle_accepts_nix_omitted_optional_metadata() {
+        let bundle = ResourceBundle::new(
+            ZoneId::parse("dev").unwrap(),
+            vec![resource("Host", "a")],
+            "sha256:".to_owned() + &"11".repeat(32),
+            BTreeMap::new(),
+            BTreeMap::new(),
+            timestamp(),
+        )
+        .unwrap();
+        let bytes = serde_json::to_vec(&bundle).unwrap();
+        let value: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        assert!(
+            !value["resources"][0]["metadata"]
+                .as_object()
+                .unwrap()
+                .contains_key("ownerRef")
+        );
         assert_eq!(ResourceBundle::from_json(&bytes).unwrap(), bundle);
     }
 
