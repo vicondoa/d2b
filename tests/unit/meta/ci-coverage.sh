@@ -147,7 +147,7 @@ apt_helper_normalized=$(tr -d '[:space:]_:-' < "$apt_helper" | tr '[:upper:]' '[
 if printf '%s\n' "$apt_helper_normalized" \
   | grep -Eq 'allowunauthenticated|allowinsecurerepositories|allowdowngradetoinsecurerepositories' \
   || grep -Eiq \
-    'trusted[[:space:]]*=[[:space:]]*yes|verify-(peer|host)[[:space:]]*=[[:space:]]*false|check-valid-until[[:space:]]*=[[:space:]]*false' \
+    'trusted[[:space:]]*=[[:space:]]*yes|verify-(peer|host)[[:space:]]*=[[:space:]]*(false|no|0)|check-(valid-until|date)[[:space:]]*=[[:space:]]*(false|no|0)' \
     "$apt_helper"
 then
   apt_contract_errors+=("tests/tools/ci-apt-install: disables APT authentication or freshness checks")
