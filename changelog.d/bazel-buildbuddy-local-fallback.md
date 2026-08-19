@@ -6,3 +6,5 @@
   test hooks cannot race under CI.
 - Allow the cold realized Nix check to use Bazel's eternal timeout instead of
   failing after the standard 15-minute test budget.
+- Keep resource-compiler test schema discovery runtime-based so strict Rust
+  path checks remain valid on remote workers.

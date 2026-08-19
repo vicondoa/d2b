@@ -2411,9 +2411,7 @@ mod tests {
             providers: Vec::new(),
             artifact_catalog_path: None,
             expected_artifact_catalog_digest: None,
-            schema_root: Some(
-                Path::new(env!("CARGO_MANIFEST_DIR")).join("../../docs/reference/schemas/v3"),
-            ),
+            schema_root: Some(schema_root()),
             expected_content_hash: None,
             strict_secrets: false,
         };
