@@ -617,6 +617,11 @@ heavy-lane-host-integration: heavy-lane-guard
 	if [ ! -e /dev/kvm ]; then \
 	echo "test-host-integration: /dev/kvm absent - runNixOSTest will fall back to slow TCG emulation"; \
 	fi; \
+	cache_dir="$${SCCACHE_DIR:-$$HOME/.cache/d2b-sccache}"; \
+	mkdir -p "$$cache_dir"; \
+	cache_dir="$$(cd "$$cache_dir" && pwd -P)"; \
+	export SCCACHE_DIR="$$cache_dir"; \
+	echo "test-host-integration: sccache cache: $$cache_dir"; \
 	root="$$(pwd)"; \
 	names="$$(nix eval --raw --impure --no-warn-dirty --expr "builtins.concatStringsSep \" \" (builtins.attrNames (builtins.getFlake \"git+file://$$root\").vmChecks.$$system)")"; \
 	if [ -z "$$names" ]; then \
@@ -629,7 +634,8 @@ heavy-lane-host-integration: heavy-lane-guard
 	set -- "$$@" ".#vmChecks.$$system.$$name"; \
 	done; \
 	echo "==> nix build $$*"; \
-	nix build --no-link --print-build-logs "$$@"
+	nix build --option extra-sandbox-paths "$$cache_dir" --no-link --print-build-logs "$$@"
+
 ## test-hardware - G-hw: real GPU/YubiKey/hardware-TPM passthrough + full
 ## microVM boot. NixOS host WITH the devices only; CI cannot run this.
 ## Public heavy lanes: acquire a slot, then run the raw work behind the gate.
