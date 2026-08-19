@@ -166,6 +166,14 @@ in
     expr = lifecycleCfg.d2b.manifest."work-vm".lifecycle.gracefulShutdown.timeoutSeconds;
     expected = 45;
   };
+  "daemon-autostart/manifest-workload-policy" = {
+    expr = lifecycleCfg.d2b.manifest."work-vm".autostart;
+    expected = false;
+  };
+  "daemon-autostart/manifest-net-policy" = {
+    expr = lifecycleCfg.d2b.manifest."sys-work-net".autostart;
+    expected = true;
+  };
   "daemon-lifecycle/manifest-qemu-graceful-enabled" = {
     expr = lifecycleCfg.d2b.manifest.media.lifecycle.gracefulShutdown.enable;
     expected = true;

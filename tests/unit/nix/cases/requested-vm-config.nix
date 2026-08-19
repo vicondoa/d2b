@@ -92,6 +92,14 @@ in
     };
   };
 
+  "requested-vm-config/cloud-hypervisor-sees-runtime-sockets" = {
+    expr =
+      lib.elem
+        "/run/d2b/vms/sys-dark-net"
+        cfg.d2b._bundle.minijailProfiles."vm-sys-dark-net-cloud-hypervisor".data.mountPolicy.readOnlyPaths;
+    expected = true;
+  };
+
   "requested-vm-config/opaque-physical-usb-refs" = {
     expr = {
       boot = {

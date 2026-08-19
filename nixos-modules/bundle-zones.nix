@@ -112,15 +112,28 @@ let
     // (cfg._resourceCompiler.volumeGenerated.byZone.${zoneName} or { })
     // (cfg._resourceCompiler.volumeShorthand.${zoneName} or { });
 
-  canonicalResource = zoneName: resourceName: resource: {
-    inherit apiVersion;
-    type = resource.type;
-    metadata = {
-      name = resourceName;
-      zone = zoneName;
-    } // optionalMetadata resource;
-    spec = stripRuntime (stripCompilerDefaults (resource.spec or { }));
-  };
+  projectedResource = zoneName: resourceName: resource:
+    if resource.type == "Device"
+      && builtins.hasAttr "devices" (cfg._resourceCompiler or { })
+      && builtins.hasAttr zoneName cfg._resourceCompiler.devices.byZone
+      && builtins.hasAttr resourceName cfg._resourceCompiler.devices.byZone.${zoneName}
+    then cfg._resourceCompiler.devices.byZone.${zoneName}.${resourceName}
+    else resource;
+
+  canonicalResource = zoneName: resourceName: resource:
+    let projected = projectedResource zoneName resourceName resource;
+    in {
+      inherit apiVersion;
+      type = projected.type;
+      metadata = {
+        name = resourceName;
+        zone = zoneName;
+      } // optionalMetadata projected;
+      spec = stripRuntime
+        (if builtins.elem projected.type [ "Host" "Guest" ]
+         then (projected.spec or { })
+         else stripCompilerDefaults (projected.spec or { }));
+    };
 
   sortResources = resources:
     lib.sort

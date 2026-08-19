@@ -1,89 +1,33 @@
-{ config, lib, pkgs, ... }:
+{ config, lib, pkgs, d2bHostTools, ... }:
 
 let
   cfg = config.d2b;
   d2bLib = import ./lib.nix { inherit lib; };
   prebuilt = if cfg.site.usePrebuiltHostTools then import ./prebuilt-packages.nix { inherit pkgs lib; } else { };
 
-  # filter out `target/` dev caches from the source
-  # so the Nix copy stays small (workspace target alone is ~17 GB).
-  packagesSrc = d2bLib.cleanRustPackagesSource ../packages;
-  # d2bd and d2b-gateway-runtime compile the relay transport crate, whose
-  # schema is embedded from the repository-level docs tree.
-  providerPackagesSrc = pkgs.runCommand "d2b-provider-rust-src" { } ''
-    mkdir -p $out/packages
-    cp -r ${packagesSrc}/. $out/packages/
-    mkdir -p $out/docs/reference/schemas/v3/providers
-    cp ${../docs/reference/schemas/v3/providers/transport-azure-relay.transport-settings.json} \
-      $out/docs/reference/schemas/v3/providers/transport-azure-relay.transport-settings.json
-    cp ${../docs/reference/schemas/v3/providers/transport-vsock.transport-binding.json} \
-      $out/docs/reference/schemas/v3/providers/transport-vsock.transport-binding.json
-  '';
-  cargoLock = {
-    lockFile = ../packages/Cargo.lock;
-    outputHashes."wl-proxy-0.1.2" = "sha256-1yO1zgzSyzQ2DnDMpVxcnI5BsTNvXfzIUS+RNlPj4A8=";
-  };
-
-  d2bdSourcePackage = pkgs.rustPlatform.buildRustPackage {
-    pname = "d2bd";
-    version = "0.0.0-bootstrap";
-    src = providerPackagesSrc;
-    sourceRoot = "d2b-provider-rust-src/packages";
-    inherit cargoLock;
-    cargoBuildFlags = [ "--package" "d2bd" ];
-    doCheck = false;
-    # strip the dev-only sccache rustc-wrapper (see
-    # host-broker.nix for full rationale). Writing the empty
-    # rustc-wrapper into .cargo/config.toml shadows the dev
-    # value without touching the parent cargo config.
-    postPatch = ''
-      mkdir -p .cargo
-      cat > .cargo/config.toml <<EOF
-[build]
-rustc-wrapper = ""
-EOF
-      rm -f .cargo/rustc-wrapper.sh
-    '';
-    installPhase = ''
-      runHook preInstall
-      install -Dm755 target/x86_64-unknown-linux-gnu/release/d2bd $out/bin/d2bd 2>/dev/null \
-        || install -Dm755 target/release/d2bd $out/bin/d2bd
-      runHook postInstall
-    '';
-  };
+  d2bdSourcePackage = d2bHostTools.d2bd;
   d2bdPackage = if prebuilt ? d2bd then prebuilt.d2bd else d2bdSourcePackage;
 
   # the user-facing CLI is now the Rust d2b crate
   # (packages/d2b). The pre-v1.0 bash CLI was RETIRED in;
   # ships the daemon-native Rust CLI as the only
   # `d2b` binary on the host.
-  d2bCliSourcePackage = pkgs.rustPlatform.buildRustPackage {
-    pname = "d2b";
-    version = "0.0.0-bootstrap";
-    src = packagesSrc;
-    inherit cargoLock;
-    cargoBuildFlags = [ "--package" "d2b" ];
-    doCheck = false;
-    postPatch = ''
-      mkdir -p .cargo
-      cat > .cargo/config.toml <<EOF
-[build]
-rustc-wrapper = ""
-EOF
-      rm -f .cargo/rustc-wrapper.sh
-    '';
-    installPhase = ''
-      runHook preInstall
-      install -Dm755 target/x86_64-unknown-linux-gnu/release/d2b $out/bin/d2b 2>/dev/null \
-        || install -Dm755 target/release/d2b $out/bin/d2b
-      runHook postInstall
-    '';
-  };
+  d2bCliSourcePackage = d2bHostTools.d2b;
   d2bCliPackage = if prebuilt ? d2b then prebuilt.d2b else d2bCliSourcePackage;
 
   netVmNames = map
     (envName: cfg.envs.${envName}.netName or "sys-${envName}-net")
     (lib.attrNames cfg.envs);
+  zoneResourceRuntimeNames = lib.unique (
+    [ (cfg._zoneCompiler.localRoot or "local-root") ]
+    ++ lib.attrNames (lib.filterAttrs (_: env: env.enable) cfg.envs)
+    ++ lib.attrNames cfg.zones
+  );
+  zoneResourceRuntimeTmpfiles = lib.concatMap
+    (zoneName: [
+      "d ${cfg.site.stateDir}/zones/${zoneName} 0750 root d2bd -"
+    ])
+    zoneResourceRuntimeNames;
   gracefulTimeoutFor = vm:
     if vm.enable && vm.lifecycle.gracefulShutdown.enable then
       if vm.lifecycle.gracefulShutdown.timeoutSeconds == null
@@ -153,55 +97,10 @@ EOF
   # call instead of `[ -L ] / [ -f ] / find -type f` shell
   # check-then-act patterns. Lives in d2b-host because it
   # only depends on libc + nix; no IPC; no async runtime.
-  d2bActivationHelperSourcePackage = pkgs.rustPlatform.buildRustPackage {
-    pname = "d2b-activation-helper";
-    version = "0.0.0-bootstrap";
-    src = packagesSrc;
-    inherit cargoLock;
-    cargoBuildFlags = [ "--package" "d2b-host" "--bin" "d2b-activation-helper" ];
-    doCheck = false;
-    postPatch = ''
-      mkdir -p .cargo
-      cat > .cargo/config.toml <<EOF
-[build]
-rustc-wrapper = ""
-EOF
-      rm -f .cargo/rustc-wrapper.sh
-    '';
-    installPhase = ''
-      runHook preInstall
-      install -Dm755 target/x86_64-unknown-linux-gnu/release/d2b-activation-helper $out/bin/d2b-activation-helper 2>/dev/null \
-        || install -Dm755 target/release/d2b-activation-helper $out/bin/d2b-activation-helper
-      runHook postInstall
-    '';
-  };
+  d2bActivationHelperSourcePackage = d2bHostTools.activationHelper;
   d2bActivationHelperPackage = if prebuilt ? "d2b-activation-helper" then prebuilt."d2b-activation-helper" else d2bActivationHelperSourcePackage;
 
-  d2bGatewayRuntimeSourcePackage = pkgs.rustPlatform.buildRustPackage {
-    pname = "d2b-gateway-runtime";
-    version = "0.0.0-bootstrap";
-    src = providerPackagesSrc;
-    sourceRoot = "d2b-provider-rust-src/packages";
-    inherit cargoLock;
-    cargoBuildFlags = [ "--package" "d2b-gateway-runtime" ];
-    doCheck = false;
-    postPatch = ''
-      mkdir -p .cargo
-      cat > .cargo/config.toml <<EOF
-[build]
-rustc-wrapper = ""
-EOF
-      rm -f .cargo/rustc-wrapper.sh
-    '';
-    installPhase = ''
-      runHook preInstall
-      install -Dm755 target/x86_64-unknown-linux-gnu/release/d2b-gateway-enroll $out/bin/d2b-gateway-enroll 2>/dev/null \
-        || install -Dm755 target/release/d2b-gateway-enroll $out/bin/d2b-gateway-enroll
-      install -Dm755 target/x86_64-unknown-linux-gnu/release/d2b-gateway-relay $out/bin/d2b-gateway-relay 2>/dev/null \
-        || install -Dm755 target/release/d2b-gateway-relay $out/bin/d2b-gateway-relay
-      runHook postInstall
-    '';
-  };
+  d2bGatewayRuntimeSourcePackage = d2bHostTools.gatewayRuntime;
   d2bGatewayRuntimePackage = if prebuilt ? "d2b-gateway-runtime" then prebuilt."d2b-gateway-runtime" else d2bGatewayRuntimeSourcePackage;
 
   d2bCliShellArtifactsPackage = pkgs.runCommand "d2b-cli-shell-artifacts" { } ''
@@ -554,7 +453,8 @@ in
       "d /var/lib/d2b/daemon-state 0700 d2bd d2bd -"
       "d /var/cache/d2b 0750 root d2bd -"
       "d /etc/d2b 0750 root d2bd -"
-    ] ++ lib.concatMap realmTmpfilesFor hostLocalRealms;
+    ] ++ zoneResourceRuntimeTmpfiles
+    ++ lib.concatMap realmTmpfilesFor hostLocalRealms;
 
     systemd.services = {
       d2bd = {

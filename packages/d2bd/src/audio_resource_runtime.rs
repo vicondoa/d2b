@@ -18,8 +18,7 @@ use d2b_provider_audio_pipewire::{
     validate_audio_service,
 };
 use d2b_resource_api::{
-    RedbBackend, UnregisteredResourceClient, service::UnavailableUpgradeDispatcher,
-    watch::ResourceWatch,
+    RedbBackend, ResourceApiClient, service::UnavailableUpgradeDispatcher, watch::ResourceWatch,
 };
 use d2b_resource_store::{
     StoreListRequest, StoreOperationContext, StoreProjection, StoreWatchRequest, StoredResource,
@@ -407,7 +406,7 @@ fn has_audio_finalizer(resource: &StoredResource) -> bool {
 }
 
 pub(crate) async fn remove_audio_finalizer(
-    client: &UnregisteredResourceClient<RedbBackend, UnavailableUpgradeDispatcher>,
+    client: &ResourceApiClient<RedbBackend, UnavailableUpgradeDispatcher>,
     resource: &StoredResource,
 ) -> Result<(), AudioResourceRuntimeError> {
     let mut target = wire::ResourceIdentity::new();
@@ -611,7 +610,7 @@ pub(crate) async fn run_audio_watch(
     store: Arc<d2b_resource_store_redb::RedbResourceStore>,
     zone: ZoneId,
     registry: Arc<std::sync::Mutex<Option<AudioResourceRuntime>>>,
-    status_client: Arc<UnregisteredResourceClient<RedbBackend, UnavailableUpgradeDispatcher>>,
+    status_client: Arc<ResourceApiClient<RedbBackend, UnavailableUpgradeDispatcher>>,
 ) {
     loop {
         let Some(batch) = watch.recv().await else {

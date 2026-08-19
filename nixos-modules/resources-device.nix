@@ -376,6 +376,9 @@ let
   canonicalSpec = device:
     let
       spec = device.spec;
+      selectorValue = selector device;
+      canonicalSelector =
+        if selectorValue == { } then null else selectorValue;
       executionDefaults = [
         "defaultDomain"
         "allowedDomains"
@@ -390,7 +393,7 @@ let
     // {
       maxConcurrentClaims = attrOr spec "maxConcurrentClaims" 1;
       inventory = {
-        selector = selector device;
+        selector = canonicalSelector;
       };
     }
     // lib.optionalAttrs (attrOr spec "provider" null != null) {

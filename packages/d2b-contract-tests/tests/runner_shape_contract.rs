@@ -165,6 +165,8 @@ fn swtpm_runner_shape_matches_rendered_snapshot() {
             "--tpmstate",
             "dir=/var/lib/d2b/vms/corp-full/swtpm",
             "--ctrl",
+            "type=unixio,path=/run/d2b/vms/corp-full/tpm-ctrl.sock,mode=0660",
+            "--server",
             "type=unixio,path=/run/d2b/vms/corp-full/tpm.sock,mode=0660",
             "--tpm2",
             "--flags",

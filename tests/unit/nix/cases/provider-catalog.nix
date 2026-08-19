@@ -1027,6 +1027,7 @@ in
         providerConfig = provider.spec.config;
         deviceProviderRef = device.spec.providerRef;
         deviceClass = device.spec.deviceClass;
+        deviceInventorySelector = device.spec.inventory.selector;
         bundleHasProvider = provider != null;
       };
     expected = {
@@ -1034,6 +1035,7 @@ in
       providerConfig = { };
       deviceProviderRef = "Provider/device-tpm";
       deviceClass = "emulated";
+      deviceInventorySelector = null;
       bundleHasProvider = true;
     };
   };

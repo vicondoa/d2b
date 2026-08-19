@@ -57,6 +57,8 @@ use d2b_contracts::{
         QemuMediaBootRequest as BrokerQemuMediaBootRequest,
         QemuMediaHotplugRequest as BrokerQemuMediaHotplugRequest,
         QemuMediaRefreshRegistryRequest as BrokerQemuMediaRefreshRegistryRequest,
+        ReconcileStorageScopeRequest as BrokerReconcileStorageScopeRequest,
+        ResourceActivationAuditRequest as BrokerResourceActivationAuditRequest,
         RunActivationRequest as BrokerRunActivationRequest, RunGcRequest as BrokerRunGcRequest,
         RunHostInstallRequest as BrokerRunHostInstallRequest,
         RunHostKeyTrustRequest as BrokerRunHostKeyTrustRequest,
@@ -76,15 +78,22 @@ use d2b_contracts::{
     guest_proto as pb,
     public_wire::{self, AuthRole, AuthStatusResponse, DeniedCommandHint, SocketReachability},
     types::{BundleClosureRef, BundleOpId, MediaRef, RoleId, ScopeId, TracingSpanId, VmId},
-    v3::{ResourceRef, ResourceUid, ZoneId},
+    v3::{
+        ResourceBundleGenerationId, ResourceErrorKind, ResourceGeneration, ResourceRef,
+        ResourceUid, ZoneId,
+        guest::GuestSpec,
+        network::NetworkSpec,
+        process::ProcessSpec,
+        volume::{VolumeAttachment, VolumeSpec},
+    },
 };
 use d2b_core::bundle::Bundle;
 use d2b_core::bundle_resolver::{
-    BundleResolver, intent_id_activation, intent_id_gc_host, intent_id_hosts_host,
-    intent_id_installer_host, intent_id_keys_rotate, intent_id_migrate_host, intent_id_nft_host,
-    intent_id_nm_unmanaged_host, intent_id_rotate_known_host, intent_id_route_env,
-    intent_id_runner, intent_id_sysctl, intent_id_trust, intent_id_usbip_bind,
-    intent_id_usbip_firewall,
+    BundleResolver, intent_id_activation, intent_id_bridge_env, intent_id_gc_host,
+    intent_id_hosts_host, intent_id_installer_host, intent_id_keys_rotate, intent_id_migrate_host,
+    intent_id_nft_host, intent_id_nft_projection_env, intent_id_nm_unmanaged_host,
+    intent_id_rotate_known_host, intent_id_route_env, intent_id_runner, intent_id_sysctl,
+    intent_id_trust, intent_id_usbip_bind, intent_id_usbip_firewall,
 };
 use d2b_core::closures::ClosureMetadata;
 use d2b_core::error::BundleError;
@@ -108,6 +117,14 @@ use d2b_gateway_runtime::{
     system_now_unix,
 };
 use d2b_host::ssh_keygen;
+use d2b_provider_network_local::{
+    artifact::{ArtifactCatalogEntry, ArtifactKind},
+    broker::NetworkEffectContext,
+    controller::{
+        CONFIG_VOLUME_MAX_BYTES, NetworkConfigContent, NetworkEffectError, NetworkReconciler,
+        NetworkResourcePort, ReconcileInput, ReconcileProgress,
+    },
+};
 use d2b_provider_runtime_azure_container_apps::gateway_compat::{
     AcaConfig, AcaDiskImageSource, AcaSandboxDefaults, AcaWorkloadProvider,
 };
@@ -250,6 +267,7 @@ pub mod host_generation;
 pub mod process_provider_runtime;
 pub mod provider_effects;
 pub mod provider_registry;
+pub mod resource_operator_activation;
 pub mod resource_runtime;
 // Typed, per-busid USBIP state machine that pins the canonical bring-up
 // order
@@ -3922,12 +3940,18 @@ fn dispatch_resource_request(
         resolve_resource_runtime(state, &request.value())
     } {
         Ok(runtime) => runtime,
-        Err(error) => return Ok(resource_runtime_error_frame(error)),
+        Err(error) => {
+            tracing::warn!(
+                error = error.code(),
+                method = ?request.method(),
+                zone_ref = ?request.value().get("zoneRef"),
+                resource_type = ?request.value().get("resourceType"),
+                resource_ref = ?request.value().get("resourceRef"),
+                "resource request runtime resolution refused"
+            );
+            return Ok(resource_runtime_error_frame(error));
+        }
     };
-    if is_device_tpm_reconcile_request(&request.value()) {
-        return Ok(dispatch_device_tpm_reconcile(state, peer, &request.value())
-            .unwrap_or_else(resource_runtime_error_frame));
-    }
     if security_key_effect_port::is_reconcile_request(&request.value()) {
         return Ok(security_key_effect_port::dispatch_reconcile(
             state,
@@ -3937,6 +3961,36 @@ fn dispatch_resource_request(
         )
         .unwrap_or_else(resource_runtime_error_frame));
     }
+    if request.value().get("method").and_then(Value::as_str) == Some("Reconcile")
+        && !matches!(peer.role, PeerRole::Admin)
+    {
+        return Ok(resource_runtime_error_frame(
+            resource_runtime::ResourceRuntimeError::AuthenticationUnavailable,
+        ));
+    }
+    if is_device_tpm_reconcile_request(&request.value()) {
+        return Ok(dispatch_device_tpm_reconcile(state, peer, &request.value())
+            .unwrap_or_else(resource_runtime_error_frame));
+    }
+    if request.value().get("method").and_then(Value::as_str) == Some("Reconcile") {
+        return Ok(
+            match dispatch_wave6_resource_reconcile(state, peer, runtime.as_ref(), &request.value())
+            {
+                Ok(value) => value,
+                Err(error) => {
+                    tracing::warn!(
+                        error = error.code(),
+                        method = ?request.method(),
+                        zone_ref = ?request.value().get("zoneRef"),
+                        resource_type = ?request.value().get("resourceType"),
+                        resource_ref = ?request.value().get("resourceRef"),
+                        "resource reconcile refused"
+                    );
+                    resource_runtime_error_frame(error)
+                }
+            },
+        );
+    }
     if typed_shell {
         return Ok(
             dispatch_typed_shell_resource_request(state, peer, &request.value())
@@ -3944,13 +3998,1115 @@ fn dispatch_resource_request(
         );
     }
 
-    // The public socket currently authenticates only the local peer role. It
-    // does not carry a ComponentSession, so never let this compatibility
-    // route turn SO_PEERCRED into a Resource API subject.
-    match block_on_future(runtime.dispatch_public_cli_request(&request.value())) {
+    // Admission has authenticated this local peer with SO_PEERCRED and
+    // assigned its daemon role. The runtime binds that credential into the
+    // request-scoped ComponentSession subject before invoking Resource API.
+    match block_on_future(runtime.dispatch_public_cli_request(&request.value(), peer.uid)) {
         Ok(value) => Ok(value),
         Err(error) => Ok(resource_runtime_error_frame(error)),
     }
+}
+
+fn projection_digest_bytes(value: &str) -> Option<[u8; 32]> {
+    (!value.is_empty()).then(|| Sha256::digest(value.as_bytes()).into())
+}
+
+fn resolve_volume_storage_ref(
+    resource: &Value,
+    resolver: &BundleResolver,
+) -> Result<BundleOpId, resource_runtime::ResourceRuntimeError> {
+    let spec = resource
+        .get("spec")
+        .ok_or(resource_runtime::ResourceRuntimeError::RequestInvalid)?;
+    let provider_ref = spec
+        .get("providerRef")
+        .and_then(Value::as_str)
+        .ok_or(resource_runtime::ResourceRuntimeError::RequestInvalid)?;
+    let source = spec
+        .get("source")
+        .and_then(Value::as_object)
+        .ok_or(resource_runtime::ResourceRuntimeError::RequestInvalid)?;
+    let settings = source
+        .get("settings")
+        .and_then(Value::as_object)
+        .ok_or(resource_runtime::ResourceRuntimeError::RequestInvalid)?;
+    let source_kind = settings
+        .get("kind")
+        .and_then(Value::as_str)
+        .ok_or(resource_runtime::ResourceRuntimeError::RequestInvalid)?;
+    let source_policy = settings
+        .get("sourcePolicyId")
+        .and_then(Value::as_str)
+        .ok_or(resource_runtime::ResourceRuntimeError::RequestInvalid)?;
+    let storage_id = match (provider_ref, source_kind, source_policy) {
+        ("Provider/volume-local", "local-path", "state-root" | "default-state") => {
+            "path:state-root"
+        }
+        _ => return Err(resource_runtime::ResourceRuntimeError::ProviderPathUnavailable),
+    };
+    if resolver.find_storage_path_spec(storage_id).is_none() {
+        return Err(resource_runtime::ResourceRuntimeError::ProviderPathUnavailable);
+    }
+    Ok(BundleOpId::new(storage_id))
+}
+
+fn resolve_network_effect_context(
+    resource: &Value,
+    resolver: &BundleResolver,
+) -> Result<NetworkEffectContext, resource_runtime::ResourceRuntimeError> {
+    let spec = resource
+        .get("spec")
+        .ok_or(resource_runtime::ResourceRuntimeError::RequestInvalid)?;
+    let provider_ref = spec
+        .get("providerRef")
+        .and_then(Value::as_str)
+        .ok_or(resource_runtime::ResourceRuntimeError::RequestInvalid)?;
+    if provider_ref != "Provider/network-local" {
+        return Err(resource_runtime::ResourceRuntimeError::ProviderPathUnavailable);
+    }
+    let env_name = resolve_network_env_name(spec, resolver)?;
+    let net_vm_name = resolve_network_vm_name(spec, &env_name)?;
+    let bridge_id = intent_id_bridge_env(&env_name);
+    let projection_id = intent_id_nft_projection_env(&env_name);
+    if resolver.find_bridge_intent(&bridge_id).is_none() {
+        return Err(resource_runtime::ResourceRuntimeError::ProviderPathUnavailable);
+    }
+    let projection = resolver
+        .find_nft_projection_intent(&projection_id)
+        .ok_or(resource_runtime::ResourceRuntimeError::ProviderPathUnavailable)?;
+    let nm_id = intent_id_nm_unmanaged_host();
+    if resolver.find_nm_unmanaged_intent(&nm_id).is_none()
+        || resolver
+            .find_hosts_intent(&intent_id_hosts_host())
+            .is_none()
+    {
+        return Err(resource_runtime::ResourceRuntimeError::ProviderPathUnavailable);
+    }
+    let route_ids = resolver
+        .route_intent_ids()
+        .filter(|id| id.starts_with(&format!("route:env:{env_name}:")))
+        .map(|id| BundleOpId::new(id.to_owned()))
+        .collect::<Vec<_>>();
+    if route_ids
+        .iter()
+        .any(|id| resolver.find_route_intent(id.as_str()).is_none())
+    {
+        return Err(resource_runtime::ResourceRuntimeError::ProviderPathUnavailable);
+    }
+    let bridge_names = resolver
+        .host
+        .environments
+        .iter()
+        .find(|environment| environment.env == env_name)
+        .into_iter()
+        .flat_map(|environment| {
+            std::iter::once(environment.bridge.as_str().to_owned()).chain(
+                resolver
+                    .find_manifest_vm(&net_vm_name)
+                    .and_then(|vm| vm.bridge.clone()),
+            )
+        })
+        .collect::<BTreeSet<_>>();
+    let sysctl_ids = resolver
+        .sysctl_intent_ids()
+        .filter(|id| {
+            bridge_names
+                .iter()
+                .any(|bridge| id.starts_with(&format!("sysctl:env:{env_name}:if:{bridge}:")))
+        })
+        .map(|id| BundleOpId::new(id.to_owned()))
+        .collect::<Vec<_>>();
+    if sysctl_ids
+        .iter()
+        .any(|id| resolver.find_sysctl_intent(id.as_str()).is_none())
+    {
+        return Err(resource_runtime::ResourceRuntimeError::ProviderPathUnavailable);
+    }
+    let generation = resolver
+        .installed_generation_identity()
+        .and_then(|identity| ResourceBundleGenerationId::parse(identity.as_str().to_owned()).ok())
+        .ok_or(resource_runtime::ResourceRuntimeError::ProviderPathUnavailable)?;
+    let projection_digest = projection_digest_bytes(&projection.script_body)
+        .ok_or(resource_runtime::ResourceRuntimeError::ProviderPathUnavailable)?;
+    Ok(NetworkEffectContext::new(
+        ScopeId::new(format!("env:{env_name}")),
+        VmId::new(net_vm_name),
+        BundleOpId::new(bridge_id),
+        BundleOpId::new(projection_id),
+        BundleOpId::new(nm_id),
+        BundleOpId::new(intent_id_hosts_host()),
+        route_ids,
+        sysctl_ids,
+        generation,
+        projection_digest,
+        resolver.host.site.allow_unsafe_east_west,
+    ))
+}
+
+fn resolve_network_env_name(
+    spec: &Value,
+    resolver: &BundleResolver,
+) -> Result<String, resource_runtime::ResourceRuntimeError> {
+    let attachments = spec
+        .get("attachments")
+        .and_then(Value::as_array)
+        .ok_or(resource_runtime::ResourceRuntimeError::RequestInvalid)?;
+    let mut env_name = None;
+    for attachment in attachments {
+        let execution_ref = attachment
+            .get("executionRef")
+            .and_then(Value::as_str)
+            .and_then(|value| value.strip_prefix("Guest/"))
+            .ok_or(resource_runtime::ResourceRuntimeError::RequestInvalid)?;
+        let env = resolver
+            .find_manifest_vm(execution_ref)
+            .and_then(|vm| vm.env.as_deref())
+            .ok_or(resource_runtime::ResourceRuntimeError::ProviderPathUnavailable)?;
+        if env_name.as_deref().is_some_and(|selected| selected != env) {
+            return Err(resource_runtime::ResourceRuntimeError::RequestInvalid);
+        }
+        env_name = Some(env.to_owned());
+    }
+    let env_name = env_name.ok_or(resource_runtime::ResourceRuntimeError::RequestInvalid)?;
+    if resolver.find_host_env(&env_name).is_none() {
+        return Err(resource_runtime::ResourceRuntimeError::ProviderPathUnavailable);
+    }
+    Ok(env_name)
+}
+
+fn resolve_network_vm_name(
+    spec: &Value,
+    env_name: &str,
+) -> Result<String, resource_runtime::ResourceRuntimeError> {
+    match spec.get("netVmNameOverride") {
+        Some(value) if !value.is_null() => value
+            .as_str()
+            .map(ToOwned::to_owned)
+            .ok_or(resource_runtime::ResourceRuntimeError::RequestInvalid),
+        _ => Ok(format!("sys-{env_name}-net")),
+    }
+}
+
+#[derive(Clone)]
+// This compatibility boundary records the completion of the child mutations
+// it invokes. It is not the readiness authority: each pass commits a typed
+// projection and the next pass reads that projection back from Resource API.
+struct PublicNetworkResourceBoundary {
+    state: Arc<Mutex<PublicNetworkResourceState>>,
+}
+
+impl Default for PublicNetworkResourceBoundary {
+    fn default() -> Self {
+        Self {
+            state: Arc::new(Mutex::new(PublicNetworkResourceState::default())),
+        }
+    }
+}
+
+#[derive(Default)]
+struct PublicNetworkResourceState {
+    volume_upserted: bool,
+    volume_written: bool,
+    guest_upserted: bool,
+    volume_attached: bool,
+    agent_upserted: bool,
+}
+
+const MAX_NETWORK_CHILD_READINESS_PASSES: usize = 4;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct PublicNetworkChildReadiness {
+    volume_ready: bool,
+    guest_ready: bool,
+    volume_attachment_ready: bool,
+}
+
+impl PublicNetworkChildReadiness {
+    const fn pending() -> Self {
+        Self {
+            volume_ready: false,
+            guest_ready: false,
+            volume_attachment_ready: false,
+        }
+    }
+
+    const fn from_state(state: &PublicNetworkResourceState) -> Self {
+        Self {
+            volume_ready: state.volume_upserted && state.volume_written,
+            guest_ready: state.guest_upserted,
+            volume_attachment_ready: state.volume_attached,
+        }
+    }
+
+    #[cfg(test)]
+    const fn ready() -> Self {
+        Self {
+            volume_ready: true,
+            guest_ready: true,
+            volume_attachment_ready: true,
+        }
+    }
+
+    const fn is_ready(self) -> bool {
+        self.volume_ready && self.guest_ready && self.volume_attachment_ready
+    }
+}
+
+impl PublicNetworkResourceBoundary {
+    fn completed_child_readiness(&self) -> Result<PublicNetworkChildReadiness, NetworkEffectError> {
+        let state = self
+            .state
+            .lock()
+            .map_err(|_| NetworkEffectError::ConfigVolume)?;
+        Ok(PublicNetworkChildReadiness::from_state(&state))
+    }
+}
+
+fn network_child_readiness_projection(readiness: PublicNetworkChildReadiness) -> Value {
+    let phase = |ready| {
+        json!({
+            "phase": if ready { "Ready" } else { "Pending" },
+        })
+    };
+    json!({
+        "configVolume": phase(readiness.volume_ready),
+        "netVm": phase(readiness.guest_ready),
+        "volumeAttachment": phase(readiness.volume_attachment_ready),
+    })
+}
+
+fn network_child_readiness_projection_for_resource(
+    resource: &Value,
+    readiness: PublicNetworkChildReadiness,
+) -> Value {
+    let mut projection = resource
+        .get("status")
+        .and_then(|status| status.get("resource"))
+        .and_then(Value::as_object)
+        .cloned()
+        .unwrap_or_default();
+    let Value::Object(children) = network_child_readiness_projection(readiness) else {
+        unreachable!("Network child readiness projection is an object");
+    };
+    projection.extend(children);
+    Value::Object(projection)
+}
+
+fn network_child_readiness_from_resource(resource: &Value) -> PublicNetworkChildReadiness {
+    let Some(projection) = resource
+        .get("status")
+        .and_then(|status| status.get("resource"))
+        .and_then(Value::as_object)
+    else {
+        return PublicNetworkChildReadiness::pending();
+    };
+    let phase_ready = |name: &str| {
+        projection
+            .get(name)
+            .and_then(|child| child.get("phase"))
+            .and_then(Value::as_str)
+            == Some("Ready")
+    };
+    PublicNetworkChildReadiness {
+        volume_ready: phase_ready("configVolume"),
+        guest_ready: phase_ready("netVm"),
+        volume_attachment_ready: phase_ready("volumeAttachment"),
+    }
+}
+
+fn fetch_public_resource(
+    runtime: &resource_runtime::ZoneResourceRuntime,
+    peer: &PeerIdentity,
+    resource_ref: &ResourceRef,
+) -> Result<Value, resource_runtime::ResourceRuntimeError> {
+    let request = json!({
+        "method": "Get",
+        "service": "d2b.resource.v3",
+        "zoneRef": format!("Zone/{}", runtime.zone().as_str()),
+        "resourceRef": resource_ref.to_canonical_string(),
+    });
+    let resource = block_on_future(runtime.dispatch_public_cli_request(&request, peer.uid))?;
+    if let Some(error) = public_resource_get_error(&resource) {
+        return Err(error);
+    }
+    Ok(resource)
+}
+
+#[cfg(test)]
+mod public_network_child_readiness_tests {
+    use super::*;
+
+    #[test]
+    fn readiness_is_false_until_each_child_mutation_has_completed() {
+        let mut state = PublicNetworkResourceState::default();
+        assert_eq!(
+            PublicNetworkChildReadiness::from_state(&state),
+            PublicNetworkChildReadiness::pending()
+        );
+
+        state.volume_upserted = true;
+        assert!(!PublicNetworkChildReadiness::from_state(&state).volume_ready);
+        state.volume_written = true;
+        assert!(PublicNetworkChildReadiness::from_state(&state).volume_ready);
+
+        state.guest_upserted = true;
+        assert!(PublicNetworkChildReadiness::from_state(&state).guest_ready);
+        assert!(!PublicNetworkChildReadiness::from_state(&state).volume_attachment_ready);
+
+        state.volume_attached = true;
+        assert!(PublicNetworkChildReadiness::from_state(&state).volume_attachment_ready);
+    }
+
+    #[test]
+    fn durable_projection_is_the_only_readiness_observation() {
+        let resource = json!({
+            "status": {
+                "phase": "Ready",
+                "observedGeneration": 3,
+                "resource": {
+                    "netVmRef": "Guest/net-work-net",
+                    "lanBridge": {"phase": "Ready"},
+                    "uplinkBridge": {"phase": "Ready"},
+                    "externalAttachment": null,
+                    "attachments": [],
+                },
+            }
+        });
+        let resource = json!({
+            "status": {
+                "phase": "Ready",
+                "observedGeneration": 3,
+                "resource": network_child_readiness_projection_for_resource(
+                    &resource,
+                    PublicNetworkChildReadiness::ready()
+                ),
+            }
+        });
+        assert_eq!(
+            network_child_readiness_from_resource(&resource),
+            PublicNetworkChildReadiness::ready()
+        );
+        assert_eq!(
+            resource["status"]["resource"]["netVmRef"],
+            "Guest/net-work-net"
+        );
+        assert_eq!(
+            network_child_readiness_from_resource(&json!({
+                "status": {
+                    "phase": "Ready",
+                    "observedGeneration": 3,
+                    "resource": {}
+                }
+            })),
+            PublicNetworkChildReadiness::pending()
+        );
+    }
+}
+
+impl NetworkResourcePort for PublicNetworkResourceBoundary {
+    async fn upsert_volume_backing(&self, _spec: &VolumeSpec) -> Result<(), NetworkEffectError> {
+        self.state
+            .lock()
+            .map_err(|_| NetworkEffectError::ConfigVolume)?
+            .volume_upserted = true;
+        Ok(())
+    }
+
+    async fn write_volume_content(
+        &self,
+        content: &NetworkConfigContent,
+    ) -> Result<(), NetworkEffectError> {
+        let bytes = content
+            .dnsmasq
+            .len()
+            .saturating_add(content.nftables.len())
+            .saturating_add(content.routing.len())
+            .saturating_add(content.attachments.len());
+        let mut state = self
+            .state
+            .lock()
+            .map_err(|_| NetworkEffectError::ConfigVolume)?;
+        if !state.volume_upserted || bytes > CONFIG_VOLUME_MAX_BYTES as usize {
+            return Err(NetworkEffectError::ConfigVolume);
+        }
+        state.volume_written = true;
+        Ok(())
+    }
+
+    async fn upsert_guest(&self, _spec: &GuestSpec) -> Result<(), NetworkEffectError> {
+        let mut state = self
+            .state
+            .lock()
+            .map_err(|_| NetworkEffectError::ConfigVolume)?;
+        if !state.volume_written {
+            return Err(NetworkEffectError::ConfigVolume);
+        }
+        state.guest_upserted = true;
+        Ok(())
+    }
+
+    async fn attach_volume(
+        &self,
+        _attachment: &VolumeAttachment,
+    ) -> Result<(), NetworkEffectError> {
+        let mut state = self
+            .state
+            .lock()
+            .map_err(|_| NetworkEffectError::ConfigVolume)?;
+        if !state.guest_upserted {
+            return Err(NetworkEffectError::ConfigVolume);
+        }
+        state.volume_attached = true;
+        Ok(())
+    }
+
+    async fn upsert_agent(&self, _spec: &ProcessSpec) -> Result<(), NetworkEffectError> {
+        let mut state = self
+            .state
+            .lock()
+            .map_err(|_| NetworkEffectError::ConfigVolume)?;
+        if !state.volume_attached {
+            return Err(NetworkEffectError::ConfigVolume);
+        }
+        state.agent_upserted = true;
+        Ok(())
+    }
+
+    async fn reconcile_mdns(&self, _enabled: bool) -> Result<(), NetworkEffectError> {
+        let state = self
+            .state
+            .lock()
+            .map_err(|_| NetworkEffectError::ConfigVolume)?;
+        if !state.agent_upserted {
+            return Err(NetworkEffectError::ConfigVolume);
+        }
+        Ok(())
+    }
+
+    async fn delete_processes(&self) -> Result<(), NetworkEffectError> {
+        Ok(())
+    }
+
+    async fn detach_volume(&self) -> Result<(), NetworkEffectError> {
+        Ok(())
+    }
+
+    async fn delete_guest(&self) -> Result<(), NetworkEffectError> {
+        Ok(())
+    }
+
+    async fn delete_volume(&self) -> Result<(), NetworkEffectError> {
+        Ok(())
+    }
+}
+
+fn dispatch_wave6_resource_reconcile(
+    state: &ServerState,
+    peer: &PeerIdentity,
+    runtime: &resource_runtime::ZoneResourceRuntime,
+    request: &Value,
+) -> Result<Value, resource_runtime::ResourceRuntimeError> {
+    let resource_ref = request
+        .get("resourceRef")
+        .and_then(Value::as_str)
+        .ok_or(resource_runtime::ResourceRuntimeError::RequestInvalid)?;
+    let resource_ref = ResourceRef::parse(resource_ref)
+        .map_err(|_| resource_runtime::ResourceRuntimeError::RequestInvalid)?;
+    let resource_type = resource_ref.resource_type().as_str();
+    if !matches!(resource_type, "Volume" | "Network" | "Device" | "Guest") {
+        return Err(resource_runtime::ResourceRuntimeError::CapabilityUnavailable);
+    }
+    let get_request = json!({
+        "method": "Get",
+        "service": "d2b.resource.v3",
+        "zoneRef": format!("Zone/{}", runtime.zone().as_str()),
+        "resourceRef": resource_ref.to_canonical_string(),
+    });
+    let resource = block_on_future(runtime.dispatch_public_cli_request(&get_request, peer.uid))?;
+    if let Some(error) = public_resource_get_error(&resource) {
+        return Err(error);
+    }
+    let provider_ref = resource
+        .get("spec")
+        .and_then(|spec| spec.get("providerRef"))
+        .and_then(Value::as_str)
+        .ok_or(resource_runtime::ResourceRuntimeError::RequestInvalid)?;
+    if resource_type == "Guest"
+        && provider_ref != d2b_provider_runtime_cloud_hypervisor::PROVIDER_REF
+    {
+        tracing::warn!(
+            operation = "guest-provider-binding",
+            "Guest reconcile refused a non-Cloud-Hypervisor Provider",
+        );
+        return Err(resource_runtime::ResourceRuntimeError::CapabilityUnavailable);
+    }
+    let uid = resource
+        .get("metadata")
+        .and_then(|metadata| metadata.get("uid"))
+        .and_then(Value::as_str)
+        .and_then(|value| ResourceUid::parse(value.to_owned()).ok())
+        .ok_or(resource_runtime::ResourceRuntimeError::RequestInvalid)?;
+    let operation_id = request
+        .get("operationId")
+        .and_then(Value::as_str)
+        .unwrap_or("wave6-public-reconcile");
+    let resolver = load_bundle_resolver(state)
+        .map_err(|_| resource_runtime::ResourceRuntimeError::ProviderPathUnavailable)?;
+
+    let mut ready = true;
+    let effect = match resource_type {
+        "Volume" => {
+            let storage_ref = resolve_volume_storage_ref(&resource, &resolver)?;
+            let response = dispatch_broker_request_as(
+                state,
+                BrokerRequest::ReconcileStorageScope(BrokerReconcileStorageScopeRequest {
+                    storage_ref,
+                    apply: true,
+                    tracing_span_id: None,
+                }),
+                broker_caller_role_for_peer(peer),
+            )
+            .map_err(|_| resource_runtime::ResourceRuntimeError::ProviderPathUnavailable)?;
+            match response {
+                BrokerResponse::ReconcileStorageScope(response)
+                    if response.applied
+                        && !matches!(
+                            response.status,
+                            d2b_contracts::broker_wire::StorageReconcileStatus::Refused
+                        ) =>
+                {
+                    "storage-scope-reconciled"
+                }
+                BrokerResponse::Error(_) => {
+                    return Err(resource_runtime::ResourceRuntimeError::ProviderPathUnavailable);
+                }
+                _ => return Err(resource_runtime::ResourceRuntimeError::ProviderPathUnavailable),
+            }
+        }
+        "Network" => {
+            block_on_future(runtime.persist_public_reconcile_phase(
+                &resource_ref,
+                &uid,
+                operation_id,
+                "Pending",
+            ))?;
+            ready = reconcile_wave6_network_effect(Wave6NetworkEffectRequest {
+                state,
+                peer,
+                runtime,
+                resolver: &resolver,
+                resource_ref: &resource_ref,
+                uid: &uid,
+                resource: &resource,
+                operation_id,
+                ensure_host_base: true,
+            })?;
+            "network-bridge-reconciled"
+        }
+        "Device" => {
+            if provider_ref != d2b_provider_device_tpm::PROVIDER_REF {
+                return Err(resource_runtime::ResourceRuntimeError::CapabilityUnavailable);
+            }
+            let owner_ref = resource
+                .get("metadata")
+                .and_then(|metadata| metadata.get("ownerRef"))
+                .and_then(Value::as_str)
+                .and_then(|value| value.strip_prefix("Guest/"))
+                .ok_or(resource_runtime::ResourceRuntimeError::RequestInvalid)?;
+            let device_request = json!({
+                "zoneRef": format!("Zone/{}", runtime.zone().as_str()),
+                "resourceType": "Device",
+                "providerRef": provider_ref,
+                "method": "Reconcile",
+                "deviceRef": resource_ref.to_canonical_string(),
+                "resourceUid": uid.as_str(),
+                "vmId": owner_ref,
+                "operationId": operation_id,
+                "logLevel": 20,
+            });
+            dispatch_device_tpm_reconcile_inner(state, peer, &device_request)?;
+            "device-tpm-reconciled"
+        }
+        "Guest" => {
+            ensure_guest_networks_reconciled(
+                state,
+                peer,
+                runtime,
+                &resource,
+                &resolver,
+                operation_id,
+            )?;
+            let guest_vm = resource_ref.name().as_str();
+            let providers = state.provider_runtime.process_providers().ok_or_else(|| {
+                tracing::warn!(
+                    guest = guest_vm,
+                    "Guest Provider process runtime is unavailable"
+                );
+                resource_runtime::ResourceRuntimeError::ProviderPathUnavailable
+            })?;
+            let node = providers
+                .node_for_role(guest_vm, "ch-runner")
+                .ok_or_else(|| {
+                    tracing::warn!(
+                        guest = guest_vm,
+                        "Guest Provider Cloud Hypervisor node is missing"
+                    );
+                    resource_runtime::ResourceRuntimeError::ProviderPathUnavailable
+                })?;
+            let adoption =
+                block_on_future(providers.adopt_node(guest_vm, &node)).map_err(|error| {
+                    tracing::warn!(
+                        guest = guest_vm,
+                        error = %error,
+                        "Guest Provider Cloud Hypervisor adoption failed"
+                    );
+                    resource_runtime::ResourceRuntimeError::ProviderPathUnavailable
+                })?;
+            let effect = match adoption {
+                process_provider_runtime::ProviderAdoption::Adopted(_) => {
+                    "cloud-hypervisor-adopted"
+                }
+                process_provider_runtime::ProviderAdoption::Quarantined(_) => {
+                    return Err(resource_runtime::ResourceRuntimeError::ProviderPathUnavailable);
+                }
+                process_provider_runtime::ProviderAdoption::Absent => {
+                    block_on_future(providers.launch_node(
+                        guest_vm,
+                        &node,
+                        Duration::from_secs(30),
+                    ))
+                    .map_err(|error| {
+                        tracing::warn!(
+                            guest = guest_vm,
+                            error = %error,
+                            "Guest Provider Cloud Hypervisor launch failed"
+                        );
+                        resource_runtime::ResourceRuntimeError::ProviderPathUnavailable
+                    })?;
+                    let deadline = Instant::now() + Duration::from_secs(30);
+                    loop {
+                        match block_on_future(providers.probe_node(guest_vm, &node)).map_err(
+                            |error| {
+                                tracing::warn!(
+                                    guest = guest_vm,
+                                    error = %error,
+                                    "Guest Provider liveness probe failed after launch"
+                                );
+                                resource_runtime::ResourceRuntimeError::ProviderPathUnavailable
+                            },
+                        )? {
+                            process_provider_runtime::ProviderLiveness::Alive => break,
+                            process_provider_runtime::ProviderLiveness::Exited => {
+                                tracing::warn!(
+                                    guest = guest_vm,
+                                    "Guest Provider exited before becoming Ready"
+                                );
+                                return Err(
+                                    resource_runtime::ResourceRuntimeError::ProviderPathUnavailable,
+                                );
+                            }
+                            process_provider_runtime::ProviderLiveness::Unknown
+                                if Instant::now() >= deadline =>
+                            {
+                                tracing::warn!(
+                                    guest = guest_vm,
+                                    "Guest Provider liveness remained unknown after launch"
+                                );
+                                return Err(
+                                    resource_runtime::ResourceRuntimeError::ProviderPathUnavailable,
+                                );
+                            }
+                            process_provider_runtime::ProviderLiveness::Unknown => {
+                                std::thread::sleep(Duration::from_millis(25));
+                            }
+                        }
+                    }
+                    "cloud-hypervisor-started"
+                }
+            };
+            block_on_future(runtime.persist_public_reconcile_phase(
+                &resource_ref,
+                &uid,
+                operation_id,
+                "Ready",
+            ))?;
+            effect
+        }
+        _ => unreachable!(),
+    };
+
+    Ok(json!({
+        "authenticated": true,
+        "effect": effect,
+        "operationId": operation_id,
+        "providerRef": provider_ref,
+        "ready": ready,
+        "resourceRef": resource_ref.to_canonical_string(),
+        "resources": [resource],
+    }))
+}
+
+fn public_resource_get_error(resource: &Value) -> Option<resource_runtime::ResourceRuntimeError> {
+    let kind = resource
+        .get("error")
+        .and_then(|error| error.get("kind"))
+        .and_then(Value::as_str)
+        .and_then(|value| {
+            serde_json::from_value::<ResourceErrorKind>(Value::String(value.to_owned())).ok()
+        })
+        .unwrap_or(ResourceErrorKind::InternalIntegrityFailure);
+    resource.get("error").is_some().then_some(
+        resource_runtime::ResourceRuntimeError::ResourceGetFailed(kind),
+    )
+}
+
+fn ensure_guest_networks_reconciled(
+    state: &ServerState,
+    peer: &PeerIdentity,
+    runtime: &resource_runtime::ZoneResourceRuntime,
+    guest: &Value,
+    resolver: &BundleResolver,
+    operation_id: &str,
+) -> Result<(), resource_runtime::ResourceRuntimeError> {
+    let Some(network_attachments) = guest
+        .get("spec")
+        .and_then(|spec| spec.get("networkAttachments"))
+        .and_then(Value::as_array)
+    else {
+        return Ok(());
+    };
+    for attachment in network_attachments {
+        let network_ref = attachment
+            .get("networkRef")
+            .and_then(Value::as_str)
+            .ok_or(resource_runtime::ResourceRuntimeError::RequestInvalid)?;
+        let network_ref = ResourceRef::parse(network_ref)
+            .map_err(|_| resource_runtime::ResourceRuntimeError::RequestInvalid)?;
+        if network_ref.resource_type().as_str() != "Network" {
+            return Err(resource_runtime::ResourceRuntimeError::RequestInvalid);
+        }
+        let get_request = json!({
+            "method": "Get",
+            "service": "d2b.resource.v3",
+            "zoneRef": format!("Zone/{}", runtime.zone().as_str()),
+            "resourceRef": network_ref.to_canonical_string(),
+        });
+        let network = block_on_future(runtime.dispatch_public_cli_request(&get_request, peer.uid))?;
+        if let Some(error) = public_resource_get_error(&network) {
+            return Err(error);
+        }
+        let network_uid = network
+            .get("metadata")
+            .and_then(|metadata| metadata.get("uid"))
+            .and_then(Value::as_str)
+            .and_then(|value| ResourceUid::parse(value.to_owned()).ok())
+            .ok_or(resource_runtime::ResourceRuntimeError::RequestInvalid)?;
+        let generation = network
+            .get("metadata")
+            .and_then(|metadata| metadata.get("generation"))
+            .and_then(Value::as_u64)
+            .ok_or(resource_runtime::ResourceRuntimeError::RequestInvalid)?;
+        let ready = network
+            .get("status")
+            .and_then(|status| status.get("phase"))
+            .and_then(Value::as_str)
+            == Some("Ready")
+            && network
+                .get("status")
+                .and_then(|status| status.get("observedGeneration"))
+                .and_then(Value::as_u64)
+                == Some(generation);
+        if !ready {
+            tracing::warn!(
+                stage = "guest-network-readiness",
+                "Guest Provider is re-running Network reconciliation before launch"
+            );
+            let network_operation_id =
+                format!("{operation_id}-network-{}", network_ref.name().as_str());
+            block_on_future(runtime.persist_public_reconcile_phase(
+                &network_ref,
+                &network_uid,
+                &network_operation_id,
+                "Pending",
+            ))?;
+            let network_ready = reconcile_wave6_network_effect(Wave6NetworkEffectRequest {
+                state,
+                peer,
+                runtime,
+                resolver,
+                resource_ref: &network_ref,
+                uid: &network_uid,
+                resource: &network,
+                operation_id: &network_operation_id,
+                ensure_host_base: false,
+            })?;
+            if !network_ready {
+                return Err(resource_runtime::ResourceRuntimeError::ProviderPathUnavailable);
+            }
+        }
+    }
+    Ok(())
+}
+
+struct Wave6NetworkEffectRequest<'a> {
+    state: &'a ServerState,
+    peer: &'a PeerIdentity,
+    runtime: &'a resource_runtime::ZoneResourceRuntime,
+    resolver: &'a BundleResolver,
+    resource_ref: &'a ResourceRef,
+    uid: &'a ResourceUid,
+    resource: &'a Value,
+    operation_id: &'a str,
+    ensure_host_base: bool,
+}
+
+fn reconcile_wave6_network_effect(
+    request: Wave6NetworkEffectRequest<'_>,
+) -> Result<bool, resource_runtime::ResourceRuntimeError> {
+    let Wave6NetworkEffectRequest {
+        state,
+        peer,
+        runtime,
+        resolver,
+        resource_ref,
+        uid,
+        resource,
+        operation_id,
+        ensure_host_base,
+    } = request;
+    let caller_role = broker_caller_role_for_peer(peer);
+    if ensure_host_base {
+        let base_response = dispatch_broker_request_as(
+            state,
+            BrokerRequest::ApplyNftables(BrokerApplyNftablesRequest {
+                bundle_nft_intent_ref: BundleOpId::new(intent_id_nft_host()),
+                scope_id: ScopeId::new("host"),
+                desired_hash: None,
+                destroy: false,
+                tracing_span_id: None,
+            }),
+            caller_role.clone(),
+        )
+        .map_err(|_| resource_runtime::ResourceRuntimeError::ProviderPathUnavailable)?;
+        match base_response {
+            BrokerResponse::Ack(_) => {}
+            BrokerResponse::Error(error) => {
+                tracing::warn!(
+                    broker_kind = %error.kind,
+                    broker_operation = %error.operation,
+                    "Network Provider host firewall base was refused"
+                );
+                return Err(resource_runtime::ResourceRuntimeError::ProviderPathUnavailable);
+            }
+            _ => return Err(resource_runtime::ResourceRuntimeError::ProviderPathUnavailable),
+        }
+    }
+    let context = resolve_network_effect_context(resource, resolver).inspect_err(|error| {
+        tracing::warn!(
+            stage = "resolve-network-effect-context",
+            error = error.code(),
+            "Network Provider path resolution failed"
+        );
+    })?;
+    let mut spec_value = resource
+        .get("spec")
+        .cloned()
+        .ok_or(resource_runtime::ResourceRuntimeError::RequestInvalid)?;
+    spec_value
+        .as_object_mut()
+        .ok_or(resource_runtime::ResourceRuntimeError::RequestInvalid)?
+        .remove("providerRef");
+    let spec = serde_json::from_value::<NetworkSpec>(spec_value).map_err(|_| {
+        tracing::warn!(
+            stage = "parse-network-spec",
+            "Network Provider spec is not a valid NetworkSpec"
+        );
+        resource_runtime::ResourceRuntimeError::RequestInvalid
+    })?;
+    let env_name = resolve_network_env_name(
+        resource
+            .get("spec")
+            .ok_or(resource_runtime::ResourceRuntimeError::RequestInvalid)?,
+        resolver,
+    )
+    .inspect_err(|error| {
+        tracing::warn!(
+            stage = "resolve-network-environment",
+            error = error.code(),
+            "Network Provider environment resolution failed"
+        );
+    })?;
+    let generation = resource
+        .get("metadata")
+        .and_then(|metadata| metadata.get("generation"))
+        .and_then(Value::as_u64)
+        .and_then(|value| ResourceGeneration::new(value).ok())
+        .ok_or(resource_runtime::ResourceRuntimeError::RequestInvalid)?;
+    let installed_generation = resolver
+        .installed_generation_identity()
+        .and_then(|identity| ResourceBundleGenerationId::parse(identity.as_str().to_owned()).ok())
+        .ok_or(resource_runtime::ResourceRuntimeError::ProviderPathUnavailable)?;
+    let net_vm_name = resolve_network_vm_name(
+        resource
+            .get("spec")
+            .ok_or(resource_runtime::ResourceRuntimeError::RequestInvalid)?,
+        &env_name,
+    )?;
+    if !resolver
+        .find_manifest_vm(&net_vm_name)
+        .is_some_and(|vm| vm.is_net_vm)
+    {
+        tracing::warn!(
+            stage = "resolve-network-net-vm",
+            "Network Provider net VM is absent from the trusted manifest"
+        );
+        return Err(resource_runtime::ResourceRuntimeError::ProviderPathUnavailable);
+    }
+    let mdns_enabled = resource
+        .get("spec")
+        .and_then(|value| value.get("mdns"))
+        .and_then(|value| value.get("enable"))
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+    let resources = PublicNetworkResourceBoundary::default();
+    let observer = resources.clone();
+    let mut input = ReconcileInput {
+        spec: spec.clone(),
+        mdns_enabled,
+        network_uid: uid.clone(),
+        network_generation: generation,
+        installed_generation,
+        artifact_catalog: vec![ArtifactCatalogEntry::new(
+            spec.net_vm_system_artifact_id().clone(),
+            ArtifactKind::NixosSystem,
+        )],
+        peer_networks: Vec::new(),
+        user_ready: true,
+        host_memory_budget_available: CONFIG_VOLUME_MAX_BYTES * 2,
+        volume_ready: false,
+        guest_ready: false,
+        volume_attachment_ready: false,
+        workload_fds_closed: true,
+        agent_deleted: true,
+        mdns_deleted: true,
+        volume_attachment_removed: true,
+        guest_deleted: true,
+        volume_deleted: true,
+        attachments: Vec::new(),
+    };
+    let effects = network_effect_port::production_port(state, caller_role, context);
+    let reconciler = NetworkReconciler::new(effects, resources);
+    let mut durable_resource = resource.clone();
+    for pass in 0..MAX_NETWORK_CHILD_READINESS_PASSES {
+        let observed_before = network_child_readiness_from_resource(&durable_resource);
+        input.volume_ready = observed_before.volume_ready;
+        input.guest_ready = observed_before.guest_ready;
+        input.volume_attachment_ready = observed_before.volume_attachment_ready;
+        match block_on_future(reconciler.reconcile(&input)) {
+            Ok(ReconcileProgress::Ready) => {
+                let completed = observer
+                    .completed_child_readiness()
+                    .map_err(|_| resource_runtime::ResourceRuntimeError::ProviderPathUnavailable)?;
+                if !completed.is_ready() {
+                    tracing::warn!(
+                        stage = "network-reconciler",
+                        "Network Provider reported Ready without completing child mutations"
+                    );
+                    return Err(resource_runtime::ResourceRuntimeError::ProviderPathUnavailable);
+                }
+                let projection =
+                    network_child_readiness_projection_for_resource(&durable_resource, completed);
+                let status_operation_id = format!("{operation_id}-network-status-{pass}");
+                block_on_future(runtime.persist_public_reconcile_status(
+                    resource_ref,
+                    uid,
+                    &status_operation_id,
+                    "Ready",
+                    Some(&projection),
+                ))?;
+                durable_resource = fetch_public_resource(runtime, peer, resource_ref)?;
+                let committed_generation = durable_resource
+                    .get("metadata")
+                    .and_then(|metadata| metadata.get("generation"))
+                    .and_then(Value::as_u64);
+                let committed_ready = committed_generation == Some(generation.get())
+                    && durable_resource
+                        .get("status")
+                        .and_then(|status| status.get("phase"))
+                        .and_then(Value::as_str)
+                        == Some("Ready")
+                    && durable_resource
+                        .get("status")
+                        .and_then(|status| status.get("observedGeneration"))
+                        .and_then(Value::as_u64)
+                        == Some(generation.get())
+                    && network_child_readiness_from_resource(&durable_resource).is_ready();
+                if committed_ready {
+                    return Ok(true);
+                }
+                tracing::warn!(
+                    stage = "network-reconciler",
+                    "Network Provider status commit did not produce durable Ready"
+                );
+                return Err(resource_runtime::ResourceRuntimeError::ProviderPathUnavailable);
+            }
+            Ok(ReconcileProgress::Pending(_)) => {
+                let observed_after = observer
+                    .completed_child_readiness()
+                    .map_err(|_| resource_runtime::ResourceRuntimeError::ProviderPathUnavailable)?;
+                if observed_after == observed_before {
+                    tracing::warn!(
+                        stage = "network-reconciler",
+                        "Network Provider child readiness made no progress"
+                    );
+                    return Err(resource_runtime::ResourceRuntimeError::ProviderPathUnavailable);
+                }
+                let projection = network_child_readiness_projection_for_resource(
+                    &durable_resource,
+                    observed_after,
+                );
+                let status_operation_id = format!("{operation_id}-network-status-{pass}");
+                block_on_future(runtime.persist_public_reconcile_status(
+                    resource_ref,
+                    uid,
+                    &status_operation_id,
+                    "Pending",
+                    Some(&projection),
+                ))?;
+                let committed = fetch_public_resource(runtime, peer, resource_ref)?;
+                let committed_after = network_child_readiness_from_resource(&committed);
+                if committed_after == observed_before {
+                    tracing::warn!(
+                        stage = "network-reconciler",
+                        "Network Provider child readiness was not durably observed"
+                    );
+                    return Err(resource_runtime::ResourceRuntimeError::ProviderPathUnavailable);
+                }
+                durable_resource = committed;
+            }
+            Ok(progress) => {
+                tracing::warn!(
+                    stage = "network-reconciler",
+                    progress = ?progress,
+                    "Network Provider reconcile did not reach Ready"
+                );
+                return Err(resource_runtime::ResourceRuntimeError::ProviderPathUnavailable);
+            }
+            Err(error) => {
+                tracing::warn!(
+                    stage = "network-reconciler",
+                    error = error.code(),
+                    "Network Provider reconcile effect failed"
+                );
+                return Err(resource_runtime::ResourceRuntimeError::ProviderPathUnavailable);
+            }
+        }
+    }
+    tracing::warn!(
+        stage = "network-reconciler",
+        "Network Provider child readiness did not converge"
+    );
+    Err(resource_runtime::ResourceRuntimeError::ProviderPathUnavailable)
 }
 
 fn is_device_tpm_reconcile_request(request: &Value) -> bool {
@@ -3961,6 +5117,14 @@ fn is_device_tpm_reconcile_request(request: &Value) -> bool {
 }
 
 fn dispatch_device_tpm_reconcile(
+    state: &ServerState,
+    peer: &PeerIdentity,
+    request: &Value,
+) -> Result<Value, resource_runtime::ResourceRuntimeError> {
+    dispatch_device_tpm_reconcile_inner(state, peer, request)
+}
+
+fn dispatch_device_tpm_reconcile_inner(
     state: &ServerState,
     peer: &PeerIdentity,
     request: &Value,
@@ -4012,18 +5176,33 @@ fn dispatch_device_tpm_reconcile(
         .ok()
         .and_then(|plane| plane.clone())
         .ok_or(resource_runtime::ResourceRuntimeError::PlaneUnavailable)?;
-    let runtime = plane.zone(&zone)?;
-    let resolver = load_bundle_resolver(state)
-        .map_err(|_| resource_runtime::ResourceRuntimeError::ProviderPathUnavailable)?;
+    let runtime = plane.zone(&zone).inspect_err(|error| {
+        tracing::warn!(?error, zone = %zone.as_str(), "Device TPM reconcile Zone lookup failed");
+    })?;
+    let resolver = load_bundle_resolver(state).map_err(|error| {
+        tracing::warn!(?error, "Device TPM reconcile bundle resolver unavailable");
+        resource_runtime::ResourceRuntimeError::ProviderPathUnavailable
+    })?;
     let migration_intent = format!("legacy-swtpm:vm:{vm_id}");
     let inventory = dispatch_broker_legacy_tpm_inventory(
         state,
         VmId::new(vm_id),
         BundleOpId::new(migration_intent.clone()),
     )
-    .map_err(|_| resource_runtime::ResourceRuntimeError::ProviderPathUnavailable)?;
-    let legacy_intent_anchor = trusted_tpm_migration_anchor(&migration_intent, inventory)
-        .map_err(|_| resource_runtime::ResourceRuntimeError::ProviderPathUnavailable)?;
+    .map_err(|error| {
+        tracing::warn!(?error, vm_id, "Device TPM legacy inventory unavailable");
+        resource_runtime::ResourceRuntimeError::ProviderPathUnavailable
+    })?;
+    tracing::warn!(
+        vm_id,
+        outcome = inventory.as_str(),
+        "Device TPM legacy inventory classified"
+    );
+    let legacy_intent_anchor =
+        trusted_tpm_migration_anchor(&migration_intent, inventory).map_err(|error| {
+            tracing::warn!(?error, vm_id, "Device TPM migration anchor rejected");
+            resource_runtime::ResourceRuntimeError::ProviderPathUnavailable
+        })?;
     let decision = block_on_future(runtime.tpm_device_is_admitted(
         &device_uid,
         &device_ref,
@@ -4056,7 +5235,10 @@ fn dispatch_device_tpm_reconcile(
             binary,
             broker_caller_role_for_peer(peer),
         )
-        .map_err(|_| resource_runtime::ResourceRuntimeError::ProviderPathUnavailable)?;
+        .map_err(|error| {
+            tracing::warn!(?error, vm_id, "Device TPM production reconcile failed");
+            resource_runtime::ResourceRuntimeError::ProviderPathUnavailable
+        })?;
     Ok(json!({
         "resourceType": "Device",
         "provider": d2b_provider_device_tpm::PROVIDER_REF,
@@ -4112,12 +5294,17 @@ fn resolve_resource_runtime(
     state: &ServerState,
     request: &Value,
 ) -> Result<Arc<resource_runtime::ZoneResourceRuntime>, resource_runtime::ResourceRuntimeError> {
-    let zone = request
-        .get("zoneRef")
-        .and_then(Value::as_str)
+    let zone_ref = request.get("zoneRef").and_then(Value::as_str);
+    let zone = zone_ref
         .and_then(|value| value.strip_prefix("Zone/"))
-        .and_then(|value| ZoneId::parse(value.to_owned()).ok())
-        .ok_or(resource_runtime::ResourceRuntimeError::RouteMismatch)?;
+        .and_then(|value| ZoneId::parse(value.to_owned()).ok());
+    let zone = match zone {
+        Some(zone) => zone,
+        None => {
+            tracing::warn!(?zone_ref, "resource runtime Zone route parse failed");
+            return Err(resource_runtime::ResourceRuntimeError::RouteMismatch);
+        }
+    };
     let plane = state
         .resource_plane
         .lock()
@@ -4269,6 +5456,28 @@ fn resource_runtime_error_frame(error: resource_runtime::ResourceRuntimeError) -
             "never",
             "the requested resource operation is not registered",
             "use a method exposed by the registered Zone service",
+        ),
+        resource_runtime::ResourceRuntimeError::ResourceGetFailed(kind) => (
+            kind.as_str(),
+            match kind {
+                ResourceErrorKind::AuthorizationDenied => "reauthorize",
+                ResourceErrorKind::ResourcePlaneUnavailable => "after-delay",
+                ResourceErrorKind::Backpressure => "immediate",
+                _ => "never",
+            },
+            "the public Resource API returned a typed error",
+            "follow the typed Resource API error before retrying",
+        ),
+        resource_runtime::ResourceRuntimeError::ResourceStatusUpdateFailed(kind) => (
+            kind.as_str(),
+            match kind {
+                ResourceErrorKind::AuthorizationDenied => "reauthorize",
+                ResourceErrorKind::ResourcePlaneUnavailable => "after-delay",
+                ResourceErrorKind::Backpressure => "immediate",
+                _ => "never",
+            },
+            "the public Resource API refused the status update",
+            "follow the typed Resource API error before retrying",
         ),
         _ => (
             code,
@@ -13896,6 +15105,53 @@ fn open_zone_store_from_broker(
     }
 }
 
+fn ensure_resource_activation_broker_evidence(
+    state: &ServerState,
+    zone: &ZoneId,
+    bundle: &d2b_contracts::v3::ResourceBundle,
+    broker_evidence: &d2b_resource_store_redb::BrokerEvidenceIndex,
+) -> Result<(), resource_runtime::ResourceRuntimeError> {
+    let operation_id = resource_runtime::resource_bundle_materialization_operation_id(zone, bundle);
+    let zone_identity = AuditZoneId::derive(zone.as_str())
+        .map_err(|_| resource_runtime::ResourceRuntimeError::HandlerNotReady)?;
+    let operation_identity = OperationIdentity::derive(&operation_id)
+        .map_err(|_| resource_runtime::ResourceRuntimeError::HandlerNotReady)?;
+    let key = ZoneOperationKey::new(zone_identity.clone(), operation_identity.clone());
+    if broker_evidence
+        .get(&key)
+        .map_err(|_| resource_runtime::ResourceRuntimeError::HandlerNotReady)?
+        .is_some()
+    {
+        return Ok(());
+    }
+    let audit_join = AuditJoinContext {
+        zone_id: CanonicalAuditDigest::parse(zone_identity.as_str())
+            .map_err(|_| resource_runtime::ResourceRuntimeError::HandlerNotReady)?,
+        operation_identity: CanonicalAuditDigest::parse(operation_identity.as_str())
+            .map_err(|_| resource_runtime::ResourceRuntimeError::HandlerNotReady)?,
+    };
+    let response = dispatch_broker_request_with_timeout(
+        state,
+        BrokerRequest::ResourceActivationAudit(BrokerResourceActivationAuditRequest { audit_join }),
+        Duration::from_secs(10),
+    )
+    .map_err(|_| resource_runtime::ResourceRuntimeError::HandlerNotReady)?;
+    match response {
+        BrokerResponse::ResourceActivationAudit(response) if response.recorded => {
+            broker_evidence
+                .insert(DurabilityEvidence {
+                    key,
+                    outcome: d2b_audit::DurabilityOutcome::Success,
+                    effect_durable: true,
+                })
+                .map_err(|_| resource_runtime::ResourceRuntimeError::HandlerNotReady)?;
+            Ok(())
+        }
+        BrokerResponse::Error(_) => Err(resource_runtime::ResourceRuntimeError::HandlerNotReady),
+        _ => Err(resource_runtime::ResourceRuntimeError::HandlerNotReady),
+    }
+}
+
 async fn open_resource_plane(
     state: &ServerState,
     resolver: &BundleResolver,
@@ -13905,17 +15161,75 @@ async fn open_resource_plane(
         return Err(resource_runtime::ResourceRuntimeError::ProviderPathUnavailable);
     }
     let mut plane = resource_runtime::ResourcePlane::new();
-    let broker_evidence = load_broker_audit_evidence(state)?;
-    let zones = authoritative_zone_ids(resolver)
-        .map_err(|_| resource_runtime::ResourceRuntimeError::ZoneStoreIdInvalid)?;
+    let broker_evidence = match load_broker_audit_evidence(state) {
+        Ok(evidence) => evidence,
+        Err(error) => {
+            tracing::error!(error = ?error, "Zone resource broker evidence load failed");
+            return Err(error);
+        }
+    };
+    let zones = match authoritative_zone_ids(resolver) {
+        Ok(zones) => zones,
+        Err(error) => {
+            tracing::error!(error = ?error, "Zone resource authority index load failed");
+            return Err(resource_runtime::ResourceRuntimeError::ZoneStoreIdInvalid);
+        }
+    };
     for zone in zones {
+        tracing::error!(zone = %zone.as_str(), "resource plane opening authoritative Zone");
+        let desired_bundle = resolver
+            .zone_resource_bundle_bytes(zone.as_str())
+            .ok_or_else(|| {
+                tracing::error!(zone = %zone.as_str(), "resource plane Zone bundle is missing");
+                resource_runtime::ResourceRuntimeError::HandlerNotReady
+            })
+            .and_then(|bytes| {
+                let bundle =
+                    d2b_contracts::v3::ResourceBundle::from_json(bytes).map_err(|error| {
+                        tracing::error!(
+                            zone = %zone.as_str(),
+                            error = ?error,
+                            "resource plane Zone bundle is invalid"
+                        );
+                        resource_runtime::ResourceRuntimeError::HandlerNotReady
+                    })?;
+                if bundle.zone.as_str() != zone.as_str() {
+                    tracing::error!(
+                        requested_zone = %zone.as_str(),
+                        bundle_zone = %bundle.zone.as_str(),
+                        "resource plane Zone bundle identity mismatch"
+                    );
+                    return Err(resource_runtime::ResourceRuntimeError::HandlerNotReady);
+                }
+                tracing::error!(
+                    zone = %zone.as_str(),
+                    resource_count = bundle.resources.len(),
+                    "resource plane Zone bundle loaded"
+                );
+                Ok(bundle)
+            })?;
         let opened = match open_zone_store_from_broker(state, &zone) {
             Ok(opened) => opened,
-            Err(_) => {
+            Err(error) => {
+                tracing::error!(zone = ?zone, error = ?error, "Zone resource store broker open failed");
                 let _ = plane.shutdown().await;
                 return Err(resource_runtime::ResourceRuntimeError::StoreOpenFailed);
             }
         };
+        if let Err(error) = ensure_resource_activation_broker_evidence(
+            state,
+            &zone,
+            &desired_bundle,
+            &broker_evidence,
+        ) {
+            tracing::error!(
+                zone = %zone.as_str(),
+                error = ?error,
+                "resource activation broker evidence unavailable"
+            );
+            let _ = plane.shutdown().await;
+            return Err(error);
+        }
         let zone_state_dir = state
             .daemon_state_dir
             .parent()
@@ -13929,22 +15243,34 @@ async fn open_resource_plane(
             let _ = plane.shutdown().await;
             return Err(resource_runtime::ResourceRuntimeError::StoreOpenFailed);
         }
-        let audit_sink = Arc::new(
-            AuditSink::open(&audit_dir)
-                .map_err(|_| resource_runtime::ResourceRuntimeError::StoreOpenFailed)?,
-        );
+        let audit_sink = match AuditSink::open(&audit_dir) {
+            Ok(sink) => Arc::new(sink),
+            Err(error) => {
+                tracing::error!(
+                    zone = %zone.as_str(),
+                    audit_dir = %audit_dir.display(),
+                    error = ?error,
+                    "Zone resource audit sink open failed",
+                );
+                let _ = plane.shutdown().await;
+                return Err(resource_runtime::ResourceRuntimeError::StoreOpenFailed);
+            }
+        };
+        let zone_name = zone.as_str().to_owned();
         let mut runtime =
-            match resource_runtime::ZoneResourceRuntime::open_with_audit_and_evidence_and_telemetry(
+            match resource_runtime::ZoneResourceRuntime::open_production_with_audit_and_evidence_and_telemetry(
                 zone,
                 opened,
                 audit_sink,
                 Arc::clone(&broker_evidence),
                 telemetry_path,
+                desired_bundle,
             )
             .await
             {
                 Ok(runtime) => runtime,
                 Err(error) => {
+                    tracing::error!(zone = %zone_name, error = ?error, "Zone resource runtime store open failed");
                     let _ = plane.shutdown().await;
                     return Err(error);
                 }
@@ -14009,6 +15335,8 @@ async fn open_resource_plane(
     Ok(Arc::new(plane))
 }
 
+const BROKER_AUDIT_EVIDENCE_PAGE_LIMIT: u32 = 16;
+
 #[derive(serde::Deserialize)]
 struct BrokerAuditEvidenceLine {
     #[serde(default)]
@@ -14036,7 +15364,7 @@ fn load_broker_audit_evidence(
                 filter: None,
                 since: None,
                 cursor: cursor.clone(),
-                limit: 1024,
+                limit: BROKER_AUDIT_EVIDENCE_PAGE_LIMIT,
             }),
             BrokerCallerRole::AdminUid {
                 uid: state.daemon_uid,
@@ -23817,6 +25145,7 @@ mod public_status_tests {
                 vsock_host_socket: None,
             },
             runtime,
+            autostart: true,
             security_key: false,
             lifecycle: Default::default(),
             shell: None,

@@ -44,6 +44,8 @@ pub enum PolicyWarning {
 #[derive(Clone, Default, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct FilterInput {
+    #[serde(default)]
+    debug_logging: bool,
     allow_globals: Vec<String>,
     deny_globals: Vec<String>,
     max_versions: BTreeMap<String, u32>,
@@ -54,6 +56,8 @@ pub struct FilterInput {
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct FilterInputWire {
+    #[serde(default)]
+    debug_logging: bool,
     allow_globals: Vec<String>,
     deny_globals: Vec<String>,
     max_versions: BTreeMap<String, u32>,
@@ -66,6 +70,7 @@ impl TryFrom<FilterInputWire> for FilterInput {
 
     fn try_from(value: FilterInputWire) -> Result<Self, Self::Error> {
         let filter = Self {
+            debug_logging: value.debug_logging,
             allow_globals: value.allow_globals,
             deny_globals: value.deny_globals,
             max_versions: value.max_versions,
@@ -95,6 +100,7 @@ impl FilterInput {
         M::Item: Into<String>,
     {
         let value = Self {
+            debug_logging: false,
             allow_globals: allow_globals.into_iter().map(Into::into).collect(),
             deny_globals: deny_globals.into_iter().map(Into::into).collect(),
             max_versions: max_versions.into_iter().collect(),
@@ -157,6 +163,7 @@ impl core::fmt::Debug for FilterInput {
     fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         formatter
             .debug_struct("FilterInput")
+            .field("debug_logging", &self.debug_logging)
             .field("allow_count", &self.allow_globals.len())
             .field("deny_count", &self.deny_globals.len())
             .field("version_count", &self.max_versions.len())

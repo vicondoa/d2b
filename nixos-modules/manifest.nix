@@ -125,6 +125,7 @@ let
           timeoutSeconds = vm.lifecycle.liveActivation.timeoutSeconds;
         };
       };
+      autostart = vm.autostart;
       graphics = isNixosRuntime && vm.graphics.enable;
       tpm = isNixosRuntime && vm.tpm.enable;
       usbipYubikey = isNixosRuntime && vm.usbip.yubikey;
@@ -519,6 +520,15 @@ let
           Per-VM lifecycle policy consumed by d2bd. v7 currently contains
           provider-aware graceful guest shutdown enablement and optional
           timeout override metadata.
+        '';
+      };
+
+      autostart = lib.mkOption {
+        type = lib.types.bool;
+        description = ''
+          Whether d2bd starts this VM during its host-boot autostart pass.
+          This mirrors `d2b.vms.<name>.autostart`; provider/runtime guards
+          still prevent graphics and qemu-media VMs from starting unattended.
         '';
       };
 

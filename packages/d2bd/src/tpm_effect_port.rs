@@ -69,6 +69,7 @@ pub trait CoreTpmEffectExecutor {
         settings: SwtpmSettings,
         binary: &SignedBinaryRef,
     ) -> Result<(), TpmEffectError>;
+    fn wait_for_endpoint(&mut self) -> Result<(), TpmEffectError>;
     fn stop(&mut self) -> Result<(), TpmEffectError>;
 }
 
@@ -169,7 +170,7 @@ impl<'a> LiveTpmEffectExecutor<'a> {
         ),
         TpmEffectError,
     > {
-        crate::dispatch_broker_request_with_fds_timeout_as(
+        let result = crate::dispatch_broker_request_with_fds_timeout_as(
             self.state,
             BrokerRequest::SpawnRunner(SpawnRunnerRequest {
                 vm_id: self.vm_id.clone(),
@@ -192,11 +193,26 @@ impl<'a> LiveTpmEffectExecutor<'a> {
             }),
             self.caller_role.clone(),
             timeout,
-        )
-        .map_err(|_| TpmEffectError::Transient)
-        .and_then(|(response, fds)| match response {
+        );
+        let (response, fds) = result.map_err(|error| {
+            tracing::warn!(
+                ?error,
+                vm = %self.vm_id,
+                role = role_id,
+                "TPM runner broker request failed"
+            );
+            TpmEffectError::Transient
+        })?;
+        match response {
             BrokerResponse::SpawnRunner(response) => Ok((response, fds)),
-            BrokerResponse::Error(_) => {
+            BrokerResponse::Error(error) => {
+                tracing::warn!(
+                    kind = %error.kind,
+                    message = %error.message,
+                    vm = %self.vm_id,
+                    role = role_id,
+                    "TPM runner broker request refused"
+                );
                 crate::close_received_fds(&fds);
                 Err(TpmEffectError::SpawnRejected)
             }
@@ -204,7 +220,7 @@ impl<'a> LiveTpmEffectExecutor<'a> {
                 crate::close_received_fds(&fds);
                 Err(TpmEffectError::SpawnRejected)
             }
-        })
+        }
     }
 
     fn cleanup_failed_start(
@@ -241,6 +257,66 @@ impl<'a> LiveTpmEffectExecutor<'a> {
             self.caller_role.clone(),
         );
         crate::close_received_fds(received_fds);
+    }
+
+    fn adopt_live_worker_if_present(&mut self) -> Result<bool, TpmEffectError> {
+        let pidfd_alive = self
+            .state
+            .pidfd_table
+            .still_alive_same_start_time(self.vm_id.as_str(), "swtpm");
+        let snapshot = crate::supervisor::state::SnapshotStore::get(
+            &crate::supervisor::state::FilesystemSnapshotStore::new(&self.state.daemon_state_dir),
+            self.vm_id.as_str(),
+            "swtpm",
+        )
+        .map_err(|_| TpmEffectError::Transient)?;
+        let liveness = if pidfd_alive {
+            DurableSwtpmLiveness::Live
+        } else if let Some(snapshot) = snapshot.as_ref() {
+            match crate::supervisor::pidfd_table::read_proc_start_time_pub(snapshot.pid) {
+                Ok(None) => DurableSwtpmLiveness::Missing,
+                Ok(Some(_)) | Err(_) => DurableSwtpmLiveness::Ambiguous,
+            }
+        } else {
+            DurableSwtpmLiveness::Missing
+        };
+        match durable_swtpm_adoption_gate(snapshot.as_ref(), &self.device_uid, liveness)? {
+            DurableSwtpmAdoption::Adopted => {
+                self.adopted_live_worker = true;
+                Ok(true)
+            }
+            DurableSwtpmAdoption::ClaimAndAdopt => {
+                let mut claimed = snapshot.expect("claim requires a durable snapshot");
+                claimed.owner_resource_uid = Some(self.device_uid.as_str().to_owned());
+                crate::supervisor::state::SnapshotStore::upsert(
+                    &crate::supervisor::state::FilesystemSnapshotStore::new(
+                        &self.state.daemon_state_dir,
+                    ),
+                    &claimed,
+                )
+                .map_err(|_| TpmEffectError::Transient)?;
+                self.adopted_live_worker = true;
+                Ok(true)
+            }
+            DurableSwtpmAdoption::RemoveAndSpawn | DurableSwtpmAdoption::Spawn => Ok(false),
+        }
+    }
+
+    fn wait_for_endpoint_ready(&self) -> Result<(), TpmEffectError> {
+        let swtpm_node = self.swtpm_node()?;
+        let liveness = crate::supervisor::readiness_liveness::PidfdLivenessProbe::new(
+            &self.state.pidfd_table,
+            &self.state.broker_reap_log,
+            self.vm_id.as_str(),
+            "swtpm",
+        );
+        crate::wait_for_readiness(
+            swtpm_node,
+            &swtpm_node.readiness,
+            Duration::from_secs(30),
+            Some(&liveness),
+        )
+        .map_err(|_| TpmEffectError::Transient)
     }
 }
 
@@ -280,6 +356,9 @@ impl CoreTpmEffectExecutor for LiveTpmEffectExecutor<'_> {
     }
 
     fn flush(&mut self, ticket: &FlushLaunchTicket) -> Result<(), TpmEffectError> {
+        if !self.adopted_live_worker && self.adopt_live_worker_if_present()? {
+            return Ok(());
+        }
         if self.adopted_live_worker {
             return Ok(());
         }
@@ -474,6 +553,10 @@ impl CoreTpmEffectExecutor for LiveTpmEffectExecutor<'_> {
             TpmEffectError::Transient
         })?;
         Ok(())
+    }
+
+    fn wait_for_endpoint(&mut self) -> Result<(), TpmEffectError> {
+        self.wait_for_endpoint_ready()
     }
 
     fn stop(&mut self) -> Result<(), TpmEffectError> {
@@ -764,6 +847,12 @@ impl<E: CoreTpmEffectExecutor + Send> TpmResourceEffectPort for LiveTpmResourceE
         &self,
         _process_ref: &ResourceRef,
     ) -> Result<ResourceRef, TpmResourceEffectError> {
+        self.effect
+            .lock()
+            .map_err(|_| TpmResourceEffectError::Transient)?
+            .executor
+            .wait_for_endpoint()
+            .map_err(map_resource_effect_error)?;
         child_ref("Endpoint", &self.device_uid, "tpm")
     }
 }

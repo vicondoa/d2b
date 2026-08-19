@@ -65,6 +65,7 @@ side-effect audit operation that never reaches the wire dispatcher).
 | QemuMediaSystemPowerdown | promoted-live | Requests qemu-media guest shutdown through QMP `system_powerdown` before forced runner cleanup. | live in production broker |
 | ReadSecretById | stubbed-unimplemented | Returns `BrokerError::Unimplemented`; secret read paths are not implemented. | future work |
 | ReconcileStorageScope | promoted-live | Resolves the trusted storage contract row and reconciles or validates the static storage scope without exposing raw paths. | live in production broker |
+| ResourceActivationAudit | promoted-live | Records the authenticated resource-bundle durability evidence join for the selected Zone; the broker accepts it only from the daemon's admin authz class. | live in production broker |
 | ResumeBroker | stubbed-unimplemented | Returns `BrokerError::Unimplemented`; broker admin resume controls are not implemented. | future work |
 | RotateSecretById | stubbed-unimplemented | Returns `BrokerError::Unimplemented`; secret rotation is not implemented. | future work |
 | RunActivation | promoted-live | Resolves activation and store-view intents from the trusted bundle and runs the requested activation mode. | live in production broker |

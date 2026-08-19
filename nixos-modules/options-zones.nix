@@ -164,7 +164,8 @@ let
           {
             assertion =
               policy.providerRef == null
-              || resolvesAs resources "Provider" policy.providerRef;
+              || resolvesAs resources "Provider" policy.providerRef
+              || (isExecutionTarget && policy.providerRef == "Provider/system-core");
             message = "${path}.spec.providerRef must resolve to a Provider in Zone ${zoneName}.";
           }
           {

@@ -510,6 +510,7 @@ pub enum OperationFields {
     Hello {
         client_version: String,
     },
+    ResourceActivationAudit {},
     ValidateBundle {},
     ExportBrokerAudit {
         since: Option<String>,
@@ -891,6 +892,7 @@ impl OperationFields {
             "Hello" => parse_fields!(value => Hello {
                 client_version: String,
             }),
+            "ResourceActivationAudit" => parse_fields!(value => ResourceActivationAudit {}),
             "ValidateBundle" => parse_fields!(value => ValidateBundle {}),
             "ExportBrokerAudit" => parse_fields!(value => ExportBrokerAudit {
                 since: Option<String>,

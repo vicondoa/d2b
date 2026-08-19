@@ -4,6 +4,12 @@
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
 
+    # Package-only Rust build helper for shared host-tool dependency
+    # artifacts. It is deliberately not used as an overlay.
+    crane = {
+      url = "github:ipetkov/crane";
+    };
+
     # The contributor environment intentionally keeps its executable inputs
     # separate from the d2b substrate.  These are source-only inputs where
     # the package expression is the public surface; they must not become

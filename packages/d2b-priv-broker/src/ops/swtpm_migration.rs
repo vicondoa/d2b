@@ -407,7 +407,7 @@ struct AnchoredPaths {
     source: AnchoredPath,
     destination: AnchoredPath,
     journal: AnchoredPath,
-    marker: AnchoredPath,
+    marker: Option<AnchoredPath>,
     lock: AnchoredPath,
 }
 
@@ -438,6 +438,23 @@ fn anchored(path: &Path) -> Result<AnchoredPath, LegacyMigrationError> {
     Ok(AnchoredPath { parent, name })
 }
 
+fn anchored_optional(path: &Path) -> Result<Option<AnchoredPath>, LegacyMigrationError> {
+    let parent = path
+        .parent()
+        .ok_or(LegacyMigrationError::InventoryInvalid)?;
+    let name = path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .ok_or(LegacyMigrationError::InventoryInvalid)?
+        .to_owned();
+    let parent = match crate::sys::path_safe::open_dir_path_safe(parent) {
+        Ok(parent) => parent,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(_) => return Err(LegacyMigrationError::InventoryInvalid),
+    };
+    Ok(Some(AnchoredPath { parent, name }))
+}
+
 fn anchored_paths(paths: &LegacyMigrationPaths) -> Result<AnchoredPaths, LegacyMigrationError> {
     let lock_path = paths
         .source
@@ -448,9 +465,35 @@ fn anchored_paths(paths: &LegacyMigrationPaths) -> Result<AnchoredPaths, LegacyM
         source: anchored(&paths.source)?,
         destination: anchored(&paths.destination)?,
         journal: anchored(&paths.journal)?,
-        marker: anchored(&paths.marker)?,
+        marker: anchored_optional(&paths.marker)?,
         lock: anchored(&lock_path)?,
     })
+}
+
+fn child_gid_is_trusted(
+    parent: std::os::fd::BorrowedFd<'_>,
+    child_gid: u32,
+) -> std::io::Result<bool> {
+    let stat = crate::sys::path_safe::fstat_fd(parent)?;
+    Ok(child_gid_is_trusted_metadata(
+        stat.st_mode,
+        stat.st_gid,
+        nix::unistd::getegid().as_raw(),
+        child_gid,
+    ))
+}
+
+fn child_gid_is_trusted_metadata(
+    parent_mode: libc::mode_t,
+    parent_gid: u32,
+    effective_gid: u32,
+    child_gid: u32,
+) -> bool {
+    child_gid == effective_gid
+        || (parent_mode & libc::S_IFMT == libc::S_IFDIR
+            && parent_mode & 0o002 == 0
+            && parent_mode & 0o2000 != 0
+            && parent_gid == child_gid)
 }
 
 fn child_stat(path: &AnchoredPath) -> Result<Option<libc::stat>, LegacyMigrationError> {
@@ -591,7 +634,8 @@ fn read_owned_file(path: &AnchoredPath) -> Result<Option<Vec<u8>>, LegacyMigrati
     if stat.st_mode & libc::S_IFMT != libc::S_IFREG
         || stat.st_mode & 0o7777 != MARKER_MODE
         || stat.st_uid != nix::unistd::geteuid().as_raw()
-        || stat.st_gid != nix::unistd::getegid().as_raw()
+        || !child_gid_is_trusted(path.parent.as_fd(), stat.st_gid)
+            .map_err(|_| LegacyMigrationError::InventoryInvalid)?
     {
         return Err(LegacyMigrationError::ForeignOwner);
     }
@@ -621,7 +665,8 @@ fn read_journal(
     if stat.st_mode & libc::S_IFMT != libc::S_IFREG
         || stat.st_mode & 0o7777 != MARKER_MODE
         || stat.st_uid != nix::unistd::geteuid().as_raw()
-        || stat.st_gid != nix::unistd::getegid().as_raw()
+        || !child_gid_is_trusted(path.parent.as_fd(), stat.st_gid)
+            .map_err(|_| LegacyMigrationError::InventoryInvalid)?
     {
         return Err(LegacyMigrationError::ForeignOwner);
     }
@@ -687,7 +732,12 @@ pub(crate) fn inventory(
             )
         })
         .transpose()?;
-    let marker_digest = read_digest(&anchored.marker)?;
+    let marker_digest = anchored
+        .marker
+        .as_ref()
+        .map(read_digest)
+        .transpose()?
+        .flatten();
     let journal = read_journal(&anchored.journal)?;
     if journal
         .as_ref()
@@ -755,9 +805,32 @@ pub(crate) fn inventory(
 pub(crate) fn probe(
     paths: &LegacyMigrationPaths,
 ) -> Result<LegacyInventoryState, LegacyMigrationError> {
-    let anchored = anchored_paths(paths)?;
-    let _lock = acquire_lock(&anchored.lock)?;
-    let current = inventory(paths)?;
+    let anchored = match anchored_paths(paths) {
+        Ok(anchored) => anchored,
+        Err(error) => {
+            tracing::warn!(?error, "TPM migration probe path anchoring failed");
+            return Err(error);
+        }
+    };
+    let _lock = match acquire_lock(&anchored.lock) {
+        Ok(lock) => lock,
+        Err(error) => {
+            tracing::warn!(?error, "TPM migration probe lock failed");
+            return Err(error);
+        }
+    };
+    let current = match inventory(paths) {
+        Ok(current) => current,
+        Err(error) => {
+            tracing::warn!(?error, "TPM migration probe inventory failed");
+            return Err(error);
+        }
+    };
+    tracing::warn!(
+        ?current,
+        marker_parent_present = anchored.marker.is_some(),
+        "TPM migration inventory probe state"
+    );
     if !matches!(current.state, LegacyInventoryState::AlreadyCommitted) {
         return Ok(current.state);
     }
@@ -781,10 +854,15 @@ fn acquire_lock(path: &AnchoredPath) -> Result<MigrationLock, LegacyMigrationErr
     .map_err(|_| LegacyMigrationError::InventoryInvalid)?;
     let stat = crate::sys::path_safe::fstat_fd(fd.as_fd())
         .map_err(|_| LegacyMigrationError::InventoryInvalid)?;
+    // The per-VM state parent is setgid `users`, so a newly-created lock
+    // inherits that group even though the broker owns the file. The lock is
+    // mode 0600 and anchored below the broker-owned VM directory; the owner
+    // and mode are the security boundary, not the inherited group.
     if stat.st_mode & libc::S_IFMT != libc::S_IFREG
         || stat.st_mode & 0o077 != 0
         || stat.st_uid != nix::unistd::geteuid().as_raw()
-        || stat.st_gid != nix::unistd::getegid().as_raw()
+        || !child_gid_is_trusted(path.parent.as_fd(), stat.st_gid)
+            .map_err(|_| LegacyMigrationError::InventoryInvalid)?
     {
         return Err(LegacyMigrationError::ForeignOwner);
     }
@@ -824,7 +902,8 @@ fn write_atomic(
         .map_err(|_| LegacyMigrationError::Durability)?;
     if temp_stat.st_mode & libc::S_IFMT != libc::S_IFREG
         || temp_stat.st_uid != nix::unistd::geteuid().as_raw()
-        || temp_stat.st_gid != nix::unistd::getegid().as_raw()
+        || !child_gid_is_trusted(parent.as_fd(), temp_stat.st_gid)
+            .map_err(|_| LegacyMigrationError::Durability)?
         || temp_stat.st_mode & 0o7777 != MARKER_MODE
     {
         let _ = unlinkat(parent.as_fd(), temp.as_str(), AtFlags::empty());
@@ -933,7 +1012,10 @@ fn marker_matches(
     anchored: &AnchoredPaths,
     journal: &LegacyMigrationJournal,
 ) -> Result<bool, LegacyMigrationError> {
-    let bytes = match read_owned_file(&anchored.marker) {
+    let Some(marker) = anchored.marker.as_ref() else {
+        return Ok(false);
+    };
+    let bytes = match read_owned_file(marker) {
         Ok(Some(bytes)) => bytes,
         Ok(None) => return Ok(false),
         Err(LegacyMigrationError::InventoryInvalid | LegacyMigrationError::ForeignOwner) => {
@@ -1355,7 +1437,10 @@ pub(crate) fn migrate(
                 if payload_digest != journal.marker_digest() {
                     return Ok(LegacyMigrationOutcome::Ambiguous);
                 }
-                match publish_marker_at(&anchored.marker, &payload) {
+                let Some(marker) = anchored.marker.as_ref() else {
+                    return Ok(LegacyMigrationOutcome::Ambiguous);
+                };
+                match publish_marker_at(marker, &payload) {
                     Ok(()) => {}
                     Err(
                         LegacyMigrationError::InventoryInvalid | LegacyMigrationError::ForeignOwner,
@@ -1566,6 +1651,38 @@ mod tests {
     }
 
     #[test]
+    fn child_gid_is_trusted_accepts_effective_and_safe_setgid_inheritance_only() {
+        let effective_gid = 100;
+        let inherited_gid = 200;
+        let directory = libc::S_IFDIR;
+
+        assert!(child_gid_is_trusted_metadata(
+            directory | 0o0700,
+            999,
+            effective_gid,
+            effective_gid,
+        ));
+        assert!(child_gid_is_trusted_metadata(
+            directory | 0o2700,
+            inherited_gid,
+            effective_gid,
+            inherited_gid,
+        ));
+        assert!(!child_gid_is_trusted_metadata(
+            directory | 0o2702,
+            inherited_gid,
+            effective_gid,
+            inherited_gid,
+        ));
+        assert!(!child_gid_is_trusted_metadata(
+            directory | 0o0700,
+            inherited_gid,
+            effective_gid,
+            inherited_gid,
+        ));
+    }
+
+    #[test]
     fn committed_replay_requires_proven_source_absence_or_identity() {
         let (scratch, paths) = committed_fixture("committed-absent");
         fs::remove_dir_all(&paths.source).unwrap();
@@ -1669,6 +1786,27 @@ mod tests {
         assert_eq!(probe(&paths).unwrap(), LegacyInventoryState::ValidLegacy);
         assert!(paths.source.exists());
         assert!(!paths.destination.exists());
+    }
+
+    #[test]
+    fn inventory_probe_accepts_fresh_state_before_marker_root_bootstrap() {
+        let scratch = Scratch::new("probe-marker-root-absent");
+        let paths = LegacyMigrationPaths::new(
+            scratch.0.join("legacy"),
+            scratch.0.join("state/swtpm"),
+            scratch.0.join("state/migration.journal"),
+            scratch.0.join("swtpm-markers/work"),
+            (
+                nix::unistd::geteuid().as_raw(),
+                nix::unistd::getegid().as_raw(),
+            ),
+        )
+        .unwrap();
+        assert_eq!(
+            probe(&paths).unwrap(),
+            LegacyInventoryState::NeverProvisioned
+        );
+        assert!(!scratch.0.join("swtpm-markers").exists());
     }
 
     #[test]

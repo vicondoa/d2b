@@ -288,7 +288,10 @@ let
           (cfg.site.ch.netHandoffMode == "persistent-tap")
           [ "CAP_NET_ADMIN" ];
         seccompPolicyRef = "w1-cloud-hypervisor-runner";
-        readOnlyPaths = [ "/nix/store" ];
+        readOnlyPaths = [
+          "/nix/store"
+          (swtpmRuntimeDirOf name)
+        ];
         writablePaths = [
           (mkWritablePath (stateDirOf name) "Own the VM API socket, disks, and other runtime artifacts.")
         ];

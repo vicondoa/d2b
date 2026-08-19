@@ -43,41 +43,18 @@
 # namespace where /nix/store is lazily unmounted. Inside that
 # namespace /nix/store is just a directory on the root mount, so
 # hardlinks succeed.
-{ config, lib, pkgs, ... }:
+{ config, lib, pkgs, d2bHostTools, ... }:
 
 let
   cfg = config.d2b;
   # d2b-owned access helpers (see lib.nix).
   d2bLib = import ./lib.nix { inherit lib pkgs; };
   normalNixosVms = d2bLib.normalNixosVms cfg.vms;
-  packagesSrc = d2bLib.cleanRustPackagesSource ../packages;
-  cargoLock = {
-    lockFile = ../packages/Cargo.lock;
-    outputHashes."wl-proxy-0.1.2" = "sha256-1yO1zgzSyzQ2DnDMpVxcnI5BsTNvXfzIUS+RNlPj4A8=";
-  };
   prebuilt =
     if cfg.site.usePrebuiltHostTools
     then import ./prebuilt-packages.nix { inherit pkgs lib; }
     else { };
-  activationHelperSourcePackage = pkgs.rustPlatform.buildRustPackage {
-    pname = "d2b-activation-helper";
-    version = "0.0.0-bootstrap";
-    src = packagesSrc;
-    inherit cargoLock;
-    cargoBuildFlags = [ "--package" "d2b-host" "--bin" "d2b-activation-helper" ];
-    doCheck = false;
-    postPatch = ''
-      mkdir -p .cargo
-      printf '[build]\nrustc-wrapper = ""\n' > .cargo/config.toml
-      rm -f .cargo/rustc-wrapper.sh
-    '';
-    installPhase = ''
-      runHook preInstall
-      install -Dm755 target/x86_64-unknown-linux-gnu/release/d2b-activation-helper $out/bin/d2b-activation-helper 2>/dev/null \
-        || install -Dm755 target/release/d2b-activation-helper $out/bin/d2b-activation-helper
-      runHook postInstall
-    '';
-  };
+  activationHelperSourcePackage = d2bHostTools.activationHelper;
   activationHelperPackage = if prebuilt ? "d2b-activation-helper" then prebuilt."d2b-activation-helper" else activationHelperSourcePackage;
   activationHelper = "${activationHelperPackage}/bin/d2b-activation-helper";
 

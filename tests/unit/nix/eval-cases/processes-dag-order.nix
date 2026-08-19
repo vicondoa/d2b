@@ -63,6 +63,9 @@ let
     builtins.sort builtins.lessThan (
       map (node: node.id) (builtins.filter (node: node.role == "virtiofsd") dag.nodes)
     );
+  nodeById = dag: id:
+    builtins.head (builtins.filter (node: node.id == id) dag.nodes);
+  swtpmArgv = dag: (nodeById dag "swtpm").argv;
 
   personal = dags.personal-dev;
   work = dags.work-entra;
@@ -75,6 +78,19 @@ assert lib.assertMsg (directDeps personal "store-virtiofs-preflight" == [ "host-
 assert lib.assertMsg (builtins.all (shareId: directDeps personal shareId == [ "store-virtiofs-preflight" ]) personalShareIds) "personal-dev virtiofsd nodes should fan out from store-virtiofs-preflight";
 assert lib.assertMsg (directDeps personal "swtpm-flush" == personalShareIds) "personal-dev should fan swtpm-flush in from every virtiofsd share";
 assert lib.assertMsg (directDeps personal "vsock-relay" == [ "swtpm" ]) "personal-dev vsock-relay should wait for swtpm";
+assert lib.assertMsg (
+  let
+    argv = swtpmArgv work;
+    ctrlIndex = lib.lists.findFirstIndex (arg: arg == "--ctrl") (-1) argv;
+    serverIndex = lib.lists.findFirstIndex (arg: arg == "--server") (-1) argv;
+  in
+    ctrlIndex >= 0
+    && serverIndex >= 0
+    && serverIndex == ctrlIndex + 2
+    && lib.hasInfix "tpm-ctrl.sock" (builtins.elemAt argv (ctrlIndex + 1))
+    && lib.hasInfix "tpm.sock" (builtins.elemAt argv (serverIndex + 1))
+    && builtins.elemAt argv (ctrlIndex + 1) != builtins.elemAt argv (serverIndex + 1)
+) "work-entra swtpm must expose separate control and Cloud Hypervisor server sockets";
 assert lib.assertMsg (directDeps personal "gpu" == [ "vsock-relay" ]) "personal-dev gpu should wait for vsock-relay";
 assert lib.assertMsg (directDeps personal "audio" == [ "vsock-relay" ]) "personal-dev audio should wait for vsock-relay";
 assert lib.assertMsg (directDeps personal "video" == [ "gpu" ]) "personal-dev video should wait for gpu";

@@ -16,6 +16,15 @@ let
   # node shares. Mirrors the consumer-style config the smoke evals use: one
   # isolated env with RFC1918 / RFC5737 ranges and a single headless workload
   # VM. No graphics / TPM / USBIP (those are device-bearing G-hw concerns).
+  # This is the framework-owned unit census for these acceptance fixtures. It
+  # is deliberately narrower than every d2b-prefixed unit an operator host
+  # might have from optional or managed infrastructure.
+  daemonAcceptanceUnits = [
+    "d2bd.service"
+    "d2b-priv-broker.socket"
+    "d2b-priv-broker.service"
+  ];
+
   baseD2bConfig = {
     d2b.site = {
       waylandUser = "alice";
@@ -75,6 +84,9 @@ in
           };
 
           environment.variables.D2B_MANIFEST_PATH = config.d2b._manifestJsonPath;
+          environment.systemPackages = [ config.d2b._manifestPkg ];
+          environment.etc."d2b/daemon-acceptance-units".text =
+            lib.concatStringsSep "\n" daemonAcceptanceUnits + "\n";
 
           # runNixOSTest runs first-boot activation before systemd-tmpfiles has
           # materialized the d2b state tree. Pre-create the key directory so

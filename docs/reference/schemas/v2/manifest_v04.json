@@ -459,6 +459,11 @@
             "null"
           ]
         },
+        "autostart": {
+          "description": "Whether d2bd should start this VM during its host-boot autostart pass.\n\nOlder v6/v7 manifests omitted this field while the daemon used the runtime/graphics heuristic. Defaulting to true preserves that legacy behavior; current Nix manifests always emit the explicit policy.",
+          "default": true,
+          "type": "boolean"
+        },
         "bridge": {
           "type": [
             "string",

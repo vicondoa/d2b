@@ -121,6 +121,7 @@ impl Request {
             Self::GatewayDisplay(_) => "gatewayDisplay",
             Self::Workload(_) => "workload",
             Self::Audio(_) => "audio",
+            Self::Resource(request) if request.method() == Some("Reconcile") => "resourceReconcile",
             Self::Resource(_) => "resourceRequest",
         }
     }
@@ -184,6 +185,7 @@ impl Request {
                             | "UpdateFinalizers"
                             | "Delete"
                             | "Upgrade"
+                            | "Reconcile"
                     )
                 ) =>
             {
@@ -754,6 +756,19 @@ mod tests {
         assert_eq!(request.method(), Some("List"));
         assert_eq!(request.fields["zoneRef"], "Zone/work");
         assert_eq!(request.fields["limit"], 10);
+    }
+
+    #[test]
+    fn resource_reconcile_is_a_global_mutating_request() {
+        let request = parse_request(
+            br#"{"type":"resourceRequest","service":"d2b.resource.v3","method":"Reconcile","zoneRef":"Zone/work","resourceRef":"Guest/corp-vm"}"#,
+        )
+        .expect("resource reconcile request");
+        assert_eq!(request.verb_name(), "resourceReconcile");
+        assert_eq!(
+            request.lock_class(),
+            crate::concurrency::OpLockClass::Global
+        );
     }
 
     #[test]

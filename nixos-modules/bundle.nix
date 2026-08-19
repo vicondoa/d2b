@@ -33,6 +33,16 @@ let
         && artifact.installFileName != null
         && artifact.path != null)
       (config.d2b._bundle.extraArtifacts or { })));
+  zoneResourceBundleArtifactHashInputs = lib.sortOn (row: row.key) (lib.mapAttrsToList
+    (_: artifact: {
+      key = artifact.installFileName;
+      path = artifact.path;
+    })
+    (lib.filterAttrs
+      (_: artifact:
+        artifact.installFileName != null
+        && artifact.path != null)
+      (config.d2b._bundle.zoneResourceBundles or { })));
 
   # Per-artifact SHA-256 hashes are computed in the bundle derivation
   # below, not with builtins.hashFile at eval time. The closure artifacts
@@ -91,7 +101,8 @@ let
       key = ref.path;
       path = config.d2b._bundle.minijailProfiles.${ref.profileId}.path;
     }) profileRefs
-    ++ zoneStorageArtifactHashInputs;
+    ++ zoneStorageArtifactHashInputs
+    ++ zoneResourceBundleArtifactHashInputs;
 
   # dataWithoutHash is the canonical bundle content used as the hash
   # input.  builtins.toJSON produces sorted-key compact JSON, matching
@@ -103,7 +114,7 @@ let
     artifactHashes = null;
     bundleVersion = 11;
     schemaVersion = "v2";
-    publicManifestPath = "/run/current-system/sw/share/d2b/vms.json";
+    publicManifestPath = config.d2b._manifestJsonPath;
     hostPath = "/etc/d2b/host.json";
     processesPath = "/etc/d2b/processes.json";
     privilegesPath = "/etc/d2b/privileges.json";

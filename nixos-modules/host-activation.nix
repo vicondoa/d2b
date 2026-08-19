@@ -30,7 +30,7 @@
 #   - d2bMigrateOwnership   - repair orphan swtpm-state UIDs after
 #                                 service-user renames, gated on
 #                                 `tpm.enable` and skipped for running VMs.
-{ config, pkgs, lib, ... }:
+{ config, pkgs, lib, d2bHostTools, ... }:
 
 let
   cfg = config.d2b;
@@ -51,51 +51,10 @@ let
   # egg during the very first activation). Each activation
   # snippet references `${activationHelper}` to get the absolute
   # store-path of the binary.
-  packagesSrc = d2bLib.cleanRustPackagesSource ../packages;
-  cargoLock = {
-    lockFile = ../packages/Cargo.lock;
-    outputHashes."wl-proxy-0.1.2" = "sha256-1yO1zgzSyzQ2DnDMpVxcnI5BsTNvXfzIUS+RNlPj4A8=";
-  };
-  activationHelperSourcePackage = pkgs.rustPlatform.buildRustPackage {
-    pname = "d2b-activation-helper";
-    version = "0.0.0-bootstrap";
-    src = packagesSrc;
-    inherit cargoLock;
-    cargoBuildFlags = [ "--package" "d2b-host" "--bin" "d2b-activation-helper" ];
-    doCheck = false;
-    postPatch = ''
-      mkdir -p .cargo
-      cat > .cargo/config.toml <<EOF
-[build]
-rustc-wrapper = ""
-EOF
-      rm -f .cargo/rustc-wrapper.sh
-    '';
-    installPhase = ''
-      runHook preInstall
-      install -Dm755 target/x86_64-unknown-linux-gnu/release/d2b-activation-helper $out/bin/d2b-activation-helper 2>/dev/null \
-        || install -Dm755 target/release/d2b-activation-helper $out/bin/d2b-activation-helper
-      runHook postInstall
-    '';
-  };
+  activationHelperSourcePackage = d2bHostTools.activationHelper;
   activationHelperPackage = if prebuilt ? "d2b-activation-helper" then prebuilt."d2b-activation-helper" else activationHelperSourcePackage;
   activationHelper = "${activationHelperPackage}/bin/d2b-activation-helper";
-  groupMigrationHelperPackage = pkgs.rustPlatform.buildRustPackage {
-    pname = "d2b-host-activation-helper";
-    version = "0.0.0-bootstrap";
-    src = packagesSrc;
-    cargoBuildFlags = [ "--package" "d2b-host-activation-helper" ];
-    inherit cargoLock;
-    doCheck = false;
-    postPatch = ''
-      mkdir -p .cargo
-      cat > .cargo/config.toml <<EOF
-[build]
-rustc-wrapper = ""
-EOF
-      rm -f .cargo/rustc-wrapper.sh
-    '';
-  };
+  groupMigrationHelperPackage = d2bHostTools.hostActivationHelper;
   groupMigrationHelper = "${groupMigrationHelperPackage}/bin/d2b-host-activation-helper";
   legacyLauncherGid = config.users.groups.d2b-launcher.gid or null;
   legacyLaunchersGid = config.users.groups.d2b-launchers.gid or null;

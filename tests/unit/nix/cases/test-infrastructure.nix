@@ -37,8 +37,8 @@ let
   missingCorpusFile = "missing-case-file.nix";
 
   flakeSource = builtins.readFile (flakeRoot + "/flake.nix");
-  hostDaemonSource =
-    builtins.readFile (flakeRoot + "/nixos-modules/host-daemon.nix");
+  rustHostToolsSource =
+    builtins.readFile (flakeRoot + "/nixos-modules/rust-host-tools.nix");
   providerSchemaPaths = [
     "docs/reference/schemas/v3/providers/transport-azure-relay.transport-settings.json"
     "docs/reference/schemas/v3/providers/transport-vsock.transport-binding.json"
@@ -105,11 +105,12 @@ in
   "test-infrastructure/provider-runtime-schema-is-staged-with-rust-sources" = {
     expr = {
       flakeSource = lib.all (path: lib.hasInfix path flakeSource) providerSchemaPaths;
-      hostDaemonSource = lib.all (path: lib.hasInfix path hostDaemonSource) providerSchemaPaths;
+      rustHostToolsSource =
+        lib.all (path: lib.hasInfix path rustHostToolsSource) providerSchemaPaths;
     };
     expected = {
       flakeSource = true;
-      hostDaemonSource = true;
+      rustHostToolsSource = true;
     };
   };
 }

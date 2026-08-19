@@ -65,6 +65,19 @@ let
     "auditMode": "yes"
   },
   {
+    "operation": "resource",
+    "subject": "Zone Resource API",
+    "scope": "per-Zone",
+    "allowedGroups": [
+      "d2b-launcher",
+      "d2b-admin"
+    ],
+    "destructive": true,
+    "secretAccess": "metadata-only",
+    "brokerRequired": "conditional",
+    "auditMode": "yes"
+  },
+  {
     "operation": "vm",
     "subject": "VM command family",
     "scope": "global-or-scoped",
@@ -830,6 +843,18 @@ let
     ],
     "destructive": false,
     "secretAccess": "none",
+    "brokerRequired": "yes",
+    "auditMode": "yes"
+  },
+  {
+    "operation": "ResourceActivationAudit",
+    "subject": "resource-bundle",
+    "scope": "per-Zone",
+    "allowedGroups": [
+      "d2bd"
+    ],
+    "destructive": false,
+    "secretAccess": "metadata-only",
     "brokerRequired": "yes",
     "auditMode": "yes"
   },
