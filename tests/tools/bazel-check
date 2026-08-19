@@ -183,7 +183,6 @@ run_bazel() {
     --test_env=D2B_REPO_ROOT="$ROOT" \
     --test_env=D2B_BAZEL_BIN="$bazel_bin" \
     --test_env=PATH="${D2B_BAZEL_TEST_PATH:-$PATH}" \
-    --test_env=TMPDIR=/tmp \
     --test_env=BAZEL_SH="${BAZEL_SH:-/bin/bash}" \
     "$@" \
     -- "${TARGETS[@]}" \
