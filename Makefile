@@ -628,8 +628,21 @@ heavy-lane-host-integration: heavy-lane-guard
 	for name in $$names; do \
 	set -- "$$@" ".#vmChecks.$$system.$$name"; \
 	done; \
+	case "$${D2B_HOST_SCCACHE:-}" in \
+	1|yes|true) \
+	cache_dir="$${SCCACHE_DIR:-$${XDG_CACHE_HOME:-$$HOME/.cache}/d2b-sccache}"; \
+	mkdir -p "$$cache_dir"; \
+	chmod 0700 "$$cache_dir"; \
+	cache_dir="$$(cd "$$cache_dir" && pwd -P)"; \
+	echo "test-host-integration: sccache cache: $$cache_dir -> /var/cache/d2b-sccache"; \
+	echo "==> nix build --option extra-sandbox-paths /var/cache/d2b-sccache=$$cache_dir $$*"; \
+	nix build --option extra-sandbox-paths "/var/cache/d2b-sccache=$$cache_dir" --no-link --print-build-logs "$$@";; \
+	*) \
+	echo "test-host-integration: sccache disabled (set D2B_HOST_SCCACHE=1 to enable)"; \
 	echo "==> nix build $$*"; \
-	nix build --no-link --print-build-logs "$$@"
+	nix build --no-link --print-build-logs "$$@";; \
+	esac
+
 ## test-hardware - G-hw: real GPU/YubiKey/hardware-TPM passthrough + full
 ## microVM boot. NixOS host WITH the devices only; CI cannot run this.
 ## Public heavy lanes: acquire a slot, then run the raw work behind the gate.

@@ -39,6 +39,8 @@ let
   flakeSource = builtins.readFile (flakeRoot + "/flake.nix");
   rustHostToolsSource =
     builtins.readFile (flakeRoot + "/nixos-modules/rust-host-tools.nix");
+  makefileSource = builtins.readFile (flakeRoot + "/Makefile");
+  sccacheSandboxDir = "/var/cache/d2b-sccache";
   providerSchemaPaths = [
     "docs/reference/schemas/v3/providers/transport-azure-relay.transport-settings.json"
     "docs/reference/schemas/v3/providers/transport-vsock.transport-binding.json"
@@ -111,6 +113,39 @@ in
     expected = {
       flakeSource = true;
       rustHostToolsSource = true;
+    };
+  };
+
+  "test-infrastructure/host-tools-sccache-contract" = {
+    expr = {
+      constantSandboxDir =
+        lib.hasInfix ''sccacheDir = "${sccacheSandboxDir}"'' rustHostToolsSource
+        && lib.hasInfix "SCCACHE_DIR = sccacheDir" rustHostToolsSource;
+      noImpureSccacheEnv =
+        !(lib.hasInfix ''builtins.getEnv "SCCACHE_DIR"'' rustHostToolsSource);
+      wrapperRequiresWritableDir =
+        lib.hasInfix "[ -d \"''\${SCCACHE_DIR}\" ]" rustHostToolsSource
+        && lib.hasInfix "[ -w \"''\${SCCACHE_DIR}\" ]" rustHostToolsSource
+        && lib.hasInfix "exec sccache" rustHostToolsSource
+        && lib.hasInfix ''exec "$@"'' rustHostToolsSource;
+      waylandProxySourceBuilt =
+        lib.hasInfix "waylandProxy = mkMainPackage" rustHostToolsSource;
+      makefileNoWorldWritableCache = !(lib.hasInfix "chmod 1777" makefileSource);
+      makefileCacheOptIn =
+        lib.hasInfix "D2B_HOST_SCCACHE" makefileSource
+        && lib.hasInfix "chmod 0700" makefileSource
+        && lib.hasInfix "${sccacheSandboxDir}=" makefileSource;
+      makefileDefaultBuildIsPure =
+        !(lib.hasInfix "nix build --impure" makefileSource);
+    };
+    expected = {
+      constantSandboxDir = true;
+      noImpureSccacheEnv = true;
+      wrapperRequiresWritableDir = true;
+      waylandProxySourceBuilt = true;
+      makefileNoWorldWritableCache = true;
+      makefileCacheOptIn = true;
+      makefileDefaultBuildIsPure = true;
     };
   };
 }
