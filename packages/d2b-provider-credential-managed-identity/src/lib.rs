@@ -28,7 +28,7 @@ use d2b_contracts::v3::credential::{
     CredentialServiceError, CredentialServiceErrorCode, CredentialSessionBinding,
     CredentialSourceVersion, MAX_PROVIDER_LEASE_LIFETIME_MS, OpaqueAzureRef, PlacementBinding,
 };
-use d2b_contracts::v3::{AuthenticatedSubjectContext, ResourceRef};
+use d2b_contracts::v3::{AuthenticatedSubjectContext, Locality, ResourceRef};
 
 pub use agent::ManagedIdentityAgent;
 pub use audit::{
@@ -594,6 +594,7 @@ impl ManagedIdentityCredentialProvider {
         subject.provider_ref() == Some(&self.consumer_ref)
             && subject.execution_ref() == Some(self.placement.execution_ref())
             && subject.zone_ref() == self.placement.zone_ref()
+            && subject.transport_binding().locality() == Locality::Local
             && subject.service().as_str() == CREDENTIAL_SERVICE_NAME
             && subject.session_purpose().as_str() == CREDENTIAL_SESSION_PURPOSE
             && subject.provider_generation().is_some()
@@ -622,6 +623,14 @@ impl ManagedIdentityCredentialProvider {
                 CredentialServiceErrorCode::OperationDenied,
             ));
         }
+        if authorization
+            .authenticated_subject_context()
+            .is_some_and(|authorized_subject| authorized_subject != subject)
+        {
+            return Err(CredentialServiceError::new(
+                CredentialServiceErrorCode::OperationDenied,
+            ));
+        }
 
         if method.requires_delivery() {
             let delivery = authorization.delivery_session_params().ok_or_else(|| {
@@ -631,6 +640,11 @@ impl ManagedIdentityCredentialProvider {
                 || delivery.consumer_provider_ref() != &self.consumer_ref
                 || delivery.operation_class() != method.operation_class()
             {
+                return Err(CredentialServiceError::new(
+                    CredentialServiceErrorCode::OperationDenied,
+                ));
+            }
+            if subject.provider_generation() != Some(delivery.consumer_component_generation()) {
                 return Err(CredentialServiceError::new(
                     CredentialServiceErrorCode::OperationDenied,
                 ));

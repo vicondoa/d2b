@@ -105,6 +105,46 @@ impl ManagedIdentityCredentialProvider {
                 .unwrap_or(0);
             prior_generation.checked_add(1).ok_or_else(invariant)?
         };
+        let stale_records = {
+            let leases = self.leases.lock().map_err(|_| invariant())?;
+            leases
+                .get(&key)
+                .into_iter()
+                .flatten()
+                .filter(|record| {
+                    record.metadata.state == CredentialLeaseState::Active
+                        && Self::same_owner(
+                            &record.authenticated_subject,
+                            session.authenticated_subject(),
+                        )
+                })
+                .cloned()
+                .collect::<Vec<_>>()
+        };
+        for stale_record in stale_records {
+            let lease = ManagedIdentityLeaseRef {
+                credential_ref: request.credential_ref().clone(),
+                metadata: stale_record.metadata.clone(),
+            };
+            let revocation = Self::poll_client(self.client.revoke_lease(&lease), deadline)?;
+            let outcome = match revocation {
+                crate::ManagedIdentityLeaseRevocation::Revoked => CredentialOutcomeCode::Revoked,
+                crate::ManagedIdentityLeaseRevocation::AlreadyRevoked => {
+                    CredentialOutcomeCode::AlreadyRevoked
+                }
+            };
+            let mut leases = self.leases.lock().map_err(|_| invariant())?;
+            let records = leases.get_mut(&key).ok_or_else(invariant)?;
+            let record = records
+                .iter_mut()
+                .find(|record| {
+                    record.metadata == stale_record.metadata
+                        && record.authenticated_subject == stale_record.authenticated_subject
+                })
+                .ok_or_else(invariant)?;
+            record.metadata.state = CredentialLeaseState::Revoked;
+            record.metadata.outcome = outcome;
+        }
         let client_request = ManagedIdentityLeaseRequest {
             credential_ref: request.credential_ref().clone(),
             operation_id: request.operation_id().to_owned(),
@@ -294,6 +334,11 @@ impl ManagedIdentityCredentialProvider {
             ensure_active_or_observable(record)?;
             record.clone()
         };
+        if record.metadata.state != CredentialLeaseState::Active {
+            return Ok(CredentialResponse::InspectMetadata(MetadataResponse {
+                metadata: record.metadata,
+            }));
+        }
         let lease = ManagedIdentityLeaseRef {
             credential_ref: request.credential_ref().clone(),
             metadata: record.metadata.clone(),
@@ -368,8 +413,10 @@ fn ensure_active(record: &LeaseRecord) -> Result<(), CredentialServiceError> {
 
 fn ensure_active_or_observable(record: &LeaseRecord) -> Result<(), CredentialServiceError> {
     match record.metadata.state {
-        CredentialLeaseState::Active => Ok(()),
-        state => Err(error_for_state(state)),
+        CredentialLeaseState::Active
+        | CredentialLeaseState::Expired
+        | CredentialLeaseState::Revoked => Ok(()),
+        CredentialLeaseState::Unknown => Err(invariant()),
     }
 }
 

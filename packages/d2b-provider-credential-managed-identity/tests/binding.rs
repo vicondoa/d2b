@@ -4,19 +4,20 @@ use std::sync::Arc;
 use std::thread;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-use d2b_contracts::v3::ResourceRef;
 use d2b_contracts::v3::credential::{
     CredentialAuthorization, CredentialMethod, CredentialRequest, CredentialResponse,
     CredentialServiceErrorCode, CredentialSessionBinding, MAX_PROVIDER_LEASE_LIFETIME_MS,
     dispatch_authorized_provider,
 };
+use d2b_contracts::v3::{Locality, ResourceRef};
 use d2b_provider_credential_managed_identity::{
     ManagedIdentityCredentialProvider, ManagedIdentityCredentialProviderFactory,
 };
 
 use common::{
-    authenticated_session, authenticated_session_with_expiry, authorization_for,
-    delivery_for_timing, request, setup,
+    authenticated_session, authenticated_session_with_expiry, authenticated_session_with_locality,
+    authorization_for, delivery_for_timing, delivery_for_timing_with_provider_generation, request,
+    setup,
 };
 
 fn now_unix_ms() -> u64 {
@@ -172,6 +173,131 @@ fn wrong_zone_acquire_is_denied_before_first_client_call() {
             CredentialMethod::AcquireToken,
             &request("wrong-zone-first"),
             wrong_zone,
+        )
+        .unwrap_err()
+        .code(),
+        CredentialServiceErrorCode::OperationDenied
+    );
+    assert_eq!(
+        client.issue_calls.load(std::sync::atomic::Ordering::SeqCst),
+        0
+    );
+}
+
+#[test]
+fn non_local_sessions_are_denied_before_first_client_call() {
+    for locality in [Locality::AdjacentZone, Locality::Remote] {
+        let (provider, client) = setup();
+        let session = authenticated_session_with_locality(
+            "Provider/workload-a",
+            "Zone/dev",
+            "Guest/aca-sandbox",
+            "Provider/runtime-azure-container-apps",
+            1,
+            1,
+            common::session_expiry(),
+            locality,
+        );
+        assert_eq!(
+            dispatch(
+                &provider,
+                CredentialMethod::AcquireToken,
+                &request("non-local-session"),
+                session,
+            )
+            .unwrap_err()
+            .code(),
+            CredentialServiceErrorCode::OperationDenied
+        );
+        assert_eq!(
+            client.issue_calls.load(std::sync::atomic::Ordering::SeqCst),
+            0
+        );
+    }
+}
+
+#[test]
+fn delivery_session_provider_generation_must_match_authenticated_subject() {
+    let (provider, client) = setup();
+    let request = request("delivery-generation-mismatch");
+    let session = authenticated_session(
+        "Provider/workload-a",
+        "Zone/dev",
+        "Guest/aca-sandbox",
+        "Provider/runtime-azure-container-apps",
+        1,
+        1,
+    );
+    let delivery = delivery_for_timing_with_provider_generation(
+        CredentialMethod::AcquireToken,
+        1,
+        request.credential_ref().clone(),
+        common::EXPIRY,
+        15_000,
+        2,
+    );
+    let authorization =
+        CredentialAuthorization::new(CredentialMethod::AcquireToken, Some(delivery))
+            .unwrap()
+            .with_authenticated_session(session)
+            .unwrap();
+    assert_eq!(
+        dispatch_authorized_provider(
+            &provider,
+            CredentialMethod::AcquireToken,
+            &request,
+            &authorization,
+        )
+        .unwrap_err()
+        .code(),
+        CredentialServiceErrorCode::OperationDenied
+    );
+    assert_eq!(
+        client.issue_calls.load(std::sync::atomic::Ordering::SeqCst),
+        0
+    );
+}
+
+#[test]
+fn authorization_subject_must_match_authenticated_session() {
+    let (provider, client) = setup();
+    let request = request("authorization-subject-mismatch");
+    let session = authenticated_session(
+        "Provider/workload-a",
+        "Zone/dev",
+        "Guest/aca-sandbox",
+        "Provider/runtime-azure-container-apps",
+        1,
+        1,
+    );
+    let mismatched_subject = authenticated_session(
+        "Provider/workload-b",
+        "Zone/dev",
+        "Guest/aca-sandbox",
+        "Provider/runtime-azure-container-apps",
+        1,
+        1,
+    )
+    .authenticated_subject()
+    .clone();
+    let authorization = CredentialAuthorization::new_for_subject(
+        CredentialMethod::AcquireToken,
+        Some(common::delivery_for(
+            CredentialMethod::AcquireToken,
+            1,
+            request.credential_ref().clone(),
+        )),
+        mismatched_subject,
+    )
+    .unwrap()
+    .with_authenticated_session(session)
+    .unwrap();
+    assert_eq!(
+        dispatch_authorized_provider(
+            &provider,
+            CredentialMethod::AcquireToken,
+            &request,
+            &authorization,
         )
         .unwrap_err()
         .code(),
@@ -423,6 +549,12 @@ fn reconnect_reacquire_replaces_stale_session_before_refresh() {
         panic!("reacquire response");
     };
     assert_eq!(reacquired.metadata.rotation_generation, 2);
+    assert_eq!(
+        client
+            .revoke_calls
+            .load(std::sync::atomic::Ordering::SeqCst),
+        1
+    );
 
     assert_eq!(
         dispatch(
@@ -472,6 +604,56 @@ fn reconnect_reacquire_replaces_stale_session_before_refresh() {
 }
 
 #[test]
+fn inspect_returns_terminal_metadata_without_reopening_a_revoked_lease() {
+    let (provider, client) = setup();
+    let session = authenticated_session(
+        "Provider/workload-a",
+        "Zone/dev",
+        "Guest/aca-sandbox",
+        "Provider/runtime-azure-container-apps",
+        1,
+        1,
+    );
+    dispatch(
+        &provider,
+        CredentialMethod::AcquireToken,
+        &request("terminal-inspect-acquire"),
+        session.clone(),
+    )
+    .unwrap();
+    dispatch(
+        &provider,
+        CredentialMethod::RevokeToken,
+        &request("terminal-inspect-revoke"),
+        session.clone(),
+    )
+    .unwrap();
+    let inspect_calls_before = client
+        .inspect_calls
+        .load(std::sync::atomic::Ordering::SeqCst);
+    let response = dispatch(
+        &provider,
+        CredentialMethod::InspectMetadata,
+        &request("terminal-inspect"),
+        session,
+    )
+    .unwrap();
+    let CredentialResponse::InspectMetadata(response) = response else {
+        panic!("inspect response");
+    };
+    assert_eq!(
+        response.metadata.state,
+        d2b_contracts::v3::credential::CredentialLeaseState::Revoked
+    );
+    assert_eq!(
+        client
+            .inspect_calls
+            .load(std::sync::atomic::Ordering::SeqCst),
+        inspect_calls_before
+    );
+}
+
+#[test]
 fn lease_lifetime_is_capped_by_provider_maximum() {
     let (provider, _) = setup();
     let now = now_unix_ms();
@@ -515,7 +697,8 @@ fn lease_lifetime_is_capped_by_provider_maximum() {
     .unwrap() else {
         panic!("acquire response");
     };
-    assert!(response.metadata.expires_at_unix_ms <= now + MAX_PROVIDER_LEASE_LIFETIME_MS);
+    let completed_at = now_unix_ms();
+    assert!(response.metadata.expires_at_unix_ms <= completed_at + MAX_PROVIDER_LEASE_LIFETIME_MS);
 }
 
 #[test]

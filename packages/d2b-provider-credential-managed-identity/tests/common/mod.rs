@@ -211,12 +211,30 @@ pub fn delivery_for_timing(
     expiry_unix_ms: u64,
     deadline_unix_ms: u64,
 ) -> DeliverySessionParams {
+    delivery_for_timing_with_provider_generation(
+        method,
+        sequence,
+        credential_ref,
+        expiry_unix_ms,
+        deadline_unix_ms,
+        1,
+    )
+}
+
+pub fn delivery_for_timing_with_provider_generation(
+    method: CredentialMethod,
+    sequence: u64,
+    credential_ref: ResourceRef,
+    expiry_unix_ms: u64,
+    deadline_unix_ms: u64,
+    provider_generation: u64,
+) -> DeliverySessionParams {
     DeliverySessionParams::new(
         credential_ref,
         ResourceUid::parse("123e4567-e89b-42d3-a456-426614174000").unwrap(),
         ResourceGeneration::new(1).unwrap(),
         ResourceRef::parse("Provider/runtime-azure-container-apps").unwrap(),
-        ResourceGeneration::new(1).unwrap(),
+        ResourceGeneration::new(provider_generation).unwrap(),
         AudienceToken::parse("azure-resource-manager").unwrap(),
         method.operation_class(),
         expiry_unix_ms,
@@ -256,6 +274,28 @@ pub fn authenticated_session_with_expiry(
     reconnect_generation: u64,
     expires_at_unix_ms: u64,
 ) -> CredentialSessionBinding {
+    authenticated_session_with_locality(
+        subject_ref,
+        zone_ref,
+        execution_ref,
+        provider_ref,
+        provider_generation,
+        reconnect_generation,
+        expires_at_unix_ms,
+        Locality::Local,
+    )
+}
+
+pub fn authenticated_session_with_locality(
+    subject_ref: &str,
+    zone_ref: &str,
+    execution_ref: &str,
+    provider_ref: &str,
+    provider_generation: u64,
+    reconnect_generation: u64,
+    expires_at_unix_ms: u64,
+    locality: Locality,
+) -> CredentialSessionBinding {
     let subject = AuthenticatedSubjectContext::new(
         ResourceRef::parse(subject_ref).unwrap(),
         ResourceUid::parse("123e4567-e89b-42d3-a456-426614174000").unwrap(),
@@ -266,7 +306,7 @@ pub fn authenticated_session_with_expiry(
         SessionBinding::new(
             SchemaFingerprint::parse(format!("sha256:{}", "a".repeat(64))).unwrap(),
             TransportBinding::new(
-                Locality::Local,
+                locality,
                 BindingDigest::parse(format!("sha256:{}", "b".repeat(64))).unwrap(),
             ),
             ReconnectGeneration::new(reconnect_generation).unwrap(),
