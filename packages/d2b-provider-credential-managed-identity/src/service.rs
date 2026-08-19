@@ -163,7 +163,6 @@ impl ManagedIdentityCredentialProvider {
             Ok(metadata) => metadata,
             Err(error) => {
                 return Err(self.cleanup_or_track_issue(
-                    &key,
                     request,
                     session,
                     cleanup_lease.metadata.clone(),
@@ -177,7 +176,6 @@ impl ManagedIdentityCredentialProvider {
             Ok(leases) => leases,
             Err(_) => {
                 return Err(self.cleanup_or_track_issue(
-                    &key,
                     request,
                     session,
                     metadata.clone(),
@@ -209,7 +207,6 @@ impl ManagedIdentityCredentialProvider {
 
     fn cleanup_or_track_issue(
         &self,
-        key: &str,
         request: &CredentialRequest,
         session: &CredentialSessionBinding,
         metadata: CredentialMetadata,
@@ -229,7 +226,9 @@ impl ManagedIdentityCredentialProvider {
         };
         match self.leases.lock() {
             Ok(mut leases) => {
-                let records = leases.entry(key.to_owned()).or_default();
+                let records = leases
+                    .entry(request.credential_ref().to_canonical_string())
+                    .or_default();
                 if let Some(existing) = records
                     .iter_mut()
                     .find(|existing| Self::same_record_identity(existing, &unresolved))
@@ -320,7 +319,6 @@ impl ManagedIdentityCredentialProvider {
             Ok(metadata) => metadata,
             Err(error) => {
                 return Err(self.cleanup_or_track_issue(
-                    &key,
                     request,
                     session,
                     cleanup_lease.metadata.clone(),
@@ -334,7 +332,6 @@ impl ManagedIdentityCredentialProvider {
             self.replace_record(&key, &record, request.idempotency_key(), metadata.clone())
         {
             return Err(self.cleanup_or_track_issue(
-                &key,
                 request,
                 session,
                 metadata.clone(),

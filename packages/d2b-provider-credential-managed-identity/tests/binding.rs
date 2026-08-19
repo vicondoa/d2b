@@ -193,8 +193,7 @@ fn non_local_sessions_are_denied_before_first_client_call() {
             "Zone/dev",
             "Guest/aca-sandbox",
             "Provider/runtime-azure-container-apps",
-            1,
-            1,
+            (1, 1),
             common::session_expiry(),
             locality,
         );

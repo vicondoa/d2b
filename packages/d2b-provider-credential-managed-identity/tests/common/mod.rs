@@ -306,8 +306,7 @@ pub fn authenticated_session_with_expiry(
         zone_ref,
         execution_ref,
         provider_ref,
-        provider_generation,
-        reconnect_generation,
+        (provider_generation, reconnect_generation),
         expires_at_unix_ms,
         Locality::Local,
     )
@@ -318,11 +317,11 @@ pub fn authenticated_session_with_locality(
     zone_ref: &str,
     execution_ref: &str,
     provider_ref: &str,
-    provider_generation: u64,
-    reconnect_generation: u64,
+    generations: (u64, u64),
     expires_at_unix_ms: u64,
     locality: Locality,
 ) -> CredentialSessionBinding {
+    let (provider_generation, reconnect_generation) = generations;
     let subject = AuthenticatedSubjectContext::new(
         ResourceRef::parse(subject_ref).unwrap(),
         ResourceUid::parse("123e4567-e89b-42d3-a456-426614174000").unwrap(),
