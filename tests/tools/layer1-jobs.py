@@ -405,7 +405,7 @@ def rust_job(job: dict[str, Any]) -> str:
           rustup toolchain install "$PINNED" --profile minimal --component rustfmt --component clippy
           rustup default "$PINNED"
           echo "Rust toolchain: $(rustc --version)"
-          sudo apt-get update && sudo apt-get install -y ripgrep acl
+          tests/tools/ci-apt-install ripgrep acl
       - name: Rust dependency cache (target dirs + cargo registry)
         # Swatinem/rust-cache caches dependency artifacts in target dirs
         # and the cargo registry. It performs all I/O in its own action
@@ -582,7 +582,7 @@ def flake_x86_shards_job(job: dict[str, Any]) -> str:
           sudo swapon "$SWAP"
 {nix_setup_step(job, MATRIX_CHECK_SCOPE)}
       - name: Install flake shard diagnostics
-        run: sudo apt-get update && sudo apt-get install -y gdb
+        run: tests/tools/ci-apt-install gdb
       - name: {job["displayName"]}
         # D2B_FLAKE_CHECK is passed via the step environment, NOT interpolated
         # into the shell command: a flake check attr name is PR-controlled, so

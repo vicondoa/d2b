@@ -88,6 +88,77 @@ if [ "${#workflow_shell_errors[@]}" -gt 0 ]; then
   exit 1
 fi
 
+apt_helper="$ROOT/tests/tools/ci-apt-install"
+if [ ! -x "$apt_helper" ]; then
+  echo "FAIL: missing executable CI APT helper $apt_helper" >&2
+  exit 1
+fi
+
+apt_contract_errors=()
+apt_command_pattern='(^|[^[:alnum:]_-])(apt-get|apt)([^[:alnum:]_-]|$)'
+has_direct_apt() {
+  sed -E '/^[[:space:]]*#/d' \
+    | sed ':a;N;$!ba;s/\\\n//g' \
+    | grep -Eq "$apt_command_pattern"
+}
+
+if ! printf '%s\n' 'sudo apt-\' 'get update' | has_direct_apt; then
+  apt_contract_errors+=("CI APT scan: split apt-get command fixture was not detected")
+fi
+
+while IFS= read -r workflow; do
+  if has_direct_apt < "$workflow"; then
+    apt_contract_errors+=("${workflow#"$ROOT"/}: contains a direct apt setup")
+  fi
+done < <(
+  find "$WORKFLOW_DIR" -maxdepth 1 -type f \
+    \( -name '*.yml' -o -name '*.yaml' \) -print \
+    | LC_ALL=C sort
+)
+
+for workflow in \
+  "$ROOT/.github/workflows/pr-l1-static-fast.yml" \
+  "$ROOT/.github/workflows/release-host-binaries.yml"
+do
+  if ! grep -Eq 'tests/tools/ci-apt-install[[:space:]]' "$workflow"; then
+    apt_contract_errors+=("${workflow#"$ROOT"/}: does not use the CI APT helper")
+  fi
+done
+
+if ! "$apt_helper" --self-test; then
+  apt_contract_errors+=("tests/tools/ci-apt-install: runner mirror-list fixture failed")
+fi
+
+for required in \
+  'AZURE_MIRROR=.*http://azure.archive.ubuntu.com/ubuntu' \
+  'CANONICAL_MIRROR=.*https://archive.ubuntu.com/ubuntu' \
+  'Acquire::Retries=' \
+  'Acquire::http::Timeout=' \
+  'Acquire::https::Timeout=' \
+  'apt-get .* update' \
+  'apt-get .* install'
+do
+  if ! grep -Eq "$required" "$apt_helper"; then
+    apt_contract_errors+=("tests/tools/ci-apt-install: missing $required")
+  fi
+done
+
+apt_helper_normalized=$(tr -d '[:space:]_:-' < "$apt_helper" | tr '[:upper:]' '[:lower:]')
+if printf '%s\n' "$apt_helper_normalized" \
+  | grep -Eq 'allowunauthenticated|allowinsecurerepositories|allowdowngradetoinsecurerepositories' \
+  || grep -Eiq \
+    'trusted[[:space:]]*=[[:space:]]*yes|verify-(peer|host)[[:space:]]*=[[:space:]]*(false|no|0)|check-(valid-until|date)[[:space:]]*=[[:space:]]*(false|no|0)' \
+    "$apt_helper"
+then
+  apt_contract_errors+=("tests/tools/ci-apt-install: disables APT authentication or freshness checks")
+fi
+
+if [ "${#apt_contract_errors[@]}" -gt 0 ]; then
+  echo "FAIL: CI APT mirror coverage is incomplete:" >&2
+  printf '  %s\n' "${apt_contract_errors[@]}" >&2
+  exit 1
+fi
+
 bash "$ROOT/tests/tools/layer1-jobs" self-test
 
 mapfile -t local_job_ids < <(
