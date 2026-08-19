@@ -135,3 +135,22 @@ fn status_projection_requires_the_committed_guest_execution() {
         CredentialServiceErrorCode::OperationDenied
     );
 }
+
+#[test]
+fn status_projection_rejects_retry_counts_above_the_provider_ceiling() {
+    let (controller, policy) = controller();
+    assert_eq!(
+        controller
+            .project_for_subject(
+                &policy,
+                &subject_context(),
+                EntraClientState::Ready,
+                None,
+                EntraResourceHealth::Degraded,
+                d2b_provider_credential_entra::MAX_REFRESH_ATTEMPTS + 1,
+            )
+            .unwrap_err()
+            .code(),
+        CredentialServiceErrorCode::InvariantFailure
+    );
+}
