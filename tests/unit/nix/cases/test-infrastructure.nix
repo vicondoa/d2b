@@ -44,6 +44,8 @@ let
   bundleSource = builtins.readFile (flakeRoot + "/nixos-modules/bundle.nix");
   processesSource = builtins.readFile (flakeRoot + "/nixos-modules/processes-json.nix");
   privilegesSource = builtins.readFile (flakeRoot + "/nixos-modules/privileges-json.nix");
+  liveCutoverSource =
+    builtins.readFile (flakeRoot + "/tests/integration/live/cutover-real-host.sh");
   makefileSource = builtins.readFile (flakeRoot + "/Makefile");
   sccacheSandboxDir = "/var/cache/d2b-sccache";
   providerSchemaPaths = [
@@ -68,6 +70,7 @@ let
     "test-infrastructure/own-shard-registration-unique"
     "test-infrastructure/pin-integrity-complete"
     "test-infrastructure/cutover-runner-host-tool-contract"
+    "test-infrastructure/cutover-live-driver-contract"
   ];
   unpinnedOwnCases =
     lib.filter (name: !(builtins.elem name pinnedNames)) ownCaseNames;
@@ -176,6 +179,57 @@ in
       processContract = true;
       privilegeContract = true;
       noPersistentUnit = true;
+    };
+  };
+
+  "test-infrastructure/cutover-live-driver-contract" = {
+    expr = {
+      selfGuard =
+        lib.hasInfix ''d2b_heavy_gate_reexec "$ROOT" "$0" "$@"'' liveCutoverSource;
+      explicitLiveGate =
+        lib.hasInfix ''D2B_LIVE:-0'' liveCutoverSource
+        && lib.hasInfix ''D2B_LIVE=1'' liveCutoverSource;
+      requiredEvidencePaths = lib.all
+        (marker: lib.hasInfix marker liveCutoverSource)
+        [
+          "D2B_LIVE_STATE_DIR"
+          "D2B_LIVE_CANDIDATE_DIR"
+          "D2B_LIVE_SNAPSHOT"
+          "D2B_LIVE_SEAL"
+          "D2B_LIVE_RECOVERY_ATTESTATION"
+          "D2B_LIVE_CUTOVER_RECOVERY"
+          "D2B_LIVE_CONSENT"
+          "D2B_LIVE_HANDOFF"
+          "D2B_LIVE_VERIFICATION"
+        ];
+      productionValidators =
+        lib.hasInfix "delivery wave recovery-import" liveCutoverSource
+        && lib.hasInfix "delivery wave seal" liveCutoverSource
+        && lib.hasInfix "delivery wave merge-eligibility" liveCutoverSource
+        && lib.hasInfix "host cutover preview" liveCutoverSource
+        && lib.hasInfix "host cutover apply" liveCutoverSource
+        && lib.hasInfix "host cutover verify" liveCutoverSource
+        && lib.hasInfix "host cutover doctor" liveCutoverSource;
+      stopsBeforeFinalization =
+        !(lib.hasInfix "host cutover finalize" liveCutoverSource)
+        && !(lib.hasInfix "d2b host finalize" liveCutoverSource);
+      noSudoOrShellPredicates =
+        !(lib.hasInfix "sudo" liveCutoverSource)
+        && !(lib.hasInfix "jq -e" liveCutoverSource)
+        && !(lib.hasInfix "grep -q" liveCutoverSource);
+      redactedFailureSurface =
+        lib.hasInfix "validation failed before mutation" liveCutoverSource
+        && lib.hasInfix "raw paths and identities are intentionally suppressed"
+          liveCutoverSource;
+    };
+    expected = {
+      selfGuard = true;
+      explicitLiveGate = true;
+      requiredEvidencePaths = true;
+      productionValidators = true;
+      stopsBeforeFinalization = true;
+      noSudoOrShellPredicates = true;
+      redactedFailureSurface = true;
     };
   };
 }

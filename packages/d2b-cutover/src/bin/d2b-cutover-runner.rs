@@ -781,7 +781,21 @@ impl Runtime {
                         true,
                     ),
                     OperationKind::Cutover => {
-                        return self.failure(d2b_cutover::RunnerSocketError::InvalidTransition);
+                        let (Some(recovery), Some(host_digest)) = (
+                            self.bootstrap.recovery.clone(),
+                            self.bootstrap.host_digest.clone(),
+                        ) else {
+                            return self.failure(d2b_cutover::RunnerSocketError::InvalidTransition);
+                        };
+                        ApplyContext::cutover(
+                            now_ms(),
+                            self.bootstrap.request.inventory_digest().clone(),
+                            true,
+                            true,
+                            true,
+                            recovery,
+                            host_digest,
+                        )
                     }
                 };
                 // Resume has the same durability requirement as hold.
@@ -959,6 +973,13 @@ impl Runtime {
                 Err(EffectSinkError::Unavailable)
                 | Err(EffectSinkError::Protocol)
                 | Err(EffectSinkError::NotAllowed) => {
+                    if !self
+                        .operation
+                        .phase()
+                        .is_before_or_at_native_rollback_boundary()
+                    {
+                        return self.require_external_restore();
+                    }
                     return self.failure(d2b_cutover::RunnerSocketError::InvalidTransition);
                 }
             };
@@ -976,6 +997,31 @@ impl Runtime {
             accepted: true,
             status: Some(self.status()),
             error: None,
+        }
+    }
+
+    fn require_external_restore(&mut self) -> RunnerResponse {
+        let audit = match self.audit_sink.publish(
+            CutoverAuditTransition::Terminal,
+            self.operation.phase().number(),
+            None,
+        ) {
+            Ok(audit) => audit,
+            Err(_) => return self.failure(d2b_cutover::RunnerSocketError::AuditUnavailable),
+        };
+        let previous = self.operation.clone();
+        if self.operation.require_external_restore(audit).is_err() {
+            self.operation = previous;
+            return self.failure(d2b_cutover::RunnerSocketError::InvalidTransition);
+        }
+        if self.persist().is_err() {
+            self.operation = previous;
+            return self.failure(d2b_cutover::RunnerSocketError::JournalUnavailable);
+        }
+        RunnerResponse {
+            accepted: false,
+            status: Some(self.status()),
+            error: Some(d2b_cutover::RunnerSocketError::InvalidTransition),
         }
     }
 
@@ -1234,6 +1280,7 @@ mod tests {
         )
         .expect("preview");
         let preview_digest = preview.digest().expect("preview digest");
+        let recovery_now = now_ms();
         let recovery = RecoveryAttestation::new(
             RecoveryId::new(format!("recovery-apply-sequence-{label}")).expect("recovery"),
             candidate_id.clone(),
@@ -1241,8 +1288,8 @@ mod tests {
             preview_digest.clone(),
             operator_id.clone(),
             d2b_cutover::Digest::derive("d2b:test:restore", b"restore"),
-            100,
-            200,
+            recovery_now.saturating_sub(1_000),
+            recovery_now.saturating_add(600_000),
             true,
         )
         .expect("recovery");
@@ -1274,7 +1321,12 @@ mod tests {
             request: request.clone(),
             preview,
             consent: Some(
-                d2b_cutover::Consent::issue(request.consent_binding(), 100, 200).expect("consent"),
+                d2b_cutover::Consent::issue(
+                    request.consent_binding(),
+                    recovery_now.saturating_sub(1_000),
+                    recovery_now.saturating_add(600_000),
+                )
+                .expect("consent"),
             ),
             destructive_consent: None,
             recovery: Some(recovery.clone()),
@@ -1307,7 +1359,7 @@ mod tests {
             .begin_apply(
                 bootstrap.consent.as_mut().expect("consent"),
                 &ApplyContext::cutover(
-                    150,
+                    recovery_now,
                     inventory.digest().expect("inventory digest"),
                     true,
                     true,
@@ -1481,6 +1533,37 @@ mod tests {
             assert!(response.accepted, "{number}: {:?}", response.error);
             assert_eq!(runtime.operation.phase(), advance_to);
         }
+        let _ = std::fs::remove_dir_all(runtime.paths.root());
+    }
+
+    #[test]
+    fn phase_five_effect_failure_publishes_external_restore_required() {
+        let (mut runtime, handoff, _kinds) = cutover_runtime_for_apply("r5");
+        let response = runtime.handle(RunnerCommand::Apply { handoff }, RunnerPeer::Owner);
+        assert!(response.accepted);
+        runtime.effect_sink = Box::new(UnavailableEffectSink);
+
+        let response = runtime.handle(
+            RunnerCommand::Effect {
+                effect_id: d2b_cutover::EffectId::new("phase-five-failure").expect("effect id"),
+                step_id: StepId::new("phase-five-failure").expect("step id"),
+                kind: EffectKind::ResourceStoreCreate,
+                replay_class: ReplayClass::ReopenByJournaledIdentity,
+                advance_to: Some(CutoverPhase::ProviderInstall),
+                identity: Some(ArtifactId::new("store-identity").expect("identity")),
+                handoff: None,
+                payload: None,
+            },
+            RunnerPeer::Owner,
+        );
+        assert!(!response.accepted);
+        assert_eq!(
+            response.error,
+            Some(d2b_cutover::RunnerSocketError::InvalidTransition)
+        );
+        assert_eq!(runtime.operation.state(), OperationState::RestoreRequired);
+        let (_, records) = d2b_cutover::load_journal(&runtime.paths.journal).expect("journal");
+        assert!(String::from_utf8_lossy(&records).contains("\"restore-required\""));
         let _ = std::fs::remove_dir_all(runtime.paths.root());
     }
 
@@ -1731,6 +1814,34 @@ mod tests {
         assert_eq!(runtime.operation.state(), OperationState::Held);
         let (_, records) = d2b_cutover::load_journal(&runtime.paths.journal).expect("journal");
         assert!(!records.is_empty());
+        let _ = std::fs::remove_dir_all(runtime.paths.root());
+    }
+
+    #[test]
+    fn cutover_resume_revalidates_recovery_and_clears_audited_hold() {
+        let (mut runtime, _handoff, _kinds) = cutover_runtime_for_apply("resume-cutover");
+        runtime.audit_sink = Box::new(FixedAuditSink);
+        runtime
+            .operation
+            .request_hold(
+                runtime.bootstrap.request.operator_id().clone(),
+                HoldReason::new("inspect").expect("reason"),
+                AuditEvidence::durable("hold-audit").expect("hold audit"),
+            )
+            .expect("hold");
+        runtime.persist().expect("persist hold");
+
+        let response = runtime.handle(
+            RunnerCommand::Resume {
+                fresh_consent: None,
+            },
+            RunnerPeer::Owner,
+        );
+        assert!(response.accepted, "resume response: {:?}", response.error);
+        assert_eq!(
+            runtime.operation.state(),
+            OperationState::Applying(CutoverPhase::Preflight)
+        );
         let _ = std::fs::remove_dir_all(runtime.paths.root());
     }
 
