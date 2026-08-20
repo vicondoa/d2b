@@ -17,8 +17,8 @@ use std::{
     time::Duration,
 };
 
-use d2b_contracts::v3::{
-    identity::ConfigurationGeneration, resource_ref::ResourceRef, zone_routing::ZonePath,
+use d2b_contracts_zone_session::v3::{
+    identity::ConfigurationGeneration, ResourceRef, zone_routing::ZonePath,
 };
 use tokio::{sync::Notify, time};
 

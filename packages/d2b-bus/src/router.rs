@@ -9,7 +9,7 @@ use std::{
     time::{Duration, Instant},
 };
 
-use d2b_contracts::v3::{
+use d2b_contracts_zone_session::v3::{
     AuthenticatedSubjectContext, ControllerGeneration, EvidenceClass, Locality, ResourceGeneration,
     ResourceName, ResourceRef, ResourceTypeName, ResourceUid, ServiceName, SessionBinding, ZoneId,
 };
@@ -1771,7 +1771,7 @@ struct ComponentEndpoint {
     responses: Arc<ComponentResponses>,
     _response_task: ComponentResponseTask,
     clock: Arc<dyn BusClock>,
-    locality: d2b_contracts::v3::Locality,
+    locality: d2b_contracts_zone_session::v3::Locality,
     generation: u64,
     cancellation: SessionCancellationHandle,
     activity: Mutex<ComponentActivity>,
@@ -2206,7 +2206,7 @@ impl crate::registry::BusEndpoint for ComponentEndpoint {
         target: Option<&ResourceRef>,
         now_tick: u64,
     ) -> Result<(), EndpointError> {
-        let request = if self.locality == d2b_contracts::v3::Locality::AdjacentZone {
+        let request = if self.locality == d2b_contracts_zone_session::v3::Locality::AdjacentZone {
             SessionAuthorizationRequest::relay(
                 route.service().clone(),
                 route.member().as_str(),
@@ -2273,7 +2273,7 @@ impl crate::registry::BusEndpoint for ComponentEndpoint {
             .resource_call()
             .and_then(ResourceCall::session_target)
             .cloned();
-        let authorization = if self.locality == d2b_contracts::v3::Locality::AdjacentZone {
+        let authorization = if self.locality == d2b_contracts_zone_session::v3::Locality::AdjacentZone {
             SessionAuthorizationRequest::relay(
                 request.route().service().clone(),
                 request.route().member().as_str(),
@@ -2337,7 +2337,7 @@ impl crate::registry::BusEndpoint for ComponentEndpoint {
         match self.ttrpc.complete(request_id).await {
             Err(cleanup_error)
                 if cleanup_error.code()
-                    != d2b_contracts::v3::component_session::SessionErrorCode::SessionDisconnected =>
+                    != d2b_contracts_zone_session::v3::component_session::SessionErrorCode::SessionDisconnected =>
             {
                 return Err(EndpointError::from(cleanup_error));
             }
@@ -3612,7 +3612,7 @@ mod tests {
 
     use crate::metrics::BusRouteOutcome;
     use async_trait::async_trait;
-    use d2b_contracts::v3::{
+    use d2b_contracts_zone_session::v3::{
         AuthenticatedSubjectContext, BindingDigest, CanonicalJsonValue, ConfigurationGeneration,
         ControllerGeneration, EvidenceClass, Locality, RESOURCE_ENVELOPE_DOMAIN_TAG,
         ReconnectGeneration, ResourceGeneration, ResourceRef, ResourceTypeName, ResourceUid,
@@ -5938,7 +5938,7 @@ mod tests {
     #[test]
     fn endpoint_session_failures_preserve_actionable_details_and_closed_labels() {
         use crate::registry::EndpointFailureClass;
-        use d2b_contracts::v3::component_session::{Remediation, SessionErrorCode};
+        use d2b_contracts_zone_session::v3::component_session::{Remediation, SessionErrorCode};
 
         let cases = [
             (

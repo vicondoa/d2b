@@ -7,7 +7,7 @@
 
 use std::{sync::Mutex, time::Duration};
 
-use d2b_contracts::v3::{ResourceRef, ResourceUid};
+use d2b_contracts_zone_session::v3::{ResourceRef, ResourceUid};
 use d2b_contracts_broker::{
     broker_wire::{
         BrokerCallerRole, BrokerRequest, BrokerResponse, RunnerRole, SpawnRunnerRequest,

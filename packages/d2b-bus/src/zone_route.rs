@@ -24,7 +24,7 @@
 
 use std::collections::BTreeMap;
 
-use d2b_contracts::v3::{
+use d2b_contracts_zone_session::v3::{
     AuthenticatedSubjectContext, MAX_BATCH_MUTATIONS, MAX_FILTER_VALUES, MAX_LIST_FILTERS,
     ReconnectGeneration, ResourceName, ResourceTypeName, ZoneRevision, is_canonical_digest,
     zone_routing::{
@@ -936,7 +936,7 @@ impl ChildWatchCursor {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use d2b_contracts::v3::zone_routing::{
+    use d2b_contracts_zone_session::v3::zone_routing::{
         ZoneLabelId, ZoneRouteHopDirection, ZoneRouteId, ZoneTreeEdge,
     };
 

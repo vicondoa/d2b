@@ -2,7 +2,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use d2b_contracts::v3::{
+use d2b_contracts_zone_session::v3::{
     AuthenticatedSubjectContext, ControllerGeneration, EvidenceClass, Locality, ResourceGeneration,
     ResourceName, ResourceRef, ResourceTypeName, ResourceUid, SchemaFingerprint, ServiceName,
     SessionPurpose,
@@ -307,7 +307,7 @@ impl AuthorizationHandler {
 
 #[cfg(test)]
 mod tests {
-    use d2b_contracts::v3::{
+    use d2b_contracts_zone_session::v3::{
         BindingDigest, ReconnectGeneration, SchemaFingerprint, ServiceName, SessionBinding,
         SessionPurpose, TranscriptHash, TransportBinding,
     };

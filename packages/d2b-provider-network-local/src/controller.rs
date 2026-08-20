@@ -3,7 +3,7 @@
 use std::collections::BTreeMap;
 use std::future::Future;
 
-use d2b_contracts::v3::{
+use d2b_contracts_zone_session::v3::{
     ResourceBundleGenerationId, ResourceGeneration, ResourceRef, ResourceUid,
     execution_policy::{BoundedToken, BudgetSpec, ExecutionPolicy},
     guest::GuestSpec,
@@ -865,7 +865,7 @@ pub fn render_config(spec: &NetworkSpec) -> Result<NetworkConfigContent, Network
         "lan={}\nuplink={}\nblocklist={}\n",
         spec.lan_cidr().as_str(),
         spec.uplink_cidr().as_str(),
-        d2b_contracts::v3::network::DEFAULT_HOST_BLOCKLIST.join(",")
+        d2b_contracts_zone_session::v3::network::DEFAULT_HOST_BLOCKLIST.join(",")
     )
     .into_bytes();
     let routing = format!("uplink={}\n", spec.uplink_cidr().as_str()).into_bytes();

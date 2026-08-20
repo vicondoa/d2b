@@ -70,10 +70,10 @@ impl RedactionGuard {
                     "d2b.zone" | "vm.name" | "vm.env" | "vm.role" | "host.name" | "source"
                 );
                 if identity_key || value.contains('/') || value.chars().any(char::is_whitespace) {
-                    if d2b_contracts::v3::is_canonical_digest(value) {
+                    if d2b_contracts_zone_session::v3::is_canonical_digest(value) {
                         value.to_owned()
                     } else {
-                        d2b_contracts::v3::canonical_digest(
+                        d2b_contracts_zone_session::v3::canonical_digest(
                             "d2b:telemetry-redaction:v1",
                             value.as_bytes(),
                         )
@@ -153,7 +153,7 @@ impl RedactionGuard {
             {
                 return Err(RedactionError::ForbiddenSpanField);
             }
-            let allowed = d2b_contracts::v3::telemetry_policy::allowed_values(&key)
+            let allowed = d2b_contracts_provider::v3::telemetry_policy::allowed_values(&key)
                 .ok_or(RedactionError::SemanticFieldNotAllowlisted)?;
             if !allowed.contains(&value.as_str()) {
                 return Err(RedactionError::SemanticValueNotAllowlisted);

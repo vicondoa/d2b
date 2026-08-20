@@ -2,7 +2,7 @@
 
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 
-use d2b_contracts::v3::{
+use d2b_contracts_zone_session::v3::{
     ControllerGeneration, ObservedGeneration, ResourceGeneration, ResourceRef, ResourceTypeName,
     ZoneId, ZoneRevision,
 };
@@ -674,7 +674,7 @@ impl std::error::Error for HintAdmissionError {}
 #[cfg(test)]
 mod tests {
     use super::*;
-    use d2b_contracts::v3::ResourceUid;
+    use d2b_contracts_zone_session::v3::ResourceUid;
 
     fn controller(name: &str) -> ResourceRef {
         ResourceRef::parse(&format!("Process/{name}")).unwrap()

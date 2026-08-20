@@ -6,9 +6,9 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use d2b_contracts::{
+use d2b_contracts_zone_session::v3::{
     ZoneBundle,
-    v3::{ConfigurationGeneration, ResourceBundleGenerationId, SchemaFingerprint, Timestamp},
+    {ConfigurationGeneration, ResourceBundleGenerationId, SchemaFingerprint, Timestamp},
 };
 
 use crate::resource_store::{

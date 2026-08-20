@@ -12,7 +12,7 @@ use d2b_bus::{
     BusConfig, OperationId, OperationSpec, ReceivedFrame, ResourceCall, ResourceQuery, StreamError,
     StreamLimits, StreamName, router::production_rss::ProductionWatchHarness,
 };
-use d2b_contracts::v3::{
+use d2b_contracts_zone_session::v3::{
     CanonicalJsonValue, ConfigurationGeneration, RESOURCE_ENVELOPE_DOMAIN_TAG, ResourceRef,
     ResourceTypeName, ResourceUid, Timestamp, ZoneId, ZoneRevision, canonical_digest,
 };

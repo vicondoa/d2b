@@ -40,32 +40,31 @@ use crate::resource_operator_activation::{
 };
 use d2b_audit::{AuditSink, DurabilityEvidence};
 use d2b_bus::{BusAuthorizer, BusConfig, BusIngress, ZoneBus, ZoneRegistrar};
-use d2b_contracts::v3::identity::STANDARD_RESOURCE_TYPES;
-use d2b_contracts::v3::provider::ProviderSpec;
-use d2b_contracts::v3::{
+use d2b_contracts_zone_session::v3::identity::STANDARD_RESOURCE_TYPES;
+use d2b_contracts_provider::v3::provider::ProviderSpec;
+use d2b_contracts_zone_session::v3::{
     DEFAULT_LIST_PAGE_SIZE, MAX_FILTER_VALUES, MAX_LIST_FILTERS, MAX_LIST_PAGE_SIZE,
     MAX_LIST_RESOURCE_TYPES, MAX_PAGE_CURSOR_BYTES, MAX_RESPONSE_CANONICAL_BYTES,
 };
-use d2b_contracts::v3::{
+use d2b_contracts_zone_session::v3::{
     host::{HOST_PROVIDER_REF, HostSpec},
     user::UserSpec,
 };
 use d2b_contracts_broker::broker_wire::{OpenZoneStoreResponse, ZoneStoreDisposition};
-use d2b_contracts::{
-    resource_proto as wire,
-    v3::{
-        AuthenticatedSubjectContext, BindingDigest, CanonicalJsonValue, ConfigurationGeneration,
-        ControllerGeneration, EvidenceClass, Locality as IdentityLocality, ReconnectGeneration,
-        ResourceBundle, ResourceEnvelope, ResourceError, ResourceErrorKind, ResourceErrorReason,
-        ResourceGeneration, ResourceName, ResourcePhase, ResourceRef, ResourceTypeName,
-        ResourceUid, RetryClass, SchemaFingerprint, ServiceName, SessionBinding, SessionPurpose,
-        Timestamp, TranscriptHash, TransportBinding, ZoneId, ZoneRevision, ZoneStatusResource,
-        component_session::{
-            AttachmentPolicy, EndpointPolicy, EndpointPurpose, EndpointRole,
-            IdentityEvidenceRequirement, LimitProfile, Locality, NoiseProfile, PurposeClass,
-            ServicePackage, TransportBinding as ComponentTransportBinding, TransportClass,
-        },
+use d2b_contracts_resource::resource_proto as wire;
+use d2b_contracts_zone_session::v3::{
+    AuthenticatedSubjectContext, BindingDigest, CanonicalJsonValue, ConfigurationGeneration,
+    ControllerGeneration, EvidenceClass, Locality as IdentityLocality, ReconnectGeneration,
+    ResourceEnvelope, ResourceError, ResourceErrorKind, ResourceErrorReason, ResourceGeneration,
+    ResourceName, ResourcePhase, ResourceRef, ResourceTypeName, ResourceUid, RetryClass,
+    SchemaFingerprint, ServiceName, SessionBinding, SessionPurpose, Timestamp, TranscriptHash,
+    TransportBinding, ZoneId, ZoneRevision, ZoneStatusResource,
+    component_session::{
+        AttachmentPolicy, EndpointPolicy, EndpointPurpose, EndpointRole,
+        IdentityEvidenceRequirement, LimitProfile, Locality, NoiseProfile, PurposeClass,
+        ServicePackage, TransportBinding as ComponentTransportBinding, TransportClass,
     },
+    resource_bundle::ResourceBundle,
 };
 use d2b_core_controller::authority::{
     AuthorityRequest, AuthorityReservation, ExternalNicClaimRequest, ExternalNicRecoveryInventory,
@@ -1428,7 +1427,7 @@ impl ZoneResourceRuntime {
     /// payload into a subject.
     pub fn bind_operator_resource_client(
         &self,
-        context: d2b_contracts::v3::AuthenticatedSubjectContext,
+        context: d2b_contracts_zone_session::v3::AuthenticatedSubjectContext,
     ) -> Result<
         Arc<ResourceApiClient<RedbBackend, UnavailableUpgradeDispatcher>>,
         ResourceRuntimeError,
@@ -3081,7 +3080,7 @@ fn system_core_endpoint_policy() -> EndpointPolicy {
         },
         reconnect_generation: 1,
         attachment_policy: AttachmentPolicy {
-            kind: d2b_contracts::v3::component_session::AttachmentPolicyKind::PacketAtomic,
+            kind: d2b_contracts_zone_session::v3::component_session::AttachmentPolicyKind::PacketAtomic,
             max_per_packet: 1,
             max_per_request: 1,
             max_per_operation: 1,
@@ -3167,7 +3166,7 @@ async fn register_system_core_session(
         .admit(
             initiator,
             TransportEvidence::new(
-                d2b_contracts::v3::EvidenceClass::UnixPeer,
+                d2b_contracts_zone_session::v3::EvidenceClass::UnixPeer,
                 BindingDigest::parse(format!("sha256:{}", "22".repeat(32)))
                     .map_err(|_| ResourceRuntimeError::AuthenticationUnavailable)?,
             ),
@@ -3283,14 +3282,14 @@ fn civil_from_days(days_since_epoch: i64) -> (i64, i64, i64) {
     (year, month, day)
 }
 
-fn handler_phase_to_zone_phase(phase: HandlerPhase) -> d2b_contracts::v3::ZoneHandlerPhase {
+fn handler_phase_to_zone_phase(phase: HandlerPhase) -> d2b_contracts_zone_session::v3::ZoneHandlerPhase {
     match phase {
-        HandlerPhase::Ready => d2b_contracts::v3::ZoneHandlerPhase::Ready,
-        HandlerPhase::Degraded => d2b_contracts::v3::ZoneHandlerPhase::Degraded,
-        HandlerPhase::Failed => d2b_contracts::v3::ZoneHandlerPhase::Failed,
-        HandlerPhase::Unknown => d2b_contracts::v3::ZoneHandlerPhase::Unknown,
+        HandlerPhase::Ready => d2b_contracts_zone_session::v3::ZoneHandlerPhase::Ready,
+        HandlerPhase::Degraded => d2b_contracts_zone_session::v3::ZoneHandlerPhase::Degraded,
+        HandlerPhase::Failed => d2b_contracts_zone_session::v3::ZoneHandlerPhase::Failed,
+        HandlerPhase::Unknown => d2b_contracts_zone_session::v3::ZoneHandlerPhase::Unknown,
         HandlerPhase::Pending | HandlerPhase::Recovering => {
-            d2b_contracts::v3::ZoneHandlerPhase::Pending
+            d2b_contracts_zone_session::v3::ZoneHandlerPhase::Pending
         }
     }
 }
@@ -4120,7 +4119,7 @@ async fn reconcile_system_core_resources(
 
     let mut host_phase = host_phase_for_resource_count(hosts.len());
     for resource in hosts {
-        let envelope = d2b_contracts::v3::ResourceEnvelope::from_json(&resource.canonical_json)
+        let envelope = d2b_contracts_zone_session::v3::ResourceEnvelope::from_json(&resource.canonical_json)
             .map_err(|_| ResourceRuntimeError::HandlerNotReady)?;
         let spec: HostSpec = serde_json::from_slice(&envelope.spec().base().to_canonical_bytes())
             .map_err(|_| ResourceRuntimeError::HandlerNotReady)?;
@@ -4173,7 +4172,7 @@ async fn reconcile_system_core_resources(
     let user_reconciler = UserReconciler::new(SystemCoreUserDiscovery);
     let mut user_phase = HandlerPhase::Ready;
     for resource in users {
-        let envelope = d2b_contracts::v3::ResourceEnvelope::from_json(&resource.canonical_json)
+        let envelope = d2b_contracts_zone_session::v3::ResourceEnvelope::from_json(&resource.canonical_json)
             .map_err(|_| ResourceRuntimeError::HandlerNotReady)?;
         let spec: UserSpec = serde_json::from_slice(&envelope.spec().base().to_canonical_bytes())
             .map_err(|_| ResourceRuntimeError::HandlerNotReady)?;
@@ -4801,7 +4800,7 @@ fn public_api_error(error: &wire::ResourceError) -> Value {
     .flatten();
     let retry_after_ms = error
         .retry_after_ms
-        .filter(|delay| (1..=d2b_contracts::v3::MAX_RESOURCE_ERROR_RETRY_AFTER_MS).contains(delay));
+        .filter(|delay| (1..=d2b_contracts_zone_session::v3::MAX_RESOURCE_ERROR_RETRY_AFTER_MS).contains(delay));
     let retry_class = if retry_after_ms.is_some() {
         RetryClass::AfterDelay
     } else if retry_class == RetryClass::AfterDelay {
@@ -5209,8 +5208,8 @@ async fn ensure_bootstrap_host_resource(
     identity.name = "host-system".to_owned();
     let mut body = wire::ResourceEnvelopeBytes::new();
     body.identity = protobuf::MessageField::some(identity.clone());
-    body.payload_digest = d2b_contracts::v3::canonical_digest(
-        d2b_contracts::v3::RESOURCE_ENVELOPE_DOMAIN_TAG,
+    body.payload_digest = d2b_contracts_zone_session::v3::canonical_digest(
+        d2b_contracts_zone_session::v3::RESOURCE_ENVELOPE_DOMAIN_TAG,
         &payload,
     );
     body.canonical_json = payload;
@@ -5381,7 +5380,7 @@ pub(crate) fn resource_bundle_materialization_operation_id(
 
 fn create_resource_payload(
     zone: &ZoneId,
-    resource: &d2b_contracts::v3::resource_bundle::BundleResource,
+    resource: &d2b_contracts_zone_session::v3::resource_bundle::BundleResource,
     configuration_generation: u64,
 ) -> Result<Vec<u8>, ResourceRuntimeError> {
     let mut value =
@@ -5447,7 +5446,7 @@ fn create_resource_payload(
 
 fn update_resource_payload(
     current: &[u8],
-    resource: &d2b_contracts::v3::resource_bundle::BundleResource,
+    resource: &d2b_contracts_zone_session::v3::resource_bundle::BundleResource,
 ) -> Result<Vec<u8>, ResourceRuntimeError> {
     let mut value = serde_json::from_slice::<Value>(current)
         .map_err(|_| ResourceRuntimeError::HandlerNotReady)?;
@@ -5492,7 +5491,7 @@ fn resource_envelope_body(
 
 fn create_mutation(
     zone: &ZoneId,
-    resource: &d2b_contracts::v3::resource_bundle::BundleResource,
+    resource: &d2b_contracts_zone_session::v3::resource_bundle::BundleResource,
     payload: Vec<u8>,
 ) -> Result<wire::Mutation, ResourceRuntimeError> {
     let identity = resource_identity(
@@ -5511,8 +5510,8 @@ fn create_mutation(
     mutation.resource = protobuf::MessageField::some(resource_envelope_body(
         identity,
         payload.clone(),
-        d2b_contracts::v3::canonical_digest(
-            d2b_contracts::v3::RESOURCE_ENVELOPE_DOMAIN_TAG,
+        d2b_contracts_zone_session::v3::canonical_digest(
+            d2b_contracts_zone_session::v3::RESOURCE_ENVELOPE_DOMAIN_TAG,
             &payload,
         ),
     ));
@@ -5708,7 +5707,7 @@ mod tests {
                 },
             },
         });
-        let canonical_json = d2b_contracts::v3::canonical_json_bytes(&envelope).unwrap();
+        let canonical_json = d2b_contracts_zone_session::v3::canonical_json_bytes(&envelope).unwrap();
         let parsed = ResourceEnvelope::from_json(&canonical_json).unwrap();
         StoredResource {
             resource_ref: ResourceRef::parse(&format!("Provider/{name}")).unwrap(),
@@ -6030,7 +6029,7 @@ mod tests {
     #[test]
     fn broker_response_requires_one_canonical_zone_store() {
         let response = OpenZoneStoreResponse {
-            zone_store_id: d2b_contracts::v3::storage::ZoneStoreId::parse("zone-store-work")
+            zone_store_id: d2b_contracts_zone_session::v3::storage::ZoneStoreId::parse("zone-store-work")
                 .unwrap(),
             store_identity: "sha256:".to_owned() + &"a".repeat(64),
             disposition: ZoneStoreDisposition::Opened,
@@ -6138,7 +6137,7 @@ mod tests {
             Some(ZoneRevision::new(11)),
             Some(250),
             RetryClass::AfterDelay,
-            d2b_contracts::v3::ResourceErrorReason::parse("revision-changed").unwrap(),
+            d2b_contracts_zone_session::v3::ResourceErrorReason::parse("revision-changed").unwrap(),
         )
         .unwrap();
         let envelope = resource_error_envelope(&error);
@@ -6221,7 +6220,7 @@ mod tests {
             zone.clone(),
             OpenedZoneStore {
                 response: OpenZoneStoreResponse {
-                    zone_store_id: d2b_contracts::v3::storage::ZoneStoreId::parse(
+                    zone_store_id: d2b_contracts_zone_session::v3::storage::ZoneStoreId::parse(
                         "zone-store-work",
                     )
                     .unwrap(),
@@ -6307,7 +6306,7 @@ mod tests {
             zone,
             OpenedZoneStore {
                 response: OpenZoneStoreResponse {
-                    zone_store_id: d2b_contracts::v3::storage::ZoneStoreId::parse(
+                    zone_store_id: d2b_contracts_zone_session::v3::storage::ZoneStoreId::parse(
                         "zone-store-work",
                     )
                     .unwrap(),
@@ -6383,7 +6382,7 @@ mod tests {
             zone,
             OpenedZoneStore {
                 response: OpenZoneStoreResponse {
-                    zone_store_id: d2b_contracts::v3::storage::ZoneStoreId::parse(
+                    zone_store_id: d2b_contracts_zone_session::v3::storage::ZoneStoreId::parse(
                         "zone-store-work",
                     )
                     .unwrap(),
@@ -6454,7 +6453,7 @@ mod tests {
             zone.clone(),
             OpenedZoneStore {
                 response: OpenZoneStoreResponse {
-                    zone_store_id: d2b_contracts::v3::storage::ZoneStoreId::parse(
+                    zone_store_id: d2b_contracts_zone_session::v3::storage::ZoneStoreId::parse(
                         "zone-store-work",
                     )
                     .unwrap(),

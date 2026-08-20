@@ -338,7 +338,7 @@ fn parse_guest_ref(
     context: &ZoneContext,
     value: &str,
     mode: OutputMode,
-) -> Result<d2b_contracts::v3::ResourceRef, CliFailure> {
+) -> Result<d2b_contracts_zone_session::v3::ResourceRef, CliFailure> {
     let resource_ref = parse_resource_ref(value, Some("Guest"))?;
     if resource_ref.resource_type().as_str() != "Guest" {
         return Err(context.failure(

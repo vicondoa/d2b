@@ -1,6 +1,6 @@
 use std::sync::{Arc, Mutex};
 
-use d2b_contracts::v3::ResourceUid;
+use d2b_contracts_zone_session::v3::ResourceUid;
 use d2b_provider_volume_local::lock::{
     LockError, LockId, LockSet, LockSpec, LockTransferPolicy, OfdLockBackend, OfdLockHandle,
 };

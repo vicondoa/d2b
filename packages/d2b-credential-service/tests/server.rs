@@ -1,9 +1,9 @@
 use std::sync::atomic::{AtomicUsize, Ordering};
 
-use d2b_contracts::v3::credential::{
+use d2b_contracts_provider::v3::credential::{
     AudienceToken, CredentialLeaseHandle, CredentialLeaseState, CredentialSourceVersion,
 };
-use d2b_contracts::v3::{ResourceGeneration, ResourceRef, ResourceUid};
+use d2b_contracts_zone_session::v3::{ResourceGeneration, ResourceRef, ResourceUid};
 use d2b_credential_service::{
     CredentialAdmission, CredentialAuthorization, CredentialFailureState, CredentialMetadata,
     CredentialMethod, CredentialOutcomeCode, CredentialProvider, CredentialRequest,

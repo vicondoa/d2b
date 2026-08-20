@@ -4,7 +4,7 @@ use std::{
 };
 
 use async_trait::async_trait;
-use d2b_contracts::v3::component_session::RequestId;
+use d2b_contracts_zone_session::v3::component_session::RequestId;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use ttrpc::{
     r#async::{MethodHandler, Service, StreamHandler, StreamInner, TtrpcContext},
@@ -125,7 +125,7 @@ trait TtrpcServerDriver: Send + Sync {
     ) -> SessionResult<()> {
         if cancellation.is_cancelled() {
             Err(crate::SessionError::new(
-                d2b_contracts::v3::component_session::SessionErrorCode::Cancelled,
+                d2b_contracts_zone_session::v3::component_session::SessionErrorCode::Cancelled,
             ))
         } else {
             self.send_ttrpc(frame).await
@@ -214,7 +214,7 @@ async fn serve_ttrpc_services_inner(
         return Err(SessionServerError::Service);
     }
     let capacity =
-        d2b_contracts::v3::component_session::LimitProfile::local_default().logical_ttrpc_bytes;
+        d2b_contracts_zone_session::v3::component_session::LimitProfile::local_default().logical_ttrpc_bytes;
     let capacity = usize::try_from(capacity).map_err(|_| SessionServerError::Transport)?;
     let (server_transport, bridge_transport) = tokio::io::duplex(capacity);
     let listener =
@@ -282,7 +282,7 @@ async fn serve_ttrpc_services_inner(
                 .map_err(|_| SessionServerError::Transport)?;
             let header = MessageHeader::from(header_bytes);
             let body_len = usize::try_from(header.length).map_err(|_| SessionServerError::Frame)?;
-            if body_len > d2b_contracts::v3::component_session::MAX_LOGICAL_MESSAGE_BYTES as usize {
+            if body_len > d2b_contracts_zone_session::v3::component_session::MAX_LOGICAL_MESSAGE_BYTES as usize {
                 return Err(SessionServerError::Frame);
             }
             let mut frame = header_bytes.to_vec();
@@ -341,7 +341,7 @@ fn validate_frame(frame: &[u8]) -> Result<MessageHeader, SessionServerError> {
         .map_err(|_| SessionServerError::Frame)?;
     let header = MessageHeader::from(header_bytes);
     let body_len = usize::try_from(header.length).map_err(|_| SessionServerError::Frame)?;
-    if body_len > d2b_contracts::v3::component_session::MAX_LOGICAL_MESSAGE_BYTES as usize
+    if body_len > d2b_contracts_zone_session::v3::component_session::MAX_LOGICAL_MESSAGE_BYTES as usize
         || frame.len() != MESSAGE_HEADER_LENGTH.saturating_add(body_len)
     {
         return Err(SessionServerError::Frame);

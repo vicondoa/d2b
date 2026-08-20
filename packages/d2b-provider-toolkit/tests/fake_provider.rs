@@ -12,19 +12,20 @@
 
 use std::collections::BTreeMap;
 
-use d2b_contracts::v3::identity::BindingDigest;
-use d2b_contracts::v3::{
+use d2b_contracts_zone_session::v3::identity::BindingDigest;
+use d2b_contracts_resource::v3::ArtifactId;
+use d2b_contracts_zone_session::v3::{
     Locality, TransportBinding,
     execution_policy::{BoundedToken, ExecutionDomain},
     identity::{ResourceTypeName, SchemaFingerprint, SessionPurpose},
     provider::{
-        ArtifactDigest, ArtifactDigestSet, ArtifactId, CapabilitySupport, CompatibilityRange,
+        ArtifactDigest, ArtifactDigestSet, CapabilitySupport, CompatibilityRange,
         ComponentDescriptor, ComponentStateKind, ComponentStateNamespace, ComponentStateView,
         ComponentType, DependencyAlias, DependencyDeclaration, PolicyEvaluation, ProviderManifest,
         ProviderSpec, ResourceApiBinding, RevocationState, SignatureState,
         StandardCapabilityMatrix, StorageNeed, TrustEvidence, UpgradeDisposition, UpgradePolicy,
     },
-    resource_ref::ResourceRef,
+    ResourceRef,
     resource_schema::SchemaVersion,
     volume::ViewRight,
     volume_state::{MigrationPolicy, PersistenceClass, SensitivityClass, VolumeStateSchemaId},
@@ -139,7 +140,7 @@ pub fn manifest_with(
     trust: TrustEvidence,
     components: Vec<ComponentDescriptor>,
     bindings: Vec<ResourceApiBinding>,
-) -> Result<ProviderManifest, d2b_contracts::v3::provider::ProviderContractError> {
+) -> Result<ProviderManifest, d2b_contracts_provider::v3::provider::ProviderContractError> {
     ProviderManifest::new(
         artifact_id(),
         digests(),

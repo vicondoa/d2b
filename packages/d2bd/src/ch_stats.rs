@@ -241,7 +241,7 @@ fn base_labels(input: &ChVmInput) -> String {
 }
 
 fn opaque_label(value: &str) -> String {
-    d2b_contracts::v3::canonical_digest("d2b:daemon-metric-label:v1", value.as_bytes())
+    d2b_contracts_zone_session::v3::canonical_digest("d2b:daemon-metric-label:v1", value.as_bytes())
 }
 
 fn escape_label_value(v: &str) -> String {

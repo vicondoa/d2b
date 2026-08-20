@@ -16,9 +16,8 @@ use d2b_contracts::provider_effects::aca::{
     AcaCredentialLease, AcaCredentialLeaseClient, AcaCredentialLeaseRequest, AcaCredentialPurpose,
     AcaDesiredDiskImage, AcaDesiredSandbox, AcaDiskImageRecord, AcaOperationId, AcaProviderConfig,
     AcaResourceBinding, AcaRuntimeConfig, AcaSandboxCandidates, AcaSandboxLifecycle,
-    AcaSandboxRecord, AcaTypeError, AcaWorkloadQuery,
+    AcaSandboxRecord, AcaTypeError, AcaWorkloadQuery, ResourceRef,
 };
-use d2b_contracts::v3::ResourceRef;
 
 /// Provider lifecycle phase.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]

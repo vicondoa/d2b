@@ -2,9 +2,10 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use d2b_contracts::v3::{
-    ProviderManifest, ResourceApiBinding, ResourceRef, ResourceTypeName, SchemaFingerprint,
+use d2b_contracts_provider::v3::{
+    ResourceRef, ResourceTypeName, SchemaFingerprint,
 };
+use d2b_contracts_provider::v3::{ProviderManifest, ResourceApiBinding};
 
 /// Closed reason a catalog candidate was refused.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -246,12 +247,13 @@ impl ApiCatalogHandler {
 
 #[cfg(test)]
 mod tests {
-    use d2b_contracts::v3::{
+    use d2b_contracts_provider::v3::{
         ArtifactDigest, ArtifactDigestSet, ArtifactId, CompatibilityRange, ComponentDescriptor,
-        ComponentType, PolicyEvaluation, ProviderUpgradePolicy, RevocationState, SchemaVersion,
+        ComponentType, PolicyEvaluation, RevocationState, SchemaVersion,
         SignatureState, StandardCapabilityMatrix, TrustEvidence, UpgradeDisposition,
         execution_policy::{BoundedToken, ExecutionDomain},
     };
+    use d2b_contracts_provider::v3::UpgradePolicy as ProviderUpgradePolicy;
 
     use super::*;
 

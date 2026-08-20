@@ -14,9 +14,9 @@
 //! assert the specification's exact negative enumeration is still refused,
 //! not because refusal depends on membership in it.
 
-use d2b_contracts::v3::ResourceRef;
-use d2b_contracts::v3::host::HOST_RESOURCE_TYPE;
-use d2b_contracts::v3::user::USER_RESOURCE_TYPE;
+use d2b_contracts_zone_session::v3::ResourceRef;
+use d2b_contracts_zone_session::v3::host::HOST_RESOURCE_TYPE;
+use d2b_contracts_zone_session::v3::user::USER_RESOURCE_TYPE;
 
 use crate::error::SystemCoreError;
 

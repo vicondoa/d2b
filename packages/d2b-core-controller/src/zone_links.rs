@@ -30,7 +30,7 @@
 //! the session state purely from the durable [`ZoneLinkRecord`]. Replaying an
 //! already-committed event after restart is a no-op that plans no effect.
 
-use d2b_contracts::v3::{
+use d2b_contracts_zone_session::v3::{
     ResourceUid,
     zone_routing::{
         ZoneLinkControllerGeneration, ZoneRouteFailClosedReason, ZoneSigningKeyFingerprint,

@@ -6,7 +6,7 @@
 
 use std::fmt;
 
-use d2b_contracts::v3::ResourceUid;
+use d2b_contracts_zone_session::v3::ResourceUid;
 
 /// A rejected anchored path value.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

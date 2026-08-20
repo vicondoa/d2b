@@ -5,7 +5,7 @@
 //! or an effect. A later dispatcher must consume this result before it creates
 //! a declared Volume or launches the component.
 
-use d2b_contracts::v3::provider::{ComponentDescriptor, ComponentStateNamespace, StorageNeed};
+use d2b_contracts_provider::v3::provider::{ComponentDescriptor, ComponentStateNamespace, StorageNeed};
 
 /// Whether one declared payload genuinely requires a state Volume.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -164,7 +164,7 @@ pub const fn revalidate_after_restart(
 mod tests {
     use std::collections::BTreeMap;
 
-    use d2b_contracts::v3::{
+    use d2b_contracts_zone_session::v3::{
         ResourceTypeName, SchemaFingerprint, SchemaVersion,
         execution_policy::{BoundedToken, ExecutionDomain},
         provider::{

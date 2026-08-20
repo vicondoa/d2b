@@ -1,12 +1,12 @@
 mod common;
 
-use d2b_contracts::v3::ResourceRef;
-use d2b_contracts::v3::credential::{
+use d2b_contracts_zone_session::v3::ResourceRef;
+use d2b_contracts_provider::v3::credential::{
     CredentialInteractionState, CredentialLeaseHandle, CredentialLeaseStatus, CredentialMethod,
     CredentialRequest, CredentialResponse, CredentialServiceErrorCode, CredentialSourceVersion,
     CredentialStatus, PlacementBinding, encode_outer,
 };
-use d2b_contracts::v3::credential_controller::{
+use d2b_contracts_provider::v3::credential_controller::{
     CredentialAuditOutcome, CredentialTelemetryOperation, CredentialTelemetryOutcome,
 };
 use d2b_provider_credential_secret_service::SecretServiceController;

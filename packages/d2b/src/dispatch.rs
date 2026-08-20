@@ -547,7 +547,7 @@ fn report_dispatch_failure(
                 .clone()
                 .or_else(|| std::env::var("D2B_ZONE").ok())
                 .unwrap_or_else(|| "local-root".to_owned());
-            let zone = if d2b_contracts::v3::ZoneId::parse(requested_zone.clone()).is_ok() {
+            let zone = if d2b_contracts_zone_session::v3::ZoneId::parse(requested_zone.clone()).is_ok() {
                 requested_zone
             } else {
                 "local-root".to_owned()

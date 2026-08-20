@@ -1,4 +1,4 @@
-use d2b_contracts::v3::SchemaVersion;
+use d2b_contracts_zone_session::v3::SchemaVersion;
 use d2b_provider_volume_local::audit::VolumeAuditKind;
 use d2b_provider_volume_local::marker::MarkerDisposition;
 use d2b_provider_volume_local::migration::{

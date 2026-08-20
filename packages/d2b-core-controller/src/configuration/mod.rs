@@ -55,9 +55,9 @@ pub mod generation_transition;
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use d2b_contracts::{
+use d2b_contracts_zone_session::v3::{
     ZoneBundle,
-    v3::identity::{
+    identity::{
         ConfigurationGeneration, ResourceBundleGenerationId, ResourceName, ResourceTypeName,
         ResourceUid, SchemaFingerprint, Timestamp, ZoneId, ZoneRevision,
     },

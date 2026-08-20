@@ -1,5 +1,5 @@
-use d2b_contracts::v3::ActivationOutcomeCode;
-use d2b_contracts::v3::{ActivationMode, NixosGenerationSpec, ResourcePhase, ResourceRef};
+use d2b_contracts_zone_session::v3::ActivationOutcomeCode;
+use d2b_contracts_zone_session::v3::{ActivationMode, NixosGenerationSpec, ResourcePhase, ResourceRef};
 use d2b_provider_activation_nixos::{
     ActivationCaller, ActivationController, CallerRole, GenerationObservation, GenerationPhase,
 };

@@ -16,7 +16,8 @@ rust_library(
     compile_data = ["Cargo.toml"],
     visibility = ["//visibility:public"],
     deps = [
-        "//packages/d2b-contracts:d2b_contracts",
+        "//packages/d2b-contracts-provider:d2b_contracts_provider",
+        "//packages/d2b-contracts-zone-session:d2b_contracts_zone_session",
         "//packages/d2b-provider-toolkit:d2b_provider_toolkit",
     ] + all_crate_deps(normal = True, cargo_only = True),
 )
@@ -26,14 +27,16 @@ rust_test(
     srcs = ["tests/ingress_metric_policy.rs"],
     compile_data = ["Cargo.toml"],
     visibility = ["//visibility:public"],
-    deps = [":d2b_provider_observability_otel"] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
+    deps = [":d2b_provider_observability_otel",
+            "//packages/d2b-contracts-provider:d2b_contracts_provider",
+        "//packages/d2b-contracts-zone-session:d2b_contracts_zone_session", ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
 )
 
 rust_test(
     name = "d2b_provider_observability_otel_test",
     compile_data = ["Cargo.toml"],
     crate = ":d2b_provider_observability_otel",
-    deps = [] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
+    deps = ["//packages/d2b-contracts-zone-session:d2b_contracts_zone_session",  "//packages/d2b-contracts-provider:d2b_contracts_provider",] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
 )
 
 # keep

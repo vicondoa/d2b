@@ -3,7 +3,7 @@
 use std::collections::BTreeSet;
 use std::{future::Future, future::ready};
 
-use d2b_contracts::v3::execution_policy::{BoundedToken, ExecutionDomain};
+use d2b_contracts_zone_session::v3::execution_policy::{BoundedToken, ExecutionDomain};
 
 use crate::error::ProcessConformanceError;
 use crate::identity::{IdentityBinding, WaitReapOwner};

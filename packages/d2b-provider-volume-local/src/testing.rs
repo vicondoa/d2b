@@ -11,9 +11,9 @@ use std::pin::pin;
 use std::sync::Mutex;
 use std::task::{Context, Poll, Waker};
 
-use d2b_contracts::v3::ResourceUid;
-use d2b_contracts::v3::execution_policy::BoundedToken;
-use d2b_contracts::v3::volume::SourceKind;
+use d2b_contracts_zone_session::v3::ResourceUid;
+use d2b_contracts_zone_session::v3::execution_policy::BoundedToken;
+use d2b_contracts_zone_session::v3::volume::SourceKind;
 
 use crate::error::VolumeLocalError;
 use crate::identity::{EntryDigest, MarkerState, OwnerProof, VolumeRootHandle};
@@ -215,8 +215,8 @@ impl VolumeLayoutEffectPort for &ScriptedPort {
 
 /// Canonical Volume fixtures.
 pub mod fixtures {
-    use d2b_contracts::v3::execution_policy::BoundedToken;
-    use d2b_contracts::v3::volume::VolumeSpec;
+    use d2b_contracts_zone_session::v3::execution_policy::BoundedToken;
+    use d2b_contracts_zone_session::v3::volume::VolumeSpec;
     use serde_json::{Value, json};
 
     use super::ResourceUid;

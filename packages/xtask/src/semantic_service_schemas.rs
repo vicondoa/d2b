@@ -6,7 +6,7 @@
 //! identity: a `spec` and a `status` layer for each of the eight qualified
 //! ResourceTypes, plus the strict projection schema of each family.
 //!
-//! The catalog in `d2b_contracts::v3::semantic_services` is the single source
+//! The catalog in `d2b_contracts_provider::v3::semantic_services` is the single source
 //! of truth. Nothing here restates a field set, so a change to the frozen
 //! bases cannot exist without moving these artifacts, which is what makes the
 //! drift gate meaningful.
@@ -21,7 +21,7 @@ use std::{
     path::{Path, PathBuf},
 };
 
-use d2b_contracts::v3::semantic_services::{
+use d2b_contracts_provider::v3::semantic_services::{
     SemanticLayerSchema, SemanticPairContract, SemanticTypeContract, catalog,
 };
 use serde_json::{Value, json};

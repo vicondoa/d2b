@@ -1,7 +1,7 @@
 //! Entra Credential audit producer.
 
-use d2b_contracts::v3::credential::CredentialMethod;
-use d2b_contracts::v3::credential_controller::{
+use d2b_contracts_provider::v3::credential::CredentialMethod;
+use d2b_contracts_provider::v3::credential_controller::{
     CredentialAuditDigest, CredentialAuditOutcome, CredentialAuditRecord,
     CredentialObservabilityError, CredentialProviderKind,
 };

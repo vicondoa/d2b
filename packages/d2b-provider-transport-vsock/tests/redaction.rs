@@ -1,4 +1,4 @@
-use d2b_contracts::v3::{ResourceRef, ZoneId};
+use d2b_contracts_zone_session::v3::{ResourceRef, ZoneId};
 use d2b_provider_transport_vsock::{
     GuestControlKey, GuestIdentity, OpaqueBindingId, OpaqueEndpointId, PeerCid, SessionAuthority,
     SessionProof, VsockTransportSettings,

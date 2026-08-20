@@ -23,7 +23,7 @@ rust_library(
     srcs = d2b_resource_store_srcs,
     compile_data = ["Cargo.toml"],
     visibility = ["//visibility:public"],
-    deps = ["//packages/d2b-contracts:d2b_contracts"] + all_crate_deps(normal = True, cargo_only = True),
+    deps = ["//packages/d2b-contracts-resource:d2b_contracts_resource"] + all_crate_deps(normal = True, cargo_only = True),
 )
 
 rust_library(
@@ -32,7 +32,7 @@ rust_library(
     compile_data = ["Cargo.toml"],
     crate_name = "d2b_resource_store",
     visibility = ["//visibility:public"],
-    deps = ["//packages/d2b-contracts:d2b_contracts_test_support"] + all_crate_deps(normal = True, cargo_only = True),
+    deps = ["//packages/d2b-contracts-resource:d2b_contracts_resource"] + all_crate_deps(normal = True, cargo_only = True),
 )
 
 rust_test(

@@ -1,7 +1,7 @@
 //! Per-Zone Unix datagram receiver for bounded telemetry frames.
 
 use crate::ingress_policy::{Ingress, IngressOutcome, IngressPolicyGate};
-use d2b_contracts::v3::{redact_parsed_frame, validate_raw_frame};
+use d2b_contracts_provider::v3::{redact_parsed_frame, validate_raw_frame};
 use rustix::fs::{Mode, fchmod, fstat};
 use std::{
     collections::VecDeque,

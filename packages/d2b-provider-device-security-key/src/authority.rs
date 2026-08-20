@@ -1,7 +1,7 @@
 //! Core-derived physical USB authority and hidraw effect boundary.
 
 use core::fmt;
-use d2b_contracts::v3::{ResourceRef, ResourceUid};
+use d2b_contracts_zone_session::v3::{ResourceRef, ResourceUid};
 
 /// Core-derived opaque physical USB backing identity.
 #[derive(Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]

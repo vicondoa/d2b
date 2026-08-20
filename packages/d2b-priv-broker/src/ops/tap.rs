@@ -183,8 +183,8 @@ pub fn set_bridge_port_flags<B: NetlinkBackend>(
 
 #[derive(Debug)]
 pub struct LiveCreateTapOutcome {
-    pub bridge_ifname: Option<d2b_contracts::v3::IfName>,
-    pub tap_ifname: d2b_contracts::v3::IfName,
+    pub bridge_ifname: Option<d2b_contracts_zone_session::v3::IfName>,
+    pub tap_ifname: d2b_contracts_zone_session::v3::IfName,
     pub fd: Option<OwnedFd>,
 }
 
@@ -511,8 +511,8 @@ fn validate_existing_macvtap_json(
 }
 
 fn attach_tap_to_bridge(
-    tap_ifname: &d2b_contracts::v3::IfName,
-    bridge_ifname: &d2b_contracts::v3::IfName,
+    tap_ifname: &d2b_contracts_zone_session::v3::IfName,
+    bridge_ifname: &d2b_contracts_zone_session::v3::IfName,
 ) -> Result<(), super::OpError> {
     let ip = ip_binary_path();
     run_ip_link(
@@ -626,12 +626,12 @@ where
         }
     })?;
     Ok(d2b_contracts_broker::broker_wire::BridgePortFlagsResponse {
-        bridge: d2b_contracts::v3::IfName::new(&target.bridge).map_err(|err| {
+        bridge: d2b_contracts_zone_session::v3::IfName::new(&target.bridge).map_err(|err| {
             LiveSetBridgePortFlagsError::Resolve(format!("resolved bridge ifname invalid: {err}"))
         })?,
         isolated: desired.isolated,
         neigh_suppress: desired.neigh_suppress,
-        port: d2b_contracts::v3::IfName::new(&target.port).map_err(|err| {
+        port: d2b_contracts_zone_session::v3::IfName::new(&target.port).map_err(|err| {
             LiveSetBridgePortFlagsError::Resolve(format!("resolved port ifname invalid: {err}"))
         })?,
     })
@@ -968,7 +968,7 @@ pub fn fake_backend() -> FakeBackend {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use d2b_contracts::v3::IfName as BundleIfName;
+    use d2b_contracts_zone_session::v3::IfName as BundleIfName;
     use d2b_core::bundle::{Bundle, BundleGeneration};
     use d2b_core::host::{
         BridgePortFlags as HostBridgePortFlags, HostJson as BundleHostJson, IfNameMapping,

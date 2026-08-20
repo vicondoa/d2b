@@ -6,7 +6,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use d2b_contracts::v3::{
+use d2b_contracts_zone_session::v3::{
     ConfigurationGeneration, ResourceBundleGenerationId, ResourceTypeName, Timestamp, ZoneRevision,
     execution_policy::DurationMs,
 };
@@ -945,7 +945,7 @@ fn civil_from_days(days: i128) -> (i128, i128, i128) {
 #[cfg(test)]
 mod ephemeral_cleanup_tests {
     use super::*;
-    use d2b_contracts::v3::{ResourceName, ResourceTypeName};
+    use d2b_contracts_zone_session::v3::{ResourceName, ResourceTypeName};
 
     fn key() -> ResourceKey {
         ResourceKey::new(

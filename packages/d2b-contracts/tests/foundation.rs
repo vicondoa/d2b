@@ -2,20 +2,11 @@ use d2b_contracts::{
     Error, FeatureFlag, Hello, SemverRange, Version, decode_json_body,
     ids::{OperationId, RealmId, WorkloadId},
     token::{ProtocolToken, TokenError},
-    v3::{IfName, IfNameError},
     workload_identity::{WorkloadIdentity, WorkloadTarget},
 };
 
 #[test]
 fn foundational_values_keep_validation_and_redaction_contracts() {
-    assert_eq!(IfName::new(""), Err(IfNameError::Empty));
-    assert_eq!(IfName::new("bad.name"), Err(IfNameError::InvalidCharacter));
-    assert_eq!(IfName::new("abcdefghijklmnop"), Err(IfNameError::TooLong));
-    let ifname = IfName::new("d2b-br0").expect("valid interface name");
-    assert_eq!(ifname.as_str(), "d2b-br0");
-    assert_eq!(format!("{ifname:?}"), "IfName(<redacted>)");
-    assert_eq!(format!("{ifname}"), "IfName(<redacted>)");
-
     assert_eq!(ProtocolToken::parse(""), Err(TokenError::Empty));
     assert!(ProtocolToken::parse("codec.v1").is_ok());
     assert!(OperationId::parse("operation-1").is_ok());

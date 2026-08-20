@@ -13,7 +13,7 @@ use std::{
     time::Duration,
 };
 
-use d2b_contracts::v3::{ResourceRef, zone_routing::ZonePath};
+use d2b_contracts_zone_session::v3::{ResourceRef, zone_routing::ZonePath};
 
 use crate::{
     AttemptDisposition, CallDriver, CallOptions, CancellationToken, ClientError, MethodProfile,
@@ -27,7 +27,7 @@ use crate::{
 /// This is the ComponentSession transport ceiling, not a second attach
 /// protocol limit.
 pub const MAX_PROCESS_ATTACH_MESSAGE_BYTES: usize =
-    d2b_contracts::v3::component_session::MAX_LOGICAL_MESSAGE_BYTES as usize;
+    d2b_contracts_zone_session::v3::component_session::MAX_LOGICAL_MESSAGE_BYTES as usize;
 
 const STREAM_OPEN: u8 = 0;
 const STREAM_CLOSING: u8 = 1;
@@ -755,7 +755,7 @@ mod tests {
         },
     };
 
-    use d2b_contracts::v3::{
+    use d2b_contracts_zone_session::v3::{
         CanonicalJsonObject, ResourceErrorKind, RetryClass, zone_routing::ZoneLabelId,
     };
 

@@ -5,11 +5,11 @@ mod audit;
 #[path = "telemetry.rs"]
 mod telemetry;
 
-use d2b_contracts::v3::credential::{
+use d2b_contracts_provider::v3::credential::{
     CredentialInteractionState, CredentialLeaseStatus, CredentialMetadata, CredentialServiceError,
     CredentialStatus, PlacementBinding,
 };
-use d2b_contracts::v3::credential_controller::{
+use d2b_contracts_provider::v3::credential_controller::{
     CredentialAuditOutcome, CredentialAuditRecord, CredentialControllerDecision,
     CredentialControllerError, CredentialControllerHandlers, CredentialControllerHealth,
     CredentialObservabilityError, CredentialObserveInput, CredentialReconcileInput,
@@ -114,7 +114,7 @@ impl SecretServiceController {
         zone: &str,
         subject_identity: &[u8],
         credential_name: &[u8],
-        method: d2b_contracts::v3::credential::CredentialMethod,
+        method: d2b_contracts_provider::v3::credential::CredentialMethod,
         outcome: CredentialAuditOutcome,
         rotation_generation: u64,
         idempotency_key: Option<&[u8]>,

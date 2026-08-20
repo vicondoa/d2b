@@ -12,7 +12,7 @@ use std::task::{Context, Poll, Waker};
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
-use d2b_contracts::v3::ResourceUid;
+use d2b_contracts_zone_session::v3::ResourceUid;
 use d2b_process::{
     AdoptionCandidate, BackendObservation, LaunchTicket, LaunchedProcess, PidfdEvidence,
     ProcessConformanceError, ProcessEffectBackend, ProcessEffectError, ProcessIdentityDigest,

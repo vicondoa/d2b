@@ -4,8 +4,8 @@
 //! Volume row: it reads the referenced Volume only to resolve the named
 //! view and the target Guest's vcpu count.
 
-use d2b_contracts::v3::execution_policy::BoundedToken;
-use d2b_contracts::v3::volume::{ViewSpec, VolumeSpec};
+use d2b_contracts_zone_session::v3::execution_policy::BoundedToken;
+use d2b_contracts_zone_session::v3::volume::{ViewSpec, VolumeSpec};
 
 use crate::error::VirtiofsExportError;
 use crate::export::{EXPORT_FINALIZER, ExportSpec};
@@ -67,7 +67,7 @@ impl<P: VirtiofsExportEffectPort> VirtiofsExportController<P> {
             reason: Some(reason),
         };
 
-        if export.access() == d2b_contracts::v3::volume::AttachmentAccess::SharedWrite {
+        if export.access() == d2b_contracts_zone_session::v3::volume::AttachmentAccess::SharedWrite {
             return Ok(failed(VirtiofsExportError::SharedWriteUnsupported));
         }
         WorkerSandbox::conformant().assert_conformant()?;

@@ -4,7 +4,7 @@
 //! index and typed broker dispatcher. This crate never imports broker DTOs or
 //! receives host paths.
 
-use d2b_contracts::v3::ResourceGeneration;
+use d2b_contracts_zone_session::v3::ResourceGeneration;
 
 use crate::{
     GpuAuthorityAdmission, GpuAuthorityLease, GpuClosureProof, GpuEffectError, GpuEffectTokenSet,

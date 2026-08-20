@@ -1,4 +1,4 @@
-use d2b_contracts::v3::{ResourceRef, ZoneId};
+use d2b_contracts_zone_session::v3::{ResourceRef, ZoneId};
 use d2b_provider_transport_vsock::{
     GuestControlKey, GuestIdentity, MAX_REPLAY_ENTRIES, PeerCid, SessionAuthority, SessionProof,
     SessionRejectReason, SessionState,

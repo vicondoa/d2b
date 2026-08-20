@@ -11,7 +11,7 @@ use std::{
 };
 
 use crate::zone_schema::core_schema_artifact_name;
-use d2b_contracts::v3::{
+use d2b_contracts_zone_session::v3::{
     EndpointSpec, EphemeralProcessSpec, GuestSpec, HostSpec, UserSpec, process::ProcessSpec,
 };
 use schemars::schema_for;
@@ -55,24 +55,16 @@ pub fn generate(repo_root: &Path) -> Result<Vec<PathBuf>, Box<dyn std::error::Er
         written.push(schema_path);
 
         let nix_path = nix_dir.join(format!("{name}.nix"));
-        let source = match name {
-            "EphemeralProcess" => "ephemeral_process",
-            "Host" => "host",
-            "Guest" => "guest",
-            "Process" => "process",
-            "User" => "user",
-            "Endpoint" => "endpoint",
-            _ => unreachable!("closed schema list"),
-        };
         let module = format!(
-            "# Generated from packages/d2b-contracts/src/v3/{lower}.rs.\n\
+            "# Generated from the d2b-contracts-resource and d2b-contracts-zone-session contract families.\n\
              # Do not hand-edit; run xtask gen-resource-schemas.\n\
              {{ lib }}:\n\
              {{\n\
                type = \"{name}\";\n\
                schema = builtins.fromJSON (builtins.readFile ../docs/reference/schemas/v3/{schema_file});\n\
              }}\n",
-            lower = source
+            name = name,
+            schema_file = schema_file
         );
         fs::write(&nix_path, module)?;
         written.push(nix_path);

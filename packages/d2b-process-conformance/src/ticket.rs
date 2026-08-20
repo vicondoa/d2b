@@ -3,8 +3,8 @@
 use std::collections::BTreeSet;
 use std::fmt;
 
-use d2b_contracts::v3::execution_policy::{BoundedToken, ExecutionDomain};
-use d2b_contracts::v3::{ControllerGeneration, ResourceGeneration, ResourceRef, ResourceUid};
+use d2b_contracts_zone_session::v3::execution_policy::{BoundedToken, ExecutionDomain};
+use d2b_contracts_zone_session::v3::{ControllerGeneration, ResourceGeneration, ResourceRef, ResourceUid};
 
 use crate::error::ProcessConformanceError;
 use crate::identity::{ConfigurationDigest, IdentityBinding, ProcessIdentityDigest};

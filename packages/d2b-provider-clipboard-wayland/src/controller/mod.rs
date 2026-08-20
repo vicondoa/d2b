@@ -1,7 +1,7 @@
 //! Clipboard controller placement and lifecycle projections.
 
 use crate::DISPLAY_PROVIDER_REF;
-use d2b_contracts::v3::{EvidenceClass, Locality, ResourceRef, ZoneId};
+use d2b_contracts_zone_session::v3::{EvidenceClass, Locality, ResourceRef, ZoneId};
 use d2b_provider_toolkit::AuthenticatedSessionRouteBinding;
 use sha2::{Digest, Sha256};
 

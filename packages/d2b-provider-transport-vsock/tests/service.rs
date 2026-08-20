@@ -1,5 +1,5 @@
 use async_trait::async_trait;
-use d2b_contracts::v3::{ResourceRef, ZoneId};
+use d2b_contracts_zone_session::v3::{ResourceRef, ZoneId};
 use d2b_provider_transport_vsock::{
     CLOSE_GRACE_MS, GuestControlKey, GuestIdentity, MAX_ACTIVE_TRANSPORTS, NamedStreamError,
     NamedStreamId, NamedStreamPort, OpaqueBindingId, OpaqueEndpointId, OpenTransportRequest,

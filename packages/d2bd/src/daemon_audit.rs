@@ -915,7 +915,7 @@ fn sanitize_daemon_event(mut value: Value) -> Value {
                     && !is_canonical_digest(text)
                     && !is_closed_semantic_token(text) =>
             {
-                *text = d2b_contracts::v3::canonical_digest(
+                *text = d2b_contracts_zone_session::v3::canonical_digest(
                     "d2b:daemon-audit-redaction:v1",
                     text.as_bytes(),
                 );

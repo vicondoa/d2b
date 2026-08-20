@@ -8,7 +8,7 @@
 
 use std::collections::BTreeSet;
 
-use d2b_contracts::v3::{
+use d2b_contracts_zone_session::v3::{
     ConfigurationGeneration, ResourceBundleGenerationId, ResourceName, ResourceTypeName,
     SchemaFingerprint, Timestamp, ZoneId, ZoneRevision, canonical_digest,
 };

@@ -1,4 +1,4 @@
-use d2b_contracts::v3::ResourceUid;
+use d2b_contracts_zone_session::v3::ResourceUid;
 use d2b_provider_device_usbip::{
     AttachProcessIdentity, AttachmentObservation, BindingIdentity, BindingLifecycleError,
     BindingProxyLease, BindingSlotLease, OwnedBusBinding, PhysicalAuthorityLease, ProductionPort,

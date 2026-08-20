@@ -1,11 +1,12 @@
 //! Canonical Provider manifest emission and verification.
 //!
 //! Provider manifests are signed over their exact file bytes.  The
-//! [`d2b_contracts::v3::canonical_json_bytes`] implementation is therefore
+//! [`d2b_contracts_zone_session::v3::canonical_json_bytes`] implementation is therefore
 //! used for both writing and checking rather than a general-purpose JSON
 //! formatter.
 
-use d2b_contracts::v3::{ProviderManifest, canonical_json_bytes};
+use d2b_contracts_provider::v3::ProviderManifest;
+use d2b_contracts_zone_session::v3::canonical_json_bytes;
 use serde_json::Error as JsonError;
 
 /// The bounded values used in a canonicality diagnostic.

@@ -1,6 +1,6 @@
 use core::fmt;
 
-use d2b_contracts::v3::ServiceName;
+use d2b_contracts_zone_session::v3::ServiceName;
 use d2b_resource_api::authz::{ApiMethod, SessionVerb};
 
 use crate::{Result, SessionError, contract::SessionErrorCode};

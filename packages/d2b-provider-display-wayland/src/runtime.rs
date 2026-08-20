@@ -686,7 +686,7 @@ impl FinalizationReport {
 mod tests {
     use super::*;
     use crate::{DisplayIdentity, FilterInput, WorkerState, process::VolumeState};
-    use d2b_contracts::v3::{ResourceRef, ZoneId};
+    use d2b_contracts_zone_session::v3::{ResourceRef, ZoneId};
 
     #[derive(Default)]
     struct Effects {

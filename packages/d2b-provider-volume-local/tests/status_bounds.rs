@@ -1,4 +1,4 @@
-use d2b_contracts::v3::{
+use d2b_contracts_zone_session::v3::{
     CanonicalJsonObject, ConditionState, ExtensionSchemaId, ObservedGeneration,
     ProviderStatusExtension, ResourceCondition, ResourceCurrencySet, ResourceErrorKind,
     ResourceGeneration, ResourcePhase, ResourceRef, ResourceStatus, ResourceStatusError,

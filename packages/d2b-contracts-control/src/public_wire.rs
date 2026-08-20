@@ -8,12 +8,12 @@ use d2b_contracts::{
     ids::OperationId,
     runtime::{RuntimeOperationCapabilities, RuntimeServiceSummary},
     token::ProtocolToken,
-    v3::IfName,
     workload::{
         LauncherItemSummary, WorkloadExecutionPosture, WorkloadProviderKind, WorkloadState,
     },
     workload_identity::{WorkloadIdentity, WorkloadTarget},
 };
+use d2b_contracts_resource::v3::IfName;
 use crate::guest_wire::ExecState;
 use schemars::{
     JsonSchema,

@@ -23,7 +23,7 @@
 
 use std::time::{Duration, Instant};
 
-use d2b_contracts::v3::zone_routing::{
+use d2b_contracts_zone_session::v3::zone_routing::{
     ZONE_ROUTE_INITIAL_HOP_BUDGET, ZONE_ROUTING_SCHEMA_VERSION, ZoneDescendantRoute, ZoneLabelId,
     ZoneLinkControllerGeneration, ZoneLinkNamespaceAllocation, ZoneLinkRouteAdvertisement,
     ZonePath, ZoneRouteCapability, ZoneRouteCapabilitySet, ZoneRouteId, ZoneRouteKeyRole,

@@ -6,7 +6,7 @@
 
 use std::fmt;
 
-use d2b_contracts::v3::execution_policy::BoundedToken;
+use d2b_contracts_zone_session::v3::execution_policy::BoundedToken;
 
 /// `CLONE_NEWUSER`, used by the broker's pre-establishment path.
 pub const CLONE_NEWUSER_FLAG: u64 = 0x1000_0000;

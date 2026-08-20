@@ -174,7 +174,7 @@ struct OperationRecord {
     destination: SessionId,
     reverse_route: RouteKey,
     endpoint: Arc<dyn BusEndpoint>,
-    generation: d2b_contracts::v3::ReconnectGeneration,
+    generation: d2b_contracts_zone_session::v3::ReconnectGeneration,
     deadline_tick: u64,
     attempt: OperationAttempt,
     cancellation: Cancellation,
@@ -199,7 +199,7 @@ pub(crate) struct CancelTarget {
     pub(crate) route: RouteKey,
     pub(crate) endpoint: Arc<dyn BusEndpoint>,
     pub(crate) destination: SessionId,
-    pub(crate) generation: d2b_contracts::v3::ReconnectGeneration,
+    pub(crate) generation: d2b_contracts_zone_session::v3::ReconnectGeneration,
     pub(crate) cancellation: Cancellation,
 }
 
@@ -744,7 +744,7 @@ mod tests {
         router::{DeliveredInvocation, DeliveredStream},
     };
     use async_trait::async_trait;
-    use d2b_contracts::v3::{
+    use d2b_contracts_zone_session::v3::{
         ControllerGeneration, ReconnectGeneration, ResourceGeneration, ResourceRef,
         SchemaFingerprint, ServiceName, ZoneId,
     };

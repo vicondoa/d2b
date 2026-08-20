@@ -25,9 +25,9 @@
 use std::collections::BTreeSet;
 use std::fmt;
 
-use d2b_contracts::v3::ResourceRef;
-use d2b_contracts::v3::resource_status::ResourcePhase;
-use d2b_contracts::v3::user::{USER_RESOURCE_TYPE, UserSpec};
+use d2b_contracts_zone_session::v3::ResourceRef;
+use d2b_contracts_zone_session::v3::resource_status::ResourcePhase;
+use d2b_contracts_zone_session::v3::user::{USER_RESOURCE_TYPE, UserSpec};
 use serde::{Serialize, Serializer};
 
 use crate::error::SystemCoreError;

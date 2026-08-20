@@ -5,9 +5,9 @@
 //! [`ZonePath`] plus the authenticated Zone principal, and the principal is
 //! never taken from the request payload.
 
-use d2b_contracts::v3::{
+use d2b_contracts_zone_session::v3::{
     identity::{AuthenticatedSubjectContext, ResourceGeneration, ServiceName},
-    resource_ref::ResourceRef,
+    ResourceRef,
     zone_routing::ZonePath,
 };
 

@@ -11,17 +11,15 @@ use std::{
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
-use d2b_contracts::{
-    host_generation::{
-        ApplyHostGenerationHandoff, HandoffCallerRole, HandoffState, HostGenerationHandoffIntent,
-        SourceGenerationCompatibilityFloorV1, target_fingerprint,
-    },
-    resource_proto as wire,
-    v3::{
-        ActivationDetail, ActivationMode, ActivationOutcomeCode, CanonicalJsonValue,
-        NixosGenerationSpec, ResourceEnvelope, ResourcePhase, ResourceRef, ResourceTypeName,
-        ZoneId, ZoneRevision,
-    },
+use d2b_contracts_broker::host_generation::{
+    ApplyHostGenerationHandoff, HandoffCallerRole, HandoffState, HostGenerationHandoffIntent,
+    SourceGenerationCompatibilityFloorV1, target_fingerprint,
+};
+use d2b_contracts_resource::resource_proto as wire;
+use d2b_contracts_zone_session::v3::{
+    ActivationDetail, ActivationMode, ActivationOutcomeCode, CanonicalJsonValue,
+    NixosGenerationSpec, ResourceEnvelope, ResourcePhase, ResourceRef, ResourceTypeName, ZoneId,
+    ZoneRevision,
 };
 use d2b_contracts_broker::broker_wire::{
         ApplyHostGenerationHandoffResponse, BrokerCallerRole, BrokerRequest, BrokerResponse,
@@ -1061,9 +1059,9 @@ mod tests {
         let resource = StoredResource {
             resource_ref,
             zone: ZoneId::parse("dev").expect("zone"),
-            uid: d2b_contracts::v3::ResourceUid::parse("123e4567-e89b-42d3-a456-426614174000")
+            uid: d2b_contracts_zone_session::v3::ResourceUid::parse("123e4567-e89b-42d3-a456-426614174000")
                 .expect("uid"),
-            generation: d2b_contracts::v3::ResourceGeneration::new(1).expect("generation"),
+            generation: d2b_contracts_zone_session::v3::ResourceGeneration::new(1).expect("generation"),
             revision: ZoneRevision::new(1),
             canonical_json: Vec::new(),
             payload_digest: "sha256:".to_owned(),

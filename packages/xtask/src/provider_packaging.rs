@@ -423,7 +423,7 @@ mod tests {
     fn the_catalog_shape_and_the_provider_contract_describe_the_same_fields() {
         let contract_path = crate::repo_root()
             .expect("repository root")
-            .join("packages/d2b-contracts/src/v3/provider.rs")
+            .join("packages/d2b-contracts-provider/src/v3/provider.rs")
             .canonicalize()
             .expect("the Provider contract source is in the tree");
         let source = fs::read_to_string(&contract_path).expect("the contract source is readable");

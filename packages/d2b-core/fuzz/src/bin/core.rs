@@ -1,7 +1,7 @@
 #[path = "../harness.rs"]
 mod harness;
 
-use d2b_contracts::v3::{IfName, IfNameError};
+use d2b_contracts_resource::v3::{IfName, IfNameError};
 use d2b_core::{
     bundle::{Bundle, BundleGeneration, BundleManagedKeys},
     bundle_resolver::{

@@ -9,7 +9,7 @@
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::sync::Arc;
 
-use d2b_contracts::v3::{ResourceName, ResourceTypeName, ZoneRevision};
+use d2b_contracts_resource::v3::{ResourceName, ResourceTypeName, ZoneRevision};
 use d2b_resource_store::{StoreError, StoreFilter};
 use redb::{Database, ReadableDatabase};
 use tokio::sync::mpsc;
@@ -647,7 +647,7 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
-    use d2b_contracts::v3::{ResourceGeneration, ResourceUid};
+    use d2b_contracts_resource::v3::{ResourceGeneration, ResourceUid};
     use redb::ReadableTableMetadata;
     use std::fs::OpenOptions;
 
@@ -728,13 +728,13 @@ mod tests {
         let identity = crate::StoreIdentity::new(
             d2b_resource_store::StoreSlot::new(0).unwrap(),
             ResourceUid::parse("11111111-1111-4111-8111-111111111111").unwrap(),
-            d2b_contracts::v3::ZoneId::parse("work").unwrap(),
+            d2b_contracts_resource::v3::ZoneId::parse("work").unwrap(),
             ResourceUid::parse("22222222-2222-4222-8222-222222222222").unwrap(),
-            d2b_contracts::v3::Timestamp::parse("2026-07-31T00:00:00.000Z").unwrap(),
+            d2b_contracts_resource::v3::Timestamp::parse("2026-07-31T00:00:00.000Z").unwrap(),
             d2b_resource_store::PolicySnapshot {
                 policy_revision: 1,
                 api_catalog_revision: 1,
-                active_configuration_revision: d2b_contracts::v3::ConfigurationGeneration::new(1)
+                active_configuration_revision: d2b_contracts_resource::v3::ConfigurationGeneration::new(1)
                     .unwrap(),
                 controller_generation: None,
             },

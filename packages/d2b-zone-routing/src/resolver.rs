@@ -29,8 +29,8 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use d2b_contracts::v3::execution_policy::PrimitiveSpecError;
-use d2b_contracts::v3::zone_routing::{
+use d2b_contracts_zone_session::v3::execution_policy::PrimitiveSpecError;
+use d2b_contracts_zone_session::v3::zone_routing::{
     MAX_ZONE_PARENT_ENTRIES, ZONE_ROUTE_INITIAL_HOP_BUDGET, ZonePath, ZoneRouteAuditEventKind,
     ZoneRouteCapability, ZoneRouteCapabilitySet, ZoneRouteFailClosedReason, ZoneRoutePath,
     ZoneTreeEdge,
@@ -368,7 +368,7 @@ redacted_topology_debug!(ZoneEntrypointResolver);
 #[cfg(test)]
 mod tests {
     use super::*;
-    use d2b_contracts::v3::zone_routing::{
+    use d2b_contracts_zone_session::v3::zone_routing::{
         ZONE_ROUTING_SCHEMA_VERSION, ZoneDescendantRoute, ZoneLabelId,
         ZoneLinkControllerGeneration, ZoneLinkNamespaceAllocation, ZoneLinkRouteAdvertisement,
         ZoneRouteId, ZoneRouteKeyRole, ZoneRouteSignature, ZoneRouteSignatureAlgorithm,

@@ -10,7 +10,7 @@ const PREFIX: &str = "sha256:";
 /// telemetry, and broker surfaces from accepting truncated or upper-case
 /// digests that cannot safely participate in joins.
 pub fn is_canonical_digest(value: &str) -> bool {
-    d2b_contracts::v3::is_canonical_digest(value)
+    d2b_contracts_zone_session::v3::is_canonical_digest(value)
 }
 
 /// A validated SHA-256 digest string.

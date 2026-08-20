@@ -2,7 +2,7 @@
 //!
 //! The engine is a pure, in-memory adaptation of the v3 baseline tree-route
 //! engine onto the Zone tree contracts owned by
-//! `d2b_contracts::v3::zone_routing`. It admits already-verified route
+//! `d2b_contracts_zone_session::v3::zone_routing`. It admits already-verified route
 //! advertisements and withdrawals, keeps a bounded parent/route projection plus
 //! a bounded replay-key table, and answers nearest-common-ancestor route
 //! questions.
@@ -17,7 +17,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use d2b_contracts::v3::zone_routing::{
+use d2b_contracts_zone_session::v3::zone_routing::{
     MAX_ZONE_PARENT_ENTRIES, MAX_ZONE_ROUTE_ENTRIES, ZONE_ROUTE_INITIAL_HOP_BUDGET, ZoneLabelId,
     ZoneLinkControllerGeneration, ZoneLinkNamespaceAllocation, ZoneLinkRouteAdvertisement,
     ZoneLinkRouteWithdrawal, ZonePath, ZoneRouteAuditEventKind, ZoneRouteCapability,
@@ -807,7 +807,7 @@ impl ZoneRouteEngine {
             if visited.contains(&entry.parent) {
                 return Err(ZoneRouteFailClosedReason::Loop);
             }
-            if hops.len() >= d2b_contracts::v3::zone_routing::MAX_ZONE_ROUTE_PATH_HOPS {
+            if hops.len() >= d2b_contracts_zone_session::v3::zone_routing::MAX_ZONE_ROUTE_PATH_HOPS {
                 return Err(ZoneRouteFailClosedReason::HopLimitExceeded);
             }
             let edge = ZoneTreeEdge::new(entry.parent.clone(), current.clone())
@@ -835,7 +835,7 @@ impl ZoneRouteEngine {
             if entry.parent != current {
                 return Err(ZoneRouteFailClosedReason::MultiParent);
             }
-            if hops.len() >= d2b_contracts::v3::zone_routing::MAX_ZONE_ROUTE_PATH_HOPS {
+            if hops.len() >= d2b_contracts_zone_session::v3::zone_routing::MAX_ZONE_ROUTE_PATH_HOPS {
                 return Err(ZoneRouteFailClosedReason::HopLimitExceeded);
             }
             let edge = ZoneTreeEdge::new(current.clone(), child.clone())
@@ -1121,7 +1121,7 @@ fn would_form_loop(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use d2b_contracts::v3::zone_routing::{
+    use d2b_contracts_zone_session::v3::zone_routing::{
         ZONE_ROUTING_SCHEMA_VERSION, ZoneDescendantRoute, ZoneRouteKeyRole, ZoneRouteSignature,
         ZoneRouteSignatureAlgorithm, ZoneRouteSignatureRef, ZoneSigningKeyFingerprint,
     };

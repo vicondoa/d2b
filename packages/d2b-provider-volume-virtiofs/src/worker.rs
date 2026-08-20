@@ -11,8 +11,8 @@ use std::fmt;
 
 use serde::Serialize;
 
-use d2b_contracts::v3::execution_policy::BoundedToken;
-use d2b_contracts::v3::volume::{
+use d2b_contracts_zone_session::v3::execution_policy::BoundedToken;
+use d2b_contracts_zone_session::v3::volume::{
     AttachmentAccess, AttachmentCache, InodeFileHandles, ViewRight, ViewSpec,
 };
 

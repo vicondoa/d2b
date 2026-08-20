@@ -304,17 +304,17 @@ fn system_profile_path(path: &str) -> Result<std::path::PathBuf, CatalogError> {
 }
 
 fn activation_probe_matches(
-    mode: d2b_contracts::v3::ActivationMode,
+    mode: d2b_contracts_zone_session::v3::ActivationMode,
     store_path: &std::path::Path,
     active_path: Option<&std::path::Path>,
     boot_path: Option<&std::path::Path>,
 ) -> bool {
     match mode {
-        d2b_contracts::v3::ActivationMode::Boot => boot_path == Some(store_path),
-        d2b_contracts::v3::ActivationMode::Switch | d2b_contracts::v3::ActivationMode::Test => {
+        d2b_contracts_zone_session::v3::ActivationMode::Boot => boot_path == Some(store_path),
+        d2b_contracts_zone_session::v3::ActivationMode::Switch | d2b_contracts_zone_session::v3::ActivationMode::Test => {
             active_path == Some(store_path)
         }
-        d2b_contracts::v3::ActivationMode::Adopt => false,
+        d2b_contracts_zone_session::v3::ActivationMode::Adopt => false,
     }
 }
 
@@ -1087,7 +1087,7 @@ fn cmd_apply_generation() -> ExitCode {
         }
         Ok(store_path) => {
             let active = active_system_path().ok();
-            if request.activation_mode == d2b_contracts::v3::ActivationMode::Adopt {
+            if request.activation_mode == d2b_contracts_zone_session::v3::ActivationMode::Adopt {
                 if active.as_ref() == Some(&store_path) {
                     ActivationHelperOutcome::Adopted
                 } else {
@@ -1104,10 +1104,10 @@ fn cmd_apply_generation() -> ExitCode {
                     ActivationHelperOutcome::Refused
                 } else {
                     let mode_arg = match request.activation_mode {
-                        d2b_contracts::v3::ActivationMode::Switch => "switch",
-                        d2b_contracts::v3::ActivationMode::Boot => "boot",
-                        d2b_contracts::v3::ActivationMode::Test => "test",
-                        d2b_contracts::v3::ActivationMode::Adopt => unreachable!(),
+                        d2b_contracts_zone_session::v3::ActivationMode::Switch => "switch",
+                        d2b_contracts_zone_session::v3::ActivationMode::Boot => "boot",
+                        d2b_contracts_zone_session::v3::ActivationMode::Test => "test",
+                        d2b_contracts_zone_session::v3::ActivationMode::Adopt => unreachable!(),
                     };
                     match Command::new(&script).arg(mode_arg).status() {
                         Ok(status) if status.success() => {
@@ -1342,13 +1342,13 @@ mod tests {
         let requested = Path::new("/nix/store/new-system");
         let active = Path::new("/nix/store/old-system");
         assert!(activation_probe_matches(
-            d2b_contracts::v3::ActivationMode::Boot,
+            d2b_contracts_zone_session::v3::ActivationMode::Boot,
             requested,
             Some(active),
             Some(requested),
         ));
         assert!(!activation_probe_matches(
-            d2b_contracts::v3::ActivationMode::Boot,
+            d2b_contracts_zone_session::v3::ActivationMode::Boot,
             requested,
             Some(requested),
             Some(active),
@@ -1359,7 +1359,7 @@ mod tests {
     fn failed_activation_probe_does_not_claim_success() {
         let requested = Path::new("/nix/store/new-system");
         assert!(!activation_probe_matches(
-            d2b_contracts::v3::ActivationMode::Boot,
+            d2b_contracts_zone_session::v3::ActivationMode::Boot,
             requested,
             None,
             None,

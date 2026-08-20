@@ -10,10 +10,10 @@ use crate::metric_policy::{
     IdentityCanaries, MetricDescriptor, MetricPolicyError, validate_data_point,
     validate_resource_attributes,
 };
-use d2b_contracts::v3::{TelemetryFrame, TelemetrySignal};
+use d2b_contracts_provider::v3::{TelemetryFrame, TelemetrySignal};
 
 /// Maximum frame bytes accepted before policy evaluation.
-pub const MAX_INGRESS_FRAME_BYTES: usize = d2b_contracts::v3::MAX_TELEMETRY_FRAME_BYTES;
+pub const MAX_INGRESS_FRAME_BYTES: usize = d2b_contracts_provider::v3::MAX_TELEMETRY_FRAME_BYTES;
 /// Maximum metric points in one admitted frame.
 pub const MAX_POINTS_PER_FRAME: usize = 1024;
 /// Maximum frames quarantined for one stream.
@@ -268,7 +268,7 @@ impl IngressPolicyGate {
         if bytes.len() > MAX_INGRESS_FRAME_BYTES {
             return self.reject(ingress, connection_id, IngressErrorClass::Oversize);
         }
-        let frame = match d2b_contracts::v3::validate_raw_frame(bytes) {
+        let frame = match d2b_contracts_provider::v3::validate_raw_frame(bytes) {
             Ok(frame) => frame,
             Err(_) => return self.reject(ingress, connection_id, IngressErrorClass::Malformed),
         };
@@ -728,7 +728,7 @@ fn producer_for(ingress: Ingress, connection_id: u64) -> Option<ProducerKey> {
 mod tests {
     use super::*;
     use crate::{canonical_descriptor, label};
-    use d2b_contracts::v3::telemetry_policy::allowed_values;
+    use d2b_contracts_provider::v3::telemetry_policy::allowed_values;
     use std::sync::atomic::{AtomicU64, Ordering};
 
     #[derive(Debug)]

@@ -1,6 +1,6 @@
 use std::collections::BTreeMap;
 
-use d2b_contracts::v3::{
+use d2b_contracts_zone_session::v3::{
     ResourceTypeName, SchemaFingerprint, SchemaVersion,
     execution_policy::{BoundedToken, ExecutionDomain},
     provider::{

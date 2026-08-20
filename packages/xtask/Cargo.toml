@@ -10,6 +10,9 @@ license.workspace = true
 workspace = true
 
 [dependencies]
+d2b-contracts-provider = { path = "../d2b-contracts-provider", version = "0.0.0-bootstrap" }
+d2b-contracts-resource = { path = "../d2b-contracts-resource", version = "0.0.0-bootstrap" }
+d2b-contracts-zone-session = { path = "../d2b-contracts-zone-session", version = "0.0.0-bootstrap" }
 # Keep the generated CLI artifacts compatible with the established
 # positional-value completion contract. clap_complete 4.6.6+ intentionally
 # omits positional usage placeholders from Bash output.

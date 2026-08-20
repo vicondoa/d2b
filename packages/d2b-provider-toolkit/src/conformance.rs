@@ -18,8 +18,8 @@
 use std::collections::BTreeSet;
 use std::fmt;
 
-use d2b_contracts::v3::execution_policy::BoundedToken;
-use d2b_contracts::v3::{
+use d2b_contracts_zone_session::v3::execution_policy::BoundedToken;
+use d2b_contracts_zone_session::v3::{
     BaseSchemaBinding, ResourceSchemaContract, ResourceSpec, ResourceTypeName,
 };
 
@@ -316,7 +316,7 @@ fn resolve<'a>(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use d2b_contracts::v3::{
+    use d2b_contracts_zone_session::v3::{
         BaseSchemaIdentity, ObjectFieldSchema, ResourceSpec, SchemaFingerprint, SchemaVersion,
     };
 
@@ -362,7 +362,7 @@ mod tests {
     }
 
     fn minimal_spec() -> ResourceSpec {
-        let base = d2b_contracts::v3::CanonicalJsonObject::parse(br#"{"capacity":1}"#)
+        let base = d2b_contracts_zone_session::v3::CanonicalJsonObject::parse(br#"{"capacity":1}"#)
             .expect("valid canonical object");
         ResourceSpec::new(None, None, base, None).expect("valid minimal spec")
     }
@@ -444,7 +444,7 @@ mod tests {
             binding_identity(),
             CapabilityMatrix::new([], []).expect("valid matrix"),
         );
-        let base = d2b_contracts::v3::CanonicalJsonObject::parse(br#"{"unknown":1}"#)
+        let base = d2b_contracts_zone_session::v3::CanonicalJsonObject::parse(br#"{"unknown":1}"#)
             .expect("valid canonical object");
         let spec = ResourceSpec::new(None, None, base, None).expect("valid spec");
         assert_eq!(

@@ -1,5 +1,5 @@
 use crate::typed_error::{ErrorEnvelope, TypedError};
-use d2b_contracts::v3::IfName;
+use d2b_contracts_zone_session::v3::IfName;
 use d2b_contracts::{
     FeatureFlag, Hello, HelloOk, HelloRejected, HelloRejectedReason, Version,
 };

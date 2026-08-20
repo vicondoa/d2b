@@ -34,7 +34,7 @@
 //! the registrar's. A digest is one-way, so a Zone that receives a bound offer
 //! cannot expand it back into an identity.
 
-use d2b_contracts::v3::{AuthenticatedSubjectContext, EvidenceClass, Locality};
+use d2b_contracts_zone_session::v3::{AuthenticatedSubjectContext, EvidenceClass, Locality};
 use sha2::{Digest, Sha256};
 
 use crate::session::contract::{ZoneEndpointPolicy, ZonePolicyError};
@@ -169,7 +169,7 @@ impl core::fmt::Debug for ZoneLinkPrologue {
 
 #[cfg(test)]
 pub(crate) mod fixtures {
-    use d2b_contracts::v3::{
+    use d2b_contracts_zone_session::v3::{
         AuthenticatedSubjectContext, BindingDigest, EvidenceClass, Locality, ReconnectGeneration,
         ResourceRef, ResourceUid, SchemaFingerprint, ServiceName, SessionBinding, SessionPurpose,
         TranscriptHash, TransportBinding,
@@ -267,7 +267,7 @@ mod tests {
     #[test]
     fn a_policy_that_cannot_reach_the_wire_is_never_bound() {
         let mut policy = enrolled_zone_link(7);
-        policy.purpose = d2b_contracts::v3::zone_session::EndpointPurpose::ZoneControl;
+        policy.purpose = d2b_contracts_zone_session::v3::zone_session::EndpointPurpose::ZoneControl;
         let subject = SubjectContextDigest::of_subject(&fixtures::subject("relay-a", "zone-link"));
         assert_eq!(
             ZoneLinkPrologue::bind(policy, subject).err(),

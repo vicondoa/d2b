@@ -2,7 +2,7 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 use crate::runtime::RuntimeMetadata;
-use d2b_contracts::v3::IfName;
+use d2b_contracts_zone_session::v3::IfName;
 
 /// Private host topology and host-owned capability contract.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
@@ -562,7 +562,7 @@ mod tests {
         BridgePortFlags, HostJson, IfName, Ipv6SysctlEntry, TapRole, UsbipBusidLock,
         UsbipLockOwner, UsbipLockScope, VendorProductPair,
     };
-    use d2b_contracts::v3::IfNameError;
+    use d2b_contracts_zone_session::v3::IfNameError;
 
     #[test]
     fn if_name_accepts_safe_linux_names() {

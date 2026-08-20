@@ -4,8 +4,8 @@
 //! active generation has committed, and the resource store persists them with
 //! the resource row.
 
-pub use d2b_contracts::v3::ManagedBy;
-use d2b_contracts::v3::Timestamp;
+pub use d2b_contracts_zone_session::v3::ManagedBy;
+use d2b_contracts_zone_session::v3::Timestamp;
 
 use crate::configuration::ResourceKey;
 

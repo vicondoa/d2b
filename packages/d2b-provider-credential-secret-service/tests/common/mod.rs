@@ -3,13 +3,13 @@
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 
-use d2b_contracts::v3::credential::{
+use d2b_contracts_provider::v3::credential::{
     AudienceToken, CredentialAuthorization, CredentialLeaseHandle, CredentialLeaseState,
     CredentialMethod, CredentialProvider, CredentialRequest, CredentialResponse,
     CredentialServiceError, CredentialSourceVersion, DeliveryRouteDigest, DeliverySessionParams,
     OperationClass, PlacementBinding, dispatch_authorized_provider,
 };
-use d2b_contracts::v3::{ResourceGeneration, ResourceRef, ResourceUid, ZoneId};
+use d2b_contracts_zone_session::v3::{ResourceGeneration, ResourceRef, ResourceUid, ZoneId};
 use d2b_provider_credential_secret_service::{
     LockPolicy, Oo7SecretServicePort, SecretServiceConfig, SecretServiceCredentialProvider,
     SecretServiceCredentialProviderFactory, SecretServiceFuture, SecretServiceLeaseGrant,

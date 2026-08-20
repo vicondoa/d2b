@@ -7,7 +7,7 @@
 
 use core::fmt;
 
-use crate::v3::{ResourceBundleGenerationId, ResourceUid};
+use crate::identity::{ResourceBundleGenerationId, ResourceUid};
 
 /// Opaque Device identity accepted from Core.
 #[derive(Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]

@@ -14,10 +14,8 @@ use std::{
     time::Duration,
 };
 
-use d2b_contracts::{
-    types::{BundleOpId, RoleId, VmId},
-    v3::ResourceUid,
-};
+use d2b_contracts::types::{BundleOpId, RoleId, VmId};
+use d2b_contracts_zone_session::v3::ResourceUid;
 use d2b_contracts_broker::broker_wire::{
         BrokerCallerRole, BrokerRequest, BrokerResponse, RunnerRole, SpawnRunnerRequest,
         UsbipBindRequest, UsbipUnbindRequest,
@@ -589,7 +587,7 @@ mod tests {
     #[test]
     fn guest_control_must_be_injected_for_detach() {
         let binding = BindingIdentity::from_controller(
-            d2b_contracts::v3::ResourceUid::parse("123e4567-e89b-42d3-a456-426614174000").unwrap(),
+            d2b_contracts_zone_session::v3::ResourceUid::parse("123e4567-e89b-42d3-a456-426614174000").unwrap(),
         );
         let proxy = BindingProxyLease::from_adapter([5; 16]);
         assert_eq!(

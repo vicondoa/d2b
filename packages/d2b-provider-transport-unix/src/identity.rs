@@ -1,6 +1,6 @@
 //! Binding of one accepted Unix socket to one authenticated request.
 
-use d2b_contracts::v3::{ResourceRef, ZoneId};
+use d2b_contracts_zone_session::v3::{ResourceRef, ZoneId};
 use rustix::{
     fd::{AsFd, OwnedFd},
     net::{UCred, sockopt::get_socket_peercred},

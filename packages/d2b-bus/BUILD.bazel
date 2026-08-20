@@ -34,6 +34,7 @@ d2b_bus_deps = [
     "//packages/d2b-session:d2b_session",
     "//packages/d2b-session-unix:d2b_session_unix",
     "//packages/d2b-telemetry:d2b_telemetry",
+    "//packages/d2b-contracts-zone-session:d2b_contracts_zone_session",
 ]
 
 # keep
@@ -64,6 +65,7 @@ rust_library(
     ],
     visibility = ["//visibility:public"],
     deps = [
+        "//packages/d2b-contracts-zone-session:d2b_contracts_zone_session",
         "//packages/d2b-audit:d2b_audit_test_support",
         "//packages/d2b-contracts:d2b_contracts_test_support",
         "//packages/d2b-resource-api:d2b_resource_api_test_support",
@@ -97,6 +99,7 @@ rust_test(
     crate_features = ["production-rss-fixture"],
     visibility = ["//visibility:public"],
     deps = [
+        "//packages/d2b-contracts-zone-session:d2b_contracts_zone_session",
         ":d2b_bus_production_rss_fixture",
         "//packages/d2b-contracts:d2b_contracts",
         "//packages/d2b-controller-toolkit:d2b_controller_toolkit",
@@ -114,6 +117,7 @@ rust_test(
         "@crates//:async-trait",
     ],
     deps = [
+        "//packages/d2b-contracts-zone-session:d2b_contracts_zone_session",
         "//packages/d2b-audit:d2b_audit",
         "//packages/d2b-contracts:d2b_contracts",
         "//packages/d2b-controller-toolkit:d2b_controller_toolkit",

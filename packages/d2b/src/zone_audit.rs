@@ -841,7 +841,7 @@ fn valid_digest(value: &str) -> bool {
 }
 
 fn valid_resource_uid(value: &str) -> bool {
-    d2b_contracts::v3::ResourceUid::parse(value.to_owned()).is_ok()
+    d2b_contracts_zone_session::v3::ResourceUid::parse(value.to_owned()).is_ok()
 }
 
 fn valid_zone(value: &str) -> bool {

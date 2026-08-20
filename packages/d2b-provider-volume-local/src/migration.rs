@@ -6,7 +6,7 @@
 
 use std::fmt;
 
-use d2b_contracts::v3::{SchemaVersion, StateSchemaPhase};
+use d2b_contracts_zone_session::v3::{SchemaVersion, StateSchemaPhase};
 
 use crate::audit::VolumeAuditKind;
 use crate::marker::MarkerDisposition;

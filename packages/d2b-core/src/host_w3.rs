@@ -23,7 +23,7 @@
 
 #[cfg(test)]
 use crate::host::TapRole;
-use d2b_contracts::v3::IfName;
+use d2b_contracts_zone_session::v3::IfName;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 

@@ -1,4 +1,4 @@
-use d2b_contracts::v3::{
+use d2b_contracts_zone_session::v3::{
     ResourcePhase, Timestamp, ZoneHandlerName, ZoneHandlerPhase, ZoneHandlerStatus,
 };
 use d2b_core_controller::zone_status::{

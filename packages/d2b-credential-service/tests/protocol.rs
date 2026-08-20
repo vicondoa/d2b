@@ -1,15 +1,16 @@
-use d2b_contracts::v3::credential::{
+use d2b_contracts_provider::v3::credential::{
     AudienceToken, CredentialLeaseHandle, CredentialLeaseState, CredentialSourceVersion,
     OperationClass,
 };
-use d2b_contracts::v3::{ResourceGeneration, ResourceRef, ResourceUid};
+use d2b_contracts_zone_session::v3::{ResourceGeneration, ResourceRef, ResourceUid};
 use d2b_credential_service::{
     CredentialMetadata, CredentialMethod, CredentialOutcomeCode, CredentialRequest,
     CredentialResponse, DeliveryResponse, DeliveryRouteDigest, DeliverySessionParams,
     MAX_CREDENTIAL_MESSAGE_BYTES, MetadataResponse, decode_outer, encode_outer,
 };
 
-const CREDENTIAL_PROTO: &str = include_str!("../../d2b-contracts/proto/v3/credential.proto");
+const CREDENTIAL_PROTO: &str =
+    include_str!("../../d2b-contracts-provider/proto/credential.proto");
 
 fn request() -> CredentialRequest {
     CredentialRequest::new(

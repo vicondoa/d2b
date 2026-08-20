@@ -5,7 +5,7 @@
 pub mod error;
 pub mod mutation_seal;
 
-use d2b_contracts::v3::{
+use d2b_contracts_resource::v3::{
     ConfigurationGeneration, ControllerGeneration, FinalizerId, ResourceGeneration, ResourceName,
     ResourceRef, ResourceTypeName, ResourceUid, ZoneId, ZoneRevision,
 };

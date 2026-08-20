@@ -1160,7 +1160,7 @@ mod tests {
             ),
             scope_id: d2b_contracts::types::ScopeId::new("scope:opaque"),
             action: d2b_contracts_broker::broker_wire::NftablesProjectionAction::Apply,
-            expected_generation_id: d2b_contracts::v3::ResourceBundleGenerationId::parse(
+            expected_generation_id: d2b_contracts_zone_session::v3::ResourceBundleGenerationId::parse(
                 "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
             )
             .unwrap(),

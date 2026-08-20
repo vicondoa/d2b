@@ -1,13 +1,13 @@
 //! Canonical Process ResourceSpec and LaunchTicket construction.
 
-pub use d2b_contracts::v3::ProcessSpec;
-use d2b_contracts::v3::{
+pub use d2b_contracts_zone_session::v3::ProcessSpec;
+use d2b_contracts_zone_session::v3::{
     DesiredLifecycle, DeviceAccess, DeviceUsageSpec, EnvironmentClass, ExecutionSpec,
     HealthCheckClass, HealthCheckSpec, MountAccess, MountSpec, NamespaceClass, NetworkUsageSpec,
     ProcessClass, ReadinessClass, ReadinessSpec, RestartClass, RestartPolicySpec, SandboxSpec,
     TelemetrySpec,
 };
-use d2b_contracts::v3::{
+use d2b_contracts_zone_session::v3::{
     ResourceRef,
     execution_policy::{BoundedToken, BudgetSpec, CountBudget, DurationMs, ExecutionDomain},
 };
@@ -159,7 +159,7 @@ pub fn build_process_spec(
             HealthCheckClass::ProviderDefined,
         )
         .map_err(|_| ProcessSpecError::InvalidShape)?,
-        d2b_contracts::v3::AdoptionPolicy::AdoptOnRestart,
+        d2b_contracts_zone_session::v3::AdoptionPolicy::AdoptOnRestart,
         duration("30s", 0, 3_600_000)?,
     )
     .map_err(|_| ProcessSpecError::InvalidShape)?;

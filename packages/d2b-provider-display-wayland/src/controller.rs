@@ -10,7 +10,7 @@ use crate::{
     },
     spec::WaylandSessionSpec,
 };
-use d2b_contracts::v3::{ResourceRef, ZoneId};
+use d2b_contracts_zone_session::v3::{ResourceRef, ZoneId};
 use d2b_provider_toolkit::{AuthenticatedComponentSession, AuthenticatedSessionRouteBinding};
 use sha2::{Digest, Sha256};
 use std::collections::BTreeMap;

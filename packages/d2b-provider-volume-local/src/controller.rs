@@ -8,9 +8,9 @@
 
 use std::collections::BTreeSet;
 
-use d2b_contracts::v3::ResourceUid;
-use d2b_contracts::v3::execution_policy::BoundedToken;
-use d2b_contracts::v3::volume::{SourceKind, VolumeSpec};
+use d2b_contracts_zone_session::v3::ResourceUid;
+use d2b_contracts_zone_session::v3::execution_policy::BoundedToken;
+use d2b_contracts_zone_session::v3::volume::{SourceKind, VolumeSpec};
 
 use crate::error::VolumeLocalError;
 use crate::finalization::{
@@ -257,7 +257,7 @@ impl<S: VolumeSourceEffectPort, L: VolumeLayoutEffectPort> VolumeLocalController
         spec: &VolumeSpec,
         root: &VolumeRootHandle,
     ) -> Result<(), VolumeLocalError> {
-        use d2b_contracts::v3::volume::QuotaEnforcement;
+        use d2b_contracts_zone_session::v3::volume::QuotaEnforcement;
         let Some(quota) = spec.quota() else {
             return Ok(());
         };

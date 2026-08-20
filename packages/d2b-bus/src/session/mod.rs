@@ -9,7 +9,7 @@
 //! verbatim". Every one of those surfaces is re-exported from the audited
 //! implementation rather than copied into a second set of source files.
 //!
-//! This is the same spelling `d2b_contracts::v3::zone_session` chose for the
+//! This is the same spelling `d2b_contracts_zone_session::v3::zone_session` chose for the
 //! wire contract, and for the same reasons. A byte-exact copy of a Noise
 //! driver is not more verbatim than the original; it is a second definition
 //! that can drift, a second thing to fuzz, and it silently invalidates the
@@ -76,7 +76,7 @@ pub use zone_link::{ZoneLinkSession, ZoneLinkSessionError};
 /// types. Import the endpoint enumerations from here, never from the
 /// component-session module, so the un-extended taxonomy cannot be picked up
 /// by accident.
-pub use d2b_contracts::v3::zone_session as wire;
+pub use d2b_contracts_zone_session::v3::zone_session as wire;
 
 // The ported ComponentSession runtime. Every item below is the audited
 // definition, re-exported unchanged; this module adds no wrapper, no default,

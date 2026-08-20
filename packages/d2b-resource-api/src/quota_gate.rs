@@ -4,7 +4,7 @@
 //! never rewrites a caller's `quotaRef`; a dependent must be reassigned or
 //! deleted by an authorized caller before a Quota can drain.
 
-use d2b_contracts::v3::{
+use d2b_contracts_zone_session::v3::{
     QuotaSpec, ResourceTypeName,
     quota::{QuotaContractError, QuotaEnforcementPolicy},
 };
@@ -139,7 +139,7 @@ impl From<QuotaContractError> for QuotaGateError {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use d2b_contracts::v3::{
+    use d2b_contracts_zone_session::v3::{
         QuotaCeilings, QuotaEnforcementPolicy, QuotaScope, QuotaSpec, QuotaTypeCeiling,
     };
     use std::collections::BTreeMap;

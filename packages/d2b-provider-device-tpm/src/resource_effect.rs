@@ -3,7 +3,7 @@
 use core::fmt;
 use std::future::Future;
 
-use d2b_contracts::v3::{ResourceRef, ResourceUid};
+use d2b_contracts_zone_session::v3::{ResourceRef, ResourceUid};
 
 /// Closed effect failure for controller-created TPM resources.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

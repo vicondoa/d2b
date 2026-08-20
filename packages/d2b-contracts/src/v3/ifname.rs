@@ -12,7 +12,7 @@ use schemars::{
 };
 use serde::{Deserialize, Deserializer, Serialize};
 
-use super::ResourceName;
+use crate::identity::ResourceName;
 
 /// Maximum visible bytes in a Linux interface name.
 pub const MAX_IFNAME_BYTES: usize = 15;

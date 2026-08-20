@@ -7,8 +7,8 @@ use std::task::{Poll, Waker};
 use std::thread;
 use std::time::Duration;
 
-use d2b_contracts::v3::ResourceRef;
-use d2b_contracts::v3::credential::{
+use d2b_contracts_zone_session::v3::ResourceRef;
+use d2b_contracts_provider::v3::credential::{
     CredentialLeaseHandle, CredentialMethod, CredentialRequest, CredentialResponse,
     CredentialServiceErrorCode, CredentialSourceVersion, PlacementBinding,
 };

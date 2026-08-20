@@ -1,6 +1,6 @@
 use std::fmt;
 
-use d2b_contracts::v3::component_session::{
+use d2b_contracts_zone_session::v3::component_session::{
     FRAGMENT_HEADER_LEN, FragmentHeader, FragmentSequence, LimitProfile, RECORD_HEADER_LEN,
     SessionErrorCode,
 };

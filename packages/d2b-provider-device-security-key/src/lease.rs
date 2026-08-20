@@ -1,7 +1,7 @@
 //! Single-session security-key lease state machine.
 
 use core::fmt;
-use d2b_contracts::v3::{ResourceRef, ResourceUid};
+use d2b_contracts_zone_session::v3::{ResourceRef, ResourceUid};
 
 use crate::authority::{
     PhysicalAuthorityLease, PhysicalUsbBackingClaim, RelayLaunchTicket, SecurityKeyAdmission,

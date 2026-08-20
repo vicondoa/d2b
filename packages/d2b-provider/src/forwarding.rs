@@ -11,13 +11,13 @@
 //! [`ZoneRouteEngine::admit_relay_hop`], which this crate reuses rather than
 //! restates.
 
-use d2b_contracts::v3::{
+use d2b_contracts_zone_session::v3::{
     identity::{ResourceName, ResourceTypeName},
     zone_routing::ZoneLabelId,
 };
 use d2b_zone_routing::engine::{ZoneRelayAdmission, ZoneRelayRequest, ZoneRouteEngine};
 
-pub use d2b_contracts::v3::zone_routing::ZoneRouteFailClosedReason;
+pub use d2b_contracts_zone_session::v3::zone_routing::ZoneRouteFailClosedReason;
 
 use crate::session::SessionIdentity;
 

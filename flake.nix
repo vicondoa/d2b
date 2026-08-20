@@ -147,6 +147,7 @@
           cp -r ${./packages/d2b-core} $out/packages/d2b-core
           cp -r ${./packages/d2b-contracts} $out/packages/d2b-contracts
           cp -r ${./packages/d2b-contracts-control} $out/packages/d2b-contracts-control
+          cp -r ${./packages/d2b-contracts-resource} $out/packages/d2b-contracts-resource
           cp -r ${./packages/d2b-guestd} $out/packages/d2b-guestd
           cp -r ${./packages/d2b-exec-runner} $out/packages/d2b-exec-runner
           cp -r ${./packages/d2b-sk-frontend} $out/packages/d2b-sk-frontend
@@ -154,6 +155,7 @@
           chmod -R u+w $out/packages/d2b-core
           chmod -R u+w $out/packages/d2b-contracts
           chmod -R u+w $out/packages/d2b-contracts-control
+          chmod -R u+w $out/packages/d2b-contracts-resource
           chmod -R u+w $out/packages/d2b-realm-core
           cp ${./tests/fixtures/guest-rust-workspace/d2b-contracts.Cargo.toml} \
             $out/packages/d2b-contracts/Cargo.toml

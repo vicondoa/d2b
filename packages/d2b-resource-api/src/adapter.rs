@@ -6,7 +6,7 @@
 use std::{collections::HashMap, sync::Arc};
 
 use async_trait::async_trait;
-use d2b_contracts::resource_proto as wire;
+use d2b_contracts_resource::resource_proto as wire;
 
 use crate::{
     ResourceStoreBackend,
@@ -216,7 +216,7 @@ mod tests {
     use super::*;
     use std::{collections::BTreeSet, sync::Mutex};
 
-    use d2b_contracts::v3::{
+    use d2b_contracts_zone_session::v3::{
         AuthenticatedSubjectContext as SessionClaims, BindingDigest, CanonicalJsonValue,
         ConfigurationGeneration, ControllerGeneration, EvidenceClass, Locality,
         RESOURCE_ENVELOPE_DOMAIN_TAG, ReconnectGeneration, ResourceEnvelope, ResourceGeneration,
@@ -518,7 +518,7 @@ mod tests {
         async fn dispatch(
             &self,
             request: AuthorizedUpgrade,
-        ) -> Result<UpgradeResult, d2b_contracts::v3::ResourceError> {
+        ) -> Result<UpgradeResult, d2b_contracts_zone_session::v3::ResourceError> {
             self.calls.lock().unwrap().push(DispatchObservation::one(
                 ApiMethod::Upgrade,
                 &request.operation.operation_id,

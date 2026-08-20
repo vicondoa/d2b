@@ -7,14 +7,14 @@
 //! are quarantined rather than guessed.
 
 use crate::zone_links::{ZoneLinkCursor, ZoneLinkError};
-use d2b_contracts::v3::SchemaFingerprint;
+use d2b_contracts_zone_session::v3::SchemaFingerprint;
 
 pub use crate::zone_links::{
     BootstrapPsk, SealedEnrollment, ZONE_LINK_METRIC_LABEL_KEYS, ZoneLinkEffect, ZoneLinkEvent,
     ZoneLinkHandler, ZoneLinkKeyPolicy, ZoneLinkLimits, ZoneLinkMetricSample, ZoneLinkPhase,
     ZoneLinkRecord, ZoneLinkSessionState, ZoneLinkStatus,
 };
-pub use d2b_contracts::v3::zone_routing::ZoneLinkControllerGeneration;
+pub use d2b_contracts_zone_session::v3::zone_routing::ZoneLinkControllerGeneration;
 
 /// Closed failure from owner-proof cursor adoption.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

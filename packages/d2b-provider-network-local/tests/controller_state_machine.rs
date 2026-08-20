@@ -4,7 +4,7 @@ use std::{
     task::{Context, Poll, Waker},
 };
 
-use d2b_contracts::v3::{
+use d2b_contracts_zone_session::v3::{
     ResourceBundleGenerationId, ResourceGeneration, ResourceUid,
     execution_policy::BoundedToken,
     network::{
@@ -140,7 +140,7 @@ impl NetworkEffectPort for FakePorts {
 impl NetworkResourcePort for FakePorts {
     async fn upsert_volume_backing(
         &self,
-        _: &d2b_contracts::v3::volume::VolumeSpec,
+        _: &d2b_contracts_zone_session::v3::volume::VolumeSpec,
     ) -> Result<(), NetworkEffectError> {
         self.push("volume-upsert")
     }
@@ -154,21 +154,21 @@ impl NetworkResourcePort for FakePorts {
 
     async fn upsert_guest(
         &self,
-        _: &d2b_contracts::v3::guest::GuestSpec,
+        _: &d2b_contracts_zone_session::v3::guest::GuestSpec,
     ) -> Result<(), NetworkEffectError> {
         self.push("guest-upsert")
     }
 
     async fn attach_volume(
         &self,
-        _: &d2b_contracts::v3::volume::VolumeAttachment,
+        _: &d2b_contracts_zone_session::v3::volume::VolumeAttachment,
     ) -> Result<(), NetworkEffectError> {
         self.push("volume-attach")
     }
 
     async fn upsert_agent(
         &self,
-        _: &d2b_contracts::v3::process::ProcessSpec,
+        _: &d2b_contracts_zone_session::v3::process::ProcessSpec,
     ) -> Result<(), NetworkEffectError> {
         self.push("agent-upsert")
     }

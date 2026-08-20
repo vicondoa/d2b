@@ -8,7 +8,7 @@
 use std::sync::{Arc, Mutex};
 
 use async_trait::async_trait;
-use d2b_contracts::v3::{
+use d2b_contracts_zone_session::v3::{
     AuthenticatedSubjectContext, BindingDigest, ConfigurationGeneration, ControllerGeneration,
     EvidenceClass, Locality, ReconnectGeneration, ResourceGeneration, ResourceRef,
     ResourceTypeName, ResourceUid, SchemaFingerprint, ServiceName, SessionBinding, SessionPurpose,

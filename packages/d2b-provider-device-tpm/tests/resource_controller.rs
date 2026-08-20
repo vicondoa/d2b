@@ -1,4 +1,4 @@
-use d2b_contracts::v3::{ResourceRef, ResourceUid};
+use d2b_contracts_zone_session::v3::{ResourceRef, ResourceUid};
 use d2b_provider_device_tpm::{
     TpmResourceController, TpmResourceEffectError, TpmResourceEffectPort, TpmResourceOutcome,
     build_tpm_state_volume_spec,

@@ -8,7 +8,7 @@ use std::{
     time::{Duration, Instant},
 };
 
-use d2b_contracts::v3::{
+use d2b_contracts_zone_session::v3::{
     ConfigurationGeneration, ResourceGeneration, ResourcePhase, ZoneId, ZoneRevision,
 };
 
@@ -1944,7 +1944,7 @@ mod tests {
         time::Duration,
     };
 
-    use d2b_contracts::v3::{
+    use d2b_contracts_zone_session::v3::{
         ControllerGeneration, ResourceRef, ResourceTypeName, ResourceUid, ZoneId,
     };
 

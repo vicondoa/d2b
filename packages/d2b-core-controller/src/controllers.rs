@@ -2,8 +2,8 @@
 
 use std::collections::BTreeMap;
 
-use d2b_contracts::v3::resource_status::MAX_STATUS_COLLECTION_ENTRIES;
-use d2b_contracts::v3::{ResourceCurrencySet, ResourceRef, UpdateState};
+use d2b_contracts_zone_session::v3::resource_status::MAX_STATUS_COLLECTION_ENTRIES;
+use d2b_contracts_zone_session::v3::{ResourceCurrencySet, ResourceRef, UpdateState};
 
 /// Closed fixed core handler set.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]

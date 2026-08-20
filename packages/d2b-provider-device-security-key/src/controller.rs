@@ -1,7 +1,7 @@
 //! Security-key Device controller facade.
 
 use core::fmt;
-use d2b_contracts::v3::ResourceUid;
+use d2b_contracts_zone_session::v3::ResourceUid;
 
 use crate::effect_port::{
     DeviceId, InventoryEffectError, InventoryObservation, ObservationPolicyId,
@@ -12,7 +12,7 @@ use crate::{
     SecurityKeyLease, SecurityKeyLeaseError, SecurityKeySessionId, SessionRecord, SessionResult,
     SessionRing,
 };
-use d2b_contracts::v3::ResourceRef;
+use d2b_contracts_zone_session::v3::ResourceRef;
 
 /// Controller-level failures.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

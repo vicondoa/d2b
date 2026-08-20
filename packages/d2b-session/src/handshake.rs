@@ -1,6 +1,6 @@
 use std::fmt;
 
-use d2b_contracts::v3::component_session::{
+use d2b_contracts_zone_session::v3::component_session::{
     BinaryError, BootstrapIdentityBinding, ComponentSessionPreface,
     ENDPOINT_POLICY_IDENTITY_CANONICAL_LEN, EndpointPolicy, EndpointPolicyIdentity, HandshakeOffer,
     LimitProfile, NoiseProfile, PREFACE_LEN, PrefaceError, SessionErrorCode,

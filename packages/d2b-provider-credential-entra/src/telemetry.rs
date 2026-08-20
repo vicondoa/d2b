@@ -1,7 +1,7 @@
 //! Entra Credential telemetry producer.
 
-use d2b_contracts::v3::credential::PlacementBinding;
-use d2b_contracts::v3::credential_controller::{
+use d2b_contracts_provider::v3::credential::PlacementBinding;
+use d2b_contracts_provider::v3::credential_controller::{
     CredentialObservabilityError, CredentialProviderKind, CredentialTelemetryFrame,
     CredentialTelemetryOperation, CredentialTelemetryOutcome,
 };
@@ -27,7 +27,7 @@ pub(super) fn frame(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use d2b_contracts::v3::credential_controller::CredentialTelemetryField;
+    use d2b_contracts_provider::v3::credential_controller::CredentialTelemetryField;
 
     #[test]
     fn process_unique_entra_canary_is_rejected_from_closed_values() {

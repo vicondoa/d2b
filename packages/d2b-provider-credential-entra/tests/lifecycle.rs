@@ -7,8 +7,8 @@ use std::task::{Poll, Waker};
 use std::thread;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-use d2b_contracts::v3::ResourceRef;
-use d2b_contracts::v3::credential::{
+use d2b_contracts_zone_session::v3::ResourceRef;
+use d2b_contracts_provider::v3::credential::{
     CredentialLeaseHandle, CredentialMethod, CredentialRequest, CredentialResponse,
     CredentialServiceErrorCode, CredentialSourceVersion, PlacementBinding,
 };
@@ -187,7 +187,7 @@ fn finalization_accepts_a_remote_lease_that_already_expired() {
         .unwrap()
         .as_millis() as u64;
     *client.inspection.lock().unwrap() = Some(EntraLeaseInspection {
-        state: d2b_contracts::v3::credential::CredentialLeaseState::Active,
+        state: d2b_contracts_provider::v3::credential::CredentialLeaseState::Active,
         source_version: CredentialSourceVersion::parse("entra-source-expired-finalize").unwrap(),
         rotation_generation: 1,
         expires_at_unix_ms: now - 1,

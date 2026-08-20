@@ -5,14 +5,14 @@ use std::{
     sync::{Arc, Mutex, RwLock, RwLockReadGuard, RwLockWriteGuard},
 };
 
-use d2b_contracts::v3::identity::STANDARD_RESOURCE_TYPES;
-use d2b_contracts::v3::{
+use d2b_contracts_zone_session::v3::identity::STANDARD_RESOURCE_TYPES;
+use d2b_contracts_zone_session::v3::{
     AuthenticatedSubjectContext, ControllerGeneration, EvidenceClass, Locality,
     MAX_ROLE_BINDING_SUBJECTS, MAX_ROLE_RULE_EXECUTION_REFS, MAX_ROLE_RULE_RESOURCE_NAMES,
     MAX_ROLE_RULE_RESOURCE_TYPES, MAX_ROLE_RULE_VERBS, MAX_ROLE_RULES, ResourceErrorKind,
     ResourceName, ResourceRef, ResourceTypeName, ResourceUid, ZoneId, ZoneRevision,
 };
-use d2b_contracts::v3::{RoleBindingSpec, RoleResourceVerb, RoleRule, RoleSessionVerb, RoleSpec};
+use d2b_contracts_zone_session::v3::{RoleBindingSpec, RoleResourceVerb, RoleRule, RoleSessionVerb, RoleSpec};
 use d2b_core_controller::rbac::{AuthorizationCacheKey, PolicyRevisionSet, PositiveDecisionCache};
 use d2b_resource_store::{
     AdmittedAuthorization, AdmittedAuthorizationTarget, AdmittedVerb, PolicySnapshot,
@@ -32,11 +32,11 @@ use crate::store::StoreBindingError;
 pub enum StoreSealHandoffError {
     AlreadyTaken {
         slot: StoreSlot,
-        zone: d2b_contracts::v3::ZoneId,
+        zone: d2b_contracts_zone_session::v3::ZoneId,
     },
     AuthorizerUnavailable {
         slot: StoreSlot,
-        zone: d2b_contracts::v3::ZoneId,
+        zone: d2b_contracts_zone_session::v3::ZoneId,
     },
 }
 
@@ -219,14 +219,14 @@ pub enum BootstrapPhase {
     Unprovisioned {
         zone: ZoneId,
         controller_generation: ControllerGeneration,
-        provider_generation: d2b_contracts::v3::ResourceGeneration,
+        provider_generation: d2b_contracts_zone_session::v3::ResourceGeneration,
     },
     Provisioned {
         zone: ZoneId,
         system_core_uid: ResourceUid,
         system_minijail_uid: ResourceUid,
         controller_generation: ControllerGeneration,
-        provider_generation: d2b_contracts::v3::ResourceGeneration,
+        provider_generation: d2b_contracts_zone_session::v3::ResourceGeneration,
     },
     Disabled,
 }
@@ -247,7 +247,7 @@ pub struct BootstrapStoreFacts {
     /// Current fixed core-controller generation.
     controller_generation: ControllerGeneration,
     /// Current bootstrap Provider generation.
-    provider_generation: d2b_contracts::v3::ResourceGeneration,
+    provider_generation: d2b_contracts_zone_session::v3::ResourceGeneration,
 }
 
 impl BootstrapStoreFacts {
@@ -258,7 +258,7 @@ impl BootstrapStoreFacts {
         policy_revision: u64,
         bootstrap_provider_uids: BTreeMap<ResourceName, ResourceUid>,
         controller_generation: ControllerGeneration,
-        provider_generation: d2b_contracts::v3::ResourceGeneration,
+        provider_generation: d2b_contracts_zone_session::v3::ResourceGeneration,
     ) -> Self {
         Self {
             zone,
@@ -1780,7 +1780,7 @@ impl std::error::Error for AuthorizationPolicyError {}
 #[cfg(test)]
 mod tests {
     use super::*;
-    use d2b_contracts::v3::{
+    use d2b_contracts_zone_session::v3::{
         BindingDigest, ConfigurationGeneration, ReconnectGeneration, ResourceGeneration,
         SchemaFingerprint, ServiceName, SessionBinding, SessionPurpose, TranscriptHash,
         TransportBinding,

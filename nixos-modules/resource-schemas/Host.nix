@@ -1,4 +1,4 @@
-# Generated from packages/d2b-contracts/src/v3/host.rs.
+# Generated from the d2b-contracts-resource and d2b-contracts-zone-session contract families.
 # Do not hand-edit; run xtask gen-resource-schemas.
 { lib }:
 {

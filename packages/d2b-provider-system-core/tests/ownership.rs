@@ -6,7 +6,7 @@
 //! the outside, so a later caller cannot widen the most privileged Provider
 //! in the Zone by handing it a ResourceType the specification denied it.
 
-use d2b_contracts::v3::ResourceRef;
+use d2b_contracts_zone_session::v3::ResourceRef;
 use d2b_provider_system_core::testing::{ScriptedDiscoveryPort, block_on, fixtures};
 use d2b_provider_system_core::{
     DISOWNED_RESOURCE_TYPES, HostReconciler, OWNED_RESOURCE_TYPES, SystemCoreError, UserReconciler,

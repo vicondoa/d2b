@@ -2,7 +2,7 @@
 
 use std::collections::BTreeMap;
 
-use d2b_contracts::v3::ZoneRevision;
+use d2b_contracts_zone_session::v3::ZoneRevision;
 
 /// Opaque process-local watch registration identifier.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]

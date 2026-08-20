@@ -2,7 +2,7 @@
 //!
 //! # The decision this module records
 //!
-//! `d2b_contracts::v3::zone_session` extends the endpoint taxonomy but
+//! `d2b_contracts_zone_session::v3::zone_session` extends the endpoint taxonomy but
 //! deliberately does not re-export `HandshakeOffer`, `EndpointPolicy`, or
 //! `EndpointPolicyIdentity`, because those structs' enum-typed fields name the
 //! *un-extended* component-session enumerations. Re-exporting them would have
@@ -44,8 +44,8 @@
 //! A policy value is desired-state configuration. It carries no session, no
 //! admission evidence, no resolved subject, no key material, and no path.
 
-use d2b_contracts::v3::component_session as base;
-use d2b_contracts::v3::zone_session::{
+use d2b_contracts_zone_session::v3::component_session as base;
+use d2b_contracts_zone_session::v3::zone_session::{
     AttachmentPolicy, EndpointPurpose, EndpointRole, LimitProfile, NoiseProfile, PurposeClass,
     ServicePackage,
 };
@@ -53,7 +53,7 @@ use d2b_contracts::v3::zone_session::{
 // `TransportBinding` is not part of the extended taxonomy, so the Zone
 // contract module does not re-export it. It is taken from its single
 // definition rather than restated here.
-use d2b_contracts::v3::component_session::TransportBinding;
+use d2b_contracts_zone_session::v3::component_session::TransportBinding;
 
 /// A structural refusal raised while lowering a Zone policy for the wire.
 ///
@@ -281,7 +281,7 @@ impl ZoneEndpointPolicyIdentity {
 #[cfg(test)]
 pub(crate) mod fixtures {
     use super::*;
-    use d2b_contracts::v3::zone_session::{IdentityEvidenceRequirement, Locality, TransportClass};
+    use d2b_contracts_zone_session::v3::zone_session::{IdentityEvidenceRequirement, Locality, TransportClass};
 
     /// The enrolled ZoneLink policy: `Noise_KK` over adjacent-Zone carriage.
     ///

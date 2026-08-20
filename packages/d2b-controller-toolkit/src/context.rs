@@ -5,7 +5,7 @@ use std::sync::{
     atomic::{AtomicBool, Ordering},
 };
 
-use d2b_contracts::v3::{
+use d2b_contracts_zone_session::v3::{
     ConfigurationGeneration, ResourceGeneration, ResourceUid, ZoneId, ZoneRevision,
 };
 
@@ -218,7 +218,7 @@ impl core::fmt::Debug for Cancellation {
 /// Foreign controller code cannot forge a committed proof:
 ///
 /// ```compile_fail
-/// use d2b_contracts::v3::{ResourceGeneration, ResourceUid, ZoneId, ZoneRevision};
+/// use d2b_contracts_zone_session::v3::{ResourceGeneration, ResourceUid, ZoneId, ZoneRevision};
 /// use d2b_controller_toolkit::CommittedRevisionProof;
 ///
 /// let _ = CommittedRevisionProof {
@@ -583,7 +583,7 @@ impl std::error::Error for ContextError {}
 mod tests {
     use super::*;
     use crate::TriggerReason;
-    use d2b_contracts::v3::{ControllerGeneration, ResourceRef};
+    use d2b_contracts_zone_session::v3::{ControllerGeneration, ResourceRef};
 
     fn key(zone: &str, name: &str, uid: &str) -> ResourceKey {
         ResourceKey::new(

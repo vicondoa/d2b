@@ -6,7 +6,7 @@
 
 use std::collections::BTreeMap;
 
-use d2b_contracts::v3::{Locality, ServiceName};
+use d2b_contracts_zone_session::v3::{Locality, ServiceName};
 use d2b_telemetry::{
     BoundedEmitter, EmitOutcome, IdentityCanaries, MetricDescriptor, MetricPolicyError, Signal,
     emitter::encode_frame, meter_registry::label, validate_data_point, validate_descriptor,
@@ -55,7 +55,7 @@ impl BusDirection {
     }
 
     /// Derive direction from already-authenticated subject evidence.
-    pub fn from_context(context: Option<&d2b_contracts::v3::AuthenticatedSubjectContext>) -> Self {
+    pub fn from_context(context: Option<&d2b_contracts_zone_session::v3::AuthenticatedSubjectContext>) -> Self {
         let Some(context) = context else {
             return Self::Local;
         };
@@ -558,7 +558,7 @@ fn service_label(service: &ServiceName) -> &'static str {
 /// Convert an authenticated subject's locality to the active-session
 /// transport label.
 pub(crate) fn transport_for_context(
-    context: Option<&d2b_contracts::v3::AuthenticatedSubjectContext>,
+    context: Option<&d2b_contracts_zone_session::v3::AuthenticatedSubjectContext>,
 ) -> BusTransport {
     if context.is_some_and(|context| {
         matches!(

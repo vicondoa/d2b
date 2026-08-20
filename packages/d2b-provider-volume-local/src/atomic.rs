@@ -6,7 +6,7 @@
 
 use std::fmt;
 
-use d2b_contracts::v3::{
+use d2b_contracts_zone_session::v3::{
     MAX_STATE_DOCUMENT_BYTES, ResourceUid, StateEnvelope, VolumeStateError, canonical_json_bytes,
 };
 use serde::{Serialize, de::DeserializeOwned};

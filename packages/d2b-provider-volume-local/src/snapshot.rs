@@ -6,8 +6,8 @@
 use std::collections::BTreeSet;
 use std::fmt;
 
-use d2b_contracts::v3::execution_policy::BoundedToken;
-use d2b_contracts::v3::{SchemaVersion, Timestamp};
+use d2b_contracts_zone_session::v3::execution_policy::BoundedToken;
+use d2b_contracts_zone_session::v3::{SchemaVersion, Timestamp};
 use serde::Serialize;
 
 use crate::audit::{SnapshotTrigger, VolumeAuditKind};

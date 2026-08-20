@@ -5,7 +5,7 @@ use std::{
     time::Duration,
 };
 
-use d2b_contracts::v3::{ResourceRef, ResourceTypeName};
+use d2b_contracts_zone_session::v3::{ResourceRef, ResourceTypeName};
 use d2b_controller_toolkit::{
     OperationContext, PendingQueue, PriorityLane, QueueHint, ResourceKey, TriggerReason, TriggerSet,
 };
@@ -69,11 +69,11 @@ impl ControllerConsumer {
                 .expect("watch entry has a valid resource type");
             let resource_name = entry["resource_name"].as_str().unwrap();
             let resource_uid =
-                d2b_contracts::v3::ResourceUid::parse(entry["resource_uid"].as_str().unwrap())
+                d2b_contracts_zone_session::v3::ResourceUid::parse(entry["resource_uid"].as_str().unwrap())
                     .expect("watch entry has an immutable UID");
             let resource_ref = ResourceRef::new(
                 resource_type,
-                d2b_contracts::v3::ResourceName::parse(resource_name)
+                d2b_contracts_zone_session::v3::ResourceName::parse(resource_name)
                     .expect("watch entry has a valid resource name"),
             );
             let reason = if has_owner_hint {
@@ -109,7 +109,7 @@ impl ControllerConsumer {
     }
 }
 
-use d2b_contracts::v3::ZoneId;
+use d2b_contracts_zone_session::v3::ZoneId;
 
 #[tokio::test]
 async fn production_watch_frames_drive_controller_queue_after_store_commit() {

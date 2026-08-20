@@ -16,7 +16,6 @@ serde_json.workspace = true
 schemars.workspace = true
 sha2.workspace = true
 unicode-normalization.workspace = true
-protobuf = "3.7.2"
 
 [dev-dependencies]
 regex = "1"

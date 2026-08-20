@@ -14,8 +14,8 @@ use std::{
 };
 
 use d2b_contracts_broker::broker_wire::BrokerCallerRole;
-use d2b_contracts::v3::execution_policy::{BoundedToken, ExecutionDomain};
-use d2b_contracts::v3::{
+use d2b_contracts_zone_session::v3::execution_policy::{BoundedToken, ExecutionDomain};
+use d2b_contracts_zone_session::v3::{
     ControllerGeneration, ResourceGeneration, ResourceRef, ResourceUid,
     process::{EphemeralProcessSpec, ProcessSpec},
 };
@@ -666,7 +666,7 @@ impl ProductionProcessProviders {
     async fn adopt_resource_with_execution(
         &self,
         context: ProcessResourceContext<'_>,
-        execution: &d2b_contracts::v3::process::ExecutionSpec,
+        execution: &d2b_contracts_zone_session::v3::process::ExecutionSpec,
         spec_bytes: &[u8],
     ) -> Result<ProviderAdoption, String> {
         let provider = managed_provider_from_ref(context.provider_ref)?;
@@ -708,7 +708,7 @@ impl ProductionProcessProviders {
     async fn probe_resource_with_execution(
         &self,
         context: ProcessResourceContext<'_>,
-        execution: &d2b_contracts::v3::process::ExecutionSpec,
+        execution: &d2b_contracts_zone_session::v3::process::ExecutionSpec,
         spec_bytes: &[u8],
     ) -> Result<ProviderLiveness, String> {
         let provider = managed_provider_from_ref(context.provider_ref)?;
@@ -757,7 +757,7 @@ impl ProductionProcessProviders {
     async fn stop_resource_with_execution(
         &self,
         context: ProcessResourceContext<'_>,
-        execution: &d2b_contracts::v3::process::ExecutionSpec,
+        execution: &d2b_contracts_zone_session::v3::process::ExecutionSpec,
         spec_bytes: &[u8],
         term_timeout: Duration,
         kill_timeout: Duration,
@@ -1183,7 +1183,7 @@ fn managed_provider_from_ref(provider_ref: &ResourceRef) -> Result<ManagedProvid
 fn resource_ticket(
     bundle: &BundleResolver,
     context: ProcessResourceContext<'_>,
-    execution: &d2b_contracts::v3::process::ExecutionSpec,
+    execution: &d2b_contracts_zone_session::v3::process::ExecutionSpec,
     spec_bytes: &[u8],
     provider: ManagedProvider,
     timeout: Duration,
@@ -1245,7 +1245,7 @@ fn resource_ticket(
             || spec.start_root()
             || !matches!(
                 spec.environment_class(),
-                d2b_contracts::v3::process::EnvironmentClass::Minimal
+                d2b_contracts_zone_session::v3::process::EnvironmentClass::Minimal
             )
             || !spec.read_only_root()
             || spec.user_namespace().is_some()

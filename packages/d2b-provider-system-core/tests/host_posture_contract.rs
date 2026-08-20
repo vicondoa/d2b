@@ -5,7 +5,7 @@ mod host_reconciler;
 #[path = "../src/host_status.rs"]
 mod host_status;
 
-use d2b_contracts::v3::{ResourceRef, host::HostSpec};
+use d2b_contracts_zone_session::v3::{ResourceRef, host::HostSpec};
 
 #[test]
 fn status_projection_declares_user_only_posture() {
@@ -16,11 +16,11 @@ fn status_projection_declares_user_only_posture() {
         host_reconciler::isolation_posture(
             &HostSpec::user_only(ResourceRef::parse("User/alice").unwrap()).unwrap()
         ),
-        Some(d2b_contracts::v3::host::IsolationPosture::NoIsolation)
+        Some(d2b_contracts_zone_session::v3::host::IsolationPosture::NoIsolation)
     );
     assert_eq!(
         status.isolation_posture,
-        Some(d2b_contracts::v3::host::IsolationPosture::NoIsolation)
+        Some(d2b_contracts_zone_session::v3::host::IsolationPosture::NoIsolation)
     );
     assert_eq!(
         status.isolation_posture_message,

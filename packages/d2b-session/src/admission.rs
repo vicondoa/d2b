@@ -1,7 +1,7 @@
 use std::{fmt, future::Future, pin::Pin, sync::Arc};
 
 use async_trait::async_trait;
-use d2b_contracts::v3::{
+use d2b_contracts_zone_session::v3::{
     AuthenticatedSubjectContext, BindingDigest, ControllerGeneration, EvidenceClass, Locality,
     ReconnectGeneration, ResourceGeneration, ResourceRef, ResourceUid, SchemaFingerprint,
     ServiceName, SessionPurpose, TranscriptHash, TransportBinding as IdentityTransportBinding,
@@ -955,7 +955,7 @@ impl AuthenticatedSessionRouteBinding {
         let subject_uid =
             ResourceUid::parse("123e4567-e89b-42d3-a456-426614174000").expect("test UID is valid");
         let service_name = ServiceName::parse(service).expect("test service is valid");
-        let session = d2b_contracts::v3::SessionBinding::new(
+        let session = d2b_contracts_zone_session::v3::SessionBinding::new(
             SchemaFingerprint::parse(
                 "sha256:0000000000000000000000000000000000000000000000000000000000000000",
             )

@@ -13,7 +13,7 @@ use std::{
     },
 };
 
-use d2b_contracts::v3::{
+use d2b_contracts_zone_session::v3::{
     AuthenticatedSubjectContext, BindingDigest, CanonicalJsonObject, ConfigurationGeneration,
     EvidenceClass, Locality, ProviderMethod, ReconnectGeneration, ResourceGeneration, ResourceName,
     ResourceRef, ResourceTypeName, ResourceUid, SchemaFingerprint, ServiceName, SessionBinding,

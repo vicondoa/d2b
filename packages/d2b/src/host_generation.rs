@@ -1,6 +1,6 @@
 //! CLI-side typed host-generation request projection.
 
-use d2b_contracts::v3::{ActivationMode, ArtifactId, ResourceRef};
+use d2b_contracts_zone_session::v3::{ActivationMode, ArtifactId, ResourceRef};
 
 /// Request constructed after CLI parsing and before daemon authorization.
 #[derive(Debug, Clone, PartialEq, Eq)]

@@ -1,6 +1,7 @@
 #![doc = "Canonical private broker IPC wire contracts for d2b."]
 
 pub mod broker_wire;
+pub mod host_generation;
 
 pub use d2b_contracts::privileges_w3::W3BrokerOperation;
 pub use broker_wire::BrokerRequest;

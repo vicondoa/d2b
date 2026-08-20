@@ -9,7 +9,7 @@ use std::io;
 
 use d2b_audit::{DurabilityEvidence, OperationIdentity, ZoneOperationKey};
 use d2b_contracts_broker::broker_wire::{NftablesProjectionAction, RunnerAllocation};
-use d2b_contracts::v3::{ResourceBundleGenerationId, ResourceGeneration};
+use d2b_contracts_zone_session::v3::{ResourceBundleGenerationId, ResourceGeneration};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 

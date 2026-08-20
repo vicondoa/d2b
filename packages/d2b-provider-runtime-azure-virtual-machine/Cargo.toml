@@ -9,9 +9,10 @@ license.workspace = true
 workspace = true
 
 [dependencies]
+d2b-contracts-provider = { path = "../d2b-contracts-provider", version = "0.0.0-bootstrap" }
+d2b-contracts-zone-session = { path = "../d2b-contracts-zone-session", version = "0.0.0-bootstrap" }
 async-trait = "0.1"
 base64 = "0.22"
-d2b-contracts = { path = "../d2b-contracts", version = "0.0.0-bootstrap" }
 serde = { workspace = true }
 serde_json = { workspace = true }
 sha2 = { workspace = true }

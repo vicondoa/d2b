@@ -25,6 +25,7 @@ rust_library(
     ],
     visibility = ["//visibility:public"],
     deps = [
+        "//packages/d2b-contracts-zone-session:d2b_contracts_zone_session",
         "//packages/d2b-contracts:d2b_contracts",
         "//packages/d2b-core:d2b_core",
         "//packages/d2b-host-argv:d2b_host_argv",
@@ -48,6 +49,7 @@ rust_library(
     crate_name = "d2b_host",
     visibility = ["//visibility:public"],
     deps = [
+        "//packages/d2b-contracts-zone-session:d2b_contracts_zone_session",
         "//packages/d2b-contracts:d2b_contracts_test_support",
         "//packages/d2b-core:d2b_core_test_support",
         "//packages/d2b-host-argv:d2b_host_argv",
@@ -72,6 +74,7 @@ rust_library(
     crate_name = "d2b_host",
     visibility = ["//visibility:public"],
     deps = [
+        "//packages/d2b-contracts-zone-session:d2b_contracts_zone_session",
         "//packages/d2b-contracts:d2b_contracts_test_support",
         "//packages/d2b-core:d2b_core_test_support",
         "//packages/d2b-host-argv:d2b_host_argv",
@@ -84,6 +87,7 @@ rust_binary(
     compile_data = ["Cargo.toml"],
     visibility = ["//visibility:public"],
     deps = [
+        "//packages/d2b-contracts-zone-session:d2b_contracts_zone_session",
         ":d2b_host",
         "//packages/d2b-contracts:d2b_contracts",
     ] + all_crate_deps(normal = True, cargo_only = True),
@@ -98,6 +102,7 @@ rust_test(
     rustc_env = {"CARGO_BIN_EXE_d2b-activation-helper": "$(rootpath :d2b-activation-helper)"},
     visibility = ["//visibility:public"],
     deps = [
+        "//packages/d2b-contracts-zone-session:d2b_contracts_zone_session",
         ":d2b_host_test_support",
     ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
 )
@@ -111,6 +116,7 @@ rust_test(
     rustc_env = {"CARGO_BIN_EXE_d2b-activation-helper": "$(rootpath :d2b-activation-helper)"},
     visibility = ["//visibility:public"],
     deps = [
+        "//packages/d2b-contracts-zone-session:d2b_contracts_zone_session",
     ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
 )
 
@@ -130,7 +136,7 @@ rust_test(
     rustc_env = {"CARGO_BIN_EXE_d2b-activation-helper": "$(rootpath :d2b-activation-helper)"},
     tags = ["no-remote-cache"],
     visibility = ["//visibility:public"],
-    deps = [] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
+    deps = ["//packages/d2b-contracts-zone-session:d2b_contracts_zone_session", ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
 )
 
 rust_test(
@@ -142,6 +148,7 @@ rust_test(
     rustc_env = {"CARGO_BIN_EXE_d2b-activation-helper": "$(rootpath :d2b-activation-helper)"},
     visibility = ["//visibility:public"],
     deps = [
+        "//packages/d2b-contracts-zone-session:d2b_contracts_zone_session",
     ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
 )
 
@@ -151,6 +158,7 @@ rust_test(
     compile_data = ["Cargo.toml"],
     visibility = ["//visibility:public"],
     deps = [
+        "//packages/d2b-contracts-zone-session:d2b_contracts_zone_session",
         ":d2b_host_test_support",
         "//packages/d2b-contracts:d2b_contracts_test_support",
     ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
@@ -170,6 +178,7 @@ rust_test(
     },
     rustc_env = {"CARGO_BIN_EXE_d2b-activation-helper": "$(rootpath :d2b-activation-helper)"},
     deps = [
+        "//packages/d2b-contracts-zone-session:d2b_contracts_zone_session",
     ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
 )
 

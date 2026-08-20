@@ -2,7 +2,7 @@
 
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 
-use d2b_contracts::v3::{ResourceRef, ZoneRevision};
+use d2b_contracts_zone_session::v3::{ResourceRef, ZoneRevision};
 
 use crate::hints::{ControllerLeaseKey, CoreTriggerReason, HintTarget};
 
@@ -322,7 +322,7 @@ impl std::error::Error for DependencyError {}
 
 #[cfg(test)]
 mod tests {
-    use d2b_contracts::v3::{ResourceUid, ZoneId};
+    use d2b_contracts_zone_session::v3::{ResourceUid, ZoneId};
 
     use super::*;
 

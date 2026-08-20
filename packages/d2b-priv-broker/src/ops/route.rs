@@ -374,7 +374,7 @@ fn normalize_table_name(table: &str) -> String {
 mod tests {
     use super::*;
     use crate::ops::exec_reconcile::{FakeReconcileExecutor, ReconcileOp};
-    use d2b_contracts::v3::IfName;
+    use d2b_contracts_zone_session::v3::IfName;
 
     fn ri(dest: &str, dev: Option<&str>) -> RouteIntent {
         RouteIntent {

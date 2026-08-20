@@ -5,9 +5,11 @@
 //! metadata.  The adapter traits below therefore do not expose a transport,
 //! stream, file descriptor, path, backing handle, or remote reference.
 
-use d2b_contracts::v3::{
-    BindingTargetType, Exportability, ProjectionFactory, ProviderContractError, ResourceEnvelope,
-    ResourceExportSpec, ResourceImportSpec, ResourceRef, ResourceTypeName,
+use d2b_contracts_zone_session::v3::{
+    ResourceEnvelope, ResourceExportSpec, ResourceImportSpec, ResourceRef, ResourceTypeName,
+};
+use d2b_contracts_provider::v3::{
+    BindingTargetType, Exportability, ProjectionFactory, ProviderContractError,
     SEMANTIC_PROJECTION_PROTOCOL_VERSION, SemanticProjectionProtocolVersion,
 };
 
@@ -172,7 +174,7 @@ pub fn admit_import(
     import
         .validate_against_export(export)
         .map_err(|error| match error {
-            d2b_contracts::v3::ResourceImportContractError::InvalidCapability => {
+            d2b_contracts_zone_session::v3::ResourceImportContractError::InvalidCapability => {
                 ShareAdapterError::CapabilityNotAllowed
             }
             _ => ShareAdapterError::ImportContract,
@@ -256,8 +258,9 @@ pub const fn service_type(factory: &ProjectionFactory) -> &ResourceTypeName {
 
 #[cfg(test)]
 mod tests {
-    use d2b_contracts::v3::{
-        BindingTargetType, ConsumerZonePolicy, ExportArbitration, ResourceExportSpec,
+    use d2b_contracts_provider::v3::BindingTargetType;
+    use d2b_contracts_zone_session::v3::{
+        ConsumerZonePolicy, ExportArbitration, ResourceExportSpec,
         ResourceImportSpec, ResourceName, ResourceTypeName, SchemaFingerprint,
         execution_policy::BoundedToken,
     };

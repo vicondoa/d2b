@@ -14,7 +14,7 @@ use std::{
     time::Duration,
 };
 
-use d2b_contracts::v3::{
+use d2b_contracts_zone_session::v3::{
     CanonicalJsonObject, ProviderMethod, ResourceRef, ServiceName, component_session::RequestId,
     execution_policy::BoundedToken, zone_routing::ZonePath,
 };

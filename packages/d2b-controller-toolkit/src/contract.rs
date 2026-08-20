@@ -2,7 +2,7 @@
 
 use std::collections::BTreeSet;
 
-use d2b_contracts::v3::{
+use d2b_contracts_zone_session::v3::{
     ControllerGeneration, ResourceGeneration, ResourceRef, ResourceTypeName, ResourceUid, ZoneId,
 };
 

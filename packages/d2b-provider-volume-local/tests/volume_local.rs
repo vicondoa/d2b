@@ -1,4 +1,4 @@
-use d2b_contracts::v3::execution_policy::BoundedToken;
+use d2b_contracts_zone_session::v3::execution_policy::BoundedToken;
 use d2b_provider_volume_local::atomic::{AtomicWriteError, check_soft_quota};
 use d2b_provider_volume_local::effect_port::{ExecutionDomain, VolumeEffectError, validate_domain};
 

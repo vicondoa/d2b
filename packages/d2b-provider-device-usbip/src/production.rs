@@ -6,7 +6,7 @@
 //! This module contains no broker dependency and therefore cannot bypass the
 //! typed supervisor boundary.
 
-use d2b_contracts::v3::ResourceUid;
+use d2b_contracts_zone_session::v3::ResourceUid;
 
 use crate::{
     AttachProcessIdentity, BindingIdentity, BindingLifecycleError, BindingPort, BindingProxyLease,

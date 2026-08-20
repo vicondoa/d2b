@@ -1,6 +1,6 @@
-use d2b_contracts::v3::volume::EntryType;
-use d2b_contracts::v3::zone_routing::{ZoneLabelId, ZonePath};
-use d2b_contracts::v3::{
+use d2b_contracts_zone_session::v3::volume::EntryType;
+use d2b_contracts_zone_session::v3::zone_routing::{ZoneLabelId, ZonePath};
+use d2b_contracts_zone_session::v3::{
     MigrationPolicy, PersistenceClass, ResourceGeneration, ResourceRef, SchemaVersion,
     VolumeStateSchemaId,
 };

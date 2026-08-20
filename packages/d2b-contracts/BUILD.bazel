@@ -7,31 +7,11 @@ exports_files(
     visibility = ["//visibility:public"],
 )
 
-exports_files(
-    ["proto/v3/credential.proto"],
-    visibility = ["//visibility:public"],
-)
-
 d2b_contracts_srcs = glob(["src/**/*.rs"], allow_empty = True)
 
 filegroup(
     name = "daemon_api_sources",
     srcs = glob(["src/*.rs"]),
-    visibility = ["//visibility:public"],
-)
-
-filegroup(
-    name = "resource_proto_source",
-    srcs = ["proto/d2b-resource-v3.proto"],
-    visibility = ["//visibility:public"],
-)
-
-filegroup(
-    name = "resource_proto_generated",
-    srcs = [
-        "src/generated/d2b_resource_v3.rs",
-        "src/generated/mod.rs",
-    ],
     visibility = ["//visibility:public"],
 )
 
@@ -66,59 +46,6 @@ rust_test(
 )
 
 rust_test(
-    name = "activation_nixos",
-    srcs = ["tests/activation_nixos.rs"],
-    compile_data = ["Cargo.toml"],
-    visibility = ["//visibility:public"],
-    deps = [
-        ":d2b_contracts",
-    ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
-)
-
-rust_test(
-    name = "generation_bundle",
-    srcs = ["tests/generation_bundle.rs"],
-    compile_data = ["Cargo.toml"],
-    visibility = ["//visibility:public"],
-    deps = [
-        ":d2b_contracts",
-    ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
-)
-
-rust_test(
-    name = "resource_v3_protocol_vectors",
-    srcs = ["tests/resource_v3_protocol_vectors.rs"],
-    compile_data = [
-        "Cargo.toml",
-        "proto/d2b-resource-v3.proto",
-    ],
-    visibility = ["//visibility:public"],
-    deps = [
-        ":d2b_contracts",
-    ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
-)
-
-rust_test(
-    name = "usbip_effect_port",
-    srcs = ["tests/usbip_effect_port.rs"],
-    compile_data = ["Cargo.toml"],
-    visibility = ["//visibility:public"],
-    deps = [
-        ":d2b_contracts",
-    ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
-)
-
-rust_test(
-    name = "virtiofs_export",
-    srcs = ["tests/virtiofs_export.rs"],
-    compile_data = ["Cargo.toml"],
-    visibility = ["//visibility:public"],
-    deps = [
-        ":d2b_contracts",
-    ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
-)
-
-rust_test(
     name = "d2b_contracts_test",
     compile_data = ["Cargo.toml"],
     crate = ":d2b_contracts",
@@ -136,7 +63,6 @@ filegroup(
             "benches/**/*.rs",
             "build.rs",
             "examples/**/*.rs",
-            "proto/**/*.proto",
             "src/**/*.rs",
             "tests/**/*.rs",
         ],

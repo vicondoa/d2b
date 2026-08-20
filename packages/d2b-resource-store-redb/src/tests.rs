@@ -5,7 +5,7 @@ use d2b_audit::{
     AuditHash, AuditRecord, AuditRecordError, AuditRecordFields, AuditSink, DurabilityEvidence,
     DurabilityOutcome, OperationIdentity, ZoneOperationKey, genesis_hash,
 };
-use d2b_contracts::v3::{
+use d2b_contracts_resource::v3::{
     CanonicalJsonValue, ConfigurationGeneration, RESOURCE_ENVELOPE_DOMAIN_TAG, ResourceEnvelope,
     ResourceRef, ResourceTypeName, ResourceUid, Timestamp, ZoneId, canonical_digest,
 };
@@ -427,7 +427,7 @@ fn seed_host(directory: &tempfile::TempDir, name: &str) {
     crate::transaction::initialize(&database, &identity()).unwrap();
     let target = ResourceRef::parse(&format!("Host/{name}")).unwrap();
     let canonical_json = stored_body(name);
-    let envelope = d2b_contracts::v3::ResourceEnvelope::from_json(&canonical_json).unwrap();
+    let envelope = d2b_contracts_resource::v3::ResourceEnvelope::from_json(&canonical_json).unwrap();
     let record = ResourceRecord {
         canonical_json,
         owner_uid: None,
@@ -445,7 +445,7 @@ fn seed_host(directory: &tempfile::TempDir, name: &str) {
         &envelope.metadata().uid().as_str(),
     )
     .unwrap();
-    let batch = ChangeBatch::new(d2b_contracts::v3::ZoneRevision::new(1), Vec::new()).unwrap();
+    let batch = ChangeBatch::new(d2b_contracts_resource::v3::ZoneRevision::new(1), Vec::new()).unwrap();
     let batch_value = encode(ValueKind::ChangeBatch, &batch).unwrap();
     let mut meta = crate::transaction::current_meta(&database).unwrap();
     meta.current_revision = 1;
@@ -514,7 +514,7 @@ fn seed_two_hosts(directory: &tempfile::TempDir) {
             "123e4567-e89b-42d3-a456-426614174001",
         )
         .into_bytes();
-    let envelope = d2b_contracts::v3::ResourceEnvelope::from_json(&canonical_json).unwrap();
+    let envelope = d2b_contracts_resource::v3::ResourceEnvelope::from_json(&canonical_json).unwrap();
     let record = crate::transaction::ResourceRecord {
         canonical_json,
         owner_uid: None,
@@ -589,7 +589,7 @@ fn seed_replay_log(directory: &tempfile::TempDir, rows: u64) {
         let mut revisions = write.open_table(REVISION_LOG).unwrap();
         for revision in 1..=rows {
             let batch =
-                ChangeBatch::new(d2b_contracts::v3::ZoneRevision::new(revision), Vec::new())
+                ChangeBatch::new(d2b_contracts_resource::v3::ZoneRevision::new(revision), Vec::new())
                     .unwrap();
             let value = encode(ValueKind::ChangeBatch, &batch).unwrap();
             revisions
@@ -2091,7 +2091,7 @@ async fn public_watch_replays_and_delivers_one_shared_committed_batch() {
             resource_types: vec![ResourceTypeName::parse("Host").unwrap()],
             resource_names: Vec::new(),
             filters: Vec::new(),
-            after_revision: d2b_contracts::v3::ZoneRevision::new(0),
+            after_revision: d2b_contracts_resource::v3::ZoneRevision::new(0),
             initial_credits: 1,
             projection: StoreProjection::Full,
         })
@@ -2114,7 +2114,7 @@ async fn public_watch_replays_and_delivers_one_shared_committed_batch() {
             resource_types: vec![ResourceTypeName::parse("Host").unwrap()],
             resource_names: Vec::new(),
             filters: Vec::new(),
-            after_revision: d2b_contracts::v3::ZoneRevision::new(0),
+            after_revision: d2b_contracts_resource::v3::ZoneRevision::new(0),
             initial_credits: 1,
             projection: StoreProjection::Full,
         })
@@ -2175,7 +2175,7 @@ fn persisted_dtos_reject_unknown_fields() {
         .as_object_mut()
         .unwrap()
         .insert("extra".to_owned(), serde_json::Value::Bool(true));
-    let canonical = d2b_contracts::v3::canonical_json_bytes(&value).unwrap();
+    let canonical = d2b_contracts_resource::v3::canonical_json_bytes(&value).unwrap();
     let framed = encode_value(ValueKind::StoreMetaScalar, &canonical).unwrap();
     let error = crate::transaction::decode::<crate::transaction::StoreMeta>(
         ValueKind::StoreMetaScalar,
@@ -2226,7 +2226,7 @@ const PRODUCTION_RSS_RESOURCE_COUNT: usize = 10_000;
 const PRODUCTION_RSS_WATCH_COUNT: usize = 100;
 const PRODUCTION_RSS_THRESHOLD_KIB: u64 = 24_576;
 const PRODUCTION_RSS_REVISION_BATCH_SIZE: usize =
-    GROUP_COMMIT_MAX * d2b_contracts::v3::MAX_BATCH_MUTATIONS;
+    GROUP_COMMIT_MAX * d2b_contracts_resource::v3::MAX_BATCH_MUTATIONS;
 const PRODUCTION_RSS_CHILD_ENV: &str = "D2B_REDB_PRODUCTION_RSS_CHILD";
 const PRODUCTION_RSS_FIXTURE_ENV: &str = "D2B_REDB_PRODUCTION_RSS_FIXTURE";
 const PRODUCTION_RSS_CHILD_MARKER: &str = "PRODUCTION_REDB_FIXTURE";
@@ -2445,7 +2445,7 @@ fn prepare_production_rss_fixture() -> tempfile::TempDir {
                         uid,
                         ChangeEvent::Created,
                         None,
-                        Some(d2b_contracts::v3::ResourceGeneration::new(1).unwrap()),
+                        Some(d2b_contracts_resource::v3::ResourceGeneration::new(1).unwrap()),
                         None,
                         payload_digest,
                         None,
@@ -2456,7 +2456,7 @@ fn prepare_production_rss_fixture() -> tempfile::TempDir {
                 })
                 .collect();
             let batch = ChangeBatch::new(
-                d2b_contracts::v3::ZoneRevision::new((batch_index + 1) as u64),
+                d2b_contracts_resource::v3::ZoneRevision::new((batch_index + 1) as u64),
                 entries,
             )
             .expect("production RSS fixture change batch");
@@ -2565,7 +2565,7 @@ async fn production_backend_hard_fixture_child() {
     let replay_entries_for_visit = Arc::clone(&replay_entries);
     store
         .replay_backend(
-            d2b_contracts::v3::ZoneRevision::new(current_revision.saturating_sub(1)).get(),
+            d2b_contracts_resource::v3::ZoneRevision::new(current_revision.saturating_sub(1)).get(),
             [ResourceTypeName::parse("Host").unwrap()],
             move |batch| {
                 replay_batches_for_visit.fetch_add(1, Ordering::Relaxed);
@@ -2601,7 +2601,7 @@ async fn production_backend_hard_fixture_child() {
             resource_types: vec![ResourceTypeName::parse("Host").unwrap()],
             resource_names: Vec::new(),
             filters: Vec::new(),
-            after_revision: d2b_contracts::v3::ZoneRevision::new(current_revision - 1),
+            after_revision: d2b_contracts_resource::v3::ZoneRevision::new(current_revision - 1),
             initial_credits: 2,
             projection: StoreProjection::Full,
         })
@@ -2637,7 +2637,7 @@ async fn production_backend_hard_fixture_child() {
                 resource_types: vec![ResourceTypeName::parse("Host").unwrap()],
                 resource_names: Vec::new(),
                 filters: Vec::new(),
-                after_revision: d2b_contracts::v3::ZoneRevision::new(current_revision),
+                after_revision: d2b_contracts_resource::v3::ZoneRevision::new(current_revision),
                 initial_credits: 2,
                 projection: StoreProjection::Full,
             })
@@ -2645,7 +2645,7 @@ async fn production_backend_hard_fixture_child() {
             .expect("production watch hard fixture registration");
         assert_eq!(
             receipt.snapshot_revision,
-            d2b_contracts::v3::ZoneRevision::new(current_revision)
+            d2b_contracts_resource::v3::ZoneRevision::new(current_revision)
         );
         watchers.push(stream);
     }
@@ -2720,7 +2720,7 @@ async fn production_backend_hard_fixture_child() {
             resource_types: vec![ResourceTypeName::parse("Host").unwrap()],
             resource_names: Vec::new(),
             filters: Vec::new(),
-            after_revision: d2b_contracts::v3::ZoneRevision::new(current_revision),
+            after_revision: d2b_contracts_resource::v3::ZoneRevision::new(current_revision),
             initial_credits: 0,
             projection: StoreProjection::Full,
         })
@@ -2739,7 +2739,7 @@ async fn production_backend_hard_fixture_child() {
             resource_types: vec![ResourceTypeName::parse("Host").unwrap()],
             resource_names: Vec::new(),
             filters: Vec::new(),
-            after_revision: d2b_contracts::v3::ZoneRevision::new(slow_start),
+            after_revision: d2b_contracts_resource::v3::ZoneRevision::new(slow_start),
             initial_credits: 1,
             projection: StoreProjection::Full,
         })
@@ -2771,7 +2771,7 @@ async fn production_backend_hard_fixture_child() {
             .lock()
             .expect("production watch coordinator")
             .take_resume_cursor(slow_id),
-        Some(d2b_contracts::v3::ZoneRevision::new(slow_start))
+        Some(d2b_contracts_resource::v3::ZoneRevision::new(slow_start))
     );
     assert_eq!(store.signals().writer_queue_depth, 0);
 

@@ -11,7 +11,7 @@ use d2b_bus::{
     BusAuthorizer, BusConfig, BusError, ComponentSessionAdmission, OperationId, OperationSpec,
     ResourceCall, RouteGenerations, RouteKey, RouteMember, RouteTarget, ZoneBus, ZoneRegistrar,
 };
-use d2b_contracts::v3::{
+use d2b_contracts_zone_session::v3::{
     BindingDigest, ConfigurationGeneration, ControllerGeneration, EvidenceClass,
     ResourceGeneration, ResourceRef, ResourceUid, SchemaFingerprint, ServiceName, ZoneId,
     ZoneRevision,
@@ -325,7 +325,7 @@ fn bus_with_config(config: BusConfig) -> (ZoneBus, d2b_bus::ZoneRegistrar) {
     let zone = ZoneId::parse("dev").unwrap();
     let rule = PolicyRule::new(
         &catalog,
-        [d2b_contracts::v3::ResourceTypeName::parse("Host").unwrap()],
+        [d2b_contracts_zone_session::v3::ResourceTypeName::parse("Host").unwrap()],
         [ResourceVerb::Get],
         [
             SessionVerb::Connect,
@@ -442,7 +442,7 @@ fn route(service: &str, member: &str, generation: u64, provider: &str) -> RouteK
         RouteGenerations::new(
             Some(ResourceGeneration::new(PROVIDER_GENERATION).unwrap()),
             Some(ControllerGeneration::new(CONTROLLER_GENERATION).unwrap()),
-            d2b_contracts::v3::ReconnectGeneration::new(generation).unwrap(),
+            d2b_contracts_zone_session::v3::ReconnectGeneration::new(generation).unwrap(),
         ),
     )
 }

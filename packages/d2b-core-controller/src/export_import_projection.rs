@@ -8,10 +8,11 @@
 
 use std::collections::BTreeSet;
 
-use d2b_contracts::v3::{
+use d2b_contracts_zone_session::v3::{
     FinalizerId, RESOURCE_IMPORT_DRAIN_FINALIZER, ResourceImportConditionType, ResourceRef,
-    ResourceTypeName, SchemaFingerprint, SemanticProjectionProtocolVersion,
+    ResourceTypeName, SchemaFingerprint,
 };
+use d2b_contracts_provider::v3::SemanticProjectionProtocolVersion;
 
 use crate::export_import::{AdmittedImport, ProjectionServiceIdentity};
 
@@ -904,10 +905,13 @@ impl core::fmt::Debug for ProjectionController {
 
 #[cfg(test)]
 mod tests {
-    use d2b_contracts::v3::{
-        BindingTargetType, ConsumerZonePolicy, ExportArbitration, Exportability,
+    use d2b_contracts_provider::v3::{
+        BindingTargetType, Exportability, SemanticProjectionProtocolVersion,
+    };
+    use d2b_contracts_zone_session::v3::{
+        ConsumerZonePolicy, ExportArbitration,
         ResourceExportSpec, ResourceImportSpec, ResourceName, ResourceTypeName, SchemaFingerprint,
-        SemanticProjectionProtocolVersion, execution_policy::BoundedToken,
+        execution_policy::BoundedToken,
     };
 
     use super::*;
@@ -917,8 +921,8 @@ mod tests {
         SchemaFingerprint::parse(format!("sha256:{}", digit.to_string().repeat(64))).unwrap()
     }
 
-    fn factory() -> d2b_contracts::v3::ProjectionFactory {
-        d2b_contracts::v3::ProjectionFactory::new(
+    fn factory() -> d2b_contracts_provider::v3::ProjectionFactory {
+        d2b_contracts_provider::v3::ProjectionFactory::new(
             ResourceTypeName::parse("security-key.d2bus.org.SecurityKeyService").unwrap(),
             ResourceTypeName::parse("security-key.d2bus.org.SecurityKeyBinding").unwrap(),
             [],
@@ -940,7 +944,7 @@ mod tests {
             vec![BoundedToken::parse("use").unwrap()],
             ExportArbitration::Exclusive,
             ConsumerZonePolicy::new(
-                vec![d2b_contracts::v3::ZoneId::parse("child").unwrap()],
+                vec![d2b_contracts_zone_session::v3::ZoneId::parse("child").unwrap()],
                 vec![BoundedToken::parse("use").unwrap()],
             )
             .unwrap(),

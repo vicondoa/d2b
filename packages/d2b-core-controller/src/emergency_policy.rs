@@ -6,7 +6,7 @@
 
 use std::collections::BTreeMap;
 
-use d2b_contracts::v3::{
+use d2b_contracts_zone_session::v3::{
     EmergencyPolicySpec, EmergencyPolicyStatusResource, EmergencyScope, ResourceUid, Timestamp,
     effective_scope,
 };
@@ -348,7 +348,7 @@ pub type EmergencyPolicyHandler = EmergencyPolicyAuthority;
 #[cfg(test)]
 mod tests {
     use super::*;
-    use d2b_contracts::v3::{EmergencyScope, ResourceGeneration};
+    use d2b_contracts_zone_session::v3::{EmergencyScope, ResourceGeneration};
 
     fn uid(value: &str) -> ResourceUid {
         ResourceUid::parse(value).unwrap()

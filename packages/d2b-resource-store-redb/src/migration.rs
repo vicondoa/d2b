@@ -10,7 +10,7 @@
 use std::fs::File;
 use std::io::{Read as _, Write as _};
 
-use d2b_contracts::v3::RetryClass;
+use d2b_contracts_resource::v3::RetryClass;
 use d2b_resource_store::{StoreError, StoreErrorKind};
 use redb::backends::FileBackend;
 use redb::{Database, Durability, ReadableDatabase, ReadableTable};
@@ -1318,7 +1318,7 @@ fn inject_boundary_fault(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use d2b_contracts::v3::{ConfigurationGeneration, ResourceUid, Timestamp, ZoneId};
+    use d2b_contracts_resource::v3::{ConfigurationGeneration, ResourceUid, Timestamp, ZoneId};
     use d2b_resource_store::PolicySnapshot;
     use std::fs::OpenOptions;
 

@@ -1,6 +1,6 @@
 //! Production Zone status projection with the mandatory system-core pair.
 
-use d2b_contracts::v3::{
+use d2b_contracts_zone_session::v3::{
     ResourcePhase, Timestamp, ZoneHandlerPhase, ZoneHandlerStatus, ZoneStatusResource,
 };
 use d2b_provider_system_core::emit_handler_status;
@@ -107,12 +107,12 @@ impl SystemCoreStatusEmitter {
 
         for handler in input_handlers {
             match handler.name() {
-                d2b_contracts::v3::ZoneHandlerName::SystemCoreHost => {
+                d2b_contracts_zone_session::v3::ZoneHandlerName::SystemCoreHost => {
                     if host_phase.replace(handler.phase()).is_some() {
                         return Err(ZoneStatusProjectionError::Contract);
                     }
                 }
-                d2b_contracts::v3::ZoneHandlerName::SystemCoreUser => {
+                d2b_contracts_zone_session::v3::ZoneHandlerName::SystemCoreUser => {
                     if user_phase.replace(handler.phase()).is_some() {
                         return Err(ZoneStatusProjectionError::Contract);
                     }

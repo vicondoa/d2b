@@ -1,6 +1,6 @@
 //! Structured activation-helper JSON protocol.
 
-use d2b_contracts::v3::{ActivationMode, ArtifactId};
+use d2b_contracts_zone_session::v3::{ActivationMode, ArtifactId};
 use serde::{Deserialize, Serialize};
 
 /// Maximum helper request bytes.

@@ -6,7 +6,7 @@
 
 use std::collections::BTreeSet;
 
-use d2b_contracts::v3::{
+use d2b_contracts_zone_session::v3::{
     MAX_BATCH_MUTATIONS, MarkerStatus, ResourceRef, ResourceUid, SchemaVersion, StateSchemaPhase,
 };
 

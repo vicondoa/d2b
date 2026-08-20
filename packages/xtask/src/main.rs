@@ -13,9 +13,7 @@ use clap_complete::{
 use clap_mangen::Man;
 use d2b_contracts_control::guest_wire::GuestControlSchema;
 use d2b_contracts_control::unsafe_local_wire::UnsafeLocalHelperWireSchema;
-use d2b_contracts::{
-    v3::storage::ZoneStoreStorageRow,
-};
+use d2b_contracts_resource::v3::storage::ZoneStoreStorageRow;
 use d2b_contracts_control::{
     cli_output::{
         AuditOutputV2, AuthStatusOutputV2, HostCheckOutputV2, LaunchOutputV1, ListOutputV2,
@@ -596,7 +594,7 @@ fn gen_guest_ttrpc() -> Result<Vec<PathBuf>, Box<dyn std::error::Error>> {
 
 fn gen_resource_ttrpc() -> Result<Vec<PathBuf>, Box<dyn std::error::Error>> {
     let repo_root = repo_root()?;
-    let proto_dir = repo_root.join("packages/d2b-contracts/proto");
+    let proto_dir = repo_root.join("packages/d2b-contracts-resource/proto");
     let proto = proto_dir.join("d2b-resource-v3.proto");
     let out_dir = repo_root.join("packages/d2b-resource-api/src/generated");
     fs::create_dir_all(&out_dir)?;
@@ -646,9 +644,9 @@ fn gen_guest_proto() -> Result<Vec<PathBuf>, Box<dyn std::error::Error>> {
 
 fn gen_resource_proto() -> Result<Vec<PathBuf>, Box<dyn std::error::Error>> {
     let repo_root = repo_root()?;
-    let proto_dir = repo_root.join("packages/d2b-contracts/proto");
+    let proto_dir = repo_root.join("packages/d2b-contracts-resource/proto");
     let proto = proto_dir.join("d2b-resource-v3.proto");
-    let out_dir = repo_root.join("packages/d2b-contracts/src/generated");
+    let out_dir = repo_root.join("packages/d2b-contracts-resource/src/generated");
     fs::create_dir_all(&out_dir)?;
     let out_file = out_dir.join("d2b_resource_v3.rs");
     let temp_proto_dir = create_exclusive_temp_dir("d2b-resource-proto")?;

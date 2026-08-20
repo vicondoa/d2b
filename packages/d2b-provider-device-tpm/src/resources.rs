@@ -1,7 +1,7 @@
 //! Canonical child-resource builders for the TPM Provider.
 
-use d2b_contracts::v3::execution_policy::{BoundedToken, DurationMs, ExecutionDomain};
-use d2b_contracts::v3::{
+use d2b_contracts_zone_session::v3::execution_policy::{BoundedToken, DurationMs, ExecutionDomain};
+use d2b_contracts_zone_session::v3::{
     AdoptionPolicy, DesiredLifecycle, EphemeralProcessSpec, ExecutionSpec, HealthCheckClass,
     HealthCheckSpec, MappingClass, MountAccess, MountSpec, NamespaceClass, ProcessClass,
     ProcessSpec, ReadinessClass, ReadinessSpec, ResourceRef, ResourceUid, RestartClass,
@@ -244,7 +244,7 @@ fn swtpm_execution(
             BoundedToken::parse("strict").map_err(|_| TpmResourceEffectError::InvalidDevice)?,
             true,
             false,
-            d2b_contracts::v3::EnvironmentClass::Minimal,
+            d2b_contracts_zone_session::v3::EnvironmentClass::Minimal,
             true,
             Some("0022".to_owned()),
             0,
@@ -264,7 +264,7 @@ fn swtpm_execution(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use d2b_contracts::v3::{EphemeralProcessSpec, ProcessSpec};
+    use d2b_contracts_zone_session::v3::{EphemeralProcessSpec, ProcessSpec};
 
     fn device_uid() -> ResourceUid {
         ResourceUid::parse("6f9619ff-8b86-4d01-b42d-00cf4fc964ff").unwrap()

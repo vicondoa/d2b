@@ -7,7 +7,7 @@
 
 use std::{fmt, future::Future};
 
-use d2b_contracts::v3::{
+use d2b_contracts_zone_session::v3::{
     ResourceRef,
     resource_status::ResourcePhase,
     user::{OsGroupName, UserSpec},

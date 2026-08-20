@@ -1,5 +1,5 @@
 use d2b_contract_tests::read_repo_file;
-use d2b_contracts::v3::storage::{
+use d2b_contracts_zone_session::v3::storage::{
     ZoneStoreDescriptorPublicationRequirement, ZoneStoreFilesystemRequirement,
     ZoneStoreFsyncRequirement, ZoneStoreLockingRequirement, ZoneStoreReplacementDetection,
     ZoneStoreReplacementPublicationRequirement, ZoneStoreStorageRow,

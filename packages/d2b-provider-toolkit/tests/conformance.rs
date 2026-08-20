@@ -10,14 +10,17 @@ use std::{
     time::Duration,
 };
 
-use d2b_contracts::v3::{
+use d2b_contracts_provider::v3::{
     execution_policy::{BoundedToken, ExecutionDomain},
-    identity::{ResourceTypeName, SchemaFingerprint},
     provider::{
-        ArtifactDigest, ArtifactDigestSet, ArtifactId, CompatibilityRange, ComponentDescriptor,
+        ArtifactDigest, ArtifactDigestSet, CompatibilityRange, ComponentDescriptor,
         ComponentType, PolicyEvaluation, ProviderManifest, ResourceApiBinding, RevocationState,
         SignatureState, StandardCapabilityMatrix, TrustEvidence, UpgradeDisposition, UpgradePolicy,
     },
+};
+use d2b_contracts_resource::v3::{
+    identity::{ResourceTypeName, SchemaFingerprint},
+    ArtifactId,
     resource_schema::SchemaVersion,
 };
 use d2b_provider::{

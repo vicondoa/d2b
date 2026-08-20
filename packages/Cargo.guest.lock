@@ -195,10 +195,25 @@ name = "d2b-contracts-control"
 version = "0.0.0-bootstrap"
 dependencies = [
  "d2b-contracts",
+ "d2b-contracts-resource",
  "protobuf",
  "schemars",
  "serde",
  "serde_json",
+]
+
+[[package]]
+name = "d2b-contracts-resource"
+version = "0.0.0-bootstrap"
+dependencies = [
+ "d2b-contracts",
+ "protobuf",
+ "regex",
+ "schemars",
+ "serde",
+ "serde_json",
+ "sha2",
+ "unicode-normalization",
 ]
 
 [[package]]

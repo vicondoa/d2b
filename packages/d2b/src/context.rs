@@ -15,7 +15,7 @@ use std::{
     time::{Duration, Instant},
 };
 
-use d2b_contracts::v3::{
+use d2b_contracts_zone_session::v3::{
     CanonicalJsonObject, ResourceErrorKind, ResourceRef, ResourceTypeName, RetryClass, ZoneId,
     identity::STANDARD_RESOURCE_TYPES,
 };
@@ -97,7 +97,7 @@ pub(crate) trait SessionClient: Send + Sync {
 #[derive(Clone)]
 struct CanonicalZoneBackend {
     zone_name: String,
-    zone_path: d2b_contracts::v3::zone_routing::ZonePath,
+    zone_path: d2b_contracts_zone_session::v3::zone_routing::ZonePath,
     socket_path: PathBuf,
 }
 
@@ -131,7 +131,7 @@ impl std::fmt::Debug for ContextBackend {
 pub(crate) struct ZoneContext {
     zone_name: String,
     socket_path: PathBuf,
-    zone_path: d2b_contracts::v3::zone_routing::ZonePath,
+    zone_path: d2b_contracts_zone_session::v3::zone_routing::ZonePath,
     backend: ContextBackend,
 }
 
@@ -1009,7 +1009,7 @@ impl CanonicalZoneBackend {
 #[derive(Clone)]
 struct CliZoneConnector {
     zone_name: String,
-    zone_path: d2b_contracts::v3::zone_routing::ZonePath,
+    zone_path: d2b_contracts_zone_session::v3::zone_routing::ZonePath,
     socket_path: PathBuf,
     service: ZoneServiceKind,
     operation: String,
@@ -1034,7 +1034,7 @@ impl std::fmt::Debug for CliZoneConnector {
 impl CliZoneConnector {
     fn new(
         zone_name: String,
-        zone_path: d2b_contracts::v3::zone_routing::ZonePath,
+        zone_path: d2b_contracts_zone_session::v3::zone_routing::ZonePath,
         socket_path: PathBuf,
         service: ZoneServiceKind,
         operation: String,
@@ -1524,14 +1524,14 @@ fn decode_cli_response(response: &[u8]) -> Result<CanonicalJsonObject, ClientErr
     CanonicalJsonObject::parse(response).map_err(|_| ClientError::ContractViolation)
 }
 
-fn zone_path(zone_name: &str) -> Result<d2b_contracts::v3::zone_routing::ZonePath, ()> {
-    let label = d2b_contracts::v3::zone_routing::ZoneLabelId::parse(zone_name.to_owned())
+fn zone_path(zone_name: &str) -> Result<d2b_contracts_zone_session::v3::zone_routing::ZonePath, ()> {
+    let label = d2b_contracts_zone_session::v3::zone_routing::ZoneLabelId::parse(zone_name.to_owned())
         .map_err(|_| ())?;
-    d2b_contracts::v3::zone_routing::ZonePath::new(vec![label]).map_err(|_| ())
+    d2b_contracts_zone_session::v3::zone_routing::ZonePath::new(vec![label]).map_err(|_| ())
 }
 
-fn owner_for_zone(zone_path: &d2b_contracts::v3::zone_routing::ZonePath) -> ServiceOwner {
-    if zone_path == &d2b_contracts::v3::zone_routing::ZonePath::local_root() {
+fn owner_for_zone(zone_path: &d2b_contracts_zone_session::v3::zone_routing::ZonePath) -> ServiceOwner {
+    if zone_path == &d2b_contracts_zone_session::v3::zone_routing::ZonePath::local_root() {
         ServiceOwner::ZoneLocal(zone_path.clone())
     } else {
         ServiceOwner::Zone(zone_path.clone())

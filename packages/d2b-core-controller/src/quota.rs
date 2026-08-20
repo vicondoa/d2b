@@ -7,7 +7,7 @@
 
 use std::collections::BTreeMap;
 
-use d2b_contracts::v3::{
+use d2b_contracts_zone_session::v3::{
     QuotaEnforcementPolicy, QuotaSpec, QuotaStatusResource, ResourceRef, ResourceTypeName,
     ResourceUid, Timestamp,
 };
@@ -161,7 +161,7 @@ impl QuotaAuthority {
         spec: QuotaSpec,
         owner_proof: AuthorityOwnerProof,
     ) -> Result<Self, QuotaError> {
-        if spec.scope() != d2b_contracts::v3::QuotaScope::Zone {
+        if spec.scope() != d2b_contracts_zone_session::v3::QuotaScope::Zone {
             return Err(QuotaError::InvalidResourceType);
         }
         let lease =
@@ -488,7 +488,7 @@ mod tests {
     use std::collections::BTreeMap;
 
     use super::*;
-    use d2b_contracts::v3::{QuotaCeilings, QuotaScope, QuotaTypeCeiling, ResourceGeneration};
+    use d2b_contracts_zone_session::v3::{QuotaCeilings, QuotaScope, QuotaTypeCeiling, ResourceGeneration};
 
     fn uid(value: &str) -> ResourceUid {
         ResourceUid::parse(value).unwrap()

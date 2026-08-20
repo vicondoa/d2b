@@ -1,4 +1,4 @@
-use d2b_contracts::v3::{ActivationMode, ArtifactId, ResourceRef};
+use d2b_contracts_zone_session::v3::{ActivationMode, ArtifactId, ResourceRef};
 use d2b_provider_activation_nixos::{
     ActivationHelper, ActivationRunner, ActivationRunnerError, ActivationRunnerRequest,
     RunnerOutcomeCode,

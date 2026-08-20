@@ -18,7 +18,7 @@ use std::{
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
-use d2b_contracts::v3::{ResourceRef, identity::ZoneId};
+use d2b_contracts_zone_session::v3::{ResourceRef, identity::ZoneId};
 use d2b_contracts_broker::broker_wire::BrokerCallerRole;
 
 /// Maximum retained lifecycle mutation keys.

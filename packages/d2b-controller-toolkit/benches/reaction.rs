@@ -19,8 +19,8 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use d2b_bus::router::production_rss::ProductionWatchHarness;
-use d2b_contracts::v3::execution_policy::{BoundedToken, ExecutionDomain};
-use d2b_contracts::v3::{
+use d2b_contracts_zone_session::v3::execution_policy::{BoundedToken, ExecutionDomain};
+use d2b_contracts_zone_session::v3::{
     CanonicalJsonValue, ConfigurationGeneration, ControllerGeneration, ResourceGeneration,
     ResourceRef, ResourceTypeName, ResourceUid, ZoneId, ZoneRevision,
 };
@@ -670,7 +670,7 @@ impl ControllerSource for ProductionControllerSource {
                     entry["resource_type"].as_str().ok_or(WatchFailure::Fatal)?,
                 )
                 .map_err(|_| WatchFailure::Fatal)?;
-                let resource_name = d2b_contracts::v3::ResourceName::parse(
+                let resource_name = d2b_contracts_zone_session::v3::ResourceName::parse(
                     entry["resource_name"].as_str().ok_or(WatchFailure::Fatal)?,
                 )
                 .map_err(|_| WatchFailure::Fatal)?;

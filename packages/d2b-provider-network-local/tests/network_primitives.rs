@@ -1,4 +1,4 @@
-use d2b_contracts::v3::{ResourceName, ResourceUid};
+use d2b_contracts_zone_session::v3::{ResourceName, ResourceUid};
 use d2b_contracts_broker::broker_wire::{
     ApplyNftablesProjectionRequest, CreateBridgeRequest, DeleteBridgeRequest,
     DeletePersistentTapRequest, NftablesProjectionAction,

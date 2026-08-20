@@ -11,7 +11,7 @@
 use core::time::Duration;
 use std::{sync::Arc, time::Instant};
 
-use d2b_contracts::v3::{ResourceError, RetryClass};
+use d2b_contracts_zone_session::v3::{ResourceError, RetryClass};
 
 use crate::{
     CallOptions, CancellationToken, ClientError, MAX_REQUEST_LIFETIME_MS, ResolvedTarget,
@@ -292,7 +292,7 @@ impl<W: WallClock> CallDriver<W> {
     /// remains terminal rather than being retried with an invented interval.
     pub fn record_remote_verdict(
         &self,
-        kind: d2b_contracts::v3::ResourceErrorKind,
+        kind: d2b_contracts_zone_session::v3::ResourceErrorKind,
         retry: RetryClass,
     ) -> AttemptDisposition {
         let terminal = AttemptDisposition::Fail(ClientError::Remote { kind, retry });
@@ -335,7 +335,7 @@ mod tests {
         MetadataInput, REQUEST_ID_BYTES, RetryPolicy, RouteRecord, RouteTable, ServiceOwner,
         TargetInput, TargetResolver, TransportKind, TransportSelection, target::fixtures::zone,
     };
-    use d2b_contracts::v3::{ResourceErrorKind, ResourceErrorReason};
+    use d2b_contracts_zone_session::v3::{ResourceErrorKind, ResourceErrorReason};
 
     const ISSUED: u64 = 1_000;
 

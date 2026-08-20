@@ -15,7 +15,7 @@ rust_library(
     compile_data = ["Cargo.toml"],
     visibility = ["//visibility:public"],
     deps = [
-        "//packages/d2b-contracts:d2b_contracts",
+        "//packages/d2b-contracts-zone-session:d2b_contracts_zone_session",
 
     ] + all_crate_deps(normal = True, cargo_only = True),
 )
@@ -28,7 +28,7 @@ rust_library(
     crate_name = "d2b_provider_device_tpm",
     visibility = ["//visibility:public"],
     deps = [
-        "//packages/d2b-contracts:d2b_contracts_test_support",
+        "//packages/d2b-contracts-zone-session:d2b_contracts_zone_session",
 
     ] + all_crate_deps(normal = True, cargo_only = True),
 )
@@ -39,6 +39,7 @@ rust_test(
     compile_data = ["Cargo.toml"],
     visibility = ["//visibility:public"],
     deps = [
+        "//packages/d2b-contracts-zone-session:d2b_contracts_zone_session",
         ":d2b_provider_device_tpm",
     ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
 )
@@ -48,7 +49,8 @@ rust_test(
     srcs = ["tests/controller_state_machine.rs"],
     compile_data = ["Cargo.toml"],
     visibility = ["//visibility:public"],
-    deps = [":d2b_provider_device_tpm_test_support"] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
+    deps = [":d2b_provider_device_tpm_test_support",
+        "//packages/d2b-contracts-zone-session:d2b_contracts_zone_session", ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
 )
 
 rust_test(
@@ -56,7 +58,8 @@ rust_test(
     srcs = ["tests/fault_swtpm_missing.rs"],
     compile_data = ["Cargo.toml"],
     visibility = ["//visibility:public"],
-    deps = [":d2b_provider_device_tpm_test_support"] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
+    deps = [":d2b_provider_device_tpm_test_support",
+        "//packages/d2b-contracts-zone-session:d2b_contracts_zone_session", ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
 )
 
 
@@ -68,7 +71,7 @@ rust_test(
     compile_data = ["Cargo.toml"],
     visibility = ["//visibility:public"],
     deps = [
-        "//packages/d2b-contracts:d2b_contracts",
+        "//packages/d2b-contracts-zone-session:d2b_contracts_zone_session",
         ":d2b_provider_device_tpm",
     ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
 )

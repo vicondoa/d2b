@@ -3,7 +3,7 @@ use crate::{
     descriptor::{PeerCredentials, ReceivedControl, ReceivedPacket},
     error::{UnixSessionError, io_error},
 };
-use d2b_contracts::v3::component_session::{
+use d2b_contracts_zone_session::v3::component_session::{
     AttachmentPolicy, AttachmentPolicyKind, LimitProfile, MAX_PACKET_ATTACHMENTS,
 };
 use rustix::{

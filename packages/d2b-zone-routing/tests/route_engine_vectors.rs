@@ -17,7 +17,7 @@
 //! rather than absorbed. No row asserts wall-clock behaviour; timing lives in
 //! the companion `route_decision` benchmark.
 
-use d2b_contracts::v3::zone_routing::{
+use d2b_contracts_zone_session::v3::zone_routing::{
     MAX_ZONE_ROUTE_PATH_HOPS, ZONE_ROUTE_INITIAL_HOP_BUDGET, ZONE_ROUTING_SCHEMA_VERSION,
     ZoneDescendantRoute, ZoneLabelId, ZoneLinkControllerGeneration, ZoneLinkNamespaceAllocation,
     ZoneLinkRouteAdvertisement, ZoneLinkRouteWithdrawal, ZonePath, ZoneRouteAuditEventKind,

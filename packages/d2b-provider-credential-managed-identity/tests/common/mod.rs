@@ -4,14 +4,14 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use d2b_contracts::v3::credential::{
+use d2b_contracts_provider::v3::credential::{
     AudienceToken, CredentialAuthorization, CredentialLeaseHandle, CredentialLeaseState,
     CredentialMethod, CredentialProvider, CredentialRequest, CredentialResponse,
     CredentialServiceError, CredentialServiceErrorCode, CredentialSessionBinding,
     CredentialSourceVersion, DeliveryRouteDigest, DeliverySessionParams, PlacementBinding,
     dispatch_authorized_provider,
 };
-use d2b_contracts::v3::{
+use d2b_contracts_zone_session::v3::{
     AuthenticatedSubjectContext, BindingDigest, EvidenceClass, Locality, ReconnectGeneration,
     ResourceGeneration, ResourceRef, ResourceUid, SchemaFingerprint, ServiceName, SessionBinding,
     SessionPurpose, TranscriptHash, TransportBinding,

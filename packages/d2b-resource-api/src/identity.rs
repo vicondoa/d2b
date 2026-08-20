@@ -2,7 +2,7 @@
 
 use std::sync::Arc;
 
-use d2b_contracts::v3::AuthenticatedSubjectContext as SessionClaims;
+use d2b_contracts_zone_session::v3::AuthenticatedSubjectContext as SessionClaims;
 
 use crate::authz::AuthorizationState;
 
@@ -72,7 +72,7 @@ pub(crate) fn issue_test_subject(
 mod tests {
     use super::*;
     use crate::authz::{AuthorizationState, BootstrapPhase};
-    use d2b_contracts::v3::{
+    use d2b_contracts_zone_session::v3::{
         BindingDigest, ConfigurationGeneration, EvidenceClass, Locality, ReconnectGeneration,
         ResourceRef, ResourceUid, SchemaFingerprint, ServiceName, SessionBinding, SessionPurpose,
         TranscriptHash, TransportBinding, ZoneRevision,

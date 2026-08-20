@@ -989,6 +989,7 @@ dependencies = [
  "d2b-contracts",
  "d2b-contracts-broker",
  "d2b-contracts-control",
+ "d2b-contracts-zone-session",
  "d2b-core",
  "d2b-realm-core",
  "d2b-realm-router",
@@ -1020,6 +1021,7 @@ dependencies = [
  "async-trait",
  "d2b-audit",
  "d2b-contracts",
+ "d2b-contracts-zone-session",
  "d2b-controller-toolkit",
  "d2b-resource-api",
  "d2b-resource-store",
@@ -1067,6 +1069,8 @@ dependencies = [
  "d2b-contracts",
  "d2b-contracts-broker",
  "d2b-contracts-control",
+ "d2b-contracts-provider",
+ "d2b-contracts-zone-session",
  "d2b-core",
  "d2b-host",
  "regex",
@@ -1079,10 +1083,25 @@ dependencies = [
 ]
 
 [[package]]
+name = "d2b-contracts"
+version = "0.0.0-bootstrap"
+dependencies = [
+ "async-trait",
+ "regex",
+ "schemars",
+ "semver",
+ "serde",
+ "serde_json",
+ "sha2",
+ "unicode-normalization",
+]
+
+[[package]]
 name = "d2b-contracts-broker"
 version = "0.0.0-bootstrap"
 dependencies = [
  "d2b-contracts",
+ "d2b-contracts-zone-session",
  "schemars",
  "serde",
  "serde_json",
@@ -1094,6 +1113,7 @@ name = "d2b-contracts-control"
 version = "0.0.0-bootstrap"
 dependencies = [
  "d2b-contracts",
+ "d2b-contracts-resource",
  "protobuf",
  "schemars",
  "serde",
@@ -1101,18 +1121,44 @@ dependencies = [
 ]
 
 [[package]]
-name = "d2b-contracts"
+name = "d2b-contracts-provider"
 version = "0.0.0-bootstrap"
 dependencies = [
  "async-trait",
- "protobuf",
- "regex",
+ "d2b-contracts",
+ "d2b-contracts-resource",
  "schemars",
- "semver",
  "serde",
  "serde_json",
  "sha2",
  "unicode-normalization",
+]
+
+[[package]]
+name = "d2b-contracts-resource"
+version = "0.0.0-bootstrap"
+dependencies = [
+ "d2b-contracts",
+ "protobuf",
+ "regex",
+ "schemars",
+ "serde",
+ "serde_json",
+ "sha2",
+ "unicode-normalization",
+]
+
+[[package]]
+name = "d2b-contracts-zone-session"
+version = "0.0.0-bootstrap"
+dependencies = [
+ "d2b-contracts",
+ "d2b-contracts-provider",
+ "d2b-contracts-resource",
+ "schemars",
+ "serde",
+ "serde_json",
+ "sha2",
 ]
 
 [[package]]
@@ -1121,6 +1167,7 @@ version = "0.0.0-bootstrap"
 dependencies = [
  "d2b-bus",
  "d2b-contracts",
+ "d2b-contracts-zone-session",
  "d2b-process",
  "d2b-process-conformance",
  "d2b-provider-supervisor",
@@ -1141,6 +1188,7 @@ version = "0.0.0-bootstrap"
 dependencies = [
  "bolero",
  "d2b-contracts",
+ "d2b-contracts-zone-session",
  "d2b-realm-core",
  "nix 0.29.0",
  "regex",
@@ -1159,6 +1207,8 @@ version = "0.0.0-bootstrap"
 dependencies = [
  "d2b-audit",
  "d2b-contracts",
+ "d2b-contracts-provider",
+ "d2b-contracts-zone-session",
  "d2b-controller-toolkit",
  "d2b-provider-system-core",
  "d2b-telemetry",
@@ -1173,6 +1223,8 @@ name = "d2b-credential-service"
 version = "0.0.0-bootstrap"
 dependencies = [
  "d2b-contracts",
+ "d2b-contracts-provider",
+ "d2b-contracts-zone-session",
 ]
 
 [[package]]
@@ -1262,6 +1314,7 @@ name = "d2b-host"
 version = "0.0.0-bootstrap"
 dependencies = [
  "d2b-contracts",
+ "d2b-contracts-zone-session",
  "d2b-core",
  "d2b-host-argv",
  "libc",
@@ -1310,6 +1363,7 @@ dependencies = [
  "d2b-contracts",
  "d2b-contracts-broker",
  "d2b-contracts-control",
+ "d2b-contracts-zone-session",
  "d2b-core",
  "d2b-host",
  "d2b-realm-core",
@@ -1338,6 +1392,7 @@ name = "d2b-process-conformance"
 version = "0.0.0-bootstrap"
 dependencies = [
  "d2b-contracts",
+ "d2b-contracts-zone-session",
  "serde",
  "serde_json",
 ]
@@ -1346,7 +1401,9 @@ dependencies = [
 name = "d2b-provider"
 version = "0.0.0-bootstrap"
 dependencies = [
- "d2b-contracts",
+ "d2b-contracts-provider",
+ "d2b-contracts-resource",
+ "d2b-contracts-zone-session",
  "d2b-zone-routing",
  "tokio",
 ]
@@ -1355,7 +1412,7 @@ dependencies = [
 name = "d2b-provider-activation-nixos"
 version = "0.0.0-bootstrap"
 dependencies = [
- "d2b-contracts",
+ "d2b-contracts-zone-session",
  "serde",
  "serde_json",
 ]
@@ -1364,7 +1421,7 @@ dependencies = [
 name = "d2b-provider-audio-pipewire"
 version = "0.0.0-bootstrap"
 dependencies = [
- "d2b-contracts",
+ "d2b-contracts-zone-session",
  "schemars",
  "serde",
  "serde_json",
@@ -1374,7 +1431,7 @@ dependencies = [
 name = "d2b-provider-clipboard-wayland"
 version = "0.0.0-bootstrap"
 dependencies = [
- "d2b-contracts",
+ "d2b-contracts-zone-session",
  "d2b-provider-toolkit",
  "rustix 0.38.44",
  "serde",
@@ -1386,7 +1443,8 @@ dependencies = [
 name = "d2b-provider-credential-entra"
 version = "0.0.0-bootstrap"
 dependencies = [
- "d2b-contracts",
+ "d2b-contracts-provider",
+ "d2b-contracts-zone-session",
  "serde_json",
 ]
 
@@ -1394,7 +1452,8 @@ dependencies = [
 name = "d2b-provider-credential-managed-identity"
 version = "0.0.0-bootstrap"
 dependencies = [
- "d2b-contracts",
+ "d2b-contracts-provider",
+ "d2b-contracts-zone-session",
  "serde_json",
 ]
 
@@ -1402,7 +1461,8 @@ dependencies = [
 name = "d2b-provider-credential-secret-service"
 version = "0.0.0-bootstrap"
 dependencies = [
- "d2b-contracts",
+ "d2b-contracts-provider",
+ "d2b-contracts-zone-session",
  "serde_json",
 ]
 
@@ -1410,7 +1470,7 @@ dependencies = [
 name = "d2b-provider-device-gpu"
 version = "0.0.0-bootstrap"
 dependencies = [
- "d2b-contracts",
+ "d2b-contracts-zone-session",
  "serde",
  "serde_json",
 ]
@@ -1419,7 +1479,9 @@ dependencies = [
 name = "d2b-provider-device-security-key"
 version = "0.0.0-bootstrap"
 dependencies = [
- "d2b-contracts",
+ "d2b-contracts-provider",
+ "d2b-contracts-resource",
+ "d2b-contracts-zone-session",
  "serde",
  "serde_json",
 ]
@@ -1428,7 +1490,7 @@ dependencies = [
 name = "d2b-provider-device-tpm"
 version = "0.0.0-bootstrap"
 dependencies = [
- "d2b-contracts",
+ "d2b-contracts-zone-session",
  "serde",
  "serde_json",
 ]
@@ -1439,13 +1501,14 @@ version = "0.0.0-bootstrap"
 dependencies = [
  "d2b-contracts",
  "d2b-contracts-broker",
+ "d2b-contracts-zone-session",
 ]
 
 [[package]]
 name = "d2b-provider-display-wayland"
 version = "0.0.0-bootstrap"
 dependencies = [
- "d2b-contracts",
+ "d2b-contracts-zone-session",
  "d2b-provider-toolkit",
  "serde",
  "serde_json",
@@ -1458,13 +1521,14 @@ version = "0.0.0-bootstrap"
 dependencies = [
  "d2b-contracts",
  "d2b-contracts-broker",
+ "d2b-contracts-zone-session",
 ]
 
 [[package]]
 name = "d2b-provider-notification-desktop"
 version = "0.0.0-bootstrap"
 dependencies = [
- "d2b-contracts",
+ "d2b-contracts-zone-session",
  "d2b-provider-toolkit",
  "getrandom 0.2.17",
  "serde",
@@ -1476,7 +1540,8 @@ dependencies = [
 name = "d2b-provider-observability-otel"
 version = "0.0.0-bootstrap"
 dependencies = [
- "d2b-contracts",
+ "d2b-contracts-provider",
+ "d2b-contracts-zone-session",
  "d2b-provider-toolkit",
  "rustix 0.38.44",
  "serde",
@@ -1491,6 +1556,7 @@ dependencies = [
  "azure_core",
  "azure_identity",
  "d2b-contracts",
+ "d2b-contracts-zone-session",
  "d2b-realm-core",
  "d2b-realm-provider",
  "reqwest 0.12.28",
@@ -1507,7 +1573,8 @@ version = "0.0.0-bootstrap"
 dependencies = [
  "async-trait",
  "base64",
- "d2b-contracts",
+ "d2b-contracts-provider",
+ "d2b-contracts-zone-session",
  "serde",
  "serde_json",
  "sha2",
@@ -1520,7 +1587,8 @@ name = "d2b-provider-runtime-cloud-hypervisor"
 version = "0.0.0-bootstrap"
 dependencies = [
  "async-trait",
- "d2b-contracts",
+ "d2b-contracts-provider",
+ "d2b-contracts-zone-session",
  "d2b-host-argv",
  "d2b-process-conformance",
  "serde",
@@ -1533,7 +1601,7 @@ dependencies = [
 name = "d2b-provider-runtime-qemu-media"
 version = "0.0.0-bootstrap"
 dependencies = [
- "d2b-contracts",
+ "d2b-contracts-zone-session",
  "d2b-process-conformance",
  "schemars",
  "serde",
@@ -1545,7 +1613,7 @@ dependencies = [
 name = "d2b-provider-shell-terminal"
 version = "0.0.0-bootstrap"
 dependencies = [
- "d2b-contracts",
+ "d2b-contracts-zone-session",
  "d2b-process-conformance",
 ]
 
@@ -1555,6 +1623,7 @@ version = "0.0.0-bootstrap"
 dependencies = [
  "d2b-contracts",
  "d2b-contracts-broker",
+ "d2b-contracts-zone-session",
  "d2b-core",
  "d2b-process",
  "d2b-process-conformance",
@@ -1573,7 +1642,7 @@ dependencies = [
 name = "d2b-provider-system-core"
 version = "0.0.0-bootstrap"
 dependencies = [
- "d2b-contracts",
+ "d2b-contracts-zone-session",
  "serde",
  "serde_json",
  "sha2",
@@ -1583,7 +1652,7 @@ dependencies = [
 name = "d2b-provider-system-minijail"
 version = "0.0.0-bootstrap"
 dependencies = [
- "d2b-contracts",
+ "d2b-contracts-zone-session",
  "d2b-process-conformance",
  "serde",
 ]
@@ -1592,7 +1661,7 @@ dependencies = [
 name = "d2b-provider-system-systemd"
 version = "0.0.0-bootstrap"
 dependencies = [
- "d2b-contracts",
+ "d2b-contracts-zone-session",
  "d2b-process-conformance",
  "d2b-provider-toolkit",
  "serde",
@@ -1603,7 +1672,9 @@ dependencies = [
 name = "d2b-provider-toolkit"
 version = "0.0.0-bootstrap"
 dependencies = [
- "d2b-contracts",
+ "d2b-contracts-provider",
+ "d2b-contracts-resource",
+ "d2b-contracts-zone-session",
  "d2b-provider",
  "d2b-session",
  "d2b-session-unix",
@@ -1619,7 +1690,7 @@ version = "0.0.0-bootstrap"
 dependencies = [
  "async-trait",
  "base64",
- "d2b-contracts",
+ "d2b-contracts-zone-session",
  "d2b-realm-core",
  "d2b-realm-provider",
  "hmac",
@@ -1636,7 +1707,7 @@ dependencies = [
 name = "d2b-provider-transport-unix"
 version = "0.0.0-bootstrap"
 dependencies = [
- "d2b-contracts",
+ "d2b-contracts-zone-session",
  "getrandom 0.3.4",
  "rustix 0.38.44",
 ]
@@ -1646,8 +1717,8 @@ name = "d2b-provider-transport-vsock"
 version = "0.0.0-bootstrap"
 dependencies = [
  "async-trait",
- "d2b-contracts",
  "d2b-contracts-control",
+ "d2b-contracts-zone-session",
  "d2b-provider",
  "d2b-session",
  "ring",
@@ -1662,6 +1733,8 @@ name = "d2b-provider-volume-local"
 version = "0.0.0-bootstrap"
 dependencies = [
  "d2b-contracts",
+ "d2b-contracts-provider",
+ "d2b-contracts-zone-session",
  "serde",
  "serde_json",
  "sha2",
@@ -1671,7 +1744,7 @@ dependencies = [
 name = "d2b-provider-volume-virtiofs"
 version = "0.0.0-bootstrap"
 dependencies = [
- "d2b-contracts",
+ "d2b-contracts-zone-session",
  "serde",
  "serde_json",
  "sha2",
@@ -1745,6 +1818,8 @@ version = "0.0.0-bootstrap"
 dependencies = [
  "async-trait",
  "d2b-contracts",
+ "d2b-contracts-resource",
+ "d2b-contracts-zone-session",
  "d2b-core-controller",
  "d2b-resource-store",
  "d2b-resource-store-redb",
@@ -1762,6 +1837,7 @@ name = "d2b-resource-client"
 version = "0.0.0-bootstrap"
 dependencies = [
  "d2b-contracts",
+ "d2b-contracts-zone-session",
  "tokio",
 ]
 
@@ -1771,6 +1847,9 @@ version = "0.0.0-bootstrap"
 dependencies = [
  "base64",
  "d2b-contracts",
+ "d2b-contracts-provider",
+ "d2b-contracts-resource",
+ "d2b-contracts-zone-session",
  "d2b-core",
  "regex",
  "ring",
@@ -1785,7 +1864,7 @@ dependencies = [
 name = "d2b-resource-store"
 version = "0.0.0-bootstrap"
 dependencies = [
- "d2b-contracts",
+ "d2b-contracts-resource",
 ]
 
 [[package]]
@@ -1793,7 +1872,9 @@ name = "d2b-resource-store-redb"
 version = "0.0.0-bootstrap"
 dependencies = [
  "d2b-audit",
- "d2b-contracts",
+ "d2b-contracts-provider",
+ "d2b-contracts-resource",
+ "d2b-contracts-zone-session",
  "d2b-controller-toolkit",
  "d2b-resource-store",
  "d2b-telemetry",
@@ -1813,6 +1894,7 @@ dependencies = [
  "async-trait",
  "d2b-audit",
  "d2b-contracts",
+ "d2b-contracts-zone-session",
  "d2b-resource-api",
  "d2b-telemetry",
  "futures-util",
@@ -1831,6 +1913,7 @@ version = "0.0.0-bootstrap"
 dependencies = [
  "async-trait",
  "d2b-contracts",
+ "d2b-contracts-zone-session",
  "d2b-session",
  "envmnt",
  "libc",
@@ -1855,6 +1938,8 @@ name = "d2b-telemetry"
 version = "0.0.0-bootstrap"
 dependencies = [
  "d2b-contracts",
+ "d2b-contracts-provider",
+ "d2b-contracts-zone-session",
  "rustix 0.38.44",
  "serde",
  "serde_json",
@@ -1909,6 +1994,7 @@ name = "d2b-zone-routing"
 version = "0.0.0-bootstrap"
 dependencies = [
  "d2b-contracts",
+ "d2b-contracts-zone-session",
 ]
 
 [[package]]
@@ -1923,6 +2009,9 @@ dependencies = [
  "d2b-contracts",
  "d2b-contracts-broker",
  "d2b-contracts-control",
+ "d2b-contracts-provider",
+ "d2b-contracts-resource",
+ "d2b-contracts-zone-session",
  "d2b-core",
  "d2b-core-controller",
  "d2b-gateway",
@@ -3975,9 +4064,9 @@ dependencies = [
 
 [[package]]
 name = "quinn-proto"
-version = "0.11.16"
+version = "0.11.17"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "2f4bfc015262b9df63c8845072ce59068853ff5872180c2ce2f13038b970e560"
+checksum = "04759210543be93709136e28212294a659ef5001836ff4eab4d663e4529bba83"
 dependencies = [
  "aws-lc-rs",
  "bytes",
@@ -6336,6 +6425,9 @@ dependencies = [
  "d2b-contracts",
  "d2b-contracts-broker",
  "d2b-contracts-control",
+ "d2b-contracts-provider",
+ "d2b-contracts-resource",
+ "d2b-contracts-zone-session",
  "d2b-core",
  "d2b-realm-core",
  "nix 0.29.0",
@@ -6512,9 +6604,9 @@ dependencies = [
 
 [[package]]
 name = "zerovec-derive"
-version = "0.11.4"
+version = "0.11.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "47402523226a02bfe5230160dc3ccc089aa6f6f19e7fcbb4e6f824bbb1b4aa62"
+checksum = "9f212a141d820099d57ffafb9569be9617a6f27d3dc881fbee8fb56642f917a9"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -6529,9 +6621,9 @@ checksum = "29666d0abbfad1e3dc4dcf6144730dd3a3ab225bbbdac83319345b1b44ccfc1b"
 
 [[package]]
 name = "zvariant"
-version = "5.14.0"
+version = "5.15.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b5e28c25bd8bb8da5a1f3e7065d0c156b9ee9a7973adf78b0e35eaefdf3b1b5c"
+checksum = "c1d34c27cc6cdd1f458427519dd6b8612f7b7e3f7b9a0b2355d041dda9869147"
 dependencies = [
  "endi",
  "enumflags2",
@@ -6544,9 +6636,9 @@ dependencies = [
 
 [[package]]
 name = "zvariant_derive"
-version = "5.14.0"
+version = "5.15.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d496a145685283b67e232bd9e47377f6b60ad9d51e3601b23867f77c42477f96"
+checksum = "864155e69b4352db0c7f374917bf45d1e0c8d17659c8b3dbf9795f3673f8c497"
 dependencies = [
  "proc-macro-crate 3.5.0",
  "proc-macro2",
@@ -6557,9 +6649,9 @@ dependencies = [
 
 [[package]]
 name = "zvariant_utils"
-version = "4.0.0"
+version = "4.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "629d80ece222cad20fe0e8741be493c4ab166acf3b85341bdc2cdbcfd8f3c2d6"
+checksum = "bad0294361a320b694a328460dc73add56c306150f5cb6bfafc44446120008a3"
 dependencies = [
  "proc-macro2",
  "quote",

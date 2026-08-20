@@ -7,7 +7,7 @@ use d2b_contracts::provider_effects::aca::{
     AcaCredentialLeaseRequest, AcaCredentialPurpose, AcaDeleteOutcome, AcaDesiredDiskImage,
     AcaDesiredSandbox, AcaDiskImageRecord, AcaOperationId, AcaProfileId, AcaResourceBinding,
     AcaSandboxCandidates, AcaSandboxId, AcaSandboxProfile, AcaSandboxRecord, AcaTypeError,
-    AcaWorkloadQuery,
+    AcaWorkloadQuery, ResourceRef,
 };
 
 use crate::controller::{AcaClock, SystemAcaClock};
@@ -54,7 +54,7 @@ pub enum AcaDeploymentRequest {
         /// Desired disk image.
         disk_image: AcaDesiredDiskImage,
         /// Optional provider network reference.
-        network_ref: Option<d2b_contracts::v3::ResourceRef>,
+        network_ref: Option<ResourceRef>,
         /// Provider-selected sandbox transport alias.
         sandbox_transport_alias: AcaProfileId,
     },

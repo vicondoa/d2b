@@ -8,7 +8,7 @@
 
 use std::fmt;
 
-use d2b_contracts::v3::ResourceUid;
+use d2b_contracts_zone_session::v3::ResourceUid;
 
 use crate::{
     ProcessConformanceError,

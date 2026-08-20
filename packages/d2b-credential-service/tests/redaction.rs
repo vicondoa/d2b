@@ -1,8 +1,8 @@
-use d2b_contracts::v3::credential::{
+use d2b_contracts_provider::v3::credential::{
     AudienceToken, CredentialLeaseHandle, CredentialLeaseState, CredentialSourceVersion,
     OperationClass,
 };
-use d2b_contracts::v3::{ResourceGeneration, ResourceRef, ResourceUid};
+use d2b_contracts_zone_session::v3::{ResourceGeneration, ResourceRef, ResourceUid};
 use d2b_credential_service::{
     CredentialAuthorization, CredentialMetadata, CredentialMethod, CredentialOutcomeCode,
     CredentialRequest, CredentialServiceError, CredentialServiceErrorCode, DeliveryResponse,

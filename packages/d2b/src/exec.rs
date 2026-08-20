@@ -367,7 +367,7 @@ fn validate_exec_ref(
     context: &ZoneContext,
     value: &str,
     mode: OutputMode,
-) -> Result<d2b_contracts::v3::ResourceRef, CliFailure> {
+) -> Result<d2b_contracts_zone_session::v3::ResourceRef, CliFailure> {
     let resource_ref = parse_resource_ref(value, None)?;
     if resource_ref.resource_type().as_str() != "EphemeralProcess" {
         return Err(context.failure(
@@ -397,7 +397,7 @@ fn validate_env(values: &[String]) -> Result<(), CliFailure> {
     Ok(())
 }
 
-fn warn_unsafe_local(resource_ref: &d2b_contracts::v3::ResourceRef, mode: OutputMode) {
+fn warn_unsafe_local(resource_ref: &d2b_contracts_zone_session::v3::ResourceRef, mode: OutputMode) {
     if resource_ref.resource_type().as_str() == "Host" && !mode.is_json() {
         crate::print_stderr(
             "warning: no isolation boundary - this process runs as your host user\n",
@@ -405,7 +405,7 @@ fn warn_unsafe_local(resource_ref: &d2b_contracts::v3::ResourceRef, mode: Output
     }
 }
 
-fn with_unsafe_posture(mut value: Value, resource_ref: &d2b_contracts::v3::ResourceRef) -> Value {
+fn with_unsafe_posture(mut value: Value, resource_ref: &d2b_contracts_zone_session::v3::ResourceRef) -> Value {
     if resource_ref.resource_type().as_str() == "Host"
         && let Value::Object(object) = &mut value
     {

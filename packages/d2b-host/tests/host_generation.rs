@@ -1,4 +1,4 @@
-use d2b_contracts::v3::ActivationMode;
+use d2b_contracts_zone_session::v3::ActivationMode;
 use d2b_host::host_generation::{
     ActivationHelperOutcome, ActivationHelperProtocolError, ActivationHelperRequest,
     ActivationHelperResponse, encode_response, parse_request,

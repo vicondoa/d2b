@@ -1,7 +1,7 @@
 use std::fs::OpenOptions;
 use std::sync::Arc;
 
-use d2b_contracts::v3::{
+use d2b_contracts_zone_session::v3::{
     CanonicalJsonValue, ConfigurationGeneration, RESOURCE_ENVELOPE_DOMAIN_TAG, ResourceRef,
     ResourceTypeName, ResourceUid, Timestamp, ZoneId, canonical_digest,
 };
@@ -66,7 +66,7 @@ pub fn watch_request(after_revision: u64, initial_credits: u32) -> StoreWatchReq
         resource_types: vec![ResourceTypeName::parse("Host").expect("valid ResourceType")],
         resource_names: Vec::new(),
         filters: Vec::new(),
-        after_revision: d2b_contracts::v3::ZoneRevision::new(after_revision),
+        after_revision: d2b_contracts_zone_session::v3::ZoneRevision::new(after_revision),
         initial_credits,
         projection: StoreProjection::Full,
     }
@@ -101,7 +101,7 @@ pub async fn commit_host(
     name: &str,
     owner: Option<&str>,
     operation_id: &str,
-) -> d2b_contracts::v3::ZoneRevision {
+) -> d2b_contracts_zone_session::v3::ZoneRevision {
     let target = ResourceRef::parse(&format!("Host/{name}")).expect("valid Host ref");
     let canonical = host_body(name, owner);
     let digest = canonical_digest(RESOURCE_ENVELOPE_DOMAIN_TAG, &canonical);

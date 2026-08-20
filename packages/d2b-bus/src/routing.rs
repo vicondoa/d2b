@@ -2,7 +2,7 @@
 
 use std::collections::BTreeMap;
 
-use d2b_contracts::v3::{identity::ZoneId, zone_session::EndpointRole};
+use d2b_contracts_zone_session::v3::{identity::ZoneId, zone_session::EndpointRole};
 
 /// The v3 Zone control service package.
 pub const ZONE_SERVICE_NAME: &str = "d2b.zone.v3.ZoneService";
@@ -251,14 +251,14 @@ mod tests {
 
     #[test]
     fn zone_authority_keeps_gateway_custody_separate() {
-        let zone = d2b_contracts::v3::identity::ZoneId::parse("work").unwrap();
+        let zone = d2b_contracts_zone_session::v3::identity::ZoneId::parse("work").unwrap();
         let local = ZoneSessionAuthority::local_controller(zone.clone()).unwrap();
         assert_eq!(local.custody(), CredentialCustody::None);
         let gateway = ZoneSessionAuthority::gateway_peer(zone).unwrap();
         assert_eq!(gateway.custody(), CredentialCustody::GatewayGuest);
         assert!(
             ZoneSessionAuthority::new(
-                d2b_contracts::v3::identity::ZoneId::parse("work").unwrap(),
+                d2b_contracts_zone_session::v3::identity::ZoneId::parse("work").unwrap(),
                 EndpointRole::ZoneController,
                 CredentialCustody::GatewayGuest,
             )

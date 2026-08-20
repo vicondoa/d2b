@@ -9,8 +9,8 @@ use std::collections::BTreeSet;
 
 use serde::Serialize;
 
-use d2b_contracts::v3::ResourceUid;
-use d2b_contracts::v3::volume::{
+use d2b_contracts_zone_session::v3::ResourceUid;
+use d2b_contracts_zone_session::v3::volume::{
     CleanupPolicy, CreatePolicy, EntryAdoptionPolicy, EntryRestartPolicy, EntryType,
     ForeignChildPolicy, Invariant, LayoutEntry, LeaseClass, RepairPolicy,
 };

@@ -8,16 +8,12 @@ pub mod capability;
 pub mod configured_argv;
 pub mod contract_id;
 pub mod error;
-pub mod generated;
-pub mod generation_bundle;
-pub mod host_generation;
+pub mod foundation_effects;
 pub mod ids;
+pub mod identity;
 pub mod privileges_w3;
 pub mod provider_effects;
 pub mod realm;
-pub mod resource_proto {
-    pub use crate::generated::d2b_resource_v3::*;
-}
 pub mod audio;
 pub mod runtime;
 pub mod security_key;
@@ -34,6 +30,14 @@ pub mod workload;
 pub mod workload_identity;
 
 pub use error::{Error, SemverRange, Version};
+pub use foundation_effects::{
+    CredentialContractError, CredentialLeaseHandle, OpaqueAzureRef,
+    MAX_AZURE_REF_BYTES, MAX_CREDENTIAL_LEASE_HANDLE_BYTES,
+};
+pub use identity::{
+    IdentityClass, IdentityError, ResourceBundleGenerationId, ResourceName, ResourceRef,
+    ResourceTypeName, ResourceUid,
+};
 pub use privileges_w3::W3BrokerOperation;
 
 pub const MAX_FRAME_SIZE: usize = 1024 * 1024;
@@ -437,14 +441,3 @@ mod tests {
 }
 
 pub mod v3;
-
-#[cfg(test)]
-mod resource_proto_formatting_tests;
-
-// The `generation_bundle` module's re-exports. Keep every
-// `pub use generation_bundle::...` line inside this region so it stays one
-// contiguous block.
-pub use generation_bundle::{
-    BundleMetadata, BundleResource, ZONE_BUNDLE_DOMAIN_TAG, ZONE_BUNDLE_GENERATED_AT,
-    ZONE_BUNDLE_SCHEMA_VERSION, ZONE_BUNDLE_VERSION, ZoneBundle, ZoneBundleError,
-};

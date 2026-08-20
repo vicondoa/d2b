@@ -25,7 +25,7 @@
 //! descriptor is closed by the same move that presented it.
 
 use crate::transport::credit::{AttachmentCreditPlan, CreditError, RouteClass};
-use d2b_contracts::v3::component_session::{LimitProfile, Locality, TransportClass};
+use d2b_contracts_zone_session::v3::component_session::{LimitProfile, Locality, TransportClass};
 use d2b_session::OwnedTransport;
 use d2b_session_unix::{
     PeerIdentityPolicy, SeqpacketSocket, StreamSocket, UnixSeqpacketTransport, UnixSessionError,
@@ -324,7 +324,7 @@ pub fn open_zone_link_stream(
 mod tests {
     use super::*;
     use crate::transport::credit::ProcessCreditLimit;
-    use d2b_contracts::v3::component_session::{AttachmentPolicy, AttachmentPolicyKind};
+    use d2b_contracts_zone_session::v3::component_session::{AttachmentPolicy, AttachmentPolicyKind};
     use d2b_session_unix::prearmed_seqpacket_pair;
     use std::{os::unix::net::UnixStream, sync::Arc};
 

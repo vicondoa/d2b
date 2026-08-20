@@ -5,8 +5,8 @@
 //! so a directory that is absent *after* its provisioning marker was
 //! written is a hard failure, never a fresh empty TPM.
 
-use d2b_contracts::v3::ResourceUid;
-use d2b_contracts::v3::volume::{
+use d2b_contracts_zone_session::v3::ResourceUid;
+use d2b_contracts_zone_session::v3::volume::{
     CleanupPolicy, CreatePolicy, EntryAdoptionPolicy, EntryType, RepairPolicy, SensitivityClass,
     VolumeKind, VolumeSpec,
 };

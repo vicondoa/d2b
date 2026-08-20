@@ -1,4 +1,4 @@
-use d2b_contracts::v3::ResourceRef;
+use d2b_contracts_zone_session::v3::ResourceRef;
 use d2b_provider_runtime_qemu_media::{
     DeviceObservation, DevicePhase, GuestProviderSpecSettings, LaunchTicket, PlatformClass,
     ProcessIdentity, ProviderConfig, QemuMediaController, QemuMediaEffectPort, QemuMediaError,

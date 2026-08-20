@@ -1,6 +1,6 @@
 //! USB Service firewall and relay lifecycle controller.
 
-use d2b_contracts::v3::{ResourceGeneration, ResourceUid};
+use d2b_contracts_zone_session::v3::{ResourceGeneration, ResourceUid};
 
 use crate::firewall::{
     FirewallConfirmationKind, FirewallDigest, FirewallGenerationFence, FirewallProjectionAction,

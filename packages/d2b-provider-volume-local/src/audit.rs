@@ -8,9 +8,9 @@
 use std::fmt::{self, Write as _};
 use std::future::Future;
 
-use d2b_contracts::v3::volume::EntryType;
-use d2b_contracts::v3::zone_routing::ZonePath;
-use d2b_contracts::v3::{
+use d2b_contracts_zone_session::v3::volume::EntryType;
+use d2b_contracts_zone_session::v3::zone_routing::ZonePath;
+use d2b_contracts_zone_session::v3::{
     MigrationPolicy, PersistenceClass, ResourceGeneration, ResourceRef, SchemaVersion,
     VolumeStateSchemaId,
 };
@@ -268,7 +268,7 @@ pub struct VolumeAuditEvent {
     #[serde(skip_serializing_if = "Option::is_none")]
     trigger: Option<SnapshotTrigger>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    snapshot_id: Option<d2b_contracts::v3::execution_policy::BoundedToken>,
+    snapshot_id: Option<d2b_contracts_zone_session::v3::execution_policy::BoundedToken>,
     #[serde(skip_serializing_if = "Option::is_none")]
     from_execution_ref: Option<ResourceRef>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -371,7 +371,7 @@ impl VolumeAuditEvent {
     /// Attach the bounded opaque snapshot identity.
     pub fn with_snapshot_id(
         mut self,
-        snapshot_id: d2b_contracts::v3::execution_policy::BoundedToken,
+        snapshot_id: d2b_contracts_zone_session::v3::execution_policy::BoundedToken,
     ) -> Self {
         self.snapshot_id = Some(snapshot_id);
         self

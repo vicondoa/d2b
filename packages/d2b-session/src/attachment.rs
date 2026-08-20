@@ -1,6 +1,6 @@
 use std::{any::Any, fmt};
 
-use d2b_contracts::v3::component_session::AttachmentDescriptor;
+use d2b_contracts_zone_session::v3::component_session::AttachmentDescriptor;
 
 pub trait AttachmentPayload: Any + Send {
     fn close(self: Box<Self>);

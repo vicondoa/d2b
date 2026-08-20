@@ -10,6 +10,7 @@ workspace = true
 
 [dependencies]
 d2b-contracts = { path = "../d2b-contracts", version = "0.0.0-bootstrap" }
+d2b-contracts-resource = { path = "../d2b-contracts-resource", version = "0.0.0-bootstrap" }
 protobuf = "3.7.2"
 schemars.workspace = true
 serde.workspace = true

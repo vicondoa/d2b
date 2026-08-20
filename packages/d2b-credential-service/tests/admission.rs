@@ -1,4 +1,4 @@
-use d2b_contracts::v3::credential::OperationClass;
+use d2b_contracts_provider::v3::credential::OperationClass;
 use d2b_credential_service::{
     CredentialAdminAction, CredentialMethod, CredentialResourceVerb, RolePermission,
     authorize_admin, authorize_operation,

@@ -9,7 +9,7 @@ use std::{
 };
 
 use async_trait::async_trait;
-use d2b_contracts::v3::{
+use d2b_contracts_zone_session::v3::{
     ResourceRef, ResourceUid, SessionPurpose, ZoneId,
     component_session::{
         AttachmentAccess, AttachmentCreditClass, AttachmentDescriptor, AttachmentKind,

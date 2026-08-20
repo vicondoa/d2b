@@ -4,7 +4,7 @@
 //! remove mutate one trusted Network slot, preserve every sibling and foreign
 //! entry byte-for-byte, and reject a marker mismatch in the target slot.
 
-use d2b_contracts::v3::ResourceUid;
+use d2b_contracts_zone_session::v3::ResourceUid;
 
 /// The mandatory ownership marker prefix for every managed chain and rule.
 pub const OWNERSHIP_MARKER_PREFIX: &str = "d2b managed: ";

@@ -1,7 +1,7 @@
 //! Strict GPU and video desired settings.
 
 use core::fmt;
-use d2b_contracts::v3::device::DeviceArbitration;
+use d2b_contracts_zone_session::v3::device::DeviceArbitration;
 use serde::{Deserialize, Serialize};
 
 /// Closed crosvm GPU context classes.

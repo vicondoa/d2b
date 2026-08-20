@@ -1,6 +1,6 @@
 //! Store-view farm and TPM state invariants, plus status redaction.
 
-use d2b_contracts::v3::volume::VolumeSpec;
+use d2b_contracts_zone_session::v3::volume::VolumeSpec;
 use d2b_provider_volume_local::testing::{ScriptedPort, block_on, fixtures};
 use d2b_provider_volume_local::{
     GCROOTS_DIR, LIVE_DIR, REJECTED_GCROOTS_DIR, STATE_DIR, VolumeLocalController,

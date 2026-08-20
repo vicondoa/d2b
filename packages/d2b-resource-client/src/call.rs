@@ -3,7 +3,7 @@
 //! The metadata bounds here are carried verbatim from the ADR45 client so a v3
 //! request cannot outlive the protocol ceiling or omit a required idempotency
 //! key. They are declared locally because the v3 session contract module
-//! (`d2b_contracts::v3::zone_session`) does not yet publish them; see the crate
+//! (`d2b_contracts_zone_session::v3::zone_session`) does not yet publish them; see the crate
 //! documentation for the reconciliation obligation.
 
 use core::{

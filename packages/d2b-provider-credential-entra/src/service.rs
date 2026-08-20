@@ -1,12 +1,12 @@
 //! Credential service dispatch for the identity-Guest client.
 
-use d2b_contracts::v3::credential::{
+use d2b_contracts_provider::v3::credential::{
     CREDENTIAL_SERVICE_NAME, CredentialAuthorization, CredentialLeaseState, CredentialMetadata,
     CredentialMethod, CredentialOutcomeCode, CredentialProvider, CredentialRequest,
     CredentialResponse, CredentialServiceError, CredentialServiceErrorCode, DeliveryResponse,
     MetadataResponse,
 };
-use d2b_contracts::v3::{Locality, ResourceRef};
+use d2b_contracts_zone_session::v3::{Locality, ResourceRef};
 
 use crate::{
     CREDENTIAL_SESSION_PURPOSE, EntraClientState, EntraCredentialProvider, EntraLeaseInspection,
@@ -517,7 +517,7 @@ impl EntraCredentialProvider {
         key: &str,
         inspection: EntraLeaseInspection,
         count_refresh_failure: bool,
-    ) -> Result<d2b_contracts::v3::credential::CredentialMetadata, CredentialServiceError> {
+    ) -> Result<d2b_contracts_provider::v3::credential::CredentialMetadata, CredentialServiceError> {
         if inspection.rotation_generation == 0 || inspection.expires_at_unix_ms == 0 {
             if count_refresh_failure {
                 self.record_refresh_failure(key);

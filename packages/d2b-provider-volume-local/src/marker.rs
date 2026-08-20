@@ -6,7 +6,7 @@
 
 use std::fmt;
 
-use d2b_contracts::v3::{
+use d2b_contracts_zone_session::v3::{
     MarkerStatus, ResourceUid, SchemaFingerprint, SchemaVersion, VolumeStateSchemaId,
 };
 use serde::{Deserialize, Serialize};

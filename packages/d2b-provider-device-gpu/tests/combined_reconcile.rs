@@ -1,4 +1,4 @@
-use d2b_contracts::v3::{ResourceGeneration, ResourceRef, ResourceUid, device::DeviceArbitration};
+use d2b_contracts_zone_session::v3::{ResourceGeneration, ResourceRef, ResourceUid, device::DeviceArbitration};
 use d2b_provider_device_gpu::{
     GpuAuthorityAdmission, GpuAuthorityLease, GpuBackingToken, GpuClosureProof, GpuController,
     GpuEffectError, GpuEffectToken, GpuEffectTokenSet, GpuLaunchTicket, GpuLifecycleEffectPort,

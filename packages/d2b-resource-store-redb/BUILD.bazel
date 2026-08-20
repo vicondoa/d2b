@@ -29,8 +29,10 @@ rust_library(
     ],
     visibility = ["//visibility:public"],
     deps = [
+        "//packages/d2b-contracts-zone-session:d2b_contracts_zone_session",
         "//packages/d2b-audit:d2b_audit",
-        "//packages/d2b-contracts:d2b_contracts",
+        "//packages/d2b-contracts-resource:d2b_contracts_resource",
+        "//packages/d2b-contracts-provider:d2b_contracts_provider",
         "//packages/d2b-controller-toolkit:d2b_controller_toolkit",
         "//packages/d2b-resource-store:d2b_resource_store",
         "//packages/d2b-telemetry:d2b_telemetry",
@@ -49,8 +51,10 @@ rust_library(
     crate_name = "d2b_resource_store_redb",
     visibility = ["//visibility:public"],
     deps = [
+        "//packages/d2b-contracts-zone-session:d2b_contracts_zone_session",
         "//packages/d2b-audit:d2b_audit_test_support",
-        "//packages/d2b-contracts:d2b_contracts_test_support",
+        "//packages/d2b-contracts-resource:d2b_contracts_resource",
+        "//packages/d2b-contracts-provider:d2b_contracts_provider",
         "//packages/d2b-controller-toolkit:d2b_controller_toolkit_test_support",
         "//packages/d2b-resource-store:d2b_resource_store_test_support",
         "//packages/d2b-telemetry:d2b_telemetry_test_support",
@@ -64,6 +68,9 @@ rust_test(
     args = ["--test-threads=1"],
     tags = ["no-remote-cache"],
     deps = [
+        "//packages/d2b-contracts-zone-session:d2b_contracts_zone_session",
+        "//packages/d2b-contracts-resource:d2b_contracts_resource",
+        "//packages/d2b-contracts-provider:d2b_contracts_provider",
     ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
 )
 

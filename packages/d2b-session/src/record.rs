@@ -1,6 +1,6 @@
 use std::{collections::VecDeque, fmt};
 
-use d2b_contracts::v3::component_session::{
+use d2b_contracts_zone_session::v3::component_session::{
     LimitProfile, NOISE_TAG_BYTES, RECORD_HEADER_LEN, RECORD_LENGTH_BYTES, ReceiveSequence,
     RecordHeader, RecordKind, SendSequence, SessionErrorCode,
 };
@@ -62,7 +62,7 @@ impl RecordProtector {
     pub fn protect(
         &mut self,
         kind: RecordKind,
-        channel: d2b_contracts::v3::component_session::ChannelId,
+        channel: d2b_contracts_zone_session::v3::component_session::ChannelId,
         payload: &[u8],
     ) -> Result<ProtectedRecord> {
         let payload_len = u32::try_from(payload.len())

@@ -10,9 +10,8 @@ use d2b_contracts::{
         AcaDiskImageCandidates, AcaDiskImageId, AcaDiskImageRecord, AcaDiskImageSource,
         AcaMemoryMib, AcaOperationId, AcaProfileId, AcaReadinessPolicy, AcaResourceBinding,
         AcaRuntimeConfig, AcaSandboxCandidates, AcaSandboxId, AcaSandboxLifecycle,
-        AcaSandboxProfile, AcaSandboxRecord,
+        AcaSandboxProfile, AcaSandboxRecord, CredentialLeaseHandle, ResourceRef, ResourceUid,
     },
-    v3::{ResourceRef, ResourceUid, credential::CredentialLeaseHandle},
 };
 use d2b_provider_runtime_azure_container_apps::{
     AcaClock, AcaController, AcaControllerError, AcaDeploymentRequest, AcaDeploymentResponse,

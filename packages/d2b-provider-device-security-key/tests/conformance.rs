@@ -1,7 +1,9 @@
-use d2b_contracts::v3::{
-    CanonicalJsonObject, ResourceEnvelope, ResourceRef, ResourceSpec,
+use d2b_contracts_provider::v3::{
     provider::ProviderContractError,
     semantic_services::{SemanticContractError, SemanticFamily},
+};
+use d2b_contracts_resource::v3::{
+    CanonicalJsonObject, ResourceEnvelope, ResourceRef, ResourceSpec,
 };
 use d2b_provider_device_security_key::{
     DEFAULT_LEASE_TIMEOUT_SECS, DEFAULT_SESSION_RING_SIZE, DEFAULT_VSOCK_PORT,

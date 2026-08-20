@@ -40,19 +40,17 @@ use d2b_audit::{
     AuditSink, DurabilityEvidence, OperationIdentity, ZoneId as AuditZoneId, ZoneOperationKey,
     evidence_from_decision_result,
 };
-use d2b_contracts::v3::storage::ZoneStoreId;
+use d2b_contracts_zone_session::v3::storage::ZoneStoreId;
 use d2b_contracts::{
     BROKER_SOCKET_PATH, KnownFeatureFlag,
     types::{BundleClosureRef, BundleOpId, MediaRef, RoleId, ScopeId, TracingSpanId, VmId},
-    v3::{
-        ResourceBundleGenerationId, ResourceErrorKind, ResourceGeneration, ResourceRef,
-        ResourceUid, ZoneId,
-        guest::GuestSpec,
-        network::NetworkSpec,
-        process::ProcessSpec,
-        volume::{VolumeAttachment, VolumeSpec},
-    },
 };
+use d2b_contracts_zone_session::v3::{
+    ResourceBundleGenerationId, ResourceErrorKind, ResourceGeneration, ResourceRef, ResourceUid,
+    ZoneId, guest::GuestSpec, network::NetworkSpec, process::ProcessSpec,
+    volume::{VolumeAttachment, VolumeSpec},
+};
+use d2b_contracts_zone_session::v3::resource_bundle::ResourceBundle;
 use d2b_contracts_broker::broker_wire::{
         ActivationMode as BrokerActivationMode, ActivationPhase as BrokerActivationPhase,
         ApplyNftablesRequest as BrokerApplyNftablesRequest,
@@ -5516,7 +5514,7 @@ fn typed_shell_resource_error_frame(error: &TypedError) -> Value {
     use crate::typed_error::{
         GuestControlShellErrorKind as Guest, UnsafeLocalShellErrorKind as UnsafeHost,
     };
-    use d2b_contracts::v3::ResourceErrorKind;
+    use d2b_contracts_zone_session::v3::ResourceErrorKind;
 
     let kind = match error {
         TypedError::AuthzNotAdmin { .. } => ResourceErrorKind::AuthorizationDenied,
@@ -6439,7 +6437,7 @@ mod workload_observability_tests {
     }
 
     fn audit_digest(value: &str) -> String {
-        d2b_contracts::v3::canonical_digest("d2b:daemon-audit-redaction:v1", value.as_bytes())
+        d2b_contracts_zone_session::v3::canonical_digest("d2b:daemon-audit-redaction:v1", value.as_bytes())
     }
 
     #[test]
@@ -11239,7 +11237,7 @@ fn typed_shell_resource_name(resource: &str) -> Result<public_wire::ShellName, T
 
 fn typed_shell_execution_target(value: &str) -> Result<String, TypedError> {
     let execution_ref =
-        d2b_contracts::v3::ResourceRef::parse(value).map_err(|_| shell_protocol_failed())?;
+        d2b_contracts_zone_session::v3::ResourceRef::parse(value).map_err(|_| shell_protocol_failed())?;
     match execution_ref.resource_type().as_str() {
         "Host" => Ok(format!("{}.host.d2b", execution_ref.name().as_str())),
         "Guest" => Ok(execution_ref.name().as_str().to_owned()),
@@ -15122,7 +15120,7 @@ fn open_zone_store_from_broker(
 fn ensure_resource_activation_broker_evidence(
     state: &ServerState,
     zone: &ZoneId,
-    bundle: &d2b_contracts::v3::ResourceBundle,
+    bundle: &ResourceBundle,
     broker_evidence: &d2b_resource_store_redb::BrokerEvidenceIndex,
 ) -> Result<(), resource_runtime::ResourceRuntimeError> {
     let operation_id = resource_runtime::resource_bundle_materialization_operation_id(zone, bundle);
@@ -15199,7 +15197,7 @@ async fn open_resource_plane(
             })
             .and_then(|bytes| {
                 let bundle =
-                    d2b_contracts::v3::ResourceBundle::from_json(bytes).map_err(|error| {
+                    ResourceBundle::from_json(bytes).map_err(|error| {
                         tracing::error!(
                             zone = %zone.as_str(),
                             error = ?error,
@@ -15453,7 +15451,7 @@ fn load_broker_audit_evidence(
 
 fn audit_resource_plane(
     state: &ServerState,
-    zone: &d2b_contracts::v3::ZoneId,
+    zone: &d2b_contracts_zone_session::v3::ZoneId,
     action: daemon_audit::ResourcePlaneAction,
     result: daemon_audit::ResourcePlaneResult,
 ) -> Result<(), std::io::Error> {
@@ -15475,7 +15473,7 @@ fn audit_resource_plane(
 
 fn record_authoritative_resource_plane_audit(
     state: &ServerState,
-    zone: &d2b_contracts::v3::ZoneId,
+    zone: &d2b_contracts_zone_session::v3::ZoneId,
     action: daemon_audit::ResourcePlaneAction,
     result: daemon_audit::ResourcePlaneResult,
 ) -> Result<(), std::io::Error> {
@@ -20838,7 +20836,7 @@ fn dispatch_broker_host_prepare_as(
     let context = d2b_provider_network_local::broker::NetworkEffectContext::for_host_nm(
         ScopeId::new("host"),
         BundleOpId::new(intent_id_nm_unmanaged_host()),
-        d2b_contracts::v3::ResourceBundleGenerationId::parse(generation.as_str()).map_err(
+        d2b_contracts_zone_session::v3::ResourceBundleGenerationId::parse(generation.as_str()).map_err(
             |_| TypedError::InternalBrokerUnavailable {
                 path: broker_socket_path(state),
                 detail: "installed generation invalid for Network effect context".to_owned(),
@@ -22014,7 +22012,7 @@ fn dispatch_run_activation_phase(
     mode: BrokerActivationMode,
     phase: BrokerActivationPhase,
     caller_role: BrokerCallerRole,
-    system_artifact_id: Option<d2b_contracts::v3::ArtifactId>,
+    system_artifact_id: Option<d2b_contracts_zone_session::v3::ArtifactId>,
 ) -> Result<d2b_contracts_broker::broker_wire::RunActivationResponse, Value> {
     const OP_NAME: &str = "RunActivation";
     let started = Instant::now();
@@ -22106,7 +22104,7 @@ fn dispatch_broker_activation_metadata_only(
     verb: &'static str,
     mode: BrokerActivationMode,
     caller_role: BrokerCallerRole,
-    system_artifact_id: Option<d2b_contracts::v3::ArtifactId>,
+    system_artifact_id: Option<d2b_contracts_zone_session::v3::ArtifactId>,
 ) -> Result<Value, TypedError> {
     let response = match dispatch_run_activation_phase(
         state,
@@ -22143,7 +22141,7 @@ fn dispatch_live_guest_activation(
     verb: &'static str,
     mode: BrokerActivationMode,
     caller_role: BrokerCallerRole,
-    system_artifact_id: Option<d2b_contracts::v3::ArtifactId>,
+    system_artifact_id: Option<d2b_contracts_zone_session::v3::ArtifactId>,
 ) -> Result<Value, TypedError> {
     let _guard = match try_acquire_activation_lock(state, &request.vm) {
         Ok(guard) => guard,
@@ -26167,7 +26165,7 @@ mod public_status_tests {
         };
         let lifecycle_request = provider_effects::GuestLifecycleRequest::new(
             ZoneId::parse("work").expect("Zone"),
-            d2b_contracts::v3::ResourceRef::parse("Guest/vm-a").expect("Guest ref"),
+            d2b_contracts_zone_session::v3::ResourceRef::parse("Guest/vm-a").expect("Guest ref"),
             provider_effects::GuestLifecycleOperation::Start,
             "failed-state",
         )
@@ -27057,7 +27055,7 @@ mod detached_exec_routing_tests {
     use std::sync::Arc;
 
     fn audit_digest(value: &str) -> String {
-        d2b_contracts::v3::canonical_digest("d2b:daemon-audit-redaction:v1", value.as_bytes())
+        d2b_contracts_zone_session::v3::canonical_digest("d2b:daemon-audit-redaction:v1", value.as_bytes())
     }
 
     fn test_state(caps: exec_session::ExecSessionCaps) -> ServerState {
@@ -33291,7 +33289,7 @@ mod broker_dispatch_tests {
         assert_eq!(
             event.get("vm").and_then(|v| v.as_str()),
             Some(
-                d2b_contracts::v3::canonical_digest("d2b:daemon-audit-redaction:v1", b"vm-a",)
+                d2b_contracts_zone_session::v3::canonical_digest("d2b:daemon-audit-redaction:v1", b"vm-a",)
                     .as_str(),
             ),
         );

@@ -11,10 +11,10 @@ use std::{
     sync::{Arc, Mutex},
 };
 
-use d2b_contracts::v3::{
+use d2b_contracts_zone_session::v3::{
     CanonicalJsonObject, ProviderMethod, ServiceName, ZoneId,
-    provider_registry::ProviderBindingAxis,
 };
+use d2b_contracts_provider::v3::provider_registry::ProviderBindingAxis;
 use tokio::{
     sync::{Semaphore, mpsc},
     time::{Duration, timeout},

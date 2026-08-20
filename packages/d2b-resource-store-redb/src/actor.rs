@@ -7,7 +7,7 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use d2b_audit::OperationIdentity;
 use d2b_audit::{DurabilityEvidence, DurabilityOutcome, Reconciliation, ZoneOperationKey};
-use d2b_contracts::v3::{ResourceRef, ResourceTypeName, ZoneId, ZoneRevision};
+use d2b_contracts_resource::v3::{ResourceRef, ResourceTypeName, ZoneId, ZoneRevision};
 use d2b_resource_store::{
     ExpectedRevision, ResourceMutationKind, StoreError, StoreFilter, StoreGetRequest,
     StoreInspectSchemaRequest, StoreListRequest, StoreListResult, StoreProjection,
@@ -426,7 +426,7 @@ impl WriterHandle {
         if opened.body().mutations.is_empty() {
             return Err(crate::transaction::integrity("empty-verified-mutation"));
         }
-        if opened.body().mutations.len() > d2b_contracts::v3::MAX_BATCH_MUTATIONS {
+        if opened.body().mutations.len() > d2b_contracts_resource::v3::MAX_BATCH_MUTATIONS {
             return Err(crate::transaction::integrity(
                 "verified-mutation-over-limit",
             ));
@@ -2249,9 +2249,9 @@ fn project_resource(
     if projection == StoreProjection::Full {
         return Ok(());
     }
-    let mut value = d2b_contracts::v3::CanonicalJsonValue::parse(&resource.canonical_json)
+    let mut value = d2b_contracts_resource::v3::CanonicalJsonValue::parse(&resource.canonical_json)
         .map_err(crate::transaction::integrity)?;
-    let d2b_contracts::v3::CanonicalJsonValue::Object(root) = &mut value else {
+    let d2b_contracts_resource::v3::CanonicalJsonValue::Object(root) = &mut value else {
         return Err(crate::transaction::integrity(
             "stored-resource-envelope-invalid",
         ));
@@ -2259,11 +2259,11 @@ fn project_resource(
     match projection {
         StoreProjection::Full => unreachable!("full projection returned above"),
         StoreProjection::BaseOnly => {
-            if let Some(d2b_contracts::v3::CanonicalJsonValue::Object(spec)) = root.get_mut("spec")
+            if let Some(d2b_contracts_resource::v3::CanonicalJsonValue::Object(spec)) = root.get_mut("spec")
             {
                 spec.remove("provider");
             }
-            if let Some(d2b_contracts::v3::CanonicalJsonValue::Object(status)) =
+            if let Some(d2b_contracts_resource::v3::CanonicalJsonValue::Object(status)) =
                 root.get_mut("status")
             {
                 status.remove("provider");
@@ -2322,7 +2322,7 @@ fn not_found() -> StoreError {
         d2b_resource_store::StoreErrorKind::ResourceNotFound,
         None,
         None,
-        d2b_contracts::v3::RetryClass::Never,
+        d2b_contracts_resource::v3::RetryClass::Never,
         "resource-not-found",
     )
 }
@@ -2331,7 +2331,7 @@ fn not_found() -> StoreError {
 mod tests {
     use super::*;
     use crate::transaction::{ChangeEntry, ChangeEvent, REVISION_LOG, encode, revision_key};
-    use d2b_contracts::v3::{ResourceGeneration, ResourceName, ResourceUid};
+    use d2b_contracts_resource::v3::{ResourceGeneration, ResourceName, ResourceUid};
     use std::fs::OpenOptions;
 
     fn database(label: &str) -> (tempfile::TempDir, Arc<Database>) {
@@ -2552,14 +2552,14 @@ mod tests {
         let (_directory, database) = database("audit-before-commit");
         let identity = crate::StoreIdentity::new(
             d2b_resource_store::StoreSlot::new(0).unwrap(),
-            d2b_contracts::v3::ResourceUid::parse("11111111-1111-4111-8111-111111111111").unwrap(),
+            d2b_contracts_resource::v3::ResourceUid::parse("11111111-1111-4111-8111-111111111111").unwrap(),
             ZoneId::parse("work").unwrap(),
-            d2b_contracts::v3::ResourceUid::parse("22222222-2222-4222-8222-222222222222").unwrap(),
-            d2b_contracts::v3::Timestamp::parse("2026-07-31T00:00:00.000Z").unwrap(),
+            d2b_contracts_resource::v3::ResourceUid::parse("22222222-2222-4222-8222-222222222222").unwrap(),
+            d2b_contracts_resource::v3::Timestamp::parse("2026-07-31T00:00:00.000Z").unwrap(),
             d2b_resource_store::PolicySnapshot {
                 policy_revision: 1,
                 api_catalog_revision: 1,
-                active_configuration_revision: d2b_contracts::v3::ConfigurationGeneration::new(1)
+                active_configuration_revision: d2b_contracts_resource::v3::ConfigurationGeneration::new(1)
                     .unwrap(),
                 controller_generation: None,
             },

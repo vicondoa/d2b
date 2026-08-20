@@ -1,9 +1,9 @@
 use std::collections::BTreeMap;
 
-use d2b_contracts::v3::{
+use d2b_contracts_zone_session::v3::{
     CanonicalJsonObject, ResourceName, ResourceTypeName, SchemaFingerprint, Timestamp, ZoneId,
 };
-use d2b_contracts::{BundleMetadata, BundleResource, ZoneBundle};
+use d2b_contracts_zone_session::v3::{BundleMetadata, BundleResource, ZoneBundle};
 use d2b_core_controller::{
     configuration::{
         ConfigurationService, RetainedGenerations,

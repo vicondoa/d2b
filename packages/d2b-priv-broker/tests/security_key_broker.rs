@@ -10,7 +10,7 @@ use d2b_contracts_broker::broker_wire::{
     BrokerRequest, BrokerResponse, OpenHidrawSecurityKeyRequest, OpenHidrawSecurityKeyResponse,
 };
 use d2b_contracts::types::VmId;
-use d2b_contracts::v3::ResourceRef;
+use d2b_contracts_zone_session::v3::ResourceRef;
 use d2b_priv_broker::ops::audit_op::OperationFields;
 use d2b_priv_broker::{fd_passing::recv_fds, protocol::send_json_frame_with_fds};
 use nix::sys::socket::{AddressFamily, SockFlag, SockType, socketpair};

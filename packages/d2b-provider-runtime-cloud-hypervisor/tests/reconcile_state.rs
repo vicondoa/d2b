@@ -2,7 +2,8 @@ use std::sync::{Arc, Mutex};
 use tokio::time::{Duration, sleep};
 
 use async_trait::async_trait;
-use d2b_contracts::v3::{ResourceRef, credential::OpaqueAzureRef};
+use d2b_contracts_zone_session::v3::ResourceRef;
+use d2b_contracts_provider::v3::credential::OpaqueAzureRef;
 use d2b_provider_runtime_cloud_hypervisor::{
     CloudHypervisorClock, CloudHypervisorConfig, CloudHypervisorController,
     CloudHypervisorEffectPort, CloudHypervisorGuestSettings, CloudHypervisorPhase,

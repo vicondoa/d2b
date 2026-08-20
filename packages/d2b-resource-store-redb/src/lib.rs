@@ -26,7 +26,7 @@ use d2b_audit::{
     AuditHash, AuditRecord, AuditRecordError, AuditRecordFields, AuditSink, AuditWriteClass,
     AuditWriteOutcome, DurabilityEvidence, ZoneOperationKey,
 };
-use d2b_contracts::v3::{
+use d2b_contracts_resource::v3::{
     ConfigurationGeneration, ControllerGeneration, ResourceUid, Timestamp, ZoneId, ZoneRevision,
     canonical_digest, identity::STANDARD_RESOURCE_TYPES,
 };
@@ -782,9 +782,9 @@ impl RedbResourceStore {
     pub async fn replay_backend(
         &self,
         after_revision: u64,
-        resource_types: impl IntoIterator<Item = d2b_contracts::v3::ResourceTypeName>,
+        resource_types: impl IntoIterator<Item = d2b_contracts_resource::v3::ResourceTypeName>,
         visit: impl FnMut(SharedChangeBatch) -> Result<(), StoreError> + Send + 'static,
-    ) -> Result<d2b_contracts::v3::ZoneRevision, StoreError> {
+    ) -> Result<d2b_contracts_resource::v3::ZoneRevision, StoreError> {
         let meta = self.reads.meta().await?;
         if after_revision < meta.compaction_floor {
             return Err(transaction::revision_expired(meta.current_revision));
@@ -1142,7 +1142,7 @@ impl RedbResourceStore {
     pub async fn acknowledge_watch(
         &self,
         id: WatchRegistrationId,
-        revision: d2b_contracts::v3::ZoneRevision,
+        revision: d2b_contracts_resource::v3::ZoneRevision,
     ) -> Result<(), StoreError> {
         self.writer.acknowledge_watch(id, revision).await
     }
@@ -1151,7 +1151,7 @@ impl RedbResourceStore {
     pub async fn unregister_watch(
         &self,
         id: WatchRegistrationId,
-    ) -> Result<Option<d2b_contracts::v3::ZoneRevision>, StoreError> {
+    ) -> Result<Option<d2b_contracts_resource::v3::ZoneRevision>, StoreError> {
         self.retained_watch_streams
             .lock()
             .map_err(|_| transaction::integrity("watch-stream-registry-poisoned"))?

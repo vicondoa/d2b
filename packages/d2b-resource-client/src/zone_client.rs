@@ -16,7 +16,7 @@ use std::{
     time::Duration,
 };
 
-use d2b_contracts::v3::{CanonicalJsonObject, ResourceRef};
+use d2b_contracts_zone_session::v3::{CanonicalJsonObject, ResourceRef};
 
 use crate::{
     AttemptDisposition, CallDriver, CallOptions, ClientError, MethodProfile, ResolvedTarget,
@@ -29,7 +29,7 @@ use crate::{
 /// This is an alias of the contract-owned catalogue rather than a second
 /// client-side enum, so adding or removing a method changes the canonical
 /// service descriptor and this API together.
-pub use d2b_contracts::v3::ResourceMethod as ResourceVerb;
+pub use d2b_contracts_zone_session::v3::ResourceMethod as ResourceVerb;
 
 /// Whether a ResourceService method can change durable Resource state.
 pub const fn resource_verb_is_mutating(verb: ResourceVerb) -> bool {
@@ -54,14 +54,14 @@ pub const fn resource_verb_is_mutating(verb: ResourceVerb) -> bool {
 /// only owner of those decisions.
 #[derive(Clone, PartialEq, Eq)]
 pub struct ZonePeerIdentity {
-    zone: d2b_contracts::v3::zone_routing::ZonePath,
+    zone: d2b_contracts_zone_session::v3::zone_routing::ZonePath,
     static_key_fingerprint: [u8; 32],
 }
 
 impl ZonePeerIdentity {
     /// Construct transport evidence observed for an authenticated peer.
     pub const fn from_observed_static_key(
-        zone: d2b_contracts::v3::zone_routing::ZonePath,
+        zone: d2b_contracts_zone_session::v3::zone_routing::ZonePath,
         static_key_fingerprint: [u8; 32],
     ) -> Self {
         Self {
@@ -72,14 +72,14 @@ impl ZonePeerIdentity {
 
     /// Construct transport evidence from an enrolled peer key fingerprint.
     pub const fn from_enrolled_peer(
-        zone: d2b_contracts::v3::zone_routing::ZonePath,
+        zone: d2b_contracts_zone_session::v3::zone_routing::ZonePath,
         static_key_fingerprint: [u8; 32],
     ) -> Self {
         Self::from_observed_static_key(zone, static_key_fingerprint)
     }
 
     /// Borrow the exact Zone route identity established by the adapter.
-    pub const fn zone(&self) -> &d2b_contracts::v3::zone_routing::ZonePath {
+    pub const fn zone(&self) -> &d2b_contracts_zone_session::v3::zone_routing::ZonePath {
         &self.zone
     }
 
@@ -693,7 +693,7 @@ impl<S> LocalZoneSession<S> {
     }
 
     /// Borrow the Zone path in the pin.
-    pub const fn zone(&self) -> &d2b_contracts::v3::zone_routing::ZonePath {
+    pub const fn zone(&self) -> &d2b_contracts_zone_session::v3::zone_routing::ZonePath {
         self.pin.peer().zone()
     }
 

@@ -1,6 +1,6 @@
 //! Structured activation-runner boundary.
 
-use d2b_contracts::v3::{ActivationMode, ActivationOutcomeCode, ArtifactId, ResourceRef};
+use d2b_contracts_zone_session::v3::{ActivationMode, ActivationOutcomeCode, ArtifactId, ResourceRef};
 use serde::{Deserialize, Serialize};
 
 /// Target-local request with no executable or store path.

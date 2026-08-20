@@ -1,6 +1,6 @@
 //! ComponentSession admission for notification streams.
 
-use d2b_contracts::v3::{EvidenceClass, ResourceRef, ZoneId};
+use d2b_contracts_zone_session::v3::{EvidenceClass, ResourceRef, ZoneId};
 use d2b_provider_toolkit::{AuthenticatedComponentSession, AuthenticatedSessionRouteBinding};
 
 /// Stream admission purpose.
@@ -68,7 +68,7 @@ impl SessionEvidence {
                 .is_none_or(|provider| provider.to_canonical_string() != crate::PROVIDER_REF)
             || route.provider_generation().is_none()
             || route.evidence_class() != EvidenceClass::UnixPeer
-            || route.locality() != d2b_contracts::v3::Locality::Local
+            || route.locality() != d2b_contracts_zone_session::v3::Locality::Local
             || route.subject_ref().resource_type().as_str() != "Guest"
             || route.reconnect_generation().get() == 0
         {
@@ -95,7 +95,7 @@ impl SessionEvidence {
                 .is_none_or(|provider| provider.to_canonical_string() != crate::PROVIDER_REF)
             || route.provider_generation().is_none()
             || route.evidence_class() != EvidenceClass::UnixPeer
-            || route.locality() != d2b_contracts::v3::Locality::Local
+            || route.locality() != d2b_contracts_zone_session::v3::Locality::Local
             || route.subject_ref().resource_type().as_str() != "Provider"
             || guest_ref.resource_type().as_str() != "Guest"
             || route.reconnect_generation().get() == 0
@@ -123,7 +123,7 @@ impl SessionEvidence {
             .is_none_or(|provider| provider.to_canonical_string() != "Provider/display-wayland")
             || route.service().as_str() != "d2b.display.v3"
             || route.evidence_class() != EvidenceClass::UnixPeer
-            || route.locality() != d2b_contracts::v3::Locality::Local
+            || route.locality() != d2b_contracts_zone_session::v3::Locality::Local
             || route.subject_ref().resource_type().as_str() != "User"
             || route.provider_generation().is_none()
             || route.reconnect_generation().get() == 0
@@ -152,7 +152,7 @@ impl SessionEvidence {
             .is_none_or(|provider| provider.to_canonical_string() != "Provider/display-wayland")
             || route.service().as_str() != "d2b.display.v3"
             || route.evidence_class() != EvidenceClass::UnixPeer
-            || route.locality() != d2b_contracts::v3::Locality::Local
+            || route.locality() != d2b_contracts_zone_session::v3::Locality::Local
             || route.subject_ref().resource_type().as_str() != "Guest"
             || user_ref.resource_type().as_str() != "User"
             || route.provider_generation().is_none()
@@ -341,7 +341,7 @@ fn validate_route(
         return Err(AdmissionError::SessionUnauthenticated);
     }
     if route.evidence_class() != expected_evidence
-        || (local_only && route.locality() != d2b_contracts::v3::Locality::Local)
+        || (local_only && route.locality() != d2b_contracts_zone_session::v3::Locality::Local)
     {
         return Err(AdmissionError::TransportMismatch);
     }

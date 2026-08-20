@@ -6,7 +6,7 @@ use d2b_provider_runtime_qemu_media::{
 #[test]
 fn guest_conformance_keeps_common_and_provider_status_layers_distinct() {
     let spec = build_guest_resource_spec(
-        Some(d2b_contracts::v3::ResourceRef::parse("Volume/boot").unwrap()),
+        Some(d2b_contracts_zone_session::v3::ResourceRef::parse("Volume/boot").unwrap()),
         2,
         4096,
         GuestProviderSpecSettings::default(),

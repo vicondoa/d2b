@@ -2,7 +2,7 @@
 
 use std::fmt;
 
-use d2b_contracts::v3::{ResourceGeneration, ResourceRef};
+use d2b_contracts_zone_session::v3::{ResourceGeneration, ResourceRef};
 
 /// Lifecycle state of one authenticated Provider instance.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]

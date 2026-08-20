@@ -2,18 +2,16 @@
 
 use std::{future::Future, sync::Arc};
 
-use d2b_contracts::{
-    resource_proto as wire,
-    v3::{
-        AuthenticatedSubjectContext, CanonicalJsonValue, DEFAULT_LIST_PAGE_SIZE,
-        DEFAULT_REQUEST_DEADLINE_MS, DEFAULT_WATCH_CREDITS, FinalizerId, MAX_BATCH_MUTATIONS,
-        MAX_EXPEDITED_DEADLINE_MS, MAX_FILTER_VALUES, MAX_LIST_FILTERS, MAX_LIST_PAGE_SIZE,
-        MAX_LIST_RESOURCE_TYPES, MAX_PAGE_CURSOR_BYTES, MAX_REQUEST_CANONICAL_BYTES,
-        MAX_REQUEST_DEADLINE_MS, MAX_RESPONSE_CANONICAL_BYTES, MAX_WATCH_CREDITS,
-        MAX_WATCH_FILTERS, MAX_WATCH_RESOURCE_TYPES, RESOURCE_ENVELOPE_DOMAIN_TAG,
-        ResourceEnvelope, ResourceError, ResourceErrorKind, ResourceName, ResourceRef,
-        ResourceTypeName, ResourceUid, ZoneId, ZoneRevision, canonical_digest,
-    },
+use d2b_contracts_resource::resource_proto as wire;
+use d2b_contracts_zone_session::v3::{
+    AuthenticatedSubjectContext, CanonicalJsonValue, DEFAULT_LIST_PAGE_SIZE,
+    DEFAULT_REQUEST_DEADLINE_MS, DEFAULT_WATCH_CREDITS, FinalizerId, MAX_BATCH_MUTATIONS,
+    MAX_EXPEDITED_DEADLINE_MS, MAX_FILTER_VALUES, MAX_LIST_FILTERS, MAX_LIST_PAGE_SIZE,
+    MAX_LIST_RESOURCE_TYPES, MAX_PAGE_CURSOR_BYTES, MAX_REQUEST_CANONICAL_BYTES,
+    MAX_REQUEST_DEADLINE_MS, MAX_RESPONSE_CANONICAL_BYTES, MAX_WATCH_CREDITS,
+    MAX_WATCH_FILTERS, MAX_WATCH_RESOURCE_TYPES, RESOURCE_ENVELOPE_DOMAIN_TAG,
+    ResourceEnvelope, ResourceError, ResourceErrorKind, ResourceName, ResourceRef,
+    ResourceTypeName, ResourceUid, ZoneId, ZoneRevision, canonical_digest,
 };
 use d2b_resource_store::{
     ExpectedRevision, ResourceMutationKind, StoreCommitResult, StoreFilter, StoreGetRequest,
@@ -1400,7 +1398,7 @@ fn parse_mutation<T>(
         return Err(schema_error("mutation body does not match its kind"));
     }
     let canonical_resource = if let Some(body) = body {
-        if body.canonical_json.len() > d2b_contracts::v3::MAX_RESOURCE_ENVELOPE_BYTES {
+        if body.canonical_json.len() > d2b_contracts_zone_session::v3::resource::MAX_RESOURCE_ENVELOPE_BYTES {
             return Err(schema_error("resource envelope exceeds its byte bound"));
         }
         let body_identity = parse_identity(body.identity.as_ref())?;
@@ -1511,7 +1509,7 @@ fn parse_mutation<T>(
             ));
         }
         let expedited_subject = trusted.subject.evidence_class()
-            == d2b_contracts::v3::EvidenceClass::UnixPeer
+            == d2b_contracts_zone_session::v3::EvidenceClass::UnixPeer
             && (trusted.subject.subject_ref().resource_type().as_str() == "User"
                 || trusted.subject.subject_ref().to_canonical_string() == "Provider/system-core");
         if !expedited_subject {
@@ -1875,7 +1873,7 @@ mod tests {
         },
     };
 
-    use d2b_contracts::v3::{
+    use d2b_contracts_zone_session::v3::{
         BindingDigest, ConfigurationGeneration, ControllerGeneration, EvidenceClass, Locality,
         ReconnectGeneration, ResourceGeneration, ResourceUid, SchemaFingerprint, ServiceName,
         SessionBinding, SessionPurpose, TranscriptHash, TransportBinding, ZoneId,
@@ -1946,7 +1944,7 @@ mod tests {
                 StoreErrorKind::ResourcePlaneUnavailable,
                 None,
                 None,
-                d2b_contracts::v3::RetryClass::AfterDelay,
+                d2b_contracts_zone_session::v3::RetryClass::AfterDelay,
                 "fake-unavailable",
             )
         }
@@ -2027,7 +2025,7 @@ mod tests {
                 CommitMode::Conflict => Err(StoreError::batch_conflict(
                     ZoneRevision::new(8),
                     MutationOrdinal::new(u32::from(mutations.len() > 1)).unwrap(),
-                    d2b_contracts::v3::RetryClass::Reauthorize,
+                    d2b_contracts_zone_session::v3::RetryClass::Reauthorize,
                     "revision-changed",
                 )),
             }
@@ -2350,7 +2348,7 @@ mod tests {
         let service = checked_service(Arc::clone(&store), authorizer([ResourceVerb::Create]));
         for bytes in [
             b"{}".to_vec(),
-            vec![b'x'; d2b_contracts::v3::MAX_RESOURCE_ENVELOPE_BYTES + 1],
+            vec![b'x'; d2b_contracts_zone_session::v3::resource::MAX_RESOURCE_ENVELOPE_BYTES + 1],
         ] {
             let mut request = wire::CreateRequest::new();
             request.meta = request_meta();
