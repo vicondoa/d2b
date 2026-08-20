@@ -396,7 +396,7 @@ mountPolicy.bindMounts = [
   the fixture-contract lane is enabled and promoted; the retired live validator
   and its evidence write are not current coverage.
 - Byte-parity golden: `tests/golden/runner-shape/gpu-argv-minimal.txt`
-  via `d2b_host::gpu_argv::generate_gpu_argv`.
+  via `d2b-provider-device-gpu/src/gpu_argv.rs::generate_gpu_argv`.
 
 ## Additional broker ops
 

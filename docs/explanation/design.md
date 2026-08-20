@@ -57,10 +57,9 @@ the historical [microvm.nix] flake input (per ADR 0018); the
 d2b-owned per-VM evaluator at
 [`nixos-modules/vm-evaluator.nix`](../../nixos-modules/vm-evaluator.nix)
 + [`nixos-modules/vm-options.nix`](../../nixos-modules/vm-options.nix)
-replaces the upstream module evaluation. The broker SpawnRunner
-pipeline (`d2b-priv-broker` + `d2b-host::*_argv`) spawns
-every per-VM runner directly; no Nix-side runner derivation is
-needed.
+replaces the upstream module evaluation. The broker SpawnRunner pipeline consumes trusted bundle argv and spawns every
+per-VM runner directly; provider-specific argv planning remains in the owning
+Provider crates. No Nix-side runner derivation is needed.
 
 ### History
 

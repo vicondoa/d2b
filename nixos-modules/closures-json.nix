@@ -29,15 +29,11 @@ let
   closureArtifact = name:
     let
       top = "${vmTopOf name}";
-      # per-VM declared runner is null (broker generates
-      # argv in Rust via packages/d2b-host/src/*_argv.rs); the
-      # bundle's `declaredRunner` / `runnerParityPath` are kept in
-      # the schema for tooling that still reads them but rendered
-      # as the empty string when no derivation exists. The runner-
-      # parity invariant is enforced in the broker by comparing the
-      # bundle's prebuilt argv to the Rust regenerator's output
-      # (see packages/d2b-priv-broker/src/runtime.rs SpawnRunner
-      # dispatch arm).
+      # per-VM declared runner is null; the bundle's
+      # `declaredRunner` / `runnerParityPath` are kept in the schema for
+      # tooling that still reads them but rendered as the empty string when
+      # no derivation exists. The broker consumes the bundle's prebuilt argv;
+      # provider-specific planning remains in the owning Provider crates.
       runnerDrv = vmRunnerOf name;
       runner = if runnerDrv == null then "" else "${runnerDrv}";
       closure = vmClosureInfo name;

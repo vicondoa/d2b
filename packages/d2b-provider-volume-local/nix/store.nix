@@ -818,7 +818,8 @@ in
     # (now enforced via `BundleResolver::ResolvedRunnerIntent`'s
     # pre-spawn validation in `d2b-priv-broker::runtime`),
     # the hardened exec wrapper (Rust generator output in
-    # `d2b-host::virtiofsd_argv`), and the CapabilityBoundingSet
+    # `d2b-provider-volume-virtiofs/src/virtiofsd_argv.rs`), and the
+    # CapabilityBoundingSet
     # (broker spawn-time `set_capabilities` in `d2b-priv-broker::sys`).
     # The drop-ins block that lived here would target a unit that
     # no longer exists; deleted.

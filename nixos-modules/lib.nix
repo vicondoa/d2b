@@ -558,9 +558,9 @@ rec {
 
   # Sibling helper for the per-VM declared runner derivation.
   # In v1.1+ this is always null (the broker generates runner
-  # argv in Rust via `packages/d2b-host/src/*_argv.rs`); the
-  # helper returns null for backward compat with consumers that
-  # touch the path.
+  # argv from the trusted bundle; provider-specific generators remain
+  # in their owning Provider crates. The helper returns null for
+  # backward compat with consumers that touch the path.
   vmDeclaredRunner = _config: _name: null;
 
   # guestConfigForbiddenNamespaces - namespace-containment policy check

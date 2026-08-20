@@ -27,8 +27,8 @@
 # `microvm.runner`, `boot-disk`, `store-disk`, `interfaces`,
 # `pci-devices`, `virtiofsd`, `graphics`, `rosetta`, `ssh-deploy`,
 # `vsock-ssh` - none of those are needed for the daemon-native
-# substrate because the broker owns hypervisor argv generation
-# (`packages/d2b-host/src/*_argv.rs`) and runtime supervision.
+# substrate because the owning runtime Providers plan hypervisor argv and
+# the broker owns runtime supervision.
 { config, lib, pkgs, ... }:
 
 let

@@ -137,6 +137,6 @@ for the DAG node taxonomy and
 the broker op catalogue.
 
 Adding or reclassifying a spawned runner `ProcessRole` also needs matching
-process-builder and runner-matrix coverage: add/extend the typed Rust argv
-builder in `packages/d2b-host/src/*_argv.rs` and role coverage policy/contract
-tests under `packages/d2b-contract-tests/tests/` in the same change.
+process-builder and role coverage: add or extend the typed Rust argv builder
+in the owning Provider crate and role coverage policy/contract tests under
+`packages/d2b-contract-tests/tests/` in the same change.

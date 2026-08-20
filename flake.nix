@@ -34,8 +34,8 @@
     # `microvm` flake input DROPPED per ADR 0018.
     # The d2b NixOS substrate owns its per-VM evaluator via
     # `nixos-modules/vm-evaluator.nix` + `nixos-modules/vm-options.nix`.
-    # Runner argv generation lives in the Rust crate
-    # `packages/d2b-host/src/*_argv.rs` (broker-side).
+    # Runner argv planning lives in the owning Provider crates; the broker
+    # consumes the trusted bundle's prebuilt argv.
 
     home-manager = {
       url = "github:nix-community/home-manager";
