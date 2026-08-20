@@ -4,7 +4,7 @@ Reference for d2b's per-VM `/nix/store` lifecycle.
 
 This contract is implemented in two layers today:
 
-- the shipping NixOS/module path in [`nixos-modules/store.nix`](../../nixos-modules/store.nix)
+- the shipping NixOS/module path in [`packages/d2b-provider-volume-local/nix/store.nix`](../../packages/d2b-provider-volume-local/nix/store.nix)
 - the Rust primitive layer in [`packages/d2b-host/src/hardlink_farm.rs`](../../packages/d2b-host/src/hardlink_farm.rs)
 
 The file names differ slightly between those layers, but the operator-visible
@@ -38,7 +38,7 @@ display/wire `generation_token`):
 The guest `d2b-meta` share is pointed at `store-view/meta/` only;
 `state/`, `gcroots/`, and `sync.lock` are host-only and never exposed.
 
-> **Transitional note:** the shipping `nixos-modules/store.nix`
+> **Transitional note:** the shipping `packages/d2b-provider-volume-local/nix/store.nix`
 > activation path and the legacy `build_farm`/rollback flows still use
 > the older single-root layout - `store-view/current -> generations/<N>`
 > with `generations/<N>/{system,store-paths,db.dump,marker.json}` and

@@ -2,7 +2,7 @@
 #
 # Point sshd at the keys provisioned on the host by
 # `nixos-modules/host-ssh-host-keys.nix` and shared in via the
-# `d2b-ssh-host` virtiofs tag from `nixos-modules/store.nix`. Disable
+# `d2b-ssh-host` virtiofs tag from `packages/d2b-provider-volume-local/nix/store.nix`. Disable
 # the NixOS default `ssh-keygen -A` activation hook so sshd does not
 # try to generate keys into the read-only nix store at boot.
 #

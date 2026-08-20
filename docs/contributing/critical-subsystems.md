@@ -10,14 +10,14 @@ section.** Touch none without a clear plan and corresponding test run.
 
 ## Net VM networking / firewall
 
-**Where:** `nixos-modules/net.nix` (`lib.mkForce` neutralizes `base.nix`'s `10-eth-dhcp`, plus per-env MTU/MSS and east-west wiring)
+**Where:** `packages/d2b-provider-network-local/nix/net.nix` (`lib.mkForce` neutralizes `base.nix`'s `10-eth-dhcp`, plus per-env MTU/MSS and east-west wiring)
 
 Net VM dual-stacks DHCP on its uplink, breaks NAT, or weakens same-env
 isolation unexpectedly. Validate with `tests/unit/nix/cases/net-vm-network.nix`.
 
 ## Per-VM `/nix/store` hardlink farm
 
-**Where:** `nixos-modules/store.nix`, `/var/lib/d2b/vms/<vm>/store{,-meta}/`, `nixos-modules/processes-json.nix` (`virtiofsdRunner` ro-store `--shared-dir`), daemon `StoreSync` op + broker `store_view_farm`
+**Where:** `packages/d2b-provider-volume-local/nix/store.nix`, `/var/lib/d2b/vms/<vm>/store{,-meta}/`, `nixos-modules/processes-json.nix` (`virtiofsdRunner` ro-store `--shared-dir`), daemon `StoreSync` op + broker `store_view_farm`
 
 The guest's `/nix/store` MUST be the per-VM closure-only farm
 `/var/lib/d2b/vms/<vm>/store`, never the host's full `/nix/store`:

@@ -12,7 +12,7 @@
 # RFC 1918 host LAN, RFC 5737 doc-range uplink, etc.) that pass
 # `nix flake check` - they need your judgement-level review
 # before activation, NOT an eval gate. (The framework's CIDR
-# validators in `nixos-modules/network.nix` parse the strings as
+# validators in `packages/d2b-provider-network-local/nix/network.nix` parse the strings as
 # IPv4 arithmetic and would crash eval before any TODO assertion
 # could fire if we used non-numeric sentinels like
 # `"TODO/REPLACE/CIDR"`; see templates/default/README.md for the

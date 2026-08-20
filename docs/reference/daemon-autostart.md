@@ -40,7 +40,7 @@ workloads):
 
 1. **Net VMs.** Every VM where `is_net_vm = true` (i.e., the
    auto-declared `sys-<env>-net` VMs from
-   `nixos-modules/network.nix`). Sorted by `(env, vm-name)`.
+   `packages/d2b-provider-network-local/nix/network.nix`). Sorted by `(env, vm-name)`.
 2. **Workloads.** Every other VM, sorted by `(env, vm-name)` so
    workloads pin to their env's net VM in plan order.
 

@@ -417,7 +417,7 @@ mod tests {
 // ---------------------------------------------------------------------------
 // Per-env usbipd-backend + TCP proxy argv generators.
 //
-// The per-env systemd units declared by `nixos-modules/network.nix`
+// The per-env systemd units declared by `packages/d2b-provider-network-local/nix/network.nix`
 // (`d2b-sys-<env>-usbipd-{backend,proxy}.service`) were retired in
 // v1.0 and replaced by the d2bd daemon spawning the backend + proxy
 // through broker `SpawnRunner` with `RunnerRole::Usbip`. These two pure
@@ -505,7 +505,7 @@ fn validate_env(env: &str) -> Result<(), UsbipdPerEnvArgvError> {
 
 /// Render the argv for the per-env `usbipd` backend. Mirrors the
 /// `d2b-sys-<env>-usbipd-backend.service` `ExecStart=` line
-/// byte-for-byte (see `nixos-modules/network.nix` `usbipd -4
+/// byte-for-byte (see `packages/d2b-provider-network-local/nix/network.nix` `usbipd -4
 /// --tcp-port <port>`).
 pub fn generate_usbipd_backend_argv(
     input: &UsbipdBackendArgvInput,

@@ -199,33 +199,34 @@ fn release_v1_1_tag_is_annotated_and_names_the_release() {
 // tests/vfsd-watchdog-retired-eval.sh
 //
 // Asserts the `d2b-vfsd-watchdog@.{service,timer}` definitions (and per-VM
-// enable units) are absent from `nixos-modules/store.nix`. The wedge-detection
+// enable units) are absent from the Provider-owned store module. The wedge-detection
 // logic moved into the broker's Virtiofsd `SpawnRunner` role supervisor per
 // ADR 0018. Patterns match unit DECLARATIONS, not comments mentioning the name.
 // ---------------------------------------------------------------------------
 
 #[test]
 fn vfsd_watchdog_units_retired_from_store_module() {
-    let store_module = read_repo_file("nixos-modules/store.nix");
+    let store_module =
+        read_repo_file("packages/d2b-provider-volume-local/nix/store.nix");
 
     // (a) Productive service template absent (string-key literal in attrs scope).
     let service_decl = Regex::new(r#"(?m)^\s*"d2b-vfsd-watchdog@"\s*="#).unwrap();
     assert!(
         !service_decl.is_match(&store_module),
-        r#""d2b-vfsd-watchdog@" service template still declared in nixos-modules/store.nix"#
+        r#""d2b-vfsd-watchdog@" service template still declared in the Provider store module"#
     );
 
     // (b) Productive timer template absent.
     let timer_decl = Regex::new(r#"systemd\.timers\."d2b-vfsd-watchdog@"\s*="#).unwrap();
     assert!(
         !timer_decl.is_match(&store_module),
-        r#"systemd.timers."d2b-vfsd-watchdog@" still declared in nixos-modules/store.nix"#
+        r#"systemd.timers."d2b-vfsd-watchdog@" still declared in the Provider store module"#
     );
 
     // (c) Per-VM enabling units absent (literal "${name}" key).
     assert!(
         !store_module.contains(r#""d2b-vfsd-watchdog-${name}-enable""#),
-        r#"per-VM enabling unit "d2b-vfsd-watchdog-${{name}}-enable" still declared in nixos-modules/store.nix"#
+        r#"per-VM enabling unit "d2b-vfsd-watchdog-${{name}}-enable" still declared in the Provider store module"#
     );
 }
 

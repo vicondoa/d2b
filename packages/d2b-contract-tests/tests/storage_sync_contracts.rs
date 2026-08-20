@@ -583,7 +583,8 @@ fn rendered_storage_roots_or_static_fallback() -> BTreeSet<String> {
         "  (policy-paths: D2B_FIXTURES unset; tmpfiles coverage uses the narrow static \
          fallback roots from storage-json.nix rather than fully evaluated rules)"
     );
-    let storage_nix = read_repo_file("nixos-modules/storage-json.nix");
+    let storage_nix =
+        read_repo_file("packages/d2b-provider-volume-local/nix/storage-json.nix");
     assert!(
         storage_nix.contains("path = toString cfg.site.stateDir;")
             && storage_nix.contains("path = \"/run/d2b\";")
@@ -627,8 +628,8 @@ fn host_mutation_sources() -> BTreeSet<String> {
             if rel_path.starts_with("nixos-modules/options-")
                 || rel_path == "nixos-modules/processes-json.nix"
                 || rel_path == "nixos-modules/rust-host-tools.nix"
-                || rel_path == "nixos-modules/storage-json.nix"
-                || rel_path == "nixos-modules/sync-json.nix"
+                || rel_path == "packages/d2b-provider-volume-local/nix/storage-json.nix"
+                || rel_path == "packages/d2b-provider-volume-local/nix/sync-json.nix"
             {
                 continue;
             }

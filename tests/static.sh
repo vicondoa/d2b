@@ -500,10 +500,10 @@ D2B_FILES=(
   #   nixos-modules/host-audit.nix       (d2b-audit-check.{service,timer})
   #   nixos-modules/host-ch-exporter.nix (d2b-ch-exporter.service)
   #   nixos-modules/components/video/host.nix (d2b-<vm>-video)
-  nixos-modules/network.nix
-  nixos-modules/net.nix
+  packages/d2b-provider-network-local/nix/network.nix
+  packages/d2b-provider-network-local/nix/net.nix
   nixos-modules/observability-vm.nix
-  nixos-modules/store.nix
+  packages/d2b-provider-volume-local/nix/store.nix
   nixos-modules/components/graphics.nix
   nixos-modules/components/tpm.nix
   nixos-modules/components/usbip.nix
@@ -590,8 +590,8 @@ d2b_static_gate_begin "readOnly + default + config trio lint" "readOnly + defaul
 TRIO_FAILED=0
 TRIO_CONFIG_ASSIGN_RE='^[[:space:]]*(config\.)?d2b\.[A-Za-z0-9_.-]+[[:space:]]*='
 STORE_TRIO_ASSIGN_RE='^[[:space:]]*(config\.)?d2b\.store\.(package|generations)[[:space:]]*='
-if grep -qE "$STORE_TRIO_ASSIGN_RE" "$ROOT/nixos-modules/store.nix"; then
-  grep -nE "$STORE_TRIO_ASSIGN_RE" "$ROOT/nixos-modules/store.nix" >&2 || true
+if grep -qE "$STORE_TRIO_ASSIGN_RE" "$ROOT/packages/d2b-provider-volume-local/nix/store.nix"; then
+  grep -nE "$STORE_TRIO_ASSIGN_RE" "$ROOT/packages/d2b-provider-volume-local/nix/store.nix" >&2 || true
   log "  FAIL: store.nix assigns readOnly+default d2b.store.package/generations"
   TRIO_FAILED=1
 fi

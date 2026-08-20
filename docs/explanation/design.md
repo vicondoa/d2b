@@ -11,8 +11,8 @@ and the [`CHANGELOG.md`](../../CHANGELOG.md) - describe the *what*.
 The doc tracks the implementation as it exists today (pre-v0.1.0).
 Where a defense is incomplete, or where a design tradeoff has known
 holes, that is called out explicitly. Concrete file paths under
-`nixos-modules/` are cited so the reader can verify a claim against
-the code.
+`nixos-modules/` and the owning Provider packages are cited so the
+reader can verify a claim against the code.
 
 [d2b]: https://github.com/vicondoa/d2b
 [Diataxis]: https://diataxis.fr/
@@ -185,7 +185,7 @@ Five distinct boundaries:
    same env cannot exchange frames directly. The LAN bridge sets
    `Isolated = true` on every workload tap unless the operator opts
    into `d2b.envs.<env>.lan.allowEastWest = true`
-   ([`nixos-modules/network.nix`](../../nixos-modules/network.nix));
+   ([`packages/d2b-provider-network-local/nix/network.nix`](../../packages/d2b-provider-network-local/nix/network.nix));
    the only un-isolated port is `<env>-l1`, which belongs to the
    env's net VM. Across envs there is no shared bridge at all.
 5. **Net VM ↔ outside world.** Each env's net VM is the sole
@@ -193,7 +193,7 @@ Five distinct boundaries:
    nftables with a default-deny forward chain, a documented
    carve-out for USBIP to the host's uplink IP, and a
    `hostBlocklist` DROP rule
-   ([`nixos-modules/net.nix:140-156`](../../nixos-modules/net.nix))
+   ([`packages/d2b-provider-network-local/nix/net.nix:140-156`](../../packages/d2b-provider-network-local/nix/net.nix))
    that includes the host's primary LAN CIDRs.
 
 ### Threats addressed
@@ -235,7 +235,7 @@ nix store* below).
 a workload in env B. There is no shared bridge - `br-A-lan` and
 `br-B-lan` are distinct interfaces, each net VM is a separate
 sandbox, and CIDR overlap is rejected at eval time
-([`nixos-modules/network.nix:220-275`](../../nixos-modules/network.nix)
+([`packages/d2b-provider-network-local/nix/network.nix:220-275`](../../packages/d2b-provider-network-local/nix/network.nix)
 uses pure-Nix prefix arithmetic to detect e.g. `10.0.0.0/16 ⊃
 10.0.1.0/24`). The per-VM `/nix/store` farm means even if a
 workload chains a hypothetical microvm.nix host-side bug, it
@@ -255,7 +255,7 @@ defines a catch-all `10-eth-dhcp` systemd-networkd network for
 *workload* VMs; on a net VM that catch-all would sort
 lex-first against the per-MAC `10-uplink` / `10-lan`
 definitions, DHCP both NICs, and preempt the static config.
-[`nixos-modules/net.nix:55-57`](../../nixos-modules/net.nix)
+[`packages/d2b-provider-network-local/nix/net.nix:55-57`](../../packages/d2b-provider-network-local/nix/net.nix)
 neutralises this by `lib.mkForce`-ing the catch-all's match to
 a sentinel MAC (`00:00:00:00:00:00`) that no interface will
 ever expose. Workload VMs continue to inherit the base.nix
@@ -515,7 +515,7 @@ walks `config.d2b.vms`, validates the platform gate
 (MAC, IP, tap name, vsock CID), and emits a matching
 `microvm.vms.<vm>` entry layered with `./base.nix` plus the
 appropriate component modules. Net VMs are auto-declared the same
-way ([`nixos-modules/network.nix:659-678`](../../nixos-modules/network.nix)),
+way ([`packages/d2b-provider-network-local/nix/network.nix:659-678`](../../packages/d2b-provider-network-local/nix/network.nix)),
 just from `d2b.envs.<env>` metadata instead of an operator-
 supplied module.
 
@@ -658,7 +658,7 @@ Per-env sidecars (one set per declared env, not per VM):
 ### Per-env net VMs
 
 Each `d2b.envs.<env>` causes
-[`nixos-modules/network.nix`](../../nixos-modules/network.nix) to
+[`packages/d2b-provider-network-local/nix/network.nix`](../../packages/d2b-provider-network-local/nix/network.nix) to
 materialise:
 
 - Two host-side bridges (`br-<env>-up` /30 point-to-point host↔net,
@@ -667,7 +667,7 @@ materialise:
 - A headless net VM `sys-<env>-net`, declared as a regular
   `d2b.vms.<netName>` and therefore subject to the same
   wrapper / store / sidecar machinery as any other VM. The VM's
-  guest config comes from [`nixos-modules/net.nix`](../../nixos-modules/net.nix):
+  guest config comes from [`packages/d2b-provider-network-local/nix/net.nix`](../../packages/d2b-provider-network-local/nix/net.nix):
   nftables firewall, MASQUERADE on eth0, dnsmasq with DHCP
   host-reservations for every workload in the env, dropped IPv6.
 - Per-tap networkd rules that route taps named `<env>-u*` to the
@@ -699,7 +699,7 @@ the same. The sync helper sidesteps this by running inside a
 private mount namespace where `/nix/store` is lazily unmounted,
 turning it into a plain directory under the root mount and
 making the hardlink succeed
-([`nixos-modules/store.nix`](../../nixos-modules/store.nix)).
+([`packages/d2b-provider-volume-local/nix/store.nix`](../../packages/d2b-provider-volume-local/nix/store.nix)).
 
 The farm exposes itself to the guest via two virtio-fs shares:
 the read-only closure as `/nix/.ro-store`, and a per-generation
@@ -983,7 +983,7 @@ collides with the host's primary LAN, or a misconfigured
 `uplinkSubnet` produce silent routing-table conflicts that
 re-route traffic the operator believed isolated.
 
-**Control:** [`nixos-modules/network.nix:213-275`](../../nixos-modules/network.nix)
+**Control:** [`packages/d2b-provider-network-local/nix/network.nix:213-275`](../../packages/d2b-provider-network-local/nix/network.nix)
 runs pure-Nix IPv4 prefix arithmetic (via `lib.nix`'s
 `cidrOverlaps`) over every pair of `{env, kind, cidr}` tuples,
 including the host's `d2b.hostLanCidrs`. Any overlap aborts
@@ -1031,7 +1031,7 @@ A subtler bootstrap deadlock surfaces if the per-env uplink bridge
 Without `ConfigureWithoutCarrier = true`, no carrier → no route →
 preflight fails → net VM can't start → no carrier. v0.1.2 sets
 this flag on `br-<env>-up`
-([`nixos-modules/network.nix:330-352`](../../nixos-modules/network.nix));
+([`packages/d2b-provider-network-local/nix/network.nix:330-352`](../../packages/d2b-provider-network-local/nix/network.nix));
 the LAN bridge `br-<env>-lan` already had it. The route is
 installed without waiting for carrier; once the net VM attaches,
 traffic flows.
@@ -1042,7 +1042,7 @@ traffic flows.
 binding to `127.0.0.1:3241` would be one misconfigured firewall
 rule away from leaking USB device export to *every* env.
 
-**Control:** [`nixos-modules/network.nix:484-587`](../../nixos-modules/network.nix)
+**Control:** [`packages/d2b-provider-network-local/nix/network.nix:484-587`](../../packages/d2b-provider-network-local/nix/network.nix)
 declares one backend + one proxy per env, on distinct loopback
 ports (`3241 + alphabetical-index-of-env`). The proxy socket
 binds the env's `hostUplinkIp:3240` only. Three iptables rules
@@ -1063,7 +1063,7 @@ invariant; documented in cli.nix's exclusive-export block).
 preempting the static `10-uplink` / `10-lan` definitions, and the
 env's whole addressing plan dies silently.
 
-**Control:** [`nixos-modules/net.nix:55-57`](../../nixos-modules/net.nix)
+**Control:** [`packages/d2b-provider-network-local/nix/net.nix:55-57`](../../packages/d2b-provider-network-local/nix/net.nix)
 uses `lib.mkForce` to replace the catch-all's `matchConfig`
 with a sentinel MAC (`00:00:00:00:00:00`) that no interface ever
 exposes. systemd-networkd writes a harmless `.network` file that
@@ -1368,7 +1368,7 @@ future overlays compose), leaves the original intent visible
 same base), and produces an unambiguous "this matches nothing"
 signal at the systemd-networkd level. It is the minimum
 mechanical change that fixes the lex-sort preemption
-([`nixos-modules/net.nix:47-57`](../../nixos-modules/net.nix)).
+([`packages/d2b-provider-network-local/nix/net.nix:47-57`](../../packages/d2b-provider-network-local/nix/net.nix)).
 
 ### Why doesn't `nixos-rebuild switch` restart VMs?
 
@@ -1638,7 +1638,7 @@ portability work splits that into three layers:
 
 ### Preserved invariants
 
-- Per-VM `/nix/store` hardlink farm (`nixos-modules/store.nix`)
+- Per-VM `/nix/store` hardlink farm (`packages/d2b-provider-volume-local/nix/store.nix`)
   remains the store-isolation primitive.
 - swtpm state under `/var/lib/d2b/vms/<vm>/swtpm/` is still
   treated as TPM identity and is never wiped casually; the v0.4.0

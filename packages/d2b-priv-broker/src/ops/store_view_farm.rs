@@ -12,7 +12,7 @@
 //! a direct in-process `link(2)` from the long-lived privileged broker
 //! fails with `EXDEV` on exactly those hosts.
 //!
-//! The legacy systemd-activation builder (`nixos-modules/store.nix`)
+//! The legacy systemd-activation builder (`packages/d2b-provider-volume-local/nix/store.nix`)
 //! already solved this: re-exec under a private mount namespace and
 //! lazily `umount /nix/store`, after which `/nix/store` is just a
 //! directory on the root mount and the hardlinks succeed. This module

@@ -1,3 +1,2 @@
-Move network diagnostics, storage lifecycle checks, and activation handoff
-policy under their owning Provider crates while keeping daemon and broker
-effect adapters unchanged.
+Complete U9 ownership relocation for network, Volume, store-view, storage
+contract, and activation planning/Nix surfaces while retaining broker effects.

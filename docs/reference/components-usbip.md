@@ -2,7 +2,7 @@
 
 > Reference for the `usbip` component module (YubiKey passthrough).
 > Source: [`nixos-modules/components/usbip.nix`](../../nixos-modules/components/usbip.nix)
-> Host-side wiring: [`nixos-modules/network.nix`](../../nixos-modules/network.nix), [`nixos-modules/host.nix`](../../nixos-modules/host.nix)
+> Host-side wiring: [`packages/d2b-provider-network-local/nix/network.nix`](../../packages/d2b-provider-network-local/nix/network.nix), [`nixos-modules/host.nix`](../../nixos-modules/host.nix)
 > CLI integration: [`packages/d2b/src/device`](../../packages/d2b/src) (`d2b device usb attach|detach|probe`). There is no bash helper for this surface.
 
 ## What this component does
@@ -84,7 +84,7 @@ config by `host.nix` (`++ lib.optional vm'.usbip.yubikey
 
 ## Host-side resources created
 
-Per opted-in env (declared in [`network.nix`](../../nixos-modules/network.nix); materialized only when `d2b.site.yubikey.enable = true` and at least one enabled VM in that env sets `usbip.yubikey = true`):
+Per opted-in env (declared in [`network.nix`](../../packages/d2b-provider-network-local/nix/network.nix); materialized only when `d2b.site.yubikey.enable = true` and at least one enabled VM in that env sets `usbip.yubikey = true`):
 
 > There are no `d2b-sys-<env>-usbipd-{backend,proxy}` systemd
 > units. The broker spawns backend/proxy runners under
