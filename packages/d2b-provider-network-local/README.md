@@ -93,6 +93,9 @@ or interface identity. This layer owns no durable Provider state.
 
 ## Build and test
 
+The production Nix materialisation modules live under `nix/`; the root
+`nixos-modules/` paths are compatibility shims only.
+
 ```bash
 cargo check -p d2b-provider-network-local
 cargo test -p d2b-provider-network-local

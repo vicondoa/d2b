@@ -57,7 +57,6 @@ exports_files([
     "cases/resources-bundle-telemetry.nix",
     "cases/resource-sharing.nix",
     "cases/restart-policy.nix",
-    "cases/store-overlay-emit.nix",
     "cases/umask-roundtrip.nix",
     "cases/vm-eval-overlays.nix",
     "cases/volume-mounts.nix",

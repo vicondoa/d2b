@@ -132,6 +132,9 @@ a bootstrap storage cycle.
 
 ## Build and test
 
+The production Volume, store-view, and storage-contract Nix emitters live
+under `nix/`; root module paths are compatibility shims only.
+
 ```bash
 cargo test -p d2b-provider-volume-local
 cargo clippy -p d2b-provider-volume-local --all-targets

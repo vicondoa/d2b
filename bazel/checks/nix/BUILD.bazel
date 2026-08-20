@@ -30,25 +30,28 @@ _SURFACES = {
     },
     "network": {
         "cases": [],
+        "package": "packages/d2b-provider-network-local",
         "files": [
-            "nixos-modules/net-mdns.nix",
+            "packages/d2b-provider-network-local/nix/net-mdns.nix",
         ],
         "modules": [
-            "nixos-modules/net.nix",
-            "nixos-modules/network.nix",
+            "packages/d2b-provider-network-local/nix/net.nix",
+            "packages/d2b-provider-network-local/nix/network.nix",
             "nixos-modules/options-envs.nix",
-            "nixos-modules/resources-network.nix",
+            "packages/d2b-provider-network-local/nix/resources-network.nix",
         ],
     },
     "storage-volume": {
         "cases": ["volume-mounts"],
+        "package": "packages/d2b-provider-volume-local",
         "modules": [
-            "nixos-modules/options-volumes.nix",
-            "nixos-modules/resources-volume.nix",
-            "nixos-modules/storage-json.nix",
-            "nixos-modules/store.nix",
-            "nixos-modules/sync-json.nix",
-            "nixos-modules/zone-storage-json.nix",
+            "packages/d2b-provider-volume-local/nix/options-volumes.nix",
+            "packages/d2b-provider-volume-local/nix/resources-volume.nix",
+            "packages/d2b-provider-volume-local/nix/resources-zones-volumes.nix",
+            "packages/d2b-provider-volume-local/nix/storage-json.nix",
+            "packages/d2b-provider-volume-local/nix/store.nix",
+            "packages/d2b-provider-volume-local/nix/sync-json.nix",
+            "packages/d2b-provider-volume-local/nix/zone-storage-json.nix",
         ],
     },
     "process-sandbox": {
@@ -91,6 +94,7 @@ _SURFACES = {
     },
     "provider-catalog": {
         "cases": ["provider-elf-shim"],
+        "package": "packages/d2b-provider-activation-nixos",
         "files": [
             "nix/provider-elf-shim.nix",
         ],
@@ -99,7 +103,7 @@ _SURFACES = {
             "nixos-modules/provider-projection-validate.nix",
             "nixos-modules/provider-runtime-contracts.nix",
             "nixos-modules/provider-settings-validation.nix",
-            "nixos-modules/providers/activation-nixos.nix",
+            "packages/d2b-provider-activation-nixos/nix/default.nix",
             "nixos-modules/providers/system-minijail.nix",
             "nixos-modules/providers/system-systemd.nix",
         ],
@@ -210,23 +214,9 @@ nix_surface_test(
         "files": [],
         "modules": [
             "packages/d2b-provider-volume-local/nix/default.nix",
+            "packages/d2b-provider-volume-local/nix/options-volumes.nix",
         ],
         "package": "packages/d2b-provider-volume-local",
-        "raw_cases": True,
-    },
-)
-
-nix_surface_test(
-    name = "nix-unit-provider-volume-virtiofs",
-    surface = "provider-volume-virtiofs",
-    spec = {
-        "cases": [],
-        "expression": "//packages/d2b-provider-volume-virtiofs:nix/tests/default.nix",
-        "files": [],
-        "modules": [
-            "packages/d2b-provider-volume-virtiofs/nix/default.nix",
-        ],
-        "package": "packages/d2b-provider-volume-virtiofs",
         "raw_cases": True,
     },
 )

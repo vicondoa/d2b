@@ -12,13 +12,13 @@ in
 {
   cases = {
     "provider-activation-nixos/modules-evaluate" = {
-      expr = builtins.deepSeq evaluated.config.d2bActivationNixos true;
+      expr = builtins.deepSeq evaluated.config.d2b.providers.activationNixos true;
       expected = true;
       propagateError = true;
     };
 
     "activation-nixos/default-retention-is-bounded" = {
-      expr = evaluated.config.d2bActivationNixos.retainedGenerations;
+      expr = evaluated.config.d2b.providers.activationNixos.retainedGenerations;
       expected = 3;
     };
   };

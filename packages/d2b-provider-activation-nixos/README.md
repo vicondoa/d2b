@@ -61,6 +61,9 @@ Volume.
 
 ## Build and test
 
+The activation Provider Nix module is `nix/default.nix`; the daemon and
+broker retain only effect adapters and helper execution.
+
 ```bash
 cargo check -p d2b-provider-activation-nixos
 cargo test -p d2b-provider-activation-nixos

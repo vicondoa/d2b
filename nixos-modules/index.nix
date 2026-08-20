@@ -921,12 +921,12 @@ in
     ./zone-resources.nix
     ./bundle-zones.nix
     ./resources-zones-processes.nix
-    ./resources-zones-volumes.nix
+    ../packages/d2b-provider-volume-local/nix/resources-zones-volumes.nix
     ./resources-device.nix
-    ./resources-volume.nix
+    ../packages/d2b-provider-volume-local/nix/resources-volume.nix
 
     # Region: Network ResourceType emitter (ADR046-network-004).
-    ./resources-network.nix
+    ../packages/d2b-provider-network-local/nix/resources-network.nix
 
     # Region: generic schema-derived resource options and their activation
     # cleanup (ADR046-credential-007).

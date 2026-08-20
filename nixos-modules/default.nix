@@ -35,21 +35,21 @@ in
   imports = [
     ./options.nix
     ./host-generation-rebuild-ref.nix
-    ./options-volumes.nix
+    ../packages/d2b-provider-volume-local/nix/options-volumes.nix
     ./resources-zone-control.nix
     ./resource-compiler.nix
     ./bundle-artifacts.nix
     ./options-observability.nix
     ./provider-catalog.nix
     ./provider-runtime-contracts.nix
-    ./providers/activation-nixos.nix
+    ../packages/d2b-provider-activation-nixos/nix/default.nix
     ./providers/system-minijail.nix
     ./providers/system-systemd.nix
     ./provider-projection-validate.nix
     ./options-ownership-matrix.nix
     ./index.nix
     ./assertions.nix
-    ./network.nix
+    ../packages/d2b-provider-network-local/nix/network.nix
     ./gateway-vm.nix
     (import ./host.nix { inherit inputs; })
     ./unsafe-local-helper.nix
@@ -70,15 +70,15 @@ in
     ./observability-vm.nix
     ./clipboard.nix
     ./notifications.nix
-    ./store.nix
+    ../packages/d2b-provider-volume-local/nix/store.nix
     ./manifest.nix
     ./bundle.nix
     ./guest-control-host.nix
     ./host-json.nix
     ./processes-json.nix
-    ./storage-json.nix
-    ./zone-storage-json.nix
-    ./sync-json.nix
+    ../packages/d2b-provider-volume-local/nix/storage-json.nix
+    ../packages/d2b-provider-volume-local/nix/zone-storage-json.nix
+    ../packages/d2b-provider-volume-local/nix/sync-json.nix
     ./allocator-json.nix
     ./realm-controller-config-json.nix
     ./realm-identity-config-json.nix

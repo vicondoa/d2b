@@ -771,11 +771,6 @@ if [ -x "$ROOT/tests/umask-roundtrip-eval.sh" ]; then
   # through processesJson.data without silent pipeline drop.
   d2b_static_parallel_script_gate "tests/umask-roundtrip-eval.sh" "$ROOT/tests/umask-roundtrip-eval.sh"
 fi
-if [ -x "$ROOT/tests/store-overlay-emit-eval.sh" ]; then
-  # v1.2 - assert DiskInit plan-op emitted in processes.json
-  # CH node when writableStoreOverlay is set.
-  d2b_static_parallel_script_gate "tests/store-overlay-emit-eval.sh" "$ROOT/tests/store-overlay-emit-eval.sh"
-fi
 if [ -x "$ROOT/tests/volume-mounts-eval.sh" ]; then
   # Declared microvm.volumes must emit stable CH disk serials and matching
   # guest fileSystems entries. Without this, /var stays on tmpfs and

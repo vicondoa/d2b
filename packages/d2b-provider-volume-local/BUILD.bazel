@@ -5,8 +5,15 @@ load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test", "rust_doc_test")
 exports_files(
     [
         "BUILD.bazel",
+        "nix/options-volumes.nix",
+        "nix/resources-volume.nix",
+        "nix/resources-zones-volumes.nix",
+        "nix/store.nix",
+        "nix/storage-json.nix",
+        "nix/sync-json.nix",
         "nix/default.nix",
         "nix/tests/default.nix",
+        "nix/zone-storage-json.nix",
     ],
     visibility = ["//visibility:public"],
 )

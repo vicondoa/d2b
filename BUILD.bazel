@@ -184,7 +184,6 @@ exports_files([
     "nixos-modules/provider-projection-validate.nix",
     "nixos-modules/provider-runtime-contracts.nix",
     "nixos-modules/provider-settings-validation.nix",
-    "nixos-modules/providers/activation-nixos.nix",
     "nixos-modules/providers/clipboard-wayland.nix",
     "nixos-modules/providers/display-wayland.nix",
     "nixos-modules/providers/notification-desktop.nix",
