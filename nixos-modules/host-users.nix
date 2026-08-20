@@ -25,7 +25,8 @@ let
       (lib.filter (realm: builtins.elem user realm.allowedUsers) hostLocalRealms);
   hostAccessGroupsForUser = user:
     lib.unique (
-      lib.optional (builtins.elem user d2bLifecycleUsers) "d2b"
+      lib.optional (builtins.elem user cfg.site.launcherUsers) "d2b"
+      ++ lib.optional (builtins.elem user cfg.site.adminUsers) "d2b"
       ++ realmSocketGroupsForUser user
     );
   waylandProxyVms =

@@ -752,9 +752,12 @@ fn invalid(field: &str) -> TypedError {
 }
 
 fn stale_preview(operation: &str) -> TypedError {
-    TypedError::WireInvalidFrame {
-        detail: format!("{operation} preview digest is stale"),
-    }
+    let detail = match operation {
+        "cutover" => "cutover preview digest is stale".to_owned(),
+        "reset" => "reset preview digest is stale".to_owned(),
+        _ => format!("{operation} preview digest is stale"),
+    };
+    TypedError::WireInvalidFrame { detail }
 }
 
 fn authorize_bound_operator(peer_uid: u32, operator_id: &OperatorId) -> Result<(), TypedError> {

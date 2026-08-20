@@ -4139,7 +4139,7 @@ _d2b() {
             return 0
             ;;
         d2b__subcmd__host__subcmd__cutover__subcmd__apply)
-            opts="-h --operation-id --candidate-id --revision-plan-id --preview-digest --recovery-digest --operator-id --consent-digest --consent-file --destructive-consent-digest --destructive-consent-file --destroy-durable-volumes --recovery-attestation-file --handoff-file --finalization-file --verification-file --host-digest --fresh-consent-digest --reason --zone --json --human --deadline --no-deadline --help"
+            opts="-h --operation-id --candidate-id --revision-plan-id --system-artifact-id --source-system-artifact-id --preview-digest --recovery-digest --operator-id --consent-digest --consent-file --destructive-consent-digest --destructive-consent-file --destroy-durable-volumes --recovery-attestation-file --handoff-file --finalization-file --verification-file --host-digest --fresh-consent-digest --reason --zone --json --human --deadline --no-deadline --help"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 4 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
                 return 0
@@ -4154,6 +4154,14 @@ _d2b() {
                     return 0
                     ;;
                 --revision-plan-id)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --system-artifact-id)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --source-system-artifact-id)
                     COMPREPLY=($(compgen -f "${cur}"))
                     return 0
                     ;;
@@ -4229,7 +4237,7 @@ _d2b() {
             return 0
             ;;
         d2b__subcmd__host__subcmd__cutover__subcmd__doctor)
-            opts="-h --operation-id --candidate-id --revision-plan-id --preview-digest --recovery-digest --operator-id --consent-digest --consent-file --destructive-consent-digest --destructive-consent-file --destroy-durable-volumes --recovery-attestation-file --handoff-file --finalization-file --verification-file --host-digest --fresh-consent-digest --reason --zone --json --human --deadline --no-deadline --help"
+            opts="-h --operation-id --candidate-id --revision-plan-id --system-artifact-id --source-system-artifact-id --preview-digest --recovery-digest --operator-id --consent-digest --consent-file --destructive-consent-digest --destructive-consent-file --destroy-durable-volumes --recovery-attestation-file --handoff-file --finalization-file --verification-file --host-digest --fresh-consent-digest --reason --zone --json --human --deadline --no-deadline --help"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 4 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
                 return 0
@@ -4244,6 +4252,14 @@ _d2b() {
                     return 0
                     ;;
                 --revision-plan-id)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --system-artifact-id)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --source-system-artifact-id)
                     COMPREPLY=($(compgen -f "${cur}"))
                     return 0
                     ;;
@@ -4319,7 +4335,7 @@ _d2b() {
             return 0
             ;;
         d2b__subcmd__host__subcmd__cutover__subcmd__finalize)
-            opts="-h --operation-id --candidate-id --revision-plan-id --preview-digest --recovery-digest --operator-id --consent-digest --consent-file --destructive-consent-digest --destructive-consent-file --destroy-durable-volumes --recovery-attestation-file --handoff-file --finalization-file --verification-file --host-digest --fresh-consent-digest --reason --zone --json --human --deadline --no-deadline --help"
+            opts="-h --operation-id --candidate-id --revision-plan-id --system-artifact-id --source-system-artifact-id --preview-digest --recovery-digest --operator-id --consent-digest --consent-file --destructive-consent-digest --destructive-consent-file --destroy-durable-volumes --recovery-attestation-file --handoff-file --finalization-file --verification-file --host-digest --fresh-consent-digest --reason --zone --json --human --deadline --no-deadline --help"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 4 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
                 return 0
@@ -4334,6 +4350,14 @@ _d2b() {
                     return 0
                     ;;
                 --revision-plan-id)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --system-artifact-id)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --source-system-artifact-id)
                     COMPREPLY=($(compgen -f "${cur}"))
                     return 0
                     ;;
@@ -4409,7 +4433,7 @@ _d2b() {
             return 0
             ;;
         d2b__subcmd__host__subcmd__cutover__subcmd__hold)
-            opts="-h --operation-id --candidate-id --revision-plan-id --preview-digest --recovery-digest --operator-id --consent-digest --consent-file --destructive-consent-digest --destructive-consent-file --destroy-durable-volumes --recovery-attestation-file --handoff-file --finalization-file --verification-file --host-digest --fresh-consent-digest --reason --zone --json --human --deadline --no-deadline --help"
+            opts="-h --operation-id --candidate-id --revision-plan-id --system-artifact-id --source-system-artifact-id --preview-digest --recovery-digest --operator-id --consent-digest --consent-file --destructive-consent-digest --destructive-consent-file --destroy-durable-volumes --recovery-attestation-file --handoff-file --finalization-file --verification-file --host-digest --fresh-consent-digest --reason --zone --json --human --deadline --no-deadline --help"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 4 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
                 return 0
@@ -4424,6 +4448,14 @@ _d2b() {
                     return 0
                     ;;
                 --revision-plan-id)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --system-artifact-id)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --source-system-artifact-id)
                     COMPREPLY=($(compgen -f "${cur}"))
                     return 0
                     ;;
@@ -4499,7 +4531,7 @@ _d2b() {
             return 0
             ;;
         d2b__subcmd__host__subcmd__cutover__subcmd__preview)
-            opts="-h --operation-id --candidate-id --revision-plan-id --preview-digest --recovery-digest --operator-id --consent-digest --consent-file --destructive-consent-digest --destructive-consent-file --destroy-durable-volumes --recovery-attestation-file --handoff-file --finalization-file --verification-file --host-digest --fresh-consent-digest --reason --zone --json --human --deadline --no-deadline --help"
+            opts="-h --operation-id --candidate-id --revision-plan-id --system-artifact-id --source-system-artifact-id --preview-digest --recovery-digest --operator-id --consent-digest --consent-file --destructive-consent-digest --destructive-consent-file --destroy-durable-volumes --recovery-attestation-file --handoff-file --finalization-file --verification-file --host-digest --fresh-consent-digest --reason --zone --json --human --deadline --no-deadline --help"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 4 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
                 return 0
@@ -4514,6 +4546,14 @@ _d2b() {
                     return 0
                     ;;
                 --revision-plan-id)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --system-artifact-id)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --source-system-artifact-id)
                     COMPREPLY=($(compgen -f "${cur}"))
                     return 0
                     ;;
@@ -4651,7 +4691,7 @@ _d2b() {
             return 0
             ;;
         d2b__subcmd__host__subcmd__cutover__subcmd__resume)
-            opts="-h --operation-id --candidate-id --revision-plan-id --preview-digest --recovery-digest --operator-id --consent-digest --consent-file --destructive-consent-digest --destructive-consent-file --destroy-durable-volumes --recovery-attestation-file --handoff-file --finalization-file --verification-file --host-digest --fresh-consent-digest --reason --zone --json --human --deadline --no-deadline --help"
+            opts="-h --operation-id --candidate-id --revision-plan-id --system-artifact-id --source-system-artifact-id --preview-digest --recovery-digest --operator-id --consent-digest --consent-file --destructive-consent-digest --destructive-consent-file --destroy-durable-volumes --recovery-attestation-file --handoff-file --finalization-file --verification-file --host-digest --fresh-consent-digest --reason --zone --json --human --deadline --no-deadline --help"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 4 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
                 return 0
@@ -4666,6 +4706,14 @@ _d2b() {
                     return 0
                     ;;
                 --revision-plan-id)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --system-artifact-id)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --source-system-artifact-id)
                     COMPREPLY=($(compgen -f "${cur}"))
                     return 0
                     ;;
@@ -4741,7 +4789,7 @@ _d2b() {
             return 0
             ;;
         d2b__subcmd__host__subcmd__cutover__subcmd__rollback)
-            opts="-h --operation-id --candidate-id --revision-plan-id --preview-digest --recovery-digest --operator-id --consent-digest --consent-file --destructive-consent-digest --destructive-consent-file --destroy-durable-volumes --recovery-attestation-file --handoff-file --finalization-file --verification-file --host-digest --fresh-consent-digest --reason --zone --json --human --deadline --no-deadline --help"
+            opts="-h --operation-id --candidate-id --revision-plan-id --system-artifact-id --source-system-artifact-id --preview-digest --recovery-digest --operator-id --consent-digest --consent-file --destructive-consent-digest --destructive-consent-file --destroy-durable-volumes --recovery-attestation-file --handoff-file --finalization-file --verification-file --host-digest --fresh-consent-digest --reason --zone --json --human --deadline --no-deadline --help"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 4 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
                 return 0
@@ -4756,6 +4804,14 @@ _d2b() {
                     return 0
                     ;;
                 --revision-plan-id)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --system-artifact-id)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --source-system-artifact-id)
                     COMPREPLY=($(compgen -f "${cur}"))
                     return 0
                     ;;
@@ -4831,7 +4887,7 @@ _d2b() {
             return 0
             ;;
         d2b__subcmd__host__subcmd__cutover__subcmd__status)
-            opts="-h --operation-id --candidate-id --revision-plan-id --preview-digest --recovery-digest --operator-id --consent-digest --consent-file --destructive-consent-digest --destructive-consent-file --destroy-durable-volumes --recovery-attestation-file --handoff-file --finalization-file --verification-file --host-digest --fresh-consent-digest --reason --zone --json --human --deadline --no-deadline --help"
+            opts="-h --operation-id --candidate-id --revision-plan-id --system-artifact-id --source-system-artifact-id --preview-digest --recovery-digest --operator-id --consent-digest --consent-file --destructive-consent-digest --destructive-consent-file --destroy-durable-volumes --recovery-attestation-file --handoff-file --finalization-file --verification-file --host-digest --fresh-consent-digest --reason --zone --json --human --deadline --no-deadline --help"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 4 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
                 return 0
@@ -4846,6 +4902,14 @@ _d2b() {
                     return 0
                     ;;
                 --revision-plan-id)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --system-artifact-id)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --source-system-artifact-id)
                     COMPREPLY=($(compgen -f "${cur}"))
                     return 0
                     ;;
@@ -4921,7 +4985,7 @@ _d2b() {
             return 0
             ;;
         d2b__subcmd__host__subcmd__cutover__subcmd__verify)
-            opts="-h --operation-id --candidate-id --revision-plan-id --preview-digest --recovery-digest --operator-id --consent-digest --consent-file --destructive-consent-digest --destructive-consent-file --destroy-durable-volumes --recovery-attestation-file --handoff-file --finalization-file --verification-file --host-digest --fresh-consent-digest --reason --zone --json --human --deadline --no-deadline --help"
+            opts="-h --operation-id --candidate-id --revision-plan-id --system-artifact-id --source-system-artifact-id --preview-digest --recovery-digest --operator-id --consent-digest --consent-file --destructive-consent-digest --destructive-consent-file --destroy-durable-volumes --recovery-attestation-file --handoff-file --finalization-file --verification-file --host-digest --fresh-consent-digest --reason --zone --json --human --deadline --no-deadline --help"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 4 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
                 return 0
@@ -4936,6 +5000,14 @@ _d2b() {
                     return 0
                     ;;
                 --revision-plan-id)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --system-artifact-id)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --source-system-artifact-id)
                     COMPREPLY=($(compgen -f "${cur}"))
                     return 0
                     ;;

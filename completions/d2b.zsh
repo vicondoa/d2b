@@ -352,6 +352,8 @@ _arguments "${_arguments_options[@]}" : \
 '--operation-id=[]:OPERATION_ID:_default' \
 '--candidate-id=[]:CANDIDATE_ID:_default' \
 '--revision-plan-id=[]:REVISION_PLAN_ID:_default' \
+'--system-artifact-id=[]:SYSTEM_ARTIFACT_ID:_default' \
+'--source-system-artifact-id=[]:SOURCE_SYSTEM_ARTIFACT_ID:_default' \
 '--preview-digest=[]:PREVIEW_DIGEST:_default' \
 '--recovery-digest=[]:RECOVERY_DIGEST:_default' \
 '--operator-id=[]:OPERATOR_ID:_default' \
@@ -381,6 +383,8 @@ _arguments "${_arguments_options[@]}" : \
 '--operation-id=[]:OPERATION_ID:_default' \
 '--candidate-id=[]:CANDIDATE_ID:_default' \
 '--revision-plan-id=[]:REVISION_PLAN_ID:_default' \
+'--system-artifact-id=[]:SYSTEM_ARTIFACT_ID:_default' \
+'--source-system-artifact-id=[]:SOURCE_SYSTEM_ARTIFACT_ID:_default' \
 '--preview-digest=[]:PREVIEW_DIGEST:_default' \
 '--recovery-digest=[]:RECOVERY_DIGEST:_default' \
 '--operator-id=[]:OPERATOR_ID:_default' \
@@ -410,6 +414,8 @@ _arguments "${_arguments_options[@]}" : \
 '--operation-id=[]:OPERATION_ID:_default' \
 '--candidate-id=[]:CANDIDATE_ID:_default' \
 '--revision-plan-id=[]:REVISION_PLAN_ID:_default' \
+'--system-artifact-id=[]:SYSTEM_ARTIFACT_ID:_default' \
+'--source-system-artifact-id=[]:SOURCE_SYSTEM_ARTIFACT_ID:_default' \
 '--preview-digest=[]:PREVIEW_DIGEST:_default' \
 '--recovery-digest=[]:RECOVERY_DIGEST:_default' \
 '--operator-id=[]:OPERATOR_ID:_default' \
@@ -439,6 +445,8 @@ _arguments "${_arguments_options[@]}" : \
 '--operation-id=[]:OPERATION_ID:_default' \
 '--candidate-id=[]:CANDIDATE_ID:_default' \
 '--revision-plan-id=[]:REVISION_PLAN_ID:_default' \
+'--system-artifact-id=[]:SYSTEM_ARTIFACT_ID:_default' \
+'--source-system-artifact-id=[]:SOURCE_SYSTEM_ARTIFACT_ID:_default' \
 '--preview-digest=[]:PREVIEW_DIGEST:_default' \
 '--recovery-digest=[]:RECOVERY_DIGEST:_default' \
 '--operator-id=[]:OPERATOR_ID:_default' \
@@ -468,6 +476,8 @@ _arguments "${_arguments_options[@]}" : \
 '--operation-id=[]:OPERATION_ID:_default' \
 '--candidate-id=[]:CANDIDATE_ID:_default' \
 '--revision-plan-id=[]:REVISION_PLAN_ID:_default' \
+'--system-artifact-id=[]:SYSTEM_ARTIFACT_ID:_default' \
+'--source-system-artifact-id=[]:SOURCE_SYSTEM_ARTIFACT_ID:_default' \
 '--preview-digest=[]:PREVIEW_DIGEST:_default' \
 '--recovery-digest=[]:RECOVERY_DIGEST:_default' \
 '--operator-id=[]:OPERATOR_ID:_default' \
@@ -497,6 +507,8 @@ _arguments "${_arguments_options[@]}" : \
 '--operation-id=[]:OPERATION_ID:_default' \
 '--candidate-id=[]:CANDIDATE_ID:_default' \
 '--revision-plan-id=[]:REVISION_PLAN_ID:_default' \
+'--system-artifact-id=[]:SYSTEM_ARTIFACT_ID:_default' \
+'--source-system-artifact-id=[]:SOURCE_SYSTEM_ARTIFACT_ID:_default' \
 '--preview-digest=[]:PREVIEW_DIGEST:_default' \
 '--recovery-digest=[]:RECOVERY_DIGEST:_default' \
 '--operator-id=[]:OPERATOR_ID:_default' \
@@ -526,6 +538,8 @@ _arguments "${_arguments_options[@]}" : \
 '--operation-id=[]:OPERATION_ID:_default' \
 '--candidate-id=[]:CANDIDATE_ID:_default' \
 '--revision-plan-id=[]:REVISION_PLAN_ID:_default' \
+'--system-artifact-id=[]:SYSTEM_ARTIFACT_ID:_default' \
+'--source-system-artifact-id=[]:SOURCE_SYSTEM_ARTIFACT_ID:_default' \
 '--preview-digest=[]:PREVIEW_DIGEST:_default' \
 '--recovery-digest=[]:RECOVERY_DIGEST:_default' \
 '--operator-id=[]:OPERATOR_ID:_default' \
@@ -555,6 +569,8 @@ _arguments "${_arguments_options[@]}" : \
 '--operation-id=[]:OPERATION_ID:_default' \
 '--candidate-id=[]:CANDIDATE_ID:_default' \
 '--revision-plan-id=[]:REVISION_PLAN_ID:_default' \
+'--system-artifact-id=[]:SYSTEM_ARTIFACT_ID:_default' \
+'--source-system-artifact-id=[]:SOURCE_SYSTEM_ARTIFACT_ID:_default' \
 '--preview-digest=[]:PREVIEW_DIGEST:_default' \
 '--recovery-digest=[]:RECOVERY_DIGEST:_default' \
 '--operator-id=[]:OPERATOR_ID:_default' \
@@ -584,6 +600,8 @@ _arguments "${_arguments_options[@]}" : \
 '--operation-id=[]:OPERATION_ID:_default' \
 '--candidate-id=[]:CANDIDATE_ID:_default' \
 '--revision-plan-id=[]:REVISION_PLAN_ID:_default' \
+'--system-artifact-id=[]:SYSTEM_ARTIFACT_ID:_default' \
+'--source-system-artifact-id=[]:SOURCE_SYSTEM_ARTIFACT_ID:_default' \
 '--preview-digest=[]:PREVIEW_DIGEST:_default' \
 '--recovery-digest=[]:RECOVERY_DIGEST:_default' \
 '--operator-id=[]:OPERATOR_ID:_default' \

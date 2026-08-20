@@ -18,3 +18,7 @@
   exited runner does not permanently block a retry.
 - Permit dead-runner capability rotation during journal adoption and have
   repeated apply commands resume through an already admitted runner.
+- Refresh CI-owned cutover completions and daemon API artifacts, restore the
+  cutover policy markers and broker disposition rows, preserve admin and
+  launcher lifecycle-group membership, and declare the direct Bazel contract
+  dependency for the vsock framing test.
