@@ -821,6 +821,12 @@ fn ensure_owned_directory(path: &Path, mode: u32) -> io::Result<()> {
                         "runner directory has foreign ownership",
                     ));
                 }
+                if current == path && metadata.permissions().mode() & 0o777 != mode {
+                    return Err(io::Error::new(
+                        io::ErrorKind::PermissionDenied,
+                        "runner directory has an unexpected mode",
+                    ));
+                }
                 break;
             }
             Err(error) if error.kind() == io::ErrorKind::NotFound => {
@@ -842,46 +848,116 @@ fn ensure_owned_directory(path: &Path, mode: u32) -> io::Result<()> {
     Ok(())
 }
 
+fn validate_runtime_anchor(path: &Path) -> io::Result<()> {
+    let metadata = fs::symlink_metadata(path)?;
+    if !metadata.is_dir() || metadata.uid() != 0 {
+        return Err(io::Error::new(
+            io::ErrorKind::PermissionDenied,
+            "runtime socket anchor has foreign ownership",
+        ));
+    }
+    Ok(())
+}
+
+fn validate_runtime_directory(path: &Path, gid: u32) -> io::Result<()> {
+    let metadata = fs::symlink_metadata(path)?;
+    if !metadata.is_dir()
+        || metadata.uid() != 0
+        || metadata.gid() != gid
+        || metadata.permissions().mode() & 0o777 != 0o710
+    {
+        return Err(io::Error::new(
+            io::ErrorKind::PermissionDenied,
+            "runtime socket directory has foreign ownership or mode",
+        ));
+    }
+    Ok(())
+}
+
+fn ensure_runtime_directory(path: &Path, gid: u32) -> io::Result<()> {
+    match fs::symlink_metadata(path) {
+        Ok(_) => validate_runtime_directory(path, gid),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => {
+            let parent = path.parent().ok_or_else(|| {
+                io::Error::new(
+                    io::ErrorKind::PermissionDenied,
+                    "runtime socket directory has no parent",
+                )
+            })?;
+            validate_runtime_anchor(parent)?;
+            fs::create_dir(path)?;
+            fs::set_permissions(path, fs::Permissions::from_mode(0o710))?;
+            chown(path, Some(Uid::from_raw(0)), Some(Gid::from_raw(gid)))
+                .map_err(|error| io::Error::from_raw_os_error(error as i32))?;
+            validate_runtime_directory(path, gid)
+        }
+        Err(error) => Err(error),
+    }
+}
+
+fn ensure_runtime_socket_directories(paths: &RunnerPaths, gid: u32) -> io::Result<()> {
+    let shared = paths.socket_dir().parent().ok_or_else(|| {
+        io::Error::new(
+            io::ErrorKind::PermissionDenied,
+            "runtime socket directory has no shared parent",
+        )
+    })?;
+    ensure_runtime_directory(shared, gid)?;
+    ensure_runtime_directory(paths.socket_dir(), gid)
+}
+
+fn validate_socket_path(path: &Path, lifecycle_gid: Option<u32>) -> io::Result<()> {
+    let metadata = fs::symlink_metadata(path)?;
+    let expected_uid = if lifecycle_gid.is_some() {
+        0
+    } else {
+        geteuid().as_raw()
+    };
+    let expected_mode = if lifecycle_gid.is_some() {
+        0o660
+    } else {
+        0o600
+    };
+    if !metadata.file_type().is_socket()
+        || metadata.uid() != expected_uid
+        || lifecycle_gid.is_some_and(|gid| metadata.gid() != gid)
+        || metadata.permissions().mode() & 0o777 != expected_mode
+    {
+        return Err(io::Error::new(
+            io::ErrorKind::PermissionDenied,
+            "runner socket has foreign ownership or mode",
+        ));
+    }
+    Ok(())
+}
+
 impl RunnerSocket {
     /// Bind one owner-authenticated socket. Existing foreign paths fail closed.
     pub fn bind(paths: &RunnerPaths, capability: ConsumedCapability) -> io::Result<Self> {
         paths.ensure_directory()?;
-        ensure_owned_directory(paths.socket_dir(), 0o700)?;
-        let socket_dir_metadata = fs::symlink_metadata(paths.socket_dir())?;
-        if !socket_dir_metadata.is_dir() || socket_dir_metadata.uid() != geteuid().as_raw() {
-            return Err(io::Error::new(
-                io::ErrorKind::PermissionDenied,
-                "runner socket directory has foreign ownership",
-            ));
+        let lifecycle_gid = capability.lifecycle_gid();
+        if let Some(gid) = lifecycle_gid {
+            ensure_runtime_socket_directories(paths, gid)?;
+        } else {
+            ensure_owned_directory(paths.socket_dir(), 0o700)?;
         }
 
-        if let Some(gid) = capability.lifecycle_gid() {
-            fs::set_permissions(paths.socket_dir(), fs::Permissions::from_mode(0o710))?;
-            chown(
-                paths.socket_dir(),
-                Some(Uid::from_raw(0)),
-                Some(Gid::from_raw(gid)),
-            )
-            .map_err(|error| io::Error::from_raw_os_error(error as i32))?;
-        }
-        if paths.socket.exists() {
-            let metadata = fs::symlink_metadata(&paths.socket)?;
-            if !metadata.file_type().is_socket() || metadata.uid() != geteuid().as_raw() {
-                return Err(io::Error::new(
-                    io::ErrorKind::PermissionDenied,
-                    "runner socket has foreign ownership",
-                ));
+        match fs::symlink_metadata(&paths.socket) {
+            Ok(_) => {
+                validate_socket_path(&paths.socket, lifecycle_gid)?;
+                fs::remove_file(&paths.socket)?;
             }
-            fs::remove_file(&paths.socket)?;
+            Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+            Err(error) => return Err(error),
         }
         let listener = UnixListener::bind(&paths.socket)?;
-        let socket_mode = if capability.lifecycle_gid().is_some() {
+        let socket_mode = if lifecycle_gid.is_some() {
             0o660
         } else {
             0o600
         };
         fs::set_permissions(&paths.socket, fs::Permissions::from_mode(socket_mode))?;
-        if let Some(gid) = capability.lifecycle_gid() {
+        if let Some(gid) = lifecycle_gid {
             chown(
                 &paths.socket,
                 Some(Uid::from_raw(0)),
@@ -889,6 +965,7 @@ impl RunnerSocket {
             )
             .map_err(|error| io::Error::from_raw_os_error(error as i32))?;
         }
+        validate_socket_path(&paths.socket, lifecycle_gid)?;
         Ok(Self {
             listener,
             capability,
@@ -1123,5 +1200,15 @@ mod tests {
             PathBuf::from("/var/lib/d2b/cutover/op-path-test/runner.sock")
         );
         assert!(!paths.socket.to_string_lossy().contains(".."));
+    }
+
+    #[test]
+    fn runtime_socket_directory_contract_is_fail_closed_and_traversal_only() {
+        let source = include_str!("runner.rs");
+        assert!(source.contains("ensure_runtime_socket_directories(paths, gid)"));
+        assert!(source.contains("metadata.gid() != gid"));
+        assert!(source.contains("metadata.permissions().mode() & 0o777 != 0o710"));
+        assert!(source.contains("metadata.permissions().mode() & 0o777 != expected_mode"));
+        assert!(!source.contains("chown(\n                paths.socket_dir()"));
     }
 }

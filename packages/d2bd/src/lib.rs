@@ -3967,11 +3967,20 @@ fn dispatch_resource_request(
                 object.remove(key);
             }
         }
-        let cutover =
+        let cutover: public_wire::HostCutoverRequest =
             serde_json::from_value(value).map_err(|error| TypedError::WireInvalidFrame {
                 detail: format!("hostCutover request malformed: {error}"),
             })?;
-        return cutover::dispatch(state, peer, cutover);
+        let operation = cutover.operation;
+        let result = cutover::dispatch(state, peer, cutover);
+        if let Err(error) = &result {
+            tracing::warn!(
+                cutover_operation = ?operation,
+                error_kind = error.kind(),
+                "host cutover resource dispatch refused"
+            );
+        }
+        return result;
     }
     let typed_shell = typed_shell_resource_request(&request.value());
     let runtime = match if typed_shell {

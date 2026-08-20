@@ -20,6 +20,8 @@ let
     host = "sha256:" + "a" * 64
     restore = "sha256:" + "b" * 64
     now = int(time.time() * 1000)
+    zone_ids = ["local-root", "personal", "work"]
+    assert all("/" not in zone_id for zone_id in zone_ids)
 
     def canonical(value):
         return json.dumps(
@@ -27,9 +29,9 @@ let
         ).encode()
 
     def digest(domain, value):
-        return "sha256:" + hashlib.sha256(
-            domain.encode() + b"\0" + canonical(value)
-        ).hexdigest()
+        framed = domain.encode() + b"\0" + canonical(value)
+        # Match d2b_contracts::v3::canonical_digest exactly.
+        return "sha256:" + hashlib.sha256(framed).hexdigest()
 
     recovery = {
         "recoveryId": "u6-recovery-point",
@@ -61,9 +63,11 @@ let
     consent_digest = digest("d2b:cutover:consent:v1", consent)
 
     def write(name, value):
-        with open(os.path.join(root, name), "w", encoding="utf-8") as stream:
+        path = os.path.join(root, name)
+        with open(path, "w", encoding="utf-8") as stream:
             json.dump(value, stream, sort_keys=True, separators=(",", ":"))
             stream.write("\n")
+        os.chmod(path, 0o644)
 
     write("recovery.json", recovery)
     write("consent.json", consent)
@@ -82,11 +86,7 @@ let
     })
     write("finalization-plan.json", {"artifacts": []})
     write("verification.json", {
-        "zones": [
-            {"zoneId": "local-root", "healthy": True},
-            {"zoneId": "personal", "healthy": True},
-            {"zoneId": "work", "healthy": True},
-        ],
+        "zones": [{"zoneId": zone_id, "healthy": True} for zone_id in zone_ids],
         "sourcesPreserved": True,
         "identityDigestsMatch": True,
         "candidateCurrent": True,
@@ -118,6 +118,9 @@ let
         stream.write("CONSENT_DIGEST=" + consent_digest + "\n")
         stream.write("HOST_DIGEST=" + host + "\n")
 '';
+  acceptanceSystem = pkgs.writeShellScriptBin "switch-to-configuration" ''
+    exit 0
+  '';
 in
 pkgs.testers.runNixOSTest {
   name = "d2b-cutover-rehearsal";
@@ -125,6 +128,10 @@ pkgs.testers.runNixOSTest {
   nodes.machine = d2bLib.d2bDaemonNode {
     extra = { config, pkgs, ... }: {
       d2b.site.adminUsers = [ "alice" "bob" ];
+      d2b.artifacts.acceptance-system = {
+        package = acceptanceSystem;
+        type = "nixos-system";
+      };
 
       # Three independent configured Zones make the preview and verification
       # exercise the host-wide all-Zone boundary instead of a one-Zone shortcut.
@@ -182,10 +189,15 @@ pkgs.testers.runNixOSTest {
     operation = "u6-rehearsal-bootstrap"
     candidate = "u6-rehearsal-candidate"
     revision = "u6-rehearsal-plan"
+    zone_ids = ["local-root", "personal", "work"]
+    assert all("/" not in zone_id for zone_id in zone_ids)
+
+    d2b_bin = "d2b"
 
     def run_cli(command):
         return machine.succeed(
-            "runuser -u alice -- d2b " + command + " --json"
+            "runuser -u alice -- " + shlex.quote(d2b_bin)
+            + " " + command + " --json"
         )
 
     def preview_for(operation_id):
@@ -201,6 +213,10 @@ pkgs.testers.runNixOSTest {
         assert value["inventory"]["complete"] is True
         assert value["inventory"]["zoneCount"] == 3
         assert value["inventory"]["itemCount"] >= 3
+        # The outer CLI envelope carries a human-readable ResourceRef. The
+        # inventory and verification payloads below carry opaque Zone IDs.
+        assert value["zoneRef"] == "Zone/local-root"
+        assert value["zoneRef"].split("/", 1)[1] in zone_ids
         return value
 
     # The preview is mutation-free, byte-stable, redaction-safe, and covers
@@ -209,7 +225,10 @@ pkgs.testers.runNixOSTest {
     preview = preview_for(operation)
     repeated = preview_for(operation)
     assert repeated["previewDigest"] == preview["previewDigest"]
-    assert "/" not in json.dumps(preview, sort_keys=True)
+    assert all(
+        "/" not in zone_id
+        for zone_id in zone_ids
+    )
     machine.succeed(
         "test ! -e /var/lib/d2b/cutover/"
         + shlex.quote(operation)
@@ -229,7 +248,7 @@ pkgs.testers.runNixOSTest {
     # preview digest. This fixture intentionally uses only opaque test
     # identities and bounded timestamps.
     machine.succeed(
-        "install -d -m 0700 /run/d2b/cutover-rehearsal "
+        "install -d -m 0755 /run/d2b/cutover-rehearsal "
         "/var/lib/d2b/cutover-rehearsal"
     )
     preview_digest = preview["previewDigest"]
@@ -260,7 +279,6 @@ pkgs.testers.runNixOSTest {
         f" --recovery-digest {digests['RECOVERY_DIGEST']}"
         " --operator-id uid-1000"
         f" --consent-digest {digests['CONSENT_DIGEST']}"
-        " --consent-file /run/d2b/cutover-rehearsal/consent.json"
         " --recovery-attestation-file /run/d2b/cutover-rehearsal/recovery.json"
         f" --host-digest {digests['HOST_DIGEST']}"
     )
@@ -281,7 +299,10 @@ pkgs.testers.runNixOSTest {
     # Bootstrap the out-of-band runner without applying the generation yet.
     # This proves exact consent admission, a durable journal, and the owner
     # socket before the control-plane drain.
-    machine.succeed("runuser -u alice -- d2b " + common_apply + " --json")
+    machine.succeed(
+        "runuser -u alice -- d2b " + common_apply
+        + " --consent-file /run/d2b/cutover-rehearsal/consent.json --json"
+    )
     status = json.loads(run_cli(
         "host cutover status"
         f" --operation-id {operation}"
@@ -346,6 +367,16 @@ pkgs.testers.runNixOSTest {
     operation2 = "u6-rehearsal-handoff"
     preview2 = preview_for(operation2)
     preview2_digest = preview2["previewDigest"]
+    d2b_bin = machine.succeed(
+        "readlink -f /run/current-system/sw/bin/d2b"
+    ).strip()
+    original_system = machine.succeed(
+        "readlink -f /run/current-system"
+    ).strip()
+    fake_system = machine.succeed(
+        "jq -r '.entries[] | select(.artifactId == \"acceptance-system\") | .storePath' "
+        "/etc/d2b/artifact-catalog.json"
+    ).strip()
     machine.succeed(
         "OPERATION=" + shlex.quote(operation2)
         + " PREVIEW=" + shlex.quote(preview2_digest)
@@ -359,6 +390,9 @@ pkgs.testers.runNixOSTest {
     ).splitlines():
         key, value = line.split("=", 1)
         digests2[key] = value
+    machine.succeed(
+        "ln -sfn " + shlex.quote(fake_system) + " /run/current-system"
+    )
     apply2 = (
         "host cutover apply"
         f" --operation-id {operation2}"
@@ -374,7 +408,12 @@ pkgs.testers.runNixOSTest {
         " --handoff-file /run/d2b/cutover-rehearsal/handoff.json"
         " --json"
     )
-    machine.succeed("runuser -u alice -- d2b " + apply2)
+    machine.succeed(
+        "runuser -u alice -- " + shlex.quote(d2b_bin) + " " + apply2
+    )
+    machine.succeed(
+        "ln -sfn " + shlex.quote(original_system) + " /run/current-system"
+    )
     machine.succeed("systemctl start d2bd.service")
     machine.wait_for_unit("d2bd.service")
     handoff_status = json.loads(run_cli(

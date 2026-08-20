@@ -1762,6 +1762,9 @@ pub mod pidfd_sys {
                 if !placed_in_cgroup {
                     return 75;
                 }
+                // Keep the broker's received fd CLOEXEC. Only this
+                // single-threaded child clears it immediately before exec;
+                // the runner re-secures it before reading the bootstrap.
                 if unsafe { libc::fcntl(bootstrap_fd, libc::F_SETFD, 0) } < 0 {
                     return 76;
                 }
@@ -3788,6 +3791,29 @@ mod tests {
         assert!(
             !source.contains(spawn_marker),
             "broker child path must not emit a debug line for every spawn"
+        );
+    }
+
+    #[test]
+    fn cutover_runner_fd_contract_clears_only_in_child_before_exec() {
+        let source = include_str!("sys.rs");
+        assert!(
+            source.contains("fd_flags < 0 || fd_flags & libc::FD_CLOEXEC == 0"),
+            "broker must require the received bootstrap fd to be CLOEXEC"
+        );
+        assert!(
+            source.contains("D2B_CUTOVER_BOOTSTRAP_FD={bootstrap_fd}"),
+            "broker must identify the inherited bootstrap fd for the runner"
+        );
+        let clear = source
+            .find("if unsafe { libc::fcntl(bootstrap_fd, libc::F_SETFD, 0) } < 0")
+            .expect("child must clear CLOEXEC before exec");
+        let exec = source
+            .find("libc::execve(binary_ptr, argv_ptrs.as_ptr(), env_ptrs.as_ptr())")
+            .expect("child must exec the trusted runner");
+        assert!(
+            clear < exec,
+            "the child must clear CLOEXEC immediately before exec"
         );
     }
 

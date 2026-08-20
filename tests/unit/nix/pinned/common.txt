@@ -722,7 +722,13 @@ realms/accepted-qemu-media-workload-fields
 realms/allocator-artifact-roots-enabled-realm-index
 realms/controller-config-artifact-materializes-host-local-units
 realms/examples-minimal-and-multi-env-still-eval
+realms/host-local-admin-launcher-membership-is-deduped
+realms/host-local-admin-users-get-d2b-lifecycle-group
+realms/host-local-launcher-users-still-get-d2b-lifecycle-group
+realms/host-local-realm-only-users-keep-realm-scope
+realms/host-local-runner-socket-contract-stays-closed
 realms/host-local-units-users-groups-tmpfiles-and-no-per-vm-units
+realms/host-local-unrelated-users-stay-out-of-d2b
 realms/identity-config-artifact-is-metadata-only
 realms/index-normalizes-enabled-disabled-and-derived-paths
 realms/rejects-duplicate-id-and-path

@@ -55,6 +55,9 @@ fn run() -> Result<(), RunnerError> {
     if nix::unistd::geteuid().as_raw() != 0 {
         return Err(RunnerError::NotRoot);
     }
+    let bootstrap_fd_value = env::var("D2B_CUTOVER_BOOTSTRAP_FD").ok();
+    let bootstrap_fd = bootstrap_fd_from_env(bootstrap_fd_value.as_deref())?;
+    let bootstrap_bytes = read_bootstrap_fd(bootstrap_fd)?;
     setsid().map_err(|_| RunnerError::Session)?;
 
     let state_root = env::var_os("D2B_CUTOVER_STATE_DIR")
@@ -63,11 +66,6 @@ fn run() -> Result<(), RunnerError> {
     let socket_root = env::var_os("D2B_CUTOVER_SOCKET_DIR")
         .map(PathBuf::from)
         .unwrap_or_else(|| PathBuf::from("/run/d2b"));
-    let bootstrap_fd = env::var("D2B_CUTOVER_BOOTSTRAP_FD")
-        .ok()
-        .and_then(|value| value.parse::<i32>().ok())
-        .unwrap_or(RUNNER_BOOTSTRAP_FD);
-    let bootstrap_bytes = read_bootstrap_fd(bootstrap_fd)?;
     let mut ledger = CapabilityLedger::default();
     let (bootstrap, consumed) =
         RunnerBootstrap::decode_and_consume(&bootstrap_bytes, now_ms(), &mut ledger)
@@ -115,30 +113,56 @@ fn run() -> Result<(), RunnerError> {
     runtime.serve()
 }
 
-fn read_bootstrap_fd(fd: i32) -> Result<Vec<u8>, RunnerError> {
-    if fd < 3 {
+fn bootstrap_fd_from_env(value: Option<&str>) -> Result<i32, RunnerError> {
+    let value = value.ok_or(RunnerError::Bootstrap)?;
+    let fd = value.parse::<i32>().map_err(|_| RunnerError::Bootstrap)?;
+    if fd < RUNNER_BOOTSTRAP_FD {
+        return Err(RunnerError::Bootstrap);
+    }
+    Ok(fd)
+}
+
+fn secure_bootstrap_fd(fd: i32) -> Result<(), RunnerError> {
+    if fd < RUNNER_BOOTSTRAP_FD {
         return Err(RunnerError::Bootstrap);
     }
     let flags = fcntl(fd, FcntlArg::F_GETFD).map_err(|_| RunnerError::Bootstrap)?;
-    if !FdFlag::from_bits_truncate(flags).contains(FdFlag::FD_CLOEXEC) {
+    let secured_flags = FdFlag::from_bits_truncate(flags) | FdFlag::FD_CLOEXEC;
+    fcntl(fd, FcntlArg::F_SETFD(secured_flags)).map_err(|_| RunnerError::Bootstrap)?;
+    let verified_flags = fcntl(fd, FcntlArg::F_GETFD).map_err(|_| RunnerError::Bootstrap)?;
+    if !FdFlag::from_bits_truncate(verified_flags).contains(FdFlag::FD_CLOEXEC) {
         return Err(RunnerError::Bootstrap);
     }
-    let path = format!("/proc/self/fd/{fd}");
-    let mut file = OpenOptions::new()
-        .read(true)
-        .custom_flags(libc::O_CLOEXEC)
-        .open(path)
-        .map_err(|_| RunnerError::Bootstrap)?;
-    let mut bytes = Vec::new();
-    file.by_ref()
-        .take((MAX_RUNNER_FRAME_BYTES + 1) as u64)
-        .read_to_end(&mut bytes)
-        .map_err(|_| RunnerError::Bootstrap)?;
-    if bytes.len() > MAX_RUNNER_FRAME_BYTES {
+    Ok(())
+}
+
+fn read_bootstrap_fd(fd: i32) -> Result<Vec<u8>, RunnerError> {
+    if fd < RUNNER_BOOTSTRAP_FD {
         return Err(RunnerError::Bootstrap);
     }
-    nix::unistd::close(fd).map_err(|_| RunnerError::Bootstrap)?;
-    Ok(bytes)
+    let result = (|| {
+        secure_bootstrap_fd(fd)?;
+        let path = format!("/proc/self/fd/{fd}");
+        let mut file = OpenOptions::new()
+            .read(true)
+            .custom_flags(libc::O_CLOEXEC)
+            .open(path)
+            .map_err(|_| RunnerError::Bootstrap)?;
+        let mut bytes = Vec::new();
+        file.by_ref()
+            .take((MAX_RUNNER_FRAME_BYTES + 1) as u64)
+            .read_to_end(&mut bytes)
+            .map_err(|_| RunnerError::Bootstrap)?;
+        if bytes.len() > MAX_RUNNER_FRAME_BYTES {
+            return Err(RunnerError::Bootstrap);
+        }
+        Ok(bytes)
+    })();
+    let close_result = nix::unistd::close(fd);
+    match (result, close_result) {
+        (Ok(bytes), Ok(())) => Ok(bytes),
+        _ => Err(RunnerError::Bootstrap),
+    }
 }
 
 fn now_ms() -> u64 {
@@ -1091,6 +1115,10 @@ impl std::error::Error for RunnerError {}
 mod tests {
     use super::*;
     use std::collections::BTreeSet;
+    use std::io::Write as _;
+    use std::os::fd::IntoRawFd;
+    use std::path::Path;
+    use std::process::Command;
     use std::sync::{Arc, Mutex};
 
     use d2b_cutover::{
@@ -1099,6 +1127,8 @@ mod tests {
         RecoveryId, ResetInventory, ResetScope, RevisionPlanId, RunnerSocketError,
         RunnerVerificationInput, RunnerZoneVerification, ZoneId, ZoneInventory,
     };
+    use nix::fcntl::OFlag;
+    use nix::unistd::{close, pipe2, write};
 
     struct UnavailableAuditSink;
 
@@ -1884,5 +1914,118 @@ mod tests {
             cutover_effect_kind(EffectKind::ScopedGuestReset),
             Some(CutoverEffectKind::ScopedGuestReset)
         );
+    }
+
+    #[test]
+    fn inherited_non_cloexec_bootstrap_fd_is_secured_and_consumed() {
+        let (read_fd, write_fd) = pipe2(OFlag::empty()).expect("pipe");
+        write(&write_fd, b"bootstrap").expect("write bootstrap");
+        drop(write_fd);
+
+        let raw_fd = read_fd.into_raw_fd();
+        let flags = fcntl(raw_fd, FcntlArg::F_GETFD).expect("get fd flags");
+        assert_eq!(
+            flags & libc::FD_CLOEXEC,
+            0,
+            "fixture must start with an inherited descriptor"
+        );
+
+        let bytes = read_bootstrap_fd(raw_fd).expect("bootstrap fd");
+        assert_eq!(bytes, b"bootstrap");
+        assert!(
+            fcntl(raw_fd, FcntlArg::F_GETFD).is_err(),
+            "bootstrap descriptor must be closed after consumption"
+        );
+    }
+
+    #[test]
+    fn missing_or_invalid_bootstrap_fd_refuses() {
+        assert!(read_bootstrap_fd(-1).is_err());
+
+        let (read_fd, write_fd) = pipe2(OFlag::empty()).expect("pipe");
+        drop(write_fd);
+        let raw_fd = read_fd.into_raw_fd();
+        close(raw_fd).expect("close invalid fixture fd");
+        assert!(read_bootstrap_fd(raw_fd).is_err());
+    }
+
+    #[test]
+    fn bootstrap_fd_requires_an_explicit_valid_descriptor() {
+        assert!(bootstrap_fd_from_env(None).is_err());
+        assert!(bootstrap_fd_from_env(Some("not-a-fd")).is_err());
+        assert!(bootstrap_fd_from_env(Some("2")).is_err());
+        assert_eq!(bootstrap_fd_from_env(Some("3")).expect("fd"), 3);
+    }
+
+    #[test]
+    fn secured_bootstrap_fd_does_not_survive_exec() {
+        let (read_fd, write_fd) = pipe2(OFlag::empty()).expect("pipe");
+        write(&write_fd, b"bootstrap").expect("write bootstrap");
+        drop(write_fd);
+        let raw_fd = read_fd.into_raw_fd();
+        secure_bootstrap_fd(raw_fd).expect("secure bootstrap fd");
+        let flags = fcntl(raw_fd, FcntlArg::F_GETFD).expect("get fd flags");
+        assert_ne!(flags & libc::FD_CLOEXEC, 0);
+
+        let shell_path = ["/bin/sh", "/run/current-system/sw/bin/sh"]
+            .into_iter()
+            .find(|path| Path::new(path).is_file())
+            .expect("shell");
+        let status = Command::new(shell_path)
+            .args([
+                "-c",
+                "test ! -e /proc/self/fd/$1",
+                "fd-check",
+                &raw_fd.to_string(),
+            ])
+            .status()
+            .expect("exec shell");
+        assert!(
+            status.success(),
+            "secured bootstrap fd leaked across exec: {status}"
+        );
+        close(raw_fd).expect("close bootstrap fd");
+    }
+
+    #[test]
+    fn oversized_bootstrap_fd_refuses_and_closes_descriptor() {
+        std::fs::create_dir_all(".scratch").expect("create test scratch root");
+        let path = PathBuf::from(".scratch")
+            .join(format!("runner-oversized-bootstrap-{}", std::process::id()));
+        let mut file = std::fs::File::create(&path).expect("create oversized bootstrap");
+        file.write_all(&vec![b'x'; MAX_RUNNER_FRAME_BYTES + 1])
+            .expect("write oversized bootstrap");
+        drop(file);
+        let file = std::fs::File::open(&path).expect("open oversized bootstrap");
+        let raw_fd = file.into_raw_fd();
+        assert!(read_bootstrap_fd(raw_fd).is_err());
+        assert!(
+            fcntl(raw_fd, FcntlArg::F_GETFD).is_err(),
+            "oversized bootstrap descriptor must be closed"
+        );
+        std::fs::remove_file(path).expect("remove oversized bootstrap");
+    }
+
+    #[test]
+    fn runner_secures_bootstrap_fd_before_reading_or_serving() {
+        let source = include_str!("d2b-cutover-runner.rs");
+        let secure = source
+            .find("secure_bootstrap_fd(fd)?")
+            .expect("runner must secure the fd before reading");
+        let read = source
+            .find(".read_to_end(&mut bytes)")
+            .expect("runner must read bounded bootstrap bytes");
+        let startup_read = source
+            .find("let bootstrap_bytes = read_bootstrap_fd(bootstrap_fd)?;")
+            .expect("runner must consume the bootstrap during startup");
+        let session = source
+            .find("setsid().map_err(|_| RunnerError::Session)?;")
+            .expect("runner must create its own session");
+        let serve = source
+            .find("runtime.serve()")
+            .expect("runner must serve only after bootstrap consumption");
+        assert!(secure < read && startup_read < session && startup_read < serve);
+        assert!(source.contains("FcntlArg::F_SETFD(secured_flags)"));
+        assert!(source.contains("let close_result = nix::unistd::close(fd);"));
     }
 }

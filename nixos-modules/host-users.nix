@@ -15,15 +15,17 @@ let
     lib.filter (realm: realm.placement == "host-local") cfg._index.realms.enabledList;
   hostLocalRealmAllowedUsers =
     lib.unique (lib.concatMap (realm: realm.allowedUsers) hostLocalRealms);
+  d2bLifecycleUsers =
+    lib.unique (cfg.site.adminUsers ++ cfg.site.launcherUsers);
   hostAccessUsers =
-    lib.unique (cfg.site.launcherUsers ++ hostLocalRealmAllowedUsers);
+    lib.unique (d2bLifecycleUsers ++ hostLocalRealmAllowedUsers);
   realmSocketGroupsForUser = user:
     map
       (realm: realm.controller.daemon.publicSocketGroup)
       (lib.filter (realm: builtins.elem user realm.allowedUsers) hostLocalRealms);
   hostAccessGroupsForUser = user:
     lib.unique (
-      lib.optional (builtins.elem user cfg.site.launcherUsers) "d2b"
+      lib.optional (builtins.elem user d2bLifecycleUsers) "d2b"
       ++ realmSocketGroupsForUser user
     );
   waylandProxyVms =
@@ -35,12 +37,12 @@ in
   # Per-VM dedicated system users for GPU + audio sidecars.
   # Each per-VM sidecar runs as its own dedicated user
   # (`d2b-<vm>-{gpu,snd,swtpm}`), NOT the host's Wayland user.
-  # The `d2b.site.launcherUsers` list controls who gets the
-  # canonical `d2b` lifecycle group.
+  # Configured Admins and launcher users get the canonical `d2b` lifecycle
+  # group; realm-only users receive only their realm socket groups.
   # ---------------------------------------------------------------------------
   users.groups = {
     # d2b: members of this group can call the daemon public socket.
-    # Add users to it via `d2b.site.launcherUsers`.
+    # Add Admins and launcher users to it via the site options.
     d2b = { };
     # The broker-owned Zone store rows use this stable principal for database
     # inode ownership. The broker passes the opened descriptor to d2bd, so the
@@ -91,8 +93,8 @@ in
     qemuMediaVms);
 
   users.users = lib.mkMerge [
-    # d2b lifecycle group membership for any user the site
-    # declares. We ONLY add the supplementary group - the user
+    # d2b lifecycle group membership for any Admin or launcher the
+    # site declares. We ONLY add the supplementary group - the user
     # must already exist (declared elsewhere in the consumer's
     # NixOS config). The assertions module enforces that.
     #

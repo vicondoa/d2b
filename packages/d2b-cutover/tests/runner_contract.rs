@@ -6,11 +6,36 @@ use d2b_cutover::{
 };
 use std::collections::BTreeSet;
 use std::io::Write;
-use std::os::unix::fs::PermissionsExt;
+use std::os::unix::fs::{FileTypeExt, MetadataExt, PermissionsExt};
 use std::os::unix::net::UnixStream;
+use std::os::unix::process::CommandExt;
+use std::path::Path;
+use std::process::Command;
 
 fn digest(seed: &str) -> Digest {
     Digest::derive("d2b:test:cutover-runner", seed.as_bytes())
+}
+
+#[test]
+fn consent_digest_matches_canonical_fixture_shape() {
+    let json = br#"{
+      "binding": {
+        "operationId": "op",
+        "operationKind": "cutover",
+        "candidateId": "candidate",
+        "previewDigest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "recoveryDigest": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "operatorId": "operator"
+      },
+      "issuedAtMs": 1000,
+      "expiresAtMs": 2000,
+      "consumed": false
+    }"#;
+    let consent = Consent::decode_json(json).expect("consent");
+    assert_eq!(
+        consent.digest().expect("consent digest").as_str(),
+        "sha256:19a1c4f098440b052131e47edf61569f840281d1d28f7c8865292ca34b0f9f30"
+    );
 }
 
 fn ensure_scratch_root() {
@@ -348,4 +373,139 @@ fn runner_socket_refuses_a_foreign_socket_directory_link() {
     };
     assert_eq!(error.kind(), std::io::ErrorKind::PermissionDenied);
     let _ = std::fs::remove_dir_all(root);
+}
+
+#[test]
+fn lifecycle_group_traverses_runtime_socket_without_state_access() {
+    let root_uid = nix::unistd::geteuid().as_raw();
+    if root_uid != 0 {
+        println!("SKIP: runtime socket ownership contract requires root");
+        return;
+    }
+    let lifecycle_gid = nix::unistd::getgid().as_raw();
+    let nonmember_gid = if lifecycle_gid == 65_534 {
+        65_533
+    } else {
+        65_534
+    };
+    let operation_id = OperationId::new("op-socket-group").expect("operation id");
+    let candidate_id = CandidateId::new("candidate-socket-group").expect("candidate id");
+    let revision_plan_id =
+        d2b_cutover::RevisionPlanId::new("plan-socket-group").expect("revision plan id");
+    let operator_id = OperatorId::new(format!("uid-{root_uid}")).expect("operator id");
+    let inventory = ResetInventory::new(ResetScope::Zone, "zone-socket-group").expect("inventory");
+    let preview = CutoverPreview::new_reset(
+        operation_id.clone(),
+        OperationKind::ScopedReset(ResetScope::Zone),
+        candidate_id.clone(),
+        revision_plan_id.clone(),
+        inventory.clone(),
+    )
+    .expect("preview");
+    let request = OperationRequest::new_reset(
+        operation_id.clone(),
+        ResetScope::Zone,
+        candidate_id.clone(),
+        revision_plan_id,
+        operator_id.clone(),
+        preview.digest().expect("preview digest"),
+        inventory,
+    )
+    .expect("request");
+    let capability = BootstrapCapability::new_with_identity_and_group(
+        operation_id.clone(),
+        candidate_id,
+        operator_id,
+        OperationKind::ScopedReset(ResetScope::Zone),
+        digest("socket-group"),
+        100,
+        200,
+        root_uid,
+        BTreeSet::new(),
+        Some(lifecycle_gid),
+    )
+    .expect("capability");
+    let capability_bytes = capability.canonical_bytes().expect("capability bytes");
+    let mut ledger = CapabilityLedger::default();
+    let consumed = BootstrapCapability::decode_and_consume(&capability_bytes, 150, &mut ledger)
+        .expect("consume capability");
+    let root = Path::new(".scratch").join(format!("runner-socket-group-{}", std::process::id()));
+    let state_root = root.join("state");
+    let socket_root = root.join("runtime");
+    std::fs::create_dir_all(&socket_root).expect("socket root");
+    std::fs::set_permissions(&socket_root, std::fs::Permissions::from_mode(0o755))
+        .expect("socket root mode");
+    let paths = RunnerPaths::new_with_socket_root(state_root, socket_root, &operation_id);
+    let socket = d2b_cutover::RunnerSocket::bind(&paths, consumed).expect("bind socket");
+    let bootstrap = RunnerBootstrap {
+        capability,
+        request,
+        preview,
+        consent: None,
+        destructive_consent: None,
+        recovery: None,
+        host_digest: None,
+    };
+    persist_journal(&paths.journal, &bootstrap, b"").expect("persist journal");
+
+    let shared_socket_dir = paths
+        .socket_dir()
+        .parent()
+        .expect("shared socket directory");
+    for directory in [shared_socket_dir, paths.socket_dir()] {
+        let metadata = std::fs::symlink_metadata(directory).expect("socket directory metadata");
+        assert!(metadata.is_dir());
+        assert_eq!(metadata.uid(), 0);
+        assert_eq!(metadata.gid(), lifecycle_gid);
+        assert_eq!(metadata.permissions().mode() & 0o777, 0o710);
+    }
+    let socket_metadata = std::fs::symlink_metadata(&paths.socket).expect("socket metadata");
+    assert!(socket_metadata.file_type().is_socket());
+    assert_eq!(socket_metadata.uid(), 0);
+    assert_eq!(socket_metadata.gid(), lifecycle_gid);
+    assert_eq!(socket_metadata.permissions().mode() & 0o777, 0o660);
+    let state_metadata = std::fs::symlink_metadata(paths.operation_dir()).expect("state metadata");
+    assert_eq!(state_metadata.uid(), 0);
+    assert_eq!(state_metadata.permissions().mode() & 0o777, 0o700);
+    let journal_metadata = std::fs::symlink_metadata(&paths.journal).expect("journal metadata");
+    assert_eq!(journal_metadata.uid(), 0);
+    assert_eq!(journal_metadata.permissions().mode() & 0o777, 0o600);
+
+    run_socket_probe(&paths.socket, lifecycle_gid, "connect", true);
+    run_socket_probe(&paths.socket, nonmember_gid, "connect", false);
+    run_socket_probe(&paths.journal, lifecycle_gid, "read", false);
+
+    drop(socket);
+    let _ = std::fs::remove_dir_all(root);
+}
+
+#[test]
+fn socket_probe_child() {
+    let Ok(mode) = std::env::var("D2B_SOCKET_PROBE_MODE") else {
+        return;
+    };
+    let path = std::env::var("D2B_SOCKET_PROBE_PATH").expect("probe path");
+    let expected = std::env::var("D2B_SOCKET_PROBE_EXPECTED").expect("probe expectation");
+    let actual = match mode.as_str() {
+        "connect" => UnixStream::connect(path).is_ok(),
+        "read" => std::fs::read(path).is_ok(),
+        other => panic!("unknown probe mode {other}"),
+    };
+    assert_eq!(actual, expected == "yes");
+}
+
+fn run_socket_probe(path: &Path, gid: u32, mode: &str, expected: bool) {
+    let status = Command::new(std::env::current_exe().expect("test executable"))
+        .args(["--exact", "socket_probe_child", "--nocapture"])
+        .env("D2B_SOCKET_PROBE_MODE", mode)
+        .env("D2B_SOCKET_PROBE_PATH", path)
+        .env(
+            "D2B_SOCKET_PROBE_EXPECTED",
+            if expected { "yes" } else { "no" },
+        )
+        .uid(65_534)
+        .gid(gid)
+        .status()
+        .expect("run socket probe");
+    assert!(status.success(), "socket probe failed: {status}");
 }

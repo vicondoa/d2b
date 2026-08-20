@@ -94,21 +94,12 @@ fn preview(state: &ServerState, request: HostCutoverRequest) -> Result<Value, Ty
     let _operator_id =
         parse_operator_id(request.operator_id.as_deref().unwrap_or("operator-preview"))?;
     let (inventory, inventory_summary) = host_inventory(state)?;
-    let recovery_digest = request
-        .recovery_digest
-        .as_deref()
-        .map(Digest::parse)
-        .transpose()
-        .map_err(|_| invalid("recoveryDigest"))?;
-    let preview = CutoverPreview::new(
+    let preview = build_preview(
         operation_id.clone(),
-        OperationKind::Cutover,
         candidate_id,
         revision_plan_id,
         inventory,
-        recovery_digest,
-    )
-    .map_err(|_| invalid("preview"))?;
+    )?;
     let preview_digest = preview
         .digest()
         .map_err(|_| invalid("previewDigest"))?
@@ -163,16 +154,20 @@ fn apply(
     let host_digest = parse_required_digest(request.host_digest.as_deref(), "hostDigest")?;
     authorize_bound_operator(peer.uid, &operator_id)?;
     let (inventory, _) = host_inventory(state)?;
-    let preview = CutoverPreview::new(
+    let preview = build_preview(
         operation_id.clone(),
-        OperationKind::Cutover,
         candidate_id.clone(),
         revision_plan_id.clone(),
         inventory.clone(),
-        Some(recovery_digest.clone()),
-    )
-    .map_err(|_| invalid("preview"))?;
-    if preview.digest().map_err(|_| invalid("previewDigest"))? != preview_digest {
+    )?;
+    let computed_preview_digest = preview.digest().map_err(|_| invalid("previewDigest"))?;
+    if computed_preview_digest != preview_digest {
+        tracing::warn!(
+            validation = "preview-digest-stale",
+            computed_preview_digest = %computed_preview_digest,
+            supplied_preview_digest = %preview_digest,
+            "host cutover apply refused before broker admission"
+        );
         return Err(TypedError::WireUnknownField {
             detail: "cutover preview digest is stale".to_owned(),
         });
@@ -254,6 +249,11 @@ fn apply(
     let response = match response {
         BrokerResponse::LaunchCutoverRunner(response) => response,
         BrokerResponse::Error(error) => {
+            tracing::warn!(
+                broker_operation = "LaunchCutoverRunner",
+                broker_error_kind = %error.kind,
+                "cutover runner admission refused by broker"
+            );
             return Err(TypedError::InternalBrokerUnavailable {
                 path: broker_socket_path(state),
                 detail: error.kind,
@@ -502,6 +502,23 @@ fn encode_response(response: HostCutoverResponse) -> Result<Value, TypedError> {
     })
 }
 
+fn build_preview(
+    operation_id: OperationId,
+    candidate_id: CandidateId,
+    revision_plan_id: RevisionPlanId,
+    inventory: HostInventory,
+) -> Result<CutoverPreview, TypedError> {
+    CutoverPreview::new(
+        operation_id,
+        OperationKind::Cutover,
+        candidate_id,
+        revision_plan_id,
+        inventory,
+        None,
+    )
+    .map_err(|_| invalid("preview"))
+}
+
 fn host_inventory(
     state: &ServerState,
 ) -> Result<(HostInventory, HostCutoverInventorySummary), TypedError> {
@@ -615,6 +632,11 @@ fn parse_required_digest(value: Option<&str>, field: &'static str) -> Result<Dig
 }
 
 fn invalid(field: &str) -> TypedError {
+    tracing::warn!(
+        validation = "invalid-field",
+        field,
+        "host cutover request refused before broker admission"
+    );
     TypedError::WireUnknownField {
         detail: format!("hostCutover requires valid {field}"),
     }
@@ -725,5 +747,68 @@ mod tests {
         CanonicalJsonObject::parse(&bytes).expect("canonical response");
         assert_eq!(value["operation"], "preview");
         assert_eq!(value["mutationAccepted"], false);
+    }
+
+    #[test]
+    fn apply_rebuilds_the_recovery_free_preview_digest() {
+        let operation_id = OperationId::new("cutover-apply-preview").expect("operation");
+        let candidate_id = CandidateId::new("candidate").expect("candidate");
+        let revision_plan_id = RevisionPlanId::new("plan").expect("plan");
+        let inventory = HostInventory::build(
+            [d2b_cutover::ZoneId::new("local-root").expect("zone")],
+            [ZoneInventory::empty("local-root").expect("zone inventory")],
+            [],
+        )
+        .expect("inventory");
+        let preview = CutoverPreview::new(
+            operation_id.clone(),
+            OperationKind::Cutover,
+            candidate_id.clone(),
+            revision_plan_id.clone(),
+            inventory.clone(),
+            None,
+        )
+        .expect("preview");
+        let apply_preview = build_preview(
+            operation_id.clone(),
+            candidate_id.clone(),
+            revision_plan_id.clone(),
+            inventory.clone(),
+        )
+        .expect("apply preview");
+        assert_eq!(
+            preview.digest().expect("preview digest"),
+            apply_preview.digest().expect("apply preview digest")
+        );
+
+        let recovery_digest = Digest::derive("d2b:test:cutover:recovery", b"recovery");
+        let request = OperationRequest::new_cutover(
+            operation_id.clone(),
+            candidate_id.clone(),
+            revision_plan_id.clone(),
+            OperatorId::new("uid-1000").expect("operator"),
+            preview.digest().expect("preview digest"),
+            recovery_digest.clone(),
+            inventory.clone(),
+        )
+        .expect("request");
+        assert_eq!(request.recovery_digest(), Some(&recovery_digest));
+        let binding = request.consent_binding();
+        assert_eq!(binding.recovery_digest(), Some(&recovery_digest));
+        let consent = Consent::issue(binding.clone(), 100, 200).expect("consent");
+        assert_eq!(consent.binding(), &binding);
+
+        let other_recovery = Digest::derive("d2b:test:cutover:recovery", b"other-recovery");
+        let other_request = OperationRequest::new_cutover(
+            operation_id,
+            candidate_id,
+            revision_plan_id,
+            OperatorId::new("uid-1000").expect("operator"),
+            apply_preview.digest().expect("apply preview digest"),
+            other_recovery,
+            inventory,
+        )
+        .expect("other request");
+        assert_ne!(request.request_digest(), other_request.request_digest());
     }
 }
