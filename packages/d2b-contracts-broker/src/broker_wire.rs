@@ -8,20 +8,24 @@
 //! the opaque IDs to look up the typed intent in its own trusted bundle
 //! copy. See `d2b_contracts::types` for the newtype set.
 
-use crate::guest_auth::AUTH_NONCE_LEN;
-use crate::types::{
+pub use d2b_contracts::audit_wire::{AuditExportCursor, AuditExportEntry, AuditExportErrorCode};
+use d2b_contracts::audit_wire::validate_audit_page;
+pub use d2b_contracts::store_verify_wire::{
+    StoreVerifyRequest, StoreVerifyResponse, StoreVerifyStatus, StoreVerifyUnknownReason,
+};
+use d2b_contracts::auth_wire::AUTH_NONCE_LEN;
+use d2b_contracts::types::{
     BundleClosureRef, BundleOpId, MediaRef, PathClass, RoleId, ScopeId, SubjectId, TracingSpanId,
     VmId,
 };
-use crate::v3::process::{CapabilityClass, EnvironmentClass, NamespaceClass, UserNamespaceSpec};
-use crate::v3::{
+use d2b_contracts::v3::process::{CapabilityClass, EnvironmentClass, NamespaceClass, UserNamespaceSpec};
+use d2b_contracts::v3::{
     ArtifactId, IfName, ResourceBundleGenerationId, ResourceGeneration, ResourceRef, ResourceUid,
     execution_policy::ExecutionDomain, storage::ZoneStoreId,
 };
-use crate::workload_identity::WorkloadIdentity;
+use d2b_contracts::workload_identity::WorkloadIdentity;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
-use serde_json::Value;
 use sha2::{Digest, Sha256};
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
@@ -30,7 +34,7 @@ pub enum BrokerRequest {
     /// Authenticate and apply one source-to-target NixOS generation
     /// handoff. The broker resolves all host effects from its trusted
     /// installed-generation state; no path or command crosses the wire.
-    ApplyHostGenerationHandoff(crate::host_generation::ApplyHostGenerationHandoff),
+    ApplyHostGenerationHandoff(d2b_contracts::host_generation::ApplyHostGenerationHandoff),
     ApplyNftables(ApplyNftablesRequest),
     /// Apply or remove one Provider-owned nftables projection.
     ///
@@ -298,7 +302,7 @@ pub enum BrokerRequest {
     /// relay session lifetime.
     ///
     /// Typed stub - live handler target: `live_security_key_open_device`.
-    SecurityKeyOpenDevice(crate::security_key::SecurityKeyOpenDeviceRequest),
+    SecurityKeyOpenDevice(d2b_contracts::security_key::SecurityKeyOpenDeviceRequest),
     /// Apply udev group grants for configured FIDO hidraw nodes.
     ///
     /// Writes broker-generated udev rules granting the
@@ -307,15 +311,15 @@ pub enum BrokerRequest {
     /// host activation or when the device selector list changes.
     ///
     /// Typed stub - live handler target: `live_security_key_apply_udev_rules`.
-    SecurityKeyApplyUdevRules(crate::security_key::SecurityKeyApplyUdevRulesRequest),
+    SecurityKeyApplyUdevRules(d2b_contracts::security_key::SecurityKeyApplyUdevRulesRequest),
 }
 
 /// Path-free result of a source-to-target generation handoff.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ApplyHostGenerationHandoffResponse {
-    pub target: crate::v3::ResourceRef,
-    pub state: crate::host_generation::HandoffState,
+    pub target: d2b_contracts::v3::ResourceRef,
+    pub state: d2b_contracts::host_generation::HandoffState,
     pub source_generation: u64,
     pub target_generation: u64,
     pub source_remains_usable: bool,
@@ -907,8 +911,8 @@ impl BrokerRequest {
             | Self::ResumeBroker => return None,
         };
         Some((
-            crate::v3::canonical_digest("d2b:broker-zone:v2", scope.as_bytes()),
-            crate::v3::canonical_digest("d2b:broker-operation:v2", operation.as_bytes()),
+            d2b_contracts::v3::canonical_digest("d2b:broker-zone:v2", scope.as_bytes()),
+            d2b_contracts::v3::canonical_digest("d2b:broker-operation:v2", operation.as_bytes()),
         ))
     }
 
@@ -1474,52 +1478,6 @@ pub enum BrokerAuditSeverity {
 
 fn default_audit_export_limit() -> u32 {
     256
-}
-
-/// Opaque page position for typed broker audit export.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct AuditExportCursor {
-    pub day: String,
-    pub line: u64,
-    /// Sequence of the last emitted entry. This keeps page sequence numbers
-    /// monotonic across restarts and continuation requests.
-    #[serde(default)]
-    pub sequence: u64,
-}
-
-/// Closed export failure classes.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
-#[serde(rename_all = "kebab-case")]
-pub enum AuditExportErrorCode {
-    HashBreak,
-    RecordInvalid,
-    ReadFailed,
-}
-
-/// One typed audit export entry. Exactly one of `record` and `error` is
-/// populated by the broker.
-#[derive(Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct AuditExportEntry {
-    pub sequence: u64,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub record: Option<Value>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub error: Option<AuditExportErrorCode>,
-}
-
-impl Eq for AuditExportEntry {}
-
-impl core::fmt::Debug for AuditExportEntry {
-    fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        formatter
-            .debug_struct("AuditExportEntry")
-            .field("sequence", &self.sequence)
-            .field("has_record", &self.record.is_some())
-            .field("error", &self.error)
-            .finish()
-    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
@@ -2409,58 +2367,6 @@ pub struct StoreSyncResponse {
     pub cleanup_deferred: bool,
 }
 
-/// Store-verify request. `repair=true` requests the broker's explicit
-/// repair path; builds without that path must fail closed instead of
-/// returning a success-shaped repair.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct StoreVerifyRequest {
-    pub vm_id: VmId,
-    #[serde(default)]
-    pub repair: bool,
-    #[serde(default)]
-    pub tracing_span_id: Option<TracingSpanId>,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
-#[serde(rename_all = "snake_case")]
-pub enum StoreVerifyStatus {
-    Ok,
-    Drift,
-    Unknown,
-    Repaired,
-    Failed,
-    NotFound,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
-#[serde(rename_all = "snake_case")]
-pub enum StoreVerifyUnknownReason {
-    MarkerOrManifestMissing,
-    MarkerOrManifestUnreadable,
-    OlderHostGeneration,
-    GenerationIdentityUnavailable,
-}
-
-/// Store-verify response. Field names intentionally match the public CLI
-/// JSON envelope after serde's camelCase conversion on the private wire;
-/// the CLI re-renders the signed snake_case envelope.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct StoreVerifyResponse {
-    pub vm: String,
-    pub status: StoreVerifyStatus,
-    pub checked: u32,
-    pub drifted: u32,
-    pub repaired: u32,
-    #[serde(default)]
-    pub unknown_reason: Option<StoreVerifyUnknownReason>,
-    #[serde(default)]
-    pub audit_ref: Option<String>,
-    #[serde(default)]
-    pub remediation: Option<String>,
-}
-
 /// The broker derives the bridge, port,
 /// isolated/neigh_suppress/learning/unicast_flood flags, and matching
 /// rule rationale from the trusted bundle row anchored by `vm_id` +
@@ -2640,7 +2546,7 @@ impl<'de> Deserialize<'de> for ExportBrokerAuditResponse {
         D: serde::Deserializer<'de>,
     {
         let wire = ExportBrokerAuditResponseWire::deserialize(deserializer)?;
-        crate::public_wire::validate_audit_page(wire.complete, wire.next_cursor.as_ref())
+        validate_audit_page(wire.complete, wire.next_cursor.as_ref())
             .map_err(serde::de::Error::custom)?;
         Ok(Self {
             entries: wire.entries,
@@ -2658,16 +2564,6 @@ impl core::fmt::Debug for ExportBrokerAuditResponse {
             .field("has_next_cursor", &self.next_cursor.is_some())
             .field("complete", &self.complete)
             .finish()
-    }
-}
-
-impl From<ExportBrokerAuditResponse> for crate::public_wire::AuditResponse {
-    fn from(response: ExportBrokerAuditResponse) -> Self {
-        Self {
-            entries: response.entries,
-            next_cursor: response.next_cursor,
-            complete: response.complete,
-        }
     }
 }
 
@@ -2845,7 +2741,7 @@ pub struct SandboxLaunchPlan {
     pub domain: ExecutionDomain,
     pub namespace_classes: Vec<NamespaceClass>,
     pub capability_classes: Vec<CapabilityClass>,
-    pub seccomp_class: crate::v3::execution_policy::BoundedToken,
+    pub seccomp_class: d2b_contracts::v3::execution_policy::BoundedToken,
     pub no_new_privileges: bool,
     pub start_root: bool,
     pub environment_class: EnvironmentClass,
@@ -3027,7 +2923,7 @@ impl CanonicalAuditDigest {
     /// Parse the exact lower-case SHA-256 wire spelling.
     pub fn parse(value: impl Into<String>) -> Result<Self, &'static str> {
         let value = value.into();
-        if crate::v3::is_canonical_digest(&value) {
+        if d2b_contracts::v3::is_canonical_digest(&value) {
             Ok(Self(value))
         } else {
             Err("canonical-audit-digest-invalid")
@@ -3331,7 +3227,7 @@ pub struct PollChildReapedResponse {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{decode_frame, encode_frame};
+    use d2b_contracts::{decode_frame, encode_frame};
 
     #[test]
     fn validate_bundle_serializes_with_exact_kind() {

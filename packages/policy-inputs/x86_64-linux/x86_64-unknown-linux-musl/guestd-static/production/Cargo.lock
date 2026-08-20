@@ -215,6 +215,18 @@ dependencies = [
 
 
 [[package]]
+name = "d2b-contracts-control"
+version = "0.0.0-bootstrap"
+dependencies = [
+ "d2b-contracts",
+ "protobuf",
+ "schemars",
+ "serde",
+ "serde_json",
+]
+
+
+[[package]]
 name = "d2b-exec-runner"
 version = "0.0.0-bootstrap"
 dependencies = [
@@ -228,6 +240,7 @@ version = "0.0.0-bootstrap"
 dependencies = [
  "async-trait",
  "d2b-contracts",
+ "d2b-contracts-control",
  "d2b-exec-runner",
  "d2b-realm-core",
  "futures",

@@ -18,6 +18,7 @@ rust_library(
     visibility = ["//visibility:public"],
     deps = [
         "//packages/d2b-contracts:d2b_contracts",
+        "//packages/d2b-contracts-broker:d2b_contracts_broker",
         "//packages/d2b-process:d2b_process",
         "//packages/d2b-telemetry:d2b_telemetry",
         "//packages/d2b-core:d2b_core",
@@ -37,6 +38,7 @@ rust_library(
     visibility = ["//visibility:public"],
     deps = [
         "//packages/d2b-contracts:d2b_contracts_test_support",
+        "//packages/d2b-contracts-broker:d2b_contracts_broker",
         "//packages/d2b-process:d2b_process_test_support",
         "//packages/d2b-telemetry:d2b_telemetry_test_support",
         "//packages/d2b-core:d2b_core_test_support",
@@ -52,6 +54,7 @@ rust_test(
     deps = [
         ":d2b_provider_supervisor",
         "//packages/d2b-contracts:d2b_contracts",
+        "//packages/d2b-contracts-broker:d2b_contracts_broker",
         "//packages/d2b-process:d2b_process",
         "//packages/d2b-process-conformance:d2b_process_conformance",
         "//packages/d2b-provider-system-minijail:d2b_provider_system_minijail",

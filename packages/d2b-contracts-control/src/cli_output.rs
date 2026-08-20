@@ -3,11 +3,15 @@ use std::collections::BTreeMap;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
-pub use crate::audio::LevelPercent;
+pub use d2b_contracts::audio::LevelPercent;
 use crate::public_wire::{
     AudioChannel, AudioEnforcementPosture, AudioErrorKind, AudioProviderKind, AudioSetApplied,
 };
-use crate::{ids::OperationId, token::ProtocolToken, workload_identity::WorkloadTarget};
+use d2b_contracts::{
+    ids::OperationId,
+    token::ProtocolToken,
+    workload_identity::WorkloadTarget,
+};
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(transparent)]
@@ -654,7 +658,7 @@ pub struct AuthDeniedSubcommandV2 {
 #[serde(deny_unknown_fields)]
 pub struct StoreVerifyOutputV2 {
     pub vm: String,
-    pub status: crate::broker_wire::StoreVerifyStatus,
+    pub status: d2b_contracts::store_verify_wire::StoreVerifyStatus,
     pub checked: u32,
     pub drifted: u32,
     pub repaired: u32,

@@ -34,7 +34,7 @@ use tokio::{
     task::JoinHandle,
 };
 
-use d2b_contracts::guest_wire::GuestControlErrorKind as WireErrorKind;
+use d2b_contracts_control::guest_wire::GuestControlErrorKind as WireErrorKind;
 
 use crate::exec_pty::{PtyProcessSpawner, SpawnedPtyProcess, StdinWriteOk, TerminalSize, TtyState};
 

@@ -4,6 +4,7 @@ members = [
   "d2b-realm-core",
   "d2b-core",
   "d2b-contracts",
+  "d2b-contracts-control",
   "d2b-guestd",
   "d2b-exec-runner",
   "d2b-sk-frontend",

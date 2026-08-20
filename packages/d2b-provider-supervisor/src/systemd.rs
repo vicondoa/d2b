@@ -5,7 +5,7 @@ use std::num::NonZeroU32;
 use std::os::fd::OwnedFd;
 use std::sync::Mutex;
 
-use d2b_contracts::broker_wire::{
+use d2b_contracts_broker::broker_wire::{
     BrokerCallerRole, BrokerRequest, BrokerResponse, OpenSystemdUnitPidfdRequest,
     StopSystemdUnitRequest, SystemdStopClass, SystemdUnitDomain, SystemdUnitIdentity,
     SystemdUnitRequest,

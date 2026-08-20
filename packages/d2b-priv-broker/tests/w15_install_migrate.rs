@@ -1,10 +1,11 @@
 use std::os::fd::AsRawFd;
 
-use d2b_contracts::broker_wire::{
+use d2b_contracts_broker::broker_wire::{
     BrokerErrorResponse, BrokerResponse, RunHostInstallResponse, RunMigrateResponse,
 };
 #[cfg(not(feature = "layer1-bootstrap"))]
-use d2b_contracts::{broker_wire::RunHostInstallRequest, types::BundleOpId};
+use d2b_contracts::{types::BundleOpId};
+use d2b_contracts_broker::broker_wire::RunHostInstallRequest;
 #[cfg(not(feature = "layer1-bootstrap"))]
 use d2b_core::{
     bundle::{Bundle, BundleGeneration, BundleManagedKeys},

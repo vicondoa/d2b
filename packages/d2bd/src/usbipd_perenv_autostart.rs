@@ -25,7 +25,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use d2b_contracts::broker_wire::RunnerRole;
+use d2b_contracts_broker::broker_wire::RunnerRole;
 use d2b_core::manifest_v04::ManifestV04;
 use serde::{Deserialize, Serialize};
 

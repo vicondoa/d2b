@@ -14,6 +14,7 @@ rust_library(
     visibility = ["//visibility:public"],
     deps = [
         "//packages/d2b-contracts:d2b_contracts",
+        "//packages/d2b-contracts-control:d2b_contracts_control",
         "//packages/d2b-core:d2b_core",
         "//packages/d2b-realm-core:d2b_realm_core",
         "//packages/d2b-wayland-proxy:d2b_wayland_proxy",
@@ -45,6 +46,7 @@ rust_test(
     deps = [
         ":d2b_unsafe_local_helper",
         "//packages/d2b-contracts:d2b_contracts",
+        "//packages/d2b-contracts-control:d2b_contracts_control",
         "//packages/d2b-core:d2b_core",
         "//packages/d2b-realm-core:d2b_realm_core",
     ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),

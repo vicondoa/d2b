@@ -3,7 +3,7 @@ use crate::terminal_session::{
     WriteStdinOutcome,
 };
 use async_trait::async_trait;
-use d2b_contracts::{
+use d2b_contracts_control::{
     terminal_wire::{TerminalStatus, TerminalStream},
     unsafe_local_wire::{
         HelperFailureCode, HelperTerminalAttachmentClosed, HelperTerminalChunkBase64,
@@ -477,7 +477,7 @@ impl TerminalBackend for UnsafeLocalTerminalClient {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use d2b_contracts::{
+    use d2b_contracts_control::{
         terminal_wire::{TerminalControlResult, TerminalWriteStdinResult},
         unsafe_local_wire::{
             HelperTerminalControlResponse, HelperTerminalOperationResult,
@@ -701,7 +701,7 @@ mod tests {
             &mut peer,
             &HelperTerminalResponse::Wait(HelperTerminalOperationResult {
                 request_id: 1,
-                result: d2b_contracts::terminal_wire::TerminalWaitResult {
+                result: d2b_contracts_control::terminal_wire::TerminalWaitResult {
                     running: true,
                     terminal_status: None,
                 },
@@ -719,7 +719,7 @@ mod tests {
             &mut peer,
             &HelperTerminalResponse::Wait(HelperTerminalOperationResult {
                 request_id: request.request_id(),
-                result: d2b_contracts::terminal_wire::TerminalWaitResult {
+                result: d2b_contracts_control::terminal_wire::TerminalWaitResult {
                     running: true,
                     terminal_status: None,
                 },

@@ -1,6 +1,6 @@
-use d2b_contracts::{
-    broker_wire::{ApplyNftablesProjectionRequest, NftablesProjectionAction},
-    usbip::{SYSFS_BUS_ID_MAX, validate_bus_id},
+use d2b_contracts::usbip::{SYSFS_BUS_ID_MAX, validate_bus_id};
+use d2b_contracts_broker::broker_wire::{
+    ApplyNftablesProjectionRequest, NftablesProjectionAction,
 };
 use d2b_provider_device_usbip::{
     AttachmentActivation, AttachmentCommand, FirewallProjectionAction, PROVIDER_REF,

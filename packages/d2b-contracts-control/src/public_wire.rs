@@ -1,11 +1,10 @@
-use crate::broker_wire::{AuditExportCursor, AuditExportEntry};
-use crate::types::MediaRef;
-use crate::{
+pub use d2b_contracts::audit_wire::{AuditExportCursor, AuditExportEntry};
+use d2b_contracts::types::MediaRef;
+use d2b_contracts::{
     FeatureFlag, Version,
     audio::LevelPercent,
     capability::CapabilitySet,
     error::Error,
-    guest_wire::ExecState,
     ids::OperationId,
     runtime::{RuntimeOperationCapabilities, RuntimeServiceSummary},
     token::ProtocolToken,
@@ -15,6 +14,7 @@ use crate::{
     },
     workload_identity::{WorkloadIdentity, WorkloadTarget},
 };
+use crate::guest_wire::ExecState;
 use schemars::{
     JsonSchema,
     r#gen::SchemaGenerator,
@@ -137,7 +137,7 @@ pub enum PublicRequest {
     /// session ID or `cancel_current = true` to cancel whatever is active.
     /// `d2b usb security-key cancel [--current | <session-id>]`
     #[serde(rename = "usb security-key cancel")]
-    UsbSecurityKeyCancel(crate::security_key::SecurityKeyCancelRequest),
+    UsbSecurityKeyCancel(d2b_contracts::security_key::SecurityKeyCancelRequest),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
@@ -179,13 +179,13 @@ pub enum PublicResponse {
     Workload(WorkloadOpResponse),
     /// `d2b usb security-key status` response.
     #[serde(rename = "usb security-key status")]
-    UsbSecurityKeyStatus(crate::security_key::SecurityKeyStatusResponse),
+    UsbSecurityKeyStatus(d2b_contracts::security_key::SecurityKeyStatusResponse),
     /// `d2b usb security-key sessions` response.
     #[serde(rename = "usb security-key sessions")]
-    UsbSecurityKeySessions(crate::security_key::SecurityKeySessionsResponse),
+    UsbSecurityKeySessions(d2b_contracts::security_key::SecurityKeySessionsResponse),
     /// `d2b usb security-key cancel` response.
     #[serde(rename = "usb security-key cancel")]
-    UsbSecurityKeyCancel(crate::security_key::SecurityKeyCancelResponse),
+    UsbSecurityKeyCancel(d2b_contracts::security_key::SecurityKeyCancelResponse),
     #[serde(rename = "error")]
     Error(Error),
 }
@@ -577,7 +577,7 @@ pub struct StoreVerifyRequest {
     pub repair: bool,
 }
 
-pub type StoreVerifyResponse = crate::broker_wire::StoreVerifyResponse;
+pub type StoreVerifyResponse = d2b_contracts::store_verify_wire::StoreVerifyResponse;
 
 /// `read guest config` request payload. The daemon resolves the per-VM vsock
 /// socket + peer credentials from the trusted bundle; the client supplies only
@@ -2739,10 +2739,8 @@ mod tests {
         AuditResponse, LevelPercent, MutationFlags, PublicRequest, PublicResponse, RuntimeSummary,
         VmLifecycleRequest, VmLifecycleState,
     };
-    use crate::{
-        Error, FeatureFlag, Version,
-        broker_wire::AuditExportCursor,
-        decode_frame, encode_frame,
+    use d2b_contracts::{
+        Error, FeatureFlag, Version, audit_wire::AuditExportCursor, decode_frame, encode_frame,
         runtime::{RuntimeOperationCapabilities, RuntimeServiceRole, RuntimeServiceSummary},
     };
 

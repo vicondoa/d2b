@@ -399,7 +399,7 @@ asserts `len() == 0`.
   `build-store-view` / `replace-store-view-live` from stdin JSON.
 - `packages/d2b-priv-broker/src/runtime.rs` - wire dispatch
   arm (`RealBrokerRequest::StoreSync(req) => …`).
-- `packages/d2b-contracts/src/broker_wire.rs` - typed request/
+- `packages/d2b-contracts-broker/src/broker_wire.rs` - typed request/
   response structs + enum variants. The wire carries both the
   collision-free `generation_id` (response) and the u32
   `generation_token` (request + response); the token is display/wire

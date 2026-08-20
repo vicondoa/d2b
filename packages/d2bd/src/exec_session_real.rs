@@ -12,7 +12,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use async_trait::async_trait;
-use d2b_contracts::guest_proto as pb;
+use d2b_contracts_control::guest_proto as pb;
 use protobuf::{EnumOrUnknown, MessageField};
 
 use crate::exec_session::{
@@ -30,8 +30,8 @@ use crate::guest_control_health::{
     AttemptBudget, GuestControlHealthError, TtrpcGuestControlClient, probe_guest_control_health,
 };
 use crate::terminal_session::TerminalBackend;
-use d2b_contracts::broker_wire::BrokerCallerRole;
-use d2b_contracts::guest_wire::GUEST_CONTROL_PROTOCOL_VERSION;
+use d2b_contracts_broker::broker_wire::BrokerCallerRole;
+use d2b_contracts_control::guest_wire::GUEST_CONTROL_PROTOCOL_VERSION;
 
 /// Absolute deadline for the whole establish phase (connect + auth handshake:
 /// `CONNECT`-ack, Hello, sign, Authenticate, sign, Health).
@@ -268,7 +268,7 @@ pub(crate) fn build_exec_create_request(
         request.initial_terminal_size = MessageField::some(size);
     }
     let mut policy = pb::OutputPolicy::new();
-    policy.max_chunk_bytes = d2b_contracts::public_wire::EXEC_MAX_CHUNK_BYTES;
+    policy.max_chunk_bytes = d2b_contracts_control::public_wire::EXEC_MAX_CHUNK_BYTES;
     request.output_policy = MessageField::some(policy);
     request
 }

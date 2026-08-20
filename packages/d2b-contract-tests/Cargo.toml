@@ -15,6 +15,8 @@ serde_json.workspace = true
 
 [dev-dependencies]
 d2b-contracts = { path = "../d2b-contracts", version = "0.0.0-bootstrap" }
+d2b-contracts-broker = { path = "../d2b-contracts-broker", version = "0.0.0-bootstrap" }
+d2b-contracts-control = { path = "../d2b-contracts-control", version = "0.0.0-bootstrap" }
 d2b-host = { path = "../d2b-host", version = "0.0.0-bootstrap" }
 regex = "1"
 rnix = "0.14"

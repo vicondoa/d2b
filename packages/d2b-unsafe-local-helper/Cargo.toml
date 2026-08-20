@@ -12,6 +12,7 @@ workspace = true
 [dependencies]
 clap = { version = "4.5", features = ["derive"] }
 d2b-contracts = { path = "../d2b-contracts", version = "0.0.0-bootstrap" }
+d2b-contracts-control = { path = "../d2b-contracts-control", version = "0.0.0-bootstrap" }
 d2b-core = { path = "../d2b-core", version = "0.0.0-bootstrap" }
 d2b-realm-core = { path = "../d2b-realm-core", version = "0.0.0-bootstrap" }
 d2b-wayland-proxy = { path = "../d2b-wayland-proxy", version = "0.1.0" }

@@ -1,7 +1,6 @@
 use d2b_contracts::{
     Error, FeatureFlag, Hello, SemverRange, Version, decode_json_body,
     ids::{OperationId, RealmId, WorkloadId},
-    public_wire::BridgeCheck,
     token::{ProtocolToken, TokenError},
     v3::{IfName, IfNameError},
     workload_identity::{WorkloadIdentity, WorkloadTarget},
@@ -55,24 +54,6 @@ fn wire_errors_preserve_stable_shape_and_reject_unknown_fields() {
         "wire-unknown-field"
     );
 
-    for bridge in ["abcdefghijklmnop", "bad.name"] {
-        let invalid_ifname = serde_json::json!({
-            "bridge": bridge,
-            "present": true,
-            "tap": null
-        });
-        let decoded = decode_json_body::<BridgeCheck>(
-            "BridgeCheck",
-            &serde_json::to_vec(&invalid_ifname).unwrap(),
-        );
-        assert_eq!(
-            decoded
-                .expect_err("invalid interface names fail as typed wire errors")
-                .kind()
-                .as_str(),
-            "wire-ifname-invalid"
-        );
-    }
 }
 
 #[test]
@@ -88,16 +69,4 @@ fn workload_identity_round_trips_without_reintroducing_legacy_owners() {
     let decoded: WorkloadIdentity = serde_json::from_str(&json).expect("deserialize identity");
     assert_eq!(decoded, identity);
     assert_eq!(decoded.target().to_canonical(), "builder.work.d2b");
-}
-
-#[test]
-fn wire_dto_uses_the_canonical_ifname_type() {
-    let response = BridgeCheck {
-        bridge: IfName::new("d2b-br0").expect("valid bridge"),
-        present: true,
-        tap: Some(IfName::new("d2b-tap0").expect("valid tap")),
-    };
-    let encoded = serde_json::to_value(response).expect("serialize bridge check");
-    assert_eq!(encoded["bridge"], "d2b-br0");
-    assert_eq!(encoded["tap"], "d2b-tap0");
 }

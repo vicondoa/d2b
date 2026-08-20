@@ -12,7 +12,7 @@ pub mod service;
 pub mod shell;
 pub mod terminal_io;
 
-use d2b_contracts::guest_wire::{
+use d2b_contracts_control::guest_wire::{
     GUEST_CONTROL_PROTOCOL_VERSION, GuestCapability, GuestSubsystem, HealthOrigin, HealthReason,
     HealthRemediation, HealthResponse, HealthState,
 };

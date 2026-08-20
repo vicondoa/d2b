@@ -15,7 +15,7 @@ use std::path::{Component, Path, PathBuf};
 use std::sync::{Mutex, OnceLock};
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use d2b_contracts::broker_wire::{OpenZoneStoreResponse, ZoneStoreDisposition};
+use d2b_contracts_broker::broker_wire::{OpenZoneStoreResponse, ZoneStoreDisposition};
 use d2b_contracts::v3::storage::{
     ZoneStoreAuxiliaryDirectory, ZoneStoreDescriptorPublicationRequirement,
     ZoneStoreDirectoryRepairOwner, ZoneStoreFilesystemRequirement, ZoneStoreFsyncRequirement,

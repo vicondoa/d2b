@@ -71,7 +71,7 @@ const BUNDLE_RESOLVER_RS: &str = "packages/d2b-core/src/bundle_resolver.rs";
 const LIVE_HANDLERS_RS: &str = "packages/d2b-priv-broker/src/live_handlers.rs";
 const SYS_RS: &str = "packages/d2b-priv-broker/src/sys.rs";
 const PROCESSES_RS: &str = "packages/d2b-core/src/processes.rs";
-const BROKER_WIRE_RS: &str = "packages/d2b-contracts/src/broker_wire.rs";
+const BROKER_WIRE_RS: &str = "packages/d2b-contracts-broker/src/broker_wire.rs";
 
 /// The closed-set Gpu device-bind matrix from the bash gate's `DEVICE_BINDS`
 /// array (6 entries, includes `/dev/udmabuf` and the per-card `/dev/nvidia0`).
@@ -578,7 +578,7 @@ fn wayland_proxy_policy_ref_device_classes_source() {
 
 /// Layer-1 `assert_rust_variant_exists` (bash lines 150-161): the WaylandProxy
 /// role variant MUST exist in both `packages/d2b-core/src/processes.rs`
-/// (`ProcessRole::WaylandProxy`) and `packages/d2b-contracts/src/broker_wire.rs`
+/// (`ProcessRole::WaylandProxy`) and `packages/d2b-contracts-broker/src/broker_wire.rs`
 /// (`RunnerRole::WaylandProxy`).
 #[test]
 fn wayland_proxy_rust_variants_declared_source() {

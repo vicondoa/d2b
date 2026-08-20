@@ -2,9 +2,9 @@ use crate::typed_error::{ErrorEnvelope, TypedError};
 use d2b_contracts::v3::IfName;
 use d2b_contracts::{
     FeatureFlag, Hello, HelloOk, HelloRejected, HelloRejectedReason, Version,
-    broker_wire::ExportBrokerAuditResponse,
-    public_wire::{self, AuditResponse, AuthStatusResponse},
 };
+use d2b_contracts_broker::broker_wire::ExportBrokerAuditResponse;
+use d2b_contracts_control::public_wire::{self, AuditResponse, AuthStatusResponse};
 use semver::{Version as SemverVersion, VersionReq};
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value, json};
@@ -540,7 +540,11 @@ pub fn status_response(status: Value) -> Value {
 pub fn audit_response(payload: ExportBrokerAuditResponse) -> AuditResponseFrame {
     AuditResponseFrame {
         type_name: "auditResponse",
-        payload: payload.into(),
+        payload: AuditResponse {
+            entries: payload.entries,
+            next_cursor: payload.next_cursor,
+            complete: payload.complete,
+        },
     }
 }
 
@@ -715,7 +719,7 @@ fn map_parse_error(error: serde_json::Error) -> TypedError {
 #[cfg(test)]
 mod tests {
     use super::{Request, audit_response, parse_request};
-    use d2b_contracts::broker_wire::{
+    use d2b_contracts_broker::broker_wire::{
         AuditExportCursor, AuditExportEntry, ExportBrokerAuditResponse,
     };
     use serde_json::json;
@@ -740,7 +744,7 @@ mod tests {
         let frame = br#"{"type":"workload","op":"launcherExec","args":{"target":"browser.host.d2b","itemId":"browser","operationId":"launch-1"}}"#;
         assert!(matches!(
             parse_request(frame).expect("workload request"),
-            Request::Workload(d2b_contracts::public_wire::WorkloadOp::LauncherExec(_))
+            Request::Workload(d2b_contracts_control::public_wire::WorkloadOp::LauncherExec(_))
         ));
     }
 
@@ -791,7 +795,7 @@ mod tests {
         let mut payload = frame.as_object().expect("audit frame object").clone();
         assert_eq!(payload.remove("type"), Some(json!("auditResponse")));
 
-        let public: d2b_contracts::public_wire::AuditResponse =
+        let public: d2b_contracts_control::public_wire::AuditResponse =
             serde_json::from_value(payload.into()).expect("public audit response decodes");
         assert_eq!(public.entries.len(), 1);
         assert_eq!(public.entries[0].sequence, 42);

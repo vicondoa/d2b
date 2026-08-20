@@ -234,6 +234,8 @@ filegroup(
         "//packages/d2b-clipd:cargo_workspace_sources",
         "//packages/d2b-contract-tests:cargo_workspace_sources",
         "//packages/d2b-contracts:cargo_workspace_sources",
+        "//packages/d2b-contracts-broker:cargo_workspace_sources",
+        "//packages/d2b-contracts-control:cargo_workspace_sources",
         "//packages/d2b-controller-toolkit:cargo_workspace_sources",
         "//packages/d2b-core:cargo_workspace_sources",
         "//packages/d2b-core-controller:cargo_workspace_sources",

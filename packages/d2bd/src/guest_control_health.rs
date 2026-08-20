@@ -8,15 +8,15 @@ use std::os::fd::OwnedFd;
 use std::time::{Duration, Instant};
 
 use async_trait::async_trait;
-use d2b_contracts::broker_wire::{
+use d2b_contracts_broker::broker_wire::{
     GuestBootIdWire, GuestControlAuthPurpose, GuestControlDirection, GuestControlProofRole,
     GuestControlSignRequest, GuestControlSignResponse,
 };
-use d2b_contracts::guest_auth::{
+use d2b_contracts_control::guest_auth::{
     AUTH_NONCE_LEN, AUTH_TAG_LEN, AUTH_TRANSCRIPT_VERSION, GUEST_CONTROL_AUTH_PORT,
 };
-use d2b_contracts::guest_proto as pb;
-use d2b_contracts::guest_wire::{GUEST_CONTROL_PROTOCOL_VERSION, READ_GUEST_FILE_MAX_BYTES};
+use d2b_contracts_control::guest_proto as pb;
+use d2b_contracts_control::guest_wire::{GUEST_CONTROL_PROTOCOL_VERSION, READ_GUEST_FILE_MAX_BYTES};
 use protobuf::{Message, MessageField};
 use subtle::ConstantTimeEq;
 

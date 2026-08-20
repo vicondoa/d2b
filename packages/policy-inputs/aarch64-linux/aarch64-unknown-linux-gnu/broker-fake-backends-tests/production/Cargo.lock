@@ -525,6 +525,30 @@ dependencies = [
 
 
 [[package]]
+name = "d2b-contracts-broker"
+version = "0.0.0-bootstrap"
+dependencies = [
+ "d2b-contracts",
+ "schemars",
+ "serde",
+ "serde_json",
+ "sha2",
+]
+
+
+[[package]]
+name = "d2b-contracts-control"
+version = "0.0.0-bootstrap"
+dependencies = [
+ "d2b-contracts",
+ "protobuf",
+ "schemars",
+ "serde",
+ "serde_json",
+]
+
+
+[[package]]
 name = "d2b-contracts"
 version = "0.0.0-bootstrap"
 dependencies = [
@@ -595,6 +619,8 @@ version = "0.0.0-bootstrap"
 dependencies = [
  "d2b-audit",
  "d2b-contracts",
+ "d2b-contracts-broker",
+ "d2b-contracts-control",
  "d2b-core",
  "d2b-host",
  "d2b-realm-core",

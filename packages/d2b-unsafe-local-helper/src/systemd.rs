@@ -1,5 +1,5 @@
 use crate::environment::{EnvironmentError, ManagerEnvironment};
-use d2b_contracts::unsafe_local_wire::{HelperScopeKind, HelperScopeState, ScopeIdentity};
+use d2b_contracts_control::unsafe_local_wire::{HelperScopeKind, HelperScopeState, ScopeIdentity};
 use std::fmt;
 use std::path::Path;
 use std::sync::Mutex;

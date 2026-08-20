@@ -54,11 +54,13 @@ const DECLARATION_WINDOW: usize = 20;
 /// This is an allowlist rather than a denylist on purpose: a denylist admits
 /// every crate nobody thought to name, and the direction rule is exactly the
 /// kind of invariant a new workspace member quietly breaks. The admitted set
-/// is the public neutral contract, the shared conformance kit, the pure host
+/// is the narrow contract families, the shared conformance kit, the pure host
 /// argv helper, the toolkits, the Provider SDK, and the codec-neutral realm
 /// Provider traits used by the gateway compatibility adapters.
 const ALLOWED_WORKSPACE_DEPS: &[&str] = &[
     "d2b-contracts",
+    "d2b-contracts-broker",
+    "d2b-contracts-control",
     "d2b-controller-toolkit",
     "d2b-core",
     "d2b-host-argv",

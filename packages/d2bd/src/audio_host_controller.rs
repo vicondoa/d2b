@@ -36,14 +36,12 @@
 use std::path::PathBuf;
 use std::time::Duration;
 
-use d2b_contracts::{
-    broker_wire::{
-        BrokerCallerRole, BrokerRequest, BrokerResponse, PipeWireAudioAction, PipeWireAudioChannel,
-        PipeWireAudioRequest,
-    },
-    public_wire::AudioChannel,
-    types::{BundleOpId, RoleId, VmId},
+use d2b_contracts::types::{BundleOpId, RoleId, VmId};
+use d2b_contracts_broker::broker_wire::{
+    BrokerCallerRole, BrokerRequest, BrokerResponse, PipeWireAudioAction, PipeWireAudioChannel,
+    PipeWireAudioRequest,
 };
+use d2b_contracts_control::public_wire::AudioChannel;
 use d2b_core::audio_policy::{AudioGrant, LevelPercent};
 use d2b_core::bundle_resolver::intent_id_runner;
 use d2b_core::processes::{ProcessNode, ProcessRole, ProcessesJson, VmProcessDag};
@@ -343,7 +341,7 @@ fn target_node_from_pw_dump(bytes: &[u8], vm_name: &str, channel: AudioChannel) 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use d2b_contracts::public_wire::AudioChannel;
+    use d2b_contracts_control::public_wire::AudioChannel;
     use d2b_core::audio_policy::{AudioGrant, LevelPercent};
 
     // ── FakeHostController ──────────────────────────────────────────────────

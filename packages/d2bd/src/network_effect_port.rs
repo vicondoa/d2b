@@ -4,7 +4,7 @@
 //! resolves the provider's opaque context into the existing typed broker wire
 //! operations and maps only closed broker outcomes back to the provider.
 
-use d2b_contracts::broker_wire::{
+use d2b_contracts_broker::broker_wire::{
     ApplyNftablesProjectionRequest, ApplyNmUnmanagedRequest, ApplyRouteRequest, ApplySysctlRequest,
     BrokerCallerRole, BrokerRequest, BrokerResponse, CreateBridgeRequest, DeleteBridgeRequest,
     DeletePersistentTapRequest, NftablesProjectionAction, SeedDnsmasqLeaseRequest,

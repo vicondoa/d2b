@@ -13,7 +13,6 @@ use std::{
 };
 
 use d2b_contracts::{
-    broker_wire::BrokerCallerRole,
     v3::{
         ResourceRef,
         identity::{
@@ -23,6 +22,7 @@ use d2b_contracts::{
         zone_routing::{ZoneLabelId, ZonePath},
     },
 };
+use d2b_contracts_broker::broker_wire::BrokerCallerRole;
 use d2b_core::host::HostJson;
 use d2b_provider::instance::ProviderInstance;
 use d2b_provider::{

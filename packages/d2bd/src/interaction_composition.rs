@@ -40,10 +40,8 @@ use d2b_contracts::v3::{
     execution_policy::{BoundedToken, ExecutionDomain},
     process::{CapabilityClass, EnvironmentClass, MappingClass, NamespaceClass, UserNamespaceSpec},
 };
-use d2b_contracts::{
-    broker_wire::{BrokerCallerRole, RunnerRole, SandboxLaunchPlan},
-    types::{BundleOpId, RoleId, VmId},
-};
+use d2b_contracts::{types::{BundleOpId, RoleId, VmId}};
+use d2b_contracts_broker::broker_wire::{BrokerCallerRole, RunnerRole, SandboxLaunchPlan};
 use d2b_core::{
     bundle_resolver::{BundleResolver, ResolvedRunnerIntent},
     processes::ProcessRole,

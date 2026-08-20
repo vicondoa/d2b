@@ -13,7 +13,7 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::time::Duration;
 
-use d2b_contracts::broker_wire::{
+use d2b_contracts_broker::broker_wire::{
     QemuMediaBootRequest, QemuMediaEnrollRequest, QemuMediaEnrollResponse, QemuMediaHotplugEvent,
     QemuMediaHotplugRequest, QemuMediaHotplugResponse, QemuMediaHotplugStatus,
     QemuMediaLifecycleAction, QemuMediaLifecycleRequest, QemuMediaLifecycleResponse,

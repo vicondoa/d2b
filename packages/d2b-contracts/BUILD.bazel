@@ -21,23 +21,8 @@ filegroup(
 )
 
 filegroup(
-    name = "guest_control_proto_source",
-    srcs = ["proto/guest_control.proto"],
-    visibility = ["//visibility:public"],
-)
-
-filegroup(
     name = "resource_proto_source",
     srcs = ["proto/d2b-resource-v3.proto"],
-    visibility = ["//visibility:public"],
-)
-
-filegroup(
-    name = "guest_proto_generated",
-    srcs = [
-        "src/generated/guest_control.rs",
-        "src/generated/mod.rs",
-    ],
     visibility = ["//visibility:public"],
 )
 
@@ -101,16 +86,6 @@ rust_test(
 )
 
 rust_test(
-    name = "guest_proto_bindings",
-    srcs = ["tests/guest_proto_bindings.rs"],
-    compile_data = ["Cargo.toml"],
-    visibility = ["//visibility:public"],
-    deps = [
-        ":d2b_contracts",
-    ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
-)
-
-rust_test(
     name = "resource_v3_protocol_vectors",
     srcs = ["tests/resource_v3_protocol_vectors.rs"],
     compile_data = [
@@ -126,16 +101,6 @@ rust_test(
 rust_test(
     name = "usbip_effect_port",
     srcs = ["tests/usbip_effect_port.rs"],
-    compile_data = ["Cargo.toml"],
-    visibility = ["//visibility:public"],
-    deps = [
-        ":d2b_contracts",
-    ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
-)
-
-rust_test(
-    name = "version_skew",
-    srcs = ["tests/version_skew.rs"],
     compile_data = ["Cargo.toml"],
     visibility = ["//visibility:public"],
     deps = [

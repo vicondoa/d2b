@@ -987,6 +987,8 @@ version = "0.0.0-bootstrap"
 dependencies = [
  "clap",
  "d2b-contracts",
+ "d2b-contracts-broker",
+ "d2b-contracts-control",
  "d2b-core",
  "d2b-realm-core",
  "d2b-realm-router",
@@ -1063,6 +1065,8 @@ name = "d2b-contract-tests"
 version = "0.0.0-bootstrap"
 dependencies = [
  "d2b-contracts",
+ "d2b-contracts-broker",
+ "d2b-contracts-control",
  "d2b-core",
  "d2b-host",
  "regex",
@@ -1072,6 +1076,28 @@ dependencies = [
  "serde_yaml_ng",
  "sha2",
  "syn 2.0.119",
+]
+
+[[package]]
+name = "d2b-contracts-broker"
+version = "0.0.0-bootstrap"
+dependencies = [
+ "d2b-contracts",
+ "schemars",
+ "serde",
+ "serde_json",
+ "sha2",
+]
+
+[[package]]
+name = "d2b-contracts-control"
+version = "0.0.0-bootstrap"
+dependencies = [
+ "d2b-contracts",
+ "protobuf",
+ "schemars",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]
@@ -1218,6 +1244,7 @@ version = "0.0.0-bootstrap"
 dependencies = [
  "async-trait",
  "d2b-contracts",
+ "d2b-contracts-control",
  "d2b-exec-runner",
  "d2b-realm-core",
  "futures",
@@ -1281,6 +1308,8 @@ version = "0.0.0-bootstrap"
 dependencies = [
  "d2b-audit",
  "d2b-contracts",
+ "d2b-contracts-broker",
+ "d2b-contracts-control",
  "d2b-core",
  "d2b-host",
  "d2b-realm-core",
@@ -1409,6 +1438,7 @@ name = "d2b-provider-device-usbip"
 version = "0.0.0-bootstrap"
 dependencies = [
  "d2b-contracts",
+ "d2b-contracts-broker",
 ]
 
 [[package]]
@@ -1427,6 +1457,7 @@ name = "d2b-provider-network-local"
 version = "0.0.0-bootstrap"
 dependencies = [
  "d2b-contracts",
+ "d2b-contracts-broker",
 ]
 
 [[package]]
@@ -1523,6 +1554,7 @@ name = "d2b-provider-supervisor"
 version = "0.0.0-bootstrap"
 dependencies = [
  "d2b-contracts",
+ "d2b-contracts-broker",
  "d2b-core",
  "d2b-process",
  "d2b-process-conformance",
@@ -1615,6 +1647,7 @@ version = "0.0.0-bootstrap"
 dependencies = [
  "async-trait",
  "d2b-contracts",
+ "d2b-contracts-control",
  "d2b-provider",
  "d2b-session",
  "ring",
@@ -1834,6 +1867,7 @@ version = "0.0.0-bootstrap"
 dependencies = [
  "clap",
  "d2b-contracts",
+ "d2b-contracts-control",
  "d2b-core",
  "d2b-realm-core",
  "d2b-wayland-proxy",
@@ -1887,6 +1921,8 @@ dependencies = [
  "d2b-audit",
  "d2b-bus",
  "d2b-contracts",
+ "d2b-contracts-broker",
+ "d2b-contracts-control",
  "d2b-core",
  "d2b-core-controller",
  "d2b-gateway",
@@ -6298,6 +6334,8 @@ dependencies = [
  "clap_mangen",
  "d2b",
  "d2b-contracts",
+ "d2b-contracts-broker",
+ "d2b-contracts-control",
  "d2b-core",
  "d2b-realm-core",
  "nix 0.29.0",

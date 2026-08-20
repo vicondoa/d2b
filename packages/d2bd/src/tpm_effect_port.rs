@@ -8,10 +8,12 @@
 use std::{sync::Mutex, time::Duration};
 
 use d2b_contracts::v3::{ResourceRef, ResourceUid};
-use d2b_contracts::{
+use d2b_contracts_broker::{
     broker_wire::{
         BrokerCallerRole, BrokerRequest, BrokerResponse, RunnerRole, SpawnRunnerRequest,
     },
+};
+use d2b_contracts::{
     types::{BundleOpId, PathClass, RoleId, VmId},
 };
 use d2b_core::bundle_resolver::BundleResolver;
@@ -28,29 +30,29 @@ use sha2::{Digest, Sha256};
 
 #[allow(dead_code)]
 fn map_legacy_migration_outcome(
-    outcome: d2b_contracts::broker_wire::LegacySwtpmMigrationOutcome,
+    outcome: d2b_contracts_broker::broker_wire::LegacySwtpmMigrationOutcome,
 ) -> LegacyMigrationOutcome {
     match outcome {
-        d2b_contracts::broker_wire::LegacySwtpmMigrationOutcome::Migrated => {
+        d2b_contracts_broker::broker_wire::LegacySwtpmMigrationOutcome::Migrated => {
             LegacyMigrationOutcome::Migrated
         }
-        d2b_contracts::broker_wire::LegacySwtpmMigrationOutcome::AlreadyMigrated => {
+        d2b_contracts_broker::broker_wire::LegacySwtpmMigrationOutcome::AlreadyMigrated => {
             LegacyMigrationOutcome::AlreadyMigrated
         }
-        d2b_contracts::broker_wire::LegacySwtpmMigrationOutcome::NotApplicable => {
+        d2b_contracts_broker::broker_wire::LegacySwtpmMigrationOutcome::NotApplicable => {
             LegacyMigrationOutcome::NotApplicable
         }
-        d2b_contracts::broker_wire::LegacySwtpmMigrationOutcome::Pending => {
+        d2b_contracts_broker::broker_wire::LegacySwtpmMigrationOutcome::Pending => {
             LegacyMigrationOutcome::Pending
         }
-        d2b_contracts::broker_wire::LegacySwtpmMigrationOutcome::Failed => {
+        d2b_contracts_broker::broker_wire::LegacySwtpmMigrationOutcome::Failed => {
             LegacyMigrationOutcome::Failed
         }
-        d2b_contracts::broker_wire::LegacySwtpmMigrationOutcome::Ambiguous => {
+        d2b_contracts_broker::broker_wire::LegacySwtpmMigrationOutcome::Ambiguous => {
             LegacyMigrationOutcome::Ambiguous
         }
-        d2b_contracts::broker_wire::LegacySwtpmMigrationOutcome::AdoptionRequired
-        | d2b_contracts::broker_wire::LegacySwtpmMigrationOutcome::NeverProvisioned => {
+        d2b_contracts_broker::broker_wire::LegacySwtpmMigrationOutcome::AdoptionRequired
+        | d2b_contracts_broker::broker_wire::LegacySwtpmMigrationOutcome::NeverProvisioned => {
             LegacyMigrationOutcome::Ambiguous
         }
     }
@@ -165,7 +167,7 @@ impl<'a> LiveTpmEffectExecutor<'a> {
         timeout: Duration,
     ) -> Result<
         (
-            d2b_contracts::broker_wire::SpawnRunnerResponse,
+            d2b_contracts_broker::broker_wire::SpawnRunnerResponse,
             Vec<std::os::fd::RawFd>,
         ),
         TpmEffectError,
@@ -225,7 +227,7 @@ impl<'a> LiveTpmEffectExecutor<'a> {
 
     fn cleanup_failed_start(
         &self,
-        response: &d2b_contracts::broker_wire::SpawnRunnerResponse,
+        response: &d2b_contracts_broker::broker_wire::SpawnRunnerResponse,
         received_fds: &[std::os::fd::RawFd],
     ) {
         let removed = {
@@ -327,7 +329,7 @@ impl CoreTpmEffectExecutor for LiveTpmEffectExecutor<'_> {
     ) -> Result<TpmStatePreparationResult, TpmEffectError> {
         let response = crate::dispatch_broker_request_as(
             self.state,
-            BrokerRequest::PrepareStateDir(d2b_contracts::broker_wire::PrepareDirRequest {
+            BrokerRequest::PrepareStateDir(d2b_contracts_broker::broker_wire::PrepareDirRequest {
                 vm_id: self.vm_id.clone(),
                 path_class: PathClass::Vm,
                 tracing_span_id: None,
@@ -970,7 +972,7 @@ pub(crate) fn register_device_tpm_controller() -> DeviceTpmControllerRegistratio
 #[cfg(test)]
 mod tests {
     use super::*;
-    use d2b_contracts::broker_wire::LegacySwtpmMigrationOutcome;
+    use d2b_contracts_broker::broker_wire::LegacySwtpmMigrationOutcome;
 
     #[test]
     fn broker_migration_outcomes_are_preserved_at_the_provider_boundary() {

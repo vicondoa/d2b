@@ -35,7 +35,7 @@
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
-use d2b_contracts::broker_wire::RunnerRole;
+use d2b_contracts_broker::broker_wire::RunnerRole;
 use serde::{Deserialize, Serialize};
 
 /// One persisted runner slot. Mirrors what the daemon learnt from a

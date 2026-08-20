@@ -58,7 +58,7 @@ pub struct LiveOpenHidrawSecurityKeyOutcome {
 /// validate it. Returns the fd plus scrubbed metadata for the audit
 /// record and wire response.
 pub fn live_open_hidraw_security_key(
-    req: &d2b_contracts::broker_wire::OpenHidrawSecurityKeyRequest,
+    req: &d2b_contracts_broker::broker_wire::OpenHidrawSecurityKeyRequest,
     selectors: &[SecurityKeySelector],
     _audit_log: &crate::audit::AuditLog,
 ) -> Result<LiveOpenHidrawSecurityKeyOutcome, OpError> {
@@ -78,7 +78,7 @@ pub fn live_open_hidraw_security_key(
 
 /// Require Core's exact Device and Host-backing proof before any node lookup.
 pub(crate) fn validate_device_authority(
-    req: &d2b_contracts::broker_wire::OpenHidrawSecurityKeyRequest,
+    req: &d2b_contracts_broker::broker_wire::OpenHidrawSecurityKeyRequest,
 ) -> Result<(), OpError> {
     if req.device_ref.resource_type().as_str() != "Device"
         || req.authority_key.is_empty()
@@ -90,7 +90,7 @@ pub(crate) fn validate_device_authority(
         });
     }
     if req.authority_key
-        != d2b_contracts::broker_wire::security_key_authority_binding(
+        != d2b_contracts_broker::broker_wire::security_key_authority_binding(
             &req.device_ref,
             &req.selector_id,
         )
@@ -360,7 +360,7 @@ mod tests {
 
     #[test]
     fn missing_core_device_authority_refuses_before_lookup() {
-        let request = d2b_contracts::broker_wire::OpenHidrawSecurityKeyRequest {
+        let request = d2b_contracts_broker::broker_wire::OpenHidrawSecurityKeyRequest {
             vm_id: d2b_contracts::types::VmId::new("work-vm"),
             selector_id: "hidraw-0".to_owned(),
             device_ref: ResourceRef::parse("Device/hidraw-0").unwrap(),
@@ -375,11 +375,11 @@ mod tests {
 
     #[test]
     fn device_authority_is_bound_to_the_requested_selector() {
-        let request = d2b_contracts::broker_wire::OpenHidrawSecurityKeyRequest {
+        let request = d2b_contracts_broker::broker_wire::OpenHidrawSecurityKeyRequest {
             vm_id: d2b_contracts::types::VmId::new("work-vm"),
             selector_id: "key-b".to_owned(),
             device_ref: ResourceRef::parse("Device/key-a").unwrap(),
-            authority_key: d2b_contracts::broker_wire::security_key_authority_binding(
+            authority_key: d2b_contracts_broker::broker_wire::security_key_authority_binding(
                 &ResourceRef::parse("Device/key-a").unwrap(),
                 "key-a",
             ),
@@ -394,10 +394,10 @@ mod tests {
     #[test]
     fn device_authority_binds_the_store_admitted_device_to_its_selector() {
         let device_ref = ResourceRef::parse("Device/corp-vm-security-key").unwrap();
-        let request = d2b_contracts::broker_wire::OpenHidrawSecurityKeyRequest {
+        let request = d2b_contracts_broker::broker_wire::OpenHidrawSecurityKeyRequest {
             vm_id: d2b_contracts::types::VmId::new("work-vm"),
             selector_id: "key-primary".to_owned(),
-            authority_key: d2b_contracts::broker_wire::security_key_authority_binding(
+            authority_key: d2b_contracts_broker::broker_wire::security_key_authority_binding(
                 &device_ref,
                 "key-primary",
             ),

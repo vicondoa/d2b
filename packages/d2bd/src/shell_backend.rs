@@ -4,7 +4,7 @@ use crate::{
     typed_error::{TypedError, UnsafeLocalShellErrorKind},
     unsafe_local_terminal::{UnsafeLocalTerminalClient, UnsafeLocalTerminalError},
 };
-use d2b_contracts::{public_wire, terminal_wire as tw};
+use d2b_contracts_control::{public_wire, terminal_wire as tw};
 use std::{fmt, sync::Arc, time::Duration};
 
 pub(crate) enum ShellTerminalOp {
@@ -247,10 +247,10 @@ fn map_terminal_error(error: UnsafeLocalTerminalError) -> TypedError {
 }
 
 pub(crate) fn map_helper_failure(
-    code: d2b_contracts::unsafe_local_wire::HelperFailureCode,
+    code: d2b_contracts_control::unsafe_local_wire::HelperFailureCode,
 ) -> TypedError {
     use UnsafeLocalShellErrorKind as UnsafeKind;
-    use d2b_contracts::unsafe_local_wire::HelperFailureCode as H;
+    use d2b_contracts_control::unsafe_local_wire::HelperFailureCode as H;
     let kind = match code {
         H::InvalidRequest => UnsafeKind::Protocol,
         H::OperationIdConflict => UnsafeKind::OperationConflict,
@@ -284,7 +284,7 @@ pub(crate) fn unsafe_shell_failed(kind: UnsafeLocalShellErrorKind) -> TypedError
 #[cfg(test)]
 mod tests {
     use super::*;
-    use d2b_contracts::unsafe_local_wire::{
+    use d2b_contracts_control::unsafe_local_wire::{
         HelperTerminalAttachmentClosed, HelperTerminalControlResponse, HelperTerminalRequest,
         HelperTerminalResponse,
     };
@@ -312,12 +312,12 @@ mod tests {
         let mut frame = Vec::from(prefix);
         frame.resize(length + 4, 0);
         peer.read_exact(&mut frame[4..]).unwrap();
-        d2b_contracts::unsafe_local_wire::decode_unsafe_local_terminal_frame(&frame).unwrap()
+        d2b_contracts_control::unsafe_local_wire::decode_unsafe_local_terminal_frame(&frame).unwrap()
     }
 
     fn send_response(peer: &mut UnixStream, response: HelperTerminalResponse) {
         peer.write_all(
-            &d2b_contracts::unsafe_local_wire::encode_unsafe_local_terminal_frame(&response)
+            &d2b_contracts_control::unsafe_local_wire::encode_unsafe_local_terminal_frame(&response)
                 .unwrap(),
         )
         .unwrap();

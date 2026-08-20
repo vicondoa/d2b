@@ -431,8 +431,6 @@ rust_test(
     name = "policy_modules",
     srcs = ["tests/policy_modules.rs"],
     compile_data = ["Cargo.toml"],
-    data = ["@rules_rust//rust/toolchain:current_cargo_files"],
-    env = {"CARGO": "$(rlocationpath @rules_rust//rust/toolchain:current_cargo_files)"},
     tags = ["no-remote-cache"],
     visibility = ["//visibility:public"],
     deps = [
@@ -472,7 +470,12 @@ rust_test(
     name = "policy_production_closure",
     srcs = ["tests/policy_production_closure.rs"],
     compile_data = ["Cargo.toml"],
-    data = ["//bazel/checks/rust:source_hygiene_sources"],
+    data = [
+        "//:Cargo.lock",
+        "//:.github/CODEOWNERS",
+        "//:policy_inputs_workspace_sources",
+        "//bazel/checks/rust:source_hygiene_sources",
+    ],
     env_inherit = ["D2B_REPO_ROOT"],
     tags = ["no-remote-cache", "no-sandbox"],
     visibility = ["//visibility:public"],
@@ -485,8 +488,6 @@ rust_test(
     name = "policy_provider_crate_layout",
     srcs = ["tests/policy_provider_crate_layout.rs"],
     compile_data = ["Cargo.toml"],
-    data = ["@rules_rust//rust/toolchain:current_cargo_files"],
-    env = {"CARGO": "$(rlocationpath @rules_rust//rust/toolchain:current_cargo_files)"},
     tags = ["no-remote-cache"],
     visibility = ["//visibility:public"],
     deps = [
@@ -750,6 +751,7 @@ rust_test(
     deps = [
         ":d2b_contract_tests",
         "//packages/d2b-contracts:d2b_contracts",
+        "//packages/d2b-contracts-control:d2b_contracts_control",
     ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
 )
 
@@ -769,6 +771,8 @@ rust_test(
     deps = [
         ":d2b_contract_tests",
         "//packages/d2b-contracts:d2b_contracts",
+        "//packages/d2b-contracts-broker:d2b_contracts_broker",
+        "//packages/d2b-contracts-control:d2b_contracts_control",
         "//packages/d2b-core:d2b_core",
     ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
 )
@@ -781,6 +785,7 @@ rust_test(
     deps = [
         ":d2b_contract_tests",
         "//packages/d2b-contracts:d2b_contracts",
+        "//packages/d2b-contracts-broker:d2b_contracts_broker",
     ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
 )
 
@@ -792,6 +797,7 @@ rust_test(
     deps = [
         ":d2b_contract_tests",
         "//packages/d2b-contracts:d2b_contracts",
+        "//packages/d2b-contracts-control:d2b_contracts_control",
     ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
 )
 

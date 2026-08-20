@@ -6,9 +6,9 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
 use d2b_contracts::v3::IfName;
-use d2b_contracts::{
-    broker_wire::{CreatePersistentTapRequest, DeletePersistentTapRequest},
-    v3::ResourceUid,
+use d2b_contracts::v3::ResourceUid;
+use d2b_contracts_broker::broker_wire::{
+    CreatePersistentTapRequest, DeletePersistentTapRequest,
 };
 use d2b_core::bundle_resolver::ResolvedBridgeIntent;
 use serde::{Deserialize, Serialize};

@@ -4,9 +4,11 @@
 /// `d2b usb attach <vm> <present-busid> --apply` explicit path - the
 /// path that does NOT require static busid/vendor allowlists in the bundle.
 use d2b_contract_tests::read_repo_file;
-use d2b_contracts::{
-    broker_wire::{BrokerRequest, UsbipExplicitBindRequest, UsbipExplicitFirewallRuleRequest},
-    usbip::{UsbipClaimSource, UsbipDaemonClaimRecord, validate_bus_id},
+use d2b_contracts::usbip::{
+    UsbipClaimSource, UsbipDaemonClaimRecord, validate_bus_id,
+};
+use d2b_contracts_broker::broker_wire::{
+    BrokerRequest, UsbipExplicitBindRequest, UsbipExplicitFirewallRuleRequest,
 };
 
 // ---------------------------------------------------------------------------

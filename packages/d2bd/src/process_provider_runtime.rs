@@ -13,7 +13,7 @@ use std::{
     time::{Duration, Instant},
 };
 
-use d2b_contracts::broker_wire::BrokerCallerRole;
+use d2b_contracts_broker::broker_wire::BrokerCallerRole;
 use d2b_contracts::v3::execution_policy::{BoundedToken, ExecutionDomain};
 use d2b_contracts::v3::{
     ControllerGeneration, ResourceGeneration, ResourceRef, ResourceUid,

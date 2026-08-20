@@ -37,6 +37,7 @@ filegroup(
         "//:nix_workspace_sources",
         "//:nixos_modules_workspace_sources",
         "//:packages_workspace_sources",
+        "//:policy_inputs_workspace_sources",
         "//:pkgs_workspace_sources",
         "//:proof_workspace_sources",
         "//:rust-toolchain.toml",

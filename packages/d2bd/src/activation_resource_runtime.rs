@@ -12,20 +12,22 @@ use std::{
 };
 
 use d2b_contracts::{
-    broker_wire::{
-        ApplyHostGenerationHandoffResponse, BrokerCallerRole, BrokerRequest, BrokerResponse,
-    },
     host_generation::{
         ApplyHostGenerationHandoff, HandoffCallerRole, HandoffState, HostGenerationHandoffIntent,
         SourceGenerationCompatibilityFloorV1, target_fingerprint,
     },
-    public_wire::{self, MutatingVerbOutcome, MutatingVerbResponse, MutationFlags},
     resource_proto as wire,
     v3::{
         ActivationDetail, ActivationMode, ActivationOutcomeCode, CanonicalJsonValue,
         NixosGenerationSpec, ResourceEnvelope, ResourcePhase, ResourceRef, ResourceTypeName,
         ZoneId, ZoneRevision,
     },
+};
+use d2b_contracts_broker::broker_wire::{
+        ApplyHostGenerationHandoffResponse, BrokerCallerRole, BrokerRequest, BrokerResponse,
+};
+use d2b_contracts_control::public_wire::{
+    self, MutatingVerbOutcome, MutatingVerbResponse, MutationFlags,
 };
 use d2b_provider_activation_nixos::{
     ActivationCaller, ActivationController, CallerRole, GenerationObservation, GenerationPhase,

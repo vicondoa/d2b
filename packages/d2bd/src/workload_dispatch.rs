@@ -4,7 +4,7 @@ use std::{
     time::{Duration, Instant},
 };
 
-use d2b_contracts::{
+use d2b_contracts_control::{
     public_wire::{GraphicalLaunchPosture, ShellName, WorkloadAvailability, WorkloadPublicSummary},
     unsafe_local_wire::{HelperShellPolicy, RealmAccentColor},
 };

@@ -26,12 +26,12 @@
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
-use d2b_contracts::broker_wire::{
+use d2b_contracts_broker::broker_wire::{
     BrokerCallerRole, BrokerRequest, BrokerResponse, GuestControlSignRequest,
     GuestControlSignResponse,
 };
-use d2b_contracts::guest_auth::AUTH_NONCE_LEN;
-use d2b_contracts::guest_proto as pb;
+use d2b_contracts_control::guest_auth::AUTH_NONCE_LEN;
+use d2b_contracts_control::guest_proto as pb;
 
 use crate::guest_control_health::{
     AttemptBudget, GuestAudioChannelStatus, GuestAudioSetError, GuestAudioSetRequest,
@@ -255,8 +255,8 @@ pub trait GuestControlProbe: Send + Sync {
         &self,
         params: &ProbeParams,
         attempt_timeout: Duration,
-        channel: d2b_contracts::guest_proto::AudioChannel,
-        kind: d2b_contracts::guest_proto::AudioSetKind,
+        channel: d2b_contracts_control::guest_proto::AudioChannel,
+        kind: d2b_contracts_control::guest_proto::AudioSetKind,
         grant_on: bool,
         level: u32,
     ) -> Result<GuestAudioChannelStatus, GuestAudioSetError> {
@@ -422,8 +422,8 @@ impl GuestControlProbe for RealGuestControlProbe {
         &self,
         params: &ProbeParams,
         attempt_timeout: Duration,
-        channel: d2b_contracts::guest_proto::AudioChannel,
-        kind: d2b_contracts::guest_proto::AudioSetKind,
+        channel: d2b_contracts_control::guest_proto::AudioChannel,
+        kind: d2b_contracts_control::guest_proto::AudioSetKind,
         grant_on: bool,
         level: u32,
     ) -> Result<GuestAudioChannelStatus, GuestAudioSetError> {
@@ -795,8 +795,8 @@ pub fn run_audio_set_once(
     broker_socket_path: &Path,
     caller_role: BrokerCallerRole,
     attempt_timeout: Duration,
-    channel: d2b_contracts::guest_proto::AudioChannel,
-    kind: d2b_contracts::guest_proto::AudioSetKind,
+    channel: d2b_contracts_control::guest_proto::AudioChannel,
+    kind: d2b_contracts_control::guest_proto::AudioSetKind,
     grant_on: bool,
     level: u32,
 ) -> Result<GuestAudioChannelStatus, GuestAudioSetError> {
@@ -885,7 +885,7 @@ pub fn activation_error_is_transient(error: &GuestSystemActivationError) -> bool
 }
 
 pub fn activation_status_error_is_transient(error: &GuestSystemActivationError) -> bool {
-    use d2b_contracts::guest_proto::GuestControlErrorKind as Kind;
+    use d2b_contracts_control::guest_proto::GuestControlErrorKind as Kind;
     activation_error_is_transient(error)
         || matches!(
             error,
@@ -1145,8 +1145,8 @@ pub fn run_audio_set_on_dedicated_thread(
     params: ProbeParams,
     broker_socket_path: PathBuf,
     caller_role: BrokerCallerRole,
-    channel: d2b_contracts::guest_proto::AudioChannel,
-    kind: d2b_contracts::guest_proto::AudioSetKind,
+    channel: d2b_contracts_control::guest_proto::AudioChannel,
+    kind: d2b_contracts_control::guest_proto::AudioSetKind,
     grant_on: bool,
     level: u32,
     deadline: Duration,
@@ -1399,7 +1399,7 @@ impl ReadinessObservation {
 /// outcome. Used as a metric/span label, so the range is a small fixed
 /// vocabulary - never free-form text and never guest-supplied content.
 pub fn health_state_label(evidence: &GuestControlHealthEvidence) -> &'static str {
-    use d2b_contracts::guest_proto::HealthState;
+    use d2b_contracts_control::guest_proto::HealthState;
     match evidence.health.state.enum_value() {
         Ok(HealthState::HEALTH_STATE_HEALTHY) => "healthy",
         Ok(HealthState::HEALTH_STATE_DEGRADED) => "degraded",
@@ -1432,7 +1432,7 @@ pub fn error_kind_label(error: &GuestControlHealthError) -> &'static str {
 /// `HealthReason` vocabulary - never free-form text and never
 /// guest-supplied content.
 pub fn health_reason_label(evidence: &GuestControlHealthEvidence) -> &'static str {
-    use d2b_contracts::guest_proto::HealthReason;
+    use d2b_contracts_control::guest_proto::HealthReason;
     match evidence.health.reason.enum_value() {
         Ok(HealthReason::HEALTH_REASON_NONE) => "none",
         Ok(HealthReason::HEALTH_REASON_OLD_GENERATION) => "old-generation",
@@ -1464,10 +1464,10 @@ pub fn health_reason_label(evidence: &GuestControlHealthEvidence) -> &'static st
 #[cfg(test)]
 mod tests {
     use super::*;
-    use d2b_contracts::broker_wire::{
+    use d2b_contracts_broker::broker_wire::{
         BrokerErrorResponse, GuestControlProofRole, GuestControlSignRequest,
     };
-    use d2b_contracts::guest_auth::AUTH_TAG_LEN;
+    use d2b_contracts_control::guest_auth::AUTH_TAG_LEN;
     use std::sync::Mutex;
     use std::sync::atomic::{AtomicU64, Ordering};
 
@@ -1561,7 +1561,7 @@ mod tests {
 
         // Wrong (non-sign) response variant -> Signer.
         let wrong = map_broker_sign_response(Ok(BrokerResponse::PollChildReaped(
-            d2b_contracts::broker_wire::PollChildReapedResponse {
+            d2b_contracts_broker::broker_wire::PollChildReapedResponse {
                 notifications: vec![],
             },
         )));
@@ -1594,14 +1594,14 @@ mod tests {
         let request = GuestControlSignRequest {
             vm_id: d2b_contracts::types::VmId::new("corp-vm"),
             role: GuestControlProofRole::HostProof,
-            protocol_version: d2b_contracts::guest_wire::GUEST_CONTROL_PROTOCOL_VERSION,
-            direction: d2b_contracts::broker_wire::GuestControlDirection::HostToGuest,
-            purpose: d2b_contracts::broker_wire::GuestControlAuthPurpose::GuestControlAuthV1,
-            guest_control_port: d2b_contracts::guest_auth::GUEST_CONTROL_AUTH_PORT,
+            protocol_version: d2b_contracts_control::guest_wire::GUEST_CONTROL_PROTOCOL_VERSION,
+            direction: d2b_contracts_broker::broker_wire::GuestControlDirection::HostToGuest,
+            purpose: d2b_contracts_broker::broker_wire::GuestControlAuthPurpose::GuestControlAuthV1,
+            guest_control_port: d2b_contracts_control::guest_auth::GUEST_CONTROL_AUTH_PORT,
             peer_cid: Some(VMADDR_CID_HOST),
             host_nonce: vec![0x11; AUTH_NONCE_LEN],
             guest_nonce: vec![0x22; AUTH_NONCE_LEN],
-            guest_boot_id: d2b_contracts::broker_wire::GuestBootIdWire::new("boot-1"),
+            guest_boot_id: d2b_contracts_broker::broker_wire::GuestBootIdWire::new("boot-1"),
             capabilities_hash: None,
             tracing_span_id: None,
         };
@@ -1621,7 +1621,7 @@ mod tests {
     /// Build a minimal Healthy evidence so the readiness loop's
     /// ready-decision can be exercised without a live guest.
     fn healthy_evidence() -> GuestControlHealthEvidence {
-        use d2b_contracts::guest_proto as pb;
+        use d2b_contracts_control::guest_proto as pb;
         let mut health = pb::HealthResponse::new();
         health.origin =
             protobuf::EnumOrUnknown::new(pb::HealthOrigin::HEALTH_ORIGIN_GUEST_REPORTED);
@@ -1629,11 +1629,11 @@ mod tests {
         health.reason = protobuf::EnumOrUnknown::new(pb::HealthReason::HEALTH_REASON_NONE);
         health.remediation =
             protobuf::EnumOrUnknown::new(pb::HealthRemediation::HEALTH_REMEDIATION_NONE);
-        health.protocol_version = d2b_contracts::guest_wire::GUEST_CONTROL_PROTOCOL_VERSION;
+        health.protocol_version = d2b_contracts_control::guest_wire::GUEST_CONTROL_PROTOCOL_VERSION;
         GuestControlHealthEvidence {
             vm_id: "corp-vm".to_owned(),
             guest_boot_id: "boot-1".to_owned(),
-            protocol_version: d2b_contracts::guest_wire::GUEST_CONTROL_PROTOCOL_VERSION,
+            protocol_version: d2b_contracts_control::guest_wire::GUEST_CONTROL_PROTOCOL_VERSION,
             capabilities_hash: "caps-sha256".to_owned(),
             health,
         }
@@ -1656,7 +1656,7 @@ mod tests {
     /// treats DEGRADED as a SUCCESS (ready), so this drives the
     /// degraded-success readiness path end to end.
     fn degraded_evidence() -> GuestControlHealthEvidence {
-        use d2b_contracts::guest_proto as pb;
+        use d2b_contracts_control::guest_proto as pb;
         let mut health = pb::HealthResponse::new();
         health.origin =
             protobuf::EnumOrUnknown::new(pb::HealthOrigin::HEALTH_ORIGIN_GUEST_REPORTED);
@@ -1670,11 +1670,11 @@ mod tests {
             .push(protobuf::EnumOrUnknown::new(
                 pb::GuestSubsystem::GUEST_SUBSYSTEM_EXEC,
             ));
-        health.protocol_version = d2b_contracts::guest_wire::GUEST_CONTROL_PROTOCOL_VERSION;
+        health.protocol_version = d2b_contracts_control::guest_wire::GUEST_CONTROL_PROTOCOL_VERSION;
         GuestControlHealthEvidence {
             vm_id: "corp-vm".to_owned(),
             guest_boot_id: "boot-1".to_owned(),
-            protocol_version: d2b_contracts::guest_wire::GUEST_CONTROL_PROTOCOL_VERSION,
+            protocol_version: d2b_contracts_control::guest_wire::GUEST_CONTROL_PROTOCOL_VERSION,
             capabilities_hash: "caps-sha256".to_owned(),
             health,
         }
@@ -2216,7 +2216,7 @@ mod tests {
 
     #[test]
     fn activation_status_loop_rejoins_after_unknown_activation_id() {
-        use d2b_contracts::guest_proto::{GuestActivationState, GuestControlErrorKind};
+        use d2b_contracts_control::guest_proto::{GuestActivationState, GuestControlErrorKind};
 
         let probe = ScriptedActivationProbe::new(vec![
             Err(GuestSystemActivationError::GuestRejected(
@@ -2401,14 +2401,14 @@ mod tests {
         let request = GuestControlSignRequest {
             vm_id: d2b_contracts::types::VmId::new("corp-vm"),
             role: GuestControlProofRole::HostProof,
-            protocol_version: d2b_contracts::guest_wire::GUEST_CONTROL_PROTOCOL_VERSION,
-            direction: d2b_contracts::broker_wire::GuestControlDirection::HostToGuest,
-            purpose: d2b_contracts::broker_wire::GuestControlAuthPurpose::GuestControlAuthV1,
-            guest_control_port: d2b_contracts::guest_auth::GUEST_CONTROL_AUTH_PORT,
+            protocol_version: d2b_contracts_control::guest_wire::GUEST_CONTROL_PROTOCOL_VERSION,
+            direction: d2b_contracts_broker::broker_wire::GuestControlDirection::HostToGuest,
+            purpose: d2b_contracts_broker::broker_wire::GuestControlAuthPurpose::GuestControlAuthV1,
+            guest_control_port: d2b_contracts_control::guest_auth::GUEST_CONTROL_AUTH_PORT,
             peer_cid: Some(VMADDR_CID_HOST),
             host_nonce: vec![0x11; AUTH_NONCE_LEN],
             guest_nonce: vec![0x22; AUTH_NONCE_LEN],
-            guest_boot_id: d2b_contracts::broker_wire::GuestBootIdWire::new("boot-1"),
+            guest_boot_id: d2b_contracts_broker::broker_wire::GuestBootIdWire::new("boot-1"),
             capabilities_hash: None,
             tracing_span_id: None,
         };
@@ -2465,19 +2465,19 @@ mod tests {
             assert_eq!(request.vm_id.as_str(), "corp-vm");
             assert_eq!(
                 request.protocol_version,
-                d2b_contracts::guest_wire::GUEST_CONTROL_PROTOCOL_VERSION
+                d2b_contracts_control::guest_wire::GUEST_CONTROL_PROTOCOL_VERSION
             );
             assert_eq!(
                 request.direction,
-                d2b_contracts::broker_wire::GuestControlDirection::HostToGuest
+                d2b_contracts_broker::broker_wire::GuestControlDirection::HostToGuest
             );
             assert_eq!(
                 request.purpose,
-                d2b_contracts::broker_wire::GuestControlAuthPurpose::GuestControlAuthV1
+                d2b_contracts_broker::broker_wire::GuestControlAuthPurpose::GuestControlAuthV1
             );
             assert_eq!(
                 request.guest_control_port,
-                d2b_contracts::guest_auth::GUEST_CONTROL_AUTH_PORT
+                d2b_contracts_control::guest_auth::GUEST_CONTROL_AUTH_PORT
             );
             assert_eq!(request.peer_cid, Some(VMADDR_CID_HOST));
             assert_eq!(request.host_nonce, host_nonce.to_vec());
@@ -2520,22 +2520,22 @@ mod tests {
     impl crate::guest_control_health::GuestControlRpc for HappyFakeClient {
         async fn hello(
             &self,
-            _request: d2b_contracts::guest_proto::HelloRequest,
-        ) -> Result<d2b_contracts::guest_proto::HelloResponse, GuestControlHealthError> {
-            use d2b_contracts::guest_proto as pb;
+            _request: d2b_contracts_control::guest_proto::HelloRequest,
+        ) -> Result<d2b_contracts_control::guest_proto::HelloResponse, GuestControlHealthError> {
+            use d2b_contracts_control::guest_proto as pb;
             let mut response = pb::HelloResponse::new();
             response.guest_nonce = vec![0x22; AUTH_NONCE_LEN];
             response.guest_boot_id = "boot-1".to_owned();
-            response.protocol_version = d2b_contracts::guest_wire::GUEST_CONTROL_PROTOCOL_VERSION;
+            response.protocol_version = d2b_contracts_control::guest_wire::GUEST_CONTROL_PROTOCOL_VERSION;
             Ok(response)
         }
 
         async fn authenticate(
             &self,
-            _request: d2b_contracts::guest_proto::AuthenticateRequest,
-        ) -> Result<d2b_contracts::guest_proto::AuthenticateResponse, GuestControlHealthError>
+            _request: d2b_contracts_control::guest_proto::AuthenticateRequest,
+        ) -> Result<d2b_contracts_control::guest_proto::AuthenticateResponse, GuestControlHealthError>
         {
-            use d2b_contracts::guest_proto as pb;
+            use d2b_contracts_control::guest_proto as pb;
             let mut response = pb::AuthenticateResponse::new();
             response.guest_auth_tag = Some(vec![0x77; AUTH_TAG_LEN]);
             response.capabilities_hash = Some("caps-sha256".to_owned());
@@ -2544,33 +2544,33 @@ mod tests {
 
         async fn health(
             &self,
-            _request: d2b_contracts::guest_proto::HealthRequest,
-        ) -> Result<d2b_contracts::guest_proto::HealthResponse, GuestControlHealthError> {
+            _request: d2b_contracts_control::guest_proto::HealthRequest,
+        ) -> Result<d2b_contracts_control::guest_proto::HealthResponse, GuestControlHealthError> {
             Ok(healthy_evidence().health)
         }
 
         async fn read_guest_file(
             &self,
-            _request: d2b_contracts::guest_proto::ReadGuestFileRequest,
-        ) -> Result<d2b_contracts::guest_proto::ReadGuestFileResponse, GuestControlHealthError>
+            _request: d2b_contracts_control::guest_proto::ReadGuestFileRequest,
+        ) -> Result<d2b_contracts_control::guest_proto::ReadGuestFileResponse, GuestControlHealthError>
         {
-            Ok(d2b_contracts::guest_proto::ReadGuestFileResponse::new())
+            Ok(d2b_contracts_control::guest_proto::ReadGuestFileResponse::new())
         }
 
         async fn usbip_import(
             &self,
-            _request: d2b_contracts::guest_proto::UsbipImportRequest,
-        ) -> Result<d2b_contracts::guest_proto::UsbipImportResponse, GuestControlHealthError>
+            _request: d2b_contracts_control::guest_proto::UsbipImportRequest,
+        ) -> Result<d2b_contracts_control::guest_proto::UsbipImportResponse, GuestControlHealthError>
         {
-            Ok(d2b_contracts::guest_proto::UsbipImportResponse::new())
+            Ok(d2b_contracts_control::guest_proto::UsbipImportResponse::new())
         }
 
         async fn usbip_status(
             &self,
-            _request: d2b_contracts::guest_proto::UsbipStatusRequest,
-        ) -> Result<d2b_contracts::guest_proto::UsbipStatusResponse, GuestControlHealthError>
+            _request: d2b_contracts_control::guest_proto::UsbipStatusRequest,
+        ) -> Result<d2b_contracts_control::guest_proto::UsbipStatusResponse, GuestControlHealthError>
         {
-            Ok(d2b_contracts::guest_proto::UsbipStatusResponse::new())
+            Ok(d2b_contracts_control::guest_proto::UsbipStatusResponse::new())
         }
     }
 
@@ -2737,10 +2737,10 @@ mod tests {
     /// Build evidence whose every guest-controlled string carries a
     /// sentinel, so a leak into the observability projection is detectable.
     fn sentinel_evidence(
-        state: d2b_contracts::guest_proto::HealthState,
-        reason: d2b_contracts::guest_proto::HealthReason,
+        state: d2b_contracts_control::guest_proto::HealthState,
+        reason: d2b_contracts_control::guest_proto::HealthReason,
     ) -> GuestControlHealthEvidence {
-        use d2b_contracts::guest_proto as pb;
+        use d2b_contracts_control::guest_proto as pb;
         let sentinel = "SENTINEL-LEAK-7b3f";
         let mut health = pb::HealthResponse::new();
         health.origin =
@@ -2749,11 +2749,11 @@ mod tests {
         health.reason = protobuf::EnumOrUnknown::new(reason);
         health.remediation =
             protobuf::EnumOrUnknown::new(pb::HealthRemediation::HEALTH_REMEDIATION_NONE);
-        health.protocol_version = d2b_contracts::guest_wire::GUEST_CONTROL_PROTOCOL_VERSION;
+        health.protocol_version = d2b_contracts_control::guest_wire::GUEST_CONTROL_PROTOCOL_VERSION;
         GuestControlHealthEvidence {
             vm_id: sentinel.to_owned(),
             guest_boot_id: sentinel.to_owned(),
-            protocol_version: d2b_contracts::guest_wire::GUEST_CONTROL_PROTOCOL_VERSION,
+            protocol_version: d2b_contracts_control::guest_wire::GUEST_CONTROL_PROTOCOL_VERSION,
             capabilities_hash: sentinel.to_owned(),
             health,
         }
@@ -2778,7 +2778,7 @@ mod tests {
 
     #[test]
     fn readiness_observation_carries_no_guest_bytes_and_uses_closed_enums() {
-        use d2b_contracts::guest_proto::{HealthReason, HealthState};
+        use d2b_contracts_control::guest_proto::{HealthReason, HealthState};
 
         // Success projection: guest-reported strings (vm_id, guest_boot_id,
         // capabilities_hash) must NEVER reach the observation fields.
@@ -2878,7 +2878,7 @@ mod tests {
 
     // ── Audio set probe tests ──────────────────────────────────────────────
 
-    use d2b_contracts::guest_proto as pb;
+    use d2b_contracts_control::guest_proto as pb;
 
     struct ScriptedAudioProbe {
         outcomes: Mutex<Vec<Result<GuestAudioChannelStatus, GuestAudioSetError>>>,

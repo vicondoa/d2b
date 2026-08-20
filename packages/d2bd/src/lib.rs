@@ -43,7 +43,17 @@ use d2b_audit::{
 use d2b_contracts::v3::storage::ZoneStoreId;
 use d2b_contracts::{
     BROKER_SOCKET_PATH, KnownFeatureFlag,
-    broker_wire::{
+    types::{BundleClosureRef, BundleOpId, MediaRef, RoleId, ScopeId, TracingSpanId, VmId},
+    v3::{
+        ResourceBundleGenerationId, ResourceErrorKind, ResourceGeneration, ResourceRef,
+        ResourceUid, ZoneId,
+        guest::GuestSpec,
+        network::NetworkSpec,
+        process::ProcessSpec,
+        volume::{VolumeAttachment, VolumeSpec},
+    },
+};
+use d2b_contracts_broker::broker_wire::{
         ActivationMode as BrokerActivationMode, ActivationPhase as BrokerActivationPhase,
         ApplyNftablesRequest as BrokerApplyNftablesRequest,
         ApplyNmUnmanagedRequest as BrokerApplyNmUnmanagedRequest,
@@ -74,18 +84,10 @@ use d2b_contracts::{
         UsbipExplicitFirewallRuleRequest as BrokerUsbipExplicitFirewallRuleRequest,
         UsbipProxyReconcileRequest as BrokerUsbipProxyReconcileRequest,
         UsbipUnbindRequest as BrokerUsbipUnbindRequest,
-    },
+};
+use d2b_contracts_control::{
     guest_proto as pb,
     public_wire::{self, AuthRole, AuthStatusResponse, DeniedCommandHint, SocketReachability},
-    types::{BundleClosureRef, BundleOpId, MediaRef, RoleId, ScopeId, TracingSpanId, VmId},
-    v3::{
-        ResourceBundleGenerationId, ResourceErrorKind, ResourceGeneration, ResourceRef,
-        ResourceUid, ZoneId,
-        guest::GuestSpec,
-        network::NetworkSpec,
-        process::ProcessSpec,
-        volume::{VolumeAttachment, VolumeSpec},
-    },
 };
 use d2b_core::bundle::Bundle;
 use d2b_core::bundle_resolver::{
@@ -3407,7 +3409,7 @@ fn write_daemon_version_file(config: &DaemonConfig) {
         server_version: DEFAULT_SERVER_VERSION.to_owned(),
         binary_path,
         started_at,
-        protocol_version: d2b_contracts::PROTOCOL_VERSION,
+        protocol_version: d2b_contracts_broker::PROTOCOL_VERSION,
     };
     let json = match serde_json::to_vec_pretty(&payload) {
         Ok(v) => v,
@@ -4584,7 +4586,7 @@ fn dispatch_wave6_resource_reconcile(
                     if response.applied
                         && !matches!(
                             response.status,
-                            d2b_contracts::broker_wire::StorageReconcileStatus::Refused
+                            d2b_contracts_broker::broker_wire::StorageReconcileStatus::Refused
                         ) =>
                 {
                     "storage-scope-reconciled"
@@ -5833,7 +5835,7 @@ fn workload_runtime_status(
     d2b_realm_core::WorkloadState,
     public_wire::WorkloadAvailability,
 ) {
-    use d2b_contracts::unsafe_local_wire::HelperScopeState;
+    use d2b_contracts_control::unsafe_local_wire::HelperScopeState;
     use d2b_realm_core::WorkloadState;
     use workload_dispatch::WorkloadRoute;
 
@@ -5891,9 +5893,9 @@ fn workload_runtime_status(
 
 fn unsafe_local_workload_availability(
     helper: unsafe_local_helper::HelperAvailability,
-    last_failure: Option<d2b_contracts::unsafe_local_wire::HelperFailureCode>,
+    last_failure: Option<d2b_contracts_control::unsafe_local_wire::HelperFailureCode>,
 ) -> public_wire::WorkloadAvailability {
-    use d2b_contracts::unsafe_local_wire::HelperFailureCode;
+    use d2b_contracts_control::unsafe_local_wire::HelperFailureCode;
     use unsafe_local_helper::HelperAvailability;
 
     match helper {
@@ -5924,7 +5926,7 @@ fn dispatch_unsafe_local_launcher(
     operation_id: &d2b_realm_core::OperationId,
     resolved: &workload_dispatch::ResolvedExec,
 ) -> Result<public_wire::LauncherExecDisposition, TypedError> {
-    use d2b_contracts::unsafe_local_wire::{HelperLaunchRequest, HelperOperationDisposition};
+    use d2b_contracts_control::unsafe_local_wire::{HelperLaunchRequest, HelperOperationDisposition};
     let request = HelperLaunchRequest {
         request_id: next_internal_helper_request_id(),
         operation_id: operation_id.clone(),
@@ -6006,7 +6008,7 @@ fn map_workload_catalog_error(error: workload_dispatch::CatalogError) -> TypedEr
 }
 
 fn map_helper_registry_error(error: unsafe_local_helper::HelperRegistryError) -> TypedError {
-    use d2b_contracts::unsafe_local_wire::HelperFailureCode;
+    use d2b_contracts_control::unsafe_local_wire::HelperFailureCode;
     use typed_error::WorkloadLaunchErrorKind as Kind;
     use unsafe_local_helper::HelperRegistryError;
     let kind = match error {
@@ -6568,7 +6570,7 @@ mod workload_observability_tests {
         assert_eq!(
             unsafe_local_workload_availability(
                 unsafe_local_helper::HelperAvailability::Ready,
-                Some(d2b_contracts::unsafe_local_wire::HelperFailureCode::WaylandUnavailable)
+                Some(d2b_contracts_control::unsafe_local_wire::HelperFailureCode::WaylandUnavailable)
             ),
             public_wire::WorkloadAvailability::WaylandUnavailable
         );
@@ -6719,7 +6721,7 @@ fn dispatch_console(
     peer: &PeerIdentity,
     op: public_wire::ConsoleOp,
 ) -> Result<Value, TypedError> {
-    use d2b_contracts::terminal_wire::TerminalStream;
+    use d2b_contracts_control::terminal_wire::TerminalStream;
     use public_wire::{
         ConsoleCloseResult, ConsoleControlResult, ConsoleOp, ConsoleOpResponse, ConsoleWaitResult,
     };
@@ -6956,10 +6958,10 @@ fn create_console_session_for_vm(
     }
 }
 
-/// Build a [`d2b_contracts::public_wire::ConsoleReadOutputResult`] wire DTO from an optional ring read.
+/// Build a [`d2b_contracts_control::public_wire::ConsoleReadOutputResult`] wire DTO from an optional ring read.
 fn build_read_output_result(
     session: &str,
-    stream: d2b_contracts::terminal_wire::TerminalStream,
+    stream: d2b_contracts_control::terminal_wire::TerminalStream,
     snap: Option<d2b_core::console_ring::RingReadResult>,
 ) -> public_wire::ConsoleReadOutputResult {
     match snap {
@@ -9426,7 +9428,7 @@ fn dispatch_broker_qemu_media_detach(
 fn qemu_media_hotplug_summary(
     verb: &str,
     action: &str,
-    response: &d2b_contracts::broker_wire::QemuMediaHotplugResponse,
+    response: &d2b_contracts_broker::broker_wire::QemuMediaHotplugResponse,
 ) -> String {
     format!(
         "d2b {verb} --apply: qemu-media {action} ref '{}' in slot '{}' for vm '{}' via QMP (commands={})",
@@ -9439,7 +9441,7 @@ fn qemu_media_hotplug_summary(
 
 fn broker_error_for_qemu_media_hotplug(
     verb: &str,
-    error: d2b_contracts::broker_wire::BrokerErrorResponse,
+    error: d2b_contracts_broker::broker_wire::BrokerErrorResponse,
 ) -> Result<Value, TypedError> {
     let (summary, remediation) = redact_broker_error_for_launcher(
         error.operation.as_str(),
@@ -10157,10 +10159,10 @@ fn qemu_media_probe_entry(
 
 fn mutating_verb_preflight(
     verb: &str,
-    flags: &d2b_contracts::public_wire::MutationFlags,
+    flags: &d2b_contracts_control::public_wire::MutationFlags,
     target_vm: Option<&str>,
 ) -> Option<Value> {
-    use d2b_contracts::public_wire::{MutatingVerbOutcome, MutatingVerbResponse};
+    use d2b_contracts_control::public_wire::{MutatingVerbOutcome, MutatingVerbResponse};
 
     if !flags.dry_run && !flags.apply {
         return Some(wire::mutating_verb_response(MutatingVerbResponse {
@@ -10351,7 +10353,7 @@ fn dispatch_read_guest_config(
     )
     .map_err(map_guest_file_read_error)?;
     let encoded = d2b_core::base64_codec::encode(&bytes);
-    if !d2b_contracts::guest_wire::guest_config_encoded_within_frame_caps(encoded.len()) {
+    if !d2b_contracts_control::guest_wire::guest_config_encoded_within_frame_caps(encoded.len()) {
         return Err(TypedError::GuestControlReadFailed {
             kind: crate::typed_error::GuestControlReadErrorKind::FileTooLarge,
         });
@@ -10613,7 +10615,7 @@ fn dispatch_shell_management(
     peer: &PeerIdentity,
     op: ShellManagementOp,
 ) -> Result<Value, TypedError> {
-    use d2b_contracts::unsafe_local_wire::{HelperShellRequest, HelperShellResponse};
+    use d2b_contracts_control::unsafe_local_wire::{HelperShellRequest, HelperShellResponse};
     use workload_dispatch::WorkloadRoute;
 
     if !matches!(peer.role, PeerRole::Admin) {
@@ -10968,7 +10970,7 @@ fn unsafe_shell_request_parts(
 ) -> Result<
     (
         d2b_core::workload_identity::WorkloadIdentity,
-        d2b_contracts::unsafe_local_wire::HelperShellPolicy,
+        d2b_contracts_control::unsafe_local_wire::HelperShellPolicy,
     ),
     TypedError,
 > {
@@ -10984,8 +10986,8 @@ fn unsafe_shell_request_parts(
 fn dispatch_unsafe_shell_management(
     state: &ServerState,
     peer_uid: u32,
-    request: d2b_contracts::unsafe_local_wire::HelperShellRequest,
-) -> Result<d2b_contracts::unsafe_local_wire::HelperShellResponse, TypedError> {
+    request: d2b_contracts_control::unsafe_local_wire::HelperShellRequest,
+) -> Result<d2b_contracts_control::unsafe_local_wire::HelperShellResponse, TypedError> {
     match state
         .unsafe_local_helpers
         .dispatch_shell(peer_uid, request)
@@ -11628,7 +11630,7 @@ fn run_typed_shell_owner(
         .get("initialSize")
         .cloned()
         .and_then(|value| serde_json::from_value(value).ok())
-        .unwrap_or(d2b_contracts::terminal_wire::TerminalSize { rows: 24, cols: 80 });
+        .unwrap_or(d2b_contracts_control::terminal_wire::TerminalSize { rows: 24, cols: 80 });
     let attach = public_wire::ShellAttachArgs {
         vm: target.clone(),
         name: Some(name.clone()),
@@ -11796,7 +11798,7 @@ fn run_typed_shell_owner(
                     .and_then(|data| d2b_core::base64_codec::decode(data).ok())
                     .unwrap_or_default();
                 shell_backend::ShellTerminalOp::WriteStdin(
-                    d2b_contracts::terminal_wire::TerminalWriteStdin {
+                    d2b_contracts_control::terminal_wire::TerminalWriteStdin {
                         session: session.clone(),
                         offset: value.get("offset").and_then(Value::as_u64).unwrap_or(0),
                         chunk_base64: d2b_core::base64_codec::encode(&data),
@@ -11805,9 +11807,9 @@ fn run_typed_shell_owner(
                 )
             }
             "namedStreamReceive" => shell_backend::ShellTerminalOp::ReadOutput(
-                d2b_contracts::terminal_wire::TerminalReadOutput {
+                d2b_contracts_control::terminal_wire::TerminalReadOutput {
                     session: session.clone(),
-                    stream: d2b_contracts::terminal_wire::TerminalStream::Stdout,
+                    stream: d2b_contracts_control::terminal_wire::TerminalStream::Stdout,
                     offset: value.get("offset").and_then(Value::as_u64).unwrap_or(0),
                     max_len: value.get("maxLen").and_then(Value::as_u64).unwrap_or(65536),
                     wait: true,
@@ -11815,7 +11817,7 @@ fn run_typed_shell_owner(
                 },
             ),
             "namedStreamResize" => shell_backend::ShellTerminalOp::Resize(
-                d2b_contracts::terminal_wire::TerminalResize {
+                d2b_contracts_control::terminal_wire::TerminalResize {
                     session: session.clone(),
                     op_id: control_sequence.saturating_add(1),
                     rows: value.get("rows").and_then(Value::as_u64).unwrap_or(24) as u32,
@@ -11997,7 +11999,7 @@ async fn establish_shell_backend(
                 "none",
             );
             let request_id = next_internal_shell_request_id();
-            let request = d2b_contracts::unsafe_local_wire::HelperShellRequest::Attach {
+            let request = d2b_contracts_control::unsafe_local_wire::HelperShellRequest::Attach {
                 request_id,
                 operation_id: operation_id.clone(),
                 workload: identity.clone(),
@@ -12241,7 +12243,7 @@ fn shell_request_metadata(vm: &str) -> pb::RequestMetadata {
     let mut metadata = pb::RequestMetadata::new();
     metadata.vm_id = vm.to_owned();
     metadata.request_id = "guest-control-shell".to_owned();
-    metadata.protocol_version = d2b_contracts::guest_wire::GUEST_CONTROL_PROTOCOL_VERSION;
+    metadata.protocol_version = d2b_contracts_control::guest_wire::GUEST_CONTROL_PROTOCOL_VERSION;
     metadata
 }
 
@@ -12280,7 +12282,7 @@ fn handle_shell_owner_op(
     control_seq: &mut u64,
     op: shell_backend::ShellTerminalOp,
 ) -> Result<Option<shell_backend::ShellTerminalResponse>, TypedError> {
-    use d2b_contracts::terminal_wire as tw;
+    use d2b_contracts_control::terminal_wire as tw;
     match op {
         shell_backend::ShellTerminalOp::WriteStdin(args) => {
             ensure_shell_owner_session(&args.session, session_id)?;
@@ -12340,7 +12342,7 @@ fn handle_shell_owner_op(
             request.offset = args.offset;
             request.max_len = args
                 .max_len
-                .min(d2b_contracts::public_wire::EXEC_MAX_CHUNK_BYTES);
+                .min(d2b_contracts_control::public_wire::EXEC_MAX_CHUNK_BYTES);
             request.wait = args.wait;
             let (timeout_ms, op_deadline) = shell_poll_timeout(args.timeout_ms, args.wait);
             request.timeout_ms = timeout_ms;
@@ -12462,7 +12464,7 @@ where
         let mut metadata = pb::RequestMetadata::new();
         metadata.vm_id = params.vm_id.clone();
         metadata.request_id = "guest-control-shell".to_owned();
-        metadata.protocol_version = d2b_contracts::guest_wire::GUEST_CONTROL_PROTOCOL_VERSION;
+        metadata.protocol_version = d2b_contracts_control::guest_wire::GUEST_CONTROL_PROTOCOL_VERSION;
         f(Arc::new(client), metadata).await
     })
 }
@@ -13720,7 +13722,7 @@ mod exec_owner_io_tests {
         EXEC_METRIC, EXEC_OWNER_INFLIGHT_CAP, EXEC_OWNER_WRITER_DRAIN_GRACE, Socket, exec_session,
         metrics, read_frame, run_exec_owner_io, spawn_exec_owner_writer, write_frame,
     };
-    use d2b_contracts::public_wire::{
+    use d2b_contracts_control::public_wire::{
         ExecCloseArgs, ExecCloseResult, ExecControlResult, ExecOp, ExecOpResponse,
         ExecReadOutputResult, ExecSignalArgs, ExecWaitArgs,
     };
@@ -14234,7 +14236,7 @@ pub(crate) fn dispatch_broker_legacy_tpm_migration(
     match dispatch_broker_request_as(
         state,
         BrokerRequest::Hello(HelloRequest {
-            client_version: d2b_contracts::PROTOCOL_VERSION.to_string(),
+            client_version: d2b_contracts_broker::PROTOCOL_VERSION.to_string(),
             supported_features: vec!["MigrateLegacySwtpmState".to_owned()],
         }),
         caller_role.clone(),
@@ -14287,7 +14289,7 @@ pub(crate) fn dispatch_broker_legacy_tpm_inventory(
     match dispatch_broker_request_as(
         state,
         BrokerRequest::Hello(HelloRequest {
-            client_version: d2b_contracts::PROTOCOL_VERSION.to_string(),
+            client_version: d2b_contracts_broker::PROTOCOL_VERSION.to_string(),
             supported_features: vec!["MigrateLegacySwtpmState".to_owned()],
         }),
         caller_role.clone(),
@@ -14634,7 +14636,7 @@ pub(crate) fn open_accepted_socket_peer_pidfd(
     let (response, received_fds) = dispatch_broker_request_with_request_fd_timeout_as(
         state,
         BrokerRequest::OpenPeerPidfdFromAcceptedSocket(
-            d2b_contracts::broker_wire::OpenPeerPidfdFromAcceptedSocketRequest {},
+            d2b_contracts_broker::broker_wire::OpenPeerPidfdFromAcceptedSocketRequest {},
         ),
         BrokerCallerRole::AdminUid {
             uid: state.daemon_uid,
@@ -14823,7 +14825,7 @@ fn broker_failure_response(
     remediation: String,
     target_wave: Option<String>,
 ) -> Value {
-    use d2b_contracts::public_wire::{MutatingVerbOutcome, MutatingVerbResponse};
+    use d2b_contracts_control::public_wire::{MutatingVerbOutcome, MutatingVerbResponse};
 
     wire::mutating_verb_response(MutatingVerbResponse {
         verb: verb.to_owned(),
@@ -14844,7 +14846,7 @@ fn invalid_request_response_with_summary(
     summary: String,
     remediation: String,
 ) -> Value {
-    use d2b_contracts::public_wire::{MutatingVerbOutcome, MutatingVerbResponse};
+    use d2b_contracts_control::public_wire::{MutatingVerbOutcome, MutatingVerbResponse};
 
     wire::mutating_verb_response(MutatingVerbResponse {
         verb: verb.to_owned(),
@@ -14870,7 +14872,7 @@ fn daemon_failure_response(verb: &str, summary: String) -> Value {
 }
 
 fn applied_response(verb: &str, summary: String) -> Value {
-    use d2b_contracts::public_wire::{MutatingVerbOutcome, MutatingVerbResponse};
+    use d2b_contracts_control::public_wire::{MutatingVerbOutcome, MutatingVerbResponse};
 
     wire::mutating_verb_response(MutatingVerbResponse {
         verb: verb.to_owned(),
@@ -14897,7 +14899,7 @@ fn append_response_summary(response: &mut Value, suffix: &str) {
 }
 
 fn api_ready_timeout_response(verb: &str, summary: String) -> Value {
-    use d2b_contracts::public_wire::{MutatingVerbOutcome, MutatingVerbResponse};
+    use d2b_contracts_control::public_wire::{MutatingVerbOutcome, MutatingVerbResponse};
 
     wire::mutating_verb_response(MutatingVerbResponse {
         verb: verb.to_owned(),
@@ -15615,7 +15617,7 @@ enum VmStartNodeMode {
 
 #[derive(Debug)]
 enum VmRunnerLaunch {
-    Legacy(Box<d2b_contracts::broker_wire::SpawnRunnerResponse>),
+    Legacy(Box<d2b_contracts_broker::broker_wire::SpawnRunnerResponse>),
     Provider,
 }
 
@@ -15730,7 +15732,7 @@ impl VmStartRunner<'_> {
         let intent = resolve_store_view_intent_for_vm(self.resolver, vm)?;
         match dispatch_broker_request_as(
             self.state,
-            BrokerRequest::StoreSync(d2b_contracts::broker_wire::StoreSyncRequest {
+            BrokerRequest::StoreSync(d2b_contracts_broker::broker_wire::StoreSyncRequest {
                 vm_id: VmId::new(vm),
                 bundle_closure_ref: BundleClosureRef::new(intent.intent_id.clone()),
                 generation_token: u32::try_from(intent.generation)
@@ -15798,7 +15800,7 @@ impl VmStartRunner<'_> {
         if node_requires_disk_init_dispatch(node) {
             match dispatch_broker_request_as(
                 self.state,
-                BrokerRequest::DiskInit(d2b_contracts::broker_wire::DiskInitRequest {
+                BrokerRequest::DiskInit(d2b_contracts_broker::broker_wire::DiskInitRequest {
                     vm_id: VmId::new(vm),
                     tracing_span_id: None,
                 }),
@@ -15930,7 +15932,7 @@ impl VmStartRunner<'_> {
         vm: &str,
         node: &ProcessNode,
         runner_role: RunnerRole,
-        response: &d2b_contracts::broker_wire::SpawnRunnerResponse,
+        response: &d2b_contracts_broker::broker_wire::SpawnRunnerResponse,
         received_fds: &[RawFd],
     ) -> Result<(), String> {
         let VmStartNodeMode::LongLived(_) = vm_start_node_mode(&node.role) else {
@@ -16843,7 +16845,7 @@ fn stop_unregistered_spawned_runner(
     state: &ServerState,
     vm: &str,
     role_id: &str,
-    response: &d2b_contracts::broker_wire::SpawnRunnerResponse,
+    response: &d2b_contracts_broker::broker_wire::SpawnRunnerResponse,
     received_fds: &[RawFd],
     caller_role: BrokerCallerRole,
 ) {
@@ -16908,7 +16910,7 @@ fn signal_unregistered_spawned_runner(
     state: &ServerState,
     vm: &str,
     role_id: &str,
-    response: &d2b_contracts::broker_wire::SpawnRunnerResponse,
+    response: &d2b_contracts_broker::broker_wire::SpawnRunnerResponse,
     pidfd: Option<&OwnedFd>,
     signal: RunnerSignal,
     caller_role: BrokerCallerRole,
@@ -19119,7 +19121,7 @@ fn execute_host_prep_dag(
                 })
             }
             HostPrepStepKind::SeedDnsmasqLease => BrokerRequest::SeedDnsmasqLease(
-                d2b_contracts::broker_wire::SeedDnsmasqLeaseRequest {
+                d2b_contracts_broker::broker_wire::SeedDnsmasqLeaseRequest {
                     vm_id: step.bundle_ref.vm_id.clone(),
                     scope_id: step
                         .bundle_ref
@@ -19131,7 +19133,7 @@ fn execute_host_prep_dag(
             ),
             HostPrepStepKind::BindMountFromHardlinkFarm => {
                 BrokerRequest::BindMountFromHardlinkFarm(
-                    d2b_contracts::broker_wire::BindMountFromHardlinkFarmRequest {
+                    d2b_contracts_broker::broker_wire::BindMountFromHardlinkFarmRequest {
                         vm_id: step.bundle_ref.vm_id.clone(),
                         bundle_store_view_intent_ref: step.bundle_ref.bundle_op_id.clone(),
                         tracing_span_id: None,
@@ -19139,7 +19141,7 @@ fn execute_host_prep_dag(
                 )
             }
             HostPrepStepKind::OwnershipMatrixCheck => BrokerRequest::OwnershipMatrixCheck(
-                d2b_contracts::broker_wire::OwnershipMatrixCheckRequest {
+                d2b_contracts_broker::broker_wire::OwnershipMatrixCheckRequest {
                     vm_id: step.bundle_ref.vm_id.clone(),
                     tracing_span_id: None,
                 },
@@ -19205,7 +19207,7 @@ fn execute_host_prep_dag(
                 // upstream; here we always issue the request.
                 let role_id = host_prep_role_id_from_bundle_ref(&step.bundle_ref, "ch");
                 let req = BrokerRequest::CreatePersistentTap(
-                    d2b_contracts::broker_wire::CreatePersistentTapRequest {
+                    d2b_contracts_broker::broker_wire::CreatePersistentTapRequest {
                         role_id,
                         vm_id: step.bundle_ref.vm_id.clone(),
                         attachment_id: None,
@@ -19235,7 +19237,7 @@ fn execute_host_prep_dag(
                 // ack-only dispatcher discards it via MSG_CTRUNC.
                 let role_id = host_prep_role_id_from_bundle_ref(&step.bundle_ref, "ch");
                 let req =
-                    BrokerRequest::OpenVhostNet(d2b_contracts::broker_wire::OpenVhostNetRequest {
+                    BrokerRequest::OpenVhostNet(d2b_contracts_broker::broker_wire::OpenVhostNetRequest {
                         role_id,
                         tracing_span_id: None,
                     });
@@ -19367,7 +19369,7 @@ fn execute_host_prep_dag(
                     .unwrap_or("workload-lan");
                 let role_id = RoleId::new(role_id);
                 let req = BrokerRequest::SetBridgePortFlags(
-                    d2b_contracts::broker_wire::SetBridgePortFlagsRequest {
+                    d2b_contracts_broker::broker_wire::SetBridgePortFlagsRequest {
                         vm_id: step.bundle_ref.vm_id.clone(),
                         role_id,
                         tracing_span_id: None,
@@ -20064,7 +20066,7 @@ fn dispatch_broker_vm_start_inner(
                 let source = otel_host_bridge_readiness::PidfdAndSocketProbeSource {
                     pidfd_table: &state.pidfd_table,
                     vm: request.vm.as_str(),
-                    runner_role_id: d2b_contracts::broker_wire::RunnerRole::OtelHostBridge.as_str(),
+                    runner_role_id: d2b_contracts_broker::broker_wire::RunnerRole::OtelHostBridge.as_str(),
                     vsock_host_socket: std::path::PathBuf::from(
                         obs_meta.obs_vsock_host_socket.as_str(),
                     ),
@@ -20292,9 +20294,9 @@ fn detect_runner_exit_failure(
 /// path, pid, or free-form node-reason text.
 fn bounded_runner_exit_cause(
     reason_kind: daemon_audit::VmStartRunnerExitReason,
-    status: Option<&d2b_contracts::broker_wire::ChildExitStatus>,
+    status: Option<&d2b_contracts_broker::broker_wire::ChildExitStatus>,
 ) -> String {
-    use d2b_contracts::broker_wire::ChildExitKind;
+    use d2b_contracts_broker::broker_wire::ChildExitKind;
     if matches!(
         reason_kind,
         daemon_audit::VmStartRunnerExitReason::RunnerReused
@@ -20327,7 +20329,7 @@ fn vm_start_runner_exited_response(
     vm: &str,
     role_id: &str,
     reason_kind: daemon_audit::VmStartRunnerExitReason,
-    status: Option<&d2b_contracts::broker_wire::ChildExitStatus>,
+    status: Option<&d2b_contracts_broker::broker_wire::ChildExitStatus>,
 ) -> Value {
     let cause = bounded_runner_exit_cause(reason_kind, status);
     let verb_word = match reason_kind {
@@ -20354,10 +20356,10 @@ fn emit_vm_start_runner_exited_audit(
     vm: &str,
     role_id: &str,
     reason_kind: daemon_audit::VmStartRunnerExitReason,
-    status: Option<&d2b_contracts::broker_wire::ChildExitStatus>,
+    status: Option<&d2b_contracts_broker::broker_wire::ChildExitStatus>,
     elapsed_ms: u64,
 ) {
-    use d2b_contracts::broker_wire::ChildExitKind;
+    use d2b_contracts_broker::broker_wire::ChildExitKind;
     let exit_kind = status.map(|status| match status.kind {
         ChildExitKind::Exited => daemon_audit::RunnerExitKind::Exited,
         ChildExitKind::Signaled => daemon_audit::RunnerExitKind::Signaled,
@@ -20393,8 +20395,8 @@ struct DaemonRotateKnownHostBroker<'a> {
 impl known_hosts_refresh::RotateKnownHostBroker for DaemonRotateKnownHostBroker<'_> {
     fn rotate(
         &self,
-        request: d2b_contracts::broker_wire::RunRotateKnownHostRequest,
-    ) -> Result<d2b_contracts::broker_wire::RunRotateKnownHostResponse, TypedError> {
+        request: d2b_contracts_broker::broker_wire::RunRotateKnownHostRequest,
+    ) -> Result<d2b_contracts_broker::broker_wire::RunRotateKnownHostResponse, TypedError> {
         match dispatch_broker_request(self.state, BrokerRequest::RunRotateKnownHost(request))? {
             BrokerResponse::RunRotateKnownHost(response) => Ok(response),
             BrokerResponse::Error(error) => Err(TypedError::InternalBrokerUnavailable {
@@ -21127,7 +21129,7 @@ fn dispatch_broker_run_host_install_as(
     request: public_wire::HostInstallRequest,
     caller_role: BrokerCallerRole,
 ) -> Result<Value, TypedError> {
-    use d2b_contracts::public_wire::{MutatingVerbOutcome, MutatingVerbResponse};
+    use d2b_contracts_control::public_wire::{MutatingVerbOutcome, MutatingVerbResponse};
 
     const VERB: &str = "host install";
     const OP_NAME: &str = "RunHostInstall";
@@ -21222,7 +21224,7 @@ fn dispatch_broker_run_migrate_as(
     request: public_wire::MigrateRequest,
     caller_role: BrokerCallerRole,
 ) -> Result<Value, TypedError> {
-    use d2b_contracts::public_wire::{MutatingVerbOutcome, MutatingVerbResponse};
+    use d2b_contracts_control::public_wire::{MutatingVerbOutcome, MutatingVerbResponse};
 
     const VERB: &str = "migrate";
     const OP_NAME: &str = "RunMigrate";
@@ -21764,7 +21766,7 @@ fn guest_activation_failure_remediation(
 fn guest_activation_error_is_indeterminate(
     error: &guest_control_health::GuestSystemActivationError,
 ) -> bool {
-    use d2b_contracts::guest_proto::GuestControlErrorKind as Kind;
+    use d2b_contracts_control::guest_proto::GuestControlErrorKind as Kind;
     matches!(
         error,
         guest_control_health::GuestSystemActivationError::Probe(
@@ -22013,7 +22015,7 @@ fn dispatch_run_activation_phase(
     phase: BrokerActivationPhase,
     caller_role: BrokerCallerRole,
     system_artifact_id: Option<d2b_contracts::v3::ArtifactId>,
-) -> Result<d2b_contracts::broker_wire::RunActivationResponse, Value> {
+) -> Result<d2b_contracts_broker::broker_wire::RunActivationResponse, Value> {
     const OP_NAME: &str = "RunActivation";
     let started = Instant::now();
     let result = dispatch_broker_request_as(
@@ -22605,9 +22607,9 @@ fn dispatch_broker_store_verify_as(
         caller_role,
     ) {
         Ok(BrokerResponse::StoreVerify(response)) => response,
-        Ok(BrokerResponse::Error(error)) => d2b_contracts::broker_wire::StoreVerifyResponse {
+        Ok(BrokerResponse::Error(error)) => d2b_contracts_broker::broker_wire::StoreVerifyResponse {
             vm: request.vm,
-            status: d2b_contracts::broker_wire::StoreVerifyStatus::Failed,
+            status: d2b_contracts_broker::broker_wire::StoreVerifyStatus::Failed,
             checked: 0,
             drifted: 0,
             repaired: 0,
@@ -22618,9 +22620,9 @@ fn dispatch_broker_store_verify_as(
                 error.kind, error.message
             )),
         },
-        Ok(other) => d2b_contracts::broker_wire::StoreVerifyResponse {
+        Ok(other) => d2b_contracts_broker::broker_wire::StoreVerifyResponse {
             vm: request.vm,
-            status: d2b_contracts::broker_wire::StoreVerifyStatus::Failed,
+            status: d2b_contracts_broker::broker_wire::StoreVerifyStatus::Failed,
             checked: 0,
             drifted: 0,
             repaired: 0,
@@ -22631,9 +22633,9 @@ fn dispatch_broker_store_verify_as(
                 broker_response_kind(&other)
             )),
         },
-        Err(error) => d2b_contracts::broker_wire::StoreVerifyResponse {
+        Err(error) => d2b_contracts_broker::broker_wire::StoreVerifyResponse {
             vm: request.vm,
-            status: d2b_contracts::broker_wire::StoreVerifyStatus::Failed,
+            status: d2b_contracts_broker::broker_wire::StoreVerifyStatus::Failed,
             checked: 0,
             drifted: 0,
             repaired: 0,
@@ -24074,7 +24076,7 @@ mod public_status_tests {
         assert!(!caller.is_admin_uid());
         let envelope = BrokerRequestEnvelope {
             request: BrokerRequest::Hello(HelloRequest {
-                client_version: d2b_contracts::PROTOCOL_VERSION.to_string(),
+                client_version: d2b_contracts_broker::PROTOCOL_VERSION.to_string(),
                 supported_features: Vec::new(),
             }),
             caller_role: caller,
@@ -26227,20 +26229,20 @@ fn dispatch_audit(
         .map(|filter| {
             let severity = match filter.severity.as_deref() {
                 None => Ok(None),
-                Some("info") => Ok(Some(d2b_contracts::broker_wire::BrokerAuditSeverity::Info)),
+                Some("info") => Ok(Some(d2b_contracts_broker::broker_wire::BrokerAuditSeverity::Info)),
                 Some("warning") => Ok(Some(
-                    d2b_contracts::broker_wire::BrokerAuditSeverity::Warning,
+                    d2b_contracts_broker::broker_wire::BrokerAuditSeverity::Warning,
                 )),
-                Some("error") => Ok(Some(d2b_contracts::broker_wire::BrokerAuditSeverity::Error)),
+                Some("error") => Ok(Some(d2b_contracts_broker::broker_wire::BrokerAuditSeverity::Error)),
                 Some("denied") => Ok(Some(
-                    d2b_contracts::broker_wire::BrokerAuditSeverity::Denied,
+                    d2b_contracts_broker::broker_wire::BrokerAuditSeverity::Denied,
                 )),
                 Some(_) => Err(TypedError::InternalIo {
                     context: "audit filter".to_owned(),
                     detail: "severity-invalid".to_owned(),
                 }),
             }?;
-            Ok::<_, TypedError>(d2b_contracts::broker_wire::BrokerAuditFilter {
+            Ok::<_, TypedError>(d2b_contracts_broker::broker_wire::BrokerAuditFilter {
                 env: filter.env,
                 operation: filter.operation,
                 vm: filter.vm,
@@ -27042,9 +27044,9 @@ mod detached_exec_routing_tests {
     use super::supervisor::pidfd_table::{BrokerReapLog, PidfdTable};
     use super::*;
 
-    use d2b_contracts::guest_proto as pb;
-    use d2b_contracts::guest_wire::ExecState;
-    use d2b_contracts::public_wire::{
+    use d2b_contracts_control::guest_proto as pb;
+    use d2b_contracts_control::guest_wire::ExecState;
+    use d2b_contracts_control::public_wire::{
         ExecDetachedKillOutcome, ExecDetachedKillResult, ExecDetachedListEntry,
         ExecDetachedListResult, ExecDetachedLogsResult, ExecDetachedStatusResult, ExecOp,
         ExecStartArgs,
@@ -27848,7 +27850,7 @@ mod accept_loop_concurrency_tests {
     use std::sync::mpsc;
     use std::time::Duration;
 
-    use d2b_contracts::public_wire::{ExecOp, ExecStartArgs};
+    use d2b_contracts_control::public_wire::{ExecOp, ExecStartArgs};
     use serde_json::json;
     use tempfile::TempDir;
 
@@ -28501,16 +28503,16 @@ mod broker_dispatch_tests {
     use std::time::{Duration, Instant};
     use std::{fs, thread};
 
-    use d2b_contracts::broker_wire::{
+    use d2b_contracts_broker::broker_wire::{
         ActivationMode as BrokerActivationMode, ActivationPhase as BrokerActivationPhase,
         BrokerCallerRole, BrokerErrorResponse, BrokerRequest, BrokerRequestEnvelope,
         BrokerResponse, ChildExitKind, ChildExitStatus, ChildReapedNotification,
         DeregisterRunnerPidfdResponse, PollChildReapedResponse, RunnerRole, RunnerSignal,
         SignalRunnerResponse, SpawnRunnerResponse,
     };
-    use d2b_contracts::guest_proto as pb;
-    use d2b_contracts::public_wire;
-    use d2b_contracts::public_wire::{
+    use d2b_contracts_control::guest_proto as pb;
+    use d2b_contracts_control::public_wire;
+    use d2b_contracts_control::public_wire::{
         ActivationRequest, GcRequest, HostDestroyRequest, HostInstallRequest, HostPrepareRequest,
         KeysRotateRequest, MigrateRequest, MutationFlags, RotateKnownHostRequest,
         ShellSessionState, StatusRequest, TrustRequest, VmLifecycleRequest,
@@ -29394,15 +29396,15 @@ mod broker_dispatch_tests {
     }
 
     fn run_activation_response(
-        request: &d2b_contracts::broker_wire::RunActivationRequest,
+        request: &d2b_contracts_broker::broker_wire::RunActivationRequest,
         summary: &str,
     ) -> BrokerResponse {
-        BrokerResponse::RunActivation(d2b_contracts::broker_wire::RunActivationResponse {
+        BrokerResponse::RunActivation(d2b_contracts_broker::broker_wire::RunActivationResponse {
             mode: request.mode,
             vm: request.vm.clone(),
             generation_number: Some(42),
             guest_switch_script_path: (request.phase
-                == d2b_contracts::broker_wire::ActivationPhase::Prepare)
+                == d2b_contracts_broker::broker_wire::ActivationPhase::Prepare)
                 .then(|| {
                     "/nix/store/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa-vm-a-system/bin/switch-to-configuration"
                         .to_owned()
@@ -29420,12 +29422,12 @@ mod broker_dispatch_tests {
     fn broker_signer_forwards_guest_control_sign_request_verbatim() {
         use crate::guest_control_bridge::{BrokerSigner, GUEST_CONTROL_ATTEMPT_CAP};
         use crate::guest_control_health::{AttemptBudget, GuestControlSigner};
-        use d2b_contracts::broker_wire::{
+        use d2b_contracts_broker::broker_wire::{
             BrokerCallerRole, GuestBootIdWire, GuestControlAuthPurpose, GuestControlDirection,
             GuestControlProofRole, GuestControlSignRequest, GuestControlSignResponse,
         };
-        use d2b_contracts::guest_auth::{AUTH_NONCE_LEN, GUEST_CONTROL_AUTH_PORT};
-        use d2b_contracts::guest_wire::GUEST_CONTROL_PROTOCOL_VERSION;
+        use d2b_contracts_control::guest_auth::{AUTH_NONCE_LEN, GUEST_CONTROL_AUTH_PORT};
+        use d2b_contracts_control::guest_wire::GUEST_CONTROL_PROTOCOL_VERSION;
         use d2b_contracts::types::VmId;
 
         let request = GuestControlSignRequest {
@@ -29519,12 +29521,12 @@ mod broker_dispatch_tests {
         use crate::guest_control_health::{
             AttemptBudget, GuestControlHealthError, GuestControlSigner,
         };
-        use d2b_contracts::broker_wire::{
+        use d2b_contracts_broker::broker_wire::{
             BrokerCallerRole, GuestBootIdWire, GuestControlAuthPurpose, GuestControlDirection,
             GuestControlProofRole, GuestControlSignRequest,
         };
-        use d2b_contracts::guest_auth::{AUTH_NONCE_LEN, GUEST_CONTROL_AUTH_PORT};
-        use d2b_contracts::guest_wire::GUEST_CONTROL_PROTOCOL_VERSION;
+        use d2b_contracts_control::guest_auth::{AUTH_NONCE_LEN, GUEST_CONTROL_AUTH_PORT};
+        use d2b_contracts_control::guest_wire::GUEST_CONTROL_PROTOCOL_VERSION;
         use d2b_contracts::types::VmId;
 
         let attempt = Duration::from_millis(300);
@@ -29902,7 +29904,7 @@ mod broker_dispatch_tests {
             ),
             (
                 "usbipBind",
-                super::wire::Request::UsbipBind(d2b_contracts::public_wire::UsbipBindCliRequest {
+                super::wire::Request::UsbipBind(d2b_contracts_control::public_wire::UsbipBindCliRequest {
                     vm: "vm-a".to_owned(),
                     bus_id: "1-1".to_owned(),
                     flags: MutationFlags {
@@ -29914,7 +29916,7 @@ mod broker_dispatch_tests {
             (
                 "usbipUnbind",
                 super::wire::Request::UsbipUnbind(
-                    d2b_contracts::public_wire::UsbipUnbindCliRequest {
+                    d2b_contracts_control::public_wire::UsbipUnbindCliRequest {
                         vm: "vm-a".to_owned(),
                         bus_id: "1-1".to_owned(),
                         flags: MutationFlags {
@@ -30766,7 +30768,7 @@ mod broker_dispatch_tests {
         ignore = "P2fu1 software-r2 (longstanding pre-existing): same root/owner requirement as vm_start_broker_unreachable_returns_broker_error."
     )]
     fn vm_start_registers_pidfd_table_entry_from_broker_fd() {
-        use d2b_contracts::broker_wire::{BrokerRequest, RunnerRole};
+        use d2b_contracts_broker::broker_wire::{BrokerRequest, RunnerRole};
         use d2b_contracts::types::{RoleId, VmId};
 
         let socket_path = unreachable_broker_socket_path("vm-start-registers");
@@ -30922,7 +30924,7 @@ mod broker_dispatch_tests {
     #[test]
     #[ignore = "flaky on shared hosts; Unix socket reuse races"]
     fn vm_start_drives_supervisor_dag_in_topo_order() {
-        use d2b_contracts::broker_wire::{BrokerRequest, RunnerRole};
+        use d2b_contracts_broker::broker_wire::{BrokerRequest, RunnerRole};
         use d2b_contracts::types::{RoleId, VmId};
 
         let daemon_state_dir = test_daemon_state_dir("vm-start-dag");
@@ -33039,7 +33041,7 @@ mod broker_dispatch_tests {
 
     #[test]
     fn host_destroy_deletes_routes_before_restoring_sysctls_and_flushing_nft() {
-        use d2b_contracts::broker_wire::{AckResponse, BrokerRequestEnvelope, BrokerResponse};
+        use d2b_contracts_broker::broker_wire::{AckResponse, BrokerRequestEnvelope, BrokerResponse};
         use nix::sys::socket::{
             AddressFamily, Backlog, MsgFlags, SockFlag, SockType, UnixAddr, accept4, bind, listen,
             recv, send, socket,
@@ -33566,7 +33568,7 @@ mod broker_dispatch_tests {
 
     #[test]
     fn vm_start_runner_exited_response_is_broker_error_with_swtpm_remediation() {
-        use d2b_contracts::broker_wire::{ChildExitKind, ChildExitStatus};
+        use d2b_contracts_broker::broker_wire::{ChildExitKind, ChildExitStatus};
 
         let status = ChildExitStatus {
             kind: ChildExitKind::Exited,
@@ -33910,7 +33912,7 @@ mod broker_dispatch_tests {
 
         let state =
             test_state_with_broker_socket(unreachable_broker_socket_path("shell-create-reserve"));
-        let name = d2b_contracts::public_wire::ShellName::new("primary").unwrap();
+        let name = d2b_contracts_control::public_wire::ShellName::new("primary").unwrap();
         let start = Arc::new(Barrier::new(2));
         let release = Arc::new(Barrier::new(2));
         let outcomes = Arc::new(Mutex::new(Vec::new()));
@@ -33975,8 +33977,8 @@ mod broker_dispatch_tests {
     fn listed_typed_shell_bindings_are_cached_after_an_unambiguous_scan() {
         let state =
             test_state_with_broker_socket(unreachable_broker_socket_path("listed-shell-bindings"));
-        let name = d2b_contracts::public_wire::ShellName::new("primary").unwrap();
-        let other_name = d2b_contracts::public_wire::ShellName::new("other").unwrap();
+        let name = d2b_contracts_control::public_wire::ShellName::new("primary").unwrap();
+        let other_name = d2b_contracts_control::public_wire::ShellName::new("other").unwrap();
         super::cache_unambiguous_typed_shell_session_targets(
             &state,
             1000,
@@ -33997,7 +33999,7 @@ mod broker_dispatch_tests {
         );
 
         super::remember_typed_shell_session_target(&state, 1000, &name, "stale.target");
-        let unaffected = d2b_contracts::public_wire::ShellName::new("unaffected").unwrap();
+        let unaffected = d2b_contracts_control::public_wire::ShellName::new("unaffected").unwrap();
         super::remember_typed_shell_session_target(&state, 1000, &unaffected, "old.target");
         let error = super::cache_unambiguous_typed_shell_session_targets(
             &state,
@@ -34030,8 +34032,8 @@ mod broker_dispatch_tests {
         let state = test_state_with_broker_socket(unreachable_broker_socket_path(
             "targeted-shell-bindings",
         ));
-        let duplicate = d2b_contracts::public_wire::ShellName::new("primary").unwrap();
-        let unique = d2b_contracts::public_wire::ShellName::new("other").unwrap();
+        let duplicate = d2b_contracts_control::public_wire::ShellName::new("primary").unwrap();
+        let unique = d2b_contracts_control::public_wire::ShellName::new("other").unwrap();
         let error = super::cache_target_local_typed_shell_session_targets(
             &state,
             1000,
@@ -34080,19 +34082,19 @@ mod broker_dispatch_tests {
     fn live_typed_shell_match_refreshes_bounded_binding_recency() {
         let state =
             test_state_with_broker_socket(unreachable_broker_socket_path("live-shell-recency"));
-        let matched = d2b_contracts::public_wire::ShellName::new("retained").unwrap();
+        let matched = d2b_contracts_control::public_wire::ShellName::new("retained").unwrap();
         super::remember_typed_shell_session_target(&state, 1000, &matched, "healthy");
         for index in 0..(super::MAX_TYPED_SHELL_SESSION_TARGETS - 1) {
             let name =
-                d2b_contracts::public_wire::ShellName::new(format!("churn-{index:03}")).unwrap();
+                d2b_contracts_control::public_wire::ShellName::new(format!("churn-{index:03}")).unwrap();
             super::remember_typed_shell_session_target(&state, 1000, &name, "work");
         }
 
         let listings = vec![(
             "healthy".to_owned(),
-            d2b_contracts::public_wire::ShellListResult {
-                default_name: d2b_contracts::public_wire::ShellName::new("primary").unwrap(),
-                sessions: vec![d2b_contracts::public_wire::ShellListEntry {
+            d2b_contracts_control::public_wire::ShellListResult {
+                default_name: d2b_contracts_control::public_wire::ShellName::new("primary").unwrap(),
+                sessions: vec![d2b_contracts_control::public_wire::ShellListEntry {
                     name: matched.clone(),
                     state: ShellSessionState::Detached,
                     attached: false,
@@ -34106,7 +34108,7 @@ mod broker_dispatch_tests {
             Some("healthy".to_owned())
         );
 
-        let newest = d2b_contracts::public_wire::ShellName::new("newest").unwrap();
+        let newest = d2b_contracts_control::public_wire::ShellName::new("newest").unwrap();
         super::remember_typed_shell_session_target(&state, 1000, &newest, "other");
         assert_eq!(
             super::cached_typed_shell_session_target(&state, 1000, &matched).as_deref(),
@@ -34114,7 +34116,7 @@ mod broker_dispatch_tests {
             "a live match must refresh its exact binding before bounded eviction"
         );
         let oldest =
-            d2b_contracts::public_wire::ShellName::new("churn-000").expect("valid churn name");
+            d2b_contracts_control::public_wire::ShellName::new("churn-000").expect("valid churn name");
         assert_eq!(
             super::cached_typed_shell_session_target(&state, 1000, &oldest),
             None,
@@ -34126,7 +34128,7 @@ mod broker_dispatch_tests {
     fn typed_shell_target_cache_is_bounded_and_preserves_recent_exact_retries() {
         let state =
             test_state_with_broker_socket(unreachable_broker_socket_path("bounded-shell-bindings"));
-        let retained = d2b_contracts::public_wire::ShellName::new("retained").unwrap();
+        let retained = d2b_contracts_control::public_wire::ShellName::new("retained").unwrap();
         super::remember_typed_shell_session_target(&state, 1000, &retained, "tools.host.d2b");
 
         for index in 0..super::MAX_TYPED_SHELL_SESSION_TARGETS {
@@ -34136,7 +34138,7 @@ mod broker_dispatch_tests {
                 "a retry must refresh the exact target binding before churn"
             );
             let name =
-                d2b_contracts::public_wire::ShellName::new(format!("churn-{index:03}")).unwrap();
+                d2b_contracts_control::public_wire::ShellName::new(format!("churn-{index:03}")).unwrap();
             super::remember_typed_shell_session_target(&state, 1000, &name, "work");
         }
 
@@ -34155,7 +34157,7 @@ mod broker_dispatch_tests {
             "recent exact-session retries must survive bounded eviction"
         );
         let evicted =
-            d2b_contracts::public_wire::ShellName::new("churn-000").expect("valid churn name");
+            d2b_contracts_control::public_wire::ShellName::new("churn-000").expect("valid churn name");
         assert_eq!(
             super::cached_typed_shell_session_target(&state, 1000, &evicted),
             None,
@@ -34236,7 +34238,7 @@ mod broker_dispatch_tests {
             "read-guest-config-authz",
         ));
         let request = super::wire::Request::ReadGuestConfig(
-            d2b_contracts::public_wire::ReadGuestConfigRequest {
+            d2b_contracts_control::public_wire::ReadGuestConfigRequest {
                 vm: "vm-a".to_owned(),
             },
         );
@@ -34262,7 +34264,7 @@ mod broker_dispatch_tests {
             "read-guest-config-admin",
         ));
         let request = super::wire::Request::ReadGuestConfig(
-            d2b_contracts::public_wire::ReadGuestConfigRequest {
+            d2b_contracts_control::public_wire::ReadGuestConfigRequest {
                 vm: "vm-a".to_owned(),
             },
         );
@@ -34478,7 +34480,7 @@ mod broker_dispatch_tests {
     /// empty so `overall_ok=true` without any broker interaction.
     #[test]
     fn vm_start_obs_degraded_timeout_injects_degraded_field_in_envelope() {
-        use d2b_contracts::public_wire::{MutationFlags, VmLifecycleRequest};
+        use d2b_contracts_control::public_wire::{MutationFlags, VmLifecycleRequest};
 
         let daemon_state_dir = test_daemon_state_dir("obs-degraded-timeout");
         let locks_dir = daemon_state_dir.join("locks");
@@ -34606,7 +34608,7 @@ mod broker_dispatch_tests {
     /// (e.g., CLI `--no-wait-api` flag).
     #[test]
     fn vm_start_non_obs_vm_has_no_degraded_field_in_envelope() {
-        use d2b_contracts::public_wire::{MutationFlags, VmLifecycleRequest};
+        use d2b_contracts_control::public_wire::{MutationFlags, VmLifecycleRequest};
 
         // Reuse the obs-enabled bundle (schemaVersion v1, empty process DAG)
         // but pass `no_wait_api: true` so `dispatch_broker_vm_start` skips
@@ -34956,7 +34958,7 @@ mod console_dispatch_ownership_tests {
 
     use super::console_session::{ConsoleRing, ConsoleSession, ConsoleSessionTable};
     use super::typed_error::TypedError;
-    use d2b_contracts::public_wire::ConsoleProviderKind;
+    use d2b_contracts_control::public_wire::ConsoleProviderKind;
     use std::sync::{Arc, Mutex};
 
     fn make_session() -> ConsoleSession {

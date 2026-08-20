@@ -1,5 +1,6 @@
 use d2b_contract_tests::read_repo_file;
-use d2b_contracts::{
+use d2b_contracts::types::MediaRef;
+use d2b_contracts_control::{
     guest_wire::{
         GUEST_CONTROL_PROTOCOL_VERSION, GuestRequestMetadata, GuestUsbipBusId, GuestUsbipHost,
         GuestVmId, RequestId, UsbipStatusEntry, UsbipStatusRequest, UsbipStatusResponse,
@@ -7,7 +8,6 @@ use d2b_contracts::{
     public_wire::{
         PublicResponse, UsbProbeEntryKind, UsbipProbeEntry, UsbipProbeResponse, UsbipProbeStatus,
     },
-    types::MediaRef,
 };
 use serde_json::{Value, json};
 
@@ -250,21 +250,21 @@ fn public_usb_probe_json_schema_matches_dto_semantics() {
                 source_kind: None,
                 candidate_bus_ids: Vec::new(),
                 follow_up_command: None,
-                durable_claim: d2b_contracts::public_wire::UsbipDurableClaimStatus {
-                    state: d2b_contracts::public_wire::UsbipDurableClaimState::HeldByDesiredOwner,
+                durable_claim: d2b_contracts_control::public_wire::UsbipDurableClaimStatus {
+                    state: d2b_contracts_control::public_wire::UsbipDurableClaimState::HeldByDesiredOwner,
                     owner_vm: Some("corp-vm".to_owned()),
                 },
-                host: d2b_contracts::public_wire::UsbipHostProbeStatus {
-                    bind: d2b_contracts::public_wire::UsbipHostBindState::BoundToUsbipHost,
-                    carrier: d2b_contracts::public_wire::UsbipHostCarrierState::Ready,
-                    proxy: d2b_contracts::public_wire::UsbipProxyState::Listening,
+                host: d2b_contracts_control::public_wire::UsbipHostProbeStatus {
+                    bind: d2b_contracts_control::public_wire::UsbipHostBindState::BoundToUsbipHost,
+                    carrier: d2b_contracts_control::public_wire::UsbipHostCarrierState::Ready,
+                    proxy: d2b_contracts_control::public_wire::UsbipProxyState::Listening,
                 },
-                guest: d2b_contracts::public_wire::UsbipGuestProbeStatus {
-                    import: d2b_contracts::public_wire::UsbipGuestImportState::Imported,
+                guest: d2b_contracts_control::public_wire::UsbipGuestProbeStatus {
+                    import: d2b_contracts_control::public_wire::UsbipGuestImportState::Imported,
                 },
-                topology_policy: d2b_contracts::public_wire::UsbipTopologyPolicyStatus {
-                    topology: d2b_contracts::public_wire::UsbipTopologyState::Match,
-                    policy: d2b_contracts::public_wire::UsbipPolicyState::Allowed,
+                topology_policy: d2b_contracts_control::public_wire::UsbipTopologyPolicyStatus {
+                    topology: d2b_contracts_control::public_wire::UsbipTopologyState::Match,
+                    policy: d2b_contracts_control::public_wire::UsbipPolicyState::Allowed,
                 },
                 degraded_reasons: Vec::new(),
                 remediation_commands: Vec::new(),

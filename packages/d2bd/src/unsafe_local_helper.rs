@@ -1,4 +1,4 @@
-use d2b_contracts::unsafe_local_wire::{
+use d2b_contracts_control::unsafe_local_wire::{
     DaemonToUnsafeLocalHelper, HELPER_SOCKET_BUFFER_REQUEST_BYTES, HelperFailureCode,
     HelperHeartbeat, HelperHelloAccepted, HelperLaunchRequest, HelperOperationDisposition,
     HelperOperationRejected, HelperOperationResult, HelperShellRequest, HelperShellResponse,
@@ -1100,7 +1100,7 @@ fn validate_terminal_fd(
     if ready.terminal_protocol_version != UNSAFE_LOCAL_TERMINAL_PROTOCOL_VERSION
         || !matches!(
             ready.transport,
-            d2b_contracts::unsafe_local_wire::HelperTerminalTransport::ConnectedUnixStream
+            d2b_contracts_control::unsafe_local_wire::HelperTerminalTransport::ConnectedUnixStream
         )
         || fds.len() != UNSAFE_LOCAL_TERMINAL_FD_COUNT
     {
@@ -1272,7 +1272,7 @@ impl OperationLedger {
         let entries = self.by_uid.entry(uid).or_default();
         for scope in &snapshot.scopes {
             if scope.scope.kind
-                == d2b_contracts::unsafe_local_wire::HelperScopeKind::PersistentShell
+                == d2b_contracts_control::unsafe_local_wire::HelperScopeKind::PersistentShell
                 || scope.persistent_shell.is_some()
             {
                 continue;
@@ -1361,10 +1361,10 @@ fn now_epoch_seconds() -> u64 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use d2b_contracts::public_wire::{
+    use d2b_contracts_control::public_wire::{
         ShellDetachResult, ShellListResult, ShellName, ShellSessionState,
     };
-    use d2b_contracts::unsafe_local_wire::{
+    use d2b_contracts_control::unsafe_local_wire::{
         HelperShellDetachResponse, HelperShellListResponse, HelperShellPolicy,
     };
     use d2b_core::configured_argv::ConfiguredArgv;
@@ -1386,7 +1386,7 @@ mod tests {
             item_id: ProtocolToken::parse("browser").unwrap(),
             argv: ConfiguredArgv::new(vec![arg.to_owned()]).unwrap(),
             graphical: false,
-            realm_accent_color: d2b_contracts::unsafe_local_wire::RealmAccentColor::new("#336699")
+            realm_accent_color: d2b_contracts_control::unsafe_local_wire::RealmAccentColor::new("#336699")
                 .unwrap(),
         }
     }
@@ -1426,7 +1426,7 @@ mod tests {
             policy,
             name: None,
             force: false,
-            initial_terminal_size: d2b_contracts::terminal_wire::TerminalSize {
+            initial_terminal_size: d2b_contracts_control::terminal_wire::TerminalSize {
                 rows: 24,
                 cols: 80,
             },
@@ -1522,7 +1522,7 @@ mod tests {
         let mut changed = first.clone();
         changed.request_id = 2;
         changed.realm_accent_color =
-            d2b_contracts::unsafe_local_wire::RealmAccentColor::new("#cc3300").unwrap();
+            d2b_contracts_control::unsafe_local_wire::RealmAccentColor::new("#cc3300").unwrap();
 
         assert!(matches!(
             ledger.begin(
@@ -1700,14 +1700,14 @@ mod tests {
             1000,
             &HelperSnapshot {
                 generation: 2,
-                scopes: vec![d2b_contracts::unsafe_local_wire::HelperScopeSnapshot {
+                scopes: vec![d2b_contracts_control::unsafe_local_wire::HelperScopeSnapshot {
                     operation_id: request.operation_id.clone(),
                     workload: request.workload.clone(),
-                    scope: d2b_contracts::unsafe_local_wire::ScopeIdentity {
+                    scope: d2b_contracts_control::unsafe_local_wire::ScopeIdentity {
                         invocation_id: "00112233445566778899aabbccddeeff".to_owned(),
-                        kind: d2b_contracts::unsafe_local_wire::HelperScopeKind::LauncherApp,
+                        kind: d2b_contracts_control::unsafe_local_wire::HelperScopeKind::LauncherApp,
                     },
-                    state: d2b_contracts::unsafe_local_wire::HelperScopeState::Active,
+                    state: d2b_contracts_control::unsafe_local_wire::HelperScopeState::Active,
                     persistent_shell: None,
                 }],
             },
@@ -1729,21 +1729,21 @@ mod tests {
             1000,
             &HelperSnapshot {
                 generation: 2,
-                scopes: vec![d2b_contracts::unsafe_local_wire::HelperScopeSnapshot {
+                scopes: vec![d2b_contracts_control::unsafe_local_wire::HelperScopeSnapshot {
                     operation_id: OperationId::parse("persistent-shell-operation").unwrap(),
                     workload: launch(1, "shell-snapshot-workload", "true").workload,
-                    scope: d2b_contracts::unsafe_local_wire::ScopeIdentity {
+                    scope: d2b_contracts_control::unsafe_local_wire::ScopeIdentity {
                         invocation_id: "00112233445566778899aabbccddeeff".to_owned(),
-                        kind: d2b_contracts::unsafe_local_wire::HelperScopeKind::PersistentShell,
+                        kind: d2b_contracts_control::unsafe_local_wire::HelperScopeKind::PersistentShell,
                     },
-                    state: d2b_contracts::unsafe_local_wire::HelperScopeState::Active,
+                    state: d2b_contracts_control::unsafe_local_wire::HelperScopeState::Active,
                     persistent_shell: Some(
-                        d2b_contracts::unsafe_local_wire::HelperPersistentShellSnapshot {
+                        d2b_contracts_control::unsafe_local_wire::HelperPersistentShellSnapshot {
                             name: ShellName::new("primary").unwrap(),
                             state: ShellSessionState::Detached,
                             attached: false,
                             supervisor_id:
-                                d2b_contracts::unsafe_local_wire::HelperSupervisorId::new(
+                                d2b_contracts_control::unsafe_local_wire::HelperSupervisorId::new(
                                     "opaque-supervisor",
                                 )
                                 .unwrap(),
@@ -1955,12 +1955,12 @@ mod tests {
             operation_id: request.operation_id().clone(),
             terminal_protocol_version: UNSAFE_LOCAL_TERMINAL_PROTOCOL_VERSION,
             transport:
-                d2b_contracts::unsafe_local_wire::HelperTerminalTransport::ConnectedUnixStream,
-            scope: d2b_contracts::unsafe_local_wire::ScopeIdentity {
+                d2b_contracts_control::unsafe_local_wire::HelperTerminalTransport::ConnectedUnixStream,
+            scope: d2b_contracts_control::unsafe_local_wire::ScopeIdentity {
                 invocation_id: "00112233445566778899aabbccddeeff".to_owned(),
-                kind: d2b_contracts::unsafe_local_wire::HelperScopeKind::PersistentShell,
+                kind: d2b_contracts_control::unsafe_local_wire::HelperScopeKind::PersistentShell,
             },
-            result: d2b_contracts::unsafe_local_wire::HelperShellAttachResult {
+            result: d2b_contracts_control::unsafe_local_wire::HelperShellAttachResult {
                 resolved_name: ShellName::new("primary").unwrap(),
                 state: ShellSessionState::Attached,
                 force_evicted: false,
@@ -2199,14 +2199,14 @@ mod tests {
             operation_id: OperationId::parse("op-terminal").unwrap(),
             terminal_protocol_version: UNSAFE_LOCAL_TERMINAL_PROTOCOL_VERSION,
             transport:
-                d2b_contracts::unsafe_local_wire::HelperTerminalTransport::ConnectedUnixStream,
-            scope: d2b_contracts::unsafe_local_wire::ScopeIdentity {
+                d2b_contracts_control::unsafe_local_wire::HelperTerminalTransport::ConnectedUnixStream,
+            scope: d2b_contracts_control::unsafe_local_wire::ScopeIdentity {
                 invocation_id: "00112233445566778899aabbccddeeff".to_owned(),
-                kind: d2b_contracts::unsafe_local_wire::HelperScopeKind::PersistentShell,
+                kind: d2b_contracts_control::unsafe_local_wire::HelperScopeKind::PersistentShell,
             },
-            result: d2b_contracts::unsafe_local_wire::HelperShellAttachResult {
-                resolved_name: d2b_contracts::public_wire::ShellName::new("default").unwrap(),
-                state: d2b_contracts::public_wire::ShellSessionState::Attached,
+            result: d2b_contracts_control::unsafe_local_wire::HelperShellAttachResult {
+                resolved_name: d2b_contracts_control::public_wire::ShellName::new("default").unwrap(),
+                state: d2b_contracts_control::public_wire::ShellSessionState::Attached,
                 force_evicted: false,
             },
         };
@@ -2246,14 +2246,14 @@ mod tests {
             operation_id: OperationId::parse("op-terminal-flags").unwrap(),
             terminal_protocol_version: UNSAFE_LOCAL_TERMINAL_PROTOCOL_VERSION,
             transport:
-                d2b_contracts::unsafe_local_wire::HelperTerminalTransport::ConnectedUnixStream,
-            scope: d2b_contracts::unsafe_local_wire::ScopeIdentity {
+                d2b_contracts_control::unsafe_local_wire::HelperTerminalTransport::ConnectedUnixStream,
+            scope: d2b_contracts_control::unsafe_local_wire::ScopeIdentity {
                 invocation_id: "00112233445566778899aabbccddeeff".to_owned(),
-                kind: d2b_contracts::unsafe_local_wire::HelperScopeKind::PersistentShell,
+                kind: d2b_contracts_control::unsafe_local_wire::HelperScopeKind::PersistentShell,
             },
-            result: d2b_contracts::unsafe_local_wire::HelperShellAttachResult {
-                resolved_name: d2b_contracts::public_wire::ShellName::new("default").unwrap(),
-                state: d2b_contracts::public_wire::ShellSessionState::Attached,
+            result: d2b_contracts_control::unsafe_local_wire::HelperShellAttachResult {
+                resolved_name: d2b_contracts_control::public_wire::ShellName::new("default").unwrap(),
+                state: d2b_contracts_control::public_wire::ShellSessionState::Attached,
                 force_evicted: false,
             },
         };
@@ -2290,7 +2290,7 @@ mod tests {
         configure_socket_buffers(&client).unwrap();
         send_frame(
             &client,
-            &UnsafeLocalHelperToDaemon::Hello(d2b_contracts::unsafe_local_wire::HelperHello {
+            &UnsafeLocalHelperToDaemon::Hello(d2b_contracts_control::unsafe_local_wire::HelperHello {
                 protocol_version: UNSAFE_LOCAL_HELPER_PROTOCOL_VERSION,
                 generation,
                 features: Vec::new(),

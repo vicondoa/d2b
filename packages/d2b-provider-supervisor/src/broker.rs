@@ -8,7 +8,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 use std::time::Duration;
 
-use d2b_contracts::broker_wire::{
+use d2b_contracts_broker::broker_wire::{
     AuditJoinContext, BrokerCallerRole, BrokerRequest, BrokerRequestEnvelope, BrokerResponse,
     CanonicalAuditDigest, DeregisterRunnerPidfdRequest, ObserveRunnerRequest, OpenPidfdRequest,
     RunnerRole, RunnerSignal, SandboxLaunchPlan, SignalRunnerRequest, SpawnRunnerRequest,
@@ -783,7 +783,7 @@ fn response_error(response: &BrokerResponse, operation: BrokerOperation<'_>) -> 
 // Keep focused broker tests beside the response mapping they exercise.
 #[allow(clippy::items_after_test_module)]
 mod tests {
-    use d2b_contracts::broker_wire::BrokerErrorResponse;
+    use d2b_contracts_broker::broker_wire::BrokerErrorResponse;
     use d2b_core::processes::ProcessRole;
 
     use super::*;

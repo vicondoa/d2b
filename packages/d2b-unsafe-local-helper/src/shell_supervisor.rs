@@ -5,11 +5,11 @@ use crate::supervisor_protocol::{
     SupervisorResponse, SupervisorResult, read_frame as read_supervisor_frame,
     validate_request as validate_supervisor_request, write_frame as write_supervisor_frame,
 };
-use d2b_contracts::terminal_wire::{
+use d2b_contracts_control::terminal_wire::{
     TerminalCloseResult, TerminalControlResult, TerminalStatus, TerminalStream, TerminalWaitResult,
     TerminalWriteStdinResult,
 };
-use d2b_contracts::unsafe_local_wire::{
+use d2b_contracts_control::unsafe_local_wire::{
     HelperFailureCode, HelperSupervisorId, HelperTerminalAttachmentClosed,
     HelperTerminalControlResponse, HelperTerminalOperationResult, HelperTerminalReadOutputResult,
     HelperTerminalRejected, HelperTerminalRequest, HelperTerminalResponse,
@@ -1017,7 +1017,7 @@ fn process_terminal_request(
                     );
                     HelperTerminalReadOutputResult {
                         data_base64:
-                            match d2b_contracts::unsafe_local_wire::HelperTerminalChunkBase64::new(
+                            match d2b_contracts_control::unsafe_local_wire::HelperTerminalChunkBase64::new(
                                 d2b_core::base64_codec::encode(&read.data),
                             ) {
                                 Ok(data) => data,
@@ -1031,7 +1031,7 @@ fn process_terminal_request(
                     }
                 }
                 TerminalStream::Stderr => HelperTerminalReadOutputResult {
-                    data_base64: d2b_contracts::unsafe_local_wire::HelperTerminalChunkBase64::new(
+                    data_base64: d2b_contracts_control::unsafe_local_wire::HelperTerminalChunkBase64::new(
                         "",
                     )
                     .expect("empty base64 is valid"),
@@ -1118,7 +1118,7 @@ fn process_terminal_request(
                     control_sequence: request.control_sequence,
                     result: HelperTerminalAttachmentClosed {
                         detached: true,
-                        cause: Some(d2b_contracts::public_wire::ShellCloseCause::ClientDetach),
+                        cause: Some(d2b_contracts_control::public_wire::ShellCloseCause::ClientDetach),
                     },
                 }),
                 true,
@@ -1149,8 +1149,8 @@ fn exit_status(status: std::process::ExitStatus) -> TerminalStatus {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use d2b_contracts::terminal_wire::TerminalSize;
-    use d2b_contracts::unsafe_local_wire::{
+    use d2b_contracts_control::terminal_wire::TerminalSize;
+    use d2b_contracts_control::unsafe_local_wire::{
         HelperTerminalChunkBase64, HelperTerminalControl, HelperTerminalReadOutput,
         HelperTerminalResize, HelperTerminalWait, HelperTerminalWriteStdin,
     };
@@ -1218,7 +1218,7 @@ mod tests {
 
     #[test]
     fn only_observation_requests_may_run_concurrently() {
-        let chunk = d2b_contracts::unsafe_local_wire::HelperTerminalChunkBase64::new("").unwrap();
+        let chunk = d2b_contracts_control::unsafe_local_wire::HelperTerminalChunkBase64::new("").unwrap();
         assert!(!terminal_request_may_run_concurrently(
             &HelperTerminalRequest::WriteStdin(HelperTerminalWriteStdin {
                 request_id: 1,

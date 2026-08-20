@@ -7,7 +7,7 @@
 
 use std::path::{Path, PathBuf};
 
-use d2b_contracts::broker_wire::{
+use d2b_contracts_broker::broker_wire::{
     ReconcileStorageScopeResponse, StorageReconcileStatus, ValidateLockSpecResponse,
 };
 use d2b_contracts::types::BundleOpId;
@@ -512,7 +512,7 @@ mod tests {
     #[test]
     fn broker_storage_and_sync_requests_are_opaque_id_only() {
         let storage =
-            serde_json::to_value(d2b_contracts::broker_wire::ReconcileStorageScopeRequest {
+            serde_json::to_value(d2b_contracts_broker::broker_wire::ReconcileStorageScopeRequest {
                 storage_ref: BundleOpId::new("path:run-root"),
                 apply: true,
                 tracing_span_id: None,
@@ -532,7 +532,7 @@ mod tests {
             ]
         );
 
-        let lock = serde_json::to_value(d2b_contracts::broker_wire::ValidateLockSpecRequest {
+        let lock = serde_json::to_value(d2b_contracts_broker::broker_wire::ValidateLockSpecRequest {
             lock_ref: BundleOpId::new("lock:daemon"),
             tracing_span_id: None,
         })

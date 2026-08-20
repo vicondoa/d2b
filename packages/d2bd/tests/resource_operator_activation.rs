@@ -13,8 +13,6 @@ use std::{
 };
 
 use d2b_contracts::{
-    broker_wire::BrokerCallerRole,
-    broker_wire::{OpenZoneStoreResponse, ZoneStoreDisposition},
     resource_proto as wire,
     v3::{
         AuthenticatedSubjectContext, BindingDigest, CanonicalJsonValue, ConfigurationGeneration,
@@ -24,6 +22,9 @@ use d2b_contracts::{
         ZoneRevision, canonical_digest, device::DeviceSpec, guest::GuestSpec,
         identity::STANDARD_RESOURCE_TYPES, storage::ZoneStoreId,
     },
+};
+use d2b_contracts_broker::broker_wire::{
+    BrokerCallerRole, OpenZoneStoreResponse, ZoneStoreDisposition,
 };
 use d2b_resource_api::{
     RedbBackend, ResourceBusAdapter, ResourceService,

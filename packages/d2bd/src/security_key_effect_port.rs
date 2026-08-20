@@ -1,7 +1,7 @@
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use d2b_contracts::broker_wire::{BrokerRequest, BrokerResponse, OpenHidrawSecurityKeyRequest};
+use d2b_contracts_broker::broker_wire::{BrokerRequest, BrokerResponse, OpenHidrawSecurityKeyRequest};
 use d2b_contracts::types::VmId;
 use d2b_contracts::v3::{ResourceRef, ResourceUid};
 use d2b_core::bundle_resolver::BundleResolver;
@@ -174,7 +174,7 @@ struct LiveSecurityKeyEffectPort<'a> {
     selector_id: String,
     device_ref: ResourceRef,
     target: RelayTarget,
-    caller_role: d2b_contracts::broker_wire::BrokerCallerRole,
+    caller_role: d2b_contracts_broker::broker_wire::BrokerCallerRole,
     claimed_backing: Option<PhysicalUsbBackingToken>,
 }
 
@@ -215,7 +215,7 @@ impl SecurityKeyEffectPort for LiveSecurityKeyEffectPort<'_> {
                 vm_id: self.vm_id.clone(),
                 selector_id: self.selector_id.clone(),
                 device_ref: self.device_ref.clone(),
-                authority_key: d2b_contracts::broker_wire::security_key_authority_binding(
+                authority_key: d2b_contracts_broker::broker_wire::security_key_authority_binding(
                     &self.device_ref,
                     &self.selector_id,
                 ),

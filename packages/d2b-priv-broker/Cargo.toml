@@ -12,7 +12,7 @@ unexpected_cfgs = { level = "warn", check-cfg = ["cfg(test_root)"] }
 [features]
 # W4-fu clean-break: `layer1-bootstrap` is no longer a default
 # feature. The broker's production wire dispatch path now uses
-# the real opaque-ID `d2b_contracts::broker_wire::BrokerRequest`
+# the real opaque-ID `d2b_contracts_broker::broker_wire::BrokerRequest`
 # shape via the `runtime::dispatch_request` non-bootstrap arm
 # (which routes audit / Hello / ValidateBundle / ExportBrokerAudit
 # end-to-end and surfaces typed-Unimplemented envelopes for the
@@ -39,6 +39,8 @@ fake-backends = ["d2b-host/fake-backends"]
 [dependencies]
 d2b-audit = { path = "../d2b-audit", version = "0.0.0-bootstrap" }
 d2b-contracts = { path = "../d2b-contracts", version = "0.0.0-bootstrap" }
+d2b-contracts-broker = { path = "../d2b-contracts-broker", version = "0.0.0-bootstrap" }
+d2b-contracts-control = { path = "../d2b-contracts-control", version = "0.0.0-bootstrap" }
 d2b-core = { path = "../d2b-core", version = "0.0.0-bootstrap" }
 d2b-host = { path = "../d2b-host", version = "0.0.0-bootstrap" }
 d2b-realm-core = { path = "../d2b-realm-core", version = "0.0.0-bootstrap" }

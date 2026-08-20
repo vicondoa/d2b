@@ -1,5 +1,5 @@
-use d2b_contracts::PROTOCOL_VERSION;
-use d2b_contracts::broker_wire::{
+use d2b_contracts_broker::PROTOCOL_VERSION;
+use d2b_contracts_broker::broker_wire::{
     ApplyNftablesProjectionRequest, BrokerCallerRole, BrokerRequest, BrokerRequestEnvelope,
     CreateBridgeRequest, DeleteBridgeRequest, DeletePersistentTapRequest, NftablesProjectionAction,
 };

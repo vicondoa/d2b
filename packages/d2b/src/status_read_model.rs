@@ -1,6 +1,6 @@
 use std::{fs, io, path::PathBuf};
 
-use d2b_contracts::{
+use d2b_contracts_control::{
     cli_output::*,
     public_wire::{
         ListEntry as IpcListEntry, PublicVmServices,
@@ -788,7 +788,7 @@ pub(crate) fn list_status_label(
 }
 
 pub(crate) fn public_lifecycle_status_label(
-    lifecycle: &d2b_contracts::public_wire::VmLifecycle,
+    lifecycle: &d2b_contracts_control::public_wire::VmLifecycle,
 ) -> String {
     if lifecycle.pending_restart {
         return "pending-restart".to_owned();
@@ -806,7 +806,7 @@ pub(crate) fn public_lifecycle_status_label(
 }
 
 pub(crate) fn public_lifecycle_list_status_label(
-    lifecycle: &d2b_contracts::public_wire::VmLifecycle,
+    lifecycle: &d2b_contracts_control::public_wire::VmLifecycle,
 ) -> String {
     if lifecycle.pending_restart {
         return "pending-restart".to_owned();

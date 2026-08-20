@@ -6,7 +6,7 @@
 //! contract (`D2B_AUTH_STATUS_FIXTURE` + `D2B_TEST_{LAUNCHER,ADMIN}_UIDS`
 //! + `--test-uid`). It asserts that:
 //!   * `auth status --json` deserializes strictly into
-//!     `d2b_contracts::cli_output::AuthStatusOutputV2` (`deny_unknown_fields` makes a successful
+//!     `d2b_contracts_control::cli_output::AuthStatusOutputV2` (`deny_unknown_fields` makes a successful
 //!     typed deserialize equivalent to the schema check the bash gate did via
 //!     docs/reference/cli-output/auth-status.schema.json);
 //!   * the per-role allowed/denied subcommand authz surface matches the binary's
@@ -20,7 +20,7 @@
 
 use std::process::Command;
 
-use d2b_contracts::cli_output::{AuthRoleV2, AuthStatusOutputV2};
+use d2b_contracts_control::cli_output::{AuthRoleV2, AuthStatusOutputV2};
 
 // Fixture JSON shapes, reproduced from tests/cli-rust-native-common.sh's
 // d2b_write_auth_status_fixture. They drive the public/broker socket probes;

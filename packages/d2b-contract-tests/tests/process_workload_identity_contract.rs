@@ -342,7 +342,7 @@ fn vm_process_dag_workload_identity_has_additive_serde_annotations() {
 /// and `skip_serializing_if = "Option::is_none"`.
 #[test]
 fn spawn_runner_request_workload_identity_has_additive_serde_annotations() {
-    let source = read_repo_file("packages/d2b-contracts/src/broker_wire.rs");
+    let source = read_repo_file("packages/d2b-contracts-broker/src/broker_wire.rs");
 
     let lines: Vec<&str> = source.lines().collect();
     let field_idx = lines

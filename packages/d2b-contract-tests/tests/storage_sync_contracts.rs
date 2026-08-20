@@ -427,7 +427,7 @@ fn read_json<T: serde::de::DeserializeOwned>(dir: &std::path::Path, name: &str) 
 
 #[test]
 fn broker_storage_and_sync_requests_stay_opaque_only() {
-    let broker_wire = read_repo_file("packages/d2b-contracts/src/broker_wire.rs");
+    let broker_wire = read_repo_file("packages/d2b-contracts-broker/src/broker_wire.rs");
     let request_re =
         Regex::new(r"(?s)pub struct (\w+Request) \{(?P<body>.*?)\n\}").expect("request regex");
     let field_re =

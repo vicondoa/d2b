@@ -20,8 +20,6 @@
     "packages/d2b-contract-tests/tests/privileges_parity.rs",
     "packages/d2b-contract-tests/tests/realm_workload_schema_contract.rs",
     "packages/d2b-contract-tests/tests/usb_sk_contract.rs",
-    "packages/d2b-contracts/proto/guest_control.proto",
-    "packages/d2b-contracts/tests/version_skew.rs",
     "packages/d2b-core/Cargo.toml",
     "packages/d2b-core/src/bundle_resolver.rs",
     "packages/d2b-core/src/host_w3.rs",
@@ -67,6 +65,8 @@
   ],
   "retiredPaths": [
     "packages/Cargo.toml",
+    "packages/d2b-contracts/proto/guest_control.proto",
+    "packages/d2b-contracts/tests/version_skew.rs",
     "packages/d2b-core/src/privileges_w3.rs",
     "packages/d2b-host/src/runner_shape.rs",
     "packages/d2b-provider-aca/Cargo.toml",

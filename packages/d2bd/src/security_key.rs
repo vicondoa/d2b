@@ -4,7 +4,7 @@
 //!
 //! `d2b-priv-broker` opens the physical hidraw node and hands the fd
 //! to `d2bd` via `SCM_RIGHTS` (see
-//! `d2b_contracts::broker_wire::OpenHidrawSecurityKey`). This module
+//! `d2b_contracts_broker::broker_wire::OpenHidrawSecurityKey`). This module
 //! manages the long-lived session state on top of that fd: it accepts
 //! per-VM connections over per-VM Unix sockets (Cloud Hypervisor
 //! bridges guest VSOCK to a host Unix socket), authenticates the

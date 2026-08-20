@@ -4,35 +4,29 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use std::collections::BTreeSet;
 
-pub mod broker_wire;
 pub mod capability;
 pub mod configured_argv;
 pub mod contract_id;
 pub mod error;
 pub mod generated;
 pub mod generation_bundle;
-pub mod guest_auth;
 pub mod host_generation;
 pub mod ids;
 pub mod privileges_w3;
 pub mod provider_effects;
 pub mod realm;
-pub mod guest_proto {
-    pub use crate::generated::guest_control::*;
-}
 pub mod resource_proto {
     pub use crate::generated::d2b_resource_v3::*;
 }
 pub mod audio;
-pub mod guest_wire;
-pub mod public_wire;
 pub mod runtime;
 pub mod security_key;
+pub mod audit_wire;
+pub mod auth_wire;
+pub mod store_verify_wire;
 pub mod target;
-pub mod terminal_wire;
 pub mod token;
 pub mod types;
-pub mod unsafe_local_wire;
 pub mod unsafe_local_workloads;
 pub mod usbip;
 pub mod usbip_effect_port;
@@ -46,79 +40,6 @@ pub const MAX_FRAME_SIZE: usize = 1024 * 1024;
 pub const PUBLIC_SOCKET_PATH: &str = "/run/d2b/public.sock";
 pub const BROKER_SOCKET_PATH: &str = "/run/d2b/priv.sock";
 pub const UNSAFE_LOCAL_HELPER_SOCKET_PATH: &str = "/run/d2b/unsafe-local-helper.sock";
-
-/// Broker operation-catalogue protocol version. The daemon publishes this
-/// value in its version file and capability metadata. The production broker
-/// request envelope does not currently carry it, so the daemon and broker do
-/// not negotiate or reject version skew at runtime.
-///
-/// This constant was bumped from 2 to 3 when mutating broker variants
-/// became **opaque ID** only: the daemon no longer passes inline nft text,
-/// route specs, sysctl values, hosts entries, NM ifname sets, paths,
-/// uids/gids, argv, env, caps, or seccomp profiles across the wire. Legacy
-/// callers cannot encode the current opaque-ID request shape.
-///
-/// Version 4 adds the `ApplyNftablesProjection`, `CreateBridge`,
-/// `DeleteBridge`, and `DeletePersistentTap` broker operations.
-///
-/// Version 5 adds cursor-bounded requests and typed paginated responses to
-/// `ExportBrokerAudit`.
-pub const PROTOCOL_VERSION: u32 = 5;
-
-/// Broker operation capability snapshot associated with the protocol version.
-/// This is contract metadata, not a runtime negotiation result.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct BrokerCapabilities {
-    /// Wire protocol version (matches [`PROTOCOL_VERSION`] when both
-    /// sides support the same protocol).
-    pub protocol_version: u32,
-    /// Stable broker operation tags this side supports. Wire-equivalent
-    /// to [`broker_wire::BrokerRequest`] variant discriminants; encoded
-    /// as a sorted list for deterministic gold-files.
-    pub broker_operations: Vec<String>,
-}
-
-impl BrokerCapabilities {
-    /// Capabilities advertised by an up-to-date broker. The list
-    /// includes both legacy variants that survive the current contract and
-    /// every variant listed in [`W3BrokerOperation::all`].
-    pub fn w3() -> Self {
-        let mut operations: Vec<String> = W3BrokerOperation::all()
-            .iter()
-            .map(|op| op.wire_tag().to_owned())
-            .collect();
-        // Legacy variants that remain wire-stable but are not in the
-        // closed operation enum (so they're not auto-included above).
-        operations.extend(
-            [
-                "Hello",
-                "ValidateBundle",
-                "ExportBrokerAudit",
-                "CreateOrReconcileUsersGroups",
-                "SetupMountNamespace",
-                "PrepareStoreView",
-                "LaunchMinijailChild",
-                "ReadSecretById",
-                "InjectSecretById",
-                "RotateSecretById",
-                "UsbipBind",
-                "UsbipUnbind",
-                "UsbipProxyReconcile",
-                "PauseBroker",
-                "ResumeBroker",
-            ]
-            .into_iter()
-            .map(str::to_owned),
-        );
-        operations.sort();
-        operations.dedup();
-        Self {
-            protocol_version: PROTOCOL_VERSION,
-            broker_operations: operations,
-        }
-    }
-}
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 #[serde(transparent)]
@@ -251,24 +172,6 @@ pub struct SocketSpec {
     pub abstract_namespace: bool,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, JsonSchema)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct WireProtocolSchema {
-    pub schema_version: String,
-    pub framing: FramingSpec,
-    pub public_socket: SocketSpec,
-    pub broker_socket: SocketSpec,
-    pub hello: Hello,
-    pub hello_ok: HelloOk,
-    pub hello_rejected: HelloRejected,
-    pub public_request: public_wire::PublicRequest,
-    pub public_response: public_wire::PublicResponse,
-    pub workload_op: public_wire::WorkloadOp,
-    pub workload_op_response: public_wire::WorkloadOpResponse,
-    pub broker_request: broker_wire::BrokerRequest,
-    pub broker_response: broker_wire::BrokerResponse,
-}
-
 pub fn negotiate_hello(
     hello: &Hello,
     server_version: &Version,
@@ -355,8 +258,6 @@ where
     serde_json::from_slice(body).map_err(|error| classify_deserialize_error(type_name, &error))
 }
 
-pub mod cli_output;
-
 fn classify_deserialize_error(type_name: &'static str, error: &serde_json::Error) -> Error {
     let message = error.to_string();
     if let Some(field) = extract_unknown_field(&message) {
@@ -408,8 +309,7 @@ fn extract_ifname_error(message: &str) -> Option<v3::IfNameError> {
 #[cfg(test)]
 mod tests {
     use super::{
-        BrokerCapabilities, FeatureFlag, Hello, KnownFeatureFlag, MAX_FRAME_SIZE, PROTOCOL_VERSION,
-        SemverRange, Version, W3BrokerOperation, broker_wire::BrokerRequest, decode_frame,
+        FeatureFlag, Hello, KnownFeatureFlag, MAX_FRAME_SIZE, SemverRange, Version, decode_frame,
         encode_frame, negotiate_hello,
     };
 
@@ -459,7 +359,6 @@ mod tests {
     fn retired_unsafe_local_shell_feature_is_not_negotiated() {
         let retired = FeatureFlag::new("unsafe-local-shell-v1").expect("valid feature");
         assert_eq!(retired.known(), None);
-        assert_eq!(PROTOCOL_VERSION, 5);
 
         let unknown = FeatureFlag::new("unsafe-local-shell-v2").expect("valid future feature");
         assert_eq!(unknown.known(), None);
@@ -525,29 +424,6 @@ mod tests {
     }
 
     #[test]
-    fn invalid_ifname_bubbles_up_as_typed_error() {
-        // CreateTapFd no longer carries `ifnameDerived` on the wire;
-        // the broker derives the ifname server-side from the trusted
-        // bundle row keyed by `role_id` + `vm_id`. The legacy "invalid
-        // ifname bubbles up" case was reframed to assert that the dropped
-        // field is fail-closed-rejected at the wire layer with
-        // `wire-unknown-field`, preventing a future caller from supplying
-        // it.
-        let frame = encode_frame(&serde_json::json!({
-            "kind": "CreateTapFd",
-            "payload": {
-                "ifnameDerived": "abcdefghijklmnop",
-                "roleId": "runner",
-                "vmId": "corp-vm"
-            }
-        }))
-        .expect("encodes");
-        let error =
-            decode_frame::<BrokerRequest>("BrokerRequest", &frame).expect_err("ifname fails");
-        assert_eq!(error.kind().as_str(), "wire-unknown-field");
-    }
-
-    #[test]
     fn hello_round_trip_preserves_length_prefix() {
         let hello = Hello {
             client_version: SemverRange::new(">=0.4.0, <0.5.0").expect("valid range"),
@@ -558,48 +434,6 @@ mod tests {
         assert_eq!(decoded, hello);
     }
 
-    #[test]
-    fn protocol_version_covers_current_broker_operation_catalogue() {
-        assert_eq!(PROTOCOL_VERSION, 5);
-        let capabilities = BrokerCapabilities::w3();
-        for operation in [
-            "ApplyNftablesProjection",
-            "CreateBridge",
-            "DeleteBridge",
-            "DeletePersistentTap",
-        ] {
-            assert!(
-                capabilities
-                    .broker_operations
-                    .iter()
-                    .any(|candidate| candidate == operation),
-                "capability set missing {operation}"
-            );
-        }
-    }
-
-    #[test]
-    fn w3_broker_capabilities_advertise_every_w3_operation() {
-        let caps = BrokerCapabilities::w3();
-        assert_eq!(caps.protocol_version, PROTOCOL_VERSION);
-        for op in W3BrokerOperation::all() {
-            assert!(
-                caps.broker_operations
-                    .iter()
-                    .any(|tag| tag == op.wire_tag()),
-                "capability set missing {}",
-                op.wire_tag()
-            );
-        }
-    }
-
-    #[test]
-    fn w3_capabilities_round_trip_via_serde() {
-        let caps = BrokerCapabilities::w3();
-        let json = serde_json::to_string(&caps).expect("serialize");
-        let decoded: BrokerCapabilities = serde_json::from_str(&json).expect("deserialize");
-        assert_eq!(decoded, caps);
-    }
 }
 
 pub mod v3;

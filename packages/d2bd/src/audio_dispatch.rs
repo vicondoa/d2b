@@ -22,9 +22,9 @@ use std::sync::Arc;
 
 use nix::fcntl::{FcntlArg, fcntl};
 
-use d2b_contracts::broker_wire::BrokerCallerRole;
-use d2b_contracts::guest_proto as pb;
-use d2b_contracts::public_wire::{
+use d2b_contracts_broker::broker_wire::BrokerCallerRole;
+use d2b_contracts_control::guest_proto as pb;
+use d2b_contracts_control::public_wire::{
     AudioChannel, AudioChannelState, AudioEnforcementPosture, AudioErrorKind, AudioMuteArgs,
     AudioOp, AudioOpResponse, AudioProviderKind, AudioSetApplied, AudioSetResult,
     AudioSetVolumeArgs, AudioStatusArgs, AudioStatusResult, AudioVmError, AudioVmState,

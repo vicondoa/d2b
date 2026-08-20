@@ -34,7 +34,7 @@ service GuestControl {
   rpc TerminalCloseStdin(TerminalCloseStdinRequest) returns (CloseStdinResponse);
   rpc TerminalTtyWinResize(TerminalTtyWinResizeRequest) returns (ControlAck);
 
-  // Framework op (W15): read a host-declared, enum-keyed guest file in a
+  // Framework op: read a host-declared, enum-keyed guest file in a
   // single bounded shot. Auth-gated like the exec RPCs; available whenever
   // guest-control is enabled (not gated on exec.enable). The request carries a
   // closed file-id enum, never a free-form path.
@@ -363,7 +363,7 @@ message ControlAck {
   GuestControlError error = 3;
 }
 
-// W15 framework read of a host-declared guest file. The request is keyed by a
+// Framework read of a host-declared guest file. The request is keyed by a
 // closed enum (NOT a free-form path); guestd maps the key to the host-declared
 // target path. The response is a single bounded payload; oversize files fail
 // with FileTooLarge BEFORE any read/allocation. The guest-reported size/sha256
@@ -630,7 +630,8 @@ enum ShellCloseCause {
 }
 
 // Closed set of host-declared guest files readable via ReadGuestFile.
-// W15 ships only GuestConfig (the in-guest editable config working copy).
+// The operation ships only GuestConfig (the in-guest editable config working
+// copy).
 enum GuestFileId {
   GUEST_FILE_ID_UNSPECIFIED = 0;
   GUEST_FILE_ID_GUEST_CONFIG = 1;

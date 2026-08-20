@@ -19,6 +19,8 @@ d2b = { path = "../d2b", version = "0.0.0-bootstrap" }
 d2b-realm-core = { path = "../d2b-realm-core", version = "0.0.0-bootstrap" }
 d2b-core = { path = "../d2b-core", version = "0.0.0-bootstrap" }
 d2b-contracts = { path = "../d2b-contracts", version = "0.0.0-bootstrap" }
+d2b-contracts-broker = { path = "../d2b-contracts-broker", version = "0.0.0-bootstrap" }
+d2b-contracts-control = { path = "../d2b-contracts-control", version = "0.0.0-bootstrap" }
 # Safe wrappers for the syscalls the heavy-gate semaphore needs: F_OFD_SETLK
 # open file description locks, FD_CLOEXEC control on the duplicated slot
 # handle, signalfd, and process-group signalling. Already used by d2b, d2bd,

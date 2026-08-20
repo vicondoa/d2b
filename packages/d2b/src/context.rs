@@ -409,7 +409,7 @@ impl ZoneContext {
         let mut host = crate::exec_client::RealHostIo;
         let mut signals = crate::exec_client::install_signals()
             .map_err(|_| CliFailure::new(69, "shell signal setup failed"))?;
-        let mut input = [0_u8; d2b_contracts::public_wire::EXEC_MAX_CHUNK_BYTES as usize];
+        let mut input = [0_u8; d2b_contracts_control::public_wire::EXEC_MAX_CHUNK_BYTES as usize];
         loop {
             for signal in crate::terminal_client::TerminalSignalSource::drain(&mut signals) {
                 match signal {
@@ -1223,7 +1223,7 @@ impl NamedStreamTransport for CliAttachStream {
             .stream_round_trip(json!({
                 "type": "namedStreamReceive",
                 "offset": self.stdout_offset.load(Ordering::Acquire),
-                "maxLen": d2b_contracts::public_wire::EXEC_MAX_CHUNK_BYTES,
+                "maxLen": d2b_contracts_control::public_wire::EXEC_MAX_CHUNK_BYTES,
             }))
             .and_then(|value| {
                 let data = value

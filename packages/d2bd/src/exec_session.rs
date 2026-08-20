@@ -27,7 +27,7 @@ use std::time::{Duration, Instant};
 
 use async_trait::async_trait;
 
-use d2b_contracts::public_wire::{
+use d2b_contracts_control::public_wire::{
     EXEC_MAX_CHUNK_BYTES, ExecCloseResult, ExecControlResult, ExecOp, ExecOpResponse,
     ExecReadOutputResult, ExecStartResult, ExecStream, ExecTerminalStatus, ExecWaitResult,
     ExecWriteStdinResult,
@@ -1057,7 +1057,7 @@ mod tests {
     use std::collections::VecDeque;
     use std::sync::atomic::{AtomicUsize, Ordering};
 
-    use d2b_contracts::public_wire::{
+    use d2b_contracts_control::public_wire::{
         ExecCloseArgs, ExecReadOutputArgs, ExecResizeArgs, ExecSignalArgs, ExecStream,
         ExecWaitArgs, ExecWriteStdinArgs,
     };

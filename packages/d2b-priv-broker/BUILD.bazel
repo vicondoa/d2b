@@ -28,12 +28,16 @@ d2b_priv_broker_compile_data = [
 d2b_priv_broker_shared_deps = [
     "//packages/d2b-audit:d2b_audit",
     "//packages/d2b-contracts:d2b_contracts",
+    "//packages/d2b-contracts-broker:d2b_contracts_broker",
+    "//packages/d2b-contracts-control:d2b_contracts_control",
     "//packages/d2b-realm-core:d2b_realm_core",
 ]
 
 d2b_priv_broker_test_support_deps = [
     "//packages/d2b-audit:d2b_audit_test_support",
     "//packages/d2b-contracts:d2b_contracts_test_support",
+    "//packages/d2b-contracts-broker:d2b_contracts_broker",
+    "//packages/d2b-contracts-control:d2b_contracts_control",
     "//packages/d2b-realm-core:d2b_realm_core",
 ]
 
@@ -179,6 +183,7 @@ rust_test(
     visibility = ["//visibility:public"],
     deps = [
         "//packages/d2b-contracts:d2b_contracts_test_support",
+        "//packages/d2b-contracts-broker:d2b_contracts_broker",
     ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
 )
 
@@ -212,6 +217,7 @@ rust_test(
     deps = [
         ":d2b_priv_broker_test_support",
         "//packages/d2b-contracts:d2b_contracts_test_support",
+        "//packages/d2b-contracts-broker:d2b_contracts_broker",
         "//packages/d2b-core:d2b_core_test_support",
     ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
 )
@@ -242,6 +248,7 @@ rust_test(
     deps = [
         ":d2b_priv_broker_test_support",
         "//packages/d2b-contracts:d2b_contracts_test_support",
+        "//packages/d2b-contracts-broker:d2b_contracts_broker",
         "//packages/d2b-core:d2b_core_test_support",
     ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
 )
@@ -287,6 +294,7 @@ rust_test(
     deps = [
         ":d2b_priv_broker_test_support",
         "//packages/d2b-contracts:d2b_contracts_test_support",
+        "//packages/d2b-contracts-broker:d2b_contracts_broker",
         "//packages/d2b-core:d2b_core_test_support",
     ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
 )
@@ -309,6 +317,7 @@ rust_test(
     deps = [
         ":d2b_priv_broker_test_support",
         "//packages/d2b-contracts:d2b_contracts_test_support",
+        "//packages/d2b-contracts-broker:d2b_contracts_broker",
     ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
 )
 
@@ -342,6 +351,7 @@ rust_test(
     deps = [
         ":d2b_priv_broker_test_support",
         "//packages/d2b-contracts:d2b_contracts_test_support",
+        "//packages/d2b-contracts-broker:d2b_contracts_broker",
         "//packages/d2b-core:d2b_core_test_support",
     ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
 )
@@ -358,6 +368,7 @@ rust_test(
     deps = [
         ":d2b_priv_broker_test_support",
         "//packages/d2b-contracts:d2b_contracts_test_support",
+        "//packages/d2b-contracts-broker:d2b_contracts_broker",
     ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
 )
 

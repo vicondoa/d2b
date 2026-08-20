@@ -27,7 +27,7 @@ use std::{
     time::Duration,
 };
 
-use d2b_contracts::public_wire::{ConsoleProviderKind, ConsoleReadOutputResult};
+use d2b_contracts_control::public_wire::{ConsoleProviderKind, ConsoleReadOutputResult};
 use d2b_core::console_ring::RingBuffer;
 
 static CONSOLE_DRAINER_RUNTIME: OnceLock<tokio::runtime::Runtime> = OnceLock::new();
@@ -483,7 +483,7 @@ pub fn create_qemu_session(std_stream: std::os::unix::net::UnixStream) -> Consol
 /// [`ConsoleSessionTable::read_output`], encoding bytes as base64.
 pub fn build_read_output_result(
     session_handle: &str,
-    stream: d2b_contracts::terminal_wire::TerminalStream,
+    stream: d2b_contracts_control::terminal_wire::TerminalStream,
     output: ConsoleReadOutput,
 ) -> ConsoleReadOutputResult {
     match output.snap {
@@ -514,7 +514,7 @@ pub fn build_read_output_result(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use d2b_contracts::public_wire::ConsoleProviderKind;
+    use d2b_contracts_control::public_wire::ConsoleProviderKind;
 
     fn make_session(provider: ConsoleProviderKind) -> ConsoleSession {
         let ring = Arc::new(Mutex::new(ConsoleRing::new()));

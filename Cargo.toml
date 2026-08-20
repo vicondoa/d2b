@@ -19,6 +19,8 @@ members = [
     "packages/d2b-audit",
     "packages/d2b-telemetry",
     "packages/d2b-contracts",
+    "packages/d2b-contracts-broker",
+    "packages/d2b-contracts-control",
     "packages/d2b-bus",
     "packages/d2b-zone-routing",
     "packages/d2b-resource-client",

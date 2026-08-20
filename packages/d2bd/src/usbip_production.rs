@@ -15,12 +15,12 @@ use std::{
 };
 
 use d2b_contracts::{
-    broker_wire::{
-        BrokerCallerRole, BrokerRequest, BrokerResponse, RunnerRole, SpawnRunnerRequest,
-        UsbipBindRequest, UsbipUnbindRequest,
-    },
     types::{BundleOpId, RoleId, VmId},
     v3::ResourceUid,
+};
+use d2b_contracts_broker::broker_wire::{
+        BrokerCallerRole, BrokerRequest, BrokerResponse, RunnerRole, SpawnRunnerRequest,
+        UsbipBindRequest, UsbipUnbindRequest,
 };
 use d2b_provider_device_usbip::{
     AttachProcessIdentity, AttachmentObservation, BindingIdentity, BindingLifecycleError,

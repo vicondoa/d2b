@@ -11,7 +11,7 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::sync::{Mutex, OnceLock};
 
-use d2b_contracts::broker_wire::ApplyHostGenerationHandoffResponse;
+use d2b_contracts_broker::broker_wire::ApplyHostGenerationHandoffResponse;
 use d2b_contracts::host_generation::{
     ApplyHostGenerationHandoff, HandoffCoordinator, HandoffError, HandoffState, target_fingerprint,
 };

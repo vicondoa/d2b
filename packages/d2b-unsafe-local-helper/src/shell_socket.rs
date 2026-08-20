@@ -1,4 +1,4 @@
-use d2b_contracts::unsafe_local_wire::HelperSupervisorId;
+use d2b_contracts_control::unsafe_local_wire::HelperSupervisorId;
 use nix::sys::socket::{getsockopt, sockopt::PeerCredentials};
 use nix::sys::stat::{Mode as NixMode, umask};
 use std::fmt;

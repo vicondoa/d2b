@@ -426,7 +426,7 @@ pub fn apply_nftables_projection(
     caller_hash: Option<&str>,
     expected_generation: &str,
     installed_generation: &str,
-    action: d2b_contracts::broker_wire::NftablesProjectionAction,
+    action: d2b_contracts_broker::broker_wire::NftablesProjectionAction,
 ) -> Result<ProjectionMutation, ProjectionMutationError> {
     if expected_generation != installed_generation {
         return Err(ProjectionMutationError::StaleGeneration);
@@ -442,7 +442,7 @@ pub fn apply_nftables_projection(
     if live_json.is_none()
         && matches!(
             action,
-            d2b_contracts::broker_wire::NftablesProjectionAction::Apply
+            d2b_contracts_broker::broker_wire::NftablesProjectionAction::Apply
         )
         && chains
             .iter()
@@ -458,14 +458,14 @@ pub fn apply_nftables_projection(
             .map_err(|_| ProjectionMutationError::Backend)?;
     }
     let projection_digest = match action {
-        d2b_contracts::broker_wire::NftablesProjectionAction::Apply => trusted_hash.to_owned(),
-        d2b_contracts::broker_wire::NftablesProjectionAction::Remove => projection_digest(&[]),
+        d2b_contracts_broker::broker_wire::NftablesProjectionAction::Apply => trusted_hash.to_owned(),
+        d2b_contracts_broker::broker_wire::NftablesProjectionAction::Remove => projection_digest(&[]),
     };
     Ok(ProjectionMutation {
         projection_digest,
         validated_absent: matches!(
             action,
-            d2b_contracts::broker_wire::NftablesProjectionAction::Remove
+            d2b_contracts_broker::broker_wire::NftablesProjectionAction::Remove
         ) && live.validated_absent,
     })
 }
@@ -677,12 +677,12 @@ fn inspect_live_projection(
 fn render_projection_mutation(
     desired: &[ProjectionChain],
     live: &LiveProjectionState,
-    action: d2b_contracts::broker_wire::NftablesProjectionAction,
+    action: d2b_contracts_broker::broker_wire::NftablesProjectionAction,
 ) -> String {
     let mut script = String::new();
     if matches!(
         action,
-        d2b_contracts::broker_wire::NftablesProjectionAction::Apply
+        d2b_contracts_broker::broker_wire::NftablesProjectionAction::Apply
     ) && !live.table_present
     {
         script.push_str("add table inet d2b\n");
@@ -698,7 +698,7 @@ fn render_projection_mutation(
     }
     if matches!(
         action,
-        d2b_contracts::broker_wire::NftablesProjectionAction::Apply
+        d2b_contracts_broker::broker_wire::NftablesProjectionAction::Apply
     ) {
         for chain in desired {
             script.push_str(&format!(
@@ -1012,7 +1012,7 @@ mod tests {
         let rendered = render_projection_mutation(
             &desired,
             &state,
-            d2b_contracts::broker_wire::NftablesProjectionAction::Apply,
+            d2b_contracts_broker::broker_wire::NftablesProjectionAction::Apply,
         );
         assert!(rendered.contains("add chain inet d2b forward-a"));
         assert!(rendered.contains("add rule inet d2b forward jump forward-a"));
@@ -1047,7 +1047,7 @@ mod tests {
         let rendered = render_projection_mutation(
             &desired,
             &state,
-            d2b_contracts::broker_wire::NftablesProjectionAction::Remove,
+            d2b_contracts_broker::broker_wire::NftablesProjectionAction::Remove,
         );
         assert_eq!(
             rendered,
@@ -1098,7 +1098,7 @@ mod tests {
             render_projection_mutation(
                 &desired,
                 &state,
-                d2b_contracts::broker_wire::NftablesProjectionAction::Remove,
+                d2b_contracts_broker::broker_wire::NftablesProjectionAction::Remove,
             )
             .is_empty()
         );
@@ -1136,7 +1136,7 @@ mod tests {
                 None,
                 "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
                 "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
-                d2b_contracts::broker_wire::NftablesProjectionAction::Apply,
+                d2b_contracts_broker::broker_wire::NftablesProjectionAction::Apply,
             ),
             Err(ProjectionMutationError::StaleGeneration)
         );
@@ -1154,12 +1154,12 @@ mod tests {
 
     #[test]
     fn projection_request_and_audit_digest_exclude_sensitive_values() {
-        let request = d2b_contracts::broker_wire::ApplyNftablesProjectionRequest {
+        let request = d2b_contracts_broker::broker_wire::ApplyNftablesProjectionRequest {
             bundle_nft_projection_intent_ref: d2b_contracts::types::BundleOpId::new(
                 "nft-projection:opaque",
             ),
             scope_id: d2b_contracts::types::ScopeId::new("scope:opaque"),
-            action: d2b_contracts::broker_wire::NftablesProjectionAction::Apply,
+            action: d2b_contracts_broker::broker_wire::NftablesProjectionAction::Apply,
             expected_generation_id: d2b_contracts::v3::ResourceBundleGenerationId::parse(
                 "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
             )

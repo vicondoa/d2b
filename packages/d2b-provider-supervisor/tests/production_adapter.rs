@@ -480,7 +480,7 @@ impl BrokerLaunchResolver for FixedBrokerResolver {
 fn broker_backend_uses_the_production_spawn_wire_and_pidfd_handoff() {
     use std::io::{IoSlice, IoSliceMut};
 
-    use d2b_contracts::broker_wire::{
+    use d2b_contracts_broker::broker_wire::{
         BrokerRequest, BrokerRequestEnvelope, BrokerResponse, RunnerRole, SpawnRunnerResponse,
     };
     use d2b_contracts::types::{BundleOpId, RoleId, VmId};
@@ -586,7 +586,7 @@ fn broker_backend_uses_the_production_spawn_wire_and_pidfd_handoff() {
         FixedBrokerResolver { intent },
         &socket_path,
         Duration::from_secs(2),
-        d2b_contracts::broker_wire::BrokerCallerRole::AdminUid { uid: 1000 },
+        d2b_contracts_broker::broker_wire::BrokerCallerRole::AdminUid { uid: 1000 },
     );
     let provider = MinijailProcessProvider::new(ProviderSupervisor::new(backend));
     let ticket = fixtures::ticket_builder()

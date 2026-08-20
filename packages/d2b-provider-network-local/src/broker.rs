@@ -7,13 +7,13 @@
 use std::fmt;
 
 use d2b_contracts::{
-    broker_wire::NftablesProjectionAction,
     types::{BundleOpId, ScopeId, VmId},
     v3::{
         ResourceBundleGenerationId, ResourceUid,
         network::{AttachmentGenerationFence, AttachmentHandle, NetworkSpec},
     },
 };
+use d2b_contracts_broker::broker_wire::NftablesProjectionAction;
 
 use crate::controller::{FirewallDigest, FirewallIntent, NetworkEffectError, NetworkEffectPort};
 
@@ -383,7 +383,6 @@ mod tests {
 
     use super::*;
     use d2b_contracts::{
-        broker_wire::NftablesProjectionAction,
         types::{BundleOpId, ScopeId, VmId},
         v3::{
             ResourceBundleGenerationId, ResourceUid,
@@ -396,6 +395,7 @@ mod tests {
             },
         },
     };
+    use d2b_contracts_broker::broker_wire::NftablesProjectionAction;
 
     #[derive(Clone, Default)]
     struct RecordingBroker {

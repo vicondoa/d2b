@@ -1,4 +1,4 @@
-use d2b_contracts::public_wire;
+use d2b_contracts_control::public_wire;
 use d2b_realm_core::PrincipalId;
 use nix::sys::socket::{getsockopt, sockopt::PeerCredentials};
 use socket2::Socket;

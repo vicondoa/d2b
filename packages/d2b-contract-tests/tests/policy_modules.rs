@@ -116,7 +116,7 @@ fn legacy_group_allowlist() -> Regex {
         r"nixos-modules/host-daemon\.nix:[0-9]+:[[:space:]]*# d2b-launcher\{,s\} → d2b rename\. No module references the[[:space:]]*",
         r"nixos-modules/host-daemon\.nix:[0-9]+:[[:space:]]*users\.groups\.d2b-launchers = \{ \};[[:space:]]*",
         r"packages/d2b-core/src/privileges\.rs:[0-9]+:.*d2b-launcher.*",
-        r"packages/d2b-contracts/src/broker_wire\.rs:[0-9]+:.*d2b-launcher.*",
+        r"packages/d2b-contracts-broker/src/broker_wire\.rs:[0-9]+:.*d2b-launcher.*",
         r"packages/d2b-priv-broker/src/bootstrap\.rs:[0-9]+:.*d2b-launcher.*",
         r"nixos-modules/privileges-json\.nix:[0-9]+:.*d2b-launcher.*",
         r"tests/legacy-group-name-denylist(-self-test)?\.sh:[0-9]+:.*",
@@ -323,6 +323,8 @@ fn providers_and_controllers_use_closed_effect_ports() {
     let allowed_internal = [
         "d2b-audit",
         "d2b-contracts",
+        "d2b-contracts-broker",
+        "d2b-contracts-control",
         "d2b-controller-toolkit",
         "d2b-core",
         "d2b-core-controller",
@@ -657,24 +659,24 @@ fn host_effect_ast_policy_ignores_comments_and_strings_but_catches_aliases() {
 #[test]
 fn cli_output_contracts_live_in_contract_crate() {
     let cli = read_repo_file_opt("packages/d2b/src/lib.rs").expect("read d2b lib.rs");
-    let ipc = read_repo_file_opt("packages/d2b-contracts/src/cli_output.rs")
-        .expect("read d2b-contracts cli_output.rs");
+    let ipc = read_repo_file_opt("packages/d2b-contracts-control/src/cli_output.rs")
+        .expect("read d2b-contracts-control cli_output.rs");
     let xtask = read_repo_file_opt("packages/xtask/src/main.rs").expect("read xtask main.rs");
 
     for type_name in MIGRATED_CLI_OUTPUT_TYPES {
         assert!(
             !cli_defines_type(&cli, type_name),
-            "{type_name} must live in d2b-contracts::cli_output, not packages/d2b/src/lib.rs"
+            "{type_name} must live in d2b-contracts-control::cli_output, not packages/d2b/src/lib.rs"
         );
         assert!(
             !xtask_imports_d2b_type(&xtask, type_name),
-            "xtask must import {type_name} from d2b_contracts::cli_output, not the d2b presentation crate"
+            "xtask must import {type_name} from d2b_contracts_control::cli_output, not the d2b presentation crate"
         );
     }
 
     assert!(
         xtask.contains("cli_output::"),
-        "gen-cli-schemas must import CLI output schemas from d2b_contracts::cli_output"
+        "gen-cli-schemas must import CLI output schemas from d2b_contracts_control::cli_output"
     );
 
     for type_name in STRICT_CLI_OUTPUT_OBJECT_TYPES {

@@ -5,7 +5,7 @@
 //! without pulling ttRPC into `d2b-contracts`.
 
 pub const AUTH_TRANSCRIPT_VERSION: u32 = 1;
-pub const AUTH_NONCE_LEN: usize = 32;
+pub use d2b_contracts::auth_wire::AUTH_NONCE_LEN;
 pub const AUTH_TAG_LEN: usize = 32;
 pub const GUEST_CONTROL_AUTH_PORT: u32 = 14_318;
 

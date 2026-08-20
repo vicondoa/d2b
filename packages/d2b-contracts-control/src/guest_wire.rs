@@ -39,7 +39,7 @@ pub const fn base64_encoded_len(raw_len: usize) -> usize {
 /// `ReadGuestConfig` verb to fail closed (`FileTooLarge`) before it serializes
 /// an oversize response. The const assertion below proves the encoded payload,
 /// plus a JSON-envelope margin, fits under BOTH the public.sock frame
-/// (`crate::MAX_FRAME_SIZE`) and the ttRPC frame ([`TTRPC_FRAME_CAP_BYTES`]).
+/// (`d2b_contracts::MAX_FRAME_SIZE`) and the ttRPC frame ([`TTRPC_FRAME_CAP_BYTES`]).
 pub const READ_GUEST_CONFIG_ENCODED_MAX_BYTES: usize =
     base64_encoded_len(READ_GUEST_FILE_MAX_BYTES as usize);
 
@@ -54,7 +54,7 @@ pub const READ_GUEST_CONFIG_ENVELOPE_MARGIN: usize = 8 * 1024;
 const _: () = {
     assert!(
         READ_GUEST_CONFIG_ENCODED_MAX_BYTES + READ_GUEST_CONFIG_ENVELOPE_MARGIN
-            < crate::MAX_FRAME_SIZE,
+            < d2b_contracts::MAX_FRAME_SIZE,
         "base64 guest-config payload + envelope must fit the public.sock frame"
     );
     assert!(
@@ -69,7 +69,7 @@ const _: () = {
 /// frames). The daemon calls this on the encoded payload before responding.
 pub fn guest_config_encoded_within_frame_caps(encoded_len: usize) -> bool {
     encoded_len <= READ_GUEST_CONFIG_ENCODED_MAX_BYTES
-        && encoded_len + READ_GUEST_CONFIG_ENVELOPE_MARGIN < crate::MAX_FRAME_SIZE
+        && encoded_len + READ_GUEST_CONFIG_ENVELOPE_MARGIN < d2b_contracts::MAX_FRAME_SIZE
         && (encoded_len as u64) < TTRPC_FRAME_CAP_BYTES
 }
 
@@ -1613,12 +1613,12 @@ mod tests {
         // smaller public.sock frame.
         assert!(
             READ_GUEST_CONFIG_ENCODED_MAX_BYTES + READ_GUEST_CONFIG_ENVELOPE_MARGIN
-                < crate::MAX_FRAME_SIZE
+                < d2b_contracts::MAX_FRAME_SIZE
         );
         assert!((READ_GUEST_CONFIG_ENCODED_MAX_BYTES as u64) < TTRPC_FRAME_CAP_BYTES);
         // A payload at the public.sock frame size must be rejected by the cap.
         assert!(!guest_config_encoded_within_frame_caps(
-            crate::MAX_FRAME_SIZE
+            d2b_contracts::MAX_FRAME_SIZE
         ));
     }
 

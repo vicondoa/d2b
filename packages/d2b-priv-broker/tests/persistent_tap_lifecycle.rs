@@ -1,9 +1,11 @@
 use std::cell::Cell;
 
 use d2b_contracts::{
-    broker_wire::{CreatePersistentTapRequest, DeletePersistentTapRequest},
     types::{RoleId, VmId},
     v3::{ResourceGeneration, ResourceUid},
+};
+use d2b_contracts_broker::broker_wire::{
+    CreatePersistentTapRequest, DeletePersistentTapRequest,
 };
 use d2b_priv_broker::ops::{
     audit_op::OperationFields,

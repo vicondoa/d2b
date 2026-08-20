@@ -1,4 +1,4 @@
-use d2b_contracts::terminal_wire::{TerminalSize, TerminalStatus};
+use d2b_contracts_control::terminal_wire::{TerminalSize, TerminalStatus};
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use std::io::{Read, Write};
 use std::os::unix::net::UnixStream;

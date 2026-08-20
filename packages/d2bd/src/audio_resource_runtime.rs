@@ -277,7 +277,7 @@ impl AudioResourceRuntime {
                             self.state.as_ref(),
                             spec.target_ref.name().as_str(),
                             capability,
-                            d2b_contracts::broker_wire::BrokerCallerRole::AdminUid {
+                            d2b_contracts_broker::broker_wire::BrokerCallerRole::AdminUid {
                                 uid: self.state.daemon_uid,
                             },
                         );

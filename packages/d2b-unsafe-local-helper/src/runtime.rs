@@ -1,8 +1,8 @@
 use crate::environment::EnvironmentError;
 use crate::shell_socket::validate_runtime_directory;
 use crate::systemd::{ScopeError, ScopeInspection, UserScopeManager, VerifiedScope};
-use d2b_contracts::public_wire::ShellName;
-use d2b_contracts::unsafe_local_wire::{
+use d2b_contracts_control::public_wire::ShellName;
+use d2b_contracts_control::unsafe_local_wire::{
     HelperLaunchRequest, HelperOperationDisposition, HelperOperationResult, HelperScopeKind,
     HelperScopeSnapshot, HelperScopeState, HelperShellRequest, HelperShellResponse, HelperSnapshot,
     HelperSupervisorId, MAX_COMPLETED_OPERATION_AGE_SECS, MAX_COMPLETED_OPERATIONS_PER_UID,
@@ -1463,7 +1463,7 @@ pub(crate) fn persist_ledger(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use d2b_contracts::unsafe_local_wire::{HelperLaunchRequest, ScopeIdentity};
+    use d2b_contracts_control::unsafe_local_wire::{HelperLaunchRequest, ScopeIdentity};
     use d2b_core::configured_argv::ConfiguredArgv;
     use d2b_core::workload_identity::WorkloadTarget;
     use d2b_realm_core::token::ProtocolToken;
@@ -1537,7 +1537,7 @@ mod tests {
             item_id: ProtocolToken::parse("browser").unwrap(),
             argv: ConfiguredArgv::new(vec![arg.to_owned()]).unwrap(),
             graphical: false,
-            realm_accent_color: d2b_contracts::unsafe_local_wire::RealmAccentColor::new("#336699")
+            realm_accent_color: d2b_contracts_control::unsafe_local_wire::RealmAccentColor::new("#336699")
                 .unwrap(),
         }
     }
