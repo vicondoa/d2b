@@ -214,6 +214,21 @@ impl core::fmt::Debug for Cancellation {
 ///
 /// The toolkit exposes no public constructor or fields. Production issuance
 /// remains unavailable until a trusted durable commit adapter lands.
+///
+/// Foreign controller code cannot forge a committed proof:
+///
+/// ```compile_fail
+/// use d2b_contracts::v3::{ResourceGeneration, ResourceUid, ZoneId, ZoneRevision};
+/// use d2b_controller_toolkit::CommittedRevisionProof;
+///
+/// let _ = CommittedRevisionProof {
+///     zone: ZoneId::parse("work").unwrap(),
+///     resource_uid: ResourceUid::parse("123e4567-e89b-42d3-a456-426614174000").unwrap(),
+///     generation: ResourceGeneration::new(1).unwrap(),
+///     revision: ZoneRevision::new(1),
+///     operation_id: String::from("operation"),
+/// };
+/// ```
 pub struct CommittedRevisionProof {
     zone: ZoneId,
     resource_uid: ResourceUid,

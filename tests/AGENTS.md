@@ -16,11 +16,9 @@ a new `tests/*.sh`. A needed shell gate almost certainly belongs as a nix-unit
 case (type 1) or Rust test (types 2-5).
 
 That closed set covers *gates*. `tests/tools/` is the open home for gate and CI
-plumbing - enumerators, partitioners, generators, and runners - when it is not
-a test case. A gate asserts an invariant and belongs to the closed set; a tool
-produces data for another gate to assert. The migration ledger inventories
-`tests/*.sh` only, so tools need no ledger row and must not smuggle in
-untracked assertions.
+plumbing - generators and runners - when it is not a test case. A gate asserts
+an invariant and belongs to the closed set; a tool produces data for another
+gate to assert. Do not add evidence, migration, wave, or ADR shell scripts.
 
 When in doubt, push the test *down* toward type 1, not up.
 
@@ -39,7 +37,7 @@ When in doubt, push the test *down* toward type 1, not up.
 | 6 | **flake check** | realized example-config eval / supply-chain (`eval-*`, `rust-deny/audit`) | `flake.checks.<sys>.*`; smoke/check defs in `tests/unit/smoke/`, eval-case libs in `tests/unit/nix/eval-cases/` |
 
 The remaining Layer-1 surface is a **closed set** you should not grow with new
-files: **drift gates** (`tests/unit/gates/` - `xtask gen-* + git diff`) and
+files: owner-local generated-artifact actions under `packages/xtask/` and
 **meta gates** (`tests/unit/meta/` - guard the test infra itself).
 
 Fixture-backed type 4 tests and fixture-dependent type 5 tests in
@@ -69,20 +67,20 @@ run `make test-policy`.
 |---|------|------------|----------|----------------|
 | 9 | **container** | Nix-OCI image under rootless podman; proves a static binary runs on a foreign non-Nix userland | `tests/integration/containers/*.sh` + `containerImages.<sys>.*` | `make test-integration` - conditional local host lane when the changed surface needs a foreign userland |
 | 10 | **VM (runNixOSTest)** | boots a real NixOS VM; asserts live daemon/broker/socket-activation/host-posture/kernel behaviour | `tests/host-integration/*.nix` + `vmChecks.<sys>.*` | `make test-host-integration` - conditional NixOS/KVM lane when the changed surface needs host behavior |
-| 11 | **live-host** | runs against a **real deployed** d2b host; destructive/stateful | `tests/integration/live/*.sh` | through the `cargo xtask heavy-gate` semaphore; `D2B_LIVE=1` / sudo - **manual, never CI** |
-| 12 | **hardware** | real GPU / YubiKey / hardware-TPM passthrough | `tests/host-integration/hardware/*.sh` | through the `cargo xtask heavy-gate` semaphore - **manual on a host with the devices** |
+| 11 | **live-host** | runs against a **real deployed** d2b host; destructive/stateful | `tests/integration/live/*.sh` | through the Bazel-built xtask heavy-gate semaphore; `D2B_LIVE=1` / sudo - **manual, never CI** |
 
-Every Layer-2 tier (9-12) runs behind the `cargo xtask heavy-gate` sole-use
+Every retained Layer-2 tier (9-11) runs behind the Bazel-built xtask heavy-gate sole-use
 semaphore, never as a raw script. Use the gated public lane target
-(`make test-integration`, `make test-host-integration`, `make test-hardware`;
+(`make test-integration`, `make test-host-integration`;
 `make pre-tag` / `make smoke-lite` for the live-VM smoke gate), or wrap an
-ad-hoc live script as `cargo xtask heavy-gate -- env D2B_LIVE=1 bash
-tests/integration/live/<name>.sh`.
+ad-hoc live script as
+`make heavy-gate-build && bazel-bin/packages/xtask/xtask heavy-gate -- env
+D2B_LIVE=1 bash tests/integration/live/<name>.sh`.
 
 Invoking a live script directly no longer bypasses the semaphore: it re-executes
 through the gate exactly once when `D2B_HEAVY_GATE` is unset, so shared Nix
-store, cargo target, and KVM are not oversubscribed. **Any new live, hardware,
-or performance entrypoint must carry that same self-guard block**, or the
+store, Bazel output tree, and KVM are not oversubscribed. **Any new live or
+performance entrypoint must carry that same self-guard block**, or the
 fail-closed inventory guard (`every_live_and_heavy_entrypoint_routes_through_the_gate`)
 fails while walking on-disk scripts and the Makefile.
 
@@ -105,23 +103,19 @@ fails while walking on-disk scripts and the Makefile.
    `D2B_FIXTURES`).
 5. **Asserting a generated artifact is up to date (docs/schemas/CLI)?** → it is
    already covered by a **drift gate**; regenerate with the matching
-   `cargo run -p xtask -- gen-*` and commit - do **not** add a new gate.
-6. **Genuinely needs a foreign userland / real systemd boot / live host /
-   device?** → the matching Layer-2 tier (9-12). Justify why Layer 1 cannot
-   cover it; reach for the *lowest* tier that works (a native fd-passing test
-   beats a container; a container beats a VM; a VM beats a live-host script).
+   `bazel run //packages/xtask:xtask -- gen-*` and commit - do **not** add a
+   new gate.
+6. **Genuinely needs a foreign userland / real systemd boot / live host?** →
+   the matching Layer-2 tier (9-11). Justify why Layer 1 cannot cover it and
+   reach for the lowest tier that works. Physical-device validation is manual
+   operator work, not a repository evidence script.
 
 ## Retiring a test
 
-Retirement is ledger-tracked. Create
-`tests/migration-state.d/<name>.toml` (`status = "retired"`,
-`successor_ids = [...]`), remove the script, sweep its references out of the
-orchestrators (`tests/static*.sh`) and CI, keep its basename in the
-`tests/tools/gen-migration-ledger.sh` inventory, then
-`bash tests/tools/gen-migration-ledger.sh && bash tests/tools/gen-migration-ledger.sh --check`.
-If the successor is a fail-closed native/contract test, pin its exact
-`cargo nextest list` path in `tests/golden/pinned/<name>.txt` and confirm with
-`bash tests/tools/assert-pinned-tests.sh`.
+Delete the test and sweep its Bazel, Make, CI, and documentation references.
+Preserve behavior only when a current owner-local test or structural boundary
+is still needed. Do not add retirement ledgers, successor pins, evidence
+scripts, or replacement inventory machinery.
 
 ## Directory map (what lives where)
 
@@ -130,7 +124,7 @@ tests/
 ├── static.sh / runner.sh                                      legacy/manual aggregate entry points
 ├── lib.sh / cli-rust-native-common.sh                              shared shell harness
 ├── README.md / AGENTS.md                                           docs (human guide + this file)
-├── migration-ledger.toml / migration-state.d/                      retirement ledger + records
+├── migration-ledger.toml / migration-state.d/                      legacy records pending deletion
 ├── golden/ / fixtures/                                             shared test data + fixtures
 ├── tools/                                                          Bazel facade, runners, codegen, and asserter tools
 ├── unit/
@@ -143,8 +137,7 @@ tests/
 │   ├── distro-matrix/                                              distro pins/fixtures
 │   └── live/                                                        type 11 D2B_LIVE (manual)
 └── host-integration/
-    ├── *.nix                                                       type 10 runNixOSTest (make test-host-integration; conditional)
-    └── hardware/                                                   type 12 device tests (manual)
+    └── *.nix                                                       type 10 runNixOSTest (make test-host-integration; conditional)
 ```
 
 Types 2-5 (unit/integration/contract/policy-lint) are Rust and live under
@@ -165,11 +158,10 @@ untrusted jobs, redacts logs and BEP output, and permits one identical local
 retry only for typed pre-dispatch infrastructure failures. Post-dispatch,
 analysis, policy, build, and test failures fail closed.
 
-The direct Cargo and nextest workflows remain supported development surfaces,
-but they do not schedule the Layer-1 graph. Cargo manifests and the root
-`Cargo.lock` own Rust package and dependency facts; `rules_rs` supplies the
-Bazel-side Cargo integration. Do not add a second Cargo lock, source
-inventory, generator, or repository-owned scheduler.
+Bazel is the only supported contributor build and test interface. Cargo
+manifests and the root `Cargo.lock` own Rust package and dependency facts;
+`rules_rs` supplies the Bazel-side Cargo integration. Do not add a second Cargo
+lock, source inventory, generator, or repository-owned scheduler.
 
 The fixed CI workflow is committed at
 `.github/workflows/pr-l1-static-fast.yml` and exposes one stable required
@@ -183,7 +175,6 @@ Use the public aliases for focused or complete runs:
 ```bash
 make check-tier0
 make test-lint
-make check-inventory
 make test-changelog
 make test-rust
 make test-proofs
@@ -209,7 +200,7 @@ adding or removing cases, regenerate only those pins with
 
 ### Retained Layer-2 and manual scripts
 
-Layer-2 container, VM, live-host, hardware, and performance scripts remain
+Layer-2 container, VM, live-host, and performance scripts remain
 manual or conditional surfaces. They run through the documented heavy-gate
 semaphore and are not part of the Bazel Layer-1 scheduler. A shell script may
 remain under `tests/tools/` or `tests/unit/` when it is the subject of a
@@ -218,9 +209,9 @@ must not schedule sibling Layer-1 work.
 
 ### Standalone Rust workspaces
 
-Product crates use the repository-root `Cargo.toml` and `Cargo.lock`. The
-privileged broker and guest shell runner retain their explicit Cargo feature
-contexts, while the no-bash walker and compile-fail UI crates retain their
-separate tooling boundaries. Doctests, harness-free binaries, feature
-variants, fixtures, and policy checks must remain visible as direct Cargo and
-Bazel targets.
+Product crates use the repository-root `Cargo.toml` and `Cargo.lock` as
+rules_rs metadata. The privileged broker and guest shell runner retain their
+explicit Cargo feature contexts, while the no-bash walker and compile-fail UI
+crates retain their separate tooling boundaries. Doctests, harness-free
+binaries, feature variants, fixtures, and policy checks must remain visible as
+direct Bazel targets.

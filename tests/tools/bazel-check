@@ -9,12 +9,11 @@ REDACTION_FAILURE_STATUS=75
 CONFIGURATION_FAILURE_STATUS=76
 
 xtask() {
-  if [ -n "${D2B_XTASK_BIN:-}" ] && [ -x "${D2B_XTASK_BIN}" ]; then
-    D2B_REPO_ROOT="$ROOT" "$D2B_XTASK_BIN" "$@"
-  else
-    D2B_REPO_ROOT="$ROOT" \
-      cargo run --quiet --locked --manifest-path "$ROOT/Cargo.toml" -p xtask -- "$@"
-  fi
+  [ -n "${D2B_XTASK_BIN:-}" ] && [ -x "${D2B_XTASK_BIN}" ] || {
+    echo "bazel-check: D2B_XTASK_BIN must name the declared //packages/xtask:xtask artifact" >&2
+    return 70
+  }
+  D2B_REPO_ROOT="$ROOT" "$D2B_XTASK_BIN" "$@"
 }
 
 redact_file() {
@@ -124,6 +123,20 @@ case "$PROFILE" in
     ;;
 esac
 
+bazel_bin="${D2B_BAZEL_BIN:-}"
+if [ -z "$bazel_bin" ]; then
+  if [ -x /nix/store/8jx5b7y9wbx72scyjdv9mvra8qwmjxz9-bazel-9.2.0/bin/bazel ]; then
+    bazel_bin=/nix/store/8jx5b7y9wbx72scyjdv9mvra8qwmjxz9-bazel-9.2.0/bin/bazel
+  else
+    bazel_bin=bazel
+  fi
+fi
+
+if [ -z "${D2B_XTASK_BIN:-}" ] || [ ! -x "${D2B_XTASK_BIN}" ]; then
+  "$bazel_bin" build --config=local //packages/xtask:xtask >/dev/null
+  export D2B_XTASK_BIN="$ROOT/bazel-bin/packages/xtask/xtask"
+fi
+
 if [ "$PROFILE" = trusted-seed ]; then
   if ! trusted_context; then
     echo "trusted BuildBuddy credential withheld: protected v3 and security digest are required"
@@ -139,14 +152,6 @@ elif [ ! -r "$(credential_file)" ] || [ ! -s "$(credential_file)" ]; then
 fi
 
 mkdir -p "$SCRATCH"
-bazel_bin="${D2B_BAZEL_BIN:-}"
-if [ -z "$bazel_bin" ]; then
-  if [ -x /nix/store/8jx5b7y9wbx72scyjdv9mvra8qwmjxz9-bazel-9.2.0/bin/bazel ]; then
-    bazel_bin=/nix/store/8jx5b7y9wbx72scyjdv9mvra8qwmjxz9-bazel-9.2.0/bin/bazel
-  else
-    bazel_bin=bazel
-  fi
-fi
 export D2B_BAZEL_BIN="$bazel_bin"
 export D2B_REPO_ROOT="$ROOT"
 export ROOT

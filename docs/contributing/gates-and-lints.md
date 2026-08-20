@@ -62,29 +62,20 @@ profiles retain panic line tables but omit dependency DWARF; use
 `cargo build --profile debugging` or `cargo test --profile debugging` for full
 debugger symbols.
 
-The main workspace, privileged broker, and guest shell runner tests use Bazel
-inside `make check`. Cargo remains an explicit compatibility and local-tool
-path. That compatibility path needs companion runs for **doctests** (several
-`compile_fail` cases are capability seals) and **`harness = false` binaries**
-(`d2b-core-smoke` carries fail-closed minijail assertions). The harness-free
-set comes from `nextest list`, not a pin. The broker Cargo compatibility
-contexts stay serial because those tests are not process-per-test safe.
+Bazel is the only supported contributor build and test interface. The main
+workspace, privileged broker, guest shell runner, doctests, and
+`harness = false` binaries are all exposed through owner-local Bazel targets.
+Cargo manifests and lockfiles remain rules_rs metadata authority and are not
+invoked by tests or gate helpers.
 
-`make test-runtime-ledger` also stays on `cargo test`, and that is load
-bearing. It enforces an aggregate process-CPU budget, and nextest's
-one-process-per-test model costs about 1.9x the CPU for the same census
-(measured: 1.2 s against 2.3 s). Porting it would mean roughly doubling the
-budget and losing that much sensitivity, for no speedup.
-
-When a failure reproduces only inside the gate toolchain, use
-`tests/tools/repro-rust-gate-env.sh <command>` instead of re-running
-`make test-rust`.
+When a failure reproduces only inside the Bazel test environment, rerun the
+owning Bazel label directly with the same profile and test environment rather
+than adding a compatibility helper.
 
 ```bash
 # Focused Layer-1 jobs over fixed Bazel labels.
 make check-tier0
 make test-lint
-make check-inventory
 make test-changelog
 make test-rust
 make test-proofs
@@ -120,7 +111,6 @@ sharding, fan-out, or rollup logic.
 
 ```bash
 make check-tier0
-make check-inventory
 make test-lint
 make test-rust
 make test-proofs
@@ -221,7 +211,7 @@ their parent and create an independent pool.
 The structure is public-lane-plus-guarded-internal:
 
 - **Public lane targets** (`make test-integration`,
-  `make test-host-integration`, `make test-hardware`, `make perf`) acquire
+  `make test-host-integration`, `make perf`) acquire
   a slot and then delegate to a guarded internal `heavy-lane-*` target.
   Run these.
 - **Internal `heavy-lane-*` targets** hold the raw work and fail closed
@@ -233,13 +223,12 @@ The structure is public-lane-plus-guarded-internal:
   the same semaphore.
 
 Run a heavy lane through its public target (or, for an arbitrary command,
-`cargo run --manifest-path Cargo.toml -p xtask -- heavy-gate --
+`make heavy-gate-build && bazel-bin/packages/xtask/xtask heavy-gate --
 <command>`) whenever another heavy lane might be running; do not invoke the
-internal targets directly. Live-host and hardware
+internal targets directly. Live-host
 tests obey the same rule: use the gated live-VM smoke entrypoints (`make
 pre-tag` for the full gate, `make smoke-lite` for the lite gate) or wrap a
-raw live script as `cargo run --manifest-path Cargo.toml -p xtask
--- heavy-gate -- env D2B_LIVE=1 bash tests/integration/live/<name>.sh`.
+raw live script with the Bazel-built xtask artifact.
 
 The repository-root `Cargo.toml` is the product workspace and the root
 `.cargo/config.toml` is its Cargo configuration. The bare `cargo xtask`

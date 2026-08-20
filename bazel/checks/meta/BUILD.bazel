@@ -6,7 +6,7 @@ filegroup(
     name = "carrier_sources",
     srcs = [
         "//:tests_workspace_sources",
-        "//bazel/checks/rust:repo_policy_sources",
+        "//bazel/checks/rust:source_hygiene_sources",
         "//tests/unit/meta:meta_sources",
     ],
 )
@@ -24,10 +24,7 @@ sh_test(
 
 test_suite(
     name = "tier0",
-    tests = [
-        ":tier0_first_pass",
-        "//packages/xtask:bazel_compatibility",
-    ],
+    tests = [":tier0_first_pass"],
 )
 
 test_suite(

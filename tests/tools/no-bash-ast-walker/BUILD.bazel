@@ -37,7 +37,7 @@ rust_test(
     ],
     data = [
         "//:Cargo.toml",
-        "//bazel/checks/rust:repo_policy_sources",
+        "//bazel/checks/rust:source_hygiene_sources",
     ],
     env_inherit = ["D2B_REPO_ROOT", "TEST_SRCDIR", "TEST_WORKSPACE"],
     visibility = ["//visibility:public"],

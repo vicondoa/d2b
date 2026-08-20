@@ -15,7 +15,6 @@ SHELL := $(CURDIR)/tests/tools/scrub-shell-environment
         test-lint test-rust test-rust-main \
         test-rust-broker test-rust-guest-shell-runner test-rust-local test-rust-no-bash-ast \
         test-rust-schema test-rust-inventory test-rust-supply-chain \
-        test-cargo-compat \
         test-rust-leaf-main-workspace \
         test-rust-leaf-schema test-rust-leaf-inventory \
         test-rust-leaf-fixture-contracts test-rust-leaf-broker \
@@ -24,13 +23,13 @@ SHELL := $(CURDIR)/tests/tools/scrub-shell-environment
         test-fixture-contracts test-proofs test-flake test-flake-realized \
         test-flake-aarch64 test-flake-x86 test-nix-unit \
         test-performance-budgets test-ci-coverage \
-        test-drift test-policy test-integration test-host-integration test-hardware perf \
+        test-drift test-policy test-integration test-host-integration perf \
         heavy-lane-guard heavy-lane-integration heavy-lane-host-integration \
-        heavy-lane-hardware heavy-lane-perf \
+        heavy-lane-perf \
         heavy-lane-pre-tag heavy-lane-smoke-lite \
-        heavy-gate-build heavy-gate-provision heavy-check heavy-cargo-test heavy-flake-check \
-        heavy-test-integration heavy-test-host-integration heavy-test-hardware \
-        ledger-regen check-inventory nix-unit-pin \
+        heavy-gate-build heavy-gate-provision heavy-check heavy-flake-check \
+        heavy-test-integration heavy-test-host-integration \
+        nix-unit-pin \
         runtime-ledger-pin clean
 
 # Current Nix system double, used to address per-system flake.checks attrs.
@@ -46,11 +45,10 @@ NIX_FLAKE := nix --extra-experimental-features 'nix-command flakes'
 #   make check          complete fixed Bazel Layer-1 gate.
 #   make check-static   Legacy monolithic tests/static.sh full-static gate.
 #   make check-ci       check + test-integration for local/manual compatibility.
-#   make check-all      check-ci + test-hardware + perf - full local NixOS gate.
+#   make check-all      check-ci + perf - full local NixOS gate.
 #   make test-<layer>   focused fixed Bazel suite.
 #   make test-integration  type-9 container integration; local host/manual pre-PR.
 #   make test-host-integration  type-10 runNixOSTest; local NixOS/KVM pre-PR.
-#   make test-hardware     G-hw real GPU/YubiKey/TPM passthrough - NixOS host only.
 #   make heavy-<lane>      the same lane, serialized through the two-slot
 #                          per-uid heavy-gate semaphore (see "Heavy lanes").
 # ===========================================================================
@@ -71,7 +69,6 @@ check-ci:
 ## check-all - the full local gate on a NixOS host with devices.
 check-all:
 	$(MAKE) check-ci
-	$(MAKE) test-hardware
 	$(MAKE) perf
 
 ## check-fast / check-tier0 - fast PR-loop subsets.
@@ -91,15 +88,10 @@ D2B_BAZEL_MAIN_TARGETS = \
 	//bazel/checks/rust/... \
 	-//packages/d2b-priv-broker/... \
 	-//packages/d2b-guest-shell-runner/... \
-	-//packages/d2b-bus/tests/ui/... \
-	-//packages/d2b-controller-toolkit/tests/ui/... \
-	-//packages/d2b-resource-api/tests/ui/... \
 	-//packages/xtask:policy_ci \
 	-//packages/xtask:policy_workspace \
 	-//bazel/checks/rust:portable_rust_broker \
-	-//bazel/checks/rust:portable_rust_guest \
-	-//bazel/checks/rust:d2b_priv_broker_doc_test \
-	-//bazel/checks/rust:d2b_guest_shell_runner_doc_test
+	-//bazel/checks/rust:portable_rust_guest
 D2B_BAZEL_BROKER_TARGETS = //bazel/checks/rust:portable_rust_broker
 D2B_BAZEL_GUEST_TARGETS = //bazel/checks/rust:portable_rust_guest
 D2B_BAZEL_LOCAL_RUST_TARGETS = //bazel/checks/rust:portable_rust_local
@@ -175,12 +167,6 @@ test-rust-inventory:
 test-rust-supply-chain:
 	$(BAZEL_RUN) //bazel/checks/nix:flake-eval-x86-realized
 
-## test-cargo-compat - standalone Cargo proof for the generic, serial, guest,
-## doctest, harness-free, bench, and fixture-exclusion contracts. This target
-## is deliberately independent of the Bazel scheduler.
-test-cargo-compat:
-	bash tests/tools/cargo-compat.sh
-
 test-rust-leaf-main-workspace: test-rust-main
 test-rust-leaf-schema: test-rust-schema
 test-rust-leaf-inventory: test-rust-inventory
@@ -246,14 +232,6 @@ heavy-lane-integration: heavy-lane-guard
 # Additional targets (helper utilities, legacy aliases, meta gates).
 # ===========================================================================
 
-## check-inventory - compatibility alias for the fixed Bazel inventory test.
-check-inventory:
-	$(MAKE) check-tier0
-
-## ledger-regen - regenerate tests/migration-ledger.toml in place for humans.
-ledger-regen:
-	bash tests/tools/gen-migration-ledger.sh
-
 ## nix-unit-pin - regenerate the fail-closed nix-unit case-presence pins
 ## (tests/unit/nix/pinned/*.txt) after adding or removing cases.
 nix-unit-pin:
@@ -307,18 +285,11 @@ heavy-lane-host-integration: heavy-lane-guard
 	nix build --no-link --print-build-logs "$$@";; \
 	esac
 
-## test-hardware - G-hw: real GPU/YubiKey/hardware-TPM passthrough + full
-## microVM boot. NixOS host WITH the devices only; CI cannot run this.
-## Public heavy lanes: acquire a slot, then run the raw work behind the gate.
-test-hardware: heavy-gate-build
-	$(HEAVY_GATE) $(MAKE) heavy-lane-hardware
 perf: heavy-gate-build
 	$(HEAVY_GATE) $(MAKE) heavy-lane-perf
 
-heavy-lane-hardware: heavy-lane-guard
-	bash tests/tools/run-layer.sh test-hardware
 heavy-lane-perf: heavy-lane-guard
-	bash tests/tools/run-layer.sh perf
+	$(BAZEL_RUN) //bazel/checks/meta:performance_budgets
 
 ## heavy-lane-guard - fail closed when a heavy-lane internal target is invoked
 ## outside the gate. It does not trust the mere presence of D2B_HEAVY_GATE
@@ -361,37 +332,27 @@ heavy-lane-guard: heavy-gate-build
 # Heavy lanes.
 #
 # Every Layer-2, host-integration, hardware, live, and perf-heavy command runs
-# through ONE semaphore: `cargo xtask heavy-gate`. It grants two slots per uid
+# through ONE semaphore: `xtask heavy-gate`. It grants two slots per uid
 # via open file description locks, so concurrent lanes cannot oversubscribe the
-# shared Nix store, cargo target directory, or KVM device. Do not add a second
+# shared Nix store or KVM device. Do not add a second
 # lock file, sleep-and-retry loop, or per-crate heavy-lane guard.
 #
 # Run the heavy-* target instead of the bare target whenever another heavy lane
 # might be running; the bare targets stay available for a serial console.
 # ===========================================================================
 
-# Normalize CARGO_TARGET_DIR to an absolute path so the wrapper is built and
-# executed at the same location. Cargo runs the build from the repository
-# root, so a relative value is resolved against the root before the binary is
-# executed. Resolve it here and pass the resolved
-# absolute path back to cargo, so both the build and the execution agree
-# regardless of the caller's value.
-ifeq ($(CARGO_TARGET_DIR),)
-HEAVY_GATE_TARGET_DIR := $(CURDIR)/target
-else ifeq ($(filter /%,$(CARGO_TARGET_DIR)),)
-HEAVY_GATE_TARGET_DIR := $(abspath $(CURDIR)/$(CARGO_TARGET_DIR))
-else
-HEAVY_GATE_TARGET_DIR := $(CARGO_TARGET_DIR)
-endif
-HEAVY_GATE_BIN := $(HEAVY_GATE_TARGET_DIR)/debug/xtask
+BAZEL_BIN ?= bazel
+HEAVY_GATE_BIN := $(CURDIR)/bazel-bin/packages/xtask/xtask
 HEAVY_GATE = $(HEAVY_GATE_BIN) heavy-gate --
 
-## heavy-gate-build - build the semaphore wrapper from the governed workspace
-## manifest. The build target dir is forced to the same absolute
-## HEAVY_GATE_TARGET_DIR the wrapper is executed from, so a relative
-## CARGO_TARGET_DIR cannot split the two.
+## heavy-gate-build - build the semaphore wrapper through its Bazel owner.
 heavy-gate-build:
-	@CARGO_TARGET_DIR='$(HEAVY_GATE_TARGET_DIR)' cargo build --quiet --manifest-path Cargo.toml --locked -p xtask --bin xtask
+	@set -eu; \
+	if command -v '$(BAZEL_BIN)' >/dev/null 2>&1; then \
+		'$(BAZEL_BIN)' build --config=local //packages/xtask:xtask; \
+	else \
+		nix develop --no-write-lock-file .#bazel -c bazel build --config=local //packages/xtask:xtask; \
+	fi
 
 ## heavy-gate-provision - create or repair the protected slot namespace for the
 ## current numeric uid without resolving a user name through NSS. This is the
@@ -427,13 +388,6 @@ heavy-check: heavy-gate-build
 ## because the inner invocation verifies and reuses the inherited slot.
 heavy-test-integration: test-integration
 heavy-test-host-integration: test-host-integration
-heavy-test-hardware: test-hardware
-
-## heavy-cargo-test - the Rust workspace test suite under the semaphore.
-##                    Override the selector with HEAVY_CARGO_TEST_ARGS.
-HEAVY_CARGO_TEST_ARGS ?= --workspace --all-targets
-heavy-cargo-test: heavy-gate-build
-	$(HEAVY_GATE) cargo test $(HEAVY_CARGO_TEST_ARGS)
 
 ## heavy-flake-check - the building `nix flake check` under the semaphore.
 ##                     `make test-flake` is the cheap --no-build sibling.
@@ -480,7 +434,12 @@ test-changelog:
 ##                  '## [Unreleased]' block and delete the consumed fragments.
 ##                  Run at merge time; see changelog.d/README.md.
 changelog-fold:
-	cargo run -q -p xtask -- changelog-fold
+	@set -eu; \
+	if command -v '$(BAZEL_BIN)' >/dev/null 2>&1; then \
+		'$(BAZEL_BIN)' run --config=local //packages/xtask:xtask -- changelog-fold; \
+	else \
+		nix develop --no-write-lock-file .#bazel -c bazel run --config=local //packages/xtask:xtask -- changelog-fold; \
+	fi
 ## test-runtime-ledger - fixed Bazel runtime-budget policy target.
 test-runtime-ledger:
 	$(BAZEL_RUN) //bazel/checks/policy:runtime_ledger
@@ -491,7 +450,7 @@ runtime-ledger-pin: test-runtime-ledger
 # ===========================================================================
 # Disk hygiene.
 #
-#   make clean   Remove this worktree's cargo target directories and scratch
+#   make clean   Remove this worktree's build output directories and scratch
 #                tree, then collect unreferenced Nix store paths. The shared
 #                sccache directory is deliberately kept, so the next build
 #                re-links rather than recompiling from scratch.

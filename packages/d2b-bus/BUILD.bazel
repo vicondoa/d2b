@@ -1,5 +1,5 @@
 load("@crates//:defs.bzl", "all_crate_deps")
-load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test")
+load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test", "rust_doc_test")
 
 exports_files(
     ["BUILD.bazel"],
@@ -107,24 +107,6 @@ rust_test(
 )
 
 rust_test(
-    name = "public_mint_surface",
-    srcs = ["tests/public_mint_surface.rs"],
-    compile_data = [
-        "Cargo.toml",
-        "tests/approved-capability-api.txt",
-        "tests/approved-capability-trait-impls.txt",
-        "tests/approved-hidden-public-api.txt",
-        "tests/approved-public-api.txt",
-        "tests/public_mint_surface.rs",
-    ],
-    data = ["//bazel/checks/rust:cargo_workspace_sources"],
-    tags = ["no-remote-cache"],
-    visibility = ["//visibility:public"],
-    deps = [
-    ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
-)
-
-rust_test(
     name = "d2b_bus_test",
     compile_data = ["Cargo.toml"],
     crate = ":d2b_bus",
@@ -139,4 +121,24 @@ rust_test(
         "//packages/d2b-resource-store-redb:d2b_resource_store_redb",
         "//packages/d2b-telemetry:d2b_telemetry",
     ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
+)
+
+test_suite(
+    name = "unit",
+    tests = [":d2b_bus_test"],
+)
+
+test_suite(
+    name = "integration",
+    tests = [":production_watch_rss"],
+)
+
+test_suite(
+    name = "doctest",
+    tests = [":d2b_bus_doc_test"],
+)
+
+rust_doc_test(
+    name = "d2b_bus_doc_test",
+    crate = "//packages/d2b-bus:d2b_bus",
 )

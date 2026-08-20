@@ -1,5 +1,5 @@
 load("@crates//:defs.bzl", "all_crate_deps")
-load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test")
+load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test", "rust_doc_test")
 
 
 exports_files(
@@ -36,22 +36,6 @@ rust_library(
 )
 
 rust_test(
-    name = "d106_policy",
-    srcs = ["tests/d106_policy.rs"],
-    compile_data = [
-        "//packages/d2b-resource-api:src/admission.rs",  # keep
-        "//packages/d2b-resource-api:src/authz.rs",  # keep
-        "//packages/d2b-resource-api:src/service.rs",  # keep
-        "//packages/d2b-resource-store-redb:Cargo.toml",  # keep
-        "//packages/d2b-resource-store-redb:src/lib.rs",  # keep
-        "//packages/d2b-resource-store-redb:src/ownership.rs",  # keep
-        "Cargo.toml",
-        "src/lib.rs",
-    ],
-    visibility = ["//visibility:public"],
-)
-
-rust_test(
     name = "d2b_resource_store_test",
     compile_data = ["Cargo.toml"],
     crate = ":d2b_resource_store",
@@ -73,4 +57,9 @@ filegroup(
         allow_empty = True,
     ),
     visibility = ["//visibility:public"],
+)
+
+rust_doc_test(
+    name = "d2b_resource_store_doc_test",
+    crate = "//packages/d2b-resource-store:d2b_resource_store",
 )

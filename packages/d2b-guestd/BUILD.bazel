@@ -1,9 +1,15 @@
 load("@crates//:defs.bzl", "all_crate_deps")
-load("@rules_rust//rust:defs.bzl", "rust_binary", "rust_library", "rust_test")
+load("@rules_rust//rust:defs.bzl", "rust_binary", "rust_library", "rust_test", "rust_doc_test")
 
 
 exports_files(
     ["BUILD.bazel"],
+    visibility = ["//visibility:public"],
+)
+
+filegroup(
+    name = "guest_ttrpc_generated",
+    srcs = ["src/generated/guest_control_ttrpc.rs"],
     visibility = ["//visibility:public"],
 )
 
@@ -69,4 +75,9 @@ filegroup(
         allow_empty = True,
     ),
     visibility = ["//visibility:public"],
+)
+
+rust_doc_test(
+    name = "d2b_guestd_doc_test",
+    crate = "//packages/d2b-guestd:d2b_guestd",
 )

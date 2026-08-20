@@ -1,5 +1,5 @@
 load("@crates//:defs.bzl", "all_crate_deps")
-load("@rules_rust//rust:defs.bzl", "rust_binary", "rust_library", "rust_test")
+load("@rules_rust//rust:defs.bzl", "rust_binary", "rust_library", "rust_test", "rust_doc_test")
 
 
 exports_files(
@@ -303,7 +303,6 @@ rust_test(
     data = [
         ":d2bd",
         "src/lib.rs",
-        "//bazel/checks/rust:repo_policy_sources",
     ],
     env = {"CARGO_BIN_EXE_d2bd": "$(rootpath :d2bd)"},
     env_inherit = ["D2B_REPO_ROOT", "PATH"],
@@ -380,4 +379,9 @@ filegroup(
         allow_empty = True,
     ),
     visibility = ["//visibility:public"],
+)
+
+rust_doc_test(
+    name = "d2bd_doc_test",
+    crate = "//packages/d2bd:d2bd_lib",
 )

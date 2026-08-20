@@ -14,6 +14,24 @@ mod authority {
 }
 
 /// Declared identity of one provisioned store and its operator-facing slot.
+///
+/// Store identities are intentionally opaque to downstream code:
+///
+/// ```compile_fail
+/// use d2b_resource_store::StoreSealIdentity;
+///
+/// fn display(identity: StoreSealIdentity) {
+///     let _ = format!("{identity}");
+/// }
+/// ```
+///
+/// ```compile_fail
+/// use d2b_resource_store::StoreSealIdentity;
+///
+/// fn compare(left: StoreSealIdentity, right: StoreSealIdentity) {
+///     let _ = left == right;
+/// }
+/// ```
 #[derive(Clone)]
 pub struct StoreSealIdentity {
     slot: StoreSlot,
@@ -48,6 +66,34 @@ pub struct MutationSealBody {
 }
 
 /// Evidence that carries one private authority, store identity, and payload.
+///
+/// Only the paired acceptor can consume this evidence:
+///
+/// ```compile_fail
+/// use d2b_resource_store::SealedMutation;
+///
+/// fn inspect(sealed: SealedMutation) {
+///     let _ = sealed.body;
+/// }
+/// ```
+///
+/// The evidence cannot be cloned or formatted by downstream code:
+///
+/// ```compile_fail
+/// use d2b_resource_store::SealedMutation;
+///
+/// fn clone(sealed: SealedMutation) {
+///     let _ = sealed.clone();
+/// }
+/// ```
+///
+/// ```compile_fail
+/// use d2b_resource_store::SealedMutation;
+///
+/// fn debug(sealed: SealedMutation) {
+///     let _ = format!("{sealed:?}");
+/// }
+/// ```
 pub struct SealedMutation {
     authority: Arc<authority::SealAuthority>,
     store: StoreSealIdentity,
@@ -76,6 +122,16 @@ pub struct MutationSealIssuer {
 }
 
 /// The paired acceptor for a store-owned mutation seal.
+///
+/// The acceptor is an instance-bound capability and cannot be cloned:
+///
+/// ```compile_fail
+/// use d2b_resource_store::mutation_seal::MutationSealAcceptor;
+///
+/// fn clone(acceptor: MutationSealAcceptor) {
+///     let _ = acceptor.clone();
+/// }
+/// ```
 pub struct MutationSealAcceptor {
     authority: Arc<authority::SealAuthority>,
     store: StoreSealIdentity,

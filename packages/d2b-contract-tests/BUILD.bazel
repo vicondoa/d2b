@@ -1,5 +1,5 @@
 load("@crates//:defs.bzl", "all_crate_deps")
-load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test")
+load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test", "rust_doc_test")
 
 
 exports_files(
@@ -30,7 +30,7 @@ rust_library(
     compile_data = ["Cargo.toml"],
     data = [
         "//:Cargo.toml",
-        "//bazel/checks/rust:repo_policy_sources",
+        "//bazel/checks/rust:source_hygiene_sources",
     ],
     visibility = ["//visibility:public"],
     deps = [
@@ -184,7 +184,7 @@ rust_test(
     compile_data = ["Cargo.toml"],
     data = [
         "//:Cargo.toml",
-        "//bazel/checks/rust:repo_policy_sources",
+        "//bazel/checks/rust:source_hygiene_sources",
     ],
     env_inherit = ["D2B_REPO_ROOT"],
     visibility = ["//visibility:public"],
@@ -217,7 +217,7 @@ rust_test(
     name = "policy_changelog_gate",
     srcs = ["tests/policy_changelog_gate.rs"],
     compile_data = ["Cargo.toml"],
-    data = ["//bazel/checks/rust:repo_policy_sources"],
+    data = ["//bazel/checks/rust:changelog_sources"],
     env_inherit = ["PATH"],
     tags = ["no-remote-cache"],
     visibility = ["//visibility:public"],
@@ -278,7 +278,7 @@ rust_test(
     compile_data = ["Cargo.toml"],
     data = [
         "//:third_party_workspace_sources",
-        "//bazel/checks/rust:repo_policy_sources",
+        "//bazel/checks/rust:source_hygiene_sources",
     ],
     env_inherit = ["D2B_REPO_ROOT", "PATH"],
     rustc_env = {"CARGO_TARGET_TMPDIR": "bazel-test-tmp"},
@@ -320,21 +320,11 @@ rust_test(
         "//:README.md",
         "//:SECURITY.md",
         "//:STRATEGY.md",
-        "//bazel/checks/rust:repo_policy_sources",
+        "//bazel/checks/rust:source_hygiene_sources",
     ],
     rustc_env = {"CARGO_TARGET_TMPDIR": "bazel-test-tmp"},
     env_inherit = ["D2B_REPO_ROOT"],
     tags = ["no-remote-cache", "no-sandbox"],
-    visibility = ["//visibility:public"],
-    deps = [
-        ":d2b_contract_tests",
-    ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
-)
-
-rust_test(
-    name = "policy_efficiency_ratchet",
-    srcs = ["tests/policy_efficiency_ratchet.rs"],
-    compile_data = ["Cargo.toml"],
     visibility = ["//visibility:public"],
     deps = [
         ":d2b_contract_tests",
@@ -482,7 +472,7 @@ rust_test(
     name = "policy_production_closure",
     srcs = ["tests/policy_production_closure.rs"],
     compile_data = ["Cargo.toml"],
-    data = ["//bazel/checks/rust:repo_policy_sources"],
+    data = ["//bazel/checks/rust:source_hygiene_sources"],
     env_inherit = ["D2B_REPO_ROOT"],
     tags = ["no-remote-cache", "no-sandbox"],
     visibility = ["//visibility:public"],
@@ -562,7 +552,7 @@ rust_test(
     name = "policy_source",
     srcs = ["tests/policy_source.rs"],
     compile_data = ["Cargo.toml"],
-    data = ["//bazel/checks/rust:repo_policy_sources"],
+    data = ["//bazel/checks/rust:source_hygiene_sources"],
     env_inherit = ["D2B_REPO_ROOT"],
     tags = ["no-remote-cache"],
     visibility = ["//visibility:public"],
@@ -856,4 +846,9 @@ filegroup(
         allow_empty = True,
     ),
     visibility = ["//visibility:public"],
+)
+
+rust_doc_test(
+    name = "d2b_contract_tests_doc_test",
+    crate = "//packages/d2b-contract-tests:d2b_contract_tests",
 )

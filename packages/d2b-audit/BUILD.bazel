@@ -1,5 +1,5 @@
 load("@crates//:defs.bzl", "all_crate_deps")
-load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test")
+load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test", "rust_doc_test")
 
 
 exports_files(
@@ -52,4 +52,9 @@ filegroup(
         allow_empty = True,
     ),
     visibility = ["//visibility:public"],
+)
+
+rust_doc_test(
+    name = "d2b_audit_doc_test",
+    crate = "//packages/d2b-audit:d2b_audit",
 )

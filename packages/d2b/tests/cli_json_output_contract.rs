@@ -1,7 +1,7 @@
 //! CLI-output contract migrated from `tests/cli-json-drift.sh`.
 //!
-//! The schema-generation half of that shell gate now lives in
-//! `tests/unit/gates/drift-check.sh`.  This test keeps the committed golden
+//! The schema-generation half lives in
+//! `//packages/xtask:gen_cli_schemas_drift`. This test keeps the committed golden
 //! output contract for the local audit, host, and auth surfaces, plus the USB
 //! probe contract, while exercising Zone-backed ModernCli commands through
 //! their strict JSON and human error envelopes.  The retired v2 inventory and

@@ -23,7 +23,6 @@ The primary aliases remain available:
 
 ```bash
 make check-tier0
-make check-inventory
 make test-lint
 make test-rust
 make test-proofs

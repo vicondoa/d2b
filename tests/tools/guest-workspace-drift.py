@@ -1,11 +1,8 @@
 #!/usr/bin/env python3
 
 import argparse
-import os
 from pathlib import Path
 import re
-import shutil
-import subprocess
 import sys
 import tomllib
 
@@ -254,58 +251,6 @@ def validate_lock(
                 )
 
 
-def validate_with_cargo(
-    root: Path,
-    cargo: str,
-    crates: list[str],
-    overrides: dict[str, str],
-) -> None:
-    scratch_root = root / ".scratch"
-    scratch_root.mkdir(exist_ok=True)
-    workspace = scratch_root / f"guest-workspace-drift-{os.getpid()}"
-    if workspace.exists():
-        shutil.rmtree(workspace)
-    workspace.mkdir()
-
-    fixture_root = root / "tests" / "fixtures" / "guest-rust-workspace"
-    try:
-        for crate in crates:
-            shutil.copytree(root / "packages" / crate, workspace / crate, symlinks=True)
-            override = overrides.get(crate)
-            if override:
-                shutil.copyfile(
-                    fixture_root / override, workspace / crate / "Cargo.toml"
-                )
-        shutil.copyfile(fixture_root / "Cargo.toml", workspace / "Cargo.toml")
-        shutil.copyfile(
-            root / "packages" / "Cargo.guest.lock", workspace / "Cargo.lock"
-        )
-        result = subprocess.run(
-            [
-                cargo,
-                "metadata",
-                "--manifest-path",
-                str(workspace / "Cargo.toml"),
-                "--format-version",
-                "1",
-                "--locked",
-                "--no-deps",
-            ],
-            cwd=root,
-            check=False,
-            capture_output=True,
-            text=True,
-        )
-        if result.returncode != 0:
-            details = result.stderr.strip() or result.stdout.strip()
-            raise DriftError(
-                "guest workspace does not resolve with packages/Cargo.guest.lock "
-                f"under 'cargo metadata --locked --no-deps':\n{details}"
-            )
-    finally:
-        shutil.rmtree(workspace, ignore_errors=True)
-
-
 def main() -> int:
     parser = argparse.ArgumentParser(
         description="Check the flake guest workspace mirror and lock for drift."
@@ -315,11 +260,6 @@ def main() -> int:
         type=Path,
         default=Path(__file__).resolve().parents[2],
         help="repository root",
-    )
-    parser.add_argument(
-        "--cargo",
-        default=os.environ.get("CARGO", "cargo"),
-        help="cargo executable",
     )
     args = parser.parse_args()
     root = args.root.resolve()
@@ -367,7 +307,6 @@ def main() -> int:
         validate_inherited_dependencies(root, crates, guest_dependencies)
         validate_override_dependencies(root, overrides)
         validate_lock(root, crates, overrides, guest_manifest)
-        validate_with_cargo(root, args.cargo, crates, overrides)
     except (DriftError, OSError) as error:
         print(f"FAIL: guest-workspace-drift: {error}", file=sys.stderr)
         return 1

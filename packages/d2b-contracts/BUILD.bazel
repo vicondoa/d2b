@@ -1,9 +1,9 @@
 load("@crates//:defs.bzl", "all_crate_deps")
-load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test")
+load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test", "rust_doc_test")
 
 
 exports_files(
-    ["BUILD.bazel"],
+    ["BUILD.bazel", "Cargo.toml"],
     visibility = ["//visibility:public"],
 )
 
@@ -13,6 +13,42 @@ exports_files(
 )
 
 d2b_contracts_srcs = glob(["src/**/*.rs"], allow_empty = True)
+
+filegroup(
+    name = "daemon_api_sources",
+    srcs = glob(["src/*.rs"]),
+    visibility = ["//visibility:public"],
+)
+
+filegroup(
+    name = "guest_control_proto_source",
+    srcs = ["proto/guest_control.proto"],
+    visibility = ["//visibility:public"],
+)
+
+filegroup(
+    name = "resource_proto_source",
+    srcs = ["proto/d2b-resource-v3.proto"],
+    visibility = ["//visibility:public"],
+)
+
+filegroup(
+    name = "guest_proto_generated",
+    srcs = [
+        "src/generated/guest_control.rs",
+        "src/generated/mod.rs",
+    ],
+    visibility = ["//visibility:public"],
+)
+
+filegroup(
+    name = "resource_proto_generated",
+    srcs = [
+        "src/generated/d2b_resource_v3.rs",
+        "src/generated/mod.rs",
+    ],
+    visibility = ["//visibility:public"],
+)
 
 rust_library(
     name = "d2b_contracts",
@@ -142,4 +178,9 @@ filegroup(
         allow_empty = True,
     ),
     visibility = ["//visibility:public"],
+)
+
+rust_doc_test(
+    name = "d2b_contracts_doc_test",
+    crate = "//packages/d2b-contracts:d2b_contracts",
 )

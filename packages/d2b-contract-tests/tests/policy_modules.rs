@@ -13,7 +13,6 @@
 //!   * tests/static-rust-dependency-direction.sh -> static_rust_dependency_direction
 
 use std::collections::{BTreeMap, BTreeSet};
-use std::process::Command;
 
 use d2b_contract_tests::{repo_files, repo_root};
 use regex::Regex;
@@ -419,56 +418,25 @@ fn providers_and_controllers_use_closed_effect_ports() {
 }
 
 fn provider_controller_crates() -> Vec<(String, String, String)> {
-    let cargo = std::env::var_os("CARGO")
-        .map(std::path::PathBuf::from)
-        .map(|path| {
-            if path.is_absolute() {
-                path
-            } else if let Some(runfiles) = std::env::var_os("RUNFILES_DIR") {
-                std::path::PathBuf::from(runfiles).join(path)
-            } else {
-                repo_root().join(path)
-            }
-        })
-        .unwrap_or_else(|| "cargo".into());
-    let output = Command::new(cargo)
-        .current_dir(repo_root())
-        .args([
-            "metadata",
-            "--manifest-path",
-            "Cargo.toml",
-            "--format-version",
-            "1",
-            "--no-deps",
-        ])
-        .output()
-        .expect("run cargo metadata");
-    assert!(
-        output.status.success(),
-        "cargo metadata failed: {}",
-        String::from_utf8_lossy(&output.stderr)
-    );
-    let metadata: serde_json::Value =
-        serde_json::from_slice(&output.stdout).expect("cargo metadata JSON");
     let mut crates = Vec::new();
-    for package in metadata["packages"].as_array().expect("metadata packages") {
-        let name = package["name"].as_str().expect("package name");
+    for entry in std::fs::read_dir(repo_root().join("packages")).expect("read packages") {
+        let entry = entry.expect("read package entry");
+        if !entry.file_type().expect("read package type").is_dir() {
+            continue;
+        }
+        let name = entry.file_name().to_string_lossy().into_owned();
         if name != "d2b-core-controller"
             && (!name.starts_with("d2b-provider-") || name == "d2b-provider-toolkit")
         {
             continue;
         }
-        let manifest = package["manifest_path"].as_str().expect("manifest path");
-        let manifest = manifest
-            .strip_prefix(&format!("{}/", repo_root().display()))
-            .unwrap_or(manifest)
-            .to_owned();
-        let manifest_dir = manifest
-            .strip_suffix("/Cargo.toml")
-            .unwrap_or(manifest.as_str())
-            .to_owned();
+        let manifest_dir = format!("packages/{name}");
+        assert!(
+            repo_root().join(&manifest_dir).join("Cargo.toml").is_file(),
+            "{name} must carry Cargo.toml"
+        );
         crates.push((
-            name.to_owned(),
+            name,
             manifest_dir.clone(),
             format!("{manifest_dir}/src"),
         ));
@@ -478,13 +446,13 @@ fn provider_controller_crates() -> Vec<(String, String, String)> {
         crates
             .iter()
             .any(|(name, _, _)| name == "d2b-core-controller"),
-        "Cargo metadata must include d2b-core-controller"
+        "packages must include d2b-core-controller"
     );
     assert!(
         crates
             .iter()
             .any(|(name, _, _)| name == "d2b-provider-device-tpm"),
-        "Cargo metadata must include device-tpm Provider"
+        "packages must include device-tpm Provider"
     );
     crates
 }

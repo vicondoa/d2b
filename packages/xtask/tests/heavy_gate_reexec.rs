@@ -28,7 +28,7 @@ fn exclusive() -> MutexGuard<'static, ()> {
 
 static SCRATCH_SEQUENCE: AtomicU32 = AtomicU32::new(0);
 
-/// Self-cleaning scratch directory under the cargo target directory, so no
+/// Self-cleaning scratch directory under the Bazel test directory, so no
 /// test writes into the repository tree. Mirrors the helper in
 /// `heavy_gate`'s inline test module, including the 0700 lockdown the guard's
 /// root-trust check depends on.
@@ -38,11 +38,9 @@ struct Scratch {
 
 impl Scratch {
     fn new(label: &str) -> Self {
-        let target = match std::env::var_os("TEST_TMPDIR")
-            .or_else(|| std::env::var_os("CARGO_TARGET_DIR"))
-        {
+        let target = match std::env::var_os("TEST_TMPDIR") {
             Some(dir) => PathBuf::from(dir),
-            None => repository_root().join("target"),
+            None => repository_root().join(".scratch/heavy-gate-tests"),
         };
         let sequence = SCRATCH_SEQUENCE.fetch_add(1, Ordering::Relaxed);
         let path = target
@@ -116,26 +114,12 @@ fn repository_root() -> PathBuf {
     panic!("repository root is not discoverable")
 }
 
-/// Drives the shell re-exec self-guard through bash with a stubbed `cargo`
-/// first on PATH, so its fail-closed build and missing-binary paths can be
-/// exercised hermetically without a real toolchain. `cargo_stub` is the body
-/// of an executable placed first on PATH - exactly the hostile-cargo surface
-/// the guard must survive.
-fn run_reexec_guard_with_stub_cargo(cargo_stub: &str) -> std::process::Output {
-    run_reexec_guard(cargo_stub, &[], false).0
-}
-
-fn run_reexec_guard_with_redactor(cargo_stub: &str) -> (std::process::Output, String) {
-    run_reexec_guard(cargo_stub, &[], true)
-}
-
-/// As above, but injects `extra_env` onto the child bash so a test can plant a
-/// hostile `BASH_FUNC_*` entry and prove the production guard controls the
-/// function table itself.
+/// Drives the shell re-exec self-guard through bash with a declared xtask
+/// artifact. `xtask_stub` is the body of that artifact, allowing the
+/// fail-closed paths to be exercised without a build at test runtime.
 fn run_reexec_guard(
-    cargo_stub: &str,
+    xtask_stub: Option<&str>,
     extra_env: &[(&str, &str)],
-    plant_redactor: bool,
 ) -> (std::process::Output, String) {
     let _guard = exclusive();
     let scratch = Scratch::new("reexec-guard");
@@ -154,24 +138,15 @@ fn run_reexec_guard(
     let helper = tools.join("heavy-gate-reexec.sh");
     fs::write(&helper, helper_src).unwrap();
 
-    let bin = base.join("bin");
-    fs::create_dir_all(&bin).unwrap();
-    let cargo = bin.join("cargo");
-    fs::write(&cargo, cargo_stub.replace("@CHECKOUT@", &checkout)).unwrap();
-    fs::set_permissions(&cargo, fs::Permissions::from_mode(0o755)).unwrap();
-
-    if plant_redactor {
-        let target = base.join("target/debug");
+    if let Some(xtask_stub) = xtask_stub {
+        let target = base.join("bazel-bin/packages/xtask");
         fs::create_dir_all(&target).unwrap();
         let xtask = target.join("xtask");
-        fs::copy(env!("CARGO_BIN_EXE_xtask"), &xtask).unwrap();
+        fs::write(&xtask, xtask_stub.replace("@CHECKOUT@", &checkout)).unwrap();
         fs::set_permissions(&xtask, fs::Permissions::from_mode(0o755)).unwrap();
     }
 
-    let path = match std::env::var("PATH") {
-        Ok(existing) => format!("{}:{}", bin.display(), existing),
-        Err(_) => bin.display().to_string(),
-    };
+    let path = std::env::var("PATH").unwrap_or_default();
 
     // The entrypoint argument is read only on the acquire (exec) path, which
     // these fail-closed cases never reach, so a nonexistent path is fine. Paths
@@ -199,7 +174,7 @@ fn run_reexec_guard(
     // exported functions, this excludes every bash startup/control channel
     // (`BASH_ENV`, `ENV`, `BASH_XTRACEFD`, `SHELLOPTS`) without relying on an
     // ever-growing denylist. PATH is the only inherited value the harness
-    // genuinely needs, and points at the test's cargo stub first.
+    // genuinely needs.
     let mut command = Command::new("bash");
     command
         .arg("-c")
@@ -220,43 +195,8 @@ fn run_reexec_guard(
 }
 
 #[test]
-fn reexec_self_guard_fails_closed_and_redacts_when_the_build_fails() {
-    // A stub cargo prints the shape of a real compiler error containing this
-    // checkout. The previously built, current xtask is planted where the guard
-    // expects it, just as a normal incremental build leaves the last good
-    // binary available when a subsequent compile fails.
-    let stub = "#!/bin/sh\n\
-        echo 'error[E0999]: @CHECKOUT@/packages/xtask/src/main.rs build exploded' >&2\n\
-        exit 1\n";
-    let (out, checkout) = run_reexec_guard_with_redactor(stub);
-    assert_eq!(
-        out.status.code(),
-        Some(70),
-        "a failed xtask build must fail closed with exit 70"
-    );
-    let stderr = String::from_utf8_lossy(&out.stderr);
-    assert!(
-        stderr.contains("build failed"),
-        "the guard must emit a bounded build-failure label: {stderr}"
-    );
-    assert!(
-        stderr.contains("error[E0999]: <repo>/packages/xtask/src/main.rs build exploded"),
-        "the redacted compiler diagnostic must remain actionable: {stderr}"
-    );
-    assert!(
-        !stderr.contains(&checkout) && !stderr.contains("/home/"),
-        "the diagnostic must contain no absolute checkout path: {stderr}"
-    );
-}
-
-#[test]
 fn reexec_self_guard_fails_closed_when_the_built_binary_is_absent() {
-    // A stub cargo that "succeeds" without producing target/debug/xtask -
-    // exactly the fake success a hostile PATH could supply alongside no planted
-    // binary. With the target dir pinned to this checkout the guard cannot be
-    // pointed at a planted xtask, so a missing binary must fail closed rather
-    // than proceed unverified.
-    let out = run_reexec_guard_with_stub_cargo("#!/bin/sh\nexit 0\n");
+    let out = run_reexec_guard(None, &[]).0;
     assert_eq!(
         out.status.code(),
         Some(70),
@@ -270,39 +210,6 @@ fn reexec_self_guard_fails_closed_when_the_built_binary_is_absent() {
     assert!(
         !stderr.contains("/debug/xtask"),
         "the binary path (username-bearing) must not be disclosed: {stderr}"
-    );
-}
-
-#[test]
-fn an_inherited_cargo_function_does_not_shadow_the_path_stub() {
-    // Regression: a heavy-gate runner may install pinned `cargo`/`rustc`
-    // wrappers with `export -f`, which cross into a child bash as BASH_FUNC_*
-    // entries. Because shell function resolution precedes PATH, such an
-    // inherited `cargo` function would shadow the stub this harness plants on
-    // PATH and silently run the real toolchain - the exact defect that let the
-    // fail-closed cases pass under `make test-rust`. Prove the child's function
-    // table is controlled: the PATH stub must run, not the inherited function.
-    let sentinel_scratch = Scratch::new("reexec-sentinel");
-    let sentinel = sentinel_scratch.path().join("who");
-    let sentinel_display = sentinel.display();
-
-    // The stub records `stub`; a shadowing `cargo` function would record
-    // `func`. Exit codes are immaterial (both drive a fail-closed 70) - the
-    // sentinel is the discriminator for which `cargo` actually resolved.
-    let stub = format!("#!/bin/sh\nprintf stub > '{sentinel_display}'\nexit 1\n");
-    // Delivered exactly as bash serialises an exported function.
-    let func = format!("() {{ printf func > '{sentinel_display}'; exit 1;\n}}");
-    let (out, _) = run_reexec_guard(&stub, &[("BASH_FUNC_cargo%%", func.as_str())], false);
-
-    assert_eq!(
-        out.status.code(),
-        Some(70),
-        "an unbuildable xtask must still fail closed with exit 70"
-    );
-    let who = fs::read_to_string(&sentinel).unwrap_or_default();
-    assert_eq!(
-        who, "stub",
-        "the PATH stub must run, not the inherited cargo function (ran: {who:?})"
     );
 }
 
@@ -323,9 +230,6 @@ fn inherited_gate_state_and_descriptor_do_not_authorise_the_child() {
     // branch, where the sentinel is written.
     let stub = format!(
         "#!/bin/sh\n\
-         mkdir -p \"$CARGO_TARGET_DIR/debug\"\n\
-         cat > \"$CARGO_TARGET_DIR/debug/xtask\" <<'EOF'\n\
-         #!/bin/sh\n\
          if [ \"$2\" = verify-slot ]; then\n\
            test -n \"$D2B_HEAVY_GATE_SLOT_FD\" && \
              test -e \"/proc/self/fd/$D2B_HEAVY_GATE_SLOT_FD\" && exit 0\n\
@@ -333,13 +237,12 @@ fn inherited_gate_state_and_descriptor_do_not_authorise_the_child() {
          fi\n\
          printf acquired > '{}'\n\
          exit 66\n\
-         EOF\n\
-         chmod 755 \"$CARGO_TARGET_DIR/debug/xtask\"\n",
+         ",
         sentinel.display()
     );
     let fd = planted.as_raw_fd().to_string();
-    let (out, _redacted) = run_reexec_guard(
-        &stub,
+    let (out, _checkout) = run_reexec_guard(
+        Some(&stub),
         &[
             ("D2B_HEAVY_GATE", "1"),
             ("D2B_HEAVY_GATE_SLOT", "0"),
@@ -349,7 +252,6 @@ fn inherited_gate_state_and_descriptor_do_not_authorise_the_child() {
             ("BASH_XTRACEFD", "9"),
             ("SHELLOPTS", "xtrace"),
         ],
-        false,
     );
 
     assert_eq!(

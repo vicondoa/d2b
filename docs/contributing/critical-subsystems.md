@@ -117,8 +117,8 @@ whose acceptor it does not hold.
 ## Capability mint surface allowlist
 
 **Where:** `packages/{d2b-bus,d2b-session,d2b-session-unix}/` defining crates,
-`packages/d2b-bus/tests/public_mint_surface.rs`, and
-`packages/d2b-resource-store/`
+`packages/d2b-resource-store/`, and
+`packages/d2b-controller-toolkit/src/context.rs`
 
 The capability boundary is enforced by stable trait-solver ambiguity assertions
 in the defining crates. These reject prohibited `Clone`, `Copy`, `Default`, and
@@ -129,11 +129,9 @@ consumed authority remain the primary boundary because bounded downstream
 implementations cannot be exhaustively enumerated.
 
 Keep the defining-crate compiler assertions and compile-fail doctests, the
-downstream external-seal fixtures where a downstream type-system property is
-required, `public_mint_surface.rs` source and mutation checks, public wire/API
-contract tests, and the resource mutation seals. These tests are the
-capability-boundary evidence; no generated inventory or snapshot is
-required.
+public wire/API contract tests, and the resource mutation seals. These
+defining-item tests are the capability-boundary evidence; no generated
+inventory, snapshot, or nested fixture workspace is required.
 
 ## Resource controller effects boundary
 
@@ -157,7 +155,7 @@ Version-pinned via `manifestVersion`. Adding, removing, or renaming a per-VM fie
 
 **Where:** `docs/reference/manifest-bundle.md` + `docs/reference/schemas/v2/*.json` + `packages/d2b-core/src/{bundle,host,processes,privileges,closures,minijail_profile}.rs` + `nixos-modules/{bundle,bundle-artifacts,host-json,processes-json,privileges-json,closures-json,minijail-profiles}.nix` + `packages/xtask/src/main.rs` (`gen-schemas`)
 
-Sensitive bundle artifacts install at `root:d2bd` 0640 and ground every broker/sandbox/runner behaviour. `d2b-core` DTOs are canonical; `d2b._bundle` is the typed internal artifact table that owns JSON data, install names, classifications, and `/etc/d2b` materialization for every bundle artifact. Add new bundle artifacts through `nixos-modules/bundle-artifacts.nix` instead of hand-writing parallel install logic in each emitter. Committed schemas under `docs/reference/schemas/v2/` ARE the contract and the `tests/unit/gates/drift-check.sh` gate enforces `xtask gen-schemas` + `git diff --exit-code` through `make test-drift`. Breaking the schema without an intentional `bundleVersion`/`schemaVersion` bump silently breaks every downstream consumer.
+Sensitive bundle artifacts install at `root:d2bd` 0640 and ground every broker/sandbox/runner behaviour. `d2b-core` DTOs are canonical; `d2b._bundle` is the typed internal artifact table that owns JSON data, install names, classifications, and `/etc/d2b` materialization for every bundle artifact. Add new bundle artifacts through `nixos-modules/bundle-artifacts.nix` instead of hand-writing parallel install logic in each emitter. Committed schemas under `docs/reference/schemas/v2/` ARE the contract and `//packages/xtask:gen_schemas_drift` enforces their owner-local generator through `make test-drift`. Breaking the schema without an intentional `bundleVersion`/`schemaVersion` bump silently breaks every downstream consumer.
 
 ## Control plane - `d2bd` + `d2b-priv-broker`
 

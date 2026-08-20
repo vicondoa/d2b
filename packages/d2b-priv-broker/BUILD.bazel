@@ -1,5 +1,5 @@
 load("@crates//:defs.bzl", "all_crate_deps")
-load("@rules_rust//rust:defs.bzl", "rust_binary", "rust_library", "rust_test")
+load("@rules_rust//rust:defs.bzl", "rust_binary", "rust_library", "rust_test", "rust_doc_test")
 load("//bazel/checks/rust:defs.bzl", "broker_test_tags")
 
 
@@ -411,4 +411,9 @@ filegroup(
         allow_empty = True,
     ),
     visibility = ["//visibility:public"],
+)
+
+rust_doc_test(
+    name = "d2b_priv_broker_doc_test",
+    crate = "//packages/d2b-priv-broker:d2b_priv_broker",
 )

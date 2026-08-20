@@ -24,8 +24,8 @@
 #
 # Phases:
 #   1. preflight: kernel KVM module, nix on PATH, root.
-#   2. install: cargo build the daemon + broker, RunHostInstall via
-#      the broker dispatch path.
+#   2. artifact check: require the Bazel-built CLI, then drive
+#      RunHostInstall via the broker dispatch path.
 #   3. host prepare: d2b host prepare --apply (live
 #      ApplyNftables / ApplyRoute / ApplySysctl / UpdateHostsFile
 #      via BundleResolver, broker live).
@@ -44,12 +44,12 @@ set -euo pipefail
 HERE=$(dirname "$(readlink -f "$0")")
 ROOT=${ROOT:-${D2B_REPO:-$(cd "$HERE/../../.." && pwd)}}
 FIXTURES="$HERE/fixtures/ubuntu-2404"
+D2B_CLI_BIN=${D2B_CLI_BIN:-"$ROOT/bazel-bin/packages/d2b/d2b"}
 export ROOT
 
 # --- heavy-gate sole-use semaphore (ADR 0046) ------------------------------
 # This Tier-1 harness is a genuinely heavy lane: it requires root (sudo),
-# requires /dev/kvm, and runs `cargo build --release --workspace` plus a second
-# release build of the broker, then boots a VM. It MUST route through the
+# requires /dev/kvm, and boots a VM. It MUST route through the
 # sole-use heavy-gate semaphore rather than trusting the forgeable
 # D2B_HEAVY_GATE marker, so it verifies a genuinely-held slot (re-using an
 # inherited one when an aggregating runner already holds it, acquiring one via
@@ -113,17 +113,14 @@ preflight_or_skip() {
     ok "preflight"
 }
 
-phase_install() {
+phase_artifacts() {
     if [ -n "${D2B_UBUNTU_SCAFFOLD_ONLY:-}" ]; then
-        log "phase install: scaffold-only mode, skipping live install"
+        log "phase artifacts: scaffold-only mode, skipping binary check"
         return 0
     fi
-    log "phase install: cargo build d2bd + broker"
-    (cd "$ROOT" && cargo build --release --workspace) \
-        || fail "cargo build workspace"
-    (cd "$ROOT" && cargo build --release --package d2b-priv-broker) \
-        || fail "cargo build d2b-priv-broker"
-    ok "phase install"
+    [ -x "$D2B_CLI_BIN" ] \
+        || fail "D2B_CLI_BIN must name a prebuilt CLI (run bazel build //packages/d2b:d2b)"
+    ok "phase artifacts"
 }
 
 phase_host_prepare() {
@@ -133,7 +130,7 @@ phase_host_prepare() {
     fi
     log "phase host prepare: d2b host prepare --apply"
     D2B_NATIVE_ONLY=1 \
-        "$ROOT/target/release/d2b" host prepare --apply \
+        "$D2B_CLI_BIN" host prepare --apply \
         || fail "host prepare --apply"
     ok "phase host prepare"
 }
@@ -145,7 +142,7 @@ phase_vm_start() {
     fi
     log "phase vm start: d2b vm start minimal-vm --apply"
     D2B_NATIVE_ONLY=1 \
-        "$ROOT/target/release/d2b" vm start minimal-vm --apply \
+        "$D2B_CLI_BIN" vm start minimal-vm --apply \
         || fail "vm start --apply"
     ok "phase vm start"
 }
@@ -169,7 +166,7 @@ phase_vm_stop() {
     fi
     log "phase vm stop: d2b vm stop minimal-vm --apply"
     D2B_NATIVE_ONLY=1 \
-        "$ROOT/target/release/d2b" vm stop minimal-vm --apply \
+        "$D2B_CLI_BIN" vm stop minimal-vm --apply \
         || fail "vm stop --apply"
     ok "phase vm stop"
 }
@@ -181,7 +178,7 @@ phase_host_destroy() {
     fi
     log "phase host destroy: d2b host destroy --apply"
     D2B_NATIVE_ONLY=1 \
-        "$ROOT/target/release/d2b" host destroy --apply \
+        "$D2B_CLI_BIN" host destroy --apply \
         || fail "host destroy --apply"
     ok "phase host destroy"
 }
@@ -243,7 +240,7 @@ main() {
     scaffold_self_test
     D2B_UBUNTU_TIER1_CLEANUP_ARMED=1
     export D2B_UBUNTU_TIER1_CLEANUP_ARMED
-    phase_install
+    phase_artifacts
     phase_host_prepare
     phase_vm_start
     phase_probe

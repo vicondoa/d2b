@@ -1,35 +1,26 @@
-//! W3 broker operation matrix extensions.
+//! Broker operation audit and mutation flags.
 //!
-//! Wire-stable contract authored by the W3 integrator API/contract prep
-//! commit. The existing W1/W2 [`super::privileges::OperationAuthzRow`]
-//! table covers every W2 broker variant; this module adds rows for
-//! genuinely new W3 broker variants (currently `UsbipBindFirewallRule`)
-//! plus the [`W3BrokerOperation`] enum and the [`W3OperationFlags`]
-//! helper that audits each row's `audit`/`destructive`/`secret_access`
-//! bits per plan.md "W3 broker variant additions".
+//! The existing [`super::privileges::OperationAuthzRow`] table covers the
+//! established broker variants. This module provides the closed
+//! [`W3BrokerOperation`] inventory and [`W3OperationFlags`] helper used to
+//! audit each row's `audit`, `destructive`, and `secret_access` posture.
 //!
-//! Pre-existing W2 broker variants (`DelegateCgroupV2`, `OpenCgroupDir`,
+//! Established broker variants (`DelegateCgroupV2`, `OpenCgroupDir`,
 //! `OpenKvm`, `OpenVhostNet`, `OpenFuse`, `OpenDevice`, `CreateTapFd`,
 //! `CreatePersistentTap`, `SetBridgePortFlags`, `ApplyNftables`,
 //! `ApplyRoute`, `ApplySysctl`, `ApplyNmUnmanaged`, `UpdateHostsFile`,
 //! `BindUnixSocket`, `SetSocketAcl`, `ModprobeIfAllowed`,
 //! `PrepareStateDir`, `PrepareRuntimeDir`) already have rows in
-//! [`super::privileges::BROKER_OPERATION_AUTHZ`]. The W3 plan
-//! re-anchors them under the W3 audit-field schema; the audit fields
-//! themselves are documented in `docs/reference/privileges.md` and are
-//! enforced by the broker dispatcher.
+//! [`super::privileges::BROKER_OPERATION_AUTHZ`]. Their audit fields are
+//! documented in `docs/reference/privileges.md` and enforced by the broker
+//! dispatcher.
 //!
-//! Spec correction (per AGENTS.md "Existing code is canon"): the W3
-//! plan example shows kebab-case wire discriminants (e.g.
-//! `delegate-cgroup-v2`); the existing W2 broker enum uses PascalCase
-//! variants (e.g. `DelegateCgroupV2`). W2 review froze the
-//! PascalCase convention. This module preserves the existing wire
-//! convention.
+//! Wire discriminants retain the established PascalCase convention, such as
+//! `DelegateCgroupV2`.
 
 use serde::{Deserialize, Serialize};
 
-/// Closed enum of every W3 broker operation, used by the wire-skew
-/// gate (plan.md §"W3 wire-compat / version-skew gate") to enumerate
+/// Closed broker operation inventory used to enumerate
 /// `Capabilities::broker_operations` without re-typing strings.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub enum W3BrokerOperation {
@@ -104,7 +95,7 @@ impl W3BrokerOperation {
         }
     }
 
-    /// Returns every W3 broker operation in stable order. Consumed by
+    /// Returns every broker operation in stable order. Consumed by
     /// the `Capabilities::broker_operations` advertisement in
     /// `d2b-contracts` and by the broker-enum-disposition gate.
     pub const fn all() -> &'static [W3BrokerOperation] {
@@ -140,9 +131,7 @@ impl W3BrokerOperation {
         ]
     }
 
-    /// Audit/destructive/secret flags for the row per plan.md "W3
-    /// broker variant additions". Consumed by the privileges drift
-    /// gate.
+    /// Returns the audit, mutation, and secret-access posture for the row.
     pub const fn flags(self) -> W3OperationFlags {
         match self {
             Self::DelegateCgroupV2 => W3OperationFlags {
@@ -225,9 +214,8 @@ impl W3BrokerOperation {
     }
 }
 
-/// Audit/destructive/secret flags from plan.md "W3 broker variant
-/// additions". `default_for_unknown` is always `Deny` per the W3
-/// fail-closed posture, so it is not stored here.
+/// Audit, mutation, and secret-access flags for one broker operation.
+/// `default_for_unknown` is always `Deny`, so it is not stored here.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct W3OperationFlags {
     /// Whether a successful operation must emit a broker audit event.
@@ -243,14 +231,14 @@ mod tests {
     use super::*;
 
     #[test]
-    fn every_w3_operation_has_audit_set() {
+    fn every_operation_has_audit_set() {
         for op in W3BrokerOperation::all() {
-            assert!(op.flags().audit, "W3 operation {op:?} must be audited");
+            assert!(op.flags().audit, "broker operation {op:?} must be audited");
         }
     }
 
     #[test]
-    fn destructive_flags_match_plan_table() {
+    fn destructive_flags_match_contract_table() {
         assert!(!W3BrokerOperation::DelegateCgroupV2.flags().destructive);
         assert!(W3BrokerOperation::PrepareStateDir.flags().destructive);
         assert!(W3BrokerOperation::ApplyNftables.flags().destructive);

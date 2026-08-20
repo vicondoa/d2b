@@ -144,9 +144,8 @@ make test-integration
 make test-host-integration
 ```
 
-Use `make test-hardware` only for a fixture that genuinely requires a GPU,
-security key, TPM, or other physical device. Do not invoke an integration
-script or an internal heavy-lane target directly.
+Validate physical-device behavior manually on an appropriate host. Do not add
+an evidence script or invoke an internal heavy-lane target directly.
 
 Several current Provider directories are scaffolding and intentionally have
 an integration README but no executable runtime fixture:

@@ -4,6 +4,7 @@ load(
     "rust_binary",
     "rust_test",
 )
+load(":generated_artifact_check.bzl", "generated_artifact_check")
 
 exports_files(
     ["BUILD.bazel"],
@@ -35,25 +36,123 @@ rust_binary(
     ] + all_crate_deps(normal = True, cargo_only = True),
 )
 
-rust_test(
-    name = "bazel_compatibility",
-    timeout = "long",
-    srcs = ["tests/bazel_compatibility.rs"],
-    compile_data = ["Cargo.toml"],
+generated_artifact_check(
+    name = "gen_schemas_drift",
+    command = "gen-schemas",
+    data = ["//:generated_v2_schemas"],
+)
+
+generated_artifact_check(
+    name = "gen_zone_storage_schema_drift",
+    command = "gen-zone-storage-schema",
+    data = ["//:generated_zone_storage_schema"],
+)
+
+generated_artifact_check(
+    name = "gen_error_codes_drift",
+    command = "gen-error-codes",
+    data = ["//:generated_error_codes"],
+)
+
+generated_artifact_check(
+    name = "gen_daemon_api_drift",
+    command = "gen-daemon-api",
     data = [
-        "//bazel/checks/rust:repo_policy_sources",
-        "//tests/fixtures/gas-city/buildbuddy:BUILD.bazel",
+        "//:generated_daemon_api",
+        "//packages/d2b-contracts:daemon_api_sources",
     ],
-    env_inherit = [
-        "BAZEL_SH",
-        "D2B_REPO_ROOT",
-        "PATH",
-        "D2B_BAZEL_BIN",
-        "D2B_BAZEL_TEST_PATH",
+)
+
+generated_artifact_check(
+    name = "gen_cli_shell_artifacts_drift",
+    command = "gen-cli-shell-artifacts",
+    data = ["//:generated_cli_shell_artifacts"],
+)
+
+generated_artifact_check(
+    name = "gen_cli_schemas_drift",
+    command = "gen-cli-schemas",
+    data = ["//:generated_cli_schemas"],
+)
+
+generated_artifact_check(
+    name = "gen_guest_proto_drift",
+    command = "gen-guest-proto",
+    data = [
+        "//packages/d2b-contracts:guest_control_proto_source",
+        "//packages/d2b-contracts:guest_proto_generated",
     ],
-    tags = ["no-remote-cache"],
-    visibility = ["//visibility:public"],
-    deps = [] + all_crate_deps(normal_dev = True, cargo_only = True),
+)
+
+generated_artifact_check(
+    name = "gen_guest_ttrpc_drift",
+    command = "gen-guest-ttrpc",
+    data = [
+        "//packages/d2b-contracts:guest_control_proto_source",
+        "//packages/d2b-guestd:guest_ttrpc_generated",
+    ],
+)
+
+generated_artifact_check(
+    name = "gen_resource_proto_drift",
+    command = "gen-resource-proto",
+    data = [
+        "//packages/d2b-contracts:resource_proto_generated",
+        "//packages/d2b-contracts:resource_proto_source",
+    ],
+)
+
+generated_artifact_check(
+    name = "gen_resource_ttrpc_drift",
+    command = "gen-resource-ttrpc",
+    data = [
+        "//packages/d2b-contracts:resource_proto_source",
+        "//packages/d2b-resource-api:resource_ttrpc_generated",
+    ],
+)
+
+generated_artifact_check(
+    name = "gen_zone_schemas_drift",
+    command = "gen-zone-schemas",
+    data = ["//:generated_zone_schemas"],
+)
+
+generated_artifact_check(
+    name = "gen_zone_nix_options_drift",
+    command = "gen-zone-nix-options",
+    data = ["//:generated_zone_nix_options"],
+)
+
+generated_artifact_check(
+    name = "gen_provider_packaging_drift",
+    command = "gen-provider-packaging",
+    data = ["//:generated_provider_packaging"],
+)
+
+generated_artifact_check(
+    name = "gen_semantic_service_schemas_drift",
+    command = "gen-semantic-service-schemas",
+    data = ["//:generated_semantic_service_schemas"],
+)
+
+test_suite(
+    name = "generated_artifacts",
+    tests = [
+        ":gen_cli_schemas_drift",
+        ":gen_cli_shell_artifacts_drift",
+        ":gen_daemon_api_drift",
+        ":gen_error_codes_drift",
+        ":gen_guest_proto_drift",
+        ":gen_guest_ttrpc_drift",
+        ":gen_provider_packaging_drift",
+        ":gen_resource_proto_drift",
+        ":gen_resource_ttrpc_drift",
+        ":gen_schemas_drift",
+        ":gen_semantic_service_schemas_drift",
+        ":gen_zone_nix_options_drift",
+        ":gen_zone_schemas_drift",
+        ":gen_zone_storage_schema_drift",
+    ],
 )
 
 rust_test(
@@ -107,7 +206,7 @@ rust_test(
     compile_data = ["Cargo.toml"],
     data = [
         ":xtask",
-        "//bazel/checks/rust:repo_policy_sources",
+        "//bazel/checks/rust:source_hygiene_sources",
     ],
     env = {"CARGO_BIN_EXE_xtask": "$(rootpath :xtask)"},
     env_inherit = ["PATH"],
@@ -123,7 +222,7 @@ rust_test(
     compile_data = ["Cargo.toml"],
     data = [
         ":xtask",
-        "//bazel/checks/rust:repo_policy_sources",
+        "//bazel/checks/rust:source_hygiene_sources",
     ],
     env = {"CARGO_BIN_EXE_xtask": "$(rootpath :xtask)"},
     env_inherit = ["PATH"],
@@ -138,7 +237,12 @@ rust_test(
     compile_data = ["Cargo.toml"],
     data = [
         ":xtask",
-        "//bazel/checks/rust:repo_policy_sources",
+        "//:BUILD.bazel",
+        "//:Cargo.toml",
+        "//:flake.nix",
+        "//:.github/workflows/release-host-binaries.yml",
+        "//packages/d2b-contracts:Cargo.toml",
+        "//packages/d2b-core/fuzz:Cargo.toml",
     ],
     env = {"CARGO_BIN_EXE_xtask": "$(rootpath :xtask)"},
     env_inherit = ["PATH"],
@@ -154,11 +258,9 @@ rust_test(
     data = [
         ":xtask",
         "//:rust-toolchain.toml",
-        "//bazel/checks/rust:repo_policy_sources",
-        "@rules_rust//rust/toolchain:current_cargo_files",
+        "//bazel/checks/rust:source_hygiene_sources",
     ],
     env = {
-        "CARGO": "$(rootpath @rules_rust//rust/toolchain:current_cargo_files)",
         "CARGO_BIN_EXE_xtask": "$(rootpath :xtask)",
     },
     env_inherit = ["D2B_REPO_ROOT", "PATH"],
@@ -179,11 +281,9 @@ rust_test(
     data = [
         ":xtask",
         "//:rust-toolchain.toml",
-        "//bazel/checks/rust:repo_policy_sources",
-        "@rules_rust//rust/toolchain:current_cargo_files",
+        "//bazel/checks/rust:source_hygiene_sources",
     ],
     env = {
-        "CARGO": "$(rootpath @rules_rust//rust/toolchain:current_cargo_files)",
         "CARGO_BIN_EXE_xtask": "$(rootpath :xtask)",
     },
     env_inherit = ["D2B_REPO_ROOT", "PATH"],
@@ -199,7 +299,7 @@ rust_test(
     crate = ":xtask",
     data = [
         ":xtask",
-        "//bazel/checks/rust:repo_policy_sources",
+        "//bazel/checks/rust:source_hygiene_sources",
     ],
     env = {
         "CARGO_BIN_EXE_xtask": "$(rootpath :xtask)",
@@ -211,25 +311,14 @@ rust_test(
     deps = [] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
 )
 
-rust_test(
-    name = "workspace_lint",
-    srcs = ["tests/workspace_lint.rs"],
-    compile_data = ["Cargo.toml"],
-    data = [
-        "//:rust-toolchain.toml",
-        "//bazel/checks/rust:repo_policy_sources",
-        "@rules_rust//rust/toolchain:current_cargo_files",
-    ],
-    env = {
-        "CARGO": "$(rootpath @rules_rust//rust/toolchain:current_cargo_files)",
-    },
-    env_inherit = ["D2B_REPO_ROOT", "PATH"],
-    tags = [
-        "exclusive",
-        "no-remote-cache",
-        "no-sandbox",
-    ],
-    visibility = ["//visibility:public"],
+test_suite(
+    name = "unit",
+    tests = [":xtask_test"],
+)
+
+test_suite(
+    name = "policy",
+    tests = [":policy_workspace"],
 )
 
 # keep

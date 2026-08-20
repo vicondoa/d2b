@@ -1,20 +1,17 @@
 //! Provider crate layout policy.
 //!
-//! This policy is deliberately driven by Cargo metadata rather than the
-//! spelling of the `members` array. It also scans the on-disk `packages/`
-//! directory, because a Provider crate omitted from the workspace must not
-//! disappear from policy coverage.
+//! Cargo manifests are the workspace authority. This policy parses their
+//! literal member and package names, then separately scans `packages/` so a
+//! Provider crate omitted from the workspace cannot disappear from coverage.
 
 use std::{
     collections::{BTreeMap, BTreeSet},
     fs,
     path::{Path, PathBuf},
-    process::Command,
     sync::atomic::{AtomicU32, Ordering},
 };
 
 use d2b_contract_tests::repo_root;
-use serde::Deserialize;
 
 const PROVIDER_PREFIX: &str = "d2b-provider-";
 const NON_PROVIDER_PREFIXED: &[&str] = &[
@@ -43,19 +40,6 @@ const REQUIRED_README_SECTIONS: &[&str] = &[
     "State and telemetry",
     "Build and test",
 ];
-
-#[derive(Debug, Deserialize)]
-struct CargoMetadata {
-    packages: Vec<CargoPackage>,
-    workspace_members: Vec<String>,
-}
-
-#[derive(Debug, Deserialize)]
-struct CargoPackage {
-    id: String,
-    name: String,
-    manifest_path: PathBuf,
-}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct WorkspaceMember {
@@ -103,7 +87,7 @@ fn workspace_policy(root: &Path) -> Result<Vec<Violation>, String> {
     let root = root
         .canonicalize()
         .map_err(|_| "provider-crate-layout-input-unreadable".to_owned())?;
-    let members = cargo_workspace_members(&root)?;
+    let members = workspace_members(&root)?;
     let on_disk = on_disk_providers(&root)?;
     let member_by_manifest: BTreeMap<PathBuf, &WorkspaceMember> = members
         .iter()
@@ -169,28 +153,43 @@ fn workspace_policy(root: &Path) -> Result<Vec<Violation>, String> {
     Ok(violations)
 }
 
-fn cargo_workspace_members(root: &Path) -> Result<Vec<WorkspaceMember>, String> {
-    let metadata = cargo_metadata(root)?;
-    let packages_by_id: BTreeMap<&str, &CargoPackage> = metadata
-        .packages
-        .iter()
-        .map(|package| (package.id.as_str(), package))
-        .collect();
+fn workspace_members(root: &Path) -> Result<Vec<WorkspaceMember>, String> {
+    let workspace = fs::read_to_string(root.join("Cargo.toml"))
+        .map_err(|_| "provider-crate-layout-metadata-unavailable".to_owned())?;
     let mut members = Vec::new();
-    for member_id in metadata.workspace_members {
-        let package = packages_by_id
-            .get(member_id.as_str())
-            .ok_or_else(|| "provider-crate-layout-metadata-member-missing".to_owned())?;
-        let manifest_path = package
-            .manifest_path
+    let mut in_members = false;
+    for line in workspace.lines() {
+        let trimmed = line.trim();
+        if trimmed == "members = [" {
+            in_members = true;
+            continue;
+        }
+        if !in_members {
+            continue;
+        }
+        if trimmed == "]" {
+            break;
+        }
+        let relative = trimmed.trim_end_matches(',').trim_matches('"');
+        let manifest_path = root
+            .join(relative)
+            .join("Cargo.toml")
             .canonicalize()
             .map_err(|_| "provider-crate-layout-member-invalid".to_owned())?;
         let crate_dir = manifest_path
             .parent()
             .ok_or_else(|| "provider-crate-layout-member-invalid".to_owned())?
             .to_owned();
+        let manifest = fs::read_to_string(&manifest_path)
+            .map_err(|_| "provider-crate-layout-member-invalid".to_owned())?;
+        let package_name = manifest
+            .lines()
+            .find_map(|line| line.trim().strip_prefix("name = \""))
+            .and_then(|name| name.strip_suffix('"'))
+            .ok_or_else(|| "provider-crate-layout-member-invalid".to_owned())?
+            .to_owned();
         members.push(WorkspaceMember {
-            package_name: package.name.clone(),
+            package_name,
             crate_dir,
             manifest_path,
         });
@@ -199,41 +198,6 @@ fn cargo_workspace_members(root: &Path) -> Result<Vec<WorkspaceMember>, String> 
         return Err("provider-crate-layout-members-empty".to_owned());
     }
     Ok(members)
-}
-
-fn cargo_metadata(root: &Path) -> Result<CargoMetadata, String> {
-    let cargo = std::env::var_os("CARGO")
-        .map(PathBuf::from)
-        .map(|path| {
-            if path.is_absolute() {
-                path
-            } else if let Some(runfiles) = std::env::var_os("RUNFILES_DIR") {
-                PathBuf::from(runfiles).join(path)
-            } else {
-                repo_root().join(path)
-            }
-        })
-        .unwrap_or_else(|| "cargo".into());
-    let output = Command::new(cargo)
-        .current_dir(root)
-        .args([
-            "metadata",
-            "--no-deps",
-            "--format-version",
-            "1",
-            "--manifest-path",
-        ])
-        .arg(root.join("Cargo.toml"))
-        .output()
-        .map_err(|_| "provider-crate-layout-metadata-unavailable".to_owned())?;
-    if !output.status.success() {
-        return Err(format!(
-            "provider-crate-layout-metadata-failed: {}",
-            String::from_utf8_lossy(&output.stderr).trim()
-        ));
-    }
-    serde_json::from_slice(&output.stdout)
-        .map_err(|_| "provider-crate-layout-metadata-malformed".to_owned())
 }
 
 fn on_disk_providers(root: &Path) -> Result<Vec<OnDiskProvider>, String> {
@@ -468,7 +432,7 @@ fn every_workspace_provider_has_the_normative_layout() {
 #[test]
 fn non_provider_workspace_helpers_are_not_in_layout_scope() {
     let root = repo_root();
-    let members = cargo_workspace_members(&root).expect("read Cargo metadata");
+    let members = workspace_members(&root).expect("read Cargo manifests");
     assert!(
         members
             .iter()

@@ -26,7 +26,6 @@
     "packages/d2b-core/src/bundle_resolver.rs",
     "packages/d2b-core/src/host_w3.rs",
     "packages/d2b-core/src/minijail_profile.rs",
-    "packages/d2b-core/src/privileges_w3.rs",
     "packages/d2b-core/tests/bundle_resolver_tamper.rs",
     "packages/d2b-exec-runner/tests/tty_pty_integration.rs",
     "packages/d2b-gateway-runtime/src/aca_workload.rs",
@@ -68,6 +67,7 @@
   ],
   "retiredPaths": [
     "packages/Cargo.toml",
+    "packages/d2b-core/src/privileges_w3.rs",
     "packages/d2b-host/src/runner_shape.rs",
     "packages/d2b-provider-aca/Cargo.toml",
     "packages/d2b-provider-relay/src/bin/d2b-relay.rs",

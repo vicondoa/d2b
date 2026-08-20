@@ -3399,14 +3399,9 @@ mod tests {
             );
         }
 
-        // 2. The aggregating runners and the layer dispatcher (which drive the
-        //    hardware, perf, and container lanes) must also route through the
-        //    same verifying self-guard.
-        for relative in [
-            "tests/runner.sh",
-            "tests/tools/run-layer.sh",
-            "tests/test-integration.sh",
-        ] {
+        // 2. The retained aggregating runners must also route through the same
+        //    verifying self-guard.
+        for relative in ["tests/runner.sh", "tests/test-integration.sh"] {
             let path = root.join(relative);
             let body = fs::read_to_string(&path)
                 .unwrap_or_else(|e| panic!("cannot read {}: {e}", path.display()));
