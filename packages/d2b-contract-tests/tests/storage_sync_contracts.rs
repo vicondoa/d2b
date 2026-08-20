@@ -725,6 +725,10 @@ fn registered_host_mutation_sources() -> BTreeMap<&'static str, &'static str> {
             "storage root:path:state-root",
         ),
         (
+            "packages/d2b-provider-volume-local/nix/storage-json.nix",
+            "storage contract emitter",
+        ),
+        (
             "packages/d2b/src/host_validate.rs",
             "storage paths:validation evidence root/records",
         ),
