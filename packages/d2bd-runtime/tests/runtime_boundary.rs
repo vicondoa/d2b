@@ -70,10 +70,6 @@ const RUNTIME_FILES: &[(&str, &str)] = &[
         "src/guest_control_vsock.rs",
         include_str!("../src/guest_control_vsock.rs"),
     ),
-    (
-        "src/host_generation.rs",
-        include_str!("../src/host_generation.rs"),
-    ),
     ("src/json_io.rs", include_str!("../src/json_io.rs")),
     (
         "src/kernel_module_check.rs",
@@ -85,14 +81,6 @@ const RUNTIME_FILES: &[(&str, &str)] = &[
     ),
     ("src/lib.rs", include_str!("../src/lib.rs")),
     ("src/metrics.rs", include_str!("../src/metrics.rs")),
-    (
-        "src/net_route_preflight.rs",
-        include_str!("../src/net_route_preflight.rs"),
-    ),
-    (
-        "src/net_vm_bundle_gate.rs",
-        include_str!("../src/net_vm_bundle_gate.rs"),
-    ),
     (
         "src/otel_host_bridge_readiness.rs",
         include_str!("../src/otel_host_bridge_readiness.rs"),
@@ -146,10 +134,6 @@ const RUNTIME_FILES: &[(&str, &str)] = &[
     (
         "src/ssh_host_key_preflight.rs",
         include_str!("../src/ssh_host_key_preflight.rs"),
-    ),
-    (
-        "src/storage_lifecycle.rs",
-        include_str!("../src/storage_lifecycle.rs"),
     ),
     (
         "src/supervisor/dag.rs",

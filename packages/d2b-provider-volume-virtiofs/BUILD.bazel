@@ -3,7 +3,11 @@ load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test", "rust_doc_test")
 
 
 exports_files(
-    ["BUILD.bazel"],
+    [
+        "BUILD.bazel",
+        "nix/default.nix",
+        "nix/tests/default.nix",
+    ],
     visibility = ["//visibility:public"],
 )
 
@@ -18,8 +22,8 @@ rust_library(
 )
 
 rust_test(
-    name = "export_lifecycle",
-    srcs = ["tests/export_lifecycle.rs"],
+    name = "lifecycle",
+    srcs = ["tests/lifecycle.rs"],
     compile_data = ["Cargo.toml"],
     visibility = ["//visibility:public"],
     deps = [

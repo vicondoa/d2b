@@ -46,7 +46,8 @@ projection, and persistent-TAP mutations stay broker-owned.
 ## Placement and dependencies
 
 The controller is placed on the configured Host and the guest-agent is placed
-inside the net VM. The crate depends only on provider-neutral contracts. It has
+inside the net VM. The crate depends only on provider-neutral contracts and
+the foundational bundle model. It has
 no dependency on the daemon, privileged broker, host implementation crate,
 resource store, or another Provider implementation.
 

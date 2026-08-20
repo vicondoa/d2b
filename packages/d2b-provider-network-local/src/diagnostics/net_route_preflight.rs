@@ -123,7 +123,7 @@ impl PreflightReport {
 
     /// Env names whose preflight failed. Used to gate the autostart
     /// pass (workloads + the env's own net VM are short-circuited
-    /// to [`crate::autostart::Outcome::Degraded`]).
+    /// to the daemon's degraded autostart outcome).
     pub fn failed_envs(&self) -> BTreeSet<String> {
         self.outcomes
             .iter()

@@ -39,6 +39,7 @@ mod views;
 
 pub mod atomic;
 pub mod audit;
+pub mod diagnostics;
 pub mod effect_port;
 pub mod lock;
 pub mod marker;

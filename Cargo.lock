@@ -1412,6 +1412,7 @@ dependencies = [
 name = "d2b-provider-activation-nixos"
 version = "0.0.0-bootstrap"
 dependencies = [
+ "d2b-contracts-broker",
  "d2b-contracts-zone-session",
  "serde",
  "serde_json",
@@ -1522,6 +1523,11 @@ dependencies = [
  "d2b-contracts",
  "d2b-contracts-broker",
  "d2b-contracts-zone-session",
+ "d2b-core",
+ "serde",
+ "serde_json",
+ "sha2",
+ "tempfile",
 ]
 
 [[package]]
@@ -1735,6 +1741,7 @@ dependencies = [
  "d2b-contracts",
  "d2b-contracts-provider",
  "d2b-contracts-zone-session",
+ "d2b-core",
  "serde",
  "serde_json",
  "sha2",

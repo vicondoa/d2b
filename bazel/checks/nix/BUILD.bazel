@@ -201,6 +201,51 @@ nix_surface_test(
     },
 )
 
+nix_surface_test(
+    name = "nix-unit-provider-volume-local",
+    surface = "provider-volume-local",
+    spec = {
+        "cases": [],
+        "expression": "//packages/d2b-provider-volume-local:nix/tests/default.nix",
+        "files": [],
+        "modules": [
+            "packages/d2b-provider-volume-local/nix/default.nix",
+        ],
+        "package": "packages/d2b-provider-volume-local",
+        "raw_cases": True,
+    },
+)
+
+nix_surface_test(
+    name = "nix-unit-provider-volume-virtiofs",
+    surface = "provider-volume-virtiofs",
+    spec = {
+        "cases": [],
+        "expression": "//packages/d2b-provider-volume-virtiofs:nix/tests/default.nix",
+        "files": [],
+        "modules": [
+            "packages/d2b-provider-volume-virtiofs/nix/default.nix",
+        ],
+        "package": "packages/d2b-provider-volume-virtiofs",
+        "raw_cases": True,
+    },
+)
+
+nix_surface_test(
+    name = "nix-unit-provider-activation-nixos",
+    surface = "provider-activation-nixos",
+    spec = {
+        "cases": [],
+        "expression": "//packages/d2b-provider-activation-nixos:nix/tests/default.nix",
+        "files": [],
+        "modules": [
+            "packages/d2b-provider-activation-nixos/nix/default.nix",
+        ],
+        "package": "packages/d2b-provider-activation-nixos",
+        "raw_cases": True,
+    },
+)
+
 nix_native_test(
     name = "flake-eval-x86",
     command = 'eval --no-write-lock-file --raw "$FLAKE_REF#checks.x86_64-linux.eval-minimal.drvPath" >/dev/null',

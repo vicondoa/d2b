@@ -126,7 +126,7 @@ a bootstrap storage cycle.
 
 | Path | Contents |
 | --- | --- |
-| `src/` | controller, source/quota/ACL admission, Export intents, layout engine, views, store-view mode, TPM state mode, effect ports, colocated unit tests |
+| `src/` | controller, source/quota/ACL admission, Export intents, layout engine, views, store-view mode, storage lifecycle diagnostics, TPM state mode, effect ports, colocated unit tests |
 | `tests/` | hermetic layout, view, sharing, store-view, TPM, and status-redaction conformance |
 | `integration/` | heavier Host-path and store-view filesystem fixtures |
 

@@ -110,6 +110,7 @@ use d2b_gateway_runtime::{
     system_now_unix,
 };
 use d2b_host::ssh_keygen;
+use d2b_provider_network_local::diagnostics::{net_route_preflight, net_vm_bundle_gate};
 use d2b_provider_network_local::{
     artifact::{ArtifactCatalogEntry, ArtifactKind},
     broker::NetworkEffectContext,
@@ -122,6 +123,7 @@ use d2b_provider_runtime_azure_container_apps::gateway_compat::{
     AcaConfig, AcaDiskImageSource, AcaSandboxDefaults, AcaWorkloadProvider,
 };
 use d2b_provider_transport_azure_relay::gateway_compat::{DEFAULT_SAS_TTL_SECS, RelayEndpoint};
+use d2b_provider_volume_local::diagnostics::storage_lifecycle;
 use d2b_realm_core::TargetName;
 use d2b_realm_provider::provider::WorkloadProvider;
 pub(crate) use d2bd_runtime::broker_transport::{
@@ -1074,7 +1076,7 @@ pub async fn serve(options: ServeOptions) -> Result<(), TypedError> {
                     }
                 }
             }
-            let report = d2bd_runtime::storage_lifecycle::run_startup_contract_check(&resolver);
+            let report = storage_lifecycle::run_startup_contract_check(&resolver);
             if report.has_only_legacy_contract_issue() {
                 tracing::info!(
                     bundle_version = resolver.bundle.bundle_version,
@@ -1119,7 +1121,7 @@ pub async fn serve(options: ServeOptions) -> Result<(), TypedError> {
                     );
                 }
             }
-            let report = d2bd_runtime::storage_lifecycle::bundle_resolver_unavailable_report();
+            let report = storage_lifecycle::bundle_resolver_unavailable_report();
             persist_storage_lifecycle_report(&state.daemon_state_dir, &report);
             let issue_kinds = report.issue_kinds_csv();
             tracing::warn!(
@@ -1204,15 +1206,14 @@ pub async fn serve(options: ServeOptions) -> Result<(), TypedError> {
     // actually fails to start, its workloads are degraded by that direct
     // dependency outcome.
     let mut net_failed_envs: BTreeSet<String> = BTreeSet::new();
-    let net_history =
-        d2bd_runtime::net_route_preflight::PreflightHistory::new(&state.daemon_state_dir);
+    let net_history = net_route_preflight::PreflightHistory::new(&state.daemon_state_dir);
     match load_host_artifact(&state) {
         Ok(host) => {
-            let probe = d2bd_runtime::net_route_preflight::SysClassNetProbe;
-            let report = d2bd_runtime::net_route_preflight::run_net_route_preflight(&host, &probe);
+            let probe = net_route_preflight::SysClassNetProbe;
+            let report = net_route_preflight::run_net_route_preflight(&host, &probe);
             let failed_envs = report.failed_envs();
-            let record = d2bd_runtime::net_route_preflight::PreflightHistoryRecord {
-                ts: d2bd_runtime::net_route_preflight::now_epoch_seconds(),
+            let record = net_route_preflight::PreflightHistoryRecord {
+                ts: net_route_preflight::now_epoch_seconds(),
                 ok: report.is_ok(),
                 failed_envs: failed_envs.iter().cloned().collect(),
                 source: "startup".to_owned(),
@@ -15489,17 +15490,11 @@ fn dispatch_broker_vm_start_inner(
     {
         let dnsmasq_dir = std::env::var_os("D2B_DNSMASQ_DIR")
             .map(std::path::PathBuf::from)
-            .unwrap_or_else(|| {
-                std::path::PathBuf::from(d2bd_runtime::net_vm_bundle_gate::DEFAULT_DNSMASQ_DIR)
-            });
-        match d2bd_runtime::net_vm_bundle_gate::check_net_vm_bundle_gate(
-            &resolver,
-            &request.vm,
-            &dnsmasq_dir,
-        ) {
-            d2bd_runtime::net_vm_bundle_gate::BundleGateOutcome::NotANetVm
-            | d2bd_runtime::net_vm_bundle_gate::BundleGateOutcome::Ok => {}
-            d2bd_runtime::net_vm_bundle_gate::BundleGateOutcome::Drift(drift) => {
+            .unwrap_or_else(|| std::path::PathBuf::from(net_vm_bundle_gate::DEFAULT_DNSMASQ_DIR));
+        match net_vm_bundle_gate::check_net_vm_bundle_gate(&resolver, &request.vm, &dnsmasq_dir) {
+            net_vm_bundle_gate::BundleGateOutcome::NotANetVm
+            | net_vm_bundle_gate::BundleGateOutcome::Ok => {}
+            net_vm_bundle_gate::BundleGateOutcome::Drift(drift) => {
                 let path = drift.path();
                 let reason = drift.reason();
                 // ConfigMissing is a SOFT-DEFER, not a hard fail. The
@@ -15516,7 +15511,7 @@ fn dispatch_broker_vm_start_inner(
                 // malformed env declaration).
                 if matches!(
                     drift,
-                    d2bd_runtime::net_vm_bundle_gate::BundleGateDrift::ConfigMissing { .. }
+                    net_vm_bundle_gate::BundleGateDrift::ConfigMissing { .. }
                 ) {
                     tracing::warn!(
                         vm = %request.vm,
@@ -15533,23 +15528,19 @@ fn dispatch_broker_vm_start_inner(
                         "net VM start refused: bundle/dnsmasq drift",
                     );
                     let (env, expected, actual) = match &drift {
-                        d2bd_runtime::net_vm_bundle_gate::BundleGateDrift::HashMismatch {
+                        net_vm_bundle_gate::BundleGateDrift::HashMismatch {
                             env,
                             expected,
                             actual,
                             ..
                         } => (env.clone(), expected.clone(), actual.clone()),
-                        d2bd_runtime::net_vm_bundle_gate::BundleGateDrift::ConfigMissing {
-                            env,
-                            ..
+                        net_vm_bundle_gate::BundleGateDrift::ConfigMissing { env, .. }
+                        | net_vm_bundle_gate::BundleGateDrift::ConfigReadFailed { env, .. } => {
+                            (env.clone(), String::new(), String::new())
                         }
-                        | d2bd_runtime::net_vm_bundle_gate::BundleGateDrift::ConfigReadFailed {
-                            env,
-                            ..
-                        } => (env.clone(), String::new(), String::new()),
-                        d2bd_runtime::net_vm_bundle_gate::BundleGateDrift::EnvMissing {
-                            ..
-                        } => (String::new(), String::new(), String::new()),
+                        net_vm_bundle_gate::BundleGateDrift::EnvMissing { .. } => {
+                            (String::new(), String::new(), String::new())
+                        }
                     };
                     return Ok(TypedError::BundleDnsmasqDrift {
                         vm: request.vm.clone(),
@@ -16973,7 +16964,7 @@ fn dispatch_broker_host_reconcile_as(
         }
     }
 
-    let history = d2bd_runtime::net_route_preflight::PreflightHistory::new(&state.daemon_state_dir);
+    let history = net_route_preflight::PreflightHistory::new(&state.daemon_state_dir);
     if let Err(err) = history.reset_after_reconcile() {
         tracing::warn!(
             path = %history.path().display(),

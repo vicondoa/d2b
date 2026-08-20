@@ -44,6 +44,7 @@ d2bd_shared_deps = [
     "//packages/d2b-provider-device-usbip:d2b_provider_device_usbip",
     "//packages/d2b-provider-display-wayland:d2b_provider_display_wayland",
     "//packages/d2b-provider-network-local:d2b_provider_network_local",
+    "//packages/d2b-provider-volume-local:d2b_provider_volume_local",
     "//packages/d2b-provider-notification-desktop:d2b_provider_notification_desktop",
     "//packages/d2b-provider-runtime-azure-container-apps:d2b_provider_runtime_azure_container_apps",
     "//packages/d2b-provider-runtime-cloud-hypervisor:d2b_provider_runtime_cloud_hypervisor",
@@ -88,6 +89,7 @@ d2bd_test_support_deps = [
         "//packages/d2b-provider-device-usbip:d2b_provider_device_usbip",
         "//packages/d2b-provider-display-wayland:d2b_provider_display_wayland",
         "//packages/d2b-provider-network-local:d2b_provider_network_local",
+        "//packages/d2b-provider-volume-local:d2b_provider_volume_local",
         "//packages/d2b-provider-notification-desktop:d2b_provider_notification_desktop",
         "//packages/d2b-provider-runtime-azure-container-apps:d2b_provider_runtime_azure_container_apps",
         "//packages/d2b-provider:d2b_provider",
@@ -139,7 +141,7 @@ d2bd_test_support_deps = [
     "//packages/d2b-session-unix:d2b_session_unix_test_support",
     "//packages/d2b-resource-store:d2b_resource_store_test_support",
     "//packages/d2b-resource-store-redb:d2b_resource_store_redb_test_support",
-    "//packages/d2b-provider-volume-local:d2b_provider_volume_local",
+    "//packages/d2b-provider-volume-local:d2b_provider_volume_local_test_support",
     "//packages/d2bd-runtime:d2bd_runtime_test_support",
 ]
 

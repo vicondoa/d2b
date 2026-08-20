@@ -332,10 +332,7 @@ mod startup_autostart_pre_degraded_tests {
     }
 }
 
-pub fn persist_storage_lifecycle_report(
-    daemon_state_dir: &Path,
-    report: &crate::storage_lifecycle::StorageLifecycleReport,
-) {
+pub fn persist_storage_lifecycle_report<T: serde::Serialize>(daemon_state_dir: &Path, report: &T) {
     let path = storage_lifecycle_report_path(daemon_state_dir);
     let json = match serde_json::to_vec_pretty(report) {
         Ok(bytes) => bytes,

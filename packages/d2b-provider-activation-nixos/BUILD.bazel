@@ -2,7 +2,11 @@ load("@crates//:defs.bzl", "all_crate_deps")
 load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test", "rust_doc_test")
 
 exports_files(
-    ["BUILD.bazel"],
+    [
+        "BUILD.bazel",
+        "nix/default.nix",
+        "nix/tests/default.nix",
+    ],
     visibility = ["//visibility:public"],
 )
 
@@ -11,6 +15,7 @@ rust_library(
     srcs = glob(["src/**/*.rs"], allow_empty = True),
     compile_data = ["Cargo.toml"],
     deps = [
+        "//packages/d2b-contracts-broker:d2b_contracts_broker",
         "//packages/d2b-contracts-zone-session:d2b_contracts_zone_session",
     ] + all_crate_deps(normal = True, cargo_only = True),
     visibility = ["//visibility:public"],
@@ -21,6 +26,7 @@ rust_library(
     srcs = glob(["src/**/*.rs"], allow_empty = True),
     compile_data = ["Cargo.toml"],
     deps = [
+        "//packages/d2b-contracts-broker:d2b_contracts_broker",
         "//packages/d2b-contracts-zone-session:d2b_contracts_zone_session",
     ] + all_crate_deps(normal = True, cargo_only = True),
     crate_name = "d2b_provider_activation_nixos",
@@ -34,11 +40,21 @@ rust_test(
     visibility = ["//visibility:public"],
 )
 
+rust_test(
+    name = "d2b_provider_activation_nixos_test",
+    compile_data = ["Cargo.toml"],
+    crate = ":d2b_provider_activation_nixos_test_support",
+    deps = [
+        "//packages/d2b-contracts-broker:d2b_contracts_broker",
+        "//packages/d2b-contracts-zone-session:d2b_contracts_zone_session",
+    ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
+)
+
 
 rust_test(
-    name = "activation_contract",
+    name = "reconcile",
     srcs = [
-        "tests/activation_contract.rs",
+        "tests/reconcile.rs",
     ],
     compile_data = ["Cargo.toml"],
     visibility = ["//visibility:public"],

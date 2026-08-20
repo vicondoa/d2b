@@ -31,7 +31,8 @@ mode, and optional prior-generation reference.
 
 ## Controllers / services / workers / binaries
 
-`ActivationController` is the pure reconcile policy and `ActivationRunner` is
+`ActivationController` is the pure reconcile policy, the activation diagnostics
+keep host-generation handoff checks with this owner, and `ActivationRunner` is
 the typed target-local helper boundary. The existing activation helper accepts
 bounded JSON and refuses raw command or path fallbacks.
 

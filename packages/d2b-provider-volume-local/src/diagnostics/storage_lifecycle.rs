@@ -17,9 +17,12 @@ pub use d2b_core::storage_lifecycle::{
     classify_sync_validation_reason, storage_validation_offending_id, sync_validation_offending_id,
 };
 
+/// Minimum bundle version that must carry storage and sync contracts.
 pub const STORAGE_LIFECYCLE_CONTRACT_BUNDLE_VERSION: u32 = 6;
+/// Persisted storage lifecycle report schema.
 pub const STORAGE_LIFECYCLE_REPORT_SCHEMA_VERSION: &str = "v2";
 
+/// Report used when the trusted bundle cannot be loaded.
 pub fn bundle_resolver_unavailable_report() -> StorageLifecycleReport {
     StorageLifecycleReport {
         schema_version: STORAGE_LIFECYCLE_REPORT_SCHEMA_VERSION.to_owned(),

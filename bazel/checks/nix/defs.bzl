@@ -318,5 +318,8 @@ def nix_surface_suite(surfaces):
             ":nix-unit-provider-device-security-key",
             ":nix-unit-provider-device-tpm",
             ":nix-unit-provider-device-gpu",
+            ":nix-unit-provider-volume-local",
+            ":nix-unit-provider-volume-virtiofs",
+            ":nix-unit-provider-activation-nixos",
         ],
     )
