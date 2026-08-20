@@ -429,15 +429,36 @@
           guestStaticPackage "d2b-sk-frontend" "d2b-sk-frontend";
         d2b-guest-shell-runner-static = guestShellRunnerStatic;
         d2b-clipd = rustWorkspace {
-          pname = "d2b-clipd";
-          cargoBuildFlags = [ "--package" "d2b-clipd" "--bin" "d2b-clipd" ];
+          pname = "d2b-provider-clipboard-wayland";
+          cargoBuildFlags = [
+            "--package"
+            "d2b-provider-clipboard-wayland"
+            "--bin"
+            "d2b-clipd"
+          ];
           doCheck = false;
         };
         d2b-wayland-proxy = rustWorkspace {
-          pname = "d2b-wayland-proxy";
-          cargoBuildFlags = [ "--package" "d2b-wayland-proxy" "--bin" "d2b-wayland-proxy" ];
+          pname = "d2b-provider-display-wayland";
+          cargoBuildFlags = [
+            "--package"
+            "d2b-provider-display-wayland"
+            "--bin"
+            "d2b-wayland-proxy"
+          ];
           doCheck = false;
           meta.mainProgram = "d2b-wayland-proxy";
+        };
+        d2b-sk-waybar-helper = rustWorkspace {
+          pname = "d2b-provider-notification-desktop";
+          cargoBuildFlags = [
+            "--package"
+            "d2b-provider-notification-desktop"
+            "--bin"
+            "d2b-sk-waybar-helper"
+          ];
+          doCheck = false;
+          meta.mainProgram = "d2b-sk-waybar-helper";
         };
         d2b-unsafe-local-helper = rustWorkspace {
           pname = "d2b-unsafe-local-helper";

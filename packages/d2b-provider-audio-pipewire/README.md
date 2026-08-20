@@ -35,7 +35,8 @@ cannot open PipeWire locally.
 
 `AudioBindingController` uses the existing policy DTO and a typed
 `AudioMediator`. Private component templates omit live Process argv and
-socket arguments. Process launch remains owned by the Process Providers.
+socket arguments; the provider also owns the signed audio argv projection.
+Process launch remains owned by the Process Providers.
 
 ## Placement and dependencies
 

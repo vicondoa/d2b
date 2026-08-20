@@ -55,17 +55,6 @@ rust_test(
 )
 
 rust_test(
-    name = "audio-policy",
-    srcs = ["tests/audio_policy.rs"],
-    compile_data = ["Cargo.toml"],
-    visibility = ["//visibility:public"],
-    deps = [
-        "//packages/d2b-contracts-zone-session:d2b_contracts_zone_session",
-        ":d2b_core",
-    ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
-)
-
-rust_test(
     name = "bundle-resolver-tamper",
     srcs = ["tests/bundle_resolver_tamper.rs"],
     compile_data = ["Cargo.toml"],

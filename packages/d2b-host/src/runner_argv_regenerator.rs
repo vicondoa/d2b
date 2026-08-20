@@ -36,11 +36,15 @@
 //! scheduled for v1.1.1 - at v1.1 we ship the canonical Rust
 //! non-device generators + the regenerator wrapper as the documented
 //! migration surface.
+//!
+//! Audio is intentionally excluded from this generic host regenerator. Its
+//! argv builder is Provider-owned; until the runtime wave seals a typed
+//! bundle projection, the bundle's argv remains authoritative and Audio
+//! returns [`RegenerateArgvError::NotYetWired`].
 
 use d2b_core::bundle_resolver::ResolvedRunnerIntent;
 use d2b_core::processes::ProcessRole;
 
-use crate::audio_argv::{AudioArgvInput, generate_audio_argv};
 use crate::ch_argv::{ChArgvInput, generate_ch_argv};
 use crate::otel_host_bridge_argv::{OtelHostBridgeArgvInputs, generate_otel_host_bridge_argv};
 use crate::qemu_media_argv::{QemuMediaArgvInput, generate_qemu_media_argv};
@@ -88,9 +92,6 @@ pub struct RunnerArgvExtra {
     /// Pre-built [`QemuMediaArgvInput`] when the role is
     /// [`ProcessRole::QemuMediaRunner`].
     pub qemu_media_input: Option<QemuMediaArgvInput>,
-    /// Pre-built [`AudioArgvInput`] when the role is
-    /// [`ProcessRole::Audio`].
-    pub audio_input: Option<AudioArgvInput>,
     /// Pre-built [`VsockRelayArgvInput`] when the role is
     /// [`ProcessRole::VsockRelay`].
     pub vsock_relay_input: Option<VsockRelayArgvInput>,
@@ -141,17 +142,13 @@ pub fn regenerate_argv(
             replace_arg0(&mut argv, intent);
             Ok(argv)
         }
-        ProcessRole::Swtpm | ProcessRole::Gpu | ProcessRole::GpuRenderNode => {
+        ProcessRole::Swtpm
+        | ProcessRole::Gpu
+        | ProcessRole::GpuRenderNode
+        | ProcessRole::Audio
+        | ProcessRole::Video => {
             Err(RegenerateArgvError::NotYetWired(intent.role.clone()))
         }
-        ProcessRole::Audio => {
-            let input = require(&extra.audio_input, &intent.role, "audio_input")?;
-            let mut argv = generate_audio_argv(input)
-                .map_err(|e| RegenerateArgvError::Generator(format!("{e:?}")))?;
-            replace_arg0(&mut argv, intent);
-            Ok(argv)
-        }
-        ProcessRole::Video => Err(RegenerateArgvError::NotYetWired(intent.role.clone())),
         ProcessRole::VsockRelay => {
             let input = require(&extra.vsock_relay_input, &intent.role, "vsock_relay_input")?;
             let mut argv = generate_vsock_relay_argv(input)
@@ -228,7 +225,6 @@ mod tests {
             ProcessRole::CloudHypervisorRunner
             | ProcessRole::Virtiofsd
             | ProcessRole::QemuMediaRunner
-            | ProcessRole::Audio
             | ProcessRole::VsockRelay
             | ProcessRole::OtelHostBridge => ExpectedRegeneratorClassification::MissingInput,
             ProcessRole::HostReconcile
@@ -242,6 +238,7 @@ mod tests {
             | ProcessRole::Video
             | ProcessRole::Usbip
             | ProcessRole::SecurityKeyFrontend
+            | ProcessRole::Audio
             | ProcessRole::WaylandProxy => ExpectedRegeneratorClassification::NotYetWired,
         }
     }
@@ -275,6 +272,16 @@ mod tests {
             RegenerateArgvError::MissingInput { field, .. } => assert_eq!(field, "ch_input"),
             other => panic!("expected MissingInput, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn audio_role_remains_bundle_authoritative_until_runtime_wave() {
+        let intent = fake_intent(ProcessRole::Audio);
+        let err = regenerate_argv(&intent, &RunnerArgvExtra::default()).unwrap_err();
+        assert!(
+            matches!(err, RegenerateArgvError::NotYetWired(ProcessRole::Audio)),
+            "Audio regeneration must not bypass bundle-authoritative argv: {err:?}"
+        );
     }
 
     #[test]

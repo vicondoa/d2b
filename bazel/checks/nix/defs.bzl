@@ -320,5 +320,9 @@ def nix_surface_suite(surfaces):
             ":nix-unit-provider-device-gpu",
             ":nix-unit-provider-volume-local",
             ":nix-unit-provider-activation-nixos",
+            ":nix-unit-provider-audio-pipewire",
+            ":nix-unit-provider-clipboard-wayland",
+            ":nix-unit-provider-display-wayland",
+            ":nix-unit-provider-notification-desktop",
         ],
     )

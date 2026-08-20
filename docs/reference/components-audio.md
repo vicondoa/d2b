@@ -1,8 +1,8 @@
 # `d2b.vms.<vm>.audio.*`
 
 > Reference for the `audio` component module.
-> Source (host): [`nixos-modules/components/audio/host.nix`](../../nixos-modules/components/audio/host.nix)
-> Source (guest): [`nixos-modules/components/audio/guest.nix`](../../nixos-modules/components/audio/guest.nix)
+> Source (host): [`packages/d2b-provider-audio-pipewire/nix/host.nix`](../../packages/d2b-provider-audio-pipewire/nix/host.nix)
+> Source (guest): [`packages/d2b-provider-audio-pipewire/nix/guest.nix`](../../packages/d2b-provider-audio-pipewire/nix/guest.nix)
 > CLI: `packages/d2b/src/lib.rs` (`d2b audio …`); there is no bash helper for this surface.
 
 ## What this component does
@@ -94,7 +94,7 @@ Per audio-enabled VM:
 - **`d2b-<vm>-snd` system user + group**
   ([`host-users.nix`](../../nixos-modules/host-users.nix)).
 - **`d2b.slice/<vm>/snd` runner**
-  ([`components/audio/host.nix`](../../nixos-modules/components/audio/host.nix)) -
+  ([`packages/d2b-provider-audio-pipewire/nix/host.nix`](../../packages/d2b-provider-audio-pipewire/nix/host.nix)) -
   vhost-user-sound sidecar, broker-spawned via the daemon DAG.
   Runs as `d2b-<vm>-snd:d2b-<vm>-snd`,
   `SupplementaryGroups = [ "audio" ]`. The runner is started on
@@ -177,7 +177,7 @@ cycles the audio sidecar and CH together so the socket gets re-established). See
 
 ## Guest-side resources created
 
-In [`components/audio/guest.nix`](../../nixos-modules/components/audio/guest.nix):
+In [`packages/d2b-provider-audio-pipewire/nix/guest.nix`](../../packages/d2b-provider-audio-pipewire/nix/guest.nix):
 
 - `microvm.hypervisor = "cloud-hypervisor"` (via `mkDefault`).
 - `microvm.extraArgsScript = audioArgsScript` - a shell helper

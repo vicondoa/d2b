@@ -5,6 +5,7 @@ pub mod generated;
 pub mod guest_auth;
 pub mod guest_wire;
 pub mod public_wire;
+pub mod proxy_readiness;
 pub mod terminal_wire;
 pub mod unsafe_local_wire;
 

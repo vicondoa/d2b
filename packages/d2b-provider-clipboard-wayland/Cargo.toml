@@ -9,9 +9,30 @@ license.workspace = true
 workspace = true
 
 [dependencies]
+command-fds = "0.3"
 d2b-contracts-zone-session = { path = "../d2b-contracts-zone-session", version = "0.0.0-bootstrap" }
+d2b-core = { path = "../d2b-core", version = "0.0.0-bootstrap" }
+d2b-realm-core = { path = "../d2b-realm-core", version = "0.0.0-bootstrap" }
 d2b-provider-toolkit = { path = "../d2b-provider-toolkit", version = "0.0.0-bootstrap" }
+env_logger = "0.11"
+html2text = "0.15.3"
+log = "0.4"
+notify-rust = "4"
 serde = { workspace = true }
 serde_json = { workspace = true }
 sha2 = { workspace = true }
-rustix = { workspace = true, features = ["event", "fs"] }
+nix = { version = "0.29", default-features = false, features = ["fs", "resource", "socket", "uio"] }
+rustix = { workspace = true, features = ["event", "fs", "pipe", "process", "net"] }
+thiserror = "2"
+wayland-client = "0.31"
+wayland-protocols = { version = "0.32", features = ["client", "staging"] }
+wayland-protocols-misc = { version = "0.3", features = ["client"] }
+wayland-protocols-wlr = { version = "0.3", features = ["client"] }
+
+[[bin]]
+name = "d2b-clipd"
+path = "src/bin/d2b-clipd.rs"
+
+[[bin]]
+name = "d2b-clip-debug"
+path = "src/bin/d2b-clip-debug.rs"

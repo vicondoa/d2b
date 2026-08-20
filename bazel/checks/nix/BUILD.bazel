@@ -83,12 +83,6 @@ _SURFACES = {
     "desktop-interaction": {
         "cases": [],
         "modules": [
-            "nixos-modules/clipboard.nix",
-            "nixos-modules/niri-vm-borders.nix",
-            "nixos-modules/notifications.nix",
-            "nixos-modules/providers/clipboard-wayland.nix",
-            "nixos-modules/providers/display-wayland.nix",
-            "nixos-modules/providers/notification-desktop.nix",
             "nixos-modules/ui-colors.nix",
         ],
     },
@@ -206,6 +200,21 @@ nix_surface_test(
 )
 
 nix_surface_test(
+    name = "nix-unit-provider-audio-pipewire",
+    surface = "provider-audio-pipewire",
+    spec = {
+        "cases": [],
+        "modules": [],
+        "expression": "//packages/d2b-provider-audio-pipewire:nix/tests/default.nix",
+        "files": [
+            "packages/d2b-provider-audio-pipewire/nix/default.nix",
+        ],
+        "package": "packages/d2b-provider-audio-pipewire",
+        "raw_cases": True,
+    },
+)
+
+nix_surface_test(
     name = "nix-unit-provider-volume-local",
     surface = "provider-volume-local",
     spec = {
@@ -222,6 +231,21 @@ nix_surface_test(
 )
 
 nix_surface_test(
+    name = "nix-unit-provider-clipboard-wayland",
+    surface = "provider-clipboard-wayland",
+    spec = {
+        "cases": [],
+        "modules": [],
+        "expression": "//packages/d2b-provider-clipboard-wayland:nix/tests/default.nix",
+        "files": [
+            "packages/d2b-provider-clipboard-wayland/nix/default.nix",
+        ],
+        "package": "packages/d2b-provider-clipboard-wayland",
+        "raw_cases": True,
+    },
+)
+
+nix_surface_test(
     name = "nix-unit-provider-activation-nixos",
     surface = "provider-activation-nixos",
     spec = {
@@ -232,6 +256,36 @@ nix_surface_test(
             "packages/d2b-provider-activation-nixos/nix/default.nix",
         ],
         "package": "packages/d2b-provider-activation-nixos",
+        "raw_cases": True,
+    },
+)
+
+nix_surface_test(
+    name = "nix-unit-provider-display-wayland",
+    surface = "provider-display-wayland",
+    spec = {
+        "cases": [],
+        "modules": [],
+        "expression": "//packages/d2b-provider-display-wayland:nix/tests/default.nix",
+        "files": [
+            "packages/d2b-provider-display-wayland/nix/default.nix",
+        ],
+        "package": "packages/d2b-provider-display-wayland",
+        "raw_cases": True,
+    },
+)
+
+nix_surface_test(
+    name = "nix-unit-provider-notification-desktop",
+    surface = "provider-notification-desktop",
+    spec = {
+        "cases": [],
+        "modules": [],
+        "expression": "//packages/d2b-provider-notification-desktop:nix/tests/default.nix",
+        "files": [
+            "packages/d2b-provider-notification-desktop/nix/default.nix",
+        ],
+        "package": "packages/d2b-provider-notification-desktop",
         "raw_cases": True,
     },
 )

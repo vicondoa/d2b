@@ -1,14 +1,18 @@
 load("@crates//:defs.bzl", "all_crate_deps")
-load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test", "rust_doc_test")
+load("@rules_rust//rust:defs.bzl", "rust_binary", "rust_library", "rust_test", "rust_doc_test")
 
 exports_files(
-    ["BUILD.bazel"],
+    ["BUILD.bazel", "nix/default.nix", "nix/site.nix", "nix/tests/default.nix"],
     visibility = ["//visibility:public"],
 )
 
 rust_library(
     name = "d2b_provider_notification_desktop",
-    srcs = glob(["src/**/*.rs"], allow_empty = True),
+    srcs = glob(
+        ["src/**/*.rs"],
+        exclude = ["src/bin/**/*.rs"],
+        allow_empty = True,
+    ),
     compile_data = ["Cargo.toml"],
     deps = [
         "//packages/d2b-contracts-zone-session:d2b_contracts_zone_session",
@@ -18,9 +22,21 @@ rust_library(
     visibility = ["//visibility:public"],
 )
 
+rust_binary(
+    name = "d2b-sk-waybar-helper",
+    srcs = ["src/bin/d2b-sk-waybar-helper.rs"],
+    compile_data = ["Cargo.toml"],
+    visibility = ["//visibility:public"],
+    deps = [":d2b_provider_notification_desktop"] + all_crate_deps(normal = True, cargo_only = True),
+)
+
 rust_library(
     name = "d2b_provider_notification_desktop_test_support",
-    srcs = glob(["src/**/*.rs"], allow_empty = True),
+    srcs = glob(
+        ["src/**/*.rs"],
+        exclude = ["src/bin/**/*.rs"],
+        allow_empty = True,
+    ),
     compile_data = ["Cargo.toml"],
     crate_name = "d2b_provider_notification_desktop",
     deps = [
@@ -117,6 +133,12 @@ rust_test(
         "//packages/d2b-contracts-zone-session:d2b_contracts_zone_session",
         ":d2b_provider_notification_desktop",
     ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
+)
+
+rust_test(
+    name = "security_key_compat",
+    compile_data = ["Cargo.toml"],
+    crate = ":d2b_provider_notification_desktop",
 )
 
 # keep

@@ -15,6 +15,11 @@ daemon-support = []
 d2b-contracts-zone-session = { path = "../d2b-contracts-zone-session", version = "0.0.0-bootstrap" }
 d2b-provider-toolkit = { path = "../d2b-provider-toolkit", version = "0.0.0-bootstrap" }
 getrandom = "0.2"
+schemars = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 sha2 = { workspace = true }
+
+[[bin]]
+name = "d2b-sk-waybar-helper"
+path = "src/bin/d2b-sk-waybar-helper.rs"

@@ -509,8 +509,8 @@ D2B_FILES=(
   nixos-modules/components/usbip.nix
   nixos-modules/components/audit.nix
   nixos-modules/components/home-manager.nix
-  nixos-modules/components/audio/guest.nix
-  nixos-modules/components/audio/host.nix
+  packages/d2b-provider-audio-pipewire/nix/guest.nix
+  packages/d2b-provider-audio-pipewire/nix/host.nix
   nixos-modules/components/observability/default.nix
   nixos-modules/components/observability/guest.nix
   nixos-modules/components/observability/host.nix

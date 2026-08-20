@@ -231,16 +231,6 @@ rust_test(
 )
 
 rust_test(
-    name = "policy_clipboard",
-    srcs = ["tests/policy_clipboard.rs"],
-    compile_data = ["Cargo.toml"],
-    visibility = ["//visibility:public"],
-    deps = [":d2b_contract_tests",
-            "//packages/d2b-contracts-provider:d2b_contracts_provider",
-        "//packages/d2b-contracts-zone-session:d2b_contracts_zone_session", ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
-)
-
-rust_test(
     name = "policy_compat_adr",
     srcs = ["tests/policy_compat_adr.rs"],
     compile_data = ["Cargo.toml"],

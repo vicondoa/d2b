@@ -1,14 +1,18 @@
 load("@crates//:defs.bzl", "all_crate_deps")
-load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test", "rust_doc_test")
+load("@rules_rust//rust:defs.bzl", "rust_binary", "rust_library", "rust_test", "rust_doc_test")
 
 exports_files(
-    ["BUILD.bazel"],
+    ["BUILD.bazel", "nix/default.nix", "nix/site.nix", "nix/tests/default.nix"],
     visibility = ["//visibility:public"],
 )
 
 rust_library(
     name = "d2b_provider_clipboard_wayland",
-    srcs = glob(["src/**/*.rs"], allow_empty = True),
+    srcs = glob(
+        ["src/**/*.rs"],
+        exclude = ["src/bin/**/*.rs"],
+        allow_empty = True,
+    ),
     compile_data = ["Cargo.toml"],
     deps = [
         "//packages/d2b-contracts-zone-session:d2b_contracts_zone_session",
@@ -17,9 +21,32 @@ rust_library(
     visibility = ["//visibility:public"],
 )
 
+rust_binary(
+    name = "d2b-clipd",
+    srcs = ["src/bin/d2b-clipd.rs"],
+    compile_data = ["Cargo.toml"] + glob(["src/clipd_host/**/*.rs"]),
+    visibility = ["//visibility:public"],
+    deps = [
+        "//packages/d2b-core:d2b_core",
+        "//packages/d2b-realm-core:d2b_realm_core",
+    ] + all_crate_deps(normal = True, cargo_only = True),
+)
+
+rust_binary(
+    name = "d2b-clip-debug",
+    srcs = ["src/bin/d2b-clip-debug.rs"],
+    compile_data = ["Cargo.toml"],
+    visibility = ["//visibility:public"],
+    deps = [] + all_crate_deps(normal = True, cargo_only = True),
+)
+
 rust_library(
     name = "d2b_provider_clipboard_wayland_test_support",
-    srcs = glob(["src/**/*.rs"], allow_empty = True),
+    srcs = glob(
+        ["src/**/*.rs"],
+        exclude = ["src/bin/**/*.rs"],
+        allow_empty = True,
+    ),
     compile_data = ["Cargo.toml"],
     crate_name = "d2b_provider_clipboard_wayland",
     deps = [
@@ -87,6 +114,38 @@ rust_test(
         "//packages/d2b-contracts-zone-session:d2b_contracts_zone_session",
         ":d2b_provider_clipboard_wayland",
     ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
+)
+
+rust_test(
+    name = "clipd_host",
+    srcs = ["tests/clipd_host.rs"],
+    compile_data = [
+        "Cargo.toml",
+        "src/bin/d2b-clipd.rs",
+    ],
+    data = [":d2b-clipd"],
+    env = {"CARGO_BIN_EXE_d2b-clipd": "$(rootpath :d2b-clipd)"},
+    rustc_env = {"CARGO_BIN_EXE_d2b-clipd": "$(rootpath :d2b-clipd)"},
+    visibility = ["//visibility:public"],
+    deps = [] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
+)
+
+rust_test(
+    name = "clipd_pipe",
+    srcs = ["tests/clipd_pipe.rs"],
+    compile_data = ["Cargo.toml"],
+    visibility = ["//visibility:public"],
+    deps = [] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
+)
+
+rust_test(
+    name = "clipd_host_impl",
+    compile_data = ["Cargo.toml"],
+    crate = ":d2b-clipd",
+    data = [":d2b-clipd"],
+    env = {"CARGO_BIN_EXE_d2b-clipd": "$(rootpath :d2b-clipd)"},
+    rustc_env = {"CARGO_BIN_EXE_d2b-clipd": "$(rootpath :d2b-clipd)"},
+    visibility = ["//visibility:public"],
 )
 
 # keep

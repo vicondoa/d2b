@@ -68,8 +68,8 @@ in
     # semantics. There is no public file with example VMs (yet -
     # examples/ will demonstrate the pattern).
     ./observability-vm.nix
-    ./clipboard.nix
-    ./notifications.nix
+    ../packages/d2b-provider-clipboard-wayland/nix/site.nix
+    ../packages/d2b-provider-notification-desktop/nix/site.nix
     ../packages/d2b-provider-volume-local/nix/store.nix
     ./manifest.nix
     ./bundle.nix
@@ -89,18 +89,18 @@ in
     ./closures-json.nix
     ./minijail-profiles.nix
     ./ui-colors.nix
-    ./providers/display-wayland.nix
-    ./providers/notification-desktop.nix
-    ./providers/clipboard-wayland.nix
+    ../packages/d2b-provider-display-wayland/nix/default.nix
+    ../packages/d2b-provider-notification-desktop/nix/default.nix
+    ../packages/d2b-provider-clipboard-wayland/nix/default.nix
     # Both cli.nix (bash CLI package) and host-ch-exporter.nix (host
     # singleton scraper folded into daemon /metrics) are now retired.
     # See tests/cli-nix-consumers-eval.sh + tests/legacy-unit-denylist-eval.sh
     # for the static gates.
     (import ./host-broker.nix { inherit inputs; })
-    ./components/audio/host.nix
-    ./components/audio/v3-resource.nix
+    ../packages/d2b-provider-audio-pipewire/nix/host.nix
+    ../packages/d2b-provider-audio-pipewire/nix/default.nix
     ./components/observability/default.nix
-    ./niri-vm-borders.nix
+    ../packages/d2b-provider-display-wayland/nix/niri-vm-borders.nix
   ];
 
   # Entra ID / Himmelblau is NOT auto-imported here - it lives in

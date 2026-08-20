@@ -127,7 +127,7 @@ pub const RUNNER_PROCESS_MATRIX: &[RunnerProcessMetadata] = &[
         RunnerLifecycleClass::Spawnable,
         Some("audio_argv"),
         "audio_argv",
-        RegeneratorWiring::Wired,
+        RegeneratorWiring::NotYetWired,
     ),
     row(
         CloudHypervisorRunner,

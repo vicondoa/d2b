@@ -127,7 +127,7 @@ let
     "d2b-gateway-runtime"
     "d2b-unsafe-local-helper"
     "d2b-resource-compiler"
-    "d2b-wayland-proxy"
+    "d2b-provider-display-wayland"
   ];
   hostPackageArgs = lib.concatMapStringsSep " " (package: "--package ${package}") hostPackages;
 
@@ -251,7 +251,7 @@ in
     binaries = [ "d2b-resource-compiler" ];
   };
   waylandProxy = mkMainPackage {
-    package = "d2b-wayland-proxy";
+    package = "d2b-provider-display-wayland";
     binaries = [ "d2b-wayland-proxy" ];
   };
 }

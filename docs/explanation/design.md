@@ -1181,7 +1181,7 @@ model is honest about its incomplete edges:
   the kernel.** The framework injects per-direction PipeWire
   `client.conf` `stream.rules` keyed on the sidecar-advertised
   `d2b.mic` / `d2b.speaker` flags (see
-  [`nixos-modules/components/audio/host.nix:432-469`](../../nixos-modules/components/audio/host.nix)),
+  [`packages/d2b-provider-audio-pipewire/nix/host.nix:432-469`](../../packages/d2b-provider-audio-pipewire/nix/host.nix)),
   so a guest cannot reach the host's microphone or speakers when its
   side is set to `off`. The remaining caveat is that this enforcement
   lives in the host user's PipeWire session, not in the kernel - a

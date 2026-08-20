@@ -12,11 +12,32 @@ test-support = []
 workspace = true
 
 [dependencies]
+clap = { version = "4", features = ["derive"] }
+d2b-contracts-control = { path = "../d2b-contracts-control", version = "0.0.0-bootstrap" }
+d2b-contracts = { path = "../d2b-contracts", version = "0.0.0-bootstrap" }
 d2b-contracts-zone-session = { path = "../d2b-contracts-zone-session", version = "0.0.0-bootstrap" }
+d2b-core = { path = "../d2b-core", version = "0.0.0-bootstrap" }
+d2b-realm-core = { path = "../d2b-realm-core", version = "0.0.0-bootstrap" }
 d2b-provider-toolkit = { path = "../d2b-provider-toolkit", version = "0.0.0-bootstrap" }
+env_logger = "0.11"
+getrandom = "0.2"
+libc = "0.2"
+log = "0.4"
+nix = { version = "0.29", default-features = false, features = ["fs", "socket", "uio"] }
 serde = { workspace = true }
 serde_json = { workspace = true }
 sha2 = { workspace = true }
+smallvec = "1"
+rustix = { workspace = true, features = ["event", "fs", "pipe", "net"] }
+thiserror = "2"
+uapi = "0.2"
+wl-proxy = { version = "=0.1.2", git = "https://github.com/vicondoa/wl-proxy.git", rev = "072945b59fef21a2a8166460454280d543f48772", package = "wl-proxy", features = [
+    "protocol-drm",
+    "protocol-stream",
+    "protocol-wl_eglstream_controller",
+    "suite-wayland-protocols",
+    "suite-wlr-protocols",
+] }
 
 [[test]]
 name = "provider_behavior"

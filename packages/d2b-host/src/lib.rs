@@ -44,8 +44,6 @@ pub mod qemu_media_argv;
 // Pure virtiofsd argv generator (one instance per `microvm.shares` row;
 // consumed by d2bd via SpawnRunner).
 pub mod virtiofsd_argv;
-// Pure vhost-device-sound audio sidecar argv generator.
-pub mod audio_argv;
 // Pure socat-based vsock-relay argv generator (covers the guest-egress +
 // stack-vm-listen shapes documented in
 // nixos-modules/components/observability/{host,guest,stack}.nix).
@@ -57,9 +55,6 @@ pub mod volume_effect_adapter;
 // d2b-otel-host-bridge.service with a broker SpawnRunner under
 // RunnerRole::OtelHostBridge.
 pub mod otel_host_bridge_argv;
-// Host-jailed Wayland proxy argv generator. Emits argv for the
-// per-VM d2b-<vm>-wlproxy role spawned via RunnerRole::WaylandProxy.
-pub mod wayland_proxy_argv;
 // Hardlink-farm primitive for per-VM store activation. Same-filesystem
 // check + per-generation marker + atomic current-symlink swap with crash
 // reconciliation.
@@ -84,7 +79,7 @@ pub mod media;
 // Canonical Rust-side runner argv regenerator.
 // Documents the migration surface from the Nix-side argv
 // generation in processes-json.nix to the typed Rust generators
-// in this crate and the device Providers. See ADR 0018.
+// in this crate and their owning Providers. See ADR 0018.
 pub mod runner_argv_regenerator;
 // v1.1.1 RenderDnsmasqEnvConf daemon-host-prep DAG op support.
 // Per ADR 0018. Pure-Rust dnsmasq config

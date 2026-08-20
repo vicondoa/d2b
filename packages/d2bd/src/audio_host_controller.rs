@@ -42,7 +42,7 @@ use d2b_contracts_broker::broker_wire::{
     PipeWireAudioRequest,
 };
 use d2b_contracts_control::public_wire::AudioChannel;
-use d2b_core::audio_policy::{AudioGrant, LevelPercent};
+use d2b_provider_audio_pipewire::{AudioGrant, LevelPercent};
 use d2b_core::bundle_resolver::intent_id_runner;
 use d2b_core::processes::{ProcessNode, ProcessRole, ProcessesJson, VmProcessDag};
 #[cfg(test)]
@@ -342,7 +342,7 @@ fn target_node_from_pw_dump(bytes: &[u8], vm_name: &str, channel: AudioChannel) 
 mod tests {
     use super::*;
     use d2b_contracts_control::public_wire::AudioChannel;
-    use d2b_core::audio_policy::{AudioGrant, LevelPercent};
+    use d2b_provider_audio_pipewire::{AudioGrant, LevelPercent};
 
     // ── FakeHostController ──────────────────────────────────────────────────
 

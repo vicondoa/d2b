@@ -10,7 +10,7 @@ use d2b_contracts_control::unsafe_local_wire::{
 };
 use d2b_core::workload_identity::WorkloadIdentity;
 use d2b_realm_core::{WorkloadProviderKind, ids::OperationId};
-use d2b_wayland_proxy::readiness::{
+use d2b_contracts_control::proxy_readiness::{
     ProxyReadinessEvent, ProxyReadinessStage, ProxyReadinessState, READINESS_PROTOCOL_VERSION,
 };
 use nix::libc;

@@ -11234,7 +11234,7 @@
           ]
         },
         {
-          "description": "vhost-device-sound audio sidecar. Broker invokes `d2b_host::audio_argv::generate_audio_argv`.",
+          "description": "vhost-device-sound audio sidecar. Broker invokes `d2b_provider_audio_pipewire::generate_audio_argv`.",
           "type": "string",
           "enum": [
             "audio"

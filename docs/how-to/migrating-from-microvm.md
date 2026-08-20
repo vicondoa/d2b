@@ -591,7 +591,7 @@ change. For the full predicate semantics see
   (via `lib.mkDefault`); the same applies to `tpm.enable` and
   `audio.enable` (the vhost-user-sound device is wired only via
   cloud-hypervisor's `--device` plumbing - see
-  `nixos-modules/components/audio/guest.nix:121-127`). You can still
+  `packages/d2b-provider-audio-pipewire/nix/guest.nix:121-127`). You can still
   override per-VM via `d2b.vms.<vm>.config.microvm.hypervisor = ...`
   for headless VMs.
 - **Framework-owned shares.** Do not add a `/nix/store` entry to

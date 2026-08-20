@@ -678,7 +678,7 @@ fn stripped_code_line<'a>(path: &Path, line: &'a str) -> &'a str {
 fn registered_host_mutation_sources() -> BTreeMap<&'static str, &'static str> {
     BTreeMap::from([
         (
-            "nixos-modules/components/audio/host.nix",
+            "packages/d2b-provider-audio-pipewire/nix/host.nix",
             "storage root:path:run-root",
         ),
         (

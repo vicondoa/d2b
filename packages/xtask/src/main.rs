@@ -24,7 +24,7 @@ use d2b_contracts_control::public_wire;
 use d2b_contracts_control::unsafe_local_wire::UnsafeLocalHelperWireSchema;
 use d2b_contracts_resource::v3::storage::ZoneStoreStorageRow;
 use d2b_core::{
-    allocator_config::AllocatorJson, audio_policy::AudioPolicyState, bundle::Bundle,
+    allocator_config::AllocatorJson, bundle::Bundle,
     closures::ClosureMetadata, error::Error, host::HostJson, manifest_v04::ManifestV04,
     minijail_profile::MinijailProfile, privileges::PrivilegesJson, processes::ProcessesJson,
     realm_controller_config::RealmControllersJson,
@@ -32,6 +32,7 @@ use d2b_core::{
     storage_lifecycle::StorageLifecycleReport, sync::SyncJson,
     unsafe_local_workloads::UnsafeLocalWorkloadsJson,
 };
+use d2b_contracts::audio::AudioPolicyState;
 use d2b_realm_core::{
     AccessBindingRef, AdmissionAuditRecord, AuditEnvelope, Capability, CapabilityNegotiation,
     CapabilityPreflightDenialReason, CapabilityPreflightStatus, CapabilitySet, ChildKeyPin,
