@@ -6,6 +6,7 @@
 //! raw host path or performs a host mutation directly.
 
 use std::{
+    collections::BTreeSet,
     env,
     fs::OpenOptions,
     io::Read as _,
@@ -26,18 +27,21 @@ use d2b_contracts::{
 };
 use d2b_cutover::{
     ApplyContext, ArtifactId, AuditEvidence, CapabilityLedger, CompletionEvidence, CutoverPhase,
-    EffectEvidence, EffectKind, EffectRequest, HoldReason, HostLockContract,
-    MAX_RUNNER_FRAME_BYTES, Operation, OperationInventory, OperationKind, RUNNER_BOOTSTRAP_FD,
+    EffectEvidence, EffectKind, EffectOutcome, EffectRequest, FailureCode, HoldReason,
+    HostLockContract, Journal, JournalBinding, MAX_RUNNER_FRAME_BYTES, Operation,
+    OperationInventory, OperationKind, RUNNER_BOOTSTRAP_FD, RUNNER_SOCKET_TIMEOUT,
     ReadOnlyEvidence, ReplayClass, RunnerBootstrap, RunnerCommand, RunnerPaths, RunnerPeer,
-    RunnerResponse, RunnerSocket, RunnerStatus, StepId, acquire_operation_lock, persist_journal,
-    write_response,
+    RunnerResponse, RunnerSocket, RunnerStatus, RunnerVerificationInput, RunnerZoneVerification,
+    StepId, acquire_operation_lock, persist_journal, write_response,
 };
 use nix::{
     fcntl::{FcntlArg, FdFlag, fcntl},
     libc,
     sys::socket::{
-        AddressFamily, MsgFlags, SockFlag, SockType, UnixAddr, connect, recv, send, socket,
+        AddressFamily, MsgFlags, SockFlag, SockType, UnixAddr, connect, recv, send, setsockopt,
+        socket, sockopt,
     },
+    sys::time::{TimeVal, TimeValLike},
     unistd::setsid,
 };
 
@@ -71,20 +75,32 @@ fn run() -> Result<(), RunnerError> {
         RunnerBootstrap::decode_and_consume(&bootstrap_bytes, now_ms(), &mut ledger)
             .map_err(|_| RunnerError::Bootstrap)?;
     let paths = RunnerPaths::new_with_socket_root(state_root, socket_root, consumed.operation_id());
-    if paths.journal.exists() {
-        return Err(RunnerError::Replay);
-    }
     let lock = acquire_operation_lock(&paths).map_err(|_| RunnerError::Lock)?;
-    let operation = Operation::new(bootstrap.request.clone(), &bootstrap.preview)
-        .map_err(|_| RunnerError::Request)?;
-    persist_journal(
-        &paths.journal,
-        &bootstrap,
-        &operation
-            .journal_bytes()
-            .map_err(|_| RunnerError::Journal)?,
-    )
-    .map_err(|_| RunnerError::Journal)?;
+    let (bootstrap, mut operation, adopted) = match load_existing_operation(&paths, &bootstrap)? {
+        Some((persisted_bootstrap, operation)) => (persisted_bootstrap, operation, true),
+        None => (
+            bootstrap.clone(),
+            Operation::new(bootstrap.request.clone(), &bootstrap.preview)
+                .map_err(|_| RunnerError::Request)?,
+            false,
+        ),
+    };
+    let mut host_lock = HostLockContract::new();
+    if adopted {
+        operation
+            .acquire_host_lock(&mut host_lock)
+            .map_err(|_| RunnerError::Request)?;
+    }
+    if !adopted {
+        persist_journal(
+            &paths.journal,
+            &bootstrap,
+            &operation
+                .journal_bytes()
+                .map_err(|_| RunnerError::Journal)?,
+        )
+        .map_err(|_| RunnerError::Journal)?;
+    }
 
     let socket = RunnerSocket::bind(&paths, consumed).map_err(|_| RunnerError::Socket)?;
     let audit_sink = Box::new(BrokerAuditSink::new(
@@ -107,10 +123,64 @@ fn run() -> Result<(), RunnerError> {
         socket,
         audit_sink,
         effect_sink,
-        _host_lock: HostLockContract::new(),
+        _host_lock: host_lock,
     };
     runtime.start_apply()?;
     runtime.serve()
+}
+
+fn load_existing_operation(
+    paths: &RunnerPaths,
+    bootstrap: &RunnerBootstrap,
+) -> Result<Option<(RunnerBootstrap, Operation)>, RunnerError> {
+    let (persisted_bootstrap, records) = match d2b_cutover::load_journal(&paths.journal) {
+        Ok(value) => value,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(_) => return Err(RunnerError::Journal),
+    };
+    if !bootstrap_restart_binding_matches(&persisted_bootstrap, bootstrap) {
+        return Err(RunnerError::Replay);
+    }
+    let binding = JournalBinding::new(
+        bootstrap.request.operation_id().clone(),
+        bootstrap.request.revision_plan_id().clone(),
+        bootstrap.request.request_digest().clone(),
+    );
+    let journal = Journal::from_bytes(binding, &records).map_err(|_| RunnerError::Journal)?;
+    Operation::reopen(bootstrap.request.clone(), &bootstrap.preview, journal)
+        .map(|operation| Some((persisted_bootstrap, operation)))
+        .map_err(|_| RunnerError::Journal)
+}
+
+fn bootstrap_restart_binding_matches(
+    persisted: &RunnerBootstrap,
+    supplied: &RunnerBootstrap,
+) -> bool {
+    persisted.capability.binding_digest() == supplied.capability.binding_digest()
+        && persisted.request == supplied.request
+        && persisted.preview == supplied.preview
+        && persisted.recovery == supplied.recovery
+        && persisted.host_digest == supplied.host_digest
+        && consent_restart_binding_matches(&persisted.consent, &supplied.consent)
+        && consent_restart_binding_matches(
+            &persisted.destructive_consent,
+            &supplied.destructive_consent,
+        )
+}
+
+fn consent_restart_binding_matches(
+    persisted: &Option<d2b_cutover::Consent>,
+    supplied: &Option<d2b_cutover::Consent>,
+) -> bool {
+    match (persisted, supplied) {
+        (None, None) => true,
+        (Some(persisted), Some(supplied)) => {
+            persisted.binding() == supplied.binding()
+                && persisted.issued_at_ms() == supplied.issued_at_ms()
+                && persisted.expires_at_ms() == supplied.expires_at_ms()
+        }
+        _ => false,
+    }
 }
 
 fn bootstrap_fd_from_env(value: Option<&str>) -> Result<i32, RunnerError> {
@@ -191,6 +261,20 @@ trait EffectSink {
         handoff: Option<d2b_contracts::host_generation::ApplyHostGenerationHandoff>,
         payload: Option<CutoverEffectPayload>,
     ) -> Result<CompletionEvidence, EffectSinkError>;
+
+    fn admission(
+        &mut self,
+    ) -> Result<d2b_contracts::broker_wire::CutoverAdmissionResponse, EffectSinkError> {
+        Err(EffectSinkError::NotAllowed)
+    }
+
+    fn verify(
+        &mut self,
+        expected: &RunnerVerificationInput,
+    ) -> Result<RunnerVerificationInput, EffectSinkError> {
+        let _ = expected;
+        Err(EffectSinkError::NotAllowed)
+    }
 }
 
 #[derive(Debug)]
@@ -275,6 +359,16 @@ struct BrokerEffectSink {
     authority: CutoverEffectAuthority,
 }
 
+struct BrokerEffectRoundTrip {
+    effect: CutoverEffectKind,
+    effect_id: BundleOpId,
+    phase: CutoverPhase,
+    replay_class: CutoverReplayClass,
+    identity: Option<BundleOpId>,
+    handoff: Option<d2b_contracts::host_generation::ApplyHostGenerationHandoff>,
+    payload: Option<CutoverEffectPayload>,
+}
+
 impl BrokerEffectSink {
     fn new(bootstrap: &RunnerBootstrap, socket_path: PathBuf) -> Result<Self, RunnerError> {
         let operation_id = BundleOpId::new(bootstrap.request.operation_id().as_str());
@@ -304,47 +398,59 @@ impl BrokerEffectSink {
             authority,
         })
     }
-}
 
-impl EffectSink for BrokerEffectSink {
-    fn execute(
-        &mut self,
+    fn round_trip_effect(
+        &self,
         request: &EffectRequest,
         phase: CutoverPhase,
         handoff: Option<d2b_contracts::host_generation::ApplyHostGenerationHandoff>,
         payload: Option<CutoverEffectPayload>,
-    ) -> Result<CompletionEvidence, EffectSinkError> {
+    ) -> Result<d2b_contracts::broker_wire::CutoverEffectResponse, EffectSinkError> {
         let effect = cutover_effect_kind(request.kind()).ok_or(EffectSinkError::NotAllowed)?;
-        if !self.authority.permits(effect) {
+        self.round_trip_request(BrokerEffectRoundTrip {
+            effect,
+            effect_id: BundleOpId::new(request.effect_id().as_str()),
+            phase,
+            replay_class: match request.replay_class() {
+                ReplayClass::Repeatable => CutoverReplayClass::Repeatable,
+                ReplayClass::ReopenByJournaledIdentity => {
+                    CutoverReplayClass::ReopenByJournaledIdentity
+                }
+                ReplayClass::QuarantineOnly => CutoverReplayClass::QuarantineOnly,
+            },
+            identity: request
+                .journaled_identity()
+                .map(|identity| BundleOpId::new(identity.as_str())),
+            handoff,
+            payload,
+        })
+    }
+
+    fn round_trip_request(
+        &self,
+        request: BrokerEffectRoundTrip,
+    ) -> Result<d2b_contracts::broker_wire::CutoverEffectResponse, EffectSinkError> {
+        if !self.authority.permits(request.effect) {
             return Err(EffectSinkError::NotAllowed);
         }
-        if request.kind() == EffectKind::ClosureActivation && handoff.is_none() {
+        if request.effect == CutoverEffectKind::ClosureActivation && request.handoff.is_none() {
             return Err(EffectSinkError::Protocol);
         }
-        let identity = request
-            .journaled_identity()
-            .map(|identity| BundleOpId::new(identity.as_str()));
         let response = broker_round_trip(
             &self.socket_path,
             &BrokerRequestEnvelope {
                 request: BrokerRequest::CutoverEffect(CutoverEffectRequest {
                     operation_id: self.operation_id.clone(),
                     authority: self.authority,
-                    phase: phase.number(),
-                    effect_id: BundleOpId::new(request.effect_id().as_str()),
-                    effect,
-                    replay_class: match request.replay_class() {
-                        ReplayClass::Repeatable => CutoverReplayClass::Repeatable,
-                        ReplayClass::ReopenByJournaledIdentity => {
-                            CutoverReplayClass::ReopenByJournaledIdentity
-                        }
-                        ReplayClass::QuarantineOnly => CutoverReplayClass::QuarantineOnly,
-                    },
+                    phase: request.phase.number(),
+                    effect_id: request.effect_id,
+                    effect: request.effect,
+                    replay_class: request.replay_class,
                     request_digest: self.request_digest.clone(),
                     capability_digest: self.capability_digest.clone(),
-                    identity,
-                    handoff,
-                    payload,
+                    identity: request.identity,
+                    handoff: request.handoff,
+                    payload: request.payload,
                 }),
                 caller_role: BrokerCallerRole::CutoverRunner {
                     operation_id: self.operation_id.clone(),
@@ -358,6 +464,19 @@ impl EffectSink for BrokerEffectSink {
         let BrokerResponse::CutoverEffect(response) = response else {
             return Err(EffectSinkError::Protocol);
         };
+        Ok(response)
+    }
+}
+
+impl EffectSink for BrokerEffectSink {
+    fn execute(
+        &mut self,
+        request: &EffectRequest,
+        phase: CutoverPhase,
+        handoff: Option<d2b_contracts::host_generation::ApplyHostGenerationHandoff>,
+        payload: Option<CutoverEffectPayload>,
+    ) -> Result<CompletionEvidence, EffectSinkError> {
+        let response = self.round_trip_effect(request, phase, handoff, payload)?;
         let effect = match response.outcome {
             CutoverEffectOutcome::Succeeded => match response.identity {
                 Some(identity) => EffectEvidence::succeeded_with_identity(identity.as_str())
@@ -370,6 +489,69 @@ impl EffectSink for BrokerEffectSink {
         let audit = AuditEvidence::durable(response.audit_record_id.as_str().to_owned())
             .map_err(|_| EffectSinkError::Protocol)?;
         Ok(CompletionEvidence { effect, audit })
+    }
+
+    fn admission(
+        &mut self,
+    ) -> Result<d2b_contracts::broker_wire::CutoverAdmissionResponse, EffectSinkError> {
+        let response = self.round_trip_request(BrokerEffectRoundTrip {
+            effect: CutoverEffectKind::ApplyAdmission,
+            effect_id: BundleOpId::new("apply-admission"),
+            phase: CutoverPhase::Disposition,
+            replay_class: CutoverReplayClass::Repeatable,
+            identity: None,
+            handoff: None,
+            payload: Some(CutoverEffectPayload::ApplyAdmission(
+                d2b_contracts::broker_wire::CutoverAdmissionRequest {},
+            )),
+        })?;
+        response.admission.ok_or(EffectSinkError::Protocol)
+    }
+
+    fn verify(
+        &mut self,
+        expected: &RunnerVerificationInput,
+    ) -> Result<RunnerVerificationInput, EffectSinkError> {
+        let effect = EffectRequest::new(
+            d2b_cutover::EffectId::new("phase-9-verification").expect("effect id"),
+            d2b_cutover::StepId::new("phase-9-verification").expect("step id"),
+            EffectKind::Verification,
+            ReplayClass::Repeatable,
+            None,
+        );
+        let payload = CutoverEffectPayload::Verification(
+            d2b_contracts::broker_wire::CutoverVerificationRequest {
+                expected_zone_ids: expected
+                    .zones
+                    .iter()
+                    .map(|zone| BundleOpId::new(zone.zone_id.as_str()))
+                    .collect(),
+            },
+        );
+        let response =
+            self.round_trip_effect(&effect, CutoverPhase::Verification, None, Some(payload))?;
+        if response.outcome != CutoverEffectOutcome::Succeeded {
+            return Err(EffectSinkError::Protocol);
+        }
+        let Some(observations) = response.verification else {
+            return Err(EffectSinkError::Protocol);
+        };
+        Ok(RunnerVerificationInput {
+            zones: observations
+                .zones
+                .into_iter()
+                .map(|zone| {
+                    Ok(RunnerZoneVerification {
+                        zone_id: d2b_cutover::ZoneId::new(zone.zone_id.as_str().to_owned())
+                            .map_err(|_| EffectSinkError::Protocol)?,
+                        healthy: zone.healthy,
+                    })
+                })
+                .collect::<Result<Vec<_>, _>>()?,
+            sources_preserved: observations.sources_preserved,
+            identity_digests_match: observations.identity_digests_match,
+            candidate_current: observations.candidate_current,
+        })
     }
 }
 
@@ -405,6 +587,9 @@ fn broker_round_trip(
         None,
     )
     .map_err(|_| AuditSinkError::Unavailable)?;
+    let timeout = TimeVal::milliseconds(RUNNER_SOCKET_TIMEOUT.as_millis() as i64);
+    setsockopt(&fd, sockopt::SendTimeout, &timeout).map_err(|_| AuditSinkError::Unavailable)?;
+    setsockopt(&fd, sockopt::ReceiveTimeout, &timeout).map_err(|_| AuditSinkError::Unavailable)?;
     let address = UnixAddr::new(socket_path).map_err(|_| AuditSinkError::Unavailable)?;
     connect(fd.as_raw_fd(), &address).map_err(|_| AuditSinkError::Unavailable)?;
     let body = serde_json::to_vec(envelope).map_err(|_| AuditSinkError::Protocol)?;
@@ -449,6 +634,9 @@ struct Runtime {
 
 impl Runtime {
     fn start_apply(&mut self) -> Result<(), RunnerError> {
+        if self.operation.state() != d2b_cutover::OperationState::Planned {
+            return Ok(());
+        }
         let Some(mut consent) = self.bootstrap.consent.clone() else {
             return Ok(());
         };
@@ -456,6 +644,13 @@ impl Runtime {
         self.operation
             .acquire_host_lock(&mut lock)
             .map_err(|_| RunnerError::Request)?;
+        let admission = self
+            .effect_sink
+            .admission()
+            .map_err(|_| RunnerError::Request)?;
+        if !admission.predicates_hold {
+            return Err(RunnerError::Request);
+        }
         let context = match (
             self.bootstrap.recovery.clone(),
             self.bootstrap.host_digest.clone(),
@@ -463,18 +658,18 @@ impl Runtime {
             (Some(recovery), Some(host_digest)) => ApplyContext::cutover(
                 now_ms(),
                 self.bootstrap.request.inventory_digest().clone(),
-                true,
-                true,
-                true,
+                admission.candidate_current,
+                admission.markers_valid,
+                admission.ownership_valid,
                 recovery,
                 host_digest,
             ),
             _ => ApplyContext::reset(
                 now_ms(),
                 self.bootstrap.request.inventory_digest().clone(),
-                true,
-                true,
-                true,
+                admission.candidate_current,
+                admission.markers_valid,
+                admission.ownership_valid,
             ),
         };
         if matches!(
@@ -620,6 +815,63 @@ impl Runtime {
                 }
             }
             RunnerCommand::Verify { observations } => {
+                let expected = match self.operation.request().inventory() {
+                    OperationInventory::Host(inventory) => RunnerVerificationInput {
+                        zones: inventory
+                            .zone_ids()
+                            .cloned()
+                            .map(|zone_id| RunnerZoneVerification {
+                                zone_id,
+                                healthy: false,
+                            })
+                            .collect(),
+                        sources_preserved: false,
+                        identity_digests_match: false,
+                        candidate_current: false,
+                    },
+                    OperationInventory::Reset(_) => {
+                        return self.failure(d2b_cutover::RunnerSocketError::InvalidTransition);
+                    }
+                };
+                let expected_zone_ids = expected
+                    .zones
+                    .iter()
+                    .map(|zone| zone.zone_id.clone())
+                    .collect::<BTreeSet<_>>();
+                let supplied_zone_ids = observations
+                    .zones
+                    .iter()
+                    .map(|zone| zone.zone_id.clone())
+                    .collect::<BTreeSet<_>>();
+                if observations.zones.len() != expected_zone_ids.len()
+                    || expected_zone_ids != supplied_zone_ids
+                {
+                    return self.failure(d2b_cutover::RunnerSocketError::InvalidTransition);
+                }
+                let observations = match self.effect_sink.verify(&expected) {
+                    Ok(observations) => observations,
+                    Err(EffectSinkError::Unavailable)
+                    | Err(EffectSinkError::Protocol)
+                    | Err(EffectSinkError::NotAllowed) => {
+                        return self.require_external_restore();
+                    }
+                };
+                if observations
+                    .zones
+                    .iter()
+                    .map(|zone| zone.zone_id.clone())
+                    .collect::<BTreeSet<_>>()
+                    != expected_zone_ids
+                {
+                    return self.require_external_restore();
+                }
+                if !observations.zones.iter().all(|zone| zone.healthy)
+                    || !observations.sources_preserved
+                    || !observations.identity_digests_match
+                    || !observations.candidate_current
+                {
+                    return self.require_external_restore();
+                }
                 let audit = match self.audit_sink.publish(
                     CutoverAuditTransition::PhaseCompleted,
                     self.operation.phase().number(),
@@ -796,13 +1048,19 @@ impl Runtime {
                         return self.failure(d2b_cutover::RunnerSocketError::OperatorMismatch);
                     }
                 }
+                let admission = match self.effect_sink.admission() {
+                    Ok(admission) if admission.predicates_hold => admission,
+                    Ok(_) | Err(_) => {
+                        return self.failure(d2b_cutover::RunnerSocketError::InvalidTransition);
+                    }
+                };
                 let context = match self.bootstrap.request.operation_kind() {
                     OperationKind::ScopedReset(_) => ApplyContext::reset(
                         now_ms(),
                         self.bootstrap.request.inventory_digest().clone(),
-                        true,
-                        true,
-                        true,
+                        admission.candidate_current,
+                        admission.markers_valid,
+                        admission.ownership_valid,
                     ),
                     OperationKind::Cutover => {
                         let (Some(recovery), Some(host_digest)) = (
@@ -814,9 +1072,9 @@ impl Runtime {
                         ApplyContext::cutover(
                             now_ms(),
                             self.bootstrap.request.inventory_digest().clone(),
-                            true,
-                            true,
-                            true,
+                            admission.candidate_current,
+                            admission.markers_valid,
+                            admission.ownership_valid,
                             recovery,
                             host_digest,
                         )
@@ -898,23 +1156,42 @@ impl Runtime {
     }
 
     fn complete_read_only_prefix(&mut self) -> Result<(), d2b_cutover::RunnerSocketError> {
+        if self.operation.phase().number() > CutoverPhase::Inventory.number() {
+            return Ok(());
+        }
+        let predicates_hold = self
+            .effect_sink
+            .admission()
+            .map_err(|_| d2b_cutover::RunnerSocketError::InvalidTransition)?
+            .predicates_hold;
+        if !predicates_hold {
+            return Err(d2b_cutover::RunnerSocketError::InvalidTransition);
+        }
         while self.operation.phase().number() <= CutoverPhase::Inventory.number() {
             let phase = self.operation.phase();
             let audit = self
                 .audit_sink
                 .publish(CutoverAuditTransition::PhaseCompleted, phase.number(), None)
                 .map_err(|_| d2b_cutover::RunnerSocketError::AuditUnavailable)?;
-            self.operation
+            let previous = self.operation.clone();
+            if self
+                .operation
                 .complete_read_only_phase(
                     phase,
                     ReadOnlyEvidence {
-                        predicates_hold: true,
+                        predicates_hold,
                         audit,
                     },
                 )
-                .map_err(|_| d2b_cutover::RunnerSocketError::InvalidTransition)?;
-            self.persist()
-                .map_err(|_| d2b_cutover::RunnerSocketError::JournalUnavailable)?;
+                .is_err()
+            {
+                self.operation = previous;
+                return Err(d2b_cutover::RunnerSocketError::InvalidTransition);
+            }
+            if self.persist().is_err() {
+                self.operation = previous;
+                return Err(d2b_cutover::RunnerSocketError::JournalUnavailable);
+            }
         }
         Ok(())
     }
@@ -967,26 +1244,35 @@ impl Runtime {
         if !Self::effect_phase_allowed(effect.kind(), self.operation.phase()) {
             return self.failure(d2b_cutover::RunnerSocketError::InvalidTransition);
         }
-        let previous = self.operation.clone();
-        if self.operation.start_effect(effect.clone()).is_err() {
-            return self.failure(d2b_cutover::RunnerSocketError::InvalidTransition);
-        }
-        // The started record is the replay boundary. It must reach the
-        // root-owned journal before the broker is allowed to mutate anything.
-        if self.persist().is_err() {
-            self.operation = previous;
-            return self.failure(d2b_cutover::RunnerSocketError::JournalUnavailable);
-        }
-        if self
-            .audit_sink
-            .publish(
-                CutoverAuditTransition::EffectStarted,
-                self.operation.phase().number(),
-                None,
-            )
-            .is_err()
-        {
-            return self.failure(d2b_cutover::RunnerSocketError::AuditUnavailable);
+        let replaying = match self.operation.current_effect() {
+            Some(current) if current.matches_replay(&effect) => true,
+            Some(_) => {
+                return self.failure(d2b_cutover::RunnerSocketError::InvalidTransition);
+            }
+            None => false,
+        };
+        if !replaying {
+            let previous = self.operation.clone();
+            if self.operation.start_effect(effect.clone()).is_err() {
+                return self.failure(d2b_cutover::RunnerSocketError::InvalidTransition);
+            }
+            // The started record is the replay boundary. It must reach the
+            // root-owned journal before the broker is allowed to mutate anything.
+            if self.persist().is_err() {
+                self.operation = previous;
+                return self.failure(d2b_cutover::RunnerSocketError::JournalUnavailable);
+            }
+            if self
+                .audit_sink
+                .publish(
+                    CutoverAuditTransition::EffectStarted,
+                    self.operation.phase().number(),
+                    None,
+                )
+                .is_err()
+            {
+                return self.retry_or_restore(FailureCode::AuditNotDurable);
+            }
         }
         let evidence =
             match self
@@ -997,24 +1283,29 @@ impl Runtime {
                 Err(EffectSinkError::Unavailable)
                 | Err(EffectSinkError::Protocol)
                 | Err(EffectSinkError::NotAllowed) => {
-                    if !self
-                        .operation
-                        .phase()
-                        .is_before_or_at_native_rollback_boundary()
-                    {
-                        return self.require_external_restore();
-                    }
-                    return self.failure(d2b_cutover::RunnerSocketError::InvalidTransition);
+                    return self.retry_or_restore(FailureCode::EffectFailed);
                 }
             };
+        let outcome = evidence.effect.outcome();
+        if *outcome != EffectOutcome::Succeeded {
+            let failure_code = match outcome {
+                EffectOutcome::Failed => FailureCode::EffectFailed,
+                EffectOutcome::Ambiguous => FailureCode::DestinationAmbiguous,
+                EffectOutcome::Succeeded => unreachable!("successful effect handled above"),
+            };
+            return self.retry_or_restore(failure_code);
+        }
+        let previous = self.operation.clone();
         if self
             .operation
             .complete_effect(effect.effect_id(), evidence)
             .is_err()
         {
-            return self.failure(d2b_cutover::RunnerSocketError::InvalidTransition);
+            self.operation = previous;
+            return self.retry_or_restore(FailureCode::EffectFailed);
         }
         if self.persist().is_err() {
+            self.operation = previous;
             return self.failure(d2b_cutover::RunnerSocketError::JournalUnavailable);
         }
         RunnerResponse {
@@ -1022,6 +1313,26 @@ impl Runtime {
             status: Some(self.status()),
             error: None,
         }
+    }
+
+    fn retry_or_restore(&mut self, failure_code: FailureCode) -> RunnerResponse {
+        if self
+            .operation
+            .phase()
+            .is_before_or_at_native_rollback_boundary()
+        {
+            let previous = self.operation.clone();
+            if self.operation.retry_effect(failure_code).is_err() {
+                self.operation = previous;
+                return self.failure(d2b_cutover::RunnerSocketError::InvalidTransition);
+            }
+            if self.persist().is_err() {
+                self.operation = previous;
+                return self.failure(d2b_cutover::RunnerSocketError::JournalUnavailable);
+            }
+            return self.failure(d2b_cutover::RunnerSocketError::InvalidTransition);
+        }
+        self.require_external_restore()
     }
 
     fn require_external_restore(&mut self) -> RunnerResponse {
@@ -1155,6 +1466,61 @@ mod tests {
         ) -> Result<CompletionEvidence, EffectSinkError> {
             Err(EffectSinkError::Unavailable)
         }
+
+        fn admission(
+            &mut self,
+        ) -> Result<d2b_contracts::broker_wire::CutoverAdmissionResponse, EffectSinkError> {
+            Ok(d2b_contracts::broker_wire::CutoverAdmissionResponse {
+                candidate_current: true,
+                markers_valid: true,
+                ownership_valid: true,
+                predicates_hold: true,
+            })
+        }
+
+        fn verify(
+            &mut self,
+            expected: &RunnerVerificationInput,
+        ) -> Result<RunnerVerificationInput, EffectSinkError> {
+            Ok(RunnerVerificationInput {
+                zones: expected
+                    .zones
+                    .iter()
+                    .map(|zone| RunnerZoneVerification {
+                        zone_id: zone.zone_id.clone(),
+                        healthy: true,
+                    })
+                    .collect(),
+                sources_preserved: true,
+                identity_digests_match: true,
+                candidate_current: true,
+            })
+        }
+    }
+
+    struct RefusingAdmissionSink;
+
+    impl EffectSink for RefusingAdmissionSink {
+        fn execute(
+            &mut self,
+            _request: &EffectRequest,
+            _phase: CutoverPhase,
+            _handoff: Option<d2b_contracts::host_generation::ApplyHostGenerationHandoff>,
+            _payload: Option<CutoverEffectPayload>,
+        ) -> Result<CompletionEvidence, EffectSinkError> {
+            Err(EffectSinkError::NotAllowed)
+        }
+
+        fn admission(
+            &mut self,
+        ) -> Result<d2b_contracts::broker_wire::CutoverAdmissionResponse, EffectSinkError> {
+            Ok(d2b_contracts::broker_wire::CutoverAdmissionResponse {
+                candidate_current: false,
+                markers_valid: false,
+                ownership_valid: false,
+                predicates_hold: false,
+            })
+        }
     }
 
     struct ScriptedEffectSink {
@@ -1188,6 +1554,69 @@ mod tests {
                 effect,
                 audit: AuditEvidence::durable("scripted-effect-audit")
                     .map_err(|_| EffectSinkError::Protocol)?,
+            })
+        }
+
+        fn admission(
+            &mut self,
+        ) -> Result<d2b_contracts::broker_wire::CutoverAdmissionResponse, EffectSinkError> {
+            Ok(d2b_contracts::broker_wire::CutoverAdmissionResponse {
+                candidate_current: true,
+                markers_valid: true,
+                ownership_valid: true,
+                predicates_hold: true,
+            })
+        }
+
+        fn verify(
+            &mut self,
+            expected: &RunnerVerificationInput,
+        ) -> Result<RunnerVerificationInput, EffectSinkError> {
+            Ok(RunnerVerificationInput {
+                zones: expected
+                    .zones
+                    .iter()
+                    .map(|zone| RunnerZoneVerification {
+                        zone_id: zone.zone_id.clone(),
+                        healthy: true,
+                    })
+                    .collect(),
+                sources_preserved: true,
+                identity_digests_match: true,
+                candidate_current: true,
+            })
+        }
+    }
+
+    struct UnhealthyVerificationSink;
+
+    impl EffectSink for UnhealthyVerificationSink {
+        fn execute(
+            &mut self,
+            _request: &EffectRequest,
+            _phase: CutoverPhase,
+            _handoff: Option<d2b_contracts::host_generation::ApplyHostGenerationHandoff>,
+            _payload: Option<CutoverEffectPayload>,
+        ) -> Result<CompletionEvidence, EffectSinkError> {
+            Err(EffectSinkError::Protocol)
+        }
+
+        fn verify(
+            &mut self,
+            expected: &RunnerVerificationInput,
+        ) -> Result<RunnerVerificationInput, EffectSinkError> {
+            Ok(RunnerVerificationInput {
+                zones: expected
+                    .zones
+                    .iter()
+                    .map(|zone| RunnerZoneVerification {
+                        zone_id: zone.zone_id.clone(),
+                        healthy: false,
+                    })
+                    .collect(),
+                sources_preserved: false,
+                identity_digests_match: false,
+                candidate_current: false,
             })
         }
     }
@@ -1462,6 +1891,81 @@ mod tests {
     }
 
     #[test]
+    fn failed_host_drain_leaves_native_rollback_available() {
+        let (mut runtime, _handoff, _kinds) = cutover_runtime_for_apply("drain-failure");
+        runtime
+            .complete_read_only_prefix()
+            .expect("read-only prefix");
+        runtime.effect_sink = Box::new(UnavailableEffectSink);
+        let drain = EffectRequest::new(
+            d2b_cutover::EffectId::new("host-drain-failure").expect("effect id"),
+            StepId::new("phase-3-host-drain-failure").expect("step id"),
+            EffectKind::HostDrain,
+            ReplayClass::Repeatable,
+            Some(CutoverPhase::Disposition),
+        );
+        let response = runtime.dispatch_effect(drain, None, None);
+        assert!(!response.accepted);
+        assert_eq!(runtime.operation.phase(), CutoverPhase::Drain);
+        assert_eq!(
+            runtime.operation.state(),
+            OperationState::Applying(CutoverPhase::Drain)
+        );
+        assert!(runtime.operation.current_effect().is_none());
+        let response = runtime.handle(RunnerCommand::Rollback { handoff: None }, RunnerPeer::Owner);
+        assert!(response.accepted, "rollback: {:?}", response.error);
+        assert_eq!(runtime.operation.state(), OperationState::RolledBack);
+        let _ = std::fs::remove_dir_all(runtime.paths.root());
+    }
+
+    #[test]
+    fn stale_admission_refuses_before_host_drain() {
+        let (mut runtime, handoff, kinds) = cutover_runtime_for_apply("stale");
+        runtime.effect_sink = Box::new(RefusingAdmissionSink);
+        let response = runtime.handle(RunnerCommand::Apply { handoff }, RunnerPeer::Owner);
+        assert!(!response.accepted);
+        assert_eq!(
+            response.error,
+            Some(d2b_cutover::RunnerSocketError::InvalidTransition)
+        );
+        assert_eq!(runtime.operation.phase(), CutoverPhase::Preflight);
+        assert!(kinds.lock().expect("effect calls").is_empty());
+        let _ = std::fs::remove_dir_all(runtime.paths.root());
+    }
+
+    #[test]
+    fn existing_journal_is_adopted_after_restart() {
+        let (runtime, _handoff, _kinds) = cutover_runtime_for_apply("adopt");
+        let (_, adopted) = load_existing_operation(&runtime.paths, &runtime.bootstrap)
+            .expect("load existing operation")
+            .expect("journal should be adopted");
+        assert_eq!(adopted.phase(), CutoverPhase::Preflight);
+        assert_eq!(
+            adopted.state(),
+            OperationState::Applying(CutoverPhase::Preflight)
+        );
+        assert!(adopted.current_effect().is_none());
+        let _ = std::fs::remove_dir_all(runtime.paths.root());
+    }
+
+    #[test]
+    fn restart_binding_ignores_only_consent_consumption_state() {
+        let runtime = runtime("restart-consent-binding");
+        let issued =
+            d2b_cutover::Consent::issue(runtime.bootstrap.request.consent_binding(), 100, 200)
+                .expect("consent");
+        let mut consumed = issued.clone();
+        consumed
+            .consume(&runtime.bootstrap.request.consent_binding(), 150)
+            .expect("consume consent");
+        assert!(consent_restart_binding_matches(
+            &Some(issued),
+            &Some(consumed)
+        ));
+        let _ = std::fs::remove_dir_all(runtime.paths.root());
+    }
+
+    #[test]
     fn rollback_after_host_drain_restores_the_bound_generation_before_closing() {
         let (mut runtime, handoff, kinds) = cutover_runtime_for_apply("rollback");
         runtime
@@ -1676,6 +2180,75 @@ mod tests {
         let response = runtime.handle(RunnerCommand::Finalize { consent, plan }, RunnerPeer::Owner);
         assert!(response.accepted, "finalization: {:?}", response.error);
         assert_eq!(runtime.operation.state(), OperationState::Closed);
+        let _ = std::fs::remove_dir_all(runtime.paths.root());
+    }
+
+    #[test]
+    fn verification_ignores_caller_authored_success_and_restores_on_broker_failure() {
+        let (mut runtime, handoff, _kinds) = cutover_runtime_for_apply("ver-auth");
+        assert!(
+            runtime
+                .handle(RunnerCommand::Apply { handoff }, RunnerPeer::Owner)
+                .accepted
+        );
+        for (number, kind, advance_to) in [
+            (
+                "resource-store-verify-authority",
+                EffectKind::ResourceStoreCreate,
+                CutoverPhase::ProviderInstall,
+            ),
+            (
+                "provider-verify-authority",
+                EffectKind::ProviderInstall,
+                CutoverPhase::ZoneCutover,
+            ),
+            (
+                "zone-verify-authority",
+                EffectKind::ZoneActivation,
+                CutoverPhase::Activation,
+            ),
+            (
+                "guest-verify-authority",
+                EffectKind::GuestActivation,
+                CutoverPhase::Verification,
+            ),
+        ] {
+            assert!(
+                runtime
+                    .handle(
+                        RunnerCommand::Effect {
+                            effect_id: d2b_cutover::EffectId::new(format!("effect-{number}"))
+                                .expect("effect id"),
+                            step_id: StepId::new(format!("step-{number}")).expect("step id"),
+                            kind,
+                            replay_class: ReplayClass::Repeatable,
+                            advance_to: Some(advance_to),
+                            identity: None,
+                            handoff: None,
+                            payload: None,
+                        },
+                        RunnerPeer::Owner,
+                    )
+                    .accepted
+            );
+        }
+        runtime.effect_sink = Box::new(UnhealthyVerificationSink);
+        let response = runtime.handle(
+            RunnerCommand::Verify {
+                observations: RunnerVerificationInput {
+                    zones: vec![RunnerZoneVerification {
+                        zone_id: ZoneId::new("zone-apply").expect("zone"),
+                        healthy: true,
+                    }],
+                    sources_preserved: true,
+                    identity_digests_match: true,
+                    candidate_current: true,
+                },
+            },
+            RunnerPeer::Owner,
+        );
+        assert!(!response.accepted);
+        assert_eq!(runtime.operation.state(), OperationState::RestoreRequired);
         let _ = std::fs::remove_dir_all(runtime.paths.root());
     }
 

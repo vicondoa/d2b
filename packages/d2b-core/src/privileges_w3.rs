@@ -3,8 +3,9 @@
 //! Wire-stable contract authored by the W3 integrator API/contract prep
 //! commit. The existing W1/W2 [`super::privileges::OperationAuthzRow`]
 //! table covers every W2 broker variant; this module adds rows for
-//! genuinely new W3 broker variants (currently `UsbipBindFirewallRule`)
-//! plus the [`W3BrokerOperation`] enum and the [`W3OperationFlags`]
+//! genuinely new W3 broker variants (`UsbipBindFirewallRule`,
+//! `LaunchCutoverRunner`, `CutoverAudit`, and `CutoverEffect`) plus the
+//! [`W3BrokerOperation`] enum and the [`W3OperationFlags`]
 //! helper that audits each row's `audit`/`destructive`/`secret_access`
 //! bits per plan.md "W3 broker variant additions".
 //!
@@ -59,6 +60,9 @@ pub enum W3BrokerOperation {
     ModprobeIfAllowed,
     UsbipBindFirewallRule,
     MigrateLegacySwtpmState,
+    LaunchCutoverRunner,
+    CutoverAudit,
+    CutoverEffect,
     /// Open the FIDO/CTAP hidraw node for the broker-configured device
     /// selector. Typed stub until the live host-broker handler is implemented.
     SecurityKeyOpenDevice,
@@ -99,6 +103,9 @@ impl W3BrokerOperation {
             Self::ModprobeIfAllowed => "ModprobeIfAllowed",
             Self::UsbipBindFirewallRule => "UsbipBindFirewallRule",
             Self::MigrateLegacySwtpmState => "MigrateLegacySwtpmState",
+            Self::LaunchCutoverRunner => "LaunchCutoverRunner",
+            Self::CutoverAudit => "CutoverAudit",
+            Self::CutoverEffect => "CutoverEffect",
             Self::SecurityKeyOpenDevice => "SecurityKeyOpenDevice",
             Self::SecurityKeyApplyUdevRules => "SecurityKeyApplyUdevRules",
         }
@@ -135,6 +142,9 @@ impl W3BrokerOperation {
             Self::ModprobeIfAllowed,
             Self::UsbipBindFirewallRule,
             Self::MigrateLegacySwtpmState,
+            Self::LaunchCutoverRunner,
+            Self::CutoverAudit,
+            Self::CutoverEffect,
             Self::SecurityKeyOpenDevice,
             Self::SecurityKeyApplyUdevRules,
         ]
@@ -208,6 +218,16 @@ impl W3BrokerOperation {
                 destructive: true,
                 secret_access: false,
             },
+            Self::LaunchCutoverRunner | Self::CutoverEffect => W3OperationFlags {
+                audit: true,
+                destructive: true,
+                secret_access: false,
+            },
+            Self::CutoverAudit => W3OperationFlags {
+                audit: true,
+                destructive: false,
+                secret_access: false,
+            },
             // SecurityKeyOpenDevice: opens a single FIDO hidraw fd; read-only
             // from the broker's perspective (no state mutation, no secret data).
             Self::SecurityKeyOpenDevice => W3OperationFlags {
@@ -263,6 +283,9 @@ mod tests {
         assert!(W3BrokerOperation::DeleteBridge.flags().destructive);
         assert!(W3BrokerOperation::DeletePersistentTap.flags().destructive);
         assert!(!W3BrokerOperation::UsbipBindFirewallRule.flags().destructive);
+        assert!(W3BrokerOperation::LaunchCutoverRunner.flags().destructive);
+        assert!(!W3BrokerOperation::CutoverAudit.flags().destructive);
+        assert!(W3BrokerOperation::CutoverEffect.flags().destructive);
     }
 
     #[test]

@@ -4757,6 +4757,36 @@
       },
       "additionalProperties": false
     },
+    "CutoverAdmissionRequest": {
+      "description": "Typed request for the broker-owned apply admission observation.",
+      "type": "object",
+      "additionalProperties": false
+    },
+    "CutoverAdmissionResponse": {
+      "description": "Broker-owned apply admission observations. These fields are never caller-authored; the broker derives them from its trusted bundle and live host ownership state.",
+      "type": "object",
+      "required": [
+        "candidateCurrent",
+        "markersValid",
+        "ownershipValid",
+        "predicatesHold"
+      ],
+      "properties": {
+        "candidateCurrent": {
+          "type": "boolean"
+        },
+        "markersValid": {
+          "type": "boolean"
+        },
+        "ownershipValid": {
+          "type": "boolean"
+        },
+        "predicatesHold": {
+          "type": "boolean"
+        }
+      },
+      "additionalProperties": false
+    },
     "CutoverAuditRequest": {
       "description": "Request to publish one durable cutover audit transition.",
       "type": "object",
@@ -4919,7 +4949,8 @@
         "preserve-source",
         "quarantine-destination",
         "cutover-broker",
-        "closure-activation"
+        "closure-activation",
+        "apply-admission"
       ]
     },
     "CutoverEffectOutcome": {
@@ -4945,6 +4976,24 @@
               "enum": [
                 "None"
               ]
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "kind",
+            "payload"
+          ],
+          "properties": {
+            "kind": {
+              "type": "string",
+              "enum": [
+                "ApplyAdmission"
+              ]
+            },
+            "payload": {
+              "$ref": "#/definitions/CutoverAdmissionRequest"
             }
           }
         },
@@ -5017,6 +5066,24 @@
             },
             "payload": {
               "$ref": "#/definitions/StoreVerifyRequest2"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "kind",
+            "payload"
+          ],
+          "properties": {
+            "kind": {
+              "type": "string",
+              "enum": [
+                "Verification"
+              ]
+            },
+            "payload": {
+              "$ref": "#/definitions/CutoverVerificationRequest"
             }
           }
         },
@@ -5241,6 +5308,16 @@
         "outcome"
       ],
       "properties": {
+        "admission": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/CutoverAdmissionResponse"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
         "auditRecordId": {
           "type": "string"
         },
@@ -5252,6 +5329,16 @@
         },
         "outcome": {
           "$ref": "#/definitions/CutoverEffectOutcome"
+        },
+        "verification": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/CutoverVerificationResponse"
+            },
+            {
+              "type": "null"
+            }
+          ]
         }
       },
       "additionalProperties": false
@@ -5264,6 +5351,67 @@
         "reopen-by-journaled-identity",
         "quarantine-only"
       ]
+    },
+    "CutoverVerificationRequest": {
+      "description": "Broker-owned phase-9 verification admission. The supplied Zone identities are expected evidence bindings only; the broker returns the live observations from its trusted bundle and host checks.",
+      "type": "object",
+      "required": [
+        "expectedZoneIds"
+      ],
+      "properties": {
+        "expectedZoneIds": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      },
+      "additionalProperties": false
+    },
+    "CutoverVerificationResponse": {
+      "description": "Broker-owned phase-9 verification observations.",
+      "type": "object",
+      "required": [
+        "candidateCurrent",
+        "identityDigestsMatch",
+        "sourcesPreserved",
+        "zones"
+      ],
+      "properties": {
+        "candidateCurrent": {
+          "type": "boolean"
+        },
+        "identityDigestsMatch": {
+          "type": "boolean"
+        },
+        "sourcesPreserved": {
+          "type": "boolean"
+        },
+        "zones": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/CutoverZoneVerification"
+          }
+        }
+      },
+      "additionalProperties": false
+    },
+    "CutoverZoneVerification": {
+      "description": "One broker-owned Zone verification observation.",
+      "type": "object",
+      "required": [
+        "healthy",
+        "zoneId"
+      ],
+      "properties": {
+        "healthy": {
+          "type": "boolean"
+        },
+        "zoneId": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false
     },
     "DelegateCgroupV2Request": {
       "description": "The slice path is pinned by the bundle (`/sys/fs/cgroup/d2b.slice`). It is **not** taken from caller input - the broker reads it from its own bundle copy via `scope_id`.",

@@ -389,6 +389,18 @@ impl EffectRequest {
     pub const fn advance_to(&self) -> Option<CutoverPhase> {
         self.advance_to
     }
+
+    /// Return whether another request is the same durable replay attempt.
+    pub fn matches_replay(&self, other: &Self) -> bool {
+        self.effect_id == other.effect_id
+            && self.step_id == other.step_id
+            && self.kind == other.kind
+            && self.replay_class == other.replay_class
+            && self.identity_bearing == other.identity_bearing
+            && self.journaled_identity == other.journaled_identity
+            && self.advance_to == other.advance_to
+            && (other.destination.is_none() || self.destination == other.destination)
+    }
 }
 
 /// The resumable pure engine.
@@ -478,14 +490,25 @@ impl Operation {
             match record.kind() {
                 crate::journal::JournalRecordKind::ConsentConsumed => {
                     operation.phase = record.phase();
-                    operation.state = OperationState::Applying(operation.phase);
+                    operation.state = if record.phase() == CutoverPhase::Finalization {
+                        OperationState::Finalizing
+                    } else {
+                        OperationState::Applying(operation.phase)
+                    };
+                    operation.lock_held = true;
                 }
                 crate::journal::JournalRecordKind::PhaseCompleted => {
-                    operation.phase = record
-                        .phase()
-                        .next()
-                        .ok_or(OperationError::InvalidTransition)?;
-                    operation.state = OperationState::Applying(operation.phase);
+                    if record.phase() == CutoverPhase::Verification {
+                        operation.phase = CutoverPhase::Verification;
+                        operation.state = OperationState::CutoverSucceeded;
+                    } else {
+                        operation.phase = record
+                            .phase()
+                            .next()
+                            .ok_or(OperationError::InvalidTransition)?;
+                        operation.state = OperationState::Applying(operation.phase);
+                    }
+                    operation.lock_held = true;
                 }
                 crate::journal::JournalRecordKind::Started => {
                     let (Some(effect_id), Some(step_id), Some(effect_kind), Some(replay_class)) = (
@@ -505,10 +528,19 @@ impl Operation {
                         record.next_phase(),
                     );
                     if let Some(identity) = record.identity() {
-                        effect = effect.with_identity(Some(identity.clone()), None);
+                        effect = effect
+                            .with_identity(Some(identity.clone()), record.destination().cloned());
+                    }
+                    if let Some(destination) = record.destination() {
+                        operation.staged_destinations.insert(destination.clone());
                     }
                     operation.current_effect = Some(effect);
-                    operation.state = OperationState::Applying(operation.phase);
+                    operation.state = if operation.phase == CutoverPhase::Finalization {
+                        OperationState::Finalizing
+                    } else {
+                        OperationState::Applying(operation.phase)
+                    };
+                    operation.lock_held = true;
                 }
                 crate::journal::JournalRecordKind::Completed => {
                     let Some(record_effect_id) = record.effect_id() else {
@@ -520,6 +552,9 @@ impl Operation {
                         .is_some_and(|effect| effect.effect_id() == record_effect_id)
                     {
                         operation.current_effect = None;
+                    }
+                    if let Some(destination) = record.destination() {
+                        operation.staged_destinations.insert(destination.clone());
                     }
                     operation.phase = record.next_phase().unwrap_or(record.phase());
                     if let HoldState::Pending {
@@ -535,6 +570,38 @@ impl Operation {
                     } else {
                         operation.state = OperationState::Applying(operation.phase);
                     }
+                    operation.lock_held = true;
+                }
+                crate::journal::JournalRecordKind::RetryableFailure => {
+                    let Some(record_effect_id) = record.effect_id() else {
+                        return Err(OperationError::Journal(JournalError::Malformed));
+                    };
+                    if operation
+                        .current_effect
+                        .as_ref()
+                        .is_some_and(|effect| effect.effect_id() == record_effect_id)
+                    {
+                        operation.current_effect = None;
+                    }
+                    if let Some(destination) = record.destination() {
+                        operation.staged_destinations.insert(destination.clone());
+                    }
+                    operation.phase = record.phase();
+                    operation.state = if let HoldState::Pending {
+                        requested_by,
+                        reason,
+                    } =
+                        std::mem::replace(&mut operation.hold, HoldState::Clear)
+                    {
+                        operation.hold = HoldState::Active {
+                            requested_by,
+                            reason,
+                        };
+                        OperationState::Held
+                    } else {
+                        OperationState::Applying(operation.phase)
+                    };
+                    operation.lock_held = true;
                 }
                 crate::journal::JournalRecordKind::HoldRequested => {
                     let reason =
@@ -545,23 +612,27 @@ impl Operation {
                             requested_by: operator,
                             reason,
                         };
+                        operation.state = OperationState::Applying(operation.phase);
                     } else {
                         operation.hold = HoldState::Active {
                             requested_by: operator,
                             reason,
                         };
+                        operation.state = OperationState::Held;
                     }
-                    operation.state = OperationState::Held;
+                    operation.lock_held = true;
                 }
                 crate::journal::JournalRecordKind::HoldCleared => {
                     operation.hold = HoldState::Clear;
                     operation.phase = record.phase();
                     operation.state = OperationState::Applying(operation.phase);
+                    operation.lock_held = true;
                 }
                 crate::journal::JournalRecordKind::Terminal => {
                     let Some(outcome) = record.terminal_outcome() else {
                         return Err(OperationError::Journal(JournalError::Malformed));
                     };
+                    operation.current_effect = None;
                     operation.terminal = Some(outcome);
                     operation.state = match outcome {
                         TerminalOutcomeKind::RolledBack => OperationState::RolledBack,
@@ -569,6 +640,7 @@ impl Operation {
                         TerminalOutcomeKind::Closed => OperationState::Closed,
                         TerminalOutcomeKind::Failed => OperationState::Failed,
                     };
+                    operation.lock_held = true;
                 }
             }
         }
@@ -736,7 +808,7 @@ impl Operation {
         if effect.identity_bearing() && effect.journaled_identity().is_none() {
             return Err(OperationError::IdentityMismatch);
         }
-        self.journal.append_started(
+        self.journal.append_started_with_destination(
             self.phase,
             effect.step_id.clone(),
             effect.effect_id.clone(),
@@ -744,8 +816,42 @@ impl Operation {
             effect.advance_to,
             effect.replay_class,
             effect.journaled_identity.clone(),
+            effect.destination.clone(),
         )?;
         self.current_effect = Some(effect);
+        Ok(())
+    }
+
+    /// Mark the current effect as retryable without retracting its started evidence.
+    pub fn retry_effect(&mut self, failure_code: FailureCode) -> Result<(), OperationError> {
+        let Some(effect) = self.current_effect.clone() else {
+            return Err(OperationError::NoCurrentEffect);
+        };
+        self.journal.append_retryable_failure(
+            self.phase,
+            effect.step_id.clone(),
+            effect.effect_id.clone(),
+            effect.kind,
+            effect.advance_to,
+            effect.replay_class,
+            effect.journaled_identity.clone(),
+            effect.destination.clone(),
+            failure_code,
+        )?;
+        self.current_effect = None;
+        self.state = if let HoldState::Pending {
+            requested_by,
+            reason,
+        } = std::mem::replace(&mut self.hold, HoldState::Clear)
+        {
+            self.hold = HoldState::Active {
+                requested_by,
+                reason,
+            };
+            OperationState::Held
+        } else {
+            OperationState::Applying(self.phase)
+        };
         Ok(())
     }
 
@@ -778,7 +884,7 @@ impl Operation {
                 return Err(OperationError::IdentityMismatch);
             }
         }
-        self.journal.append_completed(
+        self.journal.append_completed_with_destination(
             self.phase,
             effect.step_id.clone(),
             effect.effect_id.clone(),
@@ -786,6 +892,7 @@ impl Operation {
             effect.advance_to,
             effect.replay_class,
             evidence.effect.identity().cloned(),
+            effect.destination.clone(),
             audit_id,
         )?;
         if let Some(destination) = effect.destination() {
@@ -921,8 +1028,16 @@ impl Operation {
     ) -> Result<(), OperationError> {
         require_cutover_finalization(self.request.operation_kind(), CutoverPhase::Finalization)
             .map_err(OperationError::Finalization)?;
-        if self.state != OperationState::CutoverSucceeded {
+        if self.state != OperationState::CutoverSucceeded
+            && self.state != OperationState::Finalizing
+        {
             return Err(OperationError::FinalizationConsentRequired);
+        }
+        if self.state == OperationState::Finalizing {
+            consent
+                .consume(&self.request.finalization_binding(), now_ms)
+                .map_err(OperationError::Consent)?;
+            return Ok(());
         }
         consent
             .consume(&self.request.finalization_binding(), now_ms)
@@ -975,6 +1090,7 @@ impl Operation {
                 self.phase,
             )));
         }
+        self.current_effect = None;
         self.write_terminal(TerminalOutcomeKind::RestoreRequired, audit)
     }
 

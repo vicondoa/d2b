@@ -31,6 +31,8 @@ pub enum JournalRecordKind {
     HoldRequested,
     /// A hold was cleared or resumed.
     HoldCleared,
+    /// An effect failed before the native rollback boundary and may be retried.
+    RetryableFailure,
     /// A terminal result was written once.
     Terminal,
 }
@@ -91,7 +93,11 @@ pub struct JournalRecord {
     next_phase: Option<CutoverPhase>,
     replay_class: Option<ReplayClass>,
     identity: Option<ArtifactId>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    destination: Option<ArtifactId>,
     audit_record_id: Option<AuditRecordId>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    failure_code: Option<FailureCode>,
     terminal_outcome: Option<TerminalOutcomeKind>,
     record_digest: Digest,
 }
@@ -142,6 +148,16 @@ impl JournalRecord {
         self.identity.as_ref()
     }
 
+    /// Borrow the staged destination identity, if present.
+    pub fn destination(&self) -> Option<&ArtifactId> {
+        self.destination.as_ref()
+    }
+
+    /// Return the retryable failure class, if this is a retry record.
+    pub const fn failure_code(&self) -> Option<FailureCode> {
+        self.failure_code
+    }
+
     /// Borrow the durable audit identity, if present.
     pub fn audit_record_id(&self) -> Option<&AuditRecordId> {
         self.audit_record_id.as_ref()
@@ -172,7 +188,9 @@ impl JournalRecord {
             next_phase: self.next_phase,
             replay_class: self.replay_class,
             identity: self.identity.clone(),
+            destination: self.destination.clone(),
             audit_record_id: self.audit_record_id.clone(),
+            failure_code: self.failure_code,
             terminal_outcome: self.terminal_outcome,
         }
     }
@@ -194,7 +212,11 @@ struct JournalRecordUnsigned {
     next_phase: Option<CutoverPhase>,
     replay_class: Option<ReplayClass>,
     identity: Option<ArtifactId>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    destination: Option<ArtifactId>,
     audit_record_id: Option<AuditRecordId>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    failure_code: Option<FailureCode>,
     terminal_outcome: Option<TerminalOutcomeKind>,
 }
 
@@ -275,7 +297,9 @@ impl Journal {
             next_phase: None,
             replay_class: None,
             identity: None,
+            destination: None,
             audit_record_id: None,
+            failure_code: None,
             terminal_outcome: None,
         })
     }
@@ -292,6 +316,31 @@ impl Journal {
         replay_class: ReplayClass,
         identity: Option<ArtifactId>,
     ) -> Result<(), JournalError> {
+        self.append_started_with_destination(
+            phase,
+            step_id,
+            effect_id,
+            effect_kind,
+            next_phase,
+            replay_class,
+            identity,
+            None,
+        )
+    }
+
+    /// Append a started record with the staged destination needed for rollback.
+    #[allow(clippy::too_many_arguments)]
+    pub fn append_started_with_destination(
+        &mut self,
+        phase: CutoverPhase,
+        step_id: StepId,
+        effect_id: EffectId,
+        effect_kind: EffectKind,
+        next_phase: Option<CutoverPhase>,
+        replay_class: ReplayClass,
+        identity: Option<ArtifactId>,
+        destination: Option<ArtifactId>,
+    ) -> Result<(), JournalError> {
         self.append(JournalRecordInput {
             kind: JournalRecordKind::Started,
             phase,
@@ -301,7 +350,9 @@ impl Journal {
             next_phase,
             replay_class: Some(replay_class),
             identity,
+            destination,
             audit_record_id: None,
+            failure_code: None,
             terminal_outcome: None,
         })
     }
@@ -319,6 +370,33 @@ impl Journal {
         identity: Option<ArtifactId>,
         audit_record_id: AuditRecordId,
     ) -> Result<(), JournalError> {
+        self.append_completed_with_destination(
+            phase,
+            step_id,
+            effect_id,
+            effect_kind,
+            next_phase,
+            replay_class,
+            identity,
+            None,
+            audit_record_id,
+        )
+    }
+
+    /// Append a completed record with the staged destination needed for rollback.
+    #[allow(clippy::too_many_arguments)]
+    pub fn append_completed_with_destination(
+        &mut self,
+        phase: CutoverPhase,
+        step_id: StepId,
+        effect_id: EffectId,
+        effect_kind: EffectKind,
+        next_phase: Option<CutoverPhase>,
+        replay_class: ReplayClass,
+        identity: Option<ArtifactId>,
+        destination: Option<ArtifactId>,
+        audit_record_id: AuditRecordId,
+    ) -> Result<(), JournalError> {
         self.append(JournalRecordInput {
             kind: JournalRecordKind::Completed,
             phase,
@@ -328,7 +406,39 @@ impl Journal {
             next_phase,
             replay_class: Some(replay_class),
             identity,
+            destination,
             audit_record_id: Some(audit_record_id),
+            failure_code: None,
+            terminal_outcome: None,
+        })
+    }
+
+    /// Append a non-advancing failure that closes one started attempt.
+    #[allow(clippy::too_many_arguments)]
+    pub fn append_retryable_failure(
+        &mut self,
+        phase: CutoverPhase,
+        step_id: StepId,
+        effect_id: EffectId,
+        effect_kind: EffectKind,
+        next_phase: Option<CutoverPhase>,
+        replay_class: ReplayClass,
+        identity: Option<ArtifactId>,
+        destination: Option<ArtifactId>,
+        failure_code: FailureCode,
+    ) -> Result<(), JournalError> {
+        self.append(JournalRecordInput {
+            kind: JournalRecordKind::RetryableFailure,
+            phase,
+            step_id: Some(step_id),
+            effect_id: Some(effect_id),
+            effect_kind: Some(effect_kind),
+            next_phase,
+            replay_class: Some(replay_class),
+            identity,
+            destination,
+            audit_record_id: None,
+            failure_code: Some(failure_code),
             terminal_outcome: None,
         })
     }
@@ -348,7 +458,9 @@ impl Journal {
             next_phase: None,
             replay_class: None,
             identity: None,
+            destination: None,
             audit_record_id: Some(audit_record_id),
+            failure_code: None,
             terminal_outcome: None,
         })
     }
@@ -368,7 +480,9 @@ impl Journal {
             next_phase: None,
             replay_class: None,
             identity: None,
+            destination: None,
             audit_record_id: Some(audit_record_id),
+            failure_code: None,
             terminal_outcome: None,
         })
     }
@@ -388,7 +502,9 @@ impl Journal {
             next_phase: None,
             replay_class: None,
             identity: None,
+            destination: None,
             audit_record_id: Some(audit_record_id),
+            failure_code: None,
             terminal_outcome: None,
         })
     }
@@ -409,7 +525,9 @@ impl Journal {
             next_phase: None,
             replay_class: None,
             identity: None,
+            destination: None,
             audit_record_id: Some(audit_record_id),
+            failure_code: None,
             terminal_outcome: Some(outcome),
         })
     }
@@ -420,8 +538,10 @@ impl Journal {
             record.kind == JournalRecordKind::Started
                 && record.effect_id.as_ref().is_some_and(|effect_id| {
                     !self.records.iter().any(|completed| {
-                        completed.kind == JournalRecordKind::Completed
-                            && completed.effect_id.as_ref() == Some(effect_id)
+                        matches!(
+                            completed.kind,
+                            JournalRecordKind::Completed | JournalRecordKind::RetryableFailure
+                        ) && completed.effect_id.as_ref() == Some(effect_id)
                             && completed.sequence > record.sequence
                     })
                 })
@@ -440,6 +560,11 @@ impl Journal {
             return Err(JournalError::TerminalAlreadyWritten);
         }
         if input.kind == JournalRecordKind::Completed
+            && !self.has_open_effect(input.effect_id.as_ref())
+        {
+            return Err(JournalError::Reordered);
+        }
+        if input.kind == JournalRecordKind::RetryableFailure
             && !self.has_open_effect(input.effect_id.as_ref())
         {
             return Err(JournalError::Reordered);
@@ -471,7 +596,9 @@ impl Journal {
             next_phase: input.next_phase,
             replay_class: input.replay_class,
             identity: input.identity,
+            destination: input.destination,
             audit_record_id: input.audit_record_id,
+            failure_code: input.failure_code,
             terminal_outcome: input.terminal_outcome,
         };
         let bytes = canonical_json_bytes(&unsigned).map_err(JournalError::CanonicalJson)?;
@@ -491,7 +618,9 @@ impl Journal {
             next_phase: unsigned.next_phase,
             replay_class: unsigned.replay_class,
             identity: unsigned.identity,
+            destination: unsigned.destination,
             audit_record_id: unsigned.audit_record_id,
+            failure_code: unsigned.failure_code,
             terminal_outcome: unsigned.terminal_outcome,
             record_digest,
         });
@@ -502,15 +631,25 @@ impl Journal {
         let Some(effect_id) = effect_id else {
             return false;
         };
-        let started = self.records.iter().any(|record| {
-            record.kind == JournalRecordKind::Started
-                && record.effect_id.as_ref() == Some(effect_id)
-        });
-        let completed = self.records.iter().any(|record| {
-            record.kind == JournalRecordKind::Completed
-                && record.effect_id.as_ref() == Some(effect_id)
-        });
-        started && !completed
+        let Some(started_sequence) = self
+            .records
+            .iter()
+            .rev()
+            .find(|record| {
+                record.kind == JournalRecordKind::Started
+                    && record.effect_id.as_ref() == Some(effect_id)
+            })
+            .map(|record| record.sequence)
+        else {
+            return false;
+        };
+        !self.records.iter().any(|record| {
+            matches!(
+                record.kind,
+                JournalRecordKind::Completed | JournalRecordKind::RetryableFailure
+            ) && record.effect_id.as_ref() == Some(effect_id)
+                && record.sequence > started_sequence
+        })
     }
 
     fn has_completed_effect(&self, effect_id: Option<&EffectId>) -> bool {
@@ -551,6 +690,11 @@ impl Journal {
         {
             return Err(JournalError::Reordered);
         }
+        if record.kind == JournalRecordKind::RetryableFailure
+            && !self.has_open_effect(record.effect_id.as_ref())
+        {
+            return Err(JournalError::Reordered);
+        }
         if record.kind == JournalRecordKind::Started
             && self.has_completed_effect(record.effect_id.as_ref())
         {
@@ -576,7 +720,9 @@ struct JournalRecordInput {
     next_phase: Option<CutoverPhase>,
     replay_class: Option<ReplayClass>,
     identity: Option<ArtifactId>,
+    destination: Option<ArtifactId>,
     audit_record_id: Option<AuditRecordId>,
+    failure_code: Option<FailureCode>,
     terminal_outcome: Option<TerminalOutcomeKind>,
 }
 

@@ -1,8 +1,9 @@
 use d2b_cutover::{
-    BootstrapCapability, CandidateId, CapabilityLedger, Consent, CutoverPreview, Digest,
-    EffectAllowlist, OperationId, OperationKind, OperationRequest, OperatorId, ResetInventory,
-    ResetScope, RunnerBootstrap, RunnerCapabilityError, RunnerCommand, RunnerLockError,
-    RunnerPaths, RunnerSocketError, acquire_operation_lock, load_journal, persist_journal,
+    BootstrapCapability, CandidateId, CapabilityLedger, Consent, CutoverPhase, CutoverPreview,
+    Digest, EffectAllowlist, Journal, JournalBinding, MAX_RUNNER_FRAME_BYTES, OperationId,
+    OperationKind, OperationRequest, OperationState, OperatorId, ResetInventory, ResetScope,
+    RunnerBootstrap, RunnerCapabilityError, RunnerCommand, RunnerLockError, RunnerPaths,
+    RunnerSocketError, acquire_operation_lock, load_journal, persist_journal, send_command,
 };
 use std::collections::BTreeSet;
 use std::io::Write;
@@ -10,7 +11,9 @@ use std::os::unix::fs::{FileTypeExt, MetadataExt, PermissionsExt};
 use std::os::unix::net::UnixStream;
 use std::os::unix::process::CommandExt;
 use std::path::Path;
-use std::process::Command;
+use std::process::{Command, Stdio};
+use std::thread;
+use std::time::Duration;
 
 fn digest(seed: &str) -> Digest {
     Digest::derive("d2b:test:cutover-runner", seed.as_bytes())
@@ -294,6 +297,186 @@ fn journal_is_root_only_and_operation_lock_is_ofd_owned() {
     assert_eq!(loaded, bootstrap);
     assert!(loaded_records.is_empty());
     drop(lock);
+    let _ = std::fs::remove_dir_all(root);
+}
+
+#[test]
+fn journal_persist_and_load_share_the_frame_bound() {
+    ensure_scratch_root();
+    let operation_id = OperationId::new("op-journal-size").expect("operation id");
+    let candidate_id = CandidateId::new("candidate-journal-size").expect("candidate id");
+    let revision_plan_id = d2b_cutover::RevisionPlanId::new("plan-journal-size").expect("plan");
+    let operator_id = OperatorId::new("operator-journal-size").expect("operator");
+    let inventory = ResetInventory::new(ResetScope::Zone, "zone-journal-size").expect("inventory");
+    let preview = CutoverPreview::new_reset(
+        operation_id.clone(),
+        OperationKind::ScopedReset(ResetScope::Zone),
+        candidate_id.clone(),
+        revision_plan_id.clone(),
+        inventory.clone(),
+    )
+    .expect("preview");
+    let bootstrap = RunnerBootstrap {
+        capability: BootstrapCapability::new(
+            operation_id.clone(),
+            candidate_id.clone(),
+            operator_id.clone(),
+            OperationKind::ScopedReset(ResetScope::Zone),
+            digest("journal-size"),
+            100,
+            200,
+        )
+        .expect("capability"),
+        request: OperationRequest::new_reset(
+            operation_id.clone(),
+            ResetScope::Zone,
+            candidate_id,
+            revision_plan_id,
+            operator_id,
+            preview.digest().expect("preview digest"),
+            inventory,
+        )
+        .expect("request"),
+        preview,
+        consent: None,
+        destructive_consent: None,
+        recovery: None,
+        host_digest: None,
+    };
+    let root =
+        std::path::PathBuf::from(".scratch").join(format!("journal-size-{}", std::process::id()));
+    let paths = RunnerPaths::new(&root, &operation_id);
+    let oversized_record = format!("{{\"blob\":\"{}\"}}\n", "x".repeat(MAX_RUNNER_FRAME_BYTES));
+    let persist_error = persist_journal(&paths.journal, &bootstrap, oversized_record.as_bytes())
+        .expect_err("oversized journal must refuse before publication");
+    assert_eq!(persist_error.kind(), std::io::ErrorKind::InvalidData);
+    assert!(!paths.journal.exists());
+
+    std::fs::create_dir_all(paths.root()).expect("journal root");
+    std::fs::write(&paths.journal, vec![b'x'; MAX_RUNNER_FRAME_BYTES + 1]).expect("oversized file");
+    std::fs::set_permissions(&paths.journal, std::fs::Permissions::from_mode(0o600))
+        .expect("journal mode");
+    let load_error = load_journal(&paths.journal).expect_err("oversized journal must refuse");
+    assert_eq!(load_error.kind(), std::io::ErrorKind::InvalidData);
+    let _ = std::fs::remove_dir_all(root);
+}
+
+#[test]
+fn runner_binary_adopts_an_existing_journal_after_restart() {
+    if nix::unistd::geteuid().as_raw() != 0 {
+        println!("SKIP: binary runner adoption requires root");
+        return;
+    }
+    let Some(runner_path) = option_env!("CARGO_BIN_EXE_d2b-cutover-runner") else {
+        println!("SKIP: Cargo runner binary path is unavailable");
+        return;
+    };
+    let operation_id = OperationId::new("op-binary-adopt").expect("operation");
+    let candidate_id = CandidateId::new("candidate-binary-adopt").expect("candidate");
+    let revision_plan_id =
+        d2b_cutover::RevisionPlanId::new("plan-binary-adopt").expect("revision plan");
+    let operator_id = OperatorId::new("operator-binary-adopt").expect("operator");
+    let inventory = ResetInventory::new(ResetScope::Zone, "zone-binary-adopt").expect("inventory");
+    let preview = CutoverPreview::new_reset(
+        operation_id.clone(),
+        OperationKind::ScopedReset(ResetScope::Zone),
+        candidate_id.clone(),
+        revision_plan_id.clone(),
+        inventory.clone(),
+    )
+    .expect("preview");
+    let bootstrap = RunnerBootstrap {
+        capability: BootstrapCapability::new_with_identity(
+            operation_id.clone(),
+            candidate_id.clone(),
+            operator_id.clone(),
+            OperationKind::ScopedReset(ResetScope::Zone),
+            digest("binary-adopt"),
+            100,
+            200,
+            0,
+            BTreeSet::new(),
+        )
+        .expect("capability"),
+        request: OperationRequest::new_reset(
+            operation_id.clone(),
+            ResetScope::Zone,
+            candidate_id,
+            revision_plan_id.clone(),
+            operator_id,
+            preview.digest().expect("preview digest"),
+            inventory,
+        )
+        .expect("request"),
+        preview,
+        consent: None,
+        destructive_consent: None,
+        recovery: None,
+        host_digest: None,
+    };
+    let root = std::path::PathBuf::from(".scratch")
+        .join(format!("runner-binary-adopt-{}", std::process::id()));
+    let state_root = root.join("state");
+    let socket_root = root.join("socket");
+    let paths = RunnerPaths::new_with_socket_root(state_root.clone(), socket_root, &operation_id);
+    let mut journal = Journal::new(JournalBinding::new(
+        operation_id.clone(),
+        revision_plan_id,
+        bootstrap.request.request_digest().clone(),
+    ));
+    journal
+        .append_consent(CutoverPhase::Preflight)
+        .expect("consumed apply record");
+    persist_journal(
+        &paths.journal,
+        &bootstrap,
+        &journal.to_bytes().expect("journal bytes"),
+    )
+    .expect("persist existing journal");
+
+    let bootstrap_bytes = bootstrap.canonical_bytes().expect("bootstrap bytes");
+    let bootstrap_path = root.join("bootstrap.json");
+    std::fs::create_dir_all(&root).expect("bootstrap root");
+    std::fs::write(&bootstrap_path, bootstrap_bytes).expect("write bootstrap");
+    std::fs::set_permissions(&bootstrap_path, std::fs::Permissions::from_mode(0o600))
+        .expect("bootstrap mode");
+    let shell_path = ["/bin/sh", "/run/current-system/sw/bin/sh"]
+        .into_iter()
+        .find(|path| Path::new(path).is_file())
+        .expect("shell");
+    let mut child = Command::new(shell_path)
+        .args(["-c", "exec 3< \"$1\"; exec \"$2\"", "runner-adopt"])
+        .arg(&bootstrap_path)
+        .arg(runner_path)
+        .env("D2B_CUTOVER_BOOTSTRAP_FD", "3")
+        .env("D2B_CUTOVER_STATE_DIR", &state_root)
+        .env("D2B_CUTOVER_SOCKET_DIR", root.join("socket"))
+        .env("D2B_BROKER_SOCKET_PATH", root.join("broker.sock"))
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .expect("spawn runner");
+    let started = (0..200).any(|_| {
+        if let Some(status) = child.try_wait().expect("poll runner") {
+            panic!("runner exited before binding socket: {status}");
+        }
+        if paths.socket.exists() {
+            true
+        } else {
+            thread::sleep(Duration::from_millis(10));
+            false
+        }
+    });
+    assert!(started, "runner socket was not created");
+    let status = send_command(&paths.socket, &RunnerCommand::Status).expect("runner status");
+    assert!(status.accepted);
+    assert_eq!(
+        status.status.expect("status payload").state,
+        OperationState::Applying(CutoverPhase::Preflight)
+    );
+    child.kill().expect("stop runner");
+    child.wait().expect("reap runner");
     let _ = std::fs::remove_dir_all(root);
 }
 

@@ -277,6 +277,11 @@ impl Consent {
         self.consumed
     }
 
+    /// Return the consent issuance time.
+    pub const fn issued_at_ms(&self) -> u64 {
+        self.issued_at_ms
+    }
+
     /// Borrow the exact binding.
     pub fn binding(&self) -> &ConsentBinding {
         &self.binding

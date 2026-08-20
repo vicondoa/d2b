@@ -96,6 +96,7 @@ fn cutover_runner_feature_is_explicitly_negotiated() {
 
 #[test]
 fn cutover_effect_authorities_are_closed_and_non_overlapping() {
+    assert!(CutoverEffectAuthority::Cutover.permits(CutoverEffectKind::ApplyAdmission));
     assert!(CutoverEffectAuthority::Cutover.permits(CutoverEffectKind::ClosureActivation));
     assert!(!CutoverEffectAuthority::Cutover.permits(CutoverEffectKind::ScopedZoneReset));
     assert!(!CutoverEffectAuthority::Cutover.permits(CutoverEffectKind::DestroyDurableVolume));
@@ -131,4 +132,11 @@ fn cutover_effect_payload_reuses_opaque_storage_contract() {
     assert!(!encoded.contains("/var/"));
     let decoded: CutoverEffectRequest = serde_json::from_str(&encoded).expect("decode effect");
     assert_eq!(decoded, request);
+
+    let admission = CutoverEffectPayload::ApplyAdmission(
+        d2b_contracts::broker_wire::CutoverAdmissionRequest {},
+    );
+    let encoded = serde_json::to_string(&admission).expect("serialize admission");
+    let decoded: CutoverEffectPayload = serde_json::from_str(&encoded).expect("decode admission");
+    assert_eq!(decoded, admission);
 }

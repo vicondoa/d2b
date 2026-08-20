@@ -296,6 +296,11 @@ impl ConsumedCapability {
         &self.0.effect_allowlist
     }
 
+    /// Derive the capability binding digest for restart adoption checks.
+    pub fn binding_digest(&self) -> Digest {
+        self.0.binding_digest()
+    }
+
     /// Return the expiry.
     pub const fn expires_at_ms(&self) -> u64 {
         self.0.expires_at_ms
@@ -581,6 +586,12 @@ pub fn persist_journal(path: &Path, bootstrap: &RunnerBootstrap, records: &[u8])
             "runner journal is not canonical",
         )
     })?;
+    if bytes.len() > MAX_RUNNER_FRAME_BYTES {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "runner journal exceeds size limit",
+        ));
+    }
     let temp = path.with_extension("journal.tmp");
     let mut file = OpenOptions::new()
         .create(true)

@@ -2454,6 +2454,9 @@ fn cutover_effect_operation_name(
     effect: d2b_contracts::broker_wire::CutoverEffectKind,
 ) -> &'static str {
     match effect {
+        d2b_contracts::broker_wire::CutoverEffectKind::ApplyAdmission => {
+            "CutoverEffect.ApplyAdmission"
+        }
         d2b_contracts::broker_wire::CutoverEffectKind::CutoverDisposition => {
             "CutoverEffect.CutoverDisposition"
         }
@@ -2503,6 +2506,7 @@ fn cutover_effect_operation_name(
 fn cutover_effect_owner(effect: d2b_contracts::broker_wire::CutoverEffectKind) -> &'static str {
     use d2b_contracts::broker_wire::CutoverEffectKind;
     match effect {
+        CutoverEffectKind::ApplyAdmission => "ADR046-reset-001",
         CutoverEffectKind::CutoverDisposition
         | CutoverEffectKind::PreserveSource
         | CutoverEffectKind::QuarantineDestination => "ADR046-reset-003/004",
@@ -2521,6 +2525,102 @@ fn cutover_effect_owner(effect: d2b_contracts::broker_wire::CutoverEffectKind) -
         CutoverEffectKind::CutoverBroker => "ADR046-reset-003",
         CutoverEffectKind::HostDrain | CutoverEffectKind::ClosureActivation => "U4",
     }
+}
+
+#[cfg(not(feature = "layer1-bootstrap"))]
+fn execute_cutover_verification(
+    request: &d2b_contracts::broker_wire::CutoverVerificationRequest,
+    resolver: &BundleResolver,
+) -> d2b_contracts::broker_wire::CutoverVerificationResponse {
+    use d2b_contracts::broker_wire::{CutoverVerificationResponse, CutoverZoneVerification};
+    use d2b_contracts::types::BundleOpId;
+    let configured_zone_ids = resolver
+        .bundle
+        .artifact_hashes
+        .as_ref()
+        .into_iter()
+        .flat_map(|artifacts| artifacts.keys())
+        .filter_map(|key| {
+            key.strip_prefix("zones/")
+                .and_then(|value| value.strip_suffix("/storage.json"))
+                .filter(|value| !value.is_empty() && !value.contains('/') && !value.contains('\\'))
+                .map(BundleOpId::new)
+        })
+        .collect::<std::collections::BTreeSet<_>>();
+    let expected_zone_ids = request
+        .expected_zone_ids
+        .iter()
+        .cloned()
+        .collect::<std::collections::BTreeSet<_>>();
+    let binding_matches = !configured_zone_ids.is_empty()
+        && configured_zone_ids.len() == expected_zone_ids.len()
+        && configured_zone_ids
+            .iter()
+            .all(|zone_id| expected_zone_ids.contains(zone_id));
+    let zones: Vec<_> = configured_zone_ids
+        .iter()
+        .cloned()
+        .map(|zone_id| CutoverZoneVerification {
+            healthy: binding_matches && live_zone_store_view_is_healthy(resolver, &zone_id),
+            zone_id,
+        })
+        .collect();
+    let all_zones_healthy = zones.iter().all(|zone| zone.healthy);
+    CutoverVerificationResponse {
+        zones,
+        sources_preserved: binding_matches && all_zones_healthy,
+        identity_digests_match: all_zones_healthy
+            && resolver.installed_generation_identity().is_some(),
+        candidate_current: all_zones_healthy && resolver.bundle.bundle_hash.is_some(),
+    }
+}
+
+#[cfg(not(feature = "layer1-bootstrap"))]
+fn execute_cutover_admission(
+    _request: &d2b_contracts::broker_wire::CutoverAdmissionRequest,
+    resolver: &BundleResolver,
+) -> d2b_contracts::broker_wire::CutoverAdmissionResponse {
+    use d2b_contracts::types::BundleOpId;
+    let zone_ids = resolver
+        .bundle
+        .artifact_hashes
+        .as_ref()
+        .into_iter()
+        .flat_map(|artifacts| artifacts.keys())
+        .filter_map(|key| {
+            key.strip_prefix("zones/")
+                .and_then(|value| value.strip_suffix("/storage.json"))
+                .filter(|value| !value.is_empty() && !value.contains('/') && !value.contains('\\'))
+                .map(BundleOpId::new)
+        })
+        .collect::<std::collections::BTreeSet<_>>();
+    let store_views_healthy = !zone_ids.is_empty()
+        && zone_ids
+            .iter()
+            .all(|zone_id| live_zone_store_view_is_healthy(resolver, zone_id));
+    let candidate_current = resolver.bundle.bundle_hash.is_some() && store_views_healthy;
+    let markers_valid = store_views_healthy;
+    let ownership_valid = store_views_healthy && resolver.installed_generation_identity().is_some();
+    d2b_contracts::broker_wire::CutoverAdmissionResponse {
+        candidate_current,
+        markers_valid,
+        ownership_valid,
+        predicates_hold: candidate_current && markers_valid && ownership_valid,
+    }
+}
+
+#[cfg(not(feature = "layer1-bootstrap"))]
+fn live_zone_store_view_is_healthy(
+    resolver: &BundleResolver,
+    zone_id: &d2b_contracts::types::BundleOpId,
+) -> bool {
+    let Some(intent) = resolver.find_store_view_intent(zone_id.as_str()) else {
+        return false;
+    };
+    matches!(
+        crate::ops::store_verify::run_store_verify_read_only(intent, false).status,
+        d2b_contracts::broker_wire::StoreVerifyStatus::Ok
+    )
 }
 
 #[cfg(not(feature = "layer1-bootstrap"))]
@@ -5771,7 +5871,35 @@ fn dispatch_request_with_backend_and_request_fds<B: DispatchBackend>(
                     "cutover effect is not permitted by its authority".to_owned(),
                 ));
             }
+            let mut verification = None;
+            let mut admission = None;
             let (outcome, identity) = match req.effect {
+                d2b_contracts::broker_wire::CutoverEffectKind::ApplyAdmission => {
+                    let d2b_contracts::broker_wire::CutoverEffectPayload::ApplyAdmission(
+                        admission_request,
+                    ) = req.payload.clone().ok_or_else(|| {
+                        BrokerError::Protocol("apply admission payload required".to_owned())
+                    })?
+                    else {
+                        return Err(BrokerError::Protocol(
+                            "apply admission payload kind mismatch".to_owned(),
+                        ));
+                    };
+                    if req.handoff.is_some() {
+                        return Err(BrokerError::Protocol(
+                            "apply admission does not accept a handoff".to_owned(),
+                        ));
+                    }
+                    let resolver = require_resolver(resolver)?;
+                    let observations = execute_cutover_admission(&admission_request, resolver);
+                    let outcome = if observations.predicates_hold {
+                        d2b_contracts::broker_wire::CutoverEffectOutcome::Succeeded
+                    } else {
+                        d2b_contracts::broker_wire::CutoverEffectOutcome::Failed
+                    };
+                    admission = Some(observations);
+                    (outcome, None)
+                }
                 d2b_contracts::broker_wire::CutoverEffectKind::HostDrain => {
                     if req.payload.is_some() || req.handoff.is_some() {
                         return Err(BrokerError::Protocol(
@@ -5818,6 +5946,37 @@ fn dispatch_request_with_backend_and_request_fds<B: DispatchBackend>(
                     };
                     (outcome, req.identity.clone())
                 }
+                d2b_contracts::broker_wire::CutoverEffectKind::Verification
+                    if matches!(
+                        &req.payload,
+                        Some(d2b_contracts::broker_wire::CutoverEffectPayload::Verification(_))
+                    ) =>
+                {
+                    let d2b_contracts::broker_wire::CutoverEffectPayload::Verification(
+                        verification_request,
+                    ) = req.payload.clone().ok_or_else(|| {
+                        BrokerError::Protocol("verification payload required".to_owned())
+                    })?
+                    else {
+                        return Err(BrokerError::Protocol(
+                            "verification payload kind mismatch".to_owned(),
+                        ));
+                    };
+                    let resolver = require_resolver(resolver)?;
+                    let observations =
+                        execute_cutover_verification(&verification_request, resolver);
+                    let outcome = if observations.zones.iter().all(|zone| zone.healthy)
+                        && observations.sources_preserved
+                        && observations.identity_digests_match
+                        && observations.candidate_current
+                    {
+                        d2b_contracts::broker_wire::CutoverEffectOutcome::Succeeded
+                    } else {
+                        d2b_contracts::broker_wire::CutoverEffectOutcome::Failed
+                    };
+                    verification = Some(observations);
+                    (outcome, None)
+                }
                 effect => execute_cutover_effect_payload(
                     effect,
                     req.payload.clone(),
@@ -5857,6 +6016,8 @@ fn dispatch_request_with_backend_and_request_fds<B: DispatchBackend>(
                 d2b_contracts::broker_wire::CutoverEffectResponse {
                     outcome,
                     identity,
+                    verification,
+                    admission,
                     audit_record_id,
                 },
             )))

@@ -1,10 +1,11 @@
 use d2b_cutover::{
     ApplyContext, ArtifactId, AuditEvidence, CandidateId, CompletionEvidence, Consent,
     CutoverEngine, CutoverPhase, CutoverPreview, Digest, EffectEvidence, EffectId, EffectKind,
-    EffectRequest, FailureCode, HostInventory, HostLockContract, Journal, JournalBinding,
-    JournalError, JournalRecordKind, OperationId, OperationInventory, OperationKind,
-    OperationRequest, OperatorId, RecoveryAttestation, RecoveryId, ReplayClass, ReplayDecision,
-    ReplayObservation, RevisionPlanId, StepId, ZoneId, ZoneInventory,
+    EffectRequest, FailureCode, FinalizationConsent, HoldReason, HoldState, HostInventory,
+    HostLockContract, Journal, JournalBinding, JournalError, JournalRecordKind, OperationId,
+    OperationInventory, OperationKind, OperationRequest, OperationState, OperatorId,
+    RecoveryAttestation, RecoveryId, ReplayClass, ReplayDecision, ReplayObservation,
+    RevisionPlanId, StepId, VerificationInput, ZoneId, ZoneInventory, ZoneVerification,
 };
 
 fn digest(label: &str) -> Digest {
@@ -370,4 +371,287 @@ fn restart_reopens_the_verified_journal_and_resumes_after_last_durable_success()
         )
         .unwrap();
     assert_eq!(reopened.phase(), CutoverPhase::Disposition);
+}
+
+#[test]
+fn restart_after_verification_and_finalization_consent_preserves_finalizing_state() {
+    let mut original = engine();
+    for (name, kind, replay_class, identity, advance_to) in [
+        (
+            "host-drain",
+            EffectKind::HostDrain,
+            ReplayClass::Repeatable,
+            None,
+            Some(CutoverPhase::Disposition),
+        ),
+        (
+            "closure-activation",
+            EffectKind::ClosureActivation,
+            ReplayClass::ReopenByJournaledIdentity,
+            Some(ArtifactId::new("system-artifact").unwrap()),
+            Some(CutoverPhase::ResourceStore),
+        ),
+        (
+            "resource-store",
+            EffectKind::ResourceStoreCreate,
+            ReplayClass::ReopenByJournaledIdentity,
+            Some(ArtifactId::new("store-identity").unwrap()),
+            Some(CutoverPhase::ProviderInstall),
+        ),
+        (
+            "provider-install",
+            EffectKind::ProviderInstall,
+            ReplayClass::Repeatable,
+            None,
+            Some(CutoverPhase::ZoneCutover),
+        ),
+        (
+            "zone-activation",
+            EffectKind::ZoneActivation,
+            ReplayClass::Repeatable,
+            None,
+            Some(CutoverPhase::Activation),
+        ),
+        (
+            "guest-activation",
+            EffectKind::GuestActivation,
+            ReplayClass::Repeatable,
+            None,
+            Some(CutoverPhase::Verification),
+        ),
+    ] {
+        let mut effect = EffectRequest::new(
+            EffectId::new(format!("effect-{name}")).unwrap(),
+            StepId::new(format!("step-{name}")).unwrap(),
+            kind,
+            replay_class,
+            advance_to,
+        );
+        if let Some(identity) = identity {
+            effect = effect.with_identity(Some(identity), None);
+        }
+        let effect_id = effect.effect_id().clone();
+        let observed_identity = effect.journaled_identity().cloned();
+        original.start_effect(effect).unwrap();
+        original
+            .complete_effect(
+                &effect_id,
+                CompletionEvidence {
+                    effect: match observed_identity {
+                        Some(identity) => {
+                            EffectEvidence::succeeded_with_identity(identity.as_str()).unwrap()
+                        }
+                        None => EffectEvidence::succeeded(),
+                    },
+                    audit: AuditEvidence::durable(format!("audit-{name}")).unwrap(),
+                },
+            )
+            .unwrap();
+    }
+    original
+        .verify(&VerificationInput::new(
+            [ZoneVerification::new(ZoneId::new("zone-a").unwrap(), true)],
+            true,
+            true,
+            true,
+            true,
+        ))
+        .unwrap();
+    assert_eq!(original.state(), OperationState::CutoverSucceeded);
+    let mut consent =
+        FinalizationConsent::issue(original.request().finalization_binding(), 1_000, 1_900)
+            .unwrap();
+    original.begin_finalization(&mut consent, 1_100).unwrap();
+    assert_eq!(original.state(), OperationState::Finalizing);
+
+    let finalization = EffectRequest::new(
+        EffectId::new("effect-finalization").unwrap(),
+        StepId::new("step-finalization").unwrap(),
+        EffectKind::CutoverFinalization,
+        ReplayClass::QuarantineOnly,
+        None,
+    );
+    original.start_effect(finalization).unwrap();
+    let journal = Journal::from_bytes(
+        original.journal().binding().clone(),
+        &original.journal_bytes().unwrap(),
+    )
+    .unwrap();
+    let request = original.request().clone();
+    let inventory = match request.inventory() {
+        OperationInventory::Host(inventory) => inventory.clone(),
+        OperationInventory::Reset(_) => panic!("cutover fixture must use host inventory"),
+    };
+    let preview = CutoverPreview::new(
+        request.operation_id().clone(),
+        OperationKind::Cutover,
+        request.candidate_id().clone(),
+        request.revision_plan_id().clone(),
+        inventory,
+        None,
+    )
+    .unwrap();
+    let mut reopened = CutoverEngine::reopen(request, &preview, journal).unwrap();
+    assert_eq!(reopened.state(), OperationState::Finalizing);
+    let effect_id = reopened.current_effect().unwrap().effect_id().clone();
+    reopened
+        .complete_effect(
+            &effect_id,
+            CompletionEvidence {
+                effect: EffectEvidence::succeeded(),
+                audit: AuditEvidence::durable("finalization-audit").unwrap(),
+            },
+        )
+        .unwrap();
+    assert_eq!(reopened.state(), OperationState::Closed);
+}
+
+#[test]
+fn retryable_effect_failures_allow_multiple_attempts() {
+    let mut operation = engine();
+    let effect = EffectRequest::new(
+        EffectId::new("effect-retry").unwrap(),
+        StepId::new("step-retry").unwrap(),
+        EffectKind::HostDrain,
+        ReplayClass::Repeatable,
+        Some(CutoverPhase::Disposition),
+    );
+    operation.start_effect(effect.clone()).unwrap();
+    operation.retry_effect(FailureCode::EffectFailed).unwrap();
+    operation.start_effect(effect.clone()).unwrap();
+    operation.retry_effect(FailureCode::EffectFailed).unwrap();
+    assert!(operation.current_effect().is_none());
+
+    let journal = Journal::from_bytes(
+        operation.journal().binding().clone(),
+        &operation.journal_bytes().unwrap(),
+    )
+    .unwrap();
+    let request = operation.request().clone();
+    let inventory = match request.inventory() {
+        OperationInventory::Host(inventory) => inventory.clone(),
+        OperationInventory::Reset(_) => panic!("cutover fixture must use host inventory"),
+    };
+    let preview = CutoverPreview::new(
+        request.operation_id().clone(),
+        OperationKind::Cutover,
+        request.candidate_id().clone(),
+        request.revision_plan_id().clone(),
+        inventory,
+        None,
+    )
+    .unwrap();
+    let mut reopened = CutoverEngine::reopen(request, &preview, journal).unwrap();
+    assert!(reopened.current_effect().is_none());
+    reopened.start_effect(effect).unwrap();
+}
+
+#[test]
+fn reopen_keeps_started_destination_for_native_rollback() {
+    let mut operation = engine();
+    let drain = EffectRequest::new(
+        EffectId::new("effect-drain-destination").unwrap(),
+        StepId::new("step-drain-destination").unwrap(),
+        EffectKind::HostDrain,
+        ReplayClass::Repeatable,
+        Some(CutoverPhase::Disposition),
+    );
+    operation.start_effect(drain.clone()).unwrap();
+    operation
+        .complete_effect(
+            drain.effect_id(),
+            CompletionEvidence {
+                effect: EffectEvidence::succeeded(),
+                audit: AuditEvidence::durable("drain-audit").unwrap(),
+            },
+        )
+        .unwrap();
+    let store = EffectRequest::new(
+        EffectId::new("effect-store-destination").unwrap(),
+        StepId::new("step-store-destination").unwrap(),
+        EffectKind::ResourceStoreCreate,
+        ReplayClass::ReopenByJournaledIdentity,
+        Some(CutoverPhase::ProviderInstall),
+    )
+    .with_identity(
+        Some(ArtifactId::new("store-identity").unwrap()),
+        Some(ArtifactId::new("store-destination").unwrap()),
+    );
+    operation.start_effect(store).unwrap();
+    let journal = Journal::from_bytes(
+        operation.journal().binding().clone(),
+        &operation.journal_bytes().unwrap(),
+    )
+    .unwrap();
+    let request = operation.request().clone();
+    let inventory = match request.inventory() {
+        OperationInventory::Host(inventory) => inventory.clone(),
+        OperationInventory::Reset(_) => panic!("cutover fixture must use host inventory"),
+    };
+    let preview = CutoverPreview::new(
+        request.operation_id().clone(),
+        OperationKind::Cutover,
+        request.candidate_id().clone(),
+        request.revision_plan_id().clone(),
+        inventory,
+        None,
+    )
+    .unwrap();
+    let reopened = CutoverEngine::reopen(request, &preview, journal).unwrap();
+    assert_eq!(
+        reopened
+            .current_effect()
+            .and_then(|effect| effect.destination()),
+        Some(&ArtifactId::new("store-destination").unwrap())
+    );
+    assert_eq!(
+        reopened.staged_destinations().collect::<Vec<_>>(),
+        [&ArtifactId::new("store-destination").unwrap()]
+    );
+}
+
+#[test]
+fn pending_hold_reopens_as_pending_while_effect_is_in_flight() {
+    let mut operation = engine();
+    let effect = EffectRequest::new(
+        EffectId::new("effect-hold-reopen").unwrap(),
+        StepId::new("step-hold-reopen").unwrap(),
+        EffectKind::HostDrain,
+        ReplayClass::Repeatable,
+        Some(CutoverPhase::Disposition),
+    );
+    operation.start_effect(effect).unwrap();
+    operation
+        .request_hold(
+            OperatorId::new("operator-1").unwrap(),
+            HoldReason::new("pause-before-restart").unwrap(),
+            AuditEvidence::durable("hold-audit").unwrap(),
+        )
+        .unwrap();
+    let journal = Journal::from_bytes(
+        operation.journal().binding().clone(),
+        &operation.journal_bytes().unwrap(),
+    )
+    .unwrap();
+    let request = operation.request().clone();
+    let inventory = match request.inventory() {
+        OperationInventory::Host(inventory) => inventory.clone(),
+        OperationInventory::Reset(_) => panic!("cutover fixture must use host inventory"),
+    };
+    let preview = CutoverPreview::new(
+        request.operation_id().clone(),
+        OperationKind::Cutover,
+        request.candidate_id().clone(),
+        request.revision_plan_id().clone(),
+        inventory,
+        None,
+    )
+    .unwrap();
+    let reopened = CutoverEngine::reopen(request, &preview, journal).unwrap();
+    assert!(matches!(reopened.hold(), HoldState::Pending { .. }));
+    assert_eq!(
+        reopened.state(),
+        OperationState::Applying(CutoverPhase::Drain)
+    );
+    assert!(reopened.current_effect().is_some());
 }

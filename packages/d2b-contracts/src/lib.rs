@@ -93,9 +93,6 @@ impl BrokerCapabilities {
                 "UsbipProxyReconcile",
                 "PauseBroker",
                 "ResumeBroker",
-                "LaunchCutoverRunner",
-                "CutoverAudit",
-                "CutoverEffect",
             ]
             .into_iter()
             .map(str::to_owned),

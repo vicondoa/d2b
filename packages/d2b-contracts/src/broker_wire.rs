@@ -457,6 +457,7 @@ pub enum CutoverEffectKind {
     QuarantineDestination,
     CutoverBroker,
     ClosureActivation,
+    ApplyAdmission,
 }
 
 /// Typed payloads for cutover effects that reuse existing broker operations.
@@ -467,10 +468,12 @@ pub enum CutoverEffectKind {
 #[serde(tag = "kind", content = "payload")]
 pub enum CutoverEffectPayload {
     None,
+    ApplyAdmission(CutoverAdmissionRequest),
     Storage(ReconcileStorageScopeRequest),
     ZoneStore(OpenZoneStoreRequest),
     StoreSync(StoreSyncRequest),
     StoreVerify(StoreVerifyRequest),
+    Verification(CutoverVerificationRequest),
     Activation(RunActivationRequest),
     Systemd(Box<SystemdUnitRequest>),
     Quarantine {
@@ -489,6 +492,50 @@ pub enum CutoverEffectPayload {
         consent_digest: CanonicalAuditDigest,
     },
 }
+
+/// Broker-owned phase-9 verification admission. The supplied Zone identities
+/// are expected evidence bindings only; the broker returns the live
+/// observations from its trusted bundle and host checks.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct CutoverVerificationRequest {
+    pub expected_zone_ids: Vec<BundleOpId>,
+}
+
+/// One broker-owned Zone verification observation.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct CutoverZoneVerification {
+    pub zone_id: BundleOpId,
+    pub healthy: bool,
+}
+
+/// Broker-owned phase-9 verification observations.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct CutoverVerificationResponse {
+    pub zones: Vec<CutoverZoneVerification>,
+    pub sources_preserved: bool,
+    pub identity_digests_match: bool,
+    pub candidate_current: bool,
+}
+
+/// Broker-owned apply admission observations. These fields are never
+/// caller-authored; the broker derives them from its trusted bundle and live
+/// host ownership state.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct CutoverAdmissionResponse {
+    pub candidate_current: bool,
+    pub markers_valid: bool,
+    pub ownership_valid: bool,
+    pub predicates_hold: bool,
+}
+
+/// Typed request for the broker-owned apply admission observation.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct CutoverAdmissionRequest {}
 
 /// Closed replay behavior for an operation-scoped effect.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
@@ -512,7 +559,8 @@ impl CutoverEffectAuthority {
             ),
             Self::ResetZone => matches!(
                 effect,
-                CutoverEffectKind::ScopedZoneReset
+                CutoverEffectKind::ApplyAdmission
+                    | CutoverEffectKind::ScopedZoneReset
                     | CutoverEffectKind::DestroyDurableVolume
                     | CutoverEffectKind::PreserveSource
                     | CutoverEffectKind::QuarantineDestination
@@ -520,7 +568,8 @@ impl CutoverEffectAuthority {
             ),
             Self::ResetProvider => matches!(
                 effect,
-                CutoverEffectKind::ScopedProviderReset
+                CutoverEffectKind::ApplyAdmission
+                    | CutoverEffectKind::ScopedProviderReset
                     | CutoverEffectKind::DestroyDurableVolume
                     | CutoverEffectKind::PreserveSource
                     | CutoverEffectKind::QuarantineDestination
@@ -528,7 +577,8 @@ impl CutoverEffectAuthority {
             ),
             Self::ResetGuest => matches!(
                 effect,
-                CutoverEffectKind::ScopedGuestReset
+                CutoverEffectKind::ApplyAdmission
+                    | CutoverEffectKind::ScopedGuestReset
                     | CutoverEffectKind::DestroyDurableVolume
                     | CutoverEffectKind::PreserveSource
                     | CutoverEffectKind::QuarantineDestination
@@ -575,6 +625,10 @@ pub struct CutoverEffectResponse {
     pub outcome: CutoverEffectOutcome,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub identity: Option<BundleOpId>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub verification: Option<CutoverVerificationResponse>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub admission: Option<CutoverAdmissionResponse>,
     pub audit_record_id: CanonicalAuditDigest,
 }
 
