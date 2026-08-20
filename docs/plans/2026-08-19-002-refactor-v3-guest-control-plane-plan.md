@@ -842,7 +842,7 @@ The units may land as ordered reviewed pull requests. Every intermediate head mu
 - `packages/d2b-provider-system-systemd/src/lifecycle.rs`
 - `packages/d2b-provider-shell-terminal/src/service/controller.rs`
 - `packages/d2b-provider-shell-terminal/src/service/supervisor.rs`
-- `packages/d2b-provider-shell-terminal/src/resources/session/mod.rs`
+- `packages/d2b-provider-shell-terminal/src/resources/session.rs`
 - `packages/d2b-resource-client/src/process_attach.rs`
 - `packages/d2bd/src/exec_session.rs`
 - `packages/d2bd/src/exec_session_real.rs`
