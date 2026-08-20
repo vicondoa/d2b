@@ -225,8 +225,8 @@ CLI contract (`d2b device usb attach|detach|probe` in the Rust CLI):
   targeted conntrack deletion or TCP established-socket kill for a proven
   VM/proxy tuple whose source is not hidden by SNAT and whose anti-spoofing
   posture is proven. When that proof is unavailable, detach returns the public
-  `usbip-revocation-not-isolated` failure with the target busid and preserves
-  the broker-owned claim for manual drain/recovery instead of silently leaving
+  revocation-isolation failure with the target busid and preserves the
+  broker-owned claim for manual drain/recovery instead of silently leaving
   an established stream or bouncing unrelated same-env streams.
 
 ### Proxy synchronization strategy
@@ -234,7 +234,7 @@ CLI contract (`d2b device usb attach|detach|probe` in the Rust CLI):
 The current proxy is per-env, not per-busid: a `socat` L4 listener forwards
 `<env.hostUplinkIp>:3240` to that env's loopback backend port. Synchronization
 therefore follows the conservative daemon plan in
-`packages/d2bd-runtime/src/usbip_reconcile_state.rs`:
+`packages/d2b-provider-device-usbip/src/reconcile_state.rs`:
 
 1. normal attach or single-VM restart performs an optimistic backend/export
    refresh and verifies that the per-env proxy is listening;

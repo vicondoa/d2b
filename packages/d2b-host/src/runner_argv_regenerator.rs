@@ -52,6 +52,8 @@ use crate::vsock_relay_argv::{VsockRelayArgvInput, generate_vsock_relay_argv};
 #[derive(Debug)]
 pub enum RegenerateArgvError {
     MissingInput { role: ProcessRole, field: String },
+    /// The role's generator is owned by another provider or effect boundary.
+    /// The broker must keep the trusted bundle's prebuilt argv authoritative.
     NotYetWired(ProcessRole),
     Generator(String),
 }
@@ -334,6 +336,23 @@ mod tests {
                 "expected NotYetWired for non-wired role {:?}, got {err:?}",
                 row.role
             );
+        }
+    }
+
+    #[test]
+    fn device_provider_roles_preserve_bundle_argv_authority() {
+        for role in [
+            ProcessRole::Swtpm,
+            ProcessRole::Gpu,
+            ProcessRole::GpuRenderNode,
+            ProcessRole::Video,
+            ProcessRole::Usbip,
+        ] {
+            let intent = fake_intent(role.clone());
+            assert!(matches!(
+                regenerate_argv(&intent, &RunnerArgvExtra::default()),
+                Err(RegenerateArgvError::NotYetWired(actual)) if actual == role
+            ));
         }
     }
 }

@@ -84,11 +84,14 @@ pub const RUNNER_PROCESS_MATRIX: &[RunnerProcessMetadata] = &[
         "runner_process::swtpm_pre_start_flush",
         RegeneratorWiring::NotYetWired,
     ),
+    // Device argv generators live in their owning Providers. These roles stay
+    // NotYetWired here so the broker's existing bundle-argv fallback remains
+    // authoritative until typed generator inputs are carried in the bundle.
     row(
         Swtpm,
         RunnerLifecycleClass::Spawnable,
-        Some("swtpm_argv"),
-        "swtpm_argv",
+        None,
+        "d2b-provider-device-tpm::swtpm_argv",
         RegeneratorWiring::NotYetWired,
     ),
     row(
@@ -101,22 +104,22 @@ pub const RUNNER_PROCESS_MATRIX: &[RunnerProcessMetadata] = &[
     row(
         Video,
         RunnerLifecycleClass::Spawnable,
-        Some("video_argv"),
-        "video_argv",
+        None,
+        "d2b-provider-device-gpu::video_argv",
         RegeneratorWiring::NotYetWired,
     ),
     row(
         Gpu,
         RunnerLifecycleClass::Spawnable,
-        Some("gpu_argv"),
-        "gpu_argv",
+        None,
+        "d2b-provider-device-gpu::gpu_argv",
         RegeneratorWiring::NotYetWired,
     ),
     row(
         GpuRenderNode,
         RunnerLifecycleClass::Spawnable,
-        Some("gpu_argv"),
-        "gpu_argv::render_node",
+        None,
+        "d2b-provider-device-gpu::gpu_argv::render_node",
         RegeneratorWiring::NotYetWired,
     ),
     row(
@@ -171,8 +174,8 @@ pub const RUNNER_PROCESS_MATRIX: &[RunnerProcessMetadata] = &[
     row(
         Usbip,
         RunnerLifecycleClass::Spawnable,
-        Some("usbip_argv"),
-        "usbip_argv",
+        None,
+        "d2b-provider-device-usbip::usbip_argv",
         RegeneratorWiring::NotYetWired,
     ),
     row(
@@ -279,11 +282,26 @@ mod tests {
                 row.role
             );
             if row.spawnable() {
-                assert!(
-                    row.argv_generator_module.is_some(),
-                    "spawnable role {:?} needs generator ownership",
-                    row.role
-                );
+                if row.regenerator_wiring == RegeneratorWiring::Wired {
+                    assert!(
+                        row.argv_generator_module.is_some(),
+                        "wired spawnable role {:?} needs generator ownership",
+                        row.role
+                    );
+                } else if matches!(
+                    row.role,
+                    ProcessRole::Swtpm
+                        | ProcessRole::Gpu
+                        | ProcessRole::GpuRenderNode
+                        | ProcessRole::Video
+                        | ProcessRole::Usbip
+                ) {
+                    assert!(
+                        row.argv_generator_module.is_none(),
+                        "provider-owned role {:?} must not name a host generator",
+                        row.role
+                    );
+                }
             } else {
                 assert!(
                     row.argv_generator_module.is_none(),
@@ -296,5 +314,9 @@ mod tests {
         let qemu = runner_process_metadata(&QemuMediaRunner);
         assert_eq!(qemu.argv_generator_module, Some("qemu_media_argv"));
         assert_eq!(qemu.test_coverage_label, "qemu_media_argv");
+
+        let usbip = runner_process_metadata(&Usbip);
+        assert_eq!(usbip.argv_generator_module, None);
+        assert_eq!(usbip.test_coverage_label, "d2b-provider-device-usbip::usbip_argv");
     }
 }

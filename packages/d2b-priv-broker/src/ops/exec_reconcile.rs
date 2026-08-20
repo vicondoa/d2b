@@ -199,7 +199,7 @@ pub trait ReconcileExecutor: Send + Sync {
 
     /// Run `usbip <subcommand> --busid <bus_id>`. Refuses non-absolute
     /// `usbip_binary`. Bus id is validated by the caller via
-    /// `d2b_provider_device_usbip::validate_bus_id`.
+    /// `d2b_contracts::usbip::validate_bus_id`.
     fn run_usbip(
         &self,
         usbip_binary: &Path,
@@ -616,7 +616,7 @@ impl ReconcileExecutor for SystemReconcileExecutor {
                 detail: "usbip bus_id is empty".to_owned(),
             });
         }
-        d2b_provider_device_usbip::validate_bus_id(bus_id).map_err(|err| {
+        d2b_contracts::usbip::validate_bus_id(bus_id).map_err(|err| {
             ReconcileExecError::InvalidInput {
                 detail: format!("invalid usbip bus_id {bus_id:?}: {err:?}"),
             }
@@ -650,7 +650,7 @@ impl ReconcileExecutor for SystemReconcileExecutor {
         sysfs_root: &Path,
         bus_id: &str,
     ) -> Result<(), ReconcileExecError> {
-        d2b_provider_device_usbip::validate_bus_id(bus_id).map_err(|err| {
+        d2b_contracts::usbip::validate_bus_id(bus_id).map_err(|err| {
             ReconcileExecError::InvalidInput {
                 detail: format!("invalid usbip bus_id {bus_id:?}: {err:?}"),
             }
@@ -685,7 +685,7 @@ impl ReconcileExecutor for SystemReconcileExecutor {
         sysfs_root: &Path,
         bus_id: &str,
     ) -> Result<(), ReconcileExecError> {
-        d2b_provider_device_usbip::validate_bus_id(bus_id).map_err(|err| {
+        d2b_contracts::usbip::validate_bus_id(bus_id).map_err(|err| {
             ReconcileExecError::InvalidInput {
                 detail: format!("invalid usbip bus_id {bus_id:?}: {err:?}"),
             }

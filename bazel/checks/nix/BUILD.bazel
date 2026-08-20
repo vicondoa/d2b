@@ -190,8 +190,10 @@ nix_surface_test(
     spec = {
         "cases": [],
         "expression": "//packages/d2b-provider-device-gpu:nix/tests/default.nix",
+        "files": [
+            "pkgs/virtio-media-driver/default.nix",
+        ],
         "modules": [
-            "nixos-modules/components/graphics.nix",
             "nixos-modules/components/video/guest.nix",
         ],
         "package": "packages/d2b-provider-device-gpu",
