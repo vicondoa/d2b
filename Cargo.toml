@@ -59,7 +59,6 @@ members = [
     "packages/d2b-provider-device-usbip",
     "packages/d2b-provider-observability-otel",
     "packages/d2b-process",
-    "packages/d2b-credential-service",
     "packages/d2b-session",
     "packages/d2b-session-unix",
     "packages/d2b-controller-toolkit",

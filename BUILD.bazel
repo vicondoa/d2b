@@ -299,7 +299,6 @@ filegroup(
         "//packages/d2b-core:cargo_workspace_sources",
         "//packages/d2b-core-controller:cargo_workspace_sources",
         "//packages/d2b-core/fuzz:BUILD.bazel",
-        "//packages/d2b-credential-service:cargo_workspace_sources",
         "//packages/d2b-exec-runner:cargo_workspace_sources",
         "//packages/d2b-gateway:cargo_workspace_sources",
         "//packages/d2b-gateway-runtime:cargo_workspace_sources",

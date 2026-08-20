@@ -1196,15 +1196,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "d2b-credential-service"
-version = "0.0.0-bootstrap"
-dependencies = [
- "d2b-contracts",
- "d2b-contracts-provider",
- "d2b-contracts-zone-session",
-]
-
-[[package]]
 name = "d2b-exec-runner"
 version = "0.0.0-bootstrap"
 dependencies = [
