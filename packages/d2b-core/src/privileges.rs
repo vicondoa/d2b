@@ -341,6 +341,16 @@ pub const PUBLIC_OPERATION_AUTHZ: &[OperationAuthzRow] = &[
         AuditMode::Yes,
     ),
     row(
+        "host cutover",
+        "host cutover",
+        "global",
+        &["d2b-admin"],
+        true,
+        SecretAccess::MetadataOnly,
+        BrokerRequirement::Yes,
+        AuditMode::Yes,
+    ),
+    row(
         "host prepare",
         "host",
         "global",

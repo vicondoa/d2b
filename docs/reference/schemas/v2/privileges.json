@@ -259,6 +259,7 @@
             "guest",
             "hello",
             "host check",
+            "host cutover",
             "host destroy --apply",
             "host destroy --dry-run",
             "host doctor --read-only",

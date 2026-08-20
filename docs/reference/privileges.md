@@ -114,6 +114,13 @@ are denied (`defaultForUnknown: deny`).
 > subject to the Zone Role and RoleBinding policy; the operation row only
 > classifies the authenticated local daemon request.
 
+> **Host cutover is an admin-only public daemon operation.** The `host cutover`
+> command family is destructive, retains metadata-only secret access, and
+> requires broker admission. It appears in `PrivilegesJson.publicOperations`
+> with only the `d2b-admin` authz class; the daemon enforces that classification
+> before any cutover broker request is emitted. See the [CLI contract](cli-contract.md)
+> and [U4 cutover runner admission](#u4-cutover-runner-admission).
+
 ## Operation catalog (PROTOCOL_VERSION = 5)
 
 The currently implemented broker operation catalog. Every row carries
