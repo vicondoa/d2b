@@ -151,11 +151,14 @@ doctest, feature, harness-free, fixture, and policy coverage as explicit
 targets. No second Cargo lock, source inventory, generator, or shell scheduler
 is authoritative.
 
-Nix-unit and flake checks use fixed Bazel targets with declared inputs. Their
-existing case pins remain under `tests/unit/nix/pinned/`; regenerate only
-with `make nix-unit-pin` after a case change. Runtime-ledger changes use
-`make runtime-ledger-pin`. The graph has no secondary evidence or provider
-qualification gate.
+Nix-unit and flake checks use fixed Bazel targets with declared inputs. Each
+named Nix surface declares its expression and exact module/helper/fixture
+closure directly in `bazel/checks/nix/BUILD.bazel`; the graph has no corpus
+discovery, case-presence pins, secondary evidence, or provider qualification
+gate. Surface actions copy that closure into an isolated source root and
+evaluate the expression through a minimal runner flake, not the repository
+flake outputs or ambient `D2B_REPO_ROOT`. Runtime-ledger changes use
+`make runtime-ledger-pin`.
 
 ### Realized Nix checks and runtime budget
 

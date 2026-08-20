@@ -31,7 +31,7 @@ tests/
 ├── tools/                                                       runners + codegen/asserter tools
 │                                                                (rust-workspace-checks, gen-*, assert-pinned-tests, …)
 ├── unit/                          ── Layer 1 ──
-│   ├── nix/        cases/ + pinned/ + eval-cases/               type 1: nix-unit eval cases
+│   ├── nix/        surfaces/ + cases/ + eval-cases/             type 1: owner-local Nix eval cases
 │   ├── smoke/      smoke-eval*.nix                              type 6: smoke / flake-check defs
 │   ├── meta/                                                    meta gates (guard the test infra; closed set)
 │   └── gates/                                                   drift + perf gates (closed set)
@@ -61,18 +61,17 @@ Rust tests (types 2-5: unit, integration, contract, policy-lint) live under
 | `make test-fixture-contracts` | enforcing eval-rendered lane: materializes `D2B_FIXTURES` from evaluated Nix artifact data, then runs `d2b-contract-tests` and the CLI-contract cases; both lanes set `D2B_ENABLE_FIXTURE_BUILD=1`, and invoking it without that variable fails rather than skipping | local + CI |
 | `make test-proofs` | standalone proofs/ crates | local + CI |
 | `make test-flake` | fixed Bazel Nix evaluation, realization, output, and aarch64 targets | local + CI |
-| `make test-nix-unit` | fixed Bazel Nix-unit targets with existing case pins | local + CI |
+| `make test-nix-unit` | fixed Bazel Nix-unit surface targets | local + CI |
 | `make test-drift` | native generated-artifact and parity checks | local + CI |
 | `make test-policy` | native source, docs, lint, runtime-ledger, and BuildBuddy policy suites | local + CI |
 | `make test-runtime-ledger` | hermetic execution-budget gate: after a warm build, enforces aggregate per-crate process-CPU p95 budgets, fails any individual census test sample over 60 seconds, and reports shorter per-test wall-clock p95s as advisory diagnostics (holds no baseline; makes no historical-regression claim) | local + CI |
 | `make test-performance-budgets` | advisory performance canary; without `D2B_PERF_STABLE=1` it reports `SKIP` and enforces nothing | local + CI |
 | `make test-integration` | type-9 podman container tests | conditional local host lane (podman; not the PR pipeline) |
-| `make test-host-integration` | type-10 runNixOSTest VM checks | conditional local NixOS host lane (KVM; TCG fallback; not the PR pipeline) |
+| `make test-host-integration` | type-10 runNixOSTest VM checks; set `D2B_VM_CHECK=<name>` for one named check | conditional local NixOS host lane (KVM; TCG fallback; not the PR pipeline) |
 | `make check-fast` | alias for `test-unit` (backward compat) | local + CI |
 | `make check` | complete fixed Bazel graph with fixed CI enforcement | local |
 | `make bazel-check` | Bazel aggregate used by `make check`. Defaults to BuildBuddy remotely; CI forces `D2B_BAZEL_PROFILE=local` | local or remote |
 | `make check-static` | legacy/full-static monolithic gate (`tests/static.sh`) | local |
-| `make nix-unit-pin` | regenerate the nix-unit case-presence pins | local |
 | `make runtime-ledger-pin` | regenerate the runtime-ledger census pin after adding, removing or renaming a timed test | local |
 | `make heavy-gate-build && bazel-bin/packages/xtask/xtask heavy-gate -- env D2B_LIVE=1 bash tests/integration/live/<x>.sh` | type-11 live-host tests, through the heavy-gate semaphore | **manual, against a deployed d2b host** |
 
@@ -187,12 +186,15 @@ make test-unit
 make check
 ```
 
-### Nix-unit and retained pins
+### Nix-unit surfaces
 
-`make test-nix-unit` runs the fixed Nix-unit Bazel targets. Cases remain
-one-to-one with the existing files under `tests/unit/nix/cases/`, and their
-pinned case lists remain under `tests/unit/nix/pinned/`. Run `make nix-unit-pin`
-after changing cases. The runtime-ledger census uses the existing
+`make test-nix-unit` runs one fixed Bazel action per named owner surface.
+Each action declares its expression, modules, helpers, fixtures, and pinned
+external inputs directly in `bazel/checks/nix/BUILD.bazel`; there is no corpus
+discovery or case-presence pin generator. The action copies those runfiles into
+an isolated source root and evaluates the surface directly through a minimal
+runner flake, without the repository flake outputs or ambient
+`D2B_REPO_ROOT`. The runtime-ledger census uses the existing
 `make runtime-ledger-pin` target when its governed test set changes.
 
 No secondary execution record, migration ledger update, successor pin, or
@@ -211,9 +213,8 @@ not folded into the Layer-1 Bazel scheduler.
 See [`AGENTS.md`](./AGENTS.md) for the full decision rule. In short, default to
 Layer 1:
 
-- Nix module value / option / eval-rejection → a nix-unit case in
-  `tests/unit/nix/cases/*.nix` (auto-discovered; regenerate pins with
-  `tests/tools/gen-nix-unit-pins.sh`).
+- Nix module value / option / eval-rejection → an owner-local expression in
+  `tests/unit/nix/surfaces/*.nix` with an explicit Bazel input closure.
 - Rust logic → a `#[test]` in the crate's `src`.
 - Real-binary behaviour → `packages/<crate>/tests/*.rs` against
   `CARGO_BIN_EXE_*`. **Spawn hermetically**: point `D2B_PUBLIC_SOCKET`,

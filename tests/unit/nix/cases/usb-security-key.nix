@@ -7,7 +7,6 @@
 #   B. The eval-time assertion fires correctly for each of the three
 #      assertion categories (checked here as boolean expressions over
 #      the module's canonical assertion records, not via mkBatch - the batch
-#      evaluator in eval-cases/assertions.nix covers the general failure
 #      message surface).
 #   C. Host-enabled with empty devices evaluates without error.
 #   D. The option defaults: host disabled, VM disabled.

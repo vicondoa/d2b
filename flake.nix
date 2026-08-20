@@ -166,189 +166,6 @@
           cp ${./tests/fixtures/guest-rust-workspace/Cargo.toml} \
             $out/packages/Cargo.toml
         '';
-      # Eval-only Nix-unit configurations do not need the production
-      # artifact-catalog IFD. Keep an explicit escape for the catalog contract
-      # case, which supplies its own non-empty fixture and source assertions.
-      nixUnitCatalogFixtureFor = pkgs:
-        { config, lib, ... }:
-        let
-          data = {
-            schemaVersion = 3;
-            entries = [ ];
-          };
-          preimageJson = builtins.toJSON data;
-          digest = "sha256:${builtins.hashString
-            "sha256"
-            (builtins.toJSON {
-              domain = "d2b:v3:artifact-catalog";
-              framing = "d2b-digest/v1";
-              payload = preimageJson;
-            })}";
-          document = data // { catalogDigest = digest; };
-          json = builtins.toJSON document;
-          path = pkgs.writeText "d2b-artifact-catalog-nix-unit-fixture"
-            "${json}\n";
-        in
-        {
-          options.d2b._nixUnitCatalogFixture = lib.mkOption {
-            type = lib.types.bool;
-            default = true;
-            internal = true;
-            visible = false;
-          };
-          config = lib.mkIf config.d2b._nixUnitCatalogFixture {
-            d2b._artifactCatalogV3 = lib.mkForce {
-              ids = [ ];
-              artifactRows = [ ];
-              preimage = data;
-              inherit preimageJson;
-              catalogDigest = digest;
-              catalogData = document;
-              catalogJson = json;
-              inherit path;
-              publicEntries = [ ];
-            };
-            d2b._bundle.extraArtifacts.artifactCatalog =
-              lib.mkOverride 0 {
-                inherit data path;
-                jsonText = json;
-                installFileName = "artifact-catalog.json";
-                classification = "contractPrivateNonSecret";
-                sensitivity = "nonSecret";
-              };
-          };
-        };
-
-      # The Nix-unit corpus is shared by the topical flake checks, the
-      # per-file nix-eval-jobs surface, and the locked inventory. Keep the
-      # evaluator context in one constructor so those surfaces cannot drift.
-      nixUnitCorpusFor = system:
-        let
-          pkgs = nixpkgsFor.${system};
-          d2bModule = import ./nixos-modules { inherit inputs; };
-          mkEval = modules: nixpkgs.lib.nixosSystem {
-            inherit system;
-            modules = [
-              d2bModule
-              ({ lib, ... }: {
-                d2b.site.usePrebuiltHostTools =
-                  lib.mkDefault (system == "x86_64-linux");
-              })
-              (nixUnitCatalogFixtureFor pkgs)
-            ] ++ modules;
-          };
-        in
-        import ./tests/unit/nix/eval-jobs.nix {
-          lib = pkgs.lib;
-          inherit pkgs system;
-          flakeRoot = ./.;
-          d2bLib = import ./nixos-modules/lib.nix { lib = pkgs.lib; };
-          inherit mkEval;
-          nixpkgsFlake = nixpkgs;
-          inherit d2bModule;
-        };
-      nixUnitShardCaseFiles = {
-        nix-unit-daemon = [
-          "activation-runtime-tmpfiles.nix"
-          "broker-bundle-path.nix"
-          "broker-caps.nix"
-          "broker-service-posture.nix"
-          "broker-socket-activation.nix"
-          "bundle-artifacts-compiler.nix"
-          "bundle-artifacts-digest.nix"
-          "bundle-artifacts-envelope.nix"
-          "daemon-autostart.nix"
-          "daemon-default-compat.nix"
-          "gateway-vm.nix"
-          "gateway-vm-1.nix"
-          "gateway-vm-2.nix"
-          "gateway-vm-3.nix"
-          "gateway-vm-guest.nix"
-          "d2bd-startup-smoke.nix"
-        ];
-        nix-unit-guest = [
-          "guest-config-containment.nix"
-          "guest-control-auth.nix"
-          "guest-control-vsock.nix"
-          "guest-control-vsock-extra-equals.nix"
-          "guest-control-vsock-extra-split.nix"
-          "guest-control-vsock-long-socket.nix"
-          "guest-control-vsock-user-cid.nix"
-          "guest-control-vsock-user-socket.nix"
-          "guest-exec-policy.nix"
-          "guest-shell-policy.nix"
-        ];
-        nix-unit-misc = [
-          "assertions.nix"
-          "assertions-1.nix"
-          "assertions-2.nix"
-          "assertions-3.nix"
-          "autostart-wiring.nix"
-          "examples-with-observability.nix"
-          "gas-city-contributor.nix"
-          "ifname-nix-rust-parity.nix"
-          "interaction-providers.nix"
-          "observability.nix"
-          "observability-guest.nix"
-          "observability-host-collector.nix"
-          "observability-host-collector-extra.nix"
-          "observability-host-collector-otlp.nix"
-          "observability-host-collector-processor-split.nix"
-          "observability-host-collector-identity.nix"
-          "observability-host-collector-umask.nix"
-          "observability-host-collector-flags.nix"
-          "provider-catalog.nix"
-          "provider-elf-shim.nix"
-          "provider-projection-exportability.nix"
-          "provider-projection-fields.nix"
-          "provider-system-providers.nix"
-          "readiness-waves.nix"
-          "resource-sharing.nix"
-          "resources-bundle-telemetry.nix"
-          "restart-policy.nix"
-          "test-infrastructure.nix"
-          "usb-security-key.nix"
-          "vm-eval-overlays.nix"
-        ];
-        nix-unit-network = [
-          "bridge-ipv6-boot-sysctl.nix"
-          "generation-cleanup-absent-network.nix"
-          "index.nix"
-          "multi-env-daemon-backed.nix"
-          "net-vm-network.nix"
-          "realm-workloads.nix"
-          "realms.nix"
-          "realms-artifacts.nix"
-          "realms-controller.nix"
-          "realms-examples.nix"
-          "realms-host-local.nix"
-          "realms-identity.nix"
-          "realms-rejections.nix"
-          "realms-workloads.nix"
-          "realms-zone-control.nix"
-          "usbip-gating.nix"
-        ];
-        nix-unit-runtime = [
-          "clipboard.nix"
-          "device-gpu-eval.nix"
-          "external-vm-kind.nix"
-          "external-vm-kind-rejections.nix"
-          "external-vm-kind-runtime.nix"
-          "niri-vm-borders.nix"
-          "guest-qemu-media-spec.nix"
-          "provider-runtime-contracts.nix"
-          "requested-vm-config.nix"
-          "security-key-gating.nix"
-          "video-contract.nix"
-        ];
-        nix-unit-state = [
-          "per-vm-state-ownership.nix"
-          "principal-uid-collision.nix"
-          "store-overlay-emit.nix"
-          "umask-roundtrip.nix"
-          "volume-mounts.nix"
-        ];
-      };
     in
     {
       # The public surface area - populated incrementally by the
@@ -431,7 +248,6 @@
         nix-unit = pkgs.mkShellNoCC {
           name = "d2b-nix-unit";
           packages = with pkgs; [
-            nix-eval-jobs
             jq
           ];
         };
@@ -1258,74 +1074,6 @@
             commit -q -m 'advisory-db snapshot'
         '';
 
-        nixUnitCaseFileNames = nixUnitCorpus.caseFileNames;
-        nixUnitShardFiles = pkgs.lib.concatLists (pkgs.lib.attrValues nixUnitShardCaseFiles);
-        nixUnitShardMissingFiles =
-          pkgs.lib.filter (n: !(builtins.elem n nixUnitShardFiles)) nixUnitCaseFileNames;
-        nixUnitShardUnknownFiles =
-          pkgs.lib.filter (n: !(builtins.elem n nixUnitCaseFileNames)) nixUnitShardFiles;
-        nixUnitShardDuplicateFiles =
-          let
-            count = needle: pkgs.lib.length (pkgs.lib.filter (n: n == needle) nixUnitShardFiles);
-          in
-          pkgs.lib.filter (n: count n > 1) (pkgs.lib.unique nixUnitShardFiles);
-        nixUnitShardCoverageOk =
-          nixUnitShardMissingFiles == [ ]
-          && nixUnitShardUnknownFiles == [ ]
-          && nixUnitShardDuplicateFiles == [ ];
-        nixUnitShardCoverageReport = builtins.toJSON {
-          missing = nixUnitShardMissingFiles;
-          unknown = nixUnitShardUnknownFiles;
-          duplicate = nixUnitShardDuplicateFiles;
-        };
-        nixUnitCorpus = nixUnitCorpusFor system;
-        nixUnitAggregateCheck = nixUnitCorpus.mkAggregateCheck;
-        nixUnitShardChecks =
-          pkgs.lib.mapAttrs nixUnitAggregateCheck nixUnitShardCaseFiles;
-
-        # Fail-closed case-PRESENCE gate (mirrors tests/tools/assert-pinned-tests.sh
-        # for the Rust layer): every pinned case name MUST still exist in the
-        # corpus, so a retired bash gate's nix-unit successor can't silently
-        # vanish. Pins are system-aware - `common.txt` holds the all-systems
-        # cases; `<system>.txt` holds extra (e.g. x86-only graphics) cases.
-        # Regenerate with `make nix-unit-pin` after adding/removing cases.
-        #
-        # common.txt is REQUIRED and must be non-empty: deleting the pin file
-        # itself (along with case files) must fail closed, not silently make
-        # the pin set empty (review W2 finding). The PER-SYSTEM file is also
-        # REQUIRED TO EXIST for the current system, but may be empty - a
-        # system with no extra (e.g. graphics) cases still commits a
-        # header-only file, so deleting a non-empty per-system pin file
-        # (e.g. x86_64-linux.txt with its 42 graphics pins) also fails closed
-        # (review W2 re-review finding). The set of supported systems is the
-        # flake's own `systems`, not the currently-evaluated case set (which
-        # could be deleted in the same diff).
-        nixUnitCorpusCaseNames = nixUnitCorpus.caseNames;
-        pinNames = path: pkgs.lib.filter (n: n != "" && !(pkgs.lib.hasPrefix "#" n))
-          (pkgs.lib.splitString "\n" (builtins.readFile path));
-        readPinsRequiredNonEmpty = path:
-          if !(builtins.pathExists path) then
-            throw "nix-unit: required pin file ${toString path} is missing - run `make nix-unit-pin`"
-          else
-            let names = pinNames path;
-            in if names == [ ]
-            then throw "nix-unit: required pin file ${toString path} has no pinned cases - the corpus would be unguarded; run `make nix-unit-pin`"
-            else names;
-        readPinsRequiredExist = path:
-          # The file MUST exist (so deleting it fails closed) but MAY be empty
-          # for a system with no system-specific cases (e.g. aarch64 has no
-          # x86-only graphics cases).
-          if !(builtins.pathExists path) then
-            throw "nix-unit: required per-system pin file ${toString path} is missing - every supported system commits one (header-only is fine); run `make nix-unit-pin`"
-          else pinNames path;
-        nixUnitPinned =
-          (readPinsRequiredNonEmpty ./tests/unit/nix/pinned/common.txt)
-          ++ (readPinsRequiredExist (./tests/unit/nix/pinned + "/${system}.txt"));
-        nixUnitMissingPins =
-          pkgs.lib.filter (n: !(builtins.elem n nixUnitCorpusCaseNames)) nixUnitPinned;
-        nixUnitMissingReport = pkgs.lib.concatMapStringsSep "\n"
-          (n: "MISSING PINNED CASE: ${n} (a pinned nix-unit case was deleted - restore it or run `make nix-unit-pin`)")
-          nixUnitMissingPins;
       in {
         eval-fixture-contracts =
           if system == "x86_64-linux" then
@@ -1365,45 +1113,6 @@
             pkgs.runCommand "d2b-fixture-smoke-full-unsupported" { } ''
               echo "fixture-smoke-full is x86_64-linux only (graphics gate)" > $out
             '';
-
-        # W2: nix-unit value/throw assertions migrated from the group-D/E
-        # eval-gate bash scripts.
-        #
-        # CRITICAL: failures THROW at EVALUATION time, not just at build time.
-        # tests/static.sh + static-fast.sh run `nix flake check --no-build
-        # --all-systems`, which evaluates every check's derivation but does
-        # NOT build it. A failing runCommand would evaluate to a valid
-        # (unbuilt) derivation and slip through fail-OPEN (review W2 finding).
-        # Throwing here forces the gate to fail during `--no-build`
-        # evaluation, on BOTH systems (aarch64 included on an x86 runner).
-        nix-unit =
-          if !nixUnitShardCoverageOk || nixUnitMissingPins != [ ] then
-            throw ''
-              nix-unit presence gate FAILED (${toString (pkgs.lib.length nixUnitMissingPins)} pinned cases missing) for ${system}:
-              shardCoverage=${nixUnitShardCoverageReport}${pkgs.lib.optionalString (nixUnitMissingPins != [ ]) "\n${nixUnitMissingReport}"}
-            ''
-          else
-            pkgs.runCommand "d2b-nix-unit" { } ''
-              echo "nix-unit: ${toString (pkgs.lib.length nixUnitCorpusCaseNames)} pinned case names present; ${toString (pkgs.lib.length (pkgs.lib.attrNames nixUnitShardCaseFiles))} shards cover ${toString (pkgs.lib.length nixUnitCaseFileNames)} case files"
-              mkdir -p "$out"
-              echo ok > "$out/nix-unit"
-            '';
-
-        # W2: the "module callsites use the shared volume helpers" grep
-        # checks from volume-mounts-eval.sh - a hermetic source-wiring
-        # invariant (the nix-unit value cases assert the helpers; this
-        # asserts the production modules actually call them).
-        module-helper-wiring = pkgs.runCommand "d2b-module-helper-wiring" { } ''
-          set -e
-          grep -Fq 'serial = d2bLib.volumeSerial volume;' ${./nixos-modules/processes-json.nix} \
-            || { echo "processes-json.nix must use shared volumeSerial helper" >&2; exit 1; }
-          grep -Fq 'd2bLib.volumeFileSystem volume' ${./nixos-modules/vm-guest-base.nix} \
-            || { echo "vm-guest-base.nix must use shared volumeFileSystem helper" >&2; exit 1; }
-          grep -Fq 'builtins.filter d2bLib.volumeDiskInitEligible microvm.volumes' ${./nixos-modules/processes-json.nix} \
-            || { echo "processes-json.nix must gate DiskInit with shared eligibility helper" >&2; exit 1; }
-          mkdir -p "$out"
-          echo ok > "$out/module-helper-wiring"
-        '';
 
         eval-minimal = mkCheck "eval-minimal"
           (mkEval [ (import ./examples/minimal/configuration.nix) ]);
@@ -1520,28 +1229,6 @@
         in pkgs.runCommand "d2b-guest-static-consumption" { } ''
           mkdir -p "$out"
           printf '%s\n' '${evidence}' > "$out/guest-static-consumption.json"
-        '';
-
-        guest-exec-policy = let
-          evidence = import ./tests/unit/nix/eval-cases/guest-exec-policy-eval.nix {
-            inherit system pkgs;
-            flake = self;
-            scenario = "enabled";
-          };
-        in pkgs.runCommand "d2b-guest-exec-policy" { } ''
-          mkdir -p "$out"
-          printf '%s\n' '${evidence}' > "$out/guest-exec-policy.json"
-        '';
-
-        guest-control-vsock = let
-          evidence = import ./tests/unit/nix/eval-cases/guest-control-vsock-eval.nix {
-            inherit system pkgs;
-            flake = self;
-            scenario = "base";
-          };
-        in pkgs.runCommand "d2b-guest-control-vsock" { } ''
-          mkdir -p "$out"
-          printf '%s\n' '${evidence}' > "$out/guest-control-vsock.json"
         '';
 
         # Real cargo-deny gate: bans, licenses, and sources for the
@@ -1729,7 +1416,7 @@
             };
           })
         ]);
-      } // nixUnitShardChecks // nixpkgs.lib.optionalAttrs (system == "x86_64-linux") {
+      } // nixpkgs.lib.optionalAttrs (system == "x86_64-linux") {
         # graphics-workstation transitively depends on x86_64-only
         # packages (spectrum-ch, crosvm-patched, vhost-device-sound)
         # and the framework's `checkVmPlatform` gate refuses to
@@ -1739,83 +1426,6 @@
         eval-graphics = mkCheck "eval-graphics"
           (mkEval [ (import ./examples/graphics-workstation/configuration.nix) ]);
       });
-
-      # The local nix-eval-jobs surface is the middle partition: one aggregate
-      # attr per case file. The constructor lives in eval-jobs.nix and is also
-      # used by the seven topical flake checks above.
-      nixUnitJobs = forAllSystems (system:
-        let
-          nixUnitCorpus = nixUnitCorpusFor system;
-        in
-        nixUnitCorpus.fileJobs // {
-          nix-unit = self.checks.${system}.nix-unit;
-        }
-      );
-
-      # Evaluate file jobs in existing topical shard processes. This keeps
-      # coverage and the locked file-job inventory unchanged while preventing
-      # one nix-eval-jobs worker from retaining every large scenario graph for
-      # the entire corpus.
-      nixUnitJobShards = forAllSystems (system:
-        let
-          pkgs = nixpkgsFor.${system};
-          nixUnitCorpus = nixUnitCorpusFor system;
-          jobsFor = files:
-            pkgs.lib.filterAttrs
-              (jobName: _:
-                builtins.elem
-                  "${pkgs.lib.removePrefix "case-" jobName}.nix"
-                  files)
-              nixUnitCorpus.fileJobs;
-          fileGroups = pkgs.lib.listToAttrs (map
-            (file: {
-              name = "case-${pkgs.lib.removeSuffix ".nix" file}";
-              value = jobsFor [ file ];
-            })
-            nixUnitCorpus.caseFileNames);
-        in
-        fileGroups // {
-          integrity = {
-            nix-unit = self.checks.${system}.nix-unit;
-          };
-        }
-      );
-
-      # Map each topical Nix-unit check to its per-file jobs for the hosted
-      # matrix. The selected runner evaluates these jobs one at a time rather
-      # than forcing one aggregate check graph in a single evaluator.
-      nixUnitCheckJobShards = forAllSystems (system:
-        let
-          pkgs = nixpkgsFor.${system};
-          nixUnitCorpus = nixUnitCorpusFor system;
-          jobsFor = files:
-            pkgs.lib.filterAttrs
-              (jobName: _:
-                builtins.elem
-                  "${pkgs.lib.removePrefix "case-" jobName}.nix"
-                  files)
-              nixUnitCorpus.fileJobs;
-        in
-        (pkgs.lib.mapAttrs (_check: files: jobsFor files) nixUnitShardCaseFiles) // {
-          nix-unit = {
-            integrity = self.checks.${system}.nix-unit;
-          };
-        }
-      );
-
-      # One locked, evaluation-only inventory keeps both exact source case
-      # names and the per-file job names together. Attr-name discovery does
-      # not force any case expression.
-      nixUnitInventory = forAllSystems (system:
-        let
-          nixUnitCorpus = nixUnitCorpusFor system;
-        in
-        {
-          caseNames = builtins.sort builtins.lessThan nixUnitCorpus.caseNames;
-          jobNames =
-            builtins.sort builtins.lessThan (nixUnitCorpus.jobNames ++ [ "nix-unit" ]);
-        }
-      );
 
       lib = nixpkgs.lib.makeExtensible (_: {
         evalFixture = system: self.checks.${system}.eval-fixture-contracts.fixtureData;

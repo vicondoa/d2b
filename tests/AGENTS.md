@@ -29,7 +29,7 @@ When in doubt, push the test *down* toward type 1, not up.
 
 | # | Type | What it is | Lives in |
 |---|------|------------|----------|
-| 1 | **eval case** | declarative pure-Nix assertion (`{ expr; expected; }` / `{ expr; expectedError; }`) over module-config values + eval-rejection | `tests/unit/nix/cases/*.nix` (auto-discovered; pins in `tests/unit/nix/pinned/`) |
+| 1 | **eval case** | declarative pure-Nix assertion (`{ expr; expected; }` / `{ expr; expectedError; }`) over module-config values + eval-rejection | `tests/unit/nix/surfaces/*.nix`, with explicit case/module inputs in Bazel |
 | 2 | **unit test** | `#[test]` over one crate's pure logic | `packages/<crate>/src/**` `#[cfg(test)]` |
 | 3 | **integration test** | spawns the real binary (`CARGO_BIN_EXE_*`) over AF_UNIX/fd-passing; no host mutation | `packages/<crate>/tests/*.rs` |
 | 4 | **contract test** | Rust assertion over a **rendered** Nix artifact (bundle / host-json / processes.json) - the Nix↔Rust + doc↔impl boundary | `packages/d2b-contract-tests/tests/*.rs` (`D2B_FIXTURES`) |
@@ -86,12 +86,11 @@ fails while walking on-disk scripts and the Makefile.
 
 ## How to add a test (decision rule)
 
-1. **Asserting a Nix module value / option / eval-rejection?** → type 1, a
-   nix-unit case in `tests/unit/nix/cases/`. Add a case file (it is
-   auto-discovered; do not edit `default.nix`), then regenerate the pin list
-   (`tests/tools/gen-nix-unit-pins.sh`). CI evaluates the corpus through
-   sharded `nix-unit-<shard>` flake checks; add new cases to the existing
-   topical file whose shard already owns that behavior.
+1. **Asserting a Nix module value / option / eval-rejection?** → type 1, add
+   the smallest owner-local expression to its named file under
+   `tests/unit/nix/surfaces/` and declare its exact case, module, helper, and
+   fixture inputs in `bazel/checks/nix/BUILD.bazel`. Do not add a corpus
+   discovery rule, pin file, or aggregate inventory.
 2. **Asserting Rust logic?** → type 2, a `#[test]` in that crate's `src`.
 3. **Asserting the real binary's wire/CLI behaviour?** → type 3, a test in
    `packages/<crate>/tests/*.rs` against `CARGO_BIN_EXE_*`. Spawn hermetically -
@@ -128,7 +127,7 @@ tests/
 ├── golden/ / fixtures/                                             shared test data + fixtures
 ├── tools/                                                          Bazel facade, runners, codegen, and asserter tools
 ├── unit/
-│   ├── nix/      (cases/, pinned/, eval-cases/)                     type 1 eval cases
+│   ├── nix/      (surfaces/, cases/, eval-cases/)                    type 1 eval cases
 │   ├── smoke/                                                      type 6 smoke/check defs
 │   ├── meta/                                                       meta gates (closed set)
 │   └── gates/                                                      drift/perf gates (closed set)
@@ -193,10 +192,12 @@ individual Bazel labels remain directly runnable for focused reruns. The
 performance target is advisory and is not validation evidence when it reports
 a guarded skip.
 
-Nix-unit cases keep their existing pins under `tests/unit/nix/pinned/`; after
-adding or removing cases, regenerate only those pins with
-`make nix-unit-pin`. Runtime-ledger census changes use the existing
-`make runtime-ledger-pin` target. Do not add a second inventory or validator.
+Nix-unit surfaces are fixed Bazel labels with explicit source closures.
+Each action copies only its declared runfiles into an isolated source root and
+evaluates the surface directly through the shared minimal runner flake. The
+repository flake outputs and ambient `D2B_REPO_ROOT` do not participate.
+Runtime-ledger census changes use the existing `make runtime-ledger-pin`
+target. Do not add a second inventory or validator.
 
 ### Retained Layer-2 and manual scripts
 

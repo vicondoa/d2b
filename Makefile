@@ -29,7 +29,6 @@ SHELL := $(CURDIR)/tests/tools/scrub-shell-environment
         heavy-lane-pre-tag heavy-lane-smoke-lite \
         heavy-gate-build heavy-gate-provision heavy-check heavy-flake-check \
         heavy-test-integration heavy-test-host-integration \
-        nix-unit-pin \
         runtime-ledger-pin clean
 
 # Current Nix system double, used to address per-system flake.checks attrs.
@@ -232,11 +231,6 @@ heavy-lane-integration: heavy-lane-guard
 # Additional targets (helper utilities, legacy aliases, meta gates).
 # ===========================================================================
 
-## nix-unit-pin - regenerate the fail-closed nix-unit case-presence pins
-## (tests/unit/nix/pinned/*.txt) after adding or removing cases.
-nix-unit-pin:
-	bash tests/tools/gen-nix-unit-pins.sh
-
 ## test-host-integration - G-host: runNixOSTest VM integration tests (the
 ## `vmChecks` flake output, NOT swept by `nix flake check`). Each test boots a
 ## real NixOS VM with the d2b daemon surface and asserts live broker /
@@ -246,6 +240,7 @@ nix-unit-pin:
 ## NixOS host; TCG software emulation is the slow fallback when /dev/kvm is
 ## absent). x86_64-linux only (a same-system VM builder is required).
 ## Public heavy lane: acquires a slot, then runs the raw work behind the gate.
+## Set D2B_VM_CHECK=<name> to build one named vmChecks entry.
 test-host-integration: heavy-gate-build
 	$(HEAVY_GATE) $(MAKE) heavy-lane-host-integration
 
@@ -260,7 +255,11 @@ heavy-lane-host-integration: heavy-lane-guard
 	echo "test-host-integration: /dev/kvm absent - runNixOSTest will fall back to slow TCG emulation"; \
 	fi; \
 	root="$$(pwd)"; \
+	if [ -n "$${D2B_VM_CHECK:-}" ]; then \
+	names="$$D2B_VM_CHECK"; \
+	else \
 	names="$$(nix eval --raw --impure --no-warn-dirty --expr "builtins.concatStringsSep \" \" (builtins.attrNames (builtins.getFlake \"git+file://$$root\").vmChecks.$$system)")"; \
+	fi; \
 	if [ -z "$$names" ]; then \
 	echo "test-host-integration: no vmChecks present"; \
 	exit 0; \

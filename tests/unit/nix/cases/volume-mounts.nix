@@ -12,9 +12,6 @@
 # separately rejects path-shaped ResourceSpec fields by throwing; reading the
 # module-local records keeps these policy vectors focused on the Volume rules.
 #
-# The "module callsites use the shared helpers" grep checks the bash gate
-# also carried are NOT value assertions; they migrate to the hermetic
-# flake.checks.<sys>.module-helper-wiring derivation (see flake.nix).
 { d2bLib, mkEval, lib, pkgs, ... }:
 
 let
