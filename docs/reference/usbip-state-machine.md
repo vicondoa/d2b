@@ -1,10 +1,13 @@
 # USBIP per-busid state machine
 
-> Reference for the typed, fail-fast state machine owned by the USBIP
-> Provider and driven through the daemon effect adapter every time a USBIP
-> passthrough device is attached to a target VM.
+> Reference for the provider-owned, typed USBIP planning and characterization
+> model. It documents the canonical per-busid ordering and provider-local
+> tests; it is not a production daemon call path.
 >
 > Source: [`packages/d2b-provider-device-usbip/src/state_machine.rs`](../../packages/d2b-provider-device-usbip/src/state_machine.rs).
+> The production-wired lifecycle path is the Provider's
+> [`reconcile_state.rs`](../../packages/d2b-provider-device-usbip/src/reconcile_state.rs),
+> which the daemon composition currently consumes.
 > Canonical-order anchor: [AGENTS.md "Critical subsystems"](../../AGENTS.md#critical-subsystems--handle-with-care).
 
 ## Why a state machine
@@ -30,10 +33,11 @@ itself. Any step out of order silently corrupts state:
 
 The state machine pins the order so call sites can't shuffle it.
 
-## Prerequisites
+## Model scope
 
-The executor may run only after `d2bd` has resolved the trusted bundle for
-the target VM/env/busid. Required preconditions are:
+The planning model is pure provider code and has no production consumer in the
+current tree. A future effect adapter must establish these preconditions before
+using it for a live operation:
 
 - a USBIP bind intent and firewall intent exist for the VM/busid;
 - VM apply paths that need guest import have a running VM and authenticated
@@ -111,10 +115,9 @@ use d2b_provider_device_usbip::{
   per-(env, vm, busid) bind intent
   (`usbip-bind:env:<env>:vm:<vm>:bus:<busid>`) are both proven
   to exist in the trusted bundle BEFORE the executor ever runs.
-* [`UsbipStepExecutor`] - trait, one method per step. Production
-  wires this through the daemon effect adapter; tests inject a
-  fixture executor that records call order and can fail a chosen
-  step.
+* [`UsbipStepExecutor`] - trait, one method per step. Provider-local tests
+  inject a fixture executor that records call order and can fail a chosen
+  step; no production adapter currently implements this trait.
 * [`execute_usbip_plan(plan, executor)`] - drives the plan
   top-to-bottom, fail-fast on the first error.
 * `UsbipExecutionReport::failure_rollback_order()` - returns only
@@ -133,9 +136,8 @@ UsbipPlanError {
 }
 ```
 
-The provider error is an internal typed result. The daemon effect adapter maps
-it into the existing daemon and broker error surfaces; there is no separate
-public step-specific kind or exit-code contract.
+The provider error is an internal typed result for this planning model. No
+current daemon or broker adapter maps it into a public error envelope.
 
 ### Partial-progress contract
 
@@ -155,7 +157,7 @@ a partial failure are safe.
 
 ## Per-env proxy synchronization
 
-The daemon encodes the current generic L4 proxy strategy in
+The production-wired reconcile path encodes the current generic L4 proxy strategy in
 `UsbipProxySynchronizationPlan`
 ([`packages/d2b-provider-device-usbip/src/reconcile_state.rs`](../../packages/d2b-provider-device-usbip/src/reconcile_state.rs)).
 The encoded strategy deliberately avoids busid-aware claims that the current
@@ -250,6 +252,5 @@ locks, sysfs driver links, nftables rules, or per-env sidecars directly.
   per-env runner / broker op surface that backs each step.
 * [`docs/reference/components-usbip.md`](./components-usbip.md) -
   operator-facing USBIP component reference.
-* [`tests/unit/nix/cases/usbip-gating.nix`](../../tests/unit/nix/cases/usbip-gating.nix) -
-  eval-time gate that host-side USBIP artifacts require both
-  host and per-VM opt-ins.
+* [`packages/d2b-provider-device-usbip/nix/tests/default.nix`](../../packages/d2b-provider-device-usbip/nix/tests/default.nix) -
+  owner-local Nix evaluation for the USBIP guest module.
