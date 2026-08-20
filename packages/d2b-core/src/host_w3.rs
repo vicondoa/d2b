@@ -21,9 +21,9 @@
 //! `schemaVersion`/`bundleVersion` bumps. See plan.md §"W3 schema/
 //! version bump rules".
 
-use crate::host::IfName;
 #[cfg(test)]
 use crate::host::TapRole;
+use d2b_contracts::v3::IfName;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 

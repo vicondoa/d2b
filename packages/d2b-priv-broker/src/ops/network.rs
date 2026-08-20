@@ -5,12 +5,12 @@ use std::os::unix::fs::{DirBuilderExt, MetadataExt, OpenOptionsExt};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
+use d2b_contracts::v3::IfName;
 use d2b_contracts::{
     broker_wire::{CreatePersistentTapRequest, DeletePersistentTapRequest},
     v3::ResourceUid,
 };
 use d2b_core::bundle_resolver::ResolvedBridgeIntent;
-use d2b_core::host::IfName;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
@@ -642,8 +642,8 @@ fn digest_parts(parts: &[&[u8]]) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use d2b_contracts::v3::IfName;
     use d2b_contracts::v3::{ResourceGeneration, ResourceUid};
-    use d2b_core::host::IfName;
     use std::cell::Cell;
 
     struct FakeBridge {

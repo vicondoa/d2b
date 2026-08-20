@@ -17,43 +17,30 @@ d2b_contracts_srcs = glob(["src/**/*.rs"], allow_empty = True)
 rust_library(
     name = "d2b_contracts",
     srcs = d2b_contracts_srcs,
-    compile_data = ["Cargo.toml"],
+    compile_data = [
+        "Cargo.toml",
+        "tests/fixtures/workload-execution-posture-v1.json",
+    ],
     proc_macro_deps = [
         "@crates//:async-trait",
     ],
     visibility = ["//visibility:public"],
-    deps = [
-        "//packages/d2b-core:d2b_core",
-        "//packages/d2b-realm-core:d2b_realm_core",
-    ] + all_crate_deps(normal = True, cargo_only = True),
+    deps = all_crate_deps(normal = True, cargo_only = True),
 )
 
-rust_library(
+alias(
     name = "d2b_contracts_test_support",
-    srcs = d2b_contracts_srcs,
-    compile_data = ["Cargo.toml"],
-    crate_name = "d2b_contracts",
-    proc_macro_deps = [
-        "@crates//:async-trait",
-    ],
+    actual = ":d2b_contracts",
     visibility = ["//visibility:public"],
-    deps = [
-        "//packages/d2b-core:d2b_core_test_support",
-        "//packages/d2b-realm-core:d2b_realm_core",
-    ] + all_crate_deps(normal = True, cargo_only = True),
 )
 
 rust_test(
-    name = "broker_network_prep",
-    srcs = ["tests/broker_network_prep.rs"],
-    compile_data = [
-        "//tests/fixtures:deny-unknown/host-valid.json",  # keep
-        "//:tests/golden/manifest_v04/baseline-vms.json",  # keep
-        "Cargo.toml",
-    ],
+    name = "foundation",
+    srcs = ["tests/foundation.rs"],
+    compile_data = ["Cargo.toml"],
     visibility = ["//visibility:public"],
     deps = [
-        "//packages/d2b-core:d2b_core",
+        ":d2b_contracts",
     ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
 )
 

@@ -529,10 +529,10 @@ name = "d2b-contracts"
 version = "0.0.0-bootstrap"
 dependencies = [
  "async-trait",
- "d2b-core",
- "d2b-realm-core",
  "protobuf",
+ "regex",
  "schemars",
+ "semver",
  "serde",
  "serde_json",
  "sha2",
@@ -545,6 +545,7 @@ name = "d2b-core"
 version = "0.0.0-bootstrap"
 dependencies = [
  "bolero",
+ "d2b-contracts",
  "d2b-realm-core",
  "nix 0.29.0",
  "regex",
@@ -615,6 +616,7 @@ dependencies = [
 name = "d2b-realm-core"
 version = "0.0.0-bootstrap"
 dependencies = [
+ "d2b-contracts",
  "schemars",
  "serde",
  "serde_json",

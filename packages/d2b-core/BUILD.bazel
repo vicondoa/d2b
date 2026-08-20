@@ -18,6 +18,7 @@ rust_library(
     ],
     visibility = ["//visibility:public"],
     deps = [
+        "//packages/d2b-contracts:d2b_contracts",
         "//packages/d2b-realm-core:d2b_realm_core",
     ] + all_crate_deps(normal = True, cargo_only = True),
 )
@@ -35,6 +36,7 @@ rust_library(
     crate_name = "d2b_core",
     visibility = ["//visibility:public"],
     deps = [
+        "//packages/d2b-contracts:d2b_contracts",
         "//packages/d2b-realm-core:d2b_realm_core",
     ] + all_crate_deps(normal = True, cargo_only = True),
 )
@@ -63,6 +65,20 @@ rust_test(
     name = "bundle-resolver-tamper",
     srcs = ["tests/bundle_resolver_tamper.rs"],
     compile_data = ["Cargo.toml"],
+    visibility = ["//visibility:public"],
+    deps = [
+        ":d2b_core",
+    ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
+)
+
+rust_test(
+    name = "broker_network_prep",
+    srcs = ["tests/broker_network_prep.rs"],
+    compile_data = [
+        "//tests/fixtures:deny-unknown/host-valid.json",  # keep
+        "//:tests/golden/manifest_v04/baseline-vms.json",  # keep
+        "Cargo.toml",
+    ],
     visibility = ["//visibility:public"],
     deps = [
         ":d2b_core",
@@ -186,6 +202,7 @@ rust_test(
     visibility = ["//visibility:public"],
     deps = [
         ":d2b_core",
+        "//packages/d2b-contracts:d2b_contracts",
         "@crates//:bolero",
         "@crates//:serde_json",
     ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),

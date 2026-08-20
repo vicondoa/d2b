@@ -10,7 +10,7 @@
   "features": [],
   "default_features": false,
   "source_authority": "Cargo.lock",
-  "lock_sha256": "931fa7601b9f62d891a878c0c2af7c6a4fef0aae4ee839cfb01fe8a140eea753",
+  "lock_sha256": "405bc0983bb47fe81cd7636c56d53855a3086b8050090bcf0b05ff1e52e26a71",
   "packages": [
     {
       "id": "adler2@2.0.1#registry+https://github.com/rust-lang/crates.io-index",
@@ -1440,18 +1440,6 @@
     },
     {
       "from": "d2b-contracts@0.0.0-bootstrap#path",
-      "to": "d2b-core@0.0.0-bootstrap#path",
-      "kind": "normal",
-      "target": null
-    },
-    {
-      "from": "d2b-contracts@0.0.0-bootstrap#path",
-      "to": "d2b-realm-core@0.0.0-bootstrap#path",
-      "kind": "normal",
-      "target": null
-    },
-    {
-      "from": "d2b-contracts@0.0.0-bootstrap#path",
       "to": "protobuf@3.7.2#registry+https://github.com/rust-lang/crates.io-index",
       "kind": "normal",
       "target": null
@@ -1459,6 +1447,12 @@
     {
       "from": "d2b-contracts@0.0.0-bootstrap#path",
       "to": "schemars@0.8.22#registry+https://github.com/rust-lang/crates.io-index",
+      "kind": "normal",
+      "target": null
+    },
+    {
+      "from": "d2b-contracts@0.0.0-bootstrap#path",
+      "to": "semver@1.0.28#registry+https://github.com/rust-lang/crates.io-index",
       "kind": "normal",
       "target": null
     },
@@ -1483,6 +1477,12 @@
     {
       "from": "d2b-contracts@0.0.0-bootstrap#path",
       "to": "unicode-normalization@0.1.25#registry+https://github.com/rust-lang/crates.io-index",
+      "kind": "normal",
+      "target": null
+    },
+    {
+      "from": "d2b-core@0.0.0-bootstrap#path",
+      "to": "d2b-contracts@0.0.0-bootstrap#path",
       "kind": "normal",
       "target": null
     },
@@ -1687,6 +1687,12 @@
     {
       "from": "d2b-priv-broker@0.0.0-bootstrap#path",
       "to": "zbus@5.19.0#registry+https://github.com/rust-lang/crates.io-index",
+      "kind": "normal",
+      "target": null
+    },
+    {
+      "from": "d2b-realm-core@0.0.0-bootstrap#path",
+      "to": "d2b-contracts@0.0.0-bootstrap#path",
       "kind": "normal",
       "target": null
     },

@@ -5,28 +5,42 @@ use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use std::collections::BTreeSet;
 
 pub mod broker_wire;
+pub mod capability;
+pub mod configured_argv;
+pub mod contract_id;
+pub mod error;
 pub mod generated;
 pub mod generation_bundle;
 pub mod guest_auth;
 pub mod host_generation;
+pub mod ids;
+pub mod privileges_w3;
 pub mod provider_effects;
+pub mod realm;
 pub mod guest_proto {
     pub use crate::generated::guest_control::*;
 }
 pub mod resource_proto {
     pub use crate::generated::d2b_resource_v3::*;
 }
+pub mod audio;
 pub mod guest_wire;
 pub mod public_wire;
+pub mod runtime;
 pub mod security_key;
+pub mod target;
 pub mod terminal_wire;
+pub mod token;
 pub mod types;
 pub mod unsafe_local_wire;
+pub mod unsafe_local_workloads;
 pub mod usbip;
 pub mod usbip_effect_port;
+pub mod workload;
+pub mod workload_identity;
 
-pub use d2b_core::error::{Error, SemverRange, Version};
-pub use d2b_core::privileges_w3::W3BrokerOperation;
+pub use error::{Error, SemverRange, Version};
+pub use privileges_w3::W3BrokerOperation;
 
 pub const MAX_FRAME_SIZE: usize = 1024 * 1024;
 pub const PUBLIC_SOCKET_PATH: &str = "/run/d2b/public.sock";
@@ -375,13 +389,17 @@ fn extract_unknown_field(message: &str) -> Option<String> {
     Some(rest[..end].to_owned())
 }
 
-fn extract_ifname_error(message: &str) -> Option<d2b_core::host::IfNameError> {
+fn extract_ifname_error(message: &str) -> Option<v3::IfNameError> {
     if message.contains("interface name must not be empty") {
-        Some(d2b_core::host::IfNameError::Empty)
-    } else if message.contains("interface name must be at most 15 bytes") {
-        Some(d2b_core::host::IfNameError::TooLong)
-    } else if message.contains("interface name contains characters outside [A-Za-z0-9_-]") {
-        Some(d2b_core::host::IfNameError::InvalidCharacter)
+        Some(v3::IfNameError::Empty)
+    } else if message.contains("interface name must be at most 15 bytes")
+        || message.contains("interface name exceeds the Linux byte limit")
+    {
+        Some(v3::IfNameError::TooLong)
+    } else if message.contains("interface name contains characters outside [A-Za-z0-9_-]")
+        || message.contains("interface name contains an invalid character")
+    {
+        Some(v3::IfNameError::InvalidCharacter)
     } else {
         None
     }

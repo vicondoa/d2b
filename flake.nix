@@ -151,7 +151,10 @@
           cp -r ${./packages/d2b-sk-frontend} $out/packages/d2b-sk-frontend
           cp ${./packages/Cargo.guest.lock} $out/packages/Cargo.lock
           chmod -R u+w $out/packages/d2b-core
+          chmod -R u+w $out/packages/d2b-contracts
           chmod -R u+w $out/packages/d2b-realm-core
+          cp ${./tests/fixtures/guest-rust-workspace/d2b-contracts.Cargo.toml} \
+            $out/packages/d2b-contracts/Cargo.toml
           cp ${./tests/fixtures/guest-rust-workspace/d2b-realm-core.Cargo.toml} \
             $out/packages/d2b-realm-core/Cargo.toml
           cp ${./tests/fixtures/guest-rust-workspace/d2b-core.Cargo.toml} \

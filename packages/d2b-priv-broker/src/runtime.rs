@@ -12048,11 +12048,12 @@ mod tests {
 
     #[cfg(not(feature = "layer1-bootstrap"))]
     fn build_test_bundle(root: &Path) -> TestBundle {
+        use d2b_contracts::v3::IfName;
         use d2b_core::bundle::{Bundle, BundleClosureRef, BundleGeneration};
         use d2b_core::closures::{ClosureGeneration, ClosureMetadata};
         use d2b_core::host::{
             BridgePortFlags, ChNetHandoffMode, CloudHypervisorCapability, FdOwnershipEntry,
-            HostChConfig, HostJson, HostsFileOwnership, IfName, IfNameMapping, Ipv6SysctlEntry,
+            HostChConfig, HostJson, HostsFileOwnership, IfNameMapping, Ipv6SysctlEntry,
             KernelModulesEntry, LanPolicy, NetEnv, NetworkManagerUnmanaged, NftChain,
             NftablesModel, OwnershipRule, SitePolicy, TapRole, UsbipBusidLock, UsbipLockOwner,
             UsbipLockScope, VendorProductPair,
@@ -12910,10 +12911,10 @@ mod tests {
             _resolver: &BundleResolver,
         ) -> Result<d2b_contracts::broker_wire::BridgePortFlagsResponse, BrokerError> {
             Ok(d2b_contracts::broker_wire::BridgePortFlagsResponse {
-                bridge: d2b_core::host::IfName::new("nlworkbr0").expect("fake bridge ifname"),
+                bridge: d2b_contracts::v3::IfName::new("nlworkbr0").expect("fake bridge ifname"),
                 isolated: true,
                 neigh_suppress: true,
-                port: d2b_core::host::IfName::new(&format!("tap-{}", req.vm_id.as_str()))
+                port: d2b_contracts::v3::IfName::new(&format!("tap-{}", req.vm_id.as_str()))
                     .expect("fake tap ifname"),
             })
         }

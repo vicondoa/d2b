@@ -7,7 +7,7 @@
 
 use crate::ifname::{DEFAULT_PREFIX, looks_d2b_owned};
 use crate::nftables::{NftError, evaluate_coexistence_policy, hash_inet_d2b_table};
-use d2b_core::host::IfName;
+use d2b_contracts::v3::IfName;
 use d2b_core::host_w3::{
     CoexistencePolicy, FirewallCoexistencePolicy, FirewallManager, HostsEntry,
 };

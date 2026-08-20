@@ -40,7 +40,8 @@ use std::io::{BufRead, BufReader, Write};
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use d2b_core::host::{HostJson, IfName, NetEnv};
+use d2b_contracts::v3::IfName;
+use d2b_core::host::{HostJson, NetEnv};
 use serde::{Deserialize, Serialize};
 
 /// Historical degraded-mode threshold retained for compatibility with the

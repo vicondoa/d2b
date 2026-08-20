@@ -6,89 +6,11 @@
 //! decode whatever version is on disk and [`AudioPolicyState::to_v2_bytes`]
 //! to write canonical v2 JSON.
 
-use schemars::{
-    JsonSchema,
-    r#gen::SchemaGenerator,
-    schema::{InstanceType, Metadata, Schema, SchemaObject, SingleOrVec},
-};
-use serde::{Deserialize, Deserializer, Serialize};
+use schemars::JsonSchema;
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-// ── LevelPercent ────────────────────────────────────────────────────────────
-
-/// A volume or gain level in the range `0..=100`.
-///
-/// Values outside the range are rejected at construction; the `From<u8>`
-/// conversion is intentionally absent so callers cannot bypass the check
-/// via an implicit coercion.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
-#[serde(transparent)]
-pub struct LevelPercent(u8);
-
-impl LevelPercent {
-    /// Construct a [`LevelPercent`], returning an error when `value > 100`.
-    pub fn new(value: u8) -> Result<Self, LevelPercentError> {
-        if value > 100 {
-            return Err(LevelPercentError::OutOfRange(value));
-        }
-        Ok(Self(value))
-    }
-
-    /// Return the raw value as a `u8`.
-    pub fn get(self) -> u8 {
-        self.0
-    }
-}
-
-/// Error returned when a [`LevelPercent`] value is out of range.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum LevelPercentError {
-    /// The supplied value exceeds 100.
-    OutOfRange(u8),
-}
-
-impl std::fmt::Display for LevelPercentError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::OutOfRange(v) => write!(f, "level {v} is out of range; must be 0..=100"),
-        }
-    }
-}
-
-impl std::error::Error for LevelPercentError {}
-
-impl<'de> Deserialize<'de> for LevelPercent {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where
-        D: Deserializer<'de>,
-    {
-        let v = u8::deserialize(deserializer)?;
-        Self::new(v).map_err(serde::de::Error::custom)
-    }
-}
-
-impl JsonSchema for LevelPercent {
-    fn schema_name() -> String {
-        "LevelPercent".to_owned()
-    }
-
-    fn json_schema(_gen: &mut SchemaGenerator) -> Schema {
-        SchemaObject {
-            instance_type: Some(SingleOrVec::Single(Box::new(InstanceType::Integer))),
-            number: Some(Box::new(schemars::schema::NumberValidation {
-                minimum: Some(0.0),
-                maximum: Some(100.0),
-                ..Default::default()
-            })),
-            metadata: Some(Box::new(Metadata {
-                description: Some("Audio level in the range 0..=100.".to_owned()),
-                ..Default::default()
-            })),
-            ..Default::default()
-        }
-        .into()
-    }
-}
+pub use d2b_contracts::audio::{LevelPercent, LevelPercentError};
 
 // ── AudioGrant ──────────────────────────────────────────────────────────────
 

@@ -180,10 +180,10 @@ dependencies = [
 name = "d2b-contracts"
 version = "0.0.0-bootstrap"
 dependencies = [
- "d2b-core",
- "d2b-realm-core",
+ "async-trait",
  "protobuf",
  "schemars",
+ "semver",
  "serde",
  "serde_json",
  "sha2",
@@ -194,6 +194,7 @@ dependencies = [
 name = "d2b-core"
 version = "0.0.0-bootstrap"
 dependencies = [
+ "d2b-contracts",
  "d2b-realm-core",
  "rustix 0.38.44",
  "schemars",
@@ -232,6 +233,7 @@ dependencies = [
 name = "d2b-realm-core"
 version = "0.0.0-bootstrap"
 dependencies = [
+ "d2b-contracts",
  "schemars",
  "serde",
 ]

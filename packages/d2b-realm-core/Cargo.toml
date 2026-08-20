@@ -17,6 +17,7 @@ workspace = true
 # any host-only broker/daemon internals. The dependency-direction gate
 # (tests/unit/meta/) enforces this.
 [dependencies]
+d2b-contracts = { path = "../d2b-contracts", version = "0.0.0-bootstrap" }
 serde.workspace = true
 schemars.workspace = true
 

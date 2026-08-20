@@ -15,11 +15,10 @@ use crate::types::{
 };
 use crate::v3::process::{CapabilityClass, EnvironmentClass, NamespaceClass, UserNamespaceSpec};
 use crate::v3::{
-    ArtifactId, ResourceBundleGenerationId, ResourceGeneration, ResourceRef, ResourceUid,
+    ArtifactId, IfName, ResourceBundleGenerationId, ResourceGeneration, ResourceRef, ResourceUid,
     execution_policy::ExecutionDomain, storage::ZoneStoreId,
 };
-use d2b_core::host::IfName;
-use d2b_core::workload_identity::WorkloadIdentity;
+use crate::workload_identity::WorkloadIdentity;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;

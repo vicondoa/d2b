@@ -10,8 +10,7 @@ workspace = true
 
 [dependencies]
 async-trait = "0.1"
-d2b-core = { path = "../d2b-core", version = "0.0.0-bootstrap" }
-d2b-realm-core = { path = "../d2b-realm-core", version = "0.0.0-bootstrap" }
+semver = "1"
 serde.workspace = true
 serde_json.workspace = true
 schemars.workspace = true
@@ -20,4 +19,5 @@ unicode-normalization.workspace = true
 protobuf = "3.7.2"
 
 [dev-dependencies]
+regex = "1"
 serde_json.workspace = true

@@ -1,10 +1,10 @@
 use crate::typed_error::{ErrorEnvelope, TypedError};
+use d2b_contracts::v3::IfName;
 use d2b_contracts::{
     FeatureFlag, Hello, HelloOk, HelloRejected, HelloRejectedReason, Version,
     broker_wire::ExportBrokerAuditResponse,
     public_wire::{self, AuditResponse, AuthStatusResponse},
 };
-use d2b_core::host::IfName;
 use semver::{Version as SemverVersion, VersionReq};
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value, json};

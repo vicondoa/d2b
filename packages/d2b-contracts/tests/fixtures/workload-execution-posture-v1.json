@@ -1,0 +1,26 @@
+{
+  "schemaVersion": "v1",
+  "postures": {
+    "unsafeLocal": {
+      "isolation": "unsafe-local",
+      "environment": "systemd-user-manager-ambient",
+      "displayEnvironment": "wayland-proxy-only",
+      "executionIdentity": "authenticated-requester-uid",
+      "sessionPersistence": "user-manager-lifetime"
+    },
+    "localVm": {
+      "isolation": "virtual-machine",
+      "environment": "runtime-managed",
+      "displayEnvironment": "runtime-managed",
+      "executionIdentity": "workload-user",
+      "sessionPersistence": "runtime-managed"
+    },
+    "providerManaged": {
+      "isolation": "provider-managed",
+      "environment": "runtime-managed",
+      "displayEnvironment": "runtime-managed",
+      "executionIdentity": "provider-managed",
+      "sessionPersistence": "runtime-managed"
+    }
+  }
+}

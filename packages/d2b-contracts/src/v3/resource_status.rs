@@ -10,7 +10,7 @@ use super::{
         canonical_json_bytes, validate_canonical_string,
     },
 };
-use d2b_realm_core::OperationId;
+use crate::ids::OperationId;
 
 /// Maximum canonical bytes for a complete status object.
 pub const MAX_STATUS_BYTES: usize = 64 * 1024;

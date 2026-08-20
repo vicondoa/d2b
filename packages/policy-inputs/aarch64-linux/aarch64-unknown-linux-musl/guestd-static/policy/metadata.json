@@ -2,8 +2,8 @@
   "authority": "cargo-locked-metadata",
   "defaultFeatures": true,
   "features": [],
-  "lockSha256": "f3ff3d7ef4c4a6f43067d618d2202dcfaed1357dc7115b87f998cc136d2fe701",
-  "policyPackageCount": 144,
+  "lockSha256": "b192c1c85ae4c58359fbb0ea54212a61f87b05ecc19154c2ddfa75ecd18108b2",
+  "policyPackageCount": 143,
   "policyPackageIds": [
     "aho-corasick@1.1.4#registry+https://github.com/rust-lang/crates.io-index",
     "anyhow@1.0.104#registry+https://github.com/rust-lang/crates.io-index",
@@ -27,7 +27,6 @@
     "crossbeam@0.8.4#registry+https://github.com/rust-lang/crates.io-index",
     "crypto-common@0.1.7#registry+https://github.com/rust-lang/crates.io-index",
     "d2b-contracts@0.0.0-bootstrap#path",
-    "d2b-core@0.0.0-bootstrap#path",
     "d2b-exec-runner@0.0.0-bootstrap#path",
     "d2b-guestd@0.0.0-bootstrap#path",
     "d2b-realm-core@0.0.0-bootstrap#path",
@@ -150,7 +149,7 @@
     "wit-parser@0.244.0#registry+https://github.com/rust-lang/crates.io-index",
     "zmij@1.0.21#registry+https://github.com/rust-lang/crates.io-index"
   ],
-  "productionPackageCount": 144,
+  "productionPackageCount": 143,
   "resolveNodeCount": 0,
   "roots": [
     "d2b-guestd"

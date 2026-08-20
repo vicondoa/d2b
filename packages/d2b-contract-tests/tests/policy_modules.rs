@@ -184,8 +184,9 @@ fn vm_submodule_cutover() {
 // ---------------------------------------------------------------------------
 // Migrated from tests/static-rust-dependency-direction.sh.
 //
-// The Rust workspace dependency graph flows one way: contracts/core are leaves;
-// host depends on core+contracts; the binaries (d2b, d2bd) and the
+// The Rust workspace dependency graph flows one way: contracts are leaves;
+// realm/core depend on contracts; host depends on core+contracts; the binaries
+// (d2b, d2bd) and the
 // privileged broker (d2b-priv-broker, a sibling workspace) sit above. The
 // broker must NOT depend on d2bd/d2b; the CLI/daemon must NOT depend on
 // the broker.
@@ -196,20 +197,38 @@ fn vm_submodule_cutover() {
 fn static_rust_dependency_direction() {
     // (crate, allowed in-workspace deps) - verbatim port of the bash WANT map.
     let want: &[(&str, &[&str])] = &[
-        ("d2b-core", &[]),
-        ("d2b-contracts", &["d2b-core"]),
+        ("d2b-contracts", &[]),
+        ("d2b-realm-core", &["d2b-contracts"]),
+        ("d2b-core", &["d2b-contracts", "d2b-realm-core"]),
         ("d2b-host", &["d2b-core", "d2b-contracts"]),
-        ("xtask", &["d2b-core", "d2b-contracts", "d2b", "d2bd"]),
-        ("d2b", &["d2b-core", "d2b-contracts"]),
-        ("d2bd", &["d2b-core", "d2b-host", "d2b-contracts"]),
+        (
+            "xtask",
+            &["d2b-core", "d2b-realm-core", "d2b-contracts", "d2b", "d2bd"],
+        ),
+        ("d2b", &["d2b-core", "d2b-realm-core", "d2b-contracts"]),
+        (
+            "d2bd",
+            &[
+                "d2b-core",
+                "d2b-realm-core",
+                "d2b-host",
+                "d2b-contracts",
+            ],
+        ),
         (
             "d2b-priv-broker",
-            &["d2b-core", "d2b-host", "d2b-contracts"],
+            &[
+                "d2b-core",
+                "d2b-realm-core",
+                "d2b-host",
+                "d2b-contracts",
+            ],
         ),
     ];
-    let internal_crate =
-        Regex::new(r"^(d2b-core|d2b-host|d2b-contracts|d2b-priv-broker|d2b|d2bd|xtask)$")
-            .expect("valid internal-crate regex");
+    let internal_crate = Regex::new(
+        r"^(d2b-core|d2b-realm-core|d2b-host|d2b-contracts|d2b-priv-broker|d2b|d2bd|xtask)$",
+    )
+    .expect("valid internal-crate regex");
 
     let mut violations: Vec<String> = Vec::new();
     for (crate_name, allowed) in want {

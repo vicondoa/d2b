@@ -1,101 +1,8 @@
-use schemars::{
-    JsonSchema,
-    r#gen::SchemaGenerator,
-    schema::{InstanceType, Metadata, Schema, SchemaObject, SingleOrVec, StringValidation},
-};
-use serde::{Deserialize, Deserializer, Serialize};
+use schemars::JsonSchema;
+use serde::{Deserialize, Serialize};
 
 use crate::runtime::RuntimeMetadata;
-
-/// Linux interface name constrained to IFNAMSIZ-1 bytes and d2b's safe alphabet.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
-#[serde(transparent)]
-pub struct IfName(String);
-
-impl IfName {
-    /// Creates a validated interface name (<=15 ASCII bytes, `[A-Za-z0-9_-]+`).
-    pub fn new(value: impl Into<String>) -> Result<Self, IfNameError> {
-        let value = value.into();
-        if value.is_empty() {
-            return Err(IfNameError::Empty);
-        }
-        if value.len() > 15 {
-            return Err(IfNameError::TooLong);
-        }
-        if !value
-            .bytes()
-            .all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-')
-        {
-            return Err(IfNameError::InvalidCharacter);
-        }
-        Ok(Self(value))
-    }
-
-    /// Returns the validated interface name as a string slice.
-    pub fn as_str(&self) -> &str {
-        &self.0
-    }
-}
-
-/// Validation failures for IfName.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum IfNameError {
-    /// Empty names cannot address a link.
-    Empty,
-    /// Linux interface names have at most fifteen visible bytes.
-    TooLong,
-    /// Only ASCII alphanumeric, underscore, and hyphen are accepted.
-    InvalidCharacter,
-}
-
-impl std::fmt::Display for IfNameError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::Empty => write!(f, "interface name must not be empty"),
-            Self::TooLong => write!(f, "interface name must be at most 15 bytes"),
-            Self::InvalidCharacter => write!(
-                f,
-                "interface name contains characters outside [A-Za-z0-9_-]"
-            ),
-        }
-    }
-}
-
-impl std::error::Error for IfNameError {}
-
-impl<'de> Deserialize<'de> for IfName {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where
-        D: Deserializer<'de>,
-    {
-        Self::new(String::deserialize(deserializer)?).map_err(serde::de::Error::custom)
-    }
-}
-
-impl JsonSchema for IfName {
-    fn schema_name() -> String {
-        "IfName".to_owned()
-    }
-
-    fn json_schema(_gen: &mut SchemaGenerator) -> Schema {
-        let mut obj = SchemaObject {
-            instance_type: Some(SingleOrVec::Single(Box::new(InstanceType::String))),
-            string: Some(Box::new(StringValidation {
-                max_length: Some(15),
-                min_length: Some(1),
-                pattern: Some("^[A-Za-z0-9_-]+$".to_owned()),
-            })),
-            ..Default::default()
-        };
-        obj.metadata = Some(Box::new(Metadata {
-            description: Some(
-                "Linux interface name: <=15 ASCII bytes matching [A-Za-z0-9_-]+".to_owned(),
-            ),
-            ..Default::default()
-        }));
-        Schema::Object(obj)
-    }
-}
+use d2b_contracts::v3::IfName;
 
 /// Private host topology and host-owned capability contract.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
@@ -652,9 +559,10 @@ pub enum CapabilityStatus {
 #[cfg(test)]
 mod tests {
     use super::{
-        BridgePortFlags, HostJson, IfName, IfNameError, Ipv6SysctlEntry, TapRole, UsbipBusidLock,
+        BridgePortFlags, HostJson, IfName, Ipv6SysctlEntry, TapRole, UsbipBusidLock,
         UsbipLockOwner, UsbipLockScope, VendorProductPair,
     };
+    use d2b_contracts::v3::IfNameError;
 
     #[test]
     fn if_name_accepts_safe_linux_names() {

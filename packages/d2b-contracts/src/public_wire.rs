@@ -1,16 +1,19 @@
 use crate::broker_wire::{AuditExportCursor, AuditExportEntry};
 use crate::types::MediaRef;
-use crate::{FeatureFlag, Version, guest_wire::ExecState};
-pub use d2b_core::audio_policy::LevelPercent;
-use d2b_core::{
+use crate::{
+    FeatureFlag, Version,
+    audio::LevelPercent,
+    capability::CapabilitySet,
     error::Error,
-    host::IfName,
+    guest_wire::ExecState,
+    ids::OperationId,
     runtime::{RuntimeOperationCapabilities, RuntimeServiceSummary},
+    token::ProtocolToken,
+    v3::IfName,
+    workload::{
+        LauncherItemSummary, WorkloadExecutionPosture, WorkloadProviderKind, WorkloadState,
+    },
     workload_identity::{WorkloadIdentity, WorkloadTarget},
-};
-use d2b_realm_core::{
-    CapabilitySet, LauncherItemSummary, ProtocolToken, WorkloadExecutionPosture,
-    WorkloadProviderKind, WorkloadState, ids::OperationId,
 };
 use schemars::{
     JsonSchema,
@@ -2736,10 +2739,10 @@ mod tests {
         AuditResponse, LevelPercent, MutationFlags, PublicRequest, PublicResponse, RuntimeSummary,
         VmLifecycleRequest, VmLifecycleState,
     };
-    use crate::{FeatureFlag, Version, broker_wire::AuditExportCursor, decode_frame, encode_frame};
-    use d2b_core::error::Error;
-    use d2b_core::{
-        processes::ProcessRole,
+    use crate::{
+        Error, FeatureFlag, Version,
+        broker_wire::AuditExportCursor,
+        decode_frame, encode_frame,
         runtime::{RuntimeOperationCapabilities, RuntimeServiceRole, RuntimeServiceSummary},
     };
 
@@ -3010,11 +3013,11 @@ mod tests {
             detail: "qemu media runner active".to_owned(),
             kind: Some("qemu-media".to_owned()),
             operation_capabilities: RuntimeOperationCapabilities::local_qemu_media(),
-            services: vec![RuntimeServiceSummary::from_process_role(
-                "qemu-media",
-                ProcessRole::QemuMediaRunner,
-                false,
-            )],
+            services: vec![RuntimeServiceSummary {
+                id: "qemu-media".to_owned(),
+                optional: false,
+                role: RuntimeServiceRole::Hypervisor,
+            }],
         };
 
         let value = serde_json::to_value(summary).expect("serializes");

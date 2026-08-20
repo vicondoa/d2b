@@ -696,7 +696,7 @@ fn realm_controller_config_emitter_uses_legacy_vm_name_not_vm_ref() {
 /// gate: host-resident bundle artifacts parse these types.
 #[test]
 fn workload_identity_structs_carry_deny_unknown_fields() {
-    let source = read_repo_file("packages/d2b-core/src/workload_identity.rs");
+    let source = read_repo_file("packages/d2b-contracts/src/workload_identity.rs");
 
     for dto in [
         "WorkloadIdentity",
@@ -730,7 +730,7 @@ fn workload_identity_structs_carry_deny_unknown_fields() {
 /// removed or made incomplete.
 #[test]
 fn workload_identity_module_doc_names_version_bump_requirements() {
-    let source = read_repo_file("packages/d2b-core/src/workload_identity.rs");
+    let source = read_repo_file("packages/d2b-contracts/src/workload_identity.rs");
     for marker in [
         "bundleVersion",
         "schemaVersion",

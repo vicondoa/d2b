@@ -1,0 +1,23 @@
+[package]
+name = "d2b-contracts"
+version = "0.0.0-bootstrap"
+edition = "2024"
+publish = false
+license.workspace = true
+
+[lib]
+test = false
+doctest = false
+
+[lints]
+workspace = true
+
+[dependencies]
+async-trait = "0.1"
+semver = "1"
+serde.workspace = true
+serde_json.workspace = true
+schemars.workspace = true
+sha2.workspace = true
+unicode-normalization.workspace = true
+protobuf = "3.7.2"

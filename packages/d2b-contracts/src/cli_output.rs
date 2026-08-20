@@ -3,10 +3,11 @@ use std::collections::BTreeMap;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
+pub use crate::audio::LevelPercent;
 use crate::public_wire::{
     AudioChannel, AudioEnforcementPosture, AudioErrorKind, AudioProviderKind, AudioSetApplied,
-    LevelPercent,
 };
+use crate::{ids::OperationId, token::ProtocolToken, workload_identity::WorkloadTarget};
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(transparent)]
@@ -67,9 +68,9 @@ pub struct VmExecCreateOutputV1 {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct LaunchOutputV1 {
     pub command: String,
-    pub target: d2b_core::workload_identity::WorkloadTarget,
-    pub item_id: d2b_realm_core::ProtocolToken,
-    pub operation_id: d2b_realm_core::OperationId,
+    pub target: WorkloadTarget,
+    pub item_id: ProtocolToken,
+    pub operation_id: OperationId,
     pub disposition: crate::public_wire::LauncherExecDisposition,
 }
 
