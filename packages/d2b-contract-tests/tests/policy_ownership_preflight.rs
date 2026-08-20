@@ -4,7 +4,7 @@
 //! The eval-time assertions over `d2b.daemon.perVmStateOwnershipMatrix`
 //! live in the nix-unit corpus (`tests/unit/nix/cases/per-vm-state-ownership.nix`).
 //! The bash gate ALSO carried source-level regression guards - that
-//! `nixos-modules/store.nix` and the daemon's
+//! `packages/d2b-provider-volume-local/nix/store.nix` and the daemon's
 //! `packages/d2bd-runtime/src/ownership_preflight.rs` never re-introduce the legacy
 //! `root:kvm` ownership / `2775` group-writable store mode. Those are
 //! source-greps, not eval-time values, so they belong in the Rust policy layer
@@ -22,7 +22,7 @@
 
 use d2b_contract_tests::{read_repo_file, repo_path_exists, repo_root};
 
-const STORE_NIX: &str = "nixos-modules/store.nix";
+const STORE_NIX: &str = "packages/d2b-provider-volume-local/nix/store.nix";
 const OWNERSHIP_PREFLIGHT_RS: &str = "packages/d2bd-runtime/src/ownership_preflight.rs";
 
 fn store_nix() -> String {
@@ -33,21 +33,25 @@ fn store_nix() -> String {
     read_repo_file(STORE_NIX)
 }
 
-/// Recursively collect every regular file under `nixos-modules/`.
+/// Recursively collect every regular file under the Nix module roots.
 fn nixos_module_files() -> Vec<std::path::PathBuf> {
-    let root = repo_root().join("nixos-modules");
     let mut out = Vec::new();
-    let mut stack = vec![root];
-    while let Some(dir) = stack.pop() {
-        let Ok(entries) = std::fs::read_dir(&dir) else {
-            continue;
-        };
-        for entry in entries.flatten() {
-            let path = entry.path();
-            if path.is_dir() {
-                stack.push(path);
-            } else if path.is_file() {
-                out.push(path);
+    for root in [
+        repo_root().join("nixos-modules"),
+        repo_root().join("packages/d2b-provider-volume-local/nix"),
+    ] {
+        let mut stack = vec![root];
+        while let Some(dir) = stack.pop() {
+            let Ok(entries) = std::fs::read_dir(&dir) else {
+                continue;
+            };
+            for entry in entries.flatten() {
+                let path = entry.path();
+                if path.is_dir() {
+                    stack.push(path);
+                } else if path.is_file() {
+                    out.push(path);
+                }
             }
         }
     }

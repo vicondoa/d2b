@@ -19,12 +19,12 @@ use regex::Regex;
 fn storage_and_sync_emitters_are_wired_into_private_bundle() {
     let default_nix = read_repo_file("nixos-modules/default.nix");
     assert!(
-        default_nix.contains("./storage-json.nix"),
-        "default.nix must import storage-json.nix"
+        default_nix.contains("../packages/d2b-provider-volume-local/nix/storage-json.nix"),
+        "default.nix must import the Provider-owned storage-json.nix"
     );
     assert!(
-        default_nix.contains("./sync-json.nix"),
-        "default.nix must import sync-json.nix"
+        default_nix.contains("../packages/d2b-provider-volume-local/nix/sync-json.nix"),
+        "default.nix must import the Provider-owned sync-json.nix"
     );
 
     let bundle_nix = read_repo_file("nixos-modules/bundle.nix");
@@ -611,6 +611,7 @@ fn host_mutation_sources() -> BTreeSet<String> {
     let mut found = BTreeSet::new();
     for rel in [
         ("nixos-modules", "nix"),
+        ("packages/d2b-provider-volume-local/nix", "nix"),
         ("packages/d2b/src", "rs"),
         ("packages/d2b-priv-broker/src", "rs"),
         ("packages/d2bd/src", "rs"),
@@ -719,7 +720,10 @@ fn registered_host_mutation_sources() -> BTreeMap<&'static str, &'static str> {
             "nixos-modules/observability-host-secrets.nix",
             "storage root:path:state-root",
         ),
-        ("nixos-modules/store.nix", "storage root:path:state-root"),
+        (
+            "packages/d2b-provider-volume-local/nix/store.nix",
+            "storage root:path:state-root",
+        ),
         (
             "packages/d2b/src/host_validate.rs",
             "storage paths:validation evidence root/records",
