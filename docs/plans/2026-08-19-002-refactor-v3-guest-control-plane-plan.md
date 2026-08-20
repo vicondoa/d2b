@@ -1202,7 +1202,7 @@ The units may land as ordered reviewed pull requests. Every intermediate head mu
 | `make test-integration` | U3, U9-U11 | Shared daemon and broker executables run in the supported foreign-userland container path |
 | `make test` | U10 | Layer 1 plus required container integration passes |
 | `make check` | U10 | PR-equivalent Layer-1 graph passes without advisory skips cited as evidence |
-| Independent `ce-code-review` | U10 | No actionable findings remain on the validated head |
+| Independent `ce-code-review` | U10 | No actionable issues remain on the validated head |
 
 Targeted Rust and Nix tests should run during each unit. The complete gates run after the unit's canonical commit so Nix sees tracked inputs.
 
