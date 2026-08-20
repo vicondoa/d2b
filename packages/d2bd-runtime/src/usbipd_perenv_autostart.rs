@@ -1,7 +1,7 @@
 //! Daemon-side per-env usbipd autostart.
 //!
 //! Retires the 9 per-env usbipd systemd units declared by
-//! `packages/d2b-provider-network-local/nix/network.nix`
+//! the network-owned Nix module
 //! (`d2b-sys-<env>-usbipd-{backend,proxy}.{service,socket}` -
 //! 3 envs × 3 units = 9 units) by folding them into broker
 //! `SpawnRunner` with [`RunnerRole::Usbip`]. The per-env scope is
@@ -21,7 +21,7 @@
 //! `(vm_id, role_id)` pidfd is rejected fail-closed by the daemon's
 //! pidfd table, so re-entry on SIGHUP or bundle-reload is safe.
 //!
-//! See the retired-unit header in `packages/d2b-provider-network-local/nix/network.nix`.
+//! See the retired-unit header in the network-owned Nix module.
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -37,7 +37,7 @@ pub const PER_ENV_USBIPD_VM_PREFIX: &str = "sys-";
 pub const PER_ENV_USBIPD_VM_SUFFIX: &str = "-usbipd";
 
 /// Per-env backend port baseline. Matches
-/// `packages/d2b-provider-network-local/nix/network.nix`'s `3241 + alphabetical-index` rule.
+/// The network-owned Nix module's `3241 + alphabetical-index` rule.
 /// Keeping it as a `const` here means the daemon and the Nix module
 /// share a single source of truth that a static-shape test can
 /// cross-check.
