@@ -82,8 +82,7 @@ socket address, descriptor number, opaque handle, path, or payload.
 ## Build and test
 
 ```bash
-cargo check -p d2b-provider-transport-unix
-cargo test -p d2b-provider-transport-unix
+bazel test //packages/d2b-provider-transport-unix:all
 ```
 
 The focused tests cover accepted-fd/peer/request binding, socket-kind and

@@ -11192,14 +11192,14 @@
       "description": "The daemon never names argv, env, uid/gid, caps, kernel/initrd/cmdline strings, virtiofs sockets, TAP fds, or any other launch authority across the wire. The broker resolves the full role spawn context from `bundle.vms[vm_id].roles[role_id]` anchored by the opaque `bundle_runner_intent_ref`. The wire shape follows the opaque-only contract for every other mutating variant.\n\n`RunnerRole` selects which argv generator the broker invokes against the bundle data (CH, virtiofsd, or swtpm). Adding new roles requires a bundle schema bump so downstream bundles can declare the new launch context.",
       "oneOf": [
         {
-          "description": "Cloud Hypervisor headless / hybrid VM. Broker invokes `d2b_host::ch_argv::generate_ch_argv`.",
+          "description": "Cloud Hypervisor headless / hybrid VM. The runtime Provider owns argv planning; the broker consumes the bundle-authoritative launch shape.",
           "type": "string",
           "enum": [
             "cloud-hypervisor"
           ]
         },
         {
-          "description": "QEMU media runtime scaffold. Broker invokes `d2b_host::qemu_media_argv::generate_qemu_media_argv`.",
+          "description": "QEMU media runtime scaffold. The runtime Provider owns argv planning; the broker consumes the bundle-authoritative launch shape.",
           "type": "string",
           "enum": [
             "qemu-media"
@@ -11248,7 +11248,7 @@
           ]
         },
         {
-          "description": "socat-based vsock relay sidecar. Broker invokes `d2b_host::vsock_relay_argv::generate_vsock_relay_argv`.",
+          "description": "socat-based vsock relay sidecar. The transport-vsock Provider owns argv planning; the broker consumes the bundle-authoritative shape.",
           "type": "string",
           "enum": [
             "vsock-relay"

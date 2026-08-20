@@ -80,8 +80,7 @@ opaque handles do not enter debug output or provider observations.
 ## Build and test
 
 ```bash
-cargo check -p d2b-provider-shell-terminal
-cargo test -p d2b-provider-shell-terminal
+bazel test //packages/d2b-provider-shell-terminal:all
 ```
 
 The hermetic suite covers resource shape, authorization, process conformance,

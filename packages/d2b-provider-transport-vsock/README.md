@@ -59,8 +59,7 @@ material.
 ## Build and test
 
 ```bash
-cargo build -p d2b-provider-transport-vsock
-cargo test -p d2b-provider-transport-vsock --tests
+bazel test //packages/d2b-provider-transport-vsock:all
 ```
 
 The package integration targets cover host/guest descriptor parity and the

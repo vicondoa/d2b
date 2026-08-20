@@ -69,5 +69,5 @@ use fixed semantic vocabularies.
 ## Build and test
 
 ```bash
-cargo test -p d2b-provider-runtime-qemu-media
+bazel test //packages/d2b-provider-runtime-qemu-media:all
 ```

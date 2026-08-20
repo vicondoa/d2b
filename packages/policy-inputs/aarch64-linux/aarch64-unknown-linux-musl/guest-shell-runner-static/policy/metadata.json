@@ -4,7 +4,7 @@
   "features": [
     "real-libshpool"
   ],
-  "lockSha256": "ec45d9f12dd7b09271dd9e27ec014092eeb97af597c2abe1f4e3d7a56348581c",
+  "lockSha256": "4a6a7776796094585a8d7e7162e6c146c3d02719ade967cd09448a847dfc6ad8",
   "policyPackageCount": 139,
   "policyPackageIds": [
     "aho-corasick@1.1.5#registry+https://github.com/rust-lang/crates.io-index",
@@ -148,7 +148,7 @@
     "zmij@1.0.23#registry+https://github.com/rust-lang/crates.io-index"
   ],
   "productionPackageCount": 129,
-  "resolveNodeCount": 516,
+  "resolveNodeCount": 515,
   "roots": [
     "d2b-guest-shell-runner"
   ],

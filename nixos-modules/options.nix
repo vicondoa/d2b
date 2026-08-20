@@ -32,7 +32,7 @@
     ./options-envs.nix
     ./options-realms.nix
     ./options-vms.nix
-    ./options-guest-qemu-media.nix
+    ../packages/d2b-provider-runtime-qemu-media/nix/default.nix
     ./options-daemon.nix
     ./options-gateway.nix
   ];

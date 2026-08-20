@@ -34,6 +34,7 @@ pub enum SocatEndpoint {
     /// `UNIX-LISTEN:<path>` with the standard fork/reuseaddr/mode
     /// options the observability harness uses.
     UnixListen {
+        /// Unix socket path.
         path: String,
         /// `max-children=N` cap; obs harness uses 16 for the guest
         /// egress, omits for host-bridge (single-writer).
@@ -43,19 +44,30 @@ pub enum SocatEndpoint {
         mode: u32,
     },
     /// `UNIX-CONNECT:<path>`. No options.
-    UnixConnect { path: String },
+    UnixConnect {
+        /// Unix socket path.
+        path: String,
+    },
     /// `VSOCK-LISTEN:<port>` with fork/reuseaddr. obs stack VM uses
     /// max-children=16 on port 14317.
     VsockListen {
+        /// Vsock port.
         port: u32,
+        /// Optional connection cap.
         max_children: Option<u32>,
     },
     /// `VSOCK-CONNECT:<cid>:<port>`. Guest egress uses CID 2 (host)
     /// port 14317.
-    VsockConnect { cid: u32, port: u32 },
+    VsockConnect {
+        /// Guest or host context identifier.
+        cid: u32,
+        /// Vsock port.
+        port: u32,
+    },
 }
 
 impl SocatEndpoint {
+    /// Render the endpoint in socat's address syntax.
     pub fn render(&self) -> String {
         match self {
             Self::UnixListen {
@@ -116,12 +128,16 @@ pub struct VsockRelayArgvInput {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case", tag = "kind")]
 pub enum VsockRelayArgvError {
+    /// The socat executable path was empty or relative.
     InvalidSocatBinaryPath {
+        /// The rejected executable path.
         path: String,
     },
+    /// The relay process name was empty.
     EmptyRelayName,
     /// Both endpoints must contain a non-empty target.
     EmptyEndpoint {
+        /// The endpoint side that was empty.
         which: String,
     },
     /// The source MUST be a LISTEN side (one of UnixListen / VsockListen).
@@ -138,7 +154,9 @@ pub enum VsockRelayArgvError {
     /// `/run/d2b/...` or `/var/lib/d2b/...` and a bundle row
     /// supplying one is unambiguously hostile.
     PathContainsSocatMetachar {
+        /// The rejected path.
         path: String,
+        /// The first rejected character.
         character: char,
     },
 }
@@ -346,7 +364,7 @@ mod tests {
         // UNIX-CONNECT on the source side is invalid (two clients).
         let mut input = audit_stack_vsock_in();
         input.source = SocatEndpoint::UnixConnect {
-            path: "/tmp/foo.sock".to_owned(),
+            path: "/run/d2b/foo.sock".to_owned(),
         };
         assert!(matches!(
             generate_vsock_relay_argv(&input),

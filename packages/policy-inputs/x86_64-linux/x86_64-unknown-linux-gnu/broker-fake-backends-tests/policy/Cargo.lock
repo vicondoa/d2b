@@ -637,7 +637,6 @@ dependencies = [
  "d2b-contracts",
  "d2b-contracts-zone-session",
  "d2b-core",
- "d2b-host-argv",
  "libc",
  "miniz_oxide",
  "nix 0.29.0",
@@ -649,15 +648,6 @@ dependencies = [
  "tempfile",
  "tokio",
  "ttrpc",
-]
-
-
-[[package]]
-name = "d2b-host-argv"
-version = "0.0.0-bootstrap"
-dependencies = [
- "serde",
- "serde_json",
 ]
 
 

@@ -53,31 +53,46 @@ pub struct QemuMediaArgvInput {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case", tag = "kind")]
 pub enum QemuMediaArgvError {
+    /// The QEMU executable path was empty or relative.
     InvalidQemuBinaryPath {
+        /// The rejected executable path.
         path: String,
     },
+    /// The VM name was empty.
     EmptyVmName,
+    /// The QMP socket was outside the d2b runtime namespace.
     InvalidQmpSocketPath {
+        /// The rejected socket path.
         path: String,
     },
+    /// The guest MAC address was not six hexadecimal octets.
     InvalidMacAddress {
+        /// The rejected MAC address.
         value: String,
     },
+    /// The TAP descriptor was below the inherited-fd floor.
     InvalidTapFd {
+        /// The rejected descriptor number.
         fd: i32,
     },
+    /// Guest memory must be nonzero.
     InvalidMemoryMiB {
+        /// The rejected memory size.
         value: u32,
     },
+    /// Guest vCPU count must be nonzero.
     InvalidVcpu {
+        /// The rejected vCPU count.
         value: u32,
     },
     /// `console_fd` must be ≥ 3 to avoid colliding with stdin/stdout/stderr.
     InvalidConsoleFd {
+        /// The rejected descriptor number.
         fd: i32,
     },
     /// `console_fd` must not reuse the TAP fd slot.
     ConsoleFdConflictsWithTapFd {
+        /// The conflicting descriptor number.
         fd: i32,
     },
 }

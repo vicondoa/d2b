@@ -66,7 +66,6 @@ const ALLOWED_WORKSPACE_DEPS: &[&str] = &[
     "d2b-contracts-zone-session",
     "d2b-controller-toolkit",
     "d2b-core",
-    "d2b-host-argv",
     "d2b-process-conformance",
     "d2b-provider",
     "d2b-provider-toolkit",

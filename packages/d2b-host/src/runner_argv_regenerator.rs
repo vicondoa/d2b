@@ -12,9 +12,9 @@
 //!
 //! > The runner argv generation that microvm.nix's
 //! > `declaredRunner` derivation provided is replaced by typed
-//! > Rust generators in `d2b-host` and the device Providers. The broker
-//! > spawns each runner role via its owning generator rather than executing a
-//! > Nix-built runner script.
+//! > Rust generators in the neutral host surface and owning Providers. The
+//! > broker keeps the trusted bundle argv authoritative until a Provider launch
+//! > ticket carries the typed inputs required for regeneration.
 //!
 //! Usage from the broker (v1.1-final wire-cleanup path):
 //!
@@ -30,12 +30,9 @@
 //! }
 //! ```
 //!
-//! The wire-cleanup (removing the Nix-side argv generation from
-//! processes-json.nix entirely and having the bundle carry typed
-//! `ChArgvInput` records instead of materialized `argv` lists) is
-//! scheduled for v1.1.1 - at v1.1 we ship the canonical Rust
-//! non-device generators + the regenerator wrapper as the documented
-//! migration surface.
+//! Provider-specific regeneration is intentionally retired here. This module
+//! only validates neutral generators whose inputs are available to the host
+//! surface; runtime Providers remain bundle-authoritative.
 //!
 //! Audio is intentionally excluded from this generic host regenerator. Its
 //! argv builder is Provider-owned; until the runtime wave seals a typed
@@ -45,12 +42,9 @@
 use d2b_core::bundle_resolver::ResolvedRunnerIntent;
 use d2b_core::processes::ProcessRole;
 
-use crate::ch_argv::{ChArgvInput, generate_ch_argv};
 use crate::otel_host_bridge_argv::{OtelHostBridgeArgvInputs, generate_otel_host_bridge_argv};
-use crate::qemu_media_argv::{QemuMediaArgvInput, generate_qemu_media_argv};
 use crate::runner_process::runner_process_metadata;
 use crate::virtiofsd_argv::{VirtiofsdArgvInput, generate_virtiofsd_argv};
-use crate::vsock_relay_argv::{VsockRelayArgvInput, generate_vsock_relay_argv};
 
 /// Errors that can occur during regeneration.
 #[derive(Debug)]
@@ -83,18 +77,9 @@ impl std::error::Error for RegenerateArgvError {}
 /// spawn time from the resolved bundle + host state.
 #[derive(Debug, Clone, Default)]
 pub struct RunnerArgvExtra {
-    /// Pre-built [`ChArgvInput`] when the role is
-    /// [`ProcessRole::CloudHypervisorRunner`].
-    pub ch_input: Option<ChArgvInput>,
     /// Pre-built [`VirtiofsdArgvInput`] when the role is
     /// [`ProcessRole::Virtiofsd`].
     pub virtiofsd_input: Option<VirtiofsdArgvInput>,
-    /// Pre-built [`QemuMediaArgvInput`] when the role is
-    /// [`ProcessRole::QemuMediaRunner`].
-    pub qemu_media_input: Option<QemuMediaArgvInput>,
-    /// Pre-built [`VsockRelayArgvInput`] when the role is
-    /// [`ProcessRole::VsockRelay`].
-    pub vsock_relay_input: Option<VsockRelayArgvInput>,
     /// Pre-built [`OtelHostBridgeArgvInputs`] for the otel-host-bridge
     /// SpawnRunner. Not on processes-json's role enum at v1.1 (the
     /// broker dispatches via a separate code path); the field is
@@ -120,14 +105,6 @@ pub fn regenerate_argv(
     }
 
     match &intent.role {
-        ProcessRole::CloudHypervisorRunner => {
-            let ch_input = require(&extra.ch_input, &intent.role, "ch_input")?;
-            let mut argv = generate_ch_argv(ch_input)
-                .map_err(|e| RegenerateArgvError::Generator(format!("{e:?}")))?;
-            // SpawnRunnerPlanInput argv[0] = process-title convention.
-            replace_arg0(&mut argv, intent);
-            Ok(argv)
-        }
         ProcessRole::Virtiofsd => {
             let input = require(&extra.virtiofsd_input, &intent.role, "virtiofsd_input")?;
             let mut argv = generate_virtiofsd_argv(input)
@@ -135,12 +112,8 @@ pub fn regenerate_argv(
             replace_arg0(&mut argv, intent);
             Ok(argv)
         }
-        ProcessRole::QemuMediaRunner => {
-            let input = require(&extra.qemu_media_input, &intent.role, "qemu_media_input")?;
-            let mut argv = generate_qemu_media_argv(input)
-                .map_err(|e| RegenerateArgvError::Generator(format!("{e:?}")))?;
-            replace_arg0(&mut argv, intent);
-            Ok(argv)
+        ProcessRole::CloudHypervisorRunner | ProcessRole::QemuMediaRunner => {
+            Err(RegenerateArgvError::NotYetWired(intent.role.clone()))
         }
         ProcessRole::Swtpm
         | ProcessRole::Gpu
@@ -150,11 +123,7 @@ pub fn regenerate_argv(
             Err(RegenerateArgvError::NotYetWired(intent.role.clone()))
         }
         ProcessRole::VsockRelay => {
-            let input = require(&extra.vsock_relay_input, &intent.role, "vsock_relay_input")?;
-            let mut argv = generate_vsock_relay_argv(input)
-                .map_err(|e| RegenerateArgvError::Generator(format!("{e:?}")))?;
-            replace_arg0(&mut argv, intent);
-            Ok(argv)
+            Err(RegenerateArgvError::NotYetWired(intent.role.clone()))
         }
         ProcessRole::OtelHostBridge => {
             let input = require(
@@ -222,11 +191,13 @@ mod tests {
         role: &ProcessRole,
     ) -> ExpectedRegeneratorClassification {
         match role {
-            ProcessRole::CloudHypervisorRunner
-            | ProcessRole::Virtiofsd
-            | ProcessRole::QemuMediaRunner
-            | ProcessRole::VsockRelay
-            | ProcessRole::OtelHostBridge => ExpectedRegeneratorClassification::MissingInput,
+            ProcessRole::Virtiofsd | ProcessRole::OtelHostBridge => {
+                ExpectedRegeneratorClassification::MissingInput
+            }
+            ProcessRole::CloudHypervisorRunner | ProcessRole::QemuMediaRunner => {
+                ExpectedRegeneratorClassification::NotYetWired
+            }
+            ProcessRole::VsockRelay => ExpectedRegeneratorClassification::NotYetWired,
             ProcessRole::HostReconcile
             | ProcessRole::StoreVirtiofsPreflight
             | ProcessRole::GuestSshReadiness
@@ -265,13 +236,13 @@ mod tests {
     }
 
     #[test]
-    fn ch_role_without_input_errors_with_missing_field() {
+    fn provider_runtime_roles_remain_bundle_authoritative() {
         let intent = fake_intent(ProcessRole::CloudHypervisorRunner);
         let err = regenerate_argv(&intent, &RunnerArgvExtra::default()).unwrap_err();
-        match err {
-            RegenerateArgvError::MissingInput { field, .. } => assert_eq!(field, "ch_input"),
-            other => panic!("expected MissingInput, got {other:?}"),
-        }
+        assert!(matches!(
+            err,
+            RegenerateArgvError::NotYetWired(ProcessRole::CloudHypervisorRunner)
+        ));
     }
 
     #[test]

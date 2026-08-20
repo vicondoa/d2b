@@ -35,19 +35,9 @@ pub mod routes;
 pub mod seccomp;
 // Static runner lifecycle metadata used by host-side argv dispatch.
 pub mod runner_process;
-// Pure CH argv generator. Consumed by d2bd via the SpawnRunner
-// broker wire.
-pub mod ch_argv;
-// Pure QEMU media argv scaffold. It emits a paused QMP-ready baseline for
-// broker-owned media fd passing without exposing media paths.
-pub mod qemu_media_argv;
 // Pure virtiofsd argv generator (one instance per `microvm.shares` row;
 // consumed by d2bd via SpawnRunner).
 pub mod virtiofsd_argv;
-// Pure socat-based vsock-relay argv generator (covers the guest-egress +
-// stack-vm-listen shapes documented in
-// nixos-modules/components/observability/{host,guest,stack}.nix).
-pub mod vsock_relay_argv;
 // Neutral Volume effect-port composition wrapper. Concrete broker-backed
 // implementations are supplied by the Zone runtime.
 pub mod volume_effect_adapter;

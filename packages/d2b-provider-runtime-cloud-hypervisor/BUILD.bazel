@@ -13,7 +13,6 @@ rust_library(
     deps = [
         "//packages/d2b-contracts-provider:d2b_contracts_provider",
         "//packages/d2b-contracts-zone-session:d2b_contracts_zone_session",
-        "//packages/d2b-host-argv:d2b_host_argv",
         "//packages/d2b-process-conformance:d2b_process_conformance",
     ] + all_crate_deps(normal = True, cargo_only = True),
     proc_macro_deps = [
@@ -45,9 +44,9 @@ rust_test(
 )
 
 rust_test(
-    name = "reconcile_state",
+    name = "controller",
     srcs = [
-        "tests/reconcile_state.rs",
+        "tests/controller.rs",
     ],
     compile_data = ["Cargo.toml"],
     visibility = ["//visibility:public"],

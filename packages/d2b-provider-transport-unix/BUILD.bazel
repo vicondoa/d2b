@@ -17,8 +17,8 @@ rust_library(
 )
 
 rust_test(
-    name = "scaffold",
-    srcs = ["tests/scaffold.rs"],
+    name = "transport",
+    srcs = ["tests/transport.rs"],
     compile_data = ["Cargo.toml"],
     visibility = ["//visibility:public"],
     deps = [

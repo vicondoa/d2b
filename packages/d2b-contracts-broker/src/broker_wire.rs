@@ -2701,11 +2701,11 @@ pub struct DeregisterRunnerPidfdResponse {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "kebab-case")]
 pub enum RunnerRole {
-    /// Cloud Hypervisor headless / hybrid VM. Broker invokes
-    /// `d2b_host::ch_argv::generate_ch_argv`.
+    /// Cloud Hypervisor headless / hybrid VM. The runtime Provider owns argv
+    /// planning; the broker consumes the bundle-authoritative launch shape.
     CloudHypervisor,
-    /// QEMU media runtime scaffold. Broker invokes
-    /// `d2b_host::qemu_media_argv::generate_qemu_media_argv`.
+    /// QEMU media runtime scaffold. The runtime Provider owns argv planning;
+    /// the broker consumes the bundle-authoritative launch shape.
     QemuMedia,
     /// virtiofsd sidecar; one per `microvm.shares` row. The daemon/bundle
     /// provides argv from `nixos-modules/processes-json.nix`.
@@ -2721,7 +2721,8 @@ pub enum RunnerRole {
     Audio,
     /// crosvm video-decoder sidecar. Broker invokes the device GPU Provider argv generator.
     Video,
-    /// socat-based vsock relay sidecar. Broker invokes `d2b_host::vsock_relay_argv::generate_vsock_relay_argv`.
+    /// socat-based vsock relay sidecar. The transport-vsock Provider owns
+    /// argv planning; the broker consumes the bundle-authoritative shape.
     VsockRelay,
     /// usbip helper sidecar. Broker invokes the device USBIP Provider argv generator.
     Usbip,

@@ -137,56 +137,96 @@ pub enum ChArgvError {
     TapFdMissing,
 }
 
-fn host_input(input: &ChArgvInput) -> d2b_host_argv::ChArgvInput {
-    d2b_host_argv::ChArgvInput {
-        vm_name: input.vm_name.clone(),
-        ch_binary_path: input.ch_binary_path.clone(),
-        cpus: input.cpus,
-        watchdog: input.watchdog,
-        kernel_path: input.kernel_path.clone(),
-        initramfs_path: input.initramfs_path.clone(),
-        cmdline: input.cmdline.clone(),
-        seccomp: input.seccomp.clone(),
-        memory: input.memory.clone(),
-        platform_oem_strings: input.platform_oem_strings.clone(),
-        console: input.console.clone(),
-        serial: input.serial.clone(),
-        primary_vsock: input
-            .primary_vsock
-            .as_ref()
-            .map(|vsock| d2b_host_argv::ChVsock {
-                cid: vsock.cid,
-                socket: vsock.socket.clone(),
-            }),
-        extra_vsock: input.extra_vsock.clone(),
-        fs_shares: input
-            .fs_shares
-            .iter()
-            .map(|share| d2b_host_argv::ChFsShare {
-                socket: share.socket.clone(),
-                tag: share.tag.clone(),
-            })
-            .collect(),
-        api_socket_path: input.api_socket_path.clone(),
-        net_ifaces: input
-            .net_ifaces
-            .iter()
-            .map(|iface| d2b_host_argv::ChNetIface {
-                mac: iface.mac.clone(),
-                tap_fd: iface.tap_fd,
-            })
-            .collect(),
-        extra_args: input.extra_args.clone(),
-    }
-}
-
 /// Render the argv vector in deterministic order.
 pub fn generate_ch_argv(input: &ChArgvInput) -> Result<Vec<String>, ChArgvError> {
-    d2b_host_argv::generate_ch_argv(&host_input(input)).map_err(|error| match error {
-        d2b_host_argv::ChArgvError::EmptyVmName => ChArgvError::EmptyVmName,
-        d2b_host_argv::ChArgvError::InvalidChBinaryPath { .. } => ChArgvError::InvalidBinary,
-        d2b_host_argv::ChArgvError::ZeroCpus => ChArgvError::ZeroCpus,
-        d2b_host_argv::ChArgvError::EmptyKernelPath => ChArgvError::EmptyKernel,
-        d2b_host_argv::ChArgvError::TapFdMissing { .. } => ChArgvError::TapFdMissing,
-    })
+    if input.vm_name.is_empty() {
+        return Err(ChArgvError::EmptyVmName);
+    }
+    if input.ch_binary_path.is_empty() || !input.ch_binary_path.starts_with('/') {
+        return Err(ChArgvError::InvalidBinary);
+    }
+    if input.cpus == 0 {
+        return Err(ChArgvError::ZeroCpus);
+    }
+    if input.kernel_path.is_empty() {
+        return Err(ChArgvError::EmptyKernel);
+    }
+    if input.net_ifaces.iter().any(|iface| iface.tap_fd < 0) {
+        return Err(ChArgvError::TapFdMissing);
+    }
+
+    let mut argv = Vec::with_capacity(32);
+    argv.push(input.ch_binary_path.clone());
+    argv.extend(["--cpus".to_owned(), format!("boot={}", input.cpus)]);
+    if input.watchdog {
+        argv.push("--watchdog".to_owned());
+    }
+    argv.extend(["--kernel".to_owned(), input.kernel_path.clone()]);
+    if let Some(initramfs) = &input.initramfs_path {
+        argv.extend(["--initramfs".to_owned(), initramfs.clone()]);
+    }
+    argv.extend([
+        "--cmdline".to_owned(),
+        input.cmdline.clone(),
+        "--seccomp".to_owned(),
+        input.seccomp.clone(),
+        "--memory".to_owned(),
+        input.memory.clone(),
+    ]);
+    if !input.platform_oem_strings.is_empty() {
+        argv.extend([
+            "--platform".to_owned(),
+            format!(
+                "oem_strings=[{}]",
+                input.platform_oem_strings.join(",")
+            ),
+        ]);
+    }
+    argv.extend([
+        "--console".to_owned(),
+        input.console.clone(),
+        "--serial".to_owned(),
+        input.serial.clone(),
+    ]);
+    if let Some(vsock) = &input.primary_vsock {
+        argv.extend([
+            "--vsock".to_owned(),
+            format!("cid={},socket={}", vsock.cid, vsock.socket),
+        ]);
+    }
+    for socket in &input.extra_vsock {
+        argv.extend(["--vsock".to_owned(), format!("socket={socket}")]);
+    }
+    if !input.fs_shares.is_empty() {
+        argv.push("--fs".to_owned());
+        argv.extend(
+            input
+                .fs_shares
+                .iter()
+                .map(|share| format!("socket={},tag={}", share.socket, share.tag)),
+        );
+    }
+    argv.extend([
+        "--api-socket".to_owned(),
+        input.api_socket_path.clone(),
+    ]);
+    if !input.net_ifaces.is_empty() {
+        argv.push("--net".to_owned());
+        argv.extend(
+            input
+                .net_ifaces
+                .iter()
+                .map(|iface| format!("fd={},mac={}", iface.tap_fd, iface.mac)),
+        );
+    }
+    argv.extend(input.extra_args.iter().cloned());
+    Ok(argv)
+}
+
+/// Return the process title used by the daemon's SpawnRunner adapter.
+pub fn exec_arg0(input: &ChArgvInput) -> Result<String, ChArgvError> {
+    if input.vm_name.is_empty() {
+        return Err(ChArgvError::EmptyVmName);
+    }
+    Ok(format!("microvm@{}", input.vm_name))
 }

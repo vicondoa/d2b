@@ -35,7 +35,9 @@ Roles, from
   headless shape uses four shares: `ro-store`, `d2b-meta`,
   `d2b-hkeys`, and `d2b-ssh-host`.
 - `cloud-hypervisor-runner` - the CH binary launched against the
-  argv emitted by [`d2b_host::ch_argv`](../../packages/d2b-host/src/ch_argv.rs).
+  argv emitted by the
+  [`runtime-cloud-hypervisor`](../../packages/d2b-provider-runtime-cloud-hypervisor/src/vmm_argv.rs)
+  Provider.
 - `guest-control-health` - daemon-side authenticated guest-control
   Health probe (full Hello + token challenge-response + Health over the
   guest-control vsock). It is the framework readiness gate on
@@ -339,7 +341,7 @@ per-share systemd template/watchdog combination
   runner-shape preflight + CH net-handoff probe.
 - [Daemon API reference](../reference/daemon-api.md) - wire
   envelope shapes and typed-error catalog.
-- [`d2b_host::ch_argv`](../../packages/d2b-host/src/ch_argv.rs)
+- [`runtime-cloud-hypervisor::vmm_argv`](../../packages/d2b-provider-runtime-cloud-hypervisor/src/vmm_argv.rs)
   / [`swtpm_argv`](../../packages/d2b-host/src/swtpm_argv.rs) -
   pure argv generators feeding the broker `SpawnRunner` op.
   virtiofsd argv is emitted from `nixos-modules/processes-json.nix`

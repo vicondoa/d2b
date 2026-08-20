@@ -1293,7 +1293,6 @@ dependencies = [
  "d2b-contracts",
  "d2b-contracts-zone-session",
  "d2b-core",
- "d2b-host-argv",
  "libc",
  "miniz_oxide",
  "nix 0.29.0",
@@ -1312,14 +1311,6 @@ name = "d2b-host-activation-helper"
 version = "0.0.0-bootstrap"
 dependencies = [
  "libc",
-]
-
-[[package]]
-name = "d2b-host-argv"
-version = "0.0.0-bootstrap"
-dependencies = [
- "serde",
- "serde_json",
 ]
 
 [[package]]
@@ -1469,6 +1460,7 @@ dependencies = [
  "d2b-contracts-zone-session",
  "serde",
  "serde_json",
+ "tracing",
 ]
 
 [[package]]
@@ -1487,6 +1479,10 @@ dependencies = [
  "d2b-contracts",
  "d2b-contracts-broker",
  "d2b-contracts-zone-session",
+ "d2b-core",
+ "libc",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]
@@ -1595,7 +1591,6 @@ dependencies = [
  "async-trait",
  "d2b-contracts-provider",
  "d2b-contracts-zone-session",
- "d2b-host-argv",
  "d2b-process-conformance",
  "serde",
  "serde_json",

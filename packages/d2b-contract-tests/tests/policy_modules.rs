@@ -321,7 +321,6 @@ fn providers_and_controllers_use_closed_effect_ports() {
         "d2b-controller-toolkit",
         "d2b-core",
         "d2b-core-controller",
-        "d2b-host-argv",
         "d2b-process",
         "d2b-process-conformance",
         "d2b-provider",

@@ -261,6 +261,19 @@ nix_surface_test(
 )
 
 nix_surface_test(
+    name = "nix-unit-provider-runtime-qemu-media",
+    surface = "provider-runtime-qemu-media",
+    spec = {
+        "cases": [],
+        "modules": ["packages/d2b-provider-runtime-qemu-media/nix/default.nix"],
+        "expression": "//packages/d2b-provider-runtime-qemu-media:nix/tests/default.nix",
+        "files": [],
+        "package": "packages/d2b-provider-runtime-qemu-media",
+        "raw_cases": True,
+    },
+)
+
+nix_surface_test(
     name = "nix-unit-provider-display-wayland",
     surface = "provider-display-wayland",
     spec = {

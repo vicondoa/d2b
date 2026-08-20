@@ -132,23 +132,23 @@ pub const RUNNER_PROCESS_MATRIX: &[RunnerProcessMetadata] = &[
     row(
         CloudHypervisorRunner,
         RunnerLifecycleClass::Spawnable,
-        Some("ch_argv"),
-        "ch_argv",
-        RegeneratorWiring::Wired,
+        None,
+        "d2b-provider-runtime-cloud-hypervisor::vmm_argv",
+        RegeneratorWiring::NotYetWired,
     ),
     row(
         QemuMediaRunner,
         RunnerLifecycleClass::Spawnable,
-        Some("qemu_media_argv"),
-        "qemu_media_argv",
-        RegeneratorWiring::Wired,
+        None,
+        "d2b-provider-runtime-qemu-media::qemu_argv",
+        RegeneratorWiring::NotYetWired,
     ),
     row(
         VsockRelay,
         RunnerLifecycleClass::Spawnable,
-        Some("vsock_relay_argv"),
-        "vsock_relay_argv",
-        RegeneratorWiring::Wired,
+        None,
+        "d2b-provider-transport-vsock::relay_argv",
+        RegeneratorWiring::NotYetWired,
     ),
     row(
         OtelHostBridge,
@@ -295,6 +295,9 @@ mod tests {
                         | ProcessRole::GpuRenderNode
                         | ProcessRole::Video
                         | ProcessRole::Usbip
+                        | ProcessRole::CloudHypervisorRunner
+                        | ProcessRole::QemuMediaRunner
+                        | ProcessRole::VsockRelay
                 ) {
                     assert!(
                         row.argv_generator_module.is_none(),
@@ -312,8 +315,11 @@ mod tests {
         }
 
         let qemu = runner_process_metadata(&QemuMediaRunner);
-        assert_eq!(qemu.argv_generator_module, Some("qemu_media_argv"));
-        assert_eq!(qemu.test_coverage_label, "qemu_media_argv");
+        assert_eq!(qemu.argv_generator_module, None);
+        assert_eq!(
+            qemu.test_coverage_label,
+            "d2b-provider-runtime-qemu-media::qemu_argv"
+        );
 
         let usbip = runner_process_metadata(&Usbip);
         assert_eq!(usbip.argv_generator_module, None);
