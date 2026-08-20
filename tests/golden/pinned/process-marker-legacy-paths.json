@@ -11,7 +11,7 @@
     "docs/reference/wave-evidence-schema.md",
     "nixos-modules/host-activation.nix",
     "nixos-modules/host.nix",
-    "nixos-modules/net.nix",
+    "packages/d2b-provider-network-local/nix/net.nix",
     "packages/d2b-contract-tests/tests/minijail_gpu.rs",
     "packages/d2b-contract-tests/tests/minijail_profiles.rs",
     "packages/d2b-contract-tests/tests/minijail_swtpm_video.rs",
