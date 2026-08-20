@@ -19,6 +19,24 @@ filegroup(
     ]),
 )
 
+filegroup(
+    name = "generated_resource_schemas",
+    srcs = [
+        "docs/reference/schemas/v3/core.d2bus.org_Endpoint.schema.json",
+        "docs/reference/schemas/v3/core.d2bus.org_EphemeralProcess.schema.json",
+        "docs/reference/schemas/v3/core.d2bus.org_Guest.schema.json",
+        "docs/reference/schemas/v3/core.d2bus.org_Host.schema.json",
+        "docs/reference/schemas/v3/core.d2bus.org_Process.schema.json",
+        "docs/reference/schemas/v3/core.d2bus.org_User.schema.json",
+        "nixos-modules/resource-schemas/Endpoint.nix",
+        "nixos-modules/resource-schemas/EphemeralProcess.nix",
+        "nixos-modules/resource-schemas/Guest.nix",
+        "nixos-modules/resource-schemas/Host.nix",
+        "nixos-modules/resource-schemas/Process.nix",
+        "nixos-modules/resource-schemas/User.nix",
+    ],
+)
+
 exports_files([
     ".bazelrc",
     ".bazelignore",
@@ -303,6 +321,7 @@ filegroup(
         "//packages/d2b-unsafe-local-helper:cargo_workspace_sources",
         "//packages/d2b-wayland-proxy:cargo_workspace_sources",
         "//packages/d2b-zone-routing:cargo_workspace_sources",
+        "//packages/d2bd-runtime:cargo_workspace_sources",
         "//packages/d2bd:cargo_workspace_sources",
         "//packages/xtask:cargo_workspace_sources",
     ],

@@ -24,7 +24,7 @@
 //! `block_in_place`, or a nested runtime.
 
 use std::path::{Path, PathBuf};
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use d2b_contracts_broker::broker_wire::{
     BrokerCallerRole, BrokerRequest, BrokerResponse, GuestControlSignRequest,
@@ -41,34 +41,46 @@ use crate::guest_control_health::{
     GuestUsbipImportResult, GuestUsbipStatusResult, TtrpcGuestControlClient,
     activate_system_start_authenticated, activate_system_status_authenticated,
     audio_set_authenticated, audio_status_authenticated, connected_stream_to_ttrpc_socket,
-    guest_control_health_ready, probe_guest_control_health, read_guest_config_authenticated,
-    request_metadata_with_id, usbip_import_authenticated, usbip_status_authenticated,
+    probe_guest_control_health, read_guest_config_authenticated, request_metadata_with_id,
+    usbip_import_authenticated, usbip_status_authenticated,
 };
-use crate::guest_control_vsock::{GuestControlTransportProbeResult, connect_guest_control_vsock};
+use crate::guest_control_vsock::{
+    GuestControlTransportProbeResult, connect_guest_control_vsock,
+};
 use crate::typed_error::TypedError;
 use protobuf::MessageField;
 
-/// Well-known `VMADDR_CID_HOST`. The host side of an `AF_VSOCK` pair is
-/// always CID 2; the sign request binds the host proof to this CID so a
-/// captured proof cannot be replayed from a different CID.
-pub const VMADDR_CID_HOST: u32 = libc::VMADDR_CID_HOST;
+#[cfg(test)]
+use crate::guest_control_health::guest_control_health_ready;
+pub use crate::guest_control_runtime::*;
 
-/// Per-attempt cap applied to connect / CONNECT-ACK / each ttRPC / each
-/// broker-sign. The effective per-attempt timeout is
-/// `min(this, remaining_deadline)`.
-pub const GUEST_CONTROL_ATTEMPT_CAP: Duration = Duration::from_secs(3);
-
-/// Backoff between readiness-loop attempts while the guest is still
-/// booting / the socket is not yet present.
-pub const GUEST_CONTROL_RETRY_BACKOFF: Duration = Duration::from_millis(250);
-
-/// Single-attempt timeout for the config-read verb (the VM is already
-/// up by the time config-sync runs, so no readiness retry loop).
-pub const GUEST_CONTROL_CONFIG_READ_TIMEOUT: Duration = Duration::from_secs(10);
-/// End-to-end USBIP import deadline. This must exceed guestd's bounded
-/// `usbip` command timeout so the host does not drop the ttRPC future and kill
-/// the guest subprocess before guestd can return a typed failure.
-pub const GUEST_CONTROL_USBIP_IMPORT_TIMEOUT: Duration = Duration::from_secs(15);
+/// Emit a leak-safe guest-control readiness observation.
+pub fn emit_guest_control_readiness_event(obs: &ReadinessObservation, ready: bool) {
+    if ready {
+        tracing::info!(
+            kind = "critical",
+            subsystem = obs.subsystem,
+            outcome = obs.outcome,
+            health_state = obs.health_state,
+            health_reason = obs.health_reason,
+            attempt_count = obs.attempt_count,
+            duration_ms = obs.duration_ms,
+            "guest-control readiness probe completed"
+        );
+    } else {
+        tracing::warn!(
+            kind = "critical",
+            subsystem = obs.subsystem,
+            outcome = obs.outcome,
+            error_kind = obs.error_kind,
+            health_state = obs.health_state,
+            health_reason = obs.health_reason,
+            attempt_count = obs.attempt_count,
+            duration_ms = obs.duration_ms,
+            "guest-control readiness probe failed"
+        );
+    }
+}
 
 /// Closed guest-side lifecycle operation for the fixed Wayland frontend
 /// service. Callers cannot supply a command, unit name, or user.
@@ -93,6 +105,27 @@ pub fn host_nonce() -> Result<[u8; AUTH_NONCE_LEN], getrandom::Error> {
     let mut nonce = [0u8; AUTH_NONCE_LEN];
     getrandom::getrandom(&mut nonce)?;
     Ok(nonce)
+}
+
+/// Map a guest-control config read error to the closed-enum daemon error kind.
+pub fn map_guest_file_read_error(error: GuestFileReadError) -> TypedError {
+    use crate::guest_control_health::{
+        GuestControlHealthError as H, GuestFileReadError as E,
+    };
+    use crate::typed_error::GuestControlReadErrorKind as K;
+
+    let kind = match error {
+        E::Probe(H::TransportIo) | E::Probe(H::Signer) | E::Probe(H::Ttrpc) => K::Transport,
+        E::Probe(H::Timeout) => K::Timeout,
+        E::Probe(H::AuthFailed) | E::Probe(H::StaleSession) => K::AuthFailed,
+        E::Probe(H::Protocol) | E::Protocol => K::Protocol,
+        E::CapabilityUnavailable => K::CapabilityUnavailable,
+        E::FileNotFound => K::FileNotFound,
+        E::FileTooLarge => K::FileTooLarge,
+        E::PathUnsafe => K::PathUnsafe,
+        E::ReadDenied => K::ReadDenied,
+    };
+    TypedError::GuestControlReadFailed { kind }
 }
 
 /// Map a broker dispatch result for a `GuestControlSign` request to the
@@ -162,106 +195,13 @@ impl GuestControlSigner for BrokerSigner {
         if matches!(self.caller_role, BrokerCallerRole::NotAuthorized) {
             return Err(GuestControlHealthError::Signer);
         }
-        let result = crate::dispatch_broker_request_to_socket(
+        let result = crate::broker_transport::dispatch_broker_request_to_socket(
             &self.broker_socket_path,
             BrokerRequest::GuestControlSign(request),
             self.caller_role.clone(),
             Some(timeout),
         );
         map_broker_sign_response(result)
-    }
-}
-
-/// Fully-resolved, owned parameters for one guest-control probe /
-/// config read. Every field is owned so the struct can move into the
-/// blocking probe worker without borrowing `ServerState`.
-#[derive(Clone, Debug)]
-pub struct ProbeParams {
-    pub vm_id: String,
-    pub socket_path: PathBuf,
-    pub state_root: PathBuf,
-    pub expected_state_root_uid: u32,
-    pub expected_state_root_gid: u32,
-    pub expected_peer_uid: u32,
-    pub expected_peer_gid: u32,
-}
-
-/// Seam over the orchestration so the readiness loop and the config-sync
-/// verb can be unit-tested with scripted outcomes without a live guest.
-pub trait GuestControlProbe: Send + Sync {
-    fn probe_health(
-        &self,
-        params: &ProbeParams,
-        attempt_timeout: Duration,
-    ) -> Result<GuestControlHealthEvidence, GuestControlHealthError>;
-
-    fn read_config(
-        &self,
-        params: &ProbeParams,
-        attempt_timeout: Duration,
-    ) -> Result<Vec<u8>, GuestFileReadError>;
-
-    fn usbip_import(
-        &self,
-        params: &ProbeParams,
-        attempt_timeout: Duration,
-        action: GuestUsbipAction,
-        host: &str,
-        bus_id: &str,
-    ) -> Result<GuestUsbipImportResult, GuestUsbipImportError>;
-
-    fn usbip_status(
-        &self,
-        params: &ProbeParams,
-        attempt_timeout: Duration,
-        host: Option<&str>,
-        bus_id: Option<&str>,
-    ) -> Result<GuestUsbipStatusResult, GuestUsbipImportError>;
-
-    fn activate_system_start(
-        &self,
-        params: &ProbeParams,
-        attempt_timeout: Duration,
-        start: &GuestSystemActivationStart,
-    ) -> Result<GuestSystemActivationStatus, GuestSystemActivationError> {
-        let _ = (params, attempt_timeout, start);
-        Err(GuestSystemActivationError::CapabilityUnavailable)
-    }
-
-    fn activate_system_status(
-        &self,
-        params: &ProbeParams,
-        attempt_timeout: Duration,
-        activation_id: &str,
-    ) -> Result<GuestSystemActivationStatus, GuestSystemActivationError> {
-        let _ = (params, attempt_timeout, activation_id);
-        Err(GuestSystemActivationError::CapabilityUnavailable)
-    }
-
-    /// Issue an authenticated AudioSet RPC. Default returns
-    /// `CapabilityUnavailable` so existing probe impls do not need updating.
-    fn audio_status(
-        &self,
-        params: &ProbeParams,
-        attempt_timeout: Duration,
-    ) -> Result<GuestAudioStatus, GuestAudioSetError> {
-        let _ = (params, attempt_timeout);
-        Err(GuestAudioSetError::CapabilityUnavailable)
-    }
-
-    /// Issue an authenticated AudioSet RPC. Default returns
-    /// `CapabilityUnavailable` so existing probe impls do not need updating.
-    fn audio_set(
-        &self,
-        params: &ProbeParams,
-        attempt_timeout: Duration,
-        channel: d2b_contracts_control::guest_proto::AudioChannel,
-        kind: d2b_contracts_control::guest_proto::AudioSetKind,
-        grant_on: bool,
-        level: u32,
-    ) -> Result<GuestAudioChannelStatus, GuestAudioSetError> {
-        let _ = (params, attempt_timeout, channel, kind, grant_on, level);
-        Err(GuestAudioSetError::CapabilityUnavailable)
     }
 }
 
@@ -453,7 +393,7 @@ fn build_probe_runtime() -> Result<tokio::runtime::Runtime, GuestControlHealthEr
 /// draws `min(cap, remaining)` from the shared attempt budget so it
 /// shares the same absolute deadline as the ttRPC calls; a passed
 /// deadline returns [`GuestControlHealthError::Timeout`].
-pub(crate) fn connect_and_build_client(
+pub fn connect_and_build_client(
     params: &ProbeParams,
     budget: AttemptBudget,
 ) -> Result<TtrpcGuestControlClient, GuestControlHealthError> {
@@ -857,88 +797,6 @@ pub fn run_audio_status_once(
 /// failures and every guest-reported file error (not-found, too-large,
 /// path-unsafe, read-denied, capability-unavailable) are deterministic
 /// and returned immediately.
-fn config_read_error_is_transient(error: &GuestFileReadError) -> bool {
-    matches!(
-        error,
-        GuestFileReadError::Probe(GuestControlHealthError::TransportIo)
-            | GuestFileReadError::Probe(GuestControlHealthError::Ttrpc)
-            | GuestFileReadError::Probe(GuestControlHealthError::Timeout)
-    )
-}
-
-fn usbip_import_error_is_transient(error: &GuestUsbipImportError) -> bool {
-    matches!(
-        error,
-        GuestUsbipImportError::Probe(GuestControlHealthError::TransportIo)
-            | GuestUsbipImportError::Probe(GuestControlHealthError::Ttrpc)
-            | GuestUsbipImportError::Probe(GuestControlHealthError::Timeout)
-    )
-}
-
-pub fn activation_error_is_transient(error: &GuestSystemActivationError) -> bool {
-    matches!(
-        error,
-        GuestSystemActivationError::Probe(GuestControlHealthError::TransportIo)
-            | GuestSystemActivationError::Probe(GuestControlHealthError::Ttrpc)
-            | GuestSystemActivationError::Probe(GuestControlHealthError::Timeout)
-    )
-}
-
-pub fn activation_status_error_is_transient(error: &GuestSystemActivationError) -> bool {
-    use d2b_contracts_control::guest_proto::GuestControlErrorKind as Kind;
-    activation_error_is_transient(error)
-        || matches!(
-            error,
-            GuestSystemActivationError::GuestRejected(
-                Kind::GUEST_CONTROL_ERROR_KIND_ACTIVATION_NOT_FOUND
-                    | Kind::GUEST_CONTROL_ERROR_KIND_ACTIVATION_STATUS_UNAVAILABLE
-            )
-        )
-}
-
-/// State-aware config-read loop, mirroring [`run_guest_control_readiness_loop`].
-/// Retries the authenticated config read on transient connect-level
-/// failures until `deadline` elapses, applying a per-attempt timeout of
-/// `min(attempt_cap, remaining_deadline)` to connect / CONNECT-ACK /
-/// ttRPC / broker-sign. A terminal (auth/protocol/file) error returns
-/// immediately. Fails CLOSED: once the deadline has been reached (even
-/// after an overslept backoff) it does NOT start a fresh floored-to-1ms
-/// attempt - it surfaces a Timeout instead.
-pub fn run_guest_control_config_read_loop(
-    probe: &dyn GuestControlProbe,
-    params: &ProbeParams,
-    deadline: Duration,
-    attempt_cap: Duration,
-    retry_backoff: Duration,
-    clock: &dyn ProbeClock,
-) -> Result<Vec<u8>, GuestFileReadError> {
-    loop {
-        let remaining = deadline.saturating_sub(clock.elapsed());
-        // Fail closed: if the deadline has already passed (e.g. after an
-        // overslept backoff), do NOT apply the 1ms floor and start a
-        // fresh attempt AFTER the deadline. The exceeded deadline is a
-        // timeout (slug guest-control-timeout) end to end.
-        if remaining.is_zero() {
-            return Err(GuestFileReadError::Probe(GuestControlHealthError::Timeout));
-        }
-        let attempt_timeout = attempt_cap.min(remaining).max(Duration::from_millis(1));
-        match probe.read_config(params, attempt_timeout) {
-            Ok(bytes) => return Ok(bytes),
-            Err(err) => {
-                if !config_read_error_is_transient(&err) {
-                    return Err(err);
-                }
-                // No room for another attempt + backoff before the
-                // deadline: return the last transient error.
-                if clock.elapsed().saturating_add(retry_backoff) >= deadline {
-                    return Err(err);
-                }
-                clock.sleep(retry_backoff);
-            }
-        }
-    }
-}
-
 /// Run the config-read loop on a DEDICATED OS thread so the probe's
 /// current-thread runtime is never nested inside a caller's Tokio runtime
 /// (the public.sock dispatch path runs synchronously on a multi-threaded
@@ -1069,68 +927,6 @@ pub fn run_activation_status_on_dedicated_thread(
     .map_err(|_| GuestSystemActivationError::Probe(GuestControlHealthError::TransportIo))?
 }
 
-pub fn run_guest_control_activation_start_loop(
-    probe: &dyn GuestControlProbe,
-    params: &ProbeParams,
-    start: &GuestSystemActivationStart,
-    deadline: Duration,
-    retry_backoff: Duration,
-    clock: &dyn ProbeClock,
-) -> Result<GuestSystemActivationStatus, GuestSystemActivationError> {
-    loop {
-        let remaining = deadline.saturating_sub(clock.elapsed());
-        if remaining.is_zero() {
-            return Err(GuestSystemActivationError::Probe(
-                GuestControlHealthError::Timeout,
-            ));
-        }
-        let attempt_timeout = remaining.max(Duration::from_millis(1));
-        match probe.activate_system_start(params, attempt_timeout, start) {
-            Ok(status) => return Ok(status),
-            Err(err) => {
-                if !activation_error_is_transient(&err) {
-                    return Err(err);
-                }
-                if clock.elapsed().saturating_add(retry_backoff) >= deadline {
-                    return Err(err);
-                }
-                clock.sleep(retry_backoff);
-            }
-        }
-    }
-}
-
-pub fn run_guest_control_activation_status_loop(
-    probe: &dyn GuestControlProbe,
-    params: &ProbeParams,
-    activation_id: &str,
-    deadline: Duration,
-    retry_backoff: Duration,
-    clock: &dyn ProbeClock,
-) -> Result<GuestSystemActivationStatus, GuestSystemActivationError> {
-    loop {
-        let remaining = deadline.saturating_sub(clock.elapsed());
-        if remaining.is_zero() {
-            return Err(GuestSystemActivationError::Probe(
-                GuestControlHealthError::Timeout,
-            ));
-        }
-        let attempt_timeout = remaining.max(Duration::from_millis(1));
-        match probe.activate_system_status(params, attempt_timeout, activation_id) {
-            Ok(status) => return Ok(status),
-            Err(err) => {
-                if !activation_status_error_is_transient(&err) {
-                    return Err(err);
-                }
-                if clock.elapsed().saturating_add(retry_backoff) >= deadline {
-                    return Err(err);
-                }
-                clock.sleep(retry_backoff);
-            }
-        }
-    }
-}
-
 /// Per-attempt timeout for audio set RPCs (single attempt, no readiness loop).
 pub const GUEST_CONTROL_AUDIO_SET_TIMEOUT: Duration = Duration::from_secs(5);
 
@@ -1174,291 +970,6 @@ pub fn run_audio_status_on_dedicated_thread(
     })
     .join()
     .map_err(|_| GuestAudioSetError::Probe(GuestControlHealthError::TransportIo))?
-}
-
-pub fn run_guest_control_usbip_import_loop(
-    probe: &dyn GuestControlProbe,
-    params: &ProbeParams,
-    call: GuestUsbipImportCall<'_>,
-    deadline: Duration,
-    retry_backoff: Duration,
-    clock: &dyn ProbeClock,
-) -> Result<GuestUsbipImportResult, GuestUsbipImportError> {
-    loop {
-        let remaining = deadline.saturating_sub(clock.elapsed());
-        if remaining.is_zero() {
-            return Err(GuestUsbipImportError::Probe(
-                GuestControlHealthError::Timeout,
-            ));
-        }
-        let attempt_timeout = remaining.max(Duration::from_millis(1));
-        match probe.usbip_import(params, attempt_timeout, call.action, call.host, call.bus_id) {
-            Ok(result) => return Ok(result),
-            Err(err) => {
-                if !usbip_import_error_is_transient(&err) {
-                    return Err(err);
-                }
-                if clock.elapsed().saturating_add(retry_backoff) >= deadline {
-                    return Err(err);
-                }
-                clock.sleep(retry_backoff);
-            }
-        }
-    }
-}
-
-pub fn run_guest_control_usbip_status_loop(
-    probe: &dyn GuestControlProbe,
-    params: &ProbeParams,
-    host: Option<&str>,
-    bus_id: Option<&str>,
-    deadline: Duration,
-    retry_backoff: Duration,
-    clock: &dyn ProbeClock,
-) -> Result<GuestUsbipStatusResult, GuestUsbipImportError> {
-    loop {
-        let remaining = deadline.saturating_sub(clock.elapsed());
-        if remaining.is_zero() {
-            return Err(GuestUsbipImportError::Probe(
-                GuestControlHealthError::Timeout,
-            ));
-        }
-        let attempt_timeout = remaining.max(Duration::from_millis(1));
-        match probe.usbip_status(params, attempt_timeout, host, bus_id) {
-            Ok(result) => return Ok(result),
-            Err(err) => {
-                if !usbip_import_error_is_transient(&err) {
-                    return Err(err);
-                }
-                if clock.elapsed().saturating_add(retry_backoff) >= deadline {
-                    return Err(err);
-                }
-                clock.sleep(retry_backoff);
-            }
-        }
-    }
-}
-
-/// Injectable clock for deterministic retry-loop tests. The real
-/// implementation uses a monotonic `Instant` and `thread::sleep`; fakes
-/// advance a logical clock on `sleep`.
-pub trait ProbeClock {
-    fn elapsed(&self) -> Duration;
-    fn sleep(&self, duration: Duration);
-}
-
-pub struct RealProbeClock {
-    start: Instant,
-}
-
-impl RealProbeClock {
-    pub fn new() -> Self {
-        Self {
-            start: Instant::now(),
-        }
-    }
-}
-
-impl Default for RealProbeClock {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-impl ProbeClock for RealProbeClock {
-    fn elapsed(&self) -> Duration {
-        self.start.elapsed()
-    }
-
-    fn sleep(&self, duration: Duration) {
-        std::thread::sleep(duration);
-    }
-}
-
-/// Terminal result of a readiness loop: the last probe outcome plus
-/// bounded-retry observability (attempt count and elapsed wall time).
-/// `attempts`/`elapsed` are intended as tracing FIELDS / histogram
-/// buckets - never metric labels (they are unbounded-ish / per-run).
-pub struct ReadinessProbeRun {
-    pub outcome: Result<GuestControlHealthEvidence, GuestControlHealthError>,
-    pub attempts: u32,
-    pub elapsed: Duration,
-}
-
-/// State-aware guest-control readiness loop. Retries the authenticated
-/// Health probe until [`guest_control_health_ready`] returns true or the
-/// `deadline` elapses, applying a per-attempt timeout of
-/// `min(attempt_cap, remaining_deadline)` to connect / CONNECT-ACK /
-/// ttRPC / broker-sign. Fails CLOSED: on deadline it returns the last
-/// (not-ready) outcome, the number of attempts made, and the elapsed
-/// wall time.
-pub fn run_guest_control_readiness_loop(
-    probe: &dyn GuestControlProbe,
-    params: &ProbeParams,
-    deadline: Duration,
-    attempt_cap: Duration,
-    retry_backoff: Duration,
-    clock: &dyn ProbeClock,
-) -> ReadinessProbeRun {
-    let start = clock.elapsed();
-    let mut attempts: u32 = 0;
-    let mut last_outcome: Option<Result<GuestControlHealthEvidence, GuestControlHealthError>> =
-        None;
-    loop {
-        let remaining = deadline.saturating_sub(clock.elapsed());
-        // Fail closed: if the deadline has already passed (e.g. after an
-        // overslept backoff), do NOT apply the 1ms floor and start a
-        // fresh attempt AFTER the deadline. Return the last not-ready
-        // outcome, or a Timeout if no attempt ever ran.
-        if remaining.is_zero() {
-            return ReadinessProbeRun {
-                outcome: last_outcome.unwrap_or(Err(GuestControlHealthError::Timeout)),
-                attempts,
-                elapsed: clock.elapsed().saturating_sub(start),
-            };
-        }
-        let attempt_timeout = attempt_cap.min(remaining).max(Duration::from_millis(1));
-        attempts = attempts.saturating_add(1);
-        let outcome = probe.probe_health(params, attempt_timeout);
-        if guest_control_health_ready(&outcome) {
-            return ReadinessProbeRun {
-                outcome,
-                attempts,
-                elapsed: clock.elapsed().saturating_sub(start),
-            };
-        }
-        // Stop if there is no room for another attempt + backoff before
-        // the deadline. Returns the last not-ready outcome.
-        if clock.elapsed().saturating_add(retry_backoff) >= deadline {
-            return ReadinessProbeRun {
-                outcome,
-                attempts,
-                elapsed: clock.elapsed().saturating_sub(start),
-            };
-        }
-        last_outcome = Some(outcome);
-        clock.sleep(retry_backoff);
-    }
-}
-
-/// Leak-safe observability projection of a readiness run. Every string
-/// field is a CLOSED-ENUM label drawn from a small fixed vocabulary;
-/// `attempt_count`/`duration_ms` are numeric FIELDS. By construction this
-/// struct can never carry guest content, store/socket/state-dir paths,
-/// nonces, tokens, auth tags, raw signer requests/responses,
-/// `guest_boot_id`, or `capabilities_hash`.
-pub struct ReadinessObservation {
-    pub subsystem: &'static str,
-    pub outcome: &'static str,
-    pub health_state: &'static str,
-    pub health_reason: &'static str,
-    pub error_kind: &'static str,
-    pub attempt_count: u32,
-    pub duration_ms: u64,
-}
-
-impl ReadinessObservation {
-    /// Project a readiness run onto the closed-enum observability fields.
-    pub fn from_run(run: &ReadinessProbeRun) -> Self {
-        let ready = guest_control_health_ready(&run.outcome);
-        let (health_state, health_reason, error_kind) = match &run.outcome {
-            Ok(evidence) => (
-                health_state_label(evidence),
-                health_reason_label(evidence),
-                "none",
-            ),
-            Err(error) => ("unavailable", "unspecified", error_kind_label(error)),
-        };
-        Self {
-            subsystem: "guest-control-health",
-            outcome: if ready { "ready" } else { "not-ready" },
-            health_state,
-            health_reason,
-            error_kind,
-            attempt_count: run.attempts,
-            duration_ms: u64::try_from(run.elapsed.as_millis()).unwrap_or(u64::MAX),
-        }
-    }
-
-    /// The closed set of LABEL keys this subsystem contributes to
-    /// metrics/spans. Deliberately excludes `vm`, `env`, `attempt_count`,
-    /// `duration_ms`, and any path/error-message key: those are span
-    /// attributes / fields / buckets, never metric labels.
-    pub fn label_keys() -> &'static [&'static str] {
-        &[
-            "subsystem",
-            "outcome",
-            "health_state",
-            "health_reason",
-            "error_kind",
-        ]
-    }
-}
-
-/// Closed-enum label for the guest-reported health state of a probe
-/// outcome. Used as a metric/span label, so the range is a small fixed
-/// vocabulary - never free-form text and never guest-supplied content.
-pub fn health_state_label(evidence: &GuestControlHealthEvidence) -> &'static str {
-    use d2b_contracts_control::guest_proto::HealthState;
-    match evidence.health.state.enum_value() {
-        Ok(HealthState::HEALTH_STATE_HEALTHY) => "healthy",
-        Ok(HealthState::HEALTH_STATE_DEGRADED) => "degraded",
-        Ok(HealthState::HEALTH_STATE_UNAVAILABLE_OLD_GENERATION) => "unavailable-old-generation",
-        Ok(HealthState::HEALTH_STATE_LISTENER_ABSENT) => "listener-absent",
-        Ok(HealthState::HEALTH_STATE_TRANSPORT_UNREACHABLE) => "transport-unreachable",
-        Ok(HealthState::HEALTH_STATE_AUTH_FAILED) => "auth-failed",
-        Ok(HealthState::HEALTH_STATE_PROTOCOL_MISMATCH) => "protocol-mismatch",
-        Ok(HealthState::HEALTH_STATE_STALE_SESSION) => "stale-session",
-        Ok(HealthState::HEALTH_STATE_UNSPECIFIED) | Err(_) => "unspecified",
-    }
-}
-
-/// Closed-enum label for a guest-control probe error. Used as a
-/// metric/span label, so the range is a small fixed vocabulary.
-pub fn error_kind_label(error: &GuestControlHealthError) -> &'static str {
-    match error {
-        GuestControlHealthError::TransportIo => "transport-io",
-        GuestControlHealthError::Ttrpc => "ttrpc",
-        GuestControlHealthError::Signer => "signer",
-        GuestControlHealthError::Protocol => "protocol",
-        GuestControlHealthError::AuthFailed => "auth-failed",
-        GuestControlHealthError::StaleSession => "stale-session",
-        GuestControlHealthError::Timeout => "timeout",
-    }
-}
-
-/// Closed-enum label for the guest-reported health REASON of a probe
-/// outcome. Used as a metric/span label, so the range is the fixed
-/// `HealthReason` vocabulary - never free-form text and never
-/// guest-supplied content.
-pub fn health_reason_label(evidence: &GuestControlHealthEvidence) -> &'static str {
-    use d2b_contracts_control::guest_proto::HealthReason;
-    match evidence.health.reason.enum_value() {
-        Ok(HealthReason::HEALTH_REASON_NONE) => "none",
-        Ok(HealthReason::HEALTH_REASON_OLD_GENERATION) => "old-generation",
-        Ok(HealthReason::HEALTH_REASON_LISTENER_ABSENT) => "listener-absent",
-        Ok(HealthReason::HEALTH_REASON_CONNECT_REFUSED) => "connect-refused",
-        Ok(HealthReason::HEALTH_REASON_CONNECT_TIMEOUT) => "connect-timeout",
-        Ok(HealthReason::HEALTH_REASON_EOF_BEFORE_ACK) => "eof-before-ack",
-        Ok(HealthReason::HEALTH_REASON_MALFORMED_ACK) => "malformed-ack",
-        Ok(HealthReason::HEALTH_REASON_ACK_TOO_LONG) => "ack-too-long",
-        Ok(HealthReason::HEALTH_REASON_TRANSPORT_IO) => "transport-io",
-        Ok(HealthReason::HEALTH_REASON_AUTH_TOKEN_REJECTED) => "auth-token-rejected",
-        Ok(HealthReason::HEALTH_REASON_PROTOCOL_VERSION_UNSUPPORTED) => {
-            "protocol-version-unsupported"
-        }
-        Ok(HealthReason::HEALTH_REASON_SESSION_GENERATION_MISMATCH) => {
-            "session-generation-mismatch"
-        }
-        Ok(HealthReason::HEALTH_REASON_EXEC_SUBSYSTEM_UNAVAILABLE) => "exec-subsystem-unavailable",
-        Ok(HealthReason::HEALTH_REASON_LOG_STORAGE_UNAVAILABLE) => "log-storage-unavailable",
-        Ok(HealthReason::HEALTH_REASON_QUOTA_EXCEEDED) => "quota-exceeded",
-        Ok(HealthReason::HEALTH_REASON_RATE_LIMITED) => "rate-limited",
-        Ok(HealthReason::HEALTH_REASON_INTERNAL_HEALTH_CHECK_FAILED) => {
-            "internal-health-check-failed"
-        }
-        Ok(HealthReason::HEALTH_REASON_UNSPECIFIED) | Err(_) => "unspecified",
-    }
 }
 
 #[cfg(test)]
@@ -2416,19 +1927,32 @@ mod tests {
     }
 
     #[test]
-    fn config_read_timeout_maps_to_timeout_kind() {
-        // A probe timeout flows through the read-error mapping as the
-        // closed-enum Timeout kind (slug guest-control-timeout), not a
-        // generic Transport collapse.
+    fn guest_file_read_errors_map_to_closed_daemon_kinds() {
         use crate::typed_error::{GuestControlReadErrorKind, TypedError};
-        let mapped = crate::map_guest_file_read_error(GuestFileReadError::Probe(
-            GuestControlHealthError::Timeout,
-        ));
-        match mapped {
-            TypedError::GuestControlReadFailed { kind } => {
-                assert_eq!(kind, GuestControlReadErrorKind::Timeout);
+        use GuestControlHealthError as H;
+        use GuestControlReadErrorKind as K;
+        use GuestFileReadError as E;
+
+        let cases = [
+            (E::Probe(H::TransportIo), K::Transport),
+            (E::Probe(H::Signer), K::Transport),
+            (E::Probe(H::Ttrpc), K::Transport),
+            (E::Probe(H::Timeout), K::Timeout),
+            (E::Probe(H::AuthFailed), K::AuthFailed),
+            (E::Probe(H::StaleSession), K::AuthFailed),
+            (E::Probe(H::Protocol), K::Protocol),
+            (E::CapabilityUnavailable, K::CapabilityUnavailable),
+            (E::FileNotFound, K::FileNotFound),
+            (E::FileTooLarge, K::FileTooLarge),
+            (E::PathUnsafe, K::PathUnsafe),
+            (E::ReadDenied, K::ReadDenied),
+            (E::Protocol, K::Protocol),
+        ];
+        for (input, expected) in cases {
+            match super::map_guest_file_read_error(input) {
+                TypedError::GuestControlReadFailed { kind } => assert_eq!(kind, expected),
+                other => panic!("expected GuestControlReadFailed, got {other:?}"),
             }
-            other => panic!("expected GuestControlReadFailed, got {other:?}"),
         }
     }
 
@@ -2521,12 +2045,14 @@ mod tests {
         async fn hello(
             &self,
             _request: d2b_contracts_control::guest_proto::HelloRequest,
-        ) -> Result<d2b_contracts_control::guest_proto::HelloResponse, GuestControlHealthError> {
+        ) -> Result<d2b_contracts_control::guest_proto::HelloResponse, GuestControlHealthError>
+        {
             use d2b_contracts_control::guest_proto as pb;
             let mut response = pb::HelloResponse::new();
             response.guest_nonce = vec![0x22; AUTH_NONCE_LEN];
             response.guest_boot_id = "boot-1".to_owned();
-            response.protocol_version = d2b_contracts_control::guest_wire::GUEST_CONTROL_PROTOCOL_VERSION;
+            response.protocol_version =
+                d2b_contracts_control::guest_wire::GUEST_CONTROL_PROTOCOL_VERSION;
             Ok(response)
         }
 
@@ -2545,15 +2071,18 @@ mod tests {
         async fn health(
             &self,
             _request: d2b_contracts_control::guest_proto::HealthRequest,
-        ) -> Result<d2b_contracts_control::guest_proto::HealthResponse, GuestControlHealthError> {
+        ) -> Result<d2b_contracts_control::guest_proto::HealthResponse, GuestControlHealthError>
+        {
             Ok(healthy_evidence().health)
         }
 
         async fn read_guest_file(
             &self,
             _request: d2b_contracts_control::guest_proto::ReadGuestFileRequest,
-        ) -> Result<d2b_contracts_control::guest_proto::ReadGuestFileResponse, GuestControlHealthError>
-        {
+        ) -> Result<
+            d2b_contracts_control::guest_proto::ReadGuestFileResponse,
+            GuestControlHealthError,
+        > {
             Ok(d2b_contracts_control::guest_proto::ReadGuestFileResponse::new())
         }
 
@@ -2619,45 +2148,11 @@ mod tests {
         false
     }
 
-    fn collect_rs_sources(dir: &std::path::Path, out: &mut Vec<(PathBuf, String)>) {
-        for entry in std::fs::read_dir(dir).expect("read daemon src dir") {
-            let path = entry.expect("dir entry").path();
-            if path.is_dir() {
-                collect_rs_sources(&path, out);
-            } else if path.extension().and_then(|ext| ext.to_str()) == Some("rs") {
-                let body = std::fs::read_to_string(&path).expect("read daemon source file");
-                out.push((path, body));
-            }
-        }
-    }
-
     #[test]
-    fn daemon_source_launches_no_ssh_client() {
-        let src_dir = if let (Some(runfiles_dir), Some(workspace)) = (
-            std::env::var_os("RUNFILES_DIR"),
-            std::env::var_os("TEST_WORKSPACE"),
-        ) {
-            std::path::PathBuf::from(runfiles_dir)
-                .join(workspace)
-                .join("packages/d2bd/src")
-        } else {
-            std::env::var_os("CARGO_MANIFEST_DIR")
-                .map(std::path::PathBuf::from)
-                .or_else(|| std::env::current_dir().ok())
-                .expect("resolve daemon source root")
-                .join("src")
-        };
-        let mut sources = Vec::new();
-        collect_rs_sources(&src_dir, &mut sources);
-        assert!(!sources.is_empty(), "expected daemon source files");
-        let offenders: Vec<&PathBuf> = sources
-            .iter()
-            .filter(|(_, body)| source_launches_ssh(body))
-            .map(|(path, _)| path)
-            .collect();
+    fn guest_control_bridge_launches_no_ssh_client() {
         assert!(
-            offenders.is_empty(),
-            "the daemon must never launch an SSH/SCP client; offenders: {offenders:?}"
+            !source_launches_ssh(include_str!("guest_control_bridge.rs")),
+            "guest-control transport must never launch an SSH/SCP client"
         );
     }
 
@@ -2665,8 +2160,8 @@ mod tests {
     fn readiness_loop_spawns_no_ssh_client() {
         // The readiness loop drives ONLY the injected probe and spawns no
         // external process. The daemon's hard "never launch an SSH/SCP
-        // client" invariant is enforced statically across the whole daemon
-        // source by `daemon_source_launches_no_ssh_client`; this test verifies
+        // client" invariant is enforced statically across this owner module
+        // by `guest_control_bridge_launches_no_ssh_client`; this test verifies
         // the readiness path converges to ready through the injected probe.
         let probe = ScriptedProbe::new(vec![
             Err(GuestControlHealthError::TransportIo),
@@ -3033,5 +2528,152 @@ mod tests {
         let calls = probe.recorded_calls.lock().unwrap();
         assert_eq!(calls[0].1, pb::AudioSetKind::AUDIO_SET_KIND_LEVEL);
         assert_eq!(calls[0].3, 60, "level value must be forwarded verbatim");
+    }
+}
+
+#[cfg(test)]
+mod guest_control_readiness_tracing_tests {
+    use super::{ReadinessObservation, emit_guest_control_readiness_event};
+    use std::sync::{Arc, Mutex};
+    use tracing::field::{Field, Visit};
+    use tracing_subscriber::layer::{Context, SubscriberExt};
+    use tracing_subscriber::{Layer, Registry};
+
+    /// Captured events: one inner vec of `(field_name, value)` pairs per
+    /// recorded tracing event.
+    type CapturedEvents = Arc<Mutex<Vec<Vec<(String, String)>>>>;
+
+    #[derive(Default)]
+    struct FieldCollector {
+        fields: Vec<(String, String)>,
+    }
+    impl Visit for FieldCollector {
+        fn record_debug(&mut self, field: &Field, value: &dyn std::fmt::Debug) {
+            self.fields
+                .push((field.name().to_string(), format!("{value:?}")));
+        }
+        fn record_str(&mut self, field: &Field, value: &str) {
+            self.fields
+                .push((field.name().to_string(), value.to_string()));
+        }
+        fn record_u64(&mut self, field: &Field, value: u64) {
+            self.fields
+                .push((field.name().to_string(), value.to_string()));
+        }
+        fn record_i64(&mut self, field: &Field, value: i64) {
+            self.fields
+                .push((field.name().to_string(), value.to_string()));
+        }
+    }
+
+    struct CapturingLayer {
+        events: CapturedEvents,
+    }
+    impl<S: tracing::Subscriber> Layer<S> for CapturingLayer {
+        fn on_event(&self, event: &tracing::Event<'_>, _ctx: Context<'_, S>) {
+            let mut collector = FieldCollector::default();
+            event.record(&mut collector);
+            self.events.lock().unwrap().push(collector.fields);
+        }
+    }
+
+    fn observation(error_kind: &'static str, outcome: &'static str) -> ReadinessObservation {
+        ReadinessObservation {
+            subsystem: "guest-control-health",
+            outcome,
+            health_state: "degraded",
+            health_reason: "quota-exceeded",
+            error_kind,
+            attempt_count: 3,
+            duration_ms: 1234,
+        }
+    }
+
+    #[test]
+    fn readiness_tracing_events_carry_only_leak_safe_fields() {
+        // APPROVED field-name allowlist for the readiness observation
+        // events. Hardcoded (not derived from the call site) so that
+        // adding a new field to the `tracing::info!`/`warn!` macro - e.g.
+        // a raw path, nonce, or guest-supplied string - fails this test.
+        const APPROVED_FIELDS: &[&str] = &[
+            "message",
+            "kind",
+            "subsystem",
+            "outcome",
+            "health_state",
+            "health_reason",
+            "error_kind",
+            "attempt_count",
+            "duration_ms",
+        ];
+        // Field names that MUST NEVER appear on a readiness event.
+        const FORBIDDEN_FIELDS: &[&str] = &[
+            "vm",
+            "env",
+            "node",
+            "role_id",
+            "path",
+            "socket",
+            "state_dir",
+            "store_path",
+            "nonce",
+            "token",
+            "auth_tag",
+            "guest_boot_id",
+            "capabilities_hash",
+            "peer_cid",
+            "guest_bytes",
+            "content",
+            "error",
+            "error_message",
+        ];
+
+        let events = Arc::new(Mutex::new(Vec::new()));
+        let layer = CapturingLayer {
+            events: events.clone(),
+        };
+        let subscriber = Registry::default().with(layer);
+        tracing::subscriber::with_default(subscriber, || {
+            // Exercise BOTH the ready and not-ready arms so both call
+            // sites are covered.
+            emit_guest_control_readiness_event(&observation("none", "ready"), true);
+            emit_guest_control_readiness_event(&observation("auth-failed", "not-ready"), false);
+        });
+
+        let captured = events.lock().unwrap();
+        assert_eq!(captured.len(), 2, "expected exactly two readiness events");
+        for fields in captured.iter() {
+            assert!(!fields.is_empty(), "readiness event recorded no fields");
+            for (name, value) in fields {
+                assert!(
+                    APPROVED_FIELDS.contains(&name.as_str()),
+                    "unapproved readiness tracing field: {name}={value}"
+                );
+                assert!(
+                    !FORBIDDEN_FIELDS.contains(&name.as_str()),
+                    "forbidden readiness tracing field: {name}"
+                );
+                assert!(
+                    !value.contains('/'),
+                    "path-like value leaked: {name}={value}"
+                );
+                assert!(
+                    !value.contains("SENTINEL"),
+                    "guest content leaked: {name}={value}"
+                );
+            }
+        }
+
+        // The ready arm must NOT carry error_kind; the not-ready arm MUST.
+        let ready_fields: Vec<&str> = captured[0].iter().map(|(n, _)| n.as_str()).collect();
+        let not_ready_fields: Vec<&str> = captured[1].iter().map(|(n, _)| n.as_str()).collect();
+        assert!(
+            !ready_fields.contains(&"error_kind"),
+            "ready event must not carry error_kind"
+        );
+        assert!(
+            not_ready_fields.contains(&"error_kind"),
+            "not-ready event must carry error_kind"
+        );
     }
 }

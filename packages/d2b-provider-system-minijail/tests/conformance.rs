@@ -70,7 +70,8 @@ fn the_user_domain_is_admitted_only_by_the_descriptor() {
             .expected_identity(required())
             .domain(d2b_contracts_zone_session::v3::execution_policy::ExecutionDomain::User)
             .user_ref(Some(
-                d2b_contracts_zone_session::v3::ResourceRef::parse("User/alice").expect("valid reference"),
+                d2b_contracts_zone_session::v3::ResourceRef::parse("User/alice")
+                    .expect("valid reference"),
             ))
             .build()
             .expect("conformant ticket")

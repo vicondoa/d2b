@@ -7,15 +7,11 @@
 
 use std::{sync::Mutex, time::Duration};
 
+use d2b_contracts::types::{BundleOpId, PathClass, RoleId, VmId};
+use d2b_contracts_broker::broker_wire::{
+    BrokerCallerRole, BrokerRequest, BrokerResponse, RunnerRole, SpawnRunnerRequest,
+};
 use d2b_contracts_zone_session::v3::{ResourceRef, ResourceUid};
-use d2b_contracts_broker::{
-    broker_wire::{
-        BrokerCallerRole, BrokerRequest, BrokerResponse, RunnerRole, SpawnRunnerRequest,
-    },
-};
-use d2b_contracts::{
-    types::{BundleOpId, PathClass, RoleId, VmId},
-};
 use d2b_core::bundle_resolver::BundleResolver;
 use d2b_core::processes::{ProcessNode, ProcessRole};
 use d2b_core_controller::migration::LegacyTpmMigrationDecision;
@@ -76,7 +72,7 @@ pub trait CoreTpmEffectExecutor {
 }
 
 struct SwtpmSpawnReservation<'a> {
-    table: &'a crate::supervisor::pidfd_table::PidfdTable,
+    table: &'a d2bd_runtime::supervisor::pidfd_table::PidfdTable,
     vm: String,
 }
 
@@ -266,8 +262,10 @@ impl<'a> LiveTpmEffectExecutor<'a> {
             .state
             .pidfd_table
             .still_alive_same_start_time(self.vm_id.as_str(), "swtpm");
-        let snapshot = crate::supervisor::state::SnapshotStore::get(
-            &crate::supervisor::state::FilesystemSnapshotStore::new(&self.state.daemon_state_dir),
+        let snapshot = d2bd_runtime::supervisor::state::SnapshotStore::get(
+            &d2bd_runtime::supervisor::state::FilesystemSnapshotStore::new(
+                &self.state.daemon_state_dir,
+            ),
             self.vm_id.as_str(),
             "swtpm",
         )
@@ -275,7 +273,7 @@ impl<'a> LiveTpmEffectExecutor<'a> {
         let liveness = if pidfd_alive {
             DurableSwtpmLiveness::Live
         } else if let Some(snapshot) = snapshot.as_ref() {
-            match crate::supervisor::pidfd_table::read_proc_start_time_pub(snapshot.pid) {
+            match d2bd_runtime::supervisor::pidfd_table::read_proc_start_time_pub(snapshot.pid) {
                 Ok(None) => DurableSwtpmLiveness::Missing,
                 Ok(Some(_)) | Err(_) => DurableSwtpmLiveness::Ambiguous,
             }
@@ -290,8 +288,8 @@ impl<'a> LiveTpmEffectExecutor<'a> {
             DurableSwtpmAdoption::ClaimAndAdopt => {
                 let mut claimed = snapshot.expect("claim requires a durable snapshot");
                 claimed.owner_resource_uid = Some(self.device_uid.as_str().to_owned());
-                crate::supervisor::state::SnapshotStore::upsert(
-                    &crate::supervisor::state::FilesystemSnapshotStore::new(
+                d2bd_runtime::supervisor::state::SnapshotStore::upsert(
+                    &d2bd_runtime::supervisor::state::FilesystemSnapshotStore::new(
                         &self.state.daemon_state_dir,
                     ),
                     &claimed,
@@ -306,7 +304,7 @@ impl<'a> LiveTpmEffectExecutor<'a> {
 
     fn wait_for_endpoint_ready(&self) -> Result<(), TpmEffectError> {
         let swtpm_node = self.swtpm_node()?;
-        let liveness = crate::supervisor::readiness_liveness::PidfdLivenessProbe::new(
+        let liveness = d2bd_runtime::supervisor::readiness_liveness::PidfdLivenessProbe::new(
             &self.state.pidfd_table,
             &self.state.broker_reap_log,
             self.vm_id.as_str(),
@@ -409,8 +407,10 @@ impl CoreTpmEffectExecutor for LiveTpmEffectExecutor<'_> {
             .state
             .pidfd_table
             .still_alive_same_start_time(self.vm_id.as_str(), "swtpm");
-        let snapshot = crate::supervisor::state::SnapshotStore::get(
-            &crate::supervisor::state::FilesystemSnapshotStore::new(&self.state.daemon_state_dir),
+        let snapshot = d2bd_runtime::supervisor::state::SnapshotStore::get(
+            &d2bd_runtime::supervisor::state::FilesystemSnapshotStore::new(
+                &self.state.daemon_state_dir,
+            ),
             self.vm_id.as_str(),
             "swtpm",
         )
@@ -418,7 +418,7 @@ impl CoreTpmEffectExecutor for LiveTpmEffectExecutor<'_> {
         let liveness = if pidfd_alive {
             DurableSwtpmLiveness::Live
         } else if let Some(snapshot) = snapshot.as_ref() {
-            match crate::supervisor::pidfd_table::read_proc_start_time_pub(snapshot.pid) {
+            match d2bd_runtime::supervisor::pidfd_table::read_proc_start_time_pub(snapshot.pid) {
                 Ok(None) => DurableSwtpmLiveness::Missing,
                 Ok(Some(_)) | Err(_) => DurableSwtpmLiveness::Ambiguous,
             }
@@ -433,8 +433,8 @@ impl CoreTpmEffectExecutor for LiveTpmEffectExecutor<'_> {
             DurableSwtpmAdoption::ClaimAndAdopt => {
                 let mut claimed = snapshot.expect("claim requires a durable snapshot");
                 claimed.owner_resource_uid = Some(self.device_uid.as_str().to_owned());
-                crate::supervisor::state::SnapshotStore::upsert(
-                    &crate::supervisor::state::FilesystemSnapshotStore::new(
+                d2bd_runtime::supervisor::state::SnapshotStore::upsert(
+                    &d2bd_runtime::supervisor::state::FilesystemSnapshotStore::new(
                         &self.state.daemon_state_dir,
                     ),
                     &claimed,
@@ -444,8 +444,8 @@ impl CoreTpmEffectExecutor for LiveTpmEffectExecutor<'_> {
                 return Ok(());
             }
             DurableSwtpmAdoption::RemoveAndSpawn => {
-                crate::supervisor::state::SnapshotStore::remove(
-                    &crate::supervisor::state::FilesystemSnapshotStore::new(
+                d2bd_runtime::supervisor::state::SnapshotStore::remove(
+                    &d2bd_runtime::supervisor::state::FilesystemSnapshotStore::new(
                         &self.state.daemon_state_dir,
                     ),
                     self.vm_id.as_str(),
@@ -503,7 +503,7 @@ impl CoreTpmEffectExecutor for LiveTpmEffectExecutor<'_> {
                 self.state.pidfd_table.register(
                     self.vm_id.as_str().to_owned(),
                     "swtpm".to_owned(),
-                    crate::supervisor::pidfd_table::PidfdEntry {
+                    d2bd_runtime::supervisor::pidfd_table::PidfdEntry {
                         pidfd,
                         pid: response.pid,
                         start_time_ticks: response.start_time_ticks,
@@ -515,7 +515,7 @@ impl CoreTpmEffectExecutor for LiveTpmEffectExecutor<'_> {
         if let Err(error) = registration_result {
             let duplicate = matches!(
                 error,
-                crate::supervisor::pidfd_table::PidfdTableError::DuplicateRegistration { .. }
+                d2bd_runtime::supervisor::pidfd_table::PidfdTableError::DuplicateRegistration { .. }
             );
             self.cleanup_failed_start(&response, &fds);
             return Err(if duplicate {
@@ -538,7 +538,7 @@ impl CoreTpmEffectExecutor for LiveTpmEffectExecutor<'_> {
             return Err(TpmEffectError::Transient);
         }
         crate::close_received_fds(&fds);
-        let liveness = crate::supervisor::readiness_liveness::PidfdLivenessProbe::new(
+        let liveness = d2bd_runtime::supervisor::readiness_liveness::PidfdLivenessProbe::new(
             &self.state.pidfd_table,
             &self.state.broker_reap_log,
             self.vm_id.as_str(),
@@ -940,7 +940,7 @@ enum DurableSwtpmLiveness {
 }
 
 fn durable_swtpm_adoption_gate(
-    snapshot: Option<&crate::supervisor::state::RunnerSnapshotRecord>,
+    snapshot: Option<&d2bd_runtime::supervisor::state::RunnerSnapshotRecord>,
     device_uid: &ResourceUid,
     liveness: DurableSwtpmLiveness,
 ) -> Result<DurableSwtpmAdoption, TpmEffectError> {
@@ -1009,7 +1009,7 @@ mod tests {
     #[test]
     fn confirmed_dead_durable_snapshot_allows_replacement_spawn() {
         let uid = ResourceUid::parse("123e4567-e89b-42d3-a456-426614174000").unwrap();
-        let snapshot = crate::supervisor::state::RunnerSnapshotRecord {
+        let snapshot = d2bd_runtime::supervisor::state::RunnerSnapshotRecord {
             vm: "work-vm".to_owned(),
             role_id: "swtpm".to_owned(),
             role: RunnerRole::Swtpm,
@@ -1027,7 +1027,7 @@ mod tests {
     #[test]
     fn live_legacy_snapshot_is_adopted() {
         let uid = ResourceUid::parse("123e4567-e89b-42d3-a456-426614174000").unwrap();
-        let snapshot = crate::supervisor::state::RunnerSnapshotRecord {
+        let snapshot = d2bd_runtime::supervisor::state::RunnerSnapshotRecord {
             vm: "work-vm".to_owned(),
             role_id: "swtpm".to_owned(),
             role: RunnerRole::Swtpm,
@@ -1054,7 +1054,7 @@ mod tests {
     #[test]
     fn ambiguous_durable_snapshot_stays_fail_closed() {
         let uid = ResourceUid::parse("123e4567-e89b-42d3-a456-426614174000").unwrap();
-        let snapshot = crate::supervisor::state::RunnerSnapshotRecord {
+        let snapshot = d2bd_runtime::supervisor::state::RunnerSnapshotRecord {
             vm: "work-vm".to_owned(),
             role_id: "swtpm".to_owned(),
             role: RunnerRole::Swtpm,
@@ -1073,7 +1073,7 @@ mod tests {
     fn durable_snapshot_refuses_replaced_device_uid_for_same_vm() {
         let old_uid = ResourceUid::parse("123e4567-e89b-42d3-a456-426614174000").unwrap();
         let new_uid = ResourceUid::parse("223e4567-e89b-42d3-a456-426614174000").unwrap();
-        let snapshot = crate::supervisor::state::RunnerSnapshotRecord {
+        let snapshot = d2bd_runtime::supervisor::state::RunnerSnapshotRecord {
             vm: "work-vm".to_owned(),
             role_id: "swtpm".to_owned(),
             role: RunnerRole::Swtpm,

@@ -427,7 +427,8 @@ fn seed_host(directory: &tempfile::TempDir, name: &str) {
     crate::transaction::initialize(&database, &identity()).unwrap();
     let target = ResourceRef::parse(&format!("Host/{name}")).unwrap();
     let canonical_json = stored_body(name);
-    let envelope = d2b_contracts_resource::v3::ResourceEnvelope::from_json(&canonical_json).unwrap();
+    let envelope =
+        d2b_contracts_resource::v3::ResourceEnvelope::from_json(&canonical_json).unwrap();
     let record = ResourceRecord {
         canonical_json,
         owner_uid: None,
@@ -445,7 +446,8 @@ fn seed_host(directory: &tempfile::TempDir, name: &str) {
         &envelope.metadata().uid().as_str(),
     )
     .unwrap();
-    let batch = ChangeBatch::new(d2b_contracts_resource::v3::ZoneRevision::new(1), Vec::new()).unwrap();
+    let batch =
+        ChangeBatch::new(d2b_contracts_resource::v3::ZoneRevision::new(1), Vec::new()).unwrap();
     let batch_value = encode(ValueKind::ChangeBatch, &batch).unwrap();
     let mut meta = crate::transaction::current_meta(&database).unwrap();
     meta.current_revision = 1;
@@ -514,7 +516,8 @@ fn seed_two_hosts(directory: &tempfile::TempDir) {
             "123e4567-e89b-42d3-a456-426614174001",
         )
         .into_bytes();
-    let envelope = d2b_contracts_resource::v3::ResourceEnvelope::from_json(&canonical_json).unwrap();
+    let envelope =
+        d2b_contracts_resource::v3::ResourceEnvelope::from_json(&canonical_json).unwrap();
     let record = crate::transaction::ResourceRecord {
         canonical_json,
         owner_uid: None,
@@ -588,9 +591,11 @@ fn seed_replay_log(directory: &tempfile::TempDir, rows: u64) {
     {
         let mut revisions = write.open_table(REVISION_LOG).unwrap();
         for revision in 1..=rows {
-            let batch =
-                ChangeBatch::new(d2b_contracts_resource::v3::ZoneRevision::new(revision), Vec::new())
-                    .unwrap();
+            let batch = ChangeBatch::new(
+                d2b_contracts_resource::v3::ZoneRevision::new(revision),
+                Vec::new(),
+            )
+            .unwrap();
             let value = encode(ValueKind::ChangeBatch, &batch).unwrap();
             revisions
                 .insert(revision_key(revision).unwrap().as_slice(), value.as_slice())

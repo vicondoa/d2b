@@ -12,16 +12,14 @@ use std::{
     sync::atomic::{AtomicUsize, Ordering},
 };
 
-use d2b_contracts::{
-    resource_proto as wire,
-    v3::{
-        AuthenticatedSubjectContext, BindingDigest, CanonicalJsonValue, ConfigurationGeneration,
-        ControllerGeneration, EvidenceClass, Locality, RESOURCE_ENVELOPE_DOMAIN_TAG,
-        ReconnectGeneration, ResourceName, ResourceRef, ResourceUid, SchemaFingerprint,
-        ServiceName, SessionBinding, SessionPurpose, TranscriptHash, TransportBinding, ZoneId,
-        ZoneRevision, canonical_digest, device::DeviceSpec, guest::GuestSpec,
-        identity::STANDARD_RESOURCE_TYPES, storage::ZoneStoreId,
-    },
+use d2b_contracts_resource::resource_proto as wire;
+use d2b_contracts_zone_session::v3::{
+    AuthenticatedSubjectContext, BindingDigest, CanonicalJsonValue, ConfigurationGeneration,
+    ControllerGeneration, EvidenceClass, Locality, RESOURCE_ENVELOPE_DOMAIN_TAG,
+    ReconnectGeneration, ResourceName, ResourceRef, ResourceUid, SchemaFingerprint, ServiceName,
+    SessionBinding, SessionPurpose, TranscriptHash, TransportBinding, ZoneId, ZoneRevision,
+    canonical_digest, device::DeviceSpec, guest::GuestSpec, identity::STANDARD_RESOURCE_TYPES,
+    storage::ZoneStoreId,
 };
 use d2b_contracts_broker::broker_wire::{
     BrokerCallerRole, OpenZoneStoreResponse, ZoneStoreDisposition,
@@ -41,7 +39,8 @@ use d2bd::provider_effects::{
     ProviderEffectError, ProviderLifecycleDispatch, ProviderLifecycleEffectPort,
 };
 use d2bd::provider_registry::{ProviderBinding, ProviderRuntime, ProviderRuntimeDispatch};
-use d2bd::resource_runtime::{OpenedZoneStore, ZoneResourceRuntime};
+use d2bd::resource_runtime::ZoneResourceRuntime;
+use d2bd_runtime::resource_store_runtime::OpenedZoneStore;
 use protobuf::{EnumOrUnknown, MessageField};
 use serde_json::json;
 use sha2::{Digest, Sha256};
@@ -743,7 +742,7 @@ async fn authenticated_operator_drives_wave6_resources_through_production_bounda
         ("Guest", "workstation", "seed-wave6-guest"),
     ] {
         create_operator_resource(
-            &client,
+            client.as_ref(),
             resource_type,
             name,
             "Provider/system-core",

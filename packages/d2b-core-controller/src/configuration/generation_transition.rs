@@ -7,8 +7,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use d2b_contracts_zone_session::v3::{
-    ZoneBundle,
-    {ConfigurationGeneration, ResourceBundleGenerationId, SchemaFingerprint, Timestamp},
+    ZoneBundle, {ConfigurationGeneration, ResourceBundleGenerationId, SchemaFingerprint, Timestamp},
 };
 
 use crate::resource_store::{

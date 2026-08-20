@@ -2098,7 +2098,9 @@ fn dispatch_request_with_backend_and_request_fds<B: DispatchBackend>(
             )?;
             Ok(DispatchResult::no_fds(
                 BrokerResponse::ResourceActivationAudit(
-                    d2b_contracts_broker::broker_wire::ResourceActivationAuditResponse { recorded: true },
+                    d2b_contracts_broker::broker_wire::ResourceActivationAuditResponse {
+                        recorded: true,
+                    },
                 ),
             ))
         }
@@ -3388,8 +3390,8 @@ fn dispatch_request_with_backend_and_request_fds<B: DispatchBackend>(
             } else {
                 Some(1)
             };
-            let response =
-                BrokerResponse::SpawnRunner(d2b_contracts_broker::broker_wire::SpawnRunnerResponse {
+            let response = BrokerResponse::SpawnRunner(
+                d2b_contracts_broker::broker_wire::SpawnRunnerResponse {
                     vm_id: req.vm_id.clone(),
                     role_id: req.role_id.clone(),
                     role: req.role,
@@ -3404,7 +3406,8 @@ fn dispatch_request_with_backend_and_request_fds<B: DispatchBackend>(
                     start_time_ticks: outcome.start_time_ticks,
                     pidfd_index: 0,
                     console_fd_index,
-                });
+                },
+            );
             let _ = intent_id_runner;
             let mut response_fds = Vec::with_capacity(1 + outcome.extra_response_fds.len());
             response_fds.push(outcome.pidfd);
@@ -3662,11 +3665,12 @@ fn dispatch_request_with_backend_and_request_fds<B: DispatchBackend>(
                     bridge_ifname,
                 },
             )?;
-            let response =
-                BrokerResponse::CreatePersistentTap(d2b_contracts_broker::broker_wire::TapReadyResponse {
+            let response = BrokerResponse::CreatePersistentTap(
+                d2b_contracts_broker::broker_wire::TapReadyResponse {
                     bridge: outcome.bridge_ifname,
                     tap: outcome.tap_ifname,
-                });
+                },
+            );
             Ok(DispatchResult::no_fds(response))
         }
         RealBrokerRequest::CreateTapFd(req) => {
@@ -6065,7 +6069,9 @@ fn runner_signal_name(signal: d2b_contracts_broker::broker_wire::RunnerSignal) -
 }
 
 #[cfg(not(feature = "layer1-bootstrap"))]
-fn systemd_domain_name(domain: d2b_contracts_broker::broker_wire::SystemdUnitDomain) -> &'static str {
+fn systemd_domain_name(
+    domain: d2b_contracts_broker::broker_wire::SystemdUnitDomain,
+) -> &'static str {
     match domain {
         d2b_contracts_broker::broker_wire::SystemdUnitDomain::System => "system",
         d2b_contracts_broker::broker_wire::SystemdUnitDomain::User => "user",
@@ -6460,12 +6466,14 @@ fn proc_cgroup_matches(pid: i32, expected_subtree: &str) -> bool {
 /// a `std::sync::Mutex` so both the tokio reap task and the synchronous
 /// accept loop can access it safely.
 #[cfg(not(feature = "layer1-bootstrap"))]
-fn child_reap_buffer()
--> &'static Mutex<std::collections::VecDeque<d2b_contracts_broker::broker_wire::ChildReapedNotification>> {
+fn child_reap_buffer() -> &'static Mutex<
+    std::collections::VecDeque<d2b_contracts_broker::broker_wire::ChildReapedNotification>,
+> {
     use std::collections::VecDeque;
 
-    static BUFFER: OnceLock<Mutex<VecDeque<d2b_contracts_broker::broker_wire::ChildReapedNotification>>> =
-        OnceLock::new();
+    static BUFFER: OnceLock<
+        Mutex<VecDeque<d2b_contracts_broker::broker_wire::ChildReapedNotification>>,
+    > = OnceLock::new();
     BUFFER.get_or_init(|| Mutex::new(VecDeque::with_capacity(256)))
 }
 
@@ -6661,7 +6669,13 @@ trait DispatchBackend {
         &self,
         resolver: &BundleResolver,
         request: &d2b_contracts_broker::broker_wire::StartTransientUnitRequest,
-    ) -> Result<(d2b_contracts_broker::broker_wire::SystemdUnitIdentity, OwnedFd), BrokerError>;
+    ) -> Result<
+        (
+            d2b_contracts_broker::broker_wire::SystemdUnitIdentity,
+            OwnedFd,
+        ),
+        BrokerError,
+    >;
 
     fn check_systemd_user_manager(
         &self,
@@ -6679,7 +6693,13 @@ trait DispatchBackend {
         &self,
         resolver: &BundleResolver,
         request: &d2b_contracts_broker::broker_wire::OpenSystemdUnitPidfdRequest,
-    ) -> Result<(d2b_contracts_broker::broker_wire::SystemdUnitIdentity, OwnedFd), BrokerError>;
+    ) -> Result<
+        (
+            d2b_contracts_broker::broker_wire::SystemdUnitIdentity,
+            OwnedFd,
+        ),
+        BrokerError,
+    >;
 
     fn stop_systemd_unit(
         &self,
@@ -7077,7 +7097,13 @@ impl DispatchBackend for LiveDispatchBackend {
         &self,
         resolver: &BundleResolver,
         request: &d2b_contracts_broker::broker_wire::StartTransientUnitRequest,
-    ) -> Result<(d2b_contracts_broker::broker_wire::SystemdUnitIdentity, OwnedFd), BrokerError> {
+    ) -> Result<
+        (
+            d2b_contracts_broker::broker_wire::SystemdUnitIdentity,
+            OwnedFd,
+        ),
+        BrokerError,
+    > {
         crate::ops::systemd::start(resolver, request)
             .map_err(|error| BrokerError::LiveHandler(error.to_string()))
     }
@@ -7104,7 +7130,13 @@ impl DispatchBackend for LiveDispatchBackend {
         &self,
         resolver: &BundleResolver,
         request: &d2b_contracts_broker::broker_wire::OpenSystemdUnitPidfdRequest,
-    ) -> Result<(d2b_contracts_broker::broker_wire::SystemdUnitIdentity, OwnedFd), BrokerError> {
+    ) -> Result<
+        (
+            d2b_contracts_broker::broker_wire::SystemdUnitIdentity,
+            OwnedFd,
+        ),
+        BrokerError,
+    > {
         crate::ops::systemd::reopen(resolver, request)
             .map_err(|error| BrokerError::LiveHandler(error.to_string()))
     }
@@ -7224,7 +7256,8 @@ impl DispatchBackend for LiveDispatchBackend {
         state_dir: &std::path::Path,
         helper_path: &std::path::Path,
         request: &d2b_contracts_broker::host_generation::ApplyHostGenerationHandoff,
-    ) -> Result<d2b_contracts_broker::broker_wire::ApplyHostGenerationHandoffResponse, BrokerError> {
+    ) -> Result<d2b_contracts_broker::broker_wire::ApplyHostGenerationHandoffResponse, BrokerError>
+    {
         crate::ops::host_generation_handoff::apply_with_helper(state_dir, helper_path, request)
             .map_err(|error| BrokerError::LiveHandler(error.to_string()))
     }
@@ -7506,11 +7539,9 @@ pub fn dispatch_run_host_install_response(
 #[cfg(not(feature = "layer1-bootstrap"))]
 pub fn probe_bundle_load_response(bundle_path: &std::path::Path) -> BrokerResponse {
     match try_load_resolver(bundle_path) {
-        BundleSlot::Loaded(_) => {
-            BrokerResponse::ValidateBundle(d2b_contracts_broker::broker_wire::ValidateBundleResponse {
-                valid: true,
-            })
-        }
+        BundleSlot::Loaded(_) => BrokerResponse::ValidateBundle(
+            d2b_contracts_broker::broker_wire::ValidateBundleResponse { valid: true },
+        ),
         BundleSlot::Unavailable => BrokerError::BundleResolverUnavailable.into_response(),
         BundleSlot::Tampered { path, reason } => {
             BrokerError::BundleTampered { path, reason }.into_response()
@@ -7528,11 +7559,9 @@ pub fn probe_bundle_load_response_with_policy(
     policy: &d2b_core::bundle_resolver::BundleVerifyPolicy,
 ) -> BrokerResponse {
     match try_load_resolver_with_policy(bundle_path, policy) {
-        BundleSlot::Loaded(_) => {
-            BrokerResponse::ValidateBundle(d2b_contracts_broker::broker_wire::ValidateBundleResponse {
-                valid: true,
-            })
-        }
+        BundleSlot::Loaded(_) => BrokerResponse::ValidateBundle(
+            d2b_contracts_broker::broker_wire::ValidateBundleResponse { valid: true },
+        ),
         BundleSlot::Unavailable => BrokerError::BundleResolverUnavailable.into_response(),
         BundleSlot::Tampered { path, reason } => {
             BrokerError::BundleTampered { path, reason }.into_response()
@@ -7579,8 +7608,8 @@ pub fn dispatch_run_activation_response_for_intent(
     )
     .map_err(map_activation_live_error)
     {
-        Ok(outcome) => {
-            BrokerResponse::RunActivation(d2b_contracts_broker::broker_wire::RunActivationResponse {
+        Ok(outcome) => BrokerResponse::RunActivation(
+            d2b_contracts_broker::broker_wire::RunActivationResponse {
                 mode: outcome.mode,
                 vm: outcome.vm,
                 generation_number: outcome.generation_number,
@@ -7589,8 +7618,8 @@ pub fn dispatch_run_activation_response_for_intent(
                     .as_ref()
                     .map(|path| path.display().to_string()),
                 summary: outcome.summary,
-            })
-        }
+            },
+        ),
         Err(err) => err.into_response(),
     }
 }
@@ -9023,7 +9052,8 @@ fn validate_sandbox_launch_plan(
             resolved: "unsupported".to_owned(),
         });
     }
-    if plan.environment_class != d2b_contracts_zone_session::v3::process::EnvironmentClass::Minimal {
+    if plan.environment_class != d2b_contracts_zone_session::v3::process::EnvironmentClass::Minimal
+    {
         return Err(BrokerError::SpawnRunnerIntentMismatch {
             field: "sandbox_plan.environment_class",
             requested: format!("{:?}", plan.environment_class),
@@ -9050,11 +9080,12 @@ fn validate_sandbox_launch_plan(
             });
         }
     }
-    if plan
-        .namespace_classes
-        .iter()
-        .any(|class| matches!(class, d2b_contracts_zone_session::v3::process::NamespaceClass::User))
-        != expected_namespaces.user
+    if plan.namespace_classes.iter().any(|class| {
+        matches!(
+            class,
+            d2b_contracts_zone_session::v3::process::NamespaceClass::User
+        )
+    }) != expected_namespaces.user
     {
         return Err(BrokerError::SpawnRunnerIntentMismatch {
             field: "sandbox_plan.namespace_classes",
@@ -9064,7 +9095,8 @@ fn validate_sandbox_launch_plan(
     }
     if plan.user_namespace.is_some() != intent.user_namespace.is_some()
         || plan.user_namespace.is_some_and(|spec| {
-            spec.mapping_class != d2b_contracts_zone_session::v3::process::MappingClass::ProcessPrincipalRoot
+            spec.mapping_class
+                != d2b_contracts_zone_session::v3::process::MappingClass::ProcessPrincipalRoot
         })
     {
         return Err(BrokerError::SpawnRunnerIntentMismatch {
@@ -9124,7 +9156,9 @@ fn capability_matches(
     capability: &str,
 ) -> bool {
     let expected = match class {
-        d2b_contracts_zone_session::v3::process::CapabilityClass::NetworkBind => "CAP_NET_BIND_SERVICE",
+        d2b_contracts_zone_session::v3::process::CapabilityClass::NetworkBind => {
+            "CAP_NET_BIND_SERVICE"
+        }
         d2b_contracts_zone_session::v3::process::CapabilityClass::NetworkRaw => "CAP_NET_RAW",
         d2b_contracts_zone_session::v3::process::CapabilityClass::NetworkAdmin => "CAP_NET_ADMIN",
         d2b_contracts_zone_session::v3::process::CapabilityClass::SysTime => "CAP_SYS_TIME",
@@ -9153,13 +9187,11 @@ fn validate_spawn_runner_request_matches_intent(
         });
     }
     if let Some(execution_ref) = &req.execution_ref {
-        let expected =
-            d2b_contracts_zone_session::v3::ResourceRef::parse(&intent.execution_ref).map_err(|_| {
-                BrokerError::SpawnRunnerIntentMismatch {
-                    field: "execution_ref",
-                    requested: execution_ref.to_canonical_string(),
-                    resolved: "invalid-bundle-reference".to_owned(),
-                }
+        let expected = d2b_contracts_zone_session::v3::ResourceRef::parse(&intent.execution_ref)
+            .map_err(|_| BrokerError::SpawnRunnerIntentMismatch {
+                field: "execution_ref",
+                requested: execution_ref.to_canonical_string(),
+                resolved: "invalid-bundle-reference".to_owned(),
             })?;
         if execution_ref != &expected {
             return Err(BrokerError::SpawnRunnerIntentMismatch {
@@ -9508,7 +9540,10 @@ fn cleanup_otel_host_bridge_stale_socket(
     role: &d2b_contracts_broker::broker_wire::RunnerRole,
     argv: &[String],
 ) -> Result<(), BrokerError> {
-    if !matches!(role, d2b_contracts_broker::broker_wire::RunnerRole::OtelHostBridge) {
+    if !matches!(
+        role,
+        d2b_contracts_broker::broker_wire::RunnerRole::OtelHostBridge
+    ) {
         return Ok(());
     }
     let path = otel_host_bridge_socket_path(argv)?;
@@ -11171,7 +11206,10 @@ fn redact_public_detail(detail: &str) -> String {
     {
         return detail.to_owned();
     }
-    d2b_contracts_zone_session::v3::canonical_digest("d2b:broker-public-error:v1", detail.as_bytes())
+    d2b_contracts_zone_session::v3::canonical_digest(
+        "d2b:broker-public-error:v1",
+        detail.as_bytes(),
+    )
 }
 
 /// Start a background tokio runtime that listens for SIGCHLD and reaps
@@ -11232,7 +11270,9 @@ fn start_sigchld_reaper(audit_log: Arc<AuditLog>) -> tokio::runtime::Runtime {
 /// audit log.
 #[cfg(not(feature = "layer1-bootstrap"))]
 fn reap_all_pidfds(audit_log: &AuditLog) {
-    use d2b_contracts_broker::broker_wire::{ChildExitKind, ChildExitStatus, ChildReapedNotification};
+    use d2b_contracts_broker::broker_wire::{
+        ChildExitKind, ChildExitStatus, ChildReapedNotification,
+    };
     use nix::errno::Errno;
     use nix::sys::wait::{Id, WaitPidFlag, WaitStatus, waitid};
 
@@ -11357,7 +11397,9 @@ fn broker_audit_log_handle() -> &'static OnceLock<Arc<AuditLog>> {
 /// child for the SIGCHLD loop.
 #[cfg(not(feature = "layer1-bootstrap"))]
 fn targeted_reap_runner(runner_id: &str, pidfd: std::os::fd::BorrowedFd<'_>) {
-    use d2b_contracts_broker::broker_wire::{ChildExitKind, ChildExitStatus, ChildReapedNotification};
+    use d2b_contracts_broker::broker_wire::{
+        ChildExitKind, ChildExitStatus, ChildReapedNotification,
+    };
     use nix::errno::Errno;
     use nix::sys::wait::{Id, WaitPidFlag, WaitStatus, waitid};
 
@@ -11492,11 +11534,11 @@ mod tests {
     #[cfg(not(feature = "layer1-bootstrap"))]
     use crate::ops::exec_reconcile::{FakeReconcileExecutor, ReconcileOp};
     #[cfg(not(feature = "layer1-bootstrap"))]
+    use d2b_contracts::types::BundleOpId;
+    #[cfg(not(feature = "layer1-bootstrap"))]
     use d2b_contracts_broker::broker_wire::{
         ActivationMode, ActivationPhase, RunActivationRequest, RunActivationResponse,
     };
-    #[cfg(not(feature = "layer1-bootstrap"))]
-    use d2b_contracts::types::BundleOpId;
     #[cfg(not(feature = "layer1-bootstrap"))]
     use d2b_core::bundle_resolver::{ResolvedActivationIntent, ResolvedStoreViewIntent};
     use nix::unistd::Gid;
@@ -11621,15 +11663,16 @@ mod tests {
     #[cfg(not(feature = "layer1-bootstrap"))]
     #[test]
     fn qemu_media_enroll_request_fields_redact_raw_busid() {
-        let request =
-            BrokerRequest::QemuMediaEnroll(d2b_contracts_broker::broker_wire::QemuMediaEnrollRequest {
+        let request = BrokerRequest::QemuMediaEnroll(
+            d2b_contracts_broker::broker_wire::QemuMediaEnrollRequest {
                 vm_id: d2b_contracts::types::VmId::new("media"),
                 media_ref: d2b_contracts::types::MediaRef::new("installer-usb"),
                 bus_id: "1-2.3".to_owned(),
                 tracing_span_id: Some(d2b_contracts::types::TracingSpanId::new(
                     "usb-start-0000000000000001",
                 )),
-            });
+            },
+        );
 
         let fields = request_fields_value(&request).expect("redacted fields");
         assert_eq!(fields["vmId"], "media");
@@ -11644,12 +11687,13 @@ mod tests {
     #[cfg(not(feature = "layer1-bootstrap"))]
     #[test]
     fn qemu_media_hotplug_request_fields_redact_runtime_busid() {
-        let request =
-            BrokerRequest::QemuMediaAttach(d2b_contracts_broker::broker_wire::QemuMediaHotplugRequest {
+        let request = BrokerRequest::QemuMediaAttach(
+            d2b_contracts_broker::broker_wire::QemuMediaHotplugRequest {
                 vm_id: d2b_contracts::types::VmId::new("media"),
                 bus_id: "1-2.3".to_owned(),
                 tracing_span_id: None,
-            });
+            },
+        );
 
         let fields = request_fields_value(&request).expect("redacted fields");
         assert_eq!(fields["vmId"], "media");
@@ -12706,7 +12750,10 @@ mod tests {
             Some(&bundle.resolver),
         )
         .expect("sign");
-        assert_eq!(response.tag.len(), d2b_contracts_control::guest_auth::AUTH_TAG_LEN);
+        assert_eq!(
+            response.tag.len(),
+            d2b_contracts_control::guest_auth::AUTH_TAG_LEN
+        );
     }
 
     #[cfg(not(feature = "layer1-bootstrap"))]
@@ -12909,13 +12956,18 @@ mod tests {
             &self,
             req: &d2b_contracts_broker::broker_wire::SetBridgePortFlagsRequest,
             _resolver: &BundleResolver,
-        ) -> Result<d2b_contracts_broker::broker_wire::BridgePortFlagsResponse, BrokerError> {
+        ) -> Result<d2b_contracts_broker::broker_wire::BridgePortFlagsResponse, BrokerError>
+        {
             Ok(d2b_contracts_broker::broker_wire::BridgePortFlagsResponse {
-                bridge: d2b_contracts_zone_session::v3::IfName::new("nlworkbr0").expect("fake bridge ifname"),
+                bridge: d2b_contracts_zone_session::v3::IfName::new("nlworkbr0")
+                    .expect("fake bridge ifname"),
                 isolated: true,
                 neigh_suppress: true,
-                port: d2b_contracts_zone_session::v3::IfName::new(&format!("tap-{}", req.vm_id.as_str()))
-                    .expect("fake tap ifname"),
+                port: d2b_contracts_zone_session::v3::IfName::new(&format!(
+                    "tap-{}",
+                    req.vm_id.as_str()
+                ))
+                .expect("fake tap ifname"),
             })
         }
 
@@ -12953,8 +13005,13 @@ mod tests {
             &self,
             _resolver: &BundleResolver,
             _request: &d2b_contracts_broker::broker_wire::StartTransientUnitRequest,
-        ) -> Result<(d2b_contracts_broker::broker_wire::SystemdUnitIdentity, OwnedFd), BrokerError>
-        {
+        ) -> Result<
+            (
+                d2b_contracts_broker::broker_wire::SystemdUnitIdentity,
+                OwnedFd,
+            ),
+            BrokerError,
+        > {
             Err(BrokerError::Unimplemented {
                 operation: "StartSystemdUnit",
                 target_wave: "W6",
@@ -12976,7 +13033,8 @@ mod tests {
             &self,
             _resolver: &BundleResolver,
             _request: &d2b_contracts_broker::broker_wire::ObserveSystemdUnitRequest,
-        ) -> Result<Option<d2b_contracts_broker::broker_wire::SystemdUnitIdentity>, BrokerError> {
+        ) -> Result<Option<d2b_contracts_broker::broker_wire::SystemdUnitIdentity>, BrokerError>
+        {
             Err(BrokerError::Unimplemented {
                 operation: "ObserveSystemdUnit",
                 target_wave: "W6",
@@ -12987,8 +13045,13 @@ mod tests {
             &self,
             _resolver: &BundleResolver,
             _request: &d2b_contracts_broker::broker_wire::OpenSystemdUnitPidfdRequest,
-        ) -> Result<(d2b_contracts_broker::broker_wire::SystemdUnitIdentity, OwnedFd), BrokerError>
-        {
+        ) -> Result<
+            (
+                d2b_contracts_broker::broker_wire::SystemdUnitIdentity,
+                OwnedFd,
+            ),
+            BrokerError,
+        > {
             Err(BrokerError::Unimplemented {
                 operation: "OpenSystemdUnitPidfd",
                 target_wave: "W6",
@@ -13043,7 +13106,8 @@ mod tests {
             &self,
             req: &d2b_contracts_broker::broker_wire::RunHostInstallRequest,
             _resolver: Option<&BundleResolver>,
-        ) -> Result<d2b_contracts_broker::broker_wire::RunHostInstallResponse, BrokerError> {
+        ) -> Result<d2b_contracts_broker::broker_wire::RunHostInstallResponse, BrokerError>
+        {
             Ok(d2b_contracts_broker::broker_wire::RunHostInstallResponse {
                 installed: true,
                 enabled: req.enable,
@@ -13108,8 +13172,10 @@ mod tests {
             state_dir: &std::path::Path,
             helper_path: &std::path::Path,
             request: &d2b_contracts_broker::host_generation::ApplyHostGenerationHandoff,
-        ) -> Result<d2b_contracts_broker::broker_wire::ApplyHostGenerationHandoffResponse, BrokerError>
-        {
+        ) -> Result<
+            d2b_contracts_broker::broker_wire::ApplyHostGenerationHandoffResponse,
+            BrokerError,
+        > {
             crate::ops::host_generation_handoff::apply_with_helper(state_dir, helper_path, request)
                 .map_err(|error| BrokerError::LiveHandler(error.to_string()))
         }
@@ -13199,47 +13265,57 @@ mod tests {
         fn qemu_media_system_powerdown(
             &self,
             req: &d2b_contracts_broker::broker_wire::QemuMediaLifecycleRequest,
-        ) -> Result<d2b_contracts_broker::broker_wire::QemuMediaLifecycleResponse, BrokerError> {
-            Ok(d2b_contracts_broker::broker_wire::QemuMediaLifecycleResponse {
-                vm_id: req.vm_id.clone(),
-                command: d2b_contracts_broker::broker_wire::QemuMediaLifecycleAction::SystemPowerdown,
-            })
+        ) -> Result<d2b_contracts_broker::broker_wire::QemuMediaLifecycleResponse, BrokerError>
+        {
+            Ok(
+                d2b_contracts_broker::broker_wire::QemuMediaLifecycleResponse {
+                    vm_id: req.vm_id.clone(),
+                    command:
+                        d2b_contracts_broker::broker_wire::QemuMediaLifecycleAction::SystemPowerdown,
+                },
+            )
         }
 
         fn qemu_media_query_status(
             &self,
             req: &d2b_contracts_broker::broker_wire::QemuMediaQueryStatusRequest,
-        ) -> Result<d2b_contracts_broker::broker_wire::QemuMediaQueryStatusResponse, BrokerError> {
+        ) -> Result<d2b_contracts_broker::broker_wire::QemuMediaQueryStatusResponse, BrokerError>
+        {
             let status = if req.shutdown_context {
                 d2b_contracts_broker::broker_wire::QemuMediaVmStatus::ConnectionLostDuringShutdown
             } else {
                 d2b_contracts_broker::broker_wire::QemuMediaVmStatus::Running
             };
-            Ok(d2b_contracts_broker::broker_wire::QemuMediaQueryStatusResponse {
-                vm_id: req.vm_id.clone(),
-                status,
-            })
+            Ok(
+                d2b_contracts_broker::broker_wire::QemuMediaQueryStatusResponse {
+                    vm_id: req.vm_id.clone(),
+                    status,
+                },
+            )
         }
 
         fn qemu_media_quit(
             &self,
             req: &d2b_contracts_broker::broker_wire::QemuMediaLifecycleRequest,
-        ) -> Result<d2b_contracts_broker::broker_wire::QemuMediaLifecycleResponse, BrokerError> {
-            Ok(d2b_contracts_broker::broker_wire::QemuMediaLifecycleResponse {
-                vm_id: req.vm_id.clone(),
-                command: d2b_contracts_broker::broker_wire::QemuMediaLifecycleAction::Quit,
-            })
+        ) -> Result<d2b_contracts_broker::broker_wire::QemuMediaLifecycleResponse, BrokerError>
+        {
+            Ok(
+                d2b_contracts_broker::broker_wire::QemuMediaLifecycleResponse {
+                    vm_id: req.vm_id.clone(),
+                    command: d2b_contracts_broker::broker_wire::QemuMediaLifecycleAction::Quit,
+                },
+            )
         }
     }
 
     #[cfg(not(feature = "layer1-bootstrap"))]
     #[test]
     fn qemu_media_lifecycle_dispatch_audits_mutations_but_not_status_poll() {
+        use d2b_contracts::types::{TracingSpanId, VmId};
         use d2b_contracts_broker::broker_wire::{
             BrokerCallerRole, BrokerRequest, QemuMediaLifecycleAction, QemuMediaLifecycleRequest,
             QemuMediaQueryStatusRequest, QemuMediaVmStatus,
         };
-        use d2b_contracts::types::{TracingSpanId, VmId};
 
         let root = test_audit_dir("qemu-lifecycle-dispatch-audit");
         let bundle = build_test_bundle(&root);
@@ -13391,10 +13467,12 @@ mod tests {
                 b"forged zone",
             ))
             .expect("canonical zone digest"),
-            operation_identity: CanonicalAuditDigest::parse(d2b_contracts_zone_session::v3::canonical_digest(
-                "d2b:test-operation",
-                b"forged operation",
-            ))
+            operation_identity: CanonicalAuditDigest::parse(
+                d2b_contracts_zone_session::v3::canonical_digest(
+                    "d2b:test-operation",
+                    b"forged operation",
+                ),
+            )
             .expect("canonical operation digest"),
         };
 
@@ -13479,11 +13557,11 @@ mod tests {
         ignore = "v1.1.1fu11: requires write access to /var/lib/d2b/runtime/ which only root can do; run with --cfg test_root in a privileged test environment"
     )]
     fn dispatch_request_writes_typed_op_audit_records_for_all_live_arms() {
+        use d2b_contracts::types::{BundleOpId, RoleId, ScopeId, TracingSpanId, VmId};
         use d2b_contracts_broker::broker_wire::{
             ActivationMode, BrokerAuditFilter, BrokerCallerRole, BrokerRequest, RunnerAllocation,
             RunnerAllocationKind, RunnerRole, RunnerSignal,
         };
-        use d2b_contracts::types::{BundleOpId, RoleId, ScopeId, TracingSpanId, VmId};
         use d2b_core::bundle_resolver::{
             intent_id_activation, intent_id_gc_host, intent_id_hosts_host,
             intent_id_installer_host, intent_id_keys_rotate, intent_id_migrate_host,
@@ -13643,13 +13721,15 @@ mod tests {
 
         assert_ack(
             assert_dispatch(
-                BrokerRequest::ApplyNftables(d2b_contracts_broker::broker_wire::ApplyNftablesRequest {
-                    bundle_nft_intent_ref: BundleOpId::new(intent_id_nft_host()),
-                    scope_id: ScopeId::new("host"),
-                    desired_hash: Some("fnv1a64:feedfacefeedface".to_owned()),
-                    destroy: false,
-                    tracing_span_id: Some(TracingSpanId::new("span-nft")),
-                }),
+                BrokerRequest::ApplyNftables(
+                    d2b_contracts_broker::broker_wire::ApplyNftablesRequest {
+                        bundle_nft_intent_ref: BundleOpId::new(intent_id_nft_host()),
+                        scope_id: ScopeId::new("host"),
+                        desired_hash: Some("fnv1a64:feedfacefeedface".to_owned()),
+                        destroy: false,
+                        tracing_span_id: Some(TracingSpanId::new("span-nft")),
+                    },
+                ),
                 "ApplyNftables",
                 OperationFields::ApplyNftables {
                     bundle_nft_intent_ref: intent_id_nft_host(),
@@ -13930,13 +14010,15 @@ mod tests {
         }
 
         let run_host_install = assert_dispatch(
-            BrokerRequest::RunHostInstall(d2b_contracts_broker::broker_wire::RunHostInstallRequest {
-                bundle_installer_intent_ref: BundleOpId::new(intent_id_installer_host()),
-                enable: true,
-                start: true,
-                no_start: false,
-                tracing_span_id: Some(TracingSpanId::new("span-install")),
-            }),
+            BrokerRequest::RunHostInstall(
+                d2b_contracts_broker::broker_wire::RunHostInstallRequest {
+                    bundle_installer_intent_ref: BundleOpId::new(intent_id_installer_host()),
+                    enable: true,
+                    start: true,
+                    no_start: false,
+                    tracing_span_id: Some(TracingSpanId::new("span-install")),
+                },
+            ),
             "RunHostInstall",
             OperationFields::RunHostInstall {
                 bundle_installer_intent_ref: intent_id_installer_host(),
@@ -14040,11 +14122,13 @@ mod tests {
         }
 
         let run_host_key_trust = assert_dispatch(
-            BrokerRequest::RunHostKeyTrust(d2b_contracts_broker::broker_wire::RunHostKeyTrustRequest {
-                bundle_trust_intent_ref: BundleOpId::new(intent_id_trust("corp-vm")),
-                vm: "corp-vm".to_owned(),
-                tracing_span_id: Some(TracingSpanId::new("span-trust")),
-            }),
+            BrokerRequest::RunHostKeyTrust(
+                d2b_contracts_broker::broker_wire::RunHostKeyTrustRequest {
+                    bundle_trust_intent_ref: BundleOpId::new(intent_id_trust("corp-vm")),
+                    vm: "corp-vm".to_owned(),
+                    tracing_span_id: Some(TracingSpanId::new("span-trust")),
+                },
+            ),
             "RunHostKeyTrust",
             OperationFields::RunHostKeyTrust {
                 bundle_trust_intent_ref: intent_id_trust("corp-vm"),
@@ -14235,10 +14319,12 @@ mod tests {
         );
 
         let qemu_quit = assert_dispatch(
-            BrokerRequest::QemuMediaQuit(d2b_contracts_broker::broker_wire::QemuMediaLifecycleRequest {
-                vm_id: VmId::new("media"),
-                tracing_span_id: Some(TracingSpanId::new("span-qmp-quit")),
-            }),
+            BrokerRequest::QemuMediaQuit(
+                d2b_contracts_broker::broker_wire::QemuMediaLifecycleRequest {
+                    vm_id: VmId::new("media"),
+                    tracing_span_id: Some(TracingSpanId::new("span-qmp-quit")),
+                },
+            ),
             "QemuMediaQuit",
             OperationFields::QemuMediaQuit {
                 vm_id: "media".to_owned(),
@@ -14307,10 +14393,10 @@ mod tests {
     #[cfg(not(feature = "layer1-bootstrap"))]
     #[test]
     fn spawn_runner_rejects_invalid_minijail_profile() {
+        use d2b_contracts::types::{BundleOpId, RoleId, TracingSpanId, VmId};
         use d2b_contracts_broker::broker_wire::{
             BrokerCallerRole, BrokerRequest, RunnerAllocation, RunnerAllocationKind, RunnerRole,
         };
-        use d2b_contracts::types::{BundleOpId, RoleId, TracingSpanId, VmId};
         use d2b_core::bundle_resolver::intent_id_runner;
 
         let root = test_audit_dir("spawn-runner-invalid-minijail");
@@ -14326,28 +14412,29 @@ mod tests {
         let backend = FakeDispatchBackend::default();
         let caller_role = BrokerCallerRole::AdminUid { uid: 1000 };
         let caller_gid = Gid::current().as_raw();
-        let request = BrokerRequest::SpawnRunner(d2b_contracts_broker::broker_wire::SpawnRunnerRequest {
-            execution_ref: None,
-            execution_domain: None,
-            user_ref: None,
-            resource_ref: None,
-            resource_uid: None,
-            bundle_content_identity: None,
-            provider_identity: None,
-            template_identity: None,
-            generation: None,
-            sandbox_plan: None,
-            workload_identity: None,
-            vm_id: VmId::new("corp-vm"),
-            role_id: RoleId::new("ch-runner"),
-            role: RunnerRole::CloudHypervisor,
-            bundle_runner_intent_ref: BundleOpId::new(intent_id_runner("corp-vm", "ch-runner")),
-            runtime_allocations: vec![RunnerAllocation {
-                kind: RunnerAllocationKind::VsockCid,
-                opaque_ref: "cid:42".to_owned(),
-            }],
-            tracing_span_id: Some(TracingSpanId::new("span-invalid-spawn")),
-        });
+        let request =
+            BrokerRequest::SpawnRunner(d2b_contracts_broker::broker_wire::SpawnRunnerRequest {
+                execution_ref: None,
+                execution_domain: None,
+                user_ref: None,
+                resource_ref: None,
+                resource_uid: None,
+                bundle_content_identity: None,
+                provider_identity: None,
+                template_identity: None,
+                generation: None,
+                sandbox_plan: None,
+                workload_identity: None,
+                vm_id: VmId::new("corp-vm"),
+                role_id: RoleId::new("ch-runner"),
+                role: RunnerRole::CloudHypervisor,
+                bundle_runner_intent_ref: BundleOpId::new(intent_id_runner("corp-vm", "ch-runner")),
+                runtime_allocations: vec![RunnerAllocation {
+                    kind: RunnerAllocationKind::VsockCid,
+                    opaque_ref: "cid:42".to_owned(),
+                }],
+                tracing_span_id: Some(TracingSpanId::new("span-invalid-spawn")),
+            });
         let expected_request_fields = request_fields_value(&request).expect("request fields");
         let audit_context = DispatchAuditContext::from_request(&request, 5150, &caller_role)
             .expect("audit context");
@@ -14471,9 +14558,11 @@ mod tests {
     }
 
     #[cfg(not(feature = "layer1-bootstrap"))]
-    fn store_sync_request(generation_token: u32) -> d2b_contracts_broker::broker_wire::BrokerRequest {
-        use d2b_contracts_broker::broker_wire::{BrokerRequest, StoreSyncRequest};
+    fn store_sync_request(
+        generation_token: u32,
+    ) -> d2b_contracts_broker::broker_wire::BrokerRequest {
         use d2b_contracts::types::{BundleClosureRef, TracingSpanId, VmId};
+        use d2b_contracts_broker::broker_wire::{BrokerRequest, StoreSyncRequest};
         use d2b_core::bundle_resolver::intent_id_store_view;
 
         BrokerRequest::StoreSync(StoreSyncRequest {
@@ -14832,10 +14921,10 @@ mod tests {
     #[test]
     fn store_verify_repair_emits_store_sync_audit_and_export() {
         use crate::ops::store_sync_audit::SyncStatus;
+        use d2b_contracts::types::{TracingSpanId, VmId};
         use d2b_contracts_broker::broker_wire::{
             BrokerCallerRole, BrokerRequest, BrokerResponse, StoreVerifyRequest, StoreVerifyStatus,
         };
-        use d2b_contracts::types::{TracingSpanId, VmId};
 
         let root = test_audit_dir("store-verify-repair-audit");
         let (bundle, farm) = store_sync_dispatch_bundle(&root, 7);
@@ -15010,10 +15099,10 @@ mod tests {
         // for another role. OtelHostBridge is now represented in the
         // process graph, so the normal closed-set intent matching path
         // catches this before the obs-VM-specific check.
+        use d2b_contracts::types::{BundleOpId, RoleId, TracingSpanId, VmId};
         use d2b_contracts_broker::broker_wire::{
             BrokerCallerRole, BrokerRequest, RunnerAllocation, RunnerAllocationKind, RunnerRole,
         };
-        use d2b_contracts::types::{BundleOpId, RoleId, TracingSpanId, VmId};
         use d2b_core::bundle_resolver::intent_id_runner;
 
         let root = test_audit_dir("spawn-runner-otel-host-bridge-wrong-vm");
@@ -15029,31 +15118,32 @@ mod tests {
         let backend = FakeDispatchBackend::default();
         let caller_role = BrokerCallerRole::AdminUid { uid: 1000 };
         let caller_gid = Gid::current().as_raw();
-        let request = BrokerRequest::SpawnRunner(d2b_contracts_broker::broker_wire::SpawnRunnerRequest {
-            execution_ref: None,
-            execution_domain: None,
-            user_ref: None,
-            resource_ref: None,
-            resource_uid: None,
-            bundle_content_identity: None,
-            provider_identity: None,
-            template_identity: None,
-            generation: None,
-            sandbox_plan: None,
-            workload_identity: None,
-            vm_id: VmId::new("corp-vm"),
-            role_id: RoleId::new("ch-runner"),
-            // Use the existing corp-vm runner intent but assert
-            // it as an OtelHostBridge spawn - closed-set
-            // validation must refuse because corp-vm != "obs".
-            role: RunnerRole::OtelHostBridge,
-            bundle_runner_intent_ref: BundleOpId::new(intent_id_runner("corp-vm", "ch-runner")),
-            runtime_allocations: vec![RunnerAllocation {
-                kind: RunnerAllocationKind::VsockCid,
-                opaque_ref: "cid:42".to_owned(),
-            }],
-            tracing_span_id: Some(TracingSpanId::new("span-otel-bridge-refusal")),
-        });
+        let request =
+            BrokerRequest::SpawnRunner(d2b_contracts_broker::broker_wire::SpawnRunnerRequest {
+                execution_ref: None,
+                execution_domain: None,
+                user_ref: None,
+                resource_ref: None,
+                resource_uid: None,
+                bundle_content_identity: None,
+                provider_identity: None,
+                template_identity: None,
+                generation: None,
+                sandbox_plan: None,
+                workload_identity: None,
+                vm_id: VmId::new("corp-vm"),
+                role_id: RoleId::new("ch-runner"),
+                // Use the existing corp-vm runner intent but assert
+                // it as an OtelHostBridge spawn - closed-set
+                // validation must refuse because corp-vm != "obs".
+                role: RunnerRole::OtelHostBridge,
+                bundle_runner_intent_ref: BundleOpId::new(intent_id_runner("corp-vm", "ch-runner")),
+                runtime_allocations: vec![RunnerAllocation {
+                    kind: RunnerAllocationKind::VsockCid,
+                    opaque_ref: "cid:42".to_owned(),
+                }],
+                tracing_span_id: Some(TracingSpanId::new("span-otel-bridge-refusal")),
+            });
         let audit_context = DispatchAuditContext::from_request(&request, 5152, &caller_role)
             .expect("audit context");
 
@@ -15095,10 +15185,10 @@ mod tests {
     #[cfg(not(feature = "layer1-bootstrap"))]
     #[test]
     fn spawn_runner_rejects_otel_host_bridge_intent_for_non_obs_vm() {
+        use d2b_contracts::types::{BundleOpId, RoleId, TracingSpanId, VmId};
         use d2b_contracts_broker::broker_wire::{
             BrokerCallerRole, BrokerRequest, RunnerAllocation, RunnerAllocationKind, RunnerRole,
         };
-        use d2b_contracts::types::{BundleOpId, RoleId, TracingSpanId, VmId};
         use d2b_core::bundle_resolver::{BundleVerifyPolicy, intent_id_runner};
         use d2b_core::minijail_profile::{CgroupPlacement, WritablePath};
         use d2b_core::processes::{NodeId, ProcessNode, ProcessRole, ProcessesJson};
@@ -15167,28 +15257,29 @@ mod tests {
         let caller_role = BrokerCallerRole::AdminUid { uid: 1000 };
         let caller_gid = Gid::current().as_raw();
         let intent_ref = intent_id_runner("corp-vm", "otel-host-bridge");
-        let request = BrokerRequest::SpawnRunner(d2b_contracts_broker::broker_wire::SpawnRunnerRequest {
-            execution_ref: None,
-            execution_domain: None,
-            user_ref: None,
-            resource_ref: None,
-            resource_uid: None,
-            bundle_content_identity: None,
-            provider_identity: None,
-            template_identity: None,
-            generation: None,
-            sandbox_plan: None,
-            workload_identity: None,
-            vm_id: VmId::new("corp-vm"),
-            role_id: RoleId::new("otel-host-bridge"),
-            role: RunnerRole::OtelHostBridge,
-            bundle_runner_intent_ref: BundleOpId::new(intent_ref.clone()),
-            runtime_allocations: vec![RunnerAllocation {
-                kind: RunnerAllocationKind::VsockCid,
-                opaque_ref: "cid:1000".to_owned(),
-            }],
-            tracing_span_id: Some(TracingSpanId::new("span-otel-bridge-wrong-vm")),
-        });
+        let request =
+            BrokerRequest::SpawnRunner(d2b_contracts_broker::broker_wire::SpawnRunnerRequest {
+                execution_ref: None,
+                execution_domain: None,
+                user_ref: None,
+                resource_ref: None,
+                resource_uid: None,
+                bundle_content_identity: None,
+                provider_identity: None,
+                template_identity: None,
+                generation: None,
+                sandbox_plan: None,
+                workload_identity: None,
+                vm_id: VmId::new("corp-vm"),
+                role_id: RoleId::new("otel-host-bridge"),
+                role: RunnerRole::OtelHostBridge,
+                bundle_runner_intent_ref: BundleOpId::new(intent_ref.clone()),
+                runtime_allocations: vec![RunnerAllocation {
+                    kind: RunnerAllocationKind::VsockCid,
+                    opaque_ref: "cid:1000".to_owned(),
+                }],
+                tracing_span_id: Some(TracingSpanId::new("span-otel-bridge-wrong-vm")),
+            });
         let audit_context = DispatchAuditContext::from_request(&request, 5153, &caller_role)
             .expect("audit context");
 
@@ -15232,8 +15323,8 @@ mod tests {
     #[cfg(not(feature = "layer1-bootstrap"))]
     #[test]
     fn signal_runner_returns_no_pidfd_for_unknown_runner() {
-        use d2b_contracts_broker::broker_wire::{BrokerCallerRole, BrokerRequest, RunnerSignal};
         use d2b_contracts::types::{RoleId, VmId};
+        use d2b_contracts_broker::broker_wire::{BrokerCallerRole, BrokerRequest, RunnerSignal};
 
         let root = test_audit_dir("signal-runner-missing-pidfd");
         let bundle = build_test_bundle(&root);
@@ -15406,11 +15497,11 @@ mod tests {
     #[cfg(not(feature = "layer1-bootstrap"))]
     #[test]
     fn usb_broker_ipc_refuses_non_daemon_so_peercred_before_dispatch() {
+        use d2b_contracts::types::{BundleOpId, ScopeId};
         use d2b_contracts_broker::broker_wire::{
             BrokerCallerRole, BrokerRequestEnvelope, UsbipBindFirewallRuleRequest,
             UsbipBindRequest, UsbipProxyReconcileRequest, UsbipUnbindRequest,
         };
-        use d2b_contracts::types::{BundleOpId, ScopeId};
         use nix::sys::socket::{AddressFamily, SockFlag, SockType, socketpair};
         use nix::unistd::Uid;
         use std::os::fd::AsRawFd;
@@ -15520,11 +15611,11 @@ mod tests {
     #[cfg(not(feature = "layer1-bootstrap"))]
     #[test]
     fn usb_broker_ipc_validation_rejects_traversal_and_oversized_inputs() {
+        use d2b_contracts::types::{BundleOpId, ScopeId};
         use d2b_contracts_broker::broker_wire::{
             ModprobeIfAllowedRequest, UsbipBindFirewallRuleRequest, UsbipBindRequest,
             UsbipProxyReconcileRequest, UsbipUnbindRequest,
         };
-        use d2b_contracts::types::{BundleOpId, ScopeId};
 
         let cases = vec![
             (
@@ -15600,10 +15691,10 @@ mod tests {
     #[cfg(not(feature = "layer1-bootstrap"))]
     #[test]
     fn usb_broker_ipc_validation_is_shape_only_not_authorization() {
+        use d2b_contracts::types::{BundleOpId, ScopeId};
         use d2b_contracts_broker::broker_wire::{
             UsbipBindFirewallRuleRequest, UsbipBindRequest, UsbipProxyReconcileRequest,
         };
-        use d2b_contracts::types::{BundleOpId, ScopeId};
 
         let requests = [
             BrokerRequest::UsbipBind(UsbipBindRequest {
@@ -15838,10 +15929,11 @@ mod tests {
         let caller_role = BrokerCallerRole::AdminUid { uid: 1000 };
         let caller_gid = Gid::current().as_raw();
         let intent_id = d2b_core::bundle_resolver::intent_id_usbip_bind("work", "corp-vm", "1-2.3");
-        let request = BrokerRequest::UsbipBind(d2b_contracts_broker::broker_wire::UsbipBindRequest {
-            bundle_usbip_bind_intent_ref: BundleOpId::new(intent_id.as_str()),
-            tracing_span_id: None,
-        });
+        let request =
+            BrokerRequest::UsbipBind(d2b_contracts_broker::broker_wire::UsbipBindRequest {
+                bundle_usbip_bind_intent_ref: BundleOpId::new(intent_id.as_str()),
+                tracing_span_id: None,
+            });
         let audit_context = DispatchAuditContext::from_request(&request, 4242, &caller_role)
             .expect("audit context");
 
@@ -16381,8 +16473,8 @@ mod tests {
     #[cfg(not(feature = "layer1-bootstrap"))]
     #[test]
     fn usbip_bind_with_previous_serial_hmac_key_emits_one_rotation_audit_record_per_key_pair() {
-        use d2b_contracts_broker::broker_wire::{BrokerCallerRole, BrokerRequest};
         use d2b_contracts::types::TracingSpanId;
+        use d2b_contracts_broker::broker_wire::{BrokerCallerRole, BrokerRequest};
         use std::os::unix::fs::PermissionsExt;
 
         let root = test_audit_dir("usb-serial-hmac-rotation-audit");
@@ -16935,7 +17027,9 @@ mod tests {
     #[cfg(not(feature = "layer1-bootstrap"))]
     mod reap_tests {
         use super::*;
-        use d2b_contracts_broker::broker_wire::{ChildExitKind, ChildExitStatus, ChildReapedNotification};
+        use d2b_contracts_broker::broker_wire::{
+            ChildExitKind, ChildExitStatus, ChildReapedNotification,
+        };
         use nix::sys::signal::{Signal, kill};
         use nix::unistd::Pid;
         use std::process::Command;

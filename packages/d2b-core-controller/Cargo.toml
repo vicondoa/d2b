@@ -22,7 +22,6 @@ d2b-audit = { path = "../d2b-audit", version = "0.0.0-bootstrap" }
 d2b-contracts = { path = "../d2b-contracts", version = "0.0.0-bootstrap" }
 d2b-controller-toolkit = { path = "../d2b-controller-toolkit", version = "0.0.0-bootstrap" }
 d2b-telemetry = { path = "../d2b-telemetry", version = "0.0.0-bootstrap" }
-d2b-provider-system-core = { path = "../d2b-provider-system-core", version = "0.0.0-bootstrap" }
 serde.workspace = true
 serde_json.workspace = true
 sha2.workspace = true

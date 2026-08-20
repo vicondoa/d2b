@@ -458,8 +458,12 @@ pub fn apply_nftables_projection(
             .map_err(|_| ProjectionMutationError::Backend)?;
     }
     let projection_digest = match action {
-        d2b_contracts_broker::broker_wire::NftablesProjectionAction::Apply => trusted_hash.to_owned(),
-        d2b_contracts_broker::broker_wire::NftablesProjectionAction::Remove => projection_digest(&[]),
+        d2b_contracts_broker::broker_wire::NftablesProjectionAction::Apply => {
+            trusted_hash.to_owned()
+        }
+        d2b_contracts_broker::broker_wire::NftablesProjectionAction::Remove => {
+            projection_digest(&[])
+        }
     };
     Ok(ProjectionMutation {
         projection_digest,
@@ -1160,10 +1164,11 @@ mod tests {
             ),
             scope_id: d2b_contracts::types::ScopeId::new("scope:opaque"),
             action: d2b_contracts_broker::broker_wire::NftablesProjectionAction::Apply,
-            expected_generation_id: d2b_contracts_zone_session::v3::ResourceBundleGenerationId::parse(
-                "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
-            )
-            .unwrap(),
+            expected_generation_id:
+                d2b_contracts_zone_session::v3::ResourceBundleGenerationId::parse(
+                    "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+                )
+                .unwrap(),
             desired_hash: None,
             tracing_span_id: None,
         };

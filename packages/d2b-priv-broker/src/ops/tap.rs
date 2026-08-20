@@ -591,7 +591,8 @@ pub fn live_set_bridge_port_flags(
     _executor: &dyn ReconcileExecutor,
     resolver: &BundleResolver,
     req: &d2b_contracts_broker::broker_wire::SetBridgePortFlagsRequest,
-) -> Result<d2b_contracts_broker::broker_wire::BridgePortFlagsResponse, LiveSetBridgePortFlagsError> {
+) -> Result<d2b_contracts_broker::broker_wire::BridgePortFlagsResponse, LiveSetBridgePortFlagsError>
+{
     let target = resolve_live_bridge_port_target(resolver, req)?;
     let ip_binary = ip_binary_path();
     live_set_bridge_port_flags_with_ops(

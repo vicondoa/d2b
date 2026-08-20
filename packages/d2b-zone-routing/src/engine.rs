@@ -807,7 +807,8 @@ impl ZoneRouteEngine {
             if visited.contains(&entry.parent) {
                 return Err(ZoneRouteFailClosedReason::Loop);
             }
-            if hops.len() >= d2b_contracts_zone_session::v3::zone_routing::MAX_ZONE_ROUTE_PATH_HOPS {
+            if hops.len() >= d2b_contracts_zone_session::v3::zone_routing::MAX_ZONE_ROUTE_PATH_HOPS
+            {
                 return Err(ZoneRouteFailClosedReason::HopLimitExceeded);
             }
             let edge = ZoneTreeEdge::new(entry.parent.clone(), current.clone())
@@ -835,7 +836,8 @@ impl ZoneRouteEngine {
             if entry.parent != current {
                 return Err(ZoneRouteFailClosedReason::MultiParent);
             }
-            if hops.len() >= d2b_contracts_zone_session::v3::zone_routing::MAX_ZONE_ROUTE_PATH_HOPS {
+            if hops.len() >= d2b_contracts_zone_session::v3::zone_routing::MAX_ZONE_ROUTE_PATH_HOPS
+            {
                 return Err(ZoneRouteFailClosedReason::HopLimitExceeded);
             }
             let edge = ZoneTreeEdge::new(current.clone(), child.clone())

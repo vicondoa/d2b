@@ -1,9 +1,9 @@
+use d2b_contracts::types::{BundleOpId, ScopeId};
 use d2b_contracts_broker::PROTOCOL_VERSION;
 use d2b_contracts_broker::broker_wire::{
     ApplyNftablesProjectionRequest, BrokerCallerRole, BrokerRequest, BrokerRequestEnvelope,
     CreateBridgeRequest, DeleteBridgeRequest, DeletePersistentTapRequest, NftablesProjectionAction,
 };
-use d2b_contracts::types::{BundleOpId, ScopeId};
 use d2b_contracts_zone_session::v3::{ResourceBundleGenerationId, ResourceGeneration, ResourceUid};
 use serde::{Deserialize, Serialize};
 

@@ -1,7 +1,7 @@
 //! Host-side authenticated guest-control Health probe.
 //!
-//! W11 stores authenticated health evidence only. It does not replace VM
-//! lifecycle readiness and it does not expose exec.
+//! The probe stores authenticated health evidence only. It does not replace
+//! VM lifecycle readiness and it does not expose exec.
 
 use std::collections::HashMap;
 use std::os::fd::OwnedFd;
@@ -16,7 +16,9 @@ use d2b_contracts_control::guest_auth::{
     AUTH_NONCE_LEN, AUTH_TAG_LEN, AUTH_TRANSCRIPT_VERSION, GUEST_CONTROL_AUTH_PORT,
 };
 use d2b_contracts_control::guest_proto as pb;
-use d2b_contracts_control::guest_wire::{GUEST_CONTROL_PROTOCOL_VERSION, READ_GUEST_FILE_MAX_BYTES};
+use d2b_contracts_control::guest_wire::{
+    GUEST_CONTROL_PROTOCOL_VERSION, READ_GUEST_FILE_MAX_BYTES,
+};
 use protobuf::{Message, MessageField};
 use subtle::ConstantTimeEq;
 
@@ -724,8 +726,8 @@ fn map_guest_audio_error(kind: pb::GuestControlErrorKind) -> GuestAudioSetError 
     }
 }
 
-/// Authenticate to the guest control endpoint (reusing the W11 Health-probe
-/// handshake) and read the editable guest config working copy via the typed
+/// Authenticate to the guest control endpoint (reusing the authenticated
+/// Health-probe handshake) and read the editable guest config working copy via the typed
 /// `ReadGuestFile { GuestConfig }` RPC on the SAME authenticated connection.
 ///
 /// The negotiated `ReadGuestFile` capability is REQUIRED - an
@@ -1124,7 +1126,7 @@ pub(crate) fn request_metadata(vm_id: &str) -> pb::RequestMetadata {
     request_metadata_with_id(vm_id, "guest-health-probe")
 }
 
-pub(crate) fn request_metadata_with_id(vm_id: &str, request_id: &str) -> pb::RequestMetadata {
+pub fn request_metadata_with_id(vm_id: &str, request_id: &str) -> pb::RequestMetadata {
     let mut metadata = pb::RequestMetadata::new();
     metadata.vm_id = vm_id.to_owned();
     metadata.request_id = request_id.to_owned();

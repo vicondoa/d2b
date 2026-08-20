@@ -3,15 +3,11 @@ use std::collections::BTreeMap;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
-pub use d2b_contracts::audio::LevelPercent;
 use crate::public_wire::{
     AudioChannel, AudioEnforcementPosture, AudioErrorKind, AudioProviderKind, AudioSetApplied,
 };
-use d2b_contracts::{
-    ids::OperationId,
-    token::ProtocolToken,
-    workload_identity::WorkloadTarget,
-};
+pub use d2b_contracts::audio::LevelPercent;
+use d2b_contracts::{ids::OperationId, token::ProtocolToken, workload_identity::WorkloadTarget};
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(transparent)]

@@ -1188,6 +1188,7 @@ version = "0.0.0-bootstrap"
 dependencies = [
  "bolero",
  "d2b-contracts",
+ "d2b-contracts-resource",
  "d2b-contracts-zone-session",
  "d2b-realm-core",
  "nix 0.29.0",
@@ -1210,7 +1211,6 @@ dependencies = [
  "d2b-contracts-provider",
  "d2b-contracts-zone-session",
  "d2b-controller-toolkit",
- "d2b-provider-system-core",
  "d2b-telemetry",
  "serde",
  "serde_json",
@@ -2045,10 +2045,53 @@ dependencies = [
  "d2b-resource-store-redb",
  "d2b-session",
  "d2b-session-unix",
+ "d2bd-runtime",
  "getrandom 0.2.17",
  "libc",
  "nix 0.29.0",
  "notify-rust",
+ "parking_lot",
+ "protobuf",
+ "regex",
+ "rustix 0.38.44",
+ "semver",
+ "serde",
+ "serde_json",
+ "sha2",
+ "socket2 0.5.10",
+ "subtle",
+ "tempfile",
+ "tokio",
+ "tracing",
+ "tracing-subscriber",
+ "ttrpc",
+]
+
+[[package]]
+name = "d2bd-runtime"
+version = "0.0.0-bootstrap"
+dependencies = [
+ "arc-swap",
+ "async-trait",
+ "d2b-audit",
+ "d2b-bus",
+ "d2b-contracts",
+ "d2b-contracts-broker",
+ "d2b-contracts-control",
+ "d2b-contracts-resource",
+ "d2b-contracts-zone-session",
+ "d2b-core",
+ "d2b-core-controller",
+ "d2b-host",
+ "d2b-realm-core",
+ "d2b-resource-api",
+ "d2b-resource-store",
+ "d2b-resource-store-redb",
+ "d2b-session",
+ "d2b-session-unix",
+ "getrandom 0.2.17",
+ "libc",
+ "nix 0.29.0",
  "parking_lot",
  "protobuf",
  "regex",
@@ -6593,9 +6636,9 @@ dependencies = [
 
 [[package]]
 name = "zerovec"
-version = "0.11.7"
+version = "0.11.8"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "94b5c6b5976d66c1d703c4fd17d3f5e43c8cedaacf604961b171adc7130896d8"
+checksum = "bb0464e17806c1d976d5cba29399c7f08e516e279e2ba493f63123b5fca67dd8"
 dependencies = [
  "yoke",
  "zerofrom",

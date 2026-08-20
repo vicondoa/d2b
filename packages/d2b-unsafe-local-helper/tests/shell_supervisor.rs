@@ -6,10 +6,7 @@ use d2b_contracts_control::unsafe_local_wire::{
     UnsafeLocalHelperToDaemon, decode_unsafe_local_terminal_frame,
     encode_unsafe_local_terminal_frame,
 };
-use d2b_contracts_control::{
-    public_wire::ShellName,
-    terminal_wire::TerminalSize,
-};
+use d2b_contracts_control::{public_wire::ShellName, terminal_wire::TerminalSize};
 use d2b_core::base64_codec;
 use d2b_core::workload_identity::WorkloadIdentity;
 use d2b_realm_core::ids::OperationId;

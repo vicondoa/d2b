@@ -24,8 +24,8 @@ use std::fmt;
 use std::os::fd::OwnedFd;
 use std::path::{Path, PathBuf};
 
-use d2b_contracts_broker::broker_wire::{CgroupKillRequest, OpenCgroupDirRequest};
 use d2b_contracts::types::{PathClass as BrokerPathClass, ScopeId};
+use d2b_contracts_broker::broker_wire::{CgroupKillRequest, OpenCgroupDirRequest};
 use d2b_core::bundle_resolver::BundleResolver;
 use d2b_host::cgroup::{
     self as host_cgroup, CgroupBackend, CgroupError, Controller, D2B_SLICE_NAME,

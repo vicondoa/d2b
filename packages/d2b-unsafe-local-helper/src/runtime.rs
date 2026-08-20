@@ -1537,8 +1537,10 @@ mod tests {
             item_id: ProtocolToken::parse("browser").unwrap(),
             argv: ConfiguredArgv::new(vec![arg.to_owned()]).unwrap(),
             graphical: false,
-            realm_accent_color: d2b_contracts_control::unsafe_local_wire::RealmAccentColor::new("#336699")
-                .unwrap(),
+            realm_accent_color: d2b_contracts_control::unsafe_local_wire::RealmAccentColor::new(
+                "#336699",
+            )
+            .unwrap(),
         }
     }
 

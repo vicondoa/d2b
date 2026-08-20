@@ -54,7 +54,7 @@ use crate::guest_control_bridge::{
     GUEST_CONTROL_AUDIO_SET_TIMEOUT, run_audio_set_on_dedicated_thread,
     run_audio_status_on_dedicated_thread,
 };
-use crate::guest_control_health::{GuestAudioSetError, GuestAudioStatus};
+use d2bd_runtime::guest_control_health::{GuestAudioSetError, GuestAudioStatus};
 
 // ── Lock path ────────────────────────────────────────────────────────────────
 
@@ -828,9 +828,9 @@ fn dispatch_audio_status(
     }
 
     let result = AudioStatusResult { entries, errors };
-    Ok(crate::wire::audio_response(&AudioOpResponse::Status(
-        result,
-    )))
+    Ok(d2bd_runtime::wire::audio_response(
+        &AudioOpResponse::Status(result),
+    ))
 }
 
 fn resolve_vm_audio_status(
@@ -1033,14 +1033,14 @@ fn dispatch_audio_set_volume(
         AudioChannel::Microphone => state_to_channel(new_state.mic, new_state.mic_gain),
     };
 
-    Ok(crate::wire::audio_response(&AudioOpResponse::SetVolume(
-        AudioSetResult {
+    Ok(d2bd_runtime::wire::audio_response(
+        &AudioOpResponse::SetVolume(AudioSetResult {
             vm: vm_name.clone(),
             channel,
             applied,
             state: channel_state,
-        },
-    )))
+        }),
+    ))
 }
 
 // ── Mute ──────────────────────────────────────────────────────────────────────
@@ -1147,7 +1147,7 @@ fn dispatch_audio_mute(
         AudioChannel::Microphone => state_to_channel(new_state.mic, new_state.mic_gain),
     };
 
-    Ok(crate::wire::audio_response(&AudioOpResponse::Mute(
+    Ok(d2bd_runtime::wire::audio_response(&AudioOpResponse::Mute(
         AudioSetResult {
             vm: vm_name.clone(),
             channel,

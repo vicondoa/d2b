@@ -9,6 +9,7 @@ license.workspace = true
 workspace = true
 
 [dependencies]
+d2bd-runtime = { path = "../d2bd-runtime", version = "0.0.0-bootstrap" }
 d2b-contracts-provider = { path = "../d2b-contracts-provider", version = "0.0.0-bootstrap" }
 d2b-contracts-resource = { path = "../d2b-contracts-resource", version = "0.0.0-bootstrap" }
 d2b-contracts-zone-session = { path = "../d2b-contracts-zone-session", version = "0.0.0-bootstrap" }
@@ -78,9 +79,9 @@ subtle = "2.6"
 tempfile = "3"
 tokio = { version = "1", features = ["macros", "rt-multi-thread", "signal", "sync", "time", "net"] }
 ttrpc = { version = "0.9.0", default-features = false, features = ["async", "sync"] }
-uzers = "0.12"
 
 [dev-dependencies]
+d2bd-runtime = { path = "../d2bd-runtime", version = "0.0.0-bootstrap", features = ["test-support"] }
 d2b-core = { path = "../d2b-core", version = "0.0.0-bootstrap", features = ["test-support"] }
 d2b-core-controller = { path = "../d2b-core-controller", version = "0.0.0-bootstrap", features = ["test-support"] }
 d2b-provider-display-wayland = { path = "../d2b-provider-display-wayland", version = "0.0.0-bootstrap", features = ["test-support"] }

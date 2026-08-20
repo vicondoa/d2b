@@ -996,10 +996,11 @@ mod tests {
     fn signed_row_parent_and_marker_mismatch_is_rejected() {
         let mut row = signed_row();
         assert_eq!(validate_row_binding(&row, "local-root"), Ok(()));
-        row.parent_directory_id = d2b_contracts_zone_session::v3::storage::ZoneStoreParentDirectoryId::parse(
-            "zone-store-parent-other",
-        )
-        .expect("parent id");
+        row.parent_directory_id =
+            d2b_contracts_zone_session::v3::storage::ZoneStoreParentDirectoryId::parse(
+                "zone-store-parent-other",
+            )
+            .expect("parent id");
         assert_eq!(
             validate_row_binding(&row, "local-root"),
             Err(ZoneStoreError::SignedRowMismatch)

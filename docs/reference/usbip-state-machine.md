@@ -4,7 +4,7 @@
 > daemon (via the privileged broker) drives every time a USBIP
 > passthrough device is attached to a target VM.
 >
-> Source: [`packages/d2bd/src/usbip_state_machine.rs`](../../packages/d2bd/src/usbip_state_machine.rs).
+> Source: [`packages/d2bd-runtime/src/usbip_state_machine.rs`](../../packages/d2bd-runtime/src/usbip_state_machine.rs).
 > Canonical-order anchor: [AGENTS.md "Critical subsystems"](../../AGENTS.md#critical-subsystems--handle-with-care).
 
 ## Why a state machine
@@ -175,7 +175,7 @@ a partial failure are safe.
 
 The daemon encodes the current generic L4 proxy strategy in
 `UsbipProxySynchronizationPlan`
-([`packages/d2bd/src/usbip_reconcile_state.rs`](../../packages/d2bd/src/usbip_reconcile_state.rs)).
+([`packages/d2bd-runtime/src/usbip_reconcile_state.rs`](../../packages/d2bd-runtime/src/usbip_reconcile_state.rs)).
 The encoded strategy deliberately avoids busid-aware claims that the current
 `socat` proxy cannot satisfy:
 
@@ -256,8 +256,8 @@ locks, sysfs driver links, nftables rules, or per-env sidecars directly.
 
 | Layer | Path | What it asserts |
 | --- | --- | --- |
-| Unit | `packages/d2bd/src/usbip_state_machine.rs` (`mod tests`) | `CANONICAL_STEPS` is pinned, `stop_order()` and failure rollback preserve per-env backend/proxy sidecars, every step's failure surfaces as `TypedError::UsbipStepFailed`, and the typed-error envelope carries exit code 67. |
-| Unit | `packages/d2bd/src/usbip_reconcile_state.rs` (`mod tests`) | VM stop/restart carrier cleanup preserves session claims, explicit detach releases only after successful cleanup, failures preserve claims/manual recovery, firewall-before-flow-kill ordering holds, and same-env sidecars are not bounced. |
+| Unit | `packages/d2bd-runtime/src/usbip_state_machine.rs` (`mod tests`) | `CANONICAL_STEPS` is pinned, `stop_order()` and failure rollback preserve per-env backend/proxy sidecars, every step's failure surfaces as `TypedError::UsbipStepFailed`, and the typed-error envelope carries exit code 67. |
+| Unit | `packages/d2bd-runtime/src/usbip_reconcile_state.rs` (`mod tests`) | VM stop/restart carrier cleanup preserves session claims, explicit detach releases only after successful cleanup, failures preserve claims/manual recovery, firewall-before-flow-kill ordering holds, and same-env sidecars are not bounced. |
 | Contract | [`packages/d2b-contract-tests/tests/policy_supervisor.rs`](../../packages/d2b-contract-tests/tests/policy_supervisor.rs) (`usbip_state_machine_surface`) | Module is wired into `lib.rs`; canonical order is pinned in source; typed-error variant + exit code 67 are wired; this doc names the canonical order verbatim. |
 
 ## See also

@@ -8,10 +8,10 @@ use d2b_contracts_zone_session::v3::{
     DEFAULT_REQUEST_DEADLINE_MS, DEFAULT_WATCH_CREDITS, FinalizerId, MAX_BATCH_MUTATIONS,
     MAX_EXPEDITED_DEADLINE_MS, MAX_FILTER_VALUES, MAX_LIST_FILTERS, MAX_LIST_PAGE_SIZE,
     MAX_LIST_RESOURCE_TYPES, MAX_PAGE_CURSOR_BYTES, MAX_REQUEST_CANONICAL_BYTES,
-    MAX_REQUEST_DEADLINE_MS, MAX_RESPONSE_CANONICAL_BYTES, MAX_WATCH_CREDITS,
-    MAX_WATCH_FILTERS, MAX_WATCH_RESOURCE_TYPES, RESOURCE_ENVELOPE_DOMAIN_TAG,
-    ResourceEnvelope, ResourceError, ResourceErrorKind, ResourceName, ResourceRef,
-    ResourceTypeName, ResourceUid, ZoneId, ZoneRevision, canonical_digest,
+    MAX_REQUEST_DEADLINE_MS, MAX_RESPONSE_CANONICAL_BYTES, MAX_WATCH_CREDITS, MAX_WATCH_FILTERS,
+    MAX_WATCH_RESOURCE_TYPES, RESOURCE_ENVELOPE_DOMAIN_TAG, ResourceEnvelope, ResourceError,
+    ResourceErrorKind, ResourceName, ResourceRef, ResourceTypeName, ResourceUid, ZoneId,
+    ZoneRevision, canonical_digest,
 };
 use d2b_resource_store::{
     ExpectedRevision, ResourceMutationKind, StoreCommitResult, StoreFilter, StoreGetRequest,
@@ -1398,7 +1398,9 @@ fn parse_mutation<T>(
         return Err(schema_error("mutation body does not match its kind"));
     }
     let canonical_resource = if let Some(body) = body {
-        if body.canonical_json.len() > d2b_contracts_zone_session::v3::resource::MAX_RESOURCE_ENVELOPE_BYTES {
+        if body.canonical_json.len()
+            > d2b_contracts_zone_session::v3::resource::MAX_RESOURCE_ENVELOPE_BYTES
+        {
             return Err(schema_error("resource envelope exceeds its byte bound"));
         }
         let body_identity = parse_identity(body.identity.as_ref())?;

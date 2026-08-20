@@ -3,13 +3,6 @@
 //! The authenticated Unix peer credential is the execution identity. No frame
 //! carries a uid, environment, cwd, compositor path, or arbitrary public argv.
 
-use d2b_contracts::{
-    configured_argv::ConfiguredArgv,
-    ids::OperationId,
-    token::ProtocolToken,
-    unsafe_local_workloads::MAX_UNSAFE_LOCAL_SHELL_SESSIONS,
-    workload_identity::WorkloadIdentity,
-};
 use crate::{
     public_wire::{
         EXEC_MAX_CHUNK_BYTES, ShellCloseCause, ShellDetachResult, ShellKillResult, ShellListResult,
@@ -19,6 +12,10 @@ use crate::{
         TerminalCloseResult, TerminalControlResult, TerminalReadOutputChunk, TerminalSize,
         TerminalStream, TerminalWaitResult, TerminalWriteStdinResult,
     },
+};
+use d2b_contracts::{
+    configured_argv::ConfiguredArgv, ids::OperationId, token::ProtocolToken,
+    unsafe_local_workloads::MAX_UNSAFE_LOCAL_SHELL_SESSIONS, workload_identity::WorkloadIdentity,
 };
 use schemars::{
     JsonSchema,

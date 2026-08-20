@@ -511,7 +511,8 @@ mod tests {
     #[test]
     fn final_deletion_proof_requires_child_and_finalizer_completion() {
         let target = key("secret-resource-name", 3);
-        let timestamp = d2b_contracts_zone_session::v3::Timestamp::parse("2026-08-01T00:00:00.000Z").unwrap();
+        let timestamp =
+            d2b_contracts_zone_session::v3::Timestamp::parse("2026-08-01T00:00:00.000Z").unwrap();
         let prior = d2b_contracts_zone_session::v3::ConfigurationGeneration::new(1).unwrap();
         let active = d2b_contracts_zone_session::v3::ConfigurationGeneration::new(2).unwrap();
         let blocked = AtomicDeletionObservation::new(
@@ -524,7 +525,11 @@ mod tests {
             timestamp.clone(),
         );
         assert_eq!(
-            commit_atomic_deletion(blocked, d2b_contracts_zone_session::v3::ZoneRevision::new(4)).unwrap_err(),
+            commit_atomic_deletion(
+                blocked,
+                d2b_contracts_zone_session::v3::ZoneRevision::new(4)
+            )
+            .unwrap_err(),
             AtomicDeletionError::FinalizersRemain
         );
         let committed = commit_atomic_deletion(

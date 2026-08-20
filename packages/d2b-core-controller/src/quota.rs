@@ -488,7 +488,9 @@ mod tests {
     use std::collections::BTreeMap;
 
     use super::*;
-    use d2b_contracts_zone_session::v3::{QuotaCeilings, QuotaScope, QuotaTypeCeiling, ResourceGeneration};
+    use d2b_contracts_zone_session::v3::{
+        QuotaCeilings, QuotaScope, QuotaTypeCeiling, ResourceGeneration,
+    };
 
     fn uid(value: &str) -> ResourceUid {
         ResourceUid::parse(value).unwrap()

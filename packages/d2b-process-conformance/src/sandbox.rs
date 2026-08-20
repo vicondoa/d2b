@@ -177,7 +177,8 @@ mod tests {
         let sandbox = SandboxSpec::new(
             Vec::new(),
             Vec::new(),
-            d2b_contracts_zone_session::v3::execution_policy::BoundedToken::parse("strict").unwrap(),
+            d2b_contracts_zone_session::v3::execution_policy::BoundedToken::parse("strict")
+                .unwrap(),
             true,
             true,
             EnvironmentClass::Minimal,

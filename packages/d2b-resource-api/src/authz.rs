@@ -12,7 +12,9 @@ use d2b_contracts_zone_session::v3::{
     MAX_ROLE_RULE_RESOURCE_TYPES, MAX_ROLE_RULE_VERBS, MAX_ROLE_RULES, ResourceErrorKind,
     ResourceName, ResourceRef, ResourceTypeName, ResourceUid, ZoneId, ZoneRevision,
 };
-use d2b_contracts_zone_session::v3::{RoleBindingSpec, RoleResourceVerb, RoleRule, RoleSessionVerb, RoleSpec};
+use d2b_contracts_zone_session::v3::{
+    RoleBindingSpec, RoleResourceVerb, RoleRule, RoleSessionVerb, RoleSpec,
+};
 use d2b_core_controller::rbac::{AuthorizationCacheKey, PolicyRevisionSet, PositiveDecisionCache};
 use d2b_resource_store::{
     AdmittedAuthorization, AdmittedAuthorizationTarget, AdmittedVerb, PolicySnapshot,

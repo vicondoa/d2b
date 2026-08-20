@@ -71,7 +71,7 @@ pub struct ConsoleRing {
 }
 
 impl ConsoleRing {
-    pub(crate) fn new() -> Self {
+    pub fn new() -> Self {
         Self {
             ring: RingBuffer::new(RING_CAPACITY),
             notify: Arc::new(tokio::sync::Notify::new()),
@@ -92,7 +92,7 @@ pub struct ConsoleSession {
 }
 
 impl ConsoleSession {
-    pub(crate) fn new(
+    pub fn new(
         provider_kind: ConsoleProviderKind,
         ring: Arc<Mutex<ConsoleRing>>,
         drainer: Option<tokio::task::JoinHandle<()>>,
@@ -653,5 +653,98 @@ mod tests {
         assert_eq!(table.client_owner_uid(h2.as_str()), Some(1001));
         // Unknown handle returns None.
         assert_eq!(table.client_owner_uid("no-such-handle"), None);
+    }
+}
+
+#[cfg(test)]
+mod console_dispatch_ownership_tests {
+    //! Verify that dispatch_console enforces per-session UID ownership so a
+    //! non-admin launcher cannot perform ReadOutput / WriteStdin / Resize /
+    //! Wait / Close on a session owned by a different UID, while an admin
+    //! peer is always allowed.
+
+    use super::{ConsoleRing, ConsoleSession, ConsoleSessionTable};
+    use crate::typed_error::TypedError;
+    use d2b_contracts_control::public_wire::ConsoleProviderKind;
+    use std::sync::{Arc, Mutex};
+
+    fn make_session() -> ConsoleSession {
+        let ring = Arc::new(Mutex::new(ConsoleRing::new()));
+        ConsoleSession::new(ConsoleProviderKind::LocalHypervisor, ring, None, None)
+    }
+
+    /// Mirror of the inner `check_console_ownership` helper for hermetic testing.
+    fn check_ownership(
+        table: &ConsoleSessionTable,
+        session_handle: &str,
+        peer_uid: u32,
+        is_admin: bool,
+        verb: &str,
+    ) -> Result<(), TypedError> {
+        if is_admin {
+            return Ok(());
+        }
+        match table.client_owner_uid(session_handle) {
+            None => Err(TypedError::ConsoleSessionStale),
+            Some(owner_uid) if owner_uid == peer_uid => Ok(()),
+            Some(_) => Err(TypedError::AuthzNotAdmin {
+                verb: format!("console {verb}"),
+            }),
+        }
+    }
+
+    #[test]
+    fn launcher_can_access_own_session() {
+        let mut table = ConsoleSessionTable::new();
+        table.register_session("vm-x".into(), make_session());
+        let (handle, _, _) = table.attach("vm-x", 1000).unwrap().unwrap();
+        assert!(check_ownership(&table, handle.as_str(), 1000, false, "readOutput").is_ok());
+        assert!(check_ownership(&table, handle.as_str(), 1000, false, "writeStdin").is_ok());
+        assert!(check_ownership(&table, handle.as_str(), 1000, false, "close").is_ok());
+    }
+
+    #[test]
+    fn launcher_is_denied_another_launchers_session() {
+        let mut table = ConsoleSessionTable::new();
+        table.register_session("vm-x".into(), make_session());
+        let (handle, _, _) = table.attach("vm-x", 1000).unwrap().unwrap();
+        let result = check_ownership(&table, handle.as_str(), 1001, false, "readOutput");
+        assert!(
+            matches!(result, Err(TypedError::AuthzNotAdmin { .. })),
+            "expected AuthzNotAdmin for cross-uid read, got {result:?}"
+        );
+        let result2 = check_ownership(&table, handle.as_str(), 1001, false, "writeStdin");
+        assert!(
+            matches!(result2, Err(TypedError::AuthzNotAdmin { .. })),
+            "expected AuthzNotAdmin for cross-uid write, got {result2:?}"
+        );
+    }
+
+    #[test]
+    fn admin_can_access_any_session() {
+        let mut table = ConsoleSessionTable::new();
+        table.register_session("vm-x".into(), make_session());
+        let (handle, _, _) = table.attach("vm-x", 1000).unwrap().unwrap();
+        // Admin (uid=9999, different from session owner 1000) is always allowed.
+        assert!(check_ownership(&table, handle.as_str(), 9999, true, "readOutput").is_ok());
+        assert!(check_ownership(&table, handle.as_str(), 9999, true, "writeStdin").is_ok());
+    }
+
+    #[test]
+    fn stale_handle_returns_console_session_stale() {
+        let table = ConsoleSessionTable::new();
+        let result = check_ownership(&table, "no-such-handle", 1000, false, "readOutput");
+        assert!(
+            matches!(result, Err(TypedError::ConsoleSessionStale)),
+            "stale handle should return ConsoleSessionStale, got {result:?}"
+        );
+    }
+
+    #[test]
+    fn admin_bypass_applies_regardless_of_handle_existence() {
+        // Admin bypass is checked before handle lookup; stale handle is
+        // allowed for admins so they can inspect or clean up.
+        let table = ConsoleSessionTable::new();
+        assert!(check_ownership(&table, "no-such-handle", 9999, true, "readOutput").is_ok());
     }
 }

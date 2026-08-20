@@ -1199,7 +1199,6 @@ mod tests {
     fn every_primitive_resource_type_is_declared_exactly_once_and_stays_unqualified() {
         use crate::v3::{
             ResourceTypeName,
-            credential::CREDENTIAL_RESOURCE_TYPE,
             device::DEVICE_RESOURCE_TYPE,
             guest::GUEST_RESOURCE_TYPE,
             host::HOST_RESOURCE_TYPE,
@@ -1218,7 +1217,6 @@ mod tests {
             USER_RESOURCE_TYPE,
             NETWORK_RESOURCE_TYPE,
             DEVICE_RESOURCE_TYPE,
-            CREDENTIAL_RESOURCE_TYPE,
         ];
         let mut unique = declared.to_vec();
         unique.sort_unstable();
@@ -1241,7 +1239,6 @@ mod tests {
     fn every_primitive_base_object_folds_rather_than_restating_a_universal_field() {
         use crate::v3::{
             ResourceRef,
-            credential::{AudienceToken, CredentialSpec},
             device::DeviceSpec,
             guest::GuestSpec,
             host::HostSpec,
@@ -1261,10 +1258,6 @@ mod tests {
             to_base_object(&ProcessSpec::minimal(execution)).unwrap(),
             to_base_object(&UserSpec::minimal(OsUsername::parse("alice").unwrap())).unwrap(),
             to_base_object(&DeviceSpec::emulated_exclusive()).unwrap(),
-            to_base_object(&CredentialSpec::minimal(
-                AudienceToken::parse("azure-resource-manager").unwrap(),
-            ))
-            .unwrap(),
         ];
         for object in objects {
             for reserved in [

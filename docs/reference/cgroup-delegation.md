@@ -159,7 +159,7 @@ cpuset enable is the only one with a preceding inheritance step.
 
 The daemon owns one `Arc<OwnedFd>` per registered pidfd in
 [`d2b_priv_broker` →
-`d2bd::supervisor::pidfd::PidfdTable`](../../packages/d2bd/src/supervisor/pidfd.rs).
+`d2bd_runtime::supervisor::pidfd::PidfdTable`](../../packages/d2bd-runtime/src/supervisor/pidfd.rs).
 
 | Layer | What it holds | Lifetime |
 | --- | --- | --- |

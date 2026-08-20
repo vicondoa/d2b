@@ -1118,7 +1118,7 @@ fn documented_subcommands(manpage: &str) -> BTreeSet<String> {
 // Migrated from tests/kernel-module-matrix-eval.sh (matrix-parity half).
 //
 // Asserts the REQUIRED / OPTIONAL module constants in
-// `packages/d2bd/src/kernel_module_check.rs` stay in sync with the
+// `packages/d2bd-runtime/src/kernel_module_check.rs` stay in sync with the
 // operator-reference matrix in `docs/reference/kernel-module-check.md`. The
 // source must carry each canonical `"<module>"` string literal, the doc must
 // cite each module backticked, and the source must declare each canonical
@@ -1126,7 +1126,7 @@ fn documented_subcommands(manpage: &str) -> BTreeSet<String> {
 // ---------------------------------------------------------------------------
 #[test]
 fn kernel_module_matrix_source_doc_parity() {
-    let src_rel = "packages/d2bd/src/kernel_module_check.rs";
+    let src_rel = "packages/d2bd-runtime/src/kernel_module_check.rs";
     let doc_rel = "docs/reference/kernel-module-check.md";
     assert!(
         repo_path_exists(src_rel),
@@ -1330,13 +1330,13 @@ fn usb_security_key_cli_goldens_are_non_empty() {
 // ---------------------------------------------------------------------------
 // Migrated from tests/kernel-module-matrix-eval.sh (typed-error contract half).
 //
-// Asserts the fatal-typed-error contract: `packages/d2bd/src/typed_error.rs`
+// Asserts the fatal-typed-error contract: `packages/d2bd-runtime/src/typed_error.rs`
 // carries the `HostKernelModulesMissing` variant at exit code 64 with kind
 // "host-kernel-modules-missing".
 // ---------------------------------------------------------------------------
 #[test]
 fn kernel_module_missing_typed_error_contract() {
-    let typed_rel = "packages/d2bd/src/typed_error.rs";
+    let typed_rel = "packages/d2bd-runtime/src/typed_error.rs";
     assert!(
         repo_path_exists(typed_rel),
         "kernel-module-matrix-eval: typed_error.rs not found: {typed_rel}"

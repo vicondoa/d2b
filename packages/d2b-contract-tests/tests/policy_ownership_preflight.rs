@@ -5,7 +5,7 @@
 //! live in the nix-unit corpus (`tests/unit/nix/cases/per-vm-state-ownership.nix`).
 //! The bash gate ALSO carried source-level regression guards - that
 //! `nixos-modules/store.nix` and the daemon's
-//! `packages/d2bd/src/ownership_preflight.rs` never re-introduce the legacy
+//! `packages/d2bd-runtime/src/ownership_preflight.rs` never re-introduce the legacy
 //! `root:kvm` ownership / `2775` group-writable store mode. Those are
 //! source-greps, not eval-time values, so they belong in the Rust policy layer
 //! with the other `policy_*.rs` lints (this crate reads the real checkout via
@@ -23,7 +23,7 @@
 use d2b_contract_tests::{read_repo_file, repo_path_exists, repo_root};
 
 const STORE_NIX: &str = "nixos-modules/store.nix";
-const OWNERSHIP_PREFLIGHT_RS: &str = "packages/d2bd/src/ownership_preflight.rs";
+const OWNERSHIP_PREFLIGHT_RS: &str = "packages/d2bd-runtime/src/ownership_preflight.rs";
 
 fn store_nix() -> String {
     assert!(

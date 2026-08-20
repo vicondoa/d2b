@@ -1,12 +1,8 @@
 use std::cell::Cell;
 
-use d2b_contracts::{
-    types::{RoleId, VmId},
-};
+use d2b_contracts::types::{RoleId, VmId};
+use d2b_contracts_broker::broker_wire::{CreatePersistentTapRequest, DeletePersistentTapRequest};
 use d2b_contracts_zone_session::v3::{ResourceGeneration, ResourceUid};
-use d2b_contracts_broker::broker_wire::{
-    CreatePersistentTapRequest, DeletePersistentTapRequest,
-};
 use d2b_priv_broker::ops::{
     audit_op::OperationFields,
     network::{

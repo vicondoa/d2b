@@ -9,8 +9,8 @@ use super::{
     AudienceToken, CredentialLeaseHandle, CredentialLeaseState, CredentialSourceVersion,
     OperationClass,
 };
-use d2b_contracts_resource::v3::{ResourceGeneration, ResourceRef, ResourceUid};
 use d2b_contracts_resource::v3::identity::{AuthenticatedSubjectContext, TranscriptHash};
+use d2b_contracts_resource::v3::{ResourceGeneration, ResourceRef, ResourceUid};
 
 const MAX_PROTECTED_PLAINTEXT_BYTES: u32 = u16::MAX as u32 - 16;
 

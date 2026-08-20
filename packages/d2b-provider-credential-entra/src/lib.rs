@@ -19,12 +19,12 @@ use std::task::{Context, Poll, Wake, Waker};
 use std::thread::{self, Thread};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
-use d2b_contracts_zone_session::v3::ResourceRef;
 use d2b_contracts_provider::v3::credential::{
     CredentialLeaseHandle, CredentialLeaseState, CredentialMetadata, CredentialOutcomeCode,
     CredentialServiceError, CredentialServiceErrorCode, CredentialSourceVersion, OpaqueAzureRef,
     PlacementBinding,
 };
+use d2b_contracts_zone_session::v3::ResourceRef;
 
 pub use controller::{EntraController, EntraEndpointPolicy, EntraStatusProjection};
 

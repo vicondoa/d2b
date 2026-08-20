@@ -15,10 +15,11 @@ use async_trait::async_trait;
 use d2b_contracts_control::guest_proto as pb;
 use protobuf::{EnumOrUnknown, MessageField};
 
+#[cfg(test)]
+use crate::exec_session::NegotiatedCaps;
 use crate::exec_session::{
     Established, ExecEstablishError, ExecGuestConnector, ExecOpDeadlines, ExecOpError,
-    ExecSessionInfo, ExecStartSpec, GuestOpError, NegotiatedCaps, OutputStreamSel,
-    ReadOutputOutcome, TerminalKind, WaitOutcome, WriteStdinOutcome,
+    ExecSessionInfo, ExecStartSpec,
 };
 #[cfg(test)]
 use crate::guest_control_bridge::connect_and_build_client_for_tests;
@@ -26,12 +27,20 @@ use crate::guest_control_bridge::{
     BrokerSigner, GUEST_CONTROL_ATTEMPT_CAP, ProbeParams, VMADDR_CID_HOST,
     connect_and_build_client, host_nonce,
 };
+use d2b_contracts_broker::broker_wire::BrokerCallerRole;
+use d2b_contracts_control::guest_wire::GUEST_CONTROL_PROTOCOL_VERSION;
+pub use crate::exec_session::{
+    ack_result, build_exec_create_request, gate_capabilities, is_unspecified,
+    map_establish_health_error, map_guest_control_error, map_op_health_error,
+    map_op_health_error_for_establish, op_to_establish, terminal_from_state,
+};
 use crate::guest_control_health::{
     AttemptBudget, GuestControlHealthError, TtrpcGuestControlClient, probe_guest_control_health,
 };
 use crate::terminal_session::TerminalBackend;
-use d2b_contracts_broker::broker_wire::BrokerCallerRole;
-use d2b_contracts_control::guest_wire::GUEST_CONTROL_PROTOCOL_VERSION;
+use crate::terminal_session::{
+    OutputStreamSel, ReadOutputOutcome, WaitOutcome, WriteStdinOutcome,
+};
 
 /// Absolute deadline for the whole establish phase (connect + auth handshake:
 /// `CONNECT`-ack, Hello, sign, Authenticate, sign, Health).
@@ -43,7 +52,7 @@ use d2b_contracts_control::guest_wire::GUEST_CONTROL_PROTOCOL_VERSION;
 /// loading hundreds of shared libraries - every operation can approach its
 /// per-op cap, requiring up to 6 × 3 s = 18 s of budget. 20 s leaves 2 s of
 /// headroom for scheduling jitter without changing the per-op cap or protocol.
-pub(crate) const ESTABLISH_TIMEOUT: Duration = Duration::from_secs(20);
+pub const ESTABLISH_TIMEOUT: Duration = Duration::from_secs(20);
 
 /// Production exec connector. Owns the resolved probe params + broker socket
 /// path so it is `Send + Sync` and can move into the worker thread.
@@ -180,99 +189,6 @@ impl ExecGuestConnector for RealExecConnector {
 /// NOT the genuine "no guestd / old generation" case, which is detected earlier
 /// at connect/probe time. Surface the capability slug (exit 70, no SSH
 /// fallback) whose remediation points at enabling guest-control exec.
-fn gate_capabilities(
-    capabilities: &[EnumOrUnknown<pb::GuestCapability>],
-    tty: bool,
-) -> Result<NegotiatedCaps, ExecEstablishError> {
-    let advertises = |cap: pb::GuestCapability| {
-        capabilities
-            .iter()
-            .filter_map(|value| value.enum_value().ok())
-            .any(|value| value == cap)
-    };
-    // The guest authenticated but advertises no attached-exec capability: exec
-    // is disabled or not built in (NOT old-generation - that is a connect-time
-    // failure). Fail closed to the capability slug, whose remediation points at
-    // `guest.exec.enable = true`.
-    if !advertises(pb::GuestCapability::GUEST_CAPABILITY_EXEC_ATTACHED) {
-        return Err(ExecEstablishError::Capability);
-    }
-    // Every reachable exec session streams stdout/stderr back via ReadOutput, so
-    // a guest that does not advertise EXEC_LOGS cannot serve a session at all.
-    // Fail fast rather than establishing a session that can never deliver
-    // output. A real exec-enabled guestd always advertises EXEC_LOGS alongside
-    // EXEC_ATTACHED, so this never rejects a correctly-configured guest.
-    if !advertises(pb::GuestCapability::GUEST_CAPABILITY_EXEC_LOGS) {
-        return Err(ExecEstablishError::Capability);
-    }
-    if !advertises(pb::GuestCapability::GUEST_CAPABILITY_SIGNALS) {
-        return Err(ExecEstablishError::Capability);
-    }
-    if tty
-        && (!advertises(pb::GuestCapability::GUEST_CAPABILITY_EXEC_TTY)
-            || !advertises(pb::GuestCapability::GUEST_CAPABILITY_TTY_RESIZE))
-    {
-        return Err(ExecEstablishError::Capability);
-    }
-    Ok(NegotiatedCaps {
-        tty,
-        signals: advertises(pb::GuestCapability::GUEST_CAPABILITY_SIGNALS),
-        tty_resize: advertises(pb::GuestCapability::GUEST_CAPABILITY_TTY_RESIZE),
-        output: advertises(pb::GuestCapability::GUEST_CAPABILITY_EXEC_LOGS),
-    })
-}
-
-pub(crate) fn build_exec_create_request(
-    vm_id: &str,
-    spec: &ExecStartSpec,
-) -> pb::ExecCreateRequest {
-    let mut metadata = pb::RequestMetadata::new();
-    metadata.vm_id = vm_id.to_owned();
-    metadata.request_id = spec
-        .request_id
-        .clone()
-        .unwrap_or_else(|| "guest-control-exec".to_owned());
-    metadata.protocol_version = GUEST_CONTROL_PROTOCOL_VERSION;
-
-    let mut request = pb::ExecCreateRequest::new();
-    request.metadata = MessageField::some(metadata);
-    // The exec target user is host-fixed by guestd (the VM's workload user,
-    // `--exec-user`), and guestd ignores the wire `user` field entirely, so a
-    // client cannot select or escalate the target user. The daemon therefore
-    // leaves `user` unset.
-    request.argv = spec.argv.clone();
-    request.cwd = spec.cwd.clone();
-    request.env = spec
-        .env
-        .iter()
-        .map(|(key, value)| {
-            let mut var = pb::EnvVar::new();
-            var.key = key.clone();
-            var.value = value.clone();
-            var
-        })
-        .collect();
-    request.tty = spec.tty;
-    // guestd accepts an open stdin only in interactive TTY mode
-    // (`validate_and_authorize_tty`); both non-TTY validators
-    // (`validate_and_authorize` / `_detached`) reject `stdin_open` as
-    // `UnsupportedMode`. Mirror that contract: open stdin iff a PTY was
-    // requested. Hardcoding `true` made every non-TTY `vm exec` (and every
-    // detached exec) fail `ExecCreate` before the guest process could spawn.
-    request.stdin_open = spec.tty;
-    request.detached = spec.detached;
-    if let Some((rows, cols)) = spec.term_size {
-        let mut size = pb::TerminalSize::new();
-        size.rows = rows;
-        size.cols = cols;
-        request.initial_terminal_size = MessageField::some(size);
-    }
-    let mut policy = pb::OutputPolicy::new();
-    policy.max_chunk_bytes = d2b_contracts_control::public_wire::EXEC_MAX_CHUNK_BYTES;
-    request.output_policy = MessageField::some(policy);
-    request
-}
-
 /// Authenticated exec client bound to one `exec_id` on one guest connection.
 struct RealExecClient {
     client: Arc<TtrpcGuestControlClient>,
@@ -454,155 +370,6 @@ impl TerminalBackend for RealExecClient {
             return Err(map_guest_control_error(error));
         }
         Ok(())
-    }
-}
-
-fn ack_result(ack: &pb::ControlAck) -> Result<(), ExecOpError> {
-    if let Some(error) = ack.error.as_ref()
-        && !is_unspecified(error.kind)
-    {
-        return Err(map_guest_control_error(error));
-    }
-    Ok(())
-}
-
-fn terminal_from_state(
-    state: pb::ExecState,
-    status: Option<&pb::TerminalStatus>,
-) -> Option<TerminalKind> {
-    match state {
-        pb::ExecState::EXEC_STATE_EXITED => {
-            match status.and_then(|status| status.outcome.as_ref()) {
-                Some(pb::terminal_status::Outcome::ExitCode(code)) => {
-                    Some(TerminalKind::Exited(*code))
-                }
-                Some(pb::terminal_status::Outcome::StatusCode(code)) => {
-                    Some(TerminalKind::Exited(*code))
-                }
-                // EXITED without a WIFEXITED code is a protocol violation, not a
-                // synthesized success.
-                _ => Some(TerminalKind::Error("protocol-error")),
-            }
-        }
-        pb::ExecState::EXEC_STATE_SIGNALED => {
-            match status.and_then(|status| status.outcome.as_ref()) {
-                Some(pb::terminal_status::Outcome::Signal(signal)) => {
-                    Some(TerminalKind::Signaled(*signal))
-                }
-                _ => Some(TerminalKind::Error("protocol-error")),
-            }
-        }
-        pb::ExecState::EXEC_STATE_CANCELLED | pb::ExecState::EXEC_STATE_SLOW_CONSUMER_CANCELLED => {
-            Some(TerminalKind::Error("cancelled"))
-        }
-        pb::ExecState::EXEC_STATE_LOST_GUESTD => Some(TerminalKind::Error("lost-guestd")),
-        pb::ExecState::EXEC_STATE_REAPED => Some(TerminalKind::Error("reaped")),
-        pb::ExecState::EXEC_STATE_PROTOCOL_ERROR => Some(TerminalKind::Error("protocol-error")),
-        _ => None,
-    }
-}
-
-pub(crate) fn is_unspecified(kind: EnumOrUnknown<pb::GuestControlErrorKind>) -> bool {
-    matches!(
-        kind.enum_value(),
-        Ok(pb::GuestControlErrorKind::GUEST_CONTROL_ERROR_KIND_UNSPECIFIED)
-    )
-}
-
-pub(crate) fn map_guest_control_error(error: &pb::GuestControlError) -> ExecOpError {
-    use pb::GuestControlErrorKind as K;
-    match error.kind.enum_value() {
-        Ok(K::GUEST_CONTROL_ERROR_KIND_AUTH_FAILED) => ExecOpError::Auth,
-        Ok(K::GUEST_CONTROL_ERROR_KIND_STALE_SESSION) => ExecOpError::StaleSession,
-        Ok(K::GUEST_CONTROL_ERROR_KIND_TRANSPORT_UNREACHABLE) => ExecOpError::Transport,
-        Ok(K::GUEST_CONTROL_ERROR_KIND_GUEST_CONTROL_UNAVAILABLE_OLD_GENERATION) => {
-            ExecOpError::OldGeneration
-        }
-        Ok(K::GUEST_CONTROL_ERROR_KIND_GUEST_EXEC_DISABLED) => ExecOpError::Capability,
-        Ok(K::GUEST_CONTROL_ERROR_KIND_PROTOCOL_ERROR) => {
-            ExecOpError::Guest(GuestOpError::Protocol)
-        }
-        Ok(K::GUEST_CONTROL_ERROR_KIND_MAX_CHUNK_EXCEEDED) => {
-            ExecOpError::Guest(GuestOpError::MaxChunkExceeded)
-        }
-        Ok(K::GUEST_CONTROL_ERROR_KIND_STDIN_BACKPRESSURE) => {
-            ExecOpError::Guest(GuestOpError::StdinBackpressure)
-        }
-        Ok(
-            K::GUEST_CONTROL_ERROR_KIND_STDIN_CLOSED
-            | K::GUEST_CONTROL_ERROR_KIND_STDIN_CLOSED_BY_PROCESS,
-        ) => ExecOpError::Guest(GuestOpError::StdinClosed),
-        Ok(K::GUEST_CONTROL_ERROR_KIND_STDIN_NOT_OPEN) => {
-            ExecOpError::Guest(GuestOpError::StdinNotOpen)
-        }
-        Ok(
-            K::GUEST_CONTROL_ERROR_KIND_STDIN_OFFSET_MISMATCH
-            | K::GUEST_CONTROL_ERROR_KIND_OFFSET_EXPIRED
-            | K::GUEST_CONTROL_ERROR_KIND_OFFSET_IN_FUTURE
-            | K::GUEST_CONTROL_ERROR_KIND_OFFSET_EXHAUSTED,
-        ) => ExecOpError::Guest(GuestOpError::OffsetMismatch),
-        Ok(K::GUEST_CONTROL_ERROR_KIND_EXEC_NOT_FOUND) => {
-            ExecOpError::Guest(GuestOpError::ExecNotFound)
-        }
-        Ok(K::GUEST_CONTROL_ERROR_KIND_EXEC_ALREADY_EXITED) => {
-            ExecOpError::Guest(GuestOpError::ExecAlreadyExited)
-        }
-        Ok(K::GUEST_CONTROL_ERROR_KIND_EXEC_EXPIRED) => {
-            ExecOpError::Guest(GuestOpError::ExecExpired)
-        }
-        Ok(K::GUEST_CONTROL_ERROR_KIND_CONTROL_SEQ_MISMATCH) => {
-            ExecOpError::Guest(GuestOpError::ControlSeqMismatch)
-        }
-        Ok(K::GUEST_CONTROL_ERROR_KIND_RATE_LIMITED) => {
-            ExecOpError::Guest(GuestOpError::RateLimited)
-        }
-        Ok(K::GUEST_CONTROL_ERROR_KIND_INVALID_PROGRAM) => {
-            ExecOpError::Guest(GuestOpError::InvalidProgram)
-        }
-        _ => ExecOpError::Guest(GuestOpError::Other),
-    }
-}
-
-pub(crate) fn map_op_health_error(error: GuestControlHealthError) -> ExecOpError {
-    match error {
-        GuestControlHealthError::TransportIo
-        | GuestControlHealthError::Ttrpc
-        | GuestControlHealthError::Signer => ExecOpError::Transport,
-        GuestControlHealthError::Timeout => ExecOpError::Timeout,
-        GuestControlHealthError::AuthFailed => ExecOpError::Auth,
-        GuestControlHealthError::StaleSession => ExecOpError::StaleSession,
-        GuestControlHealthError::Protocol => ExecOpError::Protocol,
-    }
-}
-
-fn map_op_health_error_for_establish(error: GuestControlHealthError) -> ExecEstablishError {
-    op_to_establish(map_op_health_error(error))
-}
-
-fn map_establish_health_error(error: GuestControlHealthError) -> ExecEstablishError {
-    match error {
-        GuestControlHealthError::TransportIo
-        | GuestControlHealthError::Ttrpc
-        | GuestControlHealthError::Signer => ExecEstablishError::Transport,
-        GuestControlHealthError::Timeout => ExecEstablishError::Timeout,
-        GuestControlHealthError::AuthFailed | GuestControlHealthError::StaleSession => {
-            ExecEstablishError::Auth
-        }
-        GuestControlHealthError::Protocol => ExecEstablishError::Protocol,
-    }
-}
-
-fn op_to_establish(error: ExecOpError) -> ExecEstablishError {
-    match error {
-        ExecOpError::Transport => ExecEstablishError::Transport,
-        ExecOpError::Auth => ExecEstablishError::Auth,
-        ExecOpError::StaleSession => ExecEstablishError::Auth,
-        ExecOpError::Protocol => ExecEstablishError::Protocol,
-        ExecOpError::Timeout => ExecEstablishError::Timeout,
-        ExecOpError::OldGeneration => ExecEstablishError::OldGeneration,
-        ExecOpError::Capability => ExecEstablishError::Capability,
-        ExecOpError::DetachedUnavailable => ExecEstablishError::Capability,
-        ExecOpError::Guest(inner) => ExecEstablishError::Guest(inner),
     }
 }
 

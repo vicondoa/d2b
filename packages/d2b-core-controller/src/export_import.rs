@@ -7,13 +7,13 @@
 //! following projection-controller surface and are intentionally not
 //! implemented here.
 
-use d2b_contracts_zone_session::v3::{
-    ResourceEnvelope, ResourceExportSpec, ResourceImportSpec, ResourceRef, ResourceTypeName,
-    SchemaFingerprint,
-};
 use d2b_contracts_provider::v3::{
     BindingTargetType, Exportability, ProjectionFactory, ProviderContractError,
     SEMANTIC_PROJECTION_PROTOCOL_VERSION, SemanticProjectionProtocolVersion,
+};
+use d2b_contracts_zone_session::v3::{
+    ResourceEnvelope, ResourceExportSpec, ResourceImportSpec, ResourceRef, ResourceTypeName,
+    SchemaFingerprint,
 };
 
 /// Why Core refused an export or import admission.
@@ -421,9 +421,8 @@ pub fn projection_identity(
 mod tests {
     use d2b_contracts_provider::v3::{BindingTargetType, Exportability};
     use d2b_contracts_zone_session::v3::{
-        ConsumerZonePolicy, ExportArbitration,
-        ResourceExportSpec, ResourceImportSpec, ResourceName, ResourceTypeName, SchemaFingerprint,
-        execution_policy::BoundedToken,
+        ConsumerZonePolicy, ExportArbitration, ResourceExportSpec, ResourceImportSpec,
+        ResourceName, ResourceTypeName, SchemaFingerprint, execution_policy::BoundedToken,
     };
 
     use super::*;

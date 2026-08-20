@@ -1,0 +1,112 @@
+load("@crates//:defs.bzl", "all_crate_deps")
+load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test", "rust_doc_test")
+
+exports_files(
+    ["BUILD.bazel", "src/daemon_audit.rs"],
+    visibility = ["//visibility:public"],
+)
+
+d2bd_runtime_srcs = glob(["src/**/*.rs"], allow_empty = True)
+
+d2bd_runtime_compile_data = [
+    "//tests/fixtures:deny-unknown/host-valid.json",  # keep
+    "//:tests/golden/manifest_v04/baseline-vms.json",  # keep
+    "Cargo.toml",
+]
+
+d2bd_runtime_deps = [
+    "//packages/d2b-audit:d2b_audit",
+    "//packages/d2b-bus:d2b_bus",
+    "//packages/d2b-contracts:d2b_contracts",
+    "//packages/d2b-contracts-broker:d2b_contracts_broker",
+    "//packages/d2b-contracts-control:d2b_contracts_control",
+    "//packages/d2b-contracts-resource:d2b_contracts_resource",
+    "//packages/d2b-contracts-zone-session:d2b_contracts_zone_session",
+    "//packages/d2b-core:d2b_core",
+    "//packages/d2b-core-controller:d2b_core_controller",
+    "//packages/d2b-host:d2b_host",
+    "//packages/d2b-realm-core:d2b_realm_core",
+    "//packages/d2b-resource-api:d2b_resource_api",
+    "//packages/d2b-resource-store:d2b_resource_store",
+    "//packages/d2b-resource-store-redb:d2b_resource_store_redb",
+    "//packages/d2b-session:d2b_session",
+    "//packages/d2b-session-unix:d2b_session_unix",
+]
+
+d2bd_runtime_test_deps = [
+    "//packages/d2b-audit:d2b_audit_test_support",
+    "//packages/d2b-bus:d2b_bus_test_support",
+    "//packages/d2b-contracts:d2b_contracts_test_support",
+    "//packages/d2b-contracts-broker:d2b_contracts_broker",
+    "//packages/d2b-contracts-control:d2b_contracts_control",
+    "//packages/d2b-contracts-resource:d2b_contracts_resource",
+    "//packages/d2b-contracts-zone-session:d2b_contracts_zone_session",
+    "//packages/d2b-core-controller:d2b_core_controller_test_support",
+    "//packages/d2b-host:d2b_host_test_support",
+    "//packages/d2b-realm-core:d2b_realm_core",
+    "//packages/d2b-resource-api:d2b_resource_api_test_support",
+    "//packages/d2b-resource-store:d2b_resource_store_test_support",
+    "//packages/d2b-resource-store-redb:d2b_resource_store_redb_test_support",
+    "//packages/d2b-session:d2b_session_test_support",
+    "//packages/d2b-session-unix:d2b_session_unix_test_support",
+]
+
+rust_library(
+    name = "d2bd_runtime",
+    srcs = d2bd_runtime_srcs,
+    compile_data = d2bd_runtime_compile_data,
+    crate_name = "d2bd_runtime",
+    visibility = ["//visibility:public"],
+    deps = d2bd_runtime_deps + all_crate_deps(normal = True, cargo_only = True),
+)
+
+rust_library(
+    name = "d2bd_runtime_test_support",
+    srcs = d2bd_runtime_srcs,
+    compile_data = d2bd_runtime_compile_data,
+    crate_features = ["test-support"],
+    crate_name = "d2bd_runtime",
+    visibility = ["//visibility:public"],
+    deps = d2bd_runtime_test_deps + [
+        "//packages/d2b-core:d2b_core_test_support",
+    ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
+)
+
+rust_test(
+    name = "d2bd_runtime_test",
+    crate = ":d2bd_runtime_test_support",
+    compile_data = d2bd_runtime_compile_data,
+    visibility = ["//visibility:public"],
+    deps = all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
+)
+
+rust_test(
+    name = "runtime_boundary",
+    srcs = ["tests/runtime_boundary.rs"],
+    compile_data = d2bd_runtime_srcs + ["BUILD.bazel", "Cargo.toml"],
+    visibility = ["//visibility:public"],
+    deps = [":d2bd_runtime"] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
+)
+
+rust_doc_test(
+    name = "d2bd_runtime_doc_test",
+    crate = "//packages/d2bd-runtime:d2bd_runtime",
+)
+
+# keep
+filegroup(
+    name = "cargo_workspace_sources",
+    srcs = glob(
+        [
+            "Cargo.lock",
+            "Cargo.toml",
+            "benches/**/*.rs",
+            "build.rs",
+            "examples/**/*.rs",
+            "src/**/*.rs",
+            "tests/**/*.rs",
+        ],
+        allow_empty = True,
+    ),
+    visibility = ["//visibility:public"],
+)

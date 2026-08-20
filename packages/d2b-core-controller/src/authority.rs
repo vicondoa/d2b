@@ -15,8 +15,7 @@ use std::{
 };
 
 use d2b_contracts_zone_session::v3::{
-    CanonicalJsonValue, ResourceGeneration, ResourceRef, ResourceUid, UpdateState,
-    IfName,
+    CanonicalJsonValue, IfName, ResourceGeneration, ResourceRef, ResourceUid, UpdateState,
     is_canonical_digest,
     network::{
         ExternalNicAdmissionError, ExternalNicAuthorityStatus, ExternalNicClaim, MacvtapMode,

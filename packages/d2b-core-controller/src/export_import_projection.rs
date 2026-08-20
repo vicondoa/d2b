@@ -8,11 +8,11 @@
 
 use std::collections::BTreeSet;
 
+use d2b_contracts_provider::v3::SemanticProjectionProtocolVersion;
 use d2b_contracts_zone_session::v3::{
     FinalizerId, RESOURCE_IMPORT_DRAIN_FINALIZER, ResourceImportConditionType, ResourceRef,
     ResourceTypeName, SchemaFingerprint,
 };
-use d2b_contracts_provider::v3::SemanticProjectionProtocolVersion;
 
 use crate::export_import::{AdmittedImport, ProjectionServiceIdentity};
 
@@ -909,9 +909,8 @@ mod tests {
         BindingTargetType, Exportability, SemanticProjectionProtocolVersion,
     };
     use d2b_contracts_zone_session::v3::{
-        ConsumerZonePolicy, ExportArbitration,
-        ResourceExportSpec, ResourceImportSpec, ResourceName, ResourceTypeName, SchemaFingerprint,
-        execution_policy::BoundedToken,
+        ConsumerZonePolicy, ExportArbitration, ResourceExportSpec, ResourceImportSpec,
+        ResourceName, ResourceTypeName, SchemaFingerprint, execution_policy::BoundedToken,
     };
 
     use super::*;

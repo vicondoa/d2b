@@ -32,6 +32,16 @@ use parking_lot::{
     ArcMutexGuard, ArcRwLockReadGuard, ArcRwLockWriteGuard, Mutex, RawMutex, RawRwLock, RwLock,
 };
 
+pub const DEFAULT_MAX_INFLIGHT_CONNECTIONS: usize = 64;
+
+pub fn resolve_max_inflight_connections() -> usize {
+    std::env::var("D2BD_MAX_INFLIGHT_CONNECTIONS")
+        .ok()
+        .and_then(|raw| raw.trim().parse::<usize>().ok())
+        .filter(|cap| *cap > 0)
+        .unwrap_or(DEFAULT_MAX_INFLIGHT_CONNECTIONS)
+}
+
 /// Non-blocking, bounded admission gate for connection-handler threads.
 ///
 /// Cheaply [`Clone`]able (shared atomic counter behind an `Arc`) so it

@@ -1,9 +1,28 @@
 //! Production Zone status projection with the mandatory system-core pair.
 
+use d2b_contracts_zone_session::v3::ZoneHandlerName;
 use d2b_contracts_zone_session::v3::{
     ResourcePhase, Timestamp, ZoneHandlerPhase, ZoneHandlerStatus, ZoneStatusResource,
 };
-use d2b_provider_system_core::emit_handler_status;
+
+fn emit_handler_status(
+    host_phase: ZoneHandlerPhase,
+    user_phase: ZoneHandlerPhase,
+    last_reconciled_at: Option<Timestamp>,
+) -> Vec<ZoneHandlerStatus> {
+    vec![
+        ZoneHandlerStatus::new(
+            ZoneHandlerName::SystemCoreHost,
+            host_phase,
+            last_reconciled_at.clone(),
+        ),
+        ZoneHandlerStatus::new(
+            ZoneHandlerName::SystemCoreUser,
+            user_phase,
+            last_reconciled_at,
+        ),
+    ]
+}
 
 /// Live revisions, counts, and reconcile metadata projected into Zone status.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]

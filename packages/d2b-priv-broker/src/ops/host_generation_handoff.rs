@@ -72,7 +72,9 @@ impl HandoffEffect for SuccessfulHandoffEffect {
         request: &ApplyHostGenerationHandoff,
     ) -> Result<ActivationHelperOutcome, HandoffOperationError> {
         Ok(
-            if request.intent.activation_mode == d2b_contracts_zone_session::v3::ActivationMode::Adopt {
+            if request.intent.activation_mode
+                == d2b_contracts_zone_session::v3::ActivationMode::Adopt
+            {
                 ActivationHelperOutcome::Adopted
             } else {
                 ActivationHelperOutcome::Succeeded

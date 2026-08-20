@@ -4,9 +4,7 @@
 /// `d2b usb attach <vm> <present-busid> --apply` explicit path - the
 /// path that does NOT require static busid/vendor allowlists in the bundle.
 use d2b_contract_tests::read_repo_file;
-use d2b_contracts::usbip::{
-    UsbipClaimSource, UsbipDaemonClaimRecord, validate_bus_id,
-};
+use d2b_contracts::usbip::{UsbipClaimSource, UsbipDaemonClaimRecord, validate_bus_id};
 use d2b_contracts_broker::broker_wire::{
     BrokerRequest, UsbipExplicitBindRequest, UsbipExplicitFirewallRuleRequest,
 };
@@ -266,7 +264,7 @@ fn explicit_path_is_not_gated_on_bundle_firewall_or_bind_intent() {
     // Verify that `dispatch_broker_usbip_bind` in lib.rs checks for the
     // absence of declared intents and falls through to the explicit path
     // rather than emitting a "intent missing" error.
-    let lib_rs = read_repo_file("packages/d2bd/src/lib.rs");
+    let lib_rs = read_repo_file("packages/d2bd/src/composition.rs");
     assert!(
         lib_rs.contains("has_declared_intents"),
         "dispatch_broker_usbip_bind must check for declared intent presence before choosing explicit path"
@@ -287,7 +285,7 @@ fn explicit_path_is_not_gated_on_bundle_firewall_or_bind_intent() {
 
 #[test]
 fn sysfs_presence_check_is_fail_closed_before_broker_dispatch() {
-    let lib_rs = read_repo_file("packages/d2bd/src/lib.rs");
+    let lib_rs = read_repo_file("packages/d2bd/src/composition.rs");
     // The sysfs check function and claim exclusivity check must exist
     // and be called before any broker dispatch in the explicit path.
     assert!(
@@ -327,7 +325,7 @@ fn explicit_ops_appear_in_broker_runtime_dispatch() {
 
 #[test]
 fn usb_detach_dispatches_host_unbind_instead_of_static_ambiguous_refusal() {
-    let lib_rs = read_repo_file("packages/d2bd/src/lib.rs");
+    let lib_rs = read_repo_file("packages/d2bd/src/composition.rs");
     let detach_start = lib_rs
         .find("fn dispatch_broker_usbip_unbind")
         .expect("dispatch_broker_usbip_unbind exists");
@@ -353,7 +351,7 @@ fn usb_detach_dispatches_host_unbind_instead_of_static_ambiguous_refusal() {
 
 #[test]
 fn usb_probe_does_not_mark_resolved_guest_status_probe_incomplete() {
-    let lib_rs = read_repo_file("packages/d2bd/src/lib.rs");
+    let lib_rs = read_repo_file("packages/d2bd/src/composition.rs");
     let probe_start = lib_rs
         .find("fn usbip_probe_entry_from_intent")
         .expect("usbip_probe_entry_from_intent exists");

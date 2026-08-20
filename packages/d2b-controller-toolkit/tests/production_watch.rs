@@ -68,9 +68,10 @@ impl ControllerConsumer {
             let resource_type = ResourceTypeName::parse(entry["resource_type"].as_str().unwrap())
                 .expect("watch entry has a valid resource type");
             let resource_name = entry["resource_name"].as_str().unwrap();
-            let resource_uid =
-                d2b_contracts_zone_session::v3::ResourceUid::parse(entry["resource_uid"].as_str().unwrap())
-                    .expect("watch entry has an immutable UID");
+            let resource_uid = d2b_contracts_zone_session::v3::ResourceUid::parse(
+                entry["resource_uid"].as_str().unwrap(),
+            )
+            .expect("watch entry has an immutable UID");
             let resource_ref = ResourceRef::new(
                 resource_type,
                 d2b_contracts_zone_session::v3::ResourceName::parse(resource_name)

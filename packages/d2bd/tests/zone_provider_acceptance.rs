@@ -49,7 +49,7 @@ use d2b_provider_volume_local::{
     DriftClass, MarkerState, OwnerProof, QuotaCapability, VolumeLayoutEffectPort,
     VolumeLocalController, VolumeLocalProfile, VolumeRootHandle, VolumeSourceEffectPort,
 };
-use d2bd::resource_operator_activation::{
+use d2bd_runtime::resource_operator_activation::{
     Wave6BoundaryError, Wave6Dependencies, Wave6ProviderBoundary, Wave6ReconcileResult,
     Wave6Resource, Wave6ResourceSet,
 };
@@ -934,7 +934,8 @@ fn cloud_controller(
         controller_execution_ref: ResourceRef::parse("Host/host-system").unwrap(),
         default_vcpus: 2,
         default_memory_mb: 512,
-        default_machine_type: d2b_contracts_provider::v3::credential::OpaqueAzureRef::parse("q35").unwrap(),
+        default_machine_type: d2b_contracts_provider::v3::credential::OpaqueAzureRef::parse("q35")
+            .unwrap(),
         watchdog: true,
         adoption_window_ms: 30_000,
         health_check_interval_ms: 30_000,

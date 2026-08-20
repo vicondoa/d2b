@@ -3,10 +3,7 @@
 use schemars::JsonSchema;
 use serde::{Deserialize, Deserializer, Serialize};
 
-use super::{
-    ArtifactId, ResourceRef, ResourceTypeName,
-    execution_policy::require_execution_ref,
-};
+use super::{ArtifactId, ResourceRef, ResourceTypeName, execution_policy::require_execution_ref};
 
 /// The canonical activation generation ResourceType.
 pub const NIXOS_GENERATION_RESOURCE_TYPE: &str = "activation-nixos.d2bus.org.NixosGeneration";

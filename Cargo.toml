@@ -69,6 +69,7 @@ members = [
     "packages/d2b-resource-store",
     "packages/d2b-resource-store-redb",
     "packages/d2b",
+    "packages/d2bd-runtime",
     "packages/d2bd",
     "packages/d2b-clipd",
     "packages/d2b-notify",

@@ -11,14 +11,13 @@
 //! are delivered only over a dedicated end-to-end session and never enter a
 //! resource, the store, status, audit, or telemetry.
 
+use d2b_contracts::foundation_effects::CredentialContractError;
+pub use d2b_contracts::foundation_effects::{
+    CredentialLeaseHandle, MAX_AZURE_REF_BYTES, MAX_CREDENTIAL_LEASE_HANDLE_BYTES, OpaqueAzureRef,
+};
 use schemars::JsonSchema;
 use serde::{Deserialize, Deserializer, Serialize};
 use sha2::{Digest, Sha256};
-use d2b_contracts::foundation_effects::CredentialContractError;
-pub use d2b_contracts::foundation_effects::{
-    CredentialLeaseHandle, OpaqueAzureRef, MAX_AZURE_REF_BYTES,
-    MAX_CREDENTIAL_LEASE_HANDLE_BYTES,
-};
 
 use super::{
     ResourceRef, Timestamp,

@@ -40,8 +40,8 @@
 //! the broker rewrote anything, which the daemon logs but does
 //! not treat as a failure signal.
 
-use d2b_contracts_broker::broker_wire::{RunRotateKnownHostRequest, RunRotateKnownHostResponse};
 use d2b_contracts::types::BundleOpId;
+use d2b_contracts_broker::broker_wire::{RunRotateKnownHostRequest, RunRotateKnownHostResponse};
 use d2b_core::bundle_resolver::intent_id_rotate_known_host;
 use d2b_core::manifest_v04::ManifestV04;
 

@@ -112,6 +112,12 @@ generated_artifact_check(
 )
 
 generated_artifact_check(
+    name = "gen_resource_schemas_drift",
+    command = "gen-resource-schemas",
+    data = ["//:generated_resource_schemas"],
+)
+
+generated_artifact_check(
     name = "gen_resource_ttrpc_drift",
     command = "gen-resource-ttrpc",
     data = [
@@ -155,6 +161,7 @@ test_suite(
         ":gen_guest_ttrpc_drift",
         ":gen_provider_packaging_drift",
         ":gen_resource_proto_drift",
+        ":gen_resource_schemas_drift",
         ":gen_resource_ttrpc_drift",
         ":gen_schemas_drift",
         ":gen_semantic_service_schemas_drift",

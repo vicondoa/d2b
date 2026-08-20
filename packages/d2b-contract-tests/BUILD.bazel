@@ -930,8 +930,8 @@ rust_test(
     srcs = ["tests/workload_observability_contract.rs"],
     compile_data = [
         "//:nixos-modules/components/observability/dashboards/01-d2b-overview.json",  # keep
-        "//packages/d2bd:src/daemon_audit.rs",  # keep
-        "//packages/d2bd:src/lib.rs",  # keep
+        "//packages/d2bd-runtime:src/daemon_audit.rs",  # keep
+        "//packages/d2bd:src/composition.rs",  # keep
         "Cargo.toml",
     ],
     visibility = ["//visibility:public"],

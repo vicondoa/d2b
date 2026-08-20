@@ -82,7 +82,7 @@ fn host_daemon_broker_and_activation_do_not_store_realm_credentials() {
         "nixos-modules",
     ]);
     let allowlisted = BTreeSet::from([
-        "packages/d2bd/src/lib.rs",
+        "packages/d2bd/src/composition.rs",
         "nixos-modules/assertions.nix",
         "nixos-modules/gateway-vm.nix",
         "nixos-modules/options-gateway.nix",
@@ -158,7 +158,7 @@ fn host_bundle_artifacts_do_not_materialize_realm_credentials_or_registries() {
 
 #[test]
 fn host_relay_credentials_are_explicitly_refused_not_materialized() {
-    let daemon = read("packages/d2bd/src/lib.rs");
+    let daemon = read("packages/d2bd/src/composition.rs");
     assert!(
         daemon.contains("allow_host_relay_credentials")
             && daemon.contains(

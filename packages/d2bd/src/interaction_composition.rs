@@ -28,6 +28,8 @@ use d2b_bus::{
     ComponentRequestReceiver, ComponentSessionAdmission, NoopBusObserver, OperationId,
     OperationSpec, RouteGenerations, RouteKey, RouteMember, RouteTarget, ZoneBus, ZoneRegistrar,
 };
+use d2b_contracts::types::{BundleOpId, RoleId, VmId};
+use d2b_contracts_broker::broker_wire::{BrokerCallerRole, RunnerRole, SandboxLaunchPlan};
 use d2b_contracts_zone_session::v3::{
     ControllerGeneration, EvidenceClass, ResourceGeneration, ResourceRef, ResourceUid, ServiceName,
     ZoneId, ZoneRevision,
@@ -40,8 +42,6 @@ use d2b_contracts_zone_session::v3::{
     execution_policy::{BoundedToken, ExecutionDomain},
     process::{CapabilityClass, EnvironmentClass, MappingClass, NamespaceClass, UserNamespaceSpec},
 };
-use d2b_contracts::{types::{BundleOpId, RoleId, VmId}};
-use d2b_contracts_broker::broker_wire::{BrokerCallerRole, RunnerRole, SandboxLaunchPlan};
 use d2b_core::{
     bundle_resolver::{BundleResolver, ResolvedRunnerIntent},
     processes::ProcessRole,
@@ -4976,13 +4976,16 @@ mod tests {
                 snapshot: PolicySnapshot {
                     policy_revision: display_generation,
                     api_catalog_revision: 1,
-                    active_configuration_revision: d2b_contracts_zone_session::v3::ConfigurationGeneration::new(
-                        display_generation,
-                    )
-                    .unwrap(),
+                    active_configuration_revision:
+                        d2b_contracts_zone_session::v3::ConfigurationGeneration::new(
+                            display_generation,
+                        )
+                        .unwrap(),
                     controller_generation: Some(
-                        d2b_contracts_zone_session::v3::ControllerGeneration::new(controller_generation)
-                            .unwrap(),
+                        d2b_contracts_zone_session::v3::ControllerGeneration::new(
+                            controller_generation,
+                        )
+                        .unwrap(),
                     ),
                 },
                 zone_policy_revision: ZoneRevision::new(display_generation),
@@ -5029,13 +5032,16 @@ mod tests {
                 PolicySnapshot {
                     policy_revision: display_generation,
                     api_catalog_revision: 1,
-                    active_configuration_revision: d2b_contracts_zone_session::v3::ConfigurationGeneration::new(
-                        display_generation,
-                    )
-                    .unwrap(),
+                    active_configuration_revision:
+                        d2b_contracts_zone_session::v3::ConfigurationGeneration::new(
+                            display_generation,
+                        )
+                        .unwrap(),
                     controller_generation: Some(
-                        d2b_contracts_zone_session::v3::ControllerGeneration::new(controller_generation)
-                            .unwrap(),
+                        d2b_contracts_zone_session::v3::ControllerGeneration::new(
+                            controller_generation,
+                        )
+                        .unwrap(),
                     ),
                 },
                 display_generation,
@@ -6001,9 +6007,11 @@ mod tests {
         let policy = PolicySnapshot {
             policy_revision: 7,
             api_catalog_revision: 1,
-            active_configuration_revision: d2b_contracts_zone_session::v3::ConfigurationGeneration::new(7)
-                .unwrap(),
-            controller_generation: Some(d2b_contracts_zone_session::v3::ControllerGeneration::new(17).unwrap()),
+            active_configuration_revision:
+                d2b_contracts_zone_session::v3::ConfigurationGeneration::new(7).unwrap(),
+            controller_generation: Some(
+                d2b_contracts_zone_session::v3::ControllerGeneration::new(17).unwrap(),
+            ),
         };
         let missing = ProductionInteractionResourceState::new(
             zone.clone(),

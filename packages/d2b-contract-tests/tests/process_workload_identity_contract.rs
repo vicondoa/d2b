@@ -466,12 +466,12 @@ fn processes_json_nix_emits_workload_identity_in_both_dag_functions() {
 /// broker request.
 #[test]
 fn vm_start_runner_struct_has_workload_identity_field() {
-    let lib = read_repo_file("packages/d2bd/src/lib.rs");
+    let lib = read_repo_file("packages/d2bd/src/composition.rs");
 
     // Find the struct VmStartRunner block and verify the field is there.
     let struct_start = lib
         .find("struct VmStartRunner")
-        .expect("VmStartRunner struct must be present in d2bd/src/lib.rs");
+        .expect("VmStartRunner struct must be present in d2bd/src/composition.rs");
     // The struct body ends at the first `}` after the struct declaration.
     let struct_body_end = lib[struct_start..]
         .find('}')
@@ -491,12 +491,12 @@ fn vm_start_runner_struct_has_workload_identity_field() {
 /// verifies the propagation path is wired.
 #[test]
 fn vm_start_runner_spawn_runner_uses_self_workload_identity() {
-    let lib = read_repo_file("packages/d2bd/src/lib.rs");
+    let lib = read_repo_file("packages/d2bd/src/composition.rs");
 
     // Find the spawn_runner function body inside VmStartRunner's impl block.
     let fn_start = lib
         .find("fn spawn_runner(")
-        .expect("spawn_runner fn must be present in d2bd/src/lib.rs");
+        .expect("spawn_runner fn must be present in d2bd/src/composition.rs");
 
     // Look for `SpawnRunner(BrokerSpawnRunnerRequest` within 5000 chars of
     // spawn_runner (the function is ~150 lines; 5000 chars is a safe window).
@@ -524,12 +524,12 @@ fn vm_start_runner_spawn_runner_uses_self_workload_identity() {
 /// these are framework infrastructure services, not realm workloads.
 #[test]
 fn broker_perenv_usbipd_spawner_workload_identity_is_none_and_documented() {
-    let lib = read_repo_file("packages/d2bd/src/lib.rs");
+    let lib = read_repo_file("packages/d2bd/src/composition.rs");
 
     // Locate BrokerPerEnvUsbipdSpawner struct definition.
     let struct_offset = lib
         .find("struct BrokerPerEnvUsbipdSpawner")
-        .expect("BrokerPerEnvUsbipdSpawner must be present in d2bd/src/lib.rs");
+        .expect("BrokerPerEnvUsbipdSpawner must be present in d2bd/src/composition.rs");
 
     // The spawn fn is after the struct; search from there.
     let spawn_offset = lib[struct_offset..]

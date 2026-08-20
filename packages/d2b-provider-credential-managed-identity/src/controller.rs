@@ -1,6 +1,5 @@
 //! Secret-free managed identity controller projections.
 
-use d2b_contracts_zone_session::v3::ResourceRef;
 use d2b_contracts_provider::v3::credential::{
     CredentialInteractionState, CredentialLeaseStatus, CredentialMetadata, CredentialMethod,
     CredentialServiceError, CredentialServiceErrorCode, CredentialStatus,
@@ -13,6 +12,7 @@ use d2b_contracts_provider::v3::credential_controller::{
     CredentialTelemetryOperation, CredentialTelemetryOutcome, observe_credential,
     reconcile_credential, revoke_credential,
 };
+use d2b_contracts_zone_session::v3::ResourceRef;
 
 use crate::{AGENT_BINARY, ManagedIdentityClientState, ManagedIdentityPlacement};
 

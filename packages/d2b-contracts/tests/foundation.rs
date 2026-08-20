@@ -44,7 +44,6 @@ fn wire_errors_preserve_stable_shape_and_reject_unknown_fields() {
             .as_str(),
         "wire-unknown-field"
     );
-
 }
 
 #[test]

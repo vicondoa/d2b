@@ -2273,25 +2273,26 @@ impl crate::registry::BusEndpoint for ComponentEndpoint {
             .resource_call()
             .and_then(ResourceCall::session_target)
             .cloned();
-        let authorization = if self.locality == d2b_contracts_zone_session::v3::Locality::AdjacentZone {
-            SessionAuthorizationRequest::relay(
-                request.route().service().clone(),
-                request.route().member().as_str(),
-                request.route().zone().clone(),
-                target,
-                verb,
-                request.route().zone().clone(),
-            )
-        } else {
-            SessionAuthorizationRequest::new(
-                verb,
-                request.route().service().clone(),
-                request.route().member().as_str(),
-                request.route().zone().clone(),
-                target,
-            )
-        }
-        .map_err(|_| EndpointError::Rejected)?;
+        let authorization =
+            if self.locality == d2b_contracts_zone_session::v3::Locality::AdjacentZone {
+                SessionAuthorizationRequest::relay(
+                    request.route().service().clone(),
+                    request.route().member().as_str(),
+                    request.route().zone().clone(),
+                    target,
+                    verb,
+                    request.route().zone().clone(),
+                )
+            } else {
+                SessionAuthorizationRequest::new(
+                    verb,
+                    request.route().service().clone(),
+                    request.route().member().as_str(),
+                    request.route().zone().clone(),
+                    target,
+                )
+            }
+            .map_err(|_| EndpointError::Rejected)?;
         let permit = {
             let mut session = self.session.lock().await;
             session

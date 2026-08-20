@@ -4,8 +4,7 @@ use schemars::{
     JsonSchema,
     r#gen::SchemaGenerator,
     schema::{
-        InstanceType, Schema, SchemaObject, SingleOrVec, StringValidation,
-        SubschemaValidation,
+        InstanceType, Schema, SchemaObject, SingleOrVec, StringValidation, SubschemaValidation,
     },
 };
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
@@ -456,7 +455,10 @@ fn parse_sha256(value: impl Into<String>, class: IdentityClass) -> Result<String
         });
     }
     let valid = value.strip_prefix("sha256:").is_some_and(|hex| {
-        hex.len() == 64 && hex.bytes().all(|byte| byte.is_ascii_digit() || matches!(byte, b'a'..=b'f'))
+        hex.len() == 64
+            && hex
+                .bytes()
+                .all(|byte| byte.is_ascii_digit() || matches!(byte, b'a'..=b'f'))
     });
     if !valid {
         return Err(IdentityError::InvalidShape { class });

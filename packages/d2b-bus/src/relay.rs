@@ -23,7 +23,9 @@
 //!   intermediate hop forwards; the target Zone is the single dedup owner.
 
 use d2b_contracts_zone_session::v3::zone_routing::ZoneRouteFailClosedReason;
-use d2b_contracts_zone_session::v3::{AuthenticatedSubjectContext, Locality, zone_routing::ZonePath};
+use d2b_contracts_zone_session::v3::{
+    AuthenticatedSubjectContext, Locality, zone_routing::ZonePath,
+};
 use d2b_resource_api::authz::{PositiveCapabilities, SessionVerb};
 
 use crate::zone_route::ForwardedEnvelope;

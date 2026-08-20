@@ -1,7 +1,5 @@
 use d2b_contract_tests::read_repo_file;
-use d2b_contracts::{
-    types::MediaRef,
-};
+use d2b_contracts::types::MediaRef;
 use d2b_contracts_control::{
     guest_wire::{
         GUEST_CONTROL_PROTOCOL_VERSION, GuestRequestMetadata, GuestUsbipBusId, GuestUsbipHost,

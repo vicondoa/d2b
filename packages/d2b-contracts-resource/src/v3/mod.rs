@@ -41,16 +41,16 @@ pub use identity::{
 pub mod ifname {
     pub use d2b_contracts::v3::ifname::*;
 }
-pub use ifname::*;
 pub use d2b_contracts::identity::ResourceRef;
+pub use ifname::*;
 pub use limits::*;
 pub use network::*;
 pub use process::*;
 pub use quota::*;
 pub use resource::{
     DisruptiveUpdateMode, FinalizerId, ManagedBy, NonDisruptiveUpdateMode, PresentationMetadata,
-    ProviderSpecExtension, ResourceEnvelope, ResourceError as ResourceObjectError, ResourceMetadata,
-    ResourceSpec, UpdatePolicy,
+    ProviderSpecExtension, ResourceEnvelope, ResourceError as ResourceObjectError,
+    ResourceMetadata, ResourceSpec, UpdatePolicy,
 };
 pub use resource_schema::*;
 pub use resource_status::*;

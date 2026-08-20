@@ -11,14 +11,12 @@
 //! set.
 
 use d2b_contract_tests::{read_repo_file, repo_path_exists};
-use d2b_contracts::{
-    security_key::{
-        SecurityKeyApplyUdevRulesRequest, SecurityKeyCancelRequest, SecurityKeyDeviceLabel,
-        SecurityKeyDeviceStatus, SecurityKeyEvent, SecurityKeyLeaseState,
-        SecurityKeyOpenDeviceRequest, SecurityKeySession, SecurityKeySessionId,
-        SecurityKeySessionResult, SecurityKeySessionsResponse, SecurityKeyStatusResponse,
-        SecurityKeyVmSessionState, SecurityKeyVmState,
-    },
+use d2b_contracts::security_key::{
+    SecurityKeyApplyUdevRulesRequest, SecurityKeyCancelRequest, SecurityKeyDeviceLabel,
+    SecurityKeyDeviceStatus, SecurityKeyEvent, SecurityKeyLeaseState, SecurityKeyOpenDeviceRequest,
+    SecurityKeySession, SecurityKeySessionId, SecurityKeySessionResult,
+    SecurityKeySessionsResponse, SecurityKeyStatusResponse, SecurityKeyVmSessionState,
+    SecurityKeyVmState,
 };
 use d2b_contracts_broker::{BrokerCapabilities, broker_wire::BrokerRequest};
 use d2b_contracts_control::public_wire::{PublicRequest, PublicResponse};

@@ -12,10 +12,10 @@
 
 use std::collections::BTreeMap;
 
-use d2b_contracts_zone_session::v3::identity::BindingDigest;
 use d2b_contracts_resource::v3::ArtifactId;
+use d2b_contracts_zone_session::v3::identity::BindingDigest;
 use d2b_contracts_zone_session::v3::{
-    Locality, TransportBinding,
+    Locality, ResourceRef, TransportBinding,
     execution_policy::{BoundedToken, ExecutionDomain},
     identity::{ResourceTypeName, SchemaFingerprint, SessionPurpose},
     provider::{
@@ -25,7 +25,6 @@ use d2b_contracts_zone_session::v3::{
         ProviderSpec, ResourceApiBinding, RevocationState, SignatureState,
         StandardCapabilityMatrix, StorageNeed, TrustEvidence, UpgradeDisposition, UpgradePolicy,
     },
-    ResourceRef,
     resource_schema::SchemaVersion,
     volume::ViewRight,
     volume_state::{MigrationPolicy, PersistenceClass, SensitivityClass, VolumeStateSchemaId},

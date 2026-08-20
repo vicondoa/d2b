@@ -5,12 +5,12 @@
 //! metadata.  The adapter traits below therefore do not expose a transport,
 //! stream, file descriptor, path, backing handle, or remote reference.
 
-use d2b_contracts_zone_session::v3::{
-    ResourceEnvelope, ResourceExportSpec, ResourceImportSpec, ResourceRef, ResourceTypeName,
-};
 use d2b_contracts_provider::v3::{
     BindingTargetType, Exportability, ProjectionFactory, ProviderContractError,
     SEMANTIC_PROJECTION_PROTOCOL_VERSION, SemanticProjectionProtocolVersion,
+};
+use d2b_contracts_zone_session::v3::{
+    ResourceEnvelope, ResourceExportSpec, ResourceImportSpec, ResourceRef, ResourceTypeName,
 };
 
 /// Why a Provider-side share admission was refused.
@@ -260,9 +260,8 @@ pub const fn service_type(factory: &ProjectionFactory) -> &ResourceTypeName {
 mod tests {
     use d2b_contracts_provider::v3::BindingTargetType;
     use d2b_contracts_zone_session::v3::{
-        ConsumerZonePolicy, ExportArbitration, ResourceExportSpec,
-        ResourceImportSpec, ResourceName, ResourceTypeName, SchemaFingerprint,
-        execution_policy::BoundedToken,
+        ConsumerZonePolicy, ExportArbitration, ResourceExportSpec, ResourceImportSpec,
+        ResourceName, ResourceTypeName, SchemaFingerprint, execution_policy::BoundedToken,
     };
 
     use super::*;

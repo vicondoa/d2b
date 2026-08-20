@@ -1,7 +1,5 @@
 use d2b_contracts::usbip::{SYSFS_BUS_ID_MAX, validate_bus_id};
-use d2b_contracts_broker::broker_wire::{
-    ApplyNftablesProjectionRequest, NftablesProjectionAction,
-};
+use d2b_contracts_broker::broker_wire::{ApplyNftablesProjectionRequest, NftablesProjectionAction};
 use d2b_provider_device_usbip::{
     AttachmentActivation, AttachmentCommand, FirewallProjectionAction, PROVIDER_REF,
     USB_BINDING_RESOURCE_TYPE, USB_SERVICE_RESOURCE_TYPE, UsbipEffectError, UsbipWorkerClass,

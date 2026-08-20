@@ -99,10 +99,10 @@ an existing path → fail-closed.
 ## Implementation
 
 - Pure check:
-  [`d2bd::ssh_host_key_preflight::check_sshd_host_keys`](../../packages/d2bd/src/ssh_host_key_preflight.rs) -
+  [`d2bd_runtime::ssh_host_key_preflight::check_sshd_host_keys`](../../packages/d2bd-runtime/src/ssh_host_key_preflight.rs) -
   takes `(vm, keys_dir)`, returns `Result<(), SshdHostKeyDrift>`.
 - Typed error:
-  [`TypedError::SshdHostKeyDrift`](../../packages/d2bd/src/typed_error.rs) -
+  [`TypedError::SshdHostKeyDrift`](../../packages/d2bd-runtime/src/typed_error.rs) -
   exit code `62`, kind `sshd-host-key-drift`.
 - Call sites:
   1. `dispatch_broker_vm_start` runs the preflight inline after
@@ -120,10 +120,11 @@ an existing path → fail-closed.
 ## Tests
 
 - Unit:
-  [`d2bd::ssh_host_key_preflight::tests`](../../packages/d2bd/src/ssh_host_key_preflight.rs)
+  [`d2bd_runtime::ssh_host_key_preflight::tests`](../../packages/d2bd-runtime/src/ssh_host_key_preflight.rs)
   exhaustively covers each drift class against a tempdir-built
   fixture.
-- The `test-rust` workspace run executes those unit tests alongside the
+- The Bazel target `//packages/d2bd-runtime:d2bd_runtime_test` executes those
+  unit tests alongside the
   `TypedError::SshdHostKeyDrift` envelope-shape assertion.
 
 ## Spec correction

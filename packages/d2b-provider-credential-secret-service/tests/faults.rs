@@ -437,10 +437,11 @@ impl Oo7SecretServicePort for DelayedUnlockPort {
                     "secret-service-lease",
                 )
                 .unwrap(),
-                source_version: d2b_contracts_provider::v3::credential::CredentialSourceVersion::parse(
-                    "secret-service-source",
-                )
-                .unwrap(),
+                source_version:
+                    d2b_contracts_provider::v3::credential::CredentialSourceVersion::parse(
+                        "secret-service-source",
+                    )
+                    .unwrap(),
                 rotation_generation: 1,
                 expires_at_unix_ms: expiry,
             })

@@ -1114,8 +1114,7 @@ pub fn catalog() -> [&'static SemanticPairContract; 4] {
 pub(crate) mod tests_support {
     use super::*;
     use crate::v3::{
-        ResourceName,
-        ResourceRef,
+        ResourceName, ResourceRef,
         resource_schema::{
             CanonicalJsonObject, CanonicalJsonValue, ExtensionSchemaId, ExtensionSchemaLayer,
         },
@@ -1286,7 +1285,10 @@ pub(crate) mod tests_support {
                 probe_outcome(
                     contract,
                     provider_ref,
-                    CanonicalJsonObject::from_inner(values),
+                    CanonicalJsonObject::parse(
+                        &CanonicalJsonValue::Object(values).to_canonical_bytes(),
+                    )
+                    .expect("probe object stays canonical"),
                 ),
             ));
         }
@@ -1300,7 +1302,10 @@ pub(crate) mod tests_support {
                 probe_outcome(
                     contract,
                     provider_ref,
-                    CanonicalJsonObject::from_inner(values),
+                    CanonicalJsonObject::parse(
+                        &CanonicalJsonValue::Object(values).to_canonical_bytes(),
+                    )
+                    .expect("probe object stays canonical"),
                 ),
             ));
         }
@@ -1504,8 +1509,7 @@ pub(crate) mod tests_support {
 mod tests {
     use super::*;
     use crate::v3::{
-        ResourceName,
-        ResourceRef,
+        ResourceName, ResourceRef,
         resource_schema::{CanonicalJsonObject, ExtensionSchemaId, ExtensionSchemaLayer},
     };
 

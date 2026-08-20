@@ -223,7 +223,7 @@ in
 
   # d2bd autostart contract knobs.
   # The Rust implementation lives in
-  # packages/d2bd/src/autostart.rs; the contract is described in
+  # packages/d2bd-runtime/src/autostart.rs; the contract is described in
   # docs/reference/daemon-autostart.md.
   options.d2b.daemon.autostart = {
     parallelism = lib.mkOption {

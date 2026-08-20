@@ -124,7 +124,7 @@ and the exact remediation command (`d2b vm restart <vm>` for clean down+up,
 ## Adding new per-VM behaviour
 
 New per-VM work belongs **inside the daemon's DAG executor**
-(`packages/d2bd/src/supervisor/`), with privileged effects routed through a
+(`packages/d2bd-runtime/src/supervisor/`), with privileged effects routed through a
 typed `d2b-priv-broker` op declared in `packages/d2b-contracts/` and audited in
 `/var/lib/d2b/audit/broker-<utc-date>.jsonl`. Do not introduce a
 `systemd.services.*` declaration in `nixos-modules/` for per-VM work. Denylist

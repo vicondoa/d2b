@@ -26,9 +26,9 @@
 //! that has already been reached, not a capability that can be presented.
 
 use d2b_contracts_zone_session::v3::{
+    ResourceRef,
     identity::SchemaFingerprint,
     provider::{ProviderManifest, ProviderSpec},
-    ResourceRef,
 };
 
 use crate::{descriptor::ProviderDescriptor, error::RegistryBuildError};
@@ -182,6 +182,7 @@ fn publishes_only_signed_methods(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use d2b_contracts_resource::v3::ArtifactId;
     use d2b_contracts_zone_session::v3::{
         execution_policy::{BoundedToken, ExecutionDomain},
         identity::{ConfigurationGeneration, ResourceGeneration, ResourceTypeName, ServiceName},
@@ -193,7 +194,6 @@ mod tests {
         resource_schema::SchemaVersion,
         zone_routing::ZonePath,
     };
-    use d2b_contracts_resource::v3::ArtifactId;
 
     use crate::identity::{
         ProviderCapabilitySet, ProviderClass, ProviderImplementationId, ProviderMethodName,

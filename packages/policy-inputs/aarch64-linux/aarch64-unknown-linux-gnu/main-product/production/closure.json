@@ -80,7 +80,7 @@
   "features": [],
   "default_features": true,
   "source_authority": "Cargo.lock",
-  "lock_sha256": "1dc815c9760827df79b4f6c2c3d8e0221962f51d8917d3f1c6c973a7e504f1bc",
+  "lock_sha256": "e33a4149a2198518289f2afaa7a69688eb59cb70502e07dd03eec10bc96c06c2",
   "packages": [
     {
       "id": "adler2@2.0.1#registry+https://github.com/rust-lang/crates.io-index",
@@ -3491,11 +3491,11 @@
       "target": "aarch64-unknown-linux-gnu"
     },
     {
-      "id": "zerovec@0.11.7#registry+https://github.com/rust-lang/crates.io-index",
+      "id": "zerovec@0.11.8#registry+https://github.com/rust-lang/crates.io-index",
       "name": "zerovec",
-      "version": "0.11.7",
+      "version": "0.11.8",
       "source": "registry+https://github.com/rust-lang/crates.io-index",
-      "checksum": "94b5c6b5976d66c1d703c4fd17d3f5e43c8cedaacf604961b171adc7130896d8",
+      "checksum": "bb0464e17806c1d976d5cba29399c7f08e516e279e2ba493f63123b5fca67dd8",
       "target": "aarch64-unknown-linux-gnu"
     },
     {
@@ -5065,12 +5065,6 @@
     {
       "from": "d2b-core-controller@0.0.0-bootstrap#path",
       "to": "d2b-controller-toolkit@0.0.0-bootstrap#path",
-      "kind": "normal",
-      "target": null
-    },
-    {
-      "from": "d2b-core-controller@0.0.0-bootstrap#path",
-      "to": "d2b-provider-system-core@0.0.0-bootstrap#path",
       "kind": "normal",
       "target": null
     },
@@ -8250,7 +8244,7 @@
     },
     {
       "from": "icu_collections@2.3.0#registry+https://github.com/rust-lang/crates.io-index",
-      "to": "zerovec@0.11.7#registry+https://github.com/rust-lang/crates.io-index",
+      "to": "zerovec@0.11.8#registry+https://github.com/rust-lang/crates.io-index",
       "kind": "normal",
       "target": null
     },
@@ -8280,7 +8274,7 @@
     },
     {
       "from": "icu_locale_core@2.3.0#registry+https://github.com/rust-lang/crates.io-index",
-      "to": "zerovec@0.11.7#registry+https://github.com/rust-lang/crates.io-index",
+      "to": "zerovec@0.11.8#registry+https://github.com/rust-lang/crates.io-index",
       "kind": "normal",
       "target": null
     },
@@ -8316,7 +8310,7 @@
     },
     {
       "from": "icu_normalizer@2.3.0#registry+https://github.com/rust-lang/crates.io-index",
-      "to": "zerovec@0.11.7#registry+https://github.com/rust-lang/crates.io-index",
+      "to": "zerovec@0.11.8#registry+https://github.com/rust-lang/crates.io-index",
       "kind": "normal",
       "target": null
     },
@@ -8358,7 +8352,7 @@
     },
     {
       "from": "icu_properties@2.3.0#registry+https://github.com/rust-lang/crates.io-index",
-      "to": "zerovec@0.11.7#registry+https://github.com/rust-lang/crates.io-index",
+      "to": "zerovec@0.11.8#registry+https://github.com/rust-lang/crates.io-index",
       "kind": "normal",
       "target": null
     },
@@ -8400,7 +8394,7 @@
     },
     {
       "from": "icu_provider@2.3.0#registry+https://github.com/rust-lang/crates.io-index",
-      "to": "zerovec@0.11.7#registry+https://github.com/rust-lang/crates.io-index",
+      "to": "zerovec@0.11.8#registry+https://github.com/rust-lang/crates.io-index",
       "kind": "normal",
       "target": null
     },
@@ -8994,7 +8988,7 @@
     },
     {
       "from": "potential_utf@0.1.6#registry+https://github.com/rust-lang/crates.io-index",
-      "to": "zerovec@0.11.7#registry+https://github.com/rust-lang/crates.io-index",
+      "to": "zerovec@0.11.8#registry+https://github.com/rust-lang/crates.io-index",
       "kind": "normal",
       "target": null
     },
@@ -10524,7 +10518,7 @@
     },
     {
       "from": "tinystr@0.8.4#registry+https://github.com/rust-lang/crates.io-index",
-      "to": "zerovec@0.11.7#registry+https://github.com/rust-lang/crates.io-index",
+      "to": "zerovec@0.11.8#registry+https://github.com/rust-lang/crates.io-index",
       "kind": "normal",
       "target": null
     },
@@ -12071,19 +12065,19 @@
       "target": null
     },
     {
-      "from": "zerovec@0.11.7#registry+https://github.com/rust-lang/crates.io-index",
+      "from": "zerovec@0.11.8#registry+https://github.com/rust-lang/crates.io-index",
       "to": "yoke@0.8.3#registry+https://github.com/rust-lang/crates.io-index",
       "kind": "normal",
       "target": null
     },
     {
-      "from": "zerovec@0.11.7#registry+https://github.com/rust-lang/crates.io-index",
+      "from": "zerovec@0.11.8#registry+https://github.com/rust-lang/crates.io-index",
       "to": "zerofrom@0.1.8#registry+https://github.com/rust-lang/crates.io-index",
       "kind": "normal",
       "target": null
     },
     {
-      "from": "zerovec@0.11.7#registry+https://github.com/rust-lang/crates.io-index",
+      "from": "zerovec@0.11.8#registry+https://github.com/rust-lang/crates.io-index",
       "to": "zerovec-derive@0.11.5#registry+https://github.com/rust-lang/crates.io-index",
       "kind": "proc-macro",
       "target": null

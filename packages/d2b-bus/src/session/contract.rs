@@ -281,7 +281,9 @@ impl ZoneEndpointPolicyIdentity {
 #[cfg(test)]
 pub(crate) mod fixtures {
     use super::*;
-    use d2b_contracts_zone_session::v3::zone_session::{IdentityEvidenceRequirement, Locality, TransportClass};
+    use d2b_contracts_zone_session::v3::zone_session::{
+        IdentityEvidenceRequirement, Locality, TransportClass,
+    };
 
     /// The enrolled ZoneLink policy: `Noise_KK` over adjacent-Zone carriage.
     ///

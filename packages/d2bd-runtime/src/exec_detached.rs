@@ -26,14 +26,24 @@ use crate::guest_control_bridge::{
     BrokerSigner, GUEST_CONTROL_ATTEMPT_CAP, ProbeParams, VMADDR_CID_HOST,
     connect_and_build_client, host_nonce,
 };
+use crate::exec_session_real;
 use crate::guest_control_health::{
     AttemptBudget, GuestControlHealthError, TtrpcGuestControlClient, probe_guest_control_health,
 };
 use crate::typed_error::TypedError;
-use crate::{
-    ServerState, broker_socket_path, exec_session_real, load_bundle_resolver,
-    resolve_guest_control_probe_params,
-};
+use d2b_core::bundle_resolver::BundleResolver;
+
+pub trait DetachedExecContext {
+    fn load_bundle_resolver(&self) -> Result<BundleResolver, TypedError>;
+
+    fn resolve_guest_control_probe_params(
+        &self,
+        resolver: &BundleResolver,
+        vm: &str,
+    ) -> Result<ProbeParams, String>;
+
+    fn broker_socket_path(&self) -> PathBuf;
+}
 
 // Host-side deadline for the ExecCreate RPC. guestd's detached registry
 // waits up to 10 s for the runner to write its status file
@@ -46,7 +56,7 @@ const DETACHED_CREATE_GUEST_WINDOW: Duration = Duration::from_millis(10_000);
 #[cfg(test)]
 const DETACHED_CANCEL_GUEST_WINDOW: Duration = Duration::from_millis(15_000);
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 use std::sync::{Arc, Mutex, OnceLock};
 
 #[derive(Debug)]
@@ -76,9 +86,9 @@ enum DetachedRealResponse {
     Kill(ExecDetachedKillResult),
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub(crate) enum DetachedTestRequest {
+pub enum DetachedTestRequest {
     Create {
         vm: String,
         request_id: Option<String>,
@@ -106,9 +116,9 @@ pub(crate) enum DetachedTestRequest {
     },
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 #[derive(Clone, Debug)]
-pub(crate) enum DetachedTestResponse {
+pub enum DetachedTestResponse {
     Create(ExecDetachedCreateResult),
     List(ExecDetachedListResult),
     Status(ExecDetachedStatusResult),
@@ -116,11 +126,11 @@ pub(crate) enum DetachedTestResponse {
     Kill(ExecDetachedKillResult),
 }
 
-#[cfg(test)]
-pub(crate) type DetachedTestHook =
+#[cfg(any(test, feature = "test-support"))]
+pub type DetachedTestHook =
     Arc<dyn Fn(DetachedTestRequest) -> Result<DetachedTestResponse, TypedError> + Send + Sync>;
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 fn hook_slot() -> &'static Mutex<Option<DetachedTestHook>> {
     static HOOK: OnceLock<Mutex<Option<DetachedTestHook>>> = OnceLock::new();
     HOOK.get_or_init(|| Mutex::new(None))
@@ -133,16 +143,16 @@ fn hook_slot() -> &'static Mutex<Option<DetachedTestHook>> {
 // and the routed response mismatches). `set_test_hook` takes this lock and the
 // returned guard holds it for the whole test body, so hook-using tests run
 // one-at-a-time without forcing `--test-threads=1` on the rest of the suite.
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 fn hook_serial() -> &'static Mutex<()> {
     static SERIAL: OnceLock<Mutex<()>> = OnceLock::new();
     SERIAL.get_or_init(|| Mutex::new(()))
 }
 
-#[cfg(test)]
-pub(crate) struct DetachedTestHookGuard(#[allow(dead_code)] std::sync::MutexGuard<'static, ()>);
+#[cfg(any(test, feature = "test-support"))]
+pub struct DetachedTestHookGuard(#[allow(dead_code)] std::sync::MutexGuard<'static, ()>);
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 impl Drop for DetachedTestHookGuard {
     fn drop(&mut self) {
         // Clear the hook before the serial guard (field) is released, so the
@@ -151,8 +161,8 @@ impl Drop for DetachedTestHookGuard {
     }
 }
 
-#[cfg(test)]
-pub(crate) fn set_test_hook(hook: DetachedTestHook) -> DetachedTestHookGuard {
+#[cfg(any(test, feature = "test-support"))]
+pub fn set_test_hook(hook: DetachedTestHook) -> DetachedTestHookGuard {
     let serial = hook_serial()
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner);
@@ -160,7 +170,7 @@ pub(crate) fn set_test_hook(hook: DetachedTestHook) -> DetachedTestHookGuard {
     DetachedTestHookGuard(serial)
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 fn test_hook(request: DetachedTestRequest) -> Option<Result<DetachedTestResponse, TypedError>> {
     hook_slot()
         .lock()
@@ -170,15 +180,15 @@ fn test_hook(request: DetachedTestRequest) -> Option<Result<DetachedTestResponse
 }
 
 #[allow(dead_code)]
-pub(crate) fn create(
-    state: &ServerState,
+pub fn create(
+    state: &impl DetachedExecContext,
     start: &public_wire::ExecStartArgs,
 ) -> Result<ExecDetachedCreateResult, TypedError> {
     create_with_request_id(state, start, None, BrokerCallerRole::NotAuthorized)
 }
 
-pub(crate) fn create_as(
-    state: &ServerState,
+pub fn create_as(
+    state: &impl DetachedExecContext,
     start: &public_wire::ExecStartArgs,
     caller_role: BrokerCallerRole,
 ) -> Result<ExecDetachedCreateResult, TypedError> {
@@ -186,8 +196,8 @@ pub(crate) fn create_as(
 }
 
 #[allow(dead_code)]
-pub(crate) fn create_idempotent(
-    state: &ServerState,
+pub fn create_idempotent(
+    state: &impl DetachedExecContext,
     start: &public_wire::ExecStartArgs,
     request_id: String,
 ) -> Result<ExecDetachedCreateResult, TypedError> {
@@ -199,8 +209,8 @@ pub(crate) fn create_idempotent(
     )
 }
 
-pub(crate) fn create_idempotent_as(
-    state: &ServerState,
+pub fn create_idempotent_as(
+    state: &impl DetachedExecContext,
     start: &public_wire::ExecStartArgs,
     request_id: String,
     caller_role: BrokerCallerRole,
@@ -209,12 +219,12 @@ pub(crate) fn create_idempotent_as(
 }
 
 fn create_with_request_id(
-    state: &ServerState,
+    state: &impl DetachedExecContext,
     start: &public_wire::ExecStartArgs,
     request_id: Option<String>,
     caller_role: BrokerCallerRole,
 ) -> Result<ExecDetachedCreateResult, TypedError> {
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     if let Some(result) = test_hook(DetachedTestRequest::Create {
         vm: start.vm.clone(),
         request_id: request_id.clone(),
@@ -258,11 +268,11 @@ fn create_with_request_id(
 }
 
 #[allow(dead_code)]
-pub(crate) fn list(
-    state: &ServerState,
+pub fn list(
+    state: &impl DetachedExecContext,
     args: &public_wire::ExecDetachedListArgs,
 ) -> Result<ExecDetachedListResult, TypedError> {
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     if let Some(result) = test_hook(DetachedTestRequest::List {
         vm: args.vm.clone(),
     }) {
@@ -285,12 +295,12 @@ pub(crate) fn list(
     }
 }
 
-pub(crate) fn list_as(
-    state: &ServerState,
+pub fn list_as(
+    state: &impl DetachedExecContext,
     args: &public_wire::ExecDetachedListArgs,
     caller_role: BrokerCallerRole,
 ) -> Result<ExecDetachedListResult, TypedError> {
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     if let Some(result) = test_hook(DetachedTestRequest::List {
         vm: args.vm.clone(),
     }) {
@@ -308,11 +318,11 @@ pub(crate) fn list_as(
 }
 
 #[allow(dead_code)]
-pub(crate) fn status(
-    state: &ServerState,
+pub fn status(
+    state: &impl DetachedExecContext,
     args: &public_wire::ExecDetachedStatusArgs,
 ) -> Result<ExecDetachedStatusResult, TypedError> {
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     if let Some(result) = test_hook(DetachedTestRequest::Status {
         vm: args.vm.clone(),
         exec_id: args.exec_id.clone(),
@@ -338,12 +348,12 @@ pub(crate) fn status(
     }
 }
 
-pub(crate) fn status_as(
-    state: &ServerState,
+pub fn status_as(
+    state: &impl DetachedExecContext,
     args: &public_wire::ExecDetachedStatusArgs,
     caller_role: BrokerCallerRole,
 ) -> Result<ExecDetachedStatusResult, TypedError> {
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     if let Some(result) = test_hook(DetachedTestRequest::Status {
         vm: args.vm.clone(),
         exec_id: args.exec_id.clone(),
@@ -369,11 +379,11 @@ pub(crate) fn status_as(
 }
 
 #[allow(dead_code)]
-pub(crate) fn logs(
-    state: &ServerState,
+pub fn logs(
+    state: &impl DetachedExecContext,
     args: &public_wire::ExecDetachedLogsArgs,
 ) -> Result<ExecDetachedLogsResult, TypedError> {
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     if let Some(result) = test_hook(DetachedTestRequest::Logs {
         vm: args.vm.clone(),
         exec_id: args.exec_id.clone(),
@@ -405,12 +415,12 @@ pub(crate) fn logs(
     }
 }
 
-pub(crate) fn logs_as(
-    state: &ServerState,
+pub fn logs_as(
+    state: &impl DetachedExecContext,
     args: &public_wire::ExecDetachedLogsArgs,
     caller_role: BrokerCallerRole,
 ) -> Result<ExecDetachedLogsResult, TypedError> {
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     if let Some(result) = test_hook(DetachedTestRequest::Logs {
         vm: args.vm.clone(),
         exec_id: args.exec_id.clone(),
@@ -442,11 +452,11 @@ pub(crate) fn logs_as(
 }
 
 #[allow(dead_code)]
-pub(crate) fn kill(
-    state: &ServerState,
+pub fn kill(
+    state: &impl DetachedExecContext,
     args: &public_wire::ExecDetachedKillArgs,
 ) -> Result<ExecDetachedKillResult, TypedError> {
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     if let Some(result) = test_hook(DetachedTestRequest::Kill {
         vm: args.vm.clone(),
         exec_id: args.exec_id.clone(),
@@ -472,12 +482,12 @@ pub(crate) fn kill(
     }
 }
 
-pub(crate) fn kill_as(
-    state: &ServerState,
+pub fn kill_as(
+    state: &impl DetachedExecContext,
     args: &public_wire::ExecDetachedKillArgs,
     caller_role: BrokerCallerRole,
 ) -> Result<ExecDetachedKillResult, TypedError> {
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     if let Some(result) = test_hook(DetachedTestRequest::Kill {
         vm: args.vm.clone(),
         exec_id: args.exec_id.clone(),
@@ -503,16 +513,18 @@ pub(crate) fn kill_as(
 }
 
 fn run_real(
-    state: &ServerState,
+    state: &impl DetachedExecContext,
     vm: &str,
     caller_role: BrokerCallerRole,
     request: DetachedRealRequest,
 ) -> Result<DetachedRealResponse, TypedError> {
-    let resolver =
-        load_bundle_resolver(state).map_err(|_| exec_typed_error(ExecOpError::Transport))?;
-    let params = resolve_guest_control_probe_params(state, &resolver, vm)
+    let resolver = state
+        .load_bundle_resolver()
+        .map_err(|_| exec_typed_error(ExecOpError::Transport))?;
+    let params = state
+        .resolve_guest_control_probe_params(&resolver, vm)
         .map_err(|_| exec_typed_error(ExecOpError::OldGeneration))?;
-    let broker_socket = broker_socket_path(state);
+    let broker_socket = state.broker_socket_path();
     run_detached_request(params, broker_socket, caller_role, request)
 }
 
@@ -534,7 +546,7 @@ fn run_detached_request(
     caller_role: BrokerCallerRole,
     request: DetachedRealRequest,
 ) -> Result<DetachedRealResponse, TypedError> {
-    crate::block_on_future(async move {
+    crate::runtime_util::block_on_future(async move {
         let client = DetachedClient::connect(params, broker_socket, caller_role).await?;
         match request {
             DetachedRealRequest::Create(spec) => client
@@ -565,7 +577,7 @@ fn run_detached_request(
 }
 
 fn exec_typed_error(error: ExecOpError) -> TypedError {
-    crate::map_exec_op_error(error)
+    crate::exec_support::map_exec_op_error(error)
 }
 
 fn internal_error(detail: impl Into<String>) -> TypedError {
@@ -924,7 +936,7 @@ fn common_metadata(vm_id: &str, request_id: &str) -> pb::RequestMetadata {
     metadata
 }
 
-pub(crate) fn gate_detached_capabilities(
+pub fn gate_detached_capabilities(
     capabilities: &[EnumOrUnknown<pb::GuestCapability>],
 ) -> Result<(), ExecOpError> {
     let advertises = |cap: pb::GuestCapability| {
@@ -1524,7 +1536,7 @@ mod tests {
             gate_detached_capabilities(&caps),
             Err(ExecOpError::DetachedUnavailable)
         );
-        let typed = crate::map_exec_op_error(ExecOpError::DetachedUnavailable);
+        let typed = crate::exec_support::map_exec_op_error(ExecOpError::DetachedUnavailable);
         assert_eq!(typed.kind(), "guest-control-exec-detached-unavailable");
         assert!(typed.message().contains("detached exec"));
     }

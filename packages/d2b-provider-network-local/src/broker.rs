@@ -6,14 +6,12 @@
 
 use std::fmt;
 
-use d2b_contracts::{
-    types::{BundleOpId, ScopeId, VmId},
-};
+use d2b_contracts::types::{BundleOpId, ScopeId, VmId};
+use d2b_contracts_broker::broker_wire::NftablesProjectionAction;
 use d2b_contracts_zone_session::v3::{
     ResourceBundleGenerationId, ResourceUid,
     network::{AttachmentGenerationFence, AttachmentHandle, NetworkSpec},
 };
-use d2b_contracts_broker::broker_wire::NftablesProjectionAction;
 
 use crate::controller::{FirewallDigest, FirewallIntent, NetworkEffectError, NetworkEffectPort};
 
@@ -382,9 +380,8 @@ mod tests {
     };
 
     use super::*;
-    use d2b_contracts::{
-        types::{BundleOpId, ScopeId, VmId},
-    };
+    use d2b_contracts::types::{BundleOpId, ScopeId, VmId};
+    use d2b_contracts_broker::broker_wire::NftablesProjectionAction;
     use d2b_contracts_zone_session::v3::{
         ResourceBundleGenerationId, ResourceUid,
         execution_policy::BoundedToken,
@@ -395,7 +392,6 @@ mod tests {
             NetworkSpec, SharingPolicy,
         },
     };
-    use d2b_contracts_broker::broker_wire::NftablesProjectionAction;
 
     #[derive(Clone, Default)]
     struct RecordingBroker {

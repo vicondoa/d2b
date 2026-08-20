@@ -1,10 +1,10 @@
 use std::collections::BTreeMap;
 
+use d2b_contracts_zone_session::v3::{BundleMetadata, BundleResource, ZoneBundle};
 use d2b_contracts_zone_session::v3::{
     CanonicalJsonObject, ConfigurationGeneration, ResourceName, ResourceTypeName,
     SchemaFingerprint, Timestamp, ZoneId,
 };
-use d2b_contracts_zone_session::v3::{BundleMetadata, BundleResource, ZoneBundle};
 use d2b_core_controller::{
     configuration::{
         ActivationOutcome, BundleResource as PlannedResource, CanonicalSpec, ConfigurationService,

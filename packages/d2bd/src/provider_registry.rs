@@ -12,12 +12,15 @@ use std::{
     sync::{Arc, RwLock},
 };
 
+use d2b_contracts_broker::broker_wire::BrokerCallerRole;
 use d2b_contracts_zone_session::v3::{
     ResourceRef,
-    identity::{ConfigurationGeneration, ResourceGeneration, ResourceName, SchemaFingerprint, ServiceName, ZoneId},
+    identity::{
+        ConfigurationGeneration, ResourceGeneration, ResourceName, SchemaFingerprint, ServiceName,
+        ZoneId,
+    },
     zone_routing::{ZoneLabelId, ZonePath},
 };
-use d2b_contracts_broker::broker_wire::BrokerCallerRole;
 use d2b_core::host::HostJson;
 use d2b_provider::instance::ProviderInstance;
 use d2b_provider::{

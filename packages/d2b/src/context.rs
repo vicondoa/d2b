@@ -1524,13 +1524,18 @@ fn decode_cli_response(response: &[u8]) -> Result<CanonicalJsonObject, ClientErr
     CanonicalJsonObject::parse(response).map_err(|_| ClientError::ContractViolation)
 }
 
-fn zone_path(zone_name: &str) -> Result<d2b_contracts_zone_session::v3::zone_routing::ZonePath, ()> {
-    let label = d2b_contracts_zone_session::v3::zone_routing::ZoneLabelId::parse(zone_name.to_owned())
-        .map_err(|_| ())?;
+fn zone_path(
+    zone_name: &str,
+) -> Result<d2b_contracts_zone_session::v3::zone_routing::ZonePath, ()> {
+    let label =
+        d2b_contracts_zone_session::v3::zone_routing::ZoneLabelId::parse(zone_name.to_owned())
+            .map_err(|_| ())?;
     d2b_contracts_zone_session::v3::zone_routing::ZonePath::new(vec![label]).map_err(|_| ())
 }
 
-fn owner_for_zone(zone_path: &d2b_contracts_zone_session::v3::zone_routing::ZonePath) -> ServiceOwner {
+fn owner_for_zone(
+    zone_path: &d2b_contracts_zone_session::v3::zone_routing::ZonePath,
+) -> ServiceOwner {
     if zone_path == &d2b_contracts_zone_session::v3::zone_routing::ZonePath::local_root() {
         ServiceOwner::ZoneLocal(zone_path.clone())
     } else {

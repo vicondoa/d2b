@@ -768,10 +768,9 @@ fn registered_host_mutation_sources() -> BTreeMap<&'static str, &'static str> {
             "packages/d2bd/src/audio_dispatch.rs",
             "storage paths:audio-state + sync lock:audio-<vm>",
         ),
-        ("packages/d2bd/src/lib.rs", "storage root:path:run-root"),
         (
-            "packages/d2bd/src/typed_error.rs",
-            "storage degraded-state reports",
+            "packages/d2bd/src/composition.rs",
+            "storage root:path:run-root",
         ),
     ])
 }

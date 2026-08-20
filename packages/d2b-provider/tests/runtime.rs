@@ -4,13 +4,13 @@
 use std::time::Duration;
 
 use d2b_contracts_zone_session::v3::{
+    ResourceRef,
     identity::{
         AuthenticatedSubjectContext, BindingDigest, ConfigurationGeneration, EvidenceClass,
         Locality, ReconnectGeneration, ResourceGeneration, ResourceName, ResourceTypeName,
         ResourceUid, SchemaFingerprint, ServiceName, SessionBinding, SessionPurpose,
         TranscriptHash, TransportBinding,
     },
-    ResourceRef,
     zone_routing::{ZoneLabelId, ZonePath},
 };
 use d2b_provider::{

@@ -407,7 +407,9 @@ fn disconnect_waits_for_inflight_acquire_and_fences_the_session() {
     let provider = Arc::new(provider_with_port(64, port.clone()));
     let capability = Arc::new(
         provider
-            .issue_session_capability(d2b_contracts_zone_session::v3::ResourceGeneration::new(1).unwrap())
+            .issue_session_capability(
+                d2b_contracts_zone_session::v3::ResourceGeneration::new(1).unwrap(),
+            )
             .unwrap(),
     );
     let authorization = Arc::new(
@@ -483,7 +485,9 @@ fn inspect_waits_on_the_lifecycle_gate_before_disconnect() {
     let provider = Arc::new(provider_with_port(64, port.clone()));
     let capability = Arc::new(
         provider
-            .issue_session_capability(d2b_contracts_zone_session::v3::ResourceGeneration::new(1).unwrap())
+            .issue_session_capability(
+                d2b_contracts_zone_session::v3::ResourceGeneration::new(1).unwrap(),
+            )
             .unwrap(),
     );
     let acquire_authorization = CredentialAuthorization::new(

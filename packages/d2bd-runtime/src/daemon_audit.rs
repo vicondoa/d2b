@@ -506,9 +506,9 @@ pub enum WorkloadLaunchResult {
 pub struct DaemonAuditLog {
     state_dir: Option<PathBuf>,
     writer: Arc<Mutex<AuditWriterState>>,
-    #[cfg(test)]
-    pub(crate) captured: std::sync::Arc<std::sync::Mutex<Vec<String>>>,
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
+    pub captured: std::sync::Arc<std::sync::Mutex<Vec<String>>>,
+    #[cfg(any(test, feature = "test-support"))]
     allow_authoritative_without_state: bool,
 }
 
@@ -721,9 +721,9 @@ impl DaemonAuditLog {
                 poisoned,
                 ..AuditWriterState::default()
             })),
-            #[cfg(test)]
+            #[cfg(any(test, feature = "test-support"))]
             captured: Default::default(),
-            #[cfg(test)]
+            #[cfg(any(test, feature = "test-support"))]
             allow_authoritative_without_state: false,
         }
     }
@@ -733,9 +733,9 @@ impl DaemonAuditLog {
         Self {
             state_dir: None,
             writer: Arc::new(Mutex::new(AuditWriterState::default())),
-            #[cfg(test)]
+            #[cfg(any(test, feature = "test-support"))]
             captured: Default::default(),
-            #[cfg(test)]
+            #[cfg(any(test, feature = "test-support"))]
             allow_authoritative_without_state: true,
         }
     }
@@ -775,7 +775,7 @@ impl DaemonAuditLog {
             return Err(io::Error::other("daemon audit unavailable"));
         }
         if authority == DaemonAuditAuthority::Authoritative && self.state_dir.is_none() {
-            #[cfg(test)]
+            #[cfg(any(test, feature = "test-support"))]
             if self.allow_authoritative_without_state {
                 // The test-only capture sink is not a production durability
                 // path; it records the event for assertions without claiming
@@ -786,7 +786,7 @@ impl DaemonAuditLog {
                     "authoritative-daemon-audit-unavailable",
                 ));
             }
-            #[cfg(not(test))]
+            #[cfg(not(any(test, feature = "test-support")))]
             return Err(io::Error::new(
                 io::ErrorKind::PermissionDenied,
                 "authoritative-daemon-audit-unavailable",
@@ -840,7 +840,7 @@ impl DaemonAuditLog {
 
         writer.last_hash = Some(record_hash);
 
-        #[cfg(test)]
+        #[cfg(any(test, feature = "test-support"))]
         {
             self.captured
                 .lock()

@@ -112,8 +112,9 @@ fn validate_request(
     {
         return Err(SystemdError::BundleIntent);
     }
-    let expected_execution = d2b_contracts_zone_session::v3::ResourceRef::parse(&intent.execution_ref)
-        .map_err(|_| SystemdError::IdentityMismatch)?;
+    let expected_execution =
+        d2b_contracts_zone_session::v3::ResourceRef::parse(&intent.execution_ref)
+            .map_err(|_| SystemdError::IdentityMismatch)?;
     if request
         .execution_ref
         .as_ref()
@@ -546,8 +547,8 @@ pub fn stop(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use d2b_contracts_broker::broker_wire::{RunnerRole, SystemdUnitRequest};
     use d2b_contracts::types::{BundleOpId, RoleId, VmId};
+    use d2b_contracts_broker::broker_wire::{RunnerRole, SystemdUnitRequest};
     use d2b_contracts_zone_session::v3::{ResourceRef, ResourceUid};
 
     fn request() -> SystemdUnitRequest {

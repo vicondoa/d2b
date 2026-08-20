@@ -615,6 +615,7 @@ version = "0.0.0-bootstrap"
 dependencies = [
  "bolero",
  "d2b-contracts",
+ "d2b-contracts-resource",
  "d2b-contracts-zone-session",
  "d2b-realm-core",
  "nix 0.29.0",

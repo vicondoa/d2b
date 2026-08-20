@@ -2259,7 +2259,8 @@ fn project_resource(
     match projection {
         StoreProjection::Full => unreachable!("full projection returned above"),
         StoreProjection::BaseOnly => {
-            if let Some(d2b_contracts_resource::v3::CanonicalJsonValue::Object(spec)) = root.get_mut("spec")
+            if let Some(d2b_contracts_resource::v3::CanonicalJsonValue::Object(spec)) =
+                root.get_mut("spec")
             {
                 spec.remove("provider");
             }
@@ -2552,15 +2553,17 @@ mod tests {
         let (_directory, database) = database("audit-before-commit");
         let identity = crate::StoreIdentity::new(
             d2b_resource_store::StoreSlot::new(0).unwrap(),
-            d2b_contracts_resource::v3::ResourceUid::parse("11111111-1111-4111-8111-111111111111").unwrap(),
+            d2b_contracts_resource::v3::ResourceUid::parse("11111111-1111-4111-8111-111111111111")
+                .unwrap(),
             ZoneId::parse("work").unwrap(),
-            d2b_contracts_resource::v3::ResourceUid::parse("22222222-2222-4222-8222-222222222222").unwrap(),
+            d2b_contracts_resource::v3::ResourceUid::parse("22222222-2222-4222-8222-222222222222")
+                .unwrap(),
             d2b_contracts_resource::v3::Timestamp::parse("2026-07-31T00:00:00.000Z").unwrap(),
             d2b_resource_store::PolicySnapshot {
                 policy_revision: 1,
                 api_catalog_revision: 1,
-                active_configuration_revision: d2b_contracts_resource::v3::ConfigurationGeneration::new(1)
-                    .unwrap(),
+                active_configuration_revision:
+                    d2b_contracts_resource::v3::ConfigurationGeneration::new(1).unwrap(),
                 controller_generation: None,
             },
         );

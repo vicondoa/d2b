@@ -3,9 +3,7 @@
 use schemars::{
     JsonSchema,
     r#gen::SchemaGenerator,
-    schema::{
-        InstanceType, NumberValidation, Schema, SchemaObject, SingleOrVec, StringValidation,
-    },
+    schema::{InstanceType, NumberValidation, Schema, SchemaObject, SingleOrVec, StringValidation},
 };
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
@@ -17,9 +15,10 @@ const TIMESTAMP_PATTERN: &str =
     "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}\\.[0-9]{3}Z$";
 
 pub use d2b_contracts::identity::{
-    IdentityClass, IdentityError, ResourceBundleGenerationId, ResourceName, ResourceTypeName,
-    ResourceUid, STANDARD_RESOURCE_TYPES, MAX_RESOURCE_NAME_BYTES, MAX_RESOURCE_TYPE_SEGMENT_BYTES,
-    MAX_QUALIFIED_RESOURCE_TYPE_BYTES, RESOURCE_BUNDLE_GENERATION_DOMAIN_TAG,
+    IdentityClass, IdentityError, MAX_QUALIFIED_RESOURCE_TYPE_BYTES, MAX_RESOURCE_NAME_BYTES,
+    MAX_RESOURCE_TYPE_SEGMENT_BYTES, RESOURCE_BUNDLE_GENERATION_DOMAIN_TAG,
+    ResourceBundleGenerationId, ResourceName, ResourceTypeName, ResourceUid,
+    STANDARD_RESOURCE_TYPES,
 };
 
 fn string_schema(pattern: &str, min: u32, max: u32) -> Schema {

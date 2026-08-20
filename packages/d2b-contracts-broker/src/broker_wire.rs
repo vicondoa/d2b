@@ -8,22 +8,24 @@
 //! the opaque IDs to look up the typed intent in its own trusted bundle
 //! copy. See `d2b_contracts::types` for the newtype set.
 
-pub use d2b_contracts::audit_wire::{AuditExportCursor, AuditExportEntry, AuditExportErrorCode};
 use d2b_contracts::audit_wire::validate_audit_page;
+pub use d2b_contracts::audit_wire::{AuditExportCursor, AuditExportEntry, AuditExportErrorCode};
+use d2b_contracts::auth_wire::AUTH_NONCE_LEN;
 pub use d2b_contracts::store_verify_wire::{
     StoreVerifyRequest, StoreVerifyResponse, StoreVerifyStatus, StoreVerifyUnknownReason,
 };
-use d2b_contracts::auth_wire::AUTH_NONCE_LEN;
 use d2b_contracts::types::{
     BundleClosureRef, BundleOpId, MediaRef, PathClass, RoleId, ScopeId, SubjectId, TracingSpanId,
     VmId,
 };
-use d2b_contracts_zone_session::v3::process::{CapabilityClass, EnvironmentClass, NamespaceClass, UserNamespaceSpec};
+use d2b_contracts::workload_identity::WorkloadIdentity;
+use d2b_contracts_zone_session::v3::process::{
+    CapabilityClass, EnvironmentClass, NamespaceClass, UserNamespaceSpec,
+};
 use d2b_contracts_zone_session::v3::{
     ArtifactId, IfName, ResourceBundleGenerationId, ResourceGeneration, ResourceRef, ResourceUid,
     execution_policy::ExecutionDomain, storage::ZoneStoreId,
 };
-use d2b_contracts::workload_identity::WorkloadIdentity;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -911,8 +913,14 @@ impl BrokerRequest {
             | Self::ResumeBroker => return None,
         };
         Some((
-            d2b_contracts_zone_session::v3::canonical_digest("d2b:broker-zone:v2", scope.as_bytes()),
-            d2b_contracts_zone_session::v3::canonical_digest("d2b:broker-operation:v2", operation.as_bytes()),
+            d2b_contracts_zone_session::v3::canonical_digest(
+                "d2b:broker-zone:v2",
+                scope.as_bytes(),
+            ),
+            d2b_contracts_zone_session::v3::canonical_digest(
+                "d2b:broker-operation:v2",
+                operation.as_bytes(),
+            ),
         ))
     }
 

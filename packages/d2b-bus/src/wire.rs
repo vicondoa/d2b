@@ -78,7 +78,9 @@ impl ZoneBoundPolicyIdentity {
     }
 
     /// Render the stable digest used in local policy comparison.
-    pub fn digest(&self) -> Result<String, d2b_contracts_zone_session::v3::component_session::BinaryError> {
+    pub fn digest(
+        &self,
+    ) -> Result<String, d2b_contracts_zone_session::v3::component_session::BinaryError> {
         let encoded = self.policy.encode_canonical()?;
         let provider = self
             .provider_ref

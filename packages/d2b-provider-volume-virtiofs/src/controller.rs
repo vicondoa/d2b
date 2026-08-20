@@ -67,7 +67,8 @@ impl<P: VirtiofsExportEffectPort> VirtiofsExportController<P> {
             reason: Some(reason),
         };
 
-        if export.access() == d2b_contracts_zone_session::v3::volume::AttachmentAccess::SharedWrite {
+        if export.access() == d2b_contracts_zone_session::v3::volume::AttachmentAccess::SharedWrite
+        {
             return Ok(failed(VirtiofsExportError::SharedWriteUnsupported));
         }
         WorkerSandbox::conformant().assert_conformant()?;

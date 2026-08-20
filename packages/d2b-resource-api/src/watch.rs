@@ -10,7 +10,9 @@ use std::sync::{
     atomic::{AtomicU64, Ordering},
 };
 
-use d2b_contracts_zone_session::v3::{ResourceName, ResourceRef, ResourceTypeName, ResourceUid, ZoneRevision};
+use d2b_contracts_zone_session::v3::{
+    ResourceName, ResourceRef, ResourceTypeName, ResourceUid, ZoneRevision,
+};
 use d2b_resource_store::{StoreError, StoreErrorKind, StoreWatchReceipt, StoreWatchRequest};
 use d2b_resource_store_redb::{
     ChangeEvent, RedbResourceStore, SharedChangeBatch, WatchRegistrationId, WatchSignals,

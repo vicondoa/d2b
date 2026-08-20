@@ -144,8 +144,10 @@ fn generated_exec_expired_error_kind_matches_guest_wire() {
         "generated ExecExpired discriminant changed"
     );
     assert_eq!(
-        serde_json::to_string(&d2b_contracts_control::guest_wire::GuestControlErrorKind::ExecExpired)
-            .unwrap(),
+        serde_json::to_string(
+            &d2b_contracts_control::guest_wire::GuestControlErrorKind::ExecExpired
+        )
+        .unwrap(),
         "\"exec-expired\"",
     );
 }

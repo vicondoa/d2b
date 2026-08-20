@@ -234,7 +234,7 @@ CLI contract (`d2b device usb attach|detach|probe` in the Rust CLI):
 The current proxy is per-env, not per-busid: a `socat` L4 listener forwards
 `<env.hostUplinkIp>:3240` to that env's loopback backend port. Synchronization
 therefore follows the conservative daemon plan in
-`packages/d2bd/src/usbip_reconcile_state.rs`:
+`packages/d2bd-runtime/src/usbip_reconcile_state.rs`:
 
 1. normal attach or single-VM restart performs an optimistic backend/export
    refresh and verifies that the per-env proxy is listening;

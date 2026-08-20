@@ -9,8 +9,7 @@ use d2b_credential_service::{
     MAX_CREDENTIAL_MESSAGE_BYTES, MetadataResponse, decode_outer, encode_outer,
 };
 
-const CREDENTIAL_PROTO: &str =
-    include_str!("../../d2b-contracts-provider/proto/credential.proto");
+const CREDENTIAL_PROTO: &str = include_str!("../../d2b-contracts-provider/proto/credential.proto");
 
 fn request() -> CredentialRequest {
     CredentialRequest::new(

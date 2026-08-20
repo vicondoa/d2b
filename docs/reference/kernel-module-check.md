@@ -4,7 +4,7 @@ Operator reference for the daemon-startup self-check that verifies the
 kernel-module matrix the running bundle requires is loaded into the
 live kernel.
 
-Source of truth: `packages/d2bd/src/kernel_module_check.rs`.
+Source of truth: `packages/d2bd-runtime/src/kernel_module_check.rs`.
 
 ## When it runs
 
@@ -122,7 +122,7 @@ on the next SIGHUP / reconnect) to pick up the change.
 
 `packages/d2b-contract-tests/tests/policy_docs.rs` asserts that the
 `REQUIRED_*` / `OPTIONAL_*` constants in
-`packages/d2bd/src/kernel_module_check.rs` stay in sync with the table above.
+`packages/d2bd-runtime/src/kernel_module_check.rs` stay in sync with the table above.
 Run the enabled fixture-contract lane after editing either side. This policy is
 advisory pull-request coverage until that lane is promoted.
 

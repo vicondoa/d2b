@@ -47,7 +47,7 @@ fn usbip_firewall_carveout_uses_host_visible_env_identity() {
 
 #[test]
 fn usbip_proxy_sync_strategy_does_not_assume_busid_aware_l4_proxy() {
-    let state = read_repo_file("packages/d2bd/src/usbip_reconcile_state.rs");
+    let state = read_repo_file("packages/d2bd-runtime/src/usbip_reconcile_state.rs");
     let component_doc = read_repo_file("docs/reference/components-usbip.md");
     let state_machine_doc = read_repo_file("docs/reference/usbip-state-machine.md");
 

@@ -734,8 +734,8 @@ mod tests {
             d2b_resource_store::PolicySnapshot {
                 policy_revision: 1,
                 api_catalog_revision: 1,
-                active_configuration_revision: d2b_contracts_resource::v3::ConfigurationGeneration::new(1)
-                    .unwrap(),
+                active_configuration_revision:
+                    d2b_contracts_resource::v3::ConfigurationGeneration::new(1).unwrap(),
                 controller_generation: None,
             },
         );

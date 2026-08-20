@@ -612,11 +612,11 @@ fn persist_effect(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use d2b_contracts_zone_session::v3::{BundleMetadata, BundleResource as InputBundleResource};
     use d2b_contracts_zone_session::v3::{
         CanonicalJsonObject, ResourceBundleGenerationId, ResourceName, ResourceTypeName,
         SchemaFingerprint, ZoneId,
     };
-    use d2b_contracts_zone_session::v3::{BundleMetadata, BundleResource as InputBundleResource};
 
     fn digest(byte: char) -> SchemaFingerprint {
         SchemaFingerprint::parse(format!("sha256:{}", byte.to_string().repeat(64))).unwrap()

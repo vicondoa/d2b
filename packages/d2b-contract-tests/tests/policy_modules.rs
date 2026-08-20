@@ -207,21 +207,11 @@ fn static_rust_dependency_direction() {
         ("d2b", &["d2b-core", "d2b-realm-core", "d2b-contracts"]),
         (
             "d2bd",
-            &[
-                "d2b-core",
-                "d2b-realm-core",
-                "d2b-host",
-                "d2b-contracts",
-            ],
+            &["d2b-core", "d2b-realm-core", "d2b-host", "d2b-contracts"],
         ),
         (
             "d2b-priv-broker",
-            &[
-                "d2b-core",
-                "d2b-realm-core",
-                "d2b-host",
-                "d2b-contracts",
-            ],
+            &["d2b-core", "d2b-realm-core", "d2b-host", "d2b-contracts"],
         ),
     ];
     let internal_crate = Regex::new(
@@ -299,7 +289,7 @@ fn authority_capability_is_not_downstream_mintable() {
         !capability_block.contains("Deserialize"),
         "AuthorityOperationCapability must not be deserializable"
     );
-    let adapter = read_repo_file_opt("packages/d2bd/src/authority_persistence.rs")
+    let adapter = read_repo_file_opt("packages/d2bd-runtime/src/authority_persistence.rs")
         .expect("read d2bd adapter");
     assert!(
         adapter.contains("PreparedAuthorityOperation") && adapter.contains("AuthorityRecoveryData"),
@@ -440,11 +430,7 @@ fn provider_controller_crates() -> Vec<(String, String, String)> {
             repo_root().join(&manifest_dir).join("Cargo.toml").is_file(),
             "{name} must carry Cargo.toml"
         );
-        crates.push((
-            name,
-            manifest_dir.clone(),
-            format!("{manifest_dir}/src"),
-        ));
+        crates.push((name, manifest_dir.clone(), format!("{manifest_dir}/src")));
     }
     crates.sort();
     assert!(

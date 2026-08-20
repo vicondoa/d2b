@@ -3380,10 +3380,15 @@ pub(super) fn cmd_console(
                     if let Some((rows, cols)) = host.window_size() {
                         let _ = console_round_trip(
                             &mut socket,
-                            &ConsoleOp::Resize(d2b_contracts_control::public_wire::ConsoleResizeArgs {
-                                session: session.clone(),
-                                size: d2b_contracts_control::terminal_wire::TerminalSize { rows, cols },
-                            }),
+                            &ConsoleOp::Resize(
+                                d2b_contracts_control::public_wire::ConsoleResizeArgs {
+                                    session: session.clone(),
+                                    size: d2b_contracts_control::terminal_wire::TerminalSize {
+                                        rows,
+                                        cols,
+                                    },
+                                },
+                            ),
                         );
                     }
                 }
@@ -3427,9 +3432,11 @@ pub(super) fn cmd_console(
                         }
                         let _ = console_round_trip(
                             &mut socket,
-                            &ConsoleOp::Close(d2b_contracts_control::public_wire::ConsoleCloseArgs {
-                                session: session.clone(),
-                            }),
+                            &ConsoleOp::Close(
+                                d2b_contracts_control::public_wire::ConsoleCloseArgs {
+                                    session: session.clone(),
+                                },
+                            ),
                         );
                         print_stderr("\r\nDetached from console.\r\n");
                         return Ok(0);
@@ -3437,12 +3444,14 @@ pub(super) fn cmd_console(
                     let chunk_b64 = d2b_core::base64_codec::encode(chunk);
                     let _ = console_round_trip(
                         &mut socket,
-                        &ConsoleOp::WriteStdin(d2b_contracts_control::public_wire::ConsoleWriteStdinArgs {
-                            session: session.clone(),
-                            offset: 0,
-                            chunk_base64: chunk_b64,
-                            eof: false,
-                        }),
+                        &ConsoleOp::WriteStdin(
+                            d2b_contracts_control::public_wire::ConsoleWriteStdinArgs {
+                                session: session.clone(),
+                                offset: 0,
+                                chunk_base64: chunk_b64,
+                                eof: false,
+                            },
+                        ),
                     );
                 }
                 Err(ref e) if e.kind() == io::ErrorKind::WouldBlock => {}
@@ -3482,9 +3491,11 @@ pub(super) fn cmd_console(
                         Err(_) => {
                             let _ = console_round_trip(
                                 &mut socket,
-                                &ConsoleOp::Close(d2b_contracts_control::public_wire::ConsoleCloseArgs {
-                                    session: session.clone(),
-                                }),
+                                &ConsoleOp::Close(
+                                    d2b_contracts_control::public_wire::ConsoleCloseArgs {
+                                        session: session.clone(),
+                                    },
+                                ),
                             );
                             return Err(CliFailure::new(
                                 1,
@@ -3495,9 +3506,11 @@ pub(super) fn cmd_console(
                     if let Err(err) = write_stdout_bytes(&bytes) {
                         let _ = console_round_trip(
                             &mut socket,
-                            &ConsoleOp::Close(d2b_contracts_control::public_wire::ConsoleCloseArgs {
-                                session: session.clone(),
-                            }),
+                            &ConsoleOp::Close(
+                                d2b_contracts_control::public_wire::ConsoleCloseArgs {
+                                    session: session.clone(),
+                                },
+                            ),
                         );
                         if err.kind() == io::ErrorKind::BrokenPipe {
                             return Ok(0);
@@ -3834,7 +3847,9 @@ pub(super) fn format_enforcement(
     }
 }
 
-pub(super) fn format_channel(channel: &d2b_contracts_control::public_wire::AudioChannel) -> &'static str {
+pub(super) fn format_channel(
+    channel: &d2b_contracts_control::public_wire::AudioChannel,
+) -> &'static str {
     use d2b_contracts_control::public_wire::AudioChannel;
     match channel {
         AudioChannel::Speaker => "speaker",
@@ -6576,7 +6591,8 @@ impl terminal_client::TerminalTransport for OwnerSocketTransport {
     fn round_trip(
         &mut self,
         op: &d2b_contracts_control::public_wire::ExecOp,
-    ) -> Result<d2b_contracts_control::public_wire::ExecOpResponse, exec_client::ExecClientError> {
+    ) -> Result<d2b_contracts_control::public_wire::ExecOpResponse, exec_client::ExecClientError>
+    {
         let op_id = self.next_op_id;
         self.next_op_id = self.next_op_id.wrapping_add(1);
         let frame = exec_client::encode_exec_op_frame(op, op_id)?;
@@ -7404,7 +7420,9 @@ pub(super) fn exec_print_json<T: Serialize>(value: &T) -> Result<(), CliFailure>
     print_exec_json(&value)
 }
 
-pub(super) fn exec_state_label(state: d2b_contracts_control::guest_wire::ExecState) -> &'static str {
+pub(super) fn exec_state_label(
+    state: d2b_contracts_control::guest_wire::ExecState,
+) -> &'static str {
     use d2b_contracts_control::guest_wire::ExecState;
 
     match state {
@@ -15688,7 +15706,9 @@ mod host_install_dispatch_tests {
         assert!(!rendered.contains("systemd (net-vm)"));
     }
 
-    fn read_model_fixture(kind: &str) -> d2b_contracts_control::public_wire::PublicReadModelMetadata {
+    fn read_model_fixture(
+        kind: &str,
+    ) -> d2b_contracts_control::public_wire::PublicReadModelMetadata {
         d2b_contracts_control::public_wire::PublicReadModelMetadata {
             schema_version: 1,
             kind: kind.to_owned(),

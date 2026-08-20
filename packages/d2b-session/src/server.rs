@@ -213,8 +213,8 @@ async fn serve_ttrpc_services_inner(
     if services.is_empty() {
         return Err(SessionServerError::Service);
     }
-    let capacity =
-        d2b_contracts_zone_session::v3::component_session::LimitProfile::local_default().logical_ttrpc_bytes;
+    let capacity = d2b_contracts_zone_session::v3::component_session::LimitProfile::local_default()
+        .logical_ttrpc_bytes;
     let capacity = usize::try_from(capacity).map_err(|_| SessionServerError::Transport)?;
     let (server_transport, bridge_transport) = tokio::io::duplex(capacity);
     let listener =
@@ -282,7 +282,10 @@ async fn serve_ttrpc_services_inner(
                 .map_err(|_| SessionServerError::Transport)?;
             let header = MessageHeader::from(header_bytes);
             let body_len = usize::try_from(header.length).map_err(|_| SessionServerError::Frame)?;
-            if body_len > d2b_contracts_zone_session::v3::component_session::MAX_LOGICAL_MESSAGE_BYTES as usize {
+            if body_len
+                > d2b_contracts_zone_session::v3::component_session::MAX_LOGICAL_MESSAGE_BYTES
+                    as usize
+            {
                 return Err(SessionServerError::Frame);
             }
             let mut frame = header_bytes.to_vec();
@@ -341,7 +344,8 @@ fn validate_frame(frame: &[u8]) -> Result<MessageHeader, SessionServerError> {
         .map_err(|_| SessionServerError::Frame)?;
     let header = MessageHeader::from(header_bytes);
     let body_len = usize::try_from(header.length).map_err(|_| SessionServerError::Frame)?;
-    if body_len > d2b_contracts_zone_session::v3::component_session::MAX_LOGICAL_MESSAGE_BYTES as usize
+    if body_len
+        > d2b_contracts_zone_session::v3::component_session::MAX_LOGICAL_MESSAGE_BYTES as usize
         || frame.len() != MESSAGE_HEADER_LENGTH.saturating_add(body_len)
     {
         return Err(SessionServerError::Frame);

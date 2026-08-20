@@ -10,13 +10,12 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Deserializer, Serialize};
 
 use super::{
-    ConditionState, ManagedBy, ResourceGeneration, ResourcePhase, ResourceRef, ResourceUid,
+    ConditionState, IfName, ManagedBy, ResourceGeneration, ResourcePhase, ResourceRef, ResourceUid,
     UpdateState,
     execution_policy::{
         BoundedToken, PrimitiveSpecError, parsed_deserialize, redacted_debug,
         require_execution_ref, string_schema,
     },
-    IfName,
     user::{OsUsername, UserSpec},
 };
 

@@ -14,7 +14,7 @@
 //! local fast path is never broken.
 //!
 //! Only workloads with an `identity` field populated in the realm controllers
-//! config contribute to the index. Workloads with `identity: None` (pre-W15
+//! config contribute to the index. Workloads with `identity: None` (legacy
 //! Nix emitters) are silently skipped, preserving full backwards compatibility.
 
 use std::collections::HashMap;
@@ -375,7 +375,7 @@ mod tests {
         )
     }
 
-    /// JSON for a workload WITHOUT a WorkloadIdentity (pre-W15 emitter).
+    /// JSON for a workload WITHOUT a WorkloadIdentity (legacy emitter).
     fn workload_no_identity(workload_id: &str, vm_name: &str) -> String {
         format!(
             r#"{{
@@ -593,9 +593,9 @@ mod tests {
     }
 
     // ------------------------------------------------------------------
-    // Restart/adoption invariants - W16 requirement
+    // Restart/adoption invariants
     //
-    // These tests prove the fundamental invariant the W13/W16 plan requires:
+    // These tests prove the fundamental identity invariant:
     // workload identity in the read model (list/status) is **config-driven**,
     // not state-driven. Daemon restart does not lose workload identity because:
     //
@@ -706,7 +706,7 @@ mod tests {
     }
 
     /// Restart simulation: a workload WITHOUT identity (transitional entry from
-    /// a pre-W15 emitter) does NOT gain spurious identity after restart.
+    /// a legacy emitter) does NOT gain spurious identity after restart.
     /// The index is empty for such workloads both before and after a restart
     /// simulation, preserving backward-compat behavior.
     #[test]

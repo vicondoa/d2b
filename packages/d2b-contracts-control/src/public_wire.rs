@@ -1,3 +1,4 @@
+use crate::guest_wire::ExecState;
 pub use d2b_contracts::audit_wire::{AuditExportCursor, AuditExportEntry};
 use d2b_contracts::types::MediaRef;
 use d2b_contracts::{
@@ -14,7 +15,6 @@ use d2b_contracts::{
     workload_identity::{WorkloadIdentity, WorkloadTarget},
 };
 use d2b_contracts_resource::v3::IfName;
-use crate::guest_wire::ExecState;
 use schemars::{
     JsonSchema,
     r#gen::SchemaGenerator,
@@ -2740,7 +2740,9 @@ mod tests {
         VmLifecycleRequest, VmLifecycleState,
     };
     use d2b_contracts::{
-        Error, FeatureFlag, Version, audit_wire::AuditExportCursor, decode_frame, encode_frame,
+        Error, FeatureFlag, Version,
+        audit_wire::AuditExportCursor,
+        decode_frame, encode_frame,
         runtime::{RuntimeOperationCapabilities, RuntimeServiceRole, RuntimeServiceSummary},
     };
 

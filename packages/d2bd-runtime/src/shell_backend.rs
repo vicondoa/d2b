@@ -1,33 +1,40 @@
 use crate::{
     daemon_audit,
+    exec_session::is_unspecified,
+    guest_control_health::GuestControlHealthError,
     terminal_session::{OutputStreamSel, TerminalBackend},
-    typed_error::{TypedError, UnsafeLocalShellErrorKind},
+    typed_error::{GuestControlShellErrorKind, TypedError, UnsafeLocalShellErrorKind},
     unsafe_local_terminal::{UnsafeLocalTerminalClient, UnsafeLocalTerminalError},
 };
-use d2b_contracts_control::{public_wire, terminal_wire as tw};
+use d2b_contracts_control::{guest_proto as pb, public_wire, terminal_wire as tw};
+use protobuf::EnumOrUnknown;
 use std::{fmt, sync::Arc, time::Duration};
 
-pub(crate) enum ShellTerminalOp {
+pub const SHELL_MANAGEMENT_TIMEOUT: Duration = Duration::from_secs(12);
+pub const SHELL_POLL_CAP: Duration = Duration::from_secs(30);
+pub const SHELL_POLL_SLACK: Duration = Duration::from_secs(2);
+
+pub enum ShellTerminalOp {
     WriteStdin(tw::TerminalWriteStdin),
     ReadOutput(tw::TerminalReadOutput),
     Resize(tw::TerminalResize),
 }
 
 #[derive(Debug)]
-pub(crate) enum ShellTerminalResponse {
+pub enum ShellTerminalResponse {
     WriteStdin(tw::TerminalWriteStdinResult),
     ReadOutput(tw::TerminalReadOutputChunk),
     Delivered,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum ShellProvider {
+pub enum ShellProvider {
     GuestControl,
     UnsafeLocal,
 }
 
 impl ShellProvider {
-    pub(crate) fn label(self) -> &'static str {
+    pub fn label(self) -> &'static str {
         match self {
             Self::GuestControl => "guest-control",
             Self::UnsafeLocal => "unsafe-local",
@@ -35,7 +42,7 @@ impl ShellProvider {
     }
 }
 
-pub(crate) trait ShellBackend: Send + Sync {
+pub trait ShellBackend: Send + Sync {
     fn handle_op(
         &self,
         runtime: &tokio::runtime::Handle,
@@ -50,13 +57,13 @@ pub(crate) trait ShellBackend: Send + Sync {
     ) -> Result<public_wire::ShellDetachResult, TypedError>;
 }
 
-pub(crate) struct EstablishedShell {
-    pub(crate) backend: Arc<dyn ShellBackend>,
-    pub(crate) attach: public_wire::ShellAttachResult,
-    pub(crate) target: String,
-    pub(crate) provider: ShellProvider,
-    pub(crate) operation_digest: Option<String>,
-    pub(crate) initial_control_sequence: u64,
+pub struct EstablishedShell {
+    pub backend: Arc<dyn ShellBackend>,
+    pub attach: public_wire::ShellAttachResult,
+    pub target: String,
+    pub provider: ShellProvider,
+    pub operation_digest: Option<String>,
+    pub initial_control_sequence: u64,
 }
 
 impl fmt::Debug for EstablishedShell {
@@ -71,7 +78,7 @@ impl fmt::Debug for EstablishedShell {
     }
 }
 
-pub(crate) struct UnsafeLocalShellBackend {
+pub struct UnsafeLocalShellBackend {
     public_session: String,
     resolved_name: public_wire::ShellName,
     terminal: UnsafeLocalTerminalClient,
@@ -88,7 +95,7 @@ impl fmt::Debug for UnsafeLocalShellBackend {
 }
 
 impl UnsafeLocalShellBackend {
-    pub(crate) fn new(
+    pub fn new(
         public_session: String,
         resolved_name: public_wire::ShellName,
         terminal: UnsafeLocalTerminalClient,
@@ -140,7 +147,7 @@ impl ShellBackend for UnsafeLocalShellBackend {
             }
             ShellTerminalOp::ReadOutput(args) => {
                 self.ensure_session(&args.session)?;
-                let (timeout_ms, deadline) = shell_poll_timeout(args.timeout_ms, args.wait);
+                let (timeout_ms, deadline) = backend_shell_poll_timeout(args.timeout_ms, args.wait);
                 let result = runtime
                     .block_on(self.terminal.read_output(
                         match args.stream {
@@ -199,7 +206,7 @@ impl ShellBackend for UnsafeLocalShellBackend {
     }
 }
 
-pub(crate) fn best_effort_close(
+pub fn best_effort_close(
     backend: &dyn ShellBackend,
     runtime: &tokio::runtime::Handle,
     control_sequence: &mut u64,
@@ -220,12 +227,199 @@ fn shell_operation_timeout() -> Duration {
     Duration::from_secs(3)
 }
 
-fn shell_poll_timeout(requested_ms: u64, wait: bool) -> (u64, Duration) {
+fn backend_shell_poll_timeout(requested_ms: u64, wait: bool) -> (u64, Duration) {
     if !wait {
         return (0, shell_operation_timeout());
     }
     let timeout_ms = requested_ms.min(1_000);
     (timeout_ms, Duration::from_millis(timeout_ms + 1_000))
+}
+
+pub fn shell_poll_timeout(args_timeout_ms: u64, wait: bool) -> (u64, Duration) {
+    if !wait {
+        return (0, SHELL_MANAGEMENT_TIMEOUT);
+    }
+    let cap_ms = SHELL_POLL_CAP.as_millis().min(u64::MAX as u128) as u64;
+    let timeout_ms = args_timeout_ms.min(cap_ms);
+    (
+        timeout_ms,
+        Duration::from_millis(timeout_ms) + SHELL_POLL_SLACK,
+    )
+}
+
+pub fn shell_failed(kind: GuestControlShellErrorKind) -> TypedError {
+    TypedError::GuestControlShellFailed { kind }
+}
+
+pub fn map_shell_health_error(error: GuestControlHealthError) -> TypedError {
+    use GuestControlHealthError as E;
+    use GuestControlShellErrorKind as K;
+    match error {
+        E::TransportIo | E::Ttrpc | E::Signer => shell_failed(K::Transport),
+        E::Timeout => shell_failed(K::Timeout),
+        E::AuthFailed => shell_failed(K::Auth),
+        E::StaleSession => shell_failed(K::StaleSession),
+        E::Protocol => shell_failed(K::Protocol),
+    }
+}
+
+pub fn shell_transport_failed() -> TypedError {
+    shell_failed(GuestControlShellErrorKind::Transport)
+}
+
+pub fn shell_capability_failed() -> TypedError {
+    shell_failed(GuestControlShellErrorKind::Capability)
+}
+
+pub fn shell_protocol_failed() -> TypedError {
+    shell_failed(GuestControlShellErrorKind::Protocol)
+}
+
+pub fn map_shell_guest_error(error: &pb::GuestControlError) -> TypedError {
+    use GuestControlShellErrorKind as K;
+    use pb::GuestControlErrorKind as G;
+    let kind = match error.kind.enum_value() {
+        Ok(G::GUEST_CONTROL_ERROR_KIND_AUTH_FAILED) => K::Auth,
+        Ok(G::GUEST_CONTROL_ERROR_KIND_STALE_SESSION) => K::StaleSession,
+        Ok(G::GUEST_CONTROL_ERROR_KIND_TRANSPORT_UNREACHABLE) => K::Transport,
+        Ok(G::GUEST_CONTROL_ERROR_KIND_PROTOCOL_ERROR)
+        | Ok(G::GUEST_CONTROL_ERROR_KIND_SHELL_INVALID_NAME) => K::Protocol,
+        Ok(G::GUEST_CONTROL_ERROR_KIND_GUEST_SHELL_DISABLED)
+        | Ok(G::GUEST_CONTROL_ERROR_KIND_SHELL_POOL_UNAVAILABLE)
+        | Ok(G::GUEST_CONTROL_ERROR_KIND_SHELL_DAEMON_EPOCH_MISMATCH) => K::Capability,
+        Ok(G::GUEST_CONTROL_ERROR_KIND_SHELL_CAPACITY_EXCEEDED)
+        | Ok(G::GUEST_CONTROL_ERROR_KIND_SHELL_ATTACH_CAPACITY_EXCEEDED) => K::Capacity,
+        Ok(G::GUEST_CONTROL_ERROR_KIND_SHELL_ALREADY_ATTACHED) => K::AlreadyAttached,
+        Ok(G::GUEST_CONTROL_ERROR_KIND_SHELL_NOT_FOUND) => K::NotFound,
+        Ok(G::GUEST_CONTROL_ERROR_KIND_SHELL_OUTPUT_GAP) => K::OutputGap,
+        _ => K::GuestError,
+    };
+    shell_failed(kind)
+}
+
+pub fn guest_advertises_capability(
+    capabilities: &[EnumOrUnknown<pb::GuestCapability>],
+    cap: pb::GuestCapability,
+) -> bool {
+    capabilities
+        .iter()
+        .filter_map(|value| value.enum_value().ok())
+        .any(|value| value == cap)
+}
+
+pub fn shell_error_to_typed(error: Option<&pb::GuestControlError>) -> Result<(), TypedError> {
+    if let Some(error) = error
+        && !is_unspecified(error.kind)
+    {
+        return Err(map_shell_guest_error(error));
+    }
+    Ok(())
+}
+
+pub fn shell_name_from_guest(value: String) -> Result<public_wire::ShellName, TypedError> {
+    public_wire::ShellName::new(value).map_err(|_| shell_protocol_failed())
+}
+
+pub fn map_shell_state(state: EnumOrUnknown<pb::ShellState>) -> public_wire::ShellSessionState {
+    match state
+        .enum_value()
+        .unwrap_or(pb::ShellState::SHELL_STATE_UNSPECIFIED)
+    {
+        pb::ShellState::SHELL_STATE_ATTACHED => public_wire::ShellSessionState::Attached,
+        pb::ShellState::SHELL_STATE_DETACHED => public_wire::ShellSessionState::Detached,
+        pb::ShellState::SHELL_STATE_KILLED => public_wire::ShellSessionState::Killed,
+        pb::ShellState::SHELL_STATE_POOL_UNAVAILABLE => {
+            public_wire::ShellSessionState::PoolUnavailable
+        }
+        pb::ShellState::SHELL_STATE_FEATURE_DISABLED => {
+            public_wire::ShellSessionState::FeatureDisabled
+        }
+        pb::ShellState::SHELL_STATE_OUTPUT_GAP => public_wire::ShellSessionState::OutputGap,
+        pb::ShellState::SHELL_STATE_UNSPECIFIED => public_wire::ShellSessionState::Detached,
+    }
+}
+
+pub fn map_shell_close_cause(
+    cause: EnumOrUnknown<pb::ShellCloseCause>,
+) -> Option<public_wire::ShellCloseCause> {
+    match cause
+        .enum_value()
+        .unwrap_or(pb::ShellCloseCause::SHELL_CLOSE_CAUSE_UNSPECIFIED)
+    {
+        pb::ShellCloseCause::SHELL_CLOSE_CAUSE_CLIENT_DETACH => {
+            Some(public_wire::ShellCloseCause::ClientDetach)
+        }
+        pb::ShellCloseCause::SHELL_CLOSE_CAUSE_EVICTED_BY_FORCE => {
+            Some(public_wire::ShellCloseCause::EvictedByForce)
+        }
+        pb::ShellCloseCause::SHELL_CLOSE_CAUSE_EVICTED_BY_ADMIN_DETACH => {
+            Some(public_wire::ShellCloseCause::EvictedByAdminDetach)
+        }
+        pb::ShellCloseCause::SHELL_CLOSE_CAUSE_KILLED_BY_ADMIN => {
+            Some(public_wire::ShellCloseCause::KilledByAdmin)
+        }
+        pb::ShellCloseCause::SHELL_CLOSE_CAUSE_POOL_UNAVAILABLE => {
+            Some(public_wire::ShellCloseCause::PoolUnavailable)
+        }
+        pb::ShellCloseCause::SHELL_CLOSE_CAUSE_OUTPUT_GAP => {
+            Some(public_wire::ShellCloseCause::OutputGap)
+        }
+        pb::ShellCloseCause::SHELL_CLOSE_CAUSE_UNSPECIFIED => None,
+    }
+}
+
+pub fn map_shell_list_response(
+    response: pb::ShellListResponse,
+) -> Result<public_wire::ShellListResult, TypedError> {
+    Ok(public_wire::ShellListResult {
+        default_name: shell_name_from_guest(response.default_name)?,
+        sessions: response
+            .sessions
+            .into_iter()
+            .map(|entry| {
+                Ok(public_wire::ShellListEntry {
+                    name: shell_name_from_guest(entry.name)?,
+                    state: map_shell_state(entry.state),
+                    attached: entry.attached,
+                    is_default: entry.is_default,
+                })
+            })
+            .collect::<Result<Vec<_>, TypedError>>()?,
+    })
+}
+
+pub fn map_shell_attach_response(
+    response: pb::ShellAttachResponse,
+) -> Result<public_wire::ShellAttachResult, TypedError> {
+    shell_error_to_typed(response.error.as_ref())?;
+    Ok(public_wire::ShellAttachResult {
+        session: response.session_id.ok_or_else(shell_protocol_failed)?,
+        resolved_name: shell_name_from_guest(response.resolved_name)?,
+        state: map_shell_state(response.state),
+        force_evicted: response.force_evicted,
+    })
+}
+
+pub fn map_shell_detach_response(
+    response: pb::ShellDetachResponse,
+) -> Result<public_wire::ShellDetachResult, TypedError> {
+    shell_error_to_typed(response.error.as_ref())?;
+    Ok(public_wire::ShellDetachResult {
+        resolved_name: shell_name_from_guest(response.resolved_name)?,
+        detached: response.detached,
+        cause: map_shell_close_cause(response.cause),
+    })
+}
+
+pub fn map_shell_kill_response(
+    response: pb::ShellKillResponse,
+) -> Result<public_wire::ShellKillResult, TypedError> {
+    shell_error_to_typed(response.error.as_ref())?;
+    Ok(public_wire::ShellKillResult {
+        name: shell_name_from_guest(response.name)?,
+        killed: response.killed,
+        state: map_shell_state(response.state),
+    })
 }
 
 fn map_terminal_error(error: UnsafeLocalTerminalError) -> TypedError {
@@ -246,7 +440,7 @@ fn map_terminal_error(error: UnsafeLocalTerminalError) -> TypedError {
     unsafe_shell_failed(kind)
 }
 
-pub(crate) fn map_helper_failure(
+pub fn map_helper_failure(
     code: d2b_contracts_control::unsafe_local_wire::HelperFailureCode,
 ) -> TypedError {
     use UnsafeLocalShellErrorKind as UnsafeKind;
@@ -277,7 +471,7 @@ pub(crate) fn map_helper_failure(
     unsafe_shell_failed(kind)
 }
 
-pub(crate) fn unsafe_shell_failed(kind: UnsafeLocalShellErrorKind) -> TypedError {
+pub fn unsafe_shell_failed(kind: UnsafeLocalShellErrorKind) -> TypedError {
     TypedError::UnsafeLocalShellFailed { kind }
 }
 
@@ -312,13 +506,16 @@ mod tests {
         let mut frame = Vec::from(prefix);
         frame.resize(length + 4, 0);
         peer.read_exact(&mut frame[4..]).unwrap();
-        d2b_contracts_control::unsafe_local_wire::decode_unsafe_local_terminal_frame(&frame).unwrap()
+        d2b_contracts_control::unsafe_local_wire::decode_unsafe_local_terminal_frame(&frame)
+            .unwrap()
     }
 
     fn send_response(peer: &mut UnixStream, response: HelperTerminalResponse) {
         peer.write_all(
-            &d2b_contracts_control::unsafe_local_wire::encode_unsafe_local_terminal_frame(&response)
-                .unwrap(),
+            &d2b_contracts_control::unsafe_local_wire::encode_unsafe_local_terminal_frame(
+                &response,
+            )
+            .unwrap(),
         )
         .unwrap();
     }

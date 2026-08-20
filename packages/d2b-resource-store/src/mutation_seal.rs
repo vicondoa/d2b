@@ -234,13 +234,15 @@ fn open_rejects_same_authority_with_mismatched_declared_identity() {
     let (issuer, acceptor) = mutation_seal_pair(StoreSealIdentity::new(
         slot,
         zone.clone(),
-        d2b_contracts_resource::v3::ResourceUid::parse("11111111-1111-4111-8111-111111111111").unwrap(),
+        d2b_contracts_resource::v3::ResourceUid::parse("11111111-1111-4111-8111-111111111111")
+            .unwrap(),
     ));
     let mut sealed = issuer.seal(MutationSealBody {
         mutations: Vec::new(),
         authorization: crate::AdmittedAuthorization {
             zone: zone.clone(),
-            subject_ref: d2b_contracts_resource::v3::ResourceRef::parse("Provider/system-core").unwrap(),
+            subject_ref: d2b_contracts_resource::v3::ResourceRef::parse("Provider/system-core")
+                .unwrap(),
             subject_uid: d2b_contracts_resource::v3::ResourceUid::parse(
                 "33333333-3333-4333-8333-333333333333",
             )
@@ -250,8 +252,8 @@ fn open_rejects_same_authority_with_mismatched_declared_identity() {
         policy_snapshot: crate::PolicySnapshot {
             policy_revision: 7,
             api_catalog_revision: 8,
-            active_configuration_revision: d2b_contracts_resource::v3::ConfigurationGeneration::new(9)
-                .unwrap(),
+            active_configuration_revision:
+                d2b_contracts_resource::v3::ConfigurationGeneration::new(9).unwrap(),
             controller_generation: None,
         },
         operation: crate::StoreOperationContext {
@@ -265,7 +267,8 @@ fn open_rejects_same_authority_with_mismatched_declared_identity() {
     sealed.store = StoreSealIdentity::new(
         slot,
         zone,
-        d2b_contracts_resource::v3::ResourceUid::parse("44444444-4444-4444-8444-444444444444").unwrap(),
+        d2b_contracts_resource::v3::ResourceUid::parse("44444444-4444-4444-8444-444444444444")
+            .unwrap(),
     );
 
     let error = acceptor

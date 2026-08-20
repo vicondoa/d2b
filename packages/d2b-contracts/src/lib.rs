@@ -4,21 +4,21 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use std::collections::BTreeSet;
 
+pub mod audio;
+pub mod audit_wire;
+pub mod auth_wire;
 pub mod capability;
 pub mod configured_argv;
 pub mod contract_id;
 pub mod error;
 pub mod foundation_effects;
-pub mod ids;
 pub mod identity;
+pub mod ids;
 pub mod privileges_w3;
 pub mod provider_effects;
 pub mod realm;
-pub mod audio;
 pub mod runtime;
 pub mod security_key;
-pub mod audit_wire;
-pub mod auth_wire;
 pub mod store_verify_wire;
 pub mod target;
 pub mod token;
@@ -31,8 +31,8 @@ pub mod workload_identity;
 
 pub use error::{Error, SemverRange, Version};
 pub use foundation_effects::{
-    CredentialContractError, CredentialLeaseHandle, OpaqueAzureRef,
-    MAX_AZURE_REF_BYTES, MAX_CREDENTIAL_LEASE_HANDLE_BYTES,
+    CredentialContractError, CredentialLeaseHandle, MAX_AZURE_REF_BYTES,
+    MAX_CREDENTIAL_LEASE_HANDLE_BYTES, OpaqueAzureRef,
 };
 pub use identity::{
     IdentityClass, IdentityError, ResourceBundleGenerationId, ResourceName, ResourceRef,
@@ -437,7 +437,6 @@ mod tests {
         let decoded = decode_frame::<Hello>("Hello", &frame).expect("decodes");
         assert_eq!(decoded, hello);
     }
-
 }
 
 pub mod v3;

@@ -405,7 +405,10 @@ fn warn_unsafe_local(resource_ref: &d2b_contracts_zone_session::v3::ResourceRef,
     }
 }
 
-fn with_unsafe_posture(mut value: Value, resource_ref: &d2b_contracts_zone_session::v3::ResourceRef) -> Value {
+fn with_unsafe_posture(
+    mut value: Value,
+    resource_ref: &d2b_contracts_zone_session::v3::ResourceRef,
+) -> Value {
     if resource_ref.resource_type().as_str() == "Host"
         && let Value::Object(object) = &mut value
     {

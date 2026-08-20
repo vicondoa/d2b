@@ -24,7 +24,8 @@ const FORBIDDEN_LABEL_KEYS: &[&str] = &[
 fn authorized_audit_requires_only_digested_credential_identity() {
     let marker = format!("credential-name-secret-canary-{:x}", std::process::id());
     let subject = format!("subject-secret-canary-{:x}", std::process::id());
-    let digest = d2b_contracts_provider::v3::CredentialAuditDigest::after_authorization(marker.as_bytes());
+    let digest =
+        d2b_contracts_provider::v3::CredentialAuditDigest::after_authorization(marker.as_bytes());
     let subject_digest =
         d2b_contracts_provider::v3::CredentialAuditDigest::after_authorization(subject.as_bytes());
     let record = CredentialAuditRecord::authorized_service(

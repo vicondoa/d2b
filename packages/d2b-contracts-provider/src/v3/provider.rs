@@ -31,13 +31,12 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Deserializer, Serialize};
 
 use super::{
-    ArtifactId,
+    ArtifactId, ResourceRef,
     execution_policy::{
         BoundedToken, ExecutionDomain, PrimitiveSpecError, redacted_debug, string_schema,
     },
     identity::{ResourceTypeName, SchemaFingerprint},
     resource::ResourceEnvelope,
-    ResourceRef,
     resource_schema::{CanonicalJsonObject, ExtensionSchemaId, SchemaVersion},
     semantic_services::{
         LEGACY_ABSENT_PROTOCOL_VERSION, SEMANTIC_PROJECTION_PROTOCOL_VERSION,

@@ -113,8 +113,8 @@ fn adoption_never_opens_a_pidfd_for_an_ambiguous_scope() {
 #[test]
 fn a_user_domain_process_is_placed_in_a_verified_user_scope() {
     let provider = launching();
-    let user_ref =
-        d2b_contracts_zone_session::v3::ResourceRef::parse("User/alice").expect("valid fixture reference");
+    let user_ref = d2b_contracts_zone_session::v3::ResourceRef::parse("User/alice")
+        .expect("valid fixture reference");
     let ticket = fixtures::ticket_builder()
         .selected_provider(PROVIDER_NAME)
         .expected_identity(required())

@@ -1,6 +1,8 @@
 use std::collections::BTreeSet;
 
-use d2b_contracts_zone_session::v3::{ResourceBundleGenerationId, ResourceName, ResourceTypeName, Timestamp};
+use d2b_contracts_zone_session::v3::{
+    ResourceBundleGenerationId, ResourceName, ResourceTypeName, Timestamp,
+};
 use d2b_core_controller::{
     cleanup::{
         CleanupZonePhase, PendingCleanupState, PriorGenerationBundle, pending_cleanup_condition,

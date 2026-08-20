@@ -92,12 +92,12 @@ fn broker_systemd_unit_declarations() {
 // ---------------------------------------------------------------------------
 #[test]
 fn stop_dag_reconcile_surface() {
-    let module_rel = "packages/d2bd/src/supervisor/stop_dag.rs";
+    let module_rel = "packages/d2bd-runtime/src/supervisor/stop_dag.rs";
     assert!(
         !repo_path_exists(module_rel),
         "stop-dag leftover must stay deleted: {module_rel}"
     );
-    let mod_rs = read_repo_file("packages/d2bd/src/supervisor/mod.rs");
+    let mod_rs = read_repo_file("packages/d2bd-runtime/src/supervisor/mod.rs");
     assert!(
         !mod_rs.contains("pub mod stop_dag;"),
         "supervisor/mod.rs must not declare leftover stop_dag"

@@ -1386,8 +1386,10 @@ mod tests {
             item_id: ProtocolToken::parse("browser").unwrap(),
             argv: ConfiguredArgv::new(vec![arg.to_owned()]).unwrap(),
             graphical: false,
-            realm_accent_color: d2b_contracts_control::unsafe_local_wire::RealmAccentColor::new("#336699")
-                .unwrap(),
+            realm_accent_color: d2b_contracts_control::unsafe_local_wire::RealmAccentColor::new(
+                "#336699",
+            )
+            .unwrap(),
         }
     }
 
@@ -2290,11 +2292,13 @@ mod tests {
         configure_socket_buffers(&client).unwrap();
         send_frame(
             &client,
-            &UnsafeLocalHelperToDaemon::Hello(d2b_contracts_control::unsafe_local_wire::HelperHello {
-                protocol_version: UNSAFE_LOCAL_HELPER_PROTOCOL_VERSION,
-                generation,
-                features: Vec::new(),
-            }),
+            &UnsafeLocalHelperToDaemon::Hello(
+                d2b_contracts_control::unsafe_local_wire::HelperHello {
+                    protocol_version: UNSAFE_LOCAL_HELPER_PROTOCOL_VERSION,
+                    generation,
+                    features: Vec::new(),
+                },
+            ),
         )
         .unwrap();
         let mut receive_buffer = vec![0u8; MAX_HELPER_FRAME_SIZE + 5];

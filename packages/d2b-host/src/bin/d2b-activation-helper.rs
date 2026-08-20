@@ -311,9 +311,8 @@ fn activation_probe_matches(
 ) -> bool {
     match mode {
         d2b_contracts_zone_session::v3::ActivationMode::Boot => boot_path == Some(store_path),
-        d2b_contracts_zone_session::v3::ActivationMode::Switch | d2b_contracts_zone_session::v3::ActivationMode::Test => {
-            active_path == Some(store_path)
-        }
+        d2b_contracts_zone_session::v3::ActivationMode::Switch
+        | d2b_contracts_zone_session::v3::ActivationMode::Test => active_path == Some(store_path),
         d2b_contracts_zone_session::v3::ActivationMode::Adopt => false,
     }
 }

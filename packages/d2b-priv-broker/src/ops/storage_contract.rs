@@ -7,10 +7,10 @@
 
 use std::path::{Path, PathBuf};
 
+use d2b_contracts::types::BundleOpId;
 use d2b_contracts_broker::broker_wire::{
     ReconcileStorageScopeResponse, StorageReconcileStatus, ValidateLockSpecResponse,
 };
-use d2b_contracts::types::BundleOpId;
 use d2b_core::bundle_resolver::BundleResolver;
 use d2b_core::storage::{PrincipalKind, PrincipalRef, StoragePathKind};
 use nix::unistd::{Gid, Group, Uid, User};
@@ -511,13 +511,14 @@ mod tests {
 
     #[test]
     fn broker_storage_and_sync_requests_are_opaque_id_only() {
-        let storage =
-            serde_json::to_value(d2b_contracts_broker::broker_wire::ReconcileStorageScopeRequest {
+        let storage = serde_json::to_value(
+            d2b_contracts_broker::broker_wire::ReconcileStorageScopeRequest {
                 storage_ref: BundleOpId::new("path:run-root"),
                 apply: true,
                 tracing_span_id: None,
-            })
-            .expect("serialize storage request");
+            },
+        )
+        .expect("serialize storage request");
         assert_eq!(
             storage
                 .as_object()
@@ -532,11 +533,12 @@ mod tests {
             ]
         );
 
-        let lock = serde_json::to_value(d2b_contracts_broker::broker_wire::ValidateLockSpecRequest {
-            lock_ref: BundleOpId::new("lock:daemon"),
-            tracing_span_id: None,
-        })
-        .expect("serialize lock request");
+        let lock =
+            serde_json::to_value(d2b_contracts_broker::broker_wire::ValidateLockSpecRequest {
+                lock_ref: BundleOpId::new("lock:daemon"),
+                tracing_span_id: None,
+            })
+            .expect("serialize lock request");
         assert_eq!(
             lock.as_object()
                 .unwrap()

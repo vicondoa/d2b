@@ -53,11 +53,7 @@
     "packages/d2b/tests/host_doctor_contract.rs",
     "packages/d2b/tests/vm_verbs_contract.rs",
     "packages/d2bd/Cargo.toml",
-    "packages/d2bd/src/guest_control_health.rs",
-    "packages/d2bd/src/lib.rs",
     "packages/d2bd/src/main.rs",
-    "packages/d2bd/src/supervisor/pidfd_table.rs",
-    "packages/d2bd/src/workload_target_index.rs",
     "tests/fixtures/gen-w3-cli-goldens.py",
     "tests/golden/l3-matrix/w3-arch.txt",
     "tests/golden/l3-matrix/w3-fedora.txt",
@@ -73,6 +69,10 @@
     "packages/d2b-provider-relay/src/bin/d2b-relay.rs",
     "packages/d2b/src/lib.rs",
     "packages/d2b/tests/status_contract.rs",
-    "packages/d2b/tests/usb_contract.rs"
+    "packages/d2b/tests/usb_contract.rs",
+    "packages/d2bd/src/guest_control_health.rs",
+    "packages/d2bd/src/lib.rs",
+    "packages/d2bd/src/supervisor/pidfd_table.rs",
+    "packages/d2bd/src/workload_target_index.rs"
   ]
 }

@@ -7,11 +7,11 @@ use std::task::{Poll, Waker};
 use std::thread;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-use d2b_contracts_zone_session::v3::ResourceRef;
 use d2b_contracts_provider::v3::credential::{
     CredentialLeaseHandle, CredentialMethod, CredentialRequest, CredentialResponse,
     CredentialServiceErrorCode, CredentialSourceVersion, PlacementBinding,
 };
+use d2b_contracts_zone_session::v3::ResourceRef;
 use d2b_provider_credential_entra::{
     EntraClientError, EntraClientState, EntraConfig, EntraCredentialClient,
     EntraCredentialProvider, EntraCredentialProviderFactory, EntraFuture, EntraLeaseGrant,

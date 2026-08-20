@@ -63,10 +63,9 @@ impl OutboundFrame {
             QueueClass::AttachmentControl => {
                 d2b_contracts_zone_session::v3::component_session::ChannelId::ATTACHMENT_CONTROL
             }
-            QueueClass::NamedStream => self
-                .stream
-                .map(StreamId::channel)
-                .unwrap_or(d2b_contracts_zone_session::v3::component_session::ChannelId::SESSION_CONTROL),
+            QueueClass::NamedStream => self.stream.map(StreamId::channel).unwrap_or(
+                d2b_contracts_zone_session::v3::component_session::ChannelId::SESSION_CONTROL,
+            ),
         }
     }
 

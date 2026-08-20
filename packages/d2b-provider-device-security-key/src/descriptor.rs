@@ -78,7 +78,9 @@ impl SecurityKeySemanticDescriptor {
     }
 
     /// Return the catalog's projection schema fingerprint.
-    pub const fn projection_schema_fingerprint(&self) -> &d2b_contracts_zone_session::v3::SchemaFingerprint {
+    pub const fn projection_schema_fingerprint(
+        &self,
+    ) -> &d2b_contracts_zone_session::v3::SchemaFingerprint {
         self.projection_factory.projection_schema_fingerprint()
     }
 

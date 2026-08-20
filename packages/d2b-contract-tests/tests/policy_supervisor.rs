@@ -75,11 +75,11 @@ fn supervisor_option_absent() {
 // Migrated from tests/usbip-state-machine-eval.sh.
 //
 // Integration gate for the typed per-busid USBIP state machine. The state
-// machine lives in `packages/d2bd/src/usbip_state_machine.rs`; the
+// machine lives in `packages/d2bd-runtime/src/usbip_state_machine.rs`; the
 // in-process behaviour is covered by that module's own `#[test]`s. This gate is
 // the repo-level source/doc lint that:
 //   1. Confirms every source + doc file is present.
-//   2. Confirms the module is wired into `d2bd::lib`
+//   2. Confirms the module is wired into `d2bd-runtime::lib`
 //      (`pub mod usbip_state_machine;`).
 //   3. Confirms `CANONICAL_STEPS` pins the canonical bring-up order
 //      `modprobe -> lock -> withhold -> firewall -> backend -> bind -> proxy`.
@@ -91,9 +91,9 @@ fn supervisor_option_absent() {
 // ---------------------------------------------------------------------------
 #[test]
 fn usbip_state_machine_surface() {
-    let src_rel = "packages/d2bd/src/usbip_state_machine.rs";
-    let lib_rel = "packages/d2bd/src/lib.rs";
-    let typed_rel = "packages/d2bd/src/typed_error.rs";
+    let src_rel = "packages/d2bd-runtime/src/usbip_state_machine.rs";
+    let lib_rel = "packages/d2bd-runtime/src/lib.rs";
+    let typed_rel = "packages/d2bd-runtime/src/typed_error.rs";
     let doc_rel = "docs/reference/usbip-state-machine.md";
 
     // Every source + doc file is present.

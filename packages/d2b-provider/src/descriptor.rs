@@ -1,8 +1,8 @@
 //! The v3 Provider descriptor.
 
 use d2b_contracts_zone_session::v3::{
-    identity::{ConfigurationGeneration, ResourceGeneration, ServiceName},
     ResourceRef,
+    identity::{ConfigurationGeneration, ResourceGeneration, ServiceName},
     zone_routing::ZonePath,
 };
 

@@ -14,7 +14,7 @@ use serde::{Deserialize, Serialize};
 use tracing;
 
 static SNAPSHOT_TMP_COUNTER: AtomicU64 = AtomicU64::new(0);
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 static SIGNAL_EPERM_TEST_ROLES: OnceLock<Mutex<std::collections::HashSet<(String, String)>>> =
     OnceLock::new();
 
@@ -86,7 +86,10 @@ impl BrokerReapLog {
     }
 
     /// Remove and return the event for `pid`, if any.
-    pub fn take(&self, pid: i32) -> Option<d2b_contracts_broker::broker_wire::ChildReapedNotification> {
+    pub fn take(
+        &self,
+        pid: i32,
+    ) -> Option<d2b_contracts_broker::broker_wire::ChildReapedNotification> {
         self.inner.lock().remove(&pid)
     }
 
@@ -404,7 +407,7 @@ impl PidfdTable {
                 vm: vm.to_owned(),
                 role: role.to_owned(),
             })?;
-        #[cfg(test)]
+        #[cfg(any(test, feature = "test-support"))]
         if SIGNAL_EPERM_TEST_ROLES
             .get_or_init(|| Mutex::new(Default::default()))
             .lock()
@@ -654,7 +657,7 @@ impl PidfdTable {
     }
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 pub fn force_signal_eperm_for_tests(vm: &str, role: &str, enabled: bool) {
     let mut roles = SIGNAL_EPERM_TEST_ROLES
         .get_or_init(|| Mutex::new(Default::default()))
@@ -1245,7 +1248,9 @@ mod tests {
     /// recorded the corresponding `ChildReaped` notification.
     #[test]
     fn wait_terminated_echild_uses_broker_reap_log() {
-        use d2b_contracts_broker::broker_wire::{ChildExitKind, ChildExitStatus, ChildReapedNotification};
+        use d2b_contracts_broker::broker_wire::{
+            ChildExitKind, ChildExitStatus, ChildReapedNotification,
+        };
         use nix::sys::wait::{Id, WaitPidFlag, WaitStatus, waitid};
 
         let child = Command::new("sleep")
@@ -1317,7 +1322,9 @@ mod tests {
 
     #[test]
     fn child_reap_buffer_survives_disconnect_reconnect() {
-        use d2b_contracts_broker::broker_wire::{ChildExitKind, ChildExitStatus, ChildReapedNotification};
+        use d2b_contracts_broker::broker_wire::{
+            ChildExitKind, ChildExitStatus, ChildReapedNotification,
+        };
 
         let log = BrokerReapLog::new();
         log.insert(ChildReapedNotification {
@@ -1349,7 +1356,7 @@ mod tests {
     }
 
     /// Concurrent snapshot
-    /// stress test that would have caught the fu32 tmpfile race.
+    /// stress test that would have caught the concurrent tmpfile race.
     /// 8 threads each register a pidfd then call snapshot(). The
     /// snapshot_tmp_path uses pid + atomic counter so concurrent
     /// calls must NOT collide on the .tmp filename.

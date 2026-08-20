@@ -66,7 +66,7 @@ enum DirectoryPolicy {
         uid: u32,
         gid: u32,
     },
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     AllowTestTempDirs,
 }
 
@@ -76,7 +76,7 @@ enum PeerPolicy {
         uid: u32,
         gid: u32,
     },
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     CurrentProcess,
 }
 
@@ -116,8 +116,8 @@ pub fn connect_guest_control_vsock(
     }
 }
 
-#[cfg(test)]
-pub(crate) fn connect_guest_control_vsock_for_tests(
+#[cfg(any(test, feature = "test-support"))]
+pub fn connect_guest_control_vsock_for_tests(
     socket_path: impl AsRef<Path>,
     state_root: impl AsRef<Path>,
     setup_timeout: Duration,
@@ -196,7 +196,7 @@ fn validate_peer_credentials(
     })?;
     let (expected_uid, expected_gid) = match peer_policy {
         PeerPolicy::Expected { uid, gid } => (uid, gid),
-        #[cfg(test)]
+        #[cfg(any(test, feature = "test-support"))]
         PeerPolicy::CurrentProcess => (current_uid_for_tests(), current_gid_for_tests()),
     };
     if peer.uid() as u32 != expected_uid || peer.gid() as u32 != expected_gid {
@@ -205,12 +205,12 @@ fn validate_peer_credentials(
     Ok(())
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 fn current_uid_for_tests() -> u32 {
     nix::unistd::geteuid().as_raw()
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 fn current_gid_for_tests() -> u32 {
     nix::unistd::getgid().as_raw()
 }
@@ -262,7 +262,7 @@ fn validate_root_ancestors(
     root: &Path,
     _directory_policy: DirectoryPolicy,
 ) -> Result<(), GuestControlTransportFailure> {
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     if matches!(_directory_policy, DirectoryPolicy::AllowTestTempDirs) {
         return Ok(());
     }
@@ -317,7 +317,7 @@ fn validate_directory_metadata(
                 return Err(GuestControlTransportFailure::UnsafeDirectory);
             }
         }
-        #[cfg(test)]
+        #[cfg(any(test, feature = "test-support"))]
         DirectoryPolicy::AllowTestTempDirs => {}
     }
     Ok(())

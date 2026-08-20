@@ -55,7 +55,9 @@ impl BusDirection {
     }
 
     /// Derive direction from already-authenticated subject evidence.
-    pub fn from_context(context: Option<&d2b_contracts_zone_session::v3::AuthenticatedSubjectContext>) -> Self {
+    pub fn from_context(
+        context: Option<&d2b_contracts_zone_session::v3::AuthenticatedSubjectContext>,
+    ) -> Self {
         let Some(context) = context else {
             return Self::Local;
         };

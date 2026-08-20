@@ -5,9 +5,7 @@ use std::path::PathBuf;
 
 const CONTRACTS_CRATE: &str = "d2b-contracts";
 const EXCLUDED_WORKSPACES: &[&str] = &[];
-const INDEPENDENT_WORKSPACE_ROOTS: &[&str] = &[
-    "packages/d2b-core/fuzz",
-];
+const INDEPENDENT_WORKSPACE_ROOTS: &[&str] = &["packages/d2b-core/fuzz"];
 const RELEASE_WORKFLOW: &str = ".github/workflows/release-host-binaries.yml";
 const RELEASE_BINARY_SELECTORS: &[(&str, &str, &str)] = &[
     ("d2bd", "d2bd", "Cargo.toml"),

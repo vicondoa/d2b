@@ -20,15 +20,18 @@ use d2b_core::{
 };
 use d2b_realm_core::{LauncherItemKind, ProtocolToken, WorkloadProviderKind, WorkloadState};
 
+use crate::typed_error::{TypedError, WorkloadLaunchErrorKind};
+use crate::unsafe_local_helper::{HelperAvailability, HelperRegistryError};
+
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) enum WorkloadRoute {
+pub enum WorkloadRoute {
     LocalVm { vm: String },
     UnsafeLocal,
     CapabilityUnavailable { provider: WorkloadProviderKind },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) enum CatalogError {
+pub enum CatalogError {
     ArtifactsUnavailable,
     TargetNotFound,
     LauncherDisabled,
@@ -41,14 +44,114 @@ pub(crate) enum CatalogError {
     OperationInProgress,
 }
 
+pub fn map_catalog_error(error: CatalogError) -> TypedError {
+    let kind = match error {
+        CatalogError::TargetNotFound | CatalogError::ItemNotFound | CatalogError::AliasConflict => {
+            WorkloadLaunchErrorKind::ItemNotFound
+        }
+        CatalogError::LauncherDisabled => WorkloadLaunchErrorKind::LauncherDisabled,
+        CatalogError::ArtifactsUnavailable
+        | CatalogError::ConfiguredItemMissing
+        | CatalogError::ConfiguredItemMismatch
+        | CatalogError::ShellCapabilityUnavailable => {
+            WorkloadLaunchErrorKind::ConfiguredItemMismatch
+        }
+        CatalogError::OperationConflict => WorkloadLaunchErrorKind::OperationConflict,
+        CatalogError::OperationInProgress => WorkloadLaunchErrorKind::QueueFull,
+    };
+    TypedError::WorkloadLaunchFailed { kind }
+}
+
+pub fn map_helper_registry_error(error: HelperRegistryError) -> TypedError {
+    use d2b_contracts_control::unsafe_local_wire::HelperFailureCode;
+
+    let kind = match error {
+        HelperRegistryError::HelperUnavailable => WorkloadLaunchErrorKind::HelperUnavailable,
+        HelperRegistryError::HelperStale | HelperRegistryError::GenerationSuperseded => {
+            WorkloadLaunchErrorKind::HelperStale
+        }
+        HelperRegistryError::QueueFull | HelperRegistryError::OperationInProgress => {
+            WorkloadLaunchErrorKind::QueueFull
+        }
+        HelperRegistryError::Timeout => WorkloadLaunchErrorKind::Timeout,
+        HelperRegistryError::OperationIdConflict => WorkloadLaunchErrorKind::OperationConflict,
+        HelperRegistryError::OperationRejected(code) => match code {
+            HelperFailureCode::UserManagerUnavailable => {
+                WorkloadLaunchErrorKind::UserManagerUnavailable
+            }
+            HelperFailureCode::GraphicalSessionInactive => {
+                WorkloadLaunchErrorKind::GraphicalSessionInactive
+            }
+            HelperFailureCode::WaylandUnavailable => WorkloadLaunchErrorKind::WaylandUnavailable,
+            HelperFailureCode::ProxyUnavailable | HelperFailureCode::FirstClientTimeout => {
+                WorkloadLaunchErrorKind::ProxyUnavailable
+            }
+            HelperFailureCode::OperationIdConflict => WorkloadLaunchErrorKind::OperationConflict,
+            HelperFailureCode::QueueFull => WorkloadLaunchErrorKind::QueueFull,
+            HelperFailureCode::Timeout => WorkloadLaunchErrorKind::Timeout,
+            _ => WorkloadLaunchErrorKind::Internal,
+        },
+        _ => WorkloadLaunchErrorKind::Internal,
+    };
+    TypedError::WorkloadLaunchFailed { kind }
+}
+
+pub fn workload_provider_label(provider: WorkloadProviderKind) -> &'static str {
+    match provider {
+        WorkloadProviderKind::LocalVm => "local-vm",
+        WorkloadProviderKind::QemuMedia => "qemu-media",
+        WorkloadProviderKind::ProviderManaged => "provider-managed",
+        WorkloadProviderKind::UnsafeLocal => "unsafe-local",
+    }
+}
+
+pub fn workload_availability_label(availability: WorkloadAvailability) -> &'static str {
+    match availability {
+        WorkloadAvailability::Ready => "ready",
+        WorkloadAvailability::HelperUnavailable => "helper-unavailable",
+        WorkloadAvailability::HelperStale => "helper-stale",
+        WorkloadAvailability::UserManagerUnavailable => "user-manager-unavailable",
+        WorkloadAvailability::GraphicalSessionInactive => "graphical-session-inactive",
+        WorkloadAvailability::WaylandUnavailable => "wayland-unavailable",
+        WorkloadAvailability::ProxyUnavailable => "proxy-unavailable",
+        WorkloadAvailability::Degraded => "degraded",
+    }
+}
+
+pub fn unsafe_local_workload_availability(
+    helper: HelperAvailability,
+    last_failure: Option<d2b_contracts_control::unsafe_local_wire::HelperFailureCode>,
+) -> WorkloadAvailability {
+    use d2b_contracts_control::unsafe_local_wire::HelperFailureCode;
+
+    match helper {
+        HelperAvailability::Ready => match last_failure {
+            Some(HelperFailureCode::UserManagerUnavailable) => {
+                WorkloadAvailability::UserManagerUnavailable
+            }
+            Some(HelperFailureCode::GraphicalSessionInactive) => {
+                WorkloadAvailability::GraphicalSessionInactive
+            }
+            Some(HelperFailureCode::WaylandUnavailable) => WorkloadAvailability::WaylandUnavailable,
+            Some(HelperFailureCode::ProxyUnavailable | HelperFailureCode::FirstClientTimeout) => {
+                WorkloadAvailability::ProxyUnavailable
+            }
+            Some(_) => WorkloadAvailability::Degraded,
+            None => WorkloadAvailability::Ready,
+        },
+        HelperAvailability::Unavailable => WorkloadAvailability::HelperUnavailable,
+        HelperAvailability::Stale => WorkloadAvailability::HelperStale,
+    }
+}
+
 #[derive(Debug, Clone)]
-pub(crate) struct CatalogEntry {
+pub struct CatalogEntry {
     pub metadata: LauncherWorkloadSummary,
     pub route: WorkloadRoute,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum LaunchLedgerBegin {
+pub enum LaunchLedgerBegin {
     New,
     AlreadyCommitted,
 }
@@ -69,7 +172,7 @@ fn launch_ledger() -> &'static Mutex<BTreeMap<(u32, String), LaunchLedgerEntry>>
     LEDGER.get_or_init(|| Mutex::new(BTreeMap::new()))
 }
 
-pub(crate) fn begin_launch(
+pub fn begin_launch(
     requester_uid: u32,
     operation_id: &str,
     target: &WorkloadTarget,
@@ -122,7 +225,7 @@ pub(crate) fn begin_launch(
     Ok(LaunchLedgerBegin::New)
 }
 
-pub(crate) fn complete_launch(requester_uid: u32, operation_id: &str) {
+pub fn complete_launch(requester_uid: u32, operation_id: &str) {
     if let Some(entry) = launch_ledger()
         .lock()
         .expect("workload launch ledger")
@@ -133,7 +236,7 @@ pub(crate) fn complete_launch(requester_uid: u32, operation_id: &str) {
     }
 }
 
-pub(crate) fn abort_launch(requester_uid: u32, operation_id: &str) {
+pub fn abort_launch(requester_uid: u32, operation_id: &str) {
     launch_ledger()
         .lock()
         .expect("workload launch ledger")
@@ -141,7 +244,7 @@ pub(crate) fn abort_launch(requester_uid: u32, operation_id: &str) {
 }
 
 #[derive(Debug, Clone)]
-pub(crate) struct ResolvedExec {
+pub struct ResolvedExec {
     pub identity: WorkloadIdentity,
     pub route: WorkloadRoute,
     pub item_id: ProtocolToken,
@@ -151,21 +254,21 @@ pub(crate) struct ResolvedExec {
 }
 
 #[derive(Debug, Clone)]
-pub(crate) struct ResolvedShell {
+pub struct ResolvedShell {
     pub identity: Option<WorkloadIdentity>,
     pub route: WorkloadRoute,
     pub policy: Option<HelperShellPolicy>,
 }
 
 #[derive(Debug, Clone)]
-pub(crate) struct WorkloadCatalog {
+pub struct WorkloadCatalog {
     entries: BTreeMap<String, CatalogEntry>,
     visible: std::collections::BTreeSet<String>,
     known_local_vms: std::collections::BTreeSet<String>,
 }
 
 impl WorkloadCatalog {
-    pub(crate) fn from_resolver(resolver: &BundleResolver) -> Result<Self, CatalogError> {
+    pub fn from_resolver(resolver: &BundleResolver) -> Result<Self, CatalogError> {
         let public = resolver
             .realm_workloads_launcher_v2
             .as_ref()
@@ -208,15 +311,15 @@ impl WorkloadCatalog {
         })
     }
 
-    pub(crate) fn entries(&self) -> impl Iterator<Item = &CatalogEntry> {
+    pub fn entries(&self) -> impl Iterator<Item = &CatalogEntry> {
         self.entries
             .iter()
             .filter(|(canonical, _)| self.visible.contains(*canonical))
             .map(|(_, entry)| entry)
     }
 
-    #[cfg(test)]
-    pub(crate) fn from_test_entries(entries: impl IntoIterator<Item = CatalogEntry>) -> Self {
+    #[cfg(any(test, feature = "test-support"))]
+    pub fn from_test_entries(entries: impl IntoIterator<Item = CatalogEntry>) -> Self {
         let entries = entries
             .into_iter()
             .map(|entry| {
@@ -241,13 +344,13 @@ impl WorkloadCatalog {
         }
     }
 
-    pub(crate) fn resolve(&self, target: &WorkloadTarget) -> Result<&CatalogEntry, CatalogError> {
+    pub fn resolve(&self, target: &WorkloadTarget) -> Result<&CatalogEntry, CatalogError> {
         self.entries
             .get(&target.to_canonical())
             .ok_or(CatalogError::TargetNotFound)
     }
 
-    pub(crate) fn public_summary(
+    pub fn public_summary(
         entry: &CatalogEntry,
         state: WorkloadState,
         availability: WorkloadAvailability,
@@ -279,7 +382,7 @@ impl WorkloadCatalog {
         }
     }
 
-    pub(crate) fn resolve_exec(
+    pub fn resolve_exec(
         &self,
         private: Option<&UnsafeLocalWorkloadsJson>,
         target: &WorkloadTarget,
@@ -341,7 +444,7 @@ impl WorkloadCatalog {
         })
     }
 
-    pub(crate) fn resolve_shell(
+    pub fn resolve_shell(
         &self,
         private: Option<&UnsafeLocalWorkloadsJson>,
         target: &str,

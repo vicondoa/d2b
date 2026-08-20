@@ -119,7 +119,7 @@ start.
 
 ## Module layout
 
-The gate ships in `packages/d2bd/src/otel_host_bridge_readiness.rs`:
+The gate ships in `packages/d2bd-runtime/src/otel_host_bridge_readiness.rs`:
 
 - `enum OtelHostBridgeReadiness` - pure verdict
   (`Ready` / `Pending { elapsed_ms }` / `Failed { reason }`).

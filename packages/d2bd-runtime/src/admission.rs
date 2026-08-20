@@ -1,19 +1,30 @@
+use d2b_contracts_broker::broker_wire::BrokerCallerRole;
 use d2b_contracts_control::public_wire;
 use d2b_realm_core::PrincipalId;
 use nix::sys::socket::{getsockopt, sockopt::PeerCredentials};
 use socket2::Socket;
-use uzers::{get_group_by_name, get_user_by_uid, get_user_groups};
+use uzers::get_group_by_name;
+use uzers::{get_user_by_uid, get_user_groups};
 
-use crate::{ServerState, io_wrap, typed_error::TypedError};
+use crate::typed_error::TypedError;
+use crate::unix_transport::io_wrap;
 
 #[derive(Debug, Clone)]
-pub(crate) struct PeerIdentity {
-    pub(crate) role: PeerRole,
-    pub(crate) uid: u32,
+pub struct AdmissionConfig {
+    pub daemon_uid: u32,
+    pub public_socket_group: String,
+    pub launcher_users: Vec<String>,
+    pub admin_users: Vec<String>,
+}
+
+#[derive(Debug, Clone)]
+pub struct PeerIdentity {
+    pub role: PeerRole,
+    pub uid: u32,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum PeerRole {
+pub enum PeerRole {
     Launcher,
     Admin,
     /// Scoped authority for the guarded `ExecStop` host-shutdown hook
@@ -26,37 +37,40 @@ pub(crate) enum PeerRole {
     HostShutdown,
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 #[derive(Clone)]
-pub(crate) struct PeerOverride {
-    pub(crate) uid: u32,
-    pub(crate) gid: u32,
-    pub(crate) username: Option<String>,
-    pub(crate) groups: Option<Vec<String>>,
+pub struct PeerOverride {
+    pub uid: u32,
+    pub gid: u32,
+    pub username: Option<String>,
+    pub groups: Option<Vec<String>>,
 }
 
-pub(crate) fn authorize_peer(
+#[cfg(any(test, feature = "test-support"))]
+// Compiled out unless test-support is enabled by d2bd's test targets; release
+// binaries contain no peer-identity override path.
+pub static TEST_PEER_OVERRIDE: std::sync::Mutex<Option<PeerOverride>> =
+    std::sync::Mutex::new(None);
+
+#[cfg(any(test, feature = "test-support"))]
+pub static TEST_PEER_OVERRIDE_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+pub fn authorize_peer(
     stream: &Socket,
-    state: &ServerState,
+    config: &AdmissionConfig,
 ) -> Result<PeerIdentity, TypedError> {
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     if let Some(peer) = peer_override_injected() {
         let _peer_gid = peer.gid;
-        return classify_peer(peer.uid, peer.username, peer.groups, state, false);
+        return classify_peer(peer.uid, peer.username, peer.groups, config, false);
     }
 
     let peer = getsockopt(stream, PeerCredentials).map_err(io_wrap("read SO_PEERCRED"))?;
     let _peer_pid = peer.pid();
     let _peer_gid = peer.gid();
     let uid = peer.uid() as u32;
-    if uid == state.daemon_uid {
-        return Err(TypedError::AuthzNotALauncher { peer_uid: uid });
-    }
     if uid == 0 {
-        return Ok(PeerIdentity {
-            role: PeerRole::HostShutdown,
-            uid,
-        });
+        return classify_peer(uid, None, Some(Vec::new()), config, false);
     }
     let user = get_user_by_uid(uid);
     let username = user
@@ -71,17 +85,25 @@ pub(crate) fn authorize_peer(
                 .map(|group| group.name().to_string_lossy().into_owned())
                 .collect()
         });
-    classify_peer(uid, username, groups, state, true)
+    classify_peer(uid, username, groups, config, true)
 }
 
-fn classify_peer(
+#[cfg(any(test, feature = "test-support"))]
+fn peer_override_injected() -> Option<PeerOverride> {
+    TEST_PEER_OVERRIDE
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .clone()
+}
+
+pub fn classify_peer(
     uid: u32,
     username: Option<String>,
     groups: Option<Vec<String>>,
-    state: &ServerState,
+    config: &AdmissionConfig,
     production_lookup: bool,
 ) -> Result<PeerIdentity, TypedError> {
-    if uid == state.daemon_uid {
+    if uid == config.daemon_uid {
         return Err(TypedError::AuthzNotALauncher { peer_uid: uid });
     }
 
@@ -101,11 +123,10 @@ fn classify_peer(
     let Some(groups) = groups else {
         return Err(TypedError::AuthzNotALauncher { peer_uid: uid });
     };
-    let lifecycle_group = state.config.public_socket_group.as_str();
+    let lifecycle_group = config.public_socket_group.as_str();
     let lifecycle_member = lifecycle_group_member(lifecycle_group, &groups);
     let configured_launcher = username.as_ref().is_some_and(|name| {
-        state
-            .config
+        config
             .launcher_users
             .iter()
             .any(|launcher| launcher == name)
@@ -123,7 +144,7 @@ fn classify_peer(
 
     let role = if username
         .as_ref()
-        .is_some_and(|name| state.config.admin_users.iter().any(|admin| admin == name))
+        .is_some_and(|name| config.admin_users.iter().any(|admin| admin == name))
     {
         PeerRole::Admin
     } else {
@@ -133,11 +154,11 @@ fn classify_peer(
     Ok(PeerIdentity { role, uid })
 }
 
-fn lifecycle_group_member(configured_group: &str, groups: &[String]) -> bool {
+pub fn lifecycle_group_member(configured_group: &str, groups: &[String]) -> bool {
     !configured_group.is_empty() && groups.iter().any(|group| group == configured_group)
 }
 
-pub(crate) fn verb_requires_admin(verb: &str) -> bool {
+pub fn verb_requires_admin(verb: &str) -> bool {
     matches!(
         verb,
         "vmStart"
@@ -172,49 +193,32 @@ pub(crate) fn verb_requires_admin(verb: &str) -> bool {
 /// audit export, host prepare, …) are denied even though root could
 /// normally perform them, because the shutdown hook only needs to stop
 /// running VMs.
-pub(crate) fn verb_allowed_for_host_shutdown(verb: &str) -> bool {
+pub fn verb_allowed_for_host_shutdown(verb: &str) -> bool {
     matches!(verb, "vmStop")
 }
 
-pub(crate) fn gateway_display_op_requires_admin(op: &public_wire::GatewayDisplayOp) -> bool {
+pub fn gateway_display_op_requires_admin(op: &public_wire::GatewayDisplayOp) -> bool {
     matches!(
         op,
         public_wire::GatewayDisplayOp::Start(_) | public_wire::GatewayDisplayOp::Stop(_)
     )
 }
 
-pub(crate) fn gateway_display_peer_principal(peer: &PeerIdentity) -> PrincipalId {
+pub fn gateway_display_peer_principal(peer: &PeerIdentity) -> PrincipalId {
     PrincipalId::parse(format!("uid-{}", peer.uid))
         .expect("trusted display principal derived from numeric uid is valid")
 }
 
-pub(crate) fn gateway_display_peer_principal_string(peer: &PeerIdentity) -> String {
+pub fn gateway_display_peer_principal_string(peer: &PeerIdentity) -> String {
     gateway_display_peer_principal(peer).to_string()
 }
 
-/// Test-only peer-credential injection. The accept path
-/// ([`authorize_peer`]) reads the connecting peer's identity from
-/// `SO_PEERCRED`; the accept-loop tests need to drive `handle_connection`
-/// over an in-process socketpair while pretending the peer is a specific
-/// launcher/admin uid. Rather than mutate process-global env (which is
-/// `unsafe` under edition 2024) this is injected through a `#[cfg(test)]`
-/// `Mutex`. In non-test builds it is compiled out and always `None`, so the
-/// production accept path has no test backdoor at all.
-#[cfg(test)]
-pub(crate) static TEST_PEER_OVERRIDE: std::sync::Mutex<Option<PeerOverride>> =
-    std::sync::Mutex::new(None);
-
-/// Serializes the accept-loop tests that inject a [`PeerOverride`] so two of
-/// them cannot interleave on the process-global injection slot.
-#[cfg(test)]
-pub(crate) static TEST_PEER_OVERRIDE_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
-
-#[cfg(test)]
-fn peer_override_injected() -> Option<PeerOverride> {
-    TEST_PEER_OVERRIDE
-        .lock()
-        .unwrap_or_else(|p| p.into_inner())
-        .clone()
+pub fn broker_caller_role_for_peer(peer: &PeerIdentity) -> BrokerCallerRole {
+    match peer.role {
+        PeerRole::Admin => BrokerCallerRole::AdminUid { uid: peer.uid },
+        PeerRole::Launcher => BrokerCallerRole::LauncherUid { uid: peer.uid },
+        PeerRole::HostShutdown => BrokerCallerRole::AdminUid { uid: peer.uid },
+    }
 }
 
 #[cfg(test)]

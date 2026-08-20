@@ -6,10 +6,10 @@
 //! of raw device paths) and the `BrokerRequest`/`BrokerResponse` wire
 //! contract round-trip via `serde_json`.
 
+use d2b_contracts::types::VmId;
 use d2b_contracts_broker::broker_wire::{
     BrokerRequest, BrokerResponse, OpenHidrawSecurityKeyRequest, OpenHidrawSecurityKeyResponse,
 };
-use d2b_contracts::types::VmId;
 use d2b_contracts_zone_session::v3::ResourceRef;
 use d2b_priv_broker::ops::audit_op::OperationFields;
 use d2b_priv_broker::{fd_passing::recv_fds, protocol::send_json_frame_with_fds};
@@ -76,8 +76,10 @@ fn open_hidraw_security_key_audit_round_trips_from_value() {
 #[test]
 fn open_hidraw_security_key_request_wire_round_trips() {
     let device_ref = ResourceRef::parse("Device/yk5c-selector").expect("device ref");
-    let expected_authority_key =
-        d2b_contracts_broker::broker_wire::security_key_authority_binding(&device_ref, "yk5c-selector");
+    let expected_authority_key = d2b_contracts_broker::broker_wire::security_key_authority_binding(
+        &device_ref,
+        "yk5c-selector",
+    );
     let request = BrokerRequest::OpenHidrawSecurityKey(OpenHidrawSecurityKeyRequest {
         vm_id: VmId::new("personal-dev"),
         selector_id: "yk5c-selector".to_owned(),

@@ -6,8 +6,8 @@
 //! never taken from the request payload.
 
 use d2b_contracts_zone_session::v3::{
-    identity::{AuthenticatedSubjectContext, ResourceGeneration, ServiceName},
     ResourceRef,
+    identity::{AuthenticatedSubjectContext, ResourceGeneration, ServiceName},
     zone_routing::ZonePath,
 };
 

@@ -1,4 +1,6 @@
-use d2b_contracts_broker::{BrokerCapabilities, PROTOCOL_VERSION, broker_wire::BrokerErrorResponse};
+use d2b_contracts_broker::{
+    BrokerCapabilities, PROTOCOL_VERSION, broker_wire::BrokerErrorResponse,
+};
 
 #[test]
 fn capabilities_keep_protocol_version_and_wire_tags() {

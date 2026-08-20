@@ -87,7 +87,8 @@ impl DesiredRecord {
     fn is_running(&self) -> bool {
         match &self.process {
             DesiredProcess::Process(spec) => {
-                spec.desired_lifecycle() == d2b_contracts_zone_session::v3::process::DesiredLifecycle::Running
+                spec.desired_lifecycle()
+                    == d2b_contracts_zone_session::v3::process::DesiredLifecycle::Running
             }
             DesiredProcess::Ephemeral(_) => true,
         }

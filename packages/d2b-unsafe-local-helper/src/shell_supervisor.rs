@@ -1031,10 +1031,9 @@ fn process_terminal_request(
                     }
                 }
                 TerminalStream::Stderr => HelperTerminalReadOutputResult {
-                    data_base64: d2b_contracts_control::unsafe_local_wire::HelperTerminalChunkBase64::new(
-                        "",
-                    )
-                    .expect("empty base64 is valid"),
+                    data_base64:
+                        d2b_contracts_control::unsafe_local_wire::HelperTerminalChunkBase64::new("")
+                            .expect("empty base64 is valid"),
                     next_cursor: request.cursor,
                     eof: true,
                     dropped_bytes: 0,
@@ -1118,7 +1117,9 @@ fn process_terminal_request(
                     control_sequence: request.control_sequence,
                     result: HelperTerminalAttachmentClosed {
                         detached: true,
-                        cause: Some(d2b_contracts_control::public_wire::ShellCloseCause::ClientDetach),
+                        cause: Some(
+                            d2b_contracts_control::public_wire::ShellCloseCause::ClientDetach,
+                        ),
                     },
                 }),
                 true,
@@ -1218,7 +1219,8 @@ mod tests {
 
     #[test]
     fn only_observation_requests_may_run_concurrently() {
-        let chunk = d2b_contracts_control::unsafe_local_wire::HelperTerminalChunkBase64::new("").unwrap();
+        let chunk =
+            d2b_contracts_control::unsafe_local_wire::HelperTerminalChunkBase64::new("").unwrap();
         assert!(!terminal_request_may_run_concurrently(
             &HelperTerminalRequest::WriteStdin(HelperTerminalWriteStdin {
                 request_id: 1,

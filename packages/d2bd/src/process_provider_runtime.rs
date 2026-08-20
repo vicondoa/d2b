@@ -200,17 +200,17 @@ impl ProviderLivenessProbe {
     }
 }
 
-impl crate::supervisor::readiness_liveness::LivenessProbe for ProviderLivenessProbe {
-    fn probe(&self) -> crate::supervisor::readiness_liveness::RunnerLiveness {
+impl d2bd_runtime::supervisor::readiness_liveness::LivenessProbe for ProviderLivenessProbe {
+    fn probe(&self) -> d2bd_runtime::supervisor::readiness_liveness::RunnerLiveness {
         match crate::block_on_future(self.providers.probe_node(&self.vm, &self.node)) {
             Ok(ProviderLiveness::Alive) => {
-                crate::supervisor::readiness_liveness::RunnerLiveness::Alive
+                d2bd_runtime::supervisor::readiness_liveness::RunnerLiveness::Alive
             }
             Ok(ProviderLiveness::Exited) => {
-                crate::supervisor::readiness_liveness::RunnerLiveness::Exited(None)
+                d2bd_runtime::supervisor::readiness_liveness::RunnerLiveness::Exited(None)
             }
             Ok(ProviderLiveness::Unknown) | Err(_) => {
-                crate::supervisor::readiness_liveness::RunnerLiveness::Unknown
+                d2bd_runtime::supervisor::readiness_liveness::RunnerLiveness::Unknown
             }
         }
     }

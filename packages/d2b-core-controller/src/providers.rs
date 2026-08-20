@@ -204,13 +204,12 @@ impl ProviderHandler {
 
 #[cfg(test)]
 mod tests {
+    use d2b_contracts_provider::v3::UpgradePolicy as ProviderUpgradePolicy;
     use d2b_contracts_provider::v3::{
         ArtifactDigest, ArtifactDigestSet, ArtifactId, CompatibilityRange, ComponentDescriptor,
-        PolicyEvaluation, RevocationState, SignatureState, TrustEvidence,
-        UpgradeDisposition,
+        PolicyEvaluation, RevocationState, SignatureState, TrustEvidence, UpgradeDisposition,
         execution_policy::{BoundedToken, ExecutionDomain},
     };
-    use d2b_contracts_provider::v3::UpgradePolicy as ProviderUpgradePolicy;
 
     use super::*;
 
@@ -250,7 +249,8 @@ mod tests {
                 api_major: 3,
                 api_minor: 0,
                 descriptor_fingerprint: fingerprint(),
-                state_schema_version: d2b_contracts_zone_session::v3::SchemaVersion::new(1, 0).unwrap(),
+                state_schema_version: d2b_contracts_zone_session::v3::SchemaVersion::new(1, 0)
+                    .unwrap(),
             },
             [ComponentDescriptor::new(
                 BoundedToken::parse("service").unwrap(),

@@ -11,11 +11,11 @@
 //! integration test is its own crate and a shared module would run the
 //! honest suite twice.
 
-use d2b_contracts_zone_session::v3::identity::BindingDigest;
-use d2b_contracts_resource::v3::ArtifactId;
 use d2b_contracts_provider::v3::semantic_services::catalog;
+use d2b_contracts_resource::v3::ArtifactId;
+use d2b_contracts_zone_session::v3::identity::BindingDigest;
 use d2b_contracts_zone_session::v3::{
-    Locality, ResourceEnvelope, TransportBinding,
+    Locality, ResourceEnvelope, ResourceRef, TransportBinding,
     execution_policy::{BoundedToken, ExecutionDomain},
     identity::{ResourceTypeName, SchemaFingerprint, SessionPurpose},
     provider::{
@@ -26,7 +26,6 @@ use d2b_contracts_zone_session::v3::{
         RevocationState, SignatureState, StandardCapabilityMatrix, TrustEvidence,
         UpgradeDisposition, UpgradePolicy,
     },
-    ResourceRef,
     resource_schema::{ExtensionSchemaId, SchemaVersion, canonical_json_bytes},
     zone_routing::ZonePath,
 };

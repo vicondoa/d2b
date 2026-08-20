@@ -1,8 +1,10 @@
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use d2b_contracts_broker::broker_wire::{BrokerRequest, BrokerResponse, OpenHidrawSecurityKeyRequest};
 use d2b_contracts::types::VmId;
+use d2b_contracts_broker::broker_wire::{
+    BrokerRequest, BrokerResponse, OpenHidrawSecurityKeyRequest,
+};
 use d2b_contracts_zone_session::v3::{ResourceRef, ResourceUid};
 use d2b_core::bundle_resolver::BundleResolver;
 use d2b_core::processes::{ProcessRole, ReadinessPredicate};

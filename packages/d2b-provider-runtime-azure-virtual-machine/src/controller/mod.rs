@@ -921,8 +921,9 @@ where
     fn apply_update(&mut self, update: AzureVmUpdate) -> Result<(), AzureVmError> {
         match update {
             AzureVmUpdate::Resize { size } => {
-                self.settings.vm_size = d2b_contracts_provider::v3::credential::OpaqueAzureRef::parse(size)
-                    .map_err(|_| AzureVmError::InvalidConfiguration)?;
+                self.settings.vm_size =
+                    d2b_contracts_provider::v3::credential::OpaqueAzureRef::parse(size)
+                        .map_err(|_| AzureVmError::InvalidConfiguration)?;
             }
             AzureVmUpdate::AttachDisk { disk } => self.settings.data_disks.push(disk),
             AzureVmUpdate::DetachDisk { lun } => {

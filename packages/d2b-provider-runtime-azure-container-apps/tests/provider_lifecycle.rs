@@ -2,16 +2,14 @@ use std::collections::VecDeque;
 use std::sync::{Arc, Mutex};
 
 use async_trait::async_trait;
-use d2b_contracts::{
-    provider_effects::aca::{
-        AcaConfiguredDiskId, AcaControl, AcaControlContext, AcaControlError, AcaControlErrorKind,
-        AcaControlHealth, AcaCpuMillis, AcaCredentialLease, AcaCredentialLeaseClient,
-        AcaCredentialLeaseRequest, AcaDeleteOutcome, AcaDesiredDiskImage, AcaDesiredSandbox,
-        AcaDiskImageCandidates, AcaDiskImageId, AcaDiskImageRecord, AcaDiskImageSource,
-        AcaMemoryMib, AcaOperationId, AcaProfileId, AcaReadinessPolicy, AcaResourceBinding,
-        AcaRuntimeConfig, AcaSandboxCandidates, AcaSandboxId, AcaSandboxLifecycle,
-        AcaSandboxProfile, AcaSandboxRecord, CredentialLeaseHandle, ResourceRef, ResourceUid,
-    },
+use d2b_contracts::provider_effects::aca::{
+    AcaConfiguredDiskId, AcaControl, AcaControlContext, AcaControlError, AcaControlErrorKind,
+    AcaControlHealth, AcaCpuMillis, AcaCredentialLease, AcaCredentialLeaseClient,
+    AcaCredentialLeaseRequest, AcaDeleteOutcome, AcaDesiredDiskImage, AcaDesiredSandbox,
+    AcaDiskImageCandidates, AcaDiskImageId, AcaDiskImageRecord, AcaDiskImageSource, AcaMemoryMib,
+    AcaOperationId, AcaProfileId, AcaReadinessPolicy, AcaResourceBinding, AcaRuntimeConfig,
+    AcaSandboxCandidates, AcaSandboxId, AcaSandboxLifecycle, AcaSandboxProfile, AcaSandboxRecord,
+    CredentialLeaseHandle, ResourceRef, ResourceUid,
 };
 use d2b_provider_runtime_azure_container_apps::{
     AcaClock, AcaController, AcaControllerError, AcaDeploymentRequest, AcaDeploymentResponse,
