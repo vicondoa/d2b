@@ -75,7 +75,7 @@
   "features": [],
   "default_features": true,
   "source_authority": "Cargo.lock",
-  "lock_sha256": "de9f13860979f527e8968b2304860a410dde269fadac1e56585a4377ffcf7160",
+  "lock_sha256": "9b371a67fd2fd80cdab492f1ff2449e74b7bacea413fe7f7a95a5dc3bf1bf9c8",
   "packages": [
     {
       "id": "adler2@2.0.1#registry+https://github.com/rust-lang/crates.io-index",
@@ -6225,12 +6225,6 @@
     },
     {
       "from": "d2b-provider-runtime-azure-container-apps@0.0.0-bootstrap#path",
-      "to": "d2b-contracts-zone-session@0.0.0-bootstrap#path",
-      "kind": "normal",
-      "target": null
-    },
-    {
-      "from": "d2b-provider-runtime-azure-container-apps@0.0.0-bootstrap#path",
       "to": "d2b-contracts@0.0.0-bootstrap#path",
       "kind": "normal",
       "target": null
@@ -6303,13 +6297,7 @@
     },
     {
       "from": "d2b-provider-runtime-azure-virtual-machine@0.0.0-bootstrap#path",
-      "to": "d2b-contracts-provider@0.0.0-bootstrap#path",
-      "kind": "normal",
-      "target": null
-    },
-    {
-      "from": "d2b-provider-runtime-azure-virtual-machine@0.0.0-bootstrap#path",
-      "to": "d2b-contracts-zone-session@0.0.0-bootstrap#path",
+      "to": "d2b-contracts@0.0.0-bootstrap#path",
       "kind": "normal",
       "target": null
     },
@@ -6693,19 +6681,7 @@
     },
     {
       "from": "d2b-provider-transport-azure-relay@0.0.0-bootstrap#path",
-      "to": "d2b-contracts-zone-session@0.0.0-bootstrap#path",
-      "kind": "normal",
-      "target": null
-    },
-    {
-      "from": "d2b-provider-transport-azure-relay@0.0.0-bootstrap#path",
-      "to": "d2b-realm-core@0.0.0-bootstrap#path",
-      "kind": "normal",
-      "target": null
-    },
-    {
-      "from": "d2b-provider-transport-azure-relay@0.0.0-bootstrap#path",
-      "to": "d2b-realm-provider@0.0.0-bootstrap#path",
+      "to": "d2b-contracts@0.0.0-bootstrap#path",
       "kind": "normal",
       "target": null
     },

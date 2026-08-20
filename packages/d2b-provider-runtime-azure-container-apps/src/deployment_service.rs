@@ -2,13 +2,14 @@
 
 use std::sync::Arc;
 
-use d2b_contracts::provider_effects::aca::{
+use crate::{
     AcaControl, AcaControlContext, AcaControlHealth, AcaCredentialLease, AcaCredentialLeaseClient,
     AcaCredentialLeaseRequest, AcaCredentialPurpose, AcaDeleteOutcome, AcaDesiredDiskImage,
     AcaDesiredSandbox, AcaDiskImageRecord, AcaOperationId, AcaProfileId, AcaResourceBinding,
     AcaSandboxCandidates, AcaSandboxId, AcaSandboxProfile, AcaSandboxRecord, AcaTypeError,
-    AcaWorkloadQuery, ResourceRef,
+    AcaWorkloadQuery,
 };
+use d2b_contracts::ResourceRef;
 
 use crate::controller::{AcaClock, SystemAcaClock};
 use tokio::sync::Semaphore;

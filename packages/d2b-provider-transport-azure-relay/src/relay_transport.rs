@@ -10,7 +10,7 @@ use std::{
 };
 
 use async_trait::async_trait;
-use d2b_contracts_zone_session::v3::ResourceRef;
+use d2b_contracts::ResourceRef;
 use hmac::{Hmac, Mac};
 use sha2::{Digest, Sha256};
 use tokio::sync::{Mutex, OwnedSemaphorePermit, Semaphore};

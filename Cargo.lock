@@ -1549,7 +1549,6 @@ dependencies = [
  "azure_core",
  "azure_identity",
  "d2b-contracts",
- "d2b-contracts-zone-session",
  "d2b-realm-core",
  "d2b-realm-provider",
  "reqwest 0.12.28",
@@ -1566,8 +1565,7 @@ version = "0.0.0-bootstrap"
 dependencies = [
  "async-trait",
  "base64",
- "d2b-contracts-provider",
- "d2b-contracts-zone-session",
+ "d2b-contracts",
  "serde",
  "serde_json",
  "sha2",
@@ -1682,9 +1680,7 @@ version = "0.0.0-bootstrap"
 dependencies = [
  "async-trait",
  "base64",
- "d2b-contracts-zone-session",
- "d2b-realm-core",
- "d2b-realm-provider",
+ "d2b-contracts",
  "hmac",
  "serde",
  "serde_json",

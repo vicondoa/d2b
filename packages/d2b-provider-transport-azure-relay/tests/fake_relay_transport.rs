@@ -5,7 +5,7 @@ use std::{
 };
 
 use async_trait::async_trait;
-use d2b_contracts_zone_session::v3::ResourceRef;
+use d2b_contracts::ResourceRef;
 use d2b_provider_transport_azure_relay::{
     AzureRelayTransportProvider, CreditWindow, ReconnectBackoff, RelayAuthenticatedPeer,
     RelayCredentialError, RelayCredentialLease, RelayCredentialMaterial, RelayCredentialPort,

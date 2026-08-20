@@ -712,7 +712,7 @@ where
     }
 
     /// Return the configured gateway execution reference.
-    pub fn controller_execution_ref(&self) -> &d2b_contracts_zone_session::v3::ResourceRef {
+    pub fn controller_execution_ref(&self) -> &d2b_contracts::ResourceRef {
         &self.provider_config.controller_execution_ref
     }
 
@@ -896,7 +896,7 @@ where
     fn validate_update(&self, update: &AzureVmUpdate) -> Result<(), AzureVmError> {
         match update {
             AzureVmUpdate::Resize { size } => {
-                d2b_contracts_provider::v3::credential::OpaqueAzureRef::parse(size.clone())
+                d2b_contracts::OpaqueAzureRef::parse(size.clone())
                     .map_err(|_| AzureVmError::InvalidConfiguration)?;
             }
             AzureVmUpdate::AttachDisk { disk } => {
@@ -922,7 +922,7 @@ where
         match update {
             AzureVmUpdate::Resize { size } => {
                 self.settings.vm_size =
-                    d2b_contracts_provider::v3::credential::OpaqueAzureRef::parse(size)
+                    d2b_contracts::OpaqueAzureRef::parse(size)
                         .map_err(|_| AzureVmError::InvalidConfiguration)?;
             }
             AzureVmUpdate::AttachDisk { disk } => self.settings.data_disks.push(disk),

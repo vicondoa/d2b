@@ -11,8 +11,7 @@ rust_library(
     srcs = glob(["src/**/*.rs"], allow_empty = True),
     compile_data = ["Cargo.toml"],
     deps = [
-        "//packages/d2b-contracts-provider:d2b_contracts_provider",
-        "//packages/d2b-contracts-zone-session:d2b_contracts_zone_session",
+        "//packages/d2b-contracts:d2b_contracts",
     ] + all_crate_deps(normal = True, cargo_only = True),
     proc_macro_deps = [
         "@crates//:async-trait",
@@ -36,8 +35,6 @@ rust_test(
     compile_data = ["Cargo.toml"],
     visibility = ["//visibility:public"],
     deps = [
-        "//packages/d2b-contracts-provider:d2b_contracts_provider",
-        "//packages/d2b-contracts-zone-session:d2b_contracts_zone_session",
         ":d2b_provider_runtime_azure_virtual_machine",
     ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
 )
@@ -50,8 +47,6 @@ rust_test(
     compile_data = ["Cargo.toml"],
     visibility = ["//visibility:public"],
     deps = [
-        "//packages/d2b-contracts-provider:d2b_contracts_provider",
-        "//packages/d2b-contracts-zone-session:d2b_contracts_zone_session",
         ":d2b_provider_runtime_azure_virtual_machine",
     ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
 )
@@ -64,8 +59,6 @@ rust_test(
     compile_data = ["Cargo.toml"],
     visibility = ["//visibility:public"],
     deps = [
-        "//packages/d2b-contracts-provider:d2b_contracts_provider",
-        "//packages/d2b-contracts-zone-session:d2b_contracts_zone_session",
         ":d2b_provider_runtime_azure_virtual_machine",
     ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
 )
@@ -78,8 +71,7 @@ rust_test(
     compile_data = ["Cargo.toml"],
     visibility = ["//visibility:public"],
     deps = [
-        "//packages/d2b-contracts-provider:d2b_contracts_provider",
-        "//packages/d2b-contracts-zone-session:d2b_contracts_zone_session",
+        "//packages/d2b-contracts:d2b_contracts",
         ":d2b_provider_runtime_azure_virtual_machine",
     ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
 )

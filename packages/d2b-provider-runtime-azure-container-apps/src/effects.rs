@@ -1,12 +1,15 @@
 //! Azure Container Apps effect contracts.
 
+#![allow(missing_docs)]
+
 use std::{fmt, future::Future, pin::Pin};
 
 use async_trait::async_trait;
 use serde::{Deserialize, Deserializer, Serialize};
 
-pub use crate::foundation_effects::{CredentialLeaseHandle, OpaqueAzureRef};
-pub use crate::identity::{ResourceRef, ResourceUid};
+pub use d2b_contracts::{
+    CredentialLeaseHandle, OpaqueAzureRef, ResourceRef, ResourceUid,
+};
 
 pub const MAX_ACA_RESOURCE_ID_LEN: usize = 60;
 pub const MAX_ACA_CANDIDATES: usize = 8;
