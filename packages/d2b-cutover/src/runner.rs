@@ -396,6 +396,18 @@ impl RunnerBootstrap {
         {
             return Err(RunnerCapabilityError::Preview);
         }
+        if !self
+            .request
+            .request_digest_matches()
+            .map_err(|_| RunnerCapabilityError::Request)?
+        {
+            return Err(RunnerCapabilityError::Request);
+        }
+        if self.request.system_artifact_id() != self.preview.system_artifact_id()
+            || self.request.source_system_artifact_id() != self.preview.source_system_artifact_id()
+        {
+            return Err(RunnerCapabilityError::Preview);
+        }
         Operation::new(self.request.clone(), &self.preview)
             .map(|_| ())
             .map_err(|_| RunnerCapabilityError::Request)?;
@@ -771,6 +783,8 @@ pub enum RunnerCommand {
 pub struct RunnerStatus {
     /// Opaque operation identity.
     pub operation_id: OperationId,
+    /// Preview digest admitted for this operation.
+    pub preview_digest: Digest,
     /// Current pure-engine state.
     pub state: OperationState,
     /// Current phase.
@@ -803,6 +817,8 @@ pub enum RunnerSocketError {
     Unauthorized,
     /// The peer is not the bound operator or did not supply fresh consent.
     OperatorMismatch,
+    /// The handoff artifact does not match the admitted cutover binding.
+    ArtifactBindingMismatch,
     /// The command is not valid for the current operation state.
     InvalidTransition,
     /// The command frame was malformed or oversized.

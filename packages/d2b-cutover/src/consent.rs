@@ -8,7 +8,7 @@ use d2b_contracts::v3::{
 use serde::{Deserialize, Serialize};
 
 use crate::model::{
-    CandidateId, Digest, IdError, OperationId, OperationKind, OperatorId, RecoveryId,
+    ArtifactId, CandidateId, Digest, IdError, OperationId, OperationKind, OperatorId, RecoveryId,
 };
 
 /// Domain separator for recovery attestation digests.
@@ -150,6 +150,9 @@ impl RecoveryAttestation {
 }
 
 /// All values required to bind apply consent to one operation.
+///
+/// Cutover admission requires `system_artifact_id`; it remains optional here
+/// so reset and pre-binding journals retain their decode compatibility.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ConsentBinding {
@@ -158,6 +161,10 @@ pub struct ConsentBinding {
     candidate_id: CandidateId,
     preview_digest: Digest,
     recovery_digest: Option<Digest>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    system_artifact_id: Option<ArtifactId>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    source_system_artifact_id: Option<ArtifactId>,
     operator_id: OperatorId,
 }
 
@@ -177,8 +184,25 @@ impl ConsentBinding {
             candidate_id,
             preview_digest,
             recovery_digest,
+            system_artifact_id: None,
+            source_system_artifact_id: None,
             operator_id,
         }
+    }
+
+    /// Bind an optional system artifact identity to this consent.
+    pub fn with_system_artifact_id(mut self, system_artifact_id: Option<ArtifactId>) -> Self {
+        self.system_artifact_id = system_artifact_id;
+        self
+    }
+
+    /// Bind the preserved source artifact identity to this consent.
+    pub fn with_source_system_artifact_id(
+        mut self,
+        source_system_artifact_id: Option<ArtifactId>,
+    ) -> Self {
+        self.source_system_artifact_id = source_system_artifact_id;
+        self
     }
 
     /// Borrow the operation identity.
@@ -204,6 +228,16 @@ impl ConsentBinding {
     /// Borrow the optional recovery digest.
     pub fn recovery_digest(&self) -> Option<&Digest> {
         self.recovery_digest.as_ref()
+    }
+
+    /// Borrow the optional system artifact identity.
+    pub fn system_artifact_id(&self) -> Option<&ArtifactId> {
+        self.system_artifact_id.as_ref()
+    }
+
+    /// Borrow the preserved source artifact identity.
+    pub fn source_system_artifact_id(&self) -> Option<&ArtifactId> {
+        self.source_system_artifact_id.as_ref()
     }
 
     /// Borrow the bound operator.

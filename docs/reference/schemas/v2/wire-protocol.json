@@ -4760,6 +4760,30 @@
     "CutoverAdmissionRequest": {
       "description": "Typed request for the broker-owned apply admission observation.",
       "type": "object",
+      "properties": {
+        "sourceSystemArtifactId": {
+          "description": "Preserved source artifact resolved and verified before host drain.",
+          "anyOf": [
+            {
+              "$ref": "#/definitions/ArtifactId"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "systemArtifactId": {
+          "description": "Candidate artifact resolved and verified before host drain.",
+          "anyOf": [
+            {
+              "$ref": "#/definitions/ArtifactId"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
       "additionalProperties": false
     },
     "CutoverAdmissionResponse": {
@@ -8244,6 +8268,20 @@
         },
         "revisionPlanId": {
           "description": "Revision-plan identity bound to the request.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "sourceSystemArtifactId": {
+          "description": "Preserved source artifact identity bound to native rollback.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "systemArtifactId": {
+          "description": "System artifact identity bound to the frozen cutover preview and handoff.",
           "type": [
             "string",
             "null"

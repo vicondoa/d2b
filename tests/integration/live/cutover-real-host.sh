@@ -55,6 +55,26 @@ run_validator() {
   exit 78
 }
 
+run_json_validator() {
+  local label="$1"
+  local predicate="$2"
+  shift 2
+  local output
+  if ! output=$("$@" 2>&1); then
+    refuse "validation failed before mutation: $label; raw paths and identities are intentionally suppressed"
+    exit 78
+  fi
+  local predicate_result
+  if ! predicate_result=$(jq -r "$predicate" <<<"$output" 2>/dev/null); then
+    refuse "validation returned no valid public cutover state: $label"
+    exit 78
+  fi
+  if [[ "$predicate_result" != "true" ]]; then
+    refuse "validation returned no valid public cutover state: $label"
+    exit 78
+  fi
+}
+
 # The live gate is an explicit operator decision, not a default. Refuse before
 # building the heavy-lane helper when it is absent.
 if [[ "${D2B_LIVE:-0}" != "1" ]]; then
@@ -104,6 +124,20 @@ require_path "exact apply consent" "${D2B_LIVE_CONSENT:-}"
 require_path "typed host-generation handoff" "${D2B_LIVE_HANDOFF:-}"
 require_path "all-Zone verification evidence" "${D2B_LIVE_VERIFICATION:-}"
 
+if ! system_artifact_id=$(jq -r '.intent.systemArtifactId // empty' "$D2B_LIVE_HANDOFF"); then
+  refuse "typed handoff is not valid public JSON"
+  exit 78
+fi
+if [[ -z "$system_artifact_id" ]]; then
+  refuse "typed handoff has no system artifact identity"
+  exit 78
+fi
+source_system_artifact_id="${D2B_LIVE_SOURCE_SYSTEM_ARTIFACT_ID:-}"
+if [[ -z "$source_system_artifact_id" ]]; then
+  refuse "preserved source artifact identity is required"
+  exit 78
+fi
+
 repo_binding="$D2B_LIVE_REPO_ID=$D2B_LIVE_REPO_ROOT"
 
 # U5 validates the strict external recovery attestation, writes only its
@@ -151,16 +185,21 @@ run_validator "host-wide cutover preview" \
     --operation-id "$D2B_LIVE_OPERATION_ID" \
     --candidate-id "$D2B_LIVE_CANDIDATE_ID" \
     --revision-plan-id "$D2B_LIVE_REVISION_PLAN_ID" \
+    --system-artifact-id "$system_artifact_id" \
+    --source-system-artifact-id "$source_system_artifact_id" \
     --json
 
 # This is the first host mutation. U3/U4 revalidate the candidate, preview,
 # exact consent, qualified recovery, ownership, and typed handoff before the
 # broker admits the out-of-band runner.
-run_validator "candidate-bound cutover apply" \
+run_json_validator "candidate-bound cutover apply" \
+  'type == "object" and .ok == true and .operation == "apply" and ((.mutationAccepted == true) or (.mutationAccepted == false and .summary == "cutover apply response lost; runner state observed")) and (.operationId | type == "string") and (.state == "applying" or .state == "cutover-succeeded") and (.phase | type == "number") and .phase >= 5' \
   d2b host cutover apply \
     --operation-id "$D2B_LIVE_OPERATION_ID" \
     --candidate-id "$D2B_LIVE_CANDIDATE_ID" \
     --revision-plan-id "$D2B_LIVE_REVISION_PLAN_ID" \
+    --system-artifact-id "$system_artifact_id" \
+    --source-system-artifact-id "$source_system_artifact_id" \
     --preview-digest "$D2B_LIVE_PREVIEW_DIGEST" \
     --recovery-digest "$D2B_LIVE_RECOVERY_DIGEST" \
     --operator-id "$D2B_LIVE_OPERATOR_ID" \
@@ -171,7 +210,8 @@ run_validator "candidate-bound cutover apply" \
     --handoff-file "$D2B_LIVE_HANDOFF" \
     --json
 
-run_validator "runner status after drain and handoff" \
+run_json_validator "runner status after drain and handoff" \
+  'type == "object" and .ok == true and .operation == "status" and .mutationAccepted == false and (.operationId | type == "string") and (.state == "applying" or .state == "cutover-succeeded") and (.phase | type == "number") and .phase >= 5' \
   d2b host cutover status \
     --operation-id "$D2B_LIVE_OPERATION_ID" \
     --json
@@ -179,13 +219,15 @@ run_validator "runner status after drain and handoff" \
 # The production runner owns the remaining typed effects and all phase
 # transitions. Verification must observe every configured Zone, preserved
 # identity digest, retained source, current candidate, and durable audit chain.
-run_validator "all-Zone cutover verification" \
+run_json_validator "all-Zone cutover verification" \
+  'type == "object" and .ok == true and .operation == "verify" and .mutationAccepted == true and (.operationId | type == "string") and .state == "cutover-succeeded" and .phase == 9' \
   d2b host cutover verify \
     --operation-id "$D2B_LIVE_OPERATION_ID" \
     --verification-file "$D2B_LIVE_VERIFICATION" \
     --json
 
-run_validator "post-cutover doctor" \
+run_json_validator "post-cutover doctor" \
+  'type == "object" and .ok == true and .operation == "doctor" and .mutationAccepted == false and (.operationId | type == "string") and .state == "cutover-succeeded" and .phase == 9' \
   d2b host cutover doctor \
     --operation-id "$D2B_LIVE_OPERATION_ID" \
     --json

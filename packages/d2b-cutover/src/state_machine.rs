@@ -49,6 +49,10 @@ pub struct OperationRequest {
     candidate_id: CandidateId,
     revision_plan_id: RevisionPlanId,
     operator_id: OperatorId,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    system_artifact_id: Option<ArtifactId>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    source_system_artifact_id: Option<ArtifactId>,
     preview_digest: Digest,
     recovery_digest: Option<Digest>,
     inventory: OperationInventory,
@@ -84,6 +88,8 @@ impl OperationRequest {
             candidate_id: candidate_id.clone(),
             revision_plan_id: revision_plan_id.clone(),
             operator_id: operator_id.clone(),
+            system_artifact_id: None,
+            source_system_artifact_id: None,
             preview_digest: preview_digest.clone(),
             recovery_digest: recovery_digest.clone(),
             inventory_digest: inventory_digest.clone(),
@@ -97,6 +103,8 @@ impl OperationRequest {
             candidate_id,
             revision_plan_id,
             operator_id,
+            system_artifact_id: None,
+            source_system_artifact_id: None,
             preview_digest,
             recovery_digest,
             inventory,
@@ -179,6 +187,36 @@ impl OperationRequest {
         &self.operator_id
     }
 
+    /// Borrow the optional system artifact identity bound to a handoff.
+    pub fn system_artifact_id(&self) -> Option<&ArtifactId> {
+        self.system_artifact_id.as_ref()
+    }
+
+    /// Bind a typed system artifact identity to this frozen request contract.
+    pub fn with_system_artifact_id(
+        mut self,
+        system_artifact_id: ArtifactId,
+    ) -> Result<Self, OperationError> {
+        self.system_artifact_id = Some(system_artifact_id);
+        self.request_digest = self.derive_request_digest()?;
+        Ok(self)
+    }
+
+    /// Borrow the preserved source artifact identity bound to native rollback.
+    pub fn source_system_artifact_id(&self) -> Option<&ArtifactId> {
+        self.source_system_artifact_id.as_ref()
+    }
+
+    /// Bind the preserved source artifact identity to this frozen request.
+    pub fn with_source_system_artifact_id(
+        mut self,
+        source_system_artifact_id: ArtifactId,
+    ) -> Result<Self, OperationError> {
+        self.source_system_artifact_id = Some(source_system_artifact_id);
+        self.request_digest = self.derive_request_digest()?;
+        Ok(self)
+    }
+
     /// Borrow the preview digest.
     pub fn preview_digest(&self) -> &Digest {
         &self.preview_digest
@@ -204,6 +242,11 @@ impl OperationRequest {
         &self.request_digest
     }
 
+    /// Verify that the request digest covers every immutable request field.
+    pub fn request_digest_matches(&self) -> Result<bool, OperationError> {
+        Ok(self.derive_request_digest()? == self.request_digest)
+    }
+
     /// Build the exact apply-consent binding.
     pub fn consent_binding(&self) -> ConsentBinding {
         ConsentBinding::new(
@@ -214,6 +257,8 @@ impl OperationRequest {
             self.recovery_digest.clone(),
             self.operator_id.clone(),
         )
+        .with_system_artifact_id(self.system_artifact_id.clone())
+        .with_source_system_artifact_id(self.source_system_artifact_id.clone())
     }
 
     /// Build the distinct phase-10 binding.
@@ -226,6 +271,23 @@ impl OperationRequest {
             self.operator_id.clone(),
         )
     }
+
+    fn derive_request_digest(&self) -> Result<Digest, OperationError> {
+        let payload = OperationRequestPayload {
+            operation_id: self.operation_id.clone(),
+            operation_kind: self.operation_kind,
+            candidate_id: self.candidate_id.clone(),
+            revision_plan_id: self.revision_plan_id.clone(),
+            operator_id: self.operator_id.clone(),
+            system_artifact_id: self.system_artifact_id.clone(),
+            source_system_artifact_id: self.source_system_artifact_id.clone(),
+            preview_digest: self.preview_digest.clone(),
+            recovery_digest: self.recovery_digest.clone(),
+            inventory_digest: self.inventory_digest.clone(),
+        };
+        let bytes = canonical_json_bytes(&payload).map_err(OperationError::CanonicalJson)?;
+        Digest::parse(canonical_digest(REQUEST_DOMAIN, &bytes)).map_err(|_| OperationError::Digest)
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -236,6 +298,10 @@ struct OperationRequestPayload {
     candidate_id: CandidateId,
     revision_plan_id: RevisionPlanId,
     operator_id: OperatorId,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    system_artifact_id: Option<ArtifactId>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    source_system_artifact_id: Option<ArtifactId>,
     preview_digest: Digest,
     recovery_digest: Option<Digest>,
     inventory_digest: Digest,
@@ -651,6 +717,11 @@ impl Operation {
     /// Borrow the immutable request.
     pub fn request(&self) -> &OperationRequest {
         &self.request
+    }
+
+    /// Borrow the preview digest admitted for this operation.
+    pub fn preview_digest(&self) -> &Digest {
+        self.request.preview_digest()
     }
 
     /// Return the current phase.

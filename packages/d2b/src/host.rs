@@ -9,7 +9,8 @@ use d2b_contracts::{
     v3::CanonicalJsonValue,
 };
 use d2b_cutover::{
-    OperationState, RunnerCommand, RunnerPaths, RunnerResponse, RunnerSocketError, send_command,
+    OperationState, RunnerCommand, RunnerPaths, RunnerResponse, RunnerSocketError, RunnerStatus,
+    send_command,
 };
 use serde_json::{Map, Value, json};
 use std::path::PathBuf;
@@ -133,6 +134,10 @@ pub(crate) struct HostCutoverActionArgs {
     pub(crate) candidate_id: Option<String>,
     #[arg(long = "revision-plan-id")]
     pub(crate) revision_plan_id: Option<String>,
+    #[arg(long = "system-artifact-id")]
+    pub(crate) system_artifact_id: Option<String>,
+    #[arg(long = "source-system-artifact-id")]
+    pub(crate) source_system_artifact_id: Option<String>,
     #[arg(long = "preview-digest")]
     pub(crate) preview_digest: Option<String>,
     #[arg(long = "recovery-digest")]
@@ -604,6 +609,15 @@ fn cutover(
         ));
     }
 
+    if requires_cutover_operation_id(operation) && action.operation_id.is_none() {
+        return Err(context.failure(
+            "ref-invalid",
+            "cutover continuation commands require --operation-id",
+            mode,
+            2,
+        ));
+    }
+
     let handoff = match action.handoff_file.as_ref() {
         Some(path)
             if matches!(
@@ -635,6 +649,43 @@ fn cutover(
         None => None,
     };
 
+    if operation == HostCutoverOperation::Apply
+        && let Some(operation_id) = action.operation_id.as_deref()
+    {
+        let operation_id = d2b_cutover::OperationId::new(operation_id.to_owned())
+            .map_err(|_| context.failure("ref-invalid", "invalid operation id", mode, 2))?;
+        if let Some(status) = probe_existing_cutover_runner(context, &operation_id, mode)? {
+            let Some(handoff) = handoff.clone() else {
+                return Err(context.failure(
+                    "ref-invalid",
+                    "retrying an admitted cutover apply requires --handoff-file",
+                    mode,
+                    2,
+                ));
+            };
+            if apply_status_is_advanced(&status) {
+                return emit_ambiguous_apply_response(
+                    context,
+                    RunnerResponse {
+                        accepted: true,
+                        status: Some(status),
+                        error: None,
+                    },
+                    action.preview_digest.clone(),
+                    mode,
+                );
+            }
+            return apply_handoff_via_runner(
+                context,
+                operation,
+                operation_id,
+                handoff,
+                action.preview_digest.clone(),
+                mode,
+            );
+        }
+    }
+
     if matches!(
         operation,
         HostCutoverOperation::Status
@@ -642,6 +693,7 @@ fn cutover(
             | HostCutoverOperation::Resume
             | HostCutoverOperation::Rollback
             | HostCutoverOperation::Verify
+            | HostCutoverOperation::Doctor
             | HostCutoverOperation::Finalize
     ) && let Some(operation_id) = action.operation_id.as_deref()
     {
@@ -701,6 +753,7 @@ fn cutover(
                         })?;
                 RunnerCommand::Verify { observations }
             }
+            HostCutoverOperation::Doctor => RunnerCommand::Status,
             HostCutoverOperation::Finalize => {
                 let consent_json =
                     read_contract_file(context, action.consent_file.as_ref(), "consent", mode)?
@@ -765,13 +818,17 @@ fn cutover(
                 context.emit(&value, mode)?;
                 return Ok(0);
             }
-            Err(_) if matches!(operation, HostCutoverOperation::Status) => {}
+            Err(_)
+                if matches!(
+                    operation,
+                    HostCutoverOperation::Status | HostCutoverOperation::Doctor
+                ) => {}
             Err(_) => {
                 return Err(context.failure(
                     "cutover-runner-unavailable",
                     "cutover runner socket unavailable",
                     mode,
-                    78,
+                    69,
                 ));
             }
         }
@@ -782,6 +839,11 @@ fn cutover(
         operation_id: action.operation_id.clone(),
         candidate_id: action.candidate_id.clone(),
         revision_plan_id: action.revision_plan_id.clone(),
+        system_artifact_id: handoff
+            .as_ref()
+            .map(|handoff| handoff.intent.system_artifact_id.as_str().to_owned())
+            .or_else(|| action.system_artifact_id.clone()),
+        source_system_artifact_id: action.source_system_artifact_id.clone(),
         preview_digest: action.preview_digest.clone(),
         recovery_digest: action.recovery_digest.clone(),
         operator_id: action.operator_id.clone(),
@@ -813,8 +875,57 @@ fn cutover(
             1,
         )
     })?;
-    let value = context.invoke("HostCutover", payload, deadline, mode)?;
+    let value = match if matches!(
+        operation,
+        HostCutoverOperation::Preview | HostCutoverOperation::Status | HostCutoverOperation::Doctor
+    ) {
+        context.invoke("HostCutover", payload, deadline, mode)
+    } else {
+        context.invoke_mutating("HostCutover", payload, deadline, mode)
+    } {
+        Ok(value) => value,
+        Err(_error)
+            if matches!(
+                operation,
+                HostCutoverOperation::Status | HostCutoverOperation::Doctor
+            ) =>
+        {
+            return Err(context.failure(
+                "cutover-runner-unavailable",
+                "cutover runner and daemon observation are unavailable",
+                mode,
+                69,
+            ));
+        }
+        Err(error)
+            if operation == HostCutoverOperation::Apply
+                && handoff.is_some()
+                && action.operation_id.is_some()
+                && admission_transport_may_be_ambiguous(&error) =>
+        {
+            let operation_id = d2b_cutover::OperationId::new(
+                action
+                    .operation_id
+                    .clone()
+                    .expect("operation id checked above"),
+            )
+            .map_err(|_| context.failure("ref-invalid", "invalid operation id", mode, 2))?;
+            return apply_handoff_via_runner(
+                context,
+                operation,
+                operation_id,
+                handoff.expect("handoff checked above"),
+                action.preview_digest.clone(),
+                mode,
+            );
+        }
+        Err(error) => return Err(error),
+    };
     if let Some(handoff) = handoff {
+        let preview_digest = value
+            .get("previewDigest")
+            .and_then(Value::as_str)
+            .map(ToOwned::to_owned);
         let operation_id = value
             .get("operationId")
             .and_then(Value::as_str)
@@ -823,44 +934,19 @@ fn cutover(
                     "cutover-runner-unavailable",
                     "cutover admission returned no operation id",
                     mode,
-                    78,
+                    69,
                 )
             })?;
         let operation_id = d2b_cutover::OperationId::new(operation_id.to_owned())
             .map_err(|_| context.failure("ref-invalid", "invalid operation id", mode, 2))?;
-        let root = std::env::var_os("D2B_CUTOVER_STATE_DIR")
-            .map(PathBuf::from)
-            .unwrap_or_else(|| PathBuf::from("/var/lib/d2b"));
-        let socket_root = std::env::var_os("D2B_CUTOVER_SOCKET_DIR")
-            .map(PathBuf::from)
-            .unwrap_or_else(|| PathBuf::from("/run/d2b"));
-        let paths = RunnerPaths::new_with_socket_root(root, socket_root, &operation_id);
-        let command = RunnerCommand::Apply { handoff };
-        for _ in 0..20 {
-            match send_command(&paths.socket, &command) {
-                Ok(response) => {
-                    let value = serde_json::to_value(response).map_err(|_| {
-                        context.failure(
-                            "internal-error",
-                            "failed to encode runner response",
-                            mode,
-                            1,
-                        )
-                    })?;
-                    context.emit(&value, mode)?;
-                    return Ok(0);
-                }
-                Err(_) => {
-                    std::thread::sleep(std::time::Duration::from_millis(25));
-                }
-            }
-        }
-        return Err(context.failure(
-            "cutover-runner-unavailable",
-            "cutover runner apply socket unavailable",
+        return apply_handoff_via_runner(
+            context,
+            operation,
+            operation_id,
+            handoff,
+            preview_digest,
             mode,
-            78,
-        ));
+        );
     }
     context.emit(&value, mode)?;
     Ok(0)
@@ -882,11 +968,216 @@ fn normalize_runner_response(
         operation_id: Some(status.operation_id.to_string()),
         state: runner_state_label(status.state).to_owned(),
         phase: status.phase.number(),
-        preview_digest: None,
+        preview_digest: Some(status.preview_digest.to_string()),
         summary: runner_summary(operation).to_owned(),
-        mutation_accepted: !matches!(operation, HostCutoverOperation::Status),
+        mutation_accepted: !matches!(
+            operation,
+            HostCutoverOperation::Status | HostCutoverOperation::Doctor
+        ),
         inventory: None,
     })
+}
+
+fn requires_cutover_operation_id(operation: HostCutoverOperation) -> bool {
+    matches!(
+        operation,
+        HostCutoverOperation::Status
+            | HostCutoverOperation::Hold
+            | HostCutoverOperation::Resume
+            | HostCutoverOperation::Rollback
+            | HostCutoverOperation::Verify
+            | HostCutoverOperation::Doctor
+            | HostCutoverOperation::Finalize
+    )
+}
+
+fn probe_existing_cutover_runner(
+    context: &ZoneContext,
+    operation_id: &d2b_cutover::OperationId,
+    mode: OutputMode,
+) -> Result<Option<RunnerStatus>, CliFailure> {
+    let root = std::env::var_os("D2B_CUTOVER_STATE_DIR")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| PathBuf::from("/var/lib/d2b"));
+    let socket_root = std::env::var_os("D2B_CUTOVER_SOCKET_DIR")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| PathBuf::from("/run/d2b"));
+    let paths = RunnerPaths::new_with_socket_root(root, socket_root, operation_id);
+    let response = match send_command(&paths.socket, &RunnerCommand::Status) {
+        Ok(response) => response,
+        Err(_) => return Ok(None),
+    };
+    if !response.accepted {
+        return Err(runner_error_failure(
+            context,
+            response.error.unwrap_or(RunnerSocketError::Malformed),
+            mode,
+        ));
+    }
+    if let Some(error) = response.error {
+        return Err(runner_error_failure(context, error, mode));
+    }
+    let status = response
+        .status
+        .ok_or_else(|| runner_error_failure(context, RunnerSocketError::Malformed, mode))?;
+    if status.operation_id != *operation_id {
+        return Err(runner_error_failure(
+            context,
+            RunnerSocketError::Malformed,
+            mode,
+        ));
+    }
+    Ok(Some(status))
+}
+
+fn admission_transport_may_be_ambiguous(error: &CliFailure) -> bool {
+    error.admission_recovery
+}
+
+fn apply_handoff_via_runner(
+    context: &ZoneContext,
+    operation: HostCutoverOperation,
+    operation_id: d2b_cutover::OperationId,
+    handoff: ApplyHostGenerationHandoff,
+    preview_digest: Option<String>,
+    mode: OutputMode,
+) -> Result<i32, CliFailure> {
+    let root = std::env::var_os("D2B_CUTOVER_STATE_DIR")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| PathBuf::from("/var/lib/d2b"));
+    let socket_root = std::env::var_os("D2B_CUTOVER_SOCKET_DIR")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| PathBuf::from("/run/d2b"));
+    let paths = RunnerPaths::new_with_socket_root(root, socket_root, &operation_id);
+    let command = RunnerCommand::Apply { handoff };
+    let mut ambiguous_status = None;
+    for _ in 0..20 {
+        match send_command(&paths.socket, &command) {
+            Ok(response) => match normalize_runner_response(operation, response) {
+                Ok(response) => {
+                    validate_admitted_preview_digest(
+                        context,
+                        &response,
+                        preview_digest.as_deref(),
+                        mode,
+                    )?;
+                    let value = serde_json::to_value(response).map_err(|_| {
+                        context.failure(
+                            "internal-error",
+                            "failed to encode cutover response",
+                            mode,
+                            1,
+                        )
+                    })?;
+                    let value = decorate_cutover_response(context, value);
+                    context.emit(&value, mode)?;
+                    return Ok(0);
+                }
+                Err(error) if should_reconcile_ambiguous_apply(&error) => {
+                    match send_command(&paths.socket, &RunnerCommand::Status) {
+                        Ok(status)
+                            if status.accepted
+                                && status.status.as_ref().is_some_and(apply_status_is_advanced) =>
+                        {
+                            ambiguous_status = Some(status);
+                            break;
+                        }
+                        Ok(_) => {
+                            return Err(runner_error_failure(context, error, mode));
+                        }
+                        Err(_) => {
+                            return Err(context.failure(
+                                "cutover-runner-unavailable",
+                                "cutover runner status unavailable after ambiguous apply",
+                                mode,
+                                69,
+                            ));
+                        }
+                    }
+                }
+                Err(error) => {
+                    return Err(runner_error_failure(context, error, mode));
+                }
+            },
+            Err(_) => std::thread::sleep(std::time::Duration::from_millis(25)),
+        }
+    }
+    if let Some(response) = ambiguous_status {
+        return emit_ambiguous_apply_response(context, response, preview_digest.clone(), mode);
+    }
+    if let Ok(response) = send_command(&paths.socket, &RunnerCommand::Status)
+        && response.accepted
+        && response
+            .status
+            .as_ref()
+            .is_some_and(apply_status_is_advanced)
+    {
+        return emit_ambiguous_apply_response(context, response, preview_digest, mode);
+    }
+    Err(context.failure(
+        "cutover-runner-unavailable",
+        "cutover runner apply socket unavailable",
+        mode,
+        69,
+    ))
+}
+
+fn normalize_ambiguous_apply_response(
+    response: RunnerResponse,
+) -> Result<HostCutoverResponse, RunnerSocketError> {
+    let mut response = normalize_runner_response(HostCutoverOperation::Status, response)?;
+    response.operation = HostCutoverOperation::Apply;
+    response.summary = "cutover apply response lost; runner state observed".to_owned();
+    Ok(response)
+}
+
+fn emit_ambiguous_apply_response(
+    context: &ZoneContext,
+    response: RunnerResponse,
+    preview_digest: Option<String>,
+    mode: OutputMode,
+) -> Result<i32, CliFailure> {
+    let response = normalize_ambiguous_apply_response(response)
+        .map_err(|error| runner_error_failure(context, error, mode))?;
+    validate_admitted_preview_digest(context, &response, preview_digest.as_deref(), mode)?;
+    let value = serde_json::to_value(response).map_err(|_| {
+        context.failure(
+            "internal-error",
+            "failed to encode cutover response",
+            mode,
+            1,
+        )
+    })?;
+    let value = decorate_cutover_response(context, value);
+    context.emit(&value, mode)?;
+    Ok(0)
+}
+
+fn validate_admitted_preview_digest(
+    context: &ZoneContext,
+    response: &HostCutoverResponse,
+    expected: Option<&str>,
+    mode: OutputMode,
+) -> Result<(), CliFailure> {
+    if let Some(expected) = expected
+        && response.preview_digest.as_deref() != Some(expected)
+    {
+        return Err(context.failure(
+            "ref-invalid",
+            "cutover preview digest does not match admitted runner state",
+            mode,
+            2,
+        ));
+    }
+    Ok(())
+}
+
+fn should_reconcile_ambiguous_apply(error: &RunnerSocketError) -> bool {
+    matches!(error, RunnerSocketError::InvalidTransition)
+}
+
+fn apply_status_is_advanced(status: &RunnerStatus) -> bool {
+    status.phase.number() > d2b_cutover::CutoverPhase::Disposition.number()
 }
 
 fn runner_state_label(state: OperationState) -> &'static str {
@@ -925,6 +1216,11 @@ fn runner_error_spec(error: RunnerSocketError) -> (&'static str, &'static str, i
             77,
         ),
         RunnerSocketError::Malformed => ("ref-invalid", "cutover runner command was malformed", 2),
+        RunnerSocketError::ArtifactBindingMismatch => (
+            "resource-schema-invalid",
+            "cutover handoff artifact does not match the admitted candidate",
+            2,
+        ),
         RunnerSocketError::InvalidTransition => {
             ("internal-error", "cutover runner rejected the command", 1)
         }
@@ -1025,6 +1321,8 @@ fn cutover_reset(
         operation_id: args.operation_id.clone(),
         candidate_id: args.candidate_id.clone(),
         revision_plan_id: args.revision_plan_id.clone(),
+        system_artifact_id: None,
+        source_system_artifact_id: None,
         preview_digest: args.preview_digest.clone(),
         recovery_digest: None,
         operator_id: None,
@@ -1051,7 +1349,7 @@ fn cutover_reset(
     let payload = serde_json::to_value(request).map_err(|_| {
         context.failure("internal-error", "failed to encode reset request", mode, 1)
     })?;
-    let value = context.invoke("HostCutover", payload, deadline, mode)?;
+    let value = context.invoke_mutating("HostCutover", payload, deadline, mode)?;
     context.emit(&value, mode)?;
     Ok(0)
 }
@@ -1084,6 +1382,8 @@ mod tests {
     fn runner_status() -> RunnerStatus {
         RunnerStatus {
             operation_id: OperationId::new("op-normalized").expect("operation"),
+            preview_digest: d2b_cutover::Digest::parse("sha256:".to_owned() + &"a".repeat(64))
+                .expect("preview digest"),
             state: OperationState::Applying(CutoverPhase::Preflight),
             phase: CutoverPhase::Preflight,
             hold_active: false,
@@ -1115,6 +1415,138 @@ mod tests {
     }
 
     #[test]
+    fn direct_runner_doctor_uses_the_public_read_only_shape() {
+        let response = normalize_runner_response(
+            HostCutoverOperation::Doctor,
+            RunnerResponse {
+                accepted: true,
+                status: Some(runner_status()),
+                error: None,
+            },
+        )
+        .expect("normalized doctor");
+        assert_eq!(response.operation, HostCutoverOperation::Doctor);
+        assert!(!response.mutation_accepted);
+        assert_eq!(
+            response.summary,
+            "read-only cutover runner observation".to_owned()
+        );
+    }
+
+    #[test]
+    fn refused_runner_apply_is_a_typed_failure_without_a_success_response() {
+        let error = normalize_runner_response(
+            HostCutoverOperation::Apply,
+            RunnerResponse {
+                accepted: false,
+                status: None,
+                error: Some(RunnerSocketError::InvalidTransition),
+            },
+        )
+        .expect_err("refused apply");
+        assert_eq!(error, RunnerSocketError::InvalidTransition);
+    }
+
+    #[test]
+    fn admission_recovery_only_accepts_transport_ambiguity() {
+        let mut ambiguous = CliFailure::new(
+            1,
+            "resource-conflict: resource mutation outcome was ambiguous",
+        );
+        ambiguous.admission_recovery = true;
+        assert!(admission_transport_may_be_ambiguous(&ambiguous));
+        assert!(!admission_transport_may_be_ambiguous(&CliFailure::new(
+            1,
+            "resource-conflict: resource revision conflict"
+        )));
+        assert!(!admission_transport_may_be_ambiguous(&CliFailure::new(
+            2,
+            "resource-schema-invalid: cutover preview digest is stale"
+        )));
+    }
+
+    #[test]
+    fn invalid_transition_is_reconciled_before_reporting_apply_refusal() {
+        assert!(should_reconcile_ambiguous_apply(
+            &RunnerSocketError::InvalidTransition
+        ));
+        assert!(!should_reconcile_ambiguous_apply(
+            &RunnerSocketError::Unauthorized
+        ));
+    }
+
+    #[test]
+    fn only_runner_status_after_disposition_proves_ambiguous_apply() {
+        let mut status = runner_status();
+        assert!(!apply_status_is_advanced(&status));
+        status.phase = CutoverPhase::ResourceStore;
+        assert!(apply_status_is_advanced(&status));
+    }
+
+    #[test]
+    fn normalized_runner_response_can_preserve_the_admission_preview_digest() {
+        let response = normalize_runner_response(
+            HostCutoverOperation::Apply,
+            RunnerResponse {
+                accepted: true,
+                status: Some(runner_status()),
+                error: None,
+            },
+        )
+        .expect("normalized apply");
+        let value = decorate_cutover_response(
+            &ZoneContext::local_only(),
+            serde_json::to_value(response).expect("response JSON"),
+        );
+        assert_eq!(
+            value["previewDigest"],
+            "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        );
+        assert_eq!(value["ok"], true);
+    }
+
+    #[test]
+    fn ambiguous_apply_response_exposes_runner_state_without_claiming_mutation() {
+        let response = normalize_ambiguous_apply_response(RunnerResponse {
+            accepted: true,
+            status: Some(runner_status()),
+            error: None,
+        })
+        .expect("ambiguous apply response");
+        assert_eq!(response.operation, HostCutoverOperation::Apply);
+        assert!(!response.mutation_accepted);
+        assert_eq!(
+            response.preview_digest.as_deref(),
+            Some("sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
+        );
+        assert_eq!(
+            response.summary,
+            "cutover apply response lost; runner state observed"
+        );
+    }
+
+    #[test]
+    fn admitted_preview_digest_mismatch_is_rejected_on_retry() {
+        let response = normalize_runner_response(
+            HostCutoverOperation::Apply,
+            RunnerResponse {
+                accepted: true,
+                status: Some(runner_status()),
+                error: None,
+            },
+        )
+        .expect("normalized apply");
+        let error = validate_admitted_preview_digest(
+            &ZoneContext::local_only(),
+            &response,
+            Some("sha256:".to_owned() + &"b".repeat(64)).as_deref(),
+            OutputMode::Json,
+        )
+        .expect_err("mismatched preview digest");
+        assert!(error.message.contains("preview digest"));
+    }
+
+    #[test]
     fn direct_runner_mutations_share_the_flat_cutover_response_shape() {
         for operation in [
             HostCutoverOperation::Hold,
@@ -1137,7 +1569,7 @@ mod tests {
             assert_eq!(response.state, "applying");
             assert_eq!(response.phase, 0);
             assert!(response.mutation_accepted);
-            assert!(response.preview_digest.is_none());
+            assert!(response.preview_digest.is_some());
             assert!(response.inventory.is_none());
         }
     }
@@ -1165,6 +1597,14 @@ mod tests {
             ("ref-invalid", "cutover runner command was malformed", 2)
         );
         assert_eq!(
+            runner_error_spec(RunnerSocketError::ArtifactBindingMismatch),
+            (
+                "resource-schema-invalid",
+                "cutover handoff artifact does not match the admitted candidate",
+                2
+            )
+        );
+        assert_eq!(
             runner_error_spec(RunnerSocketError::InvalidTransition),
             ("internal-error", "cutover runner rejected the command", 1)
         );
@@ -1184,5 +1624,25 @@ mod tests {
                 1
             )
         );
+    }
+
+    #[test]
+    fn continuation_commands_require_an_operation_id() {
+        for operation in [
+            HostCutoverOperation::Status,
+            HostCutoverOperation::Hold,
+            HostCutoverOperation::Resume,
+            HostCutoverOperation::Rollback,
+            HostCutoverOperation::Verify,
+            HostCutoverOperation::Doctor,
+            HostCutoverOperation::Finalize,
+        ] {
+            assert!(requires_cutover_operation_id(operation));
+        }
+        assert!(!requires_cutover_operation_id(
+            HostCutoverOperation::Preview
+        ));
+        assert!(!requires_cutover_operation_id(HostCutoverOperation::Apply));
+        assert!(!requires_cutover_operation_id(HostCutoverOperation::Reset));
     }
 }

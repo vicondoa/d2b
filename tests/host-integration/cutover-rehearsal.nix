@@ -52,6 +52,8 @@ let
         "candidateId": candidate,
         "previewDigest": preview,
         "recoveryDigest": recovery_digest,
+        "systemArtifactId": os.environ["SYSTEM_ARTIFACT"],
+        "sourceSystemArtifactId": os.environ["SOURCE_SYSTEM_ARTIFACT"],
         "operatorId": operator,
     }
     consent = {
@@ -132,6 +134,10 @@ pkgs.testers.runNixOSTest {
         package = acceptanceSystem;
         type = "nixos-system";
       };
+      d2b.artifacts.u6-rehearsal-source = {
+        package = acceptanceSystem;
+        type = "nixos-system";
+      };
 
       # Three independent configured Zones make the preview and verification
       # exercise the host-wide all-Zone boundary instead of a one-Zone shortcut.
@@ -206,6 +212,8 @@ pkgs.testers.runNixOSTest {
             f" --operation-id {operation_id}"
             f" --candidate-id {candidate}"
             f" --revision-plan-id {revision}"
+            f" --system-artifact-id {artifact}"
+            f" --source-system-artifact-id {source_artifact}"
         ))
         assert value["state"] == "planned"
         assert value["phase"] == 0
@@ -218,6 +226,12 @@ pkgs.testers.runNixOSTest {
         assert value["zoneRef"] == "Zone/local-root"
         assert value["zoneRef"].split("/", 1)[1] in zone_ids
         return value
+
+    artifact = machine.succeed(
+        "jq -r '.entries[] | select(.type == \"nixos-system\") | .artifactId' "
+        "/etc/d2b/artifact-catalog.json | head -n 1"
+    ).strip()
+    source_artifact = "u6-rehearsal-source"
 
     # The preview is mutation-free, byte-stable, redaction-safe, and covers
     # every configured Zone. Repeating it proves the same inventory digest is
@@ -252,15 +266,12 @@ pkgs.testers.runNixOSTest {
         "/var/lib/d2b/cutover-rehearsal"
     )
     preview_digest = preview["previewDigest"]
-    artifact = machine.succeed(
-        "jq -r '.entries[] | select(.type == \"nixos-system\") | .artifactId' "
-        "/etc/d2b/artifact-catalog.json | head -n 1"
-    ).strip()
     machine.succeed(
         "OPERATION=" + shlex.quote(operation)
         + " CANDIDATE=" + shlex.quote(candidate)
         + " PREVIEW=" + shlex.quote(preview_digest)
         + " SYSTEM_ARTIFACT=" + shlex.quote(artifact)
+        + " SOURCE_SYSTEM_ARTIFACT=" + shlex.quote(source_artifact)
         + " python3 /etc/d2b/cutover-rehearsal/contracts.py"
     )
     digests = {}
@@ -275,6 +286,8 @@ pkgs.testers.runNixOSTest {
         f" --operation-id {operation}"
         f" --candidate-id {candidate}"
         f" --revision-plan-id {revision}"
+        f" --system-artifact-id {artifact}"
+        f" --source-system-artifact-id {source_artifact}"
         f" --preview-digest {preview_digest}"
         f" --recovery-digest {digests['RECOVERY_DIGEST']}"
         " --operator-id uid-1000"
@@ -381,6 +394,7 @@ pkgs.testers.runNixOSTest {
         "OPERATION=" + shlex.quote(operation2)
         + " PREVIEW=" + shlex.quote(preview2_digest)
         + " SYSTEM_ARTIFACT=" + shlex.quote(artifact)
+        + " SOURCE_SYSTEM_ARTIFACT=" + shlex.quote(source_artifact)
         + " CANDIDATE=" + shlex.quote(candidate)
         + " python3 /etc/d2b/cutover-rehearsal/contracts.py"
     )
@@ -398,6 +412,8 @@ pkgs.testers.runNixOSTest {
         f" --operation-id {operation2}"
         f" --candidate-id {candidate}"
         f" --revision-plan-id {revision}"
+        f" --system-artifact-id {artifact}"
+        f" --source-system-artifact-id {source_artifact}"
         f" --preview-digest {preview2_digest}"
         f" --recovery-digest {digests2['RECOVERY_DIGEST']}"
         " --operator-id uid-1000"

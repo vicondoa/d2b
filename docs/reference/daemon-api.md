@@ -269,7 +269,7 @@ host reboot.
 | `HostDestroyRequest` | struct | [`HostDestroyRequest`](../../packages/d2b-contracts/src/public_wire.rs#L2034) | struct { `flags`: `MutationFlags` } |
 | `HostInstallRequest` | struct | [`HostInstallRequest`](../../packages/d2b-contracts/src/public_wire.rs#L2041) | struct { `flags`: `MutationFlags`; `enable`: `bool`; `start`: `bool`; `no_start`: `bool` } |
 | `HostReconcileRequest` | struct | [`HostReconcileRequest`](../../packages/d2b-contracts/src/public_wire.rs#L2059) | struct { `flags`: `MutationFlags`; `network`: `bool` } |
-| `HostCutoverRequest` | struct | [`HostCutoverRequest`](../../packages/d2b-contracts/src/public_wire.rs#L2070) | struct { `operation`: `HostCutoverOperation`; `operation_id`: `Option<String>`; `candidate_id`: `Option<String>`; `revision_plan_id`: `Option<String>`; `preview_digest`: `Option<String>`; `recovery_digest`: `Option<String>`; `operator_id`: `Option<String>`; `consent_digest`: `Option<String>`; `consent_json`: `Option<String>`; `destructive_consent_digest`: `Option<String>`; `destructive_consent_json`: `Option<String>`; `destroy_durable_volumes`: `Option<bool>`; `recovery_attestation_json`: `Option<String>`; `host_digest`: `Option<String>`; `fresh_consent_digest`: `Option<String>`; `reason`: `Option<String>`; `reset_scope`: `Option<HostCutoverResetScope>`; `target`: `Option<String>`; `zone`: `Option<String>` } |
+| `HostCutoverRequest` | struct | [`HostCutoverRequest`](../../packages/d2b-contracts/src/public_wire.rs#L2070) | struct { `operation`: `HostCutoverOperation`; `operation_id`: `Option<String>`; `candidate_id`: `Option<String>`; `revision_plan_id`: `Option<String>`; `system_artifact_id`: `Option<String>`; `source_system_artifact_id`: `Option<String>`; `preview_digest`: `Option<String>`; `recovery_digest`: `Option<String>`; `operator_id`: `Option<String>`; `consent_digest`: `Option<String>`; `consent_json`: `Option<String>`; `destructive_consent_digest`: `Option<String>`; `destructive_consent_json`: `Option<String>`; `destroy_durable_volumes`: `Option<bool>`; `recovery_attestation_json`: `Option<String>`; `host_digest`: `Option<String>`; `fresh_consent_digest`: `Option<String>`; `reason`: `Option<String>`; `reset_scope`: `Option<HostCutoverResetScope>`; `target`: `Option<String>`; `zone`: `Option<String>` } |
 | `UsbSecurityKeyStatusRequest` | struct | [`UsbSecurityKeyStatusRequest`](../../packages/d2b-contracts/src/public_wire.rs#L3882) | empty struct |
 | `UsbSecurityKeySessionsRequest` | struct | [`UsbSecurityKeySessionsRequest`](../../packages/d2b-contracts/src/public_wire.rs#L3968) | empty struct |
 | `UsbSecurityKeyCancelRequest` | struct | [`UsbSecurityKeyCancelRequest`](../../packages/d2b-contracts/src/public_wire.rs#L4022) | struct { `session_id`: `Option<String>`; `current`: `bool` } |
@@ -283,7 +283,7 @@ host reboot.
 | `LaunchCutoverRunnerRequest` | struct | [`LaunchCutoverRunnerRequest`](../../packages/d2b-contracts/src/broker_wire.rs#L339) | struct { `operation_id`: `BundleOpId`; `bootstrap_fd_index`: `u32`; `capability_digest`: `CanonicalAuditDigest`; `expires_at_ms`: `u64` } |
 | `CutoverAuditRequest` | struct | [`CutoverAuditRequest`](../../packages/d2b-contracts/src/broker_wire.rs#L404) | struct { `operation_id`: `BundleOpId`; `phase`: `u8`; `transition`: `CutoverAuditTransition`; `request_digest`: `CanonicalAuditDigest`; `reason_digest`: `Option<CanonicalAuditDigest>` } |
 | `CutoverVerificationRequest` | struct | [`CutoverVerificationRequest`](../../packages/d2b-contracts/src/broker_wire.rs#L501) | struct { `expected_zone_ids`: `Vec<BundleOpId>` } |
-| `CutoverAdmissionRequest` | struct | [`CutoverAdmissionRequest`](../../packages/d2b-contracts/src/broker_wire.rs#L538) | empty struct |
+| `CutoverAdmissionRequest` | struct | [`CutoverAdmissionRequest`](../../packages/d2b-contracts/src/broker_wire.rs#L538) | struct { `system_artifact_id`: `Option<ArtifactId>`; `source_system_artifact_id`: `Option<ArtifactId>` } |
 | `CutoverEffectRequest` | struct | [`CutoverEffectRequest`](../../packages/d2b-contracts/src/broker_wire.rs#L594) | struct { `operation_id`: `BundleOpId`; `authority`: `CutoverEffectAuthority`; `phase`: `u8`; `effect_id`: `BundleOpId`; `effect`: `CutoverEffectKind`; `replay_class`: `CutoverReplayClass`; `request_digest`: `CanonicalAuditDigest`; `capability_digest`: `CanonicalAuditDigest`; `identity`: `Option<BundleOpId>`; `handoff`: `Option<crate::host_generation::ApplyHostGenerationHandoff>`; `payload`: `Option<CutoverEffectPayload>` } |
 | `RunHostInstallRequest` | struct | [`RunHostInstallRequest`](../../packages/d2b-contracts/src/broker_wire.rs#L1266) | struct { `bundle_installer_intent_ref`: `BundleOpId`; `enable`: `bool`; `start`: `bool`; `no_start`: `bool`; `tracing_span_id`: `Option<TracingSpanId>` } |
 | `RunMigrateRequest` | struct | [`RunMigrateRequest`](../../packages/d2b-contracts/src/broker_wire.rs#L1290) | struct { `bundle_migrate_intent_ref`: `BundleOpId`; `tracing_span_id`: `Option<TracingSpanId>` } |
@@ -926,11 +926,21 @@ daemon-wide default used when a v7 manifest entry has
 authoritative all-Zone inventory for `preview`, validates the exact candidate,
 preview, recovery, operator, and consent identities for `apply`, and asks the
 live broker to launch one `d2b-cutover-runner` child with a single bootstrap
-descriptor. It does not own the cutover journal, OFD lock, staged paths, or
+descriptor, then waits for the runner's authenticated status socket before
+reporting admission success. An invalid candidate or source artifact therefore
+fails apply rather than producing a success response for a runner that already
+exited. It does not own the cutover journal, OFD lock, staged paths, or
 repair/adoption logic. `status` and `doctor` are read-only observations after
 restart; `hold`, `resume`, `rollback`, `verify`, and `finalize` are sent
 directly to the runner socket. Scoped reset admission is separate and binds
-its own scope, target, consent, and operation capability.
+its own scope, target, consent, and operation capability. When apply carries a
+typed host-generation handoff, `system_artifact_id` is admitted into the
+immutable operation request digest, the preview and apply consent bind the
+same identity, and the runner refuses any later handoff whose artifact
+identity differs. Candidate and source artifact IDs use the canonical v3
+artifact grammar. The broker records the launched runner's process identity
+with the capability binding, so an exited runner does not permanently block a
+retry while a live runner remains protected from duplicate launch.
 
 The broker request is `LaunchCutoverRunner`, not `SpawnRunner`. It accepts one
 close-on-exec-controlled bootstrap fd and derives the runner executable and

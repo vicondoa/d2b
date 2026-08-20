@@ -533,9 +533,14 @@ pub struct CutoverAdmissionResponse {
 }
 
 /// Typed request for the broker-owned apply admission observation.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
-#[serde(deny_unknown_fields)]
-pub struct CutoverAdmissionRequest {}
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct CutoverAdmissionRequest {
+    /// Candidate artifact resolved and verified before host drain.
+    pub system_artifact_id: Option<ArtifactId>,
+    /// Preserved source artifact resolved and verified before host drain.
+    pub source_system_artifact_id: Option<ArtifactId>,
+}
 
 /// Closed replay behavior for an operation-scoped effect.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]

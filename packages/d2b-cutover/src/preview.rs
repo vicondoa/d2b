@@ -9,7 +9,9 @@ use serde::{Deserialize, Serialize};
 
 use crate::{
     inventory::{HostInventory, InventoryError},
-    model::{CandidateId, CutoverPhase, Digest, OperationId, OperationKind, RevisionPlanId},
+    model::{
+        ArtifactId, CandidateId, CutoverPhase, Digest, OperationId, OperationKind, RevisionPlanId,
+    },
     reset::{EffectAllowlist, ResetInventory},
 };
 
@@ -35,6 +37,10 @@ pub struct CutoverPreview {
     candidate_id: CandidateId,
     revision_plan_id: RevisionPlanId,
     inventory: PreviewInventory,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    system_artifact_id: Option<ArtifactId>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    source_system_artifact_id: Option<ArtifactId>,
     recovery_digest: Option<Digest>,
     rollback_boundary: CutoverPhase,
     effect_allowlist: EffectAllowlist,
@@ -64,6 +70,8 @@ impl CutoverPreview {
             candidate_id,
             revision_plan_id,
             inventory: PreviewInventory::Host(inventory),
+            system_artifact_id: None,
+            source_system_artifact_id: None,
             recovery_digest,
             rollback_boundary: CutoverPhase::Disposition,
             effect_allowlist: EffectAllowlist::for_operation(operation_kind),
@@ -89,6 +97,8 @@ impl CutoverPreview {
             candidate_id,
             revision_plan_id,
             inventory: PreviewInventory::Reset(inventory),
+            system_artifact_id: None,
+            source_system_artifact_id: None,
             recovery_digest: None,
             rollback_boundary: CutoverPhase::Disposition,
             effect_allowlist: EffectAllowlist::for_operation(operation_kind),
@@ -118,6 +128,28 @@ impl CutoverPreview {
     /// Borrow the all-Zone inventory.
     pub fn inventory(&self) -> &PreviewInventory {
         &self.inventory
+    }
+
+    /// Borrow the optional system artifact identity bound to a cutover.
+    pub fn system_artifact_id(&self) -> Option<&ArtifactId> {
+        self.system_artifact_id.as_ref()
+    }
+
+    /// Bind the exact system artifact selected by the frozen candidate.
+    pub fn with_system_artifact_id(mut self, system_artifact_id: ArtifactId) -> Self {
+        self.system_artifact_id = Some(system_artifact_id);
+        self
+    }
+
+    /// Borrow the preserved source artifact identity bound to native rollback.
+    pub fn source_system_artifact_id(&self) -> Option<&ArtifactId> {
+        self.source_system_artifact_id.as_ref()
+    }
+
+    /// Bind the exact preserved source artifact selected for native rollback.
+    pub fn with_source_system_artifact_id(mut self, source_system_artifact_id: ArtifactId) -> Self {
+        self.source_system_artifact_id = Some(source_system_artifact_id);
+        self
     }
 
     /// Borrow the host inventory when this is a cutover preview.

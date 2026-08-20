@@ -15,7 +15,9 @@ use d2b_contracts::broker_wire::ApplyHostGenerationHandoffResponse;
 use d2b_contracts::host_generation::{
     ApplyHostGenerationHandoff, HandoffCoordinator, HandoffError, HandoffState, target_fingerprint,
 };
+use d2b_contracts::v3::ArtifactId;
 use d2b_host::host_generation::{
+    ActivationArtifactValidationRequest, ActivationArtifactValidationResponse,
     ActivationHelperOutcome, ActivationHelperRequest, ActivationHelperResponse,
 };
 use sha2::{Digest, Sha256};
@@ -36,6 +38,8 @@ pub enum HandoffOperationError {
     JournalMismatch,
     HelperUnavailable,
     HelperOutputInvalid,
+    ArtifactValidationUnavailable,
+    ArtifactValidationOutputInvalid,
 }
 
 impl core::fmt::Display for HandoffOperationError {
@@ -46,6 +50,12 @@ impl core::fmt::Display for HandoffOperationError {
             Self::JournalMismatch => formatter.write_str("handoff-journal-mismatch"),
             Self::HelperUnavailable => formatter.write_str("handoff-helper-unavailable"),
             Self::HelperOutputInvalid => formatter.write_str("handoff-helper-output-invalid"),
+            Self::ArtifactValidationUnavailable => {
+                formatter.write_str("handoff-artifact-validation-unavailable")
+            }
+            Self::ArtifactValidationOutputInvalid => {
+                formatter.write_str("handoff-artifact-validation-output-invalid")
+            }
         }
     }
 }
@@ -142,6 +152,43 @@ impl HandoffEffect for ActivationHelperEffect {
         }
         Ok(response.outcome)
     }
+}
+
+/// Resolve and verify one private system artifact without activating it.
+///
+/// This is used during cutover admission, before the runner is allowed to
+/// drain the daemon. The helper remains the sole authority for catalog,
+/// store-path, and package-digest validation.
+pub fn validate_artifact_with_helper(
+    helper_path: &Path,
+    artifact_id: &ArtifactId,
+) -> Result<bool, HandoffOperationError> {
+    let input = serde_json::to_vec(&ActivationArtifactValidationRequest {
+        system_artifact_id: artifact_id.clone(),
+    })
+    .map_err(|_| HandoffOperationError::ArtifactValidationOutputInvalid)?;
+    let mut child = Command::new(helper_path)
+        .arg("validate-artifact")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()
+        .map_err(|_| HandoffOperationError::ArtifactValidationUnavailable)?;
+    child
+        .stdin
+        .take()
+        .ok_or(HandoffOperationError::ArtifactValidationUnavailable)?
+        .write_all(&input)
+        .map_err(|_| HandoffOperationError::ArtifactValidationUnavailable)?;
+    let output = child
+        .wait_with_output()
+        .map_err(|_| HandoffOperationError::ArtifactValidationUnavailable)?;
+    if output.stdout.len() > 512 {
+        return Err(HandoffOperationError::ArtifactValidationOutputInvalid);
+    }
+    let response: ActivationArtifactValidationResponse = serde_json::from_slice(&output.stdout)
+        .map_err(|_| HandoffOperationError::ArtifactValidationOutputInvalid)?;
+    Ok(output.status.success() && response.valid)
 }
 
 /// Apply or replay one broker-owned generation handoff using a typed effect.
@@ -385,5 +432,16 @@ mod tests {
             ))
         ));
         assert!(!directory.exists());
+    }
+
+    #[test]
+    fn artifact_validation_fails_closed_when_helper_is_unavailable() {
+        let helper = PathBuf::from("target")
+            .join(format!("missing-activation-helper-{}", std::process::id()));
+        let artifact = ArtifactId::parse("candidate-artifact").expect("artifact");
+        assert!(matches!(
+            validate_artifact_with_helper(&helper, &artifact),
+            Err(HandoffOperationError::ArtifactValidationUnavailable)
+        ));
     }
 }

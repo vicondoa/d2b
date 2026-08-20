@@ -113,6 +113,10 @@ struct CutoverCapabilityBinding {
     expires_at_ms: u64,
     #[serde(default)]
     drained: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    runner_pid: Option<i32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    runner_start_time_ticks: Option<u64>,
 }
 
 #[cfg(not(feature = "layer1-bootstrap"))]
@@ -234,20 +238,87 @@ fn register_cutover_capability(
         .lock()
         .map_err(|_| BrokerError::Protocol("cutover capability registry poisoned".to_owned()))?;
     let mut capabilities = load_cutover_capabilities(config)?;
-    if capabilities.contains_key(operation_id.as_str()) {
-        return Err(BrokerError::Protocol(
-            "cutover operation capability already registered".to_owned(),
-        ));
+    let mut drained = false;
+    if let Some(binding) = capabilities.get(operation_id.as_str()).cloned() {
+        let replace = match cutover_capability_runner_is_live(&binding)? {
+            Some(runner_is_live) => !runner_is_live,
+            None => audit_timestamp_ms() > u128::from(binding.expires_at_ms),
+        };
+        if !replace {
+            return Err(BrokerError::Protocol(
+                "cutover operation capability already registered".to_owned(),
+            ));
+        }
+        drained = binding.drained;
+        capabilities.remove(operation_id.as_str());
     }
     capabilities.insert(
         operation_id.to_string(),
         CutoverCapabilityBinding {
             capability_digest: capability_digest.clone(),
             expires_at_ms,
-            drained: false,
+            drained,
+            runner_pid: None,
+            runner_start_time_ticks: None,
         },
     );
     persist_cutover_capabilities(config, &capabilities)
+}
+
+#[cfg(not(feature = "layer1-bootstrap"))]
+fn bind_cutover_capability_runner(
+    config: &ServerConfig,
+    operation_id: &d2b_contracts::types::BundleOpId,
+    pid: i32,
+    start_time_ticks: u64,
+) -> Result<(), BrokerError> {
+    if pid <= 0 || start_time_ticks == 0 {
+        return Err(BrokerError::Protocol(
+            "cutover runner identity is invalid".to_owned(),
+        ));
+    }
+    let _guard = cutover_capability_lock()
+        .lock()
+        .map_err(|_| BrokerError::Protocol("cutover capability registry poisoned".to_owned()))?;
+    let mut capabilities = load_cutover_capabilities(config)?;
+    let binding = capabilities
+        .get_mut(operation_id.as_str())
+        .ok_or_else(|| BrokerError::Protocol("cutover capability binding missing".to_owned()))?;
+    binding.runner_pid = Some(pid);
+    binding.runner_start_time_ticks = Some(start_time_ticks);
+    persist_cutover_capabilities(config, &capabilities)
+}
+
+#[cfg(not(feature = "layer1-bootstrap"))]
+fn cutover_capability_runner_is_live(
+    binding: &CutoverCapabilityBinding,
+) -> Result<Option<bool>, BrokerError> {
+    let (Some(pid), Some(expected_start_time_ticks)) =
+        (binding.runner_pid, binding.runner_start_time_ticks)
+    else {
+        return Ok(None);
+    };
+    if pid <= 0 || expected_start_time_ticks == 0 {
+        return Ok(Some(false));
+    }
+    Ok(Some(
+        read_proc_start_time_ticks(pid)?.is_some_and(|actual| actual == expected_start_time_ticks),
+    ))
+}
+
+#[cfg(not(feature = "layer1-bootstrap"))]
+fn remove_cutover_capability(
+    config: &ServerConfig,
+    operation_id: &d2b_contracts::types::BundleOpId,
+) -> Result<(), BrokerError> {
+    let _guard = cutover_capability_lock()
+        .lock()
+        .map_err(|_| BrokerError::Protocol("cutover capability registry poisoned".to_owned()))?;
+    let mut capabilities = load_cutover_capabilities(config)?;
+    if capabilities.remove(operation_id.as_str()).is_some() {
+        persist_cutover_capabilities(config, &capabilities)?;
+    }
+    Ok(())
 }
 
 #[cfg(not(feature = "layer1-bootstrap"))]
@@ -277,6 +348,21 @@ fn cutover_window_active(config: &ServerConfig) -> Result<bool, BrokerError> {
     Ok(capabilities.values().any(|binding| {
         binding.drained && audit_timestamp_ms() <= u128::from(binding.expires_at_ms)
     }))
+}
+
+#[cfg(not(feature = "layer1-bootstrap"))]
+fn cutover_relaunch_allowed(
+    config: &ServerConfig,
+    request: &d2b_contracts::broker_wire::BrokerRequest,
+) -> Result<bool, BrokerError> {
+    let d2b_contracts::broker_wire::BrokerRequest::LaunchCutoverRunner(request) = request else {
+        return Ok(false);
+    };
+    let capabilities = load_cutover_capabilities(config)?;
+    let Some(binding) = capabilities.get(request.operation_id.as_str()) else {
+        return Ok(false);
+    };
+    Ok(cutover_capability_runner_is_live(binding)?.is_some_and(|runner_is_live| !runner_is_live))
 }
 
 #[cfg(not(feature = "layer1-bootstrap"))]
@@ -660,6 +746,90 @@ mod cutover_audit_tests {
         assert!(!request_allows_cutover_runner(
             &BrokerRequest::ValidateBundle
         ));
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn failed_cutover_launch_releases_its_capability_binding() {
+        let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join(".scratch")
+            .join(format!("cutover-launch-release-{}", std::process::id()));
+        fs::create_dir_all(&root).expect("test root");
+        let config = config(&root);
+        let operation_id = BundleOpId::new("op-cutover-launch-release");
+        let digest =
+            CanonicalAuditDigest::parse("sha256:".to_owned() + &"a".repeat(64)).expect("digest");
+
+        register_cutover_capability(&config, &operation_id, &digest, u64::MAX)
+            .expect("register capability");
+        remove_cutover_capability(&config, &operation_id).expect("remove capability");
+        assert!(
+            !cutover_capability_matches(&config, &operation_id, &digest)
+                .expect("capability lookup")
+        );
+        register_cutover_capability(&config, &operation_id, &digest, u64::MAX)
+            .expect("retry registration");
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn exited_cutover_runner_capability_can_be_replaced() {
+        let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join(".scratch")
+            .join(format!("cutover-capability-retry-{}", std::process::id()));
+        fs::create_dir_all(&root).expect("test root");
+        let config = config(&root);
+        let operation_id = BundleOpId::new("op-cutover-capability-retry");
+        let first_digest =
+            CanonicalAuditDigest::parse("sha256:".to_owned() + &"a".repeat(64)).expect("digest");
+        let second_digest =
+            CanonicalAuditDigest::parse("sha256:".to_owned() + &"b".repeat(64)).expect("digest");
+
+        register_cutover_capability(&config, &operation_id, &first_digest, u64::MAX)
+            .expect("register capability");
+        bind_cutover_capability_runner(&config, &operation_id, i32::MAX, 1)
+            .expect("bind exited runner identity");
+        register_cutover_capability(&config, &operation_id, &second_digest, u64::MAX)
+            .expect("replace exited runner capability");
+        assert!(
+            cutover_capability_matches(&config, &operation_id, &second_digest)
+                .expect("capability lookup")
+        );
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn drained_dead_cutover_runner_allows_only_a_narrow_relaunch() {
+        let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join(".scratch")
+            .join(format!("cutover-relaunch-window-{}", std::process::id()));
+        fs::create_dir_all(&root).expect("test root");
+        let config = config(&root);
+        let operation_id = BundleOpId::new("op-cutover-relaunch-window");
+        let digest =
+            CanonicalAuditDigest::parse("sha256:".to_owned() + &"a".repeat(64)).expect("digest");
+        register_cutover_capability(&config, &operation_id, &digest, u64::MAX)
+            .expect("register capability");
+        bind_cutover_capability_runner(&config, &operation_id, i32::MAX, 1)
+            .expect("bind exited runner identity");
+        mark_cutover_capability_drained(&config, &operation_id).expect("mark drained");
+
+        let launch = d2b_contracts::broker_wire::BrokerRequest::LaunchCutoverRunner(
+            d2b_contracts::broker_wire::LaunchCutoverRunnerRequest {
+                operation_id: operation_id.clone(),
+                bootstrap_fd_index: 0,
+                capability_digest: digest,
+                expires_at_ms: u64::MAX,
+            },
+        );
+        assert!(cutover_relaunch_allowed(&config, &launch).expect("relaunch decision"));
+        assert!(
+            !cutover_relaunch_allowed(
+                &config,
+                &d2b_contracts::broker_wire::BrokerRequest::ValidateBundle
+            )
+            .expect("non-launch decision")
+        );
         let _ = fs::remove_dir_all(root);
     }
 }
@@ -1508,7 +1678,13 @@ fn handle_connection(
     };
     #[cfg(feature = "layer1-bootstrap")]
     let cutover_window = false;
-    if cutover_window && !direct_cutover_runner {
+    #[cfg(not(feature = "layer1-bootstrap"))]
+    let cutover_relaunch = cutover_window
+        && effective_uid == config.d2bd_uid
+        && cutover_relaunch_allowed(config, &request).unwrap_or(false);
+    #[cfg(feature = "layer1-bootstrap")]
+    let cutover_relaunch = false;
+    if cutover_window && !direct_cutover_runner && !cutover_relaunch {
         let error = BrokerError::PeerCredentialRefused { operation };
         let _ = write_refusal_audit_bounded(
             audit_log,
@@ -2577,8 +2753,10 @@ fn execute_cutover_verification(
 
 #[cfg(not(feature = "layer1-bootstrap"))]
 fn execute_cutover_admission(
-    _request: &d2b_contracts::broker_wire::CutoverAdmissionRequest,
+    request: &d2b_contracts::broker_wire::CutoverAdmissionRequest,
+    authority: d2b_contracts::broker_wire::CutoverEffectAuthority,
     resolver: &BundleResolver,
+    activation_helper_path: &std::path::Path,
 ) -> d2b_contracts::broker_wire::CutoverAdmissionResponse {
     use d2b_contracts::types::BundleOpId;
     let zone_ids = resolver
@@ -2601,11 +2779,43 @@ fn execute_cutover_admission(
     let candidate_current = resolver.bundle.bundle_hash.is_some() && store_views_healthy;
     let markers_valid = store_views_healthy;
     let ownership_valid = store_views_healthy && resolver.installed_generation_identity().is_some();
+    let artifacts_valid = if !artifact_binding_shape_is_valid(request, authority) {
+        false
+    } else if let (Some(candidate), Some(source)) = (
+        request.system_artifact_id.as_ref(),
+        request.source_system_artifact_id.as_ref(),
+    ) {
+        crate::ops::host_generation_handoff::validate_artifact_with_helper(
+            activation_helper_path,
+            candidate,
+        )
+        .unwrap_or(false)
+            && crate::ops::host_generation_handoff::validate_artifact_with_helper(
+                activation_helper_path,
+                source,
+            )
+            .unwrap_or(false)
+    } else {
+        true
+    };
     d2b_contracts::broker_wire::CutoverAdmissionResponse {
         candidate_current,
         markers_valid,
         ownership_valid,
-        predicates_hold: candidate_current && markers_valid && ownership_valid,
+        predicates_hold: candidate_current && markers_valid && ownership_valid && artifacts_valid,
+    }
+}
+
+#[cfg(not(feature = "layer1-bootstrap"))]
+fn artifact_binding_shape_is_valid(
+    request: &d2b_contracts::broker_wire::CutoverAdmissionRequest,
+    authority: d2b_contracts::broker_wire::CutoverEffectAuthority,
+) -> bool {
+    match authority {
+        d2b_contracts::broker_wire::CutoverEffectAuthority::Cutover => {
+            request.system_artifact_id.is_some() && request.source_system_artifact_id.is_some()
+        }
+        _ => request.system_artifact_id.is_none() && request.source_system_artifact_id.is_none(),
     }
 }
 
@@ -5776,18 +5986,36 @@ fn dispatch_request_with_backend_and_request_fds<B: DispatchBackend>(
                     kind: "cutover-runner",
                     intent_id: req.operation_id.to_string(),
                 })?;
+            let runner_id = format!("cutover:{}", req.operation_id);
+            reserve_runner_id_for_spawn(&runner_id)?;
             register_cutover_capability(
                 config,
                 &req.operation_id,
                 &req.capability_digest,
                 req.expires_at_ms,
             )?;
-            let response = launch_cutover_runner(
+            let response = match launch_cutover_runner(
                 Path::new(runner_path),
                 &config.state_dir,
                 &req,
                 bootstrap_fd,
-            )?;
+            ) {
+                Ok(response) => response,
+                Err(error) => {
+                    let _ = remove_cutover_capability(config, &req.operation_id);
+                    return Err(error);
+                }
+            };
+            if let Err(error) = bind_cutover_capability_runner(
+                config,
+                &req.operation_id,
+                response.pid,
+                response.start_time_ticks,
+            ) {
+                cleanup_registered_runner_after_failure(&runner_id);
+                let _ = remove_cutover_capability(config, &req.operation_id);
+                return Err(error);
+            }
             audit_log
                 .write_entry_with_caller_ids(
                     "LaunchCutoverRunner",
@@ -5797,7 +6025,11 @@ fn dispatch_request_with_backend_and_request_fds<B: DispatchBackend>(
                     req.operation_id.as_str(),
                     "ok",
                 )
-                .map_err(|error| BrokerError::Protocol(error.to_string()))?;
+                .map_err(|error| {
+                    cleanup_registered_runner_after_failure(&runner_id);
+                    let _ = remove_cutover_capability(config, &req.operation_id);
+                    BrokerError::Protocol(error.to_string())
+                })?;
             Ok(DispatchResult::no_fds(BrokerResponse::LaunchCutoverRunner(
                 response,
             )))
@@ -5891,7 +6123,12 @@ fn dispatch_request_with_backend_and_request_fds<B: DispatchBackend>(
                         ));
                     }
                     let resolver = require_resolver(resolver)?;
-                    let observations = execute_cutover_admission(&admission_request, resolver);
+                    let observations = execute_cutover_admission(
+                        &admission_request,
+                        req.authority,
+                        resolver,
+                        &config.activation_helper_path,
+                    );
                     let outcome = if observations.predicates_hold {
                         d2b_contracts::broker_wire::CutoverEffectOutcome::Succeeded
                     } else {
@@ -11507,9 +11744,27 @@ fn launch_cutover_runner(
     )
     .map_err(|error| BrokerError::LiveHandler(format!("cutover runner spawn: {error}")))?;
     let pid = outcome.pid;
-    let start_time_ticks = read_proc_start_time_ticks(pid)?.ok_or_else(|| {
-        BrokerError::LiveHandler("cutover runner exited before identity read".to_owned())
-    })?;
+    let runner_id = format!("cutover:{}", request.operation_id);
+    let start_time_ticks = match read_proc_start_time_ticks(pid) {
+        Ok(Some(start_time_ticks)) => start_time_ticks,
+        Ok(None) => {
+            cleanup_spawned_runner_after_failure(&runner_id, outcome.pidfd.as_fd());
+            return Err(BrokerError::LiveHandler(
+                "cutover runner exited before identity read".to_owned(),
+            ));
+        }
+        Err(error) => {
+            cleanup_spawned_runner_after_failure(&runner_id, outcome.pidfd.as_fd());
+            return Err(error);
+        }
+    };
+    if let Err(error) = register_runner_pidfd(&runner_id, &outcome.pidfd) {
+        cleanup_spawned_runner_after_failure(&runner_id, outcome.pidfd.as_fd());
+        return Err(error);
+    }
+    // Close the registration race for a runner that exits before the
+    // background SIGCHLD loop observes the pidfd.
+    targeted_reap_runner(&runner_id, outcome.pidfd.as_fd());
     Ok(d2b_contracts::broker_wire::LaunchCutoverRunnerResponse {
         operation_id: request.operation_id.clone(),
         pid,
@@ -12806,6 +13061,21 @@ fn cleanup_spawned_runner_after_failure(runner_id: &str, pidfd: std::os::fd::Bor
     }
     if let Ok(mut registry) = runner_pidfd_registry().lock() {
         registry.remove(runner_id);
+    }
+}
+
+#[cfg(not(feature = "layer1-bootstrap"))]
+fn cleanup_registered_runner_after_failure(runner_id: &str) {
+    let pidfd = runner_pidfd_registry().lock().ok().and_then(|registry| {
+        registry
+            .get(runner_id)
+            .and_then(|fd| dup(fd.as_raw_fd()).ok().map(owned_fd_from_raw))
+    });
+    if let Some(pidfd) = pidfd {
+        cleanup_spawned_runner_after_failure(runner_id, pidfd.as_fd());
+    } else {
+        remove_runner_metadata(runner_id);
+        remove_runner_registration(runner_id);
     }
 }
 
@@ -18638,6 +18908,23 @@ mod tests {
             assert_eq!(drained.len(), CHILD_REAP_BUFFER_CAP);
             assert!(!drained.iter().any(|n| n.runner_id == "overflow-0"));
             assert!(drained.iter().any(|n| n.runner_id == "overflow-256"));
+        }
+
+        #[cfg(not(feature = "layer1-bootstrap"))]
+        #[test]
+        fn cutover_admission_requires_both_artifact_bindings() {
+            let request = d2b_contracts::broker_wire::CutoverAdmissionRequest {
+                system_artifact_id: None,
+                source_system_artifact_id: None,
+            };
+            assert!(!artifact_binding_shape_is_valid(
+                &request,
+                d2b_contracts::broker_wire::CutoverEffectAuthority::Cutover,
+            ));
+            assert!(artifact_binding_shape_is_valid(
+                &request,
+                d2b_contracts::broker_wire::CutoverEffectAuthority::ResetZone,
+            ));
         }
     }
 }

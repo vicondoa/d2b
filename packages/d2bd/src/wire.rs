@@ -21,6 +21,7 @@ pub struct HostCheckRequestExt {
 }
 
 #[derive(Debug, Clone)]
+#[allow(clippy::large_enum_variant)]
 pub enum Request {
     List(public_wire::ListRequest),
     Status(public_wire::StatusRequest),

@@ -69,6 +69,8 @@ d2b host cutover preview \
   --operation-id <operation-id> \
   --candidate-id <candidate-id> \
   --revision-plan-id <revision-plan-id> \
+  --system-artifact-id <system-artifact-id> \
+  --source-system-artifact-id <source-system-artifact-id> \
   --json
 ```
 
@@ -78,8 +80,11 @@ configured Zone inventory. Repeat the preview and require the same digest.
 Any missing, unexpected, duplicate, or incomplete Zone is a no-go.
 
 The apply consent must be the canonical record bound to the exact operation,
-candidate, preview, recovery digest, and operator. A changed byte, stale
-digest, replayed record, or different operator is refused before bootstrap.
+candidate, preview, recovery digest, candidate artifact, preserved source
+artifact, and operator. The apply handoff and preview must carry the same
+candidate artifact identity. A rollback handoff must carry the admitted
+preserved source artifact identity. A changed byte, stale digest, replayed
+record, different operator, or different artifact is refused before bootstrap.
 
 ## Apply and observe
 
@@ -91,6 +96,7 @@ d2b host cutover apply \
   --operation-id <operation-id> \
   --candidate-id <candidate-id> \
   --revision-plan-id <revision-plan-id> \
+  --source-system-artifact-id <source-system-artifact-id> \
   --preview-digest <preview-digest> \
   --recovery-digest <u3-recovery-digest> \
   --operator-id <bound-operator-id> \

@@ -3409,12 +3409,13 @@ detached state lives in guestd's detached registry).
 The cutover surface is:
 
 ```text
-d2b host cutover preview
+d2b host cutover preview [--system-artifact-id <ID>] [--source-system-artifact-id <ID>]
 d2b host cutover status --operation-id <ID>
 d2b host cutover hold --operation-id <ID> --reason <TEXT>
 d2b host cutover resume --operation-id <ID> [--fresh-consent-digest <DIGEST>]
 d2b host cutover apply --operation-id <ID> --candidate-id <ID> \
-  --revision-plan-id <ID> --preview-digest <DIGEST> \
+  --revision-plan-id <ID> --source-system-artifact-id <ID> \
+  --preview-digest <DIGEST> \
   --recovery-digest <DIGEST> --operator-id <ID> --consent-digest <DIGEST> \
   --handoff-file <JSON>
 d2b host cutover rollback --operation-id <ID>
@@ -3439,15 +3440,27 @@ Preserve.
 `apply --handoff-file` supplies the existing typed host-generation handoff;
 the CLI first obtains runner admission through `d2bd`, then submits the
 handoff directly to the runner socket once the journal reaches the native
-phase-4 disposition boundary; earlier phase skips are refused.
+phase-4 disposition boundary; earlier phase skips are refused. If an admitted
+runner is already present, a repeated apply with the handoff resumes through
+that runner instead of requesting a duplicate launch; an admission-only retry
+must supply the handoff file.
+The candidate handoff's `systemArtifactId` and the preserved rollback
+`sourceSystemArtifactId` are included in the admitted operation contract and
+the preview/consent binding; a different artifact identity is refused before
+any closure activation effect. Supply the same candidate and source artifact
+identities to `preview` that are named by the corresponding typed handoffs.
+If the apply response is lost after admission, the CLI emits the observed
+runner state with `mutationAccepted=false` rather than converting an
+possibly-mutating operation into a definitive command refusal.
 `rollback --handoff-file` supplies the pre-apply generation handoff when the
 native rollback boundary is at phase 4; the broker restores that typed
 generation before the journal is terminally rolled back.
 JSON evidence files are parsed through the canonical JSON profile and
 normalized before the typed request crosses the Zone resource transport.
-After admission, `status`, `hold`, `resume`, `rollback`, `verify`, and
+After admission, `status`, `hold`, `resume`, `rollback`, `verify`, `doctor`, and
 `finalize` use the runner-owned Unix socket so they remain available while
-`d2bd` is drained. Verification refuses without authoritative post-activation
+`d2bd` is drained; `doctor` falls back to daemon observation before drain.
+Verification refuses without authoritative post-activation
 observations rather than inferring health from preview data. The journal is
 root-owned mode `0600` and is never printed by the CLI. Hold and resume
 advance only after the privileged audit boundary returns durable evidence;

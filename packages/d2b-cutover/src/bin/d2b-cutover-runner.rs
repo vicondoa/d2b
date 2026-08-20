@@ -77,7 +77,7 @@ fn run() -> Result<(), RunnerError> {
     let paths = RunnerPaths::new_with_socket_root(state_root, socket_root, consumed.operation_id());
     let lock = acquire_operation_lock(&paths).map_err(|_| RunnerError::Lock)?;
     let (bootstrap, mut operation, adopted) = match load_existing_operation(&paths, &bootstrap)? {
-        Some((persisted_bootstrap, operation)) => (persisted_bootstrap, operation, true),
+        Some((_persisted_bootstrap, operation)) => (bootstrap.clone(), operation, true),
         None => (
             bootstrap.clone(),
             Operation::new(bootstrap.request.clone(), &bootstrap.preview)
@@ -156,8 +156,9 @@ fn bootstrap_restart_binding_matches(
     persisted: &RunnerBootstrap,
     supplied: &RunnerBootstrap,
 ) -> bool {
-    persisted.capability.binding_digest() == supplied.capability.binding_digest()
-        && persisted.request == supplied.request
+    // The broker may rotate the time-bound capability after the prior runner
+    // is confirmed dead; all operation and recovery bindings remain exact.
+    persisted.request == supplied.request
         && persisted.preview == supplied.preview
         && persisted.recovery == supplied.recovery
         && persisted.host_digest == supplied.host_digest
@@ -357,6 +358,8 @@ struct BrokerEffectSink {
     capability_digest: CanonicalAuditDigest,
     request_digest: CanonicalAuditDigest,
     authority: CutoverEffectAuthority,
+    system_artifact_id: Option<d2b_contracts::v3::ArtifactId>,
+    source_system_artifact_id: Option<d2b_contracts::v3::ArtifactId>,
 }
 
 struct BrokerEffectRoundTrip {
@@ -390,12 +393,26 @@ impl BrokerEffectSink {
                 CutoverEffectAuthority::ResetGuest
             }
         };
+        let system_artifact_id = bootstrap
+            .request
+            .system_artifact_id()
+            .map(|id| d2b_contracts::v3::ArtifactId::parse(id.as_str().to_owned()))
+            .transpose()
+            .map_err(|_| RunnerError::Bootstrap)?;
+        let source_system_artifact_id = bootstrap
+            .request
+            .source_system_artifact_id()
+            .map(|id| d2b_contracts::v3::ArtifactId::parse(id.as_str().to_owned()))
+            .transpose()
+            .map_err(|_| RunnerError::Bootstrap)?;
         Ok(Self {
             socket_path,
             operation_id,
             capability_digest,
             request_digest,
             authority,
+            system_artifact_id,
+            source_system_artifact_id,
         })
     }
 
@@ -494,6 +511,10 @@ impl EffectSink for BrokerEffectSink {
     fn admission(
         &mut self,
     ) -> Result<d2b_contracts::broker_wire::CutoverAdmissionResponse, EffectSinkError> {
+        let request = d2b_contracts::broker_wire::CutoverAdmissionRequest {
+            system_artifact_id: self.system_artifact_id.clone(),
+            source_system_artifact_id: self.source_system_artifact_id.clone(),
+        };
         let response = self.round_trip_request(BrokerEffectRoundTrip {
             effect: CutoverEffectKind::ApplyAdmission,
             effect_id: BundleOpId::new("apply-admission"),
@@ -501,9 +522,7 @@ impl EffectSink for BrokerEffectSink {
             replay_class: CutoverReplayClass::Repeatable,
             identity: None,
             handoff: None,
-            payload: Some(CutoverEffectPayload::ApplyAdmission(
-                d2b_contracts::broker_wire::CutoverAdmissionRequest {},
-            )),
+            payload: Some(CutoverEffectPayload::ApplyAdmission(request)),
         })?;
         response.admission.ok_or(EffectSinkError::Protocol)
     }
@@ -757,6 +776,9 @@ impl Runtime {
                 handoff,
                 payload,
             } => {
+                if kind == EffectKind::ClosureActivation {
+                    return self.failure(d2b_cutover::RunnerSocketError::InvalidTransition);
+                }
                 let effect = EffectRequest::new(effect_id, step_id, kind, replay_class, advance_to);
                 let effect = match identity {
                     Some(identity) => effect.with_identity(Some(identity), None),
@@ -769,13 +791,21 @@ impl Runtime {
                     let Some(handoff) = handoff else {
                         return self.failure(d2b_cutover::RunnerSocketError::InvalidTransition);
                     };
+                    if !validate_handoff_contract(&handoff) {
+                        return self.failure(d2b_cutover::RunnerSocketError::InvalidTransition);
+                    }
                     let identity = match ArtifactId::new(handoff.intent.system_artifact_id.as_str())
                     {
                         Ok(identity) => identity,
                         Err(_) => {
-                            return self.failure(d2b_cutover::RunnerSocketError::InvalidTransition);
+                            return self
+                                .failure(d2b_cutover::RunnerSocketError::ArtifactBindingMismatch);
                         }
                     };
+                    if self.bootstrap.request.source_system_artifact_id() != Some(&identity) {
+                        return self
+                            .failure(d2b_cutover::RunnerSocketError::ArtifactBindingMismatch);
+                    }
                     let restore = EffectRequest::new(
                         d2b_cutover::EffectId::new("rollback-generation").expect("effect id"),
                         StepId::new("rollback-generation").expect("step id"),
@@ -1121,6 +1151,18 @@ impl Runtime {
         &mut self,
         handoff: d2b_contracts::host_generation::ApplyHostGenerationHandoff,
     ) -> RunnerResponse {
+        let identity = match ArtifactId::new(handoff.intent.system_artifact_id.as_str()) {
+            Ok(identity) => identity,
+            Err(_) => {
+                return self.failure(d2b_cutover::RunnerSocketError::ArtifactBindingMismatch);
+            }
+        };
+        if !validate_handoff_contract(&handoff) {
+            return self.failure(d2b_cutover::RunnerSocketError::InvalidTransition);
+        }
+        if self.bootstrap.request.system_artifact_id() != Some(&identity) {
+            return self.failure(d2b_cutover::RunnerSocketError::ArtifactBindingMismatch);
+        }
         if let Err(error) = self.complete_read_only_prefix() {
             return self.failure(error);
         }
@@ -1140,10 +1182,6 @@ impl Runtime {
         if self.operation.phase() != CutoverPhase::Disposition {
             return self.failure(d2b_cutover::RunnerSocketError::InvalidTransition);
         }
-        let identity = match ArtifactId::new(handoff.intent.system_artifact_id.as_str()) {
-            Ok(identity) => identity,
-            Err(_) => return self.failure(d2b_cutover::RunnerSocketError::InvalidTransition),
-        };
         let effect = EffectRequest::new(
             d2b_cutover::EffectId::new("closure-activation").expect("effect id"),
             StepId::new("phase-closure-activation").expect("step id"),
@@ -1223,6 +1261,37 @@ impl Runtime {
         handoff: Option<d2b_contracts::host_generation::ApplyHostGenerationHandoff>,
         payload: Option<CutoverEffectPayload>,
     ) -> RunnerResponse {
+        self.dispatch_effect_internal(effect, handoff, payload)
+    }
+
+    fn dispatch_effect_internal(
+        &mut self,
+        effect: EffectRequest,
+        handoff: Option<d2b_contracts::host_generation::ApplyHostGenerationHandoff>,
+        payload: Option<CutoverEffectPayload>,
+    ) -> RunnerResponse {
+        if effect.kind() == EffectKind::ClosureActivation {
+            let Some(handoff) = handoff.as_ref() else {
+                return self.failure(d2b_cutover::RunnerSocketError::InvalidTransition);
+            };
+            if !validate_handoff_contract(handoff) {
+                return self.failure(d2b_cutover::RunnerSocketError::InvalidTransition);
+            }
+            let Ok(identity) = ArtifactId::new(handoff.intent.system_artifact_id.as_str()) else {
+                return self.failure(d2b_cutover::RunnerSocketError::ArtifactBindingMismatch);
+            };
+            let expected_identity = if effect.effect_id().as_str() == "rollback-generation" {
+                self.bootstrap.request.source_system_artifact_id()
+            } else {
+                self.bootstrap.request.system_artifact_id()
+            };
+            if expected_identity != Some(&identity) {
+                return self.failure(d2b_cutover::RunnerSocketError::ArtifactBindingMismatch);
+            }
+            if effect.journaled_identity() != Some(&identity) {
+                return self.failure(d2b_cutover::RunnerSocketError::ArtifactBindingMismatch);
+            }
+        }
         if effect.kind() == EffectKind::DestroyDurableVolume {
             let valid = match (
                 self.bootstrap.destructive_consent.as_ref(),
@@ -1375,6 +1444,7 @@ impl Runtime {
     fn status(&self) -> RunnerStatus {
         RunnerStatus {
             operation_id: self.bootstrap.request.operation_id().clone(),
+            preview_digest: self.operation.preview_digest().clone(),
             state: self.operation.state(),
             phase: self.operation.phase(),
             hold_active: matches!(self.operation.state(), d2b_cutover::OperationState::Held),
@@ -1389,6 +1459,38 @@ impl Runtime {
             error: Some(error),
         }
     }
+}
+
+fn validate_handoff_contract(
+    handoff: &d2b_contracts::host_generation::ApplyHostGenerationHandoff,
+) -> bool {
+    if handoff.validate().is_err()
+        || !matches!(
+            handoff.caller_role,
+            d2b_contracts::host_generation::HandoffCallerRole::Lifecycle
+        )
+        || handoff.target.resource_type().as_str() != "Host"
+    {
+        return false;
+    }
+    let fingerprint = d2b_contracts::host_generation::target_fingerprint(
+        &handoff.target,
+        &handoff.intent.system_artifact_id,
+        handoff.intent.target_generation,
+    );
+    handoff
+        .intent
+        .compatibility
+        .validate_target(handoff.intent.target_generation, fingerprint)
+        .is_ok()
+        && handoff
+            .intent
+            .compatibility
+            .begin_handoff(
+                handoff.intent.source_generation,
+                handoff.intent.target_generation,
+            )
+            .is_ok()
 }
 
 #[derive(Debug)]
@@ -1731,6 +1833,7 @@ mod tests {
             [],
         )
         .expect("inventory");
+        let system_artifact_id = d2b_cutover::ArtifactId::new("host-system").expect("artifact");
         let preview = CutoverPreview::new(
             operation_id.clone(),
             OperationKind::Cutover,
@@ -1739,7 +1842,11 @@ mod tests {
             inventory.clone(),
             None,
         )
-        .expect("preview");
+        .expect("preview")
+        .with_system_artifact_id(system_artifact_id.clone())
+        .with_source_system_artifact_id(
+            d2b_cutover::ArtifactId::new("source-system").expect("source artifact"),
+        );
         let preview_digest = preview.digest().expect("preview digest");
         let recovery_now = now_ms();
         let recovery = RecoveryAttestation::new(
@@ -1764,7 +1871,13 @@ mod tests {
             recovery_digest,
             inventory.clone(),
         )
-        .expect("request");
+        .expect("request")
+        .with_system_artifact_id(system_artifact_id)
+        .expect("artifact-bound request")
+        .with_source_system_artifact_id(
+            d2b_cutover::ArtifactId::new("source-system").expect("source artifact"),
+        )
+        .expect("source-artifact-bound request");
         let capability = d2b_cutover::BootstrapCapability::new_with_identity(
             operation_id.clone(),
             candidate_id,
@@ -1891,6 +2004,162 @@ mod tests {
     }
 
     #[test]
+    fn apply_command_refuses_a_handoff_artifact_different_from_the_admitted_request() {
+        let (mut runtime, mut handoff, kinds) = cutover_runtime_for_apply("mismatch");
+        let artifact = d2b_contracts::v3::ArtifactId::parse("other-system").expect("artifact");
+        handoff.intent.system_artifact_id = artifact.clone();
+        handoff.intent.compatibility =
+            d2b_contracts::host_generation::SourceGenerationCompatibilityFloorV1::new(
+                handoff.intent.source_generation,
+                d2b_contracts::host_generation::target_fingerprint(
+                    &handoff.target,
+                    &artifact,
+                    handoff.intent.target_generation,
+                ),
+            )
+            .expect("compatibility");
+        let response = runtime.handle(RunnerCommand::Apply { handoff }, RunnerPeer::Owner);
+        assert!(!response.accepted);
+        assert_eq!(
+            response.error,
+            Some(RunnerSocketError::ArtifactBindingMismatch)
+        );
+        assert!(kinds.lock().expect("effect calls").is_empty());
+        assert_eq!(
+            runtime.operation.phase(),
+            CutoverPhase::Preflight,
+            "mismatched handoff must refuse before any effect"
+        );
+        let _ = std::fs::remove_dir_all(runtime.paths.root());
+    }
+
+    #[test]
+    fn bootstrap_refuses_a_source_artifact_different_from_the_preview() {
+        let (runtime, _handoff, _kinds) = cutover_runtime_for_apply("src");
+        let mut bootstrap = runtime.bootstrap.clone();
+        let request = bootstrap
+            .request
+            .clone()
+            .with_source_system_artifact_id(
+                d2b_cutover::ArtifactId::new("other-source").expect("source artifact"),
+            )
+            .expect("source artifact binding");
+        let now = now_ms();
+        bootstrap.consent = Some(
+            d2b_cutover::Consent::issue(
+                request.consent_binding(),
+                now.saturating_sub(1_000),
+                now.saturating_add(600_000),
+            )
+            .expect("consent"),
+        );
+        bootstrap.request = request;
+        assert_eq!(
+            bootstrap.validate(),
+            Err(d2b_cutover::RunnerCapabilityError::Preview)
+        );
+        let _ = std::fs::remove_dir_all(runtime.paths.root());
+    }
+
+    #[test]
+    fn apply_command_refuses_a_non_lifecycle_handoff_before_host_drain() {
+        let (mut runtime, mut handoff, kinds) = cutover_runtime_for_apply("role-mismatch");
+        handoff.caller_role = d2b_contracts::host_generation::HandoffCallerRole::Admin;
+        let response = runtime.handle(RunnerCommand::Apply { handoff }, RunnerPeer::Owner);
+        assert!(!response.accepted);
+        assert_eq!(response.error, Some(RunnerSocketError::InvalidTransition));
+        assert!(kinds.lock().expect("effect calls").is_empty());
+        assert_eq!(runtime.operation.phase(), CutoverPhase::Preflight);
+        let _ = std::fs::remove_dir_all(runtime.paths.root());
+    }
+
+    #[test]
+    fn apply_command_refuses_a_guest_target_before_read_only_progress() {
+        let (mut runtime, mut handoff, kinds) = cutover_runtime_for_apply("guest-target");
+        handoff.target =
+            d2b_contracts::v3::ResourceRef::parse("Guest/guest-system").expect("guest target");
+        handoff.intent.compatibility =
+            d2b_contracts::host_generation::SourceGenerationCompatibilityFloorV1::new(
+                handoff.intent.source_generation,
+                d2b_contracts::host_generation::target_fingerprint(
+                    &handoff.target,
+                    &handoff.intent.system_artifact_id,
+                    handoff.intent.target_generation,
+                ),
+            )
+            .expect("compatibility");
+        let response = runtime.handle(RunnerCommand::Apply { handoff }, RunnerPeer::Owner);
+        assert!(!response.accepted);
+        assert_eq!(response.error, Some(RunnerSocketError::InvalidTransition));
+        assert!(kinds.lock().expect("effect calls").is_empty());
+        assert_eq!(runtime.operation.phase(), CutoverPhase::Preflight);
+        let _ = std::fs::remove_dir_all(runtime.paths.root());
+    }
+
+    #[test]
+    fn closure_activation_rejects_a_journal_identity_different_from_the_handoff() {
+        let (mut runtime, handoff, kinds) = cutover_runtime_for_apply("effect-mis");
+        runtime
+            .complete_read_only_prefix()
+            .expect("read-only prefix");
+        let drain = EffectRequest::new(
+            d2b_cutover::EffectId::new("host-drain-effect-mismatch").expect("effect id"),
+            StepId::new("host-drain-effect-mismatch").expect("step id"),
+            EffectKind::HostDrain,
+            ReplayClass::Repeatable,
+            Some(CutoverPhase::Disposition),
+        );
+        assert!(
+            runtime.dispatch_effect(drain, None, None).accepted,
+            "host drain"
+        );
+        let mismatched_identity = d2b_cutover::ArtifactId::new("other-system").expect("artifact");
+        let effect = EffectRequest::new(
+            d2b_cutover::EffectId::new("closure-effect-mismatch").expect("effect id"),
+            StepId::new("closure-effect-mismatch").expect("step id"),
+            EffectKind::ClosureActivation,
+            ReplayClass::ReopenByJournaledIdentity,
+            Some(CutoverPhase::ResourceStore),
+        )
+        .with_identity(Some(mismatched_identity), None);
+        let response = runtime.dispatch_effect(effect, Some(handoff), None);
+        assert!(!response.accepted);
+        assert_eq!(
+            response.error,
+            Some(RunnerSocketError::ArtifactBindingMismatch)
+        );
+        assert_eq!(
+            *kinds.lock().expect("effect calls"),
+            [EffectKind::HostDrain]
+        );
+        let _ = std::fs::remove_dir_all(runtime.paths.root());
+    }
+
+    #[test]
+    fn generic_closure_activation_effects_are_rejected_before_dispatch() {
+        let (mut runtime, handoff, kinds) = cutover_runtime_for_apply("gclose");
+        let identity = d2b_cutover::ArtifactId::new("other-system").expect("artifact");
+        let response = runtime.handle(
+            RunnerCommand::Effect {
+                effect_id: d2b_cutover::EffectId::new("gclose").expect("effect id"),
+                step_id: StepId::new("gclose").expect("step id"),
+                kind: EffectKind::ClosureActivation,
+                replay_class: ReplayClass::ReopenByJournaledIdentity,
+                advance_to: None,
+                identity: Some(identity),
+                handoff: Some(handoff),
+                payload: None,
+            },
+            RunnerPeer::Owner,
+        );
+        assert!(!response.accepted);
+        assert_eq!(response.error, Some(RunnerSocketError::InvalidTransition));
+        assert!(kinds.lock().expect("effect calls").is_empty());
+        assert_eq!(runtime.operation.phase(), CutoverPhase::Preflight);
+        let _ = std::fs::remove_dir_all(runtime.paths.root());
+    }
+
+    #[test]
     fn failed_host_drain_leaves_native_rollback_available() {
         let (mut runtime, _handoff, _kinds) = cutover_runtime_for_apply("drain-failure");
         runtime
@@ -1949,6 +2218,29 @@ mod tests {
     }
 
     #[test]
+    fn restart_binding_allows_a_rotated_capability_for_the_same_operation() {
+        let runtime = cutover_runtime_for_apply("adopt-rotated").0;
+        let mut supplied = runtime.bootstrap.clone();
+        supplied.capability = d2b_cutover::BootstrapCapability::new_with_identity(
+            supplied.request.operation_id().clone(),
+            supplied.request.candidate_id().clone(),
+            supplied.request.operator_id().clone(),
+            supplied.request.operation_kind(),
+            d2b_cutover::Digest::derive("d2b:test:rotated-capability", b"nonce"),
+            100,
+            200,
+            1000,
+            BTreeSet::new(),
+        )
+        .expect("rotated capability");
+        assert!(bootstrap_restart_binding_matches(
+            &runtime.bootstrap,
+            &supplied
+        ));
+        let _ = std::fs::remove_dir_all(runtime.paths.root());
+    }
+
+    #[test]
     fn restart_binding_ignores_only_consent_consumption_state() {
         let runtime = runtime("restart-consent-binding");
         let issued =
@@ -1967,7 +2259,23 @@ mod tests {
 
     #[test]
     fn rollback_after_host_drain_restores_the_bound_generation_before_closing() {
-        let (mut runtime, handoff, kinds) = cutover_runtime_for_apply("rollback");
+        let (mut runtime, mut handoff, kinds) = cutover_runtime_for_apply("rollback");
+        let source_artifact =
+            d2b_contracts::v3::ArtifactId::parse("source-system").expect("source artifact");
+        handoff.intent.source_generation = 7;
+        handoff.intent.target_generation = 8;
+        handoff.intent.system_artifact_id = source_artifact.clone();
+        let fingerprint = d2b_contracts::host_generation::target_fingerprint(
+            &handoff.target,
+            &source_artifact,
+            handoff.intent.target_generation,
+        );
+        handoff.intent.compatibility =
+            d2b_contracts::host_generation::SourceGenerationCompatibilityFloorV1::new(
+                handoff.intent.source_generation,
+                fingerprint,
+            )
+            .expect("compatibility");
         runtime
             .complete_read_only_prefix()
             .expect("read-only prefix");
@@ -1991,6 +2299,100 @@ mod tests {
         assert_eq!(
             *kinds.lock().expect("effect calls"),
             [EffectKind::HostDrain, EffectKind::ClosureActivation]
+        );
+        let _ = std::fs::remove_dir_all(runtime.paths.root());
+    }
+
+    #[test]
+    fn rollback_refuses_a_handoff_artifact_different_from_the_admitted_request() {
+        let (mut runtime, mut handoff, kinds) = cutover_runtime_for_apply("rsource");
+        let source_artifact =
+            d2b_contracts::v3::ArtifactId::parse("other-source").expect("artifact");
+        handoff.intent.system_artifact_id = source_artifact.clone();
+        let fingerprint = d2b_contracts::host_generation::target_fingerprint(
+            &handoff.target,
+            &source_artifact,
+            handoff.intent.target_generation,
+        );
+        handoff.intent.compatibility =
+            d2b_contracts::host_generation::SourceGenerationCompatibilityFloorV1::new(
+                handoff.intent.source_generation,
+                fingerprint,
+            )
+            .expect("compatibility");
+        runtime
+            .complete_read_only_prefix()
+            .expect("read-only prefix");
+        let drain = EffectRequest::new(
+            d2b_cutover::EffectId::new("host-drain-source-rollback").expect("effect id"),
+            StepId::new("phase-3-source-rollback").expect("step id"),
+            EffectKind::HostDrain,
+            ReplayClass::Repeatable,
+            Some(CutoverPhase::Disposition),
+        );
+        assert!(runtime.dispatch_effect(drain, None, None).accepted);
+        let response = runtime.handle(
+            RunnerCommand::Rollback {
+                handoff: Some(handoff),
+            },
+            RunnerPeer::Owner,
+        );
+        assert!(!response.accepted);
+        assert_eq!(
+            response.error,
+            Some(RunnerSocketError::ArtifactBindingMismatch)
+        );
+        assert!(matches!(
+            runtime.operation.state(),
+            OperationState::Applying(_)
+        ));
+        assert_eq!(
+            *kinds.lock().expect("effect calls"),
+            [EffectKind::HostDrain]
+        );
+        let _ = std::fs::remove_dir_all(runtime.paths.root());
+    }
+
+    #[test]
+    fn rollback_refuses_a_guest_target_before_closure_activation() {
+        let (mut runtime, mut handoff, kinds) = cutover_runtime_for_apply("rguest");
+        let source_artifact =
+            d2b_contracts::v3::ArtifactId::parse("source-system").expect("artifact");
+        handoff.target =
+            d2b_contracts::v3::ResourceRef::parse("Guest/guest-system").expect("guest target");
+        handoff.intent.system_artifact_id = source_artifact.clone();
+        handoff.intent.compatibility =
+            d2b_contracts::host_generation::SourceGenerationCompatibilityFloorV1::new(
+                handoff.intent.source_generation,
+                d2b_contracts::host_generation::target_fingerprint(
+                    &handoff.target,
+                    &source_artifact,
+                    handoff.intent.target_generation,
+                ),
+            )
+            .expect("compatibility");
+        runtime
+            .complete_read_only_prefix()
+            .expect("read-only prefix");
+        let drain = EffectRequest::new(
+            d2b_cutover::EffectId::new("host-drain-guest-rollback").expect("effect id"),
+            StepId::new("host-drain-guest-rollback").expect("step id"),
+            EffectKind::HostDrain,
+            ReplayClass::Repeatable,
+            Some(CutoverPhase::Disposition),
+        );
+        assert!(runtime.dispatch_effect(drain, None, None).accepted);
+        let response = runtime.handle(
+            RunnerCommand::Rollback {
+                handoff: Some(handoff),
+            },
+            RunnerPeer::Owner,
+        );
+        assert!(!response.accepted);
+        assert_eq!(response.error, Some(RunnerSocketError::InvalidTransition));
+        assert_eq!(
+            *kinds.lock().expect("effect calls"),
+            [EffectKind::HostDrain]
         );
         let _ = std::fs::remove_dir_all(runtime.paths.root());
     }

@@ -305,6 +305,34 @@ impl ZoneContext {
         deadline: RequestDeadline,
         mode: OutputMode,
     ) -> Result<Value, CliFailure> {
+        self.invoke_with_verb(
+            method,
+            payload,
+            deadline,
+            mode,
+            resource_verb(method, false),
+        )
+    }
+
+    /// Invoke one typed resource-plane mutation with an explicit mutating verb.
+    pub(crate) fn invoke_mutating(
+        &self,
+        method: &str,
+        payload: Value,
+        deadline: RequestDeadline,
+        mode: OutputMode,
+    ) -> Result<Value, CliFailure> {
+        self.invoke_with_verb(method, payload, deadline, mode, resource_verb(method, true))
+    }
+
+    fn invoke_with_verb(
+        &self,
+        method: &str,
+        payload: Value,
+        deadline: RequestDeadline,
+        mode: OutputMode,
+        verb: ResourceVerb,
+    ) -> Result<Value, CliFailure> {
         #[cfg(test)]
         if let Some(client) = &self.backend.injected {
             return self.invoke_injected(
@@ -321,7 +349,14 @@ impl ZoneContext {
         let value = self
             .backend
             .canonical
-            .invoke(method, payload, deadline)
+            .invoke_with_verb(
+                method,
+                payload,
+                deadline,
+                operation_service(method),
+                None,
+                verb,
+            )
             .map_err(|error| self.client_failure(error, mode))?;
         self.decorate_response(value)
     }
@@ -674,6 +709,7 @@ impl ZoneContext {
     }
 
     fn client_failure(&self, error: ClientError, mode: OutputMode) -> CliFailure {
+        let admission_recovery = matches!(&error, ClientError::AmbiguousMutation);
         let (class, message, exit_code) = match error {
             ClientError::InvalidTarget => {
                 ("resource-schema-invalid", "resource target was invalid", 2)
@@ -726,12 +762,15 @@ impl ZoneContext {
             ),
             ClientError::Remote { kind, .. } => resource_error_surface(kind),
         };
-        self.failure(class, message, mode, exit_code)
+        let mut failure = self.failure(class, message, mode, exit_code);
+        failure.admission_recovery = admission_recovery;
+        failure
     }
 
     #[cfg(test)]
     fn transport_failure(&self, error: TransportError, mode: OutputMode) -> CliFailure {
-        match error {
+        let admission_recovery = false;
+        let mut failure = match error {
             TransportError::Unavailable | TransportError::Io => {
                 self.failure("zone-unavailable", "Zone runtime is unavailable", mode, 1)
             }
@@ -759,7 +798,9 @@ impl ZoneContext {
                 mode,
                 77,
             ),
-        }
+        };
+        failure.admission_recovery = admission_recovery;
+        failure
     }
 
     /// Emit a complete response using the selected output mode.
@@ -872,16 +913,6 @@ impl CanonicalZoneBackend {
         ))
     }
 
-    fn invoke(
-        &self,
-        method: &str,
-        payload: Value,
-        deadline: RequestDeadline,
-    ) -> Result<Value, ClientError> {
-        let service = operation_service(method);
-        self.invoke_service(method, payload, deadline, service, None)
-    }
-
     fn invoke_service(
         &self,
         operation: &str,
@@ -890,10 +921,28 @@ impl CanonicalZoneBackend {
         service: ZoneServiceKind,
         session_verb: Option<&str>,
     ) -> Result<Value, ClientError> {
+        self.invoke_with_verb(
+            operation,
+            payload,
+            deadline,
+            service,
+            session_verb,
+            resource_verb(operation, false),
+        )
+    }
+
+    fn invoke_with_verb(
+        &self,
+        operation: &str,
+        payload: Value,
+        deadline: RequestDeadline,
+        service: ZoneServiceKind,
+        session_verb: Option<&str>,
+        verb: ResourceVerb,
+    ) -> Result<Value, ClientError> {
         let payload = serde_json::to_vec(&payload).map_err(|_| ClientError::ContractViolation)?;
         let payload =
             CanonicalJsonObject::parse(&payload).map_err(|_| ClientError::ContractViolation)?;
-        let verb = canonical_verb(operation);
         let options = call_options(deadline, verb)?;
         let cancellation = CancellationToken::default();
         let request = ResourceCallOptions::new(payload, false, &cancellation);
@@ -1594,6 +1643,25 @@ fn canonical_verb(method: &str) -> ResourceVerb {
     }
 }
 
+fn resource_verb(method: &str, mutating: bool) -> ResourceVerb {
+    if mutating {
+        ResourceVerb::Create
+    } else {
+        canonical_verb(method)
+    }
+}
+
+#[cfg(test)]
+mod resource_verb_tests {
+    use super::*;
+
+    #[test]
+    fn host_cutover_mutations_use_a_mutating_resource_verb() {
+        assert_eq!(resource_verb("HostCutover", true), ResourceVerb::Create);
+        assert_eq!(resource_verb("HostCutover", false), ResourceVerb::Get);
+    }
+}
+
 fn operation_service(method: &str) -> ZoneServiceKind {
     match method {
         "ZoneGet" | "ZoneList" | "ZoneStatus" => ZoneServiceKind::Zone,
@@ -1664,7 +1732,9 @@ fn resource_error_kind(value: &str) -> ResourceErrorKind {
         "resource-not-found" => ResourceErrorKind::ResourceNotFound,
         "resource-already-exists" => ResourceErrorKind::ResourceAlreadyExists,
         "resource-conflict" => ResourceErrorKind::ResourceConflict,
-        "resource-schema-invalid" => ResourceErrorKind::ResourceSchemaInvalid,
+        "resource-schema-invalid" | "wire-invalid-frame" => {
+            ResourceErrorKind::ResourceSchemaInvalid
+        }
         "resource-ref-invalid" | "ref-invalid" => ResourceErrorKind::ResourceRefInvalid,
         "resource-owner-cycle" => ResourceErrorKind::ResourceOwnerCycle,
         "resource-owner-depth" => ResourceErrorKind::ResourceOwnerDepth,
@@ -2145,6 +2215,20 @@ mod tests {
         assert!(ZoneContext::deadline(Some("901s")).is_err());
         assert!(ZoneContext::deadline(Some("0s")).is_err());
         assert!(ZoneContext::deadline(Some("30x")).is_err());
+    }
+
+    #[test]
+    fn wire_invalid_frame_preserves_the_validation_exit_surface() {
+        let failure = ZoneContext::local_only().client_failure(
+            ClientError::Remote {
+                kind: resource_error_kind("wire-invalid-frame"),
+                retry: RetryClass::Never,
+            },
+            OutputMode::Json,
+        );
+        assert_eq!(failure.exit_code, 2);
+        assert!(failure.message.starts_with("resource-schema-invalid:"));
+        assert!(!failure.admission_recovery);
     }
 
     #[test]

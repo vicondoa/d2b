@@ -22,6 +22,7 @@ use std::fmt;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(tag = "kind", content = "payload")]
+#[allow(clippy::large_enum_variant)]
 pub enum PublicRequest {
     #[serde(rename = "capabilities")]
     Capabilities,
@@ -2079,6 +2080,12 @@ pub struct HostCutoverRequest {
     /// Revision-plan identity bound to the request.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub revision_plan_id: Option<String>,
+    /// System artifact identity bound to the frozen cutover preview and handoff.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub system_artifact_id: Option<String>,
+    /// Preserved source artifact identity bound to native rollback.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source_system_artifact_id: Option<String>,
     /// Exact preview digest.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub preview_digest: Option<String>,
