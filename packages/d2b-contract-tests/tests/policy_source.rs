@@ -95,6 +95,66 @@ fn nix_package_source_filters_are_path_segment_based() {
     );
 }
 
+#[test]
+fn host_sccache_is_a_global_opt_in_daemon_contract() {
+    let options = read_repo_file("nixos-modules/options-host-sccache.nix");
+    let module = read_repo_file("nixos-modules/host-sccache.nix");
+    let tools = read_repo_file("nixos-modules/rust-host-tools.nix");
+    let makefile = read_repo_file("Makefile");
+
+    assert!(
+        options.contains("options.d2b.site.hostSccache.enable")
+            && options.contains("default = false"),
+        "host sccache must remain disabled by default"
+    );
+    assert!(
+        module.contains("extra-sandbox-paths")
+            && module.contains("\"build-users-group\"")
+            && module.contains("cacheDir = \"/var/cache/d2b-sccache\"")
+            && module.contains("2770 root ${buildUsersGroup} -")
+            && module.contains("hostPlatform.isLinux")
+            && module.contains("builtins.hasAttr buildUsersGroup config.users.groups"),
+        "host sccache must provision the fixed multi-user daemon cache with eval-time posture checks"
+    );
+    assert!(
+        !module.contains("systemd.services"),
+        "host sccache must not add a service"
+    );
+    assert!(
+        tools.contains("SCCACHE_CACHE_SIZE")
+            && tools.contains("10G")
+            && tools.contains("configured cache")
+            && !tools.contains("owner-private")
+            && tools.contains("exec \"$@\""),
+        "host-tool sccache wrapper must be bounded, visible when configured, and rustc-fallback safe"
+    );
+    assert!(
+        makefile.contains("D2B_HOST_SCCACHE")
+            && makefile.contains("/etc/nix/nix.conf")
+            && makefile.contains("root:nixbld")
+            && makefile.contains("mode 2770")
+            && makefile.contains("D2B_HOST_VM_CHECK")
+            && makefile.contains("unknown vmCheck")
+            && !makefile.contains("--option extra-sandbox-paths")
+            && !makefile.contains("XDG_CACHE_HOME")
+            && !makefile.contains("SCCACHE_DIR:-"),
+        "host integration must use the global daemon mount and its fail-closed preflight"
+    );
+}
+
+#[test]
+fn host_sccache_policy_is_in_the_bazel_policy_suite() {
+    let policy_build = read_repo_file("bazel/checks/policy/BUILD.bazel");
+
+    assert!(
+        policy_build
+            .matches("//packages/d2b-contract-tests:policy_source")
+            .count()
+            >= 2,
+        "Bazel policy suite must run the host sccache source contract"
+    );
+}
+
 // ---------------------------------------------------------------------------
 // Migrated from tests/no-bash-exec-eval.sh (v1.1 / ADR 0017: "the Rust CLI
 // never executes bash").

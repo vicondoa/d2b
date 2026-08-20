@@ -862,6 +862,8 @@ store-overlay-emit/first-op-target-suffix
 store-overlay-emit/planops-count
 test-infrastructure/cutover-live-driver-contract
 test-infrastructure/cutover-runner-host-tool-contract
+test-infrastructure/host-sccache-eval-contract
+test-infrastructure/host-sccache-site-contract
 test-infrastructure/host-tools-sccache-contract
 test-infrastructure/own-shard-registration-unique
 test-infrastructure/pin-integrity-complete

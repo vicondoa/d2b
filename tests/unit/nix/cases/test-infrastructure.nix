@@ -39,6 +39,46 @@ let
   flakeSource = builtins.readFile (flakeRoot + "/flake.nix");
   rustHostToolsSource =
     builtins.readFile (flakeRoot + "/nixos-modules/rust-host-tools.nix");
+  hostSccacheSource =
+    if builtins.pathExists (flakeRoot + "/nixos-modules/host-sccache.nix")
+    then builtins.readFile (flakeRoot + "/nixos-modules/host-sccache.nix")
+    else "";
+  hostSccacheOptionsSource =
+    if builtins.pathExists (flakeRoot + "/nixos-modules/options-host-sccache.nix")
+    then builtins.readFile (flakeRoot + "/nixos-modules/options-host-sccache.nix")
+    else "";
+  hostSccacheBase = {
+    boot.loader.grub.enable = false;
+    boot.loader.systemd-boot.enable = false;
+    boot.initrd.includeDefaultModules = false;
+    fileSystems."/" = {
+      device = "tmpfs";
+      fsType = "tmpfs";
+    };
+    environment.etc."machine-id".text =
+      "00000000000000000000000000000000";
+    system.stateVersion = "25.11";
+    users.users.alice = {
+      isNormalUser = true;
+      uid = 1000;
+    };
+    d2b.site = {
+      waylandUser = "alice";
+      launcherUsers = [ "alice" ];
+      yubikey.enable = false;
+    };
+  };
+  hostSccacheDefaultCfg = (mkEval [ hostSccacheBase ]).config;
+  hostSccacheEnabledCfg = (mkEval [
+    (lib.recursiveUpdate hostSccacheBase {
+      d2b.site.hostSccache.enable = true;
+    })
+  ]).config;
+  hostSccacheEnabledTmpfiles = hostSccacheEnabledCfg.systemd.tmpfiles.rules;
+  hostSccacheSettingContains = value:
+    if builtins.isList value
+    then builtins.elem sccacheSandboxDir value
+    else lib.hasInfix sccacheSandboxDir (toString value);
   hostBrokerSource =
     builtins.readFile (flakeRoot + "/nixos-modules/host-broker.nix");
   bundleSource = builtins.readFile (flakeRoot + "/nixos-modules/bundle.nix");
@@ -47,6 +87,8 @@ let
   liveCutoverSource =
     builtins.readFile (flakeRoot + "/tests/integration/live/cutover-real-host.sh");
   makefileSource = builtins.readFile (flakeRoot + "/Makefile");
+  gatesDocsSource =
+    builtins.readFile (flakeRoot + "/docs/contributing/gates-and-lints.md");
   sccacheSandboxDir = "/var/cache/d2b-sccache";
   providerSchemaPaths = [
     "docs/reference/schemas/v3/providers/transport-azure-relay.transport-settings.json"
@@ -75,6 +117,8 @@ let
     "test-infrastructure/pin-integrity-complete"
     "test-infrastructure/cutover-runner-host-tool-contract"
     "test-infrastructure/cutover-live-driver-contract"
+    "test-infrastructure/host-sccache-site-contract"
+    "test-infrastructure/host-sccache-eval-contract"
   ];
   unpinnedOwnCases =
     lib.filter (name: !(builtins.elem name pinnedNames)) ownCaseNames;
@@ -146,17 +190,36 @@ in
       noImpureSccacheEnv =
         !(lib.hasInfix ''builtins.getEnv "SCCACHE_DIR"'' rustHostToolsSource);
       wrapperRequiresWritableDir =
-        lib.hasInfix "[ -d \"''\${SCCACHE_DIR}\" ]" rustHostToolsSource
-        && lib.hasInfix "[ -w \"''\${SCCACHE_DIR}\" ]" rustHostToolsSource
+        lib.hasInfix "[ ! -d \"''\${SCCACHE_DIR}\" ]" rustHostToolsSource
+        && lib.hasInfix "[ ! -w \"''\${SCCACHE_DIR}\" ]" rustHostToolsSource
+        && lib.hasInfix "SCCACHE_CACHE_SIZE" rustHostToolsSource
+        && lib.hasInfix "10G" rustHostToolsSource
         && lib.hasInfix "exec sccache" rustHostToolsSource
         && lib.hasInfix ''exec "$@"'' rustHostToolsSource;
+      wrapperFailsOnlyWhenConfigured =
+        lib.hasInfix "configured cache" rustHostToolsSource
+        && lib.hasInfix "exit 1" rustHostToolsSource;
+      noOwnerPrivateCache =
+        !(lib.hasInfix "owner-private" rustHostToolsSource)
+        && !(lib.hasInfix "HOME/.cache/d2b-sccache" rustHostToolsSource);
       waylandProxySourceBuilt =
         lib.hasInfix "waylandProxy = mkMainPackage" rustHostToolsSource;
       makefileNoWorldWritableCache = !(lib.hasInfix "chmod 1777" makefileSource);
       makefileCacheOptIn =
         lib.hasInfix "D2B_HOST_SCCACHE" makefileSource
-        && lib.hasInfix "chmod 0700" makefileSource
-        && lib.hasInfix "${sccacheSandboxDir}=" makefileSource;
+        && lib.hasInfix "/etc/nix/nix.conf" makefileSource
+        && lib.hasInfix "nixbld" makefileSource
+        && lib.hasInfix "2770" makefileSource
+        && lib.hasInfix "${sccacheSandboxDir}" makefileSource;
+      makefileNoRestrictedSandboxOption =
+        !(lib.hasInfix "--option extra-sandbox-paths" makefileSource);
+      makefileNoCallerCachePath =
+        !(lib.hasInfix "SCCACHE_DIR:-" makefileSource)
+        && !(lib.hasInfix "XDG_CACHE_HOME" makefileSource);
+      makefileFocusedSelector =
+        lib.hasInfix "D2B_HOST_VM_CHECK" makefileSource
+        && lib.hasInfix "unknown vmCheck" makefileSource
+        && lib.hasInfix "case \"$$requested\"" makefileSource;
       makefileDefaultBuildIsPure =
         !(lib.hasInfix "nix build --impure" makefileSource);
     };
@@ -164,10 +227,74 @@ in
       constantSandboxDir = true;
       noImpureSccacheEnv = true;
       wrapperRequiresWritableDir = true;
+      wrapperFailsOnlyWhenConfigured = true;
+      noOwnerPrivateCache = true;
       waylandProxySourceBuilt = true;
       makefileNoWorldWritableCache = true;
       makefileCacheOptIn = true;
+      makefileNoRestrictedSandboxOption = true;
+      makefileNoCallerCachePath = true;
+      makefileFocusedSelector = true;
       makefileDefaultBuildIsPure = true;
+    };
+  };
+
+  "test-infrastructure/host-sccache-site-contract" = {
+    expr = {
+      moduleExists = hostSccacheSource != "";
+      siteOption =
+        lib.hasInfix "options.d2b.site.hostSccache.enable"
+          hostSccacheOptionsSource;
+      fixedCachePath = lib.hasInfix sccacheSandboxDir hostSccacheSource;
+      tmpfilesRule =
+        lib.hasInfix "2770 root " hostSccacheSource
+        && lib.hasInfix "buildUsersGroup" hostSccacheSource
+        && lib.hasInfix " -" hostSccacheSource;
+      globalSandboxSetting = lib.hasInfix "extra-sandbox-paths" hostSccacheSource;
+      noService = !(lib.hasInfix "systemd.services" hostSccacheSource);
+      linuxAssertion = lib.hasInfix "isLinux" hostSccacheSource;
+      buildGroupAssertion = lib.hasInfix "nixbld" hostSccacheSource;
+      docsEnablement =
+        lib.hasInfix "d2b.site.hostSccache.enable = true;" gatesDocsSource
+        && lib.hasInfix "sudo nixos-rebuild switch --flake" gatesDocsSource;
+      docsFocusedCommand =
+        lib.hasInfix
+          "D2B_HOST_SCCACHE=1 D2B_HOST_VM_CHECK=daemon-smoke make test-host-integration"
+          gatesDocsSource;
+    };
+    expected = {
+      moduleExists = true;
+      siteOption = true;
+      fixedCachePath = true;
+      tmpfilesRule = true;
+      globalSandboxSetting = true;
+      noService = true;
+      linuxAssertion = true;
+      buildGroupAssertion = true;
+      docsEnablement = true;
+      docsFocusedCommand = true;
+    };
+  };
+
+  "test-infrastructure/host-sccache-eval-contract" = {
+    expr = {
+      defaultDisabled = hostSccacheDefaultCfg.d2b.site.hostSccache.enable;
+      enabledSandboxPath = hostSccacheSettingContains
+        hostSccacheEnabledCfg.nix.settings."extra-sandbox-paths";
+      enabledBuildUsersGroup =
+        hostSccacheEnabledCfg.nix.settings."build-users-group";
+      enabledTmpfiles =
+        builtins.elem "d ${sccacheSandboxDir} 2770 root nixbld -"
+          hostSccacheEnabledTmpfiles;
+      noService = !(builtins.hasAttr "d2b-host-sccache"
+        hostSccacheEnabledCfg.systemd.services);
+    };
+    expected = {
+      defaultDisabled = false;
+      enabledSandboxPath = true;
+      enabledBuildUsersGroup = "nixbld";
+      enabledTmpfiles = true;
+      noService = true;
     };
   };
 

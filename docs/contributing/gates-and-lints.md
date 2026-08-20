@@ -183,6 +183,35 @@ make test-integration
 make test-host-integration
 ```
 
+The host-tool build can optionally use one shared multi-user sccache. Enable
+it once in the NixOS host configuration, then rebuild the host so the daemon
+configuration and tmpfiles rule are active:
+
+```nix
+d2b.site.hostSccache.enable = true;
+```
+
+Activate that host configuration once with the normal privileged switch:
+
+```bash
+sudo nixos-rebuild switch --flake /path/to/host#<host>
+```
+
+The cache is fixed at `/var/cache/d2b-sccache`, owned by `root:nixbld` with
+mode `2770`, and exposed through the daemon's global
+`extra-sandbox-paths`. The host lane never mounts a caller-owned cache path or
+passes a restricted per-command sandbox option. The exact focused cached
+iteration is:
+
+```bash
+D2B_HOST_SCCACHE=1 D2B_HOST_VM_CHECK=daemon-smoke make test-host-integration
+```
+
+The Make preflight fails before any VM build when activation is missing or
+the owner, mode, build-user group, or daemon setting is unsafe. Apply the
+option above and activate it before retrying. Leave `D2B_HOST_SCCACHE` unset
+for the normal rustc-fallback path.
+
 Hardware and live-host tests remain explicit manual tiers and require the
 matching devices or deployed d2b state.
 
