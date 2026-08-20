@@ -68,6 +68,5 @@ closed enumerations only.
 ## Build and test
 
 ```bash
-cargo test -p d2b-provider-system-systemd
-cargo clippy -p d2b-provider-system-systemd --all-targets
+bazel test //packages/d2b-provider-system-systemd:all
 ```

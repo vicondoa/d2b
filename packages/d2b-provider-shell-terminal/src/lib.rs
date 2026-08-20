@@ -1,9 +1,10 @@
 //! Resource, controller, and supervisor contracts for `Provider/shell-terminal`.
 //!
-//! The Provider owns policy-backed shell pools and sessions.  It does not own
-//! an ambient host shell, raw broker connection, or persistent controller
-//! state.  Individual session supervisors own PTYs and run as the pool's
-//! workload user.
+//! The Provider owns policy-backed shell pools, sessions, adoption, and the
+//! bounded output-ring contract. It does not own an ambient host shell, raw
+//! broker connection, or persistent controller state. OS PTY and user-scope
+//! effects remain in the unsafe-local helper behind the generic helper wire;
+//! the helper has no dependency on this Provider.
 
 #![deny(missing_docs)]
 

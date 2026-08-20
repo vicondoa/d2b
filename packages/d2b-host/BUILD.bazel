@@ -13,10 +13,6 @@ rust_library(
     name = "d2b_host",
     srcs = d2b_host_srcs,
     compile_data = [
-        "//:tests/golden/runner-shape/audio-argv-minimal.txt",  # keep
-        "//:tests/golden/runner-shape/otel-host-bridge-argv-minimal.txt",  # keep
-        "//:tests/golden/runner-shape/virtiofsd-argv-minimal.txt",  # keep
-        "//:tests/golden/runner-shape/vsock-relay-argv-minimal.txt",  # keep
         "Cargo.toml",
     ],
     visibility = ["//visibility:public"],
@@ -31,10 +27,6 @@ rust_library(
     name = "d2b_host_test_support",
     srcs = d2b_host_srcs,
     compile_data = [
-        "//:tests/golden/runner-shape/audio-argv-minimal.txt",  # keep
-        "//:tests/golden/runner-shape/otel-host-bridge-argv-minimal.txt",  # keep
-        "//:tests/golden/runner-shape/virtiofsd-argv-minimal.txt",  # keep
-        "//:tests/golden/runner-shape/vsock-relay-argv-minimal.txt",  # keep
         "Cargo.toml",
     ],
     crate_name = "d2b_host",
@@ -50,10 +42,6 @@ rust_library(
     name = "d2b_host_fake_backends",
     srcs = d2b_host_srcs,
     compile_data = [
-        "//:tests/golden/runner-shape/audio-argv-minimal.txt",  # keep
-        "//:tests/golden/runner-shape/otel-host-bridge-argv-minimal.txt",  # keep
-        "//:tests/golden/runner-shape/virtiofsd-argv-minimal.txt",  # keep
-        "//:tests/golden/runner-shape/vsock-relay-argv-minimal.txt",  # keep
         "Cargo.toml",
     ],
     crate_features = ["fake-backends"],

@@ -33,18 +33,9 @@ pub mod netlink;
 pub mod nftables;
 pub mod routes;
 pub mod seccomp;
-// Static runner lifecycle metadata used by host-side argv dispatch.
-pub mod runner_process;
-// Pure virtiofsd argv generator (one instance per `microvm.shares` row;
-// consumed by d2bd via SpawnRunner).
-pub mod virtiofsd_argv;
 // Neutral Volume effect-port composition wrapper. Concrete broker-backed
 // implementations are supplied by the Zone runtime.
 pub mod volume_effect_adapter;
-// Pure OTel host-bridge argv generator. Replaces the singleton
-// d2b-otel-host-bridge.service with a broker SpawnRunner under
-// RunnerRole::OtelHostBridge.
-pub mod otel_host_bridge_argv;
 // Hardlink-farm primitive for per-VM store activation. Same-filesystem
 // check + per-generation marker + atomic current-symlink swap with crash
 // reconciliation.
@@ -66,11 +57,6 @@ pub mod host_prep_dag;
 // registry writes, udev reloads, and fd opens stay in the privileged broker.
 pub mod media;
 
-// Canonical Rust-side runner argv regenerator.
-// Documents the migration surface from the Nix-side argv
-// generation in processes-json.nix to the typed Rust generators
-// in this crate and their owning Providers. See ADR 0018.
-pub mod runner_argv_regenerator;
 // v1.1.1 RenderDnsmasqEnvConf daemon-host-prep DAG op support.
 // Per ADR 0018. Pure-Rust dnsmasq config
 // rendering from typed env metadata; the broker writes the

@@ -2694,10 +2694,10 @@ pub struct DeregisterRunnerPidfdResponse {
 /// by the opaque `bundle_runner_intent_ref`. The wire shape follows the
 /// opaque-only contract for every other mutating variant.
 ///
-/// `RunnerRole` selects which argv generator the broker invokes against
-/// the bundle data (CH, virtiofsd, or swtpm). Adding new roles requires
-/// a bundle schema bump so downstream bundles can declare the new launch
-/// context.
+/// `RunnerRole` identifies the bundle-owned runner shape consumed by the
+/// broker. Provider-specific argv planning is not performed in this crate.
+/// Adding new roles requires a bundle schema bump so downstream bundles can
+/// declare the new launch context.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "kebab-case")]
 pub enum RunnerRole {
@@ -2730,11 +2730,10 @@ pub enum RunnerRole {
     /// `d2b-otel-host-bridge.service` into broker SpawnRunner).
     /// Receives pre-opened fds for the obs VM vsock socket and the
     /// d2b OTel host-egress socket; no AF_VSOCK socket creation
-    /// capability in the role profile. Broker invokes
-    /// `d2b_host::otel_host_bridge_argv::generate_otel_host_bridge_argv`.
+    /// capability in the role profile. The bundle remains authoritative.
     OtelHostBridge,
-    /// Host-jailed Wayland proxy. Broker invokes
-    /// `d2b_host::wayland_proxy_argv::generate_wayland_proxy_argv`.
+    /// Host-jailed Wayland proxy. The display Provider owns argv planning and
+    /// the bundle remains authoritative.
     /// Empty host capabilities; mandatory `seccompPolicyRef`; no
     /// PipeWire/Pulse socket access. Runs as `d2b-<vm>-wlproxy`
     /// with the real host compositor socket bound read/write at a

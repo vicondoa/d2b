@@ -342,10 +342,10 @@ per-share systemd template/watchdog combination
 - [Daemon API reference](../reference/daemon-api.md) - wire
   envelope shapes and typed-error catalog.
 - [`runtime-cloud-hypervisor::vmm_argv`](../../packages/d2b-provider-runtime-cloud-hypervisor/src/vmm_argv.rs)
-  / [`swtpm_argv`](../../packages/d2b-host/src/swtpm_argv.rs) -
+  / [`swtpm_argv`](../../packages/d2b-provider-device-tpm/src/swtpm_argv.rs) -
   pure argv generators feeding the broker `SpawnRunner` op.
-  virtiofsd argv is emitted from `nixos-modules/processes-json.nix`
-  because each share is already resolved during the VM eval.
+- [`virtiofsd_argv`](../../packages/d2b-provider-volume-virtiofs/src/virtiofsd_argv.rs)
+  is owned by the volume-virtiofs Provider.
 - [`d2bd_runtime::supervisor::dag`](../../packages/d2bd-runtime/src/supervisor/dag.rs)
   / [`state`](../../packages/d2bd-runtime/src/supervisor/state.rs)
   / [`pidfd`](../../packages/d2bd-runtime/src/supervisor/pidfd.rs) - the
