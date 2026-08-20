@@ -2714,15 +2714,15 @@ pub enum RunnerRole {
     Swtpm,
     /// swtpm pre-start flush (`swtpm_ioctl -i --unix ...`). One-shot.
     SwtpmFlush,
-    /// crosvm GPU sidecar. Broker invokes `d2b_host::gpu_argv::generate_gpu_argv`.
+    /// crosvm GPU sidecar. Broker invokes the device GPU Provider argv generator.
     Gpu,
     /// vhost-device-sound audio sidecar. Broker invokes `d2b_host::audio_argv::generate_audio_argv`.
     Audio,
-    /// crosvm video-decoder sidecar. Broker invokes `d2b_host::video_argv::generate_video_argv`.
+    /// crosvm video-decoder sidecar. Broker invokes the device GPU Provider argv generator.
     Video,
     /// socat-based vsock relay sidecar. Broker invokes `d2b_host::vsock_relay_argv::generate_vsock_relay_argv`.
     VsockRelay,
-    /// usbip helper sidecar. Broker invokes `d2b_host::usbip_argv::{generate_usbip_bind_argv, generate_usbip_unbind_argv}`.
+    /// usbip helper sidecar. Broker invokes the device USBIP Provider argv generator.
     Usbip,
     /// OTel host-bridge sidecar (vsock relay folded out of
     /// `d2b-otel-host-bridge.service` into broker SpawnRunner).

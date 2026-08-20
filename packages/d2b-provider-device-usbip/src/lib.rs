@@ -15,7 +15,10 @@ mod firewall;
 mod lifecycle;
 mod process;
 mod production;
+pub mod reconcile_state;
+pub mod state_machine;
 mod workers;
+pub mod usbip_argv;
 
 pub use arbitration::{UsbipArbitrator, UsbipClaim, UsbipClaimError};
 pub use busid::{BusId, FirewallOwnershipMarker, MAX_BUS_ID_BYTES, PhysicalUsbBackingToken};
@@ -36,6 +39,15 @@ pub use lifecycle::{
 };
 pub use process::{AttachSource, EphemeralProcessIntent, EphemeralProcessKind, UsbipDaemonProcess};
 pub use production::{ProductionPort, UsbipBrokerDispatcher};
+pub use state_machine::{
+    CANONICAL_STEPS, UsbipBusidPlan, UsbipBusidStep, UsbipClaimSource, UsbipExecutionReport,
+    UsbipPlanError, UsbipStepExecutor, build_usbip_explicit_plan, build_usbip_plan,
+    execute_usbip_plan,
+};
+pub use d2b_contracts::usbip::validate_bus_id;
+pub use usbip_argv::{
+    UsbipArgvError, UsbipArgvInput, UsbipSubcommand, generate_usbip_argv,
+};
 pub use workers::{
     AttachmentActivation, AttachmentCommand, UsbipWorkerClass, UsbipWorkerDeclaration,
 };

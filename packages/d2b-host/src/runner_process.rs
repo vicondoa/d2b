@@ -89,7 +89,7 @@ pub const RUNNER_PROCESS_MATRIX: &[RunnerProcessMetadata] = &[
         RunnerLifecycleClass::Spawnable,
         Some("swtpm_argv"),
         "swtpm_argv",
-        RegeneratorWiring::Wired,
+        RegeneratorWiring::NotYetWired,
     ),
     row(
         Virtiofsd,
@@ -103,21 +103,21 @@ pub const RUNNER_PROCESS_MATRIX: &[RunnerProcessMetadata] = &[
         RunnerLifecycleClass::Spawnable,
         Some("video_argv"),
         "video_argv",
-        RegeneratorWiring::Wired,
+        RegeneratorWiring::NotYetWired,
     ),
     row(
         Gpu,
         RunnerLifecycleClass::Spawnable,
         Some("gpu_argv"),
         "gpu_argv",
-        RegeneratorWiring::Wired,
+        RegeneratorWiring::NotYetWired,
     ),
     row(
         GpuRenderNode,
         RunnerLifecycleClass::Spawnable,
         Some("gpu_argv"),
         "gpu_argv::render_node",
-        RegeneratorWiring::Wired,
+        RegeneratorWiring::NotYetWired,
     ),
     row(
         Audio,
@@ -173,7 +173,7 @@ pub const RUNNER_PROCESS_MATRIX: &[RunnerProcessMetadata] = &[
         RunnerLifecycleClass::Spawnable,
         Some("usbip_argv"),
         "usbip_argv",
-        RegeneratorWiring::Wired,
+        RegeneratorWiring::NotYetWired,
     ),
     row(
         WaylandProxy,

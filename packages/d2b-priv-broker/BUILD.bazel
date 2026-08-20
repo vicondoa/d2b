@@ -30,6 +30,7 @@ d2b_priv_broker_shared_deps = [
     "//packages/d2b-contracts:d2b_contracts",
     "//packages/d2b-contracts-broker:d2b_contracts_broker",
     "//packages/d2b-contracts-control:d2b_contracts_control",
+    "//packages/d2b-provider-device-usbip:d2b_provider_device_usbip",
     "//packages/d2b-realm-core:d2b_realm_core",
     "//packages/d2b-contracts-zone-session:d2b_contracts_zone_session",
 ]
@@ -39,6 +40,7 @@ d2b_priv_broker_test_support_deps = [
     "//packages/d2b-contracts:d2b_contracts_test_support",
     "//packages/d2b-contracts-broker:d2b_contracts_broker",
     "//packages/d2b-contracts-control:d2b_contracts_control",
+    "//packages/d2b-provider-device-usbip:d2b_provider_device_usbip",
     "//packages/d2b-realm-core:d2b_realm_core",
     "//packages/d2b-contracts-zone-session:d2b_contracts_zone_session",
 ]

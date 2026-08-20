@@ -366,6 +366,8 @@ fn providers_and_controllers_use_closed_effect_ports() {
                 || rel == "packages/d2b-provider-supervisor/src/broker.rs"
                 || rel == "packages/d2b-provider-supervisor/src/systemd.rs"
                 || rel == "packages/d2b-provider-supervisor/src/lib.rs"
+                || rel == "packages/d2b-provider-device-usbip/src/usbip_argv.rs"
+                || rel == "packages/d2b-provider-device-usbip/src/reconcile_state.rs"
             {
                 continue;
             }

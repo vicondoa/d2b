@@ -21,6 +21,7 @@
 //! graphics VM's CH argv.
 //!
 //! Crate invariant `#![forbid(unsafe_code)]` is honoured.
+#![allow(missing_docs)]
 
 use serde::{Deserialize, Serialize};
 

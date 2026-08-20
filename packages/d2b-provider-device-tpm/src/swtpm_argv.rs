@@ -29,6 +29,7 @@
 //! starts the long-lived `swtpm socket` process.
 //!
 //! Crate invariant `#![forbid(unsafe_code)]` is honoured.
+#![allow(missing_docs)]
 
 use serde::{Deserialize, Serialize};
 

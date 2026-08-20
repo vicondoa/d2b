@@ -12,9 +12,9 @@
 //!
 //! > The runner argv generation that microvm.nix's
 //! > `declaredRunner` derivation provided is replaced by typed
-//! > Rust generators in `d2b-host::*_argv`. The broker
-//! > spawns each runner role via the appropriate generator
-//! > rather than executing a Nix-built runner script.
+//! > Rust generators in `d2b-host` and the device Providers. The broker
+//! > spawns each runner role via its owning generator rather than executing a
+//! > Nix-built runner script.
 //!
 //! Usage from the broker (v1.1-final wire-cleanup path):
 //!
@@ -34,7 +34,7 @@
 //! processes-json.nix entirely and having the bundle carry typed
 //! `ChArgvInput` records instead of materialized `argv` lists) is
 //! scheduled for v1.1.1 - at v1.1 we ship the canonical Rust
-//! generators + the regenerator wrapper as the documented
+//! non-device generators + the regenerator wrapper as the documented
 //! migration surface.
 
 use d2b_core::bundle_resolver::ResolvedRunnerIntent;
@@ -42,13 +42,9 @@ use d2b_core::processes::ProcessRole;
 
 use crate::audio_argv::{AudioArgvInput, generate_audio_argv};
 use crate::ch_argv::{ChArgvInput, generate_ch_argv};
-use crate::gpu_argv::{GpuArgvInput, generate_gpu_argv};
 use crate::otel_host_bridge_argv::{OtelHostBridgeArgvInputs, generate_otel_host_bridge_argv};
 use crate::qemu_media_argv::{QemuMediaArgvInput, generate_qemu_media_argv};
 use crate::runner_process::runner_process_metadata;
-use crate::swtpm_argv::{SwtpmArgvInput, generate_swtpm_argv};
-use crate::usbip_argv::{UsbipArgvInput, UsbipSubcommand, generate_usbip_argv};
-use crate::video_argv::{VideoArgvInput, generate_video_argv};
 use crate::virtiofsd_argv::{VirtiofsdArgvInput, generate_virtiofsd_argv};
 use crate::vsock_relay_argv::{VsockRelayArgvInput, generate_vsock_relay_argv};
 
@@ -90,30 +86,12 @@ pub struct RunnerArgvExtra {
     /// Pre-built [`QemuMediaArgvInput`] when the role is
     /// [`ProcessRole::QemuMediaRunner`].
     pub qemu_media_input: Option<QemuMediaArgvInput>,
-    /// Pre-built [`SwtpmArgvInput`] when the role is
-    /// [`ProcessRole::Swtpm`].
-    pub swtpm_input: Option<SwtpmArgvInput>,
-    /// Pre-built [`GpuArgvInput`] when the role is
-    /// [`ProcessRole::Gpu`].
-    pub gpu_input: Option<GpuArgvInput>,
     /// Pre-built [`AudioArgvInput`] when the role is
     /// [`ProcessRole::Audio`].
     pub audio_input: Option<AudioArgvInput>,
-    /// Pre-built [`VideoArgvInput`] when the role is
-    /// [`ProcessRole::Video`].
-    pub video_input: Option<VideoArgvInput>,
     /// Pre-built [`VsockRelayArgvInput`] when the role is
     /// [`ProcessRole::VsockRelay`].
     pub vsock_relay_input: Option<VsockRelayArgvInput>,
-    /// Pre-built [`UsbipArgvInput`] when the role is
-    /// [`ProcessRole::Usbip`]. Pair with `usbip_subcommand`
-    /// (bind | unbind) since the same input struct serves both
-    /// subcommands.
-    pub usbip_input: Option<UsbipArgvInput>,
-    /// USBIP subcommand selector (Bind / Unbind) for the
-    /// generate_usbip_argv invocation. Defaults to Bind because
-    /// initial host-side dispatch always binds before attach.
-    pub usbip_subcommand: Option<UsbipSubcommand>,
     /// Pre-built [`OtelHostBridgeArgvInputs`] for the otel-host-bridge
     /// SpawnRunner. Not on processes-json's role enum at v1.1 (the
     /// broker dispatches via a separate code path); the field is
@@ -161,19 +139,8 @@ pub fn regenerate_argv(
             replace_arg0(&mut argv, intent);
             Ok(argv)
         }
-        ProcessRole::Swtpm => {
-            let input = require(&extra.swtpm_input, &intent.role, "swtpm_input")?;
-            let mut argv = generate_swtpm_argv(input)
-                .map_err(|e| RegenerateArgvError::Generator(format!("{e:?}")))?;
-            replace_arg0(&mut argv, intent);
-            Ok(argv)
-        }
-        ProcessRole::Gpu | ProcessRole::GpuRenderNode => {
-            let input = require(&extra.gpu_input, &intent.role, "gpu_input")?;
-            let mut argv = generate_gpu_argv(input)
-                .map_err(|e| RegenerateArgvError::Generator(format!("{e:?}")))?;
-            replace_arg0(&mut argv, intent);
-            Ok(argv)
+        ProcessRole::Swtpm | ProcessRole::Gpu | ProcessRole::GpuRenderNode => {
+            Err(RegenerateArgvError::NotYetWired(intent.role.clone()))
         }
         ProcessRole::Audio => {
             let input = require(&extra.audio_input, &intent.role, "audio_input")?;
@@ -182,13 +149,7 @@ pub fn regenerate_argv(
             replace_arg0(&mut argv, intent);
             Ok(argv)
         }
-        ProcessRole::Video => {
-            let input = require(&extra.video_input, &intent.role, "video_input")?;
-            let mut argv = generate_video_argv(input)
-                .map_err(|e| RegenerateArgvError::Generator(format!("{e:?}")))?;
-            replace_arg0(&mut argv, intent);
-            Ok(argv)
-        }
+        ProcessRole::Video => Err(RegenerateArgvError::NotYetWired(intent.role.clone())),
         ProcessRole::VsockRelay => {
             let input = require(&extra.vsock_relay_input, &intent.role, "vsock_relay_input")?;
             let mut argv = generate_vsock_relay_argv(input)
@@ -207,14 +168,7 @@ pub fn regenerate_argv(
             replace_arg0(&mut argv, intent);
             Ok(argv)
         }
-        ProcessRole::Usbip => {
-            let input = require(&extra.usbip_input, &intent.role, "usbip_input")?;
-            let sub = extra.usbip_subcommand.unwrap_or(UsbipSubcommand::Bind);
-            let mut argv = generate_usbip_argv(input, sub)
-                .map_err(|e| RegenerateArgvError::Generator(format!("{e:?}")))?;
-            replace_arg0(&mut argv, intent);
-            Ok(argv)
-        }
+        ProcessRole::Usbip => Err(RegenerateArgvError::NotYetWired(intent.role.clone())),
         ProcessRole::HostReconcile
         | ProcessRole::StoreVirtiofsPreflight
         | ProcessRole::GuestSshReadiness
@@ -272,19 +226,19 @@ mod tests {
             ProcessRole::CloudHypervisorRunner
             | ProcessRole::Virtiofsd
             | ProcessRole::QemuMediaRunner
-            | ProcessRole::Swtpm
-            | ProcessRole::Gpu
-            | ProcessRole::GpuRenderNode
             | ProcessRole::Audio
-            | ProcessRole::Video
             | ProcessRole::VsockRelay
-            | ProcessRole::OtelHostBridge
-            | ProcessRole::Usbip => ExpectedRegeneratorClassification::MissingInput,
+            | ProcessRole::OtelHostBridge => ExpectedRegeneratorClassification::MissingInput,
             ProcessRole::HostReconcile
             | ProcessRole::StoreVirtiofsPreflight
             | ProcessRole::GuestSshReadiness
             | ProcessRole::GuestControlHealth
             | ProcessRole::SwtpmPreStartFlush
+            | ProcessRole::Swtpm
+            | ProcessRole::Gpu
+            | ProcessRole::GpuRenderNode
+            | ProcessRole::Video
+            | ProcessRole::Usbip
             | ProcessRole::SecurityKeyFrontend
             | ProcessRole::WaylandProxy => ExpectedRegeneratorClassification::NotYetWired,
         }

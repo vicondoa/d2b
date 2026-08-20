@@ -19,6 +19,7 @@
 //! this module is only the pure argv shape.
 //!
 //! Crate invariant `#![forbid(unsafe_code)]` is honoured.
+#![allow(missing_docs)]
 
 use std::net::IpAddr;
 

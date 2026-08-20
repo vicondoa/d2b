@@ -99,21 +99,7 @@ rust_test(
     ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
 )
 
-rust_test(
-    name = "minijail_gpu",
-    srcs = ["tests/minijail_gpu.rs"],
-    compile_data = ["Cargo.toml"],
-    data = _fixture_full_data,
-    env = _fixture_full_env,
-    tags = ["no-remote-cache"],
-    visibility = ["//visibility:public"],
-    deps = [
-        "//packages/d2b-contracts-provider:d2b_contracts_provider",
-        "//packages/d2b-contracts-zone-session:d2b_contracts_zone_session",
-        ":d2b_contract_tests",
-        "//packages/d2b-core:d2b_core",
-    ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
-)
+
 
 rust_test(
     name = "minijail_profiles",
@@ -176,21 +162,7 @@ rust_test(
     ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
 )
 
-rust_test(
-    name = "minijail_swtpm_video",
-    srcs = ["tests/minijail_swtpm_video.rs"],
-    compile_data = ["Cargo.toml"],
-    data = _fixture_full_data,
-    env = _fixture_full_env,
-    tags = ["no-remote-cache"],
-    visibility = ["//visibility:public"],
-    deps = [
-        "//packages/d2b-contracts-provider:d2b_contracts_provider",
-        "//packages/d2b-contracts-zone-session:d2b_contracts_zone_session",
-        ":d2b_contract_tests",
-        "//packages/d2b-core:d2b_core",
-    ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
-)
+
 
 rust_test(
     name = "policy_bazel_layout",
@@ -619,17 +591,7 @@ rust_test(
     ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
 )
 
-rust_test(
-    name = "policy_runner_role_coverage",
-    srcs = ["tests/policy_runner_role_coverage.rs"],
-    compile_data = ["Cargo.toml"],
-    visibility = ["//visibility:public"],
-    deps = [
-        "//packages/d2b-contracts-provider:d2b_contracts_provider",
-        "//packages/d2b-contracts-zone-session:d2b_contracts_zone_session",
-        ":d2b_contract_tests",
-    ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
-)
+
 
 rust_test(
     name = "policy_source",
@@ -670,21 +632,7 @@ rust_test(
     ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
 )
 
-rust_test(
-    name = "policy_swtpm_readiness",
-    srcs = ["tests/policy_swtpm_readiness.rs"],
-    compile_data = ["Cargo.toml"],
-    data = _fixture_full_data,
-    env = _fixture_full_env,
-    tags = ["no-remote-cache"],
-    visibility = ["//visibility:public"],
-    deps = [
-        "//packages/d2b-contracts-provider:d2b_contracts_provider",
-        "//packages/d2b-contracts-zone-session:d2b_contracts_zone_session",
-        ":d2b_contract_tests",
-        "//packages/d2b-core:d2b_core",
-    ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
-)
+
 
 rust_test(
     name = "policy_units",
@@ -884,19 +832,7 @@ rust_test(
     ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
 )
 
-rust_test(
-    name = "usbip_explicit_attach_contract",
-    srcs = ["tests/usbip_explicit_attach_contract.rs"],
-    compile_data = ["Cargo.toml"],
-    visibility = ["//visibility:public"],
-    deps = [
-        "//packages/d2b-contracts-provider:d2b_contracts_provider",
-        "//packages/d2b-contracts-zone-session:d2b_contracts_zone_session",
-        ":d2b_contract_tests",
-        "//packages/d2b-contracts:d2b_contracts",
-        "//packages/d2b-contracts-broker:d2b_contracts_broker",
-    ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
-)
+
 
 rust_test(
     name = "usbip_json_contract",
@@ -912,18 +848,7 @@ rust_test(
     ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
 )
 
-rust_test(
-    name = "video_binary_contract",
-    srcs = ["tests/video_binary_contract.rs"],
-    compile_data = ["Cargo.toml"],
-    visibility = ["//visibility:public"],
-    deps = [
-        "//packages/d2b-contracts-provider:d2b_contracts_provider",
-        "//packages/d2b-contracts-zone-session:d2b_contracts_zone_session",
-        ":d2b_contract_tests",
-        "//packages/d2b-core:d2b_core",
-    ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
-)
+
 
 rust_test(
     name = "workload_observability_contract",

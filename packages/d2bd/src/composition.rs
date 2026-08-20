@@ -479,7 +479,7 @@ struct ServerState {
     /// until the daemon restarts or the VM stops.
     console_sessions: Arc<Mutex<console_session::ConsoleSessionTable>>,
     #[allow(dead_code)]
-    security_key_sessions: Arc<parking_lot::Mutex<security_key::SkSessionTable>>,
+    security_key_sessions: Arc<parking_lot::Mutex<crate::security_key::SkSessionTable>>,
     #[allow(dead_code)]
     unsafe_local_helpers: Arc<d2bd_runtime::unsafe_local_helper::HelperRegistry>,
 }
@@ -4610,7 +4610,7 @@ mod workload_observability_tests {
             zone_coordinator: d2bd_runtime::zone_authority::new_coordinator(),
             console_sessions: Arc::new(Mutex::new(console_session::ConsoleSessionTable::default())),
             security_key_sessions: Arc::new(parking_lot::Mutex::new(
-                security_key::SkSessionTable::default(),
+                crate::security_key::SkSessionTable::default(),
             )),
             unsafe_local_helpers: Arc::new(d2bd_runtime::unsafe_local_helper::HelperRegistry::new(
                 0,
@@ -6621,13 +6621,13 @@ fn usbip_lifecycle_claim_for_intent(
     resolver: &BundleResolver,
     vm: &str,
     intent: &d2b_core::bundle_resolver::ResolvedUsbipBindIntent,
-) -> Option<d2bd_runtime::usbip_reconcile_state::UsbipLifecycleClaim> {
+) -> Option<d2b_provider_device_usbip::reconcile_state::UsbipLifecycleClaim> {
     let host = resolver
         .manifest
         .vms
         .get(vm)
         .and_then(|entry| entry.usbipd_host_ip.clone())?;
-    Some(d2bd_runtime::usbip_reconcile_state::UsbipLifecycleClaim {
+    Some(d2b_provider_device_usbip::reconcile_state::UsbipLifecycleClaim {
         vm: vm.to_owned(),
         env: intent.env.clone(),
         bus_id: intent.bus_id.clone(),
@@ -6662,7 +6662,7 @@ fn same_vm_declared_usbip_start_claims_with_reader(
     resolver: &BundleResolver,
     vm: &str,
     read_owner: impl Fn(&Path) -> io::Result<String>,
-) -> Vec<d2bd_runtime::usbip_reconcile_state::UsbipLifecycleClaim> {
+) -> Vec<d2b_provider_device_usbip::reconcile_state::UsbipLifecycleClaim> {
     resolver
         .usbip_bind_intent_ids()
         .filter_map(|intent_id| resolver.find_usbip_bind_intent(intent_id))
@@ -6699,7 +6699,7 @@ fn same_vm_declared_usbip_start_claims_with_reader(
 fn same_vm_declared_usbip_start_claims(
     resolver: &BundleResolver,
     vm: &str,
-) -> Vec<d2bd_runtime::usbip_reconcile_state::UsbipLifecycleClaim> {
+) -> Vec<d2b_provider_device_usbip::reconcile_state::UsbipLifecycleClaim> {
     same_vm_declared_usbip_start_claims_with_reader(resolver, vm, read_usbip_claim_lock_owner_path)
 }
 
@@ -6707,7 +6707,7 @@ fn same_vm_persisted_usbip_stop_claims_with_reader(
     resolver: &BundleResolver,
     vm: &str,
     read_owner: impl Fn(&Path) -> io::Result<String>,
-) -> Vec<d2bd_runtime::usbip_reconcile_state::UsbipLifecycleClaim> {
+) -> Vec<d2b_provider_device_usbip::reconcile_state::UsbipLifecycleClaim> {
     resolver
         .usbip_bind_intent_ids()
         .filter_map(|intent_id| resolver.find_usbip_bind_intent(intent_id))
@@ -6722,13 +6722,13 @@ fn same_vm_persisted_usbip_stop_claims_with_reader(
 fn same_vm_persisted_usbip_stop_claims(
     resolver: &BundleResolver,
     vm: &str,
-) -> Vec<d2bd_runtime::usbip_reconcile_state::UsbipLifecycleClaim> {
+) -> Vec<d2b_provider_device_usbip::reconcile_state::UsbipLifecycleClaim> {
     same_vm_persisted_usbip_stop_claims_with_reader(resolver, vm, read_usbip_claim_lock_owner_path)
 }
 
 fn lifecycle_broker_error_kind(
     error: &BrokerErrorResponse,
-) -> d2bd_runtime::usbip_reconcile_state::UsbipLifecycleFailureKind {
+) -> d2b_provider_device_usbip::reconcile_state::UsbipLifecycleFailureKind {
     // Typed match on the wire `kind` slug first so broker errors that
     // have dedicated variants are classified precisely without relying
     // on string matching in the redacted `message` field. The
@@ -6737,16 +6737,16 @@ fn lifecycle_broker_error_kind(
     // error that still uses the `LiveHandler` variant.
     match error.kind.as_str() {
         "Broker.UsbipDeviceNotAllowed" | "Broker.UsbipPolicyMismatch" => {
-            d2bd_runtime::usbip_reconcile_state::UsbipLifecycleFailureKind::PolicyMismatch
+            d2b_provider_device_usbip::reconcile_state::UsbipLifecycleFailureKind::PolicyMismatch
         }
         "Broker.BundleIntentMissing" => {
-            d2bd_runtime::usbip_reconcile_state::UsbipLifecycleFailureKind::MissingBundleIntent
+            d2b_provider_device_usbip::reconcile_state::UsbipLifecycleFailureKind::MissingBundleIntent
         }
         "Broker.UsbipLockConflict" => {
-            d2bd_runtime::usbip_reconcile_state::UsbipLifecycleFailureKind::LockConflict
+            d2b_provider_device_usbip::reconcile_state::UsbipLifecycleFailureKind::LockConflict
         }
         "Broker.UsbipDeviceAbsent" => {
-            d2bd_runtime::usbip_reconcile_state::UsbipLifecycleFailureKind::RuntimeAbsent
+            d2b_provider_device_usbip::reconcile_state::UsbipLifecycleFailureKind::RuntimeAbsent
         }
         _ => {
             // Fallback: substring match on the combined field for
@@ -6760,23 +6760,23 @@ fn lifecycle_broker_error_kind(
                 || combined.contains("allowlist")
                 || combined.contains("topology")
             {
-                d2bd_runtime::usbip_reconcile_state::UsbipLifecycleFailureKind::PolicyMismatch
+                d2b_provider_device_usbip::reconcile_state::UsbipLifecycleFailureKind::PolicyMismatch
             } else if combined.contains("intent") {
-                d2bd_runtime::usbip_reconcile_state::UsbipLifecycleFailureKind::MissingBundleIntent
+                d2b_provider_device_usbip::reconcile_state::UsbipLifecycleFailureKind::MissingBundleIntent
             } else if combined.contains("foreign")
                 || combined.contains("held")
                 || combined.contains("owner")
                 || combined.contains("lock")
             {
-                d2bd_runtime::usbip_reconcile_state::UsbipLifecycleFailureKind::LockConflict
+                d2b_provider_device_usbip::reconcile_state::UsbipLifecycleFailureKind::LockConflict
             } else if combined.contains("absent")
                 || combined.contains("departed")
                 || combined.contains("missing")
                 || combined.contains("not present")
             {
-                d2bd_runtime::usbip_reconcile_state::UsbipLifecycleFailureKind::RuntimeAbsent
+                d2b_provider_device_usbip::reconcile_state::UsbipLifecycleFailureKind::RuntimeAbsent
             } else {
-                d2bd_runtime::usbip_reconcile_state::UsbipLifecycleFailureKind::HostReplayFailed
+                d2b_provider_device_usbip::reconcile_state::UsbipLifecycleFailureKind::HostReplayFailed
             }
         }
     }
@@ -6787,18 +6787,18 @@ fn lifecycle_broker_ack(
     op_name: &str,
     request: BrokerRequest,
     caller_role: &BrokerCallerRole,
-) -> Result<(), d2bd_runtime::usbip_reconcile_state::UsbipLifecycleStepError> {
+) -> Result<(), d2b_provider_device_usbip::reconcile_state::UsbipLifecycleStepError> {
     match dispatch_broker_request_as(state, request, caller_role.clone()) {
         Ok(BrokerResponse::Ack(ack)) if ack.accepted && ack.operation == op_name => Ok(()),
         Ok(BrokerResponse::Error(error)) => Err(
-            d2bd_runtime::usbip_reconcile_state::UsbipLifecycleStepError::new(
+            d2b_provider_device_usbip::reconcile_state::UsbipLifecycleStepError::new(
                 lifecycle_broker_error_kind(&error),
                 format!("broker {op_name} failed: {}", error.message),
             ),
         ),
         Ok(response) => Err(
-            d2bd_runtime::usbip_reconcile_state::UsbipLifecycleStepError::new(
-                d2bd_runtime::usbip_reconcile_state::UsbipLifecycleFailureKind::HostReplayFailed,
+            d2b_provider_device_usbip::reconcile_state::UsbipLifecycleStepError::new(
+                d2b_provider_device_usbip::reconcile_state::UsbipLifecycleFailureKind::HostReplayFailed,
                 format!(
                     "broker {op_name} returned unexpected response {}",
                     broker_response_kind(&response)
@@ -6806,8 +6806,8 @@ fn lifecycle_broker_ack(
             ),
         ),
         Err(error) => Err(
-            d2bd_runtime::usbip_reconcile_state::UsbipLifecycleStepError::new(
-                d2bd_runtime::usbip_reconcile_state::UsbipLifecycleFailureKind::HostReplayFailed,
+            d2b_provider_device_usbip::reconcile_state::UsbipLifecycleStepError::new(
+                d2b_provider_device_usbip::reconcile_state::UsbipLifecycleFailureKind::HostReplayFailed,
                 format!("broker {op_name} dispatch failed: {error:?}"),
             ),
         ),
@@ -6820,14 +6820,14 @@ struct DaemonUsbipStartReconcileExecutor<'a> {
     caller_role: BrokerCallerRole,
 }
 
-impl d2bd_runtime::usbip_reconcile_state::UsbipVmStartReconcileExecutor
+impl d2b_provider_device_usbip::reconcile_state::UsbipVmStartReconcileExecutor
     for DaemonUsbipStartReconcileExecutor<'_>
 {
     fn replay_host_bind(
         &mut self,
-        claim: &d2bd_runtime::usbip_reconcile_state::UsbipLifecycleClaim,
-        attempt: &d2bd_runtime::usbip_reconcile_state::UsbipReconcileAttemptContext,
-    ) -> Result<(), d2bd_runtime::usbip_reconcile_state::UsbipLifecycleStepError> {
+        claim: &d2b_provider_device_usbip::reconcile_state::UsbipLifecycleClaim,
+        attempt: &d2b_provider_device_usbip::reconcile_state::UsbipReconcileAttemptContext,
+    ) -> Result<(), d2b_provider_device_usbip::reconcile_state::UsbipLifecycleStepError> {
         let tracing_span_id = tracing_span_id_for_usbip_attempt(attempt);
         lifecycle_broker_ack(
             self.state,
@@ -6842,9 +6842,9 @@ impl d2bd_runtime::usbip_reconcile_state::UsbipVmStartReconcileExecutor
 
     fn ensure_proxy_ready(
         &mut self,
-        claim: &d2bd_runtime::usbip_reconcile_state::UsbipLifecycleClaim,
-        attempt: &d2bd_runtime::usbip_reconcile_state::UsbipReconcileAttemptContext,
-    ) -> Result<(), d2bd_runtime::usbip_reconcile_state::UsbipLifecycleStepError> {
+        claim: &d2b_provider_device_usbip::reconcile_state::UsbipLifecycleClaim,
+        attempt: &d2b_provider_device_usbip::reconcile_state::UsbipReconcileAttemptContext,
+    ) -> Result<(), d2b_provider_device_usbip::reconcile_state::UsbipLifecycleStepError> {
         let tracing_span_id = tracing_span_id_for_usbip_attempt(attempt);
         ensure_usbipd_env_ready_for_attach(
             self.state,
@@ -6855,8 +6855,8 @@ impl d2bd_runtime::usbip_reconcile_state::UsbipVmStartReconcileExecutor
             Some(&tracing_span_id),
         )
         .map_err(|response| {
-            d2bd_runtime::usbip_reconcile_state::UsbipLifecycleStepError::new(
-                d2bd_runtime::usbip_reconcile_state::UsbipLifecycleFailureKind::ProxyFailed,
+            d2b_provider_device_usbip::reconcile_state::UsbipLifecycleStepError::new(
+                d2b_provider_device_usbip::reconcile_state::UsbipLifecycleFailureKind::ProxyFailed,
                 response
                     .get("summary")
                     .and_then(Value::as_str)
@@ -6875,18 +6875,18 @@ impl d2bd_runtime::usbip_reconcile_state::UsbipVmStartReconcileExecutor
         )
         .map_err(|mut error| {
             error.kind =
-                d2bd_runtime::usbip_reconcile_state::UsbipLifecycleFailureKind::ProxyFailed;
+                d2b_provider_device_usbip::reconcile_state::UsbipLifecycleFailureKind::ProxyFailed;
             error
         })
     }
 
     fn guest_status(
         &mut self,
-        claim: &d2bd_runtime::usbip_reconcile_state::UsbipLifecycleClaim,
-        _attempt: &d2bd_runtime::usbip_reconcile_state::UsbipReconcileAttemptContext,
+        claim: &d2b_provider_device_usbip::reconcile_state::UsbipLifecycleClaim,
+        _attempt: &d2b_provider_device_usbip::reconcile_state::UsbipReconcileAttemptContext,
     ) -> Result<
-        d2bd_runtime::usbip_reconcile_state::UsbipGuestImportState,
-        d2bd_runtime::usbip_reconcile_state::UsbipLifecycleStepError,
+        d2b_provider_device_usbip::reconcile_state::UsbipGuestImportState,
+        d2b_provider_device_usbip::reconcile_state::UsbipLifecycleStepError,
     > {
         let status = run_guest_usbip_status(
             self.state,
@@ -6897,8 +6897,8 @@ impl d2bd_runtime::usbip_reconcile_state::UsbipVmStartReconcileExecutor
             guest_control_bridge::GUEST_CONTROL_USBIP_IMPORT_TIMEOUT,
         )
         .map_err(|error| {
-            d2bd_runtime::usbip_reconcile_state::UsbipLifecycleStepError::new(
-                d2bd_runtime::usbip_reconcile_state::UsbipLifecycleFailureKind::GuestFailed,
+            d2b_provider_device_usbip::reconcile_state::UsbipLifecycleStepError::new(
+                d2b_provider_device_usbip::reconcile_state::UsbipLifecycleFailureKind::GuestFailed,
                 error.summary().to_owned(),
             )
         })?;
@@ -6907,17 +6907,17 @@ impl d2bd_runtime::usbip_reconcile_state::UsbipVmStartReconcileExecutor
             .iter()
             .any(|entry| entry.host == claim.host && entry.bus_id == claim.bus_id);
         Ok(if imported {
-            d2bd_runtime::usbip_reconcile_state::UsbipGuestImportState::Imported
+            d2b_provider_device_usbip::reconcile_state::UsbipGuestImportState::Imported
         } else {
-            d2bd_runtime::usbip_reconcile_state::UsbipGuestImportState::Detached
+            d2b_provider_device_usbip::reconcile_state::UsbipGuestImportState::Detached
         })
     }
 
     fn guest_import(
         &mut self,
-        claim: &d2bd_runtime::usbip_reconcile_state::UsbipLifecycleClaim,
-        _attempt: &d2bd_runtime::usbip_reconcile_state::UsbipReconcileAttemptContext,
-    ) -> Result<(), d2bd_runtime::usbip_reconcile_state::UsbipLifecycleStepError> {
+        claim: &d2b_provider_device_usbip::reconcile_state::UsbipLifecycleClaim,
+        _attempt: &d2b_provider_device_usbip::reconcile_state::UsbipReconcileAttemptContext,
+    ) -> Result<(), d2b_provider_device_usbip::reconcile_state::UsbipLifecycleStepError> {
         run_guest_usbip_import(
             self.state,
             self.resolver,
@@ -6928,8 +6928,8 @@ impl d2bd_runtime::usbip_reconcile_state::UsbipVmStartReconcileExecutor
         )
         .map(|_| ())
         .map_err(|summary| {
-            d2bd_runtime::usbip_reconcile_state::UsbipLifecycleStepError::new(
-                d2bd_runtime::usbip_reconcile_state::UsbipLifecycleFailureKind::GuestFailed,
+            d2b_provider_device_usbip::reconcile_state::UsbipLifecycleStepError::new(
+                d2b_provider_device_usbip::reconcile_state::UsbipLifecycleFailureKind::GuestFailed,
                 summary,
             )
         })
@@ -6941,17 +6941,17 @@ struct DaemonUsbipStopCleanupExecutor<'a> {
     caller_role: BrokerCallerRole,
 }
 
-impl d2bd_runtime::usbip_reconcile_state::UsbipVmStopCarrierCleanup
+impl d2b_provider_device_usbip::reconcile_state::UsbipVmStopCarrierCleanup
     for DaemonUsbipStopCleanupExecutor<'_>
 {
     fn detach_guest_import(
         &mut self,
-        claim: &d2bd_runtime::usbip_reconcile_state::UsbipLifecycleClaim,
-        _attempt: &d2bd_runtime::usbip_reconcile_state::UsbipReconcileAttemptContext,
-    ) -> Result<(), d2bd_runtime::usbip_reconcile_state::UsbipLifecycleStepError> {
+        claim: &d2b_provider_device_usbip::reconcile_state::UsbipLifecycleClaim,
+        _attempt: &d2b_provider_device_usbip::reconcile_state::UsbipReconcileAttemptContext,
+    ) -> Result<(), d2b_provider_device_usbip::reconcile_state::UsbipLifecycleStepError> {
         let resolver = load_bundle_resolver(self.state).map_err(|error| {
-            d2bd_runtime::usbip_reconcile_state::UsbipLifecycleStepError::new(
-                d2bd_runtime::usbip_reconcile_state::UsbipLifecycleFailureKind::GuestFailed,
+            d2b_provider_device_usbip::reconcile_state::UsbipLifecycleStepError::new(
+                d2b_provider_device_usbip::reconcile_state::UsbipLifecycleFailureKind::GuestFailed,
                 format!("{error:?}"),
             )
         })?;
@@ -6965,8 +6965,8 @@ impl d2bd_runtime::usbip_reconcile_state::UsbipVmStopCarrierCleanup
         )
         .map(|_| ())
         .map_err(|summary| {
-            d2bd_runtime::usbip_reconcile_state::UsbipLifecycleStepError::new(
-                d2bd_runtime::usbip_reconcile_state::UsbipLifecycleFailureKind::GuestFailed,
+            d2b_provider_device_usbip::reconcile_state::UsbipLifecycleStepError::new(
+                d2b_provider_device_usbip::reconcile_state::UsbipLifecycleFailureKind::GuestFailed,
                 summary,
             )
         })
@@ -6974,9 +6974,9 @@ impl d2bd_runtime::usbip_reconcile_state::UsbipVmStopCarrierCleanup
 
     fn cleanup_host_carrier_preserve_claim(
         &mut self,
-        claim: &d2bd_runtime::usbip_reconcile_state::UsbipLifecycleClaim,
-        attempt: &d2bd_runtime::usbip_reconcile_state::UsbipReconcileAttemptContext,
-    ) -> Result<(), d2bd_runtime::usbip_reconcile_state::UsbipLifecycleStepError> {
+        claim: &d2b_provider_device_usbip::reconcile_state::UsbipLifecycleClaim,
+        attempt: &d2b_provider_device_usbip::reconcile_state::UsbipReconcileAttemptContext,
+    ) -> Result<(), d2b_provider_device_usbip::reconcile_state::UsbipLifecycleStepError> {
         let tracing_span_id = tracing_span_id_for_usbip_attempt(attempt);
         lifecycle_broker_ack(
             self.state,
@@ -6992,9 +6992,9 @@ impl d2bd_runtime::usbip_reconcile_state::UsbipVmStopCarrierCleanup
 
     fn reconcile_proxy(
         &mut self,
-        claim: &d2bd_runtime::usbip_reconcile_state::UsbipLifecycleClaim,
-        attempt: &d2bd_runtime::usbip_reconcile_state::UsbipReconcileAttemptContext,
-    ) -> Result<(), d2bd_runtime::usbip_reconcile_state::UsbipLifecycleStepError> {
+        claim: &d2b_provider_device_usbip::reconcile_state::UsbipLifecycleClaim,
+        attempt: &d2b_provider_device_usbip::reconcile_state::UsbipReconcileAttemptContext,
+    ) -> Result<(), d2b_provider_device_usbip::reconcile_state::UsbipLifecycleStepError> {
         let tracing_span_id = tracing_span_id_for_usbip_attempt(attempt);
         lifecycle_broker_ack(
             self.state,
@@ -7007,7 +7007,7 @@ impl d2bd_runtime::usbip_reconcile_state::UsbipVmStopCarrierCleanup
         )
         .map_err(|mut error| {
             error.kind =
-                d2bd_runtime::usbip_reconcile_state::UsbipLifecycleFailureKind::ProxyFailed;
+                d2b_provider_device_usbip::reconcile_state::UsbipLifecycleFailureKind::ProxyFailed;
             error
         })
     }
@@ -7015,7 +7015,7 @@ impl d2bd_runtime::usbip_reconcile_state::UsbipVmStopCarrierCleanup
 
 fn emit_usbip_lifecycle_observations(
     phase: &str,
-    report: &d2bd_runtime::usbip_reconcile_state::UsbipLifecycleReconcileReport,
+    report: &d2b_provider_device_usbip::reconcile_state::UsbipLifecycleReconcileReport,
 ) {
     for claim in &report.claims {
         for reason in &claim.degraded {
@@ -7037,7 +7037,7 @@ fn emit_usbip_lifecycle_observations(
 
 fn usbip_lifecycle_report_summary(
     phase: &str,
-    report: &d2bd_runtime::usbip_reconcile_state::UsbipLifecycleReconcileReport,
+    report: &d2b_provider_device_usbip::reconcile_state::UsbipLifecycleReconcileReport,
 ) -> Option<String> {
     if report.claims.is_empty() {
         return None;
@@ -7050,7 +7050,7 @@ fn usbip_lifecycle_report_summary(
         .filter(|claim| {
             claim
                 .completed
-                .contains(&d2bd_runtime::usbip_reconcile_state::UsbipLifecycleStep::GuestImport)
+                .contains(&d2b_provider_device_usbip::reconcile_state::UsbipLifecycleStep::GuestImport)
         })
         .count();
     let preserved = report
@@ -7058,7 +7058,7 @@ fn usbip_lifecycle_report_summary(
         .iter()
         .filter(|claim| {
             claim.completed.contains(
-                &d2bd_runtime::usbip_reconcile_state::UsbipLifecycleStep::PreserveDurableClaim,
+                &d2b_provider_device_usbip::reconcile_state::UsbipLifecycleStep::PreserveDurableClaim,
             )
         })
         .count();
@@ -7085,7 +7085,7 @@ fn usbip_lifecycle_report_summary(
 
 fn new_usbip_reconcile_attempt(
     phase: &str,
-) -> d2bd_runtime::usbip_reconcile_state::UsbipReconcileAttemptContext {
+) -> d2b_provider_device_usbip::reconcile_state::UsbipReconcileAttemptContext {
     let phase = match phase {
         "start" | "stop" => phase,
         _ => "other",
@@ -7096,18 +7096,18 @@ fn new_usbip_reconcile_attempt(
         .unwrap_or_default();
     let bounded = format!("usb-{phase}-{nanos:016x}");
     let correlation_id =
-        d2bd_runtime::usbip_reconcile_state::UsbipReconcileCorrelationId::new(&bounded)
+        d2b_provider_device_usbip::reconcile_state::UsbipReconcileCorrelationId::new(&bounded)
             .or_else(|| {
-                d2bd_runtime::usbip_reconcile_state::UsbipReconcileCorrelationId::new(format!(
+                d2b_provider_device_usbip::reconcile_state::UsbipReconcileCorrelationId::new(format!(
                     "usb-{phase}"
                 ))
             })
             .expect("static USBIP reconcile correlation id is valid");
-    d2bd_runtime::usbip_reconcile_state::UsbipReconcileAttemptContext { correlation_id }
+    d2b_provider_device_usbip::reconcile_state::UsbipReconcileAttemptContext { correlation_id }
 }
 
 fn tracing_span_id_for_usbip_attempt(
-    attempt: &d2bd_runtime::usbip_reconcile_state::UsbipReconcileAttemptContext,
+    attempt: &d2b_provider_device_usbip::reconcile_state::UsbipReconcileAttemptContext,
 ) -> TracingSpanId {
     TracingSpanId::new(attempt.correlation_id.as_str().to_owned())
 }
@@ -7117,7 +7117,7 @@ fn reconcile_usbip_after_vm_start(
     resolver: &BundleResolver,
     vm: &str,
     caller_role: BrokerCallerRole,
-) -> Option<d2bd_runtime::usbip_reconcile_state::UsbipLifecycleReconcileReport> {
+) -> Option<d2b_provider_device_usbip::reconcile_state::UsbipLifecycleReconcileReport> {
     let claims = same_vm_declared_usbip_start_claims(resolver, vm);
     if claims.is_empty() {
         return None;
@@ -7128,7 +7128,7 @@ fn reconcile_usbip_after_vm_start(
         resolver,
         caller_role,
     };
-    let report = d2bd_runtime::usbip_reconcile_state::reconcile_usbip_vm_start_claims(
+    let report = d2b_provider_device_usbip::reconcile_state::reconcile_usbip_vm_start_claims(
         &claims,
         &attempt,
         &mut executor,
@@ -7147,7 +7147,7 @@ fn reconcile_usbip_after_vm_start_until_converged(
     caller_role: BrokerCallerRole,
     timeout: Duration,
     backoff: Duration,
-) -> Option<d2bd_runtime::usbip_reconcile_state::UsbipLifecycleReconcileReport> {
+) -> Option<d2b_provider_device_usbip::reconcile_state::UsbipLifecycleReconcileReport> {
     let deadline = Instant::now() + timeout;
     loop {
         let report = reconcile_usbip_after_vm_start(state, resolver, vm, caller_role.clone())?;
@@ -7284,14 +7284,14 @@ fn cleanup_usbip_before_vm_stop(
     resolver: &BundleResolver,
     vm: &str,
     caller_role: BrokerCallerRole,
-) -> Option<d2bd_runtime::usbip_reconcile_state::UsbipLifecycleReconcileReport> {
+) -> Option<d2b_provider_device_usbip::reconcile_state::UsbipLifecycleReconcileReport> {
     let claims = same_vm_persisted_usbip_stop_claims(resolver, vm);
     if claims.is_empty() {
         return None;
     }
     let attempt = new_usbip_reconcile_attempt("stop");
     let mut executor = DaemonUsbipStopCleanupExecutor { state, caller_role };
-    let report = d2bd_runtime::usbip_reconcile_state::cleanup_usbip_vm_stop_claims(
+    let report = d2b_provider_device_usbip::reconcile_state::cleanup_usbip_vm_stop_claims(
         &claims,
         &attempt,
         &mut executor,
@@ -7893,7 +7893,7 @@ fn usbip_probe_entry_from_intent(
     ) {
         if host.bind != public_wire::UsbipHostBindState::BoundToUsbipHost {
             degraded_reasons.push(usbip_probe_degraded_reason_from_internal(
-                d2bd_runtime::usbip_reconcile_state::UsbipDegradedReason::HostBindUnavailable,
+                d2b_provider_device_usbip::reconcile_state::UsbipDegradedReason::HostBindUnavailable,
                 Some(format!(
                     "Run `d2b usb attach {vm} {bus} --apply` so the broker can bind the device for USBIP export.",
                     vm = intent.vm_name,
@@ -7903,7 +7903,7 @@ fn usbip_probe_entry_from_intent(
         }
         if host.carrier != public_wire::UsbipHostCarrierState::Ready {
             degraded_reasons.push(usbip_probe_degraded_reason_from_internal(
-                d2bd_runtime::usbip_reconcile_state::UsbipDegradedReason::CarrierUnavailable,
+                d2b_provider_device_usbip::reconcile_state::UsbipDegradedReason::CarrierUnavailable,
                 Some(format!(
                     "Reconnect the device, then run `d2b usb attach {vm} {bus} --apply`.",
                     vm = intent.vm_name,
@@ -7933,7 +7933,7 @@ fn usbip_probe_entry_from_intent(
                     };
                     if !imported {
                         degraded_reasons.push(usbip_probe_degraded_reason_from_internal(
-                            d2bd_runtime::usbip_reconcile_state::UsbipDegradedReason::GuestImportUnavailable,
+                            d2b_provider_device_usbip::reconcile_state::UsbipDegradedReason::GuestImportUnavailable,
                             Some(format!(
                                 "Run `d2b usb attach {vm} {bus} --apply` after the VM is running.",
                                 vm = intent.vm_name,
@@ -7965,7 +7965,7 @@ fn usbip_probe_entry_from_intent(
             )
         {
             degraded_reasons.push(usbip_probe_degraded_reason_from_internal(
-                d2bd_runtime::usbip_reconcile_state::UsbipDegradedReason::ProbeIncomplete,
+                d2b_provider_device_usbip::reconcile_state::UsbipDegradedReason::ProbeIncomplete,
                 Some(format!(
                     "Run `d2b usb attach {vm} {bus} --apply` to reconcile host and guest USB state.",
                     vm = intent.vm_name,
@@ -7978,7 +7978,7 @@ fn usbip_probe_entry_from_intent(
         public_wire::UsbipDurableClaimState::HeldByOtherOwner
     ) {
         degraded_reasons.push(usbip_probe_degraded_reason_from_internal(
-            d2bd_runtime::usbip_reconcile_state::UsbipDegradedReason::LockHeldByOtherOwner,
+            d2b_provider_device_usbip::reconcile_state::UsbipDegradedReason::LockHeldByOtherOwner,
             Some(format!(
                 "Run `d2b usb detach {owner} {bus} --apply` before attaching to `{vm}`.",
                 owner = owner_vm.as_deref().unwrap_or("<owner>"),
@@ -8054,7 +8054,7 @@ fn push_guest_usbip_status_error(
     if matches!(error, GuestUsbipStatusError::Timeout(_)) {
         *guest_import = public_wire::UsbipGuestImportState::Unknown;
         degraded_reasons.push(usbip_probe_degraded_reason_from_internal(
-            d2bd_runtime::usbip_reconcile_state::UsbipDegradedReason::GuestImportUnavailable,
+            d2b_provider_device_usbip::reconcile_state::UsbipDegradedReason::GuestImportUnavailable,
             Some(format!(
                 "{}; retry `d2b usb probe` for a full diagnostic budget.",
                 error.summary()
@@ -8063,7 +8063,7 @@ fn push_guest_usbip_status_error(
     } else {
         *guest_import = public_wire::UsbipGuestImportState::Unavailable;
         degraded_reasons.push(usbip_probe_degraded_reason_from_internal(
-            d2bd_runtime::usbip_reconcile_state::UsbipDegradedReason::GuestImportUnavailable,
+            d2b_provider_device_usbip::reconcile_state::UsbipDegradedReason::GuestImportUnavailable,
             Some(format!(
                 "Start the VM with `d2b vm start {vm} --apply`, then run `d2b usb attach {vm} {bus_id} --apply`."
             )),
@@ -8096,7 +8096,7 @@ fn public_host_usb_probe_from_sysfs(
                 },
             },
             Some(usbip_probe_degraded_reason_from_internal(
-                d2bd_runtime::usbip_reconcile_state::UsbipDegradedReason::DeviceDepartedBeforeClaim,
+                d2b_provider_device_usbip::reconcile_state::UsbipDegradedReason::DeviceDepartedBeforeClaim,
                 Some(format!(
                     "Reconnect the device, then run `d2b usb attach {vm} {bus} --apply`.",
                     vm = intent.vm_name,
@@ -8124,7 +8124,7 @@ fn public_host_usb_probe_from_sysfs(
             public_wire::UsbipTopologyState::Incomplete,
             public_wire::UsbipPolicyState::Unknown,
             Some(usbip_probe_degraded_reason_from_internal(
-                d2bd_runtime::usbip_reconcile_state::UsbipDegradedReason::ProbeIncomplete,
+                d2b_provider_device_usbip::reconcile_state::UsbipDegradedReason::ProbeIncomplete,
                 Some("Retry `d2b usb probe`; if it repeats, reconnect the USB device and retry the lifecycle verb.".to_owned()),
             )),
         ),
@@ -8149,8 +8149,8 @@ fn public_host_usb_probe_from_sysfs(
             public_wire::UsbipTopologyState::Mismatch,
             public_wire::UsbipPolicyState::Denied,
             Some(usbip_probe_degraded_reason_from_internal(
-                d2bd_runtime::usbip_reconcile_state::UsbipDegradedReason::PolicyFailed(
-                    d2bd_runtime::usbip_reconcile_state::UsbipPolicyFailure::TopologyMismatch,
+                d2b_provider_device_usbip::reconcile_state::UsbipDegradedReason::PolicyFailed(
+                    d2b_provider_device_usbip::reconcile_state::UsbipPolicyFailure::TopologyMismatch,
                 ),
                 Some("Fix the USBIP declaration or attach the declared physical device, rebuild, then rerun `d2b usb probe`.".to_owned()),
             )),
@@ -8180,52 +8180,52 @@ fn read_usb_vendor_product(device: &Path) -> Option<(u16, u16)> {
 }
 
 fn usbip_probe_degraded_reason_from_internal(
-    reason: d2bd_runtime::usbip_reconcile_state::UsbipDegradedReason,
+    reason: d2b_provider_device_usbip::reconcile_state::UsbipDegradedReason,
     remediation_override: Option<String>,
 ) -> public_wire::UsbipProbeDegradedReason {
     let public = reason.to_public_reason();
     public_wire::UsbipProbeDegradedReason {
         code: match public.code {
-            d2bd_runtime::usbip_reconcile_state::UsbipDegradedReasonCode::PolicyFailed => {
+            d2b_provider_device_usbip::reconcile_state::UsbipDegradedReasonCode::PolicyFailed => {
                 public_wire::UsbipProbeDegradedReasonCode::PolicyFailed
             }
-            d2bd_runtime::usbip_reconcile_state::UsbipDegradedReasonCode::DeviceDepartedBeforeClaim => {
+            d2b_provider_device_usbip::reconcile_state::UsbipDegradedReasonCode::DeviceDepartedBeforeClaim => {
                 public_wire::UsbipProbeDegradedReasonCode::DeviceDepartedBeforeClaim
             }
-            d2bd_runtime::usbip_reconcile_state::UsbipDegradedReasonCode::DeviceDepartedAfterLock => {
+            d2b_provider_device_usbip::reconcile_state::UsbipDegradedReasonCode::DeviceDepartedAfterLock => {
                 public_wire::UsbipProbeDegradedReasonCode::DeviceDepartedAfterLock
             }
-            d2bd_runtime::usbip_reconcile_state::UsbipDegradedReasonCode::DeviceDepartedDuringMutation => {
+            d2b_provider_device_usbip::reconcile_state::UsbipDegradedReasonCode::DeviceDepartedDuringMutation => {
                 public_wire::UsbipProbeDegradedReasonCode::DeviceDepartedDuringMutation
             }
-            d2bd_runtime::usbip_reconcile_state::UsbipDegradedReasonCode::DeviceReappearedWithDifferentTopology => {
+            d2b_provider_device_usbip::reconcile_state::UsbipDegradedReasonCode::DeviceReappearedWithDifferentTopology => {
                 public_wire::UsbipProbeDegradedReasonCode::DeviceReappearedWithDifferentTopology
             }
-            d2bd_runtime::usbip_reconcile_state::UsbipDegradedReasonCode::LockHeldByOtherOwner => {
+            d2b_provider_device_usbip::reconcile_state::UsbipDegradedReasonCode::LockHeldByOtherOwner => {
                 public_wire::UsbipProbeDegradedReasonCode::LockHeldByOtherOwner
             }
-            d2bd_runtime::usbip_reconcile_state::UsbipDegradedReasonCode::InvalidPersistedLockClaim => {
+            d2b_provider_device_usbip::reconcile_state::UsbipDegradedReasonCode::InvalidPersistedLockClaim => {
                 public_wire::UsbipProbeDegradedReasonCode::InvalidPersistedLockClaim
             }
-            d2bd_runtime::usbip_reconcile_state::UsbipDegradedReasonCode::CarrierUnavailable => {
+            d2b_provider_device_usbip::reconcile_state::UsbipDegradedReasonCode::CarrierUnavailable => {
                 public_wire::UsbipProbeDegradedReasonCode::CarrierUnavailable
             }
-            d2bd_runtime::usbip_reconcile_state::UsbipDegradedReasonCode::HostBindUnavailable => {
+            d2b_provider_device_usbip::reconcile_state::UsbipDegradedReasonCode::HostBindUnavailable => {
                 public_wire::UsbipProbeDegradedReasonCode::HostBindUnavailable
             }
-            d2bd_runtime::usbip_reconcile_state::UsbipDegradedReasonCode::ProxyUnavailable => {
+            d2b_provider_device_usbip::reconcile_state::UsbipDegradedReasonCode::ProxyUnavailable => {
                 public_wire::UsbipProbeDegradedReasonCode::ProxyUnavailable
             }
-            d2bd_runtime::usbip_reconcile_state::UsbipDegradedReasonCode::GuestImportUnavailable => {
+            d2b_provider_device_usbip::reconcile_state::UsbipDegradedReasonCode::GuestImportUnavailable => {
                 public_wire::UsbipProbeDegradedReasonCode::GuestImportUnavailable
             }
-            d2bd_runtime::usbip_reconcile_state::UsbipDegradedReasonCode::StaleHostState => {
+            d2b_provider_device_usbip::reconcile_state::UsbipDegradedReasonCode::StaleHostState => {
                 public_wire::UsbipProbeDegradedReasonCode::StaleHostState
             }
-            d2bd_runtime::usbip_reconcile_state::UsbipDegradedReasonCode::StaleGuestState => {
+            d2b_provider_device_usbip::reconcile_state::UsbipDegradedReasonCode::StaleGuestState => {
                 public_wire::UsbipProbeDegradedReasonCode::StaleGuestState
             }
-            d2bd_runtime::usbip_reconcile_state::UsbipDegradedReasonCode::ProbeIncomplete => {
+            d2b_provider_device_usbip::reconcile_state::UsbipDegradedReasonCode::ProbeIncomplete => {
                 public_wire::UsbipProbeDegradedReasonCode::ProbeIncomplete
             }
         },
@@ -21012,7 +21012,7 @@ mod public_status_tests {
         );
         assert_eq!(
             lifecycle_broker_error_kind(&err),
-            d2bd_runtime::usbip_reconcile_state::UsbipLifecycleFailureKind::LockConflict,
+            d2b_provider_device_usbip::reconcile_state::UsbipLifecycleFailureKind::LockConflict,
             "Broker.UsbipLockConflict must classify as LockConflict without string matching"
         );
     }
@@ -21025,7 +21025,7 @@ mod public_status_tests {
         );
         assert_eq!(
             lifecycle_broker_error_kind(&err),
-            d2bd_runtime::usbip_reconcile_state::UsbipLifecycleFailureKind::RuntimeAbsent,
+            d2b_provider_device_usbip::reconcile_state::UsbipLifecycleFailureKind::RuntimeAbsent,
             "Broker.UsbipDeviceAbsent must classify as RuntimeAbsent without string matching"
         );
     }
@@ -21038,7 +21038,7 @@ mod public_status_tests {
         );
         assert_eq!(
             lifecycle_broker_error_kind(&policy_err),
-            d2bd_runtime::usbip_reconcile_state::UsbipLifecycleFailureKind::PolicyMismatch,
+            d2b_provider_device_usbip::reconcile_state::UsbipLifecycleFailureKind::PolicyMismatch,
             "Broker.UsbipPolicyMismatch must classify as PolicyMismatch"
         );
         let device_err = make_broker_error_response(
@@ -21047,7 +21047,7 @@ mod public_status_tests {
         );
         assert_eq!(
             lifecycle_broker_error_kind(&device_err),
-            d2bd_runtime::usbip_reconcile_state::UsbipLifecycleFailureKind::PolicyMismatch,
+            d2b_provider_device_usbip::reconcile_state::UsbipLifecycleFailureKind::PolicyMismatch,
             "Broker.UsbipDeviceNotAllowed must classify as PolicyMismatch"
         );
     }
@@ -21064,7 +21064,7 @@ mod public_status_tests {
         );
         assert_eq!(
             lifecycle_broker_error_kind(&err),
-            d2bd_runtime::usbip_reconcile_state::UsbipLifecycleFailureKind::HostReplayFailed,
+            d2b_provider_device_usbip::reconcile_state::UsbipLifecycleFailureKind::HostReplayFailed,
             "redacted Broker.LiveHandlerFailed must classify as HostReplayFailed"
         );
     }
@@ -21077,7 +21077,7 @@ mod public_status_tests {
         );
         assert_eq!(
             lifecycle_broker_error_kind(&err),
-            d2bd_runtime::usbip_reconcile_state::UsbipLifecycleFailureKind::MissingBundleIntent,
+            d2b_provider_device_usbip::reconcile_state::UsbipLifecycleFailureKind::MissingBundleIntent,
             "Broker.BundleIntentMissing must classify as MissingBundleIntent"
         );
     }

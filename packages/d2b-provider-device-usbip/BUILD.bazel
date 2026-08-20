@@ -3,31 +3,57 @@ load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test", "rust_doc_test")
 
 
 exports_files(
-    ["BUILD.bazel"],
+    ["BUILD.bazel", "nix/tests/default.nix"],
     visibility = ["//visibility:public"],
 )
 
 rust_library(
     name = "d2b_provider_device_usbip",
     srcs = glob(["src/**/*.rs"], allow_empty = True),
-    compile_data = ["Cargo.toml"],
     visibility = ["//visibility:public"],
+    compile_data = [
+        "Cargo.toml",
+        "//:tests/golden/runner-shape/usbip-argv-minimal.txt",
+    ],
     deps = [
+        "//packages/d2b-core:d2b_core",
         "//packages/d2b-contracts-zone-session:d2b_contracts_zone_session",
         "//packages/d2b-contracts:d2b_contracts",
+        "@crates//:libc",
+        "@crates//:serde",
     ] + all_crate_deps(normal = True, cargo_only = True),
 )
 
 rust_library(
     name = "d2b_provider_device_usbip_test_support",
     srcs = glob(["src/**/*.rs"], allow_empty = True),
-    compile_data = ["Cargo.toml"],
+    compile_data = [
+        "Cargo.toml",
+        "//:tests/golden/runner-shape/usbip-argv-minimal.txt",
+    ],
     crate_name = "d2b_provider_device_usbip",
     visibility = ["//visibility:public"],
     deps = [
+        "//packages/d2b-core:d2b_core_test_support",
         "//packages/d2b-contracts-zone-session:d2b_contracts_zone_session",
         "//packages/d2b-contracts:d2b_contracts_test_support",
+        "@crates//:libc",
+        "@crates//:serde",
+        "@crates//:serde_json",
     ] + all_crate_deps(normal = True, cargo_only = True),
+)
+
+rust_test(
+    name = "d2b_provider_device_usbip_test",
+    crate = ":d2b_provider_device_usbip",
+    compile_data = [
+        "Cargo.toml",
+        "//:tests/golden/runner-shape/usbip-argv-minimal.txt",
+    ],
+    visibility = ["//visibility:public"],
+    deps = [
+        "@crates//:serde_json",
+    ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
 )
 
 rust_test(

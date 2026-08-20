@@ -14,11 +14,7 @@ rust_library(
     srcs = d2b_host_srcs,
     compile_data = [
         "//:tests/golden/runner-shape/audio-argv-minimal.txt",  # keep
-        "//:tests/golden/runner-shape/gpu-argv-minimal.txt",  # keep
         "//:tests/golden/runner-shape/otel-host-bridge-argv-minimal.txt",  # keep
-        "//:tests/golden/runner-shape/swtpm-argv-minimal.txt",  # keep
-        "//:tests/golden/runner-shape/usbip-argv-minimal.txt",  # keep
-        "//:tests/golden/runner-shape/video-argv-minimal.txt",  # keep
         "//:tests/golden/runner-shape/virtiofsd-argv-minimal.txt",  # keep
         "//:tests/golden/runner-shape/vsock-relay-argv-minimal.txt",  # keep
         "Cargo.toml",
@@ -37,11 +33,7 @@ rust_library(
     srcs = d2b_host_srcs,
     compile_data = [
         "//:tests/golden/runner-shape/audio-argv-minimal.txt",  # keep
-        "//:tests/golden/runner-shape/gpu-argv-minimal.txt",  # keep
         "//:tests/golden/runner-shape/otel-host-bridge-argv-minimal.txt",  # keep
-        "//:tests/golden/runner-shape/swtpm-argv-minimal.txt",  # keep
-        "//:tests/golden/runner-shape/usbip-argv-minimal.txt",  # keep
-        "//:tests/golden/runner-shape/video-argv-minimal.txt",  # keep
         "//:tests/golden/runner-shape/virtiofsd-argv-minimal.txt",  # keep
         "//:tests/golden/runner-shape/vsock-relay-argv-minimal.txt",  # keep
         "Cargo.toml",
@@ -61,11 +53,7 @@ rust_library(
     srcs = d2b_host_srcs,
     compile_data = [
         "//:tests/golden/runner-shape/audio-argv-minimal.txt",  # keep
-        "//:tests/golden/runner-shape/gpu-argv-minimal.txt",  # keep
         "//:tests/golden/runner-shape/otel-host-bridge-argv-minimal.txt",  # keep
-        "//:tests/golden/runner-shape/swtpm-argv-minimal.txt",  # keep
-        "//:tests/golden/runner-shape/usbip-argv-minimal.txt",  # keep
-        "//:tests/golden/runner-shape/video-argv-minimal.txt",  # keep
         "//:tests/golden/runner-shape/virtiofsd-argv-minimal.txt",  # keep
         "//:tests/golden/runner-shape/vsock-relay-argv-minimal.txt",  # keep
         "Cargo.toml",

@@ -1209,7 +1209,6 @@ fn kernel_module_matrix_source_doc_parity() {
 //   * docs/reference/components-usb-security-key.md
 //   * docs/reference/usb-security-key-events.md
 //   * docs/explanation/usb-security-key-architecture.md
-//   * tests/unit/nix/cases/usb-security-key.nix
 //   * tests/golden/cli-output/usb-security-key-help.txt
 //   * tests/golden/cli-output/usb-security-key-status-help.txt
 //   * tests/golden/cli-output/usb-security-key-sessions-help.txt
@@ -1224,7 +1223,6 @@ fn usb_security_key_docs_scaffolding_present() {
         "docs/reference/components-usb-security-key.md",
         "docs/reference/usb-security-key-events.md",
         "docs/explanation/usb-security-key-architecture.md",
-        "tests/unit/nix/cases/usb-security-key.nix",
         "tests/golden/cli-output/usb-security-key-help.txt",
         "tests/golden/cli-output/usb-security-key-status-help.txt",
         "tests/golden/cli-output/usb-security-key-sessions-help.txt",

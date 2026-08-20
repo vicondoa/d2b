@@ -1,6 +1,6 @@
 //! Typed, per-busid state machine that pins the canonical bring-up order
 //! for a USBIP-passthrough
-//! device the daemon (via the privileged broker) attaches into a
+//! device the provider (via its effect adapter) attaches into a
 //! target VM.
 //!
 //! # Why this state machine exists
@@ -37,7 +37,7 @@
 //! preserve those per-env sidecars. This module turns that ordering
 //! into a typed Rust enum + plan + executor so call sites can't shuffle
 //! the steps and every failure surfaces through the typed error surface
-//! as `UsbipStepFailed { busid, step, reason }` (exit code 67).
+//! as [`UsbipPlanError`] with the busid, step, and redacted reason.
 //!
 //! # Shape
 //!
@@ -49,22 +49,44 @@
 //!   `BundleResolver` so callers can resolve the per-env intents
 //!   (firewall + bind) before invoking the executor.
 //! * [`UsbipStepExecutor`] - trait one method per step. Production
-//!   wires this through the broker dispatch surface; tests inject
+//!   wires this through the provider effect adapter; tests inject
 //!   a fixture executor.
 //! * [`execute_usbip_plan`] - drives the plan in order, fail-fast
 //!   on the first step that returns an error. Returns a typed
 //!   [`UsbipExecutionReport`] with the per-step outcome trace.
 //!
 //! Failures from any step are normalised to
-//! [`TypedError::UsbipStepFailed`] so the daemon's public error
-//! envelope is uniform regardless of which step blew up.
+//! [`UsbipPlanError`] so callers can map the failure into their public error
+//! envelope without importing daemon runtime types.
+#![allow(missing_docs)]
 
 use std::fmt;
 
 use d2b_core::bundle_resolver::BundleResolver;
 use serde::{Deserialize, Serialize};
 
-use crate::typed_error::TypedError;
+/// Failure returned when a USBIP plan cannot be built or a step fails.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct UsbipPlanError {
+    /// The affected USB bus identifier.
+    pub busid: String,
+    /// The canonical step that rejected the plan or failed.
+    pub step: UsbipBusidStep,
+    /// A short, non-sensitive failure reason.
+    pub reason: String,
+}
+
+impl std::fmt::Display for UsbipPlanError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            formatter,
+            "usbip busid '{}' failed at {}: {}",
+            self.busid, self.step, self.reason
+        )
+    }
+}
+
+impl std::error::Error for UsbipPlanError {}
 
 /// Whether an active USBIP plan was built from a static bundle declaration or
 /// from an explicit `d2b usb attach <vm> <busid> --apply` that bypassed the
@@ -225,7 +247,7 @@ impl UsbipBusidPlan {
 /// `resolver` is consulted to assert the per-env firewall and
 /// per-(env, vm, busid) bind intents the executor will later
 /// dispatch actually exist in the trusted bundle. If either is
-/// missing, the constructor returns a [`TypedError::UsbipStepFailed`]
+/// missing, the constructor returns a [`UsbipPlanError`]
 /// tagged against the step whose preconditions failed
 /// (`firewall` or `bind`). This is fail-fast at *plan time* so
 /// no executor side-effects ever run for a malformed plan.
@@ -234,23 +256,23 @@ pub fn build_usbip_plan(
     env: &str,
     vm: &str,
     resolver: &BundleResolver,
-) -> Result<UsbipBusidPlan, TypedError> {
+) -> Result<UsbipBusidPlan, UsbipPlanError> {
     if busid.is_empty() {
-        return Err(TypedError::UsbipStepFailed {
+        return Err(UsbipPlanError {
             busid: busid.to_owned(),
             step: UsbipBusidStep::Lock,
             reason: "bus_id is empty".to_owned(),
         });
     }
     if env.is_empty() {
-        return Err(TypedError::UsbipStepFailed {
+        return Err(UsbipPlanError {
             busid: busid.to_owned(),
             step: UsbipBusidStep::Lock,
             reason: "env is empty".to_owned(),
         });
     }
     if vm.is_empty() {
-        return Err(TypedError::UsbipStepFailed {
+        return Err(UsbipPlanError {
             busid: busid.to_owned(),
             step: UsbipBusidStep::Bind,
             reason: "vm is empty".to_owned(),
@@ -259,7 +281,7 @@ pub fn build_usbip_plan(
 
     let firewall_id = d2b_core::bundle_resolver::intent_id_usbip_firewall(env, busid);
     if resolver.find_usbip_firewall_intent(&firewall_id).is_none() {
-        return Err(TypedError::UsbipStepFailed {
+        return Err(UsbipPlanError {
             busid: busid.to_owned(),
             step: UsbipBusidStep::Firewall,
             reason: format!(
@@ -270,7 +292,7 @@ pub fn build_usbip_plan(
 
     let bind_id = d2b_core::bundle_resolver::intent_id_usbip_bind(env, vm, busid);
     if resolver.find_usbip_bind_intent(&bind_id).is_none() {
-        return Err(TypedError::UsbipStepFailed {
+        return Err(UsbipPlanError {
             busid: busid.to_owned(),
             step: UsbipBusidStep::Bind,
             reason: format!(
@@ -308,30 +330,30 @@ pub fn build_usbip_explicit_plan(
     busid: &str,
     env: &str,
     vm: &str,
-) -> Result<UsbipBusidPlan, TypedError> {
+) -> Result<UsbipBusidPlan, UsbipPlanError> {
     if busid.is_empty() {
-        return Err(TypedError::UsbipStepFailed {
+        return Err(UsbipPlanError {
             busid: busid.to_owned(),
             step: UsbipBusidStep::Lock,
             reason: "bus_id is empty".to_owned(),
         });
     }
     if let Err(err) = d2b_contracts::usbip::validate_bus_id(busid) {
-        return Err(TypedError::UsbipStepFailed {
+        return Err(UsbipPlanError {
             busid: busid.to_owned(),
             step: UsbipBusidStep::Lock,
             reason: format!("invalid bus_id shape: {err:?}"),
         });
     }
     if env.is_empty() {
-        return Err(TypedError::UsbipStepFailed {
+        return Err(UsbipPlanError {
             busid: busid.to_owned(),
             step: UsbipBusidStep::Lock,
             reason: "env is empty".to_owned(),
         });
     }
     if vm.is_empty() {
-        return Err(TypedError::UsbipStepFailed {
+        return Err(UsbipPlanError {
             busid: busid.to_owned(),
             step: UsbipBusidStep::Bind,
             reason: "vm is empty".to_owned(),
@@ -401,13 +423,13 @@ impl UsbipExecutionReport {
 /// recorded in `completed`; rollback code must use
 /// [`UsbipExecutionReport::failure_rollback_order`] so shared per-env
 /// sidecars are not torn down for one busid. The error is returned as a typed
-/// [`TypedError::UsbipStepFailed`] tagged with the exact step
+/// [`UsbipPlanError`] tagged with the exact step
 /// that blew up; the caller can lift it into the public error
 /// envelope unchanged.
 pub fn execute_usbip_plan<E: UsbipStepExecutor>(
     plan: &UsbipBusidPlan,
     executor: &mut E,
-) -> Result<UsbipExecutionReport, (UsbipExecutionReport, TypedError)> {
+) -> Result<UsbipExecutionReport, (UsbipExecutionReport, UsbipPlanError)> {
     let mut report = UsbipExecutionReport {
         busid: plan.busid.clone(),
         env: plan.env.clone(),
@@ -430,7 +452,7 @@ pub fn execute_usbip_plan<E: UsbipStepExecutor>(
             Ok(()) => report.completed.push(*step),
             Err(reason) => {
                 report.failed = Some((*step, reason.clone()));
-                let err = TypedError::UsbipStepFailed {
+                let err = UsbipPlanError {
                     busid: plan.busid.clone(),
                     step: *step,
                     reason,
@@ -668,7 +690,7 @@ mod tests {
                 execute_usbip_plan(&plan, &mut exec).expect_err("failure path should return Err");
 
             match err {
-                TypedError::UsbipStepFailed {
+                UsbipPlanError {
                     busid,
                     step: failed_step,
                     reason,
@@ -677,7 +699,7 @@ mod tests {
                     assert_eq!(failed_step, step);
                     assert!(reason.contains("synthetic failure"), "reason: {reason}");
                 }
-                other => panic!("expected UsbipStepFailed, got {other:?}"),
+                other => panic!("expected UsbipPlanError, got {other:?}"),
             }
 
             assert_eq!(report.failed.as_ref().map(|(s, _)| *s), Some(step));
@@ -688,22 +710,6 @@ mod tests {
             assert_eq!(exec.calls.last(), Some(&step));
             assert_eq!(exec.calls.len(), idx + 1, "executor must halt on failure");
         }
-    }
-
-    #[test]
-    fn typed_error_envelope_carries_exit_code_67() {
-        let err = TypedError::UsbipStepFailed {
-            busid: "1-2".to_owned(),
-            step: UsbipBusidStep::Firewall,
-            reason: "nft apply refused".to_owned(),
-        };
-        let env = err.to_envelope();
-        assert_eq!(env.kind, "usbip-step-failed");
-        assert_eq!(env.exit_code, 67);
-        assert!(env.message.contains("1-2"));
-        assert!(env.message.contains("firewall"));
-        assert!(env.remediation.contains("d2b usb probe"));
-        assert!(env.remediation.contains("1-2"));
     }
 
     // ---- Explicit-attach plan tests ----
@@ -735,7 +741,7 @@ mod tests {
             assert!(
                 matches!(
                     err,
-                    TypedError::UsbipStepFailed {
+                    UsbipPlanError {
                         step: UsbipBusidStep::Lock,
                         ..
                     }
@@ -749,11 +755,11 @@ mod tests {
     fn explicit_plan_rejects_empty_env_or_vm() {
         let err = build_usbip_explicit_plan("1-2", "", "corp-vm")
             .expect_err("empty env must be rejected");
-        assert!(matches!(err, TypedError::UsbipStepFailed { .. }));
+        assert!(matches!(err, UsbipPlanError { .. }));
 
         let err =
             build_usbip_explicit_plan("1-2", "work", "").expect_err("empty vm must be rejected");
-        assert!(matches!(err, TypedError::UsbipStepFailed { .. }));
+        assert!(matches!(err, UsbipPlanError { .. }));
     }
 
     #[test]

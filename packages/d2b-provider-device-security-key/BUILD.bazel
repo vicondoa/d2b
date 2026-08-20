@@ -3,7 +3,7 @@ load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test", "rust_doc_test")
 
 
 exports_files(
-    ["BUILD.bazel"],
+    ["BUILD.bazel", "nix/tests/default.nix"],
     visibility = ["//visibility:public"],
 )
 
@@ -16,6 +16,7 @@ rust_library(
         "//packages/d2b-contracts-resource:d2b_contracts_resource",
         "//packages/d2b-contracts-provider:d2b_contracts_provider",
         "//packages/d2b-contracts-zone-session:d2b_contracts_zone_session",
+        "@crates//:tracing",
     ] + all_crate_deps(normal = True, cargo_only = True),
 )
 
@@ -29,7 +30,16 @@ rust_library(
         "//packages/d2b-contracts-resource:d2b_contracts_resource",
         "//packages/d2b-contracts-provider:d2b_contracts_provider",
         "//packages/d2b-contracts-zone-session:d2b_contracts_zone_session",
+        "@crates//:tracing",
     ] + all_crate_deps(normal = True, cargo_only = True),
+)
+
+rust_test(
+    name = "d2b_provider_device_security_key_test",
+    crate = ":d2b_provider_device_security_key",
+    compile_data = ["Cargo.toml"],
+    visibility = ["//visibility:public"],
+    deps = all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
 )
 
 rust_test(

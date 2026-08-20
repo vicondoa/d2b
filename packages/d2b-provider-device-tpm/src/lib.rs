@@ -15,6 +15,7 @@ mod resources;
 mod runner;
 mod state;
 mod status;
+pub mod swtpm_argv;
 
 pub use controller::{
     TpmController, TpmControllerError, TpmEffectError, TpmEffectPort, TpmPhase,

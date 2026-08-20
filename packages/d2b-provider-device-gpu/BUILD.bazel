@@ -3,18 +3,34 @@ load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test", "rust_doc_test")
 
 
 exports_files(
-    ["BUILD.bazel"],
+    ["BUILD.bazel", "nix/tests/default.nix"],
     visibility = ["//visibility:public"],
 )
 
 rust_library(
     name = "d2b_provider_device_gpu",
     srcs = glob(["src/**/*.rs"], allow_empty = True),
-    compile_data = ["Cargo.toml"],
+    compile_data = [
+        "Cargo.toml",
+        "//:tests/golden/runner-shape/gpu-argv-minimal.txt",
+        "//:tests/golden/runner-shape/video-argv-minimal.txt",
+    ],
     visibility = ["//visibility:public"],
     deps = [
         "//packages/d2b-contracts-zone-session:d2b_contracts_zone_session",
     ] + all_crate_deps(normal = True, cargo_only = True),
+)
+
+rust_test(
+    name = "d2b_provider_device_gpu_test",
+    crate = ":d2b_provider_device_gpu",
+    compile_data = [
+        "Cargo.toml",
+        "//:tests/golden/runner-shape/gpu-argv-minimal.txt",
+        "//:tests/golden/runner-shape/video-argv-minimal.txt",
+    ],
+    visibility = ["//visibility:public"],
+    deps = all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
 )
 
 rust_test(

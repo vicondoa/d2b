@@ -19,6 +19,7 @@
 //! decoded media stream.
 //!
 //! Crate invariant `#![forbid(unsafe_code)]` is honoured.
+#![allow(missing_docs)]
 
 use serde::{Deserialize, Serialize};
 

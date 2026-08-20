@@ -197,14 +197,6 @@ const RUNTIME_FILES: &[(&str, &str)] = &[
         include_str!("../src/unsafe_local_terminal.rs"),
     ),
     (
-        "src/usbip_reconcile_state.rs",
-        include_str!("../src/usbip_reconcile_state.rs"),
-    ),
-    (
-        "src/usbip_state_machine.rs",
-        include_str!("../src/usbip_state_machine.rs"),
-    ),
-    (
         "src/usbipd_perenv_autostart.rs",
         include_str!("../src/usbipd_perenv_autostart.rs"),
     ),

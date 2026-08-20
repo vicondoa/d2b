@@ -1,7 +1,7 @@
-//! Daemon-internal USBIP reconciliation state model.
+//! Provider-owned USBIP reconciliation state model.
 //!
 //! This module does not add broker or public wire operations. It names the
-//! state the daemon must compare as USB reconciliation grows from the existing
+//! state the provider must compare as USB reconciliation grows from the existing
 //! per-busid step machine into a restart-safe reconciler:
 //!
 //! * declared bundle intent and policy evaluation,
@@ -16,6 +16,7 @@
 //! Public projections deliberately collapse those fields into coarse anchors;
 //! privileged audit can later opt into a different DTO without weakening the
 //! default status surface.
+#![allow(missing_docs)]
 
 use std::{
     collections::HashMap,

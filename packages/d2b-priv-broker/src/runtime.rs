@@ -1423,7 +1423,7 @@ fn validate_broker_request(request: &BrokerRequest) -> Result<(), BrokerError> {
 
 #[cfg(not(feature = "layer1-bootstrap"))]
 fn validate_usbip_busid_wire(bus_id: &str) -> Result<(), &'static str> {
-    d2b_host::usbip_argv::validate_bus_id(bus_id).map_err(|_| "invalid-usbip-busid")
+    d2b_provider_device_usbip::validate_bus_id(bus_id).map_err(|_| "invalid-usbip-busid")
 }
 
 #[cfg(not(feature = "layer1-bootstrap"))]
@@ -7746,7 +7746,7 @@ fn usb_device_sysfs_root() -> &'static Path {
 
 #[cfg(not(feature = "layer1-bootstrap"))]
 fn read_usb_device_identity(sysfs_root: &Path, bus_id: &str) -> Result<(u16, u16), BrokerError> {
-    if d2b_host::usbip_argv::validate_bus_id(bus_id).is_err() {
+    if d2b_provider_device_usbip::validate_bus_id(bus_id).is_err() {
         return Err(BrokerError::Protocol(format!(
             "invalid USB bus_id for sysfs lookup: {bus_id:?}"
         )));
@@ -8202,7 +8202,7 @@ fn lower_hex(bytes: &[u8]) -> String {
 
 #[cfg(not(feature = "layer1-bootstrap"))]
 fn read_usb_serial_for_audit(sysfs_root: &Path, bus_id: &str) -> Option<String> {
-    if d2b_host::usbip_argv::validate_bus_id(bus_id).is_err() {
+    if d2b_provider_device_usbip::validate_bus_id(bus_id).is_err() {
         return None;
     }
     let path = sysfs_root.join(bus_id).join("serial");
@@ -8217,7 +8217,7 @@ fn read_usb_serial_for_audit(sysfs_root: &Path, bus_id: &str) -> Option<String> 
 
 #[cfg(not(feature = "layer1-bootstrap"))]
 fn usb_device_node_for_busid(sysfs_root: &Path, bus_id: &str) -> Result<PathBuf, BrokerError> {
-    d2b_host::usbip_argv::validate_bus_id(bus_id)
+    d2b_provider_device_usbip::validate_bus_id(bus_id)
         .map_err(|err| BrokerError::LiveHandler(format!("invalid usbip bus_id: {err:?}")))?;
     let device_dir = sysfs_root.join(bus_id);
     let busnum = read_usb_decimal_attr(&device_dir, "busnum", bus_id)?;
@@ -8840,7 +8840,7 @@ fn collect_active_explicit_usbip_carveouts(
         .filter_map(Result::ok)
         .filter_map(|entry| {
             let bus_id = entry.file_name().into_string().ok()?;
-            d2b_host::usbip_argv::validate_bus_id(&bus_id).ok()?;
+            d2b_provider_device_usbip::validate_bus_id(&bus_id).ok()?;
             if bus_id == excluding_bus_id {
                 return None;
             }
@@ -9774,7 +9774,7 @@ fn find_usbip_firewall_intent_or_wildcard(
         return Some(intent.clone());
     }
     let (env, bus_id) = parse_usbip_firewall_intent_id(intent_id)?;
-    d2b_host::usbip_argv::validate_bus_id(&bus_id).ok()?;
+    d2b_provider_device_usbip::validate_bus_id(&bus_id).ok()?;
     let pending_id = d2b_core::bundle_resolver::intent_id_usbip_firewall(&env, "pending");
     let source = resolver.find_usbip_firewall_intent(&pending_id)?;
     Some(d2b_core::bundle_resolver::ResolvedUsbipFirewallIntent {
@@ -9808,7 +9808,7 @@ fn active_dynamic_usbip_bind_intents(
         .filter_map(Result::ok)
         .filter_map(|entry| {
             let bus_id = entry.file_name().into_string().ok()?;
-            d2b_host::usbip_argv::validate_bus_id(&bus_id).ok()?;
+            d2b_provider_device_usbip::validate_bus_id(&bus_id).ok()?;
             let owner = crate::ops::usbip_lock::peek_owner(&entry.path())?;
             find_wildcard_usbip_bind_intent_for(resolver, &owner, &bus_id)
         })
@@ -9848,7 +9848,7 @@ fn find_usbip_bind_intent_or_wildcard(
         return Some(intent.clone());
     }
     let (env, vm, bus_id) = parse_usbip_bind_intent_id(intent_id)?;
-    d2b_host::usbip_argv::validate_bus_id(&bus_id).ok()?;
+    d2b_provider_device_usbip::validate_bus_id(&bus_id).ok()?;
     if static_usbip_busid_owner(resolver, &bus_id).is_some() {
         return None;
     }
@@ -9918,7 +9918,7 @@ fn find_wildcard_usbip_bind_intent_for(
     vm_name: &str,
     bus_id: &str,
 ) -> Option<d2b_core::bundle_resolver::ResolvedUsbipBindIntent> {
-    d2b_host::usbip_argv::validate_bus_id(bus_id).ok()?;
+    d2b_provider_device_usbip::validate_bus_id(bus_id).ok()?;
     if static_usbip_busid_owner(resolver, bus_id).is_some() {
         return None;
     }

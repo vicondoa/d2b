@@ -13,6 +13,7 @@ d2b-contracts-provider = { path = "../d2b-contracts-provider", version = "0.0.0-
 d2b-contracts-resource = { path = "../d2b-contracts-resource", version = "0.0.0-bootstrap" }
 d2b-contracts-zone-session = { path = "../d2b-contracts-zone-session", version = "0.0.0-bootstrap" }
 serde.workspace = true
+tracing = "0.1"
 
 [dev-dependencies]
 serde_json.workspace = true

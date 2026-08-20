@@ -89,26 +89,6 @@ _SURFACES = {
             "nixos-modules/ui-colors.nix",
         ],
     },
-    "security-key": {
-        "cases": [],
-        "modules": [
-            "nixos-modules/components/security-key-guest.nix",
-            "nixos-modules/components/usbip.nix",
-            "nixos-modules/options-resources.nix",
-            "nixos-modules/resources-device.nix",
-        ],
-    },
-    "gpu-video": {
-        "cases": [],
-        "modules": [
-            "nixos-modules/components/audio/guest.nix",
-            "nixos-modules/components/audio/host.nix",
-            "nixos-modules/components/graphics.nix",
-            "nixos-modules/components/video/guest.nix",
-            "nixos-modules/options-guest-qemu-media.nix",
-            "nixos-modules/resources-device.nix",
-        ],
-    },
     "provider-catalog": {
         "cases": ["provider-elf-shim"],
         "files": [
@@ -158,6 +138,63 @@ nix_surface_test(
             "packages/d2b-provider-network-local/nix/default.nix",
         ],
         "package": "packages/d2b-provider-network-local",
+        "raw_cases": True,
+    },
+)
+
+nix_surface_test(
+    name = "nix-unit-provider-device-usbip",
+    surface = "provider-device-usbip",
+    spec = {
+        "cases": [],
+        "expression": "//packages/d2b-provider-device-usbip:nix/tests/default.nix",
+        "modules": [
+            "nixos-modules/components/usbip.nix",
+        ],
+        "package": "packages/d2b-provider-device-usbip",
+        "raw_cases": True,
+    },
+)
+
+nix_surface_test(
+    name = "nix-unit-provider-device-security-key",
+    surface = "provider-device-security-key",
+    spec = {
+        "cases": [],
+        "expression": "//packages/d2b-provider-device-security-key:nix/tests/default.nix",
+        "modules": [
+            "nixos-modules/components/security-key-guest.nix",
+        ],
+        "package": "packages/d2b-provider-device-security-key",
+        "raw_cases": True,
+    },
+)
+
+nix_surface_test(
+    name = "nix-unit-provider-device-tpm",
+    surface = "provider-device-tpm",
+    spec = {
+        "cases": [],
+        "expression": "//packages/d2b-provider-device-tpm:nix/tests/default.nix",
+        "modules": [
+            "nixos-modules/components/tpm.nix",
+        ],
+        "package": "packages/d2b-provider-device-tpm",
+        "raw_cases": True,
+    },
+)
+
+nix_surface_test(
+    name = "nix-unit-provider-device-gpu",
+    surface = "provider-device-gpu",
+    spec = {
+        "cases": [],
+        "expression": "//packages/d2b-provider-device-gpu:nix/tests/default.nix",
+        "modules": [
+            "nixos-modules/components/graphics.nix",
+            "nixos-modules/components/video/guest.nix",
+        ],
+        "package": "packages/d2b-provider-device-gpu",
         "raw_cases": True,
     },
 )

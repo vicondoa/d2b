@@ -312,5 +312,11 @@ def nix_surface_suite(surfaces):
         surface_tests.append(":" + test_name)
     native.test_suite(
         name = "nix_unit",
-        tests = surface_tests + [":nix-unit-provider-network-local"],
+        tests = surface_tests + [
+            ":nix-unit-provider-network-local",
+            ":nix-unit-provider-device-usbip",
+            ":nix-unit-provider-device-security-key",
+            ":nix-unit-provider-device-tpm",
+            ":nix-unit-provider-device-gpu",
+        ],
     )
