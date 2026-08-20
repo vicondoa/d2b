@@ -11,10 +11,7 @@
     "docs/reference/wave-evidence-schema.md",
     "nixos-modules/host-activation.nix",
     "nixos-modules/host.nix",
-    "packages/d2b-provider-network-local/nix/net.nix",
-    "packages/d2b-contract-tests/tests/minijail_gpu.rs",
     "packages/d2b-contract-tests/tests/minijail_profiles.rs",
-    "packages/d2b-contract-tests/tests/minijail_swtpm_video.rs",
     "packages/d2b-contract-tests/tests/policy_guest.rs",
     "packages/d2b-contract-tests/tests/policy_restart_adoption.rs",
     "packages/d2b-contract-tests/tests/privileges_parity.rs",
@@ -60,7 +57,10 @@
     "tests/golden/l3-matrix/w3-ubuntu.txt"
   ],
   "retiredPaths": [
+    "nixos-modules/net.nix",
     "packages/Cargo.toml",
+    "packages/d2b-contract-tests/tests/minijail_gpu.rs",
+    "packages/d2b-contract-tests/tests/minijail_swtpm_video.rs",
     "packages/d2b-contracts/proto/guest_control.proto",
     "packages/d2b-contracts/tests/version_skew.rs",
     "packages/d2b-core/src/privileges_w3.rs",

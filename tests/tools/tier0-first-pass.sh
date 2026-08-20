@@ -77,7 +77,7 @@ PROCESS_MARKER_FILENAME_RE='(^|[-_.])(W|w|P)[0-9]+((fu|a)[0-9]*|-(fu|followup)([
 # and fails both this gate and the independent xtask checker. There is no mutable
 # count budget to raise alongside an added exemption.
 PROCESS_MARKER_PIN=tests/golden/pinned/process-marker-legacy-paths.json
-PROCESS_MARKER_UNIVERSE_SHA256=bc792aaf0665ef7e2fabfb32a0123c3a82a3f47849490d611254bc299c3412e6
+PROCESS_MARKER_UNIVERSE_SHA256=0f6899e939fd8e0b49f41b56a0221f33552d79348adc2853927d338e610f8f34
 LEGACY_PROCESS_MARKER_PATHS=()
 
 load_process_marker_pin() {

@@ -11227,7 +11227,7 @@
           ]
         },
         {
-          "description": "crosvm GPU sidecar. Broker invokes `d2b_host::gpu_argv::generate_gpu_argv`.",
+          "description": "crosvm GPU sidecar. Broker invokes the device GPU Provider argv generator.",
           "type": "string",
           "enum": [
             "gpu"
@@ -11241,7 +11241,7 @@
           ]
         },
         {
-          "description": "crosvm video-decoder sidecar. Broker invokes `d2b_host::video_argv::generate_video_argv`.",
+          "description": "crosvm video-decoder sidecar. Broker invokes the device GPU Provider argv generator.",
           "type": "string",
           "enum": [
             "video"
@@ -11255,7 +11255,7 @@
           ]
         },
         {
-          "description": "usbip helper sidecar. Broker invokes `d2b_host::usbip_argv::{generate_usbip_bind_argv, generate_usbip_unbind_argv}`.",
+          "description": "usbip helper sidecar. Broker invokes the device USBIP Provider argv generator.",
           "type": "string",
           "enum": [
             "usbip"

@@ -234,7 +234,7 @@ in
           ''}
 
           # LAN-to-LAN (eth1→eth1) forwarding is intentionally absent
-          # by default. H1 bridge isolation prevents direct L2 between workloads,
+          # by default. Host bridge isolation prevents direct L2 between workloads,
           # and the net VM must also not relay same-LAN frames at L3 unless the
           # env explicitly opts in.
 
