@@ -132,9 +132,15 @@ if [ -z "$bazel_bin" ]; then
   fi
 fi
 
+mkdir -p "$SCRATCH"
 if [ -z "${D2B_XTASK_BIN:-}" ] || [ ! -x "${D2B_XTASK_BIN}" ]; then
   "$bazel_bin" build --config=local //packages/xtask:xtask >/dev/null
-  export D2B_XTASK_BIN="$ROOT/bazel-bin/packages/xtask/xtask"
+  xtask_source="$ROOT/bazel-bin/packages/xtask/xtask"
+  xtask_stable="$SCRATCH/xtask"
+  cp -L -- "$xtask_source" "$xtask_stable.tmp"
+  chmod 0555 "$xtask_stable.tmp"
+  mv -f -- "$xtask_stable.tmp" "$xtask_stable"
+  export D2B_XTASK_BIN="$xtask_stable"
 fi
 
 if [ "$PROFILE" = trusted-seed ]; then
@@ -151,7 +157,6 @@ elif [ ! -r "$(credential_file)" ] || [ ! -s "$(credential_file)" ]; then
   PROFILE=local
 fi
 
-mkdir -p "$SCRATCH"
 export D2B_BAZEL_BIN="$bazel_bin"
 export D2B_REPO_ROOT="$ROOT"
 export ROOT
