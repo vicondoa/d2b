@@ -5,7 +5,10 @@
 //! used for both writing and checking rather than a general-purpose JSON
 //! formatter.
 
-use d2b_contracts_provider::v3::ProviderManifest;
+use d2b_contracts_provider::v3::{
+    ProviderContractError,
+    ProviderManifest,
+};
 use d2b_contracts_resource::v3::canonical_json_bytes;
 use serde_json::Error as JsonError;
 
@@ -75,6 +78,14 @@ pub fn emit_canonical(manifest: &ProviderManifest) -> Vec<u8> {
     canonical_json_bytes(manifest).expect("ProviderManifest must be canonicalizable")
 }
 
+/// Validate the signed placement, target-artifact, and EffectPort contract
+/// before a manifest enters a package or catalog.
+pub fn validate_for_installation(
+    manifest: &ProviderManifest,
+) -> Result<(), ProviderContractError> {
+    manifest.validate_installation_contract()
+}
+
 /// Verify that a serialized Provider manifest is already canonical.
 ///
 /// The same typed parse and canonical re-emission used by the CLI are exposed
@@ -83,6 +94,7 @@ pub fn emit_canonical(manifest: &ProviderManifest) -> Vec<u8> {
 pub fn verify_canonical(bytes: &[u8]) -> Result<(), VerificationError> {
     let manifest = serde_json::from_slice::<ProviderManifest>(bytes)
         .map_err(|_: JsonError| VerificationError::InvalidManifest)?;
+    validate_for_installation(&manifest).map_err(|_| VerificationError::InvalidManifest)?;
     let expected = emit_canonical(&manifest);
     if expected == bytes {
         return Ok(());

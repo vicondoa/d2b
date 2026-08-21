@@ -64,6 +64,14 @@ After bootstrap:
 - every process has one executionRef/domain/user placement and selected Process
   Provider.
 
+Signed component descriptors carry one closed instance scope for controller
+roles, a canonical Host/Guest/Zone target set, and a concrete artifact digest
+plus required EffectPort classes for each advertised target. Core admits the
+descriptor before creating its static Process graph; services and workers
+cannot claim ResourceType ownership or controller placement. The only
+in-process controller exceptions are the fixed `Provider/system-core` and
+`Provider/system-minijail` bootstrap components.
+
 ## Static Provider deployment and optional component state Volumes
 
 Core ProviderDeployment reads the signed manifest/catalog entry a Provider's

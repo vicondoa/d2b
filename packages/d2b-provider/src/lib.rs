@@ -63,7 +63,8 @@ pub use identity::{
     ProviderMethodName,
 };
 pub use installation::{
-    InstalledProvider, ProviderReadiness, RequiredProviderApi, admit_installation,
+    InstalledProvider, ProviderReadiness, RequiredProviderApi, TargetInstallProfile,
+    admit_installation, admit_installation_for_target,
 };
 pub use registry::{
     AdmissionOptions, AdmittedProvider, InFlightPermit, MAX_REGISTRY_DRAIN_MS, ProviderRegistry,

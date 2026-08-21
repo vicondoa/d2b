@@ -82,7 +82,9 @@ pub use fixture::{
     DeterministicClock, FakeProvider, Fixture, SampleLeaseRequest, sample_lease_request,
 };
 pub use redaction::Redacted;
-pub use registration::{ExactRegistration, ToolkitError, register_exact_instances};
+pub use registration::{
+    ExactRegistration, ToolkitError, register_exact_instances, validate_manifest_registration,
+};
 pub use runtime::{
     ProviderAdmission, ProviderEntrypoint, ProviderLifecycle, ProviderRuntimeError,
     ProviderSessionAdmission,

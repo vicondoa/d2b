@@ -1,8 +1,14 @@
 //! Provider lifecycle validation and child-resource planning.
 
 use d2b_contracts_provider::v3::{
+    BinaryRef,
+    ComponentExecution,
+    ComponentTargetCapability,
+    ControllerTargetKind,
+    EffectPortClass,
     ComponentType,
     ProviderManifest,
+    TargetRuntimeArtifacts,
 };
 use d2b_contracts_resource::v3::{
     ResourceRef,
@@ -135,6 +141,9 @@ impl ProviderHandler {
                 required_descriptor_fingerprint,
             )
             .map_err(|_| ProviderError::TrustOrCompatibilityDenied)?;
+        manifest
+            .validate_installation_contract()
+            .map_err(|_| ProviderError::GraphInvalid)?;
         if !observation.package_present {
             return Err(ProviderError::PackageUnavailable);
         }
@@ -281,6 +290,24 @@ use d2b_contracts_resource::v3::{
                 [],
                 false,
             )
+            .unwrap()
+            .with_execution(ComponentExecution::Launchable {
+                binary_ref: BinaryRef::parse("service").unwrap(),
+            })
+            .with_target_capabilities([
+                ComponentTargetCapability::new(
+                    ControllerTargetKind::Host,
+                    digest(),
+                    [EffectPortClass::Runtime],
+                )
+                .unwrap(),
+                ComponentTargetCapability::new(
+                    ControllerTargetKind::Guest,
+                    digest(),
+                    [EffectPortClass::Runtime],
+                )
+                .unwrap(),
+            ])
             .unwrap()],
             [],
             [],
@@ -290,6 +317,11 @@ use d2b_contracts_resource::v3::{
                 preserves_durable_state: true,
             },
         )
+        .unwrap()
+        .with_target_runtime_artifacts([
+            TargetRuntimeArtifacts::new(ControllerTargetKind::Host, digest(), digest()).unwrap(),
+            TargetRuntimeArtifacts::new(ControllerTargetKind::Guest, digest(), digest()).unwrap(),
+        ])
         .unwrap()
     }
 

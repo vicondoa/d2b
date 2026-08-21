@@ -3,8 +3,16 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use d2b_contracts_provider::v3::{
+    ArtifactDigest,
     ProviderManifest,
+    ComponentTargetCapability,
+    ControllerInstanceScope,
+    ControllerTargetKind,
+    EffectPortClass,
     ResourceApiBinding,
+    TargetRuntimeArtifacts,
+    BinaryRef,
+    ComponentExecution,
 };
 use d2b_contracts_resource::v3::{
     ResourceRef,
@@ -272,6 +280,7 @@ use d2b_contracts_resource::v3::{
     ArtifactId,
     SchemaVersion,
     execution_policy::{BoundedToken, ExecutionDomain},
+    resource_schema::PlacementAnchor,
 };
 
     use super::*;
@@ -326,8 +335,31 @@ use d2b_contracts_resource::v3::{
                 [],
                 false,
             )
+            .unwrap()
+            .with_execution(ComponentExecution::Launchable {
+                binary_ref: BinaryRef::parse("controller").unwrap(),
+            })
+            .with_controller_placement(
+                ControllerInstanceScope::PerResourceTarget,
+                [ControllerTargetKind::Host, ControllerTargetKind::Guest],
+            )
+            .unwrap()
+            .with_target_capabilities([
+                ComponentTargetCapability::new(
+                    ControllerTargetKind::Host,
+                    digest(),
+                    [EffectPortClass::Storage],
+                )
+                .unwrap(),
+                ComponentTargetCapability::new(
+                    ControllerTargetKind::Guest,
+                    digest(),
+                    [EffectPortClass::Storage],
+                )
+                .unwrap(),
+            ])
             .unwrap()],
-            [ResourceApiBinding::new(
+            [ResourceApiBinding::new_with_placement(
                 resource_type,
                 SchemaVersion::new(1, 0).unwrap(),
                 fingerprint('2'),
@@ -336,6 +368,7 @@ use d2b_contracts_resource::v3::{
                 StandardCapabilityMatrix::default(),
                 None,
                 None,
+                PlacementAnchor::ExecutionRef,
             )
             .unwrap()],
             [],
@@ -345,6 +378,11 @@ use d2b_contracts_resource::v3::{
                 preserves_durable_state: true,
             },
         )
+        .unwrap()
+        .with_target_runtime_artifacts([
+            TargetRuntimeArtifacts::new(ControllerTargetKind::Host, digest(), digest()).unwrap(),
+            TargetRuntimeArtifacts::new(ControllerTargetKind::Guest, digest(), digest()).unwrap(),
+        ])
         .unwrap()
     }
 

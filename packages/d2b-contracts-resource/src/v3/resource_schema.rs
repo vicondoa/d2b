@@ -16,7 +16,7 @@ use sha2::{Digest, Sha256};
 use unicode_normalization::UnicodeNormalization;
 
 use super::{
-    ResourceEnvelope, ResourceName, ResourceRef, ResourceTypeName, SchemaFingerprint,
+    ResourceEnvelope, ResourceName, ResourceRef, ResourceTypeName, SchemaFingerprint, ZoneId,
     resource_status::ProviderStatusExtension,
 };
 
@@ -666,6 +666,134 @@ impl JsonSchema for SchemaVersion {
     }
 }
 
+/// The closed set of registered ResourceType placement anchors.
+///
+/// A placement anchor is a contract-owned selector, not a Provider-defined
+/// field path. `Zone` resolves the containing Zone, while `ExecutionRef`
+/// resolves the canonical `spec.executionRef` field to one Host or Guest.
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize, JsonSchema,
+)]
+#[serde(rename_all = "kebab-case")]
+pub enum PlacementAnchor {
+    /// Place the resource at its containing Zone.
+    Zone,
+    /// Place the resource at its canonical `spec.executionRef` target.
+    ExecutionRef,
+}
+
+impl PlacementAnchor {
+    /// Return the frozen anchor for a ResourceType whose base contract names
+    /// one.
+    pub fn canonical_for(resource_type: &ResourceTypeName) -> Option<Self> {
+        match resource_type.as_str() {
+            "Process"
+            | "EphemeralProcess"
+            | "activation-nixos.d2bus.org.NixosGeneration"
+            | "shell-terminal.d2bus.org.ShellSession" => Some(Self::ExecutionRef),
+            "display-wayland.d2bus.org.WaylandSession" => Some(Self::Zone),
+            _ => None,
+        }
+    }
+
+    /// Reject an anchor that disagrees with a registered ResourceType base
+    /// contract.
+    pub fn validate_for(self, resource_type: &ResourceTypeName) -> Result<(), ResourceSchemaError> {
+        if Self::canonical_for(resource_type).is_some_and(|expected| expected != self) {
+            return Err(ResourceSchemaError::PlacementAnchorMismatch);
+        }
+        Ok(())
+    }
+
+    /// Resolve this anchor against one committed resource envelope.
+    pub fn resolve(
+        self,
+        envelope: &ResourceEnvelope,
+    ) -> Result<PlacementTarget, ResourceSchemaError> {
+        match self {
+            Self::Zone => Ok(PlacementTarget::Zone(envelope.metadata().zone().clone())),
+            Self::ExecutionRef => {
+                let value = envelope
+                    .spec()
+                    .base()
+                    .get("executionRef")
+                    .ok_or(ResourceSchemaError::PlacementTargetMissing)?;
+                let CanonicalJsonValue::String(value) = value else {
+                    return Err(ResourceSchemaError::PlacementTargetInvalid);
+                };
+                let reference = ResourceRef::parse(value)
+                    .map_err(|_| ResourceSchemaError::PlacementTargetInvalid)?;
+                let target_kind = match reference.resource_type().as_str() {
+                    "Host" => PlacementTargetKind::Host,
+                    "Guest" => PlacementTargetKind::Guest,
+                    _ => return Err(ResourceSchemaError::PlacementTargetWrongType),
+                };
+                Ok(PlacementTarget::Execution {
+                    kind: target_kind,
+                    reference,
+                })
+            }
+        }
+    }
+}
+
+/// The target kind resolved by an execution-reference placement anchor.
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize, JsonSchema,
+)]
+#[serde(rename_all = "lowercase")]
+pub enum PlacementTargetKind {
+    /// The physical Host target.
+    Host,
+    /// A workload or nested Guest target.
+    Guest,
+}
+
+/// The resolved value of a registered placement anchor.
+#[derive(Clone, PartialEq, Eq)]
+pub enum PlacementTarget {
+    /// The resource is reconciled by the Zone singleton.
+    Zone(ZoneId),
+    /// The resource is reconciled at one exact Host or Guest.
+    Execution {
+        /// The resolved target kind.
+        kind: PlacementTargetKind,
+        /// The exact execution target reference.
+        reference: ResourceRef,
+    },
+}
+
+impl core::fmt::Debug for PlacementTarget {
+    fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        match self {
+            Self::Zone(_) => formatter.write_str("PlacementTarget::Zone(<redacted>)"),
+            Self::Execution { kind, .. } => formatter
+                .debug_struct("PlacementTarget::Execution")
+                .field("kind", kind)
+                .finish_non_exhaustive(),
+        }
+    }
+}
+
+impl PlacementTarget {
+    /// Return the target kind for an execution placement, or `None` for the
+    /// Zone singleton.
+    pub const fn execution_kind(&self) -> Option<PlacementTargetKind> {
+        match self {
+            Self::Zone(_) => None,
+            Self::Execution { kind, .. } => Some(*kind),
+        }
+    }
+
+    /// Borrow the exact execution target reference, if one was resolved.
+    pub fn execution_ref(&self) -> Option<&ResourceRef> {
+        match self {
+            Self::Zone(_) => None,
+            Self::Execution { reference, .. } => Some(reference),
+        }
+    }
+}
+
 /// Extension-schema layer encoded in a schema ID.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum ExtensionSchemaLayer {
@@ -1185,6 +1313,10 @@ pub enum ResourceSchemaError {
     ProviderSchemaMismatch,
     ProviderFieldShadowsBase(String),
     ProviderExtensionNotMinimal,
+    PlacementAnchorMismatch,
+    PlacementTargetMissing,
+    PlacementTargetInvalid,
+    PlacementTargetWrongType,
 }
 
 impl core::fmt::Debug for ResourceSchemaError {
@@ -1207,6 +1339,10 @@ impl core::fmt::Debug for ResourceSchemaError {
             Self::ProviderSchemaMismatch => "ProviderSchemaMismatch",
             Self::ProviderFieldShadowsBase(_) => "ProviderFieldShadowsBase",
             Self::ProviderExtensionNotMinimal => "ProviderExtensionNotMinimal",
+            Self::PlacementAnchorMismatch => "PlacementAnchorMismatch",
+            Self::PlacementTargetMissing => "PlacementTargetMissing",
+            Self::PlacementTargetInvalid => "PlacementTargetInvalid",
+            Self::PlacementTargetWrongType => "PlacementTargetWrongType",
         };
         write!(f, "ResourceSchemaError::{kind}")
     }
@@ -1253,6 +1389,18 @@ impl core::fmt::Display for ResourceSchemaError {
             }
             Self::ProviderExtensionNotMinimal => {
                 f.write_str("minimal base spec must not require a Provider extension")
+            }
+            Self::PlacementAnchorMismatch => {
+                f.write_str("placement anchor does not match the registered ResourceType schema")
+            }
+            Self::PlacementTargetMissing => {
+                f.write_str("placement anchor field is missing from the committed resource")
+            }
+            Self::PlacementTargetInvalid => {
+                f.write_str("placement anchor value is not a valid target reference")
+            }
+            Self::PlacementTargetWrongType => {
+                f.write_str("placement anchor must resolve to a Host or Guest")
             }
         }
     }
@@ -1512,6 +1660,34 @@ key":1}"#,
             id.to_canonical_string(),
             "runtime-qemu-media.d2bus.org/Guest/spec"
         );
+    }
+
+    #[test]
+    fn placement_anchor_registry_is_closed_and_resolves_execution_targets() {
+        let process = ResourceTypeName::parse("Process").unwrap();
+        let generation =
+            ResourceTypeName::parse("activation-nixos.d2bus.org.NixosGeneration").unwrap();
+        let shell = ResourceTypeName::parse("shell-terminal.d2bus.org.ShellSession").unwrap();
+        let wayland =
+            ResourceTypeName::parse("display-wayland.d2bus.org.WaylandSession").unwrap();
+
+        assert_eq!(
+            PlacementAnchor::canonical_for(&process),
+            Some(PlacementAnchor::ExecutionRef)
+        );
+        assert_eq!(
+            PlacementAnchor::canonical_for(&generation),
+            Some(PlacementAnchor::ExecutionRef)
+        );
+        assert_eq!(
+            PlacementAnchor::canonical_for(&shell),
+            Some(PlacementAnchor::ExecutionRef)
+        );
+        assert_eq!(
+            PlacementAnchor::canonical_for(&wayland),
+            Some(PlacementAnchor::Zone)
+        );
+        assert!(serde_json::from_str::<PlacementAnchor>("\"field-path\"").is_err());
     }
 
     #[test]
