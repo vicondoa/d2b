@@ -547,6 +547,7 @@ fn invalid_checkout_metadata_is_omitted_explicitly() {
                  ;;\n\
              esac\n\
              printf '# branch.oid %s\\0# branch.head %s\\0' \"$oid\" \"$head\"\n\
+             [ \"$mode\" != failed-snapshot ]\n\
              ;;\n\
            *'check-ref-format --branch'*)\n\
              [ \"$mode\" != invalid-branch ]\n\
@@ -585,6 +586,7 @@ fn invalid_checkout_metadata_is_omitted_explicitly() {
             "Git checkout is unavailable or does not match the tested repository",
         ),
         ("foreign-origin", "Git origin is not the canonical d2b repository"),
+        ("failed-snapshot", "tested commit is unavailable"),
         ("invalid-commit", "tested commit is unavailable"),
         ("detached", "detached HEAD"),
         ("invalid-branch", "branch name is not approved"),

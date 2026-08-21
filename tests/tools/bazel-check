@@ -35,14 +35,18 @@ git_checkout() {
 }
 
 git_checkout_snapshot() {
-  local branch_head="" commit_sha="" record
+  local branch_head="" commit_sha="" complete=0 record
   while IFS= read -r -d '' record; do
     case "$record" in
       "# branch.head "*) branch_head="${record#\# branch.head }" ;;
       "# branch.oid "*) commit_sha="${record#\# branch.oid }" ;;
+      "# d2b.snapshot complete") complete=1 ;;
     esac
-  done < <(git_checkout status --porcelain=v2 --branch --untracked-files=no -z 2>/dev/null)
-  [ -n "$branch_head" ] && [ -n "$commit_sha" ] || return 1
+  done < <(
+    git_checkout status --porcelain=v2 --branch --untracked-files=no -z 2>/dev/null &&
+      printf '# d2b.snapshot complete\0'
+  )
+  [ "$complete" -eq 1 ] && [ -n "$branch_head" ] && [ -n "$commit_sha" ] || return 1
   printf '%s\t%s\n' "$branch_head" "$commit_sha"
 }
 
