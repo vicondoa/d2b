@@ -170,10 +170,33 @@ let
         modulesPath = "${nixpkgsPath}/nixos/modules";
       };
     };
+
+  # Guest-only modules such as net.nix take envMeta through specialArgs and
+  # must not be imported as host modules. Declare the networkd attrset so
+  # mkForce/mkDefault merge at the 10-eth-dhcp key.
+  mkGuestEval =
+    { modules
+    , specialArgs ? { }
+    }:
+    support.evalModules {
+      modules = [
+        { _module.check = false; }
+        {
+          options.systemd.network.networks = lib.mkOption {
+            type = lib.types.attrsOf lib.types.anything;
+            default = { };
+          };
+        }
+      ] ++ modules;
+      specialArgs = {
+        inherit lib pkgs;
+        modulesPath = "${nixpkgsPath}/nixos/modules";
+      } // specialArgs;
+    };
 in
 {
   baseModule = baseModuleFor system;
-  inherit lib pkgs system flakeRoot d2bLib d2bModule mkEval mkEvalFor mkModuleEval;
+  inherit lib pkgs system flakeRoot d2bLib d2bModule mkEval mkEvalFor mkModuleEval mkGuestEval;
   nixpkgsFlake = nixpkgs;
   inherit pkgsFor;
 }

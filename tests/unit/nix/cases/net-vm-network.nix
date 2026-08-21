@@ -11,7 +11,7 @@
 # evaluations under `config.d2b._computed.<vm>.config`; these cases assert
 # the same intended values there instead of preserving the bash gate's late
 # skip after only the catch-all DHCP neutralization check.
-{ mkEval, lib, pkgs, ... }:
+{ mkEval, mkGuestEval, lib, pkgs, flakeRoot, ... }:
 
 let
   catalogShape = import ../../../../nixos-modules/generated/provider-catalog-shape.nix;
@@ -234,6 +234,64 @@ let
       secondLine = lineOf ruleset second;
     in
     firstLine != null && secondLine != null && firstLine < secondLine;
+
+  # Isolated guest eval of net.nix. The network surface selects only the
+  # two 10-eth-dhcp names below, so this thunk is the only evaluation those
+  # cases force; the host topology bindings stay lazy.
+  guestEnvMeta = {
+    name = "work";
+    netName = "sys-work-net";
+    netUplinkMac = "02:00:00:00:00:01";
+    netUplinkIp = "192.0.2.2";
+    uplinkMask = "30";
+    hostUplinkIp = "192.0.2.1";
+    mtu = null;
+    netLanMac = "02:00:00:00:00:02";
+    netLanIp = "10.20.0.1";
+    lanMask = "24";
+    mssClamp = false;
+    allowEastWest = false;
+    hostBlocklist = [ ];
+    dhcpRangeStart = "10.20.0.100";
+    dhcpRangeEnd = "10.20.0.200";
+    workloads = { };
+    externalNetwork = {
+      attachment.enable = false;
+      portForwards = [ ];
+      egress = {
+        enable = false;
+        allowedCidrs = [ ];
+        masquerade = false;
+      };
+      mdns = {
+        enable = false;
+        reflector.enable = true;
+        dnsmasqLocal = {
+          enable = false;
+          port = 53530;
+        };
+      };
+    };
+  };
+
+  guest = mkGuestEval {
+    modules = [
+      {
+        systemd.network.networks."10-eth-dhcp" = lib.mkDefault {
+          matchConfig.Type = "ether";
+          networkConfig = {
+            DHCP = "ipv4";
+            LinkLocalAddressing = "no";
+            IPv6AcceptRA = false;
+          };
+        };
+      }
+      (flakeRoot + "/packages/d2b-provider-network-local/nix/net.nix")
+    ];
+    specialArgs = { envMeta = guestEnvMeta; };
+  };
+
+  guestEthDhcp = guest.config.systemd.network.networks."10-eth-dhcp";
 in
 {
   "net-vm-network/v3-resource-canonical-spec" = {
@@ -424,11 +482,11 @@ in
   };
 
   "net-vm-network/eth-dhcp-match-type-not-ether" = {
-    expr = (workEthDhcp.matchConfig.Type or null) == "ether";
+    expr = (guestEthDhcp.matchConfig.Type or null) == "ether";
     expected = false;
   };
   "net-vm-network/eth-dhcp-match-mac-sentinel" = {
-    expr = workEthDhcp.matchConfig.MACAddress or null;
+    expr = guestEthDhcp.matchConfig.MACAddress or null;
     expected = "00:00:00:00:00:00";
   };
 

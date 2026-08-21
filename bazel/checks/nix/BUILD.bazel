@@ -29,13 +29,13 @@ _SURFACES = {
         ],
     },
     "network": {
-        "cases": [],
+        "cases": ["net-vm-network"],
         "package": "packages/d2b-provider-network-local",
         "files": [
             "packages/d2b-provider-network-local/nix/net-mdns.nix",
+            "packages/d2b-provider-network-local/nix/net.nix",
         ],
         "modules": [
-            "packages/d2b-provider-network-local/nix/net.nix",
             "packages/d2b-provider-network-local/nix/network.nix",
             "nixos-modules/options-envs.nix",
             "packages/d2b-provider-network-local/nix/resources-network.nix",
