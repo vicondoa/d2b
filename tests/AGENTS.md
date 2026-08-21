@@ -47,14 +47,6 @@ without the enforcing lane's declared environment fails rather than skipping.
 Repository-wide policy is limited to source hygiene, workspace and lock
 integrity, supply chain, and changelog policy.
 
-`test-policy` also runs `guest-workspace-drift`. It fails when the guest crates
-copied by `mkGuestRustPackagesSrc` diverge from
-`tests/fixtures/guest-rust-workspace/Cargo.toml`, its per-crate
-`*.Cargo.toml` overrides, or `packages/Cargo.guest.lock`. If a shared crate
-mirrored into the guest workspace gains or changes a dependency, update the
-fixture and any affected override, refresh `packages/Cargo.guest.lock`, then
-run `make test-policy`.
-
 ### Layer 2 - integration tiers (only when Layer 1 genuinely can't cover it)
 
 | # | Type | What it is | Lives in | Runs **where** |
