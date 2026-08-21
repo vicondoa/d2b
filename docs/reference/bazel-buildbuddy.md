@@ -76,12 +76,14 @@ BRANCH_NAME=<validated symbolic branch name>
 ```
 
 The facade reads all three values from the repository root it will test. It
-accepts only canonical d2b Git remotes, a full commit object id, and a
-non-control branch name. It passes the values as Bazel invocation metadata
-(`--build_metadata=...`) to both developer profiles; local execution omits
-them. The contract uses no `GITHUB_*`, `CI_*`, user, host, credential, or
-workspace-path environment values, and never forwards a remote URL containing
-credentials.
+clears inherited Git repository-selection and configuration environment,
+verifies the discovered top-level directory, and reads the origin from local
+repository configuration. It accepts only canonical d2b Git remotes, a full
+commit object id, and a Git-valid local branch under `refs/heads/`. It passes
+the values as Bazel invocation metadata (`--build_metadata=...`) to both
+developer profiles; local execution omits them. The contract uses no
+`GITHUB_*`, `CI_*`, user, host, credential, or workspace-path environment
+values, and never forwards a remote URL containing credentials.
 
 If Git is unavailable, the origin is not canonical, `HEAD` cannot be resolved,
 or the checkout is detached, the facade emits an explicit diagnostic and

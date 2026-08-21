@@ -400,12 +400,33 @@ fn developer_profiles_publish_the_tested_checkout_metadata() {
     std::fs::write(&credential, "synthetic-token\n").expect("write credential");
     write_executable(
         &git,
-        "#!/usr/bin/env bash\ncase \"$*\" in *'remote get-url origin'*) printf '%s\\n' 'git@github.com:vicondoa/d2b.git' ;; *'rev-parse --verify HEAD^{commit}'*) printf '%s\\n' '0123456789abcdef0123456789abcdef01234567' ;; *'symbolic-ref --quiet --short HEAD'*) printf '%s\\n' 'feat/issue-446-buildbuddy-metadata' ;; *) exit 1 ;; esac\n",
+        "#!/usr/bin/env bash\n\
+         if [ -n \"${GIT_DIR:-}${GIT_WORK_TREE:-}${GIT_COMMON_DIR:-}\" ]; then\n\
+           case \"$*\" in\n\
+             *'rev-parse --show-toplevel'*) printf '%s\\n' '/foreign-checkout' ;;\n\
+             *'config --local --get remote.origin.url'*|*'remote get-url origin'*) printf '%s\\n' 'git@github.com:vicondoa/d2b.git' ;;\n\
+             *'rev-parse --verify HEAD^{commit}'*) printf '%s\\n' 'ffffffffffffffffffffffffffffffffffffffff' ;;\n\
+             *'symbolic-ref --quiet --short HEAD'*) printf '%s\\n' 'v3' ;;\n\
+             *'symbolic-ref --quiet HEAD'*) printf '%s\\n' 'refs/heads/v3' ;;\n\
+             *'check-ref-format --branch'*) exit 0 ;;\n\
+             *) exit 1 ;;\n\
+           esac\n\
+           exit 0\n\
+         fi\n\
+         case \"$*\" in\n\
+           *'rev-parse --show-toplevel'*) printf '%s\\n' \"$2\" ;;\n\
+           *'config --local --get remote.origin.url'*|*'remote get-url origin'*) printf '%s\\n' 'git@github.com:vicondoa/d2b.git' ;;\n\
+           *'rev-parse --verify HEAD^{commit}'*) printf '%s\\n' '0123456789abcdef0123456789abcdef01234567' ;;\n\
+           *'symbolic-ref --quiet --short HEAD'*) printf '%s\\n' 'feat/issue+446@meta=one,two' ;;\n\
+           *'symbolic-ref --quiet HEAD'*) printf '%s\\n' 'refs/heads/feat/issue+446@meta=one,two' ;;\n\
+           *'check-ref-format --branch'*) exit 0 ;;\n\
+           *) exit 1 ;;\n\
+         esac\n",
     );
     write_executable(
         &bazel,
         "#!/usr/bin/env bash\n\
-         printf '%s\\n' \"$*\" > \"${D2B_CAPTURE_ARGS:?}\"\n\
+         printf '%s\\n' \"$@\" > \"${D2B_CAPTURE_ARGS:?}\"\n\
          for arg in \"$@\"; do\n\
            case \"$arg\" in\n\
              --build_event_json_file=*) bep=\"${arg#*=}\" ;;\n\
@@ -419,17 +440,23 @@ fn developer_profiles_publish_the_tested_checkout_metadata() {
          if [ \"$2\" = check-security ]; then exit 0; fi\n\
          if [ \"$2\" = redact-log ] && [ \"$4\" != \"$6\" ]; then cp -- \"$4\" \"$6\"; fi\n",
     );
+    let relative_xtask = xtask
+        .strip_prefix(repo_root())
+        .expect("xtask stub must be below the repository root");
 
     let run = |profile: &str, capture: &Path, trusted: bool| {
         let mut command = Command::new("bash");
         command
             .arg(repo_root().join("tests/tools/bazel-check"))
             .args(["--profile", profile, "--", "//:test"])
+            .current_dir(repo_root())
             .env("D2B_BAZEL_BIN", &bazel)
-            .env("D2B_XTASK_BIN", &xtask)
+            .env("D2B_XTASK_BIN", relative_xtask)
             .env("D2B_BUILDBUDDY_CREDENTIAL_FILE", &credential)
             .env("D2B_BAZEL_UNTRUSTED", "0")
             .env("GITHUB_ACTIONS", "false")
+            .env("GIT_DIR", scratch.join("foreign.git"))
+            .env("GIT_WORK_TREE", scratch.join("foreign-worktree"))
             .env("D2B_BAZEL_CHECK_SCRATCH", scratch.join(profile))
             .env("D2B_CAPTURE_ARGS", capture)
             .env(
@@ -460,7 +487,7 @@ fn developer_profiles_publish_the_tested_checkout_metadata() {
     let expected = [
         "--build_metadata=REPO_URL=https://github.com/vicondoa/d2b",
         "--build_metadata=COMMIT_SHA=0123456789abcdef0123456789abcdef01234567",
-        "--build_metadata=BRANCH_NAME=feat/issue-446-buildbuddy-metadata",
+        "--build_metadata=BRANCH_NAME=feat/issue+446@meta=one,two",
     ];
     let remote = std::fs::read_to_string(&remote_args).expect("read remote Bazel args");
     let trusted = std::fs::read_to_string(&trusted_args).expect("read trusted Bazel args");
@@ -469,45 +496,21 @@ fn developer_profiles_publish_the_tested_checkout_metadata() {
         !local.contains("--build_metadata="),
         "local profile must not publish developer metadata"
     );
-    for flag in expected {
-        assert!(remote.contains(flag), "remote profile omitted {flag}");
-        assert!(
-            trusted.contains(flag),
-            "trusted-seed profile omitted {flag}"
-        );
-    }
     let remote_metadata = remote
-        .split_whitespace()
+        .lines()
         .filter(|argument| argument.starts_with("--build_metadata="))
         .collect::<Vec<_>>();
     let trusted_metadata = trusted
-        .split_whitespace()
+        .lines()
         .filter(|argument| argument.starts_with("--build_metadata="))
         .collect::<Vec<_>>();
-    for forbidden in [
-        "/home/",
-        "synthetic-token",
-        "D2B_BUILDBUDDY_CREDENTIAL_FILE",
-    ] {
-        assert!(
-            !remote_metadata
-                .iter()
-                .any(|argument| argument.contains(forbidden)),
-            "remote metadata leaked {forbidden}"
-        );
-        assert!(
-            !trusted_metadata
-                .iter()
-                .any(|argument| argument.contains(forbidden)),
-            "trusted-seed metadata leaked {forbidden}"
-        );
-    }
-    assert_eq!(remote_metadata, trusted_metadata);
+    assert_eq!(remote_metadata, expected);
+    assert_eq!(trusted_metadata, expected);
     let _ = std::fs::remove_dir_all(scratch);
 }
 
 #[test]
-fn detached_checkout_omits_buildbuddy_metadata_explicitly() {
+fn invalid_checkout_metadata_is_omitted_explicitly() {
     let scratch = repo_root().join(".scratch").join(format!(
         "bazel-check-detached-metadata-test-{}",
         std::process::id()
@@ -523,13 +526,34 @@ fn detached_checkout_omits_buildbuddy_metadata_explicitly() {
     write_executable(
         &git,
         "#!/usr/bin/env bash\n\
-         if [ \"${D2B_GIT_MODE:-}\" = unavailable ]; then exit 1; fi\n\
-         case \"$*\" in *'remote get-url origin'*) printf '%s\\n' 'https://github.com/vicondoa/d2b.git' ;; *'rev-parse --verify HEAD^{commit}'*) printf '%s\\n' '0123456789abcdef0123456789abcdef01234567' ;; *'symbolic-ref --quiet --short HEAD'*) exit 1 ;; *) exit 1 ;; esac\n",
+         mode=\"$(cat -- \"$(dirname -- \"$0\")/git-mode\")\"\n\
+         [ \"$mode\" != unavailable ] || exit 1\n\
+         case \"$*\" in\n\
+           *'rev-parse --show-toplevel'*)\n\
+             if [ \"$mode\" = foreign-root ]; then printf '%s\\n' '/foreign-checkout'; else printf '%s\\n' \"$2\"; fi\n\
+             ;;\n\
+           *'config --local --get remote.origin.url'*|*'remote get-url origin'*)\n\
+             if [ \"$mode\" = foreign-origin ]; then printf '%s\\n' 'https://example.invalid/fork.git'; else printf '%s\\n' 'https://github.com/vicondoa/d2b.git'; fi\n\
+             ;;\n\
+           *'rev-parse --verify HEAD^{commit}'*)\n\
+             if [ \"$mode\" = invalid-commit ]; then printf '%s\\n' 'not-a-commit'; else printf '%s\\n' '0123456789abcdef0123456789abcdef01234567'; fi\n\
+             ;;\n\
+           *'symbolic-ref --quiet --short HEAD'*)\n\
+             case \"$mode\" in detached) exit 1 ;; invalid-branch) printf '%s\\n' 'bad branch' ;; *) printf '%s\\n' 'feat/issue-446-buildbuddy-metadata' ;; esac\n\
+             ;;\n\
+           *'symbolic-ref --quiet HEAD'*)\n\
+             case \"$mode\" in detached) exit 1 ;; invalid-branch) printf '%s\\n' 'refs/heads/bad branch' ;; *) printf '%s\\n' 'refs/heads/feat/issue-446-buildbuddy-metadata' ;; esac\n\
+             ;;\n\
+           *'check-ref-format --branch'*)\n\
+             [ \"$mode\" != invalid-branch ]\n\
+             ;;\n\
+           *) exit 1 ;;\n\
+         esac\n",
     );
     write_executable(
         &bazel,
         "#!/usr/bin/env bash\n\
-         printf '%s\\n' \"$*\" > \"${D2B_CAPTURE_ARGS:?}\"\n\
+         printf '%s\\n' \"$@\" > \"${D2B_CAPTURE_ARGS:?}\"\n\
          for arg in \"$@\"; do\n\
            case \"$arg\" in\n\
              --build_event_json_file=*) bep=\"${arg#*=}\" ;;\n\
@@ -544,64 +568,56 @@ fn detached_checkout_omits_buildbuddy_metadata_explicitly() {
          if [ \"$2\" = redact-log ] && [ \"$4\" != \"$6\" ]; then cp -- \"$4\" \"$6\"; fi\n",
     );
 
-    let output = Command::new("bash")
-        .arg(repo_root().join("tests/tools/bazel-check"))
-        .args(["--profile", "remote", "--", "//:test"])
-        .env("D2B_BAZEL_BIN", &bazel)
-        .env("D2B_XTASK_BIN", &xtask)
-        .env("D2B_BUILDBUDDY_CREDENTIAL_FILE", &credential)
-        .env("D2B_BAZEL_UNTRUSTED", "0")
-        .env("GITHUB_ACTIONS", "false")
-        .env("D2B_BAZEL_CHECK_SCRATCH", scratch.join("evidence"))
-        .env("D2B_CAPTURE_ARGS", &capture)
-        .env(
-            "PATH",
-            format!("{}:{}", bin.display(), std::env::var("PATH").unwrap()),
-        )
-        .output()
-        .expect("run bazel-check detached profile");
-
-    assert!(
-        output.status.success(),
-        "detached profile failed: {output:?}"
-    );
-    let diagnostics = format!(
-        "{}{}",
-        String::from_utf8_lossy(&output.stdout),
-        String::from_utf8_lossy(&output.stderr)
-    );
-    assert!(diagnostics.contains("detached HEAD"));
-    let args = std::fs::read_to_string(&capture).expect("read detached Bazel args");
-    assert!(!args.contains("--build_metadata="));
-
-    let output = Command::new("bash")
-        .arg(repo_root().join("tests/tools/bazel-check"))
-        .args(["--profile", "remote", "--", "//:test"])
-        .env("D2B_BAZEL_BIN", &bazel)
-        .env("D2B_XTASK_BIN", &xtask)
-        .env("D2B_BUILDBUDDY_CREDENTIAL_FILE", &credential)
-        .env("D2B_BAZEL_UNTRUSTED", "0")
-        .env("GITHUB_ACTIONS", "false")
-        .env("D2B_GIT_MODE", "unavailable")
-        .env("D2B_BAZEL_CHECK_SCRATCH", scratch.join("unavailable"))
-        .env("D2B_CAPTURE_ARGS", &capture)
-        .env(
-            "PATH",
-            format!("{}:{}", bin.display(), std::env::var("PATH").unwrap()),
-        )
-        .output()
-        .expect("run bazel-check unavailable Git profile");
-    assert!(
-        output.status.success(),
-        "unavailable Git profile failed: {output:?}"
-    );
-    let diagnostics = format!(
-        "{}{}",
-        String::from_utf8_lossy(&output.stdout),
-        String::from_utf8_lossy(&output.stderr)
-    );
-    assert!(diagnostics.contains("Git origin is unavailable"));
-    let args = std::fs::read_to_string(capture).expect("read unavailable Git Bazel args");
-    assert!(!args.contains("--build_metadata="));
+    for (mode, expected_diagnostic) in [
+        (
+            "unavailable",
+            "Git checkout is unavailable or does not match the tested repository",
+        ),
+        (
+            "foreign-root",
+            "Git checkout is unavailable or does not match the tested repository",
+        ),
+        ("foreign-origin", "Git origin is not the canonical d2b repository"),
+        ("invalid-commit", "tested commit is unavailable"),
+        ("detached", "detached HEAD"),
+        ("invalid-branch", "branch name is not approved"),
+    ] {
+        std::fs::write(bin.join("git-mode"), mode).expect("write Git test mode");
+        let output = Command::new("bash")
+            .arg(repo_root().join("tests/tools/bazel-check"))
+            .args(["--profile", "remote", "--", "//:test"])
+            .env("D2B_BAZEL_BIN", &bazel)
+            .env("D2B_XTASK_BIN", &xtask)
+            .env("D2B_BUILDBUDDY_CREDENTIAL_FILE", &credential)
+            .env("D2B_BAZEL_UNTRUSTED", "0")
+            .env("GITHUB_ACTIONS", "false")
+            .env("D2B_BAZEL_CHECK_SCRATCH", scratch.join(mode))
+            .env("D2B_CAPTURE_ARGS", &capture)
+            .env(
+                "PATH",
+                format!("{}:{}", bin.display(), std::env::var("PATH").unwrap()),
+            )
+            .output()
+            .unwrap_or_else(|error| panic!("run bazel-check {mode} profile: {error}"));
+        assert!(
+            output.status.success(),
+            "{mode} profile failed: {output:?}"
+        );
+        let diagnostics = format!(
+            "{}{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert!(
+            diagnostics.contains(expected_diagnostic),
+            "{mode} diagnostics omitted {expected_diagnostic:?}: {diagnostics}"
+        );
+        let args = std::fs::read_to_string(&capture)
+            .unwrap_or_else(|error| panic!("read {mode} Bazel args: {error}"));
+        assert!(
+            !args.contains("--build_metadata="),
+            "{mode} must omit all BuildBuddy metadata"
+        );
+    }
     let _ = std::fs::remove_dir_all(scratch);
 }
