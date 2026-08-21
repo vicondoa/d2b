@@ -78,6 +78,24 @@ labels. Cargo manifests and `Cargo.lock` remain rules_rs metadata authority,
 while standalone crate Cargo commands are not documented or required gate
 evidence.
 
+Run these aliases directly from a normal Nix-enabled checkout. Make enters
+the pinned `.#bazel` shell automatically when the explicit d2b shell contract
+is absent, and enters it only once for a multi-goal or parallel invocation.
+Inside `nix develop`, the complete interactive shell already supplies the
+pinned Bazel toolchain. Use the focused shell for one-shot labels:
+
+```bash
+nix develop --no-write-lock-file .#bazel -c bazel test //packages/<crate>:<owner-test>
+```
+
+The focused shell supplies Bazel, Make, jq, Git, Rustup, and the shell
+utilities used by `tests/tools/bazel-check`; no ambient host Bazel or jq is
+required. An unrelated Nix shell is not accepted as the d2b shell. Optional
+direnv integration is supported for interactive use but is not required.
+CI installs Nix and calls the same public Make aliases with
+`D2B_BAZEL_PROFILE=local` and `D2B_BAZEL_UNTRUSTED=1`, without a per-target
+`nix develop` wrapper.
+
 `make test-policy` includes the fail-closed `guest-workspace-drift` guard. The
 guard checks that the crates copied by `mkGuestRustPackagesSrc`, the members and
 workspace dependencies in
@@ -159,6 +177,9 @@ Bazel's credential helper, withholds credentials from untrusted work, redacts
 logs and BEP output, and retries the identical target set locally only for a
 typed pre-dispatch infrastructure failure. Post-dispatch and test failures
 fail closed. Provider measurements do not define a second acceptance gate.
+The facade consumes `D2B_BAZEL_BIN` from the pinned shell and rejects an
+incomplete shell contract; it does not search for a hard-coded Nix-store
+Bazel path.
 
 The complete local and CI surfaces are:
 

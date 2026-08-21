@@ -110,6 +110,7 @@ rust_test(
         "//packages/d2b-resource-store:d2b_resource_store",
         "//packages/d2b-resource-store-redb:d2b_resource_store_redb",
     ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
+    tags = ["local", "no-remote-cache"],
 )
 
 rust_test(

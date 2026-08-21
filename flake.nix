@@ -221,6 +221,8 @@
           name = "d2b-dev";
           packages = with pkgs; [
             # Toolchain. rustup resolves rust-toolchain.toml.
+            bazel920
+            gnumake
             rustup
             stdenv.cc
             # Compiler cache. The cargo configs route rustc through
@@ -238,6 +240,10 @@
             acl
           ];
           shellHook = ''
+            export D2B_PROJECT_SHELL=d2b
+            export D2B_BAZEL_BIN="${bazel920}/bin/bazel"
+            export BAZEL_SH="''${BAZEL_SH:-${bazelActionShell}/bin/bash}"
+            export D2B_BAZEL_TEST_PATH="${bazel920}/bin:${pkgs.bash}/bin:${pkgs.coreutils}/bin:${pkgs.findutils}/bin:${pkgs.gnugrep}/bin:${pkgs.gnused}/bin:${pkgs.git}/bin:${pkgs.gnumake}/bin:${pkgs.jq}/bin:${pkgs.rustup}/bin"
             export SCCACHE_DIR="''${SCCACHE_DIR:-$HOME/.cache/d2b-sccache}"
             echo "d2b dev shell: rust $(sed -n 's/.*channel = "\(.*\)".*/\1/p' rust-toolchain.toml) via rustup, sccache at $SCCACHE_DIR"
           '';
@@ -257,11 +263,24 @@
         # Bazel itself and local tests stay in the caller's environment.
         bazel = pkgs.mkShellNoCC {
           name = "d2b-bazel-compat";
-          packages = [ bazel920 pkgs.rustup pkgs.git ];
+          packages = with pkgs; [
+            bazel920
+            bash
+            coreutils
+            findutils
+            gawk
+            git
+            gnumake
+            gnugrep
+            gnused
+            jq
+            rustup
+          ];
           shellHook = ''
+            export D2B_PROJECT_SHELL=d2b
             export D2B_BAZEL_BIN="${bazel920}/bin/bazel"
             export BAZEL_SH="''${BAZEL_SH:-${bazelActionShell}/bin/bash}"
-            export D2B_BAZEL_TEST_PATH="${pkgs.bash}/bin:${pkgs.coreutils}/bin:${pkgs.findutils}/bin:${pkgs.gnugrep}/bin:${pkgs.gnused}/bin:${pkgs.git}/bin:${pkgs.rustup}/bin"
+            export D2B_BAZEL_TEST_PATH="${bazel920}/bin:${pkgs.bash}/bin:${pkgs.coreutils}/bin:${pkgs.findutils}/bin:${pkgs.gawk}/bin:${pkgs.git}/bin:${pkgs.gnumake}/bin:${pkgs.gnugrep}/bin:${pkgs.gnused}/bin:${pkgs.jq}/bin:${pkgs.rustup}/bin"
             echo "d2b Bazel compatibility shell: $(${bazel920}/bin/bazel --version)"
           '';
         };

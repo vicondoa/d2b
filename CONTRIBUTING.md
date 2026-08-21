@@ -17,9 +17,14 @@ For repo-specific operational policy, see [AGENTS.md](./AGENTS.md).
    cd d2b
    ```
 2. Install Nix with flakes enabled (`experimental-features = nix-command flakes`).
-3. No separate `nix develop` shell is needed.
-4. Run focused checks for the components you change. Broader flake checks
-   remain available when the changed surface requires them.
+3. Run `make <target>` directly from the checkout. The Makefile detects the
+   d2b shell contract and enters the pinned `.#bazel` shell once when needed;
+   no global Bazel installation is required.
+4. For an interactive contributor session, use `nix develop`. This is the
+   complete shell with the pinned Bazel and Rust toolchains. The focused
+   `nix develop .#bazel` shell is intended for short Bazel/Make commands.
+   Optional direnv integration may enter the shell automatically, but is not
+   required.
 
 ## Running quality gates
 
@@ -32,9 +37,10 @@ and public conditional integration targets.
 
 `make check` invokes the single fixed Bazel graph. A developer host uses
 BuildBuddy for eligible actions; GitHub Layer-1 runs the same graph locally
-through `nix develop .#bazel` without a provider credential. Cargo manifests
-and `Cargo.lock` remain rules_rs metadata authority, but Cargo is not a
-contributor or CI gate.
+with `D2B_BAZEL_PROFILE=local` and `D2B_BAZEL_UNTRUSTED=1`. CI only needs Nix
+installed; Make selects the pinned shell and preserves those profile and trust
+variables. Cargo manifests and `Cargo.lock` remain rules_rs metadata
+authority, but Cargo is not a contributor or CI gate.
 
 <a id="rust-workspace-checks"></a>
 
@@ -44,12 +50,15 @@ Use the owner-local Bazel label for the crate or Nix surface you changed, then
 use the matching Make alias when a broader lane is useful:
 
 ```bash
-bazel test //packages/<crate>:<owner-test>
-bazel test //bazel/checks/nix:nix-unit-<surface>
+# Make aliases are the stable public interface.
 make test-rust
 make test-nix-unit
 make test-policy
 make check
+
+# Direct labels use the focused pinned shell explicitly.
+nix develop --no-write-lock-file .#bazel -c bazel test //packages/<crate>:<owner-test>
+nix develop --no-write-lock-file .#bazel -c bazel test //bazel/checks/nix:nix-unit-<surface>
 ```
 
 The complete crate surface, including doctests, harness-free binaries,
@@ -64,12 +73,12 @@ Generated CLI/API reference artifacts must be regenerated locally
 before committing whenever you touch the corresponding Rust types,
 `clap` surface, or prose companion docs.
 
-**xtask subcommands**
+**xtask subcommands** (run them through the focused shell):
 
-- `bazel run //packages/xtask:xtask -- gen-cli-schemas`
-- `bazel run //packages/xtask:xtask -- gen-error-codes`
-- `bazel run //packages/xtask:xtask -- gen-cli-shell-artifacts`
-- `bazel run //packages/xtask:xtask -- gen-daemon-api`
+- `nix develop --no-write-lock-file .#bazel -c bazel run //packages/xtask:xtask -- gen-cli-schemas`
+- `nix develop --no-write-lock-file .#bazel -c bazel run //packages/xtask:xtask -- gen-error-codes`
+- `nix develop --no-write-lock-file .#bazel -c bazel run //packages/xtask:xtask -- gen-cli-shell-artifacts`
+- `nix develop --no-write-lock-file .#bazel -c bazel run //packages/xtask:xtask -- gen-daemon-api`
 
 **Drift gates**
 
@@ -82,10 +91,10 @@ before committing whenever you touch the corresponding Rust types,
 A typical regeneration loop is:
 
 ```bash
-bazel run //packages/xtask:xtask -- gen-cli-schemas
-bazel run //packages/xtask:xtask -- gen-error-codes
-bazel run //packages/xtask:xtask -- gen-cli-shell-artifacts
-bazel run //packages/xtask:xtask -- gen-daemon-api
+nix develop --no-write-lock-file .#bazel -c bazel run //packages/xtask:xtask -- gen-cli-schemas
+nix develop --no-write-lock-file .#bazel -c bazel run //packages/xtask:xtask -- gen-error-codes
+nix develop --no-write-lock-file .#bazel -c bazel run //packages/xtask:xtask -- gen-cli-shell-artifacts
+nix develop --no-write-lock-file .#bazel -c bazel run //packages/xtask:xtask -- gen-daemon-api
 make test-drift
 ```
 

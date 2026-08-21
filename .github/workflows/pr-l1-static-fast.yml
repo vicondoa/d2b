@@ -32,7 +32,7 @@ jobs:
           extra_nix_config: |
             experimental-features = nix-command flakes
       - name: Fixed Bazel preflight
-        run: nix develop --no-write-lock-file .#bazel -c make check-tier0
+        run: make check-tier0
 
   policy-tooling:
     runs-on: ubuntu-latest
@@ -50,7 +50,7 @@ jobs:
           extra_nix_config: |
             experimental-features = nix-command flakes
       - name: Policy and tooling suite
-        run: nix develop --no-write-lock-file .#bazel -c make test-policy
+        run: make test-policy
 
   rust-main:
     runs-on: ubuntu-latest
@@ -69,7 +69,7 @@ jobs:
           extra_nix_config: |
             experimental-features = nix-command flakes
       - name: Portable Rust main suite
-        run: nix develop --no-write-lock-file .#bazel -c make test-rust-main
+        run: make test-rust-main
 
   rust-broker:
     runs-on: ubuntu-latest
@@ -87,7 +87,7 @@ jobs:
           extra_nix_config: |
             experimental-features = nix-command flakes
       - name: Broker suite
-        run: nix develop --no-write-lock-file .#bazel -c make test-rust-broker
+        run: make test-rust-broker
 
   rust-guest:
     runs-on: ubuntu-latest
@@ -105,7 +105,7 @@ jobs:
           extra_nix_config: |
             experimental-features = nix-command flakes
       - name: Guest shell runner suite
-        run: nix develop --no-write-lock-file .#bazel -c make test-rust-guest-shell-runner
+        run: make test-rust-guest-shell-runner
 
   rust-local:
     runs-on: ubuntu-latest
@@ -123,7 +123,7 @@ jobs:
           extra_nix_config: |
             experimental-features = nix-command flakes
       - name: Local Rust suite
-        run: nix develop --no-write-lock-file .#bazel -c make test-rust-local
+        run: make test-rust-local
 
   nix-eval:
     runs-on: ubuntu-latest
@@ -141,7 +141,7 @@ jobs:
           extra_nix_config: |
             experimental-features = nix-command flakes
       - name: Nix evaluation suite
-        run: nix develop --no-write-lock-file .#bazel -c make test-flake
+        run: make test-flake
 
   nix-unit:
     runs-on: ubuntu-latest
@@ -159,7 +159,7 @@ jobs:
           extra_nix_config: |
             experimental-features = nix-command flakes
       - name: Nix surface suite
-        run: nix develop --no-write-lock-file .#bazel -c make test-nix-unit
+        run: make test-nix-unit
 
   nix-realized:
     runs-on: ubuntu-latest
@@ -177,7 +177,7 @@ jobs:
           extra_nix_config: |
             experimental-features = nix-command flakes
       - name: Realized Nix suite
-        run: nix develop --no-write-lock-file .#bazel -c make test-flake-realized
+        run: make test-flake-realized
 
   nix-aarch64:
     runs-on: ubuntu-latest
@@ -195,7 +195,7 @@ jobs:
           extra_nix_config: |
             experimental-features = nix-command flakes
       - name: AArch64 Nix smoke suite
-        run: nix develop --no-write-lock-file .#bazel -c make test-flake-aarch64
+        run: make test-flake-aarch64
 
   fixtures-proofs:
     runs-on: ubuntu-latest
@@ -213,7 +213,7 @@ jobs:
           extra_nix_config: |
             experimental-features = nix-command flakes
       - name: Fixtures and proofs suite
-        run: nix develop --no-write-lock-file .#bazel -c make test-fixture-contracts
+        run: make test-fixture-contracts
 
   test-performance-budgets:
     runs-on: ubuntu-latest
@@ -232,7 +232,7 @@ jobs:
           extra_nix_config: |
             experimental-features = nix-command flakes
       - name: Advisory performance gate
-        run: nix develop --no-write-lock-file .#bazel -c make test-performance-budgets
+        run: make test-performance-budgets
 
   check:
     if: ${{ always() }}

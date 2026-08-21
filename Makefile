@@ -3,6 +3,73 @@
 # Public compatibility targets. Bazel owns Layer-1 target selection,
 # dependency ordering, parallelism, caching, and aggregation.
 
+.DEFAULT_GOAL := check
+
+# The dispatcher is deliberately explicit. A target is listed in exactly one
+# environment class so a new public lane cannot silently inherit host-local or
+# Bazel behavior from a name pattern.
+D2B_MAKE_BAZEL_TARGETS := \
+	check check-fast check-tier0 bazel-check test-unit \
+	test-lint test-rust test-rust-main test-rust-broker \
+	test-rust-guest-shell-runner test-rust-local test-rust-no-bash-ast \
+	test-rust-schema test-rust-supply-chain test-rust-leaf-main-workspace \
+	test-rust-leaf-schema test-rust-leaf-fixture-contracts test-rust-leaf-broker \
+	test-rust-leaf-guest-shell-runner test-rust-leaf-no-bash-ast \
+	test-rust-leaf-supply-chain test-fixture-contracts test-proofs test-flake \
+	test-flake-realized test-flake-aarch64 test-flake-x86 test-nix-unit \
+	test-performance-budgets test-drift test-policy
+D2B_MAKE_LOCAL_TARGETS := \
+	test check-ci check-all test-integration test-host-integration perf \
+	pre-tag smoke-lite heavy-check heavy-test-integration \
+	heavy-test-host-integration heavy-flake-check heavy-lane-integration \
+	heavy-lane-host-integration heavy-lane-perf heavy-lane-pre-tag \
+	heavy-lane-smoke-lite heavy-lane-guard
+# Meta helpers that invoke Bazel directly but are not Layer-1 test aliases.
+D2B_MAKE_UTILITY_TARGETS := test-changelog heavy-gate-build changelog-fold
+
+D2B_MAKE_GOALS := $(if $(strip $(MAKECMDGOALS)),$(MAKECMDGOALS),check)
+D2B_MAKE_CLASSIFIED_GOALS := $(filter \
+	$(D2B_MAKE_BAZEL_TARGETS) $(D2B_MAKE_LOCAL_TARGETS) \
+	$(D2B_MAKE_UTILITY_TARGETS),$(D2B_MAKE_GOALS))
+D2B_MAKE_RECURSIVE := $(MAKE)
+D2B_MAKE_REENTRY ?= 0
+D2B_MAKE_SHELL_READY := $(shell \
+	if [ "$${D2B_PROJECT_SHELL:-}" = d2b ] && \
+	   [ -n "$${D2B_BAZEL_BIN:-}" ] && [ -x "$${D2B_BAZEL_BIN}" ]; then \
+		printf 1; \
+	else \
+		printf 0; \
+	fi)
+
+ifneq ($(strip $(D2B_MAKE_CLASSIFIED_GOALS)),)
+ifneq ($(D2B_MAKE_REENTRY),0)
+ifneq ($(D2B_MAKE_SHELL_READY),1)
+$(error d2b Make dispatcher: re-entry marker is set but the d2b shell contract is incomplete (D2B_PROJECT_SHELL=d2b and executable D2B_BAZEL_BIN are required))
+endif
+else
+ifneq ($(D2B_MAKE_SHELL_READY),1)
+D2B_MAKE_DISPATCH_REQUIRED := 1
+endif
+endif
+endif
+
+ifeq ($(D2B_MAKE_DISPATCH_REQUIRED),1)
+.PHONY: __d2b_make_dispatch $(D2B_MAKE_GOALS)
+
+$(D2B_MAKE_GOALS): __d2b_make_dispatch
+
+__d2b_make_dispatch:
+	@set -eu; \
+	if ! command -v nix >/dev/null 2>&1; then \
+		echo "d2b Make dispatcher: Nix is required for $(D2B_MAKE_GOALS); enter the d2b shell or install Nix" >&2; \
+		exit 127; \
+	fi; \
+	exec nix --extra-experimental-features 'nix-command flakes' \
+		develop --no-write-lock-file .#bazel -c \
+		env D2B_MAKE_REENTRY=1 $(D2B_MAKE_RECURSIVE) --no-print-directory \
+		D2B_MAKE_REENTRY=1 $(D2B_MAKE_GOALS)
+else
+
 # Recipe shells must not inherit exported Bash functions from their caller.
 # Function resolution precedes PATH lookup, so an inherited cargo/nix/jq
 # function could silently redirect a gate that intends to execute a binary.
@@ -138,7 +205,7 @@ test-rust:
 	$(BAZEL_RUN) $(D2B_BAZEL_MAIN_TARGETS) $(D2B_BAZEL_BROKER_TARGETS) $(D2B_BAZEL_GUEST_TARGETS) $(D2B_BAZEL_LOCAL_RUST_TARGETS)
 
 test-rust-main:
-	D2B_BAZEL_TEST_TAG_FILTERS="-local,-manual,-exclusive,-gpu,-kvm" tests/tools/bazel-check --profile "$(D2B_BAZEL_PROFILE)" -- $(D2B_BAZEL_MAIN_TARGETS)
+	D2B_BAZEL_TEST_TAG_FILTERS="-local,-no-remote-exec,-manual,-exclusive,-gpu,-kvm" tests/tools/bazel-check --profile "$(D2B_BAZEL_PROFILE)" -- $(D2B_BAZEL_MAIN_TARGETS)
 
 test-rust-broker:
 	$(BAZEL_RUN) $(D2B_BAZEL_BROKER_TARGETS)
@@ -392,18 +459,13 @@ heavy-lane-guard: heavy-gate-build
 # might be running; the bare targets stay available for a serial console.
 # ===========================================================================
 
-BAZEL_BIN ?= bazel
+BAZEL_BIN ?= $(if $(D2B_BAZEL_BIN),$(D2B_BAZEL_BIN),bazel)
 HEAVY_GATE_BIN := $(CURDIR)/bazel-bin/packages/xtask/xtask
 HEAVY_GATE = $(HEAVY_GATE_BIN) heavy-gate --
 
 ## heavy-gate-build - build the semaphore wrapper through its Bazel owner.
 heavy-gate-build:
-	@set -eu; \
-	if command -v '$(BAZEL_BIN)' >/dev/null 2>&1; then \
-		'$(BAZEL_BIN)' build --config=local //packages/xtask:xtask; \
-	else \
-		nix develop --no-write-lock-file .#bazel -c bazel build --config=local //packages/xtask:xtask; \
-	fi
+	'$(BAZEL_BIN)' build --config=local //packages/xtask:xtask
 
 ## heavy-gate-provision - create or repair the protected slot namespace for the
 ## current numeric uid without resolving a user name through NSS. This is the
@@ -485,12 +547,7 @@ test-changelog:
 ##                  '## [Unreleased]' block and delete the consumed fragments.
 ##                  Run at merge time; see changelog.d/README.md.
 changelog-fold:
-	@set -eu; \
-	if command -v '$(BAZEL_BIN)' >/dev/null 2>&1; then \
-		'$(BAZEL_BIN)' run --config=local //packages/xtask:xtask -- changelog-fold; \
-	else \
-		nix develop --no-write-lock-file .#bazel -c bazel run --config=local //packages/xtask:xtask -- changelog-fold; \
-	fi
+	'$(BAZEL_BIN)' run --config=local //packages/xtask:xtask -- changelog-fold
 # ===========================================================================
 # Disk hygiene.
 #
@@ -502,3 +559,5 @@ changelog-fold:
 # Knobs: D2B_CLEAN_DRY_RUN=1, D2B_CLEAN_SKIP_GC=1, D2B_CLEAN_KEEP_SCRATCH=1.
 clean:
 	bash tests/tools/clean-worktree.sh
+
+endif

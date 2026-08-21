@@ -65,8 +65,8 @@ rust_test(
     name = "d2b_resource_store_redb_test",
     compile_data = ["Cargo.toml"],
     crate = ":d2b_resource_store_redb",
-    args = ["--test-threads=1"],
     tags = ["no-remote-cache"],
+    args = ["--test-threads=1"],
     deps = [
         "//packages/d2b-contracts-zone-session:d2b_contracts_zone_session",
         "//packages/d2b-contracts-resource:d2b_contracts_resource",

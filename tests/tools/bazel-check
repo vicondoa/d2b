@@ -123,13 +123,15 @@ case "$PROFILE" in
     ;;
 esac
 
+if [ "${D2B_PROJECT_SHELL:-}" != d2b ]; then
+  echo "bazel-check: D2B_PROJECT_SHELL=d2b is required; enter a d2b development shell" >&2
+  exit "$CONFIGURATION_FAILURE_STATUS"
+fi
+
 bazel_bin="${D2B_BAZEL_BIN:-}"
-if [ -z "$bazel_bin" ]; then
-  if [ -x /nix/store/8jx5b7y9wbx72scyjdv9mvra8qwmjxz9-bazel-9.2.0/bin/bazel ]; then
-    bazel_bin=/nix/store/8jx5b7y9wbx72scyjdv9mvra8qwmjxz9-bazel-9.2.0/bin/bazel
-  else
-    bazel_bin=bazel
-  fi
+if [ -z "$bazel_bin" ] || [ ! -x "$bazel_bin" ]; then
+  echo "bazel-check: D2B_BAZEL_BIN must name the executable pinned by the d2b development shell" >&2
+  exit "$CONFIGURATION_FAILURE_STATUS"
 fi
 
 mkdir -p "$SCRATCH"
@@ -201,6 +203,7 @@ run_bazel() {
     --test_tag_filters="$tag_filters" \
     --test_env=D2B_REPO_ROOT="$ROOT" \
     --test_env=D2B_BAZEL_BIN="$bazel_bin" \
+    --test_env=D2B_PROJECT_SHELL=d2b \
     --test_env=PATH="$test_path" \
     --test_env=BAZEL_SH="$test_bazel_sh" \
     "$@" \

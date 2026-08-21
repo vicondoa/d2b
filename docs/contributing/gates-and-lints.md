@@ -54,11 +54,26 @@ successful. The gate then removes only these validated paths before invoking
 Use top-level `Makefile` targets. Shell scripts under `tests/` are
 implementation details unless a target or `tests/AGENTS.md` says to run one.
 
-`nix develop` provides the pinned Rust toolchain, sccache, shellcheck, and jq.
-The Bazel facade re-enters the pinned development environment when needed, so a
-dev shell skips that setup. Normal profiles retain panic line tables but omit
-dependency DWARF; use the explicit Bazel debugging profile when a full
-debugger build is required.
+Run public gates as `make <target>` from a normal Nix-enabled host. The
+Makefile is the environment dispatcher: it detects the explicit
+`D2B_PROJECT_SHELL=d2b` and executable `D2B_BAZEL_BIN` contract, enters
+`nix develop --no-write-lock-file .#bazel` once when needed, and preserves the
+original goals, variables, profile, trust settings, and parallelism. It does
+not trust an unrelated `IN_NIX_SHELL` value. A missing Nix installation fails
+clearly; enter `nix develop` or install Nix before retrying.
+
+`nix develop` is the complete interactive contributor shell with the pinned
+Bazel and Rust toolchains. `nix develop --no-write-lock-file .#bazel` is the
+focused shell used for Make re-entry and one-shot direct Bazel labels:
+
+```bash
+nix develop --no-write-lock-file .#bazel -c bazel test //packages/<crate>:<owner-test>
+```
+
+Optional direnv integration may enter the interactive shell automatically, but
+is not required. Normal profiles retain panic line tables but omit dependency
+DWARF; use the explicit Bazel debugging profile when a full debugger build is
+required.
 
 Bazel is the only supported contributor build and test interface. The main
 workspace, privileged broker, guest shell runner, doctests, and
@@ -118,7 +133,9 @@ make check
 ```
 
 Local aliases use the BuildBuddy `remote` profile when credentials and trust
-permit it. CI sets `D2B_BAZEL_PROFILE=local` and `D2B_BAZEL_UNTRUSTED=1`.
+permit it. CI invokes the same public Make aliases after installing Nix and
+sets `D2B_BAZEL_PROFILE=local` and `D2B_BAZEL_UNTRUSTED=1`; it does not wrap
+each target in a separate `nix develop` command.
 The credential helper, trust partition, redaction, and typed one-retry
 pre-dispatch fallback live in `tests/tools/bazel-check`; do not duplicate
 those behaviors in Make or workflow code. Post-dispatch, analysis, policy,
