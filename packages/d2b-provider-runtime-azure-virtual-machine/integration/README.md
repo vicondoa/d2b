@@ -3,7 +3,7 @@
 The normal suite is hermetic and uses injected effect and credential ports:
 
 ```text
-cargo test -p d2b-provider-runtime-azure-virtual-machine
+make test-rust
 ```
 
 No test requires Azure credentials, ARM access, a host socket, or a running

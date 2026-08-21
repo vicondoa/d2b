@@ -50,7 +50,7 @@ sets.
 ## Build and test
 
 ```text
-cargo test -p d2b-provider-transport-azure-relay
+bazel test //packages/d2b-provider-transport-azure-relay:d2b_provider_transport_azure_relay_doc_test
 ```
 
 Tests use in-process socket objects and do not contact Azure Relay.

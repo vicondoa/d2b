@@ -107,8 +107,7 @@ owns post-effect audit records; raw device and firewall data never enter them.
 ## Build and test
 
 ```bash
-cargo check -p d2b-provider-device-usbip
-cargo test -p d2b-provider-device-usbip
+bazel test //packages/d2b-provider-device-usbip:d2b_provider_device_usbip_test
 ```
 
 The `tests/` suite is hermetic. `integration/attach_detach_lifecycle.rs`

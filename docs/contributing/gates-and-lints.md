@@ -54,13 +54,11 @@ successful. The gate then removes only these validated paths before invoking
 Use top-level `Makefile` targets. Shell scripts under `tests/` are
 implementation details unless a target or `tests/AGENTS.md` says to run one.
 
-`nix develop` provides the pinned Rust release plus sccache, cargo-nextest,
-cargo-deny, cargo-audit, shellcheck, and jq. Gate scripts re-enter a nix shell
-and bootstrap a private toolchain when missing, so a dev shell skips that setup.
-Normal dev/test
-profiles retain panic line tables but omit dependency DWARF; use
-`cargo build --profile debugging` or `cargo test --profile debugging` for full
-debugger symbols.
+`nix develop` provides the pinned Rust toolchain, sccache, shellcheck, and jq.
+The Bazel facade re-enters the pinned development environment when needed, so a
+dev shell skips that setup. Normal profiles retain panic line tables but omit
+dependency DWARF; use the explicit Bazel debugging profile when a full
+debugger build is required.
 
 Bazel is the only supported contributor build and test interface. The main
 workspace, privileged broker, guest shell runner, doctests, and
@@ -83,7 +81,6 @@ make test-flake
 make test-nix-unit
 make test-policy
 make test-drift
-make test-runtime-ledger
 make test-performance-budgets
 make test-fixture-contracts
 
@@ -92,9 +89,6 @@ make test-unit
 
 # PR-equivalent Layer-1 gate.
 make check
-
-# Legacy/full-static monolithic gate retained for explicit use.
-make check-static
 
 # Local Layer 1 + container integration. Run wider lanes only when the changed
 # surface requires them.
@@ -118,7 +112,6 @@ make test-flake
 make test-nix-unit
 make test-policy
 make test-drift
-make test-runtime-ledger
 make test-fixture-contracts
 make test-unit
 make check
@@ -144,21 +137,19 @@ credential, redaction, and focused-rerun details.
 
 ### Rust and Nix compatibility surfaces
 
-Cargo remains a direct development surface over the root `Cargo.toml` and
-`Cargo.lock`; nextest does not replace `cargo test --doc` or harness-free
-companion commands. `rules_rs` supplies the Bazel Cargo integration, and the Bazel graph exposes
-doctest, feature, harness-free, fixture, and policy coverage as explicit
-targets. No second Cargo lock, source inventory, generator, or shell scheduler
-is authoritative.
+Cargo manifests and `Cargo.lock` remain metadata inputs over the root workspace;
+they are consumed by `rules_rs`, not exposed as contributor gates. The Bazel
+graph exposes doctest, feature, harness-free, fixture, and policy coverage as
+explicit targets. No second Cargo lock, source inventory, generator, or shell
+scheduler is authoritative.
 
 Nix-unit and flake checks use fixed Bazel targets with declared inputs. Each
 named Nix surface declares its expression and exact module/helper/fixture
 closure directly in `bazel/checks/nix/BUILD.bazel`; the graph has no corpus
-discovery, case-presence pins, secondary evidence, or provider qualification
-gate. Surface actions copy that closure into an isolated source root and
-evaluate the expression through a minimal runner flake, not the repository
-flake outputs or ambient `D2B_REPO_ROOT`. Runtime-ledger changes use
-`make runtime-ledger-pin`.
+discovery, case-presence pins, secondary evidence, test census, or provider
+qualification gate. Surface actions copy that closure into an isolated source
+root and evaluate the expression through a minimal runner flake, not the
+repository flake outputs or ambient `D2B_REPO_ROOT`.
 
 ### Realized Nix checks and runtime budget
 
@@ -208,20 +199,13 @@ for the normal rustc-fallback path.
 Hardware and live-host tests remain explicit manual tiers and require the
 matching devices or deployed d2b state.
 
-`make test-runtime-ledger` is the hermetic execution-budget Layer-1 job. It
-uses the existing `tests/runtime-ledger-census.json` and
-`make runtime-ledger-pin` when a governed test is added, removed, or renamed.
-The aggregate process-CPU budget is enforcing; shorter per-test timing
-thresholds remain advisory diagnostics. This gate holds no historical
-regression baseline.
-
 ## Heavy lanes
 
 Every Layer-2, host-integration, hardware, live, and perf-heavy command
-runs through **one** semaphore, invoked from the repository root as `cargo
-run --manifest-path Cargo.toml -p xtask -- heavy-gate`. It grants
+runs through **one** semaphore, invoked from the repository root through the
+Bazel-built `bazel-bin/packages/xtask/xtask heavy-gate` facade. It grants
 two slots per uid via open file description locks so concurrent heavy lanes
-cannot oversubscribe the shared Nix store, cargo target directory, or KVM
+cannot oversubscribe the shared Nix store, Bazel output tree, or KVM
 device. Do not add a second lock file, sleep-and-retry loop, or per-crate
 guard.
 
@@ -249,8 +233,8 @@ The structure is public-lane-plus-guarded-internal:
 - **Internal `heavy-lane-*` targets** hold the raw work and fail closed
   through `heavy-lane-guard` if invoked outside the gate (the gate exports
   `D2B_HEAVY_GATE` across its re-exec). Do not run them directly.
-- **Convenience wrappers** `make heavy-check`, `make heavy-cargo-test`,
-  `make heavy-flake-check`, and the `heavy-test-*` aliases run a Layer-1
+- **Convenience wrappers** `make heavy-check`, `make heavy-flake-check`, and
+  the `heavy-test-*` aliases run a Layer-1
   gate, the Rust suite, the building flake check, or a public lane under
   the same semaphore.
 
@@ -262,11 +246,9 @@ tests obey the same rule: use the gated live-VM smoke entrypoints (`make
 pre-tag` for the full gate, `make smoke-lite` for the lite gate) or wrap a
 raw live script with the Bazel-built xtask artifact.
 
-The repository-root `Cargo.toml` is the product workspace and the root
-`.cargo/config.toml` is its Cargo configuration. The bare `cargo xtask`
-alias therefore resolves from the repository root; use the explicit
-`--manifest-path Cargo.toml` spelling when a command's authority should be
-visible in the invocation.
+The repository-root `Cargo.toml` and `Cargo.lock` are rules_rs metadata
+authority. The Bazel-built xtask label is the only supported gate entrypoint;
+do not add a direct Cargo compatibility wrapper.
 
 Invoking a live script directly is safe but not the documented path: each
 one verifies the inherited slot and re-executes itself through the semaphore

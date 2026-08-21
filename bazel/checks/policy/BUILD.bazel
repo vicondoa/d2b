@@ -25,7 +25,6 @@ test_suite(
     tests = [
         "//packages/d2b:stub_no_socket",
         "//packages/d2bd:stub_no_socket",
-        "//packages/xtask:runtime_ledger_test",
         "//packages/xtask:schema_reproducibility_test",
         "//tests/tools/no-bash-ast-walker:no_bash_ast_test",
     ],
@@ -70,11 +69,6 @@ test_suite(
 )
 
 test_suite(
-    name = "runtime_ledger",
-    tests = ["//packages/xtask:runtime_ledger_test"],
-)
-
-test_suite(
     name = "lint",
     tests = [":source_hygiene"],
 )
@@ -85,6 +79,5 @@ test_suite(
         ":changelog",
         ":drift",
         ":policy",
-        ":runtime_ledger",
     ],
 )

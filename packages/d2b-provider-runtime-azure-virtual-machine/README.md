@@ -48,7 +48,7 @@ polling is requeue-driven, and metric labels are a closed semantic allowlist.
 ## Build and test
 
 ```text
-cargo test -p d2b-provider-runtime-azure-virtual-machine
+make test-rust
 ```
 
 Tests use scripted effect ports and do not contact Azure or a host daemon.

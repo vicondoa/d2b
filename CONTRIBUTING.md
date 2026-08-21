@@ -32,55 +32,31 @@ and public conditional integration targets.
 
 `make check` invokes the single fixed Bazel graph. A developer host uses
 BuildBuddy for eligible actions; GitHub Layer-1 runs the same graph locally
-through `nix develop .#bazel` without a provider credential. Standalone Cargo
-commands remain available for direct development.
+through `nix develop .#bazel` without a provider credential. Cargo manifests
+and `Cargo.lock` remain rules_rs metadata authority, but Cargo is not a
+contributor or CI gate.
 
 <a id="rust-workspace-checks"></a>
 
-### Rust workspace checks
+### Rust and Nix owner checks
 
-The repository-root Cargo workspace is covered by CI's Layer-1 jobs. For a
-local change, run the focused test and lint commands for the components you
-changed; the aggregate gates remain available when the changed surface needs
-broader coverage.
+Use the owner-local Bazel label for the crate or Nix surface you changed, then
+use the matching Make alias when a broader lane is useful:
 
 ```bash
-# Examples; select the commands that cover the changed components.
-cargo --manifest-path Cargo.toml test -p <changed-crate>
-cargo --manifest-path Cargo.toml clippy -p <changed-crate> --all-targets -- -D warnings
-
-# Optional broader Layer-1 aggregate.
+bazel test //packages/<crate>:<owner-test>
+bazel test //bazel/checks/nix:nix-unit-<surface>
+make test-rust
+make test-nix-unit
+make test-policy
 make check
 ```
 
-The pinned toolchain in `rust-toolchain.toml` is honored by the repository-root
-workspace. See
-[ADR 0009](docs/adr/0009-rust-toolchain-msrv-and-supply-chain.md) for
-toolchain, MSRV, and supply-chain policy.
-
-The repository-root `.cargo/config.toml` governs the product workspace. Cargo
-uses the conventional root `target/` directory by default; the broker's
-serial feature streams may set explicit execution-only sibling target
-directories, while independent fuzz and proof workspaces retain their own
-configuration.
-
-Cargo's internal locking makes concurrent worktree builds safe, but a
-very old checkout may pay one slower rebuild while incremental state is
-refreshed in the shared cache.
-
-The persistent-shell feasibility helper is a standalone excluded workspace. Run
-it explicitly when iterating on that crate:
-
-```bash
-cargo --manifest-path Cargo.toml fmt --check
-cargo --manifest-path Cargo.toml clippy -p d2b-guest-shell-runner --all-targets --features real-libshpool -- -D warnings
-cargo --manifest-path Cargo.toml test -p d2b-guest-shell-runner --features real-libshpool
-cargo deny --manifest-path Cargo.toml check --config deny.toml
-cargo xtask gen-package-policy-inputs --check
-```
-
-The fixed Bazel graph remains the broader Layer-1 gate when the changed
-surface needs it. Focused labels are preferred while iterating.
+The complete crate surface, including doctests, harness-free binaries,
+fixtures, feature variants, and policy checks, is declared by Bazel BUILD
+targets. The pinned Rust toolchain, Cargo manifests, and lockfiles remain
+rules_rs inputs; standalone crate Cargo commands may still work for local
+debugging but are not documented or required validation.
 
 #### Schema and shell-artifact drift gates
 
@@ -90,10 +66,10 @@ before committing whenever you touch the corresponding Rust types,
 
 **xtask subcommands**
 
-- `cargo xtask gen-cli-schemas`
-- `cargo xtask gen-error-codes`
-- `cargo xtask gen-cli-shell-artifacts`
-- `cargo xtask gen-daemon-api`
+- `bazel run //packages/xtask:xtask -- gen-cli-schemas`
+- `bazel run //packages/xtask:xtask -- gen-error-codes`
+- `bazel run //packages/xtask:xtask -- gen-cli-shell-artifacts`
+- `bazel run //packages/xtask:xtask -- gen-daemon-api`
 
 **Drift gates**
 
@@ -106,15 +82,11 @@ before committing whenever you touch the corresponding Rust types,
 A typical regeneration loop is:
 
 ```bash
-cargo xtask gen-cli-schemas
-cargo xtask gen-error-codes
-cargo xtask gen-cli-shell-artifacts
-cargo xtask gen-daemon-api
-bash tests/cli-json-drift.sh
-bash tests/error-codes-drift.sh
-bash tests/manpage-completion-drift.sh
-bash tests/daemon-api-drift.sh
-bash tests/cli-contract-coverage.sh
+bazel run //packages/xtask:xtask -- gen-cli-schemas
+bazel run //packages/xtask:xtask -- gen-error-codes
+bazel run //packages/xtask:xtask -- gen-cli-shell-artifacts
+bazel run //packages/xtask:xtask -- gen-daemon-api
+make test-drift
 ```
 
 ## Submitting a pull request

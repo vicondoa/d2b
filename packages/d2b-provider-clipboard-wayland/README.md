@@ -66,8 +66,7 @@ suspend or purge it. Audit size is bucketed and telemetry labels are closed.
 ## Build and test
 
 ```bash
-cargo check -p d2b-provider-clipboard-wayland
-cargo test -p d2b-provider-clipboard-wayland
+bazel test //packages/d2b-provider-clipboard-wayland:d2b_provider_clipboard_wayland_doc_test
 ```
 
 The tests cover MIME and secret-hint policy, FD safety, bounded history,

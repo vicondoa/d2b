@@ -25,7 +25,7 @@ specific wire encoding.
 ## Schema-root status
 
 The Rust models define generated JSON schema roots. They are emitted by
-`cargo xtask gen-schemas` through the
+`bazel run //packages/xtask:xtask -- gen-schemas` through the
 `D2bRealmCoreSchema` wrapper into the generated JSON companion
 in the schema reference directory.
 Regenerate that file; do not edit generated JSON by hand.

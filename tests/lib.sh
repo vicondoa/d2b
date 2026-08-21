@@ -66,7 +66,7 @@ d2b_repo_root() {
 # Why: a bare path makes Nix use the `path:` fetcher, which copies the
 # ENTIRE working tree into the store, including the multi-GiB
 # `target` cargo artifacts (measured: ~36 GB / 5+ min per cold
-# eval, re-triggered every time a cargo build churns target/). `git+file://`
+# eval, re-triggered every time a build churns target/). `git+file://`
 # copies only git-tracked files (target/ is gitignored), turning a
 # 5-minute eval into <1 s.
 #

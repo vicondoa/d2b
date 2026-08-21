@@ -49,7 +49,7 @@ bundle keeps `schemaVersion = "v2"` and uses `bundleVersion = 11`
 for provider-neutral configured launcher execution.
 Each artifact now carries a
 matching v2 markdown companion beside the committed JSON schema.
-`cargo xtask gen-schemas` regenerates the JSON files under
+`bazel run //packages/xtask:xtask -- gen-schemas` regenerates the JSON files under
 `schemas/v2/` from the Rust DTOs in `d2b-core` and
 `d2b-contracts`; keep the markdown companions in sync in the same
 commit whenever the schema changes.
@@ -60,8 +60,8 @@ The committed schema files are derived from Rust DTOs in `d2b-core`
 and `d2b-contracts`. The drift gate is:
 
 ```bash
-cargo xtask gen-schemas
-git diff --exit-code docs/reference/schemas/
+bazel run //packages/xtask:xtask -- gen-schemas
+make test-drift
 ```
 
 Any diff is a contract drift. A valid schema change updates the Rust

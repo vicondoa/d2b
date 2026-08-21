@@ -4,7 +4,7 @@
 
 Producer: `nixos-modules/manifest-bundle.nix` emits this artifact; `packages/d2b-core` parses it.
 
-Schema: [`bundle.json`](./bundle.json) (forward reference; generated with `cargo xtask gen-schemas`).
+Schema: [`bundle.json`](./bundle.json) (forward reference; generated with `bazel run //packages/xtask:xtask -- gen-schemas`).
 
 ## Fields
 

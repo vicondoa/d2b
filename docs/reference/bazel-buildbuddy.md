@@ -1,10 +1,10 @@
 # Bazel and BuildBuddy
 
 d2b uses one Bazel graph for the enforcing Layer-1 checks. Cargo manifests
-and the root `Cargo.lock` remain authoritative for Rust package membership,
-dependencies, features, and direct Cargo workflows. `rules_rs` supplies the
-Bazel-side Cargo integration; BUILD files record first-party edges and
-maintained rule exceptions only.
+and the root `Cargo.lock` remain authoritative metadata for Rust package
+membership, dependencies, and features consumed by rules_rs. BUILD files
+record first-party edges and maintained rule exceptions only; Cargo is not a
+contributor or CI gate.
 
 The normal entry point is:
 
@@ -14,10 +14,10 @@ make check
 
 ## One execution graph
 
-Bazel owns Layer-1 target selection, dependency ordering, parallelism, test
-caching, retry classification, and aggregation. Make targets are public
-compatibility aliases over fixed Bazel target sets. CI runs the same fixed
-sets with the local profile and exposes one stable required `check` result.
+Bazel owns Layer-1 dependency ordering, parallelism, test caching, retry
+classification, and aggregation. Make targets are public thin aliases over
+fixed Bazel target patterns and owner-local suites. CI runs the same fixed sets
+with the local profile and exposes one stable required `check` result.
 
 The primary aliases remain available:
 
@@ -30,7 +30,6 @@ make test-flake
 make test-nix-unit
 make test-policy
 make test-drift
-make test-runtime-ledger
 make test-fixture-contracts
 make test-unit
 make check
@@ -41,8 +40,9 @@ focused reruns. The complete aggregate is also available as
 `make bazel-check`.
 
 Do not add a second Cargo lock, exhaustive first-party source or dependency
-inventory, discovery job, or repository-owned scheduler. Add Rust files and tests in Cargo-conventional
-locations so the graph follows Cargo metadata and standard source globs.
+inventory, discovery job, or repository-owned scheduler. Add Rust files and
+tests in their owner-local Cargo-conventional locations so rules_rs metadata
+and Bazel BUILD targets remain aligned.
 
 ## Local and CI profiles
 
@@ -96,8 +96,8 @@ platform, remote policy, and credential-helper inputs listed in
 bytes:
 
 ```bash
-cargo run --quiet --locked -p xtask -- bazel-evidence security-digest
-cargo run --quiet --locked -p xtask -- bazel-evidence check-security
+bazel run //packages/xtask:xtask -- bazel-evidence security-digest
+bazel run //packages/xtask:xtask -- bazel-evidence check-security
 ```
 
 ## Redaction and failure output
@@ -128,8 +128,9 @@ fallback behavior identical to the normal graph.
 
 For an ordinary Rust change:
 
-1. Update Cargo source, tests, or manifests.
-2. Run the focused Cargo and Bazel labels.
+1. Update owner-local Rust source/tests or the Cargo metadata consumed by
+   rules_rs.
+2. Run the focused Bazel label.
 3. Run the affected public Make alias.
 
 For a dependency change, update Cargo manifests and the root lock first.

@@ -304,30 +304,6 @@ rust_test(
 )
 
 rust_test(
-    name = "runtime_ledger_test",
-    timeout = "short",
-    args = ["test_runtime_ledger::"],
-    compile_data = ["Cargo.toml"],
-    crate = ":xtask",
-    data = [
-        ":xtask",
-        "//:BUILD.bazel",
-        "//:Cargo.toml",
-        "//:flake.nix",
-        "//:rust-toolchain.toml",
-        "//bazel/checks/rust:source_hygiene_sources",
-    ],
-    env = {
-        "CARGO_BIN_EXE_xtask": "$(rootpath :xtask)",
-    },
-    env_inherit = ["D2B_REPO_ROOT", "PATH"],
-    rustc_env = {"CARGO_BIN_EXE_xtask": "$(rootpath :xtask)"},
-    tags = ["no-remote-cache"],
-    deps = ["//packages/d2b-contracts-resource:d2b_contracts_resource",
-        "//packages/d2b-contracts-zone-session:d2b_contracts_zone_session",  "//packages/d2b-contracts-provider:d2b_contracts_provider",] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
-)
-
-rust_test(
     name = "schema_reproducibility_test",
     args = ["schema_tests::"],
     compile_data = ["Cargo.toml"],

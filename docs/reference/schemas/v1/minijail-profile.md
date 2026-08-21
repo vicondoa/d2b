@@ -4,7 +4,7 @@
 
 Producer: `nixos-modules/manifest-minijail.nix` emits this artifact; `packages/d2b-core` parses it.
 
-Schema: [`minijail-profile.json`](./minijail-profile.json) (forward reference; generated with `cargo xtask gen-schemas`).
+Schema: [`minijail-profile.json`](./minijail-profile.json) (forward reference; generated with `bazel run //packages/xtask:xtask -- gen-schemas`).
 
 ## Top-level fields
 

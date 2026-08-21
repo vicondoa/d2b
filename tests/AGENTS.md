@@ -136,11 +136,11 @@ Types 2-5 (unit/integration/contract/policy-lint) are Rust and live under
 
 ## Layer-1 orchestration and Bazel authority
 
-Bazel is the sole Layer-1 scheduler. The fixed graph in `BUILD.bazel` and
-`bazel/checks/` owns target selection, dependency ordering, parallelism,
-retry classification, caching, and aggregation. Make targets and the fixed CI
-jobs are compatibility aliases over that graph; they must not grow local
-fan-out, discovery, sharding, or rollup logic.
+Bazel is the sole Layer-1 scheduler. The fixed graph in `BUILD.bazel`,
+`bazel/checks/`, and the top-level Makefile's target-pattern set owns target
+selection, dependency ordering, parallelism, retry classification, caching,
+and aggregation. Make targets and fixed CI jobs are thin aliases over that
+graph and must not grow local fan-out, discovery, sharding, or rollup logic.
 
 `tests/tools/bazel-check` is the retained execution facade. It selects the
 local, developer-remote, or protected trusted-seed profile, reads credentials
@@ -173,24 +173,22 @@ make test-flake
 make test-nix-unit
 make test-policy
 make test-drift
-make test-runtime-ledger
 make test-fixture-contracts
 make test-unit
 make check
 ```
 
-Each alias performs one direct Bazel invocation over a fixed target set. The
-individual Bazel labels remain directly runnable for focused reruns. The
-performance target is advisory and is not validation evidence when it reports
-a guarded skip.
+Each Layer-1 alias performs one direct Bazel invocation over a fixed target
+set. The individual Bazel labels remain directly runnable for focused reruns.
+The performance target is advisory and is not validation evidence when it
+reports a guarded skip.
 
 Nix-unit surfaces are fixed Bazel labels with explicit source closures.
 Each action copies only its declared runfiles into an isolated source root and
 evaluates the surface directly through the shared minimal runner flake. The
 repository flake outputs and ambient `D2B_REPO_ROOT` do not participate.
-The shared evaluator fails closed when a surface evaluates zero cases.
-Runtime-ledger census changes use the existing `make runtime-ledger-pin`
-target. Do not add a second inventory or validator.
+The shared evaluator fails closed when a surface evaluates zero cases. Do not
+add a test census, successor pin, secondary inventory, or validator.
 
 ### Retained Layer-2 and manual scripts
 
@@ -205,7 +203,8 @@ must not schedule sibling Layer-1 work.
 
 Product crates use the repository-root `Cargo.toml` and `Cargo.lock` as
 rules_rs metadata. The privileged broker and guest shell runner retain their
-explicit Cargo feature contexts, while the no-bash walker and compile-fail UI
-crates retain their separate tooling boundaries. Doctests, harness-free
-binaries, feature variants, fixtures, and policy checks must remain visible as
-direct Bazel targets.
+explicit feature contexts, while the no-bash walker and compile-fail UI crates
+retain their separate tooling boundaries. Doctests, harness-free binaries,
+feature variants, fixtures, and policy checks must remain visible as direct
+Bazel targets. Standalone Cargo remains technically usable for focused local
+debugging, but it is not a contributor or CI authority.

@@ -139,11 +139,16 @@ if [[ -z "$source_system_artifact_id" ]]; then
 fi
 
 repo_binding="$D2B_LIVE_REPO_ID=$D2B_LIVE_REPO_ROOT"
+XTASK="${D2B_XTASK_BIN:-$ROOT/bazel-bin/packages/xtask/xtask}"
+if [[ ! -x "$XTASK" ]]; then
+  refuse "Bazel xtask artifact is unavailable; build //packages/xtask:xtask first"
+  exit 78
+fi
 
 # U5 validates the strict external recovery attestation, writes only its
 # digest-addressed evidence record, and rejects candidate/evidence drift.
 run_validator "qualified recovery evidence" \
-  cargo run --quiet --locked --manifest-path "$ROOT/Cargo.toml" -p xtask -- \
+  "$XTASK" \
     delivery wave recovery-import \
     --snapshot "$D2B_LIVE_SNAPSHOT" \
     --attestation "$D2B_LIVE_RECOVERY_ATTESTATION" \
@@ -164,14 +169,14 @@ run_validator "qualified recovery evidence" \
     --state-dir "$D2B_LIVE_STATE_DIR"
 
 run_validator "candidate seal" \
-  cargo run --quiet --locked --manifest-path "$ROOT/Cargo.toml" -p xtask -- \
+  "$XTASK" \
     delivery wave seal \
     --snapshot "$D2B_LIVE_SNAPSHOT" \
     --repo "$repo_binding" \
     --state-dir "$D2B_LIVE_STATE_DIR"
 
 run_validator "current merge eligibility" \
-  cargo run --quiet --locked --manifest-path "$ROOT/Cargo.toml" -p xtask -- \
+  "$XTASK" \
     delivery wave merge-eligibility \
     --seal "$D2B_LIVE_SEAL" \
     --repo "$repo_binding" \

@@ -61,8 +61,7 @@ and closed semantic labels; summary, body, icon, and action text are excluded.
 ## Build and test
 
 ```bash
-cargo check -p d2b-provider-notification-desktop
-cargo test -p d2b-provider-notification-desktop
+bazel test //packages/d2b-provider-notification-desktop:d2b_provider_notification_desktop_doc_test
 ```
 
 The tests cover bounded DTOs, sanitization, session admission, action replay,

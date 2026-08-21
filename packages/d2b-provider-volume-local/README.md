@@ -136,8 +136,7 @@ The production Volume, store-view, and storage-contract Nix emitters live
 under `nix/`; root module paths are compatibility shims only.
 
 ```bash
-cargo test -p d2b-provider-volume-local
-cargo clippy -p d2b-provider-volume-local --all-targets
+bazel test //packages/d2b-provider-volume-local:d2b_provider_volume_local_test
 ```
 
 Host filesystem integration scenarios run through `make
