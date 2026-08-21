@@ -232,6 +232,7 @@ fn check_security(policy_path: &Path) -> Result<Value> {
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum FailureKind {
+    Warning,
     MissingCredentials,
     Authentication,
     Endpoint,
@@ -246,6 +247,7 @@ enum FailureKind {
 impl FailureKind {
     fn as_str(self) -> &'static str {
         match self {
+            Self::Warning => "warning",
             Self::MissingCredentials => "missing-credentials",
             Self::Authentication => "authentication",
             Self::Endpoint => "endpoint",
@@ -267,7 +269,7 @@ impl FailureKind {
             Self::MissingCredentials | Self::Authentication | Self::Endpoint => true,
             Self::Worker => pre_dispatch_evidence,
             Self::Transport => pre_dispatch_evidence || post_dispatch_retryable,
-            Self::Analysis | Self::Test | Self::Policy | Self::Build => false,
+            Self::Warning | Self::Analysis | Self::Test | Self::Policy | Self::Build => false,
         }
     }
 }
@@ -285,7 +287,9 @@ fn classify_failure(log: &str, explicit_dispatch_evidence: bool) -> FailureClass
     let dispatch_evidence =
         explicit_dispatch_evidence || contains_any_marker(&normalized, DISPATCH_MARKERS);
 
-    let kind = if normalized.contains("missing credential")
+    let kind = if normalized.lines().any(|line| line.starts_with("warning:")) {
+        Some(FailureKind::Warning)
+    } else if normalized.contains("missing credential")
         || normalized.contains("credential helper unavailable")
         || normalized.contains("no credential")
     {
@@ -472,7 +476,12 @@ fn redaction_hints(lower: &str) -> String {
 }
 
 fn redacted_line(lower: &str) -> String {
-    format!("[REDACTED]{}", redaction_hints(lower))
+    let warning_prefix = lower.starts_with("warning:").then_some("warning: ");
+    format!(
+        "{}[REDACTED]{}",
+        warning_prefix.unwrap_or_default(),
+        redaction_hints(lower)
+    )
 }
 
 fn redact_text(input: &str) -> String {
@@ -599,5 +608,16 @@ mod tests {
         );
         assert!(!redacted.contains("continuation-secret"));
         assert!(redacted.contains("remote execution started"));
+    }
+
+    #[test]
+    fn redaction_preserves_warning_marker_on_credential_lines() {
+        let redacted = redact_text("warning: authorization: synthetic-secret");
+        assert!(redacted.starts_with("warning:"));
+        assert!(!redacted.contains("synthetic-secret"));
+        assert_eq!(
+            classification_value(classify_failure(&redacted, false))["kind"],
+            "warning"
+        );
     }
 }

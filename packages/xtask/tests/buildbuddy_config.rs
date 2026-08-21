@@ -459,6 +459,21 @@ fn source_hygiene_fails_when_declared_shellcheck_is_missing() {
 }
 
 #[test]
+fn committed_profiles_deny_first_party_rust_warnings_and_guard_facade_logs() {
+    let bazelrc = read_text(".bazelrc");
+    assert!(
+        bazelrc.contains("--@rules_rust//rust/settings:per_crate_rustc_flag=//@-Dwarnings"),
+        "every Bazel profile must deny first-party Rust warnings at rustc"
+    );
+
+    let wrapper = read_text("tests/tools/bazel-check");
+    assert!(
+        wrapper.contains("warning:") && wrapper.contains("grep") && wrapper.contains("redact_file"),
+        "the facade must check redacted logs for warning lines"
+    );
+}
+
+#[test]
 fn redaction_failure_never_emits_captured_evidence() {
     let scratch = repo_root()
         .join(".scratch")
@@ -500,6 +515,157 @@ fn redaction_failure_never_emits_captured_evidence() {
     assert!(diagnostics.contains("evidence redaction failed"));
     assert!(!diagnostics.contains("RAW-LOG-SENTINEL"));
     assert!(!diagnostics.contains("RAW-BEP-SENTINEL"));
+    let _ = std::fs::remove_dir_all(scratch);
+}
+
+#[test]
+fn warning_after_cache_hit_fails_a_successful_local_run() {
+    let scratch = repo_root().join(".scratch").join(format!(
+        "bazel-check-warning-cache-hit-{}",
+        std::process::id()
+    ));
+    std::fs::create_dir_all(&scratch).expect("create wrapper test scratch");
+    let bazel = scratch.join("bazel");
+    write_executable(
+        &bazel,
+        "#!/usr/bin/env bash\n\
+         for arg in \"$@\"; do\n\
+           case \"$arg\" in\n\
+             --build_event_json_file=*) bep=\"${arg#*=}\" ;;\n\
+           esac\n\
+         done\n\
+         printf 'action cache hit\\nwarning: synthetic toolchain warning\\n'\n\
+         printf '{\"id\":{\"started\":{\"uuid\":\"cache-hit\"}},\"testResult\":{\"label\":\"//:test\"}}\\n' > \"$bep\"\n\
+         exit 0\n",
+    );
+
+    let output = Command::new("bash")
+        .arg(repo_root().join("tests/tools/bazel-check"))
+        .args(["--profile", "local", "--", "//:test"])
+        .env("D2B_BAZEL_BIN", &bazel)
+        .env("D2B_XTASK_BIN", env!("CARGO_BIN_EXE_xtask"))
+        .env("D2B_BAZEL_CHECK_SCRATCH", scratch.join("evidence"))
+        .output()
+        .expect("run bazel-check");
+
+    assert!(!output.status.success());
+    let diagnostics = format!(
+        "{}{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(diagnostics.contains("warning: synthetic toolchain warning"));
+    assert!(!diagnostics.contains("bazel-check: local passed"));
+    let _ = std::fs::remove_dir_all(scratch);
+}
+
+#[test]
+fn warning_blocks_typed_remote_retry() {
+    let scratch = repo_root().join(".scratch").join(format!(
+        "bazel-check-warning-remote-retry-{}",
+        std::process::id()
+    ));
+    std::fs::create_dir_all(&scratch).expect("create wrapper test scratch");
+    let bazel = scratch.join("bazel");
+    let credential = scratch.join("credential");
+    let local_retry = scratch.join("local-retry");
+    std::fs::write(&credential, "synthetic-token\n").expect("write credential");
+    write_executable(
+        &bazel,
+        &format!(
+            "#!/usr/bin/env bash\n\
+             profile=''\n\
+             for arg in \"$@\"; do\n\
+               case \"$arg\" in\n\
+                 --config=*) profile=\"${{arg#*=}}\" ;;\n\
+               esac\n\
+             done\n\
+             if [ \"$profile\" = remote ]; then\n\
+               printf 'warning: synthetic remote toolchain warning\\nremote authentication failed\\n'\n\
+               exit 1\n\
+             fi\n\
+             printf retry > '{}'\n\
+             printf '{{\"id\":{{\"started\":{{\"uuid\":\"local-retry\"}}}},\"testResult\":{{\"label\":\"//:test\"}}}}\\n' \n\
+             exit 0\n",
+            local_retry.display()
+        ),
+    );
+
+    let output = Command::new("bash")
+        .arg(repo_root().join("tests/tools/bazel-check"))
+        .args(["--profile", "remote", "--", "//:test"])
+        .env("D2B_BAZEL_BIN", &bazel)
+        .env("D2B_XTASK_BIN", env!("CARGO_BIN_EXE_xtask"))
+        .env("D2B_BUILDBUDDY_CREDENTIAL_FILE", &credential)
+        .env("D2B_BAZEL_UNTRUSTED", "0")
+        .env("GITHUB_ACTIONS", "false")
+        .env("D2B_BAZEL_CHECK_SCRATCH", scratch.join("evidence"))
+        .output()
+        .expect("run bazel-check");
+
+    assert!(!output.status.success());
+    assert!(
+        !local_retry.exists(),
+        "a warning must not be converted into a successful local retry"
+    );
+    let diagnostics = format!(
+        "{}{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(!diagnostics.contains("local fallback passed"));
+    let _ = std::fs::remove_dir_all(scratch);
+}
+
+#[test]
+fn warning_in_local_fallback_fails_after_typed_retry() {
+    let scratch = repo_root().join(".scratch").join(format!(
+        "bazel-check-warning-local-fallback-{}",
+        std::process::id()
+    ));
+    std::fs::create_dir_all(&scratch).expect("create wrapper test scratch");
+    let bazel = scratch.join("bazel");
+    let credential = scratch.join("credential");
+    write_executable(
+        &bazel,
+        "#!/usr/bin/env bash\n\
+         profile=''\n\
+         for arg in \"$@\"; do\n\
+           case \"$arg\" in\n\
+             --build_event_json_file=*) bep=\"${arg#*=}\" ;;\n\
+             --config=*) profile=\"${arg#*=}\" ;;\n\
+           esac\n\
+         done\n\
+         if [ \"$profile\" = remote ]; then\n\
+           printf 'remote authentication failed\\n'\n\
+           exit 1\n\
+         fi\n\
+         printf 'warning: synthetic local fallback warning\\n'\n\
+         printf '{\"id\":{\"started\":{\"uuid\":\"local-fallback\"}},\"testResult\":{\"label\":\"//:test\"}}\\n' > \"$bep\"\n\
+         exit 0\n",
+    );
+    std::fs::write(&credential, "synthetic-token\n").expect("write credential");
+
+    let output = Command::new("bash")
+        .arg(repo_root().join("tests/tools/bazel-check"))
+        .args(["--profile", "remote", "--", "//:test"])
+        .env("D2B_BAZEL_BIN", &bazel)
+        .env("D2B_XTASK_BIN", env!("CARGO_BIN_EXE_xtask"))
+        .env("D2B_BUILDBUDDY_CREDENTIAL_FILE", &credential)
+        .env("D2B_BAZEL_UNTRUSTED", "0")
+        .env("GITHUB_ACTIONS", "false")
+        .env("D2B_BAZEL_CHECK_SCRATCH", scratch.join("evidence"))
+        .output()
+        .expect("run bazel-check");
+
+    assert!(!output.status.success());
+    let diagnostics = format!(
+        "{}{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(diagnostics.contains("warning: synthetic local fallback warning"));
+    assert!(!diagnostics.contains("local fallback passed"));
     let _ = std::fs::remove_dir_all(scratch);
 }
 

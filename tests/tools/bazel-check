@@ -22,6 +22,33 @@ redact_file() {
   xtask bazel-evidence redact-log --input "$path" --output "$path" >/dev/null
 }
 
+warning_line_present() {
+  local path="$1"
+  [ -f "$path" ] && grep -qi '^warning:' "$path"
+}
+
+emit_captured_metadata() {
+  local path="$1"
+  local label="$2"
+  if [ -f "$path" ]; then
+    printf 'bazel-check: %s retained but suppressed (%s)\n' "$label" "$path" >&2
+  else
+    printf '%s\n' "bazel-check: ${label} is missing (${path})" >&2
+  fi
+}
+
+emit_captured_output() {
+  local path="$1"
+  local label="$2"
+  if [ -s "$path" ]; then
+    printf '%s\n' "----- ${label} (${path}) -----" >&2
+    cat "$path" >&2
+    printf '%s\n' "----- end ${label} -----" >&2
+  else
+    printf '%s\n' "bazel-check: ${label} is empty or missing (${path})" >&2
+  fi
+}
+
 credential_file() {
   printf '%s\n' "${D2B_BUILDBUDDY_CREDENTIAL_FILE:-${HOME:-}/.config/d2b/buildbuddy-api-key}"
 }
@@ -232,13 +259,27 @@ fi
 
 mkdir -p "$SCRATCH"
 if [ -z "${D2B_XTASK_BIN:-}" ] || [ ! -x "${D2B_XTASK_BIN}" ]; then
-  "$bazel_bin" build --config=local //packages/xtask:xtask >/dev/null
+  bootstrap_log="$SCRATCH/bootstrap.log"
+  if ! "$bazel_bin" build --config=local //packages/xtask:xtask >"$bootstrap_log" 2>&1; then
+    echo "bazel-check: xtask bootstrap failed" >&2
+    exit 1
+  fi
   xtask_source="$ROOT/bazel-bin/packages/xtask/xtask"
   xtask_stable="$SCRATCH/xtask"
   cp -L -- "$xtask_source" "$xtask_stable.tmp"
   chmod 0555 "$xtask_stable.tmp"
   mv -f -- "$xtask_stable.tmp" "$xtask_stable"
   export D2B_XTASK_BIN="$xtask_stable"
+  if ! redact_file "$bootstrap_log"; then
+    echo "bazel-check: bootstrap evidence redaction failed; refusing to publish the run" >&2
+    emit_captured_metadata "$bootstrap_log" "Bazel xtask bootstrap log"
+    exit "$REDACTION_FAILURE_STATUS"
+  fi
+  if warning_line_present "$bootstrap_log"; then
+    echo "bazel-check: bootstrap warning line found after log redaction; failing closed" >&2
+    emit_captured_output "$bootstrap_log" "Bazel xtask bootstrap log"
+    exit 1
+  fi
 fi
 
 if [ "$PROFILE" = trusted-seed ]; then
@@ -320,29 +361,11 @@ run_bazel() {
     emit_captured_metadata "$bep_path" "bazel $profile BEP"
     return "$REDACTION_FAILURE_STATUS"
   fi
+  if warning_line_present "$log_path"; then
+    echo "bazel-check: warning line found after log redaction; failing closed" >&2
+    status=1
+  fi
   return "$status"
-}
-
-emit_captured_metadata() {
-  local path="$1"
-  local label="$2"
-  if [ -f "$path" ]; then
-    printf 'bazel-check: %s retained but suppressed (%s)\n' "$label" "$path" >&2
-  else
-    printf '%s\n' "bazel-check: ${label} is missing (${path})" >&2
-  fi
-}
-
-emit_captured_output() {
-  local path="$1"
-  local label="$2"
-  if [ -s "$path" ]; then
-    printf '%s\n' "----- ${label} (${path}) -----" >&2
-    cat "$path" >&2
-    printf '%s\n' "----- end ${label} -----" >&2
-  else
-    printf '%s\n' "bazel-check: ${label} is empty or missing (${path})" >&2
-  fi
 }
 
 initial_status=0

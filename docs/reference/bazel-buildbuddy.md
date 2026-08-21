@@ -167,6 +167,11 @@ bazel run //packages/xtask:xtask -- bazel-evidence security-digest
 bazel run //packages/xtask:xtask -- bazel-evidence check-security
 ```
 
+All first-party Rust crates are compiled with
+`--@rules_rust//rust/settings:per_crate_rustc_flag=//@-Dwarnings`. The
+per-crate setting applies to workspace labels without changing external
+dependency or exec-configuration policy.
+
 ## Redaction and failure output
 
 The facade writes redacted logs and BEP output below
@@ -174,6 +179,10 @@ The facade writes redacted logs and BEP output below
 authorization values, header authentication fields, and configured sentinel
 values before evidence is published while preserving safe failure and dispatch
 hints for classification. The same redaction applies to local fallback output.
+After redaction, every retained profile rejects a log line beginning with
+`warning:`. This check applies to local, remote, trusted-seed, and local
+fallback runs, including otherwise-successful cache hits. Warning failures are
+not eligible for the typed local retry.
 
 `bazel-evidence classify-failure` is the typed fallback classifier. It
 distinguishes positively pre-dispatch infrastructure failures, plus a remote
