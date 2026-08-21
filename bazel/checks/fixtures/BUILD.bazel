@@ -17,6 +17,7 @@ _FIXTURE_SOURCES = [
     "//:templates_workspace_sources",
     "//:tests_root_sources",
     "//:rust-toolchain.toml",
+    "//tests/fixtures:fixture_sources",
 ]
 
 nix_fixture(
