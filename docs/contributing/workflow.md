@@ -250,7 +250,7 @@ sessions. Its focused operating detail is
   worktrees comes from `sccache` (`$SCCACHE_DIR`, default
   `~/.cache/d2b-sccache`), wired by the `[build] rustc-wrapper` lines in
   `.cargo/config.toml` and the sibling-workspace configs under
-  `packages/d2b-priv-broker/`, `packages/d2b-guest-shell-runner/`, and
+  `packages/d2b-broker/`, `packages/d2b-guest-shell-runner/`, and
   `packages/d2b-core/fuzz/`. A shared target dir is deliberately
   avoided: cargo's target-dir lock is workspace-wide, so two worktrees
   building concurrently at different SHAs would serialize pessimistically

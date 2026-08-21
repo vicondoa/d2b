@@ -1172,11 +1172,11 @@ impl TypedError {
                     .to_owned()
             }
             Self::InternalBrokerUnavailable { .. } => {
-                "start d2b-priv-broker or disable audit requests until the broker is available"
+                "start d2b-broker or disable audit requests until the broker is available"
                     .to_owned()
             }
             Self::InternalBrokerTimeout { .. } => {
-                "check that d2b-priv-broker is responsive (not backlogged or half-open) and retry; the round trip exceeded the caller's deadline"
+                "check that d2b-broker is responsive (not backlogged or half-open) and retry; the round trip exceeded the caller's deadline"
                     .to_owned()
             }
             Self::InternalConfig { .. } => {

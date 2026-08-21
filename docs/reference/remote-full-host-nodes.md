@@ -23,7 +23,7 @@ substrate capabilities see [host substrate providers](./host-substrate-providers
 The architectural rationale is in
 [ADR 0032](../adr/0032-d2b-v2-constellation-control-plane.md).
 For provider-managed sandboxes - nodes whose lifecycle is owned by a
-cloud provider API rather than by a locally managed `d2b-priv-broker` -
+cloud provider API rather than by a locally managed `d2b-broker` -
 see [provider-managed sandboxes](./provider-managed-sandboxes.md).
 
 ---
@@ -31,7 +31,7 @@ see [provider-managed sandboxes](./provider-managed-sandboxes.md).
 ## What a remote full-host node is
 
 A remote full-host node is a host running its own `d2bd`,
-`d2b-priv-broker`, and guest-control stack that a gateway guest
+`d2b-broker`, and guest-control stack that a gateway guest
 can reach through a transport peer session. From the gateway's point
 of view, the remote host appears as a named `NodeId` in a realm with
 a declared capability set. All lifecycle, broker, and guest-control
@@ -337,12 +337,12 @@ does not implement fallbacks or workarounds.
 
 | Surface | Boundary |
 | --- | --- |
-| Raw broker operation forwarding | The gateway never forwards raw `d2b-priv-broker` frames. All broker work stays on the remote host. |
+| Raw broker operation forwarding | The gateway never forwards raw `d2b-broker` frames. All broker work stays on the remote host. |
 | Guest-control frame tunneling | Guest-control (vsock) frames are not proxied through the gateway. Persistent shell routes as [ADR 0039](../adr/0039-constellation-persistent-shell-routing.md) semantic `Shell*` operations; the remote `d2bd` opens its own guest-control sessions near the guest. |
 | Pidfd / fd forwarding | File descriptors, pidfds, and socket handles are never sent across the transport session. |
 | Host path and endpoint exposure | Host-local paths, socket addresses, runner argv, and endpoint strings are not visible in the operation envelope or in gateway audit records. |
 | Provider/relay credential forwarding | Transport and realm credentials remain in the layer that owns them and are never placed in operation payloads. |
-| Remote host install / host prepare | Registration assumes the remote host is already running a compatible `d2bd`/`d2b-priv-broker` stack. Host installation and host preparation are out of scope for this adapter. |
+| Remote host install / host prepare | Registration assumes the remote host is already running a compatible `d2bd`/`d2b-broker` stack. Host installation and host preparation are out of scope for this adapter. |
 | Production WAN transports | The preview is validated with mock and loopback peer clients only. Azure Relay over a live WAN, QUIC, and SSH are not yet connected. See [transport support policy](./transport-support-policy.md). |
 | Network mutation | The adapter does not configure routing, firewall rules, or overlays on the remote host or on the gateway network. |
 | SSH fallback | There is no implicit SSH fallback when the peer session transport is unavailable. Callers receive a typed `GatewayUnavailable` / transport-layer refusal. |

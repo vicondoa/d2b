@@ -176,7 +176,7 @@ let
   });
 
   brokerCargoArtifacts = craneLib.buildDepsOnly (commonBuildArgs // {
-    pname = "d2b-priv-broker";
+    pname = "d2b-broker";
     version = "0.0.0-bootstrap";
     dummySrc = dummySource;
     sourceRoot = "d2b-provider-rust-src";
@@ -184,8 +184,8 @@ let
     cargoLock = brokerCargoLock;
     cargoVendorDir = brokerCargoVendorDir;
     inherit outputHashes;
-    cargoCheckExtraArgs = "--package d2b-priv-broker --no-default-features";
-    cargoBuildExtraArgs = "--package d2b-priv-broker --no-default-features";
+    cargoCheckExtraArgs = "--package d2b-broker --no-default-features";
+    cargoBuildExtraArgs = "--package d2b-broker --no-default-features";
   });
 
   installBinaries = binaries:
@@ -214,7 +214,7 @@ let
     });
 
   broker = craneLib.buildPackage (commonBuildArgs // {
-    pname = "d2b-priv-broker";
+    pname = "d2b-broker";
     version = "0.0.0-bootstrap";
     cargoArtifacts = brokerCargoArtifacts;
     inherit outputHashes;
@@ -224,7 +224,7 @@ let
     cargoLock = brokerCargoLock;
     cargoVendorDir = brokerCargoVendorDir;
     cargoBuildExtraArgs = "--no-default-features";
-    installPhaseCommand = installBinaries [ "d2b-priv-broker" ];
+    installPhaseCommand = installBinaries [ "d2b-broker" ];
   });
 in
 {

@@ -6,7 +6,7 @@
   "planned_steps": [
     {
       "step": 1,
-      "what": "place systemd units at /etc/systemd/system/d2bd.service + d2b-priv-broker.socket"
+      "what": "place systemd units at /etc/systemd/system/d2bd.service + d2b-broker.socket"
     },
     {
       "step": 2,

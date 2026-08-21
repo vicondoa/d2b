@@ -60,7 +60,7 @@
       default = true;
       description = ''
         Use release prebuilt host binaries for `d2b`, `d2bd`,
-        `d2b-priv-broker`, and the activation helper when they are
+        `d2b-broker`, and the activation helper when they are
         available. Set to `false` on
         development hosts that intentionally validate the checked-out flake's
         Rust sources before a release artifact exists.
@@ -106,12 +106,12 @@
 
           **Reserved.** The broker accepts
           `--audit-retention-days <N>` and the runtime prune-on-rotate
-          loop is shipping in `packages/d2b-priv-broker/src/audit.rs`,
+          loop is shipping in `packages/d2b-broker/src/audit.rs`,
           but the NixOS module does not yet spawn the broker
           (`d2bd` does so at runtime in a future wiring, and
           this option's value will then thread through
-          `daemon-config.json` → `d2bd` → `d2b-priv-broker
-          serve --audit-retention-days <value>`). Until that wiring
+          `daemon-config.json` → `d2bd` → `d2b-broker
+          host --audit-retention-days <value>`). Until that wiring
           lands, overriding this option is a no-op at runtime - the
           broker defaults to 14 days regardless.
 

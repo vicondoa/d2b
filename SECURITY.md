@@ -76,7 +76,7 @@ See [the unsafe-local provider contract](docs/reference/unsafe-local-provider.md
 ### Portability roadmap
 
 The portability work introduces a non-root `d2bd` daemon plus a
-minimal root-owned `d2b-priv-broker` (see ADRs 0001-0008 under
+minimal root-owned `d2b-broker` (see ADRs 0001-0008 under
 [`docs/adr/`](docs/adr/)). The new trust boundaries the daemon work
 will introduce are:
 
@@ -164,7 +164,7 @@ The new trust-boundary statements are:
   NetworkManager unmanaged config, and `modprobe` state on behalf
   of `d2bd`, gated entirely by the closed broker enum plus the
   trusted bundle. Every operation has a typed handler under
-  `packages/d2b-priv-broker/src/ops/` and re-derives its
+  `packages/d2b-broker/src/ops/` and re-derives its
   operating paths from the bundle, never from caller input.
 - Compromise of `d2bd` cannot escalate to arbitrary host
   mutation beyond the declared broker enum variants. Unknown

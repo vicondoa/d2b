@@ -11,7 +11,7 @@
 # - e.g. proving a static d2b binary runs on stock Ubuntu, matching CI.
 # It is deliberately NOT used to boot systemd and exercise daemon/socket
 # activation: that is covered far more cheaply by the native
-# `packages/d2b-priv-broker/tests/socket_activation.rs` test (real
+# `packages/d2b-broker/tests/socket_activation.rs` test (real
 # LISTEN_FDS fd-3 handoff + Hello round-trip, ~0.4 s, unprivileged) plus the
 # nix-unit unit-shape cases. A faithful systemd-boot container was measured at
 # ~1.4 G to ship (the d2b bundle drags the full per-VM runtime substrate,

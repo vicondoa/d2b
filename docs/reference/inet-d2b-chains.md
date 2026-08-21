@@ -122,9 +122,9 @@ kebab-case discriminant and the typed inner detail.
   (`build_inet_d2b_chains`)
 - Detector: `d2b_host::nftables::detect_firewall_manager`
 - Matrix: `d2b_host::nftables::evaluate_coexistence_policy`
-- Broker op: `packages/d2b-priv-broker/src/ops/nft.rs`
+- Broker op: `packages/d2b-broker/src/ops/nft.rs`
   (`apply_nftables`)
-- USBIP carve-out: `packages/d2b-priv-broker/src/ops/usbip_firewall.rs`
+- USBIP carve-out: `packages/d2b-broker/src/ops/usbip_firewall.rs`
   (`bind_firewall_rule`)
 - Enforcing coverage: `d2b-host::nftables::tests` and
-  `d2b-priv-broker::ops::{nft,usbip_firewall}::tests` in `test-rust`
+  `d2b-broker::ops::{nft,usbip_firewall}::tests` in `test-rust`

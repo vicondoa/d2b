@@ -103,7 +103,7 @@ d2bd (host daemon) - lease serializer
   │  queues, timeouts, cancellation, audit log
   ▼
 broker op UsbSecurityKeyOpenDevice → SCM_RIGHTS fd
-  │  d2b-priv-broker resolves stable selector → opens /dev/hidrawN
+  │  d2b-broker resolves stable selector → opens /dev/hidrawN
   ▼
 physical YubiKey (host hidraw node)
   │  CTAP HID reports, user touch, responses
@@ -150,7 +150,7 @@ physical key:
 ### Privileged device access
 
 Opening `/dev/hidrawN` for a FIDO-class device requires elevated privilege. The
-broker dispatches a `UsbSecurityKeyOpenDevice` operation to `d2b-priv-broker`,
+broker dispatches a `UsbSecurityKeyOpenDevice` operation to `d2b-broker`,
 which:
 
 1. Resolves the configured stable selector to a `/dev/hidrawN` path.
@@ -159,7 +159,7 @@ which:
 3. Opens the path and returns the file descriptor to `d2bd` via `SCM_RIGHTS`.
 4. Logs the operation to the d2b audit log.
 
-`d2b-priv-broker` does not hold the file descriptor after the transfer; it is
+`d2b-broker` does not hold the file descriptor after the transfer; it is
 owned exclusively by `d2bd` for the lifetime of the active ceremony.
 
 ---

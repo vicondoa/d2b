@@ -16,6 +16,17 @@ _SURFACES = {
             "nixos-modules/processes-json.nix",
         ],
     },
+    "broker-profiles": {
+        "cases": ["guest-broker", "prebuilt-broker"],
+        "files": [
+            "nix/prebuilt.json",
+            "nix/prebuilt.nix",
+            "nixos-modules/guest-broker.nix",
+            "nixos-modules/host-broker.nix",
+            "nixos-modules/prebuilt-packages.nix",
+        ],
+        "modules": [],
+    },
     "guest-control": {
         "cases": [],
         "files": [

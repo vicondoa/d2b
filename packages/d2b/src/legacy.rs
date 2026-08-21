@@ -4001,7 +4001,7 @@ pub(super) fn daemon_down_envelope(verb: &str) -> HostErrorEnvelope {
         1,
         "Daemon connectivity at /run/d2b/public.sock.",
         "d2bd is unreachable; the daemon is the only operator surface for mutating verbs.",
-        "Start d2bd (systemctl start d2bd d2b-priv-broker.socket) and re-run the same command. See docs/how-to/migrate-d2b-v1-0-to-v1-1.md#recovery-broker-bring-up-troubleshooting for the full bring-up checklist.",
+        "Start d2bd (systemctl start d2bd d2b-broker.socket) and re-run the same command. See docs/how-to/migrate-d2b-v1-0-to-v1-1.md#recovery-broker-bring-up-troubleshooting for the full bring-up checklist.",
         "docs/reference/error-codes.md#daemon-down",
     )
 }
@@ -4444,7 +4444,7 @@ pub(super) fn build_storage_migration_plan(manifest: &ManifestDocument) -> Stora
         preflight_requirements: vec![
             "all d2b VMs stopped",
             "d2bd.service stopped",
-            "d2b-priv-broker.service stopped",
+            "d2b-broker.service stopped",
             "operator accepts planned downtime for the one-time storage layout cutover",
             "net VMs stopped; guest routing, TAP connectivity, and dependent bridge traffic will be interrupted",
         ],
@@ -4670,7 +4670,7 @@ pub(super) fn cmd_host_install(
         "command": "host install",
         "mode": "dry-run",
         "planned_steps": [
-            { "step": 1, "what": "place systemd units at /etc/systemd/system/d2bd.service + d2b-priv-broker.socket" },
+            { "step": 1, "what": "place systemd units at /etc/systemd/system/d2bd.service + d2b-broker.socket" },
             { "step": 2, "what": "write daemon-config.json to /etc/d2b/daemon-config.json with paths matching the daemon's compiled-in defaults" },
             { "step": 3, "what": "bind /run/d2b/public.sock + /run/d2b/priv.sock with socket ACLs (launcher / admin groups)" },
             { "step": 4, "what": if args.enable && args.start { "systemctl enable --now d2bd.service" } else if args.enable { "systemctl enable d2bd.service" } else if args.no_start { "do NOT enable; operator starts manually" } else { "neither --enable nor --start specified: leave service inactive" } },
@@ -10257,7 +10257,7 @@ pub(super) fn redact_broker_error_for_cli(
             format!("{op_name} failed: trusted bundle intent missing"),
             "The daemon reached the broker, but the trusted bundle did not contain the requested intent row.".to_owned(),
             format!(
-                "{op_name} references a bundle intent that the broker did not find. Admin: ask `journalctl -u d2b-priv-broker` for the intent id."
+                "{op_name} references a bundle intent that the broker did not find. Admin: ask `journalctl -u d2b-broker` for the intent id."
             ),
         ),
         "Broker.StoreViewFilesystemMismatch" => (
@@ -10278,7 +10278,7 @@ pub(super) fn redact_broker_error_for_cli(
             format!("{op_name} failed at the broker live handler"),
             "The daemon reached the broker and the privileged live handler started, but the underlying host mutation failed.".to_owned(),
             format!(
-                "{op_name} failed at the broker live handler. Admin: inspect `journalctl -u d2b-priv-broker` for the underlying syscall/exit code."
+                "{op_name} failed at the broker live handler. Admin: inspect `journalctl -u d2b-broker` for the underlying syscall/exit code."
             ),
         ),
         "Broker.CoexistenceRefused" => (
@@ -10292,7 +10292,7 @@ pub(super) fn redact_broker_error_for_cli(
             format!("{op_name} failed: bundle nft script parse error"),
             "The daemon reached the broker, but the nftables batch embedded in the trusted bundle could not be parsed.".to_owned(),
             format!(
-                "{op_name} failed: bundle nft script could not be parsed. Admin: inspect `journalctl -u d2b-priv-broker` for the parse error."
+                "{op_name} failed: bundle nft script could not be parsed. Admin: inspect `journalctl -u d2b-broker` for the parse error."
             ),
         ),
         "Broker.CarveoutOrderingViolation" => (
@@ -14312,7 +14312,7 @@ mod host_install_dispatch_tests {
                 "outcome": "broker-error",
                 "targetWave": "legacy",
                 "summary": "RunHostInstall failed",
-                "remediation": "RunHostInstall failed at the broker live handler. Admin: inspect `journalctl -u d2b-priv-broker` for the underlying syscall/exit code.",
+                "remediation": "RunHostInstall failed at the broker live handler. Admin: inspect `journalctl -u d2b-broker` for the underlying syscall/exit code.",
             }),
         );
 

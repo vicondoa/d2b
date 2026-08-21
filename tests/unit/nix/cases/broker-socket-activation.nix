@@ -1,10 +1,10 @@
 # nix-unit cases migrated from tests/broker-socket-activation-eval.sh.
 #
-# Asserts host-broker.nix wires d2b-priv-broker for socket activation:
+# Asserts host-broker.nix wires d2b-broker for socket activation:
 #
 #   (A) ExecStart does NOT pass --socket-path (with SD_LISTEN_FDS the broker
 #       MUST adopt the inherited fd, not self-bind the path).
-#   (B) systemd.sockets.d2b-priv-broker exists (socket-activated).
+#   (B) systemd.sockets.d2b-broker exists (socket-activated).
 #   (C) socketConfig.FileDescriptorName is "priv.sock" (matched by
 #       adopt_listen_fd() against LISTEN_FDNAMES).
 #   (D) socketConfig.ListenSequentialPacket is /run/d2b/priv.sock.
@@ -41,7 +41,7 @@ let
   };
 
   cfg = (mkEval [ minimal ]).config;
-  sockCfg = cfg.systemd.sockets.d2b-priv-broker.socketConfig or { };
+  sockCfg = cfg.systemd.sockets.d2b-broker.socketConfig or { };
 in
 {
   # (A) No uncommented --socket-path in host-broker.nix.
@@ -57,7 +57,7 @@ in
 
   # (B) Socket unit exists (broker is socket-activated).
   "broker-socket-activation/has-socket" = {
-    expr = cfg.systemd.sockets ? d2b-priv-broker;
+    expr = cfg.systemd.sockets ? d2b-broker;
     expected = true;
   };
   # (C) FileDescriptorName matches the name adopt_listen_fd() validates.
@@ -73,13 +73,13 @@ in
 
   "broker-socket-activation/socket-after-tmpfiles" = {
     expr = builtins.elem "systemd-tmpfiles-setup.service"
-      (cfg.systemd.sockets.d2b-priv-broker.after or [ ]);
+      (cfg.systemd.sockets.d2b-broker.after or [ ]);
     expected = true;
   };
 
   "broker-socket-activation/socket-requires-tmpfiles" = {
     expr = builtins.elem "systemd-tmpfiles-setup.service"
-      (cfg.systemd.sockets.d2b-priv-broker.requires or [ ]);
+      (cfg.systemd.sockets.d2b-broker.requires or [ ]);
     expected = true;
   };
 }

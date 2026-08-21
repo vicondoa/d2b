@@ -836,8 +836,8 @@ PY
     machine.succeed(f"kill {unrelated_pid}")
 
     machine.succeed("systemctl show d2bd.service >/dev/null")
-    machine.succeed("systemctl show d2b-priv-broker.service >/dev/null")
-    machine.succeed("systemctl show d2b-priv-broker.socket >/dev/null")
+    machine.succeed("systemctl show d2b-broker.service >/dev/null")
+    machine.succeed("systemctl show d2b-broker.socket >/dev/null")
     machine.succeed(
         "! systemctl list-units --all --no-pager --no-legend "
         "| grep -E 'd2b-unsafe-local-(helper|shell)'"

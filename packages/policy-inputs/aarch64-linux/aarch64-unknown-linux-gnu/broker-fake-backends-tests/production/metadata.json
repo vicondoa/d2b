@@ -4,7 +4,7 @@
   "features": [
     "fake-backends"
   ],
-  "lockSha256": "2bc389b67dbd18cd8182764df9ef503e6cbd8aea013e9ffb3b5c90c451b04f35",
+  "lockSha256": "5f934c9ef42729023c20b7dd5bcf6e1bc188c145f12fcd7a4ac2cf2a51c8345a",
   "policyPackageCount": 165,
   "policyPackageIds": [
     "adler2@2.0.1#registry+https://github.com/rust-lang/crates.io-index",
@@ -42,6 +42,7 @@
     "crossbeam@0.8.4#registry+https://github.com/rust-lang/crates.io-index",
     "crypto-common@0.1.7#registry+https://github.com/rust-lang/crates.io-index",
     "d2b-audit@0.0.0-bootstrap#path",
+    "d2b-broker@0.0.0-bootstrap#path",
     "d2b-contracts-broker@0.0.0-bootstrap#path",
     "d2b-contracts-control@0.0.0-bootstrap#path",
     "d2b-contracts-provider@0.0.0-bootstrap#path",
@@ -50,7 +51,6 @@
     "d2b-contracts@0.0.0-bootstrap#path",
     "d2b-core@0.0.0-bootstrap#path",
     "d2b-host@0.0.0-bootstrap#path",
-    "d2b-priv-broker@0.0.0-bootstrap#path",
     "d2b-realm-core@0.0.0-bootstrap#path",
     "d2b-telemetry@0.0.0-bootstrap#path",
     "digest@0.10.7#registry+https://github.com/rust-lang/crates.io-index",
@@ -176,7 +176,7 @@
   "productionPackageCount": 134,
   "resolveNodeCount": 470,
   "roots": [
-    "d2b-priv-broker"
+    "d2b-broker"
   ],
   "schemaVersion": 1,
   "sourceAuthority": "Cargo.lock",

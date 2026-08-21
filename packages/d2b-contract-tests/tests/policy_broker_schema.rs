@@ -107,7 +107,7 @@ fn read_lossy(path: &Path) -> String {
 // "The broker delegates bundle validation to d2b-core only."
 //
 // The committed gate runs four `grep -R` checks over
-// `packages/d2b-priv-broker/src`:
+// `packages/d2b-broker/src`:
 //   (1) the source dir exists;
 //   (2) `d2b_core::manifest` is imported (delegation target present);
 //   (3) `validate_bundle` is called (the single validation entry point);
@@ -120,7 +120,7 @@ fn read_lossy(path: &Path) -> String {
 // ---------------------------------------------------------------------------
 #[test]
 fn broker_delegates_bundle_validation_to_core() {
-    let src_rel = "packages/d2b-priv-broker/src";
+    let src_rel = "packages/d2b-broker/src";
     let src_dir = repo_root().join(src_rel);
     assert!(
         src_dir.is_dir(),

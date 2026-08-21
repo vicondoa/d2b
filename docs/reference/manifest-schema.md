@@ -14,7 +14,7 @@ ships it as:
 /run/current-system/sw/share/d2b/vms.json
 ```
 
-The Rust CLI, `d2bd`, and `d2b-priv-broker` consume this public
+The Rust CLI, `d2bd`, and `d2b-broker` consume this public
 inventory. Private bundle artifacts live beside it and are documented in
 [`manifest-bundle.md`](./manifest-bundle.md).
 

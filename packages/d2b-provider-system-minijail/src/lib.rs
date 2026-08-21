@@ -10,7 +10,7 @@
 //! kill or a reuse.
 //!
 //! Adapted from the existing broker `SpawnRunner` plan and pidfd path
-//! (`packages/d2b-priv-broker/src/ops/spawn_runner.rs` and its
+//! (`packages/d2b-broker/src/ops/spawn_runner.rs` and its
 //! `clone3_pidfd_or_fork_fallback`) and from the daemon supervisor's pidfd
 //! table (`packages/d2bd/src/supervisor/pidfd_table.rs`), whose
 //! `(pid, start_time_ticks)` recheck is exactly the pid-reuse guard modelled

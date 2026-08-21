@@ -515,7 +515,7 @@ let
         # deviceBinds is intentionally empty: /dev/dri/renderD128 is
         # pre-opened by the broker parent and passed to the user-NS child
         # via fd inheritance (RENDER_NODE_INHERITED_FD = 10 protocol
-        # constant in d2b-priv-broker/src/sys.rs). No bind-mount.
+        # constant in d2b-broker/src/sys.rs). No bind-mount.
         deviceBinds = [ ];
         # No real host compositor bind-mount: the GPU runner connects to
         # the per-VM proxy socket at /run/d2b-wlproxy/<vm>/wayland-0.

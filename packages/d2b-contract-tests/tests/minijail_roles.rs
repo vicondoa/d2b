@@ -517,7 +517,7 @@ fn qemu_media_activation_acl_source_splits_kvm_from_vhost_net() {
 
 #[test]
 fn broker_spawn_sets_no_new_privs_before_seccomp() {
-    let src = read_repo_file("packages/d2b-priv-broker/src/sys.rs");
+    let src = read_repo_file("packages/d2b-broker/src/sys.rs");
     let no_new_privs = src
         .find("libc::PR_SET_NO_NEW_PRIVS")
         .expect("broker spawn child must call PR_SET_NO_NEW_PRIVS");

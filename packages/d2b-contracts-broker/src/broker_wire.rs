@@ -744,6 +744,15 @@ impl BrokerRequest {
         }
     }
 
+    /// Return whether this request is admitted by a fixed broker profile.
+    ///
+    /// The profile is selected by the broker process at startup. It is not
+    /// carried on the wire, so a request cannot switch or widen the active
+    /// authority domain.
+    pub fn allowed_by_profile(&self, profile: BrokerProfile) -> bool {
+        profile.allows_request(self)
+    }
+
     /// Stable category label for the audit's "opaque_target_id"
     /// column. Mirrors `BootstrapCall::opaque_target_id` semantics:
     /// classify the kind of target without leaking caller-supplied
@@ -1241,10 +1250,7 @@ impl BrokerRequest {
             | Self::ResumeBroker => return None,
         };
         Some((
-            d2b_contracts_resource::v3::canonical_digest(
-                "d2b:broker-zone:v2",
-                scope.as_bytes(),
-            ),
+            d2b_contracts_resource::v3::canonical_digest("d2b:broker-zone:v2", scope.as_bytes()),
             d2b_contracts_resource::v3::canonical_digest(
                 "d2b:broker-operation:v2",
                 operation.as_bytes(),
@@ -1270,6 +1276,194 @@ impl BrokerRequest {
         )
     }
 }
+
+/// Fixed privileged-broker authority profiles.
+///
+/// Host and Guest use the same wire and executable, but each process starts
+/// with one closed operation catalog. The catalog is deliberately kept next
+/// to the wire operation names so adding a request requires an explicit
+/// profile decision.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum BrokerProfile {
+    /// Host and realm authorities may use the complete host catalog.
+    Host,
+    /// Guest authorities may use only local process effects and read-only
+    /// broker lifecycle operations.
+    Guest,
+}
+
+impl BrokerProfile {
+    /// Stable process-start profile label.
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Host => "host",
+            Self::Guest => "guest",
+        }
+    }
+
+    /// Closed Host operation catalog.
+    pub const fn host_operations() -> &'static [&'static str] {
+        HOST_OPERATION_CATALOG
+    }
+
+    /// Closed Guest operation catalog.
+    pub const fn guest_operations() -> &'static [&'static str] {
+        GUEST_OPERATION_CATALOG
+    }
+
+    /// Return the operation catalog for this profile.
+    pub const fn operations(self) -> &'static [&'static str] {
+        match self {
+            Self::Host => Self::host_operations(),
+            Self::Guest => Self::guest_operations(),
+        }
+    }
+
+    /// Check the stable operation name against the profile catalog.
+    pub fn allows_operation(self, operation: &str) -> bool {
+        self.operations().contains(&operation)
+    }
+
+    /// Check both the closed catalog and profile-specific target constraints.
+    pub fn allows_request(self, request: &BrokerRequest) -> bool {
+        if !self.allows_operation(request.op_name()) {
+            return false;
+        }
+        match self {
+            Self::Host => true,
+            Self::Guest => match request {
+                BrokerRequest::SpawnRunner(request) => {
+                    request
+                        .execution_ref
+                        .as_ref()
+                        .is_some_and(|target| target.resource_type().as_str() == "Guest")
+                        && GUEST_LOCAL_RUNNER_ROLES.contains(&request.role)
+                }
+                _ => true,
+            },
+        }
+    }
+}
+
+/// Every request currently defined by the broker wire. Host mode is closed
+/// over this list rather than using an open-ended default.
+pub const HOST_OPERATION_CATALOG: &[&str] = &[
+    "ApplyHostGenerationHandoff",
+    "LaunchCutoverRunner",
+    "CutoverAudit",
+    "CutoverEffect",
+    "ApplyNftables",
+    "ApplyNftablesProjection",
+    "ApplyNmUnmanaged",
+    "ApplyRoute",
+    "ApplySysctl",
+    "BindUnixSocket",
+    "CreateOrReconcileUsersGroups",
+    "CreateBridge",
+    "DeleteBridge",
+    "CreatePersistentTap",
+    "DeletePersistentTap",
+    "CreateTapFd",
+    "DelegateCgroupV2",
+    "ExportBrokerAudit",
+    "Hello",
+    "GuestControlSign",
+    "InjectSecretById",
+    "LaunchMinijailChild",
+    "ModprobeIfAllowed",
+    "OpenCgroupDir",
+    "OpenDevice",
+    "OpenFuse",
+    "OpenHidrawSecurityKey",
+    "OpenKvm",
+    "QemuMediaEnroll",
+    "QemuMediaRefreshRegistry",
+    "QemuMediaBoot",
+    "QemuMediaSystemPowerdown",
+    "QemuMediaQueryStatus",
+    "QemuMediaQuit",
+    "QemuMediaAttach",
+    "QemuMediaDetach",
+    "OpenPidfd",
+    "OpenPeerPidfdFromAcceptedSocket",
+    "ObserveRunner",
+    "PipeWireAudio",
+    "StartSystemdUnit",
+    "CheckSystemdUserManager",
+    "ObserveSystemdUnit",
+    "OpenSystemdUnitPidfd",
+    "StopSystemdUnit",
+    "OpenZoneStore",
+    "OpenVhostNet",
+    "PauseBroker",
+    "PollChildReaped",
+    "PrepareRuntimeDir",
+    "PrepareStateDir",
+    "MigrateLegacySwtpmState",
+    "ReconcileStorageScope",
+    "ValidateLockSpec",
+    "PrepareStoreView",
+    "StoreSync",
+    "StoreVerify",
+    "ReadSecretById",
+    "ResumeBroker",
+    "RotateSecretById",
+    "RunHostInstall",
+    "RunMigrate",
+    "RunActivation",
+    "RunGc",
+    "RunKeysRotate",
+    "RunHostKeyTrust",
+    "RunRotateKnownHost",
+    "SetBridgePortFlags",
+    "SetSocketAcl",
+    "SetupMountNamespace",
+    "CgroupKill",
+    "SignalRunner",
+    "DeregisterRunnerPidfd",
+    "SpawnRunner",
+    "UpdateHostsFile",
+    "UsbipBind",
+    "UsbipBindFirewallRule",
+    "UsbipProxyReconcile",
+    "UsbipUnbind",
+    "UsbipExplicitBind",
+    "UsbipExplicitFirewallRule",
+    "ResourceActivationAudit",
+    "ValidateBundle",
+    "SeedDnsmasqLease",
+    "BindMountFromHardlinkFarm",
+    "OwnershipMatrixCheck",
+    "SshHostKeyPreflight",
+    "DiskInit",
+    "SecurityKeyOpenDevice",
+    "SecurityKeyApplyUdevRules",
+];
+
+/// Guest-local process and broker lifecycle effects. Host networking,
+/// devices, storage, realm, cutover, and allocator operations are intentionally
+/// absent from this catalog.
+pub const GUEST_OPERATION_CATALOG: &[&str] = &[
+    "Hello",
+    "ExportBrokerAudit",
+    "ValidateBundle",
+    "OpenPidfd",
+    "OpenPeerPidfdFromAcceptedSocket",
+    "ObserveRunner",
+    "StartSystemdUnit",
+    "CheckSystemdUserManager",
+    "ObserveSystemdUnit",
+    "OpenSystemdUnitPidfd",
+    "StopSystemdUnit",
+    "PollChildReaped",
+    "PrepareRuntimeDir",
+    "PrepareStateDir",
+    "SetupMountNamespace",
+    "CgroupKill",
+    "SignalRunner",
+    "DeregisterRunnerPidfd",
+    "SpawnRunner",
+];
 
 /// Broker-side installer driver. The broker resolves the bundle's
 /// `installer:host` intent row (synthesised by
@@ -3115,6 +3309,14 @@ impl RunnerRole {
     }
 }
 
+/// Closed set of runner roles that a Guest broker may spawn locally.
+///
+/// The current runner vocabulary contains only host-side VM, device, relay,
+/// observability, and compositor helpers. Guest Process resources use the
+/// dedicated local effect classes instead, so this set is intentionally empty
+/// until a runner with an explicitly Guest-local contract is added.
+pub const GUEST_LOCAL_RUNNER_ROLES: &[RunnerRole] = &[];
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct SpawnRunnerRequest {
@@ -4377,6 +4579,78 @@ mod tests {
                 );
             }
             other => panic!("expected SpawnRunner, got {other:?}"),
+        }
+    }
+
+    fn spawn_runner_for_profile(role: RunnerRole, execution_ref: &str) -> BrokerRequest {
+        BrokerRequest::SpawnRunner(SpawnRunnerRequest {
+            vm_id: VmId::new("guest-vm"),
+            role_id: RoleId::new(role.as_str()),
+            resource_ref: None,
+            resource_uid: None,
+            bundle_content_identity: None,
+            provider_identity: None,
+            template_identity: None,
+            generation: None,
+            sandbox_plan: None,
+            role,
+            bundle_runner_intent_ref: BundleOpId::new("runner:test"),
+            execution_ref: Some(ResourceRef::parse(execution_ref).expect("valid execution ref")),
+            execution_domain: None,
+            user_ref: None,
+            runtime_allocations: Vec::new(),
+            tracing_span_id: None,
+            workload_identity: None,
+        })
+    }
+
+    #[test]
+    fn profile_spawn_runner_role_matrix_is_closed() {
+        // No current RunnerRole is Guest-local. Guest Process resources use
+        // the dedicated local effect classes instead; a future runner role
+        // must be added to this allowlist deliberately.
+        let guest_local_roles: &[RunnerRole] = &[];
+        let all_roles = [
+            RunnerRole::CloudHypervisor,
+            RunnerRole::QemuMedia,
+            RunnerRole::Virtiofsd,
+            RunnerRole::Swtpm,
+            RunnerRole::SwtpmFlush,
+            RunnerRole::Gpu,
+            RunnerRole::Audio,
+            RunnerRole::Video,
+            RunnerRole::VsockRelay,
+            RunnerRole::Usbip,
+            RunnerRole::OtelHostBridge,
+            RunnerRole::WaylandProxy,
+        ];
+
+        for role in all_roles {
+            let expected_guest = guest_local_roles.contains(&role);
+            assert_eq!(
+                spawn_runner_for_profile(role, "Guest/guest-vm")
+                    .allowed_by_profile(BrokerProfile::Guest),
+                expected_guest,
+                "Guest profile role {} must match the closed Guest-local allowlist",
+                role.as_str()
+            );
+            assert!(
+                !spawn_runner_for_profile(role, "Host/host")
+                    .allowed_by_profile(BrokerProfile::Guest),
+                "Guest profile must reject Host execution ref for {}",
+                role.as_str()
+            );
+            assert!(
+                spawn_runner_for_profile(role, "Guest/guest-vm")
+                    .allowed_by_profile(BrokerProfile::Host),
+                "Host profile behavior changed for Guest execution ref {}",
+                role.as_str()
+            );
+            assert!(
+                spawn_runner_for_profile(role, "Host/host").allowed_by_profile(BrokerProfile::Host),
+                "Host profile behavior changed for Host execution ref {}",
+                role.as_str()
+            );
         }
     }
 

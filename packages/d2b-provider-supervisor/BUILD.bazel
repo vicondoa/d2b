@@ -11,8 +11,8 @@ rust_library(
     name = "d2b_provider_supervisor",
     srcs = glob(["src/**/*.rs"], allow_empty = True),
     compile_data = [
-        "//packages/d2b-priv-broker:src/live_handlers.rs",  # keep
-        "//packages/d2b-priv-broker:src/runtime.rs",  # keep
+        "//packages/d2b-broker:src/live_handlers.rs",  # keep
+        "//packages/d2b-broker:src/runtime.rs",  # keep
         "Cargo.toml",
     ],
     visibility = ["//visibility:public"],
@@ -32,8 +32,8 @@ rust_library(
     name = "d2b_provider_supervisor_test_support",
     srcs = glob(["src/**/*.rs"], allow_empty = True),
     compile_data = [
-        "//packages/d2b-priv-broker:src/live_handlers.rs",  # keep
-        "//packages/d2b-priv-broker:src/runtime.rs",  # keep
+        "//packages/d2b-broker:src/live_handlers.rs",  # keep
+        "//packages/d2b-broker:src/runtime.rs",  # keep
         "Cargo.toml",
     ],
     crate_name = "d2b_provider_supervisor",

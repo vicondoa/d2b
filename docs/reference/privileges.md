@@ -1,7 +1,7 @@
 # Reference: broker privileged operation matrix
 
 > Diataxis: reference. Stable catalog of every closed-enum operation
-> the privileged broker (`d2b-priv-broker`) is allowed to perform
+> the privileged broker (`d2b-broker`) is allowed to perform
 > on behalf of the unprivileged `d2bd` daemon. The wire-level
 > source of truth is `d2b_contracts::BrokerRequest`; this page is the
 > human-readable index keyed by operation name.
@@ -25,6 +25,17 @@ Every row carries three policy flags:
 
 Unknown variants and unknown fields in security-sensitive artifacts
 are denied (`defaultForUnknown: deny`).
+
+## Mode-bound broker instances
+
+Host and Guest authorities use the same `d2b-broker` artifact, selected at
+process start as `d2b-broker host` or `d2b-broker guest`. The active profile is
+not carried on the request wire and cannot be changed by a caller.
+
+Each authority instance has its own socket, caller UID/GID, state root, audit
+root, and authority label. Guest mode exposes only the closed local-process
+effect catalog; Host-only networking, device, storage, realm, cutover, and
+allocator operations are refused before dispatch.
 
 > **Authz-class vs system-group naming note.** The **Allowed groups**
 > column below uses the broker's **authz class** identifiers
@@ -413,7 +424,7 @@ mountPolicy.bindMounts = [
 This section documents broker ops used by the daemon-side host-prep
 DAG and the daemon-side preflights that run beside them. The current
 daemon-only surface is `d2bd.service` +
-`d2b-priv-broker.{service,socket}` + per-VM runners spawned via
+`d2b-broker.{service,socket}` + per-VM runners spawned via
 broker `SpawnRunner`.
 
 `StoreSync` is live. `SshKeygenProbe` remains documented as future
@@ -569,7 +580,7 @@ This section is the canonical legacy-systemd obituary index. The
 canonical surface is exactly:
 
 - `d2bd.service` (unprivileged daemon)
-- `d2b-priv-broker.service` + `d2b-priv-broker.socket`
+- `d2b-broker.service` + `d2b-broker.socket`
   (socket-activated privileged broker)
 - per-VM / per-role runners spawned via broker `SpawnRunner` (no
   systemd unit per runner; lifecycle is daemon-supervised via pidfd)
@@ -616,7 +627,7 @@ is advisory until the fixture-contract lane is enabled and promoted.
 | Per-VM `desktopItems` generation (cli.nix `d2b-launch-<vm>`) | Daemon-native launcher module emitting `.desktop` wrappers calling `d2b guest start <name> --apply`. | not emitted |
 
 The root-visible `systemd.services.*` declarations the framework owns
-under `nixos-modules/` are `d2bd`, `d2b-priv-broker`,
+under `nixos-modules/` are `d2bd`, `d2b-broker`,
 `d2b-load-store-db` (boot-time tmpfiles helper), and
 `d2b-load-host-keys` (boot-time helper). The observability backend
 declares native services inside the auto-declared `sys-obs` VM, not
@@ -759,7 +770,7 @@ capabilities. `CAP_SYS_PTRACE` is explicitly excluded.
 
 ### Socket-activation contract
 
-`d2b-priv-broker.socket` is socket-activated. systemd creates,
+`d2b-broker.socket` is socket-activated. systemd creates,
 binds, listens on, and applies the ACL to the socket before the broker
 process starts. The broker adopts the fd via `SD_LISTEN_FDS`.
 
@@ -773,7 +784,7 @@ process starts. The broker adopts the fd via `SD_LISTEN_FDS`.
 - The broker calls `sd_notify(READY=1)` only after the listener fd is
   adopted and the audit log is open - the systemd `notify` service type
   guarantees daemon readiness.
-- `d2bd.service` carries `Wants=d2b-priv-broker.socket` (not
+- `d2bd.service` carries `Wants=d2b-broker.socket` (not
   `Requires=`) so the daemon can serve even when the broker has idled.
 - The socket is the **broker private socket** at
   `/run/d2b/priv.sock`, owned `root:d2bd` with mode
@@ -889,4 +900,4 @@ opened operation-owned directory.
 
 ## Related ADRs
 
-- [ADR 0015: daemon-only clean break](../adr/0015-daemon-only-clean-break.md) - the architectural decision record that defines the daemon-only root surface of `d2bd` + `d2b-priv-broker`.
+- [ADR 0015: daemon-only clean break](../adr/0015-daemon-only-clean-break.md) - the architectural decision record that defines the daemon-only root surface of `d2bd` + `d2b-broker`.

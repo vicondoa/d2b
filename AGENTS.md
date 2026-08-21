@@ -6,7 +6,7 @@ configuration, start with [`README.md`](README.md).
 
 d2b is an opinionated NixOS desktop microVM framework for a single trusted
 Wayland host and untrusted, isolated workloads. Its daemon-only control plane
-is `d2bd` plus `d2b-priv-broker`; its declarative modules own networking,
+is `d2bd` plus `d2b-broker`; its declarative modules own networking,
 per-VM store views, mediated devices, and versioned bundle contracts.
 Product direction is in [`STRATEGY.md`](./STRATEGY.md); the threat model is
 in [`docs/explanation/design.md`](./docs/explanation/design.md). Binding
@@ -202,7 +202,7 @@ Read the relevant section before changing any of these:
 ## Daemon-only end-state (P6 onward)
 
 d2b declares exactly three root-visible units: `d2bd.service`,
-`d2b-priv-broker.socket`, and `d2b-priv-broker.service`. The binding decision
+`d2b-broker.socket`, and `d2b-broker.service`. The binding decision
 is [ADR 0015](./docs/adr/0015-daemon-only-clean-break.md).
 
 - `d2bd` supervises every per-VM DAG. The broker dispatches audited host

@@ -145,7 +145,7 @@ in
       # /dev/disk/by-id/virtio-rootfs.  Mount it at the overlay path
       # so the upperdir/workdir live on a real filesystem (ext4 - the
       # broker's DiskInit op runs mkfs.ext4 when creating the image;
-      # see packages/d2b-priv-broker/src/ops/disk_init.rs).
+      # see packages/d2b-broker/src/ops/disk_init.rs).
       # Without this mount the overlay upper/work live on the rootfs
       # tmpfs and are wiped on every reboot, which defeats the
       # writableStoreOverlay design.

@@ -265,9 +265,9 @@ fn no_bash_exec_fixture_coverage() {
 #[test]
 fn broker_never_shells_out_to_vm_switch_to_configuration() {
     let files = [
-        "packages/d2b-priv-broker/src/live_handlers.rs",
-        "packages/d2b-priv-broker/src/runtime.rs",
-        "packages/d2b-priv-broker/src/ops/exec_reconcile.rs",
+        "packages/d2b-broker/src/live_handlers.rs",
+        "packages/d2b-broker/src/runtime.rs",
+        "packages/d2b-broker/src/ops/exec_reconcile.rs",
     ];
     for rel in files {
         let content = read_repo_file(rel);
@@ -429,7 +429,7 @@ fn host_prep_dag_d2b_host_reexport() {
 #[test]
 fn host_prep_dag_broker_wire_scaffolds() {
     let wire_rel = "packages/d2b-contracts-broker/src/broker_wire.rs";
-    let runtime_rel = "packages/d2b-priv-broker/src/runtime.rs";
+    let runtime_rel = "packages/d2b-broker/src/runtime.rs";
     assert!(
         repo_path_exists(wire_rel),
         "host-prep-dag-eval: missing {wire_rel}"
@@ -697,5 +697,56 @@ fn retired_state_policy_rejects_a_new_reader_marker() {
     assert_eq!(
         violations,
         vec!["packages/d2b/src/provider.rs: LegacyContext::from_env".to_owned()]
+    );
+}
+
+#[test]
+fn broker_profiles_bind_before_dispatch_and_share_one_wire() {
+    let wire = read_repo_file("packages/d2b-contracts-broker/src/broker_wire.rs");
+    let runtime = read_repo_file("packages/d2b-broker/src/runtime.rs");
+    let guest = read_repo_file("nixos-modules/guest-broker.nix");
+    let host = read_repo_file("nixos-modules/host-broker.nix");
+
+    for marker in [
+        "pub enum BrokerProfile",
+        "HOST_OPERATION_CATALOG",
+        "GUEST_OPERATION_CATALOG",
+        "allowed_by_profile",
+    ] {
+        assert!(
+            wire.contains(marker),
+            "broker wire missing profile marker {marker}"
+        );
+    }
+    for marker in [
+        "peer_matches_instance",
+        "ProfileOperationRefused",
+        "--authority-id",
+    ] {
+        assert!(
+            runtime.contains(marker),
+            "broker runtime missing profile boundary marker {marker}"
+        );
+    }
+    let peer_auth = runtime
+        .find("let (peer_uid, peer_gid, peer_pid) = peer_credentials")
+        .expect("peer credentials lookup");
+    let decode = runtime
+        .find("let (envelope, request_fds) = match recv_json_frame_with_fds")
+        .expect("request decode");
+    assert!(
+        peer_auth < decode,
+        "broker must authenticate the kernel peer before decoding the request"
+    );
+    assert!(
+        guest.contains("brokerSourcePackage = d2bHostTools.broker;")
+            && host.contains("brokerSourcePackage = d2bHostTools.broker.overrideAttrs"),
+        "Host and Guest source packages must originate from d2bHostTools.broker"
+    );
+    assert!(
+        guest.contains("/run/d2b/guest-broker.sock")
+            && guest.contains("/var/lib/d2b/guest-broker")
+            && guest.contains("/var/lib/d2b/guest-audit"),
+        "Guest broker must have separate socket, state, and audit roots"
     );
 }

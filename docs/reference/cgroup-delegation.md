@@ -52,7 +52,7 @@ split into two categories:
 The host systemd posture is part of that contract:
 `d2b.slice` is delegated by systemd with the `cpu`, `memory`,
 `pids`, `io`, and `cpuset` controllers, and
-`d2b-priv-broker.service` runs inside that slice with
+`d2b-broker.service` runs inside that slice with
 `Delegate=true` and `KillMode=process`. Broker restarts therefore stop
 only the broker process; runner teardown stays on the audited
 pidfd/`CgroupKill` path instead of a service-wide systemd kill.
@@ -158,7 +158,7 @@ cpuset enable is the only one with a preceding inheritance step.
 ## Fd ownership table
 
 The daemon owns one `Arc<OwnedFd>` per registered pidfd in
-[`d2b_priv_broker` →
+[`d2b_broker` →
 `d2bd_runtime::supervisor::pidfd::PidfdTable`](../../packages/d2bd-runtime/src/supervisor/pidfd.rs).
 
 | Layer | What it holds | Lifetime |
@@ -195,7 +195,7 @@ path-safety contract:
   never from caller input.
 
 The canary matrices in `packages/d2b-host/src/cgroup.rs` and
-`packages/d2b-priv-broker/src/ops/cgroup.rs` exercise the refusal paths. Both
+`packages/d2b-broker/src/ops/cgroup.rs` exercise the refusal paths. Both
 are included in `test-rust`.
 
 ## Audit records

@@ -35,7 +35,7 @@ use tracing::{debug, info};
 // Hidraw device handle
 // ---------------------------------------------------------------------------
 
-/// Wrapper around the hidraw fd handed off by `d2b-priv-broker` via
+/// Wrapper around the hidraw fd handed off by `d2b-broker` via
 /// `SCM_RIGHTS`.
 ///
 /// Built from an [`OwnedFd`] via the safe `std::fs::File: From<OwnedFd>`

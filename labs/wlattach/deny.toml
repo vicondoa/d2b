@@ -1,5 +1,5 @@
 # Standalone supply-chain config, wired into the per-manifest `cargo deny` loop
-# in tests/test-rust.sh alongside d2b-priv-broker and d2b-guest-shell-runner.
+# in tests/test-rust.sh alongside d2b-broker and d2b-guest-shell-runner.
 [advisories]
 version = 2
 yanked = "deny"

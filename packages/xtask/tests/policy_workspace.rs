@@ -17,7 +17,7 @@ const RELEASE_BINARY_SELECTORS: &[(&str, &str, &str)] = &[
         "Cargo.toml",
     ),
     ("d2b-host", "d2b-activation-helper", "Cargo.toml"),
-    ("d2b-priv-broker", "d2b-priv-broker", "Cargo.toml"),
+    ("d2b-broker", "d2b-broker", "Cargo.toml"),
 ];
 fn repo_root() -> PathBuf {
     let mut candidates = Vec::new();
@@ -304,8 +304,8 @@ fn release_workflow_keeps_exact_locked_workspace_selectors() {
         ),
         (
             workflow.replace(
-                "--manifest-path Cargo.toml \\\n            --package d2b-priv-broker",
-                "--manifest-path packages/d2b-priv-broker/Cargo.toml \\\n            --package d2b-priv-broker",
+                "--manifest-path Cargo.toml \\\n            --package d2b-broker",
+                "--manifest-path packages/d2b-broker/Cargo.toml \\\n            --package d2b-broker",
             ),
             "broker manifest selector",
         ),

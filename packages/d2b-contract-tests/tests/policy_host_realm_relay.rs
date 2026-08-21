@@ -78,7 +78,7 @@ fn host_cli_and_host_sources_do_not_construct_realm_relay() {
 fn host_daemon_broker_and_activation_do_not_store_realm_credentials() {
     let checked = git_listed_files(&[
         "packages/d2bd/src",
-        "packages/d2b-priv-broker/src",
+        "packages/d2b-broker/src",
         "nixos-modules",
     ]);
     let allowlisted = BTreeSet::from([

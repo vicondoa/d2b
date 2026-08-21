@@ -43,7 +43,7 @@ fn any_line_matches(content: &str, pattern: &str) -> bool {
 // Two halves, ported verbatim from the bash gate:
 //   * Positive invariants - the rewrite must surface the daemon-only end-state
 //     section explicitly, cross-reference ADR 0015, and mention d2bd /
-//     d2b-priv-broker.socket / SpawnRunner.
+//     d2b-broker.socket / SpawnRunner.
 //   * Negative invariants - a per-line scan: any line matching a forbidden
 //     legacy-as-live pattern is a violation UNLESS the same line also carries an
 //     explicit historical / retired marker (matched case-insensitively).
@@ -71,8 +71,8 @@ fn agents_md_reflects_daemon_only_end_state() {
         "AGENTS.md does not mention d2bd"
     );
     assert!(
-        any_line_matches(&agents, r"d2b-priv-broker\.socket"),
-        "AGENTS.md does not mention d2b-priv-broker.socket (socket-activation contract)"
+        any_line_matches(&agents, r"d2b-broker\.socket"),
+        "AGENTS.md does not mention d2b-broker.socket (socket-activation contract)"
     );
     assert!(
         any_line_matches(&agents, r"SpawnRunner"),
@@ -631,7 +631,7 @@ fn strategy_is_concise_product_direction_without_operational_policy() {
         "Declarative contract",
         "Current direction",
         "d2bd",
-        "d2b-priv-broker",
+        "d2b-broker",
         "microVM",
     ] {
         assert!(

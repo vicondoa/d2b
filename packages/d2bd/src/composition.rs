@@ -16257,7 +16257,7 @@ fn vm_start_runner_exited_response(
          If this is the swtpm (per-VM TPM) runner, the TPM state must not be wiped: \
          clearing /var/lib/d2b/vms/{vm}/swtpm looks like device tampering to your \
          identity provider and forces re-enrollment. Admin: inspect \
-         `journalctl -u d2bd` and `journalctl -u d2b-priv-broker` for the \
+         `journalctl -u d2bd` and `journalctl -u d2b-broker` for the \
          swtpm exit detail before retrying `d2b vm up {vm}`."
     );
     broker_failure_response("vm start", summary, remediation, None)

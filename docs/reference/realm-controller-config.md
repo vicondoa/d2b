@@ -30,7 +30,7 @@ The current invariants are:
 | --- | --- |
 | `metadataOnly` | The file is descriptive metadata, not a runtime activation command. |
 | `noSystemdUnitsMaterialized` | Legacy double-negative kept for the v2 schema: `true` means every controller row is metadata-only with no emitted systemd unit/socket; `false` means at least one host-local realm materializes daemon/broker units or sockets. |
-| `preservesGlobalDaemonBehavior` | Existing `d2bd.service`, `d2b-priv-broker.socket`, and `d2b-priv-broker.service` behavior is unchanged. |
+| `preservesGlobalDaemonBehavior` | Existing `d2bd.service`, `d2b-broker.socket`, and `d2b-broker.service` behavior is unchanged. |
 | `preservesDirectUnixSocketSemantics` | Future realm clients are expected to authenticate to the owning realm socket directly, not through a host byte proxy. |
 
 ## Deterministic names

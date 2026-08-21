@@ -487,7 +487,7 @@ pkgs.testers.runNixOSTest {
     start_all()
     machine.wait_for_unit("nftables.service")
     machine.succeed("nft list table inet d2b")
-    machine.wait_for_unit("d2b-priv-broker.socket")
+    machine.wait_for_unit("d2b-broker.socket")
     machine.wait_for_unit("d2bd.service")
     machine.wait_for_file("/run/d2b/public.sock")
     machine.succeed("runuser -u alice -- d2b auth status --json >/run/d2b-auth-before.json")
@@ -752,8 +752,8 @@ pkgs.testers.runNixOSTest {
     )
     required = {
         "d2bd.service",
-        "d2b-priv-broker.socket",
-        "d2b-priv-broker.service",
+        "d2b-broker.socket",
+        "d2b-broker.service",
     }
     assert declared == required, (
         f"unexpected framework acceptance census: {declared}"

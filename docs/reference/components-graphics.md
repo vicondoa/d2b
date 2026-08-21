@@ -23,7 +23,7 @@ When `graphics.crossDomainTrusted = true` and
 the guest socket, while the host-side `d2b-wayland-proxy` runs as a
 broker-spawned `wayland-proxy` role and mediates access to the real host
 compositor. `d2bd` supervises the daemon-owned process DAG and asks
-`d2b-priv-broker` to spawn the wayland proxy, GPU sidecar
+`d2b-broker` to spawn the wayland proxy, GPU sidecar
 (`crosvm device gpu`), and cloud-hypervisor runner as pidfd-tracked
 runners. The GPU sidecar runs as the dedicated per-VM
 `d2b-<vm>-gpu` system user, not as the operator's Wayland user.

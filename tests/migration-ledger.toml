@@ -238,7 +238,7 @@ group = "A"
 make_target = "test-rust"
 tier = "ci-l1"
 status = "retired"      # legacy | porting | ported | retired
-successor_ids = ["vmChecks.<system>.privilege-oracle (tests/host-integration/privilege-oracle.nix - hermetic runNixOSTest asserting the live d2b-priv-broker /proc posture: bounded CapBnd, empty CapAmb, seccomp filter active, d2b.slice cgroup placement, derived from the rendered systemd unit)"]
+successor_ids = ["vmChecks.<system>.privilege-oracle (tests/host-integration/privilege-oracle.nix - hermetic runNixOSTest asserting the live d2b-broker /proc posture: bounded CapBnd, empty CapAmb, seccomp filter active, d2b.slice cgroup placement, derived from the rendered systemd unit)"]
 exercised_today = "skip"
 
 [[script]]
@@ -274,7 +274,7 @@ group = "A"
 make_target = "test-rust"
 tier = "ci-l1"
 status = "retired"      # legacy | porting | ported | retired
-successor_ids = ["flake.checks.<system>.nix-unit (tests/unit/nix/cases/d2bd-startup-smoke.nix - 17 cases: daemon/broker tmpfiles + systemd socket/service surface + evidence-record shape)", "packages/d2bd/tests/daemon_socket_acl.rs::daemon_socket_acl::real_current_peer_in_configured_classifier_is_accepted (spawns CARGO_BIN_EXE_d2bd over AF_UNIX, waits for public.sock, and asserts Hello -> helloOk)", "packages/d2bd/tests/daemon_version_file.rs::daemon_version_file::startup_writes_version_file_next_to_public_socket (spawns CARGO_BIN_EXE_d2bd over AF_UNIX and asserts the startup version file fields)", "packages/d2bd/tests/bundle_tampered_envelope.rs::daemon_vm_start_returns_bundle_tampered_envelope (spawns CARGO_BIN_EXE_d2bd over AF_UNIX and asserts vmStart returns kind=bundle-tampered for a tampered bundle.json)", "tests/golden/pinned/d2bd-startup-smoke.txt + tests/golden/pinned/daemon-socket-acl.txt (fail-closed native-test presence pins)", "packages/d2b-priv-broker/tests/socket_activation.rs::broker_adopts_socket_activated_fd_and_serves_hello (real LISTEN_FDS fd-3 socket-activation handoff + Hello round-trip; covers the live .socket -> .service activation path natively, replacing the dropped systemd-boot container - see tests/integration/containers/README.md)"]
+successor_ids = ["flake.checks.<system>.nix-unit (tests/unit/nix/cases/d2bd-startup-smoke.nix - 17 cases: daemon/broker tmpfiles + systemd socket/service surface + evidence-record shape)", "packages/d2bd/tests/daemon_socket_acl.rs::daemon_socket_acl::real_current_peer_in_configured_classifier_is_accepted (spawns CARGO_BIN_EXE_d2bd over AF_UNIX, waits for public.sock, and asserts Hello -> helloOk)", "packages/d2bd/tests/daemon_version_file.rs::daemon_version_file::startup_writes_version_file_next_to_public_socket (spawns CARGO_BIN_EXE_d2bd over AF_UNIX and asserts the startup version file fields)", "packages/d2bd/tests/bundle_tampered_envelope.rs::daemon_vm_start_returns_bundle_tampered_envelope (spawns CARGO_BIN_EXE_d2bd over AF_UNIX and asserts vmStart returns kind=bundle-tampered for a tampered bundle.json)", "tests/golden/pinned/d2bd-startup-smoke.txt + tests/golden/pinned/daemon-socket-acl.txt (fail-closed native-test presence pins)", "packages/d2b-broker/tests/socket_activation.rs::broker_adopts_socket_activated_fd_and_serves_hello (real LISTEN_FDS fd-3 socket-activation handoff + Hello round-trip; covers the live .socket -> .service activation path natively, replacing the dropped systemd-boot container - see tests/integration/containers/README.md)"]
 exercised_today = "manual"
 
 [[script]]
@@ -472,7 +472,7 @@ group = "A"
 make_target = "test-rust"
 tier = "ci-l1"
 status = "retired"      # legacy | porting | ported | retired
-successor_ids = ["broker-workspace cargo test --workspace --features layer1-bootstrap (d2b-priv-broker broker_export_audit::export_audit_requires_admin_and_exports_op_audit_records) - already gated in tests/tools/rust-workspace-checks.sh", "tests/golden/pinned/broker-export-audit.txt + tests/tools/assert-pinned-tests.sh (fail-closed presence pin across the broker workspace layer1-bootstrap list)"]
+successor_ids = ["broker-workspace cargo test --workspace --features layer1-bootstrap (d2b-broker broker_export_audit::export_audit_requires_admin_and_exports_op_audit_records) - already gated in tests/tools/rust-workspace-checks.sh", "tests/golden/pinned/broker-export-audit.txt + tests/tools/assert-pinned-tests.sh (fail-closed presence pin across the broker workspace layer1-bootstrap list)"]
 exercised_today = "yes"
 
 [[script]]
@@ -481,7 +481,7 @@ group = "A"
 make_target = "test-rust"
 tier = "ci-l1"
 status = "retired"      # legacy | porting | ported | retired
-successor_ids = ["broker-workspace cargo test --workspace --features layer1-bootstrap (d2b-priv-broker broker_socket_acl::socket_acl_rejects_non_d2bd_peers_and_accepts_daemon) - already gated in tests/tools/rust-workspace-checks.sh", "tests/golden/pinned/broker-socket-acl.txt + tests/tools/assert-pinned-tests.sh (fail-closed presence pin across the broker workspace layer1-bootstrap list)"]
+successor_ids = ["broker-workspace cargo test --workspace --features layer1-bootstrap (d2b-broker broker_socket_acl::socket_acl_rejects_non_d2bd_peers_and_accepts_daemon) - already gated in tests/tools/rust-workspace-checks.sh", "tests/golden/pinned/broker-socket-acl.txt + tests/tools/assert-pinned-tests.sh (fail-closed presence pin across the broker workspace layer1-bootstrap list)"]
 exercised_today = "yes"
 
 [[script]]
@@ -544,7 +544,7 @@ group = "A"
 make_target = "test-rust"
 tier = "ci-l1"
 status = "retired"      # legacy | porting | ported | retired
-successor_ids = ["cargo test --workspace (d2b-host nftables::tests::{usbip_carveout_inserted_before_generic,comment_marker_prefix_on_every_managed_rule,fake_backend_refuses_carveout_after_generic}) - already gated in tests/tools/rust-workspace-checks.sh", "broker-workspace cargo test --workspace [+ --features layer1-bootstrap] (d2b-priv-broker ops::usbip_firewall::tests::{bind_firewall_rule_produces_audit_with_busid_and_hash,carveout_ordering_invariant_via_op,w6_ops_refused_with_unknown_operation_audit}) - already gated in tests/tools/rust-workspace-checks.sh", "tests/golden/pinned/usbip-firewall-skeleton.txt + tests/tools/assert-pinned-tests.sh (fail-closed presence pin across both workspaces)", "retired script's UsbipBind/UsbipUnbind/UsbipProxyReconcile static grep is covered by ops::usbip_firewall::tests::w6_ops_refused_with_unknown_operation_audit, which enumerates those variants and asserts unknown-operation refusal audit payloads"]
+successor_ids = ["cargo test --workspace (d2b-host nftables::tests::{usbip_carveout_inserted_before_generic,comment_marker_prefix_on_every_managed_rule,fake_backend_refuses_carveout_after_generic}) - already gated in tests/tools/rust-workspace-checks.sh", "broker-workspace cargo test --workspace [+ --features layer1-bootstrap] (d2b-broker ops::usbip_firewall::tests::{bind_firewall_rule_produces_audit_with_busid_and_hash,carveout_ordering_invariant_via_op,w6_ops_refused_with_unknown_operation_audit}) - already gated in tests/tools/rust-workspace-checks.sh", "tests/golden/pinned/usbip-firewall-skeleton.txt + tests/tools/assert-pinned-tests.sh (fail-closed presence pin across both workspaces)", "retired script's UsbipBind/UsbipUnbind/UsbipProxyReconcile static grep is covered by ops::usbip_firewall::tests::w6_ops_refused_with_unknown_operation_audit, which enumerates those variants and asserts unknown-operation refusal audit payloads"]
 exercised_today = "yes"
 
 [[script]]
@@ -562,7 +562,7 @@ group = "A"
 make_target = "test-rust"
 tier = "ci-l1"
 status = "retired"      # legacy | porting | ported | retired
-successor_ids = ["packages/d2b-contract-tests/tests/policy_broker_schema.rs::broker_delegates_bundle_validation_to_core (asserts the broker delegates bundle validation to d2b-core only: packages/d2b-priv-broker/src exists, some source under it imports `d2b_core::manifest` (delegation target), and some source calls `validate_bundle` (the single validation entry point) - the gate's two positive `grep -R -q` delegation checks ported as substring scans over the recursively-collected broker src tree. Spec correction (existing code is canon): the bash gate's 4th assertion forbidding ALL `serde_json::from_str`/`from_value` under the broker src is red against current code - the broker legitimately parses subprocess JSON (nft / `ip route` / store-view runner output / audit lines) in ops/{store_view_farm,route,tap,store_sync_*}.rs (pre-existing breakage per tests/README.md), so the over-broad blanket negative is dropped while the gate's stated delegation purpose is preserved); gated via the D2B_FIXTURES contract step `cargo test -p d2b-contract-tests` in tests/tools/rust-workspace-checks.sh"]
+successor_ids = ["packages/d2b-contract-tests/tests/policy_broker_schema.rs::broker_delegates_bundle_validation_to_core (asserts the broker delegates bundle validation to d2b-core only: packages/d2b-broker/src exists, some source under it imports `d2b_core::manifest` (delegation target), and some source calls `validate_bundle` (the single validation entry point) - the gate's two positive `grep -R -q` delegation checks ported as substring scans over the recursively-collected broker src tree. Spec correction (existing code is canon): the bash gate's 4th assertion forbidding ALL `serde_json::from_str`/`from_value` under the broker src is red against current code - the broker legitimately parses subprocess JSON (nft / `ip route` / store-view runner output / audit lines) in ops/{store_view_farm,route,tap,store_sync_*}.rs (pre-existing breakage per tests/README.md), so the over-broad blanket negative is dropped while the gate's stated delegation purpose is preserved); gated via the D2B_FIXTURES contract step `cargo test -p d2b-contract-tests` in tests/tools/rust-workspace-checks.sh"]
 exercised_today = "yes"
 
 [[script]]
@@ -571,7 +571,7 @@ group = "A"
 make_target = "test-rust"
 tier = "ci-l1"
 status = "retired"      # legacy | porting | ported | retired
-successor_ids = ["cargo test --workspace (d2b-host cgroup::tests::* delegation canaries) + broker test pass (d2b-priv-broker ops::cgroup::tests::* delegation/audit canaries) - already gated in tests/tools/rust-workspace-checks.sh", "tests/golden/pinned/cgroup-delegation-oracle.txt + tests/tools/assert-pinned-tests.sh (fail-closed presence pin)"]
+successor_ids = ["cargo test --workspace (d2b-host cgroup::tests::* delegation canaries) + broker test pass (d2b-broker ops::cgroup::tests::* delegation/audit canaries) - already gated in tests/tools/rust-workspace-checks.sh", "tests/golden/pinned/cgroup-delegation-oracle.txt + tests/tools/assert-pinned-tests.sh (fail-closed presence pin)"]
 exercised_today = "yes"
 
 [[script]]
@@ -589,7 +589,7 @@ group = "A"
 make_target = "test-rust"
 tier = "ci-l1"
 status = "retired"      # legacy | porting | ported | retired
-successor_ids = ["cargo test --workspace (d2b-host netlink::tests::{ipv6_off_sequence_runs_in_order,bridge_port_readback_matches_defaults}, bridge_port::tests::readback_matches_defaults, routes::tests::{no_default_route_fails_closed,foreign_default_route_fails_closed,dnsmasq_not_bound_fails_closed,host_lan_cidr_ambiguous_for_vpn}) - already gated in tests/tools/rust-workspace-checks.sh", "broker-workspace cargo test --workspace [+ --features layer1-bootstrap] (d2b-priv-broker ops::nm::tests::{managed_foreign_conflict_detected,reload_command_select_by_version}, ops::tap::tests::set_bridge_port_flags_readback_drift_fails_closed) - already gated in tests/tools/rust-workspace-checks.sh", "tests/golden/pinned/host-prepare-network.txt + tests/tools/assert-pinned-tests.sh (fail-closed presence pin across both workspaces)", "ch-net-handoff-not-supported docs-anchor (retired gate's trailing grep) independently guarded by packages/d2b/tests/cli_contract_coverage.rs::host_cli_error_golden_table_is_closed_and_complete + committed host-check goldens (ch-net-handoff-canary.sh retired W3fu10)"]
+successor_ids = ["cargo test --workspace (d2b-host netlink::tests::{ipv6_off_sequence_runs_in_order,bridge_port_readback_matches_defaults}, bridge_port::tests::readback_matches_defaults, routes::tests::{no_default_route_fails_closed,foreign_default_route_fails_closed,dnsmasq_not_bound_fails_closed,host_lan_cidr_ambiguous_for_vpn}) - already gated in tests/tools/rust-workspace-checks.sh", "broker-workspace cargo test --workspace [+ --features layer1-bootstrap] (d2b-broker ops::nm::tests::{managed_foreign_conflict_detected,reload_command_select_by_version}, ops::tap::tests::set_bridge_port_flags_readback_drift_fails_closed) - already gated in tests/tools/rust-workspace-checks.sh", "tests/golden/pinned/host-prepare-network.txt + tests/tools/assert-pinned-tests.sh (fail-closed presence pin across both workspaces)", "ch-net-handoff-not-supported docs-anchor (retired gate's trailing grep) independently guarded by packages/d2b/tests/cli_contract_coverage.rs::host_cli_error_golden_table_is_closed_and_complete + committed host-check goldens (ch-net-handoff-canary.sh retired W3fu10)"]
 exercised_today = "yes"
 
 [[script]]
@@ -607,7 +607,7 @@ group = "A"
 make_target = "test-rust"
 tier = "ci-l1"
 status = "retired"      # legacy | porting | ported | retired
-successor_ids = ["cargo test --workspace (d2b-host nftables::tests::{coexistence_matrix_all_7_rows,detector_clean_host,detector_single_manager_unambiguous,detector_multiple_managers_unknown}) + broker test pass (d2b-priv-broker ops::nft::tests::{refuses_when_firewalld_declared_coexist,applies_on_clean_host_with_coexist,nft_script_includes_all_four_chains}) - already gated in tests/tools/rust-workspace-checks.sh", "tests/golden/pinned/nft-coexistence.txt + tests/tools/assert-pinned-tests.sh (fail-closed presence pin)"]
+successor_ids = ["cargo test --workspace (d2b-host nftables::tests::{coexistence_matrix_all_7_rows,detector_clean_host,detector_single_manager_unambiguous,detector_multiple_managers_unknown}) + broker test pass (d2b-broker ops::nft::tests::{refuses_when_firewalld_declared_coexist,applies_on_clean_host_with_coexist,nft_script_includes_all_four_chains}) - already gated in tests/tools/rust-workspace-checks.sh", "tests/golden/pinned/nft-coexistence.txt + tests/tools/assert-pinned-tests.sh (fail-closed presence pin)"]
 exercised_today = "yes"
 
 [[script]]
@@ -625,7 +625,7 @@ group = "A"
 make_target = "test-rust"
 tier = "ci-l1"
 status = "retired"      # legacy | porting | ported | retired
-successor_ids = ["broker test pass (d2b-priv-broker ops::hosts::tests::{refuses_symlink_target,writes_managed_block_into_fresh_file,idempotent_when_block_matches}, ops::nm::tests::reload_failure_rolls_back, ops::state_dir::tests::{refuses_absolute_relative_path,refuses_parent_dir_escape,idempotent_reuses_existing_dirs,creates_base_and_relative_paths}) - already gated in tests/tools/rust-workspace-checks.sh", "tests/golden/pinned/path-safety-violation-fs.txt + tests/tools/assert-pinned-tests.sh (fail-closed presence pin)"]
+successor_ids = ["broker test pass (d2b-broker ops::hosts::tests::{refuses_symlink_target,writes_managed_block_into_fresh_file,idempotent_when_block_matches}, ops::nm::tests::reload_failure_rolls_back, ops::state_dir::tests::{refuses_absolute_relative_path,refuses_parent_dir_escape,idempotent_reuses_existing_dirs,creates_base_and_relative_paths}) - already gated in tests/tools/rust-workspace-checks.sh", "tests/golden/pinned/path-safety-violation-fs.txt + tests/tools/assert-pinned-tests.sh (fail-closed presence pin)"]
 exercised_today = "skip"
 
 [[script]]
@@ -733,7 +733,7 @@ group = "C"
 make_target = "test-contract"
 tier = "ci-l1"
 status = "retired"      # legacy | porting | ported | retired
-successor_ids = ["packages/d2b-contract-tests/tests/minijail_gpu.rs (gated via the D2B_FIXTURES / D2B_FIXTURES_FULL contract step `cargo test -p d2b-contract-tests` in tests/tools/rust-workspace-checks.sh -> static.sh) - wayland_proxy_profile_source_shape (Layer-1 assert_profile_source over nixos-modules/minijail-profiles.nix: role = \"wayland-proxy\" declaration, mandatory seccompPolicyRef = \"w1-wayland-proxy\", empty capabilities/no CAP_ in the profile block, requiresStartRoot never true, no userNamespace, writable path /run/d2b-wlproxy present, no PipeWire/Pulse bind in the block, umask = 7, deviceBinds = [ ] empty), wayland_proxy_policy_ref_device_classes_source (Layer-1 assert_policy_ref_entry: \"w1-wayland-proxy\" in packages/d2b-priv-broker/src/live_handlers.rs policy_ref_device_classes), wayland_proxy_rust_variants_declared_source (Layer-1 assert_rust_variant_exists: ProcessRole::WaylandProxy in packages/d2b-core/src/processes.rs and RunnerRole::WaylandProxy in packages/d2b-contracts/src/broker_wire.rs), wayland_proxy_rendered_profile_shape (Layer-1 assert_installed_profiles_consistent applied to the REAL rendered RoleProfile - strictly stronger than the bash gate which scanned /etc/d2b/minijail-profiles/*wayland-proxy*.json and skipped when absent: empty caps, w1-wayland-proxy seccomp, empty deviceBinds + bindMounts, dedicated runtime dir /run/d2b-wlproxy/<vm> as the sole writable path, no PipeWire/Pulse path access, umask 0o007, no broker-pre-NS userNamespace). The bash gate's D2B_LIVE=1 Layer-2 (minijail0 /bin/true positive probe; /var/lib/d2b/validated/p1-wayland-proxy.json evidence write) is a live host-execution layer and does not port to the contract layer."]
+successor_ids = ["packages/d2b-contract-tests/tests/minijail_gpu.rs (gated via the D2B_FIXTURES / D2B_FIXTURES_FULL contract step `cargo test -p d2b-contract-tests` in tests/tools/rust-workspace-checks.sh -> static.sh) - wayland_proxy_profile_source_shape (Layer-1 assert_profile_source over nixos-modules/minijail-profiles.nix: role = \"wayland-proxy\" declaration, mandatory seccompPolicyRef = \"w1-wayland-proxy\", empty capabilities/no CAP_ in the profile block, requiresStartRoot never true, no userNamespace, writable path /run/d2b-wlproxy present, no PipeWire/Pulse bind in the block, umask = 7, deviceBinds = [ ] empty), wayland_proxy_policy_ref_device_classes_source (Layer-1 assert_policy_ref_entry: \"w1-wayland-proxy\" in packages/d2b-broker/src/live_handlers.rs policy_ref_device_classes), wayland_proxy_rust_variants_declared_source (Layer-1 assert_rust_variant_exists: ProcessRole::WaylandProxy in packages/d2b-core/src/processes.rs and RunnerRole::WaylandProxy in packages/d2b-contracts/src/broker_wire.rs), wayland_proxy_rendered_profile_shape (Layer-1 assert_installed_profiles_consistent applied to the REAL rendered RoleProfile - strictly stronger than the bash gate which scanned /etc/d2b/minijail-profiles/*wayland-proxy*.json and skipped when absent: empty caps, w1-wayland-proxy seccomp, empty deviceBinds + bindMounts, dedicated runtime dir /run/d2b-wlproxy/<vm> as the sole writable path, no PipeWire/Pulse path access, umask 0o007, no broker-pre-NS userNamespace). The bash gate's D2B_LIVE=1 Layer-2 (minijail0 /bin/true positive probe; /var/lib/d2b/validated/p1-wayland-proxy.json evidence write) is a live host-execution layer and does not port to the contract layer."]
 exercised_today = "manual"
 
 [[script]]
@@ -805,7 +805,7 @@ group = "D"
 make_target = "test-nix-unit"
 tier = "ci-l1"
 status = "retired"      # legacy | porting | ported | retired
-successor_ids = ["packages/d2b-contract-tests/tests/policy_misc.rs::polkit_allowlist_daemon_only_singletons (nixos-modules/host-polkit.nix: launcher-group allowlist names ONLY the daemon-only singletons d2bd.service/d2b-priv-broker.service/d2b-priv-broker.socket, the executable region (awk '/^in$/,0' scope) carries no retired per-VM/per-env unit shapes, and the surviving grant keeps the manage-units action-id guard, the `d2b` group guard, the start/stop/restart verb allowlist, and exactly one polkit.addRule callback); gated via the D2B_FIXTURES contract step `cargo test -p d2b-contract-tests` in tests/tools/rust-workspace-checks.sh"]
+successor_ids = ["packages/d2b-contract-tests/tests/policy_misc.rs::polkit_allowlist_daemon_only_singletons (nixos-modules/host-polkit.nix: launcher-group allowlist names ONLY the daemon-only singletons d2bd.service/d2b-broker.service/d2b-broker.socket, the executable region (awk '/^in$/,0' scope) carries no retired per-VM/per-env unit shapes, and the surviving grant keeps the manage-units action-id guard, the `d2b` group guard, the start/stop/restart verb allowlist, and exactly one polkit.addRule callback); gated via the D2B_FIXTURES contract step `cargo test -p d2b-contract-tests` in tests/tools/rust-workspace-checks.sh"]
 exercised_today = "yes"
 
 [[script]]
@@ -868,7 +868,7 @@ group = "H"
 make_target = "test-policy"
 tier = "ci-l1"
 status = "retired"      # legacy | porting | ported | retired
-successor_ids = ["packages/d2b-contract-tests/tests/policy_docs.rs::agents_md_reflects_daemon_only_end_state (AGENTS.md daemon-only end-state invariant: positive - '## Daemon-only end-state (P6 onward)' section + ADR 0015 cross-ref + d2bd / d2b-priv-broker.socket / SpawnRunner mentions; negative - per-line forbidden legacy-as-live scan exempting lines that carry an explicit historical/retired marker, forbidden_re + allowed_marker_re ported verbatim); gated via the D2B_FIXTURES contract step `cargo test -p d2b-contract-tests` in tests/tools/rust-workspace-checks.sh"]
+successor_ids = ["packages/d2b-contract-tests/tests/policy_docs.rs::agents_md_reflects_daemon_only_end_state (AGENTS.md daemon-only end-state invariant: positive - '## Daemon-only end-state (P6 onward)' section + ADR 0015 cross-ref + d2bd / d2b-broker.socket / SpawnRunner mentions; negative - per-line forbidden legacy-as-live scan exempting lines that carry an explicit historical/retired marker, forbidden_re + allowed_marker_re ported verbatim); gated via the D2B_FIXTURES contract step `cargo test -p d2b-contract-tests` in tests/tools/rust-workspace-checks.sh"]
 exercised_today = "yes"
 
 [[script]]
@@ -922,7 +922,7 @@ group = "D"
 make_target = "test-nix-unit"
 tier = "ci-l1"
 status = "retired"      # legacy | porting | ported | retired
-successor_ids = ["packages/d2b-contract-tests/tests/policy_daemon.rs::broker_systemd_unit_declarations (nixos-modules/host-broker.nix: d2b-priv-broker socket/service shape - config NOT gated behind cfg.daemonExperimental.enable, ListenSequentialPacket=/run/d2b/priv.sock, SocketGroup=d2bd, SocketMode=0660, serviceConfig.Type=notify, socket unit wantedBy sockets.target); gated via the D2B_FIXTURES contract step `cargo test -p d2b-contract-tests` in tests/tools/rust-workspace-checks.sh"]
+successor_ids = ["packages/d2b-contract-tests/tests/policy_daemon.rs::broker_systemd_unit_declarations (nixos-modules/host-broker.nix: d2b-broker socket/service shape - config NOT gated behind cfg.daemonExperimental.enable, ListenSequentialPacket=/run/d2b/priv.sock, SocketGroup=d2bd, SocketMode=0660, serviceConfig.Type=notify, socket unit wantedBy sockets.target); gated via the D2B_FIXTURES contract step `cargo test -p d2b-contract-tests` in tests/tools/rust-workspace-checks.sh"]
 exercised_today = "yes"
 
 [[script]]
@@ -1048,7 +1048,7 @@ group = "H"
 make_target = "test-policy"
 tier = "ci-l1"
 status = "retired"      # legacy | porting | ported | retired
-successor_ids = ["packages/d2b-contract-tests/tests/policy_guest.rs::otel_relay_acl_module_not_publicly_imported_and_broker_handler_present (asserts nixos-modules/default.nix carries no uncommented ./host-otel-relay-acl.nix import and that packages/d2b-priv-broker/src/runtime.rs still carries the RunnerRole::OtelHostBridge spawn handler); gated via the D2B_FIXTURES contract step `cargo test -p d2b-contract-tests` in tests/tools/rust-workspace-checks.sh"]
+successor_ids = ["packages/d2b-contract-tests/tests/policy_guest.rs::otel_relay_acl_module_not_publicly_imported_and_broker_handler_present (asserts nixos-modules/default.nix carries no uncommented ./host-otel-relay-acl.nix import and that packages/d2b-broker/src/runtime.rs still carries the RunnerRole::OtelHostBridge spawn handler); gated via the D2B_FIXTURES contract step `cargo test -p d2b-contract-tests` in tests/tools/rust-workspace-checks.sh"]
 exercised_today = "yes"
 
 [[script]]
@@ -1237,7 +1237,7 @@ group = "A"
 make_target = "test-rust"
 tier = "ci-l1"
 status = "retired"      # legacy | porting | ported | retired
-successor_ids = ["tests/tools/rust-workspace-checks.sh (gated `cargo check --workspace --manifest-path d2b-priv-broker default features = real wire dispatch` - the broker default-features build is already a gate step)"]
+successor_ids = ["tests/tools/rust-workspace-checks.sh (gated `cargo check --workspace --manifest-path d2b-broker default features = real wire dispatch` - the broker default-features build is already a gate step)"]
 exercised_today = "skip"
 
 [[script]]
@@ -1246,7 +1246,7 @@ group = "A"
 make_target = "test-rust"
 tier = "ci-l1"
 status = "retired"      # legacy | porting | ported | retired
-successor_ids = ["cargo test --workspace --features layer1-bootstrap (d2b-priv-broker fd_passing::tests::scm_rights_fd_lifecycle_* - runs in tests/tools/rust-workspace-checks.sh broker layer1-bootstrap test pass)", "tests/tools/assert-pinned-tests.sh (fail-closed pin via the broker --features layer1-bootstrap nextest list)"]
+successor_ids = ["cargo test --workspace --features layer1-bootstrap (d2b-broker fd_passing::tests::scm_rights_fd_lifecycle_* - runs in tests/tools/rust-workspace-checks.sh broker layer1-bootstrap test pass)", "tests/tools/assert-pinned-tests.sh (fail-closed pin via the broker --features layer1-bootstrap nextest list)"]
 exercised_today = "yes"
 
 [[script]]
@@ -1489,7 +1489,7 @@ group = "A"
 make_target = "test-rust"
 tier = "ci-l1"
 status = "retired"      # legacy | porting | ported | retired
-successor_ids = ["cargo nextest run --workspace (d2b-host devices #[test]s)", "tests/tools/rust-workspace-checks.sh (d2b-priv-broker ops::device #[test]s via broker-workspace cargo test --workspace)", "tests/tools/assert-pinned-tests.sh (fail-closed pin across both workspaces)"]
+successor_ids = ["cargo nextest run --workspace (d2b-host devices #[test]s)", "tests/tools/rust-workspace-checks.sh (d2b-broker ops::device #[test]s via broker-workspace cargo test --workspace)", "tests/tools/assert-pinned-tests.sh (fail-closed pin across both workspaces)"]
 exercised_today = "yes"
 
 [[script]]
@@ -1507,7 +1507,7 @@ group = "A"
 make_target = "test-rust"
 tier = "ci-l1"
 status = "retired"      # legacy | porting | ported | retired
-successor_ids = ["cargo nextest run --workspace (d2b-host ioctl_policy #[test]s)", "tests/tools/rust-workspace-checks.sh (d2b-priv-broker ops::device #[test]s via broker-workspace cargo test --workspace)", "tests/tools/assert-pinned-tests.sh (fail-closed pin across both workspaces)"]
+successor_ids = ["cargo nextest run --workspace (d2b-host ioctl_policy #[test]s)", "tests/tools/rust-workspace-checks.sh (d2b-broker ops::device #[test]s via broker-workspace cargo test --workspace)", "tests/tools/assert-pinned-tests.sh (fail-closed pin across both workspaces)"]
 exercised_today = "manual"
 
 [[script]]
@@ -1516,7 +1516,7 @@ group = "A"
 make_target = "test-rust"
 tier = "ci-l1"
 status = "retired"      # legacy | porting | ported | retired
-successor_ids = ["cargo nextest run --workspace (d2b-host modules #[test]s)", "tests/tools/rust-workspace-checks.sh (d2b-priv-broker ops::modprobe #[test]s via broker-workspace cargo test --workspace)", "tests/tools/assert-pinned-tests.sh (fail-closed pin across both workspaces)"]
+successor_ids = ["cargo nextest run --workspace (d2b-host modules #[test]s)", "tests/tools/rust-workspace-checks.sh (d2b-broker ops::modprobe #[test]s via broker-workspace cargo test --workspace)", "tests/tools/assert-pinned-tests.sh (fail-closed pin across both workspaces)"]
 exercised_today = "skip"
 
 [[script]]

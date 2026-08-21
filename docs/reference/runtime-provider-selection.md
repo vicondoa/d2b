@@ -4,7 +4,7 @@
 
 Runtime providers describe the local VM runner family used for a
 workload. They are capability declarations and routing policy, not
-escape hatches around `d2bd` or `d2b-priv-broker`.
+escape hatches around `d2bd` or `d2b-broker`.
 
 ## Default provider
 

@@ -3,7 +3,7 @@
 //! Host-check does **read-only preflight** on `/dev/kvm`, `/dev/net/tun`,
 //! `/dev/vhost-net`, `/dev/fuse`, plus the optional accelerator/USBIP/
 //! TPM/vfio matrix. Mutation (ACL fixup, fd handoff) lives in the
-//! broker (`d2b_priv_broker::ops::device`); this module exposes
+//! broker (`d2b_broker::ops::device`); this module exposes
 //! only the typed matrix + readback + per-row validators so the L1c
 //! `tests/device-node-matrix.sh` canary can drive it deterministically.
 
