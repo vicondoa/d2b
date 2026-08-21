@@ -27,12 +27,13 @@ D2B_MAKE_LOCAL_TARGETS := \
 # Meta helpers that invoke Bazel directly but are not Layer-1 test aliases.
 D2B_MAKE_UTILITY_TARGETS := test-changelog heavy-gate-build changelog-fold
 
-D2B_MAKE_GOALS := $(if $(strip $(MAKECMDGOALS)),$(MAKECMDGOALS),check)
+D2B_MAKE_GOALS := $(if $(strip $(MAKECMDGOALS)),$(MAKECMDGOALS),$(.DEFAULT_GOAL))
 D2B_MAKE_CLASSIFIED_GOALS := $(filter \
 	$(D2B_MAKE_BAZEL_TARGETS) $(D2B_MAKE_LOCAL_TARGETS) \
 	$(D2B_MAKE_UTILITY_TARGETS),$(D2B_MAKE_GOALS))
 D2B_MAKE_RECURSIVE := $(MAKE)
 D2B_MAKE_REENTRY ?= 0
+NIX_FLAKE := nix --extra-experimental-features 'nix-command flakes'
 D2B_MAKE_SHELL_READY := $(shell \
 	if [ "$${D2B_PROJECT_SHELL:-}" = d2b ] && \
 	   [ -n "$${D2B_BAZEL_BIN:-}" ] && [ -x "$${D2B_BAZEL_BIN}" ]; then \
@@ -42,13 +43,11 @@ D2B_MAKE_SHELL_READY := $(shell \
 	fi)
 
 ifneq ($(strip $(D2B_MAKE_CLASSIFIED_GOALS)),)
-ifneq ($(D2B_MAKE_REENTRY),0)
 ifneq ($(D2B_MAKE_SHELL_READY),1)
-$(error d2b Make dispatcher: re-entry marker is set but the d2b shell contract is incomplete (D2B_PROJECT_SHELL=d2b and executable D2B_BAZEL_BIN are required))
-endif
-else
-ifneq ($(D2B_MAKE_SHELL_READY),1)
+ifeq ($(D2B_MAKE_REENTRY),0)
 D2B_MAKE_DISPATCH_REQUIRED := 1
+else
+$(error d2b Make dispatcher: re-entry marker is set but the d2b shell contract is incomplete (D2B_PROJECT_SHELL=d2b and executable D2B_BAZEL_BIN are required))
 endif
 endif
 endif
@@ -64,7 +63,7 @@ __d2b_make_dispatch:
 		echo "d2b Make dispatcher: Nix is required for $(D2B_MAKE_GOALS); enter the d2b shell or install Nix" >&2; \
 		exit 127; \
 	fi; \
-	exec nix --extra-experimental-features 'nix-command flakes' \
+	exec $(NIX_FLAKE) \
 		develop --no-write-lock-file .#bazel -c \
 		env D2B_MAKE_REENTRY=1 $(D2B_MAKE_RECURSIVE) --no-print-directory \
 		D2B_MAKE_REENTRY=1 $(D2B_MAKE_GOALS)
@@ -102,7 +101,6 @@ SHELL := $(CURDIR)/tests/tools/scrub-shell-environment
 # Falls back to x86_64-linux if `nix` is unavailable (e.g. a docs-only host).
 SYSTEM ?= $(shell nix eval --extra-experimental-features 'nix-command flakes' \
 	        --impure --raw --expr builtins.currentSystem 2>/dev/null || echo x86_64-linux)
-NIX_FLAKE := nix --extra-experimental-features 'nix-command flakes'
 
 # ===========================================================================
 # Test interface. Every Layer-1 target below is one direct Bazel invocation;

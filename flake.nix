@@ -216,6 +216,12 @@
           ];
           runScript = "${pkgs.bash}/bin/bash";
         };
+        mkBazelShellHook = testPath: ''
+          export D2B_PROJECT_SHELL=d2b
+          export D2B_BAZEL_BIN="${bazel920}/bin/bazel"
+          export BAZEL_SH="''${BAZEL_SH:-${bazelActionShell}/bin/bash}"
+          export D2B_BAZEL_TEST_PATH="${testPath}"
+        '';
       in {
         default = pkgs.mkShell {
           name = "d2b-dev";
@@ -240,10 +246,18 @@
             acl
           ];
           shellHook = ''
-            export D2B_PROJECT_SHELL=d2b
-            export D2B_BAZEL_BIN="${bazel920}/bin/bazel"
-            export BAZEL_SH="''${BAZEL_SH:-${bazelActionShell}/bin/bash}"
-            export D2B_BAZEL_TEST_PATH="${bazel920}/bin:${pkgs.bash}/bin:${pkgs.coreutils}/bin:${pkgs.findutils}/bin:${pkgs.gnugrep}/bin:${pkgs.gnused}/bin:${pkgs.git}/bin:${pkgs.gnumake}/bin:${pkgs.jq}/bin:${pkgs.rustup}/bin"
+            ${mkBazelShellHook (pkgs.lib.makeBinPath [
+              bazel920
+              pkgs.bash
+              pkgs.coreutils
+              pkgs.findutils
+              pkgs.gnugrep
+              pkgs.gnused
+              pkgs.git
+              pkgs.gnumake
+              pkgs.jq
+              pkgs.rustup
+            ])}
             export SCCACHE_DIR="''${SCCACHE_DIR:-$HOME/.cache/d2b-sccache}"
             echo "d2b dev shell: rust $(sed -n 's/.*channel = "\(.*\)".*/\1/p' rust-toolchain.toml) via rustup, sccache at $SCCACHE_DIR"
           '';
@@ -277,10 +291,19 @@
             rustup
           ];
           shellHook = ''
-            export D2B_PROJECT_SHELL=d2b
-            export D2B_BAZEL_BIN="${bazel920}/bin/bazel"
-            export BAZEL_SH="''${BAZEL_SH:-${bazelActionShell}/bin/bash}"
-            export D2B_BAZEL_TEST_PATH="${bazel920}/bin:${pkgs.bash}/bin:${pkgs.coreutils}/bin:${pkgs.findutils}/bin:${pkgs.gawk}/bin:${pkgs.git}/bin:${pkgs.gnumake}/bin:${pkgs.gnugrep}/bin:${pkgs.gnused}/bin:${pkgs.jq}/bin:${pkgs.rustup}/bin"
+            ${mkBazelShellHook (pkgs.lib.makeBinPath [
+              bazel920
+              pkgs.bash
+              pkgs.coreutils
+              pkgs.findutils
+              pkgs.gawk
+              pkgs.git
+              pkgs.gnumake
+              pkgs.gnugrep
+              pkgs.gnused
+              pkgs.jq
+              pkgs.rustup
+            ])}
             echo "d2b Bazel compatibility shell: $(${bazel920}/bin/bazel --version)"
           '';
         };

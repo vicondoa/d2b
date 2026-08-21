@@ -5,42 +5,49 @@ use std::{
     os::unix::fs::PermissionsExt,
     path::{Path, PathBuf},
     process::Command,
+    sync::OnceLock,
 };
 
 use serde_json::Value;
 
-fn repo_root() -> PathBuf {
-    let mut candidates = Vec::new();
-    if let Some(root) = std::env::var_os("D2B_REPO_ROOT") {
-        candidates.push(PathBuf::from(root));
-    }
-    for variable in ["TEST_SRCDIR", "RUNFILES_DIR"] {
-        if let Some(base) = std::env::var_os(variable).map(PathBuf::from) {
-            candidates.push(base.clone());
-            if let Some(workspace) = std::env::var_os("TEST_WORKSPACE") {
-                candidates.push(base.join(workspace));
+static REPO_ROOT: OnceLock<PathBuf> = OnceLock::new();
+
+fn repo_root() -> &'static Path {
+    REPO_ROOT
+        .get_or_init(|| {
+            let mut candidates = Vec::new();
+            if let Some(root) = std::env::var_os("D2B_REPO_ROOT") {
+                candidates.push(PathBuf::from(root));
             }
-            candidates.push(base.join("_main"));
-        }
-    }
-    if let Ok(current_dir) = std::env::current_dir() {
-        candidates.push(current_dir);
-    }
-    for candidate in candidates {
-        let mut path = candidate;
-        loop {
-            if path.join("Cargo.toml").is_file()
-                && path.join("BUILD.bazel").is_file()
-                && path.join("flake.nix").is_file()
-            {
-                return path;
+            for variable in ["TEST_SRCDIR", "RUNFILES_DIR"] {
+                if let Some(base) = std::env::var_os(variable).map(PathBuf::from) {
+                    candidates.push(base.clone());
+                    if let Some(workspace) = std::env::var_os("TEST_WORKSPACE") {
+                        candidates.push(base.join(workspace));
+                    }
+                    candidates.push(base.join("_main"));
+                }
             }
-            if !path.pop() {
-                break;
+            if let Ok(current_dir) = std::env::current_dir() {
+                candidates.push(current_dir);
             }
-        }
-    }
-    panic!("repository root is not discoverable")
+            for candidate in candidates {
+                let mut path = candidate;
+                loop {
+                    if path.join("Cargo.toml").is_file()
+                        && path.join("BUILD.bazel").is_file()
+                        && path.join("flake.nix").is_file()
+                    {
+                        return path;
+                    }
+                    if !path.pop() {
+                        break;
+                    }
+                }
+            }
+            panic!("repository root is not discoverable")
+        })
+        .as_path()
 }
 
 fn read_text(relative: &str) -> String {
@@ -58,6 +65,42 @@ fn write_executable(path: &Path, contents: &str) {
         .unwrap_or_else(|error| panic!("write {}: {error}", path.display()));
     std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o755))
         .unwrap_or_else(|error| panic!("chmod {}: {error}", path.display()));
+}
+
+fn write_fake_bazel(path: &Path, handles_build: bool) {
+    let mut contents = String::from(
+        "#!/usr/bin/env bash\n\
+         set -eu\n\
+         bep=''\n\
+         for arg in \"$@\"; do\n\
+           case \"$arg\" in\n\
+             --build_event_json_file=*) bep=\"${arg#*=}\" ;;\n\
+           esac\n\
+         done\n\
+         printf '%s\\n' \"$D2B_BAZEL_PROFILE|$PWD|$BAZEL_SH|$D2B_BAZEL_UNTRUSTED|$MAKEFLAGS|$*\" >> \"$D2B_FAKE_BAZEL_LOG\"\n",
+    );
+    if handles_build {
+        contents.push_str("if [ \"${1:-}\" = build ]; then exit 0; fi\n");
+    }
+    contents.push_str("printf '{\"testResult\":{\"status\":\"PASSED\"}}\\n' > \"$bep\"\n");
+    write_executable(path, &contents);
+}
+
+fn write_fake_nix(path: &Path) {
+    write_executable(
+        path,
+        "#!/bin/sh\n\
+         set -eu\n\
+         printf 'entered\\n' >> \"$D2B_FAKE_NIX_COUNT\"\n\
+         while [ \"$#\" -gt 0 ] && [ \"$1\" != -c ]; do shift; done\n\
+         [ \"$#\" -gt 0 ] || exit 91\n\
+         shift\n\
+         export D2B_PROJECT_SHELL=d2b\n\
+         export D2B_MAKE_REENTRY=1\n\
+         export D2B_BAZEL_BIN=\"$D2B_FAKE_BAZEL\"\n\
+         export D2B_XTASK_BIN=\"$D2B_FAKE_XTASK\"\n\
+         exec \"$@\"\n",
+    );
 }
 
 fn object<'a>(value: &'a Value, context: &str) -> &'a serde_json::Map<String, Value> {
@@ -148,19 +191,24 @@ fn make_target_blocks(makefile: &str) -> BTreeMap<String, String> {
     blocks
 }
 
-fn test_suite_labels(build: &str, suite: &str) -> Vec<String> {
-    let needle = format!("name = \"{suite}\"");
+fn rule_block<'a>(build: &'a str, target: &str, rule_prefixes: &[&str]) -> &'a str {
+    let needle = format!("name = \"{target}\"");
     let name_at = build
         .find(&needle)
-        .unwrap_or_else(|| panic!("test suite {suite} is missing"));
-    let start = build[..name_at]
-        .rfind("test_suite(")
-        .unwrap_or_else(|| panic!("test suite rule for {suite} is missing"));
+        .unwrap_or_else(|| panic!("target {target} is missing"));
+    let start = rule_prefixes
+        .iter()
+        .find_map(|prefix| build[..name_at].rfind(*prefix))
+        .unwrap_or_else(|| panic!("rule start for {target} is missing"));
     let end = build[name_at..]
         .find("\n)\n")
         .map(|offset| name_at + offset + 3)
         .unwrap_or(build.len());
-    build[start..end]
+    &build[start..end]
+}
+
+fn test_suite_labels(build: &str, suite: &str) -> Vec<String> {
+    rule_block(build, suite, &["test_suite("])
         .lines()
         .filter_map(|line| {
             let trimmed = line.trim();
@@ -501,19 +549,7 @@ fn make_dispatches_multiple_goals_once_and_preserves_bazel_variables() {
 
     let bazel_log = scratch.join("bazel.log");
     let bazel = scratch.join("bazel");
-    write_executable(
-        &bazel,
-        "#!/usr/bin/env bash\n\
-         set -eu\n\
-         bep=''\n\
-         for arg in \"$@\"; do\n\
-           case \"$arg\" in\n\
-             --build_event_json_file=*) bep=\"${arg#*=}\" ;;\n\
-           esac\n\
-         done\n\
-         printf '%s\\n' \"$D2B_BAZEL_PROFILE|$PWD|$BAZEL_SH|$D2B_BAZEL_UNTRUSTED|$MAKEFLAGS|$*\" >> \"$D2B_FAKE_BAZEL_LOG\"\n\
-         printf '{\"testResult\":{\"status\":\"PASSED\"}}\\n' > \"$bep\"\n",
-    );
+    write_fake_bazel(&bazel, false);
     let xtask = scratch.join("xtask");
     write_executable(
         &xtask,
@@ -522,20 +558,7 @@ fn make_dispatches_multiple_goals_once_and_preserves_bazel_variables() {
     );
     let nix_count = scratch.join("nix.count");
     let nix = scratch.join("nix");
-    write_executable(
-        &nix,
-        "#!/bin/sh\n\
-         set -eu\n\
-         printf 'entered\\n' >> \"$D2B_FAKE_NIX_COUNT\"\n\
-         while [ \"$#\" -gt 0 ] && [ \"$1\" != -c ]; do shift; done\n\
-         [ \"$#\" -gt 0 ] || exit 91\n\
-         shift\n\
-         export D2B_PROJECT_SHELL=d2b\n\
-         export D2B_MAKE_REENTRY=1\n\
-         export D2B_BAZEL_BIN=\"$D2B_FAKE_BAZEL\"\n\
-         export D2B_XTASK_BIN=\"$D2B_FAKE_XTASK\"\n\
-         exec \"$@\"\n",
-    );
+    write_fake_nix(&nix);
 
     let mut path = scratch.display().to_string();
     path.push(':');
@@ -811,23 +834,50 @@ fn focused_bazel_shell_exports_the_complete_facade_contract() {
         .map(|offset| bazel_start + offset)
         .expect("focused Bazel shell boundary");
     let bazel_shell = &flake[bazel_start..bazel_end];
+    let package_start = bazel_shell
+        .find("packages = with pkgs; [")
+        .expect("focused Bazel shell package list");
+    let package_end = bazel_shell[package_start..]
+        .find("];")
+        .map(|offset| package_start + offset)
+        .expect("focused Bazel shell package list boundary");
+    let packages = &bazel_shell[package_start..package_end];
     for dependency in [
-        "pkgs.bash",
-        "pkgs.coreutils",
-        "pkgs.findutils",
-        "pkgs.gawk",
-        "pkgs.git",
-        "pkgs.gnugrep",
-        "pkgs.gnused",
-        "pkgs.gnumake",
-        "pkgs.jq",
-        "pkgs.rustup",
+        "bazel920",
+        "bash",
+        "coreutils",
+        "findutils",
+        "gawk",
+        "git",
+        "gnugrep",
+        "gnused",
+        "gnumake",
+        "jq",
+        "rustup",
     ] {
         assert!(
-            bazel_shell.contains(dependency),
-            "focused Bazel shell must provide {dependency}"
+            packages
+                .lines()
+                .any(|line| line.trim().trim_end_matches(',') == dependency),
+            "focused Bazel shell packages must provide {dependency}"
         );
     }
+    assert!(
+        bazel_shell.contains("pkgs.lib.makeBinPath"),
+        "focused Bazel shell must derive its facade PATH from the package list"
+    );
+    assert!(
+        bazel_shell.contains("mkBazelShellHook"),
+        "focused Bazel shell must use the shared shell contract helper"
+    );
+    let contract_start = flake
+        .find("mkBazelShellHook = testPath: ''")
+        .expect("shared Bazel shell contract helper");
+    let contract_end = flake[contract_start..]
+        .find("'';")
+        .map(|offset| contract_start + offset)
+        .expect("shared Bazel shell contract boundary");
+    let shell_contract = &flake[contract_start..contract_end];
     for export in [
         "D2B_PROJECT_SHELL=d2b",
         "D2B_BAZEL_BIN",
@@ -835,8 +885,8 @@ fn focused_bazel_shell_exports_the_complete_facade_contract() {
         "D2B_BAZEL_TEST_PATH",
     ] {
         assert!(
-            bazel_shell.contains(export),
-            "focused Bazel shell must export {export}"
+            shell_contract.contains(export),
+            "shared Bazel shell contract must export {export}"
         );
     }
 }
@@ -856,10 +906,18 @@ fn default_shell_includes_the_pinned_bazel_contract() {
         default_shell.contains("bazel920"),
         "default development shell must include the pinned Bazel package"
     );
+    assert!(
+        default_shell.contains("pkgs.lib.makeBinPath"),
+        "default development shell must derive its facade PATH from the package list"
+    );
+    assert!(
+        default_shell.contains("mkBazelShellHook"),
+        "default development shell must use the shared shell contract helper"
+    );
     for export in ["D2B_PROJECT_SHELL=d2b", "D2B_BAZEL_BIN", "BAZEL_SH"] {
         assert!(
-            default_shell.contains(export),
-            "default development shell must export {export}"
+            flake.contains(export),
+            "default development shell contract must export {export}"
         );
     }
 }
@@ -1007,34 +1065,8 @@ fn make_dispatch_preserves_mixed_local_and_utility_goals_with_one_shell_entry() 
          if [ \"${1:-}\" = heavy-gate ] && [ \"${2:-}\" = verify-slot ]; then exit 0; fi\n\
          exit 90\n",
     );
-    write_executable(
-        &fake_bazel,
-        "#!/usr/bin/env bash\n\
-         set -eu\n\
-         bep=''\n\
-         for arg in \"$@\"; do\n\
-           case \"$arg\" in\n\
-             --build_event_json_file=*) bep=\"${arg#*=}\" ;;\n\
-           esac\n\
-         done\n\
-         printf '%s\\n' \"$D2B_BAZEL_PROFILE|$PWD|$BAZEL_SH|$D2B_BAZEL_UNTRUSTED|$MAKEFLAGS|$*\" >> \"$D2B_FAKE_BAZEL_LOG\"\n\
-         if [ \"${1:-}\" = build ]; then exit 0; fi\n\
-         printf '{\"testResult\":{\"status\":\"PASSED\"}}\\n' > \"$bep\"\n",
-    );
-    write_executable(
-        &fake_nix,
-        "#!/bin/sh\n\
-         set -eu\n\
-         printf 'entered\\n' >> \"$D2B_FAKE_NIX_COUNT\"\n\
-         while [ \"$#\" -gt 0 ] && [ \"$1\" != -c ]; do shift; done\n\
-         [ \"$#\" -gt 0 ] || exit 91\n\
-         shift\n\
-         export D2B_PROJECT_SHELL=d2b\n\
-         export D2B_MAKE_REENTRY=1\n\
-         export D2B_BAZEL_BIN=\"$D2B_FAKE_BAZEL\"\n\
-         export D2B_XTASK_BIN=\"$D2B_FAKE_XTASK\"\n\
-         exec \"$@\"\n",
-    );
+    write_fake_bazel(&fake_bazel, true);
+    write_fake_nix(&fake_nix);
 
     let mut path = scratch.display().to_string();
     path.push(':');
@@ -1102,23 +1134,6 @@ fn make_dispatch_preserves_mixed_local_and_utility_goals_with_one_shell_entry() 
     let _ = std::fs::remove_dir_all(scratch);
 }
 
-fn build_rule_block<'a>(build: &'a str, target: &str) -> &'a str {
-    let needle = format!("name = \"{target}\"");
-    let name_at = build
-        .find(&needle)
-        .unwrap_or_else(|| panic!("target {target} is missing from BUILD file"));
-    let start = build[..name_at]
-        .rfind("rust_test(")
-        .or_else(|| build[..name_at].rfind("sh_test("))
-        .or_else(|| build[..name_at].rfind("filegroup("))
-        .unwrap_or_else(|| panic!("rule start for {target} is missing"));
-    let end = build[name_at..]
-        .find("\n)\n")
-        .map(|offset| name_at + offset + 3)
-        .unwrap_or(build.len());
-    &build[start..end]
-}
-
 #[test]
 fn audited_local_rust_suite_is_complete_and_tag_driven() {
     let build = read_text("bazel/checks/rust/BUILD.bazel");
@@ -1138,7 +1153,11 @@ fn audited_local_rust_suite_is_complete_and_tag_driven() {
             .split_once(':')
             .unwrap_or_else(|| panic!("local Rust label has no target: {label}"));
         let package_build = read_text(&format!("{package}/BUILD.bazel"));
-        let block = build_rule_block(&package_build, target);
+        let block = rule_block(
+            &package_build,
+            target,
+            &["rust_test(", "sh_test(", "filegroup("],
+        );
         let tags = rule_tags(block);
         assert!(
             tags.contains("local") || tags.contains("no-remote-exec"),
@@ -1158,7 +1177,7 @@ fn audited_local_rust_suite_is_complete_and_tag_driven() {
         main.contains("-local,-no-remote-exec"),
         "remote Rust main must exclude both local tag classes"
     );
-    let hermetic = build_rule_block(&d2b, "auth_status_contract");
+    let hermetic = rule_block(&d2b, "auth_status_contract", &["rust_test("]);
     assert!(
         !hermetic.contains("\"local\"") && !hermetic.contains("no-remote-cache"),
         "untagged hermetic tests must remain eligible for remote execution"
