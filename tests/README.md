@@ -78,15 +78,14 @@ labels. Cargo manifests and `Cargo.lock` remain rules_rs metadata authority,
 while standalone crate Cargo commands are not documented or required gate
 evidence.
 
-`make test-policy` includes the fail-closed `guest-workspace-drift` guard. The
-guard checks that the crates copied by `mkGuestRustPackagesSrc`, the members and
-workspace dependencies in
-`tests/fixtures/guest-rust-workspace/Cargo.toml`, any
-`tests/fixtures/guest-rust-workspace/*.Cargo.toml` overrides, and
-`packages/Cargo.guest.lock` remain one resolvable locked workspace. When a
-mirrored shared crate gains or changes a dependency, update the guest workspace
-fixture and any affected override, refresh `packages/Cargo.guest.lock`, and run
-`make test-policy`.
+`make test-policy` does not schedule
+`tests/tools/guest-workspace-drift.py`. The retained
+`//tests/unit/meta:w0_dep_direction` target owns workspace-and-lock policy, but
+it does not assert copied Guest workspace parity. Do not cite that parity as
+passing gate evidence. When a mirrored shared crate gains or changes a
+dependency, update the guest workspace fixture and any affected override,
+refresh `packages/Cargo.guest.lock`, and run the applicable owner-local targets
+plus `make test-policy`.
 
 All Layer-2 lanes (types 9-11) run behind one sole-use semaphore (two slots
 per uid via open file description locks), so concurrent heavy lanes cannot

@@ -384,7 +384,7 @@ Product Contract changed by confirmed clarification: R21 and R25 separate semant
 - KTD8. **Expose Guest health through session and resource state.** The runtime Provider consumes authenticated ComponentSession evidence and writes `Guest` and `Endpoint` observations. No guest health service remains after cutover.
 - KTD9. **Migrate one capability family at a time with one reachable owner.** A family may retain its old RPC until its replacement is validated, but bundle policy selects exactly one path. Remove the caller before removing the method. Use the existing `d2b-cutover` preview, consent, journal, hold, recovery, verification, and finalization contracts for the synchronized new-only transition; do not add another migration ledger or cutover state machine. A reviewed U10 removal inventory is implementation and release evidence that must be complete before constructing the existing cutover candidate and preview; it is not embedded in the closed `PreviewInventory` (`Host` or `Reset`) or represented as a new runtime ledger. Native rollback exists only through `Disposition` (phase 4); crossing into `ResourceStore` (phase 5) requires the existing qualified external-restore outcome/path, and phase-10 finalization is separately consented. A whole-head revert is code rollback only, not host-state recovery, and never a compatibility shim.
 - KTD10. **Retain last observation but revoke mutation authority immediately.** Disconnect or generation replacement closes assignments and watches. Readers may see the last committed status marked stale or Unknown. Ambiguous live ownership remains untouched under the narrowest degraded scope until adoption proof or operator repair. Old controllers cannot update status or clear finalizers.
-- KTD11. **Generate public artifacts from owner-local contract sources.** Update the owning split contract crate and xtask generator first. Regenerate schemas, provider catalog shapes, semantic ResourceType lists, fixtures, and guest workspace locks. Contract vectors stay in their owning split crates, including `packages/d2b-contracts-provider/tests/schema.rs`, `packages/d2b-contracts-resource/tests/schema.rs`, and `packages/d2b-contracts-zone-session/tests/contracts.rs`; Provider installation and catalog checks stay in `packages/d2b-provider/tests/runtime.rs` and `tests/unit/nix/surfaces/provider-catalog.nix`; Guest/session and rendered-bundle checks stay in consuming crates and `tests/unit/nix/surfaces/guest-control.nix`. The only repository-wide policy classes are source hygiene, workspace and lock integrity, supply chain, and changelog policy, owned by `//bazel/checks/meta:tier0`, `//tests/unit/meta:w0_dep_direction`, `//packages/xtask:policy_production_closure`, and `//packages/xtask:policy_changelog_gate` respectively. Register every surface in the fixed Bazel graph and do not hand-edit generated outputs.
+- KTD11. **Generate public artifacts from owner-local contract sources.** Update the owning split contract crate and xtask generator first. Regenerate schemas, provider catalog shapes, semantic ResourceType lists, fixtures, and guest workspace locks. Contract vectors stay in their owning split crates, including `packages/d2b-contracts-provider/tests/schema.rs`, `packages/d2b-contracts-resource/tests/schema.rs`, and `packages/d2b-contracts-zone-session/tests/contracts.rs`; Provider installation and catalog checks stay in `packages/d2b-provider/tests/runtime.rs` (`//packages/d2b-provider:runtime`) and `tests/unit/nix/surfaces/provider-catalog.nix` (`//bazel/checks/nix:nix-unit-provider-catalog`). The provider-catalog Nix target currently runs the `provider-elf-shim/positive-constructor` case and generic module-evaluation smoke; controller ownership and placement authority remain owned by the Provider contract and Rust tests. Guest/session and Nix-shape checks stay in consuming crates and `tests/unit/nix/surfaces/guest-control.nix` (`//bazel/checks/nix:nix-unit-guest-control`); rendered-artifact parity stays in the owning fixture/contract targets, whose current aggregate is `//bazel/checks/fixtures:fixtures_proofs` and is not a Guest-control-specific removal gate. The only repository-wide policy classes are source hygiene, workspace and lock integrity, supply chain, and changelog policy, owned by `//bazel/checks/meta:tier0`, `//tests/unit/meta:w0_dep_direction`, `//packages/xtask:policy_production_closure`, and `//packages/xtask:policy_changelog_gate` respectively. Register every surface in the fixed Bazel graph and do not hand-edit generated outputs.
 - KTD12. **Commit assignment and ownership indexes atomically.** Recheck resource revision and current assignment in one store transaction. Update assignment, status/finalizers, owner indexes, and revision log together. Dispatch external effects only after commit.
 - KTD13. **Delete children before releasing parent ownership.** The owning controller adopts or quarantines every live child, reaches verified terminal state, commits child deletion and owner-index removal, then clears the parent finalizer. A missing or ambiguous child blocks narrow cleanup rather than authorizing a broad sweep.
 - KTD14. **Use one `d2b-broker` artifact per OS and architecture with fixed host and guest profiles.** (session-settled: user-directed - chosen over separate broker programs, mode-specific builds, or one broker process multiplexing authorities: share framing and effect contracts while preserving separate root processes, sockets, state, audit, caller identities, and operation catalogs.) Extend and then rename the current `d2b-priv-broker` package; preserve its existing typed operation catalog, socket activation, peer authentication, runner launch, host-generation handoff, cutover artifact, and audit contracts. The profile is selected at process start and cannot be changed by a request.
@@ -608,7 +608,7 @@ The units may land as ordered reviewed pull requests. Every intermediate head mu
 - Same-platform Host and Guest component declarations that resolve different artifact digests are rejected.
 - Generated provider catalog and signed manifest fields remain byte-stable after regeneration.
 
-**Verification:** Owner-local contract and provider tests pin the canonical vectors, provider installation rejects malformed placement, the provider-catalog Nix surface preserves component authority, and generated catalog drift is clean.
+**Verification:** `//packages/d2b-contracts-provider:schema`, `//packages/d2b-contracts-resource:schema`, and `//packages/d2b-provider:runtime` own the canonical vectors and Provider installation checks. `//bazel/checks/nix:nix-unit-provider-catalog` currently proves the `provider-elf-shim/positive-constructor` case plus generic module evaluation; it does not prove component authority or placement projections. Generated provider-catalog drift is owned by `//packages/xtask:gen_provider_packaging_drift`.
 
 ### U2. Build assignment and scoped watch routing
 
@@ -817,7 +817,7 @@ The units may land as ordered reviewed pull requests. Every intermediate head mu
 - Reconnect with the same Guest and new session generation succeeds only after stale state revocation.
 - The real binary enforces frame, stream, concurrency, and shutdown limits.
 
-**Verification:** Real-binary tests prove mode separation, Guest enrollment, broker binding, and fail-closed boundaries; guest workspace drift and supply-chain tests accept the shared executable.
+**Verification:** `//packages/d2b-session:admission` and `//packages/d2b-session:component_session` own session identity, enrollment, and reconnect admission; `//packages/d2bd:resource_operator_activation` covers the existing Guest resource path. `//bazel/checks/nix:nix-unit-guest-control` covers the Guest-control Nix shape, `//packages/d2bd:daemon_version_negotiation` covers wire-version rejection, and `//packages/xtask:policy_production_closure` covers the shared executable's supply-chain closure. `//tests/unit/meta:w0_dep_direction` remains the workspace-and-lock policy target; no separate copied Guest workspace parity proof is claimed.
 
 ### U4. Deploy target-local Process controllers
 
@@ -871,7 +871,7 @@ The units may land as ordered reviewed pull requests. Every intermediate head mu
 - Missing volume-local or required dependency leaves the controller Pending without bootstrap exceptions.
 - A worker receives no ResourceClient, bus, credential, or child-spawn authority.
 
-**Verification:** Shared Process Provider conformance and target integration tests prove controller launch, identity, adoption, and no-direct-spawn boundaries.
+**Verification:** `//packages/d2b-process-conformance:d2b_process_conformance_test`, `//packages/d2b-provider-system-systemd:conformance`, `//packages/d2b-provider-system-systemd:execution_parents`, `//packages/d2b-provider-system-minijail:conformance`, and `//packages/d2b-provider-system-minijail:execution_parents` prove Process launch, identity, adoption, and Host/Guest execution-parent parity. No current target proves arbitrary direct controller child-launch absence; preserve R43 and Provider Process ownership, but do not describe these labels as a direct-spawn removal gate.
 
 ### U5. Migrate exec and shell
 
@@ -1175,7 +1175,7 @@ The units may land as ordered reviewed pull requests. Every intermediate head mu
 **Patterns to follow:**
 
 - Existing provider catalog generation and semantic resource Nix schemas.
-- Guest workspace drift and static musl consumption gates.
+- Guest workspace input and lock updates plus static musl consumption checks; no separate copied-workspace drift gate.
 - Gateway-specific Nix module separation.
 
 **Test scenarios:**
@@ -1247,32 +1247,32 @@ The units may land as ordered reviewed pull requests. Every intermediate head mu
 4. Retire or rewrite tests by deleting their Bazel, Make, CI, and documentation references after owner-local successor coverage is present.
 5. Update ADR status and migration evidence to reflect ComponentSession-only Guest control.
 6. Run the fixed Bazel Layer-1 graph, the targeted Guest VM lane, and container integration for the shared daemon and broker executables on one committed head.
-7. Confirm the fixed source-hygiene check and owner-local/structural checks find no direct controller spawn path or ordinary Guest host-daemon profile.
+7. Run the fixed source-hygiene check plus the named session, daemon, and Process Provider targets for the executable boundaries they actually assert. No current structural target proves arbitrary direct controller spawn absence or the complete ordinary Guest host-daemon profile; retain R43 and the fixed Host/Guest Provider ownership decisions as implementation and review acceptance requirements.
 
 **Execution note:** Treat removal proof as a feature, not cleanup.
 
 **Patterns to follow:**
 
-- Existing ADR046 removal-proof changelog fragments and owner-local/structural checks.
+- Existing ADR046 removal-proof changelog fragments, `//packages/d2bd:daemon_version_negotiation`, and the Provider Process conformance targets listed for U4.
 - Test retirement rule in `tests/AGENTS.md`: delete the test and sweep Bazel, Make, CI, and documentation references without adding a successor ledger.
 - Candidate-bound recovery and finalization in `packages/d2b-cutover`.
-- Daemon-only clean-break and no-fallback owner-local checks.
+- Daemon-only clean-break behavior and the existing wire-version rejection target; no generic no-fallback or direct-spawn target is currently claimed.
 
 **Test scenarios:**
 
 - Covers AE7: no production service recognizes a retired guest-control method.
 - CLI exec, shell, activation, config, audio, and USB commands reach only Resource API or named-stream paths.
-- Old Guest protocol handshakes fail with typed incompatibility and no fallback.
+- Old Guest protocol handshakes fail with typed incompatibility and no fallback; `//packages/d2bd:daemon_version_negotiation` covers the existing wire-version rejection case, not a general fallback scan.
 - Old `d2b-guestd` with new `d2bd`, and new `d2bd guest` with an old host daemon, both fail closed before controller authority or feature behavior.
 - `d2bd guest` cannot attach to a Host-profile broker, and `d2bd host` cannot attach to a Guest-profile broker for the same authority instance.
 - Covers AE6: disconnect and reconnect preserve stale fencing and no host takeover.
 - Covers AE8: gateway Guest full-daemon exception remains explicit and ordinary Guest profiles reject it.
 - Pre-cutover removal proof fails while the reviewed U10 inventory is incomplete or stale, so the implementation and release workflow cannot construct the existing cutover candidate or preview.
 - Cutover restart reopens the exact journal and candidate, preserves incident holds, and cannot cross the native rollback boundary twice; native rollback ends at Disposition, crossing into ResourceStore requires the existing qualified external-restore outcome/path, and phase-10 finalization requires separate consent.
-- Owner-local and structural checks find no feature controller direct spawn, broker tunnel, SSH fallback, generic file path, or guest-control capability enum.
-- Changelog, ADRs, schema references, and generated documentation contain no stale contract claims.
+- `//packages/d2b-provider-system-systemd:conformance`, `//packages/d2b-provider-system-systemd:execution_parents`, `//packages/d2b-provider-system-minijail:conformance`, and `//packages/d2b-provider-system-minijail:execution_parents` prove the Process Provider lifecycle and Host/Guest parent cells; `//bazel/checks/meta:tier0` and `//tests/tools/no-bash-ast-walker:no_bash_ast_test` remain the structural source-hygiene checks. No current target proves arbitrary feature-controller direct spawn, copied Guest workspace parity, or a repository-wide no-fallback/docs scan, so those are not reported as passing policy evidence.
+- Changelog and generated-artifact drift gates are clean; ADR and reference consistency remains a documentation acceptance condition rather than a `make test-policy` claim.
 
-**Verification:** Final `make check`, targeted host integration, container integration, owner-local removal tests, and independent code review all pass on the same committed head.
+**Verification:** Final `make check`, targeted host integration, container integration, the owner-local Provider/daemon targets listed above, and independent code review all pass on the same committed head. No direct-spawn or copied-workspace parity result is reported without a live target that asserts it.
 
 ---
 
@@ -1282,9 +1282,9 @@ The units may land as ordered reviewed pull requests. Every intermediate head mu
 | --- | --- | --- |
 | `make test-rust` | U1-U8, U10-U11 | Rust unit, integration, doctest, harness-free, provider, bus, client, daemon, and broker coverage passes |
 | `make test-nix-unit` | U1, U7-U11 | Placement, Provider catalog, daemon/broker profiles, Binding, and eval-rejection cases pass |
-| `make test-policy` | U1, U3-U4, U9-U11 | Source hygiene, workspace and lock integrity, supply chain, and changelog policy pass; Provider authority, mode/profile separation, no-direct-spawn, no-fallback, docs, and guest workspace proofs run under their owner-local crate, Nix-surface, fixture, or structural Bazel targets |
-| `make test-drift` | U1, U7, U9-U10 | Generated schemas, provider catalogs, semantic ResourceTypes, docs, and fixtures are current |
-| `make test-fixture-contracts` | U1, U7-U10 | Rendered Nix artifacts match Rust contracts and removal policies |
+| `make test-policy` | U1, U3-U4, U9-U11 | Runs `//bazel/checks/policy:policy_tooling`: the four retained repository-wide policy classes plus its existing Rust-policy and drift members. It does not run Provider, Guest-control, copied-workspace, no-direct-spawn, no-fallback, or documentation proofs. |
+| `make test-drift` | U1, U7, U9-U10 | Runs `//bazel/checks/policy:drift` for the existing generated-artifact and VM JSON parity checks; Provider packaging drift is `//packages/xtask:gen_provider_packaging_drift`. |
+| `make test-fixture-contracts` | U1, U7-U10 | Runs `//bazel/checks/fixtures:fixtures_proofs` for the existing fixture/contract proof set; it is not a separate Guest-control removal gate. |
 | `make test-unit` | U1-U11 | Full Layer-1 development umbrella passes |
 | `make test-host-integration` | U2-U4, U6, U8-U11 | Real NixOS Guest proves daemon/broker mode separation, vsock enrollment, assignment fencing, controller launch, Process readiness, reconnect, handoff, and teardown |
 | `make test-integration` | U3, U9-U11 | Shared daemon and broker executables run in the supported foreign-userland container path |
@@ -1292,7 +1292,17 @@ The units may land as ordered reviewed pull requests. Every intermediate head mu
 | `make check` | U10 | PR-equivalent Layer-1 graph passes without advisory skips cited as evidence |
 | Independent `ce-code-review` | U10 | No actionable issues remain on the validated head |
 
-Targeted owner-local Bazel labels should run during each unit. Public Make aliases invoke the fixed Bazel graph; the complete gates run after the unit's canonical commit so Nix sees tracked inputs.
+Targeted owner-local Bazel labels should run during each unit. The remaining proof map is:
+
+- Provider contract and installation authority: `//packages/d2b-contracts-provider:schema`, `//packages/d2b-contracts-resource:schema`, and `//packages/d2b-provider:runtime`.
+- Provider Nix shape only: `//bazel/checks/nix:nix-unit-provider-catalog` (positive ELF-shim case and module-evaluation smoke, not component authority).
+- Guest-control Nix shape: `//bazel/checks/nix:nix-unit-guest-control`.
+- Guest session/enrollment and resource path: `//packages/d2b-session:admission`, `//packages/d2b-session:component_session`, and `//packages/d2bd:resource_operator_activation`.
+- Process launch, identity, adoption, and Host/Guest parent parity: `//packages/d2b-process-conformance:d2b_process_conformance_test`, `//packages/d2b-provider-system-systemd:conformance`, `//packages/d2b-provider-system-systemd:execution_parents`, `//packages/d2b-provider-system-minijail:conformance`, and `//packages/d2b-provider-system-minijail:execution_parents`.
+- Wire-version fail-closed behavior: `//packages/d2bd:daemon_version_negotiation`.
+- Workspace and lock policy: `//tests/unit/meta:w0_dep_direction` (not copied Guest workspace/fixture/lock parity).
+
+No current live Bazel label asserts copied Guest workspace parity or arbitrary controller direct child-launch absence; the plan does not claim either as a passing gate or add a fifth repository-wide policy class. Public Make aliases invoke the fixed Bazel graph; the complete gates run after the unit's canonical commit so Nix sees tracked inputs.
 
 ---
 
