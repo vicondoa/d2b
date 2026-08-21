@@ -7,14 +7,9 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
+use d2b_contracts_resource::v3::{ConfigurationGeneration, Timestamp};
 use d2b_contracts_zone_session::v3::{
-    BundleMetadata,
-    BundleResource as InputBundleResource,
-    ZoneBundle,
-};
-use d2b_contracts_resource::v3::{
-    ConfigurationGeneration,
-    Timestamp,
+    BundleMetadata, BundleResource as InputBundleResource, ZoneBundle,
 };
 
 use super::{
@@ -617,18 +612,11 @@ fn persist_effect(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use d2b_contracts_zone_session::v3::{
-    BundleMetadata,
-    BundleResource as InputBundleResource,
-};
     use d2b_contracts_resource::v3::{
-    CanonicalJsonObject,
-    ResourceBundleGenerationId,
-    ResourceName,
-    ResourceTypeName,
-    SchemaFingerprint,
-    ZoneId,
-};
+        CanonicalJsonObject, ResourceBundleGenerationId, ResourceName, ResourceTypeName,
+        SchemaFingerprint, ZoneId,
+    };
+    use d2b_contracts_zone_session::v3::{BundleMetadata, BundleResource as InputBundleResource};
 
     fn digest(byte: char) -> SchemaFingerprint {
         SchemaFingerprint::parse(format!("sha256:{}", byte.to_string().repeat(64))).unwrap()

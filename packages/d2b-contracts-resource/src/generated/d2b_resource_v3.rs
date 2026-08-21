@@ -5166,6 +5166,8 @@ pub struct CommitBatchRequest {
     pub meta: ::protobuf::MessageField<RequestMeta>,
     // @@protoc_insertion_point(field:d2b.resource.v3.CommitBatchRequest.mutations)
     pub mutations: ::std::vec::Vec<Mutation>,
+    // @@protoc_insertion_point(field:d2b.resource.v3.CommitBatchRequest.scoped_admission)
+    pub scoped_admission: ::std::vec::Vec<u8>,
     // special fields
     // @@protoc_insertion_point(special_field:d2b.resource.v3.CommitBatchRequest.special_fields)
     pub special_fields: ::protobuf::SpecialFields,
@@ -5183,7 +5185,7 @@ impl CommitBatchRequest {
     }
 
     fn generated_message_descriptor_data() -> ::protobuf::reflect::GeneratedMessageDescriptorData {
-        let mut fields = ::std::vec::Vec::with_capacity(2);
+        let mut fields = ::std::vec::Vec::with_capacity(3);
         let mut oneofs = ::std::vec::Vec::with_capacity(0);
         fields.push(::protobuf::reflect::rt::v2::make_message_field_accessor::<_, RequestMeta>(
             "meta",
@@ -5194,6 +5196,11 @@ impl CommitBatchRequest {
             "mutations",
             |m: &CommitBatchRequest| { &m.mutations },
             |m: &mut CommitBatchRequest| { &mut m.mutations },
+        ));
+        fields.push(::protobuf::reflect::rt::v2::make_simpler_field_accessor::<_, _>(
+            "scoped_admission",
+            |m: &CommitBatchRequest| { &m.scoped_admission },
+            |m: &mut CommitBatchRequest| { &mut m.scoped_admission },
         ));
         ::protobuf::reflect::GeneratedMessageDescriptorData::new_2::<CommitBatchRequest>(
             "CommitBatchRequest",
@@ -5219,6 +5226,9 @@ impl ::protobuf::Message for CommitBatchRequest {
                 18 => {
                     self.mutations.push(is.read_message()?);
                 },
+                26 => {
+                    self.scoped_admission = is.read_bytes()?;
+                },
                 tag => {
                     ::protobuf::rt::read_unknown_or_skip_group(tag, is, self.special_fields.mut_unknown_fields())?;
                 },
@@ -5239,6 +5249,9 @@ impl ::protobuf::Message for CommitBatchRequest {
             let len = value.compute_size();
             my_size += 1 + ::protobuf::rt::compute_raw_varint64_size(len) + len;
         };
+        if !self.scoped_admission.is_empty() {
+            my_size += ::protobuf::rt::bytes_size(3, &self.scoped_admission);
+        }
         my_size += ::protobuf::rt::unknown_fields_size(self.special_fields.unknown_fields());
         self.special_fields.cached_size().set(my_size as u32);
         my_size
@@ -5251,6 +5264,9 @@ impl ::protobuf::Message for CommitBatchRequest {
         for v in &self.mutations {
             ::protobuf::rt::write_message_field_with_cached_size(2, v, os)?;
         };
+        if !self.scoped_admission.is_empty() {
+            os.write_bytes(3, &self.scoped_admission)?;
+        }
         os.write_unknown_fields(self.special_fields.unknown_fields())?;
         ::std::result::Result::Ok(())
     }
@@ -5270,6 +5286,7 @@ impl ::protobuf::Message for CommitBatchRequest {
     fn clear(&mut self) {
         self.meta.clear();
         self.mutations.clear();
+        self.scoped_admission.clear();
         self.special_fields.clear();
     }
 
@@ -5277,6 +5294,7 @@ impl ::protobuf::Message for CommitBatchRequest {
         static instance: CommitBatchRequest = CommitBatchRequest {
             meta: ::protobuf::MessageField::none(),
             mutations: ::std::vec::Vec::new(),
+            scoped_admission: ::std::vec::Vec::new(),
             special_fields: ::protobuf::SpecialFields::new(),
         };
         &instance
@@ -7406,21 +7424,22 @@ static file_descriptor_proto_data: &'static [u8] = b"\
     \x08resource\x12\x1a\n\x08revision\x18\x02\x20\x01(\x04R\x08revision\x12\
     4\n\x05error\x18\x03\x20\x01(\x0b2\x1e.d2b.resource.v3.ResourceErrorR\
     \x05error\x12G\n\x0bdisposition\x18\x04\x20\x01(\x0e2%.d2b.resource.v3.R\
-    econcileDispositionR\x0bdisposition\"\x7f\n\x12CommitBatchRequest\x120\n\
-    \x04meta\x18\x01\x20\x01(\x0b2\x1c.d2b.resource.v3.RequestMetaR\x04meta\
-    \x127\n\tmutations\x18\x02\x20\x03(\x0b2\x19.d2b.resource.v3.MutationR\t\
-    mutations\"\x8c\x02\n\x13CommitBatchResponse\x12D\n\tresources\x18\x01\
-    \x20\x03(\x0b2&.d2b.resource.v3.ResourceEnvelopeBytesR\tresources\x12\
-    \x1a\n\x08revision\x18\x02\x20\x01(\x04R\x08revision\x124\n\x05error\x18\
-    \x03\x20\x01(\x0b2\x1e.d2b.resource.v3.ResourceErrorR\x05error\x12?\n\
-    \x19conflict_mutation_ordinal\x18\x04\x20\x01(\rH\0R\x17conflictMutation\
-    Ordinal\x88\x01\x01B\x1c\n\x1a_conflict_mutation_ordinal\"\x80\x01\n\x11\
-    ResolveRefRequest\x120\n\x04meta\x18\x01\x20\x01(\x0b2\x1c.d2b.resource.\
-    v3.RequestMetaR\x04meta\x129\n\x06target\x18\x02\x20\x01(\x0b2!.d2b.reso\
-    urce.v3.ResourceIdentityR\x06target\"\x89\x01\n\x12ResolveRefResponse\
-    \x12=\n\x08resource\x18\x01\x20\x01(\x0b2!.d2b.resource.v3.ResourceIdent\
-    ityR\x08resource\x124\n\x05error\x18\x02\x20\x01(\x0b2\x1e.d2b.resource.\
-    v3.ResourceErrorR\x05error\"m\n\x14InspectSchemaRequest\x120\n\x04meta\
+    econcileDispositionR\x0bdisposition\"\xaa\x01\n\x12CommitBatchRequest\
+    \x120\n\x04meta\x18\x01\x20\x01(\x0b2\x1c.d2b.resource.v3.RequestMetaR\
+    \x04meta\x127\n\tmutations\x18\x02\x20\x03(\x0b2\x19.d2b.resource.v3.Mut\
+    ationR\tmutations\x12)\n\x10scoped_admission\x18\x03\x20\x01(\x0cR\x0fsc\
+    opedAdmission\"\x8c\x02\n\x13CommitBatchResponse\x12D\n\tresources\x18\
+    \x01\x20\x03(\x0b2&.d2b.resource.v3.ResourceEnvelopeBytesR\tresources\
+    \x12\x1a\n\x08revision\x18\x02\x20\x01(\x04R\x08revision\x124\n\x05error\
+    \x18\x03\x20\x01(\x0b2\x1e.d2b.resource.v3.ResourceErrorR\x05error\x12?\
+    \n\x19conflict_mutation_ordinal\x18\x04\x20\x01(\rH\0R\x17conflictMutati\
+    onOrdinal\x88\x01\x01B\x1c\n\x1a_conflict_mutation_ordinal\"\x80\x01\n\
+    \x11ResolveRefRequest\x120\n\x04meta\x18\x01\x20\x01(\x0b2\x1c.d2b.resou\
+    rce.v3.RequestMetaR\x04meta\x129\n\x06target\x18\x02\x20\x01(\x0b2!.d2b.\
+    resource.v3.ResourceIdentityR\x06target\"\x89\x01\n\x12ResolveRefRespons\
+    e\x12=\n\x08resource\x18\x01\x20\x01(\x0b2!.d2b.resource.v3.ResourceIden\
+    tityR\x08resource\x124\n\x05error\x18\x02\x20\x01(\x0b2\x1e.d2b.resource\
+    .v3.ResourceErrorR\x05error\"m\n\x14InspectSchemaRequest\x120\n\x04meta\
     \x18\x01\x20\x01(\x0b2\x1c.d2b.resource.v3.RequestMetaR\x04meta\x12#\n\r\
     resource_type\x18\x02\x20\x01(\tR\x0cresourceType\"\x8d\x01\n\x15Inspect\
     SchemaResponse\x12>\n\x06schema\x18\x01\x20\x01(\x0b2&.d2b.resource.v3.R\

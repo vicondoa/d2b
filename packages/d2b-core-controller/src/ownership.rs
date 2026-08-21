@@ -2,10 +2,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use d2b_contracts_resource::v3::{
-    FinalizerId,
-    ResourceRef,
-};
+use d2b_contracts_resource::v3::{FinalizerId, ResourceRef};
 use d2b_controller_toolkit::ResourceKey;
 
 use crate::audit::{AuditEvent, resource_name_digest};
@@ -384,10 +381,7 @@ pub fn commit_atomic_deletion(
 
 #[cfg(test)]
 mod tests {
-    use d2b_contracts_resource::v3::{
-    ResourceUid,
-    ZoneId,
-};
+    use d2b_contracts_resource::v3::{ResourceUid, ZoneId};
 
     use super::*;
 
@@ -531,11 +525,8 @@ mod tests {
             timestamp.clone(),
         );
         assert_eq!(
-            commit_atomic_deletion(
-                blocked,
-                d2b_contracts_resource::v3::ZoneRevision::new(4)
-            )
-            .unwrap_err(),
+            commit_atomic_deletion(blocked, d2b_contracts_resource::v3::ZoneRevision::new(4))
+                .unwrap_err(),
             AtomicDeletionError::FinalizersRemain
         );
         let committed = commit_atomic_deletion(

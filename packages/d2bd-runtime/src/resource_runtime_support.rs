@@ -6,7 +6,7 @@ use std::{
     io::{self, Read},
     os::unix::fs::FileTypeExt,
     path::Path,
-    sync::Arc,
+    sync::{Arc, Mutex},
     time::{SystemTime, UNIX_EPOCH},
 };
 
@@ -53,6 +53,7 @@ use d2b_contracts_resource::v3::identity::{
     TransportBinding,
 };
 use d2b_core_controller::{
+    controller_assignment::ControllerAssignmentRegistry,
     authority::HostGlobalAuthorityIndex,
     controllers::{CoreHandlerKind, HandlerOutcome, HandlerPhase, HandlerStatus},
     main::{
@@ -61,6 +62,15 @@ use d2b_core_controller::{
     },
     zone_status::ZoneRuntimeMetadata,
 };
+
+/// Provider-neutral Core assignment registry shared by Resource API and bus
+/// admission for one Zone runtime.
+pub type AssignmentRegistry = Arc<Mutex<ControllerAssignmentRegistry>>;
+
+/// Construct one empty Zone assignment registry.
+pub fn new_assignment_registry() -> AssignmentRegistry {
+    Arc::new(Mutex::new(ControllerAssignmentRegistry::default()))
+}
 use d2b_resource_api::{
     RedbBackend, ResourceApiClient, ResourceBusAdapter, ResourceService,
     authz::{

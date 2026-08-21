@@ -3,13 +3,8 @@
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 
 use d2b_contracts_resource::v3::{
-    ControllerGeneration,
-    ObservedGeneration,
-    ResourceGeneration,
-    ResourceRef,
-    ResourceTypeName,
-    ZoneId,
-    ZoneRevision,
+    ControllerGeneration, ObservedGeneration, ResourceGeneration, ResourceRef, ResourceTypeName,
+    ZoneId, ZoneRevision,
 };
 
 pub use d2b_controller_toolkit::{

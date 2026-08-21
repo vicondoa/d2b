@@ -5,8 +5,7 @@
 //! deleted by an authorized caller before a Quota can drain.
 
 use d2b_contracts_resource::v3::{
-    QuotaSpec,
-    ResourceTypeName,
+    QuotaSpec, ResourceTypeName,
     quota::{QuotaContractError, QuotaEnforcementPolicy},
 };
 
@@ -141,12 +140,8 @@ impl From<QuotaContractError> for QuotaGateError {
 mod tests {
     use super::*;
     use d2b_contracts_resource::v3::{
-    QuotaCeilings,
-    QuotaEnforcementPolicy,
-    QuotaScope,
-    QuotaSpec,
-    QuotaTypeCeiling,
-};
+        QuotaCeilings, QuotaEnforcementPolicy, QuotaScope, QuotaSpec, QuotaTypeCeiling,
+    };
     use std::collections::BTreeMap;
 
     fn quota(policy: QuotaEnforcementPolicy) -> QuotaSpec {

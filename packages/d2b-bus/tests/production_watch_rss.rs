@@ -218,6 +218,7 @@ fn mutation(
                 remove_finalizers: Vec::new(),
                 wait_for_reconcile: false,
                 reconcile_deadline_ms: None,
+                assignment: None,
             },
             None,
             Some(digest),

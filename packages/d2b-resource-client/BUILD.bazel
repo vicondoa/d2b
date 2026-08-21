@@ -15,6 +15,7 @@ rust_library(
     deps = [
         "//packages/d2b-contracts-resource:d2b_contracts_resource",
         "//packages/d2b-contracts-zone-session:d2b_contracts_zone_session",
+        "//packages/d2b-core-controller:d2b_core_controller",
         "//packages/d2b-contracts:d2b_contracts",
     ] + all_crate_deps(normal = True, cargo_only = True),
 )

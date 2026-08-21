@@ -18,6 +18,7 @@ use d2b_contracts_resource::v3::{
     ConfigurationGeneration,
     ControllerGeneration,
     RESOURCE_ENVELOPE_DOMAIN_TAG,
+    ResourceEnvelope,
     ResourceName,
     ResourceRef,
     ResourceUid,
@@ -45,6 +46,7 @@ use d2b_contracts_resource::v3::identity::{
 use d2b_contracts_broker::broker_wire::{
     BrokerCallerRole, OpenZoneStoreResponse, ZoneStoreDisposition,
 };
+use d2b_core_controller::controller_assignment::ScopedCommitTransport;
 use d2b_resource_api::{
     RedbBackend, ResourceBusAdapter, ResourceService,
     authz::{
@@ -54,7 +56,10 @@ use d2b_resource_api::{
     },
 };
 use d2b_resource_store::{PolicySnapshot, StoreSlot};
-use d2b_resource_store_redb::{RedbResourceStore, StoreIdentity, write_provisioning_marker};
+use d2b_resource_store_redb::{
+    DecodedKey, DecodedKeyComponent, DecodedValue, RedbResourceStore, StoreIdentity, ValueKind,
+    write_provisioning_marker,
+};
 use d2bd::provider_effects::{
     EffectDispatch, GuestLifecycleOperation, GuestLifecycleRequest, GuestLifecycleState,
     ProviderEffectError, ProviderLifecycleDispatch, ProviderLifecycleEffectPort,
@@ -690,6 +695,264 @@ async fn authenticated_operator_reaches_ready_resource_plane_and_refuses_other_s
         refused.is_err(),
         "unbound User must not inherit operator Resource API grants"
     );
+    drop(client);
+    runtime.shutdown().await.expect("shutdown resource runtime");
+}
+
+#[tokio::test]
+async fn scoped_status_finalizer_batch_reaches_redb_atomically_and_rebinds_assignment() {
+    let directory = tempfile::tempdir().expect("resource-plane directory");
+    let zone = ZoneId::parse("work").unwrap();
+    let marker_identity = format!("sha256:{}", "e".repeat(64));
+    let database_path = directory.path().join("store.redb");
+    let marker_path = directory.path().join("store.marker");
+    let snapshot = PolicySnapshot {
+        policy_revision: 1,
+        api_catalog_revision: 1,
+        active_configuration_revision: ConfigurationGeneration::new(1).unwrap(),
+        controller_generation: Some(ControllerGeneration::new(1).unwrap()),
+    };
+    let store_identity = StoreIdentity::new(
+        StoreSlot::new(0).unwrap(),
+        stable_uid("store", &marker_identity),
+        zone.clone(),
+        stable_uid("zone", zone.as_str()),
+        d2b_contracts_resource::v3::Timestamp::parse("1970-01-01T00:00:00.000Z").unwrap(),
+        snapshot,
+    );
+    seed_host_resource(
+        &zone,
+        &database_path,
+        &marker_path,
+        &marker_identity,
+        store_identity,
+        snapshot,
+    )
+    .await;
+
+    let database = OpenOptions::new()
+        .read(true)
+        .write(true)
+        .open(&database_path)
+        .expect("reopen redb file");
+    let mut runtime = ZoneResourceRuntime::open(
+        zone.clone(),
+        OpenedZoneStore {
+            response: OpenZoneStoreResponse {
+                zone_store_id: ZoneStoreId::parse("zone-store-work").unwrap(),
+                store_identity: marker_identity,
+                disposition: ZoneStoreDisposition::Opened,
+                fd_index: 0,
+            },
+            database_fd: database.into(),
+            external_inventory: None,
+        },
+    )
+    .await
+    .expect("open production Zone runtime");
+    runtime.set_provider_path_ready(true);
+
+    let (operator_ref, operator_uid) = ZoneResourceRuntime::operator_subject_identity();
+    let controller_generation = runtime
+        .committed_policy_snapshot()
+        .controller_generation
+        .expect("runtime controller generation");
+    let client = runtime
+        .bind_operator_resource_client(
+            operator_context(&zone, operator_ref, operator_uid)
+                .with_controller_generation(controller_generation),
+        )
+        .expect("bind authenticated operator Resource API client");
+    let mut target_identity = wire::ResourceIdentity::new();
+    target_identity.zone = zone.as_str().to_owned();
+    target_identity.resource_type = "Host".to_owned();
+    target_identity.name = "host-system".to_owned();
+    let mut get = wire::GetRequest::new();
+    let mut get_meta = wire::RequestMeta::new();
+    get_meta.operation_id = "scoped-assignment-read".to_owned();
+    get_meta.correlation_id = get_meta.operation_id.clone();
+    get.meta = MessageField::some(get_meta);
+    get.target = MessageField::some(target_identity);
+    let mut projection = wire::Projection::new();
+    projection.kind = EnumOrUnknown::new(wire::ProjectionKind::PROJECTION_KIND_FULL);
+    get.projection = MessageField::some(projection);
+    let current = client.get(get).await;
+    assert!(
+        current.error.is_none(),
+        "read seeded Host failed: {:?}",
+        current.error
+    );
+    let current = current.resource.as_ref().expect("seeded Host response");
+    let current_identity = current.identity.as_ref().expect("seeded Host identity");
+    let uid = ResourceUid::parse(current_identity.uid.as_ref().expect("seeded Host UID")).unwrap();
+    let initial_revision = current_identity.revision.expect("seeded Host revision");
+    let before_batch = runtime
+        .backup_before_live_adoption()
+        .await
+        .expect("capture pre-batch redb state");
+    assert_eq!(before_batch.current_revision, initial_revision);
+    let batch_revision = initial_revision
+        .checked_add(1)
+        .expect("batch revision remains in range");
+    let mut status_value = CanonicalJsonValue::parse(&current.canonical_json).unwrap();
+    let CanonicalJsonValue::Object(root) = &mut status_value else {
+        panic!("seeded Host envelope must be an object");
+    };
+    let CanonicalJsonValue::Object(status) = root.get_mut("status").expect("seeded Host status")
+    else {
+        panic!("seeded Host status must be an object");
+    };
+    status.insert(
+        "phase".to_owned(),
+        CanonicalJsonValue::String("Ready".to_owned()),
+    );
+    let status_payload = status_value.to_canonical_bytes();
+    let status_digest = ResourceEnvelope::from_json(&status_payload)
+        .unwrap()
+        .digest()
+        .unwrap();
+    let make_precondition = |revision| {
+        let mut precondition = wire::Precondition::new();
+        precondition.kind =
+            EnumOrUnknown::new(wire::PreconditionKind::PRECONDITION_KIND_EXACT_REVISION);
+        precondition.expected_revision = Some(revision);
+        precondition.expected_uid = Some(uid.as_str().to_owned());
+        precondition
+    };
+    let make_batch = |operation_id: &str, status_revision: u64, finalizer_revision: u64| {
+        let mut status_mutation = wire::Mutation::new();
+        status_mutation.kind = EnumOrUnknown::new(wire::MutationKind::MUTATION_KIND_UPDATE_STATUS);
+        status_mutation.target = MessageField::some(current_identity.clone());
+        status_mutation.precondition = MessageField::some(make_precondition(status_revision));
+        let mut status_body = wire::ResourceEnvelopeBytes::new();
+        status_body.identity = MessageField::some(current_identity.clone());
+        status_body.canonical_json = status_payload.clone();
+        status_body.payload_digest = status_digest.clone();
+        status_mutation.resource = MessageField::some(status_body);
+
+        let mut finalizer_mutation = wire::Mutation::new();
+        finalizer_mutation.kind =
+            EnumOrUnknown::new(wire::MutationKind::MUTATION_KIND_UPDATE_FINALIZERS);
+        finalizer_mutation.target = MessageField::some(current_identity.clone());
+        finalizer_mutation.precondition = MessageField::some(make_precondition(finalizer_revision));
+        finalizer_mutation
+            .add_finalizers
+            .push("core.controller-batch".to_owned());
+
+        let mut request = wire::CommitBatchRequest::new();
+        let mut meta = wire::RequestMeta::new();
+        meta.operation_id = operation_id.to_owned();
+        meta.idempotency_key = operation_id.to_owned();
+        meta.correlation_id = operation_id.to_owned();
+        request.meta = MessageField::some(meta);
+        request.mutations = vec![status_mutation, finalizer_mutation];
+        request
+    };
+    let transport = ScopedCommitTransport::decode(
+        format!(
+            r#"{{"version":1,"assignment":{{"resourceUid":"{}","resourceRevision":{},"providerGeneration":2,"controllerGeneration":3,"controllerRole":"Process/process-controller","target":{{"kind":"execution","targetKind":"host","reference":"Host/host-system"}},"sessionGeneration":1,"epoch":1}},"mutations":[{{"target":"Host/host-system","verb":"UpdateStatus"}},{{"target":"Host/host-system","verb":"UpdateFinalizers"}}]}}"#,
+            uid.as_str(),
+            initial_revision,
+        )
+        .as_bytes(),
+    )
+    .unwrap();
+
+    let committed = client
+        .scoped_commit_batch(
+            make_batch("scoped-assignment-batch", initial_revision, batch_revision),
+            transport.mutations().to_vec(),
+        )
+        .await;
+    assert!(
+        committed.error.is_none(),
+        "valid scoped batch failed: kind={:?} reason={}",
+        committed.error.as_ref().map(|error| error.kind),
+        committed
+            .error
+            .as_ref()
+            .map_or("<none>", |error| error.reason.as_str())
+    );
+    assert_eq!(committed.revision, batch_revision);
+    assert_eq!(committed.resources.len(), 2);
+
+    let backup = runtime
+        .backup_before_live_adoption()
+        .await
+        .expect("capture committed redb backup");
+    assert_eq!(backup.current_revision, batch_revision);
+    let resources = backup
+        .tables
+        .iter()
+        .find(|table| table.name == "resources")
+        .expect("resources table in backup");
+    let resource_row = resources
+        .rows
+        .iter()
+        .find(|row| {
+            let key = DecodedKey::decode(&row.key).expect("decode resource key");
+            matches!(
+                key.components(),
+                [
+                    DecodedKeyComponent::Text(resource_type),
+                    DecodedKeyComponent::Text(resource_name)
+                ] if resource_type == "Host" && resource_name == "host-system"
+            )
+        })
+        .expect("durable Host resource row");
+    let encoded_record = DecodedValue::decode(&resource_row.value).expect("decode resource record");
+    assert_eq!(encoded_record.kind(), ValueKind::ResourceRecord);
+    let record: serde_json::Value = serde_json::from_slice(encoded_record.canonical_json())
+        .expect("decode resource record JSON");
+    assert_eq!(record["assignment"]["resourceRevision"], batch_revision);
+    let canonical_json: Vec<u8> =
+        serde_json::from_value(record["canonical_json"].clone()).expect("decode stored envelope");
+    let envelope = ResourceEnvelope::from_json(&canonical_json).expect("stored envelope");
+    assert_eq!(
+        envelope.status().phase(),
+        d2b_contracts_resource::v3::ResourcePhase::Ready
+    );
+    assert!(
+        serde_json::from_slice::<serde_json::Value>(&canonical_json)
+            .expect("decode stored envelope JSON")["metadata"]["finalizers"]
+            .as_array()
+            .expect("stored finalizer array")
+            .iter()
+            .any(|finalizer| finalizer == "core.controller-batch")
+    );
+
+    let stale = client
+        .scoped_commit_batch(
+            make_batch(
+                "scoped-stale-assignment-batch",
+                batch_revision,
+                batch_revision
+                    .checked_add(1)
+                    .expect("stale batch revision remains in range"),
+            ),
+            transport.mutations().to_vec(),
+        )
+        .await;
+    assert!(
+        stale.error.is_some(),
+        "stale assignment batch must be rejected"
+    );
+    assert_eq!(
+        stale
+            .error
+            .as_ref()
+            .map(|error| error.kind.enum_value_or_default()),
+        Some(wire::ResourceErrorKind::RESOURCE_ERROR_KIND_RESOURCE_CONFLICT)
+    );
+    assert_eq!(
+        stale.error.as_ref().map(|error| error.reason.as_str()),
+        Some("stale-assignment")
+    );
+    let after_stale = runtime
+        .backup_before_live_adoption()
+        .await
+        .expect("capture redb state after stale batch");
+    assert_eq!(after_stale.current_revision, batch_revision);
     drop(client);
     runtime.shutdown().await.expect("shutdown resource runtime");
 }

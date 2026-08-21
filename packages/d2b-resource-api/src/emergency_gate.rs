@@ -1,10 +1,6 @@
 //! Pure EmergencyPolicy admission and effect signals.
 
-use d2b_contracts_zone_session::v3::{
-    EmergencyPolicySpec,
-    EmergencyScope,
-    effective_scope,
-};
+use d2b_contracts_zone_session::v3::{EmergencyPolicySpec, EmergencyScope, effective_scope};
 
 /// Effective Zone-wide emergency gate.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]

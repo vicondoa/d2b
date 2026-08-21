@@ -8,40 +8,57 @@ use std::{
 
 use async_trait::async_trait;
 use d2b_bus::{
-    BusAuthorizer, BusConfig, BusError, ComponentSessionAdmission, OperationId, OperationSpec,
-    ResourceCall, RouteGenerations, RouteKey, RouteMember, RouteTarget, ZoneBus, ZoneRegistrar,
+    AuthorizationError, BusAuthorizer, BusConfig, BusError, ComponentSessionAdmission, OperationId,
+    EndpointError, OperationSpec, ResourceCall, RouteGenerations, RouteKey, RouteMember,
+    RouteTarget, ZoneBus, ZoneRegistrar,
 };
-use d2b_contracts_zone_session::v3::{
-    component_session::{AttachmentPolicy, CloseReason, EndpointPolicy, EndpointPurpose, EndpointRole, IdentityEvidenceRequirement, LimitProfile, Locality, NoiseProfile, PurposeClass, Remediation, ServicePackage, TransportBinding, TransportClass},
-};
-use d2b_contracts_resource::v3::{
-    ConfigurationGeneration,
-    ControllerGeneration,
-    ResourceGeneration,
-    ResourceRef,
-    ResourceUid,
-    SchemaFingerprint,
-    ZoneId,
-    ZoneRevision,
+use d2b_contracts_provider::v3::{
+    ArtifactDigest, ArtifactDigestSet, BinaryRef, CompatibilityRange, ComponentDescriptor,
+    ComponentExecution, ComponentTargetCapability, ComponentType, ControllerInstanceScope,
+    ControllerTargetKind, EffectPortClass, PolicyEvaluation, ProviderManifest, ResourceApiBinding,
+    RevocationState, SignatureState, TargetRuntimeArtifacts, TrustEvidence, UpgradeDisposition,
+    UpgradePolicy,
 };
 use d2b_contracts_resource::v3::identity::{
-    BindingDigest,
-    EvidenceClass,
-    ServiceName,
+    BindingDigest, EvidenceClass, ReconnectGeneration, ServiceName,
+};
+use d2b_contracts_resource::v3::{
+    ConfigurationGeneration, ControllerGeneration, ExecutionDomain, PlacementAnchor,
+    ResourceGeneration, ResourceRef, ResourceUid, SchemaFingerprint, SchemaVersion, ZoneId,
+    ZoneRevision,
+};
+use d2b_contracts_zone_session::v3::component_session::{
+    AttachmentPolicy, CloseReason, EndpointPolicy, EndpointPurpose, EndpointRole,
+    IdentityEvidenceRequirement, LimitProfile, Locality, NoiseProfile, PurposeClass, Remediation,
+    ServicePackage, TransportBinding, TransportClass,
+};
+use d2b_core_controller::controller_assignment::{
+    AssignmentError, AssignmentRequest, AssignmentVerb, ControllerAssignmentRegistry,
+    ControllerRoleContract, ScopedCommitTransport,
 };
 use d2b_resource_api::authz::{
     ApiCatalog, AuthorizationState, BindingScope, BootstrapPhase, BoundSubject, CompiledRole,
     CompiledRoleBinding, NativeAuthorizer, PolicyRule, PolicySet, RelayGrantAuthority,
     ResourceVerb, SessionVerb,
 };
+use d2b_resource_api::{ResourceBusAdapter, ResourceService, ResourceStoreBackend};
 use d2b_resource_store::PolicySnapshot;
+use d2b_resource_store::mutation_seal::{MutationSealAcceptor, MutationSealBody};
+use d2b_resource_store::{
+    ResourceMutationKind, StoreCommitResult, StoreError, StoreGetRequest,
+    StoreInspectSchemaRequest, StoreListRequest, StoreListResult, StoreResolveRequest,
+    StoreResolvedIdentity, StoreSealIdentity, StoreSlot, StoreWatchReceipt, StoreWatchRequest,
+    StoredResource, StoredSchema,
+};
 use d2b_session::{
     AuthenticatedComponentSession, ComponentSessionDriver, HandshakeCredentials, OwnedTransport,
     SessionDriverHandle, SessionEngine, TransportDescriptor, TransportError, TransportEvidence,
-    TransportPacket, ttrpc_request_id, ttrpc_stream_id,
+    TransportPacket, serve_ttrpc_services, ttrpc_request_id, ttrpc_stream_id,
 };
 use d2b_session_unix::{SeqpacketSocket, VerifiedUnixPeer, prearmed_seqpacket_pair};
+use protobuf::Message;
 use tokio::sync::{Notify, mpsc};
+use ttrpc::proto::{MessageHeader, Request as TtrpcRequest};
 
 use crate::router::UnixSubjectRecord;
 
@@ -211,7 +228,28 @@ async fn admit(
     SessionDriverHandle,
     tokio::task::JoinHandle<()>,
 ) {
-    admit_with_writer_pause(registrar, policy, subject, uid, provider, _allowed, None).await
+    admit_inner(
+        registrar, policy, subject, uid, provider, _allowed, None, true,
+    )
+    .await
+}
+
+async fn admit_without_echo(
+    registrar: &ZoneRegistrar,
+    policy: EndpointPolicy,
+    subject: &str,
+    uid: &str,
+    provider: &str,
+    allowed: impl IntoIterator<Item = SessionVerb>,
+) -> (
+    AuthenticatedComponentSession<ComponentSessionAdmission>,
+    SessionDriverHandle,
+    tokio::task::JoinHandle<()>,
+) {
+    admit_inner(
+        registrar, policy, subject, uid, provider, allowed, None, false,
+    )
+    .await
 }
 
 async fn admit_with_writer_pause(
@@ -222,6 +260,33 @@ async fn admit_with_writer_pause(
     provider: &str,
     _allowed: impl IntoIterator<Item = SessionVerb>,
     writer_pause: Option<Arc<WriterPause>>,
+) -> (
+    AuthenticatedComponentSession<ComponentSessionAdmission>,
+    SessionDriverHandle,
+    tokio::task::JoinHandle<()>,
+) {
+    admit_inner(
+        registrar,
+        policy,
+        subject,
+        uid,
+        provider,
+        _allowed,
+        writer_pause,
+        true,
+    )
+    .await
+}
+
+async fn admit_inner(
+    registrar: &ZoneRegistrar,
+    policy: EndpointPolicy,
+    subject: &str,
+    uid: &str,
+    provider: &str,
+    _allowed: impl IntoIterator<Item = SessionVerb>,
+    writer_pause: Option<Arc<WriterPause>>,
+    start_echo: bool,
 ) -> (
     AuthenticatedComponentSession<ComponentSessionAdmission>,
     SessionDriverHandle,
@@ -262,14 +327,18 @@ async fn admit_with_writer_pause(
         ),
     );
     let remote = responder.unwrap().into_driver();
-    let echo_remote = remote.clone();
-    let echo = tokio::spawn(async move {
-        while let Ok(frame) = echo_remote.receive_ttrpc().await {
-            if echo_remote.send_ttrpc(frame).await.is_err() {
-                break;
+    let echo = if start_echo {
+        let echo_remote = remote.clone();
+        tokio::spawn(async move {
+            while let Ok(frame) = echo_remote.receive_ttrpc().await {
+                if echo_remote.send_ttrpc(frame).await.is_err() {
+                    break;
+                }
             }
-        }
-    });
+        })
+    } else {
+        tokio::spawn(async {})
+    };
     let subject_ref = ResourceRef::parse(subject).unwrap();
     let subject_uid = ResourceUid::parse(uid).unwrap();
     let provider_ref = ResourceRef::parse(provider).unwrap();
@@ -303,6 +372,8 @@ async fn admit_with_writer_pause(
         )
         .unwrap()
         .with_provider(provider_ref, provider_generation)
+        .unwrap()
+        .with_execution_ref(ResourceRef::parse("Host/host-system").unwrap())
         .unwrap(),
     }
     .with_controller_generation(ControllerGeneration::new(CONTROLLER_GENERATION).unwrap());
@@ -453,6 +524,606 @@ fn route(service: &str, member: &str, generation: u64, provider: &str) -> RouteK
             d2b_contracts_resource::v3::identity::ReconnectGeneration::new(generation).unwrap(),
         ),
     )
+}
+
+const ASSIGNMENT_DIGEST: &str =
+    "sha256:0000000000000000000000000000000000000000000000000000000000000000";
+
+fn assignment_digest() -> ArtifactDigest {
+    ArtifactDigest::parse(ASSIGNMENT_DIGEST).unwrap()
+}
+
+fn assignment_fingerprint() -> SchemaFingerprint {
+    SchemaFingerprint::parse(ASSIGNMENT_DIGEST).unwrap()
+}
+
+fn assignment_manifest() -> ProviderManifest {
+    let process = d2b_contracts_resource::v3::ResourceTypeName::parse("Process").unwrap();
+    let component = ComponentDescriptor::new(
+        d2b_contracts_resource::v3::execution_policy::BoundedToken::parse("process-controller")
+            .unwrap(),
+        ComponentType::Controller,
+        [process.clone()],
+        [],
+        [ExecutionDomain::System],
+        1,
+        assignment_digest(),
+        [],
+        false,
+    )
+    .unwrap()
+    .with_execution(ComponentExecution::Launchable {
+        binary_ref: BinaryRef::parse("process-controller").unwrap(),
+    })
+    .with_controller_placement(
+        ControllerInstanceScope::PerResourceTarget,
+        [ControllerTargetKind::Host, ControllerTargetKind::Guest],
+    )
+    .unwrap()
+    .with_target_capabilities([
+        ComponentTargetCapability::new(
+            ControllerTargetKind::Host,
+            assignment_digest(),
+            [EffectPortClass::Process],
+        )
+        .unwrap(),
+        ComponentTargetCapability::new(
+            ControllerTargetKind::Guest,
+            assignment_digest(),
+            [EffectPortClass::Process],
+        )
+        .unwrap(),
+    ])
+    .unwrap();
+    let binding = ResourceApiBinding::new_with_placement(
+        process,
+        SchemaVersion::new(1, 0).unwrap(),
+        assignment_fingerprint(),
+        SchemaVersion::new(1, 0).unwrap(),
+        assignment_fingerprint(),
+        Default::default(),
+        None,
+        None,
+        PlacementAnchor::ExecutionRef,
+    )
+    .unwrap();
+    let trust = TrustEvidence {
+        publisher: d2b_contracts_resource::v3::execution_policy::BoundedToken::parse("trusted")
+            .unwrap(),
+        root_epoch: 1,
+        publisher_trusted: true,
+        signature: SignatureState::Valid,
+        revocation: RevocationState::Clear,
+        emergency_deny: false,
+        provenance: PolicyEvaluation::Accepted,
+        sbom: PolicyEvaluation::Accepted,
+        license: PolicyEvaluation::Accepted,
+        vulnerability: PolicyEvaluation::Accepted,
+        conformance: PolicyEvaluation::Accepted,
+        support_channel: d2b_contracts_resource::v3::execution_policy::BoundedToken::parse(
+            "stable",
+        )
+        .unwrap(),
+    };
+    ProviderManifest::new(
+        d2b_contracts_resource::v3::ArtifactId::parse("provider-system-core").unwrap(),
+        ArtifactDigestSet {
+            package: assignment_digest(),
+            executable: assignment_digest(),
+            manifest: assignment_digest(),
+            config: assignment_digest(),
+            schema: assignment_digest(),
+            service: assignment_digest(),
+        },
+        trust,
+        CompatibilityRange {
+            api_major: 3,
+            api_minor: 0,
+            descriptor_fingerprint: assignment_fingerprint(),
+            state_schema_version: SchemaVersion::new(1, 0).unwrap(),
+        },
+        [component],
+        [binding],
+        [],
+        UpgradePolicy {
+            drain_before_upgrade: true,
+            max_automatic_disposition: UpgradeDisposition::InPlace,
+            preserves_durable_state: true,
+        },
+    )
+    .unwrap()
+    .with_target_runtime_artifacts([
+        TargetRuntimeArtifacts::new(
+            ControllerTargetKind::Host,
+            assignment_digest(),
+            assignment_digest(),
+        )
+        .unwrap(),
+        TargetRuntimeArtifacts::new(
+            ControllerTargetKind::Guest,
+            assignment_digest(),
+            assignment_digest(),
+        )
+        .unwrap(),
+    ])
+    .unwrap()
+}
+
+fn assignment_resource() -> d2b_contracts_resource::v3::ResourceEnvelope {
+    d2b_contracts_resource::v3::ResourceEnvelope::from_json(
+        br#"{"apiVersion":"resources.d2bus.org/v3","type":"Process","metadata":{"configurationGeneration":null,"createdAt":"2026-07-22T00:00:00.000Z","deletionRequestedAt":null,"finalizers":[],"generation":1,"managedBy":"api","name":"work","ownerRef":null,"revision":7,"uid":"123e4567-e89b-42d3-a456-426614174000","updatedAt":"2026-07-22T00:00:00.000Z","zone":"dev"},"spec":{"executionRef":"Host/host-system","providerRef":"Provider/system-core","argv":["true"]},"status":{"completedAt":null,"conditions":[],"lastReconciledAt":null,"observedGeneration":0,"outcome":null,"phase":"Pending","resource":{},"startedAt":null,"update":{"dependencies":{"count":0,"refs":[]},"disruption":"None","lastAssessedAt":null,"observedGeneration":0,"operationId":null,"owned":{"count":0,"refs":[]},"preserveState":true,"reasons":[],"state":"Unknown","targetGeneration":1}}}"#,
+
+    )
+    .unwrap()
+}
+
+fn scoped_bus() -> (
+    ZoneBus,
+    ZoneRegistrar,
+    std::sync::Arc<std::sync::Mutex<ControllerAssignmentRegistry>>,
+    std::sync::Arc<NativeAuthorizer>,
+    AuthorizationState,
+) {
+    let catalog = ApiCatalog::standard();
+    let zone = ZoneId::parse("dev").unwrap();
+    let rule = PolicyRule::new(
+        &catalog,
+        [d2b_contracts_resource::v3::ResourceTypeName::parse("Process").unwrap()],
+        [ResourceVerb::UpdateStatus, ResourceVerb::UpdateFinalizers],
+        [
+            SessionVerb::Connect,
+            SessionVerb::Invoke,
+            SessionVerb::Cancel,
+        ],
+        [],
+        [],
+        [zone.clone()],
+        [],
+    )
+    .unwrap();
+    let role = CompiledRole::new(
+        ResourceRef::parse("Role/scoped-commit").unwrap(),
+        vec![rule],
+    )
+    .unwrap();
+    let subjects = [
+        (
+            "Provider/system-core",
+            "11111111-1111-4111-8111-111111111111",
+        ),
+        ("Host/alice", "22222222-2222-4222-8222-222222222222"),
+    ]
+    .into_iter()
+    .map(|(subject, uid)| BoundSubject {
+        subject_ref: ResourceRef::parse(subject).unwrap(),
+        subject_uid: ResourceUid::parse(uid).unwrap(),
+    });
+    let binding = CompiledRoleBinding::new(
+        role.role_ref.clone(),
+        subjects,
+        BindingScope::default(),
+        RelayGrantAuthority::None,
+    )
+    .unwrap();
+    let policy_set = PolicySet::new(&catalog, 1, vec![role], vec![binding]).unwrap();
+    let native = std::sync::Arc::new(NativeAuthorizer::new(catalog, Some(policy_set)).unwrap());
+    let state = AuthorizationState {
+        snapshot: PolicySnapshot {
+            policy_revision: 1,
+            api_catalog_revision: 1,
+            active_configuration_revision: ConfigurationGeneration::new(1).unwrap(),
+            controller_generation: Some(ControllerGeneration::new(CONTROLLER_GENERATION).unwrap()),
+        },
+        zone_policy_revision: ZoneRevision::new(1),
+        bootstrap_phase: BootstrapPhase::Disabled,
+        now_tick: 1,
+    };
+    let assignments = std::sync::Arc::new(std::sync::Mutex::new(
+        ControllerAssignmentRegistry::default(),
+    ));
+    let authorizer = BusAuthorizer::from_shared(std::sync::Arc::clone(&native), state.clone())
+        .unwrap()
+        .with_assignment_registry(std::sync::Arc::clone(&assignments));
+    let (bus, registrar) = ZoneBus::new(zone, authorizer, BusConfig::default()).unwrap();
+    (bus, registrar, assignments, native, state)
+}
+
+struct ScopedStore {
+    acceptor: MutationSealAcceptor,
+    commits: std::sync::Arc<std::sync::Mutex<Vec<Vec<(ResourceMutationKind, bool)>>>>,
+}
+
+impl ResourceStoreBackend for ScopedStore {
+    async fn get(&self, _: StoreGetRequest) -> Result<StoredResource, StoreError> {
+        unreachable!("scoped commit proof does not read through the backend")
+    }
+
+    async fn list(&self, _: StoreListRequest) -> Result<StoreListResult, StoreError> {
+        unreachable!("scoped commit proof does not list through the backend")
+    }
+
+    async fn watch(&self, _: StoreWatchRequest) -> Result<StoreWatchReceipt, StoreError> {
+        unreachable!("scoped commit proof does not watch through the backend")
+    }
+
+    async fn resolve_ref(
+        &self,
+        _: StoreResolveRequest,
+    ) -> Result<StoreResolvedIdentity, StoreError> {
+        unreachable!("scoped commit proof does not resolve refs through the backend")
+    }
+
+    async fn inspect_schema(
+        &self,
+        _: StoreInspectSchemaRequest,
+    ) -> Result<StoredSchema, StoreError> {
+        unreachable!("scoped commit proof does not inspect schemas through the backend")
+    }
+
+    async fn commit_verified(
+        &self,
+        mutation: d2b_resource_store::SealedMutation,
+    ) -> Result<StoreCommitResult, StoreError> {
+        let body: MutationSealBody = self.acceptor.open(mutation).unwrap().into_body();
+        let observed = body
+            .mutations
+            .iter()
+            .map(|mutation| {
+                (
+                    mutation.mutation().kind,
+                    mutation.mutation().assignment.is_some(),
+                )
+            })
+            .collect::<Vec<_>>();
+        self.commits.lock().unwrap().push(observed);
+        Ok(StoreCommitResult {
+            resources: Vec::new(),
+            revision: ZoneRevision::new(8),
+        })
+    }
+}
+
+fn commit_batch_frame(operation_id: &str) -> Vec<u8> {
+    let envelope = assignment_resource();
+    let identity = d2b_contracts_resource::resource_proto::ResourceIdentity {
+        zone: "dev".to_owned(),
+        resource_type: "Process".to_owned(),
+        name: "work".to_owned(),
+        uid: Some(envelope.metadata().uid().as_str().to_owned()),
+        generation: Some(envelope.metadata().generation().get()),
+        revision: Some(envelope.metadata().revision().get()),
+        special_fields: protobuf::SpecialFields::new(),
+    };
+    let mut precondition = d2b_contracts_resource::resource_proto::Precondition::new();
+    precondition.kind = protobuf::EnumOrUnknown::new(
+        d2b_contracts_resource::resource_proto::PreconditionKind::PRECONDITION_KIND_EXACT_REVISION,
+    );
+    precondition.expected_revision = Some(envelope.metadata().revision().get());
+    precondition.expected_uid = Some(envelope.metadata().uid().as_str().to_owned());
+    let mut status = d2b_contracts_resource::resource_proto::Mutation::new();
+    status.kind = protobuf::EnumOrUnknown::new(
+        d2b_contracts_resource::resource_proto::MutationKind::MUTATION_KIND_UPDATE_STATUS,
+    );
+    status.target = protobuf::MessageField::some(identity.clone());
+    status.precondition = protobuf::MessageField::some(precondition.clone());
+    let mut status_body = d2b_contracts_resource::resource_proto::ResourceEnvelopeBytes::new();
+    status_body.identity = protobuf::MessageField::some(identity.clone());
+    status_body.canonical_json = envelope.canonical_bytes().unwrap();
+    status_body.payload_digest = envelope.digest().unwrap();
+    status.resource = protobuf::MessageField::some(status_body);
+
+    let mut finalizers = d2b_contracts_resource::resource_proto::Mutation::new();
+    finalizers.kind = protobuf::EnumOrUnknown::new(
+        d2b_contracts_resource::resource_proto::MutationKind::MUTATION_KIND_UPDATE_FINALIZERS,
+    );
+    finalizers.target = protobuf::MessageField::some(identity);
+    finalizers.precondition = protobuf::MessageField::some(precondition);
+    finalizers
+        .add_finalizers
+        .push("process.d2bus.org/reconcile".to_owned());
+
+    let mut meta = d2b_contracts_resource::resource_proto::RequestMeta::new();
+    meta.operation_id = operation_id.to_owned();
+    meta.idempotency_key = format!("{operation_id}-key");
+    meta.correlation_id = format!("{operation_id}-correlation");
+    meta.deadline_ms = 10_000;
+    let request = d2b_contracts_resource::resource_proto::CommitBatchRequest {
+        meta: protobuf::MessageField::some(meta),
+        mutations: vec![status, finalizers],
+        scoped_admission: Vec::new(),
+        special_fields: protobuf::SpecialFields::new(),
+    };
+    let rpc = TtrpcRequest {
+        service: "d2b.resource.v3.ResourceService".to_owned(),
+        method: "CommitBatch".to_owned(),
+        payload: request.write_to_bytes().unwrap(),
+        ..TtrpcRequest::default()
+    };
+    let body = rpc.write_to_bytes().unwrap();
+    let header = MessageHeader::new_request(1, body.len() as u32);
+    let mut frame = Vec::with_capacity(ttrpc::proto::MESSAGE_HEADER_LENGTH + body.len());
+    frame.extend_from_slice(&Vec::from(header));
+    frame.extend_from_slice(&body);
+    frame
+}
+
+#[tokio::test]
+async fn production_scoped_commit_chain_authorizes_and_fences_store_writes() {
+    let (_bus, mut registrar, assignments, native, state) = scoped_bus();
+    let resource = assignment_resource();
+    let role = ControllerRoleContract::from_signed_manifest(
+        ResourceRef::parse("Provider/system-core").unwrap(),
+        ResourceRef::parse("Process/process-controller").unwrap(),
+        &assignment_manifest(),
+    )
+    .unwrap();
+    let old_lease = assignments
+        .lock()
+        .unwrap()
+        .admit(AssignmentRequest::new(
+            &resource,
+            &role,
+            ResourceGeneration::new(PROVIDER_GENERATION).unwrap(),
+            ControllerGeneration::new(CONTROLLER_GENERATION).unwrap(),
+            ReconnectGeneration::new(1).unwrap(),
+            true,
+        ))
+        .unwrap();
+    let old_identity = old_lease.identity().clone();
+    let target = ResourceRef::parse("Process/work").unwrap();
+    let old_mutations = vec![
+        old_lease
+            .mutation(target.clone(), AssignmentVerb::UpdateStatus)
+            .unwrap(),
+        old_lease
+            .mutation(target.clone(), AssignmentVerb::UpdateFinalizers)
+            .unwrap(),
+    ];
+
+    let (resource_endpoint, resource_remote, resource_echo) = admit_without_echo(
+        &registrar,
+        policy(
+            ServicePackage::ResourceV3,
+            EndpointPurpose::ResourceService,
+            1,
+        ),
+        "Provider/system-core",
+        "11111111-1111-4111-8111-111111111111",
+        "Provider/system-core",
+        [SessionVerb::Invoke],
+    )
+    .await;
+    let store_identity = StoreSealIdentity::new(
+        StoreSlot::new(0).unwrap(),
+        ZoneId::parse("dev").unwrap(),
+        ResourceUid::parse("99999999-9999-4999-8999-999999999999").unwrap(),
+    );
+    let acceptor = native.take_store_seal(store_identity).unwrap();
+    let commits = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+    let store = std::sync::Arc::new(ScopedStore {
+        acceptor,
+        commits: std::sync::Arc::clone(&commits),
+    });
+    let service = std::sync::Arc::new(
+        ResourceService::new(
+            std::sync::Arc::clone(&store),
+            std::sync::Arc::clone(&native),
+        )
+        .unwrap(),
+    );
+    let endpoint_subject = native
+        .issue_authenticated_subject(
+            resource_endpoint.route_binding().context().clone(),
+            state.clone(),
+        )
+        .unwrap();
+    let adapter = std::sync::Arc::new(
+        ResourceBusAdapter::bind_component_session(service, endpoint_subject).unwrap(),
+    );
+    let service_task = tokio::spawn(serve_ttrpc_services(
+        std::sync::Arc::new(resource_remote),
+        adapter.ttrpc_services(),
+    ));
+    for _ in 0..16 {
+        tokio::task::yield_now().await;
+    }
+    let _resource_ingress = registrar
+        .register_component_session(resource_endpoint)
+        .await
+        .unwrap();
+
+    let (caller, _caller_remote, caller_echo) = admit(
+        &registrar,
+        policy(
+            ServicePackage::ResourceV3,
+            EndpointPurpose::ResourceService,
+            1,
+        ),
+        "Host/alice",
+        "22222222-2222-4222-8222-222222222222",
+        "Provider/system-core",
+        [SessionVerb::Invoke],
+    )
+    .await;
+    let caller = registrar.register_component_session(caller).await.unwrap();
+    let route = route(
+        "d2b.resource.v3",
+        "ResourceService/CommitBatch",
+        1,
+        "Provider/system-core",
+    );
+
+    assignments
+        .lock()
+        .unwrap()
+        .begin_drain(&old_identity)
+        .unwrap();
+    let stale = caller
+        .invoke_scoped_commit_batch(
+            route.clone(),
+            OperationSpec::new(OperationId::parse("scoped-stale").unwrap(), 10_000).unwrap(),
+            old_identity.clone(),
+            old_mutations.clone(),
+            commit_batch_frame("scoped-stale"),
+        )
+        .await
+        .unwrap_err();
+    assert!(matches!(
+        stale,
+        BusError::Authorization(AuthorizationError::Assignment(
+            AssignmentError::StaleAssignment
+        ))
+    ));
+
+    assignments.lock().unwrap().release(&old_identity).unwrap();
+    let new_lease = assignments
+        .lock()
+        .unwrap()
+        .admit(AssignmentRequest::new(
+            &resource,
+            &role,
+            ResourceGeneration::new(PROVIDER_GENERATION).unwrap(),
+            ControllerGeneration::new(CONTROLLER_GENERATION).unwrap(),
+            ReconnectGeneration::new(1).unwrap(),
+            true,
+        ))
+        .unwrap();
+    let new_identity = new_lease.identity().clone();
+    let new_mutations = vec![
+        new_lease
+            .mutation(target.clone(), AssignmentVerb::UpdateStatus)
+            .unwrap(),
+        new_lease
+            .mutation(target.clone(), AssignmentVerb::UpdateFinalizers)
+            .unwrap(),
+    ];
+    let revoked_mutations = new_mutations.clone();
+    let mut scoped_response = None;
+    for attempt in 0..32 {
+        let operation_id = format!("scoped-valid-{attempt}");
+        let response = caller
+            .invoke_scoped_commit_batch(
+                route.clone(),
+                OperationSpec::new(OperationId::parse(&operation_id).unwrap(), 10_000).unwrap(),
+                new_identity.clone(),
+                new_mutations.clone(),
+                commit_batch_frame(&operation_id),
+            )
+            .await
+            .unwrap();
+        let response = ttrpc::proto::Response::parse_from_bytes(
+            &response.as_bytes()[ttrpc::proto::MESSAGE_HEADER_LENGTH..],
+        )
+        .unwrap();
+        let response =
+            d2b_contracts_resource::resource_proto::CommitBatchResponse::parse_from_bytes(
+                &response.payload,
+            )
+            .unwrap();
+        if response.error.is_some() {
+            scoped_response = Some(response);
+            break;
+        }
+        if response.revision == 8 {
+            scoped_response = Some(response);
+            break;
+        }
+        tokio::task::yield_now().await;
+    }
+    let response = scoped_response.expect("scoped commit response");
+    assert!(response.error.is_none());
+    assert_eq!(response.revision, 8);
+
+    let forged_scope =
+        ScopedCommitTransport::new(new_identity.clone(), new_mutations.clone()).unwrap();
+    let forged_frame = d2b_resource_api::attach_scoped_commit_frame(
+        &commit_batch_frame("plain-forged"),
+        &forged_scope,
+    )
+    .unwrap();
+    let forged = caller
+        .invoke_resource(
+            route.clone(),
+            OperationSpec::new(OperationId::parse("plain-forged").unwrap(), 10_000).unwrap(),
+            ResourceCall::CommitBatch(vec![
+                (target.clone(), ResourceVerb::UpdateStatus),
+                (target.clone(), ResourceVerb::UpdateFinalizers),
+            ]),
+            forged_frame,
+        )
+        .await
+        .unwrap_err();
+    assert!(matches!(forged, BusError::Endpoint(EndpointError::Rejected)));
+
+    for attempt in 0..8 {
+        if commits.lock().unwrap().len() >= 2 {
+            break;
+        }
+        let operation_id = format!("plain-commit-{attempt}");
+        caller
+            .invoke_resource(
+                route.clone(),
+                OperationSpec::new(OperationId::parse(&operation_id).unwrap(), 10_000).unwrap(),
+                ResourceCall::CommitBatch(vec![
+                    (target.clone(), ResourceVerb::UpdateStatus),
+                    (target.clone(), ResourceVerb::UpdateFinalizers),
+                ]),
+                commit_batch_frame(&operation_id),
+            )
+            .await
+            .unwrap();
+        for _ in 0..8 {
+            if commits.lock().unwrap().len() >= 2 {
+                break;
+            }
+            tokio::task::yield_now().await;
+        }
+    }
+
+    assignments
+        .lock()
+        .unwrap()
+        .revoke_session(ReconnectGeneration::new(1).unwrap());
+    let revoked = caller
+        .invoke_scoped_commit_batch(
+            route,
+            OperationSpec::new(OperationId::parse("scoped-revoked").unwrap(), 10_000).unwrap(),
+            new_identity,
+            revoked_mutations,
+            commit_batch_frame("scoped-revoked"),
+        )
+        .await
+        .unwrap_err();
+    assert!(matches!(
+        revoked,
+        BusError::Authorization(AuthorizationError::Assignment(
+            AssignmentError::SessionRevoked
+        ))
+    ));
+
+    let commits = commits.lock().unwrap().clone();
+    assert_eq!(commits.len(), 2);
+    assert_eq!(
+        commits[0],
+        vec![
+            (ResourceMutationKind::UpdateStatus, true),
+            (ResourceMutationKind::UpdateFinalizers, true),
+        ]
+    );
+    assert_eq!(
+        commits[1],
+        vec![
+            (ResourceMutationKind::UpdateStatus, false),
+            (ResourceMutationKind::UpdateFinalizers, false),
+        ]
+    );
+    assert!(commits[0].iter().all(|(_, fenced)| *fenced));
+    assert!(commits[1].iter().all(|(_, fenced)| !*fenced));
+
+    service_task.abort();
+    let _ = service_task.await;
+    resource_echo.abort();
+    caller_echo.abort();
 }
 
 fn ttrpc_frame(stream_id: u32, payload: &[u8]) -> Vec<u8> {

@@ -93,6 +93,10 @@ impl WatchSelector {
                     .values
                     .iter()
                     .any(|value| value == entry.resource_type().as_str()),
+                "assignment.resourceUid" => filter
+                    .values
+                    .iter()
+                    .any(|value| value == entry.resource_uid().as_str()),
                 _ => false,
             })
     }
@@ -675,6 +679,36 @@ mod tests {
     }
 
     #[test]
+    fn replay_selector_keeps_assignment_uid_fence() {
+        let selector = WatchSelector::new(
+            [ResourceTypeName::parse("Process").unwrap()],
+            [],
+            [StoreFilter {
+                field: "assignment.resourceUid".to_owned(),
+                values: vec![
+                    "123e4567-e89b-42d3-a456-426614174000".to_owned(),
+                ],
+            }],
+        );
+        let entry = crate::transaction::ChangeEntry::new(
+            0,
+            ResourceTypeName::parse("Process").unwrap(),
+            ResourceName::parse("worker").unwrap(),
+            ResourceUid::parse("123e4567-e89b-42d3-a456-426614174000").unwrap(),
+            crate::transaction::ChangeEvent::StatusUpdated,
+            Some(ResourceGeneration::new(1).unwrap()),
+            Some(ResourceGeneration::new(1).unwrap()),
+            None,
+            "sha256:0000000000000000000000000000000000000000000000000000000000000000".to_owned(),
+            None,
+            "operation".to_owned(),
+            "correlation".to_owned(),
+        )
+        .unwrap();
+        assert!(selector.matches(&entry));
+    }
+
+    #[test]
     fn budget_eviction_releases_entries_and_retains_ack_cursor() {
         let mut coordinator = WatchCoordinator::default();
         let selector = WatchSelector::new([ResourceTypeName::parse("Process").unwrap()], [], []);
@@ -788,7 +822,16 @@ mod tests {
         );
 
         let mut coordinator = WatchCoordinator::default();
-        let selector = WatchSelector::new([ResourceTypeName::parse("Process").unwrap()], [], []);
+        let selector = WatchSelector::new(
+            [ResourceTypeName::parse("Process").unwrap()],
+            [],
+            [StoreFilter {
+                field: "assignment.resourceUid".to_owned(),
+                values: vec![
+                    "123e4567-e89b-42d3-a456-426614174000".to_owned(),
+                ],
+            }],
+        );
         let expired = coordinator
             .register_and_replay(
                 &database,

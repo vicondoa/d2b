@@ -12,6 +12,9 @@ use d2b_resource_api::authz::{
     AuthorizationDenial, AuthorizationPolicyError, AuthorizationState, NativeAuthorizer, PolicySet,
     SessionVerb,
 };
+use d2b_core_controller::controller_assignment::{
+    AssignmentError, AssignmentVerb, ControllerAssignmentRegistry,
+};
 use d2b_session::{
     OperationMember, SessionAuthorizationRequest, SessionError, SessionOperation,
     contract::{AuthorizationLease, SessionErrorCode},
@@ -30,6 +33,7 @@ struct AuthorizationRuntime {
 /// Single-owner native authorizer and trusted policy state for one bus.
 pub struct BusAuthorizer {
     runtime: Mutex<AuthorizationRuntime>,
+    assignments: Option<std::sync::Arc<Mutex<ControllerAssignmentRegistry>>>,
 }
 
 impl BusAuthorizer {
@@ -52,7 +56,18 @@ impl BusAuthorizer {
         }
         Ok(Self {
             runtime: Mutex::new(AuthorizationRuntime { native, state }),
+            assignments: None,
         })
+    }
+
+    /// Bind the Core-owned assignment registry used to fence controller
+    /// watches and mutations at the existing bus admission seam.
+    pub fn with_assignment_registry(
+        mut self,
+        assignments: std::sync::Arc<Mutex<ControllerAssignmentRegistry>>,
+    ) -> Self {
+        self.assignments = Some(assignments);
+        self
     }
 
     /// Borrow the single native authorizer shared with the Resource API.
@@ -130,10 +145,51 @@ impl BusAuthorizer {
         }
 
         if let Some(call) = resource_call {
+            self.authorize_assignment(context, call)?;
             let request = call.authorization_request(route.zone().clone())?;
             runtime
                 .native
                 .authorize(context, &request, &runtime.state)?;
+        }
+        Ok(())
+    }
+
+    fn authorize_assignment(
+        &self,
+        context: &AuthenticatedSubjectContext,
+        call: &ResourceCall,
+    ) -> Result<(), AuthorizationError> {
+        let Some(assignment) = call.assignment() else {
+            return Ok(());
+        };
+        if context.reconnect_generation() != assignment.session_generation()
+            || context.provider_generation() != Some(assignment.provider_generation())
+            || context.controller_generation() != Some(assignment.controller_generation())
+        {
+            return Err(AuthorizationError::Assignment(
+                AssignmentError::SessionBindingMismatch,
+            ));
+        }
+        if let Some(target) = assignment.target().execution_ref()
+            && context.execution_ref() != Some(target)
+            && context.subject_ref() != target
+        {
+            return Err(AuthorizationError::Assignment(
+                AssignmentError::TargetMismatch,
+            ));
+        }
+        let verb = match call {
+            ResourceCall::List(_) => AssignmentVerb::List,
+            ResourceCall::Watch(_) => AssignmentVerb::Watch,
+            ResourceCall::ScopedCommitBatch { .. } => AssignmentVerb::CommitBatch,
+            _ => return Err(AuthorizationError::Assignment(AssignmentError::VerbNotAllowed)),
+        };
+        if let Some(registry) = &self.assignments {
+            registry
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                .validate_scope(assignment, verb)
+                .map_err(AuthorizationError::Assignment)?;
         }
         Ok(())
     }
@@ -313,6 +369,7 @@ pub enum AuthorizationError {
     Native(AuthorizationDenial),
     Policy(AuthorizationPolicyError),
     InvalidResourceCall,
+    Assignment(AssignmentError),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -371,6 +428,7 @@ impl AuthorizationError {
             Self::ZoneMismatch
             | Self::SessionBindingMismatch
             | Self::DiagnosticBinding
+            | Self::Assignment(_)
             | Self::Native(AuthorizationDenial::ZoneMismatch) => {
                 AuthorizationErrorClass::SessionBinding
             }
@@ -466,16 +524,26 @@ impl From<crate::router::BusError> for AuthorizationError {
 
 #[cfg(test)]
 mod tests {
+    use d2b_contracts_provider::v3::{
+        ArtifactDigest, ArtifactDigestSet, BinaryRef, CompatibilityRange, ComponentDescriptor,
+        ComponentExecution, ComponentTargetCapability, ComponentType, ControllerInstanceScope,
+        ControllerTargetKind, EffectPortClass, PolicyEvaluation, ProviderManifest,
+        ResourceApiBinding, RevocationState, SignatureState, TargetRuntimeArtifacts, TrustEvidence,
+        UpgradeDisposition, UpgradePolicy,
+    };
     use d2b_contracts_resource::v3::{
     ConfigurationGeneration,
     ControllerGeneration,
+    ResourceEnvelope,
     ResourceGeneration,
     ResourceRef,
     ResourceTypeName,
     ResourceUid,
     SchemaFingerprint,
+    SchemaVersion,
     ZoneRevision,
 };
+use d2b_contracts_resource::v3::execution_policy::BoundedToken;
 use d2b_contracts_resource::v3::identity::{
     BindingDigest,
     ReconnectGeneration,
@@ -490,6 +558,10 @@ use d2b_contracts_resource::v3::identity::{
         PolicyRule, RelayGrantAuthority, ResourceVerb,
     };
     use d2b_resource_store::PolicySnapshot;
+    use d2b_core_controller::controller_assignment::{
+        AssignmentIdentity, AssignmentRequest, ControllerAssignmentRegistry, ControllerRoleContract,
+        ScopedResourceMutation, ScopedResourceQuery,
+    };
 
     use super::*;
     use crate::{
@@ -532,6 +604,16 @@ use d2b_contracts_resource::v3::identity::{
         locality: Locality,
         evidence: EvidenceClass,
     ) -> AuthenticatedSubjectContext {
+        context_with_session(zone, service, locality, evidence, 1)
+    }
+
+    fn context_with_session(
+        zone: &str,
+        service: &str,
+        locality: Locality,
+        evidence: EvidenceClass,
+        session_generation: u64,
+    ) -> AuthenticatedSubjectContext {
         AuthenticatedSubjectContext::new(
             ResourceRef::parse(if locality == Locality::Local {
                 "User/alice"
@@ -550,7 +632,7 @@ use d2b_contracts_resource::v3::identity::{
                     locality,
                     BindingDigest::parse(format!("sha256:{}", "2".repeat(64))).unwrap(),
                 ),
-                ReconnectGeneration::new(1).unwrap(),
+                ReconnectGeneration::new(session_generation).unwrap(),
                 TranscriptHash::from_bytes([3; 32]),
             ),
         )
@@ -560,6 +642,15 @@ use d2b_contracts_resource::v3::identity::{
     }
 
     fn route(zone: &str, service: &str, member: RouteMember) -> RouteKey {
+        route_with_session(zone, service, member, 1)
+    }
+
+    fn route_with_session(
+        zone: &str,
+        service: &str,
+        member: RouteMember,
+        session_generation: u64,
+    ) -> RouteKey {
         RouteKey::new(
             ZoneId::parse(zone).unwrap(),
             ServiceName::parse(service).unwrap(),
@@ -569,7 +660,7 @@ use d2b_contracts_resource::v3::identity::{
             RouteGenerations::new(
                 Some(ResourceGeneration::new(2).unwrap()),
                 Some(ControllerGeneration::new(3).unwrap()),
-                ReconnectGeneration::new(1).unwrap(),
+                ReconnectGeneration::new(session_generation).unwrap(),
             ),
         )
     }
@@ -652,6 +743,430 @@ use d2b_contracts_resource::v3::identity::{
         )
         .unwrap();
         BusAuthorizer::new(native, state(1)).unwrap()
+    }
+
+    const ASSIGNMENT_DIGEST: &str =
+        "sha256:0000000000000000000000000000000000000000000000000000000000000000";
+
+    fn assignment_digest() -> ArtifactDigest {
+        ArtifactDigest::parse(ASSIGNMENT_DIGEST).unwrap()
+    }
+
+    fn assignment_fingerprint() -> SchemaFingerprint {
+        SchemaFingerprint::parse(ASSIGNMENT_DIGEST).unwrap()
+    }
+
+    fn assignment_manifest() -> ProviderManifest {
+        let process = ResourceTypeName::parse("Process").unwrap();
+        let component = ComponentDescriptor::new(
+            BoundedToken::parse("process-controller").unwrap(),
+            ComponentType::Controller,
+            [process.clone()],
+            [],
+            [d2b_contracts_resource::v3::ExecutionDomain::System],
+            8,
+            assignment_digest(),
+            [],
+            false,
+        )
+        .unwrap()
+        .with_execution(ComponentExecution::Launchable {
+            binary_ref: BinaryRef::parse("process-controller").unwrap(),
+        })
+        .with_controller_placement(
+            ControllerInstanceScope::PerResourceTarget,
+            [ControllerTargetKind::Host, ControllerTargetKind::Guest],
+        )
+        .unwrap()
+        .with_target_capabilities([
+            ComponentTargetCapability::new(
+                ControllerTargetKind::Host,
+                assignment_digest(),
+                [EffectPortClass::Process],
+            )
+            .unwrap(),
+            ComponentTargetCapability::new(
+                ControllerTargetKind::Guest,
+                assignment_digest(),
+                [EffectPortClass::Process],
+            )
+            .unwrap(),
+        ])
+        .unwrap();
+        let binding = ResourceApiBinding::new_with_placement(
+            process,
+            SchemaVersion::new(1, 0).unwrap(),
+            assignment_fingerprint(),
+            SchemaVersion::new(1, 0).unwrap(),
+            assignment_fingerprint(),
+            Default::default(),
+            None,
+            None,
+            d2b_contracts_resource::v3::PlacementAnchor::ExecutionRef,
+        )
+        .unwrap();
+        let trust = TrustEvidence {
+            publisher: BoundedToken::parse("trusted").unwrap(),
+            root_epoch: 1,
+            publisher_trusted: true,
+            signature: SignatureState::Valid,
+            revocation: RevocationState::Clear,
+            emergency_deny: false,
+            provenance: PolicyEvaluation::Accepted,
+            sbom: PolicyEvaluation::Accepted,
+            license: PolicyEvaluation::Accepted,
+            vulnerability: PolicyEvaluation::Accepted,
+            conformance: PolicyEvaluation::Accepted,
+            support_channel: BoundedToken::parse("stable").unwrap(),
+        };
+        ProviderManifest::new(
+            d2b_contracts_resource::v3::ArtifactId::parse("provider-runtime").unwrap(),
+            ArtifactDigestSet {
+                package: assignment_digest(),
+                executable: assignment_digest(),
+                manifest: assignment_digest(),
+                config: assignment_digest(),
+                schema: assignment_digest(),
+                service: assignment_digest(),
+            },
+            trust,
+            CompatibilityRange {
+                api_major: 3,
+                api_minor: 0,
+                descriptor_fingerprint: assignment_fingerprint(),
+                state_schema_version: SchemaVersion::new(1, 0).unwrap(),
+            },
+            [component],
+            [binding],
+            [],
+            UpgradePolicy {
+                drain_before_upgrade: true,
+                max_automatic_disposition: UpgradeDisposition::InPlace,
+                preserves_durable_state: true,
+            },
+        )
+        .unwrap()
+        .with_target_runtime_artifacts([
+            TargetRuntimeArtifacts::new(
+                ControllerTargetKind::Host,
+                assignment_digest(),
+                assignment_digest(),
+            )
+            .unwrap(),
+            TargetRuntimeArtifacts::new(
+                ControllerTargetKind::Guest,
+                assignment_digest(),
+                assignment_digest(),
+            )
+            .unwrap(),
+        ])
+        .unwrap()
+    }
+
+    fn assignment_role() -> ControllerRoleContract {
+        ControllerRoleContract::from_signed_manifest(
+            ResourceRef::parse("Provider/system-core").unwrap(),
+            ResourceRef::parse("Process/process-controller").unwrap(),
+            &assignment_manifest(),
+        )
+        .unwrap()
+    }
+
+    fn assignment_resource() -> ResourceEnvelope {
+        let value = serde_json::json!({
+            "apiVersion": "resources.d2bus.org/v3",
+            "type": "Process",
+            "metadata": {
+                "name": "process-one",
+                "zone": "dev",
+                "uid": "123e4567-e89b-42d3-a456-426614174000",
+                "generation": 1,
+                "revision": 1,
+                "ownerRef": null,
+                "finalizers": [],
+                "deletionRequestedAt": null,
+                "createdAt": "2026-07-22T00:00:00.000Z",
+                "updatedAt": "2026-07-22T00:00:00.000Z",
+                "managedBy": "api",
+                "configurationGeneration": null,
+                "controllerGeneration": null,
+                "providerGeneration": null
+            },
+            "spec": {
+                "providerRef": "Provider/system-core",
+                "executionRef": "Host/host-system",
+                "argv": ["true"]
+            },
+            "status": {
+                "completedAt": null,
+                "conditions": [],
+                "lastReconciledAt": null,
+                "observedGeneration": 0,
+                "outcome": null,
+                "phase": "Pending",
+                "resource": {},
+                "startedAt": null,
+                "update": {
+                    "dependencies": {"count": 0, "refs": []},
+                    "disruption": "None",
+                    "lastAssessedAt": null,
+                    "observedGeneration": 0,
+                    "operationId": null,
+                    "owned": {"count": 0, "refs": []},
+                    "preserveState": true,
+                    "reasons": [],
+                    "state": "Unknown",
+                    "targetGeneration": 1
+                }
+            }
+        });
+        ResourceEnvelope::from_json(&serde_json::to_vec(&value).unwrap()).unwrap()
+    }
+
+    fn assignment_fixture() -> (
+        AuthenticatedSubjectContext,
+        std::sync::Arc<Mutex<ControllerAssignmentRegistry>>,
+        AssignmentIdentity,
+        ScopedResourceQuery,
+        ScopedResourceMutation,
+        ScopedResourceMutation,
+    ) {
+        let resource = assignment_resource();
+        let role = assignment_role();
+        let mut registry = ControllerAssignmentRegistry::default();
+        let lease = registry
+            .admit(AssignmentRequest::new(
+                &resource,
+                &role,
+                ResourceGeneration::new(2).unwrap(),
+                ControllerGeneration::new(3).unwrap(),
+                ReconnectGeneration::new(4).unwrap(),
+                true,
+            ))
+            .unwrap();
+        let query = lease
+            .query(
+                vec![ResourceTypeName::parse("Process").unwrap()],
+                vec![resource.metadata().name().clone()],
+                Vec::new(),
+            )
+            .unwrap();
+        let mutation = lease
+            .mutation(
+                ResourceRef::parse("Process/process-one").unwrap(),
+                AssignmentVerb::UpdateStatus,
+            )
+            .unwrap();
+        let unsupported = lease
+            .mutation(
+                ResourceRef::parse("Process/process-one").unwrap(),
+                AssignmentVerb::Get,
+            )
+            .unwrap();
+        let identity = lease.identity().clone();
+        let context = context_with_session(
+            "dev",
+            "d2b.resource.v3",
+            Locality::Local,
+            EvidenceClass::UnixPeer,
+            4,
+        )
+        .with_execution_ref(ResourceRef::parse("Host/host-system").unwrap());
+        (
+            context,
+            std::sync::Arc::new(Mutex::new(registry)),
+            identity,
+            query,
+            mutation,
+            unsupported,
+        )
+    }
+
+    fn assignment_authorizer(
+        context: &AuthenticatedSubjectContext,
+        registry: std::sync::Arc<Mutex<ControllerAssignmentRegistry>>,
+        resource_verbs: &[ResourceVerb],
+    ) -> BusAuthorizer {
+        let native = NativeAuthorizer::new(
+            ApiCatalog::standard(),
+            Some(policy(
+                1,
+                context,
+                &[
+                    SessionVerb::Connect,
+                    SessionVerb::Invoke,
+                    SessionVerb::OpenStream,
+                ],
+                &[ResourceTypeName::parse("Process").unwrap()],
+                resource_verbs,
+                &[],
+            )),
+        )
+        .unwrap();
+        BusAuthorizer::new(native, state(1))
+            .unwrap()
+            .with_assignment_registry(registry)
+    }
+
+    #[test]
+    fn assignment_authorization_uses_registry_for_scoped_commit_and_watch() {
+        let (context, registry, identity, query, mutation, unsupported) = assignment_fixture();
+        let watch_call = ResourceCall::Watch(ResourceQuery::from_scoped(query).unwrap());
+        let commit_call = ResourceCall::ScopedCommitBatch {
+            assignment: identity.clone(),
+            mutations: vec![mutation],
+        };
+        let authorizer = assignment_authorizer(
+            &context,
+            std::sync::Arc::clone(&registry),
+            &[
+                ResourceVerb::Watch,
+                ResourceVerb::UpdateStatus,
+                ResourceVerb::Delete,
+            ],
+        );
+        let watch_route = route_with_session(
+            "dev",
+            "d2b.resource.v3",
+            RouteMember::stream("ResourceService/Watch").unwrap(),
+            4,
+        );
+        let commit_route = route_with_session(
+            "dev",
+            "d2b.resource.v3",
+            RouteMember::method("ResourceService/CommitBatch").unwrap(),
+            4,
+        );
+        assert_eq!(
+            authorizer.authorize_dispatch(&context, &watch_route, Some(&watch_call), true),
+            Ok(())
+        );
+        assert_eq!(
+            authorizer.authorize_dispatch(&context, &commit_route, Some(&commit_call), false),
+            Ok(())
+        );
+
+        let unsupported_call = ResourceCall::ScopedCommitBatch {
+            assignment: identity,
+            mutations: vec![unsupported],
+        };
+        assert_eq!(
+            authorizer.authorize_dispatch(
+                &context,
+                &commit_route,
+                Some(&unsupported_call),
+                false,
+            ),
+            Err(AuthorizationError::InvalidResourceCall)
+        );
+    }
+
+    #[test]
+    fn assignment_authorization_rejects_session_and_target_mismatch() {
+        let (valid_context, registry, _identity, query, _, _) = assignment_fixture();
+        let call = ResourceCall::Watch(ResourceQuery::from_scoped(query).unwrap());
+        let route = route_with_session(
+            "dev",
+            "d2b.resource.v3",
+            RouteMember::stream("ResourceService/Watch").unwrap(),
+            1,
+        );
+        let session_mismatch = context(
+            "dev",
+            "d2b.resource.v3",
+            Locality::Local,
+            EvidenceClass::UnixPeer,
+        )
+        .with_execution_ref(ResourceRef::parse("Host/host-system").unwrap());
+        let authorizer = assignment_authorizer(
+            &session_mismatch,
+            std::sync::Arc::clone(&registry),
+            &[ResourceVerb::Watch],
+        );
+        assert_eq!(
+            authorizer.authorize_dispatch(&session_mismatch, &route, Some(&call), true),
+            Err(AuthorizationError::Assignment(
+                AssignmentError::SessionBindingMismatch
+            ))
+        );
+
+        let target_mismatch = valid_context
+            .clone()
+            .with_execution_ref(ResourceRef::parse("Host/other").unwrap());
+        let target_authorizer = assignment_authorizer(
+            &target_mismatch,
+            registry,
+            &[ResourceVerb::Watch],
+        );
+        let route = route_with_session(
+            "dev",
+            "d2b.resource.v3",
+            RouteMember::stream("ResourceService/Watch").unwrap(),
+            4,
+        );
+        assert_eq!(
+            target_authorizer.authorize_dispatch(&target_mismatch, &route, Some(&call), true),
+            Err(AuthorizationError::Assignment(
+                AssignmentError::TargetMismatch
+            ))
+        );
+    }
+
+    #[test]
+    fn assignment_authorization_rejects_revoked_and_stale_registry_scope() {
+        let (context, registry, identity, _query, mutation, _) = assignment_fixture();
+        let commit_call = ResourceCall::ScopedCommitBatch {
+            assignment: identity.clone(),
+            mutations: vec![mutation],
+        };
+        let commit_route = route_with_session(
+            "dev",
+            "d2b.resource.v3",
+            RouteMember::method("ResourceService/CommitBatch").unwrap(),
+            4,
+        );
+        registry
+            .lock()
+            .unwrap()
+            .revoke_session(ReconnectGeneration::new(4).unwrap());
+        let revoked_authorizer = assignment_authorizer(
+            &context,
+            std::sync::Arc::clone(&registry),
+            &[ResourceVerb::UpdateStatus],
+        );
+        assert_eq!(
+            revoked_authorizer.authorize_dispatch(
+                &context,
+                &commit_route,
+                Some(&commit_call),
+                false,
+            ),
+            Err(AuthorizationError::Assignment(
+                AssignmentError::SessionRevoked
+            ))
+        );
+
+        let (context, registry, identity, query, _, _) = assignment_fixture();
+        let watch_call = ResourceCall::Watch(ResourceQuery::from_scoped(query).unwrap());
+        registry
+            .lock()
+            .unwrap()
+            .begin_drain(&identity)
+            .unwrap();
+        let stale_authorizer =
+            assignment_authorizer(&context, registry, &[ResourceVerb::Watch]);
+        let watch_route = route_with_session(
+            "dev",
+            "d2b.resource.v3",
+            RouteMember::stream("ResourceService/Watch").unwrap(),
+            4,
+        );
+        assert_eq!(
+            stale_authorizer.authorize_dispatch(&context, &watch_route, Some(&watch_call), true),
+            Err(AuthorizationError::Assignment(
+                AssignmentError::StaleAssignment
+            ))
+        );
     }
 
     #[test]

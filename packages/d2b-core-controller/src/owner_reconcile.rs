@@ -2,11 +2,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use d2b_contracts_resource::v3::{
-    ResourceRef,
-    ResourceUid,
-    ZoneRevision,
-};
+use d2b_contracts_resource::v3::{ResourceRef, ResourceUid, ZoneRevision};
 
 use crate::hints::HintTarget;
 
@@ -513,10 +509,7 @@ impl std::error::Error for OwnerGraphError {}
 
 #[cfg(test)]
 mod tests {
-    use d2b_contracts_resource::v3::{
-    ResourceUid,
-    ZoneId,
-};
+    use d2b_contracts_resource::v3::{ResourceUid, ZoneId};
 
     use super::*;
 

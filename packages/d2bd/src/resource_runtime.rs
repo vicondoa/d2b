@@ -31,10 +31,6 @@ use crate::process_resource_runtime::{
     ProcessResourceRuntime, ProcessResourceRuntimeError, list_process_snapshot,
     process_watch_request, run_process_watch,
 };
-use d2bd_runtime::resource_operator_activation::{
-    Wave6AcceptanceReport, Wave6Dependencies, Wave6ProviderBoundary, Wave6ReconcileResult,
-    select_wave6_resources,
-};
 use d2b_audit::{AuditSink, DurabilityEvidence};
 use d2b_bus::{BusAuthorizer, BusConfig, BusIngress, ZoneBus, ZoneRegistrar};
 #[cfg(test)]
@@ -43,34 +39,24 @@ use d2b_contracts_broker::broker_wire::ZoneStoreDisposition;
 use d2b_contracts_provider::v3::provider::ProviderSpec;
 use d2b_contracts_resource::resource_proto as wire;
 #[cfg(test)]
+use d2b_contracts_resource::v3::{ConfigurationGeneration, ControllerGeneration};
 use d2b_contracts_resource::v3::{
-    ConfigurationGeneration,
-    ControllerGeneration,
-};
-use d2b_contracts_zone_session::v3::{
-    ZoneStatusResource,
-    resource_bundle::ResourceBundle,
-};
-use d2b_contracts_resource::v3::{
-    ResourceEnvelope,
-    ResourceGeneration,
-    ResourceName,
-    ResourcePhase,
-    ResourceRef,
-    ResourceTypeName,
-    ResourceUid,
-    ZoneId,
-    ZoneRevision,
+    ResourceEnvelope, ResourceGeneration, ResourceName, ResourcePhase, ResourceRef,
+    ResourceTypeName, ResourceUid, ZoneId, ZoneRevision,
 };
 use d2b_contracts_resource::v3::{
     host::{HOST_PROVIDER_REF, HostSpec},
     user::UserSpec,
 };
+use d2b_contracts_zone_session::v3::{ZoneStatusResource, resource_bundle::ResourceBundle};
 use d2b_core_controller::authority::{
     AuthorityRequest, AuthorityReservation, ExternalNicClaimRequest, ExternalNicRecoveryInventory,
     ExternalNicReservation, HostGlobalAuthorityIndex, TrustedExternalNicInventory,
 };
 use d2b_core_controller::authority_persistence::AuthorityRecoveryCoordinator;
+use d2b_core_controller::controller_assignment::{
+    AssignmentError, AssignmentIdentity, AssignmentRequest, ResourceClientLease,
+};
 use d2b_core_controller::controllers::HandlerPhase;
 use d2b_core_controller::main::{
     CoreProcess, RecoverySnapshot, RuntimeReadiness as CoreRuntimeReadiness, StartupStage,
@@ -104,13 +90,18 @@ use d2b_session::SessionServerError;
 use d2bd_runtime::authority_persistence::RedbAuthorityPersistence;
 pub use d2bd_runtime::resource_api::ResourceRuntimeError;
 use d2bd_runtime::resource_api::{parse_list_request, route_service_matches};
+use d2bd_runtime::resource_operator_activation::{
+    Wave6AcceptanceReport, Wave6Dependencies, Wave6ProviderBoundary, Wave6ReconcileResult,
+    select_wave6_resources,
+};
 use d2bd_runtime::resource_runtime_support::{
-    SystemCoreReconcileResult, compatibility_error_envelope, configuration_cleanup_pending,
-    current_status_timestamp, encode_public_get_response, encode_public_list_response,
-    ensure_bootstrap_host_resource, handler_phase_to_zone_phase, host_phase_for_resource_count,
-    initial_policy_snapshot, map_startup_error, materialize_zone_resource_bundle,
-    public_list_request, public_operation_id, public_request_meta, register_system_core_session,
-    runtime_authorizer, runtime_policy, store_identity, watch_needs_restart, zone_runtime_metadata,
+    AssignmentRegistry, SystemCoreReconcileResult, compatibility_error_envelope,
+    configuration_cleanup_pending, current_status_timestamp, encode_public_get_response,
+    encode_public_list_response, ensure_bootstrap_host_resource, handler_phase_to_zone_phase,
+    host_phase_for_resource_count, initial_policy_snapshot, map_startup_error,
+    materialize_zone_resource_bundle, new_assignment_registry, public_list_request,
+    public_operation_id, public_request_meta, register_system_core_session, runtime_authorizer,
+    runtime_policy, store_identity, watch_needs_restart, zone_runtime_metadata,
 };
 pub use d2bd_runtime::resource_runtime_support::{
     ZoneRuntimeReadiness, persist_resource_status, persist_resource_status_with_projection,
@@ -545,6 +536,7 @@ pub struct ZoneResourceRuntime {
     policy_installed: bool,
     controller_endpoint_registered: bool,
     watch_admitted: bool,
+    assignments: AssignmentRegistry,
     authority_index: Arc<tokio::sync::Mutex<HostGlobalAuthorityIndex>>,
     authority_persistence: Arc<RedbAuthorityPersistence>,
     authority_recovery: Arc<AuthorityRecoveryCoordinator>,
@@ -808,6 +800,7 @@ impl ZoneResourceRuntime {
             })
             .unwrap_or_default();
         let authorizer = Arc::new(runtime_authorizer(&bundle_resource_types)?);
+        let assignments = new_assignment_registry();
         let acceptor = authorizer
             .take_store_seal(store_identity.seal_identity())
             .map_err(|_| ResourceRuntimeError::StoreSealUnavailable)?;
@@ -991,6 +984,7 @@ impl ZoneResourceRuntime {
                     ResourceRuntimeError::AuthorizationUnavailable
                 })?;
             let bus_authorizer = BusAuthorizer::from_shared(Arc::clone(&authorizer), state.clone())
+                .map(|authorizer| authorizer.with_assignment_registry(Arc::clone(&assignments)))
                 .map_err(|error| {
                     tracing::error!(zone = %zone.as_str(), error = ?error, "resource runtime bus authorizer setup failed");
                     ResourceRuntimeError::AuthorizationUnavailable
@@ -1207,6 +1201,7 @@ impl ZoneResourceRuntime {
             policy_installed,
             controller_endpoint_registered,
             watch_admitted,
+            assignments,
             authority_index,
             authority_persistence,
             authority_recovery,
@@ -1237,6 +1232,49 @@ impl ZoneResourceRuntime {
     /// Return the startup readiness projection.
     pub const fn readiness(&self) -> ZoneRuntimeReadiness {
         self.readiness
+    }
+
+    /// Borrow the Zone-scoped Core assignment registry.
+    pub fn assignment_registry(&self) -> AssignmentRegistry {
+        Arc::clone(&self.assignments)
+    }
+
+    /// Admit one controller assignment through the Zone-owned registry.
+    ///
+    /// Controller deployment supplies only the committed resource, signed
+    /// role, installed generations, and authenticated session generation.
+    /// The registry remains the single owner of assignment epochs and target
+    /// conflicts; callers never receive a store handle.
+    pub fn admit_controller_assignment(
+        &self,
+        request: AssignmentRequest<'_>,
+    ) -> Result<ResourceClientLease, AssignmentError> {
+        self.assignments
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .admit(request)
+    }
+
+    /// Revoke assignments bound to a disconnected ComponentSession generation.
+    pub fn revoke_controller_assignments(
+        &self,
+        generation: d2b_contracts_resource::v3::identity::ReconnectGeneration,
+    ) {
+        self.assignments
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .revoke_session(generation);
+    }
+
+    /// Mark one assignment as draining before a target or generation handoff.
+    pub fn drain_controller_assignment(
+        &self,
+        identity: &AssignmentIdentity,
+    ) -> Result<(), AssignmentError> {
+        self.assignments
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .begin_drain(identity)
     }
 
     /// Return the policy revision committed in the opened resource store.
@@ -3511,8 +3549,7 @@ mod tests {
                 },
             },
         });
-        let canonical_json =
-            d2b_contracts_resource::v3::canonical_json_bytes(&envelope).unwrap();
+        let canonical_json = d2b_contracts_resource::v3::canonical_json_bytes(&envelope).unwrap();
         let parsed = ResourceEnvelope::from_json(&canonical_json).unwrap();
         StoredResource {
             resource_ref: ResourceRef::parse(&format!("Provider/{name}")).unwrap(),

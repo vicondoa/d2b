@@ -7,10 +7,7 @@
 
 use core::{error::Error, fmt};
 
-use d2b_contracts_resource::v3::{
-    ResourceErrorKind,
-    RetryClass,
-};
+use d2b_contracts_resource::v3::{ResourceErrorKind, RetryClass};
 
 /// The closed set of client-local refusals.
 ///

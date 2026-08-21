@@ -1,10 +1,7 @@
 //! Instance-bound admission witnesses owned by the native evaluator.
 
 use d2b_contracts_resource::v3::{
-    CanonicalJsonValue,
-    RESOURCE_ENVELOPE_DOMAIN_TAG,
-    ResourceEnvelope,
-    RetryClass,
+    CanonicalJsonValue, RESOURCE_ENVELOPE_DOMAIN_TAG, ResourceEnvelope, RetryClass,
     canonical_digest,
 };
 use d2b_resource_store::mutation_seal::MutationSealIssuer;
@@ -408,14 +405,9 @@ fn preparation_error(reason_code: &'static str) -> StoreError {
 mod tests {
     use super::*;
     use d2b_contracts_resource::v3::{
-    ConfigurationGeneration,
-    ResourceName,
-    ResourceRef,
-    ResourceTypeName,
-    ResourceUid,
-    ZoneId,
-    ZoneRevision,
-};
+        ConfigurationGeneration, ResourceName, ResourceRef, ResourceTypeName, ResourceUid, ZoneId,
+        ZoneRevision,
+    };
 
     fn authorization(zone: &str) -> AdmittedAuthorization {
         AdmittedAuthorization {
@@ -464,6 +456,7 @@ mod tests {
             remove_finalizers: Vec::new(),
             wait_for_reconcile: false,
             reconcile_deadline_ms: None,
+            assignment: None,
         }
     }
 
