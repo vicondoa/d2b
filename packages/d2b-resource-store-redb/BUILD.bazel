@@ -96,3 +96,8 @@ rust_doc_test(
     name = "d2b_resource_store_redb_doc_test",
     crate = "//packages/d2b-resource-store-redb:d2b_resource_store_redb",
 )
+
+test_suite(
+    name = "all-tests",
+    tags = ["-local", "-no-remote-exec"],
+)

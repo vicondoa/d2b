@@ -43,9 +43,11 @@ public Make aliases with `D2B_BAZEL_PROFILE=local` and
 ## One execution graph
 
 Bazel owns Layer-1 dependency ordering, parallelism, test caching, retry
-classification, and aggregation. Make targets are public thin aliases over
-fixed Bazel target patterns and owner-local suites. CI runs the same fixed sets
-with the local profile and exposes one stable required `check` result.
+classification, and aggregation. `bazel/checks/BUILD.bazel` is the public
+suite facade: package-level Rust suites and component suites compose each
+public Make target without duplicating a fixed label graph in Make. CI runs the
+same nested suites with the local profile and exposes one stable required
+`check` result.
 
 The primary aliases remain available:
 
@@ -63,8 +65,9 @@ make test-unit
 make check
 ```
 
-Each alias invokes Bazel once after any single shell re-entry. Underlying
-labels remain directly runnable for focused reruns through the focused shell.
+Each alias invokes one matching `//bazel/checks:<target>` suite after any
+single shell re-entry. Underlying owner labels remain directly runnable for
+focused reruns through the focused shell.
 The complete aggregate is also available as
 `make bazel-check`.
 

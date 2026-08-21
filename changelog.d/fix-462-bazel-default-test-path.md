@@ -2,4 +2,6 @@
 
 - Make public check and test aliases select the pinned Bazel development
   environment automatically, while keeping BuildBuddy locality and CI trust
-  boundaries explicit.
+  boundaries explicit. Bazel now owns the complete Layer-1 composition through
+  nested public and package-level test suites instead of a duplicated Make
+  label graph.

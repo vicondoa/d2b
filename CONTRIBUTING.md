@@ -35,7 +35,8 @@ Container, host, live, hardware, and performance lanes are conditional on the
 changed surface. See [tests/README.md](./tests/README.md) for the test layering
 and public conditional integration targets.
 
-`make check` invokes the single fixed Bazel graph. A developer host uses
+`make check` invokes the public Bazel suite facade. Nested component and
+package-level suites own the complete Layer-1 graph. A developer host uses
 BuildBuddy for eligible actions; GitHub Layer-1 runs the same graph locally
 with `D2B_BAZEL_PROFILE=local` and `D2B_BAZEL_UNTRUSTED=1`. CI only needs Nix
 installed; Make selects the pinned shell and preserves those profile and trust
@@ -63,7 +64,7 @@ nix develop --no-write-lock-file .#bazel -c bazel test //bazel/checks/nix:nix-un
 
 The complete crate surface, including doctests, harness-free binaries,
 fixtures, feature variants, and policy checks, is declared by Bazel BUILD
-targets. The pinned Rust toolchain, Cargo manifests, and lockfiles remain
+targets and nested suites. The pinned Rust toolchain, Cargo manifests, and lockfiles remain
 rules_rs inputs; standalone crate Cargo commands may still work for local
 debugging but are not documented or required validation.
 
@@ -138,7 +139,7 @@ bash tests/minijail-version-check.sh
 bash tests/multi-env-daemon-backed.sh
 ```
 
-Each applicable check is wired into the fixed Bazel graph. Running the
+Each applicable check is wired into the nested Bazel suite graph. Running the
 owner-local label standalone is recommended while iterating.
 
 ### When to run the L2 KVM tests

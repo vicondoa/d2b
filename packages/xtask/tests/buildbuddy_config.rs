@@ -209,16 +209,49 @@ fn rule_block<'a>(build: &'a str, target: &str, rule_prefixes: &[&str]) -> &'a s
 
 fn test_suite_labels(build: &str, suite: &str) -> Vec<String> {
     rule_block(build, suite, &["test_suite("])
-        .lines()
-        .filter_map(|line| {
-            let trimmed = line.trim();
-            trimmed
-                .strip_prefix('"')
-                .and_then(|value| value.strip_suffix("\","))
-                .filter(|value| value.starts_with("//"))
-                .map(str::to_owned)
+        .split('"')
+        .enumerate()
+        .filter_map(|(index, value)| {
+            (index % 2 == 1 && (value.starts_with("//") || value.starts_with(":")))
+                .then_some(value.to_owned())
         })
         .collect()
+}
+
+fn package_test_blocks(build: &str) -> Vec<String> {
+    [
+        "rust_test(",
+        "rust_doc_test(",
+        "sh_test(",
+        "cc_test(",
+        "go_test(",
+        "py_test(",
+    ]
+    .into_iter()
+    .flat_map(|prefix| {
+        let mut blocks = Vec::new();
+        let mut offset = 0;
+        while let Some(relative) = build[offset..].find(prefix) {
+            let start = offset + relative;
+            let end = build[start..]
+                .find("\n)\n")
+                .map(|value| start + value + 2)
+                .unwrap_or(build.len());
+            blocks.push(build[start..end].to_owned());
+            offset = end;
+        }
+        blocks
+    })
+    .collect()
+}
+
+fn rule_name(block: &str) -> Option<String> {
+    block.lines().find_map(|line| {
+        line.trim()
+            .strip_prefix("name = \"")
+            .and_then(|value| value.strip_suffix("\","))
+            .map(str::to_owned)
+    })
 }
 
 fn rule_tags(block: &str) -> BTreeSet<String> {
@@ -959,6 +992,138 @@ fn ci_uses_public_make_aliases_without_nested_nix_develop_wrappers() {
 }
 
 #[test]
+fn bazel_facade_owns_public_make_composition() {
+    let makefile = read_text("Makefile");
+    let facade = read_text("bazel/checks/BUILD.bazel");
+    let public_targets = make_variable_tokens(&makefile, "D2B_MAKE_BAZEL_TARGETS");
+
+    assert!(
+        public_targets
+            .iter()
+            .any(|target| target == "test-changelog"),
+        "test-changelog must use the public Bazel suite dispatcher"
+    );
+    assert!(
+        !make_variable_tokens(&makefile, "D2B_MAKE_UTILITY_TARGETS")
+            .iter()
+            .any(|target| target == "test-changelog"),
+        "test-changelog must not remain a utility target"
+    );
+    for target in &public_targets {
+        let needle = format!("name = \"{target}\"");
+        assert_eq!(
+            facade.matches(&needle).count(),
+            1,
+            "public Make target {target} must have exactly one facade suite"
+        );
+    }
+    assert!(
+        makefile.contains("$(BAZEL_RUN) //bazel/checks:$@"),
+        "Make must dispatch every public Bazel target through its matching facade suite"
+    );
+    let generic_recipe = "$(BAZEL_RUN) //bazel/checks:$@";
+    let make_without_generic_recipe = makefile.replace(generic_recipe, "");
+    assert!(
+        !make_without_generic_recipe.contains("$(BAZEL_RUN) //")
+            || make_without_generic_recipe
+                .lines()
+                .filter_map(|line| line.split_once("$(BAZEL_RUN) //"))
+                .all(|(_, label)| {
+                    label
+                        .strip_prefix("bazel/checks:")
+                        .and_then(|target| target.split_whitespace().next())
+                        .is_some_and(|target| public_targets.iter().any(|name| name == target))
+                }),
+        "Make must dispatch direct composite Bazel work only through public facade suites"
+    );
+    assert!(
+        !makefile.contains("D2B_BAZEL_MAIN_TARGETS")
+            && !makefile.contains("D2B_BAZEL_COMPLETE_TARGETS"),
+        "Make must not retain a second fixed Bazel label graph"
+    );
+
+    let check = test_suite_labels(&facade, "check");
+    assert!(
+        check.iter().any(|label| label == ":layer1"),
+        "check must compose the canonical Layer-1 suite"
+    );
+    let rust = test_suite_labels(&facade, "test-rust");
+    for component in [
+        ":test-rust-main",
+        ":test-rust-broker",
+        ":test-rust-guest-shell-runner",
+        ":test-rust-local",
+    ] {
+        assert!(
+            rust.iter().any(|label| label == component),
+            "test-rust must include {component}"
+        );
+    }
+    let main = test_suite_labels(&facade, "test-rust-main");
+    assert!(
+        main.iter().any(|label| label == ":rust-main-packages"),
+        "test-rust-main must delegate to the fixed package-suite list"
+    );
+    let package_suites = test_suite_labels(&facade, "rust-main-packages");
+    assert!(
+        !package_suites.is_empty()
+            && package_suites
+                .iter()
+                .all(|label| label.starts_with("//packages/")),
+        "test-rust-main package authority must be a fixed list of package suites"
+    );
+    assert!(
+        package_suites
+            .iter()
+            .all(|label| !label.starts_with("//packages/d2b-priv-broker:")
+                && !label.starts_with("//packages/d2b-guest-shell-runner:")),
+        "test-rust-main must exclude broker and guest package suites"
+    );
+    assert_eq!(
+        test_suite_labels(&facade, "test-flake-x86"),
+        vec![":test-flake"],
+        "test-flake-x86 must reuse the public flake suite"
+    );
+    assert_eq!(
+        test_suite_labels(&facade, "test-proofs"),
+        vec![":test-fixture-contracts"],
+        "test-proofs must reuse the public fixture suite"
+    );
+    for (leaf, parent) in [
+        ("test-rust-leaf-main-workspace", "test-rust-main"),
+        ("test-rust-leaf-schema", "test-rust-schema"),
+        ("test-rust-leaf-fixture-contracts", "test-fixture-contracts"),
+        ("test-rust-leaf-broker", "test-rust-broker"),
+        (
+            "test-rust-leaf-guest-shell-runner",
+            "test-rust-guest-shell-runner",
+        ),
+        ("test-rust-leaf-no-bash-ast", "test-rust-no-bash-ast"),
+        ("test-rust-leaf-supply-chain", "test-rust-supply-chain"),
+    ] {
+        assert_eq!(
+            test_suite_labels(&facade, leaf),
+            vec![format!(":{parent}")],
+            "{leaf} must reuse {parent}"
+        );
+    }
+    assert!(
+        test_suite_labels(&facade, "test-rust-local")
+            .iter()
+            .all(|label| label == "//bazel/checks/rust:portable_rust_local"),
+        "local Rust coverage must remain in the tag-driven local suite"
+    );
+    assert!(
+        make_target_blocks(&makefile)
+            .get("heavy-lane-perf")
+            .is_some_and(|block| {
+                block.contains("$(BAZEL_RUN) //bazel/checks:test-performance-budgets")
+            }),
+        "heavy-lane-perf must invoke the public performance suite directly"
+    );
+}
+
+#[test]
 fn make_dispatch_classification_covers_bazel_and_recursive_validation_targets() {
     let makefile = read_text("Makefile");
     let classes = [
@@ -985,7 +1150,11 @@ fn make_dispatch_classification_covers_bazel_and_recursive_validation_targets() 
         }
     }
     let blocks = make_target_blocks(&makefile);
-    for target in owners.keys() {
+    assert!(
+        makefile.contains("$(D2B_MAKE_BAZEL_TARGETS):"),
+        "Bazel aliases must share one generic dispatcher recipe"
+    );
+    for target in classes[1].1.iter().chain(classes[2].1.iter()) {
         assert!(
             blocks.contains_key(target),
             "{target} is classified but has no Make target definition"
@@ -1004,8 +1173,12 @@ fn make_dispatch_classification_covers_bazel_and_recursive_validation_targets() 
         "maintenance targets must not be classified merely by their names"
     );
 
+    let bazel_targets = &classes[0].1;
     for (target, block) in &blocks {
         if target == "__d2b_make_dispatch" {
+            continue;
+        }
+        if target == "$(D2B_MAKE_BAZEL_TARGETS)" {
             continue;
         }
         let executable_lines = block
@@ -1013,6 +1186,12 @@ fn make_dispatch_classification_covers_bazel_and_recursive_validation_targets() 
             .filter(|line| !line.trim_start().starts_with('#'))
             .collect::<Vec<_>>()
             .join("\n");
+        for bazel_target in bazel_targets {
+            assert!(
+                !executable_lines.contains(&format!("$(MAKE) {bazel_target}")),
+                "{target} must not recursively invoke Bazel-owned target {bazel_target}; use one facade suite invocation"
+            );
+        }
         let invokes_bazel = executable_lines.contains("tests/tools/bazel-check")
             || executable_lines.contains("$(BAZEL_RUN)")
             || executable_lines.contains("$(BAZEL_BIN)");
@@ -1146,6 +1325,7 @@ fn make_dispatch_preserves_mixed_local_and_utility_goals_with_one_shell_entry() 
 fn audited_local_rust_suite_is_complete_and_tag_driven() {
     let build = read_text("bazel/checks/rust/BUILD.bazel");
     let d2b = read_text("packages/d2b/BUILD.bazel");
+    let facade = read_text("bazel/checks/BUILD.bazel");
     let labels = test_suite_labels(&build, "portable_rust_local");
     let mut unique = BTreeSet::new();
     assert!(!labels.is_empty(), "portable_rust_local must not be empty");
@@ -1176,13 +1356,47 @@ fn audited_local_rust_suite_is_complete_and_tag_driven() {
             "{label} redundantly combines local and no-remote-exec"
         );
     }
+    let mut tagged_package_tests = BTreeSet::new();
+    for package_suite in test_suite_labels(&facade, "rust-main-packages") {
+        let relative = package_suite
+            .strip_prefix("//")
+            .unwrap_or_else(|| panic!("invalid Rust package suite {package_suite}"));
+        let (package, suite) = relative
+            .split_once(':')
+            .unwrap_or_else(|| panic!("Rust package suite has no target: {package_suite}"));
+        assert_eq!(
+            suite, "all-tests",
+            "Rust main package authority must use package all-tests suites"
+        );
+        let package_build = read_text(&format!("{package}/BUILD.bazel"));
+        assert!(
+            package_build.contains("name = \"all-tests\""),
+            "{package_suite} has no native package suite"
+        );
+        let main_suite = rule_block(&package_build, "all-tests", &["test_suite("]);
+        assert!(
+            main_suite.contains("\"-local\"") && main_suite.contains("\"-no-remote-exec\""),
+            "{package_suite} must exclude local-only leaves in its main suite"
+        );
+        for block in package_test_blocks(&package_build) {
+            let Some(target) = rule_name(&block) else {
+                continue;
+            };
+            let tags = rule_tags(&block);
+            if tags.contains("local") || tags.contains("no-remote-exec") {
+                tagged_package_tests.insert(format!("//{package}:{target}"));
+            }
+        }
+    }
+    assert_eq!(
+        tagged_package_tests, unique,
+        "the local Rust suite must cover exactly the tagged tests in the main package graph"
+    );
     let makefile = read_text("Makefile");
-    let make_targets = make_target_blocks(&makefile);
-    let main = make_targets
-        .get("test-rust-main")
-        .expect("test-rust-main Make target");
     assert!(
-        main.contains("-local,-no-remote-exec"),
+        makefile.contains(
+            "test-rust-main: D2B_BAZEL_TEST_TAG_FILTERS := -local,-no-remote-exec,-manual,-exclusive,-gpu,-kvm"
+        ),
         "remote Rust main must exclude both local tag classes"
     );
     let hermetic = rule_block(&d2b, "auth_status_contract", &["rust_test("]);

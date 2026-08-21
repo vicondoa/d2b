@@ -85,3 +85,8 @@ rust_doc_test(
     name = "d2b_unsafe_local_helper_doc_test",
     crate = "//packages/d2b-unsafe-local-helper:d2b_unsafe_local_helper",
 )
+
+test_suite(
+    name = "all-tests",
+    tags = ["-local", "-no-remote-exec"],
+)

@@ -107,3 +107,8 @@ rust_doc_test(
     name = "d2b_provider_activation_nixos_doc_test",
     crate = "//packages/d2b-provider-activation-nixos:d2b_provider_activation_nixos",
 )
+
+test_suite(
+    name = "all-tests",
+    tags = ["-local", "-no-remote-exec"],
+)

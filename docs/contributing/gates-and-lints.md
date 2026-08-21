@@ -75,9 +75,10 @@ is not required. Normal profiles retain panic line tables but omit dependency
 DWARF; use the explicit Bazel debugging profile when a full debugger build is
 required.
 
-Bazel is the only supported contributor build and test interface. The main
-workspace, privileged broker, guest shell runner, doctests, and
-`harness = false` binaries are all exposed through owner-local Bazel targets.
+Bazel is the only supported contributor build and test interface. The public
+suite facade in `bazel/checks/BUILD.bazel` composes package-level Rust suites
+with the privileged broker, guest shell runner, doctests, and
+`harness = false` binaries through owner-local Bazel targets.
 Cargo manifests and lockfiles remain rules_rs metadata authority and are not
 invoked by tests or gate helpers.
 
@@ -112,11 +113,16 @@ make test
 
 ### Bazel and BuildBuddy execution
 
-Bazel is the sole Layer-1 scheduler. The fixed graph under `BUILD.bazel` and
-`bazel/checks/` owns target selection, dependency ordering, parallelism,
-cache behavior, retry classification, and aggregation. Make and CI expose
-compatibility aliases over those fixed labels; they must not add discovery,
+Bazel is the sole Layer-1 scheduler. The nested suite graph under
+`BUILD.bazel` and `bazel/checks/` owns target selection, dependency ordering,
+parallelism, cache behavior, retry classification, and aggregation. Make and
+CI expose compatibility aliases over one public suite label per target; they
+must not add discovery,
 sharding, fan-out, or rollup logic.
+
+The facade's package-level `all-tests` suites provide the fixed main package
+authority. Broker and guest-shell-runner workspaces use dedicated component
+suites, while local Rust leaves stay in the audited tag-driven local suite.
 
 ```bash
 make check-tier0
@@ -160,7 +166,7 @@ graph exposes doctest, feature, harness-free, fixture, and policy coverage as
 explicit targets. No second Cargo lock, source inventory, generator, or shell
 scheduler is authoritative.
 
-Nix-unit and flake checks use fixed Bazel targets with declared inputs. Each
+Nix-unit and flake checks use Bazel targets with declared inputs. Each
 named Nix surface declares its expression and exact module/helper/fixture
 closure directly in `bazel/checks/nix/BUILD.bazel`; the graph has no corpus
 discovery, case-presence pins, secondary evidence, test census, or provider

@@ -17,7 +17,7 @@ D2B_MAKE_BAZEL_TARGETS := \
 	test-rust-leaf-guest-shell-runner test-rust-leaf-no-bash-ast \
 	test-rust-leaf-supply-chain test-fixture-contracts test-proofs test-flake \
 	test-flake-realized test-flake-aarch64 test-flake-x86 test-nix-unit \
-	test-performance-budgets test-drift test-policy
+	test-performance-budgets test-drift test-policy test-changelog
 D2B_MAKE_LOCAL_TARGETS := \
 	test check-ci check-all test-integration test-host-integration perf \
 	pre-tag smoke-lite heavy-check heavy-test-integration \
@@ -25,7 +25,7 @@ D2B_MAKE_LOCAL_TARGETS := \
 	heavy-lane-host-integration heavy-lane-perf heavy-lane-pre-tag \
 	heavy-lane-smoke-lite heavy-lane-guard
 # Meta helpers that invoke Bazel directly but are not Layer-1 test aliases.
-D2B_MAKE_UTILITY_TARGETS := test-changelog heavy-gate-build changelog-fold
+D2B_MAKE_UTILITY_TARGETS := heavy-gate-build changelog-fold
 
 D2B_MAKE_GOALS := $(if $(strip $(MAKECMDGOALS)),$(MAKECMDGOALS),$(.DEFAULT_GOAL))
 D2B_MAKE_CLASSIFIED_GOALS := $(filter \
@@ -89,7 +89,8 @@ SHELL := $(CURDIR)/tests/tools/scrub-shell-environment
         test-fixture-contracts test-proofs test-flake test-flake-realized \
         test-flake-aarch64 test-flake-x86 test-nix-unit \
         test-performance-budgets \
-        test-drift test-policy test-integration test-host-integration perf \
+        test-drift test-policy test-changelog \
+        test-integration test-host-integration perf \
         heavy-lane-guard heavy-lane-integration heavy-lane-host-integration \
         heavy-lane-perf \
         heavy-lane-pre-tag heavy-lane-smoke-lite \
@@ -103,179 +104,62 @@ SYSTEM ?= $(shell nix eval --extra-experimental-features 'nix-command flakes' \
 	        --impure --raw --expr builtins.currentSystem 2>/dev/null || echo x86_64-linux)
 
 # ===========================================================================
-# Test interface. Every Layer-1 target below is one direct Bazel invocation;
-# the fixed target lists are the only Make-side compatibility mapping.
+# Test interface. Every Bazel-backed target below dispatches to the matching
+# public suite in bazel/checks/BUILD.bazel.
 #
-#   make check          complete fixed Bazel Layer-1 gate.
+#   make check          complete Bazel Layer-1 gate.
 #   make check-ci       check + test-integration for local/manual compatibility.
 #   make check-all      check-ci + perf - full local NixOS gate.
-#   make test-<layer>   focused fixed Bazel suite.
+#   make test-<layer>   focused Bazel suite.
 #   make test-integration  type-9 container integration; local host/manual pre-PR.
 #   make test-host-integration  type-10 runNixOSTest; local NixOS/KVM pre-PR.
 #   make heavy-<lane>      the same lane, serialized through the two-slot
 #                          per-uid heavy-gate semaphore (see "Heavy lanes").
 # ===========================================================================
 
-## check - the complete fixed Bazel Layer-1 gate.
-check:
-	$(BAZEL_RUN) $(D2B_BAZEL_COMPLETE_TARGETS)
-
-## check-ci - run the fixed Layer-1 gate, then the conditional container lane.
+## check-ci - run the Layer-1 gate, then the conditional container lane.
 check-ci:
-	$(MAKE) check
+	$(BAZEL_RUN) //bazel/checks:check
 	$(MAKE) test-integration
 
 ## check-all - the full local gate on a NixOS host with devices.
 check-all:
-	$(MAKE) check-ci
+	$(BAZEL_RUN) //bazel/checks:check
+	$(MAKE) test-integration
 	$(MAKE) perf
 
 ## check-fast / check-tier0 - fast PR-loop subsets.
-check-fast:
-	$(BAZEL_RUN) $(D2B_BAZEL_COMPLETE_TARGETS)
-check-tier0:
-	D2B_BAZEL_JOB="$@" D2B_BAZEL_TEST_TAG_FILTERS="-gpu,-kvm" tests/tools/bazel-check --profile "$(D2B_BAZEL_PROFILE)" -- //bazel/checks/meta:tier0
 
-## bazel-check - complete fixed Bazel graph. Locally this defaults to the
+## bazel-check - complete Bazel graph. Locally this defaults to the
 ## BuildBuddy profile; the facade falls back to local execution when the
 ## credential is unavailable. CI sets D2B_BAZEL_PROFILE=local.
 D2B_BAZEL_PROFILE ?= remote
 D2B_BAZEL_TEST_TAG_FILTERS ?= -manual,-gpu,-kvm
 
-D2B_BAZEL_MAIN_TARGETS = \
-	//packages/... \
-	//bazel/checks/rust/... \
-	-//packages/d2b-priv-broker/... \
-	-//packages/d2b-guest-shell-runner/... \
-	-//bazel/checks/rust:portable_rust_broker \
-	-//bazel/checks/rust:portable_rust_guest
-D2B_BAZEL_BROKER_TARGETS = //bazel/checks/rust:portable_rust_broker
-D2B_BAZEL_GUEST_TARGETS = //bazel/checks/rust:portable_rust_guest
-D2B_BAZEL_LOCAL_RUST_TARGETS = //bazel/checks/rust:portable_rust_local
-D2B_BAZEL_POLICY_TARGETS = //bazel/checks/policy:policy_tooling
-D2B_BAZEL_NIX_EVAL_TARGETS = //bazel/checks/nix:nix_evaluation
-D2B_BAZEL_NIX_UNIT_TARGETS = //bazel/checks/nix:nix_unit
-D2B_BAZEL_NIX_REALIZED_TARGETS = //bazel/checks/nix:nix_realized
-D2B_BAZEL_NIX_AARCH64_TARGETS = //bazel/checks/nix:nix_aarch64
-D2B_BAZEL_FIXTURE_TARGETS = //bazel/checks/fixtures:fixtures_proofs
-D2B_BAZEL_COMPLETE_TARGETS = \
-	$(D2B_BAZEL_MAIN_TARGETS) \
-	$(D2B_BAZEL_BROKER_TARGETS) \
-	$(D2B_BAZEL_GUEST_TARGETS) \
-	$(D2B_BAZEL_LOCAL_RUST_TARGETS) \
-	$(D2B_BAZEL_POLICY_TARGETS) \
-	$(D2B_BAZEL_NIX_EVAL_TARGETS) \
-	$(D2B_BAZEL_NIX_UNIT_TARGETS) \
-	$(D2B_BAZEL_NIX_REALIZED_TARGETS) \
-	$(D2B_BAZEL_NIX_AARCH64_TARGETS) \
-	$(D2B_BAZEL_FIXTURE_TARGETS) \
-	//bazel/checks/meta:performance_budgets
-
 BAZEL_RUN = \
+	env \
 	D2B_BAZEL_JOB="$@" \
 	D2B_BAZEL_TEST_TAG_FILTERS="$(D2B_BAZEL_TEST_TAG_FILTERS)" \
 	tests/tools/bazel-check --profile "$(D2B_BAZEL_PROFILE)" --
 export D2B_BAZEL_PROFILE D2B_BAZEL_TEST_TAG_FILTERS
+
+check-tier0: D2B_BAZEL_TEST_TAG_FILTERS := -gpu,-kvm
+test-rust-main: D2B_BAZEL_TEST_TAG_FILTERS := -local,-no-remote-exec,-manual,-exclusive,-gpu,-kvm
+
+$(D2B_MAKE_BAZEL_TARGETS):
+	$(BAZEL_RUN) //bazel/checks:$@
 
 # ===========================================================================
 # Umbrella test targets. Layer-2 lanes remain explicit manual/local targets.
 # ===========================================================================
 
 test:
-	$(MAKE) test-unit
+	$(BAZEL_RUN) //bazel/checks:test-unit
 	$(MAKE) test-integration
 
-test-unit:
-	$(BAZEL_RUN) $(D2B_BAZEL_COMPLETE_TARGETS)
-
-bazel-check:
-	$(BAZEL_RUN) $(D2B_BAZEL_COMPLETE_TARGETS)
-
 # ===========================================================================
-# Sub-targets. Each target is a thin alias over one fixed Bazel label set.
+# Sub-targets. Each target is a thin alias over one public Bazel suite.
 # ===========================================================================
-
-## test-lint - fixed Bazel source-hygiene and shell-lint suite.
-test-lint:
-	$(BAZEL_RUN) //bazel/checks/policy:lint
-
-## test-rust - fixed portable Rust, broker, and guest Bazel suites.
-test-rust:
-	$(BAZEL_RUN) $(D2B_BAZEL_MAIN_TARGETS) $(D2B_BAZEL_BROKER_TARGETS) $(D2B_BAZEL_GUEST_TARGETS) $(D2B_BAZEL_LOCAL_RUST_TARGETS)
-
-test-rust-main:
-	D2B_BAZEL_JOB="$@" D2B_BAZEL_TEST_TAG_FILTERS="-local,-no-remote-exec,-manual,-exclusive,-gpu,-kvm" tests/tools/bazel-check --profile "$(D2B_BAZEL_PROFILE)" -- $(D2B_BAZEL_MAIN_TARGETS)
-
-test-rust-broker:
-	$(BAZEL_RUN) $(D2B_BAZEL_BROKER_TARGETS)
-
-test-rust-guest-shell-runner:
-	$(BAZEL_RUN) $(D2B_BAZEL_GUEST_TARGETS)
-
-test-rust-local:
-	$(BAZEL_RUN) $(D2B_BAZEL_LOCAL_RUST_TARGETS)
-
-test-rust-no-bash-ast:
-	$(BAZEL_RUN) //tests/tools/no-bash-ast-walker:no_bash_ast_test
-
-test-rust-schema:
-	$(BAZEL_RUN) //packages/xtask:schema_reproducibility_test
-
-test-rust-supply-chain:
-	$(BAZEL_RUN) //bazel/checks/nix:flake-eval-x86-realized-supply-chain
-
-test-rust-leaf-main-workspace:
-	$(BAZEL_RUN) $(D2B_BAZEL_MAIN_TARGETS)
-test-rust-leaf-schema:
-	$(BAZEL_RUN) //packages/xtask:schema_reproducibility_test
-test-rust-leaf-fixture-contracts:
-	$(BAZEL_RUN) $(D2B_BAZEL_FIXTURE_TARGETS)
-test-rust-leaf-broker:
-	$(BAZEL_RUN) $(D2B_BAZEL_BROKER_TARGETS)
-test-rust-leaf-guest-shell-runner:
-	$(BAZEL_RUN) $(D2B_BAZEL_GUEST_TARGETS)
-test-rust-leaf-no-bash-ast:
-	$(BAZEL_RUN) //tests/tools/no-bash-ast-walker:no_bash_ast_test
-test-rust-leaf-supply-chain:
-	$(BAZEL_RUN) //bazel/checks/nix:flake-eval-x86-realized-supply-chain
-
-## test-fixture-contracts - fixed fixture and proof Bazel suite.
-test-fixture-contracts:
-	$(BAZEL_RUN) $(D2B_BAZEL_FIXTURE_TARGETS)
-
-## test-proofs - fixed fixture and proof Bazel suite.
-test-proofs:
-	$(BAZEL_RUN) $(D2B_BAZEL_FIXTURE_TARGETS)
-
-## test-flake - fixed Nix evaluation Bazel suite.
-test-flake:
-	$(BAZEL_RUN) $(D2B_BAZEL_NIX_EVAL_TARGETS)
-
-test-flake-x86:
-	$(BAZEL_RUN) $(D2B_BAZEL_NIX_EVAL_TARGETS)
-
-test-flake-realized:
-	$(BAZEL_RUN) $(D2B_BAZEL_NIX_REALIZED_TARGETS)
-
-test-flake-aarch64:
-	$(BAZEL_RUN) $(D2B_BAZEL_NIX_AARCH64_TARGETS)
-
-## test-nix-unit - fixed Nix-unit Bazel suite.
-test-nix-unit:
-	$(BAZEL_RUN) //bazel/checks/nix:nix_unit
-
-## test-drift - fixed Bazel drift suite.
-test-drift:
-	$(BAZEL_RUN) //bazel/checks/policy:drift
-
-## test-policy - fixed Bazel policy/tooling suite.
-test-policy:
-	$(BAZEL_RUN) $(D2B_BAZEL_POLICY_TARGETS)
-
-## test-performance-budgets - execute the self-gating performance canary.
-## Hosted runners take the cheap skip path; pinned stable runners enforce it.
-test-performance-budgets:
-	$(BAZEL_RUN) //bazel/checks/meta:performance_budgets
 
 ## test-integration - L2 podman container integration tests. Public heavy lane:
 ## it acquires a heavy-gate slot, then runs the raw work behind the gate so it
@@ -406,7 +290,7 @@ perf: heavy-gate-build
 	$(HEAVY_GATE) $(MAKE) heavy-lane-perf
 
 heavy-lane-perf: heavy-lane-guard
-	$(BAZEL_RUN) //bazel/checks/meta:performance_budgets
+	$(BAZEL_RUN) //bazel/checks:test-performance-budgets
 
 ## heavy-lane-guard - fail closed when a heavy-lane internal target is invoked
 ## outside the gate. It does not trust the mere presence of D2B_HEAVY_GATE
@@ -492,7 +376,7 @@ heavy-gate-provision:
 
 ## heavy-check - the Layer-1 PR-equivalent gate under the heavy-lane semaphore.
 heavy-check: heavy-gate-build
-	$(HEAVY_GATE) $(MAKE) check
+	$(HEAVY_GATE) $(BAZEL_RUN) //bazel/checks:check
 
 ## heavy-test-integration / -host-integration - explicit aliases for
 ## the public heavy lanes, kept for muscle memory and scripts. The public lanes
@@ -533,15 +417,12 @@ smoke-lite: heavy-gate-build
 heavy-lane-smoke-lite: heavy-lane-guard
 	bash tests/integration/live/live-vm-smoke.sh --lite
 
-.PHONY: test-changelog changelog-fold
+.PHONY: changelog-fold
 
 ## test-changelog - the changelog policy gate (also the CI test-changelog job).
 ##                  Requires code changes to ship release notes as either a
 ##                  CHANGELOG.md entry or a changelog.d/ fragment, and validates
 ##                  the structure of every fragment present.
-test-changelog:
-	$(BAZEL_RUN) //bazel/checks/policy:changelog
-
 ## changelog-fold - fold every changelog.d/ fragment into the CHANGELOG.md
 ##                  '## [Unreleased]' block and delete the consumed fragments.
 ##                  Run at merge time; see changelog.d/README.md.

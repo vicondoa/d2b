@@ -398,3 +398,8 @@ rust_doc_test(
     name = "d2b_doc_test",
     crate = "//packages/d2b:d2b_lib",
 )
+
+test_suite(
+    name = "all-tests",
+    tags = ["-local", "-no-remote-exec"],
+)

@@ -151,3 +151,8 @@ rust_doc_test(
     name = "d2b_bus_doc_test",
     crate = "//packages/d2b-bus:d2b_bus",
 )
+
+test_suite(
+    name = "all-tests",
+    tags = ["-local", "-no-remote-exec"],
+)

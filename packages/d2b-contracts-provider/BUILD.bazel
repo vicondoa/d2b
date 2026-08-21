@@ -55,3 +55,8 @@ filegroup(
 )
 
 rust_doc_test(name = "d2b_contracts_provider_doc_test", crate = ":d2b_contracts_provider")
+
+test_suite(
+    name = "all-tests",
+    tags = ["-local", "-no-remote-exec"],
+)

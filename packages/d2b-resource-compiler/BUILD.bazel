@@ -125,3 +125,8 @@ rust_doc_test(
     name = "d2b_resource_compiler_doc_test",
     crate = "//packages/d2b-resource-compiler:d2b_resource_compiler",
 )
+
+test_suite(
+    name = "all-tests",
+    tags = ["-local", "-no-remote-exec"],
+)

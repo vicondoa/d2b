@@ -54,3 +54,8 @@ rust_doc_test(
     name = "d2b_provider_transport_unix_doc_test",
     crate = "//packages/d2b-provider-transport-unix:d2b_provider_transport_unix",
 )
+
+test_suite(
+    name = "all-tests",
+    tags = ["-local", "-no-remote-exec"],
+)

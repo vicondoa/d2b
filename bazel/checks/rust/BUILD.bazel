@@ -47,7 +47,6 @@ test_suite(
         "//packages/d2bd:daemon_socket_acl",
         "//packages/d2bd:daemon_state_lock",
         "//packages/d2bd:daemon_state_persistence",
-        "//packages/d2bd:resource_operator_activation",
         "//packages/d2bd:stub_no_socket",
         "//packages/d2b-bus:production_watch_rss",
         "//packages/xtask:buildbuddy_config",

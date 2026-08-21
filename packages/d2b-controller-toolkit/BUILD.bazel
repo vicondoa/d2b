@@ -124,3 +124,8 @@ test_suite(
     name = "doctest",
     tests = [":d2b_controller_toolkit_doc_test"],
 )
+
+test_suite(
+    name = "all-tests",
+    tags = ["-local", "-no-remote-exec"],
+)
