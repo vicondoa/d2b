@@ -134,7 +134,7 @@ check-all:
 check-fast:
 	$(BAZEL_RUN) $(D2B_BAZEL_COMPLETE_TARGETS)
 check-tier0:
-	D2B_BAZEL_TEST_TAG_FILTERS="-gpu,-kvm" tests/tools/bazel-check --profile "$(D2B_BAZEL_PROFILE)" -- //bazel/checks/meta:tier0
+	D2B_BAZEL_JOB="$@" D2B_BAZEL_TEST_TAG_FILTERS="-gpu,-kvm" tests/tools/bazel-check --profile "$(D2B_BAZEL_PROFILE)" -- //bazel/checks/meta:tier0
 
 ## bazel-check - complete fixed Bazel graph. Locally this defaults to the
 ## BuildBuddy profile; the facade falls back to local execution when the
@@ -172,6 +172,7 @@ D2B_BAZEL_COMPLETE_TARGETS = \
 	//bazel/checks/meta:performance_budgets
 
 BAZEL_RUN = \
+	D2B_BAZEL_JOB="$@" \
 	D2B_BAZEL_TEST_TAG_FILTERS="$(D2B_BAZEL_TEST_TAG_FILTERS)" \
 	tests/tools/bazel-check --profile "$(D2B_BAZEL_PROFILE)" --
 export D2B_BAZEL_PROFILE D2B_BAZEL_TEST_TAG_FILTERS
@@ -203,7 +204,7 @@ test-rust:
 	$(BAZEL_RUN) $(D2B_BAZEL_MAIN_TARGETS) $(D2B_BAZEL_BROKER_TARGETS) $(D2B_BAZEL_GUEST_TARGETS) $(D2B_BAZEL_LOCAL_RUST_TARGETS)
 
 test-rust-main:
-	D2B_BAZEL_TEST_TAG_FILTERS="-local,-no-remote-exec,-manual,-exclusive,-gpu,-kvm" tests/tools/bazel-check --profile "$(D2B_BAZEL_PROFILE)" -- $(D2B_BAZEL_MAIN_TARGETS)
+	D2B_BAZEL_JOB="$@" D2B_BAZEL_TEST_TAG_FILTERS="-local,-no-remote-exec,-manual,-exclusive,-gpu,-kvm" tests/tools/bazel-check --profile "$(D2B_BAZEL_PROFILE)" -- $(D2B_BAZEL_MAIN_TARGETS)
 
 test-rust-broker:
 	$(BAZEL_RUN) $(D2B_BAZEL_BROKER_TARGETS)

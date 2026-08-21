@@ -77,7 +77,7 @@ fn write_fake_bazel(path: &Path, handles_build: bool) {
              --build_event_json_file=*) bep=\"${arg#*=}\" ;;\n\
            esac\n\
          done\n\
-         printf '%s\\n' \"$D2B_BAZEL_PROFILE|$PWD|$BAZEL_SH|$D2B_BAZEL_UNTRUSTED|$MAKEFLAGS|$*\" >> \"$D2B_FAKE_BAZEL_LOG\"\n",
+         printf '%s\\n' \"$D2B_BAZEL_PROFILE|$PWD|$BAZEL_SH|$D2B_BAZEL_UNTRUSTED|$MAKEFLAGS|${D2B_BAZEL_JOB:-}|$*\" >> \"$D2B_FAKE_BAZEL_LOG\"\n",
     );
     if handles_build {
         contents.push_str("if [ \"${1:-}\" = build ]; then exit 0; fi\n");
@@ -612,6 +612,14 @@ fn make_dispatches_multiple_goals_once_and_preserves_bazel_variables() {
             && line.contains("-j2")
             && line.contains("--test_tag_filters=dispatcher-filter")
     }));
+    assert_eq!(
+        bazel_output
+            .lines()
+            .filter_map(|line| line.split('|').nth(5))
+            .collect::<BTreeSet<_>>(),
+        BTreeSet::from(["test-lint", "test-policy"]),
+        "parallel Make goals must use distinct Bazel evidence identities"
+    );
 
     let direct_output = Command::new("make")
         .args([
