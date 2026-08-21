@@ -394,7 +394,9 @@ filegroup(
 
 filegroup(
     name = "generated_v2_schemas",
-    srcs = glob(["docs/reference/schemas/v2/*.json"]),
+    srcs = glob(["docs/reference/schemas/v2/*.json"]) + [
+        "docs/reference/schemas/delivery/recovery-point-attestation-v1.schema.json",
+    ],
     visibility = ["//visibility:public"],
 )
 

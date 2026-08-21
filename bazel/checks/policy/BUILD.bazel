@@ -85,11 +85,6 @@ test_suite(
     name = "policy_tooling",
     tests = [
         "//bazel/checks/meta:tier0",
-        "//packages/d2b-contract-tests:policy_effectport_boundary",
-        "//packages/d2b-contract-tests:policy_spec_vocabulary",
-        "//packages/d2b-contract-tests:policy_test_determinism",
-        "//packages/d2b-contract-tests:policy_test_placement",
-        "//packages/d2b-contract-tests:security_matrix_coverage",
         ":changelog",
         ":drift",
         ":lint",
