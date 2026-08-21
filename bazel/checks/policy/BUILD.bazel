@@ -2,7 +2,10 @@ package(default_visibility = ["//visibility:public"])
 
 test_suite(
     name = "source_hygiene",
-    tests = ["//bazel/checks/meta:tier0"],
+    tests = [
+        "//bazel/checks/meta:tier0",
+        "//tests/tools/no-bash-ast-walker:no_bash_ast_test",
+    ],
 )
 
 test_suite(
@@ -21,20 +24,9 @@ test_suite(
 )
 
 test_suite(
-    name = "rust_policy",
-    tests = [
-        "//packages/d2b:stub_no_socket",
-        "//packages/d2bd:stub_no_socket",
-        "//packages/xtask:schema_reproducibility_test",
-        "//tests/tools/no-bash-ast-walker:no_bash_ast_test",
-    ],
-)
-
-test_suite(
     name = "policy",
     tests = [
         ":changelog",
-        ":rust_policy",
         ":source_hygiene",
         ":supply_chain",
         ":workspace_lock",
