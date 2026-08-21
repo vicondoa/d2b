@@ -104,6 +104,7 @@ def nix_native_test(name, command, lane, max_kib, data, timeout = "long"):
     native.genrule(
         name = name + "_runner",
         outs = [runner],
+        tags = _NIX_SURFACE_TAGS,
         tools = _NIX_TOOL_LABELS,
         cmd = "\"$(execpath @python3//:bin/python3)\" -c 'import pathlib,sys; p=pathlib.Path(sys.argv[1]); p.write_text(sys.stdin.read()); p.chmod(0o755)' \"$(OUTS)\" <<'EOF'\n%s\nEOF" % script,
     )
