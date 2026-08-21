@@ -632,7 +632,7 @@ mod tests {
         assert!(!redacted.contains("synthetic-secret"));
         assert_eq!(
             classification_value(classify_failure(&redacted, false))["kind"],
-            Value::Null
+            "build"
         );
     }
 }
