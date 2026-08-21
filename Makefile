@@ -89,6 +89,7 @@ D2B_BAZEL_GUEST_TARGETS = //bazel/checks/rust:portable_rust_guest
 D2B_BAZEL_LOCAL_RUST_TARGETS = //bazel/checks/rust:portable_rust_local
 D2B_BAZEL_POLICY_TARGETS = //bazel/checks/policy:policy_tooling
 D2B_BAZEL_NIX_EVAL_TARGETS = //bazel/checks/nix:nix_evaluation
+D2B_BAZEL_NIX_UNIT_TARGETS = //bazel/checks/nix:nix_unit
 D2B_BAZEL_NIX_REALIZED_TARGETS = //bazel/checks/nix:nix_realized
 D2B_BAZEL_NIX_AARCH64_TARGETS = //bazel/checks/nix:nix_aarch64
 D2B_BAZEL_FIXTURE_TARGETS = //bazel/checks/fixtures:fixtures_proofs
@@ -99,6 +100,7 @@ D2B_BAZEL_COMPLETE_TARGETS = \
 	$(D2B_BAZEL_LOCAL_RUST_TARGETS) \
 	$(D2B_BAZEL_POLICY_TARGETS) \
 	$(D2B_BAZEL_NIX_EVAL_TARGETS) \
+	$(D2B_BAZEL_NIX_UNIT_TARGETS) \
 	$(D2B_BAZEL_NIX_REALIZED_TARGETS) \
 	$(D2B_BAZEL_NIX_AARCH64_TARGETS) \
 	$(D2B_BAZEL_FIXTURE_TARGETS) \
