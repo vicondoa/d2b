@@ -22,6 +22,18 @@ rust_library(
 )
 
 rust_test(
+    name = "d2b_provider_runtime_cloud_hypervisor_test",
+    crate = ":d2b_provider_runtime_cloud_hypervisor",
+    compile_data = ["Cargo.toml"],
+    deps = [
+        "//packages/d2b-contracts-provider:d2b_contracts_provider",
+        "//packages/d2b-contracts-zone-session:d2b_contracts_zone_session",
+        "//packages/d2b-process-conformance:d2b_process_conformance",
+    ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
+    visibility = ["//visibility:public"],
+)
+
+rust_test(
     name = "scaffold",
     srcs = ["tests/scaffold.rs"],
     compile_data = ["Cargo.toml"],

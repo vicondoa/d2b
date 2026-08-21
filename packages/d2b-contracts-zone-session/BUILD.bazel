@@ -25,6 +25,30 @@ rust_test(
     visibility = ["//visibility:public"],
 )
 
+rust_test(
+    name = "generation_bundle",
+    srcs = ["tests/generation_bundle.rs"],
+    compile_data = ["Cargo.toml"],
+    deps = [
+        ":d2b_contracts_zone_session",
+        "//packages/d2b-contracts-provider:d2b_contracts_provider",
+        "//packages/d2b-contracts-resource:d2b_contracts_resource",
+    ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
+    visibility = ["//visibility:public"],
+)
+
+rust_test(
+    name = "d2b_contracts_zone_session_test",
+    crate = ":d2b_contracts_zone_session",
+    compile_data = ["Cargo.toml"],
+    deps = [
+        "//packages/d2b-contracts:d2b_contracts",
+        "//packages/d2b-contracts-provider:d2b_contracts_provider",
+        "//packages/d2b-contracts-resource:d2b_contracts_resource",
+    ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
+    visibility = ["//visibility:public"],
+)
+
 filegroup(
     name = "cargo_workspace_sources",
     srcs = glob(

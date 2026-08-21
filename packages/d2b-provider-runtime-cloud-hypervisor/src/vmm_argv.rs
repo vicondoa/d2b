@@ -151,7 +151,7 @@ pub fn generate_ch_argv(input: &ChArgvInput) -> Result<Vec<String>, ChArgvError>
     if input.kernel_path.is_empty() {
         return Err(ChArgvError::EmptyKernel);
     }
-    if input.net_ifaces.iter().any(|iface| iface.tap_fd < 0) {
+    if input.net_ifaces.iter().any(|iface| iface.tap_fd < 3) {
         return Err(ChArgvError::TapFdMissing);
     }
 

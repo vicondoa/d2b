@@ -164,7 +164,7 @@ test-rust-inventory:
 	$(MAKE) check-tier0
 
 test-rust-supply-chain:
-	$(BAZEL_RUN) //bazel/checks/nix:flake-eval-x86-realized
+	$(BAZEL_RUN) //bazel/checks/nix:flake-eval-x86-realized-supply-chain
 
 test-rust-leaf-main-workspace: test-rust-main
 test-rust-leaf-schema: test-rust-schema

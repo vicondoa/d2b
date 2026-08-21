@@ -37,6 +37,7 @@ let
     inherit moduleFixtures;
   };
   moduleEvaluation = context.mkModuleEval [ ];
+  moduleAssertions = moduleEvaluation.config.assertions or [ ];
   selectedCases = map
     (spec:
       let
@@ -56,7 +57,9 @@ let
       expr =
         builtins.deepSeq
           (builtins.attrNames moduleEvaluation.options)
-          (builtins.isAttrs moduleEvaluation.config);
+          (builtins.deepSeq
+            (map (entry: entry.assertion) moduleAssertions)
+            (builtins.attrNames moduleEvaluation.config != [ ]));
       expected = true;
       propagateError = true;
     };

@@ -1,6 +1,7 @@
 load("@bazel_skylib//rules:native_binary.bzl", "native_test")
 
 _NIX_TAGS = [
+    "external",
     "exclusive",
     "no-remote-cache",
     "no-remote-exec",
@@ -320,6 +321,7 @@ def nix_surface_suite(surfaces):
             ":nix-unit-provider-device-gpu",
             ":nix-unit-provider-volume-local",
             ":nix-unit-provider-activation-nixos",
+            ":nix-unit-provider-runtime-qemu-media",
             ":nix-unit-provider-audio-pipewire",
             ":nix-unit-provider-clipboard-wayland",
             ":nix-unit-provider-display-wayland",

@@ -34,6 +34,16 @@ rust_test(
     visibility = ["//visibility:public"],
 )
 
+rust_test(
+    name = "d2b_contracts_resource_test",
+    crate = ":d2b_contracts_resource",
+    compile_data = ["Cargo.toml"],
+    deps = [
+        "//packages/d2b-contracts:d2b_contracts",
+    ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
+    visibility = ["//visibility:public"],
+)
+
 filegroup(
     name = "cargo_workspace_sources",
     srcs = glob(

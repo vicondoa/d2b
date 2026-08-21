@@ -357,7 +357,7 @@ nix_native_test(
 
 nix_native_test(
     name = "flake-eval-aarch64",
-    command = 'eval --no-write-lock-file --raw --impure --expr "builtins.currentSystem" >/dev/null',
+    command = 'eval --no-write-lock-file --raw "$FLAKE_REF#checks.aarch64-linux.eval-minimal.drvPath" >/dev/null',
     lane = "flake-aarch64",
     max_kib = 14665373,
     data = ["//:flake.lock"],
