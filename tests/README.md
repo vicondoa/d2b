@@ -85,7 +85,9 @@ it does not assert copied Guest workspace parity. Do not cite that parity as
 passing gate evidence. When a mirrored shared crate gains or changes a
 dependency, update the guest workspace fixture and any affected override,
 refresh `packages/Cargo.guest.lock`, and run the applicable owner-local targets
-plus `make test-policy`.
+plus `make test-rust-supply-chain` and `make test-policy`. The supply-chain lane
+realizes the copied Guest workspace; it is focused build validation, not a
+fifth repository-wide policy class or copied-workspace parity result.
 
 All Layer-2 lanes (types 9-11) run behind one sole-use semaphore (two slots
 per uid via open file description locks), so concurrent heavy lanes cannot

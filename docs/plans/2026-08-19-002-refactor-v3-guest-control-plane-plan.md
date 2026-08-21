@@ -608,7 +608,7 @@ The units may land as ordered reviewed pull requests. Every intermediate head mu
 - Same-platform Host and Guest component declarations that resolve different artifact digests are rejected.
 - Generated provider catalog and signed manifest fields remain byte-stable after regeneration.
 
-**Verification:** `//packages/d2b-contracts-provider:schema`, `//packages/d2b-contracts-resource:schema`, and `//packages/d2b-provider:runtime` own the canonical vectors and Provider installation checks. `//bazel/checks/nix:nix-unit-provider-catalog` currently proves the `provider-elf-shim/positive-constructor` case plus generic module evaluation; it does not prove component authority or placement projections. Generated provider-catalog drift is owned by `//packages/xtask:gen_provider_packaging_drift`.
+**Verification:** Current contract and installation source-unit coverage runs under `//packages/d2b-contracts-provider:d2b_contracts_provider_test`, `//packages/d2b-contracts-resource:d2b_contracts_resource_test`, and `//packages/d2b-provider:d2b_provider_test`. Extend `//packages/d2b-contracts-provider:schema`, `//packages/d2b-contracts-resource:schema`, and `//packages/d2b-provider:runtime` with the listed U1 canonical-vector and installation assertions before citing those targets as U1 proof. `//bazel/checks/nix:nix-unit-provider-catalog` currently proves the `provider-elf-shim/positive-constructor` case plus generic module evaluation; it does not prove component authority or placement projections. Generated provider-catalog drift is owned by `//packages/xtask:gen_provider_packaging_drift`.
 
 ### U2. Build assignment and scoped watch routing
 
@@ -1294,7 +1294,7 @@ The units may land as ordered reviewed pull requests. Every intermediate head mu
 
 Targeted owner-local Bazel labels should run during each unit. The remaining proof map is:
 
-- Provider contract and installation authority: `//packages/d2b-contracts-provider:schema`, `//packages/d2b-contracts-resource:schema`, and `//packages/d2b-provider:runtime`.
+- Provider contract and installation authority: current source-unit coverage is `//packages/d2b-contracts-provider:d2b_contracts_provider_test`, `//packages/d2b-contracts-resource:d2b_contracts_resource_test`, and `//packages/d2b-provider:d2b_provider_test`. The `:schema` and `:runtime` targets become U1 evidence only after their listed canonical-vector and installation assertions land.
 - Provider Nix shape only: `//bazel/checks/nix:nix-unit-provider-catalog` (positive ELF-shim case and module-evaluation smoke, not component authority).
 - Guest-control Nix shape: `//bazel/checks/nix:nix-unit-guest-control`.
 - Guest session/enrollment and resource path: `//packages/d2b-session:admission`, `//packages/d2b-session:component_session`, and `//packages/d2bd:resource_operator_activation`.

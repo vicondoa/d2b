@@ -54,7 +54,10 @@ policy class, but it does not assert copied Guest workspace parity. Do not cite
 that parity as passing gate evidence. When a shared crate mirrored into the
 Guest workspace gains or changes a dependency, update the fixture and any
 affected override, refresh `packages/Cargo.guest.lock`, and run the applicable
-owner-local targets plus `make test-policy`.
+owner-local targets plus `make test-rust-supply-chain` and `make test-policy`.
+The supply-chain lane realizes the copied Guest workspace; it is focused build
+validation, not a fifth repository-wide policy class or copied-workspace parity
+result.
 
 ### Layer 2 - integration tiers (only when Layer 1 genuinely can't cover it)
 
