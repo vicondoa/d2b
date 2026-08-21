@@ -20,11 +20,6 @@ use tokio::sync::{Semaphore, watch};
 use tokio::task::JoinSet;
 use tokio::time::{Duration, timeout};
 
-#[cfg(test)]
-use d2b_provider_transport_azure_relay::auth::{DEFAULT_SAS_TTL_SECS, MAX_SAS_TTL_SECS, mint_sas};
-#[cfg(test)]
-use std::time::{SystemTime, UNIX_EPOCH};
-
 pub type RelayStream =
     tokio_tungstenite::WebSocketStream<tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>>;
 
@@ -294,6 +289,11 @@ impl RendezvousTasks {
         self.tasks.is_empty()
     }
 
+    #[cfg(test)]
+    fn len(&self) -> usize {
+        self.tasks.len()
+    }
+
     async fn reap_one(&mut self) {
         if let Some(Err(err)) = self.tasks.join_next().await
             && !err.is_cancelled()
@@ -312,6 +312,74 @@ impl RendezvousTasks {
             }
         }
     }
+}
+
+async fn run_listener_control_loop<S, K, F, Fut>(
+    stream: S,
+    mut sink: K,
+    mut cancellation: Option<watch::Receiver<bool>>,
+    mut spawn_rendezvous: F,
+) -> Result<(), RelayConnectError>
+where
+    S: futures_util::Stream<
+            Item = Result<tokio_tungstenite::tungstenite::Message, RelayConnectError>,
+        >,
+    K: futures_util::Sink<tokio_tungstenite::tungstenite::Message> + Unpin,
+    F: FnMut(String) -> Option<Fut>,
+    Fut: Future<Output = ()> + Send + 'static,
+{
+    use futures_util::{SinkExt, StreamExt};
+    use tokio_tungstenite::tungstenite::Message;
+
+    let mut stream = Box::pin(stream);
+    let mut rendezvous_tasks = RendezvousTasks::default();
+    let result: Result<(), RelayConnectError> = 'control: loop {
+        tokio::select! {
+            biased;
+            _ = wait_for_listener_cancellation(&mut cancellation) => {
+                break 'control Ok(());
+            }
+            _ = rendezvous_tasks.reap_one(), if !rendezvous_tasks.is_empty() => {
+            }
+            msg = stream.next() => {
+                let Some(msg) = msg else {
+                    break 'control Ok(());
+                };
+                let msg = match msg {
+                    Ok(msg) => msg,
+                    Err(err) => break 'control Err(err),
+                };
+                match msg {
+                    Message::Text(text) => {
+                        let v: serde_json::Value = match serde_json::from_str(&text) {
+                            Ok(v) => v,
+                            Err(_) => continue,
+                        };
+                        if let Some(addr) = v
+                            .get("accept")
+                            .and_then(|a| a.get("address"))
+                            .and_then(|s| s.as_str())
+                            && let Some(task) = spawn_rendezvous(addr.to_owned())
+                        {
+                            rendezvous_tasks.spawn(task);
+                        }
+                    }
+                    Message::Ping(p) => {
+                        tokio::select! {
+                            _ = wait_for_listener_cancellation(&mut cancellation) => {
+                                break 'control Ok(());
+                            }
+                            _ = sink.send(Message::Pong(p)) => {}
+                        }
+                    }
+                    Message::Close(_) => break 'control Ok(()),
+                    _ => {}
+                }
+            }
+        }
+    };
+    rendezvous_tasks.cancel_and_join().await;
+    result
 }
 
 /// Pump bytes between the relay WebSocket and a local stream until either
@@ -465,50 +533,24 @@ pub async fn run_listener(
     ttl_secs: u64,
     ca_pem: Option<&[u8]>,
 ) -> Result<(), RelayConnectError> {
-    use futures_util::{SinkExt, StreamExt};
-    use tokio_tungstenite::tungstenite::Message;
+    use futures_util::StreamExt;
 
     let control =
         connect_with_ca(endpoint, RelayRole::Listener, credential, ttl_secs, ca_pem).await?;
-    let (mut sink, mut stream) = control.split();
-    let mut rendezvous_tasks = RendezvousTasks::default();
-    let result = async {
-        while let Some(msg) = stream.next().await {
-            let msg =
-                msg.map_err(|err| RelayConnectError::Handshake(format!("control channel: {err}")))?;
-            match msg {
-                Message::Text(text) => {
-                    let v: serde_json::Value = match serde_json::from_str(&text) {
-                        Ok(v) => v,
-                        Err(_) => continue,
-                    };
-                    if let Some(addr) = v
-                        .get("accept")
-                        .and_then(|a| a.get("address"))
-                        .and_then(|s| s.as_str())
-                    {
-                        let address = addr.to_owned();
-                        let local = local.clone();
-                        let ca = ca_pem.map(|c| c.to_vec());
-                        rendezvous_tasks.spawn(async move {
-                            if let Err(err) = accept_one(&address, &local, ca.as_deref()).await {
-                                tracing::warn!(error = %err, "relay rendezvous ended");
-                            }
-                        });
-                    }
-                }
-                Message::Ping(p) => {
-                    let _ = sink.send(Message::Pong(p)).await;
-                }
-                Message::Close(_) => return Ok(()),
-                _ => {}
+    let (sink, stream) = control.split();
+    let stream = stream.map(|msg| {
+        msg.map_err(|err| RelayConnectError::Handshake(format!("control channel: {err}")))
+    });
+    run_listener_control_loop(stream, sink, None, |address| {
+        let local = local.clone();
+        let ca = ca_pem.map(|c| c.to_vec());
+        Some(async move {
+            if let Err(err) = accept_one(&address, &local, ca.as_deref()).await {
+                tracing::warn!(error = %err, "relay rendezvous ended");
             }
-        }
-        Ok(())
-    }
-    .await;
-    rendezvous_tasks.cancel_and_join().await;
-    result
+        })
+    })
+    .await
 }
 
 async fn accept_one(
@@ -635,8 +677,7 @@ pub(crate) async fn run_listener_verified_with_ready_and_cancel(
     ready: std::sync::Arc<dyn Fn() + Send + Sync>,
     mut cancellation: Option<watch::Receiver<bool>>,
 ) -> Result<(), RelayConnectError> {
-    use futures_util::{SinkExt, StreamExt};
-    use tokio_tungstenite::tungstenite::Message;
+    use futures_util::StreamExt;
 
     if cancellation
         .as_ref()
@@ -652,76 +693,30 @@ pub(crate) async fn run_listener_verified_with_ready_and_cancel(
             return Ok(());
         }
     };
-    let (mut sink, mut stream) = control.split();
+    let (sink, stream) = control.split();
     let rendezvous_slots = std::sync::Arc::new(Semaphore::new(MAX_PENDING_RENDEZVOUS));
-    let mut rendezvous_tasks = RendezvousTasks::default();
-    let result: Result<(), RelayConnectError> = 'control: loop {
-        tokio::select! {
-            biased;
-            _ = wait_for_listener_cancellation(&mut cancellation) => {
-                break 'control Ok(());
+    let stream = stream.map(|msg| {
+        msg.map_err(|err| RelayConnectError::Handshake(format!("control channel: {err}")))
+    });
+    run_listener_control_loop(stream, sink, cancellation, |address| {
+        let Ok(slot) = rendezvous_slots.clone().try_acquire_owned() else {
+            tracing::warn!("relay rendezvous concurrency bound reached");
+            return None;
+        };
+        let local = local.clone();
+        let ca = ca_pem.map(|c| c.to_vec());
+        let verify = verify.clone();
+        let ready = ready.clone();
+        Some(async move {
+            let _slot = slot;
+            if let Err(err) =
+                accept_one_verified(&address, &local, ca.as_deref(), verify, ready).await
+            {
+                tracing::warn!(error = %err, "verified relay rendezvous ended");
             }
-            _ = rendezvous_tasks.reap_one(), if !rendezvous_tasks.is_empty() => {
-            }
-            msg = stream.next() => {
-                let Some(msg) = msg else {
-                    break 'control Ok(());
-                };
-                let msg = match msg {
-                    Ok(msg) => msg,
-                    Err(err) => {
-                        break 'control Err(RelayConnectError::Handshake(format!(
-                            "control channel: {err}"
-                        )));
-                    }
-                };
-                match msg {
-                    Message::Text(text) => {
-                        let v: serde_json::Value = match serde_json::from_str(&text) {
-                            Ok(v) => v,
-                            Err(_) => continue,
-                        };
-                        if let Some(addr) = v
-                            .get("accept")
-                            .and_then(|a| a.get("address"))
-                            .and_then(|s| s.as_str())
-                        {
-                            let Ok(slot) = rendezvous_slots.clone().try_acquire_owned() else {
-                                tracing::warn!("relay rendezvous concurrency bound reached");
-                                continue;
-                            };
-                            let address = addr.to_owned();
-                            let local = local.clone();
-                            let ca = ca_pem.map(|c| c.to_vec());
-                            let verify = verify.clone();
-                            let ready = ready.clone();
-                            rendezvous_tasks.spawn(async move {
-                                let _slot = slot;
-                                if let Err(err) =
-                                    accept_one_verified(&address, &local, ca.as_deref(), verify, ready)
-                                        .await
-                                {
-                                    tracing::warn!(error = %err, "verified relay rendezvous ended");
-                                }
-                            });
-                        }
-                    }
-                    Message::Ping(p) => {
-                        tokio::select! {
-                            _ = wait_for_listener_cancellation(&mut cancellation) => {
-                                break 'control Ok(());
-                            }
-                            _ = sink.send(Message::Pong(p)) => {}
-                        }
-                    }
-                    Message::Close(_) => break 'control Ok(()),
-                    _ => {}
-                }
-            }
-        }
-    };
-    rendezvous_tasks.cancel_and_join().await;
-    result
+        })
+    })
+    .await
 }
 
 async fn wait_for_listener_cancellation(cancellation: &mut Option<watch::Receiver<bool>>) {
@@ -827,341 +822,4 @@ pub async fn run_sender_with_prologue(
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use std::future::pending;
-    use std::os::unix::fs::PermissionsExt;
-    use std::sync::Arc;
-    use std::sync::atomic::{AtomicUsize, Ordering};
-
-    struct PumpProbe {
-        active: Arc<AtomicUsize>,
-        stopped: Arc<AtomicUsize>,
-    }
-
-    impl PumpProbe {
-        fn new(active: &Arc<AtomicUsize>, stopped: &Arc<AtomicUsize>) -> Self {
-            active.fetch_add(1, Ordering::SeqCst);
-            Self {
-                active: Arc::clone(active),
-                stopped: Arc::clone(stopped),
-            }
-        }
-    }
-
-    impl Drop for PumpProbe {
-        fn drop(&mut self) {
-            self.active.fetch_sub(1, Ordering::SeqCst);
-            self.stopped.fetch_add(1, Ordering::SeqCst);
-        }
-    }
-
-    async fn parked_pump(probe: PumpProbe) {
-        let _probe = probe;
-        pending::<()>().await;
-    }
-
-    #[tokio::test]
-    async fn close_frame_stops_both_pump_directions_before_reconnect() {
-        let active = Arc::new(AtomicUsize::new(0));
-        let stopped = Arc::new(AtomicUsize::new(0));
-        let mut owner = RendezvousTasks::default();
-        owner.spawn(parked_pump(PumpProbe::new(&active, &stopped)));
-        owner.spawn(parked_pump(PumpProbe::new(&active, &stopped)));
-        tokio::task::yield_now().await;
-        assert_eq!(active.load(Ordering::SeqCst), 2);
-
-        // The control-channel Close path uses this owner teardown before the
-        // listener returns to its reconnect loop.
-        owner.cancel_and_join().await;
-
-        assert!(owner.is_empty());
-        assert_eq!(stopped.load(Ordering::SeqCst), 2);
-        assert_eq!(active.load(Ordering::SeqCst), 0);
-    }
-
-    #[tokio::test]
-    async fn session_cancellation_joins_every_rendezvous_task() {
-        let active = Arc::new(AtomicUsize::new(0));
-        let stopped = Arc::new(AtomicUsize::new(0));
-        let mut owner = RendezvousTasks::default();
-        for _ in 0..3 {
-            owner.spawn(parked_pump(PumpProbe::new(&active, &stopped)));
-        }
-        tokio::task::yield_now().await;
-        owner.cancel_and_join().await;
-
-        assert!(owner.is_empty());
-        assert_eq!(stopped.load(Ordering::SeqCst), 3);
-        assert_eq!(active.load(Ordering::SeqCst), 0);
-    }
-
-    #[tokio::test]
-    async fn second_bridge_starts_only_after_prior_local_session_stops() {
-        let active = Arc::new(AtomicUsize::new(0));
-        let stopped = Arc::new(AtomicUsize::new(0));
-        let mut owner = RendezvousTasks::default();
-        owner.spawn(parked_pump(PumpProbe::new(&active, &stopped)));
-        tokio::task::yield_now().await;
-        assert_eq!(active.load(Ordering::SeqCst), 1);
-
-        owner.cancel_and_join().await;
-        assert_eq!(active.load(Ordering::SeqCst), 0);
-
-        let second = PumpProbe::new(&active, &stopped);
-        assert_eq!(active.load(Ordering::SeqCst), 1);
-        drop(second);
-        assert_eq!(active.load(Ordering::SeqCst), 0);
-    }
-
-    #[test]
-    fn extract_prologue_needs_full_length_prefix() {
-        // Fewer than 4 bytes -> need more.
-        assert_eq!(extract_prologue_frame(&[0, 0]).unwrap(), None);
-    }
-
-    #[test]
-    fn extract_prologue_waits_for_full_body() {
-        // length=5 but only 3 body bytes present -> need more.
-        let mut buf = (5u32).to_be_bytes().to_vec();
-        buf.extend_from_slice(b"abc");
-        assert_eq!(extract_prologue_frame(&buf).unwrap(), None);
-    }
-
-    #[test]
-    fn extract_prologue_returns_frame_and_consumed() {
-        let mut buf = (5u32).to_be_bytes().to_vec();
-        buf.extend_from_slice(b"hello");
-        buf.extend_from_slice(b"LEFTOVER");
-        let (frame, consumed) = extract_prologue_frame(&buf).unwrap().unwrap();
-        assert_eq!(frame, b"hello");
-        assert_eq!(consumed, 9); // 4 + 5
-        assert_eq!(&buf[consumed..], b"LEFTOVER");
-    }
-
-    #[test]
-    fn extract_prologue_rejects_oversize() {
-        let buf = (u32::MAX).to_be_bytes().to_vec();
-        assert!(extract_prologue_frame(&buf).is_err());
-    }
-
-    fn endpoint() -> RelayEndpoint {
-        RelayEndpoint {
-            namespace: "relns-test.servicebus.windows.net".into(),
-            entity: "hc-d2b-display".into(),
-        }
-    }
-
-    fn now_unix_secs() -> u64 {
-        SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap()
-            .as_secs()
-    }
-
-    fn sas_param<'a>(token: &'a str, name: &str) -> &'a str {
-        let prefix = format!("{name}=");
-        token
-            .strip_prefix("SharedAccessSignature ")
-            .unwrap()
-            .split('&')
-            .find_map(|part| part.strip_prefix(&prefix))
-            .unwrap()
-    }
-
-    #[test]
-    fn mint_sas_is_deterministic_for_fixed_inputs_modulo_expiry() {
-        let ep = endpoint();
-        let a = mint_sas(&ep, "gateway-listen", "c2VjcmV0a2V5", DEFAULT_SAS_TTL_SECS).unwrap();
-        // Shape: a SharedAccessSignature with sr/sig/se/skn.
-        assert!(a.starts_with("SharedAccessSignature sr="));
-        assert!(a.contains("&skn=gateway-listen"));
-        assert!(a.contains("&sig="));
-        assert!(a.contains("&se="));
-        // The resource is the lowercased url-encoded http form of the entity.
-        assert!(a.contains("relns-test.servicebus.windows.net"));
-    }
-
-    #[test]
-    fn mint_sas_rejects_ttl_above_short_lived_cap() {
-        let ep = endpoint();
-        assert_eq!(
-            mint_sas(&ep, "gateway-send", "c2VjcmV0a2V5", MAX_SAS_TTL_SECS + 1).unwrap_err(),
-            RelayError::TtlTooLong {
-                requested: MAX_SAS_TTL_SECS + 1,
-                max: MAX_SAS_TTL_SECS
-            }
-        );
-    }
-
-    #[test]
-    fn mint_sas_expiry_matches_requested_short_ttl() {
-        let ep = endpoint();
-        let ttl = 60;
-        let before = now_unix_secs();
-        let token = mint_sas(&ep, "gateway-send", "c2VjcmV0a2V5", ttl).unwrap();
-        let after = now_unix_secs();
-        let expiry = sas_param(&token, "se").parse::<u64>().unwrap();
-        assert!(expiry >= before + ttl);
-        assert!(expiry <= after + ttl);
-        assert!(expiry <= before + MAX_SAS_TTL_SECS);
-    }
-
-    #[test]
-    fn entra_sender_uses_header_not_url_token() {
-        let ep = endpoint();
-        let cred = RelayCredential::EntraBearer("jwt.abc.def".into());
-        let c = build_connect(&ep, RelayRole::Sender, &cred, 3600).unwrap();
-        // The bearer NEVER appears in the URL.
-        assert!(!c.url.contains("jwt.abc.def"));
-        assert!(!c.url.contains("sb-hc-token"));
-        assert!(c.url.contains("sb-hc-action=connect"));
-        // The sender omits sb-hc-id; the relay generates the rendezvous GUID.
-        assert!(!c.url.contains("sb-hc-id="));
-        let scheme: String = ['B', 'e', 'a', 'r', 'e', 'r'].into_iter().collect();
-        let expected = format!("{scheme} jwt.abc.def");
-        assert_eq!(c.auth_header.as_deref(), Some(expected.as_str()));
-    }
-
-    #[test]
-    fn sas_listener_puts_token_in_url_and_no_header() {
-        let ep = endpoint();
-        let cred = RelayCredential::Sas {
-            key_name: "gateway-listen".into(),
-            key: "c2VjcmV0a2V5".into(),
-        };
-        let c = build_connect(&ep, RelayRole::Listener, &cred, DEFAULT_SAS_TTL_SECS).unwrap();
-        assert!(c.url.contains("sb-hc-action=listen"));
-        assert!(c.url.contains("sb-hc-token="));
-        assert!(!c.url.contains("sb-hc-id=")); // listener has no rendezvous id
-        assert!(c.auth_header.is_none());
-    }
-
-    #[test]
-    fn build_connect_rejects_sas_ttl_above_short_lived_cap() {
-        let ep = endpoint();
-        let cred = RelayCredential::Sas {
-            key_name: "gateway-listen".into(),
-            key: "c2VjcmV0a2V5".into(),
-        };
-        assert!(matches!(
-            build_connect(&ep, RelayRole::Listener, &cred, MAX_SAS_TTL_SECS + 1),
-            Err(RelayError::TtlTooLong { .. })
-        ));
-    }
-
-    #[test]
-    fn credential_debug_redacts_secrets() {
-        let sas = RelayCredential::Sas {
-            key_name: "gateway-send".into(),
-            key: "supersecretkey".into(),
-        };
-        let d = format!("{sas:?}");
-        assert!(d.contains("gateway-send"));
-        assert!(!d.contains("supersecretkey"));
-        let bearer = RelayCredential::EntraBearer("jwt.secret.token".into());
-        let d = format!("{bearer:?}");
-        assert!(!d.contains("jwt.secret.token"));
-        let token = RelayCredential::SasToken("SharedAccessSignature secret".into());
-        let d = format!("{token:?}");
-        assert!(!d.contains("SharedAccessSignature secret"));
-    }
-
-    #[test]
-    fn pre_minted_sas_sender_puts_token_in_url_without_key() {
-        let ep = endpoint();
-        let cred = RelayCredential::SasToken("SharedAccessSignature sr=x&sig=y".into());
-        let c = build_connect(&ep, RelayRole::Sender, &cred, 3600).unwrap();
-        assert!(c.url.contains("sb-hc-action=connect"));
-        assert!(c.url.contains("sb-hc-token="));
-        assert!(!c.url.contains("sb-hc-id="));
-        assert!(c.auth_header.is_none());
-    }
-
-    #[test]
-    fn connect_debug_redacts_preminted_sas_query_token() {
-        let ep = endpoint();
-        let secret_token =
-            "SharedAccessSignature sr=x&sig=very-secret-signature&se=123&skn=gateway-send";
-        let cred = RelayCredential::SasToken(secret_token.into());
-        let c = build_connect(&ep, RelayRole::Sender, &cred, 3600).unwrap();
-        let d = format!("{c:?}");
-        assert!(!d.contains("SharedAccessSignature"));
-        assert!(!d.contains("very-secret-signature"));
-        assert!(d.contains("?<redacted>"));
-    }
-
-    #[test]
-    fn connect_debug_redacts_url_query_and_header() {
-        let ep = endpoint();
-        let cred = RelayCredential::EntraBearer("jwt.abc.def".into());
-        let c = build_connect(&ep, RelayRole::Sender, &cred, 3600).unwrap();
-        let d = format!("{c:?}");
-        assert!(!d.contains("jwt.abc.def"));
-        assert!(!d.contains("Bearer"));
-        assert!(d.contains("<redacted>"));
-    }
-
-    #[test]
-    fn unsolicited_bridge_ack_cannot_create_credit() {
-        let mut available = 0;
-        let mut in_flight = 0;
-        acknowledge_bridge_credit(&mut available, &mut in_flight, 4096);
-        assert_eq!((available, in_flight), (0, 0));
-
-        available = BRIDGE_CREDIT_BYTES - 1024;
-        in_flight = 1024;
-        acknowledge_bridge_credit(&mut available, &mut in_flight, 4096);
-        assert_eq!((available, in_flight), (BRIDGE_CREDIT_BYTES, 0));
-    }
-
-    #[test]
-    fn local_target_parses_each_form() {
-        assert!(matches!(
-            LocalTarget::parse("unix-listen:/run/wp.sock"),
-            LocalTarget::UnixListen(p) if p == "/run/wp.sock"
-        ));
-        assert!(matches!(
-            LocalTarget::parse("unix:/run/wpc.sock"),
-            LocalTarget::UnixConnect(p) if p == "/run/wpc.sock"
-        ));
-        assert!(matches!(
-            LocalTarget::parse("tcp:127.0.0.1:8080"),
-            LocalTarget::TcpConnect(a) if a == "127.0.0.1:8080"
-        ));
-        assert!(matches!(
-            LocalTarget::parse("127.0.0.1:9000"),
-            LocalTarget::TcpConnect(a) if a == "127.0.0.1:9000"
-        ));
-    }
-
-    #[test]
-    fn checked_unix_target_revalidates_owner_and_mode() {
-        let dir = tempfile::tempdir().unwrap();
-        let socket_path = dir.path().join("wpc.sock");
-        let _listener = std::os::unix::net::UnixListener::bind(&socket_path).unwrap();
-        std::fs::set_permissions(&socket_path, std::fs::Permissions::from_mode(0o600)).unwrap();
-        let meta = std::fs::symlink_metadata(&socket_path).unwrap();
-        let path = socket_path.to_string_lossy().into_owned();
-        open_checked_unix_socket_target(&path, meta.uid(), 0o600).unwrap();
-        open_checked_unix_socket_target(&path, meta.uid(), 0o660).unwrap_err();
-
-        let link_path = dir.path().join("link.sock");
-        std::os::unix::fs::symlink(&socket_path, &link_path).unwrap();
-        open_checked_unix_socket_target(&link_path.to_string_lossy(), meta.uid(), 0o600)
-            .unwrap_err();
-    }
-
-    #[tokio::test]
-    async fn checked_unix_target_validates_connected_peer_uid() {
-        let dir = tempfile::tempdir().unwrap();
-        let socket_path = dir.path().join("wpc.sock");
-        let listener = tokio::net::UnixListener::bind(&socket_path).unwrap();
-        std::fs::set_permissions(&socket_path, std::fs::Permissions::from_mode(0o600)).unwrap();
-        let meta = std::fs::symlink_metadata(&socket_path).unwrap();
-        let stream = tokio::net::UnixStream::connect(&socket_path).await.unwrap();
-        let (_accepted, _) = listener.accept().await.unwrap();
-        validate_connected_unix_peer(&stream, meta.uid()).unwrap();
-        validate_connected_unix_peer(&stream, meta.uid().saturating_add(1)).unwrap_err();
-    }
-}
+mod tests;
