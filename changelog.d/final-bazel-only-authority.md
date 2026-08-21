@@ -2,7 +2,8 @@
 
 - Make, contributor, test, and pull-request authority now use the fixed
   Bazel Layer-1 aggregate and owner-local Bazel labels; Cargo manifests and
-  lockfiles remain rules_rs metadata inputs rather than gate entrypoints.
+  lockfiles remain rules_rs metadata inputs rather than gate entrypoints, and
+  fixture inputs no longer make documentation-only changes rerun CLI contracts.
 
 ### Removed
 

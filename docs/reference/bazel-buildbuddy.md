@@ -140,4 +140,21 @@ normal `.bazelrc` lockfile mode fails closed on stale resolution.
 Keep Nix assertions Nix-native through the existing Bazel adapters. Keep
 doctests, harness-free binaries, feature variants, fixtures, policy checks,
 and advisory leaves as explicit graph members. Do not replace them with a
+
+## Action-locality checks
+
+Use bounded Bazel queries when changing graph ownership. These checks describe
+the expected dependency shape without adding a second scheduler or inventory:
+
+| Representative change | Query | Expected shape |
+| --- | --- | --- |
+| USBIP Provider implementation | `bazel query 'rdeps(//packages/..., //packages/d2b-provider-device-usbip:d2b_provider_device_usbip)'` | The Provider's tests, `d2bd` composition/final link, and direct `d2b` integration tests only; no `d2bd-runtime`, `d2b-guestd`, sibling Provider, or foundational-contract target. |
+| Broker contract | `bazel query 'rdeps(//packages/..., //packages/d2b-contracts-broker:d2b_contracts_broker)'` | Broker/control-plane consumers only; resource-only and desktop interaction Providers remain absent. |
+| Network Nix surface | `bazel query 'kind("source file", deps(//bazel/checks/nix:nix-unit-network))'` | Only the network surface expression, its selected case, network modules, shared Nix evaluator helpers, and declared tools. Sibling Nix surfaces remain separate labels. |
+| Documentation-only | `bazel query 'rdeps(//..., //:docs/reference/bazel-buildbuddy.md)'` | Documentation/source-hygiene owners only; no product Rust test or Nix surface target. |
+| Cargo manifest or lock | `bazel query 'rdeps(//..., //:Cargo.lock)'` | Legitimate rules_rs/fixture consumers plus workspace-lock and supply-chain policies; unrelated documentation and Nix-unit labels remain absent. |
+
+Use `bazel aquery` for the affected owner label when action-level confirmation
+is needed. Keep any experiment in `.scratch/`; never commit a changed-file
+selector, cache-evidence pin, or generated action inventory. Do not replace them with a
 shell rollup or a second scheduler.

@@ -6,7 +6,6 @@ _FIXTURE_SOURCES = [
     "//:bazel_provider_workspace_sources",
     "//:Cargo.lock",
     "//:Cargo.toml",
-    "//:docs_workspace_sources",
     "//:examples_workspace_sources",
     "//:flake.lock",
     "//:flake.nix",
@@ -18,7 +17,6 @@ _FIXTURE_SOURCES = [
     "//:templates_workspace_sources",
     "//:tests_root_sources",
     "//:rust-toolchain.toml",
-    "//bazel/checks/rust:source_hygiene_sources",
 ]
 
 nix_fixture(
