@@ -361,13 +361,21 @@ mod tests {
             None,
             Arc::new(|| 900),
         );
-        let joined = Arc::new(AtomicBool::new(false));
-        let thread_joined = Arc::clone(&joined);
+        let cancelled = Arc::new(AtomicBool::new(false));
+        let thread_cancelled = Arc::clone(&cancelled);
+        let (cancel, mut cancel_rx) = tokio::sync::watch::channel(false);
         let thread = std::thread::spawn(move || {
-            std::thread::sleep(std::time::Duration::from_millis(20));
-            thread_joined.store(true, Ordering::SeqCst);
+            let runtime = tokio::runtime::Builder::new_current_thread()
+                .enable_time()
+                .build()
+                .unwrap();
+            let saw_cancel = runtime.block_on(async {
+                timeout(Duration::from_millis(250), cancel_rx.changed())
+                    .await
+                    .is_ok_and(|changed| changed.is_ok() && *cancel_rx.borrow())
+            });
+            thread_cancelled.store(saw_cancel, Ordering::SeqCst);
         });
-        let (cancel, _rx) = tokio::sync::watch::channel(false);
         listener.state.lock().unwrap().insert(
             "h1".into(),
             ListenerState {
@@ -381,6 +389,6 @@ mod tests {
 
         listener.close(&ListenerHandle("h1".into())).await.unwrap();
 
-        assert!(joined.load(Ordering::SeqCst));
+        assert!(cancelled.load(Ordering::SeqCst));
     }
 }

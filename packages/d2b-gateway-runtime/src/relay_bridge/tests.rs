@@ -6,7 +6,6 @@ use std::os::unix::fs::PermissionsExt;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
-use tokio::io::AsyncReadExt;
 use tokio_tungstenite::tungstenite::Message;
 
 struct PumpProbe {
@@ -97,10 +96,7 @@ async fn control_close_joins_before_second_bridge_can_start() {
 
     let mut byte = [0u8; 1];
     assert_eq!(
-        timeout(Duration::from_secs(1), first_local.read(&mut byte))
-            .await
-            .unwrap()
-            .unwrap(),
+        first_local.try_read(&mut byte).unwrap(),
         0
     );
 
