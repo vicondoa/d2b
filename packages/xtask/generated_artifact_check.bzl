@@ -10,8 +10,10 @@ def generated_artifact_check(name, command, data):
             "//:BUILD.bazel",
             "//:Cargo.toml",
             "//:flake.nix",
+            "@python3//:bin/python3",
         ] + data,
         env = {
+            "D2B_PYTHON_RUNFILE": "$(rootpath @python3//:bin/python3)",
             "D2B_XTASK_RUNFILE": "$(rootpath :xtask)",
         },
         visibility = ["//visibility:public"],
