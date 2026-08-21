@@ -10,7 +10,7 @@ exports_files([
 ])
 
 filegroup(
-    name = "contract_sources",
+    name = "fixture_sources",
     srcs = glob(
         [
             "**/*",

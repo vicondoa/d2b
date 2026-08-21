@@ -1,2 +1,0 @@
-status = "retired"
-successor_ids = ["cargo test -p d2b-contract-tests --test policy_broker_dispositions broker_disposition_doc_matches_schema_and_dispatcher"]

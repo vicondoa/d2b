@@ -441,11 +441,7 @@ fn extract_quoted_strings(input: &str) -> Vec<String> {
 }
 
 fn should_scan_markers(path: &str) -> bool {
-    !matches!(
-        path,
-        "packages/xtask/src/inventory.rs"
-            | "packages/d2b-contract-tests/tests/policy_compat_adr.rs"
-    )
+    path != "packages/xtask/src/inventory.rs"
 }
 
 fn scan_markers(
@@ -542,17 +538,12 @@ fn classify_test_driver_surface(path: &str) -> Option<&'static str> {
         Some("make-targets")
     } else if path.starts_with(".github/workflows/") && path.ends_with(".yml") {
         Some("ci-workflow")
-    } else if path == "tests/static.sh" || path == "tests/runner.sh" {
-        Some("top-level-shell-driver")
     } else if path.starts_with("tests/tools/") {
         Some("test-tooling")
     } else if path.starts_with("tests/unit/gates/") {
         Some("drift-gate")
     } else if path.starts_with("tests/unit/meta/") {
         Some("policy-gate")
-    } else if path == "tests/migration-ledger.toml" || path.starts_with("tests/migration-state.d/")
-    {
-        Some("migration-ledger")
     } else {
         None
     }
@@ -620,9 +611,6 @@ version = "0.0.0"
     #[test]
     fn marker_scan_skips_scanner_sources() {
         assert!(!should_scan_markers("packages/xtask/src/inventory.rs"));
-        assert!(!should_scan_markers(
-            "packages/d2b-contract-tests/tests/policy_compat_adr.rs"
-        ));
         assert!(should_scan_markers("nixos-modules/options.nix"));
     }
 
@@ -633,8 +621,8 @@ version = "0.0.0"
             Some("contract-schema-json")
         );
         assert_eq!(
-            classify_test_driver_surface("tests/static.sh"),
-            Some("top-level-shell-driver")
+            classify_test_driver_surface("tests/tools/bazel-check"),
+            Some("test-tooling")
         );
     }
 

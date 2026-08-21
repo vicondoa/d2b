@@ -39,7 +39,7 @@ rust_test(
         "//:Cargo.toml",
         "//bazel/checks/rust:source_hygiene_sources",
     ],
-    env_inherit = ["D2B_REPO_ROOT", "TEST_SRCDIR", "TEST_WORKSPACE"],
+    env_inherit = ["D2B_REPO_ROOT", "PATH", "TEST_SRCDIR", "TEST_WORKSPACE"],
     visibility = ["//visibility:public"],
     deps = [":no_bash_ast_walker"] + all_crate_deps(normal_dev = True, cargo_only = True),
 )

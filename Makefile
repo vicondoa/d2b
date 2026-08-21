@@ -9,7 +9,7 @@
 SHELL := $(CURDIR)/tests/tools/scrub-shell-environment
 
 .PHONY: pre-tag smoke-lite \
-        check check-static check-ci check-all check-fast check-tier0 \
+        check check-ci check-all check-fast check-tier0 \
         bazel-check \
         test test-unit \
         test-lint test-rust test-rust-main \
@@ -42,7 +42,6 @@ NIX_FLAKE := nix --extra-experimental-features 'nix-command flakes'
 # the fixed target lists are the only Make-side compatibility mapping.
 #
 #   make check          complete fixed Bazel Layer-1 gate.
-#   make check-static   Legacy monolithic tests/static.sh full-static gate.
 #   make check-ci       check + test-integration for local/manual compatibility.
 #   make check-all      check-ci + perf - full local NixOS gate.
 #   make test-<layer>   focused fixed Bazel suite.
@@ -55,10 +54,6 @@ NIX_FLAKE := nix --extra-experimental-features 'nix-command flakes'
 ## check - the complete fixed Bazel Layer-1 gate.
 check:
 	$(BAZEL_RUN) $(D2B_BAZEL_COMPLETE_TARGETS)
-
-## check-static - legacy/full-static monolithic gate retained for explicit use.
-check-static:
-	bash tests/static.sh
 
 ## check-ci - W0: run check, then skip or run legacy G-ci on a suitable host.
 check-ci:
@@ -87,8 +82,6 @@ D2B_BAZEL_MAIN_TARGETS = \
 	//bazel/checks/rust/... \
 	-//packages/d2b-priv-broker/... \
 	-//packages/d2b-guest-shell-runner/... \
-	-//packages/xtask:policy_ci \
-	-//packages/xtask:policy_workspace \
 	-//bazel/checks/rust:portable_rust_broker \
 	-//bazel/checks/rust:portable_rust_guest
 D2B_BAZEL_BROKER_TARGETS = //bazel/checks/rust:portable_rust_broker

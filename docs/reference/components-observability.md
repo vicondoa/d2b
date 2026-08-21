@@ -204,13 +204,9 @@ are not promoted to resource attributes.
 The collector identity gets focused read/traverse ACLs on the StoreSync
 export directory only. It is not added to the `d2bd` group and gets
 no access to the unified broker audit log, privileged daemon socket, or
-other broker state. Fixture-dependent policy coverage:
-
-- [`packages/d2b-contract-tests/tests/policy_state.rs`](../../packages/d2b-contract-tests/tests/policy_state.rs) (`store_sync_export`)
-- [`packages/d2b-contract-tests/tests/policy_observability.rs`](../../packages/d2b-contract-tests/tests/policy_observability.rs) (`loki_native_otel_resource_attributes` - the SigNoz resource-attribute key-allowlist gate; legacy name, the framework uses native SigNoz/ClickHouse, not Loki)
-
-These policies are advisory until the fixture-contract lane is enabled and
-promoted.
+other broker state. The broker, storage, and observability owners enforce
+these boundaries through typed effects, generated artifacts, and owner-local
+tests.
 
 ## USB audit HMAC keys and observability
 

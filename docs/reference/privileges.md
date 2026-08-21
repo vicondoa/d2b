@@ -402,7 +402,7 @@ mountPolicy.bindMounts = [
   derived from the device-bind set).
 - `cgroupPlacement.subtree`: `d2b.slice/<vm>/gpu`.
 - Contract coverage:
-  `packages/d2b-contract-tests/tests/minijail_gpu.rs`. This is advisory until
+  the owner-local GPU and broker tests. This is advisory until
   the fixture-contract lane is enabled and promoted; the retired live validator
   and its evidence write are not current coverage.
 - Byte-parity golden: `tests/golden/runner-shape/gpu-argv-minimal.txt`
@@ -489,7 +489,7 @@ state.
 
 - `tests/unit/nix/cases/restart-policy.nix` - asserts daemon-equivalent
   behavior instead of legacy per-VM unit behavior.
-- `packages/d2b-contract-tests/tests/policy_daemon.rs` - checks current
+- owner-local daemon tests - check current
   `processes.json` consumers. This is advisory until the fixture lane is
   enabled.
 - AGENTS.md "Critical subsystems - handle with care" rows for per-VM
@@ -574,7 +574,7 @@ canonical surface is exactly:
 - per-VM / per-role runners spawned via broker `SpawnRunner` (no
   systemd unit per runner; lifecycle is daemon-supervised via pidfd)
 
-`packages/d2b-contract-tests/tests/policy_privileges_doc.rs` checks that every
+The owner-local privilege checks ensure that every
 legacy template still emitted by `nixos-modules/` either has a live broker-op
 row in this document or appears below as an obituary - never both. This policy
 is advisory until the fixture-contract lane is enabled and promoted.
@@ -843,24 +843,23 @@ capability not listed above requires a new ADR entry.
 
 Every runner role ships a closed allowlist minijail profile rendered by
 `nixos-modules/minijail-profiles.nix`. The table below is the
-canonical operator-facing view. The contract files named below are
-fixture-dependent and advisory until `test-fixture-contracts` is enabled and
-promoted; they do not write live-host validation evidence.
+canonical operator-facing view. The named checks are owner-local and do not
+write live-host validation evidence.
 
 | Role | Profile id pattern | Caps (steady-state) | Setup-time carve-out / device binds | Contract coverage |
 | --- | --- | --- | --- | --- |
-| `cloud-hypervisor` | `vm-<vm>-cloud-hypervisor` | `CAP_NET_ADMIN` (transient - runner drops it after the SCM_RIGHTS tap-fd recv path before entering its main loop; static minijail allowlist cannot express "transient", so the profile declares the setup-time union) | `/dev/kvm`, `/dev/net/tun` (optional `/dev/dri/renderD128` + `/dev/nvidia0` when graphics/accelerator passthrough is bound to this runner) | `packages/d2b-contract-tests/tests/minijail_roles.rs` |
-| `qemu-media` | `vm-<vm>-qemu-media` | empty | fd-backed QMP/media runner: read-only root + read-only `/nix/store`, private PID/mount namespaces, masked `/dev`, no `/dev/bus/usb`, `/dev/net/tun`, or `/dev/vhost-net` path exposure, no media path binds, and writable access only to `/run/d2b/vms/<vm>` plus the per-VM state dir. `/dev/kvm` is classified as the only declared device class for focused ACL/fd handoff; vhost-net remains inherited-fd only. Focused Wayland/GTK display access uses `XDG_RUNTIME_DIR`, `WAYLAND_DISPLAY`, and host-session socket ACLs, not broad path binds. `seccompPolicyRef = w1-qemu-media`; no-new-privileges is installed by broker spawn before seccomp. | `tests/unit/nix/cases/external-vm-kind.nix` + `packages/d2b-contract-tests/tests/minijail_roles.rs` |
-| `virtiofsd` | `vm-<vm>-virtiofsd-<tag>` | empty | ADR 0021 broker-pre-established single-entry user namespace; `requiresStartRoot = false`, zero host capabilities, `--sandbox=chroot --inode-file-handles=never`. Normal shares map to `d2b-<vm>-runner`; `d2b-gctl` maps to `d2b-<vm>-gctlfs` and is read-only. | `packages/d2b-contract-tests/tests/minijail_roles.rs` |
-| `swtpm` (long-lived sidecar) | `vm-<vm>-swtpm` | empty | **CRITICAL** RW bind of `/var/lib/d2b/vms/<vm>/swtpm` (TPM 2.0 NVRAM + EK seed) + `/run/d2b/vms/<vm>/` (the TPM socket + flush socket live here as `tpm.sock` and `tpm-flush.sock` respectively) (control socket). MUST be real RW bind, NOT tmpfs. Wiping or losing the bind forces Entra/Intune re-enrollment for work-aad. | `packages/d2b-contract-tests/tests/minijail_swtpm_video.rs` + `tests/integration/live/swtpm-persistence-smoke.sh` (manual live-host persistence regression) |
+| `cloud-hypervisor` | `vm-<vm>-cloud-hypervisor` | `CAP_NET_ADMIN` (transient - runner drops it after the SCM_RIGHTS tap-fd recv path before entering its main loop; static minijail allowlist cannot express "transient", so the profile declares the setup-time union) | `/dev/kvm`, `/dev/net/tun` (optional `/dev/dri/renderD128` + `/dev/nvidia0` when graphics/accelerator passthrough is bound to this runner) | owner-local broker and provider tests |
+| `qemu-media` | `vm-<vm>-qemu-media` | empty | fd-backed QMP/media runner: read-only root + read-only `/nix/store`, private PID/mount namespaces, masked `/dev`, no `/dev/bus/usb`, `/dev/net/tun`, or `/dev/vhost-net` path exposure, no media path binds, and writable access only to `/run/d2b/vms/<vm>` plus the per-VM state dir. `/dev/kvm` is classified as the only declared device class for focused ACL/fd handoff; vhost-net remains inherited-fd only. Focused Wayland/GTK display access uses `XDG_RUNTIME_DIR`, `WAYLAND_DISPLAY`, and host-session socket ACLs, not broad path binds. `seccompPolicyRef = w1-qemu-media`; no-new-privileges is installed by broker spawn before seccomp. | `tests/unit/nix/cases/external-vm-kind.nix` + owner-local broker/provider tests |
+| `virtiofsd` | `vm-<vm>-virtiofsd-<tag>` | empty | ADR 0021 broker-pre-established single-entry user namespace; `requiresStartRoot = false`, zero host capabilities, `--sandbox=chroot --inode-file-handles=never`. Normal shares map to `d2b-<vm>-runner`; `d2b-gctl` maps to `d2b-<vm>-gctlfs` and is read-only. | owner-local broker and provider tests |
+| `swtpm` (long-lived sidecar) | `vm-<vm>-swtpm` | empty | **CRITICAL** RW bind of `/var/lib/d2b/vms/<vm>/swtpm` (TPM 2.0 NVRAM + EK seed) + `/run/d2b/vms/<vm>/` (the TPM socket + flush socket live here as `tpm.sock` and `tpm-flush.sock` respectively) (control socket). MUST be real RW bind, NOT tmpfs. Wiping or losing the bind forces Entra/Intune re-enrollment for work-aad. | owner-local broker/provider tests + `tests/integration/live/swtpm-persistence-smoke.sh` |
 | `swtpm-flush` (pre-start one-shot) | `vm-<vm>-swtpm-flush` | empty | Same `/var/lib/d2b/vms/<vm>/swtpm` + `/run/d2b/vms/<vm>/` (the TPM socket + flush socket live here as `tpm.sock` and `tpm-flush.sock` respectively) binds as the long-lived `swtpm` sidecar; runs `swtpm_ioctl -i` flush before the sidecar adopts state. | shares the swtpm validator + persistence smoke |
-| `gpu` | `vm-<vm>-gpu` | empty (per-role smoke proves virgl/venus/cross-domain run under SCHED_OTHER) | device binds: `/dev/kvm`, `/dev/dri/renderD128`, `/dev/nvidiactl`, `/dev/nvidia0`, `/dev/nvidia-uvm`, `/dev/udmabuf`; mount `/run/user/<uid>/wayland-0` → `/run/d2b-gpu/<vm>/wayland-0`; ioctls: full `DRM_IOCTL_VIRTGPU_*` family (via DeviceClass::Dri) | `packages/d2b-contract-tests/tests/minijail_gpu.rs` |
-| `audio` | `vm-<vm>-audio` | `CAP_NET_RAW` (vhost-user-sound bind on PipeWire mediation path; AF_NETLINK for virtio-snd) | RO bind of `/run/user/<uid>/pipewire-0`; RW bind of `/run/d2b/vms/<vm>/snd.sock`; seccompPolicyRef = `w1-audio` | `packages/d2b-contract-tests/tests/minijail_audio_usbip.rs` |
-| `video` | `vm-<vm>-video` | empty | `deviceBinds = [ "/dev/dri/renderD128" ]` by default for virtio-media decode (virtio-media wire contract: `virtio_id=48`, 2×256 queues, 256 MiB SHM, `vring_base=0`); `graphics.videoNvidiaDecode = true` additionally allows `/dev/nvidiactl`, `/dev/nvidia0`, and `/dev/nvidia-uvm` for the proprietary NVIDIA VA-API/NVDEC backend; `/dev` is masked and no broad bind is allowed; RW bind of `/run/d2b-video/<vm>/`; seccompPolicyRef = `w1-video`; principal is the dedicated `d2b-<vm>-video` uid | `packages/d2b-contract-tests/tests/minijail_swtpm_video.rs` |
-| `vsock-relay` | `vm-<vm>-vsock-relay` | empty (pre-opened fds only, no AF_VSOCK socket creation in-role) | bind: per-VM `/var/lib/d2b/vms/<vm>/vsock.sock` (the inherited UDS); seccompPolicyRef = `w1-vsock-relay` (denies `socket(AF_VSOCK)` + `ptrace`) | `packages/d2b-contract-tests/tests/minijail_relay_otel.rs` |
-| `usbip` backend | `vm-sys-<env>-usbipd-backend` | uid 0 carve-out + `CAP_NET_RAW` | host module `usbip-host` (not `vhci_hcd`, which is the guest module); long-lived per-env `usbipd` backend. `usbipd` must write the kernel `usbip_sockfd` sysfs attribute as host-root, so the broker gives this one runner a scoped root carve-out with a private PID namespace and fresh procfs; `/etc`, `/var`, `/home`, `/root`, `/run`, `/tmp`, `/boot`, `/mnt`, `/media`, `/srv`, and `/opt` masked; `/dev` masked; and only the currently locked `/dev/bus/usb/<bus>/<dev>` node(s) rebound writable. | `packages/d2b-contract-tests/tests/minijail_audio_usbip.rs` |
-| `usbip` proxy | `vm-sys-<env>-usbipd-proxy` | empty | self-binding TCP proxy from `<env.hostUplinkIp>:3240` to `127.0.0.1:<backendPort>`; no device access | `packages/d2b-contract-tests/tests/minijail_audio_usbip.rs` |
-| `otel-host-bridge` | (host-scoped) `d2b-otel-host-bridge` | empty (fd-only contract; no AF_VSOCK socket creation) | bind set: `/run/d2b/otel`, CH vsock host socket, `host-egress.sock` (RW listen target); broker rejects bundle intent whose source VM ≠ `observability.vmName` | `packages/d2b-contract-tests/tests/minijail_relay_otel.rs` |
+| `gpu` | `vm-<vm>-gpu` | empty (per-role smoke proves virgl/venus/cross-domain run under SCHED_OTHER) | device binds: `/dev/kvm`, `/dev/dri/renderD128`, `/dev/nvidiactl`, `/dev/nvidia0`, `/dev/nvidia-uvm`, `/dev/udmabuf`; mount `/run/user/<uid>/wayland-0` → `/run/d2b-gpu/<vm>/wayland-0`; ioctls: full `DRM_IOCTL_VIRTGPU_*` family (via DeviceClass::Dri) | owner-local GPU and broker tests |
+| `audio` | `vm-<vm>-audio` | `CAP_NET_RAW` (vhost-user-sound bind on PipeWire mediation path; AF_NETLINK for virtio-snd) | RO bind of `/run/user/<uid>/pipewire-0`; RW bind of `/run/d2b/vms/<vm>/snd.sock`; seccompPolicyRef = `w1-audio` | owner-local audio and broker tests |
+| `video` | `vm-<vm>-video` | empty | `deviceBinds = [ "/dev/dri/renderD128" ]` by default for virtio-media decode (virtio-media wire contract: `virtio_id=48`, 2×256 queues, 256 MiB SHM, `vring_base=0`); `graphics.videoNvidiaDecode = true` additionally allows `/dev/nvidiactl`, `/dev/nvidia0`, and `/dev/nvidia-uvm` for the proprietary NVIDIA VA-API/NVDEC backend; `/dev` is masked and no broad bind is allowed; RW bind of `/run/d2b-video/<vm>/`; seccompPolicyRef = `w1-video`; principal is the dedicated `d2b-<vm>-video` uid | owner-local video and broker tests |
+| `vsock-relay` | `vm-<vm>-vsock-relay` | empty (pre-opened fds only, no AF_VSOCK socket creation in-role) | bind: per-VM `/var/lib/d2b/vms/<vm>/vsock.sock` (the inherited UDS); seccompPolicyRef = `w1-vsock-relay` (denies `socket(AF_VSOCK)` + `ptrace`) | owner-local transport and broker tests |
+| `usbip` backend | `vm-sys-<env>-usbipd-backend` | uid 0 carve-out + `CAP_NET_RAW` | host module `usbip-host` (not `vhci_hcd`, which is the guest module); long-lived per-env `usbipd` backend. `usbipd` must write the kernel `usbip_sockfd` sysfs attribute as host-root, so the broker gives this one runner a scoped root carve-out with a private PID namespace and fresh procfs; `/etc`, `/var`, `/home`, `/root`, `/run`, `/tmp`, `/boot`, `/mnt`, `/media`, `/srv`, and `/opt` masked; `/dev` masked; and only the currently locked `/dev/bus/usb/<bus>/<dev>` node(s) rebound writable. | owner-local USBIP and broker tests |
+| `usbip` proxy | `vm-sys-<env>-usbipd-proxy` | empty | self-binding TCP proxy from `<env.hostUplinkIp>:3240` to `127.0.0.1:<backendPort>`; no device access | owner-local USBIP and broker tests |
+| `otel-host-bridge` | (host-scoped) `d2b-otel-host-bridge` | empty (fd-only contract; no AF_VSOCK socket creation) | bind set: `/run/d2b/otel`, CH vsock host socket, `host-egress.sock` (RW listen target); broker rejects bundle intent whose source VM ≠ `observability.vmName` | owner-local observability and broker tests |
 
 
 ## U4 cutover runner admission

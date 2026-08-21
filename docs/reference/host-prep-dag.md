@@ -157,9 +157,8 @@ when `D2B_HOST_PREP_DAG_EXECUTE=1` is set in the daemon's
 environment. This gate remains in place while the deferred broker
 handlers listed above still return `Unimplemented`.
 
-The source and documentation policy lives in
-`packages/d2b-contract-tests/tests/policy_source.rs`. It is advisory until the
-fixture-contract lane is enabled and promoted.
+Source and documentation checks remain owner-local or part of the fixed
+source-hygiene policy gate.
 
 ## Cross-references
 

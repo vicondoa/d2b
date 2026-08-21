@@ -1,51 +1,44 @@
 package(default_visibility = ["//visibility:public"])
 
-filegroup(
-    name = "carrier_sources",
-    srcs = [
-        "//:nix_workspace_sources",
-        "//:nixos_modules_workspace_sources",
-        "//:proof_workspace_sources",
-        "//:tests_root_sources",
-        "//bazel/checks/rust:source_hygiene_sources",
-        "//tests/unit/gates:gate_sources",
-        "//tests/unit/meta:meta_sources",
-    ],
+test_suite(
+    name = "source_hygiene",
+    tests = ["//bazel/checks/meta:tier0"],
+)
+
+test_suite(
+    name = "workspace_lock",
+    tests = ["//tests/unit/meta:w0_dep_direction"],
+)
+
+test_suite(
+    name = "supply_chain",
+    tests = ["//packages/xtask:policy_production_closure"],
 )
 
 test_suite(
     name = "changelog",
-    tests = ["//packages/d2b-contract-tests:policy_changelog_gate"],
+    tests = ["//packages/xtask:policy_changelog_gate"],
 )
 
 test_suite(
-    name = "lint",
+    name = "rust_policy",
     tests = [
-        "//packages/d2b-contract-tests:policy_bazel_layout",
+        "//packages/d2b:stub_no_socket",
+        "//packages/d2bd:stub_no_socket",
+        "//packages/xtask:runtime_ledger_test",
+        "//packages/xtask:schema_reproducibility_test",
+        "//tests/tools/no-bash-ast-walker:no_bash_ast_test",
     ],
 )
 
 test_suite(
     name = "policy",
     tests = [
-        "//packages/d2b-contract-tests:policy_bazel_layout",
-        "//packages/d2b-contract-tests:policy_source",
-        "//packages/xtask:buildbuddy_config",
-        "//packages/xtask:policy_ci",
-        "//packages/xtask:policy_workspace",
+        ":changelog",
         ":rust_policy",
-    ],
-)
-
-test_suite(
-    name = "rust_policy",
-    tests = [
-        "//packages/d2b-contract-tests:policy_source",
-        "//tests/tools/no-bash-ast-walker:no_bash_ast_test",
-        "//packages/d2b:stub_no_socket",
-        "//packages/d2bd:stub_no_socket",
-        "//packages/xtask:runtime_ledger_test",
-        "//packages/xtask:schema_reproducibility_test",
+        ":source_hygiene",
+        ":supply_chain",
+        ":workspace_lock",
     ],
 )
 
@@ -82,12 +75,15 @@ test_suite(
 )
 
 test_suite(
+    name = "lint",
+    tests = [":source_hygiene"],
+)
+
+test_suite(
     name = "policy_tooling",
     tests = [
-        "//bazel/checks/meta:tier0",
         ":changelog",
         ":drift",
-        ":lint",
         ":policy",
         ":runtime_ledger",
     ],

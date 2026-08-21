@@ -100,8 +100,8 @@ eval.
 | `p3`     | Host singletons retired (net-route-preflight, audit-check, ch-exporter, otel-host-bridge, per-env usbipd) + daemon health endpoint.                                   | `tests/observability-eval.sh` + USBIP smoke + degraded-mode escape-hatch smoke green.                          |
 | `p4`     | `vm start/stop/restart/list` daemon-native end-to-end; `.desktop` wrapper updated.                                                                                    | Per-VM `vm start` smoke + Wayland desktop launcher smoke green.                                                |
 | `p5`     | First-run validation UX shipped (`d2b host validate --apply` + daemon auto-write on first op).                                                                    | Fresh-host bootstrap smoke green on this host.                                                                 |
-| `p6`     | Legacy systemd template emission + bash CLI removed (clean break). The `d2b.vms.<vm>.supervisor` option's hard removal + eval-time rejection assertion was deferred to v1.1 backlog (see ADR 0015 § Decision); v1.0 retains the option with default `"systemd"` for backward-compat. | `tests/legacy-unit-denylist-eval.sh` + `tests/static.sh` green. |
-| `p7`     | Docs blast-radius + v1.0 cut shipped.                                                                                                                                 | `tests/static.sh` + per-example flake-check green.                                                             |
+| `p6`     | Legacy systemd template emission + bash CLI removed (clean break). The `d2b.vms.<vm>.supervisor` option's hard removal + eval-time rejection assertion was deferred to v1.1 backlog (see ADR 0015 § Decision); v1.0 retains the option with default `"systemd"` for backward-compat. | Fixed Nix-unit and owner-local daemon checks pass. |
+| `p7`     | Docs blast-radius + v1.0 cut shipped.                                                                                                                                 | Fixed Bazel and per-example flake checks pass. |
 
 The script names in this table record the historical evidence vocabulary for
 the original readiness rollout. Several have since been retired and are not
@@ -109,7 +109,7 @@ runnable paths in the current tree. The current `d2b host validate` catalog
 still names many of them and consequently reports those validators as missing.
 
 > **Drift policy.**
-> `packages/d2b-contract-tests/tests/policy_observability.rs` asserts every wave
+> Owner-local readiness checks assert every wave
 > declared in `readinessWaveSpecs` has a matching table row. Add a new wave to
 > `readinessWaveSpecs` and add a row here in the same commit. This policy is
 > advisory until the fixture-contract lane is enabled and promoted.

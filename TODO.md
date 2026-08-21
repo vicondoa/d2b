@@ -97,7 +97,7 @@ identically on the original tree, independent of the marker scrub):
 and in the `## Legacy systemd surface obituary` section. Reconcile the
 doc so each retired unit appears only in the obituary, or adjust the
 gate's live/obituary partition logic. The gate is wired into
-`tests/static.sh`.
+the fixed Bazel Layer-1 graph.
 
 ## `d2b usb attach` never performs the guest-side `usbip attach` (vhci import unwired)
 

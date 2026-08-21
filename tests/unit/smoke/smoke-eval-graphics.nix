@@ -19,7 +19,7 @@
 #   - GPU runner --wayland-sock targets the filter socket, not the real compositor
 #   - GPU runner has no XDG_RUNTIME_DIR or WAYLAND_DISPLAY env vars
 #
-# Wired into tests/static.sh alongside the existing smoke-eval gate.
+# Wired into the fixed Bazel Layer-1 graph alongside the smoke-eval gate.
 { system ? builtins.currentSystem
 , pkgs ? import <nixpkgs> { inherit system; }
 }:

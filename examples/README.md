@@ -19,7 +19,7 @@ via `d2b.url = "path:../.."` do **not** commit a `flake.lock`
 `with-observability/`). Even when an example spells out shared inputs
 such as `nixpkgs`, `microvm`, or `home-manager`, the point is still to
 exercise the local checkout; a committed lock would be stale by
-construction and `tests/static.sh` regenerates a local lock on first
+construction and the fixed Bazel graph regenerates a local lock on first
 eval anyway.
 
 Examples that pull in an external sibling flake (`with-entra-id/`

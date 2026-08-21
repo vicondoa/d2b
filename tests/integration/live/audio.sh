@@ -44,7 +44,7 @@
 set -uo pipefail
 
 # Scope a safe.directory entry for $ROOT to libgit2 (used by
-# `nix eval` below). Same pattern as static.sh/security-baseline.sh.
+# `nix eval` below). Same pattern as the focused Layer-1 gates.
 HERE=$(dirname "$(readlink -f "$0")")
 ROOT=${ROOT:-$(cd "$HERE/../../.." && pwd)}
 
@@ -108,7 +108,7 @@ skip() { log "  SKIP: $*"; }
 
 # Pre-flight: audio tests need a real user session (user-systemd,
 # XDG_RUNTIME_DIR, PipeWire/WirePlumber as user services). If the
-# runner was invoked as root (e.g. `sudo runner.sh --quick`), step
+# runner was invoked as root, step
 # DOWN to the resolved Wayland user (`$D2B_WAYLAND_USER`) automatically
 # so this script stays green in the aggregate suite. If no Wayland
 # user can be resolved, or it has no active login session, we SKIP
@@ -134,7 +134,7 @@ if [ "$(id -u)" = "0" ]; then
       "$(date +%H:%M:%S)" "$D2B_WAYLAND_USER" "$_wu_runtime" >&2
     exit 0
   fi
-  # lib.sh logs via `tee -a "$D2B_LOG"`. The runner.sh sets D2B_LOG to a
+  # lib.sh logs via `tee -a "$D2B_LOG"`. The public lane sets D2B_LOG to a
   # root-owned 0700 file under $RUN_DIR, so after we drop privs `tee`
   # would spam permission-denied on every line. Redirect D2B_LOG to a
   # user-writable temp file BEFORE re-exec. The runner's per-script

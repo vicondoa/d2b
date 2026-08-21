@@ -32,26 +32,20 @@ When in doubt, push the test *down* toward type 1, not up.
 | 1 | **eval case** | declarative pure-Nix assertion (`{ expr; expected; }` / `{ expr; expectedError; }`) over module-config values + eval-rejection | `tests/unit/nix/surfaces/*.nix`, with explicit case/module inputs in Bazel |
 | 2 | **unit test** | `#[test]` over one crate's pure logic | `packages/<crate>/src/**` `#[cfg(test)]` |
 | 3 | **integration test** | spawns the real binary (`CARGO_BIN_EXE_*`) over AF_UNIX/fd-passing; no host mutation | `packages/<crate>/tests/*.rs` |
-| 4 | **contract test** | Rust assertion over a **rendered** Nix artifact (bundle / host-json / processes.json) - the Nix↔Rust + doc↔impl boundary | `packages/d2b-contract-tests/tests/*.rs` (`D2B_FIXTURES`) |
-| 5 | **policy lint** | Rust scan of source/docs asserting a tree-wide invariant | `packages/d2b-contract-tests/tests/policy_*.rs` |
+| 4 | **contract test** | Rust assertion over a **rendered** Nix artifact (bundle / host-json / processes.json) - the Nix↔Rust + doc↔impl boundary | `packages/<crate>/tests/*.rs` (`D2B_FIXTURES`) |
+| 5 | **policy lint** | One of the four retained repository-wide policy classes | `packages/xtask/tests/*.rs` or the fixed source-hygiene gate |
 | 6 | **flake check** | realized example-config eval / supply-chain (`eval-*`, `rust-deny/audit`) | `flake.checks.<sys>.*`; smoke/check defs in `tests/unit/smoke/`, eval-case libs in `tests/unit/nix/eval-cases/` |
 
 The remaining Layer-1 surface is a **closed set** you should not grow with new
 files: owner-local generated-artifact actions under `packages/xtask/` and
 **meta gates** (`tests/unit/meta/` - guard the test infra itself).
 
-Fixture-backed type 4 tests and fixture-dependent type 5 tests in
-`d2b-contract-tests` are included once by the default `test-rust` aggregate
-when Nix is available. The aggregate and `test-rust-main` honor
-`D2B_SKIP_FIXTURE_BUILD=1`, which is set by the local and pull-request
-Layer-1 orchestration so the separate enforcing
-`D2B_ENABLE_FIXTURE_BUILD=1 make test-fixture-contracts` job does not duplicate
-the contract and CLI surfaces. The fixture target materializes `D2B_FIXTURES`
-from evaluated Nix artifact data and invoking it without the enable variable
-fails rather than skipping. Selected hermetic policy files may also have
-explicit enforcing entrypoints under `test-policy`; those binaries are excluded
-from `test-fixture-contracts` so the Layer-1 graph runs their repository scans
-once. Check the shared list in `tests/lib.sh` before citing one.
+Fixture-backed type 4 tests are owned by their product crate and included by
+the fixed fixture aggregate when Nix is available. The fixture target
+materializes `D2B_FIXTURES` from evaluated Nix artifact data and invoking it
+without the enforcing lane's declared environment fails rather than skipping.
+Repository-wide policy is limited to source hygiene, workspace and lock
+integrity, supply chain, and changelog policy.
 
 `test-policy` also runs `guest-workspace-drift`. It fails when the guest crates
 copied by `mkGuestRustPackagesSrc` diverge from
@@ -98,8 +92,8 @@ fails while walking on-disk scripts and the Makefile.
    fixtures or missing paths so the test never touches the operator's live
    daemon.
 4. **Asserting that a *rendered* Nix artifact matches a Rust DTO / doc?** →
-   type 4, a contract test in `packages/d2b-contract-tests/` (driven by
-   `D2B_FIXTURES`).
+   type 4, a contract test in the owning crate's `packages/<crate>/tests/`
+   (driven by `D2B_FIXTURES`).
 5. **Asserting a generated artifact is up to date (docs/schemas/CLI)?** → it is
    already covered by a **drift gate**; regenerate with the matching
    `bazel run //packages/xtask:xtask -- gen-*` and commit - do **not** add a
@@ -120,10 +114,8 @@ scripts, or replacement inventory machinery.
 
 ```
 tests/
-├── static.sh / runner.sh                                      legacy/manual aggregate entry points
 ├── lib.sh / cli-rust-native-common.sh                              shared shell harness
 ├── README.md / AGENTS.md                                           docs (human guide + this file)
-├── migration-ledger.toml / migration-state.d/                      legacy records pending deletion
 ├── golden/ / fixtures/                                             shared test data + fixtures
 ├── tools/                                                          Bazel facade, runners, codegen, and asserter tools
 ├── unit/

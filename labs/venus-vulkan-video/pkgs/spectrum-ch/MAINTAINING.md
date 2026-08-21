@@ -141,6 +141,6 @@ rev the GPU sidecar uses (see `nixos-modules/components/graphics.nix`). The buil
 - CH + crosvm: quarterly, or immediately on a published CVE.
 - Check https://github.com/cloud-hypervisor/cloud-hypervisor/releases and
   https://chromium.googlesource.com/chromiumos/platform/crosvm/+log for security advisories.
-- After each bump, run `bash tests/static.sh` from the framework checkout, then the relevant
+- After each bump, run `make check` from the framework checkout, then the relevant
   Layer-2 integration tests (`tests/integration/live/d2b-store.sh --quick`, `tests/integration/live/audio.sh --quick`)
   on a live host before committing.

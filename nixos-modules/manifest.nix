@@ -14,7 +14,7 @@
 #      is the integration surface for the Rust CLI port. It
 #      must be documented and versioned. A typed `mkOption` gives us
 #      a schema we can hand-walk into `docs/reference/manifest-schema.{md,json}`
-#      and validate against in `tests/static.sh`.
+#      and validate against the fixed Nix and Bazel gates.
 #   2. The Nix module system catches schema regressions at eval time
 #      if a future refactor accidentally produces a field of the wrong
 #      type, evaluation fails immediately rather than silently shipping

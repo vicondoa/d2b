@@ -265,6 +265,7 @@ rust_test(
     compile_data = ["Cargo.toml"],
     data = [":d2b"],
     env = {"CARGO_BIN_EXE_d2b": "$(rootpath :d2b)"},
+    env_inherit = ["PATH"],
     rustc_env = {"CARGO_BIN_EXE_d2b": "$(rootpath :d2b)"},
     tags = ["no-remote-cache"],
     visibility = ["//visibility:public"],

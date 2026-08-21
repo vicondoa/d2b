@@ -1,2 +1,0 @@
-status = "retired"
-successor_ids = ["packages/xtask/tests/bazel_non_rust_parity.rs::non_rust_layer1_surfaces_have_declared_bazel_carriers"]

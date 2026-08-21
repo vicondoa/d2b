@@ -8,7 +8,7 @@
 # create a minimal VM, bring it up, SSH into it, tear it down, and
 # verify every audit row + every artifact written by the broker.
 #
-# Why this is a manual gate today (not wired into static.sh):
+# Why this is a manual gate today (not wired into the Layer-1 graph):
 #   - The current dev host is NixOS, not Ubuntu 24.04.
 #   - The harness needs root + KVM + an Ubuntu image + ~5 GiB
 #     scratch; it is a Layer 3 / nightly gate per the validation

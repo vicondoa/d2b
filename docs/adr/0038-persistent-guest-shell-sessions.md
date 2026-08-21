@@ -406,7 +406,7 @@ Tests follow `tests/AGENTS.md`: Layer 1 first, no new top-level `tests/*.sh`,
 and Layer 2 only with justification. Nix module defaults, option values, and
 eval rejections for `guest.shell.*` are Type 1 eval cases in
 `tests/unit/nix/cases/*.nix`. Rendered manifest/bundle fields for shell
-configuration are Type 4 contract tests in `packages/d2b-contract-tests/`.
+configuration are owner-local Type 4 contract tests in their owning crates.
 Static helper packaging assertions, including no ELF interpreter and no dynamic
 dependencies, are Type 6 flake checks or existing static derivation checks wired
 into the flake; no new top-level shell gate is added for them. The guest helper's

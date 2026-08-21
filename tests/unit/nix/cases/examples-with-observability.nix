@@ -1,8 +1,7 @@
 # nix-unit cases for the with-observability example.
 #
-# PARTIAL migration. The source/file-layout assertions are now Rust policy
-# lints in packages/d2b-contract-tests/tests/policy_examples_observability.rs.
-# The example-level flake check is covered by the root
+# The source/file-layout assertions were evidence-only central scans and are
+# intentionally deleted. The example-level flake check is covered by the root
 # `eval-with-observability` check; this file keeps the resolved value cases.
 #
 # Covered here: the targeted `nix eval` of

@@ -1,2 +1,0 @@
-status = "retired"
-successor_ids = ["retired-by-scope: ADR index validation removed"]

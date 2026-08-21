@@ -24,10 +24,8 @@ that is the binding contract; this file is the human quick-start.
 
 ```
 tests/
-├── static.sh, runner.sh, test-*.sh                                orchestrators (entry points)
 ├── lib.sh, cli-rust-native-common.sh                              shared shell harness
 ├── README.md, AGENTS.md                                           this guide + the test-model contract
-├── migration-ledger.toml, migration-state.d/                    retirement ledger + per-test records
 ├── golden/, fixtures/                                           shared golden data + fixtures
 ├── tools/                                                       runners + codegen/asserter tools
 │                                                                (bazel-check, rust-workspace-checks, gen-*, …)
@@ -58,7 +56,7 @@ Rust tests (types 2-5: unit, integration, contract, policy-lint) live under
 | `make test-changelog` | require release notes for code changes and validate every changelog fragment | local + CI |
 | `make test-rust` | fixed owner-local Bazel Rust unit, integration, and doctest suite | local + CI |
 | `make test-rust-<leaf>` | focused Bazel Rust labels for main, broker, guest shell runner, policy, schema, and supply-chain coverage | CI (local for a focused rerun) |
-| `make test-fixture-contracts` | enforcing eval-rendered lane: materializes `D2B_FIXTURES` from evaluated Nix artifact data, then runs `d2b-contract-tests` and the CLI-contract cases; both lanes set `D2B_ENABLE_FIXTURE_BUILD=1`, and invoking it without that variable fails rather than skipping | local + CI |
+| `make test-fixture-contracts` | enforcing eval-rendered lane: materializes `D2B_FIXTURES` from evaluated Nix artifact data, then runs owner-local CLI contract cases; invoking it without the enforcing lane fails rather than skipping | local + CI |
 | `make test-proofs` | standalone proofs/ crates | local + CI |
 | `make test-flake` | fixed Bazel Nix evaluation, realization, output, and aarch64 targets | local + CI |
 | `make test-nix-unit` | fixed Bazel Nix-unit surface targets | local + CI |
@@ -71,7 +69,6 @@ Rust tests (types 2-5: unit, integration, contract, policy-lint) live under
 | `make check-fast` | alias for `test-unit` (backward compat) | local + CI |
 | `make check` | complete fixed Bazel graph with fixed CI enforcement | local |
 | `make bazel-check` | Bazel aggregate used by `make check`. Defaults to BuildBuddy remotely; CI forces `D2B_BAZEL_PROFILE=local` | local or remote |
-| `make check-static` | legacy/full-static monolithic gate (`tests/static.sh`) | local |
 | `make runtime-ledger-pin` | regenerate the runtime-ledger census pin after adding, removing or renaming a timed test | local |
 | `make heavy-gate-build && bazel-bin/packages/xtask/xtask heavy-gate -- env D2B_LIVE=1 bash tests/integration/live/<x>.sh` | type-11 live-host tests, through the heavy-gate semaphore | **manual, against a deployed d2b host** |
 
@@ -213,8 +210,8 @@ Layer 1:
   `CARGO_BIN_EXE_*`. **Spawn hermetically**: point `D2B_PUBLIC_SOCKET`,
   `D2B_BROKER_SOCKET`, and the `D2B_*_PATH` fixture env vars at fixtures
   or missing paths so the test never touches the operator's live daemon.
-- Rendered-artifact ↔ DTO/doc contract → a contract test in
-  `packages/d2b-contract-tests/`.
+- Rendered-artifact ↔ DTO/doc contract → a contract test in the owning
+  `packages/<crate>/tests/` directory.
 - Generated docs/schemas/CLI freshness → already a drift gate; regenerate with
   `bazel run //packages/xtask:xtask -- gen-*`. Do **not** add a new shell gate.
 

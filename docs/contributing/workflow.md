@@ -144,7 +144,7 @@ host, prefer `d2b down <vm> --apply` followed by
 
 ## Edit -> commit -> validate
 
-Commit before running `static.sh` / the smoke evals. Two reasons:
+Commit before running `make check` / the smoke evals. Two reasons:
 
 1. Untracked files are invisible to `nix flake check` (and to any
    eval that follows the same code path). Forgetting to `git add` a
@@ -332,16 +332,16 @@ reclamation is needed.
   generations from 10 days of work, pinning 471 GiB) silently fills
   its disk. The gate's default post-`nix store gc` only removes
   unreferenced paths, never old generations.
-- `tests/static.sh` can run an opt-in deep GC after the gate:
+- Run an opt-in deep GC separately from the Layer-1 gate:
 
   ```
-  D2B_POST_GATE_DEEP_GC=1 bash tests/static.sh           # user gens only
+  D2B_POST_GATE_DEEP_GC=1 nix-collect-garbage --delete-older-than 7d
   D2B_POST_GATE_DEEP_GC=1 \
   D2B_POST_GATE_DEEP_GC_SUDO=1 \
-  bash tests/static.sh                                  # + system gens
+  sudo -n nix-collect-garbage --delete-older-than 7d   # + system gens
   ```
 
-  `D2B_POST_GATE_DEEP_GC_SUDO=1` uses `sudo -n` and skips fail-open
+  The sudo form uses `sudo -n` and skips fail-open
   with a clear log if passwordless sudo isn't available. Threshold
   defaults to 7 days; override with `D2B_POST_GATE_DEEP_GC_DAYS=N`.
   Off by default - this is operator policy, not gate policy.
@@ -349,8 +349,9 @@ reclamation is needed.
   `examples/with-entra-id` when its pinned `vicondoa/entrablau.nix`
   input fails the per-example cargo fetch with a transient crates.io
   403 against `libhimmelblau-0.8.18` / `kanidm-hsm-crypto-0.3.6`.
-  `tests/static.sh` performs one in-band retry before failing the
-  example; the skip knob is an explicit, reviewable carve-out used only after the retry also fails. Added with the integration merge; re-evaluate once the entra-id input bumps past
+  The skip knob is an explicit, reviewable carve-out used when the example
+  input is unavailable. Added with the integration merge; re-evaluate once the
+  entra-id input bumps past
   the affected revision.
 - Before `git worktree remove`, delete the worktree's real
   `target/` (every worktree has one; there is no shared-cache

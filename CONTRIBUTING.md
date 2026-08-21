@@ -23,9 +23,9 @@ For repo-specific operational policy, see [AGENTS.md](./AGENTS.md).
 
 ## Running quality gates
 
-Run focused tests for each changed component. Use `bash tests/static.sh`,
-`make check`, or another broader Layer-1 target when the changed surface needs
-that coverage; none is a prerequisite for opening a PR or starting review.
+Run focused tests for each changed component. Use `make check` or another
+broader Layer-1 target when the changed surface needs that coverage; none is a
+prerequisite for opening a PR or starting review.
 Container, host, live, hardware, and performance lanes are conditional on the
 changed surface. See [tests/README.md](./tests/README.md) for the test layering
 and public conditional integration targets.
@@ -79,15 +79,8 @@ cargo deny --manifest-path Cargo.toml check --config deny.toml
 cargo xtask gen-package-policy-inputs --check
 ```
 
-`bash tests/static.sh` remains available as a broader Layer-1 gate when the
-changed surface needs it. It also has a fast path for Rust-heavy gates:
-
-- it resolves one shared Rust toolchain shell at the top of the run and
-  reuses that PATH in child scripts instead of spawning a fresh `nix shell`
-  per gate;
-- independent Rust, schema, and example gates run behind a small semaphore
-  controlled by `D2B_STATIC_JOBS` (default `4`);
-- to profile one gate in isolation, run `time bash tests/<gate>.sh`.
+The fixed Bazel graph remains the broader Layer-1 gate when the changed
+surface needs it. Focused labels are preferred while iterating.
 
 #### Schema and shell-artifact drift gates
 
@@ -164,11 +157,8 @@ bash tests/minijail-version-check.sh
 bash tests/multi-env-daemon-backed.sh
 ```
 
-Each of these is also wired into `tests/static.sh` per the
-integrator-owned wiring rule (scope agents add the standalone test
-under `tests/`, the integrator registers it). Running them
-standalone is recommended while iterating because the parallel-gate
-pool in `static.sh` adds ≈ 4-10 minutes of wall-clock per gate.
+Each applicable check is wired into the fixed Bazel graph. Running the
+owner-local label standalone is recommended while iterating.
 
 ### When to run the L2 KVM tests
 

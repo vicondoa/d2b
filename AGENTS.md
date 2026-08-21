@@ -212,10 +212,9 @@ is [ADR 0015](./docs/adr/0015-daemon-only-clean-break.md).
 - The retired bash fallback and legacy environment knobs are removed or
   no-ops. Lifecycle authorization is `d2b` group membership plus
   `SO_PEERCRED` at `public.sock` accept time.
-- Policy coverage remains in
-  `packages/d2b-contract-tests/tests/policy_units.rs`,
-  `policy_source.rs`, and `policy_docs.rs`; fixture-dependent checks need the
-  enforcing fixture lane.
+- Repository-wide policy is limited to source hygiene, workspace and lock
+  integrity, supply chain, and changelog policy; security-critical behavior
+  remains owner-local or structural.
 
 ## References
 

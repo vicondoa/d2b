@@ -29,6 +29,17 @@ except (OSError, tomllib.TOMLDecodeError, KeyError) as error:
     print(f"FAIL: cannot parse workspace manifest: {error}", file=sys.stderr)
     raise SystemExit(1)
 
+for lock_path in (root / "Cargo.lock", root / "packages" / "Cargo.guest.lock"):
+    try:
+        with lock_path.open("rb") as handle:
+            lock = tomllib.load(handle)
+    except (OSError, tomllib.TOMLDecodeError) as error:
+        print(f"FAIL: cannot parse lockfile {lock_path}: {error}", file=sys.stderr)
+        raise SystemExit(1)
+    if not isinstance(lock.get("package"), list) or not lock["package"]:
+        print(f"FAIL: lockfile {lock_path} has no package records", file=sys.stderr)
+        raise SystemExit(1)
+
 
 def manifest_for(member: str) -> tuple[str, dict]:
     path = root / member / "Cargo.toml"
