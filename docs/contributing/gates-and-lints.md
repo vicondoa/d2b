@@ -106,9 +106,9 @@ make test-unit
 # PR-equivalent Layer-1 gate.
 make check
 
-# Local Layer 1 + container integration. Run wider lanes only when the changed
-# surface requires them.
-make test
+# Conditional container integration. Run it only when the changed surface
+# requires a foreign userland.
+make test-integration
 ```
 
 ### Bazel and BuildBuddy execution

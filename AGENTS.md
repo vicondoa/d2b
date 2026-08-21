@@ -120,8 +120,9 @@ settings or claim atomic base binding.
   the required gates when the owning workflow calls for them. Read
   [`tests/AGENTS.md`](./tests/AGENTS.md) before changing test coverage.
 - Use the top-level Makefile and existing gates: `make check` is the aggregate,
-  `make test-unit` is the Layer-1 development umbrella, and `make test` adds
-  container integration. Do not cite an advisory skip as validation evidence.
+  `make test-unit` is the Layer-1 development umbrella, and
+  `make test-integration` adds the conditional container lane. Do not cite an
+  advisory skip as validation evidence.
 - Every code change ships a valid changelog entry or a fragment under
   [`changelog.d/`](./changelog.d/).
 - Leave `nix/gas-city-contributor/**` and its managed authority unchanged;

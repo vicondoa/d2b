@@ -19,7 +19,7 @@ D2B_MAKE_BAZEL_TARGETS := \
 	test-flake-realized test-flake-aarch64 test-flake-x86 test-nix-unit \
 	test-performance-budgets test-drift test-policy test-changelog
 D2B_MAKE_LOCAL_TARGETS := \
-	test check-ci check-all test-integration test-host-integration perf \
+	check-ci test-integration test-host-integration perf \
 	pre-tag smoke-lite heavy-check heavy-test-integration \
 	heavy-test-host-integration heavy-flake-check heavy-lane-integration \
 	heavy-lane-host-integration heavy-lane-perf heavy-lane-pre-tag \
@@ -75,9 +75,9 @@ else
 SHELL := $(CURDIR)/tests/tools/scrub-shell-environment
 
 .PHONY: pre-tag smoke-lite \
-        check check-ci check-all check-fast check-tier0 \
+        check check-ci check-fast check-tier0 \
         bazel-check \
-        test test-unit \
+        test-unit \
         test-lint test-rust test-rust-main \
         test-rust-broker test-rust-guest-shell-runner test-rust-local test-rust-no-bash-ast \
         test-rust-schema test-rust-supply-chain \
@@ -109,7 +109,6 @@ SYSTEM ?= $(shell nix eval --extra-experimental-features 'nix-command flakes' \
 #
 #   make check          complete Bazel Layer-1 gate.
 #   make check-ci       check + test-integration for local/manual compatibility.
-#   make check-all      check-ci + perf - full local NixOS gate.
 #   make test-<layer>   focused Bazel suite.
 #   make test-integration  type-9 container integration; local host/manual pre-PR.
 #   make test-host-integration  type-10 runNixOSTest; local NixOS/KVM pre-PR.
@@ -121,12 +120,6 @@ SYSTEM ?= $(shell nix eval --extra-experimental-features 'nix-command flakes' \
 check-ci:
 	$(BAZEL_RUN) //bazel/checks:check
 	$(MAKE) test-integration
-
-## check-all - the full local gate on a NixOS host with devices.
-check-all:
-	$(BAZEL_RUN) //bazel/checks:check
-	$(MAKE) test-integration
-	$(MAKE) perf
 
 ## check-fast / check-tier0 - fast PR-loop subsets.
 
@@ -150,21 +143,13 @@ $(D2B_MAKE_BAZEL_TARGETS):
 	$(BAZEL_RUN) //bazel/checks:$@
 
 # ===========================================================================
-# Umbrella test targets. Layer-2 lanes remain explicit manual/local targets.
-# ===========================================================================
-
-test:
-	$(BAZEL_RUN) //bazel/checks:test-unit
-	$(MAKE) test-integration
-
-# ===========================================================================
 # Sub-targets. Each target is a thin alias over one public Bazel suite.
 # ===========================================================================
 
 ## test-integration - L2 podman container integration tests. Public heavy lane:
 ## it acquires a heavy-gate slot, then runs the raw work behind the gate so it
 ## can never oversubscribe a concurrent lane, even when invoked directly or via
-## `make test` / `check-ci` / `check-all`.
+## `make check-ci`.
 test-integration: heavy-gate-build
 	$(HEAVY_GATE) $(MAKE) heavy-lane-integration
 
