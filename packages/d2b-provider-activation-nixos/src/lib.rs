@@ -3,6 +3,7 @@
 #![deny(missing_docs)]
 
 pub mod controller;
+pub mod diagnostics;
 pub mod manifest;
 pub mod runner;
 

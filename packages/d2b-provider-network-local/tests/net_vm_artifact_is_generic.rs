@@ -1,4 +1,4 @@
-use d2b_contracts::v3::{
+use d2b_contracts_resource::v3::{
     execution_policy::BoundedToken,
     network::{Ipv4Cidr, NetworkSpec},
 };
@@ -43,28 +43,28 @@ fn typed_volume_and_agent_shapes_match_the_contract() {
     assert_eq!(
         volume.views()["guest-readonly"].rights(),
         [
-            d2b_contracts::v3::volume::ViewRight::Read,
-            d2b_contracts::v3::volume::ViewRight::Traverse,
+            d2b_contracts_resource::v3::volume::ViewRight::Read,
+            d2b_contracts_resource::v3::volume::ViewRight::Traverse,
         ]
     );
     let agent = guest_agent_process_spec("net-vm").unwrap();
     assert_eq!(
         agent.execution().process_class(),
-        d2b_contracts::v3::process::ProcessClass::Worker
+        d2b_contracts_resource::v3::process::ProcessClass::Worker
     );
     assert_eq!(agent.execution().sandbox().namespace_classes(), []);
     assert_eq!(
         agent.execution().sandbox().capability_classes(),
         [
-            d2b_contracts::v3::process::CapabilityClass::NetworkAdmin,
-            d2b_contracts::v3::process::CapabilityClass::NetworkBind,
-            d2b_contracts::v3::process::CapabilityClass::NetworkRaw,
+            d2b_contracts_resource::v3::process::CapabilityClass::NetworkAdmin,
+            d2b_contracts_resource::v3::process::CapabilityClass::NetworkBind,
+            d2b_contracts_resource::v3::process::CapabilityClass::NetworkRaw,
         ]
     );
     assert_eq!(agent.execution().mounts().len(), 1);
     assert_eq!(
         agent.execution().mounts()[0].access(),
-        d2b_contracts::v3::process::MountAccess::ReadOnly
+        d2b_contracts_resource::v3::process::MountAccess::ReadOnly
     );
     assert!(agent.execution().mounts()[0].required());
 }
@@ -73,7 +73,7 @@ fn typed_volume_and_agent_shapes_match_the_contract() {
 fn rendered_config_keeps_the_mandatory_host_blocklist() {
     let content = render_config(&spec("10.20.0.0/24", "192.0.2.0/30")).unwrap();
     let firewall = String::from_utf8(content.nftables).unwrap();
-    for cidr in d2b_contracts::v3::network::DEFAULT_HOST_BLOCKLIST {
+    for cidr in d2b_contracts_resource::v3::network::DEFAULT_HOST_BLOCKLIST {
         assert!(firewall.contains(cidr));
     }
 }

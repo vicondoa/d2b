@@ -22,6 +22,8 @@ mod wire;
 mod worker_gpu;
 mod worker_video;
 mod workers;
+pub mod gpu_argv;
+pub mod video_argv;
 
 pub use arbitration::{GpuArbitrator, GpuClaim, GpuClaimError};
 pub use audit::{GpuAuditOperation, GpuAuditOutcome, GpuAuditRecord};
@@ -58,6 +60,14 @@ pub use wire::{
 pub use worker_gpu::build_gpu_worker;
 pub use worker_video::build_video_worker;
 pub use workers::{GpuDeviceNode, GpuWorkerSpec, VideoWorkerSpec};
+pub use gpu_argv::{
+    GpuArgvError, GpuArgvInput, GpuContextType, GpuDisplayConfig, GpuParams,
+    exec_arg0 as gpu_exec_arg0, generate_gpu_argv,
+};
+pub use video_argv::{
+    VideoArgvError, VideoArgvInput, VideoBackend, exec_arg0 as video_exec_arg0,
+    generate_video_argv, wire_contract_snapshot as video_wire_contract_snapshot,
+};
 
 /// Provider identity.
 pub const PROVIDER_REF: &str = "Provider/device-gpu";

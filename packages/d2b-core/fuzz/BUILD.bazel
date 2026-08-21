@@ -39,6 +39,7 @@ rust_binary(
     rustc_env = {"CARGO_MANIFEST_DIR": "."},
     visibility = ["//visibility:public"],
     deps = [
+        "//packages/d2b-contracts-resource:d2b_contracts_resource",
         "//packages/d2b-core:d2b_core",
         "@crates//:bolero",
         "@crates//:serde_json",
@@ -59,6 +60,7 @@ rust_binary(
     rustc_env = {"CARGO_MANIFEST_DIR": "."},
     visibility = ["//visibility:public"],
     deps = [
+        "//packages/d2b-contracts-resource:d2b_contracts_resource",
         "//packages/d2b-core:d2b_core",
         "@crates//:bolero",
         "@crates//:serde_json",

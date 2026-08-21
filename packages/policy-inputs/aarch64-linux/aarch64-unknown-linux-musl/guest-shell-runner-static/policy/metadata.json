@@ -4,7 +4,7 @@
   "features": [
     "real-libshpool"
   ],
-  "lockSha256": "9fa9eab3b6cc967c7061703815ac30e44126f05a9415efeefa42498e87f5c810",
+  "lockSha256": "2bc389b67dbd18cd8182764df9ef503e6cbd8aea013e9ffb3b5c90c451b04f35",
   "policyPackageCount": 139,
   "policyPackageIds": [
     "aho-corasick@1.1.5#registry+https://github.com/rust-lang/crates.io-index",
@@ -35,7 +35,7 @@
     "crossbeam-utils@0.8.22#registry+https://github.com/rust-lang/crates.io-index",
     "d2b-guest-shell-runner@0.0.0-bootstrap#path",
     "difflib@0.4.0#registry+https://github.com/rust-lang/crates.io-index",
-    "either@1.17.0#registry+https://github.com/rust-lang/crates.io-index",
+    "either@1.18.0#registry+https://github.com/rust-lang/crates.io-index",
     "equivalent@1.0.2#registry+https://github.com/rust-lang/crates.io-index",
     "errno@0.2.8#registry+https://github.com/rust-lang/crates.io-index",
     "errno@0.3.14#registry+https://github.com/rust-lang/crates.io-index",
@@ -148,7 +148,7 @@
     "zmij@1.0.23#registry+https://github.com/rust-lang/crates.io-index"
   ],
   "productionPackageCount": 129,
-  "resolveNodeCount": 514,
+  "resolveNodeCount": 515,
   "roots": [
     "d2b-guest-shell-runner"
   ],

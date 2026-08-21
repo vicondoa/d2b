@@ -111,7 +111,7 @@ fn open(
     warn_unsafe_local(&execution_ref, mode);
     let name = args.name.as_deref().unwrap_or("primary");
     let session_ref =
-        d2b_contracts::v3::ResourceRef::parse(&format!("{SHELL_SESSION_TYPE}/{name}"))
+        d2b_contracts_resource::v3::ResourceRef::parse(&format!("{SHELL_SESSION_TYPE}/{name}"))
             .map_err(|_| context.failure("ref-invalid", "invalid shell session name", mode, 2))?;
     if mode.is_json() {
         let value = context.invoke(
@@ -292,7 +292,7 @@ fn validate_session_ref(
     context: &ZoneContext,
     value: &str,
     mode: OutputMode,
-) -> Result<d2b_contracts::v3::ResourceRef, CliFailure> {
+) -> Result<d2b_contracts_resource::v3::ResourceRef, CliFailure> {
     let canonical = value
         .strip_prefix("ShellSession/")
         .map(|name| format!("{SHELL_SESSION_TYPE}/{name}"))
@@ -309,7 +309,7 @@ fn validate_session_ref(
     Ok(resource_ref)
 }
 
-fn warn_unsafe_local(resource_ref: &d2b_contracts::v3::ResourceRef, mode: OutputMode) {
+fn warn_unsafe_local(resource_ref: &d2b_contracts_resource::v3::ResourceRef, mode: OutputMode) {
     if resource_ref.resource_type().as_str() == "Host" && !mode.is_json() {
         crate::print_stderr(
             "warning: no isolation boundary - this process runs as your host user\n",
@@ -319,7 +319,7 @@ fn warn_unsafe_local(resource_ref: &d2b_contracts::v3::ResourceRef, mode: Output
 
 fn with_unsafe_posture(
     mut value: serde_json::Value,
-    resource_ref: &d2b_contracts::v3::ResourceRef,
+    resource_ref: &d2b_contracts_resource::v3::ResourceRef,
 ) -> serde_json::Value {
     if resource_ref.resource_type().as_str() == "Host"
         && let serde_json::Value::Object(object) = &mut value

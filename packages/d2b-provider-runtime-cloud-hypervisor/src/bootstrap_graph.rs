@@ -2,7 +2,7 @@
 
 use std::fmt;
 
-use d2b_contracts::v3::ResourceRef;
+use d2b_contracts_resource::v3::ResourceRef;
 
 /// Readiness of one dependency family.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

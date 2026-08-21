@@ -3,12 +3,16 @@
 #![deny(missing_docs)]
 
 pub mod argv;
+#[allow(missing_docs)]
+pub mod audio_argv;
 mod audio_policy;
 pub mod authority;
 pub mod controller;
 pub mod manifest;
 pub mod mediator;
 pub mod resource_type;
+#[allow(missing_docs)]
+pub mod state;
 pub mod telemetry;
 
 pub use argv::{AudioComponentTemplate, AudioTemplateError, RenderedAudioTemplate};
@@ -33,4 +37,9 @@ pub use resource_type::{
     AudioAdmissionError, AudioBindingSpec, AudioGrants, AudioServiceRole, AudioServiceSpec,
     ProviderExtension, validate_audio_binding, validate_audio_binding_in_zone,
     validate_audio_service,
+};
+pub use state::{
+    AudioStateIoError, AudioStateLock, acquire_audio_state_lock, audio_lock_path,
+    audio_state_path, read_audio_state_locked, read_audio_state_unlocked,
+    write_audio_state_locked, write_audio_state_unlocked,
 };

@@ -1,6 +1,6 @@
 //! Frozen `d2bval/v1` canonical-JSON value frame.
 
-use d2b_contracts::v3::CanonicalJsonValue;
+use d2b_contracts_resource::v3::CanonicalJsonValue;
 
 /// `d2bval/v1` format version.
 pub const VALUE_FORMAT_VERSION: u8 = 1;

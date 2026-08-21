@@ -28,10 +28,14 @@
 
 use std::collections::BTreeMap;
 
-use d2b_contracts::v3::{
+use d2b_contracts_resource::v3::ArtifactId;
+use d2b_contracts_provider::v3::{
+    DependencyAlias,
+    ProviderManifest,
+};
+use d2b_contracts_resource::v3::{
+    ResourceRef,
     execution_policy::BoundedToken,
-    provider::{ArtifactId, DependencyAlias, ProviderManifest},
-    resource_ref::ResourceRef,
 };
 
 use crate::error::ProviderToolkitError;

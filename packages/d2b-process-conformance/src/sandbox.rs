@@ -4,8 +4,11 @@
 //! arguments, systemd properties, paths, capabilities, or environment
 //! values.  The fixed effect adapter owns the implementation plan.
 
-use d2b_contracts::v3::{
-    canonical_digest, canonical_json_bytes, execution_policy::ExecutionDomain, process::SandboxSpec,
+use d2b_contracts_resource::v3::{
+    canonical_digest,
+    canonical_json_bytes,
+    execution_policy::ExecutionDomain,
+    process::SandboxSpec,
 };
 
 use crate::{ConfigurationDigest, ProcessConformanceError, identity::WaitReapOwner};
@@ -154,7 +157,9 @@ pub fn validate_stop_proof(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use d2b_contracts::v3::process::{EnvironmentClass, SandboxSpec};
+    use d2b_contracts_resource::v3::{
+    process::{EnvironmentClass, SandboxSpec},
+};
 
     #[test]
     fn sandbox_digest_is_opaque_and_domain_bound() {
@@ -177,7 +182,8 @@ mod tests {
         let sandbox = SandboxSpec::new(
             Vec::new(),
             Vec::new(),
-            d2b_contracts::v3::execution_policy::BoundedToken::parse("strict").unwrap(),
+            d2b_contracts_resource::v3::execution_policy::BoundedToken::parse("strict")
+                .unwrap(),
             true,
             true,
             EnvironmentClass::Minimal,

@@ -3,15 +3,29 @@
 
 use std::time::Duration;
 
-use d2b_contracts::v3::{
-    identity::{
-        AuthenticatedSubjectContext, BindingDigest, ConfigurationGeneration, EvidenceClass,
-        Locality, ReconnectGeneration, ResourceGeneration, ResourceName, ResourceTypeName,
-        ResourceUid, SchemaFingerprint, ServiceName, SessionBinding, SessionPurpose,
-        TranscriptHash, TransportBinding,
-    },
-    resource_ref::ResourceRef,
+use d2b_contracts_zone_session::v3::{
     zone_routing::{ZoneLabelId, ZonePath},
+};
+use d2b_contracts_resource::v3::{
+    ResourceRef,
+    ConfigurationGeneration,
+    ResourceGeneration,
+    ResourceName,
+    ResourceTypeName,
+    ResourceUid,
+    SchemaFingerprint,
+};
+use d2b_contracts_resource::v3::identity::{
+    AuthenticatedSubjectContext,
+    BindingDigest,
+    EvidenceClass,
+    Locality,
+    ReconnectGeneration,
+    ServiceName,
+    SessionBinding,
+    SessionPurpose,
+    TranscriptHash,
+    TransportBinding,
 };
 use d2b_provider::{
     AdmissionOptions, CancellationToken, ForwardTarget, LocalHopGrants, PROVIDER_SCHEMA_VERSION,

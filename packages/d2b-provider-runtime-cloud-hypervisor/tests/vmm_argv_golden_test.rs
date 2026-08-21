@@ -1,8 +1,7 @@
 use d2b_provider_runtime_cloud_hypervisor::{ChArgvInput, ChNetIface, ChVsock, generate_ch_argv};
 
-#[test]
-fn argv_preserves_broker_owned_order_and_tap_fd_shape() {
-    let input = ChArgvInput {
+fn input() -> ChArgvInput {
+    ChArgvInput {
         vm_name: "corp-vm".to_owned(),
         ch_binary_path: "/nix/store/cloud-hypervisor/bin/cloud-hypervisor".to_owned(),
         cpus: 2,
@@ -27,11 +26,29 @@ fn argv_preserves_broker_owned_order_and_tap_fd_shape() {
             tap_fd: 7,
         }],
         extra_args: vec!["--pvpanic".to_owned()],
-    };
+    }
+}
+
+#[test]
+fn argv_preserves_broker_owned_order_and_tap_fd_shape() {
+    let input = input();
     let argv = generate_ch_argv(&input).unwrap();
     let joined = argv.join(" ");
     assert!(joined.contains("--vsock cid=14,socket=notify.vsock"));
     assert!(joined.contains("--net fd=7,mac=02:00:00:00:00:01"));
     assert!(joined.ends_with("--pvpanic"));
     assert!(!format!("{:?}", input).contains("/nix/store"));
+}
+
+#[test]
+fn tap_fd_rejects_stdio_and_accepts_first_inherited_slot() {
+    for tap_fd in [-1, 0, 1, 2] {
+        let mut input = input();
+        input.net_ifaces[0].tap_fd = tap_fd;
+        assert!(generate_ch_argv(&input).is_err(), "accepted fd {tap_fd}");
+    }
+
+    let mut input = input();
+    input.net_ifaces[0].tap_fd = 3;
+    assert!(generate_ch_argv(&input).is_ok());
 }

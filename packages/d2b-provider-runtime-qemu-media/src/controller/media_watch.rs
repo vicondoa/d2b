@@ -1,6 +1,6 @@
 //! Volume readiness and virtio-blk attachment validation.
 
-use d2b_contracts::v3::ResourceRef;
+use d2b_contracts_resource::v3::ResourceRef;
 
 use crate::types::RemovableVolumeRef;
 

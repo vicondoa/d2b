@@ -5,12 +5,12 @@ use std::num::NonZeroU32;
 use std::os::fd::OwnedFd;
 use std::sync::Mutex;
 
-use d2b_contracts::broker_wire::{
+use d2b_contracts_broker::broker_wire::{
     BrokerCallerRole, BrokerRequest, BrokerResponse, OpenSystemdUnitPidfdRequest,
     StopSystemdUnitRequest, SystemdStopClass, SystemdUnitDomain, SystemdUnitIdentity,
     SystemdUnitRequest,
 };
-use d2b_contracts::v3::execution_policy::ExecutionDomain;
+use d2b_contracts_resource::v3::execution_policy::ExecutionDomain;
 use d2b_process::{
     BackendLaunch, BackendObservation, IdentityBinding, ObservedIdentity, ProcessEffectBackend,
     ProcessEffectError, ProcessIdentityDigest, ProcessRequest, ProcessStopClass, WaitReapOwner,

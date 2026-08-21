@@ -9,6 +9,9 @@ license.workspace = true
 workspace = true
 
 [dependencies]
+d2bd-runtime = { path = "../d2bd-runtime", version = "0.0.0-bootstrap" }
+d2b-contracts-provider = { path = "../d2b-contracts-provider", version = "0.0.0-bootstrap" }
+d2b-contracts-zone-session = { path = "../d2b-contracts-zone-session", version = "0.0.0-bootstrap" }
 arc-swap = "1"
 async-trait = "0.1"
 clap = { version = "4.5", features = ["derive"] }
@@ -25,6 +28,7 @@ d2b-provider-system-minijail = { path = "../d2b-provider-system-minijail", versi
 d2b-provider-system-systemd = { path = "../d2b-provider-system-systemd", version = "0.0.0-bootstrap" }
 d2b-provider-supervisor = { path = "../d2b-provider-supervisor", version = "0.0.0-bootstrap" }
 d2b-provider-activation-nixos = { path = "../d2b-provider-activation-nixos", version = "0.0.0-bootstrap" }
+d2b-provider-volume-local = { path = "../d2b-provider-volume-local", version = "0.0.0-bootstrap" }
 d2b-process = { path = "../d2b-process", version = "0.0.0-bootstrap" }
 d2b-process-conformance = { path = "../d2b-process-conformance", version = "0.0.0-bootstrap" }
 d2b-bus = { path = "../d2b-bus", version = "0.0.0-bootstrap" }
@@ -35,6 +39,9 @@ d2b-resource-store = { path = "../d2b-resource-store", version = "0.0.0-bootstra
 d2b-resource-store-redb = { path = "../d2b-resource-store-redb", version = "0.0.0-bootstrap" }
 d2b-host = { path = "../d2b-host", version = "0.0.0-bootstrap" }
 d2b-contracts = { path = "../d2b-contracts", version = "0.0.0-bootstrap" }
+d2b-contracts-broker = { path = "../d2b-contracts-broker", version = "0.0.0-bootstrap" }
+d2b-contracts-control = { path = "../d2b-contracts-control", version = "0.0.0-bootstrap" }
+d2b-contracts-resource = { path = "../d2b-contracts-resource", version = "0.0.0-bootstrap" }
 d2b-cutover = { path = "../d2b-cutover", version = "0.0.0-bootstrap" }
 d2b-audit = { path = "../d2b-audit", version = "0.0.0-bootstrap" }
 d2b-provider = { path = "../d2b-provider", version = "0.0.0-bootstrap" }
@@ -77,6 +84,7 @@ ttrpc = { version = "0.9.0", default-features = false, features = ["async", "syn
 uzers = "0.12"
 
 [dev-dependencies]
+d2bd-runtime = { path = "../d2bd-runtime", version = "0.0.0-bootstrap", features = ["test-support"] }
 d2b-core = { path = "../d2b-core", version = "0.0.0-bootstrap", features = ["test-support"] }
 d2b-core-controller = { path = "../d2b-core-controller", version = "0.0.0-bootstrap", features = ["test-support"] }
 d2b-provider-display-wayland = { path = "../d2b-provider-display-wayland", version = "0.0.0-bootstrap", features = ["test-support"] }

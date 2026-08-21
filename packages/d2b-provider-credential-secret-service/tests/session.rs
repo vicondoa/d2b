@@ -1,10 +1,16 @@
 mod common;
 
-use d2b_contracts::v3::credential::{
+use d2b_contracts_provider::v3::{
+    credential::{
     CredentialAuthorization, CredentialMethod, CredentialProvider, CredentialServiceErrorCode,
     PlacementBinding, dispatch_authorized_provider,
+},
 };
-use d2b_contracts::v3::{ResourceGeneration, ResourceRef, ZoneId};
+use d2b_contracts_resource::v3::{
+    ResourceGeneration,
+    ResourceRef,
+    ZoneId,
+};
 use d2b_provider_credential_secret_service::{
     LockPolicy, SecretServiceConfig, SecretServiceCredentialProvider,
     SecretServiceCredentialProviderFactory, SecretServicePlacement,
@@ -59,7 +65,7 @@ fn one_session_capability_rejects_clone_replay_and_disconnects_owned_lease() {
     dispatch_authorized_provider(
         &provider,
         CredentialMethod::AcquireToken,
-        &d2b_contracts::v3::credential::CredentialRequest::new(
+        &d2b_contracts_provider::v3::credential::CredentialRequest::new(
             ResourceRef::parse("Credential/other-keyring").unwrap(),
             "operation-2",
             "session-owned-2",

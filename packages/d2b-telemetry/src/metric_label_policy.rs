@@ -2,11 +2,13 @@
 
 use std::collections::BTreeMap;
 
-pub use d2b_contracts::v3::telemetry_policy::{
+pub use d2b_contracts_provider::v3::{
+    telemetry_policy::{
     FORBIDDEN_LABEL_KEYS, FORBIDDEN_LABEL_SUFFIXES, IdentityCanaries, LabelDescriptor,
     METRIC_LABEL_POLICY, MetricDescriptor, MetricPolicyError, OTEL_RESOURCE_ATTRIBUTES,
     allowed_values, canonical_descriptor, validate_canonical_data_point, validate_data_point,
     validate_descriptor, validate_label_key, validate_labels,
+},
 };
 
 /// Validate resource attributes with key-specific identity handling.
@@ -41,7 +43,7 @@ pub fn validate_resource_attributes(
 }
 
 fn is_canonical_digest(value: &str) -> bool {
-    d2b_contracts::v3::is_canonical_digest(value)
+    d2b_contracts_resource::v3::is_canonical_digest(value)
 }
 
 #[cfg(test)]

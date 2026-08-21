@@ -117,7 +117,7 @@ The guest module adds:
 
 `pkgs/spectrum-ch/cloud-hypervisor/0003-vhost-user-media-device.patch`
 hard-codes the virtio-media wire shape. The Rust constants in
-`d2b_host::video_argv` and
+`packages/d2b-provider-device-gpu/src/video_argv.rs` and
 `tests/golden/runner-shape/video-argv-minimal.txt` mirror these values:
 
 | Pin | Value |

@@ -7,7 +7,10 @@
 
 use std::fmt;
 
-use d2b_contracts::v3::{ResourceRef, ZoneId};
+use d2b_contracts_resource::v3::{
+    ResourceRef,
+    ZoneId,
+};
 
 use crate::VerifiedUnixPeer;
 

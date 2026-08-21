@@ -25,10 +25,13 @@
 //! no type here carries authority. An [`InstalledProvider`] is a decision
 //! that has already been reached, not a capability that can be presented.
 
-use d2b_contracts::v3::{
-    identity::SchemaFingerprint,
-    provider::{ProviderManifest, ProviderSpec},
-    resource_ref::ResourceRef,
+use d2b_contracts_provider::v3::{
+    ProviderManifest,
+    ProviderSpec,
+};
+use d2b_contracts_resource::v3::{
+    ResourceRef,
+    SchemaFingerprint,
 };
 
 use crate::{descriptor::ProviderDescriptor, error::RegistryBuildError};
@@ -182,17 +185,30 @@ fn publishes_only_signed_methods(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use d2b_contracts::v3::{
-        execution_policy::{BoundedToken, ExecutionDomain},
-        identity::{ConfigurationGeneration, ResourceGeneration, ResourceTypeName, ServiceName},
-        provider::{
-            ArtifactDigest, ArtifactDigestSet, ArtifactId, ComponentDescriptor, ComponentType,
-            PolicyEvaluation, ResourceApiBinding, RevocationState, SignatureState,
-            StandardCapabilityMatrix, TrustEvidence, UpgradeDisposition, UpgradePolicy,
-        },
-        resource_schema::SchemaVersion,
-        zone_routing::ZonePath,
+    use d2b_contracts_provider::v3::{
+        ArtifactDigest,
+        ArtifactDigestSet,
+        ComponentDescriptor,
+        ComponentType,
+        PolicyEvaluation,
+        ResourceApiBinding,
+        RevocationState,
+        SignatureState,
+        StandardCapabilityMatrix,
+        TrustEvidence,
+        UpgradeDisposition,
+        UpgradePolicy,
     };
+    use d2b_contracts_resource::v3::{
+        ArtifactId,
+        execution_policy::{BoundedToken, ExecutionDomain},
+        ConfigurationGeneration,
+        ResourceGeneration,
+        ResourceTypeName,
+        resource_schema::SchemaVersion,
+    };
+    use d2b_contracts_resource::v3::identity::ServiceName;
+    use d2b_contracts_zone_session::v3::zone_routing::ZonePath;
 
     use crate::identity::{
         ProviderCapabilitySet, ProviderClass, ProviderImplementationId, ProviderMethodName,
@@ -260,7 +276,7 @@ mod tests {
                 service: digest,
             },
             trust,
-            d2b_contracts::v3::provider::CompatibilityRange {
+            d2b_contracts_provider::v3::provider::CompatibilityRange {
                 api_major: 3,
                 api_minor: 4,
                 descriptor_fingerprint: fingerprint("1"),

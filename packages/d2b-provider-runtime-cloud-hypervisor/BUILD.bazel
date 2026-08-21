@@ -1,5 +1,5 @@
 load("@crates//:defs.bzl", "all_crate_deps")
-load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test")
+load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test", "rust_doc_test")
 
 exports_files(
     ["BUILD.bazel"],
@@ -11,13 +11,27 @@ rust_library(
     srcs = glob(["src/**/*.rs"], allow_empty = True),
     compile_data = ["Cargo.toml"],
     deps = [
-        "//packages/d2b-contracts:d2b_contracts",
-        "//packages/d2b-host-argv:d2b_host_argv",
+        "//packages/d2b-contracts-provider:d2b_contracts_provider",
+        "//packages/d2b-contracts-resource:d2b_contracts_resource",
+        "//packages/d2b-contracts-zone-session:d2b_contracts_zone_session",
         "//packages/d2b-process-conformance:d2b_process_conformance",
     ] + all_crate_deps(normal = True, cargo_only = True),
     proc_macro_deps = [
         "@crates//:async-trait",
     ],
+    visibility = ["//visibility:public"],
+)
+
+rust_test(
+    name = "d2b_provider_runtime_cloud_hypervisor_test",
+    crate = ":d2b_provider_runtime_cloud_hypervisor",
+    compile_data = ["Cargo.toml"],
+    deps = [
+        "//packages/d2b-contracts-provider:d2b_contracts_provider",
+        "//packages/d2b-contracts-resource:d2b_contracts_resource",
+        "//packages/d2b-contracts-zone-session:d2b_contracts_zone_session",
+        "//packages/d2b-process-conformance:d2b_process_conformance",
+    ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
     visibility = ["//visibility:public"],
 )
 
@@ -37,19 +51,24 @@ rust_test(
     compile_data = ["Cargo.toml"],
     visibility = ["//visibility:public"],
     deps = [
+        "//packages/d2b-contracts-provider:d2b_contracts_provider",
+        "//packages/d2b-contracts-resource:d2b_contracts_resource",
+        "//packages/d2b-contracts-zone-session:d2b_contracts_zone_session",
         ":d2b_provider_runtime_cloud_hypervisor",
     ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
 )
 
 rust_test(
-    name = "reconcile_state",
+    name = "controller",
     srcs = [
-        "tests/reconcile_state.rs",
+        "tests/controller.rs",
     ],
     compile_data = ["Cargo.toml"],
     visibility = ["//visibility:public"],
     deps = [
-        "//packages/d2b-contracts:d2b_contracts",
+        "//packages/d2b-contracts-provider:d2b_contracts_provider",
+        "//packages/d2b-contracts-resource:d2b_contracts_resource",
+        "//packages/d2b-contracts-zone-session:d2b_contracts_zone_session",
         ":d2b_provider_runtime_cloud_hypervisor",
     ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
 )
@@ -62,6 +81,9 @@ rust_test(
     compile_data = ["Cargo.toml"],
     visibility = ["//visibility:public"],
     deps = [
+        "//packages/d2b-contracts-provider:d2b_contracts_provider",
+        "//packages/d2b-contracts-resource:d2b_contracts_resource",
+        "//packages/d2b-contracts-zone-session:d2b_contracts_zone_session",
         ":d2b_provider_runtime_cloud_hypervisor",
     ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
 )
@@ -74,6 +96,9 @@ rust_test(
     compile_data = ["Cargo.toml"],
     visibility = ["//visibility:public"],
     deps = [
+        "//packages/d2b-contracts-provider:d2b_contracts_provider",
+        "//packages/d2b-contracts-resource:d2b_contracts_resource",
+        "//packages/d2b-contracts-zone-session:d2b_contracts_zone_session",
         ":d2b_provider_runtime_cloud_hypervisor",
     ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
 )
@@ -97,4 +122,9 @@ filegroup(
         allow_empty = True,
     ),
     visibility = ["//visibility:public"],
+)
+
+rust_doc_test(
+    name = "d2b_provider_runtime_cloud_hypervisor_doc_test",
+    crate = "//packages/d2b-provider-runtime-cloud-hypervisor:d2b_provider_runtime_cloud_hypervisor",
 )

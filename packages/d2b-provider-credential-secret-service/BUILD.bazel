@@ -1,5 +1,5 @@
 load("@crates//:defs.bzl", "all_crate_deps")
-load("@rules_rust//rust:defs.bzl", "rust_binary", "rust_library", "rust_test")
+load("@rules_rust//rust:defs.bzl", "rust_binary", "rust_library", "rust_test", "rust_doc_test")
 
 exports_files(["BUILD.bazel"], visibility = ["//visibility:public"])
 
@@ -10,7 +10,10 @@ rust_library(
     srcs = glob(["src/**/*.rs"], allow_empty = True),
     compile_data = ["Cargo.toml"],
     visibility = ["//visibility:public"],
-    deps = ["//packages/d2b-contracts:d2b_contracts",
+    deps = [
+        "//packages/d2b-contracts-provider:d2b_contracts_provider",
+        "//packages/d2b-contracts-resource:d2b_contracts_resource",
+        "//packages/d2b-contracts-zone-session:d2b_contracts_zone_session",
     ] + all_crate_deps(normal = True, cargo_only = True),
 )
 
@@ -31,8 +34,10 @@ rust_test(
     crate_root = "tests/canary.rs",
     visibility = ["//visibility:public"],
     deps = [
+        "//packages/d2b-contracts-provider:d2b_contracts_provider",
+        "//packages/d2b-contracts-resource:d2b_contracts_resource",
+        "//packages/d2b-contracts-zone-session:d2b_contracts_zone_session",
         ":d2b_provider_credential_secret_service",
-        "//packages/d2b-contracts:d2b_contracts",
     ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
 )
 
@@ -47,8 +52,10 @@ rust_test(
     crate_root = "tests/conformance.rs",
     visibility = ["//visibility:public"],
     deps = [
+        "//packages/d2b-contracts-provider:d2b_contracts_provider",
+        "//packages/d2b-contracts-resource:d2b_contracts_resource",
+        "//packages/d2b-contracts-zone-session:d2b_contracts_zone_session",
         ":d2b_provider_credential_secret_service",
-        "//packages/d2b-contracts:d2b_contracts",
     ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
 )
 
@@ -62,8 +69,10 @@ rust_test(
     crate_root = "tests/delivery.rs",
     visibility = ["//visibility:public"],
     deps = [
+        "//packages/d2b-contracts-provider:d2b_contracts_provider",
+        "//packages/d2b-contracts-resource:d2b_contracts_resource",
+        "//packages/d2b-contracts-zone-session:d2b_contracts_zone_session",
         ":d2b_provider_credential_secret_service",
-        "//packages/d2b-contracts:d2b_contracts",
     ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
 )
 
@@ -77,8 +86,10 @@ rust_test(
     crate_root = "tests/faults.rs",
     visibility = ["//visibility:public"],
     deps = [
+        "//packages/d2b-contracts-provider:d2b_contracts_provider",
+        "//packages/d2b-contracts-resource:d2b_contracts_resource",
+        "//packages/d2b-contracts-zone-session:d2b_contracts_zone_session",
         ":d2b_provider_credential_secret_service",
-        "//packages/d2b-contracts:d2b_contracts",
     ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
 )
 
@@ -92,8 +103,10 @@ rust_test(
     crate_root = "tests/lifecycle.rs",
     visibility = ["//visibility:public"],
     deps = [
+        "//packages/d2b-contracts-provider:d2b_contracts_provider",
+        "//packages/d2b-contracts-resource:d2b_contracts_resource",
+        "//packages/d2b-contracts-zone-session:d2b_contracts_zone_session",
         ":d2b_provider_credential_secret_service",
-        "//packages/d2b-contracts:d2b_contracts",
     ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
 )
 
@@ -103,8 +116,10 @@ rust_test(
     compile_data = ["Cargo.toml"],
     visibility = ["//visibility:public"],
     deps = [
+        "//packages/d2b-contracts-provider:d2b_contracts_provider",
+        "//packages/d2b-contracts-resource:d2b_contracts_resource",
+        "//packages/d2b-contracts-zone-session:d2b_contracts_zone_session",
         ":d2b_provider_credential_secret_service",
-        "//packages/d2b-contracts:d2b_contracts",
     ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
 )
 
@@ -122,7 +137,9 @@ rust_test(
     compile_data = ["Cargo.toml"],
     visibility = ["//visibility:public"],
     deps = [
-        "//packages/d2b-contracts:d2b_contracts",
+        "//packages/d2b-contracts-provider:d2b_contracts_provider",
+        "//packages/d2b-contracts-resource:d2b_contracts_resource",
+        "//packages/d2b-contracts-zone-session:d2b_contracts_zone_session",
         ":d2b_provider_credential_secret_service",
     ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
 )
@@ -145,4 +162,9 @@ filegroup(
         allow_empty = True,
     ),
     visibility = ["//visibility:public"],
+)
+
+rust_doc_test(
+    name = "d2b_provider_credential_secret_service_doc_test",
+    crate = "//packages/d2b-provider-credential-secret-service:d2b_provider_credential_secret_service",
 )

@@ -1,6 +1,7 @@
 #[path = "../harness.rs"]
 mod harness;
 
+use d2b_contracts_resource::v3::{IfName, IfNameError};
 use d2b_core::{
     bundle::{Bundle, BundleGeneration, BundleManagedKeys},
     bundle_resolver::{
@@ -12,9 +13,9 @@ use d2b_core::{
     closures::{ClosureGeneration, ClosureMetadata},
     error::{BrokerOp, Error, SemverRange, Version},
     host::{
-        BridgePortFlags, HostJson, HostsFileOwnership, IfName, IfNameError, Ipv6SysctlEntry,
-        LanPolicy, NetEnv, NetworkManagerUnmanaged, NftChain, NftablesModel, OwnershipRule,
-        SitePolicy, TapRole, UsbipBusidLock, UsbipLockOwner, UsbipLockScope,
+        BridgePortFlags, HostJson, HostsFileOwnership, Ipv6SysctlEntry, LanPolicy, NetEnv,
+        NetworkManagerUnmanaged, NftChain, NftablesModel, OwnershipRule, SitePolicy, TapRole,
+        UsbipBusidLock, UsbipLockOwner, UsbipLockScope,
     },
     manifest_v04::ManifestV04,
     minijail_profile::CgroupPlacement,

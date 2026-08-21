@@ -2,7 +2,7 @@
 
 use std::collections::BTreeMap;
 
-use d2b_contracts::v3::ResourceRef;
+use d2b_contracts_resource::v3::ResourceRef;
 
 /// Closed budget dimensions used for policy and metric labels.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]

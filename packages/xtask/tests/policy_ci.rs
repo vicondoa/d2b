@@ -38,10 +38,7 @@ const APPROVED_MAKE_TARGETS: &[&str] = &[
     "bazel-check",
     "test-integration",
     "test-host-integration",
-    "test-hardware",
     "perf",
-    "check-inventory",
-    "ledger-regen",
 ];
 
 const RETIRED_BAZEL_AUTHORITY_PATHS: &[&str] = &[

@@ -24,8 +24,8 @@ use std::fmt;
 use std::os::fd::OwnedFd;
 use std::path::{Path, PathBuf};
 
-use d2b_contracts::broker_wire::{CgroupKillRequest, OpenCgroupDirRequest};
 use d2b_contracts::types::{PathClass as BrokerPathClass, ScopeId};
+use d2b_contracts_broker::broker_wire::{CgroupKillRequest, OpenCgroupDirRequest};
 use d2b_core::bundle_resolver::BundleResolver;
 use d2b_host::cgroup::{
     self as host_cgroup, CgroupBackend, CgroupError, Controller, D2B_SLICE_NAME,
@@ -512,7 +512,7 @@ pub struct LiveOpenCgroupDirOutcome {
 pub fn live_delegate_cgroup_v2(
     exec: &SystemLiveExec,
     resolver: &BundleResolver,
-    req: &d2b_contracts::broker_wire::DelegateCgroupV2Request,
+    req: &d2b_contracts_broker::broker_wire::DelegateCgroupV2Request,
     _audit_log: &crate::audit::AuditLog,
 ) -> Result<(), super::OpError> {
     let subject = req.scope_id.as_str().trim_start_matches("vm:");
@@ -545,7 +545,7 @@ pub fn live_open_cgroup_dir(
             live_delegate_cgroup_v2(
                 exec,
                 resolver,
-                &d2b_contracts::broker_wire::DelegateCgroupV2Request {
+                &d2b_contracts_broker::broker_wire::DelegateCgroupV2Request {
                     scope_id: ScopeId::new("runtime"),
                     tracing_span_id: req.tracing_span_id.clone(),
                 },
@@ -564,7 +564,7 @@ pub fn live_open_cgroup_dir(
             live_delegate_cgroup_v2(
                 exec,
                 resolver,
-                &d2b_contracts::broker_wire::DelegateCgroupV2Request {
+                &d2b_contracts_broker::broker_wire::DelegateCgroupV2Request {
                     scope_id: ScopeId::new(vm_name),
                     tracing_span_id: req.tracing_span_id.clone(),
                 },

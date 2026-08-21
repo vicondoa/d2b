@@ -10,14 +10,15 @@ use std::{
     time::Duration,
 };
 
-use d2b_contracts::v3::{
+use d2b_contracts_provider::v3::{
+    provider::{ArtifactDigest, ArtifactDigestSet, CompatibilityRange, ComponentDescriptor, ComponentType, PolicyEvaluation, ProviderManifest, ResourceApiBinding, RevocationState, SignatureState, StandardCapabilityMatrix, TrustEvidence, UpgradeDisposition, UpgradePolicy},
+};
+use d2b_contracts_resource::v3::{
     execution_policy::{BoundedToken, ExecutionDomain},
+};
+use d2b_contracts_resource::v3::{
+    ArtifactId,
     identity::{ResourceTypeName, SchemaFingerprint},
-    provider::{
-        ArtifactDigest, ArtifactDigestSet, ArtifactId, CompatibilityRange, ComponentDescriptor,
-        ComponentType, PolicyEvaluation, ProviderManifest, ResourceApiBinding, RevocationState,
-        SignatureState, StandardCapabilityMatrix, TrustEvidence, UpgradeDisposition, UpgradePolicy,
-    },
     resource_schema::SchemaVersion,
 };
 use d2b_provider::{

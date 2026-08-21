@@ -2,7 +2,7 @@
 
 use std::fmt;
 
-use d2b_contracts::v3::is_canonical_digest;
+use d2b_contracts_resource::v3::is_canonical_digest;
 use serde::{Deserialize, Deserializer, Serialize, Serializer, de::Error as DeserializeError};
 
 const MAX_OPAQUE_ID_BYTES: usize = 128;
@@ -122,7 +122,7 @@ impl Digest {
 
     /// Derive a domain-separated digest from canonical bytes.
     pub fn derive(domain: &str, bytes: &[u8]) -> Self {
-        Self(d2b_contracts::v3::canonical_digest(domain, bytes))
+        Self(d2b_contracts_resource::v3::canonical_digest(domain, bytes))
     }
 
     /// Borrow the rendered digest.

@@ -11,11 +11,11 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::sync::{Mutex, OnceLock};
 
-use d2b_contracts::broker_wire::ApplyHostGenerationHandoffResponse;
-use d2b_contracts::host_generation::{
+use d2b_contracts_broker::broker_wire::ApplyHostGenerationHandoffResponse;
+use d2b_contracts_broker::host_generation::{
     ApplyHostGenerationHandoff, HandoffCoordinator, HandoffError, HandoffState, target_fingerprint,
 };
-use d2b_contracts::v3::ArtifactId;
+use d2b_contracts_resource::v3::ArtifactId;
 use d2b_host::host_generation::{
     ActivationArtifactValidationRequest, ActivationArtifactValidationResponse,
     ActivationHelperOutcome, ActivationHelperRequest, ActivationHelperResponse,
@@ -82,7 +82,9 @@ impl HandoffEffect for SuccessfulHandoffEffect {
         request: &ApplyHostGenerationHandoff,
     ) -> Result<ActivationHelperOutcome, HandoffOperationError> {
         Ok(
-            if request.intent.activation_mode == d2b_contracts::v3::ActivationMode::Adopt {
+            if request.intent.activation_mode
+                == d2b_contracts_resource::v3::ActivationMode::Adopt
+            {
                 ActivationHelperOutcome::Adopted
             } else {
                 ActivationHelperOutcome::Succeeded
@@ -117,7 +119,20 @@ impl HandoffEffect for ActivationHelperEffect {
         let helper_request = ActivationHelperRequest {
             system_artifact_id: request.intent.system_artifact_id.as_str().to_owned(),
             target_generation: request.intent.target_generation,
-            activation_mode: request.intent.activation_mode,
+            activation_mode: match request.intent.activation_mode {
+                d2b_contracts_resource::v3::ActivationMode::Switch => {
+                    d2b_contracts_resource::v3::ActivationMode::Switch
+                }
+                d2b_contracts_resource::v3::ActivationMode::Boot => {
+                    d2b_contracts_resource::v3::ActivationMode::Boot
+                }
+                d2b_contracts_resource::v3::ActivationMode::Test => {
+                    d2b_contracts_resource::v3::ActivationMode::Test
+                }
+                d2b_contracts_resource::v3::ActivationMode::Adopt => {
+                    d2b_contracts_resource::v3::ActivationMode::Adopt
+                }
+            },
         };
         let input = serde_json::to_vec(&helper_request)
             .map_err(|_| HandoffOperationError::HelperOutputInvalid)?;
@@ -319,7 +334,10 @@ fn response(
     coordinator: &HandoffCoordinator,
 ) -> ApplyHostGenerationHandoffResponse {
     ApplyHostGenerationHandoffResponse {
-        target: request.target.clone(),
+        target: d2b_contracts_resource::v3::ResourceRef::parse(
+            &request.target.to_canonical_string(),
+        )
+        .expect("validated handoff target is a canonical resource reference"),
         state: coordinator.state(),
         source_generation: coordinator.source_generation(),
         target_generation: coordinator.target_generation(),
@@ -380,10 +398,14 @@ fn sync_parent(path: &Path) -> io::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use d2b_contracts::host_generation::{
+    use d2b_contracts_broker::host_generation::{
         HandoffCallerRole, HostGenerationHandoffIntent, SourceGenerationCompatibilityFloorV1,
     };
-    use d2b_contracts::v3::{ActivationMode, ArtifactId, ResourceRef};
+    use d2b_contracts_resource::v3::{
+    ActivationMode,
+    ArtifactId,
+    ResourceRef,
+};
 
     fn request() -> ApplyHostGenerationHandoff {
         let target = ResourceRef::parse("Host/host-system").unwrap();

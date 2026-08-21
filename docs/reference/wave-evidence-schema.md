@@ -134,10 +134,9 @@ The intended path from a fresh host to a wave's
    already defaults on for the `w*Fu` waves; `p0..p7` flip in their
    own merge commits).
 
-2. **Exercise the wave on this host.** Run the per-wave smoke
-   listed in the inventory above. For `w5Fu` / `w6Fu` this is
-   `tests/host-integration/hardware/hardware-smoke-gpu-yubikey.sh`; for `p0` it is
-   `tests/d2bd-startup-smoke.sh`; etc.
+2. **Exercise the wave on this host.** Run the current owner-local checks
+   listed in the inventory above. Physical-device validation for `w5Fu` and
+   `w6Fu` is manual and has no repository evidence script.
 
 3. **Write the evidence file.** Run:
 
@@ -215,8 +214,6 @@ that the three fields are present and well-typed.
   the per-wave evidence gate this evidence feeds.
 - [`../explanation/default-switch-and-deprecation.md`](../explanation/default-switch-and-deprecation.md) -
   the per-wave readiness matrix and the design rationale.
-- [`../how-to/hardware-smoke-walkthrough.md`](../how-to/hardware-smoke-walkthrough.md) -
-  the W20 hardware smoke that writes `w5Fu.json` / `w6Fu.json`.
 - [`wave-evidence-schema.json`](./wave-evidence-schema.json) -
   machine-readable JSON Schema companion to this document.
 - [`../../nixos-modules/options-daemon.nix`](../../nixos-modules/options-daemon.nix) -

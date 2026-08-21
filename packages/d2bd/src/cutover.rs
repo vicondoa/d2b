@@ -16,17 +16,15 @@ use std::{
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 
-use d2b_contracts::{
-    broker_wire::{
-        BrokerCallerRole, BrokerRequest, BrokerResponse, CanonicalAuditDigest,
-        LaunchCutoverRunnerRequest,
-    },
-    public_wire::{
-        HostCutoverInventorySummary, HostCutoverOperation, HostCutoverRequest, HostCutoverResponse,
-    },
-    types::BundleOpId,
-    v3::canonical_json_bytes,
+use d2b_contracts::types::BundleOpId;
+use d2b_contracts_broker::broker_wire::{
+    BrokerCallerRole, BrokerRequest, BrokerResponse, CanonicalAuditDigest,
+    LaunchCutoverRunnerRequest,
 };
+use d2b_contracts_control::public_wire::{
+    HostCutoverInventorySummary, HostCutoverOperation, HostCutoverRequest, HostCutoverResponse,
+};
+use d2b_contracts_resource::v3::canonical_json_bytes;
 use d2b_cutover::{
     ArtifactId, BootstrapCapability, CandidateId, Consent, CutoverPreview, Digest, HostInventory,
     InventoryInputItem, InventoryItem, MAX_RUNNER_FRAME_BYTES, OperationId, OperationKind,
@@ -374,9 +372,9 @@ fn reset(
     let consent_digest = parse_required_digest(request.consent_digest.as_deref(), "consentDigest")?;
     let destroy_durable_volumes = request.destroy_durable_volumes.unwrap_or(false);
     let scope = match request.reset_scope.ok_or_else(|| invalid("resetScope"))? {
-        d2b_contracts::public_wire::HostCutoverResetScope::Zone => ResetScope::Zone,
-        d2b_contracts::public_wire::HostCutoverResetScope::Provider => ResetScope::Provider,
-        d2b_contracts::public_wire::HostCutoverResetScope::Guest => ResetScope::Guest,
+        d2b_contracts_control::public_wire::HostCutoverResetScope::Zone => ResetScope::Zone,
+        d2b_contracts_control::public_wire::HostCutoverResetScope::Provider => ResetScope::Provider,
+        d2b_contracts_control::public_wire::HostCutoverResetScope::Guest => ResetScope::Guest,
     };
     let target = request.target.ok_or_else(|| invalid("target"))?;
     let inventory = ResetInventory::new(scope, target)
@@ -627,8 +625,8 @@ fn host_inventory(
     state: &ServerState,
 ) -> Result<(HostInventory, HostCutoverInventorySummary), TypedError> {
     let resolver = crate::load_bundle_resolver(state)?;
-    let configured =
-        crate::authoritative_zone_ids(&resolver).map_err(|detail| TypedError::InternalConfig {
+    let configured = d2bd_runtime::zone_authority::authoritative_zone_ids(&resolver)
+        .map_err(|detail| TypedError::InternalConfig {
             detail: detail.to_owned(),
         })?;
     let zones = configured
@@ -723,7 +721,7 @@ fn parse_operator_id(value: &str) -> Result<OperatorId, TypedError> {
 }
 
 fn parse_artifact_id(value: &str, field: &'static str) -> Result<ArtifactId, TypedError> {
-    d2b_contracts::v3::ArtifactId::parse(value.to_owned()).map_err(|_| invalid(field))?;
+    d2b_contracts_resource::v3::ArtifactId::parse(value.to_owned()).map_err(|_| invalid(field))?;
     ArtifactId::new(value.to_owned()).map_err(|_| invalid(field))
 }
 
@@ -797,8 +795,8 @@ fn now_ms() -> u64 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use d2b_contracts::public_wire::{HostCutoverOperation, HostCutoverRequest};
-    use d2b_contracts::v3::CanonicalJsonObject;
+    use d2b_contracts_control::public_wire::{HostCutoverOperation, HostCutoverRequest};
+    use d2b_contracts_resource::v3::CanonicalJsonObject;
     use nix::fcntl::{FcntlArg, FdFlag, fcntl};
 
     fn request(operation: HostCutoverOperation, zone: Option<&str>) -> HostCutoverRequest {

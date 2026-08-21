@@ -14,11 +14,15 @@ use std::{
     process::ExitCode,
 };
 
-use d2b_contracts::v3::{
-    ArtifactDigest, ArtifactId, CanonicalJsonValue, NIXOS_GENERATION_RESOURCE_TYPE,
-    ProviderManifest, canonical_json_bytes, framed_canonical_digest,
-    identity::STANDARD_RESOURCE_TYPES, is_canonical_digest, resource::RESOURCE_API_VERSION,
+use d2b_contracts_provider::v3::{
+    ArtifactDigest,
+    ProviderManifest,
     semantic_services::catalog,
+};
+use d2b_contracts_resource::v3::{
+    ArtifactId, CanonicalJsonValue, NIXOS_GENERATION_RESOURCE_TYPE, canonical_json_bytes,
+    framed_canonical_digest, identity::STANDARD_RESOURCE_TYPES, is_canonical_digest,
+    resource::RESOURCE_API_VERSION,
 };
 use d2b_resource_compiler::{
     ArtifactCatalogEntry, CatalogDigests, Diagnostic, StaticPublisherKeys, compile_linux_artifact,

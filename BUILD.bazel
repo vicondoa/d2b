@@ -19,6 +19,24 @@ filegroup(
     ]),
 )
 
+filegroup(
+    name = "generated_resource_schemas",
+    srcs = [
+        "docs/reference/schemas/v3/core.d2bus.org_Endpoint.schema.json",
+        "docs/reference/schemas/v3/core.d2bus.org_EphemeralProcess.schema.json",
+        "docs/reference/schemas/v3/core.d2bus.org_Guest.schema.json",
+        "docs/reference/schemas/v3/core.d2bus.org_Host.schema.json",
+        "docs/reference/schemas/v3/core.d2bus.org_Process.schema.json",
+        "docs/reference/schemas/v3/core.d2bus.org_User.schema.json",
+        "nixos-modules/resource-schemas/Endpoint.nix",
+        "nixos-modules/resource-schemas/EphemeralProcess.nix",
+        "nixos-modules/resource-schemas/Guest.nix",
+        "nixos-modules/resource-schemas/Host.nix",
+        "nixos-modules/resource-schemas/Process.nix",
+        "nixos-modules/resource-schemas/User.nix",
+    ],
+)
+
 exports_files([
     ".bazelrc",
     ".bazelignore",
@@ -69,7 +87,9 @@ exports_files([
     "tests/AGENTS.md",
     "tests/tools/scrub-shell-environment",
     "tests/tools/bazel-check",
+    "tests/tools/generated-artifact-check.sh",
     "nix/bazel-worker-image.nix",
+    "nix/test-support/eval-surface.nix",
     "tests/README.md",
     "tests/host-integration/daemon-restart-vm-survival.nix",
     "tests/integration/live/live-vm-smoke.sh",
@@ -109,27 +129,65 @@ exports_files([
     "docs/reference/usbip-state-machine.md",
     "docs/specs/providers/ADR-046-provider-volume-local.md",
     "nixos-modules/allocator-json.nix",
+    "nixos-modules/activation-nixos-cleanup.nix",
+    "nixos-modules/artifact-catalog.nix",
+    "nixos-modules/assertions.nix",
     "nixos-modules/bundle-artifacts.nix",
+    "nixos-modules/bundle-zones.nix",
     "nixos-modules/bundle.nix",
+    "nixos-modules/components/graphics.nix",
+    "nixos-modules/components/observability/default.nix",
+    "nixos-modules/components/observability/guest.nix",
+    "nixos-modules/components/observability/host.nix",
+    "nixos-modules/components/observability/stack.nix",
+    "nixos-modules/components/security-key-guest.nix",
+    "nixos-modules/components/usbip.nix",
+    "nixos-modules/components/video/guest.nix",
     "nixos-modules/default.nix",
+    "nixos-modules/generated/options-zones-Zone.nix",
+    "nixos-modules/generated/options-zones-ZoneLink.nix",
     "nixos-modules/gateway-vm.nix",
-    "nixos-modules/guest-control-host.nix",
     "nixos-modules/guest-control.nix",
+    "nixos-modules/guest-control-host.nix",
     "nixos-modules/host-activation.d/state-dir-acl.sh",
     "nixos-modules/host-activation.nix",
     "nixos-modules/host-daemon.nix",
     "nixos-modules/host-users.nix",
     "nixos-modules/host.nix",
+    "nixos-modules/host-broker.nix",
     "nixos-modules/index.nix",
     "nixos-modules/lib.nix",
+    "nixos-modules/minijail-profiles.nix",
+    "nixos-modules/observability-host-secrets.nix",
+    "nixos-modules/observability-vm.nix",
+    "nixos-modules/options-artifacts.nix",
+    "nixos-modules/options.nix",
+    "nixos-modules/options-observability.nix",
+    "nixos-modules/options-realms-network.nix",
+    "nixos-modules/options-realms-workloads.nix",
+    "nixos-modules/options-realms.nix",
+    "nixos-modules/options-resources.nix",
+    "nixos-modules/options-zones-resources.nix",
+    "nixos-modules/options-zones.nix",
     "nixos-modules/options-daemon.nix",
     "nixos-modules/options-vms.nix",
     "nixos-modules/processes-json.nix",
+    "nixos-modules/provider-catalog.nix",
+    "nixos-modules/provider-projection-validate.nix",
+    "nixos-modules/provider-runtime-contracts.nix",
+    "nixos-modules/provider-settings-validation.nix",
+    "nixos-modules/resource-compiler.nix",
+    "nixos-modules/resources-device.nix",
+    "nixos-modules/resources-zones-processes.nix",
     "nixos-modules/realm-controller-config-json.nix",
     "nixos-modules/realm-identity-config-json.nix",
     "nixos-modules/realm-workloads-launcher-json.nix",
-    "nixos-modules/storage-json.nix",
-    "nixos-modules/store.nix",
+    "nixos-modules/ui-colors.nix",
+    "nixos-modules/unsafe-local-helper.nix",
+    "nixos-modules/unsafe-local-workloads-json.nix",
+    "nixos-modules/vm-evaluator.nix",
+    "nixos-modules/vm-guest-base.nix",
+    "nixos-modules/zone-resources.nix",
 ])
 
 filegroup(
@@ -225,15 +283,83 @@ filegroup(
 
 filegroup(
     name = "packages_workspace_sources",
-    srcs = glob(
-        ["packages/**/*"],
-        exclude = [
-            "packages/**/.scratch/**",
-            "packages/**/t/**",
-            "packages/**/target/**",
-        ],
-        allow_empty = True,
-    ),
+    srcs = [
+        "//:packages/Cargo.guest.lock",
+        "//packages/d2b:cargo_workspace_sources",
+        "//packages/d2b-audit:cargo_workspace_sources",
+        "//packages/d2b-bus:cargo_workspace_sources",
+        "//packages/d2b-contract-tests:cargo_workspace_sources",
+        "//packages/d2b-contracts:cargo_workspace_sources",
+        "//packages/d2b-contracts-broker:cargo_workspace_sources",
+        "//packages/d2b-contracts-control:cargo_workspace_sources",
+        "//packages/d2b-contracts-provider:cargo_workspace_sources",
+        "//packages/d2b-contracts-resource:cargo_workspace_sources",
+        "//packages/d2b-contracts-zone-session:cargo_workspace_sources",
+        "//packages/d2b-controller-toolkit:cargo_workspace_sources",
+        "//packages/d2b-core:cargo_workspace_sources",
+        "//packages/d2b-core-controller:cargo_workspace_sources",
+        "//packages/d2b-core/fuzz:BUILD.bazel",
+        "//packages/d2b-cutover:cargo_workspace_sources",
+        "//packages/d2b-exec-runner:cargo_workspace_sources",
+        "//packages/d2b-gateway:cargo_workspace_sources",
+        "//packages/d2b-gateway-runtime:cargo_workspace_sources",
+        "//packages/d2b-guest-shell-runner:cargo_workspace_sources",
+        "//packages/d2b-guestd:cargo_workspace_sources",
+        "//packages/d2b-host:cargo_workspace_sources",
+        "//packages/d2b-host-activation-helper:cargo_workspace_sources",
+        "//packages/d2b-priv-broker:cargo_workspace_sources",
+        "//packages/d2b-process:cargo_workspace_sources",
+        "//packages/d2b-process-conformance:cargo_workspace_sources",
+        "//packages/d2b-provider:cargo_workspace_sources",
+        "//packages/d2b-provider-activation-nixos:cargo_workspace_sources",
+        "//packages/d2b-provider-audio-pipewire:cargo_workspace_sources",
+        "//packages/d2b-provider-clipboard-wayland:cargo_workspace_sources",
+        "//packages/d2b-provider-credential-entra:cargo_workspace_sources",
+        "//packages/d2b-provider-credential-managed-identity:cargo_workspace_sources",
+        "//packages/d2b-provider-credential-secret-service:cargo_workspace_sources",
+        "//packages/d2b-provider-device-gpu:cargo_workspace_sources",
+        "//packages/d2b-provider-device-security-key:cargo_workspace_sources",
+        "//packages/d2b-provider-device-tpm:cargo_workspace_sources",
+        "//packages/d2b-provider-device-usbip:cargo_workspace_sources",
+        "//packages/d2b-provider-display-wayland:cargo_workspace_sources",
+        "//packages/d2b-provider-network-local:cargo_workspace_sources",
+        "//packages/d2b-provider-notification-desktop:cargo_workspace_sources",
+        "//packages/d2b-provider-observability-otel:cargo_workspace_sources",
+        "//packages/d2b-provider-runtime-azure-container-apps:cargo_workspace_sources",
+        "//packages/d2b-provider-runtime-azure-virtual-machine:cargo_workspace_sources",
+        "//packages/d2b-provider-runtime-cloud-hypervisor:cargo_workspace_sources",
+        "//packages/d2b-provider-runtime-qemu-media:cargo_workspace_sources",
+        "//packages/d2b-provider-shell-terminal:cargo_workspace_sources",
+        "//packages/d2b-provider-supervisor:cargo_workspace_sources",
+        "//packages/d2b-provider-system-core:cargo_workspace_sources",
+        "//packages/d2b-provider-system-minijail:cargo_workspace_sources",
+        "//packages/d2b-provider-system-systemd:cargo_workspace_sources",
+        "//packages/d2b-provider-toolkit:cargo_workspace_sources",
+        "//packages/d2b-provider-transport-azure-relay:cargo_workspace_sources",
+        "//packages/d2b-provider-transport-unix:cargo_workspace_sources",
+        "//packages/d2b-provider-transport-vsock:cargo_workspace_sources",
+        "//packages/d2b-provider-volume-local:cargo_workspace_sources",
+        "//packages/d2b-provider-volume-virtiofs:cargo_workspace_sources",
+        "//packages/d2b-realm-codec-protobuf:cargo_workspace_sources",
+        "//packages/d2b-realm-core:cargo_workspace_sources",
+        "//packages/d2b-realm-provider:cargo_workspace_sources",
+        "//packages/d2b-realm-router:cargo_workspace_sources",
+        "//packages/d2b-realm-transport:cargo_workspace_sources",
+        "//packages/d2b-resource-api:cargo_workspace_sources",
+        "//packages/d2b-resource-client:cargo_workspace_sources",
+        "//packages/d2b-resource-compiler:cargo_workspace_sources",
+        "//packages/d2b-resource-store:cargo_workspace_sources",
+        "//packages/d2b-resource-store-redb:cargo_workspace_sources",
+        "//packages/d2b-session:cargo_workspace_sources",
+        "//packages/d2b-session-unix:cargo_workspace_sources",
+        "//packages/d2b-sk-frontend:cargo_workspace_sources",
+        "//packages/d2b-telemetry:cargo_workspace_sources",
+        "//packages/d2b-unsafe-local-helper:cargo_workspace_sources",
+        "//packages/d2b-zone-routing:cargo_workspace_sources",
+        "//packages/d2bd-runtime:cargo_workspace_sources",
+        "//packages/d2bd:cargo_workspace_sources",
+        "//packages/xtask:cargo_workspace_sources",
+    ],
     visibility = ["//visibility:public"],
 )
 
@@ -253,8 +379,91 @@ filegroup(
         "//tests/fixtures:contract_sources",
         "//tests/unit/gates:gate_sources",
         "//tests/unit/meta:meta_sources",
-        "//tests/unit/nix:nix_unit_sources",
     ],
+    visibility = ["//visibility:public"],
+)
+
+filegroup(
+    name = "changelog_sources",
+    srcs = ["CHANGELOG.md"] + glob(
+        ["changelog.d/*.md"],
+        allow_empty = True,
+    ),
+    visibility = ["//visibility:public"],
+)
+
+filegroup(
+    name = "generated_v2_schemas",
+    srcs = glob(["docs/reference/schemas/v2/*.json"]) + [
+        "docs/reference/schemas/delivery/recovery-point-attestation-v1.schema.json",
+    ],
+    visibility = ["//visibility:public"],
+)
+
+filegroup(
+    name = "generated_zone_storage_schema",
+    srcs = ["docs/reference/schemas/v3/zone-storage.json"],
+    visibility = ["//visibility:public"],
+)
+
+filegroup(
+    name = "generated_error_codes",
+    srcs = ["docs/reference/error-codes.md"],
+    visibility = ["//visibility:public"],
+)
+
+filegroup(
+    name = "generated_daemon_api",
+    srcs = ["docs/reference/daemon-api.md"],
+    visibility = ["//visibility:public"],
+)
+
+filegroup(
+    name = "generated_cli_shell_artifacts",
+    srcs = glob([
+        "completions/d2b.*",
+        "docs/manpages/d2b*.1",
+    ]),
+    visibility = ["//visibility:public"],
+)
+
+filegroup(
+    name = "generated_cli_schemas",
+    srcs = glob(["docs/reference/cli-output/*.json"]),
+    visibility = ["//visibility:public"],
+)
+
+filegroup(
+    name = "generated_zone_schemas",
+    srcs = glob(["docs/reference/schemas/v3/core.d2bus.org_*.schema.json"]),
+    visibility = ["//visibility:public"],
+)
+
+filegroup(
+    name = "generated_zone_nix_options",
+    srcs = [
+        "nixos-modules/generated/options-zones-Zone.nix",
+        "nixos-modules/generated/options-zones-ZoneLink.nix",
+        "nixos-modules/generated/resource-types.nix",
+        "nixos-modules/generated/zone-spec-canonical.nix",
+    ],
+    visibility = ["//visibility:public"],
+)
+
+filegroup(
+    name = "generated_provider_packaging",
+    srcs = ["nixos-modules/generated/provider-catalog-shape.nix"],
+    visibility = ["//visibility:public"],
+)
+
+filegroup(
+    name = "generated_semantic_service_schemas",
+    srcs = glob([
+        "docs/reference/schemas/v3/audio.d2bus.org_*.schema.json",
+        "docs/reference/schemas/v3/security-key.d2bus.org_*.schema.json",
+        "docs/reference/schemas/v3/telemetry.d2bus.org_*.schema.json",
+        "docs/reference/schemas/v3/usb.d2bus.org_*.schema.json",
+    ]) + ["nixos-modules/generated/semantic-resource-types.nix"],
     visibility = ["//visibility:public"],
 )
 

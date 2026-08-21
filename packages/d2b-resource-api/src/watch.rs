@@ -10,7 +10,13 @@ use std::sync::{
     atomic::{AtomicU64, Ordering},
 };
 
-use d2b_contracts::v3::{ResourceName, ResourceRef, ResourceTypeName, ResourceUid, ZoneRevision};
+use d2b_contracts_resource::v3::{
+    ResourceName,
+    ResourceRef,
+    ResourceTypeName,
+    ResourceUid,
+    ZoneRevision,
+};
 use d2b_resource_store::{StoreError, StoreErrorKind, StoreWatchReceipt, StoreWatchRequest};
 use d2b_resource_store_redb::{
     ChangeEvent, RedbResourceStore, SharedChangeBatch, WatchRegistrationId, WatchSignals,
@@ -403,7 +409,7 @@ fn frame_integrity() -> StoreError {
         StoreErrorKind::StoreIntegrityFailure,
         None,
         None,
-        d2b_contracts::v3::RetryClass::Never,
+        d2b_contracts_resource::v3::RetryClass::Never,
         "watch-frame-encoding-failed",
     )
 }
@@ -418,10 +424,17 @@ mod tests {
     };
     use std::time::Duration;
 
-    use d2b_contracts::v3::{
-        CanonicalJsonValue, ConfigurationGeneration, RESOURCE_ENVELOPE_DOMAIN_TAG, ResourceRef,
-        ResourceTypeName, ResourceUid, Timestamp, ZoneId, canonical_digest,
-    };
+    use d2b_contracts_resource::v3::{
+    CanonicalJsonValue,
+    ConfigurationGeneration,
+    RESOURCE_ENVELOPE_DOMAIN_TAG,
+    ResourceRef,
+    ResourceTypeName,
+    ResourceUid,
+    Timestamp,
+    ZoneId,
+    canonical_digest,
+};
     use d2b_resource_store::mutation_seal::{MutationSealBody, mutation_seal_pair};
     use d2b_resource_store::{
         AdmittedAuthorization, AdmittedAuthorizationTarget, AdmittedVerb, ExpectedRevision,

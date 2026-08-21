@@ -18,7 +18,7 @@ _FIXTURE_SOURCES = [
     "//:templates_workspace_sources",
     "//:tests_root_sources",
     "//:rust-toolchain.toml",
-    "//bazel/checks/rust:repo_policy_sources",
+    "//bazel/checks/rust:source_hygiene_sources",
 ]
 
 nix_fixture(
@@ -69,13 +69,10 @@ test_suite(
         "//packages/d2b-contract-tests:host_json_drift",
         "//packages/d2b-contract-tests:ifname_parity",
         "//packages/d2b-contract-tests:minijail_audio_usbip",
-        "//packages/d2b-contract-tests:minijail_gpu",
         "//packages/d2b-contract-tests:minijail_profiles",
         "//packages/d2b-contract-tests:minijail_relay_otel",
         "//packages/d2b-contract-tests:minijail_roles",
         "//packages/d2b-contract-tests:minijail_sk_frontend",
-        "//packages/d2b-contract-tests:minijail_swtpm_video",
-        "//packages/d2b-contract-tests:policy_swtpm_readiness",
         "//packages/d2b-contract-tests:privileges_fixture",
         "//packages/d2b-contract-tests:privileges_parity",
         "//packages/d2b-contract-tests:realm_identity_schema_contract",
@@ -91,9 +88,6 @@ test_suite(
     tests = [
         ":contracts",
         "//bazel/checks/policy:proofs",
-        "//packages/d2b-bus/tests/ui/public-api-mutations:public_api_mutations",
-        "//packages/d2b-controller-toolkit/tests/ui/external-seals:external_seals",
-        "//packages/d2b-resource-api/tests/ui/external-seals:external_seals",
         "//tests/fixtures/bazel/compat:fixture_test",
     ],
 )

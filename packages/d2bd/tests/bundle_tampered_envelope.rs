@@ -13,7 +13,7 @@
 
 use d2b_core::bundle_resolver::{BundleResolver, BundleVerifyPolicy};
 use d2b_core::error::{BundleError, Error as CoreError};
-use d2bd::typed_error::TypedError;
+use d2bd_runtime::typed_error::TypedError;
 use std::fs;
 use std::io::Write as _;
 use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};

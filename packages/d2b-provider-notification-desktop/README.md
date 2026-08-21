@@ -31,10 +31,10 @@ The crate exposes a placement controller, source/sink stream DTOs, admission
 checks, a host-sink effect port, an observer projection, and single-use action
 nonces. D-Bus integration is supplied through the pre-opened effect port.
 
-Runtime process admission and supervision are daemon-owned. This crate does
-not install standalone Provider binaries; `d2bd` owns the authenticated
-ComponentSession service loops and launches signed workers through its
-ProviderSupervisor effect ports.
+Runtime process admission and supervision are daemon-owned. The package also
+owns the `d2b-sk-waybar-helper` compatibility binary; `d2bd` owns the
+authenticated ComponentSession service loops and launches signed workers
+through its ProviderSupervisor effect ports.
 
 ## Placement and dependencies
 

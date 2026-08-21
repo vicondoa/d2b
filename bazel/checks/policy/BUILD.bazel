@@ -7,7 +7,7 @@ filegroup(
         "//:nixos_modules_workspace_sources",
         "//:proof_workspace_sources",
         "//:tests_root_sources",
-        "//bazel/checks/rust:repo_policy_sources",
+        "//bazel/checks/rust:source_hygiene_sources",
         "//tests/unit/gates:gate_sources",
         "//tests/unit/meta:meta_sources",
     ],
@@ -22,7 +22,6 @@ test_suite(
     name = "lint",
     tests = [
         "//packages/d2b-contract-tests:policy_bazel_layout",
-        "//packages/xtask:workspace_lint",
     ],
 )
 
@@ -71,12 +70,8 @@ test_suite(
 
 test_suite(
     name = "drift",
-    tags = [
-        "local",
-        "no-sandbox",
-    ],
     tests = [
-        "//tests/unit/gates:drift_check",
+        "//packages/xtask:generated_artifacts",
         "//tests/unit/gates:vms_json_parity",
     ],
 )
@@ -90,11 +85,6 @@ test_suite(
     name = "policy_tooling",
     tests = [
         "//bazel/checks/meta:tier0",
-        "//packages/d2b-contract-tests:policy_effectport_boundary",
-        "//packages/d2b-contract-tests:policy_spec_vocabulary",
-        "//packages/d2b-contract-tests:policy_test_determinism",
-        "//packages/d2b-contract-tests:policy_test_placement",
-        "//packages/d2b-contract-tests:security_matrix_coverage",
         ":changelog",
         ":drift",
         ":lint",

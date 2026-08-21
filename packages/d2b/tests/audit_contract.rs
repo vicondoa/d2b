@@ -344,7 +344,7 @@ fn spawn_single_audit_response_mock(path: &Path, response: Value) -> std::thread
 }
 
 fn spawn_paginated_audit_mock_daemon(path: &Path) -> std::thread::JoinHandle<()> {
-    use d2b_contracts::broker_wire::AuditExportCursor;
+    use d2b_contracts_broker::broker_wire::AuditExportCursor;
     use nix::sys::socket::{
         AddressFamily, Backlog, SockFlag, SockType, UnixAddr, accept, bind, listen, socket,
     };

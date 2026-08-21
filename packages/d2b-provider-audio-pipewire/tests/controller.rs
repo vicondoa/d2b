@@ -1,4 +1,4 @@
-use d2b_contracts::v3::ResourceRef;
+use d2b_contracts_resource::v3::ResourceRef;
 use d2b_provider_audio_pipewire::{
     AudioBindingController, AudioBindingPhase, AudioChannel, AudioGrant, AudioLeaseId,
     AudioMediator, AudioMediatorError, AudioReadiness, FakeAudioMediator, GuestAudioReadiness,

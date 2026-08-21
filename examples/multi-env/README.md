@@ -268,7 +268,7 @@ d2b host doctor --read-only
 
 # Net VMs (`sys-<env>-net`) show STATUS=`running (net-vm)` after
 # activation. They are framework-managed and `autostart = true` by
-# construction in `nixos-modules/network.nix`. Workload Guests default to
+# construction in `packages/d2b-provider-network-local/nix/network.nix`. Workload Guests default to
 # `Pending` until you `d2b guest start <name> --apply` (or set
 # `autostart = true` per Guest).
 

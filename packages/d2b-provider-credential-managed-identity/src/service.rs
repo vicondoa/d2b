@@ -1,10 +1,12 @@
 //! Credential service dispatch for the injected managed identity client.
 
-use d2b_contracts::v3::credential::{
+use d2b_contracts_provider::v3::{
+    credential::{
     CredentialAuthorization, CredentialLeaseState, CredentialMetadata, CredentialMethod,
     CredentialOutcomeCode, CredentialProvider, CredentialRequest, CredentialResponse,
     CredentialServiceError, CredentialServiceErrorCode, CredentialSessionBinding, DeliveryResponse,
     MetadataResponse,
+},
 };
 
 use crate::{
@@ -488,7 +490,7 @@ impl ManagedIdentityCredentialProvider {
         key: &str,
         old: &LeaseRecord,
         idempotency_key: &str,
-        metadata: d2b_contracts::v3::credential::CredentialMetadata,
+        metadata: d2b_contracts_provider::v3::credential::CredentialMetadata,
     ) -> Result<(), CredentialServiceError> {
         let mut leases = self.leases.lock().map_err(|_| invariant())?;
         let records = leases.get_mut(key).ok_or_else(invariant)?;
@@ -522,7 +524,7 @@ fn ensure_active_or_observable(record: &LeaseRecord) -> Result<(), CredentialSer
 }
 
 fn lease_ref_from_grant(
-    credential_ref: &d2b_contracts::v3::ResourceRef,
+    credential_ref: &d2b_contracts_resource::v3::ResourceRef,
     grant: &crate::ManagedIdentityLeaseGrant,
 ) -> ManagedIdentityLeaseRef {
     ManagedIdentityLeaseRef {

@@ -5,14 +5,14 @@
 //! daemon or assert runtime series. This Rust port keeps the same shape by
 //! reading the real checkout via `d2b_contract_tests` repo-file helpers and
 //! checking the canonical `METRIC_INVENTORY` table in
-//! `packages/d2bd/src/metrics.rs`.
+//! `packages/d2bd-runtime/src/metrics.rs`.
 
 use std::collections::BTreeSet;
 
 use d2b_contract_tests::{read_repo_file, repo_path_exists};
 use regex::Regex;
 
-const METRICS_SRC: &str = "packages/d2bd/src/metrics.rs";
+const METRICS_SRC: &str = "packages/d2bd-runtime/src/metrics.rs";
 const METRICS_DOC: &str = "docs/reference/daemon-metrics.md";
 
 #[derive(Debug, Clone, Copy)]

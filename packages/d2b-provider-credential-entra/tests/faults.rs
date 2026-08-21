@@ -5,13 +5,15 @@ use std::sync::{Arc, mpsc};
 use std::thread;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-use d2b_contracts::v3::Locality;
-use d2b_contracts::v3::ResourceRef;
-use d2b_contracts::v3::credential::{
+use d2b_contracts_provider::v3::{
+    credential::{
     CredentialAuthorization, CredentialMethod, CredentialRequest, CredentialResponse,
     CredentialServiceErrorCode, CredentialSessionBinding, PlacementBinding,
     dispatch_authorized_provider,
+},
 };
+use d2b_contracts_resource::v3::identity::Locality;
+use d2b_contracts_resource::v3::ResourceRef;
 use d2b_provider_credential_entra::{
     EntraClientError, EntraClientState, EntraConfig, EntraCredentialClient,
     EntraCredentialProviderFactory, EntraFuture, EntraLeaseGrant, EntraLeaseInspection,
@@ -606,8 +608,8 @@ fn inspect_persists_remote_revocation_and_degrades_only_that_resource() {
         )
         .unwrap();
     *client.inspection.lock().unwrap() = Some(EntraLeaseInspection {
-        state: d2b_contracts::v3::credential::CredentialLeaseState::Revoked,
-        source_version: d2b_contracts::v3::credential::CredentialSourceVersion::parse(
+        state: d2b_contracts_provider::v3::credential::CredentialLeaseState::Revoked,
+        source_version: d2b_contracts_provider::v3::credential::CredentialSourceVersion::parse(
             "entra-source-revoked",
         )
         .unwrap(),
@@ -639,8 +641,8 @@ fn unknown_inspection_is_transient_and_acquire_revokes_before_replacement() {
         .call(CredentialMethod::AcquireToken, request("idem-unknown-base"))
         .unwrap();
     *client.inspection.lock().unwrap() = Some(EntraLeaseInspection {
-        state: d2b_contracts::v3::credential::CredentialLeaseState::Unknown,
-        source_version: d2b_contracts::v3::credential::CredentialSourceVersion::parse(
+        state: d2b_contracts_provider::v3::credential::CredentialLeaseState::Unknown,
+        source_version: d2b_contracts_provider::v3::credential::CredentialSourceVersion::parse(
             "entra-source-unknown",
         )
         .unwrap(),
@@ -684,8 +686,8 @@ fn clock_expired_inspection_is_reclaimed_before_acquire_replacement() {
         .unwrap()
         .as_millis() as u64;
     *client.inspection.lock().unwrap() = Some(EntraLeaseInspection {
-        state: d2b_contracts::v3::credential::CredentialLeaseState::Active,
-        source_version: d2b_contracts::v3::credential::CredentialSourceVersion::parse(
+        state: d2b_contracts_provider::v3::credential::CredentialLeaseState::Active,
+        source_version: d2b_contracts_provider::v3::credential::CredentialSourceVersion::parse(
             "entra-source-expired",
         )
         .unwrap(),
@@ -732,8 +734,8 @@ fn expired_remote_revoke_is_idempotent_for_explicit_revoke() {
         .unwrap()
         .as_millis() as u64;
     *client.inspection.lock().unwrap() = Some(EntraLeaseInspection {
-        state: d2b_contracts::v3::credential::CredentialLeaseState::Active,
-        source_version: d2b_contracts::v3::credential::CredentialSourceVersion::parse(
+        state: d2b_contracts_provider::v3::credential::CredentialLeaseState::Active,
+        source_version: d2b_contracts_provider::v3::credential::CredentialSourceVersion::parse(
             "entra-source-expired-revoke",
         )
         .unwrap(),
@@ -763,7 +765,7 @@ fn expired_remote_revoke_is_idempotent_for_explicit_revoke() {
     };
     assert_eq!(
         response.metadata.state,
-        d2b_contracts::v3::credential::CredentialLeaseState::Revoked
+        d2b_contracts_provider::v3::credential::CredentialLeaseState::Revoked
     );
     assert_eq!(client.revoke_calls.load(Ordering::SeqCst), 1);
 }

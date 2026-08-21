@@ -7,12 +7,17 @@ use std::task::{Poll, Waker};
 use std::thread;
 use std::time::Duration;
 
-use d2b_contracts::v3::credential::{
+use d2b_contracts_provider::v3::{
+    credential::{
     CredentialAuthorization, CredentialLeaseHandle, CredentialLeaseState, CredentialMethod,
     CredentialOutcomeCode, CredentialProvider, CredentialRequest, CredentialResponse,
     CredentialServiceErrorCode, CredentialSourceVersion, PlacementBinding,
+},
 };
-use d2b_contracts::v3::{ResourceRef, ZoneId};
+use d2b_contracts_resource::v3::{
+    ResourceRef,
+    ZoneId,
+};
 use d2b_provider_credential_secret_service::{
     LockPolicy, Oo7SecretServicePort, SecretServiceConfig, SecretServiceCredentialProvider,
     SecretServiceCredentialProviderFactory, SecretServiceFuture, SecretServiceLeaseGrant,
@@ -407,7 +412,9 @@ fn disconnect_waits_for_inflight_acquire_and_fences_the_session() {
     let provider = Arc::new(provider_with_port(64, port.clone()));
     let capability = Arc::new(
         provider
-            .issue_session_capability(d2b_contracts::v3::ResourceGeneration::new(1).unwrap())
+            .issue_session_capability(
+                d2b_contracts_resource::v3::ResourceGeneration::new(1).unwrap(),
+            )
             .unwrap(),
     );
     let authorization = Arc::new(
@@ -483,7 +490,9 @@ fn inspect_waits_on_the_lifecycle_gate_before_disconnect() {
     let provider = Arc::new(provider_with_port(64, port.clone()));
     let capability = Arc::new(
         provider
-            .issue_session_capability(d2b_contracts::v3::ResourceGeneration::new(1).unwrap())
+            .issue_session_capability(
+                d2b_contracts_resource::v3::ResourceGeneration::new(1).unwrap(),
+            )
             .unwrap(),
     );
     let acquire_authorization = CredentialAuthorization::new(

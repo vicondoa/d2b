@@ -92,8 +92,8 @@ or whose `timestamp` / `operatorSignature` are absent or empty.
 | Wave | Validators (relative to `tests/`) |
 | --- | --- |
 | `w4Fu` | `d2bd-startup-smoke.sh` |
-| `w5Fu` | `hardware-smoke-gpu-yubikey.sh` |
-| `w6Fu` | `hardware-smoke-gpu-yubikey.sh`, `usbip-state-machine-eval.sh` |
+| `w5Fu` | Manual physical-device validation; no evidence script |
+| `w6Fu` | Manual physical-device validation; no evidence script |
 | `w7Fu` | `per-vm-state-ownership-eval.sh` |
 | `w8Fu` | `ssh-host-key-preflight-eval.sh` |
 | `w9Fu` | `harness-ubuntu-eval.sh` |

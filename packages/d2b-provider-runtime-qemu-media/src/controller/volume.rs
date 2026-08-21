@@ -1,6 +1,6 @@
 //! Controller-created runtime Volume specification.
 
-use d2b_contracts::v3::ResourceRef;
+use d2b_contracts_resource::v3::ResourceRef;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 

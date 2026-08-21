@@ -7,7 +7,10 @@
 
 use std::collections::{BTreeMap, btree_map::Entry};
 
-use d2b_contracts::v3::{ResourceBundleGenerationId, ZoneId};
+use d2b_contracts_resource::v3::{
+    ResourceBundleGenerationId,
+    ZoneId,
+};
 
 /// Closed failure from the per-Zone coordinator.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

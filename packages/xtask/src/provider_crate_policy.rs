@@ -126,6 +126,10 @@ pub fn check(repo_root: &Path) -> Result<(), String> {
         .canonicalize()
         .map_err(|_| "provider-crate-layout-input-unreadable".to_owned())?;
     let members = cargo_workspace_members(&repo_root)?;
+    check_members(&repo_root, members)
+}
+
+fn check_members(repo_root: &Path, members: Vec<WorkspaceMember>) -> Result<(), String> {
     let on_disk = on_disk_providers(&repo_root)?;
     let has_provider_member = members
         .iter()
@@ -552,6 +556,51 @@ mod tests {
         }
     }
 
+    fn manifest_workspace_members(root: &Path) -> Result<Vec<WorkspaceMember>, String> {
+        let workspace = fs::read_to_string(root.join("Cargo.toml"))
+            .map_err(|_| "provider-crate-layout-metadata-unavailable".to_owned())?;
+        let mut members = Vec::new();
+        let mut in_members = false;
+        for line in workspace.lines() {
+            let trimmed = line.trim();
+            if trimmed == "members = [" {
+                in_members = true;
+                continue;
+            }
+            if !in_members {
+                continue;
+            }
+            if trimmed == "]" {
+                break;
+            }
+            let relative = trimmed.trim_end_matches(',').trim_matches('"');
+            let manifest_path = root
+                .join(relative)
+                .join("Cargo.toml")
+                .canonicalize()
+                .map_err(|_| "provider-crate-layout-member-invalid".to_owned())?;
+            let manifest = fs::read_to_string(&manifest_path)
+                .map_err(|_| "provider-crate-layout-member-invalid".to_owned())?;
+            let package_name = manifest
+                .lines()
+                .find_map(|line| line.trim().strip_prefix("name = \""))
+                .and_then(|name| name.strip_suffix('"'))
+                .ok_or_else(|| "provider-crate-layout-member-invalid".to_owned())?
+                .to_owned();
+            members.push(WorkspaceMember {
+                package_name,
+                crate_dir: manifest_path.parent().unwrap().to_owned(),
+                manifest_path,
+            });
+        }
+        Ok(members)
+    }
+
+    fn check_fixture(root: &Path) -> Result<(), String> {
+        let root = root.canonicalize().unwrap();
+        check_members(&root, manifest_workspace_members(&root)?)
+    }
+
     impl Drop for Fixture {
         fn drop(&mut self) {
             let _ = fs::remove_dir_all(&self.root);
@@ -583,14 +632,14 @@ mod tests {
     #[test]
     fn conforming_tree_is_idempotent_and_non_provider_members_are_ignored() {
         let fixture = Fixture::new("clean");
-        assert_eq!(check(&fixture.root), Ok(()));
-        assert_eq!(check(&fixture.root), Ok(()));
+        assert_eq!(check_fixture(&fixture.root), Ok(()));
+        assert_eq!(check_fixture(&fixture.root), Ok(()));
     }
 
     #[test]
     fn every_provider_prefixed_name_has_one_explicit_classification() {
         let root = repo_root().expect("resolve repository root");
-        let members = cargo_workspace_members(root).expect("read workspace metadata");
+        let members = manifest_workspace_members(root).expect("read workspace manifest");
         let mut names: BTreeSet<String> = members
             .into_iter()
             .map(|member| member.package_name)
@@ -671,7 +720,7 @@ mod tests {
         fs::remove_file(fixture.provider_dir().join("integration/README.md")).unwrap();
         fs::remove_file(fixture.provider_dir().join("integration/scenario.rs")).unwrap();
 
-        let error = check(&fixture.root).unwrap_err();
+        let error = check_fixture(&fixture.root).unwrap_err();
         eprintln!("synthetic perturbation rejected: {error}");
         assert_eq!(
             error,
@@ -691,7 +740,7 @@ mod tests {
         )
         .unwrap();
 
-        let error = check(&fixture.root).unwrap_err();
+        let error = check_fixture(&fixture.root).unwrap_err();
         assert!(error.contains("provider-crate-not-workspace-member"));
         assert!(error.contains("d2b-provider-fixture-omitted"));
     }
@@ -706,7 +755,7 @@ mod tests {
             "d2b-provider-fixture",
         ]);
 
-        let error = check(&fixture.root).unwrap_err();
+        let error = check_fixture(&fixture.root).unwrap_err();
         assert!(error.contains("provider-crate-name-invalid"));
         assert!(error.contains("d2b-provider-fixture"));
     }
@@ -716,7 +765,7 @@ mod tests {
         let fixture = Fixture::new("empty");
         fixture.set_members(&["d2b-core"]);
         assert_eq!(
-            check(&fixture.root),
+            check_fixture(&fixture.root),
             Err(
                 r#"{"error":"provider-crate-not-workspace-member","crate":"d2b-provider-fixture-example"}"#
                     .to_owned()
@@ -733,7 +782,7 @@ mod tests {
             format!("[workspace]\nmembers = [\n    \"../{marker}\",\n]\n"),
         )
         .unwrap();
-        let error = check(&fixture.root).unwrap_err();
+        let error = check_fixture(&fixture.root).unwrap_err();
         assert!(!error.contains(&marker));
     }
 }

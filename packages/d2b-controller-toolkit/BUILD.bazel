@@ -1,10 +1,7 @@
 load("@crates//:defs.bzl", "all_crate_deps")
-load("@rules_rust//rust:defs.bzl", "rust_binary", "rust_library", "rust_test")
+load("@rules_rust//rust:defs.bzl", "rust_binary", "rust_library", "rust_test", "rust_doc_test")
 
-exports_files(
-    ["BUILD.bazel", "Cargo.toml", "tests/external_seals.rs"],
-    visibility = ["//visibility:public"],
-)
+exports_files(["BUILD.bazel", "Cargo.toml"], visibility = ["//visibility:public"])
 
 # keep
 
@@ -16,7 +13,8 @@ rust_library(
     compile_data = ["Cargo.toml"],
     visibility = ["//visibility:public"],
     deps = [
-        "//packages/d2b-contracts:d2b_contracts",
+        "//packages/d2b-contracts-resource:d2b_contracts_resource",
+        "//packages/d2b-contracts-zone-session:d2b_contracts_zone_session",
     ] + all_crate_deps(normal = True, cargo_only = True),
 )
 
@@ -27,7 +25,8 @@ rust_library(
     crate_name = "d2b_controller_toolkit",
     visibility = ["//visibility:public"],
     deps = [
-        "//packages/d2b-contracts:d2b_contracts_test_support",
+        "//packages/d2b-contracts-resource:d2b_contracts_resource",
+        "//packages/d2b-contracts-zone-session:d2b_contracts_zone_session",
     ] + all_crate_deps(normal = True, cargo_only = True),
 )
 
@@ -41,6 +40,8 @@ rust_test(
     crate_root = "tests/production_watch.rs",
     visibility = ["//visibility:public"],
     deps = [
+        "//packages/d2b-contracts-resource:d2b_contracts_resource",
+        "//packages/d2b-contracts-zone-session:d2b_contracts_zone_session",
         ":d2b_controller_toolkit",
         "//packages/d2b-contracts:d2b_contracts",
         "//packages/d2b-resource-api:d2b_resource_api",
@@ -59,9 +60,10 @@ rust_test(
     tags = ["bench", "manual"],
     visibility = ["//visibility:public"],
     deps = [
+        "//packages/d2b-contracts-resource:d2b_contracts_resource",
+        "//packages/d2b-contracts-zone-session:d2b_contracts_zone_session",
         ":d2b_controller_toolkit",
         "//packages/d2b-bus:d2b_bus_production_rss_fixture",
-        "//packages/d2b-contracts:d2b_contracts",
         "//packages/d2b-process:d2b_process",
         "//packages/d2b-process-conformance:d2b_process_conformance",
         "//packages/d2b-provider-supervisor:d2b_provider_supervisor",
@@ -76,7 +78,8 @@ rust_test(
     name = "d2b_controller_toolkit_test",
     compile_data = ["Cargo.toml"],
     crate = ":d2b_controller_toolkit",
-    deps = [] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
+    deps = ["//packages/d2b-contracts-resource:d2b_contracts_resource",
+        "//packages/d2b-contracts-zone-session:d2b_contracts_zone_session", ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
 )
 
 rust_test(
@@ -100,4 +103,24 @@ filegroup(
         allow_empty = True,
     ),
     visibility = ["//visibility:public"],
+)
+
+rust_doc_test(
+    name = "d2b_controller_toolkit_doc_test",
+    crate = "//packages/d2b-controller-toolkit:d2b_controller_toolkit",
+)
+
+test_suite(
+    name = "unit",
+    tests = [":d2b_controller_toolkit_test"],
+)
+
+test_suite(
+    name = "integration",
+    tests = [":production_watch"],
+)
+
+test_suite(
+    name = "doctest",
+    tests = [":d2b_controller_toolkit_doc_test"],
 )

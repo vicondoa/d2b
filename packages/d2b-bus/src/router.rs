@@ -9,9 +9,21 @@ use std::{
     time::{Duration, Instant},
 };
 
-use d2b_contracts::v3::{
-    AuthenticatedSubjectContext, ControllerGeneration, EvidenceClass, Locality, ResourceGeneration,
-    ResourceName, ResourceRef, ResourceTypeName, ResourceUid, ServiceName, SessionBinding, ZoneId,
+use d2b_contracts_resource::v3::{
+    ControllerGeneration,
+    ResourceGeneration,
+    ResourceName,
+    ResourceRef,
+    ResourceTypeName,
+    ResourceUid,
+    ZoneId,
+};
+use d2b_contracts_resource::v3::identity::{
+    AuthenticatedSubjectContext,
+    EvidenceClass,
+    Locality,
+    ServiceName,
+    SessionBinding,
 };
 use d2b_resource_api::authz::{
     ApiMethod, AuthorizationRequest, AuthorizationState, AuthorizationTarget, PolicySet,
@@ -1771,7 +1783,7 @@ struct ComponentEndpoint {
     responses: Arc<ComponentResponses>,
     _response_task: ComponentResponseTask,
     clock: Arc<dyn BusClock>,
-    locality: d2b_contracts::v3::Locality,
+    locality: d2b_contracts_resource::v3::identity::Locality,
     generation: u64,
     cancellation: SessionCancellationHandle,
     activity: Mutex<ComponentActivity>,
@@ -2206,7 +2218,7 @@ impl crate::registry::BusEndpoint for ComponentEndpoint {
         target: Option<&ResourceRef>,
         now_tick: u64,
     ) -> Result<(), EndpointError> {
-        let request = if self.locality == d2b_contracts::v3::Locality::AdjacentZone {
+        let request = if self.locality == d2b_contracts_resource::v3::identity::Locality::AdjacentZone {
             SessionAuthorizationRequest::relay(
                 route.service().clone(),
                 route.member().as_str(),
@@ -2273,25 +2285,26 @@ impl crate::registry::BusEndpoint for ComponentEndpoint {
             .resource_call()
             .and_then(ResourceCall::session_target)
             .cloned();
-        let authorization = if self.locality == d2b_contracts::v3::Locality::AdjacentZone {
-            SessionAuthorizationRequest::relay(
-                request.route().service().clone(),
-                request.route().member().as_str(),
-                request.route().zone().clone(),
-                target,
-                verb,
-                request.route().zone().clone(),
-            )
-        } else {
-            SessionAuthorizationRequest::new(
-                verb,
-                request.route().service().clone(),
-                request.route().member().as_str(),
-                request.route().zone().clone(),
-                target,
-            )
-        }
-        .map_err(|_| EndpointError::Rejected)?;
+        let authorization =
+            if self.locality == d2b_contracts_resource::v3::identity::Locality::AdjacentZone {
+                SessionAuthorizationRequest::relay(
+                    request.route().service().clone(),
+                    request.route().member().as_str(),
+                    request.route().zone().clone(),
+                    target,
+                    verb,
+                    request.route().zone().clone(),
+                )
+            } else {
+                SessionAuthorizationRequest::new(
+                    verb,
+                    request.route().service().clone(),
+                    request.route().member().as_str(),
+                    request.route().zone().clone(),
+                    target,
+                )
+            }
+            .map_err(|_| EndpointError::Rejected)?;
         let permit = {
             let mut session = self.session.lock().await;
             session
@@ -2337,7 +2350,7 @@ impl crate::registry::BusEndpoint for ComponentEndpoint {
         match self.ttrpc.complete(request_id).await {
             Err(cleanup_error)
                 if cleanup_error.code()
-                    != d2b_contracts::v3::component_session::SessionErrorCode::SessionDisconnected =>
+                    != d2b_contracts_zone_session::v3::component_session::SessionErrorCode::SessionDisconnected =>
             {
                 return Err(EndpointError::from(cleanup_error));
             }
@@ -3612,13 +3625,33 @@ mod tests {
 
     use crate::metrics::BusRouteOutcome;
     use async_trait::async_trait;
-    use d2b_contracts::v3::{
-        AuthenticatedSubjectContext, BindingDigest, CanonicalJsonValue, ConfigurationGeneration,
-        ControllerGeneration, EvidenceClass, Locality, RESOURCE_ENVELOPE_DOMAIN_TAG,
-        ReconnectGeneration, ResourceGeneration, ResourceRef, ResourceTypeName, ResourceUid,
-        SchemaFingerprint, ServiceName, SessionBinding, SessionPurpose, Timestamp, TranscriptHash,
-        TransportBinding, ZoneId, ZoneRevision, canonical_digest,
-    };
+    use d2b_contracts_resource::v3::{
+    CanonicalJsonValue,
+    ConfigurationGeneration,
+    ControllerGeneration,
+    RESOURCE_ENVELOPE_DOMAIN_TAG,
+    ResourceGeneration,
+    ResourceRef,
+    ResourceTypeName,
+    ResourceUid,
+    SchemaFingerprint,
+    Timestamp,
+    ZoneId,
+    ZoneRevision,
+    canonical_digest,
+};
+use d2b_contracts_resource::v3::identity::{
+    AuthenticatedSubjectContext,
+    BindingDigest,
+    EvidenceClass,
+    Locality,
+    ReconnectGeneration,
+    ServiceName,
+    SessionBinding,
+    SessionPurpose,
+    TranscriptHash,
+    TransportBinding,
+};
     use d2b_controller_toolkit::{
         OperationContext, PendingQueue, PriorityLane, QueueHint, ResourceKey, TriggerReason,
         TriggerSet,
@@ -6124,7 +6157,9 @@ mod tests {
     #[test]
     fn endpoint_session_failures_preserve_actionable_details_and_closed_labels() {
         use crate::registry::EndpointFailureClass;
-        use d2b_contracts::v3::component_session::{Remediation, SessionErrorCode};
+        use d2b_contracts_zone_session::v3::{
+    component_session::{Remediation, SessionErrorCode},
+};
 
         let cases = [
             (

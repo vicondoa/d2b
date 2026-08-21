@@ -1,22 +1,18 @@
 load("@crates//:defs.bzl", "all_crate_deps")
-load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test")
+load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test", "rust_doc_test")
 
 
 exports_files(
     [
         "BUILD.bazel",
         "Cargo.toml",
-        "tests/external_seals.rs",
     ],
     visibility = ["//visibility:public"],
 )
 
-exports_files(
-    [
-        "src/admission.rs",
-        "src/authz.rs",
-        "src/service.rs",
-    ],
+filegroup(
+    name = "resource_ttrpc_generated",
+    srcs = ["src/generated/d2b_resource_v3_ttrpc.rs"],
     visibility = ["//visibility:public"],
 )
 
@@ -34,7 +30,9 @@ rust_library(
     ],
     visibility = ["//visibility:public"],
     deps = [
+        "//packages/d2b-contracts-zone-session:d2b_contracts_zone_session",
         "//packages/d2b-contracts:d2b_contracts",
+        "//packages/d2b-contracts-resource:d2b_contracts_resource",
         "//packages/d2b-core-controller:d2b_core_controller",
         "//packages/d2b-resource-store:d2b_resource_store",
         "//packages/d2b-resource-store-redb:d2b_resource_store_redb",
@@ -55,7 +53,9 @@ rust_library(
     ],
     visibility = ["//visibility:public"],
     deps = [
+        "//packages/d2b-contracts-zone-session:d2b_contracts_zone_session",
         "//packages/d2b-contracts:d2b_contracts_test_support",
+        "//packages/d2b-contracts-resource:d2b_contracts_resource",
         "//packages/d2b-core-controller:d2b_core_controller_test_support",
         "//packages/d2b-resource-store:d2b_resource_store_test_support",
         "//packages/d2b-resource-store-redb:d2b_resource_store_redb_test_support",
@@ -64,11 +64,23 @@ rust_library(
 )
 
 rust_test(
+    name = "protocol",
+    srcs = ["tests/protocol.rs"],
+    compile_data = ["Cargo.toml"],
+    deps = [
+        "//packages/d2b-contracts-zone-session:d2b_contracts_zone_session",
+        "//packages/d2b-contracts-resource:d2b_contracts_resource",
+    ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
+)
+
+rust_test(
     name = "d2b_resource_api_test",
     compile_data = ["Cargo.toml"],
     crate = ":d2b_resource_api",
     deps = [
+        "//packages/d2b-contracts-zone-session:d2b_contracts_zone_session",
         "//packages/d2b-resource-store:d2b_resource_store",
+        "//packages/d2b-contracts-resource:d2b_contracts_resource",
     ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
 )
 
@@ -88,4 +100,19 @@ filegroup(
         allow_empty = True,
     ),
     visibility = ["//visibility:public"],
+)
+
+rust_doc_test(
+    name = "d2b_resource_api_doc_test",
+    crate = "//packages/d2b-resource-api:d2b_resource_api",
+)
+
+test_suite(
+    name = "unit",
+    tests = [":d2b_resource_api_test"],
+)
+
+test_suite(
+    name = "doctest",
+    tests = [":d2b_resource_api_doc_test"],
 )

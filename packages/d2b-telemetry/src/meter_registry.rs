@@ -5,7 +5,7 @@ use std::collections::BTreeMap;
 use crate::metric_label_policy::{
     IdentityCanaries, MetricDescriptor, MetricPolicyError, validate_data_point,
 };
-pub use d2b_contracts::v3::telemetry_policy::label;
+pub use d2b_contracts_provider::v3::telemetry_policy::label;
 
 /// Metric instrument kind.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

@@ -8,9 +8,16 @@
 
 use std::collections::BTreeSet;
 
-use d2b_contracts::v3::{
-    ConfigurationGeneration, ResourceBundleGenerationId, ResourceName, ResourceTypeName,
-    SchemaFingerprint, Timestamp, ZoneId, ZoneRevision, canonical_digest,
+use d2b_contracts_resource::v3::{
+    ConfigurationGeneration,
+    ResourceBundleGenerationId,
+    ResourceName,
+    ResourceTypeName,
+    SchemaFingerprint,
+    Timestamp,
+    ZoneId,
+    ZoneRevision,
+    canonical_digest,
 };
 
 /// Domain tag for the digest of a resource name in an audit record.

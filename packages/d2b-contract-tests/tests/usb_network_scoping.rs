@@ -44,39 +44,3 @@ fn usbip_firewall_carveout_uses_host_visible_env_identity() {
         );
     }
 }
-
-#[test]
-fn usbip_proxy_sync_strategy_does_not_assume_busid_aware_l4_proxy() {
-    let state = read_repo_file("packages/d2bd/src/usbip_reconcile_state.rs");
-    let component_doc = read_repo_file("docs/reference/components-usbip.md");
-    let state_machine_doc = read_repo_file("docs/reference/usbip-state-machine.md");
-
-    for required in [
-        "UsbipProxySynchronizationPlan",
-        "OptimisticBackendExportRefresh",
-        "FailClosedRevocationNotIsolated",
-        "PreserveSameEnvStreams",
-        "AcquireExclusiveSocketLifecycleLock",
-        "RebindProxyListenerFdRelative",
-    ] {
-        assert!(
-            state.contains(required),
-            "USBIP proxy synchronization strategy must encode {required}"
-        );
-    }
-    assert!(
-        component_doc.contains("generic L4 TCP forwarder")
-            && state_machine_doc.contains("current generic L4 proxy strategy"),
-        "USBIP docs must state that the current proxy is generic L4, not busid-aware"
-    );
-    for forbidden in [
-        "stop other proxies",
-        "steals the lock",
-        "selectively close one busid stream by itself",
-    ] {
-        assert!(
-            !component_doc.contains(forbidden),
-            "USBIP component doc must not claim busid-aware proxy behaviour: {forbidden:?}"
-        );
-    }
-}

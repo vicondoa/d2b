@@ -11,13 +11,17 @@ use std::{
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 
-use d2b_contracts::{
-    resource_proto as wire,
-    v3::{
-        CanonicalJsonValue, ControllerGeneration, ResourceEnvelope, ResourcePhase, ResourceRef,
-        ResourceTypeName, ZoneId, ZoneRevision,
-        process::{EphemeralProcessSpec, ProcessSpec, RestartClass},
-    },
+use d2b_contracts_resource::resource_proto as wire;
+use d2b_contracts_resource::v3::{
+    CanonicalJsonValue,
+    ControllerGeneration,
+    ResourceEnvelope,
+    ResourcePhase,
+    ResourceRef,
+    ResourceTypeName,
+    ZoneId,
+    ZoneRevision,
+    process::{EphemeralProcessSpec, ProcessSpec, RestartClass},
 };
 use d2b_resource_api::watch::ResourceWatch;
 use d2b_resource_api::{RedbBackend, ResourceApiClient, service::UnavailableUpgradeDispatcher};
@@ -89,7 +93,8 @@ impl DesiredRecord {
     fn is_running(&self) -> bool {
         match &self.process {
             DesiredProcess::Process(spec) => {
-                spec.desired_lifecycle() == d2b_contracts::v3::process::DesiredLifecycle::Running
+                spec.desired_lifecycle()
+                    == d2b_contracts_resource::v3::process::DesiredLifecycle::Running
             }
             DesiredProcess::Ephemeral(_) => true,
         }
@@ -491,7 +496,7 @@ impl ProcessResourceRuntime {
         let adoption = match &record.process {
             DesiredProcess::Process(spec)
                 if spec.adoption_policy()
-                    == d2b_contracts::v3::process::AdoptionPolicy::NeverAdopt =>
+                    == d2b_contracts_resource::v3::process::AdoptionPolicy::NeverAdopt =>
             {
                 ProviderAdoption::Absent
             }
@@ -1378,11 +1383,11 @@ mod tests {
         let resource = StoredResource {
             resource_ref: resource_ref.clone(),
             zone: ZoneId::parse("dev").expect("zone"),
-            uid: d2b_contracts::v3::ResourceUid::parse(
+            uid: d2b_contracts_resource::v3::ResourceUid::parse(
                 "123e4567-e89b-42d3-a456-426614174000",
             )
             .expect("uid"),
-            generation: d2b_contracts::v3::ResourceGeneration::new(1).expect("generation"),
+            generation: d2b_contracts_resource::v3::ResourceGeneration::new(1).expect("generation"),
             revision: ZoneRevision::new(1),
             canonical_json: br#"{"apiVersion":"resources.d2bus.org/v3","metadata":{"configurationGeneration":1,"createdAt":"2026-07-22T00:00:00.000Z","deletionRequestedAt":null,"finalizers":[],"generation":1,"managedBy":"configuration","name":"status-projection","ownerRef":null,"revision":1,"uid":"123e4567-e89b-42d3-a456-426614174000","updatedAt":"2026-07-22T00:00:00.000Z","zone":"dev"},"spec":{"executionRef":"Host/host-system","processClass":"worker","template":"reaction"},"status":{"completedAt":null,"conditions":[],"lastReconciledAt":null,"observedGeneration":0,"outcome":null,"phase":"Pending","resource":{},"startedAt":null,"update":{"dependencies":{"count":0,"refs":[]},"disruption":"None","lastAssessedAt":null,"observedGeneration":0,"operationId":null,"owned":{"count":0,"refs":[]},"preserveState":true,"reasons":[],"state":"Unknown","targetGeneration":1}},"type":"Process"}"#.to_vec(),
             payload_digest: "sha256:".to_owned(),
@@ -1412,7 +1417,7 @@ mod tests {
                 }),
             Some(2)
         );
-        assert!(d2b_contracts::v3::Timestamp::parse(now_timestamp()).is_ok());
+        assert!(d2b_contracts_resource::v3::Timestamp::parse(now_timestamp()).is_ok());
         assert_eq!(record.key(), resource_ref);
     }
 

@@ -1,20 +1,37 @@
 load("@crates//:defs.bzl", "all_crate_deps")
-load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test")
+load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test", "rust_doc_test")
 
 
 exports_files(
-    ["BUILD.bazel"],
+    ["BUILD.bazel", "nix/tests/default.nix"],
     visibility = ["//visibility:public"],
 )
 
 rust_library(
     name = "d2b_provider_device_gpu",
     srcs = glob(["src/**/*.rs"], allow_empty = True),
-    compile_data = ["Cargo.toml"],
+    compile_data = [
+        "Cargo.toml",
+        "//:tests/golden/runner-shape/gpu-argv-minimal.txt",
+        "//:tests/golden/runner-shape/video-argv-minimal.txt",
+    ],
     visibility = ["//visibility:public"],
     deps = [
-        "//packages/d2b-contracts:d2b_contracts",
+        "//packages/d2b-contracts-resource:d2b_contracts_resource",
+        "//packages/d2b-contracts-zone-session:d2b_contracts_zone_session",
     ] + all_crate_deps(normal = True, cargo_only = True),
+)
+
+rust_test(
+    name = "d2b_provider_device_gpu_test",
+    crate = ":d2b_provider_device_gpu",
+    compile_data = [
+        "Cargo.toml",
+        "//:tests/golden/runner-shape/gpu-argv-minimal.txt",
+        "//:tests/golden/runner-shape/video-argv-minimal.txt",
+    ],
+    visibility = ["//visibility:public"],
+    deps = all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
 )
 
 rust_test(
@@ -23,8 +40,9 @@ rust_test(
     compile_data = ["Cargo.toml"],
     visibility = ["//visibility:public"],
     deps = [
+        "//packages/d2b-contracts-resource:d2b_contracts_resource",
+        "//packages/d2b-contracts-zone-session:d2b_contracts_zone_session",
         ":d2b_provider_device_gpu",
-        "//packages/d2b-contracts:d2b_contracts",
     ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
 )
 
@@ -34,8 +52,9 @@ rust_test(
     compile_data = ["Cargo.toml"],
     visibility = ["//visibility:public"],
     deps = [
+        "//packages/d2b-contracts-resource:d2b_contracts_resource",
+        "//packages/d2b-contracts-zone-session:d2b_contracts_zone_session",
         ":d2b_provider_device_gpu",
-        "//packages/d2b-contracts:d2b_contracts",
     ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
 )
 
@@ -45,8 +64,9 @@ rust_test(
     compile_data = ["Cargo.toml"],
     visibility = ["//visibility:public"],
     deps = [
+        "//packages/d2b-contracts-resource:d2b_contracts_resource",
+        "//packages/d2b-contracts-zone-session:d2b_contracts_zone_session",
         ":d2b_provider_device_gpu",
-        "//packages/d2b-contracts:d2b_contracts",
     ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
 )
 
@@ -55,7 +75,9 @@ rust_test(
     srcs = ["tests/wire_constant_snapshot.rs"],
     compile_data = ["Cargo.toml"],
     visibility = ["//visibility:public"],
-    deps = [":d2b_provider_device_gpu"] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
+    deps = [":d2b_provider_device_gpu",
+        "//packages/d2b-contracts-resource:d2b_contracts_resource",
+        "//packages/d2b-contracts-zone-session:d2b_contracts_zone_session", ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
 )
 
 
@@ -67,7 +89,8 @@ rust_test(
     compile_data = ["Cargo.toml"],
     visibility = ["//visibility:public"],
     deps = [
-        "//packages/d2b-contracts:d2b_contracts",
+        "//packages/d2b-contracts-resource:d2b_contracts_resource",
+        "//packages/d2b-contracts-zone-session:d2b_contracts_zone_session",
         ":d2b_provider_device_gpu",
     ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
 )
@@ -80,6 +103,8 @@ rust_test(
     compile_data = ["Cargo.toml"],
     visibility = ["//visibility:public"],
     deps = [
+        "//packages/d2b-contracts-resource:d2b_contracts_resource",
+        "//packages/d2b-contracts-zone-session:d2b_contracts_zone_session",
         ":d2b_provider_device_gpu",
     ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
 )
@@ -92,6 +117,8 @@ rust_test(
     compile_data = ["Cargo.toml"],
     visibility = ["//visibility:public"],
     deps = [
+        "//packages/d2b-contracts-resource:d2b_contracts_resource",
+        "//packages/d2b-contracts-zone-session:d2b_contracts_zone_session",
         ":d2b_provider_device_gpu",
     ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
 )
@@ -104,7 +131,8 @@ rust_test(
     compile_data = ["Cargo.toml"],
     visibility = ["//visibility:public"],
     deps = [
-        "//packages/d2b-contracts:d2b_contracts",
+        "//packages/d2b-contracts-resource:d2b_contracts_resource",
+        "//packages/d2b-contracts-zone-session:d2b_contracts_zone_session",
         ":d2b_provider_device_gpu",
     ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
 )
@@ -128,4 +156,9 @@ filegroup(
         allow_empty = True,
     ),
     visibility = ["//visibility:public"],
+)
+
+rust_doc_test(
+    name = "d2b_provider_device_gpu_doc_test",
+    crate = "//packages/d2b-provider-device-gpu:d2b_provider_device_gpu",
 )

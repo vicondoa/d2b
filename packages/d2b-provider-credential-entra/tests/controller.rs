@@ -1,7 +1,8 @@
 mod common;
 
-use d2b_contracts::v3::credential::CredentialServiceErrorCode;
-use d2b_contracts::v3::{Locality, ResourceRef};
+use d2b_contracts_provider::v3::credential::CredentialServiceErrorCode;
+use d2b_contracts_resource::v3::ResourceRef;
+use d2b_contracts_resource::v3::identity::Locality;
 use d2b_provider_credential_entra::{
     EntraClientState, EntraController, EntraEndpointPolicy, EntraPlacement, EntraResourceHealth,
 };
@@ -11,7 +12,7 @@ use common::{subject_context, subject_context_for, subject_context_with_bindings
 fn controller() -> (EntraController, EntraEndpointPolicy) {
     let placement = EntraPlacement::new_in_zone(
         ResourceRef::parse("Zone/work").unwrap(),
-        d2b_contracts::v3::credential::PlacementBinding::GuestAgent,
+        d2b_contracts_provider::v3::credential::PlacementBinding::GuestAgent,
         ResourceRef::parse("Guest/consumer").unwrap(),
         ResourceRef::parse("Guest/identity").unwrap(),
         ResourceRef::parse("Endpoint/entra-login").unwrap(),

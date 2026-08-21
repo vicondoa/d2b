@@ -10,6 +10,8 @@ workspace = true
 
 [dependencies]
 d2b-contracts = { path = "../d2b-contracts", version = "0.0.0-bootstrap" }
+d2b-contracts-broker = { path = "../d2b-contracts-broker", version = "0.0.0-bootstrap" }
+d2b-contracts-resource = { path = "../d2b-contracts-resource", version = "0.0.0-bootstrap" }
 nix = { version = "0.29", features = ["fs", "process", "socket", "user"] }
 serde.workspace = true
 serde_json.workspace = true

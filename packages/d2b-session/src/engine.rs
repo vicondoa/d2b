@@ -5,7 +5,8 @@ use std::{
     time::{Duration, Instant},
 };
 
-use d2b_contracts::v3::component_session::{
+use d2b_contracts_zone_session::v3::{
+    component_session::{
     AttachmentAccess, AttachmentCreditClass, AttachmentDescriptor, AttachmentKind,
     AttachmentPacket, AttachmentPolicyKind, BoundedVec, CancelAck, CancelRequest, CancelResult,
     ChannelClass, ChannelId, CloseReason, CloseRecord, EndpointPolicy, EndpointPolicyIdentity,
@@ -13,6 +14,7 @@ use d2b_contracts::v3::component_session::{
     KeepaliveRecord, KernelObjectType, LimitProfile, MAX_PACKET_ATTACHMENTS, MetricLabels,
     MetricReason, MetricResult, NoiseProfile, OperationClass, OperationId, PREFACE_LEN,
     RecordHeader, RecordKind, Remediation, RequestId, ServicePackage, SessionErrorCode,
+},
 };
 
 use crate::{
@@ -350,7 +352,9 @@ impl<T: OwnedTransport> SessionEngine<T> {
         validate_transport(&transport, &policy)?;
         let mut first = receive_clean(
             &mut transport,
-            (PREFACE_LEN + d2b_contracts::v3::component_session::MAX_HANDSHAKE_OFFER_BYTES) as u32,
+            (PREFACE_LEN
+                + d2b_contracts_zone_session::v3::component_session::MAX_HANDSHAKE_OFFER_BYTES)
+                as u32,
         )
         .await?;
         if is_generation_discovery_request(&first) {
@@ -360,7 +364,8 @@ impl<T: OwnedTransport> SessionEngine<T> {
             transport.send(TransportPacket::new(response)).await?;
             first = receive_clean(
                 &mut transport,
-                (PREFACE_LEN + d2b_contracts::v3::component_session::MAX_HANDSHAKE_OFFER_BYTES)
+                (PREFACE_LEN
+                    + d2b_contracts_zone_session::v3::component_session::MAX_HANDSHAKE_OFFER_BYTES)
                     as u32,
             )
             .await?;
@@ -1676,8 +1681,10 @@ fn decode_attachment_descriptor(bytes: &[u8]) -> Result<AttachmentDescriptor> {
             .map_err(|_| SessionError::new(SessionErrorCode::AttachmentDescriptorMismatch))?,
         access: AttachmentAccess::from_tag(bytes[4])
             .map_err(|_| SessionError::new(SessionErrorCode::AttachmentDescriptorMismatch))?,
-        purpose: d2b_contracts::v3::component_session::AttachmentPurpose::from_tag(bytes[5])
-            .map_err(|_| SessionError::new(SessionErrorCode::AttachmentDescriptorMismatch))?,
+        purpose: d2b_contracts_zone_session::v3::component_session::AttachmentPurpose::from_tag(
+            bytes[5],
+        )
+        .map_err(|_| SessionError::new(SessionErrorCode::AttachmentDescriptorMismatch))?,
         service: ServicePackage::from_tag(bytes[6])
             .map_err(|_| SessionError::new(SessionErrorCode::AttachmentDescriptorMismatch))?,
         method_id: u32::from_be_bytes(

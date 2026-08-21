@@ -1,4 +1,14 @@
-//! Canonical source layout for the clipd-host service.
+//! Legacy-compatible clipd-host implementation owned by clipboard-wayland.
 
-//! The implementation is exposed from the crate's `service` module so the
-//! service boundary remains independent from transport-generated bindings.
+pub mod audit;
+pub mod fallback;
+pub mod fd;
+pub mod framing;
+pub mod host;
+pub mod niri;
+pub mod notifications;
+pub mod picker;
+pub mod policy;
+pub mod protocol;
+pub mod virtual_keyboard;
+pub mod wayland;

@@ -1,4 +1,7 @@
-use d2b_contracts::v3::{ResourceRef, ZoneId};
+use d2b_contracts_resource::v3::{
+    ResourceRef,
+    ZoneId,
+};
 use d2b_provider_notification_desktop::{
     ActionNonceStore, ActionSpec, Category, GuestSourceConfig, NotificationController,
     NotificationProviderConfig, NotificationProviderDescriptor, NotificationRequest,

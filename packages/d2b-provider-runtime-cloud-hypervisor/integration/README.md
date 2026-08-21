@@ -3,7 +3,7 @@
 Hermetic lifecycle tests use injected process and guest-control effect ports:
 
 ```text
-cargo test -p d2b-provider-runtime-cloud-hypervisor
+bazel test //packages/d2b-provider-runtime-cloud-hypervisor:all
 ```
 
 Host/KVM acceptance is a separate manual `make test-host-integration` lane.

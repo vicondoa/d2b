@@ -4,10 +4,12 @@
 //! consumes the resulting resource shape, while the local Provider itself
 //! never imports or calls the other Provider crate.
 
-use d2b_contracts::v3::ResourceRef;
-use d2b_contracts::v3::execution_policy::BoundedToken;
-use d2b_contracts::v3::volume::{
+use d2b_contracts_resource::v3::ResourceRef;
+use d2b_contracts_resource::v3::execution_policy::BoundedToken;
+use d2b_contracts_resource::v3::{
+    volume::{
     AttachmentAccess, AttachmentSettings, AttachmentTransport, VolumeSpec,
+},
 };
 use sha2::{Digest, Sha256};
 
@@ -111,7 +113,7 @@ pub fn desired_export_intents(
 
 fn derive_export_name(
     volume_ref: &ResourceRef,
-    attachment: &d2b_contracts::v3::volume::VolumeAttachment,
+    attachment: &d2b_contracts_resource::v3::volume::VolumeAttachment,
     index: usize,
 ) -> Result<BoundedToken, VolumeLocalError> {
     let mut hasher = Sha256::new();

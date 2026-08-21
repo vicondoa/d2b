@@ -1,6 +1,6 @@
 //! Authenticated notification Provider runtime composition.
 
-use d2b_contracts::v3::ResourceRef;
+use d2b_contracts_resource::v3::ResourceRef;
 use d2b_provider_toolkit::{AuthenticatedComponentSession, AuthenticatedSessionRouteBinding};
 
 use crate::{
@@ -401,7 +401,10 @@ mod tests {
         NotificationResult, SinkError,
         admission::{test_observer, test_source},
     };
-    use d2b_contracts::v3::{ResourceRef, ZoneId};
+    use d2b_contracts_resource::v3::{
+    ResourceRef,
+    ZoneId,
+};
 
     #[derive(Default)]
     struct Effects {

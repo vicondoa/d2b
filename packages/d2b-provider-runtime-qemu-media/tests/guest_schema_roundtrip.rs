@@ -59,10 +59,10 @@ fn guest_spec_requires_the_runtime_provider() {
         "Provider/runtime-qemu-media"
     );
     assert!(
-        d2b_contracts::v3::ResourceSpec::new(
-            Some(d2b_contracts::v3::ResourceRef::parse("Provider/other").unwrap()),
+        d2b_contracts_resource::v3::ResourceSpec::new(
+            Some(d2b_contracts_resource::v3::ResourceRef::parse("Provider/other").unwrap()),
             None,
-            d2b_contracts::v3::CanonicalJsonObject::empty(),
+            d2b_contracts_resource::v3::CanonicalJsonObject::empty(),
             None,
         )
         .is_ok()

@@ -9,7 +9,7 @@ use std::collections::BTreeSet;
 use std::fmt;
 use std::fs::File;
 
-use d2b_contracts::v3::{
+use d2b_contracts_resource::v3::{
     ResourceUid, RetryClass, Timestamp, ZoneId, canonical_digest, canonical_json_bytes,
 };
 use redb::{Database, Durability, ReadableDatabase, ReadableTable, TableDefinition};
@@ -785,7 +785,7 @@ fn publication_entry(parent: &File, name: &str) -> Result<Option<FileType>, crat
 #[cfg(test)]
 mod tests {
     use super::*;
-    use d2b_contracts::v3::{ConfigurationGeneration, ResourceUid, Timestamp, ZoneId};
+    use d2b_contracts_resource::v3::{ConfigurationGeneration, ResourceUid, Timestamp, ZoneId};
     use d2b_resource_store::PolicySnapshot;
     use std::fs::OpenOptions;
 

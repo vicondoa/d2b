@@ -2,7 +2,7 @@
 
 use std::collections::BTreeMap;
 
-use d2b_contracts::v3::ResourceRef;
+use d2b_contracts_resource::v3::ResourceRef;
 
 /// Observed Device phase.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

@@ -7,9 +7,18 @@ use d2b_bus::{
     BusConfig, OperationId, OperationSpec, ReceivedFrame, ResourceCall, ResourceQuery,
     StreamLimits, StreamName, router::production_rss::ProductionWatchHarness,
 };
-use d2b_contracts::v3::{
-    CanonicalJsonValue, ConfigurationGeneration, RESOURCE_ENVELOPE_DOMAIN_TAG, ResourceName,
-    ResourceRef, ResourceTypeName, ResourceUid, Timestamp, ZoneId, ZoneRevision, canonical_digest,
+use d2b_contracts_resource::v3::{
+    CanonicalJsonValue,
+    ConfigurationGeneration,
+    RESOURCE_ENVELOPE_DOMAIN_TAG,
+    ResourceName,
+    ResourceRef,
+    ResourceTypeName,
+    ResourceUid,
+    Timestamp,
+    ZoneId,
+    ZoneRevision,
+    canonical_digest,
 };
 use d2b_controller_toolkit::{
     OperationContext, PendingQueue, PriorityLane, QueueHint, ResourceKey, TriggerReason, TriggerSet,
@@ -29,7 +38,7 @@ use serde_json::Value;
 
 const RESOURCE_COUNT: usize = 10_000;
 const WATCH_COUNT: usize = 100;
-const MAX_BATCH_MUTATIONS: usize = d2b_contracts::v3::MAX_BATCH_MUTATIONS;
+const MAX_BATCH_MUTATIONS: usize = d2b_contracts_resource::v3::MAX_BATCH_MUTATIONS;
 const REVISION_COUNT: u64 = RESOURCE_COUNT.div_ceil(MAX_BATCH_MUTATIONS) as u64;
 const RSS_THRESHOLD_KIB: u64 = 24_576;
 const RSS_CHILD_ENV: &str = "D2B_REDB_PRODUCTION_WATCH_RSS_CHILD";

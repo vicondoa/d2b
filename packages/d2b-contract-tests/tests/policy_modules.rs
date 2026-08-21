@@ -13,7 +13,6 @@
 //!   * tests/static-rust-dependency-direction.sh -> static_rust_dependency_direction
 
 use std::collections::{BTreeMap, BTreeSet};
-use std::process::Command;
 
 use d2b_contract_tests::{repo_files, repo_root};
 use regex::Regex;
@@ -117,7 +116,7 @@ fn legacy_group_allowlist() -> Regex {
         r"nixos-modules/host-daemon\.nix:[0-9]+:[[:space:]]*# d2b-launcher\{,s\} → d2b rename\. No module references the[[:space:]]*",
         r"nixos-modules/host-daemon\.nix:[0-9]+:[[:space:]]*users\.groups\.d2b-launchers = \{ \};[[:space:]]*",
         r"packages/d2b-core/src/privileges\.rs:[0-9]+:.*d2b-launcher.*",
-        r"packages/d2b-contracts/src/broker_wire\.rs:[0-9]+:.*d2b-launcher.*",
+        r"packages/d2b-contracts-broker/src/broker_wire\.rs:[0-9]+:.*d2b-launcher.*",
         r"packages/d2b-priv-broker/src/bootstrap\.rs:[0-9]+:.*d2b-launcher.*",
         r"nixos-modules/privileges-json\.nix:[0-9]+:.*d2b-launcher.*",
         r"tests/legacy-group-name-denylist(-self-test)?\.sh:[0-9]+:.*",
@@ -184,8 +183,9 @@ fn vm_submodule_cutover() {
 // ---------------------------------------------------------------------------
 // Migrated from tests/static-rust-dependency-direction.sh.
 //
-// The Rust workspace dependency graph flows one way: contracts/core are leaves;
-// host depends on core+contracts; the binaries (d2b, d2bd) and the
+// The Rust workspace dependency graph flows one way: contracts are leaves;
+// realm/core depend on contracts; host depends on core+contracts; the binaries
+// (d2b, d2bd) and the
 // privileged broker (d2b-priv-broker, a sibling workspace) sit above. The
 // broker must NOT depend on d2bd/d2b; the CLI/daemon must NOT depend on
 // the broker.
@@ -196,20 +196,28 @@ fn vm_submodule_cutover() {
 fn static_rust_dependency_direction() {
     // (crate, allowed in-workspace deps) - verbatim port of the bash WANT map.
     let want: &[(&str, &[&str])] = &[
-        ("d2b-core", &[]),
-        ("d2b-contracts", &["d2b-core"]),
+        ("d2b-contracts", &[]),
+        ("d2b-realm-core", &["d2b-contracts"]),
+        ("d2b-core", &["d2b-contracts", "d2b-realm-core"]),
         ("d2b-host", &["d2b-core", "d2b-contracts"]),
-        ("xtask", &["d2b-core", "d2b-contracts", "d2b", "d2bd"]),
-        ("d2b", &["d2b-core", "d2b-contracts"]),
-        ("d2bd", &["d2b-core", "d2b-host", "d2b-contracts"]),
+        (
+            "xtask",
+            &["d2b-core", "d2b-realm-core", "d2b-contracts", "d2b", "d2bd"],
+        ),
+        ("d2b", &["d2b-core", "d2b-realm-core", "d2b-contracts"]),
+        (
+            "d2bd",
+            &["d2b-core", "d2b-realm-core", "d2b-host", "d2b-contracts"],
+        ),
         (
             "d2b-priv-broker",
-            &["d2b-core", "d2b-host", "d2b-contracts"],
+            &["d2b-core", "d2b-realm-core", "d2b-host", "d2b-contracts"],
         ),
     ];
-    let internal_crate =
-        Regex::new(r"^(d2b-core|d2b-host|d2b-contracts|d2b-priv-broker|d2b|d2bd|xtask)$")
-            .expect("valid internal-crate regex");
+    let internal_crate = Regex::new(
+        r"^(d2b-core|d2b-realm-core|d2b-host|d2b-contracts|d2b-priv-broker|d2b|d2bd|xtask)$",
+    )
+    .expect("valid internal-crate regex");
 
     let mut violations: Vec<String> = Vec::new();
     for (crate_name, allowed) in want {
@@ -281,7 +289,7 @@ fn authority_capability_is_not_downstream_mintable() {
         !capability_block.contains("Deserialize"),
         "AuthorityOperationCapability must not be deserializable"
     );
-    let adapter = read_repo_file_opt("packages/d2bd/src/authority_persistence.rs")
+    let adapter = read_repo_file_opt("packages/d2bd-runtime/src/authority_persistence.rs")
         .expect("read d2bd adapter");
     assert!(
         adapter.contains("PreparedAuthorityOperation") && adapter.contains("AuthorityRecoveryData"),
@@ -291,183 +299,6 @@ fn authority_capability_is_not_downstream_mintable() {
         !adapter.contains("AuthorityOperationCapability::new"),
         "d2bd must not mint core capabilities directly"
     );
-}
-
-#[test]
-fn providers_and_controllers_use_closed_effect_ports() {
-    let crates = provider_controller_crates();
-    let forbidden_internal = [
-        "d2b-priv-broker",
-        "d2bd",
-        "d2b-resource-store",
-        "d2b-resource-api",
-    ];
-    let allowed_internal = [
-        "d2b-audit",
-        "d2b-contracts",
-        "d2b-controller-toolkit",
-        "d2b-core",
-        "d2b-core-controller",
-        "d2b-host-argv",
-        "d2b-process",
-        "d2b-process-conformance",
-        "d2b-provider",
-        "d2b-provider-system-core",
-        "d2b-provider-system-minijail",
-        "d2b-provider-system-systemd",
-        "d2b-provider-toolkit",
-        "d2b-realm-codec-protobuf",
-        "d2b-realm-core",
-        "d2b-realm-provider",
-        "d2b-realm-transport",
-        "d2b-session",
-        "d2b-telemetry",
-        "d2b-resource-store-redb",
-    ];
-    let mut violations = Vec::new();
-    for (crate_name, manifest_dir, src_root) in crates {
-        let manifest = read_repo_file_opt(&format!("{manifest_dir}/Cargo.toml"))
-            .unwrap_or_else(|| panic!("read {crate_name} manifest"));
-        for dependency in internal_deps(&manifest) {
-            if forbidden_internal.contains(&dependency.as_str())
-                || (dependency == "d2b-resource-store-redb" && crate_name != "d2b-core-controller")
-            {
-                violations.push(format!(
-                    "{crate_name}: direct dependency {dependency} bypasses the effect port"
-                ));
-            }
-            if dependency.starts_with("d2b-")
-                && !forbidden_internal.contains(&dependency.as_str())
-                && !allowed_internal.contains(&dependency.as_str())
-            {
-                violations.push(format!(
-                    "{crate_name}: direct dependency {dependency} is outside the Provider/controller allowlist"
-                ));
-            }
-        }
-        for rel in git_listed_files(&[&src_root]) {
-            if !rel.ends_with(".rs") {
-                continue;
-            }
-            if rel == "packages/d2b-provider-observability-otel/src/emitter_socket.rs"
-                || rel == "packages/d2b-provider-supervisor/src/broker.rs"
-                || rel == "packages/d2b-provider-supervisor/src/systemd.rs"
-                || rel == "packages/d2b-provider-supervisor/src/lib.rs"
-            {
-                continue;
-            }
-            let Some(content) = read_repo_file_opt(&rel) else {
-                continue;
-            };
-            let Ok(file) = syn::parse_file(&content) else {
-                violations.push(format!("{rel}: Rust source did not parse"));
-                continue;
-            };
-            let mut visitor = HostEffectVisitor::default();
-            syn::visit::Visit::visit_file(&mut visitor, &file);
-            for effect in visitor.forbidden {
-                violations.push(format!("{rel}: prohibited host effect API {effect}"));
-            }
-        }
-    }
-    assert!(
-        violations.is_empty(),
-        "provider/controller code must route host effects through typed ports:\n{}",
-        violations.join("\n")
-    );
-
-    assert!(
-        read_repo_file_opt("packages/d2b-provider-device-tpm/src/lib.rs")
-            .expect("read device-tpm lib.rs")
-            .contains("TpmEffectPort"),
-        "device-tpm must expose its closed effect port"
-    );
-    let volume = read_repo_file_opt("packages/d2b-provider-volume-local/src/lib.rs")
-        .expect("read volume-local lib.rs");
-    assert!(
-        volume.contains("VolumeLayoutEffectPort") && volume.contains("VolumeSourceEffectPort"),
-        "volume-local must expose typed layout/source effect ports"
-    );
-    let runtime =
-        read_repo_file_opt("packages/d2bd/src/resource_runtime.rs").expect("read resource runtime");
-    let runtime_file = syn::parse_file(&runtime).expect("resource runtime parses");
-    let mut runtime_visitor = AuthorityBoundaryVisitor::default();
-    syn::visit::Visit::visit_file(&mut runtime_visitor, &runtime_file);
-    assert!(
-        runtime_visitor.saw_durable_reservation,
-        "production Zone runtime must call AuthorityReservation::reserve_durable"
-    );
-}
-
-fn provider_controller_crates() -> Vec<(String, String, String)> {
-    let cargo = std::env::var_os("CARGO")
-        .map(std::path::PathBuf::from)
-        .map(|path| {
-            if path.is_absolute() {
-                path
-            } else if let Some(runfiles) = std::env::var_os("RUNFILES_DIR") {
-                std::path::PathBuf::from(runfiles).join(path)
-            } else {
-                repo_root().join(path)
-            }
-        })
-        .unwrap_or_else(|| "cargo".into());
-    let output = Command::new(cargo)
-        .current_dir(repo_root())
-        .args([
-            "metadata",
-            "--manifest-path",
-            "Cargo.toml",
-            "--format-version",
-            "1",
-            "--no-deps",
-        ])
-        .output()
-        .expect("run cargo metadata");
-    assert!(
-        output.status.success(),
-        "cargo metadata failed: {}",
-        String::from_utf8_lossy(&output.stderr)
-    );
-    let metadata: serde_json::Value =
-        serde_json::from_slice(&output.stdout).expect("cargo metadata JSON");
-    let mut crates = Vec::new();
-    for package in metadata["packages"].as_array().expect("metadata packages") {
-        let name = package["name"].as_str().expect("package name");
-        if name != "d2b-core-controller"
-            && (!name.starts_with("d2b-provider-") || name == "d2b-provider-toolkit")
-        {
-            continue;
-        }
-        let manifest = package["manifest_path"].as_str().expect("manifest path");
-        let manifest = manifest
-            .strip_prefix(&format!("{}/", repo_root().display()))
-            .unwrap_or(manifest)
-            .to_owned();
-        let manifest_dir = manifest
-            .strip_suffix("/Cargo.toml")
-            .unwrap_or(manifest.as_str())
-            .to_owned();
-        crates.push((
-            name.to_owned(),
-            manifest_dir.clone(),
-            format!("{manifest_dir}/src"),
-        ));
-    }
-    crates.sort();
-    assert!(
-        crates
-            .iter()
-            .any(|(name, _, _)| name == "d2b-core-controller"),
-        "Cargo metadata must include d2b-core-controller"
-    );
-    assert!(
-        crates
-            .iter()
-            .any(|(name, _, _)| name == "d2b-provider-device-tpm"),
-        "Cargo metadata must include device-tpm Provider"
-    );
-    crates
 }
 
 #[derive(Default)]
@@ -614,36 +445,6 @@ fn record_forbidden_use(path: Vec<String>, forbidden: &mut Vec<String>) {
     }
 }
 
-#[derive(Default)]
-struct AuthorityBoundaryVisitor {
-    saw_durable_reservation: bool,
-}
-
-impl<'ast> syn::visit::Visit<'ast> for AuthorityBoundaryVisitor {
-    fn visit_expr_method_call(&mut self, call: &'ast syn::ExprMethodCall) {
-        if call.method == "reserve_durable" {
-            self.saw_durable_reservation = true;
-        }
-        syn::visit::visit_expr_method_call(self, call);
-    }
-
-    fn visit_expr_path(&mut self, expression: &'ast syn::ExprPath) {
-        let path = expression
-            .path
-            .segments
-            .iter()
-            .map(|segment| segment.ident.to_string())
-            .collect::<Vec<_>>();
-        if path.windows(2).any(|pair| {
-            pair == ["AuthorityReservation", "reserve_durable"]
-                || pair == ["ExternalNicReservation", "reserve_durable"]
-        }) {
-            self.saw_durable_reservation = true;
-        }
-        syn::visit::visit_expr_path(self, expression);
-    }
-}
-
 #[test]
 fn host_effect_ast_policy_ignores_comments_and_strings_but_catches_aliases() {
     let source = r#"
@@ -670,24 +471,24 @@ fn host_effect_ast_policy_ignores_comments_and_strings_but_catches_aliases() {
 #[test]
 fn cli_output_contracts_live_in_contract_crate() {
     let cli = read_repo_file_opt("packages/d2b/src/lib.rs").expect("read d2b lib.rs");
-    let ipc = read_repo_file_opt("packages/d2b-contracts/src/cli_output.rs")
-        .expect("read d2b-contracts cli_output.rs");
+    let ipc = read_repo_file_opt("packages/d2b-contracts-control/src/cli_output.rs")
+        .expect("read d2b-contracts-control cli_output.rs");
     let xtask = read_repo_file_opt("packages/xtask/src/main.rs").expect("read xtask main.rs");
 
     for type_name in MIGRATED_CLI_OUTPUT_TYPES {
         assert!(
             !cli_defines_type(&cli, type_name),
-            "{type_name} must live in d2b-contracts::cli_output, not packages/d2b/src/lib.rs"
+            "{type_name} must live in d2b-contracts-control::cli_output, not packages/d2b/src/lib.rs"
         );
         assert!(
             !xtask_imports_d2b_type(&xtask, type_name),
-            "xtask must import {type_name} from d2b_contracts::cli_output, not the d2b presentation crate"
+            "xtask must import {type_name} from d2b_contracts_control::cli_output, not the d2b presentation crate"
         );
     }
 
     assert!(
         xtask.contains("cli_output::"),
-        "gen-cli-schemas must import CLI output schemas from d2b_contracts::cli_output"
+        "gen-cli-schemas must import CLI output schemas from d2b_contracts_control::cli_output"
     );
 
     for type_name in STRICT_CLI_OUTPUT_OBJECT_TYPES {

@@ -2,7 +2,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use d2b_contracts::v3::{ResourceRef, ResourceUid, ZoneRevision};
+use d2b_contracts_resource::v3::{ResourceRef, ResourceUid, ZoneRevision};
 use d2b_controller_toolkit::owner_hints::{
     MAX_OWNER_HINT_DEPTH, OwnedResourceChangedHint, OwnerChangeEvent,
 };

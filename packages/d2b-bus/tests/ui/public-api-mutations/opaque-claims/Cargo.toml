@@ -1,8 +1,0 @@
-[package]
-name = "opaque-claims"
-version = "0.0.0"
-edition = "2024"
-publish = false
-
-[dependencies]
-d2b-contracts = { path = "../../../../../d2b-contracts" }

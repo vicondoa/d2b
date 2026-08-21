@@ -62,7 +62,7 @@ routes:\n
 ```
 
 The full implementation lives in
-[`packages/d2bd/src/net_vm_bundle_gate.rs`](../../packages/d2bd/src/net_vm_bundle_gate.rs).
+[`packages/d2bd-runtime/src/net_vm_bundle_gate.rs`](../../packages/d2bd-runtime/src/net_vm_bundle_gate.rs).
 
 ## Actual-hash computation
 
@@ -133,18 +133,19 @@ the typed envelope remains `daemon.bundle-dnsmasq-drift` (exit code
 
 ## Tests
 
-* Unit: `cargo test --lib net_vm_bundle_gate` exercises the eight
+* Unit: `bazel test //packages/d2bd-runtime:d2bd_runtime_test` exercises the eight
   cases enumerated in
-  [`packages/d2bd/src/net_vm_bundle_gate.rs`](../../packages/d2bd/src/net_vm_bundle_gate.rs).
-* Typed-error envelope: `cargo test --lib
-  typed_error::tests::bundle_dnsmasq_drift_envelope_shape` pins
+  [`packages/d2bd-runtime/src/net_vm_bundle_gate.rs`](../../packages/d2bd-runtime/src/net_vm_bundle_gate.rs).
+* Typed-error envelope: the same Bazel target runs
+  `typed_error::tests::bundle_dnsmasq_drift_envelope_shape`, which pins
   exit code `63`, kind `bundle-dnsmasq-drift`, and remediation
   string.
-* The `test-rust` workspace run executes both the gate and typed-error tests.
+* The `//bazel/checks/rust:portable_rust_local` suite executes both the gate
+  and typed-error tests.
 
 ## Cross-references
 
 * [`docs/reference/privileges.md`](./privileges.md) - daemon-side
   VM-start preflight catalog.
-* [`packages/d2bd/src/ssh_host_key_preflight.rs`](../../packages/d2bd/src/ssh_host_key_preflight.rs) -
+* [`packages/d2bd-runtime/src/ssh_host_key_preflight.rs`](../../packages/d2bd-runtime/src/ssh_host_key_preflight.rs) -
   sibling preflight (same trust boundary, different subject).

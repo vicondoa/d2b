@@ -3,7 +3,7 @@
 use std::collections::BTreeSet;
 use std::fmt;
 
-use d2b_contracts::v3::{CanonicalJsonError, canonical_digest, canonical_json_bytes};
+use d2b_contracts_resource::v3::{CanonicalJsonError, canonical_digest, canonical_json_bytes};
 use serde::Serialize;
 
 use crate::{

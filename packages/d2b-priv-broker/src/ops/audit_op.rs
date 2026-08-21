@@ -8,8 +8,11 @@
 use std::io;
 
 use d2b_audit::{DurabilityEvidence, OperationIdentity, ZoneOperationKey};
-use d2b_contracts::broker_wire::{NftablesProjectionAction, RunnerAllocation};
-use d2b_contracts::v3::{ResourceBundleGenerationId, ResourceGeneration};
+use d2b_contracts_broker::broker_wire::{NftablesProjectionAction, RunnerAllocation};
+use d2b_contracts_resource::v3::{
+    ResourceBundleGenerationId,
+    ResourceGeneration,
+};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
@@ -1124,7 +1127,7 @@ impl OwnedOpAuditRecord {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use d2b_contracts::broker_wire::RunnerAllocationKind;
+    use d2b_contracts_broker::broker_wire::RunnerAllocationKind;
     use serde_json::json;
 
     macro_rules! roundtrip_test {

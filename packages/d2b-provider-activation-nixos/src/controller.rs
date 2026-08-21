@@ -2,8 +2,12 @@
 
 use std::collections::BTreeSet;
 
-use d2b_contracts::v3::{
-    ActivationMode, ActivationOutcomeCode, ArtifactId, NixosGenerationSpec, ResourcePhase,
+use d2b_contracts_resource::v3::{
+    ActivationMode,
+    ActivationOutcomeCode,
+    ArtifactId,
+    NixosGenerationSpec,
+    ResourcePhase,
     ResourceRef,
 };
 

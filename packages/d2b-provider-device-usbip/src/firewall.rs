@@ -1,6 +1,9 @@
 //! Opaque USBIP firewall and relay effect boundary.
 
-use d2b_contracts::v3::{ResourceGeneration, ResourceUid};
+use d2b_contracts_resource::v3::{
+    ResourceGeneration,
+    ResourceUid,
+};
 
 /// Closed direction of one ownership-scoped firewall projection mutation.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

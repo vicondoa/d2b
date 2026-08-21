@@ -1,4 +1,4 @@
-use d2b_contracts::v3::ResourceName;
+use d2b_contracts_resource::v3::ResourceName;
 use d2b_provider_network_local::ifname::{
     IfName, IfNameError, IfNameMapping, NetworkIfRole, derive_ifname, detect_collisions,
 };

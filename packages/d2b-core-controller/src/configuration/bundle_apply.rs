@@ -7,9 +7,14 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use d2b_contracts::{
-    BundleMetadata, BundleResource as InputBundleResource, ZoneBundle,
-    v3::{ConfigurationGeneration, Timestamp},
+use d2b_contracts_zone_session::v3::{
+    BundleMetadata,
+    BundleResource as InputBundleResource,
+    ZoneBundle,
+};
+use d2b_contracts_resource::v3::{
+    ConfigurationGeneration,
+    Timestamp,
 };
 
 use super::{
@@ -200,7 +205,7 @@ pub const fn removed_resource_disposition(
 pub struct DesiredBundleResource {
     key: ResourceKey,
     metadata: BundleMetadata,
-    spec: d2b_contracts::v3::CanonicalJsonObject,
+    spec: d2b_contracts_resource::v3::CanonicalJsonObject,
 }
 
 impl DesiredBundleResource {
@@ -215,7 +220,7 @@ impl DesiredBundleResource {
     }
 
     /// Borrow the exact desired-state object.
-    pub const fn spec(&self) -> &d2b_contracts::v3::CanonicalJsonObject {
+    pub const fn spec(&self) -> &d2b_contracts_resource::v3::CanonicalJsonObject {
         &self.spec
     }
 }
@@ -280,7 +285,7 @@ pub enum BundleApplyEffect {
     /// Cancel an outstanding Delete during rollback.
     CancelDelete(ResourceKey),
     /// Prune one prior bundle selected by the retention policy.
-    PrunePriorBundle(d2b_contracts::v3::ResourceBundleGenerationId),
+    PrunePriorBundle(d2b_contracts_resource::v3::ResourceBundleGenerationId),
     /// Append one closed configuration audit event.
     AppendAudit(ConfigurationAuditKind),
     /// Append one name-conflict audit without seizing the existing resource.
@@ -612,11 +617,18 @@ fn persist_effect(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use d2b_contracts::v3::{
-        CanonicalJsonObject, ResourceBundleGenerationId, ResourceName, ResourceTypeName,
-        SchemaFingerprint, ZoneId,
-    };
-    use d2b_contracts::{BundleMetadata, BundleResource as InputBundleResource};
+    use d2b_contracts_zone_session::v3::{
+    BundleMetadata,
+    BundleResource as InputBundleResource,
+};
+    use d2b_contracts_resource::v3::{
+    CanonicalJsonObject,
+    ResourceBundleGenerationId,
+    ResourceName,
+    ResourceTypeName,
+    SchemaFingerprint,
+    ZoneId,
+};
 
     fn digest(byte: char) -> SchemaFingerprint {
         SchemaFingerprint::parse(format!("sha256:{}", byte.to_string().repeat(64))).unwrap()

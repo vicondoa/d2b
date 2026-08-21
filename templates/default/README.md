@@ -33,7 +33,7 @@ eval. Treat the assertion-passing scaffold as a starting point that
 still requires a manual review of TODOs 5-7 before activation.
 
 Why no eval-gate for the CIDR TODOs? The framework's per-env CIDR
-validator in `nixos-modules/network.nix` does pure-Nix IPv4 prefix
+validator in `packages/d2b-provider-network-local/nix/network.nix` does pure-Nix IPv4 prefix
 arithmetic; non-numeric sentinel strings (`"TODO/REPLACE/CIDR"`)
 would crash eval before any TODO assertion could fire with an
 actionable message. Sentinels that pass format validation (RFC 5737
@@ -104,7 +104,7 @@ d2b guest stop corp-vm --apply
 ```
 
 `sys-work-net` (and every per-env net VM) is `autostart = true` by
-construction in `nixos-modules/network.nix` - it has to come up
+construction in `packages/d2b-provider-network-local/nix/network.nix` - it has to come up
 before any workload VM can use the LAN. Workload VMs are NOT
 autostarted unless you flip `d2b.vms.<vm>.autostart = true`.
 

@@ -183,15 +183,15 @@ pub fn set_bridge_port_flags<B: NetlinkBackend>(
 
 #[derive(Debug)]
 pub struct LiveCreateTapOutcome {
-    pub bridge_ifname: Option<d2b_core::host::IfName>,
-    pub tap_ifname: d2b_core::host::IfName,
+    pub bridge_ifname: Option<d2b_contracts_resource::v3::IfName>,
+    pub tap_ifname: d2b_contracts_resource::v3::IfName,
     pub fd: Option<OwnedFd>,
 }
 
 pub fn live_create_tap_fd(
     _exec: &SystemLiveExec,
     resolver: &BundleResolver,
-    req: &d2b_contracts::broker_wire::CreateTapFdRequest,
+    req: &d2b_contracts_broker::broker_wire::CreateTapFdRequest,
     _audit_log: &crate::audit::AuditLog,
 ) -> Result<LiveCreateTapOutcome, super::OpError> {
     let intent = resolver
@@ -230,7 +230,7 @@ pub fn live_create_tap_fd(
 pub fn live_create_persistent_tap(
     _exec: &SystemLiveExec,
     resolver: &BundleResolver,
-    req: &d2b_contracts::broker_wire::CreatePersistentTapRequest,
+    req: &d2b_contracts_broker::broker_wire::CreatePersistentTapRequest,
     _audit_log: &crate::audit::AuditLog,
 ) -> Result<LiveCreateTapOutcome, super::OpError> {
     let intent = resolver
@@ -511,8 +511,8 @@ fn validate_existing_macvtap_json(
 }
 
 fn attach_tap_to_bridge(
-    tap_ifname: &d2b_core::host::IfName,
-    bridge_ifname: &d2b_core::host::IfName,
+    tap_ifname: &d2b_contracts_resource::v3::IfName,
+    bridge_ifname: &d2b_contracts_resource::v3::IfName,
 ) -> Result<(), super::OpError> {
     let ip = ip_binary_path();
     run_ip_link(
@@ -590,8 +590,9 @@ struct LiveBridgePortTarget {
 pub fn live_set_bridge_port_flags(
     _executor: &dyn ReconcileExecutor,
     resolver: &BundleResolver,
-    req: &d2b_contracts::broker_wire::SetBridgePortFlagsRequest,
-) -> Result<d2b_contracts::broker_wire::BridgePortFlagsResponse, LiveSetBridgePortFlagsError> {
+    req: &d2b_contracts_broker::broker_wire::SetBridgePortFlagsRequest,
+) -> Result<d2b_contracts_broker::broker_wire::BridgePortFlagsResponse, LiveSetBridgePortFlagsError>
+{
     let target = resolve_live_bridge_port_target(resolver, req)?;
     let ip_binary = ip_binary_path();
     live_set_bridge_port_flags_with_ops(
@@ -605,7 +606,7 @@ fn live_set_bridge_port_flags_with_ops<F, G>(
     target: &LiveBridgePortTarget,
     mut apply: F,
     mut readback: G,
-) -> Result<d2b_contracts::broker_wire::BridgePortFlagsResponse, LiveSetBridgePortFlagsError>
+) -> Result<d2b_contracts_broker::broker_wire::BridgePortFlagsResponse, LiveSetBridgePortFlagsError>
 where
     F: FnMut(&str, BridgePortFlagSet) -> Result<(), ReconcileExecError>,
     G: FnMut(&str) -> Result<BridgePortFlagSet, ReconcileExecError>,
@@ -625,13 +626,13 @@ where
             observed: bool_to_ip_value(first.actual).to_owned(),
         }
     })?;
-    Ok(d2b_contracts::broker_wire::BridgePortFlagsResponse {
-        bridge: d2b_core::host::IfName::new(&target.bridge).map_err(|err| {
+    Ok(d2b_contracts_broker::broker_wire::BridgePortFlagsResponse {
+        bridge: d2b_contracts_resource::v3::IfName::new(&target.bridge).map_err(|err| {
             LiveSetBridgePortFlagsError::Resolve(format!("resolved bridge ifname invalid: {err}"))
         })?,
         isolated: desired.isolated,
         neigh_suppress: desired.neigh_suppress,
-        port: d2b_core::host::IfName::new(&target.port).map_err(|err| {
+        port: d2b_contracts_resource::v3::IfName::new(&target.port).map_err(|err| {
             LiveSetBridgePortFlagsError::Resolve(format!("resolved port ifname invalid: {err}"))
         })?,
     })
@@ -639,7 +640,7 @@ where
 
 fn resolve_live_bridge_port_target(
     resolver: &BundleResolver,
-    req: &d2b_contracts::broker_wire::SetBridgePortFlagsRequest,
+    req: &d2b_contracts_broker::broker_wire::SetBridgePortFlagsRequest,
 ) -> Result<LiveBridgePortTarget, LiveSetBridgePortFlagsError> {
     let vm_name = req.vm_id.as_str();
     let manifest_vm =
@@ -968,11 +969,14 @@ pub fn fake_backend() -> FakeBackend {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use d2b_contracts_resource::v3::{
+    IfName as BundleIfName,
+};
     use d2b_core::bundle::{Bundle, BundleGeneration};
     use d2b_core::host::{
-        BridgePortFlags as HostBridgePortFlags, HostJson as BundleHostJson, IfName as BundleIfName,
-        IfNameMapping, LanPolicy, NetEnv, NftablesModel, SitePolicy, TapRole, UsbipBusidLock,
-        UsbipLockOwner, UsbipLockScope,
+        BridgePortFlags as HostBridgePortFlags, HostJson as BundleHostJson, IfNameMapping,
+        LanPolicy, NetEnv, NftablesModel, SitePolicy, TapRole, UsbipBusidLock, UsbipLockOwner,
+        UsbipLockScope,
     };
     use d2b_core::manifest_v04::ManifestV04;
     use d2b_core::processes::ProcessesJson;
@@ -1356,7 +1360,7 @@ mod tests {
     #[test]
     fn live_set_bridge_port_flags_uses_netlink_apply_and_readback() {
         let resolver = live_bridge_flag_resolver();
-        let req = d2b_contracts::broker_wire::SetBridgePortFlagsRequest {
+        let req = d2b_contracts_broker::broker_wire::SetBridgePortFlagsRequest {
             vm_id: d2b_contracts::types::VmId::new("corp-vm"),
             role_id: d2b_contracts::types::RoleId::new("workload-lan"),
             tracing_span_id: None,
@@ -1395,7 +1399,7 @@ mod tests {
     #[test]
     fn live_set_bridge_port_flags_fails_closed_on_readback_drift() {
         let resolver = live_bridge_flag_resolver();
-        let req = d2b_contracts::broker_wire::SetBridgePortFlagsRequest {
+        let req = d2b_contracts_broker::broker_wire::SetBridgePortFlagsRequest {
             vm_id: d2b_contracts::types::VmId::new("corp-vm"),
             role_id: d2b_contracts::types::RoleId::new("workload-lan"),
             tracing_span_id: None,

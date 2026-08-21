@@ -5,11 +5,17 @@
 //! provider-specific Service or Binding type, choose a physical backing type,
 //! or alter the projection protocol independently of Core.
 
-use d2b_contracts::v3::{
-    ExtensionSchemaRegistration, ProjectionFactory, ProviderContractError, ResourceApiBinding,
-    ResourceSpec, SemanticContractError, SemanticFamily, SemanticTypeContract,
+use d2b_contracts_provider::v3::{
+    ExtensionSchemaRegistration,
+    ProjectionFactory,
+    ProviderContractError,
+    ResourceApiBinding,
+    SemanticContractError,
+    SemanticFamily,
+    SemanticTypeContract,
     StandardCapabilityMatrix,
 };
+use d2b_contracts_resource::v3::ResourceSpec;
 use serde::{Deserialize, Deserializer, Serialize};
 
 /// The provider-neutral security-key Service ResourceType.
@@ -20,7 +26,7 @@ pub const SECURITY_KEY_BINDING_RESOURCE_TYPE: &str = "security-key.d2bus.org.Sec
 
 /// The projection protocol version used by the catalog-derived factory.
 pub const SECURITY_KEY_PROJECTION_PROTOCOL_VERSION: &str =
-    d2b_contracts::v3::SEMANTIC_PROJECTION_PROTOCOL_VERSION;
+    d2b_contracts_provider::v3::SEMANTIC_PROJECTION_PROTOCOL_VERSION;
 
 /// The semantic, catalog-derived portion of the signed Provider descriptor.
 ///
@@ -78,12 +84,14 @@ impl SecurityKeySemanticDescriptor {
     }
 
     /// Return the catalog's projection schema fingerprint.
-    pub const fn projection_schema_fingerprint(&self) -> &d2b_contracts::v3::SchemaFingerprint {
+    pub const fn projection_schema_fingerprint(
+        &self,
+    ) -> &d2b_contracts_resource::v3::SchemaFingerprint {
         self.projection_factory.projection_schema_fingerprint()
     }
 
     /// Return the catalog's semantic factory fingerprint.
-    pub const fn factory_fingerprint(&self) -> &d2b_contracts::v3::SchemaFingerprint {
+    pub const fn factory_fingerprint(&self) -> &d2b_contracts_resource::v3::SchemaFingerprint {
         self.projection_factory.factory_fingerprint()
     }
 
@@ -168,7 +176,7 @@ pub fn security_key_projection_factory() -> Result<ProjectionFactory, ProviderCo
 
 /// Borrow the catalog-derived security-key projection schema fingerprint.
 pub fn security_key_projection_schema_fingerprint()
--> Result<&'static d2b_contracts::v3::SchemaFingerprint, ProviderContractError> {
+-> Result<&'static d2b_contracts_resource::v3::SchemaFingerprint, ProviderContractError> {
     Ok(SemanticFamily::SecurityKey
         .contract()
         .projection()
@@ -177,7 +185,7 @@ pub fn security_key_projection_schema_fingerprint()
 
 /// Borrow the catalog-derived security-key factory fingerprint.
 pub fn security_key_factory_fingerprint()
--> Result<&'static d2b_contracts::v3::SchemaFingerprint, ProviderContractError> {
+-> Result<&'static d2b_contracts_resource::v3::SchemaFingerprint, ProviderContractError> {
     Ok(SemanticFamily::SecurityKey
         .contract()
         .projection()

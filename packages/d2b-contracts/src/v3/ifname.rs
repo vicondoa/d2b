@@ -8,11 +8,11 @@
 use schemars::{
     JsonSchema,
     r#gen::SchemaGenerator,
-    schema::{InstanceType, Schema, SchemaObject, SingleOrVec},
+    schema::{InstanceType, Metadata, Schema, SchemaObject, SingleOrVec},
 };
 use serde::{Deserialize, Deserializer, Serialize};
 
-use super::ResourceName;
+use crate::identity::ResourceName;
 
 /// Maximum visible bytes in a Linux interface name.
 pub const MAX_IFNAME_BYTES: usize = 15;
@@ -36,6 +36,11 @@ const FNV_PRIME: u64 = 0x0000_0100_0000_01b3;
 pub struct IfName(String);
 
 impl IfName {
+    /// Creates a validated interface name.
+    pub fn new(value: impl Into<String>) -> Result<Self, IfNameError> {
+        Self::parse(value)
+    }
+
     /// Validate a nonempty interface name of at most 15 ASCII bytes.
     pub fn parse(value: impl Into<String>) -> Result<Self, IfNameError> {
         let value = value.into();
@@ -94,6 +99,12 @@ impl JsonSchema for IfName {
         schema.string().min_length = Some(1);
         schema.string().max_length = Some(MAX_IFNAME_BYTES as u32);
         schema.string().pattern = Some("^[A-Za-z0-9_-]+$".to_owned());
+        schema.metadata = Some(Box::new(Metadata {
+            description: Some(
+                "Linux interface name: <=15 ASCII bytes matching [A-Za-z0-9_-]+".to_owned(),
+            ),
+            ..Default::default()
+        }));
         Schema::Object(schema)
     }
 }

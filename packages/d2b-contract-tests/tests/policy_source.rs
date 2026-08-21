@@ -428,7 +428,7 @@ fn host_prep_dag_d2b_host_reexport() {
 
 #[test]
 fn host_prep_dag_broker_wire_scaffolds() {
-    let wire_rel = "packages/d2b-contracts/src/broker_wire.rs";
+    let wire_rel = "packages/d2b-contracts-broker/src/broker_wire.rs";
     let runtime_rel = "packages/d2b-priv-broker/src/runtime.rs";
     assert!(
         repo_path_exists(wire_rel),
@@ -492,14 +492,17 @@ fn host_prep_dag_broker_wire_scaffolds() {
 
 #[test]
 fn host_prep_dag_d2bd_wiring() {
-    let lib = read_repo_file("packages/d2bd/src/lib.rs");
+    let lib = read_repo_file("packages/d2bd/src/composition.rs");
     for marker in [
         "build_host_prep_dag",
         "log_host_prep_dag",
         "execute_host_prep_dag",
         "D2B_HOST_PREP_DAG_EXECUTE",
     ] {
-        assert!(lib.contains(marker), "d2bd/src/lib.rs missing '{marker}'");
+        assert!(
+            lib.contains(marker),
+            "d2bd/src/composition.rs missing '{marker}'"
+        );
     }
 }
 

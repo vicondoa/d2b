@@ -15,10 +15,15 @@ use std::{
     time::{Duration, Instant},
 };
 
-use d2b_contracts::v3::{
-    CanonicalJsonObject, ResourceErrorKind, ResourceRef, ResourceTypeName, RetryClass, ZoneId,
-    identity::STANDARD_RESOURCE_TYPES,
+use d2b_contracts_resource::v3::{
+    CanonicalJsonObject,
+    ResourceErrorKind,
+    ResourceRef,
+    ResourceTypeName,
+    RetryClass,
+    ZoneId,
 };
+use d2b_contracts_resource::v3::identity::STANDARD_RESOURCE_TYPES;
 use d2b_resource_client::{
     CallOptions, CancellationToken, ClientError, ConnectedSession, ConnectedZoneSession,
     MetadataInput, NamedStreamTransport, ProcessAttachClient, ProcessAttachOpenRequest,
@@ -97,7 +102,7 @@ pub(crate) trait SessionClient: Send + Sync {
 #[derive(Clone)]
 struct CanonicalZoneBackend {
     zone_name: String,
-    zone_path: d2b_contracts::v3::zone_routing::ZonePath,
+    zone_path: d2b_contracts_zone_session::v3::zone_routing::ZonePath,
     socket_path: PathBuf,
 }
 
@@ -132,7 +137,7 @@ pub(crate) struct ZoneContext {
     zone_name: String,
     explicit_zone: bool,
     socket_path: PathBuf,
-    zone_path: d2b_contracts::v3::zone_routing::ZonePath,
+    zone_path: d2b_contracts_zone_session::v3::zone_routing::ZonePath,
     backend: ContextBackend,
 }
 
@@ -460,7 +465,7 @@ impl ZoneContext {
         let mut host = crate::exec_client::RealHostIo;
         let mut signals = crate::exec_client::install_signals()
             .map_err(|_| CliFailure::new(69, "shell signal setup failed"))?;
-        let mut input = [0_u8; d2b_contracts::public_wire::EXEC_MAX_CHUNK_BYTES as usize];
+        let mut input = [0_u8; d2b_contracts_control::public_wire::EXEC_MAX_CHUNK_BYTES as usize];
         loop {
             for signal in crate::terminal_client::TerminalSignalSource::drain(&mut signals) {
                 match signal {
@@ -1074,7 +1079,7 @@ impl CanonicalZoneBackend {
 #[derive(Clone)]
 struct CliZoneConnector {
     zone_name: String,
-    zone_path: d2b_contracts::v3::zone_routing::ZonePath,
+    zone_path: d2b_contracts_zone_session::v3::zone_routing::ZonePath,
     socket_path: PathBuf,
     service: ZoneServiceKind,
     operation: String,
@@ -1099,7 +1104,7 @@ impl std::fmt::Debug for CliZoneConnector {
 impl CliZoneConnector {
     fn new(
         zone_name: String,
-        zone_path: d2b_contracts::v3::zone_routing::ZonePath,
+        zone_path: d2b_contracts_zone_session::v3::zone_routing::ZonePath,
         socket_path: PathBuf,
         service: ZoneServiceKind,
         operation: String,
@@ -1288,7 +1293,7 @@ impl NamedStreamTransport for CliAttachStream {
             .stream_round_trip(json!({
                 "type": "namedStreamReceive",
                 "offset": self.stdout_offset.load(Ordering::Acquire),
-                "maxLen": d2b_contracts::public_wire::EXEC_MAX_CHUNK_BYTES,
+                "maxLen": d2b_contracts_control::public_wire::EXEC_MAX_CHUNK_BYTES,
             }))
             .and_then(|value| {
                 let data = value
@@ -1589,14 +1594,19 @@ fn decode_cli_response(response: &[u8]) -> Result<CanonicalJsonObject, ClientErr
     CanonicalJsonObject::parse(response).map_err(|_| ClientError::ContractViolation)
 }
 
-fn zone_path(zone_name: &str) -> Result<d2b_contracts::v3::zone_routing::ZonePath, ()> {
-    let label = d2b_contracts::v3::zone_routing::ZoneLabelId::parse(zone_name.to_owned())
-        .map_err(|_| ())?;
-    d2b_contracts::v3::zone_routing::ZonePath::new(vec![label]).map_err(|_| ())
+fn zone_path(
+    zone_name: &str,
+) -> Result<d2b_contracts_zone_session::v3::zone_routing::ZonePath, ()> {
+    let label =
+        d2b_contracts_zone_session::v3::zone_routing::ZoneLabelId::parse(zone_name.to_owned())
+            .map_err(|_| ())?;
+    d2b_contracts_zone_session::v3::zone_routing::ZonePath::new(vec![label]).map_err(|_| ())
 }
 
-fn owner_for_zone(zone_path: &d2b_contracts::v3::zone_routing::ZonePath) -> ServiceOwner {
-    if zone_path == &d2b_contracts::v3::zone_routing::ZonePath::local_root() {
+fn owner_for_zone(
+    zone_path: &d2b_contracts_zone_session::v3::zone_routing::ZonePath,
+) -> ServiceOwner {
+    if zone_path == &d2b_contracts_zone_session::v3::zone_routing::ZonePath::local_root() {
         ServiceOwner::ZoneLocal(zone_path.clone())
     } else {
         ServiceOwner::Zone(zone_path.clone())
@@ -2515,7 +2525,7 @@ mod tests {
 
     #[test]
     fn host_cutover_preview_and_apply_decode_as_canonical_resource_responses() {
-        use d2b_contracts::public_wire::{HostCutoverOperation, HostCutoverResponse};
+        use d2b_contracts_control::public_wire::{HostCutoverOperation, HostCutoverResponse};
 
         for operation in [HostCutoverOperation::Preview, HostCutoverOperation::Apply] {
             let response = serde_json::to_vec(&HostCutoverResponse {
@@ -2579,7 +2589,7 @@ mod tests {
                     .expect("canonical response");
             assert_eq!(
                 decoded.get("operation"),
-                Some(&d2b_contracts::v3::CanonicalJsonValue::String(
+                Some(&d2b_contracts_resource::v3::CanonicalJsonValue::String(
                     serde_json::to_value(operation)
                         .expect("operation")
                         .as_str()

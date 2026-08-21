@@ -178,6 +178,7 @@
       "type": "string"
     },
     "IfName": {
+      "description": "Linux interface name: <=15 ASCII bytes matching [A-Za-z0-9_-]+",
       "maxLength": 15,
       "minLength": 1,
       "pattern": "^[A-Za-z0-9_-]+$",

@@ -275,7 +275,7 @@ fn legacy_unit_denylist_classify_semantics() {
     // Pure comment → skip.
     assert_eq!(
         classify(
-            "nixos-modules/network.nix",
+            "packages/d2b-provider-network-local/nix/network.nix",
             0,
             &["    # d2b-net-route-preflight.service was deleted".to_string()]
         ),
@@ -323,7 +323,7 @@ fn legacy_unit_denylist_classify_semantics() {
     // options-volumes.nix: a typed User ResourceRef is skipped...
     assert_eq!(
         classify(
-            "nixos-modules/options-volumes.nix",
+            "packages/d2b-provider-volume-local/nix/options-volumes.nix",
             0,
             &[r#"      owner = "User/d2b-${guestName}-swtpm";"#.to_string()]
         ),
@@ -333,7 +333,7 @@ fn legacy_unit_denylist_classify_semantics() {
     // ...but a unit declaration in the same file is still LIVE.
     assert_eq!(
         classify(
-            "nixos-modules/options-volumes.nix",
+            "packages/d2b-provider-volume-local/nix/options-volumes.nix",
             0,
             &[r#"    systemd.services."d2b-work-swtpm" = {};"#.to_string()]
         ),
@@ -365,7 +365,7 @@ fn legacy_unit_denylist_classify_semantics() {
     // Content-based carve-out in an otherwise non-exempt module → skip.
     assert_eq!(
         classify(
-            "nixos-modules/network.nix",
+            "packages/d2b-provider-network-local/nix/network.nix",
             0,
             &[r#"    videoService = "d2b-${m.name}-video";"#.to_string()]
         ),
@@ -376,7 +376,7 @@ fn legacy_unit_denylist_classify_semantics() {
     // Genuine live reference in a non-exempt module → LIVE.
     assert_eq!(
         classify(
-            "nixos-modules/network.nix",
+            "packages/d2b-provider-network-local/nix/network.nix",
             0,
             &[r#"    systemd.services."d2b-net-route-preflight" = {};"#.to_string()]
         ),

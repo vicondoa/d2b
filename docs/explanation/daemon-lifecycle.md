@@ -35,7 +35,9 @@ Roles, from
   headless shape uses four shares: `ro-store`, `d2b-meta`,
   `d2b-hkeys`, and `d2b-ssh-host`.
 - `cloud-hypervisor-runner` - the CH binary launched against the
-  argv emitted by [`d2b_host::ch_argv`](../../packages/d2b-host/src/ch_argv.rs).
+  argv emitted by the
+  [`runtime-cloud-hypervisor`](../../packages/d2b-provider-runtime-cloud-hypervisor/src/vmm_argv.rs)
+  Provider.
 - `guest-control-health` - daemon-side authenticated guest-control
   Health probe (full Hello + token challenge-response + Health over the
   guest-control vsock). It is the framework readiness gate on
@@ -62,7 +64,7 @@ Optional roles wired by per-VM features:
 The supervisor uses Kahn's algorithm to topo-sort the DAG, then
 walks the order issuing one `SpawnRunner` broker call per node.
 The relevant pure-Rust surface lives in
-[`d2bd::supervisor::dag`](../../packages/d2bd/src/supervisor/dag.rs):
+[`d2bd_runtime::supervisor::dag`](../../packages/d2bd-runtime/src/supervisor/dag.rs):
 
 - `topo_sort(VmProcessDag)` - deterministic source-pop ordering;
   cycles surface as `DagError::Cycle { residual_nodes }`. Self-loops
@@ -111,7 +113,7 @@ Supported predicate kinds (per
 
 ## Per-node budget
 
-Each node has a [`NodeBudget`](../../packages/d2bd/src/supervisor/dag.rs):
+Each node has a [`NodeBudget`](../../packages/d2bd-runtime/src/supervisor/dag.rs):
 
 ```rust
 NodeBudget {
@@ -181,7 +183,7 @@ available while live VMMs are being stopped.
 ## State persistence + restart reconciliation
 
 On every supervisor transition the daemon writes a
-[`RunnerSnapshotRecord`](../../packages/d2bd/src/supervisor/state.rs)
+[`RunnerSnapshotRecord`](../../packages/d2bd-runtime/src/supervisor/state.rs)
 to `/var/lib/d2b/daemon-state/<vm>/runtime.<role_id>.json`:
 
 ```jsonc
@@ -243,7 +245,7 @@ VM's `current` symlink diverges from its `booted` symlink). This
 same idea also applies to the daemon binary itself.
 
 On startup the daemon writes
-[`DaemonVersionFile`](../../packages/d2bd/src/daemon_version.rs)
+[`DaemonVersionFile`](../../packages/d2bd-runtime/src/daemon_version.rs)
 to `/run/d2b/version`:
 
 ```jsonc
@@ -293,7 +295,7 @@ Each virtiofsd runner the broker spawns is registered in two places:
   observability.
 
 On `ChildExited` RPC, the daemon invokes
-[`supervisor::pidfd::handle_runner_exit`](../../packages/d2bd/src/supervisor/pidfd.rs)
+[`supervisor::pidfd::handle_runner_exit`](../../packages/d2bd-runtime/src/supervisor/pidfd.rs)
 with the `(exit_code, signal)` from the broker's reap, NOT from a
 local `waitid` (the daemon is not the parent and cannot reap;
 `waitid(P_PIDFD)` would return `ECHILD`).
@@ -339,14 +341,14 @@ per-share systemd template/watchdog combination
   runner-shape preflight + CH net-handoff probe.
 - [Daemon API reference](../reference/daemon-api.md) - wire
   envelope shapes and typed-error catalog.
-- [`d2b_host::ch_argv`](../../packages/d2b-host/src/ch_argv.rs)
-  / [`swtpm_argv`](../../packages/d2b-host/src/swtpm_argv.rs) -
+- [`runtime-cloud-hypervisor::vmm_argv`](../../packages/d2b-provider-runtime-cloud-hypervisor/src/vmm_argv.rs)
+  / [`swtpm_argv`](../../packages/d2b-provider-device-tpm/src/swtpm_argv.rs) -
   pure argv generators feeding the broker `SpawnRunner` op.
-  virtiofsd argv is emitted from `nixos-modules/processes-json.nix`
-  because each share is already resolved during the VM eval.
-- [`d2bd::supervisor::dag`](../../packages/d2bd/src/supervisor/dag.rs)
-  / [`state`](../../packages/d2bd/src/supervisor/state.rs)
-  / [`pidfd`](../../packages/d2bd/src/supervisor/pidfd.rs) - the
+- [`virtiofsd_argv`](../../packages/d2b-provider-volume-virtiofs/src/virtiofsd_argv.rs)
+  is owned by the volume-virtiofs Provider.
+- [`d2bd_runtime::supervisor::dag`](../../packages/d2bd-runtime/src/supervisor/dag.rs)
+  / [`state`](../../packages/d2bd-runtime/src/supervisor/state.rs)
+  / [`pidfd`](../../packages/d2bd-runtime/src/supervisor/pidfd.rs) - the
   supervisor surface itself.
-- [`d2bd::daemon_version`](../../packages/d2bd/src/daemon_version.rs) -
+- [`d2bd_runtime::daemon_version`](../../packages/d2bd-runtime/src/daemon_version.rs) -
   `[pending restart]` machinery.

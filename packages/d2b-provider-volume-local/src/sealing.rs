@@ -6,8 +6,12 @@
 
 use std::fmt;
 
-use d2b_contracts::v3::credential::CredentialLeaseState;
-use d2b_contracts::v3::{SealingStatus, StateEnvelope, VolumeStateError};
+use d2b_contracts_provider::v3::credential::CredentialLeaseState;
+use d2b_contracts_resource::v3::{
+    SealingStatus,
+    StateEnvelope,
+    VolumeStateError,
+};
 use serde::Serialize;
 
 use crate::audit::VolumeAuditKind;

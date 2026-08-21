@@ -1,6 +1,6 @@
 //! Semantic user-namespace mapping for minijail-class processes.
 
-use d2b_contracts::v3::process::MappingClass;
+use d2b_contracts_resource::v3::process::MappingClass;
 
 use d2b_process_conformance::ProcessConformanceError;
 

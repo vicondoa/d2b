@@ -20,12 +20,18 @@ use std::task::{Context, Poll, Wake, Waker};
 use std::thread::{self, Thread};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
-use d2b_contracts::v3::credential::{
+use d2b_contracts_provider::v3::{
+    credential::{
     CredentialAuthorization, CredentialLeaseHandle, CredentialLeaseState, CredentialMetadata,
     CredentialOutcomeCode, CredentialServiceError, CredentialServiceErrorCode,
     CredentialSourceVersion, PlacementBinding,
+},
 };
-use d2b_contracts::v3::{ResourceGeneration, ResourceRef, ZoneId};
+use d2b_contracts_resource::v3::{
+    ResourceGeneration,
+    ResourceRef,
+    ZoneId,
+};
 
 pub use controller::{
     SecretServiceController, SecretServiceControllerHealth, SecretServiceStatusProjection,
@@ -1083,7 +1089,7 @@ impl SecretServiceCredentialProvider {
     pub(crate) fn remember_ambiguous_refresh(
         &self,
         session_key: SessionKey,
-        request: &d2b_contracts::v3::credential::CredentialRequest,
+        request: &d2b_contracts_provider::v3::credential::CredentialRequest,
         lease: SecretServiceLeaseRef,
     ) -> Result<(), CredentialServiceError> {
         let credential = request.credential_ref().to_canonical_string();
@@ -1309,7 +1315,7 @@ impl fmt::Debug for SecretServiceCredentialProvider {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use d2b_contracts::v3::credential::CredentialMethod;
+    use d2b_contracts_provider::v3::credential::CredentialMethod;
     use std::sync::Arc;
     use std::thread;
 

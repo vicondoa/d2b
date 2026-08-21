@@ -406,7 +406,7 @@ mod tests {
 
     fn entry(ifn_str: &str) -> NmUnmanagedEntry {
         NmUnmanagedEntry {
-            if_name: d2b_core::host::IfName::new(ifn_str).unwrap(),
+            if_name: d2b_contracts_resource::v3::IfName::new(ifn_str).unwrap(),
             marker_id: format!("marker-{ifn_str}"),
         }
     }

@@ -43,13 +43,13 @@
 //! | `OwnershipMatrixCheck`     | [`BrokerRequest::OwnershipMatrixCheck`] *(stub)*     |
 //! | `SshHostKeyPreflight`      | [`BrokerRequest::SshHostKeyPreflight`] *(stub)*      |
 //!
-//! [`BrokerRequest::CreateTapFd`]: d2b_contracts::broker_wire::BrokerRequest::CreateTapFd
-//! [`BrokerRequest::OpenVhostNet`]: d2b_contracts::broker_wire::BrokerRequest::OpenVhostNet
-//! [`BrokerRequest::ApplyNftables`]: d2b_contracts::broker_wire::BrokerRequest::ApplyNftables
-//! [`BrokerRequest::SeedDnsmasqLease`]: d2b_contracts::broker_wire::BrokerRequest::SeedDnsmasqLease
-//! [`BrokerRequest::BindMountFromHardlinkFarm`]: d2b_contracts::broker_wire::BrokerRequest::BindMountFromHardlinkFarm
-//! [`BrokerRequest::OwnershipMatrixCheck`]: d2b_contracts::broker_wire::BrokerRequest::OwnershipMatrixCheck
-//! [`BrokerRequest::SshHostKeyPreflight`]: d2b_contracts::broker_wire::BrokerRequest::SshHostKeyPreflight
+//! [`BrokerRequest::CreateTapFd`]: d2b_contracts_broker::broker_wire::BrokerRequest::CreateTapFd
+//! [`BrokerRequest::OpenVhostNet`]: d2b_contracts_broker::broker_wire::BrokerRequest::OpenVhostNet
+//! [`BrokerRequest::ApplyNftables`]: d2b_contracts_broker::broker_wire::BrokerRequest::ApplyNftables
+//! [`BrokerRequest::SeedDnsmasqLease`]: d2b_contracts_broker::broker_wire::BrokerRequest::SeedDnsmasqLease
+//! [`BrokerRequest::BindMountFromHardlinkFarm`]: d2b_contracts_broker::broker_wire::BrokerRequest::BindMountFromHardlinkFarm
+//! [`BrokerRequest::OwnershipMatrixCheck`]: d2b_contracts_broker::broker_wire::BrokerRequest::OwnershipMatrixCheck
+//! [`BrokerRequest::SshHostKeyPreflight`]: d2b_contracts_broker::broker_wire::BrokerRequest::SshHostKeyPreflight
 //!
 //! Topological order (minimal fixture VM)
 //! --------------------------------------

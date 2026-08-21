@@ -87,8 +87,6 @@ changed surface needs it. It also has a fast path for Rust-heavy gates:
   per gate;
 - independent Rust, schema, and example gates run behind a small semaphore
   controlled by `D2B_STATIC_JOBS` (default `4`);
-- `bash tests/tools/static-timing.sh` writes a per-gate wall-clock report to
-  `$ROOT/.static-timing.log`;
 - to profile one gate in isolation, run `time bash tests/<gate>.sh`.
 
 #### Schema and shell-artifact drift gates

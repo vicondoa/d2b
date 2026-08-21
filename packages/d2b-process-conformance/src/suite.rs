@@ -9,8 +9,8 @@
 
 use std::collections::BTreeSet;
 
-use d2b_contracts::v3::ResourceRef;
-use d2b_contracts::v3::execution_policy::ExecutionDomain;
+use d2b_contracts_resource::v3::ResourceRef;
+use d2b_contracts_resource::v3::execution_policy::ExecutionDomain;
 
 use crate::error::ProcessConformanceError;
 use crate::identity::IdentityBinding;

@@ -1,7 +1,7 @@
 use std::collections::BTreeSet;
 use std::fmt;
 
-use d2b_contracts::{
+use d2b_contracts_control::{
     guest_auth::{self, GuestAuthTranscript},
     guest_proto as pb,
     guest_wire::{GUEST_CONTROL_PROTOCOL_VERSION, HARD_MAX_CHUNK_BYTES, TTRPC_FRAME_CAP_BYTES},
@@ -12,7 +12,7 @@ use sha2::Sha256;
 
 use crate::{AuthError, TokenSource};
 
-pub use d2b_contracts::guest_auth::{
+pub use d2b_contracts_control::guest_auth::{
     AUTH_NONCE_LEN, AUTH_TAG_LEN, AUTH_TRANSCRIPT_VERSION, AuthDirection, AuthPurpose,
     GUEST_CONTROL_AUTH_PORT, ProofRole,
 };

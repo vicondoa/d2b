@@ -1,7 +1,9 @@
 use std::{error::Error, fmt};
 
 use async_trait::async_trait;
-use d2b_contracts::v3::component_session::{Locality, TransportClass};
+use d2b_contracts_zone_session::v3::{
+    component_session::{Locality, TransportClass},
+};
 use tokio::sync::Mutex;
 
 use crate::{Cancellation, OwnedAttachment};

@@ -904,7 +904,7 @@ reconciliation can re-import the device; a host reboot clears the `/run` lock.
 
 Single-busid detach never stops the shared per-env proxy. If the daemon cannot
 prove firewall-withdrawal-before-flow-kill ordering plus an exact VM/proxy
-cleanup tuple, `--apply` fails closed with `usbip-revocation-not-isolated` and
+cleanup tuple, `--apply` fails closed with a revocation-isolation error and
 preserves the session claim for manual drain/recovery. The public error names the
 target busid. The safe next step is to stop the VM so the stream drains, then
 rerun `d2b device usb detach <vm> <busid> --apply`.

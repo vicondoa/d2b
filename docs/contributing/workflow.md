@@ -281,7 +281,7 @@ sessions. Its focused operating detail is
   incremental pairs against a nightly LLVM control, ran 5.8 s against 7.0 s:
   a real 17% but 1.2 s in absolute terms, and it cannot enter the gate at
   all, because `rust-toolchain.toml` pins an exact stable release
-  that the Cargo compatibility checks enforce, so it would mean installing and
+  that the pinned Rust toolchain enforces, so it would mean installing and
   caching a second toolchain in every Rust job. Reopen either only with a
   measurement, and note the trap: the Rust compatibility checks export `RUSTFLAGS`,
   and that environment variable **replaces** `build.rustflags` rather than

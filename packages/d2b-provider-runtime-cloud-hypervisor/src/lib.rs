@@ -20,7 +20,9 @@ pub use controller::{
     CloudHypervisorRecoveryState, SystemCloudHypervisorClock,
 };
 pub use health::{GuestControlHealth, GuestControlHealthError, GuestControlProbe};
-pub use vmm_argv::{ChArgvError, ChArgvInput, ChNetIface, ChVsock, generate_ch_argv};
+pub use vmm_argv::{
+    ChArgvError, ChArgvInput, ChNetIface, ChVsock, exec_arg0, generate_ch_argv,
+};
 
 /// Stable Provider implementation identifier.
 pub const CLOUD_HYPERVISOR_IMPLEMENTATION_ID: &str = "cloud-hypervisor";

@@ -8,11 +8,23 @@ use std::{
 };
 
 use async_trait::async_trait;
-use d2b_contracts::v3::{
-    AuthenticatedSubjectContext, ControllerGeneration, EvidenceClass, Locality,
-    ReconnectGeneration, ResourceGeneration, ResourceRef, ResourceUid, SchemaFingerprint,
-    ServiceName, ZoneId,
+use d2b_contracts_zone_session::v3::{
     component_session::{Remediation, SessionErrorCode},
+};
+use d2b_contracts_resource::v3::{
+    ControllerGeneration,
+    ResourceGeneration,
+    ResourceRef,
+    ResourceUid,
+    SchemaFingerprint,
+    ZoneId,
+};
+use d2b_contracts_resource::v3::identity::{
+    AuthenticatedSubjectContext,
+    EvidenceClass,
+    Locality,
+    ReconnectGeneration,
+    ServiceName,
 };
 use d2b_resource_api::authz::SessionVerb;
 use d2b_session::{AuthenticatedSessionRouteBinding, OperationMember};

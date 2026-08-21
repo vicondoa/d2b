@@ -2,14 +2,20 @@
 
 use std::collections::BTreeSet;
 
-use d2b_contracts::v3::{
-    CanonicalJsonObject, ProviderSpecExtension, ResourceRef, ResourceSpec, SchemaVersion,
+use d2b_contracts_resource::v3::{
+    CanonicalJsonObject,
+    ProviderSpecExtension,
+    ResourceRef,
+    ResourceSpec,
+    SchemaVersion,
 };
 use schemars::JsonSchema;
 use serde::{Deserialize, Deserializer, Serialize};
 
-pub use d2b_contracts::v3::GuestSpec;
-pub use d2b_contracts::v3::execution_policy::{DeviceAttachment, NetworkAttachment};
+pub use d2b_contracts_resource::v3::GuestSpec;
+pub use d2b_contracts_resource::v3::{
+    execution_policy::{DeviceAttachment, NetworkAttachment},
+};
 
 /// Maximum removable media attachments on one Guest.
 pub const MAX_REMOVABLE_VOLUMES: usize = 4;
@@ -318,7 +324,7 @@ pub fn build_guest_resource_spec(
     let settings =
         CanonicalJsonObject::parse(&settings).map_err(|_| GuestResourceSpecError::CanonicalJson)?;
     let provider = ProviderSpecExtension::new(
-        d2b_contracts::v3::ExtensionSchemaId::parse(GUEST_SPEC_SCHEMA_ID)
+        d2b_contracts_resource::v3::ExtensionSchemaId::parse(GUEST_SPEC_SCHEMA_ID)
             .map_err(|_| GuestResourceSpecError::SchemaMismatch)?,
         SchemaVersion::parse("1.0").map_err(|_| GuestResourceSpecError::SchemaMismatch)?,
         settings,

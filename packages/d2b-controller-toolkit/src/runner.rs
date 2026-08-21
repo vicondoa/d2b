@@ -8,8 +8,12 @@ use std::{
     time::{Duration, Instant},
 };
 
-use d2b_contracts::v3::{
-    ConfigurationGeneration, ResourceGeneration, ResourcePhase, ZoneId, ZoneRevision,
+use d2b_contracts_resource::v3::{
+    ConfigurationGeneration,
+    ResourceGeneration,
+    ResourcePhase,
+    ZoneId,
+    ZoneRevision,
 };
 
 use crate::{
@@ -1944,9 +1948,13 @@ mod tests {
         time::Duration,
     };
 
-    use d2b_contracts::v3::{
-        ControllerGeneration, ResourceRef, ResourceTypeName, ResourceUid, ZoneId,
-    };
+    use d2b_contracts_resource::v3::{
+    ControllerGeneration,
+    ResourceRef,
+    ResourceTypeName,
+    ResourceUid,
+    ZoneId,
+};
 
     use super::*;
     use crate::{

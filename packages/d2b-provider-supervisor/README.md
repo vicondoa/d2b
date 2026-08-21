@@ -58,8 +58,7 @@ labels must use only those codes and closed operation names.
 ## Build and test
 
 ```bash
-cargo test -p d2b-provider-supervisor
-cargo clippy -p d2b-provider-supervisor --all-targets
+bazel test //packages/d2b-provider-supervisor:all
 ```
 
 The hermetic suite drives both existing Process Providers through the production

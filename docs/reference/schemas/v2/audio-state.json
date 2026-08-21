@@ -56,10 +56,21 @@
   "definitions": {
     "AudioGrant": {
       "description": "On/off grant for a single audio channel (mic or speaker).",
-      "type": "string",
-      "enum": [
-        "on",
-        "off"
+      "oneOf": [
+        {
+          "description": "Channel is enabled.",
+          "type": "string",
+          "enum": [
+            "on"
+          ]
+        },
+        {
+          "description": "Channel is muted.",
+          "type": "string",
+          "enum": [
+            "off"
+          ]
+        }
       ]
     },
     "LevelPercent": {

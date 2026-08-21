@@ -5,11 +5,17 @@ use std::sync::{Arc, mpsc};
 use std::thread;
 use std::time::Duration;
 
-use d2b_contracts::v3::credential::{
+use d2b_contracts_provider::v3::{
+    credential::{
     CredentialAuthorization, CredentialMethod, CredentialProvider, CredentialRequest,
     CredentialServiceErrorCode, PlacementBinding,
+},
 };
-use d2b_contracts::v3::{ResourceGeneration, ResourceRef, ZoneId};
+use d2b_contracts_resource::v3::{
+    ResourceGeneration,
+    ResourceRef,
+    ZoneId,
+};
 use d2b_provider_credential_secret_service::{
     LockPolicy, Oo7SecretServicePort, SecretServiceConfig, SecretServiceCredentialProvider,
     SecretServiceCredentialProviderFactory, SecretServiceFuture, SecretServiceLeaseGrant,
@@ -252,7 +258,7 @@ fn cardinality_is_enforced_before_a_second_port_call() {
         .call(CredentialMethod::AcquireToken, request("idem-first"))
         .unwrap();
     let other = CredentialRequest::new(
-        d2b_contracts::v3::ResourceRef::parse("Credential/other-keyring").unwrap(),
+        d2b_contracts_resource::v3::ResourceRef::parse("Credential/other-keyring").unwrap(),
         "operation-2",
         "idem-second",
         common::EXPIRY,
@@ -433,14 +439,15 @@ impl Oo7SecretServicePort for DelayedUnlockPort {
         let expiry = request.requested_expiry_unix_ms();
         Box::pin(async move {
             Ok(SecretServiceLeaseGrant {
-                lease_handle: d2b_contracts::v3::credential::CredentialLeaseHandle::parse(
+                lease_handle: d2b_contracts_provider::v3::credential::CredentialLeaseHandle::parse(
                     "secret-service-lease",
                 )
                 .unwrap(),
-                source_version: d2b_contracts::v3::credential::CredentialSourceVersion::parse(
-                    "secret-service-source",
-                )
-                .unwrap(),
+                source_version:
+                    d2b_contracts_provider::v3::credential::CredentialSourceVersion::parse(
+                        "secret-service-source",
+                    )
+                    .unwrap(),
                 rotation_generation: 1,
                 expires_at_unix_ms: expiry,
             })

@@ -1,7 +1,10 @@
 //! Device claim arbitration for USBIP.
 
 use core::fmt;
-use d2b_contracts::v3::{ResourceUid, device::DeviceArbitration};
+use d2b_contracts_resource::v3::{
+    ResourceUid,
+    device::DeviceArbitration,
+};
 
 use crate::busid::PhysicalUsbBackingToken;
 

@@ -49,7 +49,7 @@ PIDs, store paths, and guest identity bytes are absent from public projections.
 ## Build and test
 
 ```text
-cargo test -p d2b-provider-runtime-cloud-hypervisor
+bazel test //packages/d2b-provider-runtime-cloud-hypervisor:all
 ```
 
 Host/KVM acceptance remains a separate manual host-integration lane.

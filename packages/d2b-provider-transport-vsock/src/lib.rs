@@ -12,6 +12,7 @@ mod framing;
 mod limits;
 mod metrics;
 mod relay;
+mod relay_argv;
 mod service;
 mod settings;
 mod state_volume;
@@ -36,6 +37,10 @@ pub use limits::{
 pub use metrics::{TransportMetricLabels, TransportMetricOperation, TransportMetricOutcome};
 pub use relay::{
     NativeGuestRelay, RelayBinding, RelayEffectError, RelayEffectPort, RelayObservation, RelayPhase,
+};
+pub use relay_argv::{
+    SocatEndpoint, VsockRelayArgvError, VsockRelayArgvInput, exec_arg0,
+    generate_vsock_relay_argv,
 };
 pub use service::{
     CloseTransportRequest, ObserveTransportRequest, OpenTransportRequest, OpenTransportResponse,

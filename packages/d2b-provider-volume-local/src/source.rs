@@ -8,10 +8,12 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use d2b_contracts::v3::execution_policy::BoundedToken;
-use d2b_contracts::v3::volume::{
+use d2b_contracts_resource::v3::execution_policy::BoundedToken;
+use d2b_contracts_resource::v3::{
+    volume::{
     AttachmentTransport, BlockImageFormat, CreatePolicy, EntryRestartPolicy, SourceKind,
     VolumeKind, VolumeSpec,
+},
 };
 
 use crate::error::VolumeLocalError;
@@ -144,7 +146,8 @@ pub fn validate_source_spec(spec: &VolumeSpec) -> Result<(), VolumeLocalError> {
             if quota.max_bytes().is_none() || quota.max_inodes().is_none() {
                 return Err(VolumeLocalError::TmpfsQuotaMissing);
             }
-            if quota.enforcement() != d2b_contracts::v3::volume::QuotaEnforcement::Hard {
+            if quota.enforcement() != d2b_contracts_resource::v3::volume::QuotaEnforcement::Hard
+            {
                 return Err(VolumeLocalError::InvalidSpec);
             }
             if spec

@@ -34,9 +34,10 @@ The crate exposes the Zone display controller, same-user user portal, opaque
 LaunchTicket, path-free readiness event, and Host proxy / Guest frontend
 templates. The proxy and frontend have no d2b-bus authority after launch.
 
-Runtime admission and process supervision are daemon-owned. This crate does
-not install standalone Provider binaries; `d2bd` launches signed workers
-through authenticated ComponentSession and ProviderSupervisor effect ports.
+Runtime admission and process supervision are daemon-owned. The package owns
+the host `d2b-wayland-proxy` binary and its argv projection; `d2bd` launches
+signed workers through authenticated ComponentSession and ProviderSupervisor
+effect ports.
 
 ## Placement and dependencies
 

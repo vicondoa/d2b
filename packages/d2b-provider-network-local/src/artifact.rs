@@ -1,6 +1,9 @@
 //! Net-VM artifact catalog resolution and generic-system identity projection.
 
-use d2b_contracts::v3::{execution_policy::BoundedToken, network::NetworkSpec};
+use d2b_contracts_resource::v3::{
+    execution_policy::BoundedToken,
+    network::NetworkSpec,
+};
 
 /// Artifact kinds accepted by the network-local resolver.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -82,7 +85,7 @@ pub fn resolve_net_vm_system_artifact(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use d2b_contracts::v3::network::Ipv4Cidr;
+    use d2b_contracts_resource::v3::network::Ipv4Cidr;
 
     fn spec() -> NetworkSpec {
         NetworkSpec::minimal(

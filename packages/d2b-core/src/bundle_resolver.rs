@@ -71,7 +71,7 @@ use crate::bundle::Bundle;
 use crate::closures::ClosureMetadata;
 use crate::error::Error;
 use crate::host::{
-    ChNetHandoffMode, HostJson, IfName, ModuleRequirement, NetEnv, QemuMediaSourceIntent, TapRole,
+    ChNetHandoffMode, HostJson, ModuleRequirement, NetEnv, QemuMediaSourceIntent, TapRole,
     UsbipBusidLock, VendorProductPair,
 };
 use crate::host_w3::{ModuleRequirementW3, TapRoleW3};
@@ -86,6 +86,7 @@ use crate::realm_workloads_launcher::RealmWorkloadsLauncherV2Json;
 use crate::storage::StorageJson;
 use crate::sync::SyncJson;
 use crate::unsafe_local_workloads::{UnsafeLocalWorkload, UnsafeLocalWorkloadsJson};
+use d2b_contracts_resource::v3::IfName;
 use d2b_realm_core::RealmIdentityConfigJson;
 use sha2::Digest as _;
 use std::collections::{BTreeMap, BTreeSet};
@@ -3392,7 +3393,7 @@ mod tests {
     use crate::bundle::{Bundle, BundleClosureRef, BundleGeneration};
     use crate::closures::{ClosureGeneration, ClosureMetadata};
     use crate::host::{
-        BridgePortFlags, ChNetHandoffMode, HostChConfig, HostJson, HostsFileOwnership, IfName,
+        BridgePortFlags, ChNetHandoffMode, HostChConfig, HostJson, HostsFileOwnership,
         IfNameMapping, LanPolicy, NetEnv, NetworkManagerUnmanaged, NftablesModel, OwnershipRule,
         SitePolicy, UsbipBusidLock, UsbipLockOwner, UsbipLockScope,
     };
@@ -3406,6 +3407,7 @@ mod tests {
         VmProcessDag, VmProcessInvariants,
     };
     use crate::runtime::RuntimeMetadata;
+    use d2b_contracts_resource::v3::IfName;
     use serde::Serialize;
     use std::collections::BTreeMap;
     use std::fs;

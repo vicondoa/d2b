@@ -189,7 +189,7 @@ fn resolve(
     Ok(0)
 }
 
-fn endpoint_ref(name: &str) -> Result<d2b_contracts::v3::ResourceRef, CliFailure> {
+fn endpoint_ref(name: &str) -> Result<d2b_contracts_resource::v3::ResourceRef, CliFailure> {
     let resource_ref = parse_resource_ref(name, Some("Endpoint"))?;
     if resource_ref.resource_type().as_str() != "Endpoint" {
         return Err(CliFailure::new(

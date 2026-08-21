@@ -1,16 +1,29 @@
 use std::cell::RefCell;
 use std::collections::BTreeMap;
 
-use d2b_contracts::v3::execution_policy::BoundedToken;
-use d2b_contracts::v3::provider::{
+use d2b_contracts_provider::v3::{
+    provider::{
     ComponentDescriptor, ComponentStateKind, ComponentStateNamespace, ComponentStateView,
     MIN_COMPONENT_STATE_QUOTA_BYTES, ProviderContractError, StatePlacementMode,
     StateSchemaCustodyClass, StorageNeed,
+},
 };
-use d2b_contracts::v3::volume::{AttachmentAccess, ViewRight, VolumeSpec};
-use d2b_contracts::v3::{
-    MigrationPolicy, PersistenceClass, ResourceRef, ResourceUid, SchemaFingerprint, SchemaVersion,
-    SensitivityClass, StateDigest, StateEnvelope, VolumeStateError, VolumeStateSchemaId,
+use d2b_contracts_resource::v3::execution_policy::BoundedToken;
+use d2b_contracts_resource::v3::{
+    volume::{AttachmentAccess, ViewRight, VolumeSpec},
+};
+use d2b_contracts_resource::v3::{
+    MigrationPolicy,
+    PersistenceClass,
+    ResourceRef,
+    ResourceUid,
+    SchemaFingerprint,
+    SchemaVersion,
+    SensitivityClass,
+    StateDigest,
+    StateEnvelope,
+    VolumeStateError,
+    VolumeStateSchemaId,
 };
 use d2b_provider_volume_local::atomic::{
     AtomicFilesystem, AtomicWrite, AtomicWriteError, CanonicalJson, WritePolicy, check_soft_quota,

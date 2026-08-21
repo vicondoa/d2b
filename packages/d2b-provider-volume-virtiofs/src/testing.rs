@@ -10,7 +10,7 @@ use std::pin::pin;
 use std::sync::Mutex;
 use std::task::{Context, Poll, Waker};
 
-use d2b_contracts::v3::ResourceRef;
+use d2b_contracts_resource::v3::ResourceRef;
 
 use crate::error::VirtiofsExportError;
 use crate::export::ExportSpec;
@@ -178,9 +178,11 @@ impl VirtiofsExportEffectPort for &ScriptedPort {
 
 /// Canonical Export and Volume fixtures.
 pub mod fixtures {
-    use d2b_contracts::v3::ResourceRef;
-    use d2b_contracts::v3::execution_policy::BoundedToken;
-    use d2b_contracts::v3::volume::{AttachmentSettings, ViewSpec, VolumeSpec};
+    use d2b_contracts_resource::v3::ResourceRef;
+    use d2b_contracts_resource::v3::execution_policy::BoundedToken;
+    use d2b_contracts_resource::v3::{
+    volume::{AttachmentSettings, ViewSpec, VolumeSpec},
+};
     use serde_json::{Value, json};
 
     use crate::export::ExportSpec;

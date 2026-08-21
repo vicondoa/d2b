@@ -1,6 +1,6 @@
 //! Opaque Network attachment routing and fd lifetime evidence.
 
-use d2b_contracts::v3::ResourceRef;
+use d2b_contracts_resource::v3::ResourceRef;
 
 /// One connected tap attachment owned by Core until child handoff.
 #[derive(Debug, Clone, PartialEq, Eq)]

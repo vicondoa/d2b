@@ -7,9 +7,13 @@
 
 use std::{collections::BTreeMap, fmt, sync::Mutex};
 
-use d2b_contracts::v3::{
-    ResourceName, ResourceRef, ResourceTypeName, ResourceUid, execution_policy::BoundedToken,
-    zone_routing::ZonePath,
+use d2b_contracts_zone_session::v3::zone_routing::ZonePath;
+use d2b_contracts_resource::v3::{
+    ResourceName,
+    ResourceRef,
+    ResourceTypeName,
+    ResourceUid,
+    execution_policy::BoundedToken,
 };
 
 /// The per-Zone concurrent mutation ceiling.
@@ -365,8 +369,12 @@ impl std::error::Error for RouterError {}
 #[cfg(test)]
 mod tests {
     use super::*;
-    use d2b_contracts::v3::zone_routing::ZoneLabelId;
-    use d2b_contracts::v3::{ResourceName, ResourceTypeName, ZoneId};
+    use d2b_contracts_zone_session::v3::zone_routing::ZoneLabelId;
+    use d2b_contracts_resource::v3::{
+    ResourceName,
+    ResourceTypeName,
+    ZoneId,
+};
 
     fn zone() -> ZonePath {
         ZonePath::new(vec![ZoneLabelId::parse("dev").unwrap()]).unwrap()

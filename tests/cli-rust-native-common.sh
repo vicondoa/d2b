@@ -13,8 +13,6 @@ mkdir -p "$D2B_STATIC_CACHE"
 # shellcheck source=lib.sh
 . "$HERE/lib.sh"
 
-d2b_activate_rust_toolchain_path || true
-
 d2b_cli_flake_source_root() {
   # The cli-rust-native eval sites resolve the framework flake as
   # `git+file://$(d2b_cli_flake_source_root)`. Return $ROOT directly:
@@ -27,34 +25,20 @@ d2b_cli_flake_source_root() {
   printf '%s\n' "$ROOT"
 }
 
-d2b_cli_toolchain_shell() {
-  if [ -n "${D2B_RUST_TOOLCHAIN_PATH:-}" ]; then
-    env PATH="$PATH" bash -lc "$*"
-  else
-    nix shell --quiet --inputs-from "$ROOT" \
-      nixpkgs#cargo nixpkgs#rustc nixpkgs#rustfmt nixpkgs#clippy nixpkgs#gcc nixpkgs#sccache \
-      --command bash -lc "$*"
-  fi
-}
-
 d2b_cli_native_bin() {
-  local bin workspace_target_dir
-  bin=$(d2b_cargo_bin_path workspace d2b) || return 1
-  if [ ! -x "$bin" ]; then
-    workspace_target_dir=$(d2b_cargo_target_dir workspace) || return 1
-    d2b_cli_toolchain_shell "cd '$ROOT' && CARGO_TARGET_DIR='$workspace_target_dir' cargo build -q --manifest-path '$ROOT/Cargo.toml' -p d2b"
-  fi
-  printf '%s\n' "$bin"
+  [ -x "${D2B_CLI_BIN:-}" ] || {
+    fail "D2B_CLI_BIN must name the declared //packages/d2b:d2b artifact"
+    return 1
+  }
+  printf '%s\n' "$D2B_CLI_BIN"
 }
 
 d2b_daemon_native_bin() {
-  local bin workspace_target_dir
-  bin=$(d2b_cargo_bin_path workspace d2bd) || return 1
-  if [ ! -x "$bin" ]; then
-    workspace_target_dir=$(d2b_cargo_target_dir workspace) || return 1
-    d2b_cli_toolchain_shell "cd '$ROOT' && CARGO_TARGET_DIR='$workspace_target_dir' cargo build -q --manifest-path '$ROOT/Cargo.toml' -p d2bd"
-  fi
-  printf '%s\n' "$bin"
+  [ -x "${D2B_DAEMON_BIN:-}" ] || {
+    fail "D2B_DAEMON_BIN must name the declared //packages/d2bd:d2bd artifact"
+    return 1
+  }
+  printf '%s\n' "$D2B_DAEMON_BIN"
 }
 
 _d2b_cli_reap_repo_sockets() {

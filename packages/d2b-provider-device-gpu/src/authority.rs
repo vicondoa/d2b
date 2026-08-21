@@ -8,7 +8,12 @@
 use core::fmt;
 use std::collections::{BTreeMap, BTreeSet};
 
-use d2b_contracts::v3::{ResourceGeneration, ResourceRef, ResourceUid, device::DeviceArbitration};
+use d2b_contracts_resource::v3::{
+    ResourceGeneration,
+    ResourceRef,
+    ResourceUid,
+    device::DeviceArbitration,
+};
 
 use crate::process::GpuProcessRole;
 

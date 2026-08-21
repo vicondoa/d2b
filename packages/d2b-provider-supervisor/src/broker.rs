@@ -8,14 +8,14 @@ use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 use std::time::Duration;
 
-use d2b_contracts::broker_wire::{
+use d2b_contracts::types::{BundleOpId, RoleId, VmId};
+use d2b_contracts_broker::broker_wire::{
     AuditJoinContext, BrokerCallerRole, BrokerRequest, BrokerRequestEnvelope, BrokerResponse,
     CanonicalAuditDigest, DeregisterRunnerPidfdRequest, ObserveRunnerRequest, OpenPidfdRequest,
     RunnerRole, RunnerSignal, SandboxLaunchPlan, SignalRunnerRequest, SpawnRunnerRequest,
 };
-use d2b_contracts::types::{BundleOpId, RoleId, VmId};
-use d2b_contracts::v3::ResourceRef;
-use d2b_contracts::v3::execution_policy::ExecutionDomain;
+use d2b_contracts_resource::v3::ResourceRef;
+use d2b_contracts_resource::v3::execution_policy::ExecutionDomain;
 use d2b_core::bundle_resolver::{BundleResolver, intent_id_runner};
 use d2b_core::processes::ProcessRole;
 use d2b_process::{
@@ -58,7 +58,7 @@ pub struct BrokerLaunchIntent {
     /// Exact generic Process identity carried through broker lifecycle calls.
     pub resource_ref: ResourceRef,
     /// Immutable resource UID used to separate same-name generations.
-    pub resource_uid: d2b_contracts::v3::ResourceUid,
+    pub resource_uid: d2b_contracts_resource::v3::ResourceUid,
     /// Content identity of the trusted bundle snapshot.
     pub bundle_content_identity: String,
     /// Complete semantic sandbox plan for generic Process launches.
@@ -783,7 +783,7 @@ fn response_error(response: &BrokerResponse, operation: BrokerOperation<'_>) -> 
 // Keep focused broker tests beside the response mapping they exercise.
 #[allow(clippy::items_after_test_module)]
 mod tests {
-    use d2b_contracts::broker_wire::BrokerErrorResponse;
+    use d2b_contracts_broker::broker_wire::BrokerErrorResponse;
     use d2b_core::processes::ProcessRole;
 
     use super::*;
@@ -820,7 +820,7 @@ mod tests {
                 template_identity: [2; 32],
                 generation: 1,
                 resource_ref: ResourceRef::parse("Process/worker").unwrap(),
-                resource_uid: d2b_contracts::v3::ResourceUid::parse(
+                resource_uid: d2b_contracts_resource::v3::ResourceUid::parse(
                     "00000000-0000-4000-8000-000000000001",
                 )
                 .unwrap(),

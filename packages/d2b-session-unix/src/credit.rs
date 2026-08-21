@@ -1,5 +1,7 @@
-use d2b_contracts::v3::component_session::{
+use d2b_contracts_zone_session::v3::{
+    component_session::{
     MAX_HOST_ATTACHMENT_CREDITS, MAX_PROCESS_ATTACHMENT_CREDITS, RESERVED_CONTROL_FDS,
+},
 };
 use rustix::process::{Resource, getrlimit};
 use std::{

@@ -14,11 +14,11 @@ use crate::supervisor_protocol::{
     SupervisorResponse, SupervisorResult, read_frame, write_frame,
 };
 use crate::systemd::{ScopeInspection, UserScopeManager};
-use d2b_contracts::public_wire::{
+use d2b_contracts_control::public_wire::{
     ShellCloseCause, ShellDetachResult, ShellKillResult, ShellListEntry, ShellListResult,
     ShellName, ShellSessionState,
 };
-use d2b_contracts::unsafe_local_wire::{
+use d2b_contracts_control::unsafe_local_wire::{
     HelperPersistentShellSnapshot, HelperScopeKind, HelperScopeState, HelperShellAttachResult,
     HelperShellDetachResponse, HelperShellKillResponse, HelperShellListResponse, HelperShellPolicy,
     HelperShellRequest, HelperShellResponse, HelperSupervisorId, HelperTerminalReady,
@@ -717,7 +717,7 @@ fn attach_existing<M: UserScopeManager>(
     verify_scope(runtime, scope)?;
     let action = SupervisorAction::Attach {
         force,
-        initial_terminal_size: d2b_contracts::terminal_wire::TerminalSize { rows, cols },
+        initial_terminal_size: d2b_contracts_control::terminal_wire::TerminalSize { rows, cols },
     };
     let (response, stream) = supervisor_action_with_stream(runtime, scope, action)?;
     match response.result {
@@ -1243,7 +1243,7 @@ mod tests {
             policy: policy(),
             name: Some(ShellName::new(name).unwrap()),
             force: false,
-            initial_terminal_size: d2b_contracts::terminal_wire::TerminalSize {
+            initial_terminal_size: d2b_contracts_control::terminal_wire::TerminalSize {
                 rows: 24,
                 cols: 80,
             },

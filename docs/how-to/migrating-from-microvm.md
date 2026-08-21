@@ -152,8 +152,8 @@ share a bridge by hand, and reserve MACs yourself.
 `index` is unique **per env**. Both VMs share `br-work-lan` and route
 egress via `sys-work-net`, but they **cannot directly talk to each
 other** - workload taps are marked `Isolated = true` in the LAN bridge
-(see `nixos-modules/network.nix:376-386`), and the net VM does not
-forward eth1→eth1 (`nixos-modules/net.nix:135-155`). If you need
+(see `packages/d2b-provider-network-local/nix/network.nix:376-386`), and the net VM does not
+forward eth1→eth1 (`packages/d2b-provider-network-local/nix/net.nix:135-155`). If you need
 explicit VM-to-VM traffic (e.g. service mesh inside an env), opt in
 with the two-step unsafe acknowledgement:
 
@@ -591,7 +591,7 @@ change. For the full predicate semantics see
   (via `lib.mkDefault`); the same applies to `tpm.enable` and
   `audio.enable` (the vhost-user-sound device is wired only via
   cloud-hypervisor's `--device` plumbing - see
-  `nixos-modules/components/audio/guest.nix:121-127`). You can still
+  `packages/d2b-provider-audio-pipewire/nix/guest.nix:121-127`). You can still
   override per-VM via `d2b.vms.<vm>.config.microvm.hypervisor = ...`
   for headless VMs.
 - **Framework-owned shares.** Do not add a `/nix/store` entry to

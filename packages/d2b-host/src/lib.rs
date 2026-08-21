@@ -33,45 +33,9 @@ pub mod netlink;
 pub mod nftables;
 pub mod routes;
 pub mod seccomp;
-// Static runner lifecycle metadata used by host-side argv dispatch.
-pub mod runner_process;
-// Pure CH argv generator. Consumed by d2bd via the SpawnRunner
-// broker wire.
-pub mod ch_argv;
-// Pure QEMU media argv scaffold. It emits a paused QMP-ready baseline for
-// broker-owned media fd passing without exposing media paths.
-pub mod qemu_media_argv;
-// Pure virtiofsd argv generator (one instance per `microvm.shares` row;
-// consumed by d2bd via SpawnRunner).
-pub mod virtiofsd_argv;
-// Pure swtpm argv generator (long-lived `swtpm socket ...` plus the
-// pre-start `swtpm_ioctl -i --unix ...` flush per the
-// VmProcessInvariants::swtpm_pre_start_flush invariant).
-pub mod swtpm_argv;
-// Pure crosvm device gpu sidecar argv generator (one per graphics-enabled
-// VM; consumed by d2bd via SpawnRunner with RunnerRole::Gpu).
-pub mod gpu_argv;
-// Pure vhost-device-sound audio sidecar argv generator.
-pub mod audio_argv;
-// Pure crosvm device video-decoder sidecar argv generator.
-pub mod video_argv;
-// Pure socat-based vsock-relay argv generator (covers the guest-egress +
-// stack-vm-listen shapes documented in
-// nixos-modules/components/observability/{host,guest,stack}.nix).
-pub mod vsock_relay_argv;
-// Pure `usbip bind|unbind --busid <bus-id>` argv generator. The generator
-// stands alone with a bus-id shape validator.
-pub mod usbip_argv;
 // Neutral Volume effect-port composition wrapper. Concrete broker-backed
 // implementations are supplied by the Zone runtime.
 pub mod volume_effect_adapter;
-// Pure OTel host-bridge argv generator. Replaces the singleton
-// d2b-otel-host-bridge.service with a broker SpawnRunner under
-// RunnerRole::OtelHostBridge.
-pub mod otel_host_bridge_argv;
-// Host-jailed Wayland proxy argv generator. Emits argv for the
-// per-VM d2b-<vm>-wlproxy role spawned via RunnerRole::WaylandProxy.
-pub mod wayland_proxy_argv;
 // Hardlink-farm primitive for per-VM store activation. Same-filesystem
 // check + per-generation marker + atomic current-symlink swap with crash
 // reconciliation.
@@ -93,13 +57,6 @@ pub mod host_prep_dag;
 // registry writes, udev reloads, and fd opens stay in the privileged broker.
 pub mod media;
 
-// Canonical Rust-side runner argv regenerator.
-// Documents the migration surface from the Nix-side argv
-// generation in processes-json.nix to the typed Rust generators
-// in this crate (ch_argv, virtiofsd_argv, gpu_argv, audio_argv,
-// swtpm_argv, usbip_argv, video_argv, vsock_relay_argv,
-// otel_host_bridge_argv). See ADR 0018.
-pub mod runner_argv_regenerator;
 // v1.1.1 RenderDnsmasqEnvConf daemon-host-prep DAG op support.
 // Per ADR 0018. Pure-Rust dnsmasq config
 // rendering from typed env metadata; the broker writes the

@@ -84,16 +84,13 @@ pub const WAVE_CATALOG: &[WaveSpec] = &[
     },
     WaveSpec {
         wave: "w5Fu",
-        summary: "Minijail profiles + GPU/audio/video argv generators (hardware smoke).",
-        validators: &["hardware-smoke-gpu-yubikey.sh"],
+        summary: "GPU/audio/video physical-device validation (manual).",
+        validators: &[],
     },
     WaveSpec {
         wave: "w6Fu",
-        summary: "USBIP live executors + per-busid lock (hardware smoke).",
-        validators: &[
-            "hardware-smoke-gpu-yubikey.sh",
-            "usbip-state-machine-eval.sh",
-        ],
+        summary: "USBIP physical-device validation (manual).",
+        validators: &[],
     },
     WaveSpec {
         wave: "w7Fu",

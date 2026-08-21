@@ -35,7 +35,7 @@ use crate::ops::spawn_runner::{
 };
 use crate::ops::store_sync::generation_id_for_intent;
 use crate::ops::store_view_posture::plant_live_marker_with_matrix_posture;
-use d2b_contracts::broker_wire::{ActivationMode, ActivationPhase};
+use d2b_contracts_broker::broker_wire::{ActivationMode, ActivationPhase};
 use d2b_core::bundle_resolver::{HostRuntime, ResolvedActivationIntent, ResolvedStoreViewIntent};
 use d2b_core::minijail_profile::CgroupPlacement;
 use d2b_host::hardlink_farm;
@@ -159,7 +159,7 @@ pub struct OpenPidfdResult {
 /// accepted here.
 pub fn live_open_zone_store(
     resolver: &d2b_core::bundle_resolver::BundleResolver,
-    zone_store_id: &d2b_contracts::v3::storage::ZoneStoreId,
+    zone_store_id: &d2b_contracts_resource::v3::storage::ZoneStoreId,
 ) -> Result<crate::ops::zone_store::ZoneStoreOutcome, LiveHandlerError> {
     crate::ops::zone_store::open_zone_store(resolver, zone_store_id)
         .map_err(LiveHandlerError::ZoneStore)
@@ -3697,7 +3697,7 @@ fn maybe_harden_swtpm_dir(
 mod tests {
     use super::*;
     use crate::ops::exec_reconcile::{FakeReconcileExecutor, ReconcileOp};
-    use d2b_contracts::broker_wire::{ActivationMode, ActivationPhase};
+    use d2b_contracts_broker::broker_wire::{ActivationMode, ActivationPhase};
     use d2b_core::bundle_resolver::{
         HostRuntime, HostRuntimeArtifact, HostRuntimeIfName, InstallerArtifact,
         ResolvedActivationIntent, ResolvedGcIntent, ResolvedHostKeyTrustIntent,

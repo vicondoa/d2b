@@ -1,6 +1,7 @@
 use std::cell::{Cell, RefCell};
 
-use d2b_core::{bundle_resolver::ResolvedBridgeIntent, host::IfName};
+use d2b_contracts_resource::v3::IfName;
+use d2b_core::bundle_resolver::ResolvedBridgeIntent;
 use d2b_priv_broker::ops::network::{
     BridgeBackend, BridgeReadback, NetworkOpError, bridge_intent_digest, create_bridge,
     delete_bridge,

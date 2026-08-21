@@ -4,12 +4,15 @@ use std::sync::Arc;
 use std::thread;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-use d2b_contracts::v3::credential::{
+use d2b_contracts_provider::v3::{
+    credential::{
     CredentialAuthorization, CredentialLeaseState, CredentialMethod, CredentialRequest,
     CredentialResponse, CredentialServiceErrorCode, CredentialSessionBinding,
     MAX_PROVIDER_LEASE_LIFETIME_MS, dispatch_authorized_provider,
+},
 };
-use d2b_contracts::v3::{Locality, ResourceRef};
+use d2b_contracts_resource::v3::ResourceRef;
+use d2b_contracts_resource::v3::identity::Locality;
 use d2b_provider_credential_managed_identity::{
     ManagedIdentityCredentialProvider, ManagedIdentityCredentialProviderFactory,
 };
@@ -32,7 +35,7 @@ fn dispatch(
     method: CredentialMethod,
     request: &CredentialRequest,
     session: CredentialSessionBinding,
-) -> Result<CredentialResponse, d2b_contracts::v3::credential::CredentialServiceError> {
+) -> Result<CredentialResponse, d2b_contracts_provider::v3::credential::CredentialServiceError> {
     let authorization = authorization_for(method, session, request.credential_ref().clone())?;
     dispatch_authorized_provider(provider, method, request, &authorization)
 }
@@ -41,7 +44,7 @@ fn dispatch_without_session(
     provider: &ManagedIdentityCredentialProvider,
     method: CredentialMethod,
     request: &CredentialRequest,
-) -> Result<CredentialResponse, d2b_contracts::v3::credential::CredentialServiceError> {
+) -> Result<CredentialResponse, d2b_contracts_provider::v3::credential::CredentialServiceError> {
     let delivery = method
         .requires_delivery()
         .then(|| common::delivery_for(method, 1, request.credential_ref().clone()));
@@ -642,7 +645,7 @@ fn inspect_returns_terminal_metadata_without_reopening_a_revoked_lease() {
     };
     assert_eq!(
         response.metadata.state,
-        d2b_contracts::v3::credential::CredentialLeaseState::Revoked
+        d2b_contracts_provider::v3::credential::CredentialLeaseState::Revoked
     );
     assert_eq!(
         client
@@ -1136,7 +1139,7 @@ fn finalization_revokes_only_the_callers_owned_handles() {
         checkpoints
             .iter()
             .filter(|checkpoint| checkpoint.metadata().state
-                == d2b_contracts::v3::credential::CredentialLeaseState::Revoked)
+                == d2b_contracts_provider::v3::credential::CredentialLeaseState::Revoked)
             .count(),
         1
     );
@@ -1144,7 +1147,7 @@ fn finalization_revokes_only_the_callers_owned_handles() {
         checkpoints
             .iter()
             .filter(|checkpoint| checkpoint.metadata().state
-                == d2b_contracts::v3::credential::CredentialLeaseState::Active)
+                == d2b_contracts_provider::v3::credential::CredentialLeaseState::Active)
             .count(),
         1
     );

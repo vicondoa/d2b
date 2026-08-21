@@ -22,8 +22,12 @@
 //! - [`RelayHandler`] owns no dedup state and exposes no way to add one. An
 //!   intermediate hop forwards; the target Zone is the single dedup owner.
 
-use d2b_contracts::v3::zone_routing::ZoneRouteFailClosedReason;
-use d2b_contracts::v3::{AuthenticatedSubjectContext, Locality, zone_routing::ZonePath};
+use d2b_contracts_zone_session::v3::zone_routing::ZoneRouteFailClosedReason;
+use d2b_contracts_zone_session::v3::zone_routing::ZonePath;
+use d2b_contracts_resource::v3::identity::{
+    AuthenticatedSubjectContext,
+    Locality,
+};
 use d2b_resource_api::authz::{PositiveCapabilities, SessionVerb};
 
 use crate::zone_route::ForwardedEnvelope;
@@ -285,12 +289,26 @@ mod tests {
     use super::*;
     use std::collections::BTreeSet;
 
-    use d2b_contracts::v3::zone_routing::{ZoneLabelId, ZonePath};
-    use d2b_contracts::v3::{
-        BindingDigest, EvidenceClass, ReconnectGeneration, ResourceName, ResourceRef,
-        ResourceTypeName, ResourceUid, SchemaFingerprint, ServiceName, SessionBinding,
-        SessionPurpose, TranscriptHash, TransportBinding,
-    };
+    use d2b_contracts_zone_session::v3::{
+    zone_routing::{ZoneLabelId, ZonePath},
+};
+    use d2b_contracts_resource::v3::{
+    ResourceName,
+    ResourceRef,
+    ResourceTypeName,
+    ResourceUid,
+    SchemaFingerprint,
+};
+use d2b_contracts_resource::v3::identity::{
+    BindingDigest,
+    EvidenceClass,
+    ReconnectGeneration,
+    ServiceName,
+    SessionBinding,
+    SessionPurpose,
+    TranscriptHash,
+    TransportBinding,
+};
     use d2b_resource_api::authz::ApiMethod;
 
     use crate::operations::OperationId;

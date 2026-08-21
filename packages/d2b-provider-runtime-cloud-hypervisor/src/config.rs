@@ -2,7 +2,8 @@
 
 use std::fmt;
 
-use d2b_contracts::v3::{ResourceRef, credential::OpaqueAzureRef};
+use d2b_contracts_provider::v3::credential::OpaqueAzureRef;
+use d2b_contracts_resource::v3::ResourceRef;
 use serde::{Deserialize, Serialize};
 
 /// Console mode.

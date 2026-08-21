@@ -406,7 +406,7 @@ mountPolicy.bindMounts = [
   the fixture-contract lane is enabled and promoted; the retired live validator
   and its evidence write are not current coverage.
 - Byte-parity golden: `tests/golden/runner-shape/gpu-argv-minimal.txt`
-  via `d2b_host::gpu_argv::generate_gpu_argv`.
+  via `d2b-provider-device-gpu/src/gpu_argv.rs::generate_gpu_argv`.
 
 ## Additional broker ops
 
@@ -492,8 +492,6 @@ state.
 - `packages/d2b-contract-tests/tests/policy_daemon.rs` - checks current
   `processes.json` consumers. This is advisory until the fixture lane is
   enabled.
-- `tests/unit/nix/cases/store-overlay-emit.nix` - enforcing store emitter
-  coverage.
 - AGENTS.md "Critical subsystems - handle with care" rows for per-VM
   `/nix/store` hardlink farm and TPM state - `StoreSync` MUST honor
   both invariants.

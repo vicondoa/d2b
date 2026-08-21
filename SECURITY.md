@@ -48,7 +48,7 @@ In scope:
 - The d2b CLI (`nixos-modules/cli.nix`).
 - The per-VM sidecars (`nixos-modules/host-sidecars.nix`, `nixos-modules/components/`).
 - The framework's SSH key management (`d2b-keys` activation, virtiofs injection).
-- Network isolation / NAT / firewalling (`nixos-modules/net.nix`, `nixos-modules/network.nix`).
+- Network isolation / NAT / firewalling (`packages/d2b-provider-network-local/nix/net.nix`, `packages/d2b-provider-network-local/nix/network.nix`).
 - The Rust workspace (`packages/`) - bootstrap surface, supply-chain gates, and long-lived control-plane behavior.
 
 Out of scope:

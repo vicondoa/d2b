@@ -1,11 +1,8 @@
 load("@crates//:defs.bzl", "all_crate_deps")
-load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test")
+load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test", "rust_doc_test")
 
 
-exports_files(
-    ["BUILD.bazel"],
-    visibility = ["//visibility:public"],
-)
+exports_files(["BUILD.bazel"], visibility = ["//visibility:public"])
 
 rust_library(
     name = "d2b_provider_volume_virtiofs",
@@ -13,18 +10,20 @@ rust_library(
     compile_data = ["Cargo.toml"],
     visibility = ["//visibility:public"],
     deps = [
-        "//packages/d2b-contracts:d2b_contracts",
+        "//packages/d2b-contracts-resource:d2b_contracts_resource",
+        "//packages/d2b-contracts-zone-session:d2b_contracts_zone_session",
     ] + all_crate_deps(normal = True, cargo_only = True),
 )
 
 rust_test(
-    name = "export_lifecycle",
-    srcs = ["tests/export_lifecycle.rs"],
+    name = "lifecycle",
+    srcs = ["tests/lifecycle.rs"],
     compile_data = ["Cargo.toml"],
     visibility = ["//visibility:public"],
     deps = [
+        "//packages/d2b-contracts-resource:d2b_contracts_resource",
+        "//packages/d2b-contracts-zone-session:d2b_contracts_zone_session",
         ":d2b_provider_volume_virtiofs",
-        "//packages/d2b-contracts:d2b_contracts",
     ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
 )
 
@@ -32,7 +31,10 @@ rust_test(
     name = "d2b_provider_volume_virtiofs_test",
     compile_data = ["Cargo.toml"],
     crate = ":d2b_provider_volume_virtiofs",
-    deps = ["//packages/d2b-contracts:d2b_contracts"] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
+    deps = [
+        "//packages/d2b-contracts-resource:d2b_contracts_resource",
+        "//packages/d2b-contracts-zone-session:d2b_contracts_zone_session",
+    ],
 )
 
 # keep
@@ -54,4 +56,9 @@ filegroup(
         allow_empty = True,
     ),
     visibility = ["//visibility:public"],
+)
+
+rust_doc_test(
+    name = "d2b_provider_volume_virtiofs_doc_test",
+    crate = "//packages/d2b-provider-volume-virtiofs:d2b_provider_volume_virtiofs",
 )

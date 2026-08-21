@@ -551,11 +551,12 @@ fn report_dispatch_failure(
                 .clone()
                 .or_else(|| std::env::var("D2B_ZONE").ok())
                 .unwrap_or_else(|| "local-root".to_owned());
-            let zone = if d2b_contracts::v3::ZoneId::parse(requested_zone.clone()).is_ok() {
-                requested_zone
-            } else {
-                "local-root".to_owned()
-            };
+            let zone =
+                if d2b_contracts_resource::v3::ZoneId::parse(requested_zone.clone()).is_ok() {
+                    requested_zone
+                } else {
+                    "local-root".to_owned()
+                };
             let mut failure = CliFailure::new(exit_code, format!("{class}: {message}"));
             let mut rendered = serde_json::to_string(&serde_json::json!({
                 "ok": false,

@@ -7,7 +7,7 @@ use std::{
     time::{SystemTime, UNIX_EPOCH},
 };
 
-use d2b_contracts::v3::{CanonicalJsonError, CanonicalJsonValue, canonical_json_bytes};
+use d2b_contracts_resource::v3::{CanonicalJsonError, CanonicalJsonValue, canonical_json_bytes};
 use schemars::JsonSchema;
 use serde::{
     Deserialize, Deserializer, Serialize, Serializer,

@@ -1,7 +1,7 @@
 use crate::runtime::{RuntimeError, ScopeRuntime};
 use crate::systemd::UserScopeManager;
 use d2b_contracts::UNSAFE_LOCAL_HELPER_SOCKET_PATH;
-use d2b_contracts::unsafe_local_wire::{
+use d2b_contracts_control::unsafe_local_wire::{
     DaemonToUnsafeLocalHelper, HELPER_SOCKET_BUFFER_REQUEST_BYTES, HelperFailureCode,
     HelperHeartbeat, HelperHello, HelperOperationRejected, MAX_HELPER_FRAME_SIZE,
     MAX_HELPER_QUEUE_DEPTH, MIN_EFFECTIVE_HELPER_SOCKET_BUFFER_BYTES,
@@ -564,8 +564,8 @@ mod tests {
     }
 
     fn terminal_ready_frame() -> UnsafeLocalHelperToDaemon {
-        use d2b_contracts::public_wire::{ShellName, ShellSessionState};
-        use d2b_contracts::unsafe_local_wire::{
+        use d2b_contracts_control::public_wire::{ShellName, ShellSessionState};
+        use d2b_contracts_control::unsafe_local_wire::{
             HelperScopeKind, HelperShellAttachResult, HelperTerminalReady, HelperTerminalTransport,
             ScopeIdentity, UNSAFE_LOCAL_TERMINAL_PROTOCOL_VERSION,
         };

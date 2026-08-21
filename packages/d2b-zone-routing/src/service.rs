@@ -47,16 +47,18 @@
 //! carry no handler. Their contract - the allocator-issued single-use PSK, the
 //! IKpsk2 bootstrap that consumes it, and the follow-on Noise_KK enrollment
 //! record - belongs to the Zone session work that has not landed
-//! (`d2b_contracts::v3::zone_session` is still empty). Rather than invent a
+//! (`d2b_contracts_zone_session::v3::zone_session` is still empty). Rather than invent a
 //! session or credential surface, both methods fail closed at dispatch
 //! admission; see [`ZoneServiceMethod::has_handler`].
 
 use std::collections::{BTreeSet, VecDeque};
 
-use d2b_contracts::v3::execution_policy::PrimitiveSpecError;
-use d2b_contracts::v3::zone_routing::{
+use d2b_contracts_resource::v3::execution_policy::PrimitiveSpecError;
+use d2b_contracts_zone_session::v3::{
+    zone_routing::{
     MAX_ZONE_PARENT_ENTRIES, ZONE_ROUTE_INITIAL_HOP_BUDGET, ZonePath, ZoneRouteAuditEventKind,
     ZoneRouteFailClosedReason, ZoneTreeEdge,
+},
 };
 
 use crate::engine::{ZoneRelayAdmission, ZoneRelayRequest, ZoneRouteEngine};
@@ -714,13 +716,15 @@ redacted_service_debug!(ZoneServiceServer);
 #[cfg(test)]
 mod tests {
     use super::*;
-    use d2b_contracts::v3::zone_routing::{
+    use d2b_contracts_zone_session::v3::{
+    zone_routing::{
         ZONE_ROUTING_SCHEMA_VERSION, ZoneDescendantRoute, ZoneLabelId,
         ZoneLinkControllerGeneration, ZoneLinkNamespaceAllocation, ZoneLinkRouteAdvertisement,
         ZoneRouteCapability, ZoneRouteCapabilitySet, ZoneRouteId, ZoneRouteKeyRole,
         ZoneRouteSignature, ZoneRouteSignatureAlgorithm, ZoneRouteSignatureRef,
         ZoneSigningKeyFingerprint,
-    };
+    },
+};
 
     use crate::engine::ZoneAdvertisementAdmission;
 

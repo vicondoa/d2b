@@ -2,13 +2,14 @@
 
 use std::sync::Arc;
 
-use d2b_contracts::provider_effects::aca::{
+use crate::{
     AcaControl, AcaControlContext, AcaControlHealth, AcaCredentialLease, AcaCredentialLeaseClient,
     AcaCredentialLeaseRequest, AcaCredentialPurpose, AcaDeleteOutcome, AcaDesiredDiskImage,
     AcaDesiredSandbox, AcaDiskImageRecord, AcaOperationId, AcaProfileId, AcaResourceBinding,
     AcaSandboxCandidates, AcaSandboxId, AcaSandboxProfile, AcaSandboxRecord, AcaTypeError,
     AcaWorkloadQuery,
 };
+use d2b_contracts::ResourceRef;
 
 use crate::controller::{AcaClock, SystemAcaClock};
 use tokio::sync::Semaphore;
@@ -54,7 +55,7 @@ pub enum AcaDeploymentRequest {
         /// Desired disk image.
         disk_image: AcaDesiredDiskImage,
         /// Optional provider network reference.
-        network_ref: Option<d2b_contracts::v3::ResourceRef>,
+        network_ref: Option<ResourceRef>,
         /// Provider-selected sandbox transport alias.
         sandbox_transport_alias: AcaProfileId,
     },

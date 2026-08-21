@@ -1,7 +1,9 @@
 use std::{fmt, time::Instant};
 
-use d2b_contracts::v3::component_session::{
+use d2b_contracts_zone_session::v3::{
+    component_session::{
     CloseReason, CloseRecord, KeepaliveRecord, LimitProfile, Remediation, SessionErrorCode,
+},
 };
 
 use crate::{Result, SessionError};

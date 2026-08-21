@@ -1,7 +1,7 @@
 use std::sync::{Arc, Mutex};
 
 use async_trait::async_trait;
-use d2b_contracts::v3::{ResourceRef, credential::OpaqueAzureRef};
+use d2b_contracts::{OpaqueAzureRef, ResourceRef};
 use d2b_provider_runtime_azure_virtual_machine::{
     AzureAccessToken, AzureCredentialPort, AzureEffectPort, AzureOperationHandle, AzureVmClock,
     AzureVmConfig, AzureVmController, AzureVmError, AzureVmGuestSettings, AzureVmHandle,

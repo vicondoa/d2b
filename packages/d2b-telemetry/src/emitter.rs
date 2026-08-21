@@ -17,8 +17,12 @@ use crate::metric_label_policy::{
     IdentityCanaries, MetricDescriptor, MetricPolicyError, canonical_descriptor,
     validate_canonical_data_point, validate_data_point,
 };
-use d2b_contracts::v3::{
-    TelemetryFrame, TelemetryFrameError, TelemetrySignal, parse_raw_frame, redact_parsed_frame,
+use d2b_contracts_provider::v3::{
+    TelemetryFrame,
+    TelemetryFrameError,
+    TelemetrySignal,
+    parse_raw_frame,
+    redact_parsed_frame,
     validate_frame,
 };
 
@@ -663,7 +667,7 @@ mod tests {
     fn raw_metric_frames_preserve_the_max_label_guard() {
         let path = socket_path("max-labels");
         let emitter = BoundedEmitter::new(&path, 512).unwrap();
-        let labels = d2b_contracts::v3::telemetry_policy::METRIC_LABEL_POLICY
+        let labels = d2b_contracts_provider::v3::telemetry_policy::METRIC_LABEL_POLICY
             .iter()
             .take(17)
             .map(|(key, values)| {

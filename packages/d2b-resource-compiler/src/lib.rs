@@ -23,10 +23,13 @@ use std::{
 };
 
 use base64::{Engine as _, engine::general_purpose::STANDARD};
-use d2b_contracts::v3::{
-    ArtifactDigest, ArtifactId, CanonicalJsonValue, ProviderManifest, canonical_digest,
-    canonical_json_bytes,
+use d2b_contracts_provider::v3::{
+    ArtifactDigest,
+    ProviderManifest,
     provider::{BinaryRef, ComponentExecution},
+};
+use d2b_contracts_resource::v3::{
+    ArtifactId, CanonicalJsonValue, canonical_digest, canonical_json_bytes,
 };
 use d2b_core::{
     error::Kind,
@@ -426,7 +429,7 @@ pub fn sha256_digest(bytes: &[u8]) -> ArtifactDigest {
 /// Compute the D101 digest over a complete executable name-to-digest map.
 pub fn executable_set_digest(
     executable_digests: &BTreeMap<String, ArtifactDigest>,
-) -> Result<ArtifactDigest, d2b_contracts::v3::CanonicalJsonError> {
+) -> Result<ArtifactDigest, d2b_contracts_resource::v3::CanonicalJsonError> {
     let object: BTreeMap<String, String> = executable_digests
         .iter()
         .map(|(name, digest)| (name.clone(), digest.as_str().to_owned()))

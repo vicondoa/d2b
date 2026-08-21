@@ -1,10 +1,13 @@
 # USBIP per-busid state machine
 
-> Reference for the typed, fail-fast state machine that the d2b
-> daemon (via the privileged broker) drives every time a USBIP
-> passthrough device is attached to a target VM.
+> Reference for the provider-owned, typed USBIP planning and characterization
+> model. It documents the canonical per-busid ordering and provider-local
+> tests; it is not a production daemon call path.
 >
-> Source: [`packages/d2bd/src/usbip_state_machine.rs`](../../packages/d2bd/src/usbip_state_machine.rs).
+> Source: [`packages/d2b-provider-device-usbip/src/state_machine.rs`](../../packages/d2b-provider-device-usbip/src/state_machine.rs).
+> The production-wired lifecycle path is the Provider's
+> [`reconcile_state.rs`](../../packages/d2b-provider-device-usbip/src/reconcile_state.rs),
+> which the daemon composition currently consumes.
 > Canonical-order anchor: [AGENTS.md "Critical subsystems"](../../AGENTS.md#critical-subsystems--handle-with-care).
 
 ## Why a state machine
@@ -30,10 +33,11 @@ itself. Any step out of order silently corrupts state:
 
 The state machine pins the order so call sites can't shuffle it.
 
-## Prerequisites
+## Model scope
 
-The executor may run only after `d2bd` has resolved the trusted bundle for
-the target VM/env/busid. Required preconditions are:
+The planning model is pure provider code and has no production consumer in the
+current tree. A future effect adapter must establish these preconditions before
+using it for a live operation:
 
 - a USBIP bind intent and firewall intent exist for the VM/busid;
 - VM apply paths that need guest import have a running VM and authenticated
@@ -96,9 +100,9 @@ The state machine is fully typed; rearranging or skipping steps
 is a compile-time error.
 
 ```rust
-use d2bd::usbip_state_machine::{
+use d2b_provider_device_usbip::{
     build_usbip_plan, execute_usbip_plan,
-    UsbipBusidPlan, UsbipBusidStep, UsbipStepExecutor,
+    UsbipBusidPlan, UsbipBusidStep, UsbipPlanError, UsbipStepExecutor,
 };
 ```
 
@@ -111,10 +115,9 @@ use d2bd::usbip_state_machine::{
   per-(env, vm, busid) bind intent
   (`usbip-bind:env:<env>:vm:<vm>:bus:<busid>`) are both proven
   to exist in the trusted bundle BEFORE the executor ever runs.
-* [`UsbipStepExecutor`] - trait, one method per step. Production
-  wires this through the broker dispatch surface; tests inject a
-  fixture executor that records call order and can fail a chosen
-  step.
+* [`UsbipStepExecutor`] - trait, one method per step. Provider-local tests
+  inject a fixture executor that records call order and can fail a chosen
+  step; no production adapter currently implements this trait.
 * [`execute_usbip_plan(plan, executor)`] - drives the plan
   top-to-bottom, fail-fast on the first error.
 * `UsbipExecutionReport::failure_rollback_order()` - returns only
@@ -123,37 +126,18 @@ use d2bd::usbip_state_machine::{
 
 ## Failure mode
 
-Any step's failure is normalised to:
+Any step's failure is returned to the adapter as:
 
 ```rust
-TypedError::UsbipStepFailed {
+UsbipPlanError {
     busid: String,
     step: UsbipBusidStep,
     reason: String,
 }
 ```
 
-with these envelope fields:
-
-| Field | Value |
-| --- | --- |
-| `kind` | `usbip-step-failed` |
-| `exit_code` | `67` |
-| `message` | `usbip busid '<busid>' refused at step '<step>': <reason>` |
-| `remediation` | Names the busid and gives a concise probe/fix/retry recovery step. |
-
-Exit code 67 is distinct from the adjacent surfaces:
-
-| Code | Surface |
-| --- | --- |
-| 64 | `host-kernel-modules-missing` (broader matrix) |
-| 65 | `otel-host-bridge-readiness-timeout` |
-| 66 | `net-route-preflight-degraded` |
-| **67** | **`usbip-step-failed` (per-busid state machine)** |
-
-so operators can grep for it across hosts independently of the
-broader kernel-module check, observability bridge, or
-net-route-degraded paths.
+The provider error is an internal typed result for this planning model. No
+current daemon or broker adapter maps it into a public error envelope.
 
 ### Partial-progress contract
 
@@ -161,7 +145,7 @@ net-route-degraded paths.
 
 * `Ok(UsbipExecutionReport)` - `report.completed` is the full
   `CANONICAL_STEPS` list; `report.failed` is `None`.
-* `Err((UsbipExecutionReport, TypedError))` - `report.completed`
+* `Err((UsbipExecutionReport, UsbipPlanError))` - `report.completed`
   holds every step that succeeded before the failure;
   `report.failed = Some((step, reason))` matches the typed
   error. The stop-path / reconciler uses
@@ -173,9 +157,9 @@ a partial failure are safe.
 
 ## Per-env proxy synchronization
 
-The daemon encodes the current generic L4 proxy strategy in
+The production-wired reconcile path encodes the current generic L4 proxy strategy in
 `UsbipProxySynchronizationPlan`
-([`packages/d2bd/src/usbip_reconcile_state.rs`](../../packages/d2bd/src/usbip_reconcile_state.rs)).
+([`packages/d2b-provider-device-usbip/src/reconcile_state.rs`](../../packages/d2b-provider-device-usbip/src/reconcile_state.rs)).
 The encoded strategy deliberately avoids busid-aware claims that the current
 `socat` proxy cannot satisfy:
 
@@ -187,8 +171,9 @@ The encoded strategy deliberately avoids busid-aware claims that the current
   stream can be terminated by exact VM/proxy tuple cleanup whose source identity
   is not hidden by SNAT and whose anti-spoofing posture is proven. If the
   reconciler cannot prove that ordering and tuple,
-  `usbip-revocation-not-isolated` includes the target VM and busid, fails closed,
-  and   preserves the broker-owned session busid lock for manual drain/recovery rather than
+  the daemon surfaces a revocation isolation failure with the target VM and
+  busid, fails closed, and preserves the broker-owned session busid lock for
+  manual drain/recovery rather than
   pretending the generic proxy selectively closed that busid.
 * **Targeted cleanup (future/explicit):** only after a proven stream tuple or a
   busid-aware proxy implementation exists may the daemon run targeted cleanup.
@@ -256,9 +241,8 @@ locks, sysfs driver links, nftables rules, or per-env sidecars directly.
 
 | Layer | Path | What it asserts |
 | --- | --- | --- |
-| Unit | `packages/d2bd/src/usbip_state_machine.rs` (`mod tests`) | `CANONICAL_STEPS` is pinned, `stop_order()` and failure rollback preserve per-env backend/proxy sidecars, every step's failure surfaces as `TypedError::UsbipStepFailed`, and the typed-error envelope carries exit code 67. |
-| Unit | `packages/d2bd/src/usbip_reconcile_state.rs` (`mod tests`) | VM stop/restart carrier cleanup preserves session claims, explicit detach releases only after successful cleanup, failures preserve claims/manual recovery, firewall-before-flow-kill ordering holds, and same-env sidecars are not bounced. |
-| Contract | [`packages/d2b-contract-tests/tests/policy_supervisor.rs`](../../packages/d2b-contract-tests/tests/policy_supervisor.rs) (`usbip_state_machine_surface`) | Module is wired into `lib.rs`; canonical order is pinned in source; typed-error variant + exit code 67 are wired; this doc names the canonical order verbatim. |
+| Unit | `packages/d2b-provider-device-usbip/src/state_machine.rs` (`mod tests`) | `CANONICAL_STEPS` is pinned, `stop_order()` and failure rollback preserve per-env backend/proxy sidecars, and step failures remain typed provider results. |
+| Unit | `packages/d2b-provider-device-usbip/src/reconcile_state.rs` (`mod tests`) | VM stop/restart carrier cleanup preserves session claims, explicit detach releases only after successful cleanup, failures preserve claims/manual recovery, firewall-before-flow-kill ordering holds, and same-env sidecars are not bounced. |
 
 ## See also
 
@@ -268,6 +252,5 @@ locks, sysfs driver links, nftables rules, or per-env sidecars directly.
   per-env runner / broker op surface that backs each step.
 * [`docs/reference/components-usbip.md`](./components-usbip.md) -
   operator-facing USBIP component reference.
-* [`tests/unit/nix/cases/usbip-gating.nix`](../../tests/unit/nix/cases/usbip-gating.nix) -
-  eval-time gate that host-side USBIP artifacts require both
-  host and per-VM opt-ins.
+* [`packages/d2b-provider-device-usbip/nix/tests/default.nix`](../../packages/d2b-provider-device-usbip/nix/tests/default.nix) -
+  owner-local Nix evaluation for the USBIP guest module.

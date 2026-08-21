@@ -171,8 +171,8 @@ pub fn generate_virtiofsd_argv(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use d2b_contracts::v3::ResourceRef;
-    use d2b_contracts::v3::execution_policy::BoundedToken;
+    use d2b_contracts_resource::v3::ResourceRef;
+    use d2b_contracts_resource::v3::execution_policy::BoundedToken;
 
     fn input() -> VirtiofsdArgvInput {
         let socket_path = PrivateSocketPath::derive(

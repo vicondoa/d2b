@@ -1,5 +1,9 @@
-use d2b_contracts::v3::credential::CredentialLeaseState;
-use d2b_contracts::v3::{StateDigest, StateEnvelope, VolumeStateError};
+use d2b_contracts_provider::v3::credential::CredentialLeaseState;
+use d2b_contracts_resource::v3::{
+    StateDigest,
+    StateEnvelope,
+    VolumeStateError,
+};
 use d2b_provider_volume_local::audit::VolumeAuditKind;
 use d2b_provider_volume_local::sealing::{
     BoundRotationResult, RotationPhase, SealingAction, SealingError, SealingState,

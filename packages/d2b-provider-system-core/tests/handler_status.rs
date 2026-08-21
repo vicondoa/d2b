@@ -1,4 +1,8 @@
-use d2b_contracts::v3::{ZoneHandlerName, ZoneHandlerPhase, ZoneHandlerStatus};
+use d2b_contracts_zone_session::v3::{
+    ZoneHandlerName,
+    ZoneHandlerPhase,
+    ZoneHandlerStatus,
+};
 use d2b_provider_system_core::{
     HandlerReadinessError, SYSTEM_CORE_HOST_HANDLER, SYSTEM_CORE_USER_HANDLER, emit_handler_status,
     require_ready_handlers,

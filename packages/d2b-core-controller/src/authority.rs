@@ -14,14 +14,15 @@ use std::{
     },
 };
 
-use d2b_contracts::v3::{
-    CanonicalJsonValue, ResourceGeneration, ResourceRef, ResourceUid, UpdateState,
-    ifname::IfName,
+use d2b_contracts_resource::v3::{
+    CanonicalJsonValue,
+    IfName,
+    ResourceGeneration,
+    ResourceRef,
+    ResourceUid,
+    UpdateState,
     is_canonical_digest,
-    network::{
-        ExternalNicAdmissionError, ExternalNicAuthorityStatus, ExternalNicClaim, MacvtapMode,
-        SharingPolicy, admit_external_nic_claims,
-    },
+    network::{ExternalNicAdmissionError, ExternalNicAuthorityStatus, ExternalNicClaim, MacvtapMode, SharingPolicy, admit_external_nic_claims},
     process::PortProtocol,
     resource_schema::canonical_digest,
 };
@@ -960,7 +961,7 @@ pub fn claim_digest(claim: &AuthorityStorageClaim) -> Result<String, AuthorityEr
     let bytes = serde_json::to_vec(claim).map_err(|_| AuthorityError::InvalidAuthorityRequest)?;
     let canonical =
         CanonicalJsonValue::parse(&bytes).map_err(|_| AuthorityError::InvalidAuthorityRequest)?;
-    let bytes = d2b_contracts::v3::canonical_json_bytes(&canonical)
+    let bytes = d2b_contracts_resource::v3::canonical_json_bytes(&canonical)
         .map_err(|_| AuthorityError::InvalidAuthorityRequest)?;
     Ok(canonical_digest("d2b:authority-claim/v1", &bytes))
 }

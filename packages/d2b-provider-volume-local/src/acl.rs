@@ -4,8 +4,10 @@
 //! identity and bounded grant counts.  The effect adapter owns the actual
 //! ACL syscalls and is the only layer that sees filesystem ACL state.
 
-use d2b_contracts::v3::ResourceRef;
-use d2b_contracts::v3::volume::{ForeignChildPolicy, LayoutEntry};
+use d2b_contracts_resource::v3::ResourceRef;
+use d2b_contracts_resource::v3::{
+    volume::{ForeignChildPolicy, LayoutEntry},
+};
 
 use crate::error::VolumeLocalError;
 

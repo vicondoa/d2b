@@ -266,17 +266,18 @@ fn finalization_waits_for_dependents_and_store_writer_before_cleanup() {
 #[test]
 fn hard_quota_on_a_filesystem_that_cannot_enforce_it_fails_the_volume() {
     use d2b_provider_volume_local::QuotaCapability;
-    let spec: d2b_contracts::v3::volume::VolumeSpec = serde_json::from_value(serde_json::json!({
-        "source": {
-            "executionRef": "Host/host-system",
-            "settings": { "kind": "tmpfs" },
-        },
-        "kind": "ephemeral",
-        "layout": [],
-        "views": { "controller": { "path": "", "rights": ["read", "traverse"] } },
-        "quota": { "maxBytes": 1048576, "maxInodes": 1024, "enforcement": "hard" },
-    }))
-    .expect("conformant fixture");
+    let spec: d2b_contracts_resource::v3::volume::VolumeSpec =
+        serde_json::from_value(serde_json::json!({
+            "source": {
+                "executionRef": "Host/host-system",
+                "settings": { "kind": "tmpfs" },
+            },
+            "kind": "ephemeral",
+            "layout": [],
+            "views": { "controller": { "path": "", "rights": ["read", "traverse"] } },
+            "quota": { "maxBytes": 1048576, "maxInodes": 1024, "enforcement": "hard" },
+        }))
+        .expect("conformant fixture");
     let port = ScriptedPort::empty().with_quota(QuotaCapability::Unenforceable);
     assert_eq!(
         block_on(controller(&port).reconcile(&fixtures::volume_uid(), &spec)).unwrap_err(),

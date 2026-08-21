@@ -6,13 +6,23 @@ use std::{
 };
 
 use base64::{Engine as _, engine::general_purpose::STANDARD};
-use d2b_contracts::v3::{
-    ArtifactDigest, ArtifactDigestSet, ArtifactId, CanonicalJsonValue, CompatibilityRange,
-    ComponentDescriptor, ComponentType, PolicyEvaluation, ProviderManifest, ResourceTypeName,
-    RevocationState, SignatureState, TrustEvidence, canonical_json_bytes,
+use d2b_contracts_provider::v3::{
+    ArtifactDigest,
+    ArtifactDigestSet,
+    CompatibilityRange,
+    ComponentDescriptor,
+    ComponentType,
+    PolicyEvaluation,
+    ProviderManifest,
+    RevocationState,
+    SignatureState,
+    TrustEvidence,
+    provider::{BinaryRef, ComponentExecution, UpgradeDisposition, UpgradePolicy},
+};
+use d2b_contracts_resource::v3::{
+    ArtifactId, CanonicalJsonValue, ResourceTypeName, canonical_json_bytes,
     execution_policy::{BoundedToken, ExecutionDomain},
     identity::SchemaFingerprint,
-    provider::{BinaryRef, ComponentExecution, UpgradeDisposition, UpgradePolicy},
     resource_schema::SchemaVersion,
 };
 use d2b_core::provider_artifact::{

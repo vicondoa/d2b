@@ -6,7 +6,7 @@
 # carve-outs, and the signed store-view layout.
 #
 # The bash gate's source-level store-sync guardrails (no legacy root:kvm /
-# 2775 store-mode enforcement in nixos-modules/store.nix or the daemon's
+# 2775 store-mode enforcement in packages/d2b-provider-volume-local/nix/store.nix or the daemon's
 # packages/d2bd/src/ownership_preflight.rs) are SOURCE-LINTS, not
 # eval-time value assertions, so they live in the Rust policy layer:
 # packages/d2b-contract-tests/tests/policy_ownership_preflight.rs

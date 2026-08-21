@@ -10,8 +10,8 @@ use std::future::Future;
 
 use serde::Serialize;
 
-use d2b_contracts::v3::ResourceRef;
-use d2b_contracts::v3::execution_policy::BoundedToken;
+use d2b_contracts_resource::v3::ResourceRef;
+use d2b_contracts_resource::v3::execution_policy::BoundedToken;
 
 use crate::error::VirtiofsExportError;
 use crate::export::{ExportSpec, SocketIdentity};

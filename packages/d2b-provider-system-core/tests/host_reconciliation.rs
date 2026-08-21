@@ -9,9 +9,9 @@
 
 use std::{collections::BTreeSet, future::Future};
 
-use d2b_contracts::v3::execution_policy::ExecutionDomain;
-use d2b_contracts::v3::host::IsolationPosture;
-use d2b_contracts::v3::resource_status::ResourcePhase;
+use d2b_contracts_resource::v3::execution_policy::ExecutionDomain;
+use d2b_contracts_resource::v3::host::IsolationPosture;
+use d2b_contracts_resource::v3::resource_status::ResourcePhase;
 use d2b_provider_system_core::testing::{block_on, fixtures};
 use d2b_provider_system_core::{
     HostCapabilityClass, HostProbeEffectPort, HostProbeMetadata, HostReconciler,
@@ -94,7 +94,11 @@ fn a_user_domain_host_must_name_the_exact_user_it_resolves() {
     // reconciler keeps its own check as defence in depth; this case pins
     // where the rule is actually enforced, so a later relaxation of the
     // primitive is visible here rather than silent.
-    use d2b_contracts::v3::execution_policy::{BudgetSpec, ExecutionPolicy, PrimitiveSpecError};
+    use d2b_contracts_resource::v3::{
+    execution_policy::{
+        BudgetSpec, ExecutionPolicy, PrimitiveSpecError,
+    },
+};
 
     assert_eq!(
         ExecutionPolicy::new(
@@ -122,7 +126,7 @@ fn a_user_domain_host_must_name_the_exact_user_it_resolves() {
         Vec::new(),
     )
     .expect("the mixed-domain policy is well formed");
-    let spec = d2b_contracts::v3::host::HostSpec::new(policy, None)
+    let spec = d2b_contracts_resource::v3::host::HostSpec::new(policy, None)
         .expect("a mixed-domain host carries no posture");
     let status = HostReconciler::new()
         .reconcile(

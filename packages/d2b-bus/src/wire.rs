@@ -5,11 +5,14 @@
 //! import surface.  A Zone identity is prepended to policy fingerprints so a
 //! policy cannot be replayed under a different local Zone name.
 
-use d2b_contracts::v3::{
-    ResourceRef, ZoneId,
+use d2b_contracts_zone_session::v3::{
     component_session::{EndpointPolicyIdentity, LimitProfile},
-    resource_schema::canonical_digest,
     zone_session,
+};
+use d2b_contracts_resource::v3::{
+    ResourceRef,
+    ZoneId,
+    resource_schema::canonical_digest,
 };
 
 pub use zone_session::{
@@ -78,7 +81,9 @@ impl ZoneBoundPolicyIdentity {
     }
 
     /// Render the stable digest used in local policy comparison.
-    pub fn digest(&self) -> Result<String, d2b_contracts::v3::component_session::BinaryError> {
+    pub fn digest(
+        &self,
+    ) -> Result<String, d2b_contracts_zone_session::v3::component_session::BinaryError> {
         let encoded = self.policy.encode_canonical()?;
         let provider = self
             .provider_ref
@@ -112,11 +117,13 @@ pub const fn local_default_limits() -> LimitProfile {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use d2b_contracts::v3::component_session::{
+    use d2b_contracts_zone_session::v3::{
+    component_session::{
         AttachmentPolicy, AttachmentPolicyKind, EndpointPurpose, EndpointRole,
         IdentityEvidenceRequirement, Locality, NoiseProfile, PurposeClass, ServicePackage,
         TransportBinding, TransportClass,
-    };
+    },
+};
 
     fn identity() -> EndpointPolicyIdentity {
         EndpointPolicyIdentity {

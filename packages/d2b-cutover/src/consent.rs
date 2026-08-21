@@ -2,7 +2,7 @@
 
 use std::fmt;
 
-use d2b_contracts::v3::{
+use d2b_contracts_resource::v3::{
     CanonicalJsonError, CanonicalJsonValue, canonical_digest, canonical_json_bytes,
 };
 use serde::{Deserialize, Serialize};

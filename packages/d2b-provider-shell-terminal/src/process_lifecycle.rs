@@ -3,7 +3,7 @@
 use std::collections::BTreeSet;
 
 use crate::ShellSession;
-use d2b_contracts::v3::{
+use d2b_contracts_resource::v3::{
     ResourceRef,
     execution_policy::{BoundedToken, ExecutionDomain},
 };

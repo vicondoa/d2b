@@ -11,6 +11,10 @@ mod policy;
 mod portal;
 mod principal;
 mod process;
+#[allow(missing_docs)]
+pub mod wayland_proxy_argv;
+#[allow(missing_docs)]
+pub mod wayland_proxy;
 mod readiness;
 mod runtime;
 mod spec;
@@ -36,6 +40,10 @@ pub use process::{
     ProxyProcessTemplate, ProxyReadinessFailure, ProxyReadinessStage, ProxyReadinessState,
     VolumeState, WorkerAction, WorkerRestartEvidence, WorkerState, WorkerSupervisor,
     WorkerSupervisorError,
+};
+pub use wayland_proxy_argv::{
+    WaylandProxyArgvError, WaylandProxyArgvInput, WaylandProxyBorderConfig,
+    WaylandProxyBorderLabelConfig, WaylandProxyBorderLabelPosition, generate_wayland_proxy_argv,
 };
 pub use readiness::ProxyReadinessEvent;
 pub use runtime::{

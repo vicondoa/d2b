@@ -23,7 +23,7 @@ impl ActivationManifest {
     pub const fn canonical() -> Self {
         Self {
             artifact_id: "activation-nixos",
-            resource_type: d2b_contracts::v3::NIXOS_GENERATION_RESOURCE_TYPE,
+            resource_type: d2b_contracts_resource::v3::NIXOS_GENERATION_RESOURCE_TYPE,
             controller: "activation-controller",
             runner: "activation-runner",
             declares_state_volume: false,

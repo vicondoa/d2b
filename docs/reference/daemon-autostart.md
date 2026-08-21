@@ -7,7 +7,7 @@ caps how many start at once, tolerates failures, and is safe to
 re-run.
 
 This page is the reference. The Rust implementation lives in
-`packages/d2bd/src/autostart.rs`; the production starter wires
+`packages/d2bd-runtime/src/autostart.rs`; the production starter wires
 into `dispatch_broker_vm_start` so each per-VM start drives the
 same host-prep DAG → process DAG → pidfd-registration sequence
 that a manual `vm start` would.
@@ -40,7 +40,7 @@ workloads):
 
 1. **Net VMs.** Every VM where `is_net_vm = true` (i.e., the
    auto-declared `sys-<env>-net` VMs from
-   `nixos-modules/network.nix`). Sorted by `(env, vm-name)`.
+   `packages/d2b-provider-network-local/nix/network.nix`). Sorted by `(env, vm-name)`.
 2. **Workloads.** Every other VM, sorted by `(env, vm-name)` so
    workloads pin to their env's net VM in plan order.
 
@@ -138,8 +138,8 @@ workloads grouped by env.
 
 ## Testing
 
-- Unit tests live in `packages/d2bd/src/autostart.rs`
-  (`cargo test --lib autostart`). They cover ordering,
+- Unit tests live in `packages/d2bd-runtime/src/autostart.rs`
+  (`bazel test //packages/d2bd-runtime:d2bd_runtime_test`). They cover ordering,
   concurrency-cap enforcement, degraded-mode propagation,
   idempotent re-entry, and the `parallelism = 0` clamp.
 - `tests/unit/nix/cases/daemon-autostart.nix` asserts the public Rust surface,

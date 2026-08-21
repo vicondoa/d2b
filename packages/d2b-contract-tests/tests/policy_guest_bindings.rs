@@ -1,7 +1,7 @@
 //! Guest-control generated binding source policy lints migrated from the
 //! retired guest binding bash gates. These are source greps over committed
 //! generated bindings and crate manifests; generation determinism stays in
-//! `tests/unit/gates/drift-check.sh`.
+//! the owner-local xtask generator actions.
 
 use d2b_contract_tests::{read_repo_file, repo_path_exists};
 use regex::Regex;
@@ -36,9 +36,9 @@ fn assert_no_line_matches(content: &str, pattern: &str, context: &str) {
 
 #[test]
 fn guest_proto_bindings_are_message_only_and_codegen_free() {
-    let generated_file_rel = "packages/d2b-contracts/src/generated/guest_control.rs";
-    let ipc_manifest_rel = "packages/d2b-contracts/Cargo.toml";
-    let ipc_build_rs_rel = "packages/d2b-contracts/build.rs";
+    let generated_file_rel = "packages/d2b-contracts-control/src/generated/guest_control.rs";
+    let ipc_manifest_rel = "packages/d2b-contracts-control/Cargo.toml";
+    let ipc_build_rs_rel = "packages/d2b-contracts-control/build.rs";
 
     assert!(
         repo_path_exists(generated_file_rel),
@@ -65,16 +65,16 @@ fn guest_proto_bindings_are_message_only_and_codegen_free() {
     assert_no_line_matches(
         &ipc_manifest,
         r"ttrpc",
-        "guest-proto-bindings: d2b-contracts must not depend on ttrpc for message-only bindings",
+        "guest-proto-bindings: d2b-contracts-control must not depend on ttrpc for message-only bindings",
     );
     assert!(
         !repo_path_exists(ipc_build_rs_rel),
-        "guest-proto-bindings: d2b-contracts must not generate guest protobuf bindings during normal builds"
+        "guest-proto-bindings: d2b-contracts-control must not generate guest protobuf bindings during normal builds"
     );
     assert_no_line_matches(
         &ipc_manifest,
         r"^\[build-dependencies\]|protobuf-codegen|prost-build|tonic-build|\bprotoc\b",
-        "guest-proto-bindings: d2b-contracts must keep protobuf code generation in xtask only",
+        "guest-proto-bindings: d2b-contracts-control must keep protobuf code generation in xtask only",
     );
 }
 

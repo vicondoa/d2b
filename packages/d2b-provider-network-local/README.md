@@ -46,7 +46,8 @@ projection, and persistent-TAP mutations stay broker-owned.
 ## Placement and dependencies
 
 The controller is placed on the configured Host and the guest-agent is placed
-inside the net VM. The crate depends only on provider-neutral contracts. It has
+inside the net VM. The crate depends only on provider-neutral contracts and
+the foundational bundle model. It has
 no dependency on the daemon, privileged broker, host implementation crate,
 resource store, or another Provider implementation.
 
@@ -91,6 +92,9 @@ semantic sets and contain no Zone, Network, resource, VM, caller, address, path,
 or interface identity. This layer owns no durable Provider state.
 
 ## Build and test
+
+The production Nix materialisation modules live under `nix/`; the root
+`nixos-modules/` paths are compatibility shims only.
 
 ```bash
 cargo check -p d2b-provider-network-local

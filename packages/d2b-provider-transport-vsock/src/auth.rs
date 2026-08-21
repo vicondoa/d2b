@@ -1,12 +1,13 @@
 //! Guest-bound proof-of-possession and replay-safe session admission.
 
 use crate::limits::MAX_REPLAY_ENTRIES;
-use d2b_contracts::{
-    guest_auth::{
-        AUTH_NONCE_LEN, AuthDirection, AuthPurpose, GUEST_CONTROL_AUTH_PORT, GuestAuthTranscript,
-        ProofRole, encode_transcript,
-    },
-    v3::{ResourceRef, ZoneId},
+use d2b_contracts_control::guest_auth::{
+    AUTH_NONCE_LEN, AuthDirection, AuthPurpose, GUEST_CONTROL_AUTH_PORT, GuestAuthTranscript,
+    ProofRole, encode_transcript,
+};
+use d2b_contracts_resource::v3::{
+    ResourceRef,
+    ZoneId,
 };
 use ring::hmac;
 use std::{collections::HashSet, fmt};

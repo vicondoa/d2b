@@ -67,7 +67,7 @@ fn rust_sources_under(rel_dir: &str) -> Vec<String> {
 #[test]
 fn guest_control_vsock_helper_stays_transport_confined() {
     const SANCTIONED: [&str; 3] = [
-        "packages/d2bd/src/guest_control_vsock.rs",
+        "packages/d2bd-runtime/src/guest_control_vsock.rs",
         "packages/d2bd/src/guest_control_bridge.rs",
         "packages/d2bd/src/exec_session_real.rs",
     ];

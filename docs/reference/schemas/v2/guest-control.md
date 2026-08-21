@@ -7,9 +7,9 @@ ttRPC/protobuf surface. It snapshots the guest daemon control messages, health
 states, exec lifecycle messages, and chunked stdio RPC shapes that host
 `d2bd` and guest `d2b-guestd` must keep aligned. The protobuf service
 source lives at
-[`packages/d2b-contracts/proto/guest_control.proto`](../../../../packages/d2b-contracts/proto/guest_control.proto).
+[`packages/d2b-contracts-control/guest_control.proto`](../../../../packages/d2b-contracts-control/guest_control.proto).
 The generated Rust bindings are intentionally split by role:
-`packages/d2b-contracts/src/generated/guest_control.rs` is message-only and
+`packages/d2b-contracts-control/src/generated/guest_control.rs` is message-only and
 `ttrpc`-free, while `packages/d2b-guestd/src/generated/guest_control_ttrpc.rs`
 contains the guestd-local service bindings.
 

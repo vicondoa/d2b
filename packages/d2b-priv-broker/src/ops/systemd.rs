@@ -13,7 +13,7 @@ use std::path::{Path, PathBuf};
 use std::thread;
 use std::time::{Duration, Instant};
 
-use d2b_contracts::broker_wire::{
+use d2b_contracts_broker::broker_wire::{
     OpenSystemdUnitPidfdRequest, SandboxLaunchPlan, StartTransientUnitRequest,
     StopSystemdUnitRequest, SystemdStopClass, SystemdUnitDomain, SystemdUnitIdentity,
 };
@@ -75,7 +75,7 @@ impl std::error::Error for SystemdError {}
 
 fn validate_request(
     resolver: &BundleResolver,
-    request: &d2b_contracts::broker_wire::SystemdUnitRequest,
+    request: &d2b_contracts_broker::broker_wire::SystemdUnitRequest,
 ) -> Result<ResolvedRunnerIntent, SystemdError> {
     if request.generation == 0
         || request.provider_identity == [0; 32]
@@ -93,7 +93,7 @@ fn validate_request(
             && !plan.start_root
             && matches!(
                 plan.environment_class,
-                d2b_contracts::v3::process::EnvironmentClass::Minimal
+                d2b_contracts_resource::v3::process::EnvironmentClass::Minimal
             )
             && plan.read_only_root
             && plan.user_namespace.is_none()
@@ -113,8 +113,9 @@ fn validate_request(
     {
         return Err(SystemdError::BundleIntent);
     }
-    let expected_execution = d2b_contracts::v3::ResourceRef::parse(&intent.execution_ref)
-        .map_err(|_| SystemdError::IdentityMismatch)?;
+    let expected_execution =
+        d2b_contracts_resource::v3::ResourceRef::parse(&intent.execution_ref)
+            .map_err(|_| SystemdError::IdentityMismatch)?;
     if request
         .execution_ref
         .as_ref()
@@ -139,7 +140,7 @@ fn validate_request(
     let expected_user = intent
         .user_ref
         .as_deref()
-        .map(d2b_contracts::v3::ResourceRef::parse)
+        .map(d2b_contracts_resource::v3::ResourceRef::parse)
         .transpose()
         .map_err(|_| SystemdError::IdentityMismatch)?;
     if request.user_ref != expected_user {
@@ -192,10 +193,10 @@ fn manager_connection(
 }
 
 fn role_matches(
-    role: d2b_contracts::broker_wire::RunnerRole,
+    role: d2b_contracts_broker::broker_wire::RunnerRole,
     process_role: &d2b_core::processes::ProcessRole,
 ) -> bool {
-    use d2b_contracts::broker_wire::RunnerRole;
+    use d2b_contracts_broker::broker_wire::RunnerRole;
     use d2b_core::processes::ProcessRole;
     matches!(
         (role, process_role),
@@ -219,7 +220,7 @@ fn role_matches(
     )
 }
 
-fn unit_name(request: &d2b_contracts::broker_wire::SystemdUnitRequest) -> String {
+fn unit_name(request: &d2b_contracts_broker::broker_wire::SystemdUnitRequest) -> String {
     let mut digest = Sha256::new();
     digest.update(b"d2b-systemd-transient-unit-v1");
     digest.update(request.vm_id.as_str().as_bytes());
@@ -276,7 +277,7 @@ fn is_no_such_unit(error: &zbus::Error) -> bool {
 /// exposing its connection or accepting a caller-supplied bus address.
 pub fn check_user_manager(
     resolver: &BundleResolver,
-    request: &d2b_contracts::broker_wire::CheckSystemdUserManagerRequest,
+    request: &d2b_contracts_broker::broker_wire::CheckSystemdUserManagerRequest,
 ) -> Result<bool, SystemdError> {
     if request.domain != SystemdUnitDomain::User {
         return Err(SystemdError::InvalidRequest("user-manager-domain"));
@@ -343,7 +344,7 @@ fn cgroup_identity(
 }
 
 fn read_identity(
-    request: &d2b_contracts::broker_wire::SystemdUnitRequest,
+    request: &d2b_contracts_broker::broker_wire::SystemdUnitRequest,
     intent: &ResolvedRunnerIntent,
     connection: &Connection,
     name: &str,
@@ -396,7 +397,7 @@ fn read_identity(
 }
 
 fn wait_identity(
-    request: &d2b_contracts::broker_wire::SystemdUnitRequest,
+    request: &d2b_contracts_broker::broker_wire::SystemdUnitRequest,
     intent: &ResolvedRunnerIntent,
     connection: &Connection,
     name: &str,
@@ -482,7 +483,7 @@ pub fn start(
 /// Observe a trusted transient unit without opening a pidfd.
 pub fn observe(
     resolver: &BundleResolver,
-    request: &d2b_contracts::broker_wire::ObserveSystemdUnitRequest,
+    request: &d2b_contracts_broker::broker_wire::ObserveSystemdUnitRequest,
 ) -> Result<Option<SystemdUnitIdentity>, SystemdError> {
     let intent = validate_request(resolver, request)?;
     let connection = manager_connection(&intent, request.domain)?;
@@ -591,9 +592,12 @@ pub fn stop_cutover_daemon() -> Result<(), SystemdError> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use d2b_contracts::broker_wire::{RunnerRole, SystemdUnitRequest};
     use d2b_contracts::types::{BundleOpId, RoleId, VmId};
-    use d2b_contracts::v3::{ResourceRef, ResourceUid};
+    use d2b_contracts_broker::broker_wire::{RunnerRole, SystemdUnitRequest};
+    use d2b_contracts_resource::v3::{
+    ResourceRef,
+    ResourceUid,
+};
 
     fn request() -> SystemdUnitRequest {
         SystemdUnitRequest {

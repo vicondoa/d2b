@@ -4,7 +4,7 @@
 //! resolves the provider's opaque context into the existing typed broker wire
 //! operations and maps only closed broker outcomes back to the provider.
 
-use d2b_contracts::broker_wire::{
+use d2b_contracts_broker::broker_wire::{
     ApplyNftablesProjectionRequest, ApplyNmUnmanagedRequest, ApplyRouteRequest, ApplySysctlRequest,
     BrokerCallerRole, BrokerRequest, BrokerResponse, CreateBridgeRequest, DeleteBridgeRequest,
     DeletePersistentTapRequest, NftablesProjectionAction, SeedDnsmasqLeaseRequest,
@@ -160,8 +160,8 @@ impl NetworkBroker for DaemonNetworkBroker<'_> {
 
     fn delete_persistent_tap(
         &self,
-        handle: &d2b_contracts::v3::network::AttachmentHandle,
-        fence: &d2b_contracts::v3::network::AttachmentGenerationFence,
+        handle: &d2b_contracts_resource::v3::network::AttachmentHandle,
+        fence: &d2b_contracts_resource::v3::network::AttachmentGenerationFence,
     ) -> Result<(), NetworkBrokerError> {
         self.dispatch(BrokerRequest::DeletePersistentTap(
             DeletePersistentTapRequest {

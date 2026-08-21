@@ -1,9 +1,10 @@
 use std::cell::Cell;
 
-use d2b_contracts::{
-    broker_wire::{CreatePersistentTapRequest, DeletePersistentTapRequest},
-    types::{RoleId, VmId},
-    v3::{ResourceGeneration, ResourceUid},
+use d2b_contracts::types::{RoleId, VmId};
+use d2b_contracts_broker::broker_wire::{CreatePersistentTapRequest, DeletePersistentTapRequest};
+use d2b_contracts_resource::v3::{
+    ResourceGeneration,
+    ResourceUid,
 };
 use d2b_priv_broker::ops::{
     audit_op::OperationFields,
@@ -80,7 +81,7 @@ fn failed_create_leaves_no_realization_and_retry_is_safe() {
     let root = state_dir("persistent-tap-lifecycle");
     let create = create_request();
     let delete = request(4, 7);
-    let ifname = d2b_core::host::IfName::new("d2b-t12345678").unwrap();
+    let ifname = d2b_contracts_resource::v3::IfName::new("d2b-t12345678").unwrap();
 
     // A failed live create has no post-create persistence callback. The
     // realization row must therefore remain absent and a retry must be able

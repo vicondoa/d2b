@@ -1,9 +1,11 @@
 mod common;
 
-use d2b_contracts::v3::credential::{
+use d2b_contracts_provider::v3::{
+    credential::{
     CredentialAuthorization, CredentialMethod, CredentialProvider, CredentialRequest,
     CredentialResponse, CredentialServiceError, CredentialServiceErrorCode, DeliverySessionParams,
     SensitiveDeliveryRecord,
+},
 };
 use d2b_provider_credential_secret_service::{
     SecretServiceCredentialProvider, SecretServiceSessionCapability,
@@ -89,7 +91,9 @@ impl CredentialProvider for BindingReplacingProvider {
 impl SessionCapabilitySource for BindingReplacingProvider {
     fn test_session_capability(&self) -> SecretServiceSessionCapability {
         self.inner
-            .issue_session_capability(d2b_contracts::v3::ResourceGeneration::new(1).unwrap())
+            .issue_session_capability(
+                d2b_contracts_resource::v3::ResourceGeneration::new(1).unwrap(),
+            )
             .expect("test provider must issue its placement-bound capability")
     }
 }

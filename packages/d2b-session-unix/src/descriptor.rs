@@ -3,8 +3,10 @@ use crate::{
     error::{UnixSessionError, io_error},
     pidfd::{PidfdEvidence, PidfdIdentityVerifier, verify_pidfd},
 };
-use d2b_contracts::v3::component_session::{
+use d2b_contracts_zone_session::v3::{
+    component_session::{
     AttachmentAccess, AttachmentKind, AttachmentPacket, AttachmentPolicy, KernelObjectType,
+},
 };
 use d2b_session::OwnedAttachment;
 use rustix::{
@@ -529,7 +531,7 @@ fn inspect_identity(
 
 pub(crate) fn validate_owned_file(
     fd: impl AsFd,
-    descriptor: &d2b_contracts::v3::component_session::AttachmentDescriptor,
+    descriptor: &d2b_contracts_zone_session::v3::component_session::AttachmentDescriptor,
     policy: &DescriptorPolicy,
 ) -> Result<(), UnixSessionError> {
     validate_owned_file_identity(fd, descriptor, policy).map(|_| ())
@@ -537,7 +539,7 @@ pub(crate) fn validate_owned_file(
 
 pub(crate) fn validate_owned_file_identity(
     fd: impl AsFd,
-    descriptor: &d2b_contracts::v3::component_session::AttachmentDescriptor,
+    descriptor: &d2b_contracts_zone_session::v3::component_session::AttachmentDescriptor,
     policy: &DescriptorPolicy,
 ) -> Result<ObjectIdentity, UnixSessionError> {
     if descriptor.kind != AttachmentKind::FileDescriptor {

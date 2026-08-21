@@ -9,6 +9,7 @@ license.workspace = true
 workspace = true
 
 [dependencies]
-d2b-contracts = { path = "../d2b-contracts", version = "0.0.0-bootstrap" }
+d2b-contracts-zone-session = { path = "../d2b-contracts-zone-session", version = "0.0.0-bootstrap" }
+d2b-contracts-resource = { path = "../d2b-contracts-resource", version = "0.0.0-bootstrap" }
 getrandom = "0.3"
 rustix = { workspace = true, features = ["event"] }

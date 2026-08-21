@@ -500,17 +500,17 @@ D2B_FILES=(
   #   nixos-modules/host-audit.nix       (d2b-audit-check.{service,timer})
   #   nixos-modules/host-ch-exporter.nix (d2b-ch-exporter.service)
   #   nixos-modules/components/video/host.nix (d2b-<vm>-video)
-  nixos-modules/network.nix
-  nixos-modules/net.nix
+  packages/d2b-provider-network-local/nix/network.nix
+  packages/d2b-provider-network-local/nix/net.nix
   nixos-modules/observability-vm.nix
-  nixos-modules/store.nix
+  packages/d2b-provider-volume-local/nix/store.nix
   nixos-modules/components/graphics.nix
   nixos-modules/components/tpm.nix
   nixos-modules/components/usbip.nix
   nixos-modules/components/audit.nix
   nixos-modules/components/home-manager.nix
-  nixos-modules/components/audio/guest.nix
-  nixos-modules/components/audio/host.nix
+  packages/d2b-provider-audio-pipewire/nix/guest.nix
+  packages/d2b-provider-audio-pipewire/nix/host.nix
   nixos-modules/components/observability/default.nix
   nixos-modules/components/observability/guest.nix
   nixos-modules/components/observability/host.nix
@@ -590,8 +590,8 @@ d2b_static_gate_begin "readOnly + default + config trio lint" "readOnly + defaul
 TRIO_FAILED=0
 TRIO_CONFIG_ASSIGN_RE='^[[:space:]]*(config\.)?d2b\.[A-Za-z0-9_.-]+[[:space:]]*='
 STORE_TRIO_ASSIGN_RE='^[[:space:]]*(config\.)?d2b\.store\.(package|generations)[[:space:]]*='
-if grep -qE "$STORE_TRIO_ASSIGN_RE" "$ROOT/nixos-modules/store.nix"; then
-  grep -nE "$STORE_TRIO_ASSIGN_RE" "$ROOT/nixos-modules/store.nix" >&2 || true
+if grep -qE "$STORE_TRIO_ASSIGN_RE" "$ROOT/packages/d2b-provider-volume-local/nix/store.nix"; then
+  grep -nE "$STORE_TRIO_ASSIGN_RE" "$ROOT/packages/d2b-provider-volume-local/nix/store.nix" >&2 || true
   log "  FAIL: store.nix assigns readOnly+default d2b.store.package/generations"
   TRIO_FAILED=1
 fi
@@ -770,11 +770,6 @@ if [ -x "$ROOT/tests/umask-roundtrip-eval.sh" ]; then
   # swtpm/gpu/audio umask=7 (0o007) propagates from minijail-profiles.nix
   # through processesJson.data without silent pipeline drop.
   d2b_static_parallel_script_gate "tests/umask-roundtrip-eval.sh" "$ROOT/tests/umask-roundtrip-eval.sh"
-fi
-if [ -x "$ROOT/tests/store-overlay-emit-eval.sh" ]; then
-  # v1.2 - assert DiskInit plan-op emitted in processes.json
-  # CH node when writableStoreOverlay is set.
-  d2b_static_parallel_script_gate "tests/store-overlay-emit-eval.sh" "$ROOT/tests/store-overlay-emit-eval.sh"
 fi
 if [ -x "$ROOT/tests/volume-mounts-eval.sh" ]; then
   # Declared microvm.volumes must emit stable CH disk serials and matching

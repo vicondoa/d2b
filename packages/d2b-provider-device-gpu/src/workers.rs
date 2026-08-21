@@ -5,7 +5,7 @@ use core::fmt;
 use crate::{
     GpuProcessRole, GpuProcessSelectionError, GpuSettings, process::GpuProcessDeclaration,
 };
-use d2b_contracts::v3::ResourceUid;
+use d2b_contracts_resource::v3::ResourceUid;
 
 /// Closed device grant classes used by GPU worker templates.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]

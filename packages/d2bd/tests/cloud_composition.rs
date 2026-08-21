@@ -4,17 +4,18 @@ use std::{
 };
 
 use async_trait::async_trait;
-use d2b_contracts::{
-    provider_effects::aca::{
-        AcaConfiguredDiskId, AcaControl, AcaControlContext, AcaControlError, AcaControlErrorKind,
-        AcaControlHealth, AcaCpuMillis, AcaCredentialLease, AcaCredentialLeaseClient,
-        AcaCredentialLeaseRequest, AcaDeleteOutcome, AcaDesiredDiskImage, AcaDesiredSandbox,
-        AcaDiskImageCandidates, AcaDiskImageId, AcaDiskImageRecord, AcaDiskImageSource,
-        AcaMemoryMib, AcaOperationId, AcaProfileId, AcaReadinessPolicy, AcaResourceBinding,
-        AcaRuntimeConfig, AcaSandboxCandidates, AcaSandboxId, AcaSandboxLifecycle,
-        AcaSandboxProfile, AcaSandboxRecord,
-    },
-    v3::{ResourceRef, ResourceUid, credential::CredentialLeaseHandle},
+use d2b_contracts_provider::v3::credential::CredentialLeaseHandle;
+use d2b_contracts_resource::v3::{
+    ResourceRef,
+    ResourceUid,
+};
+use d2b_provider_runtime_azure_container_apps::{
+    AcaConfiguredDiskId, AcaControl, AcaControlContext, AcaControlError, AcaControlErrorKind,
+    AcaControlHealth, AcaCpuMillis, AcaCredentialLease, AcaCredentialLeaseClient,
+    AcaCredentialLeaseRequest, AcaDeleteOutcome, AcaDesiredDiskImage, AcaDesiredSandbox,
+    AcaDiskImageCandidates, AcaDiskImageId, AcaDiskImageRecord, AcaDiskImageSource, AcaMemoryMib,
+    AcaOperationId, AcaProfileId, AcaReadinessPolicy, AcaResourceBinding, AcaRuntimeConfig,
+    AcaSandboxCandidates, AcaSandboxId, AcaSandboxLifecycle, AcaSandboxProfile, AcaSandboxRecord,
 };
 use d2b_provider_runtime_azure_container_apps::{
     AcaClock, AcaController, AcaPhase, AcaReconcileOutcome,
@@ -279,7 +280,10 @@ fn cloud_controller(
         controller_execution_ref: ResourceRef::parse("Host/host-system").unwrap(),
         default_vcpus: 2,
         default_memory_mb: 512,
-        default_machine_type: d2b_contracts::v3::credential::OpaqueAzureRef::parse("q35").unwrap(),
+        default_machine_type: d2b_contracts_provider::v3::credential::OpaqueAzureRef::parse(
+            "q35",
+        )
+        .unwrap(),
         watchdog: true,
         adoption_window_ms: 30_000,
         health_check_interval_ms: 30_000,

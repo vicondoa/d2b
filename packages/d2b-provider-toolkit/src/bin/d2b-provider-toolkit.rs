@@ -6,7 +6,7 @@ use std::{
     process::ExitCode,
 };
 
-use d2b_contracts::v3::ProviderManifest;
+use d2b_contracts_provider::v3::ProviderManifest;
 use d2b_provider_toolkit::manifest::{self, VerificationError};
 
 fn main() -> ExitCode {

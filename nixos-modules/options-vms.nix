@@ -808,7 +808,7 @@ in
           wrapper can redirect a plugged-in Yubico device from the
           host's xhci to this VM via USBIP. Host-side daemon is
           per-env (`sys-<env>-usbipd`/`proxy` broker runner); see
-          `nixos-modules/network.nix`.
+          `packages/d2b-provider-network-local/nix/network.nix`.
         '';
 
         usbip.busids = lib.mkOption {

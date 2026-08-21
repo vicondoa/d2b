@@ -1,6 +1,6 @@
 //! WaylandSession dependency projection.
 
-use d2b_contracts::v3::ResourceRef;
+use d2b_contracts_resource::v3::ResourceRef;
 use serde::{Deserialize, Serialize};
 
 /// WaylandSession lifecycle phase.

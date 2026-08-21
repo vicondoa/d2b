@@ -35,21 +35,21 @@ in
   imports = [
     ./options.nix
     ./host-generation-rebuild-ref.nix
-    ./options-volumes.nix
+    ../packages/d2b-provider-volume-local/nix/options-volumes.nix
     ./resources-zone-control.nix
     ./resource-compiler.nix
     ./bundle-artifacts.nix
     ./options-observability.nix
     ./provider-catalog.nix
     ./provider-runtime-contracts.nix
-    ./providers/activation-nixos.nix
+    ../packages/d2b-provider-activation-nixos/nix/default.nix
     ./providers/system-minijail.nix
     ./providers/system-systemd.nix
     ./provider-projection-validate.nix
     ./options-ownership-matrix.nix
     ./index.nix
     ./assertions.nix
-    ./network.nix
+    ../packages/d2b-provider-network-local/nix/network.nix
     ./gateway-vm.nix
     (import ./host.nix { inherit inputs; })
     ./unsafe-local-helper.nix
@@ -68,17 +68,17 @@ in
     # semantics. There is no public file with example VMs (yet -
     # examples/ will demonstrate the pattern).
     ./observability-vm.nix
-    ./clipboard.nix
-    ./notifications.nix
-    ./store.nix
+    ../packages/d2b-provider-clipboard-wayland/nix/site.nix
+    ../packages/d2b-provider-notification-desktop/nix/site.nix
+    ../packages/d2b-provider-volume-local/nix/store.nix
     ./manifest.nix
     ./bundle.nix
     ./guest-control-host.nix
     ./host-json.nix
     ./processes-json.nix
-    ./storage-json.nix
-    ./zone-storage-json.nix
-    ./sync-json.nix
+    ../packages/d2b-provider-volume-local/nix/storage-json.nix
+    ../packages/d2b-provider-volume-local/nix/zone-storage-json.nix
+    ../packages/d2b-provider-volume-local/nix/sync-json.nix
     ./allocator-json.nix
     ./realm-controller-config-json.nix
     ./realm-identity-config-json.nix
@@ -89,18 +89,18 @@ in
     ./closures-json.nix
     ./minijail-profiles.nix
     ./ui-colors.nix
-    ./providers/display-wayland.nix
-    ./providers/notification-desktop.nix
-    ./providers/clipboard-wayland.nix
+    ../packages/d2b-provider-display-wayland/nix/default.nix
+    ../packages/d2b-provider-notification-desktop/nix/default.nix
+    ../packages/d2b-provider-clipboard-wayland/nix/default.nix
     # Both cli.nix (bash CLI package) and host-ch-exporter.nix (host
     # singleton scraper folded into daemon /metrics) are now retired.
     # See tests/cli-nix-consumers-eval.sh + tests/legacy-unit-denylist-eval.sh
     # for the static gates.
     (import ./host-broker.nix { inherit inputs; })
-    ./components/audio/host.nix
-    ./components/audio/v3-resource.nix
+    ../packages/d2b-provider-audio-pipewire/nix/host.nix
+    ../packages/d2b-provider-audio-pipewire/nix/default.nix
     ./components/observability/default.nix
-    ./niri-vm-borders.nix
+    ../packages/d2b-provider-display-wayland/nix/niri-vm-borders.nix
   ];
 
   # Entra ID / Himmelblau is NOT auto-imported here - it lives in

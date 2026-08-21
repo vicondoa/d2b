@@ -1,0 +1,65 @@
+load("@crates//:defs.bzl", "all_crate_deps")
+load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test", "rust_doc_test")
+
+exports_files(["BUILD.bazel", "Cargo.toml"], visibility = ["//visibility:public"])
+exports_files(["proto/d2b-resource-v3.proto"], visibility = ["//visibility:public"])
+
+resource_srcs = glob(["src/**/*.rs"], allow_empty = True)
+
+filegroup(
+    name = "resource_proto_source",
+    srcs = ["proto/d2b-resource-v3.proto"],
+    visibility = ["//visibility:public"],
+)
+
+filegroup(
+    name = "resource_proto_generated",
+    srcs = ["src/generated/d2b_resource_v3.rs", "src/generated/mod.rs"],
+    visibility = ["//visibility:public"],
+)
+
+rust_library(
+    name = "d2b_contracts_resource",
+    srcs = resource_srcs,
+    compile_data = ["Cargo.toml"],
+    visibility = ["//visibility:public"],
+    deps = ["//packages/d2b-contracts:d2b_contracts"] + all_crate_deps(normal = True, cargo_only = True),
+)
+
+rust_test(
+    name = "schema",
+    srcs = ["tests/schema.rs"],
+    compile_data = ["Cargo.toml"],
+    deps = [":d2b_contracts_resource"] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
+    visibility = ["//visibility:public"],
+)
+
+rust_test(
+    name = "d2b_contracts_resource_test",
+    crate = ":d2b_contracts_resource",
+    compile_data = ["Cargo.toml"],
+    deps = [
+        "//packages/d2b-contracts:d2b_contracts",
+    ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
+    visibility = ["//visibility:public"],
+)
+
+filegroup(
+    name = "cargo_workspace_sources",
+    srcs = glob(
+        [
+            "Cargo.lock",
+            "Cargo.toml",
+            "benches/**/*.rs",
+            "build.rs",
+            "examples/**/*.rs",
+            "proto/**/*.proto",
+            "src/**/*.rs",
+            "tests/**/*.rs",
+        ],
+        allow_empty = True,
+    ),
+    visibility = ["//visibility:public"],
+)
+
+rust_doc_test(name = "d2b_contracts_resource_doc_test", crate = ":d2b_contracts_resource")

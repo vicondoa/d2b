@@ -1,4 +1,4 @@
-use d2b_contracts::v3::device::DeviceArbitration;
+use d2b_contracts_resource::v3::device::DeviceArbitration;
 use d2b_provider_device_gpu::{GpuSettings, GpuSettingsError};
 
 #[test]

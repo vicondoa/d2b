@@ -20,8 +20,9 @@ guest-control token share is present only when
 | `d2b-gctl`     | `/run/d2b/vms/corp-vm/guest-control/d2b-gctl.sock` | `/var/lib/d2b/guest-control-corp-vm` | RO |
 
 CH connects to each socket via the `--fs socket=<path>,tag=<tag>`
-flag (see `ChArgvInput.fs_shares` in
-[`ch_argv`](../../packages/d2b-host/src/ch_argv.rs)).
+flag (see `ChArgvInput.fs_shares` in the
+[`runtime-cloud-hypervisor`](../../packages/d2b-provider-runtime-cloud-hypervisor/src/vmm_argv.rs)
+Provider).
 
 ## virtiofsd argv shape
 

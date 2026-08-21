@@ -125,7 +125,7 @@ describe WHAT each runner role may write inside the per-VM tree:
 If a future role declares a new `writablePaths` row that isn't covered
 by an existing matrix entry, add the entry to both
 `nixos-modules/options-ownership-matrix.nix` AND
-`packages/d2bd/src/ownership_preflight.rs::CANONICAL_MATRIX`. The
+`packages/d2bd-runtime/src/ownership_preflight.rs::CANONICAL_MATRIX`. The
 shapes are mirrored so the Nix declaration is authoritative for
 operators while the Rust constant carries the runtime resolution
 (uid/gid lookup via NSS).
@@ -185,7 +185,7 @@ Operator recovery:
   `hardlink_farm_carve_out_holds_for_{store_view_live,legacy_store}`
   regressions.
 - Preflight (Rust):
-  [`packages/d2bd/src/ownership_preflight.rs`](../../packages/d2bd/src/ownership_preflight.rs)
+  [`packages/d2bd-runtime/src/ownership_preflight.rs`](../../packages/d2bd-runtime/src/ownership_preflight.rs)
   `tests::*` - missing state dir is clean, unresolvable principals are
   clean, and drift-message rendering (per-axis, kind mismatch, and the
   non-ENOENT stat-failure variant).

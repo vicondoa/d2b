@@ -13,7 +13,7 @@
 
 use serde::{Deserialize, Serialize};
 
-use d2b_contracts::broker_wire::ModprobeIfAllowedRequest;
+use d2b_contracts_broker::broker_wire::ModprobeIfAllowedRequest;
 use d2b_core::bundle_resolver::BundleResolver;
 use d2b_core::host_w3::KernelModuleEntry;
 use d2b_host::modules::{

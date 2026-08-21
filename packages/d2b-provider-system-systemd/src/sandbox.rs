@@ -1,6 +1,9 @@
 //! Semantic SandboxSpec validation for the systemd Process Provider.
 
-use d2b_contracts::v3::{execution_policy::ExecutionDomain, process::SandboxSpec};
+use d2b_contracts_resource::v3::{
+    execution_policy::ExecutionDomain,
+    process::SandboxSpec,
+};
 use d2b_process_conformance::{CompiledSandbox, ProcessConformanceError, SandboxCompiler};
 
 /// The systemd Provider's semantic sandbox compiler.

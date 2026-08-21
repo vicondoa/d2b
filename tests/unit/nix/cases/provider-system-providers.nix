@@ -10,10 +10,10 @@ let
       };
     })
     ../../../../nixos-modules/host-generation-rebuild-ref.nix
-    ../../../../nixos-modules/providers/activation-nixos.nix
+    ../../../../packages/d2b-provider-activation-nixos/nix/default.nix
     ../../../../nixos-modules/providers/system-minijail.nix
     ../../../../nixos-modules/providers/system-systemd.nix
-    ../../../../nixos-modules/components/audio/v3-resource.nix
+    ../../../../packages/d2b-provider-audio-pipewire/nix/default.nix
   ];
   eval = extra:
     lib.evalModules {

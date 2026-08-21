@@ -1,16 +1,27 @@
 use std::{fmt, future::Future, pin::Pin, sync::Arc};
 
 use async_trait::async_trait;
-use d2b_contracts::v3::{
-    AuthenticatedSubjectContext, BindingDigest, ControllerGeneration, EvidenceClass, Locality,
-    ReconnectGeneration, ResourceGeneration, ResourceRef, ResourceUid, SchemaFingerprint,
-    ServiceName, SessionPurpose, TranscriptHash, TransportBinding as IdentityTransportBinding,
+use d2b_contracts_zone_session::v3::{
+    component_session::{AuthorizationLease, BootstrapIdentityBinding, ChannelClass, EndpointPolicy, HandshakeOffer, HealthState, MetricLabels, MetricReason, MetricResult, NoiseProfile, OperationClass, RequestId, SessionErrorCode, TransportClass},
+};
+use d2b_contracts_resource::v3::{
+    ControllerGeneration,
+    ResourceGeneration,
+    ResourceRef,
+    ResourceUid,
+    SchemaFingerprint,
     ZoneId,
-    component_session::{
-        AuthorizationLease, BootstrapIdentityBinding, ChannelClass, EndpointPolicy, HandshakeOffer,
-        HealthState, MetricLabels, MetricReason, MetricResult, NoiseProfile, OperationClass,
-        RequestId, SessionErrorCode, TransportClass,
-    },
+};
+use d2b_contracts_resource::v3::identity::{
+    AuthenticatedSubjectContext,
+    BindingDigest,
+    EvidenceClass,
+    Locality,
+    ReconnectGeneration,
+    ServiceName,
+    SessionPurpose,
+    TranscriptHash,
+    TransportBinding as IdentityTransportBinding,
 };
 use d2b_resource_api::authz::SessionVerb;
 
@@ -955,7 +966,7 @@ impl AuthenticatedSessionRouteBinding {
         let subject_uid =
             ResourceUid::parse("123e4567-e89b-42d3-a456-426614174000").expect("test UID is valid");
         let service_name = ServiceName::parse(service).expect("test service is valid");
-        let session = d2b_contracts::v3::SessionBinding::new(
+        let session = d2b_contracts_resource::v3::identity::SessionBinding::new(
             SchemaFingerprint::parse(
                 "sha256:0000000000000000000000000000000000000000000000000000000000000000",
             )

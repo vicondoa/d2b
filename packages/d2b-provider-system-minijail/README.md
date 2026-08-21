@@ -67,6 +67,5 @@ closed enumerations only.
 ## Build and test
 
 ```bash
-cargo test -p d2b-provider-system-minijail
-cargo clippy -p d2b-provider-system-minijail --all-targets
+bazel test //packages/d2b-provider-system-minijail:all
 ```

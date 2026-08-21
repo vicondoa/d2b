@@ -5,11 +5,13 @@
 //! the sole admitter of attachments, so the single-writer and
 //! shared-write rules are enforced here before any Export is requested.
 
-use d2b_contracts::v3::ResourceRef;
-use d2b_contracts::v3::execution_policy::BoundedToken;
-use d2b_contracts::v3::volume::{
+use d2b_contracts_resource::v3::ResourceRef;
+use d2b_contracts_resource::v3::execution_policy::BoundedToken;
+use d2b_contracts_resource::v3::{
+    volume::{
     AttachmentAccess, AttachmentSettings, AttachmentTransport, ViewRight, ViewSpec,
     VolumeAttachment, VolumeSpec,
+},
 };
 
 use crate::error::VolumeLocalError;

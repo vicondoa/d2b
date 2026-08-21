@@ -1,4 +1,7 @@
-use d2b_contracts::v3::{ResourceRef, ResourceUid};
+use d2b_contracts_resource::v3::{
+    ResourceRef,
+    ResourceUid,
+};
 use d2b_provider_device_security_key::{
     FrontendProcessDeclaration, SecurityKeyProcessRole, security_key_process_name,
 };

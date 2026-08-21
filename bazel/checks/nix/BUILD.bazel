@@ -1,387 +1,392 @@
-load(":defs.bzl", "nix_native_test", "nix_unit_case_tests")
+load(":defs.bzl", "nix_native_test", "nix_surface_suite", "nix_surface_test")
 
 package(default_visibility = ["//visibility:public"])
 
-filegroup(
-    name = "nix_unit_inputs",
-    srcs = [
-        "//:Cargo.lock",
-        "//:Cargo.toml",
-        "//:docs_workspace_sources",
-        "//:examples_workspace_sources",
-        "//:flake.lock",
-        "//:flake.nix",
-        "//:nix_flake_support_sources",
-        "//:nix_workspace_sources",
-        "//:nixos_modules_workspace_sources",
-        "//:packages_workspace_sources",
-        "//:pkgs_workspace_sources",
-        "//:rust-toolchain.toml",
-        "//packages/d2bd:cargo_workspace_sources",
-        "//tests/unit/nix:nix_unit_sources",
-    ],
-)
-
-filegroup(
-    name = "flake_eval_inputs",
-    srcs = [
-        "//:Cargo.lock",
-        "//:Cargo.toml",
-        "//:bazel_provider_workspace_sources",
-        "//:docs_workspace_sources",
-        "//:examples_workspace_sources",
-        "//:flake.lock",
-        "//:flake.nix",
-        "//:harness_workspace_sources",
-        "//:nix_flake_support_sources",
-        "//:nix_workspace_sources",
-        "//:nixos_modules_workspace_sources",
-        "//:packages_workspace_sources",
-        "//:pkgs_workspace_sources",
-        "//:proof_workspace_sources",
-        "//:rust-toolchain.toml",
-        "//:templates_workspace_sources",
-        "//:tests_root_sources",
-    ],
-)
-
-filegroup(
-    name = "aarch64_smoke_inputs",
-    srcs = [
-        "//:Cargo.lock",
-        "//:Cargo.toml",
-        "//:docs_workspace_sources",
-        "//:flake.lock",
-        "//:flake.nix",
-        "//:nix_flake_support_sources",
-        "//:nix_workspace_sources",
-        "//:nixos_modules_workspace_sources",
-        "//:packages_workspace_sources",
-        "//:pkgs_workspace_sources",
-        "//:rust-toolchain.toml",
-        "//:tests_root_sources",
-        "//:tests/unit/smoke/smoke-eval-aarch64.nix",
-    ],
-)
-
-_NIX_UNIT_GROUP_CASES = {
-    "nix-unit-daemon": [
-        "activation-runtime-tmpfiles",
-        "broker-bundle-path",
-        "broker-caps",
-        "broker-service-posture",
-        "broker-socket-activation",
-        "bundle-artifacts-compiler",
-        "bundle-artifacts-digest",
-        "bundle-artifacts-envelope",
-        "daemon-autostart",
-        "daemon-default-compat",
-        "gateway-vm",
-        "gateway-vm-1",
-        "gateway-vm-2",
-        "gateway-vm-3",
-        "gateway-vm-guest",
-        "d2bd-startup-smoke",
-    ],
-    "nix-unit-guest": [
-        "guest-config-containment",
-        "guest-control-auth",
-        "guest-control-vsock",
-        "guest-control-vsock-extra-equals",
-        "guest-control-vsock-extra-split",
-        "guest-control-vsock-long-socket",
-        "guest-control-vsock-user-cid",
-        "guest-control-vsock-user-socket",
-        "guest-exec-policy",
-        "guest-shell-policy",
-    ],
-    "nix-unit-misc": [
-        "assertions",
-        "assertions-1",
-        "assertions-2",
-        "assertions-3",
-        "autostart-wiring",
-        "examples-with-observability",
-        "gas-city-contributor",
-        "ifname-nix-rust-parity",
-        "interaction-providers",
-        "observability",
-        "observability-guest",
-        "observability-host-collector",
-        "observability-host-collector-extra",
-        "observability-host-collector-otlp",
-        "observability-host-collector-processor-split",
-        "observability-host-collector-identity",
-        "observability-host-collector-umask",
-        "observability-host-collector-flags",
-        "provider-catalog",
-        "provider-elf-shim",
-        "provider-projection-exportability",
-        "provider-projection-fields",
-        "provider-system-providers",
-        "readiness-waves",
-        "resource-sharing",
-        "resources-bundle-telemetry",
-        "restart-policy",
-        "test-infrastructure",
-        "usb-security-key",
-        "vm-eval-overlays",
-    ],
-    "nix-unit-network": [
-        "bridge-ipv6-boot-sysctl",
-        "generation-cleanup-absent-network",
-        "index",
-        "multi-env-daemon-backed",
-        "net-vm-network",
-        "realm-workloads",
-        "realms",
-        "realms-artifacts",
-        "realms-controller",
-        "realms-examples",
-        "realms-host-local",
-        "realms-identity",
-        "realms-rejections",
-        "realms-workloads",
-        "realms-zone-control",
-        "usbip-gating",
-    ],
-    "nix-unit-runtime": [
-        "clipboard",
-        "device-gpu-eval",
-        "external-vm-kind",
-        "external-vm-kind-rejections",
-        "external-vm-kind-runtime",
-        "niri-vm-borders",
-        "guest-qemu-media-spec",
-        "provider-runtime-contracts",
-        "requested-vm-config",
-        "security-key-gating",
-        "video-contract",
-    ],
-    "nix-unit-state": [
-        "per-vm-state-ownership",
-        "principal-uid-collision",
-        "store-overlay-emit",
-        "umask-roundtrip",
-        "volume-mounts",
-    ],
+_SURFACES = {
+    "daemon": {
+        "cases": [],
+        "modules": [
+            "nixos-modules/activation-nixos-cleanup.nix",
+            "nixos-modules/host-activation.nix",
+            "nixos-modules/host-broker.nix",
+            "nixos-modules/host-daemon.nix",
+            "nixos-modules/manifest.nix",
+            "nixos-modules/observability-host-secrets.nix",
+            "nixos-modules/options-daemon.nix",
+            "nixos-modules/processes-json.nix",
+        ],
+    },
+    "guest-control": {
+        "cases": [],
+        "files": [
+            "nixos-modules/vm-evaluator.nix",
+        ],
+        "modules": [
+            "nixos-modules/guest-control.nix",
+            "nixos-modules/guest-control-host.nix",
+            "nixos-modules/processes-json.nix",
+            "nixos-modules/vm-guest-base.nix",
+        ],
+    },
+    "network": {
+        "cases": ["net-vm-network"],
+        "package": "packages/d2b-provider-network-local",
+        "files": [
+            "packages/d2b-provider-network-local/nix/net-mdns.nix",
+            "packages/d2b-provider-network-local/nix/net.nix",
+        ],
+        "modules": [
+            "packages/d2b-provider-network-local/nix/network.nix",
+            "nixos-modules/options-envs.nix",
+            "packages/d2b-provider-network-local/nix/resources-network.nix",
+        ],
+    },
+    "storage-volume": {
+        "cases": ["volume-mounts"],
+        "package": "packages/d2b-provider-volume-local",
+        "modules": [
+            "packages/d2b-provider-volume-local/nix/options-volumes.nix",
+            "packages/d2b-provider-volume-local/nix/resources-volume.nix",
+            "packages/d2b-provider-volume-local/nix/resources-zones-volumes.nix",
+            "packages/d2b-provider-volume-local/nix/storage-json.nix",
+            "packages/d2b-provider-volume-local/nix/store.nix",
+            "packages/d2b-provider-volume-local/nix/sync-json.nix",
+            "packages/d2b-provider-volume-local/nix/zone-storage-json.nix",
+        ],
+    },
+    "process-sandbox": {
+        "cases": [],
+        "files": [
+            "nixos-modules/vm-evaluator.nix",
+        ],
+        "modules": [
+            "nixos-modules/minijail-profiles.nix",
+            "nixos-modules/options-vms.nix",
+            "nixos-modules/unsafe-local-helper.nix",
+            "nixos-modules/unsafe-local-workloads-json.nix",
+        ],
+    },
+    "realm-zone": {
+        "cases": [],
+        "modules": [
+            "nixos-modules/bundle-zones.nix",
+            "nixos-modules/options-realms.nix",
+            "nixos-modules/options-realms-network.nix",
+            "nixos-modules/options-realms-workloads.nix",
+            "nixos-modules/realm-controller-config-json.nix",
+            "nixos-modules/realm-identity-config-json.nix",
+            "nixos-modules/realm-workloads-launcher-json.nix",
+            "nixos-modules/realm-workloads-launcher-v2-json.nix",
+            "nixos-modules/resources-zone-control.nix",
+        ],
+    },
+    "desktop-interaction": {
+        "cases": [],
+        "modules": [
+            "nixos-modules/ui-colors.nix",
+        ],
+    },
+    "provider-catalog": {
+        "cases": ["provider-elf-shim"],
+        "package": "packages/d2b-provider-activation-nixos",
+        "files": [
+            "nix/provider-elf-shim.nix",
+        ],
+        "modules": [
+            "nixos-modules/provider-catalog.nix",
+            "nixos-modules/provider-projection-validate.nix",
+            "nixos-modules/provider-runtime-contracts.nix",
+            "nixos-modules/provider-settings-validation.nix",
+            "packages/d2b-provider-activation-nixos/nix/default.nix",
+            "nixos-modules/providers/system-minijail.nix",
+            "nixos-modules/providers/system-systemd.nix",
+        ],
+    },
+    "examples": {
+        "cases": [],
+        "files": [
+            "nixos-modules/gas-city-contributor/integrations.nix",
+            "nixos-modules/gas-city-contributor/network.nix",
+            "nixos-modules/gas-city-contributor/options.nix",
+            "nixos-modules/gas-city-contributor/service.nix",
+        ],
+        "modules": [
+            "nixos-modules/components/observability/default.nix",
+            "nixos-modules/components/observability/guest.nix",
+            "nixos-modules/components/observability/host.nix",
+            "nixos-modules/components/observability/stack.nix",
+            "nixos-modules/gas-city-contributor/default.nix",
+            "nixos-modules/observability-vm.nix",
+        ],
+    },
+    "eval-jobs": {
+        "cases": [],
+        "files": [
+            "nixos-modules/lib.nix",
+        ],
+        "modules": [],
+        "raw_cases": True,
+    },
 }
 
-nix_unit_case_tests(_NIX_UNIT_GROUP_CASES, [":nix_unit_inputs"])
+nix_surface_suite(_SURFACES)
 
-nix_native_test(
-    name = "nix-unit-integrity",
-    command = 'eval --no-write-lock-file --raw "$FLAKE_REF#checks.${SYSTEM}.nix-unit.drvPath" >/dev/null',
-    lane = "nix-unit-integrity",
-    max_kib = 10683720,
-    data = [":nix_unit_inputs"],
-    uses_nix_unit = True,
+nix_surface_test(
+    name = "nix-unit-provider-network-local",
+    surface = "provider-network-local",
+    spec = {
+        "cases": [],
+        "expression": "//packages/d2b-provider-network-local:nix/tests/default.nix",
+        "files": [
+            "packages/d2b-provider-network-local/nix/artifacts.nix",
+        ],
+        "modules": [
+            "packages/d2b-provider-network-local/nix/default.nix",
+        ],
+        "package": "packages/d2b-provider-network-local",
+        "raw_cases": True,
+    },
+)
+
+nix_surface_test(
+    name = "nix-unit-provider-device-usbip",
+    surface = "provider-device-usbip",
+    spec = {
+        "cases": [],
+        "expression": "//packages/d2b-provider-device-usbip:nix/tests/default.nix",
+        "modules": [
+            "nixos-modules/components/usbip.nix",
+        ],
+        "package": "packages/d2b-provider-device-usbip",
+        "raw_cases": True,
+    },
+)
+
+nix_surface_test(
+    name = "nix-unit-provider-device-security-key",
+    surface = "provider-device-security-key",
+    spec = {
+        "cases": [],
+        "expression": "//packages/d2b-provider-device-security-key:nix/tests/default.nix",
+        "modules": [
+            "nixos-modules/components/security-key-guest.nix",
+        ],
+        "package": "packages/d2b-provider-device-security-key",
+        "raw_cases": True,
+    },
+)
+
+nix_surface_test(
+    name = "nix-unit-provider-device-tpm",
+    surface = "provider-device-tpm",
+    spec = {
+        "cases": [],
+        "expression": "//packages/d2b-provider-device-tpm:nix/tests/default.nix",
+        "modules": [
+            "nixos-modules/components/tpm.nix",
+        ],
+        "package": "packages/d2b-provider-device-tpm",
+        "raw_cases": True,
+    },
+)
+
+nix_surface_test(
+    name = "nix-unit-provider-device-gpu",
+    surface = "provider-device-gpu",
+    spec = {
+        "cases": [],
+        "expression": "//packages/d2b-provider-device-gpu:nix/tests/default.nix",
+        "files": [
+            "pkgs/virtio-media-driver/default.nix",
+        ],
+        "modules": [
+            "nixos-modules/components/video/guest.nix",
+        ],
+        "package": "packages/d2b-provider-device-gpu",
+        "raw_cases": True,
+    },
+)
+
+nix_surface_test(
+    name = "nix-unit-provider-audio-pipewire",
+    surface = "provider-audio-pipewire",
+    spec = {
+        "cases": [],
+        "modules": [],
+        "expression": "//packages/d2b-provider-audio-pipewire:nix/tests/default.nix",
+        "files": [
+            "packages/d2b-provider-audio-pipewire/nix/default.nix",
+        ],
+        "package": "packages/d2b-provider-audio-pipewire",
+        "raw_cases": True,
+    },
+)
+
+nix_surface_test(
+    name = "nix-unit-provider-volume-local",
+    surface = "provider-volume-local",
+    spec = {
+        "cases": [],
+        "expression": "//packages/d2b-provider-volume-local:nix/tests/default.nix",
+        "files": [],
+        "modules": [
+            "packages/d2b-provider-volume-local/nix/default.nix",
+            "packages/d2b-provider-volume-local/nix/options-volumes.nix",
+        ],
+        "package": "packages/d2b-provider-volume-local",
+        "raw_cases": True,
+    },
+)
+
+nix_surface_test(
+    name = "nix-unit-provider-clipboard-wayland",
+    surface = "provider-clipboard-wayland",
+    spec = {
+        "cases": [],
+        "modules": [],
+        "expression": "//packages/d2b-provider-clipboard-wayland:nix/tests/default.nix",
+        "files": [
+            "packages/d2b-provider-clipboard-wayland/nix/default.nix",
+        ],
+        "package": "packages/d2b-provider-clipboard-wayland",
+        "raw_cases": True,
+    },
+)
+
+nix_surface_test(
+    name = "nix-unit-provider-activation-nixos",
+    surface = "provider-activation-nixos",
+    spec = {
+        "cases": [],
+        "expression": "//packages/d2b-provider-activation-nixos:nix/tests/default.nix",
+        "files": [],
+        "modules": [
+            "packages/d2b-provider-activation-nixos/nix/default.nix",
+        ],
+        "package": "packages/d2b-provider-activation-nixos",
+        "raw_cases": True,
+    },
+)
+
+nix_surface_test(
+    name = "nix-unit-provider-runtime-qemu-media",
+    surface = "provider-runtime-qemu-media",
+    spec = {
+        "cases": [],
+        "modules": ["packages/d2b-provider-runtime-qemu-media/nix/default.nix"],
+        "expression": "//packages/d2b-provider-runtime-qemu-media:nix/tests/default.nix",
+        "files": [],
+        "package": "packages/d2b-provider-runtime-qemu-media",
+        "raw_cases": True,
+    },
+)
+
+nix_surface_test(
+    name = "nix-unit-provider-display-wayland",
+    surface = "provider-display-wayland",
+    spec = {
+        "cases": [],
+        "modules": [],
+        "expression": "//packages/d2b-provider-display-wayland:nix/tests/default.nix",
+        "files": [
+            "packages/d2b-provider-display-wayland/nix/default.nix",
+        ],
+        "package": "packages/d2b-provider-display-wayland",
+        "raw_cases": True,
+    },
+)
+
+nix_surface_test(
+    name = "nix-unit-provider-notification-desktop",
+    surface = "provider-notification-desktop",
+    spec = {
+        "cases": [],
+        "modules": [],
+        "expression": "//packages/d2b-provider-notification-desktop:nix/tests/default.nix",
+        "files": [
+            "packages/d2b-provider-notification-desktop/nix/default.nix",
+        ],
+        "package": "packages/d2b-provider-notification-desktop",
+        "raw_cases": True,
+    },
 )
 
 nix_native_test(
     name = "flake-eval-x86",
-    command = """--no-instantiate --workers 1 --max-memory-size 8192 --flake "$FLAKE_REF#checks.x86_64-linux" --select 'checks: builtins.removeAttrs checks [ "nix-unit" "nix-unit-daemon" "nix-unit-guest" "nix-unit-misc" "nix-unit-network" "nix-unit-runtime" "nix-unit-state" "video-binary-contract" "gas-city-package-smoke" ]'""",
+    command = 'eval --no-write-lock-file --raw "$FLAKE_REF#checks.x86_64-linux.eval-minimal.drvPath" >/dev/null',
     lane = "flake",
     max_kib = 14665373,
-    data = [":flake_eval_inputs"],
-    uses_eval_jobs = True,
-)
-
-nix_native_test(
-    name = "flake-eval-x86-realized",
-    command = """build --no-write-lock-file --no-link --print-out-paths "$FLAKE_REF#checks.x86_64-linux.video-binary-contract" "$FLAKE_REF#checks.x86_64-linux.gas-city-package-smoke" "$FLAKE_REF#checks.x86_64-linux.rust-deny" "$FLAKE_REF#checks.x86_64-linux.guest-rust-deny" "$FLAKE_REF#checks.x86_64-linux.rust-audit" >/dev/null""",
-    lane = "flake-realized",
-    max_kib = 14665373,
-    data = [":flake_eval_inputs"],
-    timeout = "eternal",
+    data = ["//:flake.lock"],
 )
 
 nix_native_test(
     name = "flake-eval-x86-outputs",
-    command = """--no-instantiate --workers 1 --max-memory-size 8192 --flake "$FLAKE_REF#packages.x86_64-linux" """,
+    command = 'eval --no-write-lock-file --raw "$FLAKE_REF#packages.x86_64-linux.d2b-resource-compiler.drvPath" >/dev/null',
     lane = "flake-outputs",
     max_kib = 14665373,
-    data = [":flake_eval_inputs"],
-    uses_eval_jobs = True,
+    data = ["//:flake.lock"],
+)
+
+nix_native_test(
+    name = "flake-eval-x86-realized-video",
+    command = 'build --no-write-lock-file --no-link --print-out-paths "$FLAKE_REF#checks.x86_64-linux.video-binary-contract" >/dev/null',
+    lane = "flake-realized-video",
+    max_kib = 14665373,
+    data = ["//:flake.lock"],
+    timeout = "eternal",
+)
+
+nix_native_test(
+    name = "flake-eval-x86-realized-gas-city",
+    command = 'build --no-write-lock-file --no-link --print-out-paths "$FLAKE_REF#checks.x86_64-linux.gas-city-package-smoke" >/dev/null',
+    lane = "flake-realized-gas-city",
+    max_kib = 14665373,
+    data = ["//:flake.lock"],
+    timeout = "eternal",
+)
+
+nix_native_test(
+    name = "flake-eval-x86-realized-supply-chain",
+    command = 'build --no-write-lock-file --no-link --print-out-paths "$FLAKE_REF#checks.x86_64-linux.rust-deny" "$FLAKE_REF#checks.x86_64-linux.guest-rust-deny" "$FLAKE_REF#checks.x86_64-linux.rust-audit" >/dev/null',
+    lane = "flake-realized-supply-chain",
+    max_kib = 14665373,
+    data = ["//:flake.lock"],
+    timeout = "eternal",
+)
+
+nix_native_test(
+    name = "flake-eval-x86-realized-package-output",
+    command = 'build --no-write-lock-file --no-link --print-out-paths "$FLAKE_REF#packages.x86_64-linux.d2b-resource-compiler" >/dev/null',
+    lane = "flake-realized-package-output",
+    max_kib = 14665373,
+    data = ["//:flake.lock"],
+    timeout = "eternal",
 )
 
 nix_native_test(
     name = "flake-eval-aarch64",
-    command = """eval --no-write-lock-file --raw --impure --expr "(import \\"$SMOKE_PATH\\" { flakeRoot = \\"$ROOT\\"; pkgs = import (builtins.getFlake \\"$FLAKE_REF\\").inputs.nixpkgs { system = \\"aarch64-linux\\"; }; }).drvPath" >/dev/null""",
+    command = 'eval --no-write-lock-file --raw "$FLAKE_REF#checks.aarch64-linux.eval-minimal.drvPath" >/dev/null',
     lane = "flake-aarch64",
     max_kib = 14665373,
-    data = [":aarch64_smoke_inputs"],
-    smoke = True,
-)
-
-alias(
-    name = "nix_unit_daemon",
-    actual = ":nix-unit-daemon",
-)
-
-alias(
-    name = "nix_unit_guest",
-    actual = ":nix-unit-guest",
-)
-
-alias(
-    name = "nix_unit_misc",
-    actual = ":nix-unit-misc",
-)
-
-alias(
-    name = "nix_unit_network",
-    actual = ":nix-unit-network",
-)
-
-alias(
-    name = "nix_unit_runtime",
-    actual = ":nix-unit-runtime",
-)
-
-alias(
-    name = "nix_unit_state",
-    actual = ":nix-unit-state",
-)
-
-alias(
-    name = "nix_unit_integrity",
-    actual = ":nix-unit-integrity",
-)
-
-alias(
-    name = "flake_eval_x86",
-    actual = ":flake-eval-x86",
-)
-
-alias(
-    name = "flake_eval_x86_realized",
-    actual = ":flake-eval-x86-realized",
-)
-
-alias(
-    name = "flake_eval_x86_outputs",
-    actual = ":flake-eval-x86-outputs",
-)
-
-alias(
-    name = "flake_eval_aarch64",
-    actual = ":flake-eval-aarch64",
+    data = ["//:flake.lock"],
 )
 
 test_suite(
     name = "nix_evaluation",
-    tests = [
-        ":nix_unit",
-        ":flake-eval-x86",
-        ":flake-eval-x86-outputs",
-    ],
+    tests = [":nix_unit", ":flake-eval-x86", ":flake-eval-x86-outputs"],
 )
 
 test_suite(
     name = "nix_realized",
-    tests = [":flake-eval-x86-realized"],
+    tests = [
+        ":flake-eval-x86-realized-video",
+        ":flake-eval-x86-realized-gas-city",
+        ":flake-eval-x86-realized-supply-chain",
+        ":flake-eval-x86-realized-package-output",
+    ],
 )
 
 test_suite(
     name = "nix_aarch64",
     tests = [":flake-eval-aarch64"],
-)
-
-test_suite(
-    name = "nix-unit-daemon",
-    tests = [":nix-unit-case-" + case for case in _NIX_UNIT_GROUP_CASES["nix-unit-daemon"]],
-)
-
-test_suite(
-    name = "nix-unit-guest",
-    tests = [":nix-unit-case-" + case for case in _NIX_UNIT_GROUP_CASES["nix-unit-guest"]],
-)
-
-test_suite(
-    name = "nix-unit-misc",
-    tests = [":nix-unit-case-" + case for case in _NIX_UNIT_GROUP_CASES["nix-unit-misc"]],
-)
-
-test_suite(
-    name = "nix-unit-network",
-    tests = [":nix-unit-case-" + case for case in _NIX_UNIT_GROUP_CASES["nix-unit-network"]],
-)
-
-test_suite(
-    name = "nix-unit-runtime",
-    tests = [":nix-unit-case-" + case for case in _NIX_UNIT_GROUP_CASES["nix-unit-runtime"]],
-)
-
-test_suite(
-    name = "nix-unit-state",
-    tests = [":nix-unit-case-" + case for case in _NIX_UNIT_GROUP_CASES["nix-unit-state"]],
-)
-
-test_suite(
-    name = "nix_unit",
-    tests = [
-        ":nix-unit-daemon",
-        ":nix-unit-guest",
-        ":nix-unit-misc",
-        ":nix-unit-network",
-        ":nix-unit-runtime",
-        ":nix-unit-state",
-        ":nix-unit-integrity",
-    ],
-)
-
-test_suite(
-    name = "flake",
-    tests = [
-        ":flake-eval-x86",
-        ":flake-eval-x86-realized",
-        ":flake-eval-x86-outputs",
-        ":flake-eval-aarch64",
-    ],
-)
-
-filegroup(
-    name = "nix_unit_sources",
-    srcs = [
-        "//:flake.lock",
-        "//:flake.nix",
-        "//tests/unit/nix:nix_unit_sources",
-    ],
-)
-
-filegroup(
-    name = "flake_sources",
-    srcs = [
-        ":nix_unit_sources",
-        "//:nix_workspace_sources",
-        "//:nixos_modules_workspace_sources",
-        "//:tests_workspace_sources",
-    ],
-)
-
-filegroup(
-    name = "pure_locked_evaluation",
-    srcs = [
-        ":nix_unit_sources",
-        "//tests/unit/nix:eval_jobs",
-    ],
-)
-
-filegroup(
-    name = "realization_worker_image",
-    srcs = [
-        "//:flake.lock",
-        "//:flake.nix",
-        "//:tests_root_sources",
-    ],
-)
-
-filegroup(
-    name = "carrier_sources",
-    srcs = [
-        ":flake_sources",
-        ":pure_locked_evaluation",
-        ":realization_worker_image",
-    ],
 )

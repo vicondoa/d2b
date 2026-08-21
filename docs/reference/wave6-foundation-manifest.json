@@ -561,7 +561,7 @@
       "status": "Landed",
       "implementationPath": "packages/d2b-provider-runtime-cloud-hypervisor",
       "validationProof": "nix-unit eval tests: rule CH-1 through CH-4 + rules 1-17; golden resource bundle JSON (no store path); type-mismatch eval errors; raw locator rejection; `spec.systemArtifactId` at top-level in JSON (not in `spec.provider.settings`)",
-      "removalProof": "`options-vms.nix`; `options-realms-workloads.nix` (LocalVm path); `nixos-modules/processes-json.nix` (VMM emitter); `nixos-modules/store.nix` removed after integration parity",
+      "removalProof": "`options-vms.nix`; `options-realms-workloads.nix` (LocalVm path); `nixos-modules/processes-json.nix` (VMM emitter); `packages/d2b-provider-volume-local/nix/store.nix` removed after integration parity",
       "sourceState": "Planned"
     },
     {
@@ -1276,7 +1276,7 @@
       "status": "Landed",
       "implementationPath": "packages/d2b-provider-network-local",
       "validationProof": "`tests/controller_state.rs` covers normal reconcile, errors, finalizer ordering, adoption on restart, and observe/drift cycles with deterministic clock; `tests/metrics_labels.rs` structurally asserts exact identity-key absence and that a Network-name canary never enters metric label values.",
-      "removalProof": "Supersedes static per-env lifecycle in `nixos-modules/network.nix` and `nixos-modules/net.nix`; removal proof is successor controller coverage plus deletion of duplicate old gates when this provider lands.",
+      "removalProof": "Supersedes static per-env lifecycle in `packages/d2b-provider-network-local/nix/network.nix` and `packages/d2b-provider-network-local/nix/net.nix`; removal proof is successor controller coverage plus deletion of duplicate old gates when this provider lands.",
       "sourceState": "Planned"
     },
     {
@@ -1298,7 +1298,7 @@
       "status": "Landed",
       "implementationPath": "packages/d2b-provider-network-local",
       "validationProof": "`tests/controller_state.rs`, `integration/agent_reload.rs`, and `integration/delete_sequence.rs` validate rendering, write flow, reload, and cleanup ordering.",
-      "removalProof": "Supersedes static per-env config generation in `nixos-modules/net.nix`; successor coverage retires duplicate old Nix/service assertions.",
+      "removalProof": "Supersedes static per-env config generation in `packages/d2b-provider-network-local/nix/net.nix`; successor coverage retires duplicate old Nix/service assertions.",
       "sourceState": "Planned"
     },
     {
@@ -2684,7 +2684,7 @@
       "status": "Landed",
       "implementationPath": "packages/d2b-provider-volume-local",
       "validationProof": "`tests/store_view.rs` all invariants; `integration/store_view.rs` same-filesystem boundary; private-NS sync with concurrent reader",
-      "removalProof": "`nixos-modules/store.nix` activation and `d2b-priv-broker/src/ops/store_sync.rs` retired only after store-view Volume controller is live and passes all parity tests",
+      "removalProof": "`packages/d2b-provider-volume-local/nix/store.nix` activation and `d2b-priv-broker/src/ops/store_sync.rs` retired only after store-view Volume controller is live and passes all parity tests",
       "sourceState": "Planned"
     },
     {
@@ -2750,7 +2750,7 @@
       "status": "Landed",
       "implementationPath": "packages/d2b-provider-volume-local",
       "validationProof": "All Nix eval-time validation rules; `contentHash` determinism; credential-ref guard; unknown Provider config key → build fail",
-      "removalProof": "`nixos-modules/storage-json.nix` and `nixos-modules/store.nix` per-VM rows retired only after Volume resources replace every path row and all consumers complete bundle-format migration",
+      "removalProof": "`packages/d2b-provider-volume-local/nix/storage-json.nix` and `packages/d2b-provider-volume-local/nix/store.nix` per-VM rows retired only after Volume resources replace every path row and all consumers complete bundle-format migration",
       "sourceState": "Planned"
     },
     {

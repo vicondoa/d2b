@@ -1,7 +1,7 @@
 //! Trusted Core inventory receipts for irreversible state adoption.
 
 use core::fmt;
-use d2b_contracts::v3::canonical_digest;
+use d2b_contracts_resource::v3::canonical_digest;
 
 /// Opaque identity of one legacy TPM state row.
 ///

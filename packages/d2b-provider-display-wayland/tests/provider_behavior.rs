@@ -1,4 +1,4 @@
-use d2b_contracts::v3::ResourceRef;
+use d2b_contracts_resource::v3::ResourceRef;
 use d2b_provider_display_wayland::{
     DisplayAuditKind, DisplayAuditOutcome, DisplayController, DisplayIdentity,
     DisplayLabelPosition, DisplayProviderDescriptor, DisplayTelemetryField, DisplayTelemetryFrame,
@@ -61,7 +61,7 @@ fn wayland_session_accepts_the_canonical_debug_logging_filter_field() {
 fn policy_for(spec: &WaylandSessionSpec) -> WaylandPolicySnapshot {
     WaylandPolicySnapshot::from_test_core(
         spec.policy_ref().clone(),
-        d2b_contracts::v3::ZoneId::parse("local").unwrap(),
+        d2b_contracts_resource::v3::ZoneId::parse("local").unwrap(),
         1,
         FilterInput::default(),
         FilterInput::default(),

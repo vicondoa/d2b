@@ -21,7 +21,7 @@ use std::{
     time::Duration,
 };
 
-use d2b_contracts::v3::{CanonicalJsonValue, canonical_json_bytes};
+use d2b_contracts_resource::v3::{CanonicalJsonValue, canonical_json_bytes};
 use nix::{
     fcntl::{FcntlArg, fcntl},
     libc,
@@ -722,7 +722,7 @@ pub enum RunnerCommand {
     /// Apply one typed closure activation after consent and drain admission.
     Apply {
         /// Existing typed host-generation handoff contract.
-        handoff: d2b_contracts::host_generation::ApplyHostGenerationHandoff,
+        handoff: d2b_contracts_broker::host_generation::ApplyHostGenerationHandoff,
     },
     /// Dispatch one closed U3 effect through the adapted broker peer.
     Effect {
@@ -741,16 +741,16 @@ pub enum RunnerCommand {
         identity: Option<ArtifactId>,
         /// Typed generation handoff for closure activation.
         #[serde(default, skip_serializing_if = "Option::is_none")]
-        handoff: Option<d2b_contracts::host_generation::ApplyHostGenerationHandoff>,
+        handoff: Option<d2b_contracts_broker::host_generation::ApplyHostGenerationHandoff>,
         /// Existing typed broker operation payload.
         #[serde(default, skip_serializing_if = "Option::is_none")]
-        payload: Option<d2b_contracts::broker_wire::CutoverEffectPayload>,
+        payload: Option<d2b_contracts_broker::broker_wire::CutoverEffectPayload>,
     },
     /// Roll back while the native rollback boundary is still open.
     Rollback {
         /// Optional typed handoff that restores the pre-apply generation.
         #[serde(default, skip_serializing_if = "Option::is_none")]
-        handoff: Option<d2b_contracts::host_generation::ApplyHostGenerationHandoff>,
+        handoff: Option<d2b_contracts_broker::host_generation::ApplyHostGenerationHandoff>,
     },
     /// Request phase-9 verification through the runner boundary.
     Verify {

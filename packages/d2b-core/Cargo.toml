@@ -17,6 +17,9 @@ fuzz = ["dep:bolero"]
 test-support = []
 
 [dependencies]
+d2b-contracts-resource = { path = "../d2b-contracts-resource", version = "0.0.0-bootstrap" }
+d2b-contracts-zone-session = { path = "../d2b-contracts-zone-session", version = "0.0.0-bootstrap" }
+d2b-contracts = { path = "../d2b-contracts", version = "0.0.0-bootstrap" }
 serde.workspace = true
 serde_json.workspace = true
 schemars.workspace = true
@@ -66,7 +69,3 @@ required-features = ["fuzz"]
 [[test]]
 name = "bundle-resolver-tamper"
 path = "tests/bundle_resolver_tamper.rs"
-
-[[test]]
-name = "audio-policy"
-path = "tests/audio_policy.rs"

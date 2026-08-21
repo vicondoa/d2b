@@ -2,6 +2,7 @@
 
 - Keep Bazel test runners local while compiling supported Rust actions with
   BuildBuddy, and retry the complete graph locally after a remote deadline.
+- Keep Nix runner generation local when the developer profile uses BuildBuddy.
 - Serialize the redb durability fault-injection test binary so its process-wide
   test hooks cannot race under CI.
 - Allow the cold realized Nix check to use Bazel's eternal timeout instead of

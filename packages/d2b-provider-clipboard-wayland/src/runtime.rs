@@ -1,6 +1,6 @@
 //! Authenticated clipboard Provider runtime composition.
 
-use d2b_contracts::v3::ResourceRef;
+use d2b_contracts_resource::v3::ResourceRef;
 use d2b_provider_toolkit::{AuthenticatedComponentSession, AuthenticatedSessionRouteBinding};
 
 use crate::{

@@ -22,7 +22,7 @@ use crate::{
     ops::audit_op::{BrokerAuditRecordClass, OpAuditRecord},
     sys::path_safe,
 };
-use d2b_contracts::broker_wire::{
+use d2b_contracts_broker::broker_wire::{
     AuditExportCursor, AuditExportEntry, AuditExportErrorCode, BrokerAuditFilter,
     BrokerAuditSeverity, ExportBrokerAuditResponse,
 };
@@ -657,7 +657,7 @@ impl AuditLog {
     /// forensics).
     pub fn write_child_reaped(
         &self,
-        notif: &d2b_contracts::broker_wire::ChildReapedNotification,
+        notif: &d2b_contracts_broker::broker_wire::ChildReapedNotification,
     ) -> io::Result<()> {
         #[derive(serde::Serialize)]
         struct ChildReapedAuditEntry<'a> {
@@ -665,7 +665,7 @@ impl AuditLog {
             op: &'static str,
             runner_id: &'a str,
             pid: i32,
-            exit_status: &'a d2b_contracts::broker_wire::ChildExitStatus,
+            exit_status: &'a d2b_contracts_broker::broker_wire::ChildExitStatus,
             reaped_at_ms: i64,
         }
         let ts = std::time::SystemTime::now()

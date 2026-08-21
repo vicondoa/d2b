@@ -19,10 +19,13 @@ use clap::{Args, Parser, Subcommand, ValueEnum};
 use d2b_contracts::{
     Hello as IpcHello, HelloOk as IpcHelloOk, HelloRejected as IpcHelloRejected, KnownFeatureFlag,
     SemverRange,
-    broker_wire::{
-        AuditExportCursor, StoreVerifyResponse as IpcStoreVerifyResponse,
-        StoreVerifyStatus as IpcStoreVerifyStatus,
-    },
+    types::{MediaRef, validate_usb_bus_id},
+};
+use d2b_contracts_broker::broker_wire::{
+    AuditExportCursor, StoreVerifyResponse as IpcStoreVerifyResponse,
+    StoreVerifyStatus as IpcStoreVerifyStatus,
+};
+use d2b_contracts_control::{
     cli_output::*,
     public_wire::{
         self, AuditFormat as IpcAuditFormat, AuditRequest as IpcAuditRequest,
@@ -33,7 +36,6 @@ use d2b_contracts::{
         UsbipProbeStatus as IpcUsbipProbeStatus, VmLifecycleState as IpcVmLifecycleState,
         VmStatus as IpcVmStatus,
     },
-    types::{MediaRef, validate_usb_bus_id},
 };
 use d2b_core::{
     bundle::Bundle, bundle_resolver::HostRuntime, closures::ClosureMetadata,
@@ -1415,7 +1417,7 @@ pub(super) struct ListResponseFrame {
     _type_name: String,
     vms: Vec<IpcListEntry>,
     #[serde(default)]
-    read_model: Option<d2b_contracts::public_wire::PublicReadModelMetadata>,
+    read_model: Option<d2b_contracts_control::public_wire::PublicReadModelMetadata>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -1431,7 +1433,7 @@ pub(super) struct StatusResponseFrame {
 pub(super) struct StatusResponsePayload {
     entries: Vec<IpcVmStatus>,
     #[serde(default)]
-    read_model: Option<d2b_contracts::public_wire::PublicReadModelMetadata>,
+    read_model: Option<d2b_contracts_control::public_wire::PublicReadModelMetadata>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -1495,7 +1497,7 @@ pub(super) enum ListSocketOutcome {
     Unavailable,
     Entries(
         Vec<IpcListEntry>,
-        Option<d2b_contracts::public_wire::PublicReadModelMetadata>,
+        Option<d2b_contracts_control::public_wire::PublicReadModelMetadata>,
     ),
 }
 
@@ -1504,7 +1506,7 @@ pub(super) enum StatusSocketOutcome {
     Unavailable,
     Entries(
         Vec<IpcVmStatus>,
-        Option<d2b_contracts::public_wire::PublicReadModelMetadata>,
+        Option<d2b_contracts_control::public_wire::PublicReadModelMetadata>,
     ),
 }
 
@@ -2498,7 +2500,7 @@ pub(super) fn finish_config_sync_from_reply(
             // Defense in depth: the daemon already bounds the encoded payload,
             // but the host re-enforces the raw cap and never trusts a
             // guest-reported size.
-            if bytes.len() as u64 > d2b_contracts::guest_wire::READ_GUEST_FILE_MAX_BYTES {
+            if bytes.len() as u64 > d2b_contracts_control::guest_wire::READ_GUEST_FILE_MAX_BYTES {
                 return Err(guest_control_config_failure(
                     "guest-control-file-too-large",
                     "validating the received guest config size",
@@ -2988,7 +2990,7 @@ pub(super) fn select_launcher_item(
 #[cfg(test)]
 mod workload_launch_tests {
     use super::*;
-    use d2b_contracts::public_wire::{
+    use d2b_contracts_control::public_wire::{
         GraphicalLaunchPosture, WorkloadAvailability, WorkloadPublicSummary,
     };
     use d2b_core::workload_identity::{WorkloadIdentity, WorkloadTarget};
@@ -3294,8 +3296,8 @@ pub(super) fn cmd_console(
     args: &ConsoleArgs,
     _original_args: &[OsString],
 ) -> Result<i32, CliFailure> {
-    use d2b_contracts::public_wire::{ConsoleOp, ConsoleOpResponse};
-    use d2b_contracts::terminal_wire::TerminalStream;
+    use d2b_contracts_control::public_wire::{ConsoleOp, ConsoleOpResponse};
+    use d2b_contracts_control::terminal_wire::TerminalStream;
     use terminal_client::{TerminalHostIo as _, TerminalSignalSource as _};
 
     let vm = &args.vm;
@@ -3322,13 +3324,13 @@ pub(super) fn cmd_console(
 
     // Determine initial terminal size (best-effort; UART ignores it).
     let size = exec_client::current_window_size()
-        .map(|(rows, cols)| d2b_contracts::terminal_wire::TerminalSize { rows, cols })
-        .unwrap_or(d2b_contracts::terminal_wire::TerminalSize { rows: 24, cols: 80 });
+        .map(|(rows, cols)| d2b_contracts_control::terminal_wire::TerminalSize { rows, cols })
+        .unwrap_or(d2b_contracts_control::terminal_wire::TerminalSize { rows: 24, cols: 80 });
 
     // Attach to the console session.
     let attach_response = console_round_trip(
         &mut socket,
-        &ConsoleOp::Attach(d2b_contracts::public_wire::ConsoleAttachArgs {
+        &ConsoleOp::Attach(d2b_contracts_control::public_wire::ConsoleAttachArgs {
             vm: vm.clone(),
             initial_terminal_size: size,
         }),
@@ -3347,7 +3349,7 @@ pub(super) fn cmd_console(
         "Connected to console for VM '{}' ({:?}). Press Ctrl-] to detach.\r\n",
         vm, attach.provider_kind
     ));
-    if attach.provider_kind == d2b_contracts::public_wire::ConsoleProviderKind::QemuMedia {
+    if attach.provider_kind == d2b_contracts_control::public_wire::ConsoleProviderKind::QemuMedia {
         print_stderr(
             "Note: QEMU serial console may appear blank until the guest writes \
              to /dev/ttyS0 (e.g. run 'systemctl start serial-getty@ttyS0.service' \
@@ -3384,10 +3386,15 @@ pub(super) fn cmd_console(
                     if let Some((rows, cols)) = host.window_size() {
                         let _ = console_round_trip(
                             &mut socket,
-                            &ConsoleOp::Resize(d2b_contracts::public_wire::ConsoleResizeArgs {
-                                session: session.clone(),
-                                size: d2b_contracts::terminal_wire::TerminalSize { rows, cols },
-                            }),
+                            &ConsoleOp::Resize(
+                                d2b_contracts_control::public_wire::ConsoleResizeArgs {
+                                    session: session.clone(),
+                                    size: d2b_contracts_control::terminal_wire::TerminalSize {
+                                        rows,
+                                        cols,
+                                    },
+                                },
+                            ),
                         );
                     }
                 }
@@ -3398,7 +3405,7 @@ pub(super) fn cmd_console(
                 | exec_client::ExecSignal::Quit => {
                     let _ = console_round_trip(
                         &mut socket,
-                        &ConsoleOp::Close(d2b_contracts::public_wire::ConsoleCloseArgs {
+                        &ConsoleOp::Close(d2b_contracts_control::public_wire::ConsoleCloseArgs {
                             session: session.clone(),
                         }),
                     );
@@ -3420,7 +3427,7 @@ pub(super) fn cmd_console(
                             let _ = console_round_trip(
                                 &mut socket,
                                 &ConsoleOp::WriteStdin(
-                                    d2b_contracts::public_wire::ConsoleWriteStdinArgs {
+                                    d2b_contracts_control::public_wire::ConsoleWriteStdinArgs {
                                         session: session.clone(),
                                         offset: 0,
                                         chunk_base64: prefix_b64,
@@ -3431,9 +3438,11 @@ pub(super) fn cmd_console(
                         }
                         let _ = console_round_trip(
                             &mut socket,
-                            &ConsoleOp::Close(d2b_contracts::public_wire::ConsoleCloseArgs {
-                                session: session.clone(),
-                            }),
+                            &ConsoleOp::Close(
+                                d2b_contracts_control::public_wire::ConsoleCloseArgs {
+                                    session: session.clone(),
+                                },
+                            ),
                         );
                         print_stderr("\r\nDetached from console.\r\n");
                         return Ok(0);
@@ -3441,12 +3450,14 @@ pub(super) fn cmd_console(
                     let chunk_b64 = d2b_core::base64_codec::encode(chunk);
                     let _ = console_round_trip(
                         &mut socket,
-                        &ConsoleOp::WriteStdin(d2b_contracts::public_wire::ConsoleWriteStdinArgs {
-                            session: session.clone(),
-                            offset: 0,
-                            chunk_base64: chunk_b64,
-                            eof: false,
-                        }),
+                        &ConsoleOp::WriteStdin(
+                            d2b_contracts_control::public_wire::ConsoleWriteStdinArgs {
+                                session: session.clone(),
+                                offset: 0,
+                                chunk_base64: chunk_b64,
+                                eof: false,
+                            },
+                        ),
                     );
                 }
                 Err(ref e) if e.kind() == io::ErrorKind::WouldBlock => {}
@@ -3459,7 +3470,7 @@ pub(super) fn cmd_console(
         // the backoff that keeps console idle loops from burning CPU.
         let read_result = console_round_trip(
             &mut socket,
-            &ConsoleOp::ReadOutput(d2b_contracts::public_wire::ConsoleReadOutputArgs {
+            &ConsoleOp::ReadOutput(d2b_contracts_control::public_wire::ConsoleReadOutputArgs {
                 session: session.clone(),
                 stream: TerminalStream::Stdout,
                 offset: stdout_offset,
@@ -3486,9 +3497,11 @@ pub(super) fn cmd_console(
                         Err(_) => {
                             let _ = console_round_trip(
                                 &mut socket,
-                                &ConsoleOp::Close(d2b_contracts::public_wire::ConsoleCloseArgs {
-                                    session: session.clone(),
-                                }),
+                                &ConsoleOp::Close(
+                                    d2b_contracts_control::public_wire::ConsoleCloseArgs {
+                                        session: session.clone(),
+                                    },
+                                ),
                             );
                             return Err(CliFailure::new(
                                 1,
@@ -3499,9 +3512,11 @@ pub(super) fn cmd_console(
                     if let Err(err) = write_stdout_bytes(&bytes) {
                         let _ = console_round_trip(
                             &mut socket,
-                            &ConsoleOp::Close(d2b_contracts::public_wire::ConsoleCloseArgs {
-                                session: session.clone(),
-                            }),
+                            &ConsoleOp::Close(
+                                d2b_contracts_control::public_wire::ConsoleCloseArgs {
+                                    session: session.clone(),
+                                },
+                            ),
                         );
                         if err.kind() == io::ErrorKind::BrokenPipe {
                             return Ok(0);
@@ -3516,7 +3531,7 @@ pub(super) fn cmd_console(
                 if out.is_eof && out.chunk_base64.is_empty() {
                     let _ = console_round_trip(
                         &mut socket,
-                        &ConsoleOp::Close(d2b_contracts::public_wire::ConsoleCloseArgs {
+                        &ConsoleOp::Close(d2b_contracts_control::public_wire::ConsoleCloseArgs {
                             session: session.clone(),
                         }),
                     );
@@ -3532,13 +3547,13 @@ pub(super) fn cmd_console(
     }
 }
 
-/// Encode and send a [`d2b_contracts::public_wire::ConsoleOp`] on `socket`, then
+/// Encode and send a [`d2b_contracts_control::public_wire::ConsoleOp`] on `socket`, then
 /// receive and parse the `consoleResponse` reply. Each call is a complete
 /// round-trip.
 pub(super) fn console_round_trip(
     socket: &mut SeqpacketUnixSocket,
-    op: &d2b_contracts::public_wire::ConsoleOp,
-) -> Result<d2b_contracts::public_wire::ConsoleOpResponse, CliFailure> {
+    op: &d2b_contracts_control::public_wire::ConsoleOp,
+) -> Result<d2b_contracts_control::public_wire::ConsoleOpResponse, CliFailure> {
     let frame = encode_console_op_frame(op)?;
     socket
         .send_frame(&frame)
@@ -3549,10 +3564,10 @@ pub(super) fn console_round_trip(
     parse_console_reply(&reply)
 }
 
-/// Encode a [`d2b_contracts::public_wire::ConsoleOp`] as a JSON wire frame with
+/// Encode a [`d2b_contracts_control::public_wire::ConsoleOp`] as a JSON wire frame with
 /// `"type": "console"`.
 pub(super) fn encode_console_op_frame(
-    op: &d2b_contracts::public_wire::ConsoleOp,
+    op: &d2b_contracts_control::public_wire::ConsoleOp,
 ) -> Result<Vec<u8>, CliFailure> {
     let mut value = serde_json::to_value(op)
         .map_err(|err| CliFailure::new(1, format!("failed to encode console op: {err}")))?;
@@ -3567,7 +3582,7 @@ pub(super) fn encode_console_op_frame(
 /// Parse a `consoleResponse` or `error` reply frame.
 pub(super) fn parse_console_reply(
     bytes: &[u8],
-) -> Result<d2b_contracts::public_wire::ConsoleOpResponse, CliFailure> {
+) -> Result<d2b_contracts_control::public_wire::ConsoleOpResponse, CliFailure> {
     let mut value: Value = serde_json::from_slice(bytes)
         .map_err(|err| CliFailure::new(1, format!("failed to parse console reply: {err}")))?;
     match value.get("type").and_then(Value::as_str) {
@@ -3625,7 +3640,7 @@ pub(super) fn cmd_audio(
     args: &AudioArgs,
     _original_args: &[OsString],
 ) -> Result<i32, CliFailure> {
-    use d2b_contracts::public_wire::{
+    use d2b_contracts_control::public_wire::{
         AudioChannel, AudioMuteArgs, AudioOp, AudioOpResponse, AudioSetApplied,
         AudioStatusArgs as WireStatusArgs,
     };
@@ -3707,8 +3722,8 @@ pub(super) fn cmd_audio(
 
 pub(super) fn audio_round_trip(
     context: &LegacyContext,
-    op: d2b_contracts::public_wire::AudioOp,
-) -> Result<d2b_contracts::public_wire::AudioOpResponse, CliFailure> {
+    op: d2b_contracts_control::public_wire::AudioOp,
+) -> Result<d2b_contracts_control::public_wire::AudioOpResponse, CliFailure> {
     let request = encode_type_tagged_message("audio", &op, "audio request")?;
     match try_public_socket_request(context, &request, "audio")? {
         PublicSocketOutcome::Reply(response) => parse_audio_reply(&response),
@@ -3728,8 +3743,8 @@ pub(super) fn audio_round_trip(
 
 pub(super) fn parse_audio_reply(
     bytes: &[u8],
-) -> Result<d2b_contracts::public_wire::AudioOpResponse, CliFailure> {
-    use d2b_contracts::public_wire::AudioOpResponse;
+) -> Result<d2b_contracts_control::public_wire::AudioOpResponse, CliFailure> {
+    use d2b_contracts_control::public_wire::AudioOpResponse;
     let mut value: Value = serde_json::from_slice(bytes)
         .map_err(|err| CliFailure::new(1, format!("failed to parse audio reply: {err}")))?;
     match value.get("type").and_then(Value::as_str) {
@@ -3756,10 +3771,10 @@ pub(super) fn parse_audio_reply(
 
 pub(super) fn render_audio_response(
     _context: &LegacyContext,
-    response: &d2b_contracts::public_wire::AudioOpResponse,
+    response: &d2b_contracts_control::public_wire::AudioOpResponse,
     json: bool,
 ) -> Result<i32, CliFailure> {
-    use d2b_contracts::public_wire::{AudioOpResponse, AudioSetApplied};
+    use d2b_contracts_control::public_wire::{AudioOpResponse, AudioSetApplied};
     match response {
         AudioOpResponse::Status(status) => {
             if json {
@@ -3827,9 +3842,9 @@ pub(super) fn render_audio_response(
 }
 
 pub(super) fn format_enforcement(
-    posture: &d2b_contracts::public_wire::AudioEnforcementPosture,
+    posture: &d2b_contracts_control::public_wire::AudioEnforcementPosture,
 ) -> &'static str {
-    use d2b_contracts::public_wire::AudioEnforcementPosture;
+    use d2b_contracts_control::public_wire::AudioEnforcementPosture;
     match posture {
         AudioEnforcementPosture::HostAndGuest => "host+guest",
         AudioEnforcementPosture::HostOnly => "host",
@@ -3838,8 +3853,10 @@ pub(super) fn format_enforcement(
     }
 }
 
-pub(super) fn format_channel(channel: &d2b_contracts::public_wire::AudioChannel) -> &'static str {
-    use d2b_contracts::public_wire::AudioChannel;
+pub(super) fn format_channel(
+    channel: &d2b_contracts_control::public_wire::AudioChannel,
+) -> &'static str {
+    use d2b_contracts_control::public_wire::AudioChannel;
     match channel {
         AudioChannel::Speaker => "speaker",
         AudioChannel::Microphone => "microphone",
@@ -6573,14 +6590,15 @@ pub(super) struct OwnerSocketTransport {
 }
 
 impl terminal_client::TerminalTransport for OwnerSocketTransport {
-    type Op = d2b_contracts::public_wire::ExecOp;
-    type Response = d2b_contracts::public_wire::ExecOpResponse;
+    type Op = d2b_contracts_control::public_wire::ExecOp;
+    type Response = d2b_contracts_control::public_wire::ExecOpResponse;
     type Error = exec_client::ExecClientError;
 
     fn round_trip(
         &mut self,
-        op: &d2b_contracts::public_wire::ExecOp,
-    ) -> Result<d2b_contracts::public_wire::ExecOpResponse, exec_client::ExecClientError> {
+        op: &d2b_contracts_control::public_wire::ExecOp,
+    ) -> Result<d2b_contracts_control::public_wire::ExecOpResponse, exec_client::ExecClientError>
+    {
         let op_id = self.next_op_id;
         self.next_op_id = self.next_op_id.wrapping_add(1);
         let frame = exec_client::encode_exec_op_frame(op, op_id)?;
@@ -6853,7 +6871,7 @@ pub(super) fn parse_vm_exec_u64_flag(flag: &str, value: &str) -> Result<u64, Str
 /// multiplexes stdin/stdout/stderr/signals over one owner connection. The
 /// guest owns the PTY; the CLI only manages host terminal state.
 pub(super) fn cmd_vm_exec(context: &LegacyContext, args: &VmExecArgs) -> Result<i32, CliFailure> {
-    use d2b_contracts::public_wire::{ExecEnvVar, ExecOp, ExecStartArgs, ExecTermSize};
+    use d2b_contracts_control::public_wire::{ExecEnvVar, ExecOp, ExecStartArgs, ExecTermSize};
 
     // 1. Validate flags BEFORE touching host terminal state or the daemon.
     let action = match parse_vm_exec_action(args) {
@@ -7089,7 +7107,7 @@ pub(super) fn cmd_vm_exec_management(
     management: &VmExecManagementCommand,
     vm: &str,
 ) -> Result<i32, CliFailure> {
-    use d2b_contracts::public_wire::{
+    use d2b_contracts_control::public_wire::{
         ExecDetachedKillArgs, ExecDetachedListArgs, ExecDetachedLogsArgs, ExecDetachedStatusArgs,
         ExecOp,
     };
@@ -7181,15 +7199,15 @@ pub(super) fn cmd_vm_exec_management(
 
 pub(super) fn exec_send_one_op(
     context: &LegacyContext,
-    op: d2b_contracts::public_wire::ExecOp,
-) -> Result<d2b_contracts::public_wire::ExecOpResponse, exec_client::ExecClientError> {
+    op: d2b_contracts_control::public_wire::ExecOp,
+) -> Result<d2b_contracts_control::public_wire::ExecOpResponse, exec_client::ExecClientError> {
     let mut transport = exec_owner_transport(context)?;
     transport.round_trip(&op)
 }
 
 pub(super) fn exec_render_detached_create(
     args: &VmExecArgs,
-    result: &d2b_contracts::public_wire::ExecDetachedCreateResult,
+    result: &d2b_contracts_control::public_wire::ExecDetachedCreateResult,
 ) -> Result<i32, CliFailure> {
     if exec_effective_json(args) {
         exec_print_json(&VmExecCreateOutputV1 {
@@ -7206,7 +7224,7 @@ pub(super) fn exec_render_detached_create(
 
 pub(super) fn exec_render_detached_list(
     args: &VmExecArgs,
-    result: &d2b_contracts::public_wire::ExecDetachedListResult,
+    result: &d2b_contracts_control::public_wire::ExecDetachedListResult,
 ) -> Result<i32, CliFailure> {
     if exec_effective_json(args) {
         let execs = result
@@ -7263,7 +7281,7 @@ pub(super) fn exec_render_detached_list(
 
 pub(super) fn exec_render_detached_status(
     args: &VmExecArgs,
-    result: &d2b_contracts::public_wire::ExecDetachedStatusResult,
+    result: &d2b_contracts_control::public_wire::ExecDetachedStatusResult,
 ) -> Result<i32, CliFailure> {
     if exec_effective_json(args) {
         exec_print_json(&VmExecStatusOutputV1 {
@@ -7304,7 +7322,7 @@ pub(super) fn exec_render_detached_status(
 
 pub(super) fn exec_render_detached_logs(
     args: &VmExecArgs,
-    result: &d2b_contracts::public_wire::ExecDetachedLogsResult,
+    result: &d2b_contracts_control::public_wire::ExecDetachedLogsResult,
 ) -> Result<i32, CliFailure> {
     let (stdout, stderr) = match exec_decode_detached_logs(result) {
         Ok(decoded) => decoded,
@@ -7357,7 +7375,7 @@ pub(super) fn exec_render_detached_logs(
 }
 
 pub(super) fn exec_decode_detached_logs(
-    result: &d2b_contracts::public_wire::ExecDetachedLogsResult,
+    result: &d2b_contracts_control::public_wire::ExecDetachedLogsResult,
 ) -> Result<(Vec<u8>, Vec<u8>), exec_client::ExecClientError> {
     let stdout = match d2b_core::base64_codec::decode(&result.stdout_base64) {
         Ok(bytes) => bytes,
@@ -7380,7 +7398,7 @@ pub(super) fn exec_decode_detached_logs(
 
 pub(super) fn exec_render_detached_kill(
     args: &VmExecArgs,
-    result: &d2b_contracts::public_wire::ExecDetachedKillResult,
+    result: &d2b_contracts_control::public_wire::ExecDetachedKillResult,
 ) -> Result<i32, CliFailure> {
     let outcome = exec_kill_outcome_label(result.result);
     if exec_effective_json(args) {
@@ -7408,8 +7426,10 @@ pub(super) fn exec_print_json<T: Serialize>(value: &T) -> Result<(), CliFailure>
     print_exec_json(&value)
 }
 
-pub(super) fn exec_state_label(state: d2b_contracts::guest_wire::ExecState) -> &'static str {
-    use d2b_contracts::guest_wire::ExecState;
+pub(super) fn exec_state_label(
+    state: d2b_contracts_control::guest_wire::ExecState,
+) -> &'static str {
+    use d2b_contracts_control::guest_wire::ExecState;
 
     match state {
         ExecState::Created => "created",
@@ -7425,9 +7445,9 @@ pub(super) fn exec_state_label(state: d2b_contracts::guest_wire::ExecState) -> &
 }
 
 pub(super) fn exec_kill_outcome_label(
-    outcome: d2b_contracts::public_wire::ExecDetachedKillOutcome,
+    outcome: d2b_contracts_control::public_wire::ExecDetachedKillOutcome,
 ) -> &'static str {
-    use d2b_contracts::public_wire::ExecDetachedKillOutcome;
+    use d2b_contracts_control::public_wire::ExecDetachedKillOutcome;
 
     match outcome {
         ExecDetachedKillOutcome::Cancelling => "cancelling",
@@ -7459,7 +7479,7 @@ pub(super) fn exec_loss_summary(dropped_bytes: u64, truncated: bool) -> String {
 }
 
 pub(super) fn exec_list_offsets_summary(
-    entry: &d2b_contracts::public_wire::ExecDetachedListEntry,
+    entry: &d2b_contracts_control::public_wire::ExecDetachedListEntry,
 ) -> String {
     format!(
         "all={}..{} stdout={}..{} stderr={}..{}",
@@ -7473,7 +7493,7 @@ pub(super) fn exec_list_offsets_summary(
 }
 
 pub(super) fn exec_list_loss_summary(
-    entry: &d2b_contracts::public_wire::ExecDetachedListEntry,
+    entry: &d2b_contracts_control::public_wire::ExecDetachedListEntry,
 ) -> String {
     format!(
         "all={} stdout={} stderr={}",
@@ -7484,7 +7504,7 @@ pub(super) fn exec_list_loss_summary(
 }
 
 pub(super) fn exec_logs_incomplete(
-    result: &d2b_contracts::public_wire::ExecDetachedLogsResult,
+    result: &d2b_contracts_control::public_wire::ExecDetachedLogsResult,
 ) -> bool {
     result.dropped_bytes > 0
         || result.truncated
@@ -7495,7 +7515,7 @@ pub(super) fn exec_logs_incomplete(
 }
 
 pub(super) fn exec_logs_warning(
-    result: &d2b_contracts::public_wire::ExecDetachedLogsResult,
+    result: &d2b_contracts_control::public_wire::ExecDetachedLogsResult,
 ) -> String {
     format!(
         "d2b: vm exec logs: retained output incomplete (startOffset={} endOffset={} droppedBytes={} truncated={} stdoutStartOffset={} stdoutEndOffset={} stdoutNextOffset={} stdoutEof={} stdoutDroppedBytes={} stdoutTruncated={} stderrStartOffset={} stderrEndOffset={} stderrNextOffset={} stderrEof={} stderrDroppedBytes={} stderrTruncated={})\n",
@@ -7559,7 +7579,7 @@ pub(super) fn exec_json_success_value(
     outcome: &exec_client::ExecOutcome,
     host: &exec_client::CapturingHostIo,
 ) -> (Value, i32) {
-    use d2b_contracts::public_wire::ExecTerminalStatus;
+    use d2b_contracts_control::public_wire::ExecTerminalStatus;
 
     let exit_code = exec_client::exit_code_for_terminal(&outcome.terminal);
     let mut map = exec_json_base(args);
@@ -9175,7 +9195,7 @@ pub(super) fn read_live_pool_integrity(
 
 pub(super) fn render_list_human(
     output: &ListOutputV2,
-    read_model: Option<&d2b_contracts::public_wire::PublicReadModelMetadata>,
+    read_model: Option<&d2b_contracts_control::public_wire::PublicReadModelMetadata>,
 ) -> String {
     let has_canonical = output.0.iter().any(|item| item.canonical_target.is_some());
     let mut text = if has_canonical {
@@ -10653,7 +10673,7 @@ pub(super) fn try_store_verify_via_socket(
 ) -> Result<StoreVerifySocketOutcome, CliFailure> {
     let request = encode_type_tagged_message(
         "storeVerify",
-        &d2b_contracts::public_wire::StoreVerifyRequest {
+        &d2b_contracts_control::public_wire::StoreVerifyRequest {
             vm: vm.to_owned(),
             repair,
         },
@@ -10758,7 +10778,7 @@ pub(super) fn parse_list_reply(
 ) -> Result<
     (
         Vec<IpcListEntry>,
-        Option<d2b_contracts::public_wire::PublicReadModelMetadata>,
+        Option<d2b_contracts_control::public_wire::PublicReadModelMetadata>,
     ),
     CliFailure,
 > {
@@ -10780,7 +10800,7 @@ pub(super) fn parse_status_reply(
 ) -> Result<
     (
         Vec<IpcVmStatus>,
-        Option<d2b_contracts::public_wire::PublicReadModelMetadata>,
+        Option<d2b_contracts_control::public_wire::PublicReadModelMetadata>,
     ),
     CliFailure,
 > {
@@ -14110,8 +14130,8 @@ mod host_install_dispatch_tests {
         // d2b-wlcontrol depends on `d2b audio status --json` producing
         // AudioStatusResult JSON. This test locks the shape so any schema
         // change is caught before it breaks downstream consumers.
-        use d2b_contracts::public_wire::AudioChannel;
-        use d2b_contracts::public_wire::{
+        use d2b_contracts_control::public_wire::AudioChannel;
+        use d2b_contracts_control::public_wire::{
             AudioChannelState, AudioEnforcementPosture, AudioOpResponse, AudioProviderKind,
             AudioSetApplied, AudioSetResult, AudioStatusResult, AudioVmState,
         };
@@ -15580,7 +15600,7 @@ mod host_install_dispatch_tests {
 
     #[test]
     fn public_list_entries_drive_legacy_list_status_without_pidfd_read() {
-        let services = d2b_contracts::public_wire::PublicVmServices {
+        let services = d2b_contracts_control::public_wire::PublicVmServices {
             d2b: "active".to_owned(),
             microvm: "running".to_owned(),
             virtiofsd: "running".to_owned(),
@@ -15590,22 +15610,22 @@ mod host_install_dispatch_tests {
             snd: None,
             swtpm: None,
         };
-        let entry = d2b_contracts::public_wire::ListEntry {
+        let entry = d2b_contracts_control::public_wire::ListEntry {
             env: Some("dev".to_owned()),
             graphics: true,
             is_net_vm: false,
-            lifecycle: d2b_contracts::public_wire::VmLifecycle {
+            lifecycle: d2b_contracts_control::public_wire::VmLifecycle {
                 degraded: false,
                 degraded_reasons: Vec::new(),
                 pending_restart: false,
-                state: d2b_contracts::public_wire::VmLifecycleState::Running,
+                state: d2b_contracts_control::public_wire::VmLifecycleState::Running,
             },
             name: "vm-a".to_owned(),
             workload_identity: None,
             guest_closure_out_path: Some("/nix/store/vm-a-system".to_owned()),
             autostart: None,
             qemu_media: None,
-            runtime: d2b_contracts::public_wire::RuntimeSummary {
+            runtime: d2b_contracts_control::public_wire::RuntimeSummary {
                 detail: "running".to_owned(),
                 kind: None,
                 operation_capabilities: Default::default(),
@@ -15637,11 +15657,11 @@ mod host_install_dispatch_tests {
 
     #[test]
     fn public_list_status_collapses_transient_lifecycle_to_stable_label() {
-        let lifecycle = d2b_contracts::public_wire::VmLifecycle {
+        let lifecycle = d2b_contracts_control::public_wire::VmLifecycle {
             degraded: false,
             degraded_reasons: Vec::new(),
             pending_restart: false,
-            state: d2b_contracts::public_wire::VmLifecycleState::Starting,
+            state: d2b_contracts_control::public_wire::VmLifecycleState::Starting,
         };
 
         assert_eq!(
@@ -15652,11 +15672,11 @@ mod host_install_dispatch_tests {
 
     #[test]
     fn public_list_status_preserves_failed_lifecycle_label() {
-        let lifecycle = d2b_contracts::public_wire::VmLifecycle {
+        let lifecycle = d2b_contracts_control::public_wire::VmLifecycle {
             degraded: false,
             degraded_reasons: Vec::new(),
             pending_restart: false,
-            state: d2b_contracts::public_wire::VmLifecycleState::Failed,
+            state: d2b_contracts_control::public_wire::VmLifecycleState::Failed,
         };
 
         assert_eq!(
@@ -15693,8 +15713,10 @@ mod host_install_dispatch_tests {
         assert!(!rendered.contains("systemd (net-vm)"));
     }
 
-    fn read_model_fixture(kind: &str) -> d2b_contracts::public_wire::PublicReadModelMetadata {
-        d2b_contracts::public_wire::PublicReadModelMetadata {
+    fn read_model_fixture(
+        kind: &str,
+    ) -> d2b_contracts_control::public_wire::PublicReadModelMetadata {
+        d2b_contracts_control::public_wire::PublicReadModelMetadata {
             schema_version: 1,
             kind: kind.to_owned(),
             generation: 7,
@@ -15794,28 +15816,28 @@ mod host_install_dispatch_tests {
             ssh_user: Some("alice".to_owned()),
             runtime: None,
         };
-        let public = d2b_contracts::public_wire::VmStatus {
+        let public = d2b_contracts_control::public_wire::VmStatus {
             bridge_checks: Vec::new(),
             env: Some("dev".to_owned()),
             graphics: true,
             is_net_vm: false,
-            lifecycle: d2b_contracts::public_wire::VmLifecycle {
+            lifecycle: d2b_contracts_control::public_wire::VmLifecycle {
                 degraded: false,
                 degraded_reasons: Vec::new(),
                 pending_restart: false,
-                state: d2b_contracts::public_wire::VmLifecycleState::Running,
+                state: d2b_contracts_control::public_wire::VmLifecycleState::Running,
             },
             name: "vm-a".to_owned(),
             workload_identity: None,
             autostart: None,
             qemu_media: None,
-            runtime: d2b_contracts::public_wire::RuntimeSummary {
+            runtime: d2b_contracts_control::public_wire::RuntimeSummary {
                 detail: "running".to_owned(),
                 kind: None,
                 operation_capabilities: Default::default(),
                 services: Vec::new(),
             },
-            services: d2b_contracts::public_wire::PublicVmServices {
+            services: d2b_contracts_control::public_wire::PublicVmServices {
                 d2b: "active".to_owned(),
                 microvm: "running".to_owned(),
                 virtiofsd: "running".to_owned(),
@@ -16471,7 +16493,7 @@ mod exec_json_envelope_tests {
     //! status number (the 70-vs-70 case): `source` + `reason` +
     //! `guestExitCode`/`transportExitCode` carry the distinction.
 
-    use d2b_contracts::public_wire::ExecTerminalStatus;
+    use d2b_contracts_control::public_wire::ExecTerminalStatus;
 
     use super::{VmExecArgs, exec_client, exec_json_failure_value, exec_json_success_value};
 
@@ -16858,7 +16880,7 @@ mod config_cmd_tests {
         let dir = scratch("gc-sync-big");
         let staging = dir.join("work.guest.nix");
         let oversize =
-            vec![b'a'; (d2b_contracts::guest_wire::READ_GUEST_FILE_MAX_BYTES as usize) + 1];
+            vec![b'a'; (d2b_contracts_control::guest_wire::READ_GUEST_FILE_MAX_BYTES as usize) + 1];
         let reply = read_guest_config_reply(&oversize);
         let err = super::finish_config_sync_from_reply(&reply, &staging, false)
             .expect_err("oversize must be rejected");
@@ -17195,7 +17217,8 @@ mod console_fsm_tests {
         SockType, UnixAddr, daemon_supported_features, encode_type_tagged_message, nix_err_to_io,
         scan_chunk_for_detach, send, socket,
     };
-    use d2b_contracts::{Version, public_wire};
+    use d2b_contracts::Version;
+    use d2b_contracts_control::public_wire;
     use nix::{
         sys::socket::{Backlog, accept4, bind, listen},
         unistd::close,
@@ -17374,7 +17397,7 @@ mod console_fsm_tests {
                     &public_wire::ConsoleOpResponse::ReadOutput(
                         public_wire::ConsoleReadOutputResult {
                             session: "console-test".to_owned(),
-                            stream: d2b_contracts::terminal_wire::TerminalStream::Stdout,
+                            stream: d2b_contracts_control::terminal_wire::TerminalStream::Stdout,
                             offset: 0,
                             chunk_base64: d2b_core::base64_codec::encode(b"guest uart\n"),
                             is_eof: true,
@@ -17399,7 +17422,7 @@ mod console_fsm_tests {
                     &public_wire::ConsoleOpResponse::ReadOutput(
                         public_wire::ConsoleReadOutputResult {
                             session: "console-test".to_owned(),
-                            stream: d2b_contracts::terminal_wire::TerminalStream::Stdout,
+                            stream: d2b_contracts_control::terminal_wire::TerminalStream::Stdout,
                             offset: 11,
                             chunk_base64: String::new(),
                             is_eof: true,
@@ -17533,7 +17556,7 @@ mod console_fsm_tests {
                     &public_wire::ConsoleOpResponse::ReadOutput(
                         public_wire::ConsoleReadOutputResult {
                             session: "console-test".to_owned(),
-                            stream: d2b_contracts::terminal_wire::TerminalStream::Stdout,
+                            stream: d2b_contracts_control::terminal_wire::TerminalStream::Stdout,
                             offset: 0,
                             chunk_base64: "not valid base64!".to_owned(),
                             is_eof: false,

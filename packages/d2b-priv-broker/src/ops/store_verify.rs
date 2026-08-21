@@ -14,7 +14,7 @@ use std::os::fd::AsRawFd;
 use std::os::unix::fs::MetadataExt as _;
 use std::path::{Path, PathBuf};
 
-use d2b_contracts::broker_wire::{
+use d2b_contracts_broker::broker_wire::{
     StoreVerifyResponse, StoreVerifyStatus, StoreVerifyUnknownReason,
 };
 use d2b_core::bundle_resolver::ResolvedStoreViewIntent;

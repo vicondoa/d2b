@@ -1,0 +1,74 @@
+load("@crates//:defs.bzl", "all_crate_deps")
+load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test", "rust_doc_test")
+
+exports_files(["BUILD.bazel", "Cargo.toml"], visibility = ["//visibility:public"])
+
+d2b_contracts_broker_srcs = glob(["src/**/*.rs"], allow_empty = True)
+
+filegroup(
+    name = "daemon_api_sources",
+    srcs = glob(["src/*.rs"]),
+    visibility = ["//visibility:public"],
+)
+
+rust_library(
+    name = "d2b_contracts_broker",
+    srcs = d2b_contracts_broker_srcs,
+    compile_data = ["Cargo.toml"],
+    visibility = ["//visibility:public"],
+    deps = [
+        "//packages/d2b-contracts-resource:d2b_contracts_resource",
+        "//packages/d2b-contracts:d2b_contracts",
+    ] + all_crate_deps(normal = True, cargo_only = True),
+)
+
+rust_test(
+    name = "wire",
+    srcs = ["tests/wire.rs"],
+    compile_data = ["Cargo.toml"],
+    visibility = ["//visibility:public"],
+    deps = [":d2b_contracts_broker",
+        "//packages/d2b-contracts-resource:d2b_contracts_resource", ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
+)
+
+rust_test(
+    name = "cutover_wire",
+    srcs = ["tests/cutover_wire.rs"],
+    compile_data = ["Cargo.toml"],
+    visibility = ["//visibility:public"],
+    deps = [
+        ":d2b_contracts_broker",
+        "//packages/d2b-contracts:d2b_contracts",
+        "//packages/d2b-contracts-control:d2b_contracts_control",
+        "//packages/d2b-contracts-resource:d2b_contracts_resource",
+    ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
+)
+
+rust_test(
+    name = "d2b_contracts_broker_test",
+    compile_data = ["Cargo.toml"],
+    crate = ":d2b_contracts_broker",
+    deps = ["//packages/d2b-contracts-resource:d2b_contracts_resource", ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
+)
+
+rust_doc_test(
+    name = "d2b_contracts_broker_doc_test",
+    crate = "//packages/d2b-contracts-broker:d2b_contracts_broker",
+)
+
+filegroup(
+    name = "cargo_workspace_sources",
+    srcs = glob(
+        [
+            "Cargo.lock",
+            "Cargo.toml",
+            "benches/**/*.rs",
+            "build.rs",
+            "examples/**/*.rs",
+            "src/**/*.rs",
+            "tests/**/*.rs",
+        ],
+        allow_empty = True,
+    ),
+    visibility = ["//visibility:public"],
+)

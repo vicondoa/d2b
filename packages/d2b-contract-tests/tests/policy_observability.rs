@@ -36,12 +36,12 @@ const OBS_JOURNALD: &str = "packages/d2b-provider-observability-otel/src/nix/jou
 
 #[test]
 fn startup_tracing_avoids_host_path_fields() {
-    let d2bd = read_repo_file("packages/d2bd/src/lib.rs");
+    let d2bd = read_repo_file("packages/d2bd/src/composition.rs");
     let broker = read_repo_file("packages/d2b-priv-broker/src/runtime.rs");
 
     for (rel, content, forbidden) in [
         (
-            "packages/d2bd/src/lib.rs",
+            "packages/d2bd/src/composition.rs",
             d2bd.as_str(),
             [
                 "path = %config.realm_controllers_config_path.display()",
@@ -65,7 +65,7 @@ fn startup_tracing_avoids_host_path_fields() {
     }
 
     for (rel, content) in [
-        ("packages/d2bd/src/lib.rs", d2bd.as_str()),
+        ("packages/d2bd/src/composition.rs", d2bd.as_str()),
         ("packages/d2b-priv-broker/src/runtime.rs", broker.as_str()),
     ] {
         assert!(

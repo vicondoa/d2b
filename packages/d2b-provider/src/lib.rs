@@ -7,7 +7,7 @@
 //! from the ADR45 `d2b-provider` registry: the lifecycle, in-flight
 //! accounting, RAII permit, drain-waiter notify race, and live-swap manager
 //! are carried over, while the identity is now the Zone's
-//! [`ZonePath`](d2b_contracts::v3::zone_routing::ZonePath) plus an
+//! [`ZonePath`](d2b_contracts_zone_session::v3::zone_routing::ZonePath) plus an
 //! authenticated Zone principal rather than a realm and a peer role.
 //!
 //! What this crate deliberately does not do. It performs no host mutation and

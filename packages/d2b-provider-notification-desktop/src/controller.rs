@@ -5,7 +5,14 @@ use crate::{
     NotificationHostSinkIdentity, NotificationLifecyclePlan, NotificationLifecycleReceipt,
     NotificationSourceIdentity,
 };
-use d2b_contracts::v3::{EvidenceClass, Locality, ResourceRef, ZoneId};
+use d2b_contracts_resource::v3::{
+    ResourceRef,
+    ZoneId,
+};
+use d2b_contracts_resource::v3::identity::{
+    EvidenceClass,
+    Locality,
+};
 use d2b_provider_toolkit::AuthenticatedSessionRouteBinding;
 use sha2::{Digest, Sha256};
 use std::collections::BTreeSet;

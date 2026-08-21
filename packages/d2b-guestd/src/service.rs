@@ -17,7 +17,7 @@ use std::{
 };
 
 use async_trait::async_trait;
-use d2b_contracts::{
+use d2b_contracts_control::{
     guest_proto as pb,
     guest_wire::{GUEST_CONTROL_PROTOCOL_VERSION, READ_GUEST_FILE_MAX_BYTES},
 };
@@ -6920,10 +6920,10 @@ mod tests {
         assert!(response.error.is_none());
         let encoded = response.write_to_bytes().unwrap();
         assert!(
-            (encoded.len() as u64) < d2b_contracts::guest_wire::TTRPC_FRAME_CAP_BYTES,
+            (encoded.len() as u64) < d2b_contracts_control::guest_wire::TTRPC_FRAME_CAP_BYTES,
             "encoded cap response {} must fit ttRPC frame cap {}",
             encoded.len(),
-            d2b_contracts::guest_wire::TTRPC_FRAME_CAP_BYTES
+            d2b_contracts_control::guest_wire::TTRPC_FRAME_CAP_BYTES
         );
         std::fs::remove_dir_all(&dir).ok();
     }

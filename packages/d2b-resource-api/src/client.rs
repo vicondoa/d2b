@@ -2,7 +2,8 @@
 
 use std::sync::Arc;
 
-use d2b_contracts::{resource_proto as wire, v3::AuthenticatedSubjectContext};
+use d2b_contracts_resource::resource_proto as wire;
+use d2b_contracts_resource::v3::identity::AuthenticatedSubjectContext;
 
 use crate::{
     ResourceStoreBackend,

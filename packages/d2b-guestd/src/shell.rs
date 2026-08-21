@@ -4,7 +4,7 @@ use std::io::Read;
 use std::path::PathBuf;
 use std::sync::Mutex;
 
-use d2b_contracts::guest_proto as pb;
+use d2b_contracts_control::guest_proto as pb;
 use d2b_realm_core as realm_core;
 use protobuf::{EnumOrUnknown, MessageField};
 

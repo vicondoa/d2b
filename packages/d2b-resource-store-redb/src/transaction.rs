@@ -1,8 +1,8 @@
 //! Persisted store DTOs, recovery validation, and crash-safe write transactions.
 
 use d2b_audit::{AuditHash, OperationIdentity};
-use d2b_contracts::v3::identity::STANDARD_RESOURCE_TYPES;
-use d2b_contracts::v3::{
+use d2b_contracts_resource::v3::identity::STANDARD_RESOURCE_TYPES;
+use d2b_contracts_resource::v3::{
     CanonicalJsonValue, ControllerGeneration, FinalizerId, RESOURCE_ENVELOPE_DOMAIN_TAG,
     ResourceEnvelope, ResourceGeneration, ResourceName, ResourceRef, ResourceTypeName, ResourceUid,
     RetryClass, Timestamp, ZoneId, ZoneRevision, canonical_digest,
@@ -426,7 +426,8 @@ impl ChangeEntry {
         correlation_id: String,
     ) -> Result<Self, StoreError> {
         if usize::try_from(ordinal).map_or(true, |ordinal| {
-            ordinal >= crate::actor::GROUP_COMMIT_MAX * d2b_contracts::v3::MAX_BATCH_MUTATIONS
+            ordinal
+                >= crate::actor::GROUP_COMMIT_MAX * d2b_contracts_resource::v3::MAX_BATCH_MUTATIONS
         }) || !valid_digest(&payload_digest)
         {
             return Err(integrity("change-entry-invalid"));
@@ -493,7 +494,7 @@ impl ChangeBatch {
         revision: ZoneRevision,
         entries: Vec<ChangeEntry>,
     ) -> Result<Self, StoreError> {
-        let max = crate::actor::GROUP_COMMIT_MAX * d2b_contracts::v3::MAX_BATCH_MUTATIONS;
+        let max = crate::actor::GROUP_COMMIT_MAX * d2b_contracts_resource::v3::MAX_BATCH_MUTATIONS;
         if revision.get() == 0
             || entries.len() > max
             || entries
@@ -761,8 +762,8 @@ pub(crate) fn empty_write_request_for_test(
             policy_snapshot: PolicySnapshot {
                 policy_revision: 1,
                 api_catalog_revision: 1,
-                active_configuration_revision: d2b_contracts::v3::ConfigurationGeneration::new(1)
-                    .unwrap(),
+                active_configuration_revision:
+                    d2b_contracts_resource::v3::ConfigurationGeneration::new(1).unwrap(),
                 controller_generation: None,
             },
             operation: StoreOperationContext {
@@ -975,7 +976,7 @@ pub(crate) fn normalize_audit_outboxes(database: &Database) -> Result<(), StoreE
                 .bytes()
                 .any(|byte| byte.is_ascii_control())
             || outbox.mutations.is_empty()
-            || outbox.mutations.len() > d2b_contracts::v3::MAX_BATCH_MUTATIONS
+            || outbox.mutations.len() > d2b_contracts_resource::v3::MAX_BATCH_MUTATIONS
         {
             return Err(integrity("audit-outbox-record-invalid"));
         }
@@ -1465,7 +1466,7 @@ fn schema_digest_for_type(resource_type: &str) -> Result<String, StoreError> {
         "schemaVersion": STANDARD_SCHEMA_VERSION,
         "validator": "d2b-resource-store-redb/standard",
     });
-    let bytes = d2b_contracts::v3::canonical_json_bytes(&descriptor).map_err(integrity)?;
+    let bytes = d2b_contracts_resource::v3::canonical_json_bytes(&descriptor).map_err(integrity)?;
     Ok(canonical_digest(RESOURCE_SCHEMA_DOMAIN_TAG, &bytes))
 }
 
@@ -1509,7 +1510,7 @@ fn validate_audit_outbox(
         || !valid_digest(&outbox.subject_digest)
         || outbox.resulting_revision > meta.current_revision
         || outbox.mutations.is_empty()
-        || outbox.mutations.len() > d2b_contracts::v3::MAX_BATCH_MUTATIONS
+        || outbox.mutations.len() > d2b_contracts_resource::v3::MAX_BATCH_MUTATIONS
     {
         return Err(integrity("audit-outbox-record-invalid"));
     }
@@ -1530,7 +1531,7 @@ fn validate_audit_outbox(
             || !valid_digest(&mutation.target_digest)
             || mutation.mutation_id.is_empty()
             || !valid_digest(&mutation.mutation_id)
-            || mutation.ordinal >= d2b_contracts::v3::MAX_BATCH_MUTATIONS as u32
+            || mutation.ordinal >= d2b_contracts_resource::v3::MAX_BATCH_MUTATIONS as u32
             || mutation.timestamp_ms == 0
             || !matches!(mutation.outcome.as_str(), "ok" | "denied" | "error")
             || mutation.error_code.as_deref().is_some_and(|code| {
@@ -1656,7 +1657,7 @@ fn validate_active_schema(
     write: &redb::WriteTransaction,
     envelope: &ResourceEnvelope,
 ) -> Result<(), StoreError> {
-    if let Some(contract) = d2b_contracts::v3::semantic_service_catalog()
+    if let Some(contract) = d2b_contracts_provider::v3::catalog()
         .into_iter()
         .flat_map(|pair| [pair.service(), pair.binding()])
         .find(|contract| contract.resource_type() == envelope.resource_type())
@@ -1712,52 +1713,74 @@ fn validate_standard_base(envelope: &ResourceEnvelope) -> Result<bool, StoreErro
 
 fn validate_standard_base_bytes(resource_type: &str, bytes: &[u8]) -> Result<bool, StoreError> {
     let valid = match resource_type {
-        "Zone" => serde_json::from_slice::<d2b_contracts::v3::zone::ZoneSpec>(bytes).is_ok(),
+        "Zone" => {
+            serde_json::from_slice::<d2b_contracts_zone_session::v3::zone::ZoneSpec>(bytes).is_ok()
+        }
         "ZoneLink" => {
-            serde_json::from_slice::<d2b_contracts::v3::zone_link::ZoneLinkSpec>(bytes).is_ok()
+            serde_json::from_slice::<d2b_contracts_zone_session::v3::zone_link::ZoneLinkSpec>(bytes)
+                .is_ok()
         }
         "Provider" => {
-            serde_json::from_slice::<d2b_contracts::v3::provider::ProviderSpec>(bytes).is_ok()
-        }
-        "Role" => serde_json::from_slice::<d2b_contracts::v3::role::RoleSpec>(bytes).is_ok(),
-        "RoleBinding" => {
-            serde_json::from_slice::<d2b_contracts::v3::role_binding::RoleBindingSpec>(bytes)
+            serde_json::from_slice::<d2b_contracts_provider::v3::provider::ProviderSpec>(bytes)
                 .is_ok()
         }
-        "Quota" => serde_json::from_slice::<d2b_contracts::v3::quota::QuotaSpec>(bytes).is_ok(),
-        "EmergencyPolicy" => serde_json::from_slice::<
-            d2b_contracts::v3::emergency_policy::EmergencyPolicySpec,
+        "Role" => {
+            serde_json::from_slice::<d2b_contracts_zone_session::v3::role::RoleSpec>(bytes).is_ok()
+        }
+        "RoleBinding" => serde_json::from_slice::<
+            d2b_contracts_zone_session::v3::role_binding::RoleBindingSpec,
         >(bytes)
         .is_ok(),
-        "Host" => serde_json::from_slice::<d2b_contracts::v3::host::HostSpec>(bytes).is_ok(),
-        "Guest" => serde_json::from_slice::<d2b_contracts::v3::guest::GuestSpec>(bytes).is_ok(),
-        "Process" => {
-            serde_json::from_slice::<d2b_contracts::v3::process::ProcessSpec>(bytes).is_ok()
+        "Quota" => {
+            serde_json::from_slice::<d2b_contracts_resource::v3::quota::QuotaSpec>(bytes).is_ok()
         }
-        "EphemeralProcess" => {
-            serde_json::from_slice::<d2b_contracts::v3::process::EphemeralProcessSpec>(bytes)
+        "EmergencyPolicy" => serde_json::from_slice::<
+            d2b_contracts_zone_session::v3::emergency_policy::EmergencyPolicySpec,
+        >(bytes)
+        .is_ok(),
+        "Host" => {
+            serde_json::from_slice::<d2b_contracts_resource::v3::host::HostSpec>(bytes).is_ok()
+        }
+        "Guest" => {
+            serde_json::from_slice::<d2b_contracts_resource::v3::guest::GuestSpec>(bytes).is_ok()
+        }
+        "Process" => {
+            serde_json::from_slice::<d2b_contracts_resource::v3::process::ProcessSpec>(bytes)
                 .is_ok()
         }
-        "Volume" => serde_json::from_slice::<d2b_contracts::v3::volume::VolumeSpec>(bytes).is_ok(),
-        "Network" => {
-            serde_json::from_slice::<d2b_contracts::v3::network::NetworkSpec>(bytes).is_ok()
+        "EphemeralProcess" => serde_json::from_slice::<
+            d2b_contracts_resource::v3::process::EphemeralProcessSpec,
+        >(bytes)
+        .is_ok(),
+        "Volume" => {
+            serde_json::from_slice::<d2b_contracts_resource::v3::volume::VolumeSpec>(bytes).is_ok()
         }
-        "Device" => serde_json::from_slice::<d2b_contracts::v3::device::DeviceSpec>(bytes).is_ok(),
-        "User" => serde_json::from_slice::<d2b_contracts::v3::user::UserSpec>(bytes).is_ok(),
+        "Network" => {
+            serde_json::from_slice::<d2b_contracts_resource::v3::network::NetworkSpec>(bytes)
+                .is_ok()
+        }
+        "Device" => {
+            serde_json::from_slice::<d2b_contracts_resource::v3::device::DeviceSpec>(bytes).is_ok()
+        }
+        "User" => {
+            serde_json::from_slice::<d2b_contracts_resource::v3::user::UserSpec>(bytes).is_ok()
+        }
         "Credential" => {
-            serde_json::from_slice::<d2b_contracts::v3::credential::CredentialSpec>(bytes).is_ok()
+            serde_json::from_slice::<d2b_contracts_provider::v3::credential::CredentialSpec>(bytes)
+                .is_ok()
         }
         "Endpoint" => {
-            serde_json::from_slice::<d2b_contracts::v3::endpoint::EndpointSpec>(bytes).is_ok()
-        }
-        "ResourceExport" => {
-            serde_json::from_slice::<d2b_contracts::v3::resource_export::ResourceExportSpec>(bytes)
+            serde_json::from_slice::<d2b_contracts_resource::v3::endpoint::EndpointSpec>(bytes)
                 .is_ok()
         }
-        "ResourceImport" => {
-            serde_json::from_slice::<d2b_contracts::v3::resource_import::ResourceImportSpec>(bytes)
-                .is_ok()
-        }
+        "ResourceExport" => serde_json::from_slice::<
+            d2b_contracts_zone_session::v3::resource_export::ResourceExportSpec,
+        >(bytes)
+        .is_ok(),
+        "ResourceImport" => serde_json::from_slice::<
+            d2b_contracts_zone_session::v3::resource_import::ResourceImportSpec,
+        >(bytes)
+        .is_ok(),
         _ => return Ok(false),
     };
     if !valid {
@@ -2378,7 +2401,7 @@ pub(crate) fn apply_group_with_hook(
 
         let snapshot = verified.policy_snapshot;
         if verified.mutations.is_empty()
-            || verified.mutations.len() > d2b_contracts::v3::MAX_BATCH_MUTATIONS
+            || verified.mutations.len() > d2b_contracts_resource::v3::MAX_BATCH_MUTATIONS
         {
             results.push(Err(integrity("empty-verified-mutation")));
             continue;
@@ -3837,7 +3860,7 @@ fn apply_finalizer_delta(
         finalizers.remove(finalizer);
     }
     finalizers.extend(mutation.add_finalizers.iter().cloned());
-    if finalizers.len() > d2b_contracts::v3::resource::MAX_FINALIZERS {
+    if finalizers.len() > d2b_contracts_resource::v3::resource::MAX_FINALIZERS {
         return Err(error(
             StoreErrorKind::ResourceSchemaInvalid,
             None,
@@ -4329,7 +4352,7 @@ pub(crate) fn meta_key() -> Vec<u8> {
 }
 
 pub(crate) fn encode<T: Serialize>(kind: ValueKind, value: &T) -> Result<Vec<u8>, StoreError> {
-    let json = d2b_contracts::v3::canonical_json_bytes(value).map_err(integrity)?;
+    let json = d2b_contracts_resource::v3::canonical_json_bytes(value).map_err(integrity)?;
     encode_value(kind, &json)
         .map(|value| value.into_bytes())
         .map_err(integrity)
@@ -4431,7 +4454,7 @@ fn error(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use d2b_contracts::v3::{ConfigurationGeneration, ResourceTypeName, Timestamp};
+    use d2b_contracts_resource::v3::{ConfigurationGeneration, ResourceTypeName, Timestamp};
     use d2b_resource_store::{
         AdmittedAuthorizationTarget, AdmittedVerb, ResourceMutationKind, StoreSlot,
     };
@@ -5485,10 +5508,11 @@ mod tests {
             "corr".to_owned(),
         )
         .unwrap();
-        let mut entries = vec![
-            entry.clone();
-            crate::GROUP_COMMIT_MAX * d2b_contracts::v3::MAX_BATCH_MUTATIONS + 1
-        ];
+        let mut entries =
+            vec![
+                entry.clone();
+                crate::GROUP_COMMIT_MAX * d2b_contracts_resource::v3::MAX_BATCH_MUTATIONS + 1
+            ];
         for (ordinal, entry) in entries.iter_mut().enumerate() {
             entry.ordinal = u32::try_from(ordinal).unwrap();
         }

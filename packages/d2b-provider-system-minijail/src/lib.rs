@@ -35,7 +35,9 @@ pub mod user_ns;
 
 use std::collections::BTreeSet;
 
-use d2b_contracts::v3::execution_policy::{BoundedToken, ExecutionDomain};
+use d2b_contracts_resource::v3::{
+    execution_policy::{BoundedToken, ExecutionDomain},
+};
 use d2b_process_conformance::{
     AdoptionCondition, AdoptionOutcome, CancellationBinding, IdentityBinding, LaunchTicket,
     ProcessConformanceError, ProcessIdentityDigest, ProcessLaunchEffectPort, ProcessPhaseClass,

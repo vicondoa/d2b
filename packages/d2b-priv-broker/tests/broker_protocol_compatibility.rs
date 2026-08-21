@@ -1,10 +1,14 @@
-use d2b_contracts::PROTOCOL_VERSION;
-use d2b_contracts::broker_wire::{
+use d2b_contracts::types::{BundleOpId, ScopeId};
+use d2b_contracts_broker::PROTOCOL_VERSION;
+use d2b_contracts_broker::broker_wire::{
     ApplyNftablesProjectionRequest, BrokerCallerRole, BrokerRequest, BrokerRequestEnvelope,
     CreateBridgeRequest, DeleteBridgeRequest, DeletePersistentTapRequest, NftablesProjectionAction,
 };
-use d2b_contracts::types::{BundleOpId, ScopeId};
-use d2b_contracts::v3::{ResourceBundleGenerationId, ResourceGeneration, ResourceUid};
+use d2b_contracts_resource::v3::{
+    ResourceBundleGenerationId,
+    ResourceGeneration,
+    ResourceUid,
+};
 use serde::{Deserialize, Serialize};
 
 const PREVIOUS_PROTOCOL_VERSION: u32 = 3;

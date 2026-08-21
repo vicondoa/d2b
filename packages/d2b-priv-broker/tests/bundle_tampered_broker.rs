@@ -12,7 +12,7 @@
 
 #[cfg(not(feature = "layer1-bootstrap"))]
 mod broker_tampered {
-    use d2b_contracts::broker_wire::BrokerResponse;
+    use d2b_contracts_broker::broker_wire::BrokerResponse;
     use d2b_core::bundle_resolver::BundleVerifyPolicy;
     use d2b_priv_broker::runtime::{
         probe_bundle_load_response, probe_bundle_load_response_with_policy,

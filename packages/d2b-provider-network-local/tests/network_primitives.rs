@@ -1,9 +1,10 @@
-use d2b_contracts::{
-    broker_wire::{
-        ApplyNftablesProjectionRequest, CreateBridgeRequest, DeleteBridgeRequest,
-        DeletePersistentTapRequest, NftablesProjectionAction,
-    },
-    v3::{ResourceName, ResourceUid},
+use d2b_contracts_broker::broker_wire::{
+    ApplyNftablesProjectionRequest, CreateBridgeRequest, DeleteBridgeRequest,
+    DeletePersistentTapRequest, NftablesProjectionAction,
+};
+use d2b_contracts_resource::v3::{
+    ResourceName,
+    ResourceUid,
 };
 use d2b_provider_network_local::{
     ExternalNicAdmissionError, ExternalNicClaim, MacvtapMode, SharingPolicy,

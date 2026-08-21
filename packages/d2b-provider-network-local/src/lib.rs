@@ -11,6 +11,7 @@ pub mod artifact;
 pub mod bridge_port;
 pub mod broker;
 pub mod controller;
+pub mod diagnostics;
 pub mod ifname;
 pub mod netlink;
 pub mod nftables;
@@ -18,7 +19,9 @@ pub mod observe;
 pub mod plan;
 pub mod routes;
 
-pub use d2b_contracts::v3::network::{
+pub use d2b_contracts_resource::v3::{
+    network::{
     ExternalNicAdmissionError, ExternalNicClaim, MacvtapMode, SharingPolicy,
     admit_external_nic_claims,
+},
 };

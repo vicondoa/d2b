@@ -1,6 +1,6 @@
 //! Video decoder Process construction.
 
-use d2b_contracts::v3::ResourceUid;
+use d2b_contracts_resource::v3::ResourceUid;
 
 use crate::{GpuProcessSelectionError, GpuSettings, VideoWorkerSpec};
 

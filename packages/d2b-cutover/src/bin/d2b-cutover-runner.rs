@@ -15,15 +15,11 @@ use std::{
     time::{SystemTime, UNIX_EPOCH},
 };
 
-use d2b_contracts::{
-    MAX_FRAME_SIZE,
-    broker_wire::{
-        BrokerCallerRole, BrokerRequest, BrokerRequestEnvelope, BrokerResponse,
-        CanonicalAuditDigest, CutoverAuditRequest, CutoverAuditTransition, CutoverEffectAuthority,
-        CutoverEffectKind, CutoverEffectOutcome, CutoverEffectPayload, CutoverEffectRequest,
-        CutoverReplayClass,
-    },
-    types::BundleOpId,
+use d2b_contracts::{MAX_FRAME_SIZE, types::BundleOpId};
+use d2b_contracts_broker::broker_wire::{
+    BrokerCallerRole, BrokerRequest, BrokerRequestEnvelope, BrokerResponse, CanonicalAuditDigest,
+    CutoverAuditRequest, CutoverAuditTransition, CutoverEffectAuthority, CutoverEffectKind,
+    CutoverEffectOutcome, CutoverEffectPayload, CutoverEffectRequest, CutoverReplayClass,
 };
 use d2b_cutover::{
     ApplyContext, ArtifactId, AuditEvidence, CapabilityLedger, CompletionEvidence, CutoverPhase,
@@ -259,13 +255,13 @@ trait EffectSink {
         &mut self,
         request: &EffectRequest,
         phase: CutoverPhase,
-        handoff: Option<d2b_contracts::host_generation::ApplyHostGenerationHandoff>,
+        handoff: Option<d2b_contracts_broker::host_generation::ApplyHostGenerationHandoff>,
         payload: Option<CutoverEffectPayload>,
     ) -> Result<CompletionEvidence, EffectSinkError>;
 
     fn admission(
         &mut self,
-    ) -> Result<d2b_contracts::broker_wire::CutoverAdmissionResponse, EffectSinkError> {
+    ) -> Result<d2b_contracts_broker::broker_wire::CutoverAdmissionResponse, EffectSinkError> {
         Err(EffectSinkError::NotAllowed)
     }
 
@@ -358,8 +354,8 @@ struct BrokerEffectSink {
     capability_digest: CanonicalAuditDigest,
     request_digest: CanonicalAuditDigest,
     authority: CutoverEffectAuthority,
-    system_artifact_id: Option<d2b_contracts::v3::ArtifactId>,
-    source_system_artifact_id: Option<d2b_contracts::v3::ArtifactId>,
+    system_artifact_id: Option<d2b_contracts_resource::v3::ArtifactId>,
+    source_system_artifact_id: Option<d2b_contracts_resource::v3::ArtifactId>,
 }
 
 struct BrokerEffectRoundTrip {
@@ -368,7 +364,7 @@ struct BrokerEffectRoundTrip {
     phase: CutoverPhase,
     replay_class: CutoverReplayClass,
     identity: Option<BundleOpId>,
-    handoff: Option<d2b_contracts::host_generation::ApplyHostGenerationHandoff>,
+    handoff: Option<d2b_contracts_broker::host_generation::ApplyHostGenerationHandoff>,
     payload: Option<CutoverEffectPayload>,
 }
 
@@ -396,13 +392,13 @@ impl BrokerEffectSink {
         let system_artifact_id = bootstrap
             .request
             .system_artifact_id()
-            .map(|id| d2b_contracts::v3::ArtifactId::parse(id.as_str().to_owned()))
+            .map(|id| d2b_contracts_resource::v3::ArtifactId::parse(id.as_str().to_owned()))
             .transpose()
             .map_err(|_| RunnerError::Bootstrap)?;
         let source_system_artifact_id = bootstrap
             .request
             .source_system_artifact_id()
-            .map(|id| d2b_contracts::v3::ArtifactId::parse(id.as_str().to_owned()))
+            .map(|id| d2b_contracts_resource::v3::ArtifactId::parse(id.as_str().to_owned()))
             .transpose()
             .map_err(|_| RunnerError::Bootstrap)?;
         Ok(Self {
@@ -420,9 +416,9 @@ impl BrokerEffectSink {
         &self,
         request: &EffectRequest,
         phase: CutoverPhase,
-        handoff: Option<d2b_contracts::host_generation::ApplyHostGenerationHandoff>,
+        handoff: Option<d2b_contracts_broker::host_generation::ApplyHostGenerationHandoff>,
         payload: Option<CutoverEffectPayload>,
-    ) -> Result<d2b_contracts::broker_wire::CutoverEffectResponse, EffectSinkError> {
+    ) -> Result<d2b_contracts_broker::broker_wire::CutoverEffectResponse, EffectSinkError> {
         let effect = cutover_effect_kind(request.kind()).ok_or(EffectSinkError::NotAllowed)?;
         self.round_trip_request(BrokerEffectRoundTrip {
             effect,
@@ -446,7 +442,7 @@ impl BrokerEffectSink {
     fn round_trip_request(
         &self,
         request: BrokerEffectRoundTrip,
-    ) -> Result<d2b_contracts::broker_wire::CutoverEffectResponse, EffectSinkError> {
+    ) -> Result<d2b_contracts_broker::broker_wire::CutoverEffectResponse, EffectSinkError> {
         if !self.authority.permits(request.effect) {
             return Err(EffectSinkError::NotAllowed);
         }
@@ -490,7 +486,7 @@ impl EffectSink for BrokerEffectSink {
         &mut self,
         request: &EffectRequest,
         phase: CutoverPhase,
-        handoff: Option<d2b_contracts::host_generation::ApplyHostGenerationHandoff>,
+        handoff: Option<d2b_contracts_broker::host_generation::ApplyHostGenerationHandoff>,
         payload: Option<CutoverEffectPayload>,
     ) -> Result<CompletionEvidence, EffectSinkError> {
         let response = self.round_trip_effect(request, phase, handoff, payload)?;
@@ -510,8 +506,8 @@ impl EffectSink for BrokerEffectSink {
 
     fn admission(
         &mut self,
-    ) -> Result<d2b_contracts::broker_wire::CutoverAdmissionResponse, EffectSinkError> {
-        let request = d2b_contracts::broker_wire::CutoverAdmissionRequest {
+    ) -> Result<d2b_contracts_broker::broker_wire::CutoverAdmissionResponse, EffectSinkError> {
+        let request = d2b_contracts_broker::broker_wire::CutoverAdmissionRequest {
             system_artifact_id: self.system_artifact_id.clone(),
             source_system_artifact_id: self.source_system_artifact_id.clone(),
         };
@@ -539,7 +535,7 @@ impl EffectSink for BrokerEffectSink {
             None,
         );
         let payload = CutoverEffectPayload::Verification(
-            d2b_contracts::broker_wire::CutoverVerificationRequest {
+            d2b_contracts_broker::broker_wire::CutoverVerificationRequest {
                 expected_zone_ids: expected
                     .zones
                     .iter()
@@ -971,7 +967,7 @@ impl Runtime {
                     .artifacts
                     .iter()
                     .map(|artifact| {
-                        d2b_contracts::v3::ArtifactId::parse(artifact.artifact_id.as_str())
+                        d2b_contracts_resource::v3::ArtifactId::parse(artifact.artifact_id.as_str())
                             .map_err(|_| d2b_cutover::RunnerSocketError::Malformed)
                     })
                     .collect::<Result<Vec<_>, _>>()
@@ -1149,7 +1145,7 @@ impl Runtime {
 
     fn apply_closure(
         &mut self,
-        handoff: d2b_contracts::host_generation::ApplyHostGenerationHandoff,
+        handoff: d2b_contracts_broker::host_generation::ApplyHostGenerationHandoff,
     ) -> RunnerResponse {
         let identity = match ArtifactId::new(handoff.intent.system_artifact_id.as_str()) {
             Ok(identity) => identity,
@@ -1258,7 +1254,7 @@ impl Runtime {
     fn dispatch_effect(
         &mut self,
         effect: EffectRequest,
-        handoff: Option<d2b_contracts::host_generation::ApplyHostGenerationHandoff>,
+        handoff: Option<d2b_contracts_broker::host_generation::ApplyHostGenerationHandoff>,
         payload: Option<CutoverEffectPayload>,
     ) -> RunnerResponse {
         self.dispatch_effect_internal(effect, handoff, payload)
@@ -1267,7 +1263,7 @@ impl Runtime {
     fn dispatch_effect_internal(
         &mut self,
         effect: EffectRequest,
-        handoff: Option<d2b_contracts::host_generation::ApplyHostGenerationHandoff>,
+        handoff: Option<d2b_contracts_broker::host_generation::ApplyHostGenerationHandoff>,
         payload: Option<CutoverEffectPayload>,
     ) -> RunnerResponse {
         if effect.kind() == EffectKind::ClosureActivation {
@@ -1462,18 +1458,18 @@ impl Runtime {
 }
 
 fn validate_handoff_contract(
-    handoff: &d2b_contracts::host_generation::ApplyHostGenerationHandoff,
+    handoff: &d2b_contracts_broker::host_generation::ApplyHostGenerationHandoff,
 ) -> bool {
     if handoff.validate().is_err()
         || !matches!(
             handoff.caller_role,
-            d2b_contracts::host_generation::HandoffCallerRole::Lifecycle
+            d2b_contracts_broker::host_generation::HandoffCallerRole::Lifecycle
         )
         || handoff.target.resource_type().as_str() != "Host"
     {
         return false;
     }
-    let fingerprint = d2b_contracts::host_generation::target_fingerprint(
+    let fingerprint = d2b_contracts_broker::host_generation::target_fingerprint(
         &handoff.target,
         &handoff.intent.system_artifact_id,
         handoff.intent.target_generation,
@@ -1563,7 +1559,7 @@ mod tests {
             &mut self,
             _request: &EffectRequest,
             _phase: CutoverPhase,
-            _handoff: Option<d2b_contracts::host_generation::ApplyHostGenerationHandoff>,
+            _handoff: Option<d2b_contracts_broker::host_generation::ApplyHostGenerationHandoff>,
             _payload: Option<CutoverEffectPayload>,
         ) -> Result<CompletionEvidence, EffectSinkError> {
             Err(EffectSinkError::Unavailable)
@@ -1571,8 +1567,8 @@ mod tests {
 
         fn admission(
             &mut self,
-        ) -> Result<d2b_contracts::broker_wire::CutoverAdmissionResponse, EffectSinkError> {
-            Ok(d2b_contracts::broker_wire::CutoverAdmissionResponse {
+        ) -> Result<d2b_contracts_broker::broker_wire::CutoverAdmissionResponse, EffectSinkError> {
+            Ok(d2b_contracts_broker::broker_wire::CutoverAdmissionResponse {
                 candidate_current: true,
                 markers_valid: true,
                 ownership_valid: true,
@@ -1607,7 +1603,7 @@ mod tests {
             &mut self,
             _request: &EffectRequest,
             _phase: CutoverPhase,
-            _handoff: Option<d2b_contracts::host_generation::ApplyHostGenerationHandoff>,
+            _handoff: Option<d2b_contracts_broker::host_generation::ApplyHostGenerationHandoff>,
             _payload: Option<CutoverEffectPayload>,
         ) -> Result<CompletionEvidence, EffectSinkError> {
             Err(EffectSinkError::NotAllowed)
@@ -1615,8 +1611,8 @@ mod tests {
 
         fn admission(
             &mut self,
-        ) -> Result<d2b_contracts::broker_wire::CutoverAdmissionResponse, EffectSinkError> {
-            Ok(d2b_contracts::broker_wire::CutoverAdmissionResponse {
+        ) -> Result<d2b_contracts_broker::broker_wire::CutoverAdmissionResponse, EffectSinkError> {
+            Ok(d2b_contracts_broker::broker_wire::CutoverAdmissionResponse {
                 candidate_current: false,
                 markers_valid: false,
                 ownership_valid: false,
@@ -1634,7 +1630,7 @@ mod tests {
             &mut self,
             request: &EffectRequest,
             _phase: CutoverPhase,
-            _handoff: Option<d2b_contracts::host_generation::ApplyHostGenerationHandoff>,
+            _handoff: Option<d2b_contracts_broker::host_generation::ApplyHostGenerationHandoff>,
             _payload: Option<CutoverEffectPayload>,
         ) -> Result<CompletionEvidence, EffectSinkError> {
             self.kinds
@@ -1661,8 +1657,8 @@ mod tests {
 
         fn admission(
             &mut self,
-        ) -> Result<d2b_contracts::broker_wire::CutoverAdmissionResponse, EffectSinkError> {
-            Ok(d2b_contracts::broker_wire::CutoverAdmissionResponse {
+        ) -> Result<d2b_contracts_broker::broker_wire::CutoverAdmissionResponse, EffectSinkError> {
+            Ok(d2b_contracts_broker::broker_wire::CutoverAdmissionResponse {
                 candidate_current: true,
                 markers_valid: true,
                 ownership_valid: true,
@@ -1697,7 +1693,7 @@ mod tests {
             &mut self,
             _request: &EffectRequest,
             _phase: CutoverPhase,
-            _handoff: Option<d2b_contracts::host_generation::ApplyHostGenerationHandoff>,
+            _handoff: Option<d2b_contracts_broker::host_generation::ApplyHostGenerationHandoff>,
             _payload: Option<CutoverEffectPayload>,
         ) -> Result<CompletionEvidence, EffectSinkError> {
             Err(EffectSinkError::Protocol)
@@ -1815,7 +1811,7 @@ mod tests {
         label: &str,
     ) -> (
         Runtime,
-        d2b_contracts::host_generation::ApplyHostGenerationHandoff,
+        d2b_contracts_broker::host_generation::ApplyHostGenerationHandoff,
         Arc<Mutex<Vec<EffectKind>>>,
     ) {
         std::fs::create_dir_all(".scratch").expect("create test scratch root");
@@ -1950,20 +1946,20 @@ mod tests {
         )
         .expect("persist");
         let handoff = {
-            let target = d2b_contracts::v3::ResourceRef::parse("Host/host-system").expect("target");
-            let artifact = d2b_contracts::v3::ArtifactId::parse("host-system").expect("artifact");
+            let target = d2b_contracts_resource::v3::ResourceRef::parse("Host/host-system").expect("target");
+            let artifact = d2b_contracts_resource::v3::ArtifactId::parse("host-system").expect("artifact");
             let fingerprint =
-                d2b_contracts::host_generation::target_fingerprint(&target, &artifact, 8);
-            d2b_contracts::host_generation::ApplyHostGenerationHandoff {
-                caller_role: d2b_contracts::host_generation::HandoffCallerRole::Lifecycle,
+                d2b_contracts_broker::host_generation::target_fingerprint(&target, &artifact, 8);
+            d2b_contracts_broker::host_generation::ApplyHostGenerationHandoff {
+                caller_role: d2b_contracts_broker::host_generation::HandoffCallerRole::Lifecycle,
                 target,
-                intent: d2b_contracts::host_generation::HostGenerationHandoffIntent {
+                intent: d2b_contracts_broker::host_generation::HostGenerationHandoffIntent {
                     source_generation: 7,
                     target_generation: 8,
                     system_artifact_id: artifact,
-                    activation_mode: d2b_contracts::v3::ActivationMode::Switch,
+                    activation_mode: d2b_contracts_resource::v3::ActivationMode::Switch,
                     compatibility:
-                        d2b_contracts::host_generation::SourceGenerationCompatibilityFloorV1::new(
+                        d2b_contracts_broker::host_generation::SourceGenerationCompatibilityFloorV1::new(
                             7,
                             fingerprint,
                         )
@@ -2006,12 +2002,12 @@ mod tests {
     #[test]
     fn apply_command_refuses_a_handoff_artifact_different_from_the_admitted_request() {
         let (mut runtime, mut handoff, kinds) = cutover_runtime_for_apply("mismatch");
-        let artifact = d2b_contracts::v3::ArtifactId::parse("other-system").expect("artifact");
+        let artifact = d2b_contracts_resource::v3::ArtifactId::parse("other-system").expect("artifact");
         handoff.intent.system_artifact_id = artifact.clone();
         handoff.intent.compatibility =
-            d2b_contracts::host_generation::SourceGenerationCompatibilityFloorV1::new(
+            d2b_contracts_broker::host_generation::SourceGenerationCompatibilityFloorV1::new(
                 handoff.intent.source_generation,
-                d2b_contracts::host_generation::target_fingerprint(
+                d2b_contracts_broker::host_generation::target_fingerprint(
                     &handoff.target,
                     &artifact,
                     handoff.intent.target_generation,
@@ -2064,7 +2060,7 @@ mod tests {
     #[test]
     fn apply_command_refuses_a_non_lifecycle_handoff_before_host_drain() {
         let (mut runtime, mut handoff, kinds) = cutover_runtime_for_apply("role-mismatch");
-        handoff.caller_role = d2b_contracts::host_generation::HandoffCallerRole::Admin;
+        handoff.caller_role = d2b_contracts_broker::host_generation::HandoffCallerRole::Admin;
         let response = runtime.handle(RunnerCommand::Apply { handoff }, RunnerPeer::Owner);
         assert!(!response.accepted);
         assert_eq!(response.error, Some(RunnerSocketError::InvalidTransition));
@@ -2077,11 +2073,11 @@ mod tests {
     fn apply_command_refuses_a_guest_target_before_read_only_progress() {
         let (mut runtime, mut handoff, kinds) = cutover_runtime_for_apply("guest-target");
         handoff.target =
-            d2b_contracts::v3::ResourceRef::parse("Guest/guest-system").expect("guest target");
+            d2b_contracts_resource::v3::ResourceRef::parse("Guest/guest-system").expect("guest target");
         handoff.intent.compatibility =
-            d2b_contracts::host_generation::SourceGenerationCompatibilityFloorV1::new(
+            d2b_contracts_broker::host_generation::SourceGenerationCompatibilityFloorV1::new(
                 handoff.intent.source_generation,
-                d2b_contracts::host_generation::target_fingerprint(
+                d2b_contracts_broker::host_generation::target_fingerprint(
                     &handoff.target,
                     &handoff.intent.system_artifact_id,
                     handoff.intent.target_generation,
@@ -2261,17 +2257,17 @@ mod tests {
     fn rollback_after_host_drain_restores_the_bound_generation_before_closing() {
         let (mut runtime, mut handoff, kinds) = cutover_runtime_for_apply("rollback");
         let source_artifact =
-            d2b_contracts::v3::ArtifactId::parse("source-system").expect("source artifact");
+            d2b_contracts_resource::v3::ArtifactId::parse("source-system").expect("source artifact");
         handoff.intent.source_generation = 7;
         handoff.intent.target_generation = 8;
         handoff.intent.system_artifact_id = source_artifact.clone();
-        let fingerprint = d2b_contracts::host_generation::target_fingerprint(
+        let fingerprint = d2b_contracts_broker::host_generation::target_fingerprint(
             &handoff.target,
             &source_artifact,
             handoff.intent.target_generation,
         );
         handoff.intent.compatibility =
-            d2b_contracts::host_generation::SourceGenerationCompatibilityFloorV1::new(
+            d2b_contracts_broker::host_generation::SourceGenerationCompatibilityFloorV1::new(
                 handoff.intent.source_generation,
                 fingerprint,
             )
@@ -2307,15 +2303,15 @@ mod tests {
     fn rollback_refuses_a_handoff_artifact_different_from_the_admitted_request() {
         let (mut runtime, mut handoff, kinds) = cutover_runtime_for_apply("rsource");
         let source_artifact =
-            d2b_contracts::v3::ArtifactId::parse("other-source").expect("artifact");
+            d2b_contracts_resource::v3::ArtifactId::parse("other-source").expect("artifact");
         handoff.intent.system_artifact_id = source_artifact.clone();
-        let fingerprint = d2b_contracts::host_generation::target_fingerprint(
+        let fingerprint = d2b_contracts_broker::host_generation::target_fingerprint(
             &handoff.target,
             &source_artifact,
             handoff.intent.target_generation,
         );
         handoff.intent.compatibility =
-            d2b_contracts::host_generation::SourceGenerationCompatibilityFloorV1::new(
+            d2b_contracts_broker::host_generation::SourceGenerationCompatibilityFloorV1::new(
                 handoff.intent.source_generation,
                 fingerprint,
             )
@@ -2357,14 +2353,14 @@ mod tests {
     fn rollback_refuses_a_guest_target_before_closure_activation() {
         let (mut runtime, mut handoff, kinds) = cutover_runtime_for_apply("rguest");
         let source_artifact =
-            d2b_contracts::v3::ArtifactId::parse("source-system").expect("artifact");
+            d2b_contracts_resource::v3::ArtifactId::parse("source-system").expect("artifact");
         handoff.target =
-            d2b_contracts::v3::ResourceRef::parse("Guest/guest-system").expect("guest target");
+            d2b_contracts_resource::v3::ResourceRef::parse("Guest/guest-system").expect("guest target");
         handoff.intent.system_artifact_id = source_artifact.clone();
         handoff.intent.compatibility =
-            d2b_contracts::host_generation::SourceGenerationCompatibilityFloorV1::new(
+            d2b_contracts_broker::host_generation::SourceGenerationCompatibilityFloorV1::new(
                 handoff.intent.source_generation,
-                d2b_contracts::host_generation::target_fingerprint(
+                d2b_contracts_broker::host_generation::target_fingerprint(
                     &handoff.target,
                     &source_artifact,
                     handoff.intent.target_generation,
@@ -2800,7 +2796,7 @@ mod tests {
     impl AuditSink for FixedAuditSink {
         fn publish(
             &mut self,
-            _transition: d2b_contracts::broker_wire::CutoverAuditTransition,
+            _transition: d2b_contracts_broker::broker_wire::CutoverAuditTransition,
             _phase: u8,
             _reason_digest: Option<d2b_cutover::Digest>,
         ) -> Result<AuditEvidence, AuditSinkError> {

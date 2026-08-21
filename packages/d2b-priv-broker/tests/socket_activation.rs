@@ -30,7 +30,7 @@ use std::path::PathBuf;
 use std::process::Command;
 use std::time::Duration;
 
-use d2b_contracts::broker_wire::{
+use d2b_contracts_broker::broker_wire::{
     BrokerCallerRole, BrokerRequest, BrokerRequestEnvelope, BrokerResponse, HelloRequest,
 };
 use d2b_priv_broker::protocol::{connect_seqpacket, recv_json_frame, send_json_frame};

@@ -12,7 +12,7 @@
   ],
   "default_features": false,
   "source_authority": "Cargo.lock",
-  "lock_sha256": "9fa9eab3b6cc967c7061703815ac30e44126f05a9415efeefa42498e87f5c810",
+  "lock_sha256": "2bc389b67dbd18cd8182764df9ef503e6cbd8aea013e9ffb3b5c90c451b04f35",
   "packages": [
     {
       "id": "aho-corasick@1.1.5#registry+https://github.com/rust-lang/crates.io-index",
@@ -215,11 +215,11 @@
       "target": "x86_64-unknown-linux-musl"
     },
     {
-      "id": "either@1.17.0#registry+https://github.com/rust-lang/crates.io-index",
+      "id": "either@1.18.0#registry+https://github.com/rust-lang/crates.io-index",
       "name": "either",
-      "version": "1.17.0",
+      "version": "1.18.0",
       "source": "registry+https://github.com/rust-lang/crates.io-index",
-      "checksum": "9e5e8f6c15a24b9a3ee5efec809ccd006d3b30e8b3bb63c39af737c7f87daa1d",
+      "checksum": "252afb9ae5eaa683babdc6a068b3f5726eb19e05070c731f9b2a23a7c3e8ed34",
       "target": "x86_64-unknown-linux-musl"
     },
     {
@@ -1398,7 +1398,7 @@
     },
     {
       "from": "itertools@0.13.0#registry+https://github.com/rust-lang/crates.io-index",
-      "to": "either@1.17.0#registry+https://github.com/rust-lang/crates.io-index",
+      "to": "either@1.18.0#registry+https://github.com/rust-lang/crates.io-index",
       "kind": "normal",
       "target": null
     },
@@ -2418,7 +2418,7 @@
     },
     {
       "from": "which@6.0.3#registry+https://github.com/rust-lang/crates.io-index",
-      "to": "either@1.17.0#registry+https://github.com/rust-lang/crates.io-index",
+      "to": "either@1.18.0#registry+https://github.com/rust-lang/crates.io-index",
       "kind": "normal",
       "target": null
     },

@@ -1,6 +1,6 @@
 use std::any::Any;
 
-use d2b_contracts::v3::component_session::AttachmentDescriptor;
+use d2b_contracts_zone_session::v3::AttachmentDescriptor;
 use d2b_provider_transport_vsock::{FramedVsockTransport, TransportError};
 use d2b_session::{
     AttachmentPayload, AttachmentValidationError, OwnedAttachment, OwnedTransport, TransportPacket,

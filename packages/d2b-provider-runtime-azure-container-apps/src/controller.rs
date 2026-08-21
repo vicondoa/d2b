@@ -11,14 +11,14 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use tokio::time::{Duration, Instant, timeout_at};
 
-use d2b_contracts::provider_effects::aca::{
+use crate::{
     AcaControl, AcaControlContext, AcaControlError, AcaControlErrorKind, AcaControlHealth,
     AcaCredentialLease, AcaCredentialLeaseClient, AcaCredentialLeaseRequest, AcaCredentialPurpose,
     AcaDesiredDiskImage, AcaDesiredSandbox, AcaDiskImageRecord, AcaOperationId, AcaProviderConfig,
     AcaResourceBinding, AcaRuntimeConfig, AcaSandboxCandidates, AcaSandboxLifecycle,
     AcaSandboxRecord, AcaTypeError, AcaWorkloadQuery,
 };
-use d2b_contracts::v3::ResourceRef;
+use d2b_contracts::ResourceRef;
 
 /// Provider lifecycle phase.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -263,7 +263,7 @@ pub struct AcaController<C, L> {
     binding: AcaResourceBinding,
     config: AcaRuntimeConfig,
     network_ref: Option<ResourceRef>,
-    sandbox_transport_alias: d2b_contracts::provider_effects::aca::AcaProfileId,
+    sandbox_transport_alias: crate::AcaProfileId,
     control: Arc<C>,
     leases: Arc<L>,
     phase: AcaPhase,
@@ -322,7 +322,7 @@ where
     pub fn with_provider_settings(
         mut self,
         network_ref: Option<ResourceRef>,
-        sandbox_transport_alias: d2b_contracts::provider_effects::aca::AcaProfileId,
+        sandbox_transport_alias: crate::AcaProfileId,
     ) -> Self {
         self.network_ref = network_ref;
         self.sandbox_transport_alias = sandbox_transport_alias;
@@ -665,8 +665,7 @@ where
                 )
                 .await?;
             match outcome {
-                d2b_contracts::provider_effects::aca::AcaDeleteOutcome::Deleted
-                | d2b_contracts::provider_effects::aca::AcaDeleteOutcome::AlreadyAbsent => {
+                crate::AcaDeleteOutcome::Deleted | crate::AcaDeleteOutcome::AlreadyAbsent => {
                     self.finish_finalization();
                 }
             }
@@ -993,7 +992,7 @@ fn one_candidate(
 }
 
 fn one_disk_image(
-    candidates: d2b_contracts::provider_effects::aca::AcaDiskImageCandidates,
+    candidates: crate::AcaDiskImageCandidates,
     generation: u64,
 ) -> Result<Option<AcaDiskImageRecord>, AcaControlError> {
     match candidates.as_slice() {

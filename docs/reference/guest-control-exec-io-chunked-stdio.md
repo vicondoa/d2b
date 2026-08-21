@@ -31,7 +31,7 @@ slow-consumer cancellation.
 ## Service surface
 
 The committed protobuf service source is
-[`packages/d2b-contracts/proto/guest_control.proto`](../../packages/d2b-contracts/proto/guest_control.proto).
+[`packages/d2b-contracts-control/guest_control.proto`](../../packages/d2b-contracts-control/guest_control.proto).
 Lifecycle requests carry `vm_id`, `request_id`, and negotiated
 `protocol_version` in `RequestMetadata`; exec-specific requests also carry
 `exec_id` and the Hello-returned `guest_boot_id` in `ExecRequestMetadata` so

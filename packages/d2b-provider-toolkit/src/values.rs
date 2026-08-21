@@ -7,7 +7,7 @@
 
 use std::fmt;
 
-use d2b_contracts::v3::CanonicalJsonObject;
+use d2b_contracts_resource::v3::CanonicalJsonObject;
 use d2b_provider::{ProviderClass, ProviderDescriptor, RegistryBuildError};
 
 use crate::error::ProviderToolkitError;

@@ -4,8 +4,8 @@
   "features": [
     "fake-backends"
   ],
-  "lockSha256": "9fa9eab3b6cc967c7061703815ac30e44126f05a9415efeefa42498e87f5c810",
-  "policyPackageCount": 161,
+  "lockSha256": "2bc389b67dbd18cd8182764df9ef503e6cbd8aea013e9ffb3b5c90c451b04f35",
+  "policyPackageCount": 165,
   "policyPackageIds": [
     "adler2@2.0.1#registry+https://github.com/rust-lang/crates.io-index",
     "aho-corasick@1.1.5#registry+https://github.com/rust-lang/crates.io-index",
@@ -42,16 +42,20 @@
     "crossbeam@0.8.4#registry+https://github.com/rust-lang/crates.io-index",
     "crypto-common@0.1.7#registry+https://github.com/rust-lang/crates.io-index",
     "d2b-audit@0.0.0-bootstrap#path",
+    "d2b-contracts-broker@0.0.0-bootstrap#path",
+    "d2b-contracts-control@0.0.0-bootstrap#path",
+    "d2b-contracts-provider@0.0.0-bootstrap#path",
+    "d2b-contracts-resource@0.0.0-bootstrap#path",
+    "d2b-contracts-zone-session@0.0.0-bootstrap#path",
     "d2b-contracts@0.0.0-bootstrap#path",
     "d2b-core@0.0.0-bootstrap#path",
-    "d2b-host-argv@0.0.0-bootstrap#path",
     "d2b-host@0.0.0-bootstrap#path",
     "d2b-priv-broker@0.0.0-bootstrap#path",
     "d2b-realm-core@0.0.0-bootstrap#path",
     "d2b-telemetry@0.0.0-bootstrap#path",
     "digest@0.10.7#registry+https://github.com/rust-lang/crates.io-index",
     "dyn-clone@1.0.20#registry+https://github.com/rust-lang/crates.io-index",
-    "either@1.17.0#registry+https://github.com/rust-lang/crates.io-index",
+    "either@1.18.0#registry+https://github.com/rust-lang/crates.io-index",
     "endi@1.1.1#registry+https://github.com/rust-lang/crates.io-index",
     "enumflags2@0.7.12#registry+https://github.com/rust-lang/crates.io-index",
     "enumflags2_derive@0.7.12#registry+https://github.com/rust-lang/crates.io-index",
@@ -169,8 +173,8 @@
     "zvariant_derive@5.15.0#registry+https://github.com/rust-lang/crates.io-index",
     "zvariant_utils@4.2.0#registry+https://github.com/rust-lang/crates.io-index"
   ],
-  "productionPackageCount": 130,
-  "resolveNodeCount": 471,
+  "productionPackageCount": 134,
+  "resolveNodeCount": 472,
   "roots": [
     "d2b-priv-broker"
   ],

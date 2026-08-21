@@ -15,9 +15,8 @@
 # `d2bLib.vmRunner config name` helper in lib.nix). Anything not
 # listed is intentionally left out - the broker SpawnRunner
 # pipeline generates runner argv in Rust
-# (`packages/d2b-host/src/ch_argv.rs` + sibling
-# `*_argv.rs` modules), so the Nix side only needs to surface
-# the option values, not build runner derivations.
+# The owning runtime/device Provider crates plan argv, so the Nix side only
+# needs to surface the option values, not build runner derivations.
 { config, lib, pkgs, ... }:
 
 let
@@ -275,8 +274,8 @@ in
     };
 
     # declaredRunner is NOT emitted by the d2b-owned evaluator.
-    # The broker spawns the hypervisor directly via the
-    # Rust argv generators in `packages/d2b-host/src/*_argv.rs`;
+    # The broker spawns the hypervisor directly from bundle-authoritative argv;
+    # provider-specific planning remains in the owning runtime crates.
     # no Nix-side runner derivation is needed in v1.1+.
     declaredRunner = mkOption {
       type = types.nullOr types.package;

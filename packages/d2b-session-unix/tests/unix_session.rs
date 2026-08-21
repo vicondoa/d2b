@@ -1,9 +1,11 @@
-use d2b_contracts::v3::component_session::{
+use d2b_contracts_zone_session::v3::{
+    component_session::{
     AttachmentAccess, AttachmentCreditClass, AttachmentDescriptor, AttachmentKind,
     AttachmentPacket, AttachmentPolicy, AttachmentPolicyKind, AttachmentPurpose, BoundedVec,
     EndpointPolicy, EndpointPolicyIdentity, EndpointPurpose, EndpointRole,
     IdentityEvidenceRequirement, KernelObjectType, LimitProfile, Locality, NoiseProfile,
     PurposeClass, RequestId, ServicePackage, TransportBinding, TransportClass,
+},
 };
 use d2b_session::{
     AttachmentPayload, AttachmentValidationError, HandshakeCredentials, OwnedAttachment,
@@ -470,7 +472,7 @@ async fn owned_transport_adapters_transfer_packets_and_owned_files_end_to_end() 
     let receiver_peer = receiver_socket.acceptor_peer_credentials().unwrap();
     let mut sender = UnixSeqpacketTransport::new(
         sender_socket,
-        d2b_contracts::v3::component_session::Locality::HostLocal,
+        d2b_contracts_zone_session::v3::component_session::Locality::HostLocal,
         LimitProfile::local_default(),
         policy,
         sender_scopes,
@@ -480,7 +482,7 @@ async fn owned_transport_adapters_transfer_packets_and_owned_files_end_to_end() 
     .unwrap();
     let mut receiver = UnixSeqpacketTransport::new(
         receiver_socket,
-        d2b_contracts::v3::component_session::Locality::HostLocal,
+        d2b_contracts_zone_session::v3::component_session::Locality::HostLocal,
         LimitProfile::local_default(),
         policy,
         receiver_scopes,
@@ -567,12 +569,12 @@ async fn owned_transport_adapters_transfer_packets_and_owned_files_end_to_end() 
     .unwrap();
     let mut stream_sender = UnixStreamTransport::new(
         StreamSocket::from_owned(left).unwrap(),
-        d2b_contracts::v3::component_session::Locality::HostLocal,
+        d2b_contracts_zone_session::v3::component_session::Locality::HostLocal,
         LimitProfile::local_default(),
     );
     let mut stream_receiver = UnixStreamTransport::new(
         StreamSocket::from_owned(right).unwrap(),
-        d2b_contracts::v3::component_session::Locality::HostLocal,
+        d2b_contracts_zone_session::v3::component_session::Locality::HostLocal,
         LimitProfile::local_default(),
     );
     let stream_record = protected_record(b"stream-record");

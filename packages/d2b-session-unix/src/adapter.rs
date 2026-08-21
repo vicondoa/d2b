@@ -4,9 +4,11 @@ use crate::{
     descriptor::{ReceivedControl, validate_owned_file, validate_owned_file_identity},
 };
 use async_trait::async_trait;
-use d2b_contracts::v3::component_session::{
+use d2b_contracts_zone_session::v3::{
+    component_session::{
     AttachmentDescriptor, AttachmentKind, AttachmentPolicy, AttachmentPolicyKind, LimitProfile,
     Locality, TransportClass,
+},
 };
 use d2b_session::{
     AttachmentPayload, AttachmentValidationError, OwnedAttachment, OwnedTransport,

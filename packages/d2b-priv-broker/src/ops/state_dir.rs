@@ -158,7 +158,7 @@ fn production_path(p: &Path) -> bool {
 pub fn live_prepare_runtime_dir(
     _exec: &SystemLiveExec,
     resolver: &BundleResolver,
-    req: &d2b_contracts::broker_wire::PrepareDirRequest,
+    req: &d2b_contracts_broker::broker_wire::PrepareDirRequest,
     _audit_log: &crate::audit::AuditLog,
 ) -> Result<(), super::OpError> {
     if req.path_class != PathClass::Runtime {
@@ -191,7 +191,7 @@ pub fn live_prepare_runtime_dir(
 pub fn live_prepare_state_dir(
     _exec: &SystemLiveExec,
     resolver: &BundleResolver,
-    req: &d2b_contracts::broker_wire::PrepareDirRequest,
+    req: &d2b_contracts_broker::broker_wire::PrepareDirRequest,
     _audit_log: &crate::audit::AuditLog,
 ) -> Result<(), PrepareStateDirError> {
     if req.path_class != PathClass::Vm {

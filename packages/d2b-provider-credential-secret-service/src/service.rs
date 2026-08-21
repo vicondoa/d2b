@@ -2,10 +2,12 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use d2b_contracts::v3::credential::{
+use d2b_contracts_provider::v3::{
+    credential::{
     CredentialAuthorization, CredentialLeaseState, CredentialMethod, CredentialOutcomeCode,
     CredentialProvider, CredentialRequest, CredentialResponse, CredentialServiceError,
     CredentialServiceErrorCode, DeliveryResponse, MetadataResponse,
+},
 };
 
 use crate::{
@@ -673,7 +675,7 @@ impl SecretServiceCredentialProvider {
         for (credential, record) in records {
             let lease_key = (session_key, credential.clone());
             let lease = SecretServiceLeaseRef {
-                credential_ref: d2b_contracts::v3::ResourceRef::parse(&credential)
+                credential_ref: d2b_contracts_resource::v3::ResourceRef::parse(&credential)
                     .map_err(|_| invariant())?,
                 metadata: record.metadata,
             };

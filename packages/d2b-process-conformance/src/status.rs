@@ -6,8 +6,10 @@
 
 use serde::Serialize;
 
-use d2b_contracts::v3::ResourceRef;
-use d2b_contracts::v3::execution_policy::{BoundedToken, ExecutionDomain};
+use d2b_contracts_resource::v3::ResourceRef;
+use d2b_contracts_resource::v3::{
+    execution_policy::{BoundedToken, ExecutionDomain},
+};
 
 use crate::identity::{ProcessIdentityDigest, WaitReapOwner};
 use crate::ticket::CompiledDigests;

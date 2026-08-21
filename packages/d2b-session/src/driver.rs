@@ -9,8 +9,10 @@ use std::{
 };
 
 use async_trait::async_trait;
-use d2b_contracts::v3::component_session::{
+use d2b_contracts_zone_session::v3::{
+    component_session::{
     ChannelClass, CloseReason, OperationClass, Remediation, RequestId, SessionErrorCode,
+},
 };
 use tokio::sync::{mpsc, oneshot};
 
@@ -1680,7 +1682,7 @@ mod tests {
                 MetricEvent,
                 ChannelClass,
                 OperationClass,
-                d2b_contracts::v3::component_session::MetricReason,
+                d2b_contracts_zone_session::v3::component_session::MetricReason,
             )>,
         >,
     );
@@ -1856,7 +1858,7 @@ mod tests {
                         MetricEvent::RejectedRecord,
                         ChannelClass::SessionControl,
                         OperationClass::Cancel,
-                        d2b_contracts::v3::component_session::MetricReason::Cancellation,
+                        d2b_contracts_zone_session::v3::component_session::MetricReason::Cancellation,
                     )]
                 );
                 error.code()
@@ -1930,8 +1932,8 @@ mod tests {
     #[tokio::test]
     async fn unbatched_writes_preserve_the_cancellation_slot() {
         let descriptor = TransportDescriptor {
-            class: d2b_contracts::v3::component_session::TransportClass::UnixSeqpacket,
-            locality: d2b_contracts::v3::component_session::Locality::HostLocal,
+            class: d2b_contracts_zone_session::v3::component_session::TransportClass::UnixSeqpacket,
+            locality: d2b_contracts_zone_session::v3::component_session::Locality::HostLocal,
             packet_atomic: true,
             supports_attachments: false,
         };
@@ -1977,8 +1979,8 @@ mod tests {
     #[tokio::test]
     async fn driver_transport_enqueues_a_logical_packet_batch_atomically() {
         let descriptor = TransportDescriptor {
-            class: d2b_contracts::v3::component_session::TransportClass::UnixSeqpacket,
-            locality: d2b_contracts::v3::component_session::Locality::HostLocal,
+            class: d2b_contracts_zone_session::v3::component_session::TransportClass::UnixSeqpacket,
+            locality: d2b_contracts_zone_session::v3::component_session::Locality::HostLocal,
             packet_atomic: true,
             supports_attachments: false,
         };

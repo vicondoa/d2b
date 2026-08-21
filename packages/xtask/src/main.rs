@@ -11,21 +11,20 @@ use clap_complete::{
     shells::{Bash, Fish, Zsh},
 };
 use clap_mangen::Man;
-use d2b_contracts::guest_wire::GuestControlSchema;
-use d2b_contracts::unsafe_local_wire::UnsafeLocalHelperWireSchema;
-use d2b_contracts::{
-    WireProtocolSchema,
-    cli_output::{
-        AuditOutputV2, AuthStatusOutputV2, HostCheckOutputV2, LaunchOutputV1, ListOutputV2,
-        OpInspectOutputV1, RealmInspectOutputV1, RealmListOutputV1, StatusOutputV2,
-        StoreVerifyOutputV2, UsbProbeOutputV1, VmAudioSetOutputV1, VmAudioStatusOutputV1,
-        VmDisplayCloseOutputV1, VmDisplayListOutputV1, VmExecCreateOutputV1, VmExecKillOutputV1,
-        VmExecListOutputV1, VmExecLogsOutputV1, VmExecStatusOutputV1,
-    },
-    v3::storage::ZoneStoreStorageRow,
+use d2b_contracts_broker::broker_wire;
+use d2b_contracts_control::cli_output::{
+    AuditOutputV2, AuthStatusOutputV2, HostCheckOutputV2, LaunchOutputV1, ListOutputV2,
+    OpInspectOutputV1, RealmInspectOutputV1, RealmListOutputV1, StatusOutputV2,
+    StoreVerifyOutputV2, UsbProbeOutputV1, VmAudioSetOutputV1, VmAudioStatusOutputV1,
+    VmDisplayCloseOutputV1, VmDisplayListOutputV1, VmExecCreateOutputV1, VmExecKillOutputV1,
+    VmExecListOutputV1, VmExecLogsOutputV1, VmExecStatusOutputV1,
 };
+use d2b_contracts_control::guest_wire::GuestControlSchema;
+use d2b_contracts_control::public_wire;
+use d2b_contracts_control::unsafe_local_wire::UnsafeLocalHelperWireSchema;
+use d2b_contracts_resource::v3::storage::ZoneStoreStorageRow;
 use d2b_core::{
-    allocator_config::AllocatorJson, audio_policy::AudioPolicyState, bundle::Bundle,
+    allocator_config::AllocatorJson, bundle::Bundle,
     closures::ClosureMetadata, error::Error, host::HostJson, manifest_v04::ManifestV04,
     minijail_profile::MinijailProfile, privileges::PrivilegesJson, processes::ProcessesJson,
     realm_controller_config::RealmControllersJson,
@@ -33,6 +32,7 @@ use d2b_core::{
     storage_lifecycle::StorageLifecycleReport, sync::SyncJson,
     unsafe_local_workloads::UnsafeLocalWorkloadsJson,
 };
+use d2b_contracts::audio::AudioPolicyState;
 use d2b_realm_core::{
     AccessBindingRef, AdmissionAuditRecord, AuditEnvelope, Capability, CapabilityNegotiation,
     CapabilityPreflightDenialReason, CapabilityPreflightStatus, CapabilitySet, ChildKeyPin,
@@ -109,6 +109,24 @@ mod zone_schema;
 
 const SCHEMA_VERSION: &str = "v2";
 const DAEMON_API_DOC: &str = "docs/reference/daemon-api.md";
+
+#[derive(schemars::JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct WireProtocolSchema {
+    schema_version: String,
+    framing: d2b_contracts::FramingSpec,
+    public_socket: d2b_contracts::SocketSpec,
+    broker_socket: d2b_contracts::SocketSpec,
+    hello: d2b_contracts::Hello,
+    hello_ok: d2b_contracts::HelloOk,
+    hello_rejected: d2b_contracts::HelloRejected,
+    public_request: public_wire::PublicRequest,
+    public_response: public_wire::PublicResponse,
+    workload_op: public_wire::WorkloadOp,
+    workload_op_response: public_wire::WorkloadOpResponse,
+    broker_request: broker_wire::BrokerRequest,
+    broker_response: broker_wire::BrokerResponse,
+}
 
 #[allow(dead_code)]
 #[derive(schemars::JsonSchema)]
@@ -553,7 +571,7 @@ fn run_inventory(output_path: Option<PathBuf>) -> std::process::ExitCode {
 
 fn gen_guest_ttrpc() -> Result<Vec<PathBuf>, Box<dyn std::error::Error>> {
     let repo_root = repo_root()?;
-    let proto_dir = repo_root.join("packages/d2b-contracts/proto");
+    let proto_dir = repo_root.join("packages/d2b-contracts-control");
     let proto = proto_dir.join("guest_control.proto");
     let out_dir = repo_root.join("packages/d2b-guestd/src/generated");
     fs::create_dir_all(&out_dir)?;
@@ -575,7 +593,7 @@ fn gen_guest_ttrpc() -> Result<Vec<PathBuf>, Box<dyn std::error::Error>> {
 
 fn gen_resource_ttrpc() -> Result<Vec<PathBuf>, Box<dyn std::error::Error>> {
     let repo_root = repo_root()?;
-    let proto_dir = repo_root.join("packages/d2b-contracts/proto");
+    let proto_dir = repo_root.join("packages/d2b-contracts-resource/proto");
     let proto = proto_dir.join("d2b-resource-v3.proto");
     let out_dir = repo_root.join("packages/d2b-resource-api/src/generated");
     fs::create_dir_all(&out_dir)?;
@@ -598,9 +616,9 @@ fn gen_resource_ttrpc() -> Result<Vec<PathBuf>, Box<dyn std::error::Error>> {
 
 fn gen_guest_proto() -> Result<Vec<PathBuf>, Box<dyn std::error::Error>> {
     let repo_root = repo_root()?;
-    let proto_dir = repo_root.join("packages/d2b-contracts/proto");
+    let proto_dir = repo_root.join("packages/d2b-contracts-control");
     let proto = proto_dir.join("guest_control.proto");
-    let out_dir = repo_root.join("packages/d2b-contracts/src/generated");
+    let out_dir = repo_root.join("packages/d2b-contracts-control/src/generated");
     fs::create_dir_all(&out_dir)?;
     let out_file = out_dir.join("guest_control.rs");
     let temp_proto_dir = create_exclusive_temp_dir("d2b-guest-proto")?;
@@ -618,16 +636,16 @@ fn gen_guest_proto() -> Result<Vec<PathBuf>, Box<dyn std::error::Error>> {
         .run()?;
 
     sanitize_generated_rust(&out_file)?;
-    write_contract_generated_mod(&out_dir)?;
+    write_guest_generated_mod(&out_dir)?;
     let _ = fs::remove_dir_all(&temp_proto_dir);
     Ok(vec![out_file])
 }
 
 fn gen_resource_proto() -> Result<Vec<PathBuf>, Box<dyn std::error::Error>> {
     let repo_root = repo_root()?;
-    let proto_dir = repo_root.join("packages/d2b-contracts/proto");
+    let proto_dir = repo_root.join("packages/d2b-contracts-resource/proto");
     let proto = proto_dir.join("d2b-resource-v3.proto");
-    let out_dir = repo_root.join("packages/d2b-contracts/src/generated");
+    let out_dir = repo_root.join("packages/d2b-contracts-resource/src/generated");
     fs::create_dir_all(&out_dir)?;
     let out_file = out_dir.join("d2b_resource_v3.rs");
     let temp_proto_dir = create_exclusive_temp_dir("d2b-resource-proto")?;
@@ -654,7 +672,15 @@ fn gen_resource_proto() -> Result<Vec<PathBuf>, Box<dyn std::error::Error>> {
 fn write_contract_generated_mod(out_dir: &Path) -> Result<(), Box<dyn std::error::Error>> {
     fs::write(
         out_dir.join("mod.rs"),
-        "// @generated\n\npub mod d2b_resource_v3;\npub mod guest_control;\n",
+        "// @generated\n\npub mod d2b_resource_v3;\n",
+    )?;
+    Ok(())
+}
+
+fn write_guest_generated_mod(out_dir: &Path) -> Result<(), Box<dyn std::error::Error>> {
+    fs::write(
+        out_dir.join("mod.rs"),
+        "// @generated\n\npub mod guest_control;\n",
     )?;
     Ok(())
 }
@@ -1283,13 +1309,23 @@ fn gen_daemon_api() -> Result<PathBuf, Box<dyn std::error::Error>> {
 }
 
 fn parse_ipc_items(repo_root: &Path) -> Result<Vec<RustItem>, Box<dyn std::error::Error>> {
-    let ipc_dir = repo_root.join("packages/d2b-contracts/src");
-    let mut files = fs::read_dir(&ipc_dir)?
-        .filter_map(|entry| entry.ok())
-        .map(|entry| entry.path())
-        .filter(|path| path.extension().and_then(|ext| ext.to_str()) == Some("rs"))
-        .filter(|path| path.file_name().and_then(|name| name.to_str()) != Some("cli_output.rs"))
-        .collect::<Vec<_>>();
+    let ipc_dirs = [
+        repo_root.join("packages/d2b-contracts/src"),
+        repo_root.join("packages/d2b-contracts-broker/src"),
+        repo_root.join("packages/d2b-contracts-control/src"),
+    ];
+    let mut files = Vec::new();
+    for ipc_dir in ipc_dirs {
+        files.extend(
+            fs::read_dir(ipc_dir)?
+                .filter_map(|entry| entry.ok())
+                .map(|entry| entry.path())
+                .filter(|path| path.extension().and_then(|ext| ext.to_str()) == Some("rs"))
+                .filter(|path| {
+                    path.file_name().and_then(|name| name.to_str()) != Some("cli_output.rs")
+                }),
+        );
+    }
     files.sort();
 
     let mut items = Vec::new();

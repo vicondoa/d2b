@@ -11,23 +11,46 @@
 //! integration test is its own crate and a shared module would run the
 //! honest suite twice.
 
-use d2b_contracts::v3::identity::BindingDigest;
-use d2b_contracts::v3::{
-    Locality, ResourceEnvelope, TransportBinding,
+use d2b_contracts_provider::v3::semantic_services::catalog;
+use d2b_contracts_provider::v3::{
+    ArtifactDigest,
+    ArtifactDigestSet,
+    BindingTargetType,
+    CapabilitySupport,
+    CompatibilityRange,
+    ComponentDescriptor,
+    ComponentType,
+    DependencyAlias,
+    DependencyDeclaration,
+    Exportability,
+    ExtensionSchemaRegistration,
+    PolicyEvaluation,
+    ProjectionFactory,
+    ProviderContractError,
+    ProviderManifest,
+    ResourceApiBinding,
+    RevocationState,
+    SignatureState,
+    StandardCapabilityMatrix,
+    TrustEvidence,
+    UpgradeDisposition,
+    UpgradePolicy,
+};
+use d2b_contracts_zone_session::v3::zone_routing::ZonePath;
+use d2b_contracts_resource::v3::ArtifactId;
+use d2b_contracts_resource::v3::identity::BindingDigest;
+use d2b_contracts_resource::v3::{
+    ResourceEnvelope,
+    ResourceRef,
     execution_policy::{BoundedToken, ExecutionDomain},
-    identity::{ResourceTypeName, SchemaFingerprint, SessionPurpose},
-    provider::{
-        ArtifactDigest, ArtifactDigestSet, ArtifactId, BindingTargetType, CapabilitySupport,
-        CompatibilityRange, ComponentDescriptor, ComponentType, DependencyAlias,
-        DependencyDeclaration, Exportability, ExtensionSchemaRegistration, PolicyEvaluation,
-        ProjectionFactory, ProviderContractError, ProviderManifest, ResourceApiBinding,
-        RevocationState, SignatureState, StandardCapabilityMatrix, TrustEvidence,
-        UpgradeDisposition, UpgradePolicy,
-    },
-    resource_ref::ResourceRef,
+    ResourceTypeName,
+    SchemaFingerprint,
     resource_schema::{ExtensionSchemaId, SchemaVersion, canonical_json_bytes},
-    semantic_services::catalog,
-    zone_routing::ZonePath,
+};
+use d2b_contracts_resource::v3::identity::{
+    Locality,
+    TransportBinding,
+    SessionPurpose,
 };
 use d2b_provider_toolkit::conformance::{CapabilityMatrix, ConformanceError};
 use d2b_provider_toolkit::fakes::{FakeBus, FakePortError, FakeResourceStore};
@@ -560,8 +583,7 @@ fn a_provider_reports_protocol_skew_before_a_fingerprint_mismatch() {
     wire = wire.replacen(&fingerprint_field, &altered_fingerprint, 1);
 
     let legacy: ProjectionFactory =
-        d2b_contracts::decode_json_body("projection-factory", wire.as_bytes())
-            .expect("legacy descriptor reaches admission");
+        serde_json::from_slice(wire.as_bytes()).expect("legacy descriptor reaches admission");
     assert_eq!(legacy.projection_protocol_version().as_str(), "1.0");
     assert_ne!(legacy.factory_fingerprint(), expected.factory_fingerprint());
     assert_eq!(

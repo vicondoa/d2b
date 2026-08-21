@@ -1,6 +1,6 @@
 //! Redacted route and net-VM readiness preflight.
 
-use d2b_contracts::v3::network::NetworkComponentPhase;
+use d2b_contracts_resource::v3::network::NetworkComponentPhase;
 use std::collections::BTreeSet;
 
 /// Ownership classification for an observed default route.

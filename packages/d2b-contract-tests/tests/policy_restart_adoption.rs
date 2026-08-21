@@ -38,7 +38,7 @@ fn any_line_matches(content: &str, pattern: &str) -> bool {
 /// config-driven `WorkloadTargetIndex`.
 #[test]
 fn snapshot_record_does_not_carry_workload_identity() {
-    let src = read_repo_file("packages/d2bd/src/supervisor/state.rs");
+    let src = read_repo_file("packages/d2bd-runtime/src/supervisor/state.rs");
 
     // Verify the struct definition is present (so the test isn't vacuous).
     assert!(
@@ -72,32 +72,32 @@ fn snapshot_record_does_not_carry_workload_identity() {
 
 // ── WorkloadTargetIndex: rebuilt per-request, not stored in ServerState ──────
 
-/// `packages/d2bd/src/lib.rs` must call `WorkloadTargetIndex::build_from_controllers`
+/// `packages/d2bd/src/composition.rs` must call `WorkloadTargetIndex::build_from_controllers`
 /// (not store it in `ServerState`) so the index is always fresh after a restart.
 #[test]
 fn workload_target_index_is_rebuilt_per_request_in_lib_rs() {
-    let src = read_repo_file("packages/d2bd/src/lib.rs");
+    let src = read_repo_file("packages/d2bd/src/composition.rs");
 
     assert!(
         any_line_matches(&src, r"WorkloadTargetIndex::build_from_controllers"),
         "policy_restart_adoption: WorkloadTargetIndex::build_from_controllers call \
-         site missing from packages/d2bd/src/lib.rs - the index must be rebuilt on \
+         site missing from packages/d2bd/src/composition.rs - the index must be rebuilt on \
          every public request so workload identity is always fresh post-restart"
     );
 }
 
-/// `packages/d2bd/src/lib.rs` must call `identity_for_vm` to populate the
+/// `packages/d2bd/src/composition.rs` must call `identity_for_vm` to populate the
 /// read-model `workloadIdentity` field.  Without this call, list/status would
 /// silently omit workload identity after restart even though the config is
 /// correct.
 #[test]
 fn identity_for_vm_is_used_to_populate_list_status() {
-    let src = read_repo_file("packages/d2bd/src/lib.rs");
+    let src = read_repo_file("packages/d2bd/src/composition.rs");
 
     assert!(
         any_line_matches(&src, r"identity_for_vm"),
         "policy_restart_adoption: `identity_for_vm` call missing from \
-         packages/d2bd/src/lib.rs - list/status workloadIdentity population \
+         packages/d2bd/src/composition.rs - list/status workloadIdentity population \
          must use the WorkloadTargetIndex lookup so the field is present \
          after daemon restart"
     );
@@ -126,7 +126,7 @@ fn daemon_restart_vm_survival_host_integration_test_exists() {
 /// (it would silently drop the only fast gate for the W13/W16 requirement).
 #[test]
 fn workload_identity_restart_invariant_covered_by_hermetic_unit_tests() {
-    let src = read_repo_file("packages/d2bd/src/workload_target_index.rs");
+    let src = read_repo_file("packages/d2bd-runtime/src/workload_target_index.rs");
     assert!(
         any_line_matches(
             &src,
@@ -134,7 +134,7 @@ fn workload_identity_restart_invariant_covered_by_hermetic_unit_tests() {
         ),
         "policy_restart_adoption: hermetic restart-invariant test \
          `index_rebuilt_from_same_config_returns_identical_identity` is missing from \
-         packages/d2bd/src/workload_target_index.rs - this type-2 unit test is the \
+         packages/d2bd-runtime/src/workload_target_index.rs - this type-2 unit test is the \
          primary gate for the W13/W16 read-model restart invariant (config-driven \
          workload identity survives daemon restart without a VM boot)"
     );

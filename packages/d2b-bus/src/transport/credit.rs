@@ -16,10 +16,12 @@
 //! Every refusal is a typed [`CreditError`]; there is no permissive default and
 //! no inferred route class.
 
-use d2b_contracts::v3::component_session::{
+use d2b_contracts_zone_session::v3::{
+    component_session::{
     AttachmentPolicy, AttachmentPolicyKind, MAX_HOST_ATTACHMENT_CREDITS, MAX_OPERATION_ATTACHMENTS,
     MAX_PACKET_ATTACHMENTS, MAX_PROCESS_ATTACHMENT_CREDITS, MAX_REQUEST_ATTACHMENTS,
     MAX_SESSION_ATTACHMENTS, TransportClass,
+},
 };
 use std::{error::Error, fmt};
 

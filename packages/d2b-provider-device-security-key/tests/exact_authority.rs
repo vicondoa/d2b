@@ -1,4 +1,7 @@
-use d2b_contracts::v3::{ResourceRef, ResourceUid};
+use d2b_contracts_resource::v3::{
+    ResourceRef,
+    ResourceUid,
+};
 use d2b_provider_device_security_key::{
     PhysicalAuthorityLease, PhysicalUsbBackingToken, RelayLaunchTicket, SecurityKeyAdmission,
     SecurityKeyEffectError, SecurityKeyEffectPort, SecurityKeyLease, SecurityKeyOpenIntent,

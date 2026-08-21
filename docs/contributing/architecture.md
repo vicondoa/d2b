@@ -124,7 +124,7 @@ and the exact remediation command (`d2b vm restart <vm>` for clean down+up,
 ## Adding new per-VM behaviour
 
 New per-VM work belongs **inside the daemon's DAG executor**
-(`packages/d2bd/src/supervisor/`), with privileged effects routed through a
+(`packages/d2bd-runtime/src/supervisor/`), with privileged effects routed through a
 typed `d2b-priv-broker` op declared in `packages/d2b-contracts/` and audited in
 `/var/lib/d2b/audit/broker-<utc-date>.jsonl`. Do not introduce a
 `systemd.services.*` declaration in `nixos-modules/` for per-VM work. Denylist
@@ -137,6 +137,6 @@ for the DAG node taxonomy and
 the broker op catalogue.
 
 Adding or reclassifying a spawned runner `ProcessRole` also needs matching
-process-builder and runner-matrix coverage: add/extend the typed Rust argv
-builder in `packages/d2b-host/src/*_argv.rs` and role coverage policy/contract
-tests under `packages/d2b-contract-tests/tests/` in the same change.
+process-builder and role coverage: add or extend the typed Rust argv builder
+in the owning Provider crate and role coverage policy/contract tests under
+`packages/d2b-contract-tests/tests/` in the same change.

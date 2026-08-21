@@ -153,8 +153,8 @@ d2b device usb detach corp-vm 1-2 --apply
 d2b device usb probe
 ```
 
-If detach reports `usbip-revocation-not-isolated`, use the busid named in the
-error. D2b could not prove that one busid stream can be revoked without
+If detach reports that revocation cannot be isolated, use the busid named in
+the error. D2b could not prove that one busid stream can be revoked without
 affecting unrelated same-env streams. Stop the owning VM so the stream drains,
 then detach again:
 

@@ -5,10 +5,14 @@
 //! [`ZonePath`] plus the authenticated Zone principal, and the principal is
 //! never taken from the request payload.
 
-use d2b_contracts::v3::{
-    identity::{AuthenticatedSubjectContext, ResourceGeneration, ServiceName},
-    resource_ref::ResourceRef,
-    zone_routing::ZonePath,
+use d2b_contracts_zone_session::v3::zone_routing::ZonePath;
+use d2b_contracts_resource::v3::{
+    ResourceRef,
+    ResourceGeneration,
+};
+use d2b_contracts_resource::v3::identity::{
+    AuthenticatedSubjectContext,
+    ServiceName,
 };
 
 use crate::{descriptor::ProviderDescriptor, error::ProviderRuntimeError};

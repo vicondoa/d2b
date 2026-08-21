@@ -9,8 +9,10 @@ use std::pin::pin;
 use std::sync::Mutex;
 use std::task::{Context, Poll, Waker};
 
-use d2b_contracts::v3::ResourceRef;
-use d2b_contracts::v3::user::{OsUsername, UserSpec};
+use d2b_contracts_resource::v3::ResourceRef;
+use d2b_contracts_resource::v3::{
+    user::{OsUsername, UserSpec},
+};
 
 use crate::error::SystemCoreError;
 use crate::user::{DiscoveredUser, UserBinding, UserDiscoveryEffectPort, UserIdentityDigest};
@@ -99,9 +101,11 @@ impl UserDiscoveryEffectPort for ScriptedDiscoveryPort {
 /// Canonical fixtures for the hermetic suite.
 pub mod fixtures {
     use super::*;
-    use d2b_contracts::v3::execution_policy::BoundedText;
-    use d2b_contracts::v3::host::{HostSpec, IsolationPosture};
-    use d2b_contracts::v3::user::OsGroupName;
+    use d2b_contracts_resource::v3::execution_policy::BoundedText;
+    use d2b_contracts_resource::v3::{
+    host::{HostSpec, IsolationPosture},
+};
+    use d2b_contracts_resource::v3::user::OsGroupName;
 
     /// The canonical Host reference.
     pub fn host_ref() -> ResourceRef {

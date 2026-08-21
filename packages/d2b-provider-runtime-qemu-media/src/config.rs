@@ -1,6 +1,6 @@
 //! Bounded Provider configuration and controller-only projection.
 
-use d2b_contracts::v3::ResourceRef;
+use d2b_contracts_resource::v3::ResourceRef;
 use schemars::JsonSchema;
 use serde::{Deserialize, Deserializer, Serialize};
 
