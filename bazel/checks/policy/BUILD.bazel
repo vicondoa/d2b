@@ -79,5 +79,6 @@ test_suite(
         ":changelog",
         ":drift",
         ":policy",
+        "//packages/xtask:pr_workflow",
     ],
 )

@@ -258,6 +258,13 @@ rust_test(
 )
 
 rust_test(
+    name = "pr_workflow",
+    srcs = ["tests/pr_workflow.rs"],
+    data = ["//:.github/workflows/pr-l1-static-fast.yml"],
+    visibility = ["//visibility:public"],
+)
+
+rust_test(
     name = "policy_production_closure",
     srcs = [
         "tests/common/mod.rs",
