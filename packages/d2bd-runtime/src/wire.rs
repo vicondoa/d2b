@@ -793,8 +793,8 @@ mod tests {
         );
         assert!(matches!(
             request,
-            Request::HostCutover(d2b_contracts::public_wire::HostCutoverRequest {
-                operation: d2b_contracts::public_wire::HostCutoverOperation::Preview,
+            Request::HostCutover(d2b_contracts_control::public_wire::HostCutoverRequest {
+                operation: d2b_contracts_control::public_wire::HostCutoverOperation::Preview,
                 ..
             })
         ));
