@@ -25,8 +25,6 @@ find_repo_root() {
   return 1
 }
 
-ROOT=${ROOT:-$(find_repo_root)} || fail "cannot discover repository root"
-
 log() {
   printf '%s %s\n' "$(date +%H:%M:%S)" "$*" >&2
 }
@@ -39,6 +37,8 @@ fail() {
 ok() {
   log "  PASS: $*"
 }
+
+ROOT=${ROOT:-$(find_repo_root)} || fail "cannot discover repository root"
 
 is_dash_exempt() {
   case "$1" in
@@ -60,7 +60,7 @@ is_dash_exempt() {
 scan_dashes() {
   local root="$1"
   local -a files=() scan_files=() batch=()
-  local file hits chunk status all_hits start
+  local file chunk status all_hits start
 
   if git -C "$root" rev-parse --show-toplevel >/dev/null 2>&1; then
     while IFS= read -r -d '' file; do
