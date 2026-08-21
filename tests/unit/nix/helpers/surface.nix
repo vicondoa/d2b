@@ -37,20 +37,11 @@ let
     inherit moduleFixtures;
   };
   moduleEvaluation = context.mkModuleEval [ ];
-  selectedCases = map
-    (spec:
-      let
-        path =
-          if builtins.typeOf spec == "path"
-          then spec
-          else spec.path;
-        imported = import path context;
-      in
-      if builtins.typeOf spec == "path" || !(spec ? names) then
-        imported
-      else
-        lib.filterAttrs (name: _: builtins.elem name spec.names) imported)
-    caseFiles;
+  caseSelection = import ./select-cases.nix {
+    inherit lib context;
+    surfaceName = name;
+  };
+  selectedCases = caseSelection.selectCaseFiles caseFiles;
   cases = (import ../default.nix { cases = selectedCases; }) // {
     "${name}/modules-evaluate" = {
       # This shared smoke case forces only the declared module structure.
@@ -68,6 +59,7 @@ in
   inherit modules fixtures pins;
   helpers = [
     ./eval.nix
+    ./select-cases.nix
     ./surface.nix
   ];
   inherit cases;
