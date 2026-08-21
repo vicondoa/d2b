@@ -12,12 +12,13 @@ let
 
   selectCaseFile = spec:
     let
+      isPathSpec = builtins.typeOf spec == "path";
       path =
-        if builtins.typeOf spec == "path"
+        if isPathSpec
         then spec
         else spec.path;
     in
-    if builtins.typeOf spec == "path" || !(spec ? names) then
+    if isPathSpec || !(spec ? names) then
       import path context
     else if spec.names == [ ] then
       throw (formatSelectionError {
@@ -36,7 +37,7 @@ let
           inherit path missingNames;
         })
       else
-        lib.filterAttrs (caseName: _: builtins.elem caseName spec.names) imported;
+        lib.getAttrs spec.names imported;
 in
 {
   inherit formatSelectionError;
