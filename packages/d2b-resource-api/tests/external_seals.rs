@@ -31,22 +31,58 @@ impl Scratch {
 
 /// Hash `rustc -vV` so a toolchain change lands in a different tree rather than
 /// reusing artifacts the new compiler cannot read.
-fn toolchain_cache_key() -> String {
-    let rustc = runfile(PathBuf::from(
-        std::env::var_os("RUSTC").unwrap_or_else(|| "rustc".into()),
-    ));
-    let version = Command::new(&rustc)
+fn toolchain_cache_key(rustc: &Path) -> String {
+    let version = Command::new(rustc)
         .arg("-vV")
         .output()
-        .unwrap_or_else(|error| panic!("query the active rustc version at {:?}: {error}", rustc));
-    assert!(
-        version.status.success(),
-        "rustc -vV failed; a scratch tree keyed on an unknown toolchain could be reused across \
-         incompatible compilers"
-    );
+        .unwrap_or_else(|error| panic!("query the active rustc version at {rustc:?}: {error}"));
+    if !version.status.success() {
+        let stderr = String::from_utf8_lossy(&version.stderr);
+        panic!(
+            "rustc -vV failed at {rustc:?} with status {:?}; a scratch tree keyed on an unknown \
+             toolchain could be reused across incompatible compilers:\n{}",
+            version.status,
+            stderr.trim()
+        );
+    }
     let mut hasher = DefaultHasher::new();
     version.stdout.hash(&mut hasher);
     format!("{:016x}", hasher.finish())
+}
+
+fn rustc_sysroot(rustc: &Path) -> Option<PathBuf> {
+    // rules_rust supplies rustc and the standard library in one runfile tree,
+    // but Cargo does not inherit the sysroot flags from the outer Bazel action.
+    let sysroot = rustc.parent()?.parent()?;
+    sysroot
+        .join("lib/rustlib")
+        .is_dir()
+        .then(|| sysroot.to_path_buf())
+}
+
+fn cargo_rustflags(sysroot: Option<&Path>) -> String {
+    let mut flags = Vec::from(["--cap-lints", "allow"]);
+    if let Some(sysroot) = sysroot {
+        flags.splice(
+            0..0,
+            [
+                "--sysroot",
+                sysroot.to_str().expect("rustc sysroot is UTF-8"),
+            ],
+        );
+    }
+    flags.join("\u{1f}")
+}
+
+fn absolute_existing(path: PathBuf) -> PathBuf {
+    if path.is_absolute() {
+        return path;
+    }
+    std::env::current_dir()
+        .ok()
+        .map(|directory| directory.join(&path))
+        .filter(|candidate| candidate.exists())
+        .unwrap_or(path)
 }
 
 /// Force the next `cargo check` to recompile the three crates that make up the
@@ -103,6 +139,8 @@ struct CompileFailHarness<'a> {
     manifest: &'a Path,
     target: &'a Path,
     temp: &'a Path,
+    rustc: &'a Path,
+    rustc_sysroot: Option<&'a Path>,
     rustc_wrapper: &'a Path,
     cfg_test_marker_dir: &'a Path,
 }
@@ -120,9 +158,13 @@ impl CompileFailHarness<'_> {
             .arg(self.manifest)
             .args(["--test", test])
             .env("CARGO_TARGET_DIR", self.target)
+            .env("RUSTC", self.rustc)
             .env("D2B_CFG_TEST_MARKER_DIR", self.cfg_test_marker_dir)
             .env("D2B_EXTERNAL_SEALS_TARGET", self.target)
-            .env("CARGO_ENCODED_RUSTFLAGS", "--cap-lints\u{1f}allow")
+            .env(
+                "CARGO_ENCODED_RUSTFLAGS",
+                cargo_rustflags(self.rustc_sysroot),
+            )
             .env("RUSTC_WRAPPER", self.rustc_wrapper)
             .env("RUSTUP_TOOLCHAIN", "1.97.0")
             .env("RUSTC_WORKSPACE_WRAPPER", "")
@@ -145,6 +187,7 @@ impl CompileFailHarness<'_> {
                 test,
             ])
             .env("CARGO_TARGET_DIR", self.target)
+            .env("RUSTC", self.rustc)
             .env("D2B_CFG_TEST_MARKER_DIR", self.cfg_test_marker_dir)
             .env("D2B_EXTERNAL_SEALS_TARGET", self.target)
             // The outer gate rejects warnings, but this fixture deliberately
@@ -152,7 +195,10 @@ impl CompileFailHarness<'_> {
             // harness. That makes the dependency's test helpers look unused.
             // Cap lints for this diagnostic-only compile so those expected
             // warnings cannot mask the privacy error the seal is asserting.
-            .env("CARGO_ENCODED_RUSTFLAGS", "--cap-lints\u{1f}allow")
+            .env(
+                "CARGO_ENCODED_RUSTFLAGS",
+                cargo_rustflags(self.rustc_sysroot),
+            )
             // This harness owns RUSTC_WRAPPER: it must be the selective
             // cfg(test) shim below, never the repository's caching wrapper,
             // whose client or server can exit nonzero under concurrent cargo
@@ -240,6 +286,24 @@ fn fixture_manifest() -> PathBuf {
     PathBuf::from(manifest_dir).join("tests/ui/external-seals/Cargo.toml")
 }
 
+fn scratch_root() -> PathBuf {
+    if let Some(test_tmpdir) = std::env::var_os("TEST_TMPDIR") {
+        return PathBuf::from(test_tmpdir).join("resource-api-external-seals");
+    }
+    if std::env::var_os("RUNFILES_DIR").is_some() {
+        panic!("Bazel external-seals tests must provide a unique TEST_TMPDIR");
+    }
+    let Some(manifest_dir) = std::env::var_os("CARGO_MANIFEST_DIR") else {
+        panic!("Cargo must provide CARGO_MANIFEST_DIR for this fixture");
+    };
+    PathBuf::from(manifest_dir)
+        .parent()
+        .expect("packages directory")
+        .parent()
+        .expect("repository root")
+        .join(".scratch")
+}
+
 fn selected_case(name: &str) -> bool {
     std::env::var("D2B_EXTERNAL_SEALS_CASE")
         .map(|case| case == name)
@@ -249,22 +313,15 @@ fn selected_case(name: &str) -> bool {
 #[test]
 fn dependent_cannot_mint_admission_or_session_capabilities() {
     let manifest = fixture_manifest();
-    let repository_root = std::env::var_os("TEST_TMPDIR")
-        .map(PathBuf::from)
-        .or_else(|| {
-            std::env::var_os("CARGO_MANIFEST_DIR").map(|path| {
-                PathBuf::from(path)
-                    .parent()
-                    .expect("packages directory")
-                    .parent()
-                    .expect("repository root")
-                    .to_path_buf()
-            })
-        })
-        .expect("Bazel or Cargo must provide a scratch root");
-    let scratch = Scratch::new(repository_root.join(".scratch").join(format!(
+    let rustc = absolute_existing(runfile(
+        std::env::var_os("RUSTC")
+            .map(PathBuf::from)
+            .unwrap_or_else(|| PathBuf::from("rustc")),
+    ));
+    let rustc_sysroot = rustc_sysroot(&rustc);
+    let scratch = Scratch::new(scratch_root().join(format!(
         "resource-api-external-seals-{}",
-        toolchain_cache_key()
+        toolchain_cache_key(&rustc)
     )));
     let scratch = scratch.0.clone();
     let target = scratch.join("target");
@@ -327,16 +384,18 @@ exec "$rustc" "$@"
     fs::set_permissions(&rustc_wrapper, fs::Permissions::from_mode(0o700))
         .expect("make selective cfg(test) rustc wrapper executable");
 
-    let cargo = runfile(
+    let cargo = absolute_existing(runfile(
         std::env::var_os("CARGO")
             .map(PathBuf::from)
             .unwrap_or_else(|| PathBuf::from("cargo")),
-    );
+    ));
     let harness = CompileFailHarness {
         cargo: &cargo,
         manifest: &manifest,
         target: &target,
         temp: &temp,
+        rustc: &rustc,
+        rustc_sysroot: rustc_sysroot.as_deref(),
         rustc_wrapper: &rustc_wrapper,
         cfg_test_marker_dir: &cfg_test_marker_dir,
     };

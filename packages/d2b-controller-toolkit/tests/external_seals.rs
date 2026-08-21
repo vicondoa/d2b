@@ -11,12 +11,7 @@ use std::{
 /// and the gate provisions its own pinned toolchain while a developer shell
 /// commonly has a different one, so each gets its own cache tree rather than
 /// corrupting a shared one.
-fn toolchain_cache_key() -> String {
-    let rustc = runfile(
-        std::env::var_os("RUSTC")
-            .map(PathBuf::from)
-            .unwrap_or_else(|| PathBuf::from("rustc")),
-    );
+fn toolchain_cache_key(rustc: &Path) -> String {
     let version = Command::new(rustc)
         .arg("-vV")
         .output()
@@ -36,6 +31,49 @@ fn toolchain_cache_key() -> String {
     let mut hasher = DefaultHasher::new();
     version.trim().hash(&mut hasher);
     format!("{:016x}", hasher.finish())
+}
+
+fn rustc_path() -> PathBuf {
+    absolute_existing(runfile(
+        std::env::var_os("RUSTC")
+            .map(PathBuf::from)
+            .unwrap_or_else(|| PathBuf::from("rustc")),
+    ))
+}
+
+fn rustc_sysroot(rustc: &Path) -> Option<PathBuf> {
+    // rules_rust supplies rustc and the standard library in one runfile tree,
+    // but Cargo does not inherit the sysroot flags from the outer Bazel action.
+    let sysroot = rustc.parent()?.parent()?;
+    sysroot
+        .join("lib/rustlib")
+        .is_dir()
+        .then(|| sysroot.to_path_buf())
+}
+
+fn cargo_rustflags(sysroot: Option<&Path>) -> String {
+    let mut flags = Vec::from(["--cap-lints", "allow"]);
+    if let Some(sysroot) = sysroot {
+        flags.splice(
+            0..0,
+            [
+                "--sysroot",
+                sysroot.to_str().expect("rustc sysroot is UTF-8"),
+            ],
+        );
+    }
+    flags.join("\u{1f}")
+}
+
+fn absolute_existing(path: PathBuf) -> PathBuf {
+    if path.is_absolute() {
+        return path;
+    }
+    std::env::current_dir()
+        .ok()
+        .map(|directory| directory.join(&path))
+        .filter(|candidate| candidate.exists())
+        .unwrap_or(path)
 }
 
 /// A reusable repository-local compiler scratch tree.
@@ -144,6 +182,8 @@ fn foreign_source_cannot_mint_committed_decision() {
         );
     }
     let manifest = fixture_manifest();
+    let rustc = rustc_path();
+    let rustc_sysroot = rustc_sysroot(&rustc);
     let repository_root = std::env::var_os("TEST_TMPDIR")
         .map(PathBuf::from)
         .or_else(|| {
@@ -161,7 +201,7 @@ fn foreign_source_cannot_mint_committed_decision() {
         .join(".scratch/rust-test-cache")
         .join(format!(
             "controller-toolkit-external-seals-{}",
-            toolchain_cache_key()
+            toolchain_cache_key(&rustc)
         ));
     let scratch = Scratch::new(scratch);
     let temp = scratch.path().join("tmp");
@@ -184,6 +224,11 @@ fn foreign_source_cannot_mint_committed_decision() {
         ])
         .env("CARGO_TARGET_DIR", scratch.path().join("target"))
         .env("TMPDIR", &temp)
+        .env("RUSTC", &rustc)
+        .env(
+            "CARGO_ENCODED_RUSTFLAGS",
+            cargo_rustflags(rustc_sysroot.as_deref()),
+        )
         .env("RUSTUP_TOOLCHAIN", "1.97.0")
         // Compile the fixture without any rustc wrapper. The repository config
         // sets a caching wrapper, whose client or server can exit nonzero under
