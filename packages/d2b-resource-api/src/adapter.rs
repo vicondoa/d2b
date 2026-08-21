@@ -216,14 +216,34 @@ mod tests {
     use super::*;
     use std::{collections::BTreeSet, sync::Mutex};
 
-    use d2b_contracts_zone_session::v3::{
-        AuthenticatedSubjectContext as SessionClaims, BindingDigest, CanonicalJsonValue,
-        ConfigurationGeneration, ControllerGeneration, EvidenceClass, Locality,
-        RESOURCE_ENVELOPE_DOMAIN_TAG, ReconnectGeneration, ResourceEnvelope, ResourceGeneration,
-        ResourceName, ResourceRef, ResourceTypeName, ResourceUid, SchemaFingerprint, ServiceName,
-        SessionBinding, SessionPurpose, TranscriptHash, TransportBinding, ZoneId, ZoneRevision,
-        canonical_digest,
-    };
+    use d2b_contracts_resource::v3::{
+    CanonicalJsonValue,
+    ConfigurationGeneration,
+    ControllerGeneration,
+    RESOURCE_ENVELOPE_DOMAIN_TAG,
+    ResourceEnvelope,
+    ResourceGeneration,
+    ResourceName,
+    ResourceRef,
+    ResourceTypeName,
+    ResourceUid,
+    SchemaFingerprint,
+    ZoneId,
+    ZoneRevision,
+    canonical_digest,
+};
+use d2b_contracts_resource::v3::identity::{
+    AuthenticatedSubjectContext as SessionClaims,
+    BindingDigest,
+    EvidenceClass,
+    Locality,
+    ReconnectGeneration,
+    ServiceName,
+    SessionBinding,
+    SessionPurpose,
+    TranscriptHash,
+    TransportBinding,
+};
     use d2b_resource_store::mutation_seal::MutationSealAcceptor;
     use d2b_resource_store::{
         AdmittedVerb, PolicySnapshot, ResourceMutationKind, StoreCommitResult, StoreError,
@@ -518,7 +538,7 @@ mod tests {
         async fn dispatch(
             &self,
             request: AuthorizedUpgrade,
-        ) -> Result<UpgradeResult, d2b_contracts_zone_session::v3::ResourceError> {
+        ) -> Result<UpgradeResult, d2b_contracts_resource::v3::ResourceError> {
             self.calls.lock().unwrap().push(DispatchObservation::one(
                 ApiMethod::Upgrade,
                 &request.operation.operation_id,

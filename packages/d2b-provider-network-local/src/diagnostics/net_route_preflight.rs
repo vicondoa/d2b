@@ -40,7 +40,7 @@ use std::io::{BufRead, BufReader, Write};
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use d2b_contracts_zone_session::v3::IfName;
+use d2b_contracts_resource::v3::IfName;
 use d2b_core::host::{HostJson, NetEnv};
 use serde::{Deserialize, Serialize};
 

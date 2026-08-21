@@ -11,7 +11,10 @@ use d2b_contracts::types::{BundleOpId, PathClass, RoleId, VmId};
 use d2b_contracts_broker::broker_wire::{
     BrokerCallerRole, BrokerRequest, BrokerResponse, RunnerRole, SpawnRunnerRequest,
 };
-use d2b_contracts_zone_session::v3::{ResourceRef, ResourceUid};
+use d2b_contracts_resource::v3::{
+    ResourceRef,
+    ResourceUid,
+};
 use d2b_core::bundle_resolver::BundleResolver;
 use d2b_core::processes::{ProcessNode, ProcessRole};
 use d2b_core_controller::migration::LegacyTpmMigrationDecision;

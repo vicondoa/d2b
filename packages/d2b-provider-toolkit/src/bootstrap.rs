@@ -23,7 +23,12 @@
 //! non-replayable the binding is consumed by value and is not `Clone`.
 
 use d2b_contracts_zone_session::v3::zone_routing::ZonePath;
-use d2b_contracts_zone_session::v3::{Locality, ResourceRef, SessionPurpose, TransportBinding};
+use d2b_contracts_resource::v3::ResourceRef;
+use d2b_contracts_resource::v3::identity::{
+    Locality,
+    SessionPurpose,
+    TransportBinding,
+};
 
 use crate::error::ProviderToolkitError;
 
@@ -147,7 +152,11 @@ impl ProviderAgentBootstrap {
 mod tests {
     use super::*;
     use d2b_contracts_zone_session::v3::zone_routing::ZoneLabelId;
-    use d2b_contracts_zone_session::v3::{BindingDigest, ResourceName, ResourceTypeName};
+    use d2b_contracts_resource::v3::{
+    ResourceName,
+    ResourceTypeName,
+};
+use d2b_contracts_resource::v3::identity::BindingDigest;
 
     fn zone(label: &str) -> ZonePath {
         ZonePath::new(vec![ZoneLabelId::parse(label).expect("valid label")])

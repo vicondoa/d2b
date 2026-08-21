@@ -19,12 +19,10 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Deserializer, Serialize};
 use sha2::{Digest, Sha256};
 
-use super::{
-    ResourceRef, Timestamp,
-    execution_policy::{
-        ExecutionDomain, PrimitiveSpecError, parsed_deserialize, redacted_debug,
-        require_execution_ref, require_resource_type, string_schema,
-    },
+use d2b_contracts_resource::v3::{
+    ResourceRef,
+    Timestamp,
+    execution_policy::{ExecutionDomain, PrimitiveSpecError, parsed_deserialize, redacted_debug, require_execution_ref, require_resource_type, string_schema},
 };
 
 pub mod service;
@@ -851,7 +849,9 @@ impl<'de> Deserialize<'de> for CredentialSpec {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::v3::{execution_policy::to_base_object, resource_schema::canonical_json_bytes};
+    use d2b_contracts_resource::v3::{
+        execution_policy::to_base_object, resource_schema::canonical_json_bytes,
+    };
 
     const MINIMAL_CREDENTIAL_SPEC: &[u8] = br#"{"allowedOperations":["inspect-metadata"],"audience":"azure-resource-manager","consumerRef":null,"expiry":{"hardDeadlineMs":0},"identityGuestRef":null,"loginEndpointRef":null,"revocation":{"onOwnerDelete":"immediate","onProviderGeneration":"immediate"},"rotation":{"maxLeaseLifetimeMs":0,"policy":"on-expiry","proactiveWindowMs":null},"scope":{"domainFilter":null,"executionRef":null,"userRef":null}}"#;
 

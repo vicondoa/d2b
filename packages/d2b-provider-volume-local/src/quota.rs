@@ -4,7 +4,9 @@
 //! effect adapter.  These pure decisions keep hard admission, usage reporting,
 //! and write rejection independent of a filesystem or broker.
 
-use d2b_contracts_zone_session::v3::volume::{QuotaEnforcement, QuotaSpec};
+use d2b_contracts_resource::v3::{
+    volume::{QuotaEnforcement, QuotaSpec},
+};
 
 use crate::error::VolumeLocalError;
 use crate::port::QuotaCapability;

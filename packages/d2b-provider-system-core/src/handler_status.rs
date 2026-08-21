@@ -1,6 +1,10 @@
 //! The fixed system-core Host/User Zone status projection.
 
-use d2b_contracts_zone_session::v3::{ZoneHandlerName, ZoneHandlerPhase, ZoneHandlerStatus};
+use d2b_contracts_zone_session::v3::{
+    ZoneHandlerName,
+    ZoneHandlerPhase,
+    ZoneHandlerStatus,
+};
 
 /// The exact serialized handler value for the Host controller.
 pub const SYSTEM_CORE_HOST_HANDLER: &str = "system-core-host";
@@ -31,7 +35,7 @@ impl std::error::Error for HandlerReadinessError {}
 pub fn emit_handler_status(
     host_phase: ZoneHandlerPhase,
     user_phase: ZoneHandlerPhase,
-    last_reconciled_at: Option<d2b_contracts_zone_session::v3::Timestamp>,
+    last_reconciled_at: Option<d2b_contracts_resource::v3::Timestamp>,
 ) -> Vec<ZoneHandlerStatus> {
     vec![
         ZoneHandlerStatus::new(

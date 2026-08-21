@@ -8,7 +8,10 @@
 
 use std::{fmt, future::Future};
 
-use d2b_contracts_zone_session::v3::{ResourceRef, execution_policy::BoundedToken};
+use d2b_contracts_resource::v3::{
+    ResourceRef,
+    execution_policy::BoundedToken,
+};
 use d2b_provider_toolkit::{ComponentSessionDriver, StreamEvent, StreamId};
 
 /// The retained failed-job TTL required for detached guest execution.

@@ -4,12 +4,15 @@ use std::sync::Arc;
 use std::thread;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-use d2b_contracts_provider::v3::credential::{
+use d2b_contracts_provider::v3::{
+    credential::{
     CredentialAuthorization, CredentialLeaseState, CredentialMethod, CredentialRequest,
     CredentialResponse, CredentialServiceErrorCode, CredentialSessionBinding,
     MAX_PROVIDER_LEASE_LIFETIME_MS, dispatch_authorized_provider,
+},
 };
-use d2b_contracts_zone_session::v3::{Locality, ResourceRef};
+use d2b_contracts_resource::v3::ResourceRef;
+use d2b_contracts_resource::v3::identity::Locality;
 use d2b_provider_credential_managed_identity::{
     ManagedIdentityCredentialProvider, ManagedIdentityCredentialProviderFactory,
 };

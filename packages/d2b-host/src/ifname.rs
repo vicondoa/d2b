@@ -3,7 +3,7 @@
 //! Implements the hash-derived [`IfName`] scheme + emitter-time
 //! collision detection and mapping exposure. The underlying
 //! IFNAMSIZ-validated newtype is owned by
-//! [`d2b_contracts_zone_session::v3::IfName`]; this module wraps it with:
+//! [`d2b_contracts_resource::v3::IfName`]; this module wraps it with:
 //!
 //! - configurable d2b prefix (default `d2b-`);
 //! - deterministic short-hash derivation from `(env, vm?)`;
@@ -15,10 +15,13 @@
 //! TAPs prefix `t`. The full name fits inside the IFNAMSIZ-1 (15 byte)
 //! limit by construction.
 
-use d2b_contracts_zone_session::v3::{IfName as CoreIfName, IfNameError as CoreIfNameError};
+use d2b_contracts_resource::v3::{
+    IfName as CoreIfName,
+    IfNameError as CoreIfNameError,
+};
 use d2b_core::host_w3::IfNameMapping;
 
-pub use d2b_contracts_zone_session::v3::IfName;
+pub use d2b_contracts_resource::v3::IfName;
 
 /// Default d2b prefix. Operators can override per site.
 pub const DEFAULT_PREFIX: &str = "d2b-";

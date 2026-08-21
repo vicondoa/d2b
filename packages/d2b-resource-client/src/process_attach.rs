@@ -13,7 +13,8 @@ use std::{
     time::Duration,
 };
 
-use d2b_contracts_zone_session::v3::{ResourceRef, zone_routing::ZonePath};
+use d2b_contracts_zone_session::v3::zone_routing::ZonePath;
+use d2b_contracts_resource::v3::ResourceRef;
 
 use crate::{
     AttemptDisposition, CallDriver, CallOptions, CancellationToken, ClientError, MethodProfile,
@@ -755,9 +756,12 @@ mod tests {
         },
     };
 
-    use d2b_contracts_zone_session::v3::{
-        CanonicalJsonObject, ResourceErrorKind, RetryClass, zone_routing::ZoneLabelId,
-    };
+    use d2b_contracts_zone_session::v3::zone_routing::ZoneLabelId;
+use d2b_contracts_resource::v3::{
+    CanonicalJsonObject,
+    ResourceErrorKind,
+    RetryClass,
+};
 
     use super::*;
     use crate::{

@@ -16,11 +16,13 @@ use std::sync::{Mutex, OnceLock};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use d2b_contracts_broker::broker_wire::{OpenZoneStoreResponse, ZoneStoreDisposition};
-use d2b_contracts_zone_session::v3::storage::{
+use d2b_contracts_resource::v3::{
+    storage::{
     ZoneStoreAuxiliaryDirectory, ZoneStoreDescriptorPublicationRequirement,
     ZoneStoreDirectoryRepairOwner, ZoneStoreFilesystemRequirement, ZoneStoreFsyncRequirement,
     ZoneStoreId, ZoneStoreLockingRequirement, ZoneStorePrincipal, ZoneStoreReplacementDetection,
     ZoneStoreReplacementPublicationRequirement, ZoneStoreStorageRow,
+},
 };
 use d2b_core::bundle_resolver::BundleResolver;
 use nix::fcntl::{FcntlArg, FdFlag, fcntl};
@@ -729,7 +731,7 @@ fn validate_marker(
 }
 
 fn is_store_identity(value: &str) -> bool {
-    d2b_contracts_zone_session::v3::is_canonical_digest(value)
+    d2b_contracts_resource::v3::is_canonical_digest(value)
 }
 
 fn read_anchored_file(path: &Path) -> Result<Vec<u8>, ZoneStoreError> {
@@ -997,7 +999,7 @@ mod tests {
         let mut row = signed_row();
         assert_eq!(validate_row_binding(&row, "local-root"), Ok(()));
         row.parent_directory_id =
-            d2b_contracts_zone_session::v3::storage::ZoneStoreParentDirectoryId::parse(
+            d2b_contracts_resource::v3::storage::ZoneStoreParentDirectoryId::parse(
                 "zone-store-parent-other",
             )
             .expect("parent id");

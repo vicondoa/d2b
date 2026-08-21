@@ -5,7 +5,8 @@ use std::{
     time::{Duration, Instant},
 };
 
-use d2b_contracts_zone_session::v3::component_session::{
+use d2b_contracts_zone_session::v3::{
+    component_session::{
     AttachmentAccess, AttachmentCreditClass, AttachmentDescriptor, AttachmentKind,
     AttachmentPacket, AttachmentPolicyKind, BoundedVec, CancelAck, CancelRequest, CancelResult,
     ChannelClass, ChannelId, CloseReason, CloseRecord, EndpointPolicy, EndpointPolicyIdentity,
@@ -13,6 +14,7 @@ use d2b_contracts_zone_session::v3::component_session::{
     KeepaliveRecord, KernelObjectType, LimitProfile, MAX_PACKET_ATTACHMENTS, MetricLabels,
     MetricReason, MetricResult, NoiseProfile, OperationClass, OperationId, PREFACE_LEN,
     RecordHeader, RecordKind, Remediation, RequestId, ServicePackage, SessionErrorCode,
+},
 };
 
 use crate::{

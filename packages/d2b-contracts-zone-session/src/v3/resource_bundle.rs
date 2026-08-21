@@ -2,7 +2,7 @@
 //!
 //! The Nix compiler emits a configuration bundle before runtime metadata
 //! exists.  It therefore has a deliberately smaller resource item than the
-//! live [`super::ResourceEnvelope`]: the item contains author metadata and
+//! live [`d2b_contracts_resource::v3::ResourceEnvelope`]: the item contains author metadata and
 //! desired spec only, while UID, status, finalizers, and store paths remain
 //! runtime or private-artifact concerns.
 
@@ -11,12 +11,11 @@ use std::collections::BTreeMap;
 use schemars::JsonSchema;
 use serde::{Deserialize, Deserializer, Serialize};
 
-use super::{
-    ResourceRef, ResourceTypeName, ZoneId,
-    resource_schema::{
-        CanonicalJsonObject, CanonicalJsonValue, canonical_json_bytes, framed_canonical_digest,
-        is_canonical_digest,
-    },
+use d2b_contracts_resource::v3::{
+    ResourceRef,
+    ResourceTypeName,
+    ZoneId,
+    resource_schema::{CanonicalJsonObject, CanonicalJsonValue, canonical_json_bytes, framed_canonical_digest, is_canonical_digest},
 };
 
 /// The canonical domain tag used for the resource array content hash.
@@ -32,7 +31,7 @@ pub const MAX_BUNDLE_FINGERPRINTS: usize = 256;
 #[derive(Clone, PartialEq, Eq, Serialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct BundleResourceMetadata {
-    name: super::ResourceName,
+    name: d2b_contracts_resource::v3::ResourceName,
     zone: ZoneId,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     owner_ref: Option<ResourceRef>,
@@ -45,7 +44,7 @@ pub struct BundleResourceMetadata {
 impl BundleResourceMetadata {
     /// Construct bundle metadata.
     pub fn new(
-        name: super::ResourceName,
+        name: d2b_contracts_resource::v3::ResourceName,
         zone: ZoneId,
         owner_ref: Option<ResourceRef>,
         labels: BTreeMap<String, String>,
@@ -61,7 +60,7 @@ impl BundleResourceMetadata {
     }
 
     /// Borrow the derived resource name.
-    pub const fn name(&self) -> &super::ResourceName {
+    pub const fn name(&self) -> &d2b_contracts_resource::v3::ResourceName {
         &self.name
     }
 
@@ -97,7 +96,7 @@ impl<'de> Deserialize<'de> for BundleResourceMetadata {
         #[derive(Deserialize)]
         #[serde(rename_all = "camelCase", deny_unknown_fields)]
         struct Wire {
-            name: super::ResourceName,
+            name: d2b_contracts_resource::v3::ResourceName,
             zone: ZoneId,
             #[serde(default)]
             owner_ref: Option<ResourceRef>,
@@ -142,7 +141,7 @@ impl BundleResource {
         }
         reject_runtime_or_private_fields(&spec)?;
         Ok(Self {
-            api_version: super::resource::RESOURCE_API_VERSION.to_owned(),
+            api_version: d2b_contracts_resource::v3::resource::RESOURCE_API_VERSION.to_owned(),
             resource_type,
             metadata,
             spec,
@@ -188,7 +187,7 @@ impl<'de> Deserialize<'de> for BundleResource {
             spec: CanonicalJsonObject,
         }
         let wire = Wire::deserialize(deserializer)?;
-        if wire.api_version != super::resource::RESOURCE_API_VERSION {
+        if wire.api_version != d2b_contracts_resource::v3::resource::RESOURCE_API_VERSION {
             return Err(serde::de::Error::custom(
                 "bundle resource apiVersion mismatch",
             ));
@@ -235,7 +234,7 @@ pub struct ResourceBundle {
     /// Sorted desired-state resources.
     pub resources: Vec<BundleResource>,
     /// Stable generation timestamp supplied by the compiler.
-    pub generated_at: super::Timestamp,
+    pub generated_at: d2b_contracts_resource::v3::Timestamp,
 }
 
 impl ResourceBundle {
@@ -246,7 +245,7 @@ impl ResourceBundle {
         artifact_catalog_digest: String,
         schema_fingerprints: BTreeMap<String, String>,
         provider_schema_digests: BTreeMap<String, String>,
-        generated_at: super::Timestamp,
+        generated_at: d2b_contracts_resource::v3::Timestamp,
     ) -> Result<Self, ResourceBundleError> {
         if resources.len() > MAX_BUNDLE_RESOURCES
             || schema_fingerprints.len() > MAX_BUNDLE_FINGERPRINTS
@@ -356,7 +355,7 @@ impl core::fmt::Debug for ResourceBundle {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ResourceBundleError {
     /// Canonical JSON could not be decoded.
-    CanonicalJson(super::resource_schema::CanonicalJsonError),
+    CanonicalJson(d2b_contracts_resource::v3::resource_schema::CanonicalJsonError),
     /// The JSON shape was not a bundle.
     Malformed,
     /// A runtime/private field appeared in a bundle item.
@@ -378,7 +377,7 @@ pub enum ResourceBundleError {
     /// The recorded content hash differs from the resource array.
     ContentHashMismatch,
     /// A canonical rendering operation failed.
-    CanonicalJsonEncode(super::resource_schema::CanonicalJsonError),
+    CanonicalJsonEncode(d2b_contracts_resource::v3::resource_schema::CanonicalJsonError),
 }
 
 impl core::fmt::Display for ResourceBundleError {
@@ -446,7 +445,9 @@ fn reject_runtime_or_private_fields(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::v3::{ResourceName, Timestamp};
+    use d2b_contracts_resource::v3::{
+        CanonicalJsonObject, ResourceName, ResourceTypeName, Timestamp, ZoneId,
+    };
 
     fn resource(kind: &str, name: &str) -> BundleResource {
         BundleResource::new(

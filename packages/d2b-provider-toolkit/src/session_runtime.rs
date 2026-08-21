@@ -7,10 +7,13 @@
 //! frames through the bounded Provider adapter.
 
 use d2b_contracts_zone_session::v3::{
-    CanonicalJsonObject, ResourceRef,
     component_session::RequestId,
-    execution_policy::BoundedToken,
     zone_routing::{ZoneLabelId, ZonePath},
+};
+use d2b_contracts_resource::v3::{
+    CanonicalJsonObject,
+    ResourceRef,
+    execution_policy::BoundedToken,
 };
 use d2b_session::{
     AuthenticatedComponentSession, AuthenticatedSessionRouteBinding, Cancellation,
@@ -248,7 +251,7 @@ pub fn validate_provider_route(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use d2b_contracts_zone_session::v3::ServiceName;
+    use d2b_contracts_resource::v3::identity::ServiceName;
     use d2b_session::SessionVerb;
 
     fn route() -> (AuthenticatedSessionRouteBinding, ResourceRef) {

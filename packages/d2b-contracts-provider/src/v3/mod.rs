@@ -1,12 +1,5 @@
 //! Canonical provider contract family.
 
-pub use d2b_contracts::foundation_effects::{
-    CredentialContractError, CredentialLeaseHandle, MAX_AZURE_REF_BYTES,
-    MAX_CREDENTIAL_LEASE_HANDLE_BYTES, OpaqueAzureRef,
-};
-pub use d2b_contracts_resource::v3::identity;
-pub use d2b_contracts_resource::v3::*;
-
 pub mod credential;
 pub mod credential_controller;
 pub mod provider;

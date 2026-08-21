@@ -2,7 +2,10 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use d2b_contracts_zone_session::v3::{FinalizerId, ResourceRef};
+use d2b_contracts_resource::v3::{
+    FinalizerId,
+    ResourceRef,
+};
 use d2b_controller_toolkit::ResourceKey;
 
 use crate::audit::{AuditEvent, resource_name_digest};
@@ -236,9 +239,9 @@ pub struct AtomicDeletionObservation {
     pending_finalizers: u32,
     live_children: u32,
     ambiguous: bool,
-    prior_generation: d2b_contracts_zone_session::v3::ConfigurationGeneration,
-    active_generation: d2b_contracts_zone_session::v3::ConfigurationGeneration,
-    timestamp: d2b_contracts_zone_session::v3::Timestamp,
+    prior_generation: d2b_contracts_resource::v3::ConfigurationGeneration,
+    active_generation: d2b_contracts_resource::v3::ConfigurationGeneration,
+    timestamp: d2b_contracts_resource::v3::Timestamp,
 }
 
 impl AtomicDeletionObservation {
@@ -249,9 +252,9 @@ impl AtomicDeletionObservation {
         pending_finalizers: u32,
         live_children: u32,
         ambiguous: bool,
-        prior_generation: d2b_contracts_zone_session::v3::ConfigurationGeneration,
-        active_generation: d2b_contracts_zone_session::v3::ConfigurationGeneration,
-        timestamp: d2b_contracts_zone_session::v3::Timestamp,
+        prior_generation: d2b_contracts_resource::v3::ConfigurationGeneration,
+        active_generation: d2b_contracts_resource::v3::ConfigurationGeneration,
+        timestamp: d2b_contracts_resource::v3::Timestamp,
     ) -> Self {
         Self {
             target,
@@ -316,13 +319,13 @@ impl std::error::Error for AtomicDeletionError {}
 /// the corresponding Deleted revision event.
 #[derive(Clone, PartialEq, Eq)]
 pub struct AtomicDeletionCommit {
-    revision: d2b_contracts_zone_session::v3::ZoneRevision,
+    revision: d2b_contracts_resource::v3::ZoneRevision,
     audit: AuditEvent,
 }
 
 impl AtomicDeletionCommit {
     /// Return the authoritative Deleted revision.
-    pub const fn revision(&self) -> d2b_contracts_zone_session::v3::ZoneRevision {
+    pub const fn revision(&self) -> d2b_contracts_resource::v3::ZoneRevision {
         self.revision
     }
 
@@ -355,7 +358,7 @@ impl core::fmt::Debug for AtomicDeletionCommit {
 /// audit sink to append a deletion event.
 pub fn commit_atomic_deletion(
     observation: AtomicDeletionObservation,
-    revision: d2b_contracts_zone_session::v3::ZoneRevision,
+    revision: d2b_contracts_resource::v3::ZoneRevision,
 ) -> Result<AtomicDeletionCommit, AtomicDeletionError> {
     if observation.ambiguous {
         return Err(AtomicDeletionError::Ambiguous);
@@ -381,7 +384,10 @@ pub fn commit_atomic_deletion(
 
 #[cfg(test)]
 mod tests {
-    use d2b_contracts_zone_session::v3::{ResourceUid, ZoneId};
+    use d2b_contracts_resource::v3::{
+    ResourceUid,
+    ZoneId,
+};
 
     use super::*;
 
@@ -512,9 +518,9 @@ mod tests {
     fn final_deletion_proof_requires_child_and_finalizer_completion() {
         let target = key("secret-resource-name", 3);
         let timestamp =
-            d2b_contracts_zone_session::v3::Timestamp::parse("2026-08-01T00:00:00.000Z").unwrap();
-        let prior = d2b_contracts_zone_session::v3::ConfigurationGeneration::new(1).unwrap();
-        let active = d2b_contracts_zone_session::v3::ConfigurationGeneration::new(2).unwrap();
+            d2b_contracts_resource::v3::Timestamp::parse("2026-08-01T00:00:00.000Z").unwrap();
+        let prior = d2b_contracts_resource::v3::ConfigurationGeneration::new(1).unwrap();
+        let active = d2b_contracts_resource::v3::ConfigurationGeneration::new(2).unwrap();
         let blocked = AtomicDeletionObservation::new(
             target.clone(),
             1,
@@ -527,14 +533,14 @@ mod tests {
         assert_eq!(
             commit_atomic_deletion(
                 blocked,
-                d2b_contracts_zone_session::v3::ZoneRevision::new(4)
+                d2b_contracts_resource::v3::ZoneRevision::new(4)
             )
             .unwrap_err(),
             AtomicDeletionError::FinalizersRemain
         );
         let committed = commit_atomic_deletion(
             AtomicDeletionObservation::new(target, 0, 0, false, prior, active, timestamp),
-            d2b_contracts_zone_session::v3::ZoneRevision::new(5),
+            d2b_contracts_resource::v3::ZoneRevision::new(5),
         )
         .unwrap();
         assert!(committed.row_and_indexes_removed_atomically());

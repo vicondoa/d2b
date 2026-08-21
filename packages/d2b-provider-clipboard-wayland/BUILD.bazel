@@ -15,6 +15,7 @@ rust_library(
     ),
     compile_data = ["Cargo.toml"],
     deps = [
+        "//packages/d2b-contracts-resource:d2b_contracts_resource",
         "//packages/d2b-contracts-zone-session:d2b_contracts_zone_session",
         "//packages/d2b-provider-toolkit:d2b_provider_toolkit",
     ] + all_crate_deps(normal = True, cargo_only = True),
@@ -50,6 +51,7 @@ rust_library(
     compile_data = ["Cargo.toml"],
     crate_name = "d2b_provider_clipboard_wayland",
     deps = [
+        "//packages/d2b-contracts-resource:d2b_contracts_resource",
         "//packages/d2b-contracts-zone-session:d2b_contracts_zone_session",
         "//packages/d2b-provider-toolkit:d2b_provider_toolkit_test_support",
     ] + all_crate_deps(normal = True, cargo_only = True),
@@ -72,6 +74,7 @@ rust_test(
     compile_data = ["Cargo.toml"],
     visibility = ["//visibility:public"],
     deps = [
+        "//packages/d2b-contracts-resource:d2b_contracts_resource",
         "//packages/d2b-contracts-zone-session:d2b_contracts_zone_session",
         ":d2b_provider_clipboard_wayland",
     ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
@@ -85,6 +88,7 @@ rust_test(
     compile_data = ["Cargo.toml"],
     visibility = ["//visibility:public"],
     deps = [
+        "//packages/d2b-contracts-resource:d2b_contracts_resource",
         "//packages/d2b-contracts-zone-session:d2b_contracts_zone_session",
         ":d2b_provider_clipboard_wayland",
     ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
@@ -98,6 +102,7 @@ rust_test(
     compile_data = ["Cargo.toml"],
     visibility = ["//visibility:public"],
     deps = [
+        "//packages/d2b-contracts-resource:d2b_contracts_resource",
         "//packages/d2b-contracts-zone-session:d2b_contracts_zone_session",
         ":d2b_provider_clipboard_wayland",
     ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
@@ -111,6 +116,7 @@ rust_test(
     compile_data = ["Cargo.toml"],
     visibility = ["//visibility:public"],
     deps = [
+        "//packages/d2b-contracts-resource:d2b_contracts_resource",
         "//packages/d2b-contracts-zone-session:d2b_contracts_zone_session",
         ":d2b_provider_clipboard_wayland",
     ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),

@@ -160,8 +160,8 @@ impl NetworkBroker for DaemonNetworkBroker<'_> {
 
     fn delete_persistent_tap(
         &self,
-        handle: &d2b_contracts_zone_session::v3::network::AttachmentHandle,
-        fence: &d2b_contracts_zone_session::v3::network::AttachmentGenerationFence,
+        handle: &d2b_contracts_resource::v3::network::AttachmentHandle,
+        fence: &d2b_contracts_resource::v3::network::AttachmentGenerationFence,
     ) -> Result<(), NetworkBrokerError> {
         self.dispatch(BrokerRequest::DeletePersistentTap(
             DeletePersistentTapRequest {

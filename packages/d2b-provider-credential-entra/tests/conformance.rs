@@ -3,15 +3,23 @@ mod common;
 #[path = "../../d2b-provider-toolkit/src/conformance.rs"]
 mod provider_conformance;
 
-use d2b_contracts_provider::v3::credential::{
+use d2b_contracts_provider::v3::{
+    credential::{
     AudienceToken, CredentialMethod, CredentialResourceVerb, CredentialSpec, OperationClass,
     RolePermission, authorize_operation,
+},
 };
-use d2b_contracts_zone_session::v3::ResourceRef;
-use d2b_contracts_zone_session::v3::execution_policy::to_base_object;
-use d2b_contracts_zone_session::v3::{
-    BaseSchemaBinding, BaseSchemaIdentity, ObjectFieldSchema, ResourceSchemaContract, ResourceSpec,
-    ResourceTypeName, SchemaFingerprint, SchemaVersion,
+use d2b_contracts_resource::v3::ResourceRef;
+use d2b_contracts_resource::v3::execution_policy::to_base_object;
+use d2b_contracts_resource::v3::{
+    BaseSchemaBinding,
+    BaseSchemaIdentity,
+    ObjectFieldSchema,
+    ResourceSchemaContract,
+    ResourceSpec,
+    ResourceTypeName,
+    SchemaFingerprint,
+    SchemaVersion,
 };
 use d2b_provider_credential_entra::{EntraEndpointPolicy, LOGIN_ENDPOINT_PURPOSE};
 use provider_conformance::{

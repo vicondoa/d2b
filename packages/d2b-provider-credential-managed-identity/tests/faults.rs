@@ -5,10 +5,12 @@ use std::sync::{Arc, mpsc};
 use std::thread;
 use std::time::Duration;
 
-use d2b_contracts_provider::v3::credential::{
+use d2b_contracts_provider::v3::{
+    credential::{
     CredentialMethod, CredentialRequest, CredentialServiceErrorCode, PlacementBinding,
+},
 };
-use d2b_contracts_zone_session::v3::ResourceRef;
+use d2b_contracts_resource::v3::ResourceRef;
 use d2b_provider_credential_managed_identity::{
     ManagedIdentityClientConfig, ManagedIdentityClientState, ManagedIdentityCredentialClient,
     ManagedIdentityCredentialProviderFactory, ManagedIdentityFuture, ManagedIdentityLeaseGrant,

@@ -12,6 +12,7 @@ rust_library(
     compile_data = ["Cargo.toml"],
     deps = [
         "//packages/d2b-contracts-provider:d2b_contracts_provider",
+        "//packages/d2b-contracts-resource:d2b_contracts_resource",
         "//packages/d2b-contracts-zone-session:d2b_contracts_zone_session",
         "//packages/d2b-process-conformance:d2b_process_conformance",
     ] + all_crate_deps(normal = True, cargo_only = True),
@@ -27,6 +28,7 @@ rust_test(
     compile_data = ["Cargo.toml"],
     deps = [
         "//packages/d2b-contracts-provider:d2b_contracts_provider",
+        "//packages/d2b-contracts-resource:d2b_contracts_resource",
         "//packages/d2b-contracts-zone-session:d2b_contracts_zone_session",
         "//packages/d2b-process-conformance:d2b_process_conformance",
     ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
@@ -50,6 +52,7 @@ rust_test(
     visibility = ["//visibility:public"],
     deps = [
         "//packages/d2b-contracts-provider:d2b_contracts_provider",
+        "//packages/d2b-contracts-resource:d2b_contracts_resource",
         "//packages/d2b-contracts-zone-session:d2b_contracts_zone_session",
         ":d2b_provider_runtime_cloud_hypervisor",
     ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
@@ -64,6 +67,7 @@ rust_test(
     visibility = ["//visibility:public"],
     deps = [
         "//packages/d2b-contracts-provider:d2b_contracts_provider",
+        "//packages/d2b-contracts-resource:d2b_contracts_resource",
         "//packages/d2b-contracts-zone-session:d2b_contracts_zone_session",
         ":d2b_provider_runtime_cloud_hypervisor",
     ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
@@ -78,6 +82,7 @@ rust_test(
     visibility = ["//visibility:public"],
     deps = [
         "//packages/d2b-contracts-provider:d2b_contracts_provider",
+        "//packages/d2b-contracts-resource:d2b_contracts_resource",
         "//packages/d2b-contracts-zone-session:d2b_contracts_zone_session",
         ":d2b_provider_runtime_cloud_hypervisor",
     ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
@@ -92,6 +97,7 @@ rust_test(
     visibility = ["//visibility:public"],
     deps = [
         "//packages/d2b-contracts-provider:d2b_contracts_provider",
+        "//packages/d2b-contracts-resource:d2b_contracts_resource",
         "//packages/d2b-contracts-zone-session:d2b_contracts_zone_session",
         ":d2b_provider_runtime_cloud_hypervisor",
     ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),

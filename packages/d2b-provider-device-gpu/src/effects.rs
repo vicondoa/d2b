@@ -1,7 +1,7 @@
 //! Opaque GPU effect-token and launch boundary.
 
 use core::fmt;
-use d2b_contracts_zone_session::v3::ResourceUid;
+use d2b_contracts_resource::v3::ResourceUid;
 
 use crate::{
     authority::{
@@ -212,7 +212,7 @@ pub trait GpuLifecycleEffectPort {
         ticket: &GpuLaunchTicket,
         principal: &crate::authority::GpuPrincipalToken,
         platform: &GpuPlatformToken,
-        generation: d2b_contracts_zone_session::v3::ResourceGeneration,
+        generation: d2b_contracts_resource::v3::ResourceGeneration,
     ) -> Result<GpuProcessIdentity, GpuEffectError>;
 
     /// Start the separate video worker.
@@ -222,7 +222,7 @@ pub trait GpuLifecycleEffectPort {
         ticket: &GpuLaunchTicket,
         principal: &crate::authority::GpuPrincipalToken,
         platform: &GpuPlatformToken,
-        generation: d2b_contracts_zone_session::v3::ResourceGeneration,
+        generation: d2b_contracts_resource::v3::ResourceGeneration,
     ) -> Result<GpuProcessIdentity, GpuEffectError>;
 
     /// Observe one exact worker after restart.

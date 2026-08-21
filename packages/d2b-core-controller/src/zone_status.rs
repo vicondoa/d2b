@@ -2,7 +2,13 @@
 
 use d2b_contracts_zone_session::v3::ZoneHandlerName;
 use d2b_contracts_zone_session::v3::{
-    ResourcePhase, Timestamp, ZoneHandlerPhase, ZoneHandlerStatus, ZoneStatusResource,
+    ZoneHandlerPhase,
+    ZoneHandlerStatus,
+    ZoneStatusResource,
+};
+use d2b_contracts_resource::v3::{
+    ResourcePhase,
+    Timestamp,
 };
 
 fn emit_handler_status(

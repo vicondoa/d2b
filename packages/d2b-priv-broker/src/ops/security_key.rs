@@ -283,7 +283,7 @@ pub(crate) fn open_and_validate_hidraw(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use d2b_contracts_zone_session::v3::ResourceRef;
+    use d2b_contracts_resource::v3::ResourceRef;
 
     #[test]
     fn unconfigured_selector_is_rejected_before_sysfs_lookup() {

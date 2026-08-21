@@ -21,8 +21,10 @@ use std::{
     path::{Path, PathBuf},
 };
 
-use d2b_contracts_provider::v3::semantic_services::{
+use d2b_contracts_provider::v3::{
+    semantic_services::{
     SemanticLayerSchema, SemanticPairContract, SemanticTypeContract, catalog,
+},
 };
 use serde_json::{Value, json};
 

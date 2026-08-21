@@ -3,7 +3,10 @@
 use schemars::JsonSchema;
 use serde::{Deserialize, Deserializer, Serialize};
 
-use super::{Timestamp, execution_policy::redacted_debug};
+use d2b_contracts_resource::v3::{
+    Timestamp,
+    execution_policy::redacted_debug,
+};
 
 /// Canonical EmergencyPolicy ResourceType name.
 pub const EMERGENCY_POLICY_RESOURCE_TYPE: &str = "EmergencyPolicy";

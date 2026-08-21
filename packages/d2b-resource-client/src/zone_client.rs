@@ -16,7 +16,10 @@ use std::{
     time::Duration,
 };
 
-use d2b_contracts_zone_session::v3::{CanonicalJsonObject, ResourceRef};
+use d2b_contracts_resource::v3::{
+    CanonicalJsonObject,
+    ResourceRef,
+};
 
 use crate::{
     AttemptDisposition, CallDriver, CallOptions, ClientError, MethodProfile, ResolvedTarget,
@@ -29,7 +32,9 @@ use crate::{
 /// This is an alias of the contract-owned catalogue rather than a second
 /// client-side enum, so adding or removing a method changes the canonical
 /// service descriptor and this API together.
-pub use d2b_contracts_zone_session::v3::ResourceMethod as ResourceVerb;
+pub use d2b_contracts_zone_session::v3::{
+    ResourceMethod as ResourceVerb,
+};
 
 /// Whether a ResourceService method can change durable Resource state.
 pub const fn resource_verb_is_mutating(verb: ResourceVerb) -> bool {

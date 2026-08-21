@@ -1048,7 +1048,7 @@ fn standard_resource_schemas() -> Vec<(&'static str, Value)> {
         ),
         (
             "Host",
-            dto_resource_schema::<d2b_contracts_zone_session::v3::host::HostSpec>(
+            dto_resource_schema::<d2b_contracts_resource::v3::host::HostSpec>(
                 "Host",
                 "Physical or local execution and policy parent.",
                 true,
@@ -1056,7 +1056,7 @@ fn standard_resource_schemas() -> Vec<(&'static str, Value)> {
         ),
         (
             "Guest",
-            dto_resource_schema::<d2b_contracts_zone_session::v3::guest::GuestSpec>(
+            dto_resource_schema::<d2b_contracts_resource::v3::guest::GuestSpec>(
                 "Guest",
                 "VM, sandbox, cloud, or remote execution parent.",
                 true,
@@ -1064,7 +1064,7 @@ fn standard_resource_schemas() -> Vec<(&'static str, Value)> {
         ),
         (
             "Process",
-            dto_resource_schema::<d2b_contracts_zone_session::v3::process::ProcessSpec>(
+            dto_resource_schema::<d2b_contracts_resource::v3::process::ProcessSpec>(
                 "Process",
                 "Long-lived Provider-managed process.",
                 true,
@@ -1072,7 +1072,7 @@ fn standard_resource_schemas() -> Vec<(&'static str, Value)> {
         ),
         (
             "EphemeralProcess",
-            dto_resource_schema::<d2b_contracts_zone_session::v3::process::EphemeralProcessSpec>(
+            dto_resource_schema::<d2b_contracts_resource::v3::process::EphemeralProcessSpec>(
                 "EphemeralProcess",
                 "One-shot Provider-managed process.",
                 true,
@@ -1080,7 +1080,7 @@ fn standard_resource_schemas() -> Vec<(&'static str, Value)> {
         ),
         (
             "Volume",
-            dto_resource_schema::<d2b_contracts_zone_session::v3::volume::VolumeSpec>(
+            dto_resource_schema::<d2b_contracts_resource::v3::volume::VolumeSpec>(
                 "Volume",
                 "Shareable storage resource with bounded views and attachments.",
                 true,
@@ -1088,7 +1088,7 @@ fn standard_resource_schemas() -> Vec<(&'static str, Value)> {
         ),
         (
             "Network",
-            dto_resource_schema::<d2b_contracts_zone_session::v3::network::NetworkSpec>(
+            dto_resource_schema::<d2b_contracts_resource::v3::network::NetworkSpec>(
                 "Network",
                 "Zone-local network fabric.",
                 true,
@@ -1096,7 +1096,7 @@ fn standard_resource_schemas() -> Vec<(&'static str, Value)> {
         ),
         (
             "Device",
-            dto_resource_schema::<d2b_contracts_zone_session::v3::device::DeviceSpec>(
+            dto_resource_schema::<d2b_contracts_resource::v3::device::DeviceSpec>(
                 "Device",
                 "Inventoried physical or emulated device.",
                 true,
@@ -1104,7 +1104,7 @@ fn standard_resource_schemas() -> Vec<(&'static str, Value)> {
         ),
         (
             "User",
-            dto_resource_schema::<d2b_contracts_zone_session::v3::user::UserSpec>(
+            dto_resource_schema::<d2b_contracts_resource::v3::user::UserSpec>(
                 "User",
                 "Zone-local named operating-system identity.",
                 false,

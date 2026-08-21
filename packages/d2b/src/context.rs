@@ -15,10 +15,15 @@ use std::{
     time::{Duration, Instant},
 };
 
-use d2b_contracts_zone_session::v3::{
-    CanonicalJsonObject, ResourceErrorKind, ResourceRef, ResourceTypeName, RetryClass, ZoneId,
-    identity::STANDARD_RESOURCE_TYPES,
+use d2b_contracts_resource::v3::{
+    CanonicalJsonObject,
+    ResourceErrorKind,
+    ResourceRef,
+    ResourceTypeName,
+    RetryClass,
+    ZoneId,
 };
+use d2b_contracts_resource::v3::identity::STANDARD_RESOURCE_TYPES;
 use d2b_resource_client::{
     CallOptions, CancellationToken, ClientError, ConnectedSession, ConnectedZoneSession,
     MetadataInput, NamedStreamTransport, ProcessAttachClient, ProcessAttachOpenRequest,
@@ -2584,7 +2589,7 @@ mod tests {
                     .expect("canonical response");
             assert_eq!(
                 decoded.get("operation"),
-                Some(&d2b_contracts_zone_session::v3::CanonicalJsonValue::String(
+                Some(&d2b_contracts_resource::v3::CanonicalJsonValue::String(
                     serde_json::to_value(operation)
                         .expect("operation")
                         .as_str()

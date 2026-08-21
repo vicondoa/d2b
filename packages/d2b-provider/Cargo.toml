@@ -10,8 +10,8 @@ workspace = true
 
 [dependencies]
 d2b-contracts-provider = { path = "../d2b-contracts-provider", version = "0.0.0-bootstrap" }
-d2b-contracts-resource = { path = "../d2b-contracts-resource", version = "0.0.0-bootstrap" }
 d2b-contracts-zone-session = { path = "../d2b-contracts-zone-session", version = "0.0.0-bootstrap" }
+d2b-contracts-resource = { path = "../d2b-contracts-resource", version = "0.0.0-bootstrap" }
 # Reused rather than restated: `ZoneRouteEngine::admit_relay_hop` is the one
 # owner of the D040 relay-plus-target-verb hop rule.
 d2b-zone-routing = { path = "../d2b-zone-routing", version = "0.0.0-bootstrap" }

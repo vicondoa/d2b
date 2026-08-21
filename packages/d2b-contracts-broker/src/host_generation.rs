@@ -7,7 +7,7 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
-use d2b_contracts_zone_session::v3::{ActivationMode, ArtifactId, ResourceRef};
+use d2b_contracts_resource::v3::{ActivationMode, ArtifactId, ResourceRef};
 
 /// Canonical broker operation name for an activation handoff.
 pub const APPLY_HOST_GENERATION_HANDOFF: &str = "ApplyHostGenerationHandoff";

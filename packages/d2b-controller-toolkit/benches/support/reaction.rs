@@ -12,9 +12,17 @@ use d2b_bus::{
     BusConfig, OperationId, OperationSpec, ReceivedFrame, ResourceCall, ResourceQuery, StreamError,
     StreamLimits, StreamName, router::production_rss::ProductionWatchHarness,
 };
-use d2b_contracts_zone_session::v3::{
-    CanonicalJsonValue, ConfigurationGeneration, RESOURCE_ENVELOPE_DOMAIN_TAG, ResourceRef,
-    ResourceTypeName, ResourceUid, Timestamp, ZoneId, ZoneRevision, canonical_digest,
+use d2b_contracts_resource::v3::{
+    CanonicalJsonValue,
+    ConfigurationGeneration,
+    RESOURCE_ENVELOPE_DOMAIN_TAG,
+    ResourceRef,
+    ResourceTypeName,
+    ResourceUid,
+    Timestamp,
+    ZoneId,
+    ZoneRevision,
+    canonical_digest,
 };
 use d2b_resource_api::watch::{WatchPumpError, WatchService};
 use d2b_resource_store::mutation_seal::{MutationSealBody, MutationSealIssuer, mutation_seal_pair};

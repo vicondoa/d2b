@@ -7,7 +7,7 @@ use d2b_contracts_broker::broker_wire::{
 use d2b_contracts_control::public_wire::{
     HostCutoverOperation, HostCutoverRequest, HostCutoverResetScope,
 };
-use d2b_contracts_zone_session::v3::ArtifactId;
+use d2b_contracts_resource::v3::ArtifactId;
 
 #[test]
 fn public_cutover_request_round_trips_without_path_fields() {

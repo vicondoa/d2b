@@ -3,9 +3,11 @@
 use std::collections::VecDeque;
 
 use d2b_contracts_zone_session::v3::{
+    zone_routing::{ZoneLabelId, ZonePath},
+};
+use d2b_contracts_resource::v3::{
     ResourceRef,
     execution_policy::BoundedToken,
-    zone_routing::{ZoneLabelId, ZonePath},
 };
 use d2b_provider_toolkit::{ProviderAgentAuditEvent as ToolkitAuditEvent, ProviderAgentAuditLog};
 use serde::{Serialize, Serializer, ser::SerializeStruct};
@@ -96,7 +98,7 @@ fn redact_identity(value: &str) -> String {
     }) {
         value.to_owned()
     } else {
-        d2b_contracts_zone_session::v3::canonical_digest(
+        d2b_contracts_resource::v3::canonical_digest(
             "d2b:telemetry-redaction:v1",
             value.as_bytes(),
         )

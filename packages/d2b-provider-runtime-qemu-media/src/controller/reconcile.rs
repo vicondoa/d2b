@@ -11,7 +11,7 @@ use crate::{
     qmp::QmpVmStatus,
     types::{GuestProviderSpecSettings, GuestSpecError},
 };
-use d2b_contracts_zone_session::v3::ResourceRef;
+use d2b_contracts_resource::v3::ResourceRef;
 use std::marker::PhantomData;
 
 /// QEMU media lifecycle phase.

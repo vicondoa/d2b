@@ -5,10 +5,12 @@
 //! root, not under `meta/`. The guest is served the farm at `live/`; it
 //! is never served the host store.
 
-use d2b_contracts_zone_session::v3::ResourceUid;
-use d2b_contracts_zone_session::v3::execution_policy::BoundedToken;
-use d2b_contracts_zone_session::v3::volume::{
+use d2b_contracts_resource::v3::ResourceUid;
+use d2b_contracts_resource::v3::execution_policy::BoundedToken;
+use d2b_contracts_resource::v3::{
+    volume::{
     AttachmentAccess, CleanupPolicy, EntryType, LayoutEntry, VolumeSpec,
+},
 };
 
 use crate::error::VolumeLocalError;

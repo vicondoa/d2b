@@ -1,4 +1,4 @@
-use d2b_contracts_zone_session::v3::ResourceRef;
+use d2b_contracts_resource::v3::ResourceRef;
 use d2b_provider_audio_pipewire::{
     AudioBindingSpec, AudioServiceRole, AudioServiceSpec, ProviderExtension,
     validate_audio_binding, validate_audio_service,

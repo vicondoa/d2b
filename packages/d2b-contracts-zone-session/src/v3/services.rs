@@ -8,10 +8,11 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Deserializer, Serialize};
 use sha2::{Digest, Sha256};
 
-use super::{
-    SchemaFingerprint, ServiceName,
+use d2b_contracts_resource::v3::{
+    SchemaFingerprint,
     execution_policy::{BoundedText, redacted_debug},
 };
+use d2b_contracts_resource::v3::identity::ServiceName;
 
 /// Maximum methods in one service descriptor.
 pub const MAX_SERVICE_METHODS: usize = 64;
@@ -354,7 +355,7 @@ impl AuditSegment {
 
 /// Strictly reject an unknown field from a canonical wire object.
 pub fn strict_service_object(
-    value: &super::CanonicalJsonObject,
+    value: &d2b_contracts_resource::v3::CanonicalJsonObject,
     allowed: &[&str],
 ) -> Result<(), ServiceDescriptorError> {
     if value.keys().all(|key| allowed.contains(&key)) {

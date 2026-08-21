@@ -6,8 +6,13 @@
 
 use std::collections::BTreeSet;
 
-use d2b_contracts_zone_session::v3::{
-    MAX_BATCH_MUTATIONS, MarkerStatus, ResourceRef, ResourceUid, SchemaVersion, StateSchemaPhase,
+use d2b_contracts_resource::v3::{
+    MAX_BATCH_MUTATIONS,
+    MarkerStatus,
+    ResourceRef,
+    ResourceUid,
+    SchemaVersion,
+    StateSchemaPhase,
 };
 
 /// Observed phase of one migration EphemeralProcess.

@@ -1,7 +1,9 @@
 use std::fmt;
 
 use async_trait::async_trait;
-use d2b_contracts_zone_session::v3::component_session::{Locality, TransportClass};
+use d2b_contracts_zone_session::v3::{
+    component_session::{Locality, TransportClass},
+};
 use d2b_session::{
     OwnedTransport, TransportDescriptor, TransportError, TransportPacket, TransportReader,
     TransportWriter,

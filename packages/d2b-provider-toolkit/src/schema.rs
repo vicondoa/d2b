@@ -1,6 +1,6 @@
 //! Canonical root configuration schema emission.
 
-use d2b_contracts_zone_session::v3::canonical_json_bytes;
+use d2b_contracts_resource::v3::canonical_json_bytes;
 
 /// The root JSON Schema written to a Provider artifact.
 ///

@@ -10,7 +10,11 @@ use std::collections::BTreeMap;
 
 use async_trait::async_trait;
 use d2b_contracts_resource::resource_proto as wire;
-use d2b_contracts_zone_session::v3::{ResourceGeneration, ResourceRef, ResourceUid};
+use d2b_contracts_resource::v3::{
+    ResourceGeneration,
+    ResourceRef,
+    ResourceUid,
+};
 use d2b_resource_api::{RedbBackend, ResourceApiClient, service::UnavailableUpgradeDispatcher};
 use protobuf::{EnumOrUnknown, MessageField};
 use serde_json::Value;

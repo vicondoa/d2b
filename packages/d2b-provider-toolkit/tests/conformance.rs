@@ -11,12 +11,10 @@ use std::{
 };
 
 use d2b_contracts_provider::v3::{
+    provider::{ArtifactDigest, ArtifactDigestSet, CompatibilityRange, ComponentDescriptor, ComponentType, PolicyEvaluation, ProviderManifest, ResourceApiBinding, RevocationState, SignatureState, StandardCapabilityMatrix, TrustEvidence, UpgradeDisposition, UpgradePolicy},
+};
+use d2b_contracts_resource::v3::{
     execution_policy::{BoundedToken, ExecutionDomain},
-    provider::{
-        ArtifactDigest, ArtifactDigestSet, CompatibilityRange, ComponentDescriptor, ComponentType,
-        PolicyEvaluation, ProviderManifest, ResourceApiBinding, RevocationState, SignatureState,
-        StandardCapabilityMatrix, TrustEvidence, UpgradeDisposition, UpgradePolicy,
-    },
 };
 use d2b_contracts_resource::v3::{
     ArtifactId,

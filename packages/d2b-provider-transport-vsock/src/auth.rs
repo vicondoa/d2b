@@ -5,7 +5,10 @@ use d2b_contracts_control::guest_auth::{
     AUTH_NONCE_LEN, AuthDirection, AuthPurpose, GUEST_CONTROL_AUTH_PORT, GuestAuthTranscript,
     ProofRole, encode_transcript,
 };
-use d2b_contracts_zone_session::v3::{ResourceRef, ZoneId};
+use d2b_contracts_resource::v3::{
+    ResourceRef,
+    ZoneId,
+};
 use ring::hmac;
 use std::{collections::HashSet, fmt};
 

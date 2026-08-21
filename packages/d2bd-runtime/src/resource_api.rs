@@ -1,6 +1,13 @@
-use d2b_contracts_zone_session::v3::{
-    DEFAULT_LIST_PAGE_SIZE, MAX_FILTER_VALUES, MAX_LIST_FILTERS, MAX_LIST_PAGE_SIZE,
-    MAX_LIST_RESOURCE_TYPES, MAX_PAGE_CURSOR_BYTES, ResourceErrorKind, ResourceName, ResourceRef,
+use d2b_contracts_resource::v3::{
+    DEFAULT_LIST_PAGE_SIZE,
+    MAX_FILTER_VALUES,
+    MAX_LIST_FILTERS,
+    MAX_LIST_PAGE_SIZE,
+    MAX_LIST_RESOURCE_TYPES,
+    MAX_PAGE_CURSOR_BYTES,
+    ResourceErrorKind,
+    ResourceName,
+    ResourceRef,
     ResourceTypeName,
 };
 use d2b_resource_store::{StoreFilter, StoreProjection};

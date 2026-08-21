@@ -22,9 +22,17 @@ use d2b_contracts_control::public_wire::{
     self, MutatingVerbOutcome, MutatingVerbResponse, MutationFlags,
 };
 use d2b_contracts_resource::resource_proto as wire;
-use d2b_contracts_zone_session::v3::{
-    ActivationDetail, ActivationMode, ActivationOutcomeCode, CanonicalJsonValue,
-    NixosGenerationSpec, ResourceEnvelope, ResourcePhase, ResourceRef, ResourceTypeName, ZoneId,
+use d2b_contracts_resource::v3::{
+    ActivationDetail,
+    ActivationMode,
+    ActivationOutcomeCode,
+    CanonicalJsonValue,
+    NixosGenerationSpec,
+    ResourceEnvelope,
+    ResourcePhase,
+    ResourceRef,
+    ResourceTypeName,
+    ZoneId,
     ZoneRevision,
 };
 use d2b_provider_activation_nixos::{
@@ -1059,11 +1067,11 @@ mod tests {
         let resource = StoredResource {
             resource_ref,
             zone: ZoneId::parse("dev").expect("zone"),
-            uid: d2b_contracts_zone_session::v3::ResourceUid::parse(
+            uid: d2b_contracts_resource::v3::ResourceUid::parse(
                 "123e4567-e89b-42d3-a456-426614174000",
             )
             .expect("uid"),
-            generation: d2b_contracts_zone_session::v3::ResourceGeneration::new(1)
+            generation: d2b_contracts_resource::v3::ResourceGeneration::new(1)
                 .expect("generation"),
             revision: ZoneRevision::new(1),
             canonical_json: Vec::new(),

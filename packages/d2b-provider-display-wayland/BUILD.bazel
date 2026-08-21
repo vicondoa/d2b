@@ -20,6 +20,7 @@ rust_library(
         "//packages/d2b-contracts:d2b_contracts",
         "//packages/d2b-contracts-control:d2b_contracts_control",
         "//packages/d2b-core:d2b_core",
+        "//packages/d2b-contracts-resource:d2b_contracts_resource",
         "//packages/d2b-contracts-zone-session:d2b_contracts_zone_session",
         "//packages/d2b-realm-core:d2b_realm_core",
         "//packages/d2b-provider-toolkit:d2b_provider_toolkit",
@@ -50,6 +51,7 @@ rust_library(
         "//packages/d2b-contracts:d2b_contracts_test_support",
         "//packages/d2b-contracts-control:d2b_contracts_control",
         "//packages/d2b-core:d2b_core",
+        "//packages/d2b-contracts-resource:d2b_contracts_resource",
         "//packages/d2b-contracts-zone-session:d2b_contracts_zone_session",
         "//packages/d2b-realm-core:d2b_realm_core",
         "//packages/d2b-provider-toolkit:d2b_provider_toolkit_test_support",
@@ -72,6 +74,7 @@ rust_test(
     compile_data = ["Cargo.toml"],
     visibility = ["//visibility:public"],
     deps = [
+        "//packages/d2b-contracts-resource:d2b_contracts_resource",
         "//packages/d2b-contracts-zone-session:d2b_contracts_zone_session",
         ":d2b_provider_display_wayland",
     ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
@@ -85,6 +88,7 @@ rust_test(
     compile_data = ["Cargo.toml"],
     visibility = ["//visibility:public"],
     deps = [
+        "//packages/d2b-contracts-resource:d2b_contracts_resource",
         "//packages/d2b-contracts-zone-session:d2b_contracts_zone_session",
         ":d2b_provider_display_wayland",
     ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
@@ -98,6 +102,7 @@ rust_test(
     compile_data = ["Cargo.toml"],
     visibility = ["//visibility:public"],
     deps = [
+        "//packages/d2b-contracts-resource:d2b_contracts_resource",
         "//packages/d2b-contracts-zone-session:d2b_contracts_zone_session",
         ":d2b_provider_display_wayland_test_support",
     ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
@@ -111,6 +116,7 @@ rust_test(
     compile_data = ["Cargo.toml"],
     visibility = ["//visibility:public"],
     deps = [
+        "//packages/d2b-contracts-resource:d2b_contracts_resource",
         "//packages/d2b-contracts-zone-session:d2b_contracts_zone_session",
         ":d2b_provider_display_wayland",
     ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),

@@ -1,5 +1,8 @@
 use async_trait::async_trait;
-use d2b_contracts_zone_session::v3::{ResourceRef, ZoneId};
+use d2b_contracts_resource::v3::{
+    ResourceRef,
+    ZoneId,
+};
 use d2b_provider_transport_vsock::{
     GuestControlKey, GuestIdentity, NativeGuestRelay, PeerCid, RelayBinding, RelayEffectError,
     RelayEffectPort, RelayObservation, RelayPhase, SessionAuthority, SessionProof,

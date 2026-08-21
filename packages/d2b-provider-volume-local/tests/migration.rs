@@ -1,5 +1,5 @@
 use d2b_contracts_provider::v3::credential::CredentialLeaseState;
-use d2b_contracts_zone_session::v3::SchemaVersion;
+use d2b_contracts_resource::v3::SchemaVersion;
 use d2b_provider_volume_local::marker::MarkerDisposition;
 use d2b_provider_volume_local::migration::{
     MigrationAction, MigrationError, MigrationPhase, MigrationState, recover_after_restart,

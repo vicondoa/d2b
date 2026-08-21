@@ -7,8 +7,8 @@
 //! cells hold Host and Guest to the same status shape, and hold the user
 //! domain to the same exact-identity requirement under both parents.
 
-use d2b_contracts_zone_session::v3::ResourceRef;
-use d2b_contracts_zone_session::v3::execution_policy::ExecutionDomain;
+use d2b_contracts_resource::v3::ResourceRef;
+use d2b_contracts_resource::v3::execution_policy::ExecutionDomain;
 use d2b_process_conformance::testing::{PortCall, ScriptedEffectPort, block_on, fixtures};
 use d2b_process_conformance::{
     AdoptionCondition, AdoptionOutcome, IdentityBinding, ProcessConformanceError, ProcessProvider,

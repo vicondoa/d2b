@@ -6,8 +6,14 @@
 //! or alter the projection protocol independently of Core.
 
 use d2b_contracts_provider::v3::{
-    ExtensionSchemaRegistration, ProjectionFactory, ProviderContractError, ResourceApiBinding,
-    SemanticContractError, SemanticFamily, SemanticTypeContract, StandardCapabilityMatrix,
+    ExtensionSchemaRegistration,
+    ProjectionFactory,
+    ProviderContractError,
+    ResourceApiBinding,
+    SemanticContractError,
+    SemanticFamily,
+    SemanticTypeContract,
+    StandardCapabilityMatrix,
 };
 use d2b_contracts_resource::v3::ResourceSpec;
 use serde::{Deserialize, Deserializer, Serialize};
@@ -80,12 +86,12 @@ impl SecurityKeySemanticDescriptor {
     /// Return the catalog's projection schema fingerprint.
     pub const fn projection_schema_fingerprint(
         &self,
-    ) -> &d2b_contracts_zone_session::v3::SchemaFingerprint {
+    ) -> &d2b_contracts_resource::v3::SchemaFingerprint {
         self.projection_factory.projection_schema_fingerprint()
     }
 
     /// Return the catalog's semantic factory fingerprint.
-    pub const fn factory_fingerprint(&self) -> &d2b_contracts_zone_session::v3::SchemaFingerprint {
+    pub const fn factory_fingerprint(&self) -> &d2b_contracts_resource::v3::SchemaFingerprint {
         self.projection_factory.factory_fingerprint()
     }
 
@@ -170,7 +176,7 @@ pub fn security_key_projection_factory() -> Result<ProjectionFactory, ProviderCo
 
 /// Borrow the catalog-derived security-key projection schema fingerprint.
 pub fn security_key_projection_schema_fingerprint()
--> Result<&'static d2b_contracts_zone_session::v3::SchemaFingerprint, ProviderContractError> {
+-> Result<&'static d2b_contracts_resource::v3::SchemaFingerprint, ProviderContractError> {
     Ok(SemanticFamily::SecurityKey
         .contract()
         .projection()
@@ -179,7 +185,7 @@ pub fn security_key_projection_schema_fingerprint()
 
 /// Borrow the catalog-derived security-key factory fingerprint.
 pub fn security_key_factory_fingerprint()
--> Result<&'static d2b_contracts_zone_session::v3::SchemaFingerprint, ProviderContractError> {
+-> Result<&'static d2b_contracts_resource::v3::SchemaFingerprint, ProviderContractError> {
     Ok(SemanticFamily::SecurityKey
         .contract()
         .projection()

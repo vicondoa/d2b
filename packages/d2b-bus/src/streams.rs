@@ -804,7 +804,7 @@ impl std::error::Error for StreamError {}
 #[cfg(test)]
 mod tests {
     use super::*;
-    use d2b_contracts_zone_session::v3::ResourceUid;
+    use d2b_contracts_resource::v3::ResourceUid;
     use tokio::sync::{Barrier, mpsc};
 
     #[derive(Default)]

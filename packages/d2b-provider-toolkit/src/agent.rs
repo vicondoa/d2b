@@ -8,8 +8,13 @@
 use std::sync::Mutex;
 
 use d2b_contracts_zone_session::v3::{
-    CanonicalJsonObject, ResourceRef, component_session::RequestId, execution_policy::BoundedToken,
+    component_session::RequestId,
     zone_routing::ZonePath,
+};
+use d2b_contracts_resource::v3::{
+    CanonicalJsonObject,
+    ResourceRef,
+    execution_policy::BoundedToken,
 };
 use d2b_session::{Cancellation, ComponentSessionDriver};
 
@@ -315,7 +320,10 @@ impl ProviderAgentProcess {
 mod tests {
     use super::*;
     use d2b_contracts_zone_session::v3::zone_routing::ZoneLabelId;
-    use d2b_contracts_zone_session::v3::{ResourceName, ResourceTypeName};
+    use d2b_contracts_resource::v3::{
+    ResourceName,
+    ResourceTypeName,
+};
 
     struct Echo;
 

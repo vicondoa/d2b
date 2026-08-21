@@ -3,8 +3,10 @@ use crate::{
     error::{UnixSessionError, io_error},
     pidfd::{PidfdEvidence, PidfdIdentityVerifier, verify_pidfd},
 };
-use d2b_contracts_zone_session::v3::component_session::{
+use d2b_contracts_zone_session::v3::{
+    component_session::{
     AttachmentAccess, AttachmentKind, AttachmentPacket, AttachmentPolicy, KernelObjectType,
+},
 };
 use d2b_session::OwnedAttachment;
 use rustix::{

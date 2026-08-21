@@ -19,7 +19,7 @@ use d2b_contracts_broker::broker_wire::{
     BrokerCallerRole, BrokerRequest, BrokerResponse, RunnerRole, SpawnRunnerRequest,
     UsbipBindRequest, UsbipUnbindRequest,
 };
-use d2b_contracts_zone_session::v3::ResourceUid;
+use d2b_contracts_resource::v3::ResourceUid;
 use d2b_provider_device_usbip::{
     AttachProcessIdentity, AttachmentObservation, BindingIdentity, BindingLifecycleError,
     BindingProxyLease, BindingSlotLease, OwnedBusBinding, PhysicalAuthorityLease, ProductionPort,
@@ -587,7 +587,7 @@ mod tests {
     #[test]
     fn guest_control_must_be_injected_for_detach() {
         let binding = BindingIdentity::from_controller(
-            d2b_contracts_zone_session::v3::ResourceUid::parse(
+            d2b_contracts_resource::v3::ResourceUid::parse(
                 "123e4567-e89b-42d3-a456-426614174000",
             )
             .unwrap(),

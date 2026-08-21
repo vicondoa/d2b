@@ -14,7 +14,11 @@ use std::{
     process::ExitCode,
 };
 
-use d2b_contracts_provider::v3::{ArtifactDigest, ProviderManifest, semantic_services::catalog};
+use d2b_contracts_provider::v3::{
+    ArtifactDigest,
+    ProviderManifest,
+    semantic_services::catalog,
+};
 use d2b_contracts_resource::v3::{
     ArtifactId, CanonicalJsonValue, NIXOS_GENERATION_RESOURCE_TYPE, canonical_json_bytes,
     framed_canonical_digest, identity::STANDARD_RESOURCE_TYPES, is_canonical_digest,

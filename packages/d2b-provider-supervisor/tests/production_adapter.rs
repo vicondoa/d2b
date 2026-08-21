@@ -536,10 +536,10 @@ fn broker_backend_uses_the_production_spawn_wire_and_pidfd_handoff() {
             pidfd_index: 0,
             console_fd_index: None,
             execution_ref: Some(
-                d2b_contracts_zone_session::v3::ResourceRef::parse("Guest/corp-vm").unwrap(),
+                d2b_contracts_resource::v3::ResourceRef::parse("Guest/corp-vm").unwrap(),
             ),
             execution_domain: Some(
-                d2b_contracts_zone_session::v3::execution_policy::ExecutionDomain::System,
+                d2b_contracts_resource::v3::execution_policy::ExecutionDomain::System,
             ),
             user_ref: None,
             provider_identity: Some([0x11; 32]),
@@ -561,8 +561,8 @@ fn broker_backend_uses_the_production_spawn_wire_and_pidfd_handoff() {
 
     let intent = BrokerLaunchIntent {
         vm_id,
-        execution_ref: d2b_contracts_zone_session::v3::ResourceRef::parse("Guest/corp-vm").unwrap(),
-        domain: d2b_contracts_zone_session::v3::execution_policy::ExecutionDomain::System,
+        execution_ref: d2b_contracts_resource::v3::ResourceRef::parse("Guest/corp-vm").unwrap(),
+        domain: d2b_contracts_resource::v3::execution_policy::ExecutionDomain::System,
         user_ref: None,
         role_id,
         role: RunnerRole::Virtiofsd,
@@ -570,9 +570,9 @@ fn broker_backend_uses_the_production_spawn_wire_and_pidfd_handoff() {
         provider_identity: [0x11; 32],
         template_identity: [0x22; 32],
         generation: 1,
-        resource_ref: d2b_contracts_zone_session::v3::ResourceRef::parse("Process/corp-vm-worker")
+        resource_ref: d2b_contracts_resource::v3::ResourceRef::parse("Process/corp-vm-worker")
             .unwrap(),
-        resource_uid: d2b_contracts_zone_session::v3::ResourceUid::parse(
+        resource_uid: d2b_contracts_resource::v3::ResourceUid::parse(
             "123e4567-e89b-42d3-a456-426614174000",
         )
         .unwrap(),
@@ -761,10 +761,15 @@ impl ProcessEffectBackend for ParallelLaunchBackend {
 }
 
 fn parallel_ticket(index: usize) -> d2b_process::LaunchTicket {
-    use d2b_contracts_zone_session::v3::execution_policy::{BoundedToken, ExecutionDomain};
-    use d2b_contracts_zone_session::v3::{
-        ControllerGeneration, ResourceGeneration, ResourceRef, ResourceUid,
-    };
+    use d2b_contracts_resource::v3::{
+    execution_policy::{BoundedToken, ExecutionDomain},
+};
+    use d2b_contracts_resource::v3::{
+    ControllerGeneration,
+    ResourceGeneration,
+    ResourceRef,
+    ResourceUid,
+};
     use d2b_process::{LaunchTicket, OperationBinding};
 
     let uid = ResourceUid::parse(format!("123e4567-e89b-42d3-a456-42661417{index:04x}"))

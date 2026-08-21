@@ -1,9 +1,21 @@
 use std::collections::BTreeMap;
 
 use d2b_contracts_zone_session::v3::{
-    BundleMetadata, BundleResource, CanonicalJsonObject, ResourceBundleGenerationId, ResourceName,
-    ResourceTypeName, ResourceUid, SchemaFingerprint, Timestamp, ZoneBundle, ZoneBundleError,
-    ZoneId, ZoneRevision,
+    BundleMetadata,
+    BundleResource,
+    ZoneBundle,
+    ZoneBundleError,
+};
+use d2b_contracts_resource::v3::{
+    CanonicalJsonObject,
+    ResourceBundleGenerationId,
+    ResourceName,
+    ResourceTypeName,
+    ResourceUid,
+    SchemaFingerprint,
+    Timestamp,
+    ZoneId,
+    ZoneRevision,
 };
 use d2b_core_controller::{
     audit::{AuditEventKind, AuditReason},

@@ -7,8 +7,10 @@
 use schemars::JsonSchema;
 use serde::{Deserialize, Deserializer, Serialize};
 
-use super::{
-    ResourceGeneration, ResourceRef, SchemaFingerprint,
+use d2b_contracts_resource::v3::{
+    ResourceGeneration,
+    ResourceRef,
+    SchemaFingerprint,
     execution_policy::{BoundedText, redacted_debug},
 };
 use d2b_contracts_resource::v3::identity::ServiceName;

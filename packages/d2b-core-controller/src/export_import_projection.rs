@@ -10,8 +10,14 @@ use std::collections::BTreeSet;
 
 use d2b_contracts_provider::v3::SemanticProjectionProtocolVersion;
 use d2b_contracts_zone_session::v3::{
-    FinalizerId, RESOURCE_IMPORT_DRAIN_FINALIZER, ResourceImportConditionType, ResourceRef,
-    ResourceTypeName, SchemaFingerprint,
+    RESOURCE_IMPORT_DRAIN_FINALIZER,
+    ResourceImportConditionType,
+};
+use d2b_contracts_resource::v3::{
+    FinalizerId,
+    ResourceRef,
+    ResourceTypeName,
+    SchemaFingerprint,
 };
 
 use crate::export_import::{AdmittedImport, ProjectionServiceIdentity};
@@ -906,12 +912,22 @@ impl core::fmt::Debug for ProjectionController {
 #[cfg(test)]
 mod tests {
     use d2b_contracts_provider::v3::{
-        BindingTargetType, Exportability, SemanticProjectionProtocolVersion,
-    };
+    BindingTargetType,
+    Exportability,
+    SemanticProjectionProtocolVersion,
+};
     use d2b_contracts_zone_session::v3::{
-        ConsumerZonePolicy, ExportArbitration, ResourceExportSpec, ResourceImportSpec,
-        ResourceName, ResourceTypeName, SchemaFingerprint, execution_policy::BoundedToken,
-    };
+    ConsumerZonePolicy,
+    ExportArbitration,
+    ResourceExportSpec,
+    ResourceImportSpec,
+};
+use d2b_contracts_resource::v3::{
+    ResourceName,
+    ResourceTypeName,
+    SchemaFingerprint,
+    execution_policy::BoundedToken,
+};
 
     use super::*;
     use crate::export_import::admit_import;
@@ -943,7 +959,7 @@ mod tests {
             vec![BoundedToken::parse("use").unwrap()],
             ExportArbitration::Exclusive,
             ConsumerZonePolicy::new(
-                vec![d2b_contracts_zone_session::v3::ZoneId::parse("child").unwrap()],
+                vec![d2b_contracts_resource::v3::ZoneId::parse("child").unwrap()],
                 vec![BoundedToken::parse("use").unwrap()],
             )
             .unwrap(),

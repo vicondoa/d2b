@@ -21,7 +21,12 @@ use std::{
     ops::{Deref, DerefMut},
 };
 
-use super::{ResourceRef, ResourceUid, SessionPurpose, ZoneId};
+use d2b_contracts_resource::v3::{
+    ResourceRef,
+    ResourceUid,
+    ZoneId,
+};
+use d2b_contracts_resource::v3::identity::SessionPurpose;
 
 pub const PREFACE_LEN: usize = 16;
 pub const PREFACE_MAGIC: [u8; 8] = *b"D2BCS3\r\n";

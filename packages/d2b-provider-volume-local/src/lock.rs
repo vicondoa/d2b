@@ -6,8 +6,8 @@
 
 use std::fmt;
 
-use d2b_contracts_zone_session::v3::ResourceUid;
-use d2b_contracts_zone_session::v3::execution_policy::BoundedToken;
+use d2b_contracts_resource::v3::ResourceUid;
+use d2b_contracts_resource::v3::execution_policy::BoundedToken;
 
 /// Maximum lock acquisition deadline admitted by this Provider.
 pub const MAX_LOCK_DEADLINE_MS: u64 = 60_000;

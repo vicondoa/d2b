@@ -10,9 +10,14 @@ use std::pin::pin;
 use std::sync::Mutex;
 use std::task::{Context, Poll, Waker};
 
-use d2b_contracts_zone_session::v3::execution_policy::{BoundedToken, ExecutionDomain};
-use d2b_contracts_zone_session::v3::{
-    ControllerGeneration, ResourceGeneration, ResourceRef, ResourceUid,
+use d2b_contracts_resource::v3::{
+    execution_policy::{BoundedToken, ExecutionDomain},
+};
+use d2b_contracts_resource::v3::{
+    ControllerGeneration,
+    ResourceGeneration,
+    ResourceRef,
+    ResourceUid,
 };
 
 use crate::error::ProcessConformanceError;

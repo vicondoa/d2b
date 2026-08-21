@@ -7,8 +7,11 @@
 use schemars::JsonSchema;
 use serde::{Deserialize, Deserializer, Serialize};
 
-use super::{
-    ResourceName, ResourceRef, ResourceTypeName, ZoneId,
+use d2b_contracts_resource::v3::{
+    ResourceName,
+    ResourceRef,
+    ResourceTypeName,
+    ZoneId,
     execution_policy::{BoundedText, redacted_debug},
 };
 
@@ -444,14 +447,14 @@ pub enum RoleConditionType {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct RoleStatusResource {
     active_binding_count: u32,
-    last_validated_at: Option<super::Timestamp>,
+    last_validated_at: Option<d2b_contracts_resource::v3::Timestamp>,
 }
 
 impl RoleStatusResource {
     /// Construct Role status.
     pub const fn new(
         active_binding_count: u32,
-        last_validated_at: Option<super::Timestamp>,
+        last_validated_at: Option<d2b_contracts_resource::v3::Timestamp>,
     ) -> Self {
         Self {
             active_binding_count,
@@ -465,7 +468,7 @@ impl RoleStatusResource {
     }
 
     /// Borrow last validation time.
-    pub const fn last_validated_at(&self) -> Option<&super::Timestamp> {
+    pub const fn last_validated_at(&self) -> Option<&d2b_contracts_resource::v3::Timestamp> {
         self.last_validated_at.as_ref()
     }
 }

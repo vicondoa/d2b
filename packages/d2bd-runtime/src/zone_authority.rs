@@ -1,7 +1,7 @@
 use std::collections::BTreeSet;
 use std::sync::{Arc, Mutex};
 
-use d2b_contracts_zone_session::v3::ZoneId;
+use d2b_contracts_resource::v3::ZoneId;
 use d2b_core::bundle_resolver::BundleResolver;
 use d2b_core_controller::coordinator::{CoordinatorError, ZoneCoordinator};
 

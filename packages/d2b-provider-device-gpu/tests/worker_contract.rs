@@ -1,4 +1,4 @@
-use d2b_contracts_zone_session::v3::ResourceUid;
+use d2b_contracts_resource::v3::ResourceUid;
 use d2b_provider_device_gpu::{
     GpuComponentDescriptor, GpuDeviceNode, GpuSettings, GpuStatus, GpuStatusPhase, GpuWorkerSpec,
     VideoWorkerSpec,

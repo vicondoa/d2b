@@ -36,8 +36,10 @@
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU8, Ordering};
 
-use d2b_contracts_zone_session::v3::component_session::{
+use d2b_contracts_zone_session::v3::{
+    component_session::{
     CloseReason, Remediation, RequestId, SessionErrorCode,
+},
 };
 use d2b_session::{Cancellation, ComponentSessionDriver, StreamId};
 

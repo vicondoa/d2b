@@ -175,7 +175,7 @@ fn validate_observation_value(
                 if !(value.is_null()
                     || value
                         .as_str()
-                        .is_some_and(super::resource_schema::is_canonical_digest))
+                        .is_some_and(d2b_contracts_resource::v3::resource_schema::is_canonical_digest))
                 {
                     return Err(TelemetryFrameError::ResourceAttributeInvalid);
                 }
@@ -372,7 +372,7 @@ fn redact_value(value: &mut Value, key: Option<&str>, redact_sensitive_signal: b
             return;
         }
         let bytes = serde_json::to_vec(value).unwrap_or_default();
-        *value = Value::String(super::resource_schema::canonical_digest(
+        *value = Value::String(d2b_contracts_resource::v3::resource_schema::canonical_digest(
             "d2b:telemetry-redaction:v1",
             &bytes,
         ));
@@ -393,7 +393,7 @@ fn redact_value(value: &mut Value, key: Option<&str>, redact_sensitive_signal: b
             if (redact_sensitive_signal && !is_semantic_key(key.unwrap_or_default()))
                 && !is_canonical_digest(text) =>
         {
-            *text = super::resource_schema::canonical_digest(
+            *text = d2b_contracts_resource::v3::resource_schema::canonical_digest(
                 "d2b:telemetry-redaction:v1",
                 text.as_bytes(),
             );
@@ -435,7 +435,7 @@ fn valid_semantic_name(value: &str) -> bool {
         && value.bytes().all(|byte| {
             byte.is_ascii_lowercase() || byte.is_ascii_digit() || matches!(byte, b'.' | b'_' | b'-')
         })
-        && !super::resource_schema::is_canonical_digest(value)
+        && !d2b_contracts_resource::v3::resource_schema::is_canonical_digest(value)
 }
 
 fn is_semantic_key(key: &str) -> bool {
@@ -465,7 +465,7 @@ fn is_semantic_key(key: &str) -> bool {
 }
 
 fn is_canonical_digest(value: &str) -> bool {
-    super::resource_schema::is_canonical_digest(value)
+    d2b_contracts_resource::v3::resource_schema::is_canonical_digest(value)
 }
 
 fn json_kind(value: &Value) -> &'static str {

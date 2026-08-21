@@ -21,8 +21,8 @@
 //!
 //! An authorization verdict is an **input**. The client never mints, infers, or
 //! presents authority: a peer refusal arrives as [`ClientError::Remote`]
-//! carrying the canonical [`d2b_contracts_zone_session::v3::ResourceErrorKind`] and
-//! [`d2b_contracts_zone_session::v3::RetryClass`], and a `Never` or `Reauthorize` verdict is
+//! carrying the canonical [`d2b_contracts_resource::v3::ResourceErrorKind`] and
+//! [`d2b_contracts_resource::v3::RetryClass`], and a `Never` or `Reauthorize` verdict is
 //! terminal regardless of the remaining retry budget.
 //!
 //! # What this crate deliberately does not contain

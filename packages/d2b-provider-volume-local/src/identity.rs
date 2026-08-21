@@ -9,7 +9,7 @@ use std::fmt;
 use serde::Serialize;
 use sha2::{Digest, Sha256};
 
-use d2b_contracts_zone_session::v3::ResourceUid;
+use d2b_contracts_resource::v3::ResourceUid;
 
 /// The opaque public identity of one layout entry.
 ///

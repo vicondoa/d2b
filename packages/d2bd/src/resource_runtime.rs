@@ -43,13 +43,26 @@ use d2b_contracts_broker::broker_wire::ZoneStoreDisposition;
 use d2b_contracts_provider::v3::provider::ProviderSpec;
 use d2b_contracts_resource::resource_proto as wire;
 #[cfg(test)]
-use d2b_contracts_zone_session::v3::{ConfigurationGeneration, ControllerGeneration};
-use d2b_contracts_zone_session::v3::{
-    ResourceEnvelope, ResourceGeneration, ResourceName, ResourcePhase, ResourceRef,
-    ResourceTypeName, ResourceUid, ZoneId, ZoneRevision, ZoneStatusResource,
-    resource_bundle::ResourceBundle,
+use d2b_contracts_resource::v3::{
+    ConfigurationGeneration,
+    ControllerGeneration,
 };
 use d2b_contracts_zone_session::v3::{
+    ZoneStatusResource,
+    resource_bundle::ResourceBundle,
+};
+use d2b_contracts_resource::v3::{
+    ResourceEnvelope,
+    ResourceGeneration,
+    ResourceName,
+    ResourcePhase,
+    ResourceRef,
+    ResourceTypeName,
+    ResourceUid,
+    ZoneId,
+    ZoneRevision,
+};
+use d2b_contracts_resource::v3::{
     host::{HOST_PROVIDER_REF, HostSpec},
     user::UserSpec,
 };
@@ -1249,7 +1262,7 @@ impl ZoneResourceRuntime {
     /// payload into a subject.
     pub fn bind_operator_resource_client(
         &self,
-        context: d2b_contracts_zone_session::v3::AuthenticatedSubjectContext,
+        context: d2b_contracts_resource::v3::identity::AuthenticatedSubjectContext,
     ) -> Result<
         Arc<ResourceApiClient<RedbBackend, UnavailableUpgradeDispatcher>>,
         ResourceRuntimeError,
@@ -3171,7 +3184,7 @@ async fn reconcile_system_core_resources(
     let mut host_phase = host_phase_for_resource_count(hosts.len());
     for resource in hosts {
         let envelope =
-            d2b_contracts_zone_session::v3::ResourceEnvelope::from_json(&resource.canonical_json)
+            d2b_contracts_resource::v3::ResourceEnvelope::from_json(&resource.canonical_json)
                 .map_err(|_| ResourceRuntimeError::HandlerNotReady)?;
         let spec: HostSpec = serde_json::from_slice(&envelope.spec().base().to_canonical_bytes())
             .map_err(|_| ResourceRuntimeError::HandlerNotReady)?;
@@ -3225,7 +3238,7 @@ async fn reconcile_system_core_resources(
     let mut user_phase = HandlerPhase::Ready;
     for resource in users {
         let envelope =
-            d2b_contracts_zone_session::v3::ResourceEnvelope::from_json(&resource.canonical_json)
+            d2b_contracts_resource::v3::ResourceEnvelope::from_json(&resource.canonical_json)
                 .map_err(|_| ResourceRuntimeError::HandlerNotReady)?;
         let spec: UserSpec = serde_json::from_slice(&envelope.spec().base().to_canonical_bytes())
             .map_err(|_| ResourceRuntimeError::HandlerNotReady)?;
@@ -3499,7 +3512,7 @@ mod tests {
             },
         });
         let canonical_json =
-            d2b_contracts_zone_session::v3::canonical_json_bytes(&envelope).unwrap();
+            d2b_contracts_resource::v3::canonical_json_bytes(&envelope).unwrap();
         let parsed = ResourceEnvelope::from_json(&canonical_json).unwrap();
         StoredResource {
             resource_ref: ResourceRef::parse(&format!("Provider/{name}")).unwrap(),
@@ -3737,7 +3750,7 @@ mod tests {
     #[test]
     fn broker_response_requires_one_canonical_zone_store() {
         let response = OpenZoneStoreResponse {
-            zone_store_id: d2b_contracts_zone_session::v3::storage::ZoneStoreId::parse(
+            zone_store_id: d2b_contracts_resource::v3::storage::ZoneStoreId::parse(
                 "zone-store-work",
             )
             .unwrap(),
@@ -3812,7 +3825,7 @@ mod tests {
             zone.clone(),
             OpenedZoneStore {
                 response: OpenZoneStoreResponse {
-                    zone_store_id: d2b_contracts_zone_session::v3::storage::ZoneStoreId::parse(
+                    zone_store_id: d2b_contracts_resource::v3::storage::ZoneStoreId::parse(
                         "zone-store-work",
                     )
                     .unwrap(),
@@ -3898,7 +3911,7 @@ mod tests {
             zone,
             OpenedZoneStore {
                 response: OpenZoneStoreResponse {
-                    zone_store_id: d2b_contracts_zone_session::v3::storage::ZoneStoreId::parse(
+                    zone_store_id: d2b_contracts_resource::v3::storage::ZoneStoreId::parse(
                         "zone-store-work",
                     )
                     .unwrap(),
@@ -3974,7 +3987,7 @@ mod tests {
             zone,
             OpenedZoneStore {
                 response: OpenZoneStoreResponse {
-                    zone_store_id: d2b_contracts_zone_session::v3::storage::ZoneStoreId::parse(
+                    zone_store_id: d2b_contracts_resource::v3::storage::ZoneStoreId::parse(
                         "zone-store-work",
                     )
                     .unwrap(),
@@ -4045,7 +4058,7 @@ mod tests {
             zone.clone(),
             OpenedZoneStore {
                 response: OpenZoneStoreResponse {
-                    zone_store_id: d2b_contracts_zone_session::v3::storage::ZoneStoreId::parse(
+                    zone_store_id: d2b_contracts_resource::v3::storage::ZoneStoreId::parse(
                         "zone-store-work",
                     )
                     .unwrap(),

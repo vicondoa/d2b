@@ -13,6 +13,7 @@ rust_library(
     compile_data = ["Cargo.toml"],
     visibility = ["//visibility:public"],
     deps = [
+        "//packages/d2b-contracts-resource:d2b_contracts_resource",
         "//packages/d2b-contracts-zone-session:d2b_contracts_zone_session",
         "//packages/d2b-process-conformance:d2b_process_conformance",
     ] + all_crate_deps(normal = True, cargo_only = True),
@@ -25,6 +26,7 @@ rust_library(
     crate_name = "d2b_provider_system_minijail",
     visibility = ["//visibility:public"],
     deps = [
+        "//packages/d2b-contracts-resource:d2b_contracts_resource",
         "//packages/d2b-contracts-zone-session:d2b_contracts_zone_session",
         "//packages/d2b-process-conformance:d2b_process_conformance_test_support",
     ] + all_crate_deps(normal = True, cargo_only = True),
@@ -36,6 +38,7 @@ rust_test(
     compile_data = ["Cargo.toml"],
     visibility = ["//visibility:public"],
     deps = [
+        "//packages/d2b-contracts-resource:d2b_contracts_resource",
         "//packages/d2b-contracts-zone-session:d2b_contracts_zone_session",
         ":d2b_provider_system_minijail",
         "//packages/d2b-process-conformance:d2b_process_conformance",
@@ -48,6 +51,7 @@ rust_test(
     compile_data = ["Cargo.toml"],
     visibility = ["//visibility:public"],
     deps = [
+        "//packages/d2b-contracts-resource:d2b_contracts_resource",
         "//packages/d2b-contracts-zone-session:d2b_contracts_zone_session",
         ":d2b_provider_system_minijail",
         "//packages/d2b-process-conformance:d2b_process_conformance",
@@ -63,6 +67,7 @@ rust_test(
     compile_data = ["Cargo.toml"],
     visibility = ["//visibility:public"],
     deps = [
+        "//packages/d2b-contracts-resource:d2b_contracts_resource",
         "//packages/d2b-contracts-zone-session:d2b_contracts_zone_session",
         "//packages/d2b-process-conformance:d2b_process_conformance",
         ":d2b_provider_system_minijail",
@@ -77,6 +82,7 @@ rust_test(
     compile_data = ["Cargo.toml"],
     visibility = ["//visibility:public"],
     deps = [
+        "//packages/d2b-contracts-resource:d2b_contracts_resource",
         "//packages/d2b-contracts-zone-session:d2b_contracts_zone_session",
         "//packages/d2b-process-conformance:d2b_process_conformance",
         ":d2b_provider_system_minijail",
@@ -91,6 +97,7 @@ rust_test(
     compile_data = ["Cargo.toml"],
     visibility = ["//visibility:public"],
     deps = [
+        "//packages/d2b-contracts-resource:d2b_contracts_resource",
         "//packages/d2b-contracts-zone-session:d2b_contracts_zone_session",
         "//packages/d2b-process-conformance:d2b_process_conformance",
         ":d2b_provider_system_minijail",

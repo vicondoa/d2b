@@ -21,6 +21,7 @@ rust_library(
     ],
     visibility = ["//visibility:public"],
     deps = [
+        "//packages/d2b-contracts-resource:d2b_contracts_resource",
         "//packages/d2b-contracts-zone-session:d2b_contracts_zone_session",
         "//packages/d2b-contracts:d2b_contracts",
         "//packages/d2b-session:d2b_session",
@@ -41,6 +42,7 @@ rust_library(
     ],
     visibility = ["//visibility:public"],
     deps = [
+        "//packages/d2b-contracts-resource:d2b_contracts_resource",
         "//packages/d2b-contracts-zone-session:d2b_contracts_zone_session",
         "//packages/d2b-contracts:d2b_contracts_test_support",
         "//packages/d2b-session:d2b_session_test_support",
@@ -57,6 +59,7 @@ rust_test(
     ],
     visibility = ["//visibility:public"],
     deps = [
+        "//packages/d2b-contracts-resource:d2b_contracts_resource",
         "//packages/d2b-contracts-zone-session:d2b_contracts_zone_session",
         ":d2b_session_unix",
         "//packages/d2b-session:d2b_session",
@@ -73,6 +76,7 @@ rust_test(
     ],
     visibility = ["//visibility:public"],
     deps = [
+        "//packages/d2b-contracts-resource:d2b_contracts_resource",
         "//packages/d2b-contracts-zone-session:d2b_contracts_zone_session",
         ":d2b_session_unix",
         "//packages/d2b-contracts:d2b_contracts",
@@ -88,7 +92,8 @@ rust_test(
         "host-socket",
         "native-vsock",
     ],
-    deps = ["//packages/d2b-contracts-zone-session:d2b_contracts_zone_session", ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
+    deps = ["//packages/d2b-contracts-resource:d2b_contracts_resource",
+        "//packages/d2b-contracts-zone-session:d2b_contracts_zone_session", ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
 )
 
 # keep

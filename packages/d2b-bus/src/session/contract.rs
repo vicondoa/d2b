@@ -44,10 +44,14 @@
 //! A policy value is desired-state configuration. It carries no session, no
 //! admission evidence, no resolved subject, no key material, and no path.
 
-use d2b_contracts_zone_session::v3::component_session as base;
-use d2b_contracts_zone_session::v3::zone_session::{
+use d2b_contracts_zone_session::v3::{
+    component_session as base,
+};
+use d2b_contracts_zone_session::v3::{
+    zone_session::{
     AttachmentPolicy, EndpointPurpose, EndpointRole, LimitProfile, NoiseProfile, PurposeClass,
     ServicePackage,
+},
 };
 
 // `TransportBinding` is not part of the extended taxonomy, so the Zone
@@ -281,9 +285,11 @@ impl ZoneEndpointPolicyIdentity {
 #[cfg(test)]
 pub(crate) mod fixtures {
     use super::*;
-    use d2b_contracts_zone_session::v3::zone_session::{
+    use d2b_contracts_zone_session::v3::{
+    zone_session::{
         IdentityEvidenceRequirement, Locality, TransportClass,
-    };
+    },
+};
 
     /// The enrolled ZoneLink policy: `Noise_KK` over adjacent-Zone carriage.
     ///

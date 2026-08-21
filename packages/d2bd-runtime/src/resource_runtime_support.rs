@@ -13,21 +13,44 @@ use std::{
 use crate::resource_api::{ParsedListRequest, ResourceRuntimeError};
 use d2b_bus::{BusIngress, ZoneRegistrar};
 use d2b_contracts_resource::resource_proto as wire;
-use d2b_contracts_zone_session::v3::identity::STANDARD_RESOURCE_TYPES;
+use d2b_contracts_resource::v3::identity::STANDARD_RESOURCE_TYPES;
 use d2b_contracts_zone_session::v3::{
-    AuthenticatedSubjectContext, BindingDigest, CanonicalJsonValue, ConfigurationGeneration,
-    ControllerGeneration, EvidenceClass, Locality as IdentityLocality, MAX_PAGE_CURSOR_BYTES,
-    MAX_RESPONSE_CANONICAL_BYTES, ReconnectGeneration, ResourceEnvelope, ResourceError,
-    ResourceErrorKind, ResourceErrorReason, ResourceName, ResourcePhase, ResourceRef,
-    ResourceTypeName, ResourceUid, RetryClass, SchemaFingerprint, ServiceName, SessionBinding,
-    SessionPurpose, Timestamp, TranscriptHash, TransportBinding, ZoneId, ZoneRevision,
-    component_session::{
-        AttachmentPolicy, EndpointPolicy, EndpointPurpose, EndpointRole,
-        IdentityEvidenceRequirement, LimitProfile, Locality, NoiseProfile, PurposeClass,
-        ServicePackage, TransportBinding as ComponentTransportBinding, TransportClass,
-    },
-    host::HOST_PROVIDER_REF,
+    component_session::{AttachmentPolicy, EndpointPolicy, EndpointPurpose, EndpointRole, IdentityEvidenceRequirement, LimitProfile, Locality, NoiseProfile, PurposeClass, ServicePackage, TransportBinding as ComponentTransportBinding, TransportClass},
     resource_bundle::ResourceBundle,
+};
+use d2b_contracts_resource::v3::{
+    CanonicalJsonValue,
+    ConfigurationGeneration,
+    ControllerGeneration,
+    MAX_PAGE_CURSOR_BYTES,
+    MAX_RESPONSE_CANONICAL_BYTES,
+    ResourceEnvelope,
+    ResourceError,
+    ResourceErrorKind,
+    ResourceErrorReason,
+    ResourceName,
+    ResourcePhase,
+    ResourceRef,
+    ResourceTypeName,
+    ResourceUid,
+    RetryClass,
+    SchemaFingerprint,
+    Timestamp,
+    ZoneId,
+    ZoneRevision,
+    host::HOST_PROVIDER_REF,
+};
+use d2b_contracts_resource::v3::identity::{
+    AuthenticatedSubjectContext,
+    BindingDigest,
+    EvidenceClass,
+    Locality as IdentityLocality,
+    ReconnectGeneration,
+    ServiceName,
+    SessionBinding,
+    SessionPurpose,
+    TranscriptHash,
+    TransportBinding,
 };
 use d2b_core_controller::{
     authority::HostGlobalAuthorityIndex,
@@ -444,7 +467,7 @@ pub async fn register_system_core_session(
         .admit(
             initiator,
             TransportEvidence::new(
-                d2b_contracts_zone_session::v3::EvidenceClass::UnixPeer,
+                d2b_contracts_resource::v3::identity::EvidenceClass::UnixPeer,
                 BindingDigest::parse(format!("sha256:{}", "22".repeat(32)))
                     .map_err(|_| ResourceRuntimeError::AuthenticationUnavailable)?,
             ),
@@ -686,8 +709,8 @@ pub async fn ensure_bootstrap_host_resource(
     identity.name = "host-system".to_owned();
     let mut body = wire::ResourceEnvelopeBytes::new();
     body.identity = protobuf::MessageField::some(identity.clone());
-    body.payload_digest = d2b_contracts_zone_session::v3::canonical_digest(
-        d2b_contracts_zone_session::v3::RESOURCE_ENVELOPE_DOMAIN_TAG,
+    body.payload_digest = d2b_contracts_resource::v3::canonical_digest(
+        d2b_contracts_resource::v3::RESOURCE_ENVELOPE_DOMAIN_TAG,
         &payload,
     );
     body.canonical_json = payload;
@@ -988,8 +1011,8 @@ fn create_mutation(
     mutation.resource = protobuf::MessageField::some(resource_envelope_body(
         identity,
         payload.clone(),
-        d2b_contracts_zone_session::v3::canonical_digest(
-            d2b_contracts_zone_session::v3::RESOURCE_ENVELOPE_DOMAIN_TAG,
+        d2b_contracts_resource::v3::canonical_digest(
+            d2b_contracts_resource::v3::RESOURCE_ENVELOPE_DOMAIN_TAG,
             &payload,
         ),
     ));
@@ -1321,7 +1344,7 @@ pub fn public_api_error(error: &wire::ResourceError) -> Value {
     .then(|| error.current_revision.map(ZoneRevision::new))
     .flatten();
     let retry_after_ms = error.retry_after_ms.filter(|delay| {
-        (1..=d2b_contracts_zone_session::v3::MAX_RESOURCE_ERROR_RETRY_AFTER_MS).contains(delay)
+        (1..=d2b_contracts_resource::v3::MAX_RESOURCE_ERROR_RETRY_AFTER_MS).contains(delay)
     });
     let retry_class = if retry_after_ms.is_some() {
         RetryClass::AfterDelay
@@ -1686,7 +1709,7 @@ fn select_resource_projection(
 mod tests {
     use super::*;
     use crate::resource_api::parse_list_request;
-    use d2b_contracts_zone_session::v3::ResourceGeneration;
+    use d2b_contracts_resource::v3::ResourceGeneration;
 
     #[test]
     fn phase_only_status_preserves_existing_resource_projection() {
@@ -1893,7 +1916,7 @@ mod tests {
             Some(ZoneRevision::new(11)),
             Some(250),
             RetryClass::AfterDelay,
-            d2b_contracts_zone_session::v3::ResourceErrorReason::parse("revision-changed").unwrap(),
+            d2b_contracts_resource::v3::ResourceErrorReason::parse("revision-changed").unwrap(),
         )
         .unwrap();
         let envelope = resource_error_envelope(&error);

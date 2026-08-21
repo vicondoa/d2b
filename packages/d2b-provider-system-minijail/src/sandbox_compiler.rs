@@ -1,6 +1,6 @@
 //! Semantic SandboxSpec compilation for system-minijail.
 
-use d2b_contracts_zone_session::v3::{
+use d2b_contracts_resource::v3::{
     execution_policy::ExecutionDomain,
     process::{SandboxSpec, UserNamespaceSpec},
 };

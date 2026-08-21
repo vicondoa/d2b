@@ -7,8 +7,11 @@
 use std::fmt;
 use std::future::Future;
 
-use d2b_contracts_zone_session::v3::execution_policy::BoundedToken;
-use d2b_contracts_zone_session::v3::{MarkerStatus, ResourceUid};
+use d2b_contracts_resource::v3::execution_policy::BoundedToken;
+use d2b_contracts_resource::v3::{
+    MarkerStatus,
+    ResourceUid,
+};
 
 use crate::marker::MarkerError;
 

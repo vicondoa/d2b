@@ -6,8 +6,11 @@
 
 use std::{fmt, future::Future, str::FromStr};
 
-use d2b_contracts_zone_session::v3::{
-    CanonicalJsonObject, MAX_REQUEST_CANONICAL_BYTES, MAX_RESPONSE_CANONICAL_BYTES, ResourceRef,
+use d2b_contracts_resource::v3::{
+    CanonicalJsonObject,
+    MAX_REQUEST_CANONICAL_BYTES,
+    MAX_RESPONSE_CANONICAL_BYTES,
+    ResourceRef,
     ZoneId,
 };
 

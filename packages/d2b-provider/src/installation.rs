@@ -26,9 +26,11 @@
 //! that has already been reached, not a capability that can be presented.
 
 use d2b_contracts_zone_session::v3::{
-    ResourceRef,
-    identity::SchemaFingerprint,
     provider::{ProviderManifest, ProviderSpec},
+};
+use d2b_contracts_resource::v3::{
+    ResourceRef,
+    SchemaFingerprint,
 };
 
 use crate::{descriptor::ProviderDescriptor, error::RegistryBuildError};
@@ -184,16 +186,17 @@ mod tests {
     use super::*;
     use d2b_contracts_resource::v3::ArtifactId;
     use d2b_contracts_zone_session::v3::{
-        execution_policy::{BoundedToken, ExecutionDomain},
-        identity::{ConfigurationGeneration, ResourceGeneration, ResourceTypeName, ServiceName},
-        provider::{
-            ArtifactDigest, ArtifactDigestSet, ComponentDescriptor, ComponentType,
-            PolicyEvaluation, ResourceApiBinding, RevocationState, SignatureState,
-            StandardCapabilityMatrix, TrustEvidence, UpgradeDisposition, UpgradePolicy,
-        },
-        resource_schema::SchemaVersion,
-        zone_routing::ZonePath,
-    };
+    zone_routing::ZonePath,
+    provider::{ArtifactDigest, ArtifactDigestSet, ComponentDescriptor, ComponentType, PolicyEvaluation, ResourceApiBinding, RevocationState, SignatureState, StandardCapabilityMatrix, TrustEvidence, UpgradeDisposition, UpgradePolicy},
+};
+use d2b_contracts_resource::v3::{
+    execution_policy::{BoundedToken, ExecutionDomain},
+    ConfigurationGeneration,
+    ResourceGeneration,
+    ResourceTypeName,
+    resource_schema::SchemaVersion,
+};
+use d2b_contracts_resource::v3::identity::ServiceName;
 
     use crate::identity::{
         ProviderCapabilitySet, ProviderClass, ProviderImplementationId, ProviderMethodName,

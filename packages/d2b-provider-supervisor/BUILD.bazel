@@ -17,6 +17,7 @@ rust_library(
     ],
     visibility = ["//visibility:public"],
     deps = [
+        "//packages/d2b-contracts-resource:d2b_contracts_resource",
         "//packages/d2b-contracts-zone-session:d2b_contracts_zone_session",
         "//packages/d2b-contracts:d2b_contracts",
         "//packages/d2b-contracts-broker:d2b_contracts_broker",
@@ -38,6 +39,7 @@ rust_library(
     crate_name = "d2b_provider_supervisor",
     visibility = ["//visibility:public"],
     deps = [
+        "//packages/d2b-contracts-resource:d2b_contracts_resource",
         "//packages/d2b-contracts-zone-session:d2b_contracts_zone_session",
         "//packages/d2b-contracts:d2b_contracts_test_support",
         "//packages/d2b-contracts-broker:d2b_contracts_broker",
@@ -54,6 +56,7 @@ rust_test(
     compile_data = ["Cargo.toml"],
     visibility = ["//visibility:public"],
     deps = [
+        "//packages/d2b-contracts-resource:d2b_contracts_resource",
         "//packages/d2b-contracts-zone-session:d2b_contracts_zone_session",
         ":d2b_provider_supervisor",
         "//packages/d2b-contracts:d2b_contracts",
@@ -70,6 +73,7 @@ rust_test(
     compile_data = ["Cargo.toml"],
     crate = ":d2b_provider_supervisor",
     deps = ["//packages/d2b-process-conformance:d2b_process_conformance",
+        "//packages/d2b-contracts-resource:d2b_contracts_resource",
         "//packages/d2b-contracts-zone-session:d2b_contracts_zone_session", ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
 )
 

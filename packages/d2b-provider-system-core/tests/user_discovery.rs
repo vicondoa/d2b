@@ -6,7 +6,7 @@
 //! discovery port: what counts as discovered, what counts as drift, and
 //! that nothing the port resolved reaches public status.
 
-use d2b_contracts_zone_session::v3::resource_status::ResourcePhase;
+use d2b_contracts_resource::v3::resource_status::ResourcePhase;
 use d2b_provider_system_core::testing::{
     SCRIPTED_IDENTITY, ScriptedDiscoveryPort, block_on, fixtures,
 };

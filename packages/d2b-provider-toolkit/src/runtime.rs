@@ -14,7 +14,7 @@ use std::{
     time::Duration,
 };
 
-use d2b_contracts_zone_session::v3::ResourceRef;
+use d2b_contracts_resource::v3::ResourceRef;
 use d2b_session::{AuthenticatedComponentSession, AuthenticatedSessionRouteBinding};
 
 const STARTING: u8 = 0;
@@ -322,7 +322,7 @@ impl Drop for ProviderAdmission {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use d2b_contracts_zone_session::v3::ResourceRef;
+    use d2b_contracts_resource::v3::ResourceRef;
 
     #[test]
     fn readiness_is_not_published_before_registration() {

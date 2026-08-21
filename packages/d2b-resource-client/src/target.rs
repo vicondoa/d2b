@@ -9,8 +9,11 @@
 
 use core::fmt;
 
-use d2b_contracts_zone_session::v3::{
-    ResourceName, ResourceRef, ResourceTypeName, zone_routing::ZonePath,
+use d2b_contracts_zone_session::v3::zone_routing::ZonePath;
+use d2b_contracts_resource::v3::{
+    ResourceName,
+    ResourceRef,
+    ResourceTypeName,
 };
 
 use crate::ClientError;

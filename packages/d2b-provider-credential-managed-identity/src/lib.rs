@@ -22,13 +22,19 @@ use std::task::{Context, Poll, Wake, Waker};
 use std::thread::{self, Thread};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
-use d2b_contracts_provider::v3::credential::{
+use d2b_contracts_provider::v3::{
+    credential::{
     CREDENTIAL_SERVICE_NAME, CredentialAuthorization, CredentialLeaseHandle, CredentialLeaseState,
     CredentialMetadata, CredentialMethod, CredentialOutcomeCode, CredentialRequest,
     CredentialServiceError, CredentialServiceErrorCode, CredentialSessionBinding,
     CredentialSourceVersion, MAX_PROVIDER_LEASE_LIFETIME_MS, OpaqueAzureRef, PlacementBinding,
+},
 };
-use d2b_contracts_zone_session::v3::{AuthenticatedSubjectContext, Locality, ResourceRef};
+use d2b_contracts_resource::v3::ResourceRef;
+use d2b_contracts_resource::v3::identity::{
+    AuthenticatedSubjectContext,
+    Locality,
+};
 
 pub use agent::ManagedIdentityAgent;
 pub use audit::{

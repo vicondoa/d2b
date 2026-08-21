@@ -5,7 +5,7 @@ use d2b_contracts_broker::host_generation::ApplyHostGenerationHandoff;
 use d2b_contracts_control::public_wire::{
     HostCutoverOperation, HostCutoverRequest, HostCutoverResetScope, HostCutoverResponse,
 };
-use d2b_contracts_zone_session::v3::CanonicalJsonValue;
+use d2b_contracts_resource::v3::CanonicalJsonValue;
 use d2b_cutover::{
     OperationState, RunnerCommand, RunnerPaths, RunnerResponse, RunnerSocketError, RunnerStatus,
     send_command,
@@ -1355,7 +1355,7 @@ fn cutover_reset(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use d2b_contracts_zone_session::v3::CanonicalJsonObject;
+    use d2b_contracts_resource::v3::CanonicalJsonObject;
     use d2b_cutover::{
         CutoverPhase, OperationId, OperationState, RunnerResponse, RunnerSocketError, RunnerStatus,
     };

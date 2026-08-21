@@ -177,7 +177,7 @@ mod tests {
             r#""backingAuthority":{}"#,
         ] {
             let base = format!(r#"{{"accessPolicy":{{}},"mode":"projection",{extra}}}"#);
-            let spec = crate::v3::resource::ResourceSpec::new(
+            let spec = d2b_contracts_resource::v3::resource::ResourceSpec::new(
                 Some(provider_ref("device-usbip")),
                 None,
                 object(&base),

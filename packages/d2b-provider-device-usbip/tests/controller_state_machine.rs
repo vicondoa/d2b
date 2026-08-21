@@ -1,4 +1,7 @@
-use d2b_contracts_zone_session::v3::{ResourceGeneration, ResourceUid};
+use d2b_contracts_resource::v3::{
+    ResourceGeneration,
+    ResourceUid,
+};
 use d2b_provider_device_usbip::{
     FirewallConfirmation, FirewallDigest, FirewallObservation, FirewallProjectionAction,
     FirewallProjectionIntent, FirewallToken, NetworkDependency, RelayAuthorityLease,

@@ -54,7 +54,7 @@ macro_rules! string_schema {
             fn json_schema(
                 _gen: &mut schemars::r#gen::SchemaGenerator,
             ) -> schemars::schema::Schema {
-                crate::v3::execution_policy::string_schema_object($min as u32, $max as u32)
+                $crate::v3::execution_policy::string_schema_object($min as u32, $max as u32)
             }
         }
     };

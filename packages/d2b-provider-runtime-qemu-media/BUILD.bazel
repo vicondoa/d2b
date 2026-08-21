@@ -11,6 +11,7 @@ rust_library(
     srcs = glob(["src/**/*.rs"], allow_empty = True),
     compile_data = ["Cargo.toml"],
     deps = [
+        "//packages/d2b-contracts-resource:d2b_contracts_resource",
         "//packages/d2b-contracts-zone-session:d2b_contracts_zone_session",
         "//packages/d2b-process-conformance:d2b_process_conformance",
     ] + all_crate_deps(normal = True, cargo_only = True),
@@ -22,6 +23,7 @@ rust_test(
     crate = ":d2b_provider_runtime_qemu_media",
     compile_data = ["Cargo.toml"],
     deps = [
+        "//packages/d2b-contracts-resource:d2b_contracts_resource",
         "//packages/d2b-contracts-zone-session:d2b_contracts_zone_session",
         "//packages/d2b-process-conformance:d2b_process_conformance",
     ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
@@ -44,6 +46,7 @@ rust_test(
     compile_data = ["Cargo.toml"],
     visibility = ["//visibility:public"],
     deps = [
+        "//packages/d2b-contracts-resource:d2b_contracts_resource",
         "//packages/d2b-contracts-zone-session:d2b_contracts_zone_session",
         ":d2b_provider_runtime_qemu_media",
     ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
@@ -57,6 +60,7 @@ rust_test(
     compile_data = ["Cargo.toml"],
     visibility = ["//visibility:public"],
     deps = [
+        "//packages/d2b-contracts-resource:d2b_contracts_resource",
         "//packages/d2b-contracts-zone-session:d2b_contracts_zone_session",
         ":d2b_provider_runtime_qemu_media",
     ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
@@ -70,6 +74,7 @@ rust_test(
     compile_data = ["Cargo.toml"],
     visibility = ["//visibility:public"],
     deps = [
+        "//packages/d2b-contracts-resource:d2b_contracts_resource",
         "//packages/d2b-contracts-zone-session:d2b_contracts_zone_session",
         ":d2b_provider_runtime_qemu_media",
     ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
@@ -83,6 +88,7 @@ rust_test(
     compile_data = ["Cargo.toml"],
     visibility = ["//visibility:public"],
     deps = [
+        "//packages/d2b-contracts-resource:d2b_contracts_resource",
         "//packages/d2b-contracts-zone-session:d2b_contracts_zone_session",
         ":d2b_provider_runtime_qemu_media",
     ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
@@ -96,6 +102,7 @@ rust_test(
     compile_data = ["Cargo.toml"],
     visibility = ["//visibility:public"],
     deps = [
+        "//packages/d2b-contracts-resource:d2b_contracts_resource",
         "//packages/d2b-contracts-zone-session:d2b_contracts_zone_session",
         ":d2b_provider_runtime_qemu_media",
     ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
@@ -109,6 +116,7 @@ rust_test(
     compile_data = ["Cargo.toml"],
     visibility = ["//visibility:public"],
     deps = [
+        "//packages/d2b-contracts-resource:d2b_contracts_resource",
         "//packages/d2b-contracts-zone-session:d2b_contracts_zone_session",
         ":d2b_provider_runtime_qemu_media",
     ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
@@ -122,6 +130,7 @@ rust_test(
     compile_data = ["Cargo.toml"],
     visibility = ["//visibility:public"],
     deps = [
+        "//packages/d2b-contracts-resource:d2b_contracts_resource",
         "//packages/d2b-contracts-zone-session:d2b_contracts_zone_session",
         ":d2b_provider_runtime_qemu_media",
     ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
@@ -137,6 +146,7 @@ rust_test(
     crate_root = "integration/mod.rs",
     visibility = ["//visibility:public"],
     deps = [
+        "//packages/d2b-contracts-resource:d2b_contracts_resource",
         "//packages/d2b-contracts-zone-session:d2b_contracts_zone_session",
         ":d2b_provider_runtime_qemu_media",
     ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
@@ -150,6 +160,7 @@ rust_test(
     compile_data = ["Cargo.toml"],
     visibility = ["//visibility:public"],
     deps = [
+        "//packages/d2b-contracts-resource:d2b_contracts_resource",
         "//packages/d2b-contracts-zone-session:d2b_contracts_zone_session",
         ":d2b_provider_runtime_qemu_media",
     ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),

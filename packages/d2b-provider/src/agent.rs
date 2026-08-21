@@ -12,7 +12,12 @@ use std::{
 };
 
 use d2b_contracts_provider::v3::provider_registry::ProviderBindingAxis;
-use d2b_contracts_zone_session::v3::{CanonicalJsonObject, ProviderMethod, ServiceName, ZoneId};
+use d2b_contracts_zone_session::v3::ProviderMethod;
+use d2b_contracts_resource::v3::{
+    CanonicalJsonObject,
+    ZoneId,
+};
+use d2b_contracts_resource::v3::identity::ServiceName;
 use tokio::{
     sync::{Semaphore, mpsc},
     time::{Duration, timeout},

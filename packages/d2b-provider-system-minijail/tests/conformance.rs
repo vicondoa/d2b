@@ -68,9 +68,9 @@ fn the_user_domain_is_admitted_only_by_the_descriptor() {
         fixtures::ticket_builder()
             .selected_provider(provider_name)
             .expected_identity(required())
-            .domain(d2b_contracts_zone_session::v3::execution_policy::ExecutionDomain::User)
+            .domain(d2b_contracts_resource::v3::execution_policy::ExecutionDomain::User)
             .user_ref(Some(
-                d2b_contracts_zone_session::v3::ResourceRef::parse("User/alice")
+                d2b_contracts_resource::v3::ResourceRef::parse("User/alice")
                     .expect("valid reference"),
             ))
             .build()

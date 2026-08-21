@@ -93,7 +93,7 @@ fn validate_request(
             && !plan.start_root
             && matches!(
                 plan.environment_class,
-                d2b_contracts_zone_session::v3::process::EnvironmentClass::Minimal
+                d2b_contracts_resource::v3::process::EnvironmentClass::Minimal
             )
             && plan.read_only_root
             && plan.user_namespace.is_none()
@@ -114,7 +114,7 @@ fn validate_request(
         return Err(SystemdError::BundleIntent);
     }
     let expected_execution =
-        d2b_contracts_zone_session::v3::ResourceRef::parse(&intent.execution_ref)
+        d2b_contracts_resource::v3::ResourceRef::parse(&intent.execution_ref)
             .map_err(|_| SystemdError::IdentityMismatch)?;
     if request
         .execution_ref
@@ -140,7 +140,7 @@ fn validate_request(
     let expected_user = intent
         .user_ref
         .as_deref()
-        .map(d2b_contracts_zone_session::v3::ResourceRef::parse)
+        .map(d2b_contracts_resource::v3::ResourceRef::parse)
         .transpose()
         .map_err(|_| SystemdError::IdentityMismatch)?;
     if request.user_ref != expected_user {
@@ -594,7 +594,10 @@ mod tests {
     use super::*;
     use d2b_contracts::types::{BundleOpId, RoleId, VmId};
     use d2b_contracts_broker::broker_wire::{RunnerRole, SystemdUnitRequest};
-    use d2b_contracts_zone_session::v3::{ResourceRef, ResourceUid};
+    use d2b_contracts_resource::v3::{
+    ResourceRef,
+    ResourceUid,
+};
 
     fn request() -> SystemdUnitRequest {
         SystemdUnitRequest {

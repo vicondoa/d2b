@@ -11,7 +11,7 @@ use std::sync::{Mutex, MutexGuard};
 
 use sha2::{Digest, Sha256};
 
-use super::ResourceUid;
+use d2b_contracts_resource::v3::ResourceUid;
 use super::credential::{
     CredentialLeaseState, CredentialMethod, CredentialRevocationPolicy, CredentialRotationPolicy,
     OperationClass, PlacementBinding, RevocationAction, RolePermission, RotationPolicyClass,
@@ -1590,7 +1590,7 @@ fn allowed_telemetry_value(key: &str, value: &str) -> bool {
 }
 
 fn valid_sha256(value: &str) -> bool {
-    super::resource_schema::is_canonical_digest(value)
+    d2b_contracts_resource::v3::resource_schema::is_canonical_digest(value)
 }
 
 fn looks_like_uuid(token: &str) -> bool {

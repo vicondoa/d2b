@@ -159,7 +159,7 @@ pub struct OpenPidfdResult {
 /// accepted here.
 pub fn live_open_zone_store(
     resolver: &d2b_core::bundle_resolver::BundleResolver,
-    zone_store_id: &d2b_contracts_zone_session::v3::storage::ZoneStoreId,
+    zone_store_id: &d2b_contracts_resource::v3::storage::ZoneStoreId,
 ) -> Result<crate::ops::zone_store::ZoneStoreOutcome, LiveHandlerError> {
     crate::ops::zone_store::open_zone_store(resolver, zone_store_id)
         .map_err(LiveHandlerError::ZoneStore)

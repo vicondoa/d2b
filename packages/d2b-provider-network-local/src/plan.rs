@@ -1,6 +1,6 @@
 //! Effect-free Network reconcile planning.
 
-use d2b_contracts_zone_session::v3::network::NetworkSpec;
+use d2b_contracts_resource::v3::network::NetworkSpec;
 
 /// Every ordered reconciliation step owned by network-local.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

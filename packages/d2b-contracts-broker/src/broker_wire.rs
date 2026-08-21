@@ -19,10 +19,10 @@ use d2b_contracts::types::{
     VmId,
 };
 use d2b_contracts::workload_identity::WorkloadIdentity;
-use d2b_contracts_zone_session::v3::process::{
+use d2b_contracts_resource::v3::process::{
     CapabilityClass, EnvironmentClass, NamespaceClass, UserNamespaceSpec,
 };
-use d2b_contracts_zone_session::v3::{
+use d2b_contracts_resource::v3::{
     ArtifactId, IfName, ResourceBundleGenerationId, ResourceGeneration, ResourceRef, ResourceUid,
     execution_policy::ExecutionDomain, storage::ZoneStoreId,
 };
@@ -330,7 +330,7 @@ pub enum BrokerRequest {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ApplyHostGenerationHandoffResponse {
-    pub target: d2b_contracts_zone_session::v3::ResourceRef,
+    pub target: d2b_contracts_resource::v3::ResourceRef,
     pub state: crate::host_generation::HandoffState,
     pub source_generation: u64,
     pub target_generation: u64,
@@ -1241,11 +1241,11 @@ impl BrokerRequest {
             | Self::ResumeBroker => return None,
         };
         Some((
-            d2b_contracts_zone_session::v3::canonical_digest(
+            d2b_contracts_resource::v3::canonical_digest(
                 "d2b:broker-zone:v2",
                 scope.as_bytes(),
             ),
-            d2b_contracts_zone_session::v3::canonical_digest(
+            d2b_contracts_resource::v3::canonical_digest(
                 "d2b:broker-operation:v2",
                 operation.as_bytes(),
             ),
@@ -3086,7 +3086,7 @@ pub struct SandboxLaunchPlan {
     pub domain: ExecutionDomain,
     pub namespace_classes: Vec<NamespaceClass>,
     pub capability_classes: Vec<CapabilityClass>,
-    pub seccomp_class: d2b_contracts_zone_session::v3::execution_policy::BoundedToken,
+    pub seccomp_class: d2b_contracts_resource::v3::execution_policy::BoundedToken,
     pub no_new_privileges: bool,
     pub start_root: bool,
     pub environment_class: EnvironmentClass,
@@ -3268,7 +3268,7 @@ impl CanonicalAuditDigest {
     /// Parse the exact lower-case SHA-256 wire spelling.
     pub fn parse(value: impl Into<String>) -> Result<Self, &'static str> {
         let value = value.into();
-        if d2b_contracts_zone_session::v3::is_canonical_digest(&value) {
+        if d2b_contracts_resource::v3::is_canonical_digest(&value) {
             Ok(Self(value))
         } else {
             Err("canonical-audit-digest-invalid")

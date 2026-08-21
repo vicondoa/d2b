@@ -164,7 +164,7 @@ mod tests {
     /// A Core projection rejects `spec.provider` and the authority descriptor.
     #[test]
     fn a_projection_rejects_a_provider_extension_and_the_authority_descriptor() {
-        let spec = crate::v3::resource::ResourceSpec::new(
+        let spec = d2b_contracts_resource::v3::resource::ResourceSpec::new(
             Some(provider_ref("device-security-key")),
             None,
             object(r#"{"authority":{},"mode":"projection"}"#),

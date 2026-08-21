@@ -1,7 +1,9 @@
 //! Named views, right intersection, and sharing admission.
 
-use d2b_contracts_zone_session::v3::execution_policy::BoundedToken;
-use d2b_contracts_zone_session::v3::volume::{AttachmentAccess, VolumeSpec};
+use d2b_contracts_resource::v3::execution_policy::BoundedToken;
+use d2b_contracts_resource::v3::{
+    volume::{AttachmentAccess, VolumeSpec},
+};
 use d2b_provider_volume_local::testing::fixtures;
 use d2b_provider_volume_local::{VolumeLocalError, admit_access, admit_attachments, resolve_view};
 

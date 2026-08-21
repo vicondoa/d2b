@@ -5,8 +5,10 @@
 //! or an effect. A later dispatcher must consume this result before it creates
 //! a declared Volume or launches the component.
 
-use d2b_contracts_provider::v3::provider::{
+use d2b_contracts_provider::v3::{
+    provider::{
     ComponentDescriptor, ComponentStateNamespace, StorageNeed,
+},
 };
 
 /// Whether one declared payload genuinely requires a state Volume.
@@ -167,15 +169,16 @@ mod tests {
     use std::collections::BTreeMap;
 
     use d2b_contracts_zone_session::v3::{
-        ResourceTypeName, SchemaFingerprint, SchemaVersion,
-        execution_policy::{BoundedToken, ExecutionDomain},
-        provider::{
-            ArtifactDigest, ComponentStateKind, ComponentStateNamespace, ComponentStateView,
-            ComponentType, StatePlacementMode,
-        },
-        volume::ViewRight,
-        volume_state::{MigrationPolicy, PersistenceClass, SensitivityClass, VolumeStateSchemaId},
-    };
+    provider::{ArtifactDigest, ComponentStateKind, ComponentStateNamespace, ComponentStateView, ComponentType, StatePlacementMode},
+};
+use d2b_contracts_resource::v3::{
+    ResourceTypeName,
+    SchemaFingerprint,
+    SchemaVersion,
+    execution_policy::{BoundedToken, ExecutionDomain},
+    volume::ViewRight,
+    volume_state::{MigrationPolicy, PersistenceClass, SensitivityClass, VolumeStateSchemaId},
+};
 
     use super::*;
 

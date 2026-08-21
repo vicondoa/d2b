@@ -1,7 +1,8 @@
 mod common;
 
 use d2b_contracts_provider::v3::credential::CredentialServiceErrorCode;
-use d2b_contracts_zone_session::v3::{Locality, ResourceRef};
+use d2b_contracts_resource::v3::ResourceRef;
+use d2b_contracts_resource::v3::identity::Locality;
 use d2b_provider_credential_entra::{
     EntraClientState, EntraController, EntraEndpointPolicy, EntraPlacement, EntraResourceHealth,
 };

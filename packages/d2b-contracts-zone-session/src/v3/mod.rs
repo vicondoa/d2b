@@ -1,14 +1,5 @@
 //! Canonical Zone and ComponentSession contract family.
 
-pub use d2b_contracts_provider::v3::provider;
-pub use d2b_contracts_resource::v3::identity;
-pub use d2b_contracts_resource::v3::identity::{
-    AuthenticatedSubjectContext, BindingDigest, EvidenceClass, Locality, ReconnectGeneration,
-    ServiceName, SessionBinding, SessionPurpose, TranscriptHash, TransportBinding,
-};
-pub use d2b_contracts_resource::v3::ifname;
-pub use d2b_contracts_resource::v3::*;
-
 pub mod component_session;
 pub mod emergency_policy;
 pub mod generation_bundle;

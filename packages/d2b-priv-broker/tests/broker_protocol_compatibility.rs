@@ -4,7 +4,11 @@ use d2b_contracts_broker::broker_wire::{
     ApplyNftablesProjectionRequest, BrokerCallerRole, BrokerRequest, BrokerRequestEnvelope,
     CreateBridgeRequest, DeleteBridgeRequest, DeletePersistentTapRequest, NftablesProjectionAction,
 };
-use d2b_contracts_zone_session::v3::{ResourceBundleGenerationId, ResourceGeneration, ResourceUid};
+use d2b_contracts_resource::v3::{
+    ResourceBundleGenerationId,
+    ResourceGeneration,
+    ResourceUid,
+};
 use serde::{Deserialize, Serialize};
 
 const PREVIOUS_PROTOCOL_VERSION: u32 = 3;

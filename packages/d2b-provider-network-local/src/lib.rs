@@ -19,7 +19,9 @@ pub mod observe;
 pub mod plan;
 pub mod routes;
 
-pub use d2b_contracts_zone_session::v3::network::{
+pub use d2b_contracts_resource::v3::{
+    network::{
     ExternalNicAdmissionError, ExternalNicClaim, MacvtapMode, SharingPolicy,
     admit_external_nic_claims,
+},
 };

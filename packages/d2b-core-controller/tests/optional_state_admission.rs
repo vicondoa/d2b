@@ -1,12 +1,13 @@
 use std::collections::BTreeMap;
 
 use d2b_contracts_zone_session::v3::{
-    ResourceTypeName, SchemaFingerprint, SchemaVersion,
+    provider::{ArtifactDigest, ComponentDescriptor, ComponentStateKind, ComponentStateNamespace, ComponentStateView, ComponentType, StatePlacementMode, StorageNeed},
+};
+use d2b_contracts_resource::v3::{
+    ResourceTypeName,
+    SchemaFingerprint,
+    SchemaVersion,
     execution_policy::{BoundedToken, ExecutionDomain},
-    provider::{
-        ArtifactDigest, ComponentDescriptor, ComponentStateKind, ComponentStateNamespace,
-        ComponentStateView, ComponentType, StatePlacementMode, StorageNeed,
-    },
     volume::ViewRight,
     volume_state::{MigrationPolicy, PersistenceClass, SensitivityClass, VolumeStateSchemaId},
 };

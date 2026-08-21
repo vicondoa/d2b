@@ -5,7 +5,7 @@
 //! a Binding finalizer from releasing a physical device that other Bindings
 //! might still use.
 
-use d2b_contracts_zone_session::v3::ResourceUid;
+use d2b_contracts_resource::v3::ResourceUid;
 
 /// Opaque Host-global physical-backing reservation issued by the Core adapter.
 #[derive(Clone, PartialEq, Eq)]

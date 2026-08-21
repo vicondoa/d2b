@@ -4,7 +4,10 @@
 //! port. Host device opening and transport orchestration remain outside this
 //! crate.
 
-use d2b_contracts_zone_session::v3::{ResourceRef, ResourceUid};
+use d2b_contracts_resource::v3::{
+    ResourceRef,
+    ResourceUid,
+};
 use d2b_provider_device_security_key::{
     FrontendProcessDeclaration, GuestCid, LeaseState, PhysicalAuthorityLease,
     PhysicalUsbBackingClaim, PhysicalUsbBackingToken, RelayLaunchTicket,

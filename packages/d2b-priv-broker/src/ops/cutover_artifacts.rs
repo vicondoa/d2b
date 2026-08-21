@@ -14,7 +14,7 @@ use std::{
 
 use d2b_contracts_broker::broker_wire::CanonicalAuditDigest;
 use d2b_contracts::{types::BundleOpId};
-use d2b_contracts_zone_session::v3::ArtifactId;
+use d2b_contracts_resource::v3::ArtifactId;
 use nix::unistd::geteuid;
 use rustix::fs::{
     AtFlags, CWD, FileType, Mode, OFlags, ResolveFlags, fstat, fsync, openat2, statat, unlinkat,

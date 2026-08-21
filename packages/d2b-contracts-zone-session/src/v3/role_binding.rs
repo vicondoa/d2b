@@ -4,11 +4,13 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Deserializer, Serialize};
 
 use super::{
-    CanonicalJsonObject, ResourceRef, ZoneId,
+    role::{MAX_ROLE_RULE_EXECUTION_REFS, MAX_ROLE_RULE_RESOURCE_NAMES, RoleContractError, RoleRule},
+};
+use d2b_contracts_resource::v3::{
+    CanonicalJsonObject,
+    ResourceRef,
+    ZoneId,
     execution_policy::redacted_debug,
-    role::{
-        MAX_ROLE_RULE_EXECUTION_REFS, MAX_ROLE_RULE_RESOURCE_NAMES, RoleContractError, RoleRule,
-    },
 };
 
 /// Canonical RoleBinding ResourceType name.
@@ -379,10 +381,8 @@ pub type RoleBindingStatus = RoleBindingStatusResource;
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::v3::{
-        ResourceTypeName,
-        role::{RoleResourceVerb, RoleRule, RoleSpec},
-    };
+    use crate::v3::role::{RoleResourceVerb, RoleRule, RoleSpec};
+    use d2b_contracts_resource::v3::{ResourceRef, ResourceTypeName};
 
     #[test]
     fn binding_requires_role_and_bounded_subjects() {

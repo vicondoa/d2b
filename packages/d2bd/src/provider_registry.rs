@@ -14,13 +14,17 @@ use std::{
 
 use d2b_contracts_broker::broker_wire::BrokerCallerRole;
 use d2b_contracts_zone_session::v3::{
-    ResourceRef,
-    identity::{
-        ConfigurationGeneration, ResourceGeneration, ResourceName, SchemaFingerprint, ServiceName,
-        ZoneId,
-    },
     zone_routing::{ZoneLabelId, ZonePath},
 };
+use d2b_contracts_resource::v3::{
+    ResourceRef,
+    ConfigurationGeneration,
+    ResourceGeneration,
+    ResourceName,
+    SchemaFingerprint,
+    ZoneId,
+};
+use d2b_contracts_resource::v3::identity::ServiceName;
 use d2b_core::host::HostJson;
 use d2b_provider::instance::ProviderInstance;
 use d2b_provider::{
@@ -53,7 +57,7 @@ pub(crate) fn next_lifecycle_operation_id(
     guest: &str,
     request_fingerprint: &str,
 ) -> String {
-    d2b_contracts_zone_session::v3::canonical_digest(
+    d2b_contracts_resource::v3::canonical_digest(
         "d2bd:provider-lifecycle:v1",
         format!("{operation}:{guest}:{request_fingerprint}").as_bytes(),
     )
@@ -599,8 +603,8 @@ fn runtime_catalog_fingerprint(
 
 /// Keep the ResourceType identity available to callers without accepting a
 /// free-form type alias.
-pub fn provider_resource_type() -> d2b_contracts_zone_session::v3::identity::ResourceTypeName {
-    d2b_contracts_zone_session::v3::identity::ResourceTypeName::parse("Provider")
+pub fn provider_resource_type() -> d2b_contracts_resource::v3::identity::identity::ResourceTypeName {
+    d2b_contracts_resource::v3::identity::identity::ResourceTypeName::parse("Provider")
         .expect("Provider is in the v3 catalog")
 }
 

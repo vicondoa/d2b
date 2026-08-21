@@ -1,7 +1,9 @@
 use std::{collections::BTreeMap, fmt};
 
-use d2b_contracts_zone_session::v3::component_session::{
+use d2b_contracts_zone_session::v3::{
+    component_session::{
     ChannelId, LimitProfile, SessionErrorCode,
+},
 };
 
 use crate::{Result, SessionError};

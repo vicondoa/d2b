@@ -15,7 +15,7 @@
 //! perform no I/O.
 //!
 //! Shared scalars, the shared error type, and the canonical JSON renderer are
-//! reused from `super::execution_policy` and `super::resource_schema` rather
+//! reused from `d2b_contracts_resource::v3::execution_policy` and `d2b_contracts_resource::v3::resource_schema` rather
 //! than restated here.
 
 use schemars::{
@@ -25,9 +25,11 @@ use schemars::{
 };
 use serde::{Deserialize, Deserializer, Serialize};
 
-use super::execution_policy::{
+use d2b_contracts_resource::v3::{
+    execution_policy::{
     BoundedToken, MAX_BOUNDED_TOKEN_BYTES, PrimitiveSpecError, parsed_deserialize, redacted_debug,
     string_schema,
+},
 };
 
 /// Schema version of the v3 Zone routing wire contracts.
@@ -1361,7 +1363,7 @@ impl ZoneRouteAuditEventKind {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::v3::resource_schema::canonical_json_bytes;
+    use d2b_contracts_resource::v3::resource_schema::canonical_json_bytes;
 
     fn zone(labels: &[&str]) -> ZonePath {
         ZonePath::new(

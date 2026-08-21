@@ -20,12 +20,18 @@ use std::task::{Context, Poll, Wake, Waker};
 use std::thread::{self, Thread};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
-use d2b_contracts_provider::v3::credential::{
+use d2b_contracts_provider::v3::{
+    credential::{
     CredentialAuthorization, CredentialLeaseHandle, CredentialLeaseState, CredentialMetadata,
     CredentialOutcomeCode, CredentialServiceError, CredentialServiceErrorCode,
     CredentialSourceVersion, PlacementBinding,
+},
 };
-use d2b_contracts_zone_session::v3::{ResourceGeneration, ResourceRef, ZoneId};
+use d2b_contracts_resource::v3::{
+    ResourceGeneration,
+    ResourceRef,
+    ZoneId,
+};
 
 pub use controller::{
     SecretServiceController, SecretServiceControllerHealth, SecretServiceStatusProjection,

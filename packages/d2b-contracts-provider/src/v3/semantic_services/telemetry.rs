@@ -185,7 +185,7 @@ mod tests {
             let base = format!(
                 r#"{{"policy":{{}},"quota":{{}},"serviceRole":"projection","signals":["metrics"],{extra}}}"#
             );
-            let spec = crate::v3::resource::ResourceSpec::new(
+            let spec = d2b_contracts_resource::v3::resource::ResourceSpec::new(
                 Some(provider_ref("observability-otel")),
                 None,
                 object(&base),

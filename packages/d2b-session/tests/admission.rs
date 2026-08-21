@@ -9,14 +9,18 @@ use std::{
 
 use async_trait::async_trait;
 use d2b_contracts_zone_session::v3::{
-    AuthenticatedSubjectContext, BindingDigest, EvidenceClass, ResourceRef, ResourceUid,
-    SessionBinding, ZoneId,
-    component_session::{
-        AttachmentPolicy, AuthorizationLease, BootstrapIdentityBinding, BootstrapPskBinding,
-        EndpointPolicy, EndpointPurpose, EndpointRole, IdentityEvidenceRequirement, LimitProfile,
-        Locality as SessionLocality, NoiseProfile, OperationId, ServicePackage, SessionErrorCode,
-        TransportBinding, TransportClass,
-    },
+    component_session::{AttachmentPolicy, AuthorizationLease, BootstrapIdentityBinding, BootstrapPskBinding, EndpointPolicy, EndpointPurpose, EndpointRole, IdentityEvidenceRequirement, LimitProfile, Locality as SessionLocality, NoiseProfile, OperationId, ServicePackage, SessionErrorCode, TransportBinding, TransportClass},
+};
+use d2b_contracts_resource::v3::{
+    ResourceRef,
+    ResourceUid,
+    ZoneId,
+};
+use d2b_contracts_resource::v3::identity::{
+    AuthenticatedSubjectContext,
+    BindingDigest,
+    EvidenceClass,
+    SessionBinding,
 };
 use d2b_resource_api::authz::SessionVerb;
 use d2b_session::{
@@ -228,7 +232,7 @@ fn bootstrap_identity(subject: &str, zone: &str) -> BootstrapIdentityBinding {
         subject_ref: ResourceRef::parse(subject).unwrap(),
         subject_uid: ResourceUid::parse("123e4567-e89b-42d3-a456-426614174000").unwrap(),
         zone: ZoneId::parse(zone).unwrap(),
-        purpose: d2b_contracts_zone_session::v3::SessionPurpose::parse("bootstrap").unwrap(),
+        purpose: d2b_contracts_resource::v3::identity::SessionPurpose::parse("bootstrap").unwrap(),
     }
 }
 
@@ -505,7 +509,7 @@ async fn invoke_permit<C>(
         .authorize(
             SessionAuthorizationRequest::new(
                 SessionVerb::Invoke,
-                d2b_contracts_zone_session::v3::ServiceName::parse("d2b.resource.v3").unwrap(),
+                d2b_contracts_resource::v3::identity::ServiceName::parse("d2b.resource.v3").unwrap(),
                 "ResourceService/Get",
                 zone.clone(),
                 None,
@@ -603,7 +607,7 @@ async fn native_rbac_connect_and_invoke_are_executed() {
         .unwrap();
     let request = SessionAuthorizationRequest::new(
         SessionVerb::Invoke,
-        d2b_contracts_zone_session::v3::ServiceName::parse("d2b.resource.v3").unwrap(),
+        d2b_contracts_resource::v3::identity::ServiceName::parse("d2b.resource.v3").unwrap(),
         "ResourceService/Get",
         zone,
         Some(ResourceRef::parse("Process/app").unwrap()),
@@ -636,7 +640,7 @@ async fn admitted_session_retains_transport_and_consumes_send_permits() {
         .authorize(
             SessionAuthorizationRequest::new(
                 SessionVerb::Observe,
-                d2b_contracts_zone_session::v3::ServiceName::parse("d2b.resource.v3").unwrap(),
+                d2b_contracts_resource::v3::identity::ServiceName::parse("d2b.resource.v3").unwrap(),
                 "ResourceService/Watch",
                 zone.clone(),
                 None,
@@ -659,7 +663,7 @@ async fn admitted_session_retains_transport_and_consumes_send_permits() {
         .authorize(
             SessionAuthorizationRequest::new(
                 SessionVerb::Invoke,
-                d2b_contracts_zone_session::v3::ServiceName::parse("d2b.resource.v3").unwrap(),
+                d2b_contracts_resource::v3::identity::ServiceName::parse("d2b.resource.v3").unwrap(),
                 "ResourceService/Get",
                 zone.clone(),
                 None,
@@ -683,7 +687,7 @@ async fn admitted_session_retains_transport_and_consumes_send_permits() {
         .authorize(
             SessionAuthorizationRequest::new(
                 SessionVerb::Invoke,
-                d2b_contracts_zone_session::v3::ServiceName::parse("d2b.resource.v3").unwrap(),
+                d2b_contracts_resource::v3::identity::ServiceName::parse("d2b.resource.v3").unwrap(),
                 "ResourceService/Get",
                 zone,
                 None,
@@ -774,7 +778,7 @@ async fn policy_revision_change_revokes_new_work() {
         .unwrap();
     let request = SessionAuthorizationRequest::new(
         SessionVerb::Invoke,
-        d2b_contracts_zone_session::v3::ServiceName::parse("d2b.resource.v3").unwrap(),
+        d2b_contracts_resource::v3::identity::ServiceName::parse("d2b.resource.v3").unwrap(),
         "ResourceService/Get",
         zone,
         None,
@@ -799,7 +803,7 @@ async fn native_rbac_relay_mints_only_for_a_distinct_next_zone() {
     .await
     .unwrap();
     let invalid = SessionAuthorizationRequest::relay(
-        d2b_contracts_zone_session::v3::ServiceName::parse("d2b.resource.v3").unwrap(),
+        d2b_contracts_resource::v3::identity::ServiceName::parse("d2b.resource.v3").unwrap(),
         "ResourceService/Get",
         ZoneId::parse("personal").unwrap(),
         None,
@@ -813,7 +817,7 @@ async fn native_rbac_relay_mints_only_for_a_distinct_next_zone() {
     );
 
     let valid = SessionAuthorizationRequest::relay(
-        d2b_contracts_zone_session::v3::ServiceName::parse("d2b.resource.v3").unwrap(),
+        d2b_contracts_resource::v3::identity::ServiceName::parse("d2b.resource.v3").unwrap(),
         "ResourceService/Get",
         ZoneId::parse("personal").unwrap(),
         None,
@@ -847,7 +851,7 @@ fn authorization_request_enforces_relay_and_diagnostic_bindings() {
     let local = ZoneId::parse("work").unwrap();
     let remote = ZoneId::parse("personal").unwrap();
     let next_hop = ZoneId::parse("gateway").unwrap();
-    let service = d2b_contracts_zone_session::v3::ServiceName::parse("d2b.resource.v3").unwrap();
+    let service = d2b_contracts_resource::v3::identity::ServiceName::parse("d2b.resource.v3").unwrap();
     let relay = SessionAuthorizationRequest::relay(
         service.clone(),
         "ResourceService/Get",
@@ -877,7 +881,7 @@ fn authorization_request_enforces_relay_and_diagnostic_bindings() {
     assert_eq!(
         SessionAuthorizationRequest::new(
             SessionVerb::AuditExport,
-            d2b_contracts_zone_session::v3::ServiceName::parse("d2b.resource.v3").unwrap(),
+            d2b_contracts_resource::v3::identity::ServiceName::parse("d2b.resource.v3").unwrap(),
             "AuditService/Export",
             local.clone(),
             None,
@@ -888,7 +892,7 @@ fn authorization_request_enforces_relay_and_diagnostic_bindings() {
     );
     SessionAuthorizationRequest::new(
         SessionVerb::AuditExport,
-        d2b_contracts_zone_session::v3::ServiceName::parse("d2b.audit.v3").unwrap(),
+        d2b_contracts_resource::v3::identity::ServiceName::parse("d2b.audit.v3").unwrap(),
         "AuditService/Export",
         local.clone(),
         None,
@@ -896,7 +900,7 @@ fn authorization_request_enforces_relay_and_diagnostic_bindings() {
     .unwrap();
     SessionAuthorizationRequest::new(
         SessionVerb::SupportBundle,
-        d2b_contracts_zone_session::v3::ServiceName::parse("d2b.support.v3").unwrap(),
+        d2b_contracts_resource::v3::identity::ServiceName::parse("d2b.support.v3").unwrap(),
         "SupportService/GenerateBundle",
         local,
         None,

@@ -11,9 +11,10 @@
 //! [`ZoneRouteEngine::admit_relay_hop`], which this crate reuses rather than
 //! restates.
 
-use d2b_contracts_zone_session::v3::{
-    identity::{ResourceName, ResourceTypeName},
-    zone_routing::ZoneLabelId,
+use d2b_contracts_zone_session::v3::zone_routing::ZoneLabelId;
+use d2b_contracts_resource::v3::{
+    ResourceName,
+    ResourceTypeName,
 };
 use d2b_zone_routing::engine::{ZoneRelayAdmission, ZoneRelayRequest, ZoneRouteEngine};
 

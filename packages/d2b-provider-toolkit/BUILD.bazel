@@ -53,6 +53,7 @@ rust_binary(
     visibility = ["//visibility:public"],
     deps = [
         "//packages/d2b-contracts-provider:d2b_contracts_provider",
+        "//packages/d2b-contracts-resource:d2b_contracts_resource",
         "//packages/d2b-contracts-zone-session:d2b_contracts_zone_session",
         ":d2b_provider_toolkit",
     ] + all_crate_deps(normal = True, cargo_only = True),

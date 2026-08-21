@@ -15,7 +15,7 @@ use d2b_contracts_broker::broker_wire::ApplyHostGenerationHandoffResponse;
 use d2b_contracts_broker::host_generation::{
     ApplyHostGenerationHandoff, HandoffCoordinator, HandoffError, HandoffState, target_fingerprint,
 };
-use d2b_contracts_zone_session::v3::ArtifactId;
+use d2b_contracts_resource::v3::ArtifactId;
 use d2b_host::host_generation::{
     ActivationArtifactValidationRequest, ActivationArtifactValidationResponse,
     ActivationHelperOutcome, ActivationHelperRequest, ActivationHelperResponse,
@@ -83,7 +83,7 @@ impl HandoffEffect for SuccessfulHandoffEffect {
     ) -> Result<ActivationHelperOutcome, HandoffOperationError> {
         Ok(
             if request.intent.activation_mode
-                == d2b_contracts_zone_session::v3::ActivationMode::Adopt
+                == d2b_contracts_resource::v3::ActivationMode::Adopt
             {
                 ActivationHelperOutcome::Adopted
             } else {
@@ -120,17 +120,17 @@ impl HandoffEffect for ActivationHelperEffect {
             system_artifact_id: request.intent.system_artifact_id.as_str().to_owned(),
             target_generation: request.intent.target_generation,
             activation_mode: match request.intent.activation_mode {
-                d2b_contracts_zone_session::v3::ActivationMode::Switch => {
-                    d2b_contracts_zone_session::v3::ActivationMode::Switch
+                d2b_contracts_resource::v3::ActivationMode::Switch => {
+                    d2b_contracts_resource::v3::ActivationMode::Switch
                 }
-                d2b_contracts_zone_session::v3::ActivationMode::Boot => {
-                    d2b_contracts_zone_session::v3::ActivationMode::Boot
+                d2b_contracts_resource::v3::ActivationMode::Boot => {
+                    d2b_contracts_resource::v3::ActivationMode::Boot
                 }
-                d2b_contracts_zone_session::v3::ActivationMode::Test => {
-                    d2b_contracts_zone_session::v3::ActivationMode::Test
+                d2b_contracts_resource::v3::ActivationMode::Test => {
+                    d2b_contracts_resource::v3::ActivationMode::Test
                 }
-                d2b_contracts_zone_session::v3::ActivationMode::Adopt => {
-                    d2b_contracts_zone_session::v3::ActivationMode::Adopt
+                d2b_contracts_resource::v3::ActivationMode::Adopt => {
+                    d2b_contracts_resource::v3::ActivationMode::Adopt
                 }
             },
         };
@@ -334,7 +334,7 @@ fn response(
     coordinator: &HandoffCoordinator,
 ) -> ApplyHostGenerationHandoffResponse {
     ApplyHostGenerationHandoffResponse {
-        target: d2b_contracts_zone_session::v3::ResourceRef::parse(
+        target: d2b_contracts_resource::v3::ResourceRef::parse(
             &request.target.to_canonical_string(),
         )
         .expect("validated handoff target is a canonical resource reference"),
@@ -401,7 +401,11 @@ mod tests {
     use d2b_contracts_broker::host_generation::{
         HandoffCallerRole, HostGenerationHandoffIntent, SourceGenerationCompatibilityFloorV1,
     };
-    use d2b_contracts_zone_session::v3::{ActivationMode, ArtifactId, ResourceRef};
+    use d2b_contracts_resource::v3::{
+    ActivationMode,
+    ArtifactId,
+    ResourceRef,
+};
 
     fn request() -> ApplyHostGenerationHandoff {
         let target = ResourceRef::parse("Host/host-system").unwrap();

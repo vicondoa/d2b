@@ -168,7 +168,7 @@ mod tests {
             .service()
             .schema_contract(std::iter::empty())
             .unwrap();
-        let spec = crate::v3::resource::ResourceSpec::new(
+        let spec = d2b_contracts_resource::v3::resource::ResourceSpec::new(
             Some(provider_ref("audio-pipewire")),
             None,
             object(
@@ -200,7 +200,7 @@ mod tests {
     /// owner authority descriptor.
     #[test]
     fn a_projection_may_not_carry_the_owner_authority_descriptor() {
-        let spec = crate::v3::resource::ResourceSpec::new(
+        let spec = d2b_contracts_resource::v3::resource::ResourceSpec::new(
             Some(provider_ref("audio-pipewire")),
             None,
             object(

@@ -1,9 +1,11 @@
 //! Secret Service Credential telemetry producer.
 
 use d2b_contracts_provider::v3::credential::PlacementBinding;
-use d2b_contracts_provider::v3::credential_controller::{
+use d2b_contracts_provider::v3::{
+    credential_controller::{
     CredentialObservabilityError, CredentialProviderKind, CredentialTelemetryFrame,
     CredentialTelemetryOperation, CredentialTelemetryOutcome,
+},
 };
 
 pub(super) fn frame(

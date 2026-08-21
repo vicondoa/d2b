@@ -76,7 +76,9 @@ pub use zone_link::{ZoneLinkSession, ZoneLinkSessionError};
 /// types. Import the endpoint enumerations from here, never from the
 /// component-session module, so the un-extended taxonomy cannot be picked up
 /// by accident.
-pub use d2b_contracts_zone_session::v3::zone_session as wire;
+pub use d2b_contracts_zone_session::v3::{
+    zone_session as wire,
+};
 
 // The ported ComponentSession runtime. Every item below is the audited
 // definition, re-exported unchanged; this module adds no wrapper, no default,

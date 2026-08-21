@@ -18,7 +18,7 @@ use std::{
     },
 };
 
-use d2b_contracts_zone_session::v3::ResourceRef;
+use d2b_contracts_resource::v3::ResourceRef;
 
 /// The fixed authority scope.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]

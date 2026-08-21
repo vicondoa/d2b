@@ -39,10 +39,11 @@ use schemars::{
 };
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
-use super::{
-    identity::{ResourceTypeName, SchemaFingerprint},
-    provider::{BindingTargetType, Exportability, ProjectionFactory, ProviderContractError},
-    resource::ResourceSpec,
+use super::provider::{
+    BindingTargetType, Exportability, ProjectionFactory, ProviderContractError,
+};
+use d2b_contracts_resource::v3::{
+    ResourceRef, ResourceSpec, ResourceTypeName, SchemaFingerprint,
     resource_schema::{
         ObjectFieldSchema, ProviderExtensionRegistration, ResourceSchemaContract,
         ResourceSchemaError, SCHEMA_DOMAIN_TAG, SchemaVersion, canonical_digest,
@@ -500,7 +501,7 @@ fn layer_fingerprint(
         "allowed": allowed.iter().copied().collect::<Vec<_>>(),
         "required": required.iter().copied().collect::<Vec<_>>(),
     });
-    let bytes = super::resource_schema::canonical_json_bytes(&declaration)
+    let bytes = d2b_contracts_resource::v3::resource_schema::canonical_json_bytes(&declaration)
         .expect("a catalog schema declaration is canonicalizable");
     SchemaFingerprint::parse(canonical_digest(SCHEMA_DOMAIN_TAG, &bytes))
         .expect("a domain-separated SHA-256 digest is a valid schema fingerprint")
@@ -587,12 +588,12 @@ impl SemanticTypeContract {
     ) -> Result<ResourceSchemaContract, SemanticContractError> {
         Ok(ResourceSchemaContract::new(
             self.resource_type.clone(),
-            super::resource_schema::BaseSchemaBinding {
-                spec: super::resource_schema::BaseSchemaIdentity {
+            d2b_contracts_resource::v3::resource_schema::BaseSchemaBinding {
+                spec: d2b_contracts_resource::v3::resource_schema::BaseSchemaIdentity {
                     version: self.spec.version,
                     fingerprint: self.spec.fingerprint.clone(),
                 },
-                status: super::resource_schema::BaseSchemaIdentity {
+                status: d2b_contracts_resource::v3::resource_schema::BaseSchemaIdentity {
                     version: self.status.version,
                     fingerprint: self.status.fingerprint.clone(),
                 },
@@ -613,8 +614,8 @@ impl SemanticTypeContract {
     /// each family module for which interiors it leaves open.
     pub fn minimal_base_spec(
         &self,
-        provider_ref: super::ResourceRef,
-        base_values: super::resource_schema::CanonicalJsonObject,
+        provider_ref: ResourceRef,
+        base_values: d2b_contracts_resource::v3::resource_schema::CanonicalJsonObject,
     ) -> Result<ResourceSpec, SemanticContractError> {
         for key in base_values.keys() {
             if matches!(key, "provider" | PROVIDER_REF_FIELD | UPDATE_POLICY_FIELD) {
@@ -952,7 +953,7 @@ fn factory_fingerprint_for_protocol(
         "projectionSchemaFingerprint": projection_schema_fingerprint.as_str(),
         "projectionProtocolVersion": projection_protocol_version,
     });
-    let bytes = super::resource_schema::canonical_json_bytes(&declaration)
+    let bytes = d2b_contracts_resource::v3::resource_schema::canonical_json_bytes(&declaration)
         .expect("a catalog factory declaration is canonicalizable");
     SchemaFingerprint::parse(canonical_digest(SCHEMA_DOMAIN_TAG, &bytes))
         .expect("a domain-separated SHA-256 digest is a valid schema fingerprint")
@@ -1058,7 +1059,7 @@ impl SemanticPairContract {
     /// must be in this pair's closed allowed target set.
     pub fn admit_binding_refs(
         &self,
-        service_ref: &super::ResourceRef,
+        service_ref: &ResourceRef,
         target: BindingTargetType,
     ) -> Result<(), SemanticContractError> {
         if service_ref.resource_type() != &self.service.resource_type {
@@ -1082,7 +1083,7 @@ impl SemanticPairContract {
     /// [`ProjectionFactory::admits_export_target`].
     pub fn admit_export_target(
         &self,
-        resource_ref: &super::ResourceRef,
+        resource_ref: &ResourceRef,
     ) -> Result<(), SemanticContractError> {
         if resource_ref.resource_type() == &self.service.resource_type {
             Ok(())
@@ -1113,8 +1114,8 @@ pub fn catalog() -> [&'static SemanticPairContract; 4] {
 #[cfg(test)]
 pub(crate) mod tests_support {
     use super::*;
-    use crate::v3::{
-        ResourceName, ResourceRef,
+    use d2b_contracts_resource::v3::{
+        ResourceName, ResourceRef, ResourceTypeName,
         resource_schema::{
             CanonicalJsonObject, CanonicalJsonValue, ExtensionSchemaId, ExtensionSchemaLayer,
         },
@@ -1137,7 +1138,7 @@ pub(crate) mod tests_support {
     pub(crate) fn resource_envelope(
         resource_type: &str,
         owner_ref: Option<&str>,
-    ) -> crate::v3::ResourceEnvelope {
+    ) -> d2b_contracts_resource::v3::ResourceEnvelope {
         let owner_ref = owner_ref
             .map(serde_json::Value::from)
             .unwrap_or(serde_json::Value::Null);
@@ -1184,7 +1185,7 @@ pub(crate) mod tests_support {
                 }
             }
         });
-        crate::v3::ResourceEnvelope::from_json(&serde_json::to_vec(&value).unwrap()).unwrap()
+        d2b_contracts_resource::v3::ResourceEnvelope::from_json(&serde_json::to_vec(&value).unwrap()).unwrap()
     }
 
     /// Assert that the canonical minimal base Spec is accepted with no
@@ -1508,9 +1509,11 @@ pub(crate) mod tests_support {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::v3::{
-        ResourceName, ResourceRef,
-        resource_schema::{CanonicalJsonObject, ExtensionSchemaId, ExtensionSchemaLayer},
+    use d2b_contracts_resource::v3::{
+        ResourceName, ResourceRef, ResourceTypeName,
+        resource_schema::{
+            CanonicalJsonObject, ExtensionSchemaId, ExtensionSchemaLayer, SchemaVersion,
+        },
     };
 
     fn provider_ref(name: &str) -> ResourceRef {
@@ -1790,7 +1793,7 @@ mod tests {
     #[test]
     fn a_core_projection_rejects_a_provider_extension() {
         let pair = SemanticFamily::SecurityKey.contract();
-        let extension = crate::v3::resource::ProviderSpecExtension::new(
+        let extension = d2b_contracts_resource::v3::resource::ProviderSpecExtension::new(
             ExtensionSchemaId::new(
                 ResourceName::parse("device-security-key").unwrap(),
                 pair.service().resource_type().clone(),

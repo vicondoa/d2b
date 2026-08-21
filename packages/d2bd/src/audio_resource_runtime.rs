@@ -10,8 +10,13 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 
 use d2b_contracts_resource::resource_proto as wire;
-use d2b_contracts_zone_session::v3::ZoneRevision;
-use d2b_contracts_zone_session::v3::{ResourceEnvelope, ResourceRef, ResourceTypeName, ZoneId};
+use d2b_contracts_resource::v3::ZoneRevision;
+use d2b_contracts_resource::v3::{
+    ResourceEnvelope,
+    ResourceRef,
+    ResourceTypeName,
+    ZoneId,
+};
 use d2b_provider_audio_pipewire::{
     AudioBindingController, AudioBindingPhase, AudioBindingSpec, AudioBindingStatus,
     AudioControllerError, AudioMediator, AudioServiceRole, AudioServiceSpec, GuestAudioReadiness,
@@ -781,11 +786,11 @@ mod tests {
         let resource = StoredResource {
             resource_ref: binding_ref.clone(),
             zone: zone.clone(),
-            uid: d2b_contracts_zone_session::v3::ResourceUid::parse(
+            uid: d2b_contracts_resource::v3::ResourceUid::parse(
                 "123e4567-e89b-42d3-a456-426614174000",
             )
             .unwrap(),
-            generation: d2b_contracts_zone_session::v3::ResourceGeneration::new(1).unwrap(),
+            generation: d2b_contracts_resource::v3::ResourceGeneration::new(1).unwrap(),
             revision: ZoneRevision::new(1),
             canonical_json: br#"{"metadata":{}}"#.to_vec(),
             payload_digest: String::new(),

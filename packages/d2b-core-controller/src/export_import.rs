@@ -8,11 +8,21 @@
 //! implemented here.
 
 use d2b_contracts_provider::v3::{
-    BindingTargetType, Exportability, ProjectionFactory, ProviderContractError,
-    SEMANTIC_PROJECTION_PROTOCOL_VERSION, SemanticProjectionProtocolVersion,
+    BindingTargetType,
+    Exportability,
+    ProjectionFactory,
+    ProviderContractError,
+    SEMANTIC_PROJECTION_PROTOCOL_VERSION,
+    SemanticProjectionProtocolVersion,
 };
 use d2b_contracts_zone_session::v3::{
-    ResourceEnvelope, ResourceExportSpec, ResourceImportSpec, ResourceRef, ResourceTypeName,
+    ResourceExportSpec,
+    ResourceImportSpec,
+};
+use d2b_contracts_resource::v3::{
+    ResourceEnvelope,
+    ResourceRef,
+    ResourceTypeName,
     SchemaFingerprint,
 };
 
@@ -419,11 +429,22 @@ pub fn projection_identity(
 
 #[cfg(test)]
 mod tests {
-    use d2b_contracts_provider::v3::{BindingTargetType, Exportability};
+    use d2b_contracts_provider::v3::{
+    BindingTargetType,
+    Exportability,
+};
     use d2b_contracts_zone_session::v3::{
-        ConsumerZonePolicy, ExportArbitration, ResourceExportSpec, ResourceImportSpec,
-        ResourceName, ResourceTypeName, SchemaFingerprint, execution_policy::BoundedToken,
-    };
+    ConsumerZonePolicy,
+    ExportArbitration,
+    ResourceExportSpec,
+    ResourceImportSpec,
+};
+use d2b_contracts_resource::v3::{
+    ResourceName,
+    ResourceTypeName,
+    SchemaFingerprint,
+    execution_policy::BoundedToken,
+};
 
     use super::*;
 
@@ -455,7 +476,7 @@ mod tests {
             vec![BoundedToken::parse("use").unwrap()],
             ExportArbitration::Exclusive,
             ConsumerZonePolicy::new(
-                vec![d2b_contracts_zone_session::v3::ZoneId::parse("child").unwrap()],
+                vec![d2b_contracts_resource::v3::ZoneId::parse("child").unwrap()],
                 vec![BoundedToken::parse("use").unwrap()],
             )
             .unwrap(),

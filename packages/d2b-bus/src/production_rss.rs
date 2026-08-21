@@ -8,11 +8,28 @@
 use std::sync::{Arc, Mutex};
 
 use async_trait::async_trait;
-use d2b_contracts_zone_session::v3::{
-    AuthenticatedSubjectContext, BindingDigest, ConfigurationGeneration, ControllerGeneration,
-    EvidenceClass, Locality, ReconnectGeneration, ResourceGeneration, ResourceRef,
-    ResourceTypeName, ResourceUid, SchemaFingerprint, ServiceName, SessionBinding, SessionPurpose,
-    TranscriptHash, TransportBinding, ZoneId, ZoneRevision,
+use d2b_contracts_resource::v3::{
+    ConfigurationGeneration,
+    ControllerGeneration,
+    ResourceGeneration,
+    ResourceRef,
+    ResourceTypeName,
+    ResourceUid,
+    SchemaFingerprint,
+    ZoneId,
+    ZoneRevision,
+};
+use d2b_contracts_resource::v3::identity::{
+    AuthenticatedSubjectContext,
+    BindingDigest,
+    EvidenceClass,
+    Locality,
+    ReconnectGeneration,
+    ServiceName,
+    SessionBinding,
+    SessionPurpose,
+    TranscriptHash,
+    TransportBinding,
 };
 use d2b_resource_api::authz::{
     ApiCatalog, BindingScope, BootstrapPhase, BoundSubject, CompiledRole, CompiledRoleBinding,

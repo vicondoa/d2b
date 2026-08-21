@@ -12,8 +12,8 @@ use std::future::Future;
 
 use serde::Serialize;
 
-use d2b_contracts_zone_session::v3::execution_policy::BoundedToken;
-use d2b_contracts_zone_session::v3::volume::SourceKind;
+use d2b_contracts_resource::v3::execution_policy::BoundedToken;
+use d2b_contracts_resource::v3::volume::SourceKind;
 
 use crate::error::VolumeLocalError;
 use crate::identity::{MarkerState, OwnerProof, VolumeRootHandle};

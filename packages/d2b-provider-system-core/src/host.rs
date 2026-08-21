@@ -22,12 +22,16 @@
 //! `packages/d2bd/src/unsafe_local_helper.rs`), whose exact-user constraint
 //! becomes the `defaultUserRef` requirement asserted below.
 
-use d2b_contracts_zone_session::v3::ResourceRef;
+use d2b_contracts_resource::v3::ResourceRef;
 use std::{collections::BTreeSet, future::Future, future::ready};
 
-use d2b_contracts_zone_session::v3::execution_policy::{BudgetSpec, ExecutionDomain};
-use d2b_contracts_zone_session::v3::host::{HOST_RESOURCE_TYPE, HostSpec, IsolationPosture};
-use d2b_contracts_zone_session::v3::resource_status::ResourcePhase;
+use d2b_contracts_resource::v3::{
+    execution_policy::{BudgetSpec, ExecutionDomain},
+};
+use d2b_contracts_resource::v3::{
+    host::{HOST_RESOURCE_TYPE, HostSpec, IsolationPosture},
+};
+use d2b_contracts_resource::v3::resource_status::ResourcePhase;
 use serde::Serialize;
 
 use crate::error::SystemCoreError;

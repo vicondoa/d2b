@@ -83,7 +83,8 @@ rust_test(
     data = [":d2b-resource-compiler"],
     env = {"CARGO_BIN_EXE_d2b-resource-compiler": "$(rootpath :d2b-resource-compiler)"},
     rustc_env = {"CARGO_BIN_EXE_d2b-resource-compiler": "$(rootpath :d2b-resource-compiler)"},
-    deps = ["//packages/d2b-contracts-zone-session:d2b_contracts_zone_session", ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
+    deps = ["//packages/d2b-contracts-resource:d2b_contracts_resource",
+        "//packages/d2b-contracts-zone-session:d2b_contracts_zone_session", ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
 )
 
 rust_test(

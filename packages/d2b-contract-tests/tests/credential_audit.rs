@@ -1,10 +1,14 @@
 //! Credential audit and telemetry structural contract.
 
-use d2b_contracts_provider::v3::credential::{CredentialMethod, PlacementBinding};
-use d2b_contracts_provider::v3::credential_controller::{
+use d2b_contracts_provider::v3::{
+    credential::{CredentialMethod, PlacementBinding},
+};
+use d2b_contracts_provider::v3::{
+    credential_controller::{
     CREDENTIAL_METRICS, CredentialAuditOutcome, CredentialAuditRecord, CredentialLeaseAggregate,
     CredentialProviderKind, CredentialTelemetryField, CredentialTelemetryFrame,
     CredentialTelemetryOperation, CredentialTelemetryOutcome,
+},
 };
 
 const FORBIDDEN_LABEL_KEYS: &[&str] = &[

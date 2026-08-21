@@ -3,22 +3,16 @@
 use std::collections::BTreeMap;
 use std::future::Future;
 
-use d2b_contracts_zone_session::v3::{
-    ResourceBundleGenerationId, ResourceGeneration, ResourceRef, ResourceUid,
+use d2b_contracts_resource::v3::{
+    ResourceBundleGenerationId,
+    ResourceGeneration,
+    ResourceRef,
+    ResourceUid,
     execution_policy::{BoundedToken, BudgetSpec, ExecutionPolicy},
     guest::GuestSpec,
     network::{AttachmentGenerationFence, AttachmentHandle, NetworkSpec, cidr_overlaps},
-    process::{
-        CapabilityClass, EnvironmentClass, ExecutionSpec, MountAccess, MountSpec, ProcessClass,
-        ProcessSpec, SandboxSpec, TelemetrySpec,
-    },
-    volume::{
-        AttachmentAccess, AttachmentSettings, AttachmentTransport, CleanupPolicy, CreatePolicy,
-        EntryAdoptionPolicy, EntryRestartPolicy, EntryType, ForeignChildPolicy, Invariant,
-        LayoutEntry, LeaseClass, QuotaEnforcement, QuotaSpec, RepairPolicy, SensitivityClass,
-        SourceKind, SourceSettings, ViewRight, ViewSpec, VolumeAttachment, VolumeKind,
-        VolumeSource, VolumeSpec,
-    },
+    process::{CapabilityClass, EnvironmentClass, ExecutionSpec, MountAccess, MountSpec, ProcessClass, ProcessSpec, SandboxSpec, TelemetrySpec},
+    volume::{AttachmentAccess, AttachmentSettings, AttachmentTransport, CleanupPolicy, CreatePolicy, EntryAdoptionPolicy, EntryRestartPolicy, EntryType, ForeignChildPolicy, Invariant, LayoutEntry, LeaseClass, QuotaEnforcement, QuotaSpec, RepairPolicy, SensitivityClass, SourceKind, SourceSettings, ViewRight, ViewSpec, VolumeAttachment, VolumeKind, VolumeSource, VolumeSpec},
 };
 
 use crate::artifact::{
@@ -865,7 +859,7 @@ pub fn render_config(spec: &NetworkSpec) -> Result<NetworkConfigContent, Network
         "lan={}\nuplink={}\nblocklist={}\n",
         spec.lan_cidr().as_str(),
         spec.uplink_cidr().as_str(),
-        d2b_contracts_zone_session::v3::network::DEFAULT_HOST_BLOCKLIST.join(",")
+        d2b_contracts_resource::v3::network::DEFAULT_HOST_BLOCKLIST.join(",")
     )
     .into_bytes();
     let routing = format!("uplink={}\n", spec.uplink_cidr().as_str()).into_bytes();

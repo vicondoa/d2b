@@ -7,7 +7,7 @@
 //! are quarantined rather than guessed.
 
 use crate::zone_links::{ZoneLinkCursor, ZoneLinkError};
-use d2b_contracts_zone_session::v3::SchemaFingerprint;
+use d2b_contracts_resource::v3::SchemaFingerprint;
 
 pub use crate::zone_links::{
     BootstrapPsk, SealedEnrollment, ZONE_LINK_METRIC_LABEL_KEYS, ZoneLinkEffect, ZoneLinkEvent,

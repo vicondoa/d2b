@@ -16,6 +16,7 @@ rust_library(
     compile_data = ["Cargo.toml"],
     deps = [
         "//packages/d2b-contracts-broker:d2b_contracts_broker",
+        "//packages/d2b-contracts-resource:d2b_contracts_resource",
         "//packages/d2b-contracts-zone-session:d2b_contracts_zone_session",
     ] + all_crate_deps(normal = True, cargo_only = True),
     visibility = ["//visibility:public"],
@@ -27,6 +28,7 @@ rust_library(
     compile_data = ["Cargo.toml"],
     deps = [
         "//packages/d2b-contracts-broker:d2b_contracts_broker",
+        "//packages/d2b-contracts-resource:d2b_contracts_resource",
         "//packages/d2b-contracts-zone-session:d2b_contracts_zone_session",
     ] + all_crate_deps(normal = True, cargo_only = True),
     crate_name = "d2b_provider_activation_nixos",
@@ -46,6 +48,7 @@ rust_test(
     crate = ":d2b_provider_activation_nixos_test_support",
     deps = [
         "//packages/d2b-contracts-broker:d2b_contracts_broker",
+        "//packages/d2b-contracts-resource:d2b_contracts_resource",
         "//packages/d2b-contracts-zone-session:d2b_contracts_zone_session",
     ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
 )
@@ -59,6 +62,7 @@ rust_test(
     compile_data = ["Cargo.toml"],
     visibility = ["//visibility:public"],
     deps = [
+        "//packages/d2b-contracts-resource:d2b_contracts_resource",
         "//packages/d2b-contracts-zone-session:d2b_contracts_zone_session",
         ":d2b_provider_activation_nixos",
     ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
@@ -72,6 +76,7 @@ rust_test(
     compile_data = ["Cargo.toml"],
     visibility = ["//visibility:public"],
     deps = [
+        "//packages/d2b-contracts-resource:d2b_contracts_resource",
         "//packages/d2b-contracts-zone-session:d2b_contracts_zone_session",
         ":d2b_provider_activation_nixos",
     ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),

@@ -34,7 +34,11 @@
 //! the registrar's. A digest is one-way, so a Zone that receives a bound offer
 //! cannot expand it back into an identity.
 
-use d2b_contracts_zone_session::v3::{AuthenticatedSubjectContext, EvidenceClass, Locality};
+use d2b_contracts_resource::v3::identity::{
+    AuthenticatedSubjectContext,
+    EvidenceClass,
+    Locality,
+};
 use sha2::{Digest, Sha256};
 
 use crate::session::contract::{ZoneEndpointPolicy, ZonePolicyError};
@@ -169,11 +173,23 @@ impl core::fmt::Debug for ZoneLinkPrologue {
 
 #[cfg(test)]
 pub(crate) mod fixtures {
-    use d2b_contracts_zone_session::v3::{
-        AuthenticatedSubjectContext, BindingDigest, EvidenceClass, Locality, ReconnectGeneration,
-        ResourceRef, ResourceUid, SchemaFingerprint, ServiceName, SessionBinding, SessionPurpose,
-        TranscriptHash, TransportBinding,
-    };
+    use d2b_contracts_resource::v3::{
+    ResourceRef,
+    ResourceUid,
+    SchemaFingerprint,
+};
+use d2b_contracts_resource::v3::identity::{
+    AuthenticatedSubjectContext,
+    BindingDigest,
+    EvidenceClass,
+    Locality,
+    ReconnectGeneration,
+    ServiceName,
+    SessionBinding,
+    SessionPurpose,
+    TranscriptHash,
+    TransportBinding,
+};
 
     /// One authenticated subject context, as the registrar would have
     /// produced it. The test builds it directly because no registrar is wired

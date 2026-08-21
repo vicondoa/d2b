@@ -1,6 +1,6 @@
 //! Same-user compositor attachment portal.
 
-use d2b_contracts_zone_session::v3::ResourceRef;
+use d2b_contracts_resource::v3::ResourceRef;
 use std::collections::BTreeMap;
 
 use crate::AttachmentGrantHandle;

@@ -13,22 +13,24 @@
 use std::collections::BTreeMap;
 
 use d2b_contracts_resource::v3::ArtifactId;
-use d2b_contracts_zone_session::v3::identity::BindingDigest;
+use d2b_contracts_resource::v3::identity::BindingDigest;
 use d2b_contracts_zone_session::v3::{
-    Locality, ResourceRef, TransportBinding,
+    zone_routing::ZonePath,
+    provider::{ArtifactDigest, ArtifactDigestSet, CapabilitySupport, CompatibilityRange, ComponentDescriptor, ComponentStateKind, ComponentStateNamespace, ComponentStateView, ComponentType, DependencyAlias, DependencyDeclaration, PolicyEvaluation, ProviderManifest, ProviderSpec, ResourceApiBinding, RevocationState, SignatureState, StandardCapabilityMatrix, StorageNeed, TrustEvidence, UpgradeDisposition, UpgradePolicy},
+};
+use d2b_contracts_resource::v3::{
+    ResourceRef,
     execution_policy::{BoundedToken, ExecutionDomain},
-    identity::{ResourceTypeName, SchemaFingerprint, SessionPurpose},
-    provider::{
-        ArtifactDigest, ArtifactDigestSet, CapabilitySupport, CompatibilityRange,
-        ComponentDescriptor, ComponentStateKind, ComponentStateNamespace, ComponentStateView,
-        ComponentType, DependencyAlias, DependencyDeclaration, PolicyEvaluation, ProviderManifest,
-        ProviderSpec, ResourceApiBinding, RevocationState, SignatureState,
-        StandardCapabilityMatrix, StorageNeed, TrustEvidence, UpgradeDisposition, UpgradePolicy,
-    },
+    ResourceTypeName,
+    SchemaFingerprint,
     resource_schema::SchemaVersion,
     volume::ViewRight,
     volume_state::{MigrationPolicy, PersistenceClass, SensitivityClass, VolumeStateSchemaId},
-    zone_routing::ZonePath,
+};
+use d2b_contracts_resource::v3::identity::{
+    Locality,
+    TransportBinding,
+    SessionPurpose,
 };
 use d2b_provider_toolkit::fakes::{
     FakeBus, FakeCoreClient, FakeEffectPort, FakePortError, FakeResourceStore, FakeSupervisor,

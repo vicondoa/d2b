@@ -8,8 +8,9 @@ use std::fmt;
 
 use d2b_contracts::types::{BundleOpId, ScopeId, VmId};
 use d2b_contracts_broker::broker_wire::NftablesProjectionAction;
-use d2b_contracts_zone_session::v3::{
-    ResourceBundleGenerationId, ResourceUid,
+use d2b_contracts_resource::v3::{
+    ResourceBundleGenerationId,
+    ResourceUid,
     network::{AttachmentGenerationFence, AttachmentHandle, NetworkSpec},
 };
 
@@ -382,16 +383,13 @@ mod tests {
     use super::*;
     use d2b_contracts::types::{BundleOpId, ScopeId, VmId};
     use d2b_contracts_broker::broker_wire::NftablesProjectionAction;
-    use d2b_contracts_zone_session::v3::{
-        ResourceBundleGenerationId, ResourceUid,
-        execution_policy::BoundedToken,
-        ifname::IfName,
-        network::{
-            AttachmentGenerationFence, AttachmentHandle, EgressSpec, ExternalAttachmentMode,
-            ExternalAttachmentSpec, ExternalIpv4Spec, Ipv4Cidr, IsolationSpec, MacvtapMode,
-            NetworkSpec, SharingPolicy,
-        },
-    };
+    use d2b_contracts_resource::v3::{
+    ResourceBundleGenerationId,
+    ResourceUid,
+    execution_policy::BoundedToken,
+    ifname::IfName,
+    network::{AttachmentGenerationFence, AttachmentHandle, EgressSpec, ExternalAttachmentMode, ExternalAttachmentSpec, ExternalIpv4Spec, Ipv4Cidr, IsolationSpec, MacvtapMode, NetworkSpec, SharingPolicy},
+};
 
     #[derive(Clone, Default)]
     struct RecordingBroker {
@@ -593,9 +591,9 @@ mod tests {
             attachment_uid.clone(),
             AttachmentGenerationFence::new(
                 uid.clone(),
-                d2b_contracts_zone_session::v3::ResourceGeneration::new(4).unwrap(),
+                d2b_contracts_resource::v3::ResourceGeneration::new(4).unwrap(),
                 attachment_uid,
-                d2b_contracts_zone_session::v3::ResourceGeneration::new(7).unwrap(),
+                d2b_contracts_resource::v3::ResourceGeneration::new(7).unwrap(),
             ),
         );
 

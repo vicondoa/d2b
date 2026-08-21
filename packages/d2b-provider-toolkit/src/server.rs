@@ -15,9 +15,16 @@ use std::{
 };
 
 use d2b_contracts_zone_session::v3::{
-    CanonicalJsonObject, ProviderMethod, ResourceRef, ServiceName, component_session::RequestId,
-    execution_policy::BoundedToken, zone_routing::ZonePath,
+    ProviderMethod,
+    component_session::RequestId,
+    zone_routing::ZonePath,
 };
+use d2b_contracts_resource::v3::{
+    CanonicalJsonObject,
+    ResourceRef,
+    execution_policy::BoundedToken,
+};
+use d2b_contracts_resource::v3::identity::ServiceName;
 use d2b_session::{Cancellation, ComponentSessionDriver};
 use tokio::sync::Notify;
 

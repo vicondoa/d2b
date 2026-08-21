@@ -1,7 +1,7 @@
 //! Hermetic Export lifecycle, sandbox, and privacy conformance.
 
-use d2b_contracts_zone_session::v3::ResourceRef;
-use d2b_contracts_zone_session::v3::execution_policy::BoundedToken;
+use d2b_contracts_resource::v3::ResourceRef;
+use d2b_contracts_resource::v3::execution_policy::BoundedToken;
 use d2b_provider_volume_virtiofs::testing::{PortCall, ScriptedPort, block_on, fixtures};
 use d2b_provider_volume_virtiofs::{
     EXPORT_FINALIZER, EXPORT_RESOURCE_TYPE, ExportPhase, ExportSpec, VirtiofsExportController,
@@ -103,8 +103,8 @@ fn an_export_naming_an_undeclared_view_is_rejected() {
         fixtures::volume_ref(),
         ResourceRef::parse("Guest/work-vm").expect("valid ref"),
         BoundedToken::parse("absent").expect("valid token"),
-        d2b_contracts_zone_session::v3::volume::AttachmentAccess::ReadOnly,
-        d2b_contracts_zone_session::v3::volume::AttachmentSettings::default(),
+        d2b_contracts_resource::v3::volume::AttachmentAccess::ReadOnly,
+        d2b_contracts_resource::v3::volume::AttachmentSettings::default(),
     )
     .expect("conformant Export");
     let port = ScriptedPort::serving();
@@ -129,8 +129,8 @@ fn two_exports_of_one_volume_have_distinct_socket_identities() {
         fixtures::volume_ref(),
         ResourceRef::parse("Guest/personal-vm").expect("valid ref"),
         BoundedToken::parse("ro-store").expect("valid token"),
-        d2b_contracts_zone_session::v3::volume::AttachmentAccess::ReadOnly,
-        d2b_contracts_zone_session::v3::volume::AttachmentSettings::default(),
+        d2b_contracts_resource::v3::volume::AttachmentAccess::ReadOnly,
+        d2b_contracts_resource::v3::volume::AttachmentSettings::default(),
     )
     .expect("conformant Export");
     let zone = fixtures::zone();
@@ -227,7 +227,7 @@ fn the_provider_owns_only_the_export_resource_type_and_finalizer() {
 
 #[test]
 fn a_virtio_blk_attachment_is_not_translated_into_an_export() {
-    let attachment: d2b_contracts_zone_session::v3::volume::VolumeAttachment =
+    let attachment: d2b_contracts_resource::v3::volume::VolumeAttachment =
         serde_json::from_value(serde_json::json!({
             "executionRef": "Guest/work-vm",
             "transport": "virtio-blk",

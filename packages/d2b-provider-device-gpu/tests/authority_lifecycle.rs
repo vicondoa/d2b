@@ -1,5 +1,8 @@
-use d2b_contracts_zone_session::v3::{
-    ResourceGeneration, ResourceRef, ResourceUid, device::DeviceArbitration,
+use d2b_contracts_resource::v3::{
+    ResourceGeneration,
+    ResourceRef,
+    ResourceUid,
+    device::DeviceArbitration,
 };
 use d2b_provider_device_gpu::{
     GpuAuthorityAdmission, GpuAuthorityError, GpuAuthorityIndex, GpuAuthorityLease,

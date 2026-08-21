@@ -1,5 +1,5 @@
 use d2b_contracts_provider::v3::credential::PlacementBinding;
-use d2b_contracts_zone_session::v3::ResourceRef;
+use d2b_contracts_resource::v3::ResourceRef;
 use d2b_provider_credential_entra::{EntraPlacement, EntraProviderError};
 
 #[test]

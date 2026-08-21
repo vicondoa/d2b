@@ -11,7 +11,6 @@ workspace = true
 
 [dependencies]
 d2b-contracts-provider = { path = "../d2b-contracts-provider", version = "0.0.0-bootstrap" }
-d2b-contracts-resource = { path = "../d2b-contracts-resource", version = "0.0.0-bootstrap" }
 d2b-contracts-zone-session = { path = "../d2b-contracts-zone-session", version = "0.0.0-bootstrap" }
 # Keep the generated CLI artifacts compatible with the established
 # positional-value completion contract. clap_complete 4.6.6+ intentionally
@@ -24,6 +23,7 @@ d2b-core = { path = "../d2b-core", version = "0.0.0-bootstrap" }
 d2b-contracts = { path = "../d2b-contracts", version = "0.0.0-bootstrap" }
 d2b-contracts-broker = { path = "../d2b-contracts-broker", version = "0.0.0-bootstrap" }
 d2b-contracts-control = { path = "../d2b-contracts-control", version = "0.0.0-bootstrap" }
+d2b-contracts-resource = { path = "../d2b-contracts-resource", version = "0.0.0-bootstrap" }
 # Safe wrappers for the syscalls the heavy-gate semaphore needs: F_OFD_SETLK
 # open file description locks, FD_CLOEXEC control on the duplicated slot
 # handle, signalfd, and process-group signalling. Already used by d2b, d2bd,

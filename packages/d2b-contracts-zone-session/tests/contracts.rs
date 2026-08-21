@@ -1,4 +1,5 @@
-use d2b_contracts_zone_session::v3::{ZoneId, ZoneSpec};
+use d2b_contracts_zone_session::v3::ZoneSpec;
+use d2b_contracts_resource::v3::ZoneId;
 
 #[test]
 fn zone_session_contracts_preserve_zone_identity() {

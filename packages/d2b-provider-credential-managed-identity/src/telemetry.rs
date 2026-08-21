@@ -3,9 +3,11 @@
 use std::collections::BTreeMap;
 
 use d2b_contracts_provider::v3::credential::PlacementBinding;
-use d2b_contracts_provider::v3::credential_controller::{
+use d2b_contracts_provider::v3::{
+    credential_controller::{
     CredentialObservabilityError, CredentialProviderKind, CredentialTelemetryField,
     CredentialTelemetryFrame, CredentialTelemetryOperation, CredentialTelemetryOutcome,
+},
 };
 
 /// Exposed telemetry fields use the shared closed field shape.

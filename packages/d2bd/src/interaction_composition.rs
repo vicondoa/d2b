@@ -31,16 +31,21 @@ use d2b_bus::{
 use d2b_contracts::types::{BundleOpId, RoleId, VmId};
 use d2b_contracts_broker::broker_wire::{BrokerCallerRole, RunnerRole, SandboxLaunchPlan};
 use d2b_contracts_zone_session::v3::{
-    ControllerGeneration, EvidenceClass, ResourceGeneration, ResourceRef, ResourceUid, ServiceName,
-    ZoneId, ZoneRevision,
-    component_session::{
-        AttachmentKind, AttachmentPolicy, AttachmentPolicyKind, AttachmentPurpose, EndpointPolicy,
-        EndpointPurpose, EndpointRole, IdentityEvidenceRequirement, LimitProfile,
-        Locality as TransportLocality, NoiseProfile, PurposeClass, ServicePackage,
-        TransportBinding, TransportClass,
-    },
+    component_session::{AttachmentKind, AttachmentPolicy, AttachmentPolicyKind, AttachmentPurpose, EndpointPolicy, EndpointPurpose, EndpointRole, IdentityEvidenceRequirement, LimitProfile, Locality as TransportLocality, NoiseProfile, PurposeClass, ServicePackage, TransportBinding, TransportClass},
+};
+use d2b_contracts_resource::v3::{
+    ControllerGeneration,
+    ResourceGeneration,
+    ResourceRef,
+    ResourceUid,
+    ZoneId,
+    ZoneRevision,
     execution_policy::{BoundedToken, ExecutionDomain},
     process::{CapabilityClass, EnvironmentClass, MappingClass, NamespaceClass, UserNamespaceSpec},
+};
+use d2b_contracts_resource::v3::identity::{
+    EvidenceClass,
+    ServiceName,
 };
 use d2b_core::{
     bundle_resolver::{BundleResolver, ResolvedRunnerIntent},
@@ -169,8 +174,8 @@ pub fn interaction_endpoint_policy(service: &str, generation: u64) -> Option<End
     })
 }
 
-fn binding_digest(policy: &EndpointPolicy) -> d2b_contracts_zone_session::v3::BindingDigest {
-    d2b_contracts_zone_session::v3::BindingDigest::parse(format!(
+fn binding_digest(policy: &EndpointPolicy) -> d2b_contracts_resource::v3::identity::BindingDigest {
+    d2b_contracts_resource::v3::identity::BindingDigest::parse(format!(
         "sha256:{}",
         policy
             .transport_binding
@@ -205,7 +210,7 @@ impl RegisteredInteractionSession {
     }
 
     /// Return the exact service package admitted for this session.
-    pub fn service(&self) -> &d2b_contracts_zone_session::v3::ServiceName {
+    pub fn service(&self) -> &d2b_contracts_resource::v3::identity::ServiceName {
         self.route.service()
     }
 
@@ -3383,7 +3388,7 @@ fn display_sandbox_plan(
         .and_then(|reference| {
             BoundedToken::parse(reference).map_err(|_| ProcessEffectError::ResolutionFailed)
         })?;
-    let spec = d2b_contracts_zone_session::v3::process::SandboxSpec::new(
+    let spec = d2b_contracts_resource::v3::process::SandboxSpec::new(
         namespace_classes,
         capability_classes,
         seccomp_class,
@@ -4977,12 +4982,12 @@ mod tests {
                     policy_revision: display_generation,
                     api_catalog_revision: 1,
                     active_configuration_revision:
-                        d2b_contracts_zone_session::v3::ConfigurationGeneration::new(
+                        d2b_contracts_resource::v3::ConfigurationGeneration::new(
                             display_generation,
                         )
                         .unwrap(),
                     controller_generation: Some(
-                        d2b_contracts_zone_session::v3::ControllerGeneration::new(
+                        d2b_contracts_resource::v3::ControllerGeneration::new(
                             controller_generation,
                         )
                         .unwrap(),
@@ -5033,12 +5038,12 @@ mod tests {
                     policy_revision: display_generation,
                     api_catalog_revision: 1,
                     active_configuration_revision:
-                        d2b_contracts_zone_session::v3::ConfigurationGeneration::new(
+                        d2b_contracts_resource::v3::ConfigurationGeneration::new(
                             display_generation,
                         )
                         .unwrap(),
                     controller_generation: Some(
-                        d2b_contracts_zone_session::v3::ControllerGeneration::new(
+                        d2b_contracts_resource::v3::ControllerGeneration::new(
                             controller_generation,
                         )
                         .unwrap(),
@@ -6008,9 +6013,9 @@ mod tests {
             policy_revision: 7,
             api_catalog_revision: 1,
             active_configuration_revision:
-                d2b_contracts_zone_session::v3::ConfigurationGeneration::new(7).unwrap(),
+                d2b_contracts_resource::v3::ConfigurationGeneration::new(7).unwrap(),
             controller_generation: Some(
-                d2b_contracts_zone_session::v3::ControllerGeneration::new(17).unwrap(),
+                d2b_contracts_resource::v3::ControllerGeneration::new(17).unwrap(),
             ),
         };
         let missing = ProductionInteractionResourceState::new(

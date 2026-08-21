@@ -2,8 +2,11 @@
 
 use std::sync::{Mutex, MutexGuard};
 
-use d2b_contracts_zone_session::v3::{
-    AuthenticatedSubjectContext, EvidenceClass, Locality, ZoneId,
+use d2b_contracts_resource::v3::ZoneId;
+use d2b_contracts_resource::v3::identity::{
+    AuthenticatedSubjectContext,
+    EvidenceClass,
+    Locality,
 };
 use d2b_resource_api::authz::{
     AuthorizationDenial, AuthorizationPolicyError, AuthorizationState, NativeAuthorizer, PolicySet,
@@ -463,12 +466,25 @@ impl From<crate::router::BusError> for AuthorizationError {
 
 #[cfg(test)]
 mod tests {
-    use d2b_contracts_zone_session::v3::{
-        BindingDigest, ConfigurationGeneration, ControllerGeneration, ReconnectGeneration,
-        ResourceGeneration, ResourceRef, ResourceTypeName, ResourceUid, SchemaFingerprint,
-        ServiceName, SessionBinding, SessionPurpose, TranscriptHash, TransportBinding,
-        ZoneRevision,
-    };
+    use d2b_contracts_resource::v3::{
+    ConfigurationGeneration,
+    ControllerGeneration,
+    ResourceGeneration,
+    ResourceRef,
+    ResourceTypeName,
+    ResourceUid,
+    SchemaFingerprint,
+    ZoneRevision,
+};
+use d2b_contracts_resource::v3::identity::{
+    BindingDigest,
+    ReconnectGeneration,
+    ServiceName,
+    SessionBinding,
+    SessionPurpose,
+    TranscriptHash,
+    TransportBinding,
+};
     use d2b_resource_api::authz::{
         ApiCatalog, BindingScope, BootstrapPhase, BoundSubject, CompiledRole, CompiledRoleBinding,
         PolicyRule, RelayGrantAuthority, ResourceVerb,

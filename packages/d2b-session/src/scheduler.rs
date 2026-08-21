@@ -3,7 +3,9 @@ use std::{
     fmt,
 };
 
-use d2b_contracts_zone_session::v3::component_session::{LimitProfile, SessionErrorCode};
+use d2b_contracts_zone_session::v3::{
+    component_session::{LimitProfile, SessionErrorCode},
+};
 
 use crate::{Result, SessionError, StreamId};
 

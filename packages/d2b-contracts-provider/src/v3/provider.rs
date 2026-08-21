@@ -31,21 +31,18 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Deserializer, Serialize};
 
 use super::{
-    ArtifactId, ResourceRef,
-    execution_policy::{
-        BoundedToken, ExecutionDomain, PrimitiveSpecError, redacted_debug, string_schema,
-    },
-    identity::{ResourceTypeName, SchemaFingerprint},
+    semantic_services::{LEGACY_ABSENT_PROTOCOL_VERSION, SEMANTIC_PROJECTION_PROTOCOL_VERSION, SemanticProjectionProtocolVersion},
+};
+use d2b_contracts_resource::v3::{
+    ArtifactId,
+    ResourceRef,
+    execution_policy::{BoundedToken, ExecutionDomain, PrimitiveSpecError, redacted_debug, string_schema},
+    ResourceTypeName,
+    SchemaFingerprint,
     resource::ResourceEnvelope,
     resource_schema::{CanonicalJsonObject, ExtensionSchemaId, SchemaVersion},
-    semantic_services::{
-        LEGACY_ABSENT_PROTOCOL_VERSION, SEMANTIC_PROJECTION_PROTOCOL_VERSION,
-        SemanticProjectionProtocolVersion,
-    },
     volume::{MAX_VIEWS, ViewRight, ViewSpec},
-    volume_state::{
-        MigrationPolicy, PersistenceClass, SensitivityClass, VolumeStateSchema, VolumeStateSchemaId,
-    },
+    volume_state::{MigrationPolicy, PersistenceClass, SensitivityClass, VolumeStateSchema, VolumeStateSchemaId},
 };
 
 /// The canonical ResourceType name for this module.
@@ -251,7 +248,7 @@ impl ArtifactDigest {
     /// Parse exactly `sha256:` followed by 64 lower-case hex digits.
     pub fn parse(value: impl Into<String>) -> Result<Self, ProviderContractError> {
         let value = value.into();
-        if !super::resource_schema::is_canonical_digest(&value) {
+        if !d2b_contracts_resource::v3::resource_schema::is_canonical_digest(&value) {
             return Err(ProviderContractError::InvalidPrimitive);
         }
         Ok(Self(value))
@@ -2212,7 +2209,7 @@ impl SpecifiedProviderMethod {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::v3::{
+    use d2b_contracts_resource::v3::{
         execution_policy::to_base_object, resource_schema::canonical_json_bytes, volume::ViewRight,
     };
 

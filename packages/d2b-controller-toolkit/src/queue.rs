@@ -5,7 +5,7 @@ use std::{
     sync::Mutex,
 };
 
-use d2b_contracts_zone_session::v3::ZoneRevision;
+use d2b_contracts_resource::v3::ZoneRevision;
 
 use crate::{OperationContext, ResourceKey, TriggerReason, TriggerSet};
 
@@ -446,7 +446,11 @@ mod tests {
         thread,
     };
 
-    use d2b_contracts_zone_session::v3::{ResourceRef, ResourceUid, ZoneId};
+    use d2b_contracts_resource::v3::{
+    ResourceRef,
+    ResourceUid,
+    ZoneId,
+};
 
     use super::*;
 

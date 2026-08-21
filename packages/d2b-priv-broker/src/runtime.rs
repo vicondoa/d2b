@@ -6043,7 +6043,7 @@ fn dispatch_request_with_backend_and_request_fds<B: DispatchBackend>(
                 capability_digest.as_str()
             );
             let record_id = d2b_contracts_broker::broker_wire::CanonicalAuditDigest::parse(
-                d2b_contracts_zone_session::v3::canonical_digest(
+                d2b_contracts_resource::v3::canonical_digest(
                     "d2b:cutover:audit-record:v1",
                     preimage.as_bytes(),
                 ),
@@ -6215,7 +6215,7 @@ fn dispatch_request_with_backend_and_request_fds<B: DispatchBackend>(
                 capability_digest.as_str()
             );
             let audit_record_id = d2b_contracts_broker::broker_wire::CanonicalAuditDigest::parse(
-                d2b_contracts_zone_session::v3::canonical_digest(
+                d2b_contracts_resource::v3::canonical_digest(
                     "d2b:cutover:effect-audit:v1",
                     preimage.as_bytes(),
                 ),
@@ -7601,8 +7601,8 @@ fn runner_pidfd_registry() -> &'static Mutex<HashMap<String, OwnedFd>> {
 struct RunnerRegistration {
     vm_id: String,
     role_id: String,
-    resource_ref: Option<d2b_contracts_zone_session::v3::ResourceRef>,
-    resource_uid: Option<d2b_contracts_zone_session::v3::ResourceUid>,
+    resource_ref: Option<d2b_contracts_resource::v3::ResourceRef>,
+    resource_uid: Option<d2b_contracts_resource::v3::ResourceUid>,
     role: d2b_contracts_broker::broker_wire::RunnerRole,
     bundle_runner_intent_ref: String,
     pid: i32,
@@ -7684,8 +7684,8 @@ fn register_runner_metadata_from_open(
 fn runner_registry_key(
     vm_id: &str,
     role_id: &str,
-    resource_ref: Option<&d2b_contracts_zone_session::v3::ResourceRef>,
-    resource_uid: Option<&d2b_contracts_zone_session::v3::ResourceUid>,
+    resource_ref: Option<&d2b_contracts_resource::v3::ResourceRef>,
+    resource_uid: Option<&d2b_contracts_resource::v3::ResourceUid>,
 ) -> String {
     match (resource_ref, resource_uid) {
         (Some(resource_ref), Some(resource_uid)) => format!(
@@ -7709,8 +7709,8 @@ fn runner_intent_id_for_open_pidfd(vm_id: &str, role_id: &str) -> String {
 #[cfg(not(feature = "layer1-bootstrap"))]
 fn registration_matches(
     registration: &RunnerRegistration,
-    resource_ref: Option<&d2b_contracts_zone_session::v3::ResourceRef>,
-    resource_uid: Option<&d2b_contracts_zone_session::v3::ResourceUid>,
+    resource_ref: Option<&d2b_contracts_resource::v3::ResourceRef>,
+    resource_uid: Option<&d2b_contracts_resource::v3::ResourceUid>,
     pid: Option<i32>,
     start_time_ticks: Option<u64>,
 ) -> bool {
@@ -10519,7 +10519,7 @@ fn validate_sandbox_launch_plan(
     if plan.domain
         != req
             .execution_domain
-            .unwrap_or(d2b_contracts_zone_session::v3::execution_policy::ExecutionDomain::System)
+            .unwrap_or(d2b_contracts_resource::v3::execution_policy::ExecutionDomain::System)
     {
         return Err(BrokerError::SpawnRunnerIntentMismatch {
             field: "sandbox_plan.domain",
@@ -10555,7 +10555,7 @@ fn validate_sandbox_launch_plan(
             resolved: "unsupported".to_owned(),
         });
     }
-    if plan.environment_class != d2b_contracts_zone_session::v3::process::EnvironmentClass::Minimal
+    if plan.environment_class != d2b_contracts_resource::v3::process::EnvironmentClass::Minimal
     {
         return Err(BrokerError::SpawnRunnerIntentMismatch {
             field: "sandbox_plan.environment_class",
@@ -10565,14 +10565,14 @@ fn validate_sandbox_launch_plan(
     }
     let expected_namespaces = &intent.namespaces;
     let requested_namespaces = |class| match class {
-        d2b_contracts_zone_session::v3::process::NamespaceClass::User => expected_namespaces.user,
-        d2b_contracts_zone_session::v3::process::NamespaceClass::Pid => expected_namespaces.pid,
-        d2b_contracts_zone_session::v3::process::NamespaceClass::Mount => expected_namespaces.mount,
-        d2b_contracts_zone_session::v3::process::NamespaceClass::Ipc => expected_namespaces.ipc,
-        d2b_contracts_zone_session::v3::process::NamespaceClass::Uts => expected_namespaces.uts,
-        d2b_contracts_zone_session::v3::process::NamespaceClass::Network => expected_namespaces.net,
-        d2b_contracts_zone_session::v3::process::NamespaceClass::Cgroup
-        | d2b_contracts_zone_session::v3::process::NamespaceClass::Time => false,
+        d2b_contracts_resource::v3::process::NamespaceClass::User => expected_namespaces.user,
+        d2b_contracts_resource::v3::process::NamespaceClass::Pid => expected_namespaces.pid,
+        d2b_contracts_resource::v3::process::NamespaceClass::Mount => expected_namespaces.mount,
+        d2b_contracts_resource::v3::process::NamespaceClass::Ipc => expected_namespaces.ipc,
+        d2b_contracts_resource::v3::process::NamespaceClass::Uts => expected_namespaces.uts,
+        d2b_contracts_resource::v3::process::NamespaceClass::Network => expected_namespaces.net,
+        d2b_contracts_resource::v3::process::NamespaceClass::Cgroup
+        | d2b_contracts_resource::v3::process::NamespaceClass::Time => false,
     };
     for class in &plan.namespace_classes {
         if !requested_namespaces(*class) {
@@ -10586,7 +10586,7 @@ fn validate_sandbox_launch_plan(
     if plan.namespace_classes.iter().any(|class| {
         matches!(
             class,
-            d2b_contracts_zone_session::v3::process::NamespaceClass::User
+            d2b_contracts_resource::v3::process::NamespaceClass::User
         )
     }) != expected_namespaces.user
     {
@@ -10599,7 +10599,7 @@ fn validate_sandbox_launch_plan(
     if plan.user_namespace.is_some() != intent.user_namespace.is_some()
         || plan.user_namespace.is_some_and(|spec| {
             spec.mapping_class
-                != d2b_contracts_zone_session::v3::process::MappingClass::ProcessPrincipalRoot
+                != d2b_contracts_resource::v3::process::MappingClass::ProcessPrincipalRoot
         })
     {
         return Err(BrokerError::SpawnRunnerIntentMismatch {
@@ -10655,25 +10655,25 @@ fn validate_sandbox_launch_plan(
 
 #[cfg(not(feature = "layer1-bootstrap"))]
 fn capability_matches(
-    class: d2b_contracts_zone_session::v3::process::CapabilityClass,
+    class: d2b_contracts_resource::v3::process::CapabilityClass,
     capability: &str,
 ) -> bool {
     let expected = match class {
-        d2b_contracts_zone_session::v3::process::CapabilityClass::NetworkBind => {
+        d2b_contracts_resource::v3::process::CapabilityClass::NetworkBind => {
             "CAP_NET_BIND_SERVICE"
         }
-        d2b_contracts_zone_session::v3::process::CapabilityClass::NetworkRaw => "CAP_NET_RAW",
-        d2b_contracts_zone_session::v3::process::CapabilityClass::NetworkAdmin => "CAP_NET_ADMIN",
-        d2b_contracts_zone_session::v3::process::CapabilityClass::SysTime => "CAP_SYS_TIME",
-        d2b_contracts_zone_session::v3::process::CapabilityClass::SysPtrace => "CAP_SYS_PTRACE",
-        d2b_contracts_zone_session::v3::process::CapabilityClass::SysAdmin => "CAP_SYS_ADMIN",
-        d2b_contracts_zone_session::v3::process::CapabilityClass::DacOverride => "CAP_DAC_OVERRIDE",
-        d2b_contracts_zone_session::v3::process::CapabilityClass::Fowner => "CAP_FOWNER",
-        d2b_contracts_zone_session::v3::process::CapabilityClass::Chown => "CAP_CHOWN",
-        d2b_contracts_zone_session::v3::process::CapabilityClass::Setuid => "CAP_SETUID",
-        d2b_contracts_zone_session::v3::process::CapabilityClass::Setgid => "CAP_SETGID",
-        d2b_contracts_zone_session::v3::process::CapabilityClass::AuditWrite => "CAP_AUDIT_WRITE",
-        d2b_contracts_zone_session::v3::process::CapabilityClass::Kill => "CAP_KILL",
+        d2b_contracts_resource::v3::process::CapabilityClass::NetworkRaw => "CAP_NET_RAW",
+        d2b_contracts_resource::v3::process::CapabilityClass::NetworkAdmin => "CAP_NET_ADMIN",
+        d2b_contracts_resource::v3::process::CapabilityClass::SysTime => "CAP_SYS_TIME",
+        d2b_contracts_resource::v3::process::CapabilityClass::SysPtrace => "CAP_SYS_PTRACE",
+        d2b_contracts_resource::v3::process::CapabilityClass::SysAdmin => "CAP_SYS_ADMIN",
+        d2b_contracts_resource::v3::process::CapabilityClass::DacOverride => "CAP_DAC_OVERRIDE",
+        d2b_contracts_resource::v3::process::CapabilityClass::Fowner => "CAP_FOWNER",
+        d2b_contracts_resource::v3::process::CapabilityClass::Chown => "CAP_CHOWN",
+        d2b_contracts_resource::v3::process::CapabilityClass::Setuid => "CAP_SETUID",
+        d2b_contracts_resource::v3::process::CapabilityClass::Setgid => "CAP_SETGID",
+        d2b_contracts_resource::v3::process::CapabilityClass::AuditWrite => "CAP_AUDIT_WRITE",
+        d2b_contracts_resource::v3::process::CapabilityClass::Kill => "CAP_KILL",
     };
     capability == expected
 }
@@ -10690,7 +10690,7 @@ fn validate_spawn_runner_request_matches_intent(
         });
     }
     if let Some(execution_ref) = &req.execution_ref {
-        let expected = d2b_contracts_zone_session::v3::ResourceRef::parse(&intent.execution_ref)
+        let expected = d2b_contracts_resource::v3::ResourceRef::parse(&intent.execution_ref)
             .map_err(|_| BrokerError::SpawnRunnerIntentMismatch {
                 field: "execution_ref",
                 requested: execution_ref.to_canonical_string(),
@@ -10706,10 +10706,10 @@ fn validate_spawn_runner_request_matches_intent(
     }
     let expected_domain = match intent.execution_domain {
         d2b_core::processes::ProcessExecutionDomain::System => {
-            d2b_contracts_zone_session::v3::execution_policy::ExecutionDomain::System
+            d2b_contracts_resource::v3::execution_policy::ExecutionDomain::System
         }
         d2b_core::processes::ProcessExecutionDomain::User => {
-            d2b_contracts_zone_session::v3::execution_policy::ExecutionDomain::User
+            d2b_contracts_resource::v3::execution_policy::ExecutionDomain::User
         }
     };
     if req
@@ -10725,7 +10725,7 @@ fn validate_spawn_runner_request_matches_intent(
     let expected_user = intent
         .user_ref
         .as_deref()
-        .map(d2b_contracts_zone_session::v3::ResourceRef::parse)
+        .map(d2b_contracts_resource::v3::ResourceRef::parse)
         .transpose()
         .map_err(|_| BrokerError::SpawnRunnerIntentMismatch {
             field: "user_ref",
@@ -12746,7 +12746,7 @@ fn error_response(
 }
 
 fn redact_public_detail(detail: &str) -> String {
-    if d2b_contracts_zone_session::v3::is_canonical_digest(detail) {
+    if d2b_contracts_resource::v3::is_canonical_digest(detail) {
         return detail.to_owned();
     }
     if matches!(
@@ -12762,7 +12762,7 @@ fn redact_public_detail(detail: &str) -> String {
     {
         return detail.to_owned();
     }
-    d2b_contracts_zone_session::v3::canonical_digest(
+    d2b_contracts_resource::v3::canonical_digest(
         "d2b:broker-public-error:v1",
         detail.as_bytes(),
     )
@@ -13137,14 +13137,14 @@ mod tests {
     fn public_error_details_fail_closed_for_paths_and_attacker_text() {
         assert_eq!(
             redact_public_detail("failed at /private/host/path"),
-            d2b_contracts_zone_session::v3::canonical_digest(
+            d2b_contracts_resource::v3::canonical_digest(
                 "d2b:broker-public-error:v1",
                 b"failed at /private/host/path"
             )
         );
         assert_eq!(
             redact_public_detail("attacker error text"),
-            d2b_contracts_zone_session::v3::canonical_digest(
+            d2b_contracts_resource::v3::canonical_digest(
                 "d2b:broker-public-error:v1",
                 b"attacker error text"
             )
@@ -13663,7 +13663,7 @@ mod tests {
 
     #[cfg(not(feature = "layer1-bootstrap"))]
     fn build_test_bundle(root: &Path) -> TestBundle {
-        use d2b_contracts_zone_session::v3::IfName;
+        use d2b_contracts_resource::v3::IfName;
         use d2b_core::bundle::{Bundle, BundleClosureRef, BundleGeneration};
         use d2b_core::closures::{ClosureGeneration, ClosureMetadata};
         use d2b_core::host::{
@@ -14533,11 +14533,11 @@ mod tests {
         ) -> Result<d2b_contracts_broker::broker_wire::BridgePortFlagsResponse, BrokerError>
         {
             Ok(d2b_contracts_broker::broker_wire::BridgePortFlagsResponse {
-                bridge: d2b_contracts_zone_session::v3::IfName::new("nlworkbr0")
+                bridge: d2b_contracts_resource::v3::IfName::new("nlworkbr0")
                     .expect("fake bridge ifname"),
                 isolated: true,
                 neigh_suppress: true,
-                port: d2b_contracts_zone_session::v3::IfName::new(&format!(
+                port: d2b_contracts_resource::v3::IfName::new(&format!(
                     "tap-{}",
                     req.vm_id.as_str()
                 ))
@@ -15036,13 +15036,13 @@ mod tests {
             d2b_contracts_broker::broker_wire::OpenPeerPidfdFromAcceptedSocketRequest {},
         );
         let audit_join = AuditJoinContext {
-            zone_id: CanonicalAuditDigest::parse(d2b_contracts_zone_session::v3::canonical_digest(
+            zone_id: CanonicalAuditDigest::parse(d2b_contracts_resource::v3::canonical_digest(
                 "d2b:test-zone",
                 b"forged zone",
             ))
             .expect("canonical zone digest"),
             operation_identity: CanonicalAuditDigest::parse(
-                d2b_contracts_zone_session::v3::canonical_digest(
+                d2b_contracts_resource::v3::canonical_digest(
                     "d2b:test-operation",
                     b"forged operation",
                 ),
@@ -17060,7 +17060,7 @@ mod tests {
         assert!(
             rendered
                 .split_whitespace()
-                .any(d2b_contracts_zone_session::v3::is_canonical_digest)
+                .any(d2b_contracts_resource::v3::is_canonical_digest)
         );
         assert!(!rendered.contains("1-2.3"), "{rendered}");
         assert!(!rendered.contains("/sys/"), "{rendered}");
@@ -18142,7 +18142,7 @@ mod tests {
             .iter()
             .find(|record| record.operation == "UsbSerialCorrelationKeyRotate")
             .expect("rotation audit record");
-        assert!(d2b_contracts_zone_session::v3::is_canonical_digest(
+        assert!(d2b_contracts_resource::v3::is_canonical_digest(
             &rotation_record.public_operation_id
         ));
         assert_eq!(rotation_record.subject_id, "usb-audit-serial-hmac");

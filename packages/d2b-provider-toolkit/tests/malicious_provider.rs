@@ -13,21 +13,23 @@
 
 use d2b_contracts_provider::v3::semantic_services::catalog;
 use d2b_contracts_resource::v3::ArtifactId;
-use d2b_contracts_zone_session::v3::identity::BindingDigest;
+use d2b_contracts_resource::v3::identity::BindingDigest;
 use d2b_contracts_zone_session::v3::{
-    Locality, ResourceEnvelope, ResourceRef, TransportBinding,
-    execution_policy::{BoundedToken, ExecutionDomain},
-    identity::{ResourceTypeName, SchemaFingerprint, SessionPurpose},
-    provider::{
-        ArtifactDigest, ArtifactDigestSet, BindingTargetType, CapabilitySupport,
-        CompatibilityRange, ComponentDescriptor, ComponentType, DependencyAlias,
-        DependencyDeclaration, Exportability, ExtensionSchemaRegistration, PolicyEvaluation,
-        ProjectionFactory, ProviderContractError, ProviderManifest, ResourceApiBinding,
-        RevocationState, SignatureState, StandardCapabilityMatrix, TrustEvidence,
-        UpgradeDisposition, UpgradePolicy,
-    },
-    resource_schema::{ExtensionSchemaId, SchemaVersion, canonical_json_bytes},
     zone_routing::ZonePath,
+    provider::{ArtifactDigest, ArtifactDigestSet, BindingTargetType, CapabilitySupport, CompatibilityRange, ComponentDescriptor, ComponentType, DependencyAlias, DependencyDeclaration, Exportability, ExtensionSchemaRegistration, PolicyEvaluation, ProjectionFactory, ProviderContractError, ProviderManifest, ResourceApiBinding, RevocationState, SignatureState, StandardCapabilityMatrix, TrustEvidence, UpgradeDisposition, UpgradePolicy},
+};
+use d2b_contracts_resource::v3::{
+    ResourceEnvelope,
+    ResourceRef,
+    execution_policy::{BoundedToken, ExecutionDomain},
+    ResourceTypeName,
+    SchemaFingerprint,
+    resource_schema::{ExtensionSchemaId, SchemaVersion, canonical_json_bytes},
+};
+use d2b_contracts_resource::v3::identity::{
+    Locality,
+    TransportBinding,
+    SessionPurpose,
 };
 use d2b_provider_toolkit::conformance::{CapabilityMatrix, ConformanceError};
 use d2b_provider_toolkit::fakes::{FakeBus, FakePortError, FakeResourceStore};

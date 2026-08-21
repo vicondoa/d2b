@@ -17,12 +17,14 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use d2b_contracts_zone_session::v3::zone_routing::{
+use d2b_contracts_zone_session::v3::{
+    zone_routing::{
     MAX_ZONE_PARENT_ENTRIES, MAX_ZONE_ROUTE_ENTRIES, ZONE_ROUTE_INITIAL_HOP_BUDGET, ZoneLabelId,
     ZoneLinkControllerGeneration, ZoneLinkNamespaceAllocation, ZoneLinkRouteAdvertisement,
     ZoneLinkRouteWithdrawal, ZonePath, ZoneRouteAuditEventKind, ZoneRouteCapability,
     ZoneRouteCapabilitySet, ZoneRouteFailClosedReason, ZoneRouteHop, ZoneRouteHopDirection,
     ZoneRouteId, ZoneRoutePath, ZoneTreeEdge,
+},
 };
 
 /// Maximum live replay-window keys one engine retains.
@@ -1123,10 +1125,12 @@ fn would_form_loop(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use d2b_contracts_zone_session::v3::zone_routing::{
+    use d2b_contracts_zone_session::v3::{
+    zone_routing::{
         ZONE_ROUTING_SCHEMA_VERSION, ZoneDescendantRoute, ZoneRouteKeyRole, ZoneRouteSignature,
         ZoneRouteSignatureAlgorithm, ZoneRouteSignatureRef, ZoneSigningKeyFingerprint,
-    };
+    },
+};
 
     fn zone(labels: &[&str]) -> ZonePath {
         ZonePath::new(

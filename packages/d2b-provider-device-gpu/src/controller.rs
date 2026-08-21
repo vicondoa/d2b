@@ -1,7 +1,10 @@
 //! Combined GPU/video Device reconcile state machine.
 
 use core::fmt;
-use d2b_contracts_zone_session::v3::{ResourceUid, device::DeviceArbitration};
+use d2b_contracts_resource::v3::{
+    ResourceUid,
+    device::DeviceArbitration,
+};
 
 use crate::{
     GpuAuthorityAdmission, GpuAuthorityError, GpuAuthorityLease, GpuClosureProof, GpuEffectError,
@@ -471,7 +474,7 @@ fn validate_started_identity(
     expected_role: GpuProcessRole,
     expected_principal: &crate::GpuPrincipalToken,
     expected_platform: &crate::GpuPlatformToken,
-    expected_generation: d2b_contracts_zone_session::v3::ResourceGeneration,
+    expected_generation: d2b_contracts_resource::v3::ResourceGeneration,
 ) -> Result<(), GpuEffectError> {
     if identity.role() != expected_role || identity.principal() != expected_principal {
         return Err(GpuEffectError::WrongPrincipal);

@@ -6,7 +6,7 @@ use std::process::Command;
 use d2b_contracts_broker::broker_wire::{
     BrokerResponse, OpenZoneStoreResponse, ZoneStoreDisposition,
 };
-use d2b_contracts_zone_session::v3::storage::ZoneStoreId;
+use d2b_contracts_resource::v3::storage::ZoneStoreId;
 use d2b_priv_broker::fd_passing::{FdPassingError, recv_one_fd, send_fds};
 use d2b_priv_broker::ops::audit_op::OperationFields;
 use d2b_priv_broker::protocol::send_json_frame_with_fds;

@@ -6,7 +6,7 @@
 
 use std::{fmt, future::Future};
 
-use d2b_contracts_zone_session::v3::CanonicalJsonObject;
+use d2b_contracts_resource::v3::CanonicalJsonObject;
 
 use crate::{
     context::OwnedOperationContext,

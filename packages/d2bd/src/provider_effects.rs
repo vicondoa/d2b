@@ -19,7 +19,10 @@ use std::{
 };
 
 use d2b_contracts_broker::broker_wire::BrokerCallerRole;
-use d2b_contracts_zone_session::v3::{ResourceRef, identity::ZoneId};
+use d2b_contracts_resource::v3::{
+    ResourceRef,
+    ZoneId,
+};
 
 /// Maximum retained lifecycle mutation keys.
 pub const MAX_TRACKED_LIFECYCLE_MUTATIONS: usize = 256;

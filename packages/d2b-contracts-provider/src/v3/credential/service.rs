@@ -338,7 +338,7 @@ impl DeliveryRouteDigest {
     /// Parse exactly one `sha256:` lowercase digest.
     pub fn parse(value: impl Into<String>) -> Result<Self, CredentialServiceError> {
         let value = value.into();
-        let valid = super::super::resource_schema::is_canonical_digest(&value)
+        let valid = d2b_contracts_resource::v3::resource_schema::is_canonical_digest(&value)
             && value.len() == ROUTE_DIGEST_BYTES;
         if valid {
             Ok(Self(value))

@@ -14,14 +14,14 @@ use std::{
 };
 
 use async_trait::async_trait;
-use d2b_contracts_zone_session::v3::{
-    ResourceBundleGenerationId, ResourceGeneration, ResourceRef, ResourceUid,
+use d2b_contracts_resource::v3::{
+    ResourceBundleGenerationId,
+    ResourceGeneration,
+    ResourceRef,
+    ResourceUid,
     execution_policy::BoundedToken,
     guest::GuestSpec,
-    network::{
-        AttachmentGenerationFence, AttachmentHandle, DhcpSpec, DnsSpec, Ipv4Cidr, IsolationSpec,
-        MdnsSpec, NetworkSpec, RoutingSpec,
-    },
+    network::{AttachmentGenerationFence, AttachmentHandle, DhcpSpec, DnsSpec, Ipv4Cidr, IsolationSpec, MdnsSpec, NetworkSpec, RoutingSpec},
     process::ProcessSpec,
     volume::{EntryType, VolumeSpec},
 };
@@ -136,7 +136,7 @@ impl VolumeSourceEffectPort for &FilesystemVolume {
     async fn resolve_root(
         &self,
         _source_policy_id: Option<&BoundedToken>,
-        _kind: d2b_contracts_zone_session::v3::volume::SourceKind,
+        _kind: d2b_contracts_resource::v3::volume::SourceKind,
     ) -> Result<VolumeRootHandle, d2b_provider_volume_local::VolumeLocalError> {
         fs::create_dir_all(&self.root)
             .map_err(|_| d2b_provider_volume_local::VolumeLocalError::EffectFailed)?;
@@ -400,7 +400,7 @@ impl NetworkEffectPort for &FilesystemNetworkBoundary {
 impl NetworkResourcePort for &FilesystemNetworkBoundary {
     async fn upsert_volume_backing(
         &self,
-        _: &d2b_contracts_zone_session::v3::volume::VolumeSpec,
+        _: &d2b_contracts_resource::v3::volume::VolumeSpec,
     ) -> Result<(), NetworkEffectError> {
         self.event("volume-upsert")
     }
@@ -423,7 +423,7 @@ impl NetworkResourcePort for &FilesystemNetworkBoundary {
 
     async fn attach_volume(
         &self,
-        _: &d2b_contracts_zone_session::v3::volume::VolumeAttachment,
+        _: &d2b_contracts_resource::v3::volume::VolumeAttachment,
     ) -> Result<(), NetworkEffectError> {
         self.event("volume-attach")
     }

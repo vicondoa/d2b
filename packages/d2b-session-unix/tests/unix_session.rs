@@ -1,9 +1,11 @@
-use d2b_contracts_zone_session::v3::component_session::{
+use d2b_contracts_zone_session::v3::{
+    component_session::{
     AttachmentAccess, AttachmentCreditClass, AttachmentDescriptor, AttachmentKind,
     AttachmentPacket, AttachmentPolicy, AttachmentPolicyKind, AttachmentPurpose, BoundedVec,
     EndpointPolicy, EndpointPolicyIdentity, EndpointPurpose, EndpointRole,
     IdentityEvidenceRequirement, KernelObjectType, LimitProfile, Locality, NoiseProfile,
     PurposeClass, RequestId, ServicePackage, TransportBinding, TransportClass,
+},
 };
 use d2b_session::{
     AttachmentPayload, AttachmentValidationError, HandshakeCredentials, OwnedAttachment,

@@ -11,7 +11,6 @@ workspace = true
 [dependencies]
 d2bd-runtime = { path = "../d2bd-runtime", version = "0.0.0-bootstrap" }
 d2b-contracts-provider = { path = "../d2b-contracts-provider", version = "0.0.0-bootstrap" }
-d2b-contracts-resource = { path = "../d2b-contracts-resource", version = "0.0.0-bootstrap" }
 d2b-contracts-zone-session = { path = "../d2b-contracts-zone-session", version = "0.0.0-bootstrap" }
 arc-swap = "1"
 async-trait = "0.1"
@@ -42,6 +41,7 @@ d2b-host = { path = "../d2b-host", version = "0.0.0-bootstrap" }
 d2b-contracts = { path = "../d2b-contracts", version = "0.0.0-bootstrap" }
 d2b-contracts-broker = { path = "../d2b-contracts-broker", version = "0.0.0-bootstrap" }
 d2b-contracts-control = { path = "../d2b-contracts-control", version = "0.0.0-bootstrap" }
+d2b-contracts-resource = { path = "../d2b-contracts-resource", version = "0.0.0-bootstrap" }
 d2b-cutover = { path = "../d2b-cutover", version = "0.0.0-bootstrap" }
 d2b-audit = { path = "../d2b-audit", version = "0.0.0-bootstrap" }
 d2b-provider = { path = "../d2b-provider", version = "0.0.0-bootstrap" }

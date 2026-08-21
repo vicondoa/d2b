@@ -1,10 +1,12 @@
 //! The v3 Provider descriptor.
 
-use d2b_contracts_zone_session::v3::{
+use d2b_contracts_zone_session::v3::zone_routing::ZonePath;
+use d2b_contracts_resource::v3::{
     ResourceRef,
-    identity::{ConfigurationGeneration, ResourceGeneration, ServiceName},
-    zone_routing::ZonePath,
+    ConfigurationGeneration,
+    ResourceGeneration,
 };
+use d2b_contracts_resource::v3::identity::ServiceName;
 
 use crate::{
     error::RegistryBuildError,

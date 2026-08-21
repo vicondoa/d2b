@@ -1,8 +1,11 @@
 //! Total one-way store-to-resource error mapping.
 
 use d2b_contracts_resource::resource_proto as wire;
-use d2b_contracts_zone_session::v3::{
-    ResourceError, ResourceErrorKind, ResourceErrorReason, RetryClass,
+use d2b_contracts_resource::v3::{
+    ResourceError,
+    ResourceErrorKind,
+    ResourceErrorReason,
+    RetryClass,
 };
 use d2b_resource_store::{StoreError, StoreErrorKind};
 use protobuf::EnumOrUnknown;
@@ -199,7 +202,7 @@ fn to_wire_kind(kind: ResourceErrorKind) -> wire::ResourceErrorKind {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use d2b_contracts_zone_session::v3::ZoneRevision;
+    use d2b_contracts_resource::v3::ZoneRevision;
 
     #[test]
     fn store_mapping_is_total_and_one_way() {

@@ -14,8 +14,8 @@
 
 use std::collections::VecDeque;
 
-use d2b_contracts_zone_session::v3::ResourceRef;
-use d2b_contracts_zone_session::v3::execution_policy::BoundedToken;
+use d2b_contracts_resource::v3::ResourceRef;
+use d2b_contracts_resource::v3::execution_policy::BoundedToken;
 use d2b_contracts_zone_session::v3::zone_routing::ZonePath;
 
 use crate::error::ProviderToolkitError;
@@ -182,7 +182,10 @@ impl Default for ProviderAgentAuditLog {
 mod tests {
     use super::*;
     use d2b_contracts_zone_session::v3::zone_routing::ZoneLabelId;
-    use d2b_contracts_zone_session::v3::{ResourceName, ResourceTypeName};
+    use d2b_contracts_resource::v3::{
+    ResourceName,
+    ResourceTypeName,
+};
 
     fn zone() -> ZonePath {
         ZonePath::new(vec![ZoneLabelId::parse("work").expect("valid label")])

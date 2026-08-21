@@ -13,13 +13,34 @@ use std::{
 };
 
 use d2b_contracts_resource::resource_proto as wire;
-use d2b_contracts_zone_session::v3::{
-    AuthenticatedSubjectContext, BindingDigest, CanonicalJsonValue, ConfigurationGeneration,
-    ControllerGeneration, EvidenceClass, Locality, RESOURCE_ENVELOPE_DOMAIN_TAG,
-    ReconnectGeneration, ResourceName, ResourceRef, ResourceUid, SchemaFingerprint, ServiceName,
-    SessionBinding, SessionPurpose, TranscriptHash, TransportBinding, ZoneId, ZoneRevision,
-    canonical_digest, device::DeviceSpec, guest::GuestSpec, identity::STANDARD_RESOURCE_TYPES,
+use d2b_contracts_resource::v3::{
+    CanonicalJsonValue,
+    ConfigurationGeneration,
+    ControllerGeneration,
+    RESOURCE_ENVELOPE_DOMAIN_TAG,
+    ResourceName,
+    ResourceRef,
+    ResourceUid,
+    SchemaFingerprint,
+    ZoneId,
+    ZoneRevision,
+    canonical_digest,
+    device::DeviceSpec,
+    guest::GuestSpec,
     storage::ZoneStoreId,
+};
+use d2b_contracts_resource::v3::identity::{
+    AuthenticatedSubjectContext,
+    BindingDigest,
+    EvidenceClass,
+    Locality,
+    ReconnectGeneration,
+    ServiceName,
+    SessionBinding,
+    SessionPurpose,
+    TranscriptHash,
+    TransportBinding,
+    STANDARD_RESOURCE_TYPES,
 };
 use d2b_contracts_broker::broker_wire::{
     BrokerCallerRole, OpenZoneStoreResponse, ZoneStoreDisposition,
@@ -307,7 +328,7 @@ fn resource_policy(zone: &ZoneId, snapshot: PolicySnapshot) -> (PolicySet, Autho
     let catalog = ApiCatalog::standard();
     let resource_types = STANDARD_RESOURCE_TYPES
         .iter()
-        .map(|name| d2b_contracts_zone_session::v3::ResourceTypeName::parse(*name).unwrap())
+        .map(|name| d2b_contracts_resource::v3::ResourceTypeName::parse(*name).unwrap())
         .collect::<Vec<_>>();
     let resource_verbs = [
         ResourceVerb::Get,
@@ -593,7 +614,7 @@ async fn authenticated_operator_reaches_ready_resource_plane_and_refuses_other_s
         stable_uid("store", &marker_identity),
         zone.clone(),
         stable_uid("zone", zone.as_str()),
-        d2b_contracts_zone_session::v3::Timestamp::parse("1970-01-01T00:00:00.000Z").unwrap(),
+        d2b_contracts_resource::v3::Timestamp::parse("1970-01-01T00:00:00.000Z").unwrap(),
         PolicySnapshot {
             policy_revision: 1,
             api_catalog_revision: 1,
@@ -685,7 +706,7 @@ async fn authenticated_operator_drives_wave6_resources_through_production_bounda
         stable_uid("store", &marker_identity),
         zone.clone(),
         stable_uid("zone", zone.as_str()),
-        d2b_contracts_zone_session::v3::Timestamp::parse("1970-01-01T00:00:00.000Z").unwrap(),
+        d2b_contracts_resource::v3::Timestamp::parse("1970-01-01T00:00:00.000Z").unwrap(),
         PolicySnapshot {
             policy_revision: 1,
             api_catalog_revision: 1,
