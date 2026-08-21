@@ -16,8 +16,9 @@ that is the binding contract; this file is the human quick-start.
   advisory; an advisory success may be a guarded skip and is not validation
   evidence.
 - **Layer 2 - integration tiers.** Real systemd / kernel / userland: podman
-  containers, runNixOSTest VMs, live-host scripts, and hardware tests. Used only
-  when Layer 1 *provably* cannot cover the behaviour.
+  containers, runNixOSTest VMs, and live-host scripts. Used only
+  when Layer 1 *provably* cannot cover the behaviour. Physical-device
+  validation is manual operator work, not a repository evidence script.
 
 ## Directory structure
 
@@ -29,7 +30,7 @@ tests/
 ├── migration-ledger.toml, migration-state.d/                    retirement ledger + per-test records
 ├── golden/, fixtures/                                           shared golden data + fixtures
 ├── tools/                                                       runners + codegen/asserter tools
-│                                                                (rust-workspace-checks, gen-*, assert-pinned-tests, …)
+│                                                                (bazel-check, rust-workspace-checks, gen-*, …)
 ├── unit/                          ── Layer 1 ──
 │   ├── nix/        surfaces/ + cases/ + eval-cases/             type 1: owner-local Nix eval cases
 │   ├── smoke/      smoke-eval*.nix                              type 6: smoke / flake-check defs
@@ -40,8 +41,7 @@ tests/
 │   ├── distro-matrix/                                           distro pins + fixtures
 │   └── live/                                                    type 11: D2B_LIVE live-host (manual)
 └── host-integration/
-    ├── *.nix                                                    type 10: runNixOSTest (make test-host-integration; conditional)
-    └── hardware/                                                type 12: real-device tests (manual)
+    └── *.nix                                                    type 10: runNixOSTest (make test-host-integration; conditional)
 ```
 
 Rust tests (types 2-5: unit, integration, contract, policy-lint) live under
@@ -90,33 +90,26 @@ mirrored shared crate gains or changes a dependency, update the guest workspace
 fixture and any affected override, refresh `packages/Cargo.guest.lock`, and run
 `make test-policy`.
 
-All Layer-2 lanes (types 9-12) run behind one sole-use semaphore, invoked
-from the repository root as `cargo run --manifest-path Cargo.toml
--p xtask -- heavy-gate` (two slots per uid via open file description locks), so
-concurrent heavy lanes cannot oversubscribe the shared Nix store, cargo
-target directory, or KVM device. The public lane targets above
-(`make test-integration`, `make test-host-integration`, `make perf`) acquire a
-slot and then delegate to a guarded internal
-`heavy-lane-*` target that fails closed if run outside the gate; run the
-public targets, not the internal ones. `make heavy-check`,
-`make heavy-cargo-test`, `make heavy-flake-check`, and the `heavy-test-*`
-aliases run a Layer-1 gate, the Rust suite, the building flake check, or a
-public lane under the same semaphore. Live-host and hardware scripts obey the
-same rule: use the gated `make pre-tag` / `make smoke-lite` live-VM smoke
-entrypoints, or wrap a raw live script as `cargo run --manifest-path
-Cargo.toml -p xtask -- heavy-gate -- env
+All Layer-2 lanes (types 9-11) run behind one sole-use semaphore (two slots
+per uid via open file description locks), so concurrent heavy lanes cannot
+oversubscribe the shared Nix store, Bazel output tree, or KVM device. The
+public lane targets above (`make test-integration`,
+`make test-host-integration`, `make perf`) acquire a slot and then delegate
+to a guarded internal `heavy-lane-*` target that fails closed if run outside
+the gate; run the public targets, not the internal ones. `make heavy-check`,
+`make heavy-flake-check`, and the `heavy-test-*` aliases run a Layer-1 gate,
+the building flake check, or a public lane under the same semaphore.
+Live-host scripts obey the same rule: use the gated `make pre-tag` /
+`make smoke-lite` live-VM smoke entrypoints, or wrap a raw live script as
+`make heavy-gate-build && bazel-bin/packages/xtask/xtask heavy-gate -- env
 D2B_LIVE=1 bash tests/integration/live/<x>.sh`. Invoking `D2B_LIVE=1 bash
 tests/integration/live/<x>.sh` directly no longer bypasses the semaphore:
-each live and hardware entrypoint, plus the enforcing path of each performance
+each live entrypoint, plus the enforcing path of each performance
 entrypoint, verifies its inherited slot and re-executes itself through the gate
 exactly once when no genuine slot is held. The advisory performance skip exits
 before acquiring a slot because it does no heavy work. A bare `D2B_HEAVY_GATE`
-value is not trusted, so the shared Nix store, cargo target directory, and KVM
+value is not trusted, so the shared Nix store, Bazel output tree, and KVM
 device cannot be oversubscribed. The gated targets remain the documented path.
-The repository-root `Cargo.toml` is the product workspace, so the bare
-`cargo xtask` alias works from the repository root. Use
-`cargo run --manifest-path Cargo.toml` when an explicit manifest path makes
-the command's authority clearer; see AGENTS.md for the `sccache` tradeoff.
 
 The semaphore uses a protected, system-provisioned namespace under
 `/run/d2b-heavy-gates`; it never falls back to a user-writable runtime or
@@ -204,7 +197,7 @@ evidence script is required.
 
 The fixed workflow is committed at `.github/workflows/pr-l1-static-fast.yml`
 and exposes one stable required `check` result. Intermediate job names are
-implementation details. Layer-2 container, VM, live-host, hardware, and performance scripts
+implementation details. Layer-2 container, VM, live-host, and performance scripts
 remain conditional or manual lanes behind the heavy-gate semaphore; they are
 not folded into the Layer-1 Bazel scheduler.
 
@@ -225,9 +218,10 @@ Layer 1:
 - Generated docs/schemas/CLI freshness → already a drift gate; regenerate with
   `bazel run //packages/xtask:xtask -- gen-*`. Do **not** add a new shell gate.
 
-Only reach for Layer 2 (containers / VMs / live-host / hardware) when a foreign
-userland, a real systemd boot, a live host, or a physical device is genuinely
-required - and pick the lowest tier that works.
+Only reach for Layer 2 (containers / VMs / live-host) when a foreign
+userland, a real systemd boot, or a live host is genuinely
+required - and pick the lowest tier that works. Physical-device
+validation is manual operator work, not a repository evidence script.
 
 ## Conventions
 

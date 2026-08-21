@@ -339,11 +339,7 @@ heavy-lane-host-integration: heavy-lane-guard
 	echo "==> nix build $$*"; \
 	nix build --no-link --print-build-logs "$$@"
 
-## test-hardware - G-hw: real GPU/YubiKey/hardware-TPM passthrough + full
-## microVM boot. NixOS host WITH the devices only; CI cannot run this.
 ## Public heavy lanes: acquire a slot, then run the raw work behind the gate.
-test-hardware: heavy-gate-build
-	$(HEAVY_GATE) $(MAKE) heavy-lane-hardware
 perf: heavy-gate-build
 	$(HEAVY_GATE) $(MAKE) heavy-lane-perf
 
@@ -390,7 +386,7 @@ heavy-lane-guard: heavy-gate-build
 # ===========================================================================
 # Heavy lanes.
 #
-# Every Layer-2, host-integration, hardware, live, and perf-heavy command runs
+# Every Layer-2, host-integration, live, and perf-heavy command runs
 # through ONE semaphore: `xtask heavy-gate`. It grants two slots per uid
 # via open file description locks, so concurrent lanes cannot oversubscribe the
 # shared Nix store or KVM device. Do not add a second
@@ -441,7 +437,7 @@ heavy-gate-provision:
 heavy-check: heavy-gate-build
 	$(HEAVY_GATE) $(MAKE) check
 
-## heavy-test-integration / -host-integration / -hardware - explicit aliases for
+## heavy-test-integration / -host-integration - explicit aliases for
 ## the public heavy lanes, kept for muscle memory and scripts. The public lanes
 ## now acquire the semaphore themselves; a redundant outer gate here is safe
 ## because the inner invocation verifies and reuses the inherited slot.
