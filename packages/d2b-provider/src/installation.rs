@@ -25,8 +25,9 @@
 //! no type here carries authority. An [`InstalledProvider`] is a decision
 //! that has already been reached, not a capability that can be presented.
 
-use d2b_contracts_zone_session::v3::{
-    provider::{ProviderManifest, ProviderSpec},
+use d2b_contracts_provider::v3::{
+    ProviderManifest,
+    ProviderSpec,
 };
 use d2b_contracts_resource::v3::{
     ResourceRef,
@@ -184,19 +185,30 @@ fn publishes_only_signed_methods(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use d2b_contracts_resource::v3::ArtifactId;
-    use d2b_contracts_zone_session::v3::{
-    zone_routing::ZonePath,
-    provider::{ArtifactDigest, ArtifactDigestSet, ComponentDescriptor, ComponentType, PolicyEvaluation, ResourceApiBinding, RevocationState, SignatureState, StandardCapabilityMatrix, TrustEvidence, UpgradeDisposition, UpgradePolicy},
-};
-use d2b_contracts_resource::v3::{
-    execution_policy::{BoundedToken, ExecutionDomain},
-    ConfigurationGeneration,
-    ResourceGeneration,
-    ResourceTypeName,
-    resource_schema::SchemaVersion,
-};
-use d2b_contracts_resource::v3::identity::ServiceName;
+    use d2b_contracts_provider::v3::{
+        ArtifactDigest,
+        ArtifactDigestSet,
+        ComponentDescriptor,
+        ComponentType,
+        PolicyEvaluation,
+        ResourceApiBinding,
+        RevocationState,
+        SignatureState,
+        StandardCapabilityMatrix,
+        TrustEvidence,
+        UpgradeDisposition,
+        UpgradePolicy,
+    };
+    use d2b_contracts_resource::v3::{
+        ArtifactId,
+        execution_policy::{BoundedToken, ExecutionDomain},
+        ConfigurationGeneration,
+        ResourceGeneration,
+        ResourceTypeName,
+        resource_schema::SchemaVersion,
+    };
+    use d2b_contracts_resource::v3::identity::ServiceName;
+    use d2b_contracts_zone_session::v3::zone_routing::ZonePath;
 
     use crate::identity::{
         ProviderCapabilitySet, ProviderClass, ProviderImplementationId, ProviderMethodName,

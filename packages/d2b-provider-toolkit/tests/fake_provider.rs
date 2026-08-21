@@ -12,12 +12,33 @@
 
 use std::collections::BTreeMap;
 
+use d2b_contracts_provider::v3::{
+    ArtifactDigest,
+    ArtifactDigestSet,
+    CapabilitySupport,
+    CompatibilityRange,
+    ComponentDescriptor,
+    ComponentStateKind,
+    ComponentStateNamespace,
+    ComponentStateView,
+    ComponentType,
+    DependencyAlias,
+    DependencyDeclaration,
+    PolicyEvaluation,
+    ProviderManifest,
+    ProviderSpec,
+    ResourceApiBinding,
+    RevocationState,
+    SignatureState,
+    StandardCapabilityMatrix,
+    StorageNeed,
+    TrustEvidence,
+    UpgradeDisposition,
+    UpgradePolicy,
+};
+use d2b_contracts_zone_session::v3::zone_routing::ZonePath;
 use d2b_contracts_resource::v3::ArtifactId;
 use d2b_contracts_resource::v3::identity::BindingDigest;
-use d2b_contracts_zone_session::v3::{
-    zone_routing::ZonePath,
-    provider::{ArtifactDigest, ArtifactDigestSet, CapabilitySupport, CompatibilityRange, ComponentDescriptor, ComponentStateKind, ComponentStateNamespace, ComponentStateView, ComponentType, DependencyAlias, DependencyDeclaration, PolicyEvaluation, ProviderManifest, ProviderSpec, ResourceApiBinding, RevocationState, SignatureState, StandardCapabilityMatrix, StorageNeed, TrustEvidence, UpgradeDisposition, UpgradePolicy},
-};
 use d2b_contracts_resource::v3::{
     ResourceRef,
     execution_policy::{BoundedToken, ExecutionDomain},

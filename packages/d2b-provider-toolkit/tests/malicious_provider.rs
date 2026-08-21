@@ -12,12 +12,33 @@
 //! honest suite twice.
 
 use d2b_contracts_provider::v3::semantic_services::catalog;
+use d2b_contracts_provider::v3::{
+    ArtifactDigest,
+    ArtifactDigestSet,
+    BindingTargetType,
+    CapabilitySupport,
+    CompatibilityRange,
+    ComponentDescriptor,
+    ComponentType,
+    DependencyAlias,
+    DependencyDeclaration,
+    Exportability,
+    ExtensionSchemaRegistration,
+    PolicyEvaluation,
+    ProjectionFactory,
+    ProviderContractError,
+    ProviderManifest,
+    ResourceApiBinding,
+    RevocationState,
+    SignatureState,
+    StandardCapabilityMatrix,
+    TrustEvidence,
+    UpgradeDisposition,
+    UpgradePolicy,
+};
+use d2b_contracts_zone_session::v3::zone_routing::ZonePath;
 use d2b_contracts_resource::v3::ArtifactId;
 use d2b_contracts_resource::v3::identity::BindingDigest;
-use d2b_contracts_zone_session::v3::{
-    zone_routing::ZonePath,
-    provider::{ArtifactDigest, ArtifactDigestSet, BindingTargetType, CapabilitySupport, CompatibilityRange, ComponentDescriptor, ComponentType, DependencyAlias, DependencyDeclaration, Exportability, ExtensionSchemaRegistration, PolicyEvaluation, ProjectionFactory, ProviderContractError, ProviderManifest, ResourceApiBinding, RevocationState, SignatureState, StandardCapabilityMatrix, TrustEvidence, UpgradeDisposition, UpgradePolicy},
-};
 use d2b_contracts_resource::v3::{
     ResourceEnvelope,
     ResourceRef,

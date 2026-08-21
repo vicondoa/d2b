@@ -223,11 +223,11 @@ impl core::fmt::Debug for Cancellation {
 ///
 /// ```compile_fail
 /// use d2b_contracts_resource::v3::{
-    ResourceGeneration,
-    ResourceUid,
-    ZoneId,
-    ZoneRevision,
-};
+///     ResourceGeneration,
+///     ResourceUid,
+///     ZoneId,
+///     ZoneRevision,
+/// };
 /// use d2b_controller_toolkit::CommittedRevisionProof;
 ///
 /// let _ = CommittedRevisionProof {

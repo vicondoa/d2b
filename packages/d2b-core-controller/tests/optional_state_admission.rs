@@ -1,7 +1,14 @@
 use std::collections::BTreeMap;
 
-use d2b_contracts_zone_session::v3::{
-    provider::{ArtifactDigest, ComponentDescriptor, ComponentStateKind, ComponentStateNamespace, ComponentStateView, ComponentType, StatePlacementMode, StorageNeed},
+use d2b_contracts_provider::v3::{
+    ArtifactDigest,
+    ComponentDescriptor,
+    ComponentStateKind,
+    ComponentStateNamespace,
+    ComponentStateView,
+    ComponentType,
+    StatePlacementMode,
+    StorageNeed,
 };
 use d2b_contracts_resource::v3::{
     ResourceTypeName,
