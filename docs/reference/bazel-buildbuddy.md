@@ -88,10 +88,11 @@ The committed `.bazelrc` defines:
 
 Remote profiles use the BuildBuddy Linux worker contract, Ubuntu GCC
 toolchain, minimal output downloads, compressed cache blobs, zero Bazel remote
-retries, and a bounded job count. Nix, fixture, hardware, and other local-only
-actions are tagged `local` or `no-remote-exec`; `no-remote-cache` alone does
-not make an action local. Heavy, container, VM, live-host, hardware, fixture,
-and performance lanes remain explicit local lanes.
+retries, and a bounded job count. Nix, fixture, hardware, and other local-only actions are tagged `local` or
+`no-remote-exec`; `no-remote-cache` alone does not make an action local. Heavy,
+container, VM, live-host, hardware, fixture, and performance lanes remain
+explicit local lanes. Rust target and exec actions override the worker
+toolchain's deprecated gold default with GNU ld.bfd.
 
 GitHub Layer-1 jobs set `D2B_BAZEL_PROFILE=local` and
 `D2B_BAZEL_UNTRUSTED=1`; they receive no BuildBuddy credential. The fixed job
@@ -170,7 +171,9 @@ bazel run //packages/xtask:xtask -- bazel-evidence check-security
 All first-party Rust crates are compiled with
 `--@rules_rust//rust/settings:per_crate_rustc_flag=//@-Dwarnings`. The
 per-crate setting applies to workspace labels without changing external
-dependency or exec-configuration policy.
+dependency or exec-configuration policy. Rust link actions also pass
+`-Wno-unused-command-line-argument` to clang so the toolchain's intentional
+`--unwindlib=none` selection does not emit an inapplicable driver warning.
 
 ## Redaction and failure output
 

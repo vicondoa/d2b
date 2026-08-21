@@ -465,12 +465,26 @@ fn committed_profiles_deny_first_party_rust_warnings_and_guard_facade_logs() {
         bazelrc.contains("--@rules_rust//rust/settings:per_crate_rustc_flag=//@-Dwarnings"),
         "every Bazel profile must deny first-party Rust warnings at rustc"
     );
-
-    let wrapper = read_text("tests/tools/bazel-check");
     assert!(
-        wrapper.contains("warning:") && wrapper.contains("grep") && wrapper.contains("redact_file"),
-        "the facade must check redacted logs for warning lines"
+        bazelrc.contains(
+            "--@rules_rust//rust/settings:per_crate_rustc_flag=//@-Clink-arg=-Wno-unused-command-line-argument"
+        ),
+        "Rust link actions must silence clang's inapplicable unwindlib warning"
     );
+    for profile in ["remote", "trusted-seed"] {
+        assert!(
+            bazelrc.contains(&format!(
+                "build:{profile} --@rules_rust//rust/settings:extra_rustc_flag=-Clink-arg=-fuse-ld=bfd"
+            )),
+            "{profile} target Rust actions must override the deprecated gold linker"
+        );
+        assert!(
+            bazelrc.contains(&format!(
+                "build:{profile} --@rules_rust//rust/settings:extra_exec_rustc_flag=-Clink-arg=-fuse-ld=bfd"
+            )),
+            "{profile} exec Rust actions must override the deprecated gold linker"
+        );
+    }
 }
 
 #[test]
@@ -556,6 +570,100 @@ fn warning_after_cache_hit_fails_a_successful_local_run() {
     );
     assert!(diagnostics.contains("warning: synthetic toolchain warning"));
     assert!(!diagnostics.contains("bazel-check: local passed"));
+    let _ = std::fs::remove_dir_all(scratch);
+}
+
+#[test]
+fn uppercase_bazel_diagnostic_does_not_trigger_the_rust_warning_guard() {
+    let scratch = repo_root().join(".scratch").join(format!(
+        "bazel-check-uppercase-warning-{}",
+        std::process::id()
+    ));
+    std::fs::create_dir_all(&scratch).expect("create wrapper test scratch");
+    let bazel = scratch.join("bazel");
+    write_executable(
+        &bazel,
+        "#!/usr/bin/env bash\n\
+         for arg in \"$@\"; do\n\
+           case \"$arg\" in\n\
+             --build_event_json_file=*) bep=\"${arg#*=}\" ;;\n\
+           esac\n\
+         done\n\
+         printf 'WARNING: build options changed\\n'\n\
+         printf '{\"id\":{\"started\":{\"uuid\":\"uppercase\"}},\"testResult\":{\"label\":\"//:test\"}}\\n' > \"$bep\"\n\
+         exit 0\n",
+    );
+
+    let output = Command::new("bash")
+        .arg(repo_root().join("tests/tools/bazel-check"))
+        .args(["--profile", "local", "--", "//:test"])
+        .env("D2B_BAZEL_BIN", &bazel)
+        .env("D2B_XTASK_BIN", env!("CARGO_BIN_EXE_xtask"))
+        .env("D2B_BAZEL_CHECK_SCRATCH", scratch.join("evidence"))
+        .output()
+        .expect("run bazel-check");
+
+    assert!(output.status.success());
+    assert!(String::from_utf8_lossy(&output.stdout).contains("bazel-check: local passed"));
+    let _ = std::fs::remove_dir_all(scratch);
+}
+
+#[test]
+fn warning_fails_an_otherwise_successful_trusted_seed_run() {
+    let scratch = repo_root().join(".scratch").join(format!(
+        "bazel-check-warning-trusted-seed-{}",
+        std::process::id()
+    ));
+    std::fs::create_dir_all(&scratch).expect("create wrapper test scratch");
+    let bazel = scratch.join("bazel");
+    let credential = scratch.join("credential");
+    let selected_profile = scratch.join("selected-profile");
+    std::fs::write(&credential, "synthetic-token\n").expect("write credential");
+    write_executable(
+        &bazel,
+        &format!(
+            "#!/usr/bin/env bash\n\
+             profile=''\n\
+             for arg in \"$@\"; do\n\
+               case \"$arg\" in\n\
+                 --build_event_json_file=*) bep=\"${{arg#*=}}\" ;;\n\
+                 --config=*) profile=\"${{arg#*=}}\" ;;\n\
+               esac\n\
+             done\n\
+             printf '%s' \"$profile\" > '{}'\n\
+             printf 'warning: synthetic trusted-seed warning\\n'\n\
+             printf '{{\"id\":{{\"started\":{{\"uuid\":\"trusted-seed\"}}}},\"testResult\":{{\"label\":\"//:test\"}}}}\\n' > \"$bep\"\n\
+             exit 0\n",
+            selected_profile.display()
+        ),
+    );
+
+    let output = Command::new("bash")
+        .arg(repo_root().join("tests/tools/bazel-check"))
+        .args(["--profile", "trusted-seed", "--", "//:test"])
+        .env("D2B_BAZEL_BIN", &bazel)
+        .env("D2B_XTASK_BIN", env!("CARGO_BIN_EXE_xtask"))
+        .env("D2B_BUILDBUDDY_CREDENTIAL_FILE", &credential)
+        .env("D2B_BAZEL_TRUSTED", "1")
+        .env("D2B_BAZEL_UNTRUSTED", "0")
+        .env("GITHUB_ACTIONS", "false")
+        .env("GITHUB_REF", "refs/heads/v3")
+        .env("D2B_BAZEL_CHECK_SCRATCH", scratch.join("evidence"))
+        .output()
+        .expect("run bazel-check");
+
+    assert!(!output.status.success());
+    assert_eq!(
+        std::fs::read_to_string(&selected_profile).expect("read selected profile"),
+        "trusted-seed"
+    );
+    let diagnostics = format!(
+        "{}{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(diagnostics.contains("warning: synthetic trusted-seed warning"));
+    assert!(!diagnostics.contains("bazel-check: trusted-seed passed"));
     let _ = std::fs::remove_dir_all(scratch);
 }
 

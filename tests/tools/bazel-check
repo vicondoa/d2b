@@ -24,7 +24,7 @@ redact_file() {
 
 warning_line_present() {
   local path="$1"
-  [ -f "$path" ] && grep -qi '^warning:' "$path"
+  [ -f "$path" ] && grep -q '^warning:' "$path"
 }
 
 emit_captured_metadata() {
