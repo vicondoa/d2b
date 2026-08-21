@@ -86,8 +86,9 @@ passing gate evidence. When a mirrored shared crate gains or changes a
 dependency, update the guest workspace fixture and any affected override,
 refresh `packages/Cargo.guest.lock`, and run the applicable owner-local targets
 plus `make test-rust-supply-chain` and `make test-policy`. The supply-chain lane
-realizes the copied Guest workspace; it is focused build validation, not a
-fifth repository-wide policy class or copied-workspace parity result.
+realizes the copied Guest workspace for dependency metadata, license, source,
+and audit validation; it does not compile Guest packages and is not a fifth
+repository-wide policy class or copied-workspace parity result.
 
 All Layer-2 lanes (types 9-11) run behind one sole-use semaphore (two slots
 per uid via open file description locks), so concurrent heavy lanes cannot
