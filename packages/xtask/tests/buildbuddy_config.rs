@@ -577,6 +577,48 @@ fn failed_bootstrap_removes_protected_raw_log() {
 }
 
 #[test]
+fn warning_after_successful_bootstrap_fails_without_leaking_credentials() {
+    let scratch = repo_root().join(".scratch").join(format!(
+        "bazel-check-bootstrap-warning-{}",
+        std::process::id()
+    ));
+    std::fs::create_dir_all(&scratch).expect("create wrapper test scratch");
+    let bazel = scratch.join("bazel");
+    write_executable(
+        &bazel,
+        "#!/usr/bin/env bash\n\
+         printf 'warning: authorization: bootstrap-secret\\n'\n\
+         exit 0\n",
+    );
+
+    let evidence = scratch.join("evidence");
+    let output = Command::new("bash")
+        .arg(repo_root().join("tests/tools/bazel-check"))
+        .args(["--profile", "local", "--", "//:test"])
+        .env("D2B_BAZEL_BIN", &bazel)
+        .env_remove("D2B_XTASK_BIN")
+        .env("D2B_BAZEL_CHECK_SCRATCH", &evidence)
+        .output()
+        .expect("run bazel-check");
+
+    assert_eq!(output.status.code(), Some(1));
+    let diagnostics = format!(
+        "{}{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(diagnostics.contains("bootstrap warning line found"));
+    assert!(diagnostics.contains("warning: [REDACTED]"));
+    assert!(!diagnostics.contains("bootstrap-secret"));
+    assert_eq!(
+        std::fs::read_to_string(evidence.join("bootstrap.log"))
+            .expect("read redacted bootstrap log"),
+        "warning: [REDACTED]"
+    );
+    let _ = std::fs::remove_dir_all(scratch);
+}
+
+#[test]
 fn warning_after_cache_hit_fails_a_successful_local_run() {
     let scratch = repo_root().join(".scratch").join(format!(
         "bazel-check-warning-cache-hit-{}",
