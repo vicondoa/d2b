@@ -424,7 +424,7 @@ see the auto-generated tables above for the committed Rust variants.
 
 | Type | Kind | Rust definition | Shape |
 | --- | --- | --- | --- |
-| `ApplyHostGenerationHandoffResponse` | struct | [`ApplyHostGenerationHandoffResponse`](../../packages/d2b-contracts-broker/src/broker_wire.rs#L332) | struct { `target`: `d2b_contracts_zone_session::v3::ResourceRef`; `state`: `crate::host_generation::HandoffState`; `source_generation`: `u64`; `target_generation`: `u64`; `source_remains_usable`: `bool`; `summary`: `String` } |
+| `ApplyHostGenerationHandoffResponse` | struct | [`ApplyHostGenerationHandoffResponse`](../../packages/d2b-contracts-broker/src/broker_wire.rs#L332) | struct { `target`: `d2b_contracts_resource::v3::ResourceRef`; `state`: `crate::host_generation::HandoffState`; `source_generation`: `u64`; `target_generation`: `u64`; `source_remains_usable`: `bool`; `summary`: `String` } |
 | `LaunchCutoverRunnerResponse` | struct | [`LaunchCutoverRunnerResponse`](../../packages/d2b-contracts-broker/src/broker_wire.rs#L359) | struct { `operation_id`: `BundleOpId`; `pid`: `i32`; `start_time_ticks`: `u64`; `pidfd_index`: `Option<u32>` } |
 | `CutoverAuditResponse` | struct | [`CutoverAuditResponse`](../../packages/d2b-contracts-broker/src/broker_wire.rs#L426) | struct { `record_id`: `CanonicalAuditDigest` } |
 | `CutoverVerificationResponse` | struct | [`CutoverVerificationResponse`](../../packages/d2b-contracts-broker/src/broker_wire.rs#L521) | struct { `zones`: `Vec<CutoverZoneVerification>`; `sources_preserved`: `bool`; `identity_digests_match`: `bool`; `candidate_current`: `bool` } |

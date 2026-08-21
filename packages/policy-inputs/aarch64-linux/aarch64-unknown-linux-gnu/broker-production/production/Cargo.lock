@@ -545,7 +545,7 @@ version = "0.0.0-bootstrap"
 dependencies = [
  "d2b-contracts",
  "d2b-contracts-control",
- "d2b-contracts-zone-session",
+ "d2b-contracts-resource",
  "schemars",
  "serde",
  "serde_json",
@@ -636,6 +636,7 @@ name = "d2b-host"
 version = "0.0.0-bootstrap"
 dependencies = [
  "d2b-contracts",
+ "d2b-contracts-resource",
  "d2b-contracts-zone-session",
  "d2b-core",
  "libc",
@@ -660,6 +661,7 @@ dependencies = [
  "d2b-contracts",
  "d2b-contracts-broker",
  "d2b-contracts-control",
+ "d2b-contracts-resource",
  "d2b-contracts-zone-session",
  "d2b-core",
  "d2b-host",
@@ -695,6 +697,7 @@ version = "0.0.0-bootstrap"
 dependencies = [
  "d2b-contracts",
  "d2b-contracts-provider",
+ "d2b-contracts-resource",
  "d2b-contracts-zone-session",
  "rustix 0.38.44",
  "serde",
