@@ -633,7 +633,7 @@ fn uppercase_bazel_diagnostic_does_not_trigger_the_rust_warning_guard() {
              --build_event_json_file=*) bep=\"${arg#*=}\" ;;\n\
            esac\n\
          done\n\
-         printf 'WARNING: build options changed\\n'\n\
+         printf 'WARNING: authorization: synthetic-secret\\n'\n\
          printf '{\"id\":{\"started\":{\"uuid\":\"uppercase\"}},\"testResult\":{\"label\":\"//:test\"}}\\n' > \"$bep\"\n\
          exit 0\n",
     );
@@ -648,7 +648,13 @@ fn uppercase_bazel_diagnostic_does_not_trigger_the_rust_warning_guard() {
         .expect("run bazel-check");
 
     assert!(output.status.success());
-    assert!(String::from_utf8_lossy(&output.stdout).contains("bazel-check: local passed"));
+    let diagnostics = format!(
+        "{}{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(diagnostics.contains("bazel-check: local passed"));
+    assert!(!diagnostics.contains("synthetic-secret"));
     let _ = std::fs::remove_dir_all(scratch);
 }
 

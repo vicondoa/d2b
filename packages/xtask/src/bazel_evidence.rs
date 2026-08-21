@@ -476,11 +476,14 @@ fn redaction_hints(lower: &str) -> String {
     }
 }
 
-fn redacted_line(lower: &str) -> String {
-    let warning_prefix = lower.starts_with("warning:").then_some("warning: ");
+fn redacted_line(original: &str, lower: &str) -> String {
+    let warning_prefix = original
+        .get(.."warning:".len())
+        .filter(|prefix| prefix.eq_ignore_ascii_case("warning:"))
+        .map(|prefix| format!("{prefix} "))
+        .unwrap_or_default();
     format!(
-        "{}[REDACTED]{}",
-        warning_prefix.unwrap_or_default(),
+        "{warning_prefix}[REDACTED]{}",
         redaction_hints(lower)
     )
 }
@@ -500,7 +503,7 @@ fn redact_text(input: &str) -> String {
     for line in output.lines() {
         if let Some(state) = continuation {
             let lower = line.to_ascii_lowercase();
-            redacted_lines.push(redacted_line(&lower));
+            redacted_lines.push(redacted_line(line, &lower));
             continuation = match state {
                 RedactionContinuation::Unquoted => None,
                 RedactionContinuation::Quoted(quote) => unescaped_quote_count(&lower, quote)
@@ -513,7 +516,7 @@ fn redact_text(input: &str) -> String {
         let lower = line.to_ascii_lowercase();
         if contains_credential_field(&lower) {
             continuation = redaction_continuation(&lower);
-            redacted_lines.push(redacted_line(&lower));
+            redacted_lines.push(redacted_line(line, &lower));
         } else {
             redacted_lines.push(line.to_owned());
         }
@@ -619,6 +622,17 @@ mod tests {
         assert_eq!(
             classification_value(classify_failure(&redacted, false))["kind"],
             "warning"
+        );
+    }
+
+    #[test]
+    fn redaction_preserves_uppercase_warning_marker_without_promoting_it() {
+        let redacted = redact_text("WARNING: authorization: synthetic-secret");
+        assert!(redacted.starts_with("WARNING:"));
+        assert!(!redacted.contains("synthetic-secret"));
+        assert_eq!(
+            classification_value(classify_failure(&redacted, false))["kind"],
+            Value::Null
         );
     }
 }
