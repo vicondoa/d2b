@@ -121,7 +121,7 @@ check-ci:
 	$(BAZEL_RUN) //bazel/checks:check
 	$(MAKE) test-integration
 
-## check-fast / check-tier0 - fast PR-loop subsets.
+## check-fast - compatibility alias for check; check-tier0 is the fast subset.
 
 ## bazel-check - complete Bazel graph. Locally this defaults to the
 ## BuildBuddy profile; the facade falls back to local execution when the

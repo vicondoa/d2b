@@ -574,6 +574,65 @@ fn bazel_check_rejects_an_incomplete_project_shell_contract() {
 }
 
 #[test]
+fn bazel_check_rejects_an_unset_or_non_executable_bazel_bin_without_invocation() {
+    let scratch = repo_root()
+        .join(".scratch")
+        .join(format!("bazel-check-bazel-bin-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&scratch);
+    std::fs::create_dir_all(&scratch).expect("create wrapper test scratch");
+    let bazel = scratch.join("bazel");
+    let invocation_log = scratch.join("invoked.log");
+    write_executable(
+        &bazel,
+        "#!/usr/bin/env bash\n\
+         printf 'invoked\\n' >> \"$D2B_FAKE_BAZEL_LOG\"\n\
+         exit 99\n",
+    );
+    let cases = [("unset", false), ("non-executable", true)];
+
+    for (label, non_executable) in cases {
+        if non_executable {
+            std::fs::set_permissions(&bazel, std::os::unix::fs::PermissionsExt::from_mode(0o644))
+                .expect("make fake Bazel non-executable");
+        }
+        let mut command = Command::new("bash");
+        command
+            .arg(repo_root().join("tests/tools/bazel-check"))
+            .args(["--profile", "local", "--", "//:test"])
+            .env("D2B_PROJECT_SHELL", "d2b")
+            .env("D2B_FAKE_BAZEL_LOG", &invocation_log)
+            .env("D2B_XTASK_BIN", env!("CARGO_BIN_EXE_xtask"))
+            .env_remove("D2B_BAZEL_BIN")
+            .env("D2B_BAZEL_CHECK_SCRATCH", scratch.join(label));
+        if non_executable {
+            command.env("D2B_BAZEL_BIN", &bazel);
+        }
+
+        let output = command.output().expect("run bazel-check");
+
+        assert_eq!(output.status.code(), Some(76), "{label} case");
+        let diagnostics = format!(
+            "{}{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert!(
+            diagnostics.contains("D2B_BAZEL_BIN must name the executable"),
+            "{label} case diagnostics: {diagnostics}"
+        );
+        assert!(
+            !invocation_log.exists()
+                || std::fs::read_to_string(&invocation_log)
+                    .expect("read fake Bazel invocation log")
+                    .is_empty(),
+            "{label} case invoked fake Bazel"
+        );
+    }
+
+    let _ = std::fs::remove_dir_all(scratch);
+}
+
+#[test]
 fn make_dispatches_multiple_goals_once_and_preserves_bazel_variables() {
     let scratch = repo_root()
         .join(".scratch")
@@ -1374,6 +1433,12 @@ fn audited_local_rust_suite_is_complete_and_tag_driven() {
             "{package_suite} has no native package suite"
         );
         let main_suite = rule_block(&package_build, "all-tests", &["test_suite("]);
+        assert!(
+            !main_suite
+                .lines()
+                .any(|line| line.trim_start().starts_with("tests =")),
+            "{package_suite} must rely on native empty-suite expansion"
+        );
         assert!(
             main_suite.contains("\"-local\"") && main_suite.contains("\"-no-remote-exec\""),
             "{package_suite} must exclude local-only leaves in its main suite"
