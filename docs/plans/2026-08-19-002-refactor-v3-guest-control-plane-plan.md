@@ -8,6 +8,7 @@ artifact_readiness: implementation-ready
 product_contract_source: ce-brainstorm
 execution: code
 deepened: 2026-08-19
+reconciled: 2026-08-20
 ---
 
 # V3 Guest Control Plane - Plan
@@ -18,6 +19,7 @@ deepened: 2026-08-19
 - **Product authority:** Nix and the Zone resource store remain authoritative. Each resource has exactly one assigned Provider controller instance.
 - **Open blockers:** None.
 - **Execution profile:** Deep, security-sensitive refactor with contract-first sequencing and a clean-break removal tail.
+- **Current baseline:** The cutover engine, split contract crates, provider-neutral `d2bd-runtime`, owner-local Provider code/Nix/tests, Process resource contracts, and production Resource API routing already exist.
 - **Tail ownership:** The implementation workflow owns validation, independent review, changelog, PR creation, and reviewed-head babysitting.
 
 ---
@@ -26,13 +28,15 @@ deepened: 2026-08-19
 
 ### Summary
 
-One `d2bd` executable supplies mode-bound Host and Guest daemon instances, and one `d2b-broker` executable supplies separate privileged broker instances for each authority domain.
+One `d2bd` executable supplies mode-bound Host and Guest daemon instances from a thin static composition root over the provider-neutral `d2bd-runtime`, and one `d2b-broker` executable evolves from `d2b-priv-broker` to supply separate privileged broker instances for each authority domain.
 Both target modes deploy signed Provider controller, service, and worker Processes through the same placement and effect contracts.
 The legacy `guest_control.proto` feature API is removed after resource and named-stream parity is complete.
 
 ### Problem Frame
 
-The v3 resource model, semantic Service/Binding contracts, Provider packages, ComponentSession runtime, and host-side ZoneBus are already present, but the reachable guest path still uses a dedicated feature RPC surface for exec, shell, configuration reads, USBIP, activation, and audio.
+The v3 resource model, semantic Service/Binding contracts, Provider packages, ComponentSession runtime, host-side ZoneBus, `Process`/`EphemeralProcess` contracts, production Resource API query and batch routing, and recovery-bound cutover engine are already present.
+Repository ownership is also already split: provider-neutral daemon services live in `d2bd-runtime`, `d2bd` is the static Provider composition root, contract families live in an acyclic `d2b-contracts-*` ladder, and Provider implementations own their Rust, Nix, and focused test surfaces.
+The reachable guest path still uses a dedicated feature RPC surface for exec, shell, configuration reads, USBIP, activation, and audio.
 This keeps feature behavior embedded in `d2b-guestd` and `d2bd` bridges instead of using the Provider and ResourceType ownership model.
 
 The current split also leaves controller placement implicit.
@@ -169,7 +173,7 @@ A `Process` with `spec.executionRef = Guest/dev-vm` routes to the controller ins
 **Clean break and removal**
 
 - R40. The v3 cutover MUST fail closed for old Guest generations rather than retaining a compatibility or fallback feature API.
-- R41. Schema, manifest, Provider descriptors, Nix emitters, reference documentation, migration records, policy tests, and changelog MUST move together.
+- R41. Schema, manifest, Provider descriptors, owner-local Nix emitters and tests, reference documentation, cutover records, policy tests, Bazel targets, and changelog MUST move together.
 - R42. Removal proof MUST show that no production path calls the retired guest-control feature methods and that no ordinary Guest starts a host-authority daemon profile.
 - R43. A Provider controller that needs runtime work MUST create `Process` or `EphemeralProcess` resources and observe their status; it MUST NOT directly spawn, adopt, signal, or reap feature child processes.
 - R44. One `d2b-broker` executable MUST expose fixed `host` and `guest` profiles selected at process start; no broker request may select or widen the active profile.
@@ -320,7 +324,13 @@ A `Process` with `spec.executionRef = Guest/dev-vm` routes to the controller ins
 
 ### Dependencies and Assumptions
 
-- ComponentSession, d2b-bus, the Resource API, Provider packages, and target-local Process contracts remain the v3 foundation.
+- ComponentSession, d2b-bus, the Resource API, Provider packages, and target-local `Process` and `EphemeralProcess` contracts remain the v3 foundation.
+- `d2b-bus` already exposes production `ResourceQuery`, Watch, and `CommitBatch` routing; this plan adds assignment-scoped authority instead of replacing that API.
+- `d2bd-runtime` remains provider-independent, while `d2bd` remains the single thin static Provider composition root.
+- Contract ownership remains split across `d2b-contracts-broker`, `d2b-contracts-control`, `d2b-contracts-provider`, `d2b-contracts-resource`, and `d2b-contracts-zone-session`.
+- `d2b-guestd` remains a provider-independent legacy protocol owner until replacement parity permits its removal in U10; no new Provider behavior moves into it.
+- `d2b-cutover` remains the resumable, journaled, recovery-bound owner for the final synchronized cutover and rollback boundary.
+- Bazel remains the sole supported contributor build and test scheduler; Make targets are public aliases over its fixed graph.
 - The authoritative Zone resource store remains outside ordinary workload Guests.
 - Provider packages can supply concrete controller, service, and worker artifacts plus effect requirements for every target kind they advertise.
 - Core can fence controller assignments by resource revision, Provider generation, controller generation, session generation, and placement epoch.
@@ -338,10 +348,17 @@ A `Process` with `spec.executionRef = Guest/dev-vm` routes to the controller ins
 - `docs/specs/ADR-046-provider-model-and-packaging.md`
 - `docs/specs/ADR-046-resources-host-guest-process-user.md`
 - `docs/specs/providers/README.md`
-- `packages/d2b-contracts/proto/guest_control.proto`
+- `packages/d2b-contracts-control/guest_control.proto`
+- `packages/d2b-contracts-provider/src/v3/provider.rs`
+- `packages/d2b-contracts-resource/src/v3/process.rs`
+- `packages/d2b-contracts-zone-session/src/v3/component_session.rs`
+- `packages/d2b-contracts-broker/src/broker_wire.rs`
+- `packages/d2b-cutover/`
 - `packages/d2b-provider/src/installation.rs`
 - `packages/d2b-provider-system-systemd/`
 - `packages/d2b-provider-system-minijail/`
+- `packages/d2bd-runtime/`
+- `packages/d2bd/src/composition.rs`
 - `packages/d2bd/src/resource_runtime.rs`
 - `packages/d2bd/src/audio_resource_runtime.rs`
 - `packages/d2b-guestd/`
@@ -353,27 +370,28 @@ A `Process` with `spec.executionRef = Guest/dev-vm` routes to the controller ins
 
 ### Product Contract Preservation
 
-Product Contract changed by confirmed clarification: R21 and R25 separate semantic resource shape from controller placement; R43 makes resource-backed child execution mandatory; R44-R47 establish shared daemon/broker executables with separate mode-bound authority instances. No capability scope was removed.
+Product Contract changed by confirmed clarification: R21 and R25 separate semantic resource shape from controller placement; R43 makes resource-backed child execution mandatory; R44-R47 establish shared daemon/broker executables with separate mode-bound authority instances. The current repository baseline changes implementation ownership and prior art, not the settled end-state topology or capability scope.
 
 ### Key Technical Decisions
 
 - KTD1. **Split placement declaration from placement resolution.** Extend signed controller component descriptors with instance scope and supported target kinds. Extend each owned ResourceType binding with one closed placement anchor. This instantiates R6-R12 without provider-defined field paths.
-- KTD2. **Core owns assignment; controllers own filtered watches.** Add a Core controller-assignment state machine that issues one consumed, assignment-scoped ResourceClient lease after one atomic admission check. Resource revision comes from the current store transaction, Provider and controller generations come from installed registrations, session generation comes from the authenticated ComponentSession, and placement epoch comes from the assignment record. Watches and mutations are non-widenable and withdraw with the lease. No controller receives a direct store handle or clonable admission token. `d2bd` stops owning feature-specific watch loops after each family migrates.
-- KTD3. **Use one `d2bd` artifact per OS and architecture with fixed host and guest subcommands.** (session-settled: user-directed - chosen over separate Host/Guest programs or mode-specific builds: the same platform artifact digest must run both roles while live authority remains bound to process mode and sealed configuration.) Reuse vsock port `14318` for `d2bd guest`. ComponentSession handshake mismatch makes old peers fail closed.
-- KTD4. **Bootstrap the first controller through the local broker.** Core ProviderDeployment sends a signed static-component LaunchTicket over the authenticated Guest session. The fixed Guest effect adapter forwards the admitted ticket to `d2b-broker guest`. The controller then establishes its own ComponentSession and receives its assignment. No controller self-authorizes or self-launches.
+- KTD2. **Core owns assignment; controllers own filtered watches.** Add a Core controller-assignment state machine that issues one consumed, assignment-scoped ResourceClient lease after one atomic admission check. Resource revision comes from the current store transaction, Provider and controller generations come from installed registrations, session generation comes from the authenticated ComponentSession, and placement epoch comes from the assignment record. Extend the existing d2b-bus `ResourceQuery`, Watch, and `CommitBatch` admission path rather than creating a parallel resource transport. Watches and mutations are non-widenable and withdraw with the lease. No controller receives a direct store handle or clonable admission token. `d2bd` stops owning feature-specific watch loops after each family migrates.
+- KTD3. **Use one `d2bd` artifact per OS and architecture with fixed host and guest subcommands.** (session-settled: user-directed - chosen over separate Host/Guest programs or mode-specific builds: the same platform artifact digest must run both roles while live authority remains bound to process mode and sealed configuration.) Keep `d2bd` as the thin static Provider composition root and put shared provider-neutral mode, transport, session, and lifecycle machinery in `d2bd-runtime`. Reuse vsock port `14318` for `d2bd guest`. ComponentSession handshake mismatch makes old peers fail closed. Retain provider-independent `d2b-guestd` only as migration input until U10.
+- KTD4. **Bootstrap the first controller through the local broker.** Core ProviderDeployment sends a signed static-component LaunchTicket over the authenticated Guest session. The fixed Guest effect adapter forwards the admitted ticket through the existing typed broker wire to the Guest profile of the broker that is currently packaged as `d2b-priv-broker` and becomes `d2b-broker` in U11. The controller then establishes its own ComponentSession and receives its assignment. No controller self-authorizes or self-launches.
 - KTD5. **Represent all feature child execution as resources.** (session-settled: user-directed - chosen over controller-owned subprocesses: preserve Process Provider launch, adoption, stop, and audit authority.) Controllers create `Process` or `EphemeralProcess` resources and observe status. Fixed effect adapters validate tickets; local brokers execute them. This implements R13-R15 and R43-R46.
 - KTD6. **Use Service/Binding only for D096 semantic sharing.** A Service has independent producer authority and may be exported or projected. Core remains the sole owner of `ResourceExport`, `ResourceImport`, and projection Service creation. Provider controllers reconcile authored Bindings and their children. Controller placement remains independent. Aggregate resources such as `WaylandSession` own cross-target child resources directly.
 - KTD7. **Add a service-only config-management Provider.** (session-settled: user-approved - chosen over extending activation, runtime, or daemon components: the accepted activation boundary assigns guest-editable config to a separate Provider and daemon modes must remain feature-neutral.) Introduce `Provider/config-nixos` with a target-local guest config reader service and a host-side staging client. It preserves the closed guest-config identifier and bounded content contract without adding a generic file API.
 - KTD8. **Expose Guest health through session and resource state.** The runtime Provider consumes authenticated ComponentSession evidence and writes `Guest` and `Endpoint` observations. No guest health service remains after cutover.
-- KTD9. **Migrate one capability family at a time with one reachable owner.** A family may retain its old RPC until its replacement is validated, but bundle policy selects exactly one path. Remove the caller before removing the method. The final cutover is synchronized: the host enables the new-only path only when every enabled Guest is stopped or proves the matching ComponentSession contract. The last reversible boundary is before U10 removes the shared legacy service; after that point rollback is a whole-head revert, never a compatibility shim.
+- KTD9. **Migrate one capability family at a time with one reachable owner.** A family may retain its old RPC until its replacement is validated, but bundle policy selects exactly one path. Remove the caller before removing the method. Use the existing `d2b-cutover` preview, consent, journal, hold, recovery, verification, and finalization contracts for the synchronized new-only transition; do not add another migration ledger or cutover state machine. A reviewed U10 removal inventory is implementation and release evidence that must be complete before constructing the existing cutover candidate and preview; it is not embedded in the closed `PreviewInventory` (`Host` or `Reset`) or represented as a new runtime ledger. Native rollback exists only through `Disposition` (phase 4); crossing into `ResourceStore` (phase 5) requires the existing qualified external-restore outcome/path, and phase-10 finalization is separately consented. A whole-head revert is code rollback only, not host-state recovery, and never a compatibility shim.
 - KTD10. **Retain last observation but revoke mutation authority immediately.** Disconnect or generation replacement closes assignments and watches. Readers may see the last committed status marked stale or Unknown. Ambiguous live ownership remains untouched under the narrowest degraded scope until adoption proof or operator repair. Old controllers cannot update status or clear finalizers.
-- KTD11. **Generate public artifacts from contract sources.** Update Rust contract sources and xtask generators first. Regenerate schemas, provider catalog shapes, semantic ResourceType lists, fixtures, and guest workspace locks. Do not hand-edit generated outputs.
+- KTD11. **Generate public artifacts from owner-local contract sources.** Update the owning split contract crate and xtask generator first. Regenerate schemas, provider catalog shapes, semantic ResourceType lists, fixtures, and guest workspace locks. Provider-owned Nix and focused tests stay with the Provider; cross-family rendered-artifact and policy coverage stays in `d2b-contract-tests`. Register every surface in the fixed Bazel graph and do not hand-edit generated outputs.
 - KTD12. **Commit assignment and ownership indexes atomically.** Recheck resource revision and current assignment in one store transaction. Update assignment, status/finalizers, owner indexes, and revision log together. Dispatch external effects only after commit.
 - KTD13. **Delete children before releasing parent ownership.** The owning controller adopts or quarantines every live child, reaches verified terminal state, commits child deletion and owner-index removal, then clears the parent finalizer. A missing or ambiguous child blocks narrow cleanup rather than authorizing a broad sweep.
-- KTD14. **Use one `d2b-broker` artifact per OS and architecture with fixed host and guest profiles.** (session-settled: user-directed - chosen over separate broker programs, mode-specific builds, or one broker process multiplexing authorities: share framing and effect contracts while preserving separate root processes, sockets, state, audit, caller identities, and operation catalogs.) The profile is selected at process start and cannot be changed by a request.
-- KTD15. **Deploy Providers through one target-runtime contract.** Host and Guest daemon modes run the same ProviderDeployment and component-session machinery. Package admission fails unless every advertised target kind has a concrete signed artifact and required EffectPort classes supported by that target profile.
-- KTD16. **Make the shared daemon and broker artifacts platform-portable.** Keep Host-mode core code such as the Zone store, public socket, and realm routing in the shared `d2bd` artifact, but initialize it only in Host mode. Move feature Provider implementations and all privileged mutation behind signed Provider Processes, fixed EffectPorts, and `d2b-broker`. One same-platform build must expose both modes.
+- KTD14. **Use one `d2b-broker` artifact per OS and architecture with fixed host and guest profiles.** (session-settled: user-directed - chosen over separate broker programs, mode-specific builds, or one broker process multiplexing authorities: share framing and effect contracts while preserving separate root processes, sockets, state, audit, caller identities, and operation catalogs.) Extend and then rename the current `d2b-priv-broker` package; preserve its existing typed operation catalog, socket activation, peer authentication, runner launch, host-generation handoff, cutover artifact, and audit contracts. The profile is selected at process start and cannot be changed by a request.
+- KTD15. **Deploy Providers through one target-runtime contract.** Host and Guest daemon modes share provider-neutral deployment/session machinery through `d2bd-runtime`, while `d2bd` statically composes Provider implementations and fixed effect adapters. Package admission fails unless every advertised target kind has a concrete signed artifact and required EffectPort classes supported by that target profile.
+- KTD16. **Make the shared daemon and broker artifacts platform-portable.** Keep Host-mode provider-neutral code such as the Zone store, public socket, and realm routing in `d2bd-runtime`, initialize it only in Host mode, and keep static Provider selection and effect-adapter wiring in `d2bd`. Move feature Provider implementations and all privileged mutation behind signed Provider Processes, fixed EffectPorts, and `d2b-broker`. One same-platform build must expose both modes.
 - KTD17. **Derive Guest boot identity from the kernel boot identity.** `d2bd guest` reads the current kernel boot ID, binds it to the enrolled Guest identity and session transcript, and never treats writable Guest state as boot authority.
+- KTD18. **Preserve owner-local build and test ownership.** New Provider Rust, Nix, and focused tests land with the owning Provider package. Provider-neutral daemon runtime work lands in `d2bd-runtime`; static composition remains in `d2bd`; contract changes land in the narrowest `d2b-contracts-*` crate. Bazel labels are authoritative, and public Make aliases invoke only the fixed graph.
 
 ### High-Level Technical Design
 
@@ -389,7 +407,7 @@ flowchart TB
   BUS --> HOSTCTL[Host-target Provider controller Process]
   BUS --> GSESSION[Parent-Zone ComponentSession]
 
-  GSESSION --> GD[d2bd guest target runtime]
+  GSESSION --> GD[d2bd guest composition over d2bd-runtime]
   GSESSION --> GUESTCTL[Guest-target Provider controller Process]
 
   ZONECTL --> HPROC[Host Process resources]
@@ -407,7 +425,7 @@ flowchart TB
 
 ```mermaid
 sequenceDiagram
-  participant Guest as d2bd guest
+  participant Guest as d2bd guest + d2bd-runtime
   participant Bus as Zone d2b-bus
   participant Core as ProviderDeployment
   participant Broker as d2b-broker guest
@@ -454,12 +472,13 @@ flowchart TB
 
 ### Sequencing
 
-1. Land placement contracts and generated artifacts without changing runtime behavior.
-2. Land the assignment engine, shared daemon modes, shared broker profiles, scoped Resource API watches, and Guest ComponentSession substrate.
-3. Land target-local Process controller deployment and conformance before migrating feature families.
-4. Migrate capability families in dependency order. Keep one reachable path per family.
-5. Cut Nix and bundle generation to the new Guest shape.
-6. Remove the legacy protocol, bridges, policy allowances, and obsolete tests.
+1. Preserve the landed baseline: split contract crates, provider-neutral `d2bd-runtime`, provider-local ownership, Process contracts, production Resource API routing, typed broker operations, and `d2b-cutover`.
+2. Land placement contracts and generated artifacts without changing runtime behavior.
+3. Land the assignment engine, shared daemon modes, shared broker profiles, scoped Resource API watches, and Guest ComponentSession substrate.
+4. Land target-local Process controller deployment and conformance before migrating feature families.
+5. Migrate capability families in dependency order. Keep one reachable path per family.
+6. Cut Nix and bundle generation to the new Guest shape.
+7. Use the existing cutover engine to remove the legacy protocol, bridges, policy allowances, and obsolete tests.
 
 The units may land as ordered reviewed pull requests. Every intermediate head must compile, pass its applicable gates, and keep one authoritative path for each capability.
 
@@ -470,6 +489,7 @@ The units may land as ordered reviewed pull requests. Every intermediate head mu
 - **Privilege separation:** Both execution targets gain an unprivileged daemon instance plus a separate root broker instance with a fixed local effect profile.
 - **Resource lifecycle:** Adds assignment epochs and target handoff to Provider generation, reconnect, adoption, and cleanup.
 - **Provider packaging:** Changes signed component descriptors, generated catalogs, controller placement, and Guest package closures.
+- **Repository ownership:** Keeps provider-neutral runtime in `d2bd-runtime`, static composition in `d2bd`, contracts in the narrowest split crate, and Provider Rust/Nix/tests with their owner.
 - **CLI:** Preserves command behavior while replacing exec, shell, activation, config, audio, and USB backends.
 - **Nix:** Replaces guest-control service arguments and token plumbing with ComponentSession enrollment and signed controller deployment.
 - **Tests:** Retires legacy guest-control coverage only after Resource API, bus, contract, and host-integration successors exist.
@@ -489,9 +509,11 @@ The units may land as ordered reviewed pull requests. Every intermediate head mu
 | One broker instance serves multiple authority domains | Realm or parent/child effects share root mutation and audit custody | Require one broker process, socket, state root, audit root, caller identity, and sealed profile per daemon or realm authority |
 | Cross-target aggregate controllers directly spawn children | Process lifecycle bypasses providers | Add source-policy tests and controller conformance proving resource creation only |
 | Assignment or child indexes commit partially | Orphaned children, double ownership, or invisible live state | Commit assignment, status/finalizers, owner indexes, and revision log in one redb transaction; fault-inject every commit boundary |
-| Generated contracts and Nix emitters drift | Runtime rejects valid bundles or admits invalid placement | Regenerate through xtask and enforce drift plus fixture-contract lanes |
+| Generated contracts and owner-local Nix emitters drift | Runtime rejects valid bundles or admits invalid placement | Regenerate through xtask, declare exact Bazel inputs, and enforce drift plus fixture-contract lanes |
 | Real vsock or systemd behavior differs from hermetic tests | Bootstrap works only in mocks | Require one targeted `runNixOSTest` path for enrollment, controller launch, reconnect, and child Process readiness |
-| Host and Guest binaries cut over at different times | Enabled Guests become unreachable with no supported path | Gate final cutover on stopped Guests or matching authenticated protocol evidence; keep the rollback boundary before U10 |
+| Host and Guest binaries cut over at different times | Enabled Guests become unreachable with no supported path | Gate final cutover on stopped Guests or matching authenticated protocol evidence; native rollback ends at Disposition (phase 4), ResourceStore (phase 5) requires qualified external restore, and phase-10 finalization remains separately consented |
+| A second migration framework diverges from the landed cutover owner | Restart, hold, rollback, or finalization semantics split | Reuse `d2b-cutover` and its journaled candidate-bound state machine; add no migration ledger or parallel runner |
+| Shared runtime and static composition blur again | Provider changes re-couple the daemon and widen Guest code | Keep provider-neutral services in `d2bd-runtime`, Provider selection/effect adapters in `d2bd`, and enforce the boundary with owner-local Bazel targets |
 
 ### Alternatives Considered
 
@@ -510,8 +532,8 @@ The units may land as ordered reviewed pull requests. Every intermediate head mu
 - Document daemon and broker mode/profile selection as service-manager-owned startup configuration, never caller input.
 - Add one changelog fragment for the complete control-plane change or one fragment per independently landed migration phase.
 - Treat old Guest generations as incompatible after the final cutover. Surface typed remediation instead of fallback.
-- Before U9 cutover, maintain a family inventory of every legacy caller, method, generated artifact, Nix input, and replacement owner. Stop when any row lacks a validated replacement.
-- After U10 begins, rollback is whole-head revert only. Do not restore guest-control methods, feature flags, or dual routing.
+- Before U9 cutover, prepare and review a family inventory of every legacy caller, method, generated artifact, Nix input, Bazel target, and replacement owner. The implementation and release workflow refuses to construct the existing `d2b-cutover` candidate or preview until every row has a validated, current replacement. Do not add a manifest schema, runtime migration ledger, second cutover engine, or row data to `PreviewInventory`.
+- During U10, use only the rollback path and boundary recorded by `d2b-cutover`: native rollback is available only through Disposition (phase 4); crossing into ResourceStore (phase 5) requires the existing qualified external-restore outcome/path; and phase-10 finalization requires separate consent. A whole-head revert is code rollback only, not host-state recovery; do not restore guest-control methods, feature flags, or dual routing.
 - Observe the first deployed cutover for retired-method calls, stale-epoch mutation attempts, direct-spawn denials, unexpected Guest host-daemon profiles, reconnect saturation, and assignment quarantine.
 
 ---
@@ -520,10 +542,10 @@ The units may land as ordered reviewed pull requests. Every intermediate head mu
 
 | Unit | Title | Primary files | Depends on |
 | --- | --- | --- | --- |
-| U1 | Define controller placement contracts | Provider contracts, provider toolkit, generators | None |
-| U2 | Build assignment and scoped watch routing | Core controller, bus, Resource API/client | U1 |
-| U11 | Unify broker executable and profiles | Broker wire, host/guest broker services, policy tests | U1 |
-| U3 | Add host and guest modes to d2bd | Daemon runtime, session vsock, ProviderDeployment | U1, U2, U11 |
+| U1 | Define controller placement contracts | Split Provider/resource contracts, provider toolkit, generators | None |
+| U2 | Build assignment and scoped watch routing | Core controller, bus, Resource API/client, d2bd-runtime | U1 |
+| U11 | Unify broker executable and profiles | Split broker wire, d2b-priv-broker, host/guest services | U1 |
+| U3 | Add host and guest modes to d2bd | d2bd-runtime, d2bd composition, session vsock, ProviderDeployment | U1, U2, U11 |
 | U4 | Deploy target-local Process controllers | Process Providers, conformance, ProviderDeployment | U1-U3, U11 |
 | U5 | Migrate exec and shell | Process attach, shell Provider, CLI/daemon routes | U2-U4 |
 | U6 | Migrate activation, config, and health | Activation Provider, config Provider, runtime status | U2-U4 |
@@ -542,7 +564,8 @@ The units may land as ordered reviewed pull requests. Every intermediate head mu
 
 **Files:**
 
-- `packages/d2b-contracts/src/v3/provider.rs`
+- `packages/d2b-contracts-provider/src/v3/provider.rs`
+- `packages/d2b-contracts-resource/src/v3/resource_schema.rs`
 - `packages/d2b-provider/src/installation.rs`
 - `packages/d2b-provider/src/descriptor.rs`
 - `packages/d2b-provider/src/registry.rs`
@@ -559,14 +582,16 @@ The units may land as ordered reviewed pull requests. Every intermediate head mu
 
 1. Add closed controller instance-scope and supported-target contracts to controller component descriptors.
 2. Add a closed placement-anchor contract to owned ResourceType API bindings.
-3. Validate one controller owner per ResourceType, compatible target kinds, bounded cardinality, and no free-form selectors.
-4. Require a concrete signed component artifact and supported EffectPort set for every advertised target kind.
-5. Require Host and Guest placements on the same OS and architecture to resolve the same component artifact digest.
-6. Extend provider package generation and catalog parity checks.
+3. Extend the existing component-role and `Process`/`EphemeralProcess` contracts; do not duplicate those resource or role schemas.
+4. Validate one controller owner per ResourceType, compatible target kinds, bounded cardinality, and no free-form selectors.
+5. Require a concrete signed component artifact and supported EffectPort set for every advertised target kind.
+6. Require Host and Guest placements on the same OS and architecture to resolve the same component artifact digest.
+7. Extend provider package generation, owner-local Nix, Bazel targets, and catalog parity checks.
 
 **Patterns to follow:**
 
-- `ComponentDescriptor::new` authority separation in `packages/d2b-contracts/src/v3/provider.rs`.
+- `ComponentDescriptor::new` authority separation in `packages/d2b-contracts-provider/src/v3/provider.rs`.
+- Existing resource schema and Process contracts in `packages/d2b-contracts-resource/src/v3/`.
 - Provider trust-before-compatibility admission in `packages/d2b-provider/src/installation.rs`.
 - Existing semantic schema and provider-catalog xtask generation.
 
@@ -607,6 +632,9 @@ The units may land as ordered reviewed pull requests. Every intermediate head mu
 - `packages/d2b-resource-store-redb/src/ownership.rs`
 - `packages/d2b-resource-store-redb/src/revision_log.rs`
 - `packages/d2b-resource-store-redb/src/tests.rs`
+- `packages/d2bd-runtime/src/resource_api.rs`
+- `packages/d2bd-runtime/src/resource_store_runtime.rs`
+- `packages/d2bd-runtime/src/resource_runtime_support.rs`
 - `packages/d2bd/src/resource_runtime.rs`
 - `packages/d2bd/tests/zone_provider_acceptance.rs`
 - `packages/d2b-bus/src/session_seam_tests.rs`
@@ -616,9 +644,10 @@ The units may land as ordered reviewed pull requests. Every intermediate head mu
 1. Introduce an assignment identity binding resource UID, revision, Provider generation, controller role, target, session generation, and assignment epoch.
 2. Resolve placement only from committed resources and signed Provider contracts.
 3. Mint ResourceClient filters from the assignment; do not accept widening selectors from controllers.
-4. Route controller-owned Watch, Get, status, finalizer, and child-resource operations through the existing bus admission seam.
-5. Commit assignment state, status/finalizer state, child owner indexes, and the revision log atomically before dispatching effects.
-6. Implement drain, revoke, stale observation, narrow quarantine, and reassignment transitions.
+4. Extend the production `ResourceQuery`, Watch, and `CommitBatch` route through the existing bus admission seam; do not add a second resource transport.
+5. Keep provider-neutral Resource API/store session plumbing in `d2bd-runtime` and static Provider wiring in `d2bd`.
+6. Commit assignment state, status/finalizer state, child owner indexes, and the revision log atomically before dispatching effects.
+7. Implement drain, revoke, stale observation, narrow quarantine, and reassignment transitions.
 
 **Execution note:** Start with assignment and stale-writer rejection tests before connecting production watches.
 
@@ -656,9 +685,9 @@ The units may land as ordered reviewed pull requests. Every intermediate head mu
 
 - `Cargo.toml`
 - `Cargo.lock`
-- `packages/d2b-contracts/src/broker_wire.rs`
+- `packages/d2b-contracts-broker/src/broker_wire.rs`
 - `packages/d2b-priv-broker/`
-- `packages/d2b-broker/`
+- `packages/d2b-broker/` after the package rename
 - `packages/d2b-provider-supervisor/src/`
 - `packages/d2b-process-conformance/src/port.rs`
 - `packages/d2b-process-conformance/src/ticket.rs`
@@ -667,6 +696,7 @@ The units may land as ordered reviewed pull requests. Every intermediate head mu
 - `tests/unit/nix/cases/broker-socket-activation.nix`
 - `tests/unit/nix/cases/broker-caps.nix`
 - `tests/unit/nix/cases/guest-broker.nix`
+- `packages/d2b-contract-tests/tests/policy_source.rs`
 - `packages/d2b-contract-tests/tests/policy_units.rs`
 - `packages/d2b-contract-tests/tests/policy_provider_crates.rs`
 - `packages/d2b-broker/tests/host_profile.rs`
@@ -675,21 +705,23 @@ The units may land as ordered reviewed pull requests. Every intermediate head mu
 
 **Approach:**
 
-1. Move the broker package and binary identity to `d2b-broker` while preserving one shared framing and version negotiation contract.
-2. Add fixed Host and Guest profiles selected only at process start from sealed service configuration.
-3. Bind each profile to a closed operation catalog, caller identity, socket, state root, audit root, and authority domain.
-4. Authenticate the local socket peer with kernel peer credentials before decoding any effect request and bind that identity to the sealed broker profile.
-5. Keep Provider controllers on neutral EffectPorts. Fixed local adapters are the only broker clients.
-6. Reuse typed process launch, systemd, pidfd, identity, and bounded receipt contracts across profiles.
-7. Keep Host-only network, device, storage, realm, and allocator operations unreachable in the Guest profile.
-8. Build one same-platform broker artifact digest that exposes both profiles.
+1. Extend the current `d2b-priv-broker` implementation, then move its package and binary identity to `d2b-broker` while preserving the `d2b-contracts-broker` framing and version negotiation contract.
+2. Preserve the existing socket activation, peer authentication, audit, typed host operations, `SpawnRunner`, host-generation handoff, and cutover artifact handling.
+3. Add fixed Host and Guest profiles selected only at process start from sealed service configuration.
+4. Bind each profile to a closed operation catalog, caller identity, socket, state root, audit root, and authority domain.
+5. Authenticate the local socket peer with kernel peer credentials before decoding any effect request and bind that identity to the sealed broker profile.
+6. Keep Provider controllers on neutral EffectPorts. Fixed local adapters are the only broker clients.
+7. Reuse typed process launch, systemd, pidfd, identity, and bounded receipt contracts across profiles.
+8. Keep Host-only network, device, storage, realm, cutover, and allocator operations unreachable in the Guest profile.
+9. Build one same-platform broker artifact digest that exposes both profiles.
 
 **Execution note:** Preserve the host broker's socket-activation, audit, capability, and bundle-reload characterization tests before renaming or adding the Guest profile.
 
 **Patterns to follow:**
 
 - Socket-activated broker ownership in `nixos-modules/host-broker.nix`.
-- Opaque intent resolution and typed operations in `packages/d2b-contracts/src/broker_wire.rs`.
+- Opaque intent resolution and typed operations in `packages/d2b-contracts-broker/src/broker_wire.rs`.
+- Existing broker operations in `packages/d2b-priv-broker/src/ops/`.
 - Fixed `ProcessLaunchEffectPort` adapter boundary in `packages/d2b-provider-supervisor`.
 - Realm-specific broker process, socket, state, and audit separation from ADR 0043.
 
@@ -721,11 +753,15 @@ The units may land as ordered reviewed pull requests. Every intermediate head mu
 - `packages/d2bd/Cargo.toml`
 - `packages/d2bd/src/main.rs`
 - `packages/d2bd/src/lib.rs`
-- `packages/d2bd/src/target_runtime.rs`
-- `packages/d2bd/src/guest_mode.rs`
-- `packages/d2bd/src/host_mode.rs`
+- `packages/d2bd/src/composition.rs`
 - `packages/d2bd/src/provider_effects.rs`
-- `packages/d2bd/src/portable.rs`
+- `packages/d2bd-runtime/src/lib.rs`
+- `packages/d2bd-runtime/src/target_runtime.rs`
+- `packages/d2bd-runtime/src/guest_mode.rs`
+- `packages/d2bd-runtime/src/host_mode.rs`
+- `packages/d2bd-runtime/src/broker_transport.rs`
+- `packages/d2bd-runtime/src/resource_runtime_support.rs`
+- `packages/d2b-guestd/`
 - `packages/d2b-session-unix/src/vsock.rs`
 - `packages/d2b-bus/src/session/mod.rs`
 - `packages/d2b-provider-toolkit/src/bootstrap.rs`
@@ -738,17 +774,19 @@ The units may land as ordered reviewed pull requests. Every intermediate head mu
 
 **Approach:**
 
-1. Add service-manager-selected `host` and `guest` subcommands with no request-driven mode transition.
-2. Reuse vsock port `14318` for the enrolled Guest ComponentSession listener.
-3. Replace HMAC guest-control service admission with ComponentSession identity, purpose, schema, limits, and reconnect binding.
-4. Share ProviderDeployment, controller-session, assignment-client, and child-resource machinery across modes.
-5. Keep Host-mode Zone store, public socket, and realm routing code in the shared artifact, but initialize those modules only in Host mode.
-6. Move feature Provider implementations and all privileged mutation out of the daemon process and behind Provider Processes, fixed EffectPorts, and the local broker.
-7. Keep Host store/public/realm surfaces inactive and unavailable in Guest mode.
-8. Route privileged Host and Guest effects only through the local fixed adapter and the mode-bound broker instance.
-9. Bind Guest enrollment to the kernel boot ID plus enrolled Guest identity.
-10. Build one same-platform daemon artifact digest that exposes both modes.
-11. Enforce session, controller-launch, watch, and stream admission caps before allocating per-request state.
+1. Add service-manager-selected `host` and `guest` subcommands to the thin `d2bd` composition root with no request-driven mode transition.
+2. Put shared provider-neutral mode, transport, enrollment, session, Resource API, and lifecycle machinery in `d2bd-runtime`; keep static Provider selection and fixed effect-adapter wiring in `d2bd`.
+3. Reuse vsock port `14318` for the enrolled Guest ComponentSession listener.
+4. Replace HMAC guest-control service admission with ComponentSession identity, purpose, schema, limits, and reconnect binding.
+5. Share ProviderDeployment, controller-session, assignment-client, and child-resource machinery across modes.
+6. Keep Host-mode Zone store, public socket, and realm routing code in the shared artifact, but initialize those modules only in Host mode.
+7. Move feature Provider implementations and all privileged mutation out of the daemon process and behind Provider Processes, fixed EffectPorts, and the local broker.
+8. Keep Host store/public/realm surfaces inactive and unavailable in Guest mode.
+9. Route privileged Host and Guest effects only through the local fixed adapter and the mode-bound broker instance.
+10. Bind Guest enrollment to the kernel boot ID plus enrolled Guest identity.
+11. Preserve `d2b-guestd` only as provider-independent characterization and compatibility input until the clean removal in U10.
+12. Build one same-platform daemon artifact digest that exposes both modes.
+13. Enforce session, controller-launch, watch, and stream admission caps before allocating per-request state.
 
 **Execution note:** Preserve host daemon and guest daemon fail-closed characterization tests while consolidating the executable.
 
@@ -756,6 +794,8 @@ The units may land as ordered reviewed pull requests. Every intermediate head mu
 
 - Owned vsock transport in `packages/d2b-session-unix/src/vsock.rs`.
 - Provider bootstrap admission in `packages/d2b-provider-toolkit/src/bootstrap.rs`.
+- Provider-neutral ownership boundary in `packages/d2bd-runtime/src/lib.rs`.
+- Static composition boundary in `packages/d2bd/src/composition.rs`.
 - Current unprivileged `d2bd` systemd hardening and capability-free service profile.
 - Current `d2b-guestd` bounded limits and zero-unsafe posture as migration evidence.
 
@@ -796,13 +836,16 @@ The units may land as ordered reviewed pull requests. Every intermediate head mu
 - `packages/d2b-process-conformance/src/suite.rs`
 - `packages/d2b-process-conformance/src/ticket.rs`
 - `packages/d2bd/src/provider_effects.rs`
+- `packages/d2bd/src/provider_registry.rs`
+- `packages/d2bd/src/process_provider_runtime.rs`
+- `packages/d2bd-runtime/src/runtime_process.rs`
 - `packages/d2bd/tests/zone_provider_acceptance.rs`
 - `packages/d2b-provider-system-systemd/tests/execution_parents.rs`
 - `packages/d2b-provider-system-minijail/tests/execution_parents.rs`
 
 **Approach:**
 
-1. Extend ProviderDeployment to create static controller `Process` resources for every resolved controller instance.
+1. Extend ProviderDeployment to create static controller `Process` resources for every resolved controller instance, reusing the existing Process contracts and provider role vocabulary.
 2. Deliver signed LaunchTickets to the fixed adapter and mode-bound local broker on the selected execution target.
 3. Require the launched controller to authenticate separately before Core grants assignment.
 4. Route all child execution through `Process` or `EphemeralProcess` resources and the selected Process Provider.
@@ -844,12 +887,12 @@ The units may land as ordered reviewed pull requests. Every intermediate head mu
 - `packages/d2b-provider-shell-terminal/src/service/supervisor.rs`
 - `packages/d2b-provider-shell-terminal/src/resources/session.rs`
 - `packages/d2b-resource-client/src/process_attach.rs`
-- `packages/d2bd/src/exec_session.rs`
-- `packages/d2bd/src/exec_session_real.rs`
-- `packages/d2bd/src/exec_detached.rs`
-- `packages/d2bd/src/shell_backend.rs`
+- `packages/d2bd-runtime/src/exec_session.rs`
+- `packages/d2bd-runtime/src/exec_session_real.rs`
+- `packages/d2bd-runtime/src/exec_detached.rs`
+- `packages/d2bd-runtime/src/shell_backend.rs`
 - `packages/d2b/src/exec_client.rs`
-- `packages/d2b-contracts/src/public_wire.rs`
+- `packages/d2b-contracts-control/src/public_wire.rs`
 - `packages/d2b-provider-shell-terminal/tests/controller_reconcile.rs`
 - `packages/d2b-provider-shell-terminal/tests/supervisor_runtime.rs`
 - `packages/d2b-provider-shell-terminal/tests/service_contract.rs`
@@ -906,12 +949,15 @@ The units may land as ordered reviewed pull requests. Every intermediate head mu
 - `packages/d2b-provider-config-nixos/tests/service_contract.rs`
 - `packages/d2b-provider-config-nixos/tests/config_lifecycle.rs`
 - `packages/d2b-provider-config-nixos/tests/redaction.rs`
-- `packages/d2b-provider-activation-nixos/tests/activation_contract.rs`
+- `packages/d2b-provider-activation-nixos/tests/reconcile.rs`
 - `packages/d2b-provider-activation-nixos/tests/runner.rs`
 - `packages/d2b-provider-runtime-cloud-hypervisor/src/controller.rs`
-- `packages/d2b-contracts/src/v3/activation_nixos.rs`
-- `packages/d2b-contracts/src/v3/services.rs`
+- `packages/d2b-contracts-resource/src/v3/activation_nixos.rs`
+- `packages/d2b-contracts-zone-session/src/v3/services.rs`
 - `packages/d2b/src/lib.rs`
+- `packages/d2bd-runtime/src/resource_operator_activation.rs`
+- `packages/d2bd-runtime/src/resource_runtime_support.rs`
+- `packages/d2bd/src/activation_resource_runtime.rs`
 - `packages/d2bd/src/resource_runtime.rs`
 - `packages/d2bd/tests/resource_operator_activation.rs`
 - `tests/host-integration/resource-operator-activation.nix`
@@ -925,10 +971,12 @@ The units may land as ordered reviewed pull requests. Every intermediate head mu
 4. Bind Guest reads to the owning Guest session and bind host staging, diff, approve, reject, and status operations to the existing admin-only operator role through ComponentSession and Resource API authorization.
 5. Project Guest session health and capabilities through the runtime Provider's `Guest` and `Endpoint` status.
 6. Remove activation, config-read, health, and capability callers from the legacy guest-control bridge.
+7. Reuse the existing host-generation handoff and cutover activation contracts for host-side orchestration; do not create a second activation handoff protocol.
 
 **Patterns to follow:**
 
 - Activation controller and runner contracts in `packages/d2b-provider-activation-nixos`.
+- Host-generation handoff in `packages/d2b-contracts-broker/src/host_generation.rs` and `packages/d2b-priv-broker/src/ops/host_generation_handoff.rs`.
 - Service-only Provider layout in notification and clipboard Providers.
 - Closed config lifecycle in `docs/specs/ADR-046-cli-and-operations.md`.
 
@@ -964,10 +1012,17 @@ The units may land as ordered reviewed pull requests. Every intermediate head mu
 - `packages/d2b-provider-observability-otel/src/agent.rs`
 - `packages/d2b-provider-observability-otel/src/ingress_policy.rs`
 - `packages/d2bd/src/audio_resource_runtime.rs`
-- `packages/d2bd/src/usbip_reconcile_state.rs`
-- `packages/d2b-contracts/src/v3/semantic_services/`
+- `packages/d2b-provider-device-usbip/src/reconcile_state.rs`
+- `packages/d2b-contracts-provider/src/v3/semantic_services/`
+- `packages/d2b-contracts-zone-session/src/v3/services.rs`
+- `packages/d2b-provider-audio-pipewire/nix/`
+- `packages/d2b-provider-device-usbip/nix/`
+- `packages/d2b-provider-device-security-key/nix/`
 - `nixos-modules/resources-sharing.nix`
-- `tests/unit/nix/cases/resource-sharing.nix`
+- `packages/d2b-provider-audio-pipewire/nix/tests/default.nix`
+- `packages/d2b-provider-device-usbip/nix/tests/default.nix`
+- `packages/d2b-provider-device-security-key/nix/tests/default.nix`
+- `bazel/checks/nix/BUILD.bazel`
 - `packages/d2b-provider-device-usbip/integration/attach_detach_lifecycle.rs`
 - `packages/d2b-provider-audio-pipewire/tests/controller.rs`
 - `packages/d2b-provider-audio-pipewire/tests/authority.rs`
@@ -985,6 +1040,7 @@ The units may land as ordered reviewed pull requests. Every intermediate head mu
 4. Have Binding controllers create Host and Guest Process/Endpoint children needed for realization.
 5. Preserve physical-device authority, arbitration, import/export, grants, status layering, and revoke behavior.
 6. Remove audio and USB guest-control calls after the corresponding Provider path is authoritative.
+7. Keep Provider-specific Nix assertions and focused tests with their owning packages; keep only cross-family projection and rendered-artifact assertions in shared surfaces.
 
 **Patterns to follow:**
 
@@ -1020,11 +1076,16 @@ The units may land as ordered reviewed pull requests. Every intermediate head mu
 - `packages/d2b-provider-display-wayland/src/runtime.rs`
 - `packages/d2b-provider-clipboard-wayland/src/`
 - `packages/d2b-provider-notification-desktop/src/`
+- `packages/d2b-provider-display-wayland/nix/`
+- `packages/d2b-provider-clipboard-wayland/nix/`
+- `packages/d2b-provider-notification-desktop/nix/`
+- `packages/d2b-provider-display-wayland/nix/tests/default.nix`
+- `packages/d2b-provider-clipboard-wayland/nix/tests/default.nix`
+- `packages/d2b-provider-notification-desktop/nix/tests/default.nix`
 - `packages/d2bd/src/interaction_composition.rs`
 - `packages/d2bd/src/resource_runtime.rs`
-- `packages/d2b-wayland-proxy/src/`
-- `nixos-modules/resource-compiler.nix`
-- `tests/unit/nix/cases/interaction-providers.nix`
+- `packages/d2b-provider-display-wayland/src/bin/d2b-wayland-proxy.rs`
+- `bazel/checks/nix/BUILD.bazel`
 - `packages/d2b-provider-display-wayland/tests/lifecycle.rs`
 - `packages/d2b-provider-display-wayland/tests/provider_behavior.rs`
 - `packages/d2b-provider-display-wayland/tests/policy.rs`
@@ -1040,6 +1101,7 @@ The units may land as ordered reviewed pull requests. Every intermediate head mu
 3. Replace the current direct guest frontend effect with Process resource creation and status observation.
 4. Preserve clipboard FD transfer and notification delivery as ComponentSession services and streams; create resource-backed Processes for durable components.
 5. Keep Wayland filtering, compositor authority, GPU handoff, and endpoint resolution on their existing typed boundaries.
+6. Preserve the provider-local binary and Nix ownership introduced by the repository reorganization; do not recreate standalone `d2b-wayland-proxy`, `d2b-clipd`, or notification implementation crates.
 
 **Patterns to follow:**
 
@@ -1081,11 +1143,15 @@ The units may land as ordered reviewed pull requests. Every intermediate head mu
 - `nixos-modules/resources-sharing.nix`
 - `nixos-modules/generated/provider-catalog-shape.nix`
 - `nixos-modules/generated/semantic-resource-types.nix`
+- `packages/d2b-provider-activation-nixos/nix/`
+- `packages/d2b-provider-audio-pipewire/nix/`
+- `packages/d2b-provider-clipboard-wayland/nix/`
+- `packages/d2b-provider-display-wayland/nix/`
+- `packages/d2b-provider-notification-desktop/nix/`
 - `packages/xtask/src/provider_packaging.rs`
-- `tests/unit/nix/cases/guest-control-auth.nix`
-- `tests/unit/nix/cases/guest-control-vsock.nix`
-- `tests/unit/nix/cases/provider-catalog.nix`
-- `tests/unit/nix/cases/provider-system-providers.nix`
+- `bazel/checks/nix/BUILD.bazel`
+- `tests/unit/nix/surfaces/guest-control.nix`
+- `tests/unit/nix/surfaces/provider-catalog.nix`
 - `packages/d2b-contract-tests/tests/policy_guest.rs`
 - `packages/d2b-contract-tests/tests/policy_guest_bindings.rs`
 - `packages/d2b-contract-tests/tests/policy_provider_crates.rs`
@@ -1097,7 +1163,9 @@ The units may land as ordered reviewed pull requests. Every intermediate head mu
 3. Generate controller placement data and Guest package closure from signed Provider artifacts.
 4. Resolve the same `d2bd` and `d2b-broker` package artifact digests for Host and Guest services on the same Nix system.
 5. Emit separate daemon and broker instances for gateway parent-Guest and child-Zone roles.
-6. Update guest workspace sources, lockfile, fixtures, and static binary checks.
+6. Keep Provider-specific module and assertion ownership under each Provider's `nix/` tree, while shared daemon, bundle, schema, and cross-provider surfaces remain in the top-level Nix owners.
+7. Declare exact Nix surface inputs and owner-local tests in the fixed Bazel graph.
+8. Update guest workspace sources, lockfile, fixtures, and static binary checks.
 
 **Patterns to follow:**
 
@@ -1129,18 +1197,20 @@ The units may land as ordered reviewed pull requests. Every intermediate head mu
 
 **Files:**
 
-- `packages/d2b-contracts/proto/guest_control.proto`
-- `packages/d2b-contracts/src/generated/guest_control.rs`
+- `packages/d2b-contracts-control/guest_control.proto`
+- `packages/d2b-contracts-control/src/generated/guest_control.rs`
 - `packages/d2b-guestd/src/generated/guest_control_ttrpc.rs`
 - `packages/d2b-guestd/`
-- `packages/d2bd/src/guest_control_bridge.rs`
-- `packages/d2bd/src/guest_control_vsock.rs`
-- `packages/d2bd/src/guest_control_health.rs`
+- `packages/d2bd-runtime/src/guest_control_bridge.rs`
+- `packages/d2bd-runtime/src/guest_control_vsock.rs`
+- `packages/d2bd-runtime/src/guest_control_health.rs`
+- `packages/d2bd-runtime/src/guest_control_runtime.rs`
 - `packages/d2bd/src/audio_dispatch.rs`
-- `packages/d2bd/src/exec_session_real.rs`
-- `packages/d2bd/src/exec_detached.rs`
-- `packages/d2bd/src/shell_backend.rs`
-- `packages/d2b-contracts/src/public_wire.rs`
+- `packages/d2bd-runtime/src/exec_session_real.rs`
+- `packages/d2bd-runtime/src/exec_detached.rs`
+- `packages/d2bd-runtime/src/shell_backend.rs`
+- `packages/d2b-contracts-control/src/public_wire.rs`
+- `packages/d2b-cutover/`
 - `docs/reference/daemon-api.md`
 - `docs/reference/cli-contract.md`
 - `docs/reference/privileges.md`
@@ -1157,19 +1227,21 @@ The units may land as ordered reviewed pull requests. Every intermediate head mu
 
 **Approach:**
 
-1. Freeze the pre-cutover inventory and require a validated replacement owner for every legacy caller, method, generated artifact, and Nix input.
-2. Remove all legacy callers, methods, generated bindings, feature capability flags, token-share assumptions, and fallback messages.
-3. Retire or rewrite tests only after successor test IDs are present and migration-ledger rules are satisfied.
-4. Update ADR status and migration evidence to reflect ComponentSession-only Guest control.
-5. Run full Layer-1 validation, the targeted Guest VM lane, and container integration for the shared daemon and broker executables on one committed head.
-6. Confirm source and policy scans find no direct controller spawn path or ordinary Guest host-daemon profile.
+1. Freeze and review the U10 removal inventory, with a validated replacement owner for every legacy caller, method, generated artifact, Nix input, and Bazel target. The implementation and release workflow refuses to construct the existing `d2b-cutover` candidate or preview while any row is incomplete or stale; do not embed the rows in `PreviewInventory` or add a runtime ledger.
+2. Drive the synchronized transition through the existing cutover consent, journal, hold, recovery, rollback-boundary, verification, and finalization contracts. Native rollback is available only through Disposition (phase 4); crossing into ResourceStore (phase 5) uses the existing qualified external-restore outcome/path, and phase-10 finalization remains separately consented. Do not add a migration ledger or second cutover engine.
+3. Remove all legacy callers, methods, generated bindings, feature capability flags, token-share assumptions, and fallback messages.
+4. Retire or rewrite tests by deleting their Bazel, Make, CI, and documentation references after owner-local successor coverage is present.
+5. Update ADR status and migration evidence to reflect ComponentSession-only Guest control.
+6. Run the fixed Bazel Layer-1 graph, the targeted Guest VM lane, and container integration for the shared daemon and broker executables on one committed head.
+7. Confirm source and policy scans find no direct controller spawn path or ordinary Guest host-daemon profile.
 
 **Execution note:** Treat removal proof as a feature, not cleanup.
 
 **Patterns to follow:**
 
 - Existing ADR046 removal-proof changelog fragments and policy tests.
-- Test retirement ledger rules in `tests/AGENTS.md`.
+- Test retirement rule in `tests/AGENTS.md`: delete the test and sweep Bazel, Make, CI, and documentation references without adding a successor ledger.
+- Candidate-bound recovery and finalization in `packages/d2b-cutover`.
 - Daemon-only clean-break and no-fallback policy tests.
 
 **Test scenarios:**
@@ -1181,6 +1253,8 @@ The units may land as ordered reviewed pull requests. Every intermediate head mu
 - `d2bd guest` cannot attach to a Host-profile broker, and `d2bd host` cannot attach to a Guest-profile broker for the same authority instance.
 - Covers AE6: disconnect and reconnect preserve stale fencing and no host takeover.
 - Covers AE8: gateway Guest full-daemon exception remains explicit and ordinary Guest profiles reject it.
+- Pre-cutover removal proof fails while the reviewed U10 inventory is incomplete or stale, so the implementation and release workflow cannot construct the existing cutover candidate or preview.
+- Cutover restart reopens the exact journal and candidate, preserves incident holds, and cannot cross the native rollback boundary twice; native rollback ends at Disposition, crossing into ResourceStore requires the existing qualified external-restore outcome/path, and phase-10 finalization requires separate consent.
 - Policy scans find no feature controller direct spawn, broker tunnel, SSH fallback, generic file path, or guest-control capability enum.
 - Changelog, ADRs, schema references, and generated documentation contain no stale contract claims.
 
@@ -1196,6 +1270,7 @@ The units may land as ordered reviewed pull requests. Every intermediate head mu
 | `make test-nix-unit` | U1, U7-U11 | Placement, Provider catalog, daemon/broker profiles, Binding, and eval-rejection cases pass |
 | `make test-policy` | U1, U3-U4, U9-U11 | Provider authority, mode/profile separation, no-direct-spawn, no-fallback, docs, and guest workspace drift policies pass |
 | `make test-drift` | U1, U7, U9-U10 | Generated schemas, provider catalogs, semantic ResourceTypes, docs, and fixtures are current |
+| `make test-runtime-ledger` | U2-U11 | The fixed Bazel runtime census and aggregate execution budget remain current after owner-local target changes |
 | `make test-fixture-contracts` | U1, U7-U10 | Rendered Nix artifacts match Rust contracts and removal policies |
 | `make test-unit` | U1-U11 | Full Layer-1 development umbrella passes |
 | `make test-host-integration` | U2-U4, U6, U8-U11 | Real NixOS Guest proves daemon/broker mode separation, vsock enrollment, assignment fencing, controller launch, Process readiness, reconnect, handoff, and teardown |
@@ -1204,7 +1279,7 @@ The units may land as ordered reviewed pull requests. Every intermediate head mu
 | `make check` | U10 | PR-equivalent Layer-1 graph passes without advisory skips cited as evidence |
 | Independent `ce-code-review` | U10 | No actionable issues remain on the validated head |
 
-Targeted Rust and Nix tests should run during each unit. The complete gates run after the unit's canonical commit so Nix sees tracked inputs.
+Targeted owner-local Bazel labels should run during each unit. Public Make aliases invoke the fixed Bazel graph; the complete gates run after the unit's canonical commit so Nix sees tracked inputs.
 
 ---
 
@@ -1215,6 +1290,8 @@ Targeted Rust and Nix tests should run during each unit. The complete gates run 
 - The Product Contract remains traceable through every implementation unit and test scenario.
 - Ordinary workload Guests run one unprivileged `d2bd guest` instance and one separate root `d2b-broker guest` instance.
 - Hosts, Guests, and gateway roles use the same daemon and broker executables but separate mode-bound process instances and authority roots.
+- `d2bd-runtime` remains provider-independent, `d2bd` remains the thin static composition root, and no Provider implementation moves back into the shared runtime.
+- Contract changes remain in the narrowest `d2b-contracts-*` owner, and Provider Rust, Nix, and focused tests remain owner-local.
 - Every Provider controller is a signed Process or an existing fixed bootstrap exception.
 - Every reconciled resource has one active controller assignment and one mutation epoch.
 - Every feature process is represented by `Process` or `EphemeralProcess`; no feature controller spawns directly.
@@ -1222,6 +1299,7 @@ Targeted Rust and Nix tests should run during each unit. The complete gates run 
 - Exec, shell, activation, config, health, audio, USB, security key, telemetry, display, clipboard, and notification guest paths use Resource API, typed services, or named streams.
 - `guest_control.proto`, its generated services, production bridges, capability flags, and fallback behavior are absent.
 - Generated artifacts, guest workspace inputs, Nix fixtures, docs, ADRs, policy tests, and changelog agree with the final contracts.
+- The final transition uses the existing `d2b-cutover` candidate, consent, journal, hold, recovery, rollback-boundary, verification, and finalization contracts with no second migration ledger; reviewed U10 removal inventory remains implementation and release evidence outside `PreviewInventory`.
 - Restart, disconnect, reassignment, Provider replacement, deletion, and stale-session paths preserve single ownership and finalizer safety.
 - Crash-at-commit-boundary, same-revision conflict, watch-floor expiry, backup/restore, and upgrade-quarantine tests preserve revision and ownership integrity.
 - Required Layer-1, host-integration, and container gates pass on the reviewed committed head.
@@ -1229,15 +1307,16 @@ Targeted Rust and Nix tests should run during each unit. The complete gates run 
 
 ### Per Unit
 
-- U1 is done when signed placement contracts round-trip, reject ambiguity, and regenerate catalogs.
-- U2 is done when assignment, scoped watches, stale fencing, and target handoff are enforced.
-- U11 is done when one broker executable preserves Host behavior, enforces the Guest effect subset, and separates every authority instance.
-- U3 is done when one `d2bd` executable provides fail-closed Host and Guest modes with shared ProviderDeployment behavior.
+- U1 is done when signed placement contracts round-trip in the split contract owners, reject ambiguity, and regenerate catalogs.
+- U2 is done when assignment, scoped watches, stale fencing, and target handoff extend the existing Resource API route without a parallel transport.
+- U11 is done when the current `d2b-priv-broker` becomes one broker executable that preserves Host behavior, enforces the Guest effect subset, and separates every authority instance.
+- U3 is done when one `d2bd` executable provides fail-closed Host and Guest modes through provider-neutral `d2bd-runtime` with static Provider composition in `d2bd`.
 - U4 is done when Host and Guest controller Processes launch, authenticate, adopt, and reconcile without direct spawn authority.
 - U5 is done when exec and shell parity uses Process-family resources and named streams.
 - U6 is done when activation, config, and health have no guest-control caller.
 - U7 is done when semantic Service/Binding families reconcile through Provider-owned resources and children.
 - U8 is done when `WaylandSession` and interaction components create target Processes and use typed streams.
-- U9 is done when Nix, bundles, provider catalogs, Guest closure, and fixtures emit only the new architecture.
-- U10 is done when removal proof, full validation, independent review, changelog, and documentation are complete.
+- U9 is done when owner-local Provider Nix, shared Nix surfaces, bundles, provider catalogs, Guest closure, Bazel declarations, and fixtures emit only the new architecture.
+- U10 is done when the existing cutover engine records the synchronized clean break and removal proof, full validation, independent review, changelog, and documentation are complete.
+- U10 implementation and release gates reject incomplete or stale reviewed removal inventory before constructing the existing cutover candidate or preview; native rollback stops at Disposition, ResourceStore crossing uses the qualified external-restore outcome/path, phase-10 finalization is separately consented, and whole-head revert is treated as code rollback only.
 - The final cutover is done only when host, container, VM, policy, and review evidence all bind the same committed head.
