@@ -792,7 +792,7 @@
       "status": "Landed",
       "implementationPath": "packages/d2b-provider-credential-secret-service",
       "validationProof": "Credential ResourceType schema/serde/redaction tests from `ADR-046-resources-credential`; credential-secret-service conformance consumes the shared types",
-      "removalProof": "Old `d2b-realm-provider:CredentialProvider` trait and `CredentialStatus` enum are removed only after all three v3 Credential Provider controllers reach full reconcile parity",
+      "removalProof": "Legacy credential-provider trait and CredentialStatus enum are retired after all three v3 Credential Provider controllers reach full reconcile parity",
       "sourceState": "Planned"
     },
     {
@@ -814,7 +814,7 @@
       "status": "Landed",
       "implementationPath": "packages/d2b-provider-credential-secret-service",
       "validationProof": "See §16",
-      "removalProof": "Old `d2b-realm-provider:CredentialProvider` trait removed only after all three v3 Credential Provider controllers reach full reconcile parity",
+      "removalProof": "Legacy credential-provider trait is retired after all three v3 Credential Provider controllers reach full reconcile parity",
       "sourceState": "Planned"
     },
     {

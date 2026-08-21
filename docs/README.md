@@ -89,7 +89,6 @@ The contracts. Stable interfaces a consumer can depend on.
 - [`reference/realm-core.md`](./reference/realm-core.md) -
   codec-neutral realm target, identifier, capability, audit, frame, routing,
   identity, and allocator schema roots.
-- [`reference/realm-identity-lifecycle.md`](./reference/realm-identity-lifecycle.md) -
   metadata-only realm identity, enrollment, controller-generation, rotation,
   revocation, teardown, recovery, and future enforcement boundary contract.
 - [`reference/realm-options.md`](./reference/realm-options.md) -
@@ -104,14 +103,6 @@ The contracts. Stable interfaces a consumer can depend on.
   private `realm-controllers.json` metadata for deterministic host-local
   realm controller naming, sockets, allocator bindings, state, and audit
   boundaries.
-- [`reference/realm-access-resolver.md`](./reference/realm-access-resolver.md) -
-  canonical realm target grammar, alias/default-realm resolution, direct
-  host-local access bindings, capability preflight, and typed resolver
-  diagnostics.
-- [`reference/realm-routing.md`](./reference/realm-routing.md) -
-  metadata-only discovery, strict parent/child tree routing, signed route
-  advertisements, namespace validation, direct shortcut constraints, and
-  bounded route audit/telemetry contracts.
 - [`reference/constellation-observability.md`](./reference/constellation-observability.md) -
   bounded `d2b op inspect`, TraceContext propagation, degraded partial
   results, and telemetry redaction/cardinality constraints.

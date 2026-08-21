@@ -22,9 +22,6 @@ sh_test(
         "//:Cargo.toml",
         "//packages/d2b-contracts:Cargo.toml",
         "//packages/d2b-realm-core:Cargo.toml",
-        "//packages/d2b-realm-provider:Cargo.toml",
-        "//packages/d2b-realm-router:Cargo.toml",
-        "//packages/d2b-realm-transport:Cargo.toml",
     ],
     env_inherit = ["PATH", "ROOT"],
     tags = [

@@ -2,7 +2,7 @@
 
 > Diataxis: explanation. Conceptual model for realm discovery and strict tree
 > routing. For field-level schema validation, read
-> [`docs/reference/realm-routing.md`](../reference/realm-routing.md).
+> The current route owner is the Zone/session control plane.
 
 The realm routing contract models how future realm controllers may discover each
 other and authorize operations across a parent/child tree. It deliberately stops
@@ -72,9 +72,9 @@ class/placement labels, not raw target names or transport addresses.
 
 ## Relationship to access and identity
 
-The [realm access resolver](../reference/realm-access-resolver.md) answers,
+The Zone/session route owner answers,
 "which binding should this client use for this target?" The
-[identity lifecycle contract](../reference/realm-identity-lifecycle.md) records
+the realm-core identity model records
 controller generations, parent trust anchors, child pins, revocation, teardown,
 and recovery metadata. Tree routing composes with both: a future router needs a
 resolved realm, valid controller generation, accepted parent/child identity

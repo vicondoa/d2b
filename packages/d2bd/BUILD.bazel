@@ -55,8 +55,6 @@ d2bd_shared_deps = [
     "//packages/d2b-provider-system-systemd:d2b_provider_system_systemd",
     "//packages/d2b-provider-transport-azure-relay:d2b_provider_transport_azure_relay",
     "//packages/d2b-realm-core:d2b_realm_core",
-    "//packages/d2b-realm-provider:d2b_realm_provider",
-    "//packages/d2b-realm-router:d2b_realm_router",
     "//packages/d2b-resource-api:d2b_resource_api",
     "//packages/d2b-session:d2b_session",
     "//packages/d2b-session-unix:d2b_session_unix",

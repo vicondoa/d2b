@@ -1,5 +1,5 @@
-//! `d2b-provider-runtime-azure-container-apps`: the Azure Container Apps **sandbox**
-//! `WorkloadProvider` implementation for provider-managed sandboxes.
+//! `d2b-provider-runtime-azure-container-apps`: the Azure Container Apps gateway
+//! effect implementation for provider-managed sandboxes.
 //!
 //! This productionizes the Azure Container Apps sandbox path: instead of the
 //! operator driving the sandbox by hand with the preview CLI, the gateway drives
@@ -33,7 +33,7 @@
 //!
 //! ```no_run
 //! # use d2b_realm_core::NodeId;
-//! # use d2b_provider_runtime_azure_container_apps::gateway_compat::{
+//! # use d2b_provider_runtime_azure_container_apps::gateway::{
 //! #     AcaConfig, AcaWorkloadProvider,
 //! # };
 //! # fn build(cfg: AcaConfig) -> Result<AcaWorkloadProvider, Box<dyn std::error::Error>> {
@@ -48,7 +48,7 @@
 //!
 //! ```no_run
 //! # use d2b_realm_core::NodeId;
-//! # use d2b_provider_runtime_azure_container_apps::gateway_compat::{
+//! # use d2b_provider_runtime_azure_container_apps::gateway::{
 //! #     AcaConfig, AcaWorkloadProvider, ReqwestTransport,
 //! # };
 //! # use std::sync::Arc;
@@ -73,16 +73,15 @@ use serde::Deserialize;
 use sha2::{Digest, Sha256};
 
 use d2b_realm_core::{
-    Capability, CapabilitySet, ErrorKind, ExecutionId, NodeId, ProviderId, WorkloadId,
+    Capability, CapabilitySet, ErrorKind, ExecutionId, NodeId, OpaquePayload, ProviderId,
+    WorkloadId,
 };
 use d2b_realm_core::{RealmId, RealmPath, WorkloadSummary};
-use d2b_realm_provider::capabilities::WorkloadCapabilitySet;
-use d2b_realm_provider::error::{ProviderDiagnostic, ProviderError, ProviderResult, RetryHint};
-use d2b_realm_provider::provider::WorkloadProvider;
-use d2b_realm_provider::rate_limit::{CircuitPermit, ProviderCircuitBreaker};
-use d2b_realm_provider::types::{
-    ExecStartRequest, ListSelector, ProviderGuestdBootstrapContract, WorkloadSpec, WorkloadStatus,
-};
+use crate::error::{ProviderDiagnostic, ProviderError, ProviderResult, RetryHint};
+use crate::rate_limit::{CircuitPermit, ProviderCircuitBreaker};
+
+/// Result type returned by ACA gateway effect ports.
+pub type AcaResult<T> = ProviderResult<T>;
 
 /// The Entra scope for the Azure Container Apps data plane (plane 1). Explicit managed/workload
 /// identity credentials acquire tokens for this audience.
@@ -152,6 +151,42 @@ pub struct AcaSandboxDefaults {
     pub managed_identity_resource_id: Option<String>,
     /// Extra non-secret sandbox labels, e.g. `d2b-realm=work`.
     pub labels: BTreeMap<String, String>,
+}
+
+/// Selector for gateway-owned ACA sandbox inventory.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ListSelector {
+    /// List every sandbox in the configured group.
+    All,
+    /// List the sandbox for one workload alias.
+    One(WorkloadId),
+}
+
+/// Workload creation request owned by the ACA gateway effect.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct WorkloadSpec {
+    /// Stable workload alias.
+    pub alias: WorkloadId,
+}
+
+/// Workload lifecycle status returned by the ACA gateway effect.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct WorkloadStatus {
+    /// Workload alias.
+    pub workload: WorkloadId,
+    /// Whether the workload is running.
+    pub running: bool,
+}
+
+/// Synchronous non-PTY command request for an ACA sandbox.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ExecStartRequest {
+    /// Workload alias or provider sandbox id.
+    pub workload: WorkloadId,
+    /// Whether a PTY was requested.
+    pub tty: bool,
+    /// UTF-8 command payload.
+    pub command: OpaquePayload,
 }
 
 impl AcaSandboxDefaults {
@@ -840,13 +875,6 @@ impl AcaWorkloadProvider {
         }
     }
 
-    /// Current ACA executeShellCommand-only sandboxes do not boot a
-    /// guestd-compatible agent, so persistent-shell advertisement is
-    /// fail-closed until the image/relay/bootstrap contract is complete.
-    pub fn guestd_bootstrap_contract(&self) -> ProviderGuestdBootstrapContract {
-        ProviderGuestdBootstrapContract::execute_only_fail_closed()
-    }
-
     /// Share a provider-endpoint circuit breaker across Azure Container Apps provider instances.
     pub fn with_circuit_breaker(mut self, circuit: Arc<ProviderCircuitBreaker>) -> Self {
         self.circuit = circuit;
@@ -1250,27 +1278,30 @@ impl AcaWorkloadProvider {
     }
 }
 
-#[async_trait]
-impl WorkloadProvider for AcaWorkloadProvider {
-    fn provider_id(&self) -> ProviderId {
+impl AcaWorkloadProvider {
+    /// Stable provider identity used by gateway diagnostics.
+    pub fn provider_id(&self) -> ProviderId {
         self.provider_id.clone()
     }
 
-    fn node_id(&self) -> NodeId {
+    /// Node hosting the provider-managed sandbox.
+    pub fn node_id(&self) -> NodeId {
         self.node.clone()
     }
 
-    fn capabilities(&self) -> WorkloadCapabilitySet {
+    /// Capabilities exposed by the gateway effect.
+    pub fn capabilities(&self) -> CapabilitySet {
         let mut caps = CapabilitySet::empty()
             .with(Capability::Exec)
             .with(Capability::ProviderManagedIsolation);
         if self.sandbox_defaults.is_some() {
             caps = caps.with(Capability::Lifecycle);
         }
-        WorkloadCapabilitySet { caps }
+        caps
     }
 
-    async fn list(&self, selector: ListSelector) -> ProviderResult<Vec<WorkloadSummary>> {
+    /// List provider-managed sandboxes.
+    pub async fn list(&self, selector: ListSelector) -> ProviderResult<Vec<WorkloadSummary>> {
         if self.sandbox_defaults.is_none() {
             return Err(ProviderError::capability_denied(Capability::Lifecycle));
         }
@@ -1300,13 +1331,14 @@ impl WorkloadProvider for AcaWorkloadProvider {
                     realm,
                     node: self.node.clone(),
                     state: sandbox_state(&sandbox),
-                    capabilities: WorkloadProvider::capabilities(self).caps,
+                    capabilities: self.capabilities(),
                 })
             })
             .collect())
     }
 
-    async fn create(&self, spec: WorkloadSpec) -> ProviderResult<WorkloadId> {
+    /// Create or adopt a provider-managed sandbox for a workload.
+    pub async fn create(&self, spec: WorkloadSpec) -> ProviderResult<WorkloadId> {
         if self.sandbox_defaults.is_none() {
             return Err(ProviderError::capability_denied(Capability::Lifecycle));
         }
@@ -1314,7 +1346,8 @@ impl WorkloadProvider for AcaWorkloadProvider {
         Ok(spec.alias)
     }
 
-    async fn start(&self, id: WorkloadId) -> ProviderResult<WorkloadStatus> {
+    /// Start or resume a provider-managed sandbox.
+    pub async fn start(&self, id: WorkloadId) -> ProviderResult<WorkloadStatus> {
         if self.sandbox_defaults.is_none() {
             return Err(ProviderError::capability_denied(Capability::Lifecycle));
         }
@@ -1341,7 +1374,8 @@ impl WorkloadProvider for AcaWorkloadProvider {
         })
     }
 
-    async fn stop(&self, id: WorkloadId) -> ProviderResult<WorkloadStatus> {
+    /// Stop a provider-managed sandbox when it is currently running.
+    pub async fn stop(&self, id: WorkloadId) -> ProviderResult<WorkloadStatus> {
         if self.sandbox_defaults.is_none() {
             return Err(ProviderError::capability_denied(Capability::Lifecycle));
         }
@@ -1356,7 +1390,8 @@ impl WorkloadProvider for AcaWorkloadProvider {
         })
     }
 
-    async fn exec(&self, req: ExecStartRequest) -> ProviderResult<ExecutionId> {
+    /// Execute one bounded, non-PTY command in a provider-managed sandbox.
+    pub async fn exec(&self, req: ExecStartRequest) -> ProviderResult<ExecutionId> {
         if req.tty {
             return Err(ProviderError::capability_denied(Capability::Pty));
         }
@@ -1399,30 +1434,6 @@ impl WorkloadProvider for AcaWorkloadProvider {
                 "failed to mint Azure Container Apps execution id",
             )
         })
-    }
-}
-
-#[async_trait]
-impl d2b_realm_provider::provider::GuestControlEndpointProvider for AcaWorkloadProvider {
-    fn provider_id(&self) -> ProviderId {
-        self.provider_id.clone()
-    }
-
-    fn node_id(&self) -> NodeId {
-        self.node.clone()
-    }
-
-    fn capabilities(&self) -> WorkloadCapabilitySet {
-        self.guestd_bootstrap_contract().advertised_capabilities()
-    }
-
-    async fn endpoint_status(
-        &self,
-        _workload: WorkloadId,
-    ) -> ProviderResult<d2b_realm_provider::types::GuestControlEndpointStatus> {
-        Err(ProviderError::capability_denied(
-            Capability::PersistentShell,
-        ))
     }
 }
 
@@ -2199,10 +2210,10 @@ mod tests {
     #[test]
     fn capabilities_are_honest_exec_only() {
         let (p, _) = provider_seq(vec![]);
-        let caps = WorkloadProvider::capabilities(&p);
-        assert!(caps.caps.has(Capability::Exec));
-        assert!(caps.caps.has(Capability::ProviderManagedIsolation));
-        assert!(!caps.caps.has(Capability::Lifecycle));
+        let caps = p.capabilities();
+        assert!(caps.has(Capability::Exec));
+        assert!(caps.has(Capability::ProviderManagedIsolation));
+        assert!(!caps.has(Capability::Lifecycle));
         for absent in [
             Capability::Logs,
             Capability::Pty,
@@ -2216,54 +2227,17 @@ mod tests {
             Capability::PersistentShell,
         ] {
             assert!(
-                !caps.caps.has(absent),
+                !caps.has(absent),
                 "ACA must not advertise unsupported capability {}",
                 absent.code()
             );
         }
 
         let (p, _) = lifecycle_provider_seq(vec![]);
-        let caps = WorkloadProvider::capabilities(&p);
-        assert!(caps.caps.has(Capability::Exec));
-        assert!(caps.caps.has(Capability::Lifecycle));
-        assert!(caps.caps.has(Capability::ProviderManagedIsolation));
-    }
-
-    #[test]
-    fn guestd_bootstrap_contract_keeps_persistent_shell_fail_closed() {
-        let (p, _) = provider_seq(vec![]);
-        let bootstrap = p.guestd_bootstrap_contract();
-        assert!(!bootstrap.persistent_shell_ready());
-        assert!(
-            !bootstrap
-                .advertised_capabilities()
-                .has(Capability::PersistentShell)
-        );
-        assert!(!WorkloadProvider::capabilities(&p).has(Capability::PersistentShell));
-        assert!(
-            !d2b_realm_provider::provider::GuestControlEndpointProvider::capabilities(&p)
-                .has(Capability::PersistentShell)
-        );
-    }
-
-    #[tokio::test]
-    async fn guest_control_endpoint_status_fails_closed_without_provider_agent() {
-        let (p, http) = provider_seq(vec![]);
-
-        let err = d2b_realm_provider::provider::GuestControlEndpointProvider::endpoint_status(
-            &p,
-            WorkloadId::parse("sandbox-a").unwrap(),
-        )
-        .await
-        .expect_err("execute-only ACA provider has no guestd endpoint");
-
-        assert_eq!(err.kind(), ErrorKind::CapabilityDenied);
-        assert_eq!(err.missing_capability(), Some(Capability::PersistentShell));
-        assert_eq!(
-            http.calls.lock().unwrap().len(),
-            0,
-            "endpoint discovery denial must happen before ACA data-plane calls"
-        );
+        let caps = p.capabilities();
+        assert!(caps.has(Capability::Exec));
+        assert!(caps.has(Capability::Lifecycle));
+        assert!(caps.has(Capability::ProviderManagedIsolation));
     }
 
     #[test]
@@ -2286,7 +2260,7 @@ mod tests {
 
     #[test]
     fn aca_source_imports_no_full_host_or_developer_credential_surfaces() {
-        let imports = include_str!("gateway_compat.rs")
+        let imports = include_str!("gateway.rs")
             .lines()
             .filter(|line| line.trim_start().starts_with("use "))
             .collect::<Vec<_>>()
@@ -2315,7 +2289,7 @@ mod tests {
 
     #[test]
     fn production_constructor_uses_workload_then_managed_identity_only() {
-        let source = include_str!("gateway_compat.rs");
+        let source = include_str!("gateway.rs");
         let impl_start = source
             .find("impl AcaWorkloadProvider {")
             .expect("AcaWorkloadProvider impl present");

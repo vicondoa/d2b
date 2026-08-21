@@ -1,4 +1,4 @@
-//! Realm entrypoint table + target resolution (`RealmTargetResolver`).
+//! Realm entrypoint table + target resolution owned by the Zone routing plane.
 //!
 //! Resolution is **policy, not address decoding**: the
 //! [`d2b_realm_core::RealmTarget`] grammar never encodes whether a realm is

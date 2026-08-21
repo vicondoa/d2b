@@ -135,7 +135,7 @@ automatically relay-exportable.
 
 The access resolver models define the target-to-binding contract shape for CLI
 routing and daemon access APIs. See
-[Realm access resolver contract](./realm-access-resolver.md) for the complete
+the current CLI routing owner for the complete
 resolver behavior reference.
 
 - `RealmAccessResolverRequest` carries a bounded target input, optional
@@ -173,7 +173,7 @@ can be routed.
 The identity lifecycle roots are metadata-only contracts for enrollment,
 controller-generation admission, key rotation, revocation, teardown, and
 recovery flows. See
-[Realm identity lifecycle contract](./realm-identity-lifecycle.md) for the
+the realm identity model for the
 field-level lifecycle reference and
 the generated schema companion for machine-readable fields.
 
@@ -200,7 +200,7 @@ The routing roots are schema contracts only. They describe how controllers
 bound pre-auth discovery, verify parent/child route advertisements, validate
 namespace delegation, authorize direct shortcuts, and
 record route audit/telemetry without exposing relay endpoints or tunnel handles.
-See [Realm tree routing contract](./realm-routing.md) for the field-level
+See the Zone/session route owner for the field-level
 reference and contract boundary.
 
 They do not implement live relay sessions, runtime route enforcement, SSH
@@ -340,7 +340,5 @@ the structured capability.
 - [Daemon API reference](./daemon-api.md)
 - [Naming conventions](./naming-conventions.md)
 - [Realm option schema](./realm-options.md)
-- [Realm access resolver contract](./realm-access-resolver.md)
-- [Realm tree routing contract](./realm-routing.md)
-- [Realm identity lifecycle contract](./realm-identity-lifecycle.md)
+- [Realm core reference](./realm-core.md)
 - [Manifest bundle reference](./manifest-bundle.md)

@@ -55,8 +55,7 @@ const DECLARATION_WINDOW: usize = 20;
 /// every crate nobody thought to name, and the direction rule is exactly the
 /// kind of invariant a new workspace member quietly breaks. The admitted set
 /// is the narrow contract families, the shared conformance kit, the pure host
-/// argv helper, the toolkits, the Provider SDK, and the codec-neutral realm
-/// Provider traits used by the gateway compatibility adapters.
+/// argv helper, the toolkits, and the Provider SDK.
 const ALLOWED_WORKSPACE_DEPS: &[&str] = &[
     "d2b-contracts",
     "d2b-contracts-broker",
@@ -70,7 +69,6 @@ const ALLOWED_WORKSPACE_DEPS: &[&str] = &[
     "d2b-provider",
     "d2b-provider-toolkit",
     "d2b-realm-core",
-    "d2b-realm-provider",
     "d2b-session",
 ];
 

@@ -75,7 +75,6 @@ test_suite(
         "//packages/d2b-contract-tests:minijail_sk_frontend",
         "//packages/d2b-contract-tests:privileges_fixture",
         "//packages/d2b-contract-tests:privileges_parity",
-        "//packages/d2b-contract-tests:realm_identity_schema_contract",
         "//packages/d2b-contract-tests:realm_workload_schema_contract",
         "//packages/d2b-contract-tests:runner_shape_contract",
         "//packages/d2b-contract-tests:static_invariants",

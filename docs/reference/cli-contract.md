@@ -48,7 +48,7 @@ Realm-aware target strings use the canonical form
 `<workload>.<realm>[.<ancestor>...].d2b`. Bare workload names are aliases only
 when a caller supplies an alias table or default realm, and old node-qualified
 forms are diagnostics that point to the realm-native target with the node label
-removed. See [Realm access resolver contract](./realm-access-resolver.md) for
+removed. See [realm-core](./realm-core.md) for
 the target grammar, direct host-local socket binding, capability preflight, and
 typed denial shapes.
 

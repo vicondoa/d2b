@@ -1,4 +1,4 @@
-//! `d2b-provider-relay`: the Azure Relay transport auth/credential core
+//! Azure Relay transport authentication and credential helpers
 //! for the realm gateway (ADR 0032).
 //!
 //! This crate is the d2b-native home for the **credential model +

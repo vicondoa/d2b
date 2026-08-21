@@ -8,7 +8,10 @@ mod controller;
 mod deployment_service;
 #[allow(missing_docs)]
 mod effects;
-pub mod gateway_compat;
+#[allow(missing_docs)]
+mod error;
+pub mod gateway;
+mod rate_limit;
 mod metrics;
 
 pub use audit::{AcaAuditEvent, AcaAuditOutcome, AcaAuditSink};

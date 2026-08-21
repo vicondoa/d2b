@@ -33,8 +33,7 @@ allocation or protobuf decode.
 
 Transport adapters must preserve byte-exact delivery, bounded pending
 session queues, typed unavailable/backpressure errors, and explicit
-shutdown behavior. The reusable checks are listed in the
-[transport conformance matrix](./transport-conformance-matrix.md).
+shutdown behavior.
 The Azure Relay adapter is documented in
 [transport-azure-relay](./transport-azure-relay.md).
 Supported transport policy, including the no-implicit-SSH-fallback rule,

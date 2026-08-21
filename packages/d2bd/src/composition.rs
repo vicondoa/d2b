@@ -107,7 +107,7 @@ use d2b_gateway::{
     IdSource, LedgerLimits, ListenerHandle, NoopGatewayAudit, OpenSession, SECRET_LEN,
     SessionBinding, SessionSecret, TargetKey,
 };
-use d2b_gateway_runtime::relay_compat::LocalTarget;
+use d2b_gateway_runtime::relay_bridge::LocalTarget;
 use d2b_gateway_runtime::{
     AcaGatewayWorkload, AgentBinaries, CredentialFilePolicy, GatewayCredential, RelayCoords,
     RelayDisplayListener, SealingKey, production_deps, relay_sas_token_snippet, system_now_fn,
@@ -123,13 +123,12 @@ use d2b_provider_network_local::{
         NetworkResourcePort, ReconcileInput, ReconcileProgress,
     },
 };
-use d2b_provider_runtime_azure_container_apps::gateway_compat::{
+use d2b_provider_runtime_azure_container_apps::gateway::{
     AcaConfig, AcaDiskImageSource, AcaSandboxDefaults, AcaWorkloadProvider,
 };
-use d2b_provider_transport_azure_relay::gateway_compat::{DEFAULT_SAS_TTL_SECS, RelayEndpoint};
+use d2b_provider_transport_azure_relay::auth::{DEFAULT_SAS_TTL_SECS, RelayEndpoint};
 use d2b_provider_volume_local::diagnostics::storage_lifecycle;
 use d2b_realm_core::TargetName;
-use d2b_realm_provider::provider::WorkloadProvider;
 pub(crate) use d2bd_runtime::broker_transport::{
     broker_remaining_before_op, broker_response_kind, default_audit_join_context,
     dispatch_broker_request_to_socket, redact_broker_dispatch_failure_for_launcher,

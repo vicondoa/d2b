@@ -25,7 +25,7 @@
 use async_trait::async_trait;
 use base64::Engine;
 use d2b_gateway::{AgentHandle, AgentSpawnRequest, GatewayError, GatewayWorkload, SessionBinding};
-use d2b_provider_runtime_azure_container_apps::gateway_compat::AcaWorkloadProvider;
+use d2b_provider_runtime_azure_container_apps::gateway::AcaWorkloadProvider;
 use d2b_realm_core::WorkloadId;
 
 /// Azure Relay coordinates the in-sandbox sender dials out to.
@@ -582,7 +582,7 @@ mod tests {
     #[tokio::test]
     async fn invalid_agent_handle_fails_cleanup_closed() {
         use azure_core::credentials::{AccessToken, TokenRequestOptions};
-        use d2b_provider_runtime_azure_container_apps::gateway_compat::{
+        use d2b_provider_runtime_azure_container_apps::gateway::{
             AcaConfig, AcaWorkloadProvider, HttpResponse, HttpTransport,
         };
         use std::sync::Arc;
@@ -608,11 +608,11 @@ mod tests {
         impl HttpTransport for NeverHttp {
             async fn request(
                 &self,
-                _method: d2b_provider_runtime_azure_container_apps::gateway_compat::HttpMethod,
+                _method: d2b_provider_runtime_azure_container_apps::gateway::HttpMethod,
                 _url: &str,
                 _bearer: &str,
                 _body: Option<String>,
-            ) -> d2b_realm_provider::error::ProviderResult<HttpResponse> {
+            ) -> d2b_provider_runtime_azure_container_apps::gateway::AcaResult<HttpResponse> {
                 panic!("invalid handle cleanup must not call provider")
             }
         }

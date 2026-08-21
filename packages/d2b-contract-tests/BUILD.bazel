@@ -727,49 +727,6 @@ rust_test(
 )
 
 rust_test(
-    name = "realm_access_schema_contract",
-    srcs = ["tests/realm_access_schema_contract.rs"],
-    compile_data = ["Cargo.toml"],
-    visibility = ["//visibility:public"],
-    deps = [
-        "//packages/d2b-contracts-provider:d2b_contracts_provider",
-        "//packages/d2b-contracts-resource:d2b_contracts_resource",
-        "//packages/d2b-contracts-zone-session:d2b_contracts_zone_session",
-        ":d2b_contract_tests",
-    ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
-)
-
-rust_test(
-    name = "realm_identity_schema_contract",
-    srcs = ["tests/realm_identity_schema_contract.rs"],
-    compile_data = ["Cargo.toml"],
-    data = _fixture_data,
-    env = _fixture_env,
-    tags = ["no-remote-cache"],
-    visibility = ["//visibility:public"],
-    deps = [
-        "//packages/d2b-contracts-provider:d2b_contracts_provider",
-        "//packages/d2b-contracts-resource:d2b_contracts_resource",
-        "//packages/d2b-contracts-zone-session:d2b_contracts_zone_session",
-        ":d2b_contract_tests",
-        "//packages/d2b-core:d2b_core",
-    ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
-)
-
-rust_test(
-    name = "realm_route_schema_contract",
-    srcs = ["tests/realm_route_schema_contract.rs"],
-    compile_data = ["Cargo.toml"],
-    visibility = ["//visibility:public"],
-    deps = [
-        "//packages/d2b-contracts-provider:d2b_contracts_provider",
-        "//packages/d2b-contracts-resource:d2b_contracts_resource",
-        "//packages/d2b-contracts-zone-session:d2b_contracts_zone_session",
-        ":d2b_contract_tests",
-    ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
-)
-
-rust_test(
     name = "realm_workload_schema_contract",
     srcs = ["tests/realm_workload_schema_contract.rs"],
     compile_data = ["Cargo.toml"],

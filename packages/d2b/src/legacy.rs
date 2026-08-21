@@ -4868,7 +4868,7 @@ pub(super) fn realm_entrypoints_path() -> PathBuf {
 }
 
 pub(super) fn load_realm_entrypoint_table()
--> Result<Option<d2b_realm_router::RealmEntrypointTable>, CliFailure> {
+-> Result<Option<d2b_zone_routing::RealmEntrypointTable>, CliFailure> {
     let path = realm_entrypoints_path();
     load_realm_entrypoint_table_from_path(&path)
 }
@@ -4913,11 +4913,11 @@ pub(super) fn load_realm_entrypoint_document_from_path(
 
 pub(super) fn load_realm_entrypoint_table_from_path(
     path: &Path,
-) -> Result<Option<d2b_realm_router::RealmEntrypointTable>, CliFailure> {
+) -> Result<Option<d2b_zone_routing::RealmEntrypointTable>, CliFailure> {
     let Some(doc) = load_realm_entrypoint_document_from_path(path)? else {
         return Ok(None);
     };
-    let mut table = d2b_realm_router::RealmEntrypointTable::new();
+    let mut table = d2b_zone_routing::RealmEntrypointTable::new();
     for (realm_raw, entry) in normalize_realm_entrypoint_entries(doc.entries)? {
         let realm = target_routing::parse_realm_arg(&realm_raw).map_err(|err| {
             CliFailure::new(
@@ -5188,7 +5188,7 @@ pub(super) fn route_vm_target_with_table(
     context: &LegacyContext,
     raw: &str,
     json: bool,
-    table: Option<d2b_realm_router::RealmEntrypointTable>,
+    table: Option<d2b_zone_routing::RealmEntrypointTable>,
 ) -> Result<VmTargetRoute, CliFailure> {
     if let Some(vm) = try_vm_for_canonical_target(&context.bundle_path, raw) {
         return Ok(VmTargetRoute::Local { vm });
@@ -5219,7 +5219,7 @@ pub(super) fn route_vm_target_with_table(
             }
             return Ok(route);
         }
-        let table = d2b_realm_router::RealmEntrypointTable::with_local_default();
+        let table = d2b_zone_routing::RealmEntrypointTable::with_local_default();
         return match target_routing::route(raw, &table) {
             Ok(target_routing::Route::Local { vm }) => Ok(VmTargetRoute::Local { vm }),
             Ok(target_routing::Route::Gateway { gateway, target }) => {
@@ -5829,7 +5829,7 @@ pub(super) fn cmd_realm_run(
 /// gateway-mode `d2bd` owns gateway-backed targets.
 #[cfg(test)]
 pub(super) fn guard_local_target(raw: &str, json: bool) -> Result<(), CliFailure> {
-    let table = d2b_realm_router::RealmEntrypointTable::with_local_default();
+    let table = d2b_zone_routing::RealmEntrypointTable::with_local_default();
     match target_routing::route(raw, &table) {
         Ok(target_routing::Route::Local { .. }) => Ok(()),
         Ok(target_routing::Route::Gateway { gateway, target }) => {
@@ -11403,7 +11403,7 @@ mod host_install_dispatch_tests {
             std::fs::create_dir_all(parent).expect("manifest parent");
         }
         write_test_manifest(&manifest_path, "vm-a");
-        let mut table = d2b_realm_router::RealmEntrypointTable::with_local_default();
+        let mut table = d2b_zone_routing::RealmEntrypointTable::with_local_default();
         table.gateway_backed(
             d2b_realm_core::RealmPath::new(vec![d2b_realm_core::RealmId::parse("work").unwrap()])
                 .unwrap(),
@@ -11483,7 +11483,7 @@ mod host_install_dispatch_tests {
             std::fs::create_dir_all(parent).expect("manifest parent");
         }
         write_test_manifest(&manifest_path, "vm-a");
-        let mut table = d2b_realm_router::RealmEntrypointTable::with_local_default();
+        let mut table = d2b_zone_routing::RealmEntrypointTable::with_local_default();
         // Make `work` a local realm so the route resolves without a daemon.
         table.host_resident(
             d2b_realm_core::RealmPath::new(vec![d2b_realm_core::RealmId::parse("work").unwrap()])

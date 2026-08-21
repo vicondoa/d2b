@@ -69,9 +69,6 @@ def check_lints(crate: str, manifest: dict) -> bool:
 
 
 allowed = {
-    "d2b-realm-provider": {"d2b-realm-core"},
-    "d2b-realm-router": {"d2b-realm-core", "d2b-realm-provider"},
-    "d2b-realm-transport": {"d2b-realm-core", "d2b-realm-provider"},
     "d2b-realm-core": {"d2b-contracts"},
 }
 members: dict[str, tuple[str, dict]] = {}
