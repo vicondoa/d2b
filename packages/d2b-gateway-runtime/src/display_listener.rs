@@ -53,7 +53,7 @@ pub fn notifying_verifier(
 
 struct ListenerState {
     cancel: tokio::sync::watch::Sender<bool>,
-    _thread: std::thread::JoinHandle<()>,
+    thread: Option<std::thread::JoinHandle<()>>,
     handshook: Arc<Notify>,
     armed: Arc<AtomicBool>,
     handshake_timeout: Duration,
@@ -160,13 +160,8 @@ impl DisplayListener for RelayDisplayListener {
                     // on its own runtime thread so the listener survives the
                     // daemon's synchronous gatewayDisplay request runtime.
                     loop {
-                        tokio::select! {
-                            changed = cancel_rx.changed() => {
-                                if changed.is_err() || *cancel_rx.borrow() {
-                                    break;
-                                }
-                            }
-                            result = crate::relay_bridge::run_listener_verified_with_ready(
+                        let result =
+                            crate::relay_bridge::run_listener_verified_with_ready_and_cancel(
                                 &endpoint,
                                 &credential,
                                 &target,
@@ -174,14 +169,14 @@ impl DisplayListener for RelayDisplayListener {
                                 ca.as_deref(),
                                 inner.clone(),
                                 ready.clone(),
-                            ) => {
-                                if *cancel_rx.borrow() {
-                                    break;
-                                }
-                                if let Err(err) = result {
-                                    tracing::warn!(error = %err, "gateway relay listener ended before close");
-                                }
-                            }
+                                Some(cancel_rx.clone()),
+                            )
+                            .await;
+                        if *cancel_rx.borrow() {
+                            break;
+                        }
+                        if let Err(err) = result {
+                            tracing::warn!(error = %err, "gateway relay listener ended before close");
                         }
                         tokio::select! {
                             changed = cancel_rx.changed() => {
@@ -202,7 +197,7 @@ impl DisplayListener for RelayDisplayListener {
             id.clone(),
             ListenerState {
                 cancel: task_cancel,
-                _thread: thread,
+                thread: Some(thread),
                 handshook,
                 armed,
                 handshake_timeout,
@@ -239,8 +234,11 @@ impl DisplayListener for RelayDisplayListener {
             let mut guard = self.state.lock().map_err(|_| GatewayError::Internal)?;
             guard.remove(&handle.0)
         };
-        if let Some(st) = st {
+        if let Some(mut st) = st {
             let _ = st.cancel.send(true);
+            if let Some(thread) = st.thread.take() {
+                let _ = tokio::task::spawn_blocking(move || thread.join()).await;
+            }
         }
         Ok(())
     }
@@ -319,7 +317,7 @@ mod tests {
             "h1".into(),
             ListenerState {
                 cancel,
-                _thread: thread,
+                thread: Some(thread),
                 handshook,
                 armed,
                 handshake_timeout: Duration::from_secs(100),
@@ -356,5 +354,41 @@ mod tests {
             .await
             .unwrap_err();
         assert!(matches!(err, GatewayError::Internal));
+    }
+
+    #[tokio::test]
+    async fn close_joins_listener_thread_before_next_bridge_can_arm() {
+        let listener = RelayDisplayListener::new(
+            RelayEndpoint {
+                namespace: "ns".into(),
+                entity: "e".into(),
+            },
+            RelayCredential::EntraBearer("t".into()),
+            LocalTarget::UnixConnect("unused-socket".into()),
+            60,
+            None,
+            Arc::new(|| 900),
+        );
+        let joined = Arc::new(AtomicBool::new(false));
+        let thread_joined = Arc::clone(&joined);
+        let thread = std::thread::spawn(move || {
+            std::thread::sleep(std::time::Duration::from_millis(20));
+            thread_joined.store(true, Ordering::SeqCst);
+        });
+        let (cancel, _rx) = tokio::sync::watch::channel(false);
+        listener.state.lock().unwrap().insert(
+            "h1".into(),
+            ListenerState {
+                cancel,
+                thread: Some(thread),
+                handshook: Arc::new(Notify::new()),
+                armed: Arc::new(AtomicBool::new(false)),
+                handshake_timeout: Duration::from_secs(100),
+            },
+        );
+
+        listener.close(&ListenerHandle("h1".into())).await.unwrap();
+
+        assert!(joined.load(Ordering::SeqCst));
     }
 }

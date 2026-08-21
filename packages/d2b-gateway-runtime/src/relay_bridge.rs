@@ -6,6 +6,7 @@
 
 use std::fmt;
 use std::fs::{File, OpenOptions};
+use std::future::Future;
 use std::os::fd::AsRawFd;
 use std::os::unix::fs::OpenOptionsExt;
 use std::os::unix::fs::{FileTypeExt, MetadataExt};
@@ -15,13 +16,12 @@ use d2b_provider_transport_azure_relay::auth::{
     RelayCredential, RelayEndpoint, RelayError, RelayRole, build_connect,
 };
 use rustls_pki_types::{CertificateDer, pem::PemObject};
-use tokio::sync::Semaphore;
+use tokio::sync::{Semaphore, watch};
+use tokio::task::JoinSet;
 use tokio::time::{Duration, timeout};
 
 #[cfg(test)]
-use d2b_provider_transport_azure_relay::auth::{
-    DEFAULT_SAS_TTL_SECS, MAX_SAS_TTL_SECS, mint_sas,
-};
+use d2b_provider_transport_azure_relay::auth::{DEFAULT_SAS_TTL_SECS, MAX_SAS_TTL_SECS, mint_sas};
 #[cfg(test)]
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -277,6 +277,43 @@ fn validate_connected_unix_peer(
     Ok(())
 }
 
+#[derive(Default)]
+struct RendezvousTasks {
+    tasks: JoinSet<()>,
+}
+
+impl RendezvousTasks {
+    fn spawn<F>(&mut self, task: F)
+    where
+        F: Future<Output = ()> + Send + 'static,
+    {
+        self.tasks.spawn(task);
+    }
+
+    fn is_empty(&self) -> bool {
+        self.tasks.is_empty()
+    }
+
+    async fn reap_one(&mut self) {
+        if let Some(Err(err)) = self.tasks.join_next().await
+            && !err.is_cancelled()
+        {
+            tracing::warn!(error = %err, "relay rendezvous task failed");
+        }
+    }
+
+    async fn cancel_and_join(&mut self) {
+        self.tasks.abort_all();
+        while let Some(result) = self.tasks.join_next().await {
+            if let Err(err) = result
+                && !err.is_cancelled()
+            {
+                tracing::warn!(error = %err, "relay rendezvous task failed while stopping");
+            }
+        }
+    }
+}
+
 /// Pump bytes between the relay WebSocket and a local stream until either
 /// side closes. Binary frames carry the tunneled bytes; pings are answered;
 /// text/close end the pump. This is the productionized form of the POC
@@ -434,38 +471,44 @@ pub async fn run_listener(
     let control =
         connect_with_ca(endpoint, RelayRole::Listener, credential, ttl_secs, ca_pem).await?;
     let (mut sink, mut stream) = control.split();
-    while let Some(msg) = stream.next().await {
-        let msg =
-            msg.map_err(|err| RelayConnectError::Handshake(format!("control channel: {err}")))?;
-        match msg {
-            Message::Text(text) => {
-                let v: serde_json::Value = match serde_json::from_str(&text) {
-                    Ok(v) => v,
-                    Err(_) => continue,
-                };
-                if let Some(addr) = v
-                    .get("accept")
-                    .and_then(|a| a.get("address"))
-                    .and_then(|s| s.as_str())
-                {
-                    let address = addr.to_owned();
-                    let local = local.clone();
-                    let ca = ca_pem.map(|c| c.to_vec());
-                    tokio::spawn(async move {
-                        if let Err(err) = accept_one(&address, &local, ca.as_deref()).await {
-                            tracing::warn!(error = %err, "relay rendezvous ended");
-                        }
-                    });
+    let mut rendezvous_tasks = RendezvousTasks::default();
+    let result = async {
+        while let Some(msg) = stream.next().await {
+            let msg =
+                msg.map_err(|err| RelayConnectError::Handshake(format!("control channel: {err}")))?;
+            match msg {
+                Message::Text(text) => {
+                    let v: serde_json::Value = match serde_json::from_str(&text) {
+                        Ok(v) => v,
+                        Err(_) => continue,
+                    };
+                    if let Some(addr) = v
+                        .get("accept")
+                        .and_then(|a| a.get("address"))
+                        .and_then(|s| s.as_str())
+                    {
+                        let address = addr.to_owned();
+                        let local = local.clone();
+                        let ca = ca_pem.map(|c| c.to_vec());
+                        rendezvous_tasks.spawn(async move {
+                            if let Err(err) = accept_one(&address, &local, ca.as_deref()).await {
+                                tracing::warn!(error = %err, "relay rendezvous ended");
+                            }
+                        });
+                    }
                 }
+                Message::Ping(p) => {
+                    let _ = sink.send(Message::Pong(p)).await;
+                }
+                Message::Close(_) => return Ok(()),
+                _ => {}
             }
-            Message::Ping(p) => {
-                let _ = sink.send(Message::Pong(p)).await;
-            }
-            Message::Close(_) => return Ok(()),
-            _ => {}
         }
+        Ok(())
     }
-    Ok(())
+    .await;
+    rendezvous_tasks.cancel_and_join().await;
+    result
 }
 
 async fn accept_one(
@@ -576,55 +619,122 @@ pub async fn run_listener_verified_with_ready(
     verify: PrologueVerifier,
     ready: std::sync::Arc<dyn Fn() + Send + Sync>,
 ) -> Result<(), RelayConnectError> {
+    run_listener_verified_with_ready_and_cancel(
+        endpoint, credential, local, ttl_secs, ca_pem, verify, ready, None,
+    )
+    .await
+}
+
+pub(crate) async fn run_listener_verified_with_ready_and_cancel(
+    endpoint: &RelayEndpoint,
+    credential: &RelayCredential,
+    local: &LocalTarget,
+    ttl_secs: u64,
+    ca_pem: Option<&[u8]>,
+    verify: PrologueVerifier,
+    ready: std::sync::Arc<dyn Fn() + Send + Sync>,
+    mut cancellation: Option<watch::Receiver<bool>>,
+) -> Result<(), RelayConnectError> {
     use futures_util::{SinkExt, StreamExt};
     use tokio_tungstenite::tungstenite::Message;
 
-    let control =
-        connect_with_ca(endpoint, RelayRole::Listener, credential, ttl_secs, ca_pem).await?;
+    if cancellation
+        .as_ref()
+        .is_some_and(|receiver| *receiver.borrow())
+    {
+        return Ok(());
+    }
+    let control = tokio::select! {
+        result = connect_with_ca(endpoint, RelayRole::Listener, credential, ttl_secs, ca_pem) => {
+            result?
+        }
+        _ = wait_for_listener_cancellation(&mut cancellation) => {
+            return Ok(());
+        }
+    };
     let (mut sink, mut stream) = control.split();
     let rendezvous_slots = std::sync::Arc::new(Semaphore::new(MAX_PENDING_RENDEZVOUS));
-    while let Some(msg) = stream.next().await {
-        let msg =
-            msg.map_err(|err| RelayConnectError::Handshake(format!("control channel: {err}")))?;
-        match msg {
-            Message::Text(text) => {
-                let v: serde_json::Value = match serde_json::from_str(&text) {
-                    Ok(v) => v,
-                    Err(_) => continue,
+    let mut rendezvous_tasks = RendezvousTasks::default();
+    let result: Result<(), RelayConnectError> = 'control: loop {
+        tokio::select! {
+            biased;
+            _ = wait_for_listener_cancellation(&mut cancellation) => {
+                break 'control Ok(());
+            }
+            _ = rendezvous_tasks.reap_one(), if !rendezvous_tasks.is_empty() => {
+            }
+            msg = stream.next() => {
+                let Some(msg) = msg else {
+                    break 'control Ok(());
                 };
-                if let Some(addr) = v
-                    .get("accept")
-                    .and_then(|a| a.get("address"))
-                    .and_then(|s| s.as_str())
-                {
-                    let address = addr.to_owned();
-                    let local = local.clone();
-                    let ca = ca_pem.map(|c| c.to_vec());
-                    let verify = verify.clone();
-                    let ready = ready.clone();
-                    let Ok(slot) = rendezvous_slots.clone().try_acquire_owned() else {
-                        tracing::warn!("relay rendezvous concurrency bound reached");
-                        continue;
-                    };
-                    tokio::spawn(async move {
-                        let _slot = slot;
-                        if let Err(err) =
-                            accept_one_verified(&address, &local, ca.as_deref(), verify, ready)
-                                .await
+                let msg = match msg {
+                    Ok(msg) => msg,
+                    Err(err) => {
+                        break 'control Err(RelayConnectError::Handshake(format!(
+                            "control channel: {err}"
+                        )));
+                    }
+                };
+                match msg {
+                    Message::Text(text) => {
+                        let v: serde_json::Value = match serde_json::from_str(&text) {
+                            Ok(v) => v,
+                            Err(_) => continue,
+                        };
+                        if let Some(addr) = v
+                            .get("accept")
+                            .and_then(|a| a.get("address"))
+                            .and_then(|s| s.as_str())
                         {
-                            tracing::warn!(error = %err, "verified relay rendezvous ended");
+                            let address = addr.to_owned();
+                            let local = local.clone();
+                            let ca = ca_pem.map(|c| c.to_vec());
+                            let verify = verify.clone();
+                            let ready = ready.clone();
+                            let Ok(slot) = rendezvous_slots.clone().try_acquire_owned() else {
+                                tracing::warn!("relay rendezvous concurrency bound reached");
+                                continue;
+                            };
+                            rendezvous_tasks.spawn(async move {
+                                let _slot = slot;
+                                if let Err(err) =
+                                    accept_one_verified(&address, &local, ca.as_deref(), verify, ready)
+                                        .await
+                                {
+                                    tracing::warn!(error = %err, "verified relay rendezvous ended");
+                                }
+                            });
                         }
-                    });
+                    }
+                    Message::Ping(p) => {
+                        tokio::select! {
+                            _ = wait_for_listener_cancellation(&mut cancellation) => {
+                                break 'control Ok(());
+                            }
+                            _ = sink.send(Message::Pong(p)) => {}
+                        }
+                    }
+                    Message::Close(_) => break 'control Ok(()),
+                    _ => {}
                 }
             }
-            Message::Ping(p) => {
-                let _ = sink.send(Message::Pong(p)).await;
+        }
+    };
+    rendezvous_tasks.cancel_and_join().await;
+    result
+}
+
+async fn wait_for_listener_cancellation(cancellation: &mut Option<watch::Receiver<bool>>) {
+    loop {
+        match cancellation {
+            Some(receiver) => {
+                if receiver.changed().await.is_err() || *receiver.borrow() {
+                    return;
+                }
             }
-            Message::Close(_) => return Ok(()),
-            _ => {}
+            None => std::future::pending::<()>().await,
         }
     }
-    Ok(())
 }
 
 async fn accept_one_verified(
@@ -719,7 +829,90 @@ pub async fn run_sender_with_prologue(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::future::pending;
     use std::os::unix::fs::PermissionsExt;
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    struct PumpProbe {
+        active: Arc<AtomicUsize>,
+        stopped: Arc<AtomicUsize>,
+    }
+
+    impl PumpProbe {
+        fn new(active: &Arc<AtomicUsize>, stopped: &Arc<AtomicUsize>) -> Self {
+            active.fetch_add(1, Ordering::SeqCst);
+            Self {
+                active: Arc::clone(active),
+                stopped: Arc::clone(stopped),
+            }
+        }
+    }
+
+    impl Drop for PumpProbe {
+        fn drop(&mut self) {
+            self.active.fetch_sub(1, Ordering::SeqCst);
+            self.stopped.fetch_add(1, Ordering::SeqCst);
+        }
+    }
+
+    async fn parked_pump(probe: PumpProbe) {
+        let _probe = probe;
+        pending::<()>().await;
+    }
+
+    #[tokio::test]
+    async fn close_frame_stops_both_pump_directions_before_reconnect() {
+        let active = Arc::new(AtomicUsize::new(0));
+        let stopped = Arc::new(AtomicUsize::new(0));
+        let mut owner = RendezvousTasks::default();
+        owner.spawn(parked_pump(PumpProbe::new(&active, &stopped)));
+        owner.spawn(parked_pump(PumpProbe::new(&active, &stopped)));
+        tokio::task::yield_now().await;
+        assert_eq!(active.load(Ordering::SeqCst), 2);
+
+        // The control-channel Close path uses this owner teardown before the
+        // listener returns to its reconnect loop.
+        owner.cancel_and_join().await;
+
+        assert!(owner.is_empty());
+        assert_eq!(stopped.load(Ordering::SeqCst), 2);
+        assert_eq!(active.load(Ordering::SeqCst), 0);
+    }
+
+    #[tokio::test]
+    async fn session_cancellation_joins_every_rendezvous_task() {
+        let active = Arc::new(AtomicUsize::new(0));
+        let stopped = Arc::new(AtomicUsize::new(0));
+        let mut owner = RendezvousTasks::default();
+        for _ in 0..3 {
+            owner.spawn(parked_pump(PumpProbe::new(&active, &stopped)));
+        }
+        tokio::task::yield_now().await;
+        owner.cancel_and_join().await;
+
+        assert!(owner.is_empty());
+        assert_eq!(stopped.load(Ordering::SeqCst), 3);
+        assert_eq!(active.load(Ordering::SeqCst), 0);
+    }
+
+    #[tokio::test]
+    async fn second_bridge_starts_only_after_prior_local_session_stops() {
+        let active = Arc::new(AtomicUsize::new(0));
+        let stopped = Arc::new(AtomicUsize::new(0));
+        let mut owner = RendezvousTasks::default();
+        owner.spawn(parked_pump(PumpProbe::new(&active, &stopped)));
+        tokio::task::yield_now().await;
+        assert_eq!(active.load(Ordering::SeqCst), 1);
+
+        owner.cancel_and_join().await;
+        assert_eq!(active.load(Ordering::SeqCst), 0);
+
+        let second = PumpProbe::new(&active, &stopped);
+        assert_eq!(active.load(Ordering::SeqCst), 1);
+        drop(second);
+        assert_eq!(active.load(Ordering::SeqCst), 0);
+    }
 
     #[test]
     fn extract_prologue_needs_full_length_prefix() {
