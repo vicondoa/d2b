@@ -252,14 +252,14 @@ mod tests {
 
     #[test]
     fn zone_authority_keeps_gateway_custody_separate() {
-        let zone = d2b_contracts_resource::v3::identity::identity::ZoneId::parse("work").unwrap();
+        let zone = d2b_contracts_resource::v3::identity::ZoneId::parse("work").unwrap();
         let local = ZoneSessionAuthority::local_controller(zone.clone()).unwrap();
         assert_eq!(local.custody(), CredentialCustody::None);
         let gateway = ZoneSessionAuthority::gateway_peer(zone).unwrap();
         assert_eq!(gateway.custody(), CredentialCustody::GatewayGuest);
         assert!(
             ZoneSessionAuthority::new(
-                d2b_contracts_resource::v3::identity::identity::ZoneId::parse("work").unwrap(),
+                d2b_contracts_resource::v3::identity::ZoneId::parse("work").unwrap(),
                 EndpointRole::ZoneController,
                 CredentialCustody::GatewayGuest,
             )

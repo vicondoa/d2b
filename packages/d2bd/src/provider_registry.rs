@@ -603,8 +603,8 @@ fn runtime_catalog_fingerprint(
 
 /// Keep the ResourceType identity available to callers without accepting a
 /// free-form type alias.
-pub fn provider_resource_type() -> d2b_contracts_resource::v3::identity::identity::ResourceTypeName {
-    d2b_contracts_resource::v3::identity::identity::ResourceTypeName::parse("Provider")
+pub fn provider_resource_type() -> d2b_contracts_resource::v3::identity::ResourceTypeName {
+    d2b_contracts_resource::v3::identity::ResourceTypeName::parse("Provider")
         .expect("Provider is in the v3 catalog")
 }
 
