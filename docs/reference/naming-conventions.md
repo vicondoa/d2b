@@ -111,7 +111,7 @@ Label-shaped constellation ids (`RealmId`, `NodeId`, `WorkloadId`,
 `OperationId`, and `IdempotencyKey`) are bounded printable-ASCII tokens
 without spaces. See
 [`realm-core.md`](./realm-core.md) for the complete realm-core model
-contract and [Realm access resolver contract](./realm-access-resolver.md) for
+contract and [realm-core](./realm-core.md) for
 resolver diagnostics and access binding behavior.
 
 `d2b.realms.<realm>` uses the same lowercase label shape for the realm

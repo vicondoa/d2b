@@ -274,7 +274,7 @@ change.
 When the Rust DTOs change, regenerate schema artifacts with:
 
 ```bash
-cargo run -p xtask -- gen-schemas
+bazel run //packages/xtask:xtask -- gen-schemas
 ```
 
 Then run the manifest parity and bundle drift gates so the Nix emitter,

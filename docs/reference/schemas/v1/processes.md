@@ -4,7 +4,7 @@
 
 Producer: `nixos-modules/manifest-processes.nix` emits this artifact; `packages/d2b-core` parses it.
 
-Schema: [`processes.json`](./processes.json) (forward reference; generated with `cargo xtask gen-schemas`).
+Schema: [`processes.json`](./processes.json) (forward reference; generated with `bazel run //packages/xtask:xtask -- gen-schemas`).
 
 ## Top-level fields
 

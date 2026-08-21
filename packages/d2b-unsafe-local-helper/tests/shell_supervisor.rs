@@ -404,7 +404,7 @@ fn exercise_helper_runtime_reconstruction(scratch: &Scratch, operation_suffix: &
         ),
         (
             "HOME".to_owned(),
-            user.home_dir().to_string_lossy().into_owned(),
+            scratch.path.display().to_string(),
         ),
     ]);
     environment.insert(

@@ -760,7 +760,7 @@ in
     # let-bindings directly. Both bindings remain available for the
     # daemon-native StoreSync surface, which will plumb them through
     # bundle.nix / processes-json.nix instead of re-exposing a
-    # readOnly NixOS option (issue #6 - see tests/static.sh trio lint).
+    # readOnly NixOS option (issue #6 - see the focused Nix checks).
     # ---------------------------------------------------------------------------
   };
 

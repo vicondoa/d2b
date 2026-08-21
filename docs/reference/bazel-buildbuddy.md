@@ -1,10 +1,10 @@
 # Bazel and BuildBuddy
 
 d2b uses one Bazel graph for the enforcing Layer-1 checks. Cargo manifests
-and the root `Cargo.lock` remain authoritative for Rust package membership,
-dependencies, features, and direct Cargo workflows. `rules_rs` supplies the
-Bazel-side Cargo integration; BUILD files record first-party edges and
-maintained rule exceptions only.
+and the root `Cargo.lock` remain authoritative metadata for Rust package
+membership, dependencies, and features consumed by rules_rs. BUILD files
+record first-party edges and maintained rule exceptions only; Cargo is not a
+contributor or CI gate.
 
 The normal entry point is:
 
@@ -14,10 +14,10 @@ make check
 
 ## One execution graph
 
-Bazel owns Layer-1 target selection, dependency ordering, parallelism, test
-caching, retry classification, and aggregation. Make targets are public
-compatibility aliases over fixed Bazel target sets. CI runs the same fixed
-sets with the local profile and exposes one stable required `check` result.
+Bazel owns Layer-1 dependency ordering, parallelism, test caching, retry
+classification, and aggregation. Make targets are public thin aliases over
+fixed Bazel target patterns and owner-local suites. CI runs the same fixed sets
+with the local profile and exposes one stable required `check` result.
 
 The primary aliases remain available:
 
@@ -30,7 +30,6 @@ make test-flake
 make test-nix-unit
 make test-policy
 make test-drift
-make test-runtime-ledger
 make test-fixture-contracts
 make test-unit
 make check
@@ -41,8 +40,9 @@ focused reruns. The complete aggregate is also available as
 `make bazel-check`.
 
 Do not add a second Cargo lock, exhaustive first-party source or dependency
-inventory, discovery job, or repository-owned scheduler. Add Rust files and tests in Cargo-conventional
-locations so the graph follows Cargo metadata and standard source globs.
+inventory, discovery job, or repository-owned scheduler. Add Rust files and
+tests in their owner-local Cargo-conventional locations so rules_rs metadata
+and Bazel BUILD targets remain aligned.
 
 ## Local and CI profiles
 
@@ -96,8 +96,8 @@ platform, remote policy, and credential-helper inputs listed in
 bytes:
 
 ```bash
-cargo run --quiet --locked -p xtask -- bazel-evidence security-digest
-cargo run --quiet --locked -p xtask -- bazel-evidence check-security
+bazel run //packages/xtask:xtask -- bazel-evidence security-digest
+bazel run //packages/xtask:xtask -- bazel-evidence check-security
 ```
 
 ## Redaction and failure output
@@ -128,8 +128,9 @@ fallback behavior identical to the normal graph.
 
 For an ordinary Rust change:
 
-1. Update Cargo source, tests, or manifests.
-2. Run the focused Cargo and Bazel labels.
+1. Update owner-local Rust source/tests or the Cargo metadata consumed by
+   rules_rs.
+2. Run the focused Bazel label.
 3. Run the affected public Make alias.
 
 For a dependency change, update Cargo manifests and the root lock first.
@@ -139,4 +140,21 @@ normal `.bazelrc` lockfile mode fails closed on stale resolution.
 Keep Nix assertions Nix-native through the existing Bazel adapters. Keep
 doctests, harness-free binaries, feature variants, fixtures, policy checks,
 and advisory leaves as explicit graph members. Do not replace them with a
+
+## Action-locality checks
+
+Use bounded Bazel queries when changing graph ownership. These checks describe
+the expected dependency shape without adding a second scheduler or inventory:
+
+| Representative change | Query | Expected shape |
+| --- | --- | --- |
+| USBIP Provider implementation | `bazel query 'rdeps(//packages/..., //packages/d2b-provider-device-usbip:d2b_provider_device_usbip)'` | The Provider's tests, `d2bd` composition/final link, and direct `d2b` integration tests only; no `d2bd-runtime`, `d2b-guestd`, sibling Provider, or foundational-contract target. |
+| Broker contract | `bazel query 'rdeps(//packages/..., //packages/d2b-contracts-broker:d2b_contracts_broker)'` | Broker/control-plane consumers only; resource-only and desktop interaction Providers remain absent. |
+| Network Nix surface | `bazel query 'kind("source file", deps(//bazel/checks/nix:nix-unit-network))'` | Only the network surface expression, its selected case, network modules, shared Nix evaluator helpers, and declared tools. Sibling Nix surfaces remain separate labels. |
+| Documentation-only | `bazel query 'rdeps(//..., //:docs/reference/bazel-buildbuddy.md)'` | Documentation/source-hygiene owners only; no product Rust test or Nix surface target. |
+| Cargo manifest or lock | `bazel query 'rdeps(//..., //:Cargo.lock)'` | Legitimate rules_rs/fixture consumers plus workspace-lock and supply-chain policies; unrelated documentation and Nix-unit labels remain absent. |
+
+Use `bazel aquery` for the affected owner label when action-level confirmation
+is needed. Keep any experiment in `.scratch/`; never commit a changed-file
+selector, cache-evidence pin, or generated action inventory. Do not replace them with a
 shell rollup or a second scheduler.

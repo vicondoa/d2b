@@ -1,9 +1,7 @@
 # Tracing contract (bounded-cardinality span attributes)
 
-> **Status**: codified in
-> `packages/d2b-contract-tests/tests/policy_contracts.rs`. The policy test is
-> advisory pull-request coverage until the fixture-contract lane is enabled
-> and promoted.
+> **Status**: codified in the daemon and broker owner-local tests and generated
+> artifact checks.
 
 The d2b daemon (`d2bd`) and the privileged broker
 (`d2b-broker`) both emit OpenTelemetry spans and structured
@@ -77,11 +75,9 @@ than emitting the path itself.
 
 ## How the contract is enforced
 
-1. **`packages/d2b-contract-tests/tests/policy_contracts.rs`** - the
-   `tracing_contract_lint` policy scans workspace Rust source for the forbidden
-   patterns above and fails if any match. It runs only when the advisory
-   fixture-contract lane is enabled, so it is not enforcing pull-request
-   evidence yet.
+1. **Owner-local daemon and broker tests** - the typed tracing and audit
+   surfaces reject the forbidden patterns above without a central source
+   scanner.
 2. **Audit-record fallback** - every operator-recoverable detail
    (paths, drift reasons, child stderr) lives in
    `OpAuditRecord.{typed_envelope,tracing_span_id}` (see

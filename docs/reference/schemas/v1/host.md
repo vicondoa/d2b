@@ -4,7 +4,7 @@
 
 Producer: `nixos-modules/manifest-host.nix` emits this artifact; `packages/d2b-core` parses it.
 
-Schema: [`host.json`](./host.json) (forward reference; generated with `cargo xtask gen-schemas`).
+Schema: [`host.json`](./host.json) (forward reference; generated with `bazel run //packages/xtask:xtask -- gen-schemas`).
 
 ## Top-level fields
 

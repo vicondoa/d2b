@@ -17,7 +17,7 @@ fi
 # Enforcing the budgets spins up daemon/broker/VM-start timing work that
 # contends for the shared host, so real runs must never bypass the sole-use
 # heavy-gate semaphore. This guard sits AFTER the D2B_PERF_STABLE skip so the
-# cheap SKIP path (the common case, including static.sh's direct invocation)
+# cheap SKIP path (the common case)
 # never acquires a slot. The mere presence of D2B_HEAVY_GATE is not trusted:
 # the shared helper verifies this process genuinely holds a slot and re-execs
 # through the gate exactly once when it does not.

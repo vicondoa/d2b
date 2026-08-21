@@ -26,7 +26,7 @@
 #   nix-instantiate --eval --strict --expr \
 #     "let f = import ./tests/unit/smoke/smoke-eval-aarch64.nix; r = f {}; in r.drvPath"
 #
-# Wired into tests/static.sh as a Layer-1 gate.
+# Wired into the fixed Bazel Layer-1 graph.
 
 { pkgs ? import <nixpkgs> { system = "aarch64-linux"; }
 , flakeRoot ? ./../../..

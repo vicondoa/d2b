@@ -1,2 +1,0 @@
-status = "retired"
-successor_ids = ["packages/xtask/tests/policy_ci.rs::ci_uses_make_allowlist_is_intentional_and_bounded"]

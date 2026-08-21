@@ -35,7 +35,7 @@ const PROTECTED_CODEOWNERS_RULES: &[&str] = &[
     "/packages/xtask/Cargo.toml @vicondoa",
     "/packages/xtask/src/main.rs @vicondoa",
     "/packages/xtask/src/production_closure.rs @vicondoa",
-    "/packages/d2b-contract-tests/tests/policy_production_closure.rs @vicondoa",
+    "/packages/xtask/tests/policy_production_closure.rs @vicondoa",
     "/Makefile @vicondoa",
     "/flake.nix @vicondoa",
     "/nixos-modules/guest-control.nix @vicondoa",
@@ -177,7 +177,7 @@ pub fn context_specs(root: &Path) -> Result<Vec<ContextSpec>, String> {
         .filter(|name| {
             !matches!(
                 *name,
-                "d2b-broker" | "d2b-guest-shell-runner" | "d2b-contract-tests" | "xtask"
+                "d2b-broker" | "d2b-guest-shell-runner" | "xtask"
             ) && (*name == "d2b" || name.starts_with("d2b-"))
         })
         .map(str::to_owned)

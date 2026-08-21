@@ -25,7 +25,7 @@ use d2b_realm_core::{
     RealmPath, RealmTarget, RealmTargetParseError, RealmTargetParser, RealmTransportBinding,
     TargetName, UnixSocketPath, WorkloadId,
 };
-use d2b_realm_router::{DispatchTarget, RealmEntrypointTable, ResolveError};
+use d2b_zone_routing::{DispatchTarget, RealmEntrypointTable, ResolveError};
 
 const DEFAULT_PUBLIC_SOCKET_PATH: &str = "/run/d2b/public.sock";
 const CLI_ROUTING_GENERATION: &str = "cli-routing-contract-v1";
@@ -803,7 +803,7 @@ pub fn gateway_hint(raw: &str) -> Result<Option<GatewayHint>, RouteError> {
 mod tests {
     use super::*;
     use d2b_realm_core::{EntrypointMode, RealmId};
-    use d2b_realm_router::RealmEntrypoint;
+    use d2b_zone_routing::RealmEntrypoint;
 
     fn realm(labels: &[&str]) -> RealmPath {
         RealmPath::new(labels.iter().map(|l| RealmId::parse(*l).unwrap()).collect()).unwrap()

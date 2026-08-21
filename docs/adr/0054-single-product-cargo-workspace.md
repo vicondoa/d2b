@@ -170,7 +170,6 @@ The main Cargo gate uses the root workspace and its documented exclusions:
 cargo clippy --locked --workspace --all-targets \
   --exclude d2b-priv-broker --exclude d2b-guest-shell-runner -- -D warnings
 cargo nextest run --locked --workspace \
-  --exclude d2b-contract-tests \
   --exclude d2b-priv-broker --exclude d2b-guest-shell-runner
 ```
 

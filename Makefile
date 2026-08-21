@@ -9,27 +9,27 @@
 SHELL := $(CURDIR)/tests/tools/scrub-shell-environment
 
 .PHONY: pre-tag smoke-lite \
-        check check-static check-ci check-all check-fast check-tier0 \
+        check check-ci check-all check-fast check-tier0 \
         bazel-check \
         test test-unit \
         test-lint test-rust test-rust-main \
         test-rust-broker test-rust-guest-shell-runner test-rust-local test-rust-no-bash-ast \
-        test-rust-schema test-rust-inventory test-rust-supply-chain \
+        test-rust-schema test-rust-supply-chain \
         test-rust-leaf-main-workspace \
-        test-rust-leaf-schema test-rust-leaf-inventory \
+        test-rust-leaf-schema \
         test-rust-leaf-fixture-contracts test-rust-leaf-broker \
         test-rust-leaf-guest-shell-runner test-rust-leaf-no-bash-ast \
         test-rust-leaf-supply-chain \
         test-fixture-contracts test-proofs test-flake test-flake-realized \
         test-flake-aarch64 test-flake-x86 test-nix-unit \
-        test-performance-budgets test-ci-coverage \
+        test-performance-budgets \
         test-drift test-policy test-integration test-host-integration perf \
         heavy-lane-guard heavy-lane-integration heavy-lane-host-integration \
         heavy-lane-perf \
         heavy-lane-pre-tag heavy-lane-smoke-lite \
         heavy-gate-build heavy-gate-provision heavy-check heavy-flake-check \
         heavy-test-integration heavy-test-host-integration \
-        runtime-ledger-pin clean
+        clean
 
 # Current Nix system double, used to address per-system flake.checks attrs.
 # Falls back to x86_64-linux if `nix` is unavailable (e.g. a docs-only host).
@@ -42,7 +42,6 @@ NIX_FLAKE := nix --extra-experimental-features 'nix-command flakes'
 # the fixed target lists are the only Make-side compatibility mapping.
 #
 #   make check          complete fixed Bazel Layer-1 gate.
-#   make check-static   Legacy monolithic tests/static.sh full-static gate.
 #   make check-ci       check + test-integration for local/manual compatibility.
 #   make check-all      check-ci + perf - full local NixOS gate.
 #   make test-<layer>   focused fixed Bazel suite.
@@ -56,11 +55,7 @@ NIX_FLAKE := nix --extra-experimental-features 'nix-command flakes'
 check:
 	$(BAZEL_RUN) $(D2B_BAZEL_COMPLETE_TARGETS)
 
-## check-static - legacy/full-static monolithic gate retained for explicit use.
-check-static:
-	bash tests/static.sh
-
-## check-ci - W0: run check, then skip or run legacy G-ci on a suitable host.
+## check-ci - run the fixed Layer-1 gate, then the conditional container lane.
 check-ci:
 	$(MAKE) check
 	$(MAKE) test-integration
@@ -71,14 +66,14 @@ check-all:
 	$(MAKE) perf
 
 ## check-fast / check-tier0 - fast PR-loop subsets.
-## check-fast is superseded by `make test-unit` (the new umbrella); left for
-## back-compat but now aliases to test-unit.
-check-fast: test-unit
+check-fast:
+	$(BAZEL_RUN) $(D2B_BAZEL_COMPLETE_TARGETS)
 check-tier0:
 	D2B_BAZEL_TEST_TAG_FILTERS="-gpu,-kvm" tests/tools/bazel-check --profile "$(D2B_BAZEL_PROFILE)" -- //bazel/checks/meta:tier0
 
 ## bazel-check - complete fixed Bazel graph. Locally this defaults to the
-## BuildBuddy remote profile; CI sets D2B_BAZEL_PROFILE=local.
+## BuildBuddy profile; the facade falls back to local execution when the
+## credential is unavailable. CI sets D2B_BAZEL_PROFILE=local.
 D2B_BAZEL_PROFILE ?= remote
 D2B_BAZEL_TEST_TAG_FILTERS ?= -manual,-gpu,-kvm
 
@@ -87,8 +82,6 @@ D2B_BAZEL_MAIN_TARGETS = \
 	//bazel/checks/rust/... \
 	-//packages/d2b-broker/... \
 	-//packages/d2b-guest-shell-runner/... \
-	-//packages/xtask:policy_ci \
-	-//packages/xtask:policy_workspace \
 	-//bazel/checks/rust:portable_rust_broker \
 	-//bazel/checks/rust:portable_rust_guest
 D2B_BAZEL_BROKER_TARGETS = //bazel/checks/rust:portable_rust_broker
@@ -96,6 +89,7 @@ D2B_BAZEL_GUEST_TARGETS = //bazel/checks/rust:portable_rust_guest
 D2B_BAZEL_LOCAL_RUST_TARGETS = //bazel/checks/rust:portable_rust_local
 D2B_BAZEL_POLICY_TARGETS = //bazel/checks/policy:policy_tooling
 D2B_BAZEL_NIX_EVAL_TARGETS = //bazel/checks/nix:nix_evaluation
+D2B_BAZEL_NIX_UNIT_TARGETS = //bazel/checks/nix:nix_unit
 D2B_BAZEL_NIX_REALIZED_TARGETS = //bazel/checks/nix:nix_realized
 D2B_BAZEL_NIX_AARCH64_TARGETS = //bazel/checks/nix:nix_aarch64
 D2B_BAZEL_FIXTURE_TARGETS = //bazel/checks/fixtures:fixtures_proofs
@@ -106,6 +100,7 @@ D2B_BAZEL_COMPLETE_TARGETS = \
 	$(D2B_BAZEL_LOCAL_RUST_TARGETS) \
 	$(D2B_BAZEL_POLICY_TARGETS) \
 	$(D2B_BAZEL_NIX_EVAL_TARGETS) \
+	$(D2B_BAZEL_NIX_UNIT_TARGETS) \
 	$(D2B_BAZEL_NIX_REALIZED_TARGETS) \
 	$(D2B_BAZEL_NIX_AARCH64_TARGETS) \
 	$(D2B_BAZEL_FIXTURE_TARGETS) \
@@ -134,7 +129,7 @@ bazel-check:
 # Sub-targets. Each target is a thin alias over one fixed Bazel label set.
 # ===========================================================================
 
-## test-lint - fixed Bazel lint suite.
+## test-lint - fixed Bazel source-hygiene and shell-lint suite.
 test-lint:
 	$(BAZEL_RUN) //bazel/checks/policy:lint
 
@@ -160,20 +155,23 @@ test-rust-no-bash-ast:
 test-rust-schema:
 	$(BAZEL_RUN) //packages/xtask:schema_reproducibility_test
 
-test-rust-inventory:
-	$(MAKE) check-tier0
-
 test-rust-supply-chain:
 	$(BAZEL_RUN) //bazel/checks/nix:flake-eval-x86-realized-supply-chain
 
-test-rust-leaf-main-workspace: test-rust-main
-test-rust-leaf-schema: test-rust-schema
-test-rust-leaf-inventory: test-rust-inventory
-test-rust-leaf-fixture-contracts: test-fixture-contracts
-test-rust-leaf-broker: test-rust-broker
-test-rust-leaf-guest-shell-runner: test-rust-guest-shell-runner
-test-rust-leaf-no-bash-ast: test-rust-no-bash-ast
-test-rust-leaf-supply-chain: test-rust-supply-chain
+test-rust-leaf-main-workspace:
+	$(BAZEL_RUN) $(D2B_BAZEL_MAIN_TARGETS)
+test-rust-leaf-schema:
+	$(BAZEL_RUN) //packages/xtask:schema_reproducibility_test
+test-rust-leaf-fixture-contracts:
+	$(BAZEL_RUN) $(D2B_BAZEL_FIXTURE_TARGETS)
+test-rust-leaf-broker:
+	$(BAZEL_RUN) $(D2B_BAZEL_BROKER_TARGETS)
+test-rust-leaf-guest-shell-runner:
+	$(BAZEL_RUN) $(D2B_BAZEL_GUEST_TARGETS)
+test-rust-leaf-no-bash-ast:
+	$(BAZEL_RUN) //tests/tools/no-bash-ast-walker:no_bash_ast_test
+test-rust-leaf-supply-chain:
+	$(BAZEL_RUN) //bazel/checks/nix:flake-eval-x86-realized-supply-chain
 
 ## test-fixture-contracts - fixed fixture and proof Bazel suite.
 test-fixture-contracts:
@@ -187,7 +185,8 @@ test-proofs:
 test-flake:
 	$(BAZEL_RUN) $(D2B_BAZEL_NIX_EVAL_TARGETS)
 
-test-flake-x86: test-flake
+test-flake-x86:
+	$(BAZEL_RUN) $(D2B_BAZEL_NIX_EVAL_TARGETS)
 
 test-flake-realized:
 	$(BAZEL_RUN) $(D2B_BAZEL_NIX_REALIZED_TARGETS)
@@ -211,9 +210,6 @@ test-policy:
 ## Hosted runners take the cheap skip path; pinned stable runners enforce it.
 test-performance-budgets:
 	$(BAZEL_RUN) //bazel/checks/meta:performance_budgets
-
-test-ci-coverage:
-	$(BAZEL_RUN) //bazel/checks/policy:policy_tooling
 
 ## test-integration - L2 podman container integration tests. Public heavy lane:
 ## it acquires a heavy-gate slot, then runs the raw work behind the gate so it
@@ -495,13 +491,6 @@ changelog-fold:
 	else \
 		nix develop --no-write-lock-file .#bazel -c bazel run --config=local //packages/xtask:xtask -- changelog-fold; \
 	fi
-## test-runtime-ledger - fixed Bazel runtime-budget policy target.
-test-runtime-ledger:
-	$(BAZEL_RUN) //bazel/checks/policy:runtime_ledger
-
-## runtime-ledger-pin - compatibility alias for the fixed runtime-ledger target.
-runtime-ledger-pin: test-runtime-ledger
-
 # ===========================================================================
 # Disk hygiene.
 #

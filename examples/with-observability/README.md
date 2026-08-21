@@ -73,7 +73,7 @@ host OTel collector
 This example is exercised by:
 
 - `tests/examples-with-observability-eval.sh`
-- the per-example flake-check loop in `tests/static.sh`
+- the fixed per-example flake-check lane
 
 To re-run the dedicated gate from the repo root:
 

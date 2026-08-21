@@ -84,8 +84,8 @@ then landed in protected `main` or `v3` only through a pull request.
 
 Concretely, the agent that owns a worktree:
 
-1. Verifies green on the worktree (`cargo test --workspace`, the
-   relevant `tests/*.sh` gates).
+1. Verifies green on the worktree (`make check`, or the relevant focused Bazel
+   labels).
 2. From the primary clone (`/home/paydro/projects/d2b`), fast-forwards (or
    octopus-merges, per the rules above) the worktree's `phase-<name>` branch
    into the owned feature/integration branch.
@@ -144,7 +144,7 @@ host, prefer `d2b down <vm> --apply` followed by
 
 ## Edit -> commit -> validate
 
-Commit before running `static.sh` / the smoke evals. Two reasons:
+Commit before running `make check` / the smoke evals. Two reasons:
 
 1. Untracked files are invisible to `nix flake check` (and to any
    eval that follows the same code path). Forgetting to `git add` a
@@ -223,8 +223,8 @@ sessions. Its focused operating detail is
   (use the `d2b_flake_ref` helper in `tests/lib.sh`), **never**
   `builtins.getFlake (toString $ROOT)`. A bare path makes Nix use the
   `path:` fetcher, which copies the ENTIRE working tree into the store -
-  including the multi-GiB `target` cargo artifacts (measured:
-  ~36 GB / 5+ min per cold eval, re-triggered every time a cargo build
+  including the multi-GiB build artifacts (measured:
+  ~36 GB / 5+ min per cold eval, re-triggered every time a build
   churns `target/`). `git+file://` copies only git-tracked files
   (`target/` is gitignored), turning a 5-minute eval into <1 s. Caveats:
   (a) `nix eval` is pure by default and needs `--impure` with git+file;
@@ -245,30 +245,11 @@ sessions. Its focused operating detail is
   `${TMPDIR:-/tmp}/d2b-static-timing.$$/`. Both moves are
   required so volatile files can't race
   `builtins.getFlake (toString $ROOT)` source-capture during flake-eval gates.
-- Rust worktrees do NOT share a cargo target directory. Each worktree
-  keeps its own `target/`; compiled-output dedup across
-  worktrees comes from `sccache` (`$SCCACHE_DIR`, default
-  `~/.cache/d2b-sccache`), wired by the `[build] rustc-wrapper` lines in
-  `.cargo/config.toml` and the sibling-workspace configs under
-  `packages/d2b-broker/`, `packages/d2b-guest-shell-runner/`, and
-  `packages/d2b-core/fuzz/`. A shared target dir is deliberately
-  avoided: cargo's target-dir lock is workspace-wide, so two worktrees
-  building concurrently at different SHAs would serialize pessimistically
-  and stomp each other's incremental caches. To bypass sccache locally
-  (e.g. when bisecting a compiler issue), set `RUSTC_WRAPPER=` or
-  `CARGO_BUILD_RUSTC_WRAPPER=` explicitly.
-- **Never clear `RUSTC_WRAPPER` to make a command work.** Every
-  `rustc-wrapper` line points at a repo-local `.cargo/rustc-wrapper.sh`
-  that uses sccache when it is on PATH and plain rustc when it is not, so
-  no environment needs the variable cleared to build. Naming
-  `sccache` directly used to make it a hard requirement, and the resulting
-  `RUSTC_WRAPPER=""` workaround spread into environments that *did* have
-  sccache and silently disabled the compiler cache. Clearing it is reserved
-  for a deliberate choice: running uncached (`D2B_NO_SCCACHE=1`, or CI
-  without `D2B_CI_SCCACHE=1`), or the compile-fail seal fixtures, which
-  clear every wrapper spelling because a caching wrapper that exits nonzero
-  under concurrent cargo invocations is indistinguishable from the fixture
-  failing for the wrong reason.
+- Rust worktrees keep separate Bazel output trees. Compiled-output dedup
+  across worktrees comes from the shared `sccache` directory
+  (`$SCCACHE_DIR`, default `~/.cache/d2b-sccache`) when the active Bazel
+  profile permits it; do not point multiple worktrees at one mutable output
+  directory.
 - **No linker and no alternative codegen backend are configured, and that is
   a measured decision rather than an oversight.** Both were tried on this
   tree and neither earned its place. mold, wired through
@@ -287,36 +268,11 @@ sessions. Its focused operating detail is
   and that environment variable **replaces** `build.rustflags` rather than
   merging with it, so a linker configured through `rustflags` is silently
   dead there.
-- Tests that shell out to `cargo` (the capability-seal guards in
-  `packages/d2b-bus/`, `packages/d2b-controller-toolkit/` and
-  `packages/d2b-resource-api/`) cache their
-  scratch trees between runs, keyed on a hash of `rustc -vV`. Compiled
-  artifacts are not portable across compiler versions, and the gate's
-  pinned toolchain routinely differs from a dev shell's, so an unkeyed
-  cache lets one poison the other. The first two live under
-  `.scratch/rust-test-cache/`, which CI restores as one cache surface. They
-  are several GB per worktree; delete that subtree to reclaim the space.
-- The `d2b-resource-api` seal instead caches to
-  `.scratch/resource-api-external-seals-<key>/`, deliberately outside that
-  restored surface. Its tree is 767 MB, and the Actions cache is a hard
-  repository-wide budget that is already fully subscribed, so carrying it
-  would evict entries whose cold rebuild costs far more than this fixture's
-  40 s. Do not move it under `rust-test-cache/` without first showing the
-  budget has room.
-- That seal proves the resource API compiled under forced `cfg(test)`, which
-  a warm tree would otherwise skip - so it discards that one crate's cargo
-  fingerprints before checking, keeping its dependencies warm. Both the
-  marker and the rustc wrapper live at fixed paths inside the tree: cargo
-  fingerprints `RUSTC_WRAPPER`, so a per-run wrapper path silently
-  invalidates everything and restores the cold build. The arrangement is
-  fail-closed - the marker is deleted at the start of every run, so if the
-  forcing ever stops working the marker is absent and the seal fails rather
-  than passing without proof.
 - The persistent-shell helper is intentionally excluded from the main
-  Rust workspace at `packages/d2b-guest-shell-runner/`. Run it by
-  manifest path (and with `--features real-libshpool` when checking the
-  real shpool bridge); the top-level Rust/static/supply-chain gates wire
-  it explicitly like the broker workspace.
+- The persistent-shell helper is intentionally excluded from the main
+  product workspace at `packages/d2b-guest-shell-runner/`. Its feature
+  variant remains a direct Bazel target, and the Rust, supply-chain, and
+  guest-runner aliases wire it explicitly like the broker workspace.
 - Run `nix-collect-garbage` after integrating a completed change when disk
 reclamation is needed.
 - For the operator host running heavy iteration: prune OLD
@@ -332,33 +288,33 @@ reclamation is needed.
   generations from 10 days of work, pinning 471 GiB) silently fills
   its disk. The gate's default post-`nix store gc` only removes
   unreferenced paths, never old generations.
-- `tests/static.sh` can run an opt-in deep GC after the gate:
+- Run an opt-in deep GC separately from the Layer-1 gate:
 
   ```
-  D2B_POST_GATE_DEEP_GC=1 bash tests/static.sh           # user gens only
+  D2B_POST_GATE_DEEP_GC=1 nix-collect-garbage --delete-older-than 7d
   D2B_POST_GATE_DEEP_GC=1 \
   D2B_POST_GATE_DEEP_GC_SUDO=1 \
-  bash tests/static.sh                                  # + system gens
+  sudo -n nix-collect-garbage --delete-older-than 7d   # + system gens
   ```
 
-  `D2B_POST_GATE_DEEP_GC_SUDO=1` uses `sudo -n` and skips fail-open
+  The sudo form uses `sudo -n` and skips fail-open
   with a clear log if passwordless sudo isn't available. Threshold
   defaults to 7 days; override with `D2B_POST_GATE_DEEP_GC_DAYS=N`.
   Off by default - this is operator policy, not gate policy.
 - `D2B_SKIP_WITH_ENTRA_ID=1` skips the per-example flake check for
   `examples/with-entra-id` when its pinned `vicondoa/entrablau.nix`
-  input fails the per-example cargo fetch with a transient crates.io
-  403 against `libhimmelblau-0.8.18` / `kanidm-hsm-crypto-0.3.6`.
-  `tests/static.sh` performs one in-band retry before failing the
-  example; the skip knob is an explicit, reviewable carve-out used only after the retry also fails. Added with the integration merge; re-evaluate once the entra-id input bumps past
+  input fails a per-example Nix fetch with a transient upstream 403.
+  The skip knob is an explicit, reviewable carve-out used when the example
+  input is unavailable. Added with the integration merge; re-evaluate once the
+  entra-id input bumps past
   the affected revision.
 - Before `git worktree remove`, delete the worktree's real
   `target/` (every worktree has one; there is no shared-cache
   symlink) so the removal reclaims its multi-GiB build artifacts.
   Rebuilds in a fresh worktree stay cheap because sccache retains the
   compiled outputs.
-- `make clean` does that sweep for the current worktree: every cargo
-  target directory, the `.scratch/` tree, then `nix-collect-garbage`. It
+- `make clean` does that sweep for the current worktree: every build output
+directory, the `.scratch/` tree, then `nix-collect-garbage`. It
   keeps `$SCCACHE_DIR` for the reason above, and deletes no file outside
   the worktree, because sibling worktrees own their artifacts and may
   have work in flight - the store collection is the one step with

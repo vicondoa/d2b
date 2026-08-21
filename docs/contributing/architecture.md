@@ -127,10 +127,8 @@ New per-VM work belongs **inside the daemon's DAG executor**
 (`packages/d2bd-runtime/src/supervisor/`), with privileged effects routed through a
 typed `d2b-broker` op declared in `packages/d2b-contracts/` and audited in
 `/var/lib/d2b/audit/broker-<utc-date>.jsonl`. Do not introduce a
-`systemd.services.*` declaration in `nixos-modules/` for per-VM work. Denylist
-coverage lives in
-`packages/d2b-contract-tests/tests/policy_units.rs`; run the enabled
-fixture-contract lane when changing this surface. See
+`systemd.services.*` declaration in `nixos-modules/` for per-VM work. Denylist coverage is owner-local or structural; run the focused
+Nix-unit and daemon tests when changing this surface. See
 [`docs/explanation/daemon-lifecycle.md`](../explanation/daemon-lifecycle.md)
 for the DAG node taxonomy and
 [`docs/reference/privileges.md`](../reference/privileges.md) for
@@ -138,5 +136,4 @@ the broker op catalogue.
 
 Adding or reclassifying a spawned runner `ProcessRole` also needs matching
 process-builder and role coverage: add or extend the typed Rust argv builder
-in the owning Provider crate and role coverage policy/contract tests under
-`packages/d2b-contract-tests/tests/` in the same change.
+and owner-local tests in the owning Provider crate in the same change.

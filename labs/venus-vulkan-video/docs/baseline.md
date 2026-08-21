@@ -380,7 +380,7 @@ nixpkgs builds Firefox with `cairo-gtk3-wayland`.
 | Stock Firefox 153 packaged, prefs-only, no source patch | ✅ |
 | Guest image builds; closure contains lab Mesa | ✅ |
 | `run-lab-vm.sh` written + shellchecked | ✅ |
-| Root gates green with `labs/` present | ✅ `test-lint`, `policy_cli_consumers`, `policy_source` |
+| Root gates green with `labs/` present | ✅ `test-lint`, source hygiene |
 | Launcher executed end-to-end (VM boots to graphical target) | ✅ **PASS** |
 | Guest `vulkaninfo` baseline from inside the booted VM | ✅ **CAPTURED** |
 | Guest ICD proven to be lab Mesa, from inside the guest | ✅ **PASS** |

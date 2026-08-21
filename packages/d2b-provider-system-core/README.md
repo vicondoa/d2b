@@ -72,6 +72,5 @@ representable in either, and both render redacted through `Debug`.
 ## Build and test
 
 ```bash
-cargo test -p d2b-provider-system-core
-cargo clippy -p d2b-provider-system-core --all-targets
+bazel test //packages/d2b-provider-system-core:d2b_provider_system_core_test
 ```

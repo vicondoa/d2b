@@ -27,9 +27,7 @@ all snapshots add one test-only module:
 ```
 
 The retired shell snapshot generator has no current command-line successor.
-Current expectations live in
-`packages/d2b-contract-tests/tests/runner_shape_contract.rs` and are checked
-against the full rendered fixture when the fixture-contract lane is enabled.
+Current expectations live in owner-local runner and generated-artifact checks.
 
 The inspected runner path was:
 
@@ -200,10 +198,8 @@ parity oracle during the transition.
   cloud-hypervisor ...` line extracted from that runner's
   `bin/microvm-run`.
 
-`packages/d2b-contract-tests/tests/runner_shape_contract.rs` compares rendered
-fixture data with the committed snapshots. That contract is advisory until the
-fixture-contract lane is enabled and promoted; it is not executed by
-`test-rust` or the flake shards.
+Owner-local runner checks compare rendered fixture data with the committed
+snapshots.
 
 A future microvm.nix, nixpkgs, component, or d2b option change that
 alters runner shape must update this audit, explain the intended drift,

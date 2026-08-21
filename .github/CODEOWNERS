@@ -10,7 +10,7 @@
 /packages/xtask/Cargo.toml @vicondoa
 /packages/xtask/src/main.rs @vicondoa
 /packages/xtask/src/production_closure.rs @vicondoa
-/packages/d2b-contract-tests/tests/policy_production_closure.rs @vicondoa
+/packages/xtask/tests/policy_production_closure.rs @vicondoa
 /Makefile @vicondoa
 /flake.nix @vicondoa
 /nixos-modules/guest-control.nix @vicondoa

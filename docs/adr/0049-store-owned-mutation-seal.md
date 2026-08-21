@@ -1283,22 +1283,11 @@ section to `docs/contributing/critical-subsystems.md`, headed
 `packages/d2b-resource-store/src/mutation_seal.rs` and carrying invariants 1
 through 11 above.
 
-That row is the reason `make test-rust` is not a sufficient stopping condition
-for this wave, and the gap is measured, not hypothetical. `test-rust` excludes
-`d2b-contract-tests`, which is where `policy_docs.rs` enforces a 40,000-byte
-ceiling on `AGENTS.md`; the file is 38,812 bytes at this branch tip, leaving
-1,188 bytes of headroom that one critical-subsystem row can plausibly consume.
-The same excluded crate holds `policy_dash_gate.rs` and `policy_lints.rs`,
-which read `AGENTS.md` and `docs/adr/README.md`, and `policy_units.rs` and
-`policy_docs.rs`, which the daemon-only rule already requires for any doc row
-describing a control-plane surface. Wave A changes both documents and eleven
-the resource mutation policy lint, so it must run the lane that covers it.
-
-`make test-fixture-contracts` refuses to run unless `D2B_ENABLE_FIXTURE_BUILD`
-is `1`: the fixture Bazel target fails with "fixture-contracts mode requires
-D2B_ENABLE_FIXTURE_BUILD=1; refusing to report a skipped gate as passing". The
-fixed Layer-1 workflow sets it in its fixture lane; a hand-run
-stopping condition has to set it too, or it is not a stopping condition.
+That row is the reason the resource-store tests alone are not a sufficient
+stopping condition for this wave. The fixed Bazel graph also runs the
+repository source-hygiene policy and the owner-local rendered-fixture
+contracts. The retired central policy crate and its historical document-size
+ratchet are not part of the current authority.
 
 Done when all of the following hold:
 
@@ -1317,8 +1306,8 @@ rg -n 'StoreSlot' packages/d2b-contracts \
    packages/d2b-resource-store-redb/src/values.rs \
    packages/d2b-resource-store-redb/src/schema.rs                               # exit 1
 cargo test -p d2b-resource-api --test external_seals                               # exit 0
-cargo test -p d2b-contract-tests --test policy_resource_mutation_seal              # exit 0
-D2B_ENABLE_FIXTURE_BUILD=1 make test-fixture-contracts                             # exit 0
+make test-policy                                                                   # exit 0
+make test-fixture-contracts                                                        # exit 0
 ```
 
 The `StoreSlot` grep is invariant 10's "never serialized, never on the wire" as

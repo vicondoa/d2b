@@ -99,12 +99,10 @@ mod delivery;
 mod gen_resource_schemas;
 mod heavy_gate;
 mod inventory;
-mod process_marker_pin;
 mod production_closure;
 mod provider_crate_policy;
 mod provider_packaging;
 mod semantic_service_schemas;
-mod test_runtime_ledger;
 mod zone_schema;
 
 const SCHEMA_VERSION: &str = "v2";
@@ -442,29 +440,12 @@ fn main() -> std::process::ExitCode {
                 }
             }
         }
-        [command] if command == "process-marker-pin" => run_process_marker_pin(),
         [command] if command == "check-provider-crate-layout" => run_provider_crate_layout(),
         [command] if command == "check-provider-layout" => run_provider_layout(),
-        [command, rest @ ..] if command == "test-runtime-ledger" => {
-            test_runtime_ledger::run_cli(rest)
-        }
         _ => {
             eprintln!(
-                "usage: cargo run --manifest-path Cargo.toml -p xtask -- <gen-schemas|gen-zone-storage-schema|gen-cli-schemas|gen-zone-schemas|gen-zone-nix-options|gen-resource-schemas|gen-error-codes|gen-provider-packaging|gen-semantic-service-schemas|gen-cli-shell-artifacts|gen-guest-proto|gen-guest-ttrpc|gen-resource-proto|gen-resource-ttrpc|gen-daemon-api|gen-package-policy-inputs [--check|--write]|release-notes <version>|adr0035-inventory [--output <path>]|changelog-fold [--check]|bazel-evidence <check-security|security-digest|classify-failure|redact-log> ...|process-marker-pin|check-provider-crate-layout|check-provider-layout|test-runtime-ledger <record|check|lint|help> [options]|redact-diagnostics --repo-root <path> [--home <path>] [--tail-lines <count>]|delivery wave <snapshot|validate-import|recovery-import|seal|merge-target|merge-eligibility|help> [options]|heavy-gate <-- <command> [args...] | verify-slot>>"
+                "usage: cargo run --manifest-path Cargo.toml -p xtask -- <gen-schemas|gen-zone-storage-schema|gen-cli-schemas|gen-zone-schemas|gen-zone-nix-options|gen-resource-schemas|gen-error-codes|gen-provider-packaging|gen-semantic-service-schemas|gen-cli-shell-artifacts|gen-guest-proto|gen-guest-ttrpc|gen-resource-proto|gen-resource-ttrpc|gen-daemon-api|gen-package-policy-inputs [--check|--write]|release-notes <version>|adr0035-inventory [--output <path>]|changelog-fold [--check]|bazel-evidence <check-security|security-digest|classify-failure|redact-log> ...|check-provider-crate-layout|check-provider-layout|redact-diagnostics --repo-root <path> [--home <path>] [--tail-lines <count>]|delivery wave <snapshot|validate-import|recovery-import|seal|merge-target|merge-eligibility|help> [options]|heavy-gate <-- <command> [args...] | verify-slot>>"
             );
-            std::process::ExitCode::FAILURE
-        }
-    }
-}
-
-fn run_process_marker_pin() -> std::process::ExitCode {
-    let result = repo_root()
-        .map_err(|error| error.to_string())
-        .and_then(process_marker_pin::check);
-    match result {
-        Ok(()) => std::process::ExitCode::SUCCESS,
-        Err(error) => {
-            eprintln!("process-marker-pin failed: {error}");
             std::process::ExitCode::FAILURE
         }
     }

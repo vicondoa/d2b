@@ -677,14 +677,14 @@ systemctl list-units --no-pager --all \
   | grep -E '^(d2b|microvm)' | wc -l
 # Expected: 3   (d2bd.service + d2b-priv-broker.{service,socket})
 
-# Default-flip eval gate (tests/daemon-default-compat-eval.sh) asserts
+# Default-flip eval case asserts
 # the gate honors readiness + evidence + operator override
-# semantics. It is wired into tests/static.sh.
-bash tests/daemon-default-compat-eval.sh
+# semantics. It is wired into the fixed Nix-unit graph.
+make test-nix-unit
 
 # Confirm the wave-evidence schema is consistent across the live
 # config + the canonical schema.
-bash tests/wave-evidence-schema-eval.sh
+make test-drift
 ```
 
 If `host validate --apply` reports any `missing` wave, the verb

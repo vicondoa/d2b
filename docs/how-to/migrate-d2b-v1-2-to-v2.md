@@ -403,7 +403,7 @@ does not require moving `/var/lib/d2b/vms/<vm>`.
 
 - [Realm option schema](../reference/realm-options.md)
 - [Realm controller configuration](../reference/realm-controller-config.md)
-- [Realm access resolver](../reference/realm-access-resolver.md)
+- [Realm core reference](../reference/realm-core.md)
 - [Provider-managed sandboxes](../reference/provider-managed-sandboxes.md)
 - [Remote full-host nodes](../reference/remote-full-host-nodes.md)
 - [Display and virtual I/O capabilities](../reference/display-io-capabilities.md)

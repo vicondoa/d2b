@@ -19,7 +19,6 @@ rust_library(
         "//packages/d2b-provider-runtime-azure-container-apps:d2b_provider_runtime_azure_container_apps",
         "//packages/d2b-provider-transport-azure-relay:d2b_provider_transport_azure_relay",
         "//packages/d2b-realm-core:d2b_realm_core",
-        "//packages/d2b-realm-provider:d2b_realm_provider",
     ] + all_crate_deps(normal = True, cargo_only = True),
 )
 
@@ -37,7 +36,6 @@ rust_library(
         "//packages/d2b-provider-runtime-azure-container-apps:d2b_provider_runtime_azure_container_apps_test_support",
         "//packages/d2b-provider-transport-azure-relay:d2b_provider_transport_azure_relay_test_support",
         "//packages/d2b-realm-core:d2b_realm_core",
-        "//packages/d2b-realm-provider:d2b_realm_provider",
     ] + all_crate_deps(normal = True, cargo_only = True),
 )
 
@@ -69,7 +67,6 @@ rust_test(
     crate = ":d2b_gateway_runtime",
     deps = [
         "//packages/d2b-realm-core:d2b_realm_core",
-        "//packages/d2b-realm-provider:d2b_realm_provider",
     ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
 )
 

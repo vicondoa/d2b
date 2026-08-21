@@ -78,12 +78,12 @@ let
     };
     p6 = {
       implementedDescription = "legacy systemd template emission + bash CLI removed (clean break; v1.0 retains the supervisor option for backward-compat with consumer flakes pinning pre-v1.0 manifests, see ADR 0015 § Decision)";
-      validatedDescription = "Validated via tests/legacy-unit-denylist-eval.sh + tests/static.sh green";
+      validatedDescription = "Validated via the fixed Bazel Layer-1 graph";
       implementedDefault = false;
     };
     p7 = {
       implementedDescription = "docs blast-radius + v1.0 cut shipped";
-      validatedDescription = "Validated via static.sh + per-example flake-check green";
+      validatedDescription = "Validated via the fixed Bazel and flake checks";
       implementedDefault = false;
     };
   };

@@ -5,25 +5,14 @@ def _nix_fixture_impl(ctx):
         output = source_manifest,
         content = "\n".join([source.path for source in ctx.files.srcs]) + "\n",
     )
-    inputs = depset(
-        ctx.files.srcs + [
-            ctx.file.flake,
-            ctx.file.materializer,
-            source_manifest,
-        ],
-    )
+    inputs = depset(ctx.files.srcs + [ctx.file.flake, source_manifest])
     ctx.actions.run_shell(
         inputs = inputs,
-        tools = [
-            ctx.executable.nix,
-            ctx.executable.python3,
-        ],
+        tools = [ctx.executable.nix],
         outputs = [output],
         arguments = [
             ctx.executable.nix.path,
-            ctx.executable.python3.path,
             ctx.file.flake.path,
-            ctx.file.materializer.path,
             output.path,
             ctx.attr.variant,
             source_manifest.path,
@@ -32,12 +21,10 @@ def _nix_fixture_impl(ctx):
 set -eu
 export PATH=/run/current-system/sw/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:$PATH
 nix_bin="$1"
-python_bin="$2"
-flake="$3"
-materializer="$4"
-out="$5"
-variant="$6"
-source_manifest="$7"
+flake="$2"
+out="$3"
+variant="$4"
+source_manifest="$5"
 source="$out.source"
 rm -rf "$source"
 mkdir -p "$source"
@@ -58,16 +45,6 @@ case "$variant" in
       "path:$root#checks.${system}.fixture-smoke")"
     cp -R "$store_path"/. "$out"/
     ;;
-  full)
-    system="$("$nix_bin" eval --raw --impure --expr builtins.currentSystem)"
-    [ "$system" = x86_64-linux ] || exit 0
-    json="$out/eval-fixture.json"
-    "$nix_bin" eval --quiet --no-write-lock-file --no-warn-dirty --json --apply \
-      "fixtureFor: (fixtureFor \\"$system\\").full" \
-      "path:$root#lib.evalFixture" > "$json"
-    "$python_bin" "$materializer" "$json" "$out"
-    rm -f "$json"
-    ;;
   *)
     printf 'unknown fixture variant: %s\\n' "$variant" >&2
     exit 2
@@ -82,13 +59,7 @@ nix_fixture = rule(
     implementation = _nix_fixture_impl,
     attrs = {
         "flake": attr.label(allow_single_file = True),
-        "materializer": attr.label(allow_single_file = True),
         "nix": attr.label(
-            allow_single_file = True,
-            cfg = "exec",
-            executable = True,
-        ),
-        "python3": attr.label(
             allow_single_file = True,
             cfg = "exec",
             executable = True,

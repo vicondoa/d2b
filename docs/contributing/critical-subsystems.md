@@ -55,7 +55,7 @@ Graphics VMs run cloud-hypervisor with the GPU device attached. Restarting `d2bd
 
 **Where:** `nixos-modules/components/video/guest.nix`, `nixos-modules/processes-json.nix`, `pkgs/vhost-user-video/`, `packages/d2b-provider-device-gpu/src/video_argv.rs`, broker `SpawnRunner{role: Video}`
 
-`graphics.videoSidecar = true` is an explicit opt-in H264 decode path: guest `virtio_media` + patched Cloud Hypervisor `--vhost-user-media` + patched crosvm `device video-decoder --backend vaapi`. No per-VM video systemd unit, no stock crosvm/CH fallback, and no free-form video extra args. The video runner MUST use the dedicated `d2b-<vm>-video` principal, not `d2b-<vm>-gpu`, so broker/activation ACLs can deny host Wayland/PipeWire/Pulse sockets to video without breaking GPU cross-domain. The broker masks `/dev` for the video runner and exposes only the declared device allowlist: default `/dev/dri/renderD128`, plus `/dev/nvidiactl`, `/dev/nvidia0`, and `/dev/nvidia-uvm` only when `graphics.videoNvidiaDecode = true`. `virtio_media` is a guest module, not a host `/proc/modules` preflight requirement. Firefox/VA-API uses the separate experimental `graphics.virglVideo` GPU path; it is default-off and must not be treated as stable video-sidecar coverage. Validate evaluated shape with `tests/unit/nix/cases/video-contract.nix`; rendered argv and sandbox coverage lives in `packages/d2b-contract-tests/tests/minijail_swtpm_video.rs` and runs in the enforcing fixture-contract lane.
+`graphics.videoSidecar = true` is an explicit opt-in H264 decode path: guest `virtio_media` + patched Cloud Hypervisor `--vhost-user-media` + patched crosvm `device video-decoder --backend vaapi`. No per-VM video systemd unit, no stock crosvm/CH fallback, and no free-form video extra args. The video runner MUST use the dedicated `d2b-<vm>-video` principal, not `d2b-<vm>-gpu`, so broker/activation ACLs can deny host Wayland/PipeWire/Pulse sockets to video without breaking GPU cross-domain. The broker masks `/dev` for the video runner and exposes only the declared device allowlist: default `/dev/dri/renderD128`, plus `/dev/nvidiactl`, `/dev/nvidia0`, and `/dev/nvidia-uvm` only when `graphics.videoNvidiaDecode = true`. `virtio_media` is a guest module, not a host `/proc/modules` preflight requirement. Firefox/VA-API uses the separate experimental `graphics.virglVideo` GPU path; it is default-off and must not be treated as stable video-sidecar coverage. Validate evaluated shape with `tests/unit/nix/cases/video-contract.nix`; rendered argv and sandbox behavior are covered by the owning provider and broker tests.
 
 ## UI color contract / niri backend
 
@@ -139,6 +139,38 @@ inventory, snapshot, or nested fixture workspace is required.
 
 Controller and core-reconciliation engines are test-only and unwired from the absent production store/watch dispatcher. An EffectPort call is permitted only after durable resource commit and consumption of the matching `CommittedRevisionProof`; abort, conflict, stale proof, or restart ambiguity cannot release an effect. Preserve per-resource single flight, bounded fair admission, deterministic owner/dependency propagation, and restart-safe idempotency when wiring the production path.
 
+## Controller assignment and scoped routing
+
+**Where:** `packages/d2b-contracts-provider/src/v3/provider.rs`, `packages/d2b-core-controller/src/controller_assignment.rs`, `packages/d2b-bus/src/{authorization,router,session_seam_tests}.rs`, and `packages/d2bd/tests/resource_operator_activation.rs`
+
+Provider manifests carry a closed controller placement contract:
+`instanceScope`, supported target kinds, per-target component artifacts, and
+required EffectPort classes. Core owns one assignment registry. Each lease
+binds the resource UID and revision, provider and controller generations,
+controller role, exact target, session generation, and assignment epoch.
+Target readiness, role scope, and resource placement are checked without a
+fallback target.
+
+Resource-client leases are non-clonable and cannot widen their query or
+mutation scope. Queries always add the assignment-owned resource filter and
+reject caller-supplied attempts to replace it; mutating verbs carry the same
+assignment identity. Scoped commit transport is versioned, size-bounded, and
+rejects stale, forged, released, or revoked-session evidence. Host and Guest
+controller routes therefore remain target-scoped and single-owner across
+reconnects and handoff.
+
+## Broker host and guest profiles
+
+**Where:** `packages/d2b-broker/src/{runtime,protocol}.rs`, `packages/d2b-broker/tests/{guest_profile,host_profile,profile_separation}.rs`, `nixos-modules/{host-broker,guest-broker}.nix`, and `tests/unit/nix/surfaces/broker-profiles.nix`
+
+The broker profile is selected only at process start. Host and Guest
+instances have distinct authority, socket, state, and audit bindings; a
+request cannot select or switch profiles. The Guest profile admits only its
+closed local operation set and rejects host-only effects before bundle
+dispatch or mutation, while the Host profile retains the complete host
+operation catalog. Keep these checks in the owner-local broker tests and
+broker profile Nix cases; do not restore the retired central policy package.
+
 ## Unsafe-local provider, launcher, and persistent-shell helper
 
 **Where:** `nixos-modules/options-realms-workloads.nix`, `nixos-modules/unsafe-local-workloads-json.nix`, `packages/d2b-core/src/unsafe_local_workloads.rs`, `packages/d2b-contracts-control/src/unsafe_local_wire.rs`, `packages/d2b-unsafe-local-helper/src/{shell_runtime,shell_supervisor,shell_socket,output_ring,tty_exec}.rs`, and `docs/reference/unsafe-local-provider.md`
@@ -149,7 +181,7 @@ Controller and core-reconciliation engines are test-only and unwired from the ab
 
 **Where:** `docs/reference/manifest-schema.{md,json}` + `nixos-modules/manifest.nix`
 
-Version-pinned via `manifestVersion`. Adding, removing, or renaming a per-VM field requires bumping the version, updating the schema, and noting it in the CHANGELOG. The `static.sh` md↔json drift gate catches partial updates.
+Version-pinned via `manifestVersion`. Adding, removing, or renaming a per-VM field requires bumping the version, updating the schema, and noting it in the CHANGELOG. The generated-artifact drift gate catches partial updates.
 
 ## Manifest bundle - private artifacts
 
@@ -159,9 +191,9 @@ Sensitive bundle artifacts install at `root:d2bd` 0640 and ground every broker/s
 
 ## Control plane - `d2bd` + `d2b-broker`
 
-**Where:** `packages/d2b-contracts/**` + `packages/d2b-core/**` + `packages/d2bd/**` + `packages/d2b-broker/**` (sibling workspace; `unsafe_code = "deny"` with quarantined `src/sys.rs` for fd-passing FFI) + `packages/d2b/**` + `docs/reference/{cli-contract,daemon-api,error-codes,privileges}.md` + the daemon Layer-1 gate set in `tests/static.sh`
+**Where:** `packages/d2b-contracts/**` + `packages/d2b-core/**` + `packages/d2bd/**` + `packages/d2b-broker/**` (sibling workspace; `unsafe_code = "deny"` with quarantined `src/sys.rs` for fd-passing FFI) + `packages/d2b/**` + `docs/reference/{cli-contract,daemon-api,error-codes,privileges}.md` + the fixed daemon Layer-1 gate set
 
-The **only** persistent root surfaces the framework declares. `d2b-broker.socket` is socket-activated: systemd creates/binds/listens/sets-ACL before the broker starts; the broker adopts fd 3 via `SD_LISTEN_FDS` and MUST NOT self-bind, self-fchmod, or self-fchown when `SD_LISTEN_FDS=1`. `d2bd.service` carries `Wants=d2b-broker.socket` (not `Requires=`) so the daemon keeps serving while the broker is idle. The broker reloads the current bundle resolver per accepted request so it does not dispatch stale runner intents after a switch. The broker drops to the `d2bd` group and uses `SO_PEERCRED` at accept time for authz (launcher / admin / deny). Every host mutation flows through a typed broker op (cgroup v2 delegation, TAP/bridge lifecycle, `ApplyNftables`, `ApplyNmUnmanaged`, `ApplySysctl`, `UpdateHostsFile`, `ModprobeIfAllowed`, `UsbipBindFirewallRule`, `SpawnRunner`, `OpenPidfd`) and is recorded as an `OpAuditRecord` in `/var/lib/d2b/audit/broker-<utc-date>.jsonl` (root-owned `0640 root:d2bd`, append-only `O_APPEND`, daily rotation, 14-day default retention overridable via `d2b.site.audit.retentionDays`). Relevant enforcing coverage includes `tests/unit/nix/cases/broker-socket-activation.nix`, `tests/unit/nix/cases/broker-caps.nix`, and daemon startup integration tests under `packages/d2bd/tests/`. The legacy-unit policy lives in `packages/d2b-contract-tests/tests/policy_units.rs` and runs in the enforcing fixture-contract lane. See [ADR 0015](../adr/0015-daemon-only-clean-break.md).
+The **only** persistent root surfaces the framework declares. `d2b-broker.socket` is socket-activated: systemd creates/binds/listens/sets-ACL before the broker starts; the broker adopts fd 3 via `SD_LISTEN_FDS` and MUST NOT self-bind, self-fchmod, or self-fchown when `SD_LISTEN_FDS=1`. `d2bd.service` carries `Wants=d2b-broker.socket` (not `Requires=`) so the daemon keeps serving while the broker is idle. The broker reloads the current bundle resolver per accepted request so it does not dispatch stale runner intents after a switch. The broker drops to the `d2bd` group and uses `SO_PEERCRED` at accept time for authz (launcher / admin / deny). Every host mutation flows through a typed broker op (cgroup v2 delegation, TAP/bridge lifecycle, `ApplyNftables`, `ApplyNmUnmanaged`, `ApplySysctl`, `UpdateHostsFile`, `ModprobeIfAllowed`, `UsbipBindFirewallRule`, `SpawnRunner`, `OpenPidfd`) and is recorded as an `OpAuditRecord` in `/var/lib/d2b/audit/broker-<utc-date>.jsonl` (root-owned `0640 root:d2bd`, append-only `O_APPEND`, daily rotation, 14-day default retention overridable via `d2b.site.audit.retentionDays`). Relevant enforcing coverage includes `tests/unit/nix/cases/broker-socket-activation.nix`, `tests/unit/nix/cases/broker-caps.nix`, and daemon startup integration tests under `packages/d2bd/tests/`. Security-critical behavior remains owner-local or structural. See [ADR 0015](../adr/0015-daemon-only-clean-break.md).
 
 ## Storage lifecycle / restart / synchronization
 
@@ -203,7 +235,7 @@ The framework owns `${cfg.site.keysDir}/<vm>_ed25519`. `d2b keys rotate` MUST NO
 
 **Where:** `nixos-modules/minijail-profiles.nix` (virtiofsdProfiles), `packages/d2b-broker/src/sys.rs` (`clone3_spawn_runner` user-NS path), `nixos-modules/processes-json.nix` (argv emit)
 
-virtiofsd profiles MUST declare zero host capabilities (`capabilities = []`), `requiresStartRoot = false`, and a `userNamespace` block mapping in-NS UID/GID 0 to the per-share principal. Normal VM shares map to `d2b-<vm>-runner`; the guest-control token share (`d2b-gctl`) maps to the narrower `d2b-<vm>-gctlfs` principal. The broker pre-establishes the user namespace via `clone3(CLONE_NEWUSER)` + `pipe2` sync + `/proc/<pid>/uid_map` writes BEFORE virtiofsd's first instruction runs. virtiofsd argv MUST include `--sandbox=chroot --inode-file-handles=never` and `--readonly` for every `readOnly` share (`ro-store`, `d2b-gctl`). Reintroducing host caps, `requiresStartRoot=true`, or `--sandbox=namespace` violates [ADR 0021](../adr/0021-broker-user-namespace-for-virtiofsd.md). Rendered profile and argv coverage lives in `packages/d2b-contract-tests/tests/minijail_roles.rs` and runs in the enforcing fixture-contract lane.
+virtiofsd profiles MUST declare zero host capabilities (`capabilities = []`), `requiresStartRoot = false`, and a `userNamespace` block mapping in-NS UID/GID 0 to the per-share principal. Normal VM shares map to `d2b-<vm>-runner`; the guest-control token share (`d2b-gctl`) maps to the narrower `d2b-<vm>-gctlfs` principal. The broker pre-establishes the user namespace via `clone3(CLONE_NEWUSER)` + `pipe2` sync + `/proc/<pid>/uid_map` writes BEFORE virtiofsd's first instruction runs. virtiofsd argv MUST include `--sandbox=chroot --inode-file-handles=never` and `--readonly` for every `readOnly` share (`ro-store`, `d2b-gctl`). Reintroducing host caps, `requiresStartRoot=true`, or `--sandbox=namespace` violates [ADR 0021](../adr/0021-broker-user-namespace-for-virtiofsd.md). Rendered profile and argv coverage is owned by the provider and broker tests.
 
 ## cgroup slice naming and ownership markers
 

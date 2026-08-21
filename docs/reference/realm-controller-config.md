@@ -101,7 +101,7 @@ names, or command bytes through the host daemon to get work done.
 Realm controller rows reserve the host-local state and audit locations where a
 future controller can persist identity lifecycle state. The identity contract
 itself lives in
-[`d2b-realm-core`](./realm-identity-lifecycle.md) and the generated
+[`d2b-realm-core`](./realm-core.md) and the generated
 [`d2b-realm-core` schema companion](./schemas/v2/d2b-realm-core.md): identity
 references, fingerprints, controller generations, enrollment records, rotation
 plans, revocation lists, teardown directives, recovery procedures, and redacted
@@ -186,9 +186,7 @@ runtime substrate until those later runtime surfaces land.
 ## Related references
 
 - [Realm option schema](./realm-options.md)
-- [Realm access resolver contract](./realm-access-resolver.md)
-- [Realm tree routing contract](./realm-routing.md)
-- [Realm identity lifecycle contract](./realm-identity-lifecycle.md)
+- [Realm core reference](./realm-core.md)
 - [Local-root allocator contract](./local-root-allocator.md)
 - [Realm policy](./realm-policy.md)
 - [Realm core model reference](./realm-core.md)

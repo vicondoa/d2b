@@ -7,7 +7,7 @@ Current d2b observability no longer emits a Loki backend or
 Collector pipelines into the SigNoz OTel Collector and ClickHouse.
 
 The live contract is codified by
-[`packages/d2b-contract-tests/tests/policy_observability.rs`](../../packages/d2b-contract-tests/tests/policy_observability.rs).
+the owner-local observability tests and generated artifact checks.
 That policy is advisory until the fixture-contract lane is enabled and
 promoted. It covers the OTel resource-attribute contract for the native SigNoz
 path:

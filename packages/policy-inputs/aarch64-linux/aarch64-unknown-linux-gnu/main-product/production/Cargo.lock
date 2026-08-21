@@ -964,8 +964,8 @@ dependencies = [
  "d2b-core",
  "d2b-cutover",
  "d2b-realm-core",
- "d2b-realm-router",
  "d2b-resource-client",
+ "d2b-zone-routing",
  "nix 0.29.0",
  "rustix 0.38.44",
  "schemars",
@@ -1214,7 +1214,6 @@ dependencies = [
  "d2b-provider-runtime-azure-container-apps",
  "d2b-provider-transport-azure-relay",
  "d2b-realm-core",
- "d2b-realm-provider",
  "futures-util",
  "getrandom 0.2.17",
  "libc",
@@ -1534,7 +1533,6 @@ dependencies = [
  "azure_identity",
  "d2b-contracts",
  "d2b-realm-core",
- "d2b-realm-provider",
  "reqwest 0.12.28",
  "serde",
  "serde_json",
@@ -1750,18 +1748,6 @@ dependencies = [
 
 
 [[package]]
-name = "d2b-realm-codec-protobuf"
-version = "0.0.0-bootstrap"
-dependencies = [
- "d2b-contracts",
- "d2b-realm-core",
- "d2b-realm-provider",
- "prost 0.13.5",
- "serde_json",
-]
-
-
-[[package]]
 name = "d2b-realm-core"
 version = "0.0.0-bootstrap"
 dependencies = [
@@ -1769,50 +1755,6 @@ dependencies = [
  "schemars",
  "serde",
  "serde_json",
-]
-
-
-[[package]]
-name = "d2b-realm-provider"
-version = "0.0.0-bootstrap"
-dependencies = [
- "async-trait",
- "d2b-realm-core",
- "schemars",
- "serde",
- "serde_json",
- "tokio",
- "tracing",
-]
-
-
-[[package]]
-name = "d2b-realm-router"
-version = "0.0.0-bootstrap"
-dependencies = [
- "chacha20poly1305",
- "d2b-realm-codec-protobuf",
- "d2b-realm-core",
- "d2b-realm-provider",
- "d2b-realm-transport",
- "hmac",
- "serde",
- "serde_json",
- "sha2",
- "subtle",
- "tokio",
- "tracing",
-]
-
-
-[[package]]
-name = "d2b-realm-transport"
-version = "0.0.0-bootstrap"
-dependencies = [
- "async-trait",
- "d2b-realm-core",
- "d2b-realm-provider",
- "tokio",
 ]
 
 
@@ -1992,6 +1934,7 @@ dependencies = [
  "d2b-contracts",
  "d2b-contracts-resource",
  "d2b-contracts-zone-session",
+ "d2b-realm-core",
 ]
 
 
@@ -2833,16 +2776,6 @@ checksum = "f1697e6b71679da96d5c41bb9035116141baadbf59a60625fd66cb3c9584e7b0"
 
 
 [[package]]
-name = "itertools"
-version = "0.14.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "2b192c782037fadd9cfa75548310488aabdbf3d2da73885b31bd0abd03351285"
-dependencies = [
- "either",
-]
-
-
-[[package]]
 name = "itoa"
 version = "1.0.18"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3655,31 +3588,6 @@ dependencies = [
 
 
 [[package]]
-name = "prost"
-version = "0.13.5"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "2796faa41db3ec313a31f7624d9286acf277b52de526150b7e69f3debf891ee5"
-dependencies = [
- "bytes",
- "prost-derive 0.13.5",
-]
-
-
-[[package]]
-name = "prost-derive"
-version = "0.13.5"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "8a56d757972c98b346a9b766e3f02746cde6dd1cd1d1d563472929fdd74bec4d"
-dependencies = [
- "anyhow",
- "itertools 0.14.0",
- "proc-macro2",
- "quote",
- "syn 2.0.119",
-]
-
-
-[[package]]
 name = "protobuf"
 version = "3.7.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3755,7 +3663,7 @@ dependencies = [
  "pin-project-lite",
  "quinn-proto",
  "quinn-udp",
- "rustc-hash 2.1.3",
+ "rustc-hash",
  "rustls",
  "socket2 0.6.5",
  "thiserror 2.0.20",
@@ -3778,7 +3686,7 @@ dependencies = [
  "rand 0.10.2",
  "rand_pcg",
  "ring",
- "rustc-hash 2.1.3",
+ "rustc-hash",
  "rustls",
  "rustls-pki-types",
  "slab",

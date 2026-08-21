@@ -43,11 +43,6 @@ test_suite(
     tests = [
         "//packages/d2b:host_doctor_contract",
         "//packages/d2b:zone_doctor_contract",
-        "//packages/d2b-contract-tests:policy_dash_gate",
-        "//packages/d2b-contract-tests:policy_docs",
-        "//packages/d2b-contract-tests:policy_modules",
-        "//packages/d2b-contract-tests:policy_production_closure",
-        "//packages/d2b-contract-tests:policy_provider_crate_layout",
         "//packages/d2b-contracts-broker:cutover_wire",
         "//packages/d2b-cutover:crash_recovery",
         "//packages/d2b-cutover:reset_scope",

@@ -120,11 +120,10 @@ on the next SIGHUP / reconnect) to pick up the change.
 
 ## Matrix gate
 
-`packages/d2b-contract-tests/tests/policy_docs.rs` asserts that the
-`REQUIRED_*` / `OPTIONAL_*` constants in
-`packages/d2bd-runtime/src/kernel_module_check.rs` stay in sync with the table above.
-Run the enabled fixture-contract lane after editing either side. This policy is
-advisory pull-request coverage until that lane is promoted.
+The owner-local Rust tests for
+`packages/d2bd-runtime/src/kernel_module_check.rs` and the focused Nix cases
+cover the executable behavior. Run those owner-local labels after editing
+either side.
 
 ## Related
 

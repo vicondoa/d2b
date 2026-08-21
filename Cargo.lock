@@ -432,7 +432,7 @@ dependencies = [
  "proc-macro2",
  "quote",
  "regex",
- "rustc-hash 2.1.3",
+ "rustc-hash",
  "shlex 1.3.0",
  "syn 2.0.119",
 ]
@@ -848,12 +848,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "773648b94d0e5d620f64f280777445740e61fe701025087ec8b57f45c791888b"
 
 [[package]]
-name = "countme"
-version = "3.0.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7704b5fdd17b18ae31c4c1da5a2e0305a2bf17b5249300a9ee9ed7b72114c636"
-
-[[package]]
 name = "cpufeatures"
 version = "0.2.17"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -994,8 +988,8 @@ dependencies = [
  "d2b-core",
  "d2b-cutover",
  "d2b-realm-core",
- "d2b-realm-router",
  "d2b-resource-client",
+ "d2b-zone-routing",
  "nix 0.29.0",
  "rustix 0.38.44",
  "schemars",
@@ -1070,27 +1064,6 @@ dependencies = [
  "tempfile",
  "tokio",
  "ttrpc",
-]
-
-[[package]]
-name = "d2b-contract-tests"
-version = "0.0.0-bootstrap"
-dependencies = [
- "d2b-contracts",
- "d2b-contracts-broker",
- "d2b-contracts-control",
- "d2b-contracts-provider",
- "d2b-contracts-resource",
- "d2b-contracts-zone-session",
- "d2b-core",
- "d2b-host",
- "regex",
- "rnix",
- "serde",
- "serde_json",
- "serde_yaml_ng",
- "sha2",
- "syn 2.0.119",
 ]
 
 [[package]]
@@ -1276,7 +1249,6 @@ dependencies = [
  "d2b-provider-runtime-azure-container-apps",
  "d2b-provider-transport-azure-relay",
  "d2b-realm-core",
- "d2b-realm-provider",
  "futures-util",
  "getrandom 0.2.17",
  "libc",
@@ -1589,7 +1561,6 @@ dependencies = [
  "azure_identity",
  "d2b-contracts",
  "d2b-realm-core",
- "d2b-realm-provider",
  "reqwest 0.12.28",
  "serde",
  "serde_json",
@@ -1790,17 +1761,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "d2b-realm-codec-protobuf"
-version = "0.0.0-bootstrap"
-dependencies = [
- "d2b-contracts",
- "d2b-realm-core",
- "d2b-realm-provider",
- "prost 0.13.5",
- "serde_json",
-]
-
-[[package]]
 name = "d2b-realm-core"
 version = "0.0.0-bootstrap"
 dependencies = [
@@ -1808,47 +1768,6 @@ dependencies = [
  "schemars",
  "serde",
  "serde_json",
-]
-
-[[package]]
-name = "d2b-realm-provider"
-version = "0.0.0-bootstrap"
-dependencies = [
- "async-trait",
- "d2b-realm-core",
- "schemars",
- "serde",
- "serde_json",
- "tokio",
- "tracing",
-]
-
-[[package]]
-name = "d2b-realm-router"
-version = "0.0.0-bootstrap"
-dependencies = [
- "chacha20poly1305",
- "d2b-realm-codec-protobuf",
- "d2b-realm-core",
- "d2b-realm-provider",
- "d2b-realm-transport",
- "hmac",
- "serde",
- "serde_json",
- "sha2",
- "subtle",
- "tokio",
- "tracing",
-]
-
-[[package]]
-name = "d2b-realm-transport"
-version = "0.0.0-bootstrap"
-dependencies = [
- "async-trait",
- "d2b-realm-core",
- "d2b-realm-provider",
- "tokio",
 ]
 
 [[package]]
@@ -2017,6 +1936,7 @@ dependencies = [
  "d2b-contracts",
  "d2b-contracts-resource",
  "d2b-contracts-zone-session",
+ "d2b-realm-core",
 ]
 
 [[package]]
@@ -2061,8 +1981,6 @@ dependencies = [
  "d2b-provider-transport-azure-relay",
  "d2b-provider-volume-local",
  "d2b-realm-core",
- "d2b-realm-provider",
- "d2b-realm-router",
  "d2b-resource-api",
  "d2b-resource-store",
  "d2b-resource-store-redb",
@@ -2664,12 +2582,6 @@ checksum = "8a9ee70c43aaf417c914396645a0fa852624801b24ebb7ae78fe8272889ac888"
 
 [[package]]
 name = "hashbrown"
-version = "0.14.5"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e5274423e17b7c9fc20b6e7e208532f9b19825d82dfd615708b70edd83df41f1"
-
-[[package]]
-name = "hashbrown"
 version = "0.17.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ed5909b6e89a2db4456e54cd5f673791d7eca6732202bbf2a9cc504fe2f9b84a"
@@ -3034,15 +2946,6 @@ name = "itertools"
 version = "0.13.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "413ee7dfc52ee1a4949ceeb7dbc8a33f2d6c088194d9f922fb8318faf1f01186"
-dependencies = [
- "either",
-]
-
-[[package]]
-name = "itertools"
-version = "0.14.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "2b192c782037fadd9cfa75548310488aabdbf3d2da73885b31bd0abd03351285"
 dependencies = [
  "either",
 ]
@@ -3982,17 +3885,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "de5e2533f59d08fcf364fd374ebda0692a70bd6d7e66ef97f306f45c6c5d8020"
 dependencies = [
  "bytes",
- "prost-derive 0.8.0",
-]
-
-[[package]]
-name = "prost"
-version = "0.13.5"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "2796faa41db3ec313a31f7624d9286acf277b52de526150b7e69f3debf891ee5"
-dependencies = [
- "bytes",
- "prost-derive 0.13.5",
+ "prost-derive",
 ]
 
 [[package]]
@@ -4007,7 +3900,7 @@ dependencies = [
  "log",
  "multimap",
  "petgraph",
- "prost 0.8.0",
+ "prost",
  "prost-types",
  "tempfile",
  "which 4.4.2",
@@ -4027,26 +3920,13 @@ dependencies = [
 ]
 
 [[package]]
-name = "prost-derive"
-version = "0.13.5"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "8a56d757972c98b346a9b766e3f02746cde6dd1cd1d1d563472929fdd74bec4d"
-dependencies = [
- "anyhow",
- "itertools 0.14.0",
- "proc-macro2",
- "quote",
- "syn 2.0.119",
-]
-
-[[package]]
 name = "prost-types"
 version = "0.8.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "603bbd6394701d13f3f25aada59c7de9d35a6a5887cfc156181234a44002771b"
 dependencies = [
  "bytes",
- "prost 0.8.0",
+ "prost",
 ]
 
 [[package]]
@@ -4120,7 +4000,7 @@ dependencies = [
  "pin-project-lite",
  "quinn-proto",
  "quinn-udp",
- "rustc-hash 2.1.3",
+ "rustc-hash",
  "rustls",
  "socket2 0.6.5",
  "thiserror 2.0.20",
@@ -4142,7 +4022,7 @@ dependencies = [
  "rand 0.10.2",
  "rand_pcg",
  "ring",
- "rustc-hash 2.1.3",
+ "rustc-hash",
  "rustls",
  "rustls-pki-types",
  "slab",
@@ -4421,31 +4301,10 @@ dependencies = [
 ]
 
 [[package]]
-name = "rnix"
-version = "0.14.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c163bd17372eecdf10d351c34584b7de7c1a33be4e92a32f3fb3f5a7fe3f579b"
-dependencies = [
- "rowan",
-]
-
-[[package]]
 name = "roff"
 version = "1.1.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "323c417e1d9665a65b263ec744ba09030cfb277e9daa0b018a4ab62e57bc8189"
-
-[[package]]
-name = "rowan"
-version = "0.16.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "417a3a9f582e349834051b8a10c8d71ca88da4211e4093528e36b9845f6b5f21"
-dependencies = [
- "countme",
- "hashbrown 0.14.5",
- "rustc-hash 1.1.0",
- "text-size",
-]
 
 [[package]]
 name = "run-on-drop"
@@ -4458,12 +4317,6 @@ name = "rustc-demangle"
 version = "0.1.28"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b74b56ffa8bb2830709a538c2cbcae9aa062db0d2a42563bfb09bdaae44020eb"
-
-[[package]]
-name = "rustc-hash"
-version = "1.1.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "08d43f7aa6b08d49f382cde6a7982047c3426db949b1424bc4b7ec9ae12c6ce2"
 
 [[package]]
 name = "rustc-hash"
@@ -4757,19 +4610,6 @@ dependencies = [
  "itoa",
  "ryu",
  "serde",
-]
-
-[[package]]
-name = "serde_yaml_ng"
-version = "0.10.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7b4db627b98b36d4203a7b458cf3573730f2bb591b28871d916dfa9efabfd41f"
-dependencies = [
- "indexmap 2.14.0",
- "itoa",
- "ryu",
- "serde",
- "unsafe-libyaml",
 ]
 
 [[package]]
@@ -5136,12 +4976,6 @@ name = "termtree"
 version = "0.5.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "8f50febec83f5ee1df3015341d8bd429f2d1cc62bcba7ea2076759d315084683"
-
-[[package]]
-name = "text-size"
-version = "1.1.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f18aa187839b2bdb1ad2fa35ead8c4c2976b64e4363c386d45ac0f7ee85c9233"
 
 [[package]]
 name = "thiserror"
@@ -5552,7 +5386,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "3aa71f4a44711b3b9cc10ed0c7e239ff0fe4b8e6c900a142fb3bb26401385718"
 dependencies = [
  "derive-new",
- "prost 0.8.0",
+ "prost",
  "prost-build",
  "prost-types",
  "protobuf",
@@ -5716,12 +5550,6 @@ dependencies = [
  "crypto-common",
  "subtle",
 ]
-
-[[package]]
-name = "unsafe-libyaml"
-version = "0.2.11"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "673aac59facbab8a9007c7f6108d11f63b603f7cabff99fabf650fea5c32b861"
 
 [[package]]
 name = "untrusted"

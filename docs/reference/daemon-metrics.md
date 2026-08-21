@@ -4,9 +4,8 @@
 
 > Canonical metric inventory maintained by `d2bd`.
 > Implementation: [`packages/d2bd-runtime/src/metrics.rs`](../../packages/d2bd-runtime/src/metrics.rs).
-> Policy coverage:
-> [`packages/d2b-contract-tests/tests/policy_metrics.rs`](../../packages/d2b-contract-tests/tests/policy_metrics.rs).
-> This is advisory until the fixture-contract lane is enabled and promoted.
+> Policy coverage remains in the daemon's owner-local tests and generated
+> artifact checks.
 
 ## Endpoint status
 

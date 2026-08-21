@@ -19,12 +19,11 @@ sh_test(
     name = "w0_dep_direction",
     srcs = ["w0-dep-direction.sh"],
     data = [
+        "//:Cargo.lock",
         "//:Cargo.toml",
+        "//:packages/Cargo.guest.lock",
         "//packages/d2b-contracts:Cargo.toml",
         "//packages/d2b-realm-core:Cargo.toml",
-        "//packages/d2b-realm-provider:Cargo.toml",
-        "//packages/d2b-realm-router:Cargo.toml",
-        "//packages/d2b-realm-transport:Cargo.toml",
     ],
     env_inherit = ["PATH", "ROOT"],
     tags = [

@@ -3399,9 +3399,9 @@ mod tests {
             );
         }
 
-        // 2. The retained aggregating runners must also route through the same
+        // 2. The retained aggregating runner must also route through the same
         //    verifying self-guard.
-        for relative in ["tests/runner.sh", "tests/test-integration.sh"] {
+        for relative in ["tests/test-integration.sh"] {
             let path = root.join(relative);
             let body = fs::read_to_string(&path)
                 .unwrap_or_else(|e| panic!("cannot read {}: {e}", path.display()));
@@ -3469,21 +3469,11 @@ mod tests {
              testing D2B_HEAVY_GATE alone is the forgeable-marker bypass:\n{guard_recipe}"
         );
 
-        // 6. static.sh routing. static.sh invokes performance-budgets.sh
-        //    directly; that is safe only because the perf script self-guards
-        //    (asserted in step 1). Require the invocation to be present so the
-        //    routing stays wired, and require perf to be in the guarded set.
-        let static_sh =
-            fs::read_to_string(root.join("tests/static.sh")).expect("tests/static.sh is readable");
-        assert!(
-            static_sh.contains("performance-budgets.sh"),
-            "tests/static.sh no longer references performance-budgets.sh; if the perf canary moved \
-             its new entrypoint must remain in this inventory guard"
-        );
+        // 6. The performance entrypoint remains in the guarded set.
         assert!(
             entrypoints.contains(&perf),
-            "the performance-budgets entrypoint must be in the guarded set so static.sh's direct \
-             invocation cannot bypass the semaphore"
+            "the performance-budgets entrypoint must be in the guarded set so direct invocation \
+             cannot bypass the semaphore"
         );
     }
 

@@ -42,7 +42,7 @@ cleanup status; dynamic controller-owned resources are not broadly swept.
 
 The v3 baseline has useful foundations:
 
-- typed Provider traits in `d2b-realm-provider`;
+- typed Provider contracts in `d2b-contracts-provider` and `d2b-provider`;
 - production ACA and Relay integrations;
 - codec-neutral Realm operations, idempotency, targets, capabilities, and
   stream state machines;

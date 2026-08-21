@@ -4277,7 +4277,7 @@ mod tests {
     // coverage of these rejection paths; these unit tests bring the invariant
     // logic into Rust so those gates can retire to a Rust successor (plus the
     // positive contract test over the rendered fixture bundle in
-    // packages/d2b-contract-tests/tests/minijail_profiles.rs). Each
+    // owner-local rendered fixture contract). Each
     // mutates ONE invariant on the first node of the otherwise-valid
     // personal-dev bundle and asserts the matching violation (validate returns
     // on the first violation, and vms[0].nodes[0] is iterated first).

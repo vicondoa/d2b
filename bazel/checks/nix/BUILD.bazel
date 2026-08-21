@@ -384,7 +384,7 @@ nix_native_test(
 
 test_suite(
     name = "nix_evaluation",
-    tests = [":nix_unit", ":flake-eval-x86", ":flake-eval-x86-outputs"],
+    tests = [":flake-eval-x86", ":flake-eval-x86-outputs"],
 )
 
 test_suite(

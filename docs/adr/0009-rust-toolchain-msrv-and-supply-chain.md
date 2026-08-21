@@ -44,7 +44,7 @@ TODO stub.
    stub references this ADR and is an explicit TODO scheduled for W2.
 4. Workspace lints set `unsafe_code = "forbid"` at workspace scope, and
    new per-crate exceptions land only with a follow-up ADR.
-5. `tests/static.sh` runs `cargo fmt --check`,
+5. The fixed Bazel lint lane runs `cargo fmt --check`,
    `cargo clippy --workspace --all-targets -- -D warnings`,
    `cargo test --workspace`, `cargo deny check`, and `cargo audit` or
    the ADR-referenced stub; all must exit 0 to pass the gate.

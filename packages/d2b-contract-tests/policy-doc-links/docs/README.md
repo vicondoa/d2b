@@ -1,1 +1,0 @@
-/home/paydro/projects/d2b/.worktrees/v3-guest-u11/packages/d2b-contract-tests/policy-doc-outside.md
