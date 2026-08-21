@@ -13,6 +13,7 @@ fn repo_root() -> PathBuf {
     if let Some(root) = std::env::var_os("D2B_REPO_ROOT") {
         candidates.push(PathBuf::from(root));
     }
+
     for variable in ["TEST_SRCDIR", "RUNFILES_DIR"] {
         if let Some(base) = std::env::var_os(variable).map(PathBuf::from) {
             candidates.push(base.clone());
@@ -86,6 +87,10 @@ fn committed_profiles_share_authentication_and_worker_policy() {
     assert!(
         bazelrc.contains("--remote_download_outputs=minimal"),
         "remote profiles must use minimal output downloads"
+    );
+    assert!(
+        bazelrc.contains("build --stamp=no"),
+        "BuildBuddy metadata must not change unstamped action behavior"
     );
     assert!(
         !bazelrc.contains("CargoBuildScriptRun=+no-remote"),
@@ -379,4 +384,224 @@ fn policy_preserves_remote_profiles_and_trust_partition() {
                 .as_str()
                 .is_some_and(|value| value.starts_with("sha256:")))
     );
+}
+
+#[test]
+fn developer_profiles_publish_the_tested_checkout_metadata() {
+    let scratch = repo_root()
+        .join(".scratch")
+        .join(format!("bazel-check-metadata-test-{}", std::process::id()));
+    let bin = scratch.join("bin");
+    std::fs::create_dir_all(&bin).expect("create metadata test bin directory");
+    let bazel = bin.join("bazel");
+    let git = bin.join("git");
+    let xtask = bin.join("xtask");
+    let credential = scratch.join("credential");
+    std::fs::write(&credential, "synthetic-token\n").expect("write credential");
+    write_executable(
+        &git,
+        "#!/usr/bin/env bash\ncase \"$*\" in *'remote get-url origin'*) printf '%s\\n' 'git@github.com:vicondoa/d2b.git' ;; *'rev-parse --verify HEAD^{commit}'*) printf '%s\\n' '0123456789abcdef0123456789abcdef01234567' ;; *'symbolic-ref --quiet --short HEAD'*) printf '%s\\n' 'feat/issue-446-buildbuddy-metadata' ;; *) exit 1 ;; esac\n",
+    );
+    write_executable(
+        &bazel,
+        "#!/usr/bin/env bash\n\
+         printf '%s\\n' \"$*\" > \"${D2B_CAPTURE_ARGS:?}\"\n\
+         for arg in \"$@\"; do\n\
+           case \"$arg\" in\n\
+             --build_event_json_file=*) bep=\"${arg#*=}\" ;;\n\
+           esac\n\
+         done\n\
+         printf '{\"testResult\":{\"status\":\"PASSED\"}}\\n' > \"$bep\"\n",
+    );
+    write_executable(
+        &xtask,
+        "#!/usr/bin/env bash\n\
+         if [ \"$2\" = check-security ]; then exit 0; fi\n\
+         if [ \"$2\" = redact-log ] && [ \"$4\" != \"$6\" ]; then cp -- \"$4\" \"$6\"; fi\n",
+    );
+
+    let run = |profile: &str, capture: &Path, trusted: bool| {
+        let mut command = Command::new("bash");
+        command
+            .arg(repo_root().join("tests/tools/bazel-check"))
+            .args(["--profile", profile, "--", "//:test"])
+            .env("D2B_BAZEL_BIN", &bazel)
+            .env("D2B_XTASK_BIN", &xtask)
+            .env("D2B_BUILDBUDDY_CREDENTIAL_FILE", &credential)
+            .env("D2B_BAZEL_UNTRUSTED", "0")
+            .env("GITHUB_ACTIONS", "false")
+            .env("D2B_BAZEL_CHECK_SCRATCH", scratch.join(profile))
+            .env("D2B_CAPTURE_ARGS", capture)
+            .env(
+                "PATH",
+                format!("{}:{}", bin.display(), std::env::var("PATH").unwrap()),
+            );
+        if trusted {
+            command
+                .env("D2B_BAZEL_TRUSTED", "1")
+                .env("GITHUB_REF", "refs/heads/v3");
+        }
+        command.output().expect("run bazel-check metadata profile")
+    };
+
+    let remote_args = scratch.join("remote.args");
+    let output = run("remote", &remote_args, false);
+    assert!(output.status.success(), "remote profile failed: {output:?}");
+    let trusted_args = scratch.join("trusted-seed.args");
+    let output = run("trusted-seed", &trusted_args, true);
+    assert!(
+        output.status.success(),
+        "trusted-seed profile failed: {output:?}"
+    );
+    let local_args = scratch.join("local.args");
+    let output = run("local", &local_args, false);
+    assert!(output.status.success(), "local profile failed: {output:?}");
+
+    let expected = [
+        "--build_metadata=REPO_URL=https://github.com/vicondoa/d2b",
+        "--build_metadata=COMMIT_SHA=0123456789abcdef0123456789abcdef01234567",
+        "--build_metadata=BRANCH_NAME=feat/issue-446-buildbuddy-metadata",
+    ];
+    let remote = std::fs::read_to_string(&remote_args).expect("read remote Bazel args");
+    let trusted = std::fs::read_to_string(&trusted_args).expect("read trusted Bazel args");
+    let local = std::fs::read_to_string(&local_args).expect("read local Bazel args");
+    assert!(
+        !local.contains("--build_metadata="),
+        "local profile must not publish developer metadata"
+    );
+    for flag in expected {
+        assert!(remote.contains(flag), "remote profile omitted {flag}");
+        assert!(
+            trusted.contains(flag),
+            "trusted-seed profile omitted {flag}"
+        );
+    }
+    let remote_metadata = remote
+        .split_whitespace()
+        .filter(|argument| argument.starts_with("--build_metadata="))
+        .collect::<Vec<_>>();
+    let trusted_metadata = trusted
+        .split_whitespace()
+        .filter(|argument| argument.starts_with("--build_metadata="))
+        .collect::<Vec<_>>();
+    for forbidden in [
+        "/home/",
+        "synthetic-token",
+        "D2B_BUILDBUDDY_CREDENTIAL_FILE",
+    ] {
+        assert!(
+            !remote_metadata
+                .iter()
+                .any(|argument| argument.contains(forbidden)),
+            "remote metadata leaked {forbidden}"
+        );
+        assert!(
+            !trusted_metadata
+                .iter()
+                .any(|argument| argument.contains(forbidden)),
+            "trusted-seed metadata leaked {forbidden}"
+        );
+    }
+    assert_eq!(remote_metadata, trusted_metadata);
+    let _ = std::fs::remove_dir_all(scratch);
+}
+
+#[test]
+fn detached_checkout_omits_buildbuddy_metadata_explicitly() {
+    let scratch = repo_root().join(".scratch").join(format!(
+        "bazel-check-detached-metadata-test-{}",
+        std::process::id()
+    ));
+    let bin = scratch.join("bin");
+    std::fs::create_dir_all(&bin).expect("create detached metadata test bin directory");
+    let bazel = bin.join("bazel");
+    let git = bin.join("git");
+    let xtask = bin.join("xtask");
+    let credential = scratch.join("credential");
+    let capture = scratch.join("args");
+    std::fs::write(&credential, "synthetic-token\n").expect("write credential");
+    write_executable(
+        &git,
+        "#!/usr/bin/env bash\n\
+         if [ \"${D2B_GIT_MODE:-}\" = unavailable ]; then exit 1; fi\n\
+         case \"$*\" in *'remote get-url origin'*) printf '%s\\n' 'https://github.com/vicondoa/d2b.git' ;; *'rev-parse --verify HEAD^{commit}'*) printf '%s\\n' '0123456789abcdef0123456789abcdef01234567' ;; *'symbolic-ref --quiet --short HEAD'*) exit 1 ;; *) exit 1 ;; esac\n",
+    );
+    write_executable(
+        &bazel,
+        "#!/usr/bin/env bash\n\
+         printf '%s\\n' \"$*\" > \"${D2B_CAPTURE_ARGS:?}\"\n\
+         for arg in \"$@\"; do\n\
+           case \"$arg\" in\n\
+             --build_event_json_file=*) bep=\"${arg#*=}\" ;;\n\
+           esac\n\
+         done\n\
+         printf '{\"testResult\":{\"status\":\"PASSED\"}}\\n' > \"$bep\"\n",
+    );
+    write_executable(
+        &xtask,
+        "#!/usr/bin/env bash\n\
+         if [ \"$2\" = check-security ]; then exit 0; fi\n\
+         if [ \"$2\" = redact-log ] && [ \"$4\" != \"$6\" ]; then cp -- \"$4\" \"$6\"; fi\n",
+    );
+
+    let output = Command::new("bash")
+        .arg(repo_root().join("tests/tools/bazel-check"))
+        .args(["--profile", "remote", "--", "//:test"])
+        .env("D2B_BAZEL_BIN", &bazel)
+        .env("D2B_XTASK_BIN", &xtask)
+        .env("D2B_BUILDBUDDY_CREDENTIAL_FILE", &credential)
+        .env("D2B_BAZEL_UNTRUSTED", "0")
+        .env("GITHUB_ACTIONS", "false")
+        .env("D2B_BAZEL_CHECK_SCRATCH", scratch.join("evidence"))
+        .env("D2B_CAPTURE_ARGS", &capture)
+        .env(
+            "PATH",
+            format!("{}:{}", bin.display(), std::env::var("PATH").unwrap()),
+        )
+        .output()
+        .expect("run bazel-check detached profile");
+
+    assert!(
+        output.status.success(),
+        "detached profile failed: {output:?}"
+    );
+    let diagnostics = format!(
+        "{}{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(diagnostics.contains("detached HEAD"));
+    let args = std::fs::read_to_string(&capture).expect("read detached Bazel args");
+    assert!(!args.contains("--build_metadata="));
+
+    let output = Command::new("bash")
+        .arg(repo_root().join("tests/tools/bazel-check"))
+        .args(["--profile", "remote", "--", "//:test"])
+        .env("D2B_BAZEL_BIN", &bazel)
+        .env("D2B_XTASK_BIN", &xtask)
+        .env("D2B_BUILDBUDDY_CREDENTIAL_FILE", &credential)
+        .env("D2B_BAZEL_UNTRUSTED", "0")
+        .env("GITHUB_ACTIONS", "false")
+        .env("D2B_GIT_MODE", "unavailable")
+        .env("D2B_BAZEL_CHECK_SCRATCH", scratch.join("unavailable"))
+        .env("D2B_CAPTURE_ARGS", &capture)
+        .env(
+            "PATH",
+            format!("{}:{}", bin.display(), std::env::var("PATH").unwrap()),
+        )
+        .output()
+        .expect("run bazel-check unavailable Git profile");
+    assert!(
+        output.status.success(),
+        "unavailable Git profile failed: {output:?}"
+    );
+    let diagnostics = format!(
+        "{}{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(diagnostics.contains("Git origin is unavailable"));
+    let args = std::fs::read_to_string(capture).expect("read unavailable Git Bazel args");
+    assert!(!args.contains("--build_metadata="));
+    let _ = std::fs::remove_dir_all(scratch);
 }
