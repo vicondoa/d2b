@@ -44,7 +44,7 @@ pkgs.testers.runNixOSTest {
   testScript = ''
     start_all()
     machine.wait_for_unit("d2bd.service")
-    machine.wait_for_unit("d2b-priv-broker.socket")
+    machine.wait_for_unit("d2b-broker.socket")
 
     policy = "/etc/d2b/host-realm-relay-egress-policy.json"
     machine.succeed(f"test -r {policy}")
@@ -73,10 +73,10 @@ pkgs.testers.runNixOSTest {
 
     pids = machine.succeed("pgrep -x d2bd").strip().split()
     assert pids, "d2bd pid missing"
-    machine.succeed("systemctl start d2b-priv-broker.service")
+    machine.succeed("systemctl start d2b-broker.service")
     broker_pid = machine.succeed(
       "for i in $(seq 1 50); do "
-      "pid=$(systemctl show -p MainPID --value d2b-priv-broker.service); "
+      "pid=$(systemctl show -p MainPID --value d2b-broker.service); "
       "if [ -n \"$pid\" ] && [ \"$pid\" != 0 ]; then echo \"$pid\"; exit 0; fi; "
       "sleep 0.2; done; exit 1"
     ).strip()

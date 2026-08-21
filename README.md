@@ -417,7 +417,7 @@ profile). Operators elevate with `sudo` inside the session.
 
 Run-state ships in `/var/lib/d2b/`; per-host config emitted by
 the NixOS module ships in `/etc/d2b/` (bundle + privileges +
-processes JSON files consumed by `d2bd` / `d2b-priv-broker`).
+processes JSON files consumed by `d2bd` / `d2b-broker`).
 
 For typed exit codes and JSON envelopes, see
 [`docs/reference/cli-contract.md`](docs/reference/cli-contract.md).

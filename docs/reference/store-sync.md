@@ -221,7 +221,7 @@ positive-allow-list projection to a dedicated export file:
 written `0640`, `O_APPEND`, one JSON object per line, daily-rotated by
 UTC date. The projection is a dedicated
 `StoreSyncObservabilityRecord` struct
-(`packages/d2b-priv-broker/src/ops/store_sync_export.rs`) built by
+(`packages/d2b-broker/src/ops/store_sync_export.rs`) built by
 `from_audit_fields()`, which reads **only** the allow-listed fields - so
 no serializer ever receives the full audit struct and host-only fields
 cannot leak by construction (`#[serde(deny_unknown_fields)]` + an
@@ -380,11 +380,11 @@ asserts `len() == 0`.
 
 ## Implementation file map
 
-- `packages/d2b-priv-broker/src/ops/store_sync.rs` - pure
+- `packages/d2b-broker/src/ops/store_sync.rs` - pure
   handler (`run_store_sync`) + typed `StoreSyncError`. Derives the
   `generation_id`, materialises via `build_store_view_cross_mount_safe`,
   and publishes (`state/current`, `meta/current`, live marker).
-- `packages/d2b-priv-broker/src/ops/store_view_farm.rs` -
+- `packages/d2b-broker/src/ops/store_view_farm.rs` -
   cross-mount-safe wrappers (`build_store_view_cross_mount_safe`) that
   retry the build/replace in a private mount namespace when `/nix/store` is a
   separate vfsmount. The broker execs the activation helper directly; no shell
@@ -397,7 +397,7 @@ asserts `len() == 0`.
   the `private-store <verb>` entrypoint that unshares the mount namespace,
   makes propagation private, lazily detaches `/nix/store`, and runs
   `build-store-view` / `replace-store-view-live` from stdin JSON.
-- `packages/d2b-priv-broker/src/runtime.rs` - wire dispatch
+- `packages/d2b-broker/src/runtime.rs` - wire dispatch
   arm (`RealBrokerRequest::StoreSync(req) => …`).
 - `packages/d2b-contracts-broker/src/broker_wire.rs` - typed request/
   response structs + enum variants. The wire carries both the
@@ -406,12 +406,12 @@ asserts `len() == 0`.
   only and is never the on-disk key.
 - `packages/d2b-contracts/src/types.rs` - `BundleClosureRef`
   opaque newtype.
-- `packages/d2b-priv-broker/src/ops/audit_op.rs` -
+- `packages/d2b-broker/src/ops/audit_op.rs` -
   `OperationFields::StoreSync` newtype over `StoreSyncAuditFields`.
-- `packages/d2b-priv-broker/src/ops/store_sync_audit.rs` -
+- `packages/d2b-broker/src/ops/store_sync_audit.rs` -
   the signed `StoreSyncAuditFields` terminal audit schema, its enums,
   invariant-enforcing constructors, and `validate()`.
-- `packages/d2b-priv-broker/src/ops/store_verify.rs` - explicit
+- `packages/d2b-broker/src/ops/store_verify.rs` - explicit
   StoreVerify broker op, top-level live-pool verifier, and host-only
   integrity record writer.
 

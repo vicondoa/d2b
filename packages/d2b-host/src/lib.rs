@@ -12,9 +12,9 @@
 //! Crate-level invariants:
 //!
 //! - `#![forbid(unsafe_code)]`: any required `unsafe` (e.g. raw netlink
-//!   FFI, SCM_RIGHTS fd handling) lives in `d2b-priv-broker`'s
+//!   FFI, SCM_RIGHTS fd handling) lives in `d2b-broker`'s
 //!   quarantined `sys.rs`, never here.
-//! - No dependency on `d2bd` or `d2b-priv-broker`. This crate
+//! - No dependency on `d2bd` or `d2b-broker`. This crate
 //!   is consumed by both; the dependency direction is one-way.
 
 #![forbid(unsafe_code)]
@@ -27,7 +27,7 @@ pub mod ioctl_policy;
 pub mod modules;
 // BPF seccomp compilation from the ioctl_policy matrix.
 // Lives here (not d2b-core) so DeviceClass is available without
-// a dep-graph cycle; d2b-priv-broker converts CompiledSeccompProgram
+// a dep-graph cycle; d2b-broker converts CompiledSeccompProgram
 // to libc::sock_filter in its quarantined sys.rs.
 pub mod netlink;
 pub mod nftables;

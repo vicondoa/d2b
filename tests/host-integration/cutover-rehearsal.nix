@@ -175,7 +175,7 @@ pkgs.testers.runNixOSTest {
 
     start_all()
     machine.wait_for_unit("d2bd.service")
-    machine.wait_for_unit("d2b-priv-broker.socket")
+    machine.wait_for_unit("d2b-broker.socket")
     machine.wait_for_file("/run/d2b/public.sock")
 
     # The daemon-only end state has exactly three root-visible persistent
@@ -184,8 +184,8 @@ pkgs.testers.runNixOSTest {
     declared = machine.succeed("cat /etc/d2b/daemon-acceptance-units").splitlines()
     assert declared == [
         "d2bd.service",
-        "d2b-priv-broker.socket",
-        "d2b-priv-broker.service",
+        "d2b-broker.socket",
+        "d2b-broker.service",
     ]
     machine.succeed(
         "test -z \"$(systemctl list-unit-files --no-legend "

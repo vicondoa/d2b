@@ -1,6 +1,6 @@
 # nix-unit cases migrated from tests/broker-caps-eval.sh.
 #
-# Asserts that systemd.services.d2b-priv-broker.serviceConfig
+# Asserts that systemd.services.d2b-broker.serviceConfig
 # .CapabilityBoundingSet matches the canonical broker bounding set EXACTLY
 # (no additions, no omissions) and that AmbientCapabilities carries the
 # sentinel empty-string entry that drops all ambient caps.
@@ -62,7 +62,7 @@ let
     d2b.daemonExperimental.enable = true;
   };
 
-  brokerService = (mkEval [ base ]).config.systemd.services.d2b-priv-broker;
+  brokerService = (mkEval [ base ]).config.systemd.services.d2b-broker;
   svc = brokerService.serviceConfig;
   env = brokerService.environment;
   cbs = svc.CapabilityBoundingSet or null;

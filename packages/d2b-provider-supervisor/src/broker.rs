@@ -10,9 +10,10 @@ use std::time::Duration;
 
 use d2b_contracts::types::{BundleOpId, RoleId, VmId};
 use d2b_contracts_broker::broker_wire::{
-    AuditJoinContext, BrokerCallerRole, BrokerRequest, BrokerRequestEnvelope, BrokerResponse,
-    CanonicalAuditDigest, DeregisterRunnerPidfdRequest, ObserveRunnerRequest, OpenPidfdRequest,
-    RunnerRole, RunnerSignal, SandboxLaunchPlan, SignalRunnerRequest, SpawnRunnerRequest,
+    AuditJoinContext, BrokerCallerRole, BrokerProfile, BrokerRequest, BrokerRequestEnvelope,
+    BrokerResponse, CanonicalAuditDigest, DeregisterRunnerPidfdRequest, ObserveRunnerRequest,
+    OpenPidfdRequest, RunnerRole, RunnerSignal, SandboxLaunchPlan, SignalRunnerRequest,
+    SpawnRunnerRequest,
 };
 use d2b_contracts_resource::v3::ResourceRef;
 use d2b_contracts_resource::v3::execution_policy::ExecutionDomain;
@@ -434,6 +435,7 @@ pub struct BrokerProcessBackend<R: BrokerLaunchResolver> {
     resolver: R,
     socket_path: PathBuf,
     io_timeout: Duration,
+    profile: BrokerProfile,
     caller_role: BrokerCallerRole,
     observations: Mutex<BTreeMap<ProcessIdentityDigest, BrokerObservedProcess>>,
 }
@@ -441,21 +443,42 @@ pub struct BrokerProcessBackend<R: BrokerLaunchResolver> {
 impl<R: BrokerLaunchResolver> BrokerProcessBackend<R> {
     /// Build a backend using the production broker socket path.
     pub fn new(resolver: R) -> Self {
-        Self::with_socket(
+        Self::with_socket_profile_and_role(
             resolver,
             d2b_contracts::BROKER_SOCKET_PATH,
             Duration::from_secs(10),
+            BrokerProfile::Host,
+            BrokerCallerRole::NotAuthorized,
         )
     }
 
     /// Build a backend with an explicit socket path and I/O timeout.
     pub fn with_socket(resolver: R, socket_path: impl Into<PathBuf>, io_timeout: Duration) -> Self {
-        Self::with_socket_and_role(
+        Self::with_socket_profile_and_role(
             resolver,
             socket_path,
             io_timeout,
+            BrokerProfile::Host,
             BrokerCallerRole::NotAuthorized,
         )
+    }
+
+    /// Build a backend bound to one fixed broker profile and caller identity.
+    pub fn with_socket_profile_and_role(
+        resolver: R,
+        socket_path: impl Into<PathBuf>,
+        io_timeout: Duration,
+        profile: BrokerProfile,
+        caller_role: BrokerCallerRole,
+    ) -> Self {
+        Self {
+            resolver,
+            socket_path: socket_path.into(),
+            io_timeout,
+            profile,
+            caller_role,
+            observations: Mutex::new(BTreeMap::new()),
+        }
     }
 
     /// Build a backend with an authenticated broker caller role.
@@ -465,17 +488,19 @@ impl<R: BrokerLaunchResolver> BrokerProcessBackend<R> {
         io_timeout: Duration,
         caller_role: BrokerCallerRole,
     ) -> Self {
-        Self {
+        Self::with_socket_profile_and_role(
             resolver,
-            socket_path: socket_path.into(),
+            socket_path,
             io_timeout,
+            BrokerProfile::Host,
             caller_role,
-            observations: Mutex::new(BTreeMap::new()),
-        }
+        )
     }
 
     fn request(&self, request: BrokerRequest) -> Result<BrokerFrame, ProcessEffectError> {
-        if matches!(self.caller_role, BrokerCallerRole::NotAuthorized) {
+        if matches!(self.caller_role, BrokerCallerRole::NotAuthorized)
+            || !request.allowed_by_profile(self.profile)
+        {
             return Err(ProcessEffectError::LaunchFailed);
         }
         broker_round_trip(
@@ -843,7 +868,7 @@ mod tests {
     }
 
     fn producer_live_handler_error_kind() -> &'static str {
-        const SOURCE: &str = include_str!("../../d2b-priv-broker/src/runtime.rs");
+        const SOURCE: &str = include_str!("../../d2b-broker/src/runtime.rs");
         const ARM: &str = "Self::LiveHandler(message) => error_response(";
         let arm = SOURCE
             .split_once(ARM)
@@ -887,8 +912,7 @@ mod tests {
 
     #[test]
     fn open_pidfd_live_handler_failure_is_ambiguous_only_after_identity_drift() {
-        const LIVE_HANDLER_SOURCE: &str =
-            include_str!("../../d2b-priv-broker/src/live_handlers.rs");
+        const LIVE_HANDLER_SOURCE: &str = include_str!("../../d2b-broker/src/live_handlers.rs");
         for producer_error in ["PidfdRace", "PidfdOpenFailed", "ProcStatReadFailed"] {
             assert!(LIVE_HANDLER_SOURCE.contains(producer_error));
         }

@@ -79,7 +79,7 @@ const ALLOWED_WORKSPACE_DEPS: &[&str] = &[
 /// allowlist rejected the name.
 const NAMED_INVERSIONS: &[(&str, &str)] = &[
     ("d2bd", "the daemon"),
-    ("d2b-priv-broker", "the privileged broker"),
+    ("d2b-broker", "the privileged broker"),
     ("d2b-resource-store", "the Zone store"),
     ("d2b-resource-store-redb", "the Zone store backend"),
     ("d2b-resource-api", "the Zone store API"),
@@ -719,7 +719,7 @@ fn the_naming_convention_reads_base_before_implementation() {
 /// outside the naming rule.
 #[test]
 fn non_provider_crates_are_exempt() {
-    for name in ["d2b-core", "d2b-contracts", "d2bd", "d2b-priv-broker"] {
+    for name in ["d2b-core", "d2b-contracts", "d2bd", "d2b-broker"] {
         assert!(!is_in_scope(name), "{name} must be out of scope");
     }
     for name in NON_PROVIDER_PREFIXED {
@@ -1199,5 +1199,63 @@ fn the_dossier_spec_id_parse_reads_a_real_dossier() {
     assert_eq!(
         table_row_values(&text, "Spec ID"),
         vec!["ADR-046-provider-volume-local".to_owned()]
+    );
+}
+
+/// Provider controllers stay on neutral EffectPorts. The fixed supervisor is
+/// the only package allowed to translate a typed effect into broker wire or a
+/// broker socket.
+#[test]
+fn provider_controllers_cannot_import_broker_clients() {
+    let packages = repo_root().join("packages");
+    let mut violations = Vec::new();
+    for entry in fs::read_dir(&packages).expect("packages directory") {
+        let entry = entry.expect("provider package entry");
+        let name = entry.file_name().to_string_lossy().into_owned();
+        if !name.starts_with("d2b-provider-") || name == "d2b-provider-supervisor" {
+            continue;
+        }
+        let dir = entry.path();
+        if !dir.is_dir() {
+            continue;
+        }
+        let mut stack = vec![dir];
+        while let Some(path) = stack.pop() {
+            for child in fs::read_dir(&path).expect("provider source directory") {
+                let child = child.expect("provider source entry").path();
+                if child.is_dir() {
+                    stack.push(child);
+                    continue;
+                }
+                if !matches!(
+                    child.extension().and_then(|ext| ext.to_str()),
+                    Some("rs" | "toml" | "bazel")
+                ) {
+                    continue;
+                }
+                let Ok(text) = fs::read_to_string(&child) else {
+                    continue;
+                };
+                let production = text
+                    .lines()
+                    .filter(|line| !line.trim_start().starts_with("//"))
+                    .collect::<Vec<_>>()
+                    .join("\n");
+                if production.contains("d2b_broker")
+                    || production.contains("d2b-broker")
+                    || production.contains("BrokerRequest")
+                    || production.contains("BrokerResponse")
+                    || production.contains("D2B_BROKER_SOCKET")
+                    || production.contains("connect_seqpacket")
+                {
+                    violations.push(child.display().to_string());
+                }
+            }
+        }
+    }
+    assert!(
+        violations.is_empty(),
+        "Provider controllers must use neutral EffectPorts; broker client references found in {:?}",
+        violations
     );
 }

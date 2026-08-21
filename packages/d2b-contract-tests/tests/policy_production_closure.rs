@@ -23,7 +23,7 @@ const PROTECTED_CODEOWNERS_RULES: &[&str] = &[
     "/Cargo.toml @vicondoa",
     "/Cargo.lock @vicondoa",
     "/packages/Cargo.guest.lock @vicondoa",
-    "/packages/d2b-priv-broker/Cargo.toml @vicondoa",
+    "/packages/d2b-broker/Cargo.toml @vicondoa",
     "/packages/d2b-guest-shell-runner/Cargo.toml @vicondoa",
     "/packages/policy-inputs/** @vicondoa",
     "/packages/policy-inputs/advisory-policy.json @vicondoa",

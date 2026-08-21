@@ -4,7 +4,7 @@
 //! The legacy shell gate cross-referenced
 //! `docs/reference/broker-w2-dispositions.md`,
 //! `docs/reference/schemas/v2/privileges.json`, and the broker dispatcher in
-//! `packages/d2b-priv-broker/src/runtime.rs`. This Rust port keeps the
+//! `packages/d2b-broker/src/runtime.rs`. This Rust port keeps the
 //! same closed-world assertions while evaluating the production real-wire
 //! dispatcher (`RealBrokerRequest::...`) instead of the retired bootstrap
 //! dispatcher.
@@ -19,8 +19,8 @@ use serde_json::Value;
 
 const DOC_REL: &str = "docs/reference/broker-w2-dispositions.md";
 const SCHEMA_REL: &str = "docs/reference/schemas/v2/privileges.json";
-const BROKER_SRC_REL: &str = "packages/d2b-priv-broker/src";
-const RUNTIME_REL: &str = "packages/d2b-priv-broker/src/runtime.rs";
+const BROKER_SRC_REL: &str = "packages/d2b-broker/src";
+const RUNTIME_REL: &str = "packages/d2b-broker/src/runtime.rs";
 
 fn collect_rs_files(dir: &Path, out: &mut Vec<PathBuf>) {
     let entries = fs::read_dir(dir).unwrap_or_else(|err| {

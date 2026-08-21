@@ -88,8 +88,8 @@ if [ ! -e /dev/kvm ]; then
   exit 77
 fi
 
-if ! systemctl is-active --quiet d2b-priv-broker 2>/dev/null; then
-  log "==> SKIP: d2b-priv-broker is not active (systemctl is-active returned non-zero)"
+if ! systemctl is-active --quiet d2b-broker 2>/dev/null; then
+  log "==> SKIP: d2b-broker is not active (systemctl is-active returned non-zero)"
   exit 77
 fi
 

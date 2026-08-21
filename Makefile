@@ -85,7 +85,7 @@ D2B_BAZEL_TEST_TAG_FILTERS ?= -manual,-gpu,-kvm
 D2B_BAZEL_MAIN_TARGETS = \
 	//packages/... \
 	//bazel/checks/rust/... \
-	-//packages/d2b-priv-broker/... \
+	-//packages/d2b-broker/... \
 	-//packages/d2b-guest-shell-runner/... \
 	-//packages/xtask:policy_ci \
 	-//packages/xtask:policy_workspace \

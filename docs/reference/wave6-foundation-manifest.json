@@ -868,7 +868,7 @@
       "owner": "provider.device-tpm",
       "status": "Landed",
       "implementationPath": "packages/d2b-provider-device-tpm",
-      "validationProof": "`tests/effect_fake.rs` proves migration precedes ensure and carries no path/uid/gid/mode/command; static proof that non-test files do not import `d2b_priv_broker`",
+      "validationProof": "`tests/effect_fake.rs` proves migration precedes ensure and carries no path/uid/gid/mode/command; static proof that non-test files do not import `d2b_broker`",
       "removalProof": "Direct broker references in controller/daemon TPM paths are superseded by the effect-port/resource-provider boundary; final deletion is ADR046-device-tpm-013",
       "sourceState": "Planned"
     },
@@ -1814,8 +1814,8 @@
       "owner": "provider.device-security-key",
       "status": "Landed",
       "implementationPath": "packages/d2b-provider-device-security-key",
-      "validationProof": "`packages/d2b-priv-broker/tests/security_key_broker.rs` updates for bundle table lookup and zone-field round trip; `device_grant_no_path.rs` proves Provider code does not call the broker and sees no device path; audit tests prove path-free grant records.",
-      "removalProof": "The superseded iterative sysfs scan/fallback behavior in `packages/d2b-priv-broker/src/ops/security_key.rs` is removed once bundle-token lookup and revalidation tests pass.",
+      "validationProof": "`packages/d2b-broker/tests/security_key_broker.rs` updates for bundle table lookup and zone-field round trip; `device_grant_no_path.rs` proves Provider code does not call the broker and sees no device path; audit tests prove path-free grant records.",
+      "removalProof": "The superseded iterative sysfs scan/fallback behavior in `packages/d2b-broker/src/ops/security_key.rs` is removed once bundle-token lookup and revalidation tests pass.",
       "sourceState": "Planned"
     },
     {
@@ -2661,7 +2661,7 @@
       "owner": "provider.volume-local",
       "status": "Landed",
       "implementationPath": "packages/d2b-provider-volume-local",
-      "validationProof": "All `tests/marker.rs`, `tests/state.rs`, and `integration/provision.rs` scenarios; dependency/source checks prove no `d2b-priv-broker`/`d2bd`, syscall binding, command execution, raw host-path type, audit writer, or Provider-local descriptor in the Provider crate",
+      "validationProof": "All `tests/marker.rs`, `tests/state.rs`, and `integration/provision.rs` scenarios; dependency/source checks prove no `d2b-broker`/`d2bd`, syscall binding, command execution, raw host-path type, audit writer, or Provider-local descriptor in the Provider crate",
       "removalProof": "`swtpm_dir.rs` marker implementation retired only after device-tpm Provider Volume is live and marker-check parity is confirmed",
       "sourceState": "Planned"
     },
@@ -2673,7 +2673,7 @@
       "status": "Landed",
       "implementationPath": "packages/d2b-provider-volume-local",
       "validationProof": "`tests/layout_provision.rs`, `tests/layout_repair.rs`, `tests/layout_adopt.rs`, `tests/acl.rs`, `tests/view_rights.rs`, `tests/source.rs`, `integration/provision.rs`",
-      "removalProof": "`d2b-priv-broker/src/ops/storage_contract.rs` `reconcile_storage_scope` retired only after Volume controller parity confirmed",
+      "removalProof": "`d2b-broker/src/ops/storage_contract.rs` `reconcile_storage_scope` retired only after Volume controller parity confirmed",
       "sourceState": "Planned"
     },
     {
@@ -2684,7 +2684,7 @@
       "status": "Landed",
       "implementationPath": "packages/d2b-provider-volume-local",
       "validationProof": "`tests/store_view.rs` all invariants; `integration/store_view.rs` same-filesystem boundary; private-NS sync with concurrent reader",
-      "removalProof": "`packages/d2b-provider-volume-local/nix/store.nix` activation and `d2b-priv-broker/src/ops/store_sync.rs` retired only after store-view Volume controller is live and passes all parity tests",
+      "removalProof": "`packages/d2b-provider-volume-local/nix/store.nix` activation and `d2b-broker/src/ops/store_sync.rs` retired only after store-view Volume controller is live and passes all parity tests",
       "sourceState": "Planned"
     },
     {
@@ -2695,7 +2695,7 @@
       "status": "Landed",
       "implementationPath": "packages/d2b-provider-volume-local",
       "validationProof": "`tests/swtpm_volume.rs` all scenarios; `integration/swtpm_marker.rs` real broker-maintained marker",
-      "removalProof": "`d2b-priv-broker/src/ops/swtpm_dir.rs` retired only after device-tpm Provider TPM Volume is live and fail-closed tests pass",
+      "removalProof": "`d2b-broker/src/ops/swtpm_dir.rs` retired only after device-tpm Provider TPM Volume is live and fail-closed tests pass",
       "sourceState": "Planned"
     },
     {

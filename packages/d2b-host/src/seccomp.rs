@@ -5,7 +5,7 @@
 //! compact BPF seccomp program ready for installation by the broker via
 //! `SECCOMP_SET_MODE_FILTER`. This module lives in `d2b-host` (not
 //! `d2b-core`) so that [`DeviceClass`] is available without creating
-//! a dep-graph cycle; `d2b-priv-broker` depends on `d2b-host` and
+//! a dep-graph cycle; `d2b-broker` depends on `d2b-host` and
 //! converts the [`CompiledSeccompProgram`] to `libc::sock_filter` slices
 //! in its quarantined `sys.rs`.
 //!

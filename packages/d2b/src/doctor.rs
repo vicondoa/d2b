@@ -1426,7 +1426,7 @@ fn check_pre_ns_posture_with_reader<F>(
 /// - **Pass** otherwise.
 ///
 /// The broker's in-memory `ChildReaped` replay-buffer depth is NOT yet
-/// observable via a stable CLI command (`d2b-priv-broker
+/// observable via a stable CLI command (`d2b-broker
 /// --report-state` is not yet implemented as of v1.2).  When D7 lands
 /// the IPC mechanism, this check will be extended to query that buffer.
 /// For v1.2 the zombie-count probe is sufficient: zero zombies among
@@ -1487,7 +1487,7 @@ fn check_broker_reap_health(entries: &PidfdEntries, report: &mut DoctorReport) {
         "zombies": zombies.len(),
         "checked": checked,
         // D7 replay-buffer depth probe: not yet observable.
-        // When `d2b-priv-broker --report-state` lands, this
+        // When `d2b-broker --report-state` lands, this
         // field will carry the actual in-memory buffer depth.
         "bufferDepth": null,
     });

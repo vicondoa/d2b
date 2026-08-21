@@ -96,7 +96,7 @@ stable label, USB vendor/product IDs, and an optional serial:
 
 The host broker owns the following runtime resources. They are **not** declared
 as NixOS systemd services or static units; they are created and torn down by
-the `d2bd`/`d2b-priv-broker` pipeline at runtime:
+the `d2bd`/`d2b-broker` pipeline at runtime:
 
 | Resource | Owner | Path / name |
 |----------|-------|-------------|

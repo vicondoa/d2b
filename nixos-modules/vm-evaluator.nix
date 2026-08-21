@@ -22,7 +22,7 @@
 #     networking, services, etc. - driven by the consumer's
 #     `vm.config` module list).
 { inputs }:
-{ config, lib, pkgs, ... }:
+{ config, lib, pkgs, d2bHostTools ? null, ... }:
 
 let
   cfg = config.d2b;
@@ -49,6 +49,7 @@ let
         ./vm-options.nix
         ./vm-guest-base.nix
         ./guest-control.nix
+        ./guest-broker.nix
         # Inherit host nixpkgs policy so per-VM evals honor the consumer's
         # allowUnfree / overlays / security fixes without re-stating them in
         # each per-VM module.
@@ -61,7 +62,11 @@ let
       specialArgs =
         { inherit inputs; }
         // cfg.site.extraSpecialArgs
-        // { d2bInputs = inputs; };
+        // {
+          d2bInputs = inputs;
+          inherit d2bHostTools;
+          d2bUsePrebuiltHostTools = cfg.site.usePrebuiltHostTools;
+        };
       inherit (pkgs.stdenv.hostPlatform) system;
     };
 

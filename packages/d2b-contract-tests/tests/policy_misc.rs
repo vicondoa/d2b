@@ -28,7 +28,7 @@ fn any_line_matches(content: &str, pattern: &str) -> bool {
 //
 // Asserts nixos-modules/host-polkit.nix names ONLY the daemon-only singleton
 // units in its launcher-group allowlist (d2bd.service,
-// d2b-priv-broker.service, d2b-priv-broker.socket) and contains NO
+// d2b-broker.service, d2b-broker.socket) and contains NO
 // references to the retired per-VM / per-env unit shapes in its executable
 // region (the leading comment block is allowed to name the retired shapes;
 // the executable code MUST NOT). Also asserts the structural invariants on the
@@ -50,8 +50,8 @@ fn polkit_allowlist_daemon_only_singletons() {
     // search strings include the surrounding double-quotes).
     for unit in [
         r#""d2bd.service""#,
-        r#""d2b-priv-broker.service""#,
-        r#""d2b-priv-broker.socket""#,
+        r#""d2b-broker.service""#,
+        r#""d2b-broker.socket""#,
     ] {
         assert!(
             polkit.contains(unit),

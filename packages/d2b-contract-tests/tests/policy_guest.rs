@@ -113,11 +113,11 @@ fn otel_relay_acl_module_not_publicly_imported_and_broker_handler_present() {
          nixos-modules/default.nix: {offending:?}"
     );
 
-    let broker_runtime = read_repo_file("packages/d2b-priv-broker/src/runtime.rs");
+    let broker_runtime = read_repo_file("packages/d2b-broker/src/runtime.rs");
     assert!(
         broker_runtime.contains("RunnerRole::OtelHostBridge"),
         "otel-acl-migration-eval: broker runtime missing OtelHostBridge handler in \
-         packages/d2b-priv-broker/src/runtime.rs"
+         packages/d2b-broker/src/runtime.rs"
     );
 }
 
@@ -231,7 +231,7 @@ fn guest_activation_stays_guest_systemd_only_and_restart_safe() {
         "activation must not route through a shell wrapper"
     );
     assert!(
-        !service.contains("d2bd.service") && !service.contains("d2b-priv-broker"),
+        !service.contains("d2bd.service") && !service.contains("d2b-broker"),
         "guest activation support must not orchestrate host daemon/broker services"
     );
 }

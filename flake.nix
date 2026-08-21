@@ -530,7 +530,7 @@
       # userland - e.g. proving a static d2b binary runs on stock Ubuntu.
       # It deliberately does NOT boot systemd for daemon/socket activation;
       # that is covered natively by
-      # packages/d2b-priv-broker/tests/socket_activation.rs plus nix-unit.
+      # packages/d2b-broker/tests/socket_activation.rs plus nix-unit.
       # See tests/integration/containers/README.md.
       #
       # Auto-discovered from tests/integration/containers/images/*.nix: each image module is
@@ -1057,7 +1057,7 @@
         } // args);
         rustToolchainChannel =
           (builtins.fromTOML (builtins.readFile ./rust-toolchain.toml)).toolchain.channel;
-        brokerManifestToml = builtins.fromTOML (builtins.readFile ./packages/d2b-priv-broker/Cargo.toml);
+        brokerManifestToml = builtins.fromTOML (builtins.readFile ./packages/d2b-broker/Cargo.toml);
         mainManifestToml = builtins.fromTOML (builtins.readFile ./Cargo.toml);
         assertRustToolchain = ''
           rustc --version | grep -F "${rustToolchainChannel}"

@@ -61,7 +61,7 @@ fn assert_files_have_no_line(files: &[&str], pattern: &str, ctx: &str) {
 //
 // Doc/code drift gate. Asserts docs/reference/tap-dag-contract.md matches the
 // implementation it documents: the derived-ifname scheme in
-// d2b_host::ifname, the tap broker ops in d2b-priv-broker, the
+// d2b_host::ifname, the tap broker ops in d2b-broker, the
 // host-prep DAG variant + ordering edges in d2b_host::host_prep_dag, and
 // the ChNetHandoffMode enum in d2b-core. Pure grep over committed sources;
 // no nixpkgs eval, no rust build.
@@ -70,7 +70,7 @@ fn assert_files_have_no_line(files: &[&str], pattern: &str, ctx: &str) {
 fn tap_dag_contract_doc_matches_implementation() {
     const DOC: &str = "docs/reference/tap-dag-contract.md";
     const IFNAME: &str = "packages/d2b-host/src/ifname.rs";
-    const TAP_OPS: &str = "packages/d2b-priv-broker/src/ops/tap.rs";
+    const TAP_OPS: &str = "packages/d2b-broker/src/ops/tap.rs";
     const DAG: &str = "packages/d2b-host/src/host_prep_dag.rs";
     const HOST_DTO: &str = "packages/d2b-core/src/host.rs";
 

@@ -9,12 +9,12 @@ license.workspace = true
 workspace = true
 
 # d2b-host is the W3 disjoint host-prepare API surface consumed by
-# d2bd and d2b-priv-broker. Stub modules land in the integrator
+# d2bd and d2b-broker. Stub modules land in the integrator
 # prep commit; W3 scope agents s1-s4 fill them in.
 #
 # Dependency rule (per W3 file-ownership map): d2b-host depends only
 # on d2b-core + d2b-contracts + low-level OS crates declared in the
-# workspace. It must NEVER depend on d2bd or d2b-priv-broker
+# workspace. It must NEVER depend on d2bd or d2b-broker
 # (both are downstream consumers).
 
 [features]

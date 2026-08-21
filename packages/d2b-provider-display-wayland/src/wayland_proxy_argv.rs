@@ -1,7 +1,7 @@
 //! `d2b-wayland-proxy` host-side Wayland proxy argv generator.
 //!
 //! Pure Rust function that emits the argv for the per-VM
-//! `d2b-<vm>-wlproxy` role spawned by `d2b-priv-broker`
+//! `d2b-<vm>-wlproxy` role spawned by `d2b-broker`
 //! via `SpawnRunner { role: WaylandProxy }`.
 //!
 //! The proxy runs as a dedicated `d2b-<vm>-wlproxy` UID with:

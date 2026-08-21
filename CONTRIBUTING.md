@@ -138,7 +138,7 @@ When docs disagree with committed, passing code, the code wins. Update the docs 
 ## Host-prepare gates
 
 Contributors touching anything in `packages/d2b-host/`,
-`packages/d2b-priv-broker/src/ops/`, or the host-prepare
+`packages/d2b-broker/src/ops/`, or the host-prepare
 docs (`docs/how-to/host-prepare.md`,
 `docs/how-to/host-prepare.d/*.md`,
 `docs/reference/{cgroup-delegation,inet-d2b-chains,privileges,support-matrix}.md`)

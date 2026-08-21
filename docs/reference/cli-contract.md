@@ -2501,7 +2501,7 @@ cutover-only cleanup candidates, and fail-closed hazards. `--apply` and
   "preflightRequirements": [
     "all d2b VMs stopped",
     "d2bd.service stopped",
-    "d2b-priv-broker.service stopped",
+    "d2b-broker.service stopped",
     "net VMs stopped; guest routing, TAP connectivity, and dependent bridge traffic will be interrupted"
   ],
   "preserve": [
@@ -2538,7 +2538,7 @@ rollback command: d2b host migrate-storage --rollback --from-checkpoint storage-
 preflight requirements:
   - all d2b VMs stopped
   - d2bd.service stopped
-  - d2b-priv-broker.service stopped
+  - d2b-broker.service stopped
   - net VMs stopped; guest routing, TAP connectivity, and dependent bridge traffic will be interrupted
 ```
 

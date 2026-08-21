@@ -1,6 +1,6 @@
 { inputs }:
 
-{ config, pkgs, lib, ... }:
+{ config, pkgs, lib, d2bHostTools ? null, ... }:
 
 let
   d2bLib = import ./lib.nix { inherit lib; };
@@ -14,7 +14,7 @@ let
   # lib.nix helpers (vmRunner / vmToplevel / vmDeclaredRunner)
   # read it.
   vmSubmodule = (import ./vm-submodule.nix { inherit inputs; })
-    { inherit config lib pkgs; };
+    { inherit config lib pkgs d2bHostTools; };
   composeVm = vmSubmodule._composeVm;
 
   cfg = config.d2b;

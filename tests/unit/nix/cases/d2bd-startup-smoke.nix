@@ -1,7 +1,7 @@
 # nix-unit cases migrated from tests/d2bd-startup-smoke.sh Phase 1.
 #
 # Eval-only daemon/broker startup surface: systemd tmpfiles rules,
-# d2b-priv-broker.{socket,service}, d2bd.service, and the small
+# d2b-broker.{socket,service}, d2bd.service, and the small
 # evidence-record shape assertion the retired shell gate carried before its
 # opt-in D2B_LIVE section.
 { mkEval, lib, ... }:
@@ -61,9 +61,9 @@ let
   tmpfiles = cfg.systemd.tmpfiles.rules;
   services = cfg.systemd.services;
   sockets = cfg.systemd.sockets;
-  brokerService = services.d2b-priv-broker;
+  brokerService = services.d2b-broker;
   daemonService = services.d2bd;
-  brokerSocket = sockets.d2b-priv-broker;
+  brokerSocket = sockets.d2b-broker;
 
   rulesForPath = path:
     builtins.filter (lib.hasInfix (" " + path + " ")) tmpfiles;
@@ -233,7 +233,7 @@ in
   };
 
   "d2bd-startup-smoke/daemon-wants-broker-socket" = {
-    expr = builtins.elem "d2b-priv-broker.socket" (daemonService.wants or [ ]);
+    expr = builtins.elem "d2b-broker.socket" (daemonService.wants or [ ]);
     expected = true;
   };
 

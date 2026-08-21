@@ -1187,7 +1187,7 @@ d2b_static_gate_end "W1 bundle/schema static gates"
 # -----------------------------------------------------------------------------
 # Control-plane skeleton gates (per the plan-of-record, plan.md §
 # "###: Rust workspace and API skeleton"). These cover the d2b-contracts
-# wire types, d2b-priv-broker dispatch, d2bd socket auth + state
+# wire types, d2b-broker dispatch, d2bd socket auth + state
 # lock + version negotiation, the Rust-native CLI shim, generated docs +
 # error-codes, and bounded fuzz of the manifest_v04 / bundle parsers.
 # -----------------------------------------------------------------------------
@@ -1198,7 +1198,7 @@ if [ -d "$ROOT/packages" ]; then
   _W2_WORKSPACE_TARGET=$(d2b_cargo_target_dir workspace)
   _W2_BROKER_TARGET=$(d2b_cargo_target_dir broker)
   CARGO_TARGET_DIR="$_W2_WORKSPACE_TARGET" cargo build --manifest-path "$ROOT/Cargo.toml" --quiet -p d2b -p d2bd -p xtask --bins
-  CARGO_TARGET_DIR="$_W2_BROKER_TARGET" cargo build --manifest-path "$ROOT/Cargo.toml" --quiet -p d2b-priv-broker --features layer1-bootstrap
+  CARGO_TARGET_DIR="$_W2_BROKER_TARGET" cargo build --manifest-path "$ROOT/Cargo.toml" --quiet -p d2b-broker --features layer1-bootstrap
 fi
 d2b_time_end "W2 cargo prebuild"
 d2b_time_begin "W2 CLI smoke prewarm"

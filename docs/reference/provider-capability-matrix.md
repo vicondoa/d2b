@@ -16,7 +16,7 @@ For display and virtual I/O capabilities beyond console and audio, see
 
 | Provider | Identity | Guest-control channel |
 | --- | --- | --- |
-| Cloud Hypervisor NixOS | Local VM managed by `d2bd` + `d2b-priv-broker` | `guestd` over authenticated vsock guest-control |
+| Cloud Hypervisor NixOS | Local VM managed by `d2bd` + `d2b-broker` | `guestd` over authenticated vsock guest-control |
 | qemu-media | Dedicated media/console workload; no `guestd` | None |
 | ACA sandbox | Provider-managed workload (Azure Container Apps) | guestd-compatible in-sandbox agent over ADR 0032 relay/peer transport |
 

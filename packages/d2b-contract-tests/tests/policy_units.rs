@@ -506,3 +506,28 @@ fn legacy_unit_denylist_swtpm_forms() {
         "manifest.nix tpmService bundle-metadata string must be SKIP (file allowlist)"
     );
 }
+
+#[test]
+fn broker_units_are_profile_bound_and_not_legacy_serve_units() {
+    let host = read_repo_file_opt("nixos-modules/host-broker.nix").expect("host broker module");
+    let guest = read_repo_file_opt("nixos-modules/guest-broker.nix").expect("guest broker module");
+    let daemon = read_repo_file_opt("nixos-modules/host-daemon.nix").expect("host daemon module");
+
+    assert!(host.contains("systemd.sockets ="));
+    assert!(host.contains("d2b-broker = {"));
+    assert!(host.contains("/bin/d2b-broker host"));
+    assert!(host.contains("--authority-id host"));
+    assert!(!host.contains("/bin/d2b-broker serve"));
+
+    assert!(guest.contains("systemd.sockets.d2b-broker-guest"));
+    assert!(guest.contains("systemd.services.d2b-broker-guest"));
+    assert!(guest.contains("/bin/d2b-broker guest"));
+    assert!(guest.contains("--authority-id guest-"));
+    assert!(guest.contains("/run/d2b/guest-broker.sock"));
+    assert!(guest.contains("/var/lib/d2b/guest-broker"));
+    assert!(guest.contains("/var/lib/d2b/guest-audit"));
+    assert!(!guest.contains("/bin/d2b-broker host"));
+
+    assert!(daemon.contains("d2b-broker.socket"));
+    assert!(!daemon.contains("d2b-priv-broker"));
+}

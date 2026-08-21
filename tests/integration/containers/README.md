@@ -27,7 +27,7 @@ already exists, far more cheaply and without containers:
 
 | What | Where | Cost |
 | --- | --- | --- |
-| Broker adopts the socket-activated fd (`LISTEN_FDS` fd-3 handoff) + serves a Hello round-trip | `packages/d2b-priv-broker/tests/socket_activation.rs` | ~0.4 s, unprivileged |
+| Broker adopts the socket-activated fd (`LISTEN_FDS` fd-3 handoff) + serves a Hello round-trip | `packages/d2b-broker/tests/socket_activation.rs` | ~0.4 s, unprivileged |
 | Daemon binds `public.sock`, serves Hello/vmStart, `SO_PEERCRED` authz, writes the version file | `packages/d2bd/tests/daemon_*.rs` | native, hermetic |
 | Unit shape + `Wants=`/ordering, broker capability set, tmpfiles, evidence-record shape | `tests/unit/nix/cases/{broker-socket-activation,d2bd-startup-smoke}.nix` | nix eval, fail-closed |
 

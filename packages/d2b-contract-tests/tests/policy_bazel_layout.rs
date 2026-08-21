@@ -243,7 +243,7 @@ fn production_bazel_layout_has_one_locked_root_authority() {
 
     let cargo = read_repo_file("Cargo.toml");
     for required in [
-        "packages/d2b-priv-broker",
+        "packages/d2b-broker",
         "packages/d2b-guest-shell-runner",
     ] {
         assert!(

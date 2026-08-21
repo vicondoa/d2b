@@ -21,11 +21,11 @@ guest-control), see [remote full-host nodes](./remote-full-host-nodes.md).
 
 A provider-managed sandbox is a named workload target in a realm whose
 lifecycle (create, start, stop, destroy) is owned by an external provider
-API rather than by a `d2b-priv-broker` running on a locally managed
+API rather than by a `d2b-broker` running on a locally managed
 host. From the daemon's perspective it is a node with a bounded positive
 capability set derived from what that provider API or provider-side d2b
 agent supports. The daemon never provisions, registers, or expects a full
-host `d2bd`, `d2b-priv-broker`, KVM subsystem, vsock channel, cgroup
+host `d2bd`, `d2b-broker`, KVM subsystem, vsock channel, cgroup
 subtree, namespace hierarchy, full-host lifecycle, or device-hotplug surface
 on a provider-managed node. ADR 0039 defines one exception to the old
 exec-only model: a provider-managed sandbox may advertise persistent shell
@@ -40,7 +40,7 @@ key differences:
 
 | Dimension | Provider-managed sandbox | Remote full-host node |
 | --- | --- | --- |
-| Who owns lifecycle | Cloud provider API | Remote `d2bd` + `d2b-priv-broker` |
+| Who owns lifecycle | Cloud provider API | Remote `d2bd` + `d2b-broker` |
 | Broker presence | None | Full broker on the remote host |
 | Guest-control / vsock | No vsock or raw guest-control tunnel; persistent-shell-capable sandboxes require a guestd-compatible agent over constellation peer transport. | Present |
 | KVM / hypervisor | Absent | Present |
@@ -149,7 +149,7 @@ are never routed through this adapter. Requests for them fail closed
 with `UnsupportedFeature` or `CapabilityDenied`; there are no fallbacks.
 
 - **No broker operation forwarding.** The adapter never forwards raw
-  `d2b-priv-broker` frames to the container runtime.
+  `d2b-broker` frames to the container runtime.
 - **No raw guest-control or vsock frames.** The current
   executeShellCommand-only Azure Container Apps adapter has no guestd instance
   and no vsock channel to attach or tunnel. Future persistent-shell-capable

@@ -371,7 +371,7 @@ remediation block renders as:
 ```
 Remediation:
   d2bd is not reachable. Start the daemon and re-run:
-    sudo systemctl start d2b-priv-broker.socket
+    sudo systemctl start d2b-broker.socket
     sudo systemctl start d2bd.service
   For the full operator runbook context, see:
     docs/how-to/migrate-d2b-v0-to-v1.md

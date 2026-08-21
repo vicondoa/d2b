@@ -723,8 +723,8 @@ let
             daemonPrincipalIsShared = false;
           };
           broker = {
-            socketUnitName = "${homeUnitPrefix}-priv-broker.socket";
-            serviceUnitName = "${homeUnitPrefix}-priv-broker.service";
+            socketUnitName = "${homeUnitPrefix}-broker.socket";
+            serviceUnitName = "${homeUnitPrefix}-broker.service";
             materializedSocket = true;
             materializedService = true;
           };
@@ -987,9 +987,9 @@ let
         units = {
           homeDaemon = {
             wantedBy = homeDaemonUnit.wantedBy;
-            wantsRootBrokerSocket = builtins.elem "d2b-priv-broker.socket" homeDaemonUnit.wants;
-            afterRootBrokerSocket = builtins.elem "d2b-priv-broker.socket" homeDaemonUnit.after;
-            afterRootBrokerService = builtins.elem "d2b-priv-broker.service" homeDaemonUnit.after;
+            wantsRootBrokerSocket = builtins.elem "d2b-broker.socket" homeDaemonUnit.wants;
+            afterRootBrokerSocket = builtins.elem "d2b-broker.socket" homeDaemonUnit.after;
+            afterRootBrokerService = builtins.elem "d2b-broker.service" homeDaemonUnit.after;
             wantsBrokerSocket = builtins.elem home.broker.socketUnitName homeDaemonUnit.wants;
             afterBrokerSocket = builtins.elem home.broker.socketUnitName homeDaemonUnit.after;
             afterBrokerService = builtins.elem home.broker.serviceUnitName homeDaemonUnit.after;
@@ -1188,8 +1188,8 @@ let
           user = "root";
           group = realms.byPath.home.controller.broker.group;
           socketPath = "/run/d2b/realms/home/broker.sock";
-          socketUnitName = "${homeUnitPrefix}-priv-broker.socket";
-          serviceUnitName = "${homeUnitPrefix}-priv-broker.service";
+          socketUnitName = "${homeUnitPrefix}-broker.socket";
+          serviceUnitName = "${homeUnitPrefix}-broker.service";
           auditDir = "/var/lib/d2b/audit/realms/home";
           materializedSocket = true;
           materializedService = true;
@@ -1448,8 +1448,8 @@ let
         unitOrdering = {
           childAfterParent = builtins.elem home.daemon.serviceName devDaemonUnit.after;
           parentDoesNotAfterChild = !(builtins.elem dev.daemon.serviceName homeDaemonUnit.after);
-          parentAfterRootBrokerSocket = builtins.elem "d2b-priv-broker.socket" homeDaemonUnit.after;
-          parentAfterRootBrokerService = builtins.elem "d2b-priv-broker.service" homeDaemonUnit.after;
+          parentAfterRootBrokerSocket = builtins.elem "d2b-broker.socket" homeDaemonUnit.after;
+          parentAfterRootBrokerService = builtins.elem "d2b-broker.service" homeDaemonUnit.after;
         };
         socketAccess = {
           inherit (homeBrokerSocket.socketConfig) ListenSequentialPacket SocketGroup SocketMode;

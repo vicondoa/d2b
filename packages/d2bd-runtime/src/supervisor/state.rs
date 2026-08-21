@@ -241,7 +241,7 @@ pub fn reconcile(
 ///
 /// Pure-ish: takes an opener trait so tests can run without /proc
 /// or the SYS_pidfd_open syscall. The production opener calls
-/// `d2b_priv_broker::sys::pidfd_sys::pidfd_open` via a thin
+/// `d2b_broker::sys::pidfd_sys::pidfd_open` via a thin
 /// shim (the broker crate has the only `unsafe` quarantine).
 /// Abstraction over "open pidfd for this pid AND verify the resulting
 /// pidfd still refers to the process we expect". Implementations:
@@ -257,7 +257,7 @@ pub fn reconcile(
 ///
 ///   The production opener lives outside this module because
 ///   `d2bd` is `#![forbid(unsafe_code)]` and `pidfd_open(2)`
-///   syscall access lives in `d2b-priv-broker::sys::pidfd_sys`.
+///   syscall access lives in `d2b-broker::sys::pidfd_sys`.
 ///   The W*-fu wiring sends a `BrokerRequest::OpenPidfd { pid,
 ///   expected_start_time }` shim over the broker socket, and the
 ///   broker returns the verified-fd over SCM_RIGHTS. That shim is

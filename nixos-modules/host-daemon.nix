@@ -221,14 +221,14 @@ let
       wants =
         [
           "systemd-tmpfiles-setup.service"
-          "d2b-priv-broker.socket"
+          "d2b-broker.socket"
         ]
         ++ lib.optional (brokerSocketUnit != null) brokerSocketUnit;
       after =
         [
           "systemd-tmpfiles-setup.service"
-          "d2b-priv-broker.socket"
-          "d2b-priv-broker.service"
+          "d2b-broker.socket"
+          "d2b-broker.service"
           "network.target"
           "dbus.socket"
           "dbus.service"
@@ -464,14 +464,14 @@ in
       description = "d2b daemon skeleton";
       wantedBy = [ "multi-user.target" ];
       wants = [
-        "d2b-priv-broker.socket"
+        "d2b-broker.socket"
         "systemd-tmpfiles-setup.service"
       ];
       after = [
         "systemd-tmpfiles-setup.service"
         "network.target"
-        "d2b-priv-broker.socket"
-        "d2b-priv-broker.service"
+        "d2b-broker.socket"
+        "d2b-broker.service"
         "dbus.socket"
         "dbus.service"
         "d2b.slice"

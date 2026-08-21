@@ -117,7 +117,7 @@ fn legacy_group_allowlist() -> Regex {
         r"nixos-modules/host-daemon\.nix:[0-9]+:[[:space:]]*users\.groups\.d2b-launchers = \{ \};[[:space:]]*",
         r"packages/d2b-core/src/privileges\.rs:[0-9]+:.*d2b-launcher.*",
         r"packages/d2b-contracts-broker/src/broker_wire\.rs:[0-9]+:.*d2b-launcher.*",
-        r"packages/d2b-priv-broker/src/bootstrap\.rs:[0-9]+:.*d2b-launcher.*",
+        r"packages/d2b-broker/src/bootstrap\.rs:[0-9]+:.*d2b-launcher.*",
         r"nixos-modules/privileges-json\.nix:[0-9]+:.*d2b-launcher.*",
         r"tests/legacy-group-name-denylist(-self-test)?\.sh:[0-9]+:.*",
         r"tests/group-rename-semantic-eval\.sh:[0-9]+:.*",
@@ -186,7 +186,7 @@ fn vm_submodule_cutover() {
 // The Rust workspace dependency graph flows one way: contracts are leaves;
 // realm/core depend on contracts; host depends on core+contracts; the binaries
 // (d2b, d2bd) and the
-// privileged broker (d2b-priv-broker, a sibling workspace) sit above. The
+// privileged broker (d2b-broker, a sibling workspace) sit above. The
 // broker must NOT depend on d2bd/d2b; the CLI/daemon must NOT depend on
 // the broker.
 // This is a pure static parse of the `Cargo.toml` files. It also asserts the
@@ -210,12 +210,12 @@ fn static_rust_dependency_direction() {
             &["d2b-core", "d2b-realm-core", "d2b-host", "d2b-contracts"],
         ),
         (
-            "d2b-priv-broker",
+            "d2b-broker",
             &["d2b-core", "d2b-realm-core", "d2b-host", "d2b-contracts"],
         ),
     ];
     let internal_crate = Regex::new(
-        r"^(d2b-core|d2b-realm-core|d2b-host|d2b-contracts|d2b-priv-broker|d2b|d2bd|xtask)$",
+        r"^(d2b-core|d2b-realm-core|d2b-host|d2b-contracts|d2b-broker|d2b|d2bd|xtask)$",
     )
     .expect("valid internal-crate regex");
 
@@ -350,7 +350,7 @@ impl<'ast> syn::visit::Visit<'ast> for HostEffectVisitor {
             "std::os::unix::net",
             "tokio::net",
             "systemd",
-            "d2b_priv_broker",
+            "d2b_broker",
         ];
         if (forbidden
             .iter()
@@ -436,7 +436,7 @@ fn record_forbidden_use(path: Vec<String>, forbidden: &mut Vec<String>) {
         "std::os::unix::net",
         "tokio::net",
         "systemd",
-        "d2b_priv_broker",
+        "d2b_broker",
     ]
     .iter()
     .any(|prefix| joined == *prefix || joined.starts_with(&format!("{prefix}::")))

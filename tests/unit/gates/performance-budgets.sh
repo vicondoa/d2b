@@ -44,7 +44,7 @@ add_cleanup "rm -rf -- \"$scratch\""
 bundle_root=$(d2b_cli_smoke_bundle_tree)
 cli_bin=$(d2b_cli_native_bin)
 daemon_bin=$(d2b_daemon_native_bin)
-[ -x "${D2B_BROKER_BIN:-}" ] || fail "D2B_BROKER_BIN must name the declared //packages/d2b-priv-broker:d2b_priv_broker artifact"
+[ -x "${D2B_BROKER_BIN:-}" ] || fail "D2B_BROKER_BIN must name the declared //packages/d2b-broker:d2b_broker artifact"
 broker_bin="$D2B_BROKER_BIN"
 
 wait_for_socket() {

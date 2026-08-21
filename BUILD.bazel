@@ -307,7 +307,7 @@ filegroup(
         "//packages/d2b-guestd:cargo_workspace_sources",
         "//packages/d2b-host:cargo_workspace_sources",
         "//packages/d2b-host-activation-helper:cargo_workspace_sources",
-        "//packages/d2b-priv-broker:cargo_workspace_sources",
+        "//packages/d2b-broker:cargo_workspace_sources",
         "//packages/d2b-process:cargo_workspace_sources",
         "//packages/d2b-process-conformance:cargo_workspace_sources",
         "//packages/d2b-provider:cargo_workspace_sources",

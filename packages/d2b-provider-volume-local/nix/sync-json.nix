@@ -130,7 +130,7 @@ let
     id = "lock:store-sync:${vm}";
     scope = "vm:${vm}";
     path = "${toString cfg.store.stateDir}/${vm}/store-view/sync.lock";
-    owner = actor "broker" "d2b-priv-broker";
+    owner = actor "broker" "d2b-broker";
     scopeClass = "vm";
     root = "state";
     normalizedPath = "vms/${vm}/store-view/sync.lock";
@@ -156,9 +156,9 @@ let
       pathTemplate = "/run/d2b/locks/usbip/${busid}";
       resourceId = null;
       kind = "file-record";
-      ownerProcess = actor "broker" "d2b-priv-broker";
+      ownerProcess = actor "broker" "d2b-broker";
       allowedHolders = [
-        (actor "broker" "d2b-priv-broker")
+        (actor "broker" "d2b-broker")
         (actor "daemon" "d2bd")
       ];
       inheritancePolicy = "close-on-exec";
@@ -174,7 +174,7 @@ let
       };
       adoptionPolicy = "reacquire-after-proof";
       degradeScope = "vm";
-      releaseAuthority = actor "broker" "d2b-priv-broker";
+      releaseAuthority = actor "broker" "d2b-broker";
       cloexecRequired = true;
     };
 
@@ -193,7 +193,7 @@ let
         normalizedPath = "run/d2b";
         readers = [
           (actor "daemon" "d2bd")
-          (actor "broker" "d2b-priv-broker")
+          (actor "broker" "d2b-broker")
         ];
       })
       (lockRoot {
@@ -219,7 +219,7 @@ let
         owner = actor "nix-module" "tmpfiles";
         normalizedPath = "run/d2b/locks/usbip";
         readers = [
-          (actor "broker" "d2b-priv-broker")
+          (actor "broker" "d2b-broker")
           (actor "daemon" "d2bd")
         ];
       })

@@ -475,7 +475,7 @@ Everything else is derived.
 > `nixos-modules/host-wrapper.nix` were deleted in v1.0. The section
 > below documents the legacy architecture for historical context;
 > in v1.0 the per-VM lifecycle is fully owned by `d2bd`'s
-> supervisor DAG dispatched through `d2b-priv-broker`'s
+> supervisor DAG dispatched through `d2b-broker`'s
 > `SpawnRunner` / `SignalRunner` ops, and runner lifecycle-of-record
 > is the broker-registered pidfd table. See
 > [§ Launcher authorisation](#launcher-authorisation-v10-so_peercred--d2b-group)
@@ -527,7 +527,7 @@ audit and backup scripts can reason about.
 ### Per-VM sidecars
 
 > **v1.0 status (ADR 0015):** in v1.0 daemon-only, the per-VM sidecars
-> listed below are spawned by `d2b-priv-broker` via the supervisor
+> listed below are spawned by `d2b-broker` via the supervisor
 > DAG (`SpawnRunner` requests) and registered in the pidfd table for
 > lifecycle ownership. Historically, they were emitted as
 > independent systemd units under `nixos-modules/host-sidecars.nix`; in
@@ -737,7 +737,7 @@ is the daily-driver interface. Verbs include `list`, `status`,
 `keys`, `host`, and `audit`. The CLI is the Rust binary, full stop:
 the pre-v1.0 bash CLI (and the generated `nixos-modules/cli.nix`
 shell script) was retired in v1.0. Host mutations dispatch through
-`d2bd` → `d2b-priv-broker`; live guest activation dispatches
+`d2bd` → `d2b-broker`; live guest activation dispatches
 through `d2bd` → authenticated guest-control and only uses the
 broker to publish/commit host-owned generation metadata (see
 [ADR 0015](../adr/0015-daemon-only-clean-break.md) and
@@ -841,7 +841,7 @@ patterns, see [the naming conventions reference](../reference/naming-conventions
 | VM name (`d2b.vms.<vm>`)              | `^[a-z][a-z0-9-]*$`, ≤ ... no `sys-` prefix, not `launcher` | assertions.nix |
 | Env name (`d2b.envs.<env>`)           | `^[a-z][a-z0-9-]*$`, length ≤ 8 (IFNAMSIZ-1=15 minus `br--lan` = 7) | network.nix |
 | `d2bd.service`                        | non-root daemon (v1.0; per ADR 0015 the only persistent user-facing d2b unit besides the broker) | host-daemon.nix |
-| `d2b-priv-broker.{socket,service}`    | socket-activated privileged broker (v1.0) | host-broker.nix              |
+| `d2b-broker.{socket,service}`    | socket-activated privileged broker (v1.0) | host-broker.nix              |
 | `microvm@<vm>.service`                    | upstream microvm.nix unit (still emitted for direct-debug bypass; not the lifecycle-of-record in v1.0) | microvm.nix |
 | `d2b.slice/<vm>/<role>`               | per-VM broker-spawned runner leaves (v1.0 replaces legacy `d2b-<vm>-{gpu,video,snd,swtpm,store-sync,usbip}.service`) | broker SpawnRunner |
 | `d2b.slice/sys-<env>/usbipd-{backend,proxy}` | per-env USBIP runner leaves (v1.0 replaces legacy `d2b-sys-<env>-usbipd-{backend,proxy}.service`) | broker SpawnRunner |
@@ -949,7 +949,7 @@ uid/gid, refuses requests from peers outside the `d2b` group /
 mutating verbs to the admin role (`d2b.site.adminUsers`, the
 *role* gate). Per-verb authorisation lives in the daemon's
 `dispatch_request` table. Most host-mutating verbs route through
-`d2b-priv-broker`, where each host mutation is recorded as an
+`d2b-broker`, where each host mutation is recorded as an
 audited `OpAuditRecord` in `broker-<utc-date>.jsonl`. The
 guest-control verbs are the exception: `readGuestConfig`
 (config sync) reads the guest's config over the typed guest-control

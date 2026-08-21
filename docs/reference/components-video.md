@@ -54,7 +54,7 @@ Video decode is distinct from display streaming and GPU acceleration; see
 ## Host-side resources
 
 When enabled, the daemon-owned process DAG adds a `video` node. There is no
-per-VM systemd unit; `d2bd` asks `d2b-priv-broker` to spawn the runner
+per-VM systemd unit; `d2bd` asks `d2b-broker` to spawn the runner
 with `SpawnRunner { role: Video }` and tracks it by pidfd.
 
 | Resource | Shape |

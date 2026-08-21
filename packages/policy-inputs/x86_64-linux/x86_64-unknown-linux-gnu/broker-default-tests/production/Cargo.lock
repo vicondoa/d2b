@@ -525,6 +525,33 @@ dependencies = [
 
 
 [[package]]
+name = "d2b-broker"
+version = "0.0.0-bootstrap"
+dependencies = [
+ "d2b-audit",
+ "d2b-contracts",
+ "d2b-contracts-broker",
+ "d2b-contracts-control",
+ "d2b-contracts-resource",
+ "d2b-contracts-zone-session",
+ "d2b-core",
+ "d2b-host",
+ "d2b-realm-core",
+ "hmac",
+ "nix 0.29.0",
+ "rustix 0.38.44",
+ "serde",
+ "serde_json",
+ "sha2",
+ "tempfile",
+ "tokio",
+ "tracing",
+ "tracing-subscriber",
+ "zbus",
+]
+
+
+[[package]]
 name = "d2b-contracts"
 version = "0.0.0-bootstrap"
 dependencies = [
@@ -650,33 +677,6 @@ dependencies = [
  "tempfile",
  "tokio",
  "ttrpc",
-]
-
-
-[[package]]
-name = "d2b-priv-broker"
-version = "0.0.0-bootstrap"
-dependencies = [
- "d2b-audit",
- "d2b-contracts",
- "d2b-contracts-broker",
- "d2b-contracts-control",
- "d2b-contracts-resource",
- "d2b-contracts-zone-session",
- "d2b-core",
- "d2b-host",
- "d2b-realm-core",
- "hmac",
- "nix 0.29.0",
- "rustix 0.38.44",
- "serde",
- "serde_json",
- "sha2",
- "tempfile",
- "tokio",
- "tracing",
- "tracing-subscriber",
- "zbus",
 ]
 
 

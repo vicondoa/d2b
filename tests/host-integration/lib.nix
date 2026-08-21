@@ -21,8 +21,8 @@ let
   # might have from optional or managed infrastructure.
   daemonAcceptanceUnits = [
     "d2bd.service"
-    "d2b-priv-broker.socket"
-    "d2b-priv-broker.service"
+    "d2b-broker.socket"
+    "d2b-broker.service"
   ];
 
   baseD2bConfig = {

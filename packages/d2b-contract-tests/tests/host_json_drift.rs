@@ -177,7 +177,7 @@ fn live_shape_fixture_uses_broker_canonical_ownership() {
             observed,
             Some(*expected),
             "host-valid.json: {key} is {observed:?}, expected {expected:?} \
-             (broker-canonical, see packages/d2b-priv-broker/src/ops/nm.rs::DEFAULT_NM_CONF_PATH \
+             (broker-canonical, see packages/d2b-broker/src/ops/nm.rs::DEFAULT_NM_CONF_PATH \
              and packages/d2b-host/src/routes.rs::HOSTS_MANAGED_BEGIN/END)"
         );
     }

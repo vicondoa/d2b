@@ -25,7 +25,7 @@ fn any_line_matches(content: &str, pattern: &str) -> bool {
 // ---------------------------------------------------------------------------
 // Migrated from tests/broker-systemd-unit-eval.sh.
 //
-// Asserts d2b-priv-broker.service + d2b-priv-broker.socket are
+// Asserts d2b-broker.service + d2b-broker.socket are
 // unconditionally configured in `nixos-modules/host-broker.nix` (NOT gated
 // behind `cfg.daemonExperimental.enable`), and that the canonical
 // socket/service shape is preserved: ListenSequentialPacket =

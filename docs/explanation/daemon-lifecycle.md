@@ -155,8 +155,8 @@ primary VMM stop/cleanup decision.
 ## Host shutdown and reboot integration
 
 NixOS still declares only the three ADR-0015 root-visible units:
-`d2bd.service`, `d2b-priv-broker.socket`, and
-`d2b-priv-broker.service`. There is no per-VM or extra guest-shutdown
+`d2bd.service`, `d2b-broker.socket`, and
+`d2b-broker.service`. There is no per-VM or extra guest-shutdown
 systemd unit. Instead, `d2bd.service` has an `ExecStop` hook that first
 checks the systemd manager state with absolute systemd helper paths. It runs
 the all-VM shutdown hook only when the system manager is stopping for host

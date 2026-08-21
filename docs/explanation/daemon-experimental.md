@@ -3,7 +3,7 @@
 ## v1.0 (ADR 0015): on by default
 
 In v1.0 the daemon-only end-state landed: every mutating verb dispatches
-through `d2bd` → `d2b-priv-broker`, and the historical bash CLI
+through `d2bd` → `d2b-broker`, and the historical bash CLI
 (`nixos-modules/cli.nix`) and the three-mode bridge (`default
 daemon-first` / `D2B_NATIVE_ONLY=1` /
 `D2B_LEGACY_BASH_OPT_IN=1`) were retired in v1.0.
@@ -18,7 +18,7 @@ Enabling it adds the v1.0 daemon surface to the host:
 
 - the `d2bd` system user/group;
 - the `d2bd.service` unit plus the public/private sockets;
-- the `d2b-priv-broker.{service,socket}` units (socket-activated;
+- the `d2b-broker.{service,socket}` units (socket-activated;
   see ADR 0015);
 - the Rust CLI + manpages/completions;
 - `/etc/d2b/{bundle,host,processes,privileges}.json` emitted at

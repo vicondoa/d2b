@@ -400,8 +400,8 @@ let
         user = "root";
         group = principal;
         socketPath = realm.paths.brokerSocket;
-        socketUnitName = "${unitPrefix}-priv-broker.socket";
-        serviceUnitName = "${unitPrefix}-priv-broker.service";
+        socketUnitName = "${unitPrefix}-broker.socket";
+        serviceUnitName = "${unitPrefix}-broker.service";
         auditDir = realm.paths.auditDir;
         materializedSocket = brokerMaterialized;
         materializedService = brokerMaterialized;

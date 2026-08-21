@@ -1,6 +1,6 @@
 //! The crate's **only** `unsafe` code.
 //!
-//! Quarantined here deliberately, following the `d2b-priv-broker` precedent of
+//! Quarantined here deliberately, following the `d2b-broker` precedent of
 //! `unsafe_code = "deny"` plus one audited module, so every unsafe expression in
 //! the prototype is reviewable in a single short file.
 //!

@@ -28,7 +28,7 @@ const PROTECTED_CODEOWNERS_RULES: &[&str] = &[
     "/Cargo.toml @vicondoa",
     "/Cargo.lock @vicondoa",
     "/packages/Cargo.guest.lock @vicondoa",
-    "/packages/d2b-priv-broker/Cargo.toml @vicondoa",
+    "/packages/d2b-broker/Cargo.toml @vicondoa",
     "/packages/d2b-guest-shell-runner/Cargo.toml @vicondoa",
     "/packages/policy-inputs/** @vicondoa",
     "/packages/policy-inputs/advisory-policy.json @vicondoa",
@@ -177,7 +177,7 @@ pub fn context_specs(root: &Path) -> Result<Vec<ContextSpec>, String> {
         .filter(|name| {
             !matches!(
                 *name,
-                "d2b-priv-broker" | "d2b-guest-shell-runner" | "d2b-contract-tests" | "xtask"
+                "d2b-broker" | "d2b-guest-shell-runner" | "d2b-contract-tests" | "xtask"
             ) && (*name == "d2b" || name.starts_with("d2b-"))
         })
         .map(str::to_owned)
@@ -206,7 +206,7 @@ pub fn context_specs(root: &Path) -> Result<Vec<ContextSpec>, String> {
             system: system.to_owned(),
             target: gnu.clone(),
             name: "broker-production".to_owned(),
-            roots: vec!["d2b-priv-broker".to_owned()],
+            roots: vec!["d2b-broker".to_owned()],
             features: Vec::new(),
             default_features: false,
             source_authority: "Cargo.lock".to_owned(),
@@ -221,7 +221,7 @@ pub fn context_specs(root: &Path) -> Result<Vec<ContextSpec>, String> {
                 system: system.to_owned(),
                 target: gnu.clone(),
                 name: name.to_owned(),
-                roots: vec!["d2b-priv-broker".to_owned()],
+                roots: vec!["d2b-broker".to_owned()],
                 features: feature.into_iter().map(str::to_owned).collect(),
                 default_features: false,
                 source_authority: "Cargo.lock".to_owned(),

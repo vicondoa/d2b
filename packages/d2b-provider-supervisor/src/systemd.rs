@@ -6,7 +6,7 @@ use std::os::fd::OwnedFd;
 use std::sync::Mutex;
 
 use d2b_contracts_broker::broker_wire::{
-    BrokerCallerRole, BrokerRequest, BrokerResponse, OpenSystemdUnitPidfdRequest,
+    BrokerCallerRole, BrokerProfile, BrokerRequest, BrokerResponse, OpenSystemdUnitPidfdRequest,
     StopSystemdUnitRequest, SystemdStopClass, SystemdUnitDomain, SystemdUnitIdentity,
     SystemdUnitRequest,
 };
@@ -462,6 +462,7 @@ pub struct BrokerSystemdEffectOwner {
     resolver: BundleBackedLaunchResolver,
     socket_path: std::path::PathBuf,
     io_timeout: std::time::Duration,
+    profile: BrokerProfile,
     caller_role: BrokerCallerRole,
     requests: Mutex<BTreeMap<ProcessIdentityDigest, SystemdUnitRequest>>,
 }
@@ -484,17 +485,37 @@ impl BrokerSystemdEffectOwner {
         io_timeout: std::time::Duration,
         caller_role: BrokerCallerRole,
     ) -> Self {
+        Self::with_socket_profile_and_role(
+            resolver,
+            socket_path,
+            io_timeout,
+            BrokerProfile::Host,
+            caller_role,
+        )
+    }
+
+    /// Build an owner bound to one fixed broker profile and caller identity.
+    pub fn with_socket_profile_and_role(
+        resolver: BundleBackedLaunchResolver,
+        socket_path: impl Into<std::path::PathBuf>,
+        io_timeout: std::time::Duration,
+        profile: BrokerProfile,
+        caller_role: BrokerCallerRole,
+    ) -> Self {
         Self {
             resolver,
             socket_path: socket_path.into(),
             io_timeout,
+            profile,
             caller_role,
             requests: Mutex::new(BTreeMap::new()),
         }
     }
 
     fn request(&self, request: BrokerRequest) -> Result<BrokerFrame, ProcessEffectError> {
-        if matches!(self.caller_role, BrokerCallerRole::NotAuthorized) {
+        if matches!(self.caller_role, BrokerCallerRole::NotAuthorized)
+            || !request.allowed_by_profile(self.profile)
+        {
             return Err(ProcessEffectError::LaunchFailed);
         }
         broker_round_trip(

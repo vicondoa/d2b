@@ -16,7 +16,7 @@
 //! recommendation surfaced in the probe result.
 //!
 //! Mutation (`modprobe`) lives in the broker - see
-//! `d2b_priv_broker::ops::modprobe`. This module is pure read-only
+//! `d2b_broker::ops::modprobe`. This module is pure read-only
 //! preflight and exposes deterministic parsers so the canary matrix can
 //! drive it with fixtures.
 

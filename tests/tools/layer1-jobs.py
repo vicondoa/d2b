@@ -417,11 +417,11 @@ def rust_job(job: dict[str, Any]) -> str:
         with:
           workspaces: |
             packages -> target
-            packages/d2b-priv-broker -> target
+            packages/d2b-broker -> target
             packages/d2b-guest-shell-runner -> target
           cache-directories: |
-            packages/d2b-priv-broker/target-layer1
-            packages/d2b-priv-broker/target-fakebackends
+            packages/d2b-broker/target-layer1
+            packages/d2b-broker/target-fakebackends
             tests/tools/no-bash-ast-walker/target
             .scratch/rust-test-cache
           prefix-key: "v3-rust"
