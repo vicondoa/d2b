@@ -283,11 +283,12 @@ struct FailureClassification {
 }
 
 fn classify_failure(log: &str, explicit_dispatch_evidence: bool) -> FailureClassification {
+    let warning_line = log.lines().any(|line| line.starts_with("warning:"));
     let normalized = log.to_ascii_lowercase();
     let dispatch_evidence =
         explicit_dispatch_evidence || contains_any_marker(&normalized, DISPATCH_MARKERS);
 
-    let kind = if normalized.lines().any(|line| line.starts_with("warning:")) {
+    let kind = if warning_line {
         Some(FailureKind::Warning)
     } else if normalized.contains("missing credential")
         || normalized.contains("credential helper unavailable")

@@ -533,6 +533,50 @@ fn redaction_failure_never_emits_captured_evidence() {
 }
 
 #[test]
+fn failed_bootstrap_removes_protected_raw_log() {
+    let scratch = repo_root().join(".scratch").join(format!(
+        "bazel-check-bootstrap-failure-{}",
+        std::process::id()
+    ));
+    std::fs::create_dir_all(&scratch).expect("create wrapper test scratch");
+    let bazel = scratch.join("bazel");
+    let mode = scratch.join("bootstrap-mode");
+    write_executable(
+        &bazel,
+        "#!/usr/bin/env bash\n\
+         stat -c '%a' \"$D2B_BAZEL_CHECK_SCRATCH/bootstrap.log\" > \"$D2B_BOOTSTRAP_MODE_FILE\"\n\
+         printf 'BOOTSTRAP-RAW-SENTINEL\\n'\n\
+         exit 1\n",
+    );
+
+    let evidence = scratch.join("evidence");
+    let output = Command::new("bash")
+        .arg(repo_root().join("tests/tools/bazel-check"))
+        .args(["--profile", "local", "--", "//:test"])
+        .env("D2B_BAZEL_BIN", &bazel)
+        .env_remove("D2B_XTASK_BIN")
+        .env("D2B_BAZEL_CHECK_SCRATCH", &evidence)
+        .env("D2B_BOOTSTRAP_MODE_FILE", &mode)
+        .output()
+        .expect("run bazel-check");
+
+    assert_eq!(output.status.code(), Some(1));
+    assert_eq!(
+        std::fs::read_to_string(&mode).expect("read bootstrap mode"),
+        "600\n"
+    );
+    assert!(!evidence.join("bootstrap.log").exists());
+    let diagnostics = format!(
+        "{}{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(diagnostics.contains("xtask bootstrap failed"));
+    assert!(!diagnostics.contains("BOOTSTRAP-RAW-SENTINEL"));
+    let _ = std::fs::remove_dir_all(scratch);
+}
+
+#[test]
 fn warning_after_cache_hit_fails_a_successful_local_run() {
     let scratch = repo_root().join(".scratch").join(format!(
         "bazel-check-warning-cache-hit-{}",
@@ -722,6 +766,59 @@ fn warning_blocks_typed_remote_retry() {
         String::from_utf8_lossy(&output.stderr)
     );
     assert!(!diagnostics.contains("local fallback passed"));
+    let _ = std::fs::remove_dir_all(scratch);
+}
+
+#[test]
+fn uppercase_bazel_warning_allows_typed_remote_retry() {
+    let scratch = repo_root().join(".scratch").join(format!(
+        "bazel-check-uppercase-remote-retry-{}",
+        std::process::id()
+    ));
+    std::fs::create_dir_all(&scratch).expect("create wrapper test scratch");
+    let bazel = scratch.join("bazel");
+    let credential = scratch.join("credential");
+    let local_retry = scratch.join("local-retry");
+    std::fs::write(&credential, "synthetic-token\n").expect("write credential");
+    write_executable(
+        &bazel,
+        &format!(
+            "#!/usr/bin/env bash\n\
+             profile=''\n\
+             for arg in \"$@\"; do\n\
+               case \"$arg\" in\n\
+                 --build_event_json_file=*) bep=\"${{arg#*=}}\" ;;\n\
+                 --config=*) profile=\"${{arg#*=}}\" ;;\n\
+               esac\n\
+             done\n\
+             if [ \"$profile\" = remote ]; then\n\
+               printf 'WARNING: build options changed\\nremote authentication failed\\n'\n\
+               exit 1\n\
+             fi\n\
+             printf retry > '{}'\n\
+             printf '{{\"id\":{{\"started\":{{\"uuid\":\"local-retry\"}}}},\"testResult\":{{\"label\":\"//:test\"}}}}\\n' > \"$bep\"\n\
+             exit 0\n",
+            local_retry.display()
+        ),
+    );
+
+    let output = Command::new("bash")
+        .arg(repo_root().join("tests/tools/bazel-check"))
+        .args(["--profile", "remote", "--", "//:test"])
+        .env("D2B_BAZEL_BIN", &bazel)
+        .env("D2B_XTASK_BIN", env!("CARGO_BIN_EXE_xtask"))
+        .env("D2B_BUILDBUDDY_CREDENTIAL_FILE", &credential)
+        .env("D2B_BAZEL_UNTRUSTED", "0")
+        .env("GITHUB_ACTIONS", "false")
+        .env("D2B_BAZEL_CHECK_SCRATCH", scratch.join("evidence"))
+        .output()
+        .expect("run bazel-check");
+
+    assert!(output.status.success());
+    assert!(local_retry.exists());
+    assert!(
+        String::from_utf8_lossy(&output.stdout).contains("bazel-check: local fallback passed")
+    );
     let _ = std::fs::remove_dir_all(scratch);
 }
 

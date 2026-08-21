@@ -260,19 +260,29 @@ fi
 mkdir -p "$SCRATCH"
 if [ -z "${D2B_XTASK_BIN:-}" ] || [ ! -x "${D2B_XTASK_BIN}" ]; then
   bootstrap_log="$SCRATCH/bootstrap.log"
+  if ! (umask 077; : >"$bootstrap_log") || ! chmod 0600 "$bootstrap_log"; then
+    rm -f -- "$bootstrap_log"
+    echo "bazel-check: cannot create protected xtask bootstrap log" >&2
+    exit 1
+  fi
   if ! "$bazel_bin" build --config=local //packages/xtask:xtask >"$bootstrap_log" 2>&1; then
+    rm -f -- "$bootstrap_log"
     echo "bazel-check: xtask bootstrap failed" >&2
     exit 1
   fi
   xtask_source="$ROOT/bazel-bin/packages/xtask/xtask"
   xtask_stable="$SCRATCH/xtask"
-  cp -L -- "$xtask_source" "$xtask_stable.tmp"
-  chmod 0555 "$xtask_stable.tmp"
-  mv -f -- "$xtask_stable.tmp" "$xtask_stable"
+  if ! cp -L -- "$xtask_source" "$xtask_stable.tmp" ||
+    ! chmod 0555 "$xtask_stable.tmp" ||
+    ! mv -f -- "$xtask_stable.tmp" "$xtask_stable"; then
+    rm -f -- "$bootstrap_log" "$xtask_stable.tmp"
+    echo "bazel-check: xtask bootstrap artifact staging failed" >&2
+    exit 1
+  fi
   export D2B_XTASK_BIN="$xtask_stable"
   if ! redact_file "$bootstrap_log"; then
+    rm -f -- "$bootstrap_log"
     echo "bazel-check: bootstrap evidence redaction failed; refusing to publish the run" >&2
-    emit_captured_metadata "$bootstrap_log" "Bazel xtask bootstrap log"
     exit "$REDACTION_FAILURE_STATUS"
   fi
   if warning_line_present "$bootstrap_log"; then
