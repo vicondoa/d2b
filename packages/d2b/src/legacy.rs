@@ -1122,6 +1122,7 @@ pub(crate) struct CliFailure {
     pub(crate) exit_code: i32,
     pub(crate) message: String,
     pub(crate) rendered_stderr: Option<String>,
+    pub(crate) admission_recovery: bool,
 }
 
 impl CliFailure {
@@ -1130,6 +1131,7 @@ impl CliFailure {
             exit_code,
             message: message.into(),
             rendered_stderr: None,
+            admission_recovery: false,
         }
     }
 
@@ -1139,6 +1141,7 @@ impl CliFailure {
             exit_code: 1,
             message: operator_error.message(),
             rendered_stderr: render_operator_error(&operator_error, Some("host check")),
+            admission_recovery: false,
         }
     }
 }
@@ -1554,6 +1557,7 @@ pub(super) fn daemon_supported_features() -> Vec<d2b_contracts::FeatureFlag> {
         KnownFeatureFlag::ExportBrokerAudit.wire_value(),
         KnownFeatureFlag::ConfiguredLaunchV1.wire_value(),
         KnownFeatureFlag::UnsafeLocalProviderV1.wire_value(),
+        KnownFeatureFlag::CutoverRunnerV1.wire_value(),
     ]
 }
 
@@ -1853,6 +1857,7 @@ pub(super) fn clipboard_arm_failure(
             exit_code: 2,
             rendered_stderr: Some(String::new()),
             message,
+            admission_recovery: false,
         }
     } else {
         CliFailure::new(2, message)
@@ -2334,6 +2339,7 @@ pub(super) fn guest_control_config_failure(
         exit_code: envelope.exit_code,
         message: envelope.kind,
         rendered_stderr: Some(rendered_stderr),
+        admission_recovery: false,
     }
 }
 
@@ -13652,6 +13658,7 @@ mod host_install_dispatch_tests {
         let processes_path = base_dir.join(format!("{unique}.processes.json"));
         let processes = d2b_core::processes::ProcessesJson {
             schema_version: "v2".to_owned(),
+            cutover_runner: None,
             vms: vec![d2b_core::processes::VmProcessDag {
                 workload_identity: None,
                 vm: vm.to_owned(),
@@ -17059,6 +17066,7 @@ mod ssh_spawn_gate {
         let processes_path = base_dir.join(format!("{unique}.processes.json"));
         let processes = d2b_core::processes::ProcessesJson {
             schema_version: "v2".to_owned(),
+            cutover_runner: None,
             vms: vec![d2b_core::processes::VmProcessDag {
                 workload_identity: None,
                 vm: vm.to_owned(),

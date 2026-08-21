@@ -283,6 +283,9 @@ fn run_with_root(request: &ImportRequest, root: &StateRoot) -> Result<WorkflowOu
 
 /// Writes one evidence record into the candidate directory.
 pub fn import(candidate: &CandidateDir, record: &EvidenceRecord) -> Result<PathBuf> {
+    if record.validation == super::recovery::RECOVERY_EVIDENCE_VALIDATION {
+        return import_recovery(candidate, record);
+    }
     record.validate()?;
     if candidate.candidate_id() != &record.candidate_id {
         return Err(DeliveryError::new(
@@ -291,6 +294,29 @@ pub fn import(candidate: &CandidateDir, record: &EvidenceRecord) -> Result<PathB
     }
     let relative = record.relative_path();
     candidate.write_json(&relative, record)?;
+    candidate.resolve(&relative)
+}
+
+/// Writes the one recovery attestation evidence record without replacement.
+///
+/// Recovery evidence is a binding input rather than an ordinary validator
+/// rerun. Once imported, replacing the record would let a later payload or
+/// locator digest move a candidate's recovery boundary without a new
+/// candidate, so this path uses the storage layer's atomic no-replace writer.
+pub fn import_recovery(candidate: &CandidateDir, record: &EvidenceRecord) -> Result<PathBuf> {
+    record.validate()?;
+    if record.validation != super::recovery::RECOVERY_EVIDENCE_VALIDATION {
+        return Err(DeliveryError::new(
+            "recovery evidence must use the recovery-point-attestation validation name",
+        ));
+    }
+    if candidate.candidate_id() != &record.candidate_id {
+        return Err(DeliveryError::new(
+            "candidate directory does not address this recovery evidence record",
+        ));
+    }
+    let relative = record.relative_path();
+    candidate.write_json_once(&relative, record)?;
     candidate.resolve(&relative)
 }
 

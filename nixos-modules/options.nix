@@ -28,6 +28,7 @@
 {
   imports = [
     ./options-site.nix
+    ./options-host-sccache.nix
     ./options-host.nix
     ./options-envs.nix
     ./options-realms.nix

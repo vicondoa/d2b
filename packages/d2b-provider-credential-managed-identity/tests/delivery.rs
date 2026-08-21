@@ -26,6 +26,26 @@ fn provider_returns_the_adapter_supplied_binding_unchanged() {
 }
 
 #[test]
+fn refresh_response_preserves_the_authorization_owned_binding() {
+    let (provider, _) = setup();
+    let server = ProviderHarness::new(provider, admitted());
+    server
+        .call(CredentialMethod::AcquireToken, request("idem-acquire"))
+        .unwrap();
+    let refresh_request = request("idem-refresh");
+    let response = server
+        .call(CredentialMethod::RefreshToken, refresh_request)
+        .unwrap();
+    let CredentialResponse::RefreshToken(response) = response else {
+        panic!("refresh response");
+    };
+    assert_eq!(
+        response.delivery_session_params,
+        delivery(CredentialMethod::RefreshToken, 1)
+    );
+}
+
+#[test]
 fn delivery_zeroizes() {
     let mut record = SensitiveDeliveryRecord::new(b"managed-token".to_vec(), 64).unwrap();
     let mut destination = [0; 13];

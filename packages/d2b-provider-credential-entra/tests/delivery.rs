@@ -27,6 +27,26 @@ fn provider_returns_exactly_the_read_only_adapter_binding() {
 }
 
 #[test]
+fn refresh_response_preserves_the_authorization_owned_binding() {
+    let (provider, _) = setup();
+    let server = ProviderHarness::new(provider, admitted());
+    server
+        .call(CredentialMethod::AcquireToken, request("idem-acquire"))
+        .unwrap();
+    let refresh_request = request("idem-refresh");
+    let response = server
+        .call(CredentialMethod::RefreshToken, refresh_request.clone())
+        .unwrap();
+    let CredentialResponse::RefreshToken(response) = response else {
+        panic!("refresh response");
+    };
+    assert_eq!(
+        response.delivery_session_params,
+        common::delivery_for_request(CredentialMethod::RefreshToken, &refresh_request)
+    );
+}
+
+#[test]
 fn delivery_records_zeroize() {
     let mut record = SensitiveDeliveryRecord::new(b"access-token".to_vec(), 64).unwrap();
     let mut destination = [0; 12];

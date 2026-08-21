@@ -210,6 +210,8 @@ daemon-autostart/librs-broker-vm-starter
 daemon-autostart/librs-config-parallelism-field
 daemon-autostart/librs-pub-mod-autostart
 daemon-autostart/librs-run-startup-autostart
+daemon-autostart/manifest-net-policy
+daemon-autostart/manifest-workload-policy
 daemon-autostart/option-default-3
 daemon-autostart/option-override-7
 daemon-autostart/rs-AutostartConfig
@@ -720,7 +722,13 @@ realms/accepted-qemu-media-workload-fields
 realms/allocator-artifact-roots-enabled-realm-index
 realms/controller-config-artifact-materializes-host-local-units
 realms/examples-minimal-and-multi-env-still-eval
+realms/host-local-admin-launcher-membership-is-deduped
+realms/host-local-admin-users-get-d2b-lifecycle-group
+realms/host-local-launcher-users-still-get-d2b-lifecycle-group
+realms/host-local-realm-only-users-keep-realm-scope
+realms/host-local-runner-socket-contract-stays-closed
 realms/host-local-units-users-groups-tmpfiles-and-no-per-vm-units
+realms/host-local-unrelated-users-stay-out-of-d2b
 realms/identity-config-artifact-is-metadata-only
 realms/index-normalizes-enabled-disabled-and-derived-paths
 realms/rejects-duplicate-id-and-path
@@ -795,6 +803,7 @@ realm-workloads/unsafe-local-rejects-net-vm-port-forward
 realm-workloads/unsafe-local-rejects-vm-paths-and-options
 realm-workloads/unsafe-local-requires-explicit-opt-in
 requested-vm-config/boot-selector-and-hotplug-source-coexist
+requested-vm-config/cloud-hypervisor-sees-runtime-sockets
 requested-vm-config/dark-env-declared
 requested-vm-config/dark-live-manual-qemu-media
 requested-vm-config/evaluates-without-hardware
@@ -857,6 +866,10 @@ store-overlay-emit/first-op-owner-uid-positive
 store-overlay-emit/first-op-size-bytes
 store-overlay-emit/first-op-target-suffix
 store-overlay-emit/planops-count
+test-infrastructure/cutover-live-driver-contract
+test-infrastructure/cutover-runner-host-tool-contract
+test-infrastructure/host-sccache-eval-contract
+test-infrastructure/host-sccache-site-contract
 test-infrastructure/host-tools-sccache-contract
 test-infrastructure/own-shard-registration-unique
 test-infrastructure/pin-integrity-complete

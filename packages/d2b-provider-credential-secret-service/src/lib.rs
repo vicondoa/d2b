@@ -1354,6 +1354,41 @@ mod tests {
     }
 
     #[test]
+    fn session_key_and_capability_debug_are_redacted() {
+        let marker = format!("session-key-canary-{:x}", std::process::id());
+        let workload = format!("Host/{marker}");
+        let key = SessionKey {
+            authority: 7,
+            capability_id: 11,
+            presentation: 13,
+        };
+        assert_eq!(format!("{key:?}"), "SessionKey(<redacted>)");
+
+        let capability = SecretServiceSessionCapability {
+            authority: SessionAuthority {
+                identity: 7,
+                state: Arc::new(SessionAuthorityState {
+                    next_capability: AtomicU64::new(0),
+                    next_presentation: AtomicU64::new(0),
+                    sessions: Mutex::new(BTreeMap::new()),
+                }),
+            },
+            capability_id: 11,
+            presentation: 13,
+            binding: SessionBinding {
+                zone: ZoneId::parse("user-zone").unwrap(),
+                workload: ResourceRef::parse(&workload).unwrap(),
+                subject: ResourceRef::parse("User/alice").unwrap(),
+                consumer: ResourceRef::parse("Provider/shell-terminal").unwrap(),
+                generation: ResourceGeneration::new(1).unwrap(),
+            },
+        };
+        let debug = format!("{capability:?}");
+        assert_eq!(debug, "SecretServiceSessionCapability(<redacted>)");
+        assert!(!debug.contains(&marker));
+    }
+
+    #[test]
     fn same_presentation_concurrent_first_admission_is_idempotent() {
         struct NoopPort;
 

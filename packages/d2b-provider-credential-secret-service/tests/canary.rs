@@ -1,6 +1,5 @@
 mod common;
 
-use d2b_contracts::v3::ResourceRef;
 use d2b_contracts::v3::credential::{
     CredentialInteractionState, CredentialLeaseHandle, CredentialLeaseStatus, CredentialMethod,
     CredentialRequest, CredentialResponse, CredentialServiceErrorCode, CredentialSourceVersion,
@@ -9,6 +8,7 @@ use d2b_contracts::v3::credential::{
 use d2b_contracts::v3::credential_controller::{
     CredentialAuditOutcome, CredentialTelemetryOperation, CredentialTelemetryOutcome,
 };
+use d2b_contracts::v3::{ResourceGeneration, ResourceRef};
 use d2b_provider_credential_secret_service::SecretServiceController;
 
 use common::{Admission, ProviderHarness, setup};
@@ -21,6 +21,14 @@ fn process_unique_secret_service_canaries_are_absent_from_every_rendered_surface
     let credential_uid = format!("credential-uid-{nonce}");
     let credential_digest = format!("credential-digest-{nonce}");
     let (provider, port) = setup(64);
+    let config_debug = format!("{:?}", provider.config());
+    let placement_debug = format!("{:?}", provider.placement());
+    let session_debug = format!(
+        "{:?}",
+        provider
+            .issue_session_capability(ResourceGeneration::new(1).unwrap())
+            .unwrap()
+    );
     let controller = SecretServiceController::new(provider.config().clone());
     let operation_id = format!("{}-{credential_uid}", port.object_path_canary);
     let idempotency_key = format!("{}-{credential_digest}", port.credential_canary);
@@ -105,7 +113,30 @@ fn process_unique_secret_service_canaries_are_absent_from_every_rendered_surface
             idempotency_key.clone(),
         ))
     );
+    let (ambiguous_provider, ambiguous_port) = setup(64);
+    *ambiguous_port.issue_error.lock().unwrap() =
+        Some(d2b_provider_credential_secret_service::SecretServicePortError::CompletionUnknown);
+    let ambiguous_error = ProviderHarness::new(ambiguous_provider, Admission)
+        .call(
+            CredentialMethod::AcquireToken,
+            CredentialRequest::new(
+                ResourceRef::parse(&credential_ref).unwrap(),
+                &operation_id,
+                &idempotency_key,
+                common::EXPIRY,
+                15_000,
+            )
+            .unwrap(),
+        )
+        .unwrap_err();
+    assert_eq!(
+        ambiguous_error.code(),
+        CredentialServiceErrorCode::InvariantFailure
+    );
     let surfaces = [
+        config_debug,
+        placement_debug,
+        session_debug,
         provider_debug,
         request_debug,
         format!("{response:?}"),
@@ -118,6 +149,8 @@ fn process_unique_secret_service_canaries_are_absent_from_every_rendered_surface
         serde_json::to_string(&status).unwrap(),
         format!("{error:?}"),
         error.to_string(),
+        format!("{ambiguous_error:?}"),
+        ambiguous_error.to_string(),
         format!(
             "{:?}",
             controller

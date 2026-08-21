@@ -22,6 +22,7 @@ fn process_unique_managed_identity_canaries_are_absent_from_rendered_surfaces() 
     let credential_uid = format!("credential-uid-{nonce}");
     let credential_digest = format!("credential-digest-{nonce}");
     let (provider, client) = setup();
+    let placement_debug = format!("{:?}", provider.placement());
     let operation_id = format!("{}-{credential_digest}", client.response_canary);
     let idempotency_key = credential_uid.clone();
     let request = CredentialRequest::new(
@@ -106,6 +107,27 @@ fn process_unique_managed_identity_canaries_are_absent_from_rendered_surfaces() 
             idempotency_key.clone(),
         ))
     );
+    let (ambiguous_provider, ambiguous_client) = setup();
+    *ambiguous_client.issue_error.lock().unwrap() = Some(
+        d2b_provider_credential_managed_identity::ManagedIdentityClientError::CompletionUnknown,
+    );
+    let ambiguous_error = ProviderHarness::new(ambiguous_provider, admitted())
+        .call(
+            CredentialMethod::AcquireToken,
+            CredentialRequest::new(
+                ResourceRef::parse(&credential_ref).unwrap(),
+                &operation_id,
+                &idempotency_key,
+                common::EXPIRY,
+                15_000,
+            )
+            .unwrap(),
+        )
+        .unwrap_err();
+    assert_eq!(
+        ambiguous_error.code(),
+        CredentialServiceErrorCode::InvariantFailure
+    );
     let audit_digest = CredentialLeaseHandle::parse(&credential_digest).unwrap();
     let typed_audit = ManagedIdentityAuditRecord::new(
         audit_digest.as_opaque_str(),
@@ -137,6 +159,7 @@ fn process_unique_managed_identity_canaries_are_absent_from_rendered_surfaces() 
         }])
         .unwrap_err();
     let surfaces = [
+        placement_debug,
         provider_debug,
         config_debug,
         request_debug,
@@ -149,6 +172,8 @@ fn process_unique_managed_identity_canaries_are_absent_from_rendered_surfaces() 
         serde_json::to_string(&status).unwrap(),
         format!("{error:?}"),
         error.to_string(),
+        format!("{ambiguous_error:?}"),
+        ambiguous_error.to_string(),
         format!("{typed_audit:?}"),
         typed_audit.to_wire_record(),
         format!("{audit_error:?}"),

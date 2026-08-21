@@ -7,11 +7,6 @@ let
   hostSource = pkgs.runCommand "d2b-provider-rust-src" { } ''
     mkdir -p "$out"
     cp -r ${packagesSrc}/. "$out/"
-    mkdir -p "$out/docs/reference/schemas/v3/providers"
-    cp ${../docs/reference/schemas/v3/providers/transport-azure-relay.transport-settings.json} \
-      "$out/docs/reference/schemas/v3/providers/transport-azure-relay.transport-settings.json"
-    cp ${../docs/reference/schemas/v3/providers/transport-vsock.transport-binding.json} \
-      "$out/docs/reference/schemas/v3/providers/transport-vsock.transport-binding.json"
   '';
   cargoLock = ../Cargo.lock;
   # Keep the deps-only derivation keyed to manifests, locks, and Cargo config,
@@ -122,6 +117,7 @@ let
   hostPackages = [
     "d2bd"
     "d2b"
+    "d2b-cutover"
     "d2b-host"
     "d2b-host-activation-helper"
     "d2b-gateway-runtime"
@@ -130,12 +126,23 @@ let
     "d2b-wayland-proxy"
   ];
   hostPackageArgs = lib.concatMapStringsSep " " (package: "--package ${package}") hostPackages;
+  sccacheCacheSize = "10G";
 
   rustcWrapper = pkgs.writeShellScript "d2b-sccache-rustc-wrapper" ''
-    if [ -n "''${SCCACHE_DIR:-}" ] \
-      && [ -d "''${SCCACHE_DIR}" ] \
-      && [ -w "''${SCCACHE_DIR}" ] \
-      && command -v sccache >/dev/null 2>&1; then
+    # The fixed path is absent from ordinary Nix sandboxes, so those builds
+    # retain the plain-rustc fallback. Once the opt-in host preflight has
+    # exposed the path, any posture or tool failure is an actionable error
+    # instead of silently disabling the cache.
+    if [ -n "''${SCCACHE_DIR:-}" ] && [ -e "''${SCCACHE_DIR}" ]; then
+      if [ ! -d "''${SCCACHE_DIR}" ] || [ ! -w "''${SCCACHE_DIR}" ]; then
+        echo "d2b sccache: configured cache ''${SCCACHE_DIR} is not a writable directory" >&2
+        exit 1
+      fi
+      if ! command -v sccache >/dev/null 2>&1; then
+        echo "d2b sccache: configured cache requires sccache on PATH" >&2
+        exit 1
+      fi
+      export SCCACHE_CACHE_SIZE="${sccacheCacheSize}"
       exec sccache "$@"
     fi
     exec "$@"
@@ -143,8 +150,8 @@ let
 
   # Constant sandbox path so pure CI and host-int realize the same host-tool
   # derivations. The directory is absent in the default sandbox, so the
-  # wrapper falls back to rustc. Host-int may bind-mount an owner-private
-  # cache here when D2B_HOST_SCCACHE=1.
+  # wrapper falls back to rustc. A host that enables the d2b site cache option
+  # exposes this fixed path through the Nix daemon's global sandbox settings.
   sccacheDir = "/var/cache/d2b-sccache";
   commonBuildArgs = {
     strictDeps = true;
@@ -154,6 +161,7 @@ let
     nativeBuildInputs = [ pkgs.protobuf pkgs.sccache ];
     RUSTC_WRAPPER = rustcWrapper;
     SCCACHE_DIR = sccacheDir;
+    SCCACHE_CACHE_SIZE = sccacheCacheSize;
   };
 
   cargoArtifacts = craneLib.buildDepsOnly (commonBuildArgs // {
@@ -233,6 +241,10 @@ in
   activationHelper = mkMainPackage {
     package = "d2b-host";
     binaries = [ "d2b-activation-helper" ];
+  };
+  cutoverRunner = mkMainPackage {
+    package = "d2b-cutover";
+    binaries = [ "d2b-cutover-runner" ];
   };
   hostActivationHelper = mkMainPackage {
     package = "d2b-host-activation-helper";

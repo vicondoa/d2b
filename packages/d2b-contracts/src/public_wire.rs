@@ -22,6 +22,7 @@ use std::fmt;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(tag = "kind", content = "payload")]
+#[allow(clippy::large_enum_variant)]
 pub enum PublicRequest {
     #[serde(rename = "capabilities")]
     Capabilities,
@@ -90,6 +91,9 @@ pub enum PublicRequest {
     /// The CLI exposes this as `d2b host reconcile --network --apply`.
     #[serde(rename = "host reconcile")]
     HostReconcile(HostReconcileRequest),
+    /// Host-wide cutover and scoped-reset operation family.
+    #[serde(rename = "host cutover")]
+    HostCutover(HostCutoverRequest),
     /// Read the editable guest config working copy of `vm` over the
     /// authenticated guest-control bridge and return it as a base64 string.
     /// ADMIN-ONLY (it crosses into the guest over the authenticated
@@ -152,6 +156,9 @@ pub enum PublicResponse {
     Audit(AuditResponse),
     #[serde(rename = "host check")]
     HostCheck(HostCheckResponse),
+    /// Host-wide cutover or scoped-reset response.
+    #[serde(rename = "host cutover")]
+    HostCutover(HostCutoverResponse),
     #[serde(rename = "keys list")]
     KeysList(KeysListResponse),
     #[serde(rename = "keys show")]
@@ -2056,6 +2063,151 @@ pub struct HostReconcileRequest {
     /// Re-run the per-env nftables / route / sysctl reconcile.
     #[serde(default)]
     pub network: bool,
+}
+
+/// One host cutover or scoped-reset command.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct HostCutoverRequest {
+    /// Requested operation.
+    pub operation: HostCutoverOperation,
+    /// Existing operation identity for status or continuation.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub operation_id: Option<String>,
+    /// Candidate identity bound to the request.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub candidate_id: Option<String>,
+    /// Revision-plan identity bound to the request.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub revision_plan_id: Option<String>,
+    /// System artifact identity bound to the frozen cutover preview and handoff.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub system_artifact_id: Option<String>,
+    /// Preserved source artifact identity bound to native rollback.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source_system_artifact_id: Option<String>,
+    /// Exact preview digest.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub preview_digest: Option<String>,
+    /// Qualified recovery digest for cutover apply.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub recovery_digest: Option<String>,
+    /// Bound operator identity.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub operator_id: Option<String>,
+    /// Exact apply or finalization consent digest.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub consent_digest: Option<String>,
+    /// Canonical serialized U3 apply consent.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub consent_json: Option<String>,
+    /// Separate destructive reset consent digest.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub destructive_consent_digest: Option<String>,
+    /// Canonical destructive reset consent artifact.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub destructive_consent_json: Option<String>,
+    /// Whether this reset explicitly authorizes durable-Volume destruction.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub destroy_durable_volumes: Option<bool>,
+    /// Canonical serialized qualified recovery attestation.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub recovery_attestation_json: Option<String>,
+    /// Host identity digest bound by the recovery attestation.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub host_digest: Option<String>,
+    /// Fresh consent used by a non-owner Admin to resume.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fresh_consent_digest: Option<String>,
+    /// Bounded hold reason.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
+    /// Scoped reset authority, required only for `reset`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reset_scope: Option<HostCutoverResetScope>,
+    /// Opaque target identity for a scoped reset.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub target: Option<String>,
+    /// Zone selection is forbidden for one-time cutover operations.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub zone: Option<String>,
+}
+
+/// Closed host cutover command vocabulary.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "kebab-case")]
+pub enum HostCutoverOperation {
+    /// Build a mutation-free preview.
+    Preview,
+    /// Read the current redacted status.
+    Status,
+    /// Set an operator hold.
+    Hold,
+    /// Clear a hold and resume.
+    Resume,
+    /// Consume apply consent and launch the runner.
+    Apply,
+    /// Roll back before the native boundary.
+    Rollback,
+    /// Verify every configured Zone.
+    Verify,
+    /// Read-only cutover health diagnostics.
+    Doctor,
+    /// Consume phase-10 consent.
+    Finalize,
+    /// Run a distinct scoped reset.
+    Reset,
+}
+
+/// Closed scoped-reset authority vocabulary.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "kebab-case")]
+pub enum HostCutoverResetScope {
+    /// Reset one Zone.
+    Zone,
+    /// Reset one Provider.
+    Provider,
+    /// Reset one Guest.
+    Guest,
+}
+
+/// Redaction-safe host cutover response.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct HostCutoverResponse {
+    /// Command that produced this response.
+    pub operation: HostCutoverOperation,
+    /// Opaque operation identity, when one exists.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub operation_id: Option<String>,
+    /// Redacted U3 operation state.
+    pub state: String,
+    /// Current protocol phase number.
+    pub phase: u8,
+    /// Preview digest, when the operation has a preview.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub preview_digest: Option<String>,
+    /// Redaction-safe summary.
+    pub summary: String,
+    /// Whether this response represents an accepted mutation.
+    pub mutation_accepted: bool,
+    /// Inventory summary without paths, secrets, or host identifiers.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub inventory: Option<HostCutoverInventorySummary>,
+}
+
+/// Redaction-safe inventory summary for a host-wide preview.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct HostCutoverInventorySummary {
+    /// Number of configured Zones included.
+    pub zone_count: u32,
+    /// Number of classified inventory items.
+    pub item_count: u32,
+    /// Canonical inventory digest.
+    pub inventory_digest: String,
+    /// Whether every configured Zone was observed.
+    pub complete: bool,
 }
 
 /// Mutating-verb daemon response shape.

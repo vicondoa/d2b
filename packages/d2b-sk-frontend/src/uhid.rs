@@ -19,6 +19,7 @@
 //! No `unsafe` code. Struct bytes are constructed/parsed manually using the
 //! documented packed C layout.
 
+use std::fmt;
 use std::io::{self, Read, Write};
 use std::os::unix::fs::OpenOptionsExt;
 use std::path::Path;
@@ -103,7 +104,7 @@ const UHID_INPUT2_PAYLOAD_LEN: usize = 2 + 4096;
 const UHID_EVENT_SIZE: usize = 4 + UHID_CREATE2_PAYLOAD_LEN;
 
 /// A received event from /dev/uhid.
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub enum UhidEvent {
     /// Output report (userspace → virtual device): CTAPHID command from browser.
     Output {
@@ -118,6 +119,23 @@ pub enum UhidEvent {
     GetReport { id: u32, _rtype: u8, _rnum: u8 },
     /// Other/unhandled event type.
     Other(u32),
+}
+
+impl fmt::Debug for UhidEvent {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Output { .. } => formatter.write_str("UhidEvent::Output(<redacted>)"),
+            Self::Lifecycle(_) => formatter.write_str("UhidEvent::Lifecycle"),
+            Self::GetReport { id, .. } => formatter
+                .debug_struct("UhidEvent::GetReport")
+                .field("id", id)
+                .finish(),
+            Self::Other(event_type) => formatter
+                .debug_tuple("UhidEvent::Other")
+                .field(event_type)
+                .finish(),
+        }
+    }
 }
 
 /// Manages the lifecycle of a virtual FIDO2 HID device via /dev/uhid.
@@ -469,6 +487,17 @@ mod tests {
 
         assert_eq!(&report[..5], &[0xff, 0xff, 0xff, 0xff, 0x86]);
         assert_eq!(report[63], 0xee);
+    }
+
+    #[test]
+    fn output_report_debug_redacts_ctaphid_bytes() {
+        let event = UhidEvent::Output {
+            _rtype: 0x02,
+            data: [0xa5; CTAPHID_REPORT_LEN],
+        };
+        let rendered = format!("{event:?}");
+        assert_eq!(rendered, "UhidEvent::Output(<redacted>)");
+        assert!(!rendered.contains("a5"));
     }
 
     #[test]

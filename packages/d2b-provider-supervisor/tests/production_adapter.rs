@@ -62,7 +62,6 @@ struct DeterministicBackend {
     owner: WaitReapOwner,
     mode: Mode,
     calls: Arc<Mutex<Vec<&'static str>>>,
-    delay: Duration,
 }
 
 impl DeterministicBackend {
@@ -72,17 +71,11 @@ impl DeterministicBackend {
             owner,
             mode: Mode::Good,
             calls: Arc::new(Mutex::new(Vec::new())),
-            delay: Duration::ZERO,
         }
     }
 
     fn mode(mut self, mode: Mode) -> Self {
         self.mode = mode;
-        self
-    }
-
-    fn delay(mut self, delay: Duration) -> Self {
-        self.delay = delay;
         self
     }
 
@@ -121,9 +114,6 @@ impl ProcessEffectBackend for DeterministicBackend {
         _request: ProcessRequest,
     ) -> Result<BackendLaunch<Self::Handle>, ProcessEffectError> {
         self.record("launch");
-        if !self.delay.is_zero() {
-            std::thread::sleep(self.delay);
-        }
         if matches!(self.mode, Mode::LaunchFailure) {
             return Err(ProcessEffectError::LaunchFailed);
         }
@@ -613,37 +603,77 @@ fn read_self_start_time() -> u64 {
 
 #[tokio::test(flavor = "current_thread")]
 async fn blocking_effects_do_not_stall_the_async_executor() {
-    let supervisor = ProviderSupervisor::with_limits(
-        DeterministicBackend::new(minijail_bindings(), WaitReapOwner::Local)
-            .delay(Duration::from_millis(50)),
+    const CALLS: usize = 200;
+    const BLOCKING_DELAY: Duration = Duration::from_millis(50);
+    const HEARTBEAT_PERIOD: Duration = Duration::from_millis(10);
+    const MAX_HEARTBEAT_GAP: Duration = Duration::from_millis(15);
+
+    let (backend, started, max_active) = ParallelLaunchBackend::new(BLOCKING_DELAY);
+    let supervisor = Arc::new(ProviderSupervisor::with_limits(
+        backend,
         16,
         Duration::from_secs(2),
-    );
-    let ticket = fixtures::ticket_builder()
-        .selected_provider(MINIJAIL)
-        .expected_identity(minijail_bindings())
-        .build()
-        .unwrap();
-    let started = Instant::now();
-    let launch = supervisor.launch(&ticket);
-    let heartbeat = async {
-        let mut ticks = Vec::new();
-        for _ in 0..5 {
-            tokio::time::sleep(Duration::from_millis(10)).await;
-            ticks.push(started.elapsed());
+    ));
+    let admission = Arc::new(tokio::sync::Semaphore::new(16));
+    let launches = async {
+        let mut tasks = Vec::with_capacity(CALLS);
+        for index in 0..CALLS {
+            let supervisor = Arc::clone(&supervisor);
+            let admission = Arc::clone(&admission);
+            tasks.push(tokio::spawn(async move {
+                let permit = admission.acquire_owned().await.unwrap();
+                let result = supervisor.launch(&parallel_ticket(index)).await;
+                drop(permit);
+                result
+            }));
         }
-        ticks
+        for task in tasks {
+            task.await.unwrap().unwrap();
+        }
     };
-    let (result, ticks) = tokio::join!(launch, heartbeat);
-    result.unwrap();
+    tokio::pin!(launches);
+
+    let mut interval = tokio::time::interval(HEARTBEAT_PERIOD);
+    interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+    let mut ticks = Vec::new();
+    loop {
+        tokio::select! {
+            _ = &mut launches => {
+                break;
+            }
+            _ = interval.tick() => ticks.push(Instant::now()),
+        }
+    }
+
     let max_gap = ticks
         .windows(2)
-        .map(|pair| pair[1] - pair[0])
+        .map(|pair| pair[1].duration_since(pair[0]))
         .max()
-        .unwrap();
+        .unwrap_or_default();
     assert!(
-        max_gap < Duration::from_millis(40),
-        "blocking backend stalled the async executor"
+        ticks.len() >= 20,
+        "heartbeat must run throughout the 200-call blocking workload; recorded {} ticks",
+        ticks.len()
+    );
+    assert!(
+        max_gap <= MAX_HEARTBEAT_GAP,
+        "blocking backend stalled the async executor: maximum heartbeat gap was {max_gap:?}"
+    );
+    assert_eq!(
+        started
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .len(),
+        CALLS,
+        "every production EffectPort call must reach the blocking adapter"
+    );
+    assert!(
+        max_active.load(Ordering::SeqCst) >= 2,
+        "the blocking adapter must preserve independent concurrent calls"
+    );
+    assert!(
+        max_active.load(Ordering::SeqCst) <= 16,
+        "the blocking adapter must honor its configured concurrency bound"
     );
 }
 

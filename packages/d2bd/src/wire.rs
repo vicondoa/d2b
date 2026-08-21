@@ -21,6 +21,7 @@ pub struct HostCheckRequestExt {
 }
 
 #[derive(Debug, Clone)]
+#[allow(clippy::large_enum_variant)]
 pub enum Request {
     List(public_wire::ListRequest),
     Status(public_wire::StatusRequest),
@@ -54,6 +55,7 @@ pub enum Request {
     HostDestroy(public_wire::HostDestroyRequest),
     HostInstall(public_wire::HostInstallRequest),
     HostReconcile(public_wire::HostReconcileRequest),
+    HostCutover(public_wire::HostCutoverRequest),
     ReadGuestConfig(public_wire::ReadGuestConfigRequest),
     Exec(public_wire::ExecOp),
     Console(public_wire::ConsoleOp),
@@ -115,6 +117,7 @@ impl Request {
             Self::HostDestroy(_) => "hostDestroy",
             Self::HostInstall(_) => "hostInstall",
             Self::HostReconcile(_) => "hostReconcile",
+            Self::HostCutover(_) => "hostCutover",
             Self::ReadGuestConfig(_) => "readGuestConfig",
             Self::Exec(_) => "exec",
             Self::Console(_) => "console",
@@ -153,7 +156,8 @@ impl Request {
             | Self::HostPrepare(_)
             | Self::HostDestroy(_)
             | Self::HostInstall(_)
-            | Self::HostReconcile(_) => OpLockClass::Global,
+            | Self::HostReconcile(_)
+            | Self::HostCutover(_) => OpLockClass::Global,
             // Per-VM audio set ops serialize on the named VM. Status is read-only.
             Self::Audio(public_wire::AudioOp::SetVolume(args)) => {
                 OpLockClass::PerVm(args.vm.clone())
@@ -383,6 +387,9 @@ pub fn parse_request(bytes: &[u8]) -> Result<Request, TypedError> {
             .map_err(map_parse_error),
         "hostReconcile" => serde_json::from_value(Value::Object(object.clone()))
             .map(Request::HostReconcile)
+            .map_err(map_parse_error),
+        "hostCutover" => serde_json::from_value(Value::Object(object.clone()))
+            .map(Request::HostCutover)
             .map_err(map_parse_error),
         "readGuestConfig" => serde_json::from_value(Value::Object(object.clone()))
             .map(Request::ReadGuestConfig)
@@ -769,6 +776,26 @@ mod tests {
             request.lock_class(),
             crate::concurrency::OpLockClass::Global
         );
+    }
+
+    #[test]
+    fn host_cutover_wire_is_global_and_typed() {
+        let request = parse_request(
+            br#"{"type":"hostCutover","operation":"preview","operationId":"op-wire"}"#,
+        )
+        .expect("host cutover request");
+        assert_eq!(request.verb_name(), "hostCutover");
+        assert_eq!(
+            request.lock_class(),
+            crate::concurrency::OpLockClass::Global
+        );
+        assert!(matches!(
+            request,
+            Request::HostCutover(d2b_contracts::public_wire::HostCutoverRequest {
+                operation: d2b_contracts::public_wire::HostCutoverOperation::Preview,
+                ..
+            })
+        ));
     }
 
     #[test]

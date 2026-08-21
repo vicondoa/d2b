@@ -69,6 +69,7 @@ members = [
     "packages/d2b-notify",
     "packages/d2b-wayland-proxy",
     "packages/d2b-contract-tests",
+    "packages/d2b-cutover",
     "packages/xtask",
     "packages/d2b-priv-broker",
     "packages/d2b-guest-shell-runner",

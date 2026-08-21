@@ -563,6 +563,33 @@ let
       };
     })
   ]).config;
+  lifecycleBase = { ... }: {
+    boot.loader.grub.enable = false;
+    boot.loader.systemd-boot.enable = false;
+    boot.initrd.includeDefaultModules = false;
+    fileSystems."/" = { device = "tmpfs"; fsType = "tmpfs"; };
+    environment.etc."machine-id".text = "00000000000000000000000000000000";
+    system.stateVersion = "25.11";
+
+    users.users = {
+      admin = { isNormalUser = true; uid = 1000; };
+      launcher = { isNormalUser = true; uid = 1001; };
+      overlap = { isNormalUser = true; uid = 1002; };
+      realm-only = { isNormalUser = true; uid = 1003; };
+      unrelated = { isNormalUser = true; uid = 1004; };
+    };
+
+    d2b.site = {
+      waylandUser = "admin";
+      adminUsers = [ "admin" "overlap" "admin" ];
+      launcherUsers = [ "launcher" "overlap" "launcher" ];
+    };
+
+    d2b.realms.host.allowedUsers = [ "realm-only" ];
+  };
+  lifecycleCfg = (mkEval [ lifecycleBase ]).config;
+  lifecycleGroups = user: lifecycleCfg.users.users.${user}.extraGroups or [ ];
+  runnerSource = builtins.readFile (flakeRoot + "/packages/d2b-cutover/src/runner.rs");
 in
 let
   allCases = {
@@ -1974,6 +2001,54 @@ let
       root = true;
       cycle = true;
       depth = true;
+    };
+  };
+  "realms/host-local-admin-users-get-d2b-lifecycle-group" = {
+    expr = builtins.elem "d2b" (lifecycleGroups "admin");
+    expected = true;
+  };
+  "realms/host-local-launcher-users-still-get-d2b-lifecycle-group" = {
+    expr = builtins.elem "d2b" (lifecycleGroups "launcher");
+    expected = true;
+  };
+  "realms/host-local-unrelated-users-stay-out-of-d2b" = {
+    expr = builtins.elem "d2b" (lifecycleGroups "unrelated");
+    expected = false;
+  };
+  "realms/host-local-realm-only-users-keep-realm-scope" = {
+    expr = {
+      d2b = builtins.elem "d2b" (lifecycleGroups "realm-only");
+      realmGroupCount = builtins.length (lib.filter (group:
+        group != "d2b"
+      ) (lifecycleGroups "realm-only"));
+    };
+    expected = {
+      d2b = false;
+      realmGroupCount = 1;
+    };
+  };
+  "realms/host-local-admin-launcher-membership-is-deduped" = {
+    expr = {
+      adminCount = lib.length (lib.filter (group: group == "d2b") (lifecycleGroups "admin"));
+      launcherCount = lib.length (lib.filter (group: group == "d2b") (lifecycleGroups "launcher"));
+      overlapCount = lib.length (lib.filter (group: group == "d2b") (lifecycleGroups "overlap"));
+    };
+    expected = {
+      adminCount = 1;
+      launcherCount = 1;
+      overlapCount = 1;
+    };
+  };
+  "realms/host-local-runner-socket-contract-stays-closed" = {
+    expr = {
+      traversalMode = lib.hasInfix "0o710" runnerSource;
+      socketMode = lib.hasInfix "0o660" runnerSource;
+      peerCredentials = lib.hasInfix "PeerCredentials" runnerSource;
+    };
+    expected = {
+      traversalMode = true;
+      socketMode = true;
+      peerCredentials = true;
     };
   };
 };

@@ -28,6 +28,12 @@ let
     meta.description = "d2b privileged broker (uid 0 host-mutation surface)";
   });
   brokerPackage = if prebuilt ? "d2b-priv-broker" then prebuilt."d2b-priv-broker" else brokerSourcePackage;
+  cutoverRunnerSourcePackage = d2bHostTools.cutoverRunner;
+  cutoverRunnerPackage =
+    if prebuilt ? "d2b-cutover-runner"
+    then prebuilt."d2b-cutover-runner"
+    else cutoverRunnerSourcePackage;
+  cutoverRunnerPath = "${cutoverRunnerPackage}/bin/d2b-cutover-runner";
 
   bundleManifestPath =
     cfg.site.bundle.currentManifest or "/etc/d2b/bundle.json";
@@ -76,6 +82,7 @@ let
       D2B_BROKER_NFT_BINARY = "${pkgs.nftables}/bin/nft";
       D2B_BROKER_IP_BINARY = "${pkgs.iproute2}/bin/ip";
       D2B_BROKER_USBIP_BINARY = "${pkgs.linuxPackages_latest.usbip}/bin/usbip";
+      D2B_CUTOVER_RUNNER_PATH = cutoverRunnerPath;
     };
     path = with pkgs; [
       nftables
@@ -174,7 +181,9 @@ in
   # `docs/how-to/migrate-nixos-to-daemon.md` § Recovery.
   config = {
 
-    environment.systemPackages = [ brokerPackage ];
+    environment.systemPackages = [ brokerPackage cutoverRunnerPackage ];
+    d2b._hostToolPackages.d2bCutoverRunner = cutoverRunnerPackage;
+    d2b._bundle.cutoverRunnerPath = cutoverRunnerPath;
 
     # broker-owned state + bundle dirs; /run/d2b itself is owned by
     # root:d2b 1770 with explicit ACLs from host-daemon.nix (canonical;
@@ -253,6 +262,7 @@ in
         D2B_BROKER_IP_BINARY = "${pkgs.iproute2}/bin/ip";
         # usbip binary from linuxPackages_latest.usbip.
         D2B_BROKER_USBIP_BINARY = "${pkgs.linuxPackages_latest.usbip}/bin/usbip";
+        D2B_CUTOVER_RUNNER_PATH = cutoverRunnerPath;
       };
 
       # ApplyNftables / SpawnRunner mount-prep ops invoke nft /

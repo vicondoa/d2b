@@ -32,6 +32,25 @@ fn response_uses_the_read_only_adapter_binding_and_record_zeroizes() {
     assert!(record.copy_to(&mut destination).is_err());
 }
 
+#[test]
+fn refresh_response_preserves_the_authorization_owned_binding() {
+    let (provider, _) = setup(64);
+    let server = ProviderHarness::new(provider, Admission);
+    server
+        .call(CredentialMethod::AcquireToken, request("idem-acquire"))
+        .unwrap();
+    let response = server
+        .call(CredentialMethod::RefreshToken, request("idem-refresh"))
+        .unwrap();
+    let CredentialResponse::RefreshToken(response) = response else {
+        panic!("refresh response");
+    };
+    assert_eq!(
+        response.delivery_session_params,
+        common::delivery(CredentialMethod::RefreshToken, 1)
+    );
+}
+
 #[derive(Clone)]
 struct MismatchedAdmission {
     authorized: DeliverySessionParams,

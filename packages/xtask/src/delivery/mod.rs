@@ -28,6 +28,7 @@ pub mod eligibility;
 pub mod evidence;
 pub mod history_proof;
 pub mod model;
+pub mod recovery;
 pub mod seal;
 pub mod snapshot;
 pub mod storage;
@@ -214,7 +215,7 @@ pub(crate) mod test_support {
 /// the removed lifecycle stages left the delivery operation domain. Each change
 /// means older artifacts can no longer be read, and every downstream consumer
 /// must notice the contract moved.
-pub const DELIVERY_SCHEMA_VERSION: u32 = 3;
+pub const DELIVERY_SCHEMA_VERSION: u32 = 4;
 
 pub type Result<T> = std::result::Result<T, DeliveryError>;
 

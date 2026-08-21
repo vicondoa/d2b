@@ -294,6 +294,11 @@ rust_doc_test(
 )
 
 rust_doc_test(
+    name = "d2b_cutover_doc_test",
+    crate = "//packages/d2b-cutover:d2b_cutover",
+)
+
+rust_doc_test(
     name = "d2b_priv_broker_doc_test",
     crate = "//packages/d2b-priv-broker:d2b_priv_broker",
 )
@@ -391,6 +396,7 @@ filegroup(
         "//packages/d2b-core-controller:cargo_workspace_sources",
         "//packages/d2b-core/fuzz:BUILD.bazel",
         "//packages/d2b-credential-service:cargo_workspace_sources",
+        "//packages/d2b-cutover:cargo_workspace_sources",
         "//packages/d2b-exec-runner:cargo_workspace_sources",
         "//packages/d2b-gateway:cargo_workspace_sources",
         "//packages/d2b-gateway-runtime:cargo_workspace_sources",
@@ -594,6 +600,7 @@ filegroup(
         "//packages/d2b-core/fuzz:src/harness.rs",
         "//packages/d2b-core/fuzz:workspace_sources",
         "//packages/d2b-credential-service:BUILD.bazel",
+        "//packages/d2b-cutover:BUILD.bazel",
         "//packages/d2b-exec-runner:BUILD.bazel",
         "//packages/d2b-gateway:BUILD.bazel",
         "//packages/d2b-gateway-runtime:BUILD.bazel",

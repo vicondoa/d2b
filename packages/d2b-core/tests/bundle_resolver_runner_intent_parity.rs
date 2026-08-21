@@ -81,6 +81,7 @@ fn bundle() -> Bundle {
         host_path: "host.json".to_owned(),
         processes_path: "processes.json".to_owned(),
         privileges_path: "privileges.json".to_owned(),
+        cutover_runner_path: None,
         storage_path: None,
         sync_path: None,
         allocator_path: None,
@@ -255,6 +256,7 @@ fn bundle_resolver_runner_intents_match_typed_process_node_helper_for_runner_rol
     let nodes = runner_nodes();
     let processes = ProcessesJson {
         schema_version: "v2".to_owned(),
+        cutover_runner: None,
         vms: vec![VmProcessDag {
             workload_identity: None,
             vm: VM.to_owned(),
@@ -290,6 +292,7 @@ fn generic_process_template_lookup_does_not_require_resource_name_to_match_role_
     let nodes = runner_nodes();
     let processes = ProcessesJson {
         schema_version: "v2".to_owned(),
+        cutover_runner: None,
         vms: vec![VmProcessDag {
             workload_identity: None,
             vm: VM.to_owned(),

@@ -39,12 +39,65 @@ let
   flakeSource = builtins.readFile (flakeRoot + "/flake.nix");
   rustHostToolsSource =
     builtins.readFile (flakeRoot + "/nixos-modules/rust-host-tools.nix");
+  hostSccacheSource =
+    if builtins.pathExists (flakeRoot + "/nixos-modules/host-sccache.nix")
+    then builtins.readFile (flakeRoot + "/nixos-modules/host-sccache.nix")
+    else "";
+  hostSccacheOptionsSource =
+    if builtins.pathExists (flakeRoot + "/nixos-modules/options-host-sccache.nix")
+    then builtins.readFile (flakeRoot + "/nixos-modules/options-host-sccache.nix")
+    else "";
+  hostSccacheBase = {
+    boot.loader.grub.enable = false;
+    boot.loader.systemd-boot.enable = false;
+    boot.initrd.includeDefaultModules = false;
+    fileSystems."/" = {
+      device = "tmpfs";
+      fsType = "tmpfs";
+    };
+    environment.etc."machine-id".text =
+      "00000000000000000000000000000000";
+    system.stateVersion = "25.11";
+    users.users.alice = {
+      isNormalUser = true;
+      uid = 1000;
+    };
+    d2b.site = {
+      waylandUser = "alice";
+      launcherUsers = [ "alice" ];
+      yubikey.enable = false;
+    };
+  };
+  hostSccacheDefaultCfg = (mkEval [ hostSccacheBase ]).config;
+  hostSccacheEnabledCfg = (mkEval [
+    (lib.recursiveUpdate hostSccacheBase {
+      d2b.site.hostSccache.enable = true;
+    })
+  ]).config;
+  hostSccacheEnabledTmpfiles = hostSccacheEnabledCfg.systemd.tmpfiles.rules;
+  hostSccacheSettingContains = value:
+    if builtins.isList value
+    then builtins.elem sccacheSandboxDir value
+    else lib.hasInfix sccacheSandboxDir (toString value);
+  hostBrokerSource =
+    builtins.readFile (flakeRoot + "/nixos-modules/host-broker.nix");
+  bundleSource = builtins.readFile (flakeRoot + "/nixos-modules/bundle.nix");
+  processesSource = builtins.readFile (flakeRoot + "/nixos-modules/processes-json.nix");
+  privilegesSource = builtins.readFile (flakeRoot + "/nixos-modules/privileges-json.nix");
+  liveCutoverSource =
+    builtins.readFile (flakeRoot + "/tests/integration/live/cutover-real-host.sh");
   makefileSource = builtins.readFile (flakeRoot + "/Makefile");
+  gatesDocsSource =
+    builtins.readFile (flakeRoot + "/docs/contributing/gates-and-lints.md");
   sccacheSandboxDir = "/var/cache/d2b-sccache";
   providerSchemaPaths = [
     "docs/reference/schemas/v3/providers/transport-azure-relay.transport-settings.json"
     "docs/reference/schemas/v3/providers/transport-vsock.transport-binding.json"
   ];
+  packagesSrc = d2bLib.cleanRustPackagesSource flakeRoot;
+  hostSourceBlock =
+    builtins.head
+      (lib.splitString "  cargoLock = ../Cargo.lock;" rustHostToolsSource);
   shardEntryLines = builtins.filter
     (line: lib.hasInfix ''"test-infrastructure.nix"'' line)
     (lib.splitString "\n" flakeSource);
@@ -62,6 +115,10 @@ let
     "test-infrastructure/shared-corpus-duplicate-name-rejected"
     "test-infrastructure/own-shard-registration-unique"
     "test-infrastructure/pin-integrity-complete"
+    "test-infrastructure/cutover-runner-host-tool-contract"
+    "test-infrastructure/cutover-live-driver-contract"
+    "test-infrastructure/host-sccache-site-contract"
+    "test-infrastructure/host-sccache-eval-contract"
   ];
   unpinnedOwnCases =
     lib.filter (name: !(builtins.elem name pinnedNames)) ownCaseNames;
@@ -109,10 +166,19 @@ in
       flakeSource = lib.all (path: lib.hasInfix path flakeSource) providerSchemaPaths;
       rustHostToolsSource =
         lib.all (path: lib.hasInfix path rustHostToolsSource) providerSchemaPaths;
+      filteredSourceHasSchemas =
+        lib.all
+          (path: builtins.pathExists (packagesSrc + "/${path}"))
+          providerSchemaPaths;
+      hostSourceDoesNotCopyFilteredSchemas =
+        !(lib.hasInfix ''mkdir -p "$out/docs/reference/schemas/v3/providers"'' hostSourceBlock)
+        && !(lib.hasInfix "cp \${../docs/reference/schemas/v3/providers/" hostSourceBlock);
     };
     expected = {
       flakeSource = true;
       rustHostToolsSource = true;
+      filteredSourceHasSchemas = true;
+      hostSourceDoesNotCopyFilteredSchemas = true;
     };
   };
 
@@ -124,17 +190,36 @@ in
       noImpureSccacheEnv =
         !(lib.hasInfix ''builtins.getEnv "SCCACHE_DIR"'' rustHostToolsSource);
       wrapperRequiresWritableDir =
-        lib.hasInfix "[ -d \"''\${SCCACHE_DIR}\" ]" rustHostToolsSource
-        && lib.hasInfix "[ -w \"''\${SCCACHE_DIR}\" ]" rustHostToolsSource
+        lib.hasInfix "[ ! -d \"''\${SCCACHE_DIR}\" ]" rustHostToolsSource
+        && lib.hasInfix "[ ! -w \"''\${SCCACHE_DIR}\" ]" rustHostToolsSource
+        && lib.hasInfix "SCCACHE_CACHE_SIZE" rustHostToolsSource
+        && lib.hasInfix "10G" rustHostToolsSource
         && lib.hasInfix "exec sccache" rustHostToolsSource
         && lib.hasInfix ''exec "$@"'' rustHostToolsSource;
+      wrapperFailsOnlyWhenConfigured =
+        lib.hasInfix "configured cache" rustHostToolsSource
+        && lib.hasInfix "exit 1" rustHostToolsSource;
+      noOwnerPrivateCache =
+        !(lib.hasInfix "owner-private" rustHostToolsSource)
+        && !(lib.hasInfix "HOME/.cache/d2b-sccache" rustHostToolsSource);
       waylandProxySourceBuilt =
         lib.hasInfix "waylandProxy = mkMainPackage" rustHostToolsSource;
       makefileNoWorldWritableCache = !(lib.hasInfix "chmod 1777" makefileSource);
       makefileCacheOptIn =
         lib.hasInfix "D2B_HOST_SCCACHE" makefileSource
-        && lib.hasInfix "chmod 0700" makefileSource
-        && lib.hasInfix "${sccacheSandboxDir}=" makefileSource;
+        && lib.hasInfix "/etc/nix/nix.conf" makefileSource
+        && lib.hasInfix "nixbld" makefileSource
+        && lib.hasInfix "2770" makefileSource
+        && lib.hasInfix "${sccacheSandboxDir}" makefileSource;
+      makefileNoRestrictedSandboxOption =
+        !(lib.hasInfix "--option extra-sandbox-paths" makefileSource);
+      makefileNoCallerCachePath =
+        !(lib.hasInfix "SCCACHE_DIR:-" makefileSource)
+        && !(lib.hasInfix "XDG_CACHE_HOME" makefileSource);
+      makefileFocusedSelector =
+        lib.hasInfix "D2B_HOST_VM_CHECK" makefileSource
+        && lib.hasInfix "unknown vmCheck" makefileSource
+        && lib.hasInfix "case \"$$requested\"" makefileSource;
       makefileDefaultBuildIsPure =
         !(lib.hasInfix "nix build --impure" makefileSource);
     };
@@ -142,10 +227,149 @@ in
       constantSandboxDir = true;
       noImpureSccacheEnv = true;
       wrapperRequiresWritableDir = true;
+      wrapperFailsOnlyWhenConfigured = true;
+      noOwnerPrivateCache = true;
       waylandProxySourceBuilt = true;
       makefileNoWorldWritableCache = true;
       makefileCacheOptIn = true;
+      makefileNoRestrictedSandboxOption = true;
+      makefileNoCallerCachePath = true;
+      makefileFocusedSelector = true;
       makefileDefaultBuildIsPure = true;
+    };
+  };
+
+  "test-infrastructure/host-sccache-site-contract" = {
+    expr = {
+      moduleExists = hostSccacheSource != "";
+      siteOption =
+        lib.hasInfix "options.d2b.site.hostSccache.enable"
+          hostSccacheOptionsSource;
+      fixedCachePath = lib.hasInfix sccacheSandboxDir hostSccacheSource;
+      tmpfilesRule =
+        lib.hasInfix "2770 root " hostSccacheSource
+        && lib.hasInfix "buildUsersGroup" hostSccacheSource
+        && lib.hasInfix " -" hostSccacheSource;
+      globalSandboxSetting = lib.hasInfix "extra-sandbox-paths" hostSccacheSource;
+      noService = !(lib.hasInfix "systemd.services" hostSccacheSource);
+      linuxAssertion = lib.hasInfix "isLinux" hostSccacheSource;
+      buildGroupAssertion = lib.hasInfix "nixbld" hostSccacheSource;
+      docsEnablement =
+        lib.hasInfix "d2b.site.hostSccache.enable = true;" gatesDocsSource
+        && lib.hasInfix "sudo nixos-rebuild switch --flake" gatesDocsSource;
+      docsFocusedCommand =
+        lib.hasInfix
+          "D2B_HOST_SCCACHE=1 D2B_HOST_VM_CHECK=daemon-smoke make test-host-integration"
+          gatesDocsSource;
+    };
+    expected = {
+      moduleExists = true;
+      siteOption = true;
+      fixedCachePath = true;
+      tmpfilesRule = true;
+      globalSandboxSetting = true;
+      noService = true;
+      linuxAssertion = true;
+      buildGroupAssertion = true;
+      docsEnablement = true;
+      docsFocusedCommand = true;
+    };
+  };
+
+  "test-infrastructure/host-sccache-eval-contract" = {
+    expr = {
+      defaultDisabled = hostSccacheDefaultCfg.d2b.site.hostSccache.enable;
+      enabledSandboxPath = hostSccacheSettingContains
+        hostSccacheEnabledCfg.nix.settings."extra-sandbox-paths";
+      enabledBuildUsersGroup =
+        hostSccacheEnabledCfg.nix.settings."build-users-group";
+      enabledTmpfiles =
+        builtins.elem "d ${sccacheSandboxDir} 2770 root nixbld -"
+          hostSccacheEnabledTmpfiles;
+      noService = !(builtins.hasAttr "d2b-host-sccache"
+        hostSccacheEnabledCfg.systemd.services);
+    };
+    expected = {
+      defaultDisabled = false;
+      enabledSandboxPath = true;
+      enabledBuildUsersGroup = "nixbld";
+      enabledTmpfiles = true;
+      noService = true;
+    };
+  };
+
+  "test-infrastructure/cutover-runner-host-tool-contract" = {
+    expr = {
+      sourcePackage = lib.hasInfix ''"d2b-cutover"'' rustHostToolsSource;
+      outputPackage = lib.hasInfix "cutoverRunner = mkMainPackage" rustHostToolsSource;
+      brokerPath = lib.hasInfix "D2B_CUTOVER_RUNNER_PATH" hostBrokerSource;
+      bundlePath = lib.hasInfix "cutoverRunnerPath" bundleSource;
+      processContract = lib.hasInfix "cutoverRunner" processesSource;
+      privilegeContract =
+        lib.hasInfix ''"operation": "LaunchCutoverRunner"'' privilegesSource
+        && lib.hasInfix ''"operation": "CutoverAudit"'' privilegesSource
+        && lib.hasInfix ''"operation": "CutoverEffect"'' privilegesSource;
+      noPersistentUnit = !(lib.hasInfix "systemd.services.d2b-cutover" hostBrokerSource);
+    };
+    expected = {
+      sourcePackage = true;
+      outputPackage = true;
+      brokerPath = true;
+      bundlePath = true;
+      processContract = true;
+      privilegeContract = true;
+      noPersistentUnit = true;
+    };
+  };
+
+  "test-infrastructure/cutover-live-driver-contract" = {
+    expr = {
+      selfGuard =
+        lib.hasInfix ''d2b_heavy_gate_reexec "$ROOT" "$0" "$@"'' liveCutoverSource;
+      explicitLiveGate =
+        lib.hasInfix ''D2B_LIVE:-0'' liveCutoverSource
+        && lib.hasInfix ''D2B_LIVE=1'' liveCutoverSource;
+      requiredEvidencePaths = lib.all
+        (marker: lib.hasInfix marker liveCutoverSource)
+        [
+          "D2B_LIVE_STATE_DIR"
+          "D2B_LIVE_CANDIDATE_DIR"
+          "D2B_LIVE_SNAPSHOT"
+          "D2B_LIVE_SEAL"
+          "D2B_LIVE_RECOVERY_ATTESTATION"
+          "D2B_LIVE_CUTOVER_RECOVERY"
+          "D2B_LIVE_CONSENT"
+          "D2B_LIVE_HANDOFF"
+          "D2B_LIVE_VERIFICATION"
+        ];
+      productionValidators =
+        lib.hasInfix "delivery wave recovery-import" liveCutoverSource
+        && lib.hasInfix "delivery wave seal" liveCutoverSource
+        && lib.hasInfix "delivery wave merge-eligibility" liveCutoverSource
+        && lib.hasInfix "host cutover preview" liveCutoverSource
+        && lib.hasInfix "host cutover apply" liveCutoverSource
+        && lib.hasInfix "host cutover verify" liveCutoverSource
+        && lib.hasInfix "host cutover doctor" liveCutoverSource;
+      stopsBeforeFinalization =
+        !(lib.hasInfix "host cutover finalize" liveCutoverSource)
+        && !(lib.hasInfix "d2b host finalize" liveCutoverSource);
+      noSudoOrShellPredicates =
+        !(lib.hasInfix "sudo" liveCutoverSource)
+        && !(lib.hasInfix "jq -e" liveCutoverSource)
+        && !(lib.hasInfix "grep -q" liveCutoverSource);
+      redactedFailureSurface =
+        lib.hasInfix "validation failed before mutation" liveCutoverSource
+        && lib.hasInfix "raw paths and identities are intentionally suppressed"
+          liveCutoverSource;
+    };
+    expected = {
+      selfGuard = true;
+      explicitLiveGate = true;
+      requiredEvidencePaths = true;
+      productionValidators = true;
+      stopsBeforeFinalization = true;
+      noSudoOrShellPredicates = true;
+      redactedFailureSurface = true;
     };
   };
 }

@@ -58,6 +58,16 @@ rust_test(
 )
 
 rust_test(
+    name = "cutover_wire",
+    srcs = ["tests/cutover_wire.rs"],
+    compile_data = ["Cargo.toml"],
+    visibility = ["//visibility:public"],
+    deps = [
+        ":d2b_contracts",
+    ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
+)
+
+rust_test(
     name = "activation_nixos",
     srcs = ["tests/activation_nixos.rs"],
     compile_data = ["Cargo.toml"],

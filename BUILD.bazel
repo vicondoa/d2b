@@ -227,6 +227,11 @@ filegroup(
     name = "packages_workspace_sources",
     srcs = glob(
         ["packages/**/*"],
+        exclude = [
+            "packages/**/.scratch/**",
+            "packages/**/t/**",
+            "packages/**/target/**",
+        ],
         allow_empty = True,
     ),
     visibility = ["//visibility:public"],

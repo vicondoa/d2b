@@ -9,7 +9,7 @@ surface and the private broker operations.
 
 - `schemaVersion` - schema directory/version for this artifact.
 - `publicOperations` - public command rows (`list`, `status`, `host check`,
-  `vm start --dry-run`, and so on).
+  `host cutover`, `vm start --dry-run`, and so on).
 - `brokerOperations` - private broker rows (`ValidateBundle`,
   `RunActivation`, `SpawnRunner`, `DelegateCgroupV2`, and friends).
 

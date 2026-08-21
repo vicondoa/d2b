@@ -1,9 +1,35 @@
+use std::any::Any;
+
+use d2b_contracts::v3::component_session::AttachmentDescriptor;
 use d2b_provider_transport_vsock::{FramedVsockTransport, TransportError};
-use d2b_session::{OwnedTransport, TransportPacket};
+use d2b_session::{
+    AttachmentPayload, AttachmentValidationError, OwnedAttachment, OwnedTransport, TransportPacket,
+};
 use tokio::{
     io::{AsyncWriteExt, duplex},
     runtime::Builder,
 };
+
+struct TestAttachment;
+
+impl AttachmentPayload for TestAttachment {
+    fn close(self: Box<Self>) {}
+
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+
+    fn into_any(self: Box<Self>) -> Box<dyn Any + Send> {
+        self
+    }
+
+    fn validate_descriptor(
+        &self,
+        _descriptor: &AttachmentDescriptor,
+    ) -> Result<(), AttachmentValidationError> {
+        Ok(())
+    }
+}
 
 #[test]
 fn framed_transport_handles_partial_and_coalesced_records() {
@@ -55,7 +81,13 @@ fn framed_transport_rejects_attachments() {
     runtime.block_on(async {
         let (_sender, receiver) = duplex(64);
         let mut transport = FramedVsockTransport::new(receiver);
-        let packet = TransportPacket::with_attachments(b"payload".to_vec(), Vec::new());
-        transport.send(packet).await.unwrap();
+        let packet = TransportPacket::with_attachments(
+            b"payload".to_vec(),
+            vec![OwnedAttachment::unbound(Box::new(TestAttachment))],
+        );
+        assert_eq!(
+            transport.send(packet).await,
+            Err(d2b_session::TransportError::InvalidAttachment)
+        );
     });
 }
