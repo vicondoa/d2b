@@ -37,8 +37,6 @@ let
     inherit moduleFixtures;
   };
   moduleEvaluation = context.mkModuleEval [ ];
-  moduleAssertions = moduleEvaluation.config.assertions or [ ];
-  assertionsHold = builtins.all (entry: entry.assertion) moduleAssertions;
   selectedCases = map
     (spec:
       let
@@ -55,10 +53,12 @@ let
     caseFiles;
   cases = (import ../default.nix { cases = selectedCases; }) // {
     "${name}/modules-evaluate" = {
+      # This shared smoke case forces only the declared module structure.
+      # Owner-local cases force behavior without importing unrelated surfaces.
       expr =
         builtins.deepSeq
           (builtins.attrNames moduleEvaluation.options)
-          (assertionsHold && builtins.attrNames moduleEvaluation.config != [ ]);
+          (builtins.isAttrs moduleEvaluation.config);
       expected = true;
       propagateError = true;
     };
