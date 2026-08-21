@@ -698,7 +698,9 @@ The units may land as ordered reviewed pull requests. Every intermediate head mu
 - `tests/unit/nix/cases/broker-socket-activation.nix`
 - `tests/unit/nix/cases/broker-caps.nix`
 - `tests/unit/nix/cases/broker-service-posture.nix`
+- `tests/unit/nix/surfaces/daemon.nix`
 - `tests/unit/nix/surfaces/guest-control.nix`
+- `bazel/checks/nix/BUILD.bazel`
 - `packages/d2b-contracts-broker/tests/wire.rs`
 - `packages/d2b-contracts-broker/tests/cutover_wire.rs`
 - `packages/d2b-priv-broker/tests/broker_protocol_compatibility.rs`
@@ -1282,7 +1284,7 @@ The units may land as ordered reviewed pull requests. Every intermediate head mu
 | --- | --- | --- |
 | `make test-rust` | U1-U8, U10-U11 | Rust unit, integration, doctest, harness-free, provider, bus, client, daemon, and broker coverage passes |
 | `make test-nix-unit` | U1, U7-U11 | Placement, Provider catalog, daemon/broker profiles, Binding, and eval-rejection cases pass |
-| `make test-policy` | U1, U3-U4, U9-U11 | Runs `//bazel/checks/policy:policy_tooling`: the four retained repository-wide policy classes plus its existing Rust-policy and drift members. It does not run Provider, Guest-control, copied-workspace, no-direct-spawn, no-fallback, or documentation proofs. |
+| `make test-policy` | U1, U3-U4, U9-U11 | Runs `//bazel/checks/policy:policy_tooling`: the four retained repository-wide policy classes plus its existing Rust-policy, drift, and `//packages/xtask:pr_workflow` members. It does not run Provider, Guest-control, copied-workspace, no-direct-spawn, no-fallback, or documentation proofs. |
 | `make test-drift` | U1, U7, U9-U10 | Runs `//bazel/checks/policy:drift` for the existing generated-artifact and VM JSON parity checks; Provider packaging drift is `//packages/xtask:gen_provider_packaging_drift`. |
 | `make test-fixture-contracts` | U1, U7-U10 | Runs `//bazel/checks/fixtures:fixtures_proofs` for the existing fixture/contract proof set; it is not a separate Guest-control removal gate. |
 | `make test-unit` | U1-U11 | Full Layer-1 development umbrella passes |
