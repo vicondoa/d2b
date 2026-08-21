@@ -58,6 +58,7 @@ exports_files([
     "flake.lock",
     "flake.nix",
     ".github/PULL_REQUEST_TEMPLATE.md",
+    ".github/workflows/pr-l1-static-fast.yml",
     "scripts/changelog-check.sh",
     "BUILD.bazel",
     "tests/golden/bazel/cache-policy.json",
