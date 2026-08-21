@@ -686,15 +686,15 @@ pub(crate) async fn run_listener_verified_with_ready_and_cancel(
                             .and_then(|a| a.get("address"))
                             .and_then(|s| s.as_str())
                         {
+                            let Ok(slot) = rendezvous_slots.clone().try_acquire_owned() else {
+                                tracing::warn!("relay rendezvous concurrency bound reached");
+                                continue;
+                            };
                             let address = addr.to_owned();
                             let local = local.clone();
                             let ca = ca_pem.map(|c| c.to_vec());
                             let verify = verify.clone();
                             let ready = ready.clone();
-                            let Ok(slot) = rendezvous_slots.clone().try_acquire_owned() else {
-                                tracing::warn!("relay rendezvous concurrency bound reached");
-                                continue;
-                            };
                             rendezvous_tasks.spawn(async move {
                                 let _slot = slot;
                                 if let Err(err) =

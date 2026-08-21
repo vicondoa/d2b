@@ -7,8 +7,8 @@
 //! with a [`PrologueVerifier`] that verifies the session handshake under the
 //! authorizing binding + secret. Readiness is signalled only after the
 //! authenticated relay has attached to the local display endpoint, so
-//! `await_handshake` resolves exactly when bytes can flow. `close` aborts the
-//! task and drops the listener.
+//! `await_handshake` resolves exactly when bytes can flow. `close` cancels the
+//! listener and joins its runtime thread.
 //!
 //! The verifier-signal composition is a pure helper ([`notifying_verifier`]) so
 //! it is unit-tested with a real handshake frame and no Azure round-trip.
@@ -53,16 +53,10 @@ pub fn notifying_verifier(
 
 struct ListenerState {
     cancel: tokio::sync::watch::Sender<bool>,
-    thread: Option<std::thread::JoinHandle<()>>,
+    thread: std::thread::JoinHandle<()>,
     handshook: Arc<Notify>,
     armed: Arc<AtomicBool>,
     handshake_timeout: Duration,
-}
-
-impl Drop for ListenerState {
-    fn drop(&mut self) {
-        let _ = self.cancel.send(true);
-    }
 }
 
 /// The production host-side display listener.
@@ -197,7 +191,7 @@ impl DisplayListener for RelayDisplayListener {
             id.clone(),
             ListenerState {
                 cancel: task_cancel,
-                thread: Some(thread),
+                thread,
                 handshook,
                 armed,
                 handshake_timeout,
@@ -234,11 +228,9 @@ impl DisplayListener for RelayDisplayListener {
             let mut guard = self.state.lock().map_err(|_| GatewayError::Internal)?;
             guard.remove(&handle.0)
         };
-        if let Some(mut st) = st {
+        if let Some(st) = st {
             let _ = st.cancel.send(true);
-            if let Some(thread) = st.thread.take() {
-                let _ = tokio::task::spawn_blocking(move || thread.join()).await;
-            }
+            let _ = tokio::task::spawn_blocking(move || st.thread.join()).await;
         }
         Ok(())
     }
@@ -317,7 +309,7 @@ mod tests {
             "h1".into(),
             ListenerState {
                 cancel,
-                thread: Some(thread),
+                thread,
                 handshook,
                 armed,
                 handshake_timeout: Duration::from_secs(100),
@@ -380,7 +372,7 @@ mod tests {
             "h1".into(),
             ListenerState {
                 cancel,
-                thread: Some(thread),
+                thread,
                 handshook: Arc::new(Notify::new()),
                 armed: Arc::new(AtomicBool::new(false)),
                 handshake_timeout: Duration::from_secs(100),
