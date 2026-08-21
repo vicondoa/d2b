@@ -6,13 +6,10 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use d2b_contracts_zone_session::v3::ZoneBundle;
 use d2b_contracts_resource::v3::{
-    ConfigurationGeneration,
-    ResourceBundleGenerationId,
-    SchemaFingerprint,
-    Timestamp,
+    ConfigurationGeneration, ResourceBundleGenerationId, SchemaFingerprint, Timestamp,
 };
+use d2b_contracts_zone_session::v3::ZoneBundle;
 
 use crate::resource_store::{
     ManagedBy, PersistedResourceMetadata, PersistedResourceRecord, ResourceMetadataError,

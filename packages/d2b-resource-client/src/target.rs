@@ -9,12 +9,9 @@
 
 use core::fmt;
 
+use d2b_contracts_resource::v3::{ResourceName, ResourceRef, ResourceTypeName};
 use d2b_contracts_zone_session::v3::zone_routing::ZonePath;
-use d2b_contracts_resource::v3::{
-    ResourceName,
-    ResourceRef,
-    ResourceTypeName,
-};
+use d2b_core_controller::controller_assignment::AssignmentTarget;
 
 use crate::ClientError;
 
@@ -404,6 +401,24 @@ impl ResolvedTarget {
     /// Return the addressed resource reference, when this target names one.
     pub fn resource_ref(&self) -> Option<ResourceRef> {
         self.owner.resource_ref()
+    }
+
+    /// Check that this resolved route is exactly the assignment target.
+    pub fn matches_assignment(&self, assignment: &AssignmentTarget) -> bool {
+        match assignment {
+            AssignmentTarget::Zone(zone) => {
+                self.owner.zone().depth() == 1
+                    && self
+                        .owner
+                        .zone()
+                        .labels()
+                        .first()
+                        .is_some_and(|label| label.as_str() == zone.as_str())
+            }
+            AssignmentTarget::Execution { reference, .. } => {
+                self.resource_ref().as_ref() == Some(reference)
+            }
+        }
     }
 }
 

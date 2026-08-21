@@ -7,6 +7,13 @@ use std::{collections::HashMap, sync::Arc};
 
 use async_trait::async_trait;
 use d2b_contracts_resource::resource_proto as wire;
+use d2b_core_controller::controller_assignment::{
+    AssignmentTransportError, ScopedCommitTransport, ScopedResourceMutation,
+};
+use protobuf::Message;
+use ttrpc::proto::{
+    MESSAGE_HEADER_LENGTH, MESSAGE_TYPE_REQUEST, MessageHeader, Request as TtrpcRequest,
+};
 
 use crate::{
     ResourceStoreBackend,
@@ -16,6 +23,115 @@ use crate::{
     identity::AuthenticatedSubjectContext,
     service::{ResourceService, TrustedRequest, UpgradeDispatcher},
 };
+
+/// Failure while attaching assignment evidence to a Resource CommitBatch
+/// frame.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ScopedCommitFrameError {
+    InvalidFrame,
+    InvalidRequest,
+    Assignment(AssignmentTransportError),
+}
+
+impl core::fmt::Display for ScopedCommitFrameError {
+    fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        formatter.write_str(match self {
+            Self::InvalidFrame => "scoped-commit-frame-invalid",
+            Self::InvalidRequest => "scoped-commit-request-invalid",
+            Self::Assignment(error) => error.code(),
+        })
+    }
+}
+
+impl std::error::Error for ScopedCommitFrameError {}
+
+/// Attach bus-admitted assignment evidence to the existing ttrpc CommitBatch
+/// request without creating another transport.
+pub fn attach_scoped_commit_frame(
+    frame: &[u8],
+    transport: &ScopedCommitTransport,
+) -> Result<Vec<u8>, ScopedCommitFrameError> {
+    let header_bytes: [u8; MESSAGE_HEADER_LENGTH] = frame
+        .get(..MESSAGE_HEADER_LENGTH)
+        .ok_or(ScopedCommitFrameError::InvalidFrame)?
+        .try_into()
+        .map_err(|_| ScopedCommitFrameError::InvalidFrame)?;
+    let header = MessageHeader::from(header_bytes);
+    let body_len =
+        usize::try_from(header.length).map_err(|_| ScopedCommitFrameError::InvalidFrame)?;
+    if header.type_ != MESSAGE_TYPE_REQUEST
+        || frame.len() != MESSAGE_HEADER_LENGTH.saturating_add(body_len)
+    {
+        return Err(ScopedCommitFrameError::InvalidFrame);
+    }
+    let mut rpc = TtrpcRequest::parse_from_bytes(&frame[MESSAGE_HEADER_LENGTH..])
+        .map_err(|_| ScopedCommitFrameError::InvalidRequest)?;
+    if rpc.service != "d2b.resource.v3.ResourceService" || rpc.method != "CommitBatch" {
+        return Err(ScopedCommitFrameError::InvalidRequest);
+    }
+    let mut request = wire::CommitBatchRequest::parse_from_bytes(&rpc.payload)
+        .map_err(|_| ScopedCommitFrameError::InvalidRequest)?;
+    if !request.scoped_admission.is_empty() {
+        return Err(ScopedCommitFrameError::InvalidRequest);
+    }
+    request.scoped_admission = transport
+        .encode()
+        .map_err(ScopedCommitFrameError::Assignment)?;
+    rpc.payload = request
+        .write_to_bytes()
+        .map_err(|_| ScopedCommitFrameError::InvalidRequest)?;
+    let body = rpc
+        .write_to_bytes()
+        .map_err(|_| ScopedCommitFrameError::InvalidRequest)?;
+    let mut header = header;
+    header.length = u32::try_from(body.len()).map_err(|_| ScopedCommitFrameError::InvalidFrame)?;
+    let mut result = Vec::with_capacity(MESSAGE_HEADER_LENGTH + body.len());
+    result.extend_from_slice(&Vec::from(header));
+    result.extend_from_slice(&body);
+    Ok(result)
+}
+
+/// Decode the optional assignment evidence carried by a CommitBatch request.
+pub fn decode_scoped_commit_request(
+    request: &wire::CommitBatchRequest,
+) -> Result<Option<ScopedCommitTransport>, AssignmentTransportError> {
+    if request.scoped_admission.is_empty() {
+        return Ok(None);
+    }
+    ScopedCommitTransport::decode(&request.scoped_admission).map(Some)
+}
+
+/// Reject assignment evidence supplied by an ordinary CommitBatch caller.
+///
+/// Scoped evidence is bus-owned. A plain ResourceCall must never be able to
+/// smuggle the field through the same RPC and receive a storage fence.
+pub fn reject_scoped_commit_frame(frame: &[u8]) -> Result<(), ScopedCommitFrameError> {
+    let header_bytes: [u8; MESSAGE_HEADER_LENGTH] = frame
+        .get(..MESSAGE_HEADER_LENGTH)
+        .ok_or(ScopedCommitFrameError::InvalidFrame)?
+        .try_into()
+        .map_err(|_| ScopedCommitFrameError::InvalidFrame)?;
+    let header = MessageHeader::from(header_bytes);
+    let body_len =
+        usize::try_from(header.length).map_err(|_| ScopedCommitFrameError::InvalidFrame)?;
+    if header.type_ != MESSAGE_TYPE_REQUEST
+        || frame.len() != MESSAGE_HEADER_LENGTH.saturating_add(body_len)
+    {
+        return Err(ScopedCommitFrameError::InvalidFrame);
+    }
+    let rpc = TtrpcRequest::parse_from_bytes(&frame[MESSAGE_HEADER_LENGTH..])
+        .map_err(|_| ScopedCommitFrameError::InvalidRequest)?;
+    if rpc.service != "d2b.resource.v3.ResourceService" || rpc.method != "CommitBatch" {
+        return Err(ScopedCommitFrameError::InvalidRequest);
+    }
+    let request = wire::CommitBatchRequest::parse_from_bytes(&rpc.payload)
+        .map_err(|_| ScopedCommitFrameError::InvalidRequest)?;
+    if request.scoped_admission.is_empty() {
+        Ok(())
+    } else {
+        Err(ScopedCommitFrameError::InvalidRequest)
+    }
+}
 
 /// Failure to bind an authenticated ComponentSession route.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -71,6 +187,17 @@ where
             Arc::clone(self.session.claims()),
             self.session.authorization_state().clone(),
         )
+    }
+
+    /// Dispatch one scoped commit through the existing authenticated adapter.
+    pub async fn scoped_commit_batch(
+        &self,
+        request: wire::CommitBatchRequest,
+        scoped_mutations: Vec<ScopedResourceMutation>,
+    ) -> wire::CommitBatchResponse {
+        self.client()
+            .scoped_commit_batch(request, scoped_mutations)
+            .await
     }
 
     pub(crate) fn service(&self) -> &ResourceService<S, U> {
@@ -183,7 +310,22 @@ where
         _ctx: &ttrpc::r#async::TtrpcContext,
         request: wire::CommitBatchRequest,
     ) -> ttrpc::Result<wire::CommitBatchResponse> {
-        Ok(self.service().commit_batch(self.trusted(request)).await)
+        let scoped = match decode_scoped_commit_request(&request) {
+            Ok(scoped) => scoped,
+            Err(_) => {
+                return Ok(ResourceService::<S, U>::invalid_commit_batch(
+                    "scoped commit transport is invalid",
+                ));
+            }
+        };
+        Ok(match scoped {
+            Some(transport) => {
+                self.client()
+                    .scoped_commit_batch(request, transport.mutations().to_vec())
+                    .await
+            }
+            None => self.service().commit_batch(self.trusted(request)).await,
+        })
     }
 
     async fn resolve_ref(
@@ -216,34 +358,18 @@ mod tests {
     use super::*;
     use std::{collections::BTreeSet, sync::Mutex};
 
+    use d2b_contracts_resource::v3::identity::{
+        AuthenticatedSubjectContext as SessionClaims, BindingDigest, EvidenceClass, Locality,
+        ReconnectGeneration, ServiceName, SessionBinding, SessionPurpose, TranscriptHash,
+        TransportBinding,
+    };
     use d2b_contracts_resource::v3::{
-    CanonicalJsonValue,
-    ConfigurationGeneration,
-    ControllerGeneration,
-    RESOURCE_ENVELOPE_DOMAIN_TAG,
-    ResourceEnvelope,
-    ResourceGeneration,
-    ResourceName,
-    ResourceRef,
-    ResourceTypeName,
-    ResourceUid,
-    SchemaFingerprint,
-    ZoneId,
-    ZoneRevision,
-    canonical_digest,
-};
-use d2b_contracts_resource::v3::identity::{
-    AuthenticatedSubjectContext as SessionClaims,
-    BindingDigest,
-    EvidenceClass,
-    Locality,
-    ReconnectGeneration,
-    ServiceName,
-    SessionBinding,
-    SessionPurpose,
-    TranscriptHash,
-    TransportBinding,
-};
+        CanonicalJsonValue, ConfigurationGeneration, ControllerGeneration,
+        RESOURCE_ENVELOPE_DOMAIN_TAG, ResourceEnvelope, ResourceGeneration, ResourceName,
+        ResourceRef, ResourceTypeName, ResourceUid, SchemaFingerprint, ZoneId, ZoneRevision,
+        canonical_digest,
+    };
+    use d2b_core_controller::controller_assignment::ScopedCommitTransport;
     use d2b_resource_store::mutation_seal::MutationSealAcceptor;
     use d2b_resource_store::{
         AdmittedVerb, PolicySnapshot, ResourceMutationKind, StoreCommitResult, StoreError,
@@ -251,7 +377,8 @@ use d2b_contracts_resource::v3::identity::{
         StoreResolveRequest, StoreResolvedIdentity, StoreSealIdentity, StoreSlot,
         StoreWatchReceipt, StoreWatchRequest, StoredResource, StoredSchema,
     };
-    use protobuf::{EnumOrUnknown, MessageField};
+    use protobuf::{EnumOrUnknown, Message, MessageField};
+    use ttrpc::proto::{MessageHeader, Request as TtrpcRequest};
 
     use crate::ResourceStoreBackend;
     use crate::authz::{
@@ -321,6 +448,40 @@ use d2b_contracts_resource::v3::identity::{
             ZoneId::parse("dev").unwrap(),
             ResourceUid::parse("11111111-1111-4111-8111-111111111111").unwrap(),
         )
+    }
+
+    #[test]
+    fn scoped_commit_frame_preserves_assignment_evidence_on_existing_rpc() {
+        let transport = ScopedCommitTransport::decode(
+            br#"{"version":1,"assignment":{"resourceUid":"123e4567-e89b-42d3-a456-426614174000","resourceRevision":7,"providerGeneration":2,"controllerGeneration":3,"controllerRole":"Process/process-controller","target":{"kind":"zone","zone":"dev"},"sessionGeneration":1,"epoch":9},"mutations":[{"target":"Process/work","verb":"UpdateStatus"},{"target":"Process/work","verb":"UpdateFinalizers"}]}"#,
+        )
+        .unwrap();
+        let request = d2b_contracts_resource::resource_proto::CommitBatchRequest::new();
+        let rpc = TtrpcRequest {
+            service: "d2b.resource.v3.ResourceService".to_owned(),
+            method: "CommitBatch".to_owned(),
+            payload: request.write_to_bytes().unwrap(),
+            ..TtrpcRequest::default()
+        };
+        let body = rpc.write_to_bytes().unwrap();
+        let mut frame = Vec::with_capacity(ttrpc::proto::MESSAGE_HEADER_LENGTH + body.len());
+        let mut header = MessageHeader::new_request(1, body.len() as u32);
+        header.length = body.len() as u32;
+        frame.extend_from_slice(&Vec::from(header));
+        frame.extend_from_slice(&body);
+
+        let attached = attach_scoped_commit_frame(&frame, &transport).unwrap();
+        let attached_body = &attached[ttrpc::proto::MESSAGE_HEADER_LENGTH..];
+        let attached_rpc = TtrpcRequest::parse_from_bytes(attached_body).unwrap();
+        let attached_request =
+            d2b_contracts_resource::resource_proto::CommitBatchRequest::parse_from_bytes(
+                &attached_rpc.payload,
+            )
+            .unwrap();
+        let decoded = decode_scoped_commit_request(&attached_request)
+            .unwrap()
+            .unwrap();
+        assert_eq!(decoded, transport);
     }
 
     #[derive(Debug, Clone, PartialEq, Eq)]

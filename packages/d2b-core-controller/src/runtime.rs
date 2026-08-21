@@ -546,16 +546,9 @@ mod tests {
     use std::collections::{BTreeMap, BTreeSet, VecDeque};
 
     use d2b_contracts_resource::v3::{
-    ConfigurationGeneration,
-    ControllerGeneration,
-    ObservedGeneration,
-    ResourceGeneration,
-    ResourcePhase,
-    ResourceRef,
-    ResourceTypeName,
-    ResourceUid,
-    ZoneId,
-};
+        ConfigurationGeneration, ControllerGeneration, ObservedGeneration, ResourceGeneration,
+        ResourcePhase, ResourceRef, ResourceTypeName, ResourceUid, ZoneId,
+    };
     use d2b_controller_toolkit::{
         ControllerExecutionPolicy, ControllerIdentity, ControllerSelector, ControllerVerb,
         ProjectionDisposition, ResourceRegistration, ResyncPolicy, Runner, RunnerConfig,

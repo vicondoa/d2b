@@ -15,14 +15,12 @@ use std::{
 };
 
 use d2b_contracts_resource::v3::{
-    CanonicalJsonValue,
-    IfName,
-    ResourceGeneration,
-    ResourceRef,
-    ResourceUid,
-    UpdateState,
+    CanonicalJsonValue, IfName, ResourceGeneration, ResourceRef, ResourceUid, UpdateState,
     is_canonical_digest,
-    network::{ExternalNicAdmissionError, ExternalNicAuthorityStatus, ExternalNicClaim, MacvtapMode, SharingPolicy, admit_external_nic_claims},
+    network::{
+        ExternalNicAdmissionError, ExternalNicAuthorityStatus, ExternalNicClaim, MacvtapMode,
+        SharingPolicy, admit_external_nic_claims,
+    },
     process::PortProtocol,
     resource_schema::canonical_digest,
 };

@@ -226,6 +226,7 @@ fn create_seal_body_for_type(
                 remove_finalizers: Vec::new(),
                 wait_for_reconcile: false,
                 reconcile_deadline_ms: None,
+                assignment: None,
             },
             None,
             Some(payload_digest),
@@ -434,6 +435,7 @@ fn seed_host(directory: &tempfile::TempDir, name: &str) {
         owner_uid: None,
         controller_binding_id: "Provider/system-core".to_owned(),
         payload_digest: envelope.digest().unwrap(),
+        assignment: None,
     };
     let value = encode(ValueKind::ResourceRecord, &record).unwrap();
     let type_value = encode(
@@ -523,6 +525,7 @@ fn seed_two_hosts(directory: &tempfile::TempDir) {
         owner_uid: None,
         controller_binding_id: "Provider/system-core".to_owned(),
         payload_digest: envelope.digest().unwrap(),
+        assignment: None,
     };
     let write = database.begin_write().unwrap();
     let value = crate::transaction::encode(ValueKind::ResourceRecord, &record).unwrap();
@@ -2376,6 +2379,7 @@ fn prepare_production_rss_fixture() -> tempfile::TempDir {
                 owner_uid: None,
                 controller_binding_id: "Provider/system-core".to_owned(),
                 payload_digest,
+                assignment: None,
             };
             let value = crate::transaction::encode(ValueKind::ResourceRecord, &record)
                 .expect("production RSS fixture resource encoding");

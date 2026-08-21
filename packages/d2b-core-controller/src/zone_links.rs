@@ -30,10 +30,10 @@
 //! the session state purely from the durable [`ZoneLinkRecord`]. Replaying an
 //! already-committed event after restart is a no-op that plans no effect.
 
-use d2b_contracts_zone_session::v3::{
-    zone_routing::{ZoneLinkControllerGeneration, ZoneRouteFailClosedReason, ZoneSigningKeyFingerprint},
-};
 use d2b_contracts_resource::v3::ResourceUid;
+use d2b_contracts_zone_session::v3::zone_routing::{
+    ZoneLinkControllerGeneration, ZoneRouteFailClosedReason, ZoneSigningKeyFingerprint,
+};
 
 /// Default absolute lifetime of one allocator-issued bootstrap PSK.
 pub const BOOTSTRAP_PSK_TTL_MS_DEFAULT: u64 = 300_000;

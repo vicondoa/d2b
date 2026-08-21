@@ -1,15 +1,8 @@
 //! Production Zone status projection with the mandatory system-core pair.
 
+use d2b_contracts_resource::v3::{ResourcePhase, Timestamp};
 use d2b_contracts_zone_session::v3::ZoneHandlerName;
-use d2b_contracts_zone_session::v3::{
-    ZoneHandlerPhase,
-    ZoneHandlerStatus,
-    ZoneStatusResource,
-};
-use d2b_contracts_resource::v3::{
-    ResourcePhase,
-    Timestamp,
-};
+use d2b_contracts_zone_session::v3::{ZoneHandlerPhase, ZoneHandlerStatus, ZoneStatusResource};
 
 fn emit_handler_status(
     host_phase: ZoneHandlerPhase,

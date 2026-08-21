@@ -17,9 +17,12 @@ use std::{
 };
 
 use d2b_contracts_resource::v3::{
-    CanonicalJsonObject,
-    ResourceRef,
+    CanonicalJsonObject, ResourceName, ResourceRef, ResourceTypeName,
 };
+use d2b_core_controller::controller_assignment::{
+    AssignmentError, AssignmentVerb, ResourceClientLease, ScopedResourceFilter, ScopedResourceQuery,
+};
+pub use d2b_core_controller::controller_assignment::{AssignmentIdentity, ScopedResourceMutation};
 
 use crate::{
     AttemptDisposition, CallDriver, CallOptions, ClientError, MethodProfile, ResolvedTarget,
@@ -32,9 +35,7 @@ use crate::{
 /// This is an alias of the contract-owned catalogue rather than a second
 /// client-side enum, so adding or removing a method changes the canonical
 /// service descriptor and this API together.
-pub use d2b_contracts_zone_session::v3::{
-    ResourceMethod as ResourceVerb,
-};
+pub use d2b_contracts_zone_session::v3::ResourceMethod as ResourceVerb;
 
 /// Whether a ResourceService method can change durable Resource state.
 pub const fn resource_verb_is_mutating(verb: ResourceVerb) -> bool {
@@ -242,6 +243,21 @@ pub trait ConnectedZoneSession: Send + Sync {
         _relative_timeout_nanos: u64,
     ) -> impl Future<Output = Result<CanonicalJsonObject, ClientError>> + Send {
         self.call(verb, target, payload)
+    }
+
+    /// Issue one scoped commit through the same authenticated transport.
+    ///
+    /// The assignment and mutations are the transport-neutral bus admission
+    /// descriptor. The runtime adapter converts them to its existing
+    /// `ResourceCall::ScopedCommitBatch` route and attaches the storage fence.
+    fn call_scoped_commit_batch(
+        &self,
+        _assignment: AssignmentIdentity,
+        _mutations: Vec<ScopedResourceMutation>,
+        _payload: CanonicalJsonObject,
+        _relative_timeout_nanos: u64,
+    ) -> impl Future<Output = Result<CanonicalJsonObject, ClientError>> + Send {
+        core::future::ready(Err(ClientError::ContractViolation))
     }
 
     /// Forward cancellation for the request currently in flight.
@@ -473,6 +489,19 @@ where
     R: TargetResolver,
     W: WallClock,
 {
+    /// Mint the controller-scoped collection query used by the existing
+    /// Resource API route. The lease supplies the non-widenable assignment
+    /// filter; callers can only narrow its ResourceType/name selectors.
+    pub fn scoped_query(
+        &self,
+        lease: &ResourceClientLease,
+        resource_types: Vec<ResourceTypeName>,
+        resource_names: Vec<ResourceName>,
+        filters: Vec<ScopedResourceFilter>,
+    ) -> Result<ScopedResourceQuery, AssignmentError> {
+        lease.query(resource_types, resource_names, filters)
+    }
+
     /// Resolve a target and prepare one bounded Resource call.
     pub fn prepare_resource_call(
         &self,
@@ -534,7 +563,16 @@ where
     {
         let (resolved, _driver) =
             self.prepare_resource_call(target, verb, options, selection, request.has_attachments)?;
-        execute_resource_call(&self.resource, session, &resolved, verb, _driver, request).await
+        execute_resource_call(
+            &self.resource,
+            session,
+            &resolved,
+            verb,
+            _driver,
+            request,
+            None,
+        )
+        .await
     }
 
     /// Execute a typed call over a handle whose authenticated route pin was
@@ -569,6 +607,68 @@ where
             verb,
             driver,
             request,
+            None,
+        )
+        .await
+    }
+
+    /// Execute a controller-scoped atomic commit batch on one authenticated
+    /// Zone session.
+    ///
+    /// Each target and verb is re-admitted by the non-clonable lease. The
+    /// resulting transport descriptor is derived from that same admission
+    /// before the existing Resource transport is used.
+    pub async fn scoped_commit_batch(
+        &self,
+        connection: &ConnectedZoneClient<C::Session>,
+        lease: &ResourceClientLease,
+        mutations: Vec<(ResourceRef, AssignmentVerb)>,
+        options: CallOptions,
+        request: ResourceCallOptions<'_>,
+    ) -> Result<CanonicalJsonObject, ClientError>
+    where
+        C: ZoneSessionConnector,
+    {
+        if mutations.is_empty() || mutations.len() > 128 {
+            return Err(ClientError::ContractViolation);
+        }
+        if !connection
+            .session_pin()
+            .matches_target(connection.target(), connection.target().service())
+        {
+            return Err(ClientError::TransportPolicyMismatch);
+        }
+        let scoped_mutations = mutations
+            .into_iter()
+            .map(|(target, verb)| {
+                if !verb.is_mutating() || verb == AssignmentVerb::CommitBatch {
+                    return Err(ClientError::ContractViolation);
+                }
+                lease
+                    .mutation(target, verb)
+                    .map_err(|_| ClientError::ContractViolation)
+            })
+            .collect::<Result<Vec<ScopedResourceMutation>, _>>()?;
+        let assignment = lease.identity().clone();
+        let profile = method_profile_for_service(
+            connection.target().service(),
+            ResourceVerb::CommitBatch,
+            &options,
+        )?;
+        let driver = self.resource.prepare_call(
+            connection.target(),
+            profile,
+            options,
+            request.has_attachments,
+        )?;
+        execute_resource_call(
+            &self.resource,
+            connection.session(),
+            connection.target(),
+            ResourceVerb::CommitBatch,
+            driver,
+            request,
+            Some((assignment, scoped_mutations)),
         )
         .await
     }
@@ -600,6 +700,7 @@ async fn execute_resource_call<S, R, W>(
     verb: ResourceVerb,
     mut driver: CallDriver<W>,
     request: ResourceCallOptions<'_>,
+    scoped_call: Option<(AssignmentIdentity, Vec<ScopedResourceMutation>)>,
 ) -> Result<CanonicalJsonObject, ClientError>
 where
     S: ConnectedZoneSession,
@@ -615,13 +716,30 @@ where
 
     loop {
         let attempt = driver.begin_attempt(cancellation)?;
-        let call = session.call_with_timeout(
-            verb,
-            resource_target.clone(),
-            payload.clone(),
-            attempt.relative_timeout_nanos(),
-        );
-        let result = match await_with_cancellation(call, cancellation).await {
+        let result = if let Some((assignment, mutations)) = scoped_call.as_ref() {
+            await_with_cancellation(
+                session.call_scoped_commit_batch(
+                    assignment.clone(),
+                    mutations.clone(),
+                    payload.clone(),
+                    attempt.relative_timeout_nanos(),
+                ),
+                cancellation,
+            )
+            .await
+        } else {
+            await_with_cancellation(
+                session.call_with_timeout(
+                    verb,
+                    resource_target.clone(),
+                    payload.clone(),
+                    attempt.relative_timeout_nanos(),
+                ),
+                cancellation,
+            )
+            .await
+        };
+        let result = match result {
             Ok(result) => result,
             Err(ClientError::Cancelled) => {
                 let _ = session.cancel(request_id).await;

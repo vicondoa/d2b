@@ -35,6 +35,7 @@ use d2b_contracts_resource::v3::{
     canonical_digest,
 };
 use d2b_contracts_resource::v3::identity::AuthenticatedSubjectContext;
+use d2b_core_controller::controller_assignment::{AssignmentVerb, ScopedResourceMutation};
 use d2b_resource_store::{
     ExpectedRevision, ResourceMutationKind, StoreCommitResult, StoreFilter, StoreGetRequest,
     StoreInspectSchemaRequest, StoreListRequest, StoreListResult, StoreMutation,
@@ -46,7 +47,7 @@ use crate::{
     ResourceStoreBackend, StoreBindingError,
     authz::{
         ApiMethod, AuthorizationRequest, AuthorizationState, AuthorizationTarget, NativeAuthorizer,
-        ResourceVerb,
+        ResourceVerb, assignment_fence_for_mutation,
     },
     error::{map_store_error, map_store_error_with_revision_visibility, to_wire_error},
     store::CheckedResourceStore,
@@ -638,6 +639,29 @@ where
         &self,
         trusted: TrustedRequest<wire::CommitBatchRequest>,
     ) -> wire::CommitBatchResponse {
+        self.commit_batch_with_scope(trusted, None).await
+    }
+
+    pub(crate) fn invalid_commit_batch(reason: &'static str) -> wire::CommitBatchResponse {
+        batch_error(schema_error(reason))
+    }
+
+    /// Commit one bus-authorized assignment batch while carrying the same
+    /// lease evidence into every eligible store mutation.
+    pub async fn commit_scoped_batch(
+        &self,
+        trusted: TrustedRequest<wire::CommitBatchRequest>,
+        scoped_mutations: Vec<ScopedResourceMutation>,
+    ) -> wire::CommitBatchResponse {
+        self.commit_batch_with_scope(trusted, Some(scoped_mutations))
+            .await
+    }
+
+    async fn commit_batch_with_scope(
+        &self,
+        trusted: TrustedRequest<wire::CommitBatchRequest>,
+        scoped_mutations: Option<Vec<ScopedResourceMutation>>,
+    ) -> wire::CommitBatchResponse {
         if trusted.request.mutations.is_empty() {
             return batch_error(schema_error("batch mutation count exceeds its bound"));
         }
@@ -682,7 +706,7 @@ where
         if trusted.request.mutations.len() > MAX_BATCH_MUTATIONS {
             return batch_error(schema_error("batch mutation count exceeds its bound"));
         }
-        let parsed = match trusted
+        let mut parsed = match trusted
             .request
             .mutations
             .iter()
@@ -693,6 +717,11 @@ where
             Ok(parsed) => parsed,
             Err(error) => return batch_error(error),
         };
+        if let Some(scoped_mutations) = scoped_mutations.as_deref() {
+            if let Err(error) = attach_scoped_fences(&mut parsed, scoped_mutations, &routes) {
+                return batch_error(error);
+            }
+        }
         let operation = match operation_context(
             trusted.request.meta.as_ref(),
             true,
@@ -1191,6 +1220,66 @@ struct ParsedMutationRoute {
     authorizations: Vec<AuthorizationTarget>,
 }
 
+fn attach_scoped_fences(
+    parsed: &mut [ParsedMutation],
+    scoped: &[ScopedResourceMutation],
+    routes: &[ParsedMutationRoute],
+) -> Result<(), ResourceError> {
+    if scoped.is_empty() || scoped.len() != parsed.len() || scoped.len() != routes.len() {
+        return Err(schema_error("scoped batch mutation count does not match"));
+    }
+    let assignment = scoped
+        .first()
+        .map(ScopedResourceMutation::assignment)
+        .ok_or_else(|| schema_error("scoped batch assignment is missing"))?;
+    for (ordinal, ((parsed, route), scoped)) in
+        parsed.iter_mut().zip(routes).zip(scoped).enumerate()
+    {
+        if scoped.assignment() != assignment
+            || scoped.target() != &route.identity.resource_ref
+            || resource_mutation_kind_for_assignment(scoped.verb()) != Some(route.kind)
+        {
+            return Err(ResourceError::terminal(
+                ResourceErrorKind::AuthorizationDenied,
+                "scoped batch mutation is outside its assignment",
+            ));
+        }
+        let mut fence = assignment_fence_for_mutation(scoped).map_err(|_| {
+            ResourceError::terminal(
+                ResourceErrorKind::InternalIntegrityFailure,
+                "assignment-fence-invalid",
+            )
+        })?;
+        // Keep the first fence at the admitted snapshot for stale-batch and
+        // single-write fencing; later mutations follow the staged revision.
+        if ordinal > 0 {
+            let ExpectedRevision::Exact(revision) = parsed.store.expected else {
+                return Err(schema_error("scoped batch assignment requires an exact revision"));
+            };
+            fence.resource_revision = revision;
+        }
+        parsed.store.assignment = Some(fence);
+    }
+    Ok(())
+}
+
+const fn resource_mutation_kind_for_assignment(
+    verb: AssignmentVerb,
+) -> Option<ResourceMutationKind> {
+    match verb {
+        AssignmentVerb::Create => Some(ResourceMutationKind::Create),
+        AssignmentVerb::UpdateSpec => Some(ResourceMutationKind::UpdateSpec),
+        AssignmentVerb::UpdateStatus => Some(ResourceMutationKind::UpdateStatus),
+        AssignmentVerb::UpdateMetadata => Some(ResourceMutationKind::UpdateMetadata),
+        AssignmentVerb::UpdateFinalizers => Some(ResourceMutationKind::UpdateFinalizers),
+        AssignmentVerb::Delete => Some(ResourceMutationKind::Delete),
+        AssignmentVerb::Get
+        | AssignmentVerb::List
+        | AssignmentVerb::Watch
+        | AssignmentVerb::CommitBatch => None,
+    }
+}
+
 impl core::fmt::Debug for ParsedIdentity {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         f.debug_struct("ParsedIdentity")
@@ -1561,6 +1650,7 @@ fn parse_mutation<T>(
             reconcile_deadline_ms: mutation
                 .wait_for_reconcile
                 .then_some(mutation.reconcile_deadline_ms),
+            assignment: None,
         },
     })
 }
@@ -1897,25 +1987,14 @@ mod tests {
         },
     };
 
+    use d2b_contracts_resource::v3::identity::{
+        BindingDigest, EvidenceClass, Locality, ReconnectGeneration, ServiceName, SessionBinding,
+        SessionPurpose, TranscriptHash, TransportBinding,
+    };
     use d2b_contracts_resource::v3::{
-    ConfigurationGeneration,
-    ControllerGeneration,
-    ResourceGeneration,
-    ResourceUid,
-    SchemaFingerprint,
-    ZoneId,
-};
-use d2b_contracts_resource::v3::identity::{
-    BindingDigest,
-    EvidenceClass,
-    Locality,
-    ReconnectGeneration,
-    ServiceName,
-    SessionBinding,
-    SessionPurpose,
-    TranscriptHash,
-    TransportBinding,
-};
+        ConfigurationGeneration, ControllerGeneration, ResourceGeneration, ResourceUid,
+        SchemaFingerprint, ZoneId,
+    };
     use d2b_resource_store::mutation_seal::MutationSealAcceptor;
     use d2b_resource_store::{
         MutationOrdinal, StoreError, StoreErrorKind, StoreListResult, StoreResolvedIdentity,
@@ -2843,6 +2922,7 @@ use d2b_contracts_resource::v3::identity::{
             remove_finalizers: Vec::new(),
             wait_for_reconcile: false,
             reconcile_deadline_ms: None,
+            assignment: None,
         };
         let parsed_mutation = ParsedMutation {
             store: protected_mutation,

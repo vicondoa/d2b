@@ -3,22 +3,11 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use d2b_contracts_provider::v3::{
-    ArtifactDigest,
-    ProviderManifest,
-    ComponentTargetCapability,
-    ControllerInstanceScope,
-    ControllerTargetKind,
-    EffectPortClass,
-    ResourceApiBinding,
-    TargetRuntimeArtifacts,
-    BinaryRef,
-    ComponentExecution,
+    ArtifactDigest, BinaryRef, ComponentExecution, ComponentTargetCapability,
+    ControllerInstanceScope, ControllerTargetKind, EffectPortClass, ProviderManifest,
+    ResourceApiBinding, TargetRuntimeArtifacts,
 };
-use d2b_contracts_resource::v3::{
-    ResourceRef,
-    ResourceTypeName,
-    SchemaFingerprint,
-};
+use d2b_contracts_resource::v3::{ResourceRef, ResourceTypeName, SchemaFingerprint};
 
 /// Closed reason a catalog candidate was refused.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -260,28 +249,17 @@ impl ApiCatalogHandler {
 
 #[cfg(test)]
 mod tests {
+    use d2b_contracts_provider::v3::UpgradePolicy as ProviderUpgradePolicy;
     use d2b_contracts_provider::v3::{
-    UpgradePolicy as ProviderUpgradePolicy,
-};
-    use d2b_contracts_provider::v3::{
-    ArtifactDigest,
-    ArtifactDigestSet,
-    CompatibilityRange,
-    ComponentDescriptor,
-    ComponentType,
-    PolicyEvaluation,
-    RevocationState,
-    SignatureState,
-    StandardCapabilityMatrix,
-    TrustEvidence,
-    UpgradeDisposition,
-};
-use d2b_contracts_resource::v3::{
-    ArtifactId,
-    SchemaVersion,
-    execution_policy::{BoundedToken, ExecutionDomain},
-    resource_schema::PlacementAnchor,
-};
+        ArtifactDigest, ArtifactDigestSet, CompatibilityRange, ComponentDescriptor, ComponentType,
+        PolicyEvaluation, RevocationState, SignatureState, StandardCapabilityMatrix, TrustEvidence,
+        UpgradeDisposition,
+    };
+    use d2b_contracts_resource::v3::{
+        ArtifactId, SchemaVersion,
+        execution_policy::{BoundedToken, ExecutionDomain},
+        resource_schema::PlacementAnchor,
+    };
 
     use super::*;
 

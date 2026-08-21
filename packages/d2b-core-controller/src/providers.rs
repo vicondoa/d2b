@@ -1,19 +1,10 @@
 //! Provider lifecycle validation and child-resource planning.
 
 use d2b_contracts_provider::v3::{
-    BinaryRef,
-    ComponentExecution,
-    ComponentTargetCapability,
-    ControllerTargetKind,
-    EffectPortClass,
-    ComponentType,
-    ProviderManifest,
-    TargetRuntimeArtifacts,
+    BinaryRef, ComponentExecution, ComponentTargetCapability, ComponentType, ControllerTargetKind,
+    EffectPortClass, ProviderManifest, TargetRuntimeArtifacts,
 };
-use d2b_contracts_resource::v3::{
-    ResourceRef,
-    SchemaFingerprint,
-};
+use d2b_contracts_resource::v3::{ResourceRef, SchemaFingerprint};
 
 /// Provider lifecycle phase derived from exact child observations.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -219,24 +210,15 @@ impl ProviderHandler {
 
 #[cfg(test)]
 mod tests {
+    use d2b_contracts_provider::v3::UpgradePolicy as ProviderUpgradePolicy;
     use d2b_contracts_provider::v3::{
-    UpgradePolicy as ProviderUpgradePolicy,
-};
-    use d2b_contracts_provider::v3::{
-    ArtifactDigest,
-    ArtifactDigestSet,
-    CompatibilityRange,
-    ComponentDescriptor,
-    PolicyEvaluation,
-    RevocationState,
-    SignatureState,
-    TrustEvidence,
-    UpgradeDisposition,
-};
-use d2b_contracts_resource::v3::{
-    ArtifactId,
-    execution_policy::{BoundedToken, ExecutionDomain},
-};
+        ArtifactDigest, ArtifactDigestSet, CompatibilityRange, ComponentDescriptor,
+        PolicyEvaluation, RevocationState, SignatureState, TrustEvidence, UpgradeDisposition,
+    };
+    use d2b_contracts_resource::v3::{
+        ArtifactId,
+        execution_policy::{BoundedToken, ExecutionDomain},
+    };
 
     use super::*;
 
@@ -276,8 +258,7 @@ use d2b_contracts_resource::v3::{
                 api_major: 3,
                 api_minor: 0,
                 descriptor_fingerprint: fingerprint(),
-                state_schema_version: d2b_contracts_resource::v3::SchemaVersion::new(1, 0)
-                    .unwrap(),
+                state_schema_version: d2b_contracts_resource::v3::SchemaVersion::new(1, 0).unwrap(),
             },
             [ComponentDescriptor::new(
                 BoundedToken::parse("service").unwrap(),

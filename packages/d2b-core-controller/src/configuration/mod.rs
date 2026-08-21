@@ -55,18 +55,11 @@ pub mod generation_transition;
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use d2b_contracts_zone_session::v3::ZoneBundle;
 use d2b_contracts_resource::v3::{
-    ConfigurationGeneration,
-    ResourceBundleGenerationId,
-    ResourceName,
-    ResourceTypeName,
-    ResourceUid,
-    SchemaFingerprint,
-    Timestamp,
-    ZoneId,
-    ZoneRevision,
+    ConfigurationGeneration, ResourceBundleGenerationId, ResourceName, ResourceTypeName,
+    ResourceUid, SchemaFingerprint, Timestamp, ZoneId, ZoneRevision,
 };
+use d2b_contracts_zone_session::v3::ZoneBundle;
 
 use crate::{
     audit::{AuditError, AuditEvent, AuditLedger, AuditReason},

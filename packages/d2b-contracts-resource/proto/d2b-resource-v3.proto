@@ -213,6 +213,9 @@ message DeleteResponse {
 message CommitBatchRequest {
   RequestMeta meta = 1;
   repeated Mutation mutations = 2;
+  // Bus-admitted assignment evidence attached to the existing CommitBatch
+  // transport. This field is populated only after ResourceCall admission.
+  bytes scoped_admission = 3;
 }
 
 message CommitBatchResponse {

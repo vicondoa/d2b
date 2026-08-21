@@ -7,7 +7,9 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use d2b_audit::OperationIdentity;
 use d2b_audit::{DurabilityEvidence, DurabilityOutcome, Reconciliation, ZoneOperationKey};
-use d2b_contracts_resource::v3::{ResourceRef, ResourceTypeName, ZoneId, ZoneRevision};
+use d2b_contracts_resource::v3::{
+    ResourceRef, ResourceTypeName, ResourceUid, ZoneId, ZoneRevision,
+};
 use d2b_resource_store::{
     ExpectedRevision, ResourceMutationKind, StoreError, StoreFilter, StoreGetRequest,
     StoreInspectSchemaRequest, StoreListRequest, StoreListResult, StoreProjection,
@@ -2105,11 +2107,11 @@ fn read_list(
         {
             continue;
         }
-        if !filters_match(&request.filters, resource_type, name) {
-            continue;
-        }
         let record: ResourceRecord = decode(ValueKind::ResourceRecord, value.value())?;
         let mut resource = stored_resource(&request.zone, &resource_ref, &record)?;
+        if !filters_match(&request.filters, resource_type, name, &resource.uid) {
+            continue;
+        }
         project_resource(&mut resource, request.projection)?;
         resources.push((key.value().to_vec(), resource));
         if resources.len() > page_size {
@@ -2234,10 +2236,16 @@ fn hex_decode(value: &str) -> Result<Vec<u8>, StoreError> {
         .collect()
 }
 
-fn filters_match(filters: &[StoreFilter], resource_type: &str, name: &str) -> bool {
+fn filters_match(
+    filters: &[StoreFilter],
+    resource_type: &str,
+    name: &str,
+    uid: &ResourceUid,
+) -> bool {
     filters.iter().all(|filter| match filter.field.as_str() {
         "metadata.name" => filter.values.iter().any(|value| value == name),
         "type" => filter.values.iter().any(|value| value == resource_type),
+        "assignment.resourceUid" => filter.values.iter().any(|value| value == uid.as_str()),
         _ => false,
     })
 }
@@ -2371,6 +2379,29 @@ mod tests {
             ],
         )
         .unwrap()
+    }
+
+    #[test]
+    fn assignment_filter_is_exact_and_does_not_widen_a_watch() {
+        let uid = ResourceUid::parse("123e4567-e89b-42d3-a456-426614174000").unwrap();
+        assert!(filters_match(
+            &[StoreFilter {
+                field: "assignment.resourceUid".to_owned(),
+                values: vec![uid.as_str().to_owned()],
+            }],
+            "Process",
+            "worker",
+            &uid,
+        ));
+        assert!(!filters_match(
+            &[StoreFilter {
+                field: "assignment.resourceUid".to_owned(),
+                values: vec!["223e4567-e89b-42d3-a456-426614174001".to_owned(),],
+            }],
+            "Process",
+            "worker",
+            &uid,
+        ));
     }
 
     #[test]

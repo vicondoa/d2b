@@ -995,9 +995,11 @@ dependencies = [
  "async-trait",
  "d2b-audit",
  "d2b-contracts",
+ "d2b-contracts-provider",
  "d2b-contracts-resource",
  "d2b-contracts-zone-session",
  "d2b-controller-toolkit",
+ "d2b-core-controller",
  "d2b-resource-api",
  "d2b-resource-store",
  "d2b-resource-store-redb",
@@ -1840,6 +1842,7 @@ dependencies = [
  "d2b-contracts",
  "d2b-contracts-resource",
  "d2b-contracts-zone-session",
+ "d2b-core-controller",
  "tokio",
 ]
 

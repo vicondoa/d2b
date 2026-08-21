@@ -23,15 +23,41 @@ use d2b_contracts_resource::v3::{
     RetryClass,
     ZoneId,
 };
-use d2b_contracts_resource::v3::identity::STANDARD_RESOURCE_TYPES;
 use d2b_resource_client::{
-    CallOptions, CancellationToken, ClientError, ConnectedSession, ConnectedZoneSession,
-    MetadataInput, NamedStreamTransport, ProcessAttachClient, ProcessAttachOpenRequest,
-    ProcessAttachOptions, ProcessAttachTarget, ResourceCallOptions, ResourceVerb, RetryPolicy,
-    RouteRecord, RouteTable, ServiceOwner, SystemClock, TargetInput, TerminalSize, TransportKind,
-    TransportSelection, WallClock, ZoneClient, ZonePeerIdentity, ZoneServiceKind,
-    ZoneSessionConnector, ZoneSessionPin, ZoneSocketConnector, resource_verb_is_mutating,
+    AssignmentIdentity,
+    CallOptions,
+    CancellationToken,
+    ClientError,
+    ConnectedSession,
+    ConnectedZoneSession,
+    MetadataInput,
+    NamedStreamTransport,
+    ProcessAttachClient,
+    ProcessAttachOpenRequest,
+    ProcessAttachOptions,
+    ProcessAttachTarget,
+    ResourceCallOptions,
+    ResourceVerb,
+    RetryPolicy,
+    RouteRecord,
+    RouteTable,
+    ScopedResourceMutation,
+    ServiceOwner,
+    SystemClock,
+    TargetInput,
+    TerminalSize,
+    TransportKind,
+    TransportSelection,
+    WallClock,
+    ZoneClient,
+    ZonePeerIdentity,
+    ZoneServiceKind,
+    ZoneSessionConnector,
+    ZoneSessionPin,
+    ZoneSocketConnector,
+    resource_verb_is_mutating,
 };
+use d2b_contracts_resource::v3::identity::STANDARD_RESOURCE_TYPES;
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 
@@ -1427,6 +1453,18 @@ impl ConnectedZoneSession for CliConnectedSession {
     ) -> impl Future<Output = Result<CanonicalJsonObject, ClientError>> + Send {
         let result = self.invoke(target, payload, relative_timeout_nanos);
         ready(result)
+    }
+
+    fn call_scoped_commit_batch(
+        &self,
+        _assignment: AssignmentIdentity,
+        _mutations: Vec<ScopedResourceMutation>,
+        _payload: CanonicalJsonObject,
+        _relative_timeout_nanos: u64,
+    ) -> impl Future<Output = Result<CanonicalJsonObject, ClientError>> + Send {
+        // The CLI public socket is an operator route, not a controller
+        // ComponentSession. Never downgrade a scoped write to plain CommitBatch.
+        ready(Err(ClientError::ContractViolation))
     }
 }
 

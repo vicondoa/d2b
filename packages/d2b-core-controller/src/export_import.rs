@@ -8,23 +8,13 @@
 //! implemented here.
 
 use d2b_contracts_provider::v3::{
-    BindingTargetType,
-    Exportability,
-    ProjectionFactory,
-    ProviderContractError,
-    SEMANTIC_PROJECTION_PROTOCOL_VERSION,
-    SemanticProjectionProtocolVersion,
-};
-use d2b_contracts_zone_session::v3::{
-    ResourceExportSpec,
-    ResourceImportSpec,
+    BindingTargetType, Exportability, ProjectionFactory, ProviderContractError,
+    SEMANTIC_PROJECTION_PROTOCOL_VERSION, SemanticProjectionProtocolVersion,
 };
 use d2b_contracts_resource::v3::{
-    ResourceEnvelope,
-    ResourceRef,
-    ResourceTypeName,
-    SchemaFingerprint,
+    ResourceEnvelope, ResourceRef, ResourceTypeName, SchemaFingerprint,
 };
+use d2b_contracts_zone_session::v3::{ResourceExportSpec, ResourceImportSpec};
 
 /// Why Core refused an export or import admission.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -429,22 +419,13 @@ pub fn projection_identity(
 
 #[cfg(test)]
 mod tests {
-    use d2b_contracts_provider::v3::{
-    BindingTargetType,
-    Exportability,
-};
+    use d2b_contracts_provider::v3::{BindingTargetType, Exportability};
+    use d2b_contracts_resource::v3::{
+        ResourceName, ResourceTypeName, SchemaFingerprint, execution_policy::BoundedToken,
+    };
     use d2b_contracts_zone_session::v3::{
-    ConsumerZonePolicy,
-    ExportArbitration,
-    ResourceExportSpec,
-    ResourceImportSpec,
-};
-use d2b_contracts_resource::v3::{
-    ResourceName,
-    ResourceTypeName,
-    SchemaFingerprint,
-    execution_policy::BoundedToken,
-};
+        ConsumerZonePolicy, ExportArbitration, ResourceExportSpec, ResourceImportSpec,
+    };
 
     use super::*;
 

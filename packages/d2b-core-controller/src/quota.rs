@@ -8,13 +8,8 @@
 use std::collections::BTreeMap;
 
 use d2b_contracts_resource::v3::{
-    QuotaEnforcementPolicy,
-    QuotaSpec,
-    QuotaStatusResource,
-    ResourceRef,
-    ResourceTypeName,
-    ResourceUid,
-    Timestamp,
+    QuotaEnforcementPolicy, QuotaSpec, QuotaStatusResource, ResourceRef, ResourceTypeName,
+    ResourceUid, Timestamp,
 };
 
 use super::{
@@ -494,11 +489,8 @@ mod tests {
 
     use super::*;
     use d2b_contracts_resource::v3::{
-    QuotaCeilings,
-    QuotaScope,
-    QuotaTypeCeiling,
-    ResourceGeneration,
-};
+        QuotaCeilings, QuotaScope, QuotaTypeCeiling, ResourceGeneration,
+    };
 
     fn uid(value: &str) -> ResourceUid {
         ResourceUid::parse(value).unwrap()

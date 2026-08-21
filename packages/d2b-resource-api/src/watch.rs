@@ -11,11 +11,7 @@ use std::sync::{
 };
 
 use d2b_contracts_resource::v3::{
-    ResourceName,
-    ResourceRef,
-    ResourceTypeName,
-    ResourceUid,
-    ZoneRevision,
+    ResourceName, ResourceRef, ResourceTypeName, ResourceUid, ZoneRevision,
 };
 use d2b_resource_store::{StoreError, StoreErrorKind, StoreWatchReceipt, StoreWatchRequest};
 use d2b_resource_store_redb::{
@@ -425,16 +421,9 @@ mod tests {
     use std::time::Duration;
 
     use d2b_contracts_resource::v3::{
-    CanonicalJsonValue,
-    ConfigurationGeneration,
-    RESOURCE_ENVELOPE_DOMAIN_TAG,
-    ResourceRef,
-    ResourceTypeName,
-    ResourceUid,
-    Timestamp,
-    ZoneId,
-    canonical_digest,
-};
+        CanonicalJsonValue, ConfigurationGeneration, RESOURCE_ENVELOPE_DOMAIN_TAG, ResourceRef,
+        ResourceTypeName, ResourceUid, Timestamp, ZoneId, canonical_digest,
+    };
     use d2b_resource_store::mutation_seal::{MutationSealBody, mutation_seal_pair};
     use d2b_resource_store::{
         AdmittedAuthorization, AdmittedAuthorizationTarget, AdmittedVerb, ExpectedRevision,
@@ -622,6 +611,7 @@ mod tests {
                     remove_finalizers: Vec::new(),
                     wait_for_reconcile: false,
                     reconcile_deadline_ms: None,
+                    assignment: None,
                 },
                 None,
                 Some(digest),
