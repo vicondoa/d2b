@@ -38,6 +38,7 @@ let
   };
   moduleEvaluation = context.mkModuleEval [ ];
   moduleAssertions = moduleEvaluation.config.assertions or [ ];
+  assertionsHold = builtins.all (entry: entry.assertion) moduleAssertions;
   selectedCases = map
     (spec:
       let
@@ -57,9 +58,7 @@ let
       expr =
         builtins.deepSeq
           (builtins.attrNames moduleEvaluation.options)
-          (builtins.deepSeq
-            (map (entry: entry.assertion) moduleAssertions)
-            (builtins.attrNames moduleEvaluation.config != [ ]));
+          (assertionsHold && builtins.attrNames moduleEvaluation.config != [ ]);
       expected = true;
       propagateError = true;
     };
