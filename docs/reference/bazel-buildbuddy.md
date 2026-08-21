@@ -86,9 +86,10 @@ developer profiles; local execution omits them. The contract uses no
 values, and never forwards a remote URL containing credentials.
 
 If Git is unavailable, the origin is not canonical, `HEAD` cannot be resolved,
-or the checkout is detached, the facade emits an explicit diagnostic and
-omits all three fields rather than publishing a partial or misleading
-revision. This is not a local retry condition.
+the checkout is detached, or the branch and commit change while the tuple is
+collected, the facade emits an explicit diagnostic and omits all three fields
+rather than publishing a partial or misleading revision. This is not a local
+retry condition.
 
 `--build_metadata` is Build Event Service invocation metadata, not an action
 input. It therefore does not change ordinary action keys or invalidate

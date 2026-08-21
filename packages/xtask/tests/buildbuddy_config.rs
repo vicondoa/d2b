@@ -405,7 +405,7 @@ fn developer_profiles_publish_the_tested_checkout_metadata() {
            case \"$*\" in\n\
              *'rev-parse --show-toplevel'*) printf '%s\\n' '/foreign-checkout' ;;\n\
              *'config --local --get remote.origin.url'*|*'remote get-url origin'*) printf '%s\\n' 'git@github.com:vicondoa/d2b.git' ;;\n\
-             *'rev-parse --verify HEAD^{commit}'*) printf '%s\\n' 'ffffffffffffffffffffffffffffffffffffffff' ;;\n\
+             *'rev-parse --verify HEAD^{commit}'*|*'rev-parse --verify refs/heads/'*) printf '%s\\n' 'ffffffffffffffffffffffffffffffffffffffff' ;;\n\
              *'symbolic-ref --quiet --short HEAD'*) printf '%s\\n' 'v3' ;;\n\
              *'symbolic-ref --quiet HEAD'*) printf '%s\\n' 'refs/heads/v3' ;;\n\
              *'check-ref-format --branch'*) exit 0 ;;\n\
@@ -416,7 +416,7 @@ fn developer_profiles_publish_the_tested_checkout_metadata() {
          case \"$*\" in\n\
            *'rev-parse --show-toplevel'*) printf '%s\\n' \"$2\" ;;\n\
            *'config --local --get remote.origin.url'*|*'remote get-url origin'*) printf '%s\\n' 'git@github.com:vicondoa/d2b.git' ;;\n\
-           *'rev-parse --verify HEAD^{commit}'*) printf '%s\\n' '0123456789abcdef0123456789abcdef01234567' ;;\n\
+           *'rev-parse --verify HEAD^{commit}'*|*'rev-parse --verify refs/heads/'*) printf '%s\\n' '0123456789abcdef0123456789abcdef01234567' ;;\n\
            *'symbolic-ref --quiet --short HEAD'*) printf '%s\\n' 'feat/issue+446@meta=one,two' ;;\n\
            *'symbolic-ref --quiet HEAD'*) printf '%s\\n' 'refs/heads/feat/issue+446@meta=one,two' ;;\n\
            *'check-ref-format --branch'*) exit 0 ;;\n\
@@ -427,8 +427,11 @@ fn developer_profiles_publish_the_tested_checkout_metadata() {
         &bazel,
         "#!/usr/bin/env bash\n\
          printf '%s\\n' \"$@\" > \"${D2B_CAPTURE_ARGS:?}\"\n\
+         after_separator=0\n\
          for arg in \"$@\"; do\n\
            case \"$arg\" in\n\
+             --) after_separator=1 ;;\n\
+             --build_metadata=*) [ \"$after_separator\" -eq 0 ] || exit 64 ;;\n\
              --build_event_json_file=*) bep=\"${arg#*=}\" ;;\n\
            esac\n\
          done\n\
@@ -441,15 +444,15 @@ fn developer_profiles_publish_the_tested_checkout_metadata() {
          if [ \"$2\" = redact-log ] && [ \"$4\" != \"$6\" ]; then cp -- \"$4\" \"$6\"; fi\n",
     );
     let relative_xtask = xtask
-        .strip_prefix(repo_root())
-        .expect("xtask stub must be below the repository root");
+        .strip_prefix(&scratch)
+        .expect("xtask stub must be below the test scratch directory");
 
     let run = |profile: &str, capture: &Path, trusted: bool| {
         let mut command = Command::new("bash");
         command
             .arg(repo_root().join("tests/tools/bazel-check"))
             .args(["--profile", profile, "--", "//:test"])
-            .current_dir(repo_root())
+            .current_dir(&scratch)
             .env("D2B_BAZEL_BIN", &bazel)
             .env("D2B_XTASK_BIN", relative_xtask)
             .env("D2B_BUILDBUDDY_CREDENTIAL_FILE", &credential)
@@ -535,14 +538,22 @@ fn invalid_checkout_metadata_is_omitted_explicitly() {
            *'config --local --get remote.origin.url'*|*'remote get-url origin'*)\n\
              if [ \"$mode\" = foreign-origin ]; then printf '%s\\n' 'https://example.invalid/fork.git'; else printf '%s\\n' 'https://github.com/vicondoa/d2b.git'; fi\n\
              ;;\n\
-           *'rev-parse --verify HEAD^{commit}'*)\n\
+           *'rev-parse --verify HEAD^{commit}'*|*'rev-parse --verify refs/heads/'*)\n\
              if [ \"$mode\" = invalid-commit ]; then printf '%s\\n' 'not-a-commit'; else printf '%s\\n' '0123456789abcdef0123456789abcdef01234567'; fi\n\
              ;;\n\
            *'symbolic-ref --quiet --short HEAD'*)\n\
              case \"$mode\" in detached) exit 1 ;; invalid-branch) printf '%s\\n' 'bad branch' ;; *) printf '%s\\n' 'feat/issue-446-buildbuddy-metadata' ;; esac\n\
              ;;\n\
            *'symbolic-ref --quiet HEAD'*)\n\
-             case \"$mode\" in detached) exit 1 ;; invalid-branch) printf '%s\\n' 'refs/heads/bad branch' ;; *) printf '%s\\n' 'refs/heads/feat/issue-446-buildbuddy-metadata' ;; esac\n\
+             case \"$mode\" in\n\
+               detached) exit 1 ;;\n\
+               invalid-branch) printf '%s\\n' 'refs/heads/bad branch' ;;\n\
+               changing-head)\n\
+                 marker=\"$(dirname -- \"$0\")/git-changing-head\"\n\
+                 if [ -e \"$marker\" ]; then printf '%s\\n' 'refs/heads/other'; else : > \"$marker\"; printf '%s\\n' 'refs/heads/feat/issue-446-buildbuddy-metadata'; fi\n\
+                 ;;\n\
+               *) printf '%s\\n' 'refs/heads/feat/issue-446-buildbuddy-metadata' ;;\n\
+             esac\n\
              ;;\n\
            *'check-ref-format --branch'*)\n\
              [ \"$mode\" != invalid-branch ]\n\
@@ -554,8 +565,11 @@ fn invalid_checkout_metadata_is_omitted_explicitly() {
         &bazel,
         "#!/usr/bin/env bash\n\
          printf '%s\\n' \"$@\" > \"${D2B_CAPTURE_ARGS:?}\"\n\
+         after_separator=0\n\
          for arg in \"$@\"; do\n\
            case \"$arg\" in\n\
+             --) after_separator=1 ;;\n\
+             --build_metadata=*) [ \"$after_separator\" -eq 0 ] || exit 64 ;;\n\
              --build_event_json_file=*) bep=\"${arg#*=}\" ;;\n\
            esac\n\
          done\n\
@@ -581,8 +595,13 @@ fn invalid_checkout_metadata_is_omitted_explicitly() {
         ("invalid-commit", "tested commit is unavailable"),
         ("detached", "detached HEAD"),
         ("invalid-branch", "branch name is not approved"),
+        (
+            "changing-head",
+            "checkout changed while metadata was collected",
+        ),
     ] {
         std::fs::write(bin.join("git-mode"), mode).expect("write Git test mode");
+        let _ = std::fs::remove_file(bin.join("git-changing-head"));
         let output = Command::new("bash")
             .arg(repo_root().join("tests/tools/bazel-check"))
             .args(["--profile", "remote", "--", "//:test"])
