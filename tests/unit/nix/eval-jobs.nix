@@ -54,7 +54,11 @@ let
         (result: "FAIL ${result.name}: ${result.detail}") failures;
       total = builtins.length results;
     in builtins.deepSeq results (
-    if failures != [ ] then
+    if total == 0 then
+      throw ''
+        ${name} surface FAILED: 0 cases evaluated for ${system}
+      ''
+    else if failures != [ ] then
       throw ''
         ${name} surface FAILED (${toString (builtins.length failures)}/${toString total} cases failed) for ${system}:
         ${report}

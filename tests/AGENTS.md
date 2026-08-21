@@ -196,6 +196,7 @@ Nix-unit surfaces are fixed Bazel labels with explicit source closures.
 Each action copies only its declared runfiles into an isolated source root and
 evaluates the surface directly through the shared minimal runner flake. The
 repository flake outputs and ambient `D2B_REPO_ROOT` do not participate.
+The shared evaluator fails closed when a surface evaluates zero cases.
 Runtime-ledger census changes use the existing `make runtime-ledger-pin`
 target. Do not add a second inventory or validator.
 

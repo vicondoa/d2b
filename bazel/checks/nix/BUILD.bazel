@@ -119,6 +119,14 @@ _SURFACES = {
             "nixos-modules/observability-vm.nix",
         ],
     },
+    "eval-jobs": {
+        "cases": [],
+        "files": [
+            "nixos-modules/lib.nix",
+        ],
+        "modules": [],
+        "raw_cases": True,
+    },
 }
 
 nix_surface_suite(_SURFACES)
