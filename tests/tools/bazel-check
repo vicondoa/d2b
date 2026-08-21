@@ -110,6 +110,13 @@ credential_helper() {
     jq -Rs '{headers: {"x-buildbuddy-api-key": [rtrimstr("\n")]}}'
 }
 
+if [ -n "${D2B_XTASK_BIN:-}" ] &&
+  [[ "$D2B_XTASK_BIN" != /* ]] &&
+  [ -x "$D2B_XTASK_BIN" ]; then
+  D2B_XTASK_BIN="$(cd -- "$(dirname -- "$D2B_XTASK_BIN")" && pwd)/$(basename -- "$D2B_XTASK_BIN")"
+  export D2B_XTASK_BIN
+fi
+
 if [ "$#" -ge 1 ] && [ "$1" = get ]; then
   [ "$#" -eq 1 ] || {
     echo "credential helper get does not accept extra arguments" >&2
