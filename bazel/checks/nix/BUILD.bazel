@@ -17,8 +17,13 @@ _SURFACES = {
         ],
     },
     "broker-profiles": {
-        "cases": ["guest-broker", "prebuilt-broker"],
+        "cases": ["guest-broker", "host-tools-source", "prebuilt-broker"],
+        "package": "bazel/checks/fixtures",
         "files": [
+            "bazel/checks/fixtures/BUILD.bazel",
+            "docs/reference/schemas/v3/providers/transport-azure-relay.transport-settings.json",
+            "docs/reference/schemas/v3/providers/transport-vsock.transport-binding.json",
+            "nixos-modules/rust-host-tools.nix",
             "nix/prebuilt.json",
             "nix/prebuilt.nix",
             "nixos-modules/guest-broker.nix",

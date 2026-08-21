@@ -6,6 +6,7 @@ _FIXTURE_SOURCES = [
     "//:bazel_provider_workspace_sources",
     "//:Cargo.lock",
     "//:Cargo.toml",
+    "//:d2b_resource_schemas_v3",
     "//:examples_workspace_sources",
     "//:flake.lock",
     "//:flake.nix",

@@ -5,6 +5,7 @@ import ../helpers/surface.nix {
   name = "broker-profiles";
   caseFiles = [
     ../cases/guest-broker.nix
+    ../cases/host-tools-source.nix
     ../cases/prebuilt-broker.nix
   ];
 }
