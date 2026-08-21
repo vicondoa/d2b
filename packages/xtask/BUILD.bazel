@@ -165,6 +165,7 @@ test_suite(
         ":gen_resource_schemas_drift",
         ":gen_resource_ttrpc_drift",
         ":gen_schemas_drift",
+        ":schema_reproducibility_test",
         ":gen_semantic_service_schemas_drift",
         ":gen_zone_nix_options_drift",
         ":gen_zone_schemas_drift",
@@ -255,6 +256,13 @@ rust_test(
     tags = ["no-remote-cache", "no-sandbox"],
     visibility = ["//visibility:public"],
     deps = all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
+)
+
+rust_test(
+    name = "pr_workflow",
+    srcs = ["tests/pr_workflow.rs"],
+    data = ["//:.github/workflows/pr-l1-static-fast.yml"],
+    visibility = ["//visibility:public"],
 )
 
 rust_test(
