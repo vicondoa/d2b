@@ -740,7 +740,7 @@ The units may land as ordered reviewed pull requests. Every intermediate head mu
 - Provider controller crates cannot import the broker wire or open a broker socket.
 - Gateway parent-Guest and child-Zone modes use separate broker instances.
 
-**Verification:** Owner-local broker contract/runtime tests, broker Nix cases, and socket-activation tests prove shared implementation with strict profile and instance separation.
+**Verification:** Owner-local broker contract/runtime tests, broker Nix module evaluation, service-posture cases, ACL checks, and socket-activation tests cover shared wire/runtime behavior and the current broker service boundary. No live owner-local target asserts complete Host/Guest profile or cross-instance separation; U2 must add those cases before citing strict separation proof.
 
 ### U3. Add host and guest modes to d2bd
 
@@ -1262,14 +1262,14 @@ The units may land as ordered reviewed pull requests. Every intermediate head mu
 
 - Covers AE7: no production service recognizes a retired guest-control method.
 - CLI exec, shell, activation, config, audio, and USB commands reach only Resource API or named-stream paths.
-- Old Guest protocol handshakes fail with typed incompatibility and no fallback; `//packages/d2bd:daemon_version_negotiation` covers the existing wire-version rejection case, not a general fallback scan.
+- Old Guest protocol handshakes fail with typed incompatibility and no fallback. `//packages/d2bd:daemon_version_negotiation` covers public daemon-api `Hello` version rejection on `public.sock`; U10 must add owner-local Guest ComponentSession/vsock compatibility cases before citing old Guest handshake or no-fallback proof.
 - Old `d2b-guestd` with new `d2bd`, and new `d2bd guest` with an old host daemon, both fail closed before controller authority or feature behavior.
 - `d2bd guest` cannot attach to a Host-profile broker, and `d2bd host` cannot attach to a Guest-profile broker for the same authority instance.
 - Covers AE6: disconnect and reconnect preserve stale fencing and no host takeover.
 - Covers AE8: gateway Guest full-daemon exception remains explicit and ordinary Guest profiles reject it.
 - Pre-cutover removal proof fails while the reviewed U10 inventory is incomplete or stale, so the implementation and release workflow cannot construct the existing cutover candidate or preview.
 - Cutover restart reopens the exact journal and candidate, preserves incident holds, and cannot cross the native rollback boundary twice; native rollback ends at Disposition, crossing into ResourceStore requires the existing qualified external-restore outcome/path, and phase-10 finalization requires separate consent.
-- `//packages/d2b-provider-system-systemd:conformance`, `//packages/d2b-provider-system-systemd:execution_parents`, `//packages/d2b-provider-system-minijail:conformance`, and `//packages/d2b-provider-system-minijail:execution_parents` prove the Process Provider lifecycle and Host/Guest parent cells; `//bazel/checks/meta:tier0` and `//tests/tools/no-bash-ast-walker:no_bash_ast_test` remain the structural source-hygiene checks. No current target proves arbitrary feature-controller direct spawn, copied Guest workspace parity, or a repository-wide no-fallback/docs scan, so those are not reported as passing policy evidence.
+- `//packages/d2b-provider-system-systemd:conformance`, `//packages/d2b-provider-system-systemd:execution_parents`, `//packages/d2b-provider-system-minijail:conformance`, and `//packages/d2b-provider-system-minijail:execution_parents` prove scripted Process Provider effect-port lifecycle semantics and Host/Guest execution-parent status cells; actual process launch remains targeted host-integration evidence. `//bazel/checks/meta:tier0` and `//tests/tools/no-bash-ast-walker:no_bash_ast_test` remain the structural source-hygiene checks. No current target proves arbitrary feature-controller direct spawn, copied Guest workspace parity, or a repository-wide no-fallback/docs scan, so those are not reported as passing policy evidence.
 - Changelog and generated-artifact drift gates are clean; ADR and reference consistency remains a documentation acceptance condition rather than a `make test-policy` claim.
 
 **Verification:** Final `make check`, targeted host integration, container integration, the owner-local Provider/daemon targets listed above, and independent code review all pass on the same committed head. No direct-spawn or copied-workspace parity result is reported without a live target that asserts it.
@@ -1298,7 +1298,7 @@ Targeted owner-local Bazel labels should run during each unit. The remaining pro
 - Provider Nix shape only: `//bazel/checks/nix:nix-unit-provider-catalog` (positive ELF-shim case and module-evaluation smoke, not component authority).
 - Guest-control Nix shape: `//bazel/checks/nix:nix-unit-guest-control`.
 - Guest session/enrollment and resource path: `//packages/d2b-session:admission`, `//packages/d2b-session:component_session`, and `//packages/d2bd:resource_operator_activation`.
-- Process launch, identity, adoption, and Host/Guest parent parity: `//packages/d2b-process-conformance:d2b_process_conformance_test`, `//packages/d2b-provider-system-systemd:conformance`, `//packages/d2b-provider-system-systemd:execution_parents`, `//packages/d2b-provider-system-minijail:conformance`, and `//packages/d2b-provider-system-minijail:execution_parents`.
+- Process launch-ticket and effect-port conformance, identity, adoption, and Host/Guest execution-parent status parity: `//packages/d2b-process-conformance:d2b_process_conformance_test`, `//packages/d2b-provider-system-systemd:conformance`, `//packages/d2b-provider-system-systemd:execution_parents`, `//packages/d2b-provider-system-minijail:conformance`, and `//packages/d2b-provider-system-minijail:execution_parents`. These scripted-port targets do not prove a real broker, systemd, or minijail process launch; actual launch remains targeted host-integration evidence.
 - Wire-version fail-closed behavior: `//packages/d2bd:daemon_version_negotiation`.
 - Workspace and lock policy: `//tests/unit/meta:w0_dep_direction` (not copied Guest workspace/fixture/lock parity).
 
