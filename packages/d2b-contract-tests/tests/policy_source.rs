@@ -95,6 +95,66 @@ fn nix_package_source_filters_are_path_segment_based() {
     );
 }
 
+#[test]
+fn host_sccache_is_a_global_opt_in_daemon_contract() {
+    let options = read_repo_file("nixos-modules/options-host-sccache.nix");
+    let module = read_repo_file("nixos-modules/host-sccache.nix");
+    let tools = read_repo_file("nixos-modules/rust-host-tools.nix");
+    let makefile = read_repo_file("Makefile");
+
+    assert!(
+        options.contains("options.d2b.site.hostSccache.enable")
+            && options.contains("default = false"),
+        "host sccache must remain disabled by default"
+    );
+    assert!(
+        module.contains("extra-sandbox-paths")
+            && module.contains("\"build-users-group\"")
+            && module.contains("cacheDir = \"/var/cache/d2b-sccache\"")
+            && module.contains("2770 root ${buildUsersGroup} -")
+            && module.contains("hostPlatform.isLinux")
+            && module.contains("builtins.hasAttr buildUsersGroup config.users.groups"),
+        "host sccache must provision the fixed multi-user daemon cache with eval-time posture checks"
+    );
+    assert!(
+        !module.contains("systemd.services"),
+        "host sccache must not add a service"
+    );
+    assert!(
+        tools.contains("SCCACHE_CACHE_SIZE")
+            && tools.contains("10G")
+            && tools.contains("configured cache")
+            && !tools.contains("owner-private")
+            && tools.contains("exec \"$@\""),
+        "host-tool sccache wrapper must be bounded, visible when configured, and rustc-fallback safe"
+    );
+    assert!(
+        makefile.contains("D2B_HOST_SCCACHE")
+            && makefile.contains("/etc/nix/nix.conf")
+            && makefile.contains("root:nixbld")
+            && makefile.contains("mode 2770")
+            && makefile.contains("D2B_HOST_VM_CHECK")
+            && makefile.contains("unknown vmCheck")
+            && !makefile.contains("--option extra-sandbox-paths")
+            && !makefile.contains("XDG_CACHE_HOME")
+            && !makefile.contains("SCCACHE_DIR:-"),
+        "host integration must use the global daemon mount and its fail-closed preflight"
+    );
+}
+
+#[test]
+fn host_sccache_policy_is_in_the_bazel_policy_suite() {
+    let policy_build = read_repo_file("bazel/checks/policy/BUILD.bazel");
+
+    assert!(
+        policy_build
+            .matches("//packages/d2b-contract-tests:policy_source")
+            .count()
+            >= 2,
+        "Bazel policy suite must run the host sccache source contract"
+    );
+}
+
 // ---------------------------------------------------------------------------
 // Migrated from tests/no-bash-exec-eval.sh (v1.1 / ADR 0017: "the Rust CLI
 // never executes bash").
@@ -534,4 +594,108 @@ fn canonical_step_set_section(doc: &str) -> String {
         }
     }
     out.join("\n")
+}
+
+const NORMAL_ZONE_RUNTIME_FILES: &[&str] = &[
+    "packages/d2b/src/complete.rs",
+    "packages/d2b/src/endpoint.rs",
+    "packages/d2b/src/exec.rs",
+    "packages/d2b/src/guest.rs",
+    "packages/d2b/src/provider.rs",
+    "packages/d2b/src/resource.rs",
+    "packages/d2b/src/share.rs",
+    "packages/d2b/src/shell.rs",
+    "packages/d2b/src/zone.rs",
+    "packages/d2b/src/zone_doctor.rs",
+];
+
+const RETIRED_STATE_MARKERS: &[&str] = &[
+    "LegacyContext::from_env",
+    "load_manifest(",
+    "load_bundle_context(",
+    "D2B_MANIFEST_PATH",
+    "D2B_BUNDLE_PATH",
+    "D2B_STATE_ROOT",
+];
+const RETIRED_STATE_BRIDGE_FILES: &[&str] = &[
+    "packages/d2b/src/activation.rs",
+    "packages/d2b/src/dispatch.rs",
+    "packages/d2b/src/host.rs",
+    "packages/d2b/src/legacy.rs",
+];
+
+fn retired_state_markers(path: &str, source: &str) -> Vec<String> {
+    RETIRED_STATE_MARKERS
+        .iter()
+        .filter(|marker| source.contains(**marker))
+        .map(|marker| format!("{path}: {marker}"))
+        .collect()
+}
+
+#[test]
+fn normal_zone_runtime_does_not_read_retired_state() {
+    let violations = NORMAL_ZONE_RUNTIME_FILES
+        .iter()
+        .flat_map(|path| retired_state_markers(path, &read_repo_file(path)))
+        .collect::<Vec<_>>();
+    assert!(
+        violations.is_empty(),
+        "normal Zone runtime imported a retired-state reader:\n{}",
+        violations.join("\n")
+    );
+}
+
+#[test]
+fn retired_state_readers_remain_in_the_explicit_legacy_seam() {
+    let legacy = read_repo_file("packages/d2b/src/legacy.rs");
+    for marker in [
+        "pub(crate) fn load_manifest",
+        "pub(crate) fn load_bundle_context",
+    ] {
+        assert!(
+            legacy.contains(marker),
+            "the explicit legacy seam lost its bounded reader {marker}"
+        );
+    }
+    assert!(
+        !retired_state_markers(
+            "packages/d2b/src/provider.rs",
+            &read_repo_file("packages/d2b/src/provider.rs")
+        )
+        .iter()
+        .any(|violation| violation.contains("LegacyContext")),
+        "Provider inspection must not regain a legacy-state access seam"
+    );
+}
+
+#[test]
+fn retired_state_access_has_only_declared_bridge_owners() {
+    let owners = git_listed_files(&["packages/d2b/src"])
+        .into_iter()
+        .filter(|path| path.ends_with(".rs"))
+        .filter_map(|path| {
+            let source = read_repo_file_opt(&path)?;
+            (!retired_state_markers(&path, &source).is_empty()).then_some(path)
+        })
+        .collect::<BTreeSet<_>>();
+    let expected = RETIRED_STATE_BRIDGE_FILES
+        .iter()
+        .map(|path| (*path).to_owned())
+        .collect::<BTreeSet<_>>();
+    assert_eq!(
+        owners, expected,
+        "retired-state access escaped its declared bridge owners"
+    );
+}
+
+#[test]
+fn retired_state_policy_rejects_a_new_reader_marker() {
+    let violations = retired_state_markers(
+        "packages/d2b/src/provider.rs",
+        "fn inspect() { let _ = LegacyContext::from_env(); }",
+    );
+    assert_eq!(
+        violations,
+        vec!["packages/d2b/src/provider.rs: LegacyContext::from_env".to_owned()]
+    );
 }

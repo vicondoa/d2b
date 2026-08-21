@@ -39,6 +39,24 @@ pub struct ActivationHelperResponse {
     pub outcome: ActivationHelperOutcome,
 }
 
+/// Bounded read-only artifact validation request accepted by the activation
+/// helper. The helper resolves and verifies the private catalog entry without
+/// invoking an activation script.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ActivationArtifactValidationRequest {
+    /// Private artifact identifier to resolve and verify.
+    pub system_artifact_id: ArtifactId,
+}
+
+/// Bounded read-only artifact validation response.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ActivationArtifactValidationResponse {
+    /// Whether the private catalog entry and its store contents verified.
+    pub valid: bool,
+}
+
 /// Closed helper result.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
@@ -94,9 +112,32 @@ pub fn parse_request(
     Ok(request)
 }
 
+/// Parse one bounded read-only artifact validation request.
+pub fn parse_validation_request(
+    bytes: &[u8],
+) -> Result<ActivationArtifactValidationRequest, ActivationHelperProtocolError> {
+    if bytes.len() > MAX_HELPER_REQUEST_BYTES {
+        return Err(ActivationHelperProtocolError::TooLarge);
+    }
+    serde_json::from_slice(bytes).map_err(|_| ActivationHelperProtocolError::InvalidJson)
+}
+
 /// Encode one bounded helper response.
 pub fn encode_response(
     response: ActivationHelperResponse,
 ) -> Result<Vec<u8>, ActivationHelperProtocolError> {
     serde_json::to_vec(&response).map_err(|_| ActivationHelperProtocolError::InvalidJson)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn validation_request_is_bounded_and_typed() {
+        let request = parse_validation_request(br#"{"systemArtifactId":"candidate-system"}"#)
+            .expect("validation request");
+        assert_eq!(request.system_artifact_id.as_str(), "candidate-system");
+        assert!(parse_validation_request(br#"{"systemArtifactId":"bad_id"}"#).is_err());
+    }
 }

@@ -8,7 +8,7 @@
 #[test]
 fn wave6_operator_path_contains_public_api_and_provider_boundary() {
     let runtime = include_str!("../../d2bd/src/resource_runtime.rs");
-    let boundary = include_str!("../../d2bd/src/resource_operator_activation.rs");
+    let boundary = include_str!("../../d2bd-runtime/src/resource_operator_activation.rs");
     let daemon = include_str!("../../d2bd/src/composition.rs");
     let integration = include_str!("../../d2bd/tests/resource_operator_activation.rs");
     let effects = include_str!("../../d2bd/tests/zone_provider_acceptance.rs");
@@ -76,4 +76,49 @@ fn wave6_operator_path_contains_public_api_and_provider_boundary() {
         !integration.contains("Mock") && !integration.contains("mock_"),
         "operator acceptance must not regress to mock-only coverage"
     );
+}
+
+#[test]
+fn cloud_composition_is_layer1_and_fake_only() {
+    let composition = include_str!("../../d2bd/tests/cloud_composition.rs");
+    let azure_vm = include_str!(
+        "../../d2b-provider-runtime-azure-virtual-machine/tests/lifecycle_hermetic.rs"
+    );
+    for required in [
+        "CloudHypervisorController",
+        "CloudHypervisorEffectPort",
+        "AcaController",
+        "AcaControl",
+        "AcaCredentialLeaseClient",
+        "cloud_composition_reaches_ready_through_production_controllers",
+        "cloud_composition_fails_closed_on_ambiguous_or_failed_effects",
+    ] {
+        assert!(
+            composition.contains(required),
+            "cloud composition evidence lost required production marker: {required}"
+        );
+    }
+    for forbidden in [
+        "DefaultAzureCredential",
+        "AZURE_CLIENT_SECRET",
+        "AZURE_TENANT_ID",
+        "azure_core::",
+        "reqwest::",
+    ] {
+        assert!(
+            !composition.contains(forbidden),
+            "cloud composition must not require live Azure or network clients: {forbidden}"
+        );
+    }
+    for required in [
+        "AzureVmController",
+        "AzureEffectPort",
+        "FakeEffect",
+        "FakeCredential",
+    ] {
+        assert!(
+            azure_vm.contains(required),
+            "Azure production controller evidence lost fake EffectPort coverage: {required}"
+        );
+    }
 }

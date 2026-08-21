@@ -257,6 +257,7 @@ use d2bd_runtime::admission::{PeerOverride, TEST_PEER_OVERRIDE, TEST_PEER_OVERRI
 mod audio_dispatch;
 mod audio_host_controller;
 mod audio_resource_runtime;
+mod cutover;
 pub mod interaction_composition;
 pub mod network_effect_port;
 pub mod process_provider_runtime;
@@ -2080,6 +2081,7 @@ fn handle_connection_authorized(
         KnownFeatureFlag::ExportBrokerAudit.wire_value(),
         KnownFeatureFlag::ConfiguredLaunchV1.wire_value(),
         KnownFeatureFlag::UnsafeLocalProviderV1.wire_value(),
+        KnownFeatureFlag::CutoverRunnerV1.wire_value(),
     ];
     let capabilities = advertised_capabilities
         .into_iter()
@@ -2401,6 +2403,7 @@ fn dispatch_request_locked(
         d2bd_runtime::wire::Request::HostReconcile(req) => {
             dispatch_broker_host_reconcile_as(state, req, broker_caller_role_for_peer(peer))
         }
+        d2bd_runtime::wire::Request::HostCutover(req) => cutover::dispatch(state, peer, req),
         d2bd_runtime::wire::Request::ReadGuestConfig(req) => {
             dispatch_read_guest_config(state, broker_caller_role_for_peer(peer), req)
         }
@@ -2439,6 +2442,40 @@ fn dispatch_resource_request(
         return Ok(resource_runtime_error_frame(
             resource_runtime::ResourceRuntimeError::AuthenticationUnavailable,
         ));
+    }
+    if request.method() == Some("HostCutover") {
+        if !matches!(peer.role, PeerRole::Admin) {
+            return Err(TypedError::AuthzNotAdmin {
+                verb: "hostCutover".to_owned(),
+            });
+        }
+        let mut value = request.value();
+        if let Value::Object(object) = &mut value {
+            for key in [
+                "type",
+                "method",
+                "zoneRef",
+                "schemaVersion",
+                "service",
+                "sessionVerb",
+            ] {
+                object.remove(key);
+            }
+        }
+        let cutover: public_wire::HostCutoverRequest =
+            serde_json::from_value(value).map_err(|error| TypedError::WireInvalidFrame {
+                detail: format!("hostCutover request malformed: {error}"),
+            })?;
+        let operation = cutover.operation;
+        let result = cutover::dispatch(state, peer, cutover);
+        if let Err(error) = &result {
+            tracing::warn!(
+                cutover_operation = ?operation,
+                error_kind = error.kind(),
+                "host cutover resource dispatch refused"
+            );
+        }
+        return result;
     }
     let typed_shell = typed_shell_resource_request(&request.value());
     let runtime = match if typed_shell {
@@ -13402,6 +13439,7 @@ fn broker_caller_uid(caller_role: &BrokerCallerRole) -> u32 {
         BrokerCallerRole::AdminUid { uid }
         | BrokerCallerRole::LauncherUid { uid }
         | BrokerCallerRole::RootUid { uid } => *uid,
+        BrokerCallerRole::CutoverRunner { .. } => 0,
         BrokerCallerRole::NotAuthorized => 0,
     }
 }

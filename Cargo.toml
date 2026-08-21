@@ -70,6 +70,7 @@ members = [
     "packages/d2bd-runtime",
     "packages/d2bd",
     "packages/d2b-contract-tests",
+    "packages/d2b-cutover",
     "packages/xtask",
     "packages/d2b-priv-broker",
     "packages/d2b-guest-shell-runner",

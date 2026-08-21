@@ -74,6 +74,7 @@ impl FeatureFlag {
             "export-broker-audit" => Some(KnownFeatureFlag::ExportBrokerAudit),
             "configured-launch-v1" => Some(KnownFeatureFlag::ConfiguredLaunchV1),
             "unsafe-local-provider-v1" => Some(KnownFeatureFlag::UnsafeLocalProviderV1),
+            "cutover-runner-v1" => Some(KnownFeatureFlag::CutoverRunnerV1),
             _ => None,
         }
     }
@@ -107,6 +108,7 @@ pub enum KnownFeatureFlag {
     ExportBrokerAudit,
     ConfiguredLaunchV1,
     UnsafeLocalProviderV1,
+    CutoverRunnerV1,
 }
 
 impl KnownFeatureFlag {
@@ -118,6 +120,7 @@ impl KnownFeatureFlag {
             Self::ExportBrokerAudit => "export-broker-audit",
             Self::ConfiguredLaunchV1 => "configured-launch-v1",
             Self::UnsafeLocalProviderV1 => "unsafe-local-provider-v1",
+            Self::CutoverRunnerV1 => "cutover-runner-v1",
         }
     }
 

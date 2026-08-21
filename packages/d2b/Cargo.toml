@@ -16,6 +16,8 @@ d2b-core = { path = "../d2b-core", version = "0.0.0-bootstrap" }
 d2b-contracts = { path = "../d2b-contracts", version = "0.0.0-bootstrap" }
 d2b-contracts-broker = { path = "../d2b-contracts-broker", version = "0.0.0-bootstrap" }
 d2b-contracts-control = { path = "../d2b-contracts-control", version = "0.0.0-bootstrap" }
+d2b-contracts-resource = { path = "../d2b-contracts-resource", version = "0.0.0-bootstrap" }
+d2b-cutover = { path = "../d2b-cutover", version = "0.0.0-bootstrap" }
 d2b-resource-client = { path = "../d2b-resource-client", version = "0.0.0-bootstrap" }
 d2b-realm-core = { path = "../d2b-realm-core", version = "0.0.0-bootstrap" }
 d2b-realm-router = { path = "../d2b-realm-router", version = "0.0.0-bootstrap" }

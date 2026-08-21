@@ -28,6 +28,8 @@
 //   clear-acl-on-path --path P [--require-kind regular|directory|socket|any]
 //     Open P with openat2 RESOLVE_NO_SYMLINKS, verify the requested file
 //     type, then run setfacl -b against /proc/self/fd/<N>.
+//   validate-artifact (request JSON on stdin)
+//     Resolve and verify one private system artifact without activation.
 //
 // Exit codes:
 //   0  - success (action applied or already-correct)
@@ -59,7 +61,10 @@ use d2b_host::hardlink_farm::{
     BuildStoreViewFarmRequest, BuildStoreViewRequest, ReplaceLivePathsRequest, build_farm,
     build_store_view, replace_live_top_level_paths,
 };
-use d2b_host::host_generation::{ActivationHelperOutcome, ActivationHelperResponse, parse_request};
+use d2b_host::host_generation::{
+    ActivationArtifactValidationResponse, ActivationHelperOutcome, ActivationHelperResponse,
+    parse_request, parse_validation_request,
+};
 
 const PRIVATE_ARTIFACT_CATALOG: &str = "/etc/d2b/artifact-catalog.json";
 const EXPECTED_SYSTEM_ARTIFACT_TYPE: &str = "nixos-system";
@@ -320,11 +325,15 @@ fn activation_probe_matches(
 fn resolve_system_artifact(
     request: &d2b_host::host_generation::ActivationHelperRequest,
 ) -> Result<std::path::PathBuf, CatalogError> {
+    resolve_system_artifact_id(request.system_artifact_id.as_str())
+}
+
+fn resolve_system_artifact_id(artifact_id: &str) -> Result<std::path::PathBuf, CatalogError> {
     let catalog = read_private_catalog(std::path::Path::new(PRIVATE_ARTIFACT_CATALOG))?;
     let entry = catalog
         .entries
         .iter()
-        .find(|entry| entry.artifact_id == request.system_artifact_id)
+        .find(|entry| entry.artifact_id == artifact_id)
         .ok_or(CatalogError::ArtifactMissing)?;
     if entry.artifact_type != EXPECTED_SYSTEM_ARTIFACT_TYPE {
         return Err(CatalogError::ArtifactType);
@@ -433,6 +442,7 @@ fn print_help() {
            d2b-activation-helper chown-if-orphan --path P --uid U --gid G\n  \
            d2b-activation-helper build-store-view-farm   (request JSON on stdin)\n  \
            d2b-activation-helper build-store-view        (request JSON on stdin)\n\
+           d2b-activation-helper validate-artifact      (request JSON on stdin)\n\
            d2b-activation-helper apply-generation       (request JSON on stdin)\n\
          \n\
          EXIT CODES:\n  \
@@ -1062,6 +1072,32 @@ fn cmd_build_store_view_farm() -> ExitCode {
     }
 }
 
+fn cmd_validate_artifact() -> ExitCode {
+    let mut bytes = Vec::new();
+    if std::io::stdin().read_to_end(&mut bytes).is_err() {
+        return ExitCode::from(1);
+    }
+    let request = match parse_validation_request(&bytes) {
+        Ok(request) => request,
+        Err(error) => {
+            eprintln!("activation-helper: {error}");
+            return ExitCode::from(1);
+        }
+    };
+    let valid = resolve_system_artifact_id(request.system_artifact_id.as_str()).is_ok();
+    match serde_json::to_vec(&ActivationArtifactValidationResponse { valid }) {
+        Ok(response) => {
+            println!("{}", String::from_utf8_lossy(&response));
+            if valid {
+                ExitCode::from(0)
+            } else {
+                ExitCode::from(2)
+            }
+        }
+        Err(_) => ExitCode::from(1),
+    }
+}
+
 fn cmd_apply_generation() -> ExitCode {
     use std::io::Read;
 
@@ -1069,6 +1105,7 @@ fn cmd_apply_generation() -> ExitCode {
     if std::io::stdin().read_to_end(&mut bytes).is_err() {
         return ExitCode::from(1);
     }
+
     let request = match parse_request(&bytes) {
         Ok(request) => request,
         Err(error) => {
@@ -1275,6 +1312,9 @@ fn main() -> ExitCode {
     }
     if args.get(1).map(String::as_str) == Some("apply-generation") {
         return cmd_apply_generation();
+    }
+    if args.get(1).map(String::as_str) == Some("validate-artifact") {
+        return cmd_validate_artifact();
     }
     let args = match parse_args() {
         Ok(a) => a,

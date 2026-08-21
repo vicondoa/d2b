@@ -1038,8 +1038,21 @@ fn checkpoints_restore_is_idempotent_and_refreshes_without_secret_material() {
     let checkpoints = provider.export_checkpoints().unwrap();
     assert_eq!(checkpoints.len(), 1);
     let checkpoint_debug = format!("{checkpoints:?}");
-    assert!(!checkpoint_debug.contains(client.token_canary.as_str()));
-    assert!(!checkpoint_debug.contains(client.endpoint_canary.as_str()));
+    for marker in [
+        client.token_canary.as_str(),
+        client.endpoint_canary.as_str(),
+        "Credential/aca-relay-mi",
+        "checkpoint-acquire",
+        "Provider/workload-a",
+        "Zone/dev",
+        "Guest/aca-sandbox",
+        "Provider/runtime-azure-container-apps",
+    ] {
+        assert!(
+            !checkpoint_debug.contains(marker),
+            "managed-identity checkpoint leaked marker {marker}"
+        );
+    }
 
     let restored = restart_provider(&provider, client.clone());
     restored.restore_checkpoints(checkpoints.clone()).unwrap();

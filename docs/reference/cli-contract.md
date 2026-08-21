@@ -3403,3 +3403,65 @@ detached state lives in guestd's detached registry).
 | `auth status` | `rust-native` | Auth status is a read-only daemon query that reports caller mapping, socket reachability, and authorization hints. |
 | `exec run/attach/wait/status/list/logs/kill` | `rust-native` | Typed EphemeralProcess Resource operations over the Zone session; no SSH or VM lifecycle alias. |
 | `shell open/attach/list/status/detach/kill` | `rust-native` | Admin-only qualified ShellSession Resource lifecycle plus ProcessAttachClient named streams. Local VMs use authenticated guest-control; unsafe-local uses the exact requester-UID helper and a validated terminal fd. No retired `ShellOp`, SSH, host-shell fallback, root unit, per-VM service, or broker op. |
+
+### Host cutover and scoped reset
+
+The cutover surface is:
+
+```text
+d2b host cutover preview [--system-artifact-id <ID>] [--source-system-artifact-id <ID>]
+d2b host cutover status --operation-id <ID>
+d2b host cutover hold --operation-id <ID> --reason <TEXT>
+d2b host cutover resume --operation-id <ID> [--fresh-consent-digest <DIGEST>]
+d2b host cutover apply --operation-id <ID> --candidate-id <ID> \
+  --revision-plan-id <ID> --source-system-artifact-id <ID> \
+  --preview-digest <DIGEST> \
+  --recovery-digest <DIGEST> --operator-id <ID> --consent-digest <DIGEST> \
+  --handoff-file <JSON>
+d2b host cutover rollback --operation-id <ID>
+d2b host cutover verify --operation-id <ID>
+d2b host cutover doctor --operation-id <ID>
+d2b host cutover finalize --operation-id <ID> --consent-file <JSON> \
+  --finalization-file <JSON>
+d2b host cutover reset --scope <zone|provider|guest> --target <ID> \
+  --operation-id <ID> --candidate-id <ID> --revision-plan-id <ID> \
+  --preview-digest <DIGEST> --consent-digest <DIGEST> --consent-file <JSON>
+```
+
+`preview` is mutation-free and reports only redaction-safe inventory counts
+and canonical digests. One-time cutover `preview`, `apply`, `verify`, and
+`finalize` reject `--zone`; the operation is host-wide. Scoped reset is a
+separate authority and requires its own scope, target, preview, and consent.
+Reset admission binds the scope and target into a distinct operation capability;
+it does not reuse the host-wide cutover capability. Destructive durable-Volume
+reset additionally requires `--destroy-durable-volumes`,
+`--destructive-consent-file`, and its matching digest; the default remains
+Preserve.
+`apply --handoff-file` supplies the existing typed host-generation handoff;
+the CLI first obtains runner admission through `d2bd`, then submits the
+handoff directly to the runner socket once the journal reaches the native
+phase-4 disposition boundary; earlier phase skips are refused. If an admitted
+runner is already present, a repeated apply with the handoff resumes through
+that runner instead of requesting a duplicate launch; an admission-only retry
+must supply the handoff file.
+The candidate handoff's `systemArtifactId` and the preserved rollback
+`sourceSystemArtifactId` are included in the admitted operation contract and
+the preview/consent binding; a different artifact identity is refused before
+any closure activation effect. Supply the same candidate and source artifact
+identities to `preview` that are named by the corresponding typed handoffs.
+If the apply response is lost after admission, the CLI emits the observed
+runner state with `mutationAccepted=false` rather than converting an
+possibly-mutating operation into a definitive command refusal.
+`rollback --handoff-file` supplies the pre-apply generation handoff when the
+native rollback boundary is at phase 4; the broker restores that typed
+generation before the journal is terminally rolled back.
+JSON evidence files are parsed through the canonical JSON profile and
+normalized before the typed request crosses the Zone resource transport.
+After admission, `status`, `hold`, `resume`, `rollback`, `verify`, `doctor`, and
+`finalize` use the runner-owned Unix socket so they remain available while
+`d2bd` is drained; `doctor` falls back to daemon observation before drain.
+Verification refuses without authoritative post-activation
+observations rather than inferring health from preview data. The journal is
+root-owned mode `0600` and is never printed by the CLI. Hold and resume
+advance only after the privileged audit boundary returns durable evidence;
+otherwise they return a typed refusal without changing the journal.

@@ -180,6 +180,7 @@ pub fn verb_requires_admin(verb: &str) -> bool {
             | "hostDestroy"
             | "hostInstall"
             | "hostReconcile"
+            | "hostCutover"
             | "resourceReconcile"
             | "readGuestConfig"
             | "exec"
@@ -233,5 +234,11 @@ mod tests {
         assert!(!lifecycle_group_member("d2b", &["wheel".to_owned()]));
         assert!(!lifecycle_group_member("missing", &groups));
         assert!(!lifecycle_group_member("", &groups));
+    }
+
+    #[test]
+    fn cutover_is_admin_only_and_host_shutdown_cannot_reach_it() {
+        assert!(super::verb_requires_admin("hostCutover"));
+        assert!(!super::verb_allowed_for_host_shutdown("hostCutover"));
     }
 }

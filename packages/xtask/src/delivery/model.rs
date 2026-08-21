@@ -32,6 +32,7 @@ use std::{
     path::{Component, Path},
 };
 
+use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
@@ -57,7 +58,7 @@ const SNAPSHOT_DOMAIN: &[u8] = b"d2b-delivery-snapshot-v1\0";
 
 macro_rules! digest_identifier {
     ($name:ident, $label:literal) => {
-        #[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd, Serialize)]
+        #[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd, Serialize, JsonSchema)]
         #[serde(transparent)]
         pub struct $name(String);
 

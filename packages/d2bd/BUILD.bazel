@@ -31,6 +31,7 @@ d2bd_shared_deps = [
     "//packages/d2b-contracts:d2b_contracts",
     "//packages/d2b-contracts-broker:d2b_contracts_broker",
     "//packages/d2b-contracts-control:d2b_contracts_control",
+    "//packages/d2b-cutover:d2b_cutover",
     "//packages/d2b-gateway:d2b_gateway",
     "//packages/d2b-gateway-runtime:d2b_gateway_runtime",
     "//packages/d2b-process:d2b_process",
@@ -233,6 +234,20 @@ rust_test(
     deps = [
         "//packages/d2b-contracts-provider:d2b_contracts_provider",
         "//packages/d2b-contracts-zone-session:d2b_contracts_zone_session",
+    ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
+)
+
+rust_test(
+    name = "cloud_composition",
+    srcs = ["tests/cloud_composition.rs"],
+    compile_data = ["Cargo.toml"],
+    visibility = ["//visibility:public"],
+    deps = [
+        "//packages/d2b-contracts:d2b_contracts",
+        "//packages/d2b-contracts-provider:d2b_contracts_provider",
+        "//packages/d2b-contracts-zone-session:d2b_contracts_zone_session",
+        "//packages/d2b-provider-runtime-azure-container-apps:d2b_provider_runtime_azure_container_apps",
+        "//packages/d2b-provider-runtime-cloud-hypervisor:d2b_provider_runtime_cloud_hypervisor",
     ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
 )
 

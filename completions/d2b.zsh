@@ -328,6 +328,330 @@ _arguments "${_arguments_options[@]}" : \
 '--help[Print help]' \
 && ret=0
 ;;
+(cutover)
+_arguments "${_arguments_options[@]}" : \
+'--zone=[Address a declared Zone. Without this flag the nearest local runtime is selected]:ZONE:_default' \
+'--deadline=[Bound all Zone requests and streams]:DURATION:_default' \
+'(--human)--json[Emit the stable JSON envelope]' \
+'(--json)--human[Force human-readable terminal output]' \
+'(--deadline)--no-deadline[Suppress the command default deadline]' \
+'-h[Print help]' \
+'--help[Print help]' \
+":: :_d2b__subcmd__host__subcmd__cutover_commands" \
+"*::: :->cutover" \
+&& ret=0
+
+    case $state in
+    (cutover)
+        words=($line[1] "${words[@]}")
+        (( CURRENT += 1 ))
+        curcontext="${curcontext%:*:*}:d2b-host-cutover-command-$line[1]:"
+        case $line[1] in
+            (preview)
+_arguments "${_arguments_options[@]}" : \
+'--operation-id=[]:OPERATION_ID:_default' \
+'--candidate-id=[]:CANDIDATE_ID:_default' \
+'--revision-plan-id=[]:REVISION_PLAN_ID:_default' \
+'--system-artifact-id=[]:SYSTEM_ARTIFACT_ID:_default' \
+'--source-system-artifact-id=[]:SOURCE_SYSTEM_ARTIFACT_ID:_default' \
+'--preview-digest=[]:PREVIEW_DIGEST:_default' \
+'--recovery-digest=[]:RECOVERY_DIGEST:_default' \
+'--operator-id=[]:OPERATOR_ID:_default' \
+'--consent-digest=[]:CONSENT_DIGEST:_default' \
+'--consent-file=[]:CONSENT_FILE:_files' \
+'--destructive-consent-digest=[]:DESTRUCTIVE_CONSENT_DIGEST:_default' \
+'--destructive-consent-file=[]:DESTRUCTIVE_CONSENT_FILE:_files' \
+'--recovery-attestation-file=[]:RECOVERY_ATTESTATION_FILE:_files' \
+'--handoff-file=[]:HANDOFF_FILE:_files' \
+'--finalization-file=[]:FINALIZATION_FILE:_files' \
+'--verification-file=[]:VERIFICATION_FILE:_files' \
+'--host-digest=[]:HOST_DIGEST:_default' \
+'--fresh-consent-digest=[]:FRESH_CONSENT_DIGEST:_default' \
+'--reason=[]:REASON:_default' \
+'--zone=[Address a declared Zone. Without this flag the nearest local runtime is selected]:ZONE:_default' \
+'--deadline=[Bound all Zone requests and streams]:DURATION:_default' \
+'--destroy-durable-volumes[]' \
+'(--human)--json[Emit the stable JSON envelope]' \
+'(--json)--human[Force human-readable terminal output]' \
+'(--deadline)--no-deadline[Suppress the command default deadline]' \
+'-h[Print help]' \
+'--help[Print help]' \
+&& ret=0
+;;
+(status)
+_arguments "${_arguments_options[@]}" : \
+'--operation-id=[]:OPERATION_ID:_default' \
+'--candidate-id=[]:CANDIDATE_ID:_default' \
+'--revision-plan-id=[]:REVISION_PLAN_ID:_default' \
+'--system-artifact-id=[]:SYSTEM_ARTIFACT_ID:_default' \
+'--source-system-artifact-id=[]:SOURCE_SYSTEM_ARTIFACT_ID:_default' \
+'--preview-digest=[]:PREVIEW_DIGEST:_default' \
+'--recovery-digest=[]:RECOVERY_DIGEST:_default' \
+'--operator-id=[]:OPERATOR_ID:_default' \
+'--consent-digest=[]:CONSENT_DIGEST:_default' \
+'--consent-file=[]:CONSENT_FILE:_files' \
+'--destructive-consent-digest=[]:DESTRUCTIVE_CONSENT_DIGEST:_default' \
+'--destructive-consent-file=[]:DESTRUCTIVE_CONSENT_FILE:_files' \
+'--recovery-attestation-file=[]:RECOVERY_ATTESTATION_FILE:_files' \
+'--handoff-file=[]:HANDOFF_FILE:_files' \
+'--finalization-file=[]:FINALIZATION_FILE:_files' \
+'--verification-file=[]:VERIFICATION_FILE:_files' \
+'--host-digest=[]:HOST_DIGEST:_default' \
+'--fresh-consent-digest=[]:FRESH_CONSENT_DIGEST:_default' \
+'--reason=[]:REASON:_default' \
+'--zone=[Address a declared Zone. Without this flag the nearest local runtime is selected]:ZONE:_default' \
+'--deadline=[Bound all Zone requests and streams]:DURATION:_default' \
+'--destroy-durable-volumes[]' \
+'(--human)--json[Emit the stable JSON envelope]' \
+'(--json)--human[Force human-readable terminal output]' \
+'(--deadline)--no-deadline[Suppress the command default deadline]' \
+'-h[Print help]' \
+'--help[Print help]' \
+&& ret=0
+;;
+(hold)
+_arguments "${_arguments_options[@]}" : \
+'--operation-id=[]:OPERATION_ID:_default' \
+'--candidate-id=[]:CANDIDATE_ID:_default' \
+'--revision-plan-id=[]:REVISION_PLAN_ID:_default' \
+'--system-artifact-id=[]:SYSTEM_ARTIFACT_ID:_default' \
+'--source-system-artifact-id=[]:SOURCE_SYSTEM_ARTIFACT_ID:_default' \
+'--preview-digest=[]:PREVIEW_DIGEST:_default' \
+'--recovery-digest=[]:RECOVERY_DIGEST:_default' \
+'--operator-id=[]:OPERATOR_ID:_default' \
+'--consent-digest=[]:CONSENT_DIGEST:_default' \
+'--consent-file=[]:CONSENT_FILE:_files' \
+'--destructive-consent-digest=[]:DESTRUCTIVE_CONSENT_DIGEST:_default' \
+'--destructive-consent-file=[]:DESTRUCTIVE_CONSENT_FILE:_files' \
+'--recovery-attestation-file=[]:RECOVERY_ATTESTATION_FILE:_files' \
+'--handoff-file=[]:HANDOFF_FILE:_files' \
+'--finalization-file=[]:FINALIZATION_FILE:_files' \
+'--verification-file=[]:VERIFICATION_FILE:_files' \
+'--host-digest=[]:HOST_DIGEST:_default' \
+'--fresh-consent-digest=[]:FRESH_CONSENT_DIGEST:_default' \
+'--reason=[]:REASON:_default' \
+'--zone=[Address a declared Zone. Without this flag the nearest local runtime is selected]:ZONE:_default' \
+'--deadline=[Bound all Zone requests and streams]:DURATION:_default' \
+'--destroy-durable-volumes[]' \
+'(--human)--json[Emit the stable JSON envelope]' \
+'(--json)--human[Force human-readable terminal output]' \
+'(--deadline)--no-deadline[Suppress the command default deadline]' \
+'-h[Print help]' \
+'--help[Print help]' \
+&& ret=0
+;;
+(resume)
+_arguments "${_arguments_options[@]}" : \
+'--operation-id=[]:OPERATION_ID:_default' \
+'--candidate-id=[]:CANDIDATE_ID:_default' \
+'--revision-plan-id=[]:REVISION_PLAN_ID:_default' \
+'--system-artifact-id=[]:SYSTEM_ARTIFACT_ID:_default' \
+'--source-system-artifact-id=[]:SOURCE_SYSTEM_ARTIFACT_ID:_default' \
+'--preview-digest=[]:PREVIEW_DIGEST:_default' \
+'--recovery-digest=[]:RECOVERY_DIGEST:_default' \
+'--operator-id=[]:OPERATOR_ID:_default' \
+'--consent-digest=[]:CONSENT_DIGEST:_default' \
+'--consent-file=[]:CONSENT_FILE:_files' \
+'--destructive-consent-digest=[]:DESTRUCTIVE_CONSENT_DIGEST:_default' \
+'--destructive-consent-file=[]:DESTRUCTIVE_CONSENT_FILE:_files' \
+'--recovery-attestation-file=[]:RECOVERY_ATTESTATION_FILE:_files' \
+'--handoff-file=[]:HANDOFF_FILE:_files' \
+'--finalization-file=[]:FINALIZATION_FILE:_files' \
+'--verification-file=[]:VERIFICATION_FILE:_files' \
+'--host-digest=[]:HOST_DIGEST:_default' \
+'--fresh-consent-digest=[]:FRESH_CONSENT_DIGEST:_default' \
+'--reason=[]:REASON:_default' \
+'--zone=[Address a declared Zone. Without this flag the nearest local runtime is selected]:ZONE:_default' \
+'--deadline=[Bound all Zone requests and streams]:DURATION:_default' \
+'--destroy-durable-volumes[]' \
+'(--human)--json[Emit the stable JSON envelope]' \
+'(--json)--human[Force human-readable terminal output]' \
+'(--deadline)--no-deadline[Suppress the command default deadline]' \
+'-h[Print help]' \
+'--help[Print help]' \
+&& ret=0
+;;
+(apply)
+_arguments "${_arguments_options[@]}" : \
+'--operation-id=[]:OPERATION_ID:_default' \
+'--candidate-id=[]:CANDIDATE_ID:_default' \
+'--revision-plan-id=[]:REVISION_PLAN_ID:_default' \
+'--system-artifact-id=[]:SYSTEM_ARTIFACT_ID:_default' \
+'--source-system-artifact-id=[]:SOURCE_SYSTEM_ARTIFACT_ID:_default' \
+'--preview-digest=[]:PREVIEW_DIGEST:_default' \
+'--recovery-digest=[]:RECOVERY_DIGEST:_default' \
+'--operator-id=[]:OPERATOR_ID:_default' \
+'--consent-digest=[]:CONSENT_DIGEST:_default' \
+'--consent-file=[]:CONSENT_FILE:_files' \
+'--destructive-consent-digest=[]:DESTRUCTIVE_CONSENT_DIGEST:_default' \
+'--destructive-consent-file=[]:DESTRUCTIVE_CONSENT_FILE:_files' \
+'--recovery-attestation-file=[]:RECOVERY_ATTESTATION_FILE:_files' \
+'--handoff-file=[]:HANDOFF_FILE:_files' \
+'--finalization-file=[]:FINALIZATION_FILE:_files' \
+'--verification-file=[]:VERIFICATION_FILE:_files' \
+'--host-digest=[]:HOST_DIGEST:_default' \
+'--fresh-consent-digest=[]:FRESH_CONSENT_DIGEST:_default' \
+'--reason=[]:REASON:_default' \
+'--zone=[Address a declared Zone. Without this flag the nearest local runtime is selected]:ZONE:_default' \
+'--deadline=[Bound all Zone requests and streams]:DURATION:_default' \
+'--destroy-durable-volumes[]' \
+'(--human)--json[Emit the stable JSON envelope]' \
+'(--json)--human[Force human-readable terminal output]' \
+'(--deadline)--no-deadline[Suppress the command default deadline]' \
+'-h[Print help]' \
+'--help[Print help]' \
+&& ret=0
+;;
+(rollback)
+_arguments "${_arguments_options[@]}" : \
+'--operation-id=[]:OPERATION_ID:_default' \
+'--candidate-id=[]:CANDIDATE_ID:_default' \
+'--revision-plan-id=[]:REVISION_PLAN_ID:_default' \
+'--system-artifact-id=[]:SYSTEM_ARTIFACT_ID:_default' \
+'--source-system-artifact-id=[]:SOURCE_SYSTEM_ARTIFACT_ID:_default' \
+'--preview-digest=[]:PREVIEW_DIGEST:_default' \
+'--recovery-digest=[]:RECOVERY_DIGEST:_default' \
+'--operator-id=[]:OPERATOR_ID:_default' \
+'--consent-digest=[]:CONSENT_DIGEST:_default' \
+'--consent-file=[]:CONSENT_FILE:_files' \
+'--destructive-consent-digest=[]:DESTRUCTIVE_CONSENT_DIGEST:_default' \
+'--destructive-consent-file=[]:DESTRUCTIVE_CONSENT_FILE:_files' \
+'--recovery-attestation-file=[]:RECOVERY_ATTESTATION_FILE:_files' \
+'--handoff-file=[]:HANDOFF_FILE:_files' \
+'--finalization-file=[]:FINALIZATION_FILE:_files' \
+'--verification-file=[]:VERIFICATION_FILE:_files' \
+'--host-digest=[]:HOST_DIGEST:_default' \
+'--fresh-consent-digest=[]:FRESH_CONSENT_DIGEST:_default' \
+'--reason=[]:REASON:_default' \
+'--zone=[Address a declared Zone. Without this flag the nearest local runtime is selected]:ZONE:_default' \
+'--deadline=[Bound all Zone requests and streams]:DURATION:_default' \
+'--destroy-durable-volumes[]' \
+'(--human)--json[Emit the stable JSON envelope]' \
+'(--json)--human[Force human-readable terminal output]' \
+'(--deadline)--no-deadline[Suppress the command default deadline]' \
+'-h[Print help]' \
+'--help[Print help]' \
+&& ret=0
+;;
+(verify)
+_arguments "${_arguments_options[@]}" : \
+'--operation-id=[]:OPERATION_ID:_default' \
+'--candidate-id=[]:CANDIDATE_ID:_default' \
+'--revision-plan-id=[]:REVISION_PLAN_ID:_default' \
+'--system-artifact-id=[]:SYSTEM_ARTIFACT_ID:_default' \
+'--source-system-artifact-id=[]:SOURCE_SYSTEM_ARTIFACT_ID:_default' \
+'--preview-digest=[]:PREVIEW_DIGEST:_default' \
+'--recovery-digest=[]:RECOVERY_DIGEST:_default' \
+'--operator-id=[]:OPERATOR_ID:_default' \
+'--consent-digest=[]:CONSENT_DIGEST:_default' \
+'--consent-file=[]:CONSENT_FILE:_files' \
+'--destructive-consent-digest=[]:DESTRUCTIVE_CONSENT_DIGEST:_default' \
+'--destructive-consent-file=[]:DESTRUCTIVE_CONSENT_FILE:_files' \
+'--recovery-attestation-file=[]:RECOVERY_ATTESTATION_FILE:_files' \
+'--handoff-file=[]:HANDOFF_FILE:_files' \
+'--finalization-file=[]:FINALIZATION_FILE:_files' \
+'--verification-file=[]:VERIFICATION_FILE:_files' \
+'--host-digest=[]:HOST_DIGEST:_default' \
+'--fresh-consent-digest=[]:FRESH_CONSENT_DIGEST:_default' \
+'--reason=[]:REASON:_default' \
+'--zone=[Address a declared Zone. Without this flag the nearest local runtime is selected]:ZONE:_default' \
+'--deadline=[Bound all Zone requests and streams]:DURATION:_default' \
+'--destroy-durable-volumes[]' \
+'(--human)--json[Emit the stable JSON envelope]' \
+'(--json)--human[Force human-readable terminal output]' \
+'(--deadline)--no-deadline[Suppress the command default deadline]' \
+'-h[Print help]' \
+'--help[Print help]' \
+&& ret=0
+;;
+(doctor)
+_arguments "${_arguments_options[@]}" : \
+'--operation-id=[]:OPERATION_ID:_default' \
+'--candidate-id=[]:CANDIDATE_ID:_default' \
+'--revision-plan-id=[]:REVISION_PLAN_ID:_default' \
+'--system-artifact-id=[]:SYSTEM_ARTIFACT_ID:_default' \
+'--source-system-artifact-id=[]:SOURCE_SYSTEM_ARTIFACT_ID:_default' \
+'--preview-digest=[]:PREVIEW_DIGEST:_default' \
+'--recovery-digest=[]:RECOVERY_DIGEST:_default' \
+'--operator-id=[]:OPERATOR_ID:_default' \
+'--consent-digest=[]:CONSENT_DIGEST:_default' \
+'--consent-file=[]:CONSENT_FILE:_files' \
+'--destructive-consent-digest=[]:DESTRUCTIVE_CONSENT_DIGEST:_default' \
+'--destructive-consent-file=[]:DESTRUCTIVE_CONSENT_FILE:_files' \
+'--recovery-attestation-file=[]:RECOVERY_ATTESTATION_FILE:_files' \
+'--handoff-file=[]:HANDOFF_FILE:_files' \
+'--finalization-file=[]:FINALIZATION_FILE:_files' \
+'--verification-file=[]:VERIFICATION_FILE:_files' \
+'--host-digest=[]:HOST_DIGEST:_default' \
+'--fresh-consent-digest=[]:FRESH_CONSENT_DIGEST:_default' \
+'--reason=[]:REASON:_default' \
+'--zone=[Address a declared Zone. Without this flag the nearest local runtime is selected]:ZONE:_default' \
+'--deadline=[Bound all Zone requests and streams]:DURATION:_default' \
+'--destroy-durable-volumes[]' \
+'(--human)--json[Emit the stable JSON envelope]' \
+'(--json)--human[Force human-readable terminal output]' \
+'(--deadline)--no-deadline[Suppress the command default deadline]' \
+'-h[Print help]' \
+'--help[Print help]' \
+&& ret=0
+;;
+(finalize)
+_arguments "${_arguments_options[@]}" : \
+'--operation-id=[]:OPERATION_ID:_default' \
+'--candidate-id=[]:CANDIDATE_ID:_default' \
+'--revision-plan-id=[]:REVISION_PLAN_ID:_default' \
+'--system-artifact-id=[]:SYSTEM_ARTIFACT_ID:_default' \
+'--source-system-artifact-id=[]:SOURCE_SYSTEM_ARTIFACT_ID:_default' \
+'--preview-digest=[]:PREVIEW_DIGEST:_default' \
+'--recovery-digest=[]:RECOVERY_DIGEST:_default' \
+'--operator-id=[]:OPERATOR_ID:_default' \
+'--consent-digest=[]:CONSENT_DIGEST:_default' \
+'--consent-file=[]:CONSENT_FILE:_files' \
+'--destructive-consent-digest=[]:DESTRUCTIVE_CONSENT_DIGEST:_default' \
+'--destructive-consent-file=[]:DESTRUCTIVE_CONSENT_FILE:_files' \
+'--recovery-attestation-file=[]:RECOVERY_ATTESTATION_FILE:_files' \
+'--handoff-file=[]:HANDOFF_FILE:_files' \
+'--finalization-file=[]:FINALIZATION_FILE:_files' \
+'--verification-file=[]:VERIFICATION_FILE:_files' \
+'--host-digest=[]:HOST_DIGEST:_default' \
+'--fresh-consent-digest=[]:FRESH_CONSENT_DIGEST:_default' \
+'--reason=[]:REASON:_default' \
+'--zone=[Address a declared Zone. Without this flag the nearest local runtime is selected]:ZONE:_default' \
+'--deadline=[Bound all Zone requests and streams]:DURATION:_default' \
+'--destroy-durable-volumes[]' \
+'(--human)--json[Emit the stable JSON envelope]' \
+'(--json)--human[Force human-readable terminal output]' \
+'(--deadline)--no-deadline[Suppress the command default deadline]' \
+'-h[Print help]' \
+'--help[Print help]' \
+&& ret=0
+;;
+(reset)
+_arguments "${_arguments_options[@]}" : \
+'--operation-id=[]:OPERATION_ID:_default' \
+'--candidate-id=[]:CANDIDATE_ID:_default' \
+'--revision-plan-id=[]:REVISION_PLAN_ID:_default' \
+'--preview-digest=[]:PREVIEW_DIGEST:_default' \
+'--consent-digest=[]:CONSENT_DIGEST:_default' \
+'--consent-file=[]:CONSENT_FILE:_files' \
+'--destructive-consent-digest=[]:DESTRUCTIVE_CONSENT_DIGEST:_default' \
+'--destructive-consent-file=[]:DESTRUCTIVE_CONSENT_FILE:_files' \
+'--scope=[]:SCOPE:(zone provider guest)' \
+'--target=[]:TARGET:_default' \
+'--zone=[Address a declared Zone. Without this flag the nearest local runtime is selected]:ZONE:_default' \
+'--deadline=[Bound all Zone requests and streams]:DURATION:_default' \
+'--destroy-durable-volumes[]' \
+'(--human)--json[Emit the stable JSON envelope]' \
+'(--json)--human[Force human-readable terminal output]' \
+'(--deadline)--no-deadline[Suppress the command default deadline]' \
+'-h[Print help]' \
+'--help[Print help]' \
+&& ret=0
+;;
+        esac
+    ;;
+esac
+;;
         esac
     ;;
 esac
@@ -5025,6 +5349,7 @@ _d2b__subcmd__host_commands() {
 'install:' \
 'reconcile:' \
 'validate:' \
+'cutover:' \
     )
     _describe -t commands 'd2b host commands' commands "$@"
 }
@@ -5032,6 +5357,72 @@ _d2b__subcmd__host_commands() {
 _d2b__subcmd__host__subcmd__check_commands() {
     local commands; commands=()
     _describe -t commands 'd2b host check commands' commands "$@"
+}
+(( $+functions[_d2b__subcmd__host__subcmd__cutover_commands] )) ||
+_d2b__subcmd__host__subcmd__cutover_commands() {
+    local commands; commands=(
+'preview:' \
+'status:' \
+'hold:' \
+'resume:' \
+'apply:' \
+'rollback:' \
+'verify:' \
+'doctor:' \
+'finalize:' \
+'reset:' \
+    )
+    _describe -t commands 'd2b host cutover commands' commands "$@"
+}
+(( $+functions[_d2b__subcmd__host__subcmd__cutover__subcmd__apply_commands] )) ||
+_d2b__subcmd__host__subcmd__cutover__subcmd__apply_commands() {
+    local commands; commands=()
+    _describe -t commands 'd2b host cutover apply commands' commands "$@"
+}
+(( $+functions[_d2b__subcmd__host__subcmd__cutover__subcmd__doctor_commands] )) ||
+_d2b__subcmd__host__subcmd__cutover__subcmd__doctor_commands() {
+    local commands; commands=()
+    _describe -t commands 'd2b host cutover doctor commands' commands "$@"
+}
+(( $+functions[_d2b__subcmd__host__subcmd__cutover__subcmd__finalize_commands] )) ||
+_d2b__subcmd__host__subcmd__cutover__subcmd__finalize_commands() {
+    local commands; commands=()
+    _describe -t commands 'd2b host cutover finalize commands' commands "$@"
+}
+(( $+functions[_d2b__subcmd__host__subcmd__cutover__subcmd__hold_commands] )) ||
+_d2b__subcmd__host__subcmd__cutover__subcmd__hold_commands() {
+    local commands; commands=()
+    _describe -t commands 'd2b host cutover hold commands' commands "$@"
+}
+(( $+functions[_d2b__subcmd__host__subcmd__cutover__subcmd__preview_commands] )) ||
+_d2b__subcmd__host__subcmd__cutover__subcmd__preview_commands() {
+    local commands; commands=()
+    _describe -t commands 'd2b host cutover preview commands' commands "$@"
+}
+(( $+functions[_d2b__subcmd__host__subcmd__cutover__subcmd__reset_commands] )) ||
+_d2b__subcmd__host__subcmd__cutover__subcmd__reset_commands() {
+    local commands; commands=()
+    _describe -t commands 'd2b host cutover reset commands' commands "$@"
+}
+(( $+functions[_d2b__subcmd__host__subcmd__cutover__subcmd__resume_commands] )) ||
+_d2b__subcmd__host__subcmd__cutover__subcmd__resume_commands() {
+    local commands; commands=()
+    _describe -t commands 'd2b host cutover resume commands' commands "$@"
+}
+(( $+functions[_d2b__subcmd__host__subcmd__cutover__subcmd__rollback_commands] )) ||
+_d2b__subcmd__host__subcmd__cutover__subcmd__rollback_commands() {
+    local commands; commands=()
+    _describe -t commands 'd2b host cutover rollback commands' commands "$@"
+}
+(( $+functions[_d2b__subcmd__host__subcmd__cutover__subcmd__status_commands] )) ||
+_d2b__subcmd__host__subcmd__cutover__subcmd__status_commands() {
+    local commands; commands=()
+    _describe -t commands 'd2b host cutover status commands' commands "$@"
+}
+(( $+functions[_d2b__subcmd__host__subcmd__cutover__subcmd__verify_commands] )) ||
+_d2b__subcmd__host__subcmd__cutover__subcmd__verify_commands() {
+    local commands; commands=()
+    _describe -t commands 'd2b host cutover verify commands' commands "$@"
 }
 (( $+functions[_d2b__subcmd__host__subcmd__destroy_commands] )) ||
 _d2b__subcmd__host__subcmd__destroy_commands() {

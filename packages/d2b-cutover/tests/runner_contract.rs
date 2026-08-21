@@ -1,0 +1,694 @@
+use d2b_cutover::{
+    BootstrapCapability, CandidateId, CapabilityLedger, Consent, CutoverPhase, CutoverPreview,
+    Digest, EffectAllowlist, Journal, JournalBinding, MAX_RUNNER_FRAME_BYTES, OperationId,
+    OperationKind, OperationRequest, OperationState, OperatorId, ResetInventory, ResetScope,
+    RunnerBootstrap, RunnerCapabilityError, RunnerCommand, RunnerLockError, RunnerPaths,
+    RunnerSocketError, acquire_operation_lock, load_journal, persist_journal, send_command,
+};
+use std::collections::BTreeSet;
+use std::io::Write;
+use std::os::unix::fs::{FileTypeExt, MetadataExt, PermissionsExt};
+use std::os::unix::net::UnixStream;
+use std::os::unix::process::CommandExt;
+use std::path::Path;
+use std::process::{Command, Stdio};
+use std::thread;
+use std::time::Duration;
+
+fn digest(seed: &str) -> Digest {
+    Digest::derive("d2b:test:cutover-runner", seed.as_bytes())
+}
+
+#[test]
+fn consent_digest_matches_canonical_fixture_shape() {
+    let json = br#"{
+      "binding": {
+        "operationId": "op",
+        "operationKind": "cutover",
+        "candidateId": "candidate",
+        "previewDigest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "recoveryDigest": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "operatorId": "operator"
+      },
+      "issuedAtMs": 1000,
+      "expiresAtMs": 2000,
+      "consumed": false
+    }"#;
+    let consent = Consent::decode_json(json).expect("consent");
+    assert_eq!(
+        consent.digest().expect("consent digest").as_str(),
+        "sha256:19a1c4f098440b052131e47edf61569f840281d1d28f7c8865292ca34b0f9f30"
+    );
+}
+
+fn ensure_scratch_root() {
+    std::fs::create_dir_all(".scratch").expect("create test scratch root");
+}
+
+#[test]
+fn bootstrap_capability_is_single_use_and_rejects_replay() {
+    let operation_id = OperationId::new("op-runner-contract").expect("operation id");
+    let candidate_id = CandidateId::new("candidate-runner-contract").expect("candidate id");
+    let operator_id = OperatorId::new("operator-runner-contract").expect("operator id");
+    let capability = BootstrapCapability::new(
+        operation_id,
+        candidate_id,
+        operator_id,
+        OperationKind::Cutover,
+        digest("nonce"),
+        100,
+        200,
+    )
+    .expect("capability");
+    let encoded = capability.canonical_bytes().expect("canonical capability");
+    let mut ledger = CapabilityLedger::default();
+
+    let consumed =
+        BootstrapCapability::decode_and_consume(&encoded, 150, &mut ledger).expect("first use");
+    assert_eq!(consumed.operation_kind(), OperationKind::Cutover);
+    let replay =
+        BootstrapCapability::decode_and_consume(&encoded, 150, &mut ledger).expect_err("replay");
+    assert_eq!(
+        replay.to_string(),
+        "cutover bootstrap capability already consumed"
+    );
+}
+
+#[test]
+fn bootstrap_capability_rejects_expiry_and_wrong_effect_allowlist() {
+    let capability = BootstrapCapability::new(
+        OperationId::new("op-expiry").expect("operation id"),
+        CandidateId::new("candidate-expiry").expect("candidate id"),
+        OperatorId::new("operator-expiry").expect("operator id"),
+        OperationKind::Cutover,
+        digest("expiry"),
+        100,
+        200,
+    )
+    .expect("capability");
+    let encoded = capability.canonical_bytes().expect("canonical capability");
+    let mut ledger = CapabilityLedger::default();
+
+    let error =
+        BootstrapCapability::decode_and_consume(&encoded, 201, &mut ledger).expect_err("expired");
+    assert_eq!(error.to_string(), "cutover bootstrap capability expired");
+    assert_eq!(
+        EffectAllowlist::for_operation(OperationKind::Cutover),
+        EffectAllowlist::for_operation(OperationKind::Cutover)
+    );
+}
+
+#[test]
+fn destructive_reset_bootstrap_requires_separate_consent() {
+    let operation_id = OperationId::new("op-destroy-consent").expect("operation");
+    let candidate_id = CandidateId::new("candidate-destroy-consent").expect("candidate");
+    let revision_plan_id = d2b_cutover::RevisionPlanId::new("plan-destroy-consent").expect("plan");
+    let operator_id = OperatorId::new("operator-destroy-consent").expect("operator");
+    let inventory = ResetInventory::new(ResetScope::Zone, "zone-destroy-consent")
+        .expect("inventory")
+        .with_preserve_durable_volumes(false)
+        .with_destroy_durable_consent(true);
+    let preview = CutoverPreview::new_reset(
+        operation_id.clone(),
+        OperationKind::ScopedReset(ResetScope::Zone),
+        candidate_id.clone(),
+        revision_plan_id.clone(),
+        inventory.clone(),
+    )
+    .expect("preview");
+    let request = OperationRequest::new_reset(
+        operation_id.clone(),
+        ResetScope::Zone,
+        candidate_id,
+        revision_plan_id,
+        operator_id.clone(),
+        preview.digest().expect("preview digest"),
+        inventory,
+    )
+    .expect("request");
+    let capability = BootstrapCapability::new(
+        operation_id,
+        request.candidate_id().clone(),
+        operator_id,
+        OperationKind::ScopedReset(ResetScope::Zone),
+        digest("destroy-consent"),
+        100,
+        200,
+    )
+    .expect("capability");
+    let bootstrap = RunnerBootstrap {
+        capability,
+        request: request.clone(),
+        preview,
+        consent: Some(Consent::issue(request.consent_binding(), 100, 200).expect("consent")),
+        destructive_consent: None,
+        recovery: None,
+        host_digest: None,
+    };
+    assert_eq!(
+        bootstrap.canonical_bytes().expect_err("missing consent"),
+        RunnerCapabilityError::Consent
+    );
+}
+
+#[test]
+fn runner_socket_authority_distinguishes_admin_hold_and_owner_resume() {
+    ensure_scratch_root();
+    let capability = BootstrapCapability::new_with_identity(
+        OperationId::new("op-socket-auth").expect("operation id"),
+        CandidateId::new("candidate-socket-auth").expect("candidate id"),
+        OperatorId::new("operator-socket-auth").expect("operator id"),
+        OperationKind::Cutover,
+        digest("socket-auth"),
+        100,
+        200,
+        42,
+        BTreeSet::from([7]),
+    )
+    .expect("capability");
+    let bytes = capability.canonical_bytes().expect("canonical capability");
+    let mut ledger = CapabilityLedger::default();
+    let consumed =
+        BootstrapCapability::decode_and_consume(&bytes, 150, &mut ledger).expect("consume");
+    let root = std::path::PathBuf::from(".scratch")
+        .join(format!("runner-contract-{}", std::process::id()));
+    let paths = RunnerPaths::new(&root, consumed.operation_id());
+    let socket = d2b_cutover::RunnerSocket::bind(&paths, consumed).expect("bind socket");
+
+    assert!(
+        socket
+            .authorize(
+                7,
+                &RunnerCommand::Hold {
+                    reason: "incident".to_owned()
+                }
+            )
+            .is_ok()
+    );
+    assert_eq!(
+        socket
+            .authorize(
+                7,
+                &RunnerCommand::Resume {
+                    fresh_consent: None
+                }
+            )
+            .expect_err("admin needs fresh consent"),
+        RunnerSocketError::OperatorMismatch
+    );
+    assert!(
+        socket
+            .authorize(
+                7,
+                &RunnerCommand::Resume {
+                    fresh_consent: Some(digest("fresh-consent"))
+                }
+            )
+            .is_ok()
+    );
+    assert!(
+        socket
+            .authorize(
+                42,
+                &RunnerCommand::Resume {
+                    fresh_consent: None
+                }
+            )
+            .is_ok()
+    );
+    assert_eq!(
+        socket
+            .authorize(0, &RunnerCommand::Status)
+            .expect_err("HostShutdown is not a cutover peer"),
+        RunnerSocketError::Unauthorized
+    );
+    assert_eq!(
+        socket
+            .authorize(8, &RunnerCommand::Status)
+            .expect_err("unconfigured peer"),
+        RunnerSocketError::Unauthorized
+    );
+    drop(socket);
+    let _ = std::fs::remove_dir_all(root);
+}
+
+#[test]
+fn journal_is_root_only_and_operation_lock_is_ofd_owned() {
+    ensure_scratch_root();
+    let operation_id = OperationId::new("op-journal-contract").expect("operation id");
+    let candidate_id = CandidateId::new("candidate-journal-contract").expect("candidate id");
+    let revision_plan_id =
+        d2b_cutover::RevisionPlanId::new("plan-journal-contract").expect("plan id");
+    let operator_id = OperatorId::new("operator-journal-contract").expect("operator id");
+    let inventory =
+        ResetInventory::new(ResetScope::Zone, "zone-journal-contract").expect("inventory");
+    let preview = CutoverPreview::new_reset(
+        operation_id.clone(),
+        OperationKind::ScopedReset(ResetScope::Zone),
+        candidate_id.clone(),
+        revision_plan_id.clone(),
+        inventory.clone(),
+    )
+    .expect("preview");
+    let preview_digest = preview.digest().expect("preview digest");
+    let request = OperationRequest::new_reset(
+        operation_id.clone(),
+        ResetScope::Zone,
+        candidate_id.clone(),
+        revision_plan_id,
+        operator_id.clone(),
+        preview_digest,
+        inventory,
+    )
+    .expect("request");
+    let capability = BootstrapCapability::new(
+        operation_id.clone(),
+        candidate_id,
+        operator_id,
+        OperationKind::ScopedReset(ResetScope::Zone),
+        digest("journal-capability"),
+        100,
+        200,
+    )
+    .expect("capability");
+    let bootstrap = RunnerBootstrap {
+        capability,
+        request,
+        preview,
+        consent: None,
+        destructive_consent: None,
+        recovery: None,
+        host_digest: None,
+    };
+    let root = std::path::PathBuf::from(".scratch")
+        .join(format!("journal-contract-{}", std::process::id()));
+    let paths = RunnerPaths::new(&root, &operation_id);
+    let lock = acquire_operation_lock(&paths).expect("first lock");
+    let second = acquire_operation_lock(&paths).expect_err("second lock must contend");
+    assert_eq!(second, RunnerLockError::Contended);
+    persist_journal(&paths.journal, &bootstrap, b"").expect("persist journal");
+    let metadata = std::fs::metadata(&paths.journal).expect("journal metadata");
+    assert_eq!(
+        metadata.permissions().mode() & 0o777,
+        0o600,
+        "journal must be root-only"
+    );
+    let (loaded, loaded_records) = load_journal(&paths.journal).expect("load journal");
+    assert_eq!(loaded, bootstrap);
+    assert!(loaded_records.is_empty());
+    drop(lock);
+    let _ = std::fs::remove_dir_all(root);
+}
+
+#[test]
+fn journal_persist_and_load_share_the_frame_bound() {
+    ensure_scratch_root();
+    let operation_id = OperationId::new("op-journal-size").expect("operation id");
+    let candidate_id = CandidateId::new("candidate-journal-size").expect("candidate id");
+    let revision_plan_id = d2b_cutover::RevisionPlanId::new("plan-journal-size").expect("plan");
+    let operator_id = OperatorId::new("operator-journal-size").expect("operator");
+    let inventory = ResetInventory::new(ResetScope::Zone, "zone-journal-size").expect("inventory");
+    let preview = CutoverPreview::new_reset(
+        operation_id.clone(),
+        OperationKind::ScopedReset(ResetScope::Zone),
+        candidate_id.clone(),
+        revision_plan_id.clone(),
+        inventory.clone(),
+    )
+    .expect("preview");
+    let bootstrap = RunnerBootstrap {
+        capability: BootstrapCapability::new(
+            operation_id.clone(),
+            candidate_id.clone(),
+            operator_id.clone(),
+            OperationKind::ScopedReset(ResetScope::Zone),
+            digest("journal-size"),
+            100,
+            200,
+        )
+        .expect("capability"),
+        request: OperationRequest::new_reset(
+            operation_id.clone(),
+            ResetScope::Zone,
+            candidate_id,
+            revision_plan_id,
+            operator_id,
+            preview.digest().expect("preview digest"),
+            inventory,
+        )
+        .expect("request"),
+        preview,
+        consent: None,
+        destructive_consent: None,
+        recovery: None,
+        host_digest: None,
+    };
+    let root =
+        std::path::PathBuf::from(".scratch").join(format!("journal-size-{}", std::process::id()));
+    let paths = RunnerPaths::new(&root, &operation_id);
+    let oversized_record = format!("{{\"blob\":\"{}\"}}\n", "x".repeat(MAX_RUNNER_FRAME_BYTES));
+    let persist_error = persist_journal(&paths.journal, &bootstrap, oversized_record.as_bytes())
+        .expect_err("oversized journal must refuse before publication");
+    assert_eq!(persist_error.kind(), std::io::ErrorKind::InvalidData);
+    assert!(!paths.journal.exists());
+
+    std::fs::create_dir_all(paths.root()).expect("journal root");
+    std::fs::write(&paths.journal, vec![b'x'; MAX_RUNNER_FRAME_BYTES + 1]).expect("oversized file");
+    std::fs::set_permissions(&paths.journal, std::fs::Permissions::from_mode(0o600))
+        .expect("journal mode");
+    let load_error = load_journal(&paths.journal).expect_err("oversized journal must refuse");
+    assert_eq!(load_error.kind(), std::io::ErrorKind::InvalidData);
+    let _ = std::fs::remove_dir_all(root);
+}
+
+#[test]
+fn runner_binary_adopts_an_existing_journal_after_restart() {
+    if nix::unistd::geteuid().as_raw() != 0 {
+        println!("SKIP: binary runner adoption requires root");
+        return;
+    }
+    let Some(runner_path) = option_env!("CARGO_BIN_EXE_d2b-cutover-runner") else {
+        println!("SKIP: Cargo runner binary path is unavailable");
+        return;
+    };
+    let operation_id = OperationId::new("op-binary-adopt").expect("operation");
+    let candidate_id = CandidateId::new("candidate-binary-adopt").expect("candidate");
+    let revision_plan_id =
+        d2b_cutover::RevisionPlanId::new("plan-binary-adopt").expect("revision plan");
+    let operator_id = OperatorId::new("operator-binary-adopt").expect("operator");
+    let inventory = ResetInventory::new(ResetScope::Zone, "zone-binary-adopt").expect("inventory");
+    let preview = CutoverPreview::new_reset(
+        operation_id.clone(),
+        OperationKind::ScopedReset(ResetScope::Zone),
+        candidate_id.clone(),
+        revision_plan_id.clone(),
+        inventory.clone(),
+    )
+    .expect("preview");
+    let bootstrap = RunnerBootstrap {
+        capability: BootstrapCapability::new_with_identity(
+            operation_id.clone(),
+            candidate_id.clone(),
+            operator_id.clone(),
+            OperationKind::ScopedReset(ResetScope::Zone),
+            digest("binary-adopt"),
+            100,
+            200,
+            0,
+            BTreeSet::new(),
+        )
+        .expect("capability"),
+        request: OperationRequest::new_reset(
+            operation_id.clone(),
+            ResetScope::Zone,
+            candidate_id,
+            revision_plan_id.clone(),
+            operator_id,
+            preview.digest().expect("preview digest"),
+            inventory,
+        )
+        .expect("request"),
+        preview,
+        consent: None,
+        destructive_consent: None,
+        recovery: None,
+        host_digest: None,
+    };
+    let root = std::path::PathBuf::from(".scratch")
+        .join(format!("runner-binary-adopt-{}", std::process::id()));
+    let state_root = root.join("state");
+    let socket_root = root.join("socket");
+    let paths = RunnerPaths::new_with_socket_root(state_root.clone(), socket_root, &operation_id);
+    let mut journal = Journal::new(JournalBinding::new(
+        operation_id.clone(),
+        revision_plan_id,
+        bootstrap.request.request_digest().clone(),
+    ));
+    journal
+        .append_consent(CutoverPhase::Preflight)
+        .expect("consumed apply record");
+    persist_journal(
+        &paths.journal,
+        &bootstrap,
+        &journal.to_bytes().expect("journal bytes"),
+    )
+    .expect("persist existing journal");
+
+    let bootstrap_bytes = bootstrap.canonical_bytes().expect("bootstrap bytes");
+    let bootstrap_path = root.join("bootstrap.json");
+    std::fs::create_dir_all(&root).expect("bootstrap root");
+    std::fs::write(&bootstrap_path, bootstrap_bytes).expect("write bootstrap");
+    std::fs::set_permissions(&bootstrap_path, std::fs::Permissions::from_mode(0o600))
+        .expect("bootstrap mode");
+    let shell_path = ["/bin/sh", "/run/current-system/sw/bin/sh"]
+        .into_iter()
+        .find(|path| Path::new(path).is_file())
+        .expect("shell");
+    let mut child = Command::new(shell_path)
+        .args(["-c", "exec 3< \"$1\"; exec \"$2\"", "runner-adopt"])
+        .arg(&bootstrap_path)
+        .arg(runner_path)
+        .env("D2B_CUTOVER_BOOTSTRAP_FD", "3")
+        .env("D2B_CUTOVER_STATE_DIR", &state_root)
+        .env("D2B_CUTOVER_SOCKET_DIR", root.join("socket"))
+        .env("D2B_BROKER_SOCKET_PATH", root.join("broker.sock"))
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .expect("spawn runner");
+    let started = (0..200).any(|_| {
+        if let Some(status) = child.try_wait().expect("poll runner") {
+            panic!("runner exited before binding socket: {status}");
+        }
+        if paths.socket.exists() {
+            true
+        } else {
+            thread::sleep(Duration::from_millis(10));
+            false
+        }
+    });
+    assert!(started, "runner socket was not created");
+    let status = send_command(&paths.socket, &RunnerCommand::Status).expect("runner status");
+    assert!(status.accepted);
+    assert_eq!(
+        status.status.expect("status payload").state,
+        OperationState::Applying(CutoverPhase::Preflight)
+    );
+    child.kill().expect("stop runner");
+    child.wait().expect("reap runner");
+    let _ = std::fs::remove_dir_all(root);
+}
+
+#[test]
+fn runner_socket_survives_a_disconnected_client() {
+    ensure_scratch_root();
+    let operator_uid = nix::unistd::geteuid().as_raw();
+    let operation_id = OperationId::new("op-client-disconnect").expect("operation id");
+    let capability = BootstrapCapability::new_with_identity(
+        operation_id.clone(),
+        CandidateId::new("candidate-client-disconnect").expect("candidate id"),
+        OperatorId::new("operator-client-disconnect").expect("operator id"),
+        OperationKind::ScopedReset(ResetScope::Zone),
+        digest("client-disconnect"),
+        100,
+        200,
+        operator_uid,
+        BTreeSet::new(),
+    )
+    .expect("capability");
+    let bytes = capability.canonical_bytes().expect("canonical capability");
+    let mut ledger = CapabilityLedger::default();
+    let consumed =
+        BootstrapCapability::decode_and_consume(&bytes, 150, &mut ledger).expect("consume");
+    let root = std::path::PathBuf::from(".scratch")
+        .join(format!("runner-disconnect-{}", std::process::id()));
+    let paths = RunnerPaths::new(&root, &operation_id);
+    let socket = d2b_cutover::RunnerSocket::bind(&paths, consumed).expect("bind socket");
+    let socket_path = paths.socket.clone();
+    let thread = std::thread::spawn(move || {
+        assert!(socket.accept_command().is_err());
+        let (_, command, _) = socket.accept_command().expect("second client is accepted");
+        assert_eq!(command, RunnerCommand::Status);
+    });
+
+    drop(UnixStream::connect(&socket_path).expect("first client"));
+    let mut client = UnixStream::connect(&socket_path).expect("second client");
+    client
+        .write_all(&serde_json::to_vec(&RunnerCommand::Status).expect("status JSON"))
+        .expect("write status");
+    client
+        .shutdown(std::net::Shutdown::Write)
+        .expect("half-close status");
+    thread.join().expect("runner listener thread");
+    let _ = std::fs::remove_dir_all(root);
+}
+
+#[test]
+fn runner_socket_refuses_a_foreign_socket_directory_link() {
+    let operation_id = OperationId::new("op-foreign-socket").expect("operation id");
+    let capability = BootstrapCapability::new(
+        operation_id.clone(),
+        CandidateId::new("candidate-foreign-socket").expect("candidate id"),
+        OperatorId::new("operator-foreign-socket").expect("operator id"),
+        OperationKind::ScopedReset(ResetScope::Zone),
+        digest("foreign-socket"),
+        100,
+        200,
+    )
+    .expect("capability");
+    let bytes = capability.canonical_bytes().expect("canonical capability");
+    let mut ledger = CapabilityLedger::default();
+    let consumed =
+        BootstrapCapability::decode_and_consume(&bytes, 150, &mut ledger).expect("consume");
+    let root =
+        std::path::PathBuf::from(".scratch").join(format!("runner-foreign-{}", std::process::id()));
+    let state_root = root.join("state");
+    let socket_root = root.join("socket");
+    std::fs::create_dir_all(&socket_root).expect("socket root");
+    let target = root.join("foreign-target");
+    std::fs::create_dir_all(&target).expect("foreign target");
+    std::os::unix::fs::symlink(&target, socket_root.join("cutover")).expect("foreign link");
+    let paths = RunnerPaths::new_with_socket_root(state_root, socket_root, &operation_id);
+    let error = match d2b_cutover::RunnerSocket::bind(&paths, consumed) {
+        Ok(_) => panic!("foreign socket directory must refuse"),
+        Err(error) => error,
+    };
+    assert_eq!(error.kind(), std::io::ErrorKind::PermissionDenied);
+    let _ = std::fs::remove_dir_all(root);
+}
+
+#[test]
+fn lifecycle_group_traverses_runtime_socket_without_state_access() {
+    let root_uid = nix::unistd::geteuid().as_raw();
+    if root_uid != 0 {
+        println!("SKIP: runtime socket ownership contract requires root");
+        return;
+    }
+    let lifecycle_gid = nix::unistd::getgid().as_raw();
+    let nonmember_gid = if lifecycle_gid == 65_534 {
+        65_533
+    } else {
+        65_534
+    };
+    let operation_id = OperationId::new("op-socket-group").expect("operation id");
+    let candidate_id = CandidateId::new("candidate-socket-group").expect("candidate id");
+    let revision_plan_id =
+        d2b_cutover::RevisionPlanId::new("plan-socket-group").expect("revision plan id");
+    let operator_id = OperatorId::new(format!("uid-{root_uid}")).expect("operator id");
+    let inventory = ResetInventory::new(ResetScope::Zone, "zone-socket-group").expect("inventory");
+    let preview = CutoverPreview::new_reset(
+        operation_id.clone(),
+        OperationKind::ScopedReset(ResetScope::Zone),
+        candidate_id.clone(),
+        revision_plan_id.clone(),
+        inventory.clone(),
+    )
+    .expect("preview");
+    let request = OperationRequest::new_reset(
+        operation_id.clone(),
+        ResetScope::Zone,
+        candidate_id.clone(),
+        revision_plan_id,
+        operator_id.clone(),
+        preview.digest().expect("preview digest"),
+        inventory,
+    )
+    .expect("request");
+    let capability = BootstrapCapability::new_with_identity_and_group(
+        operation_id.clone(),
+        candidate_id,
+        operator_id,
+        OperationKind::ScopedReset(ResetScope::Zone),
+        digest("socket-group"),
+        100,
+        200,
+        root_uid,
+        BTreeSet::new(),
+        Some(lifecycle_gid),
+    )
+    .expect("capability");
+    let capability_bytes = capability.canonical_bytes().expect("capability bytes");
+    let mut ledger = CapabilityLedger::default();
+    let consumed = BootstrapCapability::decode_and_consume(&capability_bytes, 150, &mut ledger)
+        .expect("consume capability");
+    let root = Path::new(".scratch").join(format!("runner-socket-group-{}", std::process::id()));
+    let state_root = root.join("state");
+    let socket_root = root.join("runtime");
+    std::fs::create_dir_all(&socket_root).expect("socket root");
+    std::fs::set_permissions(&socket_root, std::fs::Permissions::from_mode(0o755))
+        .expect("socket root mode");
+    let paths = RunnerPaths::new_with_socket_root(state_root, socket_root, &operation_id);
+    let socket = d2b_cutover::RunnerSocket::bind(&paths, consumed).expect("bind socket");
+    let bootstrap = RunnerBootstrap {
+        capability,
+        request,
+        preview,
+        consent: None,
+        destructive_consent: None,
+        recovery: None,
+        host_digest: None,
+    };
+    persist_journal(&paths.journal, &bootstrap, b"").expect("persist journal");
+
+    let shared_socket_dir = paths
+        .socket_dir()
+        .parent()
+        .expect("shared socket directory");
+    for directory in [shared_socket_dir, paths.socket_dir()] {
+        let metadata = std::fs::symlink_metadata(directory).expect("socket directory metadata");
+        assert!(metadata.is_dir());
+        assert_eq!(metadata.uid(), 0);
+        assert_eq!(metadata.gid(), lifecycle_gid);
+        assert_eq!(metadata.permissions().mode() & 0o777, 0o710);
+    }
+    let socket_metadata = std::fs::symlink_metadata(&paths.socket).expect("socket metadata");
+    assert!(socket_metadata.file_type().is_socket());
+    assert_eq!(socket_metadata.uid(), 0);
+    assert_eq!(socket_metadata.gid(), lifecycle_gid);
+    assert_eq!(socket_metadata.permissions().mode() & 0o777, 0o660);
+    let state_metadata = std::fs::symlink_metadata(paths.operation_dir()).expect("state metadata");
+    assert_eq!(state_metadata.uid(), 0);
+    assert_eq!(state_metadata.permissions().mode() & 0o777, 0o700);
+    let journal_metadata = std::fs::symlink_metadata(&paths.journal).expect("journal metadata");
+    assert_eq!(journal_metadata.uid(), 0);
+    assert_eq!(journal_metadata.permissions().mode() & 0o777, 0o600);
+
+    run_socket_probe(&paths.socket, lifecycle_gid, "connect", true);
+    run_socket_probe(&paths.socket, nonmember_gid, "connect", false);
+    run_socket_probe(&paths.journal, lifecycle_gid, "read", false);
+
+    drop(socket);
+    let _ = std::fs::remove_dir_all(root);
+}
+
+#[test]
+fn socket_probe_child() {
+    let Ok(mode) = std::env::var("D2B_SOCKET_PROBE_MODE") else {
+        return;
+    };
+    let path = std::env::var("D2B_SOCKET_PROBE_PATH").expect("probe path");
+    let expected = std::env::var("D2B_SOCKET_PROBE_EXPECTED").expect("probe expectation");
+    let actual = match mode.as_str() {
+        "connect" => UnixStream::connect(path).is_ok(),
+        "read" => std::fs::read(path).is_ok(),
+        other => panic!("unknown probe mode {other}"),
+    };
+    assert_eq!(actual, expected == "yes");
+}
+
+fn run_socket_probe(path: &Path, gid: u32, mode: &str, expected: bool) {
+    let status = Command::new(std::env::current_exe().expect("test executable"))
+        .args(["--exact", "socket_probe_child", "--nocapture"])
+        .env("D2B_SOCKET_PROBE_MODE", mode)
+        .env("D2B_SOCKET_PROBE_PATH", path)
+        .env(
+            "D2B_SOCKET_PROBE_EXPECTED",
+            if expected { "yes" } else { "no" },
+        )
+        .uid(65_534)
+        .gid(gid)
+        .status()
+        .expect("run socket probe");
+    assert!(status.success(), "socket probe failed: {status}");
+}

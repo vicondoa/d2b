@@ -285,6 +285,26 @@ fn assert_zone_unavailable_modes(env: &FixtureEnv, args: &[&str], label: &str) {
     assert_zone_unavailable_human(&human, &env.missing_public_socket(), label);
 }
 
+#[test]
+fn normal_zone_runtime_ignores_retired_state_paths_after_cutover() {
+    let Some(env) = FixtureEnv::new() else {
+        return;
+    };
+    let retired_state = env._tmp.path().join("retired-state-directory");
+    fs::create_dir_all(&retired_state).expect("create retired-state poison directory");
+
+    let out = env.run(
+        &["list", "Guest", "--json"],
+        &[
+            ("D2B_MANIFEST_PATH", &retired_state),
+            ("D2B_BUNDLE_PATH", &retired_state),
+            ("D2B_HOST_RUNTIME_PATH", &retired_state),
+            ("D2B_DAEMON_STATE_DIR", &retired_state),
+        ],
+    );
+    assert_zone_unavailable_json(&out, &env.missing_public_socket(), "list Guest");
+}
+
 fn assert_usage_rejection(out: &Output, marker: &str, label: &str) {
     assert_eq!(
         out.status.code(),

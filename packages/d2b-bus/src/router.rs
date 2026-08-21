@@ -4604,6 +4604,192 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn exact_routes_deliver_only_to_the_named_recipient() {
+        let zone = ZoneId::parse("dev").unwrap();
+        let schema = fingerprint('1');
+        let generations = RouteGenerations::new(
+            Some(ResourceGeneration::new(2).unwrap()),
+            Some(ControllerGeneration::new(3).unwrap()),
+            ReconnectGeneration::new(1).unwrap(),
+        );
+        let service = ServiceName::parse("d2b.resource.v3").unwrap();
+        let member = RouteMember::method("ResourceService/Get").unwrap();
+        let provider_a = ResourceRef::parse("Provider/recipient-a").unwrap();
+        let provider_b = ResourceRef::parse("Provider/recipient-b").unwrap();
+        let route_a = RouteKey::new(
+            zone.clone(),
+            service.clone(),
+            member.clone(),
+            RouteTarget::provider(provider_a.clone()).unwrap(),
+            schema.clone(),
+            generations,
+        );
+        let route_b = RouteKey::new(
+            zone.clone(),
+            service.clone(),
+            member,
+            RouteTarget::provider(provider_b.clone()).unwrap(),
+            schema.clone(),
+            generations,
+        );
+        let caller_context_a = context(
+            "User/alice-a",
+            CALLER_UID,
+            service.as_str(),
+            schema.clone(),
+            generations,
+            Locality::Local,
+            EvidenceClass::UnixPeer,
+        )
+        .with_provider_ref(provider_a.clone());
+        let caller_context_b = context(
+            "User/alice-b",
+            "55555555-5555-4555-8555-555555555555",
+            service.as_str(),
+            schema.clone(),
+            generations,
+            Locality::Local,
+            EvidenceClass::UnixPeer,
+        )
+        .with_provider_ref(provider_b.clone());
+        let endpoint_a_context = context(
+            "Provider/recipient-a",
+            "33333333-3333-4333-8333-333333333333",
+            service.as_str(),
+            schema.clone(),
+            generations,
+            Locality::Local,
+            EvidenceClass::UnixPeer,
+        )
+        .with_provider_ref(provider_a.clone());
+        let endpoint_b_context = context(
+            "Provider/recipient-b",
+            "44444444-4444-4444-8444-444444444444",
+            service.as_str(),
+            schema,
+            generations,
+            Locality::Local,
+            EvidenceClass::UnixPeer,
+        )
+        .with_provider_ref(provider_b.clone());
+        let endpoint_a = RecordingEndpoint::new();
+        let endpoint_b = RecordingEndpoint::new();
+        let subjects = [
+            bound_subject(&caller_context_a),
+            bound_subject(&caller_context_b),
+            bound_subject(&endpoint_a_context),
+            bound_subject(&endpoint_b_context),
+        ];
+        let native = NativeAuthorizer::new(
+            ApiCatalog::standard(),
+            Some(policy(
+                1,
+                &subjects,
+                &[SessionVerb::Connect, SessionVerb::Invoke],
+                &[ResourceVerb::Get],
+            )),
+        )
+        .unwrap();
+        let (bus, mut registrar) = ZoneBus::with_clock(
+            zone,
+            BusAuthorizer::new(native, state(1)).unwrap(),
+            BusConfig::default(),
+            Arc::new(ManualClock::new(1)),
+        )
+        .unwrap();
+        let endpoint_a_ingress = registrar
+            .register(SessionRegistration::new(
+                endpoint_a_context,
+                vec![route_a.clone()],
+                endpoint_a.clone(),
+            ))
+            .unwrap();
+        let endpoint_b_ingress = registrar
+            .register(SessionRegistration::new(
+                endpoint_b_context,
+                vec![route_b.clone()],
+                endpoint_b.clone(),
+            ))
+            .unwrap();
+        let caller = registrar
+            .register(SessionRegistration::new(
+                caller_context_a,
+                Vec::new(),
+                RecordingEndpoint::new(),
+            ))
+            .unwrap();
+        let caller_b = registrar
+            .register(SessionRegistration::new(
+                caller_context_b,
+                Vec::new(),
+                RecordingEndpoint::new(),
+            ))
+            .unwrap();
+
+        caller
+            .invoke_resource(
+                route_a.clone(),
+                operation("recipient-a"),
+                ResourceCall::Get(ResourceRef::parse("Host/system").unwrap()),
+                b"to-a".to_vec(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(endpoint_a.call_count(), 1);
+        assert_eq!(endpoint_b.call_count(), 0);
+        assert_eq!(
+            endpoint_a.calls.lock().unwrap()[0]
+                .0
+                .target()
+                .resource_ref(),
+            &provider_a
+        );
+        assert_eq!(endpoint_a.calls.lock().unwrap()[0].2, b"to-a".to_vec());
+
+        assert_eq!(
+            caller
+                .invoke_resource(
+                    route_b.clone(),
+                    operation("wrong-recipient"),
+                    ResourceCall::Get(ResourceRef::parse("Host/system").unwrap()),
+                    b"must-not-deliver".to_vec(),
+                )
+                .await,
+            Err(BusError::Authorization(
+                AuthorizationError::SessionBindingMismatch
+            ))
+        );
+        assert_eq!(endpoint_a.call_count(), 1);
+        assert_eq!(endpoint_b.call_count(), 0);
+
+        caller_b
+            .invoke_resource(
+                route_b.clone(),
+                operation("recipient-b"),
+                ResourceCall::Get(ResourceRef::parse("Host/system").unwrap()),
+                b"to-b".to_vec(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(endpoint_a.call_count(), 1);
+        assert_eq!(endpoint_b.call_count(), 1);
+        assert_eq!(
+            endpoint_b.calls.lock().unwrap()[0]
+                .0
+                .target()
+                .resource_ref(),
+            &provider_b
+        );
+        assert_eq!(endpoint_b.calls.lock().unwrap()[0].2, b"to-b".to_vec());
+
+        registrar.revoke(caller).await.unwrap();
+        registrar.revoke(caller_b).await.unwrap();
+        registrar.revoke(endpoint_a_ingress).await.unwrap();
+        registrar.revoke(endpoint_b_ingress).await.unwrap();
+        drop(bus);
+    }
+
+    #[tokio::test]
     async fn exact_route_is_required_and_no_direct_resource_fallback_exists() {
         let mut harness = resource_harness(
             RouteMember::method("ResourceService/Get").unwrap(),

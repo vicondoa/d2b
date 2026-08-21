@@ -130,6 +130,7 @@ impl std::fmt::Debug for ContextBackend {
 /// The selected Zone and its authenticated-session request facade.
 pub(crate) struct ZoneContext {
     zone_name: String,
+    explicit_zone: bool,
     socket_path: PathBuf,
     zone_path: d2b_contracts_zone_session::v3::zone_routing::ZonePath,
     backend: ContextBackend,
@@ -140,6 +141,7 @@ impl std::fmt::Debug for ZoneContext {
         formatter
             .debug_struct("ZoneContext")
             .field("zone_name", &self.zone_name)
+            .field("explicit_zone", &self.explicit_zone)
             .field("backend", &self.backend)
             .finish()
     }
@@ -151,6 +153,12 @@ impl ZoneContext {
             .map(PathBuf::from)
             .unwrap_or_else(|| PathBuf::from("/run/d2b/public.sock"));
         Self::from_socket("local-root".to_owned(), socket_path)
+    }
+
+    pub(crate) fn local_only_with_explicit_zone(explicit_zone: bool) -> Self {
+        let mut context = Self::local_only();
+        context.explicit_zone = explicit_zone;
+        context
     }
 
     /// Discover the nearest reachable Zone socket.
@@ -166,6 +174,7 @@ impl ZoneContext {
         let requested_zone = zone_arg
             .map(str::to_owned)
             .or_else(|| env::var("D2B_ZONE").ok().filter(|value| !value.is_empty()));
+        let explicit_zone = requested_zone.is_some();
         let zone_name = requested_zone.as_deref().unwrap_or("local-root").to_owned();
         validate_zone_name(&zone_name)?;
 
@@ -198,6 +207,7 @@ impl ZoneContext {
         let backend = canonical_backend(&selected_zone, &socket_path)?;
         Ok(Self {
             zone_name: selected_zone,
+            explicit_zone,
             socket_path,
             zone_path,
             backend,
@@ -220,6 +230,7 @@ impl ZoneContext {
         backend.injected = Some(session_client);
         Ok(Self {
             zone_name,
+            explicit_zone: false,
             socket_path,
             zone_path,
             backend,
@@ -232,6 +243,7 @@ impl ZoneContext {
             .expect("validated local Zone socket backend");
         Self {
             zone_name,
+            explicit_zone: false,
             socket_path,
             zone_path,
             backend,
@@ -240,6 +252,10 @@ impl ZoneContext {
 
     pub(crate) fn zone_name(&self) -> &str {
         &self.zone_name
+    }
+
+    pub(crate) const fn has_explicit_zone(&self) -> bool {
+        self.explicit_zone
     }
 
     pub(crate) fn zone_ref(&self) -> String {
@@ -289,6 +305,34 @@ impl ZoneContext {
         deadline: RequestDeadline,
         mode: OutputMode,
     ) -> Result<Value, CliFailure> {
+        self.invoke_with_verb(
+            method,
+            payload,
+            deadline,
+            mode,
+            resource_verb(method, false),
+        )
+    }
+
+    /// Invoke one typed resource-plane mutation with an explicit mutating verb.
+    pub(crate) fn invoke_mutating(
+        &self,
+        method: &str,
+        payload: Value,
+        deadline: RequestDeadline,
+        mode: OutputMode,
+    ) -> Result<Value, CliFailure> {
+        self.invoke_with_verb(method, payload, deadline, mode, resource_verb(method, true))
+    }
+
+    fn invoke_with_verb(
+        &self,
+        method: &str,
+        payload: Value,
+        deadline: RequestDeadline,
+        mode: OutputMode,
+        verb: ResourceVerb,
+    ) -> Result<Value, CliFailure> {
         #[cfg(test)]
         if let Some(client) = &self.backend.injected {
             return self.invoke_injected(
@@ -305,7 +349,14 @@ impl ZoneContext {
         let value = self
             .backend
             .canonical
-            .invoke(method, payload, deadline)
+            .invoke_with_verb(
+                method,
+                payload,
+                deadline,
+                operation_service(method),
+                None,
+                verb,
+            )
             .map_err(|error| self.client_failure(error, mode))?;
         self.decorate_response(value)
     }
@@ -658,6 +709,7 @@ impl ZoneContext {
     }
 
     fn client_failure(&self, error: ClientError, mode: OutputMode) -> CliFailure {
+        let admission_recovery = matches!(&error, ClientError::AmbiguousMutation);
         let (class, message, exit_code) = match error {
             ClientError::InvalidTarget => {
                 ("resource-schema-invalid", "resource target was invalid", 2)
@@ -710,12 +762,15 @@ impl ZoneContext {
             ),
             ClientError::Remote { kind, .. } => resource_error_surface(kind),
         };
-        self.failure(class, message, mode, exit_code)
+        let mut failure = self.failure(class, message, mode, exit_code);
+        failure.admission_recovery = admission_recovery;
+        failure
     }
 
     #[cfg(test)]
     fn transport_failure(&self, error: TransportError, mode: OutputMode) -> CliFailure {
-        match error {
+        let admission_recovery = false;
+        let mut failure = match error {
             TransportError::Unavailable | TransportError::Io => {
                 self.failure("zone-unavailable", "Zone runtime is unavailable", mode, 1)
             }
@@ -743,7 +798,9 @@ impl ZoneContext {
                 mode,
                 77,
             ),
-        }
+        };
+        failure.admission_recovery = admission_recovery;
+        failure
     }
 
     /// Emit a complete response using the selected output mode.
@@ -856,16 +913,6 @@ impl CanonicalZoneBackend {
         ))
     }
 
-    fn invoke(
-        &self,
-        method: &str,
-        payload: Value,
-        deadline: RequestDeadline,
-    ) -> Result<Value, ClientError> {
-        let service = operation_service(method);
-        self.invoke_service(method, payload, deadline, service, None)
-    }
-
     fn invoke_service(
         &self,
         operation: &str,
@@ -874,10 +921,28 @@ impl CanonicalZoneBackend {
         service: ZoneServiceKind,
         session_verb: Option<&str>,
     ) -> Result<Value, ClientError> {
+        self.invoke_with_verb(
+            operation,
+            payload,
+            deadline,
+            service,
+            session_verb,
+            resource_verb(operation, false),
+        )
+    }
+
+    fn invoke_with_verb(
+        &self,
+        operation: &str,
+        payload: Value,
+        deadline: RequestDeadline,
+        service: ZoneServiceKind,
+        session_verb: Option<&str>,
+        verb: ResourceVerb,
+    ) -> Result<Value, ClientError> {
         let payload = serde_json::to_vec(&payload).map_err(|_| ClientError::ContractViolation)?;
         let payload =
             CanonicalJsonObject::parse(&payload).map_err(|_| ClientError::ContractViolation)?;
-        let verb = canonical_verb(operation);
         let options = call_options(deadline, verb)?;
         let cancellation = CancellationToken::default();
         let request = ResourceCallOptions::new(payload, false, &cancellation);
@@ -1583,6 +1648,25 @@ fn canonical_verb(method: &str) -> ResourceVerb {
     }
 }
 
+fn resource_verb(method: &str, mutating: bool) -> ResourceVerb {
+    if mutating {
+        ResourceVerb::Create
+    } else {
+        canonical_verb(method)
+    }
+}
+
+#[cfg(test)]
+mod resource_verb_tests {
+    use super::*;
+
+    #[test]
+    fn host_cutover_mutations_use_a_mutating_resource_verb() {
+        assert_eq!(resource_verb("HostCutover", true), ResourceVerb::Create);
+        assert_eq!(resource_verb("HostCutover", false), ResourceVerb::Get);
+    }
+}
+
 fn operation_service(method: &str) -> ZoneServiceKind {
     match method {
         "ZoneGet" | "ZoneList" | "ZoneStatus" => ZoneServiceKind::Zone,
@@ -1653,7 +1737,9 @@ fn resource_error_kind(value: &str) -> ResourceErrorKind {
         "resource-not-found" => ResourceErrorKind::ResourceNotFound,
         "resource-already-exists" => ResourceErrorKind::ResourceAlreadyExists,
         "resource-conflict" => ResourceErrorKind::ResourceConflict,
-        "resource-schema-invalid" => ResourceErrorKind::ResourceSchemaInvalid,
+        "resource-schema-invalid" | "wire-invalid-frame" => {
+            ResourceErrorKind::ResourceSchemaInvalid
+        }
         "resource-ref-invalid" | "ref-invalid" => ResourceErrorKind::ResourceRefInvalid,
         "resource-owner-cycle" => ResourceErrorKind::ResourceOwnerCycle,
         "resource-owner-depth" => ResourceErrorKind::ResourceOwnerDepth,
@@ -2137,6 +2223,20 @@ mod tests {
     }
 
     #[test]
+    fn wire_invalid_frame_preserves_the_validation_exit_surface() {
+        let failure = ZoneContext::local_only().client_failure(
+            ClientError::Remote {
+                kind: resource_error_kind("wire-invalid-frame"),
+                retry: RetryClass::Never,
+            },
+            OutputMode::Json,
+        );
+        assert_eq!(failure.exit_code, 2);
+        assert!(failure.message.starts_with("resource-schema-invalid:"));
+        assert!(!failure.admission_recovery);
+    }
+
+    #[test]
     fn expedited_deadlines_use_the_ten_second_reconcile_bound() {
         assert_eq!(
             ZoneContext::expedited_deadline(Some("10s")).unwrap(),
@@ -2416,6 +2516,115 @@ mod tests {
         let write = call_options(deadline, ResourceVerb::UpdateSpec).unwrap();
         assert!(write.metadata.has_idempotency_key());
         assert_eq!(write.retry.max_attempts(), 1);
+    }
+
+    #[test]
+    fn host_cutover_preview_and_apply_decode_as_canonical_resource_responses() {
+        use d2b_contracts_control::public_wire::{HostCutoverOperation, HostCutoverResponse};
+
+        for operation in [HostCutoverOperation::Preview, HostCutoverOperation::Apply] {
+            let response = serde_json::to_vec(&HostCutoverResponse {
+                operation,
+                operation_id: Some("cutover-test".to_owned()),
+                state: "planned".to_owned(),
+                phase: 0,
+                preview_digest: Some("sha256:".to_owned() + &"a".repeat(64)),
+                summary: "redaction-safe cutover response".to_owned(),
+                mutation_accepted: matches!(operation, HostCutoverOperation::Apply),
+                inventory: None,
+            })
+            .expect("response JSON");
+            let client = Arc::new(MockClient {
+                requests: Mutex::new(Vec::new()),
+                response,
+            });
+            let zone_path = zone_path("local-root").expect("zone path");
+            let owner = owner_for_zone(&zone_path);
+            let connector = CliZoneConnector {
+                zone_name: "local-root".to_owned(),
+                zone_path: zone_path.clone(),
+                socket_path: PathBuf::from("/run/d2b/public.sock"),
+                service: ZoneServiceKind::Resource,
+                operation: "HostCutover".to_owned(),
+                session_verb: None,
+                handshake_timeout: Duration::from_secs(1),
+                injected: Some(client),
+            };
+            let client = ZoneClient::new(
+                RouteTable::new(vec![RouteRecord::new(
+                    owner.clone(),
+                    TransportKind::LocalUnix,
+                )]),
+                connector,
+            );
+            let target = TargetInput::Service {
+                owner,
+                service: ZoneServiceKind::Resource,
+            };
+            let connection = block_on(client.connect(
+                &target,
+                ZoneServiceKind::Resource,
+                TransportSelection::exact(TransportKind::LocalUnix),
+            ))
+            .expect("connect");
+            let deadline = ZoneContext::deadline(Some("30s")).expect("deadline");
+            let options = call_options(deadline, ResourceVerb::Get).expect("call options");
+            let cancellation = CancellationToken::default();
+            let payload = CanonicalJsonObject::parse(
+                serde_json::to_vec(&json!({
+                    "operation": operation,
+                }))
+                .expect("request JSON")
+                .as_slice(),
+            )
+            .expect("canonical request");
+            let request = ResourceCallOptions::new(payload, false, &cancellation);
+            let decoded =
+                block_on(client.call_connected(&connection, ResourceVerb::Get, options, request))
+                    .expect("canonical response");
+            assert_eq!(
+                decoded.get("operation"),
+                Some(&d2b_contracts_zone_session::v3::CanonicalJsonValue::String(
+                    serde_json::to_value(operation)
+                        .expect("operation")
+                        .as_str()
+                        .expect("operation string")
+                        .to_owned(),
+                ))
+            );
+        }
+    }
+
+    #[test]
+    fn host_cutover_error_response_remains_typed_and_redacted() {
+        let error = decode_cli_response(
+            br#"{"type":"error","error":{"errorClass":"authorization-denied","retryClass":"never","message":"secret-subject"}}"#,
+        )
+        .expect_err("error response");
+        assert!(matches!(
+            error,
+            ClientError::Remote {
+                kind: ResourceErrorKind::AuthorizationDenied,
+                ..
+            }
+        ));
+        let context = ZoneContext::with_client(
+            "local-root",
+            "/run/d2b/public.sock",
+            Arc::new(MockClient {
+                requests: Mutex::new(Vec::new()),
+                response: br#"{"ok":true}"#.to_vec(),
+            }),
+        )
+        .expect("context");
+        let failure = context.client_failure(error, OutputMode::Json);
+        assert!(!failure.message.contains("secret-subject"));
+        assert!(
+            !failure
+                .rendered_stderr
+                .unwrap_or_default()
+                .contains("secret-subject")
+        );
     }
 
     #[test]

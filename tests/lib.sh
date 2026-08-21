@@ -63,11 +63,17 @@ export SCCACHE_CACHE_SIZE="${SCCACHE_CACHE_SIZE:-10G}"
 readonly -a D2B_FIXTURE_INDEPENDENT_POLICY_BINARIES=(
   policy_dash_gate
   policy_changelog_gate
+  policy_effectport_boundary
   policy_provider_crates
   policy_resource_mutation_seal
   policy_production_closure
+  policy_spec_vocabulary
+  policy_test_determinism
+  policy_test_placement
+  policy_telemetry_redaction
   policy_docs
   policy_gas_city
+  security_matrix_coverage
 )
 
 d2b_repo_root() {

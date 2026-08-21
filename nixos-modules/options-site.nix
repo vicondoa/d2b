@@ -208,9 +208,9 @@
       default = [ ];
       example = [ "alice" ];
       description = ''
-        Users to add to the `d2b` lifecycle group. Members of that
-        group can connect to the daemon public socket and perform
-        lifecycle operations.
+        Users to grant launcher-specific lifecycle actions. Launcher
+        users are also added to the `d2b` lifecycle group; configured
+        Admin users receive that group membership as well.
 
         When `d2b.daemonExperimental.enable = true`, the same user
         list is also added to the canonical `d2b`
@@ -218,7 +218,7 @@
 
         The framework does NOT create the users - declare them in
         your top-level NixOS config with `users.users.<name> = { …
-        };`. d2b only adds the launcher groups to their
+        };`. d2b only adds the lifecycle group to their
         `extraGroups`.
 
         Empty list = nobody is a launcher principal. The framework
@@ -237,8 +237,9 @@
         AND admin-gated, potentially destructive lifecycle operations
         such as `d2b vm exec` (which opens
         an authenticated command/console session inside a guest).
-        Admin users still need to connect over the daemon public
-        socket, so they SHOULD also be present in `launcherUsers`.
+        Admin users are also added to the `d2b` lifecycle group so
+        they can connect over the daemon public socket. Membership
+        does not replace the daemon's Admin authorization check.
       '';
     };
 

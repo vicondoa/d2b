@@ -357,8 +357,6 @@ fn apply_optional_fixture_reads(input: &mut DoctorInput) {
         if let Some(drop_total) = value.get("drop_total").and_then(Value::as_u64) {
             input.telemetry.drop_total = drop_total;
         }
-    } else if manifest_observability_disabled() {
-        input.telemetry.phase = "unavailable".to_owned();
     }
 
     if let Some(value) = read_fixture(&["D2B_AUDIT_STATUS_PATH", "D2B_ZONE_AUDIT_STATUS_PATH"]) {
@@ -403,24 +401,6 @@ fn read_fixture(names: &[&str]) -> Option<Value> {
         return None;
     }
     serde_json::from_slice(&bytes).ok()
-}
-
-fn manifest_observability_disabled() -> bool {
-    let Some(path) = std::env::var_os("D2B_MANIFEST_PATH") else {
-        return false;
-    };
-    read_fixture_value(Path::new(&path)).and_then(|value| {
-        value
-            .pointer("/_observability/enabled")
-            .and_then(Value::as_bool)
-    }) == Some(false)
-}
-
-fn read_fixture_value(path: &Path) -> Option<Value> {
-    let bytes = fs::read(path).ok()?;
-    (bytes.len() <= crate::MAX_FRAME_BYTES)
-        .then(|| serde_json::from_slice(&bytes).ok())
-        .flatten()
 }
 
 fn audit_directory_health(path: &Path) -> Option<(u32, bool)> {

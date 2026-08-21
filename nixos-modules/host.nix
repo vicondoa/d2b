@@ -155,6 +155,7 @@ in
     # templates microvm.nix would have emitted are not declared;
     # the broker SpawnRunner pipeline owns every spawn directly.
     ./host-users.nix
+    ./host-sccache.nix
     ./host-polkit.nix
     ./host-activation.nix
     ./host-keys.nix

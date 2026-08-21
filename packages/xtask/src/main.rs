@@ -450,7 +450,7 @@ fn main() -> std::process::ExitCode {
         }
         _ => {
             eprintln!(
-                "usage: cargo run --manifest-path Cargo.toml -p xtask -- <gen-schemas|gen-zone-storage-schema|gen-cli-schemas|gen-zone-schemas|gen-zone-nix-options|gen-resource-schemas|gen-error-codes|gen-provider-packaging|gen-semantic-service-schemas|gen-cli-shell-artifacts|gen-guest-proto|gen-guest-ttrpc|gen-resource-proto|gen-resource-ttrpc|gen-daemon-api|gen-package-policy-inputs [--check|--write]|release-notes <version>|adr0035-inventory [--output <path>]|changelog-fold [--check]|bazel-evidence <check-security|security-digest|classify-failure|redact-log> ...|process-marker-pin|check-provider-crate-layout|check-provider-layout|test-runtime-ledger <record|check|lint|help> [options]|redact-diagnostics --repo-root <path> [--home <path>] [--tail-lines <count>]|delivery wave <snapshot|validate-import|seal|merge-target|merge-eligibility|help> [options]|heavy-gate <-- <command> [args...] | verify-slot>>"
+                "usage: cargo run --manifest-path Cargo.toml -p xtask -- <gen-schemas|gen-zone-storage-schema|gen-cli-schemas|gen-zone-schemas|gen-zone-nix-options|gen-resource-schemas|gen-error-codes|gen-provider-packaging|gen-semantic-service-schemas|gen-cli-shell-artifacts|gen-guest-proto|gen-guest-ttrpc|gen-resource-proto|gen-resource-ttrpc|gen-daemon-api|gen-package-policy-inputs [--check|--write]|release-notes <version>|adr0035-inventory [--output <path>]|changelog-fold [--check]|bazel-evidence <check-security|security-digest|classify-failure|redact-log> ...|process-marker-pin|check-provider-crate-layout|check-provider-layout|test-runtime-ledger <record|check|lint|help> [options]|redact-diagnostics --repo-root <path> [--home <path>] [--tail-lines <count>]|delivery wave <snapshot|validate-import|recovery-import|seal|merge-target|merge-eligibility|help> [options]|heavy-gate <-- <command> [args...] | verify-slot>>"
             );
             std::process::ExitCode::FAILURE
         }
@@ -915,7 +915,112 @@ fn gen_schemas() -> Result<Vec<PathBuf>, Box<dyn std::error::Error>> {
         .join(SCHEMA_VERSION);
     fs::create_dir_all(&out_dir)?;
     let schemas = schema_documents();
-    write_schemas(&out_dir, &schemas)
+    let mut written = write_schemas(&out_dir, &schemas)?;
+    let delivery_dir = repo_root.join("docs/reference/schemas/delivery");
+    fs::create_dir_all(&delivery_dir)?;
+    written.push(write_recovery_schema(&delivery_dir)?);
+    Ok(written)
+}
+
+fn write_recovery_schema(out_dir: &Path) -> Result<PathBuf, Box<dyn std::error::Error>> {
+    let mut schema = serde_json::to_value(schemars::schema_for!(
+        delivery::recovery::RecoveryAttestation
+    ))?;
+    schema["$schema"] = serde_json::json!("https://json-schema.org/draft/2020-12/schema");
+    let properties = schema
+        .get_mut("properties")
+        .and_then(serde_json::Value::as_object_mut)
+        .ok_or("recovery schema has no properties")?;
+    properties
+        .get_mut("artifactKind")
+        .ok_or("recovery schema artifact kind is missing")?["const"] =
+        serde_json::json!(delivery::recovery::RECOVERY_ATTESTATION_ARTIFACT_KIND);
+    properties
+        .get_mut("schemaVersion")
+        .ok_or("recovery schema version is missing")?["const"] =
+        serde_json::json!(delivery::recovery::RECOVERY_ATTESTATION_SCHEMA_VERSION);
+    properties
+        .get_mut("program")
+        .ok_or("recovery schema program is missing")?["enum"] = serde_json::json!([
+        delivery::recovery::RECOVERY_PROGRAM,
+        delivery::recovery::RECOVERY_PROGRAM_RELEASE
+    ]);
+    for field in [
+        "hostIdentitySha256",
+        "operatorSubjectSha256",
+        "previewSha256",
+        "closureStorePathSha256",
+        "recoveryPointLocatorSha256",
+        "restoreInstructionsSha256",
+    ] {
+        properties
+            .get_mut(field)
+            .ok_or("recovery schema digest field is missing")?["pattern"] =
+            serde_json::json!("^[a-f0-9]{64}$");
+    }
+    for field in ["commitOid", "treeOid"] {
+        properties
+            .get_mut(field)
+            .ok_or("recovery schema object-id field is missing")?["pattern"] =
+            serde_json::json!("^(?:[a-f0-9]{40}|[a-f0-9]{64})$");
+    }
+    properties
+        .get_mut("bundleGeneration")
+        .ok_or("recovery schema generation field is missing")?
+        .as_object_mut()
+        .ok_or("recovery schema generation field is not an object")?
+        .extend([
+            ("minLength".to_owned(), serde_json::json!(1)),
+            ("maxLength".to_owned(), serde_json::json!(128)),
+            (
+                "pattern".to_owned(),
+                serde_json::json!(r"^[^\s/\\\u0000-\u001f]+$"),
+            ),
+        ]);
+    for field in [
+        "previewedAtUnix",
+        "capturedAtUnix",
+        "verifiedAtUnix",
+        "attestedAtUnix",
+        "retentionUntilUnix",
+        "expiresAtUnix",
+    ] {
+        properties
+            .get_mut(field)
+            .ok_or("recovery schema timestamp field is missing")?["maximum"] =
+            serde_json::json!(delivery::recovery::MAX_RECOVERY_UNIX_SECONDS);
+    }
+    for field in ["verificationResult", "result"] {
+        properties
+            .get_mut(field)
+            .ok_or("recovery schema result field is missing")?["const"] =
+            serde_json::json!("passed");
+    }
+    let qualification = schema
+        .get_mut("definitions")
+        .and_then(serde_json::Value::as_object_mut)
+        .and_then(|definitions| definitions.get_mut("RecoveryQualification"))
+        .and_then(serde_json::Value::as_object_mut)
+        .and_then(|definition| definition.get_mut("properties"))
+        .and_then(serde_json::Value::as_object_mut)
+        .ok_or("recovery schema qualification is missing")?;
+    for field in [
+        "bootAndSystemStateCovered",
+        "affectedArtifactInventoryCovered",
+        "preservedIdentityStateCovered",
+        "sameHostRestoreTarget",
+        "readOnlyUntilExpiry",
+    ] {
+        qualification
+            .get_mut(field)
+            .ok_or("recovery schema qualification field is missing")?["const"] =
+            serde_json::json!(true);
+    }
+    let path = out_dir.join("recovery-point-attestation-v1.schema.json");
+    let mut data = serde_json::to_string_pretty(&schema)?;
+    data.push('\n');
+    fs::write(&path, data)?;
+    Ok(path)
 }
 
 fn gen_zone_storage_schema() -> Result<Vec<PathBuf>, Box<dyn std::error::Error>> {

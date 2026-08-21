@@ -83,15 +83,17 @@ pub enum WaveCommand {
     Help,
     Snapshot,
     ValidateImport,
+    RecoveryImport,
     Seal,
     MergeTarget,
     MergeEligibility,
 }
 
 /// Every wave subcommand, in workflow order.
-pub const WAVE_COMMANDS: [WaveCommand; 6] = [
+pub const WAVE_COMMANDS: [WaveCommand; 7] = [
     WaveCommand::Snapshot,
     WaveCommand::ValidateImport,
+    WaveCommand::RecoveryImport,
     WaveCommand::Seal,
     WaveCommand::MergeTarget,
     WaveCommand::MergeEligibility,
@@ -104,6 +106,7 @@ impl WaveCommand {
             Self::Help => "help",
             Self::Snapshot => "snapshot",
             Self::ValidateImport => "validate-import",
+            Self::RecoveryImport => "recovery-import",
             Self::Seal => "seal",
             Self::MergeTarget => "merge-target",
             Self::MergeEligibility => "merge-eligibility",
@@ -122,6 +125,7 @@ impl WaveCommand {
             Self::Help => "ADR046-delivery-002",
             Self::Snapshot => "ADR046-delivery-002",
             Self::ValidateImport => "ADR046-delivery-003",
+            Self::RecoveryImport => "ADR046-delivery-007",
             Self::Seal | Self::MergeTarget | Self::MergeEligibility => "ADR046-delivery-006",
         }
     }
@@ -136,6 +140,9 @@ impl WaveCommand {
             Self::ValidateImport => {
                 "Import CI, local, and host validator command results as evidence addressed by \
                  candidate ID."
+            }
+            Self::RecoveryImport => {
+                "Validate and import one strict, candidate-bound recovery-point attestation."
             }
             Self::Seal => "Bind passing validator lanes to one candidate.",
             Self::MergeTarget => {
@@ -169,6 +176,17 @@ impl WaveCommand {
                  [--lane github-ci|local-host] [--command TEXT] [--log PATH] [--locator TEXT] \
                  [--candidate CANDIDATE_ID] [--state-dir DIR]"
             }
+            Self::RecoveryImport => {
+                "cargo run --manifest-path Cargo.toml -p xtask -- delivery wave recovery-import \
+                 --snapshot PATH --attestation PATH --repo LOGICAL_ID=CHECKOUT_ROOT \
+                 --candidate-id CANDIDATE_ID --commit-oid OID --tree-oid OID \
+                 --closure-store-path-sha256 DIGEST --bundle-generation GENERATION \
+                 --preview-sha256 DIGEST --host-identity-sha256 DIGEST \
+                 --operator-subject-sha256 DIGEST --restore-instructions-sha256 DIGEST \
+                 --recovery-point-locator-sha256 DIGEST \
+                 --required-remaining-ttl-seconds SECONDS --verifier-now-unix SECONDS \
+                 --command VERIFIER_NAME [--state-dir DIR]"
+            }
             Self::Seal => {
                 "cargo run --manifest-path Cargo.toml -p xtask -- delivery wave seal --snapshot PATH --repo LOGICAL_ID=CHECKOUT_ROOT \
                  [--state-dir DIR]"
@@ -189,6 +207,24 @@ impl WaveCommand {
             Self::Help => &[],
             Self::Snapshot => &["--program", "--wave", "--repo", "--base", "--pull-request"],
             Self::ValidateImport => &["--snapshot", "--validation", "--result", "--repo"],
+            Self::RecoveryImport => &[
+                "--snapshot",
+                "--attestation",
+                "--repo",
+                "--candidate-id",
+                "--commit-oid",
+                "--tree-oid",
+                "--closure-store-path-sha256",
+                "--bundle-generation",
+                "--preview-sha256",
+                "--host-identity-sha256",
+                "--operator-subject-sha256",
+                "--restore-instructions-sha256",
+                "--recovery-point-locator-sha256",
+                "--required-remaining-ttl-seconds",
+                "--verifier-now-unix",
+                "--command",
+            ],
             Self::Seal => &["--snapshot", "--repo"],
             Self::MergeTarget => &["--seal", "--target", "--repo"],
             Self::MergeEligibility => &["--seal", "--repo"],
@@ -214,6 +250,7 @@ impl WaveCommand {
                 "--locator",
                 "--candidate",
             ],
+            Self::RecoveryImport => &["--state-dir"],
             Self::MergeEligibility => &["--state-dir", "--target"],
             _ => &["--state-dir"],
         }
@@ -239,6 +276,7 @@ impl WaveCommand {
             Self::Help
                 | Self::Snapshot
                 | Self::ValidateImport
+                | Self::RecoveryImport
                 | Self::Seal
                 | Self::MergeTarget
                 | Self::MergeEligibility
@@ -486,6 +524,7 @@ fn dispatch_wave(args: &[String]) -> Result<WorkflowOutput> {
         }
         WaveCommand::Snapshot => super::snapshot::run(rest),
         WaveCommand::ValidateImport => super::evidence::run(rest),
+        WaveCommand::RecoveryImport => super::recovery::run(rest),
         WaveCommand::Seal => super::seal::run(rest),
         WaveCommand::MergeTarget => super::eligibility::run_capture(rest),
         WaveCommand::MergeEligibility => super::eligibility::run(rest),
@@ -629,6 +668,7 @@ mod tests {
             vec![
                 "snapshot",
                 "validate-import",
+                "recovery-import",
                 "seal",
                 "merge-target",
                 "merge-eligibility",
@@ -896,7 +936,7 @@ mod tests {
         /// to the production constant by [`schema_version_moves_with_the_golden`]
         /// so a version bump without a golden update, or a golden update without
         /// a version bump, fails the build.
-        const GOLDEN_SCHEMA_VERSION: u32 = 3;
+        const GOLDEN_SCHEMA_VERSION: u32 = 4;
 
         fn sorted_keys(value: &Value) -> Vec<String> {
             value
@@ -985,6 +1025,7 @@ mod tests {
                 json!([
                     "snapshot",
                     "validate-import",
+                    "recovery-import",
                     "seal",
                     "merge-target",
                     "merge-eligibility",
@@ -1047,6 +1088,9 @@ mod tests {
                     WaveCommand::Snapshot => WAVE_COMMANDS.contains(&WaveCommand::Snapshot),
                     WaveCommand::ValidateImport => {
                         WAVE_COMMANDS.contains(&WaveCommand::ValidateImport)
+                    }
+                    WaveCommand::RecoveryImport => {
+                        WAVE_COMMANDS.contains(&WaveCommand::RecoveryImport)
                     }
                     WaveCommand::Seal => WAVE_COMMANDS.contains(&WaveCommand::Seal),
                     WaveCommand::MergeTarget => WAVE_COMMANDS.contains(&WaveCommand::MergeTarget),
@@ -1272,6 +1316,8 @@ mod tests {
             match version {
                 3 => serde_json::from_str::<Value>(GOLDEN_FINGERPRINT_V3)
                     .expect("the pinned v3 fingerprint is valid JSON"),
+                4 => serde_json::from_str::<Value>(GOLDEN_FINGERPRINT_V4)
+                    .expect("the pinned v4 fingerprint is valid JSON"),
                 other => panic!(
                     "no pinned delivery wire fingerprint golden for schema version {other}; \
                      capture live_fingerprint() and add a matching arm to golden_fingerprint in \
@@ -1473,6 +1519,260 @@ mod tests {
       "status": "string"
     }
   }
+}"#;
+
+        const GOLDEN_FINGERPRINT_V4: &str = r#"{
+  "command_help_fields": [
+    "implemented",
+    "name",
+    "optional_options",
+    "purpose",
+    "required_options",
+    "schema",
+    "synopsis",
+    "work_item"
+  ],
+  "operation_domain": [
+    "snapshot",
+    "validate-import",
+    "recovery-import",
+    "seal",
+    "merge-target",
+    "merge-eligibility",
+    "help"
+  ],
+  "schema_version": 4,
+  "stages": {
+    "help": {
+      "commands": [
+        {
+          "implemented": "bool",
+          "name": "string",
+          "optional_options": [],
+          "purpose": "string",
+          "required_options": [],
+          "schema": "string",
+          "synopsis": "string",
+          "work_item": "string"
+        }
+      ],
+      "operation": "string",
+      "schema_version": "number",
+      "state": {
+        "chaining": "string",
+        "default_root": "string",
+        "layout": "string",
+        "override_flag": "string"
+      },
+      "status": "string"
+    },
+    "merge-eligibility": {
+      "artifact": "string",
+      "candidate_id": "string",
+      "commands": [
+        {
+          "implemented": "bool",
+          "name": "string",
+          "optional_options": [
+            "string"
+          ],
+          "purpose": "string",
+          "required_options": [
+            "string"
+          ],
+          "schema": "string",
+          "synopsis": "string",
+          "work_item": "string"
+        }
+      ],
+      "content_id": "string",
+      "operation": "string",
+      "schema_version": "number",
+      "snapshot_sha256": "string",
+      "state": {
+        "chaining": "string",
+        "default_root": "string",
+        "layout": "string",
+        "override_flag": "string"
+      },
+      "status": "string"
+    },
+    "merge-target": {
+      "artifact": "string",
+      "candidate_id": "string",
+      "commands": [
+        {
+          "implemented": "bool",
+          "name": "string",
+          "optional_options": [
+            "string"
+          ],
+          "purpose": "string",
+          "required_options": [
+            "string"
+          ],
+          "schema": "string",
+          "synopsis": "string",
+          "work_item": "string"
+        }
+      ],
+      "content_id": "string",
+      "operation": "string",
+      "schema_version": "number",
+      "snapshot_sha256": "string",
+      "state": {
+        "chaining": "string",
+        "default_root": "string",
+        "layout": "string",
+        "override_flag": "string"
+      },
+      "status": "string"
+    },
+    "recovery-import": {
+      "artifact": "string",
+      "candidate_id": "string",
+      "commands": [
+        {
+          "implemented": "bool",
+          "name": "string",
+          "optional_options": [
+            "string"
+          ],
+          "purpose": "string",
+          "required_options": [
+            "string"
+          ],
+          "schema": "string",
+          "synopsis": "string",
+          "work_item": "string"
+        }
+      ],
+      "content_id": "string",
+      "operation": "string",
+      "schema_version": "number",
+      "snapshot_sha256": "string",
+      "state": {
+        "chaining": "string",
+        "default_root": "string",
+        "layout": "string",
+        "override_flag": "string"
+      },
+      "status": "string"
+    },
+    "seal": {
+      "artifact": "string",
+      "candidate_id": "string",
+      "commands": [
+        {
+          "implemented": "bool",
+          "name": "string",
+          "optional_options": [
+            "string"
+          ],
+          "purpose": "string",
+          "required_options": [
+            "string"
+          ],
+          "schema": "string",
+          "synopsis": "string",
+          "work_item": "string"
+        }
+      ],
+      "content_id": "string",
+      "operation": "string",
+      "schema_version": "number",
+      "snapshot_sha256": "string",
+      "state": {
+        "chaining": "string",
+        "default_root": "string",
+        "layout": "string",
+        "override_flag": "string"
+      },
+      "status": "string"
+    },
+    "snapshot": {
+      "artifact": "string",
+      "candidate_id": "string",
+      "commands": [
+        {
+          "implemented": "bool",
+          "name": "string",
+          "optional_options": [
+            "string"
+          ],
+          "purpose": "string",
+          "required_options": [
+            "string"
+          ],
+          "schema": "string",
+          "synopsis": "string",
+          "work_item": "string"
+        }
+      ],
+      "content_id": "string",
+      "operation": "string",
+      "schema_version": "number",
+      "snapshot_sha256": "string",
+      "state": {
+        "chaining": "string",
+        "default_root": "string",
+        "layout": "string",
+        "override_flag": "string"
+      },
+      "status": "string"
+    },
+    "validate-import": {
+      "artifact": "string",
+      "candidate_id": "string",
+      "commands": [
+        {
+          "implemented": "bool",
+          "name": "string",
+          "optional_options": [
+            "string"
+          ],
+          "purpose": "string",
+          "required_options": [
+            "string"
+          ],
+          "schema": "string",
+          "synopsis": "string",
+          "work_item": "string"
+        }
+      ],
+      "content_id": "string",
+      "operation": "string",
+      "schema_version": "number",
+      "snapshot_sha256": "string",
+      "state": {
+        "chaining": "string",
+        "default_root": "string",
+        "layout": "string",
+        "override_flag": "string"
+      },
+      "status": "string"
+    }
+  },
+  "state_help_fields": [
+    "chaining",
+    "default_root",
+    "layout",
+    "override_flag"
+  ],
+  "status_domain": [
+    "ok"
+  ],
+  "workflow_output_fields": [
+    "artifact",
+    "candidate_id",
+    "commands",
+    "content_id",
+    "operation",
+    "schema_version",
+    "snapshot_sha256",
+    "state",
+    "status"
+  ]
 }"#;
 
         #[test]

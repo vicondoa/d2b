@@ -260,30 +260,90 @@ heavy-lane-host-integration: heavy-lane-guard
 	else \
 	names="$$(nix eval --raw --impure --no-warn-dirty --expr "builtins.concatStringsSep \" \" (builtins.attrNames (builtins.getFlake \"git+file://$$root\").vmChecks.$$system)")"; \
 	fi; \
+	requested="$${D2B_HOST_VM_CHECK:-}"; \
+	if [ -n "$$requested" ]; then \
+	case "$$requested" in \
+	*[!A-Za-z0-9._-]*) \
+	echo "test-host-integration: invalid D2B_HOST_VM_CHECK (use one discovered vmCheck name): $$requested" >&2; \
+	exit 1;; \
+	esac; \
+	fi; \
 	if [ -z "$$names" ]; then \
+	if [ -n "$$requested" ]; then \
+	echo "test-host-integration: unknown vmCheck '$$requested' (available: none)" >&2; \
+	exit 1; \
+	fi; \
 	echo "test-host-integration: no vmChecks present"; \
 	exit 0; \
 	fi; \
-	echo "test-host-integration: building vmChecks: $$names"; \
+	if [ -n "$$requested" ]; then \
+	case " $$names " in \
+	*" $$requested "*) names="$$requested";; \
+	*) \
+	echo "test-host-integration: unknown vmCheck '$$requested' (available: $$names)" >&2; \
+	exit 1;; \
+	esac; \
+	fi; \
+	fail_sccache_preflight() { \
+	echo "test-host-integration: sccache preflight failed: $$1" >&2; \
+	echo "Remediation: enable d2b.site.hostSccache.enable = true in the NixOS host configuration, then run:" >&2; \
+	echo "  sudo nixos-rebuild switch --flake /path/to/host#<host>" >&2; \
+	echo "The activated host must expose /var/cache/d2b-sccache in /etc/nix/nix.conf and keep it root:nixbld mode 2770." >&2; \
+	exit 1; \
+	}; \
 	set --; \
 	for name in $$names; do \
 	set -- "$$@" ".#vmChecks.$$system.$$name"; \
 	done; \
 	case "$${D2B_HOST_SCCACHE:-}" in \
 	1|yes|true) \
-	cache_dir="$${SCCACHE_DIR:-$${XDG_CACHE_HOME:-$$HOME/.cache}/d2b-sccache}"; \
-	mkdir -p "$$cache_dir"; \
-	chmod 0700 "$$cache_dir"; \
-	cache_dir="$$(cd "$$cache_dir" && pwd -P)"; \
-	echo "test-host-integration: sccache cache: $$cache_dir -> /var/cache/d2b-sccache"; \
-	echo "==> nix build --option extra-sandbox-paths /var/cache/d2b-sccache=$$cache_dir $$*"; \
-	nix build --option extra-sandbox-paths "/var/cache/d2b-sccache=$$cache_dir" --no-link --print-build-logs "$$@";; \
+	cache_dir=/var/cache/d2b-sccache; \
+	if [ ! -r /etc/nix/nix.conf ]; then \
+	fail_sccache_preflight "/etc/nix/nix.conf is missing or unreadable"; \
+	fi; \
+	if ! awk '\
+		/^[[:space:]]*#/ { next } \
+		/^[[:space:]]*extra-sandbox-paths[[:space:]]*=/ { \
+			line = $$0; \
+			sub(/^[^=]*=/, "", line); \
+			found = 0; \
+			count = split(line, fields, /[[:space:]]+/); \
+			for (i = 1; i <= count; i++) if (fields[i] == "/var/cache/d2b-sccache") found = 1; \
+		} \
+		END { exit(found ? 0 : 1) } \
+	' /etc/nix/nix.conf; then \
+	fail_sccache_preflight "/etc/nix/nix.conf does not expose extra-sandbox-paths = /var/cache/d2b-sccache"; \
+	fi; \
+	if [ ! -d "$$cache_dir" ]; then \
+	fail_sccache_preflight "$$cache_dir does not exist"; \
+	fi; \
+	cache_owner="$$(stat -c '%U' "$$cache_dir")"; \
+	cache_group="$$(stat -c '%G' "$$cache_dir")"; \
+	cache_mode="$$(stat -c '%a' "$$cache_dir")"; \
+	if [ "$$cache_owner" != root ] || [ "$$cache_group" != nixbld ] || [ "$$cache_mode" != 2770 ]; then \
+	fail_sccache_preflight "$$cache_dir must be owned by root:nixbld with mode 2770 (found $$cache_owner:$$cache_group mode $$cache_mode)"; \
+	fi; \
+	if ! getent group nixbld >/dev/null 2>&1; then \
+	fail_sccache_preflight "the nixbld daemon build-user group is unavailable"; \
+	fi; \
+	build_users_group="$$(nix show-config 2>/dev/null | awk '$$1 == \"build-users-group\" { print $$3; exit }')"; \
+	if [ "$$build_users_group" != nixbld ]; then \
+	fail_sccache_preflight "the Nix daemon build-users-group is not nixbld (found '$$build_users_group')"; \
+	fi; \
+	echo "test-host-integration: sccache preflight passed ($$cache_dir root:nixbld 2770, daemon build group nixbld)";; \
 	*) \
 	echo "test-host-integration: sccache disabled (set D2B_HOST_SCCACHE=1 to enable)"; \
+	;; \
+	esac; \
+	echo "test-host-integration: building vmChecks: $$names"; \
 	echo "==> nix build $$*"; \
-	nix build --no-link --print-build-logs "$$@";; \
-	esac
+	nix build --no-link --print-build-logs "$$@"
 
+## test-hardware - G-hw: real GPU/YubiKey/hardware-TPM passthrough + full
+## microVM boot. NixOS host WITH the devices only; CI cannot run this.
+## Public heavy lanes: acquire a slot, then run the raw work behind the gate.
+test-hardware: heavy-gate-build
+	$(HEAVY_GATE) $(MAKE) heavy-lane-hardware
 perf: heavy-gate-build
 	$(HEAVY_GATE) $(MAKE) heavy-lane-perf
 

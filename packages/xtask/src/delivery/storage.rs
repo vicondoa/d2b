@@ -77,7 +77,7 @@ use std::{
     sync::atomic::{AtomicU64, Ordering},
 };
 
-use rustix::fs::{AtFlags, FileType, Mode, OFlags, ResolveFlags};
+use rustix::fs::{AtFlags, FileType, Mode, OFlags, RenameFlags, ResolveFlags};
 use serde::{Serialize, de::DeserializeOwned};
 
 use super::{
@@ -441,6 +441,20 @@ impl CandidateDir {
         self.write_bytes(relative, &bytes)
     }
 
+    /// Writes a JSON artifact exactly once.
+    ///
+    /// The final install uses `renameat2(RENAME_NOREPLACE)` against the same
+    /// pinned parent descriptor as the ordinary writer. A second publication
+    /// therefore cannot replace the first record, even when two writers race.
+    pub fn write_json_once<T: Serialize>(
+        &self,
+        relative: impl AsRef<Path>,
+        value: &T,
+    ) -> Result<String> {
+        let bytes = serde_json::to_vec(value)?;
+        self.write_bytes_once(relative, &bytes)
+    }
+
     /// Writes raw artifact bytes and returns their SHA-256 digest.
     ///
     /// The write is anchored on the candidate directory descriptor: every
@@ -457,7 +471,31 @@ impl CandidateDir {
         }
         let relative = relative.as_ref();
         validate_anchored_relative(relative)?;
+        if relative == Path::new(SNAPSHOT_FILE)
+            && self.artifact_exists(super::recovery::BINDING_REQUEST_FILE)?
+        {
+            return Err(DeliveryError::new(
+                "candidate snapshot is immutable after the binding request",
+            ));
+        }
         write_anchored(self.dir_fd.as_fd(), relative, bytes)?;
+        Ok(sha256_bytes(bytes))
+    }
+
+    /// Writes raw artifact bytes exactly once and returns their SHA-256 digest.
+    ///
+    /// Unlike [`Self::write_bytes`], this method refuses an existing leaf
+    /// rather than replacing it. It is the only writer suitable for terminal
+    /// delivery records and binding decisions.
+    pub fn write_bytes_once(&self, relative: impl AsRef<Path>, bytes: &[u8]) -> Result<String> {
+        if bytes.len() > MAX_ARTIFACT_BYTES {
+            return Err(DeliveryError::new(format!(
+                "delivery artifact exceeds {MAX_ARTIFACT_BYTES} bytes"
+            )));
+        }
+        let relative = relative.as_ref();
+        validate_anchored_relative(relative)?;
+        write_anchored_once(self.dir_fd.as_fd(), relative, bytes)?;
         Ok(sha256_bytes(bytes))
     }
 
@@ -476,6 +514,14 @@ impl CandidateDir {
         validate_anchored_relative(relative)?;
         let key = relative.to_string_lossy().into_owned();
         read_limited_anchored(self.dir_fd.as_fd(), relative, MAX_ARTIFACT_BYTES, &key)
+    }
+
+    /// Checks for a regular artifact through the pinned directory descriptor.
+    pub fn artifact_exists(&self, relative: impl AsRef<Path>) -> Result<bool> {
+        let relative = relative.as_ref();
+        validate_anchored_relative(relative)?;
+        let key = relative.to_string_lossy().into_owned();
+        anchored_leaf_exists(self.dir_fd.as_fd(), relative, &key)
     }
 
     /// Lists the entry names of a directory under the candidate directory.
@@ -738,6 +784,19 @@ fn verify_regular_file(
 /// `RESOLVE_BENEATH`, so the walk cannot be diverted upward or through a
 /// symlink.
 fn write_anchored(anchor: BorrowedFd<'_>, relative: &Path, bytes: &[u8]) -> Result<()> {
+    write_anchored_with_mode(anchor, relative, bytes, false)
+}
+
+fn write_anchored_once(anchor: BorrowedFd<'_>, relative: &Path, bytes: &[u8]) -> Result<()> {
+    write_anchored_with_mode(anchor, relative, bytes, true)
+}
+
+fn write_anchored_with_mode(
+    anchor: BorrowedFd<'_>,
+    relative: &Path,
+    bytes: &[u8],
+    no_replace: bool,
+) -> Result<()> {
     let relative_key = relative
         .to_str()
         .ok_or_else(|| DeliveryError::new("delivery artifact key is not UTF-8"))?
@@ -773,7 +832,11 @@ fn write_anchored(anchor: BorrowedFd<'_>, relative: &Path, bytes: &[u8]) -> Resu
     }
 
     let parent = chain.last().map_or(anchor, OwnedFd::as_fd);
-    write_leaf(parent, leaf, &relative_key, bytes)
+    if no_replace {
+        write_leaf_once(parent, leaf, &relative_key, bytes)
+    } else {
+        write_leaf(parent, leaf, &relative_key, bytes)
+    }
 }
 
 /// Splits an absolute, already-normalized path into its `Normal` component
@@ -1103,6 +1166,25 @@ fn reject_leaf_symlink(parent: BorrowedFd<'_>, leaf: &str, relative_key: &str) -
 /// descriptor on every failure path until the rename disarms it, and folds a
 /// cleanup failure into the returned error so no stale temp hides silently.
 fn write_leaf(parent: BorrowedFd<'_>, leaf: &str, relative_key: &str, bytes: &[u8]) -> Result<()> {
+    write_leaf_with_mode(parent, leaf, relative_key, bytes, false)
+}
+
+fn write_leaf_once(
+    parent: BorrowedFd<'_>,
+    leaf: &str,
+    relative_key: &str,
+    bytes: &[u8],
+) -> Result<()> {
+    write_leaf_with_mode(parent, leaf, relative_key, bytes, true)
+}
+
+fn write_leaf_with_mode(
+    parent: BorrowedFd<'_>,
+    leaf: &str,
+    relative_key: &str,
+    bytes: &[u8],
+    no_replace: bool,
+) -> Result<()> {
     reject_leaf_symlink(parent, leaf, relative_key)?;
 
     let temp_name = format!(".{leaf}.tmp.{}", unique_suffix());
@@ -1139,7 +1221,17 @@ fn write_leaf(parent: BorrowedFd<'_>, leaf: &str, relative_key: &str, bytes: &[u
     }
     drop(file);
 
-    if let Err(error) = rustix::fs::renameat(parent, guard.name(), parent, leaf) {
+    let rename = if no_replace {
+        rustix::fs::renameat_with(parent, guard.name(), parent, leaf, RenameFlags::NOREPLACE)
+    } else {
+        rustix::fs::renameat(parent, guard.name(), parent, leaf)
+    };
+    if let Err(error) = rename {
+        if no_replace && error == rustix::io::Errno::EXIST {
+            return Err(guard.fail(DeliveryError::new(
+                "delivery record already exists and cannot be replaced",
+            )));
+        }
         return Err(guard.fail(DeliveryError::environment(format!(
             "cannot install delivery artifact {relative_key}: {error}"
         ))));
@@ -1303,6 +1395,50 @@ fn open_anchored_leaf(anchor: BorrowedFd<'_>, relative: &Path, label: &str) -> R
     Ok(file)
 }
 
+fn anchored_leaf_exists(anchor: BorrowedFd<'_>, relative: &Path, label: &str) -> Result<bool> {
+    let components: Vec<&OsStr> = relative
+        .components()
+        .map(|component| component.as_os_str())
+        .collect();
+    let (leaf, dirs) = components
+        .split_last()
+        .ok_or_else(|| DeliveryError::new("delivery artifact path has no leaf"))?;
+    let leaf = leaf
+        .to_str()
+        .ok_or_else(|| DeliveryError::new("delivery artifact name is not UTF-8"))?;
+
+    let mut chain: Vec<OwnedFd> = Vec::new();
+    for dir in dirs {
+        let name = dir
+            .to_str()
+            .ok_or_else(|| DeliveryError::new("delivery directory name is not UTF-8"))?;
+        let parent = chain.last().map_or(anchor, OwnedFd::as_fd);
+        let Some(child) = open_existing_directory_optional(parent, name, label)? else {
+            return Ok(false);
+        };
+        chain.push(child);
+    }
+
+    let parent = chain.last().map_or(anchor, OwnedFd::as_fd);
+    let leaf_fd = match rustix::fs::openat(
+        parent,
+        leaf,
+        OFlags::RDONLY | OFlags::NOFOLLOW | OFlags::CLOEXEC,
+        Mode::empty(),
+    ) {
+        Ok(fd) => fd,
+        Err(rustix::io::Errno::NOENT) => return Ok(false),
+        Err(error) => {
+            return Err(DeliveryError::environment(format!(
+                "cannot inspect delivery artifact {label}: {error}"
+            )));
+        }
+    };
+    let file = File::from(leaf_fd);
+    verify_regular_file(&file, label, None, false)?;
+    Ok(true)
+}
+
 /// Lists the entry names of a directory beneath the candidate directory on the
 /// same pinned inode chain the writer uses. `anchor` is the candidate
 /// directory descriptor the caller pinned once, the target directory is
@@ -1374,6 +1510,25 @@ fn open_existing_directory(parent: BorrowedFd<'_>, name: &str, label: &str) -> R
     Ok(fd)
 }
 
+fn open_existing_directory_optional(
+    parent: BorrowedFd<'_>,
+    name: &str,
+    label: &str,
+) -> Result<Option<OwnedFd>> {
+    let flags = OFlags::RDONLY | OFlags::DIRECTORY | OFlags::NOFOLLOW | OFlags::CLOEXEC;
+    let fd = match rustix::fs::openat(parent, name, flags, Mode::empty()) {
+        Ok(fd) => fd,
+        Err(rustix::io::Errno::NOENT) => return Ok(None),
+        Err(error) => {
+            return Err(DeliveryError::environment(format!(
+                "cannot inspect delivery artifact directory {label}: {error}"
+            )));
+        }
+    };
+    verify_anchored_directory(fd.as_fd(), name)?;
+    Ok(Some(fd))
+}
+
 /// SHA-256 of a delivery artifact on disk.
 pub fn sha256_file(path: &Path) -> Result<String> {
     Ok(sha256_bytes(&read_limited(
@@ -1426,6 +1581,37 @@ pub(crate) mod tests {
 
     fn candidate_id() -> CandidateId {
         CandidateId::parse("a".repeat(64)).expect("hex digest")
+    }
+
+    #[test]
+    fn write_once_does_not_replace_a_durable_record() {
+        let scratch = Scratch::new("write-once");
+        let root = StateRoot::for_tests(&scratch.path.join("state")).expect("state root");
+        let candidate = root.candidate("W0", &candidate_id()).expect("candidate");
+        candidate
+            .write_bytes_once("binding-request.json", b"first")
+            .expect("first publication");
+        let error = candidate
+            .write_bytes_once("binding-request.json", b"second")
+            .expect_err("replacement");
+        assert!(error.message().contains("already exists"), "{error}");
+        assert_eq!(
+            candidate
+                .read_bytes("binding-request.json")
+                .expect("record"),
+            b"first"
+        );
+        let temporary_files = fs::read_dir(candidate.path())
+            .expect("candidate directory")
+            .filter_map(|entry| entry.ok())
+            .filter(|entry| {
+                entry
+                    .file_name()
+                    .to_string_lossy()
+                    .starts_with(".binding-request.json.tmp.")
+            })
+            .count();
+        assert_eq!(temporary_files, 0, "failed no-replace leaves no temp file");
     }
 
     fn other_candidate_id() -> CandidateId {

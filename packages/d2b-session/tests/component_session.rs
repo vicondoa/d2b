@@ -234,6 +234,43 @@ fn establish(
     (initiator, responder)
 }
 
+fn establish_kk_with_keys(
+    initiator_private: [u8; 32],
+    responder_private: [u8; 32],
+) -> (
+    d2b_session::EstablishedHandshake,
+    d2b_session::EstablishedHandshake,
+) {
+    let offer = offer(NoiseProfile::Kk25519ChaChaPolySha256);
+    let negotiated = negotiated(&offer);
+    let mut initiator = NoiseHandshake::new(
+        HandshakeRole::Initiator,
+        &negotiated,
+        HandshakeCredentials::Kk {
+            local_private: Secret32::new(initiator_private).unwrap(),
+            remote_public: public(&responder_private),
+        },
+    )
+    .unwrap();
+    let mut responder = NoiseHandshake::new(
+        HandshakeRole::Responder,
+        &negotiated,
+        HandshakeCredentials::Kk {
+            local_private: Secret32::new(responder_private).unwrap(),
+            remote_public: public(&initiator_private),
+        },
+    )
+    .unwrap();
+    let message = initiator.write_next().unwrap();
+    responder.read_next(&message).unwrap();
+    let message = responder.write_next().unwrap();
+    initiator.read_next(&message).unwrap();
+    let initiator = initiator.finish().unwrap();
+    let responder = responder.finish().unwrap();
+    assert_eq!(initiator.transcript_hash(), responder.transcript_hash());
+    (initiator, responder)
+}
+
 #[test]
 fn fixed_negotiation_and_all_noise_profiles_are_strict() {
     for profile in NoiseProfile::ALL {
@@ -359,6 +396,16 @@ fn direct_guest_handshake_rejects_a_guest_service_only_schema_peer() {
 }
 
 #[test]
+fn sensitive_credential_policy_accepts_an_enrolled_kk_profile() {
+    let mut sensitive = offer(NoiseProfile::Kk25519ChaChaPolySha256);
+    sensitive.purpose = EndpointPurpose::SensitiveCredential;
+    sensitive.initiator_role = EndpointRole::Provider;
+    sensitive.responder_role = EndpointRole::Provider;
+    sensitive.service = ServicePackage::CredentialV3;
+    assert!(sensitive.validate().is_ok());
+}
+
+#[test]
 fn protected_records_are_directional_sequenced_and_replay_safe() {
     let (initiator, responder) = establish(NoiseProfile::Nn25519ChaChaPolySha256);
     let mut sender = RecordProtector::from_handshake(initiator);
@@ -397,6 +444,59 @@ fn protected_records_are_directional_sequenced_and_replay_safe() {
         receiver.unprotect(&truncated).unwrap_err().code(),
         SessionErrorCode::RecordTruncated
     );
+}
+
+#[test]
+fn enrolled_kk_sessions_are_recipient_specific_and_replay_safe() {
+    let (initiator_a, responder_a) = establish_kk_with_keys([0x31; 32], [0x42; 32]);
+    let (initiator_b, responder_b) = establish_kk_with_keys([0x31; 32], [0x43; 32]);
+    assert_ne!(initiator_a.transcript_hash(), initiator_b.transcript_hash());
+
+    let mut sender_a = RecordProtector::from_handshake(initiator_a);
+    let mut receiver_a = RecordProtector::from_handshake(responder_a);
+    let mut sender_b = RecordProtector::from_handshake(initiator_b);
+    let mut receiver_b = RecordProtector::from_handshake(responder_b);
+
+    let record_a = sender_a
+        .protect(RecordKind::Ttrpc, ChannelId::TTRPC_CONTROL, b"recipient-a")
+        .unwrap();
+    let record_a_bytes = record_a.as_bytes().to_vec();
+    let (header_a, plaintext_a) = receiver_a.unprotect(&record_a_bytes).unwrap();
+    assert_eq!(header_a.sequence, 0);
+    assert_eq!(plaintext_a, b"recipient-a");
+    assert_eq!(
+        receiver_b.unprotect(&record_a_bytes).unwrap_err().code(),
+        SessionErrorCode::AuthenticationFailed
+    );
+    assert_eq!(
+        receiver_a.unprotect(&record_a_bytes).unwrap_err().code(),
+        SessionErrorCode::RecordReplay
+    );
+
+    let record_b = sender_b
+        .protect(RecordKind::Ttrpc, ChannelId::TTRPC_CONTROL, b"recipient-b")
+        .unwrap();
+    let (header_b, plaintext_b) = receiver_b.unprotect(record_b.as_bytes()).unwrap();
+    assert_eq!(header_b.sequence, 0);
+    assert_eq!(plaintext_b, b"recipient-b");
+    assert_eq!(
+        receiver_a
+            .unprotect(record_b.as_bytes())
+            .unwrap_err()
+            .code(),
+        SessionErrorCode::AuthenticationFailed
+    );
+
+    let second_a = sender_a
+        .protect(
+            RecordKind::Ttrpc,
+            ChannelId::TTRPC_CONTROL,
+            b"recipient-a-second",
+        )
+        .unwrap();
+    let (header_second_a, plaintext_second_a) = receiver_a.unprotect(second_a.as_bytes()).unwrap();
+    assert_eq!(header_second_a.sequence, 1);
+    assert_eq!(plaintext_second_a, b"recipient-a-second");
 }
 
 #[test]

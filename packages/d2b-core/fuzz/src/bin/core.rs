@@ -316,6 +316,7 @@ fn build_synthetic_resolver() -> BundleResolver {
         host_path: "/etc/d2b/host.json".to_owned(),
         processes_path: "/etc/d2b/processes.json".to_owned(),
         privileges_path: "/etc/d2b/privileges.json".to_owned(),
+        cutover_runner_path: None,
         storage_path: None,
         sync_path: None,
         allocator_path: None,
@@ -438,6 +439,7 @@ fn build_synthetic_resolver() -> BundleResolver {
     };
     let processes = ProcessesJson {
         schema_version: "v2".to_owned(),
+        cutover_runner: None,
         vms: vec![VmProcessDag {
             vm: "work-vm".to_owned(),
             workload_identity: None,

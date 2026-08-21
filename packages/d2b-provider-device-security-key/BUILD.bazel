@@ -108,6 +108,16 @@ rust_test(
 )
 
 rust_test(
+    name = "redaction",
+    srcs = ["tests/redaction.rs"],
+    compile_data = ["Cargo.toml"],
+    visibility = ["//visibility:public"],
+    deps = [
+        ":d2b_provider_device_security_key",
+    ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
+)
+
+rust_test(
     name = "session_ring",
     srcs = ["tests/session_ring.rs"],
     compile_data = ["Cargo.toml"],
