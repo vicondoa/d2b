@@ -41,7 +41,7 @@ broker, Nix emitter, schema, or prose contract drifts.
    semantics.
 4. Rust wire types in `d2b-core` plus `schemars` are canonical for
    the JSON Schemas. Nix emitters validate against the generated
-   schemas, and `tests/static.sh` static gates fail closed on any
+   schemas, and the generated-artifact drift gates fail closed on any
    schema, documentation, emitter, Rust, or Nix divergence.
 5. `deny_unknown_fields` is enforced for security-sensitive artifacts:
    `privileges.json`, `processes.json`, and `minijail/*.json`.

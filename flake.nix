@@ -609,7 +609,7 @@
       # flake, and the root flake doesn't (and shouldn't) pull that
       # in as an input. The example's own `flake.nix` still gates
       # eval via `nix flake check` in its own directory; the
-      # `tests/static.sh` examples-iteration step exercises it.
+      # The fixed flake evaluation lane exercises it.
       #
       # The template's `configuration.nix` carries sentinel
       # assertions that fail eval until the operator replaces
@@ -1185,15 +1185,7 @@
           pname = "d2b-rust-tests";
           preBuild = assertRustToolchain;
           cargoBuildFlags = [ "--workspace" ];
-          # Keep fixture-dependent contract crates out of generic sandbox
-          # workspace tests. fixture-smoke only renders their input artifacts;
-          # it does not execute these tests. Full D2B_FIXTURES delivery to the
-          # sandbox/CI is tracked separately.
-          cargoTestFlags = [
-            "--workspace"
-            "--exclude"
-            "d2b-contract-tests"
-          ];
+          cargoTestFlags = [ "--workspace" ];
           installPhase = ''
             runHook preInstall
             mkdir -p $out

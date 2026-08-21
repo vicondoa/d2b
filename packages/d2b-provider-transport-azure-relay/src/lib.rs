@@ -6,7 +6,7 @@
 pub mod audit;
 pub mod backpressure;
 pub mod credential_client;
-pub mod gateway_compat;
+pub mod auth;
 pub mod metrics;
 pub mod reconnect;
 pub mod relay_transport;

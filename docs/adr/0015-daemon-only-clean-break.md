@@ -336,25 +336,7 @@ v2 → v3 auto-rewriter.
 
 ## Verification
 
-- [`packages/d2b-contract-tests/tests/policy_lints.rs`](../../packages/d2b-contract-tests/tests/policy_lints.rs)
-  (`adr_0015_present_with_header_and_cross_references`) asserts this file
-  exists and is cross-referenced from `AGENTS.md`.
-- [`tests/legacy-unit-denylist-eval.sh`](../../tests/legacy-unit-denylist-eval.sh)
-  (P6 `ph6-p6-unit-denylist-gate`) asserts none of the deleted unit
-  names appear in `nixos-rebuild dry-build` output on any example.
-- [`tests/assertions-eval.sh`](../../tests/assertions-eval.sh)
-  (v1.1-P2 closure of the planned-in-P6 `ph6-p6-supervisor-removed-assertion`)
-  asserts that setting `d2b.vms.<vm>.supervisor` fails eval with
-  the operator-friendly message above. The primary error path is the
-  per-submodule `mkRemovedOptionModule` shim in
-  `nixos-modules/options-vms-removed.nix`; a defense-in-depth
-  assertion in `assertions.nix` is the fallback path when the shim
-  is bypassed.
-- [`tests/supervisor-option-absent-eval.sh`](../../tests/supervisor-option-absent-eval.sh)
-  (v1.1-P2 invariant gate) asserts the productive option declaration
-  is absent from `nixos-modules/options-vms.nix` AND the
-  `mkRemovedOptionModule` shim is present + wired into the
-  submodule's `imports` list.
-- P6 exit criterion:
-  `systemctl list-units --no-pager --all | grep -E '^(d2b|microvm)' | wc -l`
-  returns `3` on the test host.
+- The fixed source-hygiene and owner-local Nix/Rust checks cover the
+  daemon-only surface and its cross-references.
+- The daemon-only unit shape remains enforced by the Nix module cases and
+  owner-local daemon and broker tests.

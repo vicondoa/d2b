@@ -4,7 +4,7 @@ Hermetic lifecycle coverage uses the Provider's typed effect ports and
 in-process fakes:
 
 ```text
-cargo test -p d2b-provider-runtime-azure-container-apps
+make test-rust
 ```
 
 The fixture path never uses Azure credentials, network access, a broker, or a

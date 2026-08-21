@@ -253,7 +253,7 @@ nix eval examples/multi-env#nixosConfigurations.demo.config.system.build.topleve
 nix flake check examples/multi-env --no-build --all-systems
 ```
 
-Both gates run in CI as part of the top-level `tests/static.sh`.
+Both gates run in CI as part of the fixed Bazel graph.
 
 ## After activation
 

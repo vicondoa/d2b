@@ -364,8 +364,6 @@ the capability matrix above.
   WebSocket transport used for sandbox sender connections.
 - [Realm core](./realm-core.md) - typed error shapes,
   capability model, audit redaction, and idempotency contract.
-- [Transport conformance matrix](./transport-conformance-matrix.md) -
-  cross-transport capability and conformance requirements.
 - [Host substrate providers](./host-substrate-providers.md) - discovery
   adapters for host-owned capability reporting (distinct from
   provider-managed nodes).

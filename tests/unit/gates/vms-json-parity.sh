@@ -23,9 +23,9 @@ fi
 render_vms_json() {
   local out=$2
   local cached
-  # Follow-up: under static.sh parallelism, multiple gates compete on
+  # Follow-up: under parallel Layer-1 execution, multiple gates compete on
   # the nix daemon when each runs its own nix-instantiate. Use the
-  # shared smoke-render cache (already prewarmed serially by static.sh
+  # shared smoke-render cache
   # before the parallel pool fires) instead of re-rendering.
   if cached=$(d2b_smoke_vms_json 2>/dev/null) && [ -s "$cached" ]; then
     cp -f -- "$cached" "$out"

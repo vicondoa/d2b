@@ -135,11 +135,13 @@ settings or claim atomic base binding.
 
 ## Critical subsystem index
 
-`make check` invokes the single fixed Bazel Layer-1 graph. Locally eligible
-actions use BuildBuddy; CI runs the same graph with the local profile and no
-BuildBuddy credential. Make aliases remain public compatibility entry points,
-while Cargo manifests and lockfiles remain rules_rs metadata authority rather
-than contributor workflow entry points.
+`make check` invokes the single fixed Bazel Layer-1 graph from the target
+patterns and owner-local suites in the top-level Makefile. Bare local runs use
+the BuildBuddy profile for eligible actions and automatically fall back to
+local execution when no credential is available; CI runs the same graph
+through the local profile with no BuildBuddy credential. Make aliases are thin
+Bazel entry points, while Cargo manifests and lockfiles remain rules_rs
+metadata authority rather than contributor workflow entry points.
 
 The full invariants are in
 [`docs/contributing/critical-subsystems.md`](./docs/contributing/critical-subsystems.md).
@@ -212,10 +214,9 @@ is [ADR 0015](./docs/adr/0015-daemon-only-clean-break.md).
 - The retired bash fallback and legacy environment knobs are removed or
   no-ops. Lifecycle authorization is `d2b` group membership plus
   `SO_PEERCRED` at `public.sock` accept time.
-- Policy coverage remains in
-  `packages/d2b-contract-tests/tests/policy_units.rs`,
-  `policy_source.rs`, and `policy_docs.rs`; fixture-dependent checks need the
-  enforcing fixture lane.
+- Repository-wide policy is limited to source hygiene, workspace and lock
+  integrity, supply chain, and changelog policy; security-critical behavior
+  remains owner-local or structural.
 
 ## References
 

@@ -65,8 +65,7 @@ The activation Provider Nix module is `nix/default.nix`; the daemon and
 broker retain only effect adapters and helper execution.
 
 ```bash
-cargo check -p d2b-provider-activation-nixos
-cargo test -p d2b-provider-activation-nixos
+bazel test //packages/d2b-provider-activation-nixos:d2b_provider_activation_nixos_test
 ```
 
 The current test targets are structural compile checks. Executable scenarios

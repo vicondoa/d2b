@@ -7,7 +7,7 @@
 //!   binding it received over the MI-authenticated ACA control plane; written
 //!   as the relay sender's prologue (the first bytes on the display channel).
 //! - [`make_prologue_verifier`] - the gateway-side
-//!   [`relay_compat::PrologueVerifier`] the relay
+//!   [`relay_bridge::PrologueVerifier`] the relay
 //!   listener runs **before bridging any byte**; it deserializes + verifies the
 //!   handshake (MAC, generation, expiry, field-equality, one-shot anti-replay).
 //!
@@ -22,8 +22,7 @@ pub mod audit_jsonl;
 pub mod credential;
 pub mod display_listener;
 pub mod production;
-pub mod relay_compat;
-pub mod waypipe_display;
+pub mod relay_bridge;
 pub use aca_workload::{
     AcaGatewayWorkload, AgentBinaries, RelayCoords, build_agent_command, build_cleanup_command,
     default_entra_token_snippet, relay_sas_token_snippet,
@@ -37,17 +36,12 @@ pub use credential::{
 pub use display_listener::{RelayDisplayListener, notifying_verifier};
 pub use production::production_deps_with_audit;
 pub use production::{SystemClock, UrandomIds, production_deps, system_now_fn, system_now_unix};
-pub use waypipe_display::{
-    WaypipeCompression, WaypipeDisplayProvider, WaypipeRunnerConfig, WaypipeSystemdService,
-    gated_relay_sender_argv, guest_waypipe_server_argv, guest_waypipe_service,
-    host_waypipe_client_argv, host_waypipe_service,
-};
 
 use d2b_gateway::{
     Handshake, SessionBinding, SessionSecret, SetReplayGuard, encode_handshake_frame,
     verify_handshake_frame,
 };
-use relay_compat::PrologueVerifier;
+use relay_bridge::PrologueVerifier;
 
 /// Build the length-delimited handshake prologue the in-sandbox agent writes
 /// as the first bytes on the relay display channel. The agent holds `secret`
@@ -64,7 +58,7 @@ pub type NowFn = Arc<dyn Fn() -> u64 + Send + Sync>;
 
 /// Build the gateway-side prologue verifier for one display session. The
 /// returned closure, when handed each accepted rendezvous's first frame by
-/// [`relay_compat::run_listener_verified`], admits the connection
+/// [`relay_bridge::run_listener_verified`], admits the connection
 /// **only** if the frame is a handshake that verifies against `secret`, the
 /// authorizing `expected` binding, the current `generation`, the current time,
 /// and the one-shot anti-replay guard. Any failure returns `false` and the

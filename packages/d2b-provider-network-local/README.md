@@ -97,9 +97,8 @@ The production Nix materialisation modules live under `nix/`; the root
 `nixos-modules/` paths are compatibility shims only.
 
 ```bash
-cargo check -p d2b-provider-network-local
-cargo test -p d2b-provider-network-local
-cargo test -p d2b-provider-network-local --test '*'
+bazel test //packages/d2b-provider-network-local:d2b_provider_network_local_test
+make test-nix-unit
 ```
 
 Run the declared provider-system scenarios only through the repository's

@@ -33,9 +33,9 @@ That leaves several ambiguities:
   adapter;
 - the existing `d2b.realms.<realm>.providers` records do not distinguish those
   responsibilities;
-- `d2b-realm-provider` exports provider authorities beside
-  `TransportProvider`, `ProtocolCodec`, `StreamMux`, daemon-access, and node
-  client traits even though those seams have different ownership;
+- the former realm provider crate exported provider authorities beside
+  transport, codec, session, daemon-access, and node-client traits even though
+  those seams had different ownership;
 - Azure Relay already implements the generic `TransportProvider`, while the
   narrower `RelayProvider` has no production implementation;
 - realm relay configuration says how a realm is reachable, but not how Unix
@@ -204,8 +204,8 @@ matches the repository convention: `d2b-contracts` owns serialized contracts,
 composition boundary. The project does not otherwise use an `-api` crate suffix
 for this kind of in-process interface.
 
-`d2b-provider` replaces only the trait, registry, and in-process runtime
-portion of `d2b-realm-provider`. It depends inward on `d2b-contracts` plus the
+`d2b-provider` replaces the trait, registry, and in-process runtime portion of
+the retired realm provider surface. It depends inward on `d2b-contracts` plus the
 minimum async/I/O traits needed by the interfaces. It may define non-serialized
 trait-object adapters, `ProviderResult`, and a runtime `ProviderError` wrapper,
 but that wrapper exposes the stable error envelope from `d2b-contracts`.
@@ -328,7 +328,7 @@ being folded into runtime lifecycle.
 
 ### Provider and non-provider seams are explicit
 
-The current `d2b-realm-provider` surface mixes provider authorities with
+The former realm provider surface mixed provider authorities with
 protocol machinery. The cutover classifies them as follows:
 
 | Current interface | Selected treatment |
@@ -651,7 +651,7 @@ another stream.
   `d2b.daemon.v1`.
 - `ProtocolCodec` moves to the session/codec boundary; semantic services do not
   depend on concrete codec implementations.
-- `StreamMux` moves to `d2b-session` or `d2b-realm-router` and remains above
+- `StreamMux` moves to `d2b-session` and remains above
   authenticated sessions.
 - Broker and unsafe-local helper protocols retain specialized seqpacket and FD
   semantics. They may reuse shared IDs/errors but are not component-session
@@ -663,14 +663,14 @@ The implementation cutover uses this map:
 
 | Current crate | Selected replacement |
 | --- | --- |
-| `d2b-realm-provider` | Split serialized DTOs/capabilities/stable errors into `d2b-contracts::provider`, provider traits/registries into `d2b-provider`, session/codec/mux traits into `d2b-session` or realm-router, and mocks/conformance into `d2b-provider-testkit`. |
+| Former realm provider surface | Split serialized DTOs and provider contracts into `d2b-contracts-provider`, provider registries into `d2b-provider`, session runtime into `d2b-session`, and mocks/conformance into owner-local tests. |
 | `d2b-host-providers` | Split into `d2b-provider-runtime-cloud-hypervisor`, `d2b-provider-runtime-qemu-media`, `d2b-provider-substrate-nixos`, `d2b-provider-substrate-linux`, and `d2b-provider-display-wayland`. |
 | `d2b-provider-aca` | `d2b-provider-runtime-azure-container-apps` |
 | `d2b-provider-relay` | `d2b-provider-transport-azure-relay` |
 | Provider conformance code in production crates | `d2b-provider-testkit` |
 | Loopback transport implementation used only by tests | `d2b-provider-testkit` |
-| Implementations in `d2b-realm-transport` | Move to matching `d2b-provider-transport-<implementation>` crates; move common session runtime to `d2b-session`; keep semantic route DTOs in realm-core. |
-| `d2b-realm-router::{PeerSession,SecurePeerSession}` | Merge into `d2b-session::ComponentSession`; keep realm route policy and operation-bound mux orchestration in realm-router. |
+| Former realm transport implementations | Move to matching `d2b-provider-transport-<implementation>` crates; keep common session runtime in `d2b-session`. |
+| Former realm router session types | Merge into `d2b-session::ComponentSession`; keep route policy and operation-bound routing in `d2b-zone-routing`. |
 | `d2b-daemon-access` transport implementations | Compose daemon-access service clients over typed transport providers and component sessions; keep local Unix compatibility admission until migrated. |
 | `d2b-gateway` | Move generic authorization, ledger, and session state into the realm controller/router crates; move provider-specific behavior into typed provider implementations; delete the gateway-named crate. |
 | `d2b-gateway-runtime` | Delete after the realm controller composes typed provider registries directly. |

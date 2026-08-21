@@ -3,7 +3,7 @@
 //! per-session handshake (ADR 0032, P0).
 //!
 //! `arm` spawns a task running
-//! [`run_listener_verified_with_ready`](crate::relay_compat::run_listener_verified_with_ready)
+//! [`run_listener_verified_with_ready`](crate::relay_bridge::run_listener_verified_with_ready)
 //! with a [`PrologueVerifier`] that verifies the session handshake under the
 //! authorizing binding + secret. Readiness is signalled only after the
 //! authenticated relay has attached to the local display endpoint, so
@@ -23,13 +23,13 @@ use d2b_gateway::{
     DisplayListener, DisplaySessionContext, GatewayError, ListenerHandle, SessionBinding,
     SessionSecret,
 };
-use d2b_provider_transport_azure_relay::gateway_compat::{RelayCredential, RelayEndpoint};
+use d2b_provider_transport_azure_relay::auth::{RelayCredential, RelayEndpoint};
 use tokio::sync::Notify;
 use tokio::time::{Duration, timeout};
 
 use crate::{
     NowFn, make_prologue_verifier,
-    relay_compat::{LocalTarget, PrologueVerifier},
+    relay_bridge::{LocalTarget, PrologueVerifier},
 };
 
 /// Wrap a [`PrologueVerifier`] so the first verified handshake flips `armed` and
@@ -166,7 +166,7 @@ impl DisplayListener for RelayDisplayListener {
                                     break;
                                 }
                             }
-                            result = crate::relay_compat::run_listener_verified_with_ready(
+                            result = crate::relay_bridge::run_listener_verified_with_ready(
                                 &endpoint,
                                 &credential,
                                 &target,

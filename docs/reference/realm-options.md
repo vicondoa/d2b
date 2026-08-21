@@ -61,7 +61,7 @@ canonical target `laptop.work.d2b` for CLI output and desktop consumers.
 Realm path labels use the same lowercase label shape as other
 realm-core identifiers. See [Naming conventions](./naming-conventions.md),
 [Realm core model reference](./realm-core.md), and
-[Realm access resolver contract](./realm-access-resolver.md) for target grammar,
+realm-core for target grammar,
 access resolution, and identifier families.
 
 ## Placement
@@ -221,7 +221,7 @@ Realm colors come from the UI color contract, not from authorization state.
 
 - [Realm-native control-plane decision record](../adr/0043-realm-native-control-plane.md)
 - [Realm core model reference](./realm-core.md)
-- [Realm access resolver contract](./realm-access-resolver.md)
+- [Realm core reference](./realm-core.md)
 - [Realm controller configuration](./realm-controller-config.md)
 - [Realm policy](./realm-policy.md)
 - [Naming conventions](./naming-conventions.md)

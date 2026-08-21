@@ -90,8 +90,7 @@ enforces this.
 ## Build and test
 
 ```bash
-cargo check -p d2b-provider-credential-secret-service
-cargo test -p d2b-provider-credential-secret-service --lib --test lifecycle --test conformance --test faults --test canary --test delivery --test placement
+make test-rust
 make test-integration
 make test-host-integration
 ```

@@ -24,10 +24,8 @@ that is the binding contract; this file is the human quick-start.
 
 ```
 tests/
-├── static.sh, runner.sh, test-*.sh                                orchestrators (entry points)
 ├── lib.sh, cli-rust-native-common.sh                              shared shell harness
 ├── README.md, AGENTS.md                                           this guide + the test-model contract
-├── migration-ledger.toml, migration-state.d/                    retirement ledger + per-test records
 ├── golden/, fixtures/                                           shared golden data + fixtures
 ├── tools/                                                       runners + codegen/asserter tools
 │                                                                (bazel-check, rust-workspace-checks, gen-*, …)
@@ -54,31 +52,31 @@ Rust tests (types 2-5: unit, integration, contract, policy-lint) live under
 | `make test-unit` | complete fixed Bazel Layer-1 development graph | local + CI |
 | `make test` | `test-unit` + `test-integration` | local convenience aggregate; use wider lanes when the changed surface needs them |
 | `make check-tier0` | fast Bazel toolchain and source-policy suite | local + CI |
-| `make test-lint` | fixed Bazel formatting and lint suite | local + CI |
+| `make test-lint` | fixed Bazel source-hygiene and shell-lint suite | local + CI |
 | `make test-changelog` | require release notes for code changes and validate every changelog fragment | local + CI |
 | `make test-rust` | fixed owner-local Bazel Rust unit, integration, and doctest suite | local + CI |
 | `make test-rust-<leaf>` | focused Bazel Rust labels for main, broker, guest shell runner, policy, schema, and supply-chain coverage | CI (local for a focused rerun) |
-| `make test-fixture-contracts` | enforcing eval-rendered lane: materializes `D2B_FIXTURES` from evaluated Nix artifact data, then runs `d2b-contract-tests` and the CLI-contract cases; both lanes set `D2B_ENABLE_FIXTURE_BUILD=1`, and invoking it without that variable fails rather than skipping | local + CI |
+| `make test-fixture-contracts` | enforcing eval-rendered lane: materializes `D2B_FIXTURES` from evaluated Nix artifact data, then runs owner-local CLI contract cases; invoking it without the enforcing lane fails rather than skipping | local + CI |
 | `make test-proofs` | standalone proofs/ crates | local + CI |
-| `make test-flake` | fixed Bazel Nix evaluation, realization, output, and aarch64 targets | local + CI |
+| `make test-flake` | fixed Bazel Nix evaluation target | local + CI |
 | `make test-nix-unit` | fixed Bazel Nix-unit surface targets | local + CI |
 | `make test-drift` | native generated-artifact and parity checks | local + CI |
-| `make test-policy` | native source, docs, lint, runtime-ledger, and BuildBuddy policy suites | local + CI |
-| `make test-runtime-ledger` | hermetic execution-budget gate: after a warm build, enforces aggregate per-crate process-CPU p95 budgets, fails any individual census test sample over 60 seconds, and reports shorter per-test wall-clock p95s as advisory diagnostics (holds no baseline; makes no historical-regression claim) | local + CI |
+| `make test-policy` | fixed Bazel source, workspace/lock, supply-chain, and changelog policy suites | local + CI |
 | `make test-performance-budgets` | advisory performance canary; without `D2B_PERF_STABLE=1` it reports `SKIP` and enforces nothing | local + CI |
 | `make test-integration` | type-9 podman container tests | conditional local host lane (podman; not the PR pipeline) |
 | `make test-host-integration` | type-10 runNixOSTest VM checks; set `D2B_VM_CHECK=<name>` for one named check | conditional local NixOS host lane (KVM; TCG fallback; not the PR pipeline) |
 | `make check-fast` | alias for `test-unit` (backward compat) | local + CI |
 | `make check` | complete fixed Bazel graph with fixed CI enforcement | local |
 | `make bazel-check` | Bazel aggregate used by `make check`. Defaults to BuildBuddy remotely; CI forces `D2B_BAZEL_PROFILE=local` | local or remote |
-| `make check-static` | legacy/full-static monolithic gate (`tests/static.sh`) | local |
-| `make runtime-ledger-pin` | regenerate the runtime-ledger census pin after adding, removing or renaming a timed test | local |
 | `make heavy-gate-build && bazel-bin/packages/xtask/xtask heavy-gate -- env D2B_LIVE=1 bash tests/integration/live/<x>.sh` | type-11 live-host tests, through the heavy-gate semaphore | **manual, against a deployed d2b host** |
 
-`make bazel-check` and `tests/tools/bazel-check --profile local` run the same
-fixed Bazel graph locally. Bazel owns Layer-1 scheduling; Make and CI retain
-their public compatibility surfaces, and standalone Cargo workflows remain
-available for direct development.
+`make check`, `make test-unit`, and `make bazel-check` invoke the same fixed
+target-pattern and owner-suite set through one Bazel call.
+`tests/tools/bazel-check --profile local` uses the same facade for focused
+reruns. Bazel owns Layer-1 scheduling; Make and CI are thin aliases over fixed
+labels. Cargo manifests and `Cargo.lock` remain rules_rs metadata authority,
+while standalone crate Cargo commands are not documented or required gate
+evidence.
 
 `make test-policy` includes the fail-closed `guest-workspace-drift` guard. The
 guard checks that the crates copied by `mkGuestRustPackagesSrc`, the members and
@@ -146,14 +144,15 @@ outputs, and runs the fixture-dependent contract and CLI targets exactly once.
 
 The Layer-1 graph is fixed in `BUILD.bazel` and `bazel/checks/`. Bazel owns
 selection, dependency ordering, parallelism, retry classification, caching,
-and aggregation. Every public `make test-*` alias is a thin direct Bazel
-invocation, and every fixed CI job runs the same graph with the local profile.
+and aggregation. Every public Layer-1 `make test-*` alias is a thin direct
+Bazel invocation, and every fixed CI job runs the same graph with the local
+profile.
 Individual labels remain available for focused reruns.
 
 Cargo manifests and the root `Cargo.lock` remain authoritative for Rust
-membership, dependencies, features, and direct Cargo or nextest workflows.
-`rules_rs` supplies the Bazel Cargo integration. Do not add a second Cargo
-lock, source inventory, generator, discovery job, or shell scheduler.
+membership, dependencies, and features consumed by rules_rs. Do not add a
+second Cargo lock, source inventory, generator, discovery job, or shell
+scheduler.
 
 `tests/tools/bazel-check` retains the BuildBuddy security boundary. It uses
 Bazel's credential helper, withholds credentials from untrusted work, redacts
@@ -173,7 +172,6 @@ make test-flake
 make test-nix-unit
 make test-policy
 make test-drift
-make test-runtime-ledger
 make test-fixture-contracts
 make test-unit
 make check
@@ -187,8 +185,7 @@ external inputs directly in `bazel/checks/nix/BUILD.bazel`; there is no corpus
 discovery or case-presence pin generator. The action copies those runfiles into
 an isolated source root and evaluates the surface directly through a minimal
 runner flake, without the repository flake outputs or ambient
-`D2B_REPO_ROOT`. The runtime-ledger census uses the existing
-`make runtime-ledger-pin` target when its governed test set changes.
+`D2B_REPO_ROOT`. No secondary test census or successor pin is maintained.
 
 No secondary execution record, migration ledger update, successor pin, or
 evidence script is required.
@@ -213,8 +210,8 @@ Layer 1:
   `CARGO_BIN_EXE_*`. **Spawn hermetically**: point `D2B_PUBLIC_SOCKET`,
   `D2B_BROKER_SOCKET`, and the `D2B_*_PATH` fixture env vars at fixtures
   or missing paths so the test never touches the operator's live daemon.
-- Rendered-artifact ↔ DTO/doc contract → a contract test in
-  `packages/d2b-contract-tests/`.
+- Rendered-artifact ↔ DTO/doc contract → a contract test in the owning
+  `packages/<crate>/tests/` directory.
 - Generated docs/schemas/CLI freshness → already a drift gate; regenerate with
   `bazel run //packages/xtask:xtask -- gen-*`. Do **not** add a new shell gate.
 

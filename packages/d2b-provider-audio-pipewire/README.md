@@ -62,8 +62,7 @@ Zone/resource identity labels.
 ## Build and test
 
 ```bash
-cargo check -p d2b-provider-audio-pipewire
-cargo test -p d2b-provider-audio-pipewire
+bazel test //packages/d2b-provider-audio-pipewire:d2b_provider_audio_pipewire_doc_test
 ```
 
 The current test targets are structural compile checks. Executable scenarios

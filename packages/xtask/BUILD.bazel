@@ -237,38 +237,45 @@ rust_test(
 )
 
 rust_test(
-    name = "policy_ci",
-    srcs = ["tests/policy_ci.rs"],
-    compile_data = ["Cargo.toml"],
-    data = [
-        ":xtask",
-        "//bazel/checks/rust:source_hygiene_sources",
+    name = "policy_changelog_gate",
+    srcs = [
+        "tests/common/mod.rs",
+        "tests/policy_changelog_gate.rs",
     ],
-    env = {"CARGO_BIN_EXE_xtask": "$(rootpath :xtask)"},
-    env_inherit = ["PATH"],
-    rustc_env = {"CARGO_BIN_EXE_xtask": "$(rootpath :xtask)"},
-    tags = ["no-remote-cache"],
-    visibility = ["//visibility:public"],
-)
-
-rust_test(
-    name = "policy_workspace",
-    srcs = ["tests/policy_workspace.rs"],
     compile_data = ["Cargo.toml"],
     data = [
-        ":xtask",
         "//:BUILD.bazel",
         "//:Cargo.toml",
         "//:flake.nix",
-        "//:.github/workflows/release-host-binaries.yml",
-        "//packages/d2b-contracts:Cargo.toml",
-        "//packages/d2b-core/fuzz:Cargo.toml",
+        "//:scripts/changelog-check.sh",
+        "//:tests/tools/scrub-shell-environment",
+        "//bazel/checks/rust:changelog_sources",
     ],
-    env = {"CARGO_BIN_EXE_xtask": "$(rootpath :xtask)"},
-    env_inherit = ["PATH"],
-    rustc_env = {"CARGO_BIN_EXE_xtask": "$(rootpath :xtask)"},
-    tags = ["no-remote-cache"],
+    env_inherit = ["D2B_REPO_ROOT", "PATH"],
+    tags = ["no-remote-cache", "no-sandbox"],
     visibility = ["//visibility:public"],
+    deps = all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
+)
+
+rust_test(
+    name = "policy_production_closure",
+    srcs = [
+        "tests/common/mod.rs",
+        "tests/policy_production_closure.rs",
+    ],
+    compile_data = ["Cargo.toml"],
+    data = [
+        "//:BUILD.bazel",
+        "//:Cargo.lock",
+        "//:Cargo.toml",
+        "//:.github/CODEOWNERS",
+        "//:flake.nix",
+        "//:policy_inputs_workspace_sources",
+    ],
+    env_inherit = ["D2B_REPO_ROOT", "PATH"],
+    tags = ["no-remote-cache", "no-sandbox"],
+    visibility = ["//visibility:public"],
+    deps = all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
 )
 
 rust_test(
@@ -277,6 +284,9 @@ rust_test(
     crate = ":xtask",
     data = [
         ":xtask",
+        "//:BUILD.bazel",
+        "//:Cargo.toml",
+        "//:flake.nix",
         "//:rust-toolchain.toml",
         "//bazel/checks/rust:source_hygiene_sources",
     ],
@@ -294,33 +304,15 @@ rust_test(
 )
 
 rust_test(
-    name = "runtime_ledger_test",
-    timeout = "short",
-    args = ["test_runtime_ledger::"],
-    compile_data = ["Cargo.toml"],
-    crate = ":xtask",
-    data = [
-        ":xtask",
-        "//:rust-toolchain.toml",
-        "//bazel/checks/rust:source_hygiene_sources",
-    ],
-    env = {
-        "CARGO_BIN_EXE_xtask": "$(rootpath :xtask)",
-    },
-    env_inherit = ["D2B_REPO_ROOT", "PATH"],
-    rustc_env = {"CARGO_BIN_EXE_xtask": "$(rootpath :xtask)"},
-    tags = ["no-remote-cache"],
-    deps = ["//packages/d2b-contracts-resource:d2b_contracts_resource",
-        "//packages/d2b-contracts-zone-session:d2b_contracts_zone_session",  "//packages/d2b-contracts-provider:d2b_contracts_provider",] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
-)
-
-rust_test(
     name = "schema_reproducibility_test",
     args = ["schema_tests::"],
     compile_data = ["Cargo.toml"],
     crate = ":xtask",
     data = [
         ":xtask",
+        "//:BUILD.bazel",
+        "//:Cargo.toml",
+        "//:flake.nix",
         "//bazel/checks/rust:source_hygiene_sources",
     ],
     env = {
@@ -337,11 +329,6 @@ rust_test(
 test_suite(
     name = "unit",
     tests = [":xtask_test"],
-)
-
-test_suite(
-    name = "policy",
-    tests = [":policy_workspace"],
 )
 
 # keep

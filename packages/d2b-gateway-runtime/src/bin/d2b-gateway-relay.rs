@@ -34,9 +34,9 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use base64::Engine;
 use d2b_gateway::{SECRET_LEN, SessionBinding, SessionSecret};
-use d2b_gateway_runtime::relay_compat::{LocalTarget, RelayConnectError};
+use d2b_gateway_runtime::relay_bridge::{LocalTarget, RelayConnectError};
 use d2b_gateway_runtime::{agent_prologue, make_prologue_verifier};
-use d2b_provider_transport_azure_relay::gateway_compat::{RelayCredential, RelayEndpoint};
+use d2b_provider_transport_azure_relay::auth::{RelayCredential, RelayEndpoint};
 
 type Err = Box<dyn std::error::Error>;
 
@@ -127,7 +127,7 @@ async fn main() -> Result<(), Err> {
                     return Err("relay sender session expired".into());
                 }
                 let credential = credential()?;
-                match d2b_gateway_runtime::relay_compat::run_sender_with_prologue(
+                match d2b_gateway_runtime::relay_bridge::run_sender_with_prologue(
                     &endpoint,
                     &credential,
                     &target,
@@ -157,7 +157,7 @@ async fn main() -> Result<(), Err> {
             loop {
                 eprintln!("[d2b-gateway-relay] arming verified listener...");
                 let credential = credential()?;
-                if let Err(e) = d2b_gateway_runtime::relay_compat::run_listener_verified(
+                if let Err(e) = d2b_gateway_runtime::relay_bridge::run_listener_verified(
                     &endpoint,
                     &credential,
                     &target,
@@ -184,7 +184,7 @@ async fn main() -> Result<(), Err> {
 #[cfg(test)]
 mod tests {
     use super::retry_sender_error;
-    use d2b_gateway_runtime::relay_compat::RelayConnectError;
+    use d2b_gateway_runtime::relay_bridge::RelayConnectError;
 
     #[test]
     fn authenticated_bridge_failures_are_not_retried() {

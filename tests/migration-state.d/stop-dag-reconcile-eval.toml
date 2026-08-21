@@ -1,2 +1,0 @@
-status = "retired"
-successor_ids = ["packages/d2b-contract-tests/tests/policy_daemon.rs::stop_dag_reconcile_surface (leftover StopDagOwner deleted; asserts packages/d2bd/src/supervisor/stop_dag.rs is absent and supervisor/mod.rs has no pub mod stop_dag); gated via the D2B_FIXTURES contract step `cargo test -p d2b-contract-tests` in tests/tools/rust-workspace-checks.sh"]

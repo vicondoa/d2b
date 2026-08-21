@@ -17,7 +17,7 @@
 //! teardown phase). The low-level PTY allocation/control syscalls
 //! (`openpt`/`grantpt`/`unlockpt`/`ptsname`/`TIOCSWINSZ`/`tcgetpgrp`) live here
 //! and in the runner helper, never in the attached spawner
-//! (`exec.rs`/`exec_linux.rs`) - see `tests/guest-exec-runtime-static.sh`.
+//! (`exec.rs`/`exec_linux.rs`) - see the owner-local Rust and Bazel checks.
 
 use std::sync::{Arc, Mutex};
 

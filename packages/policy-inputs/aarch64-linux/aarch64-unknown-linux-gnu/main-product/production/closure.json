@@ -56,11 +56,7 @@
     "d2b-provider-transport-vsock",
     "d2b-provider-volume-local",
     "d2b-provider-volume-virtiofs",
-    "d2b-realm-codec-protobuf",
     "d2b-realm-core",
-    "d2b-realm-provider",
-    "d2b-realm-router",
-    "d2b-realm-transport",
     "d2b-resource-api",
     "d2b-resource-client",
     "d2b-resource-compiler",
@@ -76,7 +72,7 @@
   "features": [],
   "default_features": true,
   "source_authority": "Cargo.lock",
-  "lock_sha256": "2bc389b67dbd18cd8182764df9ef503e6cbd8aea013e9ffb3b5c90c451b04f35",
+  "lock_sha256": "0d243e625dfd3607dc7f17506915358972596a2d42df57ec5ccf76f7d9ed8f33",
   "packages": [
     {
       "id": "adler2@2.0.1#registry+https://github.com/rust-lang/crates.io-index",
@@ -1007,40 +1003,8 @@
       "target": "aarch64-unknown-linux-gnu"
     },
     {
-      "id": "d2b-realm-codec-protobuf@0.0.0-bootstrap#path",
-      "name": "d2b-realm-codec-protobuf",
-      "version": "0.0.0-bootstrap",
-      "source": null,
-      "checksum": null,
-      "target": "aarch64-unknown-linux-gnu"
-    },
-    {
       "id": "d2b-realm-core@0.0.0-bootstrap#path",
       "name": "d2b-realm-core",
-      "version": "0.0.0-bootstrap",
-      "source": null,
-      "checksum": null,
-      "target": "aarch64-unknown-linux-gnu"
-    },
-    {
-      "id": "d2b-realm-provider@0.0.0-bootstrap#path",
-      "name": "d2b-realm-provider",
-      "version": "0.0.0-bootstrap",
-      "source": null,
-      "checksum": null,
-      "target": "aarch64-unknown-linux-gnu"
-    },
-    {
-      "id": "d2b-realm-router@0.0.0-bootstrap#path",
-      "name": "d2b-realm-router",
-      "version": "0.0.0-bootstrap",
-      "source": null,
-      "checksum": null,
-      "target": "aarch64-unknown-linux-gnu"
-    },
-    {
-      "id": "d2b-realm-transport@0.0.0-bootstrap#path",
-      "name": "d2b-realm-transport",
       "version": "0.0.0-bootstrap",
       "source": null,
       "checksum": null,
@@ -1743,14 +1707,6 @@
       "target": "aarch64-unknown-linux-gnu"
     },
     {
-      "id": "itertools@0.14.0#registry+https://github.com/rust-lang/crates.io-index",
-      "name": "itertools",
-      "version": "0.14.0",
-      "source": "registry+https://github.com/rust-lang/crates.io-index",
-      "checksum": "2b192c782037fadd9cfa75548310488aabdbf3d2da73885b31bd0abd03351285",
-      "target": "aarch64-unknown-linux-gnu"
-    },
-    {
       "id": "itoa@1.0.18#registry+https://github.com/rust-lang/crates.io-index",
       "name": "itoa",
       "version": "1.0.18",
@@ -2244,22 +2200,6 @@
       "version": "1.0.107",
       "source": "registry+https://github.com/rust-lang/crates.io-index",
       "checksum": "985e7ec9bb745e6ce6535b544d84d6cd6f7ad8bd711c398938ae983b91a766d9",
-      "target": "aarch64-unknown-linux-gnu"
-    },
-    {
-      "id": "prost-derive@0.13.5#registry+https://github.com/rust-lang/crates.io-index",
-      "name": "prost-derive",
-      "version": "0.13.5",
-      "source": "registry+https://github.com/rust-lang/crates.io-index",
-      "checksum": "8a56d757972c98b346a9b766e3f02746cde6dd1cd1d1d563472929fdd74bec4d",
-      "target": "aarch64-unknown-linux-gnu"
-    },
-    {
-      "id": "prost@0.13.5#registry+https://github.com/rust-lang/crates.io-index",
-      "name": "prost",
-      "version": "0.13.5",
-      "source": "registry+https://github.com/rust-lang/crates.io-index",
-      "checksum": "2796faa41db3ec313a31f7624d9286acf277b52de526150b7e69f3debf891ee5",
       "target": "aarch64-unknown-linux-gnu"
     },
     {
@@ -5124,12 +5064,6 @@
     },
     {
       "from": "d2b-gateway-runtime@0.0.0-bootstrap#path",
-      "to": "d2b-realm-provider@0.0.0-bootstrap#path",
-      "kind": "normal",
-      "target": null
-    },
-    {
-      "from": "d2b-gateway-runtime@0.0.0-bootstrap#path",
       "to": "futures-util@0.3.34#registry+https://github.com/rust-lang/crates.io-index",
       "kind": "normal",
       "target": null
@@ -6108,12 +6042,6 @@
     },
     {
       "from": "d2b-provider-runtime-azure-container-apps@0.0.0-bootstrap#path",
-      "to": "d2b-realm-provider@0.0.0-bootstrap#path",
-      "kind": "normal",
-      "target": null
-    },
-    {
-      "from": "d2b-provider-runtime-azure-container-apps@0.0.0-bootstrap#path",
       "to": "reqwest@0.12.28#registry+https://github.com/rust-lang/crates.io-index",
       "kind": "normal",
       "target": null
@@ -6779,30 +6707,6 @@
       "target": null
     },
     {
-      "from": "d2b-realm-codec-protobuf@0.0.0-bootstrap#path",
-      "to": "d2b-contracts@0.0.0-bootstrap#path",
-      "kind": "normal",
-      "target": null
-    },
-    {
-      "from": "d2b-realm-codec-protobuf@0.0.0-bootstrap#path",
-      "to": "d2b-realm-core@0.0.0-bootstrap#path",
-      "kind": "normal",
-      "target": null
-    },
-    {
-      "from": "d2b-realm-codec-protobuf@0.0.0-bootstrap#path",
-      "to": "d2b-realm-provider@0.0.0-bootstrap#path",
-      "kind": "normal",
-      "target": null
-    },
-    {
-      "from": "d2b-realm-codec-protobuf@0.0.0-bootstrap#path",
-      "to": "prost@0.13.5#registry+https://github.com/rust-lang/crates.io-index",
-      "kind": "normal",
-      "target": null
-    },
-    {
       "from": "d2b-realm-core@0.0.0-bootstrap#path",
       "to": "d2b-contracts@0.0.0-bootstrap#path",
       "kind": "normal",
@@ -6817,126 +6721,6 @@
     {
       "from": "d2b-realm-core@0.0.0-bootstrap#path",
       "to": "serde@1.0.229#registry+https://github.com/rust-lang/crates.io-index",
-      "kind": "normal",
-      "target": null
-    },
-    {
-      "from": "d2b-realm-provider@0.0.0-bootstrap#path",
-      "to": "async-trait@0.1.92#registry+https://github.com/rust-lang/crates.io-index",
-      "kind": "proc-macro",
-      "target": null
-    },
-    {
-      "from": "d2b-realm-provider@0.0.0-bootstrap#path",
-      "to": "d2b-realm-core@0.0.0-bootstrap#path",
-      "kind": "normal",
-      "target": null
-    },
-    {
-      "from": "d2b-realm-provider@0.0.0-bootstrap#path",
-      "to": "schemars@0.8.22#registry+https://github.com/rust-lang/crates.io-index",
-      "kind": "normal",
-      "target": null
-    },
-    {
-      "from": "d2b-realm-provider@0.0.0-bootstrap#path",
-      "to": "serde@1.0.229#registry+https://github.com/rust-lang/crates.io-index",
-      "kind": "normal",
-      "target": null
-    },
-    {
-      "from": "d2b-realm-provider@0.0.0-bootstrap#path",
-      "to": "tokio@1.53.1#registry+https://github.com/rust-lang/crates.io-index",
-      "kind": "normal",
-      "target": null
-    },
-    {
-      "from": "d2b-realm-provider@0.0.0-bootstrap#path",
-      "to": "tracing@0.1.44#registry+https://github.com/rust-lang/crates.io-index",
-      "kind": "normal",
-      "target": null
-    },
-    {
-      "from": "d2b-realm-router@0.0.0-bootstrap#path",
-      "to": "chacha20poly1305@0.10.1#registry+https://github.com/rust-lang/crates.io-index",
-      "kind": "normal",
-      "target": null
-    },
-    {
-      "from": "d2b-realm-router@0.0.0-bootstrap#path",
-      "to": "d2b-realm-core@0.0.0-bootstrap#path",
-      "kind": "normal",
-      "target": null
-    },
-    {
-      "from": "d2b-realm-router@0.0.0-bootstrap#path",
-      "to": "d2b-realm-provider@0.0.0-bootstrap#path",
-      "kind": "normal",
-      "target": null
-    },
-    {
-      "from": "d2b-realm-router@0.0.0-bootstrap#path",
-      "to": "hmac@0.12.1#registry+https://github.com/rust-lang/crates.io-index",
-      "kind": "normal",
-      "target": null
-    },
-    {
-      "from": "d2b-realm-router@0.0.0-bootstrap#path",
-      "to": "serde@1.0.229#registry+https://github.com/rust-lang/crates.io-index",
-      "kind": "normal",
-      "target": null
-    },
-    {
-      "from": "d2b-realm-router@0.0.0-bootstrap#path",
-      "to": "serde_json@1.0.151#registry+https://github.com/rust-lang/crates.io-index",
-      "kind": "normal",
-      "target": null
-    },
-    {
-      "from": "d2b-realm-router@0.0.0-bootstrap#path",
-      "to": "sha2@0.10.9#registry+https://github.com/rust-lang/crates.io-index",
-      "kind": "normal",
-      "target": null
-    },
-    {
-      "from": "d2b-realm-router@0.0.0-bootstrap#path",
-      "to": "subtle@2.6.1#registry+https://github.com/rust-lang/crates.io-index",
-      "kind": "normal",
-      "target": null
-    },
-    {
-      "from": "d2b-realm-router@0.0.0-bootstrap#path",
-      "to": "tokio@1.53.1#registry+https://github.com/rust-lang/crates.io-index",
-      "kind": "normal",
-      "target": null
-    },
-    {
-      "from": "d2b-realm-router@0.0.0-bootstrap#path",
-      "to": "tracing@0.1.44#registry+https://github.com/rust-lang/crates.io-index",
-      "kind": "normal",
-      "target": null
-    },
-    {
-      "from": "d2b-realm-transport@0.0.0-bootstrap#path",
-      "to": "async-trait@0.1.92#registry+https://github.com/rust-lang/crates.io-index",
-      "kind": "proc-macro",
-      "target": null
-    },
-    {
-      "from": "d2b-realm-transport@0.0.0-bootstrap#path",
-      "to": "d2b-realm-core@0.0.0-bootstrap#path",
-      "kind": "normal",
-      "target": null
-    },
-    {
-      "from": "d2b-realm-transport@0.0.0-bootstrap#path",
-      "to": "d2b-realm-provider@0.0.0-bootstrap#path",
-      "kind": "normal",
-      "target": null
-    },
-    {
-      "from": "d2b-realm-transport@0.0.0-bootstrap#path",
-      "to": "tokio@1.53.1#registry+https://github.com/rust-lang/crates.io-index",
       "kind": "normal",
       "target": null
     },
@@ -7517,6 +7301,12 @@
       "target": null
     },
     {
+      "from": "d2b-zone-routing@0.0.0-bootstrap#path",
+      "to": "d2b-realm-core@0.0.0-bootstrap#path",
+      "kind": "normal",
+      "target": null
+    },
+    {
       "from": "d2b@0.0.0-bootstrap#path",
       "to": "clap@4.6.6#registry+https://github.com/rust-lang/crates.io-index",
       "kind": "normal",
@@ -7572,13 +7362,13 @@
     },
     {
       "from": "d2b@0.0.0-bootstrap#path",
-      "to": "d2b-realm-router@0.0.0-bootstrap#path",
+      "to": "d2b-resource-client@0.0.0-bootstrap#path",
       "kind": "normal",
       "target": null
     },
     {
       "from": "d2b@0.0.0-bootstrap#path",
-      "to": "d2b-resource-client@0.0.0-bootstrap#path",
+      "to": "d2b-zone-routing@0.0.0-bootstrap#path",
       "kind": "normal",
       "target": null
     },
@@ -8645,12 +8435,6 @@
       "target": null
     },
     {
-      "from": "itertools@0.14.0#registry+https://github.com/rust-lang/crates.io-index",
-      "to": "either@1.18.0#registry+https://github.com/rust-lang/crates.io-index",
-      "kind": "normal",
-      "target": null
-    },
-    {
       "from": "jiff-core@0.1.0#registry+https://github.com/rust-lang/crates.io-index",
       "to": "defmt@1.1.1#registry+https://github.com/rust-lang/crates.io-index",
       "kind": "normal",
@@ -9194,48 +8978,6 @@
       "from": "proc-macro2@1.0.107#registry+https://github.com/rust-lang/crates.io-index",
       "to": "unicode-ident@1.0.24#registry+https://github.com/rust-lang/crates.io-index",
       "kind": "normal",
-      "target": null
-    },
-    {
-      "from": "prost-derive@0.13.5#registry+https://github.com/rust-lang/crates.io-index",
-      "to": "anyhow@1.0.104#registry+https://github.com/rust-lang/crates.io-index",
-      "kind": "normal",
-      "target": null
-    },
-    {
-      "from": "prost-derive@0.13.5#registry+https://github.com/rust-lang/crates.io-index",
-      "to": "itertools@0.14.0#registry+https://github.com/rust-lang/crates.io-index",
-      "kind": "normal",
-      "target": null
-    },
-    {
-      "from": "prost-derive@0.13.5#registry+https://github.com/rust-lang/crates.io-index",
-      "to": "proc-macro2@1.0.107#registry+https://github.com/rust-lang/crates.io-index",
-      "kind": "normal",
-      "target": null
-    },
-    {
-      "from": "prost-derive@0.13.5#registry+https://github.com/rust-lang/crates.io-index",
-      "to": "quote@1.0.47#registry+https://github.com/rust-lang/crates.io-index",
-      "kind": "normal",
-      "target": null
-    },
-    {
-      "from": "prost-derive@0.13.5#registry+https://github.com/rust-lang/crates.io-index",
-      "to": "syn@2.0.119#registry+https://github.com/rust-lang/crates.io-index",
-      "kind": "normal",
-      "target": null
-    },
-    {
-      "from": "prost@0.13.5#registry+https://github.com/rust-lang/crates.io-index",
-      "to": "bytes@1.12.1#registry+https://github.com/rust-lang/crates.io-index",
-      "kind": "normal",
-      "target": null
-    },
-    {
-      "from": "prost@0.13.5#registry+https://github.com/rust-lang/crates.io-index",
-      "to": "prost-derive@0.13.5#registry+https://github.com/rust-lang/crates.io-index",
-      "kind": "proc-macro",
       "target": null
     },
     {

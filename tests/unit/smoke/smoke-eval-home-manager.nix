@@ -9,7 +9,7 @@
 # `attribute 'home-manager' missing` at eval time. This test would
 # have caught that regression.
 #
-# Wired into tests/static.sh as a Layer-1 gate.
+# Wired into the fixed Bazel Layer-1 graph.
 { system ? builtins.currentSystem
 , pkgs ? import <nixpkgs> { inherit system; }
 }:

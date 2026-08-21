@@ -82,9 +82,7 @@ vsock, ComponentSession, journald, projection, or cross-Zone share support.
 From `packages/`, run:
 
 ```bash
-cargo nextest run -p d2b-provider-observability-otel --lib --tests
-cargo clippy -p d2b-provider-observability-otel --all-targets -- -D warnings
-cargo fmt --manifest-path d2b-provider-observability-otel/Cargo.toml -- --check
+bazel test //packages/d2b-provider-observability-otel:d2b_provider_observability_otel_test
 ```
 
 The crate's normal tests are hermetic and cover the retained agent, socket,

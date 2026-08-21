@@ -65,8 +65,7 @@ not observable.
 ## Build and test
 
 ```bash
-cargo check -p d2b-provider-display-wayland
-cargo test -p d2b-provider-display-wayland
+bazel test //packages/d2b-provider-display-wayland:d2b_provider_display_wayland_doc_test
 ```
 
 The tests are hermetic and cover policy layering, readiness, principal-pool

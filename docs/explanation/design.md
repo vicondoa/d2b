@@ -1112,9 +1112,9 @@ model is honest about its incomplete edges:
   v0.2.0 wishlist; until then, treat each workload VM as a
   point-to-point endpoint of its env's gateway.
 - **The `mkOption { default = …; readOnly = true; }` + matching
-  `config.<…>` assignment trio only has heuristic static
-  coverage.** `tests/static.sh` now runs a grep+awk lint that
-  catches same-file inline and multiline `mkOption` blocks plus
+  `config.<…>` assignment trio only has heuristic source
+  coverage.** The fixed source-hygiene gate catches same-file inline
+  and multiline `mkOption` blocks plus
   one-line `mkOption { default = …; readOnly = true; }` forms.
   It still does **not** detect nested `config = { d2b = {
   … }; };` assignments, and comments / strings can still fool the

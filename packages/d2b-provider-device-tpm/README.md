@@ -105,10 +105,8 @@ records for the resulting privileged effects.
 ## Build and test
 
 ```bash
-cargo test -p d2b-provider-device-tpm
-cargo nextest run -p d2b-provider-device-tpm
-cargo clippy -p d2b-provider-device-tpm --all-targets -- -D warnings
-cargo run -p xtask -- check-provider-layout
+bazel test //packages/d2b-provider-device-tpm:d2b_provider_device_tpm_test
+make test-drift
 ```
 
 The hermetic tests cover settings and argv shape, opaque ticket binding,

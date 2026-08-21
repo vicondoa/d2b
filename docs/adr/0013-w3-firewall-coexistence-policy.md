@@ -138,9 +138,8 @@ non-admin readers.
   Both licenses (MIT, Apache-2.0) are already in `packages/deny.toml`'s
   allow list, so no `cargo-deny` matrix change is needed.
 - The 7-row matrix becomes the source of truth for the
-  `host-prepare/firewall.md` operator how-to and the
-  `nft-coexistence.sh`/`nft-foreign-rule-preservation.sh` /
-  `usbip-firewall-skeleton.sh` gates in `tests/static.sh`.
+  `host-prepare/firewall.md` operator how-to and the owner-local
+  networking and USBIP checks.
 - Operators on firewalld or ufw hosts must explicitly opt into the
   refusal-override path (W3fu ADR will define it).
 - Adding ANY new hook family (raw / mangle / nat) under `inet d2b`

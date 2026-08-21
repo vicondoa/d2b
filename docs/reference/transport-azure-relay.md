@@ -28,8 +28,6 @@ Long-lived Relay rule keys are never passed to provider-managed sandboxes.
   rendezvous addresses, and queues accepted `TransportSession`s for callers;
 - connection/auth failures map to typed provider errors without exposing
   relay tokens;
-- adapters above it must still pass the shared
-  [transport conformance matrix](./transport-conformance-matrix.md).
 
 The provider accepts an optional extra CA bundle for sandbox egress-proxy
 environments. Gateway-side listeners normally use the platform web PKI roots.

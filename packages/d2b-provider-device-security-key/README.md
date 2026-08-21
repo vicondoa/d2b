@@ -116,12 +116,8 @@ and session material are excluded from labels and messages.
 ## Build and test
 
 ```bash
-cargo check -p d2b-provider-device-security-key
-cargo test -p d2b-provider-device-security-key
-cargo nextest run -p d2b-provider-device-security-key
-cargo clippy -p d2b-provider-device-security-key --all-targets -- -D warnings
-cargo fmt --package d2b-provider-device-security-key -- --check
-cargo run -p xtask -- check-provider-layout
+bazel test //packages/d2b-provider-device-security-key:d2b_provider_device_security_key_test
+make test-drift
 ```
 
 The container-targeted integration scenario exercises the public Provider

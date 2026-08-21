@@ -1,7 +1,0 @@
-# cli-contract - CLI-contract integration tests (d2b crate, tests/*.rs).
-# Successors for the retired cli-rust-native-* bash gates: spawn the real
-# `d2b` binary against the D2B_FIXTURES rendered bundle + a hermetic
-# system-state/daemon-state fixture and validate the JSON envelopes strictly
-# against the committed DTOs (deny_unknown_fields). One libtest path per line;
-# checked by tests/tools/assert-pinned-tests.sh.
-list_json_matches_smoke_inventory_and_schema

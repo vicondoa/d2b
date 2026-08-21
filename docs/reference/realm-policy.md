@@ -66,7 +66,7 @@ endpoints, host paths, or PII.
 
 Identity lifecycle metadata for enrollment, controller generations, rotation,
 revocation, teardown directives, and recovery is documented in
-[Realm identity lifecycle contract](./realm-identity-lifecycle.md). Those DTOs
+The realm identity DTOs are documented in [realm-core](./realm-core.md). Those DTOs
 are designed for future policy/session enforcement, but the current runtime
 does not yet enforce live revocation or route sessions through per-realm
 controllers.
@@ -75,6 +75,5 @@ controllers.
 
 - [Realm option schema](./realm-options.md)
 - [Realm controller configuration](./realm-controller-config.md)
-- [Realm identity lifecycle contract](./realm-identity-lifecycle.md)
-- [Realm tree routing contract](./realm-routing.md)
+- [Realm core reference](./realm-core.md)
 - [Realm core model reference](./realm-core.md)

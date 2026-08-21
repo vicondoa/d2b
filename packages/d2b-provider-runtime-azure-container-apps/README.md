@@ -52,7 +52,7 @@ labels use closed semantic values.
 ## Build and test
 
 ```text
-cargo test -p d2b-provider-runtime-azure-container-apps
+make test-rust
 ```
 
 Tests use real typed effect objects and in-process fakes. No Azure account or

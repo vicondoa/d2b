@@ -4,7 +4,7 @@
 
 Producer: `nixos-modules/manifest-closures.nix` emits this artifact; `packages/d2b-core` parses it.
 
-Schema: [`closures.json`](./closures.json) (forward reference; generated with `cargo xtask gen-schemas`).
+Schema: [`closures.json`](./closures.json) (forward reference; generated with `bazel run //packages/xtask:xtask -- gen-schemas`).
 
 ## Fields
 

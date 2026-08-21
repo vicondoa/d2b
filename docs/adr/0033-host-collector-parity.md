@@ -201,17 +201,10 @@ The existing `hostmetrics`, self-`prometheus`, and StoreSync-audit
   identity resolution + override, and socket-path non-collision
   (`host-otlp.sock` != `host-egress.sock` / guest sockets; no SigNoz
   4317/4318 or vsock 14317 reuse).
-- **Contract tests (Rust):**
-  `packages/d2b-contract-tests/tests/policy_state.rs::store_sync_export`
-  regex-asserts the StoreSync `vm.name` *value* is `"host"`, so it is
-  updated to follow `identityName` while `vm.env` / `vm.role` stay
-  `"host"`. The resource-attribute **key**-allowlist gate
-  `packages/d2b-contract-tests/tests/policy_observability.rs::loki_native_otel_resource_attributes`
-  (legacy name - the framework uses native SigNoz/ClickHouse, not Loki;
-  the retired `tests/loki-label-cardinality-eval.sh` shell gate is gone)
-  checks the *set of keys*, not values, and forbids retired
-  Loki/Tempo/Grafana surfaces. This change adds no new resource-attribute
-  keys (all of `vm.name`/`vm.env`/`vm.role`/`host.name`/`service.name`/
+- **Owner-local checks (Rust/Nix):**
+  The StoreSync identity and resource-attribute key allowlist remain owned by
+  the observability and storage emitters with their owner-local tests. This
+  change adds no new resource-attribute keys (all of `vm.name`/`vm.env`/`vm.role`/`host.name`/`service.name`/
   `source` are already allow-listed) and no retired surfaces, so that gate
   needs no edit - only re-verification that it stays green.
 - **Docs:** `docs/reference/components-observability.md` gains the three

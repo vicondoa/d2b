@@ -64,6 +64,5 @@ decision renders as a decision rather than as a name.
 ## Build and test
 
 ```bash
-cargo test -p d2b-provider
-cargo clippy -p d2b-provider --all-targets
+bazel test //packages/d2b-provider:d2b_provider_test
 ```

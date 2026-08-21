@@ -17,9 +17,8 @@ than literal byte-for-byte goldens unless the corresponding
 
 > There is no bash fallback. The Rust CLI never executes bash, and
 > the no-bash invariant is enforced by
-> `tests/tools/no-bash-ast-walker` in `test-rust`. The companion source policy
-> in `packages/d2b-contract-tests/tests/policy_source.rs` is advisory until the
-> fixture-contract lane is enabled. Verbs that used to degrade to bash on
+> `tests/tools/no-bash-ast-walker` in `test-rust`; source hygiene remains a
+> fixed global policy gate. Verbs that used to degrade to bash on
 > `not-yet-implemented` or `daemon-down` now surface typed
 > envelopes (`not-yet-implemented` exit 78, `daemon-down` exit 1) -
 > see [`error-codes.md` § "Remediation rendering conventions"](./error-codes.md#remediation-rendering-conventions)
@@ -48,7 +47,7 @@ Realm-aware target strings use the canonical form
 `<workload>.<realm>[.<ancestor>...].d2b`. Bare workload names are aliases only
 when a caller supplies an alias table or default realm, and old node-qualified
 forms are diagnostics that point to the realm-native target with the node label
-removed. See [Realm access resolver contract](./realm-access-resolver.md) for
+removed. See [realm-core](./realm-core.md) for
 the target grammar, direct host-local socket binding, capability preflight, and
 typed denial shapes.
 

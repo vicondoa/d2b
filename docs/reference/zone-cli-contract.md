@@ -137,7 +137,7 @@ targets:
 The first label is the workload and the remaining labels are the realm path,
 most-specific first. The target is an identifier, not a DNS name, IP address,
 SSH address, vsock address, or physical-node selector. Use
-[the realm access resolver contract](./realm-access-resolver.md) for aliases,
+the realm-core target contract for aliases,
 ambiguity handling, and capability preflight.
 
 `type: "workload"` requests expose:

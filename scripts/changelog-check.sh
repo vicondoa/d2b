@@ -181,7 +181,7 @@ use Encode ();
 # but the Rust fold rejects would break the merge, the two MUST agree on
 # discovery, file types, encoding, and structure. That equivalence is pinned by
 # the cross-language parity tests in
-# packages/d2b-contract-tests/tests/policy_changelog_gate.rs and the Rust-side
+# packages/xtask/tests/policy_changelog_gate.rs and the Rust-side
 # discovery tests in packages/xtask/src/changelog.rs. Keep all three in sync.
 my @sections = qw(Added Changed Deprecated Removed Fixed Security);
 my %known = map { $_ => 1 } @sections;

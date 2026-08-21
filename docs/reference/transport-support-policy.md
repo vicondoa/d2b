@@ -21,4 +21,4 @@ transport error; d2b does not silently downgrade to another transport.
 Tree route metadata does not create a transport by itself. The route contract
 forbids treating discovery or direct shortcut metadata as a VPN, overlay, SSH
 fallback, raw relay tunnel, raw TCP proxy, or file-descriptor tunnel; see
-[realm tree routing](./realm-routing.md).
+[realm-core target model](./realm-core.md).

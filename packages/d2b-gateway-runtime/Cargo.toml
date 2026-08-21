@@ -24,7 +24,6 @@ futures-util = "0.3"
 d2b-provider-transport-azure-relay = { path = "../d2b-provider-transport-azure-relay", version = "0.0.0-bootstrap" }
 d2b-provider-runtime-azure-container-apps = { path = "../d2b-provider-runtime-azure-container-apps", version = "0.0.0-bootstrap" }
 d2b-realm-core = { path = "../d2b-realm-core", version = "0.0.0-bootstrap" }
-d2b-realm-provider = { path = "../d2b-realm-provider", version = "0.0.0-bootstrap" }
 async-trait = "0.1"
 tokio = { version = "1", features = ["rt", "rt-multi-thread", "macros", "sync", "time"] }
 tokio-tungstenite = { version = "0.24", features = ["rustls-tls-webpki-roots"] }

@@ -109,10 +109,8 @@ unbounded text.
 ## Build and test
 
 ```bash
-cargo test -p d2b-provider-device-gpu
-cargo nextest run -p d2b-provider-device-gpu
-cargo clippy -p d2b-provider-device-gpu --all-targets -- -D warnings
-cargo run -p xtask -- check-provider-layout
+bazel test //packages/d2b-provider-device-gpu:d2b_provider_device_gpu_test
+make test-drift
 ```
 
 The hermetic tests cover settings and unknown-field rejection, arbitration,

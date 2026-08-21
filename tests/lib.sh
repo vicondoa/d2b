@@ -55,27 +55,6 @@ export SCCACHE_DIR="${SCCACHE_DIR:-$HOME/.cache/d2b-sccache}"
 # for the host's free-space envelope.
 export SCCACHE_CACHE_SIZE="${SCCACHE_CACHE_SIZE:-10G}"
 
-# Hermetic d2b-contract-tests policy binaries owned by `make test-policy`.
-# The fixture-contract lane excludes these exact binaries so the Layer-1 graph
-# does not run their repository-wide source and documentation scans twice.
-# ShellCheck analyzes this sourced library without either consuming driver.
-# shellcheck disable=SC2034
-readonly -a D2B_FIXTURE_INDEPENDENT_POLICY_BINARIES=(
-  policy_dash_gate
-  policy_changelog_gate
-  policy_effectport_boundary
-  policy_provider_crates
-  policy_resource_mutation_seal
-  policy_production_closure
-  policy_spec_vocabulary
-  policy_test_determinism
-  policy_test_placement
-  policy_telemetry_redaction
-  policy_docs
-  policy_gas_city
-  security_matrix_coverage
-)
-
 d2b_repo_root() {
   printf '%s\n' "${ROOT:-${FLAKE:-$(dirname "$_LIB_HERE")}}"
 }
@@ -87,7 +66,7 @@ d2b_repo_root() {
 # Why: a bare path makes Nix use the `path:` fetcher, which copies the
 # ENTIRE working tree into the store, including the multi-GiB
 # `target` cargo artifacts (measured: ~36 GB / 5+ min per cold
-# eval, re-triggered every time a cargo build churns target/). `git+file://`
+# eval, re-triggered every time a build churns target/). `git+file://`
 # copies only git-tracked files (target/ is gitignored), turning a
 # 5-minute eval into <1 s.
 #
@@ -402,7 +381,7 @@ ssh_net_vm() {
 
 # Per-process cleanup bookkeeping files MUST live outside $(d2b_repo_root)
 # so they can't race with `builtins.getFlake (toString <repo>)` source
-# captures during a static.sh run. Nix copies the entire flake source
+# captures during a flake evaluation. Nix copies the entire flake source
 # tree at first eval; if .d2b-cleanups.<PID> or .d2b-scratch-registry is
 # created/removed/appended between the kernel `stat` and the store
 # copy, the copy fails with
@@ -412,7 +391,7 @@ ssh_net_vm() {
 # Cleanups + scratch registry move to
 #   ${D2B_BOOKKEEPING_DIR:-${TMPDIR:-/tmp}/d2b-bookkeeping}
 # which is shared across forks of the same gate run (so the orphan
-# reaper at static.sh start can find dead-PID cleanup files there),
+# reaper can find dead-PID cleanup files there),
 # but is invisible to the flake-source enumeration.
 D2B_BOOKKEEPING_DIR=${D2B_BOOKKEEPING_DIR:-${TMPDIR:-/tmp}/d2b-bookkeeping}
 export D2B_BOOKKEEPING_DIR
@@ -533,7 +512,7 @@ d2b_reap_scratch_orphans() {
 
 # ---------- disk budget + per-phase GC ----------
 #
-# Full tests/static.sh peak /nix/store growth is ~1.2 TiB cold (per
+# A cold full Nix gate can grow /nix/store substantially (per
 # historical test transcripts). The bulk of that growth is in
 # transient derivations (kernel/initrd/systemd toplevels) that are
 # only retained via auto-gcroots created by `nix-shell` and
@@ -607,7 +586,7 @@ d2b_check_disk_budget() {
 # contention that surfaces as transient "could not render smoke
 # vms.json" failures when several test runs happen concurrently.
 #
-# When `tests/static.sh` runs the Layer-1 gates it exports
+# When a Layer-1 gate exports
 # `D2B_STATIC_CACHE=<scratch dir>` and pre-renders the shared smoke
 # artifacts. Each gate calls `d2b_smoke_vms_json` / `d2b_smoke_bundle_*`
 # which lazily render on first request (cached for subsequent

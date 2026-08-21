@@ -17,7 +17,6 @@ the non-tunneling boundary. For the realm core model (frame
 schema, operation kinds, idempotency, stream authz) see
 [realm core](./realm-core.md). For the transport layer
 (loopback, local TCP, Azure Relay) see the
-[transport conformance matrix](./transport-conformance-matrix.md) and the
 [transport support policy](./transport-support-policy.md). For host
 substrate capabilities see [host substrate providers](./host-substrate-providers.md).
 The architectural rationale is in

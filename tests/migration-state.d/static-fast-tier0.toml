@@ -1,2 +1,0 @@
-status = "retired"
-successor_ids = ["tests/tools/tier0-first-pass.sh"]

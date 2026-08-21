@@ -9,7 +9,7 @@ The container lane can be exercised with:
 ```bash
 make test-integration
 # or, for the hermetic provider target:
-cargo test -p d2b-provider-device-gpu --test provider_lifecycle
+bazel test //packages/d2b-provider-device-gpu:provider_lifecycle
 ```
 
 | Fixture | Required end-to-end assertion |

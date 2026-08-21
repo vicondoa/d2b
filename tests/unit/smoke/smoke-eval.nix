@@ -27,7 +27,7 @@
 #   # or, from the flake:
 #   nix build .#checks.x86_64-linux.smoke
 #
-# Wired into tests/static.sh as a Layer-1 gate.
+# Wired into the fixed Bazel Layer-1 graph.
 { system ? builtins.currentSystem
 , pkgs ? import <nixpkgs> { inherit system; }
 }:

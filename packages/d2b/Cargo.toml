@@ -20,7 +20,7 @@ d2b-contracts-resource = { path = "../d2b-contracts-resource", version = "0.0.0-
 d2b-cutover = { path = "../d2b-cutover", version = "0.0.0-bootstrap" }
 d2b-resource-client = { path = "../d2b-resource-client", version = "0.0.0-bootstrap" }
 d2b-realm-core = { path = "../d2b-realm-core", version = "0.0.0-bootstrap" }
-d2b-realm-router = { path = "../d2b-realm-router", version = "0.0.0-bootstrap" }
+d2b-zone-routing = { path = "../d2b-zone-routing", version = "0.0.0-bootstrap" }
 rustix = { workspace = true }
 schemars.workspace = true
 serde.workspace = true

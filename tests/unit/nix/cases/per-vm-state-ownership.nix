@@ -9,7 +9,7 @@
 # 2775 store-mode enforcement in packages/d2b-provider-volume-local/nix/store.nix or the daemon's
 # packages/d2bd/src/ownership_preflight.rs) are SOURCE-LINTS, not
 # eval-time value assertions, so they live in the Rust policy layer:
-# packages/d2b-contract-tests/tests/policy_ownership_preflight.rs
+# the accepted deletion of the old source-lint evidence; pure eval cases remain
 # (per the eval/Rust routing discipline - nix-unit holds pure-eval
 # assertions; source-greps belong with the other policy_*.rs lints).
 #
