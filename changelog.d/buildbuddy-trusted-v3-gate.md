@@ -12,4 +12,6 @@
   boundary. Missing or failed remote authentication now fails closed in the
   credential-bearing CI path. Fixed suite definitions and the workflow/Make
   control files are now overlaid from trusted `v3`, and the tier-0 preflight
-  remains local and credential-free.
+  remains local and credential-free. Credential-bearing jobs reject local
+  action execution and run local policy checks on a fresh credential-free
+  runner.

@@ -357,14 +357,18 @@ prepare_trusted_control_files() {
     MODULE.bazel.lock \
     bazel/checks/BUILD.bazel \
     bazel/checks/fixtures/BUILD.bazel \
+    bazel/checks/fixtures/defs.bzl \
     bazel/checks/meta/BUILD.bazel \
     bazel/checks/nix/BUILD.bazel \
+    bazel/checks/nix/defs.bzl \
     bazel/checks/policy/BUILD.bazel \
     bazel/checks/rust/BUILD.bazel \
     bazel/platforms/BUILD.bazel \
     bazel/remote/BUILD.bazel \
     Makefile \
     .github/workflows/pr-l1-static-fast.yml \
+    tests/tools/peak-rss.py \
+    tests/tools/tier0-first-pass.sh \
     tests/tools/bazel-check \
     tests/tools/bazel-check-bootstrap \
     tests/tools/ci-shell \
@@ -619,6 +623,9 @@ run_bazel() {
       --bes_backend=grpcs://d2b.buildbuddy.io
       --bes_results_url=https://d2b.buildbuddy.io/invocation/
       "--credential_helper=d2b.buildbuddy.io=$TRUSTED_ROOT/tests/tools/bazel-check"
+      --spawn_strategy=remote
+      --remote_local_fallback=false
+      "--modify_execution_info=.*=+no-local"
     )
     if ci_mode; then
       command_flags+=(

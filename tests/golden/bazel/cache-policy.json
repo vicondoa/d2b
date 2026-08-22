@@ -72,8 +72,10 @@
       "MODULE.bazel.lock",
       "bazel/checks/BUILD.bazel",
       "bazel/checks/fixtures/BUILD.bazel",
+      "bazel/checks/fixtures/defs.bzl",
       "bazel/checks/meta/BUILD.bazel",
       "bazel/checks/nix/BUILD.bazel",
+      "bazel/checks/nix/defs.bzl",
       "bazel/checks/policy/BUILD.bazel",
       "bazel/checks/rust/BUILD.bazel",
       "bazel/platforms/BUILD.bazel",
@@ -83,10 +85,12 @@
       "tests/tools/ci-shell",
       "tests/tools/scrub-shell-environment",
       "Makefile",
+      "tests/tools/peak-rss.py",
+      "tests/tools/tier0-first-pass.sh",
       ".github/workflows/pr-l1-static-fast.yml"
     ],
     "allowedSecurityDigests": [
-      "sha256:f25a2dc8d4a7e5628c94624c565ba1cff7d16a4bc09a45f4a197d025dd77a265"
+      "sha256:3139ba25c6776a35a3e02249b562ba6331f518ed704fc3369c861df489ec1fa6"
     ],
     "untrustedCredential": "none",
     "trustedCredential": "credential-helper"

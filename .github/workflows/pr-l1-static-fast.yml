@@ -94,9 +94,41 @@ jobs:
         run: |
           printf '%s' "$D2B_BUILDBUDDY_API_KEY" | env -u D2B_BUILDBUDDY_API_KEY ./trusted/tests/tools/bazel-check-bootstrap \
             make -C trusted test-policy
+
+  policy-local:
+    if: ${{ github.event_name == 'push' || github.event.pull_request.merge_commit_sha != '' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      D2B_BAZEL_TRUSTED: "1"
+      D2B_BAZEL_PROFILE: local
+      D2B_BAZEL_BASE_SHA: ${{ github.event.pull_request.base.sha || github.sha }}
+      D2B_BAZEL_HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+      D2B_BAZEL_MERGE_SHA: ${{ github.event_name == 'push' && github.sha || github.event.pull_request.merge_commit_sha }}
+      D2B_BAZEL_TRUSTED_SHA: ${{ github.event.pull_request.base.sha || github.sha }}
+      D2B_BAZEL_PR_NUMBER: ${{ github.event.pull_request.number || '' }}
+      D2B_BAZEL_BRANCH: ${{ github.head_ref || github.ref_name }}
+      D2B_BAZEL_RUN_ID: ${{ github.run_id }}
+      D2B_BAZEL_WORKFLOW_REF: ${{ github.workflow_ref }}
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+        with:
+          ref: ${{ github.event.pull_request.base.sha || github.sha }}
+          path: trusted
+          persist-credentials: false
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+        with:
+          ref: ${{ github.event_name == 'push' && github.sha || github.event.pull_request.merge_commit_sha }}
+          path: workspace
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: cachix/install-nix-action@23cf0fec1d55e0b1f2631aedd2a610c21ef8b077
+        with:
+          nix_path: nixpkgs=channel:nixos-unstable
+          extra_nix_config: |
+            experimental-features = nix-command flakes
       - name: Local policy-only suite
         env:
-          D2B_BAZEL_PROFILE: local
           D2B_BAZEL_REQUIRE_REMOTE: "0"
           D2B_BAZEL_TEST_TAG_FILTERS: "-manual,-gpu,-kvm"
         run: make -C trusted test-policy
@@ -109,7 +141,7 @@ jobs:
       D2B_BAZEL_TRUSTED: "1"
       D2B_BAZEL_PROFILE: ${{ github.event_name == 'push' && 'trusted-seed' || 'remote' }}
       D2B_BAZEL_REQUIRE_REMOTE: "1"
-      D2B_BAZEL_TEST_TAG_FILTERS: "-local,-manual,-exclusive,-gpu,-kvm"
+      D2B_BAZEL_TEST_TAG_FILTERS: "-local,-no-remote-exec,-manual,-exclusive,-gpu,-kvm"
       D2B_BAZEL_BASE_SHA: ${{ github.event.pull_request.base.sha || github.sha }}
       D2B_BAZEL_HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
       D2B_BAZEL_MERGE_SHA: ${{ github.event_name == 'push' && github.sha || github.event.pull_request.merge_commit_sha }}
@@ -150,6 +182,7 @@ jobs:
       D2B_BAZEL_TRUSTED: "1"
       D2B_BAZEL_PROFILE: ${{ github.event_name == 'push' && 'trusted-seed' || 'remote' }}
       D2B_BAZEL_REQUIRE_REMOTE: "1"
+      D2B_BAZEL_TEST_TAG_FILTERS: "-local,-no-remote-exec,-manual,-gpu,-kvm"
       D2B_BAZEL_BASE_SHA: ${{ github.event.pull_request.base.sha || github.sha }}
       D2B_BAZEL_HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
       D2B_BAZEL_MERGE_SHA: ${{ github.event_name == 'push' && github.sha || github.event.pull_request.merge_commit_sha }}
@@ -190,6 +223,7 @@ jobs:
       D2B_BAZEL_TRUSTED: "1"
       D2B_BAZEL_PROFILE: ${{ github.event_name == 'push' && 'trusted-seed' || 'remote' }}
       D2B_BAZEL_REQUIRE_REMOTE: "1"
+      D2B_BAZEL_TEST_TAG_FILTERS: "-local,-no-remote-exec,-manual,-gpu,-kvm"
       D2B_BAZEL_BASE_SHA: ${{ github.event.pull_request.base.sha || github.sha }}
       D2B_BAZEL_HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
       D2B_BAZEL_MERGE_SHA: ${{ github.event_name == 'push' && github.sha || github.event.pull_request.merge_commit_sha }}
@@ -470,7 +504,7 @@ jobs:
 
   check:
     if: ${{ always() }}
-    needs: [tier0, policy-tooling, rust-main, rust-broker, rust-guest, rust-local, nix-eval, nix-unit, nix-realized, nix-aarch64, fixtures-proofs]
+    needs: [tier0, policy-tooling, policy-local, rust-main, rust-broker, rust-guest, rust-local, nix-eval, nix-unit, nix-realized, nix-aarch64, fixtures-proofs]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5

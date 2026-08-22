@@ -5,6 +5,7 @@ use std::path::PathBuf;
 const REQUIRED_AGGREGATE_JOBS: &[&str] = &[
     "tier0",
     "policy-tooling",
+    "policy-local",
     "rust-main",
     "rust-broker",
     "rust-guest",
@@ -127,7 +128,7 @@ fn assert_trusted_workflow_contract(workflow: &str) {
     );
     assert_eq!(
         workflow.matches("make -C trusted").count(),
-        13,
+        14,
         "every Layer-1 step must invoke its fixed public Make alias from trusted v3"
     );
     assert!(
@@ -192,6 +193,11 @@ fn assert_trusted_workflow_contract(workflow: &str) {
             "{job} must fail closed instead of reducing to a local gate"
         );
         assert!(
+            block.contains("D2B_BAZEL_TEST_TAG_FILTERS:")
+                && block.contains("-local,-no-remote-exec"),
+            "{job} must exclude local actions from credential-bearing CI"
+        );
+        assert!(
             block.contains("D2B_BUILDBUDDY_API_KEY: ${{ secrets.D2B_BUILDBUDDY_API_KEY }}")
                 && block.contains("bazel-check-bootstrap"),
             "{job} must broker the credential through the trusted bootstrap"
@@ -211,15 +217,16 @@ fn assert_trusted_workflow_contract(workflow: &str) {
             && !tier0.contains("bazel-check-bootstrap"),
         "tier0 must remain a credential-free local preflight"
     );
-    let policy = job_block(workflow, "policy-tooling");
+    let policy_local = job_block(workflow, "policy-local");
     assert!(
-        policy.contains("D2B_BAZEL_TEST_TAG_FILTERS: \"-local,-no-remote-exec,-manual,-gpu,-kvm\"")
-            && policy.contains("name: Local policy-only suite")
-            && policy.contains("D2B_BAZEL_PROFILE: local")
-            && policy.contains("D2B_BAZEL_REQUIRE_REMOTE: \"0\""),
+        policy_local.contains("D2B_BAZEL_TEST_TAG_FILTERS: \"-manual,-gpu,-kvm\"")
+            && policy_local.contains("name: Local policy-only suite")
+            && policy_local.contains("D2B_BAZEL_PROFILE: local")
+            && policy_local.contains("D2B_BAZEL_REQUIRE_REMOTE: \"0\""),
         "policy-only local tests must be split from the credential-bearing remote step"
     );
     for job in [
+        "policy-local",
         "tier0",
         "rust-local",
         "nix-eval",

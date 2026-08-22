@@ -451,6 +451,16 @@ fn committed_profiles_share_authentication_and_worker_policy() {
         wrapper.contains("command_flags+=(--shell_executable=/bin/bash)"),
         "remote Bazel actions must use the worker's shell path"
     );
+    for marker in [
+        "--spawn_strategy=remote",
+        "--remote_local_fallback=false",
+        "--modify_execution_info=.*=+no-local",
+    ] {
+        assert!(
+            wrapper.contains(marker),
+            "credential-bearing remote execution must reject local actions: {marker}"
+        );
+    }
     assert!(
         wrapper.contains(
             "/run/current-system/sw/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:$test_path",
@@ -1651,10 +1661,14 @@ fn policy_preserves_remote_profiles_and_trust_partition() {
         "Makefile",
         "bazel/checks/BUILD.bazel",
         "bazel/checks/fixtures/BUILD.bazel",
+        "bazel/checks/fixtures/defs.bzl",
         "bazel/checks/meta/BUILD.bazel",
         "bazel/checks/nix/BUILD.bazel",
+        "bazel/checks/nix/defs.bzl",
         "bazel/checks/policy/BUILD.bazel",
         "bazel/checks/rust/BUILD.bazel",
+        "tests/tools/peak-rss.py",
+        "tests/tools/tier0-first-pass.sh",
         "tests/tools/ci-shell",
         "tests/tools/bazel-check-bootstrap",
     ] {
@@ -1751,14 +1765,18 @@ fn trusted_ci_rejects_pr_metadata_tampering() {
             "MODULE.bazel.lock",
             "bazel/checks/BUILD.bazel",
             "bazel/checks/fixtures/BUILD.bazel",
+            "bazel/checks/fixtures/defs.bzl",
             "bazel/checks/meta/BUILD.bazel",
             "bazel/checks/nix/BUILD.bazel",
+            "bazel/checks/nix/defs.bzl",
             "bazel/checks/policy/BUILD.bazel",
             "bazel/checks/rust/BUILD.bazel",
             "bazel/platforms/BUILD.bazel",
             "bazel/remote/BUILD.bazel",
             "Makefile",
             ".github/workflows/pr-l1-static-fast.yml",
+            "tests/tools/peak-rss.py",
+            "tests/tools/tier0-first-pass.sh",
             "tests/tools/bazel-check",
             "tests/tools/bazel-check-bootstrap",
             "tests/tools/ci-shell",
