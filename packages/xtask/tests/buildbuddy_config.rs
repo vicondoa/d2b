@@ -1658,6 +1658,7 @@ fn policy_preserves_remote_profiles_and_trust_partition() {
         .expect("allowlisted security files");
     for path in [
         ".github/workflows/pr-l1-static-fast.yml",
+        "flake.lock",
         "Makefile",
         "bazel/checks/BUILD.bazel",
         "bazel/checks/fixtures/BUILD.bazel",
@@ -1763,6 +1764,7 @@ fn trusted_ci_rejects_pr_metadata_tampering() {
             ".bazelrc",
             "MODULE.bazel",
             "MODULE.bazel.lock",
+            "flake.lock",
             "bazel/checks/BUILD.bazel",
             "bazel/checks/fixtures/BUILD.bazel",
             "bazel/checks/fixtures/defs.bzl",

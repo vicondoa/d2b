@@ -178,8 +178,9 @@ review. Missing review evidence fails closed to fresh review. No actionable
 finding remains at merge.
 
 The Bazel graph is the single enforcing Layer-1 authority. Bare local
-`make check` uses BuildBuddy for eligible actions, while generated CI runs the
-same fixed target sets with local Bazel execution and no remote credential.
+`make check` uses BuildBuddy for eligible actions. Protected `v3` CI runs
+credential-bearing remote suites for eligible actions and keeps Nix, fixture,
+hardware, and other local-only lanes local and credential-free.
 Make remains a compatibility surface, not a scheduler. See [Bazel and
 BuildBuddy](../reference/bazel-buildbuddy.md) for execution, cache, failure,
 credential, and update contracts.

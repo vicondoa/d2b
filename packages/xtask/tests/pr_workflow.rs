@@ -128,7 +128,7 @@ fn assert_trusted_workflow_contract(workflow: &str) {
     );
     assert_eq!(
         workflow.matches("make -C trusted").count(),
-        14,
+        13,
         "every Layer-1 step must invoke its fixed public Make alias from trusted v3"
     );
     assert!(

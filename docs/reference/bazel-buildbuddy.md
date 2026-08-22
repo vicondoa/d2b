@@ -180,15 +180,15 @@ missing credentials, authentication failure, endpoint failure, or remote
 execution failure fails the job instead of producing a reduced local gate.
 
 The facade stages the tested source with trusted copies of `.bazelrc`,
-`MODULE.bazel`, `MODULE.bazel.lock`, remote/platform BUILD files, and the
-credential/shell helpers. It disables system, home, workspace, and PR
+`MODULE.bazel`, `MODULE.bazel.lock`, `flake.lock`, remote/platform BUILD files,
+and the credential/shell helpers. It disables system, home, workspace, and PR
 `.bazelrc.user` configuration and pins the endpoint and helper path on the
 Bazel command line. PR cache writes never use the trusted seed namespace.
 
-The trusted security digest covers the committed workflow, Makefile, module
-lock, platform, remote policy, bootstrap, shell, and credential-helper inputs listed in
-`tests/golden/bazel/cache-policy.json`. Refresh it only after reviewing those
-bytes:
+The trusted security digest covers the committed workflow, Makefile, module and
+Nix locks, platform, remote policy, bootstrap, shell, and credential-helper
+inputs listed in `tests/golden/bazel/cache-policy.json`. Refresh it only after
+reviewing those bytes:
 
 ```bash
 bazel run //packages/xtask:xtask -- bazel-evidence security-digest

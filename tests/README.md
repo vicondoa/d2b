@@ -187,6 +187,9 @@ Bazel's credential helper, withholds credentials from untrusted work, redacts
 logs and BEP output, and retries the identical target set locally only for a
 typed pre-dispatch infrastructure failure. Post-dispatch and test failures
 fail closed. Provider measurements do not define a second acceptance gate.
+Protected `v3` CI uses this boundary for credential-bearing remote suites,
+while Nix, fixture, hardware, and other local-only actions remain local and
+credential-free.
 The facade consumes `D2B_BAZEL_BIN` from the pinned shell and rejects an
 incomplete shell contract; it does not search for a hard-coded Nix-store
 Bazel path.

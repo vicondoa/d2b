@@ -355,6 +355,7 @@ prepare_trusted_control_files() {
     .bazelrc \
     MODULE.bazel \
     MODULE.bazel.lock \
+    flake.lock \
     bazel/checks/BUILD.bazel \
     bazel/checks/fixtures/BUILD.bazel \
     bazel/checks/fixtures/defs.bzl \
