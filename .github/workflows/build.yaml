@@ -183,6 +183,11 @@ jobs:
       D2B_BAZEL_PROFILE: local
       D2B_BAZEL_UNTRUSTED: "1"
       D2B_BAZEL_REQUIRE_REMOTE: "0"
+      # The build job also runs the nested local flake shards. Keep both
+      # layers serial on the hosted runner so Nix evaluation and Rust
+      # compilation cannot exhaust its memory before the gate reports.
+      D2B_CHECK_JOBS: "1"
+      D2B_FLAKE_JOBS: "1"
     steps:
       - name: Checkout immutable trusted controls
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5

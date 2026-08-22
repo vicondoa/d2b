@@ -52,6 +52,9 @@ deprecations ship one minor release before removal.
   identifiers whenever GitHub provides them.
 - Prepared the pinned Rust toolchain before parallel local Layer-1 gates so
   concurrent Rust and proof jobs do not race during rustup installation.
+- Serialized the main push workflow's nested local Layer-1 fan-out on hosted
+  runners so concurrent Nix evaluation and Rust compilation cannot exhaust the
+  runner before the aggregate check reports.
 
 ## [1.4.1] - 2026-07-12
 
