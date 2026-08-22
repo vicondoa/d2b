@@ -19,8 +19,10 @@ pub struct HostSelection {
     /// The Wayland offer proxy; `None` when all MIME types were denied by policy.
     pub offer: Option<DataControlOffer>,
     pub allowed_mimes: Vec<String>,
+    #[expect(dead_code, reason = "reserved selection inspection")]
     pub has_secret: bool,
     pub attribution: HostSelectionAttribution,
+    #[expect(dead_code, reason = "reserved selection inspection")]
     pub observed_at: Instant,
 }
 
@@ -49,6 +51,7 @@ impl<P: crate::clipd_host::niri::FocusedWindowProvider> HostClipboard<P> {
         self.attributor.cache_mut().apply_event(event)
     }
 
+    #[expect(dead_code, reason = "reserved attribution inspection")]
     pub fn focused_window_snapshot(&mut self) -> Option<FocusedWindowSnapshot> {
         self.attributor.cache_mut().focused_window()
     }
@@ -96,6 +99,7 @@ impl<P: crate::clipd_host::niri::FocusedWindowProvider> HostClipboard<P> {
     }
 
     /// Attribution quality of the current selection.
+    #[cfg_attr(not(test), expect(dead_code, reason = "test-only attribution inspection"))]
     pub fn current_attribution_quality(&self) -> Option<AttributionQuality> {
         self.current_selection
             .as_ref()

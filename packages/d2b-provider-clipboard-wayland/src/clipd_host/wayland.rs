@@ -102,6 +102,7 @@ impl DataControlSource {
         }
     }
 
+    #[expect(dead_code, reason = "reserved explicit lifecycle helper")]
     pub fn destroy(self) {
         match self {
             Self::Ext(s) => s.destroy(),
@@ -656,12 +657,14 @@ impl DataControlClient {
     }
 
     /// Raw Wayland socket fd (deprecated; prefer `as_fd`).
+    #[expect(dead_code, reason = "reserved fd inspection")]
     pub fn as_raw_fd(&self) -> std::os::unix::io::RawFd {
         use std::os::fd::AsRawFd;
         self.conn.as_fd().as_raw_fd()
     }
 
     /// Whether the data-control protocol is available.
+    #[expect(dead_code, reason = "reserved availability inspection")]
     pub fn is_available(&self) -> bool {
         !matches!(
             self.state.manager_state,

@@ -27,6 +27,7 @@ impl Notifier for DesktopNotifier {
 }
 
 #[derive(Debug, Default)]
+#[cfg_attr(not(test), expect(dead_code, reason = "test-only notifier"))]
 pub struct RecordingNotifier {
     pub notifications: Vec<Notification>,
 }
