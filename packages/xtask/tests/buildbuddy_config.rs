@@ -692,6 +692,91 @@ fn warning_after_cache_hit_fails_a_successful_local_run() {
 }
 
 #[test]
+fn warning_guard_survives_redaction_of_the_warning_prefix() {
+    let scratch = repo_root().join(".scratch").join(format!(
+        "bazel-check-warning-redacted-prefix-{}",
+        std::process::id()
+    ));
+    std::fs::create_dir_all(&scratch).expect("create wrapper test scratch");
+    let bazel = scratch.join("bazel");
+    write_executable(
+        &bazel,
+        "#!/usr/bin/env bash\n\
+         for arg in \"$@\"; do\n\
+           case \"$arg\" in\n\
+             --build_event_json_file=*) bep=\"${arg#*=}\" ;;\n\
+           esac\n\
+         done\n\
+         printf 'warning: synthetic warning prefix\\n'\n\
+         printf '{\"id\":{\"started\":{\"uuid\":\"redacted-prefix\"}},\"testResult\":{\"label\":\"//:test\"}}\\n' > \"$bep\"\n\
+         exit 0\n",
+    );
+
+    let output = Command::new("bash")
+        .arg(repo_root().join("tests/tools/bazel-check"))
+        .args(["--profile", "local", "--", "//:test"])
+        .env("D2B_BAZEL_BIN", &bazel)
+        .env("D2B_PROJECT_SHELL", "d2b")
+        .env("D2B_XTASK_BIN", env!("CARGO_BIN_EXE_xtask"))
+        .env("D2B_BUILDBUDDY_SENTINELS", "warning:")
+        .env("D2B_BAZEL_CHECK_SCRATCH", scratch.join("evidence"))
+        .output()
+        .expect("run bazel-check");
+
+    assert_eq!(output.status.code(), Some(1));
+    let diagnostics = format!(
+        "{}{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(diagnostics.contains("warning line found"));
+    assert!(!diagnostics.contains("bazel-check: local passed"));
+    let _ = std::fs::remove_dir_all(scratch);
+}
+
+#[test]
+fn warning_guard_fails_closed_when_the_log_disappears() {
+    let scratch = repo_root().join(".scratch").join(format!(
+        "bazel-check-warning-missing-log-{}",
+        std::process::id()
+    ));
+    std::fs::create_dir_all(&scratch).expect("create wrapper test scratch");
+    let bazel = scratch.join("bazel");
+    write_executable(
+        &bazel,
+        "#!/usr/bin/env bash\n\
+         rm -f \"$D2B_BAZEL_CHECK_SCRATCH/local.check.log\"\n\
+         for arg in \"$@\"; do\n\
+           case \"$arg\" in\n\
+             --build_event_json_file=*) bep=\"${arg#*=}\" ;;\n\
+           esac\n\
+         done\n\
+         printf '{\"id\":{\"started\":{\"uuid\":\"missing-log\"}},\"testResult\":{\"label\":\"//:test\"}}\\n' > \"$bep\"\n\
+         exit 0\n",
+    );
+
+    let output = Command::new("bash")
+        .arg(repo_root().join("tests/tools/bazel-check"))
+        .args(["--profile", "local", "--", "//:test"])
+        .env("D2B_BAZEL_BIN", &bazel)
+        .env("D2B_PROJECT_SHELL", "d2b")
+        .env("D2B_XTASK_BIN", env!("CARGO_BIN_EXE_xtask"))
+        .env("D2B_BAZEL_CHECK_SCRATCH", scratch.join("evidence"))
+        .output()
+        .expect("run bazel-check");
+
+    assert_eq!(output.status.code(), Some(1));
+    let diagnostics = format!(
+        "{}{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(diagnostics.contains("warning scan failed"));
+    assert!(!diagnostics.contains("bazel-check: local passed"));
+    let _ = std::fs::remove_dir_all(scratch);
+}
+
+#[test]
 fn concurrent_facades_isolate_warning_evidence() {
     let scratch = repo_root().join(".scratch").join(format!(
         "bazel-check-concurrent-warning-{}",

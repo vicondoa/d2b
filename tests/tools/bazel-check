@@ -23,9 +23,15 @@ redact_file() {
   xtask bazel-evidence redact-log --input "$path" --output "$path" >/dev/null
 }
 
-warning_line_present() {
+warning_line_status() {
   local path="$1"
-  [ -f "$path" ] && grep -q '^warning:' "$path"
+  [ -f "$path" ] || return 2
+  local status=0
+  grep -q '^warning:' "$path" || status=$?
+  case "$status" in
+    0|1) return "$status" ;;
+    *) return 2 ;;
+  esac
 }
 
 emit_captured_metadata() {
@@ -276,6 +282,13 @@ if [ -z "${D2B_XTASK_BIN:-}" ] || [ ! -x "${D2B_XTASK_BIN}" ]; then
     echo "bazel-check: xtask bootstrap failed" >&2
     exit 1
   fi
+  bootstrap_warning_status=1
+  warning_line_status "$bootstrap_log" || bootstrap_warning_status=$?
+  if [ "$bootstrap_warning_status" -gt 1 ]; then
+    rm -f -- "$bootstrap_log"
+    echo "bazel-check: bootstrap warning scan failed; failing closed" >&2
+    exit 1
+  fi
   xtask_source="$ROOT/bazel-bin/packages/xtask/xtask"
   xtask_stable="$SCRATCH/xtask"
   if ! cp -L -- "$xtask_source" "$xtask_stable.tmp" ||
@@ -291,9 +304,16 @@ if [ -z "${D2B_XTASK_BIN:-}" ] || [ ! -x "${D2B_XTASK_BIN}" ]; then
     echo "bazel-check: bootstrap evidence redaction failed; refusing to publish the run" >&2
     exit "$REDACTION_FAILURE_STATUS"
   fi
-  if warning_line_present "$bootstrap_log"; then
+  redacted_bootstrap_warning_status=1
+  warning_line_status "$bootstrap_log" || redacted_bootstrap_warning_status=$?
+  if [ "$bootstrap_warning_status" -eq 0 ] ||
+    [ "$redacted_bootstrap_warning_status" -eq 0 ]; then
     echo "bazel-check: bootstrap warning line found after log redaction; failing closed" >&2
     emit_captured_output "$bootstrap_log" "Bazel xtask bootstrap log"
+    exit 1
+  fi
+  if [ "$redacted_bootstrap_warning_status" -gt 1 ]; then
+    echo "bazel-check: bootstrap warning scan failed after log redaction; failing closed" >&2
     exit 1
   fi
 fi
@@ -331,6 +351,8 @@ run_bazel() {
   local bep_path="$3"
   local -a startup_flags=()
   shift 3
+  LAST_BAZEL_WARNING=0
+  LAST_WARNING_SCAN_FAILURE=0
   if [ "${D2B_BAZEL_FALLBACK_ISOLATE_RC:-0}" = 1 ]; then
     [ ! -e "$ROOT/.bazelrc.user" ] || {
       echo "local fallback rejects an external workspace Bazel rc" >&2
@@ -367,6 +389,13 @@ run_bazel() {
     >"$log_path" 2>&1
   local status=$?
   set -e
+  local raw_warning_status=1
+  warning_line_status "$log_path" || raw_warning_status=$?
+  if [ "$raw_warning_status" -eq 0 ]; then
+    LAST_BAZEL_WARNING=1
+  elif [ "$raw_warning_status" -gt 1 ]; then
+    LAST_WARNING_SCAN_FAILURE=1
+  fi
   if [ "$status" -eq 0 ] && ! bep_has_test_result "$bep_path"; then
     echo "bazel-check: successful Bazel invocation emitted no testResult event" >&2
     status=1
@@ -377,8 +406,13 @@ run_bazel() {
     emit_captured_metadata "$bep_path" "bazel $profile BEP"
     return "$REDACTION_FAILURE_STATUS"
   fi
-  if warning_line_present "$log_path"; then
+  local redacted_warning_status=1
+  warning_line_status "$log_path" || redacted_warning_status=$?
+  if [ "$LAST_BAZEL_WARNING" -eq 1 ] || [ "$redacted_warning_status" -eq 0 ]; then
     echo "bazel-check: warning line found after log redaction; failing closed" >&2
+    status=1
+  elif [ "$LAST_WARNING_SCAN_FAILURE" -eq 1 ] || [ "$redacted_warning_status" -gt 1 ]; then
+    echo "bazel-check: warning scan failed after log redaction; failing closed" >&2
     status=1
   fi
   return "$status"
@@ -386,6 +420,8 @@ run_bazel() {
 
 initial_status=0
 run_bazel "$PROFILE" "$log" "$bep" "$@" || initial_status=$?
+initial_warning="$LAST_BAZEL_WARNING"
+initial_warning_scan_failure="$LAST_WARNING_SCAN_FAILURE"
 if [ "$initial_status" -eq 0 ]; then
   printf '%s\n' "bazel-check: $PROFILE passed"
   exit 0
@@ -396,8 +432,12 @@ if [ "$initial_status" -eq "$REDACTION_FAILURE_STATUS" ] ||
 fi
 
 if [ "$PROFILE" != local ]; then
-  classification_args=(bazel-evidence classify-failure --log "$log")
-  classification="$(xtask "${classification_args[@]}")"
+  if [ "$initial_warning" -eq 1 ] || [ "$initial_warning_scan_failure" -eq 1 ]; then
+    classification='{"kind":"warning","dispatchEvidence":false,"retryLocally":false,"maxLocalRetries":0}'
+  else
+    classification_args=(bazel-evidence classify-failure --log "$log")
+    classification="$(xtask "${classification_args[@]}")"
+  fi
   if printf '%s' "$classification" | jq -e '.retryLocally == true' >/dev/null; then
     local_log="$SCRATCH/local.$JOB.log"
     local_bep="$SCRATCH/local.$JOB.bep.json"
