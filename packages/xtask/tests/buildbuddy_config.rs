@@ -417,6 +417,11 @@ fn committed_profiles_share_authentication_and_worker_policy() {
             >= 2,
         "default and Bazel Nix shells must export the pinned shellcheck binary"
     );
+    assert!(
+        read_text("bazel/checks/meta/BUILD.bazel")
+            .contains("env_inherit = [\"D2B_REPO_ROOT\", \"D2B_SHELLCHECK_BIN\", \"PATH\", \"ROOT\"]"),
+        "the direct tier0 test must inherit the declared shellcheck binary"
+    );
 }
 
 #[test]
