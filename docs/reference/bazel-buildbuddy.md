@@ -37,8 +37,8 @@ nix develop --no-write-lock-file .#bazel -c bazel test //packages/<crate>:<owner
 
 Direnv is optional; it may enter `nix develop` automatically but is not part
 of the contributor or CI contract. CI installs Nix and invokes the trusted
-`v3` Make aliases from the protected checkout. Remote-eligible jobs use the
-brokered BuildBuddy credential; local-only jobs do not receive it.
+`v3` Make aliases from the protected checkout. Every GitHub Actions Bazel job
+uses the local profile and receives no BuildBuddy credential.
 
 ## One execution graph
 
@@ -46,9 +46,8 @@ Bazel owns Layer-1 dependency ordering, parallelism, test caching, retry
 classification, and aggregation. `bazel/checks/BUILD.bazel` is the public
 suite facade: package-level Rust suites and component suites compose each
 public Make target without duplicating a fixed label graph in Make. CI runs the
-same nested suites with remote-eligible Rust and policy actions on BuildBuddy,
-while Nix, fixture, hardware, and explicitly local actions remain local. It
-exposes one stable required `check` result.
+same nested suites locally, while Nix, fixture, hardware, and explicitly local
+actions remain local. It exposes one stable required `check` result.
 
 The primary aliases remain available:
 
@@ -85,7 +84,7 @@ The committed `.bazelrc` defines:
 | --- | --- |
 | `local` | Local execution with no remote executor, cache, or BES |
 | `remote` | Developer BuildBuddy execution and cache |
-| `trusted-seed` | Protected `v3` cache seeding with synchronous uploads |
+| `trusted-seed` | Controlled non-Actions `v3` cache seeding with synchronous uploads |
 
 Remote profiles use the BuildBuddy Linux worker contract, Ubuntu GCC
 toolchain, minimal output downloads, compressed cache blobs, zero Bazel remote
@@ -95,14 +94,15 @@ container, VM, live-host, hardware, fixture, and performance lanes remain
 explicit local lanes. Rust target and exec actions override the worker
 toolchain's deprecated gold default with GNU ld.bfd.
 
-The credential-bearing PR gate is a `pull_request_target` workflow owned by
-protected `v3`; push seeding is also limited to `v3`. Each job checks out the
-event's immutable base into `trusted` and the immutable tested merge/push
-commit into `workspace`. The workflow executes the `v3` Makefile and trusted
-shell/bootstrap only. Remote jobs use `D2B_BAZEL_PROFILE=remote` and
-`D2B_BAZEL_REQUIRE_REMOTE=1`; local-only jobs use `local`. The fixed job set is
-committed in `.github/workflows/pr-l1-static-fast.yml` and must remain aligned
-with the public Make aliases.
+The protected PR gate is a `pull_request_target` workflow owned by `v3`; pushes
+are also limited to `v3`. Each job checks out the event's immutable base into
+`trusted` and the immutable tested merge/push commit into `workspace`. The
+workflow executes the `v3` Makefile and trusted shell only, with
+`D2B_BAZEL_PROFILE=local` for every Bazel action. It does not receive a
+BuildBuddy credential, invoke the credential bootstrap, or execute remote
+Bazel. The fixed job set is committed in
+`.github/workflows/pr-l1-static-fast.yml` and must remain aligned with the
+public Make aliases.
 
 ## Developer invocation metadata
 
@@ -139,9 +139,10 @@ reusable outputs, and the global `--stamp=no` contract remains unchanged.
 
 Trusted CI additionally validates the protected base, PR head, tested merge,
 trusted checkout, run id, PR number, branch, workflow reference, and event
-before invoking Bazel. It publishes those immutable OIDs and run/linkage
-fields as BuildBuddy metadata, and derives a cache instance namespace from the
-PR number and head SHA (`d2b/pr/<number>/<head-sha>/...`). Pushes use the
+before invoking Bazel. These immutable OIDs and the PR/head cache namespace
+(`d2b/pr/<number>/<head-sha>/...`) remain the handoff contract for a future
+non-Actions BuildBuddy Workflows trial; the current local Actions gate does not
+write remote cache or publish BuildBuddy invocation metadata. Pushes retain the
 separate trusted `v3` namespace. A stale checkout or mismatched event fails
 closed.
 
@@ -166,25 +167,36 @@ The facade preserves the selected target set when execution changes:
 - untrusted GitHub jobs always select `local`;
 - `trusted-seed` requires `D2B_BAZEL_TRUSTED=1`, `GITHUB_REF=refs/heads/v3`,
   and an allowlisted security digest;
+- GitHub Actions rejects `remote` and `trusted-seed` profiles before Bazel
+  starts;
 - a clearly pre-dispatch missing-credential, authentication, or endpoint
   failure permits one identical local retry; worker and transport failures
   require explicit pre-dispatch evidence, except for a remote gRPC deadline;
 - analysis, policy, build, test, and post-dispatch failures fail closed.
 
-For GitHub Actions, add the repository secret
-`D2B_BUILDBUDDY_API_KEY`. The trusted workflow passes it only over stdin to
-`tests/tools/bazel-check-bootstrap`, which stores it in an anonymous memfd and
-execs the trusted `v3` command with a descriptor number. The key is not placed
-in ordinary action environment variables, arguments, repository files, Bazel
-rc files, or test environments. Credential-bearing CI has no local fallback:
-missing credentials, authentication failure, endpoint failure, or remote
-execution failure fails the job instead of producing a reduced local gate.
+GitHub Actions does not define, read, or pass `D2B_BUILDBUDDY_API_KEY`. It
+never invokes `tests/tools/bazel-check-bootstrap` and the facade rejects a
+non-local profile when `GITHUB_ACTIONS=true`. The credential helper and
+bootstrap remain available only to controlled non-Actions developer or future
+Workflows use.
 
 The facade stages the tested source with trusted copies of `.bazelrc`,
 `MODULE.bazel`, `MODULE.bazel.lock`, `flake.lock`, remote/platform BUILD files,
 and the credential/shell helpers. It disables system, home, workspace, and PR
-`.bazelrc.user` configuration and pins the endpoint and helper path on the
-Bazel command line. PR cache writes never use the trusted seed namespace.
+`.bazelrc.user` configuration. Remote endpoint and helper flags are only
+constructed for non-Actions remote profiles; local Actions runs cannot reach
+that path. Future PR cache writes must use the PR/head namespace and never the
+trusted seed namespace.
+
+## Future BuildBuddy Workflows trial handoff
+
+This branch does not implement BuildBuddy Workflows or move GitHub Actions to
+remote execution. A future pilot may consume only the existing fixed
+`//...` target set, protected-v3 workflow ownership, exact base/head/merge/
+trusted/tested OIDs, run and PR linkage, trusted security digest, and isolated
+`d2b/pr/<number>/<head-sha>/...` cache domain. Credential acquisition and
+remote execution must remain outside GitHub Actions, and the stable `check`
+result must retain the same target and trust contracts before any adoption.
 
 The trusted security digest covers the committed workflow, Makefile, module and
 Nix locks, platform, remote policy, bootstrap, shell, and credential-helper

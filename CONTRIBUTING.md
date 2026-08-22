@@ -38,8 +38,10 @@ and public conditional integration targets.
 `make check` invokes the public Bazel suite facade. Nested component and
 package-level suites own the complete Layer-1 graph. A developer host uses
 BuildBuddy for eligible actions; protected `v3` GitHub Layer-1 jobs use the
-trusted workflow and brokered credential for remote-eligible actions while
-keeping local-only actions local. CI only needs Nix installed; Make selects the
+trusted workflow and local profile for every action without BuildBuddy
+credentials. The developer remote profiles, immutable metadata, and isolated
+cache domains remain the narrow handoff contract for a future non-Actions
+BuildBuddy Workflows trial. CI only needs Nix installed; Make selects the
 pinned shell and preserves those profile and trust variables. Cargo manifests
 and `Cargo.lock` remain rules_rs metadata authority, but Cargo is not a
 contributor or CI gate.

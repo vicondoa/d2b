@@ -1923,12 +1923,14 @@ fn ci_uses_trusted_public_make_aliases_without_nested_nix_develop_wrappers() {
         "CI must use the public Make dispatcher instead of per-target Nix wrappers"
     );
     assert!(
-        workflow.contains(
-            "D2B_BAZEL_PROFILE: ${{ github.event_name == 'push' && 'trusted-seed' || 'remote' }}"
-        )
-            && workflow.contains("D2B_BAZEL_PROFILE: local")
+        workflow.matches("D2B_BAZEL_PROFILE: local").count() == 13
+            && !workflow.contains("D2B_BAZEL_PROFILE: remote")
+            && !workflow.contains("D2B_BAZEL_PROFILE: trusted-seed")
+            && !workflow.contains("D2B_BAZEL_REQUIRE_REMOTE")
+            && !workflow.contains("D2B_BUILDBUDDY_API_KEY")
+            && !workflow.contains("bazel-check-bootstrap")
             && !workflow.contains("D2B_BAZEL_UNTRUSTED: \"1\""),
-        "CI must use the trusted remote and local-only BuildBuddy profiles"
+        "CI must use only the trusted local profile without BuildBuddy credentials"
     );
     let make_runs = workflow
         .lines()
@@ -1941,6 +1943,32 @@ fn ci_uses_trusted_public_make_aliases_without_nested_nix_develop_wrappers() {
         make_runs >= 12,
         "the Layer-1 workflow should exercise trusted public Make aliases directly (found {make_runs})"
     );
+}
+
+#[test]
+fn github_actions_rejects_remote_profiles() {
+    for profile in ["remote", "trusted-seed"] {
+        let output = Command::new("bash")
+            .arg(repo_root().join("tests/tools/bazel-check"))
+            .args(["--profile", profile, "--", "//:test"])
+            .env("GITHUB_ACTIONS", "true")
+            .output()
+            .expect("run GitHub Actions profile guard");
+        assert_eq!(
+            output.status.code(),
+            Some(76),
+            "GitHub Actions must reject {profile}: {output:?}"
+        );
+        let diagnostics = format!(
+            "{}{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert!(
+            diagnostics.contains("GitHub Actions CI is local-only"),
+            "profile guard must explain the local-only contract: {diagnostics}"
+        );
+    }
 }
 
 #[test]
