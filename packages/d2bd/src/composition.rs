@@ -79,12 +79,14 @@ use d2b_contracts_resource::v3::{
     ResourceGeneration,
     ResourceRef,
     ResourceUid,
+    SchemaFingerprint,
     ZoneId,
     guest::GuestSpec,
     network::NetworkSpec,
     process::ProcessSpec,
     volume::{VolumeAttachment, VolumeSpec},
 };
+use d2b_contracts_resource::v3::identity::ReconnectGeneration;
 use d2b_core::bundle::Bundle;
 use d2b_core::bundle_resolver::{
     BundleResolver, intent_id_activation, intent_id_bridge_env, intent_id_gc_host,
@@ -285,6 +287,71 @@ const USBIP_SYSFS_PRESENCE_TIMEOUT: Duration = Duration::from_millis(250);
 const EMPTY_VMM_CLEANUP_GRACE: Duration = Duration::from_secs(5);
 const CGROUP_EMPTY_POST_KILL_WAIT: Duration = Duration::from_secs(5);
 const GATEWAY_DISPLAY_SESSION_TTL: Duration = Duration::from_secs(3600);
+
+/// The static composition root is one artifact for both process-start modes.
+pub const D2BD_ARTIFACT_FAMILY: &str = "d2bd";
+
+/// Stable build identity shared by Host and Guest compositions. The actual
+/// executable digest remains the package artifact digest; this value is the
+/// mode-independent family identity used in runtime evidence and tests.
+pub fn shared_artifact_digest() -> String {
+    let mut digest = Sha256::new();
+    digest.update(D2BD_ARTIFACT_FAMILY.as_bytes());
+    digest.update(env!("CARGO_PKG_VERSION").as_bytes());
+    digest.update(b"\0d2b-v3\0");
+    format!("sha256:{:x}", digest.finalize())
+}
+
+/// Shared ProviderDeployment and fixed EffectPort composition for one daemon
+/// instance. Provider selection remains static in this crate; lifecycle and
+/// admission behavior live in `d2bd-runtime`.
+#[derive(Debug, Clone)]
+pub struct StaticProviderComposition {
+    mode: d2bd_runtime::target_runtime::DaemonMode,
+    deployment: d2bd_runtime::target_runtime::ProviderDeployment,
+    effects: provider_effects::FixedEffectAdapter,
+}
+
+impl StaticProviderComposition {
+    pub fn new(
+        mode: d2bd_runtime::target_runtime::DaemonMode,
+        broker_socket: PathBuf,
+        daemon_uid: u32,
+        limits: d2bd_runtime::target_runtime::AdmissionLimits,
+    ) -> Result<Self, d2bd_runtime::target_runtime::AdmissionError> {
+        let deployment =
+            d2bd_runtime::target_runtime::ProviderDeployment::new(mode, limits)?;
+        let effects = match mode {
+            d2bd_runtime::target_runtime::DaemonMode::Host => {
+                provider_effects::FixedEffectAdapter::host(broker_socket, daemon_uid)
+            }
+            d2bd_runtime::target_runtime::DaemonMode::Guest => {
+                provider_effects::FixedEffectAdapter::guest(broker_socket, daemon_uid)
+            }
+        };
+        Ok(Self {
+            mode,
+            deployment,
+            effects,
+        })
+    }
+
+    pub const fn mode(&self) -> d2bd_runtime::target_runtime::DaemonMode {
+        self.mode
+    }
+
+    pub fn deployment(&self) -> &d2bd_runtime::target_runtime::ProviderDeployment {
+        &self.deployment
+    }
+
+    pub fn effects(&self) -> &provider_effects::FixedEffectAdapter {
+        &self.effects
+    }
+
+    pub fn artifact_digest(&self) -> String {
+        shared_artifact_digest()
+    }
+}
 
 /// Write deadline for the typed refusal frame (authz reject / busy) the
 /// accept loop sends before closing - never block the accept loop on a
@@ -1381,6 +1448,202 @@ pub async fn serve(options: ServeOptions) -> Result<(), TypedError> {
     }
 
     Ok(())
+}
+
+/// Process-start Guest mode options. These options contain only the Guest
+/// target identity and its own broker/state roots; Host bundle, public socket,
+/// and realm paths are intentionally absent.
+#[derive(Debug, Clone)]
+pub struct GuestServeOptions {
+    pub guest_ref: String,
+    pub guest_uid: String,
+    pub zone: String,
+    pub purpose: String,
+    pub schema_fingerprint: String,
+    pub reconnect_generation: u64,
+    pub provider_generation: u64,
+    pub controller_generation: u64,
+    pub assignment_epoch: u64,
+    pub broker_socket_path: PathBuf,
+    pub broker_uid: u32,
+    pub state_dir: PathBuf,
+    pub boot_id_path: PathBuf,
+    pub local_private_key_path: Option<PathBuf>,
+    pub parent_public_key_path: Option<PathBuf>,
+    pub validate_only: bool,
+    pub once: bool,
+}
+
+/// Start the fixed Guest target agent. Unlike [`serve`], this path never
+/// loads `DaemonConfig`, binds a public operator socket, opens a Zone store,
+/// or loads realm credentials.
+pub async fn serve_guest(options: GuestServeOptions) -> Result<(), TypedError> {
+    if !options.state_dir.is_absolute() || !options.broker_socket_path.is_absolute() {
+        return Err(TypedError::InternalConfig {
+            detail: "guest mode requires absolute state and broker paths".to_owned(),
+        });
+    }
+    // The production path is sealed to the kernel's boot-id file. A custom
+    // path is accepted only by the validation-only characterization route,
+    // which never establishes a session or allocates Guest authority.
+    let boot_id_path = if options.validate_only {
+        options.boot_id_path
+    } else {
+        PathBuf::from(d2bd_runtime::guest_mode::KERNEL_BOOT_ID_PATH)
+    };
+    let boot = d2bd_runtime::guest_mode::BootIdentity::read(&boot_id_path)
+        .map_err(|_| TypedError::InternalConfig {
+            detail: "guest kernel boot identity unavailable".to_owned(),
+        })?;
+    let guest_ref = ResourceRef::parse(&options.guest_ref).map_err(|_| {
+        TypedError::InternalConfig {
+            detail: "guest identity reference is invalid".to_owned(),
+        }
+    })?;
+    let guest_uid = ResourceUid::parse(options.guest_uid).map_err(|_| {
+        TypedError::InternalConfig {
+            detail: "guest identity UID is invalid".to_owned(),
+        }
+    })?;
+    let zone = ZoneId::parse(options.zone).map_err(|_| TypedError::InternalConfig {
+        detail: "guest Zone identity is invalid".to_owned(),
+    })?;
+    let purpose = d2b_contracts_resource::v3::identity::SessionPurpose::parse(options.purpose)
+        .map_err(|_| TypedError::InternalConfig {
+            detail: "guest session purpose is invalid".to_owned(),
+        })?;
+    let schema = SchemaFingerprint::parse(options.schema_fingerprint).map_err(|_| {
+        TypedError::InternalConfig {
+            detail: "guest session schema fingerprint is invalid".to_owned(),
+        }
+    })?;
+    let reconnect_generation =
+        ReconnectGeneration::new(options.reconnect_generation).map_err(|_| {
+            TypedError::InternalConfig {
+                detail: "guest reconnect generation is invalid".to_owned(),
+            }
+        })?;
+    let identity = d2bd_runtime::guest_mode::GuestIdentity::new(
+        guest_ref,
+        guest_uid,
+        zone,
+        boot,
+        purpose,
+        schema,
+        reconnect_generation,
+        options.provider_generation,
+        options.controller_generation,
+        options.assignment_epoch,
+    )
+    .map_err(|error| TypedError::InternalConfig {
+        detail: error.to_string(),
+    })?;
+    let runtime = d2bd_runtime::guest_mode::GuestRuntime::new(
+        identity,
+        options.broker_socket_path,
+        options.broker_uid,
+        d2bd_runtime::target_runtime::AdmissionLimits::guest_default(),
+    )
+    .map_err(|error| TypedError::InternalConfig {
+        detail: error.to_string(),
+    })?;
+    if options.validate_only {
+        return Ok(());
+    }
+    fs::create_dir_all(&options.state_dir).map_err(|_| TypedError::InternalConfig {
+        detail: "guest state root unavailable".to_owned(),
+    })?;
+    let local_private_path = options
+        .local_private_key_path
+        .ok_or_else(|| TypedError::InternalConfig {
+            detail: "guest ComponentSession private key is unavailable".to_owned(),
+        })?;
+    let parent_public_path = options
+        .parent_public_key_path
+        .ok_or_else(|| TypedError::InternalConfig {
+            detail: "parent Zone ComponentSession key is unavailable".to_owned(),
+        })?;
+    let parent_public = read_public_key32(&parent_public_path)?;
+    let mut listener = runtime.bind_listener().map_err(|error| TypedError::InternalConfig {
+        detail: error.to_string(),
+    })?;
+    let mut sigterm = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
+        .map_err(|_| TypedError::InternalIo {
+            context: "install Guest SIGTERM handler".to_owned(),
+            detail: "signal handler unavailable".to_owned(),
+        })?;
+    let mut sigint = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::interrupt())
+        .map_err(|_| TypedError::InternalIo {
+            context: "install Guest SIGINT handler".to_owned(),
+            detail: "signal handler unavailable".to_owned(),
+        })?;
+    loop {
+        let local_private = read_secret32(&local_private_path)?;
+        let accepted = tokio::select! {
+            _ = sigterm.recv() => break,
+            _ = sigint.recv() => break,
+            result = runtime.accept_from_parent(&mut listener, local_private, parent_public) => result,
+        };
+        let (mut session, lease) = match accepted {
+            Ok(session) => session,
+            Err(error) => {
+                if options.once {
+                    return Err(TypedError::InternalConfig {
+                        detail: error.to_string(),
+                    });
+                }
+                tracing::warn!(error = %error, "Guest ComponentSession handshake refused");
+                continue;
+            }
+        };
+        if options.once {
+            drop(lease);
+            return Ok(());
+        }
+        let shutdown = loop {
+            tokio::select! {
+                _ = sigterm.recv() => break true,
+                _ = sigint.recv() => break true,
+                result = session.receive_ttrpc() => {
+                    if result.is_err() {
+                        break false;
+                    }
+                }
+            }
+        };
+        drop(lease);
+        if shutdown {
+            break;
+        }
+    }
+    Ok(())
+}
+
+fn read_secret32(path: &Path) -> Result<d2b_session::Secret32, TypedError> {
+    let bytes = fs::read(path).map_err(|_| TypedError::InternalConfig {
+        detail: "guest ComponentSession private key unavailable".to_owned(),
+    })?;
+    let bytes: [u8; 32] = bytes.try_into().map_err(|_| TypedError::InternalConfig {
+        detail: "guest ComponentSession private key has invalid length".to_owned(),
+    })?;
+    d2b_session::Secret32::new(bytes).map_err(|_| TypedError::InternalConfig {
+        detail: "guest ComponentSession private key is invalid".to_owned(),
+    })
+}
+
+fn read_public_key32(path: &Path) -> Result<[u8; 32], TypedError> {
+    let bytes = fs::read(path).map_err(|_| TypedError::InternalConfig {
+        detail: "parent Zone ComponentSession key unavailable".to_owned(),
+    })?;
+    let bytes: [u8; 32] = bytes.try_into().map_err(|_| TypedError::InternalConfig {
+        detail: "parent Zone ComponentSession key has invalid length".to_owned(),
+    })?;
+    if bytes == [0; 32] {
+        return Err(TypedError::InternalConfig {
+            detail: "parent Zone ComponentSession key is invalid".to_owned(),
+        });
+    }
+    Ok(bytes)
 }
 
 async fn finalize_daemon_interactions(state: &ServerState) -> Result<(), TypedError> {

@@ -9,7 +9,7 @@ use d2b_session::{
     TransportWriter,
 };
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
-use tokio_vsock::{VMADDR_CID_ANY, VsockAddr, VsockListener, VsockStream};
+use tokio_vsock::{VMADDR_CID_ANY, VMADDR_CID_HOST, VsockAddr, VsockListener, VsockStream};
 
 pub struct FramedVsockTransport<S> {
     stream: S,
@@ -350,6 +350,14 @@ impl NativeVsockListener {
             .map(FramedVsockTransport::new)
     }
 
+    /// Accept exactly the parent Host CID. This is intentionally separate
+    /// from [`Self::accept`], whose remote-peer API rejects reserved CIDs.
+    pub async fn accept_host(&mut self) -> Result<NativeVsockTransport, TransportError> {
+        accept_host_expected(&mut self.listener)
+            .await
+            .map(FramedVsockTransport::new)
+    }
+
     pub const fn port(&self) -> u32 {
         self.port
     }
@@ -382,6 +390,19 @@ where
     loop {
         let (stream, cid, port) = listener.accept_one().await?;
         if cid == expected_cid && port != 0 {
+            return Ok(stream);
+        }
+        drop(stream);
+    }
+}
+
+async fn accept_host_expected<A>(listener: &mut A) -> Result<A::Stream, TransportError>
+where
+    A: AcceptOne + Send,
+{
+    loop {
+        let (stream, cid, port) = listener.accept_one().await?;
+        if cid == VMADDR_CID_HOST && port != 0 {
             return Ok(stream);
         }
         drop(stream);

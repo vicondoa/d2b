@@ -62,6 +62,10 @@ use d2b_core_controller::{
     },
     zone_status::ZoneRuntimeMetadata,
 };
+use crate::target_runtime::{
+    AdmissionError, AdmissionLimits, AssignmentLease, ControllerAssignmentKey, DaemonMode,
+    DeploymentError, ProviderDeployment,
+};
 
 /// Provider-neutral Core assignment registry shared by Resource API and bus
 /// admission for one Zone runtime.
@@ -70,6 +74,42 @@ pub type AssignmentRegistry = Arc<Mutex<ControllerAssignmentRegistry>>;
 /// Construct one empty Zone assignment registry.
 pub fn new_assignment_registry() -> AssignmentRegistry {
     Arc::new(Mutex::new(ControllerAssignmentRegistry::default()))
+}
+
+/// Shared target-local resource lifecycle owner.
+///
+/// Host and Guest use the same assignment/lease machinery; only the static
+/// composition chooses the mode and its effect adapter.
+#[derive(Debug, Clone)]
+pub struct TargetResourceLifecycle {
+    deployment: ProviderDeployment,
+}
+
+impl TargetResourceLifecycle {
+    pub fn new(mode: DaemonMode, limits: AdmissionLimits) -> Result<Self, AdmissionError> {
+        Ok(Self {
+            deployment: ProviderDeployment::new(mode, limits)?,
+        })
+    }
+
+    pub const fn mode(&self) -> DaemonMode {
+        self.deployment.mode()
+    }
+
+    pub fn admit_controller(
+        &self,
+        assignment: ControllerAssignmentKey,
+    ) -> Result<AssignmentLease, DeploymentError> {
+        self.deployment.admit_assignment(assignment)
+    }
+
+    pub fn revoke_session(&self, generation: u64) -> Result<usize, DeploymentError> {
+        self.deployment.revoke_session(generation)
+    }
+
+    pub fn active_assignments(&self) -> Result<usize, DeploymentError> {
+        self.deployment.active_assignments()
+    }
 }
 use d2b_resource_api::{
     RedbBackend, ResourceApiClient, ResourceBusAdapter, ResourceService,

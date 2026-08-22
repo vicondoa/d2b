@@ -70,6 +70,8 @@ const RUNTIME_FILES: &[(&str, &str)] = &[
         "src/guest_control_vsock.rs",
         include_str!("../src/guest_control_vsock.rs"),
     ),
+    ("src/guest_mode.rs", include_str!("../src/guest_mode.rs")),
+    ("src/host_mode.rs", include_str!("../src/host_mode.rs")),
     ("src/json_io.rs", include_str!("../src/json_io.rs")),
     (
         "src/kernel_module_check.rs",
@@ -163,6 +165,7 @@ const RUNTIME_FILES: &[(&str, &str)] = &[
         "src/terminal_session.rs",
         include_str!("../src/terminal_session.rs"),
     ),
+    ("src/target_runtime.rs", include_str!("../src/target_runtime.rs")),
     ("src/typed_error.rs", include_str!("../src/typed_error.rs")),
     (
         "src/typed_shell_targets.rs",
@@ -224,6 +227,7 @@ fn runtime_uses_narrow_direct_contracts() {
         "d2b-contracts",
         "d2b-contracts-broker",
         "d2b-contracts-control",
+        "d2b-contracts-provider",
         "d2b-contracts-resource",
         "d2b-contracts-zone-session",
     ] {

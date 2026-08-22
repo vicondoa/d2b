@@ -460,6 +460,47 @@ rust_test(
     ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
 )
 
+rust_test(
+    name = "guest_mode_fail_closed",
+    srcs = ["tests/guest_mode_fail_closed.rs"],
+    compile_data = ["Cargo.toml"],
+    data = [":d2bd"],
+    env = {"CARGO_BIN_EXE_d2bd": "$(rootpath :d2bd)"},
+    rustc_env = {"CARGO_BIN_EXE_d2bd": "$(rootpath :d2bd)"},
+    tags = ["no-remote-cache"],
+    visibility = ["//visibility:public"],
+    deps = all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
+)
+
+rust_test(
+    name = "guest_mode_component_session",
+    srcs = ["tests/guest_mode_component_session.rs"],
+    compile_data = ["Cargo.toml"],
+    visibility = ["//visibility:public"],
+    deps = [
+        "//packages/d2b-contracts-resource:d2b_contracts_resource",
+        "//packages/d2b-session:d2b_session_test_support",
+        "//packages/d2b-session-unix:d2b_session_unix_test_support",
+        "//packages/d2bd-runtime:d2bd_runtime_test_support",
+    ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
+)
+
+rust_test(
+    name = "mode_separation",
+    srcs = ["tests/mode_separation.rs"],
+    compile_data = ["Cargo.toml"],
+    data = [":d2bd"],
+    env = {"CARGO_BIN_EXE_d2bd": "$(rootpath :d2bd)"},
+    rustc_env = {"CARGO_BIN_EXE_d2bd": "$(rootpath :d2bd)"},
+    tags = ["no-remote-cache"],
+    visibility = ["//visibility:public"],
+    deps = [
+        ":d2bd_lib_test_support",
+        "//packages/d2b-contracts-resource:d2b_contracts_resource",
+        "//packages/d2bd-runtime:d2bd_runtime_test_support",
+    ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
+)
+
 # keep
 filegroup(
     name = "cargo_workspace_sources",
