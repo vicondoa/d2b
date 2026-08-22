@@ -173,6 +173,7 @@ ci_metadata() {
   BUILD_BUDDY_METADATA_FLAGS=()
   local base_sha head_sha merge_sha trusted_sha tested_sha
   local branch_name pr_number run_id workflow_ref event repository server_url
+  local expected_workflow_ref
 
   event="${GITHUB_EVENT_NAME:-}"
   case "$event" in
@@ -182,10 +183,25 @@ ci_metadata() {
       return "$CONFIGURATION_FAILURE_STATUS"
       ;;
   esac
-  [ "${GITHUB_REF:-}" = "refs/heads/v3" ] || {
-    echo "bazel-check: trusted CI requires refs/heads/v3" >&2
-    return "$CONFIGURATION_FAILURE_STATUS"
-  }
+  case "$event" in
+    pull_request_target)
+      [ "${GITHUB_REF:-}" = "refs/heads/main" ] || {
+        echo "bazel-check: trusted pull_request_target must execute from refs/heads/main" >&2
+        return "$CONFIGURATION_FAILURE_STATUS"
+      }
+      expected_workflow_ref="vicondoa/d2b/.github/workflows/pr-l1-static-fast.yml@refs/heads/main"
+      ;;
+    push)
+      case "${GITHUB_REF:-}" in
+        refs/heads/main|refs/heads/v3) ;;
+        *)
+          echo "bazel-check: trusted push must execute from protected main or v3" >&2
+          return "$CONFIGURATION_FAILURE_STATUS"
+          ;;
+      esac
+      expected_workflow_ref="vicondoa/d2b/.github/workflows/pr-l1-static-fast.yml@${GITHUB_REF}"
+      ;;
+  esac
   repository="${GITHUB_REPOSITORY:-}"
   [ "$repository" = "vicondoa/d2b" ] || {
     echo "bazel-check: trusted CI requires the canonical d2b repository" >&2
@@ -224,14 +240,24 @@ ci_metadata() {
     echo "bazel-check: trusted CI run metadata is invalid" >&2
     return "$CONFIGURATION_FAILURE_STATUS"
   }
-  [ "$workflow_ref" = "vicondoa/d2b/.github/workflows/pr-l1-static-fast.yml@refs/heads/v3" ] || {
+  [ "$workflow_ref" = "$expected_workflow_ref" ] || {
     echo "bazel-check: trusted CI workflow metadata is invalid" >&2
+    return "$CONFIGURATION_FAILURE_STATUS"
+  }
+  [ "$trusted_sha" = "${GITHUB_SHA:-}" ] || {
+    echo "bazel-check: trusted checkout SHA does not match the immutable GitHub workflow SHA" >&2
     return "$CONFIGURATION_FAILURE_STATUS"
   }
 
   if [ "$event" = pull_request_target ]; then
-    [ "${GITHUB_BASE_REF:-}" = "v3" ] &&
-      [ -n "${GITHUB_HEAD_REF:-}" ] &&
+    case "${GITHUB_BASE_REF:-}" in
+      main|v3) ;;
+      *)
+        echo "bazel-check: trusted PR must target protected main or v3" >&2
+        return "$CONFIGURATION_FAILURE_STATUS"
+        ;;
+    esac
+    [ -n "${GITHUB_HEAD_REF:-}" ] &&
       [ "$branch_name" = "$GITHUB_HEAD_REF" ] || {
       echo "bazel-check: trusted PR branch metadata does not match the event" >&2
       return "$CONFIGURATION_FAILURE_STATUS"
@@ -241,10 +267,19 @@ ci_metadata() {
       return "$CONFIGURATION_FAILURE_STATUS"
     }
   else
-    [ -z "${GITHUB_BASE_REF:-}" ] &&
-      [ "${GITHUB_REF_NAME:-}" = "v3" ] &&
-      [ "$branch_name" = "v3" ] || {
-      echo "bazel-check: trusted push branch metadata does not match v3" >&2
+    [ -z "${GITHUB_BASE_REF:-}" ] || {
+      echo "bazel-check: trusted push must not carry a base branch" >&2
+      return "$CONFIGURATION_FAILURE_STATUS"
+    }
+    case "${GITHUB_REF_NAME:-}" in
+      main|v3) ;;
+      *)
+        echo "bazel-check: trusted push branch metadata does not match protected main or v3" >&2
+        return "$CONFIGURATION_FAILURE_STATUS"
+        ;;
+    esac
+    [ "$branch_name" = "${GITHUB_REF_NAME:-}" ] || {
+      echo "bazel-check: trusted push branch metadata does not match the event" >&2
       return "$CONFIGURATION_FAILURE_STATUS"
     }
     [ -z "$pr_number" ] || {
@@ -272,19 +307,26 @@ ci_metadata() {
     echo "bazel-check: trusted checkout HEAD is unavailable" >&2
     return "$CONFIGURATION_FAILURE_STATUS"
   }
-  [ "$trusted_head" = "$base_sha" ] && [ "$trusted_head" = "$trusted_sha" ] || {
-    echo "bazel-check: trusted checkout does not match protected v3 base SHA" >&2
-    return "$CONFIGURATION_FAILURE_STATUS"
-  }
+  if [ "$event" = pull_request_target ]; then
+    [ "$trusted_head" = "$trusted_sha" ] || {
+      echo "bazel-check: trusted checkout does not match the immutable workflow SHA" >&2
+      return "$CONFIGURATION_FAILURE_STATUS"
+    }
+  else
+    [ "$trusted_head" = "$base_sha" ] && [ "$trusted_head" = "$trusted_sha" ] || {
+      echo "bazel-check: trusted push checkout does not match its immutable commit SHA" >&2
+      return "$CONFIGURATION_FAILURE_STATUS"
+    }
+  fi
 
   env -i PATH="$PATH" LC_ALL=C git -C "$SOURCE_ROOT" cat-file -e "$base_sha^{commit}" ||
     {
-      echo "bazel-check: protected v3 base SHA is unavailable in the tested checkout" >&2
+      echo "bazel-check: protected base SHA is unavailable in the tested checkout" >&2
       return "$CONFIGURATION_FAILURE_STATUS"
     }
   env -i PATH="$PATH" LC_ALL=C git -C "$SOURCE_ROOT" merge-base --is-ancestor "$base_sha" "$merge_sha" ||
     {
-      echo "bazel-check: tested merge SHA is not based on protected v3" >&2
+      echo "bazel-check: tested merge SHA is not based on the protected base" >&2
       return "$CONFIGURATION_FAILURE_STATUS"
     }
 
@@ -331,10 +373,16 @@ validate_ci_context() {
 }
 
 trusted_context() {
-  [ "${D2B_BAZEL_TRUSTED:-0}" = 1 ] &&
-    [ "${GITHUB_REF:-}" = "refs/heads/v3" ] &&
-    validate_ci_context &&
-    xtask bazel-evidence check-security >/dev/null
+  [ "${D2B_BAZEL_TRUSTED:-0}" = 1 ] || return 1
+  if ci_mode; then
+    ci_metadata >/dev/null || return 1
+  else
+    case "${GITHUB_REF:-}" in
+      refs/heads/main|refs/heads/v3) ;;
+      *) return 1 ;;
+    esac
+  fi
+  xtask bazel-evidence check-security >/dev/null
 }
 
 replace_trusted_control() {

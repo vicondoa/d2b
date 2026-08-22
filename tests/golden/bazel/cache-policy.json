@@ -65,7 +65,11 @@
     "gasCityProxy": "separate"
   },
   "trustedInjection": {
-    "protectedRef": "refs/heads/v3",
+    "protectedRef": "refs/heads/main",
+    "seedRefs": [
+      "refs/heads/main",
+      "refs/heads/v3"
+    ],
     "allowlistedSecurityFiles": [
       ".bazelrc",
       "MODULE.bazel",
