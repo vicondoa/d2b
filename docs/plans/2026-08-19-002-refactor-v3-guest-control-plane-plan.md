@@ -773,6 +773,7 @@ The units may land as ordered reviewed pull requests. Every intermediate head mu
 - `packages/d2bd/tests/guest_mode_fail_closed.rs`
 - `packages/d2bd/tests/guest_mode_component_session.rs`
 - `packages/d2bd/tests/mode_separation.rs`
+- `tests/host-integration/guest-control-plane.nix`
 - `tests/fixtures/guest-rust-workspace/Cargo.toml`
 - `packages/Cargo.guest.lock`
 
@@ -819,7 +820,7 @@ The units may land as ordered reviewed pull requests. Every intermediate head mu
 - Reconnect with the same Guest and new session generation succeeds only after stale state revocation.
 - The real binary enforces frame, stream, concurrency, and shutdown limits.
 
-**Verification:** Current supporting evidence is `//packages/d2b-session:admission` and `//packages/d2b-session:component_session` for session identity, enrollment, and reconnect admission; `//packages/d2bd:resource_operator_activation` for the existing Guest resource path; `//bazel/checks/nix:nix-unit-guest-control` for the Guest-control Nix shape; and `//packages/d2bd:daemon_version_negotiation` for public-socket wire-version rejection. None starts `d2bd guest`. U3 must add owner-local targets for the planned `guest_mode_fail_closed`, `guest_mode_component_session`, and `mode_separation` real-binary cases plus targeted host-integration evidence before citing Guest mode, vsock enrollment, broker binding, or mode-separation proof. `//packages/xtask:policy_production_closure` structurally validates the checked-in production-closure projections; it does not currently select `d2bd` as a production root or recompute projections from Cargo metadata, so U3 must add owner-local `d2bd` closure generation and check evidence before citing shared-executable closure proof. `//tests/unit/meta:w0_dep_direction` remains the workspace-and-lock policy target; no separate copied Guest workspace parity proof is claimed.
+**Verification:** Current supporting evidence is `//packages/d2b-session:admission` and `//packages/d2b-session:component_session` for session identity, enrollment, and reconnect admission; `//packages/d2bd:resource_operator_activation` for the existing Guest resource path; `//bazel/checks/nix:nix-unit-guest-control` for the Guest-control Nix shape; and `//packages/d2bd:daemon_version_negotiation` for public-socket wire-version rejection. None starts `d2bd guest`. U3 must add owner-local targets for the planned `guest_mode_fail_closed`, `guest_mode_component_session`, and `mode_separation` real-binary cases. The exact Layer-2 owner is `tests/host-integration/guest-control-plane.nix`, run as `D2B_VM_CHECK=guest-control-plane make test-host-integration`; it must prove Guest mode, vsock enrollment, broker binding, reconnect, and mode separation, and an unsupported-platform skip is not evidence. `//packages/xtask:policy_production_closure` structurally validates the checked-in production-closure projections; it does not currently select `d2bd` as a production root or recompute projections from Cargo metadata, so U3 must add owner-local `d2bd` closure generation and check evidence before citing shared-executable closure proof. `//tests/unit/meta:w0_dep_direction` remains the workspace-and-lock policy target; no separate copied Guest workspace parity proof is claimed.
 
 ### U4. Deploy target-local Process controllers
 
@@ -846,6 +847,7 @@ The units may land as ordered reviewed pull requests. Every intermediate head mu
 - `packages/d2bd/tests/zone_provider_acceptance.rs`
 - `packages/d2b-provider-system-systemd/tests/execution_parents.rs`
 - `packages/d2b-provider-system-minijail/tests/execution_parents.rs`
+- `tests/host-integration/guest-control-plane.nix`
 
 **Approach:**
 
@@ -873,7 +875,7 @@ The units may land as ordered reviewed pull requests. Every intermediate head mu
 - Missing volume-local or required dependency leaves the controller Pending without bootstrap exceptions.
 - A worker receives no ResourceClient, bus, credential, or child-spawn authority.
 
-**Verification:** `//packages/d2b-process-conformance:d2b_process_conformance_test`, `//packages/d2b-provider-system-systemd:conformance`, `//packages/d2b-provider-system-systemd:execution_parents`, `//packages/d2b-provider-system-minijail:conformance`, and `//packages/d2b-provider-system-minijail:execution_parents` prove launch-ticket and scripted effect-port lifecycle semantics, identity, adoption, and Host/Guest execution-parent status parity. They do not prove a real broker, systemd, or minijail process launch; actual launch remains targeted host-integration evidence. No current target proves arbitrary direct controller child-launch absence; preserve R43 and Provider Process ownership, but do not describe these labels as a direct-spawn removal gate.
+**Verification:** `//packages/d2b-process-conformance:d2b_process_conformance_test`, `//packages/d2b-provider-system-systemd:conformance`, `//packages/d2b-provider-system-systemd:execution_parents`, `//packages/d2b-provider-system-minijail:conformance`, and `//packages/d2b-provider-system-minijail:execution_parents` prove launch-ticket and scripted effect-port lifecycle semantics, identity, adoption, and Host/Guest execution-parent status parity. They do not prove a real broker, systemd, or minijail process launch. `tests/host-integration/guest-control-plane.nix`, run as `D2B_VM_CHECK=guest-control-plane make test-host-integration`, owns the real broker-to-controller launch, readiness, and reconnect scenarios; an unsupported-platform skip is not evidence. No current target proves arbitrary direct controller child-launch absence; preserve R43 and Provider Process ownership, but do not describe these labels as a direct-spawn removal gate.
 
 ### U5. Migrate exec and shell
 
@@ -1162,6 +1164,12 @@ The units may land as ordered reviewed pull requests. Every intermediate head mu
 - `packages/d2bd/tests/cloud_composition.rs`
 - `packages/d2b-host/tests/guest_control_token_materializer.rs`
 - `tests/unit/nix/cases/gateway-vm-guest.nix`
+- `tests/fixtures/guest-rust-workspace/`
+- `packages/Cargo.guest.lock`
+- `tests/unit/smoke/guest-static-elf.nix`
+- `tests/integration/containers/images/ubuntu-host-check.nix`
+- `tests/integration/containers/ubuntu-host-check.sh`
+- `flake.nix`
 
 **Approach:**
 
@@ -1190,9 +1198,11 @@ The units may land as ordered reviewed pull requests. Every intermediate head mu
 - Process and Binding resources preserve authored target and policy fields.
 - Unknown placement, unsupported target, duplicate owner, or auto-Binding configuration fails evaluation.
 - Guest package closure and lockfile contain only approved dependencies.
+- `//bazel/checks/nix:flake-eval-x86-realized-guest-static` builds the shared Guest daemon and broker artifacts from the copied Guest workspace and proves their static ELF shape.
+- `ubuntu-host-check` fails unless both `d2bd --version` and `d2b-broker --version` execute in the supported foreign-userland container.
 - Rendered bundle and Rust contract fixtures agree byte-for-byte.
 
-**Verification:** Nix-unit, fixture-contract, owner-local crate, drift, and daemon/broker binary checks prove the complete declarative shape.
+**Verification:** U9 must add and pass `//bazel/checks/nix:flake-eval-x86-realized-guest-static` against the copied Guest workspace, updated fixture overrides, `packages/Cargo.guest.lock`, and `tests/unit/smoke/guest-static-elf.nix`. Nix-unit, fixture-contract, owner-local crate, and Provider packaging drift targets prove their narrower declarative contracts. `tests/integration/containers/ubuntu-host-check.sh` must execute both shared binaries from its Nix-built image; an absent runner, empty inventory, missing Nix, or skipped container execution is not U9 evidence.
 
 ### U10. Remove legacy guest control and prove parity
 
@@ -1239,6 +1249,9 @@ The units may land as ordered reviewed pull requests. Every intermediate head mu
 - `packages/xtask/tests/policy_changelog_gate.rs`
 - `tests/host-integration/guest-agent-cap-confinement.nix`
 - `tests/host-integration/guest-shell-service.nix`
+- `tests/host-integration/guest-control-plane.nix`
+- `tests/integration/containers/images/ubuntu-host-check.nix`
+- `tests/integration/containers/ubuntu-host-check.sh`
 - `changelog.d/v3-guest-control-plane.md`
 
 **Approach:**
@@ -1288,8 +1301,8 @@ The units may land as ordered reviewed pull requests. Every intermediate head mu
 | `make test-drift` | U1, U7, U9-U10 | Runs `//bazel/checks/policy:drift` for the existing generated-artifact and VM JSON parity checks; Provider packaging drift is `//packages/xtask:gen_provider_packaging_drift`. |
 | `make test-fixture-contracts` | U1, U7-U10 | Runs `//bazel/checks/fixtures:fixtures_proofs` for the existing fixture/contract proof set; it is not a separate Guest-control removal gate. |
 | `make test-unit` | U1-U11 | Full Layer-1 development umbrella passes |
-| `make test-host-integration` | U2-U4, U6, U8-U11 | Real NixOS Guest proves daemon/broker mode separation, vsock enrollment, assignment fencing, controller launch, Process readiness, reconnect, handoff, and teardown |
-| `make test-integration` | U3, U9-U11 | Shared daemon and broker executables run in the supported foreign-userland container path |
+| `D2B_VM_CHECK=guest-control-plane make test-host-integration` | U3-U4, U9-U11 | The named x86_64 runNixOSTest Guest proves daemon/broker mode separation, vsock enrollment, assignment fencing, controller launch, Process readiness, reconnect, handoff, and teardown; an unsupported-platform skip is not evidence |
+| `make test-integration` | U3, U9-U11 | The required `ubuntu-host-check` runner executes both shared binaries in the supported foreign-userland container path; an empty inventory, missing Nix, or skipped runner is not evidence |
 | `make test` | U10 | Layer 1 plus required container integration passes |
 | `make check` | U10 | PR-equivalent Layer-1 graph passes without advisory skips cited as evidence |
 | Independent `ce-code-review` | U10 | No actionable issues remain on the validated head |
