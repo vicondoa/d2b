@@ -20,15 +20,15 @@ defaults:
 
 jobs:
   tier0:
+    if: ${{ github.event_name == 'push' || github.event.pull_request.merge_commit_sha != '' }}
     runs-on: ubuntu-latest
     timeout-minutes: 10
     env:
       D2B_BAZEL_TRUSTED: "1"
-      D2B_BAZEL_PROFILE: ${{ github.event_name == 'push' && 'trusted-seed' || 'remote' }}
-      D2B_BAZEL_REQUIRE_REMOTE: "1"
+      D2B_BAZEL_PROFILE: local
       D2B_BAZEL_BASE_SHA: ${{ github.event.pull_request.base.sha || github.sha }}
       D2B_BAZEL_HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
-      D2B_BAZEL_MERGE_SHA: ${{ github.event.pull_request.merge_commit_sha || github.sha }}
+      D2B_BAZEL_MERGE_SHA: ${{ github.event_name == 'push' && github.sha || github.event.pull_request.merge_commit_sha }}
       D2B_BAZEL_TRUSTED_SHA: ${{ github.event.pull_request.base.sha || github.sha }}
       D2B_BAZEL_PR_NUMBER: ${{ github.event.pull_request.number || '' }}
       D2B_BAZEL_BRANCH: ${{ github.head_ref || github.ref_name }}
@@ -42,7 +42,7 @@ jobs:
           persist-credentials: false
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
         with:
-          ref: ${{ github.event.pull_request.merge_commit_sha || github.sha }}
+          ref: ${{ github.event_name == 'push' && github.sha || github.event.pull_request.merge_commit_sha }}
           path: workspace
           fetch-depth: 0
           persist-credentials: false
@@ -52,13 +52,10 @@ jobs:
           extra_nix_config: |
             experimental-features = nix-command flakes
       - name: Fixed Bazel preflight
-        env:
-          D2B_BUILDBUDDY_API_KEY: ${{ secrets.D2B_BUILDBUDDY_API_KEY }}
-        run: |
-          printf '%s' "$D2B_BUILDBUDDY_API_KEY" | env -u D2B_BUILDBUDDY_API_KEY python3 ./trusted/tests/tools/bazel-check-bootstrap \
-            make -C trusted check-tier0
+        run: make -C trusted check-tier0
 
   policy-tooling:
+    if: ${{ github.event_name == 'push' || github.event.pull_request.merge_commit_sha != '' }}
     runs-on: ubuntu-latest
     timeout-minutes: 30
     env:
@@ -68,7 +65,7 @@ jobs:
       D2B_BAZEL_TEST_TAG_FILTERS: "-local,-no-remote-exec,-manual,-gpu,-kvm"
       D2B_BAZEL_BASE_SHA: ${{ github.event.pull_request.base.sha || github.sha }}
       D2B_BAZEL_HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
-      D2B_BAZEL_MERGE_SHA: ${{ github.event.pull_request.merge_commit_sha || github.sha }}
+      D2B_BAZEL_MERGE_SHA: ${{ github.event_name == 'push' && github.sha || github.event.pull_request.merge_commit_sha }}
       D2B_BAZEL_TRUSTED_SHA: ${{ github.event.pull_request.base.sha || github.sha }}
       D2B_BAZEL_PR_NUMBER: ${{ github.event.pull_request.number || '' }}
       D2B_BAZEL_BRANCH: ${{ github.head_ref || github.ref_name }}
@@ -82,7 +79,7 @@ jobs:
           persist-credentials: false
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
         with:
-          ref: ${{ github.event.pull_request.merge_commit_sha || github.sha }}
+          ref: ${{ github.event_name == 'push' && github.sha || github.event.pull_request.merge_commit_sha }}
           path: workspace
           fetch-depth: 0
           persist-credentials: false
@@ -95,7 +92,7 @@ jobs:
         env:
           D2B_BUILDBUDDY_API_KEY: ${{ secrets.D2B_BUILDBUDDY_API_KEY }}
         run: |
-          printf '%s' "$D2B_BUILDBUDDY_API_KEY" | env -u D2B_BUILDBUDDY_API_KEY python3 ./trusted/tests/tools/bazel-check-bootstrap \
+          printf '%s' "$D2B_BUILDBUDDY_API_KEY" | env -u D2B_BUILDBUDDY_API_KEY ./trusted/tests/tools/bazel-check-bootstrap \
             make -C trusted test-policy
       - name: Local policy-only suite
         env:
@@ -105,6 +102,7 @@ jobs:
         run: make -C trusted test-policy
 
   rust-main:
+    if: ${{ github.event_name == 'push' || github.event.pull_request.merge_commit_sha != '' }}
     runs-on: ubuntu-latest
     timeout-minutes: 90
     env:
@@ -114,7 +112,7 @@ jobs:
       D2B_BAZEL_TEST_TAG_FILTERS: "-local,-manual,-exclusive,-gpu,-kvm"
       D2B_BAZEL_BASE_SHA: ${{ github.event.pull_request.base.sha || github.sha }}
       D2B_BAZEL_HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
-      D2B_BAZEL_MERGE_SHA: ${{ github.event.pull_request.merge_commit_sha || github.sha }}
+      D2B_BAZEL_MERGE_SHA: ${{ github.event_name == 'push' && github.sha || github.event.pull_request.merge_commit_sha }}
       D2B_BAZEL_TRUSTED_SHA: ${{ github.event.pull_request.base.sha || github.sha }}
       D2B_BAZEL_PR_NUMBER: ${{ github.event.pull_request.number || '' }}
       D2B_BAZEL_BRANCH: ${{ github.head_ref || github.ref_name }}
@@ -128,7 +126,7 @@ jobs:
           persist-credentials: false
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
         with:
-          ref: ${{ github.event.pull_request.merge_commit_sha || github.sha }}
+          ref: ${{ github.event_name == 'push' && github.sha || github.event.pull_request.merge_commit_sha }}
           path: workspace
           fetch-depth: 0
           persist-credentials: false
@@ -141,10 +139,11 @@ jobs:
         env:
           D2B_BUILDBUDDY_API_KEY: ${{ secrets.D2B_BUILDBUDDY_API_KEY }}
         run: |
-          printf '%s' "$D2B_BUILDBUDDY_API_KEY" | env -u D2B_BUILDBUDDY_API_KEY python3 ./trusted/tests/tools/bazel-check-bootstrap \
+          printf '%s' "$D2B_BUILDBUDDY_API_KEY" | env -u D2B_BUILDBUDDY_API_KEY ./trusted/tests/tools/bazel-check-bootstrap \
             make -C trusted test-rust-main
 
   rust-broker:
+    if: ${{ github.event_name == 'push' || github.event.pull_request.merge_commit_sha != '' }}
     runs-on: ubuntu-latest
     timeout-minutes: 90
     env:
@@ -153,7 +152,7 @@ jobs:
       D2B_BAZEL_REQUIRE_REMOTE: "1"
       D2B_BAZEL_BASE_SHA: ${{ github.event.pull_request.base.sha || github.sha }}
       D2B_BAZEL_HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
-      D2B_BAZEL_MERGE_SHA: ${{ github.event.pull_request.merge_commit_sha || github.sha }}
+      D2B_BAZEL_MERGE_SHA: ${{ github.event_name == 'push' && github.sha || github.event.pull_request.merge_commit_sha }}
       D2B_BAZEL_TRUSTED_SHA: ${{ github.event.pull_request.base.sha || github.sha }}
       D2B_BAZEL_PR_NUMBER: ${{ github.event.pull_request.number || '' }}
       D2B_BAZEL_BRANCH: ${{ github.head_ref || github.ref_name }}
@@ -167,7 +166,7 @@ jobs:
           persist-credentials: false
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
         with:
-          ref: ${{ github.event.pull_request.merge_commit_sha || github.sha }}
+          ref: ${{ github.event_name == 'push' && github.sha || github.event.pull_request.merge_commit_sha }}
           path: workspace
           fetch-depth: 0
           persist-credentials: false
@@ -180,10 +179,11 @@ jobs:
         env:
           D2B_BUILDBUDDY_API_KEY: ${{ secrets.D2B_BUILDBUDDY_API_KEY }}
         run: |
-          printf '%s' "$D2B_BUILDBUDDY_API_KEY" | env -u D2B_BUILDBUDDY_API_KEY python3 ./trusted/tests/tools/bazel-check-bootstrap \
+          printf '%s' "$D2B_BUILDBUDDY_API_KEY" | env -u D2B_BUILDBUDDY_API_KEY ./trusted/tests/tools/bazel-check-bootstrap \
             make -C trusted test-rust-broker
 
   rust-guest:
+    if: ${{ github.event_name == 'push' || github.event.pull_request.merge_commit_sha != '' }}
     runs-on: ubuntu-latest
     timeout-minutes: 90
     env:
@@ -192,7 +192,7 @@ jobs:
       D2B_BAZEL_REQUIRE_REMOTE: "1"
       D2B_BAZEL_BASE_SHA: ${{ github.event.pull_request.base.sha || github.sha }}
       D2B_BAZEL_HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
-      D2B_BAZEL_MERGE_SHA: ${{ github.event.pull_request.merge_commit_sha || github.sha }}
+      D2B_BAZEL_MERGE_SHA: ${{ github.event_name == 'push' && github.sha || github.event.pull_request.merge_commit_sha }}
       D2B_BAZEL_TRUSTED_SHA: ${{ github.event.pull_request.base.sha || github.sha }}
       D2B_BAZEL_PR_NUMBER: ${{ github.event.pull_request.number || '' }}
       D2B_BAZEL_BRANCH: ${{ github.head_ref || github.ref_name }}
@@ -206,7 +206,7 @@ jobs:
           persist-credentials: false
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
         with:
-          ref: ${{ github.event.pull_request.merge_commit_sha || github.sha }}
+          ref: ${{ github.event_name == 'push' && github.sha || github.event.pull_request.merge_commit_sha }}
           path: workspace
           fetch-depth: 0
           persist-credentials: false
@@ -219,10 +219,11 @@ jobs:
         env:
           D2B_BUILDBUDDY_API_KEY: ${{ secrets.D2B_BUILDBUDDY_API_KEY }}
         run: |
-          printf '%s' "$D2B_BUILDBUDDY_API_KEY" | env -u D2B_BUILDBUDDY_API_KEY python3 ./trusted/tests/tools/bazel-check-bootstrap \
+          printf '%s' "$D2B_BUILDBUDDY_API_KEY" | env -u D2B_BUILDBUDDY_API_KEY ./trusted/tests/tools/bazel-check-bootstrap \
             make -C trusted test-rust-guest-shell-runner
 
   rust-local:
+    if: ${{ github.event_name == 'push' || github.event.pull_request.merge_commit_sha != '' }}
     runs-on: ubuntu-latest
     timeout-minutes: 90
     env:
@@ -230,7 +231,7 @@ jobs:
       D2B_BAZEL_PROFILE: local
       D2B_BAZEL_BASE_SHA: ${{ github.event.pull_request.base.sha || github.sha }}
       D2B_BAZEL_HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
-      D2B_BAZEL_MERGE_SHA: ${{ github.event.pull_request.merge_commit_sha || github.sha }}
+      D2B_BAZEL_MERGE_SHA: ${{ github.event_name == 'push' && github.sha || github.event.pull_request.merge_commit_sha }}
       D2B_BAZEL_TRUSTED_SHA: ${{ github.event.pull_request.base.sha || github.sha }}
       D2B_BAZEL_PR_NUMBER: ${{ github.event.pull_request.number || '' }}
       D2B_BAZEL_BRANCH: ${{ github.head_ref || github.ref_name }}
@@ -244,7 +245,7 @@ jobs:
           persist-credentials: false
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
         with:
-          ref: ${{ github.event.pull_request.merge_commit_sha || github.sha }}
+          ref: ${{ github.event_name == 'push' && github.sha || github.event.pull_request.merge_commit_sha }}
           path: workspace
           fetch-depth: 0
           persist-credentials: false
@@ -257,6 +258,7 @@ jobs:
         run: make -C trusted test-rust-local
 
   nix-eval:
+    if: ${{ github.event_name == 'push' || github.event.pull_request.merge_commit_sha != '' }}
     runs-on: ubuntu-latest
     timeout-minutes: 45
     env:
@@ -264,7 +266,7 @@ jobs:
       D2B_BAZEL_PROFILE: local
       D2B_BAZEL_BASE_SHA: ${{ github.event.pull_request.base.sha || github.sha }}
       D2B_BAZEL_HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
-      D2B_BAZEL_MERGE_SHA: ${{ github.event.pull_request.merge_commit_sha || github.sha }}
+      D2B_BAZEL_MERGE_SHA: ${{ github.event_name == 'push' && github.sha || github.event.pull_request.merge_commit_sha }}
       D2B_BAZEL_TRUSTED_SHA: ${{ github.event.pull_request.base.sha || github.sha }}
       D2B_BAZEL_PR_NUMBER: ${{ github.event.pull_request.number || '' }}
       D2B_BAZEL_BRANCH: ${{ github.head_ref || github.ref_name }}
@@ -278,7 +280,7 @@ jobs:
           persist-credentials: false
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
         with:
-          ref: ${{ github.event.pull_request.merge_commit_sha || github.sha }}
+          ref: ${{ github.event_name == 'push' && github.sha || github.event.pull_request.merge_commit_sha }}
           path: workspace
           fetch-depth: 0
           persist-credentials: false
@@ -291,6 +293,7 @@ jobs:
         run: make -C trusted test-flake
 
   nix-unit:
+    if: ${{ github.event_name == 'push' || github.event.pull_request.merge_commit_sha != '' }}
     runs-on: ubuntu-latest
     timeout-minutes: 45
     env:
@@ -298,7 +301,7 @@ jobs:
       D2B_BAZEL_PROFILE: local
       D2B_BAZEL_BASE_SHA: ${{ github.event.pull_request.base.sha || github.sha }}
       D2B_BAZEL_HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
-      D2B_BAZEL_MERGE_SHA: ${{ github.event.pull_request.merge_commit_sha || github.sha }}
+      D2B_BAZEL_MERGE_SHA: ${{ github.event_name == 'push' && github.sha || github.event.pull_request.merge_commit_sha }}
       D2B_BAZEL_TRUSTED_SHA: ${{ github.event.pull_request.base.sha || github.sha }}
       D2B_BAZEL_PR_NUMBER: ${{ github.event.pull_request.number || '' }}
       D2B_BAZEL_BRANCH: ${{ github.head_ref || github.ref_name }}
@@ -312,7 +315,7 @@ jobs:
           persist-credentials: false
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
         with:
-          ref: ${{ github.event.pull_request.merge_commit_sha || github.sha }}
+          ref: ${{ github.event_name == 'push' && github.sha || github.event.pull_request.merge_commit_sha }}
           path: workspace
           fetch-depth: 0
           persist-credentials: false
@@ -325,6 +328,7 @@ jobs:
         run: make -C trusted test-nix-unit
 
   nix-realized:
+    if: ${{ github.event_name == 'push' || github.event.pull_request.merge_commit_sha != '' }}
     runs-on: ubuntu-latest
     timeout-minutes: 60
     env:
@@ -332,7 +336,7 @@ jobs:
       D2B_BAZEL_PROFILE: local
       D2B_BAZEL_BASE_SHA: ${{ github.event.pull_request.base.sha || github.sha }}
       D2B_BAZEL_HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
-      D2B_BAZEL_MERGE_SHA: ${{ github.event.pull_request.merge_commit_sha || github.sha }}
+      D2B_BAZEL_MERGE_SHA: ${{ github.event_name == 'push' && github.sha || github.event.pull_request.merge_commit_sha }}
       D2B_BAZEL_TRUSTED_SHA: ${{ github.event.pull_request.base.sha || github.sha }}
       D2B_BAZEL_PR_NUMBER: ${{ github.event.pull_request.number || '' }}
       D2B_BAZEL_BRANCH: ${{ github.head_ref || github.ref_name }}
@@ -346,7 +350,7 @@ jobs:
           persist-credentials: false
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
         with:
-          ref: ${{ github.event.pull_request.merge_commit_sha || github.sha }}
+          ref: ${{ github.event_name == 'push' && github.sha || github.event.pull_request.merge_commit_sha }}
           path: workspace
           fetch-depth: 0
           persist-credentials: false
@@ -359,6 +363,7 @@ jobs:
         run: make -C trusted test-flake-realized
 
   nix-aarch64:
+    if: ${{ github.event_name == 'push' || github.event.pull_request.merge_commit_sha != '' }}
     runs-on: ubuntu-latest
     timeout-minutes: 30
     env:
@@ -366,7 +371,7 @@ jobs:
       D2B_BAZEL_PROFILE: local
       D2B_BAZEL_BASE_SHA: ${{ github.event.pull_request.base.sha || github.sha }}
       D2B_BAZEL_HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
-      D2B_BAZEL_MERGE_SHA: ${{ github.event.pull_request.merge_commit_sha || github.sha }}
+      D2B_BAZEL_MERGE_SHA: ${{ github.event_name == 'push' && github.sha || github.event.pull_request.merge_commit_sha }}
       D2B_BAZEL_TRUSTED_SHA: ${{ github.event.pull_request.base.sha || github.sha }}
       D2B_BAZEL_PR_NUMBER: ${{ github.event.pull_request.number || '' }}
       D2B_BAZEL_BRANCH: ${{ github.head_ref || github.ref_name }}
@@ -380,7 +385,7 @@ jobs:
           persist-credentials: false
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
         with:
-          ref: ${{ github.event.pull_request.merge_commit_sha || github.sha }}
+          ref: ${{ github.event_name == 'push' && github.sha || github.event.pull_request.merge_commit_sha }}
           path: workspace
           fetch-depth: 0
           persist-credentials: false
@@ -393,6 +398,7 @@ jobs:
         run: make -C trusted test-flake-aarch64
 
   fixtures-proofs:
+    if: ${{ github.event_name == 'push' || github.event.pull_request.merge_commit_sha != '' }}
     runs-on: ubuntu-latest
     timeout-minutes: 90
     env:
@@ -400,7 +406,7 @@ jobs:
       D2B_BAZEL_PROFILE: local
       D2B_BAZEL_BASE_SHA: ${{ github.event.pull_request.base.sha || github.sha }}
       D2B_BAZEL_HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
-      D2B_BAZEL_MERGE_SHA: ${{ github.event.pull_request.merge_commit_sha || github.sha }}
+      D2B_BAZEL_MERGE_SHA: ${{ github.event_name == 'push' && github.sha || github.event.pull_request.merge_commit_sha }}
       D2B_BAZEL_TRUSTED_SHA: ${{ github.event.pull_request.base.sha || github.sha }}
       D2B_BAZEL_PR_NUMBER: ${{ github.event.pull_request.number || '' }}
       D2B_BAZEL_BRANCH: ${{ github.head_ref || github.ref_name }}
@@ -414,7 +420,7 @@ jobs:
           persist-credentials: false
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
         with:
-          ref: ${{ github.event.pull_request.merge_commit_sha || github.sha }}
+          ref: ${{ github.event_name == 'push' && github.sha || github.event.pull_request.merge_commit_sha }}
           path: workspace
           fetch-depth: 0
           persist-credentials: false
@@ -427,6 +433,7 @@ jobs:
         run: make -C trusted test-fixture-contracts
 
   test-performance-budgets:
+    if: ${{ github.event_name == 'push' || github.event.pull_request.merge_commit_sha != '' }}
     runs-on: ubuntu-latest
     continue-on-error: true
     timeout-minutes: 10
@@ -435,7 +442,7 @@ jobs:
       D2B_BAZEL_PROFILE: local
       D2B_BAZEL_BASE_SHA: ${{ github.event.pull_request.base.sha || github.sha }}
       D2B_BAZEL_HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
-      D2B_BAZEL_MERGE_SHA: ${{ github.event.pull_request.merge_commit_sha || github.sha }}
+      D2B_BAZEL_MERGE_SHA: ${{ github.event_name == 'push' && github.sha || github.event.pull_request.merge_commit_sha }}
       D2B_BAZEL_TRUSTED_SHA: ${{ github.event.pull_request.base.sha || github.sha }}
       D2B_BAZEL_PR_NUMBER: ${{ github.event.pull_request.number || '' }}
       D2B_BAZEL_BRANCH: ${{ github.head_ref || github.ref_name }}
@@ -449,7 +456,7 @@ jobs:
           persist-credentials: false
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
         with:
-          ref: ${{ github.event.pull_request.merge_commit_sha || github.sha }}
+          ref: ${{ github.event_name == 'push' && github.sha || github.event.pull_request.merge_commit_sha }}
           path: workspace
           fetch-depth: 0
           persist-credentials: false

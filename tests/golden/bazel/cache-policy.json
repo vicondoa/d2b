@@ -70,6 +70,12 @@
       ".bazelrc",
       "MODULE.bazel",
       "MODULE.bazel.lock",
+      "bazel/checks/BUILD.bazel",
+      "bazel/checks/fixtures/BUILD.bazel",
+      "bazel/checks/meta/BUILD.bazel",
+      "bazel/checks/nix/BUILD.bazel",
+      "bazel/checks/policy/BUILD.bazel",
+      "bazel/checks/rust/BUILD.bazel",
       "bazel/platforms/BUILD.bazel",
       "bazel/remote/BUILD.bazel",
       "tests/tools/bazel-check",
@@ -80,7 +86,7 @@
       ".github/workflows/pr-l1-static-fast.yml"
     ],
     "allowedSecurityDigests": [
-      "sha256:b13999681f9fe3473bdd778b290bea84736148458254ccca2c7b95d3eb9de8b2"
+      "sha256:f25a2dc8d4a7e5628c94624c565ba1cff7d16a4bc09a45f4a197d025dd77a265"
     ],
     "untrustedCredential": "none",
     "trustedCredential": "credential-helper"

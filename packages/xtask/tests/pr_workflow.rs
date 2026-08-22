@@ -135,7 +135,9 @@ fn assert_trusted_workflow_contract(workflow: &str) {
         "trusted bootstrap must bind to the event base or pushed v3 commit"
     );
     assert!(
-        workflow.contains("ref: ${{ github.event.pull_request.merge_commit_sha || github.sha }}"),
+        workflow.contains(
+            "ref: ${{ github.event_name == 'push' && github.sha || github.event.pull_request.merge_commit_sha }}"
+        ),
         "the tested checkout must bind to the immutable merge or pushed commit"
     );
     assert!(
@@ -145,7 +147,12 @@ fn assert_trusted_workflow_contract(workflow: &str) {
         "the facade must receive separate source and trusted roots"
     );
     assert!(
-        workflow.contains("python3 ./trusted/tests/tools/bazel-check-bootstrap")
+        !workflow.contains("github.event.pull_request.merge_commit_sha || github.sha"),
+        "PR jobs must not substitute the default-branch SHA for a missing merge SHA"
+    );
+    assert!(
+        workflow.contains("./trusted/tests/tools/bazel-check-bootstrap")
+            && !workflow.contains("python3 ./trusted/tests/tools/bazel-check-bootstrap")
             && workflow.contains("env -u D2B_BUILDBUDDY_API_KEY")
             && workflow.contains("printf '%s' \"$D2B_BUILDBUDDY_API_KEY\"")
             && workflow.contains("D2B_BUILDBUDDY_API_KEY: ${{ secrets.D2B_BUILDBUDDY_API_KEY }}")
@@ -168,7 +175,6 @@ fn assert_trusted_workflow_contract(workflow: &str) {
     }
 
     for job in [
-        "tier0",
         "policy-tooling",
         "rust-main",
         "rust-broker",
@@ -190,7 +196,21 @@ fn assert_trusted_workflow_contract(workflow: &str) {
                 && block.contains("bazel-check-bootstrap"),
             "{job} must broker the credential through the trusted bootstrap"
         );
+        assert!(
+            block.contains(
+                "if: ${{ github.event_name == 'push' || github.event.pull_request.merge_commit_sha != '' }}"
+            ),
+            "{job} must fail closed when the PR merge SHA is unavailable"
+        );
     }
+    let tier0 = job_block(workflow, "tier0");
+    assert!(
+        tier0.contains("D2B_BAZEL_PROFILE: local")
+            && !tier0.contains("D2B_BAZEL_REQUIRE_REMOTE")
+            && !tier0.contains("D2B_BUILDBUDDY_API_KEY")
+            && !tier0.contains("bazel-check-bootstrap"),
+        "tier0 must remain a credential-free local preflight"
+    );
     let policy = job_block(workflow, "policy-tooling");
     assert!(
         policy.contains("D2B_BAZEL_TEST_TAG_FILTERS: \"-local,-no-remote-exec,-manual,-gpu,-kvm\"")
@@ -200,6 +220,7 @@ fn assert_trusted_workflow_contract(workflow: &str) {
         "policy-only local tests must be split from the credential-bearing remote step"
     );
     for job in [
+        "tier0",
         "rust-local",
         "nix-eval",
         "nix-unit",
@@ -266,8 +287,12 @@ fn trusted_workflow_rejects_malicious_control_plane_edits() {
             "pull_request:\n    branches: [v3]",
         ),
         workflow.replace(
-            "python3 ./trusted/tests/tools/bazel-check-bootstrap",
+            "./trusted/tests/tools/bazel-check-bootstrap",
             "python3 ./workspace/tests/tools/bazel-check-bootstrap",
+        ),
+        workflow.replace(
+            "github.event_name == 'push' && github.sha || github.event.pull_request.merge_commit_sha",
+            "github.event.pull_request.merge_commit_sha || github.sha",
         ),
         workflow.replace("make -C trusted", "make"),
         workflow.replace(

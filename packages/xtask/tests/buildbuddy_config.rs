@@ -1581,6 +1581,14 @@ fn audited_local_rust_suite_is_complete_and_tag_driven() {
         ),
         "remote Rust main must exclude both local tag classes"
     );
+    for target in ["test-rust-broker", "test-rust-guest-shell-runner"] {
+        assert!(
+            makefile.contains(&format!(
+                "{target}: D2B_BAZEL_TEST_TAG_FILTERS := -local,-no-remote-exec,-manual,-gpu,-kvm"
+            )),
+            "{target} must exclude local tag classes from credential-bearing CI"
+        );
+    }
     let hermetic = rule_block(&d2b, "auth_status_contract", &["rust_test("]);
     assert!(
         !hermetic.contains("\"local\"") && !hermetic.contains("no-remote-cache"),
@@ -1641,6 +1649,12 @@ fn policy_preserves_remote_profiles_and_trust_partition() {
     for path in [
         ".github/workflows/pr-l1-static-fast.yml",
         "Makefile",
+        "bazel/checks/BUILD.bazel",
+        "bazel/checks/fixtures/BUILD.bazel",
+        "bazel/checks/meta/BUILD.bazel",
+        "bazel/checks/nix/BUILD.bazel",
+        "bazel/checks/policy/BUILD.bazel",
+        "bazel/checks/rust/BUILD.bazel",
         "tests/tools/ci-shell",
         "tests/tools/bazel-check-bootstrap",
     ] {
@@ -1726,22 +1740,71 @@ fn trusted_ci_rejects_pr_metadata_tampering() {
     ));
     let bin = scratch.join("bin");
     std::fs::create_dir_all(&bin).expect("create CI metadata test directory");
-    let commit = "0123456789abcdef0123456789abcdef01234567";
+    let source_root = scratch.join("source");
+    let trusted_root = scratch.join("trusted");
+    std::fs::create_dir_all(&source_root).expect("create tested source root");
+    std::fs::create_dir_all(&trusted_root).expect("create trusted source root");
+    for root in [&source_root, &trusted_root] {
+        for relative in [
+            ".bazelrc",
+            "MODULE.bazel",
+            "MODULE.bazel.lock",
+            "bazel/checks/BUILD.bazel",
+            "bazel/checks/fixtures/BUILD.bazel",
+            "bazel/checks/meta/BUILD.bazel",
+            "bazel/checks/nix/BUILD.bazel",
+            "bazel/checks/policy/BUILD.bazel",
+            "bazel/checks/rust/BUILD.bazel",
+            "bazel/platforms/BUILD.bazel",
+            "bazel/remote/BUILD.bazel",
+            "Makefile",
+            ".github/workflows/pr-l1-static-fast.yml",
+            "tests/tools/bazel-check",
+            "tests/tools/bazel-check-bootstrap",
+            "tests/tools/ci-shell",
+            "tests/tools/scrub-shell-environment",
+        ] {
+            let path = root.join(relative);
+            if let Some(parent) = path.parent() {
+                std::fs::create_dir_all(parent).expect("create trusted control directory");
+            }
+            std::fs::write(&path, root == &trusted_root).expect("write trusted control fixture");
+        }
+    }
+    let base_commit = "0123456789abcdef0123456789abcdef01234567";
+    let head_commit = "1234567890abcdef1234567890abcdef12345678";
+    let merge_commit = "2345678901abcdef2345678901abcdef23456789";
+    let invalid_commit = "ffffffffffffffffffffffffffffffffffffffff";
     let git = bin.join("git");
     write_executable(
         &git,
         &format!(
             "#!/usr/bin/env bash\n\
              case \"$*\" in\n\
-               *'status --porcelain=v2 --branch --untracked-files=no -z'*) printf '# branch.oid {0}\\0# branch.head feature/issue-447\\0' ;;\n\
+               *'status --porcelain=v2 --branch --untracked-files=no -z'*) printf '# branch.oid {merge_commit}\\0# branch.head feature/issue-447\\0' ;;\n\
                *'config --local --get remote.origin.url'*) printf 'https://github.com/vicondoa/d2b.git\\n' ;;\n\
                *'check-ref-format --branch'*) exit 0 ;;\n\
-               *'rev-parse --verify'*) printf '{0}\\n' ;;\n\
-               *'cat-file -e'*|*'merge-base --is-ancestor'*) exit 0 ;;\n\
-               *'rev-parse --show-toplevel'*) printf '%s\\n' \"$D2B_BAZEL_SOURCE_ROOT\" ;;\n\
+               *'rev-parse --verify HEAD^{{commit}}'*)\n\
+                 case \"$*\" in\n\
+                   *'-C {trusted_root} '*) printf '{base_commit}\\n' ;;\n\
+                   *'-C {source_root} '*) printf '{merge_commit}\\n' ;;\n\
+                   *) exit 1 ;;\n\
+                 esac\n\
+                 ;;\n\
+               *'cat-file -e'*)\n\
+                 case \"$*\" in *'{invalid_commit}^{{commit}}'*) exit 1 ;; *) exit 0 ;; esac\n\
+                 ;;\n\
+               *'merge-base --is-ancestor'*)\n\
+                 case \"$*\" in *'{invalid_commit}'*) exit 1 ;; *) exit 0 ;; esac\n\
+                 ;;\n\
+               *'rev-parse --show-toplevel'*) printf '%s\\n' '{source_root}' ;;\n\
                *) exit 1 ;;\n\
              esac\n",
-            commit
+            base_commit = base_commit,
+            merge_commit = merge_commit,
+            invalid_commit = invalid_commit,
+            source_root = source_root.display(),
+            trusted_root = trusted_root.display(),
         ),
     );
     let bazel = bin.join("bazel");
@@ -1765,15 +1828,16 @@ fn trusted_ci_rejects_pr_metadata_tampering() {
             .args(["--profile", "local", "--", "//:test"])
             .env("D2B_BAZEL_BIN", &bazel)
             .env("D2B_XTASK_BIN", &xtask)
-            .env("D2B_BAZEL_SOURCE_ROOT", &scratch)
-            .env("D2B_BAZEL_TRUSTED_ROOT", &scratch)
+            .env("D2B_PROJECT_SHELL", "d2b")
+            .env("D2B_BAZEL_SOURCE_ROOT", &source_root)
+            .env("D2B_BAZEL_TRUSTED_ROOT", &trusted_root)
             .env("D2B_BAZEL_CHECK_SCRATCH", scratch.join("evidence"))
             .env("D2B_BAZEL_TRUSTED", "1")
             .env("D2B_BAZEL_PROFILE", "local")
             .env("D2B_BAZEL_BASE_SHA", base_sha)
-            .env("D2B_BAZEL_HEAD_SHA", commit)
-            .env("D2B_BAZEL_MERGE_SHA", commit)
-            .env("D2B_BAZEL_TRUSTED_SHA", commit)
+            .env("D2B_BAZEL_HEAD_SHA", head_commit)
+            .env("D2B_BAZEL_MERGE_SHA", merge_commit)
+            .env("D2B_BAZEL_TRUSTED_SHA", base_commit)
             .env("D2B_BAZEL_PR_NUMBER", "447")
             .env("D2B_BAZEL_BRANCH", "feature/issue-447")
             .env("D2B_BAZEL_RUN_ID", "123")
@@ -1796,12 +1860,17 @@ fn trusted_ci_rejects_pr_metadata_tampering() {
             .expect("run trusted CI metadata profile")
     };
 
-    let output = run(commit);
+    let output = run(base_commit);
     assert!(
         output.status.success(),
         "valid trusted PR metadata must pass: {output:?}"
     );
-    let output = run("ffffffffffffffffffffffffffffffffffffffff");
+    assert_eq!(
+        std::fs::read_to_string(scratch.join("evidence/trusted-workspace/.bazelrc"))
+            .expect("read staged trusted Bazel rc"),
+        "true"
+    );
+    let output = run(invalid_commit);
     assert_eq!(output.status.code(), Some(76));
     let _ = std::fs::remove_dir_all(scratch);
 }

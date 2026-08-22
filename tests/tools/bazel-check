@@ -355,9 +355,18 @@ prepare_trusted_control_files() {
     .bazelrc \
     MODULE.bazel \
     MODULE.bazel.lock \
+    bazel/checks/BUILD.bazel \
+    bazel/checks/fixtures/BUILD.bazel \
+    bazel/checks/meta/BUILD.bazel \
+    bazel/checks/nix/BUILD.bazel \
+    bazel/checks/policy/BUILD.bazel \
+    bazel/checks/rust/BUILD.bazel \
     bazel/platforms/BUILD.bazel \
     bazel/remote/BUILD.bazel \
+    Makefile \
+    .github/workflows/pr-l1-static-fast.yml \
     tests/tools/bazel-check \
+    tests/tools/bazel-check-bootstrap \
     tests/tools/ci-shell \
     tests/tools/scrub-shell-environment
   do

@@ -10,4 +10,6 @@
 - Added trusted/bootstrap checkouts, immutable PR and run metadata validation,
   PR/head cache namespaces, and an anonymous-memfd BuildBuddy credential
   boundary. Missing or failed remote authentication now fails closed in the
-  credential-bearing CI path.
+  credential-bearing CI path. Fixed suite definitions and the workflow/Make
+  control files are now overlaid from trusted `v3`, and the tier-0 preflight
+  remains local and credential-free.

@@ -140,6 +140,8 @@ export D2B_BAZEL_PROFILE D2B_BAZEL_TEST_TAG_FILTERS
 
 check-tier0: D2B_BAZEL_TEST_TAG_FILTERS := -gpu,-kvm
 test-rust-main: D2B_BAZEL_TEST_TAG_FILTERS := -local,-no-remote-exec,-manual,-exclusive,-gpu,-kvm
+test-rust-broker: D2B_BAZEL_TEST_TAG_FILTERS := -local,-no-remote-exec,-manual,-gpu,-kvm
+test-rust-guest-shell-runner: D2B_BAZEL_TEST_TAG_FILTERS := -local,-no-remote-exec,-manual,-gpu,-kvm
 
 $(D2B_MAKE_BAZEL_TARGETS):
 	$(BAZEL_RUN) //bazel/checks:$@
