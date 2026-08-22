@@ -282,7 +282,7 @@ if [ -z "${D2B_XTASK_BIN:-}" ] || [ ! -x "${D2B_XTASK_BIN}" ]; then
     echo "bazel-check: xtask bootstrap failed" >&2
     exit 1
   fi
-  bootstrap_warning_status=1
+  bootstrap_warning_status=0
   warning_line_status "$bootstrap_log" || bootstrap_warning_status=$?
   if [ "$bootstrap_warning_status" -gt 1 ]; then
     rm -f -- "$bootstrap_log"
@@ -304,7 +304,7 @@ if [ -z "${D2B_XTASK_BIN:-}" ] || [ ! -x "${D2B_XTASK_BIN}" ]; then
     echo "bazel-check: bootstrap evidence redaction failed; refusing to publish the run" >&2
     exit "$REDACTION_FAILURE_STATUS"
   fi
-  redacted_bootstrap_warning_status=1
+  redacted_bootstrap_warning_status=0
   warning_line_status "$bootstrap_log" || redacted_bootstrap_warning_status=$?
   if [ "$bootstrap_warning_status" -eq 0 ] ||
     [ "$redacted_bootstrap_warning_status" -eq 0 ]; then
@@ -389,7 +389,7 @@ run_bazel() {
     >"$log_path" 2>&1
   local status=$?
   set -e
-  local raw_warning_status=1
+  local raw_warning_status=0
   warning_line_status "$log_path" || raw_warning_status=$?
   if [ "$raw_warning_status" -eq 0 ]; then
     LAST_BAZEL_WARNING=1
@@ -406,7 +406,7 @@ run_bazel() {
     emit_captured_metadata "$bep_path" "bazel $profile BEP"
     return "$REDACTION_FAILURE_STATUS"
   fi
-  local redacted_warning_status=1
+  local redacted_warning_status=0
   warning_line_status "$log_path" || redacted_warning_status=$?
   if [ "$LAST_BAZEL_WARNING" -eq 1 ] || [ "$redacted_warning_status" -eq 0 ]; then
     echo "bazel-check: warning line found after log redaction; failing closed" >&2
