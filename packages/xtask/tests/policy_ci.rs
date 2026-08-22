@@ -256,9 +256,18 @@ fn main_controlled_buildbuddy_workflows_preserve_trust_contract() {
             .find("\n  remote:\n")
             .expect("build workflow must define a remote job");
     let local_job = &build[local_job_start..local_job_end];
+    let local_env_start = local_job
+        .find("\n    env:\n")
+        .expect("local job must define a job-level environment");
+    let local_env_end = local_env_start
+        + local_job[local_env_start..]
+            .find("\n    steps:\n")
+            .expect("local job environment must end before its steps");
+    let local_env = &local_job[local_env_start..local_env_end];
     assert!(
-        local_job.contains("D2B_CHECK_JOBS: \"1\"") && local_job.contains("D2B_FLAKE_JOBS: \"1\""),
-        "main hosted local gate must serialize nested Layer-1 fan-out"
+        local_env.contains("\n      D2B_CHECK_JOBS: \"1\"\n")
+            && local_env.contains("\n      D2B_FLAKE_JOBS: \"1\"\n"),
+        "main hosted local gate must export serialized Layer-1 bounds at job scope"
     );
     let rust_bootstrap = local_job
         .find("      - name: Prepare pinned Rust toolchain for parallel Layer-1 gates")
