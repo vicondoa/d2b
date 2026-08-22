@@ -411,11 +411,8 @@ fn committed_profiles_share_authentication_and_worker_policy() {
     );
     let flake = read_text("flake.nix");
     assert!(
-        flake
-            .matches("export D2B_SHELLCHECK_BIN=\"${pkgs.shellcheck}/bin/shellcheck\"")
-            .count()
-            >= 2,
-        "default and Bazel Nix shells must export the pinned shellcheck binary"
+        flake.contains("export D2B_SHELLCHECK_BIN=\"${pkgs.shellcheck}/bin/shellcheck\""),
+        "Nix shells must export the pinned shellcheck binary through the shared contract"
     );
     assert!(
         read_text("bazel/checks/meta/BUILD.bazel")
@@ -1012,6 +1009,7 @@ fn focused_bazel_shell_exports_the_complete_facade_contract() {
         "gnumake",
         "jq",
         "rustup",
+        "shellcheck",
     ] {
         assert!(
             packages
@@ -1040,6 +1038,7 @@ fn focused_bazel_shell_exports_the_complete_facade_contract() {
         "D2B_PROJECT_SHELL=d2b",
         "D2B_BAZEL_BIN",
         "BAZEL_SH",
+        "D2B_SHELLCHECK_BIN",
         "D2B_BAZEL_TEST_PATH",
     ] {
         assert!(
@@ -1072,7 +1071,12 @@ fn default_shell_includes_the_pinned_bazel_contract() {
         default_shell.contains("mkBazelShellHook"),
         "default development shell must use the shared shell contract helper"
     );
-    for export in ["D2B_PROJECT_SHELL=d2b", "D2B_BAZEL_BIN", "BAZEL_SH"] {
+    for export in [
+        "D2B_PROJECT_SHELL=d2b",
+        "D2B_BAZEL_BIN",
+        "BAZEL_SH",
+        "D2B_SHELLCHECK_BIN",
+    ] {
         assert!(
             flake.contains(export),
             "default development shell contract must export {export}"
