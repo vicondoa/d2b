@@ -47,9 +47,7 @@ Rust tests (types 2-5: unit, integration, contract, policy-lint) live under
 
 ## Running tests
 
-Bazel-backed lint aliases must run in a declared Nix shell, for example
-`nix develop .#bazel -c make test-lint`. The source-hygiene gate fails closed
-when `D2B_SHELLCHECK_BIN` is not supplied by that environment.
+The source-hygiene gate fails closed when `D2B_SHELLCHECK_BIN` is unavailable.
 
 | Command | Runs | Where |
 |---------|------|-------|
