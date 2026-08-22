@@ -15,7 +15,7 @@ sh_test(
     name = "tier0_first_pass",
     srcs = ["//:tests/tools/tier0-first-pass.sh"],
     data = [":carrier_sources"],
-    env_inherit = ["D2B_REPO_ROOT", "PATH", "ROOT"],
+    env_inherit = ["D2B_REPO_ROOT", "D2B_SHELLCHECK_BIN", "PATH", "ROOT"],
     tags = [
         "local",
         "no-sandbox",
