@@ -1,0 +1,456 @@
+name: build
+
+on:
+  push:
+    branches: [main]
+  workflow_call:
+    secrets:
+      D2B_BUILDBUDDY_API_KEY:
+        required: false
+
+permissions:
+  contents: read
+
+env:
+  D2B_REPOSITORY: vicondoa/d2b
+  D2B_SERVER_URL: https://github.com
+  D2B_CALLER_WORKFLOW_REF: ${{ github.workflow_ref }}
+  D2B_CALLER_WORKFLOW_SHA: ${{ github.workflow_sha }}
+  D2B_JOB_WORKFLOW_REF: ${{ github.job_workflow_ref }}
+  D2B_JOB_WORKFLOW_SHA: ${{ github.job_workflow_sha }}
+
+jobs:
+  metadata:
+    name: metadata
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    outputs:
+      trusted_sha: ${{ steps.validate.outputs.trusted_sha }}
+      base_sha: ${{ steps.validate.outputs.base_sha }}
+      head_sha: ${{ steps.validate.outputs.head_sha }}
+      merge_sha: ${{ steps.validate.outputs.merge_sha }}
+      tested_sha: ${{ steps.validate.outputs.tested_sha }}
+      pr_number: ${{ steps.validate.outputs.pr_number }}
+      branch: ${{ steps.validate.outputs.branch }}
+      instance: ${{ steps.validate.outputs.instance }}
+      has_bazel: ${{ steps.validate.outputs.has_bazel }}
+    steps:
+      - name: Checkout immutable tested revision
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+        with:
+          ref: ${{ github.event_name == 'push' && github.sha || github.event.pull_request.merge_commit_sha }}
+          path: source
+          fetch-depth: 0
+          persist-credentials: false
+      - id: validate
+        name: Validate immutable workflow and revision metadata
+        env:
+          D2B_EVENT_NAME: ${{ github.event_name }}
+          D2B_REF: ${{ github.ref }}
+          D2B_BASE_REF: ${{ github.base_ref }}
+          D2B_DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+          D2B_BASE_SHA: ${{ github.event.pull_request.base.sha || github.sha }}
+          D2B_HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+          D2B_MERGE_SHA: ${{ github.event.pull_request.merge_commit_sha || github.sha }}
+          D2B_PR_NUMBER: ${{ github.event.pull_request.number || '' }}
+          D2B_BRANCH: ${{ github.head_ref || github.ref_name }}
+          D2B_RUN_ID: ${{ github.run_id }}
+          D2B_CALLER_WORKFLOW_REF: ${{ github.workflow_ref }}
+          D2B_CALLER_WORKFLOW_SHA: ${{ github.workflow_sha }}
+          D2B_JOB_WORKFLOW_REF: ${{ github.job_workflow_ref }}
+          D2B_JOB_WORKFLOW_SHA: ${{ github.job_workflow_sha }}
+          D2B_REPOSITORY: ${{ github.repository }}
+          D2B_SERVER_URL: ${{ github.server_url }}
+        run: |
+          set -euo pipefail
+
+          fail() {
+            echo "::error::$1" >&2
+            exit 76
+          }
+
+          is_sha() {
+            [[ "$1" =~ ^[0-9a-f]{40}$ ]]
+          }
+
+          [ "$D2B_REPOSITORY" = "vicondoa/d2b" ] ||
+            fail "the trusted build is restricted to vicondoa/d2b"
+          [ "$D2B_SERVER_URL" = "https://github.com" ] ||
+            fail "the trusted build is restricted to github.com"
+          [ "$D2B_DEFAULT_BRANCH" = "main" ] ||
+            fail "the repository default branch must remain main"
+          trusted_sha="${D2B_JOB_WORKFLOW_SHA:-$D2B_CALLER_WORKFLOW_SHA}"
+          is_sha "$trusted_sha" ||
+            fail "the reusable workflow SHA is not a full immutable commit SHA"
+          [[ "$D2B_RUN_ID" =~ ^[0-9]+$ ]] ||
+            fail "github.run_id is not numeric"
+          [[ "$D2B_BRANCH" != *$'\n'* && "$D2B_BRANCH" != *$'\r'* ]] ||
+            fail "branch metadata contains a control character"
+          git -C source check-ref-format --branch "$D2B_BRANCH" >/dev/null 2>&1 ||
+            fail "branch metadata is not an approved ref"
+
+          if [ "$D2B_EVENT_NAME" = "pull_request_target" ]; then
+            [ "$D2B_CALLER_WORKFLOW_REF" =
+              "vicondoa/d2b/.github/workflows/pr.yml@refs/heads/main" ] ||
+              fail "PR workflow controls must be sourced from protected main"
+            [ "$D2B_JOB_WORKFLOW_REF" =
+              "vicondoa/d2b/.github/workflows/build.yaml@refs/heads/main" ] ||
+              fail "reusable build controls must be sourced from protected main"
+            case "$D2B_BASE_REF" in
+              main|v3) ;;
+              *) fail "pull request target is not main or v3" ;;
+            esac
+            [ "$D2B_REF" = "refs/heads/$D2B_DEFAULT_BRANCH" ] ||
+              fail "pull request ref does not match the default branch"
+            [ -n "$D2B_PR_NUMBER" ] && [[ "$D2B_PR_NUMBER" =~ ^[0-9]+$ ]] ||
+              fail "pull request number is invalid"
+            is_sha "$D2B_BASE_SHA" || fail "pull request base SHA is invalid"
+            is_sha "$D2B_HEAD_SHA" || fail "pull request head SHA is invalid"
+            is_sha "$D2B_MERGE_SHA" || fail "pull request merge SHA is invalid"
+            tested_sha="$D2B_MERGE_SHA"
+            instance="d2b/pr/$D2B_PR_NUMBER/$D2B_HEAD_SHA/linux-x86_64/rules_rs/worker-v1/minimal/lock-v1"
+          elif [ "$D2B_EVENT_NAME" = "push" ]; then
+            [ "$D2B_CALLER_WORKFLOW_REF" =
+              "vicondoa/d2b/.github/workflows/build.yaml@refs/heads/main" ] ||
+              fail "push workflow controls must be sourced from protected main"
+            [ "$D2B_REF" = "refs/heads/main" ] ||
+              fail "trusted build pushes are restricted to main"
+            [ -z "$D2B_BASE_REF" ] || fail "push events must not carry a base ref"
+            [ -z "$D2B_PR_NUMBER" ] || fail "push events must not carry PR metadata"
+            is_sha "$D2B_MERGE_SHA" || fail "pushed SHA is invalid"
+            D2B_BASE_SHA="$D2B_MERGE_SHA"
+            D2B_HEAD_SHA="$D2B_MERGE_SHA"
+            tested_sha="$D2B_MERGE_SHA"
+            instance="d2b/trusted-seed/main/$tested_sha/linux-x86_64/rules_rs/worker-v1/minimal/lock-v1"
+          else
+            fail "only pull_request_target and push events are accepted"
+          fi
+
+          is_sha "$tested_sha" || fail "tested SHA is invalid"
+          [ "$(git -C source rev-parse HEAD)" = "$tested_sha" ] ||
+            fail "tested checkout does not match the immutable tested SHA"
+          git -C source cat-file -e "$D2B_BASE_SHA^{commit}" ||
+            fail "protected base SHA is unavailable in the tested checkout"
+          git -C source merge-base --is-ancestor "$D2B_BASE_SHA" "$tested_sha" ||
+            fail "tested revision is not based on the protected base"
+          if [ "$D2B_EVENT_NAME" = "pull_request_target" ]; then
+            git -C source cat-file -e "$D2B_HEAD_SHA^{commit}" ||
+              fail "pull request head SHA is unavailable in the tested checkout"
+            git -C source merge-base --is-ancestor "$D2B_HEAD_SHA" "$tested_sha" ||
+              fail "tested merge revision does not contain the pull request head"
+          fi
+
+          if [ -f source/MODULE.bazel ] &&
+            [ -f source/.bazelversion ] &&
+            [ -f source/bazel/checks/BUILD.bazel ]; then
+            [ "$(tr -d '\r\n' <source/.bazelversion)" = "9.2.0" ] ||
+              fail "the tested Bazel graph must use the pinned Bazel 9.2.0"
+            has_bazel=true
+          else
+            has_bazel=false
+          fi
+
+          {
+            printf 'trusted_sha=%s\n' "$trusted_sha"
+            printf 'base_sha=%s\n' "$D2B_BASE_SHA"
+            printf 'head_sha=%s\n' "$D2B_HEAD_SHA"
+            printf 'merge_sha=%s\n' "$D2B_MERGE_SHA"
+            printf 'tested_sha=%s\n' "$tested_sha"
+            printf 'pr_number=%s\n' "$D2B_PR_NUMBER"
+            printf 'branch=%s\n' "$D2B_BRANCH"
+            printf 'instance=%s\n' "$instance"
+            printf 'has_bazel=%s\n' "$has_bazel"
+          } >>"$GITHUB_OUTPUT"
+
+  local:
+    name: local
+    needs: [metadata]
+    if: ${{ needs.metadata.result == 'success' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    env:
+      D2B_TRUSTED_SHA: ${{ needs.metadata.outputs.trusted_sha }}
+      D2B_TESTED_SHA: ${{ needs.metadata.outputs.tested_sha }}
+      D2B_BASE_SHA: ${{ needs.metadata.outputs.base_sha }}
+      D2B_HEAD_SHA: ${{ needs.metadata.outputs.head_sha }}
+      D2B_MERGE_SHA: ${{ needs.metadata.outputs.merge_sha }}
+      D2B_BAZEL_PROFILE: local
+      D2B_BAZEL_UNTRUSTED: "1"
+      D2B_BAZEL_REQUIRE_REMOTE: "0"
+    steps:
+      - name: Checkout immutable trusted controls
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+        with:
+          ref: ${{ needs.metadata.outputs.trusted_sha }}
+          path: trusted
+          persist-credentials: false
+      - name: Checkout immutable tested revision
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+        with:
+          ref: ${{ needs.metadata.outputs.tested_sha }}
+          path: workspace
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Install Nix
+        uses: cachix/install-nix-action@23cf0fec1d55e0b1f2631aedd2a610c21ef8b077
+        with:
+          nix_path: nixpkgs=channel:nixos-unstable
+          extra_nix_config: |
+            experimental-features = nix-command flakes
+      - name: Verify immutable checkouts
+        env:
+          D2B_TRUSTED_SHA: ${{ needs.metadata.outputs.trusted_sha }}
+          D2B_TESTED_SHA: ${{ needs.metadata.outputs.tested_sha }}
+        run: |
+          set -euo pipefail
+          test "$(git -C trusted rev-parse HEAD)" = "$D2B_TRUSTED_SHA"
+          test "$(git -C workspace rev-parse HEAD)" = "$D2B_TESTED_SHA"
+      - name: Run credential-free local Layer-1 gate
+        working-directory: workspace
+        run: |
+          set -euo pipefail
+          make check
+
+  remote:
+    name: remote
+    needs: [metadata]
+    if: ${{ needs.metadata.result == 'success' && github.event_name == 'push' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    env:
+      D2B_TRUSTED_SHA: ${{ needs.metadata.outputs.trusted_sha }}
+      D2B_TESTED_SHA: ${{ needs.metadata.outputs.tested_sha }}
+      D2B_BASE_SHA: ${{ needs.metadata.outputs.base_sha }}
+      D2B_HEAD_SHA: ${{ needs.metadata.outputs.head_sha }}
+      D2B_MERGE_SHA: ${{ needs.metadata.outputs.merge_sha }}
+      D2B_PR_NUMBER: ${{ needs.metadata.outputs.pr_number }}
+      D2B_INSTANCE: ${{ needs.metadata.outputs.instance }}
+      D2B_HAS_BAZEL: ${{ needs.metadata.outputs.has_bazel }}
+      USE_BAZEL_VERSION: "9.2.0"
+    steps:
+      - name: Checkout immutable trusted controls
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+        with:
+          ref: ${{ needs.metadata.outputs.trusted_sha }}
+          path: trusted
+          persist-credentials: false
+      - name: Checkout immutable tested revision
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+        with:
+          ref: ${{ needs.metadata.outputs.tested_sha }}
+          path: workspace
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Install Nix
+        uses: cachix/install-nix-action@23cf0fec1d55e0b1f2631aedd2a610c21ef8b077
+        with:
+          nix_path: nixpkgs=channel:nixos-unstable
+          extra_nix_config: |
+            experimental-features = nix-command flakes
+      - name: Install pinned Bazelisk
+        if: ${{ needs.metadata.outputs.has_bazel == 'true' }}
+        uses: bazelbuild/setup-bazelisk@b39c379c82683a5f25d34f0d062761f62693e0b2
+      - name: Verify immutable checkouts
+        run: |
+          set -euo pipefail
+          test "$(git -C trusted rev-parse HEAD)" = "$D2B_TRUSTED_SHA"
+          test "$(git -C workspace rev-parse HEAD)" = "$D2B_TESTED_SHA"
+      - name: Run brokered remote Bazel subset
+        if: ${{ needs.metadata.outputs.has_bazel == 'true' }}
+        working-directory: workspace
+        env:
+          D2B_BUILDBUDDY_API_KEY: ${{ secrets.D2B_BUILDBUDDY_API_KEY }}
+        run: |
+          set -euo pipefail
+
+          [ -n "$D2B_BUILDBUDDY_API_KEY" ] || {
+            echo "::error::BuildBuddy credential is unavailable; refusing the remote lane" >&2
+            exit 76
+          }
+
+          umask 077
+          log="$RUNNER_TEMP/d2b-bazel-remote.log"
+          bep="$RUNNER_TEMP/d2b-bazel-remote.bep.json"
+          helper="$RUNNER_TEMP/d2b-buildbuddy-credential-helper"
+          bootstrap="$RUNNER_TEMP/d2b-buildbuddy-bootstrap"
+
+          cat >"$helper" <<'HELPER'
+          #!/usr/bin/env bash
+          set -euo pipefail
+
+          request="$(cat)"
+          if ! printf '%s' "$request" |
+            jq -e '
+              (.uri // "") |
+              (startswith("grpcs://d2b.buildbuddy.io") or
+               startswith("https://d2b.buildbuddy.io"))
+            ' >/dev/null 2>&1; then
+            printf '%s\n' '{"headers":{}}'
+            exit 0
+          fi
+
+          fd="${D2B_BAZEL_CREDENTIAL_FD:-}"
+          case "$fd" in
+            ''|*[!0-9]*) printf '%s\n' '{"headers":{}}'; exit 0 ;;
+          esac
+          token="$(python3 - "$fd" <<'PY'
+          import os
+          import sys
+
+          data = os.pread(int(sys.argv[1]), 4096, 0)
+          if not data or b"\x00" in data or b"\n" in data or b"\r" in data:
+              raise SystemExit(1)
+          sys.stdout.buffer.write(data)
+          PY
+          )" || {
+            printf '%s\n' '{"headers":{}}'
+            exit 0
+          }
+
+          printf '%s' "$token" |
+            jq -Rs '{headers: {"x-buildbuddy-api-key": [rtrimstr("\n")]}}'
+          HELPER
+          chmod 0700 "$helper"
+
+          cat >"$bootstrap" <<'BOOTSTRAP'
+          #!/usr/bin/env bash
+          set -euo pipefail
+
+          [ "$#" -gt 0 ] || {
+            echo "BuildBuddy bootstrap requires a command" >&2
+            exit 2
+          }
+
+          python3 - "$@" <<'PY'
+          import os
+          import sys
+
+          secret = os.read(9, 4096)
+          if not secret or b"\x00" in secret or b"\n" in secret or b"\r" in secret:
+              raise SystemExit("invalid BuildBuddy credential")
+          fd = os.memfd_create("d2b-buildbuddy-credential", os.MFD_CLOEXEC)
+          os.write(fd, secret)
+          os.lseek(fd, 0, os.SEEK_SET)
+          os.set_inheritable(fd, True)
+          os.environ.pop("D2B_BUILDBUDDY_API_KEY", None)
+          os.environ["D2B_BAZEL_CREDENTIAL_FD"] = str(fd)
+          os.execvp(sys.argv[1], sys.argv[1:])
+          PY
+          BOOTSTRAP
+          chmod 0700 "$bootstrap"
+
+          set +e
+          printf '%s' "$D2B_BUILDBUDDY_API_KEY" |
+            env -u D2B_BUILDBUDDY_API_KEY "$bootstrap" bazelisk \
+              --nosystem_rc \
+              --noworkspace_rc \
+              --nohome_rc \
+              --bazelrc=/dev/null \
+              --output_user_root="$RUNNER_TEMP/d2b-bazel-root" \
+              test \
+              --lockfile_mode=error \
+              --@protobuf//bazel/toolchains:prefer_prebuilt_protoc \
+              --@protobuf//bazel/flags:allow_nonstandard_protoc \
+              --remote_executor=grpcs://d2b.buildbuddy.io \
+              --remote_cache=grpcs://d2b.buildbuddy.io \
+              --bes_backend=grpcs://d2b.buildbuddy.io \
+              --bes_results_url=https://d2b.buildbuddy.io/invocation/ \
+              --credential_helper=d2b.buildbuddy.io="$helper" \
+              --remote_timeout=60s \
+              --remote_retries=0 \
+              --remote_instance_name="$D2B_INSTANCE" \
+              --platforms=@toolchains_buildbuddy//platforms:linux_x86_64 \
+              --extra_execution_platforms=@toolchains_buildbuddy//platforms:linux_x86_64 \
+              --extra_toolchains=@toolchains_buildbuddy//toolchains/cc:ubuntu_gcc_x86_64 \
+              --remote_download_outputs=minimal \
+              --remote_upload_local_results=false \
+              --remote_cache_compression \
+              --jobs=50 \
+              --shell_executable=/bin/bash \
+              --action_env=PATH=/run/current-system/sw/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin \
+              --test_env=PATH=/run/current-system/sw/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin \
+              --action_env=D2B_BUILDBUDDY_API_KEY= \
+              --action_env=D2B_BAZEL_CREDENTIAL_FD= \
+              --test_env=D2B_BUILDBUDDY_API_KEY= \
+              --test_env=D2B_BAZEL_CREDENTIAL_FD= \
+              --test_env=D2B_REPO_ROOT="$GITHUB_WORKSPACE/workspace" \
+              --test_env=D2B_PROJECT_SHELL=d2b \
+              --test_env=BAZEL_SH=/bin/bash \
+              --repo_contents_cache= \
+              --build_tests_only \
+              --test_output=errors \
+              --test_tag_filters=-local,-no-remote-exec,-manual,-exclusive,-gpu,-kvm \
+              --build_metadata=REPO_URL=https://github.com/vicondoa/d2b \
+              --build_metadata=COMMIT_SHA="$D2B_TESTED_SHA" \
+              --build_metadata=BASE_SHA="$D2B_BASE_SHA" \
+              --build_metadata=HEAD_SHA="$D2B_HEAD_SHA" \
+              --build_metadata=MERGE_SHA="$D2B_MERGE_SHA" \
+              --build_metadata=PR_NUMBER="$D2B_PR_NUMBER" \
+              --build_metadata=GITHUB_RUN_ID="$GITHUB_RUN_ID" \
+              --build_event_json_file="$bep" \
+              //bazel/checks:test-rust-main \
+              //bazel/checks:test-rust-broker \
+              //bazel/checks:test-rust-guest-shell-runner \
+              //bazel/checks:test-policy \
+              9<&0 \
+              >"$log" 2>&1
+          status=$?
+          set -e
+
+          exec 9< <(printf '%s' "$D2B_BUILDBUDDY_API_KEY")
+          python3 - "$log" "$bep" 9 <<'PY'
+          import os
+          import pathlib
+          import sys
+
+          token = os.read(int(sys.argv[3]), 4096)
+          if not token or b"\x00" in token or b"\n" in token or b"\r" in token:
+              raise SystemExit("credential redaction input is invalid")
+          for name in sys.argv[1:3]:
+              path = pathlib.Path(name)
+              if not path.exists():
+                  continue
+              data = path.read_bytes()
+              path.write_bytes(data.replace(token, b"<redacted>"))
+          PY
+          exec 9<&-
+
+          if grep -q '^warning:' "$log" 2>/dev/null; then
+            echo "::error::warning-producing Bazel output is not accepted" >&2
+            status=1
+          fi
+          if [ "$status" -ne 0 ]; then
+            sed -n '1,240p' "$log"
+            exit "$status"
+          fi
+          echo "Brokered remote Bazel subset passed."
+      - name: No remote Bazel graph on this revision
+        if: ${{ needs.metadata.outputs.has_bazel != 'true' }}
+        run: echo "No Bazel graph is present on trusted main; no remote seed is required."
+
+  check:
+    name: check
+    if: ${{ always() }}
+    needs: [metadata, local, remote]
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Require all build lanes to pass
+        env:
+          METADATA_RESULT: ${{ needs.metadata.result }}
+          LOCAL_RESULT: ${{ needs.local.result }}
+          REMOTE_RESULT: ${{ needs.remote.result }}
+          EVENT_NAME: ${{ github.event_name }}
+        run: |
+          set -euo pipefail
+          echo "metadata=$METADATA_RESULT local=$LOCAL_RESULT remote=$REMOTE_RESULT"
+          for result in "$METADATA_RESULT" "$LOCAL_RESULT"; do
+            [ "$result" = success ] || {
+              echo "::error::a required build lane did not pass (result=$result)" >&2
+              exit 1
+            }
+          done
+          if [ "$EVENT_NAME" = push ] && [ "$REMOTE_RESULT" != success ]; then
+            echo "::error::the trusted main remote seed lane did not pass (result=$REMOTE_RESULT)" >&2
+            exit 1
+          fi
