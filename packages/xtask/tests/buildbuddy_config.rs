@@ -600,6 +600,17 @@ fn warning_after_successful_bootstrap_fails_without_leaking_credentials() {
         std::process::id()
     ));
     std::fs::create_dir_all(&scratch).expect("create wrapper test scratch");
+    let facade_root = scratch.join("repo");
+    let facade = facade_root.join("tests/tools/bazel-check");
+    std::fs::create_dir_all(facade.parent().expect("facade parent"))
+        .expect("create facade test root");
+    std::fs::copy(repo_root().join("tests/tools/bazel-check"), &facade)
+        .expect("copy bazel-check facade");
+    let bootstrap_xtask = facade_root.join("bazel-bin/packages/xtask/xtask");
+    std::fs::create_dir_all(bootstrap_xtask.parent().expect("bootstrap xtask parent"))
+        .expect("create bootstrap artifact directory");
+    std::fs::copy(env!("CARGO_BIN_EXE_xtask"), &bootstrap_xtask)
+        .expect("copy bootstrap xtask artifact");
     let bazel = scratch.join("bazel");
     write_executable(
         &bazel,
@@ -610,7 +621,7 @@ fn warning_after_successful_bootstrap_fails_without_leaking_credentials() {
 
     let evidence = scratch.join("evidence");
     let output = Command::new("bash")
-        .arg(repo_root().join("tests/tools/bazel-check"))
+        .arg(&facade)
         .args(["--profile", "local", "--", "//:test"])
         .env("D2B_BAZEL_BIN", &bazel)
         .env_remove("D2B_XTASK_BIN")
@@ -864,6 +875,52 @@ fn warning_fails_an_otherwise_successful_trusted_seed_run() {
     );
     assert!(diagnostics.contains("warning: synthetic trusted-seed warning"));
     assert!(!diagnostics.contains("bazel-check: trusted-seed passed"));
+    let _ = std::fs::remove_dir_all(scratch);
+}
+
+#[test]
+fn warning_after_successful_remote_run_fails() {
+    let scratch = repo_root().join(".scratch").join(format!(
+        "bazel-check-warning-remote-success-{}",
+        std::process::id()
+    ));
+    std::fs::create_dir_all(&scratch).expect("create wrapper test scratch");
+    let bazel = scratch.join("bazel");
+    let credential = scratch.join("credential");
+    std::fs::write(&credential, "synthetic-token\n").expect("write credential");
+    write_executable(
+        &bazel,
+        "#!/usr/bin/env bash\n\
+         for arg in \"$@\"; do\n\
+           case \"$arg\" in\n\
+             --build_event_json_file=*) bep=\"${arg#*=}\" ;;\n\
+           esac\n\
+         done\n\
+         printf 'warning: synthetic remote toolchain warning\\n'\n\
+         printf '{\"id\":{\"started\":{\"uuid\":\"remote\"}},\"testResult\":{\"label\":\"//:test\"}}\\n' > \"$bep\"\n\
+         exit 0\n",
+    );
+
+    let output = Command::new("bash")
+        .arg(repo_root().join("tests/tools/bazel-check"))
+        .args(["--profile", "remote", "--", "//:test"])
+        .env("D2B_BAZEL_BIN", &bazel)
+        .env("D2B_XTASK_BIN", env!("CARGO_BIN_EXE_xtask"))
+        .env("D2B_BUILDBUDDY_CREDENTIAL_FILE", &credential)
+        .env("D2B_BAZEL_UNTRUSTED", "0")
+        .env("GITHUB_ACTIONS", "false")
+        .env("D2B_BAZEL_CHECK_SCRATCH", scratch.join("evidence"))
+        .output()
+        .expect("run bazel-check");
+
+    assert_eq!(output.status.code(), Some(1));
+    let diagnostics = format!(
+        "{}{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(diagnostics.contains("warning: synthetic remote toolchain warning"));
+    assert!(!diagnostics.contains("bazel-check: remote passed"));
     let _ = std::fs::remove_dir_all(scratch);
 }
 
