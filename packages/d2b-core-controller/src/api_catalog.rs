@@ -2,11 +2,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use d2b_contracts_provider::v3::{
-    ArtifactDigest, BinaryRef, ComponentExecution, ComponentTargetCapability,
-    ControllerInstanceScope, ControllerTargetKind, EffectPortClass, ProviderManifest,
-    ResourceApiBinding, TargetRuntimeArtifacts,
-};
+use d2b_contracts_provider::v3::{ProviderManifest, ResourceApiBinding};
 use d2b_contracts_resource::v3::{ResourceRef, ResourceTypeName, SchemaFingerprint};
 
 /// Closed reason a catalog candidate was refused.
@@ -251,9 +247,10 @@ impl ApiCatalogHandler {
 mod tests {
     use d2b_contracts_provider::v3::UpgradePolicy as ProviderUpgradePolicy;
     use d2b_contracts_provider::v3::{
-        ArtifactDigest, ArtifactDigestSet, CompatibilityRange, ComponentDescriptor, ComponentType,
-        PolicyEvaluation, RevocationState, SignatureState, StandardCapabilityMatrix, TrustEvidence,
-        UpgradeDisposition,
+        ArtifactDigest, ArtifactDigestSet, BinaryRef, CompatibilityRange, ComponentDescriptor,
+        ComponentExecution, ComponentTargetCapability, ComponentType, ControllerInstanceScope,
+        ControllerTargetKind, EffectPortClass, PolicyEvaluation, RevocationState, SignatureState,
+        StandardCapabilityMatrix, TargetRuntimeArtifacts, TrustEvidence, UpgradeDisposition,
     };
     use d2b_contracts_resource::v3::{
         ArtifactId, SchemaVersion,

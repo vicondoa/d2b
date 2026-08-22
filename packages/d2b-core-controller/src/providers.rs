@@ -1,9 +1,6 @@
 //! Provider lifecycle validation and child-resource planning.
 
-use d2b_contracts_provider::v3::{
-    BinaryRef, ComponentExecution, ComponentTargetCapability, ComponentType, ControllerTargetKind,
-    EffectPortClass, ProviderManifest, TargetRuntimeArtifacts,
-};
+use d2b_contracts_provider::v3::{ComponentType, ProviderManifest};
 use d2b_contracts_resource::v3::{ResourceRef, SchemaFingerprint};
 
 /// Provider lifecycle phase derived from exact child observations.
@@ -212,8 +209,10 @@ impl ProviderHandler {
 mod tests {
     use d2b_contracts_provider::v3::UpgradePolicy as ProviderUpgradePolicy;
     use d2b_contracts_provider::v3::{
-        ArtifactDigest, ArtifactDigestSet, CompatibilityRange, ComponentDescriptor,
-        PolicyEvaluation, RevocationState, SignatureState, TrustEvidence, UpgradeDisposition,
+        ArtifactDigest, ArtifactDigestSet, BinaryRef, CompatibilityRange, ComponentDescriptor,
+        ComponentExecution, ComponentTargetCapability, ControllerTargetKind, EffectPortClass,
+        PolicyEvaluation, RevocationState, SignatureState, TargetRuntimeArtifacts, TrustEvidence,
+        UpgradeDisposition,
     };
     use d2b_contracts_resource::v3::{
         ArtifactId,
