@@ -202,15 +202,17 @@ pub use d2bd_runtime::daemon_config::{
     storage_lifecycle_report_path,
 };
 pub use d2bd_runtime::exec_detached;
+#[cfg(test)]
 pub(crate) use d2bd_runtime::exec_owner_io;
 pub use d2bd_runtime::exec_session;
 use d2bd_runtime::exec_session::ExecGuestConnector;
 pub use d2bd_runtime::exec_session_real;
 #[cfg(test)]
 use d2bd_runtime::exec_support::map_exec_op_error;
+pub(crate) use d2bd_runtime::exec_support::map_exec_reserve_error;
+#[cfg(test)]
 pub(crate) use d2bd_runtime::exec_support::{
     emit_exec_established_event, exec_error_kind_label, exec_metric_into, map_exec_establish_error,
-    map_exec_reserve_error,
 };
 pub use d2bd_runtime::guest_control_bridge;
 pub use d2bd_runtime::runtime_capability::{
@@ -227,10 +229,14 @@ use d2bd_runtime::runtime_util::{
     block_on_future, duplicate_received_fd, hex_bytes, projection_digest_bytes,
 };
 use d2bd_runtime::shell_backend::{
-    SHELL_MANAGEMENT_TIMEOUT, guest_advertises_capability, map_shell_attach_response,
-    map_shell_detach_response, map_shell_health_error, map_shell_kill_response,
-    map_shell_list_response, shell_capability_failed, shell_error_to_typed, shell_failed,
-    shell_poll_timeout, shell_protocol_failed, shell_transport_failed,
+    SHELL_MANAGEMENT_TIMEOUT, shell_capability_failed, shell_failed, shell_protocol_failed,
+    shell_transport_failed,
+};
+#[cfg(test)]
+use d2bd_runtime::shell_backend::{
+    guest_advertises_capability, map_shell_attach_response, map_shell_detach_response,
+    map_shell_health_error, map_shell_kill_response, map_shell_list_response, shell_error_to_typed,
+    shell_poll_timeout,
 };
 #[cfg(test)]
 use d2bd_runtime::shell_backend::{SHELL_POLL_CAP, SHELL_POLL_SLACK};
@@ -13839,6 +13845,7 @@ fn shell_close_attach_with_runtime(
 /// Increment the closed-label exec outcome counter. `outcome` and `error_kind`
 /// are the only labels besides the constant subsystem; all three are drawn
 /// from a hard allowlist (no vm/uid/handle/argv ever becomes a label).
+#[cfg(test)]
 fn exec_metric(state: &ServerState, outcome: &'static str, error_kind: &'static str) {
     exec_metric_into(&state.metrics_registry, outcome, error_kind);
 }
@@ -13860,6 +13867,7 @@ fn emit_detached_create_audit(state: &ServerState, peer_uid: u32, vm: &str, exec
     }
 }
 
+#[cfg(test)]
 fn emit_detached_kill_audit(
     state: &ServerState,
     peer_uid: u32,
