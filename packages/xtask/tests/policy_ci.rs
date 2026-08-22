@@ -264,9 +264,10 @@ fn main_controlled_buildbuddy_workflows_preserve_trust_contract() {
             .find("\n    steps:\n")
             .expect("local job environment must end before its steps");
     let local_env = &local_job[local_env_start..local_env_end];
+    let local_env_lines = local_env.lines().collect::<Vec<_>>();
     assert!(
-        local_env.contains("\n      D2B_CHECK_JOBS: \"1\"\n")
-            && local_env.contains("\n      D2B_FLAKE_JOBS: \"1\"\n"),
+        local_env_lines.contains(&"      D2B_CHECK_JOBS: \"1\"")
+            && local_env_lines.contains(&"      D2B_FLAKE_JOBS: \"1\""),
         "main hosted local gate must export serialized Layer-1 bounds at job scope"
     );
     let rust_bootstrap = local_job
