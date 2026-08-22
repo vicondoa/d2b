@@ -335,7 +335,7 @@ rust_test(
     name = "pr_workflow",
     srcs = ["tests/pr_workflow.rs"],
     data = ["//:.github/workflows/pr-l1-static-fast.yml"],
-    tags = ["no-remote-exec"],
+    tags = ["local", "no-remote-cache"],
     visibility = ["//visibility:public"],
 )
 
