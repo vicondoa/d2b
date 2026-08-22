@@ -267,7 +267,7 @@ rust_test(
     env = {"CARGO_BIN_EXE_xtask": "$(rootpath :xtask)"},
     env_inherit = ["D2B_REPO_ROOT", "PATH"],
     rustc_env = {"CARGO_BIN_EXE_xtask": "$(rootpath :xtask)"},
-    tags = ["local", "no-remote-cache"],
+    tags = ["local", "no-remote-cache", "no-sandbox"],
     visibility = ["//visibility:public"],
     deps = ["//packages/d2b-contracts-resource:d2b_contracts_resource",
         "//packages/d2b-contracts-zone-session:d2b_contracts_zone_session",  "//packages/d2b-contracts-provider:d2b_contracts_provider",] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
@@ -335,7 +335,7 @@ rust_test(
     name = "pr_workflow",
     srcs = ["tests/pr_workflow.rs"],
     data = ["//:.github/workflows/pr-l1-static-fast.yml"],
-    tags = ["local", "no-remote-cache"],
+    tags = ["local", "no-remote-cache", "no-sandbox"],
     visibility = ["//visibility:public"],
 )
 
