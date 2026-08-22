@@ -204,13 +204,21 @@ settings; it does not change GitHub settings or claim atomic base binding.
 direct push. PR bodies record the change, validation evidence, and substantive
 review outcomes only. Never include AI, tool, or model attribution.
 
-## Gas City boundary
+## Contributor orchestration boundary
 
-Gas City is separate managed contributor infrastructure. Do not modify
-`nix/gas-city-contributor/**` or its managed authority as part of ordinary
-repository work, and do not make claims about repo-skill visibility in managed
-sessions. Its focused operating detail is
-[`gas-city.md`](./gas-city.md).
+Contributor orchestration is owned by
+[`d2b-gascity`](https://github.com/vicondoa/d2b-gascity). NixOS host
+distribution and installation are owned by
+[`gascity.nix`](https://github.com/vicondoa/gascity.nix). The repository-local
+Gas City contributor runtime is retired; do not add a replacement or treat its
+old exports as an active d2b surface.
+
+Before adopting the d2b revision that removes those exports, consumers migrate
+the host configuration, run the standalone smoke checks, and capture rollback
+evidence with the external owners. d2b does not migrate, delete, chmod, chown,
+or sweep `/var/lib/gascity*` or `/run/gascity*` state. See the migration
+allowlist in [`README.md`](./README.md#migration-from-d2b-gas-city-exports) for
+the retired identifiers kept solely for cutover.
 
 
 ## Disk hygiene contract
