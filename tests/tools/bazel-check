@@ -26,6 +26,93 @@ credential_file() {
   printf '%s\n' "${D2B_BUILDBUDDY_CREDENTIAL_FILE:-${HOME:-}/.config/d2b/buildbuddy-api-key}"
 }
 
+BUILD_BUDDY_METADATA_FLAGS=()
+
+git_checkout() {
+  local git_bin
+  git_bin="$(command -v git)" || return 127
+  env -i PATH="$PATH" LC_ALL=C "$git_bin" -C "$ROOT" "$@"
+}
+
+git_checkout_snapshot() {
+  local branch_head="" commit_sha="" complete=0 record
+  while IFS= read -r -d '' record; do
+    case "$record" in
+      "# branch.head "*) branch_head="${record#\# branch.head }" ;;
+      "# branch.oid "*) commit_sha="${record#\# branch.oid }" ;;
+      "# d2b.snapshot complete") complete=1 ;;
+    esac
+  done < <(
+    git_checkout status --porcelain=v2 --branch --untracked-files=no -z 2>/dev/null &&
+      printf '# d2b.snapshot complete\0'
+  )
+  [ "$complete" -eq 1 ] && [ -n "$branch_head" ] && [ -n "$commit_sha" ] || return 1
+  printf '%s\t%s\n' "$branch_head" "$commit_sha"
+}
+
+buildbuddy_metadata() {
+  BUILD_BUDDY_METADATA_FLAGS=()
+  local checkout_root remote_url commit_sha branch_name snapshot
+  local observed_branch_head observed_commit_sha
+
+  if ! checkout_root="$(git_checkout rev-parse --show-toplevel 2>/dev/null)" ||
+    [ "$checkout_root" != "$ROOT" ]; then
+    echo "bazel-check: BuildBuddy metadata unavailable: Git checkout is unavailable or does not match the tested repository; omitting repository metadata" >&2
+    return 0
+  fi
+
+  if ! remote_url="$(git_checkout config --local --get remote.origin.url 2>/dev/null)"; then
+    echo "bazel-check: BuildBuddy metadata unavailable: Git origin is unavailable; omitting repository metadata" >&2
+    return 0
+  fi
+  case "$remote_url" in
+    https://github.com/vicondoa/d2b|https://github.com/vicondoa/d2b.git|\
+    git@github.com:vicondoa/d2b|git@github.com:vicondoa/d2b.git|\
+    ssh://git@github.com/vicondoa/d2b|ssh://git@github.com/vicondoa/d2b.git)
+      ;;
+    *)
+      echo "bazel-check: BuildBuddy metadata unavailable: Git origin is not the canonical d2b repository; omitting repository metadata" >&2
+      return 0
+      ;;
+  esac
+
+  if ! snapshot="$(git_checkout_snapshot)"; then
+    echo "bazel-check: BuildBuddy metadata unavailable: tested commit is unavailable; omitting repository metadata" >&2
+    return 0
+  fi
+  IFS=$'\t' read -r branch_name commit_sha <<<"$snapshot"
+  if [ "$branch_name" = "(detached)" ]; then
+    echo "bazel-check: BuildBuddy metadata unavailable: checkout is at a detached HEAD; omitting repository metadata" >&2
+    return 0
+  fi
+  if ! git_checkout check-ref-format --branch "$branch_name" >/dev/null 2>&1; then
+    echo "bazel-check: BuildBuddy metadata unavailable: branch name is not approved; omitting repository metadata" >&2
+    return 0
+  fi
+
+  if [[ ! "$commit_sha" =~ ^[0-9a-fA-F]{40}$ ]]; then
+    echo "bazel-check: BuildBuddy metadata unavailable: tested commit is unavailable; omitting repository metadata" >&2
+    return 0
+  fi
+
+  if ! snapshot="$(git_checkout_snapshot)"; then
+    echo "bazel-check: BuildBuddy metadata unavailable: checkout changed while metadata was collected; omitting repository metadata" >&2
+    return 0
+  fi
+  IFS=$'\t' read -r observed_branch_head observed_commit_sha <<<"$snapshot"
+  if [ "$observed_branch_head" != "$branch_name" ] ||
+    [ "$observed_commit_sha" != "$commit_sha" ]; then
+    echo "bazel-check: BuildBuddy metadata unavailable: checkout changed while metadata was collected; omitting repository metadata" >&2
+    return 0
+  fi
+
+  BUILD_BUDDY_METADATA_FLAGS=(
+    "--build_metadata=REPO_URL=https://github.com/vicondoa/d2b"
+    "--build_metadata=COMMIT_SHA=$commit_sha"
+    "--build_metadata=BRANCH_NAME=$branch_name"
+  )
+}
+
 trusted_context() {
   [ "${D2B_BAZEL_TRUSTED:-0}" = 1 ] &&
     [ "${GITHUB_REF:-}" = "refs/heads/v3" ] &&
@@ -67,6 +154,13 @@ credential_helper() {
     jq -Rs '{headers: {"x-buildbuddy-api-key": [rtrimstr("\n")]}}'
 }
 
+if [ -n "${D2B_XTASK_BIN:-}" ] &&
+  [[ "$D2B_XTASK_BIN" != /* ]] &&
+  [ -x "$D2B_XTASK_BIN" ]; then
+  D2B_XTASK_BIN="$(cd -- "$(dirname -- "$D2B_XTASK_BIN")" && pwd)/$(basename -- "$D2B_XTASK_BIN")"
+  export D2B_XTASK_BIN
+fi
+
 if [ "$#" -ge 1 ] && [ "$1" = get ]; then
   [ "$#" -eq 1 ] || {
     echo "credential helper get does not accept extra arguments" >&2
@@ -75,6 +169,8 @@ if [ "$#" -ge 1 ] && [ "$1" = get ]; then
   credential_helper
   exit $?
 fi
+
+cd "$ROOT"
 
 if [ "$#" -eq 0 ]; then
   request="$(cat)"
@@ -189,6 +285,8 @@ run_bazel() {
   local test_bazel_sh="${BAZEL_SH:-/bin/bash}"
   local test_path="${D2B_BAZEL_TEST_PATH:-$PATH}"
   if [ "$profile" != local ]; then
+    buildbuddy_metadata
+    command_flags+=("${BUILD_BUDDY_METADATA_FLAGS[@]}")
     command_flags+=(--shell_executable=/bin/bash)
     test_bazel_sh=/bin/bash
     test_path="/run/current-system/sw/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:$test_path"
