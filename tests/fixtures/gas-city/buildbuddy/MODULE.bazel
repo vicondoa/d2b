@@ -1,4 +1,0 @@
-module(
-    name = "gascity_buildbuddy_roundtrip",
-    version = "0.1.0",
-)
