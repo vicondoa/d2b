@@ -1768,7 +1768,15 @@ fn trusted_ci_rejects_pr_metadata_tampering() {
             if let Some(parent) = path.parent() {
                 std::fs::create_dir_all(parent).expect("create trusted control directory");
             }
-            std::fs::write(&path, root == &trusted_root).expect("write trusted control fixture");
+            std::fs::write(
+                &path,
+                if root == &trusted_root {
+                    "true"
+                } else {
+                    "false"
+                },
+            )
+            .expect("write trusted control fixture");
         }
     }
     let base_commit = "0123456789abcdef0123456789abcdef01234567";
