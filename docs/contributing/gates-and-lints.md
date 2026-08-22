@@ -139,12 +139,11 @@ make check
 ```
 
 Local aliases use the BuildBuddy `remote` profile when credentials and trust
-permit it. The default-branch `main` workflow invokes the same public Make
-aliases from an immutable trusted checkout for PRs targeting protected `main`
-or `v3`: remote-eligible jobs use the brokered BuildBuddy credential, while
-local-only jobs remain local and credential-free. Protected `main` and `v3`
-pushes retain trusted cache seeding. CI does not wrap each target in a separate
-`nix develop` command.
+permit it. The protected `v3` workflow invokes the same public Make aliases
+from an immutable trusted checkout for PRs targeting `v3`: remote-eligible
+jobs use the brokered BuildBuddy credential, while local-only jobs remain local
+and credential-free. Protected `main` and `v3` pushes retain trusted cache
+seeding. CI does not wrap each target in a separate `nix develop` command.
 The credential helper, trust partition, redaction, and typed one-retry
 pre-dispatch fallback live in `tests/tools/bazel-check`; do not duplicate
 those behaviors in Make or workflow code. Post-dispatch, analysis, policy,

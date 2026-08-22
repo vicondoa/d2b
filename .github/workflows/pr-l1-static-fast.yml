@@ -2,7 +2,7 @@ name: pr-l1-static-fast
 
 on:
   pull_request_target:
-    branches: [main, v3]
+    branches: [v3]
   push:
     branches: [main, v3]
 
@@ -29,7 +29,7 @@ jobs:
       D2B_BAZEL_BASE_SHA: ${{ github.event.pull_request.base.sha || github.sha }}
       D2B_BAZEL_HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
       D2B_BAZEL_MERGE_SHA: ${{ github.event_name == 'push' && github.sha || github.event.pull_request.merge_commit_sha }}
-      D2B_BAZEL_TRUSTED_SHA: ${{ github.sha }}
+      D2B_BAZEL_TRUSTED_SHA: ${{ github.event.pull_request.base.sha || github.sha }}
       D2B_BAZEL_PR_NUMBER: ${{ github.event.pull_request.number || '' }}
       D2B_BAZEL_BRANCH: ${{ github.head_ref || github.ref_name }}
       D2B_BAZEL_RUN_ID: ${{ github.run_id }}
@@ -37,7 +37,7 @@ jobs:
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
         with:
-          ref: ${{ github.sha }}
+          ref: ${{ github.event.pull_request.base.sha || github.sha }}
           path: trusted
           persist-credentials: false
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
@@ -66,7 +66,7 @@ jobs:
       D2B_BAZEL_BASE_SHA: ${{ github.event.pull_request.base.sha || github.sha }}
       D2B_BAZEL_HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
       D2B_BAZEL_MERGE_SHA: ${{ github.event_name == 'push' && github.sha || github.event.pull_request.merge_commit_sha }}
-      D2B_BAZEL_TRUSTED_SHA: ${{ github.sha }}
+      D2B_BAZEL_TRUSTED_SHA: ${{ github.event.pull_request.base.sha || github.sha }}
       D2B_BAZEL_PR_NUMBER: ${{ github.event.pull_request.number || '' }}
       D2B_BAZEL_BRANCH: ${{ github.head_ref || github.ref_name }}
       D2B_BAZEL_RUN_ID: ${{ github.run_id }}
@@ -74,7 +74,7 @@ jobs:
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
         with:
-          ref: ${{ github.sha }}
+          ref: ${{ github.event.pull_request.base.sha || github.sha }}
           path: trusted
           persist-credentials: false
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
@@ -105,7 +105,7 @@ jobs:
       D2B_BAZEL_BASE_SHA: ${{ github.event.pull_request.base.sha || github.sha }}
       D2B_BAZEL_HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
       D2B_BAZEL_MERGE_SHA: ${{ github.event_name == 'push' && github.sha || github.event.pull_request.merge_commit_sha }}
-      D2B_BAZEL_TRUSTED_SHA: ${{ github.sha }}
+      D2B_BAZEL_TRUSTED_SHA: ${{ github.event.pull_request.base.sha || github.sha }}
       D2B_BAZEL_PR_NUMBER: ${{ github.event.pull_request.number || '' }}
       D2B_BAZEL_BRANCH: ${{ github.head_ref || github.ref_name }}
       D2B_BAZEL_RUN_ID: ${{ github.run_id }}
@@ -113,7 +113,7 @@ jobs:
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
         with:
-          ref: ${{ github.sha }}
+          ref: ${{ github.event.pull_request.base.sha || github.sha }}
           path: trusted
           persist-credentials: false
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
@@ -145,7 +145,7 @@ jobs:
       D2B_BAZEL_BASE_SHA: ${{ github.event.pull_request.base.sha || github.sha }}
       D2B_BAZEL_HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
       D2B_BAZEL_MERGE_SHA: ${{ github.event_name == 'push' && github.sha || github.event.pull_request.merge_commit_sha }}
-      D2B_BAZEL_TRUSTED_SHA: ${{ github.sha }}
+      D2B_BAZEL_TRUSTED_SHA: ${{ github.event.pull_request.base.sha || github.sha }}
       D2B_BAZEL_PR_NUMBER: ${{ github.event.pull_request.number || '' }}
       D2B_BAZEL_BRANCH: ${{ github.head_ref || github.ref_name }}
       D2B_BAZEL_RUN_ID: ${{ github.run_id }}
@@ -153,7 +153,7 @@ jobs:
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
         with:
-          ref: ${{ github.sha }}
+          ref: ${{ github.event.pull_request.base.sha || github.sha }}
           path: trusted
           persist-credentials: false
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
@@ -186,7 +186,7 @@ jobs:
       D2B_BAZEL_BASE_SHA: ${{ github.event.pull_request.base.sha || github.sha }}
       D2B_BAZEL_HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
       D2B_BAZEL_MERGE_SHA: ${{ github.event_name == 'push' && github.sha || github.event.pull_request.merge_commit_sha }}
-      D2B_BAZEL_TRUSTED_SHA: ${{ github.sha }}
+      D2B_BAZEL_TRUSTED_SHA: ${{ github.event.pull_request.base.sha || github.sha }}
       D2B_BAZEL_PR_NUMBER: ${{ github.event.pull_request.number || '' }}
       D2B_BAZEL_BRANCH: ${{ github.head_ref || github.ref_name }}
       D2B_BAZEL_RUN_ID: ${{ github.run_id }}
@@ -194,7 +194,7 @@ jobs:
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
         with:
-          ref: ${{ github.sha }}
+          ref: ${{ github.event.pull_request.base.sha || github.sha }}
           path: trusted
           persist-credentials: false
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
@@ -227,7 +227,7 @@ jobs:
       D2B_BAZEL_BASE_SHA: ${{ github.event.pull_request.base.sha || github.sha }}
       D2B_BAZEL_HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
       D2B_BAZEL_MERGE_SHA: ${{ github.event_name == 'push' && github.sha || github.event.pull_request.merge_commit_sha }}
-      D2B_BAZEL_TRUSTED_SHA: ${{ github.sha }}
+      D2B_BAZEL_TRUSTED_SHA: ${{ github.event.pull_request.base.sha || github.sha }}
       D2B_BAZEL_PR_NUMBER: ${{ github.event.pull_request.number || '' }}
       D2B_BAZEL_BRANCH: ${{ github.head_ref || github.ref_name }}
       D2B_BAZEL_RUN_ID: ${{ github.run_id }}
@@ -235,7 +235,7 @@ jobs:
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
         with:
-          ref: ${{ github.sha }}
+          ref: ${{ github.event.pull_request.base.sha || github.sha }}
           path: trusted
           persist-credentials: false
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
@@ -266,7 +266,7 @@ jobs:
       D2B_BAZEL_BASE_SHA: ${{ github.event.pull_request.base.sha || github.sha }}
       D2B_BAZEL_HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
       D2B_BAZEL_MERGE_SHA: ${{ github.event_name == 'push' && github.sha || github.event.pull_request.merge_commit_sha }}
-      D2B_BAZEL_TRUSTED_SHA: ${{ github.sha }}
+      D2B_BAZEL_TRUSTED_SHA: ${{ github.event.pull_request.base.sha || github.sha }}
       D2B_BAZEL_PR_NUMBER: ${{ github.event.pull_request.number || '' }}
       D2B_BAZEL_BRANCH: ${{ github.head_ref || github.ref_name }}
       D2B_BAZEL_RUN_ID: ${{ github.run_id }}
@@ -274,7 +274,7 @@ jobs:
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
         with:
-          ref: ${{ github.sha }}
+          ref: ${{ github.event.pull_request.base.sha || github.sha }}
           path: trusted
           persist-credentials: false
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
@@ -301,7 +301,7 @@ jobs:
       D2B_BAZEL_BASE_SHA: ${{ github.event.pull_request.base.sha || github.sha }}
       D2B_BAZEL_HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
       D2B_BAZEL_MERGE_SHA: ${{ github.event_name == 'push' && github.sha || github.event.pull_request.merge_commit_sha }}
-      D2B_BAZEL_TRUSTED_SHA: ${{ github.sha }}
+      D2B_BAZEL_TRUSTED_SHA: ${{ github.event.pull_request.base.sha || github.sha }}
       D2B_BAZEL_PR_NUMBER: ${{ github.event.pull_request.number || '' }}
       D2B_BAZEL_BRANCH: ${{ github.head_ref || github.ref_name }}
       D2B_BAZEL_RUN_ID: ${{ github.run_id }}
@@ -309,7 +309,7 @@ jobs:
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
         with:
-          ref: ${{ github.sha }}
+          ref: ${{ github.event.pull_request.base.sha || github.sha }}
           path: trusted
           persist-credentials: false
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
@@ -336,7 +336,7 @@ jobs:
       D2B_BAZEL_BASE_SHA: ${{ github.event.pull_request.base.sha || github.sha }}
       D2B_BAZEL_HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
       D2B_BAZEL_MERGE_SHA: ${{ github.event_name == 'push' && github.sha || github.event.pull_request.merge_commit_sha }}
-      D2B_BAZEL_TRUSTED_SHA: ${{ github.sha }}
+      D2B_BAZEL_TRUSTED_SHA: ${{ github.event.pull_request.base.sha || github.sha }}
       D2B_BAZEL_PR_NUMBER: ${{ github.event.pull_request.number || '' }}
       D2B_BAZEL_BRANCH: ${{ github.head_ref || github.ref_name }}
       D2B_BAZEL_RUN_ID: ${{ github.run_id }}
@@ -344,7 +344,7 @@ jobs:
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
         with:
-          ref: ${{ github.sha }}
+          ref: ${{ github.event.pull_request.base.sha || github.sha }}
           path: trusted
           persist-credentials: false
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
@@ -371,7 +371,7 @@ jobs:
       D2B_BAZEL_BASE_SHA: ${{ github.event.pull_request.base.sha || github.sha }}
       D2B_BAZEL_HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
       D2B_BAZEL_MERGE_SHA: ${{ github.event_name == 'push' && github.sha || github.event.pull_request.merge_commit_sha }}
-      D2B_BAZEL_TRUSTED_SHA: ${{ github.sha }}
+      D2B_BAZEL_TRUSTED_SHA: ${{ github.event.pull_request.base.sha || github.sha }}
       D2B_BAZEL_PR_NUMBER: ${{ github.event.pull_request.number || '' }}
       D2B_BAZEL_BRANCH: ${{ github.head_ref || github.ref_name }}
       D2B_BAZEL_RUN_ID: ${{ github.run_id }}
@@ -379,7 +379,7 @@ jobs:
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
         with:
-          ref: ${{ github.sha }}
+          ref: ${{ github.event.pull_request.base.sha || github.sha }}
           path: trusted
           persist-credentials: false
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
@@ -406,7 +406,7 @@ jobs:
       D2B_BAZEL_BASE_SHA: ${{ github.event.pull_request.base.sha || github.sha }}
       D2B_BAZEL_HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
       D2B_BAZEL_MERGE_SHA: ${{ github.event_name == 'push' && github.sha || github.event.pull_request.merge_commit_sha }}
-      D2B_BAZEL_TRUSTED_SHA: ${{ github.sha }}
+      D2B_BAZEL_TRUSTED_SHA: ${{ github.event.pull_request.base.sha || github.sha }}
       D2B_BAZEL_PR_NUMBER: ${{ github.event.pull_request.number || '' }}
       D2B_BAZEL_BRANCH: ${{ github.head_ref || github.ref_name }}
       D2B_BAZEL_RUN_ID: ${{ github.run_id }}
@@ -414,7 +414,7 @@ jobs:
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
         with:
-          ref: ${{ github.sha }}
+          ref: ${{ github.event.pull_request.base.sha || github.sha }}
           path: trusted
           persist-credentials: false
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
@@ -441,7 +441,7 @@ jobs:
       D2B_BAZEL_BASE_SHA: ${{ github.event.pull_request.base.sha || github.sha }}
       D2B_BAZEL_HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
       D2B_BAZEL_MERGE_SHA: ${{ github.event_name == 'push' && github.sha || github.event.pull_request.merge_commit_sha }}
-      D2B_BAZEL_TRUSTED_SHA: ${{ github.sha }}
+      D2B_BAZEL_TRUSTED_SHA: ${{ github.event.pull_request.base.sha || github.sha }}
       D2B_BAZEL_PR_NUMBER: ${{ github.event.pull_request.number || '' }}
       D2B_BAZEL_BRANCH: ${{ github.head_ref || github.ref_name }}
       D2B_BAZEL_RUN_ID: ${{ github.run_id }}
@@ -449,7 +449,7 @@ jobs:
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
         with:
-          ref: ${{ github.sha }}
+          ref: ${{ github.event.pull_request.base.sha || github.sha }}
           path: trusted
           persist-credentials: false
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
@@ -477,7 +477,7 @@ jobs:
       D2B_BAZEL_BASE_SHA: ${{ github.event.pull_request.base.sha || github.sha }}
       D2B_BAZEL_HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
       D2B_BAZEL_MERGE_SHA: ${{ github.event_name == 'push' && github.sha || github.event.pull_request.merge_commit_sha }}
-      D2B_BAZEL_TRUSTED_SHA: ${{ github.sha }}
+      D2B_BAZEL_TRUSTED_SHA: ${{ github.event.pull_request.base.sha || github.sha }}
       D2B_BAZEL_PR_NUMBER: ${{ github.event.pull_request.number || '' }}
       D2B_BAZEL_BRANCH: ${{ github.head_ref || github.ref_name }}
       D2B_BAZEL_RUN_ID: ${{ github.run_id }}
@@ -485,7 +485,7 @@ jobs:
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
         with:
-          ref: ${{ github.sha }}
+          ref: ${{ github.event.pull_request.base.sha || github.sha }}
           path: trusted
           persist-credentials: false
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
@@ -509,7 +509,7 @@ jobs:
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
         with:
-          ref: ${{ github.sha }}
+          ref: ${{ github.event.pull_request.base.sha || github.sha }}
           path: trusted
           persist-credentials: false
       - name: Fixed Layer-1 suites passed

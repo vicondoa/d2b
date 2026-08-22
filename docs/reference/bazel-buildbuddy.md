@@ -37,11 +37,10 @@ nix develop --no-write-lock-file .#bazel -c bazel test //packages/<crate>:<owner
 
 Direnv is optional; it may enter `nix develop` automatically but is not part
 of the contributor or CI contract. CI installs Nix and invokes the fixed Make
-aliases from an immutable trusted checkout. Pull-request target runs source
-that checkout and the workflow/bootstrap from default branch `main`, even
-when the PR targets `v3`; protected `main` and `v3` pushes use their immutable
-event commit for trusted cache seeding. Remote-eligible jobs use the brokered
-BuildBuddy credential; local-only jobs do not receive it.
+aliases from an immutable protected `v3` checkout for pull requests; protected
+`main` and `v3` pushes use their immutable event commit for trusted cache
+seeding. Remote-eligible jobs use the brokered BuildBuddy credential;
+local-only jobs do not receive it.
 
 ## One execution graph
 
@@ -98,19 +97,17 @@ container, VM, live-host, hardware, fixture, and performance lanes remain
 explicit local lanes. Rust target and exec actions override the worker
 toolchain's deprecated gold default with GNU ld.bfd.
 
-The credential-bearing PR gate is a `pull_request_target` workflow sourced
-from default branch `main` and accepted for PRs targeting `main` or `v3`.
-GitHub's `pull_request_target` context supplies the immutable default-branch
-workflow SHA, which each job checks out into `trusted`; the protected base
-commit remains a separate metadata value. Each job checks out the immutable
-tested merge/push commit into `workspace`. The workflow executes only the
-trusted Makefile and shell/bootstrap from `trusted`, while the facade stages
-the tested source and overlays those controls before Bazel runs. Protected
-`main` and `v3` pushes use the same fixed job set and seed their separate
-trusted cache namespace. Remote jobs use `D2B_BAZEL_PROFILE=remote` and
-`D2B_BAZEL_REQUIRE_REMOTE=1`; local-only jobs use `local`. The fixed job set is
-committed in `.github/workflows/pr-l1-static-fast.yml` and must remain aligned
-with the public Make aliases.
+The credential-bearing PR gate is a `pull_request_target` workflow owned by
+protected `v3` and accepted for PRs targeting `v3`. Each job checks out the
+immutable protected base into `trusted` and the immutable tested merge commit
+into `workspace`; the workflow executes only the trusted Makefile and
+shell/bootstrap from `trusted`, while the facade stages the tested source and
+overlays those controls before Bazel runs. Protected `main` and `v3` pushes
+use the same fixed job set and seed their separate trusted cache namespace.
+Remote-eligible jobs use `D2B_BAZEL_PROFILE=remote` and
+`D2B_BAZEL_REQUIRE_REMOTE=1`; local-only jobs use `local`. The fixed job set
+is committed in `.github/workflows/pr-l1-static-fast.yml` and must remain
+aligned with the public Make aliases.
 
 ## Developer invocation metadata
 
@@ -148,15 +145,15 @@ reusable outputs, and the global `--stamp=no` contract remains unchanged.
 Trusted CI additionally validates the protected base, PR head, tested merge,
 trusted workflow checkout, run id, PR number, branch, workflow reference, and
 event before invoking Bazel. For pull requests it requires
-`GITHUB_REF=refs/heads/main`, a `main` workflow reference, and a trusted
-checkout matching `GITHUB_SHA`; the base ref may be `main` or `v3`. It
-publishes those immutable OIDs and run/linkage fields as BuildBuddy metadata,
-uses the PR head as the BuildBuddy commit identity for pull-request status
-linkage, and derives a cache instance namespace from the PR number and head SHA
-(`d2b/pr/<number>/<head-sha>/...`). Protected pushes use their immutable event
-commit as the BuildBuddy commit identity and use the separate trusted-seed
-namespace. A stale checkout, mismatched event, or non-main pull-request
-workflow fails closed.
+`GITHUB_REF=refs/heads/v3`, the `v3` workflow reference, and a trusted
+checkout matching the immutable protected base; only `v3` is accepted as the
+PR base ref. It publishes those immutable OIDs and run/linkage fields as
+BuildBuddy metadata, uses the PR head as the BuildBuddy commit identity for
+pull-request status linkage, and derives a cache instance namespace from the
+PR number and head SHA (`d2b/pr/<number>/<head-sha>/...`). Protected pushes use
+their immutable event commit as the BuildBuddy commit identity and use the
+separate trusted-seed namespace. A stale checkout, mismatched event, or
+non-`v3` pull-request workflow fails closed.
 
 ## Credentials and trust selection
 

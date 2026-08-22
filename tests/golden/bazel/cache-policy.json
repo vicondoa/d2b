@@ -65,7 +65,7 @@
     "gasCityProxy": "separate"
   },
   "trustedInjection": {
-    "protectedRef": "refs/heads/main",
+    "protectedRef": "refs/heads/v3",
     "seedRefs": [
       "refs/heads/main",
       "refs/heads/v3"
@@ -95,7 +95,7 @@
       ".github/workflows/pr-l1-static-fast.yml"
     ],
     "allowedSecurityDigests": [
-      "sha256:7a13cfb6623ac24361ca9d93f2b7eecb80d2aa63b661c2c026f3ff69aecedcb5"
+      "sha256:90543e5607b240e3ae9aa7360dc31dd0b1732769d4f8e2e7771217e14bd1797b"
     ],
     "untrustedCredential": "none",
     "trustedCredential": "credential-helper"

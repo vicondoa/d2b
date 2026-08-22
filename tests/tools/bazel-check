@@ -185,11 +185,11 @@ ci_metadata() {
   esac
   case "$event" in
     pull_request_target)
-      [ "${GITHUB_REF:-}" = "refs/heads/main" ] || {
-        echo "bazel-check: trusted pull_request_target must execute from refs/heads/main" >&2
+      [ "${GITHUB_REF:-}" = "refs/heads/v3" ] || {
+        echo "bazel-check: trusted pull_request_target must execute from refs/heads/v3" >&2
         return "$CONFIGURATION_FAILURE_STATUS"
       }
-      expected_workflow_ref="vicondoa/d2b/.github/workflows/pr-l1-static-fast.yml@refs/heads/main"
+      expected_workflow_ref="vicondoa/d2b/.github/workflows/pr-l1-static-fast.yml@refs/heads/v3"
       ;;
     push)
       case "${GITHUB_REF:-}" in
@@ -251,9 +251,9 @@ ci_metadata() {
 
   if [ "$event" = pull_request_target ]; then
     case "${GITHUB_BASE_REF:-}" in
-      main|v3) ;;
+      v3) ;;
       *)
-        echo "bazel-check: trusted PR must target protected main or v3" >&2
+        echo "bazel-check: trusted PR must target protected v3" >&2
         return "$CONFIGURATION_FAILURE_STATUS"
         ;;
     esac

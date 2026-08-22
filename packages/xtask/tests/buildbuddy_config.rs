@@ -2420,7 +2420,7 @@ fn policy_preserves_remote_profiles_and_trust_partition() {
     );
     assert_eq!(
         trusted.get("protectedRef").and_then(Value::as_str),
-        Some("refs/heads/main")
+        Some("refs/heads/v3")
     );
     assert_eq!(
         trusted.get("seedRefs").and_then(Value::as_array),
@@ -2582,7 +2582,6 @@ fn trusted_ci_rejects_pr_metadata_tampering() {
     let base_commit = "0123456789abcdef0123456789abcdef01234567";
     let head_commit = "1234567890abcdef1234567890abcdef12345678";
     let merge_commit = "2345678901abcdef2345678901abcdef23456789";
-    let trusted_commit = "3456789012abcdef3456789012abcdef34567890";
     let invalid_commit = "ffffffffffffffffffffffffffffffffffffffff";
     let fail_base_ancestry = scratch.join("fail-base-ancestry");
     let fail_head_ancestry = scratch.join("fail-head-ancestry");
@@ -2597,7 +2596,7 @@ fn trusted_ci_rejects_pr_metadata_tampering() {
                *'check-ref-format --branch'*) exit 0 ;;\n\
                *'rev-parse --verify HEAD^{{commit}}'*)\n\
                  case \"$*\" in\n\
-                   *'-C {trusted_root} '*) printf '{trusted_commit}\\n' ;;\n\
+                   *'-C {trusted_root} '*) printf '{base_commit}\\n' ;;\n\
                    *'-C {source_root} '*) printf '{merge_commit}\\n' ;;\n\
                    *) exit 1 ;;\n\
                  esac\n\
@@ -2615,7 +2614,6 @@ fn trusted_ci_rejects_pr_metadata_tampering() {
              esac\n",
             base_commit = base_commit,
             merge_commit = merge_commit,
-            trusted_commit = trusted_commit,
             invalid_commit = invalid_commit,
             fail_base_ancestry = fail_base_ancestry.display(),
             fail_head_ancestry = fail_head_ancestry.display(),
@@ -2674,18 +2672,18 @@ fn trusted_ci_rejects_pr_metadata_tampering() {
             .env("D2B_BAZEL_BASE_SHA", base_sha)
             .env("D2B_BAZEL_HEAD_SHA", head_commit)
             .env("D2B_BAZEL_MERGE_SHA", merge_commit)
-            .env("D2B_BAZEL_TRUSTED_SHA", trusted_commit)
+            .env("D2B_BAZEL_TRUSTED_SHA", base_commit)
             .env("D2B_BAZEL_PR_NUMBER", "447")
             .env("D2B_BAZEL_BRANCH", "feature/issue-447")
             .env("D2B_BAZEL_RUN_ID", "123")
             .env(
                 "D2B_BAZEL_WORKFLOW_REF",
-                "vicondoa/d2b/.github/workflows/pr-l1-static-fast.yml@refs/heads/main",
+                "vicondoa/d2b/.github/workflows/pr-l1-static-fast.yml@refs/heads/v3",
             )
             .env("GITHUB_ACTIONS", "true")
             .env("GITHUB_EVENT_NAME", "pull_request_target")
-            .env("GITHUB_REF", "refs/heads/main")
-            .env("GITHUB_SHA", trusted_commit)
+            .env("GITHUB_REF", "refs/heads/v3")
+            .env("GITHUB_SHA", base_commit)
             .env("GITHUB_REPOSITORY", "vicondoa/d2b")
             .env("GITHUB_SERVER_URL", "https://github.com")
             .env("GITHUB_BASE_REF", base_ref)
@@ -2710,9 +2708,10 @@ fn trusted_ci_rejects_pr_metadata_tampering() {
         "true"
     );
     let output = run(base_commit, "", "main");
+    assert_eq!(output.status.code(), Some(76));
     assert!(
-        output.status.success(),
-        "valid main-targeted PR metadata must pass: {output:?}"
+        String::from_utf8_lossy(&output.stderr).contains("must target protected v3"),
+        "main-targeted PR metadata must fail closed: {output:?}"
     );
     let output = run(invalid_commit, "", "v3");
     assert_eq!(output.status.code(), Some(76));

@@ -93,8 +93,8 @@ fn needs_entries(block: &str) -> Vec<&str> {
 
 fn assert_trusted_workflow_contract(workflow: &str) {
     assert!(
-        workflow.contains("pull_request_target:\n    branches: [main, v3]"),
-        "the credential-bearing workflow must cover protected main and v3"
+        workflow.contains("pull_request_target:\n    branches: [v3]"),
+        "the credential-bearing PR workflow must be owned by protected v3"
     );
     assert!(
         workflow.contains("push:\n    branches: [main, v3]"),
@@ -144,12 +144,16 @@ fn assert_trusted_workflow_contract(workflow: &str) {
         "every Layer-1 step must invoke its fixed public Make alias from trusted v3"
     );
     assert!(
-        workflow.contains("ref: ${{ github.sha }}\n          path: trusted"),
-        "trusted bootstrap must bind to the immutable workflow SHA"
+        workflow.contains(
+            "ref: ${{ github.event.pull_request.base.sha || github.sha }}\n          path: trusted"
+        ),
+        "trusted bootstrap must bind to the immutable protected base or pushed v3 commit"
     );
     assert!(
-        workflow.contains("D2B_BAZEL_TRUSTED_SHA: ${{ github.sha }}"),
-        "trusted bootstrap metadata must bind to GitHub's immutable workflow SHA"
+        workflow.contains(
+            "D2B_BAZEL_TRUSTED_SHA: ${{ github.event.pull_request.base.sha || github.sha }}"
+        ),
+        "trusted bootstrap metadata must bind to the immutable protected base or pushed commit"
     );
     assert!(
         workflow.contains(
@@ -165,7 +169,7 @@ fn assert_trusted_workflow_contract(workflow: &str) {
     );
     assert!(
         !workflow.contains("github.event.pull_request.merge_commit_sha || github.sha"),
-        "PR jobs must not substitute the default-branch SHA for a missing merge SHA"
+        "PR jobs must not substitute a fallback SHA for a missing merge SHA"
     );
     assert!(
         workflow.contains("./trusted/tests/tools/bazel-check-bootstrap")
@@ -312,8 +316,8 @@ fn trusted_workflow_rejects_malicious_control_plane_edits() {
 
     for tampered in [
         workflow.replace(
-            "pull_request_target:\n    branches: [main, v3]",
-            "pull_request:\n    branches: [main, v3]",
+            "pull_request_target:\n    branches: [v3]",
+            "pull_request:\n    branches: [v3]",
         ),
         workflow.replace(
             "./trusted/tests/tools/bazel-check-bootstrap",
@@ -325,7 +329,7 @@ fn trusted_workflow_rejects_malicious_control_plane_edits() {
         ),
         workflow.replace("make -C trusted", "make"),
         workflow.replace(
-            "ref: ${{ github.sha }}\n          path: trusted",
+            "ref: ${{ github.event.pull_request.base.sha || github.sha }}\n          path: trusted",
             "ref: main\n          path: trusted",
         ),
         workflow.replacen(
