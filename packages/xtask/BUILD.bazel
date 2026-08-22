@@ -325,7 +325,7 @@ rust_test(
         "//bazel/checks/rust:changelog_sources",
     ],
     env_inherit = ["D2B_REPO_ROOT", "PATH"],
-    tags = ["no-remote-cache", "no-sandbox"],
+    tags = ["no-remote-cache", "no-sandbox", "no-remote-exec"],
     visibility = ["//visibility:public"],
     deps = all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
 )
@@ -353,7 +353,7 @@ rust_test(
         "//:policy_inputs_workspace_sources",
     ],
     env_inherit = ["D2B_REPO_ROOT", "PATH"],
-    tags = ["no-remote-cache", "no-sandbox"],
+    tags = ["no-remote-cache", "no-sandbox", "no-remote-exec"],
     visibility = ["//visibility:public"],
     deps = all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
 )
@@ -378,6 +378,7 @@ rust_test(
     tags = [
         "no-remote-cache",
         "no-sandbox",
+        "no-remote-exec",
     ],
     deps = ["//packages/d2b-contracts-resource:d2b_contracts_resource",
         "//packages/d2b-contracts-zone-session:d2b_contracts_zone_session",  "//packages/d2b-contracts-provider:d2b_contracts_provider",] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),

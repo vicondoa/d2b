@@ -54,6 +54,9 @@ test_suite(
         "//packages/d2b-bus:production_watch_rss",
         "//packages/xtask:buildbuddy_config",
         "//packages/xtask:heavy_gate_reexec",
+        "//packages/xtask:policy_changelog_gate",
+        "//packages/xtask:policy_production_closure",
+        "//packages/xtask:xtask_test",
     ],
 )
 

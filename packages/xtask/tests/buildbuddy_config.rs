@@ -426,10 +426,18 @@ fn committed_profiles_share_authentication_and_worker_policy() {
         wrapper.contains("--test_env=D2B_SHELLCHECK_BIN=\"${D2B_SHELLCHECK_BIN:-}\""),
         "source-hygiene tests must receive the declared shellcheck binary"
     );
-    assert!(
-        wrapper.contains("--action_env=PATH=\"$test_path\""),
-        "Bazel test-runner actions must resolve pinned shell tools through the computed test PATH"
-    );
+    let xtask_build = read_text("packages/xtask/BUILD.bazel");
+    for target in [
+        "policy_changelog_gate",
+        "policy_production_closure",
+        "xtask_test",
+    ] {
+        let block = rule_block(&xtask_build, target, &["rust_test("]);
+        assert!(
+            rule_tags(block).contains("no-remote-exec"),
+            "host-coupled xtask target {target} must opt out of remote execution"
+        );
+    }
     let flake = read_text("flake.nix");
     assert!(
         flake.contains("export D2B_SHELLCHECK_BIN=\"${pkgs.shellcheck}/bin/shellcheck\""),

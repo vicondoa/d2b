@@ -1,4 +1,5 @@
 ### Fixed
 
-- Preserve the pinned development-shell `PATH` for Bazel test-runner actions
-  so local Layer-1 tests can resolve their declared shell tools on NixOS.
+- Route host-coupled xtask tests to local test execution so they can resolve
+  repository and tool state without changing the worker-standard `PATH` for
+  remote actions.
