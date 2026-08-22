@@ -186,7 +186,9 @@ to local fallback output.
 After redaction, every retained profile rejects a log line beginning with
 `warning:`. This check applies to local, remote, trusted-seed, and local
 fallback runs, including otherwise-successful cache hits. Warning failures are
-not eligible for the typed local retry.
+not eligible for the typed local retry. The facade also inspects local `test.log`
+artifacts named by the BEP, including cached test results, so test output that
+is not replayed into the console cannot bypass the warning check.
 
 `bazel-evidence classify-failure` is the typed fallback classifier. It
 distinguishes positively pre-dispatch infrastructure failures, plus a remote
