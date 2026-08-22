@@ -141,8 +141,7 @@ fn main_controlled_buildbuddy_workflows_preserve_trust_contract() {
         "PR workflow must not run untrusted pull_request controls"
     );
     assert!(
-        pr.contains("uses: ./.github/workflows/build.yaml")
-            && pr.contains("secrets: inherit"),
+        pr.contains("uses: ./.github/workflows/build.yaml") && pr.contains("secrets: inherit"),
         "PR workflow must call the main-owned reusable build with inherited secrets"
     );
 
