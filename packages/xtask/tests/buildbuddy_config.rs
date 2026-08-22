@@ -405,6 +405,57 @@ fn committed_profiles_share_authentication_and_worker_policy() {
         ),
         "remote test runners must receive worker-standard PATH entries"
     );
+    assert!(
+        wrapper.contains("--test_env=D2B_SHELLCHECK_BIN=\"${D2B_SHELLCHECK_BIN:-}\""),
+        "source-hygiene tests must receive the declared shellcheck binary"
+    );
+    let flake = read_text("flake.nix");
+    assert!(
+        flake.contains("export D2B_SHELLCHECK_BIN=\"${pkgs.shellcheck}/bin/shellcheck\""),
+        "Nix shells must export the pinned shellcheck binary through the shared contract"
+    );
+    assert!(
+        read_text("bazel/checks/meta/BUILD.bazel")
+            .contains("env_inherit = [\"D2B_REPO_ROOT\", \"D2B_SHELLCHECK_BIN\", \"PATH\", \"ROOT\"]"),
+        "the direct tier0 test must inherit the declared shellcheck binary"
+    );
+}
+
+#[test]
+fn source_hygiene_fails_when_declared_shellcheck_is_missing() {
+    let scratch = repo_root().join(".scratch").join(format!(
+        "tier0-shellcheck-missing-test-{}-{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("system clock")
+            .as_nanos()
+    ));
+    std::fs::create_dir_all(scratch.join("tests")).expect("create source-hygiene fixture");
+    std::fs::write(
+        scratch.join("tests/input.sh"),
+        "#!/usr/bin/env bash\nprintf 'fixture\\n'\n",
+    )
+    .expect("write source-hygiene fixture");
+
+    let output = Command::new("/bin/bash")
+        .arg(repo_root().join("tests/tools/tier0-first-pass.sh"))
+        .env("ROOT", &scratch)
+        .env_remove("D2B_SHELLCHECK_BIN")
+        .output()
+        .expect("run source-hygiene gate");
+    let diagnostics = format!(
+        "{}{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let _ = std::fs::remove_dir_all(&scratch);
+
+    assert_eq!(output.status.code(), Some(1), "{diagnostics}");
+    assert!(
+        diagnostics.contains("shellcheck is required for the source-hygiene gate"),
+        "missing-tool diagnostic absent:\n{diagnostics}"
+    );
 }
 
 #[test]
@@ -958,6 +1009,7 @@ fn focused_bazel_shell_exports_the_complete_facade_contract() {
         "gnumake",
         "jq",
         "rustup",
+        "shellcheck",
     ] {
         assert!(
             packages
@@ -986,6 +1038,7 @@ fn focused_bazel_shell_exports_the_complete_facade_contract() {
         "D2B_PROJECT_SHELL=d2b",
         "D2B_BAZEL_BIN",
         "BAZEL_SH",
+        "D2B_SHELLCHECK_BIN",
         "D2B_BAZEL_TEST_PATH",
     ] {
         assert!(
@@ -1018,7 +1071,12 @@ fn default_shell_includes_the_pinned_bazel_contract() {
         default_shell.contains("mkBazelShellHook"),
         "default development shell must use the shared shell contract helper"
     );
-    for export in ["D2B_PROJECT_SHELL=d2b", "D2B_BAZEL_BIN", "BAZEL_SH"] {
+    for export in [
+        "D2B_PROJECT_SHELL=d2b",
+        "D2B_BAZEL_BIN",
+        "BAZEL_SH",
+        "D2B_SHELLCHECK_BIN",
+    ] {
         assert!(
             flake.contains(export),
             "default development shell contract must export {export}"
