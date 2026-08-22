@@ -117,7 +117,8 @@ mapfile -t shell_files < <(
 bash -n "${shell_files[@]}"
 ok "bash -n on ${#shell_files[@]} shell scripts"
 
-if ! shellcheck_bin=$(command -v shellcheck); then
+shellcheck_bin=${D2B_SHELLCHECK_BIN:-}
+if [ -z "$shellcheck_bin" ] || [ ! -x "$shellcheck_bin" ]; then
   fail "shellcheck is required for the source-hygiene gate; enter the declared Nix/Bazel test environment"
 fi
 "$shellcheck_bin" --severity=warning -x "${shell_files[@]}"

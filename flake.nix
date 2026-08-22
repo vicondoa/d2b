@@ -261,6 +261,7 @@
               pkgs.shellcheck
             ])}
             export SCCACHE_DIR="''${SCCACHE_DIR:-$HOME/.cache/d2b-sccache}"
+            export D2B_SHELLCHECK_BIN="${pkgs.shellcheck}/bin/shellcheck"
             echo "d2b dev shell: rust $(sed -n 's/.*channel = "\(.*\)".*/\1/p' rust-toolchain.toml) via rustup, sccache at $SCCACHE_DIR"
           '';
         };
