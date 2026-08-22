@@ -186,3 +186,8 @@ rust_doc_test(
     name = "d2b_provider_notification_desktop_doc_test",
     crate = "//packages/d2b-provider-notification-desktop:d2b_provider_notification_desktop",
 )
+
+test_suite(
+    name = "all-tests",
+    tags = ["-local", "-no-remote-exec"],
+)

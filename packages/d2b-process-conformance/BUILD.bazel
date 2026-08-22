@@ -62,3 +62,8 @@ rust_doc_test(
     name = "d2b_process_conformance_doc_test",
     crate = "//packages/d2b-process-conformance:d2b_process_conformance",
 )
+
+test_suite(
+    name = "all-tests",
+    tags = ["-local", "-no-remote-exec"],
+)

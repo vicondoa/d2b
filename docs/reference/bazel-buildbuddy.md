@@ -12,12 +12,42 @@ The normal entry point is:
 make check
 ```
 
+Run any public `make check*` or `make test*` alias directly from a
+Nix-enabled host. The Makefile detects the pinned d2b shell contract and
+re-enters `nix develop --no-write-lock-file .#bazel` exactly once when the
+contract is absent. It does not trust an unrelated Nix shell or a bare
+`IN_NIX_SHELL`; the shell must provide `D2B_PROJECT_SHELL=d2b` and an
+executable `D2B_BAZEL_BIN`. Multiple goals, `-j` parallelism, target-specific
+variables, the working directory, profile/trust variables, and the final exit
+status are preserved across re-entry. A re-entry with an incomplete contract
+fails closed instead of recursing.
+
+For an interactive session, use the complete shell:
+
+```bash
+nix develop
+```
+
+The focused shell is self-contained for Make/facade/Bazel commands:
+
+```bash
+nix develop --no-write-lock-file .#bazel
+nix develop --no-write-lock-file .#bazel -c bazel test //packages/<crate>:<owner-test>
+```
+
+Direnv is optional; it may enter `nix develop` automatically but is not part
+of the contributor or CI contract. CI installs Nix and invokes the same
+public Make aliases with `D2B_BAZEL_PROFILE=local` and
+`D2B_BAZEL_UNTRUSTED=1`.
+
 ## One execution graph
 
 Bazel owns Layer-1 dependency ordering, parallelism, test caching, retry
-classification, and aggregation. Make targets are public thin aliases over
-fixed Bazel target patterns and owner-local suites. CI runs the same fixed sets
-with the local profile and exposes one stable required `check` result.
+classification, and aggregation. `bazel/checks/BUILD.bazel` is the public
+suite facade: package-level Rust suites and component suites compose each
+public Make target without duplicating a fixed label graph in Make. CI runs the
+same nested suites with the local profile and exposes one stable required
+`check` result.
 
 The primary aliases remain available:
 
@@ -35,8 +65,10 @@ make test-unit
 make check
 ```
 
-Each alias invokes Bazel once. Underlying labels remain directly runnable for
-focused reruns. The complete aggregate is also available as
+Each alias invokes one matching `//bazel/checks:<target>` suite after any
+single shell re-entry. Underlying owner labels remain directly runnable for
+focused reruns through the focused shell.
+The complete aggregate is also available as
 `make bazel-check`.
 
 Do not add a second Cargo lock, exhaustive first-party source or dependency
@@ -57,12 +89,47 @@ The committed `.bazelrc` defines:
 Remote profiles use the BuildBuddy Linux worker contract, Ubuntu GCC
 toolchain, minimal output downloads, compressed cache blobs, zero Bazel remote
 retries, and a bounded job count. Nix, fixture, hardware, and other local-only
-actions are tagged so they remain local and remote-disabled.
+actions are tagged `local` or `no-remote-exec`; `no-remote-cache` alone does
+not make an action local. Heavy, container, VM, live-host, hardware, fixture,
+and performance lanes remain explicit local lanes.
 
 GitHub Layer-1 jobs set `D2B_BAZEL_PROFILE=local` and
 `D2B_BAZEL_UNTRUSTED=1`; they receive no BuildBuddy credential. The fixed job
 set is committed in `.github/workflows/pr-l1-static-fast.yml` and must remain
 aligned with the public Make aliases.
+
+## Developer invocation metadata
+
+For developer `remote` and protected `trusted-seed` runs, `tests/tools/bazel-check`
+derives one checkout-bound metadata contract before invoking Bazel:
+
+```text
+REPO_URL=https://github.com/vicondoa/d2b
+COMMIT_SHA=<40-hex commit at HEAD>
+BRANCH_NAME=<validated symbolic branch name>
+```
+
+The facade reads all three values from the repository root it will test. It
+clears inherited Git repository-selection and configuration environment,
+verifies the discovered top-level directory, and reads the origin from local
+repository configuration. It accepts only canonical d2b Git remotes, a full
+commit object id, and a Git-valid local branch under `refs/heads/`. The branch
+and commit come from one Git status snapshot, and the facade requires two
+identical snapshots before publishing them. It passes the values as Bazel
+invocation metadata (`--build_metadata=...`) to both developer profiles; local
+execution omits them. The contract uses no `GITHUB_*`, `CI_*`, user, host,
+credential, or workspace-path environment values, and never forwards a remote
+URL containing credentials.
+
+If Git is unavailable, the origin is not canonical, `HEAD` cannot be resolved,
+the checkout is detached, or the branch and commit change while the tuple is
+collected, the facade emits an explicit diagnostic and omits all three fields
+rather than publishing a partial or misleading revision. This is not a local
+retry condition.
+
+`--build_metadata` is Build Event Service invocation metadata, not an action
+input. It therefore does not change ordinary action keys or invalidate
+reusable outputs, and the global `--stamp=no` contract remains unchanged.
 
 ## Credentials and trust selection
 

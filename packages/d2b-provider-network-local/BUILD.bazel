@@ -150,3 +150,8 @@ rust_doc_test(
     name = "d2b_provider_network_local_doc_test",
     crate = "//packages/d2b-provider-network-local:d2b_provider_network_local",
 )
+
+test_suite(
+    name = "all-tests",
+    tags = ["-local", "-no-remote-exec"],
+)

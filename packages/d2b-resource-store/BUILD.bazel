@@ -63,3 +63,8 @@ rust_doc_test(
     name = "d2b_resource_store_doc_test",
     crate = "//packages/d2b-resource-store:d2b_resource_store",
 )
+
+test_suite(
+    name = "all-tests",
+    tags = ["-local", "-no-remote-exec"],
+)

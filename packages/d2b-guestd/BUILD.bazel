@@ -82,3 +82,8 @@ rust_doc_test(
     name = "d2b_guestd_doc_test",
     crate = "//packages/d2b-guestd:d2b_guestd",
 )
+
+test_suite(
+    name = "all-tests",
+    tags = ["-local", "-no-remote-exec"],
+)

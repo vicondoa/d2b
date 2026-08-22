@@ -213,3 +213,8 @@ rust_doc_test(
     name = "d2b_provider_shell_terminal_doc_test",
     crate = "//packages/d2b-provider-shell-terminal:d2b_provider_shell_terminal",
 )
+
+test_suite(
+    name = "all-tests",
+    tags = ["-local", "-no-remote-exec"],
+)

@@ -92,3 +92,8 @@ rust_doc_test(
     name = "d2b_zone_routing_doc_test",
     crate = "//packages/d2b-zone-routing:d2b_zone_routing",
 )
+
+test_suite(
+    name = "all-tests",
+    tags = ["-local", "-no-remote-exec"],
+)

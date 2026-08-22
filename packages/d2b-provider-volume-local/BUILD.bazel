@@ -280,3 +280,8 @@ rust_doc_test(
     name = "d2b_provider_volume_local_doc_test",
     crate = "//packages/d2b-provider-volume-local:d2b_provider_volume_local",
 )
+
+test_suite(
+    name = "all-tests",
+    tags = ["-local", "-no-remote-exec"],
+)

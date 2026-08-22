@@ -116,3 +116,8 @@ test_suite(
     name = "doctest",
     tests = [":d2b_resource_api_doc_test"],
 )
+
+test_suite(
+    name = "all-tests",
+    tags = ["-local", "-no-remote-exec"],
+)

@@ -141,11 +141,12 @@ Types 2-5 (unit/integration/contract/policy-lint) are Rust and live under
 
 ## Layer-1 orchestration and Bazel authority
 
-Bazel is the sole Layer-1 scheduler. The fixed graph in `BUILD.bazel`,
-`bazel/checks/`, and the top-level Makefile's target-pattern set owns target
-selection, dependency ordering, parallelism, retry classification, caching,
-and aggregation. Make targets and fixed CI jobs are thin aliases over that
-graph and must not grow local fan-out, discovery, sharding, or rollup logic.
+Bazel is the sole Layer-1 scheduler. The nested suite graph in `BUILD.bazel`
+and `bazel/checks/`, including the top-level facade and package-level suites,
+owns target selection, dependency ordering, parallelism, retry classification,
+caching, and aggregation. Make targets and fixed CI jobs are thin aliases over
+one facade suite per public target and must not grow local fan-out, discovery,
+sharding, or rollup logic.
 
 `tests/tools/bazel-check` is the retained execution facade. It selects the
 local, developer-remote, or protected trusted-seed profile, reads credentials
@@ -183,8 +184,9 @@ make test-unit
 make check
 ```
 
-Each Layer-1 alias performs one direct Bazel invocation over a fixed target
-set. The individual Bazel labels remain directly runnable for focused reruns.
+Each Layer-1 alias performs one direct Bazel invocation over its matching
+facade suite. The individual Bazel labels remain directly runnable for focused
+reruns.
 The performance target is advisory and is not validation evidence when it
 reports a guarded skip.
 

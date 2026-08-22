@@ -128,3 +128,8 @@ rust_doc_test(
     name = "d2b_provider_runtime_cloud_hypervisor_doc_test",
     crate = "//packages/d2b-provider-runtime-cloud-hypervisor:d2b_provider_runtime_cloud_hypervisor",
 )
+
+test_suite(
+    name = "all-tests",
+    tags = ["-local", "-no-remote-exec"],
+)
