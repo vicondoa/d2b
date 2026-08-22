@@ -1155,7 +1155,10 @@ impl ProviderDeployment {
         })
     }
 
-    /// Revoke every assignment bound to one ComponentSession generation.
+    /// Revoke every assignment bound to one target ComponentSession generation.
+    ///
+    /// A controller's authenticated session has a separate generation, so
+    /// controller records must be selected by their target generation.
     pub fn revoke_session(&self, session_generation: u64) -> Result<usize, DeploymentError> {
         if session_generation == 0 {
             return Err(DeploymentError::GenerationZero);
@@ -1188,19 +1191,21 @@ impl ProviderDeployment {
             let mut record = record
                 .lock()
                 .map_err(|_| DeploymentError::StateUnavailable)?;
-            let matches = record
-                .ready_session
-                .as_ref()
-                .is_some_and(|binding| binding.session_generation().get() == session_generation);
+            let matches = record.resource.target_session_generation().get() == session_generation;
             if matches {
-                count = count.saturating_add(revoke_record_assignments(
+                count = count.saturating_add(revoke_record_assignments_all(
                     &self.controller_assignments,
                     &mut record,
-                    ReconnectGeneration::new(session_generation)
-                        .map_err(|_| DeploymentError::GenerationZero)?,
-                )?);
+                ));
                 record.ready_session = None;
-                if record.phase != ControllerProcessPhase::Released {
+                if matches!(
+                    record.phase,
+                    ControllerProcessPhase::Pending
+                        | ControllerProcessPhase::Launching
+                        | ControllerProcessPhase::Running
+                        | ControllerProcessPhase::Ready
+                        | ControllerProcessPhase::Assigned
+                ) {
                     record.phase = ControllerProcessPhase::Revoked;
                 }
             }
@@ -1671,11 +1676,14 @@ impl ProviderDeployment {
         {
             return Err(DeploymentError::ControllerSessionMismatch);
         }
-        if record.phase == ControllerProcessPhase::Released
-            || record.phase == ControllerProcessPhase::Quarantined
-            || record.phase == ControllerProcessPhase::Launching
-            || record.phase == ControllerProcessPhase::Pending
-        {
+        if matches!(
+            record.phase,
+            ControllerProcessPhase::Released
+                | ControllerProcessPhase::Quarantined
+                | ControllerProcessPhase::Draining
+                | ControllerProcessPhase::Launching
+                | ControllerProcessPhase::Pending
+        ) {
             return Err(DeploymentError::ControllerNotReady);
         }
         if let Some(previous) = record.ready_session.as_ref() {
@@ -2531,9 +2539,20 @@ mod tests {
         assert_eq!(assignment.identity().resource_generation().get(), 1);
         assert_eq!(assignment.identity().assignment_epoch(), 1);
         assert_eq!(deployment.active_controller_assignments().unwrap(), 1);
-        drop(session);
+        assert_eq!(
+            deployment
+                .revoke_session(process.target_session_generation().get())
+                .expect("revoke parent session"),
+            1
+        );
+        assert!(!session.is_active());
         assert!(!assignment.is_active());
         assert_eq!(deployment.active_controller_assignments().unwrap(), 0);
+        assert_eq!(
+            deployment.controller_phase(process.process_ref()),
+            Some(ControllerProcessPhase::Revoked)
+        );
+        drop(session);
         let reconnect = deployment
             .admit_controller_session(ControllerSessionBinding::new(
                 process.process_ref().clone(),
@@ -2567,6 +2586,58 @@ mod tests {
         assert!(replacement.is_active());
         drop(reconnect);
         assert!(!replacement.is_active());
+    }
+
+    #[test]
+    fn parent_session_revoke_revokes_running_controller_without_ready_session() {
+        use d2b_contracts_resource::v3::{
+            ControllerGeneration, ResourceGeneration, ZoneRevision, identity::ReconnectGeneration,
+        };
+
+        let deployment =
+            ProviderDeployment::new(DaemonMode::Guest, AdmissionLimits::guest_default())
+                .expect("deployment");
+        let process = deployment
+            .create_controller_process(
+                ZoneId::parse("work").unwrap(),
+                resource("Provider", "runtime"),
+                &signed_controller_descriptor(),
+                ResourceGeneration::new(3).unwrap(),
+                ResourceGeneration::new(7).unwrap(),
+                ControllerGeneration::new(4).unwrap(),
+                ReconnectGeneration::new(2).unwrap(),
+                ZoneRevision::new(11),
+                resource("Guest", "workload"),
+                resource("Provider", "system-systemd"),
+                true,
+            )
+            .expect("controller process");
+        let readiness = d2b_contracts_resource::v3::SchemaFingerprint::parse(format!(
+            "sha256:{}",
+            "b".repeat(64)
+        ))
+        .unwrap();
+        deployment
+            .begin_controller_launch(process.process_ref(), readiness)
+            .expect("launch admission");
+        deployment
+            .controller_launch_succeeded(process.process_ref(), [9; 32])
+            .expect("launch success");
+        assert_eq!(
+            deployment.controller_phase(process.process_ref()),
+            Some(ControllerProcessPhase::Running)
+        );
+
+        assert_eq!(
+            deployment
+                .revoke_session(process.target_session_generation().get())
+                .expect("revoke parent session"),
+            0
+        );
+        assert_eq!(
+            deployment.controller_phase(process.process_ref()),
+            Some(ControllerProcessPhase::Revoked)
+        );
     }
 
     #[test]
@@ -2607,7 +2678,7 @@ mod tests {
         deployment
             .controller_launch_succeeded(process.process_ref(), [9; 32])
             .unwrap();
-        let session = deployment
+        let _session = deployment
             .admit_controller_session(ControllerSessionBinding::new(
                 process.process_ref().clone(),
                 process.zone().clone(),
@@ -2633,7 +2704,7 @@ mod tests {
             )
             .unwrap();
         deployment
-            .revoke_session(session.generation().get())
+            .revoke_session(process.target_session_generation().get())
             .expect("revoke session");
         assert!(
             deployment
@@ -2659,6 +2730,28 @@ mod tests {
         deployment
             .prepare_controller_cleanup(process.process_ref(), process.process_ref())
             .expect("cleanup owner");
+        assert!(matches!(
+            deployment.admit_controller_session(ControllerSessionBinding::new(
+                process.process_ref().clone(),
+                process.zone().clone(),
+                process.provider_ref().clone(),
+                process.target().clone(),
+                process.provider_generation(),
+                process.controller_generation(),
+                process.target_session_generation(),
+                ReconnectGeneration::new(6).unwrap(),
+                d2b_contracts_resource::v3::SchemaFingerprint::parse(format!(
+                    "sha256:{}",
+                    "b".repeat(64)
+                ))
+                .unwrap(),
+            )),
+            Err(DeploymentError::ControllerNotReady)
+        ));
+        assert_eq!(
+            deployment.controller_phase(process.process_ref()),
+            Some(ControllerProcessPhase::Draining)
+        );
         deployment
             .complete_controller_cleanup(process.process_ref(), process.process_ref())
             .expect("cleanup complete");
