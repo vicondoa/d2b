@@ -52,7 +52,7 @@ Rust tests (types 2-5: unit, integration, contract, policy-lint) live under
 | `make check` | complete PR-equivalent Bazel Layer-1 suite graph | local + CI |
 | `make test-unit` | complete Bazel Layer-1 development suite graph | local + CI |
 | `make check-tier0` | fast Bazel toolchain and source-policy suite | local + CI |
-| `make test-lint` | fixed Bazel source-hygiene and shell-lint suite | local + CI |
+| `make test-lint` | fixed Bazel source-hygiene and required shell-lint suite | local + CI |
 | `make test-changelog` | require release notes for code changes and validate every changelog fragment | local + CI |
 | `make test-rust` | composed Bazel Rust unit, integration, and doctest suites | local + CI |
 | `make test-rust-<leaf>` | focused Bazel suites for main, broker, guest shell runner, policy, schema, and supply-chain coverage | CI (local for a focused rerun) |

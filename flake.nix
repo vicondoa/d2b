@@ -220,6 +220,7 @@
           export D2B_PROJECT_SHELL=d2b
           export D2B_BAZEL_BIN="${bazel920}/bin/bazel"
           export BAZEL_SH="''${BAZEL_SH:-${bazelActionShell}/bin/bash}"
+          export D2B_SHELLCHECK_BIN="${pkgs.shellcheck}/bin/shellcheck"
           export D2B_BAZEL_TEST_PATH="${testPath}"
         '';
       in {
@@ -257,6 +258,7 @@
               pkgs.gnumake
               pkgs.jq
               pkgs.rustup
+              pkgs.shellcheck
             ])}
             export SCCACHE_DIR="''${SCCACHE_DIR:-$HOME/.cache/d2b-sccache}"
             echo "d2b dev shell: rust $(sed -n 's/.*channel = "\(.*\)".*/\1/p' rust-toolchain.toml) via rustup, sccache at $SCCACHE_DIR"
@@ -289,6 +291,7 @@
             gnused
             jq
             rustup
+            shellcheck
           ];
           shellHook = ''
             ${mkBazelShellHook (pkgs.lib.makeBinPath [
@@ -303,6 +306,7 @@
               pkgs.gnused
               pkgs.jq
               pkgs.rustup
+              pkgs.shellcheck
             ])}
             echo "d2b Bazel compatibility shell: $(${bazel920}/bin/bazel --version)"
           '';
