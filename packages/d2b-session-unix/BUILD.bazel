@@ -118,3 +118,8 @@ rust_doc_test(
     name = "d2b_session_unix_doc_test",
     crate = "//packages/d2b-session-unix:d2b_session_unix",
 )
+
+test_suite(
+    name = "all-tests",
+    tags = ["-local", "-no-remote-exec"],
+)

@@ -154,3 +154,8 @@ rust_doc_test(
     name = "d2b_provider_system_core_doc_test",
     crate = "//packages/d2b-provider-system-core:d2b_provider_system_core",
 )
+
+test_suite(
+    name = "all-tests",
+    tags = ["-local", "-no-remote-exec"],
+)

@@ -51,3 +51,8 @@ rust_doc_test(
     name = "d2b_process_doc_test",
     crate = "//packages/d2b-process:d2b_process",
 )
+
+test_suite(
+    name = "all-tests",
+    tags = ["-local", "-no-remote-exec"],
+)

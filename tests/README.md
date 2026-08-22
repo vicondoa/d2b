@@ -49,34 +49,63 @@ Rust tests (types 2-5: unit, integration, contract, policy-lint) live under
 
 | Command | Runs | Where |
 |---------|------|-------|
-| `make test-unit` | complete fixed Bazel Layer-1 development graph | local + CI |
-| `make test` | `test-unit` + `test-integration` | local convenience aggregate; use wider lanes when the changed surface needs them |
+| `make check` | complete PR-equivalent Bazel Layer-1 suite graph | local + CI |
+| `make test-unit` | complete Bazel Layer-1 development suite graph | local + CI |
 | `make check-tier0` | fast Bazel toolchain and source-policy suite | local + CI |
 | `make test-lint` | fixed Bazel source-hygiene and shell-lint suite | local + CI |
 | `make test-changelog` | require release notes for code changes and validate every changelog fragment | local + CI |
-| `make test-rust` | fixed owner-local Bazel Rust unit, integration, and doctest suite | local + CI |
-| `make test-rust-<leaf>` | focused Bazel Rust labels for main, broker, guest shell runner, policy, schema, and supply-chain coverage | CI (local for a focused rerun) |
+| `make test-rust` | composed Bazel Rust unit, integration, and doctest suites | local + CI |
+| `make test-rust-<leaf>` | focused Bazel suites for main, broker, guest shell runner, policy, schema, and supply-chain coverage | CI (local for a focused rerun) |
 | `make test-fixture-contracts` | enforcing eval-rendered lane: materializes `D2B_FIXTURES` from evaluated Nix artifact data, then runs owner-local CLI contract cases; invoking it without the enforcing lane fails rather than skipping | local + CI |
 | `make test-proofs` | standalone proofs/ crates | local + CI |
-| `make test-flake` | fixed Bazel Nix evaluation target | local + CI |
-| `make test-nix-unit` | fixed Bazel Nix-unit surface targets | local + CI |
+| `make test-flake` | Bazel Nix evaluation suite | local + CI |
+| `make test-nix-unit` | Bazel Nix-unit surface suite | local + CI |
 | `make test-drift` | native generated-artifact and parity checks | local + CI |
-| `make test-policy` | fixed Bazel source, workspace/lock, supply-chain, and changelog policy suites | local + CI |
+| `make test-policy` | composed Bazel source, workspace/lock, supply-chain, and changelog policy suites | local + CI |
 | `make test-performance-budgets` | advisory performance canary; without `D2B_PERF_STABLE=1` it reports `SKIP` and enforces nothing | local + CI |
 | `make test-integration` | type-9 podman container tests | conditional local host lane (podman; not the PR pipeline) |
 | `make test-host-integration` | type-10 runNixOSTest VM checks; set `D2B_VM_CHECK=<name>` for one named check | conditional local NixOS host lane (KVM; TCG fallback; not the PR pipeline) |
-| `make check-fast` | alias for `test-unit` (backward compat) | local + CI |
-| `make check` | complete fixed Bazel graph with fixed CI enforcement | local |
-| `make bazel-check` | Bazel aggregate used by `make check`. Defaults to BuildBuddy remotely; CI forces `D2B_BAZEL_PROFILE=local` | local or remote |
+| `make check-fast` | compatibility alias for `make check` | local + CI |
+| `make bazel-check` | Bazel aggregate suite used by `make check`. Defaults to BuildBuddy remotely; CI forces `D2B_BAZEL_PROFILE=local` | local or remote |
 | `make heavy-gate-build && bazel-bin/packages/xtask/xtask heavy-gate -- env D2B_LIVE=1 bash tests/integration/live/<x>.sh` | type-11 live-host tests, through the heavy-gate semaphore | **manual, against a deployed d2b host** |
 
-`make check`, `make test-unit`, and `make bazel-check` invoke the same fixed
-target-pattern and owner-suite set through one Bazel call.
-`tests/tools/bazel-check --profile local` uses the same facade for focused
-reruns. Bazel owns Layer-1 scheduling; Make and CI are thin aliases over fixed
-labels. Cargo manifests and `Cargo.lock` remain rules_rs metadata authority,
+`make check`, `make test-unit`, and `make bazel-check` invoke the same nested
+suite graph through one public facade label. `tests/tools/bazel-check
+--profile local` uses the same facade for focused reruns. Bazel owns Layer-1
+scheduling; Make and CI are thin aliases over one suite label per public
+target. Cargo manifests and `Cargo.lock` remain rules_rs metadata authority,
 while standalone crate Cargo commands are not documented or required gate
 evidence.
+
+Run these aliases directly from a normal Nix-enabled checkout. Make enters
+the pinned `.#bazel` shell automatically when the explicit d2b shell contract
+is absent, and enters it only once for a multi-goal or parallel invocation.
+Inside `nix develop`, the complete interactive shell already supplies the
+pinned Bazel toolchain. Use the focused shell for one-shot labels:
+
+```bash
+nix develop --no-write-lock-file .#bazel -c bazel test //packages/<crate>:<owner-test>
+```
+
+The focused shell supplies Bazel, Make, jq, Git, Rustup, and the shell
+utilities used by `tests/tools/bazel-check`; no ambient host Bazel or jq is
+required. An unrelated Nix shell is not accepted as the d2b shell. Optional
+direnv integration is supported for interactive use but is not required.
+CI installs Nix and calls the same public Make aliases with
+`D2B_BAZEL_PROFILE=local` and `D2B_BAZEL_UNTRUSTED=1`, without a per-target
+`nix develop` wrapper.
+
+`make test-policy` does not schedule
+`tests/tools/guest-workspace-drift.py`. The retained
+`//tests/unit/meta:w0_dep_direction` target owns workspace-and-lock policy, but
+it does not assert copied Guest workspace parity. Do not cite that parity as
+passing gate evidence. When a mirrored shared crate gains or changes a
+dependency, update the guest workspace fixture and any affected override,
+refresh `packages/Cargo.guest.lock`, and run the applicable owner-local targets
+plus `make test-rust-supply-chain` and `make test-policy`. The supply-chain lane
+realizes the copied Guest workspace for dependency metadata, license, source,
+and audit validation; it does not compile Guest packages and is not a fifth
+repository-wide policy class or copied-workspace parity result.
 
 All Layer-2 lanes (types 9-11) run behind one sole-use semaphore (two slots
 per uid via open file description locks), so concurrent heavy lanes cannot
@@ -132,12 +161,18 @@ outputs, and runs the fixture-dependent contract and CLI targets exactly once.
 
 ### Bazel graph execution
 
-The Layer-1 graph is fixed in `BUILD.bazel` and `bazel/checks/`. Bazel owns
-selection, dependency ordering, parallelism, retry classification, caching,
-and aggregation. Every public Layer-1 `make test-*` alias is a thin direct
-Bazel invocation, and every fixed CI job runs the same graph with the local
-profile.
+The Layer-1 graph is composed by nested suites in `BUILD.bazel` and
+`bazel/checks/`. Bazel owns selection, dependency ordering, parallelism, retry
+classification, caching, and aggregation. Every public Layer-1 `make test-*`
+alias invokes one matching facade suite, and every fixed CI job runs the same
+graph with the local profile.
 Individual labels remain available for focused reruns.
+
+`bazel/checks/BUILD.bazel` is the public suite facade. Its fixed package-suite
+list owns the package-wide main graph; the broker, guest-shell-runner, and
+local Rust suites remain separate components. `make test-rust-main` excludes
+`local` and `no-remote-exec` leaves by tag, while `make test-rust-local`
+executes the audited local suite.
 
 Cargo manifests and the root `Cargo.lock` remain authoritative for Rust
 membership, dependencies, and features consumed by rules_rs. Do not add a
@@ -149,6 +184,9 @@ Bazel's credential helper, withholds credentials from untrusted work, redacts
 logs and BEP output, and retries the identical target set locally only for a
 typed pre-dispatch infrastructure failure. Post-dispatch and test failures
 fail closed. Provider measurements do not define a second acceptance gate.
+The facade consumes `D2B_BAZEL_BIN` from the pinned shell and rejects an
+incomplete shell contract; it does not search for a hard-coded Nix-store
+Bazel path.
 
 The complete local and CI surfaces are:
 
@@ -169,7 +207,7 @@ make check
 
 ### Nix-unit surfaces
 
-`make test-nix-unit` runs one fixed Bazel action per named owner surface.
+`make test-nix-unit` runs one Bazel action per named owner surface.
 Each action declares its expression, modules, helpers, fixtures, and pinned
 external inputs directly in `bazel/checks/nix/BUILD.bazel`; there is no corpus
 discovery or case-presence pin generator. The action copies those runfiles into

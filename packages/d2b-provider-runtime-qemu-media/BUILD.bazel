@@ -191,3 +191,8 @@ rust_doc_test(
     name = "d2b_provider_runtime_qemu_media_doc_test",
     crate = "//packages/d2b-provider-runtime-qemu-media:d2b_provider_runtime_qemu_media",
 )
+
+test_suite(
+    name = "all-tests",
+    tags = ["-local", "-no-remote-exec"],
+)

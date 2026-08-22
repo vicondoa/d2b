@@ -102,3 +102,8 @@ rust_doc_test(
     name = "d2b_provider_supervisor_doc_test",
     crate = "//packages/d2b-provider-supervisor:d2b_provider_supervisor",
 )
+
+test_suite(
+    name = "all-tests",
+    tags = ["-local", "-no-remote-exec"],
+)
