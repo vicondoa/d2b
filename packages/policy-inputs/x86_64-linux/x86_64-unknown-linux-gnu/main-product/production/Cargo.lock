@@ -1647,11 +1647,13 @@ dependencies = [
 name = "d2b-provider-system-systemd"
 version = "0.0.0-bootstrap"
 dependencies = [
+ "d2b-contracts-control",
  "d2b-contracts-resource",
  "d2b-contracts-zone-session",
  "d2b-process-conformance",
  "d2b-provider-toolkit",
  "serde",
+ "serde_json",
  "tokio",
 ]
 
@@ -1784,9 +1786,11 @@ name = "d2b-resource-client"
 version = "0.0.0-bootstrap"
 dependencies = [
  "d2b-contracts",
+ "d2b-contracts-control",
  "d2b-contracts-resource",
  "d2b-contracts-zone-session",
  "d2b-core-controller",
+ "serde_json",
  "tokio",
 ]
 
