@@ -171,6 +171,14 @@ fn main_controlled_buildbuddy_workflows_preserve_trust_contract() {
         "build workflow must bind trusted and tested immutable OIDs"
     );
     assert!(
+        build.contains("trusted_sha=\"${D2B_JOB_WORKFLOW_SHA:-$D2B_CALLER_WORKFLOW_SHA}\"")
+            && build.contains(
+                "if [ -n \"$D2B_JOB_WORKFLOW_REF\" ] || [ -n \"$D2B_JOB_WORKFLOW_SHA\" ]; then"
+            )
+            && build.contains("is_sha \"$D2B_JOB_WORKFLOW_SHA\""),
+        "optional reusable-workflow metadata must be validated when GitHub provides it"
+    );
+    assert!(
         build.matches("persist-credentials: false").count() >= 4,
         "trusted and source checkouts must not persist credentials"
     );
