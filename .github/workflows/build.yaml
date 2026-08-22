@@ -202,6 +202,23 @@ jobs:
           set -euo pipefail
           test "$(git -C trusted rev-parse HEAD)" = "$D2B_TRUSTED_SHA"
           test "$(git -C workspace rev-parse HEAD)" = "$D2B_TESTED_SHA"
+      - name: Prepare pinned Rust toolchain for parallel Layer-1 gates
+        working-directory: workspace
+        run: |
+          set -euo pipefail
+          if ! command -v rustup >/dev/null 2>&1; then
+            echo "rustup is unavailable; Rust gates will use their Nix fallback."
+            exit 0
+          fi
+          pinned_channel="$(
+            sed -n 's/^[[:space:]]*channel[[:space:]]*=[[:space:]]*"\([^"]*\)".*/\1/p' \
+              packages/rust-toolchain.toml | head -1
+          )"
+          [ -n "$pinned_channel" ] || {
+            echo "::error::could not read the pinned Rust channel" >&2
+            exit 76
+          }
+          rustup toolchain install "$pinned_channel" --profile minimal --component rustfmt --component clippy
       - name: Run credential-free local Layer-1 gate
         working-directory: workspace
         run: |

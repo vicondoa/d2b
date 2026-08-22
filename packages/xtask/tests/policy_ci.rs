@@ -211,6 +211,18 @@ fn main_controlled_buildbuddy_workflows_preserve_trust_contract() {
             && build.contains("D2B_BAZEL_UNTRUSTED: \"1\""),
         "full PR coverage must retain a credential-free local Layer-1 gate"
     );
+    let rust_bootstrap = build
+        .find("Prepare pinned Rust toolchain for parallel Layer-1 gates")
+        .expect("local Layer-1 gate must prepare the shared Rust toolchain");
+    let local_gate = build
+        .find("Run credential-free local Layer-1 gate")
+        .expect("local Layer-1 gate step must be present");
+    assert!(
+        rust_bootstrap < local_gate
+            && build.contains("rustup toolchain install \"$pinned_channel\" --profile minimal")
+            && build.contains("--component rustfmt --component clippy"),
+        "parallel local Layer-1 jobs must share a preinstalled pinned Rust toolchain"
+    );
     assert!(
         build.contains("github.event_name == 'push'")
             && build.contains("github.event_name == 'push' }}"),
