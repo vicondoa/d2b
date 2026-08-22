@@ -7,8 +7,8 @@
 //! with a [`PrologueVerifier`] that verifies the session handshake under the
 //! authorizing binding + secret. Readiness is signalled only after the
 //! authenticated relay has attached to the local display endpoint, so
-//! `await_handshake` resolves exactly when bytes can flow. `close` aborts the
-//! task and drops the listener.
+//! `await_handshake` resolves exactly when bytes can flow. `close` cancels the
+//! listener and joins its runtime thread.
 //!
 //! The verifier-signal composition is a pure helper ([`notifying_verifier`]) so
 //! it is unit-tested with a real handshake frame and no Azure round-trip.
@@ -53,16 +53,10 @@ pub fn notifying_verifier(
 
 struct ListenerState {
     cancel: tokio::sync::watch::Sender<bool>,
-    _thread: std::thread::JoinHandle<()>,
+    thread: std::thread::JoinHandle<()>,
     handshook: Arc<Notify>,
     armed: Arc<AtomicBool>,
     handshake_timeout: Duration,
-}
-
-impl Drop for ListenerState {
-    fn drop(&mut self) {
-        let _ = self.cancel.send(true);
-    }
 }
 
 /// The production host-side display listener.
@@ -160,13 +154,8 @@ impl DisplayListener for RelayDisplayListener {
                     // on its own runtime thread so the listener survives the
                     // daemon's synchronous gatewayDisplay request runtime.
                     loop {
-                        tokio::select! {
-                            changed = cancel_rx.changed() => {
-                                if changed.is_err() || *cancel_rx.borrow() {
-                                    break;
-                                }
-                            }
-                            result = crate::relay_bridge::run_listener_verified_with_ready(
+                        let result =
+                            crate::relay_bridge::run_listener_verified_with_ready_and_cancel(
                                 &endpoint,
                                 &credential,
                                 &target,
@@ -174,14 +163,14 @@ impl DisplayListener for RelayDisplayListener {
                                 ca.as_deref(),
                                 inner.clone(),
                                 ready.clone(),
-                            ) => {
-                                if *cancel_rx.borrow() {
-                                    break;
-                                }
-                                if let Err(err) = result {
-                                    tracing::warn!(error = %err, "gateway relay listener ended before close");
-                                }
-                            }
+                                Some(cancel_rx.clone()),
+                            )
+                            .await;
+                        if *cancel_rx.borrow() {
+                            break;
+                        }
+                        if let Err(err) = result {
+                            tracing::warn!(error = %err, "gateway relay listener ended before close");
                         }
                         tokio::select! {
                             changed = cancel_rx.changed() => {
@@ -202,7 +191,7 @@ impl DisplayListener for RelayDisplayListener {
             id.clone(),
             ListenerState {
                 cancel: task_cancel,
-                _thread: thread,
+                thread,
                 handshook,
                 armed,
                 handshake_timeout,
@@ -241,6 +230,7 @@ impl DisplayListener for RelayDisplayListener {
         };
         if let Some(st) = st {
             let _ = st.cancel.send(true);
+            let _ = tokio::task::spawn_blocking(move || st.thread.join()).await;
         }
         Ok(())
     }
@@ -319,7 +309,7 @@ mod tests {
             "h1".into(),
             ListenerState {
                 cancel,
-                _thread: thread,
+                thread,
                 handshook,
                 armed,
                 handshake_timeout: Duration::from_secs(100),
@@ -356,5 +346,49 @@ mod tests {
             .await
             .unwrap_err();
         assert!(matches!(err, GatewayError::Internal));
+    }
+
+    #[tokio::test]
+    async fn close_joins_listener_thread_before_next_bridge_can_arm() {
+        let listener = RelayDisplayListener::new(
+            RelayEndpoint {
+                namespace: "ns".into(),
+                entity: "e".into(),
+            },
+            RelayCredential::EntraBearer("t".into()),
+            LocalTarget::UnixConnect("unused-socket".into()),
+            60,
+            None,
+            Arc::new(|| 900),
+        );
+        let cancelled = Arc::new(AtomicBool::new(false));
+        let thread_cancelled = Arc::clone(&cancelled);
+        let (cancel, mut cancel_rx) = tokio::sync::watch::channel(false);
+        let thread = std::thread::spawn(move || {
+            let runtime = tokio::runtime::Builder::new_current_thread()
+                .enable_time()
+                .build()
+                .unwrap();
+            let saw_cancel = runtime.block_on(async {
+                timeout(Duration::from_millis(250), cancel_rx.changed())
+                    .await
+                    .is_ok_and(|changed| changed.is_ok() && *cancel_rx.borrow())
+            });
+            thread_cancelled.store(saw_cancel, Ordering::SeqCst);
+        });
+        listener.state.lock().unwrap().insert(
+            "h1".into(),
+            ListenerState {
+                cancel,
+                thread,
+                handshook: Arc::new(Notify::new()),
+                armed: Arc::new(AtomicBool::new(false)),
+                handshake_timeout: Duration::from_secs(100),
+            },
+        );
+
+        listener.close(&ListenerHandle("h1".into())).await.unwrap();
+
+        assert!(cancelled.load(Ordering::SeqCst));
     }
 }

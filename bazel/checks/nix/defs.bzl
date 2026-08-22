@@ -282,6 +282,7 @@ def _surface_inputs(surface, spec):
             "//:nixos-modules/lib.nix",
             "//tests/unit/nix:default.nix",
             "//tests/unit/nix:helpers/eval.nix",
+            "//tests/unit/nix:helpers/select-cases.nix",
             "//tests/unit/nix:helpers/surface.nix",
         ]
     return inputs + [

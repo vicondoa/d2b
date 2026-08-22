@@ -139,8 +139,11 @@ _SURFACES = {
         "cases": [],
         "files": [
             "nixos-modules/lib.nix",
+            "tests/unit/nix/cases/selection-helper.nix",
+            "tests/unit/nix/helpers/select-cases.nix",
         ],
         "modules": [],
+        "package": "tests/unit/nix",
         "raw_cases": True,
     },
 }
