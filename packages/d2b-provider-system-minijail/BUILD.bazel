@@ -129,3 +129,8 @@ rust_doc_test(
     name = "d2b_provider_system_minijail_doc_test",
     crate = "//packages/d2b-provider-system-minijail:d2b_provider_system_minijail",
 )
+
+test_suite(
+    name = "all-tests",
+    tags = ["-local", "-no-remote-exec"],
+)

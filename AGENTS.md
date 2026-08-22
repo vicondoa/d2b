@@ -120,8 +120,9 @@ settings or claim atomic base binding.
   the required gates when the owning workflow calls for them. Read
   [`tests/AGENTS.md`](./tests/AGENTS.md) before changing test coverage.
 - Use the top-level Makefile and existing gates: `make check` is the aggregate,
-  `make test-unit` is the Layer-1 development umbrella, and `make test` adds
-  container integration. Do not cite an advisory skip as validation evidence.
+  `make test-unit` is the Layer-1 development umbrella, and
+  `make test-integration` adds the conditional container lane. Do not cite an
+  advisory skip as validation evidence.
 - Every code change ships a valid changelog entry or a fragment under
   [`changelog.d/`](./changelog.d/).
 - Leave `nix/gas-city-contributor/**` and its managed authority unchanged;
@@ -135,13 +136,13 @@ settings or claim atomic base binding.
 
 ## Critical subsystem index
 
-`make check` invokes the single fixed Bazel Layer-1 graph from the target
-patterns and owner-local suites in the top-level Makefile. Bare local runs use
-the BuildBuddy profile for eligible actions and automatically fall back to
-local execution when no credential is available; CI runs the same graph
-through the local profile with no BuildBuddy credential. Make aliases are thin
-Bazel entry points, while Cargo manifests and lockfiles remain rules_rs
-metadata authority rather than contributor workflow entry points.
+`make check` invokes the public Bazel suite facade and its nested Layer-1
+component and package suites. Bare local runs use the BuildBuddy profile for
+eligible actions and automatically fall back to local execution when no
+credential is available; CI runs the same suite graph through the local profile
+with no BuildBuddy credential. Make aliases are thin facade entry points,
+while Cargo manifests and lockfiles remain rules_rs metadata authority rather
+than contributor workflow entry points.
 
 The full invariants are in
 [`docs/contributing/critical-subsystems.md`](./docs/contributing/critical-subsystems.md).

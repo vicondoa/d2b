@@ -1,0 +1,258 @@
+package(default_visibility = ["//visibility:public"])
+
+# The package-level suites are the fixed authority for the package-wide
+# graph. An empty native test_suite includes every non-manual test in its
+# package, while its negative tags remove local-only leaves from the main
+# suite. Make's tag filters keep the remaining excluded lanes out of the
+# remote main run. Broker and guest-shell-runner stay in their dedicated suites
+# below.
+test_suite(
+    name = "rust-main-packages",
+    tests = [
+        "//packages/d2b:all-tests",
+        "//packages/d2b-audit:all-tests",
+        "//packages/d2b-bus:all-tests",
+        "//packages/d2b-contracts:all-tests",
+        "//packages/d2b-contracts-broker:all-tests",
+        "//packages/d2b-contracts-control:all-tests",
+        "//packages/d2b-contracts-provider:all-tests",
+        "//packages/d2b-contracts-resource:all-tests",
+        "//packages/d2b-contracts-zone-session:all-tests",
+        "//packages/d2b-controller-toolkit:all-tests",
+        "//packages/d2b-core:all-tests",
+        "//packages/d2b-core-controller:all-tests",
+        "//packages/d2b-cutover:all-tests",
+        "//packages/d2b-exec-runner:all-tests",
+        "//packages/d2b-gateway:all-tests",
+        "//packages/d2b-gateway-runtime:all-tests",
+        "//packages/d2b-guestd:all-tests",
+        "//packages/d2b-host:all-tests",
+        "//packages/d2b-host-activation-helper:all-tests",
+        "//packages/d2b-process:all-tests",
+        "//packages/d2b-process-conformance:all-tests",
+        "//packages/d2b-provider:all-tests",
+        "//packages/d2b-provider-activation-nixos:all-tests",
+        "//packages/d2b-provider-audio-pipewire:all-tests",
+        "//packages/d2b-provider-clipboard-wayland:all-tests",
+        "//packages/d2b-provider-credential-entra:all-tests",
+        "//packages/d2b-provider-credential-managed-identity:all-tests",
+        "//packages/d2b-provider-credential-secret-service:all-tests",
+        "//packages/d2b-provider-device-gpu:all-tests",
+        "//packages/d2b-provider-device-security-key:all-tests",
+        "//packages/d2b-provider-device-tpm:all-tests",
+        "//packages/d2b-provider-device-usbip:all-tests",
+        "//packages/d2b-provider-display-wayland:all-tests",
+        "//packages/d2b-provider-network-local:all-tests",
+        "//packages/d2b-provider-notification-desktop:all-tests",
+        "//packages/d2b-provider-observability-otel:all-tests",
+        "//packages/d2b-provider-runtime-azure-container-apps:all-tests",
+        "//packages/d2b-provider-runtime-azure-virtual-machine:all-tests",
+        "//packages/d2b-provider-runtime-cloud-hypervisor:all-tests",
+        "//packages/d2b-provider-runtime-qemu-media:all-tests",
+        "//packages/d2b-provider-shell-terminal:all-tests",
+        "//packages/d2b-provider-supervisor:all-tests",
+        "//packages/d2b-provider-system-core:all-tests",
+        "//packages/d2b-provider-system-minijail:all-tests",
+        "//packages/d2b-provider-system-systemd:all-tests",
+        "//packages/d2b-provider-toolkit:all-tests",
+        "//packages/d2b-provider-transport-azure-relay:all-tests",
+        "//packages/d2b-provider-transport-unix:all-tests",
+        "//packages/d2b-provider-transport-vsock:all-tests",
+        "//packages/d2b-provider-volume-local:all-tests",
+        "//packages/d2b-provider-volume-virtiofs:all-tests",
+        "//packages/d2b-realm-core:all-tests",
+        "//packages/d2b-resource-api:all-tests",
+        "//packages/d2b-resource-client:all-tests",
+        "//packages/d2b-resource-compiler:all-tests",
+        "//packages/d2b-resource-store:all-tests",
+        "//packages/d2b-resource-store-redb:all-tests",
+        "//packages/d2b-session:all-tests",
+        "//packages/d2b-session-unix:all-tests",
+        "//packages/d2b-sk-frontend:all-tests",
+        "//packages/d2b-telemetry:all-tests",
+        "//packages/d2b-unsafe-local-helper:all-tests",
+        "//packages/d2b-zone-routing:all-tests",
+        "//packages/d2bd:all-tests",
+        "//packages/d2bd-runtime:all-tests",
+        "//packages/xtask:all-tests",
+    ],
+)
+
+test_suite(
+    name = "test-rust-main",
+    tests = [":rust-main-packages"],
+)
+
+test_suite(
+    name = "test-rust-broker",
+    tests = ["//bazel/checks/rust:portable_rust_broker"],
+)
+
+test_suite(
+    name = "test-rust-guest-shell-runner",
+    tests = ["//bazel/checks/rust:portable_rust_guest"],
+)
+
+test_suite(
+    name = "test-rust-local",
+    tests = ["//bazel/checks/rust:portable_rust_local"],
+)
+
+test_suite(
+    name = "test-rust",
+    tests = [
+        ":test-rust-main",
+        ":test-rust-broker",
+        ":test-rust-guest-shell-runner",
+        ":test-rust-local",
+    ],
+)
+
+test_suite(
+    name = "test-rust-no-bash-ast",
+    tests = ["//tests/tools/no-bash-ast-walker:no_bash_ast_test"],
+)
+
+test_suite(
+    name = "test-rust-schema",
+    tests = ["//packages/xtask:schema_reproducibility_test"],
+)
+
+test_suite(
+    name = "test-rust-supply-chain",
+    tests = ["//bazel/checks/nix:flake-eval-x86-realized-supply-chain"],
+)
+
+test_suite(
+    name = "test-rust-leaf-main-workspace",
+    tests = [":test-rust-main"],
+)
+
+test_suite(
+    name = "test-rust-leaf-schema",
+    tests = [":test-rust-schema"],
+)
+
+test_suite(
+    name = "test-rust-leaf-fixture-contracts",
+    tests = [":test-fixture-contracts"],
+)
+
+test_suite(
+    name = "test-rust-leaf-broker",
+    tests = [":test-rust-broker"],
+)
+
+test_suite(
+    name = "test-rust-leaf-guest-shell-runner",
+    tests = [":test-rust-guest-shell-runner"],
+)
+
+test_suite(
+    name = "test-rust-leaf-no-bash-ast",
+    tests = [":test-rust-no-bash-ast"],
+)
+
+test_suite(
+    name = "test-rust-leaf-supply-chain",
+    tests = [":test-rust-supply-chain"],
+)
+
+test_suite(
+    name = "test-fixture-contracts",
+    tests = ["//bazel/checks/fixtures:fixtures_proofs"],
+)
+
+test_suite(
+    name = "test-proofs",
+    tests = [":test-fixture-contracts"],
+)
+
+test_suite(
+    name = "test-flake",
+    tests = ["//bazel/checks/nix:nix_evaluation"],
+)
+
+test_suite(
+    name = "test-flake-x86",
+    tests = [":test-flake"],
+)
+
+test_suite(
+    name = "test-flake-realized",
+    tests = ["//bazel/checks/nix:nix_realized"],
+)
+
+test_suite(
+    name = "test-flake-aarch64",
+    tests = ["//bazel/checks/nix:nix_aarch64"],
+)
+
+test_suite(
+    name = "test-nix-unit",
+    tests = ["//bazel/checks/nix:nix_unit"],
+)
+
+test_suite(
+    name = "test-drift",
+    tests = ["//bazel/checks/policy:drift"],
+)
+
+test_suite(
+    name = "test-policy",
+    tests = ["//bazel/checks/policy:policy_tooling"],
+)
+
+test_suite(
+    name = "test-lint",
+    tests = ["//bazel/checks/policy:lint"],
+)
+
+test_suite(
+    name = "test-changelog",
+    tests = ["//bazel/checks/policy:changelog"],
+)
+
+test_suite(
+    name = "test-performance-budgets",
+    tests = ["//bazel/checks/meta:performance_budgets"],
+)
+
+test_suite(
+    name = "layer1",
+    tests = [
+        ":test-rust",
+        ":test-fixture-contracts",
+        ":test-policy",
+        ":test-flake",
+        ":test-flake-realized",
+        ":test-flake-aarch64",
+        ":test-nix-unit",
+        ":test-performance-budgets",
+    ],
+)
+
+test_suite(
+    name = "check",
+    tests = [":layer1"],
+)
+
+test_suite(
+    name = "check-fast",
+    tests = [":check"],
+)
+
+test_suite(
+    name = "check-tier0",
+    tests = ["//bazel/checks/meta:tier0"],
+)
+
+test_suite(
+    name = "bazel-check",
+    tests = [":check"],
+)
+
+test_suite(
+    name = "test-unit",
+    tests = [":check"],
+)

@@ -179,3 +179,8 @@ rust_doc_test(
     name = "d2b_provider_clipboard_wayland_doc_test",
     crate = "//packages/d2b-provider-clipboard-wayland:d2b_provider_clipboard_wayland",
 )
+
+test_suite(
+    name = "all-tests",
+    tags = ["-local", "-no-remote-exec"],
+)

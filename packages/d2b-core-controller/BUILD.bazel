@@ -209,3 +209,8 @@ rust_doc_test(
     name = "d2b_core_controller_doc_test",
     crate = "//packages/d2b-core-controller:d2b_core_controller",
 )
+
+test_suite(
+    name = "all-tests",
+    tags = ["-local", "-no-remote-exec"],
+)

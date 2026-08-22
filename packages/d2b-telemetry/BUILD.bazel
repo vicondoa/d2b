@@ -69,3 +69,8 @@ rust_doc_test(
     name = "d2b_telemetry_doc_test",
     crate = "//packages/d2b-telemetry:d2b_telemetry",
 )
+
+test_suite(
+    name = "all-tests",
+    tags = ["-local", "-no-remote-exec"],
+)
