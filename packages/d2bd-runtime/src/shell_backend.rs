@@ -1,6 +1,7 @@
 use crate::{
     daemon_audit,
     exec_session::is_unspecified,
+    exec_session::{ComponentSessionExecClient, ExecOpError, GuestOpError},
     guest_control_health::GuestControlHealthError,
     terminal_session::{OutputStreamSel, TerminalBackend},
     typed_error::{GuestControlShellErrorKind, TypedError, UnsafeLocalShellErrorKind},
@@ -29,7 +30,9 @@ pub enum ShellTerminalResponse {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ShellProvider {
+    /// ComponentSession guest provider or its legacy characterization.
     GuestControl,
+    /// Unsafe-local host provider.
     UnsafeLocal,
 }
 
@@ -55,6 +58,16 @@ pub trait ShellBackend: Send + Sync {
         runtime: &tokio::runtime::Handle,
         control_sequence: &mut u64,
     ) -> Result<public_wire::ShellDetachResult, TypedError>;
+
+    /// Reset the named stream when its owning public connection disappears.
+    /// Backends without a distinct reset operation may close normally.
+    fn cancel_attachment(
+        &self,
+        runtime: &tokio::runtime::Handle,
+        control_sequence: &mut u64,
+    ) -> Result<public_wire::ShellDetachResult, TypedError> {
+        self.close_attachment(runtime, control_sequence)
+    }
 }
 
 pub struct EstablishedShell {
@@ -64,6 +77,222 @@ pub struct EstablishedShell {
     pub provider: ShellProvider,
     pub operation_digest: Option<String>,
     pub initial_control_sequence: u64,
+}
+
+/// Persistent-shell backend over a ComponentSession named stream.
+///
+/// Shell lifecycle is still authorized by the ShellSession resource and its
+/// Provider controller. This adapter only translates terminal operations to
+/// the already-admitted stream; it has no process-spawn or broker authority.
+pub struct ComponentSessionShellBackend<D> {
+    public_session: String,
+    resolved_name: public_wire::ShellName,
+    client: ComponentSessionExecClient<D>,
+}
+
+impl<D> fmt::Debug for ComponentSessionShellBackend<D> {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("ComponentSessionShellBackend")
+            .field("public_session", &"<redacted>")
+            .field("resolved_name", &"<redacted>")
+            .field("client", &self.client)
+            .finish()
+    }
+}
+
+impl<D> ComponentSessionShellBackend<D>
+where
+    D: d2b_session::ComponentSessionDriver + 'static,
+{
+    /// Open the fixed terminal named stream after ShellSession admission.
+    pub async fn open(
+        driver: D,
+        stream_number: u16,
+        public_session: String,
+        resolved_name: public_wire::ShellName,
+    ) -> Result<Self, TypedError> {
+        let client = ComponentSessionExecClient::open(
+            driver,
+            stream_number,
+            d2b_contracts_zone_session::v3::component_session::MAX_NAMED_STREAM_QUEUE_BYTES,
+            d2b_contracts_zone_session::v3::component_session::MAX_NAMED_STREAM_QUEUE_BYTES,
+        )
+        .await
+        .map_err(map_component_session_shell_error)?;
+        Ok(Self {
+            public_session,
+            resolved_name,
+            client,
+        })
+    }
+
+    /// Reset the stream after owner cancellation or a disconnected peer.
+    pub fn cancel(&self, runtime: &tokio::runtime::Handle) -> Result<(), TypedError> {
+        runtime
+            .block_on(self.client.cancel())
+            .map_err(map_component_session_shell_error)
+    }
+
+    fn ensure_session(&self, session: &str) -> Result<(), TypedError> {
+        if session == self.public_session {
+            Ok(())
+        } else {
+            Err(shell_failed(
+                crate::typed_error::GuestControlShellErrorKind::StaleSession,
+            ))
+        }
+    }
+}
+
+impl<D> ShellBackend for ComponentSessionShellBackend<D>
+where
+    D: d2b_session::ComponentSessionDriver + 'static,
+{
+    fn handle_op(
+        &self,
+        runtime: &tokio::runtime::Handle,
+        control_sequence: &mut u64,
+        op: ShellTerminalOp,
+    ) -> Result<Option<ShellTerminalResponse>, TypedError> {
+        match op {
+            ShellTerminalOp::WriteStdin(args) => {
+                self.ensure_session(&args.session)?;
+                let data = d2b_core::base64_codec::decode(&args.chunk_base64)
+                    .map_err(|_| shell_protocol_failed())?;
+                let result = if data.is_empty() && args.eof {
+                    runtime
+                        .block_on(
+                            self.client
+                                .close_stdin(args.offset, SHELL_MANAGEMENT_TIMEOUT),
+                        )
+                        .map(|()| crate::terminal_session::WriteStdinOutcome {
+                            accepted_len: 0,
+                            next_offset: args.offset,
+                            backpressured: false,
+                            stdin_closed: true,
+                        })
+                } else {
+                    runtime.block_on(self.client.write_stdin(
+                        args.offset,
+                        data,
+                        args.eof,
+                        SHELL_MANAGEMENT_TIMEOUT,
+                    ))
+                }
+                .map_err(map_component_session_shell_error)?;
+                Ok(Some(ShellTerminalResponse::WriteStdin(
+                    tw::TerminalWriteStdinResult {
+                        accepted_len: result.accepted_len,
+                        next_offset: result.next_offset,
+                        backpressured: result.backpressured,
+                        stdin_closed: result.stdin_closed,
+                    },
+                )))
+            }
+            ShellTerminalOp::ReadOutput(args) => {
+                self.ensure_session(&args.session)?;
+                if args.stream != tw::TerminalStream::Stdout {
+                    return Err(shell_protocol_failed());
+                }
+                let (timeout_ms, deadline) = backend_shell_poll_timeout(args.timeout_ms, args.wait);
+                let result = runtime
+                    .block_on(self.client.read_output(
+                        OutputStreamSel::Stdout,
+                        args.offset,
+                        args.max_len,
+                        args.wait,
+                        timeout_ms,
+                        deadline,
+                    ))
+                    .map_err(map_component_session_shell_error)?;
+                Ok(Some(ShellTerminalResponse::ReadOutput(
+                    tw::TerminalReadOutputChunk {
+                        data_base64: d2b_core::base64_codec::encode(&result.data),
+                        next_offset: result.next_offset,
+                        eof: result.eof,
+                        dropped_bytes: result.dropped_bytes,
+                        truncated: result.truncated,
+                        timed_out: result.timed_out,
+                    },
+                )))
+            }
+            ShellTerminalOp::Resize(args) => {
+                self.ensure_session(&args.session)?;
+                *control_sequence = control_sequence.saturating_add(1);
+                runtime
+                    .block_on(self.client.resize(
+                        *control_sequence,
+                        args.rows,
+                        args.cols,
+                        SHELL_MANAGEMENT_TIMEOUT,
+                    ))
+                    .map_err(map_component_session_shell_error)?;
+                Ok(Some(ShellTerminalResponse::Delivered))
+            }
+        }
+    }
+
+    fn close_attachment(
+        &self,
+        runtime: &tokio::runtime::Handle,
+        control_sequence: &mut u64,
+    ) -> Result<public_wire::ShellDetachResult, TypedError> {
+        *control_sequence = control_sequence.saturating_add(1);
+        runtime
+            .block_on(self.client.close_stream())
+            .map_err(map_component_session_shell_error)?;
+        Ok(public_wire::ShellDetachResult {
+            resolved_name: self.resolved_name.clone(),
+            detached: true,
+            cause: Some(public_wire::ShellCloseCause::ClientDetach),
+        })
+    }
+
+    fn cancel_attachment(
+        &self,
+        runtime: &tokio::runtime::Handle,
+        control_sequence: &mut u64,
+    ) -> Result<public_wire::ShellDetachResult, TypedError> {
+        *control_sequence = control_sequence.saturating_add(1);
+        runtime
+            .block_on(self.client.cancel())
+            .map_err(map_component_session_shell_error)?;
+        Ok(public_wire::ShellDetachResult {
+            resolved_name: self.resolved_name.clone(),
+            detached: true,
+            cause: Some(public_wire::ShellCloseCause::ClientDetach),
+        })
+    }
+}
+
+fn map_component_session_shell_error(error: ExecOpError) -> TypedError {
+    use crate::typed_error::GuestControlShellErrorKind as Kind;
+    let kind = match error {
+        ExecOpError::Transport => Kind::Transport,
+        ExecOpError::Auth => Kind::Auth,
+        ExecOpError::StaleSession => Kind::StaleSession,
+        ExecOpError::Protocol => Kind::Protocol,
+        ExecOpError::Timeout => Kind::Timeout,
+        ExecOpError::OldGeneration | ExecOpError::Capability => Kind::Capability,
+        ExecOpError::DetachedUnavailable => Kind::Capability,
+        ExecOpError::Guest(GuestOpError::ExecNotFound | GuestOpError::ExecExpired) => {
+            Kind::NotFound
+        }
+        ExecOpError::Guest(GuestOpError::StdinBackpressure) => Kind::Capacity,
+        ExecOpError::Guest(GuestOpError::OffsetMismatch) => Kind::Protocol,
+        ExecOpError::Guest(GuestOpError::StdinClosed | GuestOpError::StdinNotOpen) => {
+            Kind::StaleSession
+        }
+        ExecOpError::Guest(GuestOpError::ControlSeqMismatch) => Kind::StaleSession,
+        ExecOpError::Guest(GuestOpError::RateLimited) => Kind::Capacity,
+        ExecOpError::Guest(GuestOpError::MaxChunkExceeded | GuestOpError::InvalidProgram) => {
+            Kind::Protocol
+        }
+        ExecOpError::Guest(GuestOpError::ExecAlreadyExited) => Kind::NotFound,
+        ExecOpError::Guest(GuestOpError::Protocol | GuestOpError::Other) => Kind::GuestError,
+    };
+    shell_failed(kind)
 }
 
 impl fmt::Debug for EstablishedShell {
@@ -212,6 +441,23 @@ pub fn best_effort_close(
     control_sequence: &mut u64,
 ) -> daemon_audit::ShellAuditResult {
     match backend.close_attachment(runtime, control_sequence) {
+        Ok(_) => daemon_audit::ShellAuditResult::Closed,
+        Err(TypedError::UnsafeLocalShellFailed {
+            kind: UnsafeLocalShellErrorKind::Timeout,
+        })
+        | Err(TypedError::GuestControlShellFailed {
+            kind: crate::typed_error::GuestControlShellErrorKind::Timeout,
+        }) => daemon_audit::ShellAuditResult::Timeout,
+        Err(_) => daemon_audit::ShellAuditResult::Error,
+    }
+}
+
+pub fn best_effort_cancel(
+    backend: &dyn ShellBackend,
+    runtime: &tokio::runtime::Handle,
+    control_sequence: &mut u64,
+) -> daemon_audit::ShellAuditResult {
+    match backend.cancel_attachment(runtime, control_sequence) {
         Ok(_) => daemon_audit::ShellAuditResult::Closed,
         Err(TypedError::UnsafeLocalShellFailed {
             kind: UnsafeLocalShellErrorKind::Timeout,
@@ -583,6 +829,28 @@ mod tests {
                 detached: true,
                 cause: Some(public_wire::ShellCloseCause::ClientDetach),
                 ..
+            }
+        ));
+    }
+
+    #[test]
+    fn component_session_shell_errors_stay_in_the_closed_shell_vocabulary() {
+        assert!(matches!(
+            map_component_session_shell_error(ExecOpError::Auth),
+            TypedError::GuestControlShellFailed {
+                kind: GuestControlShellErrorKind::Auth
+            }
+        ));
+        assert!(matches!(
+            map_component_session_shell_error(ExecOpError::Guest(GuestOpError::StdinBackpressure)),
+            TypedError::GuestControlShellFailed {
+                kind: GuestControlShellErrorKind::Capacity
+            }
+        ));
+        assert!(matches!(
+            map_component_session_shell_error(ExecOpError::Transport),
+            TypedError::GuestControlShellFailed {
+                kind: GuestControlShellErrorKind::Transport
             }
         ));
     }

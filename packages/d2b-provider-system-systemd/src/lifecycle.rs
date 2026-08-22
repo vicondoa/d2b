@@ -1,5 +1,6 @@
 //! Bounded systemd Provider lifecycle policy.
 
+use d2b_contracts_resource::v3::process::EphemeralProcessSpec;
 use d2b_process_conformance::{ProcessExitClass, ProcessOutcome};
 
 /// Provider-level systemd settings.
@@ -139,7 +140,8 @@ impl RestartPolicy {
 /// One-shot EphemeralProcess lifecycle.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct EphemeralProcessController {
-    ttl_seconds: u64,
+    successful_ttl_seconds: u64,
+    failed_ttl_seconds: u64,
     ttl_remaining: Option<u64>,
     incident_hold: bool,
     terminal: Option<ProcessExitClass>,
@@ -149,7 +151,32 @@ impl EphemeralProcessController {
     /// Construct a one-shot process with a bounded terminal TTL.
     pub const fn new(ttl_seconds: u64, incident_hold: bool) -> Self {
         Self {
-            ttl_seconds,
+            successful_ttl_seconds: ttl_seconds,
+            failed_ttl_seconds: ttl_seconds,
+            ttl_remaining: None,
+            incident_hold,
+            terminal: None,
+        }
+    }
+
+    /// Build lifecycle state from the resource-owned EphemeralProcess
+    /// retention policy.
+    pub fn from_spec(spec: &EphemeralProcessSpec) -> Self {
+        Self::with_ttls(
+            spec.successful_ttl().as_millis().div_ceil(1_000),
+            spec.failed_ttl().as_millis().div_ceil(1_000),
+            spec.incident_hold(),
+        )
+    }
+
+    fn with_ttls(
+        successful_ttl_seconds: u64,
+        failed_ttl_seconds: u64,
+        incident_hold: bool,
+    ) -> Self {
+        Self {
+            successful_ttl_seconds,
+            failed_ttl_seconds,
             ttl_remaining: None,
             incident_hold,
             terminal: None,
@@ -160,7 +187,11 @@ impl EphemeralProcessController {
     pub fn observe(&mut self, outcome: ProcessOutcome) -> ProcessExitClass {
         self.terminal = Some(outcome.exit_class);
         if self.ttl_remaining.is_none() {
-            self.ttl_remaining = Some(self.ttl_seconds);
+            self.ttl_remaining = Some(if outcome.exit_class == ProcessExitClass::CleanExit {
+                self.successful_ttl_seconds
+            } else {
+                self.failed_ttl_seconds
+            });
         }
         outcome.exit_class
     }

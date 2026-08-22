@@ -1,9 +1,8 @@
 //! CLI-side `d2b vm exec` owner-connection FSM + host terminal safety.
 //!
-//! `d2b vm exec` routes one owner connection over the daemon `public.sock`
-//! `exec` verb: a single `Start` op establishes the daemon-held authenticated
-//! guest-control session, then the remaining ops
-//! (`WriteStdin`/`ReadOutput`/`Signal`/`Resize`/`Wait`/`Close`) drive it. The
+//! `d2b vm exec` establishes one Process/EphemeralProcess resource owner over
+//! the daemon `public.sock`, then drives the authenticated named stream with
+//! (`WriteStdin`/`ReadOutput`/`Signal`/`Resize`/`Wait`/`Close`) operations. The
 //! CLI never opens a new connection per op and never allocates a host PTY -
 //! the guest owns the PTY (helper-exec). This module is the pure FSM +
 //! host-termios safety; the real socket/signal/host wiring lives in `lib.rs`
@@ -16,7 +15,9 @@ use std::sync::{Arc, Mutex};
 use d2b_contracts_control::public_wire::{
     ExecCloseArgs, ExecOp, ExecOpResponse, ExecReadOutputArgs, ExecReadOutputResult,
     ExecResizeArgs, ExecSignalArgs, ExecStartResult, ExecStream, ExecTerminalStatus, ExecWaitArgs,
-    ExecWaitResult, ExecWriteStdinArgs, ExecWriteStdinResult,
+    ExecWaitResult, ExecWriteStdinArgs, ExecWriteStdinResult, NamedProcessStreamErrorKind,
+    NamedProcessStreamRequest, NamedProcessStreamRequestFrame, NamedProcessStreamResponse,
+    NamedProcessStreamResponseFrame,
 };
 use d2b_core::base64_codec;
 use serde_json::Value;
@@ -185,6 +186,10 @@ pub fn exit_for_kind(kind: &str) -> (i32, ExecFailureSource) {
         "guest-control-transport-unavailable" | "guest-control-timeout" => {
             (EXIT_EXEC_TRANSPORT, ExecFailureSource::Transport)
         }
+        "resource-provider-unavailable" | "resource-not-found" | "session-disconnected" => {
+            (EXIT_EXEC_TRANSPORT, ExecFailureSource::Transport)
+        }
+        "backpressure" => (EXIT_EXEC_CAPACITY, ExecFailureSource::GuestControl),
         "guest-control-unavailable-old-generation"
         | "guest-control-capability-unavailable"
         | "guest-control-exec-detached-unavailable" => {
@@ -199,7 +204,9 @@ pub fn exit_for_kind(kind: &str) -> (i32, ExecFailureSource) {
         | "guest-control-exec-expired" => (EXIT_EXEC_PROTOCOL, ExecFailureSource::Protocol),
         "guest-control-invalid-program" => (2, ExecFailureSource::GuestControl),
         "guest-control-auth-failed" => (EXIT_EXEC_AUTH, ExecFailureSource::GuestControl),
-        "guest-control-stale-session" => (EXIT_EXEC_AUTH, ExecFailureSource::GuestControl),
+        "guest-control-stale-session" | "stale-session" => {
+            (EXIT_EXEC_AUTH, ExecFailureSource::GuestControl)
+        }
         // The daemon's admin gate refused the caller before any guest contact
         // (caller not in `d2b.site.adminUsers`). It is an authorization
         // failure, NOT an internal bug - map it to the AUTH reserved code so
@@ -207,6 +214,145 @@ pub fn exit_for_kind(kind: &str) -> (i32, ExecFailureSource) {
         "authz-not-admin" => (EXIT_EXEC_AUTH, ExecFailureSource::GuestControl),
         "guest-control-exec-internal" => (EXIT_EXEC_INTERNAL, ExecFailureSource::Internal),
         _ => (EXIT_EXEC_INTERNAL, ExecFailureSource::Internal),
+    }
+}
+
+/// Translate one established Exec operation to the authenticated named-stream
+/// request carried by its Process or ShellSession attachment.
+///
+/// Start and detached-management operations are Resource API calls and
+/// therefore do not belong on an already-open named stream.
+pub fn named_stream_request(op: &ExecOp) -> Result<NamedProcessStreamRequest, ExecClientError> {
+    named_stream_request_with_offset(op, 0)
+}
+
+/// Translate an Exec operation while supplying the current stdin cursor for a
+/// `Close` half-close.
+pub fn named_stream_request_with_offset(
+    op: &ExecOp,
+    stdin_offset: u64,
+) -> Result<NamedProcessStreamRequest, ExecClientError> {
+    match op {
+        ExecOp::WriteStdin(args) => Ok(NamedProcessStreamRequest::Stdin {
+            offset: args.offset,
+            chunk_base64: args.chunk_base64.clone(),
+            eof: args.eof,
+        }),
+        ExecOp::ReadOutput(args) => Ok(NamedProcessStreamRequest::Read {
+            stream: args.stream,
+            offset: args.offset,
+            max_len: args.max_len,
+            wait: args.wait,
+            timeout_ms: args.timeout_ms,
+        }),
+        ExecOp::Signal(args) => Ok(NamedProcessStreamRequest::Signal {
+            control_seq: args.op_id,
+            signo: args.signo,
+        }),
+        ExecOp::Resize(args) => Ok(NamedProcessStreamRequest::Resize {
+            control_seq: args.op_id,
+            rows: args.rows,
+            cols: args.cols,
+        }),
+        ExecOp::Wait(args) => Ok(NamedProcessStreamRequest::Wait {
+            timeout_ms: args.timeout_ms,
+        }),
+        ExecOp::Close(_) => Ok(NamedProcessStreamRequest::CloseStdin {
+            offset: stdin_offset,
+        }),
+        ExecOp::Start(_)
+        | ExecOp::List(_)
+        | ExecOp::Logs(_)
+        | ExecOp::Status(_)
+        | ExecOp::Kill(_) => Err(ExecClientError::protocol(
+            "operation is not valid on a Process named stream",
+        )),
+    }
+}
+
+/// Wrap one named-stream request in its bounded in-stream correlation frame.
+pub fn named_stream_request_frame(
+    op: &ExecOp,
+    request_id: u64,
+    stdin_offset: u64,
+) -> Result<NamedProcessStreamRequestFrame, ExecClientError> {
+    if request_id == 0 {
+        return Err(ExecClientError::protocol(
+            "named-stream request id must be non-zero",
+        ));
+    }
+    Ok(NamedProcessStreamRequestFrame::new(
+        request_id,
+        named_stream_request_with_offset(op, stdin_offset)?,
+    ))
+}
+
+/// Translate one named-stream response into the existing Exec wire result.
+pub fn named_stream_response(
+    response: NamedProcessStreamResponse,
+) -> Result<ExecOpResponse, ExecClientError> {
+    named_stream_response_for(None, response)
+}
+
+/// Decode one correlated named-stream response and restore the existing Exec
+/// result envelope.
+pub fn named_stream_response_frame(
+    op: &ExecOp,
+    bytes: &[u8],
+) -> Result<(u64, ExecOpResponse), ExecClientError> {
+    let frame: NamedProcessStreamResponseFrame = serde_json::from_slice(bytes)
+        .map_err(|_| ExecClientError::protocol("named-stream response frame was malformed"))?;
+    if frame.request_id == 0 {
+        return Err(ExecClientError::protocol(
+            "named-stream response id must be non-zero",
+        ));
+    }
+    let request = named_stream_request(op)?;
+    Ok((
+        frame.request_id,
+        named_stream_response_for(Some(&request), frame.response)?,
+    ))
+}
+
+/// Translate a named-stream response while preserving whether a delivered
+/// acknowledgement belongs to a signal or resize operation.
+pub fn named_stream_response_for(
+    request: Option<&NamedProcessStreamRequest>,
+    response: NamedProcessStreamResponse,
+) -> Result<ExecOpResponse, ExecClientError> {
+    match response {
+        NamedProcessStreamResponse::Stdin(result) => Ok(ExecOpResponse::WriteStdin(result)),
+        NamedProcessStreamResponse::Output(result) => Ok(ExecOpResponse::ReadOutput(result)),
+        NamedProcessStreamResponse::Delivered(result) => match request {
+            Some(NamedProcessStreamRequest::Resize { .. }) => Ok(ExecOpResponse::Resize(result)),
+            _ => Ok(ExecOpResponse::Signal(result)),
+        },
+        NamedProcessStreamResponse::Wait(result) => Ok(ExecOpResponse::Wait(result)),
+        NamedProcessStreamResponse::Closed(result) => Ok(ExecOpResponse::Close(
+            d2b_contracts_control::public_wire::ExecCloseResult {
+                stdin_closed: result.stdin_closed,
+            },
+        )),
+        NamedProcessStreamResponse::Terminal(status) => Ok(ExecOpResponse::Wait(ExecWaitResult {
+            running: false,
+            terminal_status: Some(status),
+        })),
+        NamedProcessStreamResponse::Error(error) => {
+            let kind = match error.kind {
+                NamedProcessStreamErrorKind::Authorization => "guest-control-auth-failed",
+                NamedProcessStreamErrorKind::StaleSession => "stale-session",
+                NamedProcessStreamErrorKind::NotFound => "guest-control-exec-not-found",
+                NamedProcessStreamErrorKind::Backpressure => "backpressure",
+                NamedProcessStreamErrorKind::Protocol => "guest-control-protocol-error",
+                NamedProcessStreamErrorKind::Timeout => "guest-control-timeout",
+                NamedProcessStreamErrorKind::Disconnected => "session-disconnected",
+            };
+            Err(ExecClientError::from_daemon_error(
+                kind,
+                "the authenticated Process named stream rejected the operation",
+                "inspect the Process resource status and retry when its ComponentSession is ready",
+            ))
+        }
     }
 }
 
@@ -676,23 +822,6 @@ fn write_output<H: ExecHostIo>(
     };
     result
         .map_err(|error| ExecClientError::internal(format!("writing host output failed: {error}")))
-}
-
-/// Encode an [`ExecOp`] as the `exec` daemon wire frame: the adjacently-tagged
-/// `{ "op": …, "args": … }` body with a `type: "exec"` discriminator and an
-/// envelope-level `opId` correlation id. The daemon echoes `opId` on
-/// the matching response so a pending long-poll and an urgent control reply can
-/// be matched out of order.
-pub fn encode_exec_op_frame(op: &ExecOp, op_id: u64) -> Result<Vec<u8>, ExecClientError> {
-    let mut value = serde_json::to_value(op)
-        .map_err(|error| ExecClientError::internal(format!("encoding exec op failed: {error}")))?;
-    let object = value
-        .as_object_mut()
-        .ok_or_else(|| ExecClientError::internal("encoded exec op was not a JSON object"))?;
-    object.insert("type".to_owned(), Value::String("exec".to_owned()));
-    object.insert("opId".to_owned(), Value::from(op_id));
-    serde_json::to_vec(&value)
-        .map_err(|error| ExecClientError::internal(format!("serializing exec op failed: {error}")))
 }
 
 /// Decode an `execResponse` (or `error`) daemon wire frame into an
@@ -2012,5 +2141,63 @@ mod tests {
             assert!(!err.kind.is_empty());
             assert!(!err.remediation.is_empty());
         }
+    }
+
+    #[test]
+    fn named_stream_mapping_preserves_control_operation_and_redaction() {
+        let resize = ExecOp::Resize(ExecResizeArgs {
+            session: "opaque-session".to_owned(),
+            rows: 24,
+            cols: 80,
+            op_id: 9,
+        });
+        let request = named_stream_request(&resize).expect("resize maps to named stream");
+        assert!(matches!(
+            request,
+            NamedProcessStreamRequest::Resize {
+                control_seq: 9,
+                rows: 24,
+                cols: 80
+            }
+        ));
+        let close = named_stream_request_with_offset(
+            &ExecOp::Close(ExecCloseArgs {
+                session: "opaque-session".to_owned(),
+            }),
+            12,
+        )
+        .expect("close maps to a named-stream half-close");
+        assert!(matches!(
+            close,
+            NamedProcessStreamRequest::CloseStdin { offset: 12 }
+        ));
+        let frame = named_stream_request_frame(&resize, 17, 12).expect("frame has correlation");
+        assert_eq!(frame.request_id, 17);
+        let response_frame =
+            d2b_contracts_control::public_wire::NamedProcessStreamResponseFrame::new(
+                17,
+                NamedProcessStreamResponse::Delivered(ExecControlResult { delivered: true }),
+            );
+        let (_, decoded) = named_stream_response_frame(
+            &resize,
+            &serde_json::to_vec(&response_frame).expect("response frame serializes"),
+        )
+        .expect("response frame decodes");
+        assert!(matches!(decoded, ExecOpResponse::Resize(_)));
+        let response = named_stream_response_for(
+            Some(&request),
+            NamedProcessStreamResponse::Delivered(ExecControlResult { delivered: true }),
+        )
+        .expect("resize response maps");
+        assert!(matches!(response, ExecOpResponse::Resize(_)));
+
+        let error = named_stream_response(NamedProcessStreamResponse::Error(
+            d2b_contracts_control::public_wire::NamedProcessStreamError {
+                kind: NamedProcessStreamErrorKind::Disconnected,
+            },
+        ))
+        .expect_err("disconnect is a typed failure");
+        assert_eq!(error.kind, "session-disconnected");
+        assert!(!format!("{error:?}").contains("opaque-session"));
     }
 }

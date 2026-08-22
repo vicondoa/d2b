@@ -1667,11 +1667,13 @@ dependencies = [
 name = "d2b-provider-system-systemd"
 version = "0.0.0-bootstrap"
 dependencies = [
+ "d2b-contracts-control",
  "d2b-contracts-resource",
  "d2b-contracts-zone-session",
  "d2b-process-conformance",
  "d2b-provider-toolkit",
  "serde",
+ "serde_json",
  "tokio",
 ]
 
@@ -1795,9 +1797,11 @@ name = "d2b-resource-client"
 version = "0.0.0-bootstrap"
 dependencies = [
  "d2b-contracts",
+ "d2b-contracts-control",
  "d2b-contracts-resource",
  "d2b-contracts-zone-session",
  "d2b-core-controller",
+ "serde_json",
  "tokio",
 ]
 
@@ -1974,6 +1978,7 @@ dependencies = [
  "d2b-provider-notification-desktop",
  "d2b-provider-runtime-azure-container-apps",
  "d2b-provider-runtime-cloud-hypervisor",
+ "d2b-provider-shell-terminal",
  "d2b-provider-supervisor",
  "d2b-provider-system-core",
  "d2b-provider-system-minijail",

@@ -47,6 +47,10 @@ fn supervisor_rejects_stale_generation_and_reused_capability() {
             SupervisorIdentity::new([1; 32], [2; 32], opened.supervisor_generation()).unwrap(),
         )
         .unwrap();
+    assert_eq!(
+        supervisor.process_ref().to_canonical_string(),
+        "Process/guest-alice-main"
+    );
 
     assert!(
         supervisor
@@ -109,6 +113,7 @@ fn detach_releases_the_bounded_attachment_slot() {
             AttachRequest::new(opened.supervisor_generation(), 0).unwrap(),
         )
         .unwrap();
+    assert_eq!(first.stream_name(), "terminal");
     assert!(
         supervisor
             .attach(

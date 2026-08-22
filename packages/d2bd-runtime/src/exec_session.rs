@@ -1,12 +1,12 @@
 //! In-process exec session table + per-session worker for `d2b vm exec`.
 //!
-//! The daemon owns a long-lived, authenticated guest-control client per exec
-//! session. The CLI drives the session through admin-gated `public.sock`
-//! round trips (one frame per [`ExecOp`]); the daemon never opens a new
-//! transport per op. A dedicated worker thread (current-thread tokio runtime)
-//! owns the authenticated client, the guest `exec_id`, the authoritative stdin
-//! offset, and the monotone control sequence; it is reached over a bounded
-//! sync command channel.
+//! The daemon owns a long-lived, authenticated Process named-stream client per
+//! exec session. The CLI establishes the resource owner through the
+//! admin-gated `public.sock` route, then sends one correlated named-stream
+//! frame per [`ExecOp`]. A dedicated worker thread (current-thread tokio
+//! runtime) owns the authenticated client, the target-local process resource,
+//! the authoritative stdin offset, and the monotone control sequence; it is
+//! reached over a bounded sync command channel.
 //!
 //! Concurrency contract (no head-of-line blocking): long-poll ops
 //! (`ReadOutput`, `Wait`) are spawned onto the worker runtime so the worker
@@ -15,15 +15,22 @@
 //! they mutate shared session state (stdin offset, control sequence).
 //!
 //! Teardown contract (non-detached): when the owner connection drops, the
-//! command channel closes, the worker returns, the runtime is dropped, and
-//! every clone of the authenticated client is dropped with it. That prompts
-//! the guest's `close_connection` → PTY hangup→grace→stop. The daemon
-//! never issues `ExecCancel` for a non-detached session.
+//! command channel closes, the worker explicitly cancels/resets the named
+//! stream and target-local process before returning. The runtime is then
+//! dropped, so no attachment or process remains owned by a disconnected
+//! caller.
 
-use std::collections::HashMap;
-use std::sync::{Arc, Mutex};
+use std::sync::{
+    Arc, Mutex,
+    atomic::AtomicU64,
+    atomic::{AtomicBool, Ordering},
+};
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
+use std::{
+    collections::{BTreeMap, HashMap},
+    sync::Weak,
+};
 
 use async_trait::async_trait;
 
@@ -32,15 +39,16 @@ use d2b_contracts_control::guest_wire::GUEST_CONTROL_PROTOCOL_VERSION;
 use d2b_contracts_control::public_wire::{
     EXEC_MAX_CHUNK_BYTES, ExecCloseResult, ExecControlResult, ExecOp, ExecOpResponse,
     ExecReadOutputResult, ExecStartResult, ExecStream, ExecTerminalStatus, ExecWaitResult,
-    ExecWriteStdinResult,
+    ExecWriteStdinResult, NamedProcessStreamErrorKind, NamedProcessStreamRequest,
+    NamedProcessStreamRequestFrame, NamedProcessStreamResponse, NamedProcessStreamResponseFrame,
 };
 use d2b_core::base64_codec;
+use d2b_session::{ComponentSessionDriver, StreamEvent, StreamId};
 use protobuf::{EnumOrUnknown, MessageField};
 use tokio::sync::{mpsc, oneshot};
 
 use crate::guest_control_health::GuestControlHealthError;
 use crate::terminal_session::{OutputStreamSel, TerminalBackend, TerminalKind};
-#[cfg(test)]
 use crate::terminal_session::{ReadOutputOutcome, WaitOutcome, WriteStdinOutcome};
 
 /// Closed enum of per-op proxy failures. Each maps to a redaction-safe slug;
@@ -282,6 +290,564 @@ pub trait ExecGuestClient: TerminalBackend<Error = ExecOpError> {}
 
 impl<T> ExecGuestClient for T where T: TerminalBackend<Error = ExecOpError> {}
 
+/// ComponentSession named-stream implementation of the terminal backend.
+///
+/// The stream is admitted by the authenticated session before this value is
+/// constructed. Resource identity and caller authorization therefore stay in
+/// the Resource API/session layers; this adapter only moves bounded typed
+/// control messages and returns redacted protocol failures.
+const MAX_PENDING_NAMED_RESPONSES: usize = 64;
+
+pub struct ComponentSessionExecClient<D> {
+    inner: Arc<ComponentSessionExecClientInner<D>>,
+}
+
+struct ComponentSessionExecClientInner<D> {
+    driver: Arc<D>,
+    stream: StreamId,
+    closed: AtomicBool,
+    next_request_id: AtomicU64,
+    waiters: Mutex<BTreeMap<u64, oneshot::Sender<Result<NamedProcessStreamResponse, ExecOpError>>>>,
+    late_responses: Mutex<BTreeMap<u64, NamedProcessStreamResponse>>,
+    pending_credit: Mutex<u32>,
+    send_lock: tokio::sync::Mutex<()>,
+    demux_abort: Mutex<Option<tokio::task::AbortHandle>>,
+    reset_sent: AtomicBool,
+}
+
+impl<D> std::fmt::Debug for ComponentSessionExecClient<D> {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("ComponentSessionExecClient")
+            .field("stream", &"<redacted>")
+            .field("closed", &self.inner.closed.load(Ordering::Acquire))
+            .finish()
+    }
+}
+
+impl<D> ComponentSessionExecClient<D>
+where
+    D: ComponentSessionDriver + 'static,
+{
+    /// Open the fixed process named stream on an authenticated session.
+    pub async fn open(
+        driver: D,
+        stream_number: u16,
+        send_credit: u32,
+        receive_credit: u32,
+    ) -> Result<Self, ExecOpError> {
+        let stream = StreamId::new(stream_number).map_err(|_| ExecOpError::Protocol)?;
+        driver
+            .open_named_stream(stream, send_credit, receive_credit)
+            .await
+            .map_err(|_| ExecOpError::Transport)?;
+        let inner = Arc::new(ComponentSessionExecClientInner {
+            driver: Arc::new(driver),
+            stream,
+            closed: AtomicBool::new(false),
+            next_request_id: AtomicU64::new(1),
+            waiters: Mutex::new(BTreeMap::new()),
+            late_responses: Mutex::new(BTreeMap::new()),
+            pending_credit: Mutex::new(0),
+            send_lock: tokio::sync::Mutex::new(()),
+            demux_abort: Mutex::new(None),
+            reset_sent: AtomicBool::new(false),
+        });
+        let task = tokio::spawn(named_stream_demux(Arc::downgrade(&inner)));
+        *inner
+            .demux_abort
+            .lock()
+            .map_err(|_| ExecOpError::Protocol)? = Some(task.abort_handle());
+        Ok(Self { inner })
+    }
+
+    /// Cancel/reset the named stream after owner disconnect or timeout.
+    pub async fn cancel(&self) -> Result<(), ExecOpError> {
+        self.inner.closed.store(true, Ordering::Release);
+        self.inner.stop_demux();
+        self.inner.fail_waiters(ExecOpError::Transport);
+        self.inner
+            .late_responses
+            .lock()
+            .map_err(|_| ExecOpError::Protocol)?
+            .clear();
+        *self
+            .inner
+            .pending_credit
+            .lock()
+            .map_err(|_| ExecOpError::Protocol)? = 0;
+        if self.inner.reset_sent.swap(true, Ordering::AcqRel) {
+            return Ok(());
+        }
+        self.inner
+            .driver
+            .reset_named_stream(self.inner.stream)
+            .await
+            .map_err(|_| ExecOpError::Transport)
+    }
+
+    /// Acknowledge that the last received response reached its downstream
+    /// consumer and release its ComponentSession receive credit.
+    pub async fn acknowledge_received(&self) -> Result<(), ExecOpError> {
+        self.flush_pending_credit().await
+    }
+
+    /// Close the named stream after a clean owner detach.
+    pub async fn close_stream(&self) -> Result<(), ExecOpError> {
+        if self.inner.closed.swap(true, Ordering::AcqRel) {
+            return Ok(());
+        }
+        self.inner.stop_demux();
+        self.inner.fail_waiters(ExecOpError::Transport);
+        self.flush_pending_credit().await?;
+        self.inner
+            .driver
+            .close_named_stream(self.inner.stream)
+            .await
+            .map_err(|_| ExecOpError::Transport)?;
+        self.inner
+            .late_responses
+            .lock()
+            .map_err(|_| ExecOpError::Protocol)?
+            .clear();
+        Ok(())
+    }
+
+    async fn request(
+        &self,
+        request: NamedProcessStreamRequest,
+        timeout: Duration,
+    ) -> Result<NamedProcessStreamResponse, ExecOpError> {
+        if self.inner.closed.load(Ordering::Acquire) {
+            return Err(ExecOpError::StaleSession);
+        }
+        self.flush_pending_credit().await?;
+        let request_id = self.inner.next_request_id.fetch_add(1, Ordering::AcqRel);
+        if request_id == 0 {
+            return Err(ExecOpError::Protocol);
+        }
+        let frame = serde_json::to_vec(&NamedProcessStreamRequestFrame::new(request_id, request))
+            .map_err(|_| ExecOpError::Protocol)?;
+        if frame.len()
+            > d2b_contracts_zone_session::v3::component_session::MAX_LOGICAL_MESSAGE_BYTES as usize
+        {
+            return Err(ExecOpError::Protocol);
+        }
+        let (reply, receive) = oneshot::channel();
+        if let Some(response) = self
+            .inner
+            .late_responses
+            .lock()
+            .map_err(|_| ExecOpError::Protocol)?
+            .remove(&request_id)
+        {
+            return Ok(response);
+        }
+        {
+            let mut waiters = self
+                .inner
+                .waiters
+                .lock()
+                .map_err(|_| ExecOpError::Protocol)?;
+            if waiters.len() >= MAX_PENDING_NAMED_RESPONSES {
+                return Err(ExecOpError::Guest(GuestOpError::StdinBackpressure));
+            }
+            waiters.insert(request_id, reply);
+        }
+        let send_result = {
+            let _send_lock = self.inner.send_lock.lock().await;
+            self.inner
+                .driver
+                .send_named_stream(self.inner.stream, frame)
+                .await
+        };
+        if send_result.is_err() {
+            self.inner
+                .waiters
+                .lock()
+                .map_err(|_| ExecOpError::Protocol)?
+                .remove(&request_id);
+            return Err(ExecOpError::Transport);
+        }
+        match tokio::time::timeout(timeout, receive).await {
+            Ok(Ok(response)) => response,
+            Ok(Err(_)) => Err(ExecOpError::Transport),
+            Err(_) => {
+                self.inner
+                    .waiters
+                    .lock()
+                    .map_err(|_| ExecOpError::Protocol)?
+                    .remove(&request_id);
+                Err(ExecOpError::Timeout)
+            }
+        }
+    }
+
+    async fn flush_pending_credit(&self) -> Result<(), ExecOpError> {
+        let credit = {
+            let mut pending = self
+                .inner
+                .pending_credit
+                .lock()
+                .map_err(|_| ExecOpError::Protocol)?;
+            std::mem::take(&mut *pending)
+        };
+        if credit == 0 {
+            return Ok(());
+        }
+        self.inner
+            .driver
+            .grant_named_stream_credit(self.inner.stream, credit)
+            .await
+            .map_err(|_| ExecOpError::Transport)
+    }
+
+    fn map_error(kind: NamedProcessStreamErrorKind) -> ExecOpError {
+        match kind {
+            NamedProcessStreamErrorKind::Authorization => ExecOpError::Auth,
+            NamedProcessStreamErrorKind::StaleSession => ExecOpError::StaleSession,
+            NamedProcessStreamErrorKind::NotFound => ExecOpError::Guest(GuestOpError::ExecNotFound),
+            NamedProcessStreamErrorKind::Backpressure => {
+                ExecOpError::Guest(GuestOpError::StdinBackpressure)
+            }
+            NamedProcessStreamErrorKind::Protocol => ExecOpError::Protocol,
+            NamedProcessStreamErrorKind::Timeout => ExecOpError::Timeout,
+            NamedProcessStreamErrorKind::Disconnected => ExecOpError::Transport,
+        }
+    }
+
+    fn response_error(
+        response: NamedProcessStreamResponse,
+    ) -> Result<NamedProcessStreamResponse, ExecOpError> {
+        match response {
+            NamedProcessStreamResponse::Error(error) => Err(Self::map_error(error.kind)),
+            response => Ok(response),
+        }
+    }
+
+    fn terminal_kind(status: &ExecTerminalStatus) -> Option<TerminalKind> {
+        match status {
+            ExecTerminalStatus::Exited { code } => Some(TerminalKind::Exited(*code)),
+            ExecTerminalStatus::Signaled { signal } => Some(TerminalKind::Signaled(*signal)),
+            ExecTerminalStatus::Error { .. } => Some(TerminalKind::Error("process-stream-error")),
+        }
+    }
+}
+
+impl<D> Drop for ComponentSessionExecClient<D> {
+    fn drop(&mut self) {
+        self.inner.closed.store(true, Ordering::Release);
+        self.inner.stop_demux();
+        self.inner.fail_waiters(ExecOpError::Transport);
+    }
+}
+
+impl<D> ComponentSessionExecClientInner<D> {
+    fn stop_demux(&self) {
+        if let Ok(mut abort) = self.demux_abort.lock()
+            && let Some(abort) = abort.take()
+        {
+            abort.abort();
+        }
+    }
+
+    fn fail_waiters(&self, error: ExecOpError) {
+        if let Ok(mut waiters) = self.waiters.lock() {
+            for (_, waiter) in std::mem::take(&mut *waiters) {
+                let _ = waiter.send(Err(error));
+            }
+        }
+    }
+
+    fn fail_closed(&self, error: ExecOpError) {
+        self.closed.store(true, Ordering::Release);
+        self.fail_waiters(error);
+    }
+}
+
+async fn named_stream_demux<D>(weak: Weak<ComponentSessionExecClientInner<D>>)
+where
+    D: ComponentSessionDriver + 'static,
+{
+    loop {
+        let Some(inner) = weak.upgrade() else {
+            return;
+        };
+        let event = inner.driver.receive_named_stream().await;
+        match event {
+            Ok(StreamEvent::Data { stream, bytes }) if stream == inner.stream => {
+                let frame: NamedProcessStreamResponseFrame = match serde_json::from_slice(&bytes) {
+                    Ok(frame) => frame,
+                    Err(_) => {
+                        inner.fail_closed(ExecOpError::Protocol);
+                        return;
+                    }
+                };
+                if frame.request_id == 0 {
+                    inner.fail_closed(ExecOpError::Protocol);
+                    return;
+                }
+                let credit = match u32::try_from(bytes.len()) {
+                    Ok(credit) => credit,
+                    Err(_) => {
+                        inner.fail_closed(ExecOpError::Protocol);
+                        return;
+                    }
+                };
+                let credit_result = match inner.pending_credit.lock() {
+                    Ok(mut pending) => match pending.checked_add(credit) {
+                        Some(next) => {
+                            *pending = next;
+                            Ok(())
+                        }
+                        None => Err(ExecOpError::Protocol),
+                    },
+                    Err(_) => Err(ExecOpError::Protocol),
+                };
+                match credit_result {
+                    Ok(()) => {}
+                    Err(error) => {
+                        inner.fail_closed(error);
+                        return;
+                    }
+                }
+                let waiter = inner
+                    .waiters
+                    .lock()
+                    .ok()
+                    .and_then(|mut waiters| waiters.remove(&frame.request_id));
+                if let Some(waiter) = waiter {
+                    let _ = waiter.send(Ok(frame.response));
+                    continue;
+                }
+                let mut late = match inner.late_responses.lock() {
+                    Ok(late) => late,
+                    Err(_) => {
+                        inner.fail_closed(ExecOpError::Protocol);
+                        return;
+                    }
+                };
+                if late.len() >= MAX_PENDING_NAMED_RESPONSES {
+                    inner.fail_closed(ExecOpError::Guest(GuestOpError::StdinBackpressure));
+                    return;
+                }
+                if late.contains_key(&frame.request_id) {
+                    inner.fail_closed(ExecOpError::Protocol);
+                    return;
+                }
+                late.insert(frame.request_id, frame.response);
+            }
+            Ok(StreamEvent::RemoteClosed { stream } | StreamEvent::Reset { stream })
+                if stream == inner.stream =>
+            {
+                inner.fail_closed(ExecOpError::Transport);
+                return;
+            }
+            Ok(_) => {}
+            Err(_) => {
+                inner.fail_closed(ExecOpError::Transport);
+                return;
+            }
+        }
+    }
+}
+
+#[async_trait]
+impl<D> TerminalBackend for ComponentSessionExecClient<D>
+where
+    D: ComponentSessionDriver + 'static,
+{
+    type Error = ExecOpError;
+
+    async fn write_stdin(
+        &self,
+        offset: u64,
+        data: Vec<u8>,
+        eof: bool,
+        timeout: Duration,
+    ) -> Result<WriteStdinOutcome, Self::Error> {
+        let data_len = u64::try_from(data.len()).map_err(|_| ExecOpError::Protocol)?;
+        if data.is_empty() || data_len > EXEC_MAX_CHUNK_BYTES {
+            return Err(ExecOpError::Guest(GuestOpError::MaxChunkExceeded));
+        }
+        let response = Self::response_error(
+            self.request(
+                NamedProcessStreamRequest::Stdin {
+                    offset,
+                    chunk_base64: base64_codec::encode(&data),
+                    eof,
+                },
+                timeout,
+            )
+            .await?,
+        )?;
+        match response {
+            NamedProcessStreamResponse::Stdin(result) => {
+                if result.accepted_len > data_len
+                    || result.next_offset < offset
+                    || result.next_offset - offset != result.accepted_len
+                {
+                    return Err(ExecOpError::Protocol);
+                }
+                Ok(WriteStdinOutcome {
+                    accepted_len: result.accepted_len,
+                    next_offset: result.next_offset,
+                    backpressured: result.backpressured,
+                    stdin_closed: result.stdin_closed,
+                })
+            }
+            _ => Err(ExecOpError::Protocol),
+        }
+    }
+
+    async fn read_output(
+        &self,
+        stream: OutputStreamSel,
+        offset: u64,
+        max_len: u64,
+        wait: bool,
+        timeout_ms: u64,
+        timeout: Duration,
+    ) -> Result<ReadOutputOutcome, Self::Error> {
+        if max_len == 0 || max_len > EXEC_MAX_CHUNK_BYTES {
+            return Err(ExecOpError::Guest(GuestOpError::MaxChunkExceeded));
+        }
+        let response = Self::response_error(
+            self.request(
+                NamedProcessStreamRequest::Read {
+                    stream: match stream {
+                        OutputStreamSel::Stdout => ExecStream::Stdout,
+                        OutputStreamSel::Stderr => ExecStream::Stderr,
+                    },
+                    offset,
+                    max_len,
+                    wait,
+                    timeout_ms,
+                },
+                timeout,
+            )
+            .await?,
+        )?;
+        match response {
+            NamedProcessStreamResponse::Output(result) => {
+                let data =
+                    base64_codec::decode(&result.data_base64).map_err(|_| ExecOpError::Protocol)?;
+                let data_len = u64::try_from(data.len()).map_err(|_| ExecOpError::Protocol)?;
+                if data_len > max_len
+                    || result.next_offset < offset
+                    || result.next_offset - offset != data_len
+                {
+                    return Err(ExecOpError::Protocol);
+                }
+                Ok(ReadOutputOutcome {
+                    data,
+                    next_offset: result.next_offset,
+                    eof: result.eof,
+                    dropped_bytes: result.dropped_bytes,
+                    truncated: result.truncated,
+                    timed_out: result.timed_out,
+                })
+            }
+            NamedProcessStreamResponse::Terminal(_) => Ok(ReadOutputOutcome {
+                data: Vec::new(),
+                next_offset: offset,
+                eof: true,
+                dropped_bytes: 0,
+                truncated: false,
+                timed_out: false,
+            }),
+            _ => Err(ExecOpError::Protocol),
+        }
+    }
+
+    async fn signal(
+        &self,
+        control_seq: u64,
+        signo: u32,
+        timeout: Duration,
+    ) -> Result<(), Self::Error> {
+        if !matches!(signo, 1 | 2 | 3 | 9 | 10 | 12 | 15 | 18 | 19 | 20 | 28) {
+            return Err(ExecOpError::Protocol);
+        }
+        let response = Self::response_error(
+            self.request(
+                NamedProcessStreamRequest::Signal { control_seq, signo },
+                timeout,
+            )
+            .await?,
+        )?;
+        match response {
+            NamedProcessStreamResponse::Delivered(_) => Ok(()),
+            _ => Err(ExecOpError::Protocol),
+        }
+    }
+
+    async fn resize(
+        &self,
+        control_seq: u64,
+        rows: u32,
+        cols: u32,
+        timeout: Duration,
+    ) -> Result<(), Self::Error> {
+        if rows == 0 || cols == 0 || rows > u32::from(u16::MAX) || cols > u32::from(u16::MAX) {
+            return Err(ExecOpError::Protocol);
+        }
+        let response = Self::response_error(
+            self.request(
+                NamedProcessStreamRequest::Resize {
+                    control_seq,
+                    rows,
+                    cols,
+                },
+                timeout,
+            )
+            .await?,
+        )?;
+        match response {
+            NamedProcessStreamResponse::Delivered(_) => Ok(()),
+            _ => Err(ExecOpError::Protocol),
+        }
+    }
+
+    async fn wait(&self, timeout_ms: u64, timeout: Duration) -> Result<WaitOutcome, Self::Error> {
+        let response = Self::response_error(
+            self.request(NamedProcessStreamRequest::Wait { timeout_ms }, timeout)
+                .await?,
+        )?;
+        match response {
+            NamedProcessStreamResponse::Wait(result) => Ok(WaitOutcome {
+                running: result.running,
+                terminal: result
+                    .terminal_status
+                    .as_ref()
+                    .and_then(Self::terminal_kind),
+            }),
+            NamedProcessStreamResponse::Terminal(status) => Ok(WaitOutcome {
+                running: false,
+                terminal: Self::terminal_kind(&status),
+            }),
+            _ => Err(ExecOpError::Protocol),
+        }
+    }
+
+    async fn close_stdin(&self, offset: u64, timeout: Duration) -> Result<(), Self::Error> {
+        let response = Self::response_error(
+            self.request(NamedProcessStreamRequest::CloseStdin { offset }, timeout)
+                .await?,
+        )?;
+        match response {
+            NamedProcessStreamResponse::Closed(_) => Ok(()),
+            _ => Err(ExecOpError::Protocol),
+        }
+    }
+
+    async fn cancel(&self, _control_seq: u64, timeout: Duration) -> Result<(), Self::Error> {
+        tokio::time::timeout(timeout, ComponentSessionExecClient::cancel(self))
+            .await
+            .map_err(|_| ExecOpError::Timeout)?
+    }
+}
+
 /// Establishment seam: connect + authenticate + cap-gate + `ExecCreate`.
 #[async_trait]
 pub trait ExecGuestConnector: Send + Sync {
@@ -454,7 +1020,10 @@ async fn worker_main(
     } = established;
     if establish_tx.send(Ok(info)).is_err() {
         // Owner vanished before the establish reply landed. Returning here
-        // drops `client`, closing the guest connection promptly.
+        // must still reset/cancel the guest process before the client drops.
+        let _ = client
+            .cancel(control_seq.saturating_add(1), deadlines.control)
+            .await;
         return;
     }
 
@@ -509,9 +1078,13 @@ async fn worker_main(
             }
         }
     }
-    // `control_rx` closed → owner disconnected → drop `state` (and its sole
-    // client reference). Any still-spawned long-poll is aborted when the
-    // runtime is dropped at thread exit.
+    // `control_rx` closed -> owner disconnected. Explicitly cancel/reset the
+    // established process before dropping the client so a named stream and
+    // its target-local process cannot outlive their owner.
+    let _ = state
+        .client
+        .cancel(state.control_seq.saturating_add(1), state.deadlines.control)
+        .await;
 }
 
 /// Arm the terminal-cleanup timer: after the TTL elapses, if the command
@@ -1057,8 +1630,575 @@ fn hex_encode(bytes: &[u8]) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use d2b_contracts_zone_session::v3::component_session::{
+        AttachmentPolicy, EndpointPolicy, EndpointPurpose, EndpointRole,
+        IdentityEvidenceRequirement, LimitProfile, Locality, NoiseProfile, PurposeClass,
+        ServicePackage, TransportBinding, TransportClass,
+    };
+    use d2b_session::{
+        HandshakeCredentials, OwnedTransport, SessionEngine, TransportDescriptor, TransportError,
+        TransportPacket, TransportReader, TransportWriter,
+    };
     use std::collections::VecDeque;
     use std::sync::atomic::{AtomicUsize, Ordering};
+    use tokio::sync::Notify;
+
+    #[derive(Default)]
+    struct NamedDriverState {
+        sent: Mutex<Vec<Vec<u8>>>,
+        events: Mutex<VecDeque<d2b_session::Result<StreamEvent>>>,
+        opened: Mutex<Vec<(StreamId, u32, u32)>>,
+        granted: AtomicUsize,
+        resets: AtomicUsize,
+        event_ready: Notify,
+    }
+
+    #[derive(Clone, Default)]
+    struct NamedDriver {
+        state: Arc<NamedDriverState>,
+    }
+
+    impl NamedDriver {
+        fn push_event(&self, event: d2b_session::Result<StreamEvent>) {
+            self.state.events.lock().unwrap().push_back(event);
+            self.state.event_ready.notify_one();
+        }
+    }
+
+    #[async_trait]
+    impl ComponentSessionDriver for NamedDriver {
+        fn generation(&self) -> u64 {
+            1
+        }
+
+        async fn start_ttrpc(
+            &self,
+            _request_id: d2b_contracts_zone_session::v3::component_session::RequestId,
+            _frame: Vec<u8>,
+        ) -> d2b_session::Result<()> {
+            Ok(())
+        }
+
+        async fn complete_ttrpc(
+            &self,
+            _request_id: d2b_contracts_zone_session::v3::component_session::RequestId,
+        ) -> d2b_session::Result<bool> {
+            Ok(true)
+        }
+
+        async fn cancel(
+            &self,
+            _generation: u64,
+            _request_id: d2b_contracts_zone_session::v3::component_session::RequestId,
+        ) -> d2b_session::Result<()> {
+            Ok(())
+        }
+
+        async fn send_ttrpc(&self, _frame: Vec<u8>) -> d2b_session::Result<()> {
+            Ok(())
+        }
+
+        async fn receive_ttrpc(&self) -> d2b_session::Result<Vec<u8>> {
+            Err(d2b_session::SessionError::new(
+                d2b_contracts_zone_session::v3::component_session::SessionErrorCode::InternalInvariant,
+            ))
+        }
+
+        async fn register_inbound_call(
+            &self,
+            _request_id: d2b_contracts_zone_session::v3::component_session::RequestId,
+        ) -> d2b_session::Result<d2b_session::Cancellation> {
+            panic!("named-stream test driver does not accept inbound calls")
+        }
+
+        async fn mark_inbound_dispatched(
+            &self,
+            _request_id: d2b_contracts_zone_session::v3::component_session::RequestId,
+        ) -> d2b_session::Result<()> {
+            Ok(())
+        }
+
+        async fn complete_inbound_call(
+            &self,
+            _request_id: d2b_contracts_zone_session::v3::component_session::RequestId,
+        ) -> d2b_session::Result<bool> {
+            Ok(true)
+        }
+
+        async fn remove_inbound_call(
+            &self,
+            _request_id: d2b_contracts_zone_session::v3::component_session::RequestId,
+        ) -> d2b_session::Result<bool> {
+            Ok(true)
+        }
+
+        async fn send_attachments(
+            &self,
+            _attachments: Vec<d2b_session::OwnedAttachment>,
+        ) -> d2b_session::Result<()> {
+            Ok(())
+        }
+
+        async fn receive_attachments(
+            &self,
+        ) -> d2b_session::Result<Vec<d2b_session::OwnedAttachment>> {
+            Ok(Vec::new())
+        }
+
+        async fn open_named_stream(
+            &self,
+            stream: StreamId,
+            send_credit: u32,
+            receive_credit: u32,
+        ) -> d2b_session::Result<()> {
+            self.state
+                .opened
+                .lock()
+                .unwrap()
+                .push((stream, send_credit, receive_credit));
+            Ok(())
+        }
+
+        async fn send_named_stream(
+            &self,
+            _stream: StreamId,
+            bytes: Vec<u8>,
+        ) -> d2b_session::Result<()> {
+            self.state.sent.lock().unwrap().push(bytes);
+            Ok(())
+        }
+
+        async fn receive_named_stream(&self) -> d2b_session::Result<StreamEvent> {
+            loop {
+                if let Some(event) = self.state.events.lock().unwrap().pop_front() {
+                    return event;
+                }
+                self.state.event_ready.notified().await;
+            }
+        }
+
+        async fn grant_named_stream_credit(
+            &self,
+            _stream: StreamId,
+            bytes: u32,
+        ) -> d2b_session::Result<()> {
+            self.state
+                .granted
+                .fetch_add(bytes as usize, Ordering::AcqRel);
+            Ok(())
+        }
+
+        async fn close_named_stream(&self, _stream: StreamId) -> d2b_session::Result<()> {
+            Ok(())
+        }
+
+        async fn reset_named_stream(&self, _stream: StreamId) -> d2b_session::Result<()> {
+            self.state.resets.fetch_add(1, Ordering::AcqRel);
+            Ok(())
+        }
+
+        async fn drive_keepalive(&self, _now: Instant) -> d2b_session::Result<()> {
+            Ok(())
+        }
+
+        async fn receive_control(&self) -> d2b_session::Result<d2b_session::SessionEvent> {
+            Err(d2b_session::SessionError::new(
+                d2b_contracts_zone_session::v3::component_session::SessionErrorCode::InternalInvariant,
+            ))
+        }
+
+        async fn close(
+            &self,
+            _reason: d2b_contracts_zone_session::v3::component_session::CloseReason,
+            _remediation: d2b_contracts_zone_session::v3::component_session::Remediation,
+        ) -> d2b_session::Result<()> {
+            Ok(())
+        }
+    }
+
+    fn named_event(
+        stream: StreamId,
+        response: NamedProcessStreamResponse,
+    ) -> d2b_session::Result<StreamEvent> {
+        named_event_with_id(stream, 1, response)
+    }
+
+    fn named_event_with_id(
+        stream: StreamId,
+        request_id: u64,
+        response: NamedProcessStreamResponse,
+    ) -> d2b_session::Result<StreamEvent> {
+        Ok(StreamEvent::Data {
+            stream,
+            bytes: serde_json::to_vec(&NamedProcessStreamResponseFrame::new(request_id, response))
+                .unwrap(),
+        })
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn component_session_exec_client_uses_one_authenticated_named_stream() {
+        let stream = StreamId::new(0x100).unwrap();
+        let driver = NamedDriver::default();
+        driver.push_event(named_event(
+            stream,
+            NamedProcessStreamResponse::Stdin(ExecWriteStdinResult {
+                accepted_len: 2,
+                next_offset: 2,
+                backpressured: false,
+                stdin_closed: false,
+            }),
+        ));
+        let client = ComponentSessionExecClient::open(driver.clone(), 0x100, 1024, 1024)
+            .await
+            .unwrap();
+        let result = client
+            .write_stdin(0, b"hi".to_vec(), false, Duration::from_secs(1))
+            .await
+            .unwrap();
+        client.acknowledge_received().await.unwrap();
+        assert_eq!(result.next_offset, 2);
+        assert_eq!(driver.state.opened.lock().unwrap().len(), 1);
+        assert!(driver.state.granted.load(Ordering::Acquire) > 0);
+        assert_eq!(driver.state.sent.lock().unwrap().len(), 1);
+        let request: NamedProcessStreamRequestFrame =
+            serde_json::from_slice(&driver.state.sent.lock().unwrap()[0]).unwrap();
+        assert_eq!(request.request_id, 1);
+        assert!(matches!(
+            request.request,
+            NamedProcessStreamRequest::Stdin { .. }
+        ));
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn component_session_exec_client_releases_credit_after_output_consumption() {
+        let stream = StreamId::new(0x101).unwrap();
+        let driver = NamedDriver::default();
+        let output = NamedProcessStreamResponse::Output(ExecReadOutputResult {
+            data_base64: base64_codec::encode(b"output"),
+            next_offset: 6,
+            eof: false,
+            dropped_bytes: 0,
+            truncated: false,
+            timed_out: false,
+        });
+        driver.push_event(named_event(stream, output));
+        let client = ComponentSessionExecClient::open(driver.clone(), 0x101, 1024, 1024)
+            .await
+            .unwrap();
+        let result = client
+            .read_output(
+                OutputStreamSel::Stdout,
+                0,
+                64,
+                false,
+                0,
+                Duration::from_secs(1),
+            )
+            .await
+            .unwrap();
+        assert_eq!(result.data, b"output");
+        assert_eq!(driver.state.granted.load(Ordering::Acquire), 0);
+        client.acknowledge_received().await.unwrap();
+        assert!(driver.state.granted.load(Ordering::Acquire) > 0);
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn component_session_exec_client_cancel_resets_the_named_stream_once() {
+        let driver = NamedDriver::default();
+        let client = ComponentSessionExecClient::open(driver.clone(), 0x105, 1024, 1024)
+            .await
+            .unwrap();
+        client.cancel().await.unwrap();
+        client.cancel().await.unwrap();
+        assert_eq!(driver.state.resets.load(Ordering::Acquire), 1);
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn component_session_exec_client_correlates_out_of_order_responses() {
+        let stream = StreamId::new(0x102).unwrap();
+        let driver = NamedDriver::default();
+        let reply = |next_offset| {
+            NamedProcessStreamResponse::Stdin(ExecWriteStdinResult {
+                accepted_len: 1,
+                next_offset,
+                backpressured: false,
+                stdin_closed: false,
+            })
+        };
+        driver.push_event(named_event_with_id(stream, 2, reply(2)));
+        driver.push_event(named_event_with_id(stream, 1, reply(1)));
+        let client = ComponentSessionExecClient::open(driver, 0x102, 1024, 1024)
+            .await
+            .unwrap();
+        let (first, second) = tokio::join!(
+            client.write_stdin(0, b"a".to_vec(), false, Duration::from_secs(1)),
+            client.write_stdin(1, b"b".to_vec(), false, Duration::from_secs(1)),
+        );
+        assert_eq!(first.unwrap().next_offset, 1);
+        assert_eq!(second.unwrap().next_offset, 2);
+    }
+
+    struct DriverTestTransport {
+        sender: mpsc::Sender<TransportPacket>,
+        receiver: Option<mpsc::Receiver<TransportPacket>>,
+        descriptor: TransportDescriptor,
+    }
+
+    struct DriverTestReader {
+        receiver: mpsc::Receiver<TransportPacket>,
+    }
+
+    struct DriverTestWriter {
+        sender: mpsc::Sender<TransportPacket>,
+    }
+
+    #[async_trait]
+    impl OwnedTransport for DriverTestTransport {
+        fn descriptor(&self) -> TransportDescriptor {
+            self.descriptor
+        }
+
+        fn into_split(mut self: Box<Self>) -> (Box<dyn TransportReader>, Box<dyn TransportWriter>) {
+            (
+                Box::new(DriverTestReader {
+                    receiver: self.receiver.take().expect("driver test reader"),
+                }),
+                Box::new(DriverTestWriter {
+                    sender: self.sender.clone(),
+                }),
+            )
+        }
+
+        async fn receive(
+            &mut self,
+            protected_limit: usize,
+        ) -> Result<TransportPacket, TransportError> {
+            let receiver = self.receiver.as_mut().expect("handshake receiver");
+            let packet = receiver.recv().await.ok_or(TransportError::Disconnected)?;
+            if packet.as_bytes().len() > protected_limit {
+                return Err(TransportError::LimitExceeded);
+            }
+            Ok(packet)
+        }
+
+        async fn send(&mut self, packet: TransportPacket) -> Result<(), TransportError> {
+            self.sender
+                .send(packet)
+                .await
+                .map_err(|_| TransportError::Disconnected)
+        }
+
+        async fn close(&mut self) -> Result<(), TransportError> {
+            Ok(())
+        }
+    }
+
+    #[async_trait]
+    impl TransportReader for DriverTestReader {
+        async fn receive(
+            &mut self,
+            protected_limit: usize,
+        ) -> Result<TransportPacket, TransportError> {
+            let packet = self
+                .receiver
+                .recv()
+                .await
+                .ok_or(TransportError::Disconnected)?;
+            if packet.as_bytes().len() > protected_limit {
+                return Err(TransportError::LimitExceeded);
+            }
+            Ok(packet)
+        }
+    }
+
+    #[async_trait]
+    impl TransportWriter for DriverTestWriter {
+        async fn send(&mut self, packet: TransportPacket) -> Result<(), TransportError> {
+            self.sender
+                .send(packet)
+                .await
+                .map_err(|_| TransportError::Disconnected)
+        }
+
+        async fn close(&mut self) -> Result<(), TransportError> {
+            Ok(())
+        }
+    }
+
+    fn driver_test_policy() -> EndpointPolicy {
+        EndpointPolicy {
+            purpose: EndpointPurpose::LocalLifecycle,
+            purpose_class: PurposeClass::Local,
+            initiator_role: EndpointRole::ZoneController,
+            responder_role: EndpointRole::Component,
+            service: ServicePackage::ResourceV3,
+            schema_fingerprint: [0x11; 32],
+            noise_profile: NoiseProfile::Nn25519ChaChaPolySha256,
+            limits: LimitProfile::local_default(),
+            transport_binding: TransportBinding {
+                transport: TransportClass::UnixSeqpacket,
+                locality: Locality::HostLocal,
+                channel_binding: [0x22; 32],
+                identity_evidence: IdentityEvidenceRequirement::DirectionalUnix,
+            },
+            reconnect_generation: 1,
+            attachment_policy: AttachmentPolicy::disabled(),
+        }
+    }
+
+    fn driver_test_transport_pair() -> (DriverTestTransport, DriverTestTransport) {
+        let (left_sender, right_receiver) = mpsc::channel(128);
+        let (right_sender, left_receiver) = mpsc::channel(128);
+        let descriptor = TransportDescriptor {
+            class: TransportClass::UnixSeqpacket,
+            locality: Locality::HostLocal,
+            packet_atomic: true,
+            supports_attachments: false,
+        };
+        (
+            DriverTestTransport {
+                sender: left_sender,
+                receiver: Some(left_receiver),
+                descriptor,
+            },
+            DriverTestTransport {
+                sender: right_sender,
+                receiver: Some(right_receiver),
+                descriptor,
+            },
+        )
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn component_session_exec_client_demuxes_concurrent_controls_on_real_driver_handle() {
+        let (initiator_transport, responder_transport) = driver_test_transport_pair();
+        let policy = driver_test_policy();
+        let now = Instant::now();
+        let (initiator, responder) = tokio::join!(
+            SessionEngine::establish_initiator(
+                initiator_transport,
+                policy.clone(),
+                HandshakeCredentials::Nn,
+                now,
+            ),
+            SessionEngine::establish_responder(
+                responder_transport,
+                policy,
+                HandshakeCredentials::Nn,
+                now,
+            ),
+        );
+        let initiator = initiator.expect("initiator session");
+        let responder = responder.expect("responder session");
+        let initiator = initiator.into_driver();
+        let responder = responder.into_driver();
+        let stream = StreamId::new(0x104).unwrap();
+        responder
+            .open_named_stream(stream, 64 * 1024, 64 * 1024)
+            .await
+            .unwrap();
+
+        let wait_gate = Arc::new(Notify::new());
+        let peer_gate = Arc::clone(&wait_gate);
+        let wait_seen = Arc::new(Notify::new());
+        let peer_wait_seen = Arc::clone(&wait_seen);
+        let peer = tokio::spawn(async move {
+            while let Ok(event) = responder.receive_named_stream().await {
+                let StreamEvent::Data { stream, bytes } = event else {
+                    continue;
+                };
+                let frame: NamedProcessStreamRequestFrame =
+                    serde_json::from_slice(&bytes).expect("request frame");
+                if let NamedProcessStreamRequest::Wait { .. } = frame.request {
+                    let responder = responder.clone();
+                    let peer_gate = Arc::clone(&peer_gate);
+                    peer_wait_seen.notify_one();
+                    tokio::spawn(async move {
+                        peer_gate.notified().await;
+                        let response = NamedProcessStreamResponseFrame::new(
+                            frame.request_id,
+                            NamedProcessStreamResponse::Wait(ExecWaitResult {
+                                running: true,
+                                terminal_status: None,
+                            }),
+                        );
+                        responder
+                            .send_named_stream(stream, serde_json::to_vec(&response).unwrap())
+                            .await
+                            .expect("wait response frame");
+                    });
+                    continue;
+                }
+                let response = match frame.request {
+                    NamedProcessStreamRequest::Resize { .. } => {
+                        NamedProcessStreamResponse::Delivered(ExecControlResult { delivered: true })
+                    }
+                    _ => NamedProcessStreamResponse::Error(
+                        d2b_contracts_control::public_wire::NamedProcessStreamError {
+                            kind: NamedProcessStreamErrorKind::Protocol,
+                        },
+                    ),
+                };
+                let response = NamedProcessStreamResponseFrame::new(frame.request_id, response);
+                responder
+                    .send_named_stream(stream, serde_json::to_vec(&response).unwrap())
+                    .await
+                    .expect("response frame");
+            }
+        });
+
+        let client = Arc::new(
+            ComponentSessionExecClient::open(initiator, 0x104, 64 * 1024, 64 * 1024)
+                .await
+                .unwrap(),
+        );
+        let wait_client = Arc::clone(&client);
+        let wait =
+            tokio::spawn(async move { wait_client.wait(1_000, Duration::from_secs(2)).await });
+        tokio::time::timeout(Duration::from_secs(1), wait_seen.notified())
+            .await
+            .expect("peer did not receive the long poll");
+        let resize_client = Arc::clone(&client);
+        let resize = tokio::spawn(async move {
+            resize_client
+                .resize(1, 24, 80, Duration::from_secs(2))
+                .await
+        });
+        assert!(
+            tokio::time::timeout(Duration::from_secs(1), resize)
+                .await
+                .expect("resize was head-of-line blocked")
+                .unwrap()
+                .is_ok()
+        );
+        wait_gate.notify_one();
+        assert!(wait.await.unwrap().unwrap().running);
+        client.cancel().await.unwrap();
+        peer.abort();
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn component_session_exec_client_rejects_unallowlisted_controls() {
+        let driver = NamedDriver::default();
+        let client = ComponentSessionExecClient::open(driver.clone(), 0x103, 1024, 1024)
+            .await
+            .unwrap();
+        assert_eq!(
+            client
+                .signal(1, 4, Duration::from_secs(1))
+                .await
+                .unwrap_err(),
+            ExecOpError::Protocol
+        );
+        assert_eq!(
+            client
+                .resize(1, u32::from(u16::MAX) + 1, 80, Duration::from_secs(1))
+                .await
+                .unwrap_err(),
+            ExecOpError::Protocol
+        );
+        assert!(driver.state.sent.lock().unwrap().is_empty());
+    }
 
     use d2b_contracts_control::public_wire::{
         ExecCloseArgs, ExecReadOutputArgs, ExecResizeArgs, ExecSignalArgs, ExecStream,
@@ -1133,6 +2273,7 @@ mod tests {
     struct FakeShared {
         write_calls: AtomicUsize,
         close_calls: AtomicUsize,
+        cancel_calls: AtomicUsize,
         signal_calls: AtomicUsize,
         resize_calls: AtomicUsize,
         read_calls: AtomicUsize,
@@ -1268,6 +2409,16 @@ mod tests {
                 .push(("close", timeout));
             Ok(())
         }
+
+        async fn cancel(&self, _control_seq: u64, timeout: Duration) -> Result<(), ExecOpError> {
+            self.shared.cancel_calls.fetch_add(1, Ordering::SeqCst);
+            self.shared
+                .op_timeouts
+                .lock()
+                .unwrap()
+                .push(("cancel", timeout));
+            Ok(())
+        }
     }
 
     // ---- Fake connector (establish once from a builder closure) ----------------
@@ -1389,11 +2540,12 @@ mod tests {
         let alive = Arc::new(AtomicUsize::new(0));
         let alive_for_builder = Arc::clone(&alive);
         let shared = Arc::new(FakeShared::default());
+        let shared_for_builder = Arc::clone(&shared);
         let builder: Builder = Box::new(move || {
             alive_for_builder.fetch_add(1, Ordering::SeqCst);
             established(Arc::new(FakeClient {
                 alive: alive_for_builder,
-                shared,
+                shared: shared_for_builder,
                 write_outcome: WriteStdinOutcome {
                     accepted_len: 0,
                     next_offset: 0,
@@ -1422,6 +2574,11 @@ mod tests {
             0,
             "client dropped on teardown (prompts guest close_connection)"
         );
+        assert_eq!(
+            shared.cancel_calls.load(Ordering::SeqCst),
+            1,
+            "owner disconnect must cancel the established process"
+        );
     }
 
     #[test]
@@ -1430,11 +2587,13 @@ mod tests {
         let alive_for_builder = Arc::clone(&alive);
         let gate = Arc::new(tokio::sync::Notify::new());
         let gate_for_builder = Arc::clone(&gate);
+        let shared = Arc::new(FakeShared::default());
+        let shared_for_builder = Arc::clone(&shared);
         let builder: Builder = Box::new(move || {
             alive_for_builder.fetch_add(1, Ordering::SeqCst);
             established(Arc::new(FakeClient {
                 alive: alive_for_builder,
-                shared: Arc::new(FakeShared::default()),
+                shared: shared_for_builder,
                 write_outcome: WriteStdinOutcome {
                     accepted_len: 0,
                     next_offset: 0,
@@ -1476,6 +2635,11 @@ mod tests {
             alive.load(Ordering::SeqCst),
             0,
             "parked long-poll's client clone dropped at runtime teardown"
+        );
+        assert_eq!(
+            shared.cancel_calls.load(Ordering::SeqCst),
+            1,
+            "disconnect must cancel even while a long poll is active"
         );
     }
 

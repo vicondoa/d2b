@@ -1258,6 +1258,258 @@ pub enum ExecOpResponse {
     Kill(ExecDetachedKillResult),
 }
 
+/// Request carried by an authenticated Process or ShellSession named stream.
+///
+/// The stream itself binds the resource and caller, so no session handle,
+/// execution target, user, argv, environment, cwd, or transport locator is
+/// repeated in these messages.
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(
+    tag = "kind",
+    content = "payload",
+    rename_all = "camelCase",
+    deny_unknown_fields
+)]
+pub enum NamedProcessStreamRequest {
+    /// Send one bounded stdin chunk.
+    Stdin {
+        offset: u64,
+        chunk_base64: String,
+        #[serde(default)]
+        eof: bool,
+    },
+    /// Request one bounded output chunk.
+    Read {
+        stream: ExecStream,
+        offset: u64,
+        max_len: u64,
+        #[serde(default)]
+        wait: bool,
+        #[serde(default)]
+        timeout_ms: u64,
+    },
+    /// Deliver one allowlisted signal to the process.
+    Signal { control_seq: u64, signo: u32 },
+    /// Resize the attached terminal.
+    Resize {
+        control_seq: u64,
+        rows: u32,
+        cols: u32,
+    },
+    /// Half-close stdin without tearing down the process.
+    CloseStdin { offset: u64 },
+    /// Cancel the attached process and named stream.
+    Cancel,
+    /// Cleanly close the attached named stream without cancelling its process.
+    Close,
+    /// Poll the process terminal state.
+    Wait { timeout_ms: u64 },
+}
+
+impl fmt::Debug for NamedProcessStreamRequest {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Stdin {
+                offset,
+                chunk_base64,
+                eof,
+            } => formatter
+                .debug_struct("NamedProcessStreamRequest::Stdin")
+                .field("offset", offset)
+                .field("chunk_base64_len", &chunk_base64.len())
+                .field("eof", eof)
+                .finish(),
+            Self::Read {
+                stream,
+                offset,
+                max_len,
+                wait,
+                timeout_ms,
+            } => formatter
+                .debug_struct("NamedProcessStreamRequest::Read")
+                .field("stream", stream)
+                .field("offset", offset)
+                .field("max_len", max_len)
+                .field("wait", wait)
+                .field("timeout_ms", timeout_ms)
+                .finish(),
+            Self::Signal { control_seq, signo } => formatter
+                .debug_struct("NamedProcessStreamRequest::Signal")
+                .field("control_seq", control_seq)
+                .field("signo", signo)
+                .finish(),
+            Self::Resize {
+                control_seq,
+                rows,
+                cols,
+            } => formatter
+                .debug_struct("NamedProcessStreamRequest::Resize")
+                .field("control_seq", control_seq)
+                .field("rows", rows)
+                .field("cols", cols)
+                .finish(),
+            Self::CloseStdin { offset } => formatter
+                .debug_struct("NamedProcessStreamRequest::CloseStdin")
+                .field("offset", offset)
+                .finish(),
+            Self::Cancel => formatter.write_str("NamedProcessStreamRequest::Cancel"),
+            Self::Close => formatter.write_str("NamedProcessStreamRequest::Close"),
+            Self::Wait { timeout_ms } => formatter
+                .debug_struct("NamedProcessStreamRequest::Wait")
+                .field("timeout_ms", timeout_ms)
+                .finish(),
+        }
+    }
+}
+
+/// Response carried by an authenticated Process or ShellSession named stream.
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(
+    tag = "kind",
+    content = "payload",
+    rename_all = "camelCase",
+    deny_unknown_fields
+)]
+pub enum NamedProcessStreamResponse {
+    /// Acknowledge a stdin write.
+    Stdin(ExecWriteStdinResult),
+    /// Return one output chunk.
+    Output(ExecReadOutputResult),
+    /// Acknowledge a control operation.
+    Delivered(ExecControlResult),
+    /// Return the current terminal state.
+    Wait(ExecWaitResult),
+    /// Confirm stdin half-close or clean named-stream close.
+    Closed(ExecCloseResult),
+    /// Return a terminal disposition.
+    Terminal(ExecTerminalStatus),
+    /// Refuse the stream operation with a closed redacted error class.
+    Error(NamedProcessStreamError),
+}
+
+impl fmt::Debug for NamedProcessStreamResponse {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Stdin(result) => formatter
+                .debug_tuple("NamedProcessStreamResponse::Stdin")
+                .field(result)
+                .finish(),
+            Self::Output(result) => formatter
+                .debug_tuple("NamedProcessStreamResponse::Output")
+                .field(result)
+                .finish(),
+            Self::Delivered(result) => formatter
+                .debug_tuple("NamedProcessStreamResponse::Delivered")
+                .field(result)
+                .finish(),
+            Self::Wait(result) => formatter
+                .debug_tuple("NamedProcessStreamResponse::Wait")
+                .field(result)
+                .finish(),
+            Self::Closed(result) => formatter
+                .debug_tuple("NamedProcessStreamResponse::Closed")
+                .field(result)
+                .finish(),
+            Self::Terminal(result) => match result {
+                ExecTerminalStatus::Exited { code } => formatter
+                    .debug_struct("NamedProcessStreamResponse::Terminal")
+                    .field("kind", &"exited")
+                    .field("code", code)
+                    .finish(),
+                ExecTerminalStatus::Signaled { signal } => formatter
+                    .debug_struct("NamedProcessStreamResponse::Terminal")
+                    .field("kind", &"signaled")
+                    .field("signal", signal)
+                    .finish(),
+                ExecTerminalStatus::Error { .. } => formatter
+                    .debug_struct("NamedProcessStreamResponse::Terminal")
+                    .field("kind", &"error")
+                    .finish(),
+            },
+            Self::Error(result) => formatter
+                .debug_tuple("NamedProcessStreamResponse::Error")
+                .field(result)
+                .finish(),
+        }
+    }
+}
+
+/// Closed failure vocabulary for named Process/ShellSession streams.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "kebab-case")]
+pub enum NamedProcessStreamErrorKind {
+    /// The authenticated session cannot perform this operation.
+    Authorization,
+    /// The resource or controller generation is stale.
+    StaleSession,
+    /// The named stream or process is no longer available.
+    NotFound,
+    /// The stream credit or process quota is exhausted.
+    Backpressure,
+    /// The request was malformed or violated the resource contract.
+    Protocol,
+    /// The bounded operation deadline elapsed.
+    Timeout,
+    /// The authenticated ComponentSession disconnected.
+    Disconnected,
+}
+
+/// Redacted named-stream failure.
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct NamedProcessStreamError {
+    pub kind: NamedProcessStreamErrorKind,
+}
+
+impl fmt::Debug for NamedProcessStreamError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("NamedProcessStreamError")
+            .field("kind", &self.kind)
+            .finish()
+    }
+}
+
+/// Correlated request frame carried by a Process/ShellSession stream.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct NamedProcessStreamRequestFrame {
+    /// Bounded in-stream correlation id.
+    pub request_id: u64,
+    /// The typed operation.
+    pub request: NamedProcessStreamRequest,
+}
+
+impl NamedProcessStreamRequestFrame {
+    /// Construct one correlated request frame.
+    pub const fn new(request_id: u64, request: NamedProcessStreamRequest) -> Self {
+        Self {
+            request_id,
+            request,
+        }
+    }
+}
+
+/// Correlated response frame carried by a Process/ShellSession stream.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct NamedProcessStreamResponseFrame {
+    /// Request id being completed.
+    pub request_id: u64,
+    /// The typed operation result.
+    pub response: NamedProcessStreamResponse,
+}
+
+impl NamedProcessStreamResponseFrame {
+    /// Construct one correlated response frame.
+    pub const fn new(request_id: u64, response: NamedProcessStreamResponse) -> Self {
+        Self {
+            request_id,
+            response,
+        }
+    }
+}
+
 #[derive(Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 #[serde(transparent)]
 pub struct ShellName(String);
@@ -2888,7 +3140,10 @@ fn default_true() -> bool {
 #[cfg(test)]
 mod tests {
     use super::{
-        AuditResponse, LevelPercent, MutationFlags, PublicRequest, PublicResponse, RuntimeSummary,
+        AuditResponse, ExecReadOutputResult, ExecStream, ExecTerminalStatus, LevelPercent,
+        MutationFlags, NamedProcessStreamError, NamedProcessStreamErrorKind,
+        NamedProcessStreamRequest, NamedProcessStreamRequestFrame, NamedProcessStreamResponse,
+        NamedProcessStreamResponseFrame, PublicRequest, PublicResponse, RuntimeSummary,
         VmLifecycleRequest, VmLifecycleState,
     };
     use d2b_contracts::{
@@ -2902,6 +3157,82 @@ mod tests {
     fn vm_lifecycle_keeps_booted_variant() {
         let encoded = serde_json::to_string(&VmLifecycleState::Booted).expect("serializes");
         assert_eq!(encoded, "\"Booted\"");
+    }
+
+    #[test]
+    fn named_process_stream_frames_round_trip_without_identity_fields() {
+        let request = NamedProcessStreamRequest::Stdin {
+            offset: 7,
+            chunk_base64: "c2VjcmV0".to_owned(),
+            eof: false,
+        };
+        let value = serde_json::to_value(&request).expect("request serializes");
+        assert_eq!(value["kind"], "stdin");
+        assert!(value.get("session").is_none());
+        let decoded: NamedProcessStreamRequest =
+            serde_json::from_value(value).expect("request decodes");
+        assert_eq!(decoded, request);
+        let close = NamedProcessStreamRequest::Close;
+        assert_eq!(
+            serde_json::from_value::<NamedProcessStreamRequest>(
+                serde_json::to_value(&close).expect("close serializes")
+            )
+            .expect("close decodes"),
+            close
+        );
+        let frame = NamedProcessStreamRequestFrame::new(11, request);
+        let decoded: NamedProcessStreamRequestFrame =
+            serde_json::from_value(serde_json::to_value(&frame).expect("request frame serializes"))
+                .expect("request frame decodes");
+        assert_eq!(decoded.request_id, 11);
+
+        let response = NamedProcessStreamResponse::Output(ExecReadOutputResult {
+            data_base64: "c2VjcmV0".to_owned(),
+            next_offset: 13,
+            eof: false,
+            dropped_bytes: 0,
+            truncated: false,
+            timed_out: false,
+        });
+        let rendered = format!("{response:?}");
+        assert!(!rendered.contains("c2VjcmV0"));
+        let terminal = NamedProcessStreamResponse::Terminal(ExecTerminalStatus::Exited { code: 0 });
+        assert_eq!(
+            serde_json::from_value::<NamedProcessStreamResponse>(
+                serde_json::to_value(terminal).expect("terminal serializes")
+            )
+            .expect("terminal decodes"),
+            NamedProcessStreamResponse::Terminal(ExecTerminalStatus::Exited { code: 0 })
+        );
+        let terminal_error = NamedProcessStreamResponse::Terminal(ExecTerminalStatus::Error {
+            slug: "D2B_TERMINAL_LEAK_CANARY".to_owned(),
+        });
+        assert!(!format!("{terminal_error:?}").contains("D2B_TERMINAL_LEAK_CANARY"));
+        let error = NamedProcessStreamResponse::Error(NamedProcessStreamError {
+            kind: NamedProcessStreamErrorKind::Disconnected,
+        });
+        assert_eq!(
+            serde_json::from_value::<NamedProcessStreamResponse>(
+                serde_json::to_value(error).expect("error serializes")
+            )
+            .expect("error decodes"),
+            NamedProcessStreamResponse::Error(NamedProcessStreamError {
+                kind: NamedProcessStreamErrorKind::Disconnected,
+            })
+        );
+        let response_frame = NamedProcessStreamResponseFrame::new(
+            11,
+            NamedProcessStreamResponse::Terminal(ExecTerminalStatus::Exited { code: 0 }),
+        );
+        assert_eq!(
+            serde_json::from_value::<NamedProcessStreamResponseFrame>(
+                serde_json::to_value(response_frame).expect("response frame serializes")
+            )
+            .expect("response frame decodes")
+            .request_id,
+            11
+        );
+        let _ = ExecStream::Stdout;
     }
 
     #[test]

@@ -30,22 +30,17 @@ use d2b_bus::{
 };
 use d2b_contracts::types::{BundleOpId, RoleId, VmId};
 use d2b_contracts_broker::broker_wire::{BrokerCallerRole, RunnerRole, SandboxLaunchPlan};
-use d2b_contracts_zone_session::v3::{
-    component_session::{AttachmentKind, AttachmentPolicy, AttachmentPolicyKind, AttachmentPurpose, EndpointPolicy, EndpointPurpose, EndpointRole, IdentityEvidenceRequirement, LimitProfile, Locality as TransportLocality, NoiseProfile, PurposeClass, ServicePackage, TransportBinding, TransportClass},
-};
+use d2b_contracts_resource::v3::identity::{EvidenceClass, ServiceName};
 use d2b_contracts_resource::v3::{
-    ControllerGeneration,
-    ResourceGeneration,
-    ResourceRef,
-    ResourceUid,
-    ZoneId,
-    ZoneRevision,
+    ControllerGeneration, ResourceGeneration, ResourceRef, ResourceUid, ZoneId, ZoneRevision,
     execution_policy::{BoundedToken, ExecutionDomain},
     process::{CapabilityClass, EnvironmentClass, MappingClass, NamespaceClass, UserNamespaceSpec},
 };
-use d2b_contracts_resource::v3::identity::{
-    EvidenceClass,
-    ServiceName,
+use d2b_contracts_zone_session::v3::component_session::{
+    AttachmentKind, AttachmentPolicy, AttachmentPolicyKind, AttachmentPurpose, EndpointPolicy,
+    EndpointPurpose, EndpointRole, IdentityEvidenceRequirement, LimitProfile,
+    Locality as TransportLocality, NoiseProfile, PurposeClass, ServicePackage, TransportBinding,
+    TransportClass,
 };
 use d2b_core::{
     bundle_resolver::{BundleResolver, ResolvedRunnerIntent},
@@ -85,8 +80,8 @@ use d2b_resource_api::authz::{
 };
 use d2b_resource_store::PolicySnapshot;
 use d2b_session::{
-    AuthenticatedSessionRouteBinding, OwnedAttachment, OwnedTransport, SessionAcceptor,
-    SessionEngine, TransportEvidence, operation_catalog_entry, ttrpc_stream_id,
+    AuthenticatedSessionRouteBinding, ComponentSessionDriver, OwnedAttachment, OwnedTransport,
+    SessionAcceptor, SessionEngine, TransportEvidence, operation_catalog_entry, ttrpc_stream_id,
 };
 use d2b_session_unix::{
     CreditPool, CreditScopeSet, PeerIdentityPolicy, SeqpacketSocket, UnixSeqpacketTransport,
@@ -116,7 +111,18 @@ pub enum InteractionAdmissionError {
     ServiceUnavailable,
 }
 
-const INTERACTION_SERVICES: &[(&str, ServicePackage)] = &[
+/// The fixed ComponentSession service identities accepted by the daemon.
+///
+/// Process attachment uses the generic Provider package on the wire, while
+/// persistent shell attachment uses its provider-defined supervisor identity.
+/// The listener identity is retained separately from the package so these
+/// sessions cannot be confused with ordinary interaction Providers.
+/// Generic Provider package used by Process/EphemeralProcess attachment.
+pub(crate) const PROCESS_ATTACH_SERVICE: &str = ServicePackage::ProviderV3.as_str();
+/// Per-session shell supervisor service used by ShellSession attachment.
+pub(crate) const SHELL_SESSION_SERVICE: &str = d2b_provider_shell_terminal::SUPERVISOR_SERVICE;
+
+const COMPONENT_SESSION_SERVICES: &[(&str, ServicePackage)] = &[
     (
         d2b_provider_display_wayland::SERVICE_PACKAGE,
         ServicePackage::DisplayV3,
@@ -137,13 +143,15 @@ const INTERACTION_SERVICES: &[(&str, ServicePackage)] = &[
         d2b_provider_notification_desktop::SERVICE_PACKAGE,
         ServicePackage::NotificationV3,
     ),
+    (PROCESS_ATTACH_SERVICE, ServicePackage::ProviderV3),
+    (SHELL_SESSION_SERVICE, ServicePackage::ProviderV3),
 ];
 
-/// Return the exact ComponentSession policy for one daemon-owned interaction
-/// listener.  Each service has a distinct Unix socket so the handshake offer
+/// Return the exact ComponentSession policy for one daemon-owned service
+/// listener. Each service has a distinct Unix socket so the handshake offer
 /// cannot select a different Provider after the listener policy is chosen.
 pub fn interaction_endpoint_policy(service: &str, generation: u64) -> Option<EndpointPolicy> {
-    let (_, package) = INTERACTION_SERVICES
+    let (_, package) = COMPONENT_SESSION_SERVICES
         .iter()
         .find(|(candidate, _)| *candidate == service)?;
     let attachment_policy = AttachmentPolicy {
@@ -196,6 +204,7 @@ fn binding_digest(policy: &EndpointPolicy) -> d2b_contracts_resource::v3::identi
 pub struct RegisteredInteractionSession {
     ingress: BusIngress,
     route: AuthenticatedSessionRouteBinding,
+    service_identity: String,
 }
 
 impl RegisteredInteractionSession {
@@ -214,20 +223,35 @@ impl RegisteredInteractionSession {
         self.route.service()
     }
 
+    /// Return the fixed listener service identity admitted for this session.
+    pub fn service_identity(&self) -> &str {
+        &self.service_identity
+    }
+
     /// Return the stable daemon-local key for this authenticated session.
     pub fn session_key(&self) -> String {
-        interaction_session_key(&self.route)
+        interaction_session_key(&self.service_identity, &self.route)
     }
 
     /// Clone the daemon-owned request receiver demultiplexed by the bus.
     pub fn request_receiver(&self) -> ComponentRequestReceiver {
         self.ingress.component_request_receiver()
     }
+
+    /// Clone the authenticated ComponentSession driver for daemon-owned
+    /// target-local named-stream composition.
+    pub fn component_session_driver(&self) -> Option<d2b_session::SessionDriverHandle> {
+        self.ingress.component_session_driver()
+    }
 }
 
-fn interaction_session_key(route: &AuthenticatedSessionRouteBinding) -> String {
+fn interaction_session_key(
+    service_identity: &str,
+    route: &AuthenticatedSessionRouteBinding,
+) -> String {
     format!(
-        "{}|{}|{}|{}",
+        "{}|{}|{}|{}|{}",
+        service_identity,
         route.zone().as_str(),
         route.service().as_str(),
         route.subject_uid().as_str(),
@@ -287,19 +311,78 @@ pub async fn admit_and_register_with_route<T>(
 where
     T: OwnedTransport + 'static,
 {
+    admit_and_register_with_route_identity(registrar, acceptor, engine, evidence, now_tick, None)
+        .await
+}
+
+/// Authenticate, register, and retain the fixed service identity of a
+/// daemon-owned listener. This is distinct from the wire package because a
+/// provider may expose more than one service over the generic Provider
+/// package.
+pub(crate) async fn admit_and_register_with_service<T>(
+    registrar: &mut ZoneRegistrar,
+    acceptor: SessionAcceptor<ComponentSessionAdmission>,
+    engine: SessionEngine<T>,
+    evidence: TransportEvidence,
+    now_tick: u64,
+    service_identity: &str,
+) -> Result<RegisteredInteractionSession, InteractionAdmissionError>
+where
+    T: OwnedTransport + 'static,
+{
+    admit_and_register_with_route_identity(
+        registrar,
+        acceptor,
+        engine,
+        evidence,
+        now_tick,
+        Some(service_identity),
+    )
+    .await
+}
+
+async fn admit_and_register_with_route_identity<T>(
+    registrar: &mut ZoneRegistrar,
+    acceptor: SessionAcceptor<ComponentSessionAdmission>,
+    engine: SessionEngine<T>,
+    evidence: TransportEvidence,
+    now_tick: u64,
+    service_identity: Option<&str>,
+) -> Result<RegisteredInteractionSession, InteractionAdmissionError>
+where
+    T: OwnedTransport + 'static,
+{
     let session = acceptor
         .admit(engine, evidence, now_tick)
         .await
         .map_err(|_| InteractionAdmissionError::SessionAdmission)?;
     let route = session.route_binding();
+    let service_identity = match service_identity {
+        Some(service_identity)
+            if COMPONENT_SESSION_SERVICES
+                .iter()
+                .any(|(candidate, package)| {
+                    *candidate == service_identity && package.as_str() == route.service().as_str()
+                }) =>
+        {
+            service_identity.to_owned()
+        }
+        Some(_) => return Err(InteractionAdmissionError::Registration),
+        None => route.service().as_str().to_owned(),
+    };
     let ingress = registrar
         .register_component_session(session)
         .await
         .map_err(InteractionAdmissionError::from)?;
-    Ok(RegisteredInteractionSession { ingress, route })
+    Ok(RegisteredInteractionSession {
+        ingress,
+        route,
+        service_identity,
+    })
 }
 
-/// The daemon-owned composition for one authenticated interaction session.
+/// The daemon-owned composition for one authenticated Provider or
+/// Process/Shell session.
 ///
 /// This object is intentionally the only place where a registered bus ingress,
 /// Provider runtime state, and supervisor effect owner meet.  The Provider
@@ -330,7 +413,8 @@ where
     notification_configuration: Option<CommittedNotificationProviderConfiguration>,
 }
 
-/// Daemon-owned collection of independently Zone-bound compositions.
+/// Daemon-owned collection of independently Zone-bound Provider and
+/// Process/Shell compositions.
 pub struct InteractionRuntimeSet<S, G = UnavailableGuestFrontendEffects>
 where
     S: ProcessLaunchEffectPort + Clone + Send + Sync + 'static,
@@ -387,6 +471,22 @@ where
         self.runtimes.get_mut(zone.as_str())
     }
 
+    /// Find the sole authenticated ComponentSession owned by one exact
+    /// execution target and service across the daemon's Zone compositions.
+    /// Absent, stale, or ambiguous sources fail closed.
+    pub fn component_session_driver_for_target(
+        &self,
+        service: &str,
+        target: &ResourceRef,
+    ) -> Option<d2b_session::SessionDriverHandle> {
+        let mut drivers = self
+            .runtimes
+            .values()
+            .filter_map(|runtime| runtime.component_session_driver_for_target(service, target));
+        let driver = drivers.next()?;
+        drivers.next().is_none().then_some(driver)
+    }
+
     async fn remove_session(&mut self, zone: &ZoneId, session_key: &str) -> Result<(), String> {
         self.runtime_for_mut(zone)
             .ok_or_else(|| "interaction runtime unavailable".to_owned())?
@@ -410,6 +510,23 @@ where
         }
         failure.map_or(Ok(()), Err)
     }
+}
+
+/// Resolve one exact service-owned ComponentSession without converting a
+/// contended runtime lock into an absent source.
+pub(crate) fn blocking_component_session_driver_for_service<S, G>(
+    runtime: &Arc<AsyncMutex<Option<InteractionRuntimeSet<S, G>>>>,
+    service: &str,
+    target: &ResourceRef,
+) -> Option<d2b_session::SessionDriverHandle>
+where
+    S: ProcessLaunchEffectPort + Clone + Send + Sync + 'static,
+    G: GuestFrontendEffectPort + 'static,
+{
+    let runtime = runtime.blocking_lock();
+    runtime
+        .as_ref()
+        .and_then(|runtime| runtime.component_session_driver_for_target(service, target))
 }
 
 impl<S, G> Default for InteractionRuntimeSet<S, G>
@@ -983,15 +1100,62 @@ where
     where
         T: OwnedTransport + 'static,
     {
-        let session = admit_and_register_with_route(
-            &mut self.registrar,
-            acceptor,
-            engine,
-            evidence,
-            now_tick,
-        )
-        .await?;
-        let service = session.route().service().as_str().to_owned();
+        self.admit_and_register_inner(acceptor, engine, evidence, now_tick, None)
+            .await
+    }
+
+    /// Admit a ComponentSession while retaining the fixed service identity of
+    /// the listener that accepted it.
+    pub async fn admit_and_register_for_service<T>(
+        &mut self,
+        acceptor: SessionAcceptor<ComponentSessionAdmission>,
+        engine: SessionEngine<T>,
+        evidence: TransportEvidence,
+        now_tick: u64,
+        service_identity: &str,
+    ) -> Result<&RegisteredInteractionSession, InteractionAdmissionError>
+    where
+        T: OwnedTransport + 'static,
+    {
+        self.admit_and_register_inner(acceptor, engine, evidence, now_tick, Some(service_identity))
+            .await
+    }
+
+    async fn admit_and_register_inner<T>(
+        &mut self,
+        acceptor: SessionAcceptor<ComponentSessionAdmission>,
+        engine: SessionEngine<T>,
+        evidence: TransportEvidence,
+        now_tick: u64,
+        service_identity: Option<&str>,
+    ) -> Result<&RegisteredInteractionSession, InteractionAdmissionError>
+    where
+        T: OwnedTransport + 'static,
+    {
+        let session = match service_identity {
+            Some(service_identity) => {
+                admit_and_register_with_service(
+                    &mut self.registrar,
+                    acceptor,
+                    engine,
+                    evidence,
+                    now_tick,
+                    service_identity,
+                )
+                .await?
+            }
+            None => {
+                admit_and_register_with_route(
+                    &mut self.registrar,
+                    acceptor,
+                    engine,
+                    evidence,
+                    now_tick,
+                )
+                .await?
+            }
+        };
+        let service = session.service().as_str().to_owned();
         let session_key = session.session_key();
         if self.sessions.contains_key(&session_key) {
             let RegisteredInteractionSession { ingress, .. } = session;
@@ -1042,6 +1206,33 @@ where
             .filter(|session| session.service().as_str() == service)
             .map(|session| session.route().clone())
             .collect()
+    }
+
+    /// Find the sole authenticated ComponentSession for one exact execution
+    /// target and service. The route context is the only source of target
+    /// identity; no caller-supplied session handle is accepted. Absent, stale,
+    /// or ambiguous sources fail closed.
+    pub fn component_session_driver_for_target(
+        &self,
+        service: &str,
+        target: &ResourceRef,
+    ) -> Option<d2b_session::SessionDriverHandle> {
+        let mut drivers = self.sessions.values().filter_map(|session| {
+            if session.service_identity() != service {
+                return None;
+            }
+            let context = session.route().context();
+            let target_matches = context.execution_ref() == Some(target)
+                || (!matches!(service, PROCESS_ATTACH_SERVICE | SHELL_SESSION_SERVICE)
+                    && context.execution_ref().is_none()
+                    && context.subject_ref() == target);
+            let driver = target_matches
+                .then(|| session.component_session_driver())
+                .flatten()?;
+            (driver.generation() == session.route().reconnect_generation().get()).then_some(driver)
+        });
+        let driver = drivers.next()?;
+        drivers.next().is_none().then_some(driver)
     }
 
     fn route_for_session(&self, session_key: &str) -> Option<&AuthenticatedSessionRouteBinding> {
@@ -3908,9 +4099,9 @@ fn unix_guest_subject_uid(uid: u32) -> ResourceUid {
     .expect("digest-derived test guest UID is valid")
 }
 
-/// Bind and retain the daemon-owned ComponentSession listeners for all
-/// interaction Provider service packages.  Providers do not open these
-/// sockets and no Provider-owned service unit is created.
+/// Bind and retain the daemon-owned ComponentSession listeners for all fixed
+/// service packages. Providers do not open these sockets and no Provider-owned
+/// service unit is created.
 pub fn spawn_interaction_listeners<S, G>(
     runtime: Arc<AsyncMutex<Option<InteractionRuntimeSet<S, G>>>>,
     state_dir: PathBuf,
@@ -3998,11 +4189,11 @@ where
         }
         Ok(())
     }
-    let mut paths = Vec::with_capacity(INTERACTION_SERVICES.len());
+    let mut paths = Vec::with_capacity(COMPONENT_SESSION_SERVICES.len());
     let handlers = Arc::new(Mutex::new(Vec::new()));
     let active_handlers = Arc::new(AtomicUsize::new(0));
-    let mut threads = Vec::with_capacity(INTERACTION_SERVICES.len());
-    for (service, _) in INTERACTION_SERVICES {
+    let mut threads = Vec::with_capacity(COMPONENT_SESSION_SERVICES.len());
+    for (service, _) in COMPONENT_SESSION_SERVICES {
         let slug = service.replace('.', "-");
         let path = state_dir.join(format!("interaction-{slug}.sock"));
         let listener = bind_interaction_listener(&path, expected_peer_uid)
@@ -4445,18 +4636,25 @@ where
             .and_then(|set| set.runtime_for_mut(&zone))
             .ok_or_else(|| "interaction runtime unavailable".to_owned())?;
         let registered = composition
-            .admit_and_register(acceptor, engine, evidence, 1)
+            .admit_and_register_for_service(acceptor, engine, evidence, 1, &service)
             .await
             .map_err(|error| error.to_string())?;
         let session_key = registered.session_key();
-        (session_key, registered.request_receiver())
+        let session_driver = registered
+            .component_session_driver()
+            .ok_or_else(|| "interaction session driver unavailable".to_owned())?;
+        (session_key, registered.request_receiver(), session_driver)
     };
-    let (session_key, request_receiver) = request_receiver;
+    let (session_key, request_receiver, session_driver) = request_receiver;
     loop {
         let frame = tokio::select! {
             frame = request_receiver.recv() => match frame {
                 Ok(frame) => frame,
                 Err(_) => break,
+            },
+            control = session_driver.receive_control() => match control {
+                Ok(d2b_session::SessionEvent::Close(_)) | Err(_) => break,
+                Ok(_) => continue,
             },
             _ = tokio::time::sleep(Duration::from_millis(50)) => {
                 if stop.load(Ordering::Acquire) {
@@ -4862,6 +5060,18 @@ mod tests {
             policy.transport_binding.transport,
             TransportClass::UnixSeqpacket,
         );
+        assert_eq!(
+            interaction_endpoint_policy(PROCESS_ATTACH_SERVICE, 7)
+                .expect("Process attach policy")
+                .service,
+            ServicePackage::ProviderV3,
+        );
+        assert_eq!(
+            interaction_endpoint_policy(SHELL_SESSION_SERVICE, 7)
+                .expect("shell supervisor policy")
+                .service,
+            ServicePackage::ProviderV3,
+        );
     }
 
     #[test]
@@ -4887,6 +5097,247 @@ mod tests {
         assert!(path.exists());
         listeners.stop();
         assert!(!path.exists());
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn process_session_lookup_owns_named_stream_and_disconnects_fail_closed() {
+        let directory = tempfile::tempdir().unwrap();
+        let zone = ZoneId::parse("work").unwrap();
+        let uid = nix::unistd::getuid().as_raw();
+        let runtime = Arc::new(AsyncMutex::new(Some(test_interaction_runtime(&zone, uid))));
+        let display_path = directory.path().join("display.sock");
+        let display_listener = bind_interaction_listener(&display_path, uid).unwrap();
+        let (display_client, display_server) = establish_test_client(
+            &display_listener,
+            &runtime,
+            &zone,
+            d2b_provider_display_wayland::SERVICE_PACKAGE,
+            uid,
+            &display_path,
+        )
+        .await;
+        let process_path = directory.path().join("process.sock");
+        let process_listener = bind_interaction_listener(&process_path, uid).unwrap();
+        let (process_client, process_server) = establish_test_client(
+            &process_listener,
+            &runtime,
+            &zone,
+            PROCESS_ATTACH_SERVICE,
+            uid,
+            &process_path,
+        )
+        .await;
+        for _ in 0..50 {
+            if runtime
+                .lock()
+                .await
+                .as_ref()
+                .and_then(|set| set.runtime_for(&zone))
+                .is_some_and(|composition| composition.session_count() == 2)
+            {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(1)).await;
+        }
+        let target = ResourceRef::parse(&format!("Guest/uid-{uid}")).unwrap();
+        let display_target = ResourceRef::parse("Host/host-system").unwrap();
+        let missing = ResourceRef::parse("Guest/missing").unwrap();
+        let guard = runtime.lock().await;
+        let composition = guard
+            .as_ref()
+            .and_then(|set| set.runtime_for(&zone))
+            .expect("runtime");
+        assert!(
+            composition
+                .component_session_driver_for_target(PROCESS_ATTACH_SERVICE, &target,)
+                .is_some(),
+            "the enrolled Process session must expose its real driver"
+        );
+        assert!(
+            composition
+                .component_session_driver_for_target(
+                    d2b_provider_display_wayland::SERVICE_PACKAGE,
+                    &target,
+                )
+                .is_none(),
+            "the display session must not own the Process target"
+        );
+        assert!(
+            composition
+                .component_session_driver_for_target(PROCESS_ATTACH_SERVICE, &display_target,)
+                .is_none(),
+            "a display-only target must not be treated as a Process source"
+        );
+        assert!(
+            composition
+                .component_session_driver_for_target(PROCESS_ATTACH_SERVICE, &missing,)
+                .is_none(),
+            "an absent target must remain fail-closed"
+        );
+        drop(guard);
+
+        let stream = d2b_session::StreamId::new(0x101).unwrap();
+        process_client
+            .open_named_stream(stream, 64, 64)
+            .await
+            .unwrap();
+        display_client
+            .open_named_stream(stream, 64, 64)
+            .await
+            .unwrap();
+        let process_driver = {
+            let guard = runtime.lock().await;
+            guard
+                .as_ref()
+                .and_then(|set| set.runtime_for(&zone))
+                .and_then(|composition| {
+                    composition.component_session_driver_for_target(PROCESS_ATTACH_SERVICE, &target)
+                })
+                .expect("Process session driver")
+        };
+        process_driver
+            .open_named_stream(stream, 64, 64)
+            .await
+            .unwrap();
+        process_driver
+            .send_named_stream(stream, b"process-owner".to_vec())
+            .await
+            .unwrap();
+        let event = tokio::time::timeout(
+            Duration::from_secs(1),
+            process_client.receive_named_stream(),
+        )
+        .await
+        .expect("Process stream data timeout")
+        .unwrap();
+        assert!(matches!(
+            event,
+            d2b_session::StreamEvent::Data {
+                stream: received,
+                bytes
+            } if received == stream && bytes == b"process-owner"
+        ));
+        assert!(
+            tokio::time::timeout(
+                Duration::from_millis(50),
+                display_client.receive_named_stream(),
+            )
+            .await
+            .is_err(),
+            "display interaction session must not receive Process data"
+        );
+
+        process_driver.reset_named_stream(stream).await.unwrap();
+        let event = tokio::time::timeout(
+            Duration::from_secs(1),
+            process_client.receive_named_stream(),
+        )
+        .await
+        .expect("Process stream reset timeout")
+        .unwrap();
+        assert!(matches!(
+            event,
+            d2b_session::StreamEvent::Reset { stream: received } if received == stream
+        ));
+
+        drop(process_client);
+        for _ in 0..1_000 {
+            if runtime
+                .lock()
+                .await
+                .as_ref()
+                .and_then(|set| set.runtime_for(&zone))
+                .is_some_and(|composition| composition.session_count() == 1)
+            {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(1)).await;
+        }
+        let guard = runtime.lock().await;
+        let composition = guard
+            .as_ref()
+            .and_then(|set| set.runtime_for(&zone))
+            .expect("runtime");
+        assert!(
+            composition
+                .component_session_driver_for_target(PROCESS_ATTACH_SERVICE, &target)
+                .is_none(),
+            "a disconnected Process source must be removed rather than reused"
+        );
+        drop(guard);
+        display_server.abort();
+        process_server.abort();
+        drop(display_listener);
+        drop(process_listener);
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn process_session_lookup_waits_for_runtime_contention() {
+        let directory = tempfile::tempdir().unwrap();
+        let zone = ZoneId::parse("work").unwrap();
+        let uid = nix::unistd::getuid().as_raw();
+        let runtime = Arc::new(AsyncMutex::new(Some(test_interaction_runtime(&zone, uid))));
+        let path = directory.path().join("process.sock");
+        let listener = bind_interaction_listener(&path, uid).unwrap();
+        let (client, server) = establish_test_client(
+            &listener,
+            &runtime,
+            &zone,
+            PROCESS_ATTACH_SERVICE,
+            uid,
+            &path,
+        )
+        .await;
+        for _ in 0..50 {
+            if runtime
+                .lock()
+                .await
+                .as_ref()
+                .and_then(|set| set.runtime_for(&zone))
+                .is_some_and(|composition| composition.session_count() == 1)
+            {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(1)).await;
+        }
+        let target = ResourceRef::parse(&format!("Guest/uid-{uid}")).unwrap();
+        let guard = runtime.lock().await;
+        let lookup_runtime = Arc::clone(&runtime);
+        let mut lookup = tokio::spawn(async move {
+            tokio::task::spawn_blocking(move || {
+                blocking_component_session_driver_for_service(
+                    &lookup_runtime,
+                    PROCESS_ATTACH_SERVICE,
+                    &target,
+                )
+            })
+            .await
+            .unwrap()
+        });
+        assert!(
+            tokio::time::timeout(Duration::from_millis(20), &mut lookup)
+                .await
+                .is_err(),
+            "runtime contention must not be reported as an absent source"
+        );
+        drop(guard);
+        assert!(
+            tokio::time::timeout(Duration::from_secs(1), &mut lookup)
+                .await
+                .expect("lookup release timeout")
+                .expect("lookup task failed")
+                .is_some(),
+            "the enrolled Process source must resolve after contention clears"
+        );
+        client
+            .close(
+                d2b_contracts_zone_session::v3::component_session::CloseReason::Normal,
+                d2b_contracts_zone_session::v3::component_session::Remediation::None,
+            )
+            .await
+            .unwrap();
+        server.abort();
+        drop(listener);
     }
 
     fn test_interaction_composition(
@@ -4982,10 +5433,8 @@ mod tests {
                     policy_revision: display_generation,
                     api_catalog_revision: 1,
                     active_configuration_revision:
-                        d2b_contracts_resource::v3::ConfigurationGeneration::new(
-                            display_generation,
-                        )
-                        .unwrap(),
+                        d2b_contracts_resource::v3::ConfigurationGeneration::new(display_generation)
+                            .unwrap(),
                     controller_generation: Some(
                         d2b_contracts_resource::v3::ControllerGeneration::new(
                             controller_generation,
@@ -5038,10 +5487,8 @@ mod tests {
                     policy_revision: display_generation,
                     api_catalog_revision: 1,
                     active_configuration_revision:
-                        d2b_contracts_resource::v3::ConfigurationGeneration::new(
-                            display_generation,
-                        )
-                        .unwrap(),
+                        d2b_contracts_resource::v3::ConfigurationGeneration::new(display_generation)
+                            .unwrap(),
                     controller_generation: Some(
                         d2b_contracts_resource::v3::ControllerGeneration::new(
                             controller_generation,

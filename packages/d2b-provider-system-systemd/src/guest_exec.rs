@@ -6,11 +6,19 @@
 //! argv, environment, paths, and credentials are resolved by the signed
 //! Provider template and never cross this boundary.
 
-use std::{fmt, future::Future};
+use std::{
+    fmt,
+    future::Future,
+    sync::atomic::{AtomicU8, Ordering},
+};
 
+use d2b_contracts_control::public_wire::{
+    NamedProcessStreamRequestFrame, NamedProcessStreamResponseFrame,
+};
 use d2b_contracts_resource::v3::{
     ResourceRef,
-    execution_policy::BoundedToken,
+    execution_policy::{BoundedToken, DurationMs},
+    process::{EphemeralProcessSpec, ExecutionSpec, ProcessClass},
 };
 use d2b_provider_toolkit::{ComponentSessionDriver, StreamEvent, StreamId};
 
@@ -18,6 +26,12 @@ use d2b_provider_toolkit::{ComponentSessionDriver, StreamEvent, StreamId};
 pub const DETACHED_FAILED_TTL_MS: u64 = 24 * 60 * 60 * 1_000;
 /// Default per-direction named-stream credit for guest attachment.
 pub const GUEST_EXEC_STREAM_CREDIT: u32 = 256 * 1024;
+/// The authenticated named stream used by guest Process attachments.
+pub const GUEST_EXEC_STREAM_NAME: &str = "process";
+
+const STREAM_OPEN: u8 = 0;
+const STREAM_CLOSING: u8 = 1;
+const STREAM_CLOSED: u8 = 2;
 
 /// Bounded terminal geometry supplied to an attach operation.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -110,6 +124,34 @@ impl GuestExecRequest {
     pub const fn initial_size(&self) -> Option<TtySize> {
         self.initial_size
     }
+
+    /// Build the resource-owned EphemeralProcess spec for this request.
+    ///
+    /// The command remains a signed template concern. Only the Guest target,
+    /// worker classification, and bounded lifecycle retention cross this
+    /// Provider seam.
+    pub fn ephemeral_process_spec(&self) -> Result<EphemeralProcessSpec, GuestExecError> {
+        let execution = ExecutionSpec::minimal(
+            self.execution_ref.clone(),
+            ProcessClass::Worker,
+            self.template.clone(),
+        )
+        .map_err(|_| GuestExecError::InvalidProcessSpec)?;
+        let runtime_deadline = if self.detached { "24h" } else { "6h" };
+        EphemeralProcessSpec::new(
+            execution,
+            DurationMs::parse("60s", 1_000, 3_600_000)
+                .map_err(|_| GuestExecError::InvalidProcessSpec)?,
+            DurationMs::parse(runtime_deadline, 1_000, 86_400_000)
+                .map_err(|_| GuestExecError::InvalidProcessSpec)?,
+            DurationMs::parse("1h", 0, 7 * 86_400_000)
+                .map_err(|_| GuestExecError::InvalidProcessSpec)?,
+            DurationMs::parse("24h", 0, 30 * 86_400_000)
+                .map_err(|_| GuestExecError::InvalidProcessSpec)?,
+            false,
+        )
+        .map_err(|_| GuestExecError::InvalidProcessSpec)
+    }
 }
 
 /// A typed attach request replacing the userd socket protocol.
@@ -169,9 +211,19 @@ impl NamedAttachmentStream {
         Self(name)
     }
 
+    /// Construct the fixed guest Process attachment stream name.
+    pub fn process() -> Self {
+        Self::new(BoundedToken::parse(GUEST_EXEC_STREAM_NAME).expect("valid process stream name"))
+    }
+
     /// Borrow the stream name for the session mux.
     pub const fn name(&self) -> &BoundedToken {
         &self.0
+    }
+
+    /// Return the stream name's bounded text.
+    pub fn as_str(&self) -> &str {
+        self.0.as_str()
     }
 }
 
@@ -187,6 +239,7 @@ pub struct ComponentSessionAttachment<D> {
     driver: D,
     stream: StreamId,
     name: NamedAttachmentStream,
+    state: AtomicU8,
 }
 
 impl<D> fmt::Debug for ComponentSessionAttachment<D> {
@@ -205,6 +258,9 @@ where
         stream_number: u16,
         name: NamedAttachmentStream,
     ) -> Result<Self, GuestExecError> {
+        if name.as_str() != GUEST_EXEC_STREAM_NAME {
+            return Err(GuestExecError::InvalidStreamName);
+        }
         let stream = StreamId::new(stream_number).map_err(|_| GuestExecError::StreamUnavailable)?;
         driver
             .open_named_stream(stream, GUEST_EXEC_STREAM_CREDIT, GUEST_EXEC_STREAM_CREDIT)
@@ -214,6 +270,7 @@ where
             driver,
             stream,
             name,
+            state: AtomicU8::new(STREAM_OPEN),
         })
     }
 
@@ -222,36 +279,127 @@ where
         &self.name
     }
 
+    /// Whether the named stream has been closed or reset.
+    pub fn is_closed(&self) -> bool {
+        self.state.load(Ordering::Acquire) == STREAM_CLOSED
+    }
+
     /// Send one bounded logical stream message.
     pub async fn send(&self, bytes: Vec<u8>) -> Result<(), GuestExecError> {
+        if bytes.is_empty()
+            || bytes.len()
+                > d2b_contracts_zone_session::v3::component_session::MAX_LOGICAL_MESSAGE_BYTES
+                    as usize
+        {
+            return Err(GuestExecError::InvalidStreamPayload);
+        }
+        if self.state.load(Ordering::Acquire) != STREAM_OPEN {
+            return Err(GuestExecError::StreamUnavailable);
+        }
         self.driver
             .send_named_stream(self.stream, bytes)
             .await
             .map_err(|_| GuestExecError::StreamUnavailable)
     }
 
+    /// Send one canonical Process named-stream request frame.
+    pub async fn send_frame(
+        &self,
+        frame: &NamedProcessStreamRequestFrame,
+    ) -> Result<(), GuestExecError> {
+        if frame.request_id == 0 {
+            return Err(GuestExecError::InvalidStreamPayload);
+        }
+        let bytes = serde_json::to_vec(frame).map_err(|_| GuestExecError::InvalidStreamPayload)?;
+        self.send(bytes).await
+    }
+
     /// Receive the next typed stream event.
     pub async fn receive(&self) -> Result<StreamEvent, GuestExecError> {
-        self.driver
+        if self.state.load(Ordering::Acquire) != STREAM_OPEN {
+            return Err(GuestExecError::StreamUnavailable);
+        }
+        let event = self
+            .driver
             .receive_named_stream()
             .await
-            .map_err(|_| GuestExecError::StreamUnavailable)
+            .map_err(|_| GuestExecError::StreamUnavailable)?;
+        if matches!(
+            event,
+            StreamEvent::RemoteClosed { .. } | StreamEvent::Reset { .. }
+        ) {
+            self.state.store(STREAM_CLOSED, Ordering::Release);
+        }
+        Ok(event)
+    }
+
+    /// Receive and decode one canonical Process named-stream response frame.
+    pub async fn receive_frame(&self) -> Result<NamedProcessStreamResponseFrame, GuestExecError> {
+        let event = self.receive().await?;
+        let StreamEvent::Data { stream, bytes } = event else {
+            return Err(GuestExecError::InvalidStreamPayload);
+        };
+        if stream != self.stream {
+            return Err(GuestExecError::InvalidStreamPayload);
+        }
+        let frame: NamedProcessStreamResponseFrame =
+            serde_json::from_slice(&bytes).map_err(|_| GuestExecError::InvalidStreamPayload)?;
+        if frame.request_id == 0 {
+            return Err(GuestExecError::InvalidStreamPayload);
+        }
+        Ok(frame)
     }
 
     /// Close this named stream.
     pub async fn close(&self) -> Result<(), GuestExecError> {
-        self.driver
-            .close_named_stream(self.stream)
-            .await
-            .map_err(|_| GuestExecError::StreamUnavailable)
+        if self
+            .state
+            .compare_exchange(
+                STREAM_OPEN,
+                STREAM_CLOSING,
+                Ordering::AcqRel,
+                Ordering::Acquire,
+            )
+            .is_err()
+        {
+            return Ok(());
+        }
+        match self.driver.close_named_stream(self.stream).await {
+            Ok(()) => {
+                self.state.store(STREAM_CLOSED, Ordering::Release);
+                Ok(())
+            }
+            Err(_) => {
+                self.state.store(STREAM_OPEN, Ordering::Release);
+                Err(GuestExecError::StreamUnavailable)
+            }
+        }
     }
 
     /// Reset this named stream after cancellation or protocol failure.
     pub async fn reset(&self) -> Result<(), GuestExecError> {
-        self.driver
-            .reset_named_stream(self.stream)
-            .await
-            .map_err(|_| GuestExecError::StreamUnavailable)
+        if self
+            .state
+            .compare_exchange(
+                STREAM_OPEN,
+                STREAM_CLOSING,
+                Ordering::AcqRel,
+                Ordering::Acquire,
+            )
+            .is_err()
+        {
+            return Ok(());
+        }
+        match self.driver.reset_named_stream(self.stream).await {
+            Ok(()) => {
+                self.state.store(STREAM_CLOSED, Ordering::Release);
+                Ok(())
+            }
+            Err(_) => {
+                self.state.store(STREAM_OPEN, Ordering::Release);
+                Err(GuestExecError::StreamUnavailable)
+            }
+        }
     }
 }
 
@@ -270,6 +418,12 @@ pub enum GuestExecError {
     NotAttachable,
     /// The ComponentSession stream could not be opened.
     StreamUnavailable,
+    /// The request used a stream name outside the Process contract.
+    InvalidStreamName,
+    /// The stream payload was empty or exceeded the ComponentSession bound.
+    InvalidStreamPayload,
+    /// The resource-owned EphemeralProcess spec could not be built.
+    InvalidProcessSpec,
 }
 
 impl fmt::Display for GuestExecError {
@@ -281,6 +435,9 @@ impl fmt::Display for GuestExecError {
             Self::TtySizeWithoutTty => "guest-exec-tty-size-unexpected",
             Self::NotAttachable => "guest-exec-process-not-attachable",
             Self::StreamUnavailable => "guest-exec-stream-unavailable",
+            Self::InvalidStreamName => "guest-exec-stream-name-invalid",
+            Self::InvalidStreamPayload => "guest-exec-stream-payload-invalid",
+            Self::InvalidProcessSpec => "guest-exec-process-spec-invalid",
         })
     }
 }
@@ -331,6 +488,44 @@ mod tests {
     }
 
     #[test]
+    fn detached_exec_builds_the_guest_ephemeral_process_spec() {
+        let request = GuestExecRequest::new(
+            process(),
+            guest(),
+            BoundedToken::parse("shell-terminal").unwrap(),
+            true,
+            false,
+            None,
+        )
+        .unwrap();
+        let spec = request.ephemeral_process_spec().unwrap();
+        assert_eq!(spec.execution().execution_ref(), &guest());
+        assert_eq!(
+            spec.execution().process_class(),
+            d2b_contracts_resource::v3::process::ProcessClass::Worker
+        );
+        assert_eq!(spec.execution().template().as_str(), "shell-terminal");
+        assert_eq!(spec.failed_ttl().as_millis(), DETACHED_FAILED_TTL_MS);
+        let attached = GuestExecRequest::new(
+            process(),
+            guest(),
+            BoundedToken::parse("shell-terminal").unwrap(),
+            false,
+            false,
+            None,
+        )
+        .unwrap();
+        assert_eq!(
+            attached
+                .ephemeral_process_spec()
+                .unwrap()
+                .runtime_deadline()
+                .as_millis(),
+            21_600_000
+        );
+    }
+
+    #[test]
     fn attach_validation_preserves_tty_and_stream_error_boundaries() {
         assert_eq!(
             AttachRequest::new(process(), true, None).unwrap_err(),
@@ -342,5 +537,35 @@ mod tests {
             AttachRequest::new(process(), false, Some(size)).unwrap_err(),
             GuestExecError::TtySizeWithoutTty
         );
+        assert_eq!(
+            NamedAttachmentStream::process().as_str(),
+            GUEST_EXEC_STREAM_NAME
+        );
+        assert_eq!(
+            GuestExecError::InvalidStreamName.to_string(),
+            "guest-exec-stream-name-invalid"
+        );
+    }
+
+    #[test]
+    fn process_attachment_round_trips_the_shared_named_stream_frame() {
+        let request = d2b_contracts_control::public_wire::NamedProcessStreamRequestFrame::new(
+            9,
+            d2b_contracts_control::public_wire::NamedProcessStreamRequest::Close,
+        );
+        let encoded = serde_json::to_vec(&request).unwrap();
+        let decoded: NamedProcessStreamRequestFrame = serde_json::from_slice(&encoded).unwrap();
+        assert_eq!(decoded, request);
+
+        let response = d2b_contracts_control::public_wire::NamedProcessStreamResponseFrame::new(
+            decoded.request_id,
+            d2b_contracts_control::public_wire::NamedProcessStreamResponse::Closed(
+                d2b_contracts_control::public_wire::ExecCloseResult { stdin_closed: true },
+            ),
+        );
+        let response_bytes = serde_json::to_vec(&response).unwrap();
+        let response: NamedProcessStreamResponseFrame =
+            serde_json::from_slice(&response_bytes).unwrap();
+        assert_eq!(response.request_id, 9);
     }
 }

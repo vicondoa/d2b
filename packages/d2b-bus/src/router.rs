@@ -37,7 +37,8 @@ use d2b_resource_api::watch::{WatchFrame, WatchSink, WatchSinkError};
 use d2b_session::{
     AuthenticatedComponentSession, AuthenticatedSessionRouteBinding, AuthenticatedTtrpcHandle,
     GENERATED_OPERATION_CATALOG, OperationKind, SessionAcceptor, SessionAuthorizationRequest,
-    SessionCancellationHandle, SessionOperation, SessionRegistrationCapability,
+    SessionCancellationHandle, SessionDriverHandle, SessionOperation,
+    SessionRegistrationCapability,
     contract::{EndpointPolicy, ServicePackage},
     resource_operation, rewrite_ttrpc_stream_id, ttrpc_request_id, ttrpc_stream_id,
 };
@@ -1471,7 +1472,7 @@ impl UnixSubjectRecord {
         mut self,
         execution_ref: ResourceRef,
     ) -> d2b_session::Result<Self> {
-        if execution_ref.resource_type().as_str() != "Host" {
+        if !matches!(execution_ref.resource_type().as_str(), "Host" | "Guest") {
             return Err(d2b_session::SessionError::new(
                 d2b_session::contract::SessionErrorCode::SubjectMismatch,
             ));
@@ -1665,7 +1666,8 @@ impl core::fmt::Debug for AuthoritativeUnixSubjectResolver {
     }
 }
 
-/// Trusted committed state used to install daemon-owned interaction subjects.
+/// Trusted committed state used to install daemon-owned interaction and
+/// Process/Shell attach subjects.
 pub struct CommittedInteractionSubjectInput {
     /// The Guest identity committed by the display WaylandSession.
     pub display_subject_ref: ResourceRef,
@@ -2593,10 +2595,11 @@ impl ZoneRegistrar {
         )
     }
 
-    /// Install the daemon-owned interaction subject projection from the
-    /// committed resource snapshot. The Unix peer UID authenticates the
-    /// transport only; the Guest/Host refs, resource generations, and
-    /// controller generation are all supplied by trusted committed state.
+    /// Install the daemon-owned interaction and Process/Shell subject
+    /// projection from the committed resource snapshot. The Unix peer UID
+    /// authenticates the transport only; the Guest/Host refs, resource
+    /// generations, and controller generation are all supplied by trusted
+    /// committed state.
     pub fn install_committed_interaction_subject(
         &self,
         committed: CommittedInteractionSubjectInput,
@@ -2619,7 +2622,7 @@ impl ZoneRegistrar {
             ResourceRef::parse("Provider/display-wayland").expect("fixed display Provider ref"),
             display_generation,
         )];
-        let mut subjects = Vec::with_capacity(5);
+        let mut subjects = Vec::with_capacity(6);
         for (service, provider_ref, generation) in services {
             subjects.push(
                 UnixSubjectRecord::guest_for_uid(
@@ -2634,6 +2637,21 @@ impl ZoneRegistrar {
                 .for_service(service),
             );
         }
+        // Process and ShellSession named streams use the generic Provider
+        // package on the wire, but their listener identities are retained by
+        // d2bd. Bind that package to the enrolled Guest's own execution
+        // reference rather than borrowing the display Host route.
+        subjects.push(
+            UnixSubjectRecord::guest_for_uid(
+                display_subject_ref.clone(),
+                display_subject_uid.clone(),
+                zone_ref.clone(),
+                expected_peer_uid,
+            )?
+            .with_controller_generation(controller_generation)
+            .with_execution_ref(display_subject_ref.clone())?
+            .for_service(ServicePackage::ProviderV3),
+        );
         if let Some(generation) = clipboard_generation {
             let (subject_ref, subject_uid, provider_ref) =
                 if let Some(provider_uid) = clipboard_provider_uid {
@@ -3048,6 +3066,14 @@ impl Drop for OperationLease {
 }
 
 impl BusIngress {
+    /// Clone the authenticated ComponentSession driver for a daemon-owned
+    /// target-local named-stream owner.
+    pub fn component_session_driver(&self) -> Option<SessionDriverHandle> {
+        self.attachments
+            .as_ref()
+            .map(AuthenticatedTtrpcHandle::component_session_driver)
+    }
+
     /// Clone the daemon-owned request receiver for one session loop.
     pub fn component_request_receiver(&self) -> ComponentRequestReceiver {
         ComponentRequestReceiver {

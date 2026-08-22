@@ -6581,12 +6581,33 @@ pub(super) fn cmd_vm_status(
     )
 }
 
-/// The owner-connection transport: one op per round trip over the held
-/// public.sock seqpacket connection. The daemon multiplexes a single
-/// authenticated guest-control session behind this connection.
+/// The resource-owner transport: one Resource attach request establishes the
+/// Process stream, then every operation is a correlated named-stream frame
+/// over the held public.sock seqpacket connection.
 pub(super) struct OwnerSocketTransport {
     socket: SeqpacketUnixSocket,
     next_op_id: u64,
+    stdin_offset: u64,
+    resource_ref: Option<String>,
+}
+
+impl Drop for OwnerSocketTransport {
+    fn drop(&mut self) {
+        if self.resource_ref.is_none() {
+            return;
+        }
+        let request_id = self.next_op_id;
+        if request_id == 0 {
+            return;
+        }
+        let frame = public_wire::NamedProcessStreamRequestFrame::new(
+            request_id,
+            public_wire::NamedProcessStreamRequest::Cancel,
+        );
+        if let Ok(bytes) = serde_json::to_vec(&frame) {
+            let _ = self.socket.send_frame(&bytes);
+        }
+    }
 }
 
 impl terminal_client::TerminalTransport for OwnerSocketTransport {
@@ -6601,15 +6622,268 @@ impl terminal_client::TerminalTransport for OwnerSocketTransport {
     {
         let op_id = self.next_op_id;
         self.next_op_id = self.next_op_id.wrapping_add(1);
-        let frame = exec_client::encode_exec_op_frame(op, op_id)?;
+        if op_id == 0 {
+            return Err(exec_client::ExecClientError::protocol(
+                "process stream request id exhausted",
+            ));
+        }
+        if !matches!(op, public_wire::ExecOp::Start(_)) && self.resource_ref.is_none() {
+            return Err(exec_client::ExecClientError::protocol(
+                "process stream operation preceded resource attach",
+            ));
+        }
+        let frame = if let public_wire::ExecOp::Start(start) = op {
+            if self.resource_ref.is_some() {
+                return Err(exec_client::ExecClientError::protocol(
+                    "duplicate process resource attach",
+                ));
+            }
+            encode_process_resource_attach(start, op_id)?
+        } else {
+            let frame = exec_client::named_stream_request_frame(op, op_id, self.stdin_offset)?;
+            serde_json::to_vec(&frame).map_err(|_| {
+                exec_client::ExecClientError::protocol(
+                    "process named-stream request frame was malformed",
+                )
+            })?
+        };
         self.socket.send_frame(&frame).map_err(|err| {
-            exec_client::ExecClientError::transport(format!("exec op send failed: {err}"))
+            exec_client::ExecClientError::transport(format!("process stream send failed: {err}"))
         })?;
         let reply = self.socket.recv_frame().map_err(|err| {
-            exec_client::ExecClientError::transport(format!("exec op recv failed: {err}"))
+            exec_client::ExecClientError::transport(format!("process stream recv failed: {err}"))
+        })?;
+        let response = if let public_wire::ExecOp::Start(start) = op {
+            let result = decode_process_resource_attach(&reply)?;
+            self.resource_ref = Some(format!("EphemeralProcess/exec-{op_id}"));
+            let _ = start;
+            public_wire::ExecOpResponse::Start(result)
+        } else {
+            let (response_id, response) = exec_client::named_stream_response_frame(op, &reply)?;
+            if response_id != op_id {
+                return Err(exec_client::ExecClientError::protocol(
+                    "process named-stream response id did not match request",
+                ));
+            }
+            response
+        };
+        if let public_wire::ExecOpResponse::WriteStdin(result) = &response {
+            self.stdin_offset = result.next_offset;
+        }
+        Ok(response)
+    }
+}
+
+impl OwnerSocketTransport {
+    fn resource_management_round_trip(
+        &mut self,
+        op: &public_wire::ExecOp,
+    ) -> Result<public_wire::ExecOpResponse, exec_client::ExecClientError> {
+        let request = encode_process_resource_management(op)?;
+        self.socket.send_frame(&request).map_err(|err| {
+            exec_client::ExecClientError::transport(format!(
+                "process resource request send failed: {err}"
+            ))
+        })?;
+        let reply = self.socket.recv_frame().map_err(|err| {
+            exec_client::ExecClientError::transport(format!(
+                "process resource response receive failed: {err}"
+            ))
         })?;
         exec_client::decode_exec_response_frame(&reply)
     }
+
+    fn resource_detached_create_round_trip(
+        &mut self,
+        start: &public_wire::ExecStartArgs,
+    ) -> Result<public_wire::ExecOpResponse, exec_client::ExecClientError> {
+        let request = encode_process_resource_detached_create(start, self.next_op_id)?;
+        self.next_op_id = self.next_op_id.wrapping_add(1);
+        self.socket.send_frame(&request).map_err(|err| {
+            exec_client::ExecClientError::transport(format!(
+                "detached Process resource request send failed: {err}"
+            ))
+        })?;
+        let reply = self.socket.recv_frame().map_err(|err| {
+            exec_client::ExecClientError::transport(format!(
+                "detached Process resource response receive failed: {err}"
+            ))
+        })?;
+        exec_client::decode_exec_response_frame(&reply)
+    }
+}
+
+fn encode_process_resource_management(
+    op: &public_wire::ExecOp,
+) -> Result<Vec<u8>, exec_client::ExecClientError> {
+    let (method, vm, resource_ref, extra) = match op {
+        public_wire::ExecOp::List(args) => ("List", args.vm.clone(), None, serde_json::json!({})),
+        public_wire::ExecOp::Status(args) => (
+            "Status",
+            args.vm.clone(),
+            Some(format!("EphemeralProcess/{}", args.exec_id)),
+            serde_json::json!({}),
+        ),
+        public_wire::ExecOp::Logs(args) => (
+            "Logs",
+            args.vm.clone(),
+            Some(format!("EphemeralProcess/{}", args.exec_id)),
+            serde_json::json!({
+                "stdoutOffset": args.stdout_offset,
+                "stderrOffset": args.stderr_offset,
+                "maxLen": args.max_len,
+            }),
+        ),
+        public_wire::ExecOp::Kill(args) => (
+            "Kill",
+            args.vm.clone(),
+            Some(format!("EphemeralProcess/{}", args.exec_id)),
+            serde_json::json!({}),
+        ),
+        _ => {
+            return Err(exec_client::ExecClientError::protocol(
+                "operation is not detached Process resource management",
+            ));
+        }
+    };
+    let mut request = serde_json::json!({
+        "type": "resourceRequest",
+        "method": method,
+        "service": "d2b.resource.v3",
+        "sessionVerb": "invoke",
+        "zoneRef": "Zone/local-root",
+        "resourceType": "EphemeralProcess",
+        "executionRef": format!("Guest/{vm}"),
+    });
+    if let Some(resource_ref) = resource_ref {
+        request["resourceRef"] = Value::String(resource_ref);
+    }
+    if let (Some(object), Some(extra)) = (request.as_object_mut(), extra.as_object()) {
+        object.extend(
+            extra
+                .iter()
+                .map(|(key, value)| (key.clone(), value.clone())),
+        );
+    }
+    serde_json::to_vec(&request).map_err(|_| {
+        exec_client::ExecClientError::protocol("process resource management request was malformed")
+    })
+}
+
+fn encode_process_resource_attach(
+    start: &public_wire::ExecStartArgs,
+    request_id: u64,
+) -> Result<Vec<u8>, exec_client::ExecClientError> {
+    let resource_ref = format!("EphemeralProcess/exec-{request_id}");
+    let initial_size = start
+        .term_size
+        .map(|size| serde_json::json!({ "rows": size.rows, "cols": size.cols }));
+    let request = serde_json::json!({
+        "type": "resourceRequest",
+        "method": "Create",
+        "service": "d2b.resource.v3",
+        "sessionVerb": "attach",
+        "zoneRef": "Zone/local-root",
+        "resourceType": "EphemeralProcess",
+        "resourceRef": resource_ref,
+        "executionRef": format!("Guest/{}", start.vm),
+        "interactive": start.tty,
+        "tty": start.tty,
+        "initialSize": initial_size,
+        "detached": false,
+        "argv": start.argv,
+        "env": start.env,
+        "cwd": start.cwd,
+        "opId": request_id,
+    });
+    serde_json::to_vec(&request).map_err(|_| {
+        exec_client::ExecClientError::protocol("process resource attach request was malformed")
+    })
+}
+
+fn encode_process_resource_detached_create(
+    start: &public_wire::ExecStartArgs,
+    request_id: u64,
+) -> Result<Vec<u8>, exec_client::ExecClientError> {
+    let request = serde_json::json!({
+        "type": "resourceRequest",
+        "method": "Create",
+        "service": "d2b.resource.v3",
+        "sessionVerb": "invoke",
+        "zoneRef": "Zone/local-root",
+        "resourceType": "EphemeralProcess",
+        "resourceRef": format!("EphemeralProcess/exec-{request_id}"),
+        "executionRef": format!("Guest/{}", start.vm),
+        "interactive": false,
+        "tty": false,
+        "initialSize": Value::Null,
+        "detached": true,
+        "argv": start.argv,
+        "env": start.env,
+        "cwd": start.cwd,
+        "opId": request_id,
+    });
+    serde_json::to_vec(&request).map_err(|_| {
+        exec_client::ExecClientError::protocol(
+            "detached Process resource create request was malformed",
+        )
+    })
+}
+
+fn decode_process_resource_attach(
+    bytes: &[u8],
+) -> Result<public_wire::ExecStartResult, exec_client::ExecClientError> {
+    let value: Value = serde_json::from_slice(bytes).map_err(|_| {
+        exec_client::ExecClientError::protocol("process resource attach response was malformed")
+    })?;
+    if value.get("type").and_then(Value::as_str) == Some("error") {
+        let error = value.get("error").unwrap_or(&value);
+        let kind = error
+            .get("kind")
+            .and_then(Value::as_str)
+            .unwrap_or("resource-provider-unavailable");
+        let message = error
+            .get("message")
+            .and_then(Value::as_str)
+            .unwrap_or("the Process resource attach was refused");
+        let remediation = error
+            .get("remediation")
+            .and_then(Value::as_str)
+            .unwrap_or("");
+        return Err(exec_client::ExecClientError::from_daemon_error(
+            kind,
+            message,
+            remediation,
+        ));
+    }
+    if value.get("attached").and_then(Value::as_bool) != Some(true) {
+        return Err(exec_client::ExecClientError::protocol(
+            "process resource attach did not establish a stream",
+        ));
+    }
+    let session = value
+        .get("session")
+        .and_then(Value::as_str)
+        .ok_or_else(|| {
+            exec_client::ExecClientError::protocol(
+                "process resource attach response omitted its session",
+            )
+        })?;
+    let tty = value.get("tty").and_then(Value::as_bool).unwrap_or(false);
+    let stdout_offset = value
+        .get("stdoutOffset")
+        .and_then(Value::as_u64)
+        .unwrap_or(0);
+    let stderr_offset = value
+        .get("stderrOffset")
+        .and_then(Value::as_u64)
+        .unwrap_or(0);
+    Ok(public_wire::ExecStartResult {
+        session: session.to_owned(),
+        tty,
+        stdout_offset,
+        stderr_offset,
+    })
 }
 
 /// Typed transport error for an unreachable daemon on the exec path: there is
@@ -6650,7 +6924,9 @@ pub(super) fn exec_owner_transport(
         .map_err(|failure| exec_client::ExecClientError::protocol(failure.message))?;
     Ok(OwnerSocketTransport {
         socket,
-        next_op_id: 0,
+        next_op_id: 1,
+        stdin_offset: 0,
+        resource_ref: None,
     })
 }
 
@@ -6866,10 +7142,10 @@ pub(super) fn parse_vm_exec_u64_flag(flag: &str, value: &str) -> Result<u64, Str
         .map_err(|_| format!("vm exec logs: {flag} must be a non-negative integer"))
 }
 
-/// Run a command inside a guest-control VM (FSM). Establishes the
-/// daemon-held authenticated session over `public.sock` (admin-only), then
-/// multiplexes stdin/stdout/stderr/signals over one owner connection. The
-/// guest owns the PTY; the CLI only manages host terminal state.
+/// Run a command inside a Guest Process resource (FSM). Establishes the
+/// resource owner over `public.sock` (admin-only), then multiplexes
+/// stdin/stdout/signals over one authenticated named stream. The guest owns
+/// the PTY; the CLI only manages host terminal state.
 pub(super) fn cmd_vm_exec(context: &LegacyContext, args: &VmExecArgs) -> Result<i32, CliFailure> {
     use d2b_contracts_control::public_wire::{ExecEnvVar, ExecOp, ExecStartArgs, ExecTermSize};
 
@@ -6996,7 +7272,14 @@ pub(super) fn cmd_vm_exec(context: &LegacyContext, args: &VmExecArgs) -> Result<
         Ok(transport) => transport,
         Err(err) => return exec_terminate(args, err),
     };
-    let start_response = match transport.round_trip(&start_op) {
+    let start_response = match if args.detach {
+        let public_wire::ExecOp::Start(start) = &start_op else {
+            unreachable!("the command path always builds ExecOp::Start");
+        };
+        transport.resource_detached_create_round_trip(start)
+    } else {
+        transport.round_trip(&start_op)
+    } {
         Ok(response) => response,
         Err(err) => {
             return exec_terminate(args, err);
@@ -7202,7 +7485,7 @@ pub(super) fn exec_send_one_op(
     op: d2b_contracts_control::public_wire::ExecOp,
 ) -> Result<d2b_contracts_control::public_wire::ExecOpResponse, exec_client::ExecClientError> {
     let mut transport = exec_owner_transport(context)?;
-    transport.round_trip(&op)
+    transport.resource_management_round_trip(&op)
 }
 
 pub(super) fn exec_render_detached_create(
@@ -12527,11 +12810,11 @@ mod host_install_dispatch_tests {
     }
 
     /// Drive `cmd_vm_exec` (json) against a mock daemon that completes the
-    /// hello handshake, accepts the `Start` op, and replies with the daemon
-    /// `error` frame whose `kind` is supplied. Returns the CLI result plus the
-    /// list of post-hello frames the daemon received before the response.
-    /// Attached and detached-create forms send `Start`; management verbs send
-    /// their single management op.
+    /// hello handshake, accepts the Process resource request, and replies
+    /// with the daemon frame whose `kind` is supplied. Returns the CLI result
+    /// plus the list of post-hello frames the daemon received before the
+    /// response. Attached and detached-create forms send a Process resource
+    /// create; management verbs send their single resource operation.
     fn run_vm_exec_with_mock_daemon_response(
         args: VmExecArgs,
         response_frame: Value,
@@ -12583,8 +12866,7 @@ mod host_install_dispatch_tests {
                 )
                 .expect("encode hello reply");
                 send_test_frame(accepted, &hello_reply)?;
-                // First post-hello frame: the Start op.
-                // First post-hello frame: the Start op.
+                // First post-hello frame: the Process resource operation.
                 let start_bytes = recv_test_frame(accepted)?;
                 let start: Value = serde_json::from_slice(&start_bytes)
                     .map_err(|err| io::Error::new(io::ErrorKind::InvalidData, err))?;
@@ -12715,17 +12997,19 @@ mod host_install_dispatch_tests {
             "a failure envelope never carries captured stdio bytes: {envelope}"
         );
         // The daemon received exactly ONE post-hello frame before the
-        // terminal response: the Start establishment op.
+        // terminal response: the Process resource create request.
         assert_eq!(
             frames.len(),
             1,
-            "exactly the rejected Start may be sent; no proxied op may follow"
+            "exactly the rejected resource create may be sent; no proxied op may follow"
         );
         assert_eq!(
-            frames[0].get("op").and_then(Value::as_str),
-            Some("start"),
-            "the single proxied frame is the Start op"
+            frames[0].get("type").and_then(Value::as_str),
+            Some("resourceRequest"),
+            "the single establishment frame is a Resource request"
         );
+        assert_eq!(frames[0]["method"], "Create");
+        assert_eq!(frames[0]["resourceType"], "EphemeralProcess");
         // No SSH/SCP client may be spawned on the fail-closed exec path: the
         // "exactly one frame (the Start)" + "exit 70" assertions above prove
         // the path stops before any further transport, and the crate-wide
@@ -13122,10 +13406,20 @@ mod host_install_dispatch_tests {
         assert_eq!(human_result.expect("detached create human"), 0);
         assert_eq!(String::from_utf8(human_stdout).unwrap(), "exec-abc\n");
         assert_eq!(
-            human_frames[0]
-                .pointer("/args/detached")
-                .and_then(Value::as_bool),
+            human_frames[0].get("detached").and_then(Value::as_bool),
             Some(true)
+        );
+        assert_eq!(
+            human_frames[0].get("method").and_then(Value::as_str),
+            Some("Create")
+        );
+        assert_eq!(
+            human_frames[0].get("sessionVerb").and_then(Value::as_str),
+            Some("invoke")
+        );
+        assert_eq!(
+            human_frames[0].get("resourceType").and_then(Value::as_str),
+            Some("EphemeralProcess")
         );
 
         let json_args = parse_vm_exec(&["d2b", "vm", "exec", "-d", "work", "--json", "--", "id"]);
@@ -13185,9 +13479,11 @@ mod host_install_dispatch_tests {
         );
         assert_eq!(list_result.expect("list json"), 0);
         assert_eq!(
-            list_frames[0].get("op").and_then(Value::as_str),
-            Some("list")
+            list_frames[0].get("method").and_then(Value::as_str),
+            Some("List")
         );
+        assert_eq!(list_frames[0]["resourceType"], "EphemeralProcess");
+        assert_eq!(list_frames[0]["executionRef"], "Guest/work");
         let list_envelope: Value = serde_json::from_slice(&list_stdout).expect("list JSON");
         assert_eq!(
             list_envelope,
@@ -13297,21 +13593,15 @@ mod host_install_dispatch_tests {
         );
         assert_eq!(logs_result.expect("logs json"), 0);
         assert_eq!(
-            logs_frames[0]
-                .pointer("/args/stdoutOffset")
-                .and_then(Value::as_i64),
+            logs_frames[0].get("stdoutOffset").and_then(Value::as_i64),
             Some(4)
         );
         assert_eq!(
-            logs_frames[0]
-                .pointer("/args/stderrOffset")
-                .and_then(Value::as_i64),
+            logs_frames[0].get("stderrOffset").and_then(Value::as_i64),
             Some(8)
         );
         assert_eq!(
-            logs_frames[0]
-                .pointer("/args/maxLen")
-                .and_then(Value::as_i64),
+            logs_frames[0].get("maxLen").and_then(Value::as_i64),
             Some(16)
         );
         let logs_envelope: Value = serde_json::from_slice(&logs_stdout).expect("logs JSON");
@@ -16493,9 +16783,12 @@ mod exec_json_envelope_tests {
     //! status number (the 70-vs-70 case): `source` + `reason` +
     //! `guestExitCode`/`transportExitCode` carry the distinction.
 
-    use d2b_contracts_control::public_wire::ExecTerminalStatus;
+    use d2b_contracts_control::public_wire::{ExecStartArgs, ExecTerminalStatus};
 
-    use super::{VmExecArgs, exec_client, exec_json_failure_value, exec_json_success_value};
+    use super::{
+        VmExecArgs, encode_process_resource_attach, exec_client, exec_json_failure_value,
+        exec_json_success_value,
+    };
 
     fn exec_args(vm: &str) -> VmExecArgs {
         VmExecArgs {
@@ -16548,6 +16841,29 @@ mod exec_json_envelope_tests {
         // A failure envelope never carries captured stdio bytes.
         assert!(value.get("stdoutBase64").is_none());
         assert!(value.get("stderrBase64").is_none());
+    }
+
+    #[test]
+    fn exec_start_uses_a_process_resource_request_not_the_retired_exec_wire() {
+        let bytes = encode_process_resource_attach(
+            &ExecStartArgs {
+                vm: "work".to_owned(),
+                argv: vec!["true".to_owned()],
+                tty: false,
+                detached: false,
+                env: None,
+                cwd: None,
+                term_size: None,
+            },
+            9,
+        )
+        .expect("resource attach frame");
+        let value: serde_json::Value = serde_json::from_slice(&bytes).expect("JSON request");
+        assert_eq!(value["type"], "resourceRequest");
+        assert_eq!(value["method"], "Create");
+        assert_eq!(value["resourceType"], "EphemeralProcess");
+        assert_eq!(value["sessionVerb"], "attach");
+        assert_ne!(value["type"], "exec");
     }
 }
 

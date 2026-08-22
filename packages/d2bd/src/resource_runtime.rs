@@ -1318,6 +1318,15 @@ impl ZoneResourceRuntime {
         Ok(Arc::new(adapter.client()))
     }
 
+    /// Borrow the daemon-owned Resource API client used by the target-local
+    /// process reconciler. The client is present only after the Zone's
+    /// authenticated system-core session has been enrolled.
+    pub(crate) fn process_resource_client(
+        &self,
+    ) -> Option<Arc<ResourceApiClient<RedbBackend, UnavailableUpgradeDispatcher>>> {
+        self.process_status_client.clone()
+    }
+
     /// Persist a provider reconcile phase through the authenticated Resource
     /// API so restart admission can rely on durable observed generation.
     pub(crate) async fn persist_public_reconcile_phase(

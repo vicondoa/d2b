@@ -26,6 +26,7 @@ d2b-core-controller = { path = "../d2b-core-controller", version = "0.0.0-bootst
 d2b-provider-system-core = { path = "../d2b-provider-system-core", version = "0.0.0-bootstrap" }
 d2b-provider-system-minijail = { path = "../d2b-provider-system-minijail", version = "0.0.0-bootstrap" }
 d2b-provider-system-systemd = { path = "../d2b-provider-system-systemd", version = "0.0.0-bootstrap" }
+d2b-provider-shell-terminal = { path = "../d2b-provider-shell-terminal", version = "0.0.0-bootstrap" }
 d2b-provider-supervisor = { path = "../d2b-provider-supervisor", version = "0.0.0-bootstrap" }
 d2b-provider-activation-nixos = { path = "../d2b-provider-activation-nixos", version = "0.0.0-bootstrap" }
 d2b-provider-volume-local = { path = "../d2b-provider-volume-local", version = "0.0.0-bootstrap" }

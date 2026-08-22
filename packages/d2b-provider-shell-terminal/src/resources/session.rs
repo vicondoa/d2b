@@ -2,6 +2,7 @@
 
 use super::{ShellPool, ShellTerminalError, validate_name};
 use crate::resources::ExecutionTarget;
+use d2b_contracts_resource::v3::ResourceRef;
 
 /// Common resource phases used by shell pools and sessions.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -34,6 +35,9 @@ pub struct ShellSession {
     session_name: String,
     output_ring_capacity: u64,
     phase: SessionPhase,
+    supervisor_process_ref: ResourceRef,
+    supervisor_execution_ref: ResourceRef,
+    supervisor_user_ref: ResourceRef,
 }
 
 impl std::fmt::Debug for ShellSession {
@@ -54,6 +58,19 @@ impl ShellSession {
         session_name: impl Into<String>,
         output_ring_capacity: Option<u64>,
     ) -> Result<Self, ShellTerminalError> {
+        let session_name = session_name.into();
+        let name = name.into();
+        Self::from_pool_with_resource_name(pool, name, session_name, output_ring_capacity)
+    }
+
+    /// Create a session while choosing its stable resource name separately
+    /// from its operator-facing session name.
+    pub fn from_pool_with_resource_name(
+        pool: &ShellPool,
+        name: impl Into<String>,
+        session_name: impl Into<String>,
+        output_ring_capacity: Option<u64>,
+    ) -> Result<Self, ShellTerminalError> {
         let name = name.into();
         let session_name = session_name.into();
         validate_name(&name, 63)?;
@@ -63,6 +80,18 @@ impl ShellSession {
         if !(4 * 1024..=pool.spec().output_ring_capacity()).contains(&output_ring_capacity) {
             return Err(ShellTerminalError::CapacityOutOfRange);
         }
+        let target_type = if pool.execution_target().is_host() {
+            "Host"
+        } else {
+            "Guest"
+        };
+        let supervisor_execution_ref =
+            ResourceRef::parse(&format!("{target_type}/{}", pool.execution_target().name()))
+                .map_err(|_| ShellTerminalError::InvalidName)?;
+        let supervisor_process_ref = ResourceRef::parse(&format!("Process/{name}"))
+            .map_err(|_| ShellTerminalError::InvalidName)?;
+        let supervisor_user_ref = ResourceRef::parse(&format!("User/{}", pool.workload_user()))
+            .map_err(|_| ShellTerminalError::InvalidName)?;
         Ok(Self {
             name,
             zone: pool.zone().to_owned(),
@@ -73,6 +102,9 @@ impl ShellSession {
             session_name,
             output_ring_capacity,
             phase: SessionPhase::Pending,
+            supervisor_process_ref,
+            supervisor_execution_ref,
+            supervisor_user_ref,
         })
     }
 
@@ -124,5 +156,20 @@ impl ShellSession {
     /// Return the current common resource phase.
     pub const fn phase(&self) -> SessionPhase {
         self.phase
+    }
+
+    /// Borrow the Process child resource owned by this shell session.
+    pub const fn supervisor_process_ref(&self) -> &ResourceRef {
+        &self.supervisor_process_ref
+    }
+
+    /// Borrow the Host or Guest execution parent for the supervisor Process.
+    pub const fn supervisor_execution_ref(&self) -> &ResourceRef {
+        &self.supervisor_execution_ref
+    }
+
+    /// Borrow the exact workload User resource for the supervisor Process.
+    pub const fn supervisor_user_ref(&self) -> &ResourceRef {
+        &self.supervisor_user_ref
     }
 }

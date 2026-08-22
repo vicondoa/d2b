@@ -422,7 +422,7 @@ pub fn connect_and_build_client(
 /// genuine `SocketMissing` transport branch under a non-root tempdir instead of
 /// tripping the production state-root ownership pre-validation first. The
 /// `Failed(_) -> TransportIo` mapping is identical to production.
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 pub(crate) fn connect_and_build_client_for_tests(
     params: &ProbeParams,
     budget: AttemptBudget,

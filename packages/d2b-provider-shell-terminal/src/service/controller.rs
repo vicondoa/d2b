@@ -87,6 +87,7 @@ impl OpenSessionResult {
         if identity.generation() != self.supervisor_generation {
             return Err(ShellTerminalError::StaleSessionGeneration);
         }
+        self.authority.ensure_supervisor_process(&self.session)?;
         self.authority.claim_supervisor(&self.session, &identity)?;
         Ok(SessionSupervisor::new(
             self.session.clone(),
@@ -235,6 +236,7 @@ impl ShellTerminalController {
         let grant = self
             .authority
             .advance_session(&session, retiring_identity)?;
+        self.authority.ensure_supervisor_process(&session)?;
         let supervisor_generation = grant.generation();
         let capability = grant.capability();
         Ok(OpenSessionResult {
@@ -271,6 +273,10 @@ impl ShellTerminalController {
             request.output_ring_capacity,
         )?;
         let grant = self.authority.open_session(&session)?;
+        if let Err(error) = self.authority.ensure_supervisor_process(&session) {
+            let _ = self.authority.finalize_session(&session, None);
+            return Err(error);
+        }
         let supervisor_generation = grant.generation();
         let capability = grant.capability();
         let result = OpenSessionResult {
@@ -317,6 +323,7 @@ impl ShellTerminalController {
             .get(session.pool_name())
             .ok_or(ShellTerminalError::CapacityExceeded)?;
         Authorizer::authorize(subject, pool)?;
+        self.authority.remove_supervisor_process(&session)?;
         self.authority.finalize_session(&session, identity)?;
         self.sessions.remove(session_name);
         self.trusted_sessions.remove(session_name);
