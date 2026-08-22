@@ -216,6 +216,7 @@ pub enum AttributionQuality {
     BrokerInjectedDebug,
 }
 
+#[cfg_attr(not(test), expect(dead_code, reason = "test-only negotiation model"))]
 pub fn negotiate_version(range: &ProtocolVersionRange, daemon_supported: u16) -> Option<u16> {
     (range.min <= daemon_supported && daemon_supported <= range.max).then_some(daemon_supported)
 }

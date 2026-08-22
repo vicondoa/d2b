@@ -55,6 +55,7 @@ pub enum FdSafetyError {
         reserved_margin: u64,
     },
     #[error("control message was truncated; close {fds_to_close} partially received fds")]
+    #[cfg_attr(not(test), expect(dead_code, reason = "test-only recvmsg model"))]
     ControlMessageTruncated { fds_to_close: usize },
 }
 
@@ -126,11 +127,13 @@ pub fn validate_fd_cap(model: FdCapModel) -> Result<u64, FdSafetyError> {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[cfg_attr(not(test), expect(dead_code, reason = "test-only recvmsg model"))]
 pub struct RecvmsgControlStatus {
     pub msg_ctrunc: bool,
     pub received_fd_count: usize,
 }
 
+#[cfg_attr(not(test), expect(dead_code, reason = "test-only recvmsg model"))]
 pub fn validate_recvmsg_control(status: RecvmsgControlStatus) -> Result<(), FdSafetyError> {
     if status.msg_ctrunc {
         Err(FdSafetyError::ControlMessageTruncated {

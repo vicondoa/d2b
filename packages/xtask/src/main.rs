@@ -108,6 +108,7 @@ mod zone_schema;
 const SCHEMA_VERSION: &str = "v2";
 const DAEMON_API_DOC: &str = "docs/reference/daemon-api.md";
 
+#[allow(dead_code)]
 #[derive(schemars::JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct WireProtocolSchema {

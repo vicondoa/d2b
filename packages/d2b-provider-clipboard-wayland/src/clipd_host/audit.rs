@@ -85,6 +85,7 @@ impl AuditQueue {
         Ok(())
     }
 
+    #[cfg_attr(not(test), expect(dead_code, reason = "test-only queue inspection"))]
     pub fn len_for_realm(&self, realm: &str) -> usize {
         self.per_realm.get(realm).map_or(0, VecDeque::len)
     }
@@ -138,6 +139,7 @@ impl MetricsQueue {
         }
     }
 
+    #[cfg_attr(not(test), expect(dead_code, reason = "test-only queue inspection"))]
     pub fn dropped_count(&self) -> u64 {
         self.dropped
     }
@@ -148,10 +150,12 @@ impl MetricsQueue {
         dropped
     }
 
+    #[cfg_attr(not(test), expect(dead_code, reason = "test-only queue inspection"))]
     pub fn len(&self) -> usize {
         self.queue.len()
     }
 
+    #[cfg_attr(not(test), expect(dead_code, reason = "test-only queue inspection"))]
     pub fn is_empty(&self) -> bool {
         self.queue.is_empty()
     }

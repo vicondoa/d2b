@@ -89,10 +89,11 @@ The committed `.bazelrc` defines:
 
 Remote profiles use the BuildBuddy Linux worker contract, Ubuntu GCC
 toolchain, minimal output downloads, compressed cache blobs, zero Bazel remote
-retries, and a bounded job count. Nix, fixture, hardware, and other local-only
-actions are tagged `local` or `no-remote-exec`; `no-remote-cache` alone does
-not make an action local. Heavy, container, VM, live-host, hardware, fixture,
-and performance lanes remain explicit local lanes.
+retries, and a bounded job count. Nix, fixture, hardware, and other local-only actions are tagged `local` or
+`no-remote-exec`; `no-remote-cache` alone does not make an action local. Heavy,
+container, VM, live-host, hardware, fixture, and performance lanes remain
+explicit local lanes. Rust target and exec actions override the worker
+toolchain's deprecated gold default with GNU ld.bfd.
 
 The credential-bearing PR gate is a `pull_request_target` workflow owned by
 protected `v3`; push seeding is also limited to `v3`. Each job checks out the
@@ -195,13 +196,29 @@ bazel run //packages/xtask:xtask -- bazel-evidence security-digest
 bazel run //packages/xtask:xtask -- bazel-evidence check-security
 ```
 
+All first-party Rust crates are compiled with
+`--@rules_rust//rust/settings:per_crate_rustc_flag=//@-Dwarnings`. The
+per-crate setting applies to workspace labels without changing external
+dependency or exec-configuration policy. Rust link actions also pass
+`-Wno-unused-command-line-argument` to clang so the toolchain's intentional
+`--unwindlib=none` selection does not emit an inapplicable driver warning.
+
 ## Redaction and failure output
 
-The facade writes redacted logs and BEP output below
-`.scratch/bazel-check/`. `bazel-evidence redact-log` rejects credential keys,
-authorization values, header authentication fields, and configured sentinel
-values before evidence is published while preserving safe failure and dispatch
-hints for classification. The same redaction applies to local fallback output.
+The facade writes each invocation's redacted logs and BEP output to an isolated
+run directory below `.scratch/bazel-check/`. `bazel-evidence redact-log`
+rejects credential keys, authorization values, header authentication fields,
+and configured sentinel values before evidence is published while preserving
+safe failure and dispatch hints for classification. The same redaction applies
+to local fallback output.
+After redaction, every retained profile rejects a log line beginning with
+`warning:`. This check applies to local, remote, trusted-seed, and local
+fallback runs, including otherwise-successful cache hits. Warning failures are
+not eligible for the typed local retry. The facade also inspects local `test.log`
+artifacts named by the BEP, including cached test results, so test output that
+is not replayed into the console cannot bypass the warning check. If a
+`test.log` URI is not a local `file://` artifact, the facade fails closed
+rather than treating the unscanned output as clean.
 
 `bazel-evidence classify-failure` is the typed fallback classifier. It
 distinguishes positively pre-dispatch infrastructure failures, plus a remote

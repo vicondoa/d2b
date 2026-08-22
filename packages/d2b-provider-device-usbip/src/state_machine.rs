@@ -689,18 +689,14 @@ mod tests {
             let (report, err) =
                 execute_usbip_plan(&plan, &mut exec).expect_err("failure path should return Err");
 
-            match err {
-                UsbipPlanError {
-                    busid,
-                    step: failed_step,
-                    reason,
-                } => {
-                    assert_eq!(busid, "1-2");
-                    assert_eq!(failed_step, step);
-                    assert!(reason.contains("synthetic failure"), "reason: {reason}");
-                }
-                other => panic!("expected UsbipPlanError, got {other:?}"),
-            }
+            let UsbipPlanError {
+                busid,
+                step: failed_step,
+                reason,
+            } = err;
+            assert_eq!(busid, "1-2");
+            assert_eq!(failed_step, step);
+            assert!(reason.contains("synthetic failure"), "reason: {reason}");
 
             assert_eq!(report.failed.as_ref().map(|(s, _)| *s), Some(step));
 
