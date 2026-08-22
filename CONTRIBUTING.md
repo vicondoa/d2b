@@ -43,6 +43,9 @@ installed; Make selects the pinned shell and preserves those profile and trust
 variables. Cargo manifests and `Cargo.lock` remain rules_rs metadata
 authority, but Cargo is not a contributor or CI gate.
 
+The `make test-lint` gate requires the declared `D2B_SHELLCHECK_BIN` and fails
+closed instead of using a host-provided shellcheck.
+
 <a id="rust-workspace-checks"></a>
 
 ### Rust and Nix owner checks

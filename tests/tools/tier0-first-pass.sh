@@ -117,12 +117,12 @@ mapfile -t shell_files < <(
 bash -n "${shell_files[@]}"
 ok "bash -n on ${#shell_files[@]} shell scripts"
 
-if command -v shellcheck >/dev/null 2>&1; then
-  shellcheck --severity=warning -x "${shell_files[@]}"
-  ok "shellcheck --severity=warning on ${#shell_files[@]} shell scripts"
-else
-  log "  SKIP: shellcheck not on PATH here; authoritative lint is make test-lint"
+shellcheck_bin=${D2B_SHELLCHECK_BIN:-}
+if [ -z "$shellcheck_bin" ] || [ ! -x "$shellcheck_bin" ]; then
+  fail "shellcheck is required for the source-hygiene gate; enter the declared Nix/Bazel test environment"
 fi
+"$shellcheck_bin" --severity=warning -x "${shell_files[@]}"
+ok "shellcheck --severity=warning on ${#shell_files[@]} shell scripts"
 
 scan_dashes "$ROOT"
 ok "source-hygiene gate complete"
