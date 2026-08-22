@@ -95,6 +95,18 @@ CI installs Nix and calls the same public Make aliases with
 `D2B_BAZEL_PROFILE=local` and `D2B_BAZEL_UNTRUSTED=1`, without a per-target
 `nix develop` wrapper.
 
+`make test-policy` does not schedule
+`tests/tools/guest-workspace-drift.py`. The retained
+`//tests/unit/meta:w0_dep_direction` target owns workspace-and-lock policy, but
+it does not assert copied Guest workspace parity. Do not cite that parity as
+passing gate evidence. When a mirrored shared crate gains or changes a
+dependency, update the guest workspace fixture and any affected override,
+refresh `packages/Cargo.guest.lock`, and run the applicable owner-local targets
+plus `make test-rust-supply-chain` and `make test-policy`. The supply-chain lane
+realizes the copied Guest workspace for dependency metadata, license, source,
+and audit validation; it does not compile Guest packages and is not a fifth
+repository-wide policy class or copied-workspace parity result.
+
 All Layer-2 lanes (types 9-11) run behind one sole-use semaphore (two slots
 per uid via open file description locks), so concurrent heavy lanes cannot
 oversubscribe the shared Nix store, Bazel output tree, or KVM device. The
