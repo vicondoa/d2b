@@ -100,8 +100,8 @@ jobs:
               main|v3) ;;
               *) fail "pull request target is not main or v3" ;;
             esac
-            [ "$D2B_REF" = "refs/heads/$D2B_BASE_REF" ] ||
-              fail "pull request ref does not match its protected base"
+            [ "$D2B_REF" = "refs/heads/$D2B_DEFAULT_BRANCH" ] ||
+              fail "pull request ref does not match the default branch"
             [ -n "$D2B_PR_NUMBER" ] && [[ "$D2B_PR_NUMBER" =~ ^[0-9]+$ ]] ||
               fail "pull request number is invalid"
             is_sha "$D2B_BASE_SHA" || fail "pull request base SHA is invalid"
@@ -325,7 +325,7 @@ jobs:
           import os
           import sys
 
-          secret = sys.stdin.buffer.read()
+          secret = os.read(9, 4096)
           if not secret or b"\x00" in secret or b"\n" in secret or b"\r" in secret:
               raise SystemExit("invalid BuildBuddy credential")
           fd = os.memfd_create("d2b-buildbuddy-credential", os.MFD_CLOEXEC)
@@ -392,6 +392,7 @@ jobs:
               //bazel/checks:test-rust-broker \
               //bazel/checks:test-rust-guest-shell-runner \
               //bazel/checks:test-policy \
+              9<&0 \
               >"$log" 2>&1
           status=$?
           set -e

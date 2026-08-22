@@ -216,6 +216,12 @@ fn main_controlled_buildbuddy_workflows_preserve_trust_contract() {
         "credential-bearing remote execution must be restricted to trusted main pushes"
     );
     assert!(
+        build.contains("refs/heads/$D2B_DEFAULT_BRANCH")
+            && build.contains("secret = os.read(9, 4096)")
+            && build.contains("9<&0"),
+        "PR ref validation and credential bootstrap must match GitHub's default-branch semantics"
+    );
+    assert!(
         build.contains("redact") && build.contains("^warning:"),
         "remote evidence must be redacted and warning-producing builds must fail closed"
     );
