@@ -98,6 +98,39 @@ GitHub Layer-1 jobs set `D2B_BAZEL_PROFILE=local` and
 set is committed in `.github/workflows/pr-l1-static-fast.yml` and must remain
 aligned with the public Make aliases.
 
+## Developer invocation metadata
+
+For developer `remote` and protected `trusted-seed` runs, `tests/tools/bazel-check`
+derives one checkout-bound metadata contract before invoking Bazel:
+
+```text
+REPO_URL=https://github.com/vicondoa/d2b
+COMMIT_SHA=<40-hex commit at HEAD>
+BRANCH_NAME=<validated symbolic branch name>
+```
+
+The facade reads all three values from the repository root it will test. It
+clears inherited Git repository-selection and configuration environment,
+verifies the discovered top-level directory, and reads the origin from local
+repository configuration. It accepts only canonical d2b Git remotes, a full
+commit object id, and a Git-valid local branch under `refs/heads/`. The branch
+and commit come from one Git status snapshot, and the facade requires two
+identical snapshots before publishing them. It passes the values as Bazel
+invocation metadata (`--build_metadata=...`) to both developer profiles; local
+execution omits them. The contract uses no `GITHUB_*`, `CI_*`, user, host,
+credential, or workspace-path environment values, and never forwards a remote
+URL containing credentials.
+
+If Git is unavailable, the origin is not canonical, `HEAD` cannot be resolved,
+the checkout is detached, or the branch and commit change while the tuple is
+collected, the facade emits an explicit diagnostic and omits all three fields
+rather than publishing a partial or misleading revision. This is not a local
+retry condition.
+
+`--build_metadata` is Build Event Service invocation metadata, not an action
+input. It therefore does not change ordinary action keys or invalidate
+reusable outputs, and the global `--stamp=no` contract remains unchanged.
+
 ## Credentials and trust selection
 
 Store the developer API key as one line in the protected file named by
