@@ -75,7 +75,7 @@
       "tests/tools/bazel-check"
     ],
     "allowedSecurityDigests": [
-      "sha256:cf12e6f7c73eb0375e9ffe2753cc7f1e70f213b1ec25377290b2509a00947f98"
+      "sha256:128ade7a73c07c191edd5015d611f389f70500aa23bdc1049fae895fa6369e46"
     ],
     "untrustedCredential": "none",
     "trustedCredential": "credential-helper"
