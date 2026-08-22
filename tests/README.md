@@ -65,8 +65,7 @@ Rust tests (types 2-5: unit, integration, contract, policy-lint) live under
 | `make test-performance-budgets` | advisory performance canary; without `D2B_PERF_STABLE=1` it reports `SKIP` and enforces nothing | local + CI |
 | `make test-integration` | type-9 podman container tests | conditional local host lane (podman; not the PR pipeline) |
 | `make test-host-integration` | type-10 runNixOSTest VM checks; set `D2B_VM_CHECK=<name>` for one named check | conditional local NixOS host lane (KVM; TCG fallback; not the PR pipeline) |
-| `make check-fast` | alias for `test-unit` (backward compat) | local + CI |
-| `make check` | complete nested Bazel suite graph with fixed CI enforcement | local |
+| `make check-fast` | compatibility alias for `make check` | local + CI |
 | `make bazel-check` | Bazel aggregate suite used by `make check`. Defaults to BuildBuddy remotely; CI forces `D2B_BAZEL_PROFILE=local` | local or remote |
 | `make heavy-gate-build && bazel-bin/packages/xtask/xtask heavy-gate -- env D2B_LIVE=1 bash tests/integration/live/<x>.sh` | type-11 live-host tests, through the heavy-gate semaphore | **manual, against a deployed d2b host** |
 
@@ -95,16 +94,6 @@ direnv integration is supported for interactive use but is not required.
 CI installs Nix and calls the same public Make aliases with
 `D2B_BAZEL_PROFILE=local` and `D2B_BAZEL_UNTRUSTED=1`, without a per-target
 `nix develop` wrapper.
-
-`make test-policy` includes the fail-closed `guest-workspace-drift` guard. The
-guard checks that the crates copied by `mkGuestRustPackagesSrc`, the members and
-workspace dependencies in
-`tests/fixtures/guest-rust-workspace/Cargo.toml`, any
-`tests/fixtures/guest-rust-workspace/*.Cargo.toml` overrides, and
-`packages/Cargo.guest.lock` remain one resolvable locked workspace. When a
-mirrored shared crate gains or changes a dependency, update the guest workspace
-fixture and any affected override, refresh `packages/Cargo.guest.lock`, and run
-`make test-policy`.
 
 All Layer-2 lanes (types 9-11) run behind one sole-use semaphore (two slots
 per uid via open file description locks), so concurrent heavy lanes cannot
