@@ -345,6 +345,34 @@ bep_has_test_result() {
     jq -e -s 'any(.[]; .testResult != null)' "$path" >/dev/null 2>&1
 }
 
+test_logs_have_warning() {
+  local path="$1"
+  [ -s "$path" ] || return 1
+  local uris
+  if ! uris="$(jq -r -s \
+    '.[] | .testResult.testActionOutput[]? | select(.name == "test.log") | .uri // empty' \
+    "$path")"; then
+    return 2
+  fi
+
+  local uri test_log warning_status
+  while IFS= read -r uri; do
+    [ -n "$uri" ] || continue
+    case "$uri" in
+      file://*) test_log="${uri#file://}" ;;
+      *) continue ;;
+    esac
+    warning_status=0
+    warning_line_status "$test_log" || warning_status=$?
+    case "$warning_status" in
+      0) return 0 ;;
+      1) ;;
+      *) return 2 ;;
+    esac
+  done <<<"$uris"
+  return 1
+}
+
 run_bazel() {
   local profile="$1"
   local log_path="$2"
@@ -394,6 +422,13 @@ run_bazel() {
   if [ "$raw_warning_status" -eq 0 ]; then
     LAST_BAZEL_WARNING=1
   elif [ "$raw_warning_status" -gt 1 ]; then
+    LAST_WARNING_SCAN_FAILURE=1
+  fi
+  local test_log_warning_status=0
+  test_logs_have_warning "$bep_path" || test_log_warning_status=$?
+  if [ "$test_log_warning_status" -eq 0 ]; then
+    LAST_BAZEL_WARNING=1
+  elif [ "$test_log_warning_status" -gt 1 ]; then
     LAST_WARNING_SCAN_FAILURE=1
   fi
   if [ "$status" -eq 0 ] && ! bep_has_test_result "$bep_path"; then

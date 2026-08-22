@@ -657,20 +657,34 @@ fn warning_after_cache_hit_fails_a_successful_local_run() {
     ));
     std::fs::create_dir_all(&scratch).expect("create wrapper test scratch");
     let bazel = scratch.join("bazel");
+    let cache_state = scratch.join("cache-state");
+    let test_log = scratch.join("cached-test.log");
     write_executable(
         &bazel,
-        "#!/usr/bin/env bash\n\
-         for arg in \"$@\"; do\n\
-           case \"$arg\" in\n\
-             --build_event_json_file=*) bep=\"${arg#*=}\" ;;\n\
-           esac\n\
-         done\n\
-         printf 'action cache hit\\nwarning: synthetic toolchain warning\\n'\n\
-         printf '{\"id\":{\"started\":{\"uuid\":\"cache-hit\"}},\"testResult\":{\"label\":\"//:test\"}}\\n' > \"$bep\"\n\
-         exit 0\n",
+        &format!(
+            "#!/usr/bin/env bash\n\
+             for arg in \"$@\"; do\n\
+               case \"$arg\" in\n\
+                 --build_event_json_file=*) bep=\"${{arg#*=}}\" ;;\n\
+               esac\n\
+             done\n\
+             if [ -e '{}' ]; then\n\
+               cached=true\n\
+             else\n\
+               cached=false\n\
+               : > '{}'\n\
+             fi\n\
+             printf 'warning: synthetic cached test warning\\n' > '{}'\n\
+             printf '{{\"id\":{{\"testResult\":{{\"label\":\"//:test\"}}}},\"testResult\":{{\"testActionOutput\":[{{\"name\":\"test.log\",\"uri\":\"file://{}\"}}],\"cachedLocally\":%s,\"status\":\"PASSED\"}}}}\\n' \"$cached\" > \"$bep\"\n\
+             exit 0\n",
+            cache_state.display(),
+            cache_state.display(),
+            test_log.display(),
+            test_log.display(),
+        ),
     );
 
-    let output = Command::new("bash")
+    let first_output = Command::new("bash")
         .arg(repo_root().join("tests/tools/bazel-check"))
         .args(["--profile", "local", "--", "//:test"])
         .env("D2B_BAZEL_BIN", &bazel)
@@ -678,15 +692,26 @@ fn warning_after_cache_hit_fails_a_successful_local_run() {
         .env("D2B_XTASK_BIN", env!("CARGO_BIN_EXE_xtask"))
         .env("D2B_BAZEL_CHECK_SCRATCH", scratch.join("evidence"))
         .output()
-        .expect("run bazel-check");
+        .expect("run first bazel-check");
 
-    assert!(!output.status.success());
+    let second_output = Command::new("bash")
+        .arg(repo_root().join("tests/tools/bazel-check"))
+        .args(["--profile", "local", "--", "//:test"])
+        .env("D2B_BAZEL_BIN", &bazel)
+        .env("D2B_PROJECT_SHELL", "d2b")
+        .env("D2B_XTASK_BIN", env!("CARGO_BIN_EXE_xtask"))
+        .env("D2B_BAZEL_CHECK_SCRATCH", scratch.join("evidence"))
+        .output()
+        .expect("run second bazel-check");
+
+    assert_eq!(first_output.status.code(), Some(1));
+    assert_eq!(second_output.status.code(), Some(1));
     let diagnostics = format!(
         "{}{}",
-        String::from_utf8_lossy(&output.stdout),
-        String::from_utf8_lossy(&output.stderr)
+        String::from_utf8_lossy(&second_output.stdout),
+        String::from_utf8_lossy(&second_output.stderr)
     );
-    assert!(diagnostics.contains("warning: synthetic toolchain warning"));
+    assert!(diagnostics.contains("warning line found"));
     assert!(!diagnostics.contains("bazel-check: local passed"));
     let _ = std::fs::remove_dir_all(scratch);
 }
