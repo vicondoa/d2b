@@ -19,6 +19,18 @@ const REQUIRED_AGGREGATE_JOBS: &[&str] = &[
 
 fn workflow() -> String {
     let relative = ".github/workflows/pr-l1-static-fast.yml";
+    if let Some(root) = std::env::var_os("D2B_BAZEL_SOURCE_ROOT")
+        .or_else(|| std::env::var_os("D2B_REPO_ROOT"))
+    {
+        let path = PathBuf::from(root).join(relative);
+        return std::fs::read_to_string(&path).unwrap_or_else(|error| {
+            panic!(
+                "tested PR workflow is not readable at {}: {error}",
+                path.display()
+            )
+        });
+    }
+
     let mut candidates = Vec::new();
     for variable in ["TEST_SRCDIR", "RUNFILES_DIR"] {
         if let Some(base) = std::env::var_os(variable).map(PathBuf::from) {
@@ -237,6 +249,12 @@ fn assert_trusted_workflow_contract(workflow: &str) {
         "test-performance-budgets",
     ] {
         let block = job_block(workflow, job);
+        assert!(
+            block.contains(
+                "if: ${{ github.event_name == 'push' || github.event.pull_request.merge_commit_sha != '' }}"
+            ),
+            "{job} must fail closed when the PR merge SHA is unavailable"
+        );
         assert!(
             block.contains("D2B_BAZEL_PROFILE: local"),
             "{job} must remain local-only"

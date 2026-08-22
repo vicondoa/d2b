@@ -1823,6 +1823,8 @@ fn trusted_ci_rejects_pr_metadata_tampering() {
                  case \"$*\" in *'{invalid_commit}^{{commit}}'*) exit 1 ;; *) exit 0 ;; esac\n\
                  ;;\n\
                *'merge-base --is-ancestor'*)\n\
+                 if [ \"${{D2B_TEST_FAIL_ANCESTRY:-}}\" = base ] && [[ \"$*\" == *'{base_commit}'* ]]; then exit 1; fi\n\
+                 if [ \"${{D2B_TEST_FAIL_ANCESTRY:-}}\" = head ] && [[ \"$*\" == *'{head_commit}'* ]]; then exit 1; fi\n\
                  case \"$*\" in *'{invalid_commit}'*) exit 1 ;; *) exit 0 ;; esac\n\
                  ;;\n\
                *'rev-parse --show-toplevel'*) printf '%s\\n' '{source_root}' ;;\n\
@@ -1850,7 +1852,7 @@ fn trusted_ci_rejects_pr_metadata_tampering() {
     write_executable(&xtask, "#!/usr/bin/env bash\nexit 0\n");
     std::fs::write(scratch.join(".bazelrc"), "").expect("write CI metadata Bazel rc");
 
-    let run = |base_sha: &str| {
+    let run = |base_sha: &str, fail_ancestry: &str| {
         Command::new("bash")
             .arg(repo_root().join("tests/tools/bazel-check"))
             .args(["--profile", "local", "--", "//:test"])
@@ -1863,6 +1865,7 @@ fn trusted_ci_rejects_pr_metadata_tampering() {
             .env("D2B_BAZEL_TRUSTED", "1")
             .env("D2B_BAZEL_PROFILE", "local")
             .env("D2B_BAZEL_BASE_SHA", base_sha)
+            .env("D2B_TEST_FAIL_ANCESTRY", fail_ancestry)
             .env("D2B_BAZEL_HEAD_SHA", head_commit)
             .env("D2B_BAZEL_MERGE_SHA", merge_commit)
             .env("D2B_BAZEL_TRUSTED_SHA", base_commit)
@@ -1888,7 +1891,7 @@ fn trusted_ci_rejects_pr_metadata_tampering() {
             .expect("run trusted CI metadata profile")
     };
 
-    let output = run(base_commit);
+    let output = run(base_commit, "");
     assert!(
         output.status.success(),
         "valid trusted PR metadata must pass: {output:?}"
@@ -1898,8 +1901,26 @@ fn trusted_ci_rejects_pr_metadata_tampering() {
             .expect("read staged trusted Bazel rc"),
         "true"
     );
-    let output = run(invalid_commit);
+    let output = run(invalid_commit, "");
     assert_eq!(output.status.code(), Some(76));
+    let output = run(base_commit, "base");
+    assert_eq!(output.status.code(), Some(76));
+    assert!(
+        String::from_utf8_lossy(&output.stderr).contains("not based on protected v3"),
+        "base ancestry failure must identify the protected-v3 check: {output:?}"
+    );
+    let output = run(base_commit, "head");
+    assert_eq!(output.status.code(), Some(76));
+    assert!(
+        String::from_utf8_lossy(&output.stderr).contains("PR head SHA is not an ancestor"),
+        "head ancestry failure must identify the PR-head check: {output:?}"
+    );
+    let output = run("", "");
+    assert_eq!(output.status.code(), Some(76));
+    assert!(
+        String::from_utf8_lossy(&output.stderr).contains("OID metadata is invalid"),
+        "missing base SHA must fail closed before the legacy path: {output:?}"
+    );
     let _ = std::fs::remove_dir_all(scratch);
 }
 

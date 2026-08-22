@@ -287,8 +287,7 @@ ci_metadata() {
 
 ci_mode() {
   [ "${D2B_BAZEL_TRUSTED:-0}" = 1 ] &&
-    [ "${GITHUB_ACTIONS:-false}" = true ] &&
-    [ -n "${D2B_BAZEL_BASE_SHA:-}" ]
+  [ "${GITHUB_ACTIONS:-false}" = true ]
 }
 
 validate_ci_context() {
