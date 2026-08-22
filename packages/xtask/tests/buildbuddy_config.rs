@@ -484,9 +484,9 @@ fn committed_profiles_deny_first_party_rust_warnings_and_guard_facade_logs() {
     );
     assert!(
         bazelrc.contains(
-            "--@rules_rust//rust/settings:per_crate_rustc_flag=//@-Clink-arg=-Wno-unused-command-line-argument"
+            "--@rules_rust//rust/settings:extra_rustc_flag=-Clink-arg=-Wno-unused-command-line-argument"
         ),
-        "Rust link actions must silence clang's inapplicable unwindlib warning"
+        "all Rust link actions must silence clang's inapplicable unwindlib warning"
     );
     for profile in ["remote", "trusted-seed"] {
         assert!(

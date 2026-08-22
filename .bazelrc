@@ -4,7 +4,7 @@ common --lockfile_mode=error
 common --@protobuf//bazel/toolchains:prefer_prebuilt_protoc
 common --@protobuf//bazel/flags:allow_nonstandard_protoc
 build --@rules_rust//rust/settings:per_crate_rustc_flag=//@-Dwarnings
-build --@rules_rust//rust/settings:per_crate_rustc_flag=//@-Clink-arg=-Wno-unused-command-line-argument
+build --@rules_rust//rust/settings:extra_rustc_flag=-Clink-arg=-Wno-unused-command-line-argument
 common --per_file_copt=external/.*protobuf.*@--PROTOBUF_WAS_NOT_SUPPOSED_TO_BE_BUILT
 common --host_per_file_copt=external/.*protobuf.*@--PROTOBUF_WAS_NOT_SUPPOSED_TO_BE_BUILT
 common --per_file_copt=external/.*grpc.*@--GRPC_WAS_NOT_SUPPOSED_TO_BE_BUILT
