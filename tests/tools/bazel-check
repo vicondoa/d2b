@@ -410,6 +410,7 @@ run_bazel() {
     --test_env=D2B_BAZEL_BIN="$bazel_bin" \
     --test_env=D2B_PROJECT_SHELL=d2b \
     --test_env=D2B_SHELLCHECK_BIN="${D2B_SHELLCHECK_BIN:-}" \
+    --action_env=PATH="$test_path" \
     --test_env=PATH="$test_path" \
     --test_env=BAZEL_SH="$test_bazel_sh" \
     "$@" \

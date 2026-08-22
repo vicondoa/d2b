@@ -426,6 +426,10 @@ fn committed_profiles_share_authentication_and_worker_policy() {
         wrapper.contains("--test_env=D2B_SHELLCHECK_BIN=\"${D2B_SHELLCHECK_BIN:-}\""),
         "source-hygiene tests must receive the declared shellcheck binary"
     );
+    assert!(
+        wrapper.contains("--action_env=PATH=\"$test_path\""),
+        "Bazel test-runner actions must resolve pinned shell tools through the computed test PATH"
+    );
     let flake = read_text("flake.nix");
     assert!(
         flake.contains("export D2B_SHELLCHECK_BIN=\"${pkgs.shellcheck}/bin/shellcheck\""),
