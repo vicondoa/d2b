@@ -317,6 +317,8 @@ fn assert_trusted_wrapper_contract(wrapper: &str) {
         "D2B_BAZEL_BASE_SHA",
         "D2B_BAZEL_HEAD_SHA",
         "D2B_BAZEL_MERGE_SHA",
+        "--build_metadata=COMMIT_SHA=$head_sha",
+        "--build_metadata=COMMIT_SHA=$tested_sha",
         "D2B_BAZEL_PR_NUMBER",
         "D2B_BAZEL_RUN_ID",
         "D2B_BAZEL_REQUIRE_REMOTE",

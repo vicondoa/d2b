@@ -18,3 +18,6 @@
   preflight remains local and credential-free. Credential-bearing jobs reject
   local action execution and run local policy checks on a fresh
   credential-free runner.
+- BuildBuddy commit metadata now identifies the immutable PR head for
+  pull-request status linkage and the tested protected push commit for seed
+  runs, rather than inheriting the default-branch workflow SHA.

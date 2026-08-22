@@ -151,10 +151,12 @@ event before invoking Bazel. For pull requests it requires
 `GITHUB_REF=refs/heads/main`, a `main` workflow reference, and a trusted
 checkout matching `GITHUB_SHA`; the base ref may be `main` or `v3`. It
 publishes those immutable OIDs and run/linkage fields as BuildBuddy metadata,
-and derives a cache instance namespace from the PR number and head SHA
+uses the PR head as the BuildBuddy commit identity for pull-request status
+linkage, and derives a cache instance namespace from the PR number and head SHA
 (`d2b/pr/<number>/<head-sha>/...`). Protected pushes use their immutable event
-commit and the separate trusted-seed namespace. A stale checkout, mismatched
-event, or non-main pull-request workflow fails closed.
+commit as the BuildBuddy commit identity and use the separate trusted-seed
+namespace. A stale checkout, mismatched event, or non-main pull-request
+workflow fails closed.
 
 ## Credentials and trust selection
 

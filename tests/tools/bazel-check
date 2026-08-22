@@ -357,7 +357,12 @@ ci_metadata() {
     "--build_metadata=EVENT_NAME=$event"
   )
   if [ "$event" = pull_request_target ]; then
-    BUILD_BUDDY_METADATA_FLAGS+=("--build_metadata=PR_NUMBER=$pr_number")
+    BUILD_BUDDY_METADATA_FLAGS+=(
+      "--build_metadata=COMMIT_SHA=$head_sha"
+      "--build_metadata=PR_NUMBER=$pr_number"
+    )
+  else
+    BUILD_BUDDY_METADATA_FLAGS+=("--build_metadata=COMMIT_SHA=$tested_sha")
   fi
 }
 
