@@ -10,4 +10,4 @@ permissions:
 jobs:
   build:
     name: build
-    uses: vicondoa/d2b/.github/workflows/build.yaml@refs/heads/main
+    uses: vicondoa/d2b/.github/workflows/build.yaml@main
