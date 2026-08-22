@@ -72,7 +72,12 @@
       "MODULE.bazel.lock",
       "bazel/platforms/BUILD.bazel",
       "bazel/remote/BUILD.bazel",
-      "tests/tools/bazel-check"
+      "tests/tools/bazel-check",
+      "tests/tools/bazel-check-bootstrap",
+      "tests/tools/ci-shell",
+      "tests/tools/scrub-shell-environment",
+      "Makefile",
+      ".github/workflows/pr-l1-static-fast.yml"
     ],
     "allowedSecurityDigests": [
       "sha256:a1c2b67628ffe701eda58232d76523c2e3fcb141a4aea68550907f1da45632c1"

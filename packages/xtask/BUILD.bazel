@@ -194,6 +194,7 @@ rust_test(
         "//bazel/checks/meta:BUILD.bazel",
         "//:tests/tools/bazel-check",
         "//:tests/tools/tier0-first-pass.sh",
+        "//:tests/tools/bazel-check-bootstrap",
         "//:tests/golden/bazel/cache-policy.json",
         "//packages/d2b-bus:BUILD.bazel",
         "//packages/d2b:BUILD.bazel",

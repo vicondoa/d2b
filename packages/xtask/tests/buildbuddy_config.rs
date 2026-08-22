@@ -2,9 +2,10 @@
 
 use std::{
     collections::{BTreeMap, BTreeSet},
+    io::Write,
     os::unix::fs::PermissionsExt,
     path::{Path, PathBuf},
-    process::Command,
+    process::{Command, Stdio},
     sync::OnceLock,
 };
 
@@ -269,6 +270,45 @@ fn rule_tags(block: &str) -> BTreeSet<String> {
         .collect()
 }
 
+fn assert_trusted_bazelrc_contract(bazelrc: &str) {
+    for line in [
+        "build:remote --remote_executor=grpcs://d2b.buildbuddy.io",
+        "build:remote --remote_cache=grpcs://d2b.buildbuddy.io",
+        "build:remote --bes_backend=grpcs://d2b.buildbuddy.io",
+        "build:remote --credential_helper=d2b.buildbuddy.io=%workspace%/tests/tools/bazel-check",
+    ] {
+        assert!(bazelrc.contains(line), "trusted .bazelrc lost {line}");
+    }
+    assert!(
+        !bazelrc.contains("--remote_header") && !bazelrc.contains("--bes_header"),
+        "trusted .bazelrc must not use header authentication"
+    );
+}
+
+fn assert_trusted_wrapper_contract(wrapper: &str) {
+    for marker in [
+        "D2B_BAZEL_SOURCE_ROOT",
+        "D2B_BAZEL_TRUSTED_ROOT",
+        "D2B_BAZEL_TRUSTED_SHA",
+        "prepare_trusted_control_files",
+        "--noworkspace_rc",
+        "--remote_executor=grpcs://d2b.buildbuddy.io",
+        "--remote_cache=grpcs://d2b.buildbuddy.io",
+        "--bes_backend=grpcs://d2b.buildbuddy.io",
+        "--credential_helper=d2b.buildbuddy.io=$TRUSTED_ROOT/tests/tools/bazel-check",
+        "D2B_BAZEL_TESTED_SHA",
+        "D2B_BAZEL_BASE_SHA",
+        "D2B_BAZEL_HEAD_SHA",
+        "D2B_BAZEL_MERGE_SHA",
+        "D2B_BAZEL_PR_NUMBER",
+        "D2B_BAZEL_RUN_ID",
+        "D2B_BAZEL_REQUIRE_REMOTE",
+        "D2B_BAZEL_CREDENTIAL_FD",
+    ] {
+        assert!(wrapper.contains(marker), "trusted facade lost {marker}");
+    }
+}
+
 #[test]
 fn committed_profiles_share_authentication_and_worker_policy() {
     let bazelrc = read_text(".bazelrc");
@@ -394,6 +434,18 @@ fn committed_profiles_share_authentication_and_worker_policy() {
     assert!(
         !wrapper.contains("--dispatch-evidence"),
         "BEP file presence alone must not suppress pre-dispatch fallback"
+    );
+    assert!(
+        wrapper.contains("D2B_BAZEL_TRUSTED_ROOT"),
+        "CI must keep trusted control files separate from the tested checkout"
+    );
+    assert!(
+        wrapper.contains("D2B_BAZEL_SOURCE_ROOT"),
+        "CI must run the tested source through the trusted facade"
+    );
+    assert!(
+        wrapper.contains("D2B_BAZEL_CREDENTIAL_FD"),
+        "CI credentials must use the bootstrap descriptor boundary"
     );
     assert!(
         wrapper.contains("command_flags+=(--shell_executable=/bin/bash)"),
@@ -1085,7 +1137,7 @@ fn default_shell_includes_the_pinned_bazel_contract() {
 }
 
 #[test]
-fn ci_uses_public_make_aliases_without_nested_nix_develop_wrappers() {
+fn ci_uses_trusted_public_make_aliases_without_nested_nix_develop_wrappers() {
     let workflow = read_text(".github/workflows/pr-l1-static-fast.yml");
     assert!(
         workflow
@@ -1095,20 +1147,23 @@ fn ci_uses_public_make_aliases_without_nested_nix_develop_wrappers() {
         "CI must use the public Make dispatcher instead of per-target Nix wrappers"
     );
     assert!(
-        workflow.contains("D2B_BAZEL_PROFILE: local")
-            && workflow.contains("D2B_BAZEL_UNTRUSTED: \"1\""),
-        "CI must keep the local and untrusted BuildBuddy boundary"
+        workflow.contains(
+            "D2B_BAZEL_PROFILE: ${{ github.event_name == 'push' && 'trusted-seed' || 'remote' }}"
+        )
+            && workflow.contains("D2B_BAZEL_PROFILE: local")
+            && !workflow.contains("D2B_BAZEL_UNTRUSTED: \"1\""),
+        "CI must use the trusted remote and local-only BuildBuddy profiles"
     );
     let make_runs = workflow
         .lines()
         .filter(|line| {
             let trimmed = line.trim_start();
-            trimmed.starts_with("run: make ") || trimmed == "run: make"
+            trimmed.contains("make -C trusted")
         })
         .count();
     assert!(
-        make_runs >= 10,
-        "the Layer-1 workflow should exercise public Make aliases directly (found {make_runs})"
+        make_runs >= 12,
+        "the Layer-1 workflow should exercise trusted public Make aliases directly (found {make_runs})"
     );
 }
 
@@ -1554,21 +1609,17 @@ fn policy_preserves_remote_profiles_and_trust_partition() {
         remote.get("workerImageContract").and_then(Value::as_str),
         Some("d2b-bazel-worker/v1")
     );
-    assert!(
-        policy["profiles"]["remote"]["namespace"]
-            .as_str()
-            .is_some_and(|namespace| namespace.contains("/worker-v1/minimal/lock-v1"))
-    );
+    assert!(policy["profiles"]["remote"]["namespace"]
+        .as_str()
+        .is_some_and(|namespace| namespace.contains("/worker-v1/minimal/lock-v1")));
     assert_eq!(
         policy["profiles"]["trusted-seed"]["remoteCacheAsync"].as_bool(),
         Some(false)
     );
-    assert!(
-        remote["experimentalFeatures"]
-            .as_array()
-            .expect("experimental feature list")
-            .is_empty()
-    );
+    assert!(remote["experimentalFeatures"]
+        .as_array()
+        .expect("experimental feature list")
+        .is_empty());
 
     let trusted = object(
         object(&policy, "cache policy")
@@ -1584,15 +1635,175 @@ fn policy_preserves_remote_profiles_and_trust_partition() {
         trusted.get("untrustedCredential").and_then(Value::as_str),
         Some("none")
     );
+    let allowlisted = trusted["allowlistedSecurityFiles"]
+        .as_array()
+        .expect("allowlisted security files");
+    for path in [
+        ".github/workflows/pr-l1-static-fast.yml",
+        "Makefile",
+        "tests/tools/ci-shell",
+        "tests/tools/bazel-check-bootstrap",
+    ] {
+        assert!(
+            allowlisted.iter().any(|value| value.as_str() == Some(path)),
+            "trusted security digest must cover {path}"
+        );
+    }
+    assert!(trusted["allowedSecurityDigests"]
+        .as_array()
+        .expect("security digest allowlist")
+        .iter()
+        .all(|digest| digest
+            .as_str()
+            .is_some_and(|value| value.starts_with("sha256:"))));
+}
+
+#[test]
+fn trusted_control_plane_rejects_malicious_edits() {
+    let bazelrc = read_text(".bazelrc");
+    assert_trusted_bazelrc_contract(&bazelrc);
+    let wrapper = read_text("tests/tools/bazel-check");
+    assert_trusted_wrapper_contract(&wrapper);
+
+    for tampered in [
+        bazelrc.replace("grpcs://d2b.buildbuddy.io", "grpcs://evil.invalid"),
+        bazelrc.replace(
+            "build:remote --credential_helper=d2b.buildbuddy.io=%workspace%/tests/tools/bazel-check",
+            "build:remote --credential_helper=d2b.buildbuddy.io=workspace/tests/tools/bazel-check",
+        ),
+    ] {
+        assert!(
+            std::panic::catch_unwind(|| assert_trusted_bazelrc_contract(&tampered)).is_err(),
+            "malicious .bazelrc edit was accepted"
+        );
+    }
+    for tampered in [
+        wrapper.replace(
+            "--remote_executor=grpcs://d2b.buildbuddy.io",
+            "--remote_executor=grpcs://evil.invalid",
+        ),
+        wrapper.replace(
+            "--credential_helper=d2b.buildbuddy.io=$TRUSTED_ROOT/tests/tools/bazel-check",
+            "--credential_helper=d2b.buildbuddy.io=$ROOT/tests/tools/bazel-check",
+        ),
+        wrapper.replace("D2B_BAZEL_TESTED_SHA", "D2B_BAZEL_HEAD_SHA"),
+    ] {
+        assert!(
+            std::panic::catch_unwind(|| assert_trusted_wrapper_contract(&tampered)).is_err(),
+            "malicious facade edit was accepted"
+        );
+    }
+}
+
+#[test]
+fn bootstrap_transfers_only_a_credential_fd() {
+    let mut child = Command::new(repo_root().join("tests/tools/bazel-check-bootstrap"))
+        .args([
+            "python3",
+            "-c",
+            "import os; fd=int(os.environ['D2B_BAZEL_CREDENTIAL_FD']); assert os.pread(fd, 99, 0) == b'synthetic-token'; assert 'D2B_BUILDBUDDY_API_KEY' not in os.environ",
+        ])
+        .stdin(Stdio::piped())
+        .spawn()
+        .expect("spawn credential bootstrap");
+    child
+        .stdin
+        .take()
+        .expect("open bootstrap stdin")
+        .write_all(b"synthetic-token")
+        .expect("write synthetic credential");
     assert!(
-        trusted["allowedSecurityDigests"]
-            .as_array()
-            .expect("security digest allowlist")
-            .iter()
-            .all(|digest| digest
-                .as_str()
-                .is_some_and(|value| value.starts_with("sha256:")))
+        child.wait().expect("wait for credential bootstrap").success(),
+        "bootstrap must expose only the inherited credential descriptor"
     );
+}
+
+#[test]
+fn trusted_ci_rejects_pr_metadata_tampering() {
+    let scratch = repo_root().join(".scratch").join(format!(
+        "bazel-check-ci-metadata-test-{}",
+        std::process::id()
+    ));
+    let bin = scratch.join("bin");
+    std::fs::create_dir_all(&bin).expect("create CI metadata test directory");
+    let commit = "0123456789abcdef0123456789abcdef01234567";
+    let git = bin.join("git");
+    write_executable(
+        &git,
+        &format!(
+            "#!/usr/bin/env bash\n\
+             case \"$*\" in\n\
+               *'status --porcelain=v2 --branch --untracked-files=no -z'*) printf '# branch.oid {0}\\0# branch.head feature/issue-447\\0' ;;\n\
+               *'config --local --get remote.origin.url'*) printf 'https://github.com/vicondoa/d2b.git\\n' ;;\n\
+               *'check-ref-format --branch'*) exit 0 ;;\n\
+               *'rev-parse --verify'*) printf '{0}\\n' ;;\n\
+               *'cat-file -e'*|*'merge-base --is-ancestor'*) exit 0 ;;\n\
+               *'rev-parse --show-toplevel'*) printf '%s\\n' \"$D2B_BAZEL_SOURCE_ROOT\" ;;\n\
+               *) exit 1 ;;\n\
+             esac\n",
+            commit
+        ),
+    );
+    let bazel = bin.join("bazel");
+    write_executable(
+        &bazel,
+        "#!/usr/bin/env bash\n\
+         for arg in \"$@\"; do\n\
+           case \"$arg\" in\n\
+             --build_event_json_file=*) bep=\"${arg#*=}\" ;;\n\
+           esac\n\
+         done\n\
+         printf '{\"testResult\":{\"status\":\"PASSED\"}}\\n' > \"$bep\"\n",
+    );
+    let xtask = bin.join("xtask");
+    write_executable(&xtask, "#!/usr/bin/env bash\nexit 0\n");
+    std::fs::write(scratch.join(".bazelrc"), "").expect("write CI metadata Bazel rc");
+
+    let run = |base_sha: &str| {
+        Command::new("bash")
+            .arg(repo_root().join("tests/tools/bazel-check"))
+            .args(["--profile", "local", "--", "//:test"])
+            .env("D2B_BAZEL_BIN", &bazel)
+            .env("D2B_XTASK_BIN", &xtask)
+            .env("D2B_BAZEL_SOURCE_ROOT", &scratch)
+            .env("D2B_BAZEL_TRUSTED_ROOT", &scratch)
+            .env("D2B_BAZEL_CHECK_SCRATCH", scratch.join("evidence"))
+            .env("D2B_BAZEL_TRUSTED", "1")
+            .env("D2B_BAZEL_PROFILE", "local")
+            .env("D2B_BAZEL_BASE_SHA", base_sha)
+            .env("D2B_BAZEL_HEAD_SHA", commit)
+            .env("D2B_BAZEL_MERGE_SHA", commit)
+            .env("D2B_BAZEL_TRUSTED_SHA", commit)
+            .env("D2B_BAZEL_PR_NUMBER", "447")
+            .env("D2B_BAZEL_BRANCH", "feature/issue-447")
+            .env("D2B_BAZEL_RUN_ID", "123")
+            .env(
+                "D2B_BAZEL_WORKFLOW_REF",
+                "vicondoa/d2b/.github/workflows/pr-l1-static-fast.yml@refs/heads/v3",
+            )
+            .env("GITHUB_ACTIONS", "true")
+            .env("GITHUB_EVENT_NAME", "pull_request_target")
+            .env("GITHUB_REF", "refs/heads/v3")
+            .env("GITHUB_REPOSITORY", "vicondoa/d2b")
+            .env("GITHUB_SERVER_URL", "https://github.com")
+            .env("GITHUB_BASE_REF", "v3")
+            .env("GITHUB_HEAD_REF", "feature/issue-447")
+            .env(
+                "PATH",
+                format!("{}:{}", bin.display(), std::env::var("PATH").unwrap()),
+            )
+            .output()
+            .expect("run trusted CI metadata profile")
+    };
+
+    let output = run(commit);
+    assert!(
+        output.status.success(),
+        "valid trusted PR metadata must pass: {output:?}"
+    );
+    let output = run("ffffffffffffffffffffffffffffffffffffffff");
+    assert_eq!(output.status.code(), Some(76));
+    let _ = std::fs::remove_dir_all(scratch);
 }
 
 #[test]

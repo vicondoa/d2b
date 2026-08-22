@@ -125,7 +125,9 @@ check-ci:
 
 ## bazel-check - complete Bazel graph. Locally this defaults to the
 ## BuildBuddy profile; the facade falls back to local execution when the
-## credential is unavailable. CI sets D2B_BAZEL_PROFILE=local.
+## credential is unavailable. Trusted v3 CI selects remote for eligible
+## actions and sets D2B_BAZEL_REQUIRE_REMOTE=1; local-only CI lanes select
+## the local profile.
 D2B_BAZEL_PROFILE ?= remote
 D2B_BAZEL_TEST_TAG_FILTERS ?= -manual,-gpu,-kvm
 

@@ -37,11 +37,12 @@ and public conditional integration targets.
 
 `make check` invokes the public Bazel suite facade. Nested component and
 package-level suites own the complete Layer-1 graph. A developer host uses
-BuildBuddy for eligible actions; GitHub Layer-1 runs the same graph locally
-with `D2B_BAZEL_PROFILE=local` and `D2B_BAZEL_UNTRUSTED=1`. CI only needs Nix
-installed; Make selects the pinned shell and preserves those profile and trust
-variables. Cargo manifests and `Cargo.lock` remain rules_rs metadata
-authority, but Cargo is not a contributor or CI gate.
+BuildBuddy for eligible actions; protected `v3` GitHub Layer-1 jobs use the
+trusted workflow and brokered credential for remote-eligible actions while
+keeping local-only actions local. CI only needs Nix installed; Make selects the
+pinned shell and preserves those profile and trust variables. Cargo manifests
+and `Cargo.lock` remain rules_rs metadata authority, but Cargo is not a
+contributor or CI gate.
 
 The `make test-lint` gate requires the declared `D2B_SHELLCHECK_BIN` and fails
 closed instead of using a host-provided shellcheck.

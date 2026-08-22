@@ -2,18 +2,23 @@
 set -euo pipefail
 
 ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../.." && pwd)"
+TRUSTED_ROOT="${D2B_BAZEL_TRUSTED_ROOT:-$ROOT}"
+SOURCE_ROOT="${D2B_BAZEL_SOURCE_ROOT:-$ROOT}"
+TRUSTED_ROOT="$(cd -- "$TRUSTED_ROOT" && pwd)"
+SOURCE_ROOT="$(cd -- "$SOURCE_ROOT" && pwd)"
 PROFILE=""
 SCRATCH="${D2B_BAZEL_CHECK_SCRATCH:-$ROOT/.scratch/bazel-check}"
 TARGETS=()
 REDACTION_FAILURE_STATUS=75
 CONFIGURATION_FAILURE_STATUS=76
+TRUSTED_WORKSPACE="$SOURCE_ROOT"
 
 xtask() {
   [ -n "${D2B_XTASK_BIN:-}" ] && [ -x "${D2B_XTASK_BIN}" ] || {
     echo "bazel-check: D2B_XTASK_BIN must name the declared //packages/xtask:xtask artifact" >&2
     return 70
   }
-  D2B_REPO_ROOT="$ROOT" "$D2B_XTASK_BIN" "$@"
+  D2B_REPO_ROOT="$TRUSTED_ROOT" "$D2B_XTASK_BIN" "$@"
 }
 
 redact_file() {
@@ -26,12 +31,29 @@ credential_file() {
   printf '%s\n' "${D2B_BUILDBUDDY_CREDENTIAL_FILE:-${HOME:-}/.config/d2b/buildbuddy-api-key}"
 }
 
+credential_from_fd() {
+  local fd="${D2B_BAZEL_CREDENTIAL_FD:-}"
+  case "$fd" in
+    ''|*[!0-9]*) return 1 ;;
+  esac
+  python3 - "$fd" <<'PY'
+import os
+import sys
+
+fd = int(sys.argv[1])
+data = os.pread(fd, 4096, 0)
+if not data or b"\x00" in data or b"\n" in data or b"\r" in data:
+    raise SystemExit(1)
+sys.stdout.buffer.write(data)
+PY
+}
+
 BUILD_BUDDY_METADATA_FLAGS=()
 
 git_checkout() {
   local git_bin
   git_bin="$(command -v git)" || return 127
-  env -i PATH="$PATH" LC_ALL=C "$git_bin" -C "$ROOT" "$@"
+  env -i PATH="$PATH" LC_ALL=C "$git_bin" -C "$SOURCE_ROOT" "$@"
 }
 
 git_checkout_snapshot() {
@@ -56,7 +78,7 @@ buildbuddy_metadata() {
   local observed_branch_head observed_commit_sha
 
   if ! checkout_root="$(git_checkout rev-parse --show-toplevel 2>/dev/null)" ||
-    [ "$checkout_root" != "$ROOT" ]; then
+    [ "$checkout_root" != "$SOURCE_ROOT" ]; then
     echo "bazel-check: BuildBuddy metadata unavailable: Git checkout is unavailable or does not match the tested repository; omitting repository metadata" >&2
     return 0
   fi
@@ -113,14 +135,255 @@ buildbuddy_metadata() {
   )
 }
 
+ci_metadata() {
+  BUILD_BUDDY_METADATA_FLAGS=()
+  local base_sha head_sha merge_sha trusted_sha tested_sha
+  local branch_name pr_number run_id workflow_ref event repository server_url
+
+  event="${GITHUB_EVENT_NAME:-}"
+  case "$event" in
+    pull_request_target|push) ;;
+    *)
+      echo "bazel-check: trusted CI requires pull_request_target or push" >&2
+      return "$CONFIGURATION_FAILURE_STATUS"
+      ;;
+  esac
+  [ "${GITHUB_REF:-}" = "refs/heads/v3" ] || {
+    echo "bazel-check: trusted CI requires refs/heads/v3" >&2
+    return "$CONFIGURATION_FAILURE_STATUS"
+  }
+  repository="${GITHUB_REPOSITORY:-}"
+  [ "$repository" = "vicondoa/d2b" ] || {
+    echo "bazel-check: trusted CI requires the canonical d2b repository" >&2
+    return "$CONFIGURATION_FAILURE_STATUS"
+  }
+  server_url="${GITHUB_SERVER_URL:-}"
+  [ "$server_url" = "https://github.com" ] || {
+    echo "bazel-check: trusted CI requires the canonical GitHub server" >&2
+    return "$CONFIGURATION_FAILURE_STATUS"
+  }
+
+  base_sha="${D2B_BAZEL_BASE_SHA:-}"
+  head_sha="${D2B_BAZEL_HEAD_SHA:-}"
+  merge_sha="${D2B_BAZEL_MERGE_SHA:-}"
+  trusted_sha="${D2B_BAZEL_TRUSTED_SHA:-}"
+  branch_name="${D2B_BAZEL_BRANCH:-}"
+  pr_number="${D2B_BAZEL_PR_NUMBER:-}"
+  run_id="${D2B_BAZEL_RUN_ID:-}"
+  workflow_ref="${D2B_BAZEL_WORKFLOW_REF:-}"
+
+  for value in "$base_sha" "$head_sha" "$merge_sha" "$trusted_sha"; do
+    [[ "$value" =~ ^[0-9a-fA-F]{40}$ ]] || {
+      echo "bazel-check: trusted CI OID metadata is invalid" >&2
+      return "$CONFIGURATION_FAILURE_STATUS"
+    }
+  done
+  [[ "$branch_name" != *$'\n'* && "$branch_name" != *$'\r'* ]] || {
+    echo "bazel-check: trusted CI branch metadata contains a control character" >&2
+    return "$CONFIGURATION_FAILURE_STATUS"
+  }
+  git_checkout check-ref-format --branch "$branch_name" >/dev/null 2>&1 || {
+    echo "bazel-check: trusted CI branch metadata is not an approved ref" >&2
+    return "$CONFIGURATION_FAILURE_STATUS"
+  }
+  [[ "$run_id" =~ ^[0-9]+$ ]] || {
+    echo "bazel-check: trusted CI run metadata is invalid" >&2
+    return "$CONFIGURATION_FAILURE_STATUS"
+  }
+  [ "$workflow_ref" = "vicondoa/d2b/.github/workflows/pr-l1-static-fast.yml@refs/heads/v3" ] || {
+    echo "bazel-check: trusted CI workflow metadata is invalid" >&2
+    return "$CONFIGURATION_FAILURE_STATUS"
+  }
+
+  if [ "$event" = pull_request_target ]; then
+    [ "${GITHUB_BASE_REF:-}" = "v3" ] &&
+      [ -n "${GITHUB_HEAD_REF:-}" ] &&
+      [ "$branch_name" = "$GITHUB_HEAD_REF" ] || {
+      echo "bazel-check: trusted PR branch metadata does not match the event" >&2
+      return "$CONFIGURATION_FAILURE_STATUS"
+    }
+    [[ "$pr_number" =~ ^[0-9]+$ ]] || {
+      echo "bazel-check: trusted PR metadata is invalid" >&2
+      return "$CONFIGURATION_FAILURE_STATUS"
+    }
+  else
+    [ -z "${GITHUB_BASE_REF:-}" ] &&
+      [ "${GITHUB_REF_NAME:-}" = "v3" ] &&
+      [ "$branch_name" = "v3" ] || {
+      echo "bazel-check: trusted push branch metadata does not match v3" >&2
+      return "$CONFIGURATION_FAILURE_STATUS"
+    }
+    [ -z "$pr_number" ] || {
+      echo "bazel-check: trusted push must not carry PR metadata" >&2
+      return "$CONFIGURATION_FAILURE_STATUS"
+    }
+    [ "$head_sha" = "$merge_sha" ] || {
+      echo "bazel-check: trusted push head and merge SHA metadata must match" >&2
+      return "$CONFIGURATION_FAILURE_STATUS"
+    }
+  fi
+
+  tested_sha="$(git_checkout rev-parse --verify HEAD^{commit} 2>/dev/null)" || {
+    echo "bazel-check: tested checkout HEAD is unavailable" >&2
+    return "$CONFIGURATION_FAILURE_STATUS"
+  }
+  [ "$tested_sha" = "$merge_sha" ] || {
+    echo "bazel-check: tested checkout does not match the event merge/push SHA" >&2
+    return "$CONFIGURATION_FAILURE_STATUS"
+  }
+  local trusted_head
+  trusted_head="$(
+    env -i PATH="$PATH" LC_ALL=C git -C "$TRUSTED_ROOT" rev-parse --verify HEAD^{commit} 2>/dev/null
+  )" || {
+    echo "bazel-check: trusted checkout HEAD is unavailable" >&2
+    return "$CONFIGURATION_FAILURE_STATUS"
+  }
+  [ "$trusted_head" = "$base_sha" ] && [ "$trusted_head" = "$trusted_sha" ] || {
+    echo "bazel-check: trusted checkout does not match protected v3 base SHA" >&2
+    return "$CONFIGURATION_FAILURE_STATUS"
+  }
+
+  env -i PATH="$PATH" LC_ALL=C git -C "$SOURCE_ROOT" cat-file -e "$base_sha^{commit}" ||
+    {
+      echo "bazel-check: protected v3 base SHA is unavailable in the tested checkout" >&2
+      return "$CONFIGURATION_FAILURE_STATUS"
+    }
+  env -i PATH="$PATH" LC_ALL=C git -C "$SOURCE_ROOT" merge-base --is-ancestor "$base_sha" "$merge_sha" ||
+    {
+      echo "bazel-check: tested merge SHA is not based on protected v3" >&2
+      return "$CONFIGURATION_FAILURE_STATUS"
+    }
+
+  if [ "$event" = pull_request_target ]; then
+    env -i PATH="$PATH" LC_ALL=C git -C "$SOURCE_ROOT" cat-file -e "$head_sha^{commit}" ||
+      {
+        echo "bazel-check: PR head SHA is unavailable in the tested checkout" >&2
+        return "$CONFIGURATION_FAILURE_STATUS"
+      }
+    env -i PATH="$PATH" LC_ALL=C git -C "$SOURCE_ROOT" merge-base --is-ancestor "$head_sha" "$merge_sha" ||
+      {
+        echo "bazel-check: PR head SHA is not an ancestor of the tested merge SHA" >&2
+        return "$CONFIGURATION_FAILURE_STATUS"
+      }
+  fi
+
+  export D2B_BAZEL_TESTED_SHA="$tested_sha"
+  BUILD_BUDDY_METADATA_FLAGS=(
+    "--build_metadata=REPO_URL=https://github.com/vicondoa/d2b"
+    "--build_metadata=BASE_SHA=$base_sha"
+    "--build_metadata=HEAD_SHA=$head_sha"
+    "--build_metadata=MERGE_SHA=$merge_sha"
+    "--build_metadata=TESTED_SHA=$tested_sha"
+    "--build_metadata=TRUSTED_SHA=$trusted_sha"
+    "--build_metadata=BRANCH_NAME=$branch_name"
+    "--build_metadata=RUN_ID=$run_id"
+    "--build_metadata=WORKFLOW_REF=$workflow_ref"
+    "--build_metadata=EVENT_NAME=$event"
+  )
+  if [ "$event" = pull_request_target ]; then
+    BUILD_BUDDY_METADATA_FLAGS+=("--build_metadata=PR_NUMBER=$pr_number")
+  fi
+}
+
+ci_mode() {
+  [ "${D2B_BAZEL_TRUSTED:-0}" = 1 ] &&
+    [ "${GITHUB_ACTIONS:-false}" = true ] &&
+    [ -n "${D2B_BAZEL_BASE_SHA:-}" ]
+}
+
+validate_ci_context() {
+  if ci_mode; then
+    ci_metadata >/dev/null
+  fi
+}
+
 trusted_context() {
   [ "${D2B_BAZEL_TRUSTED:-0}" = 1 ] &&
     [ "${GITHUB_REF:-}" = "refs/heads/v3" ] &&
+    validate_ci_context &&
     xtask bazel-evidence check-security >/dev/null
 }
 
+replace_trusted_control() {
+  local relative="$1"
+  local source="$TRUSTED_ROOT/$relative"
+  local target="$TRUSTED_WORKSPACE/$relative"
+  local parent="$TRUSTED_WORKSPACE"
+  local component
+  local directory="${relative%/*}"
+
+  [ -f "$source" ] || {
+    echo "bazel-check: trusted control file is missing: $relative" >&2
+    return "$CONFIGURATION_FAILURE_STATUS"
+  }
+  if [ "$directory" != "$relative" ]; then
+    IFS=/ read -r -a components <<<"$directory"
+    for component in "${components[@]}"; do
+      parent="$parent/$component"
+      if [ -L "$parent" ]; then
+        echo "bazel-check: source control path is a symlink: ${parent#$TRUSTED_WORKSPACE/}" >&2
+        return "$CONFIGURATION_FAILURE_STATUS"
+      fi
+      mkdir -p -- "$parent"
+    done
+  fi
+  rm -f -- "$target"
+  install -m 0555 "$source" "$target"
+}
+
+prepare_trusted_control_files() {
+  if [ "$SOURCE_ROOT" = "$TRUSTED_ROOT" ]; then
+    TRUSTED_WORKSPACE="$SOURCE_ROOT"
+    return 0
+  fi
+
+  mkdir -p -- "$SCRATCH"
+  TRUSTED_WORKSPACE="$SCRATCH/trusted-workspace"
+  if [ -L "$TRUSTED_WORKSPACE" ]; then
+    echo "bazel-check: refusing a symlinked trusted workspace scratch path" >&2
+    return "$CONFIGURATION_FAILURE_STATUS"
+  fi
+  rm -rf -- "$TRUSTED_WORKSPACE"
+  mkdir -p -- "$TRUSTED_WORKSPACE"
+  if ! cp -al -- "$SOURCE_ROOT/." "$TRUSTED_WORKSPACE/" 2>/dev/null; then
+    cp -a -- "$SOURCE_ROOT/." "$TRUSTED_WORKSPACE/"
+  fi
+  rm -rf -- "$TRUSTED_WORKSPACE/.git"
+  rm -f -- "$TRUSTED_WORKSPACE/.bazelrc.user"
+
+  for relative in \
+    .bazelrc \
+    MODULE.bazel \
+    MODULE.bazel.lock \
+    bazel/platforms/BUILD.bazel \
+    bazel/remote/BUILD.bazel \
+    tests/tools/bazel-check \
+    tests/tools/ci-shell \
+    tests/tools/scrub-shell-environment
+  do
+    replace_trusted_control "$relative"
+  done
+}
+
+remote_instance_name() {
+  if ci_mode; then
+    if [ "${GITHUB_EVENT_NAME:-}" = pull_request_target ]; then
+      printf 'd2b/pr/%s/%s/linux-x86_64/rules_rs/worker-v1/minimal/lock-v1\n' \
+        "$D2B_BAZEL_PR_NUMBER" "$D2B_BAZEL_HEAD_SHA"
+    else
+      printf 'd2b/trusted-seed/linux-x86_64/rules_rs/worker-v1/minimal/lock-v1\n'
+    fi
+  else
+    printf '%s\n' ""
+  fi
+}
+
+require_remote() {
+  [ "${D2B_BAZEL_REQUIRE_REMOTE:-0}" = 1 ]
+}
+
 credential_helper() {
-  local request token path
+  local request token path uri
   request="$(cat)"
   if [[ "$request" != *'"uri"'* ]]; then
     printf '%s\n' '{"headers":{}}'
@@ -132,19 +395,30 @@ credential_helper() {
     return 0
   fi
 
-  if [ "${D2B_BAZEL_PROFILE:-}" = trusted-seed ]; then
-    trusted_context || {
+  uri="$(printf '%s' "$request" | jq -r '.uri // empty' 2>/dev/null || true)"
+  case "$uri" in
+    https://d2b.buildbuddy.io/*|https://d2b.buildbuddy.io|grpcs://d2b.buildbuddy.io/*|grpcs://d2b.buildbuddy.io)
+      ;;
+    *)
       printf '%s\n' '{"headers":{}}'
       return 0
-    }
+      ;;
+  esac
+
+  if [ -n "${D2B_BAZEL_CREDENTIAL_FD:-}" ]; then
+    if ! token="$(credential_from_fd)"; then
+      printf '%s\n' '{"headers":{}}'
+      return 0
+    fi
+  else
+    path="$(credential_file)"
+    if [ ! -r "$path" ] || [ ! -s "$path" ]; then
+      printf '%s\n' '{"headers":{}}'
+      return 0
+    fi
+    token="$(cat "$path")"
   fi
 
-  path="$(credential_file)"
-  if [ ! -r "$path" ] || [ ! -s "$path" ]; then
-    printf '%s\n' '{"headers":{}}'
-    return 0
-  fi
-  token="$(cat "$path")"
   case "$token" in
     *$'\n'*|*$'\r'*|'') printf '%s\n' '{"headers":{}}'; return 0 ;;
   esac
@@ -170,7 +444,7 @@ if [ "$#" -ge 1 ] && [ "$1" = get ]; then
   exit $?
 fi
 
-cd "$ROOT"
+cd "$TRUSTED_ROOT"
 
 if [ "$#" -eq 0 ]; then
   request="$(cat)"
@@ -232,8 +506,20 @@ fi
 
 mkdir -p "$SCRATCH"
 if [ -z "${D2B_XTASK_BIN:-}" ] || [ ! -x "${D2B_XTASK_BIN}" ]; then
-  "$bazel_bin" build --config=local //packages/xtask:xtask >/dev/null
-  xtask_source="$ROOT/bazel-bin/packages/xtask/xtask"
+  if ci_mode; then
+    (
+      cd "$TRUSTED_ROOT"
+      "$bazel_bin" \
+        --nosystem_rc \
+        --nohome_rc \
+        --noworkspace_rc \
+        --bazelrc="$TRUSTED_ROOT/.bazelrc" \
+        build --config=local //packages/xtask:xtask
+    ) >/dev/null
+  else
+    "$bazel_bin" build --config=local //packages/xtask:xtask >/dev/null
+  fi
+  xtask_source="$TRUSTED_ROOT/bazel-bin/packages/xtask/xtask"
   xtask_stable="$SCRATCH/xtask"
   cp -L -- "$xtask_source" "$xtask_stable.tmp"
   chmod 0555 "$xtask_stable.tmp"
@@ -241,7 +527,18 @@ if [ -z "${D2B_XTASK_BIN:-}" ] || [ ! -x "${D2B_XTASK_BIN}" ]; then
   export D2B_XTASK_BIN="$xtask_stable"
 fi
 
-if [ "$PROFILE" = trusted-seed ]; then
+if ci_mode; then
+  trusted_context || {
+    echo "bazel-check: trusted v3 security context is invalid" >&2
+    exit "$CONFIGURATION_FAILURE_STATUS"
+  }
+  prepare_trusted_control_files
+  if { [ "$PROFILE" = remote ] || [ "$PROFILE" = trusted-seed ]; } &&
+    [ -z "${D2B_BAZEL_CREDENTIAL_FD:-}" ]; then
+    echo "bazel-check: credential-bearing CI requires D2B_BUILDBUDDY_API_KEY through the trusted bootstrap" >&2
+    exit "$CONFIGURATION_FAILURE_STATUS"
+  fi
+elif [ "$PROFILE" = trusted-seed ]; then
   if ! trusted_context; then
     echo "trusted BuildBuddy credential withheld: protected v3 and security digest are required"
     PROFILE=local
@@ -250,13 +547,20 @@ elif [ "${D2B_BAZEL_UNTRUSTED:-0}" = 1 ] ||
   { [ "${GITHUB_ACTIONS:-false}" = true ] && ! trusted_context; }; then
   echo "BuildBuddy credential withheld for an untrusted job; retrying locally"
   PROFILE=local
-elif [ ! -r "$(credential_file)" ] || [ ! -s "$(credential_file)" ]; then
+elif [ -z "${D2B_BAZEL_CREDENTIAL_FD:-}" ] &&
+  { [ ! -r "$(credential_file)" ] || [ ! -s "$(credential_file)" ]; }; then
+  if require_remote; then
+    echo "bazel-check: remote execution was required but the credential is unavailable" >&2
+    exit "$CONFIGURATION_FAILURE_STATUS"
+  fi
   echo "BuildBuddy credential unavailable; retrying locally"
   PROFILE=local
 fi
 
 export D2B_BAZEL_BIN="$bazel_bin"
-export D2B_REPO_ROOT="$ROOT"
+export D2B_BAZEL_TRUSTED_ROOT="$TRUSTED_ROOT"
+export D2B_BAZEL_SOURCE_ROOT="$SOURCE_ROOT"
+export D2B_REPO_ROOT="$SOURCE_ROOT"
 export ROOT
 JOB="${D2B_BAZEL_JOB:-check}"
 log="$SCRATCH/$PROFILE.$JOB.log"
@@ -274,8 +578,15 @@ run_bazel() {
   local bep_path="$3"
   local -a startup_flags=()
   shift 3
-  if [ "${D2B_BAZEL_FALLBACK_ISOLATE_RC:-0}" = 1 ]; then
-    [ ! -e "$ROOT/.bazelrc.user" ] || {
+  if ci_mode; then
+    startup_flags=(
+      --nosystem_rc
+      --nohome_rc
+      --noworkspace_rc
+      --bazelrc="$TRUSTED_ROOT/.bazelrc"
+    )
+  elif [ "${D2B_BAZEL_FALLBACK_ISOLATE_RC:-0}" = 1 ]; then
+    [ ! -e "$TRUSTED_WORKSPACE/.bazelrc.user" ] || {
       echo "local fallback rejects an external workspace Bazel rc" >&2
       return "$CONFIGURATION_FAILURE_STATUS"
     }
@@ -287,27 +598,52 @@ run_bazel() {
   local test_bazel_sh="${BAZEL_SH:-/bin/bash}"
   local test_path="${D2B_BAZEL_TEST_PATH:-$PATH}"
   if [ "$profile" != local ]; then
-    buildbuddy_metadata
+    if ci_mode; then
+      ci_metadata || return $?
+    else
+      buildbuddy_metadata
+    fi
     command_flags+=("${BUILD_BUDDY_METADATA_FLAGS[@]}")
+    command_flags+=(
+      --remote_executor=grpcs://d2b.buildbuddy.io
+      --remote_cache=grpcs://d2b.buildbuddy.io
+      --bes_backend=grpcs://d2b.buildbuddy.io
+      --bes_results_url=https://d2b.buildbuddy.io/invocation/
+      "--credential_helper=d2b.buildbuddy.io=$TRUSTED_ROOT/tests/tools/bazel-check"
+    )
+    if ci_mode; then
+      command_flags+=(
+        --action_env=D2B_BUILDBUDDY_API_KEY=
+        --action_env=D2B_BAZEL_CREDENTIAL_FD=
+        --test_env=D2B_BUILDBUDDY_API_KEY=
+        --test_env=D2B_BAZEL_CREDENTIAL_FD=
+      )
+    fi
+    if namespace="$(remote_instance_name)" && [ -n "$namespace" ]; then
+      command_flags+=(--remote_instance_name="$namespace")
+    fi
     command_flags+=(--shell_executable=/bin/bash)
     test_bazel_sh=/bin/bash
     test_path="/run/current-system/sw/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:$test_path"
   fi
-  D2B_BAZEL_PROFILE="$profile" "$bazel_bin" "${startup_flags[@]}" test "--config=$profile" \
-    "${command_flags[@]}" \
-    --repo_contents_cache= "--build_event_json_file=$bep_path" \
-    --build_tests_only \
-    --test_output=errors \
-    --test_tag_filters="$tag_filters" \
-    --test_env=D2B_REPO_ROOT="$ROOT" \
-    --test_env=D2B_BAZEL_BIN="$bazel_bin" \
-    --test_env=D2B_PROJECT_SHELL=d2b \
-    --test_env=D2B_SHELLCHECK_BIN="${D2B_SHELLCHECK_BIN:-}" \
-    --test_env=PATH="$test_path" \
-    --test_env=BAZEL_SH="$test_bazel_sh" \
-    "$@" \
-    -- "${TARGETS[@]}" \
-    >"$log_path" 2>&1
+  (
+    cd "$TRUSTED_WORKSPACE"
+    D2B_BAZEL_PROFILE="$profile" "$bazel_bin" "${startup_flags[@]}" test "--config=$profile" \
+      "${command_flags[@]}" \
+      --repo_contents_cache= "--build_event_json_file=$bep_path" \
+      --build_tests_only \
+      --test_output=errors \
+      --test_tag_filters="$tag_filters" \
+      --test_env=D2B_REPO_ROOT="$SOURCE_ROOT" \
+      --test_env=D2B_BAZEL_SOURCE_ROOT="$SOURCE_ROOT" \
+      --test_env=D2B_BAZEL_BIN="$bazel_bin" \
+      --test_env=D2B_PROJECT_SHELL=d2b \
+      --test_env=D2B_SHELLCHECK_BIN="${D2B_SHELLCHECK_BIN:-}" \
+      --test_env=PATH="$test_path" \
+      --test_env=BAZEL_SH="$test_bazel_sh" \
+      "$@" \
+      -- "${TARGETS[@]}"
+  ) >"$log_path" 2>&1
   local status=$?
   set -e
   if [ "$status" -eq 0 ] && ! bep_has_test_result "$bep_path"; then
@@ -354,6 +690,12 @@ fi
 if [ "$initial_status" -eq "$REDACTION_FAILURE_STATUS" ] ||
   [ "$initial_status" -eq "$CONFIGURATION_FAILURE_STATUS" ]; then
   exit "$initial_status"
+fi
+
+if require_remote && [ "$PROFILE" != local ]; then
+  echo "bazel-check: trusted CI remote execution failed; refusing a local retry" >&2
+  emit_captured_output "$log" "bazel $PROFILE log"
+  exit 1
 fi
 
 if [ "$PROFILE" != local ]; then

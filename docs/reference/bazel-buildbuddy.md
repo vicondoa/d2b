@@ -36,9 +36,9 @@ nix develop --no-write-lock-file .#bazel -c bazel test //packages/<crate>:<owner
 ```
 
 Direnv is optional; it may enter `nix develop` automatically but is not part
-of the contributor or CI contract. CI installs Nix and invokes the same
-public Make aliases with `D2B_BAZEL_PROFILE=local` and
-`D2B_BAZEL_UNTRUSTED=1`.
+of the contributor or CI contract. CI installs Nix and invokes the trusted
+`v3` Make aliases from the protected checkout. Remote-eligible jobs use the
+brokered BuildBuddy credential; local-only jobs do not receive it.
 
 ## One execution graph
 
@@ -46,8 +46,9 @@ Bazel owns Layer-1 dependency ordering, parallelism, test caching, retry
 classification, and aggregation. `bazel/checks/BUILD.bazel` is the public
 suite facade: package-level Rust suites and component suites compose each
 public Make target without duplicating a fixed label graph in Make. CI runs the
-same nested suites with the local profile and exposes one stable required
-`check` result.
+same nested suites with remote-eligible Rust and policy actions on BuildBuddy,
+while Nix, fixture, hardware, and explicitly local actions remain local. It
+exposes one stable required `check` result.
 
 The primary aliases remain available:
 
@@ -93,10 +94,14 @@ actions are tagged `local` or `no-remote-exec`; `no-remote-cache` alone does
 not make an action local. Heavy, container, VM, live-host, hardware, fixture,
 and performance lanes remain explicit local lanes.
 
-GitHub Layer-1 jobs set `D2B_BAZEL_PROFILE=local` and
-`D2B_BAZEL_UNTRUSTED=1`; they receive no BuildBuddy credential. The fixed job
-set is committed in `.github/workflows/pr-l1-static-fast.yml` and must remain
-aligned with the public Make aliases.
+The credential-bearing PR gate is a `pull_request_target` workflow owned by
+protected `v3`; push seeding is also limited to `v3`. Each job checks out the
+event's immutable base into `trusted` and the immutable tested merge/push
+commit into `workspace`. The workflow executes the `v3` Makefile and trusted
+shell/bootstrap only. Remote jobs use `D2B_BAZEL_PROFILE=remote` and
+`D2B_BAZEL_REQUIRE_REMOTE=1`; local-only jobs use `local`. The fixed job set is
+committed in `.github/workflows/pr-l1-static-fast.yml` and must remain aligned
+with the public Make aliases.
 
 ## Developer invocation metadata
 
@@ -131,6 +136,14 @@ retry condition.
 input. It therefore does not change ordinary action keys or invalidate
 reusable outputs, and the global `--stamp=no` contract remains unchanged.
 
+Trusted CI additionally validates the protected base, PR head, tested merge,
+trusted checkout, run id, PR number, branch, workflow reference, and event
+before invoking Bazel. It publishes those immutable OIDs and run/linkage
+fields as BuildBuddy metadata, and derives a cache instance namespace from the
+PR number and head SHA (`d2b/pr/<number>/<head-sha>/...`). Pushes use the
+separate trusted `v3` namespace. A stale checkout or mismatched event fails
+closed.
+
 ## Credentials and trust selection
 
 Store the developer API key as one line in the protected file named by
@@ -157,8 +170,23 @@ The facade preserves the selected target set when execution changes:
   require explicit pre-dispatch evidence, except for a remote gRPC deadline;
 - analysis, policy, build, test, and post-dispatch failures fail closed.
 
-The trusted security digest covers the committed remote profile, module lock,
-platform, remote policy, and credential-helper inputs listed in
+For GitHub Actions, add the repository secret
+`D2B_BUILDBUDDY_API_KEY`. The trusted workflow passes it only over stdin to
+`tests/tools/bazel-check-bootstrap`, which stores it in an anonymous memfd and
+execs the trusted `v3` command with a descriptor number. The key is not placed
+in ordinary action environment variables, arguments, repository files, Bazel
+rc files, or test environments. Credential-bearing CI has no local fallback:
+missing credentials, authentication failure, endpoint failure, or remote
+execution failure fails the job instead of producing a reduced local gate.
+
+The facade stages the tested source with trusted copies of `.bazelrc`,
+`MODULE.bazel`, `MODULE.bazel.lock`, remote/platform BUILD files, and the
+credential/shell helpers. It disables system, home, workspace, and PR
+`.bazelrc.user` configuration and pins the endpoint and helper path on the
+Bazel command line. PR cache writes never use the trusted seed namespace.
+
+The trusted security digest covers the committed workflow, Makefile, module
+lock, platform, remote policy, bootstrap, shell, and credential-helper inputs listed in
 `tests/golden/bazel/cache-policy.json`. Refresh it only after reviewing those
 bytes:
 

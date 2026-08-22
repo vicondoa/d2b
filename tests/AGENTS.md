@@ -152,8 +152,11 @@ sharding, or rollup logic.
 local, developer-remote, or protected trusted-seed profile, reads credentials
 only through Bazel's credential-helper protocol, withholds credentials from
 untrusted jobs, redacts logs and BEP output, and permits one identical local
-retry only for typed pre-dispatch infrastructure failures. Post-dispatch,
-analysis, policy, build, and test failures fail closed.
+retry only for typed pre-dispatch infrastructure failures. In trusted `v3`
+CI it runs a staged tested source with trusted control files, validates event
+OIDs and PR/run metadata, isolates the PR cache namespace, and requires the
+remote path. Post-dispatch, analysis, policy, build, and test failures fail
+closed.
 
 Bazel is the only supported contributor build and test interface. Cargo
 manifests and the root `Cargo.lock` own Rust package and dependency facts;
@@ -161,9 +164,9 @@ manifests and the root `Cargo.lock` own Rust package and dependency facts;
 lock, source inventory, generator, or repository-owned scheduler.
 
 The fixed CI workflow is committed at
-`.github/workflows/pr-l1-static-fast.yml` and exposes one stable required
-`check` result. Keep its jobs aligned with the public Make aliases. Do not add
-discovery jobs or new inventory files.
+`.github/workflows/pr-l1-static-fast.yml`, is owned by protected `v3`, and
+exposes one stable required `check` result. Keep its jobs aligned with the
+public Make aliases. Do not add discovery jobs or new inventory files.
 
 ### Running the Layer-1 graph
 

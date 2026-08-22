@@ -6,6 +6,7 @@ filegroup(
     name = "policy",
     srcs = [
         "//:tests/tools/bazel-check",
+        "//:tests/tools/bazel-check-bootstrap",
         "//:tests/golden/bazel/cache-policy.json",
         "//:nix/bazel-worker-image.nix",
     ],

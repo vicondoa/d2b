@@ -87,6 +87,7 @@ exports_files([
     "tests/AGENTS.md",
     "tests/tools/scrub-shell-environment",
     "tests/tools/bazel-check",
+    "tests/tools/bazel-check-bootstrap",
     "tests/tools/generated-artifact-check.sh",
     "nix/bazel-worker-image.nix",
     "nix/test-support/eval-surface.nix",

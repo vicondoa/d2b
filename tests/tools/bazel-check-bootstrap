@@ -1,0 +1,28 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+if [ "$#" -eq 0 ]; then
+  echo "bazel-check-bootstrap: a trusted command is required" >&2
+  exit 2
+fi
+
+python3 -c '
+import os
+import sys
+
+command = sys.argv[1:]
+secret = sys.stdin.buffer.read()
+if not secret or b"\x00" in secret or b"\n" in secret or b"\r" in secret:
+    raise SystemExit("bazel-check-bootstrap: credential must be one non-empty line")
+
+fd = os.memfd_create("d2b-buildbuddy-credential", os.MFD_CLOEXEC)
+try:
+    os.write(fd, secret)
+    os.lseek(fd, 0, os.SEEK_SET)
+    os.set_inheritable(fd, True)
+    os.environ.pop("D2B_BUILDBUDDY_API_KEY", None)
+    os.environ["D2B_BAZEL_CREDENTIAL_FD"] = str(fd)
+    os.execvpe(command[0], command, os.environ)
+finally:
+    os.close(fd)
+' "$@"

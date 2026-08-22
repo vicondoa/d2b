@@ -78,6 +78,136 @@ fn needs_entries(block: &str) -> Vec<&str> {
     value.split(',').map(str::trim).collect()
 }
 
+fn assert_trusted_workflow_contract(workflow: &str) {
+    assert!(
+        workflow.contains("pull_request_target:\n    branches: [v3]"),
+        "the credential-bearing workflow must be owned by protected v3"
+    );
+    assert!(
+        workflow.contains("push:\n    branches: [v3]"),
+        "trusted seeding must run only from protected v3"
+    );
+    assert!(
+        !workflow.contains("\n  pull_request:\n"),
+        "the secret-bearing gate must not use an untrusted pull_request workflow"
+    );
+    assert!(
+        workflow.contains("permissions:\n  contents: read")
+            && !workflow.contains("contents: write")
+            && !workflow.contains("pull-requests: write"),
+        "the trusted gate must use a read-only GitHub token"
+    );
+    assert!(
+        !workflow.contains("D2B_BAZEL_UNTRUSTED"),
+        "the trusted gate must not opt into the untrusted BuildBuddy boundary"
+    );
+    for line in workflow
+        .lines()
+        .filter(|line| line.trim_start().starts_with("- uses:"))
+    {
+        let reference = line
+            .split_once('@')
+            .map(|(_, reference)| reference.trim())
+            .expect("pinned action reference");
+        assert!(
+            reference.len() == 40
+                && reference
+                    .bytes()
+                    .all(|byte| byte.is_ascii_hexdigit()),
+            "every workflow action must be pinned to a commit: {line}"
+        );
+    }
+    assert!(
+        workflow.contains("path: trusted") && workflow.contains("path: workspace"),
+        "every gate must separate trusted bootstrap and tested source"
+    );
+    assert!(
+        workflow.contains("shell: sh trusted/tests/tools/ci-shell {0}"),
+        "workflow commands must use the trusted shell wrapper"
+    );
+    assert!(
+        workflow.contains("ref: ${{ github.event.pull_request.base.sha || github.sha }}"),
+        "trusted bootstrap must bind to the event base or pushed v3 commit"
+    );
+    assert!(
+        workflow.contains("ref: ${{ github.event.pull_request.merge_commit_sha || github.sha }}"),
+        "the tested checkout must bind to the immutable merge or pushed commit"
+    );
+    assert!(
+        workflow.contains("D2B_BAZEL_SOURCE_ROOT")
+            && workflow.contains("D2B_BAZEL_TRUSTED_ROOT")
+            && workflow.contains("D2B_BAZEL_TRUSTED_SHA"),
+        "the facade must receive separate source and trusted roots"
+    );
+    assert!(
+        workflow.contains("python3 ./trusted/tests/tools/bazel-check-bootstrap")
+            && workflow.contains("env -u D2B_BUILDBUDDY_API_KEY")
+            && workflow.contains("printf '%s' \"$D2B_BUILDBUDDY_API_KEY\"")
+            && workflow.contains("D2B_BUILDBUDDY_API_KEY: ${{ secrets.D2B_BUILDBUDDY_API_KEY }}")
+            && !workflow.contains("secret=\"${{ secrets.D2B_BUILDBUDDY_API_KEY }}\""),
+        "the BuildBuddy secret must cross the trusted bootstrap only over stdin"
+    );
+    assert!(
+        workflow.contains("secrets.D2B_BUILDBUDDY_API_KEY"),
+        "the remote gate must use the repository BuildBuddy secret"
+    );
+    assert!(
+        workflow.matches("persist-credentials: false").count() >= 2,
+        "all checkouts must disable persisted GitHub credentials"
+    );
+    for line in workflow.lines().filter(|line| line.contains("make -C")) {
+        assert!(
+            line.contains("make -C trusted"),
+            "workflow commands must use the trusted v3 Makefile: {line}"
+        );
+    }
+
+    for job in [
+        "tier0",
+        "policy-tooling",
+        "rust-main",
+        "rust-broker",
+        "rust-guest",
+    ] {
+        let block = job_block(workflow, job);
+        assert!(
+            block.contains(
+                "D2B_BAZEL_PROFILE: ${{ github.event_name == 'push' && 'trusted-seed' || 'remote' }}"
+            ),
+            "{job} must use the trusted remote/seeding BuildBuddy profile"
+        );
+        assert!(
+            block.contains("D2B_BAZEL_REQUIRE_REMOTE: \"1\""),
+            "{job} must fail closed instead of reducing to a local gate"
+        );
+        assert!(
+            block.contains("D2B_BUILDBUDDY_API_KEY: ${{ secrets.D2B_BUILDBUDDY_API_KEY }}")
+                && block.contains("bazel-check-bootstrap"),
+            "{job} must broker the credential through the trusted bootstrap"
+        );
+    }
+    for job in [
+        "rust-local",
+        "nix-eval",
+        "nix-unit",
+        "nix-realized",
+        "nix-aarch64",
+        "fixtures-proofs",
+        "test-performance-budgets",
+    ] {
+        let block = job_block(workflow, job);
+        assert!(
+            block.contains("D2B_BAZEL_PROFILE: local"),
+            "{job} must remain local-only"
+        );
+        assert!(
+            !block.contains("D2B_BUILDBUDDY_API_KEY")
+                && !block.contains("bazel-check-bootstrap"),
+            "{job} must not receive the BuildBuddy credential"
+        );
+    }
+}
+
 #[test]
 fn pr_suites_start_concurrently_and_aggregate_preserves_required_failures() {
     let workflow = workflow();
@@ -110,4 +240,36 @@ fn pr_suites_start_concurrently_and_aggregate_preserves_required_failures() {
         !needs_entries(aggregate).contains(&"test-performance-budgets"),
         "advisory performance budgets must not block the aggregate"
     );
+}
+
+#[test]
+fn trusted_workflow_rejects_malicious_control_plane_edits() {
+    let workflow = workflow();
+    assert_trusted_workflow_contract(&workflow);
+
+    for tampered in [
+        workflow.replace(
+            "pull_request_target:\n    branches: [v3]",
+            "pull_request:\n    branches: [v3]",
+        ),
+        workflow.replace(
+            "python3 ./trusted/tests/tools/bazel-check-bootstrap",
+            "python3 ./workspace/tests/tools/bazel-check-bootstrap",
+        ),
+        workflow.replace("make -C trusted", "make"),
+        workflow.replace(
+            "ref: ${{ github.event.pull_request.base.sha || github.sha }}",
+            "ref: main",
+        ),
+        workflow.replacen(
+            "D2B_BAZEL_PROFILE: ${{ github.event_name == 'push' && 'trusted-seed' || 'remote' }}",
+            "D2B_BAZEL_PROFILE: local",
+            1,
+        ),
+    ] {
+        assert!(
+            std::panic::catch_unwind(|| assert_trusted_workflow_contract(&tampered)).is_err(),
+            "malicious workflow edit was accepted"
+        );
+    }
 }
