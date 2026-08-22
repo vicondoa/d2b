@@ -65,6 +65,7 @@ jobs:
       D2B_BAZEL_TRUSTED: "1"
       D2B_BAZEL_PROFILE: ${{ github.event_name == 'push' && 'trusted-seed' || 'remote' }}
       D2B_BAZEL_REQUIRE_REMOTE: "1"
+      D2B_BAZEL_TEST_TAG_FILTERS: "-local,-no-remote-exec,-manual,-gpu,-kvm"
       D2B_BAZEL_BASE_SHA: ${{ github.event.pull_request.base.sha || github.sha }}
       D2B_BAZEL_HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
       D2B_BAZEL_MERGE_SHA: ${{ github.event.pull_request.merge_commit_sha || github.sha }}
@@ -96,6 +97,12 @@ jobs:
         run: |
           printf '%s' "$D2B_BUILDBUDDY_API_KEY" | env -u D2B_BUILDBUDDY_API_KEY python3 ./trusted/tests/tools/bazel-check-bootstrap \
             make -C trusted test-policy
+      - name: Local policy-only suite
+        env:
+          D2B_BAZEL_PROFILE: local
+          D2B_BAZEL_REQUIRE_REMOTE: "0"
+          D2B_BAZEL_TEST_TAG_FILTERS: "-manual,-gpu,-kvm"
+        run: make -C trusted test-policy
 
   rust-main:
     runs-on: ubuntu-latest

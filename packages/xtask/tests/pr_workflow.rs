@@ -127,8 +127,8 @@ fn assert_trusted_workflow_contract(workflow: &str) {
     );
     assert_eq!(
         workflow.matches("make -C trusted").count(),
-        12,
-        "every Layer-1 job must invoke its fixed public Make alias from trusted v3"
+        13,
+        "every Layer-1 step must invoke its fixed public Make alias from trusted v3"
     );
     assert!(
         workflow.contains("ref: ${{ github.event.pull_request.base.sha || github.sha }}"),
@@ -191,6 +191,14 @@ fn assert_trusted_workflow_contract(workflow: &str) {
             "{job} must broker the credential through the trusted bootstrap"
         );
     }
+    let policy = job_block(workflow, "policy-tooling");
+    assert!(
+        policy.contains("D2B_BAZEL_TEST_TAG_FILTERS: \"-local,-no-remote-exec,-manual,-gpu,-kvm\"")
+            && policy.contains("name: Local policy-only suite")
+            && policy.contains("D2B_BAZEL_PROFILE: local")
+            && policy.contains("D2B_BAZEL_REQUIRE_REMOTE: \"0\""),
+        "policy-only local tests must be split from the credential-bearing remote step"
+    );
     for job in [
         "rust-local",
         "nix-eval",
