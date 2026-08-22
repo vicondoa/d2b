@@ -125,6 +125,11 @@ fn assert_trusted_workflow_contract(workflow: &str) {
         workflow.contains("shell: sh trusted/tests/tools/ci-shell {0}"),
         "workflow commands must use the trusted shell wrapper"
     );
+    assert_eq!(
+        workflow.matches("make -C trusted").count(),
+        12,
+        "every Layer-1 job must invoke its fixed public Make alias from trusted v3"
+    );
     assert!(
         workflow.contains("ref: ${{ github.event.pull_request.base.sha || github.sha }}"),
         "trusted bootstrap must bind to the event base or pushed v3 commit"
