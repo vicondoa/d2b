@@ -13,8 +13,9 @@ deprecations ship one minor release before removal.
 ### Added
 
 - Added main-controlled `build` and `pr` workflows for immutable PR revision
-  validation, credential-free local Layer-1 coverage, and brokered BuildBuddy
-  execution of the explicitly remote-eligible Bazel suites.
+  validation and credential-free local Layer-1 coverage. Brokered BuildBuddy
+  execution of the explicitly remote-eligible Bazel suites is limited to
+  trusted `main` pushes so PR-controlled code never receives the credential.
 - Added `labs/d2b-agentterm`, an experimental crate exploring a terminal that a
   human and an AI agent can drive at the same time. It wraps a program in a
   pseudoterminal and passes it through unchanged, so a person interacts with the

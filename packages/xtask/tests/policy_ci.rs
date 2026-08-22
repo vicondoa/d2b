@@ -141,8 +141,10 @@ fn main_controlled_buildbuddy_workflows_preserve_trust_contract() {
         "PR workflow must not run untrusted pull_request controls"
     );
     assert!(
-        pr.contains("uses: ./.github/workflows/build.yaml") && pr.contains("secrets: inherit"),
-        "PR workflow must call the main-owned reusable build with inherited secrets"
+        pr.contains(
+            "uses: vicondoa/d2b/.github/workflows/build.yaml@refs/heads/main"
+        ) && pr.contains("D2B_BUILDBUDDY_API_KEY: ${{ secrets.D2B_BUILDBUDDY_API_KEY }}"),
+        "PR workflow must call the main-owned reusable build at main with only the BuildBuddy secret"
     );
 
     assert!(
@@ -159,6 +161,8 @@ fn main_controlled_buildbuddy_workflows_preserve_trust_contract() {
     );
     assert!(
         build.contains("github.workflow_sha")
+            && build.contains("github.job_workflow_ref")
+            && build.contains("github.job_workflow_sha")
             && build.contains("trusted_sha")
             && build.contains("base_sha")
             && build.contains("head_sha")
@@ -205,6 +209,11 @@ fn main_controlled_buildbuddy_workflows_preserve_trust_contract() {
             && build.contains("D2B_BAZEL_PROFILE: local")
             && build.contains("D2B_BAZEL_UNTRUSTED: \"1\""),
         "full PR coverage must retain a credential-free local Layer-1 gate"
+    );
+    assert!(
+        build.contains("github.event_name == 'push'")
+            && build.contains("github.event_name == 'push' }}"),
+        "credential-bearing remote execution must be restricted to trusted main pushes"
     );
     assert!(
         build.contains("redact") && build.contains("^warning:"),

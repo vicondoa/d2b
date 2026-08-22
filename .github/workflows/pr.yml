@@ -10,5 +10,6 @@ permissions:
 jobs:
   build:
     name: build
-    uses: ./.github/workflows/build.yaml
-    secrets: inherit
+    uses: vicondoa/d2b/.github/workflows/build.yaml@refs/heads/main
+    secrets:
+      D2B_BUILDBUDDY_API_KEY: ${{ secrets.D2B_BUILDBUDDY_API_KEY }}

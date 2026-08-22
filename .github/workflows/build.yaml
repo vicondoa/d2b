@@ -14,8 +14,10 @@ permissions:
 env:
   D2B_REPOSITORY: vicondoa/d2b
   D2B_SERVER_URL: https://github.com
-  D2B_TRUSTED_WORKFLOW_REF: ${{ github.workflow_ref }}
-  D2B_WORKFLOW_SHA: ${{ github.workflow_sha }}
+  D2B_CALLER_WORKFLOW_REF: ${{ github.workflow_ref }}
+  D2B_CALLER_WORKFLOW_SHA: ${{ github.workflow_sha }}
+  D2B_JOB_WORKFLOW_REF: ${{ github.job_workflow_ref }}
+  D2B_JOB_WORKFLOW_SHA: ${{ github.job_workflow_sha }}
 
 jobs:
   metadata:
@@ -53,8 +55,10 @@ jobs:
           D2B_PR_NUMBER: ${{ github.event.pull_request.number || '' }}
           D2B_BRANCH: ${{ github.head_ref || github.ref_name }}
           D2B_RUN_ID: ${{ github.run_id }}
-          D2B_WORKFLOW_REF: ${{ github.workflow_ref }}
-          D2B_WORKFLOW_SHA: ${{ github.workflow_sha }}
+          D2B_CALLER_WORKFLOW_REF: ${{ github.workflow_ref }}
+          D2B_CALLER_WORKFLOW_SHA: ${{ github.workflow_sha }}
+          D2B_JOB_WORKFLOW_REF: ${{ github.job_workflow_ref }}
+          D2B_JOB_WORKFLOW_SHA: ${{ github.job_workflow_sha }}
           D2B_REPOSITORY: ${{ github.repository }}
           D2B_SERVER_URL: ${{ github.server_url }}
         run: |
@@ -75,8 +79,9 @@ jobs:
             fail "the trusted build is restricted to github.com"
           [ "$D2B_DEFAULT_BRANCH" = "main" ] ||
             fail "the repository default branch must remain main"
-          is_sha "$D2B_WORKFLOW_SHA" ||
-            fail "github.workflow_sha is not a full immutable commit SHA"
+          trusted_sha="${D2B_JOB_WORKFLOW_SHA:-$D2B_CALLER_WORKFLOW_SHA}"
+          is_sha "$trusted_sha" ||
+            fail "the reusable workflow SHA is not a full immutable commit SHA"
           [[ "$D2B_RUN_ID" =~ ^[0-9]+$ ]] ||
             fail "github.run_id is not numeric"
           [[ "$D2B_BRANCH" != *$'\n'* && "$D2B_BRANCH" != *$'\r'* ]] ||
@@ -84,16 +89,13 @@ jobs:
           git -C source check-ref-format --branch "$D2B_BRANCH" >/dev/null 2>&1 ||
             fail "branch metadata is not an approved ref"
 
-          case "$D2B_WORKFLOW_REF" in
-            vicondoa/d2b/.github/workflows/pr.yml@refs/heads/main|\
-            vicondoa/d2b/.github/workflows/build.yaml@refs/heads/main)
-              ;;
-            *)
-              fail "workflow controls must be sourced from protected main"
-              ;;
-          esac
-
           if [ "$D2B_EVENT_NAME" = "pull_request_target" ]; then
+            [ "$D2B_CALLER_WORKFLOW_REF" =
+              "vicondoa/d2b/.github/workflows/pr.yml@refs/heads/main" ] ||
+              fail "PR workflow controls must be sourced from protected main"
+            [ "$D2B_JOB_WORKFLOW_REF" =
+              "vicondoa/d2b/.github/workflows/build.yaml@refs/heads/main" ] ||
+              fail "reusable build controls must be sourced from protected main"
             case "$D2B_BASE_REF" in
               main|v3) ;;
               *) fail "pull request target is not main or v3" ;;
@@ -108,6 +110,9 @@ jobs:
             tested_sha="$D2B_MERGE_SHA"
             instance="d2b/pr/$D2B_PR_NUMBER/$D2B_HEAD_SHA/linux-x86_64/rules_rs/worker-v1/minimal/lock-v1"
           elif [ "$D2B_EVENT_NAME" = "push" ]; then
+            [ "$D2B_CALLER_WORKFLOW_REF" =
+              "vicondoa/d2b/.github/workflows/build.yaml@refs/heads/main" ] ||
+              fail "push workflow controls must be sourced from protected main"
             [ "$D2B_REF" = "refs/heads/main" ] ||
               fail "trusted build pushes are restricted to main"
             [ -z "$D2B_BASE_REF" ] || fail "push events must not carry a base ref"
@@ -146,7 +151,7 @@ jobs:
           fi
 
           {
-            printf 'trusted_sha=%s\n' "$D2B_WORKFLOW_SHA"
+            printf 'trusted_sha=%s\n' "$trusted_sha"
             printf 'base_sha=%s\n' "$D2B_BASE_SHA"
             printf 'head_sha=%s\n' "$D2B_HEAD_SHA"
             printf 'merge_sha=%s\n' "$D2B_MERGE_SHA"
@@ -209,7 +214,7 @@ jobs:
   remote:
     name: remote
     needs: [metadata]
-    if: ${{ needs.metadata.result == 'success' }}
+    if: ${{ needs.metadata.result == 'success' && github.event_name == 'push' }}
     runs-on: ubuntu-latest
     timeout-minutes: 120
     env:
@@ -219,7 +224,6 @@ jobs:
       D2B_HEAD_SHA: ${{ needs.metadata.outputs.head_sha }}
       D2B_MERGE_SHA: ${{ needs.metadata.outputs.merge_sha }}
       D2B_PR_NUMBER: ${{ needs.metadata.outputs.pr_number }}
-      D2B_BRANCH: ${{ needs.metadata.outputs.branch }}
       D2B_INSTANCE: ${{ needs.metadata.outputs.instance }}
       D2B_HAS_BAZEL: ${{ needs.metadata.outputs.has_bazel }}
       USE_BAZEL_VERSION: "9.2.0"
@@ -421,7 +425,7 @@ jobs:
           echo "Brokered remote Bazel subset passed."
       - name: No remote Bazel graph on this revision
         if: ${{ needs.metadata.outputs.has_bazel != 'true' }}
-        run: echo "No Bazel graph is present; the credential-free local lane remains authoritative."
+        run: echo "No Bazel graph is present on trusted main; no remote seed is required."
 
   check:
     name: check
@@ -435,12 +439,17 @@ jobs:
           METADATA_RESULT: ${{ needs.metadata.result }}
           LOCAL_RESULT: ${{ needs.local.result }}
           REMOTE_RESULT: ${{ needs.remote.result }}
+          EVENT_NAME: ${{ github.event_name }}
         run: |
           set -euo pipefail
           echo "metadata=$METADATA_RESULT local=$LOCAL_RESULT remote=$REMOTE_RESULT"
-          for result in "$METADATA_RESULT" "$LOCAL_RESULT" "$REMOTE_RESULT"; do
+          for result in "$METADATA_RESULT" "$LOCAL_RESULT"; do
             [ "$result" = success ] || {
               echo "::error::a required build lane did not pass (result=$result)" >&2
               exit 1
             }
           done
+          if [ "$EVENT_NAME" = push ] && [ "$REMOTE_RESULT" != success ]; then
+            echo "::error::the trusted main remote seed lane did not pass (result=$REMOTE_RESULT)" >&2
+            exit 1
+          fi
