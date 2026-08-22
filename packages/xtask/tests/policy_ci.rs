@@ -211,16 +211,28 @@ fn main_controlled_buildbuddy_workflows_preserve_trust_contract() {
             && build.contains("D2B_BAZEL_UNTRUSTED: \"1\""),
         "full PR coverage must retain a credential-free local Layer-1 gate"
     );
-    let rust_bootstrap = build
-        .find("Prepare pinned Rust toolchain for parallel Layer-1 gates")
+    let local_job_start = build
+        .find("\n  local:\n")
+        .expect("build workflow must define a local job");
+    let local_job_end = local_job_start
+        + build[local_job_start..]
+            .find("\n  remote:\n")
+            .expect("build workflow must define a remote job");
+    let local_job = &build[local_job_start..local_job_end];
+    let rust_bootstrap = local_job
+        .find("      - name: Prepare pinned Rust toolchain for parallel Layer-1 gates")
         .expect("local Layer-1 gate must prepare the shared Rust toolchain");
-    let local_gate = build
-        .find("Run credential-free local Layer-1 gate")
+    let local_gate = local_job
+        .find("      - name: Run credential-free local Layer-1 gate")
         .expect("local Layer-1 gate step must be present");
+    let rust_bootstrap_step = &local_job[rust_bootstrap..local_gate];
     assert!(
         rust_bootstrap < local_gate
-            && build.contains("rustup toolchain install \"$pinned_channel\" --profile minimal")
-            && build.contains("--component rustfmt --component clippy"),
+            && rust_bootstrap_step.contains("working-directory: workspace")
+            && rust_bootstrap_step.contains("packages/rust-toolchain.toml")
+            && rust_bootstrap_step
+                .contains("rustup toolchain install \"$pinned_channel\" --profile minimal")
+            && rust_bootstrap_step.contains("--component rustfmt --component clippy"),
         "parallel local Layer-1 jobs must share a preinstalled pinned Rust toolchain"
     );
     assert!(
