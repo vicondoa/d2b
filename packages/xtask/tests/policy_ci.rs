@@ -171,26 +171,40 @@ fn main_controlled_buildbuddy_workflows_preserve_trust_contract() {
         "build workflow must bind trusted and tested immutable OIDs"
     );
     assert!(
-        build.contains("trusted_sha=\"${D2B_JOB_WORKFLOW_SHA:-$D2B_CALLER_WORKFLOW_SHA}\"")
-            && build.contains(
-                "if [ -n \"$D2B_JOB_WORKFLOW_REF\" ] || [ -n \"$D2B_JOB_WORKFLOW_SHA\" ]; then"
-            )
-            && build.contains(
-                "[ \"$D2B_JOB_WORKFLOW_REF\" = \"vicondoa/d2b/.github/workflows/build.yaml@refs/heads/main\" ]"
-            )
-            && build.contains("is_sha \"$D2B_JOB_WORKFLOW_SHA\""),
-        "optional reusable-workflow metadata must be validated when GitHub provides it"
+        build.contains("trusted_sha=\"${D2B_JOB_WORKFLOW_SHA:-$D2B_CALLER_WORKFLOW_SHA}\""),
+        "trusted workflow SHA must fall back to the caller SHA when job metadata is absent"
     );
+    let helper_start = build
+        .find("          validate_optional_reusable_workflow() {")
+        .expect("build workflow must define optional reusable-workflow validation");
     let pr_validation_start = build
-        .find("if [ \"$D2B_EVENT_NAME\" = \"pull_request_target\" ]")
+        .find("          if [ \"$D2B_EVENT_NAME\" = \"pull_request_target\" ]")
         .expect("build workflow must validate pull_request_target metadata");
     let push_validation_start = build
-        .find("elif [ \"$D2B_EVENT_NAME\" = \"push\" ]")
+        .find("          elif [ \"$D2B_EVENT_NAME\" = \"push\" ]")
         .expect("build workflow must validate push metadata");
+    let helper_end = helper_start
+        + build[helper_start..pr_validation_start]
+            .find("\n          }\n\n")
+            .expect("optional reusable-workflow validator must end before event validation");
+    let helper = &build[helper_start..helper_end];
+    assert!(
+        helper.contains(
+            "if [ -n \"$D2B_JOB_WORKFLOW_REF\" ] || [ -n \"$D2B_JOB_WORKFLOW_SHA\" ]; then"
+        ) && helper.contains(
+            "[ \"$D2B_JOB_WORKFLOW_REF\" = \"vicondoa/d2b/.github/workflows/build.yaml@refs/heads/main\" ]"
+        ) && helper.contains("is_sha \"$D2B_JOB_WORKFLOW_SHA\""),
+        "optional reusable-workflow metadata checks must stay inside their validator"
+    );
+    let push_validation_end = push_validation_start
+        + build[push_validation_start..]
+            .find("\n          else\n            fail \"only pull_request_target and push events are accepted\"")
+            .expect("build workflow event validation must have a bounded fallback branch");
     assert!(
         build[pr_validation_start..push_validation_start]
-            .contains("validate_optional_reusable_workflow")
-            && build[push_validation_start..].contains("validate_optional_reusable_workflow"),
+            .contains("            validate_optional_reusable_workflow\n")
+            && build[push_validation_start..push_validation_end]
+                .contains("            validate_optional_reusable_workflow\n"),
         "optional reusable-workflow metadata validation must bind to both event paths"
     );
     assert!(
