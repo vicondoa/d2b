@@ -122,18 +122,11 @@ _SURFACES = {
     },
     "examples": {
         "cases": [],
-        "files": [
-            "nixos-modules/gas-city-contributor/integrations.nix",
-            "nixos-modules/gas-city-contributor/network.nix",
-            "nixos-modules/gas-city-contributor/options.nix",
-            "nixos-modules/gas-city-contributor/service.nix",
-        ],
         "modules": [
             "nixos-modules/components/observability/default.nix",
             "nixos-modules/components/observability/guest.nix",
             "nixos-modules/components/observability/host.nix",
             "nixos-modules/components/observability/stack.nix",
-            "nixos-modules/gas-city-contributor/default.nix",
             "nixos-modules/observability-vm.nix",
         ],
     },

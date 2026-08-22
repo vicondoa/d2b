@@ -1,5 +1,0 @@
-[pack]
-name = "d2b-contributor"
-version = "0.1.0"
-schema = 2
-description = "Local Gas City contributor workflow seams and review boundaries."

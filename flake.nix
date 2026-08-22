@@ -10,27 +10,6 @@
       url = "github:ipetkov/crane";
     };
 
-    # The contributor environment intentionally keeps its executable inputs
-    # separate from the d2b substrate.  These are source-only inputs where
-    # the package expression is the public surface; they must not become
-    # overlays or alter the default module.
-    gascity = {
-      url = "github:gastownhall/gascity/6e0399fb970190a35c3e3d5d272a02becec55ffe";
-      flake = false;
-    };
-    gascity-packs = {
-      url = "github:gastownhall/gascity-packs/f3826035bb7de7c34621c2fdcd8620ab5a18bb08";
-      flake = false;
-    };
-    llm-agents = {
-      url = "github:numtide/llm-agents.nix/387989ee56d550d86d46d9458ad68a55b9e0ca3b";
-    };
-    # This input is deliberately package-only: the repository's main
-    # nixpkgs input remains the source of all existing d2b outputs.
-    nixpkgs-gas-city = {
-      url = "github:NixOS/nixpkgs/f13ff45afd1bb73e640eaa08a7066dbed07e3238";
-    };
-
     # `microvm` flake input DROPPED per ADR 0018.
     # The d2b NixOS substrate owns its per-VM evaluator via
     # `nixos-modules/vm-evaluator.nix` + `nixos-modules/vm-options.nix`.
@@ -47,18 +26,12 @@
     self,
     nixpkgs,
     home-manager,
-    gascity,
-    gascity-packs,
-    llm-agents,
-    nixpkgs-gas-city,
     ...
   }@inputs:
     let
       systems = [ "x86_64-linux" "aarch64-linux" ];
       forAllSystems = nixpkgs.lib.genAttrs systems;
       nixpkgsFor = forAllSystems (system: import nixpkgs { inherit system; });
-      gasCityNixpkgsFor =
-        forAllSystems (system: import nixpkgs-gas-city { inherit system; });
       bazel920For = system:
         import ./pkgs/bazel-9.2.0 {
           pkgs = nixpkgsFor.${system};
@@ -68,75 +41,6 @@
           pkgs = nixpkgsFor.${system};
           bazel = bazel920For system;
           inherit system;
-        };
-
-      # The current Gas City source and the package-only nixpkgs input both
-      # require Go 1.26.5. Keep the package set explicit so a future update
-      # of the d2b substrate cannot silently change the contributor binary.
-      gascityFor = system:
-        import ./pkgs/gascity {
-          pkgs = gasCityNixpkgsFor.${system};
-          source = gascity;
-        };
-      doltFor = system:
-        import ./pkgs/dolt {
-          pkgs = gasCityNixpkgsFor.${system};
-        };
-      beadsFor = system:
-        import ./pkgs/beads {
-          pkgs = gasCityNixpkgsFor.${system};
-        };
-      copilotFor = system: llm-agents.packages.${system}.copilot-cli;
-
-      gasCityContributorFor = system:
-        import ./nix/gas-city-contributor {
-          pkgs = nixpkgsFor.${system};
-          gascityPacksSrc = gascity-packs;
-          gascity = gascityFor system;
-          dolt = doltFor system;
-          beads = beadsFor system;
-          copilot = copilotFor system;
-          go = (gasCityNixpkgsFor.${system}).go_1_26;
-          bazel = (gasCityNixpkgsFor.${system}).bazel_9;
-          gascityRevision =
-            "6e0399fb970190a35c3e3d5d272a02becec55ffe";
-          gascityPacksRevision =
-            "f3826035bb7de7c34621c2fdcd8620ab5a18bb08";
-          beadsRevision = "bf97b73749ac3ef2fca2365b54537ac041ad4293";
-          llmAgentsRevision =
-            "387989ee56d550d86d46d9458ad68a55b9e0ca3b";
-          packageNixpkgsRevision =
-            "f13ff45afd1bb73e640eaa08a7066dbed07e3238";
-        };
-
-      gasCityPackageSmokeFor = system:
-        let
-          gascity = gascityFor system;
-          dolt = doltFor system;
-          beads = beadsFor system;
-          copilot = copilotFor system;
-          gasCityContributor = gasCityContributorFor system;
-          go = gasCityNixpkgsFor.${system}.go_1_26;
-          bazel = gasCityNixpkgsFor.${system}.bazel_9;
-        in
-        import ./tests/unit/smoke/gas-city-package-smoke.nix {
-          pkgs = nixpkgsFor.${system};
-          inherit gasCityContributor;
-          gascityRevision =
-            "6e0399fb970190a35c3e3d5d272a02becec55ffe";
-          gascityPacksRevision =
-            "f3826035bb7de7c34621c2fdcd8620ab5a18bb08";
-          beadsRevision = "bf97b73749ac3ef2fca2365b54537ac041ad4293";
-          llmAgentsRevision =
-            "387989ee56d550d86d46d9458ad68a55b9e0ca3b";
-          packageNixpkgsRevision =
-            "f13ff45afd1bb73e640eaa08a7066dbed07e3238";
-          copilotVersion = copilot.version;
-          gascityVersion = gascity.version;
-          goVersion = go.version;
-          bazelVersion = bazel.version;
-          doltVersion = dolt.version;
-          beadsVersion = beads.version;
         };
 
       providerElfShim = import ./nix/provider-elf-shim.nix;
@@ -230,13 +134,6 @@
       #   checks.<sys>         - flake-eval CI gates
       #   lib                  - re-exported helpers (subnetIp, mkMac, …)
       nixosModules.default = import ./nixos-modules { inherit inputs; };
-      # U4's contributor environment is a separate consumer module.  The
-      # generic framework module above remains unchanged.
-      nixosModules.gasCityContributor =
-        import ./nixos-modules/gas-city-contributor {
-          packageFor = gasCityContributorFor;
-        };
-
       # Developer shell: everything the Layer-1 gates need, in one place.
       #
       # Without this each focused gate would provision its own toolchain.
@@ -250,7 +147,6 @@
       # for pkgs.rustc/pkgs.cargo and the pin will be served natively.
       devShells = forAllSystems (system: let
         pkgs = nixpkgsFor.${system};
-        gasCityContributor = gasCityContributorFor system;
         bazel920 = bazel920For system;
         bazelActionShell = pkgs.buildFHSEnv {
           name = "d2b-bazel-action-shell";
@@ -326,7 +222,7 @@
           ];
         };
         # Focused U1 shell: the compatibility proof must use the exact
-        # official Bazel release rather than an ambient or Gas City Bazel.
+        # official Bazel release rather than an ambient toolchain.
         # Only Bazel shell actions enter the standard FHS action shell;
         # Bazel itself and local tests stay in the caller's environment.
         bazel = pkgs.mkShellNoCC {
@@ -363,27 +259,11 @@
             echo "d2b Bazel compatibility shell: $(${bazel920}/bin/bazel --version)"
           '';
         };
-        # Contributor shell: the closure is the only source of executable
-        # inputs, so entering this shell does not depend on the host PATH.
-        gas-city = pkgs.mkShell {
-          name = "d2b-gas-city";
-          packages = [ gasCityContributor ];
-          shellHook = ''
-            export GC_CONTRIBUTOR_ROOT="${gasCityContributor}/share/gas-city-contributor"
-            export PATH="${gasCityContributor}/bin"
-            echo "Gas City contributor shell: $GC_CONTRIBUTOR_ROOT"
-          '';
-        };
       });
 
       packages = forAllSystems (system: let
         pkgs = nixpkgsFor.${system};
         bazel920 = bazel920For system;
-        gascity = gascityFor system;
-        dolt = doltFor system;
-        beads = beadsFor system;
-        copilot = copilotFor system;
-        gasCityContributor = gasCityContributorFor system;
         rustPackagesSrc = pkgs.runCommand "d2b-rust-src" { } ''
           mkdir -p $out/packages
           cp ${./Cargo.toml} $out/Cargo.toml
@@ -615,8 +495,6 @@
         signozSchemaMigrator = import ./pkgs/signoz-schema-migrator { inherit pkgs; };
         bazel-9_2_0 = bazel920;
         bazel-worker-image = bazelWorkerImageFor system;
-        inherit gascity dolt beads copilot gasCityContributor;
-        gas-city-contributor = gasCityContributor;
       });
 
       # Container-based integration test images (the type-G layer), built by
@@ -1249,9 +1127,6 @@
               echo "video-binary-contract is x86_64-linux only (graphics gate)" > $out
             '';
         fixture-smoke = smokeFixture;
-        # Unlike the existing eval-only fixture checks, this one deliberately
-        # realizes every pinned executable and the immutable pack closure.
-        gas-city-package-smoke = gasCityPackageSmokeFor system;
         bazel-9_2_0-provider-smoke =
           import ./tests/unit/smoke/bazel-provider.nix {
             inherit pkgs bazel920 system;
