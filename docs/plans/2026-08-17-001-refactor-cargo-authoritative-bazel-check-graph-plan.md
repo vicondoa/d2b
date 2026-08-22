@@ -60,7 +60,7 @@ The surrounding relationships describe current context, not a committed roadmap.
 
 - **Supersedes:** The Product Contract in `docs/plans/2026-08-14-002-refactor-bazel-buildbuddy-check-migration-plan.md` where it requires `rules_rust`, manual BUILD authority, shell scheduling, fine-grained CI Rust leaves, custom qualification tooling, or a fixed three-minute threshold.
 - **Reuses:** Compatible graph, BuildBuddy, test, and documentation work from `feat/bazel-buildbuddy-check` remains implementation input rather than being discarded wholesale.
-- **Shares:** The Gas City contributor environment may provide Bazel and BuildBuddy access, but its orchestration is not part of this graph.
+- **Shares:** The standalone [contributor Gas City repository](https://github.com/vicondoa/d2b-gascity) may provide Bazel and BuildBuddy access, but its orchestration is not part of this graph.
 - **Can proceed independently of:** d2b runtime, daemon, broker, microVM, and consumer-facing feature work.
 
 ### Actors

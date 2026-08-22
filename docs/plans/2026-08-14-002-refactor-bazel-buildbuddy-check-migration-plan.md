@@ -57,7 +57,7 @@ This plan owns the Bazel and BuildBuddy check migration.
 The surrounding breakdown is current context, not a committed roadmap.
 
 - **Depends on:** BuildBuddy remote execution and cache availability, direct secret-backed authentication, and upstream Bazel and rules that can represent each admitted action without a project-maintained Bazel patch.
-- **Shares:** The Gas City contributor environment already provides Bazel 9.x and BuildBuddy connectivity, but this migration does not depend on Gas City orchestration.
+- **Shares:** The standalone [contributor Gas City repository](https://github.com/vicondoa/d2b-gascity) may provide Bazel 9.x and BuildBuddy connectivity, but this migration does not depend on its orchestration.
 - **Can proceed independently of:** d2b runtime, daemon, broker, microVM, release-artifact, and consumer-facing feature work.
 - **Includes:** Deleting Bazel-specific ADRs and specs so obsolete build authority does not coexist with this contract.
 - **Excludes:** Broad cleanup of ADRs, specs, or contributor policy that is not about the Bazel build and test design.
@@ -272,7 +272,7 @@ flowchart TB
 - `docs/adr/0052-bazel-rust-build-and-test.md`
 - `docs/adr/0054-single-product-cargo-workspace.md`
 - `specs/003-adr052-bazel-rust/`
-- `docs/plans/2026-08-10-001-feat-gas-city-contributor-environment-plan.md`
+- [Standalone contributor Gas City repository](https://github.com/vicondoa/d2b-gascity) - external orchestration context only.
 - [Bazel release model](https://bazel.build/release)
 - [Bazel remote caching](https://bazel.build/remote/caching)
 - [Bazel remote cache hit debugging](https://bazel.build/remote/cache-remote)
@@ -753,7 +753,7 @@ flowchart LR
   10. Collect separate AC, CAS, output, stdout/stderr, BES, repository, retry, provider-billed transfer, and local U9 predicted-bound evidence.
   11. Compare the first provider-observed upload and download with U9's unique-input, gross-input, and output estimates without requiring an exact match.
   12. Retry once locally only when evidence proves the typed infrastructure failure occurred before action dispatch; post-dispatch uncertainty fails closed.
-- **Patterns to follow:** Follow official Bazel remote flags and BuildBuddy auth, RBE, cache, metrics, and troubleshooting guidance. Keep the Gas City proxy separate.
+- **Patterns to follow:** Follow official Bazel remote flags and BuildBuddy auth, RBE, cache, metrics, and troubleshooting guidance. Keep standalone contributor Gas City orchestration separate.
 - **Test scenarios:**
   1. Plain, encoded, and split sentinel keys are absent from argv, canonical options, BEP, logs, actions, tests, CAS-visible output, invocation views, and evidence.
   2. A pull request that changes an endpoint, instance, import, module source, repository rule, action environment, or security file cannot receive a trusted key.
