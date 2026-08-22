@@ -188,7 +188,9 @@ After redaction, every retained profile rejects a log line beginning with
 fallback runs, including otherwise-successful cache hits. Warning failures are
 not eligible for the typed local retry. The facade also inspects local `test.log`
 artifacts named by the BEP, including cached test results, so test output that
-is not replayed into the console cannot bypass the warning check.
+is not replayed into the console cannot bypass the warning check. If a
+`test.log` URI is not a local `file://` artifact, the facade fails closed
+rather than treating the unscanned output as clean.
 
 `bazel-evidence classify-failure` is the typed fallback classifier. It
 distinguishes positively pre-dispatch infrastructure failures, plus a remote

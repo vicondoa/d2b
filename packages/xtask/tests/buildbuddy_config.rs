@@ -723,6 +723,61 @@ fn warning_after_cache_hit_fails_a_successful_local_run() {
 }
 
 #[test]
+fn non_file_cached_test_log_uri_fails_closed_without_retry() {
+    let scratch = repo_root().join(".scratch").join(format!(
+        "bazel-check-warning-bytestream-{}",
+        std::process::id()
+    ));
+    std::fs::create_dir_all(&scratch).expect("create wrapper test scratch");
+    let bazel = scratch.join("bazel");
+    let profile_log = scratch.join("profiles");
+    let credential = scratch.join("credential");
+    std::fs::write(&credential, "credential").expect("write fake credential");
+    write_executable(
+        &bazel,
+        &format!(
+            "#!/usr/bin/env bash\n\
+             printf '%s\\n' \"$D2B_BAZEL_PROFILE\" >> '{}'\n\
+             for arg in \"$@\"; do\n\
+               case \"$arg\" in\n\
+                 --build_event_json_file=*) bep=\"${{arg#*=}}\" ;;\n\
+               esac\n\
+             done\n\
+             printf '{{\"id\":{{\"testResult\":{{\"label\":\"//:test\"}}}},\"testResult\":{{\"testActionOutput\":[{{\"name\":\"test.log\",\"uri\":\"bytestream://cache/test.log\"}}],\"cachedLocally\":true,\"status\":\"PASSED\"}}}}\\n' > \"$bep\"\n\
+             exit 0\n",
+            profile_log.display(),
+        ),
+    );
+
+    let output = Command::new("bash")
+        .arg(repo_root().join("tests/tools/bazel-check"))
+        .args(["--profile", "remote", "--", "//:test"])
+        .env("D2B_BAZEL_BIN", &bazel)
+        .env("D2B_PROJECT_SHELL", "d2b")
+        .env("D2B_XTASK_BIN", env!("CARGO_BIN_EXE_xtask"))
+        .env("D2B_BUILDBUDDY_CREDENTIAL_FILE", &credential)
+        .env_remove("D2B_BAZEL_UNTRUSTED")
+        .env_remove("GITHUB_ACTIONS")
+        .env("D2B_BAZEL_CHECK_SCRATCH", scratch.join("evidence"))
+        .output()
+        .expect("run bazel-check");
+
+    assert_eq!(output.status.code(), Some(1));
+    let diagnostics = format!(
+        "{}{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(diagnostics.contains("warning scan failed"));
+    assert!(!diagnostics.contains("bazel-check: local passed"));
+    assert_eq!(
+        std::fs::read_to_string(&profile_log).expect("read fake Bazel profiles"),
+        "remote\n"
+    );
+    let _ = std::fs::remove_dir_all(scratch);
+}
+
+#[test]
 fn warning_guard_survives_redaction_of_the_warning_prefix() {
     let scratch = repo_root().join(".scratch").join(format!(
         "bazel-check-warning-redacted-prefix-{}",

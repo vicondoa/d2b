@@ -360,7 +360,7 @@ test_logs_have_warning() {
     [ -n "$uri" ] || continue
     case "$uri" in
       file://*) test_log="${uri#file://}" ;;
-      *) continue ;;
+      *) return 2 ;;
     esac
     warning_status=0
     warning_line_status "$test_log" || warning_status=$?
