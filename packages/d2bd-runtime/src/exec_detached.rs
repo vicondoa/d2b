@@ -49,6 +49,7 @@ pub trait DetachedExecContext {
 // waits up to 10 s for the runner to write its status file
 // (`CREATE_TIMEOUT_MS`); 20 s covers that window plus scheduling slack,
 // consistent with `exec_session_real::ESTABLISH_TIMEOUT`.
+#[cfg(any(test, feature = "test-support"))]
 const DETACHED_CREATE_DEADLINE: Duration = Duration::from_secs(20);
 const DETACHED_CANCEL_DEADLINE: Duration = Duration::from_secs(30);
 #[cfg(test)]
@@ -198,6 +199,7 @@ use std::sync::{Arc, Mutex, OnceLock};
 
 #[derive(Debug)]
 enum DetachedRealRequest {
+    #[cfg(any(test, feature = "test-support"))]
     Create(ExecStartSpec),
     List,
     Status {
@@ -216,6 +218,7 @@ enum DetachedRealRequest {
 
 #[derive(Debug)]
 enum DetachedRealResponse {
+    #[cfg(any(test, feature = "test-support"))]
     Create(ExecDetachedCreateResult),
     List(ExecDetachedListResult),
     Status(ExecDetachedStatusResult),
@@ -357,6 +360,7 @@ pub fn create_idempotent_as(
     create_with_request_id(state, start, Some(request_id), caller_role)
 }
 
+#[cfg(any(test, feature = "test-support"))]
 fn create_with_request_id(
     state: &impl DetachedExecContext,
     start: &public_wire::ExecStartArgs,
@@ -692,6 +696,7 @@ fn run_detached_request(
     crate::runtime_util::block_on_future(async move {
         let client = DetachedClient::connect(params, broker_socket, caller_role).await?;
         match request {
+            #[cfg(any(test, feature = "test-support"))]
             DetachedRealRequest::Create(spec) => client
                 .exec_create(&spec)
                 .await
@@ -731,6 +736,7 @@ fn internal_error(detail: impl Into<String>) -> TypedError {
 
 #[async_trait]
 trait DetachedGuestControlRpc: Send + Sync {
+    #[cfg(any(test, feature = "test-support"))]
     async fn exec_create(
         &self,
         request: pb::ExecCreateRequest,
@@ -764,6 +770,7 @@ trait DetachedGuestControlRpc: Send + Sync {
 
 #[async_trait]
 impl DetachedGuestControlRpc for TtrpcGuestControlClient {
+    #[cfg(any(test, feature = "test-support"))]
     async fn exec_create(
         &self,
         request: pb::ExecCreateRequest,
@@ -850,6 +857,7 @@ impl<C> DetachedClient<C>
 where
     C: DetachedGuestControlRpc,
 {
+    #[cfg(any(test, feature = "test-support"))]
     async fn exec_create(
         &self,
         spec: &ExecStartSpec,
