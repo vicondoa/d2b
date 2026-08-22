@@ -44,8 +44,9 @@ deprecations ship one minor release before removal.
 
 ### Fixed
 
-- Fixed trusted `main` push validation so the BuildBuddy seed workflow
-  executes its metadata checks instead of failing on shell test parsing.
+- Fixed trusted `main` push validation and reusable workflow resolution so the
+  BuildBuddy seed workflow executes its metadata checks instead of failing on
+  shell test parsing.
 
 ## [1.4.1] - 2026-07-12
 
