@@ -47,6 +47,11 @@ deprecations ship one minor release before removal.
 - Fixed trusted `main` push validation and reusable workflow resolution so the
   BuildBuddy seed workflow executes its metadata checks instead of failing on
   shell test parsing.
+- Accepted GitHub runs that omit `job_workflow_ref` and `job_workflow_sha` for
+  same-repository reusable workflows while still validating those immutable
+  identifiers whenever GitHub provides them.
+- Prepared the pinned Rust toolchain before parallel local Layer-1 gates so
+  concurrent Rust and proof jobs do not race during rustup installation.
 
 ## [1.4.1] - 2026-07-12
 

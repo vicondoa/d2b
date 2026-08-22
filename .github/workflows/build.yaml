@@ -89,11 +89,19 @@ jobs:
           git -C source check-ref-format --branch "$D2B_BRANCH" >/dev/null 2>&1 ||
             fail "branch metadata is not an approved ref"
 
+          validate_optional_reusable_workflow() {
+            if [ -n "$D2B_JOB_WORKFLOW_REF" ] || [ -n "$D2B_JOB_WORKFLOW_SHA" ]; then
+              [ "$D2B_JOB_WORKFLOW_REF" = "vicondoa/d2b/.github/workflows/build.yaml@refs/heads/main" ] ||
+                fail "reusable build controls must be sourced from protected main"
+              is_sha "$D2B_JOB_WORKFLOW_SHA" ||
+                fail "reusable workflow SHA is not a full immutable commit SHA"
+            fi
+          }
+
           if [ "$D2B_EVENT_NAME" = "pull_request_target" ]; then
             [ "$D2B_CALLER_WORKFLOW_REF" = "vicondoa/d2b/.github/workflows/pr.yml@refs/heads/main" ] ||
               fail "PR workflow controls must be sourced from protected main"
-            [ "$D2B_JOB_WORKFLOW_REF" = "vicondoa/d2b/.github/workflows/build.yaml@refs/heads/main" ] ||
-              fail "reusable build controls must be sourced from protected main"
+            validate_optional_reusable_workflow
             case "$D2B_BASE_REF" in
               main|v3) ;;
               *) fail "pull request target is not main or v3" ;;
@@ -110,6 +118,7 @@ jobs:
           elif [ "$D2B_EVENT_NAME" = "push" ]; then
             [ "$D2B_CALLER_WORKFLOW_REF" = "vicondoa/d2b/.github/workflows/build.yaml@refs/heads/main" ] ||
               fail "push workflow controls must be sourced from protected main"
+            validate_optional_reusable_workflow
             [ "$D2B_REF" = "refs/heads/main" ] ||
               fail "trusted build pushes are restricted to main"
             [ -z "$D2B_BASE_REF" ] || fail "push events must not carry a base ref"
@@ -202,6 +211,23 @@ jobs:
           set -euo pipefail
           test "$(git -C trusted rev-parse HEAD)" = "$D2B_TRUSTED_SHA"
           test "$(git -C workspace rev-parse HEAD)" = "$D2B_TESTED_SHA"
+      - name: Prepare pinned Rust toolchain for parallel Layer-1 gates
+        working-directory: workspace
+        run: |
+          set -euo pipefail
+          if ! command -v rustup >/dev/null 2>&1; then
+            echo "rustup is unavailable; Rust gates will use their Nix fallback."
+            exit 0
+          fi
+          pinned_channel="$(
+            sed -n 's/^[[:space:]]*channel[[:space:]]*=[[:space:]]*"\([^"]*\)".*/\1/p' \
+              packages/rust-toolchain.toml | head -1
+          )"
+          [ -n "$pinned_channel" ] || {
+            echo "::error::could not read the pinned Rust channel" >&2
+            exit 76
+          }
+          rustup toolchain install "$pinned_channel" --profile minimal --component rustfmt --component clippy
       - name: Run credential-free local Layer-1 gate
         working-directory: workspace
         run: |
