@@ -68,7 +68,7 @@ The source-hygiene gate fails closed when `D2B_SHELLCHECK_BIN` is unavailable.
 | `make test-integration` | type-9 podman container tests | conditional local host lane (podman; not the PR pipeline) |
 | `make test-host-integration` | type-10 runNixOSTest VM checks; set `D2B_VM_CHECK=<name>` for one named check | conditional local NixOS host lane (KVM; TCG fallback; not the PR pipeline) |
 | `make check-fast` | compatibility alias for `make check` | local + CI |
-| `make bazel-check` | Bazel aggregate suite used by `make check`. Defaults to BuildBuddy remotely; protected `v3` CI uses the trusted remote/local split | local or remote |
+| `make bazel-check` | Bazel aggregate suite used by `make check`. Defaults to BuildBuddy remotely; default-branch `main` CI uses the trusted remote/local split for protected `main` and `v3` targets | local or remote |
 | `make heavy-gate-build && bazel-bin/packages/xtask/xtask heavy-gate -- env D2B_LIVE=1 bash tests/integration/live/<x>.sh` | type-11 live-host tests, through the heavy-gate semaphore | **manual, against a deployed d2b host** |
 
 `make check`, `make test-unit`, and `make bazel-check` invoke the same nested
@@ -93,10 +93,11 @@ The focused shell supplies Bazel, Make, jq, Git, Rustup, and the shell
 utilities used by `tests/tools/bazel-check`; no ambient host Bazel or jq is
 required. An unrelated Nix shell is not accepted as the d2b shell. Optional
 direnv integration is supported for interactive use but is not required.
-Protected `v3` CI installs Nix and calls the same public Make aliases from the
-trusted checkout. Remote-eligible jobs use the brokered BuildBuddy credential;
-Nix, fixture, hardware, and other local-only jobs remain local and
-credential-free.
+Default-branch `main` CI installs Nix and calls the same public Make aliases
+from an immutable trusted checkout for PRs targeting `main` or `v3`.
+Protected `main` and `v3` pushes retain trusted cache seeding. Remote-eligible
+jobs use the brokered BuildBuddy credential; Nix, fixture, hardware, and other
+local-only jobs remain local and credential-free.
 
 `make test-policy` does not schedule
 `tests/tools/guest-workspace-drift.py`. The retained

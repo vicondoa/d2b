@@ -321,6 +321,7 @@ fn assert_trusted_wrapper_contract(wrapper: &str) {
         "D2B_BAZEL_RUN_ID",
         "D2B_BAZEL_REQUIRE_REMOTE",
         "D2B_BAZEL_CREDENTIAL_FD",
+        "unset D2B_XTASK_BIN",
     ] {
         assert!(wrapper.contains(marker), "trusted facade lost {marker}");
     }
@@ -2635,7 +2636,7 @@ fn trusted_ci_rejects_pr_metadata_tampering() {
     write_executable(&xtask, "#!/usr/bin/env bash\nexit 0\n");
     std::fs::write(scratch.join(".bazelrc"), "").expect("write CI metadata Bazel rc");
 
-    let run = |base_sha: &str, fail_ancestry: &str| {
+    let run = |base_sha: &str, fail_ancestry: &str, base_ref: &str| {
         let _ = std::fs::remove_file(&fail_base_ancestry);
         let _ = std::fs::remove_file(&fail_head_ancestry);
         match fail_ancestry {
@@ -2676,7 +2677,7 @@ fn trusted_ci_rejects_pr_metadata_tampering() {
             .env("GITHUB_SHA", trusted_commit)
             .env("GITHUB_REPOSITORY", "vicondoa/d2b")
             .env("GITHUB_SERVER_URL", "https://github.com")
-            .env("GITHUB_BASE_REF", "v3")
+            .env("GITHUB_BASE_REF", base_ref)
             .env("GITHUB_HEAD_REF", "feature/issue-447")
             .env(
                 "PATH",
@@ -2686,7 +2687,7 @@ fn trusted_ci_rejects_pr_metadata_tampering() {
             .expect("run trusted CI metadata profile")
     };
 
-    let output = run(base_commit, "");
+    let output = run(base_commit, "", "v3");
     assert!(
         output.status.success(),
         "valid trusted PR metadata must pass: {output:?}"
@@ -2697,21 +2698,26 @@ fn trusted_ci_rejects_pr_metadata_tampering() {
             .expect("read staged trusted Bazel rc"),
         "true"
     );
-    let output = run(invalid_commit, "");
+    let output = run(base_commit, "", "main");
+    assert!(
+        output.status.success(),
+        "valid main-targeted PR metadata must pass: {output:?}"
+    );
+    let output = run(invalid_commit, "", "v3");
     assert_eq!(output.status.code(), Some(76));
-    let output = run(base_commit, "base");
+    let output = run(base_commit, "base", "v3");
     assert_eq!(output.status.code(), Some(76));
     assert!(
         String::from_utf8_lossy(&output.stderr).contains("not based on protected base"),
         "base ancestry failure must identify the protected-base check: {output:?}"
     );
-    let output = run(base_commit, "head");
+    let output = run(base_commit, "head", "v3");
     assert_eq!(output.status.code(), Some(76));
     assert!(
         String::from_utf8_lossy(&output.stderr).contains("PR head SHA is not an ancestor"),
         "head ancestry failure must identify the PR-head check: {output:?}"
     );
-    let output = run("", "");
+    let output = run("", "", "v3");
     assert_eq!(output.status.code(), Some(76));
     assert!(
         String::from_utf8_lossy(&output.stderr).contains("OID metadata is invalid"),

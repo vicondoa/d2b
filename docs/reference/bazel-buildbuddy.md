@@ -36,9 +36,12 @@ nix develop --no-write-lock-file .#bazel -c bazel test //packages/<crate>:<owner
 ```
 
 Direnv is optional; it may enter `nix develop` automatically but is not part
-of the contributor or CI contract. CI installs Nix and invokes the trusted
-`v3` Make aliases from the protected checkout. Remote-eligible jobs use the
-brokered BuildBuddy credential; local-only jobs do not receive it.
+of the contributor or CI contract. CI installs Nix and invokes the fixed Make
+aliases from an immutable trusted checkout. Pull-request target runs source
+that checkout and the workflow/bootstrap from default branch `main`, even
+when the PR targets `v3`; protected `main` and `v3` pushes use their immutable
+event commit for trusted cache seeding. Remote-eligible jobs use the brokered
+BuildBuddy credential; local-only jobs do not receive it.
 
 ## One execution graph
 
@@ -85,7 +88,7 @@ The committed `.bazelrc` defines:
 | --- | --- |
 | `local` | Local execution with no remote executor, cache, or BES |
 | `remote` | Developer BuildBuddy execution and cache |
-| `trusted-seed` | Protected `v3` cache seeding with synchronous uploads |
+| `trusted-seed` | Protected `main` or `v3` cache seeding with synchronous uploads |
 
 Remote profiles use the BuildBuddy Linux worker contract, Ubuntu GCC
 toolchain, minimal output downloads, compressed cache blobs, zero Bazel remote
@@ -95,11 +98,16 @@ container, VM, live-host, hardware, fixture, and performance lanes remain
 explicit local lanes. Rust target and exec actions override the worker
 toolchain's deprecated gold default with GNU ld.bfd.
 
-The credential-bearing PR gate is a `pull_request_target` workflow owned by
-protected `v3`; push seeding is also limited to `v3`. Each job checks out the
-event's immutable base into `trusted` and the immutable tested merge/push
-commit into `workspace`. The workflow executes the `v3` Makefile and trusted
-shell/bootstrap only. Remote jobs use `D2B_BAZEL_PROFILE=remote` and
+The credential-bearing PR gate is a `pull_request_target` workflow sourced
+from default branch `main` and accepted for PRs targeting `main` or `v3`.
+GitHub's `pull_request_target` context supplies the immutable default-branch
+workflow SHA, which each job checks out into `trusted`; the protected base
+commit remains a separate metadata value. Each job checks out the immutable
+tested merge/push commit into `workspace`. The workflow executes only the
+trusted Makefile and shell/bootstrap from `trusted`, while the facade stages
+the tested source and overlays those controls before Bazel runs. Protected
+`main` and `v3` pushes use the same fixed job set and seed their separate
+trusted cache namespace. Remote jobs use `D2B_BAZEL_PROFILE=remote` and
 `D2B_BAZEL_REQUIRE_REMOTE=1`; local-only jobs use `local`. The fixed job set is
 committed in `.github/workflows/pr-l1-static-fast.yml` and must remain aligned
 with the public Make aliases.
@@ -138,12 +146,15 @@ input. It therefore does not change ordinary action keys or invalidate
 reusable outputs, and the global `--stamp=no` contract remains unchanged.
 
 Trusted CI additionally validates the protected base, PR head, tested merge,
-trusted checkout, run id, PR number, branch, workflow reference, and event
-before invoking Bazel. It publishes those immutable OIDs and run/linkage
-fields as BuildBuddy metadata, and derives a cache instance namespace from the
-PR number and head SHA (`d2b/pr/<number>/<head-sha>/...`). Pushes use the
-separate trusted `v3` namespace. A stale checkout or mismatched event fails
-closed.
+trusted workflow checkout, run id, PR number, branch, workflow reference, and
+event before invoking Bazel. For pull requests it requires
+`GITHUB_REF=refs/heads/main`, a `main` workflow reference, and a trusted
+checkout matching `GITHUB_SHA`; the base ref may be `main` or `v3`. It
+publishes those immutable OIDs and run/linkage fields as BuildBuddy metadata,
+and derives a cache instance namespace from the PR number and head SHA
+(`d2b/pr/<number>/<head-sha>/...`). Protected pushes use their immutable event
+commit and the separate trusted-seed namespace. A stale checkout, mismatched
+event, or non-main pull-request workflow fails closed.
 
 ## Credentials and trust selection
 
@@ -164,8 +175,8 @@ The facade preserves the selected target set when execution changes:
 
 - missing or withheld credentials select `local` before Bazel starts;
 - untrusted GitHub jobs always select `local`;
-- `trusted-seed` requires `D2B_BAZEL_TRUSTED=1`, `GITHUB_REF=refs/heads/v3`,
-  and an allowlisted security digest;
+- `trusted-seed` requires `D2B_BAZEL_TRUSTED=1`, a protected `main` or `v3`
+  ref, and an allowlisted security digest;
 - a clearly pre-dispatch missing-credential, authentication, or endpoint
   failure permits one identical local retry; worker and transport failures
   require explicit pre-dispatch evidence, except for a remote gRPC deadline;
@@ -174,7 +185,7 @@ The facade preserves the selected target set when execution changes:
 For GitHub Actions, add the repository secret
 `D2B_BUILDBUDDY_API_KEY`. The trusted workflow passes it only over stdin to
 `tests/tools/bazel-check-bootstrap`, which stores it in an anonymous memfd and
-execs the trusted `v3` command with a descriptor number. The key is not placed
+execs the trusted command with a descriptor number. The key is not placed
 in ordinary action environment variables, arguments, repository files, Bazel
 rc files, or test environments. Credential-bearing CI has no local fallback:
 missing credentials, authentication failure, endpoint failure, or remote

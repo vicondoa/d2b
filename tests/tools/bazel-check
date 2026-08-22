@@ -593,6 +593,10 @@ if [ "${D2B_PROJECT_SHELL:-}" != d2b ]; then
   exit "$CONFIGURATION_FAILURE_STATUS"
 fi
 
+if ci_mode; then
+  unset D2B_XTASK_BIN
+fi
+
 bazel_bin="${D2B_BAZEL_BIN:-}"
 if [ -z "$bazel_bin" ] || [ ! -x "$bazel_bin" ]; then
   echo "bazel-check: D2B_BAZEL_BIN must name the executable pinned by the d2b development shell" >&2
