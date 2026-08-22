@@ -4,6 +4,7 @@ use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 
 const ALLOWLISTED_WORKFLOWS: &[&str] = &[
+    ".github/workflows/pr.yml",
     ".github/workflows/eval-with-entra-id.yml",
     ".github/workflows/pr-eval-shell-tests.yml",
     ".github/workflows/release-host-binaries.yml",
@@ -49,7 +50,10 @@ fn workflow_files() -> Vec<String> {
             let entry = entry.expect("read workflow entry");
             entry.path()
         })
-        .filter(|path| path.extension().is_some_and(|ext| ext == "yml"))
+        .filter(|path| {
+            path.extension()
+                .is_some_and(|ext| ext == "yml" || ext == "yaml")
+        })
         .map(|path| {
             path.strip_prefix(&root)
                 .expect("workflow path under repo root")
@@ -114,10 +118,103 @@ fn ci_uses_make_allowlist_is_intentional_and_bounded() {
     assert_eq!(
         ALLOWLISTED_WORKFLOWS,
         &[
+            ".github/workflows/pr.yml",
             ".github/workflows/eval-with-entra-id.yml",
             ".github/workflows/pr-eval-shell-tests.yml",
             ".github/workflows/release-host-binaries.yml",
         ],
         "workflow make-target exceptions must stay reviewed and bounded"
+    );
+}
+
+#[test]
+fn main_controlled_buildbuddy_workflows_preserve_trust_contract() {
+    let build = read_repo_file(".github/workflows/build.yaml");
+    let pr = read_repo_file(".github/workflows/pr.yml");
+
+    assert!(
+        pr.contains("pull_request_target:\n    branches: [main, v3]"),
+        "PR workflow must cover both protected targets"
+    );
+    assert!(
+        !pr.contains("\n  pull_request:\n"),
+        "PR workflow must not run untrusted pull_request controls"
+    );
+    assert!(
+        pr.contains("uses: ./.github/workflows/build.yaml")
+            && pr.contains("secrets: inherit"),
+        "PR workflow must call the main-owned reusable build with inherited secrets"
+    );
+
+    assert!(
+        build.contains("name: build") && build.contains("workflow_call:"),
+        "build.yaml must be the reusable build workflow"
+    );
+    assert!(
+        build.contains("push:\n    branches: [main]"),
+        "trusted cache seeding must be limited to main pushes"
+    );
+    assert!(
+        build.contains("permissions:\n  contents: read"),
+        "build workflow must retain least-privilege contents access"
+    );
+    assert!(
+        build.contains("github.workflow_sha")
+            && build.contains("trusted_sha")
+            && build.contains("base_sha")
+            && build.contains("head_sha")
+            && build.contains("merge_sha"),
+        "build workflow must bind trusted and tested immutable OIDs"
+    );
+    assert!(
+        build.matches("persist-credentials: false").count() >= 4,
+        "trusted and source checkouts must not persist credentials"
+    );
+    assert!(
+        build.contains("D2B_BAZEL_CREDENTIAL_FD")
+            && build.contains("D2B_BUILDBUDDY_API_KEY")
+            && build.contains("env -u D2B_BUILDBUDDY_API_KEY"),
+        "BuildBuddy authentication must use the trusted descriptor bootstrap"
+    );
+    assert!(
+        build.contains("grpcs://d2b.buildbuddy.io")
+            && build.contains("d2b/pr/")
+            && build.contains("--credential_helper="),
+        "remote execution must use the fixed brokered BuildBuddy endpoint and PR namespace"
+    );
+    assert!(
+        !build.contains("--remote_header=") && !build.contains("--bes_header="),
+        "API keys must not be passed as direct Bazel headers"
+    );
+    assert!(
+        build.contains("--test_tag_filters=-local,-no-remote-exec,-manual,-exclusive,-gpu,-kvm"),
+        "remote execution must exclude local-only and hardware-tagged actions"
+    );
+    for target in [
+        "//bazel/checks:test-rust-main",
+        "//bazel/checks:test-rust-broker",
+        "//bazel/checks:test-rust-guest-shell-runner",
+        "//bazel/checks:test-policy",
+    ] {
+        assert!(
+            build.contains(target),
+            "remote target set must retain canonical target {target}"
+        );
+    }
+    assert!(
+        build.contains("make check")
+            && build.contains("D2B_BAZEL_PROFILE: local")
+            && build.contains("D2B_BAZEL_UNTRUSTED: \"1\""),
+        "full PR coverage must retain a credential-free local Layer-1 gate"
+    );
+    assert!(
+        build.contains("redact") && build.contains("^warning:"),
+        "remote evidence must be redacted and warning-producing builds must fail closed"
+    );
+    assert!(
+        build.contains("if: ${{ always() }}")
+            && build.contains("needs: [metadata, local, remote]")
+            && build.contains("name: check"),
+        "build workflow must expose one stable aggregate check"
     );
 }
