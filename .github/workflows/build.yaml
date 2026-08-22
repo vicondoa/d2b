@@ -90,11 +90,9 @@ jobs:
             fail "branch metadata is not an approved ref"
 
           if [ "$D2B_EVENT_NAME" = "pull_request_target" ]; then
-            [ "$D2B_CALLER_WORKFLOW_REF" =
-              "vicondoa/d2b/.github/workflows/pr.yml@refs/heads/main" ] ||
+            [ "$D2B_CALLER_WORKFLOW_REF" = "vicondoa/d2b/.github/workflows/pr.yml@refs/heads/main" ] ||
               fail "PR workflow controls must be sourced from protected main"
-            [ "$D2B_JOB_WORKFLOW_REF" =
-              "vicondoa/d2b/.github/workflows/build.yaml@refs/heads/main" ] ||
+            [ "$D2B_JOB_WORKFLOW_REF" = "vicondoa/d2b/.github/workflows/build.yaml@refs/heads/main" ] ||
               fail "reusable build controls must be sourced from protected main"
             case "$D2B_BASE_REF" in
               main|v3) ;;
@@ -110,8 +108,7 @@ jobs:
             tested_sha="$D2B_MERGE_SHA"
             instance="d2b/pr/$D2B_PR_NUMBER/$D2B_HEAD_SHA/linux-x86_64/rules_rs/worker-v1/minimal/lock-v1"
           elif [ "$D2B_EVENT_NAME" = "push" ]; then
-            [ "$D2B_CALLER_WORKFLOW_REF" =
-              "vicondoa/d2b/.github/workflows/build.yaml@refs/heads/main" ] ||
+            [ "$D2B_CALLER_WORKFLOW_REF" = "vicondoa/d2b/.github/workflows/build.yaml@refs/heads/main" ] ||
               fail "push workflow controls must be sourced from protected main"
             [ "$D2B_REF" = "refs/heads/main" ] ||
               fail "trusted build pushes are restricted to main"

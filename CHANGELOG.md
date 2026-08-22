@@ -42,6 +42,11 @@ deprecations ship one minor release before removal.
   window unlabelled. Adds the `proofs/window-identity-chrome/` proof for the
   geometry, parts, contrast, and label logic.
 
+### Fixed
+
+- Fixed trusted `main` push validation so the BuildBuddy seed workflow
+  executes its metadata checks instead of failing on shell test parsing.
+
 ## [1.4.1] - 2026-07-12
 
 ### Added
