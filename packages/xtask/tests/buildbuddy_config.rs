@@ -1803,6 +1803,8 @@ fn trusted_ci_rejects_pr_metadata_tampering() {
     let head_commit = "1234567890abcdef1234567890abcdef12345678";
     let merge_commit = "2345678901abcdef2345678901abcdef23456789";
     let invalid_commit = "ffffffffffffffffffffffffffffffffffffffff";
+    let fail_base_ancestry = scratch.join("fail-base-ancestry");
+    let fail_head_ancestry = scratch.join("fail-head-ancestry");
     let git = bin.join("git");
     write_executable(
         &git,
@@ -1823,8 +1825,8 @@ fn trusted_ci_rejects_pr_metadata_tampering() {
                  case \"$*\" in *'{invalid_commit}^{{commit}}'*) exit 1 ;; *) exit 0 ;; esac\n\
                  ;;\n\
                *'merge-base --is-ancestor'*)\n\
-                 if [ \"${{D2B_TEST_FAIL_ANCESTRY:-}}\" = base ] && [[ \"$*\" == *'{base_commit}'* ]]; then exit 1; fi\n\
-                 if [ \"${{D2B_TEST_FAIL_ANCESTRY:-}}\" = head ] && [[ \"$*\" == *'{head_commit}'* ]]; then exit 1; fi\n\
+                 if [ -e '{fail_base_ancestry}' ] && [[ \"$*\" == *'{base_commit}'* ]]; then exit 1; fi\n\
+                 if [ -e '{fail_head_ancestry}' ] && [[ \"$*\" == *'{head_commit}'* ]]; then exit 1; fi\n\
                  case \"$*\" in *'{invalid_commit}'*) exit 1 ;; *) exit 0 ;; esac\n\
                  ;;\n\
                *'rev-parse --show-toplevel'*) printf '%s\\n' '{source_root}' ;;\n\
@@ -1833,6 +1835,8 @@ fn trusted_ci_rejects_pr_metadata_tampering() {
             base_commit = base_commit,
             merge_commit = merge_commit,
             invalid_commit = invalid_commit,
+            fail_base_ancestry = fail_base_ancestry.display(),
+            fail_head_ancestry = fail_head_ancestry.display(),
             source_root = source_root.display(),
             trusted_root = trusted_root.display(),
         ),
@@ -1853,6 +1857,18 @@ fn trusted_ci_rejects_pr_metadata_tampering() {
     std::fs::write(scratch.join(".bazelrc"), "").expect("write CI metadata Bazel rc");
 
     let run = |base_sha: &str, fail_ancestry: &str| {
+        let _ = std::fs::remove_file(&fail_base_ancestry);
+        let _ = std::fs::remove_file(&fail_head_ancestry);
+        match fail_ancestry {
+            "base" => {
+                std::fs::write(&fail_base_ancestry, "").expect("mark base ancestry failure")
+            }
+            "head" => {
+                std::fs::write(&fail_head_ancestry, "").expect("mark head ancestry failure")
+            }
+            "" => {}
+            other => panic!("unknown ancestry failure mode: {other}"),
+        }
         Command::new("bash")
             .arg(repo_root().join("tests/tools/bazel-check"))
             .args(["--profile", "local", "--", "//:test"])
@@ -1865,7 +1881,6 @@ fn trusted_ci_rejects_pr_metadata_tampering() {
             .env("D2B_BAZEL_TRUSTED", "1")
             .env("D2B_BAZEL_PROFILE", "local")
             .env("D2B_BAZEL_BASE_SHA", base_sha)
-            .env("D2B_TEST_FAIL_ANCESTRY", fail_ancestry)
             .env("D2B_BAZEL_HEAD_SHA", head_commit)
             .env("D2B_BAZEL_MERGE_SHA", merge_commit)
             .env("D2B_BAZEL_TRUSTED_SHA", base_commit)
