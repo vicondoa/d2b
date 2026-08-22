@@ -423,6 +423,10 @@ fn committed_profiles_share_authentication_and_worker_policy() {
         "remote test runners must receive worker-standard PATH entries"
     );
     assert!(
+        !wrapper.contains(r#"--action_env=PATH="$test_path""#),
+        "remote actions must retain the worker-standard PATH"
+    );
+    assert!(
         wrapper.contains("--test_env=D2B_SHELLCHECK_BIN=\"${D2B_SHELLCHECK_BIN:-}\""),
         "source-hygiene tests must receive the declared shellcheck binary"
     );
