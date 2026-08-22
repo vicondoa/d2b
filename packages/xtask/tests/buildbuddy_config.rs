@@ -439,7 +439,6 @@ fn source_hygiene_fails_when_declared_shellcheck_is_missing() {
     let output = Command::new("/bin/bash")
         .arg(repo_root().join("tests/tools/tier0-first-pass.sh"))
         .env("ROOT", &scratch)
-        .env("PATH", "/usr/bin:/bin")
         .env_remove("D2B_SHELLCHECK_BIN")
         .output()
         .expect("run source-hygiene gate");
