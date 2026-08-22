@@ -91,7 +91,7 @@
       ".github/workflows/pr-l1-static-fast.yml"
     ],
     "allowedSecurityDigests": [
-      "sha256:1297055b0bef00d2f90fd928ee1d060825fefaf3e241cbf85dc3b7b38beecd4d"
+      "sha256:f8a62ab9e88f05fd34fbba0b107b2e6d201acfdf3a45d4fc6011d4f283b008e3"
     ],
     "untrustedCredential": "none",
     "trustedCredential": "credential-helper"
