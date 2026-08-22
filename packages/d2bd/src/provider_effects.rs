@@ -19,10 +19,114 @@ use std::{
 };
 
 use d2b_contracts_broker::broker_wire::BrokerCallerRole;
+use d2b_contracts_broker::broker_wire::{BrokerRequest, BrokerResponse};
 use d2b_contracts_resource::v3::{
     ResourceRef,
     ZoneId,
 };
+use d2bd_runtime::{
+    broker_transport::{ModeBoundBrokerAdapter, ModeBoundBrokerError},
+    target_runtime::DaemonMode,
+};
+
+/// Provider-neutral EffectPort classes wired by the static d2bd composition
+/// root. These are capability classes, not request names.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum ProviderEffectClass {
+    Runtime,
+    ProcessLaunch,
+    ProcessObserve,
+    ProcessSignal,
+}
+
+impl ProviderEffectClass {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Runtime => "runtime",
+            Self::ProcessLaunch => "process-launch",
+            Self::ProcessObserve => "process-observe",
+            Self::ProcessSignal => "process-signal",
+        }
+    }
+}
+
+/// Static, mode-bound Provider effect adapter.
+#[derive(Debug, Clone)]
+pub struct FixedEffectAdapter {
+    mode: DaemonMode,
+    broker: ModeBoundBrokerAdapter,
+}
+
+impl FixedEffectAdapter {
+    pub fn host(socket_path: PathBuf, daemon_uid: u32) -> Self {
+        Self {
+            mode: DaemonMode::Host,
+            broker: ModeBoundBrokerAdapter::host(socket_path, daemon_uid),
+        }
+    }
+
+    pub fn guest(socket_path: PathBuf, daemon_uid: u32) -> Self {
+        Self {
+            mode: DaemonMode::Guest,
+            broker: ModeBoundBrokerAdapter::guest(socket_path, daemon_uid),
+        }
+    }
+
+    pub const fn mode(&self) -> DaemonMode {
+        self.mode
+    }
+
+    pub const fn broker_profile(&self) -> d2b_contracts_broker::broker_wire::BrokerProfile {
+        self.broker.profile()
+    }
+
+    pub fn allows(&self, class: ProviderEffectClass) -> bool {
+        match self.mode {
+            DaemonMode::Host => true,
+            DaemonMode::Guest => matches!(
+                class,
+                ProviderEffectClass::Runtime
+                    | ProviderEffectClass::ProcessLaunch
+                    | ProviderEffectClass::ProcessObserve
+                    | ProviderEffectClass::ProcessSignal
+            ),
+        }
+    }
+
+    pub fn dispatch(
+        &self,
+        class: ProviderEffectClass,
+        request: BrokerRequest,
+        timeout: Option<Duration>,
+    ) -> Result<BrokerResponse, FixedEffectError> {
+        if !self.allows(class) {
+            return Err(FixedEffectError::EffectClassDenied(class));
+        }
+        self.broker
+            .dispatch(request, timeout)
+            .map_err(FixedEffectError::Broker)
+    }
+}
+
+/// Refusal at the fixed EffectPort boundary.
+#[derive(Debug)]
+pub enum FixedEffectError {
+    EffectClassDenied(ProviderEffectClass),
+    Broker(ModeBoundBrokerError),
+}
+
+impl std::fmt::Display for FixedEffectError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::EffectClassDenied(class) => {
+                write!(formatter, "provider-effect-class-denied:{}", class.as_str())
+            }
+            Self::Broker(error) => error.fmt(formatter),
+        }
+    }
+}
+
+impl std::error::Error for FixedEffectError {}
 
 /// Maximum retained lifecycle mutation keys.
 pub const MAX_TRACKED_LIFECYCLE_MUTATIONS: usize = 256;

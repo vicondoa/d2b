@@ -4,15 +4,19 @@ use std::path::Path;
 use std::time::{Duration, Instant};
 
 use d2b_contracts_broker::broker_wire::{
-    AuditJoinContext, BrokerCallerRole, BrokerRequest, BrokerRequestEnvelope, BrokerResponse,
-    CanonicalAuditDigest,
+    AuditJoinContext, BrokerCallerRole, BrokerProfile, BrokerRequest, BrokerRequestEnvelope,
+    BrokerResponse, CanonicalAuditDigest,
 };
 
+use crate::target_runtime::DaemonMode;
 use crate::typed_error::TypedError;
 use crate::unix_transport::{
     connect_seqpacket, connect_seqpacket_with_timeout, read_frame, write_json_frame,
 };
 use socket2::Socket;
+
+/// NixOS gives every workload Guest its own fixed broker socket basename.
+pub const GUEST_BROKER_SOCKET_BASENAME: &str = "guest-broker.sock";
 
 /// Dispatch one broker request over an owned socket path.
 ///
@@ -188,3 +192,117 @@ pub fn redact_broker_dispatch_failure_for_launcher(op_name: &str) -> (String, St
         ),
     )
 }
+
+/// A fixed, mode-bound broker client.
+///
+/// The profile is selected when the daemon composition is created. Requests
+/// carry no profile field and are checked against the closed catalog before a
+/// socket is opened.
+#[derive(Debug, Clone)]
+pub struct ModeBoundBrokerAdapter {
+    mode: DaemonMode,
+    profile: BrokerProfile,
+    socket_path: std::path::PathBuf,
+    caller_role: BrokerCallerRole,
+}
+
+impl ModeBoundBrokerAdapter {
+    pub fn for_mode(
+        mode: DaemonMode,
+        socket_path: impl Into<std::path::PathBuf>,
+        daemon_uid: u32,
+    ) -> Self {
+        Self {
+            mode,
+            profile: mode.broker_profile(),
+            socket_path: socket_path.into(),
+            caller_role: BrokerCallerRole::AdminUid { uid: daemon_uid },
+        }
+    }
+
+    pub fn host(socket_path: impl Into<std::path::PathBuf>, daemon_uid: u32) -> Self {
+        Self::for_mode(DaemonMode::Host, socket_path, daemon_uid)
+    }
+
+    pub fn guest(socket_path: impl Into<std::path::PathBuf>, daemon_uid: u32) -> Self {
+        Self::for_mode(DaemonMode::Guest, socket_path, daemon_uid)
+    }
+
+    pub const fn mode(&self) -> DaemonMode {
+        self.mode
+    }
+
+    pub const fn profile(&self) -> BrokerProfile {
+        self.profile
+    }
+
+    pub fn socket_path(&self) -> &std::path::Path {
+        &self.socket_path
+    }
+
+    pub fn validate_instance(&self) -> Result<(), ModeBoundBrokerError> {
+        if !self.socket_path.is_absolute() {
+            return Err(ModeBoundBrokerError::SocketPath);
+        }
+        if self.mode == DaemonMode::Guest
+            && self.socket_path.file_name().and_then(|name| name.to_str())
+                != Some(GUEST_BROKER_SOCKET_BASENAME)
+        {
+            return Err(ModeBoundBrokerError::InstanceMismatch);
+        }
+        Ok(())
+    }
+
+    /// Dispatch a request only through this adapter's fixed profile.
+    pub fn dispatch(
+        &self,
+        request: BrokerRequest,
+        timeout: Option<Duration>,
+    ) -> Result<BrokerResponse, ModeBoundBrokerError> {
+        if !self.profile.allows_request(&request) {
+            return Err(ModeBoundBrokerError::RequestDenied {
+                profile: self.profile,
+                operation: request.op_name(),
+            });
+        }
+        self.validate_instance()?;
+        dispatch_broker_request_to_socket(
+            &self.socket_path,
+            request,
+            self.caller_role.clone(),
+            timeout,
+        )
+        .map_err(ModeBoundBrokerError::Transport)
+    }
+}
+
+/// Fixed broker adapter refusal.
+#[derive(Debug)]
+pub enum ModeBoundBrokerError {
+    SocketPath,
+    InstanceMismatch,
+    RequestDenied {
+        profile: BrokerProfile,
+        operation: &'static str,
+    },
+    Transport(TypedError),
+}
+
+impl std::fmt::Display for ModeBoundBrokerError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::SocketPath => formatter.write_str("mode-bound-broker-socket-path"),
+            Self::InstanceMismatch => formatter.write_str("mode-bound-broker-instance-mismatch"),
+            Self::RequestDenied { profile, operation } => {
+                write!(
+                    formatter,
+                    "{}-broker-operation-denied:{operation}",
+                    profile.as_str()
+                )
+            }
+            Self::Transport(error) => formatter.write_str(error.kind()),
+        }
+    }
+}
+
+impl std::error::Error for ModeBoundBrokerError {}

@@ -1,9 +1,9 @@
 use std::path::PathBuf;
 
-use clap::{Parser, Subcommand};
+use clap::{Args, Parser, Subcommand};
 use d2bd::{
-    DEFAULT_CONFIG_PATH, LockOnlyOptions, ServeOptions, TestClientOptions, banner, banner_note,
-    lock_only, run_test_client, serve,
+    DEFAULT_CONFIG_PATH, GuestServeOptions, LockOnlyOptions, ServeOptions, TestClientOptions,
+    banner, banner_note, lock_only, run_test_client, serve, serve_guest,
 };
 
 #[derive(Debug, Parser)]
@@ -15,6 +15,10 @@ struct Cli {
 
 #[derive(Debug, Subcommand)]
 enum Command {
+    /// Run the fixed Host authority mode.
+    Host(HostArgs),
+    /// Run the fixed Guest target-agent mode.
+    Guest(GuestArgs),
     Serve {
         #[arg(long, default_value = DEFAULT_CONFIG_PATH)]
         config: PathBuf,
@@ -57,6 +61,70 @@ enum Command {
     },
 }
 
+#[derive(Debug, Clone, Args)]
+struct HostArgs {
+    #[arg(long, default_value = DEFAULT_CONFIG_PATH)]
+    config: PathBuf,
+    #[arg(long)]
+    public_socket: Option<PathBuf>,
+    #[arg(long)]
+    broker_socket: Option<PathBuf>,
+    #[arg(long)]
+    state_lock: Option<PathBuf>,
+    #[arg(long)]
+    locks_dir: Option<PathBuf>,
+    #[arg(long)]
+    once: bool,
+    #[arg(long, hide = true)]
+    test_listen_on: Option<PathBuf>,
+    #[arg(long, hide = true)]
+    allow_unprivileged_runtime_dir: bool,
+    #[arg(long)]
+    no_drop_privileges: bool,
+    #[arg(long, hide = true)]
+    daemon_state_dir: Option<PathBuf>,
+    #[arg(long, hide = true)]
+    test_state_restore_report: Option<PathBuf>,
+}
+
+#[derive(Debug, Clone, Args)]
+struct GuestArgs {
+    #[arg(long)]
+    guest_ref: String,
+    #[arg(long)]
+    guest_uid: String,
+    #[arg(long)]
+    zone: String,
+    #[arg(long, default_value = "zone-link")]
+    purpose: String,
+    #[arg(long)]
+    schema_fingerprint: String,
+    #[arg(long, default_value_t = 1)]
+    reconnect_generation: u64,
+    #[arg(long, default_value_t = 1)]
+    provider_generation: u64,
+    #[arg(long, default_value_t = 1)]
+    controller_generation: u64,
+    #[arg(long, default_value_t = 1)]
+    assignment_epoch: u64,
+    #[arg(long, default_value = "/run/d2b/guest-broker.sock")]
+    broker_socket: PathBuf,
+    #[arg(long, default_value_t = 997)]
+    broker_uid: u32,
+    #[arg(long, default_value = "/var/lib/d2b/guest-state")]
+    state_dir: PathBuf,
+    #[arg(long, hide = true, default_value = "/proc/sys/kernel/random/boot_id")]
+    boot_id_path: PathBuf,
+    #[arg(long, hide = true)]
+    local_private_key: Option<PathBuf>,
+    #[arg(long, hide = true)]
+    parent_public_key: Option<PathBuf>,
+    #[arg(long, hide = true)]
+    validate_only: bool,
+    #[arg(long, hide = true)]
+    once: bool,
+}
+
 #[tokio::main(flavor = "multi_thread")]
 async fn main() {
     // v1.1.1 live-deploy fu9: route tracing to stderr so
@@ -74,6 +142,43 @@ async fn main() {
             println!("{}", banner());
             println!("{}", banner_note());
             Ok(())
+        }
+        Some(Command::Host(args)) => {
+            serve(ServeOptions {
+                config_path: args.config,
+                public_socket_path: args.test_listen_on.or(args.public_socket),
+                broker_socket_path: args.broker_socket,
+                state_lock_path: args.state_lock,
+                locks_dir: args.locks_dir,
+                once: args.once,
+                allow_unprivileged_runtime_dir: args.allow_unprivileged_runtime_dir,
+                drop_privileges: !args.no_drop_privileges,
+                daemon_state_dir: args.daemon_state_dir,
+                test_state_restore_report_path: args.test_state_restore_report,
+            })
+            .await
+        }
+        Some(Command::Guest(args)) => {
+            serve_guest(GuestServeOptions {
+                guest_ref: args.guest_ref,
+                guest_uid: args.guest_uid,
+                zone: args.zone,
+                purpose: args.purpose,
+                schema_fingerprint: args.schema_fingerprint,
+                reconnect_generation: args.reconnect_generation,
+                provider_generation: args.provider_generation,
+                controller_generation: args.controller_generation,
+                assignment_epoch: args.assignment_epoch,
+                broker_socket_path: args.broker_socket,
+                broker_uid: args.broker_uid,
+                state_dir: args.state_dir,
+                boot_id_path: args.boot_id_path,
+                local_private_key_path: args.local_private_key,
+                parent_public_key_path: args.parent_public_key,
+                validate_only: args.validate_only,
+                once: args.once,
+            })
+            .await
         }
         Some(Command::Serve {
             config,
