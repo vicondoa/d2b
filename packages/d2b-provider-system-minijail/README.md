@@ -57,6 +57,9 @@ generation before any `pidfd_open`. The pid and start-time pair is the
 pid-reuse guard: a matching pid whose start time disagrees is a different
 process, so it is ambiguity. Ambiguity quarantines and reports Unknown; it
 never signals, kills, or reuses.
+Launch tickets are validated before the effect boundary, and a requested
+readiness condition must observe the same verified identity before status
+reports `Ready`; an unmet condition terminates only that verified launch.
 
 ## State and telemetry
 

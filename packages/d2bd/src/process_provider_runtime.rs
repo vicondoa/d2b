@@ -14,14 +14,9 @@ use std::{
 };
 
 use d2b_contracts_broker::broker_wire::BrokerCallerRole;
+use d2b_contracts_resource::v3::execution_policy::{BoundedToken, ExecutionDomain};
 use d2b_contracts_resource::v3::{
-    execution_policy::{BoundedToken, ExecutionDomain},
-};
-use d2b_contracts_resource::v3::{
-    ControllerGeneration,
-    ResourceGeneration,
-    ResourceRef,
-    ResourceUid,
+    ControllerGeneration, ResourceGeneration, ResourceRef, ResourceUid,
     process::{EphemeralProcessSpec, ProcessSpec},
 };
 use d2b_core::{
@@ -39,7 +34,10 @@ use d2b_provider_supervisor::{
 };
 use d2b_provider_system_minijail::{MinijailProcessProvider, launch::PlatformGate};
 use d2b_provider_system_systemd::SystemdProcessProvider;
+use d2bd_runtime::target_runtime::{ControllerProcessResource, DaemonMode};
 use sha2::{Digest, Sha256};
+
+use crate::provider_effects::FixedEffectAdapter;
 
 /// The fixed process Provider names wired by the daemon.
 pub const FIXED_PROCESS_PROVIDER_NAMES: [&str; 2] = ["system-minijail", "system-systemd"];
@@ -231,6 +229,8 @@ pub struct ProductionProcessProviders {
     minijail: MinijailProcessProvider<BrokerProcessSupervisor>,
     systemd: SystemdProcessProvider<BrokerSystemdSupervisor>,
     bundle: BundleResolver,
+    mode: DaemonMode,
+    fixed_effect: FixedEffectAdapter,
     managed: Mutex<BTreeMap<(String, String), ManagedProcess>>,
     managed_resources: Mutex<BTreeMap<ResourceRef, ManagedResource>>,
 }
@@ -251,24 +251,42 @@ impl ProductionProcessProviders {
         broker_socket: impl Into<PathBuf>,
         caller_role: BrokerCallerRole,
     ) -> Self {
+        Self::new_for_mode(bundle, broker_socket, caller_role, DaemonMode::Host)
+    }
+
+    /// Construct both fixed process Providers over a mode-bound broker.
+    ///
+    /// The mode is selected once at construction. It is passed to both
+    /// concrete broker adapters and cannot be widened by a Process ticket.
+    pub fn new_for_mode(
+        bundle: BundleResolver,
+        broker_socket: impl Into<PathBuf>,
+        caller_role: BrokerCallerRole,
+        mode: DaemonMode,
+    ) -> Self {
         let broker_socket = broker_socket.into();
+        let fixed_socket = broker_socket.clone();
+        let daemon_uid = caller_uid(&caller_role);
         let resolver = BundleBackedLaunchResolver::new(bundle.clone()).with_observation_socket(
             broker_socket.clone(),
             Duration::from_secs(10),
             caller_role.clone(),
         );
-        let minijail_backend = BrokerProcessBackend::with_socket_and_role(
+        let minijail_backend = BrokerProcessBackend::with_socket_profile_and_role(
             resolver.clone(),
             broker_socket.clone(),
             Duration::from_secs(10),
+            mode.broker_profile(),
             caller_role.clone(),
         );
-        let systemd_owner = BrokerSystemdEffectOwner::with_socket(
+        let systemd_owner = BrokerSystemdEffectOwner::with_socket_profile_and_role(
             resolver,
             broker_socket,
             Duration::from_secs(10),
+            mode.broker_profile(),
             caller_role,
         );
+        let fixed_effect = FixedEffectAdapter::for_mode(mode, fixed_socket, daemon_uid);
         let platform_gate = detect_minijail_platform_gate();
         Self {
             minijail: MinijailProcessProvider::with_platform_gate(
@@ -279,9 +297,21 @@ impl ProductionProcessProviders {
                 SystemdProcessBackend::new(systemd_owner),
             )),
             bundle,
+            mode,
+            fixed_effect,
             managed: Mutex::new(BTreeMap::new()),
             managed_resources: Mutex::new(BTreeMap::new()),
         }
+    }
+
+    /// Return the fixed daemon mode bound to these Process Providers.
+    pub const fn mode(&self) -> DaemonMode {
+        self.mode
+    }
+
+    /// Return the broker profile sealed into both concrete Process adapters.
+    pub const fn broker_profile(&self) -> d2b_contracts_broker::broker_wire::BrokerProfile {
+        self.mode.broker_profile()
     }
 
     /// Borrow the daemon-owned minijail Provider.
@@ -297,6 +327,12 @@ impl ProductionProcessProviders {
     /// Return the fixed Provider names in contract order.
     pub const fn provider_names() -> &'static [&'static str; 2] {
         &FIXED_PROCESS_PROVIDER_NAMES
+    }
+
+    /// Borrow the fixed mode-bound effect adapter used by controller
+    /// launches.
+    pub const fn fixed_effect(&self) -> &FixedEffectAdapter {
+        &self.fixed_effect
     }
 
     /// Return whether this node is a daemon-owned Provider process.
@@ -496,6 +532,110 @@ impl ProductionProcessProviders {
         Ok(ProviderLaunch {
             identity: report.identity,
         })
+    }
+
+    /// Launch a signed target-local controller Process.
+    ///
+    /// The controller is represented by a normal Process ticket. The fixed
+    /// adapter validates the target mode first, then the selected Process
+    /// Provider delivers the ticket through its mode-bound broker backend.
+    pub(crate) async fn launch_controller(
+        &self,
+        resource: &ControllerProcessResource,
+        target_readiness_digest: ConfigurationDigest,
+        timeout: Duration,
+    ) -> Result<ProviderLaunch, String> {
+        self.validate_controller_target(resource)?;
+        let provider = managed_provider_from_ref(resource.process_provider_ref())?;
+        let ticket =
+            controller_launch_ticket(resource, provider, target_readiness_digest, timeout)?;
+        self.fixed_effect
+            .validate_controller_ticket(&ticket)
+            .map_err(|error| error.to_string())?;
+        let report = match provider {
+            ManagedProvider::Minijail => self
+                .minijail
+                .launch(&ticket)
+                .await
+                .map_err(provider_error)?,
+            ManagedProvider::Systemd => {
+                self.systemd.launch(&ticket).await.map_err(provider_error)?
+            }
+        };
+        self.remember_resource(
+            resource.process_ref(),
+            resource.uid(),
+            resource.resource_generation(),
+            provider,
+            report.identity,
+        )?;
+        Ok(ProviderLaunch {
+            identity: report.identity,
+        })
+    }
+
+    /// Adopt a signed target-local controller Process after daemon restart.
+    pub(crate) async fn adopt_controller(
+        &self,
+        resource: &ControllerProcessResource,
+        target_readiness_digest: ConfigurationDigest,
+    ) -> Result<ProviderAdoption, String> {
+        self.validate_controller_target(resource)?;
+        let provider = managed_provider_from_ref(resource.process_provider_ref())?;
+        let ticket = controller_launch_ticket(
+            resource,
+            provider,
+            target_readiness_digest,
+            Duration::from_secs(30),
+        )?;
+        self.fixed_effect
+            .validate_controller_ticket(&ticket)
+            .map_err(|error| error.to_string())?;
+        let outcome = match provider {
+            ManagedProvider::Minijail => {
+                self.minijail.adopt(&ticket).await.map_err(provider_error)?
+            }
+            ManagedProvider::Systemd => {
+                self.systemd.adopt(&ticket).await.map_err(provider_error)?
+            }
+        };
+        match outcome {
+            AdoptionOutcome::Absent => Ok(ProviderAdoption::Absent),
+            AdoptionOutcome::Adopted(report) => {
+                self.remember_resource(
+                    resource.process_ref(),
+                    resource.uid(),
+                    resource.resource_generation(),
+                    provider,
+                    report.identity,
+                )?;
+                Ok(ProviderAdoption::Adopted(report))
+            }
+            AdoptionOutcome::Quarantined(report) => {
+                self.forget_resource(resource.process_ref());
+                Ok(ProviderAdoption::Quarantined(report))
+            }
+        }
+    }
+
+    fn validate_controller_target(
+        &self,
+        resource: &ControllerProcessResource,
+    ) -> Result<(), String> {
+        let expected = match self.mode {
+            DaemonMode::Host => "Host",
+            DaemonMode::Guest => "Guest",
+        };
+        if resource.target().resource_type().as_str() != expected {
+            return Err("provider-controller-target-denied".to_owned());
+        }
+        if !resource
+            .required_effect_classes()
+            .contains(&d2b_contracts_provider::v3::EffectPortClass::Process)
+        {
+            return Err("provider-controller-effect-class-denied".to_owned());
+        }
+        Ok(())
     }
 
     /// Adopt one durable Process resource with the controller generation
@@ -1177,12 +1317,135 @@ fn provider_error(error: ProcessConformanceError) -> String {
     error.code().to_owned()
 }
 
+fn caller_uid(caller: &BrokerCallerRole) -> u32 {
+    match caller {
+        BrokerCallerRole::AdminUid { uid }
+        | BrokerCallerRole::LauncherUid { uid }
+        | BrokerCallerRole::RootUid { uid } => *uid,
+        BrokerCallerRole::CutoverRunner { .. } | BrokerCallerRole::NotAuthorized => 0,
+    }
+}
+
 fn managed_provider_from_ref(provider_ref: &ResourceRef) -> Result<ManagedProvider, String> {
     match provider_ref.name().as_str() {
         "system-minijail" => Ok(ManagedProvider::Minijail),
         "system-systemd" => Ok(ManagedProvider::Systemd),
         _ => Err("provider-ticket:unsupported-provider".to_owned()),
     }
+}
+
+fn controller_launch_ticket(
+    resource: &ControllerProcessResource,
+    provider: ManagedProvider,
+    target_readiness_digest: ConfigurationDigest,
+    timeout: Duration,
+) -> Result<LaunchTicket, String> {
+    let owner_provider = BoundedToken::parse(resource.provider_ref().name().as_str())
+        .map_err(|_| "provider-ticket:invalid-owner-provider")?;
+    let selected_provider = BoundedToken::parse(resource.process_provider_ref().name().as_str())
+        .map_err(|_| "provider-ticket:invalid-process-provider")?;
+    let component = resource.component_id().clone();
+    let operation_scope = format!(
+        "{}:{}:{}:{}",
+        component.as_str(),
+        resource.provider_generation().get(),
+        resource.controller_generation().get(),
+        resource.target_session_generation().get(),
+    );
+    let operation_uid = stable_uid(
+        "controller-launch",
+        &resource.process_ref().to_canonical_string(),
+        &operation_scope,
+        resource.resource_generation().get(),
+    );
+    let deadline_ms = timeout.as_millis().clamp(1, 900_000) as u32;
+    let operation = OperationBinding::new(operation_uid, deadline_ms)
+        .map_err(|_| "provider-ticket:invalid-operation")?;
+    let mut ticket = LaunchTicket::new(
+        resource.process_ref().clone(),
+        resource.uid().clone(),
+        resource.resource_generation(),
+        resource.controller_generation(),
+        owner_provider,
+        component.clone(),
+        component,
+        resource.target().clone(),
+        ExecutionDomain::System,
+        None,
+        selected_provider,
+        compiled_controller_digests(resource, provider, &target_readiness_digest),
+        operation,
+        required_identity(provider),
+    )
+    .map_err(|error| format!("provider-ticket:{}", error.code()))?;
+    let sandbox = SandboxCompiler
+        .compile_plan(
+            resource.process_spec().execution().sandbox(),
+            ExecutionDomain::System,
+            false,
+        )
+        .map_err(|error| format!("provider-ticket:{}", error.code()))?;
+    let signed_descriptor_digest = configuration_digest(
+        "signed-descriptor",
+        resource.signed_descriptor_digest().as_str(),
+    );
+    ticket = ticket
+        .with_resource_revision(resource.resource_revision())
+        .map_err(|error| format!("provider-ticket:{}", error.code()))?
+        .with_controller_launch_binding(
+            resource.provider_generation(),
+            resource.target_session_generation(),
+            signed_descriptor_digest,
+            target_readiness_digest,
+        )
+        .map_err(|error| format!("provider-ticket:{}", error.code()))?
+        .with_sandbox_plan(sandbox)
+        .with_readiness(ReadinessExpectation::None);
+    Ok(ticket)
+}
+
+fn compiled_controller_digests(
+    resource: &ControllerProcessResource,
+    provider: ManagedProvider,
+    readiness: &ConfigurationDigest,
+) -> CompiledDigests {
+    fn digest(label: &str, bytes: &[u8]) -> ConfigurationDigest {
+        let mut hasher = Sha256::new();
+        hasher.update(b"d2bd-provider-controller-ticket-v1");
+        hasher.update(label.as_bytes());
+        hasher.update([0]);
+        hasher.update(bytes);
+        ConfigurationDigest::from_bytes(hasher.finalize().into())
+    }
+    let context = format!(
+        "{}:{}:{}:{}",
+        resource.process_ref().to_canonical_string(),
+        resource.signed_descriptor_digest().as_str(),
+        resource.artifact_digest().as_str(),
+        match provider {
+            ManagedProvider::Minijail => "system-minijail",
+            ManagedProvider::Systemd => "system-systemd",
+        },
+    );
+    let bytes = format!("{context}:{}", readiness.to_hex()).into_bytes();
+    CompiledDigests {
+        sandbox: digest("sandbox", &bytes),
+        budget: digest("budget", &bytes),
+        mounts: digest("mounts", &bytes),
+        devices: digest("devices", &bytes),
+        network: digest("network", &bytes),
+        endpoints: digest("endpoints", &bytes),
+        fd_table: digest("fd-table", &bytes),
+    }
+}
+
+fn configuration_digest(label: &str, value: &str) -> ConfigurationDigest {
+    let mut hasher = Sha256::new();
+    hasher.update(b"d2bd-provider-configuration-digest-v1");
+    hasher.update(label.as_bytes());
+    hasher.update([0]);
+    hasher.update(value.as_bytes());
+    ConfigurationDigest::from_bytes(hasher.finalize().into())
 }
 
 fn resource_ticket(
@@ -1481,6 +1744,68 @@ fn stable_token(value: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use d2b_contracts_provider::v3::{
+        ArtifactDigest, BinaryRef, ComponentDescriptor, ComponentExecution,
+        ComponentTargetCapability, ComponentType, ControllerInstanceScope, ControllerTargetKind,
+        EffectPortClass,
+    };
+    use d2b_contracts_resource::v3::{
+        ControllerGeneration, ResourceGeneration, ResourceRef, ResourceTypeName, ZoneId,
+        ZoneRevision,
+        execution_policy::{BoundedToken, ExecutionDomain},
+        identity::ReconnectGeneration,
+    };
+    use d2bd_runtime::target_runtime::ProviderDeployment;
+
+    fn controller_resource() -> ControllerProcessResource {
+        let digest = ArtifactDigest::parse(format!("sha256:{}", "a".repeat(64))).unwrap();
+        let descriptor = ComponentDescriptor::new(
+            BoundedToken::parse("process-controller").unwrap(),
+            ComponentType::Controller,
+            [ResourceTypeName::parse("Process").unwrap()],
+            [BoundedToken::parse("reconcile").unwrap()],
+            [ExecutionDomain::System],
+            8,
+            digest.clone(),
+            [],
+            false,
+        )
+        .unwrap()
+        .with_execution(ComponentExecution::Launchable {
+            binary_ref: BinaryRef::parse("process-controller").unwrap(),
+        })
+        .with_controller_placement(
+            ControllerInstanceScope::PerResourceTarget,
+            [ControllerTargetKind::Guest],
+        )
+        .unwrap()
+        .with_target_capabilities([ComponentTargetCapability::new(
+            ControllerTargetKind::Guest,
+            digest,
+            [EffectPortClass::Process],
+        )
+        .unwrap()])
+        .unwrap();
+        ProviderDeployment::new(
+            DaemonMode::Guest,
+            d2bd_runtime::target_runtime::AdmissionLimits::guest_default(),
+        )
+        .unwrap()
+        .create_controller_process(
+            ZoneId::parse("work").unwrap(),
+            ResourceRef::parse("Provider/runtime").unwrap(),
+            &descriptor,
+            ResourceGeneration::new(1).unwrap(),
+            ResourceGeneration::new(2).unwrap(),
+            ControllerGeneration::new(3).unwrap(),
+            ReconnectGeneration::new(4).unwrap(),
+            ZoneRevision::new(5),
+            ResourceRef::parse("Guest/workload").unwrap(),
+            ResourceRef::parse("Provider/system-systemd").unwrap(),
+            true,
+        )
+        .unwrap()
+    }
 
     #[test]
     fn stable_uids_are_uuid_v4_shaped_and_repeatable() {
@@ -1541,5 +1866,36 @@ mod tests {
         assert!(retryable_stop_error("process-fate-unknown"));
         assert!(!retryable_stop_error("identity-mismatch"));
         assert!(!retryable_stop_error("permission-denied"));
+    }
+
+    #[test]
+    fn controller_launch_ticket_binds_target_descriptor_and_session_without_assignment() {
+        let resource = controller_resource();
+        let readiness = ConfigurationDigest::from_bytes([7; 32]);
+        let ticket = controller_launch_ticket(
+            &resource,
+            ManagedProvider::Systemd,
+            readiness,
+            Duration::from_secs(5),
+        )
+        .expect("controller ticket");
+        assert!(ticket.validate_controller_launch().is_ok());
+        assert_eq!(ticket.process_ref(), resource.process_ref());
+        assert_eq!(ticket.execution_ref(), resource.target());
+        assert_eq!(
+            ticket.provider_generation(),
+            Some(resource.provider_generation())
+        );
+        assert_eq!(
+            ticket.target_session_generation(),
+            Some(resource.target_session_generation())
+        );
+        assert_eq!(
+            ticket.resource_revision(),
+            Some(resource.resource_revision())
+        );
+        assert!(ticket.signed_descriptor_digest().is_some());
+        assert!(!ticket.has_assignment_binding());
+        assert!(ticket.resource_client_binding().is_none());
     }
 }

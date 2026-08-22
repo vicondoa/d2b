@@ -9,10 +9,13 @@
 
 use d2b_contracts_resource::v3::ResourceRef;
 use d2b_contracts_resource::v3::execution_policy::ExecutionDomain;
+use d2b_contracts_resource::v3::identity::ReconnectGeneration;
+use d2b_contracts_resource::v3::{ResourceGeneration, ZoneRevision};
 use d2b_process_conformance::testing::{PortCall, ScriptedEffectPort, block_on, fixtures};
 use d2b_process_conformance::{
-    AdoptionCondition, AdoptionOutcome, IdentityBinding, ProcessConformanceError, ProcessProvider,
-    WaitReapOwner,
+    AdoptionCondition, AdoptionOutcome, ConfigurationDigest, IdentityBinding,
+    ProcessConformanceError, ProcessIdentityDigest, ProcessPhaseClass, ProcessProvider,
+    ReadinessExpectation, WaitReapOwner,
 };
 use d2b_provider_system_systemd::{PROVIDER_NAME, SystemdProcessProvider};
 
@@ -160,4 +163,68 @@ fn a_candidate_whose_wait_owner_disagrees_is_quarantined() {
         AdoptionOutcome::Quarantined(_)
     ));
     assert!(!provider.port().calls().contains(&PortCall::OpenPidfd));
+}
+
+#[test]
+fn readiness_and_identity_seals_are_parent_neutral() {
+    for execution_ref in [host_ref(), guest_ref()] {
+        let provider = provider(
+            ScriptedEffectPort::launching(required(), WaitReapOwner::ServiceManager)
+                .with_candidate(required(), WaitReapOwner::ServiceManager),
+        );
+        let ticket = fixtures::ticket_builder()
+            .selected_provider(PROVIDER_NAME)
+            .expected_identity(required())
+            .execution_ref(execution_ref.clone())
+            .build()
+            .expect("conformant ticket")
+            .with_readiness(ReadinessExpectation::condition(1_000).expect("bounded readiness"))
+            .with_expected_identity_digest(ProcessIdentityDigest::from_bytes([0x11; 32]))
+            .expect("identity seal");
+
+        let report = block_on(provider.launch(&ticket)).expect("ready launch");
+        assert_eq!(report.execution_ref, execution_ref);
+        assert_eq!(report.phase, ProcessPhaseClass::Ready);
+        assert_eq!(
+            provider.port().calls(),
+            vec![PortCall::Launch, PortCall::Observe]
+        );
+    }
+}
+
+#[test]
+fn controller_launch_and_assignment_authority_remain_disjoint_on_each_parent() {
+    for execution_ref in [host_ref(), guest_ref()] {
+        let launch = fixtures::ticket_builder()
+            .selected_provider(PROVIDER_NAME)
+            .execution_ref(execution_ref.clone())
+            .build()
+            .expect("conformant ticket")
+            .with_resource_revision(ZoneRevision::new(1))
+            .expect("revision binding")
+            .with_controller_launch_binding(
+                ResourceGeneration::new(2).expect("provider generation"),
+                ReconnectGeneration::new(4).expect("session generation"),
+                ConfigurationDigest::from_bytes([1; 32]),
+                ConfigurationDigest::from_bytes([2; 32]),
+            )
+            .expect("controller launch binding");
+        d2b_process_conformance::suite::assert_controller_launch_has_no_resource_client(&launch);
+
+        let assignment = fixtures::ticket_builder()
+            .selected_provider(PROVIDER_NAME)
+            .execution_ref(execution_ref)
+            .build()
+            .expect("conformant ticket")
+            .with_resource_revision(ZoneRevision::new(1))
+            .expect("revision binding")
+            .with_assignment_binding(
+                ResourceGeneration::new(2).expect("provider generation"),
+                ReconnectGeneration::new(4).expect("session generation"),
+                9,
+                ConfigurationDigest::from_bytes([3; 32]),
+            )
+            .expect("assignment binding");
+        d2b_process_conformance::suite::assert_assignment_is_session_fenced(&assignment, 4, 9);
+    }
 }

@@ -20,10 +20,8 @@ use std::{
 
 use d2b_contracts_broker::broker_wire::BrokerCallerRole;
 use d2b_contracts_broker::broker_wire::{BrokerRequest, BrokerResponse};
-use d2b_contracts_resource::v3::{
-    ResourceRef,
-    ZoneId,
-};
+use d2b_contracts_resource::v3::{ResourceRef, ZoneId};
+use d2b_process_conformance::LaunchTicket;
 use d2bd_runtime::{
     broker_transport::{ModeBoundBrokerAdapter, ModeBoundBrokerError},
     target_runtime::DaemonMode,
@@ -58,6 +56,14 @@ pub struct FixedEffectAdapter {
 }
 
 impl FixedEffectAdapter {
+    /// Construct the adapter from one closed daemon mode.
+    pub fn for_mode(mode: DaemonMode, socket_path: PathBuf, daemon_uid: u32) -> Self {
+        match mode {
+            DaemonMode::Host => Self::host(socket_path, daemon_uid),
+            DaemonMode::Guest => Self::guest(socket_path, daemon_uid),
+        }
+    }
+
     pub fn host(socket_path: PathBuf, daemon_uid: u32) -> Self {
         Self {
             mode: DaemonMode::Host,
@@ -78,6 +84,13 @@ impl FixedEffectAdapter {
 
     pub const fn broker_profile(&self) -> d2b_contracts_broker::broker_wire::BrokerProfile {
         self.broker.profile()
+    }
+
+    /// Validate the fixed socket instance before any ticket is delivered.
+    pub fn validate_instance(&self) -> Result<(), FixedEffectError> {
+        self.broker
+            .validate_instance()
+            .map_err(FixedEffectError::Broker)
     }
 
     pub fn allows(&self, class: ProviderEffectClass) -> bool {
@@ -106,12 +119,43 @@ impl FixedEffectAdapter {
             .dispatch(request, timeout)
             .map_err(FixedEffectError::Broker)
     }
+
+    /// Validate a signed target-local controller LaunchTicket against this
+    /// adapter's fixed daemon mode before it reaches a Process Provider.
+    ///
+    /// The ticket carries target-session evidence only. ResourceClient
+    /// assignment is admitted separately by ProviderDeployment after the
+    /// controller authenticates and publishes readiness.
+    pub fn validate_controller_ticket(
+        &self,
+        ticket: &LaunchTicket,
+    ) -> Result<(), FixedEffectError> {
+        self.validate_instance()?;
+        ticket
+            .validate_controller_launch()
+            .map_err(|_| FixedEffectError::ControllerTicketInvalid)?;
+        let expected_target = match self.mode {
+            DaemonMode::Host => "Host",
+            DaemonMode::Guest => "Guest",
+        };
+        if ticket.execution_ref().resource_type().as_str() != expected_target {
+            return Err(FixedEffectError::ControllerTargetDenied);
+        }
+        if !self.allows(ProviderEffectClass::ProcessLaunch) {
+            return Err(FixedEffectError::EffectClassDenied(
+                ProviderEffectClass::ProcessLaunch,
+            ));
+        }
+        Ok(())
+    }
 }
 
 /// Refusal at the fixed EffectPort boundary.
 #[derive(Debug)]
 pub enum FixedEffectError {
     EffectClassDenied(ProviderEffectClass),
+    ControllerTicketInvalid,
+    ControllerTargetDenied,
     Broker(ModeBoundBrokerError),
 }
 
@@ -120,6 +164,12 @@ impl std::fmt::Display for FixedEffectError {
         match self {
             Self::EffectClassDenied(class) => {
                 write!(formatter, "provider-effect-class-denied:{}", class.as_str())
+            }
+            Self::ControllerTicketInvalid => {
+                formatter.write_str("provider-controller-ticket-invalid")
+            }
+            Self::ControllerTargetDenied => {
+                formatter.write_str("provider-controller-target-denied")
             }
             Self::Broker(error) => error.fmt(formatter),
         }
@@ -907,11 +957,52 @@ fn now_ms() -> u64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use d2b_contracts_resource::v3::{
+        ResourceGeneration, ResourceRef, ZoneRevision, identity::ReconnectGeneration,
+    };
+    use d2b_process_conformance::ConfigurationDigest;
     use std::sync::{
         Arc, Barrier,
         atomic::{AtomicBool, AtomicUsize, Ordering},
         mpsc::{Sender, channel},
     };
+
+    #[test]
+    fn fixed_effect_adapter_binds_controller_ticket_to_its_mode() {
+        let ticket = d2b_process_conformance::testing::fixtures::ticket_builder()
+            .execution_ref(ResourceRef::parse("Guest/dev-vm").unwrap())
+            .build()
+            .unwrap()
+            .with_resource_revision(ZoneRevision::new(1))
+            .unwrap()
+            .with_controller_launch_binding(
+                ResourceGeneration::new(2).unwrap(),
+                ReconnectGeneration::new(3).unwrap(),
+                ConfigurationDigest::from_bytes([1; 32]),
+                ConfigurationDigest::from_bytes([2; 32]),
+            )
+            .unwrap();
+        let guest = FixedEffectAdapter::guest("/run/d2b/guest-broker.sock".into(), 997);
+        assert!(guest.validate_controller_ticket(&ticket).is_ok());
+        let host = FixedEffectAdapter::host("/run/d2b/broker.sock".into(), 997);
+        assert!(matches!(
+            host.validate_controller_ticket(&ticket),
+            Err(FixedEffectError::ControllerTargetDenied)
+        ));
+    }
+
+    #[test]
+    fn malformed_controller_ticket_is_rejected_before_broker_io() {
+        let ticket = d2b_process_conformance::testing::fixtures::ticket_builder()
+            .execution_ref(ResourceRef::parse("Guest/dev-vm").unwrap())
+            .build()
+            .unwrap();
+        let guest = FixedEffectAdapter::guest("/run/d2b/guest-broker.sock".into(), 997);
+        assert!(matches!(
+            guest.validate_controller_ticket(&ticket),
+            Err(FixedEffectError::ControllerTicketInvalid)
+        ));
+    }
 
     struct RecordingEffect {
         calls: Arc<AtomicUsize>,

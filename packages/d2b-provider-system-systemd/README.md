@@ -58,6 +58,9 @@ implements and which is the sole caller of the systemd effect owner.
 
 Adoption revalidates every required identity binding before a pidfd is
 opened. Ambiguity quarantines; it never signals, kills, or reuses.
+Launch tickets are validated before the effect boundary, and a requested
+readiness condition must observe the same verified identity before status
+reports `Ready`; an unmet condition terminates only that verified launch.
 
 ## State and telemetry
 

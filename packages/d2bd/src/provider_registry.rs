@@ -13,18 +13,13 @@ use std::{
 };
 
 use d2b_contracts_broker::broker_wire::BrokerCallerRole;
-use d2b_contracts_zone_session::v3::{
-    zone_routing::{ZoneLabelId, ZonePath},
-};
-use d2b_contracts_resource::v3::{
-    ResourceRef,
-    ConfigurationGeneration,
-    ResourceGeneration,
-    ResourceName,
-    SchemaFingerprint,
-    ZoneId,
-};
+use d2b_contracts_provider::v3::{ComponentType, ControllerInstanceScope, ProviderManifest};
 use d2b_contracts_resource::v3::identity::ServiceName;
+use d2b_contracts_resource::v3::{
+    ConfigurationGeneration, ControllerGeneration, ResourceGeneration, ResourceName, ResourceRef,
+    SchemaFingerprint, ZoneId, ZoneRevision, identity::ReconnectGeneration,
+};
+use d2b_contracts_zone_session::v3::zone_routing::{ZoneLabelId, ZonePath};
 use d2b_core::host::HostJson;
 use d2b_provider::instance::ProviderInstance;
 use d2b_provider::{
@@ -34,10 +29,16 @@ use d2b_provider::{
 };
 use sha2::{Digest, Sha256};
 
-use crate::process_provider_runtime::ProductionProcessProviders;
+use crate::process_provider_runtime::{
+    ProductionProcessProviders, ProviderAdoption, ProviderLaunch,
+};
 use crate::provider_effects::{
     EffectDispatch, GuestLifecycleOperation, GuestLifecycleRequest, ProviderEffectError,
     ProviderLifecycleDispatch, ProviderLifecycleEffectPort,
+};
+use d2b_process_conformance::ConfigurationDigest;
+use d2bd_runtime::target_runtime::{
+    ControllerProcessResource, DaemonMode, DeploymentError, ProviderDeployment,
 };
 
 /// Version of the v3 Provider bundle artifact.
@@ -88,6 +89,15 @@ pub enum ProviderCompositionError {
     CatalogFingerprintInvalid,
     /// The registry state lock was poisoned.
     StateUnavailable,
+    /// A signed controller manifest could not be admitted for deployment.
+    ControllerManifestInvalid,
+    /// A target-local controller Process could not be created.
+    ControllerDeployment(DeploymentError),
+    /// The fixed Process adapter or broker rejected a controller effect.
+    ControllerEffectRejected,
+    /// The Process adapter could not prove an unambiguous controller
+    /// identity; reuse is forbidden until repair.
+    ControllerEffectAmbiguous,
     /// The shared Provider registry rejected a descriptor or instance.
     RegistryBuild(RegistryBuildError),
 }
@@ -107,6 +117,10 @@ impl ProviderCompositionError {
             Self::ZonePathInvalid => "provider-zone-path-invalid",
             Self::CatalogFingerprintInvalid => "provider-catalog-fingerprint-invalid",
             Self::StateUnavailable => "provider-registry-state-unavailable",
+            Self::ControllerManifestInvalid => "provider-controller-manifest-invalid",
+            Self::ControllerDeployment(_) => "provider-controller-deployment-rejected",
+            Self::ControllerEffectRejected => "provider-controller-effect-rejected",
+            Self::ControllerEffectAmbiguous => "provider-controller-effect-ambiguous",
             Self::RegistryBuild(_) => "provider-registry-build-rejected",
         }
     }
@@ -273,6 +287,222 @@ pub fn validate_provider_bundle_version(
         return Err(ProviderCompositionError::BundleSchemaMismatch);
     }
     Ok(())
+}
+
+/// Create the target-local controller Process resources advertised by one
+/// signed Provider manifest.
+///
+/// This function is deliberately an intent-only step. It never resolves a
+/// binary or starts a child. Launches are admitted later through the fixed
+/// Process Provider and the mode-bound broker.
+#[allow(clippy::too_many_arguments)]
+pub fn deploy_target_local_controllers(
+    deployment: &ProviderDeployment,
+    zone: ZoneId,
+    provider_ref: ResourceRef,
+    manifest: &ProviderManifest,
+    resource_generation: ResourceGeneration,
+    provider_generation: ResourceGeneration,
+    controller_generation: ControllerGeneration,
+    target_session_generation: ReconnectGeneration,
+    resource_revision: ZoneRevision,
+    target: ResourceRef,
+    process_provider_ref: ResourceRef,
+    target_ready: bool,
+) -> Result<Vec<ControllerProcessResource>, ProviderCompositionError> {
+    manifest
+        .validate_installation_contract()
+        .map_err(|_| ProviderCompositionError::ControllerManifestInvalid)?;
+    if provider_ref.resource_type().as_str() != "Provider"
+        || provider_ref.name().as_str() != manifest.artifact_id().as_str()
+    {
+        return Err(ProviderCompositionError::ControllerManifestInvalid);
+    }
+    let target_kind = match target.resource_type().as_str() {
+        "Host" => d2b_contracts_provider::v3::ControllerTargetKind::Host,
+        "Guest" => d2b_contracts_provider::v3::ControllerTargetKind::Guest,
+        _ => return Err(ProviderCompositionError::ControllerManifestInvalid),
+    };
+    let expected_kind = match deployment.mode() {
+        DaemonMode::Host => d2b_contracts_provider::v3::ControllerTargetKind::Host,
+        DaemonMode::Guest => d2b_contracts_provider::v3::ControllerTargetKind::Guest,
+    };
+    if target_kind != expected_kind {
+        return Err(ProviderCompositionError::ControllerManifestInvalid);
+    }
+    let mut resources = Vec::new();
+    for descriptor in manifest.components() {
+        if descriptor.component_type() != ComponentType::Controller
+            || matches!(
+                descriptor.instance_scope(),
+                Some(ControllerInstanceScope::ZoneSingleton)
+            )
+            || !descriptor.supported_target_kinds().contains(&target_kind)
+        {
+            continue;
+        }
+        resources.push(
+            deployment
+                .create_controller_process(
+                    zone.clone(),
+                    provider_ref.clone(),
+                    descriptor,
+                    resource_generation,
+                    provider_generation,
+                    controller_generation,
+                    target_session_generation,
+                    resource_revision,
+                    target.clone(),
+                    process_provider_ref.clone(),
+                    target_ready,
+                )
+                .map_err(ProviderCompositionError::ControllerDeployment)?,
+        );
+    }
+    Ok(resources)
+}
+
+/// Launch one previously created target-local controller Process through the
+/// fixed, mode-bound Process Provider adapter.
+pub(crate) async fn launch_target_local_controller(
+    providers: &ProductionProcessProviders,
+    resource: &ControllerProcessResource,
+    target_readiness_digest: ConfigurationDigest,
+    timeout: std::time::Duration,
+) -> Result<ProviderLaunch, ProviderCompositionError> {
+    providers
+        .launch_controller(resource, target_readiness_digest, timeout)
+        .await
+        .map_err(|error| {
+            if error.contains("ambiguous")
+                || error.contains("identity")
+                || error.contains("deadline")
+                || error.contains("fate")
+            {
+                ProviderCompositionError::ControllerEffectAmbiguous
+            } else {
+                ProviderCompositionError::ControllerEffectRejected
+            }
+        })
+}
+
+/// Adopt one target-local controller Process through the same fixed adapter
+/// used for its launch.
+pub(crate) async fn adopt_target_local_controller(
+    providers: &ProductionProcessProviders,
+    resource: &ControllerProcessResource,
+    target_readiness_digest: ConfigurationDigest,
+) -> Result<ProviderAdoption, ProviderCompositionError> {
+    providers
+        .adopt_controller(resource, target_readiness_digest)
+        .await
+        .map_err(|error| {
+            if error.contains("ambiguous")
+                || error.contains("identity")
+                || error.contains("deadline")
+                || error.contains("fate")
+            {
+                ProviderCompositionError::ControllerEffectAmbiguous
+            } else {
+                ProviderCompositionError::ControllerEffectRejected
+            }
+        })
+}
+
+/// Launch one deployed controller and commit its running identity back to the
+/// ProviderDeployment state machine.
+pub async fn launch_deployed_controller(
+    deployment: &ProviderDeployment,
+    providers: &ProductionProcessProviders,
+    process_ref: &ResourceRef,
+    target_readiness: SchemaFingerprint,
+    timeout: std::time::Duration,
+) -> Result<ProviderLaunch, ProviderCompositionError> {
+    let context = deployment
+        .begin_controller_launch(process_ref, target_readiness.clone())
+        .map_err(ProviderCompositionError::ControllerDeployment)?;
+    let readiness = configuration_digest(&target_readiness);
+    let result =
+        launch_target_local_controller(providers, context.resource(), readiness, timeout).await;
+    match result {
+        Ok(launch) => {
+            let identity = identity_commitment(launch.identity);
+            match deployment.controller_launch_succeeded(process_ref, identity) {
+                Ok(()) => Ok(launch),
+                Err(error) => {
+                    let _ = deployment.controller_launch_failed(process_ref, true);
+                    Err(ProviderCompositionError::ControllerDeployment(error))
+                }
+            }
+        }
+        Err(error) => {
+            let _ = deployment.controller_launch_failed(
+                process_ref,
+                matches!(error, ProviderCompositionError::ControllerEffectAmbiguous),
+            );
+            Err(error)
+        }
+    }
+}
+
+/// Adopt one deployed controller after restart, quarantining an ambiguous
+/// child rather than handing it to a replacement controller.
+pub async fn adopt_deployed_controller(
+    deployment: &ProviderDeployment,
+    providers: &ProductionProcessProviders,
+    process_ref: &ResourceRef,
+    target_readiness: SchemaFingerprint,
+) -> Result<ProviderAdoption, ProviderCompositionError> {
+    let resource = deployment
+        .controller_process(process_ref)
+        .map_err(ProviderCompositionError::ControllerDeployment)?;
+    let adoption = match adopt_target_local_controller(
+        providers,
+        &resource,
+        configuration_digest(&target_readiness),
+    )
+    .await
+    {
+        Ok(adoption) => adoption,
+        Err(error) => {
+            if matches!(error, ProviderCompositionError::ControllerEffectAmbiguous) {
+                let _ = deployment.quarantine_controller(process_ref);
+            }
+            return Err(error);
+        }
+    };
+    match adoption {
+        ProviderAdoption::Adopted(report) => {
+            match deployment.controller_adopted(process_ref, identity_commitment(report.identity)) {
+                Ok(()) => Ok(ProviderAdoption::Adopted(report)),
+                Err(error) => {
+                    let _ = deployment.quarantine_controller(process_ref);
+                    Err(ProviderCompositionError::ControllerDeployment(error))
+                }
+            }
+        }
+        ProviderAdoption::Quarantined(report) => {
+            deployment
+                .quarantine_controller(process_ref)
+                .map_err(ProviderCompositionError::ControllerDeployment)?;
+            Ok(ProviderAdoption::Quarantined(report))
+        }
+        ProviderAdoption::Absent => Ok(ProviderAdoption::Absent),
+    }
+}
+
+fn configuration_digest(value: &SchemaFingerprint) -> ConfigurationDigest {
+    let mut digest = Sha256::new();
+    digest.update(b"d2bd-controller-readiness-v1\0");
+    digest.update(value.as_str().as_bytes());
+    ConfigurationDigest::from_bytes(digest.finalize().into())
+}
+
+fn identity_commitment(identity: d2b_process_conformance::ProcessIdentityDigest) -> [u8; 32] {
+    let mut digest = Sha256::new();
+    digest.update(b"d2bd-controller-process-identity-v1\0");
+    digest.update(identity.to_hex().as_bytes());
+    digest.finalize().into()
 }
 
 /// Result of routing a lifecycle request through the configured Provider
@@ -612,6 +842,17 @@ pub fn provider_resource_type() -> d2b_contracts_resource::v3::identity::Resourc
 mod tests {
     use super::*;
     use crate::provider_effects::{EffectDispatch, ProviderLifecycleEffectPort};
+    use d2b_contracts_provider::v3::{
+        ArtifactDigest, ArtifactDigestSet, BinaryRef, CompatibilityRange, ComponentDescriptor,
+        ComponentExecution, ComponentTargetCapability, ComponentType, ControllerInstanceScope,
+        ControllerTargetKind, EffectPortClass, PolicyEvaluation, ResourceApiBinding,
+        RevocationState, SignatureState, TargetRuntimeArtifacts, TrustEvidence, UpgradeDisposition,
+        UpgradePolicy,
+    };
+    use d2b_contracts_resource::v3::{
+        ResourceTypeName, SchemaVersion,
+        execution_policy::{BoundedToken, ExecutionDomain},
+    };
 
     const FINGERPRINT: &str =
         "sha256:0000000000000000000000000000000000000000000000000000000000000001";
@@ -628,6 +869,107 @@ mod tests {
             FINGERPRINT,
         )
         .expect("binding")
+    }
+
+    fn controller_manifest() -> ProviderManifest {
+        let digest = ArtifactDigest::parse(format!("sha256:{}", "a".repeat(64))).unwrap();
+        let fingerprint = SchemaFingerprint::parse(format!("sha256:{}", "b".repeat(64))).unwrap();
+        let process = ResourceTypeName::parse("Process").unwrap();
+        let component = ComponentDescriptor::new(
+            BoundedToken::parse("process-controller").unwrap(),
+            ComponentType::Controller,
+            [process.clone()],
+            [BoundedToken::parse("reconcile").unwrap()],
+            [ExecutionDomain::System],
+            8,
+            digest.clone(),
+            [],
+            false,
+        )
+        .unwrap()
+        .with_execution(ComponentExecution::Launchable {
+            binary_ref: BinaryRef::parse("process-controller").unwrap(),
+        })
+        .with_controller_placement(
+            ControllerInstanceScope::PerResourceTarget,
+            [ControllerTargetKind::Host, ControllerTargetKind::Guest],
+        )
+        .unwrap()
+        .with_target_capabilities([
+            ComponentTargetCapability::new(
+                ControllerTargetKind::Host,
+                digest.clone(),
+                [EffectPortClass::Process],
+            )
+            .unwrap(),
+            ComponentTargetCapability::new(
+                ControllerTargetKind::Guest,
+                digest.clone(),
+                [EffectPortClass::Process],
+            )
+            .unwrap(),
+        ])
+        .unwrap();
+        let binding = ResourceApiBinding::new_with_placement(
+            process,
+            SchemaVersion::new(1, 0).unwrap(),
+            fingerprint.clone(),
+            SchemaVersion::new(1, 0).unwrap(),
+            fingerprint.clone(),
+            Default::default(),
+            None,
+            None,
+            d2b_contracts_resource::v3::PlacementAnchor::ExecutionRef,
+        )
+        .unwrap();
+        let trust = TrustEvidence {
+            publisher: BoundedToken::parse("trusted").unwrap(),
+            root_epoch: 1,
+            publisher_trusted: true,
+            signature: SignatureState::Valid,
+            revocation: RevocationState::Clear,
+            emergency_deny: false,
+            provenance: PolicyEvaluation::Accepted,
+            sbom: PolicyEvaluation::Accepted,
+            license: PolicyEvaluation::Accepted,
+            vulnerability: PolicyEvaluation::Accepted,
+            conformance: PolicyEvaluation::Accepted,
+            support_channel: BoundedToken::parse("stable").unwrap(),
+        };
+        ProviderManifest::new(
+            d2b_contracts_resource::v3::ArtifactId::parse("provider-runtime").unwrap(),
+            ArtifactDigestSet {
+                package: digest.clone(),
+                executable: digest.clone(),
+                manifest: digest.clone(),
+                config: digest.clone(),
+                schema: digest.clone(),
+                service: digest.clone(),
+            },
+            trust,
+            CompatibilityRange {
+                api_major: 3,
+                api_minor: 0,
+                descriptor_fingerprint: fingerprint,
+                state_schema_version: SchemaVersion::new(1, 0).unwrap(),
+            },
+            [component],
+            [binding],
+            [],
+            UpgradePolicy {
+                drain_before_upgrade: true,
+                max_automatic_disposition: UpgradeDisposition::InPlace,
+                preserves_durable_state: true,
+            },
+        )
+        .unwrap()
+        .with_target_runtime_artifacts([
+            TargetRuntimeArtifacts::new(ControllerTargetKind::Host, digest.clone(), digest.clone())
+                .unwrap(),
+            TargetRuntimeArtifacts::new(ControllerTargetKind::Guest, digest.clone(), digest)
+                .unwrap(),
+        ])
+        .unwrap()
     }
 
     struct RecordingEffect;
@@ -716,6 +1058,39 @@ mod tests {
                 &effect
             ),
             Err(ProviderEffectError::CallerRoleDenied)
+        );
+    }
+
+    #[test]
+    fn signed_manifest_deployment_creates_one_target_local_controller_process() {
+        let deployment = ProviderDeployment::new(
+            DaemonMode::Guest,
+            d2bd_runtime::target_runtime::AdmissionLimits::guest_default(),
+        )
+        .expect("deployment");
+        let resources = deploy_target_local_controllers(
+            &deployment,
+            zone(),
+            ResourceRef::parse("Provider/provider-runtime").unwrap(),
+            &controller_manifest(),
+            ResourceGeneration::new(1).unwrap(),
+            ResourceGeneration::new(2).unwrap(),
+            ControllerGeneration::new(3).unwrap(),
+            ReconnectGeneration::new(4).unwrap(),
+            ZoneRevision::new(5),
+            ResourceRef::parse("Guest/workload").unwrap(),
+            ResourceRef::parse("Provider/system-systemd").unwrap(),
+            true,
+        )
+        .expect("target-local controller deployment");
+        assert_eq!(resources.len(), 1);
+        assert_eq!(
+            resources[0].process_spec().execution().process_class(),
+            d2b_contracts_resource::v3::process::ProcessClass::Controller
+        );
+        assert_eq!(
+            deployment.controller_phase(resources[0].process_ref()),
+            Some(d2bd_runtime::target_runtime::ControllerProcessPhase::Pending)
         );
     }
 }

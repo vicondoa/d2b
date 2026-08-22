@@ -43,13 +43,12 @@ pub use manifest::SystemdManifest;
 
 use std::collections::BTreeSet;
 
-use d2b_contracts_resource::v3::{
-    execution_policy::{BoundedToken, ExecutionDomain},
-};
+use d2b_contracts_resource::v3::execution_policy::{BoundedToken, ExecutionDomain};
 use d2b_process_conformance::{
-    AdoptionCondition, AdoptionOutcome, CancellationBinding, IdentityBinding, LaunchTicket,
-    ProcessConformanceError, ProcessIdentityDigest, ProcessLaunchEffectPort, ProcessPhaseClass,
-    ProcessProvider, ProcessProviderProfile, ProcessStatusReport, StopClass, WaitReapOwner,
+    AdoptionCandidate, AdoptionCondition, AdoptionOutcome, CancellationBinding, IdentityBinding,
+    LaunchTicket, LaunchedProcess, ProcessConformanceError, ProcessIdentityDigest,
+    ProcessLaunchEffectPort, ProcessPhaseClass, ProcessProvider, ProcessProviderProfile,
+    ProcessStatusReport, ReadinessExpectation, StopClass, WaitReapOwner,
 };
 
 /// The Provider name this controller implements.
@@ -91,6 +90,13 @@ impl<P: ProcessLaunchEffectPort> SystemdProcessProvider<P> {
     }
 
     fn validate(&self, ticket: &LaunchTicket) -> Result<(), ProcessConformanceError> {
+        ticket.validate()?;
+        if ticket.has_controller_launch_binding() {
+            ticket.validate_controller_launch()?;
+        }
+        if ticket.has_assignment_binding() {
+            ticket.validate_assignment()?;
+        }
         if ticket.selected_provider().as_str() != PROVIDER_NAME {
             return Err(ProcessConformanceError::ProviderMismatch);
         }
@@ -104,6 +110,61 @@ impl<P: ProcessLaunchEffectPort> SystemdProcessProvider<P> {
             return Err(ProcessConformanceError::UserRefRequired);
         }
         Ok(())
+    }
+
+    async fn cleanup_failed_launch(
+        &self,
+        launched: &LaunchedProcess,
+        error: ProcessConformanceError,
+    ) -> ProcessConformanceError {
+        if launched.identity.is_zero() {
+            return error;
+        }
+        match self
+            .port
+            .stop(&launched.identity, StopClass::Terminate)
+            .await
+        {
+            Ok(()) => error,
+            Err(_) => ProcessConformanceError::StopUnavailable,
+        }
+    }
+
+    async fn readiness_phase(
+        &self,
+        ticket: &LaunchTicket,
+        identity: ProcessIdentityDigest,
+    ) -> Result<ProcessPhaseClass, ProcessConformanceError> {
+        match ticket.readiness() {
+            ReadinessExpectation::None => Ok(ProcessPhaseClass::Running),
+            ReadinessExpectation::Condition { .. } => {
+                // The fixed adapter's probe is the readiness observation;
+                // it does not open or retain another pidfd.
+                let Some(candidate) = self.port.probe(ticket).await? else {
+                    return Err(ProcessConformanceError::DeadlineExceeded);
+                };
+                if !self.candidate_matches(ticket, &candidate, identity) {
+                    return Err(ProcessConformanceError::AdoptionAmbiguous);
+                }
+                Ok(ProcessPhaseClass::Ready)
+            }
+        }
+    }
+
+    fn candidate_matches(
+        &self,
+        ticket: &LaunchTicket,
+        candidate: &AdoptionCandidate,
+        identity: ProcessIdentityDigest,
+    ) -> bool {
+        candidate.identity == identity
+            && candidate.wait_reap_owner == WaitReapOwner::ServiceManager
+            && candidate
+                .validate(self.profile.required_identity_bindings())
+                .is_ok()
+            && ticket
+                .validate_process_identity(&candidate.identity)
+                .is_ok()
     }
 
     fn report(
@@ -143,12 +204,16 @@ impl<P: ProcessLaunchEffectPort> ProcessProvider for SystemdProcessProvider<P> {
             return Err(ProcessConformanceError::WaitOwnerMismatch);
         }
         launched.validate(self.profile.required_identity_bindings())?;
-        Ok(self.report(
-            ticket,
-            launched.identity,
-            ProcessPhaseClass::Running,
-            AdoptionCondition::NotApplicable,
-        ))
+        ticket.validate_process_identity(&launched.identity)?;
+        match self.readiness_phase(ticket, launched.identity).await {
+            Ok(phase) => Ok(self.report(
+                ticket,
+                launched.identity,
+                phase,
+                AdoptionCondition::NotApplicable,
+            )),
+            Err(error) => Err(self.cleanup_failed_launch(&launched, error).await),
+        }
     }
 
     async fn adopt(
@@ -164,6 +229,9 @@ impl<P: ProcessLaunchEffectPort> ProcessProvider for SystemdProcessProvider<P> {
         let identity_ok = candidate.wait_reap_owner == WaitReapOwner::ServiceManager
             && candidate
                 .validate(self.profile.required_identity_bindings())
+                .is_ok()
+            && ticket
+                .validate_process_identity(&candidate.identity)
                 .is_ok();
         if !identity_ok {
             return Ok(AdoptionOutcome::Quarantined(self.report(
@@ -173,11 +241,22 @@ impl<P: ProcessLaunchEffectPort> ProcessProvider for SystemdProcessProvider<P> {
                 AdoptionCondition::Quarantined,
             )));
         }
+        let phase = match self.readiness_phase(ticket, candidate.identity).await {
+            Ok(phase) => phase,
+            Err(_) => {
+                return Ok(AdoptionOutcome::Quarantined(self.report(
+                    ticket,
+                    candidate.identity,
+                    ProcessPhaseClass::Unknown,
+                    AdoptionCondition::Quarantined,
+                )));
+            }
+        };
         let _pidfd = self.port.open_pidfd(&candidate).await?;
         Ok(AdoptionOutcome::Adopted(self.report(
             ticket,
             candidate.identity,
-            ProcessPhaseClass::Running,
+            phase,
             AdoptionCondition::Adopted,
         )))
     }
@@ -187,6 +266,9 @@ impl<P: ProcessLaunchEffectPort> ProcessProvider for SystemdProcessProvider<P> {
         identity: &ProcessIdentityDigest,
         class: StopClass,
     ) -> Result<(), ProcessConformanceError> {
+        if identity.is_zero() {
+            return Err(ProcessConformanceError::IdentityUnverified);
+        }
         self.port.stop(identity, class).await
     }
 }

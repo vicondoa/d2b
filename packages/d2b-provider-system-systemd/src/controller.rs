@@ -71,9 +71,15 @@ impl<P: d2b_process_conformance::ProcessLaunchEffectPort> SystemdProcessControll
             SystemdReconcileAction::Adopt(_) => self.config.user_manager_check_timeout,
             SystemdReconcileAction::Stop(_, _) => self.config.termination_grace_sec.max(1),
         };
-        let permit = Arc::clone(&self.launch_slots)
-            .try_acquire_owned()
-            .map_err(|_| ProcessConformanceError::DeadlineExceeded)?;
+        let permit = if matches!(action, SystemdReconcileAction::Start(_)) {
+            Some(
+                Arc::clone(&self.launch_slots)
+                    .try_acquire_owned()
+                    .map_err(|_| ProcessConformanceError::DeadlineExceeded)?,
+            )
+        } else {
+            None
+        };
         let operation = async {
             match action {
                 SystemdReconcileAction::Start(ticket) => self

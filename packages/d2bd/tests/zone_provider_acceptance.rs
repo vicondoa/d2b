@@ -14,15 +14,21 @@ use std::{
 };
 
 use async_trait::async_trait;
+use d2b_contracts_provider::v3::{
+    ArtifactDigest, BinaryRef, ComponentDescriptor, ComponentExecution, ComponentTargetCapability,
+    ComponentType, ControllerInstanceScope, ControllerTargetKind, EffectPortClass,
+};
 use d2b_contracts_resource::v3::{
-    ResourceBundleGenerationId,
-    ResourceGeneration,
-    ResourceRef,
-    ResourceUid,
+    ControllerGeneration, ResourceBundleGenerationId, ResourceGeneration, ResourceRef,
+    ResourceTypeName, ResourceUid, SchemaFingerprint, ZoneId, ZoneRevision,
     execution_policy::BoundedToken,
     guest::GuestSpec,
-    network::{AttachmentGenerationFence, AttachmentHandle, DhcpSpec, DnsSpec, Ipv4Cidr, IsolationSpec, MdnsSpec, NetworkSpec, RoutingSpec},
-    process::ProcessSpec,
+    identity::ReconnectGeneration,
+    network::{
+        AttachmentGenerationFence, AttachmentHandle, DhcpSpec, DnsSpec, Ipv4Cidr, IsolationSpec,
+        MdnsSpec, NetworkSpec, RoutingSpec,
+    },
+    process::{ProcessClass, ProcessSpec},
     volume::{EntryType, VolumeSpec},
 };
 use d2b_provider_device_tpm::{
@@ -52,6 +58,11 @@ use d2b_provider_volume_local::{
 use d2bd_runtime::resource_operator_activation::{
     Wave6BoundaryError, Wave6Dependencies, Wave6ProviderBoundary, Wave6ReconcileResult,
     Wave6Resource, Wave6ResourceSet,
+};
+use d2bd_runtime::target_runtime::{
+    AdmissionLimits, ControllerAssignmentRequest, ControllerChildObservation,
+    ControllerProcessPhase, ControllerResourceVerb, ControllerSessionBinding, DaemonMode,
+    ProviderDeployment,
 };
 use serde_json::json;
 
@@ -1358,4 +1369,231 @@ impl Wave6ProviderBoundary for Wave6RealBoundary {
         }
         Ok(())
     }
+}
+
+fn u4_controller_descriptor() -> ComponentDescriptor {
+    let digest = ArtifactDigest::parse(format!("sha256:{}", "a".repeat(64))).unwrap();
+    ComponentDescriptor::new(
+        BoundedToken::parse("process-controller").unwrap(),
+        ComponentType::Controller,
+        [ResourceTypeName::parse("Process").unwrap()],
+        [BoundedToken::parse("reconcile").unwrap()],
+        [d2b_contracts_resource::v3::execution_policy::ExecutionDomain::System],
+        8,
+        digest.clone(),
+        [],
+        false,
+    )
+    .unwrap()
+    .with_execution(ComponentExecution::Launchable {
+        binary_ref: BinaryRef::parse("process-controller").unwrap(),
+    })
+    .with_controller_placement(
+        ControllerInstanceScope::PerResourceTarget,
+        [ControllerTargetKind::Host, ControllerTargetKind::Guest],
+    )
+    .unwrap()
+    .with_target_capabilities([
+        ComponentTargetCapability::new(
+            ControllerTargetKind::Host,
+            digest.clone(),
+            [EffectPortClass::Process],
+        )
+        .unwrap(),
+        ComponentTargetCapability::new(
+            ControllerTargetKind::Guest,
+            digest,
+            [EffectPortClass::Process],
+        )
+        .unwrap(),
+    ])
+    .unwrap()
+}
+
+#[test]
+fn controller_process_acceptance_fences_assignment_and_cleanup() {
+    let deployment =
+        ProviderDeployment::new(DaemonMode::Guest, AdmissionLimits::guest_default()).unwrap();
+    let provider = ResourceRef::parse("Provider/runtime").unwrap();
+    let target = ResourceRef::parse("Guest/workload").unwrap();
+    let process = deployment
+        .create_controller_process(
+            ZoneId::parse("work").unwrap(),
+            provider.clone(),
+            &u4_controller_descriptor(),
+            ResourceGeneration::new(1).unwrap(),
+            ResourceGeneration::new(2).unwrap(),
+            ControllerGeneration::new(3).unwrap(),
+            ReconnectGeneration::new(4).unwrap(),
+            ZoneRevision::new(5),
+            target.clone(),
+            ResourceRef::parse("Provider/system-systemd").unwrap(),
+            true,
+        )
+        .unwrap();
+    assert_eq!(
+        process.process_spec().execution().process_class(),
+        ProcessClass::Controller
+    );
+    assert_eq!(
+        process.finalizer(),
+        "provider-controller.d2bus.org/children"
+    );
+    assert!(
+        process
+            .owned_resource_types()
+            .contains(&ResourceTypeName::parse("Process").expect("Process type"))
+    );
+
+    let readiness = SchemaFingerprint::parse(format!("sha256:{}", "b".repeat(64))).unwrap();
+    deployment
+        .begin_controller_launch(process.process_ref(), readiness.clone())
+        .unwrap();
+    assert!(matches!(
+        deployment.admit_controller_assignment(ControllerAssignmentRequest::new(
+            process.process_ref().clone(),
+            ResourceRef::parse("Process/child").unwrap(),
+            ResourceUid::parse("123e4567-e89b-42d3-a456-426614174000").unwrap(),
+            ResourceGeneration::new(1).unwrap(),
+            ZoneRevision::new(6),
+            provider.clone(),
+            target.clone(),
+            ReconnectGeneration::new(7).unwrap(),
+        )),
+        Err(d2bd_runtime::target_runtime::DeploymentError::ControllerNotReady)
+    ));
+    deployment
+        .controller_launch_succeeded(process.process_ref(), [1; 32])
+        .unwrap();
+    let session = deployment
+        .admit_controller_session(ControllerSessionBinding::new(
+            process.process_ref().clone(),
+            process.zone().clone(),
+            provider.clone(),
+            target.clone(),
+            process.provider_generation(),
+            process.controller_generation(),
+            process.target_session_generation(),
+            ReconnectGeneration::new(7).unwrap(),
+            readiness,
+        ))
+        .unwrap();
+    let assignment = deployment
+        .admit_controller_assignment(ControllerAssignmentRequest::new(
+            process.process_ref().clone(),
+            ResourceRef::parse("Process/child").unwrap(),
+            ResourceUid::parse("123e4567-e89b-42d3-a456-426614174000").unwrap(),
+            ResourceGeneration::new(1).unwrap(),
+            ZoneRevision::new(6),
+            provider,
+            target,
+            session.generation(),
+        ))
+        .unwrap();
+    assert!(assignment.is_active());
+    assert!(
+        assignment
+            .resource_types()
+            .contains(&ResourceTypeName::parse("Process").expect("Process type"))
+    );
+    assert!(assignment.allows(ControllerResourceVerb::UpdateStatus));
+    assert!(assignment.allows(ControllerResourceVerb::Watch));
+    drop(session);
+    assert!(!assignment.is_active());
+    assert_eq!(
+        deployment.controller_phase(process.process_ref()),
+        Some(ControllerProcessPhase::Revoked)
+    );
+
+    deployment
+        .record_controller_child(
+            process.process_ref(),
+            ResourceRef::parse("Process/child").unwrap(),
+            ResourceUid::parse("223e4567-e89b-42d3-a456-426614174001").unwrap(),
+        )
+        .unwrap();
+    let child_uid = ResourceUid::parse("223e4567-e89b-42d3-a456-426614174001").unwrap();
+    deployment
+        .adopt_controller_children(
+            process.process_ref(),
+            [ControllerChildObservation::verified(
+                ResourceRef::parse("Process/child").unwrap(),
+                child_uid.clone(),
+            )],
+        )
+        .unwrap();
+    deployment
+        .remove_controller_child(
+            process.process_ref(),
+            ResourceRef::parse("Process/child").unwrap(),
+            &child_uid,
+        )
+        .unwrap();
+    deployment
+        .prepare_controller_cleanup(process.process_ref(), process.process_ref())
+        .unwrap();
+    assert!(
+        deployment
+            .controller_finalizer_held(process.process_ref())
+            .unwrap()
+    );
+    deployment
+        .complete_controller_cleanup(process.process_ref(), process.process_ref())
+        .unwrap();
+    assert!(
+        !deployment
+            .controller_finalizer_held(process.process_ref())
+            .unwrap()
+    );
+}
+
+#[test]
+fn host_and_guest_controller_process_resources_keep_one_process_shape() {
+    let descriptor = u4_controller_descriptor();
+    let host_deployment =
+        ProviderDeployment::new(DaemonMode::Host, AdmissionLimits::host_default()).unwrap();
+    let guest_deployment =
+        ProviderDeployment::new(DaemonMode::Guest, AdmissionLimits::guest_default()).unwrap();
+    let provider = ResourceRef::parse("Provider/runtime").unwrap();
+    let process_provider = ResourceRef::parse("Provider/system-systemd").unwrap();
+    let host = host_deployment
+        .create_controller_process(
+            ZoneId::parse("work").unwrap(),
+            provider.clone(),
+            &descriptor,
+            ResourceGeneration::new(1).unwrap(),
+            ResourceGeneration::new(2).unwrap(),
+            ControllerGeneration::new(3).unwrap(),
+            ReconnectGeneration::new(4).unwrap(),
+            ZoneRevision::new(5),
+            ResourceRef::parse("Host/host-system").unwrap(),
+            process_provider.clone(),
+            true,
+        )
+        .unwrap();
+    let guest = guest_deployment
+        .create_controller_process(
+            ZoneId::parse("work").unwrap(),
+            provider,
+            &descriptor,
+            ResourceGeneration::new(1).unwrap(),
+            ResourceGeneration::new(2).unwrap(),
+            ControllerGeneration::new(3).unwrap(),
+            ReconnectGeneration::new(4).unwrap(),
+            ZoneRevision::new(5),
+            ResourceRef::parse("Guest/workload").unwrap(),
+            process_provider,
+            true,
+        )
+        .unwrap();
+    assert_ne!(host.process_ref(), guest.process_ref());
+    assert_eq!(
+        host.process_spec().execution().process_class(),
+        guest.process_spec().execution().process_class()
+    );
+    assert_eq!(host.process_provider_ref(), guest.process_provider_ref());
+    assert_eq!(
+        host.required_effect_classes(),
+        guest.required_effect_classes()
+    );
 }

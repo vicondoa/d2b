@@ -25,7 +25,11 @@ use d2b_contracts_resource::v3::{
     execution_policy::BoundedToken,
 };
 use d2b_contracts_resource::v3::identity::ServiceName;
-use d2b_session::{Cancellation, ComponentSessionDriver};
+use d2b_session::{
+    AuthenticatedSessionRouteBinding,
+    Cancellation,
+    ComponentSessionDriver,
+};
 use tokio::sync::Notify;
 
 use crate::{ProviderAgentAdapter, ProviderFrameCodec, ProviderService, ProviderToolkitError};
@@ -162,6 +166,17 @@ impl<S> GeneratedProviderServiceServer<S> {
         &self.adapter
     }
 
+    /// Bind the generated server to one authenticated controller route.
+    pub fn bind_authenticated_route(
+        &self,
+        route: AuthenticatedSessionRouteBinding,
+    ) -> Result<(), ProviderToolkitError> {
+        if route.service() != self.generated.package() {
+            return Err(ProviderToolkitError::SessionUnauthenticated);
+        }
+        self.adapter.bind_authenticated_route(route)
+    }
+
     /// Borrow the generated service descriptor.
     pub const fn generated_service(&self) -> &GeneratedServiceDescriptor {
         &self.generated
@@ -249,6 +264,9 @@ where
     }
 
     /// Serve frames from an authenticated ComponentSession.
+    ///
+    /// The server must first be bound with [`Self::bind_authenticated_route`];
+    /// an unbound server refuses the loop before reading transport data.
     pub async fn serve_component_session<D, C>(
         &self,
         driver: &D,
@@ -320,5 +338,32 @@ mod tests {
             .expect("dispatch");
         assert!(response.get("state").is_some());
         assert_eq!(server.generated_services().len(), 1);
+    }
+
+    #[test]
+    fn generated_server_requires_an_authenticated_controller_route_for_session_serving() {
+        let fixture = Fixture::new(ProviderClass::Runtime, 0).expect("fixture");
+        let server = GeneratedProviderServiceServer::new(FakeProvider::new(fixture.clone()));
+        let route = AuthenticatedSessionRouteBinding::for_test(
+            Some(fixture.descriptor.provider_ref().clone()),
+            "d2b.provider.v3",
+            1,
+            Some(1),
+            Some(1),
+        );
+        assert!(server.bind_authenticated_route(route).is_ok());
+        assert!(server.adapter().has_authenticated_route());
+
+        let wrong_service = AuthenticatedSessionRouteBinding::for_test(
+            Some(fixture.descriptor.provider_ref().clone()),
+            "d2b.other.v3",
+            1,
+            Some(1),
+            Some(1),
+        );
+        assert_eq!(
+            server.bind_authenticated_route(wrong_service),
+            Err(ProviderToolkitError::SessionUnauthenticated)
+        );
     }
 }

@@ -9,19 +9,24 @@ use std::sync::Mutex;
 
 use d2b_contracts_zone_session::v3::{
     component_session::RequestId,
-    zone_routing::ZonePath,
+    zone_routing::{ZoneLabelId, ZonePath},
 };
 use d2b_contracts_resource::v3::{
     CanonicalJsonObject,
     ResourceRef,
     execution_policy::BoundedToken,
 };
-use d2b_session::{Cancellation, ComponentSessionDriver};
+use d2b_session::{
+    AuthenticatedSessionRouteBinding,
+    Cancellation,
+    ComponentSessionDriver,
+};
 
 use crate::{
     DispatchLimiter, ProviderAgentAuditEvent, ProviderAgentAuditLog, ProviderAgentAuditOutcome,
     ProviderToolkitError,
 };
+use crate::runtime::same_controller_identity;
 
 /// Validate the strict attachment-index sequence carried by a Provider
 /// adapter.  Descriptors are numbered from zero and may not repeat, reorder,
@@ -123,6 +128,7 @@ pub struct ProviderAgentAdapter<S> {
     service: S,
     dispatch: DispatchLimiter,
     audit: Mutex<ProviderAgentAuditLog>,
+    authenticated_route: Mutex<Option<AuthenticatedSessionRouteBinding>>,
 }
 
 impl<S> ProviderAgentAdapter<S> {
@@ -132,6 +138,7 @@ impl<S> ProviderAgentAdapter<S> {
             service,
             dispatch: DispatchLimiter::new(),
             audit: Mutex::new(ProviderAgentAuditLog::new()),
+            authenticated_route: Mutex::new(None),
         }
     }
 
@@ -152,6 +159,51 @@ impl<S> ProviderAgentAdapter<S> {
             .map(|audit| audit.len())
             .unwrap_or_default()
     }
+
+    /// Bind the adapter to one authenticated controller route.
+    ///
+    /// A route is admission evidence only. It does not grant a ResourceClient
+    /// or effect capability, and a second route cannot replace the first one
+    /// while this adapter is alive.
+    pub fn bind_authenticated_route(
+        &self,
+        route: AuthenticatedSessionRouteBinding,
+    ) -> Result<(), ProviderToolkitError> {
+        if route.provider_ref().is_none()
+            || route.provider_generation().is_none()
+            || route.controller_generation().is_none()
+            || route.reconnect_generation().get() == 0
+        {
+            return Err(ProviderToolkitError::SessionUnauthenticated);
+        }
+        let mut bound = self
+            .authenticated_route
+            .lock()
+            .map_err(|_| ProviderToolkitError::SessionUnauthenticated)?;
+        match bound.as_ref() {
+            None => {
+                *bound = Some(route);
+                Ok(())
+            }
+            Some(existing) if existing == &route => Ok(()),
+            Some(existing)
+                if same_controller_identity(existing, &route)
+                    && route.reconnect_generation() > existing.reconnect_generation() =>
+            {
+                *bound = Some(route);
+                Ok(())
+            }
+            Some(_) => Err(ProviderToolkitError::SessionUnauthenticated),
+        }
+    }
+
+    /// Whether an authenticated controller route has been bound.
+    pub fn has_authenticated_route(&self) -> bool {
+        self.authenticated_route
+            .lock()
+            .ok()
+            .is_some_and(|route| route.is_some())
+    }
 }
 
 impl<S> ProviderAgentAdapter<S>
@@ -160,6 +212,45 @@ where
 {
     /// Dispatch one request under bounded admission and record its outcome.
     pub fn dispatch(
+        &self,
+        zone: ZonePath,
+        provider_ref: ResourceRef,
+        method: BoundedToken,
+        payload: CanonicalJsonObject,
+    ) -> Result<CanonicalJsonObject, ProviderToolkitError> {
+        let bound = self
+            .authenticated_route
+            .lock()
+            .map_err(|_| ProviderToolkitError::SessionUnauthenticated)?;
+        if let Some(route) = bound.as_ref() {
+            Self::validate_bound_request(route, &zone, &provider_ref)?;
+        }
+        self.dispatch_inner(zone, provider_ref, method, payload)
+    }
+
+    fn dispatch_for_route(
+        &self,
+        route: &AuthenticatedSessionRouteBinding,
+        zone: ZonePath,
+        provider_ref: ResourceRef,
+        method: BoundedToken,
+        payload: CanonicalJsonObject,
+    ) -> Result<CanonicalJsonObject, ProviderToolkitError> {
+        let bound = self
+            .authenticated_route
+            .lock()
+            .map_err(|_| ProviderToolkitError::SessionUnauthenticated)?;
+        let current_route = bound
+            .as_ref()
+            .ok_or(ProviderToolkitError::SessionUnauthenticated)?;
+        if current_route != route {
+            return Err(ProviderToolkitError::SessionUnauthenticated);
+        }
+        Self::validate_bound_request(route, &zone, &provider_ref)?;
+        self.dispatch_inner(zone, provider_ref, method, payload)
+    }
+
+    fn dispatch_inner(
         &self,
         zone: ZonePath,
         provider_ref: ResourceRef,
@@ -187,6 +278,9 @@ where
     /// Serve decoded Provider RPC frames from one authenticated
     /// ComponentSession until cancellation or transport close.
     ///
+    /// Callers must bind the authenticated route before entering this loop.
+    /// Every decoded target is checked against that binding.
+    ///
     /// Session authentication, generation binding, attachment policy, and
     /// stream fairness remain owned by `d2b-session`; this loop only bridges
     /// the generated frame codec to the bounded Provider service adapter.
@@ -200,9 +294,24 @@ where
         D: ComponentSessionDriver,
         C: ProviderFrameCodec,
     {
+        let route = self
+            .authenticated_route
+            .lock()
+            .map_err(|_| ProviderToolkitError::SessionUnauthenticated)?
+            .clone()
+            .ok_or(ProviderToolkitError::SessionUnauthenticated)?;
         loop {
             if cancellation.is_cancelled() {
                 return Ok(());
+            }
+            let current_route = self
+                .authenticated_route
+                .lock()
+                .map_err(|_| ProviderToolkitError::SessionUnauthenticated)?
+                .clone()
+                .ok_or(ProviderToolkitError::SessionUnauthenticated)?;
+            if current_route != route {
+                return Err(ProviderToolkitError::SessionUnauthenticated);
             }
             let frame = driver
                 .receive_ttrpc()
@@ -211,7 +320,8 @@ where
             let request = codec
                 .decode_request(&frame)
                 .map_err(|_| ProviderToolkitError::WireInvalid)?;
-            let response = self.dispatch(
+            let response = self.dispatch_for_route(
+                &route,
                 request.zone().clone(),
                 request.provider_ref().clone(),
                 request.method().clone(),
@@ -225,6 +335,25 @@ where
                 .await
                 .map_err(|_| ProviderToolkitError::SessionClosed)?;
         }
+    }
+
+    fn validate_bound_request(
+        route: &AuthenticatedSessionRouteBinding,
+        zone: &ZonePath,
+        provider_ref: &ResourceRef,
+    ) -> Result<(), ProviderToolkitError> {
+        let expected_zone = ZonePath::new(vec![
+            ZoneLabelId::parse(route.zone().as_str())
+                .map_err(|_| ProviderToolkitError::SessionUnauthenticated)?,
+        ])
+        .map_err(|_| ProviderToolkitError::SessionUnauthenticated)?;
+        let expected_provider = route
+            .provider_ref()
+            .ok_or(ProviderToolkitError::SessionUnauthenticated)?;
+        if zone != &expected_zone || provider_ref != expected_provider {
+            return Err(ProviderToolkitError::SessionUnauthenticated);
+        }
+        Ok(())
     }
 }
 
@@ -244,6 +373,14 @@ impl<S> GeneratedProviderServiceServer<S> {
     /// Borrow the bounded adapter.
     pub const fn adapter(&self) -> &ProviderAgentAdapter<S> {
         &self.adapter
+    }
+
+    /// Bind the generated server to one authenticated controller route.
+    pub fn bind_authenticated_route(
+        &self,
+        route: AuthenticatedSessionRouteBinding,
+    ) -> Result<(), ProviderToolkitError> {
+        self.adapter.bind_authenticated_route(route)
     }
 }
 
@@ -324,7 +461,6 @@ mod tests {
     ResourceName,
     ResourceTypeName,
 };
-
     struct Echo;
 
     impl ProviderService for Echo {
@@ -384,6 +520,60 @@ mod tests {
         assert_eq!(
             validate_attachment_indexes(&[1, 0]),
             Err(ProviderToolkitError::NonMonotoneAttachmentIndexes)
+        );
+    }
+
+    #[test]
+    fn component_session_serving_requires_controller_route_admission() {
+        use crate::Fixture;
+        use d2b_provider::ProviderClass;
+        use d2b_session::AuthenticatedSessionRouteBinding;
+
+        let fixture = Fixture::new(ProviderClass::Runtime, 0).expect("fixture");
+        let adapter = ProviderAgentAdapter::new(Echo);
+        let missing_generation = AuthenticatedSessionRouteBinding::for_test(
+            Some(fixture.descriptor.provider_ref().clone()),
+            "d2b.provider.v3",
+            1,
+            Some(1),
+            None,
+        );
+        assert_eq!(
+            adapter.bind_authenticated_route(missing_generation),
+            Err(ProviderToolkitError::SessionUnauthenticated)
+        );
+        assert!(!adapter.has_authenticated_route());
+
+        let route = AuthenticatedSessionRouteBinding::for_test(
+            Some(fixture.descriptor.provider_ref().clone()),
+            "d2b.provider.v3",
+            1,
+            Some(1),
+            Some(1),
+        );
+        assert!(adapter.bind_authenticated_route(route.clone()).is_ok());
+        assert!(adapter.has_authenticated_route());
+        assert!(adapter.bind_authenticated_route(route).is_ok());
+        let reconnect = AuthenticatedSessionRouteBinding::for_test(
+            Some(fixture.descriptor.provider_ref().clone()),
+            "d2b.provider.v3",
+            2,
+            Some(1),
+            Some(1),
+        );
+        assert!(adapter.bind_authenticated_route(reconnect).is_ok());
+        assert_eq!(
+            adapter.dispatch(
+                d2b_contracts_zone_session::v3::zone_routing::ZonePath::new(vec![
+                    d2b_contracts_zone_session::v3::zone_routing::ZoneLabelId::parse("dev")
+                        .unwrap(),
+                ])
+                .unwrap(),
+                d2b_contracts_resource::v3::ResourceRef::parse("Provider/other").unwrap(),
+                BoundedToken::parse("inspect").unwrap(),
+                CanonicalJsonObject::empty(),
+            ),
+            Err(ProviderToolkitError::SessionUnauthenticated)
         );
     }
 }

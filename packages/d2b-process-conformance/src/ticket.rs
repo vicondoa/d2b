@@ -10,8 +10,10 @@ use d2b_contracts_resource::v3::{
     ControllerGeneration,
     ResourceGeneration,
     ResourceRef,
+    ZoneRevision,
     ResourceUid,
 };
+use d2b_contracts_resource::v3::identity::ReconnectGeneration;
 
 use crate::error::ProcessConformanceError;
 use crate::identity::{ConfigurationDigest, IdentityBinding, ProcessIdentityDigest};
@@ -150,6 +152,20 @@ impl ReadinessExpectation {
         }
         Ok(Self::Condition { timeout_ms })
     }
+
+    /// Validate an expectation constructed from a decoded or otherwise
+    /// untrusted value.
+    pub const fn validate(self) -> Result<(), ProcessConformanceError> {
+        match self {
+            Self::None => Ok(()),
+            Self::Condition { timeout_ms }
+                if timeout_ms > 0 && timeout_ms <= MAX_LAUNCH_DEADLINE_MS =>
+            {
+                Ok(())
+            }
+            Self::Condition { .. } => Err(ProcessConformanceError::InvalidTicket),
+        }
+    }
 }
 
 /// The private inherited-fd table binding carried by a launch ticket.
@@ -160,6 +176,33 @@ impl ReadinessExpectation {
 pub struct InheritedFdTable {
     digest: ConfigurationDigest,
     count: u16,
+}
+
+/// The target-side proof carried by a static controller launch.
+///
+/// The target session and readiness commitments are opaque evidence produced
+/// by Core. They do not grant a ResourceClient and cannot be combined with an
+/// assignment binding on the same ticket.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct ControllerLaunchBinding {
+    provider_generation: ResourceGeneration,
+    target_session_generation: ReconnectGeneration,
+    signed_descriptor_digest: ConfigurationDigest,
+    target_readiness_digest: ConfigurationDigest,
+}
+
+/// The Core-issued assignment proof carried by an assigned controller or
+/// Process child.
+///
+/// The ResourceClient itself remains in Core. Only its opaque binding digest
+/// crosses the Process Provider seam, together with the exact Provider,
+/// session, and assignment generations.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct ControllerAssignmentBinding {
+    provider_generation: ResourceGeneration,
+    session_generation: ReconnectGeneration,
+    assignment_epoch: u64,
+    resource_client_binding: ConfigurationDigest,
 }
 
 impl InheritedFdTable {
@@ -185,15 +228,20 @@ impl InheritedFdTable {
 /// The ticket a Process controller hands to the fixed process effect
 /// adapter.
 ///
-/// It binds the resource, the owning Provider component and template, the
-/// placement, the selected Process Provider, the compiled configuration
-/// digests, the operation, and the identity bindings the launch is expected
-/// to establish. Nothing in it names an executable, a host path, a numeric
-/// UID or GID, a cgroup path, a broker operation, or an environment value.
+/// It binds the resource and committed revision, the owning Provider
+/// component and template, the placement, the selected Process Provider, the
+/// compiled configuration digests, the operation, and the identity bindings
+/// the launch is expected to establish. Static controller launches carry
+/// target-session, signed-descriptor, and target-readiness commitments;
+/// assignment-bound launches carry only an opaque ResourceClient commitment
+/// plus the exact Provider/session/epoch fence. Nothing in it names an
+/// executable, a host path, a numeric UID or GID, a cgroup path, a broker
+/// operation, or an environment value.
 #[derive(Clone, PartialEq, Eq)]
 pub struct LaunchTicket {
     process_ref: ResourceRef,
     process_uid: ResourceUid,
+    resource_revision: Option<ZoneRevision>,
     resource_generation: ResourceGeneration,
     controller_generation: ControllerGeneration,
     owner_provider: BoundedToken,
@@ -211,6 +259,8 @@ pub struct LaunchTicket {
     readiness: ReadinessExpectation,
     inherited_fd_table: InheritedFdTable,
     sandbox: Option<SandboxPlan>,
+    controller_launch: Option<ControllerLaunchBinding>,
+    assignment: Option<ControllerAssignmentBinding>,
 }
 
 impl LaunchTicket {
@@ -268,6 +318,7 @@ impl LaunchTicket {
         Ok(Self {
             process_ref,
             process_uid,
+            resource_revision: None,
             resource_generation,
             controller_generation,
             owner_provider,
@@ -285,7 +336,150 @@ impl LaunchTicket {
             readiness: ReadinessExpectation::None,
             inherited_fd_table,
             sandbox: None,
+            controller_launch: None,
+            assignment: None,
         })
+    }
+
+    /// Bind the committed resource revision to this launch.
+    pub fn with_resource_revision(
+        mut self,
+        resource_revision: ZoneRevision,
+    ) -> Result<Self, ProcessConformanceError> {
+        if resource_revision.get() == 0 || self.resource_revision.is_some() {
+            return Err(ProcessConformanceError::InvalidTicket);
+        }
+        self.resource_revision = Some(resource_revision);
+        Ok(self)
+    }
+
+    /// Attach the Core-produced proof for a target-local controller launch.
+    ///
+    /// A fresh controller receives only its Provider generation, target
+    /// session, signed component descriptor, and target readiness
+    /// commitments. It does not receive a ResourceClient or assignment
+    /// authority until a separate controller session is authenticated and
+    /// admitted.
+    pub fn with_controller_launch_binding(
+        mut self,
+        provider_generation: ResourceGeneration,
+        target_session_generation: ReconnectGeneration,
+        signed_descriptor_digest: ConfigurationDigest,
+        target_readiness_digest: ConfigurationDigest,
+    ) -> Result<Self, ProcessConformanceError> {
+        if signed_descriptor_digest.is_zero()
+            || target_readiness_digest.is_zero()
+            || self.assignment.is_some()
+            || self.controller_launch.is_some()
+            || self.process_ref.resource_type().as_str() != "Process"
+        {
+            return Err(ProcessConformanceError::InvalidTicket);
+        }
+        self.controller_launch = Some(ControllerLaunchBinding {
+            provider_generation,
+            target_session_generation,
+            signed_descriptor_digest,
+            target_readiness_digest,
+        });
+        Ok(self)
+    }
+
+    /// Attach the separate Core-issued assignment and ResourceClient proof.
+    ///
+    /// This operation is intentionally incompatible with a static controller
+    /// launch binding. A controller must authenticate and become Ready before
+    /// it can receive this assignment-scoped authority.
+    pub fn with_assignment_binding(
+        mut self,
+        provider_generation: ResourceGeneration,
+        session_generation: ReconnectGeneration,
+        assignment_epoch: u64,
+        resource_client_binding: ConfigurationDigest,
+    ) -> Result<Self, ProcessConformanceError> {
+        if assignment_epoch == 0
+            || resource_client_binding.is_zero()
+            || self.controller_launch.is_some()
+            || self.assignment.is_some()
+        {
+            return Err(ProcessConformanceError::InvalidTicket);
+        }
+        self.assignment = Some(ControllerAssignmentBinding {
+            provider_generation,
+            session_generation,
+            assignment_epoch,
+            resource_client_binding,
+        });
+        Ok(self)
+    }
+
+    /// Validate this ticket before handing it to an effect adapter.
+    pub fn validate(&self) -> Result<(), ProcessConformanceError> {
+        if !matches!(
+            self.process_ref.resource_type().as_str(),
+            "Process" | "EphemeralProcess"
+        ) || !matches!(
+            self.execution_ref.resource_type().as_str(),
+            "Host" | "Guest"
+        ) || (self.domain == ExecutionDomain::User && self.user_ref.is_none())
+            || (self.domain == ExecutionDomain::System && self.user_ref.is_some())
+            || self.expected_identity.is_empty()
+        {
+            return Err(ProcessConformanceError::InvalidTicket);
+        }
+        if self
+            .resource_revision
+            .is_some_and(|revision| revision.get() == 0)
+        {
+            return Err(ProcessConformanceError::InvalidTicket);
+        }
+        self.digests.validate()?;
+        self.readiness.validate()?;
+        if let Some(binding) = self.controller_launch {
+            if binding.provider_generation.get() == 0
+                || binding.target_session_generation.get() == 0
+                || binding.signed_descriptor_digest.is_zero()
+                || binding.target_readiness_digest.is_zero()
+                || self.process_ref.resource_type().as_str() != "Process"
+            {
+                return Err(ProcessConformanceError::InvalidTicket);
+            }
+        }
+        if let Some(binding) = self.assignment {
+            if binding.provider_generation.get() == 0
+                || binding.session_generation.get() == 0
+                || binding.assignment_epoch == 0
+                || binding.resource_client_binding.is_zero()
+            {
+                return Err(ProcessConformanceError::InvalidTicket);
+            }
+        }
+        Ok(())
+    }
+
+    /// Validate that this ticket is a static target-local controller launch.
+    pub fn validate_controller_launch(&self) -> Result<(), ProcessConformanceError> {
+        self.validate()?;
+        if self.controller_launch.is_some()
+            && self.assignment.is_none()
+            && self.resource_revision.is_some()
+        {
+            Ok(())
+        } else {
+            Err(ProcessConformanceError::InvalidTicket)
+        }
+    }
+
+    /// Validate that this ticket carries an assignment-scoped capability.
+    pub fn validate_assignment(&self) -> Result<(), ProcessConformanceError> {
+        self.validate()?;
+        if self.assignment.is_some()
+            && self.controller_launch.is_none()
+            && self.resource_revision.is_some()
+        {
+            Ok(())
+        } else {
+            Err(ProcessConformanceError::InvalidTicket)
+        }
     }
 
     /// Attach a bounded readiness expectation.
@@ -293,6 +487,16 @@ impl LaunchTicket {
     pub fn with_readiness(mut self, readiness: ReadinessExpectation) -> Self {
         self.readiness = readiness;
         self
+    }
+
+    /// Attach a readiness expectation while rejecting malformed decoded data.
+    pub fn try_with_readiness(
+        mut self,
+        readiness: ReadinessExpectation,
+    ) -> Result<Self, ProcessConformanceError> {
+        readiness.validate()?;
+        self.readiness = readiness;
+        Ok(self)
     }
 
     /// Bind the complete typed sandbox plan to the launch.
@@ -317,7 +521,7 @@ impl LaunchTicket {
         mut self,
         identity: ProcessIdentityDigest,
     ) -> Result<Self, ProcessConformanceError> {
-        if identity.is_zero() {
+        if identity.is_zero() || self.expected_identity_digest.is_some() {
             return Err(ProcessConformanceError::InvalidTicket);
         }
         self.expected_identity_digest = Some(identity);
@@ -339,6 +543,11 @@ impl LaunchTicket {
     /// Borrow the resource UID.
     pub const fn process_uid(&self) -> &ResourceUid {
         &self.process_uid
+    }
+
+    /// Return the committed resource revision, when one was bound.
+    pub const fn resource_revision(&self) -> Option<ZoneRevision> {
+        self.resource_revision
     }
 
     /// Return the resource generation this launch is for.
@@ -411,6 +620,22 @@ impl LaunchTicket {
         self.expected_identity_digest.as_ref()
     }
 
+    /// Validate a returned process identity against this ticket's optional
+    /// adoption/terminal identity seal.
+    pub fn validate_process_identity(
+        &self,
+        identity: &ProcessIdentityDigest,
+    ) -> Result<(), ProcessConformanceError> {
+        if self
+            .expected_identity_digest
+            .is_some_and(|expected| &expected != identity)
+        {
+            Err(ProcessConformanceError::TerminalEvidenceMismatch)
+        } else {
+            Ok(())
+        }
+    }
+
     /// Return the readiness expectation.
     pub const fn readiness(&self) -> ReadinessExpectation {
         self.readiness
@@ -419,6 +644,76 @@ impl LaunchTicket {
     /// Borrow the inherited descriptor-table binding.
     pub const fn inherited_fd_table(&self) -> &InheritedFdTable {
         &self.inherited_fd_table
+    }
+
+    /// Whether this ticket carries a static controller launch proof.
+    pub const fn has_controller_launch_binding(&self) -> bool {
+        self.controller_launch.is_some()
+    }
+
+    /// Return the target session generation bound to a static controller
+    /// launch.
+    pub const fn target_session_generation(&self) -> Option<ReconnectGeneration> {
+        match self.controller_launch {
+            Some(binding) => Some(binding.target_session_generation),
+            None => None,
+        }
+    }
+
+    /// Return the signed component descriptor commitment.
+    pub const fn signed_descriptor_digest(&self) -> Option<ConfigurationDigest> {
+        match self.controller_launch {
+            Some(binding) => Some(binding.signed_descriptor_digest),
+            None => None,
+        }
+    }
+
+    /// Return the target readiness commitment.
+    pub const fn target_readiness_digest(&self) -> Option<ConfigurationDigest> {
+        match self.controller_launch {
+            Some(binding) => Some(binding.target_readiness_digest),
+            None => None,
+        }
+    }
+
+    /// Whether this ticket carries a Core-issued assignment proof.
+    pub const fn has_assignment_binding(&self) -> bool {
+        self.assignment.is_some()
+    }
+
+    /// Return the Provider generation bound to this launch or assignment.
+    pub const fn provider_generation(&self) -> Option<ResourceGeneration> {
+        match self.assignment {
+            Some(binding) => Some(binding.provider_generation),
+            None => match self.controller_launch {
+                Some(binding) => Some(binding.provider_generation),
+                None => None,
+            },
+        }
+    }
+
+    /// Return the authenticated session generation bound to the assignment.
+    pub const fn session_generation(&self) -> Option<ReconnectGeneration> {
+        match self.assignment {
+            Some(binding) => Some(binding.session_generation),
+            None => None,
+        }
+    }
+
+    /// Return the assignment epoch bound to the assignment.
+    pub const fn assignment_epoch(&self) -> Option<u64> {
+        match self.assignment {
+            Some(binding) => Some(binding.assignment_epoch),
+            None => None,
+        }
+    }
+
+    /// Borrow the opaque ResourceClient binding commitment.
+    pub const fn resource_client_binding(&self) -> Option<ConfigurationDigest> {
+        match self.assignment {
+            Some(binding) => Some(binding.resource_client_binding),
+            None => None,
+        }
     }
 }
 
@@ -483,5 +778,97 @@ mod tests {
         assert!(OperationBinding::new(uid, MAX_LAUNCH_DEADLINE_MS).is_ok());
         let ticket = fixtures::ticket_builder().build().unwrap();
         assert_eq!(format!("{ticket:?}"), "LaunchTicket(<redacted>)");
+    }
+
+    #[test]
+    fn controller_launch_proof_cannot_carry_assignment_authority() {
+        assert_eq!(
+            fixtures::ticket_builder()
+                .build()
+                .unwrap()
+                .with_resource_revision(ZoneRevision::new(1))
+                .unwrap()
+                .validate_controller_launch(),
+            Err(ProcessConformanceError::InvalidTicket)
+        );
+        let ticket = fixtures::ticket_builder()
+            .build()
+            .unwrap()
+            .with_resource_revision(ZoneRevision::new(1))
+            .unwrap()
+            .with_controller_launch_binding(
+                ResourceGeneration::new(2).unwrap(),
+                d2b_contracts_resource::v3::identity::ReconnectGeneration::new(2).unwrap(),
+                ConfigurationDigest::from_bytes([8; 32]),
+                ConfigurationDigest::from_bytes([9; 32]),
+            )
+            .unwrap();
+        assert!(ticket.has_controller_launch_binding());
+        assert!(!ticket.has_assignment_binding());
+        assert!(ticket.resource_client_binding().is_none());
+        assert_eq!(format!("{ticket:?}"), "LaunchTicket(<redacted>)");
+        assert_eq!(
+            ticket.with_assignment_binding(
+                ResourceGeneration::new(2).unwrap(),
+                d2b_contracts_resource::v3::identity::ReconnectGeneration::new(2).unwrap(),
+                1,
+                ConfigurationDigest::from_bytes([10; 32]),
+            ),
+            Err(ProcessConformanceError::InvalidTicket)
+        );
+    }
+
+    #[test]
+    fn assignment_binding_requires_nonzero_session_epoch_and_client_commitment() {
+        let ticket = fixtures::ticket_builder().build().unwrap();
+        let session = d2b_contracts_resource::v3::identity::ReconnectGeneration::new(3).unwrap();
+        let bound = ticket
+            .with_resource_revision(ZoneRevision::new(1))
+            .unwrap()
+            .with_assignment_binding(
+                ResourceGeneration::new(2).unwrap(),
+                session,
+                7,
+                ConfigurationDigest::from_bytes([11; 32]),
+            )
+            .unwrap();
+        assert!(bound.has_assignment_binding());
+        assert_eq!(bound.provider_generation().unwrap().get(), 2);
+        assert_eq!(bound.session_generation().unwrap().get(), 3);
+        assert_eq!(bound.assignment_epoch(), Some(7));
+        assert_eq!(
+            bound.resource_client_binding(),
+            Some(ConfigurationDigest::from_bytes([11; 32]))
+        );
+    }
+
+    #[test]
+    fn malformed_readiness_is_rejected_by_ticket_validation() {
+        let ticket = fixtures::ticket_builder()
+            .build()
+            .unwrap()
+            .with_readiness(ReadinessExpectation::Condition { timeout_ms: 0 });
+        assert_eq!(
+            ticket.validate(),
+            Err(ProcessConformanceError::InvalidTicket)
+        );
+    }
+
+    #[test]
+    fn an_expected_process_identity_seal_rejects_a_reused_identity() {
+        let ticket = fixtures::ticket_builder()
+            .build()
+            .unwrap()
+            .with_expected_identity_digest(ProcessIdentityDigest::from_bytes([1; 32]))
+            .unwrap();
+        assert!(
+            ticket
+                .validate_process_identity(&ProcessIdentityDigest::from_bytes([1; 32]))
+                .is_ok()
+        );
+        assert_eq!(
+            ticket.validate_process_identity(&ProcessIdentityDigest::from_bytes([2; 32])),
+            Err(ProcessConformanceError::TerminalEvidenceMismatch)
+        );
     }
 }
