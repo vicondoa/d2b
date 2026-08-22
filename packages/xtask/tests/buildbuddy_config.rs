@@ -2417,6 +2417,11 @@ fn developer_profiles_publish_the_tested_checkout_metadata() {
     let relative_xtask = xtask
         .strip_prefix(&scratch)
         .expect("xtask stub must be below the test scratch directory");
+    let test_path = format!(
+        "{}:{}",
+        bin.display(),
+        std::env::var("PATH").expect("test PATH must be present")
+    );
 
     let run = |profile: &str, capture: &Path, trusted: bool| {
         let mut command = Command::new("bash");
@@ -2437,7 +2442,7 @@ fn developer_profiles_publish_the_tested_checkout_metadata() {
             .env("D2B_CAPTURE_ARGS", capture)
             .env(
                 "PATH",
-                format!("{}:{}", bin.display(), std::env::var("PATH").unwrap()),
+                &test_path,
             );
         if trusted {
             command
@@ -2472,6 +2477,20 @@ fn developer_profiles_publish_the_tested_checkout_metadata() {
         !local.contains("--build_metadata="),
         "local profile must not publish developer metadata"
     );
+    assert!(
+        local
+            .lines()
+            .any(|argument| argument == format!("--action_env=PATH={test_path}")),
+        "local profile must pass its test PATH to Bazel actions"
+    );
+    for (profile, arguments) in [("remote", &remote), ("trusted-seed", &trusted)] {
+        assert!(
+            !arguments
+                .lines()
+                .any(|argument| argument.starts_with("--action_env=PATH=")),
+            "{profile} profile must retain the worker-standard action PATH"
+        );
+    }
     let remote_metadata = remote
         .lines()
         .filter(|argument| argument.starts_with("--build_metadata="))

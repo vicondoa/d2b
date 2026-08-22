@@ -399,6 +399,8 @@ run_bazel() {
     command_flags+=(--shell_executable=/bin/bash)
     test_bazel_sh=/bin/bash
     test_path="/run/current-system/sw/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:$test_path"
+  else
+    command_flags+=(--action_env=PATH="$test_path")
   fi
   D2B_BAZEL_PROFILE="$profile" "$bazel_bin" "${startup_flags[@]}" test "--config=$profile" \
     "${command_flags[@]}" \
