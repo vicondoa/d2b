@@ -2677,8 +2677,9 @@ fn trusted_ci_rejects_pr_metadata_tampering() {
         output.status.success(),
         "valid trusted PR metadata must pass: {output:?}"
     );
+    let evidence_run = only_evidence_run(&scratch.join("evidence"));
     assert_eq!(
-        std::fs::read_to_string(scratch.join("evidence/trusted-workspace/.bazelrc"))
+        std::fs::read_to_string(evidence_run.join("trusted-workspace/.bazelrc"))
             .expect("read staged trusted Bazel rc"),
         "true"
     );
