@@ -175,8 +175,23 @@ fn main_controlled_buildbuddy_workflows_preserve_trust_contract() {
             && build.contains(
                 "if [ -n \"$D2B_JOB_WORKFLOW_REF\" ] || [ -n \"$D2B_JOB_WORKFLOW_SHA\" ]; then"
             )
+            && build.contains(
+                "[ \"$D2B_JOB_WORKFLOW_REF\" = \"vicondoa/d2b/.github/workflows/build.yaml@refs/heads/main\" ]"
+            )
             && build.contains("is_sha \"$D2B_JOB_WORKFLOW_SHA\""),
         "optional reusable-workflow metadata must be validated when GitHub provides it"
+    );
+    let pr_validation_start = build
+        .find("if [ \"$D2B_EVENT_NAME\" = \"pull_request_target\" ]")
+        .expect("build workflow must validate pull_request_target metadata");
+    let push_validation_start = build
+        .find("elif [ \"$D2B_EVENT_NAME\" = \"push\" ]")
+        .expect("build workflow must validate push metadata");
+    assert!(
+        build[pr_validation_start..push_validation_start]
+            .contains("validate_optional_reusable_workflow")
+            && build[push_validation_start..].contains("validate_optional_reusable_workflow"),
+        "optional reusable-workflow metadata validation must bind to both event paths"
     );
     assert!(
         build.matches("persist-credentials: false").count() >= 4,
