@@ -2628,6 +2628,14 @@ fn trusted_ci_rejects_pr_metadata_tampering() {
         &bazel,
         "#!/usr/bin/env bash\n\
          for arg in \"$@\"; do\n\
+           if [ \"$arg\" = build ]; then\n\
+             mkdir -p \"$D2B_FAKE_TRUSTED_ROOT/bazel-bin/packages/xtask\"\n\
+             printf '#!/usr/bin/env bash\\nexit 0\\n' > \"$D2B_FAKE_TRUSTED_ROOT/bazel-bin/packages/xtask/xtask\"\n\
+             chmod 0555 \"$D2B_FAKE_TRUSTED_ROOT/bazel-bin/packages/xtask/xtask\"\n\
+             exit 0\n\
+           fi\n\
+         done\n\
+         for arg in \"$@\"; do\n\
            case \"$arg\" in\n\
              --build_event_json_file=*) bep=\"${arg#*=}\" ;;\n\
            esac\n\
@@ -2659,6 +2667,7 @@ fn trusted_ci_rejects_pr_metadata_tampering() {
             .env("D2B_PROJECT_SHELL", "d2b")
             .env("D2B_BAZEL_SOURCE_ROOT", &source_root)
             .env("D2B_BAZEL_TRUSTED_ROOT", &trusted_root)
+            .env("D2B_FAKE_TRUSTED_ROOT", &trusted_root)
             .env("D2B_BAZEL_CHECK_SCRATCH", scratch.join("evidence"))
             .env("D2B_BAZEL_TRUSTED", "1")
             .env("D2B_BAZEL_PROFILE", "local")
@@ -2710,7 +2719,7 @@ fn trusted_ci_rejects_pr_metadata_tampering() {
     let output = run(base_commit, "base", "v3");
     assert_eq!(output.status.code(), Some(76));
     assert!(
-        String::from_utf8_lossy(&output.stderr).contains("not based on protected base"),
+        String::from_utf8_lossy(&output.stderr).contains("not based on the protected base"),
         "base ancestry failure must identify the protected-base check: {output:?}"
     );
     let output = run(base_commit, "head", "v3");
