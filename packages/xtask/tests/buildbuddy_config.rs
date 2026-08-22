@@ -4,8 +4,10 @@ use std::{
     collections::{BTreeMap, BTreeSet},
     os::unix::fs::PermissionsExt,
     path::{Path, PathBuf},
-    process::Command,
+    process::{Command, Stdio},
     sync::OnceLock,
+    thread,
+    time::Duration,
 };
 
 use serde_json::Value;
@@ -101,6 +103,21 @@ fn write_fake_nix(path: &Path) {
          export D2B_XTASK_BIN=\"$D2B_FAKE_XTASK\"\n\
          exec \"$@\"\n",
     );
+}
+
+fn only_evidence_run(root: &Path) -> PathBuf {
+    let runs = std::fs::read_dir(root)
+        .unwrap_or_else(|error| panic!("read evidence root {}: {error}", root.display()))
+        .map(|entry| entry.expect("read evidence entry").path())
+        .filter(|path| path.is_dir())
+        .collect::<Vec<_>>();
+    assert_eq!(
+        runs.len(),
+        1,
+        "expected one isolated evidence run below {}",
+        root.display()
+    );
+    runs.into_iter().next().unwrap()
 }
 
 fn object<'a>(value: &'a Value, context: &str) -> &'a serde_json::Map<String, Value> {
@@ -565,7 +582,7 @@ fn failed_bootstrap_removes_protected_raw_log() {
         std::fs::read_to_string(&mode).expect("read bootstrap mode"),
         "600\n"
     );
-    assert!(!evidence.join("bootstrap.log").exists());
+    assert!(!only_evidence_run(&evidence).join("bootstrap.log").exists());
     let diagnostics = format!(
         "{}{}",
         String::from_utf8_lossy(&output.stdout),
@@ -610,8 +627,9 @@ fn warning_after_successful_bootstrap_fails_without_leaking_credentials() {
     assert!(diagnostics.contains("bootstrap warning line found"));
     assert!(diagnostics.contains("warning: [REDACTED]"));
     assert!(!diagnostics.contains("bootstrap-secret"));
+    let evidence_run = only_evidence_run(&evidence);
     assert_eq!(
-        std::fs::read_to_string(evidence.join("bootstrap.log"))
+        std::fs::read_to_string(evidence_run.join("bootstrap.log"))
             .expect("read redacted bootstrap log"),
         "warning: [REDACTED]"
     );
@@ -656,6 +674,96 @@ fn warning_after_cache_hit_fails_a_successful_local_run() {
     );
     assert!(diagnostics.contains("warning: synthetic toolchain warning"));
     assert!(!diagnostics.contains("bazel-check: local passed"));
+    let _ = std::fs::remove_dir_all(scratch);
+}
+
+#[test]
+fn concurrent_facades_isolate_warning_evidence() {
+    let scratch = repo_root().join(".scratch").join(format!(
+        "bazel-check-concurrent-warning-{}",
+        std::process::id()
+    ));
+    std::fs::create_dir_all(&scratch).expect("create wrapper test scratch");
+    let warning_bazel = scratch.join("warning-bazel");
+    let clean_bazel = scratch.join("clean-bazel");
+    let warning_ready = scratch.join("warning-ready");
+    let warning_release = scratch.join("warning-release");
+    write_executable(
+        &warning_bazel,
+        "#!/usr/bin/env bash\n\
+         for arg in \"$@\"; do\n\
+           case \"$arg\" in\n\
+             --build_event_json_file=*) bep=\"${arg#*=}\" ;;\n\
+           esac\n\
+         done\n\
+         printf 'warning: concurrent toolchain warning\\n'\n\
+         printf '{\"id\":{\"started\":{\"uuid\":\"warning\"}},\"testResult\":{\"label\":\"//:test\"}}\\n' > \"$bep\"\n\
+         : > \"$D2B_WARNING_READY\"\n\
+         while [ ! -e \"$D2B_WARNING_RELEASE\" ]; do sleep 0.01; done\n\
+         exit 0\n",
+    );
+    write_executable(
+        &clean_bazel,
+        "#!/usr/bin/env bash\n\
+         for arg in \"$@\"; do\n\
+           case \"$arg\" in\n\
+             --build_event_json_file=*) bep=\"${arg#*=}\" ;;\n\
+           esac\n\
+         done\n\
+         printf 'clean build\\n'\n\
+         printf '{\"id\":{\"started\":{\"uuid\":\"clean\"}},\"testResult\":{\"label\":\"//:test\"}}\\n' > \"$bep\"\n\
+         exit 0\n",
+    );
+
+    let evidence = scratch.join("evidence");
+    let warning = Command::new("bash")
+        .arg(repo_root().join("tests/tools/bazel-check"))
+        .args(["--profile", "local", "--", "//:test"])
+        .env("D2B_BAZEL_BIN", &warning_bazel)
+        .env("D2B_XTASK_BIN", env!("CARGO_BIN_EXE_xtask"))
+        .env("D2B_BAZEL_CHECK_SCRATCH", &evidence)
+        .env("D2B_WARNING_READY", &warning_ready)
+        .env("D2B_WARNING_RELEASE", &warning_release)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("start warning bazel-check");
+
+    for _ in 0..500 {
+        if warning_ready.exists() {
+            break;
+        }
+        thread::sleep(Duration::from_millis(10));
+    }
+    assert!(warning_ready.exists(), "warning facade did not reach barrier");
+
+    let clean = Command::new("bash")
+        .arg(repo_root().join("tests/tools/bazel-check"))
+        .args(["--profile", "local", "--", "//:test"])
+        .env("D2B_BAZEL_BIN", &clean_bazel)
+        .env("D2B_XTASK_BIN", env!("CARGO_BIN_EXE_xtask"))
+        .env("D2B_BAZEL_CHECK_SCRATCH", &evidence)
+        .output()
+        .expect("run clean bazel-check");
+    assert!(clean.status.success());
+
+    std::fs::write(&warning_release, "").expect("release warning facade");
+    let warning = warning.wait_with_output().expect("wait for warning facade");
+    assert_eq!(warning.status.code(), Some(1));
+    let diagnostics = format!(
+        "{}{}",
+        String::from_utf8_lossy(&warning.stdout),
+        String::from_utf8_lossy(&warning.stderr)
+    );
+    assert!(diagnostics.contains("warning: concurrent toolchain warning"));
+    assert_eq!(
+        std::fs::read_dir(&evidence)
+            .expect("read concurrent evidence root")
+            .filter_map(Result::ok)
+            .filter(|entry| entry.path().is_dir())
+            .count(),
+        2
+    );
     let _ = std::fs::remove_dir_all(scratch);
 }
 

@@ -3,7 +3,8 @@ set -euo pipefail
 
 ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../.." && pwd)"
 PROFILE=""
-SCRATCH="${D2B_BAZEL_CHECK_SCRATCH:-$ROOT/.scratch/bazel-check}"
+SCRATCH_ROOT="${D2B_BAZEL_CHECK_SCRATCH:-$ROOT/.scratch/bazel-check}"
+SCRATCH="$SCRATCH_ROOT/run-${BASHPID}-${RANDOM}"
 TARGETS=()
 REDACTION_FAILURE_STATUS=75
 CONFIGURATION_FAILURE_STATUS=76
@@ -257,7 +258,12 @@ if [ -z "$bazel_bin" ] || [ ! -x "$bazel_bin" ]; then
   exit "$CONFIGURATION_FAILURE_STATUS"
 fi
 
-mkdir -p "$SCRATCH"
+mkdir -p "$SCRATCH_ROOT"
+if ! (umask 077; mkdir "$SCRATCH"); then
+  echo "bazel-check: cannot create isolated evidence directory" >&2
+  exit 1
+fi
+export D2B_BAZEL_CHECK_SCRATCH="$SCRATCH"
 if [ -z "${D2B_XTASK_BIN:-}" ] || [ ! -x "${D2B_XTASK_BIN}" ]; then
   bootstrap_log="$SCRATCH/bootstrap.log"
   if ! (umask 077; : >"$bootstrap_log") || ! chmod 0600 "$bootstrap_log"; then

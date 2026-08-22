@@ -177,11 +177,12 @@ dependency or exec-configuration policy. Rust link actions also pass
 
 ## Redaction and failure output
 
-The facade writes redacted logs and BEP output below
-`.scratch/bazel-check/`. `bazel-evidence redact-log` rejects credential keys,
-authorization values, header authentication fields, and configured sentinel
-values before evidence is published while preserving safe failure and dispatch
-hints for classification. The same redaction applies to local fallback output.
+The facade writes each invocation's redacted logs and BEP output to an isolated
+run directory below `.scratch/bazel-check/`. `bazel-evidence redact-log`
+rejects credential keys, authorization values, header authentication fields,
+and configured sentinel values before evidence is published while preserving
+safe failure and dispatch hints for classification. The same redaction applies
+to local fallback output.
 After redaction, every retained profile rejects a log line beginning with
 `warning:`. This check applies to local, remote, trusted-seed, and local
 fallback runs, including otherwise-successful cache hits. Warning failures are
