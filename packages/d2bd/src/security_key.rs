@@ -14,22 +14,15 @@ use std::os::unix::fs::PermissionsExt;
 use std::os::unix::net::UnixListener as StdUnixListener;
 use std::path::Path;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant};
 
 use d2b_provider_device_security_key::{
-    CTAPHID_BROADCAST_CID, CTAPHID_CANCEL, CTAPHID_CBOR, CTAPHID_ERROR, CTAPHID_ERR_CHANNEL_BUSY,
-    CTAPHID_ERR_INVALID_CMD, CTAPHID_INIT,
-    CTAPHID_INIT_PKT_BIT, CTAPHID_KEEPALIVE, CTAPHID_MSG, CTAPHID_PING, CTAPHID_REPORT_SIZE,
-    CTAPHID_WINK, CEREMONY_TIMEOUT, CtaphidContPacket, CtaphidInitPacket, CtaphidPacket,
-    CtaphidReport, CidTranslator, LeaseId, QUEUE_WAIT_TIMEOUT,
-    relay::LeaseState as RelayLeaseState,
-    build_cancel_packet, build_error_report, build_init_packet, parse_ctaphid_report,
-    recv_report, send_report,
+    CTAPHID_BROADCAST_CID, CTAPHID_INIT, CTAPHID_REPORT_SIZE, CtaphidPacket, CtaphidReport,
+    QUEUE_WAIT_TIMEOUT, build_cancel_packet, parse_ctaphid_report,
 };
 pub use d2b_provider_device_security_key::SecurityKeyState;
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt, unix::AsyncFd};
-use tracing::{debug, info};
+use tracing::info;
 
 // ---------------------------------------------------------------------------
 // Hidraw device handle
@@ -576,9 +569,15 @@ pub(crate) async fn run_connection(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use d2b_provider_device_security_key::{
+        CTAPHID_CANCEL, CTAPHID_CBOR, CTAPHID_ERROR, CTAPHID_ERR_CHANNEL_BUSY,
+        CTAPHID_ERR_INVALID_CMD, CidTranslator, LeaseId, build_error_report, build_init_packet,
+        recv_report, relay::LeaseState as RelayLeaseState, send_report,
+    };
     use std::fs;
     use std::io::Cursor;
     use std::path::PathBuf;
+    use std::sync::atomic::{AtomicU64, Ordering};
 
     fn test_scratch_dir(name: &str) -> PathBuf {
         static NEXT_TEST_ID: AtomicU64 = AtomicU64::new(1);

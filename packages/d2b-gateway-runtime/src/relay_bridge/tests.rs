@@ -86,7 +86,7 @@ async fn control_close_joins_before_second_bridge_can_start() {
             r#"{"accept":{"address":"local-test"}}"#.into(),
         )))
         .unwrap();
-    let (mut first_local, _) = timeout(Duration::from_secs(1), listener.accept())
+    let (first_local, _) = timeout(Duration::from_secs(1), listener.accept())
         .await
         .unwrap()
         .unwrap();
