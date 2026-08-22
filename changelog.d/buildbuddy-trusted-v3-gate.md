@@ -1,14 +1,17 @@
 ### Changed
 
-- Kept the fixed Layer-1 PR and push gate owned by protected `v3` while making
-  every GitHub Actions Bazel action local and credential-free. Developer
-  BuildBuddy profiles and the immutable cache/OID contract remain available
-  for a future non-Actions Workflows trial.
+- Moved the credential-bearing Layer-1 PR and push gate to protected `v3`.
+  Remote-eligible Rust and policy actions use BuildBuddy, while Nix, fixture,
+  and other local-only actions remain local under the existing fixed target
+  sets and stable `check` result.
 
 ### Security
 
-- Preserved trusted/bootstrap checkouts, immutable PR and run metadata
-  validation, PR/head cache namespaces, and the trusted control overlay while
-  removing BuildBuddy secrets and remote profiles from GitHub Actions. The
-  facade now rejects non-local profiles when invoked by Actions, so a workflow
-  change cannot silently restore credential-bearing remote execution.
+- Added trusted/bootstrap checkouts, immutable PR and run metadata validation,
+  PR/head cache namespaces, and an anonymous-memfd BuildBuddy credential
+  boundary. Missing or failed remote authentication now fails closed in the
+  credential-bearing CI path. Fixed suite definitions and the workflow/Make
+  control files are now overlaid from trusted `v3`, and the tier-0 preflight
+  remains local and credential-free. Credential-bearing jobs reject local
+  action execution and run local policy checks on a fresh credential-free
+  runner.

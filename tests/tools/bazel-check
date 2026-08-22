@@ -540,11 +540,6 @@ case "$PROFILE" in
     ;;
 esac
 
-if [ "${GITHUB_ACTIONS:-false}" = true ] && [ "$PROFILE" != local ]; then
-  echo "bazel-check: GitHub Actions CI is local-only; remote profiles are reserved for non-Actions runs" >&2
-  exit "$CONFIGURATION_FAILURE_STATUS"
-fi
-
 if [ "${D2B_PROJECT_SHELL:-}" != d2b ]; then
   echo "bazel-check: D2B_PROJECT_SHELL=d2b is required; enter a d2b development shell" >&2
   exit "$CONFIGURATION_FAILURE_STATUS"

@@ -139,12 +139,12 @@ settings or claim atomic base binding.
 `make check` invokes the public Bazel suite facade and its nested Layer-1
 component and package suites. Bare local runs use the BuildBuddy profile for
 eligible actions and automatically fall back to local execution when no
-credential is available. The protected `v3` CI workflow owns the trusted
-checkout and runs every Bazel action locally without BuildBuddy credentials.
-Developer remote profiles and their isolated cache domains remain available
-for a future non-Actions BuildBuddy Workflows trial. Make aliases are thin
-facade entry points, while Cargo manifests and lockfiles remain rules_rs
-metadata authority rather than contributor workflow entry points.
+credential is available. The protected `v3` CI workflow runs eligible Rust and
+policy actions through BuildBuddy with a brokered repository secret, keeps Nix
+and fixture actions local, and fails closed instead of reducing a
+credential-bearing job to a local gate. Make aliases are thin facade entry
+points, while Cargo manifests and lockfiles remain rules_rs metadata
+authority rather than contributor workflow entry points.
 
 The full invariants are in
 [`docs/contributing/critical-subsystems.md`](./docs/contributing/critical-subsystems.md).

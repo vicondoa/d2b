@@ -60,7 +60,8 @@ jobs:
     timeout-minutes: 30
     env:
       D2B_BAZEL_TRUSTED: "1"
-      D2B_BAZEL_PROFILE: local
+      D2B_BAZEL_PROFILE: ${{ github.event_name == 'push' && 'trusted-seed' || 'remote' }}
+      D2B_BAZEL_REQUIRE_REMOTE: "1"
       D2B_BAZEL_TEST_TAG_FILTERS: "-local,-no-remote-exec,-manual,-gpu,-kvm"
       D2B_BAZEL_BASE_SHA: ${{ github.event.pull_request.base.sha || github.sha }}
       D2B_BAZEL_HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
@@ -88,7 +89,11 @@ jobs:
           extra_nix_config: |
             experimental-features = nix-command flakes
       - name: Policy and tooling suite
-        run: make -C trusted test-policy
+        env:
+          D2B_BUILDBUDDY_API_KEY: ${{ secrets.D2B_BUILDBUDDY_API_KEY }}
+        run: |
+          printf '%s' "$D2B_BUILDBUDDY_API_KEY" | env -u D2B_BUILDBUDDY_API_KEY ./trusted/tests/tools/bazel-check-bootstrap \
+            make -C trusted test-policy
 
   policy-local:
     if: ${{ github.event_name == 'push' || github.event.pull_request.merge_commit_sha != '' }}
@@ -124,6 +129,7 @@ jobs:
             experimental-features = nix-command flakes
       - name: Local policy-only suite
         env:
+          D2B_BAZEL_REQUIRE_REMOTE: "0"
           D2B_BAZEL_TEST_TAG_FILTERS: "-manual,-gpu,-kvm"
         run: make -C trusted test-policy
 
@@ -133,7 +139,8 @@ jobs:
     timeout-minutes: 90
     env:
       D2B_BAZEL_TRUSTED: "1"
-      D2B_BAZEL_PROFILE: local
+      D2B_BAZEL_PROFILE: ${{ github.event_name == 'push' && 'trusted-seed' || 'remote' }}
+      D2B_BAZEL_REQUIRE_REMOTE: "1"
       D2B_BAZEL_TEST_TAG_FILTERS: "-local,-no-remote-exec,-manual,-exclusive,-gpu,-kvm"
       D2B_BAZEL_BASE_SHA: ${{ github.event.pull_request.base.sha || github.sha }}
       D2B_BAZEL_HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
@@ -161,7 +168,11 @@ jobs:
           extra_nix_config: |
             experimental-features = nix-command flakes
       - name: Portable Rust main suite
-        run: make -C trusted test-rust-main
+        env:
+          D2B_BUILDBUDDY_API_KEY: ${{ secrets.D2B_BUILDBUDDY_API_KEY }}
+        run: |
+          printf '%s' "$D2B_BUILDBUDDY_API_KEY" | env -u D2B_BUILDBUDDY_API_KEY ./trusted/tests/tools/bazel-check-bootstrap \
+            make -C trusted test-rust-main
 
   rust-broker:
     if: ${{ github.event_name == 'push' || github.event.pull_request.merge_commit_sha != '' }}
@@ -169,7 +180,8 @@ jobs:
     timeout-minutes: 90
     env:
       D2B_BAZEL_TRUSTED: "1"
-      D2B_BAZEL_PROFILE: local
+      D2B_BAZEL_PROFILE: ${{ github.event_name == 'push' && 'trusted-seed' || 'remote' }}
+      D2B_BAZEL_REQUIRE_REMOTE: "1"
       D2B_BAZEL_TEST_TAG_FILTERS: "-local,-no-remote-exec,-manual,-gpu,-kvm"
       D2B_BAZEL_BASE_SHA: ${{ github.event.pull_request.base.sha || github.sha }}
       D2B_BAZEL_HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
@@ -197,7 +209,11 @@ jobs:
           extra_nix_config: |
             experimental-features = nix-command flakes
       - name: Broker suite
-        run: make -C trusted test-rust-broker
+        env:
+          D2B_BUILDBUDDY_API_KEY: ${{ secrets.D2B_BUILDBUDDY_API_KEY }}
+        run: |
+          printf '%s' "$D2B_BUILDBUDDY_API_KEY" | env -u D2B_BUILDBUDDY_API_KEY ./trusted/tests/tools/bazel-check-bootstrap \
+            make -C trusted test-rust-broker
 
   rust-guest:
     if: ${{ github.event_name == 'push' || github.event.pull_request.merge_commit_sha != '' }}
@@ -205,7 +221,8 @@ jobs:
     timeout-minutes: 90
     env:
       D2B_BAZEL_TRUSTED: "1"
-      D2B_BAZEL_PROFILE: local
+      D2B_BAZEL_PROFILE: ${{ github.event_name == 'push' && 'trusted-seed' || 'remote' }}
+      D2B_BAZEL_REQUIRE_REMOTE: "1"
       D2B_BAZEL_TEST_TAG_FILTERS: "-local,-no-remote-exec,-manual,-gpu,-kvm"
       D2B_BAZEL_BASE_SHA: ${{ github.event.pull_request.base.sha || github.sha }}
       D2B_BAZEL_HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
@@ -233,7 +250,11 @@ jobs:
           extra_nix_config: |
             experimental-features = nix-command flakes
       - name: Guest shell runner suite
-        run: make -C trusted test-rust-guest-shell-runner
+        env:
+          D2B_BUILDBUDDY_API_KEY: ${{ secrets.D2B_BUILDBUDDY_API_KEY }}
+        run: |
+          printf '%s' "$D2B_BUILDBUDDY_API_KEY" | env -u D2B_BUILDBUDDY_API_KEY ./trusted/tests/tools/bazel-check-bootstrap \
+            make -C trusted test-rust-guest-shell-runner
 
   rust-local:
     if: ${{ github.event_name == 'push' || github.event.pull_request.merge_commit_sha != '' }}

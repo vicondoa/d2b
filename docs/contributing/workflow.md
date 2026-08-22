@@ -179,10 +179,8 @@ finding remains at merge.
 
 The Bazel graph is the single enforcing Layer-1 authority. Bare local
 `make check` uses BuildBuddy for eligible actions. Protected `v3` CI runs
-the trusted workflow and local profile for every action; it never receives
-BuildBuddy credentials or executes remote Bazel. Developer remote profiles,
-immutable OID metadata, and isolated cache domains remain a narrow handoff
-for a future non-Actions BuildBuddy Workflows trial.
+credential-bearing remote suites for eligible actions and keeps Nix, fixture,
+hardware, and other local-only lanes local and credential-free.
 Make remains a compatibility surface, not a scheduler. See [Bazel and
 BuildBuddy](../reference/bazel-buildbuddy.md) for execution, cache, failure,
 credential, and update contracts.

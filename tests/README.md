@@ -68,7 +68,7 @@ The source-hygiene gate fails closed when `D2B_SHELLCHECK_BIN` is unavailable.
 | `make test-integration` | type-9 podman container tests | conditional local host lane (podman; not the PR pipeline) |
 | `make test-host-integration` | type-10 runNixOSTest VM checks; set `D2B_VM_CHECK=<name>` for one named check | conditional local NixOS host lane (KVM; TCG fallback; not the PR pipeline) |
 | `make check-fast` | compatibility alias for `make check` | local + CI |
-| `make bazel-check` | Bazel aggregate suite used by `make check`. Defaults to BuildBuddy remotely; protected `v3` CI uses the trusted local profile | local or remote |
+| `make bazel-check` | Bazel aggregate suite used by `make check`. Defaults to BuildBuddy remotely; protected `v3` CI uses the trusted remote/local split | local or remote |
 | `make heavy-gate-build && bazel-bin/packages/xtask/xtask heavy-gate -- env D2B_LIVE=1 bash tests/integration/live/<x>.sh` | type-11 live-host tests, through the heavy-gate semaphore | **manual, against a deployed d2b host** |
 
 `make check`, `make test-unit`, and `make bazel-check` invoke the same nested
@@ -94,10 +94,9 @@ utilities used by `tests/tools/bazel-check`; no ambient host Bazel or jq is
 required. An unrelated Nix shell is not accepted as the d2b shell. Optional
 direnv integration is supported for interactive use but is not required.
 Protected `v3` CI installs Nix and calls the same public Make aliases from the
-trusted checkout. Every GitHub Actions Bazel job uses the local profile and
-receives no BuildBuddy credential. Developer remote profiles and the immutable
-OID/cache handoff remain reserved for a future non-Actions BuildBuddy
-Workflows trial.
+trusted checkout. Remote-eligible jobs use the brokered BuildBuddy credential;
+Nix, fixture, hardware, and other local-only jobs remain local and
+credential-free.
 
 `make test-policy` does not schedule
 `tests/tools/guest-workspace-drift.py`. The retained
@@ -183,13 +182,14 @@ membership, dependencies, and features consumed by rules_rs. Do not add a
 second Cargo lock, source inventory, generator, discovery job, or shell
 scheduler.
 
-`tests/tools/bazel-check` retains the BuildBuddy security boundary for
-developer and future non-Actions use. It uses Bazel's credential helper,
-withholds credentials from untrusted work, redacts logs and BEP output, and
-retries the identical target set locally only for a typed pre-dispatch
-infrastructure failure. Post-dispatch and test failures fail closed. Provider
-measurements do not define a second acceptance gate. Protected `v3` CI uses
-the same trusted control validation with the local profile and no credential.
+`tests/tools/bazel-check` retains the BuildBuddy security boundary. It uses
+Bazel's credential helper, withholds credentials from untrusted work, redacts
+logs and BEP output, and retries the identical target set locally only for a
+typed pre-dispatch infrastructure failure. Post-dispatch and test failures
+fail closed. Provider measurements do not define a second acceptance gate.
+Protected `v3` CI uses this boundary for credential-bearing remote suites,
+while Nix, fixture, hardware, and other local-only actions remain local and
+credential-free.
 The facade consumes `D2B_BAZEL_BIN` from the pinned shell and rejects an
 incomplete shell contract; it does not search for a hard-coded Nix-store
 Bazel path.

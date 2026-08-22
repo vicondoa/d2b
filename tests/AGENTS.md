@@ -154,11 +154,9 @@ only through Bazel's credential-helper protocol, withholds credentials from
 untrusted jobs, redacts logs and BEP output, and permits one identical local
 retry only for typed pre-dispatch infrastructure failures. In trusted `v3`
 CI it runs a staged tested source with trusted control files, validates event
-OIDs and PR/run metadata, and preserves the PR cache namespace contract even
-though GitHub Actions uses the local profile and never receives a BuildBuddy
-credential. Post-dispatch, analysis, policy, build, and test failures fail
-closed. Developer remote profiles remain available for the future
-non-Actions BuildBuddy Workflows trial.
+OIDs and PR/run metadata, isolates the PR cache namespace, and requires the
+remote path. Post-dispatch, analysis, policy, build, and test failures fail
+closed.
 
 Bazel is the only supported contributor build and test interface. Cargo
 manifests and the root `Cargo.lock` own Rust package and dependency facts;
