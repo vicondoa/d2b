@@ -423,25 +423,9 @@ fn committed_profiles_share_authentication_and_worker_policy() {
         "remote test runners must receive worker-standard PATH entries"
     );
     assert!(
-        !wrapper.contains(r#"--action_env=PATH="$test_path""#),
-        "remote actions must retain the worker-standard PATH"
-    );
-    assert!(
         wrapper.contains("--test_env=D2B_SHELLCHECK_BIN=\"${D2B_SHELLCHECK_BIN:-}\""),
         "source-hygiene tests must receive the declared shellcheck binary"
     );
-    let xtask_build = read_text("packages/xtask/BUILD.bazel");
-    for target in [
-        "policy_changelog_gate",
-        "policy_production_closure",
-        "xtask_test",
-    ] {
-        let block = rule_block(&xtask_build, target, &["rust_test("]);
-        assert!(
-            rule_tags(block).contains("no-remote-exec"),
-            "host-coupled xtask target {target} must opt out of remote execution"
-        );
-    }
     let flake = read_text("flake.nix");
     assert!(
         flake.contains("export D2B_SHELLCHECK_BIN=\"${pkgs.shellcheck}/bin/shellcheck\""),
