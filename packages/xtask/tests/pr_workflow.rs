@@ -302,8 +302,8 @@ fn trusted_workflow_rejects_malicious_control_plane_edits() {
             "pull_request:\n    branches: [v3]",
         ),
         workflow.replace(
-            "./trusted/tests/tools/bazel-check-bootstrap",
-            "python3 ./workspace/tests/tools/bazel-check-bootstrap",
+            "permissions:\n  contents: read",
+            "permissions:\n  contents: write",
         ),
         workflow.replace(
             "github.event_name == 'push' && github.sha || github.event.pull_request.merge_commit_sha",
