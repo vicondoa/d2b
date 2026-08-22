@@ -141,10 +141,10 @@ fn main_controlled_buildbuddy_workflows_preserve_trust_contract() {
         "PR workflow must not run untrusted pull_request controls"
     );
     assert!(
-        pr.contains(
-            "uses: vicondoa/d2b/.github/workflows/build.yaml@refs/heads/main"
-        ) && pr.contains("D2B_BUILDBUDDY_API_KEY: ${{ secrets.D2B_BUILDBUDDY_API_KEY }}"),
-        "PR workflow must call the main-owned reusable build at main with only the BuildBuddy secret"
+        pr.contains("uses: vicondoa/d2b/.github/workflows/build.yaml@refs/heads/main")
+            && !pr.contains("D2B_BUILDBUDDY_API_KEY")
+            && !pr.contains("secrets: inherit"),
+        "PR workflow must call the main-owned reusable build at main without PR secret access"
     );
 
     assert!(

@@ -11,5 +11,3 @@ jobs:
   build:
     name: build
     uses: vicondoa/d2b/.github/workflows/build.yaml@refs/heads/main
-    secrets:
-      D2B_BUILDBUDDY_API_KEY: ${{ secrets.D2B_BUILDBUDDY_API_KEY }}
