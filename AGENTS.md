@@ -23,6 +23,12 @@ document disagrees with committed, passing code, keep the code and document
 the drift. If a load-bearing behavior described here changes, update this file
 with the same change.
 
+Contributor orchestration is owned by the standalone
+[`d2b-gascity`](https://github.com/vicondoa/d2b-gascity) repository, and NixOS
+host distribution and installation are owned by
+[`gascity.nix`](https://github.com/vicondoa/gascity.nix). d2b does not own a
+replacement contributor runtime or host-state migration.
+
 ## Start here
 
 Use this index, then open the focused document instead of expanding this file.
@@ -36,7 +42,7 @@ Use this index, then open the focused document instead of expanding this file.
 | Gates, heavy lanes, and build profiles | [`docs/contributing/gates-and-lints.md`](./docs/contributing/gates-and-lints.md) |
 | Architecture and per-VM features | [`docs/contributing/architecture.md`](./docs/contributing/architecture.md) and [ADR 0015](./docs/adr/0015-daemon-only-clean-break.md) |
 | Critical subsystem invariants | [`docs/contributing/critical-subsystems.md`](./docs/contributing/critical-subsystems.md) |
-| Optional Gas City infrastructure | [`docs/contributing/gas-city.md`](./docs/contributing/gas-city.md) |
+| Contributor orchestration and host distribution | [`d2b-gascity`](https://github.com/vicondoa/d2b-gascity) for orchestration and [`gascity.nix`](https://github.com/vicondoa/gascity.nix) for NixOS distribution and installation |
 
 ## Mandatory contributor-agent workflow
 
@@ -125,8 +131,9 @@ settings or claim atomic base binding.
   advisory skip as validation evidence.
 - Every code change ships a valid changelog entry or a fragment under
   [`changelog.d/`](./changelog.d/).
-- Leave `nix/gas-city-contributor/**` and its managed authority unchanged;
-  ordinary repo skill policy makes no visibility claim for managed sessions.
+- The retired repository-local contributor runtime has no ordinary-work
+  exception. Do not add a replacement in d2b; use the standalone owners linked
+  above for orchestration and host distribution.
 - `main` and `v3` are protected and land only through reviewed pull requests.
   Use short imperative area-prefixed commit subjects and no AI, tool, or model
   attribution.
