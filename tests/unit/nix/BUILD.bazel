@@ -20,7 +20,6 @@ exports_files([
     "cases/external-vm-kind.nix",
     "cases/external-vm-kind-rejections.nix",
     "cases/external-vm-kind-runtime.nix",
-    "cases/gas-city-contributor.nix",
     "cases/gateway-vm-1.nix",
     "cases/gateway-vm-2.nix",
     "cases/gateway-vm-3.nix",

@@ -934,7 +934,7 @@ fn focused_bazel_shell_exports_the_complete_facade_contract() {
         .find("bazel = pkgs.mkShellNoCC")
         .expect("focused Bazel shell definition");
     let bazel_end = flake[bazel_start..]
-        .find("gas-city = pkgs.mkShell")
+        .find("\n      });\n\n      packages = forAllSystems")
         .map(|offset| bazel_start + offset)
         .expect("focused Bazel shell boundary");
     let bazel_shell = &flake[bazel_start..bazel_end];

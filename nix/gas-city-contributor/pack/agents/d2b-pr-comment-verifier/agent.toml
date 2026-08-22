@@ -1,3 +1,0 @@
-description = "Read-only re-verification of pull-request comment-resolution edits"
-scope = "rig"
-fallback = true
