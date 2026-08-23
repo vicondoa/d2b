@@ -256,6 +256,20 @@ fn main_controlled_buildbuddy_workflows_preserve_trust_contract() {
             .find("\n  remote:\n")
             .expect("build workflow must define a remote job");
     let local_job = &build[local_job_start..local_job_end];
+    let local_env_start = local_job
+        .find("\n    env:\n")
+        .expect("local job must define a job-level environment");
+    let local_env_end = local_env_start
+        + local_job[local_env_start..]
+            .find("\n    steps:\n")
+            .expect("local job environment must end before its steps");
+    let local_env = &local_job[local_env_start..local_env_end];
+    let local_env_lines = local_env.lines().collect::<Vec<_>>();
+    assert!(
+        local_env_lines.contains(&"      D2B_CHECK_JOBS: \"1\"")
+            && local_env_lines.contains(&"      D2B_FLAKE_JOBS: \"1\""),
+        "main hosted local gate must export serialized Layer-1 bounds at job scope"
+    );
     let rust_bootstrap = local_job
         .find("      - name: Prepare pinned Rust toolchain for parallel Layer-1 gates")
         .expect("local Layer-1 gate must prepare the shared Rust toolchain");
@@ -278,10 +292,32 @@ fn main_controlled_buildbuddy_workflows_preserve_trust_contract() {
         "credential-bearing remote execution must be restricted to trusted main pushes"
     );
     assert!(
-        build.contains("refs/heads/$D2B_DEFAULT_BRANCH")
+        build.contains("name: Resolve live pull request merge ref")
+            && build.contains("if: ${{ github.event_name == 'pull_request_target' }}")
+            && build.contains("ref: ${{ github.event_name == 'push' && github.sha || steps.resolve.outputs.merge_sha }}")
+            && build.contains("git ls-remote --exit-code \"https://github.com/$D2B_REPOSITORY.git\"")
+            && build.contains("git -C source show -s --format='%P' \"$tested_sha\"")
+            && build.contains("refs/heads/$D2B_BASE_REF")
+            && build.contains("refs/pull/$D2B_PR_NUMBER/head")
+            && build.contains("D2B_RESOLVED_BASE_SHA")
+            && build.contains("D2B_RESOLVED_HEAD_SHA")
+            && build.contains("D2B_RESOLVED_MERGE_SHA")
+            && build.contains("base_sha=\"$(advertised_sha")
+            && build.contains("head_sha=\"$(advertised_sha")
+            && build.contains("merge_sha=\"$(advertised_sha")
+            && !build.contains("printf 'base_sha=%s\\n' \"$(advertised_sha")
+            && build.contains("[ \"$tested_sha\" = \"$D2B_RESOLVED_MERGE_SHA\" ]")
+            && build.contains("[ \"$D2B_RESOLVED_HEAD_SHA\" = \"$D2B_HEAD_SHA\" ]")
+            && build.contains("[ \"$merge_parent_base\" = \"$D2B_BASE_SHA\" ]")
+            && build.contains("[ \"$merge_parent_head\" = \"$D2B_HEAD_SHA\" ]")
+            && build.contains("live pull request refs are unavailable")
+            && build.contains("live pull request ref is malformed")
+            && build.contains("live pull request merge ref does not bind the current base and head")
+            && !build.contains("github.event.pull_request.merge_commit_sha")
+            && build.contains("refs/heads/$D2B_DEFAULT_BRANCH")
             && build.contains("secret = os.read(9, 4096)")
             && build.contains("9<&0"),
-        "PR ref validation and credential bootstrap must match GitHub's default-branch semantics"
+        "PR merge-ref validation and credential bootstrap must match GitHub's default-branch semantics"
     );
     assert!(
         build.contains("redact") && build.contains("^warning:"),
