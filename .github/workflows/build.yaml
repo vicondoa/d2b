@@ -35,10 +35,64 @@ jobs:
       instance: ${{ steps.validate.outputs.instance }}
       has_bazel: ${{ steps.validate.outputs.has_bazel }}
     steps:
+      - id: resolve
+        name: Resolve live pull request merge ref
+        if: ${{ github.event_name == 'pull_request_target' }}
+        env:
+          D2B_PR_NUMBER: ${{ github.event.pull_request.number || '' }}
+          D2B_BASE_REF: ${{ github.base_ref }}
+          D2B_REPOSITORY: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+
+          fail() {
+            echo "::error::$1" >&2
+            exit 76
+          }
+
+          is_sha() {
+            [[ "$1" =~ ^[0-9a-f]{40}$ ]]
+          }
+
+          [ "$D2B_REPOSITORY" = "vicondoa/d2b" ] ||
+            fail "the trusted build is restricted to vicondoa/d2b"
+          case "$D2B_BASE_REF" in
+            main|v3) ;;
+            *) fail "pull request target is not main or v3" ;;
+          esac
+          [ -n "$D2B_PR_NUMBER" ] && [[ "$D2B_PR_NUMBER" =~ ^[0-9]+$ ]] ||
+            fail "pull request number is invalid"
+
+          advertised_refs="$(
+            git ls-remote --exit-code "https://github.com/$D2B_REPOSITORY.git" \
+              "refs/heads/$D2B_BASE_REF" \
+              "refs/pull/$D2B_PR_NUMBER/head" \
+              "refs/pull/$D2B_PR_NUMBER/merge"
+          )" || fail "live pull request refs are unavailable"
+
+          advertised_sha() {
+            local ref="$1" line remote_sha remote_ref extra result="" count=0
+            while IFS= read -r line; do
+              read -r remote_sha remote_ref extra <<<"$line"
+              if [ "$remote_ref" = "$ref" ]; then
+                count=$((count + 1))
+                is_sha "$remote_sha" && [ -z "$extra" ] ||
+                  fail "live pull request ref is malformed: $ref"
+                result="$remote_sha"
+              fi
+            done <<<"$advertised_refs"
+            [ "$count" -eq 1 ] ||
+              fail "live pull request ref is unavailable: $ref"
+            printf '%s\n' "$result"
+          }
+
+          printf 'base_sha=%s\n' "$(advertised_sha "refs/heads/$D2B_BASE_REF")" >>"$GITHUB_OUTPUT"
+          printf 'head_sha=%s\n' "$(advertised_sha "refs/pull/$D2B_PR_NUMBER/head")" >>"$GITHUB_OUTPUT"
+          printf 'merge_sha=%s\n' "$(advertised_sha "refs/pull/$D2B_PR_NUMBER/merge")" >>"$GITHUB_OUTPUT"
       - name: Checkout immutable tested revision
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
         with:
-          ref: ${{ github.event_name == 'push' && github.sha || format('refs/pull/{0}/merge', github.event.pull_request.number) }}
+          ref: ${{ github.event_name == 'push' && github.sha || steps.resolve.outputs.merge_sha }}
           path: source
           fetch-depth: 0
           persist-credentials: false
@@ -51,6 +105,9 @@ jobs:
           D2B_DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
           D2B_BASE_SHA: ${{ github.event.pull_request.base.sha || github.sha }}
           D2B_HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+          D2B_RESOLVED_BASE_SHA: ${{ steps.resolve.outputs.base_sha || '' }}
+          D2B_RESOLVED_HEAD_SHA: ${{ steps.resolve.outputs.head_sha || '' }}
+          D2B_RESOLVED_MERGE_SHA: ${{ steps.resolve.outputs.merge_sha || '' }}
           D2B_PR_NUMBER: ${{ github.event.pull_request.number || '' }}
           D2B_BRANCH: ${{ github.head_ref || github.ref_name }}
           D2B_RUN_ID: ${{ github.run_id }}
@@ -111,24 +168,25 @@ jobs:
               fail "pull request number is invalid"
             is_sha "$D2B_BASE_SHA" || fail "pull request base SHA is invalid"
             is_sha "$D2B_HEAD_SHA" || fail "pull request head SHA is invalid"
-            resolve_remote_sha() {
-              local ref="$1" line remote_sha remote_ref extra
-              line="$(git -C source ls-remote --exit-code origin "$ref")" ||
-                fail "live pull request ref is unavailable: $ref"
-              read -r remote_sha remote_ref extra <<<"$line"
-              is_sha "$remote_sha" && [ "$remote_ref" = "$ref" ] && [ -z "$extra" ] ||
-                fail "live pull request ref is malformed: $ref"
-              printf '%s\n' "$remote_sha"
-            }
             tested_sha="$(git -C source rev-parse HEAD)"
             is_sha "$tested_sha" || fail "live pull request merge ref did not resolve to a commit"
+            is_sha "$D2B_RESOLVED_BASE_SHA" ||
+              fail "resolved pull request base SHA is invalid"
+            is_sha "$D2B_RESOLVED_HEAD_SHA" ||
+              fail "resolved pull request head SHA is invalid"
+            is_sha "$D2B_RESOLVED_MERGE_SHA" ||
+              fail "resolved pull request merge SHA is invalid"
+            [ "$tested_sha" = "$D2B_RESOLVED_MERGE_SHA" ] ||
+              fail "tested checkout does not match the resolved pull request merge ref"
+            [ "$D2B_RESOLVED_HEAD_SHA" = "$D2B_HEAD_SHA" ] ||
+              fail "pull request head changed during workflow dispatch"
             read -r merge_parent_base merge_parent_head merge_parent_extra <<< \
               "$(git -C source show -s --format='%P' "$tested_sha")"
             is_sha "$merge_parent_base" && is_sha "$merge_parent_head" &&
               [ -z "$merge_parent_extra" ] ||
               fail "live pull request merge ref must have exactly two parents"
-            D2B_BASE_SHA="$(resolve_remote_sha "refs/heads/$D2B_BASE_REF")"
-            D2B_HEAD_SHA="$(resolve_remote_sha "refs/pull/$D2B_PR_NUMBER/head")"
+            D2B_BASE_SHA="$D2B_RESOLVED_BASE_SHA"
+            D2B_HEAD_SHA="$D2B_RESOLVED_HEAD_SHA"
             [ "$merge_parent_base" = "$D2B_BASE_SHA" ] &&
               [ "$merge_parent_head" = "$D2B_HEAD_SHA" ] ||
               fail "live pull request merge ref does not bind the current base and head"
