@@ -111,10 +111,26 @@ jobs:
               fail "pull request number is invalid"
             is_sha "$D2B_BASE_SHA" || fail "pull request base SHA is invalid"
             is_sha "$D2B_HEAD_SHA" || fail "pull request head SHA is invalid"
+            resolve_remote_sha() {
+              local ref="$1" line remote_sha remote_ref extra
+              line="$(git -C source ls-remote --exit-code origin "$ref")" ||
+                fail "live pull request ref is unavailable: $ref"
+              read -r remote_sha remote_ref extra <<<"$line"
+              is_sha "$remote_sha" && [ "$remote_ref" = "$ref" ] && [ -z "$extra" ] ||
+                fail "live pull request ref is malformed: $ref"
+              printf '%s\n' "$remote_sha"
+            }
             tested_sha="$(git -C source rev-parse HEAD)"
             is_sha "$tested_sha" || fail "live pull request merge ref did not resolve to a commit"
-            [ "$(git -C source show -s --format='%P' "$tested_sha")" =
-              "$D2B_BASE_SHA $D2B_HEAD_SHA" ] ||
+            read -r merge_parent_base merge_parent_head merge_parent_extra <<< \
+              "$(git -C source show -s --format='%P' "$tested_sha")"
+            is_sha "$merge_parent_base" && is_sha "$merge_parent_head" &&
+              [ -z "$merge_parent_extra" ] ||
+              fail "live pull request merge ref must have exactly two parents"
+            D2B_BASE_SHA="$(resolve_remote_sha "refs/heads/$D2B_BASE_REF")"
+            D2B_HEAD_SHA="$(resolve_remote_sha "refs/pull/$D2B_PR_NUMBER/head")"
+            [ "$merge_parent_base" = "$D2B_BASE_SHA" ] &&
+              [ "$merge_parent_head" = "$D2B_HEAD_SHA" ] ||
               fail "live pull request merge ref does not bind the current base and head"
             D2B_MERGE_SHA="$tested_sha"
             instance="d2b/pr/$D2B_PR_NUMBER/$D2B_HEAD_SHA/linux-x86_64/rules_rs/worker-v1/minimal/lock-v1"

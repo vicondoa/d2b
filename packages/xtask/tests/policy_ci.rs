@@ -294,6 +294,13 @@ fn main_controlled_buildbuddy_workflows_preserve_trust_contract() {
     assert!(
         build.contains("format('refs/pull/{0}/merge', github.event.pull_request.number)")
             && build.contains("git -C source show -s --format='%P' \"$tested_sha\"")
+            && build.contains("git -C source ls-remote --exit-code origin \"$ref\"")
+            && build.contains("refs/heads/$D2B_BASE_REF")
+            && build.contains("refs/pull/$D2B_PR_NUMBER/head")
+            && build.contains("D2B_BASE_SHA=\"$(resolve_remote_sha")
+            && build.contains("D2B_HEAD_SHA=\"$(resolve_remote_sha")
+            && build.contains("[ \"$merge_parent_base\" = \"$D2B_BASE_SHA\" ]")
+            && build.contains("[ \"$merge_parent_head\" = \"$D2B_HEAD_SHA\" ]")
             && build.contains("live pull request merge ref does not bind the current base and head")
             && !build.contains("github.event.pull_request.merge_commit_sha")
             && build.contains("refs/heads/$D2B_DEFAULT_BRANCH")
