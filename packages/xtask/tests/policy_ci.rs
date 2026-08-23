@@ -293,6 +293,8 @@ fn main_controlled_buildbuddy_workflows_preserve_trust_contract() {
     );
     assert!(
         build.contains("name: Resolve live pull request merge ref")
+            && build.contains("if: ${{ github.event_name == 'pull_request_target' }}")
+            && build.contains("ref: ${{ github.event_name == 'push' && github.sha || steps.resolve.outputs.merge_sha }}")
             && build.contains("git ls-remote --exit-code \"https://github.com/$D2B_REPOSITORY.git\"")
             && build.contains("git -C source show -s --format='%P' \"$tested_sha\"")
             && build.contains("refs/heads/$D2B_BASE_REF")
@@ -300,6 +302,10 @@ fn main_controlled_buildbuddy_workflows_preserve_trust_contract() {
             && build.contains("D2B_RESOLVED_BASE_SHA")
             && build.contains("D2B_RESOLVED_HEAD_SHA")
             && build.contains("D2B_RESOLVED_MERGE_SHA")
+            && build.contains("base_sha=\"$(advertised_sha")
+            && build.contains("head_sha=\"$(advertised_sha")
+            && build.contains("merge_sha=\"$(advertised_sha")
+            && !build.contains("printf 'base_sha=%s\\n' \"$(advertised_sha")
             && build.contains("[ \"$tested_sha\" = \"$D2B_RESOLVED_MERGE_SHA\" ]")
             && build.contains("[ \"$D2B_RESOLVED_HEAD_SHA\" = \"$D2B_HEAD_SHA\" ]")
             && build.contains("[ \"$merge_parent_base\" = \"$D2B_BASE_SHA\" ]")

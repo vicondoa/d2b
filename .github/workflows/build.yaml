@@ -86,9 +86,12 @@ jobs:
             printf '%s\n' "$result"
           }
 
-          printf 'base_sha=%s\n' "$(advertised_sha "refs/heads/$D2B_BASE_REF")" >>"$GITHUB_OUTPUT"
-          printf 'head_sha=%s\n' "$(advertised_sha "refs/pull/$D2B_PR_NUMBER/head")" >>"$GITHUB_OUTPUT"
-          printf 'merge_sha=%s\n' "$(advertised_sha "refs/pull/$D2B_PR_NUMBER/merge")" >>"$GITHUB_OUTPUT"
+          base_sha="$(advertised_sha "refs/heads/$D2B_BASE_REF")"
+          head_sha="$(advertised_sha "refs/pull/$D2B_PR_NUMBER/head")"
+          merge_sha="$(advertised_sha "refs/pull/$D2B_PR_NUMBER/merge")"
+          printf 'base_sha=%s\n' "$base_sha" >>"$GITHUB_OUTPUT"
+          printf 'head_sha=%s\n' "$head_sha" >>"$GITHUB_OUTPUT"
+          printf 'merge_sha=%s\n' "$merge_sha" >>"$GITHUB_OUTPUT"
       - name: Checkout immutable tested revision
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
         with:
