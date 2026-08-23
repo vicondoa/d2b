@@ -38,7 +38,7 @@ jobs:
       - name: Checkout immutable tested revision
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
         with:
-          ref: ${{ github.event_name == 'push' && github.sha || github.event.pull_request.merge_commit_sha }}
+          ref: ${{ github.event_name == 'push' && github.sha || format('refs/pull/{0}/merge', github.event.pull_request.number) }}
           path: source
           fetch-depth: 0
           persist-credentials: false
@@ -51,7 +51,6 @@ jobs:
           D2B_DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
           D2B_BASE_SHA: ${{ github.event.pull_request.base.sha || github.sha }}
           D2B_HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
-          D2B_MERGE_SHA: ${{ github.event.pull_request.merge_commit_sha || github.sha }}
           D2B_PR_NUMBER: ${{ github.event.pull_request.number || '' }}
           D2B_BRANCH: ${{ github.head_ref || github.ref_name }}
           D2B_RUN_ID: ${{ github.run_id }}
@@ -112,8 +111,12 @@ jobs:
               fail "pull request number is invalid"
             is_sha "$D2B_BASE_SHA" || fail "pull request base SHA is invalid"
             is_sha "$D2B_HEAD_SHA" || fail "pull request head SHA is invalid"
-            is_sha "$D2B_MERGE_SHA" || fail "pull request merge SHA is invalid"
-            tested_sha="$D2B_MERGE_SHA"
+            tested_sha="$(git -C source rev-parse HEAD)"
+            is_sha "$tested_sha" || fail "live pull request merge ref did not resolve to a commit"
+            [ "$(git -C source show -s --format='%P' "$tested_sha")" =
+              "$D2B_BASE_SHA $D2B_HEAD_SHA" ] ||
+              fail "live pull request merge ref does not bind the current base and head"
+            D2B_MERGE_SHA="$tested_sha"
             instance="d2b/pr/$D2B_PR_NUMBER/$D2B_HEAD_SHA/linux-x86_64/rules_rs/worker-v1/minimal/lock-v1"
           elif [ "$D2B_EVENT_NAME" = "push" ]; then
             [ "$D2B_CALLER_WORKFLOW_REF" = "vicondoa/d2b/.github/workflows/build.yaml@refs/heads/main" ] ||
@@ -123,10 +126,15 @@ jobs:
               fail "trusted build pushes are restricted to main"
             [ -z "$D2B_BASE_REF" ] || fail "push events must not carry a base ref"
             [ -z "$D2B_PR_NUMBER" ] || fail "push events must not carry PR metadata"
-            is_sha "$D2B_MERGE_SHA" || fail "pushed SHA is invalid"
-            D2B_BASE_SHA="$D2B_MERGE_SHA"
-            D2B_HEAD_SHA="$D2B_MERGE_SHA"
-            tested_sha="$D2B_MERGE_SHA"
+            is_sha "$D2B_CALLER_WORKFLOW_SHA" ||
+              fail "pushed workflow SHA is invalid"
+            tested_sha="$(git -C source rev-parse HEAD)"
+            is_sha "$tested_sha" || fail "pushed revision is invalid"
+            [ "$tested_sha" = "$D2B_HEAD_SHA" ] ||
+              fail "tested checkout does not match the pushed revision"
+            D2B_BASE_SHA="$tested_sha"
+            D2B_HEAD_SHA="$tested_sha"
+            D2B_MERGE_SHA="$tested_sha"
             instance="d2b/trusted-seed/main/$tested_sha/linux-x86_64/rules_rs/worker-v1/minimal/lock-v1"
           else
             fail "only pull_request_target and push events are accepted"

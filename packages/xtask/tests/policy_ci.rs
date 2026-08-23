@@ -292,10 +292,14 @@ fn main_controlled_buildbuddy_workflows_preserve_trust_contract() {
         "credential-bearing remote execution must be restricted to trusted main pushes"
     );
     assert!(
-        build.contains("refs/heads/$D2B_DEFAULT_BRANCH")
+        build.contains("format('refs/pull/{0}/merge', github.event.pull_request.number)")
+            && build.contains("git -C source show -s --format='%P' \"$tested_sha\"")
+            && build.contains("live pull request merge ref does not bind the current base and head")
+            && !build.contains("github.event.pull_request.merge_commit_sha")
+            && build.contains("refs/heads/$D2B_DEFAULT_BRANCH")
             && build.contains("secret = os.read(9, 4096)")
             && build.contains("9<&0"),
-        "PR ref validation and credential bootstrap must match GitHub's default-branch semantics"
+        "PR merge-ref validation and credential bootstrap must match GitHub's default-branch semantics"
     );
     assert!(
         build.contains("redact") && build.contains("^warning:"),

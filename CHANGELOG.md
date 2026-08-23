@@ -55,6 +55,9 @@ deprecations ship one minor release before removal.
 - Serialized the main push workflow's nested local Layer-1 fan-out on hosted
   runners so concurrent Nix evaluation and Rust compilation cannot exhaust the
   runner before the aggregate check reports.
+- Resolved pull-request tests from the live synthetic merge ref and verified
+  its immutable base and head parents instead of trusting a stale event merge
+  SHA.
 
 ## [1.4.1] - 2026-07-12
 
