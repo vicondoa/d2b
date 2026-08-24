@@ -4,9 +4,8 @@
 //! These cases drive the guard through a real `bash` interpreter, because the
 //! helper is a bash script (`BASH_SOURCE`, arrays, `local`) that can only be
 //! exercised through the shell it targets. They live in `tests/` - not inline
-//! in `src/heavy_gate.rs` - so the ADR 0017 no-bash-exec gate stays strict for
-//! every production source location while still allowing the helper itself to
-//! be tested through bash.
+//! in `src/heavy_gate.rs` - so production source stays separate from the shell
+//! helper while the helper itself is tested through bash.
 
 use std::fs;
 use std::os::fd::AsRawFd;

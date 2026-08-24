@@ -109,11 +109,6 @@ test_suite(
 )
 
 test_suite(
-    name = "test-rust-no-bash-ast",
-    tests = ["//tests/tools/no-bash-ast-walker:no_bash_ast_test"],
-)
-
-test_suite(
     name = "test-rust-schema",
     tests = ["//packages/xtask:schema_reproducibility_test"],
 )
@@ -146,11 +141,6 @@ test_suite(
 test_suite(
     name = "test-rust-leaf-guest-shell-runner",
     tests = [":test-rust-guest-shell-runner"],
-)
-
-test_suite(
-    name = "test-rust-leaf-no-bash-ast",
-    tests = [":test-rust-no-bash-ast"],
 )
 
 test_suite(

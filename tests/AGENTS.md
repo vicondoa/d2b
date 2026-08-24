@@ -210,8 +210,8 @@ must not schedule sibling Layer-1 work.
 
 Product crates use the repository-root `Cargo.toml` and `Cargo.lock` as
 rules_rs metadata. The privileged broker and guest shell runner retain their
-explicit feature contexts, while the no-bash walker and compile-fail UI crates
-retain their separate tooling boundaries. Doctests, harness-free binaries,
-feature variants, fixtures, and policy checks must remain visible as direct
-Bazel targets. Standalone Cargo remains technically usable for focused local
-debugging, but it is not a contributor or CI authority.
+explicit feature contexts, while compile-fail UI crates retain their separate
+tooling boundaries. Doctests, harness-free binaries, feature variants,
+fixtures, and policy checks must remain visible as direct Bazel targets.
+Standalone Cargo remains technically usable for focused local debugging, but it
+is not a contributor or CI authority.

@@ -52,7 +52,6 @@ CI may continue invoking:
 make test-rust-main
 make test-rust-broker
 make test-rust-guest-shell-runner
-make test-rust-no-bash-ast
 make test-rust-schema
 make test-rust-inventory
 make test-rust-supply-chain

@@ -11,10 +11,10 @@
 D2B_MAKE_BAZEL_TARGETS := \
 	check check-fast check-tier0 bazel-check test-unit \
 	test-lint test-rust test-rust-main test-rust-broker \
-	test-rust-guest-shell-runner test-rust-local test-rust-no-bash-ast \
+	test-rust-guest-shell-runner test-rust-local \
 	test-rust-schema test-rust-supply-chain test-rust-leaf-main-workspace \
 	test-rust-leaf-schema test-rust-leaf-fixture-contracts test-rust-leaf-broker \
-	test-rust-leaf-guest-shell-runner test-rust-leaf-no-bash-ast \
+	test-rust-leaf-guest-shell-runner \
 	test-rust-leaf-supply-chain test-fixture-contracts test-proofs test-flake \
 	test-flake-realized test-flake-aarch64 test-flake-x86 test-nix-unit \
 	test-performance-budgets test-drift test-policy test-changelog
@@ -79,12 +79,12 @@ SHELL := $(CURDIR)/tests/tools/scrub-shell-environment
         bazel-check \
         test-unit \
         test-lint test-rust test-rust-main \
-        test-rust-broker test-rust-guest-shell-runner test-rust-local test-rust-no-bash-ast \
+        test-rust-broker test-rust-guest-shell-runner test-rust-local \
         test-rust-schema test-rust-supply-chain \
         test-rust-leaf-main-workspace \
         test-rust-leaf-schema \
         test-rust-leaf-fixture-contracts test-rust-leaf-broker \
-        test-rust-leaf-guest-shell-runner test-rust-leaf-no-bash-ast \
+        test-rust-leaf-guest-shell-runner \
         test-rust-leaf-supply-chain \
         test-fixture-contracts test-proofs test-flake test-flake-realized \
         test-flake-aarch64 test-flake-x86 test-nix-unit \

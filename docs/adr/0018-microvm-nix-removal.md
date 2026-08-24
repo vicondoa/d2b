@@ -1230,9 +1230,7 @@ so it does not shadow operator-installed jq on the host PATH.
 The eval gate `tests/host-otel-acl-activation-eval.sh` asserts
 the binary exists at `${d2bCli}/bin/d2b-activation-jq`
 AND that its output for a fixture envelope matches `.code`
-extraction. The vendored gojq is provisioned from the
-flake-pinned nixpkgs input (per the no-bash gate's flake-pinned
-toolchain pattern).
+extraction. The vendored gojq is provisioned from the flake-pinned nixpkgs input.
 
 The activation script distinguishes two failure modes:
 - **Daemon-down (soft defer)**: invocation returns exit 1 +
@@ -1656,8 +1654,7 @@ entry explosion):
   helper that enforces the anchored regex patterns inline (not
   post-parse). The implementation lives in
   `tests/tools/baseline-exception-validator/` (a small dev-only
-  Rust binary, reviewed at commit time per the
-  no-bash-ast-walker pattern). YAML parsers that accept
+  Rust binary, reviewed at commit time). YAML parsers that accept
   trailing-junk strings without `deny_unknown_fields` are
   forbidden. The validator runs as part of
   `tests/broker-spawn-audit-parity-eval.sh` setup, before any

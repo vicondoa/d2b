@@ -1,11 +1,16 @@
 # 0017. No bash fallbacks invariant (v1.1)
 
-- Status: Implemented in v1.1
+- Status: Superseded as a structural policy; runtime fallback contract retained
 - Date: 2026-05-31
 - Wave: v1.1-P1 (landed)
 - Plan slice: v1.1 §"v1.1-P1 - Eliminate `exec_legacy_passthrough` and every bash fallback path"
 - Companion ADRs: [ADR 0007](0007-bash-coexistence-and-migration.md), [ADR 0010](0010-wire-protocol-and-typed-errors.md), [ADR 0015](0015-daemon-only-clean-break.md)
 - Verification: `tests/no-bash-exec-eval.sh` (3 modes); commit `3c1c019`.
+
+> **Superseded as a binding no-wrapper policy.** The AST enforcement and
+> wrapper prohibition described here are retired. The remainder is historical;
+> current behavior is defined by committed code and Bazel-owned CLI contract
+> tests.
 
 ## Context
 

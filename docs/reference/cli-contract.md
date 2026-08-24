@@ -15,10 +15,10 @@ than literal byte-for-byte goldens unless the corresponding
 
 ## Scope and conventions
 
-> There is no bash fallback. The Rust CLI never executes bash, and
-> the no-bash invariant is enforced by
-> `tests/tools/no-bash-ast-walker` in `test-rust`; source hygiene remains a
-> fixed global policy gate. Verbs that used to degrade to bash on
+> There is no bash fallback. The Rust CLI never executes bash. Bazel-owned
+> Rust CLI and contract tests enforce the daemon-only typed behavior; source
+> hygiene remains a fixed global policy gate. Verbs that used to degrade to
+> bash on
 > `not-yet-implemented` or `daemon-down` now surface typed
 > envelopes (`not-yet-implemented` exit 78, `daemon-down` exit 1) -
 > see [`error-codes.md` § "Remediation rendering conventions"](./error-codes.md#remediation-rendering-conventions)
@@ -2207,7 +2207,7 @@ d2b activation keys rotate --apply executed via the native daemon → broker pat
 
 | Code | Meaning | Typed error / reference |
 | --- | --- | --- |
-| `78` | **`--strict` flag arm only** - `d2b audit --strict` emits typed `#not-yet-implemented` envelope unconditionally regardless of daemon state per [ADR 0017](../adr/0017-no-bash-fallbacks-invariant.md) § "Migration target table" line 91 (the strict-audit surface is queued for v1.2+ (unscheduled; v1.1 only delivers the typed-envelope rendering + remediation per ADR 0017) implementation). The multi-line `Remediation:` block per [`error-codes.md` "Remediation rendering conventions"](./error-codes.md#remediation-rendering-conventions) points operators at the migration runbook. | [`not-yet-implemented`](./error-codes.md#not-yet-implemented) |
+| `78` | **`--strict` flag arm only** - `d2b audit --strict` emits typed `#not-yet-implemented` envelope unconditionally regardless of daemon state per the current typed CLI contract (the strict-audit surface is queued for v1.2+ (unscheduled; v1.1 only delivers the typed-envelope rendering + remediation) implementation). The multi-line `Remediation:` block per [`error-codes.md` "Remediation rendering conventions"](./error-codes.md#remediation-rendering-conventions) points operators at the migration runbook. | [`not-yet-implemented`](./error-codes.md#not-yet-implemented) |
 | `0` | Success (non-`--strict` arm only - `--strict` returns exit 78 unconditionally per above). | - |
 | `1` | (Non-`--strict` arm only) `d2bd` is unreachable; typed `#daemon-down` envelope emitted. The multi-line `Remediation:` block per [`error-codes.md` "Remediation rendering conventions"](./error-codes.md#remediation-rendering-conventions) points operators at the daemon-startup runbook. | [`daemon-down`](./error-codes.md#daemon-down) |
 | `2` | Unknown flag or unexpected positional argument. | [`usage`](./error-codes.md#usage) |
@@ -2623,7 +2623,7 @@ mid-cycle reconciliation.
   daemon-dispatched CLI op).
 - Daemon-unreachable surfaces `#daemon-down` exit 1 per the
   v1.1 typed-envelope contract.
-- No bash fallback exists per [ADR 0017](../adr/0017-no-bash-fallbacks-invariant.md).
+- No runtime bash fallback exists; daemon-native typed behavior is canonical.
 
 ### `host doctor`
 

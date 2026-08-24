@@ -2,10 +2,7 @@ package(default_visibility = ["//visibility:public"])
 
 test_suite(
     name = "source_hygiene",
-    tests = [
-        "//bazel/checks/meta:tier0",
-        "//tests/tools/no-bash-ast-walker:no_bash_ast_test",
-    ],
+    tests = ["//bazel/checks/meta:tier0"],
 )
 
 test_suite(

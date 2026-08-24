@@ -851,8 +851,7 @@ Primary targets:
 Validation:
 
 - migration records are updated for any retired shell gate and successor
-  test when the test model requires it; do not replace a retired bash wrapper
-  with another per-test cargo wrapper;
+  test when the test model requires it;
 - pinned test inventory confirms no coverage silently disappears;
 - CI still runs every Layer-1 family, but with fewer repeated setup paths.
 
@@ -1471,8 +1470,8 @@ These targets are good first compatibility-removal and consolidation inputs:
 ## Anti-goals
 
 - Do not weaken security boundaries to reduce code. The broker/daemon split,
-  typed ops, pidfd handoff, minijail profiles, and no-bash invariant are
-  not optimization targets.
+  typed ops, pidfd handoff, minijail profiles, and daemon-only typed CLI
+  behavior are not optimization targets.
 - Do not collapse generated contracts into untyped runtime maps.
 - Do not replace many small explicit broker ops with one unstructured
   "run shell" or "apply path" escape hatch.

@@ -24,9 +24,8 @@
   library and binary targets share one output directory. Against a warm tree
   Cargo re-runs only the target it considers dirty and overwrites that
   directory, dropping exactly the private items the guard checks.
-- Continuous integration caches the nix store, the guest-shell-runner cargo
-  target directory, and the no-bash-ast-walker target directory. None of the
-  three were cached, so every run rebuilt them from source.
+- Continuous integration caches the nix store and the guest-shell-runner cargo
+  target directory. Neither was cached, so every run rebuilt them from source.
 
 ### Added
 

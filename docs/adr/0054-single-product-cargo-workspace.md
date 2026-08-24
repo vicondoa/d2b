@@ -5,8 +5,7 @@
 - Scope: Cargo workspace membership and locks for product packages, Cargo and
   Nix package selection, selected production closures, and package-scoped
   supply-chain enforcement.
-- Non-scope: changing Rust behavior, moving the no-bash walker, or weakening
-  static, ELF, or policy checks.
+- Non-scope: changing Rust behavior or weakening static, ELF, or policy checks.
 - Threat-model non-goal: contributor mutation commands run in a trusted local
   operator shell. They are not a credential or sandbox boundary and are
   unreachable from workflows and Make targets.
@@ -15,8 +14,7 @@
 
 The product packages share one repository-root Cargo workspace and one
 authoritative `Cargo.lock`. The privileged broker and static guest runner are
-members of that workspace, while the no-bash AST walker remains a separate
-tooling workspace with its own manifest and lock.
+members of that workspace.
 
 A shared lock resolves the union of workspace dependencies. That union is not
 itself a build dependency or an approval to ship a package. The security
@@ -24,10 +22,6 @@ boundaries are package-selected Cargo and Nix builds and enforcing policy over
 each selected production closure. An unrelated package appearing only in the
 shared lock is harmless; a new edge that connects it to a privileged or static
 selected closure is not.
-
-The no-bash walker has a different boundary. It is closed gate plumbing under
-`tests/tools/`, outside the product package tree, and has no path dependency
-into the product workspace. It therefore remains separate.
 
 ## Evidence
 
@@ -213,7 +207,6 @@ static artifact.
 - Product packages share one dependency resolution and update event.
 - Broker and guest lock-update cadence and visual isolation are lost; this is
   accepted because selected closure policy preserves the security boundary.
-- The no-bash walker remains independently buildable and independently pinned.
 - Broker default, Layer 1, and fake streams stay serial and target-isolated.
 - Nix uses the exact native system, target, source, and selected closure without
   weakening static, ELF, deny, audit, or policy checks.
@@ -228,10 +221,6 @@ Rejected. They duplicate workspace and lock lifecycle. Measured package
 selection and selected-closure controls preserve the needed isolation without
 duplicating resolution authority.
 
-### Merge the no-bash walker
-
-Rejected. It has a real tooling boundary and no product path dependency.
-
 ### Make the shared lock the security boundary
 
 Rejected. Lock membership is not reachability. Selected Cargo metadata,
@@ -241,11 +230,10 @@ production closures, and package policy must remain the approval boundary.
 
 1. `Cargo.lock` at repository root is the only authoritative product lock.
 2. Broker and guest production are always package and feature selected.
-3. The no-bash walker keeps its separate manifest, lock, and dependency policy.
-4. Broker default, Layer 1, and fake lanes stay serial and target-isolated.
-5. Nix reads the exact native system and target selected-closure outputs.
-6. Production closure approval and filtered audit locks remain distinct inputs.
-7. Every selected context proves one root and a nonempty exact census before
+3. Broker default, Layer 1, and fake lanes stay serial and target-isolated.
+4. Nix reads the exact native system and target selected-closure outputs.
+5. Production closure approval and filtered audit locks remain distinct inputs.
+6. Every selected context proves one root and a nonempty exact census before
    absence or containment predicates.
-8. Existing supply-chain, drift, flake, fixture, static ELF, and policy jobs
+7. Existing supply-chain, drift, flake, fixture, static ELF, and policy jobs
    remain enforcing for the contexts they own.

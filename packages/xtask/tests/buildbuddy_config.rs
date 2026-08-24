@@ -2012,7 +2012,6 @@ fn bazel_facade_owns_public_make_composition() {
             "test-rust-leaf-guest-shell-runner",
             "test-rust-guest-shell-runner",
         ),
-        ("test-rust-leaf-no-bash-ast", "test-rust-no-bash-ast"),
         ("test-rust-leaf-supply-chain", "test-rust-supply-chain"),
     ] {
         assert_eq!(
