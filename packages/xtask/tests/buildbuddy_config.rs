@@ -1896,9 +1896,10 @@ fn buildbuddy_workflow_owns_the_protected_v3_check() {
           - v3
     steps:
       - run: >-
-          bazel test --config=local --build_tests_only --test_output=errors
-          --test_tag_filters=-local,-no-remote-exec,-manual,-exclusive,-gpu,-kvm
-          //bazel/checks:check
+          env D2B_PROJECT_SHELL=d2b D2B_BAZEL_BIN="$(command -v bazel)"
+          D2B_BAZEL_UNTRUSTED=1
+          D2B_BAZEL_TEST_TAG_FILTERS="-local,-no-remote-exec,-manual,-exclusive,-gpu,-kvm"
+          tests/tools/bazel-check --profile local -- //bazel/checks:check
 "#,
         "BuildBuddy must use one exact protected v3 hosted check action"
     );

@@ -105,19 +105,23 @@ The root `buildbuddy.yaml` defines one BuildBuddy Workflows action named
 `build / check`. It runs for pull requests targeting `v3` and pushes to `v3`,
 using `merge_with_base: true` for pull requests.
 
-The action invokes the existing fixed Bazel facade directly:
+The action invokes the retained `tests/tools/bazel-check` facade with the
+local profile:
 
 ```bash
-bazel test --config=local --build_tests_only --test_output=errors \
-  --test_tag_filters=-local,-no-remote-exec,-manual,-exclusive,-gpu,-kvm \
-  //bazel/checks:check
+env D2B_PROJECT_SHELL=d2b D2B_BAZEL_BIN="$(command -v bazel)" \
+  D2B_BAZEL_UNTRUSTED=1 \
+  D2B_BAZEL_TEST_TAG_FILTERS="-local,-no-remote-exec,-manual,-exclusive,-gpu,-kvm" \
+  tests/tools/bazel-check --profile local -- //bazel/checks:check
 ```
 
 BuildBuddy Workflows owns checkout, isolation, and GitHub status for the
-action. Its Ubuntu 22.04 hosted runner executes the remote-compatible fixed
-Layer-1 selection locally with `--config=local`, avoiding a nested RBE profile
-and any GitHub secret-bearing proxy. The GitHub Actions workflow remains the
-credential-free, local-only `check` implementation in
+action. Its Ubuntu 22.04 hosted runner supplies the two shell-contract
+variables normally exported by the Nix development shell,
+`D2B_PROJECT_SHELL=d2b` and `D2B_BAZEL_BIN`, then reuses the facade's fixed
+graph and environment contract with the local profile. This avoids nesting the
+RBE profile or using a GitHub secret-bearing proxy. The GitHub Actions workflow
+remains the credential-free, local-only `check` implementation in
 `.github/workflows/pr-l1-static-fast.yml`.
 
 ## Developer invocation metadata

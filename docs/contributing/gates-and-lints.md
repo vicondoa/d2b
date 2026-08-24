@@ -149,10 +149,13 @@ build, and test failures fail closed.
 
 The committed GitHub Actions workflow exposes one stable required local
 `check` result. The protected `v3` BuildBuddy Workflows action is defined in
-the root `buildbuddy.yaml`; its hosted Ubuntu 22.04 runner executes the same
-remote-compatible fixed Layer-1 selection locally, without nesting the RBE
-profile or using a GitHub secret-bearing proxy. A guarded performance skip is
-advisory and is not validation evidence.
+the root `buildbuddy.yaml`; its hosted Ubuntu 22.04 runner reuses
+`tests/tools/bazel-check` with the local profile. It supplies the two
+shell-contract variables normally exported by the Nix development shell,
+`D2B_PROJECT_SHELL=d2b` and `D2B_BAZEL_BIN`, preserving the fixed
+graph/environment contract without nesting the RBE profile or using a GitHub
+secret-bearing proxy. A guarded performance skip is advisory and is not
+validation evidence.
 
 The fixture-contract lane remains enforcing and local-only. It materializes
 `D2B_FIXTURES` through the existing Bazel fixture target and fails when
