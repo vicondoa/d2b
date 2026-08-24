@@ -1879,12 +1879,13 @@ fn ci_uses_public_make_aliases_without_nested_nix_develop_wrappers() {
 }
 
 #[test]
-fn buildbuddy_workflow_owns_the_protected_v3_remote_check() {
+fn buildbuddy_workflow_owns_the_protected_v3_check() {
     let workflow = read_text("buildbuddy.yaml");
     assert_eq!(
         workflow,
         r#"actions:
   - name: "build / check"
+    container_image: "ubuntu-22.04"
     triggers:
       pull_request:
         branches:
@@ -1895,11 +1896,11 @@ fn buildbuddy_workflow_owns_the_protected_v3_remote_check() {
           - v3
     steps:
       - run: >-
-          bazel test --config=remote --build_tests_only --test_output=errors
+          bazel test --config=local --build_tests_only --test_output=errors
           --test_tag_filters=-local,-no-remote-exec,-manual,-exclusive,-gpu,-kvm
           //bazel/checks:check
 "#,
-        "BuildBuddy must use one exact protected v3 remote check action"
+        "BuildBuddy must use one exact protected v3 hosted check action"
     );
 }
 

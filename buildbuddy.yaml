@@ -1,5 +1,6 @@
 actions:
   - name: "build / check"
+    container_image: "ubuntu-22.04"
     triggers:
       pull_request:
         branches:
@@ -10,6 +11,6 @@ actions:
           - v3
     steps:
       - run: >-
-          bazel test --config=remote --build_tests_only --test_output=errors
+          bazel test --config=local --build_tests_only --test_output=errors
           --test_tag_filters=-local,-no-remote-exec,-manual,-exclusive,-gpu,-kvm
           //bazel/checks:check

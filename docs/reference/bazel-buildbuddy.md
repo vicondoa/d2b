@@ -108,15 +108,17 @@ using `merge_with_base: true` for pull requests.
 The action invokes the existing fixed Bazel facade directly:
 
 ```bash
-bazel test --config=remote --build_tests_only --test_output=errors \
+bazel test --config=local --build_tests_only --test_output=errors \
   --test_tag_filters=-local,-no-remote-exec,-manual,-exclusive,-gpu,-kvm \
   //bazel/checks:check
 ```
 
-BuildBuddy Workflows supplies its authenticated Bazel flags. The GitHub
-Actions workflow remains the credential-free, local-only `check` implementation
-in `.github/workflows/pr-l1-static-fast.yml`; no GitHub proxy or second
-scheduler is part of this configuration.
+BuildBuddy Workflows owns checkout, isolation, and GitHub status for the
+action. Its Ubuntu 22.04 hosted runner executes the remote-compatible fixed
+Layer-1 selection locally with `--config=local`, avoiding a nested RBE profile
+and any GitHub secret-bearing proxy. The GitHub Actions workflow remains the
+credential-free, local-only `check` implementation in
+`.github/workflows/pr-l1-static-fast.yml`.
 
 ## Developer invocation metadata
 
