@@ -40,18 +40,11 @@ let
   evaluated = (mkGuestEval {
     modules = [
       optionSinks
-      (import (flakeRoot + "/nixos-modules/guest-control.nix"))
+      (import (flakeRoot + "/nixos-modules/component-session.nix"))
       ({ ... }: {
-        d2b.guestControl = {
+        d2b.componentSession = {
           enable = true;
           guestConfigPath = null;
-          usbipPath = null;
-          exec = {
-            enable = false;
-            execUser = null;
-            detachedMaxRuntimeSec = 0;
-            interactiveMaxRuntimeSec = 0;
-          };
           shell = {
             enable = false;
             defaultName = "default";
@@ -110,7 +103,7 @@ in
     };
   };
 
-  "guest-component-session/does-not-install-legacy-guestd" = {
+  "guest-component-session/does-not-install-retired-guest-agent" = {
     expr = {
       package = lib.any (path: lib.hasInfix "d2b-guestd" path) packagePaths;
       service = builtins.hasAttr "d2b-guestd" evaluated.systemd.services;

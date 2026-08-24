@@ -31,7 +31,6 @@ side-effect audit operation that never reaches the wire dispatcher).
 | CutoverAudit | promoted-live | Records the admitted cutover runner's durable audit transition through the broker audit chain. | live in production broker |
 | CutoverEffect | promoted-live | Executes the closed, capability-bound cutover effect vocabulary and records the resulting disposition. | live in production broker |
 | ExportBrokerAudit | callable-read-only | Reads the append-only broker audit log, requires `caller_role: AdminUid { uid }`, and streams redacted lines back to `d2bd`. | live read-only callable |
-| GuestControlSign | callable-read-only | Computes the per-VM guest-control auth tag over the bound transcript; returns only the transcript-bound MAC tag. | guest-control live callable |
 | Hello | callable-read-only | Daemon-only handshake; returns `HelloOk` with the broker capability list. | live read-only callable |
 | InjectSecretById | stubbed-unimplemented | Returns `BrokerError::Unimplemented`; secret write paths are not implemented. | future work |
 | LaunchMinijailChild | stubbed-unimplemented | Returns `BrokerError::Unimplemented`; privileged child launch is not implemented. | future work |

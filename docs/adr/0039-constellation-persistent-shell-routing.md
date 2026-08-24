@@ -8,6 +8,11 @@
   exec), ADR 0032 (d2b v2 constellation control plane), ADR 0037 (local
   hypervisor runtime seam), ADR 0038 (persistent named guest shell sessions)
 
+> **Current implementation note (U10).** Persistent shell routing remains
+> semantic and stream-scoped, but the old Guest daemon and guest-control
+> terminal substrate are removed. Local Guest shells now use ComponentSession
+> and signed target-local Process workers.
+
 ## Context
 
 ADR 0032 defines constellation routing between local hosts, gateway guests,

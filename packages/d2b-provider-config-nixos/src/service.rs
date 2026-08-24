@@ -12,8 +12,9 @@ use crate::{ConfigCaller, ConfigError, ConfigOperation, GuestConfigDocument, SER
 /// The only Guest configuration identifier accepted by this service.
 pub const GUEST_CONFIG_IDENTIFIER: &str = "guest-config";
 /// Maximum raw document size.
-pub const MAX_CONFIG_BYTES: usize =
-    d2b_contracts_control::guest_wire::READ_GUEST_FILE_MAX_BYTES as usize;
+pub const MAX_CONFIG_BYTES: usize = 512 * 1024;
+/// Maximum base64-encoded document size.
+pub const MAX_CONFIG_ENCODED_BYTES: usize = MAX_CONFIG_BYTES.div_ceil(3) * 4;
 
 /// Typed request for reading or staging the canonical Guest document.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
@@ -69,7 +70,7 @@ impl ConfigSyncResponse {
     pub fn document(&self) -> Result<GuestConfigDocument, ConfigError> {
         if self.identifier != GUEST_CONFIG_IDENTIFIER
             || self.content_base64.len()
-                > d2b_contracts_control::guest_wire::READ_GUEST_CONFIG_ENCODED_MAX_BYTES
+                > MAX_CONFIG_ENCODED_BYTES
         {
             return Err(ConfigError::InvalidRequest);
         }
@@ -114,7 +115,7 @@ impl ConfigStageRequest {
     pub fn document(&self) -> Result<GuestConfigDocument, ConfigError> {
         validate_identifier(&self.identifier)?;
         if self.content_base64.len()
-            > d2b_contracts_control::guest_wire::READ_GUEST_CONFIG_ENCODED_MAX_BYTES
+            > MAX_CONFIG_ENCODED_BYTES
         {
             return Err(ConfigError::DocumentTooLarge);
         }

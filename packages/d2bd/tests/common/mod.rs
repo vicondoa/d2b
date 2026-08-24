@@ -194,7 +194,9 @@ pub fn write_daemon_config_with_artifacts(
         "adminUsers": admin_users,
         "serverVersion": "0.4.0",
         "acceptedClientVersionRange": ">=0.4.0, <0.5.0",
-        "gatewayConfigPath": path_string(&fixture.root().join("gateway.json"))
+        "gatewayConfigPath": path_string(&fixture.root().join("gateway.json")),
+        "realmControllersConfigPath": path_string(&fixture.root().join("realm-controllers.json")),
+        "realmIdentityConfigPath": path_string(&fixture.root().join("realm-identity.json"))
     });
     if let Some(artifacts) = artifacts {
         config

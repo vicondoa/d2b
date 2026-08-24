@@ -32,15 +32,14 @@ _SURFACES = {
         ],
         "modules": [],
     },
-    "guest-control": {
+    "component-session": {
         "cases": ["gateway-component-session", "guest-component-session"],
         "files": [
             "nixos-modules/vm-evaluator.nix",
         ],
         "modules": [
-            "nixos-modules/guest-control.nix",
+            "nixos-modules/component-session.nix",
             "nixos-modules/guest-broker.nix",
-            "nixos-modules/guest-control-host.nix",
             "nixos-modules/processes-json.nix",
             "nixos-modules/vm-guest-base.nix",
         ],

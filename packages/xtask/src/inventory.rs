@@ -517,7 +517,7 @@ fn classify_generated_surface(path: &str) -> Option<&'static str> {
     } else if path.starts_with("completions/") {
         Some("cli-completion")
     } else if path.starts_with("packages/d2b-contracts/proto/") && path.ends_with(".proto") {
-        Some("guest-control-proto-source")
+        Some("component-session-proto-source")
     } else if path.contains("/src/generated/") {
         Some("generated-rust-binding")
     } else if path == "docs/reference/daemon-api.md" || path == "docs/reference/error-codes.md" {

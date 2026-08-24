@@ -84,8 +84,7 @@ let
       };
       audio.enable = x86;
       observability.enable = true;
-      guest.control.enable = true;
-      guest.exec.enable = true;
+      guest.componentSession.enable = true;
       guest.shell = {
         enable = true;
         defaultName = "ops";
@@ -725,8 +724,6 @@ in
           defaultName = "ops";
           maxSessions = 3;
           maxAttached = 2;
-          controlEnabled = true;
-          execEnabled = true;
         };
       };
     };

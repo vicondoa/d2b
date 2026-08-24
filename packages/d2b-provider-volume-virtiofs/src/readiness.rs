@@ -12,7 +12,7 @@ pub enum SocketObservation {
     Absent,
 }
 
-/// Observation returned by the guest-control mount probe.
+/// Observation returned by the component-session mount probe.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum GuestMountObservation {
     /// The guest reports the mount present.

@@ -48,11 +48,11 @@ pub enum UsbipSubcommand {
     /// Host-side unbind: `usbip unbind --busid <bus_id>`.
     Unbind,
     /// Guest-side attach: `usbip attach -r <host_ip> -b <bus_id>`.
-    /// In current d2b this is owned by guestd over authenticated
-    /// guest-control; this enum variant remains the pure argv shape.
+    /// In current d2b this is owned by a signed target-local Process over
+    /// ComponentSession; this enum variant remains the pure argv shape.
     Attach,
     /// Guest-side detach: `usbip detach -p <port>`. Bus-id alone isn't enough;
-    /// guestd derives the assigned port from `usbip port`.
+    /// The target-local Process derives the assigned port from `usbip port`.
     Detach,
 }
 

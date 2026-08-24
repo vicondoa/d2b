@@ -57,7 +57,7 @@ let
       env = gw.env;
       index = gw.index;
       ssh.user = lib.mkDefault "gateway";
-      guest.control.enable = true;
+      guest.componentSession.enable = true;
       config = { lib, pkgs, ... }: {
         networking.hostName = lib.mkDefault gw.vmName;
         users.groups.d2b = { };
@@ -71,7 +71,7 @@ let
           isNormalUser = true;
           extraGroups = [ "wheel" "d2b" ];
         };
-        d2b.guestControl.componentSession = {
+        d2b.componentSession = {
           guestRef = "Guest/${gw.vmName}";
           zone = gw.realm;
         };

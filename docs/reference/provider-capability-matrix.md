@@ -14,11 +14,11 @@ For display and virtual I/O capabilities beyond console and audio, see
 
 ## Providers in scope
 
-| Provider | Identity | Guest-control channel |
+| Provider | Identity | ComponentSession channel |
 | --- | --- | --- |
-| Cloud Hypervisor NixOS | Local VM managed by `d2bd` + `d2b-broker` | `guestd` over authenticated vsock guest-control |
-| qemu-media | Dedicated media/console workload; no `guestd` | None |
-| ACA sandbox | Provider-managed workload (Azure Container Apps) | guestd-compatible in-sandbox agent over ADR 0032 relay/peer transport |
+| Cloud Hypervisor NixOS | Local VM managed by `d2bd` + `d2b-broker` | `target-local Process` over authenticated vsock component-session |
+| qemu-media | Dedicated media/console workload; no `target-local Process` | None |
+| ACA sandbox | Provider-managed workload (Azure Container Apps) | target-local Process-compatible in-sandbox agent over ADR 0032 relay/peer transport |
 
 ---
 
@@ -28,7 +28,7 @@ For display and virtual I/O capabilities beyond console and audio, see
 | --- | --- | --- | --- | --- |
 | Cloud Hypervisor NixOS | ✓ | Broker-owned `--serial` backend; attach-safe and non-blocking. | Daemon-side ring-buffer drainer; broker or broker-spawned component owns the fd. | See [Console transport - Cloud Hypervisor](#console-transport--cloud-hypervisor). |
 | qemu-media | ✓ | Broker-owned fd-backed chardev (PTY/fd-store design, not a qemu-created path socket). | Same daemon ring-buffer contract; broker-owned fd. | Qemu path sockets weaken permission posture; the fd-backed design is the posture baseline. See [Console transport - qemu-media](#console-transport--qemu-media). |
-| ACA sandbox | ✓ via guestd | Provider guestd terminal/console over ADR 0032 relay/peer transport. | Not applicable (provider-managed draining). | Missing guestd is provider misconfiguration; see [ACA console - provider misconfiguration](#aca-console--provider-misconfiguration). |
+| ACA sandbox | ✓ via target-local Process | Provider target-local Process terminal/console over ADR 0032 relay/peer transport. | Not applicable (provider-managed draining). | Missing target-local Process is provider misconfiguration; see [ACA console - provider misconfiguration](#aca-console--provider-misconfiguration). |
 
 ### Console transport - Cloud Hypervisor
 
@@ -50,7 +50,7 @@ console fd during a `d2bd` restart so draining is not interrupted.
 
 ### Console transport - qemu-media
 
-qemu-media VMs do not run `guestd`. The daemon accesses the console
+qemu-media VMs do not run `target-local Process`. The daemon accesses the console
 through a broker-owned fd-backed chardev. The broker opens a socketpair
 (or PTY master) and passes the relevant fd to QEMU at launch time using
 the `chardev socket,fd=N` mechanism rather than a
@@ -72,7 +72,7 @@ contract is identical to the Cloud Hypervisor case.
 
 ### ACA console - provider misconfiguration
 
-ACA sandboxes are expected to run a guestd-compatible in-sandbox
+ACA sandboxes are expected to run a target-local Process-compatible in-sandbox
 agent. If the agent is absent, the daemon returns a typed
 `provider-misconfigured` error with a remediation that points
 to the sandbox configuration. The daemon does **not** fall back to
@@ -90,7 +90,7 @@ control traffic.
 
 | Transport | Isolation mechanism |
 | --- | --- |
-| Local vsock (Cloud Hypervisor, qemu-media) | Separate vsock port per stream type. Console and guestd control (health, audio, exec) must use distinct vsock CID/port pairs. Multiplexing console data and control RPCs over the same vsock connection is forbidden. virtio-vsock per-connection flow control is credit-based; independent connections do not share backpressure. |
+| Local vsock (Cloud Hypervisor, qemu-media) | Separate vsock port per stream type. Console and target-local Process control (health, audio, exec) must use distinct vsock CID/port pairs. Multiplexing console data and control RPCs over the same vsock connection is forbidden. virtio-vsock per-connection flow control is credit-based; independent connections do not share backpressure. |
 | ADR 0032 relay/peer (ACA) | Dedicated logical channel or stream within the relay transport for console bytes, separated from health-check pings, audio policy RPCs, and other control traffic. The relay transport must not share backpressure state between the console stream and control queues. Where the relay protocol supports per-stream priority, the console stream is assigned lower priority than health and control messages. |
 
 **Ring-buffer backpressure contract**: The daemon-side ring buffer is
@@ -112,14 +112,14 @@ not a holder of the console fd.
 
 | Provider | Host audio enforcement | Guest audio enforcement | Offline audio policy | Notes |
 | --- | --- | --- | --- | --- |
-| Cloud Hypervisor NixOS | ✓ PipeWire/vhost-user-sound controller | ✓ via `guestd` over authenticated guest-control | N/A (live state) | Reports `enforcement: host-and-guest` when both sides apply; host-side `off` is fail-closed; see [Audio enforcement - Cloud Hypervisor](#audio-enforcement--cloud-hypervisor). |
+| Cloud Hypervisor NixOS | ✓ PipeWire/vhost-user-sound controller | ✓ via `target-local Process` over authenticated component-session | N/A (live state) | Reports `enforcement: host-and-guest` when both sides apply; host-side `off` is fail-closed; see [Audio enforcement - Cloud Hypervisor](#audio-enforcement--cloud-hypervisor). |
 | qemu-media | ✓ host/qemu audio subset when declared | `unsupported` - `enforcement: unsupported` reported for guest-side capability | ✓ Persisted offline policy | See [Audio enforcement - qemu-media](#audio-enforcement--qemu-media). |
-| ACA sandbox | None (no local host PipeWire nodes or broker mutations) | ✓ remote guestd policy only | None | Reports `enforcement: guest-only` when guestd applies; no local audio state files or broker host mutations for ACA sandboxes; see [ACA audio](#aca-audio). |
+| ACA sandbox | None (no local host PipeWire nodes or broker mutations) | ✓ remote target-local Process policy only | None | Reports `enforcement: guest-only` when target-local Process applies; no local audio state files or broker host mutations for ACA sandboxes; see [ACA audio](#aca-audio). |
 
 ### Audio enforcement - Cloud Hypervisor
 
 Cloud Hypervisor NixOS VMs support both host-side PipeWire enforcement
-and guest-side enforcement via `guestd`:
+and guest-side enforcement via `target-local Process`:
 
 - Volume and gain are bounded `0..=100` domain values validated at the
   public-wire boundary before reaching the daemon.
@@ -145,7 +145,7 @@ and guest-side enforcement via `guestd`:
   declared VM name set, which is validated at eval time
   (`^[a-z][a-z0-9-]*$`).
 - Host-side `off` requests are fail-closed: the host boundary is sealed
-  even when `guestd` is unresponsive; the response carries a degraded
+  even when `target-local Process` is unresponsive; the response carries a degraded
   result for the guest-side enforcement step so the operator knows the
   guest-side did not apply.
 - Successful host and guest application reports `enforcement:
@@ -155,7 +155,7 @@ and guest-side enforcement via `guestd`:
 
 ### Audio enforcement - qemu-media
 
-qemu-media VMs do not run `guestd`. The daemon:
+qemu-media VMs do not run `target-local Process`. The daemon:
 
 - applies the declared host/qemu audio subset when it is advertised in
   the qemu-media capability declaration;
@@ -169,13 +169,13 @@ treat it as an error.
 
 ### ACA audio
 
-ACA sandboxes use remote guestd audio policy only. The host does not
+ACA sandboxes use remote target-local Process audio policy only. The host does not
 create local audio state files, PipeWire nodes, vhost-user-sound
-connections, or broker host mutations for ACA targets. Missing guestd
+connections, or broker host mutations for ACA targets. Missing target-local Process
 on an ACA sandbox is provider misconfiguration and surfaces as a typed
 error with remediation, not a silent no-op.
 
-Successful ACA guestd application reports `enforcement: guest-only` in
+Successful ACA target-local Process application reports `enforcement: guest-only` in
 `audio status` output.
 
 ---
@@ -195,7 +195,7 @@ provider:
 - qemu-media host-side audio controls are enabled when the host subset
   is supported; the UI shows a `host-only` annotation alongside the
   controls.
-- ACA missing-guestd states surface as `provider-misconfigured` errors
+- ACA missing-target-local Process states surface as `provider-misconfigured` errors
   in `AudioVmError.kind` with remediation text, not as disabled UI controls.
 - Volume and gain sliders send final or debounced mutations only; they
   do not dismiss layer-shell popups during drag.

@@ -17,11 +17,11 @@ backend ingress to host loopback, so it's the operational equivalent
 of a loopback bind but enforced via netfilter rather than by the
 socket). A broker-spawned per-env `socat` proxy binds exactly the env's
 uplink-bridge IP at TCP 3240; the guest loads `vhci_hcd`, ships the
-`usbip` CLI, and advertises guestd's `UsbipImport` capability so
-`d2bd` can import/detach through authenticated guest-control. The
+`usbip` CLI, and advertises target-local Process's `UsbipImport` capability so
+`d2bd` can import/detach through authenticated component-session. The
 hot-plug ceremony is daemon-owned: host bind/unbind and firewall/proxy
 reconcile go through the privileged broker, while guest attach/detach goes
-through guestd. The CLI sends one intent to `d2bd`; it never SSHes into
+through target-local Process. The CLI sends one intent to `d2bd`; it never SSHes into
 the guest for USBIP.
 
 The component itself only declares the **guest-side** wiring. All
@@ -45,7 +45,7 @@ owners and remediation:
   `d2b device usb detach <name> <busid> --apply` releases a healthy claim during
   that host session.
 - **Active carrier** - transient host/guest state that can disappear across
-  unplug, VM stop, daemon restart, or guest-control restart: the
+  unplug, VM stop, daemon restart, or component-session restart: the
   `usbip-host` module, host driver bind, per-env backend/export readiness,
   per-env proxy listener, and guest import.
 - **Policy/topology** - bundle-declared vendor/product and bus/port
@@ -56,7 +56,7 @@ owners and remediation:
 VM stop/restart cleans up guest imports and only runs host unbind when firewall
 withdrawal plus targeted stream cleanup can be proven first; otherwise it keeps
 the same-VM session claim for manual recovery. VM start reconciles same-VM
-session claims from the current host session after guest-control readiness by
+session claims from the current host session after component-session readiness by
 replaying host bind/proxy state and re-importing in the guest. Runtime absence,
 proxy/backend unavailability, or guest import unavailability degrades
 `d2b device usb probe` / `d2b guest status <name>` without pretending the row is healthy.
@@ -94,7 +94,7 @@ Per opted-in env (declared in [`network.nix`](../../packages/d2b-provider-networ
 > `ModprobeIfAllowed{module: "usbip-host"}` runs before the first
 > `UsbipBackend` runner for each env. Per-attach host `usbip bind` /
 > `unbind` steps are broker ops with per-env busid locking and audit
-> coverage; guest `usbip attach` / `detach` is an authenticated guestd RPC.
+> coverage; guest `usbip attach` / `detach` is an authenticated target-local Process RPC.
 > VM start/stop USB reconciliation threads one bounded reconcile correlation ID
 > through its USB broker requests as the broker audit `tracingSpanId`.
 > These privileged USB broker requests inherit the broker IPC limiter
@@ -201,7 +201,7 @@ Per host (in [`host.nix`](../../nixos-modules/host.nix)):
 For `d2b device usb attach <name> <busid> --apply` to expose a device, all of
 these must be true:
 
-1. the target VM is running and guest-control advertises USBIP status/import;
+1. the target VM is running and component-session advertises USBIP status/import;
 2. the bundle declares USBIP bind/firewall intents for the VM and busid;
 3. the session busid claim is missing or already held by the target VM;
 4. `usbip-host`, the physical device, host bind operation, per-env backend,
@@ -217,9 +217,9 @@ sysfs mutation. Keep procedural recovery in the how-to runbook:
 CLI contract (`d2b device usb attach|detach|probe` in the Rust CLI):
 
 - Sends one apply/dry-run intent to `d2bd`.
-- `attach --apply`: guestd first detaches any stale matching import, the
+- `attach --apply`: target-local Process first detaches any stale matching import, the
   broker binds/locks the host busid and reconciles firewall/proxy state, then
-  guestd imports the device inside the VM.
+  target-local Process imports the device inside the VM.
 - `detach --apply`: for the generic per-env L4 proxy, the daemon first requires
   an immediate-revocation proof: firewall block/withdrawal must precede any
   targeted conntrack deletion or TCP established-socket kill for a proven
@@ -263,15 +263,14 @@ The entire `components/usbip.nix` is two lines of payload:
 {
   boot.kernelModules = [ "vhci_hcd" ];
   environment.systemPackages = [ pkgs.linuxPackages.usbip ];
-  d2b.guestControl.usbipPath = ".../bin/usbip";
 }
 ```
 
 - `vhci_hcd` lets `usbip attach` materialise the redirected device
   as `/dev/hidraw<N>` (or a raw USB node) inside the guest kernel.
-- The `usbip` CLI is needed in-guest so guestd can issue `usbip port`,
+- The `usbip` CLI is needed in-guest so target-local Process can issue `usbip port`,
   `usbip detach`, and `usbip attach` after authenticating the host over
-  guest-control. Host-side `usbip bind/unbind`, firewall, and proxy
+  component-session. Host-side `usbip bind/unbind`, firewall, and proxy
   reconciliation dispatch through the daemon → broker path.
 
 ## Runtime invariants
@@ -285,7 +284,7 @@ The entire `components/usbip.nix` is two lines of payload:
   the nftables carve-out (per ADR 0013 + this doc's
   "Firewall carve-outs" section above) keys on the env's own
   uplink bridge, host destination IP, and net-VM uplink source IP.
-- Guestd's `usbip attach` connects to its own env's
+- target-local Process's `usbip attach` connects to its own env's
   `usbipdHostIp` (the host-side end of that env's uplink bridge),
   not the host's WAN address.
 

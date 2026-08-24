@@ -34,8 +34,6 @@ use std::{
 
 use async_trait::async_trait;
 
-use d2b_contracts_control::guest_proto as pb;
-use d2b_contracts_control::guest_wire::GUEST_CONTROL_PROTOCOL_VERSION;
 use d2b_contracts_control::public_wire::{
     EXEC_MAX_CHUNK_BYTES, ExecCloseResult, ExecControlResult, ExecOp, ExecOpResponse,
     ExecReadOutputResult, ExecStartResult, ExecStream, ExecTerminalStatus, ExecWaitResult,
@@ -44,10 +42,8 @@ use d2b_contracts_control::public_wire::{
 };
 use d2b_core::base64_codec;
 use d2b_session::{ComponentSessionDriver, StreamEvent, StreamId};
-use protobuf::{EnumOrUnknown, MessageField};
 use tokio::sync::{mpsc, oneshot};
 
-use crate::guest_control_health::GuestControlHealthError;
 use crate::terminal_session::{OutputStreamSel, TerminalBackend, TerminalKind};
 use crate::terminal_session::{ReadOutputOutcome, WaitOutcome, WriteStdinOutcome};
 
@@ -65,12 +61,12 @@ pub enum ExecOpError {
     Capability,
     DetachedUnavailable,
     /// Guest-reported deterministic op error (a closed slug).
-    Guest(GuestOpError),
+    Guest(ProcessOpError),
 }
 
 /// Closed enum of deterministic guest-reported op errors.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum GuestOpError {
+pub enum ProcessOpError {
     OffsetMismatch,
     StdinClosed,
     StdinNotOpen,
@@ -86,7 +82,7 @@ pub enum GuestOpError {
     Other,
 }
 
-impl GuestOpError {
+impl ProcessOpError {
     pub fn slug(self) -> &'static str {
         match self {
             Self::OffsetMismatch => "stdin-offset-mismatch",
@@ -110,14 +106,14 @@ impl ExecOpError {
     /// Redaction-safe slug for the public error envelope and audit fields.
     pub fn slug(self) -> &'static str {
         match self {
-            Self::Transport => "guest-control-transport-unavailable",
-            Self::Auth => "guest-control-auth-failed",
+            Self::Transport => "component-session-transport-unavailable",
+            Self::Auth => "component-session-auth-failed",
             Self::StaleSession => "stale-session",
-            Self::Protocol => "guest-control-protocol-error",
-            Self::Timeout => "guest-control-timeout",
-            Self::OldGeneration => "guest-control-unavailable-old-generation",
-            Self::Capability => "guest-control-capability-unavailable",
-            Self::DetachedUnavailable => "guest-control-exec-detached-unavailable",
+            Self::Protocol => "component-session-protocol-error",
+            Self::Timeout => "component-session-timeout",
+            Self::OldGeneration => "component-session-unavailable-old-generation",
+            Self::Capability => "component-session-capability-unavailable",
+            Self::DetachedUnavailable => "component-session-exec-detached-unavailable",
             Self::Guest(inner) => inner.slug(),
         }
     }
@@ -150,18 +146,18 @@ pub enum ExecEstablishError {
     Capability,
     /// Guest accepted the handshake but rejected the create (e.g. exec
     /// disabled, root denied, unsupported mode).
-    Guest(GuestOpError),
+    Guest(ProcessOpError),
 }
 
 impl ExecEstablishError {
     pub fn slug(self) -> &'static str {
         match self {
-            Self::Transport => "guest-control-transport-unavailable",
-            Self::Auth => "guest-control-auth-failed",
-            Self::Protocol => "guest-control-protocol-error",
-            Self::Timeout => "guest-control-timeout",
-            Self::OldGeneration => "guest-control-unavailable-old-generation",
-            Self::Capability => "guest-control-capability-unavailable",
+            Self::Transport => "component-session-transport-unavailable",
+            Self::Auth => "component-session-auth-failed",
+            Self::Protocol => "component-session-protocol-error",
+            Self::Timeout => "component-session-timeout",
+            Self::OldGeneration => "component-session-unavailable-old-generation",
+            Self::Capability => "component-session-capability-unavailable",
             Self::Guest(inner) => inner.slug(),
         }
     }
@@ -450,7 +446,7 @@ where
                 .lock()
                 .map_err(|_| ExecOpError::Protocol)?;
             if waiters.len() >= MAX_PENDING_NAMED_RESPONSES {
-                return Err(ExecOpError::Guest(GuestOpError::StdinBackpressure));
+                return Err(ExecOpError::Guest(ProcessOpError::StdinBackpressure));
             }
             waiters.insert(request_id, reply);
         }
@@ -506,9 +502,9 @@ where
         match kind {
             NamedProcessStreamErrorKind::Authorization => ExecOpError::Auth,
             NamedProcessStreamErrorKind::StaleSession => ExecOpError::StaleSession,
-            NamedProcessStreamErrorKind::NotFound => ExecOpError::Guest(GuestOpError::ExecNotFound),
+            NamedProcessStreamErrorKind::NotFound => ExecOpError::Guest(ProcessOpError::ExecNotFound),
             NamedProcessStreamErrorKind::Backpressure => {
-                ExecOpError::Guest(GuestOpError::StdinBackpressure)
+                ExecOpError::Guest(ProcessOpError::StdinBackpressure)
             }
             NamedProcessStreamErrorKind::Protocol => ExecOpError::Protocol,
             NamedProcessStreamErrorKind::Timeout => ExecOpError::Timeout,
@@ -628,7 +624,7 @@ where
                     }
                 };
                 if late.len() >= MAX_PENDING_NAMED_RESPONSES {
-                    inner.fail_closed(ExecOpError::Guest(GuestOpError::StdinBackpressure));
+                    inner.fail_closed(ExecOpError::Guest(ProcessOpError::StdinBackpressure));
                     return;
                 }
                 if late.contains_key(&frame.request_id) {
@@ -668,7 +664,7 @@ where
     ) -> Result<WriteStdinOutcome, Self::Error> {
         let data_len = u64::try_from(data.len()).map_err(|_| ExecOpError::Protocol)?;
         if data.is_empty() || data_len > EXEC_MAX_CHUNK_BYTES {
-            return Err(ExecOpError::Guest(GuestOpError::MaxChunkExceeded));
+            return Err(ExecOpError::Guest(ProcessOpError::MaxChunkExceeded));
         }
         let response = Self::response_error(
             self.request(
@@ -710,7 +706,7 @@ where
         timeout: Duration,
     ) -> Result<ReadOutputOutcome, Self::Error> {
         if max_len == 0 || max_len > EXEC_MAX_CHUNK_BYTES {
-            return Err(ExecOpError::Guest(GuestOpError::MaxChunkExceeded));
+            return Err(ExecOpError::Guest(ProcessOpError::MaxChunkExceeded));
         }
         let response = Self::response_error(
             self.request(
@@ -1154,7 +1150,7 @@ impl WorkerState {
                 let data =
                     base64_codec::decode(&args.chunk_base64).map_err(|_| ExecOpError::Protocol)?;
                 if data.len() as u64 > EXEC_MAX_CHUNK_BYTES {
-                    return Err(ExecOpError::Guest(GuestOpError::MaxChunkExceeded));
+                    return Err(ExecOpError::Guest(ProcessOpError::MaxChunkExceeded));
                 }
                 // Idempotent retry of the most recent write at the same offset.
                 if let Some((offset, cached)) = &self.last_write
@@ -1163,10 +1159,10 @@ impl WorkerState {
                     return Ok(ExecOpResponse::WriteStdin(cached.clone()));
                 }
                 if args.offset != self.next_stdin_offset {
-                    return Err(ExecOpError::Guest(GuestOpError::OffsetMismatch));
+                    return Err(ExecOpError::Guest(ProcessOpError::OffsetMismatch));
                 }
                 if self.stdin_closed {
-                    return Err(ExecOpError::Guest(GuestOpError::StdinClosed));
+                    return Err(ExecOpError::Guest(ProcessOpError::StdinClosed));
                 }
                 let timeout = self.deadlines.control;
                 let outcome = self
@@ -1244,7 +1240,7 @@ impl WorkerState {
                 {
                     Ok(()) => {}
                     Err(ExecOpError::Guest(
-                        GuestOpError::StdinClosed | GuestOpError::StdinNotOpen,
+                        ProcessOpError::StdinClosed | ProcessOpError::StdinNotOpen,
                     )) => {}
                     Err(error) => return Err(error),
                 }
@@ -3064,7 +3060,7 @@ mod tests {
             stdin_closed: false,
         });
         let err = send_op(&tx, write_op(99, b"abc")).expect_err("offset mismatch");
-        assert_eq!(err, ExecOpError::Guest(GuestOpError::OffsetMismatch));
+        assert_eq!(err, ExecOpError::Guest(ProcessOpError::OffsetMismatch));
         drop(tx);
         worker.join().unwrap();
     }
@@ -3200,7 +3196,7 @@ mod tests {
         });
         let big = vec![0_u8; (EXEC_MAX_CHUNK_BYTES + 1) as usize];
         let err = send_op(&tx, write_op(0, &big)).expect_err("too big");
-        assert_eq!(err, ExecOpError::Guest(GuestOpError::MaxChunkExceeded));
+        assert_eq!(err, ExecOpError::Guest(ProcessOpError::MaxChunkExceeded));
         assert_eq!(
             shared.write_calls.load(Ordering::SeqCst),
             0,
@@ -3673,231 +3669,6 @@ mod tests {
     }
 }
 
-pub fn gate_capabilities(
-    capabilities: &[EnumOrUnknown<pb::GuestCapability>],
-    tty: bool,
-) -> Result<NegotiatedCaps, ExecEstablishError> {
-    let advertises = |cap: pb::GuestCapability| {
-        capabilities
-            .iter()
-            .filter_map(|value| value.enum_value().ok())
-            .any(|value| value == cap)
-    };
-    // The guest authenticated but advertises no attached-exec capability: exec
-    // is disabled or not built in (NOT old-generation - that is a connect-time
-    // failure). Fail closed to the capability slug, whose remediation points at
-    // `guest.exec.enable = true`.
-    if !advertises(pb::GuestCapability::GUEST_CAPABILITY_EXEC_ATTACHED) {
-        return Err(ExecEstablishError::Capability);
-    }
-    // Every reachable exec session streams stdout/stderr back via ReadOutput, so
-    // a guest that does not advertise EXEC_LOGS cannot serve a session at all.
-    // Fail fast rather than establishing a session that can never deliver
-    // output. A real exec-enabled guestd always advertises EXEC_LOGS alongside
-    // EXEC_ATTACHED, so this never rejects a correctly-configured guest.
-    if !advertises(pb::GuestCapability::GUEST_CAPABILITY_EXEC_LOGS) {
-        return Err(ExecEstablishError::Capability);
-    }
-    if !advertises(pb::GuestCapability::GUEST_CAPABILITY_SIGNALS) {
-        return Err(ExecEstablishError::Capability);
-    }
-    if tty
-        && (!advertises(pb::GuestCapability::GUEST_CAPABILITY_EXEC_TTY)
-            || !advertises(pb::GuestCapability::GUEST_CAPABILITY_TTY_RESIZE))
-    {
-        return Err(ExecEstablishError::Capability);
-    }
-    Ok(NegotiatedCaps {
-        tty,
-        signals: advertises(pb::GuestCapability::GUEST_CAPABILITY_SIGNALS),
-        tty_resize: advertises(pb::GuestCapability::GUEST_CAPABILITY_TTY_RESIZE),
-        output: advertises(pb::GuestCapability::GUEST_CAPABILITY_EXEC_LOGS),
-    })
-}
-
-pub fn build_exec_create_request(vm_id: &str, spec: &ExecStartSpec) -> pb::ExecCreateRequest {
-    let mut metadata = pb::RequestMetadata::new();
-    metadata.vm_id = vm_id.to_owned();
-    metadata.request_id = spec
-        .request_id
-        .clone()
-        .unwrap_or_else(|| "guest-control-exec".to_owned());
-    metadata.protocol_version = GUEST_CONTROL_PROTOCOL_VERSION;
-
-    let mut request = pb::ExecCreateRequest::new();
-    request.metadata = MessageField::some(metadata);
-    // The exec target user is host-fixed by guestd (the VM's workload user,
-    // `--exec-user`), and guestd ignores the wire `user` field entirely, so a
-    // client cannot select or escalate the target user. The daemon therefore
-    // leaves `user` unset.
-    request.argv = spec.argv.clone();
-    request.cwd = spec.cwd.clone();
-    request.env = spec
-        .env
-        .iter()
-        .map(|(key, value)| {
-            let mut var = pb::EnvVar::new();
-            var.key = key.clone();
-            var.value = value.clone();
-            var
-        })
-        .collect();
-    request.tty = spec.tty;
-    // guestd accepts an open stdin only in interactive TTY mode
-    // (`validate_and_authorize_tty`); both non-TTY validators
-    // (`validate_and_authorize` / `_detached`) reject `stdin_open` as
-    // `UnsupportedMode`. Mirror that contract: open stdin iff a PTY was
-    // requested. Hardcoding `true` made every non-TTY `vm exec` (and every
-    // detached exec) fail `ExecCreate` before the guest process could spawn.
-    request.stdin_open = spec.tty;
-    request.detached = spec.detached;
-    if let Some((rows, cols)) = spec.term_size {
-        let mut size = pb::TerminalSize::new();
-        size.rows = rows;
-        size.cols = cols;
-        request.initial_terminal_size = MessageField::some(size);
-    }
-    let mut policy = pb::OutputPolicy::new();
-    policy.max_chunk_bytes = d2b_contracts_control::public_wire::EXEC_MAX_CHUNK_BYTES;
-    request.output_policy = MessageField::some(policy);
-    request
-}
-
-pub fn ack_result(ack: &pb::ControlAck) -> Result<(), ExecOpError> {
-    if let Some(error) = ack.error.as_ref()
-        && !is_unspecified(error.kind)
-    {
-        return Err(map_guest_control_error(error));
-    }
-    Ok(())
-}
-
-pub fn terminal_from_state(
-    state: pb::ExecState,
-    status: Option<&pb::TerminalStatus>,
-) -> Option<TerminalKind> {
-    match state {
-        pb::ExecState::EXEC_STATE_EXITED => {
-            match status.and_then(|status| status.outcome.as_ref()) {
-                Some(pb::terminal_status::Outcome::ExitCode(code)) => {
-                    Some(TerminalKind::Exited(*code))
-                }
-                Some(pb::terminal_status::Outcome::StatusCode(code)) => {
-                    Some(TerminalKind::Exited(*code))
-                }
-                // EXITED without a WIFEXITED code is a protocol violation, not a
-                // synthesized success.
-                _ => Some(TerminalKind::Error("protocol-error")),
-            }
-        }
-        pb::ExecState::EXEC_STATE_SIGNALED => {
-            match status.and_then(|status| status.outcome.as_ref()) {
-                Some(pb::terminal_status::Outcome::Signal(signal)) => {
-                    Some(TerminalKind::Signaled(*signal))
-                }
-                _ => Some(TerminalKind::Error("protocol-error")),
-            }
-        }
-        pb::ExecState::EXEC_STATE_CANCELLED | pb::ExecState::EXEC_STATE_SLOW_CONSUMER_CANCELLED => {
-            Some(TerminalKind::Error("cancelled"))
-        }
-        pb::ExecState::EXEC_STATE_LOST_GUESTD => Some(TerminalKind::Error("lost-guestd")),
-        pb::ExecState::EXEC_STATE_REAPED => Some(TerminalKind::Error("reaped")),
-        pb::ExecState::EXEC_STATE_PROTOCOL_ERROR => Some(TerminalKind::Error("protocol-error")),
-        _ => None,
-    }
-}
-
-pub fn is_unspecified(kind: EnumOrUnknown<pb::GuestControlErrorKind>) -> bool {
-    matches!(
-        kind.enum_value(),
-        Ok(pb::GuestControlErrorKind::GUEST_CONTROL_ERROR_KIND_UNSPECIFIED)
-    )
-}
-
-pub fn map_guest_control_error(error: &pb::GuestControlError) -> ExecOpError {
-    use pb::GuestControlErrorKind as K;
-    match error.kind.enum_value() {
-        Ok(K::GUEST_CONTROL_ERROR_KIND_AUTH_FAILED) => ExecOpError::Auth,
-        Ok(K::GUEST_CONTROL_ERROR_KIND_STALE_SESSION) => ExecOpError::StaleSession,
-        Ok(K::GUEST_CONTROL_ERROR_KIND_TRANSPORT_UNREACHABLE) => ExecOpError::Transport,
-        Ok(K::GUEST_CONTROL_ERROR_KIND_GUEST_CONTROL_UNAVAILABLE_OLD_GENERATION) => {
-            ExecOpError::OldGeneration
-        }
-        Ok(K::GUEST_CONTROL_ERROR_KIND_GUEST_EXEC_DISABLED) => ExecOpError::Capability,
-        Ok(K::GUEST_CONTROL_ERROR_KIND_PROTOCOL_ERROR) => {
-            ExecOpError::Guest(GuestOpError::Protocol)
-        }
-        Ok(K::GUEST_CONTROL_ERROR_KIND_MAX_CHUNK_EXCEEDED) => {
-            ExecOpError::Guest(GuestOpError::MaxChunkExceeded)
-        }
-        Ok(K::GUEST_CONTROL_ERROR_KIND_STDIN_BACKPRESSURE) => {
-            ExecOpError::Guest(GuestOpError::StdinBackpressure)
-        }
-        Ok(
-            K::GUEST_CONTROL_ERROR_KIND_STDIN_CLOSED
-            | K::GUEST_CONTROL_ERROR_KIND_STDIN_CLOSED_BY_PROCESS,
-        ) => ExecOpError::Guest(GuestOpError::StdinClosed),
-        Ok(K::GUEST_CONTROL_ERROR_KIND_STDIN_NOT_OPEN) => {
-            ExecOpError::Guest(GuestOpError::StdinNotOpen)
-        }
-        Ok(
-            K::GUEST_CONTROL_ERROR_KIND_STDIN_OFFSET_MISMATCH
-            | K::GUEST_CONTROL_ERROR_KIND_OFFSET_EXPIRED
-            | K::GUEST_CONTROL_ERROR_KIND_OFFSET_IN_FUTURE
-            | K::GUEST_CONTROL_ERROR_KIND_OFFSET_EXHAUSTED,
-        ) => ExecOpError::Guest(GuestOpError::OffsetMismatch),
-        Ok(K::GUEST_CONTROL_ERROR_KIND_EXEC_NOT_FOUND) => {
-            ExecOpError::Guest(GuestOpError::ExecNotFound)
-        }
-        Ok(K::GUEST_CONTROL_ERROR_KIND_EXEC_ALREADY_EXITED) => {
-            ExecOpError::Guest(GuestOpError::ExecAlreadyExited)
-        }
-        Ok(K::GUEST_CONTROL_ERROR_KIND_EXEC_EXPIRED) => {
-            ExecOpError::Guest(GuestOpError::ExecExpired)
-        }
-        Ok(K::GUEST_CONTROL_ERROR_KIND_CONTROL_SEQ_MISMATCH) => {
-            ExecOpError::Guest(GuestOpError::ControlSeqMismatch)
-        }
-        Ok(K::GUEST_CONTROL_ERROR_KIND_RATE_LIMITED) => {
-            ExecOpError::Guest(GuestOpError::RateLimited)
-        }
-        Ok(K::GUEST_CONTROL_ERROR_KIND_INVALID_PROGRAM) => {
-            ExecOpError::Guest(GuestOpError::InvalidProgram)
-        }
-        _ => ExecOpError::Guest(GuestOpError::Other),
-    }
-}
-
-pub fn map_op_health_error(error: GuestControlHealthError) -> ExecOpError {
-    match error {
-        GuestControlHealthError::TransportIo
-        | GuestControlHealthError::Ttrpc
-        | GuestControlHealthError::Signer => ExecOpError::Transport,
-        GuestControlHealthError::Timeout => ExecOpError::Timeout,
-        GuestControlHealthError::AuthFailed => ExecOpError::Auth,
-        GuestControlHealthError::StaleSession => ExecOpError::StaleSession,
-        GuestControlHealthError::Protocol => ExecOpError::Protocol,
-    }
-}
-
-pub fn map_op_health_error_for_establish(error: GuestControlHealthError) -> ExecEstablishError {
-    op_to_establish(map_op_health_error(error))
-}
-
-pub fn map_establish_health_error(error: GuestControlHealthError) -> ExecEstablishError {
-    match error {
-        GuestControlHealthError::TransportIo
-        | GuestControlHealthError::Ttrpc
-        | GuestControlHealthError::Signer => ExecEstablishError::Transport,
-        GuestControlHealthError::Timeout => ExecEstablishError::Timeout,
-        GuestControlHealthError::AuthFailed | GuestControlHealthError::StaleSession => {
-            ExecEstablishError::Auth
-        }
-        GuestControlHealthError::Protocol => ExecEstablishError::Protocol,
-    }
-}
-
 pub fn op_to_establish(error: ExecOpError) -> ExecEstablishError {
     match error {
         ExecOpError::Transport => ExecEstablishError::Transport,
@@ -3909,154 +3680,5 @@ pub fn op_to_establish(error: ExecOpError) -> ExecEstablishError {
         ExecOpError::Capability => ExecEstablishError::Capability,
         ExecOpError::DetachedUnavailable => ExecEstablishError::Capability,
         ExecOpError::Guest(inner) => ExecEstablishError::Guest(inner),
-    }
-}
-
-#[cfg(test)]
-mod exec_protocol_tests {
-    use super::*;
-    use d2b_contracts_control::guest_proto as pb;
-
-    fn cap(value: pb::GuestCapability) -> EnumOrUnknown<pb::GuestCapability> {
-        EnumOrUnknown::new(value)
-    }
-
-    /// The full capability set a TTY exec needs.
-    fn full_tty_caps() -> Vec<EnumOrUnknown<pb::GuestCapability>> {
-        vec![
-            cap(pb::GuestCapability::GUEST_CAPABILITY_EXEC_ATTACHED),
-            cap(pb::GuestCapability::GUEST_CAPABILITY_EXEC_LOGS),
-            cap(pb::GuestCapability::GUEST_CAPABILITY_SIGNALS),
-            cap(pb::GuestCapability::GUEST_CAPABILITY_EXEC_TTY),
-            cap(pb::GuestCapability::GUEST_CAPABILITY_TTY_RESIZE),
-        ]
-    }
-
-    #[test]
-    fn no_exec_capability_is_capability_unavailable_after_auth() {
-        // A guest advertising only health/capabilities (no exec) has reached
-        // this gate AFTER authenticating, so it is up and reachable - exec is
-        // disabled or not built in, NOT a genuine old generation (that is a
-        // connect-time failure). Fail closed to the capability slug (exit 70,
-        // NO SSH fallback) whose remediation points at `guest.exec.enable`.
-        let caps = vec![
-            cap(pb::GuestCapability::GUEST_CAPABILITY_HEALTH),
-            cap(pb::GuestCapability::GUEST_CAPABILITY_CAPABILITIES),
-        ];
-        assert_eq!(
-            gate_capabilities(&caps, false),
-            Err(ExecEstablishError::Capability)
-        );
-        assert_eq!(
-            gate_capabilities(&caps, true),
-            Err(ExecEstablishError::Capability)
-        );
-    }
-
-    #[test]
-    fn exec_without_output_capability_is_capability_unavailable() {
-        // EXEC_ATTACHED without EXEC_LOGS: every reachable session must stream
-        // output, so the host fails closed rather than establishing a session
-        // that can never deliver stdout/stderr.
-        let caps = vec![
-            cap(pb::GuestCapability::GUEST_CAPABILITY_EXEC_ATTACHED),
-            cap(pb::GuestCapability::GUEST_CAPABILITY_SIGNALS),
-        ];
-        assert_eq!(
-            gate_capabilities(&caps, false),
-            Err(ExecEstablishError::Capability)
-        );
-        assert_eq!(
-            gate_capabilities(&caps, true),
-            Err(ExecEstablishError::Capability)
-        );
-    }
-
-    #[test]
-    fn exec_without_signals_is_capability_unavailable() {
-        let caps = vec![
-            cap(pb::GuestCapability::GUEST_CAPABILITY_EXEC_ATTACHED),
-            cap(pb::GuestCapability::GUEST_CAPABILITY_EXEC_LOGS),
-        ];
-        assert_eq!(
-            gate_capabilities(&caps, false),
-            Err(ExecEstablishError::Capability)
-        );
-    }
-
-    #[test]
-    fn non_tty_session_succeeds_without_tty_caps() {
-        let caps = vec![
-            cap(pb::GuestCapability::GUEST_CAPABILITY_EXEC_ATTACHED),
-            cap(pb::GuestCapability::GUEST_CAPABILITY_EXEC_LOGS),
-            cap(pb::GuestCapability::GUEST_CAPABILITY_SIGNALS),
-        ];
-        let negotiated = gate_capabilities(&caps, false).expect("non-tty session is allowed");
-        assert_eq!(
-            negotiated,
-            NegotiatedCaps {
-                tty: false,
-                signals: true,
-                tty_resize: false,
-                output: true,
-            }
-        );
-    }
-
-    #[test]
-    fn negotiated_caps_reflect_output_and_resize_advertisements() {
-        // The cap snapshot used for per-op gating reflects exactly what the
-        // guest advertised: ExecLogs → output, TtyResize → tty_resize.
-        let caps = vec![
-            cap(pb::GuestCapability::GUEST_CAPABILITY_EXEC_ATTACHED),
-            cap(pb::GuestCapability::GUEST_CAPABILITY_SIGNALS),
-            cap(pb::GuestCapability::GUEST_CAPABILITY_EXEC_TTY),
-            cap(pb::GuestCapability::GUEST_CAPABILITY_TTY_RESIZE),
-            cap(pb::GuestCapability::GUEST_CAPABILITY_EXEC_LOGS),
-        ];
-        let negotiated = gate_capabilities(&caps, true).expect("full tty caps allowed");
-        assert_eq!(
-            negotiated,
-            NegotiatedCaps {
-                tty: true,
-                signals: true,
-                tty_resize: true,
-                output: true,
-            }
-        );
-    }
-
-    #[test]
-    fn tty_session_requires_exec_tty_and_tty_resize() {
-        // Missing EXEC_TTY.
-        let no_exec_tty = vec![
-            cap(pb::GuestCapability::GUEST_CAPABILITY_EXEC_ATTACHED),
-            cap(pb::GuestCapability::GUEST_CAPABILITY_EXEC_LOGS),
-            cap(pb::GuestCapability::GUEST_CAPABILITY_SIGNALS),
-            cap(pb::GuestCapability::GUEST_CAPABILITY_TTY_RESIZE),
-        ];
-        assert_eq!(
-            gate_capabilities(&no_exec_tty, true),
-            Err(ExecEstablishError::Capability)
-        );
-        // Missing TTY_RESIZE.
-        let no_resize = vec![
-            cap(pb::GuestCapability::GUEST_CAPABILITY_EXEC_ATTACHED),
-            cap(pb::GuestCapability::GUEST_CAPABILITY_EXEC_LOGS),
-            cap(pb::GuestCapability::GUEST_CAPABILITY_SIGNALS),
-            cap(pb::GuestCapability::GUEST_CAPABILITY_EXEC_TTY),
-        ];
-        assert_eq!(
-            gate_capabilities(&no_resize, true),
-            Err(ExecEstablishError::Capability)
-        );
-        // A non-tty session does not need the tty caps even when absent.
-        assert!(gate_capabilities(&no_exec_tty, false).is_ok());
-    }
-
-    #[test]
-    fn full_capability_set_passes_for_tty_and_non_tty() {
-        assert!(gate_capabilities(&full_tty_caps(), true).is_ok());
-        assert!(gate_capabilities(&full_tty_caps(), false).is_ok());
     }
 }

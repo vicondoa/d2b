@@ -974,13 +974,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "d2b-exec-runner"
-version = "0.0.0-bootstrap"
-dependencies = [
- "rustix 0.38.44",
-]
-
-[[package]]
 name = "d2b-gateway"
 version = "0.0.0-bootstrap"
 dependencies = [
@@ -1019,25 +1012,6 @@ dependencies = [
  "tracing",
  "tracing-subscriber",
  "webpki-roots 0.26.11",
-]
-
-[[package]]
-name = "d2b-guestd"
-version = "0.0.0-bootstrap"
-dependencies = [
- "async-trait",
- "d2b-contracts",
- "d2b-contracts-control",
- "d2b-exec-runner",
- "d2b-realm-core",
- "futures",
- "hmac",
- "protobuf",
- "rustix 0.38.44",
- "sha2",
- "tokio",
- "tokio-vsock",
- "ttrpc",
 ]
 
 [[package]]

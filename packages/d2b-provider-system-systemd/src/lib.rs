@@ -8,8 +8,8 @@
 //! systemd owns `wait` and reap; this Provider holds only a locally
 //! verified pidfd.
 //!
-//! Adapted from the guest exec runner's non-forking `systemd-run`
-//! transient-unit launch (`packages/d2b-guestd/src/detached.rs`).
+//! Adapted from the earlier non-forking `systemd-run` transient-unit launch
+//! contract.
 //!
 //! This crate performs no privileged mutation: it opens no D-Bus or systemd
 //! socket, spawns no process, and resolves no unit name or path. It

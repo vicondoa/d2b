@@ -68,9 +68,9 @@ The following conditions are enforced at NixOS eval time (before any build):
    cannot both be set for the same VM. The assertion message names the
    conflicting VM.
 
-3. **Guest control prerequisite**: `usb.securityKey.enable = true` requires
-   `guest.control.enable = true` on the same VM (the DAG supervisor needs
-   guest control to manage the frontend node lifecycle).
+3. **ComponentSession prerequisite**: `usb.securityKey.enable = true` requires
+   `guest.componentSession.enable = true` on the same VM (the DAG supervisor needs
+   ComponentSession to manage the frontend node lifecycle).
 
 ## Device selectors
 

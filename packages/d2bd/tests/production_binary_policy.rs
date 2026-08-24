@@ -12,6 +12,17 @@ fn production_binary_contains_no_peer_override_surface() {
         !rendered.contains("peer_override_from_env"),
         "production d2bd must not contain the peer override implementation"
     );
+    for retired in [
+        "run_exec_owner",
+        "dispatch_exec_management",
+        "dispatch_read_guest_config",
+        "exec_owner_io",
+    ] {
+        assert!(
+            !rendered.contains(retired),
+            "production d2bd must not retain retired component-session path {retired}"
+        );
+    }
     let source = [
         PathBuf::from(std::env::var_os("CARGO_MANIFEST_DIR").unwrap_or_else(|| ".".into()))
             .join("src/composition.rs"),

@@ -25,7 +25,6 @@ fn capabilities_keep_protocol_version_and_wire_tags() {
             "DeleteBridge",
             "DeletePersistentTap",
             "ExportBrokerAudit",
-            "GuestControlSign",
             "Hello",
             "InjectSecretById",
             "LaunchCutoverRunner",

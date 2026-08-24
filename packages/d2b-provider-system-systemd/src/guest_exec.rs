@@ -1,7 +1,7 @@
 //! Guest-domain EphemeralProcess execution and attachment contracts.
 //!
-//! The former guestd command and userd socket protocols are represented here
-//! as typed resource/session intents.  The request carries an
+//! The target-local execution command and session protocol are represented here
+//! as typed resource/session intents. The request carries an
 //! `EphemeralProcess` reference and bounded terminal geometry only; command
 //! argv, environment, paths, and credentials are resolved by the signed
 //! Provider template and never cross this boundary.

@@ -52,20 +52,13 @@ let
   evaluated = (mkGuestEval {
     modules = [
       optionSinks
-      (import (flakeRoot + "/nixos-modules/guest-control.nix"))
+      (import (flakeRoot + "/nixos-modules/component-session.nix"))
       (import (flakeRoot + "/nixos-modules/guest-broker.nix"))
       childZone
       ({ ... }: {
-        d2b.guestControl = {
+        d2b.componentSession = {
           enable = true;
           guestConfigPath = null;
-          usbipPath = null;
-          exec = {
-            enable = false;
-            execUser = null;
-            detachedMaxRuntimeSec = 0;
-            interactiveMaxRuntimeSec = 0;
-          };
           shell = {
             enable = false;
             defaultName = "default";

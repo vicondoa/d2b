@@ -23,8 +23,8 @@ use d2b_provider_runtime_azure_container_apps::{
 use d2b_provider_runtime_cloud_hypervisor::{
     CloudHypervisorClock, CloudHypervisorConfig, CloudHypervisorController,
     CloudHypervisorEffectPort, CloudHypervisorError, CloudHypervisorGuestSettings,
-    CloudHypervisorPhase, CloudHypervisorReconcileOutcome, ConsoleType, GuestControlHealth,
-    GuestControlHealthError, GuestControlProbe,
+    CloudHypervisorPhase, CloudHypervisorReconcileOutcome, ConsoleType, GuestSessionError,
+    GuestSessionEvidence, GuestSessionEvidenceProbe,
     adoption::ProcessIdentity,
     bootstrap_graph::{AttachmentRef, BootstrapGraph},
 };
@@ -252,15 +252,22 @@ fn cloud_identity() -> ProcessIdentity {
     }
 }
 
-struct FakeGuestControl;
+struct FakeGuestSession;
 
 #[async_trait]
-impl GuestControlProbe for FakeGuestControl {
-    async fn probe(&self, _: u32, _: u32) -> Result<GuestControlHealth, GuestControlHealthError> {
-        Ok(GuestControlHealth::Ready)
+impl GuestSessionEvidenceProbe for FakeGuestSession {
+    async fn observe(&self, _: u32, _: u32) -> Result<GuestSessionEvidence, GuestSessionError> {
+        GuestSessionEvidence::current(
+            ResourceRef::parse("Guest/test").unwrap(),
+            "sha256:0000000000000000000000000000000000000000000000000000000000000001",
+            1,
+            [],
+            true,
+            true,
+        )
     }
 
-    async fn close(&self, _: u32) -> Result<(), GuestControlHealthError> {
+    async fn close(&self, _: u32) -> Result<(), GuestSessionError> {
         Ok(())
     }
 }
@@ -275,7 +282,7 @@ impl CloudHypervisorClock for FixedCloudClock {
 
 fn cloud_controller(
     effect: Arc<FakeCloudEffect>,
-) -> CloudHypervisorController<FakeCloudEffect, FakeGuestControl> {
+) -> CloudHypervisorController<FakeCloudEffect, FakeGuestSession> {
     let config = CloudHypervisorConfig {
         controller_execution_ref: ResourceRef::parse("Host/host-system").unwrap(),
         default_vcpus: 2,
@@ -310,7 +317,7 @@ fn cloud_controller(
         vec![AttachmentRef::new("launch-ticket").unwrap()],
     )
     .unwrap();
-    CloudHypervisorController::new(config, settings, graph, effect, Arc::new(FakeGuestControl))
+    CloudHypervisorController::new(config, settings, graph, effect, Arc::new(FakeGuestSession))
         .unwrap()
         .with_clock(Arc::new(FixedCloudClock))
 }

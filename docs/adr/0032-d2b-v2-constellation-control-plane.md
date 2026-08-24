@@ -2793,7 +2793,7 @@ Negative/trade-offs:
 - [Daemon API reference](../reference/daemon-api.md)
 - [Tracing contract](../reference/tracing-contract.md)
 - [Observability component reference](../reference/components-observability.md)
-- [Guest-control exec I/O reference](../reference/guest-control-exec-io-chunked-stdio.md)
+- [ComponentSession exec contract](../reference/cli-contract.md#exec)
 - [Graphics component reference](../reference/components-graphics.md)
 - [Audio component reference](../reference/components-audio.md)
 - [USBIP component reference](../reference/components-usbip.md)

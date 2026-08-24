@@ -95,7 +95,6 @@ pub const PUBLIC_MANIFEST_FIELDS: &[&str] = &[
     "displayWindow",
     "exec",
     "guest",
-    "guestControl",
     "gracefulShutdown",
     "hostPrepare",
     "inGuestObservability",

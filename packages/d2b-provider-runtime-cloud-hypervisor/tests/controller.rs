@@ -7,12 +7,13 @@ use d2b_contracts_resource::v3::ResourceRef;
 use d2b_provider_runtime_cloud_hypervisor::{
     CloudHypervisorClock, CloudHypervisorConfig, CloudHypervisorController,
     CloudHypervisorEffectPort, CloudHypervisorGuestSettings, CloudHypervisorPhase,
-    CloudHypervisorReconcileOutcome, ConsoleType, GuestControlHealth, GuestControlProbe,
+    CloudHypervisorReconcileOutcome, ConsoleType, GuestSessionEvidence, GuestSessionHealth,
+    GuestSessionEvidenceProbe,
 };
 use d2b_provider_runtime_cloud_hypervisor::{
     adoption::ProcessIdentity,
     bootstrap_graph::{AttachmentRef, BootstrapGraph},
-    health::GuestControlHealthError,
+    health::GuestSessionError,
 };
 
 #[derive(Default)]
@@ -98,13 +99,13 @@ impl CloudHypervisorEffectPort for FakeEffect {
 }
 
 struct ReadyProbe {
-    responses: Arc<Mutex<Vec<GuestControlHealth>>>,
+    responses: Arc<Mutex<Vec<GuestSessionHealth>>>,
     close_calls: Arc<Mutex<Vec<u32>>>,
     delay_ms: u64,
 }
 
 impl ReadyProbe {
-    fn scripted(responses: Vec<GuestControlHealth>) -> Self {
+    fn scripted(responses: Vec<GuestSessionHealth>) -> Self {
         Self {
             responses: Arc::new(Mutex::new(responses)),
             close_calls: Arc::new(Mutex::new(Vec::new())),
@@ -112,7 +113,7 @@ impl ReadyProbe {
         }
     }
 
-    fn delayed(responses: Vec<GuestControlHealth>, delay_ms: u64) -> Self {
+    fn delayed(responses: Vec<GuestSessionHealth>, delay_ms: u64) -> Self {
         Self {
             responses: Arc::new(Mutex::new(responses)),
             close_calls: Arc::new(Mutex::new(Vec::new())),
@@ -122,20 +123,43 @@ impl ReadyProbe {
 }
 
 #[async_trait]
-impl GuestControlProbe for ReadyProbe {
-    async fn probe(&self, _: u32, _: u32) -> Result<GuestControlHealth, GuestControlHealthError> {
+impl GuestSessionEvidenceProbe for ReadyProbe {
+    async fn observe(
+        &self,
+        _: u32,
+        _: u32,
+    ) -> Result<GuestSessionEvidence, GuestSessionError> {
         if self.delay_ms > 0 {
             sleep(Duration::from_millis(self.delay_ms)).await;
         }
-        Ok(self
+        let health = self
             .responses
             .lock()
             .unwrap()
             .pop()
-            .unwrap_or(GuestControlHealth::Ready))
+            .unwrap_or(GuestSessionHealth::Ready);
+        match health {
+            GuestSessionHealth::Ready => GuestSessionEvidence::current(
+                ResourceRef::parse("Guest/test").unwrap(),
+                "sha256:0000000000000000000000000000000000000000000000000000000000000001",
+                1,
+                [],
+                true,
+                true,
+            ),
+            GuestSessionHealth::Degraded => GuestSessionEvidence::current(
+                ResourceRef::parse("Guest/test").unwrap(),
+                "sha256:0000000000000000000000000000000000000000000000000000000000000001",
+                1,
+                [],
+                false,
+                false,
+            ),
+            GuestSessionHealth::Failed => Err(GuestSessionError::AuthenticationFailed),
+        }
     }
 
-    async fn close(&self, cid: u32) -> Result<(), GuestControlHealthError> {
+    async fn close(&self, cid: u32) -> Result<(), GuestSessionError> {
         self.close_calls.lock().unwrap().push(cid);
         Ok(())
     }
@@ -231,7 +255,7 @@ async fn dependency_barrier_prevents_process_launch() {
 }
 
 #[tokio::test]
-async fn launch_requires_authenticated_guest_control_before_ready() {
+async fn launch_requires_authenticated_guest_session_before_ready() {
     let state = Arc::new(Mutex::new(FakeState::default()));
     let mut controller = controller(Arc::clone(&state));
     assert_eq!(
@@ -390,7 +414,7 @@ async fn finalization_requires_observing_process_exit() {
 }
 
 #[tokio::test]
-async fn absent_process_still_closes_guest_control() {
+async fn absent_process_still_closes_guest_session() {
     let state = Arc::new(Mutex::new(FakeState::default()));
     let probe = ReadyProbe::scripted(Vec::new());
     let close_calls = Arc::clone(&probe.close_calls);
@@ -410,9 +434,9 @@ async fn degraded_health_requires_threshold_before_phase_change() {
     let mut controller = controller_with_probe(
         state,
         ReadyProbe::scripted(vec![
-            GuestControlHealth::Ready,
-            GuestControlHealth::Degraded,
-            GuestControlHealth::Degraded,
+            GuestSessionHealth::Ready,
+            GuestSessionHealth::Degraded,
+            GuestSessionHealth::Degraded,
         ]),
     );
     assert!(matches!(
@@ -448,7 +472,7 @@ async fn launch_is_cancelled_at_startup_deadline() {
 }
 
 #[tokio::test]
-async fn initial_guest_control_probe_is_cancelled_at_startup_deadline() {
+async fn initial_guest_session_probe_is_cancelled_at_startup_deadline() {
     let state = Arc::new(Mutex::new(FakeState::default()));
     let mut controller =
         controller_with_probe_and_deadline(state, ReadyProbe::delayed(Vec::new(), 100), 20);

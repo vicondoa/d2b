@@ -1078,7 +1078,7 @@ in
           };
         };
 
-        guest.control = {
+        guest.componentSession = {
           enable = lib.mkOption {
             type = lib.types.bool;
             default = false;
@@ -1089,100 +1089,6 @@ in
               create a local Zone store or public operator socket.
             '';
           };
-          auth.tokenFile = lib.mkOption {
-            type = lib.types.nullOr lib.types.str;
-            default = null;
-            description = ''
-              REMOVED. Guest enrollment uses the ComponentSession key
-              contract. This option is retained only as a fail-closed
-              migration diagnostic and must remain null.
-            '';
-          };
-        };
-
-        guest.exec = {
-          enable = lib.mkOption {
-            type = lib.types.bool;
-            default = false;
-            description = ''
-              Enable the guest-control exec runtime for this VM.
-
-              This wires the guestd exec service so admin operators (callers in
-              `d2b.site.adminUsers`) can run `d2b vm exec` against this
-              VM over the authenticated guest-control vsock - no SSH. Exec is
-              off by default; enabling it requires `guest.control.enable = true`
-              and a workload user (`ssh.user`).
-
-              Every exec runs the requested command as the VM's workload user
-              (`ssh.user`) - never as root - inside a real PAM login session
-              (`systemd-run --property=PAMName=login --uid=<user>`), so the
-              command sees the same environment an SSH login would
-              (`XDG_RUNTIME_DIR`, the login-shell profile, …). Users elevate
-              with `sudo` inside the session.
-            '';
-          };
-
-          # Tombstones (removed options): guest-control exec now always
-          # runs as the VM's workload user (`ssh.user`) in a PAM login
-          # session - never root - and there is no per-VM exec user
-          # allowlist. These hidden stubs keep legacy assignments landing
-          # on the friendly migration assertions in assertions.nix instead
-          # of a cryptic "option does not exist" module-system error.
-          allowRoot = lib.mkOption {
-            type = lib.types.bool;
-            default = false;
-            internal = true;
-            visible = false;
-            description = ''
-              REMOVED. Guest-control exec always runs as the VM's workload
-              user (`ssh.user`), never root. Elevate with `sudo` inside the
-              session. See the migration assertion in assertions.nix.
-            '';
-          };
-
-          users = lib.mkOption {
-            type = lib.types.listOf lib.types.str;
-            default = [ ];
-            internal = true;
-            visible = false;
-            description = ''
-              REMOVED. Guest-control exec always targets the VM's single
-              workload user (`ssh.user`); there is no per-VM exec user
-              allowlist. See the migration assertion in assertions.nix.
-            '';
-          };
-
-          detachedMaxRuntimeSec = lib.mkOption {
-            type = lib.types.ints.unsigned;
-            default = 0;
-            example = 86400;
-            description = ''
-              Default runtime ceiling, in seconds, for detached execs on this
-              VM. `0` (the default) means no ceiling: a detached exec may run
-              indefinitely until it exits or is cancelled.
-
-              When non-zero, guestd passes the value to the per-exec transient
-              unit as a `RuntimeMaxSec` ceiling; a detached exec exceeding it is
-              terminated and reported as expired. This is a guest-enforced
-              backstop, not a substitute for explicit cancellation.
-            '';
-          };
-
-          interactiveMaxRuntimeSec = lib.mkOption {
-            type = lib.types.ints.unsigned;
-            default = 0;
-            example = 28800;
-            description = ''
-              Default runtime ceiling, in seconds, for interactive (TTY) execs
-              on this VM. `0` (the default) means no ceiling: an interactive
-              session is connection-owned and may run indefinitely until it
-              exits or the controlling connection drops.
-
-              This ceiling applies only to interactive `tty = true`,
-              non-detached execs. Non-interactive attached execs keep their
-              fixed built-in runtime ceiling regardless of this value.
-            '';
-          };
         };
 
         guest.shell = {
@@ -1190,15 +1096,11 @@ in
             type = lib.types.bool;
             default = false;
             description = ''
-              Enable the staged persistent guest-shell contract for this VM.
+              Enable the staged persistent ShellSession contract for this VM.
 
-              Persistent shells use the authenticated guest-control plane and the
-              same workload-user terminal substrate as guest exec. The option is
-              default-off and requires `guest.control.enable = true`,
-              `guest.exec.enable = true`, and a non-root workload user
-              (`ssh.user`). Runtime shpool attachment is staged separately; this
-              option currently carries the host/guest policy and manifest
-              contract used by runtime implementations.
+              Persistent shells use authenticated ComponentSession named streams
+              and the target-local Process terminal substrate. The option is
+              default-off and requires `guest.componentSession.enable = true`.
             '';
           };
 

@@ -8,7 +8,7 @@
   (wire protocol and typed errors), [ADR 0015](0015-daemon-only-clean-break.md)
   (daemon-only clean break), [ADR 0025](0025-wayland-proxy-host-jailed-role.md)
   (host-jailed Wayland filter proxy role), [ADR 0028](0028-guest-control-plane-over-vsock.md)
-  (guest control plane over virtio-vsock), [ADR 0034](0034-storage-lifecycle-restart-and-synchronization.md)
+  (ComponentSession control plane over virtio-vsock), [ADR 0034](0034-storage-lifecycle-restart-and-synchronization.md)
   (storage lifecycle, restart adoption, and synchronization), [ADR 0037](0037-local-hypervisor-runtime-seam.md)
   (local hypervisor runtime seam), [ADR 0038](0038-persistent-guest-shell-sessions.md)
   (persistent named guest shell sessions), [ADR 0039](0039-constellation-persistent-shell-routing.md)
@@ -19,14 +19,14 @@
 
 D2b's local desktop VM experience is strong: a local `d2b` CLI talks to a
 local `d2bd`, `d2bd` owns the VM lifecycle DAG, privileged host mutation
-flows through `d2b-priv-broker`, guest control is typed, and Wayland
+flows through `d2b-priv-broker`, ComponentSession control is typed, and Wayland
 windows run through d2b-owned local virtualization surfaces.
 
 The constellation/realm model is less coherent. [ADR 0032](0032-d2b-v2-constellation-control-plane.md)
 correctly introduced semantic daemon-to-daemon operations, capability
 negotiation, remote full-host nodes, provider adapters, and relay-agnostic
 transport boundaries. It also intentionally avoided raw broker, daemon,
-guest-control, SSH, and generic network tunnels. Those invariants remain sound.
+component-session, SSH, and generic network tunnels. Those invariants remain sound.
 
 The weak point is the ownership model. [ADR 0032](0032-d2b-v2-constellation-control-plane.md)
 treats realms as an entrypoint table in front of a host daemon, with
@@ -266,7 +266,7 @@ The same realm contract can be implemented in different placements:
 | --- | --- | --- |
 | `host-local` | Isolated service on the physical host | May own local VM/provider lifecycle through that realm's broker. |
 | `gateway-vm` | Dedicated local d2b VM | Owns realm policy/credentials inside a microVM boundary. |
-| `cloud-full-host` | Cloud VM running full d2b | Owns its local broker, runtimes, and guest-control stack. |
+| `cloud-full-host` | Cloud VM running full d2b | Owns its local broker, runtimes, and ComponentSession stack. |
 | `provider-controller` | Provider-supported environment | Implements the standard d2b realm protocol with a limited capability set. |
 | `provider-agent` | Inside or adjacent to a managed sandbox | Implements workload/stream subsets when a full `d2bd` cannot run. |
 
@@ -546,7 +546,7 @@ local-root
 
 The protocol routes semantic d2b operation and stream frames. It does not
 create a flat L3/L4 overlay, VPN, raw port-forward default, SSH fallback, raw
-guest-control tunnel, raw broker tunnel, pidfd passing, or generic socket
+component-session tunnel, raw broker tunnel, pidfd passing, or generic socket
 proxy.
 
 Every routed operation carries a bounded correlation id aligned with W3C Trace
@@ -623,7 +623,7 @@ The architecture should pursue local d2b parity where feasible:
 | --- | --- |
 | Lifecycle | Core capability for realms that own workload lifecycle. |
 | Exec | Core typed operation; provider API exec is allowed only as a capability-scoped implementation. |
-| Persistent shell | Core where a guestd-compatible agent or full d2bd can provide [ADR 0038](0038-persistent-guest-shell-sessions.md) semantics. |
+| Persistent shell | Core where a ComponentSession-capable provider agent or full d2bd can provide [ADR 0038](0038-persistent-guest-shell-sessions.md) semantics. |
 | Logs | Core bounded stream/summary capability. |
 | Wayland/display | Core capability for desktop use, implemented through d2b-owned proxy/stream surfaces. |
 | Clipboard | Capability-gated and must preserve [ADR 0042](0042-d2b-clipboard-authority-and-picker-split.md) picker/clipd authority. |
@@ -711,7 +711,7 @@ daemon namespace.
 An Azure VM realm type provisions or adopts a VM capable of running d2b. The
 provider may create the infrastructure and inject bootstrap material, but once
 the VM boots, the cloud host runs its own realm controller and broker. Local
-effects are re-originated inside that cloud host's d2bd/broker/guest-control
+effects are re-originated inside that cloud host's d2bd/broker/component-session
 stack.
 
 ### Provider-managed sandboxes
@@ -719,7 +719,7 @@ stack.
 An ACA-like provider may not have KVM, systemd, a broker, cgroups, or vsock.
 It can still participate when it implements the standard d2b semantic
 contract subset and advertises only the capabilities it can support. A
-persistent-shell-capable sandbox must run a guestd-compatible d2b agent; a
+persistent-shell-capable sandbox must run a ComponentSession-capable provider agent; a
 provider-native one-shot command API is not a persistent shell.
 
 Existing ACA sandbox support migrates into this model. Old ACA sandbox
@@ -973,7 +973,7 @@ test it:
   and runtime metadata into the selected realm.
 
 Local Cloud Hypervisor VMs are part of this required migration. Their disks,
-per-VM state, guest-control identity, display/Wayland proxy identity, audit
+per-VM state, component-session identity, display/Wayland proxy identity, audit
 pointers, and runtime metadata move under the owning realm while preserving the
 local fast path for default-realm use.
 
@@ -1000,7 +1000,7 @@ The following [ADR 0032](0032-d2b-v2-constellation-control-plane.md) decisions
 remain valid and should be carried forward:
 
 - semantic operation/stream frames;
-- no raw broker/daemon/guest-control tunneling;
+- no raw broker/daemon/component-session tunneling;
 - relay is untrusted reachability;
 - capability negotiation and typed denial;
 - idempotency for mutating operations;

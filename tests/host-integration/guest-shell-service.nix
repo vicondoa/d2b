@@ -1,6 +1,6 @@
 # Type-G runNixOSTest: guest persistent-shell service wiring.
 #
-# Applies the guest-control module directly to a NixOS test node and asserts the
+# Applies the component-session module directly to a NixOS test node and asserts the
 # real systemd/PAM/linger boundary for the guest-local shell pool. This avoids a
 # nested d2b-managed VM while still exercising NixOS module realization.
 { pkgs, self }:
@@ -10,7 +10,7 @@ pkgs.testers.runNixOSTest {
 
   nodes.machine = { lib, ... }: {
     imports = [
-      ../../nixos-modules/guest-control.nix
+      ../../nixos-modules/component-session.nix
       {
         _module.args = {
           d2bInputs = { inherit self; };
@@ -21,7 +21,7 @@ pkgs.testers.runNixOSTest {
           uid = 1000;
         };
 
-        d2b.guestControl = {
+        d2b.componentSession = {
           enable = lib.mkForce true;
           exec = {
             enable = lib.mkForce true;
@@ -48,8 +48,8 @@ pkgs.testers.runNixOSTest {
     start_all()
     machine.wait_for_unit("multi-user.target")
 
-    # The shell pool daemon is declared but dormant: guestd owns when it starts
-    # or adopts the pool.
+    # The shell pool daemon is declared but dormant: the target-local Process
+    # owner starts or adopts the pool.
     machine.succeed("systemctl cat d2b-shpool-daemon.service")
     machine.succeed(
         "test \"$(systemctl show -P PAMName d2b-shpool-daemon.service)\" = d2b-shpool-daemon"

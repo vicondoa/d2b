@@ -2,12 +2,11 @@
 //!
 //! Resolves the per-VM provider capability row before touching local state:
 //!
-//! * **Cloud Hypervisor NixOS** - OFD-locked local state I/O, host PipeWire
-//!   enforcement via a `pw-cli`/`wpctl` subprocess (credential-aware; see
-//!   `audio_host_controller::PipeWireHostController`), guest enforcement via
-//!   guestd audio RPCs over the authenticated guest-control transport.
+//! * **Cloud Hypervisor NixOS** - OFD-locked local state I/O and host PipeWire
+//!   enforcement via the broker-backed
+//!   `audio_host_controller::PipeWireHostController`.
 //! * **qemu-media** - OFD-locked local state I/O, offline state-file policy.
-//!   Guest enforcement always reported `Unsupported`. No guestd calls.
+//!   Target-side enforcement is reported as unavailable.
 //!
 //! All provider-internal resource IDs and credentials are redacted from
 //! public responses. Volume/gain values never appear in audit records,
@@ -16,7 +15,6 @@
 use std::sync::Arc;
 
 use d2b_contracts_broker::broker_wire::BrokerCallerRole;
-use d2b_contracts_control::guest_proto as pb;
 use d2b_contracts_control::public_wire::{
     AudioChannel, AudioChannelState, AudioEnforcementPosture, AudioErrorKind, AudioMuteArgs,
     AudioOp, AudioOpResponse, AudioProviderKind, AudioSetApplied, AudioSetResult,
@@ -45,12 +43,6 @@ use crate::TypedError;
 use crate::audio_host_controller::{
     HostAudioController, PipeWireHostController, QemuAudioController,
 };
-use crate::guest_control_bridge::{
-    GUEST_CONTROL_AUDIO_SET_TIMEOUT, run_audio_set_on_dedicated_thread,
-    run_audio_status_on_dedicated_thread,
-};
-use d2bd_runtime::guest_control_health::{GuestAudioSetError, GuestAudioStatus};
-
 // ── Provider capability resolution ───────────────────────────────────────────
 
 /// Resolve the audio capability row for a VM manifest entry.
@@ -83,12 +75,10 @@ fn public_provider_kind(cap: &AudioProviderCapability) -> AudioProviderKind {
 
 /// Map provider capability to the public enforcement posture.
 fn public_enforcement_posture(cap: &AudioProviderCapability) -> AudioEnforcementPosture {
-    match (cap.host_enforcement, cap.guest_enforcement) {
-        (AudioHostEnforcementKind::None, AudioGuestEnforcementKind::GuestdCapable) => {
-            AudioEnforcementPosture::GuestOnly
-        }
-        (_, AudioGuestEnforcementKind::Unsupported) => AudioEnforcementPosture::HostOnly,
-        _ => AudioEnforcementPosture::HostAndGuest,
+    match cap.host_enforcement {
+        AudioHostEnforcementKind::None => AudioEnforcementPosture::Unsupported,
+        AudioHostEnforcementKind::PipeWireVhostUserSound
+        | AudioHostEnforcementKind::QemuAudioBackend => AudioEnforcementPosture::HostOnly,
     }
 }
 
@@ -212,26 +202,13 @@ fn state_to_vm_state(
     }
 }
 
-// ── Guest enforcement result ──────────────────────────────────────────────────
-
-/// Result of a guest-side (guestd AudioSet RPC) enforcement call.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum GuestEnforcementResult {
-    /// guestd applied the change successfully.
-    Applied,
-    /// guestd was not reachable or the capability was not advertised.
-    Unavailable,
-    /// guestd was reachable but returned an error (PipeWire unavailable, etc.).
-    Failed,
-}
-
-/// Production AudioMediator backed by the daemon's existing broker and
-/// authenticated guest-control paths.
+/// Production AudioMediator backed by the daemon's broker and
+/// target-local audio Provider.
 ///
 /// The mediator owns no host handles or paths. It translates the Provider's
 /// channel-neutral effect port into the existing capability-resolved daemon
-/// controllers, which keep PipeWire mutations broker-owned and guest effects
-/// on the authenticated guest-control transport.
+/// controllers, which keep PipeWire mutations broker-owned. Target-side
+/// effects are represented by the signed Process child resources.
 pub(crate) struct DaemonAudioMediator {
     state: Arc<ServerState>,
     vm_name: String,
@@ -280,18 +257,6 @@ impl DaemonAudioMediator {
         }
     }
 
-    fn guest_error(&self, result: GuestEnforcementResult) -> Result<(), AudioMediatorError> {
-        match (self.capability.guest_enforcement, result) {
-            (AudioGuestEnforcementKind::Unsupported, _) => Ok(()),
-            (_, GuestEnforcementResult::Applied) => Ok(()),
-            (AudioGuestEnforcementKind::GuestdCapable, GuestEnforcementResult::Unavailable) => {
-                Err(AudioMediatorError::GuestSessionUnavailable)
-            }
-            (AudioGuestEnforcementKind::GuestdCapable, GuestEnforcementResult::Failed) => {
-                Err(AudioMediatorError::GuestSessionUnavailable)
-            }
-        }
-    }
 }
 
 impl AudioMediator for DaemonAudioMediator {
@@ -313,37 +278,7 @@ impl AudioMediator for DaemonAudioMediator {
             core_audio_grant(grant),
             wire_channel,
         );
-        self.host_error(host)?;
-        let guest = if self.capability.guest_enforcement == AudioGuestEnforcementKind::GuestdCapable
-        {
-            enforce_guest_grant(
-                &self.state,
-                &self.vm_name,
-                self.caller_role.clone(),
-                core_audio_grant(grant),
-                wire_channel,
-            )
-        } else {
-            GuestEnforcementResult::Unavailable
-        };
-        if let Err(error) = self.guest_error(guest) {
-            if host == HostEnforcementResult::Applied {
-                let rollback = match grant {
-                    ProviderAudioGrant::On => ProviderAudioGrant::Off,
-                    ProviderAudioGrant::Off => ProviderAudioGrant::On,
-                };
-                let _ = enforce_host_grant(
-                    &self.state,
-                    &self.vm_name,
-                    &self.capability,
-                    self.caller_role.clone(),
-                    core_audio_grant(rollback),
-                    wire_channel,
-                );
-            }
-            return Err(error);
-        }
-        Ok(())
+        self.host_error(host)
     }
 
     fn set_level(&mut self, level: ProviderLevelPercent) -> Result<(), AudioMediatorError> {
@@ -365,20 +300,7 @@ impl AudioMediator for DaemonAudioMediator {
             level,
             wire_channel,
         );
-        self.host_error(host)?;
-        let guest = if self.capability.guest_enforcement == AudioGuestEnforcementKind::GuestdCapable
-        {
-            enforce_guest_level(
-                &self.state,
-                &self.vm_name,
-                self.caller_role.clone(),
-                level,
-                wire_channel,
-            )
-        } else {
-            GuestEnforcementResult::Unavailable
-        };
-        self.guest_error(guest)
+        self.host_error(host)
     }
 
     fn readiness(&self) -> AudioReadiness {
@@ -408,18 +330,7 @@ impl AudioMediator for DaemonAudioMediator {
         if self.capability.guest_enforcement == AudioGuestEnforcementKind::Unsupported {
             return GuestAudioReadiness::Ready;
         }
-        let ready = crate::load_bundle_resolver(&self.state)
-            .ok()
-            .and_then(|resolver| {
-                crate::resolve_guest_control_probe_params(&self.state, &resolver, &self.vm_name)
-                    .ok()
-            })
-            .is_some();
-        if ready {
-            GuestAudioReadiness::Ready
-        } else {
-            GuestAudioReadiness::Unavailable
-        }
+        GuestAudioReadiness::Unavailable
     }
 }
 
@@ -436,142 +347,23 @@ fn core_audio_level(level: ProviderLevelPercent) -> Result<LevelPercent, AudioMe
 
 // ── Enforcement result → AudioSetApplied mapping ──────────────────────────────
 
-/// Combine host and guest enforcement results into the public
+/// Combine host enforcement results into the public
 /// [`AudioSetApplied`] outcome.
 ///
 /// This function is `pub(crate)` so the test suite can lock the mapping
 /// without needing a full [`crate::ServerState`].
 pub(crate) fn combined_audio_applied(
     host_result: HostEnforcementResult,
-    guest_result: GuestEnforcementResult,
     cap: &AudioProviderCapability,
 ) -> AudioSetApplied {
-    match (cap.host_enforcement, cap.guest_enforcement) {
-        // ACA sandbox: guest-only enforcement path.
-        (AudioHostEnforcementKind::None, AudioGuestEnforcementKind::GuestdCapable) => {
-            match guest_result {
-                GuestEnforcementResult::Applied => AudioSetApplied::GuestOnly,
-                _ => AudioSetApplied::Unsupported,
-            }
-        }
-        // qemu-media: host-only enforcement (no guestd).
-        (_, AudioGuestEnforcementKind::Unsupported) => match host_result {
+    if cap.host_enforcement == AudioHostEnforcementKind::None {
+        AudioSetApplied::Unsupported
+    } else {
+        match host_result {
             HostEnforcementResult::Applied => AudioSetApplied::HostOnly,
-            _ => AudioSetApplied::Unsupported,
-        },
-        // Cloud Hypervisor NixOS: both host and guest paths.
-        _ => match (host_result, guest_result) {
-            (HostEnforcementResult::Applied, GuestEnforcementResult::Applied) => {
-                AudioSetApplied::HostAndGuest
+            HostEnforcementResult::Unsupported | HostEnforcementResult::Failed => {
+                AudioSetApplied::Unsupported
             }
-            (HostEnforcementResult::Applied, _) => AudioSetApplied::HostOnly,
-            (_, GuestEnforcementResult::Applied) => AudioSetApplied::GuestOnly,
-            _ => AudioSetApplied::Unsupported,
-        },
-    }
-}
-
-/// Issue a guestd AudioSet (mute/unmute) call for a VM.
-///
-/// Returns `Unavailable` when the bundle cannot be resolved, the VM has no
-/// vsock socket, or the capability is not advertised. Returns `Failed` when
-/// the guestd call is reachable but fails (e.g. PipeWire unavailable in the
-/// guest).
-pub(crate) fn enforce_guest_grant(
-    state: &ServerState,
-    vm_name: &str,
-    caller_role: BrokerCallerRole,
-    grant: AudioGrant,
-    channel: AudioChannel,
-) -> GuestEnforcementResult {
-    let wire_channel = match channel {
-        AudioChannel::Speaker => pb::AudioChannel::AUDIO_CHANNEL_SPEAKER,
-        AudioChannel::Microphone => pb::AudioChannel::AUDIO_CHANNEL_MICROPHONE,
-    };
-    run_guestd_audio_set(
-        state,
-        vm_name,
-        caller_role,
-        wire_channel,
-        pb::AudioSetKind::AUDIO_SET_KIND_GRANT,
-        grant.is_on(),
-        0,
-    )
-}
-
-/// Issue a guestd AudioSet (volume) call for a VM.
-pub(crate) fn enforce_guest_level(
-    state: &ServerState,
-    vm_name: &str,
-    caller_role: BrokerCallerRole,
-    level: LevelPercent,
-    channel: AudioChannel,
-) -> GuestEnforcementResult {
-    let wire_channel = match channel {
-        AudioChannel::Speaker => pb::AudioChannel::AUDIO_CHANNEL_SPEAKER,
-        AudioChannel::Microphone => pb::AudioChannel::AUDIO_CHANNEL_MICROPHONE,
-    };
-    run_guestd_audio_set(
-        state,
-        vm_name,
-        caller_role,
-        wire_channel,
-        pb::AudioSetKind::AUDIO_SET_KIND_LEVEL,
-        false,
-        level.get().into(),
-    )
-}
-
-fn run_guestd_audio_set(
-    state: &ServerState,
-    vm_name: &str,
-    caller_role: BrokerCallerRole,
-    channel: pb::AudioChannel,
-    kind: pb::AudioSetKind,
-    grant_on: bool,
-    level: u32,
-) -> GuestEnforcementResult {
-    let resolver = match crate::load_bundle_resolver(state) {
-        Ok(r) => r,
-        Err(_) => {
-            tracing::debug!(vm = vm_name, "audio guestd: bundle resolver unavailable");
-            return GuestEnforcementResult::Unavailable;
-        }
-    };
-    let params = match crate::resolve_guest_control_probe_params(state, &resolver, vm_name) {
-        Ok(p) => p,
-        Err(reason) => {
-            tracing::debug!(vm = vm_name, %reason, "audio guestd: probe params unresolved");
-            return GuestEnforcementResult::Unavailable;
-        }
-    };
-    let broker_path = crate::broker_socket_path(state);
-
-    match run_audio_set_on_dedicated_thread(
-        params,
-        broker_path,
-        caller_role,
-        channel,
-        kind,
-        grant_on,
-        level,
-        GUEST_CONTROL_AUDIO_SET_TIMEOUT,
-    ) {
-        Ok(_) => GuestEnforcementResult::Applied,
-        Err(GuestAudioSetError::CapabilityUnavailable) => {
-            tracing::debug!(
-                vm = vm_name,
-                "audio guestd: AudioSet capability not advertised"
-            );
-            GuestEnforcementResult::Unavailable
-        }
-        Err(e) => {
-            tracing::warn!(
-                vm = vm_name,
-                error = ?e,
-                "audio guestd: AudioSet RPC failed"
-            );
-            GuestEnforcementResult::Failed
         }
     }
 }
@@ -674,51 +466,7 @@ fn resolve_vm_audio_status(
             AudioEnforcementPosture::Unsupported
         }
     };
-    if matches!(
-        cap.guest_enforcement,
-        AudioGuestEnforcementKind::GuestdCapable
-    ) {
-        if let Some(guest_status) = query_guest_audio_status(state, vm_name, caller_role) {
-            apply_guest_status(&mut vm_state, guest_status);
-        } else {
-            vm_state.enforcement = match mediator.host_readiness() {
-                HostAudioReadiness::Ready => AudioEnforcementPosture::HostOnly,
-                HostAudioReadiness::Unavailable => AudioEnforcementPosture::Unsupported,
-            };
-        }
-    }
     Ok(vm_state)
-}
-
-fn query_guest_audio_status(
-    state: &ServerState,
-    vm_name: &str,
-    caller_role: BrokerCallerRole,
-) -> Option<GuestAudioStatus> {
-    let resolver = crate::load_bundle_resolver(state).ok()?;
-    let params = crate::resolve_guest_control_probe_params(state, &resolver, vm_name).ok()?;
-    run_audio_status_on_dedicated_thread(
-        params,
-        crate::broker_socket_path(state),
-        caller_role,
-        GUEST_CONTROL_AUDIO_SET_TIMEOUT,
-    )
-    .ok()
-}
-
-fn apply_guest_status(vm_state: &mut AudioVmState, guest_status: GuestAudioStatus) {
-    vm_state.microphone.muted = guest_status.microphone.muted;
-    if guest_status.microphone.level_known {
-        vm_state.microphone.level = u8::try_from(guest_status.microphone.level)
-            .ok()
-            .and_then(|level| LevelPercent::new(level).ok());
-    }
-    vm_state.speaker.muted = guest_status.speaker.muted;
-    if guest_status.speaker.level_known {
-        vm_state.speaker.level = u8::try_from(guest_status.speaker.level)
-            .ok()
-            .and_then(|level| LevelPercent::new(level).ok());
-    }
 }
 
 // ── SetVolume ─────────────────────────────────────────────────────────────────
@@ -811,15 +559,7 @@ fn dispatch_audio_set_volume(
         host_result
     };
 
-    // Guest enforcement for guestd-capable VMs (CH NixOS). qemu never calls
-    // guestd. ACA has no local state file and calls guestd only.
-    let guest_result = if cap.guest_enforcement == AudioGuestEnforcementKind::GuestdCapable {
-        enforce_guest_level(state, vm_name, caller_role.clone(), level, channel)
-    } else {
-        GuestEnforcementResult::Unavailable
-    };
-
-    let applied = combined_audio_applied(host_result, guest_result, &cap);
+    let applied = combined_audio_applied(host_result, &cap);
 
     let channel_state = match channel {
         AudioChannel::Speaker => state_to_channel(new_state.speaker, new_state.speaker_level),
@@ -926,14 +666,7 @@ fn dispatch_audio_mute(
         host_result
     };
 
-    // Guest enforcement for guestd-capable VMs. qemu never calls guestd.
-    let guest_result = if cap.guest_enforcement == AudioGuestEnforcementKind::GuestdCapable {
-        enforce_guest_grant(state, vm_name, caller_role, grant, channel)
-    } else {
-        GuestEnforcementResult::Unavailable
-    };
-
-    let applied = combined_audio_applied(host_result, guest_result, &cap);
+    let applied = combined_audio_applied(host_result, &cap);
 
     let channel_state = match channel {
         AudioChannel::Speaker => state_to_channel(new_state.speaker, new_state.speaker_level),
@@ -960,7 +693,7 @@ mod tests {
     // ── Provider capability tests ───────────────────────────────────────────
 
     #[test]
-    fn ch_nixos_cap_is_pipewire_guestd() {
+    fn ch_nixos_cap_is_pipewire_target_process() {
         let cap = AudioProviderCapability::cloud_hypervisor_nixos();
         assert_eq!(
             cap.host_enforcement,
@@ -968,7 +701,7 @@ mod tests {
         );
         assert_eq!(
             cap.guest_enforcement,
-            AudioGuestEnforcementKind::GuestdCapable
+            AudioGuestEnforcementKind::ProcessCapable
         );
         assert!(cap.needs_local_state_file);
     }
@@ -988,12 +721,12 @@ mod tests {
     }
 
     #[test]
-    fn aca_cap_is_guest_only_no_local_state() {
+    fn aca_cap_uses_target_process_without_local_state() {
         let cap = AudioProviderCapability::aca_sandbox();
         assert_eq!(cap.host_enforcement, AudioHostEnforcementKind::None);
         assert_eq!(
             cap.guest_enforcement,
-            AudioGuestEnforcementKind::GuestdCapable
+            AudioGuestEnforcementKind::ProcessCapable
         );
         assert!(!cap.needs_local_state_file);
     }
@@ -1003,7 +736,7 @@ mod tests {
         let ch_cap = AudioProviderCapability::cloud_hypervisor_nixos();
         assert_eq!(
             public_enforcement_posture(&ch_cap),
-            AudioEnforcementPosture::HostAndGuest
+            AudioEnforcementPosture::HostOnly
         );
 
         let qemu_cap = AudioProviderCapability::qemu_media();
@@ -1015,136 +748,8 @@ mod tests {
         let aca_cap = AudioProviderCapability::aca_sandbox();
         assert_eq!(
             public_enforcement_posture(&aca_cap),
-            AudioEnforcementPosture::GuestOnly
+            AudioEnforcementPosture::Unsupported
         );
-    }
-
-    // ── combined_audio_applied tests ────────────────────────────────────────
-    //
-    // These tests lock the combined host+guest result mapping. The key
-    // invariants are:
-    //   - CH NixOS: host+guest both succeed → HostAndGuest
-    //   - CH NixOS: host succeeds, guest unavailable → HostOnly
-    //   - CH NixOS: host fails → Unsupported (no success-shaped fallback)
-    //   - qemu-media: host applied, guest unsupported → HostOnly
-    //   - ACA sandbox: guest applied → GuestOnly; guest fails → Unsupported
-
-    #[test]
-    fn ch_nixos_host_and_guest_applied_returns_host_and_guest() {
-        let cap = AudioProviderCapability::cloud_hypervisor_nixos();
-        let result = combined_audio_applied(
-            HostEnforcementResult::Applied,
-            GuestEnforcementResult::Applied,
-            &cap,
-        );
-        assert_eq!(result, AudioSetApplied::HostAndGuest);
-    }
-
-    #[test]
-    fn ch_nixos_host_applied_guest_unavailable_returns_host_only() {
-        let cap = AudioProviderCapability::cloud_hypervisor_nixos();
-        let result = combined_audio_applied(
-            HostEnforcementResult::Applied,
-            GuestEnforcementResult::Unavailable,
-            &cap,
-        );
-        assert_eq!(result, AudioSetApplied::HostOnly);
-    }
-
-    #[test]
-    fn ch_nixos_host_applied_guest_failed_returns_host_only() {
-        let cap = AudioProviderCapability::cloud_hypervisor_nixos();
-        let result = combined_audio_applied(
-            HostEnforcementResult::Applied,
-            GuestEnforcementResult::Failed,
-            &cap,
-        );
-        assert_eq!(result, AudioSetApplied::HostOnly);
-    }
-
-    #[test]
-    fn ch_nixos_host_failed_guest_applied_returns_guest_only() {
-        let cap = AudioProviderCapability::cloud_hypervisor_nixos();
-        let result = combined_audio_applied(
-            HostEnforcementResult::Failed,
-            GuestEnforcementResult::Applied,
-            &cap,
-        );
-        assert_eq!(result, AudioSetApplied::GuestOnly);
-    }
-
-    #[test]
-    fn ch_nixos_both_failed_returns_unsupported_not_success() {
-        let cap = AudioProviderCapability::cloud_hypervisor_nixos();
-        let result = combined_audio_applied(
-            HostEnforcementResult::Failed,
-            GuestEnforcementResult::Failed,
-            &cap,
-        );
-        assert_eq!(
-            result,
-            AudioSetApplied::Unsupported,
-            "both failed must not produce success-shaped result"
-        );
-    }
-
-    #[test]
-    fn qemu_host_applied_returns_host_only() {
-        let cap = AudioProviderCapability::qemu_media();
-        let result = combined_audio_applied(
-            HostEnforcementResult::Applied,
-            GuestEnforcementResult::Unavailable, // qemu never sets guest result
-            &cap,
-        );
-        assert_eq!(result, AudioSetApplied::HostOnly);
-    }
-
-    #[test]
-    fn qemu_host_failed_returns_unsupported() {
-        let cap = AudioProviderCapability::qemu_media();
-        let result = combined_audio_applied(
-            HostEnforcementResult::Failed,
-            GuestEnforcementResult::Unavailable,
-            &cap,
-        );
-        assert_eq!(result, AudioSetApplied::Unsupported);
-    }
-
-    #[test]
-    fn aca_guest_applied_returns_guest_only() {
-        let cap = AudioProviderCapability::aca_sandbox();
-        let result = combined_audio_applied(
-            HostEnforcementResult::Unsupported, // ACA has no host enforcement
-            GuestEnforcementResult::Applied,
-            &cap,
-        );
-        assert_eq!(result, AudioSetApplied::GuestOnly);
-    }
-
-    #[test]
-    fn aca_guest_unavailable_returns_unsupported() {
-        let cap = AudioProviderCapability::aca_sandbox();
-        let result = combined_audio_applied(
-            HostEnforcementResult::Unsupported,
-            GuestEnforcementResult::Unavailable,
-            &cap,
-        );
-        assert_eq!(result, AudioSetApplied::Unsupported);
-    }
-
-    #[test]
-    fn no_success_shaped_fallback_for_both_unavailable() {
-        // CH NixOS: both host and guest unavailable must not produce any success.
-        let cap = AudioProviderCapability::cloud_hypervisor_nixos();
-        let result = combined_audio_applied(
-            HostEnforcementResult::Unsupported,
-            GuestEnforcementResult::Unavailable,
-            &cap,
-        );
-        assert_ne!(result, AudioSetApplied::HostOnly);
-        assert_ne!(result, AudioSetApplied::GuestOnly);
-        assert_ne!(result, AudioSetApplied::HostAndGuest);
-        assert_eq!(result, AudioSetApplied::Unsupported);
     }
 
     // ── legacy host-only integration tests (FakeHostController) ─────────────
@@ -1157,11 +762,11 @@ mod tests {
         let host_result = ctrl.enforce_grant("corp-vm", AudioGrant::Off, AudioChannel::Speaker);
         assert_eq!(host_result, HostEnforcementResult::Applied);
         let applied =
-            combined_audio_applied(host_result, GuestEnforcementResult::Unavailable, &cap);
+            combined_audio_applied(host_result, &cap);
         assert_eq!(
             applied,
             AudioSetApplied::HostOnly,
-            "host applied, guestd unavailable → HostOnly"
+            "host applied, target process unavailable -> HostOnly"
         );
     }
 
@@ -1175,7 +780,7 @@ mod tests {
         let host_result = ctrl.enforce_grant("corp-vm", AudioGrant::Off, AudioChannel::Speaker);
         assert_eq!(host_result, HostEnforcementResult::Failed);
         let applied =
-            combined_audio_applied(host_result, GuestEnforcementResult::Unavailable, &cap);
+            combined_audio_applied(host_result, &cap);
         assert_eq!(
             applied,
             AudioSetApplied::Unsupported,
@@ -1193,7 +798,7 @@ mod tests {
         let host_result = ctrl.enforce_level("corp-vm", level, AudioChannel::Microphone);
         assert_eq!(host_result, HostEnforcementResult::Failed);
         let applied =
-            combined_audio_applied(host_result, GuestEnforcementResult::Unavailable, &cap);
+            combined_audio_applied(host_result, &cap);
         assert_eq!(applied, AudioSetApplied::Unsupported);
     }
 
@@ -1205,15 +810,15 @@ mod tests {
         let host_result = ctrl.enforce_grant("qemu-vm", AudioGrant::Off, AudioChannel::Speaker);
         assert_eq!(host_result, HostEnforcementResult::Applied);
         let applied =
-            combined_audio_applied(host_result, GuestEnforcementResult::Unavailable, &cap);
+            combined_audio_applied(host_result, &cap);
         assert_eq!(applied, AudioSetApplied::HostOnly);
     }
 
     #[test]
-    fn qemu_controller_never_calls_guestd_capable_path() {
+    fn qemu_controller_never_calls_target_process_path() {
         use crate::audio_host_controller::QemuAudioController;
         // qemu-media VMs have guest_enforcement = Unsupported. Verify the
-        // applied result with Unsupported guest kind, not GuestdCapable.
+        // applied result with Unsupported guest kind, not ProcessCapable.
         let cap = AudioProviderCapability::qemu_media();
         let ctrl = QemuAudioController;
         let host_result = ctrl.enforce_level(
@@ -1223,7 +828,7 @@ mod tests {
         );
         assert_eq!(host_result, HostEnforcementResult::Applied);
         let applied =
-            combined_audio_applied(host_result, GuestEnforcementResult::Unavailable, &cap);
+            combined_audio_applied(host_result, &cap);
         assert_eq!(
             applied,
             AudioSetApplied::HostOnly,

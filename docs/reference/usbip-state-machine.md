@@ -40,8 +40,8 @@ current tree. A future effect adapter must establish these preconditions before
 using it for a live operation:
 
 - a USBIP bind intent and firewall intent exist for the VM/busid;
-- VM apply paths that need guest import have a running VM and authenticated
-  guest-control USBIP capability;
+- VM apply paths that need guest import have a running VM and an authenticated
+  ComponentSession USBIP Process;
 - `d2b.site.yubikey.enable = true` and at least one enabled VM in the env
   opts into `usbip.yubikey = true` before host YubiKey machinery is expected;
 - the broker can prepare `usbip-host`, the host-session busid lock,
@@ -197,7 +197,7 @@ current host boot/session. It is not preserved across host reboot because the
 lock is under `/run/d2b/locks/usbip`. Only an explicit USB detach may revoke
 backend ACLs and release the claim during a host session, and only after
 firewall withdrawal/targeted flow cleanup and host unbind succeed. A
-dead/unreachable VM guest-detach failure stays visible as degraded cleanup but
+dead/unreachable VM target-local detach failure stays visible as degraded cleanup but
 does not block host-side firewall withdrawal or unbind.
 
 The cleanup plan never stops or rebinds the per-env backend/proxy sidecars. If a
@@ -206,12 +206,13 @@ closed before sysfs `usbip-host` unbind, keeps the session claim, and surfaces
 manual recovery instead of killing the shared listener.
 
 VM start treats same-host-session same-VM USBIP session claims as required until an explicit
-optional-device policy exists. Runtime absence, guest-control import failure, or
+optional-device policy exists. Runtime absence, target-local import failure, or
 per-env proxy/backend unavailability degrades the USB row and lets boot continue
 with a precise remediation command. A same-owner row where the host claim is held,
 the device is already bound to `usbip-host`, and the guest import is detached is
-convergable: the daemon may refresh the firewall/proxy path and ask guestd to
-import the busid again without releasing the host-session claim.
+convergable: the daemon may refresh the firewall/proxy path and ask the
+target-local USBIP Process to import the busid again without releasing the
+host-session claim.
 
 During backend ACL grant the broker treats `/dev/bus/usb/<bus>/<dev>` as a
 volatile device node. It may retry across transient devnum changes or brief

@@ -195,25 +195,21 @@ The new trust-boundary statements are:
   trust-boundary delta; only the per-busid
   `UsbipBindFirewallRule` skeleton is covered.
 
-### Guest-control exec trust boundary
+### ComponentSession exec trust boundary
 
 `d2b vm exec` runs a command inside a VM over
-the authenticated guest-control vsock channel - there is no SSH. The
+the authenticated ComponentSession channel - there is no SSH. The
 trust-boundary statements are:
 
 - **Admin-only, destructive.** Guest exec is a destructive verb: the
   `SO_PEERCRED` caller must be in `d2b.site.adminUsers` (the
   daemon-side role gate above), on top of the `d2b`-group
-  connection gate. Per-VM exec must also be enabled in the bundle
-  (`guest.control.enable` + `guest.exec.enable`). Every exec runs the
-  requested command as the VM's workload user (`ssh.user`) - **never
-  root** - inside a real PAM login session (`systemd-run
-  --property=PAMName=login --uid=<user>`); the wire `user` field is
-  host-fixed by guestd and ignored, and operators elevate with `sudo`
-  inside the session.
+  connection gate. Every exec is admitted as a target-local `Process` or
+  `EphemeralProcess` from a signed Provider template; caller-supplied SSH
+  transport and host process execution are not accepted.
 - **Leak-safe daemon-side audit.** The daemon records attached exec
-  lifecycle events (`GuestControlExecEstablished` /
-  `GuestControlExecTerminated`) to its own
+  lifecycle events (`component_session_exec_established` /
+  `component_session_exec_terminated`) to its own
   `daemon-events-<utc-date>.jsonl`, carrying ONLY the VM name, the
   admin `peer_uid`, and the negotiated `tty` shape. Detached create and
   kill/cancel write separate redacted daemon audit events carrying ONLY

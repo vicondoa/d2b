@@ -30,10 +30,10 @@ use std::path::PathBuf;
 use std::process::Command;
 use std::time::Duration;
 
+use d2b_broker::protocol::{connect_seqpacket, recv_json_frame, send_json_frame};
 use d2b_contracts_broker::broker_wire::{
     BrokerCallerRole, BrokerRequest, BrokerRequestEnvelope, BrokerResponse, HelloRequest,
 };
-use d2b_broker::protocol::{connect_seqpacket, recv_json_frame, send_json_frame};
 use nix::sys::socket::{
     AddressFamily, Backlog, SockFlag, SockType, UnixAddr, bind, listen, socket,
 };
@@ -140,7 +140,9 @@ fn broker_adopts_socket_activated_fd_and_serves_hello() {
          --d2bd-uid \"$UID\" \
          --d2bd-gid \"$GID\" \
          --audit-dir \"$AUDIT_DIR\" \
-         --bundle-path /nonexistent/bundle.json"
+         --bundle-path /nonexistent/bundle.json \
+         --realm-controllers-path /nonexistent/realm-controllers.json \
+         --realm-identity-path /nonexistent/realm-identity.json"
     );
 
     let scrubber = scrub_shell_environment_path();

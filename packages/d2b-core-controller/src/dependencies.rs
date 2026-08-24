@@ -350,7 +350,7 @@ mod tests {
         let mut index = DependencyIndex::default();
         index
             .register(
-                controller("guest-controller"),
+                controller("component-sessionler"),
                 guest.clone(),
                 BTreeSet::from([network.clone()]),
             )
@@ -383,7 +383,7 @@ mod tests {
         let mut index = DependencyIndex::default();
         index
             .register(
-                controller("guest-controller"),
+                controller("component-sessionler"),
                 guest,
                 BTreeSet::from([volume.clone()]),
             )
@@ -400,7 +400,7 @@ mod tests {
         assert_eq!(
             index
                 .register(
-                    controller("guest-controller"),
+                    controller("component-sessionler"),
                     target("work", "Guest", "app", 1),
                     BTreeSet::from([target("personal", "Volume", "root", 2)]),
                 )
@@ -525,7 +525,7 @@ mod tests {
         let mut index = DependencyIndex::default();
         index
             .register(
-                controller("guest-controller"),
+                controller("component-sessionler"),
                 guest.clone(),
                 BTreeSet::from([gpu.clone()]),
             )
@@ -553,7 +553,7 @@ mod tests {
         let mut index = DependencyIndex::default();
         index
             .register(
-                controller("guest-controller"),
+                controller("component-sessionler"),
                 guest,
                 BTreeSet::from([network.clone()]),
             )
@@ -567,7 +567,7 @@ mod tests {
             .unwrap();
 
         assert_eq!(
-            index.withdraw_controller(&controller("guest-controller")),
+            index.withdraw_controller(&controller("component-sessionler")),
             1
         );
         let triggers = index

@@ -1,14 +1,11 @@
 use crate::{
     daemon_audit,
-    exec_session::is_unspecified,
-    exec_session::{ComponentSessionExecClient, ExecOpError, GuestOpError},
-    guest_control_health::GuestControlHealthError,
+    exec_session::{ComponentSessionExecClient, ExecOpError, ProcessOpError},
     terminal_session::{OutputStreamSel, TerminalBackend},
-    typed_error::{GuestControlShellErrorKind, TypedError, UnsafeLocalShellErrorKind},
+    typed_error::{ComponentSessionShellErrorKind, TypedError, UnsafeLocalShellErrorKind},
     unsafe_local_terminal::{UnsafeLocalTerminalClient, UnsafeLocalTerminalError},
 };
-use d2b_contracts_control::{guest_proto as pb, public_wire, terminal_wire as tw};
-use protobuf::EnumOrUnknown;
+use d2b_contracts_control::{public_wire, terminal_wire as tw};
 use std::{fmt, sync::Arc, time::Duration};
 
 pub const SHELL_MANAGEMENT_TIMEOUT: Duration = Duration::from_secs(12);
@@ -30,8 +27,8 @@ pub enum ShellTerminalResponse {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ShellProvider {
-    /// ComponentSession guest provider or its legacy characterization.
-    GuestControl,
+    /// Authenticated ComponentSession guest provider.
+    ComponentSession,
     /// Unsafe-local host provider.
     UnsafeLocal,
 }
@@ -39,7 +36,7 @@ pub enum ShellProvider {
 impl ShellProvider {
     pub fn label(self) -> &'static str {
         match self {
-            Self::GuestControl => "guest-control",
+            Self::ComponentSession => "component-session",
             Self::UnsafeLocal => "unsafe-local",
         }
     }
@@ -139,7 +136,7 @@ where
             Ok(())
         } else {
             Err(shell_failed(
-                crate::typed_error::GuestControlShellErrorKind::StaleSession,
+                crate::typed_error::ComponentSessionShellErrorKind::StaleSession,
             ))
         }
     }
@@ -267,7 +264,7 @@ where
 }
 
 fn map_component_session_shell_error(error: ExecOpError) -> TypedError {
-    use crate::typed_error::GuestControlShellErrorKind as Kind;
+    use crate::typed_error::ComponentSessionShellErrorKind as Kind;
     let kind = match error {
         ExecOpError::Transport => Kind::Transport,
         ExecOpError::Auth => Kind::Auth,
@@ -276,21 +273,21 @@ fn map_component_session_shell_error(error: ExecOpError) -> TypedError {
         ExecOpError::Timeout => Kind::Timeout,
         ExecOpError::OldGeneration | ExecOpError::Capability => Kind::Capability,
         ExecOpError::DetachedUnavailable => Kind::Capability,
-        ExecOpError::Guest(GuestOpError::ExecNotFound | GuestOpError::ExecExpired) => {
+        ExecOpError::Guest(ProcessOpError::ExecNotFound | ProcessOpError::ExecExpired) => {
             Kind::NotFound
         }
-        ExecOpError::Guest(GuestOpError::StdinBackpressure) => Kind::Capacity,
-        ExecOpError::Guest(GuestOpError::OffsetMismatch) => Kind::Protocol,
-        ExecOpError::Guest(GuestOpError::StdinClosed | GuestOpError::StdinNotOpen) => {
+        ExecOpError::Guest(ProcessOpError::StdinBackpressure) => Kind::Capacity,
+        ExecOpError::Guest(ProcessOpError::OffsetMismatch) => Kind::Protocol,
+        ExecOpError::Guest(ProcessOpError::StdinClosed | ProcessOpError::StdinNotOpen) => {
             Kind::StaleSession
         }
-        ExecOpError::Guest(GuestOpError::ControlSeqMismatch) => Kind::StaleSession,
-        ExecOpError::Guest(GuestOpError::RateLimited) => Kind::Capacity,
-        ExecOpError::Guest(GuestOpError::MaxChunkExceeded | GuestOpError::InvalidProgram) => {
+        ExecOpError::Guest(ProcessOpError::ControlSeqMismatch) => Kind::StaleSession,
+        ExecOpError::Guest(ProcessOpError::RateLimited) => Kind::Capacity,
+        ExecOpError::Guest(ProcessOpError::MaxChunkExceeded | ProcessOpError::InvalidProgram) => {
             Kind::Protocol
         }
-        ExecOpError::Guest(GuestOpError::ExecAlreadyExited) => Kind::NotFound,
-        ExecOpError::Guest(GuestOpError::Protocol | GuestOpError::Other) => Kind::GuestError,
+        ExecOpError::Guest(ProcessOpError::ExecAlreadyExited) => Kind::NotFound,
+        ExecOpError::Guest(ProcessOpError::Protocol | ProcessOpError::Other) => Kind::GuestError,
     };
     shell_failed(kind)
 }
@@ -445,8 +442,8 @@ pub fn best_effort_close(
         Err(TypedError::UnsafeLocalShellFailed {
             kind: UnsafeLocalShellErrorKind::Timeout,
         })
-        | Err(TypedError::GuestControlShellFailed {
-            kind: crate::typed_error::GuestControlShellErrorKind::Timeout,
+        | Err(TypedError::ComponentSessionShellFailed {
+            kind: crate::typed_error::ComponentSessionShellErrorKind::Timeout,
         }) => daemon_audit::ShellAuditResult::Timeout,
         Err(_) => daemon_audit::ShellAuditResult::Error,
     }
@@ -462,8 +459,8 @@ pub fn best_effort_cancel(
         Err(TypedError::UnsafeLocalShellFailed {
             kind: UnsafeLocalShellErrorKind::Timeout,
         })
-        | Err(TypedError::GuestControlShellFailed {
-            kind: crate::typed_error::GuestControlShellErrorKind::Timeout,
+        | Err(TypedError::ComponentSessionShellFailed {
+            kind: crate::typed_error::ComponentSessionShellErrorKind::Timeout,
         }) => daemon_audit::ShellAuditResult::Timeout,
         Err(_) => daemon_audit::ShellAuditResult::Error,
     }
@@ -493,179 +490,20 @@ pub fn shell_poll_timeout(args_timeout_ms: u64, wait: bool) -> (u64, Duration) {
     )
 }
 
-pub fn shell_failed(kind: GuestControlShellErrorKind) -> TypedError {
-    TypedError::GuestControlShellFailed { kind }
-}
-
-pub fn map_shell_health_error(error: GuestControlHealthError) -> TypedError {
-    use GuestControlHealthError as E;
-    use GuestControlShellErrorKind as K;
-    match error {
-        E::TransportIo | E::Ttrpc | E::Signer => shell_failed(K::Transport),
-        E::Timeout => shell_failed(K::Timeout),
-        E::AuthFailed => shell_failed(K::Auth),
-        E::StaleSession => shell_failed(K::StaleSession),
-        E::Protocol => shell_failed(K::Protocol),
-    }
+pub fn shell_failed(kind: ComponentSessionShellErrorKind) -> TypedError {
+    TypedError::ComponentSessionShellFailed { kind }
 }
 
 pub fn shell_transport_failed() -> TypedError {
-    shell_failed(GuestControlShellErrorKind::Transport)
+    shell_failed(ComponentSessionShellErrorKind::Transport)
 }
 
 pub fn shell_capability_failed() -> TypedError {
-    shell_failed(GuestControlShellErrorKind::Capability)
+    shell_failed(ComponentSessionShellErrorKind::Capability)
 }
 
 pub fn shell_protocol_failed() -> TypedError {
-    shell_failed(GuestControlShellErrorKind::Protocol)
-}
-
-pub fn map_shell_guest_error(error: &pb::GuestControlError) -> TypedError {
-    use GuestControlShellErrorKind as K;
-    use pb::GuestControlErrorKind as G;
-    let kind = match error.kind.enum_value() {
-        Ok(G::GUEST_CONTROL_ERROR_KIND_AUTH_FAILED) => K::Auth,
-        Ok(G::GUEST_CONTROL_ERROR_KIND_STALE_SESSION) => K::StaleSession,
-        Ok(G::GUEST_CONTROL_ERROR_KIND_TRANSPORT_UNREACHABLE) => K::Transport,
-        Ok(G::GUEST_CONTROL_ERROR_KIND_PROTOCOL_ERROR)
-        | Ok(G::GUEST_CONTROL_ERROR_KIND_SHELL_INVALID_NAME) => K::Protocol,
-        Ok(G::GUEST_CONTROL_ERROR_KIND_GUEST_SHELL_DISABLED)
-        | Ok(G::GUEST_CONTROL_ERROR_KIND_SHELL_POOL_UNAVAILABLE)
-        | Ok(G::GUEST_CONTROL_ERROR_KIND_SHELL_DAEMON_EPOCH_MISMATCH) => K::Capability,
-        Ok(G::GUEST_CONTROL_ERROR_KIND_SHELL_CAPACITY_EXCEEDED)
-        | Ok(G::GUEST_CONTROL_ERROR_KIND_SHELL_ATTACH_CAPACITY_EXCEEDED) => K::Capacity,
-        Ok(G::GUEST_CONTROL_ERROR_KIND_SHELL_ALREADY_ATTACHED) => K::AlreadyAttached,
-        Ok(G::GUEST_CONTROL_ERROR_KIND_SHELL_NOT_FOUND) => K::NotFound,
-        Ok(G::GUEST_CONTROL_ERROR_KIND_SHELL_OUTPUT_GAP) => K::OutputGap,
-        _ => K::GuestError,
-    };
-    shell_failed(kind)
-}
-
-pub fn guest_advertises_capability(
-    capabilities: &[EnumOrUnknown<pb::GuestCapability>],
-    cap: pb::GuestCapability,
-) -> bool {
-    capabilities
-        .iter()
-        .filter_map(|value| value.enum_value().ok())
-        .any(|value| value == cap)
-}
-
-pub fn shell_error_to_typed(error: Option<&pb::GuestControlError>) -> Result<(), TypedError> {
-    if let Some(error) = error
-        && !is_unspecified(error.kind)
-    {
-        return Err(map_shell_guest_error(error));
-    }
-    Ok(())
-}
-
-pub fn shell_name_from_guest(value: String) -> Result<public_wire::ShellName, TypedError> {
-    public_wire::ShellName::new(value).map_err(|_| shell_protocol_failed())
-}
-
-pub fn map_shell_state(state: EnumOrUnknown<pb::ShellState>) -> public_wire::ShellSessionState {
-    match state
-        .enum_value()
-        .unwrap_or(pb::ShellState::SHELL_STATE_UNSPECIFIED)
-    {
-        pb::ShellState::SHELL_STATE_ATTACHED => public_wire::ShellSessionState::Attached,
-        pb::ShellState::SHELL_STATE_DETACHED => public_wire::ShellSessionState::Detached,
-        pb::ShellState::SHELL_STATE_KILLED => public_wire::ShellSessionState::Killed,
-        pb::ShellState::SHELL_STATE_POOL_UNAVAILABLE => {
-            public_wire::ShellSessionState::PoolUnavailable
-        }
-        pb::ShellState::SHELL_STATE_FEATURE_DISABLED => {
-            public_wire::ShellSessionState::FeatureDisabled
-        }
-        pb::ShellState::SHELL_STATE_OUTPUT_GAP => public_wire::ShellSessionState::OutputGap,
-        pb::ShellState::SHELL_STATE_UNSPECIFIED => public_wire::ShellSessionState::Detached,
-    }
-}
-
-pub fn map_shell_close_cause(
-    cause: EnumOrUnknown<pb::ShellCloseCause>,
-) -> Option<public_wire::ShellCloseCause> {
-    match cause
-        .enum_value()
-        .unwrap_or(pb::ShellCloseCause::SHELL_CLOSE_CAUSE_UNSPECIFIED)
-    {
-        pb::ShellCloseCause::SHELL_CLOSE_CAUSE_CLIENT_DETACH => {
-            Some(public_wire::ShellCloseCause::ClientDetach)
-        }
-        pb::ShellCloseCause::SHELL_CLOSE_CAUSE_EVICTED_BY_FORCE => {
-            Some(public_wire::ShellCloseCause::EvictedByForce)
-        }
-        pb::ShellCloseCause::SHELL_CLOSE_CAUSE_EVICTED_BY_ADMIN_DETACH => {
-            Some(public_wire::ShellCloseCause::EvictedByAdminDetach)
-        }
-        pb::ShellCloseCause::SHELL_CLOSE_CAUSE_KILLED_BY_ADMIN => {
-            Some(public_wire::ShellCloseCause::KilledByAdmin)
-        }
-        pb::ShellCloseCause::SHELL_CLOSE_CAUSE_POOL_UNAVAILABLE => {
-            Some(public_wire::ShellCloseCause::PoolUnavailable)
-        }
-        pb::ShellCloseCause::SHELL_CLOSE_CAUSE_OUTPUT_GAP => {
-            Some(public_wire::ShellCloseCause::OutputGap)
-        }
-        pb::ShellCloseCause::SHELL_CLOSE_CAUSE_UNSPECIFIED => None,
-    }
-}
-
-pub fn map_shell_list_response(
-    response: pb::ShellListResponse,
-) -> Result<public_wire::ShellListResult, TypedError> {
-    Ok(public_wire::ShellListResult {
-        default_name: shell_name_from_guest(response.default_name)?,
-        sessions: response
-            .sessions
-            .into_iter()
-            .map(|entry| {
-                Ok(public_wire::ShellListEntry {
-                    name: shell_name_from_guest(entry.name)?,
-                    state: map_shell_state(entry.state),
-                    attached: entry.attached,
-                    is_default: entry.is_default,
-                })
-            })
-            .collect::<Result<Vec<_>, TypedError>>()?,
-    })
-}
-
-pub fn map_shell_attach_response(
-    response: pb::ShellAttachResponse,
-) -> Result<public_wire::ShellAttachResult, TypedError> {
-    shell_error_to_typed(response.error.as_ref())?;
-    Ok(public_wire::ShellAttachResult {
-        session: response.session_id.ok_or_else(shell_protocol_failed)?,
-        resolved_name: shell_name_from_guest(response.resolved_name)?,
-        state: map_shell_state(response.state),
-        force_evicted: response.force_evicted,
-    })
-}
-
-pub fn map_shell_detach_response(
-    response: pb::ShellDetachResponse,
-) -> Result<public_wire::ShellDetachResult, TypedError> {
-    shell_error_to_typed(response.error.as_ref())?;
-    Ok(public_wire::ShellDetachResult {
-        resolved_name: shell_name_from_guest(response.resolved_name)?,
-        detached: response.detached,
-        cause: map_shell_close_cause(response.cause),
-    })
-}
-
-pub fn map_shell_kill_response(
-    response: pb::ShellKillResponse,
-) -> Result<public_wire::ShellKillResult, TypedError> {
-    shell_error_to_typed(response.error.as_ref())?;
-    Ok(public_wire::ShellKillResult {
-        name: shell_name_from_guest(response.name)?,
-        killed: response.killed,
-        state: map_shell_state(response.state),
-    })
+    shell_failed(ComponentSessionShellErrorKind::Protocol)
 }
 
 fn map_terminal_error(error: UnsafeLocalTerminalError) -> TypedError {
@@ -837,20 +675,20 @@ mod tests {
     fn component_session_shell_errors_stay_in_the_closed_shell_vocabulary() {
         assert!(matches!(
             map_component_session_shell_error(ExecOpError::Auth),
-            TypedError::GuestControlShellFailed {
-                kind: GuestControlShellErrorKind::Auth
+            TypedError::ComponentSessionShellFailed {
+                kind: ComponentSessionShellErrorKind::Auth
             }
         ));
         assert!(matches!(
-            map_component_session_shell_error(ExecOpError::Guest(GuestOpError::StdinBackpressure)),
-            TypedError::GuestControlShellFailed {
-                kind: GuestControlShellErrorKind::Capacity
+            map_component_session_shell_error(ExecOpError::Guest(ProcessOpError::StdinBackpressure)),
+            TypedError::ComponentSessionShellFailed {
+                kind: ComponentSessionShellErrorKind::Capacity
             }
         ));
         assert!(matches!(
             map_component_session_shell_error(ExecOpError::Transport),
-            TypedError::GuestControlShellFailed {
-                kind: GuestControlShellErrorKind::Transport
+            TypedError::ComponentSessionShellFailed {
+                kind: ComponentSessionShellErrorKind::Transport
             }
         ));
     }

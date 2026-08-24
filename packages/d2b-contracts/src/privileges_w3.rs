@@ -46,7 +46,6 @@ pub enum W3BrokerOperation {
     UpdateHostsFile,
     BindUnixSocket,
     SetSocketAcl,
-    GuestControlSign,
     ModprobeIfAllowed,
     UsbipBindFirewallRule,
     MigrateLegacySwtpmState,
@@ -89,7 +88,6 @@ impl W3BrokerOperation {
             Self::UpdateHostsFile => "UpdateHostsFile",
             Self::BindUnixSocket => "BindUnixSocket",
             Self::SetSocketAcl => "SetSocketAcl",
-            Self::GuestControlSign => "GuestControlSign",
             Self::ModprobeIfAllowed => "ModprobeIfAllowed",
             Self::UsbipBindFirewallRule => "UsbipBindFirewallRule",
             Self::MigrateLegacySwtpmState => "MigrateLegacySwtpmState",
@@ -128,7 +126,6 @@ impl W3BrokerOperation {
             Self::UpdateHostsFile,
             Self::BindUnixSocket,
             Self::SetSocketAcl,
-            Self::GuestControlSign,
             Self::ModprobeIfAllowed,
             Self::UsbipBindFirewallRule,
             Self::MigrateLegacySwtpmState,
@@ -185,11 +182,6 @@ impl W3BrokerOperation {
                 audit: true,
                 destructive: true,
                 secret_access: false,
-            },
-            Self::GuestControlSign => W3OperationFlags {
-                audit: true,
-                destructive: false,
-                secret_access: true,
             },
             Self::ModprobeIfAllowed => W3OperationFlags {
                 audit: true,
@@ -276,11 +268,11 @@ mod tests {
     }
 
     #[test]
-    fn only_guest_control_sign_grants_secret_access() {
+    fn no_remaining_operation_grants_secret_access() {
         for op in W3BrokerOperation::all() {
             assert_eq!(
                 op.flags().secret_access,
-                *op == W3BrokerOperation::GuestControlSign,
+                false,
                 "unexpected secret_access flag for {op:?}"
             );
         }

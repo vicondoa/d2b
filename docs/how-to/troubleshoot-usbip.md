@@ -27,7 +27,7 @@ Host prerequisites:
   match an allowlist entry.
 
 Guest prerequisites are provided by `usbip.yubikey = true`: the guest loads
-`vhci_hcd`, includes the guest `usbip` tool, and exposes guest-control USBIP
+`vhci_hcd`, includes the guest `usbip` tool, and exposes component-session USBIP
 status/import operations.
 
 Example host snippet:
@@ -91,7 +91,7 @@ show as `degraded` until active carrier state is replayed.
 ## 3. Attach a declared device
 
 Use the busid from the declaration/probe. The VM must be running before apply
-because guest-control performs the in-guest import.
+because component-session performs the in-guest import.
 
 ```bash
 d2b guest start corp-vm --apply
@@ -106,7 +106,7 @@ it to report running, then retry the same attach command.
 
 VM stop/restart preserves same-VM USBIP session claims within the current host
 boot/session but tears down active carriers/imports where safe. On the next
-VM start, d2b replays host bind/proxy state and asks guestd to import again.
+VM start, d2b replays host bind/proxy state and asks target-local Process to import again.
 After a host reboot, `/run/d2b/locks/usbip` is recreated empty and the
 operator should attach the device again. To verify the replay after an
 intentional VM restart, run:
@@ -129,7 +129,7 @@ If the row shows the same VM still owns the session claim and the host is alread
 bound (`SESSION-CLAIM=held-by-desired-owner`,
 `HOST-BIND=bound-to-usbip-host`) but `GUEST=detached`, this is a convergable
 same-owner state. Re-run the printed `d2b device usb attach <name> <busid> --apply`
-command. The daemon rechecks the per-env firewall/proxy path and asks guestd to
+command. The daemon rechecks the per-env firewall/proxy path and asks target-local Process to
 import the device again; it does not release the claim or require raw host
 `usbip` commands.
 
@@ -172,8 +172,8 @@ same-env USB streams is acceptable.
 | Symptom from `d2b device usb probe` or `d2b guest status` | What it means | Remediation |
 | --- | --- | --- |
 | `status=unbound` or `SESSION-CLAIM=missing` | No session owner exists for the declared busid. | `d2b device usb attach corp-vm 1-2 --apply` |
-| Attach says the VM is stopped or `guest-import-unavailable` | Guest-control cannot import until the Guest is running. | `d2b guest start corp-vm --apply`, then `d2b device usb attach corp-vm 1-2 --apply` |
-| `SESSION-CLAIM=held-by-desired-owner`, `HOST-BIND=bound-to-usbip-host`, and `GUEST=detached` | The host owns and exports the device for this Guest, but guestd has not imported it. | Re-run the row's `d2b device usb attach <name> <busid> --apply` command; it converges guest import without releasing the session claim. |
+| Attach says the VM is stopped or `guest-import-unavailable` | The target-local USBIP Process cannot import until the Guest is running. | `d2b guest start corp-vm --apply`, then `d2b device usb attach corp-vm 1-2 --apply` |
+| `SESSION-CLAIM=held-by-desired-owner`, `HOST-BIND=bound-to-usbip-host`, and `GUEST=detached` | The host owns and exports the device for this Guest, but target-local Process has not imported it. | Re-run the row's `d2b device usb attach <name> <busid> --apply` command; it converges guest import without releasing the session claim. |
 | `SESSION-CLAIM=held-by-other-owner` / `lock-held-by-other-owner` | Another Guest owns the session claim. | `d2b device usb detach <owner> 1-2 --apply`, then `d2b device usb attach corp-vm 1-2 --apply` |
 | `SESSION-CLAIM=stale-owner`, `SESSION-CLAIM=corrupt`, or `invalid-persisted-lock-claim` | The session claim cannot be safely trusted as a healthy owner. | Do not edit the lock file. Run the probe's `command:` line if present; otherwise `d2b device usb detach corp-vm 1-2 --apply`, then `d2b device usb probe`. |
 | `HOST-BIND=bound-to-unexpected-driver` | The device is present but still owned by another host driver or local application. | Close local consumers of the device, then `d2b device usb attach corp-vm 1-2 --apply`. |

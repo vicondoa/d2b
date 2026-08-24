@@ -15,7 +15,7 @@ let
             type = lib.types.listOf lib.types.package;
             default = [ ];
           };
-          d2b.guestControl.usbipPath = lib.mkOption {
+          d2b.componentSession.usbipPath = lib.mkOption {
             type = lib.types.str;
             default = "";
           };
@@ -38,7 +38,7 @@ in
       expr = {
         kernel = builtins.elem "vhci_hcd" config.boot.kernelModules;
         tools = config.environment.systemPackages != [ ];
-        controlPath = config.d2b.guestControl.usbipPath != "";
+        controlPath = config.d2b.componentSession.usbipPath != "";
       };
       expected = {
         kernel = true;

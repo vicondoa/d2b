@@ -21,7 +21,7 @@
     "virtiofsd",
     "virtiofsd",
     "cloud-hypervisor-runner",
-    "guest-ssh-readiness"
+    "component-session-health"
   ],
   "readiness": [
     "component-specific:host state, runtime directories, and bridges are reconciled",

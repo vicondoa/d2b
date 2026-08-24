@@ -14,7 +14,6 @@ fn serde_kebab_string<T: Serialize>(value: &T) -> String {
 pub enum RuntimeCapabilityGate {
     ConfigSync,
     Exec,
-    GuestControl,
     Keys,
     Ssh,
     StoreSync,
@@ -26,7 +25,6 @@ impl RuntimeCapabilityGate {
         match self {
             Self::ConfigSync => "config-sync",
             Self::Exec => "exec",
-            Self::GuestControl => "guest-control",
             Self::Keys => "keys",
             Self::Ssh => concat!("s", "sh"),
             Self::StoreSync => "store-sync",
@@ -38,7 +36,6 @@ impl RuntimeCapabilityGate {
         match self {
             Self::ConfigSync => entry.runtime.capabilities.config_sync,
             Self::Exec => entry.runtime.capabilities.exec,
-            Self::GuestControl => entry.runtime.capabilities.guest_control,
             Self::Keys => entry.runtime.capabilities.keys,
             Self::Ssh => entry.runtime.capabilities.ssh,
             Self::StoreSync => entry.runtime.capabilities.store_sync,

@@ -33,21 +33,21 @@
       "description": "How audio enforcement is applied for a target VM (ADR 0041).\n\nThis enum describes only *successful* enforcement outcomes. Provider misconfiguration is not a successful outcome and is reported exclusively through [`AudioVmError`] with `kind = AudioErrorKind::ProviderMisconfigured`.",
       "oneOf": [
         {
-          "description": "Host-side PipeWire policy and guest-side guestd policy both applied.",
+          "description": "Host-side PipeWire policy and target-local Process policy both applied.",
           "type": "string",
           "enum": [
             "host-and-guest"
           ]
         },
         {
-          "description": "Host-side enforcement only; guestd is absent or the provider does not support guest enforcement.",
+          "description": "Host-side enforcement only; the provider does not support target-local enforcement.",
           "type": "string",
           "enum": [
             "host-only"
           ]
         },
         {
-          "description": "Guest-side guestd enforcement only; no local PipeWire node (e.g. ACA sandbox with a guestd-compatible agent).",
+          "description": "Target-local Process enforcement only; no local PipeWire node (for example, an ACA sandbox with a provider agent).",
           "type": "string",
           "enum": [
             "guest-only"
@@ -66,7 +66,7 @@
       "description": "Low-cardinality error kind for a per-VM audio failure.\n\nUsed in [`AudioVmError`] and [`VmAudioErrorOutputV1`](crate::cli_output::VmAudioErrorOutputV1) so that both the wire protocol and the generated CLI schema carry enum constraints rather than a free-form string.\n\nSerde names match the canonical wire strings exactly.",
       "oneOf": [
         {
-          "description": "The provider is expected to expose a guestd-compatible agent but none was found; operator remediation is required.",
+          "description": "The provider is expected to expose a target-local audio Process but none was found; operator remediation is required.",
           "type": "string",
           "enum": [
             "provider-misconfigured"
@@ -120,7 +120,7 @@
           ]
         },
         {
-          "description": "ACA sandbox with a guestd-compatible agent for audio policy.",
+          "description": "ACA sandbox with a provider agent for audio policy.",
           "type": "string",
           "enum": [
             "aca-sandbox"

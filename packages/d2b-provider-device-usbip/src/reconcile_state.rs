@@ -693,7 +693,8 @@ pub enum UsbipVmCarrierCleanupMode {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum UsbipVmCarrierCleanupAction {
-    /// Ask guestd to remove any imported USBIP device before the VM disappears.
+    /// Ask the target-local USBIP Process to remove any imported device before
+    /// the VM disappears.
     DetachGuestImport,
     /// Block/withdraw the host firewall carve-out before any flow termination.
     WithdrawFirewallCarveout,
@@ -875,10 +876,10 @@ fn mark_cleanup_action_failed(
 
 fn detach_guest_import_failure_allows_host_cleanup(reason: &str) -> bool {
     let reason = reason.to_ascii_lowercase();
-    reason.contains("guest-control transport unavailable")
-        || reason.contains("could not resolve guest-control transport")
-        || reason.contains("cannot reach guest-control")
-        || reason.contains("guest-control unreachable")
+    reason.contains("component-session transport unavailable")
+        || reason.contains("could not resolve component-session transport")
+        || reason.contains("cannot reach component-session")
+        || reason.contains("component-session unreachable")
         || reason.contains("vm unreachable")
         || reason.contains("dead vm")
         || reason.contains("vm dead")
@@ -1412,13 +1413,13 @@ impl UsbipDegradedReason {
                 "restart or reconcile the per-environment USBIP proxy before guest attach"
             }
             UsbipDegradedReasonCode::GuestImportUnavailable => {
-                "check guest-control USBIP capability and retry the attach after host export is healthy"
+                "check component-session USBIP capability and retry the attach after host export is healthy"
             }
             UsbipDegradedReasonCode::StaleHostState => {
                 "rerun USB detach/reconcile to drain host export and proxy state for the removed claim"
             }
             UsbipDegradedReasonCode::StaleGuestState => {
-                "rerun USB detach/reconcile so guestd removes stale imported-device state"
+                "rerun USB detach/reconcile so the target-local Process removes stale imported-device state"
             }
             UsbipDegradedReasonCode::ProbeIncomplete => {
                 "retry the USB probe; if it repeats, verify the declaration has a stable physical selector"
@@ -1825,7 +1826,7 @@ impl UsbipStepFailureReasonKind {
             }
             Self::InvalidInput => "retry with a valid declared USB selector",
             Self::TransportUnavailable => {
-                "verify guest-control and USBIP transport readiness, then retry"
+                "verify component-session and USBIP transport readiness, then retry"
             }
             Self::Other => {
                 "run `d2b usb probe` and retry the lifecycle verb after the reported posture is healthy"
@@ -2535,7 +2536,7 @@ pub struct UsbipHostRuntimeState {
 pub struct UsbipGuestRuntimeState {
     /// Guest import state.
     pub import: UsbipGuestImportState,
-    /// Owner generation echoed by guestd when available.
+    /// Owner generation echoed by the target-local USBIP Process when available.
     pub generation: Option<u64>,
 }
 
@@ -4294,7 +4295,7 @@ mod tests {
         );
         let mut executor = VmCarrierCleanupFixtureExecutor::failing(
             UsbipVmCarrierCleanupAction::DetachGuestImport,
-            "guest-control USBIP import failed for vm 'corp-vm': guest-control transport unavailable",
+            "component-session USBIP import failed for vm 'corp-vm': component-session transport unavailable",
         );
 
         let (report, err) = execute_usbip_vm_carrier_cleanup(&plan, &mut executor)
@@ -4333,7 +4334,7 @@ mod tests {
             err,
             UsbipVmCarrierCleanupExecutionError::ActionFailed {
                 action: UsbipVmCarrierCleanupAction::DetachGuestImport,
-                reason: "guest-control USBIP import failed for vm 'corp-vm': guest-control transport unavailable".to_owned(),
+                reason: "component-session USBIP import failed for vm 'corp-vm': component-session transport unavailable".to_owned(),
             }
         );
     }

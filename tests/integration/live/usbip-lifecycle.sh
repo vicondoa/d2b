@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Live host USBIP guestd lifecycle check.
+# Live host USBIP provider lifecycle check.
 #
 # Requires a deployed d2b host, a USBIP-enabled running VM, and a real
 # busid. This is intentionally Layer 2/manual: it restarts d2bd and mutates
@@ -7,7 +7,7 @@
 #
 # Usage:
 #   D2B_LIVE=1 D2B_USBIP_VM=work-ssd D2B_USBIP_BUSID=1-2.1 \
-#     bash tests/integration/live/usbip-guestd-lifecycle.sh
+#     bash tests/integration/live/usbip-lifecycle.sh
 
 set -euo pipefail
 
@@ -75,7 +75,7 @@ trap restore EXIT
 log "detaching stale guest/host USBIP state"
 d2b usb detach --apply "$vm" "$busid" >/dev/null
 
-log "attaching through daemon/broker/guestd"
+log "attaching through daemon/broker/provider process"
 d2b usb attach --apply "$vm" "$busid" >/dev/null
 require_owner "$vm"
 
@@ -95,4 +95,4 @@ log "reattaching after daemon restart"
 d2b usb attach --apply "$vm" "$busid" >/dev/null
 require_owner "$vm"
 
-ok "USBIP guestd lifecycle survived daemon restart and reattach"
+ok "USBIP provider lifecycle survived daemon restart and reattach"

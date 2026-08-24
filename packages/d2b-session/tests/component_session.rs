@@ -826,7 +826,7 @@ fn bootstrap_is_operation_bound_expiring_single_use_and_redacted() {
             .consume(
                 &operation,
                 &nonce,
-                bootstrap_identity("Guest/corp-vm", "guest-control"),
+                bootstrap_identity("Guest/corp-vm", "component-session"),
                 99,
             )
             .unwrap_err()

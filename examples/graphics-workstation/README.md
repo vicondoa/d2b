@@ -156,8 +156,8 @@ talks to PipeWire as a regular client, so:
 - **Guest side** (from `usbip.yubikey = true`):
   - The `vhci_hcd` kernel module is loaded so the guest has a
     virtual USB host controller.
-  - The `usbip` userspace CLI is installed for authenticated guestd
-    import/detach operations.
+  - The `usbip` userspace CLI is installed for authenticated target-local
+    Process import/detach operations.
 
 Declare the approved busid in the copied example and use the read-only probe to
 confirm host observation:

@@ -12,6 +12,12 @@
 | Depends on | `ADR-046-terminology-and-identities`, `ADR-046-resource-object-model`, `ADR-046-resource-api-and-authorization`, `ADR-046-provider-model-and-packaging`, `ADR-046-components-processes-and-sandbox`, `ADR-046-componentsession-and-bus` |
 | Supersedes | Current v3 `d2b` CLI contract (`packages/d2b/src/lib.rs` at baseline) |
 
+> **Current-state note (U10).** Baseline rows that name the removed Guest
+> daemon or guest-control transport are historical disposition records. The
+> current CLI reaches Guest execution, shell, activation, config, audio, and
+> USB behavior through Resource API, ComponentSession, named streams, and
+> signed target-local Processes.
+
 ## Purpose
 
 This spec defines every public-facing CLI command, argument, output format, exit
@@ -79,7 +85,7 @@ the "target:" annotation.
 | `ProcessRole::Gpu`/`GpuRenderNode` | `d2b-core/src/processes.rs:209,211` | `Process` under `Provider/device-gpu` |
 | `ProcessRole::Audio` | `d2b-core/src/processes.rs:213` | `Process` under audio-pipewire Provider |
 | `ProcessRole::HostReconcile` | `d2b-core/src/processes.rs:196` | Realm controller bootstrap step; not a standalone CLI-visible Process |
-| `ProcessRole::GuestControlHealth` | `d2b-core/src/processes.rs:235` | Guest readiness probe integrated into Guest controller reconcile loop; not a standalone Process ResourceType |
+| `ProcessRole::ComponentSessionHealth` | `d2b-core/src/processes.rs` | Guest readiness probe integrated into Guest controller reconcile loop; not a standalone Process ResourceType |
 | `ProcessRole::GuestSshReadiness` | `d2b-core/src/processes.rs:228` | Deleted at v3 clean cutover; no compatibility retention |
 | `VmProcessDag` | `d2b-core/src/processes.rs` | Per-Guest/Provider `Process` resource DAG; target managed by Provider controller |
 | `RealmControllersJson`, `RealmControllerLocalWorkload { vm_name, identity }` | `d2b-core/src/realm_controller_config.rs` | Zone Nix-authored Guest resources; `vm_name` → `Guest/<name>` resource name; `identity.canonical_target` → `WorkloadId` = `Guest/<name>` resource name |

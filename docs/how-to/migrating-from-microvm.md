@@ -518,7 +518,7 @@ d2b guest restart <name> --apply
 ```
 
 (Or `d2b activation switch Guest/<name> --apply` if you want a Guest closure rebuild +
-live activation via guest control; restart cycles the existing closure
+live activation through the target-local Process; restart cycles the existing closure
 cleanly.)
 
 `d2b guest status <name>` prints the Guest phase, conditions, and

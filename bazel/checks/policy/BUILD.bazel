@@ -35,9 +35,6 @@ test_suite(
 test_suite(
     name = "proofs",
     tests = [
-        "//proofs/chunked-stdio-conformance:clippy",
-        "//proofs/chunked-stdio-conformance:doc",
-        "//proofs/chunked-stdio-conformance:unit",
         "//proofs/redb-resource-store-spike:clippy",
         "//proofs/redb-resource-store-spike:doc",
         "//proofs/redb-resource-store-spike:full_scale_smoke",

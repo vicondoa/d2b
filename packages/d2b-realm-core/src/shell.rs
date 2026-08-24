@@ -263,7 +263,7 @@ shell_opaque_id!(
 #[serde(deny_unknown_fields)]
 pub struct ShellGeneration {
     pub guest_boot_id: ProtocolToken,
-    pub guestd_instance_id: ProtocolToken,
+    pub session_instance_id: ProtocolToken,
     pub shell_daemon_instance_id: ProtocolToken,
 }
 
@@ -465,7 +465,7 @@ mod tests {
     fn generation() -> ShellGeneration {
         ShellGeneration {
             guest_boot_id: ProtocolToken::parse("boot-1").unwrap(),
-            guestd_instance_id: ProtocolToken::parse("guestd-1").unwrap(),
+            session_instance_id: ProtocolToken::parse("session-1").unwrap(),
             shell_daemon_instance_id: ProtocolToken::parse("shell-daemon-1").unwrap(),
         }
     }
@@ -498,7 +498,7 @@ mod tests {
     #[test]
     fn shell_request_decode_rejects_unknown_fields() {
         let json = "{\"name\":\"default\",\"generation\":{\"guest_boot_id\":\"boot-1\",\
-                    \"guestd_instance_id\":\"guestd-1\",\
+                    \"session_instance_id\":\"session-1\",\
                     \"shell_daemon_instance_id\":\"shell-daemon-1\"},\
                     \"attach_id\":\"attach-1\",\
                     \"force\":false,\"argv\":[\"sh\"]}";
@@ -549,12 +549,12 @@ mod tests {
 
         let one = "{\"name\":\"default\",\"state\":\"detached\",\
                    \"generation\":{\"guest_boot_id\":\"boot-1\",\
-                   \"guestd_instance_id\":\"guestd-1\",\
+                   \"session_instance_id\":\"session-1\",\
                    \"shell_daemon_instance_id\":\"shell-daemon-1\"},\
                    \"attached\":false,\"is_default\":true}";
         let too_many = format!(
             "{{\"generation\":{{\"guest_boot_id\":\"boot-1\",\
-             \"guestd_instance_id\":\"guestd-1\",\
+            \"session_instance_id\":\"session-1\",\
              \"shell_daemon_instance_id\":\"shell-daemon-1\"}},\"summaries\":[{}]}}",
             std::iter::repeat_n(one, MAX_SHELL_SUMMARIES + 1)
                 .collect::<Vec<_>>()
@@ -597,12 +597,12 @@ mod tests {
         }
 
         let one = "{\"cursor\":\"shell-event-1\",\"generation\":{\"guest_boot_id\":\"boot-1\",\
-                   \"guestd_instance_id\":\"guestd-1\",\
+                   \"session_instance_id\":\"session-1\",\
                    \"shell_daemon_instance_id\":\"shell-daemon-1\"},\
                    \"state\":\"lost\",\"cause\":\"reconciliation-gap\"}";
         let too_many = format!(
             "{{\"generation\":{{\"guest_boot_id\":\"boot-1\",\
-             \"guestd_instance_id\":\"guestd-1\",\
+            \"session_instance_id\":\"session-1\",\
              \"shell_daemon_instance_id\":\"shell-daemon-1\"}},\"events\":[{}],\
              \"cursor\":\"shell-event-1\",\"dropped_events\":0,\"reconciliation_gap\":false}}",
             std::iter::repeat_n(one, MAX_SHELL_EVENTS + 1)

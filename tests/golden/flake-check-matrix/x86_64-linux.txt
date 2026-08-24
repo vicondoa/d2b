@@ -12,8 +12,6 @@ eval-with-observability
 fixture-smoke
 fixture-smoke-full
 gas-city-package-smoke
-guest-control-vsock
-guest-exec-policy
 guest-rust-deny
 guest-shell-runner-static-dependency-policy
 guest-static-consumption

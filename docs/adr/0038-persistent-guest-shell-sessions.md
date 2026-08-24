@@ -1,6 +1,6 @@
 # ADR 0038: Persistent named guest shell sessions
 
-- Status: Accepted
+- Status: Accepted (historical implementation details superseded by U10)
 - Date: 2026-06-21
 - Related: ADR 0015 (daemon-only clean break), ADR 0026 (native SigNoz
   observability backend), ADR 0028 (guest control plane over virtio-vsock),
@@ -10,6 +10,12 @@
   ADR 0034 (storage lifecycle, restart adoption, and synchronization), ADR 0035
   (efficiency and simplification roadmap), ADR 0037 (local hypervisor runtime
   seam)
+
+> **Current implementation note.** The shell lifecycle remains a
+> `ShellSession` resource with authenticated ComponentSession named streams,
+> but the standalone Guest daemon and guest-control RPCs described below were
+> removed by U10. Target-local signed Processes and the Guest-profile broker
+> now own execution and lifecycle; references to `guestd` below are historical.
 
 ## Context
 

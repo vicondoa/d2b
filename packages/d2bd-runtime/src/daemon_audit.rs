@@ -88,7 +88,7 @@ pub enum ShellAuditResult {
 #[derive(Debug, Clone, Copy, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "kebab-case")]
 pub enum ShellAuditProvider {
-    GuestControl,
+    ComponentSession,
     UnsafeLocal,
 }
 
@@ -198,7 +198,7 @@ pub enum DaemonEvent {
     /// Leak-safe by construction: carries ONLY the VM name, the admin peer
     /// uid, and the negotiated tty shape. The opaque session handle, argv,
     /// env, cwd, and any stdio bytes are NEVER recorded.
-    GuestControlExecEstablished {
+    ComponentSessionExecEstablished {
         /// VM name the exec session targets.
         vm: String,
         /// Admin peer uid (from `SO_PEERCRED`) that opened the session.
@@ -211,7 +211,7 @@ pub enum DaemonEvent {
     ///
     /// Leak-safe: carries ONLY the VM name and the admin peer uid. No
     /// session handle, exit status bytes, argv, env, cwd, or stdio.
-    GuestControlExecTerminated {
+    ComponentSessionExecTerminated {
         /// VM name the exec session targeted.
         vm: String,
         /// Admin peer uid (from `SO_PEERCRED`) that owned the session.
@@ -237,7 +237,7 @@ pub enum DaemonEvent {
     /// Leak-safe: carries ONLY the VM name, admin peer uid, closed
     /// action/result enums, and the opaque guest exec id. argv, env, cwd, and
     /// retained output bytes are never recorded.
-    GuestControlExecDetachedCreate {
+    ComponentSessionExecDetachedCreate {
         vm: String,
         peer_uid: u32,
         action: DetachedExecAuditAction,
@@ -250,7 +250,7 @@ pub enum DaemonEvent {
     /// Leak-safe: carries ONLY the VM name, admin peer uid, closed
     /// action/result enums, and the opaque target exec id. No argv, env, cwd,
     /// or log bytes.
-    GuestControlExecDetachedKill {
+    ComponentSessionExecDetachedKill {
         vm: String,
         peer_uid: u32,
         action: DetachedExecAuditAction,
@@ -346,14 +346,14 @@ impl Serialize for DaemonEvent {
                 "elapsed_secs": elapsed_secs,
                 "mode": mode,
             }),
-            Self::GuestControlExecEstablished { vm, peer_uid, tty } => serde_json::json!({
-                "kind": "guest_control_exec_established",
+            Self::ComponentSessionExecEstablished { vm, peer_uid, tty } => serde_json::json!({
+                "kind": "component_session_exec_established",
                 "vm": vm,
                 "peer_uid": peer_uid,
                 "tty": tty,
             }),
-            Self::GuestControlExecTerminated { vm, peer_uid } => serde_json::json!({
-                "kind": "guest_control_exec_terminated",
+            Self::ComponentSessionExecTerminated { vm, peer_uid } => serde_json::json!({
+                "kind": "component_session_exec_terminated",
                 "vm": vm,
                 "peer_uid": peer_uid,
             }),
@@ -377,28 +377,28 @@ impl Serialize for DaemonEvent {
                 "operation_digest": operation_digest,
                 "session_digest": session_digest,
             }),
-            Self::GuestControlExecDetachedCreate {
+            Self::ComponentSessionExecDetachedCreate {
                 vm,
                 peer_uid,
                 action,
                 result,
                 exec_id,
             } => serde_json::json!({
-                "kind": "guest_control_exec_detached_create",
+                "kind": "component_session_exec_detached_create",
                 "vm": vm,
                 "peer_uid": peer_uid,
                 "action": action,
                 "result": result,
                 "exec_id": exec_id,
             }),
-            Self::GuestControlExecDetachedKill {
+            Self::ComponentSessionExecDetachedKill {
                 vm,
                 peer_uid,
                 action,
                 result,
                 exec_id,
             } => serde_json::json!({
-                "kind": "guest_control_exec_detached_kill",
+                "kind": "component_session_exec_detached_kill",
                 "vm": vm,
                 "peer_uid": peer_uid,
                 "action": action,
@@ -2053,13 +2053,13 @@ mod tests {
         const SENTINEL: &str = "SECRET-handle-argv-env-cwd-/nix/store/path-like-token-9b2f";
         let log = DaemonAuditLog::no_op();
 
-        log.write_event(&DaemonEvent::GuestControlExecEstablished {
+        log.write_event(&DaemonEvent::ComponentSessionExecEstablished {
             vm: "corp-vm".to_owned(),
             peer_uid: 1000,
             tty: true,
         })
         .expect("write established event");
-        log.write_event(&DaemonEvent::GuestControlExecTerminated {
+        log.write_event(&DaemonEvent::ComponentSessionExecTerminated {
             vm: "corp-vm".to_owned(),
             peer_uid: 1000,
         })
@@ -2104,7 +2104,7 @@ mod tests {
             .expect("parse established record");
         assert_eq!(
             established["event"]["kind"].as_str(),
-            Some("guest_control_exec_established")
+            Some("component_session_exec_established")
         );
         assert_eq!(established["event"]["tty"].as_bool(), Some(true));
 
@@ -2112,7 +2112,7 @@ mod tests {
             .expect("parse terminated record");
         assert_eq!(
             terminated["event"]["kind"].as_str(),
-            Some("guest_control_exec_terminated")
+            Some("component_session_exec_terminated")
         );
         // The terminate event has no tty field (only the redacted vm identity).
         assert!(terminated["event"].get("tty").is_none());
@@ -2126,7 +2126,7 @@ mod tests {
         log.write_event(&DaemonEvent::ShellLifecycle {
             target: "corp-vm".to_owned(),
             peer_uid: 1000,
-            provider: ShellAuditProvider::GuestControl,
+            provider: ShellAuditProvider::ComponentSession,
             action: ShellAuditAction::Attach,
             result: ShellAuditResult::Attached,
             force: Some(true),
@@ -2182,7 +2182,7 @@ mod tests {
         const SENTINEL: &str = "SECRET-argv-env-cwd-/nix/store/log-bytes-2d7b";
         let log = DaemonAuditLog::no_op();
 
-        log.write_event(&DaemonEvent::GuestControlExecDetachedCreate {
+        log.write_event(&DaemonEvent::ComponentSessionExecDetachedCreate {
             vm: "corp-vm".to_owned(),
             peer_uid: 1000,
             action: DetachedExecAuditAction::Create,
@@ -2190,7 +2190,7 @@ mod tests {
             exec_id: "exec-opaque-1".to_owned(),
         })
         .expect("write detached create event");
-        log.write_event(&DaemonEvent::GuestControlExecDetachedKill {
+        log.write_event(&DaemonEvent::ComponentSessionExecDetachedKill {
             vm: "corp-vm".to_owned(),
             peer_uid: 1000,
             action: DetachedExecAuditAction::Cancel,
@@ -2257,7 +2257,7 @@ mod tests {
             .expect("parse detached create record");
         assert_eq!(
             create["event"]["kind"].as_str(),
-            Some("guest_control_exec_detached_create")
+            Some("component_session_exec_detached_create")
         );
         assert_eq!(create["event"]["action"].as_str(), Some("create"));
         assert_eq!(create["event"]["result"].as_str(), Some("created"));
@@ -2266,7 +2266,7 @@ mod tests {
             .expect("parse detached kill record");
         assert_eq!(
             kill["event"]["kind"].as_str(),
-            Some("guest_control_exec_detached_kill")
+            Some("component_session_exec_detached_kill")
         );
         assert_eq!(kill["event"]["action"].as_str(), Some("cancel"));
         assert_eq!(kill["event"]["result"].as_str(), Some("cancelling"));

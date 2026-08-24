@@ -40,7 +40,7 @@ mod public_status_socket {
                             "lifecycle": true,
                             "display": false,
                             "usbHotplug": false,
-                            "guestControl": true,
+
                             "exec": true,
                             "configSync": true,
                             "ssh": true,
@@ -66,7 +66,7 @@ mod public_status_socket {
                             "lifecycle": true,
                             "display": false,
                             "usbHotplug": false,
-                            "guestControl": true,
+
                             "exec": true,
                             "configSync": true,
                             "ssh": true,

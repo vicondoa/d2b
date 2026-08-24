@@ -615,7 +615,6 @@ mod tests {
             "capabilities": {
                 "lifecycle": true,
                 "storeSync": false,
-                "guestControl": false,
                 "exec": false,
                 "configSync": false,
                 "display": true,

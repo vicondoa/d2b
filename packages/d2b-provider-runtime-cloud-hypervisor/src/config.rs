@@ -32,9 +32,9 @@ pub struct CloudHypervisorConfig {
     pub watchdog: bool,
     /// Maximum adoption window in milliseconds.
     pub adoption_window_ms: u32,
-    /// Guest-control polling interval.
+    /// ComponentSession polling interval.
     pub health_check_interval_ms: u32,
-    /// Guest-control attempt timeout.
+    /// ComponentSession attempt timeout.
     pub health_check_timeout_ms: u32,
     /// Consecutive failures before degradation.
     pub health_check_failure_threshold: u8,

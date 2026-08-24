@@ -45,11 +45,11 @@ use d2b_provider_network_local::{
 use d2b_provider_runtime_cloud_hypervisor::{
     CloudHypervisorClock, CloudHypervisorConfig, CloudHypervisorController,
     CloudHypervisorEffectPort, CloudHypervisorError, CloudHypervisorGuestSettings,
-    CloudHypervisorPhase, CloudHypervisorReconcileOutcome, ConsoleType, GuestControlHealth,
-    GuestControlProbe,
+    CloudHypervisorPhase, CloudHypervisorReconcileOutcome, ConsoleType, GuestSessionEvidence,
+    GuestSessionEvidenceProbe,
     adoption::ProcessIdentity,
     bootstrap_graph::{AttachmentRef, BootstrapGraph},
-    health::GuestControlHealthError,
+    health::GuestSessionError,
 };
 use d2b_provider_volume_local::{
     DriftClass, MarkerState, OwnerProof, QuotaCapability, VolumeLayoutEffectPort,
@@ -917,30 +917,50 @@ impl CloudHypervisorClock for FixedCloudClock {
     }
 }
 
-struct FilesystemGuestControl {
+struct FilesystemGuestSession {
     ready: PathBuf,
 }
 
 #[async_trait]
-impl GuestControlProbe for FilesystemGuestControl {
-    async fn probe(&self, _: u32, _: u32) -> Result<GuestControlHealth, GuestControlHealthError> {
+impl GuestSessionEvidenceProbe for FilesystemGuestSession {
+    async fn observe(
+        &self,
+        _: u32,
+        _: u32,
+    ) -> Result<GuestSessionEvidence, GuestSessionError> {
         match fs::read_to_string(&self.ready) {
-            Ok(value) if value == "ready" => Ok(GuestControlHealth::Ready),
-            Ok(_) => Ok(GuestControlHealth::Degraded),
-            Err(_) => Err(GuestControlHealthError::Disconnected),
+            Ok(value) if value == "ready" => GuestSessionEvidence::current(
+                ResourceRef::parse("Guest/test").unwrap(),
+                "sha256:0000000000000000000000000000000000000000000000000000000000000001",
+                1,
+                [],
+                true,
+                true,
+            )
+            .map_err(|_| GuestSessionError::Protocol),
+            Ok(_) => GuestSessionEvidence::current(
+                ResourceRef::parse("Guest/test").unwrap(),
+                "sha256:0000000000000000000000000000000000000000000000000000000000000001",
+                1,
+                [],
+                false,
+                false,
+            )
+            .map_err(|_| GuestSessionError::Protocol),
+            Err(_) => Err(GuestSessionError::Disconnected),
         }
     }
 
-    async fn close(&self, _: u32) -> Result<(), GuestControlHealthError> {
-        fs::write(&self.ready, b"closed").map_err(|_| GuestControlHealthError::Disconnected)
+    async fn close(&self, _: u32) -> Result<(), GuestSessionError> {
+        fs::write(&self.ready, b"closed").map_err(|_| GuestSessionError::Disconnected)
     }
 }
 
 fn cloud_controller(
     effect: Arc<RealCloudHypervisorEffect>,
-    probe: Arc<FilesystemGuestControl>,
+    probe: Arc<FilesystemGuestSession>,
     expected: Option<ProcessIdentity>,
-) -> CloudHypervisorController<RealCloudHypervisorEffect, FilesystemGuestControl> {
+) -> CloudHypervisorController<RealCloudHypervisorEffect, FilesystemGuestSession> {
     let config = CloudHypervisorConfig {
         controller_execution_ref: ResourceRef::parse("Host/host-system").unwrap(),
         default_vcpus: 2,
@@ -984,14 +1004,14 @@ fn cloud_controller(
 
 #[tokio::test]
 async fn cloud_hypervisor_zone_waits_dependencies_reaches_ready_and_adopts_process() {
-    let directory = tempfile::tempdir().expect("Guest-control state directory");
-    let ready_path = directory.path().join("guest-control");
+    let directory = tempfile::tempdir().expect("ComponentSession state directory");
+    let ready_path = directory.path().join("component-session");
     fs::write(&ready_path, b"ready").unwrap();
     let effect = Arc::new(RealCloudHypervisorEffect {
         process: Mutex::new(None),
         pidfds: Mutex::new(Vec::new()),
     });
-    let probe = Arc::new(FilesystemGuestControl { ready: ready_path });
+    let probe = Arc::new(FilesystemGuestSession { ready: ready_path });
     let mut controller = cloud_controller(Arc::clone(&effect), Arc::clone(&probe), None);
 
     assert_eq!(
@@ -1036,17 +1056,17 @@ pub struct Wave6RealBoundary {
     tpm: FilesystemTpm,
     tpm_controller: Mutex<Option<TpmResourceController>>,
     cloud_effect: Arc<RealCloudHypervisorEffect>,
-    cloud_probe: Arc<FilesystemGuestControl>,
-    guest_controller:
-        Mutex<Option<CloudHypervisorController<RealCloudHypervisorEffect, FilesystemGuestControl>>>,
+    cloud_probe: Arc<FilesystemGuestSession>,
+    guest_sessionler:
+        Mutex<Option<CloudHypervisorController<RealCloudHypervisorEffect, FilesystemGuestSession>>>,
 }
 
 impl Wave6RealBoundary {
     pub fn new(root: impl Into<PathBuf>) -> Self {
         let root = root.into();
         fs::create_dir_all(&root).expect("create Wave 6 provider effect root");
-        let guest_control = root.join("guest-control");
-        fs::write(&guest_control, b"ready").expect("seed guest-control readiness");
+        let guest_session = root.join("component-session");
+        fs::write(&guest_session, b"ready").expect("seed component-session readiness");
         Self {
             volume: FilesystemVolume::new(root.join("volume")),
             network: FilesystemNetworkBoundary::new(root.join("network")),
@@ -1056,10 +1076,10 @@ impl Wave6RealBoundary {
                 process: Mutex::new(None),
                 pidfds: Mutex::new(Vec::new()),
             }),
-            cloud_probe: Arc::new(FilesystemGuestControl {
-                ready: guest_control,
+            cloud_probe: Arc::new(FilesystemGuestSession {
+                ready: guest_session,
             }),
-            guest_controller: Mutex::new(None),
+            guest_sessionler: Mutex::new(None),
             root,
         }
     }
@@ -1074,11 +1094,11 @@ impl Wave6RealBoundary {
         .map_err(|_| Wave6BoundaryError::Effect)
     }
 
-    fn guest_controller(
+    fn guest_sessionler(
         &self,
         expected: Option<ProcessIdentity>,
     ) -> Result<
-        CloudHypervisorController<RealCloudHypervisorEffect, FilesystemGuestControl>,
+        CloudHypervisorController<RealCloudHypervisorEffect, FilesystemGuestSession>,
         Wave6BoundaryError,
     > {
         Ok(cloud_controller(
@@ -1159,12 +1179,12 @@ impl Wave6ProviderBoundary for Wave6RealBoundary {
         dependencies: Wave6Dependencies,
     ) -> Result<Wave6ReconcileResult, Wave6BoundaryError> {
         let mut controller = self
-            .guest_controller
+            .guest_sessionler
             .lock()
             .map_err(|_| Wave6BoundaryError::Effect)?
             .take()
             .map(Ok)
-            .unwrap_or_else(|| self.guest_controller(None))?;
+            .unwrap_or_else(|| self.guest_sessionler(None))?;
         let outcome = controller
             .reconcile(
                 dependencies.network_ready,
@@ -1174,7 +1194,7 @@ impl Wave6ProviderBoundary for Wave6RealBoundary {
             )
             .await
             .map_err(|_| Wave6BoundaryError::Effect)?;
-        self.guest_controller
+        self.guest_sessionler
             .lock()
             .map_err(|_| Wave6BoundaryError::Effect)?
             .replace(controller);
@@ -1219,7 +1239,7 @@ impl Wave6ProviderBoundary for Wave6RealBoundary {
 
         let (recovery, identity) = {
             let mut guest_guard = self
-                .guest_controller
+                .guest_sessionler
                 .lock()
                 .map_err(|_| Wave6BoundaryError::Effect)?;
             let controller = guest_guard.take().ok_or(Wave6BoundaryError::Lifecycle)?;
@@ -1231,7 +1251,7 @@ impl Wave6ProviderBoundary for Wave6RealBoundary {
             (controller.recovery_state(), identity)
         };
         let mut restarted = self
-            .guest_controller(Some(identity))?
+            .guest_sessionler(Some(identity))?
             .restore_recovery_state(recovery)
             .map_err(|_| Wave6BoundaryError::Lifecycle)?;
         restarted
@@ -1242,7 +1262,7 @@ impl Wave6ProviderBoundary for Wave6RealBoundary {
             return Err(Wave6BoundaryError::Lifecycle);
         }
         *self
-            .guest_controller
+            .guest_sessionler
             .lock()
             .map_err(|_| Wave6BoundaryError::Effect)? = Some(restarted);
         Ok(())
@@ -1253,7 +1273,7 @@ impl Wave6ProviderBoundary for Wave6RealBoundary {
         _resource: &Wave6Resource,
     ) -> Result<(), Wave6BoundaryError> {
         let mut controller = self
-            .guest_controller
+            .guest_sessionler
             .lock()
             .map_err(|_| Wave6BoundaryError::Effect)?
             .take()
@@ -1548,7 +1568,7 @@ fn controller_process_acceptance_fences_assignment_and_cleanup() {
 }
 
 #[test]
-fn host_and_guest_controller_process_resources_keep_one_process_shape() {
+fn host_and_guest_sessionler_process_resources_keep_one_process_shape() {
     let descriptor = u4_controller_descriptor();
     let host_deployment =
         ProviderDeployment::new(DaemonMode::Host, AdmissionLimits::host_default()).unwrap();

@@ -22,8 +22,9 @@ Core. Device, Network, and Volume resources remain owned by their Providers.
 ## Controllers / services / workers / binaries
 
 `CloudHypervisorController` gates launch on Device, Network, and Volume
-readiness, adopts exact process identity, probes authenticated guest-control,
-and finalizes guest-control before the VMM process.
+readiness, adopts exact process identity, probes the authenticated
+ComponentSession, and finalizes the target-local session before the VMM
+process.
 
 ## Placement and dependencies
 
@@ -38,8 +39,8 @@ template, and generation evidence is verified.
 
 ## Security posture
 
-Guest readiness requires authenticated guest-control health, not only process
-existence. Ambiguous adoption is quarantined and never broadly killed.
+Guest readiness requires authenticated ComponentSession health, not only
+process existence. Ambiguous adoption is quarantined and never broadly killed.
 
 ## State and telemetry
 

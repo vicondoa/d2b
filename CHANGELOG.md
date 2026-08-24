@@ -796,7 +796,7 @@ deprecations ship one minor release before removal.
   no-orphan; a `setsid`/double-fork escapee is a documented trusted-root
   limitation). Interactive detached exec remains unsupported; use
   non-TTY `d2b vm exec -d` for detached commands. See
-  [`docs/reference/guest-control-exec-interactive-tty.md`](docs/reference/guest-control-exec-interactive-tty.md)
+  [`docs/reference/cli-contract.md`](docs/reference/cli-contract.md#exec)
   and the interactive-exec section of
   [ADR 0028](docs/adr/0028-guest-control-plane-over-vsock.md). The
   guest-control wire contract is unchanged (the TTY surface was already

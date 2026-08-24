@@ -141,7 +141,7 @@
     graphics.crossDomainTrusted = true;
     audio.enable    = true;         # vhost-user-sound → host PipeWire
     usbip.yubikey   = true;         # `d2b device usb attach corp-desktop <busid> --apply`
-    guest.control.enable = true;    # guestd owns guest-side USBIP import
+    guest.componentSession.enable = true; # target-local Process owns USBIP import
 
     # Audio grants are OFF by default. The host-side audio sidecar
     # is installed, but the per-VM state file at

@@ -33,7 +33,7 @@ The following ids are reserved but are not production VM runtimes:
 | `crosvm` | Refuses as unsupported. crosvm is currently used for selected sidecars, not as the full VM runtime. |
 | `qemu` | Refuses as unsupported. General QEMU VM runtime semantics are not implemented. |
 | `qemu-media` | Refuses as a full VM runtime. It remains the dedicated media sidecar runtime documented in [qemu-media](./qemu-media.md). |
-| `firecracker` | Refuses as unsupported and, before any side effect, rejects workloads requiring guest-control, virtiofs/store sync, graphics, audio, USB, or desktop surfaces. |
+| `firecracker` | Refuses as unsupported and, before any side effect, rejects workloads requiring component-session, virtiofs/store sync, graphics, audio, USB, or desktop surfaces. |
 
 Unknown provider ids fail closed with `UnsupportedFeature` and a remediation
 that points operators back to `local-cloud-hypervisor`.
@@ -51,7 +51,7 @@ Runtime provider selection is data-driven:
   reason, and remediation.
 
 Features that require graphics, audio, USB, virtiofs-backed storage,
-guest-control, or local GPU acceleration should assume the Cloud Hypervisor
+component-session, or local GPU acceleration should assume the Cloud Hypervisor
 runtime unless a future provider explicitly advertises the needed capability.
 
 ## Related component requirements

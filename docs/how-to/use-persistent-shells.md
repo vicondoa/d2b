@@ -11,14 +11,11 @@ see [Persistent shell sessions](../explanation/persistent-shells.md).
 
 ## Enable persistent shells for a VM
 
-Enable guest control, exec, and shell for a VM with a non-root workload user:
+Enable the Guest ComponentSession and shell for a VM:
 
 ```nix
 d2b.vms.work = {
-  ssh.user = "alice";
-
-  guest.control.enable = true;
-  guest.exec.enable = true;
+  guest.componentSession.enable = true;
   guest.shell = {
     enable = true;
     defaultName = "default";
@@ -28,8 +25,8 @@ d2b.vms.work = {
 };
 ```
 
-Switch the host configuration, then restart the affected VM so guestd sees the
-new shell policy.
+Switch the host configuration, then restart the affected VM so the target-local
+shell Process sees the new policy.
 
 ## Enable an unsafe-local shell
 

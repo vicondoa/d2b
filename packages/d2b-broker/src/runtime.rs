@@ -1027,10 +1027,6 @@ enum BrokerError {
         profile: BrokerProfile,
         operation: &'static str,
     },
-    #[cfg_attr(feature = "layer1-bootstrap", allow(dead_code))]
-    GuestControlSignRefused {
-        reason: &'static str,
-    },
     /// swtpm-dir first-run hardening (issue #64) refused to proceed.
     /// Carries the path-free [`OperationFields::PrepareSwtpmDir`] audit
     /// so the SpawnRunner dispatch arm emits exactly one terminal
@@ -2442,11 +2438,6 @@ impl DispatchAuditContext {
 }
 
 fn request_fields_value(request: &BrokerRequest) -> Result<Value, BrokerError> {
-    // GuestControlSign carries auth secret material (nonces, token-derived
-    // tag inputs); emit only redacted lengths/presence, never the values.
-    // This branch is real-wire-only: under the `layer1-bootstrap` feature
-    // `BrokerRequest` aliases to the bootstrap `BootstrapCall`, which has no
-    // GuestControlSign variant, so gate it out of the bootstrap build.
     #[cfg(not(feature = "layer1-bootstrap"))]
     if let BrokerRequest::QemuMediaEnroll(req) = request {
         return Ok(serde_json::json!({
@@ -2521,19 +2512,6 @@ fn request_fields_value(request: &BrokerRequest) -> Result<Value, BrokerError> {
         return Ok(serde_json::json!({
             "scopeId": req.scope_id.as_str(),
             "tracingSpanIdPresent": req.tracing_span_id.is_some(),
-        }));
-    }
-    #[cfg(not(feature = "layer1-bootstrap"))]
-    if let BrokerRequest::GuestControlSign(req) = request {
-        return Ok(serde_json::json!({
-            "vmId": req.vm_id.as_str(),
-            "role": format!("{:?}", req.role),
-            "purpose": format!("{:?}", req.purpose),
-            "hostNonceLen": req.host_nonce.len(),
-            "guestNonceLen": req.guest_nonce.len(),
-            "guestBootIdPresent": !req.guest_boot_id.as_str().is_empty(),
-            "peerCidPresent": req.peer_cid.is_some(),
-            "capabilitiesHashPresent": req.capabilities_hash.is_some(),
         }));
     }
     let mut value = serde_json::to_value(request)
@@ -3362,32 +3340,6 @@ fn dispatch_request_with_backend_and_request_fds<B: DispatchBackend>(
                 },
             )?;
             Ok(DispatchResult::no_fds(hello_ok_response(config.profile)))
-        }
-        RealBrokerRequest::GuestControlSign(req) => {
-            let response = handle_guest_control_sign(req.clone(), config, resolver)?;
-            write_success_op_record!(
-                audit_log,
-                bundle_metadata,
-                "GuestControlSign",
-                req.vm_id.as_str(),
-                caller_uid,
-                caller_gid,
-                &caller_role,
-                req.vm_id.as_str(),
-                "guest-control-auth",
-                tracing_span_id_str(req.tracing_span_id.as_ref()),
-                OperationFields::GuestControlSign {
-                    vm_id: req.vm_id.as_str().to_owned(),
-                    role: format!("{:?}", req.role),
-                    purpose: format!("{:?}", req.purpose),
-                    transcript_len: guest_control_transcript_len(&req)?,
-                    peer_cid_present: req.peer_cid.is_some(),
-                    capabilities_hash_present: req.capabilities_hash.is_some(),
-                },
-            )?;
-            Ok(DispatchResult::no_fds(BrokerResponse::GuestControlSign(
-                response,
-            )))
         }
         RealBrokerRequest::ValidateBundle => {
             // The broker validates the server-configured bundle path.
@@ -7555,193 +7507,6 @@ fn write_success_op_record_impl(
 }
 
 #[cfg(not(feature = "layer1-bootstrap"))]
-type GuestControlHmac = Hmac<Sha256>;
-
-#[cfg(not(feature = "layer1-bootstrap"))]
-fn handle_guest_control_sign(
-    req: d2b_contracts_broker::broker_wire::GuestControlSignRequest,
-    config: &ServerConfig,
-    resolver: Option<&Arc<BundleResolver>>,
-) -> Result<d2b_contracts_broker::broker_wire::GuestControlSignResponse, BrokerError> {
-    req.validate_shape()
-        .map_err(|reason| BrokerError::GuestControlSignRefused { reason })?;
-    let resolver = resolver.ok_or(BrokerError::BundleResolverUnavailable)?;
-    if resolver.find_manifest_vm(req.vm_id.as_str()).is_none() {
-        return Err(BrokerError::GuestControlSignRefused {
-            reason: "vm-not-in-bundle",
-        });
-    }
-    let transcript = guest_control_transcript(&req)?;
-    let mut token = read_guest_control_token(&config.state_dir, req.vm_id.as_str())?;
-    let mut mac = GuestControlHmac::new_from_slice(&token).map_err(|_| {
-        BrokerError::GuestControlSignRefused {
-            reason: "token-unavailable",
-        }
-    })?;
-    mac.update(&transcript);
-    let tag = mac.finalize().into_bytes().to_vec();
-    token.fill(0);
-    Ok(d2b_contracts_broker::broker_wire::GuestControlSignResponse { tag })
-}
-
-#[cfg(not(feature = "layer1-bootstrap"))]
-fn guest_control_transcript_len(
-    req: &d2b_contracts_broker::broker_wire::GuestControlSignRequest,
-) -> Result<usize, BrokerError> {
-    Ok(guest_control_transcript(req)?.len())
-}
-
-#[cfg(not(feature = "layer1-bootstrap"))]
-fn guest_control_transcript(
-    req: &d2b_contracts_broker::broker_wire::GuestControlSignRequest,
-) -> Result<Vec<u8>, BrokerError> {
-    use d2b_contracts_broker::broker_wire::GuestControlProofRole;
-    use d2b_contracts_control::guest_auth::{
-        self, AUTH_NONCE_LEN, AuthDirection, AuthPurpose, GUEST_CONTROL_AUTH_PORT,
-        GuestAuthTranscript, ProofRole,
-    };
-    req.validate_shape()
-        .map_err(|reason| BrokerError::GuestControlSignRefused { reason })?;
-    if req.protocol_version != d2b_contracts_control::guest_wire::GUEST_CONTROL_PROTOCOL_VERSION
-        || req.guest_control_port != GUEST_CONTROL_AUTH_PORT
-    {
-        return Err(BrokerError::GuestControlSignRefused {
-            reason: "protocol-or-port",
-        });
-    }
-    let host_nonce: [u8; AUTH_NONCE_LEN] =
-        req.host_nonce
-            .as_slice()
-            .try_into()
-            .map_err(|_| BrokerError::GuestControlSignRefused {
-                reason: "host-nonce-length",
-            })?;
-    let guest_nonce: [u8; AUTH_NONCE_LEN] =
-        req.guest_nonce.as_slice().try_into().map_err(|_| {
-            BrokerError::GuestControlSignRefused {
-                reason: "guest-nonce-length",
-            }
-        })?;
-    let role = match req.role {
-        GuestControlProofRole::HostProof => ProofRole::Host,
-        GuestControlProofRole::GuestProof => ProofRole::Guest,
-    };
-    Ok(guest_auth::encode_transcript(&GuestAuthTranscript {
-        role,
-        direction: AuthDirection::HostToGuest,
-        purpose: AuthPurpose::GuestControlAuthV1,
-        vm_id: req.vm_id.as_str(),
-        protocol_version: req.protocol_version,
-        guest_control_port: req.guest_control_port,
-        peer_cid: req.peer_cid,
-        host_nonce: &host_nonce,
-        guest_nonce: &guest_nonce,
-        guest_boot_id: req.guest_boot_id.as_str(),
-        capabilities_hash: req.capabilities_hash.as_deref().map(str::as_bytes),
-    }))
-}
-
-#[cfg(not(feature = "layer1-bootstrap"))]
-fn read_guest_control_token(state_dir: &Path, vm_id: &str) -> Result<Vec<u8>, BrokerError> {
-    const MAX_TOKEN_BYTES: usize = 4096;
-    let token_path = state_dir.join(format!("guest-control-{vm_id}/token"));
-    validate_guest_control_token_path(state_dir, &token_path)?;
-    let file = nix::fcntl::open(
-        token_path.as_path(),
-        nix::fcntl::OFlag::O_RDONLY | nix::fcntl::OFlag::O_CLOEXEC | nix::fcntl::OFlag::O_NOFOLLOW,
-        nix::sys::stat::Mode::empty(),
-    )
-    .map_err(|_| BrokerError::GuestControlSignRefused {
-        reason: "token-open",
-    })?;
-    let mut file = fs::File::from(owned_fd_from_raw(file));
-    let mut token = Vec::new();
-    std::io::Read::by_ref(&mut file)
-        .take((MAX_TOKEN_BYTES + 1) as u64)
-        .read_to_end(&mut token)
-        .map_err(|_| BrokerError::GuestControlSignRefused {
-            reason: "token-read",
-        })?;
-    let metadata = file
-        .metadata()
-        .map_err(|_| BrokerError::GuestControlSignRefused {
-            reason: "token-metadata",
-        })?;
-    if !metadata.is_file()
-        || !owner_is_safe_for_guest_control_token(metadata.uid())
-        || !matches!(metadata.mode() & 0o777, 0o400 | 0o440)
-        || token.is_empty()
-        || token.len() > MAX_TOKEN_BYTES
-    {
-        return Err(BrokerError::GuestControlSignRefused {
-            reason: "token-unsafe",
-        });
-    }
-    while matches!(token.last(), Some(b'\n' | b'\r')) {
-        token.pop();
-    }
-    if token.is_empty() {
-        return Err(BrokerError::GuestControlSignRefused {
-            reason: "token-empty",
-        });
-    }
-    Ok(token)
-}
-
-#[cfg(not(feature = "layer1-bootstrap"))]
-fn validate_guest_control_token_path(
-    state_dir: &Path,
-    token_path: &Path,
-) -> Result<(), BrokerError> {
-    if !state_dir.is_absolute()
-        || state_dir == Path::new("/nix/store")
-        || state_dir.starts_with("/nix/store/")
-        || !token_path.starts_with(state_dir)
-    {
-        return Err(BrokerError::GuestControlSignRefused {
-            reason: "token-path",
-        });
-    }
-    let mut current = PathBuf::new();
-    let parent = token_path
-        .parent()
-        .ok_or(BrokerError::GuestControlSignRefused {
-            reason: "token-parent",
-        })?;
-    for component in parent.components() {
-        current.push(component);
-        let metadata =
-            fs::symlink_metadata(&current).map_err(|_| BrokerError::GuestControlSignRefused {
-                reason: "token-parent",
-            })?;
-        if metadata.file_type().is_symlink()
-            || !metadata.is_dir()
-            || !owner_is_safe_for_guest_control_token(metadata.uid())
-            || metadata.mode() & 0o022 != 0
-        {
-            return Err(BrokerError::GuestControlSignRefused {
-                reason: "token-parent-unsafe",
-            });
-        }
-    }
-    let metadata =
-        fs::symlink_metadata(token_path).map_err(|_| BrokerError::GuestControlSignRefused {
-            reason: "token-missing",
-        })?;
-    if metadata.file_type().is_symlink() {
-        return Err(BrokerError::GuestControlSignRefused {
-            reason: "token-symlink",
-        });
-    }
-    Ok(())
-}
-
-#[cfg(not(feature = "layer1-bootstrap"))]
-fn owner_is_safe_for_guest_control_token(uid: u32) -> bool {
-    uid == 0 || cfg!(test)
-}
-
-#[cfg(not(feature = "layer1-bootstrap"))]
 fn activation_mode_name(mode: d2b_contracts_broker::broker_wire::ActivationMode) -> &'static str {
     match mode {
         d2b_contracts_broker::broker_wire::ActivationMode::Switch => "switch",
@@ -10774,8 +10539,7 @@ fn runner_role_for_process_role(
         ProcessRole::WaylandProxy => Some(RunnerRole::WaylandProxy),
         ProcessRole::HostReconcile
         | ProcessRole::StoreVirtiofsPreflight
-        | ProcessRole::GuestSshReadiness
-        | ProcessRole::GuestControlHealth
+        | ProcessRole::ComponentSessionHealth
         | ProcessRole::SecurityKeyFrontend => None,
     }
 }
@@ -12727,17 +12491,6 @@ impl BrokerError {
                     ),
                 )?;
             }
-            Self::GuestControlSignRefused { reason } => {
-                audit_log.write_error_entry_with_caller_ids(
-                    operation,
-                    caller_uid,
-                    caller_gid,
-                    "guest-control-sign-refused",
-                    opaque_target_id,
-                    "Broker.GuestControlSignRefused",
-                    reason,
-                )?;
-            }
             // The StoreSync dispatch arm already wrote the signed terminal
             // `OperationFields::StoreSync` record (ADR 0027: exactly one
             // terminal record per attempt). Writing the generic error entry
@@ -12964,13 +12717,6 @@ impl BrokerError {
                     profile.as_str()
                 ),
                 "Use the fixed effect adapter for the authority that owns this operation; the active broker profile cannot be changed by a request.",
-            ),
-            Self::GuestControlSignRefused { reason } => error_response(
-                "Broker.GuestControlSignRefused",
-                "GuestControlSign",
-                Some("W11"),
-                reason,
-                "Check guest-control token materialization and the structured auth transcript fields.",
             ),
             Self::OtelHostBridgeIntentInvalid {
                 intent_vm,
@@ -13652,7 +13398,7 @@ mod tests {
             (ProcessRole::Usbip, Some(RunnerRole::Usbip)),
             (ProcessRole::HostReconcile, None),
             (ProcessRole::StoreVirtiofsPreflight, None),
-            (ProcessRole::GuestSshReadiness, None),
+            (ProcessRole::ComponentSessionHealth, None),
         ];
 
         for (role, expected) in cases {
@@ -14786,110 +14532,6 @@ mod tests {
                 "redacted key {redacted:?} leaked into export surface"
             );
         }
-    }
-
-    #[cfg(not(feature = "layer1-bootstrap"))]
-    fn guest_control_test_root(prefix: &str) -> tempfile::TempDir {
-        let base = crate::test_scratch_root().join("guest-control-tests");
-        crate::sys::path_safe::ensure_dir(&base, 0o750, None, None)
-            .expect("create guest-control test root");
-        tempfile::Builder::new()
-            .prefix(prefix)
-            .tempdir_in(base)
-            .expect("create guest-control test directory")
-    }
-
-    #[cfg(not(feature = "layer1-bootstrap"))]
-    fn write_guest_control_token(state_dir: &Path, vm: &str, mode: u32) {
-        use std::os::unix::fs::PermissionsExt;
-        let dir = state_dir.join(format!("guest-control-{vm}"));
-        fs::create_dir_all(&dir).expect("create guest-control token dir");
-        fs::set_permissions(&dir, fs::Permissions::from_mode(0o750))
-            .expect("chmod guest-control token dir");
-        let token = dir.join("token");
-        if token.exists() {
-            fs::set_permissions(&token, fs::Permissions::from_mode(0o600))
-                .expect("restore token write perms");
-            fs::remove_file(&token).expect("remove old token");
-        }
-        fs::write(&token, b"broker-test-token\n").expect("write token");
-        fs::set_permissions(&token, fs::Permissions::from_mode(mode)).expect("chmod token");
-    }
-
-    #[cfg(not(feature = "layer1-bootstrap"))]
-    fn guest_control_sign_request(
-        role: d2b_contracts_broker::broker_wire::GuestControlProofRole,
-    ) -> d2b_contracts_broker::broker_wire::GuestControlSignRequest {
-        d2b_contracts_broker::broker_wire::GuestControlSignRequest {
-            vm_id: d2b_contracts::types::VmId::new("corp-vm"),
-            role,
-            protocol_version: d2b_contracts_control::guest_wire::GUEST_CONTROL_PROTOCOL_VERSION,
-            direction: d2b_contracts_broker::broker_wire::GuestControlDirection::HostToGuest,
-            purpose: d2b_contracts_broker::broker_wire::GuestControlAuthPurpose::GuestControlAuthV1,
-            guest_control_port: d2b_contracts_control::guest_auth::GUEST_CONTROL_AUTH_PORT,
-            peer_cid: Some(2),
-            host_nonce: vec![0x11; d2b_contracts_control::guest_auth::AUTH_NONCE_LEN],
-            guest_nonce: vec![0x22; d2b_contracts_control::guest_auth::AUTH_NONCE_LEN],
-            guest_boot_id: d2b_contracts_broker::broker_wire::GuestBootIdWire::new("boot-1"),
-            capabilities_hash: match role {
-                d2b_contracts_broker::broker_wire::GuestControlProofRole::HostProof => None,
-                d2b_contracts_broker::broker_wire::GuestControlProofRole::GuestProof => {
-                    Some("caps-sha256".to_owned())
-                }
-            },
-            tracing_span_id: None,
-        }
-    }
-
-    #[cfg(not(feature = "layer1-bootstrap"))]
-    #[test]
-    fn guest_control_sign_returns_only_fixed_tag() {
-        let root = guest_control_test_root("guest-control-sign-");
-        let bundle = build_test_bundle(root.path());
-        let config = test_server_config(root.path(), &bundle.bundle_path);
-        write_guest_control_token(&config.state_dir, "corp-vm", 0o440);
-        let response = handle_guest_control_sign(
-            guest_control_sign_request(
-                d2b_contracts_broker::broker_wire::GuestControlProofRole::HostProof,
-            ),
-            &config,
-            Some(&bundle.resolver),
-        )
-        .expect("sign");
-        assert_eq!(
-            response.tag.len(),
-            d2b_contracts_control::guest_auth::AUTH_TAG_LEN
-        );
-    }
-
-    #[cfg(not(feature = "layer1-bootstrap"))]
-    #[test]
-    fn guest_control_sign_rejects_role_confusion_and_unsafe_token() {
-        let root = guest_control_test_root("guest-control-sign-reject-");
-        let bundle = build_test_bundle(root.path());
-        let config = test_server_config(root.path(), &bundle.bundle_path);
-        write_guest_control_token(&config.state_dir, "corp-vm", 0o440);
-
-        let mut bad = guest_control_sign_request(
-            d2b_contracts_broker::broker_wire::GuestControlProofRole::HostProof,
-        );
-        bad.capabilities_hash = Some("caps-sha256".to_owned());
-        assert!(matches!(
-            handle_guest_control_sign(bad, &config, Some(&bundle.resolver)),
-            Err(BrokerError::GuestControlSignRefused { .. })
-        ));
-
-        write_guest_control_token(&config.state_dir, "corp-vm", 0o666);
-        assert!(matches!(
-            handle_guest_control_sign(
-                guest_control_sign_request(
-                    d2b_contracts_broker::broker_wire::GuestControlProofRole::HostProof
-                ),
-                &config,
-                Some(&bundle.resolver),
-            ),
-            Err(BrokerError::GuestControlSignRefused { .. })
-        ));
     }
 
     #[cfg(not(feature = "layer1-bootstrap"))]

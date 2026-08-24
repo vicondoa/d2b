@@ -28,7 +28,7 @@ or release a USBIP device.
 | `entries[].host.bind` | string | Host driver bind state: `unbound`, `bound-to-usbip-host`, `bound-to-unexpected-driver`, `device-missing`, `unknown`, or `not-applicable`. | Stable additive field. |
 | `entries[].host.carrier` | string | Active carrier state for the `usbip-host` module, per-env backend/export readiness, and selected device presence: `absent`, `unavailable`, `withheld-for-owner`, `ready`, `departed-during-probe`, `unknown`, or `not-applicable`. | Stable additive field. |
 | `entries[].host.proxy` | string | Per-env proxy listener state: `not-declared`, `stopped`, `starting`, `listening`, `stale`, `failed`, `unknown`, or `not-applicable`. | Stable additive field. |
-| `entries[].guest.import` | string | Guest import observation through authenticated guest-control: `detached`, `imported`, `unavailable`, `unknown`, or `not-applicable`. | Stable additive field. |
+| `entries[].guest.import` | string | Guest import observation through authenticated component-session: `detached`, `imported`, `unavailable`, `unknown`, or `not-applicable`. | Stable additive field. |
 | `entries[].topologyPolicy.topology` | string | Redacted physical topology match state: `match`, `mismatch`, `incomplete`, `not-observed`, `not-applicable`, or `unknown`. | Stable additive field. |
 | `entries[].topologyPolicy.policy` | string | Bundle policy state: `allowed`, `denied`, `missing`, `not-applicable`, or `unknown`. | Stable additive field. |
 | `entries[].degradedReasons[]` | array | Closed degraded reason objects with `code`, `summary`, and `remediation`. Raw sysfs paths, serials, command output, and stderr are not included. | Stable additive field. |
@@ -49,7 +49,7 @@ or release a USBIP device.
 - VM restart reconciliation preserves same-VM session claims. During restart
   the daemon detaches guest imports and only runs host unbind after firewall
   withdrawal plus targeted stream cleanup is proven, then replays
-  bind/proxy/import after guest-control readiness. Runtime absence or
+  bind/proxy/import after component-session readiness. Runtime absence or
   guest/proxy unavailability is reported as degraded USB state; required
   policy/topology failures fail before device exposure.
 
@@ -67,9 +67,9 @@ or release a USBIP device.
 | `carrier-unavailable` | The `usbip-host` module, selected device, or per-env backend/export carrier is unavailable. | Reconnect the device and run `d2b usb attach <vm> <busid> --apply`. |
 | `host-bind-unavailable` | The device is not bound to `usbip-host`. | Run `d2b usb attach <vm> <busid> --apply` so the broker can bind it for export. |
 | `proxy-unavailable` | The per-env proxy is missing, stale, failed, or not listening. | Reconcile the proxy by running `d2b usb attach <vm> <busid> --apply`; inspect broker audit if it repeats. |
-| `guest-import-unavailable` | The guest has not imported the claimed device or guest-control is unavailable. | Start the VM if needed, then run `d2b usb attach <vm> <busid> --apply`. |
+| `guest-import-unavailable` | The guest has not imported the claimed device or component-session is unavailable. | Start the VM if needed, then run `d2b usb attach <vm> <busid> --apply`. |
 | `stale-host-state` | Host export/proxy state remains after the claim was removed. | Run `d2b usb detach <vm> <busid> --apply` to drain host state. |
-| `stale-guest-state` | Guest import state remains after the claim was removed. | Run `d2b usb detach <vm> <busid> --apply` so guestd removes the import. |
+| `stale-guest-state` | Guest import state remains after the claim was removed. | Run `d2b usb detach <vm> <busid> --apply` so target-local Process removes the import. |
 | `probe-incomplete` | Probe did not produce a reconciliation-safe identity. | Retry `d2b usb probe`; if it repeats, verify the declaration has a stable physical selector. |
 
 ## JSON example

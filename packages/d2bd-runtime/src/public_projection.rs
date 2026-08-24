@@ -13,7 +13,6 @@ const QEMU_MEDIA_DEFAULT_RUNTIME_CAPABILITIES: &[&str] = &["display", "lifecycle
 const QEMU_MEDIA_DEFAULT_UNSUPPORTED_CAPABILITIES: &[&str] = &[
     "config-sync",
     "exec",
-    "guest-control",
     "in-guest-observability",
     "keys",
     concat!("s", "sh"),
@@ -160,7 +159,6 @@ fn public_runtime_capabilities_by_support(
 fn capability_name_for_public_output(name: &str) -> String {
     match name {
         "configSync" => "config-sync",
-        "guestControl" => "guest-control",
         "inGuestObservability" => "in-guest-observability",
         "storeSync" => "store-sync",
         "usbHotplug" => "usb-hotplug",

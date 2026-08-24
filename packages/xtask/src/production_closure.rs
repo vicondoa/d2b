@@ -38,7 +38,7 @@ const PROTECTED_CODEOWNERS_RULES: &[&str] = &[
     "/packages/xtask/tests/policy_production_closure.rs @vicondoa",
     "/Makefile @vicondoa",
     "/flake.nix @vicondoa",
-    "/nixos-modules/guest-control.nix @vicondoa",
+    "/nixos-modules/component-session.nix @vicondoa",
     "/nixos-modules/host-activation.nix @vicondoa",
     "/nixos-modules/host-broker.nix @vicondoa",
     "/nixos-modules/host-daemon.nix @vicondoa",
@@ -237,16 +237,6 @@ pub fn context_specs(root: &Path) -> Result<Vec<ContextSpec>, String> {
             default_features: false,
             source_authority: "Cargo.lock".to_owned(),
             lock_path: PRODUCT_LOCK.to_owned(),
-        });
-        contexts.push(ContextSpec {
-            system: system.to_owned(),
-            target: musl.clone(),
-            name: "guestd-static".to_owned(),
-            roots: vec!["d2b-guestd".to_owned()],
-            features: Vec::new(),
-            default_features: true,
-            source_authority: "packages/Cargo.guest.lock".to_owned(),
-            lock_path: "packages/Cargo.guest.lock".to_owned(),
         });
         contexts.push(ContextSpec {
             system: system.to_owned(),

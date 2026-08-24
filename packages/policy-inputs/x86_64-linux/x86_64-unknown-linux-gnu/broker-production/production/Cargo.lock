@@ -586,7 +586,6 @@ version = "0.0.0-bootstrap"
 dependencies = [
  "d2b-contracts",
  "d2b-contracts-resource",
- "protobuf",
  "schemars",
  "serde",
  "serde_json",

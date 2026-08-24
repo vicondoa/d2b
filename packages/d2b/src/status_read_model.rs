@@ -154,7 +154,6 @@ const QEMU_MEDIA_DEFAULT_RUNTIME_CAPABILITIES: &[&str] = &["display", "lifecycle
 const QEMU_MEDIA_DEFAULT_UNSUPPORTED_CAPABILITIES: &[&str] = &[
     "config-sync",
     "exec",
-    "guest-control",
     "in-guest-observability",
     "keys",
     concat!("s", "sh"),
@@ -225,7 +224,6 @@ pub(crate) fn output_service_capabilities(services: &StatusServicesOutputV2) -> 
 fn capability_name_for_output(capability: &str) -> &str {
     match capability {
         "configSync" => "config-sync",
-        "guestControl" => "guest-control",
         "inGuestObservability" => "in-guest-observability",
         "storeSync" => "store-sync",
         "usbHotplug" => "usb-hotplug",
@@ -839,8 +837,7 @@ fn process_role_name(role: &d2b_core::processes::ProcessRole) -> String {
         d2b_core::processes::ProcessRole::QemuMediaRunner => "qemu-media-runner",
         d2b_core::processes::ProcessRole::VsockRelay => "vsock-relay",
         d2b_core::processes::ProcessRole::OtelHostBridge => "otel-host-bridge",
-        d2b_core::processes::ProcessRole::GuestSshReadiness => "guest-ssh-readiness",
-        d2b_core::processes::ProcessRole::GuestControlHealth => "guest-control-health",
+        d2b_core::processes::ProcessRole::ComponentSessionHealth => "component-session-health",
         d2b_core::processes::ProcessRole::Usbip => "usbip",
         d2b_core::processes::ProcessRole::WaylandProxy => "wayland-proxy",
         d2b_core::processes::ProcessRole::SecurityKeyFrontend => "security-key-frontend",
@@ -872,8 +869,8 @@ fn readiness_name(readiness: &d2b_core::processes::ReadinessPredicate) -> String
         d2b_core::processes::ReadinessPredicate::ComponentSpecific(value) => {
             format!("component-specific:{value}")
         }
-        d2b_core::processes::ReadinessPredicate::GuestControlHealth { .. } => {
-            "guest-control-health".to_owned()
+        d2b_core::processes::ReadinessPredicate::ComponentSessionHealth { .. } => {
+            "component-session-health".to_owned()
         }
     }
 }
@@ -934,7 +931,6 @@ mod tests {
             vec![
                 "config-sync",
                 "exec",
-                "guest-control",
                 "in-guest-observability",
                 "keys",
                 "ssh",
@@ -948,12 +944,12 @@ mod tests {
         let vm = manifest_vm_with_runtime(
             "qemu-media",
             BTreeMap::from([
-                ("guestControl".to_owned(), false),
+                ("exec".to_owned(), false),
                 ("usbHotplug".to_owned(), true),
             ]),
         );
 
         assert_eq!(output_runtime_capabilities(&vm), vec!["usb-hotplug"]);
-        assert_eq!(output_unsupported_capabilities(&vm), vec!["guest-control"]);
+        assert_eq!(output_unsupported_capabilities(&vm), vec!["exec"]);
     }
 }

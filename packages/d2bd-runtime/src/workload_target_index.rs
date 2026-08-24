@@ -362,7 +362,7 @@ mod tests {
                 "stateDir": "/var/lib/d2b/vms/{{vm}}",
                 "runDir": "/run/d2b/vms/{{vm}}",
                 "storeView": "/var/lib/d2b/vms/{{vm}}/store",
-                "guestControlDir": "/run/d2b/vms/{{vm}}/gctl"
+                "componentSessionDir": "/run/d2b/vms/{{vm}}/component-session"
               }},
               "identity": {{
                 "workloadId": "{workload_id}",
@@ -387,7 +387,7 @@ mod tests {
                 "stateDir": "/var/lib/d2b/vms/{{vm}}",
                 "runDir": "/run/d2b/vms/{{vm}}",
                 "storeView": "/var/lib/d2b/vms/{{vm}}/store",
-                "guestControlDir": "/run/d2b/vms/{{vm}}/gctl"
+                "componentSessionDir": "/run/d2b/vms/{{vm}}/component-session"
               }}
             }}"#
         )
@@ -398,14 +398,14 @@ mod tests {
         "provider": { "id": "local-ch", "driver": "cloud-hypervisor", "type": "local" },
         "capabilities": {
             "lifecycle": true, "display": false, "usbHotplug": false,
-            "guestControl": true, "exec": true, "configSync": false,
+             "exec": true, "configSync": false,
             "ssh": false, "storeSync": true, "keys": false, "inGuestObservability": false
         },
         "operationCapabilities": {
             "lifecycle": { "start": true, "stop": true, "restart": true, "switch": true, "hostPrepare": false },
             "media": { "usbHotplug": false, "removableMedia": false, "qemuMedia": false },
             "display": { "display": false, "graphics": false, "video": false, "waylandProxy": false },
-            "guest": { "guestControl": true, "exec": true, "shell": true, "configSync": false, "ssh": false, "keys": false, "inGuestObservability": false },
+            "guest": {  "exec": true, "shell": true, "configSync": false, "ssh": false, "keys": false, "inGuestObservability": false },
             "storage": { "storeSync": true, "virtiofs": true, "volumes": false }
         },
         "autostartPolicy": "host-boot-eligible"

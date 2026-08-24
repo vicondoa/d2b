@@ -9,7 +9,7 @@ pub struct GuestRuntimeStatus {
     pub phase: &'static str,
     /// Whether the VMM process is ready.
     pub runtime_ready: bool,
-    /// Whether guest-control is authenticated and healthy.
+    /// Whether the Guest ComponentSession is authenticated and healthy.
     pub bootstrap_ready: bool,
     /// Active process count.
     pub active_process_count: u16,

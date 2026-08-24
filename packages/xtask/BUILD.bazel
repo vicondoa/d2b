@@ -85,24 +85,6 @@ generated_artifact_check(
 )
 
 generated_artifact_check(
-    name = "gen_guest_proto_drift",
-    command = "gen-guest-proto",
-    data = [
-        "//packages/d2b-contracts-control:guest_control_proto_source",
-        "//packages/d2b-contracts-control:guest_proto_generated",
-    ],
-)
-
-generated_artifact_check(
-    name = "gen_guest_ttrpc_drift",
-    command = "gen-guest-ttrpc",
-    data = [
-        "//packages/d2b-contracts-control:guest_control_proto_source",
-        "//packages/d2b-guestd:guest_ttrpc_generated",
-    ],
-)
-
-generated_artifact_check(
     name = "gen_resource_proto_drift",
     command = "gen-resource-proto",
     data = [
@@ -157,8 +139,6 @@ test_suite(
         ":gen_cli_shell_artifacts_drift",
         ":gen_daemon_api_drift",
         ":gen_error_codes_drift",
-        ":gen_guest_proto_drift",
-        ":gen_guest_ttrpc_drift",
         ":gen_provider_packaging_drift",
         ":gen_resource_proto_drift",
         ":gen_resource_schemas_drift",
@@ -215,10 +195,8 @@ rust_test(
         "//packages/d2b-core:BUILD.bazel",
         "//packages/d2b-core-controller:BUILD.bazel",
         "//packages/d2b-cutover:BUILD.bazel",
-        "//packages/d2b-exec-runner:BUILD.bazel",
         "//packages/d2b-gateway:BUILD.bazel",
         "//packages/d2b-gateway-runtime:BUILD.bazel",
-        "//packages/d2b-guestd:BUILD.bazel",
         "//packages/d2b-host-activation-helper:BUILD.bazel",
         "//packages/d2b-process:BUILD.bazel",
         "//packages/d2b-process-conformance:BUILD.bazel",

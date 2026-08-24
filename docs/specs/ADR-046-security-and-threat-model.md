@@ -12,6 +12,12 @@
 | Depends on | `ADR-046-terminology-and-identities`, `ADR-046-resource-object-model`, `ADR-046-resource-api-and-authorization`, `ADR-046-resource-reconciliation`, `ADR-046-resource-store-redb`, `ADR-046-componentsession-and-bus`, `ADR-046-zone-routing`, `ADR-046-resources-zone-control`, `ADR-046-core-controllers`, `ADR-046-provider-model-and-packaging`, `ADR-046-provider-state`, `ADR-046-components-processes-and-sandbox`, `ADR-046-primitive-resource-composition`, `ADR-046-resources-host-guest-process-user`, `ADR-046-resources-volume`, `ADR-046-resources-network`, `ADR-046-resources-device`, `ADR-046-resources-credential`, `ADR-046-nix-configuration`, `ADR-046-cli-and-operations`, `ADR-046-telemetry-audit-and-support`, `ADR-046-current-code-migration-map`, `ADR-046-decision-register`, and all 27 `docs/specs/providers/ADR-046-provider-*.md` dossiers |
 | Supersedes | None. This spec is a new cross-cutting synthesis. `SECURITY.md` and `docs/explanation/design.md` remain the disclosure policy and pre-v3 (v1/v2) threat model for the protected `v3` baseline and are not superseded; historical main-branch ADR 0045 (`a1cc0b2d^:docs/adr/0045-provider-and-transport-framework.md`, "d2b 2.0 provider and transport framework") and ADR 0032/0034 remain non-ancestry reuse sources whose useful invariants this spec adapts under D001/D041 |
 
+> **Current-state note (U10).** The baseline threat rows that name the
+> standalone Guest daemon, feature-specific guest-control HMACs, or token-share
+> broker path are historical. The implemented boundary is the enrolled
+> ComponentSession plus signed target-local Process and Guest-profile broker;
+> old peers are rejected before feature or authority state is exposed.
+
 This spec is the normative closing security and threat-model contract for the
 ADR 0046 d2b 3.0 Provider control plane. It does not introduce new
 ResourceTypes, Providers, or wire contracts. It collects, cross-references, and

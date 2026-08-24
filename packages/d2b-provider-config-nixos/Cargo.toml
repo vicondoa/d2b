@@ -10,11 +10,8 @@ workspace = true
 
 [dependencies]
 async-trait = "0.1"
-d2b-contracts-control = { path = "../d2b-contracts-control", version = "0.0.0-bootstrap" }
 d2b-contracts-resource = { path = "../d2b-contracts-resource", version = "0.0.0-bootstrap" }
-d2b-contracts-zone-session = { path = "../d2b-contracts-zone-session", version = "0.0.0-bootstrap" }
 base64 = { workspace = true }
-libc = "0.2"
 schemars = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }

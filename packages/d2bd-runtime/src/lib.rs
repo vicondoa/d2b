@@ -1,7 +1,7 @@
 //! Provider-independent daemon runtime services.
 //!
 //! This crate owns the daemon's transport, public wire, audit, metrics,
-//! guest-control protocol, lifecycle primitives, supervisor, and other
+//! ComponentSession transport, lifecycle primitives, supervisor, and other
 //! provider-neutral state. The `d2bd` crate remains the static composition
 //! root for provider selection and effect adapters.
 
@@ -18,14 +18,10 @@ pub mod daemon_client;
 pub mod daemon_config;
 pub mod daemon_version;
 pub mod exec_detached;
-pub mod exec_owner_io;
 pub mod exec_session;
 pub mod exec_session_real;
 pub mod exec_support;
-pub mod guest_control_health;
-pub mod guest_control_bridge;
-pub mod guest_control_runtime;
-pub mod guest_control_vsock;
+pub mod component_session_vsock;
 pub mod guest_component_session;
 pub mod guest_mode;
 pub mod guest_resource_runtime;
