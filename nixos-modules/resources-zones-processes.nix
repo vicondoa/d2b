@@ -286,6 +286,7 @@ let
     Audio = "Provider/audio-pipewire";
     CloudHypervisorRunner = "Provider/runtime-cloud-hypervisor";
     QemuMediaRunner = "Provider/runtime-qemu-media";
+    ActivationNixosRunner = "Provider/activation-nixos";
     VsockRelay = "Provider/transport-vsock";
     OtelHostBridge = "Provider/observability-otel";
     GuestControlHealth = "Provider/system-core";

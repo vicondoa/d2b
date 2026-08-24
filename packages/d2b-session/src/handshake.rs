@@ -139,7 +139,7 @@ pub fn negotiate_offer(
 
 pub fn encode_generation_discovery_request(identity: &EndpointPolicyIdentity) -> Result<Vec<u8>> {
     identity
-        .validate_local_generation_discovery()
+        .validate_generation_discovery()
         .map_err(SessionError::from)?;
     let encoded = identity
         .encode_canonical()
@@ -165,7 +165,7 @@ pub fn accept_generation_discovery_request(
     let identity = EndpointPolicyIdentity::decode_canonical(&bytes[GENERATION_QUERY_MAGIC.len()..])
         .map_err(handshake_binary_error)?;
     identity
-        .validate_local_generation_discovery()
+        .validate_generation_discovery()
         .map_err(SessionError::from)?;
     identity
         .validate_exact(policy)

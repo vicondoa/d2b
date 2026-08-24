@@ -6,10 +6,23 @@ use d2b_contracts_resource::v3::{
     ActivationMode,
     ActivationOutcomeCode,
     ArtifactId,
+    ActivationRunnerInput,
+    process::{
+        EphemeralProcessSpec, ExecutionSpec, NamespaceClass, ProcessClass, SandboxSpec,
+    },
+    EnvironmentClass,
+    ExecutionDomain,
+    ResourceName,
     NixosGenerationSpec,
     ResourcePhase,
     ResourceRef,
 };
+use sha2::{Digest, Sha256};
+
+/// The target-local Process template used for activation effects.
+pub const ACTIVATION_RUNNER_TEMPLATE: &str = "activation-nixos-runner";
+/// The generic one-shot process resource type used for activation effects.
+pub const ACTIVATION_RUNNER_RESOURCE_TYPE: &str = "EphemeralProcess";
 
 /// Caller role derived from the authenticated daemon request.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -98,7 +111,13 @@ pub struct GenerationObservation {
 impl GenerationObservation {
     /// Construct a bounded observation.
     pub fn new(name: impl Into<String>, phase: GenerationPhase) -> Self {
-        Self::terminal(name, phase, 0)
+        let name = name.into();
+        let ordinal = name
+            .rsplit('-')
+            .next()
+            .and_then(|value| value.parse::<u64>().ok())
+            .unwrap_or(0);
+        Self::terminal(name, phase, ordinal)
     }
 
     /// Construct a bounded terminal observation.
@@ -131,14 +150,138 @@ impl GenerationObservation {
 /// A typed runner launch request.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RunnerRequest {
+    /// Deterministic child resource name, derived from the generation.
+    pub runner_name: ResourceName,
     /// Target execution context.
     pub execution_ref: ResourceRef,
     /// Private-catalog artifact identifier.
     pub system_artifact_id: ArtifactId,
     /// Requested activation mode.
     pub activation_mode: ActivationMode,
+    /// Target generation ordinal bound to the runner stdin envelope.
+    pub target_generation: u64,
     /// Activation runners start without an in-namespace root UID.
     pub start_root: bool,
+}
+
+/// Return the deterministic target-local child name for one generation.
+///
+/// The name is derived from the qualified generation reference rather than
+/// an operator-provided value, so retries and daemon restarts converge on the
+/// same EphemeralProcess.
+pub fn activation_runner_name(generation: &ResourceRef) -> ResourceName {
+    let readable = format!("activation-nixos--runner--{}", generation.name().as_str());
+    if let Ok(name) = ResourceName::parse(readable) {
+        return name;
+    }
+    let mut digest = Sha256::new();
+    digest.update(b"d2b-activation-runner-v1");
+    digest.update([0]);
+    digest.update(generation.to_canonical_string().as_bytes());
+    let digest = digest.finalize();
+    let suffix = digest[..12]
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect::<String>();
+    ResourceName::parse(format!("activation-runner-{suffix}"))
+        .expect("activation runner name is bounded and lowercase")
+}
+
+/// Return the deterministic child reference owned by one generation.
+pub fn activation_runner_ref(generation: &ResourceRef) -> ResourceRef {
+    let canonical = format!(
+        "{ACTIVATION_RUNNER_RESOURCE_TYPE}/{}",
+        activation_runner_name(generation).as_str()
+    );
+    ResourceRef::parse(&canonical)
+    .expect("activation runner reference is valid")
+}
+
+/// Build the closed EphemeralProcess contract for one activation request.
+///
+pub fn activation_runner_spec(request: &RunnerRequest) -> EphemeralProcessSpec {
+    let template = d2b_contracts_resource::v3::BoundedToken::parse(ACTIVATION_RUNNER_TEMPLATE)
+        .expect("static activation runner template");
+    let sandbox = SandboxSpec::new(
+        vec![NamespaceClass::Pid, NamespaceClass::Mount, NamespaceClass::Ipc],
+        Vec::new(),
+        d2b_contracts_resource::v3::BoundedToken::parse("activation-nixos-runner")
+            .expect("static activation runner seccomp class"),
+        true,
+        request.start_root,
+        EnvironmentClass::Minimal,
+        true,
+        Some("0022".to_owned()),
+        0,
+        None,
+    )
+    .expect("static activation runner sandbox");
+    let budget = d2b_contracts_resource::v3::BudgetSpec::new(
+        Some(d2b_contracts_resource::v3::CpuBudget {
+            request: Some(
+                d2b_contracts_resource::v3::MilliCpu::parse("100m")
+                    .expect("static activation runner cpu request"),
+            ),
+            limit: Some(
+                d2b_contracts_resource::v3::MilliCpu::parse("2000m")
+                    .expect("static activation runner cpu limit"),
+            ),
+        }),
+        Some(d2b_contracts_resource::v3::MemoryBudget {
+            request: Some(
+                d2b_contracts_resource::v3::ByteQuantity::parse("32Mi")
+                    .expect("static activation runner memory request"),
+            ),
+            limit: Some(
+                d2b_contracts_resource::v3::ByteQuantity::parse("128Mi")
+                    .expect("static activation runner memory limit"),
+            ),
+        }),
+        Some(d2b_contracts_resource::v3::CountBudget { limit: Some(128) }),
+        Some(d2b_contracts_resource::v3::CountBudget { limit: Some(512) }),
+        None,
+        None,
+        None,
+    )
+    .expect("static activation runner budget");
+    let execution = ExecutionSpec::new(
+        request.execution_ref.clone(),
+        Some(ExecutionDomain::System),
+        None,
+        ProcessClass::Worker,
+        template,
+        None,
+        Vec::new(),
+        Vec::new(),
+        sandbox,
+        budget,
+        None,
+        Vec::new(),
+        Default::default(),
+    )
+    .expect("static activation runner execution");
+    let spec = EphemeralProcessSpec::new(
+        execution,
+        d2b_contracts_resource::v3::DurationMs::parse("120s", 1_000, 3_600_000)
+            .expect("static activation runner start deadline"),
+        d2b_contracts_resource::v3::DurationMs::parse("600s", 1_000, 86_400_000)
+            .expect("static activation runner runtime deadline"),
+        d2b_contracts_resource::v3::DurationMs::parse("1h", 0, 7 * 86_400_000)
+            .expect("static activation runner success ttl"),
+        d2b_contracts_resource::v3::DurationMs::parse("24h", 0, 30 * 86_400_000)
+            .expect("static activation runner failure ttl"),
+        false,
+    )
+    .expect("static activation runner process");
+    spec.with_activation_input(
+        ActivationRunnerInput::new(
+            request.system_artifact_id.clone(),
+            request.target_generation,
+            request.activation_mode,
+        )
+        .expect("activation runner generation is nonzero"),
+    )
+    .expect("activation runner accepts its typed input")
 }
 
 /// Stable controller failures.
@@ -258,10 +401,18 @@ impl ActivationController {
             GenerationPhase::Pending | GenerationPhase::Degraded
         ) && spec.activation_mode() != ActivationMode::Adopt
         {
+            let generation_ref = format!(
+                    "activation-nixos.d2bus.org.NixosGeneration/{}",
+                    observed.name()
+                );
             vec![RunnerRequest {
+                runner_name: activation_runner_name(
+                    &ResourceRef::parse(&generation_ref).expect("generation reference is valid"),
+                ),
                 execution_ref: spec.execution_ref().clone(),
                 system_artifact_id: spec.system_artifact_id().clone(),
                 activation_mode: spec.activation_mode(),
+                target_generation: observed.ordinal(),
                 start_root: true,
             }]
         } else {

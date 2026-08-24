@@ -2179,6 +2179,10 @@ pub mod pidfd_sys {
         /// dropping credentials. Used only for qemu-media runners whose
         /// trusted argv requests QEMU `mem-lock=on`.
         pub memlock_limit_bytes: Option<u64>,
+        /// Optional broker-controlled stdin envelope for an activation
+        /// runner. The broker creates the pipe and writes these validated
+        /// bytes only after the child has been spawned.
+        pub activation_stdin: Option<Vec<u8>>,
     }
 
     /// Well-known fd number for the pre-opened render node.
@@ -2953,6 +2957,8 @@ pub mod pidfd_sys {
     const CHILD_EXIT_PREOPEN_DUP2: libc::c_int = 76;
     /// setrlimit(RLIMIT_MEMLOCK) failed for a runner that requested it.
     const CHILD_EXIT_MEMLOCK_RLIMIT: libc::c_int = 77;
+    /// dup2 of the broker-controlled activation stdin pipe failed.
+    const CHILD_EXIT_ACTIVATION_STDIN: libc::c_int = 78;
 
     /// Spawn a per-role runner with namespace / seccomp / capability
     /// setup plus `setgroups` + `setgid` + `setuid` + `execve` in a
@@ -2972,6 +2978,14 @@ pub mod pidfd_sys {
         supplementary_groups: Vec<u32>,
         isolation: RunnerIsolationSpec,
     ) -> io::Result<SpawnOutcome> {
+        if isolation.activation_stdin.as_ref().is_some_and(|payload| {
+            payload.len() > d2b_contracts_resource::v3::MAX_ACTIVATION_RUNNER_INPUT_BYTES
+        }) {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "SpawnRunner: activation stdin exceeds bounded envelope",
+            ));
+        }
         // NamespaceSet.user is ALLOWED when
         // RunnerIsolationSpec.user_namespace provides the uid_map/gid_map
         // values. Caller must set both for the child to be fake-root
@@ -3092,6 +3106,26 @@ pub mod pidfd_sys {
             .map(|p| p.write_fd.as_raw_fd())
             .unwrap_or(-1);
 
+        // Activation runners receive a broker-created stdin pipe. The child
+        // owns only the read end; the parent writes the already validated
+        // typed envelope after clone and closes its end to delimit input.
+        let (activation_stdin_read_owner, activation_stdin_write_fd) =
+            match isolation.activation_stdin.as_ref() {
+                Some(_) => {
+                    let pipe = make_sync_pipe()?;
+                    (Some(pipe.read_fd), Some(pipe.write_fd))
+                }
+                None => (None, None),
+            };
+        let activation_stdin_read_fd = activation_stdin_read_owner
+            .as_ref()
+            .map(|fd| fd.as_raw_fd())
+            .unwrap_or(-1);
+        let activation_stdin_write_raw_fd = activation_stdin_write_fd
+            .as_ref()
+            .map(|fd| fd.as_raw_fd())
+            .unwrap_or(-1);
+
         // When a user namespace is in play, the child must transition
         // to in-NS UID 0 (the mapped root), NOT to the host stable
         // principal UID. Calling setuid(<host_uid>) inside the new user
@@ -3124,6 +3158,25 @@ pub mod pidfd_sys {
             extra_clone_flags,
             cgroup_dir_raw_fd,
             move |_| unsafe {
+                // Keep the parent's read-end owner live through clone/fork;
+                // the child inherits the raw descriptor captured below.
+                let _activation_stdin_read_owner = &activation_stdin_read_owner;
+                if activation_stdin_read_fd >= 0 {
+                    if activation_stdin_write_raw_fd >= 0 {
+                        libc::close(activation_stdin_write_raw_fd);
+                    }
+                    if activation_stdin_read_fd != libc::STDIN_FILENO {
+                        if libc::dup2(activation_stdin_read_fd, libc::STDIN_FILENO) < 0 {
+                            let m = b"DEBUG: dup2 activation stdin failed\n";
+                            libc::write(2, m.as_ptr() as *const _, m.len());
+                            libc::_exit(CHILD_EXIT_ACTIVATION_STDIN);
+                        }
+                        libc::close(activation_stdin_read_fd);
+                    }
+                    // dup2 does not copy CLOEXEC; clear it for the
+                    // read-end-already-at-stdin case.
+                    libc::fcntl(libc::STDIN_FILENO, libc::F_SETFD, 0);
+                }
                 // If we're in a user NS, FIRST close the inherited write end
                 // of the sync pipe so the parent's death is observable as EOF.
                 // THEN block on the read end until the parent has written
@@ -3443,6 +3496,37 @@ pub mod pidfd_sys {
             }
         }
 
+        if let Some(payload) = isolation.activation_stdin.as_deref() {
+            let write_fd = activation_stdin_write_fd.ok_or_else(|| {
+                io::Error::new(
+                    io::ErrorKind::BrokenPipe,
+                    "activation stdin pipe was not created",
+                )
+            })?;
+            let mut offset = 0;
+            while offset < payload.len() {
+                match rustix::io::write(&write_fd, &payload[offset..]) {
+                    Ok(0) => {
+                        let _ = pidfd_send_signal(outcome.pidfd.as_fd(), libc::SIGKILL);
+                        let _ = reap_spawn_runner_error_child(outcome.pid);
+                        return Err(io::Error::new(
+                            io::ErrorKind::WriteZero,
+                            "activation stdin pipe closed before payload delivery",
+                        ));
+                    }
+                    Ok(written) => offset += written,
+                    Err(error) if error.raw_os_error() == libc::EINTR => {}
+                    Err(error) => {
+                        let _ = pidfd_send_signal(outcome.pidfd.as_fd(), libc::SIGKILL);
+                        let _ = reap_spawn_runner_error_child(outcome.pid);
+                        return Err(io::Error::from_raw_os_error(error.raw_os_error()));
+                    }
+                }
+            }
+            // Dropping the write end sends EOF to the helper.
+            drop(write_fd);
+        }
+
         Ok(outcome)
     }
 
@@ -3514,6 +3598,7 @@ pub mod pidfd_sys {
 
 #[cfg(test)]
 mod tests {
+    use std::ffi::CString;
     use std::fs;
     use std::os::fd::{AsRawFd, OwnedFd};
     use std::os::unix::fs::{PermissionsExt, symlink};
@@ -3522,6 +3607,8 @@ mod tests {
     use nix::fcntl::{FcntlArg, FdFlag, fcntl};
     use nix::libc;
     use nix::sys::socket::{AddressFamily, SockFlag, SockType, socketpair};
+    use nix::sys::wait::{WaitStatus, waitpid};
+    use nix::unistd::Pid;
     use tempfile::tempdir;
 
     fn test_namespaces(pid: bool) -> NamespaceSet {
@@ -3691,7 +3778,6 @@ mod tests {
     // requires root and is tested by integration tests in live_handlers.rs).
 
     use super::pidfd_sys::{RunnerIsolationSpec, UserNamespaceSpec, clone3_spawn_runner};
-    use std::ffi::CString;
 
     fn empty_mount_policy() -> MountPolicy {
         MountPolicy {
@@ -3723,6 +3809,7 @@ mod tests {
             umask: None,
             pre_opened_device_fds: Vec::new(),
             memlock_limit_bytes: None,
+            activation_stdin: None,
         }
     }
 
@@ -3771,6 +3858,67 @@ mod tests {
         let mut iso = isolation_with_user_namespace(None);
         iso.umask = Some(0o007);
         assert_eq!(iso.umask, Some(7));
+    }
+
+    #[test]
+    fn activation_stdin_delivery_is_broker_controlled() {
+        let shell_path = ["/bin/sh", "/usr/bin/sh"]
+            .iter()
+            .find(|path| std::path::Path::new(path).exists())
+            .copied()
+            .expect("could not find a shell binary");
+        let current_uid = nix::unistd::Uid::current().as_raw();
+        let current_gid = nix::unistd::Gid::current().as_raw();
+        if current_uid != 0 {
+            eprintln!("SKIP: activation stdin child test requires broker credentials");
+            return;
+        }
+        let mut isolation = isolation_with_user_namespace(None);
+        isolation.activation_stdin = Some(b"expected\n".to_vec());
+        let binary = CString::new(shell_path).expect("shell path");
+        let supplementary_groups = nix::unistd::getgroups()
+            .expect("read supplementary groups")
+            .into_iter()
+            .map(|group| group.as_raw())
+            .collect();
+        let outcome = clone3_spawn_runner(
+            binary.clone(),
+            vec![
+                binary,
+                CString::new("-c").expect("shell option"),
+                CString::new(r#"read -r value && [ "$value" = expected ]"#)
+                    .expect("shell script"),
+            ],
+            Vec::new(),
+            current_uid,
+            current_gid,
+            supplementary_groups,
+            isolation,
+        )
+        .expect("activation stdin runner should spawn");
+        let status = waitpid(Pid::from_raw(outcome.pid), None).expect("wait for runner");
+        assert!(matches!(status, WaitStatus::Exited(_, 0)), "status: {status:?}");
+    }
+
+    #[test]
+    fn activation_stdin_bound_is_enforced_before_spawn() {
+        let mut isolation = isolation_with_user_namespace(None);
+        isolation.activation_stdin = Some(vec![
+            0;
+            d2b_contracts_resource::v3::MAX_ACTIVATION_RUNNER_INPUT_BYTES + 1
+        ]);
+        let binary = CString::new("/bin/true").expect("true path");
+        let error = clone3_spawn_runner(
+            binary,
+            Vec::new(),
+            Vec::new(),
+            nix::unistd::Uid::current().as_raw(),
+            nix::unistd::Gid::current().as_raw(),
+            Vec::new(),
+            isolation,
+        )
+        .expect_err("oversized activation stdin must be refused");
+        assert_eq!(error.kind(), std::io::ErrorKind::InvalidInput);
     }
 
     #[test]
@@ -3911,8 +4059,8 @@ mod tests {
         );
         assert_eq!(
             source.matches(reap_error_child).count(),
-            4,
-            "fallback cgroup, user-NS map, sync-write error, and sync-write short-write paths must each reap before returning Err"
+            6,
+            "fallback cgroup, user-NS map, sync-write error, sync-write short-write, activation stdin write error, and activation stdin short-write paths must each reap before returning Err"
         );
         assert!(
             !source.contains(removed_child_helper),
@@ -4075,6 +4223,7 @@ mod tests {
             umask: None,
             pre_opened_device_fds: Vec::new(),
             memlock_limit_bytes: None,
+            activation_stdin: None,
         };
 
         let bin = CString::new(true_path).unwrap();

@@ -124,6 +124,25 @@ fn policy(offer: &HandshakeOffer) -> EndpointPolicy {
     }
 }
 
+fn guest_generation_identity() -> EndpointPolicyIdentity {
+    let mut guest = offer(NoiseProfile::Nn25519ChaChaPolySha256);
+    guest.purpose = EndpointPurpose::ZoneLink;
+    guest.purpose_class = PurposeClass::Enrolled;
+    guest.initiator_role = EndpointRole::ZoneController;
+    guest.responder_role = EndpointRole::GuestAgent;
+    guest.noise_profile = NoiseProfile::Kk25519ChaChaPolySha256;
+    guest.limits = LimitProfile::remote_default();
+    guest.transport_binding = TransportBinding {
+        transport: TransportClass::NativeVsock,
+        locality: Locality::GuestLocal,
+        channel_binding: [0x22; 32],
+        identity_evidence: IdentityEvidenceRequirement::EnrolledStaticKeys,
+    };
+    guest.attachment_policy = AttachmentPolicy::disabled();
+    let guest_policy = policy(&guest);
+    EndpointPolicyIdentity::from(&guest_policy)
+}
+
 fn negotiated(offer: &HandshakeOffer) -> d2b_session::NegotiatedOffer {
     let encoded = offer.encode_canonical().unwrap();
     let preface = d2b_session::contract::ComponentSessionPreface::new(encoded.len())
@@ -1343,6 +1362,16 @@ async fn local_generation_discovery_rejects_endpoint_identity_mismatch() {
         responder.unwrap_err().code(),
         SessionErrorCode::SchemaMismatch
     );
+}
+
+#[test]
+fn enrolled_guest_generation_discovery_is_allowed() {
+    let identity = guest_generation_identity();
+    let request =
+        encode_generation_discovery_request(&identity).expect("exact enrolled Guest discovery");
+    let policy = identity.with_generation(7).expect("discovery policy generation");
+    accept_generation_discovery_request(&request, &policy)
+        .expect("exact enrolled Guest discovery accepted");
 }
 
 #[test]

@@ -515,6 +515,9 @@ fn is_false(value: &bool) -> bool {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ActivationRequest {
     pub vm: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(range(min = 1))]
+    pub to_generation: Option<u64>,
     #[serde(default, flatten)]
     pub flags: MutationFlags,
 }

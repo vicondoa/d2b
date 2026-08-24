@@ -536,12 +536,13 @@ fn broker_backend_uses_the_production_spawn_wire_and_pidfd_handoff() {
             pidfd_index: 0,
             console_fd_index: None,
             execution_ref: Some(
-                d2b_contracts_resource::v3::ResourceRef::parse("Guest/corp-vm").unwrap(),
+                d2b_contracts_resource::v3::ResourceRef::parse("Host/host-system").unwrap(),
             ),
             execution_domain: Some(
                 d2b_contracts_resource::v3::execution_policy::ExecutionDomain::System,
             ),
             user_ref: None,
+            guest_execution: None,
             provider_identity: Some([0x11; 32]),
             template_identity: Some([0x22; 32]),
             generation: Some(1),
@@ -561,7 +562,7 @@ fn broker_backend_uses_the_production_spawn_wire_and_pidfd_handoff() {
 
     let intent = BrokerLaunchIntent {
         vm_id,
-        execution_ref: d2b_contracts_resource::v3::ResourceRef::parse("Guest/corp-vm").unwrap(),
+        execution_ref: d2b_contracts_resource::v3::ResourceRef::parse("Host/host-system").unwrap(),
         domain: d2b_contracts_resource::v3::execution_policy::ExecutionDomain::System,
         user_ref: None,
         role_id,
@@ -570,6 +571,8 @@ fn broker_backend_uses_the_production_spawn_wire_and_pidfd_handoff() {
         provider_identity: [0x11; 32],
         template_identity: [0x22; 32],
         generation: 1,
+        activation_input: None,
+        guest_execution: None,
         resource_ref: d2b_contracts_resource::v3::ResourceRef::parse("Process/corp-vm-worker")
             .unwrap(),
         resource_uid: d2b_contracts_resource::v3::ResourceUid::parse(

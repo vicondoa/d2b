@@ -24,6 +24,7 @@ fn request(execution_ref: &str) -> ActivationRunnerRequest {
     ActivationRunnerRequest {
         system_artifact_id: ArtifactId::parse("dev-vm-system").unwrap(),
         execution_ref: ResourceRef::parse(execution_ref).expect("valid execution reference"),
+        target_generation: 7,
         activation_mode: ActivationMode::Switch,
     }
 }

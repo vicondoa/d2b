@@ -38,6 +38,7 @@ d2bd_shared_deps = [
     "//packages/d2b-process-conformance:d2b_process_conformance",
     "//packages/d2b-provider:d2b_provider",
     "//packages/d2b-provider-activation-nixos:d2b_provider_activation_nixos",
+    "//packages/d2b-provider-config-nixos:d2b_provider_config_nixos",
     "//packages/d2b-provider-audio-pipewire:d2b_provider_audio_pipewire",
     "//packages/d2b-provider-clipboard-wayland:d2b_provider_clipboard_wayland",
     "//packages/d2b-provider-device-security-key:d2b_provider_device_security_key",
@@ -231,7 +232,7 @@ rust_test(
     env = {"CARGO_BIN_EXE_d2bd": "$(rootpath :d2bd)"},
     env_inherit = ["PATH"],
     rustc_env = {"CARGO_BIN_EXE_d2bd": "$(rootpath :d2bd)"},
-    tags = ["local", "no-remote-cache"],
+    tags = ["no-remote-cache"],
     visibility = ["//visibility:public"],
     deps = [
         "//packages/d2b-contracts-provider:d2b_contracts_provider",
@@ -266,7 +267,7 @@ rust_test(
     data = [":d2bd"],
     env = {"CARGO_BIN_EXE_d2bd": "$(rootpath :d2bd)"},
     rustc_env = {"CARGO_BIN_EXE_d2bd": "$(rootpath :d2bd)"},
-    tags = ["local", "no-remote-cache"],
+    tags = ["no-remote-cache"],
     visibility = ["//visibility:public"],
     deps = [
         "//packages/d2b-contracts-provider:d2b_contracts_provider",
@@ -292,7 +293,7 @@ rust_test(
         "D2B_TEST_SCRUB_SHELL_ENVIRONMENT": "$(rootpath //:tests/tools/scrub-shell-environment)",
     },
     rustc_env = {"CARGO_BIN_EXE_d2bd": "$(rootpath :d2bd)"},
-    tags = ["local", "no-remote-cache"],
+    tags = ["no-remote-cache"],
     visibility = ["//visibility:public"],
     deps = [
         "//packages/d2b-contracts-provider:d2b_contracts_provider",
@@ -309,7 +310,7 @@ rust_test(
     env = {"CARGO_BIN_EXE_d2bd": "$(rootpath :d2bd)"},
     env_inherit = ["PATH"],
     rustc_env = {"CARGO_BIN_EXE_d2bd": "$(rootpath :d2bd)"},
-    tags = ["local", "no-remote-cache"],
+    tags = ["no-remote-cache"],
     visibility = ["//visibility:public"],
     deps = ["//packages/d2b-contracts-resource:d2b_contracts_resource",
         "//packages/d2b-contracts-zone-session:d2b_contracts_zone_session",  "//packages/d2b-contracts-provider:d2b_contracts_provider",] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
@@ -419,7 +420,6 @@ rust_test(
     ],
     rustc_env = {"CARGO_BIN_EXE_d2bd": "$(rootpath :d2bd)"},
     tags = [
-        "local",
         "no-remote-cache",
         "no-sandbox",
     ],

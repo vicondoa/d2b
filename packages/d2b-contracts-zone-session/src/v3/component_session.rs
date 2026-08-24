@@ -347,7 +347,8 @@ closed_enum!(ServicePackage {
     ClipboardV3 = 10 => "d2b.clipboard.v3",
     ClipboardBridgeV3 = 11 => "d2b.clipboard.bridge.v3",
     ClipboardPickerCoordV3 = 12 => "d2b.clipboard.picker-coord.v3",
-    NotificationV3 = 13 => "d2b.notification.v3"
+    NotificationV3 = 13 => "d2b.notification.v3",
+    ConfigNixosV3 = 14 => "d2b.config-nixos.v3"
 });
 
 closed_enum!(NoiseProfile {
@@ -780,6 +781,37 @@ impl EndpointPolicyIdentity {
             return Err(ContractError::IdentityEvidenceMismatch);
         }
         Ok(())
+    }
+
+    /// Validate an identity permitted to request reconnect generation
+    /// discovery. Discovery does not authenticate static keys; the subsequent
+    /// handshake remains responsible for exact policy and key authentication.
+    pub fn validate_generation_discovery(&self) -> Result<(), ContractError> {
+        self.validate()?;
+        let local = self.purpose_class == PurposeClass::Local
+            && self.noise_profile == NoiseProfile::Nn25519ChaChaPolySha256
+            && self.transport_binding.identity_evidence
+                == IdentityEvidenceRequirement::DirectionalUnix
+            && matches!(
+                self.transport_binding.transport,
+                TransportClass::UnixStream | TransportClass::UnixSeqpacket
+            );
+        let enrolled_guest = self.purpose == EndpointPurpose::ZoneLink
+            && self.purpose_class == PurposeClass::Enrolled
+            && self.initiator_role == EndpointRole::ZoneController
+            && self.responder_role == EndpointRole::GuestAgent
+            && self.service == ServicePackage::ResourceV3
+            && self.noise_profile == NoiseProfile::Kk25519ChaChaPolySha256
+            && self.transport_binding.transport == TransportClass::NativeVsock
+            && self.transport_binding.locality == Locality::GuestLocal
+            && self.transport_binding.identity_evidence
+                == IdentityEvidenceRequirement::EnrolledStaticKeys
+            && self.attachment_policy == AttachmentPolicy::disabled();
+        if local || enrolled_guest {
+            Ok(())
+        } else {
+            Err(ContractError::IdentityEvidenceMismatch)
+        }
     }
 
     pub fn with_generation(

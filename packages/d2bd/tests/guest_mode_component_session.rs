@@ -9,6 +9,7 @@ use d2bd_runtime::{
         BootIdentity, GUEST_COMPONENT_SESSION_PORT, GUEST_COMPONENT_SESSION_PURPOSE, GuestIdentity,
         GuestRuntime, reject_legacy_guest_control_prelude,
     },
+    guest_resource_runtime::{GuestResourceRuntime, GuestResourceRuntimeError},
     target_runtime::{AdmissionBudget, AdmissionKind, AdmissionLimits, ControllerAssignmentKey},
 };
 use std::time::Instant;
@@ -32,14 +33,33 @@ fn identity(generation: u64) -> GuestIdentity {
     .expect("Guest identity")
 }
 
-fn runtime() -> GuestRuntime {
-    GuestRuntime::new(
+async fn runtime() -> (GuestRuntime, tempfile::TempDir) {
+    let state_dir = tempfile::tempdir().expect("state directory");
+    let runtime = GuestRuntime::new(
         identity(1),
         "/run/d2b/guest-broker.sock".into(),
         997,
         AdmissionLimits::guest_default(),
+        state_dir.path(),
     )
-    .expect("Guest runtime")
+    .await
+    .expect("Guest runtime");
+    (runtime, state_dir)
+}
+
+#[tokio::test]
+async fn guest_resource_runtime_is_target_local() {
+    let state_dir = tempfile::tempdir().expect("state directory");
+    let runtime = GuestResourceRuntime::new(identity(1), state_dir.path())
+        .await
+        .expect("Guest resource runtime");
+    assert!(runtime.is_target_local());
+}
+
+#[tokio::test]
+async fn guest_runtime_owns_one_target_local_resource_runtime() {
+    let (runtime, _state_dir) = runtime().await;
+    assert!(runtime.resource_runtime().is_target_local());
 }
 
 #[test]
@@ -92,9 +112,9 @@ fn old_guest_control_prelude_is_rejected() {
     assert!(reject_legacy_guest_control_prelude(b"D2BGC-old").is_err());
 }
 
-#[test]
-fn reconnect_revokes_stale_assignments_and_drops_the_new_lease() {
-    let runtime = runtime();
+#[tokio::test]
+async fn reconnect_revokes_stale_assignments_and_drops_the_new_lease() {
+    let (runtime, _state_dir) = runtime().await;
     let first = runtime
         .admit_generation_for_tests(1)
         .expect("first session");
@@ -126,8 +146,25 @@ fn reconnect_revokes_stale_assignments_and_drops_the_new_lease() {
 }
 
 #[tokio::test]
-async fn newer_generation_completes_the_real_component_session_path() {
-    let runtime = runtime();
+async fn disconnected_generation_cannot_be_reused() {
+    let (runtime, _state_dir) = runtime().await;
+    let lease = runtime
+        .admit_generation_for_tests(1)
+        .expect("first session");
+    drop(lease);
+    assert!(
+        runtime.admit_generation_for_tests(1).is_err(),
+        "disconnect must advance the reconnect high-water mark"
+    );
+}
+
+#[tokio::test]
+async fn authenticated_guest_session_binds_readiness_and_stale_binding_fails_closed() {
+    let (runtime, _state_dir) = runtime().await;
+    let previous = runtime
+        .admit_generation_for_tests(1)
+        .expect("initial Guest session");
+    drop(previous);
     let parent_private_bytes = [2_u8; 32];
     let guest_private_bytes = [3_u8; 32];
     let parent_public = x25519_public_key(&parent_private_bytes).expect("parent public key");
@@ -137,9 +174,9 @@ async fn newer_generation_completes_the_real_component_session_path() {
     let policy = identity(2).endpoint_policy();
     let (left, right) = tokio::io::duplex(16 * 1024);
     let parent = tokio::spawn(async move {
-        SessionEngine::establish_initiator(
+        SessionEngine::establish_initiator_with_generation_discovery(
             FramedVsockTransport::new(left),
-            policy,
+            d2b_session::contract::EndpointPolicyIdentity::from(&policy),
             HandshakeCredentials::Kk {
                 local_private: parent_private,
                 remote_public: guest_public,
@@ -148,7 +185,7 @@ async fn newer_generation_completes_the_real_component_session_path() {
         )
         .await
     });
-    let (_, lease) = runtime
+    let (session, lease) = runtime
         .establish_component_session(
             FramedVsockTransport::new(right),
             guest_private,
@@ -159,4 +196,23 @@ async fn newer_generation_completes_the_real_component_session_path() {
     let parent = parent.await.expect("parent task").expect("parent session");
     assert_eq!(lease.generation(), 2);
     assert_eq!(parent.generation(), 2);
+    let state_dir = tempfile::tempdir().expect("state directory");
+    let resource_runtime = GuestResourceRuntime::new(identity(2), state_dir.path())
+        .await
+        .expect("target-local resource runtime");
+    let resource_session = resource_runtime
+        .bind_session(&session.route_binding())
+        .expect("authenticated session binds Resource API");
+    assert_eq!(resource_session.generation(), 2);
+
+    let invalid_state_dir = tempfile::tempdir().expect("state directory");
+    let invalid_runtime = GuestResourceRuntime::new(identity(3), invalid_state_dir.path())
+        .await
+        .expect("target-local resource runtime");
+    assert_eq!(
+        invalid_runtime
+            .bind_session(&session.route_binding())
+            .expect_err("stale session binding must fail closed"),
+        GuestResourceRuntimeError::SessionBinding
+    );
 }

@@ -3,7 +3,7 @@
 //! The activation Provider is a fixed daemon composition.  This module owns
 //! only the Zone-scoped durable-resource adapter: it relists and watches
 //! generation rows, applies the pure activation policy, and routes target
-//! effects through the existing broker and guest-control boundaries.
+//! effects through the existing broker and Guest ComponentSession boundaries.
 
 use std::{
     collections::{BTreeMap, BTreeSet},
@@ -18,9 +18,6 @@ use d2b_contracts_broker::host_generation::{
     ApplyHostGenerationHandoff, HandoffCallerRole, HandoffState, HostGenerationHandoffIntent,
     SourceGenerationCompatibilityFloorV1, target_fingerprint,
 };
-use d2b_contracts_control::public_wire::{
-    self, MutatingVerbOutcome, MutatingVerbResponse, MutationFlags,
-};
 use d2b_contracts_resource::resource_proto as wire;
 use d2b_contracts_resource::v3::{
     ActivationDetail,
@@ -32,11 +29,13 @@ use d2b_contracts_resource::v3::{
     ResourcePhase,
     ResourceRef,
     ResourceTypeName,
+    ResourceUid,
     ZoneId,
     ZoneRevision,
 };
 use d2b_provider_activation_nixos::{
-    ActivationCaller, ActivationController, CallerRole, GenerationObservation, GenerationPhase,
+    activation_runner_ref, activation_runner_spec, ActivationCaller, ActivationController,
+    CallerRole, GenerationObservation, GenerationPhase,
 };
 use d2b_resource_api::watch::ResourceWatch;
 use d2b_resource_api::{RedbBackend, ResourceApiClient, service::UnavailableUpgradeDispatcher};
@@ -46,9 +45,115 @@ use d2b_resource_store::{
 use d2b_resource_store_redb::RedbResourceStore;
 
 use crate::{
-    BrokerActivationMode, ServerState, dispatch_broker_activation_metadata_only,
-    dispatch_broker_request_as, dispatch_live_guest_activation,
+    ServerState, dispatch_broker_request_as,
 };
+
+#[async_trait::async_trait]
+pub(crate) trait ActivationResourceClient: Send + Sync {
+    async fn create(
+        &self,
+        request: wire::CreateRequest,
+    ) -> Result<wire::CreateResponse, ()>;
+
+    async fn update_status(
+        &self,
+        request: wire::UpdateStatusRequest,
+    ) -> Result<wire::UpdateStatusResponse, ()>;
+
+    async fn update_finalizers(
+        &self,
+        request: wire::UpdateFinalizersRequest,
+    ) -> Result<wire::UpdateFinalizersResponse, ()>;
+
+    async fn delete(&self, request: wire::DeleteRequest) -> Result<wire::DeleteResponse, ()>;
+}
+
+#[async_trait::async_trait]
+impl ActivationResourceClient
+    for ResourceApiClient<RedbBackend, UnavailableUpgradeDispatcher>
+{
+    async fn create(
+        &self,
+        request: wire::CreateRequest,
+    ) -> Result<wire::CreateResponse, ()> {
+        Ok(ResourceApiClient::create(self, request).await)
+    }
+
+    async fn update_status(
+        &self,
+        request: wire::UpdateStatusRequest,
+    ) -> Result<wire::UpdateStatusResponse, ()> {
+        Ok(ResourceApiClient::update_status(self, request).await)
+    }
+
+    async fn update_finalizers(
+        &self,
+        request: wire::UpdateFinalizersRequest,
+    ) -> Result<wire::UpdateFinalizersResponse, ()> {
+        Ok(ResourceApiClient::update_finalizers(self, request).await)
+    }
+
+    async fn delete(&self, request: wire::DeleteRequest) -> Result<wire::DeleteResponse, ()> {
+        Ok(ResourceApiClient::delete(self, request).await)
+    }
+}
+
+/// Resource API adapter for one authenticated Guest ComponentSession.
+pub(crate) struct GuestActivationResourceClient {
+    session: Arc<d2bd_runtime::guest_component_session::GuestComponentSessionClient>,
+}
+
+impl GuestActivationResourceClient {
+    pub(crate) fn new(
+        session: Arc<d2bd_runtime::guest_component_session::GuestComponentSessionClient>,
+    ) -> Self {
+        Self { session }
+    }
+}
+
+#[async_trait::async_trait]
+impl ActivationResourceClient for GuestActivationResourceClient {
+    async fn create(
+        &self,
+        request: wire::CreateRequest,
+    ) -> Result<wire::CreateResponse, ()> {
+        self.session
+            .resource_service_client()
+            .create(ttrpc::context::Context::default(), &request)
+            .await
+            .map_err(|_| ())
+    }
+
+    async fn update_status(
+        &self,
+        request: wire::UpdateStatusRequest,
+    ) -> Result<wire::UpdateStatusResponse, ()> {
+        self.session
+            .resource_service_client()
+            .update_status(ttrpc::context::Context::default(), &request)
+            .await
+            .map_err(|_| ())
+    }
+
+    async fn update_finalizers(
+        &self,
+        request: wire::UpdateFinalizersRequest,
+    ) -> Result<wire::UpdateFinalizersResponse, ()> {
+        self.session
+            .resource_service_client()
+            .update_finalizers(ttrpc::context::Context::default(), &request)
+            .await
+            .map_err(|_| ())
+    }
+
+    async fn delete(&self, request: wire::DeleteRequest) -> Result<wire::DeleteResponse, ()> {
+        self.session
+            .resource_service_client()
+            .delete(ttrpc::context::Context::default(), &request)
+            .await
+            .map_err(|_| ())
+    }
+}
 
 const ACTIVATION_TYPE: &str = "activation-nixos.d2bus.org.NixosGeneration";
 const ACTIVATION_FINALIZER: &str = "activation-nixos.d2bus.org/cleanup";
@@ -82,6 +187,12 @@ struct DesiredRecord {
     resource: StoredResource,
     spec: NixosGenerationSpec,
     ordinal: u64,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct RunnerObservation {
+    phase: ResourcePhase,
+    outcome: Option<ActivationOutcomeCode>,
 }
 
 impl DesiredRecord {
@@ -121,7 +232,8 @@ pub(crate) struct ActivationResourceRuntime {
     zone: ZoneId,
     controller: ActivationController,
     records: BTreeMap<ResourceRef, DesiredRecord>,
-    status_client: Option<Arc<ResourceApiClient<RedbBackend, UnavailableUpgradeDispatcher>>>,
+    status_client: Option<Arc<dyn ActivationResourceClient>>,
+    guest_clients: BTreeMap<String, Arc<dyn ActivationResourceClient>>,
 }
 
 impl core::fmt::Debug for ActivationResourceRuntime {
@@ -142,14 +254,40 @@ impl ActivationResourceRuntime {
             controller: ActivationController::new(RETAINED_GENERATIONS),
             records: BTreeMap::new(),
             status_client: None,
+            guest_clients: BTreeMap::new(),
         }
     }
 
-    pub(crate) fn set_status_client(
-        &mut self,
-        status_client: Arc<ResourceApiClient<RedbBackend, UnavailableUpgradeDispatcher>>,
-    ) {
+    pub(crate) fn set_status_client<C>(&mut self, status_client: Arc<C>)
+    where
+        C: ActivationResourceClient + 'static,
+    {
         self.status_client = Some(status_client);
+    }
+
+    pub(crate) fn set_guest_client(
+        &mut self,
+        guest: impl Into<String>,
+        client: Arc<dyn ActivationResourceClient>,
+    ) {
+        self.guest_clients.insert(guest.into(), client);
+    }
+
+    pub(crate) fn clear_guest_clients(&mut self) {
+        self.guest_clients.clear();
+    }
+
+    fn runner_client(
+        &self,
+        execution_ref: &ResourceRef,
+    ) -> Option<Arc<dyn ActivationResourceClient>> {
+        if execution_ref.resource_type().as_str() == "Guest" {
+            self.guest_clients
+                .get(execution_ref.name().as_str())
+                .cloned()
+        } else {
+            self.status_client.clone()
+        }
     }
 
     /// Reconcile a complete durable activation snapshot.
@@ -157,6 +295,7 @@ impl ActivationResourceRuntime {
         &mut self,
         state: Arc<ServerState>,
         snapshot: Vec<StoredResource>,
+        process_snapshot: Vec<StoredResource>,
     ) -> Result<(), ActivationResourceRuntimeError> {
         let desired = decode_snapshot(&self.zone, snapshot)?;
         let desired_keys = desired.keys().cloned().collect::<BTreeSet<_>>();
@@ -192,6 +331,22 @@ impl ActivationResourceRuntime {
             }
 
             if record.deletion_requested() {
+                if let Some(child) = find_runner_resource(&record, &process_snapshot) {
+                    if !matches!(
+                        status_phase(child).unwrap_or(ResourcePhase::Pending),
+                        ResourcePhase::Deleted
+                    ) {
+                        if metadata_value(child, "deletionRequestedAt")
+                            .is_none_or(|value| matches!(value, CanonicalJsonValue::Null))
+                        {
+                            if let Some(client) = self.runner_client(record.spec.execution_ref()) {
+                                self.request_delete_stored(client.as_ref(), child).await?;
+                            }
+                        }
+                        self.records.insert(key, record);
+                        continue;
+                    }
+                }
                 record = self
                     .publish_status(
                         &record,
@@ -248,25 +403,72 @@ impl ActivationResourceRuntime {
                 continue;
             }
 
-            record = self
-                .publish_status(
-                    &record,
-                    ResourcePhase::Pending,
-                    ActivationDetail::Staged,
-                    None,
-                )
-                .await?;
-            record = self
-                .publish_status(
-                    &record,
-                    ResourcePhase::Pending,
-                    ActivationDetail::Applying,
-                    None,
-                )
-                .await?;
-
             let request = planned.runner_requests()[0].clone();
-            let outcome = self.execute_runner(&state, &record, &request, &prior).await;
+            if request.execution_ref.resource_type().as_str() == "Host" {
+                let outcome = self.execute_runner(&state, &record, &request, &prior).await;
+                let applied = self
+                    .controller
+                    .apply_runner_result(&record.spec, outcome, observed)
+                    .map_err(|_| ActivationResourceRuntimeError::Policy)?;
+                let detail =
+                    activation_detail(record.spec.activation_mode(), outcome, applied.phase());
+                record = self
+                    .publish_status(
+                        &record,
+                        applied.phase(),
+                        detail,
+                        applied.audit_codes().first().copied(),
+                    )
+                    .await?;
+                self.records.insert(key, record);
+                continue;
+            }
+            let runner = find_runner_observation(&record, &process_snapshot);
+            if runner.is_none() {
+                record = self
+                    .publish_status(
+                        &record,
+                        ResourcePhase::Pending,
+                        ActivationDetail::Staged,
+                        None,
+                    )
+                    .await?;
+                self.create_runner(&record, &request).await?;
+                self.records.insert(key, record);
+                continue;
+            }
+            let runner = runner.expect("checked above");
+            if runner.phase == ResourcePhase::Pending {
+                record = self
+                    .publish_status(
+                        &record,
+                        ResourcePhase::Pending,
+                        ActivationDetail::Staged,
+                        None,
+                    )
+                    .await?;
+                self.records.insert(key, record);
+                continue;
+            }
+            if runner.phase == ResourcePhase::Ready {
+                record = self
+                    .publish_status(
+                        &record,
+                        ResourcePhase::Pending,
+                        ActivationDetail::Applying,
+                        None,
+                    )
+                    .await?;
+                self.records.insert(key, record);
+                continue;
+            }
+            let outcome = runner.outcome.unwrap_or_else(|| {
+                if runner.phase == ResourcePhase::Succeeded {
+                    ActivationOutcomeCode::Succeeded
+                } else {
+                    ActivationOutcomeCode::HelperFailed
+                }
+            });
             let applied = self
                 .controller
                 .apply_runner_result(&record.spec, outcome, observed)
@@ -301,7 +503,6 @@ impl ActivationResourceRuntime {
             "Host" => self
                 .execute_host_handoff(state, record, prior)
                 .unwrap_or(ActivationOutcomeCode::HelperFailed),
-            "Guest" => self.execute_guest_activation(state, record, request),
             _ => ActivationOutcomeCode::TargetMismatch,
         }
     }
@@ -361,68 +562,6 @@ impl ActivationResourceRuntime {
         }
     }
 
-    fn execute_guest_activation(
-        &self,
-        state: &ServerState,
-        record: &DesiredRecord,
-        request: &d2b_provider_activation_nixos::RunnerRequest,
-    ) -> ActivationOutcomeCode {
-        let mode = match record.spec.activation_mode() {
-            ActivationMode::Switch => BrokerActivationMode::Switch,
-            ActivationMode::Boot => BrokerActivationMode::Boot,
-            ActivationMode::Test => BrokerActivationMode::Test,
-            ActivationMode::Adopt => return ActivationOutcomeCode::Adopted,
-        };
-        let verb = match mode {
-            BrokerActivationMode::Switch => "switch",
-            BrokerActivationMode::Boot => "boot",
-            BrokerActivationMode::Test => "test",
-            BrokerActivationMode::Rollback => "rollback",
-        };
-        let activation_request = public_wire::ActivationRequest {
-            vm: record.spec.execution_ref().name().as_str().to_owned(),
-            flags: MutationFlags {
-                apply: true,
-                ..MutationFlags::default()
-            },
-        };
-        let response = if mode == BrokerActivationMode::Boot {
-            dispatch_broker_activation_metadata_only(
-                state,
-                activation_request,
-                verb,
-                mode,
-                BrokerCallerRole::AdminUid {
-                    uid: state.daemon_uid,
-                },
-                Some(request.system_artifact_id.clone()),
-            )
-        } else {
-            dispatch_live_guest_activation(
-                state,
-                activation_request,
-                verb,
-                mode,
-                BrokerCallerRole::AdminUid {
-                    uid: state.daemon_uid,
-                },
-                Some(request.system_artifact_id.clone()),
-            )
-        };
-        match response {
-            Ok(value) => match serde_json::from_value::<MutatingVerbResponse>(value) {
-                Ok(response) if response.outcome == MutatingVerbOutcome::Applied => {
-                    ActivationOutcomeCode::Succeeded
-                }
-                Ok(response) if response.outcome == MutatingVerbOutcome::InvalidRequest => {
-                    ActivationOutcomeCode::TargetMismatch
-                }
-                _ => ActivationOutcomeCode::HelperFailed,
-            },
-            Err(_) => ActivationOutcomeCode::HelperFailed,
-        }
-    }
-
     async fn apply_retention(&self) -> Result<(), ActivationResourceRuntimeError> {
         let observations = self
             .records
@@ -461,7 +600,7 @@ impl ActivationResourceRuntime {
         let Some(client) = &self.status_client else {
             return Ok(record.clone());
         };
-        update_status(client, record, phase, detail, outcome).await
+        update_status(client.as_ref(), record, phase, detail, outcome).await
     }
 
     async fn ensure_finalizer(
@@ -471,7 +610,7 @@ impl ActivationResourceRuntime {
         let Some(client) = &self.status_client else {
             return Ok(record.clone());
         };
-        update_finalizers(client, record, true).await
+        update_finalizers(client.as_ref(), record, true).await
     }
 
     async fn remove_finalizer(
@@ -484,7 +623,7 @@ impl ActivationResourceRuntime {
         if !record.has_finalizer() {
             return Ok(record.clone());
         }
-        update_finalizers(client, record, false).await
+        update_finalizers(client.as_ref(), record, false).await
     }
 
     async fn request_delete(
@@ -494,7 +633,119 @@ impl ActivationResourceRuntime {
         let Some(client) = &self.status_client else {
             return Ok(());
         };
-        delete_resource(client, record).await
+        delete_resource(client.as_ref(), record).await
+    }
+
+    async fn create_runner(
+        &self,
+        record: &DesiredRecord,
+        request: &d2b_provider_activation_nixos::RunnerRequest,
+    ) -> Result<(), ActivationResourceRuntimeError> {
+        let Some(client) = self.runner_client(&request.execution_ref) else {
+            return Ok(());
+        };
+        let mut spec = serde_json::to_value(activation_runner_spec(request))
+            .map_err(|_| ActivationResourceRuntimeError::InvalidResource)?;
+        let spec_object = spec
+            .as_object_mut()
+            .ok_or(ActivationResourceRuntimeError::InvalidResource)?;
+        spec_object.insert(
+            "providerRef".to_owned(),
+            serde_json::json!("Provider/system-minijail"),
+        );
+        let child_ref = activation_runner_ref(&record.key());
+        let payload = serde_json::json!({
+            "apiVersion": "resources.d2bus.org/v3",
+            "metadata": {
+                "configurationGeneration": record.resource.generation.get(),
+                "createdAt": "1970-01-01T00:00:00.000Z",
+                "deletionRequestedAt": null,
+                "finalizers": [],
+                "generation": 1,
+                "managedBy": "controller",
+                "name": child_ref.name().as_str(),
+                "ownerRef": record.key().to_canonical_string(),
+                "revision": 1,
+                "updatedAt": "1970-01-01T00:00:00.000Z",
+                "zone": self.zone.as_str()
+            },
+            "spec": spec,
+            "status": {
+                "completedAt": null,
+                "conditions": [],
+                "lastReconciledAt": null,
+                "observedGeneration": 0,
+                "outcome": null,
+                "phase": "Pending",
+                "resource": {},
+                "startedAt": null,
+                "update": {
+                    "dependencies": {"count": 0, "refs": []},
+                    "disruption": "None",
+                    "lastAssessedAt": null,
+                    "operationId": null,
+                    "owned": {"count": 0, "refs": []},
+                    "preserveState": true,
+                    "reasons": [],
+                    "state": "Unknown",
+                    "targetGeneration": 1
+                }
+            },
+            "type": "EphemeralProcess"
+        });
+        let canonical = CanonicalJsonValue::parse(
+            &serde_json::to_vec(&payload)
+                .map_err(|_| ActivationResourceRuntimeError::InvalidResource)?,
+        )
+        .map_err(|_| ActivationResourceRuntimeError::InvalidResource)?
+        .to_canonical_bytes();
+        let mut identity = wire::ResourceIdentity::new();
+        identity.zone = self.zone.as_str().to_owned();
+        identity.resource_type = "EphemeralProcess".to_owned();
+        identity.name = child_ref.name().as_str().to_owned();
+        let mut body = wire::ResourceEnvelopeBytes::new();
+        body.identity = protobuf::MessageField::some(identity.clone());
+        body.payload_digest = d2b_contracts_resource::v3::canonical_digest(
+            d2b_contracts_resource::v3::RESOURCE_ENVELOPE_DOMAIN_TAG,
+            &canonical,
+        );
+        body.canonical_json = canonical;
+        let mut precondition = wire::Precondition::new();
+        precondition.kind =
+            protobuf::EnumOrUnknown::new(wire::PreconditionKind::PRECONDITION_KIND_CREATE_ABSENT);
+        let mut mutation = wire::Mutation::new();
+        mutation.kind = protobuf::EnumOrUnknown::new(wire::MutationKind::MUTATION_KIND_CREATE);
+        mutation.target = protobuf::MessageField::some(identity);
+        mutation.precondition = protobuf::MessageField::some(precondition);
+        mutation.resource = protobuf::MessageField::some(body);
+        let operation = format!(
+            "activation-runner-create-{}-{}",
+            child_ref.to_canonical_string(),
+            record.resource.uid.as_str()
+        );
+        let mut request_wire = wire::CreateRequest::new();
+        request_wire.meta = protobuf::MessageField::some(request_meta(&operation));
+        request_wire.mutation = protobuf::MessageField::some(mutation);
+        let response = client
+            .create(request_wire)
+            .await
+            .map_err(|_| ActivationResourceRuntimeError::Store)?;
+        if let Some(error) = response.error.as_ref() {
+            if error.kind.enum_value().ok()
+                != Some(wire::ResourceErrorKind::RESOURCE_ERROR_KIND_RESOURCE_ALREADY_EXISTS)
+            {
+                return Err(ActivationResourceRuntimeError::Store);
+            }
+        }
+        Ok(())
+    }
+
+    async fn request_delete_stored(
+        &self,
+        client: &dyn ActivationResourceClient,
+        resource: &StoredResource,
+    ) -> Result<(), ActivationResourceRuntimeError> {
+        delete_stored_resource(client, resource).await
     }
 }
 
@@ -580,6 +831,68 @@ fn status_phase(resource: &StoredResource) -> Option<ResourcePhase> {
         "Failed" => Some(ResourcePhase::Failed),
         "Deleted" => Some(ResourcePhase::Deleted),
         "Unknown" => Some(ResourcePhase::Unknown),
+        _ => None,
+    }
+}
+
+fn find_runner_resource<'a>(
+    record: &DesiredRecord,
+    process_snapshot: &'a [StoredResource],
+) -> Option<&'a StoredResource> {
+    let expected = activation_runner_ref(&record.key());
+    process_snapshot.iter().find(|resource| {
+        resource.zone == record.resource.zone
+            && resource.resource_ref == expected
+            && resource_execution_ref(resource).as_ref() == Some(record.spec.execution_ref())
+            && metadata_value(resource, "ownerRef").is_some_and(|owner| {
+                matches!(
+                    owner,
+                    CanonicalJsonValue::String(value)
+                        if value == record.key().to_canonical_string()
+                )
+            })
+    })
+}
+
+fn resource_execution_ref(resource: &StoredResource) -> Option<ResourceRef> {
+    let envelope = ResourceEnvelope::from_json(&resource.canonical_json).ok()?;
+    match envelope.spec().base().get("executionRef") {
+        Some(CanonicalJsonValue::String(value)) => ResourceRef::parse(value).ok(),
+        _ => None,
+    }
+}
+
+fn find_runner_observation(
+    record: &DesiredRecord,
+    process_snapshot: &[StoredResource],
+) -> Option<RunnerObservation> {
+    let resource = find_runner_resource(record, process_snapshot)?;
+    Some(RunnerObservation {
+        phase: status_phase(resource).unwrap_or(ResourcePhase::Pending),
+        outcome: status_outcome(resource),
+    })
+}
+
+fn status_outcome(resource: &StoredResource) -> Option<ActivationOutcomeCode> {
+    let value = CanonicalJsonValue::parse(&resource.canonical_json).ok()?;
+    let CanonicalJsonValue::Object(root) = value else {
+        return None;
+    };
+    let CanonicalJsonValue::Object(status) = root.get("status")? else {
+        return None;
+    };
+    let CanonicalJsonValue::Object(outcome) = status.get("outcome")? else {
+        return None;
+    };
+    let CanonicalJsonValue::String(code) = outcome.get("code")? else {
+        return None;
+    };
+    match code.as_str() {
+        "succeeded" | "process-exited" => Some(ActivationOutcomeCode::Succeeded),
+        "runtime-deadline" => Some(ActivationOutcomeCode::HelperFailed),
+        "adopted" => Some(ActivationOutcomeCode::Adopted),
+        "target-mismatch" => Some(ActivationOutcomeCode::TargetMismatch),
+        "helper-refused" => Some(ActivationOutcomeCode::HelperRefused),
         _ => None,
     }
 }
@@ -706,7 +1019,7 @@ fn civil_from_days(days_since_epoch: i64) -> (i64, i64, i64) {
 }
 
 async fn update_status(
-    client: &ResourceApiClient<RedbBackend, UnavailableUpgradeDispatcher>,
+    client: &dyn ActivationResourceClient,
     record: &DesiredRecord,
     phase: ResourcePhase,
     detail: ActivationDetail,
@@ -736,7 +1049,10 @@ async fn update_status(
     let mut request = wire::UpdateStatusRequest::new();
     request.meta = protobuf::MessageField::some(request_meta(&operation));
     request.mutation = protobuf::MessageField::some(mutation);
-    let response = client.update_status(request).await;
+    let response = client
+        .update_status(request)
+        .await
+        .map_err(|_| ActivationResourceRuntimeError::Store)?;
     if response.error.is_some() {
         return Err(ActivationResourceRuntimeError::Store);
     }
@@ -838,7 +1154,7 @@ fn activation_outcome_message(outcome: ActivationOutcomeCode) -> &'static str {
 }
 
 async fn update_finalizers(
-    client: &ResourceApiClient<RedbBackend, UnavailableUpgradeDispatcher>,
+    client: &dyn ActivationResourceClient,
     record: &DesiredRecord,
     add: bool,
 ) -> Result<DesiredRecord, ActivationResourceRuntimeError> {
@@ -865,7 +1181,10 @@ async fn update_finalizers(
     let mut request = wire::UpdateFinalizersRequest::new();
     request.meta = protobuf::MessageField::some(request_meta(&operation));
     request.mutation = protobuf::MessageField::some(mutation);
-    let response = client.update_finalizers(request).await;
+    let response = client
+        .update_finalizers(request)
+        .await
+        .map_err(|_| ActivationResourceRuntimeError::Store)?;
     if response.error.is_some() {
         return Err(ActivationResourceRuntimeError::Store);
     }
@@ -881,7 +1200,7 @@ async fn update_finalizers(
 }
 
 async fn delete_resource(
-    client: &ResourceApiClient<RedbBackend, UnavailableUpgradeDispatcher>,
+    client: &dyn ActivationResourceClient,
     record: &DesiredRecord,
 ) -> Result<(), ActivationResourceRuntimeError> {
     let mut mutation = wire::Mutation::new();
@@ -896,7 +1215,36 @@ async fn delete_resource(
     let mut request = wire::DeleteRequest::new();
     request.meta = protobuf::MessageField::some(request_meta(&operation));
     request.mutation = protobuf::MessageField::some(mutation);
-    let response = client.delete(request).await;
+    let response = client
+        .delete(request)
+        .await
+        .map_err(|_| ActivationResourceRuntimeError::Store)?;
+    if response.error.is_some() {
+        return Err(ActivationResourceRuntimeError::Store);
+    }
+    Ok(())
+}
+
+async fn delete_stored_resource(
+    client: &dyn ActivationResourceClient,
+    resource: &StoredResource,
+) -> Result<(), ActivationResourceRuntimeError> {
+    let mut mutation = wire::Mutation::new();
+    mutation.kind = protobuf::EnumOrUnknown::new(wire::MutationKind::MUTATION_KIND_DELETE);
+    mutation.target = protobuf::MessageField::some(stored_resource_identity(resource));
+    mutation.precondition = protobuf::MessageField::some(stored_exact_precondition(resource));
+    let operation = format!(
+        "activation-runner-delete-{}-{}",
+        resource.resource_ref.to_canonical_string(),
+        resource.revision.get()
+    );
+    let mut request = wire::DeleteRequest::new();
+    request.meta = protobuf::MessageField::some(request_meta(&operation));
+    request.mutation = protobuf::MessageField::some(mutation);
+    let response = client
+        .delete(request)
+        .await
+        .map_err(|_| ActivationResourceRuntimeError::Store)?;
     if response.error.is_some() {
         return Err(ActivationResourceRuntimeError::Store);
     }
@@ -924,6 +1272,48 @@ fn exact_precondition(record: &DesiredRecord) -> wire::Precondition {
         protobuf::EnumOrUnknown::new(wire::PreconditionKind::PRECONDITION_KIND_EXACT_REVISION);
     precondition.expected_revision = Some(record.resource.revision.get());
     precondition.expected_uid = Some(record.resource.uid.as_str().to_owned());
+    precondition
+}
+
+fn stored_resource_identity(resource: &StoredResource) -> wire::ResourceIdentity {
+    let mut identity = wire::ResourceIdentity::new();
+    identity.zone = resource.zone.to_canonical_string();
+    identity.resource_type = resource.resource_ref.resource_type().to_canonical_string();
+    identity.name = resource.resource_ref.name().to_canonical_string();
+    identity.uid = Some(resource.uid.as_str().to_owned());
+    identity.generation = Some(resource.generation.get());
+    identity.revision = Some(resource.revision.get());
+    identity
+}
+
+pub(crate) fn stored_resource_from_wire(
+    resource: &wire::ResourceEnvelopeBytes,
+) -> Option<StoredResource> {
+    let identity = resource.identity.as_ref()?;
+    let uid = ResourceUid::parse(identity.uid.as_deref()?).ok()?;
+    let generation = d2b_contracts_resource::v3::ResourceGeneration::new(identity.generation?)
+        .ok()?;
+    let revision = ZoneRevision::new(identity.revision?);
+    let zone = ZoneId::parse(&identity.zone).ok()?;
+    let resource_ref_text = format!("{}/{}", identity.resource_type, identity.name);
+    let resource_ref = ResourceRef::parse(&resource_ref_text).ok()?;
+    Some(StoredResource {
+        resource_ref,
+        zone,
+        uid,
+        generation,
+        revision,
+        canonical_json: resource.canonical_json.clone(),
+        payload_digest: resource.payload_digest.clone(),
+    })
+}
+
+fn stored_exact_precondition(resource: &StoredResource) -> wire::Precondition {
+    let mut precondition = wire::Precondition::new();
+    precondition.kind =
+        protobuf::EnumOrUnknown::new(wire::PreconditionKind::PRECONDITION_KIND_EXACT_REVISION);
+    precondition.expected_revision = Some(resource.revision.get());
+    precondition.expected_uid = Some(resource.uid.as_str().to_owned());
     precondition
 }
 
@@ -1027,6 +1417,11 @@ pub(crate) async fn run_activation_watch(
         let Ok(snapshot) = list_activation_snapshot(&store, &zone).await else {
             continue;
         };
+        let Ok(process_snapshot) =
+            crate::process_resource_runtime::list_process_snapshot(&store, &zone).await
+        else {
+            continue;
+        };
         let runtime = match registry.lock() {
             Ok(mut guard) => guard.take(),
             Err(_) => return,
@@ -1034,7 +1429,30 @@ pub(crate) async fn run_activation_watch(
         let Some(mut runtime) = runtime else {
             continue;
         };
-        let result = runtime.reconcile(Arc::clone(&state), snapshot).await;
+        runtime.clear_guest_clients();
+        let mut process_snapshot = process_snapshot;
+        for guest in crate::resource_runtime::guest_activation_targets(&snapshot) {
+            let Ok(session) = crate::connect_guest_component_session(&state, &guest).await else {
+                continue;
+            };
+            match crate::resource_runtime::list_guest_process_snapshot(&session, &zone, &guest)
+                .await
+            {
+                Ok(resources) => {
+                    runtime.set_guest_client(
+                        guest.clone(),
+                        Arc::new(GuestActivationResourceClient::new(Arc::clone(&session))),
+                    );
+                    process_snapshot.extend(resources);
+                }
+                Err(()) => {
+                    crate::invalidate_guest_component_session(&state, &guest).await;
+                }
+            }
+        }
+        let result = runtime
+            .reconcile(Arc::clone(&state), snapshot, process_snapshot)
+            .await;
         if let Ok(mut guard) = registry.lock() {
             *guard = Some(runtime);
         } else {
@@ -1097,6 +1515,27 @@ mod tests {
                 ResourcePhase::Succeeded,
             ),
             ActivationDetail::Applied
+        );
+    }
+
+    #[test]
+    fn activation_runtime_deadline_is_not_success() {
+        let resource = StoredResource {
+            resource_ref: ResourceRef::parse("EphemeralProcess/activation").expect("ref"),
+            zone: ZoneId::parse("dev").expect("zone"),
+            uid: d2b_contracts_resource::v3::ResourceUid::parse(
+                "123e4567-e89b-42d3-a456-426614174000",
+            )
+            .expect("uid"),
+            generation: d2b_contracts_resource::v3::ResourceGeneration::new(1)
+                .expect("generation"),
+            revision: ZoneRevision::new(1),
+            canonical_json: br#"{"status":{"outcome":{"code":"runtime-deadline"}}}"#.to_vec(),
+            payload_digest: "sha256:".to_owned(),
+        };
+        assert_eq!(
+            status_outcome(&resource),
+            Some(ActivationOutcomeCode::HelperFailed)
         );
     }
 }

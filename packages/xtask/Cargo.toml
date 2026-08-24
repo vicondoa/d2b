@@ -24,11 +24,9 @@ d2b-contracts = { path = "../d2b-contracts", version = "0.0.0-bootstrap" }
 d2b-contracts-broker = { path = "../d2b-contracts-broker", version = "0.0.0-bootstrap" }
 d2b-contracts-control = { path = "../d2b-contracts-control", version = "0.0.0-bootstrap" }
 d2b-contracts-resource = { path = "../d2b-contracts-resource", version = "0.0.0-bootstrap" }
-# Safe wrappers for the syscalls the heavy-gate semaphore needs: F_OFD_SETLK
-# open file description locks, FD_CLOEXEC control on the duplicated slot
-# handle, signalfd, and process-group signalling. Already used by d2b, d2bd,
-# and the broker at the same version, so this adds no new supply-chain edge.
-nix = { version = "0.29", default-features = false, features = ["fs", "signal", "user"] }
+# The delivery state writer uses nix for libc constants and effective-UID
+# checks. Keep the feature surface limited to the user APIs it calls.
+nix = { version = "0.29", default-features = false, features = ["user"] }
 # Directory-descriptor-anchored file operations for the delivery state
 # writer: `openat`/`openat2`/`mkdirat`/`renameat`/`unlinkat`/`fsync` relative
 # to a pinned, verified parent fd, so a temp create, rename, and directory

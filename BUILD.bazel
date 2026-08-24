@@ -311,6 +311,7 @@ filegroup(
         "//packages/d2b-provider-activation-nixos:cargo_workspace_sources",
         "//packages/d2b-provider-audio-pipewire:cargo_workspace_sources",
         "//packages/d2b-provider-clipboard-wayland:cargo_workspace_sources",
+        "//packages/d2b-provider-config-nixos:cargo_workspace_sources",
         "//packages/d2b-provider-credential-entra:cargo_workspace_sources",
         "//packages/d2b-provider-credential-managed-identity:cargo_workspace_sources",
         "//packages/d2b-provider-credential-secret-service:cargo_workspace_sources",

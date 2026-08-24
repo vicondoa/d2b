@@ -20,6 +20,10 @@ pub fn vm_start_node_mode(role: &ProcessRole) -> VmStartNodeMode {
             VmStartNodeMode::LongLived(RunnerRole::CloudHypervisor)
         }
         ProcessRole::QemuMediaRunner => VmStartNodeMode::LongLived(RunnerRole::QemuMedia),
+        // Activation runners are target-local EphemeralProcess resources.
+        // Their bundle row is used for resource-ticket resolution, but they
+        // are never started as part of VM boot.
+        ProcessRole::ActivationNixosRunner => VmStartNodeMode::ReadinessOnly,
         ProcessRole::Gpu | ProcessRole::GpuRenderNode => {
             VmStartNodeMode::LongLived(RunnerRole::Gpu)
         }

@@ -13,6 +13,7 @@ use tokio_vsock::{VMADDR_CID_ANY, VMADDR_CID_HOST, VsockAddr, VsockListener, Vso
 
 pub struct FramedVsockTransport<S> {
     stream: S,
+    descriptor: TransportDescriptor,
     receive_header: Vec<u8>,
     receive_body: Vec<u8>,
     receive_declared: Option<usize>,
@@ -22,8 +23,24 @@ pub struct FramedVsockTransport<S> {
 
 impl<S> FramedVsockTransport<S> {
     pub fn new(stream: S) -> Self {
+        Self::with_descriptor(
+            stream,
+            TransportDescriptor {
+                class: TransportClass::NativeVsock,
+                locality: Locality::GuestLocal,
+                packet_atomic: false,
+                supports_attachments: false,
+            },
+        )
+    }
+
+    /// Construct a framed stream with an explicitly bound transport
+    /// descriptor. This is used by the host-side Cloud Hypervisor CONNECT
+    /// adapter after the socket path and peer have been validated.
+    pub fn with_descriptor(stream: S, descriptor: TransportDescriptor) -> Self {
         Self {
             stream,
+            descriptor,
             receive_header: Vec::with_capacity(4),
             receive_body: Vec::new(),
             receive_declared: None,
@@ -48,17 +65,13 @@ where
     S: AsyncRead + AsyncWrite + Unpin + Send + 'static,
 {
     fn descriptor(&self) -> TransportDescriptor {
-        TransportDescriptor {
-            class: TransportClass::NativeVsock,
-            locality: Locality::GuestLocal,
-            packet_atomic: false,
-            supports_attachments: false,
-        }
+        self.descriptor
     }
 
     fn into_split(self: Box<Self>) -> (Box<dyn TransportReader>, Box<dyn TransportWriter>) {
         let Self {
             stream,
+            descriptor: _,
             receive_header,
             receive_body,
             receive_declared,

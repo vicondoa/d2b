@@ -25,7 +25,7 @@ pub fn readiness_predicate_ready(predicate: &ReadinessPredicate) -> Result<bool,
         ReadinessPredicate::TcpPort { host, port } => Ok(tcp_port_ready(host, *port)),
         ReadinessPredicate::Command(command) => command_ready(command),
         ReadinessPredicate::ComponentSpecific(_) => Ok(true),
-        // The authenticated guest-control Health probe is evaluated through a
+        // The authenticated Guest ComponentSession readiness probe is evaluated through a
         // daemon-state-aware path (it needs the per-VM vsock socket, peer
         // credentials, and a broker-backed signer that this stateless helper
         // cannot reach). The live readiness path intercepts
@@ -34,7 +34,7 @@ pub fn readiness_predicate_ready(predicate: &ReadinessPredicate) -> Result<bool,
         // the state-aware routing regressed. Fail LOUD rather than silently
         // never-ready so the regression surfaces immediately.
         ReadinessPredicate::GuestControlHealth { .. } => {
-            Err("guest-control-health-needs-state-aware-path".to_owned())
+            Err("guest-component-session-needs-state-aware-path".to_owned())
         }
     }
 }

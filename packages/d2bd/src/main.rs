@@ -113,6 +113,10 @@ struct GuestArgs {
     broker_uid: u32,
     #[arg(long, default_value = "/var/lib/d2b/guest-state")]
     state_dir: PathBuf,
+    #[arg(long, hide = true, default_value = "/etc/d2b/guest-bundle.json")]
+    bundle_path: PathBuf,
+    #[arg(long, default_value = "/var/lib/d2b-guest/guest-config.nix")]
+    guest_config_path: PathBuf,
     #[arg(long, hide = true, default_value = "/proc/sys/kernel/random/boot_id")]
     boot_id_path: PathBuf,
     #[arg(long, hide = true)]
@@ -172,6 +176,8 @@ async fn main() {
                 broker_socket_path: args.broker_socket,
                 broker_uid: args.broker_uid,
                 state_dir: args.state_dir,
+                bundle_path: args.bundle_path,
+                guest_config_path: args.guest_config_path,
                 boot_id_path: args.boot_id_path,
                 local_private_key_path: args.local_private_key,
                 parent_public_key_path: args.parent_public_key,

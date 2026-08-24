@@ -145,8 +145,50 @@
           "default": false,
           "type": "boolean"
         },
+        "toGeneration": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 1.0
+        },
         "vm": {
           "type": "string"
+        }
+      },
+      "additionalProperties": false
+    },
+    "ActivationRunnerInput": {
+      "description": "Closed input delivered to an activation-runner `EphemeralProcess`.\n\nThe broker serializes this value into the bounded stdin envelope consumed by `d2b-activation-helper`. It deliberately carries no executable, store path, target path, or caller-controlled bytes.",
+      "type": "object",
+      "required": [
+        "activationMode",
+        "systemArtifactId",
+        "targetGeneration"
+      ],
+      "properties": {
+        "activationMode": {
+          "description": "Closed activation mode.",
+          "allOf": [
+            {
+              "$ref": "#/definitions/ActivationMode"
+            }
+          ]
+        },
+        "systemArtifactId": {
+          "description": "Private-catalog artifact identifier.",
+          "allOf": [
+            {
+              "$ref": "#/definitions/ArtifactId"
+            }
+          ]
+        },
+        "targetGeneration": {
+          "description": "Target generation ordinal bound to the owning `NixosGeneration`.",
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 1.0
         }
       },
       "additionalProperties": false
@@ -5540,6 +5582,17 @@
           "format": "uint64",
           "minimum": 0.0
         },
+        "guestExecution": {
+          "description": "Exact Guest target/session binding for target-local Process cleanup.",
+          "anyOf": [
+            {
+              "$ref": "#/definitions/GuestExecutionBinding"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
         "pid": {
           "description": "Optional exact process identity. Deregistration must not remove a replacement runner that reused the VM/role tuple.",
           "type": [
@@ -7820,6 +7873,54 @@
       },
       "additionalProperties": false
     },
+    "GuestExecutionBinding": {
+      "description": "Exact authenticated binding for a Guest-local Process lifecycle.\n\nThe values are commitments, not raw boot identifiers or transport handles. A Guest broker requires this tuple for every target-local Process operation and revalidates the boot commitment against its own kernel before executing the request.",
+      "type": "object",
+      "required": [
+        "assignmentEpoch",
+        "bootIdentityDigest",
+        "controllerGeneration",
+        "providerGeneration",
+        "sessionGeneration",
+        "targetUid"
+      ],
+      "properties": {
+        "assignmentEpoch": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0.0
+        },
+        "bootIdentityDigest": {
+          "type": "array",
+          "items": {
+            "type": "integer",
+            "format": "uint8",
+            "minimum": 0.0
+          },
+          "maxItems": 32,
+          "minItems": 32
+        },
+        "controllerGeneration": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0.0
+        },
+        "providerGeneration": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0.0
+        },
+        "sessionGeneration": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0.0
+        },
+        "targetUid": {
+          "$ref": "#/definitions/ResourceUid"
+        }
+      },
+      "additionalProperties": false
+    },
     "HandoffCallerRole": {
       "description": "Caller-derived broker role for the handoff operation.",
       "oneOf": [
@@ -9394,6 +9495,17 @@
         "bundleRunnerIntentRef": {
           "type": "string"
         },
+        "guestExecution": {
+          "description": "Exact Guest target/session binding for target-local Process adoption.",
+          "anyOf": [
+            {
+              "$ref": "#/definitions/GuestExecutionBinding"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
         "resourceRef": {
           "description": "Optional generic Process identity binding.",
           "anyOf": [
@@ -9685,6 +9797,17 @@
           "format": "uint64",
           "minimum": 0.0
         },
+        "guestExecution": {
+          "description": "Exact Guest target/session binding for target-local Process adoption.",
+          "anyOf": [
+            {
+              "$ref": "#/definitions/GuestExecutionBinding"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
         "pid": {
           "description": "PID the snapshot recorded.",
           "type": "integer",
@@ -9822,6 +9945,17 @@
           "type": "integer",
           "format": "uint64",
           "minimum": 0.0
+        },
+        "guestExecution": {
+          "description": "Exact Guest target/session binding for target-local Process operations.",
+          "anyOf": [
+            {
+              "$ref": "#/definitions/GuestExecutionBinding"
+            },
+            {
+              "type": "null"
+            }
+          ]
         },
         "providerIdentity": {
           "description": "Process Provider identity digest.",
@@ -12468,6 +12602,13 @@
           ]
         },
         {
+          "description": "Target-local one-shot NixOS activation runner. Guest mode may spawn this role only from the bundle-authoritative process intent.",
+          "type": "string",
+          "enum": [
+            "activation-nixos"
+          ]
+        },
+        {
           "description": "virtiofsd sidecar; one per `microvm.shares` row. The daemon/bundle provides argv from `nixos-modules/processes-json.nix`.",
           "type": "string",
           "enum": [
@@ -13387,6 +13528,17 @@
           "format": "uint64",
           "minimum": 0.0
         },
+        "guestExecution": {
+          "description": "Exact Guest target/session binding for target-local Process control.",
+          "anyOf": [
+            {
+              "$ref": "#/definitions/GuestExecutionBinding"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
         "pid": {
           "type": [
             "integer",
@@ -13533,6 +13685,17 @@
         "vmId"
       ],
       "properties": {
+        "activationInput": {
+          "description": "Typed stdin input admitted only for the activation-nixos runner role.",
+          "anyOf": [
+            {
+              "$ref": "#/definitions/ActivationRunnerInput"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
         "bundleContentIdentity": {
           "description": "Content identity of the daemon's trusted bundle snapshot.",
           "type": [
@@ -13575,6 +13738,17 @@
           ],
           "format": "uint64",
           "minimum": 0.0
+        },
+        "guestExecution": {
+          "description": "Exact Guest target/session binding for target-local Process launches.",
+          "anyOf": [
+            {
+              "$ref": "#/definitions/GuestExecutionBinding"
+            },
+            {
+              "type": "null"
+            }
+          ]
         },
         "providerIdentity": {
           "description": "Provider/template identity expected by the daemon.",
@@ -13746,6 +13920,16 @@
           ],
           "format": "uint64",
           "minimum": 0.0
+        },
+        "guestExecution": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/GuestExecutionBinding"
+            },
+            {
+              "type": "null"
+            }
+          ]
         },
         "pid": {
           "description": "Child PID. The daemon validates this against the pidfd it received and against `/proc/<pid>/stat` field 22 (`start_time`).",
@@ -13966,6 +14150,17 @@
           "type": "integer",
           "format": "uint64",
           "minimum": 0.0
+        },
+        "guestExecution": {
+          "description": "Exact Guest target/session binding for target-local Process operations.",
+          "anyOf": [
+            {
+              "$ref": "#/definitions/GuestExecutionBinding"
+            },
+            {
+              "type": "null"
+            }
+          ]
         },
         "providerIdentity": {
           "description": "Process Provider identity digest.",
@@ -14366,6 +14561,17 @@
           "format": "uint64",
           "minimum": 0.0
         },
+        "guestExecution": {
+          "description": "Exact Guest target/session binding, when this is Guest-local.",
+          "anyOf": [
+            {
+              "$ref": "#/definitions/GuestExecutionBinding"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
         "invocationId": {
           "description": "systemd's 16-byte InvocationID.",
           "type": "array",
@@ -14462,6 +14668,17 @@
           "type": "integer",
           "format": "uint64",
           "minimum": 0.0
+        },
+        "guestExecution": {
+          "description": "Exact Guest target/session binding for target-local Process operations.",
+          "anyOf": [
+            {
+              "$ref": "#/definitions/GuestExecutionBinding"
+            },
+            {
+              "type": "null"
+            }
+          ]
         },
         "providerIdentity": {
           "description": "Process Provider identity digest.",

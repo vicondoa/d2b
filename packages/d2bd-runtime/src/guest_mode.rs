@@ -33,6 +33,7 @@ use sha2::{Digest, Sha256};
 
 use crate::{
     broker_transport::{ModeBoundBrokerAdapter, ModeBoundBrokerError},
+    guest_resource_runtime::{GuestResourceRuntime, GuestResourceRuntimeError},
     target_runtime::{
         AdmissionBudget, AdmissionError, AdmissionKind, AdmissionLimits, AssignmentLease,
         ControllerAssignmentKey, DaemonMode, DeploymentError, ProviderDeployment,
@@ -89,6 +90,26 @@ impl BootIdentity {
         let value =
             fs::read_to_string(path).map_err(|_| GuestModeError::BootIdentityUnavailable)?;
         Self::from_kernel_boot_id(&value)
+    }
+
+    /// Rehydrate a previously published boot-identity commitment.
+    ///
+    /// Hosts never need the raw kernel boot-id to bind a reconnect. They may
+    /// persist only this domain-separated digest and use it to reconstruct
+    /// the enrolled identity after a daemon restart.
+    pub fn from_digest(value: &str) -> Result<Self, GuestModeError> {
+        let encoded = value
+            .strip_prefix("sha256:")
+            .ok_or(GuestModeError::BootIdentityInvalid)?;
+        if encoded.len() != 64 || !encoded.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+            return Err(GuestModeError::BootIdentityInvalid);
+        }
+        let mut digest = [0_u8; 32];
+        for (index, slot) in digest.iter_mut().enumerate() {
+            *slot = u8::from_str_radix(&encoded[index * 2..index * 2 + 2], 16)
+                .map_err(|_| GuestModeError::BootIdentityInvalid)?;
+        }
+        Ok(Self(digest))
     }
 
     pub const fn digest(self) -> [u8; 32] {
@@ -327,10 +348,12 @@ pub struct GuestHandshakeAdmission {
 #[derive(Debug)]
 struct GuestRuntimeInner {
     identity: GuestIdentity,
+    resource_runtime: GuestResourceRuntime,
     deployment: ProviderDeployment,
     admission: AdmissionBudget,
     broker: ModeBoundBrokerAdapter,
-    active_generation: Mutex<Option<u64>>,
+    active_generation: Arc<Mutex<Option<u64>>>,
+    last_generation: Mutex<u64>,
     active_session_permit: Mutex<Option<crate::target_runtime::AdmissionPermit>>,
 }
 
@@ -342,24 +365,32 @@ pub struct GuestRuntime {
 }
 
 impl GuestRuntime {
-    pub fn new(
+    pub async fn new(
         identity: GuestIdentity,
         broker_socket: PathBuf,
         broker_uid: u32,
         limits: AdmissionLimits,
+        state_dir: impl AsRef<Path>,
     ) -> Result<Self, GuestModeError> {
         let admission = AdmissionBudget::new(limits).map_err(GuestModeError::Admission)?;
         let deployment = ProviderDeployment::new(DaemonMode::Guest, limits)
             .map_err(GuestModeError::Admission)?;
+        let resource_runtime = GuestResourceRuntime::new(identity.clone(), state_dir)
+            .await
+            .map_err(GuestModeError::Resource)?;
+        let active_generation = resource_runtime.active_generation();
         let broker = ModeBoundBrokerAdapter::guest(broker_socket, broker_uid);
         broker.validate_instance().map_err(GuestModeError::Broker)?;
+        let initial_generation = identity.reconnect_generation().get().saturating_sub(1);
         Ok(Self {
             inner: Arc::new(GuestRuntimeInner {
                 identity,
+                resource_runtime,
                 deployment,
                 admission,
                 broker,
-                active_generation: Mutex::new(None),
+                active_generation,
+                last_generation: Mutex::new(initial_generation),
                 active_session_permit: Mutex::new(None),
             }),
         })
@@ -369,12 +400,30 @@ impl GuestRuntime {
         &self.inner.identity
     }
 
+    /// Return the target-local Resource API owned by this Guest runtime.
+    ///
+    /// Keeping this alongside the session admission state prevents callers
+    /// from accidentally constructing a second store with a mismatched
+    /// identity.
+    pub fn resource_runtime(&self) -> &GuestResourceRuntime {
+        &self.inner.resource_runtime
+    }
+
     pub fn deployment(&self) -> &ProviderDeployment {
         &self.inner.deployment
     }
 
     pub fn broker(&self) -> &ModeBoundBrokerAdapter {
         &self.inner.broker
+    }
+
+    fn next_generation(&self) -> Result<u64, GuestModeError> {
+        self.inner
+            .last_generation
+            .lock()
+            .map_err(|_| GuestModeError::StateUnavailable)?
+            .checked_add(1)
+            .ok_or(GuestModeError::GenerationZero)
     }
 
     pub const fn component_session_port() -> u32 {
@@ -466,6 +515,14 @@ impl GuestRuntime {
         generation: u64,
         admission: GuestHandshakeAdmission,
     ) -> Result<GuestSessionLease, GuestModeError> {
+        let mut last_generation = self
+            .inner
+            .last_generation
+            .lock()
+            .map_err(|_| GuestModeError::StateUnavailable)?;
+        if generation <= *last_generation {
+            return Err(GuestModeError::StaleSession);
+        }
         let mut active = self
             .inner
             .active_generation
@@ -494,6 +551,7 @@ impl GuestRuntime {
             *active_permit = Some(admission.session_permit.clone());
         }
         *active = Some(generation);
+        *last_generation = generation;
         Ok(GuestSessionLease {
             runtime: Arc::downgrade(&self.inner),
             generation,
@@ -539,7 +597,8 @@ impl GuestRuntime {
     {
         let admission = self.admit_handshake()?;
         let identity = self.inner.identity.clone();
-        let policy = identity.endpoint_policy();
+        let minimum_generation = self.next_generation()?;
+        let policy = identity.endpoint_policy_for_generation(minimum_generation);
         let engine = SessionEngine::establish_responder_with_generation_floor(
             transport,
             policy.clone(),
@@ -547,7 +606,7 @@ impl GuestRuntime {
                 local_private,
                 remote_public: parent_public,
             },
-            identity.reconnect_generation().get(),
+            minimum_generation,
             Instant::now(),
         )
         .await
@@ -747,6 +806,7 @@ fn monotonic_tick() -> u64 {
 pub enum GuestModeError {
     Admission(AdmissionError),
     Deployment(DeploymentError),
+    Resource(GuestResourceRuntimeError),
     GuestIdentityWrongKind,
     BootIdentityInvalid,
     BootIdentityUnavailable,
@@ -767,6 +827,7 @@ impl std::fmt::Display for GuestModeError {
         formatter.write_str(match self {
             Self::Admission(error) => return error.fmt(formatter),
             Self::Deployment(error) => return error.fmt(formatter),
+            Self::Resource(error) => return error.fmt(formatter),
             Self::GuestIdentityWrongKind => "guest-mode-identity-wrong-kind",
             Self::BootIdentityInvalid => "guest-mode-boot-identity-invalid",
             Self::BootIdentityUnavailable => "guest-mode-boot-identity-unavailable",
@@ -832,15 +893,18 @@ mod tests {
         assert_ne!(policy.transport_binding.channel_binding, [0; 32]);
     }
 
-    #[test]
-    fn guest_runtime_exposes_no_host_authority_surfaces() {
+    #[tokio::test]
+    async fn guest_runtime_exposes_no_host_authority_surfaces() {
         let identity = identity(1);
+        let state_dir = tempfile::tempdir().expect("state directory");
         let runtime = GuestRuntime::new(
             identity,
             PathBuf::from("/run/d2b/guest-broker.sock"),
             997,
             AdmissionLimits::guest_default(),
+            state_dir.path(),
         )
+        .await
         .expect("runtime");
         assert!(!runtime.surfaces().local_zone_store);
         assert!(runtime.local_zone_store().is_err());

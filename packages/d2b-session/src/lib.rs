@@ -10,6 +10,7 @@ mod attachment;
 pub mod audit;
 mod bootstrap;
 mod cancellation;
+mod client;
 mod deadline;
 mod driver;
 mod engine;
@@ -27,6 +28,7 @@ mod transport;
 
 pub use bootstrap::{AdmittedBootstrapPsk, BootstrapAdmission, BootstrapPsk, Secret32};
 pub use cancellation::{Cancellation, RequestRegistry};
+pub use client::SessionTtrpcClient;
 pub use deadline::DeadlineBudget;
 pub use driver::{ComponentSessionDriver, SessionDriverHandle};
 pub use engine::{SessionEngine, SessionEvent};

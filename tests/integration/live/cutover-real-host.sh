@@ -75,20 +75,11 @@ run_json_validator() {
   fi
 }
 
-# The live gate is an explicit operator decision, not a default. Refuse before
-# building the heavy-lane helper when it is absent.
+# The live gate is an explicit operator decision, not a default.
 if [[ "${D2B_LIVE:-0}" != "1" ]]; then
   refuse "set D2B_LIVE=1 for the manual daily-driver lane"
   exit 78
 fi
-
-# --- heavy-gate sole-use semaphore (ADR 0046) ------------------------------
-# The helper proves that this process owns a protected slot and re-execs once
-# through the public heavy gate when it does not. Do not replace it with an
-# environment-marker check or a second lock.
-# shellcheck source=tests/tools/heavy-gate-reexec.sh
-. "$ROOT/tests/tools/heavy-gate-reexec.sh"
-d2b_heavy_gate_reexec "$ROOT" "$0" "$@"
 
 require_value "delivery state directory" "${D2B_LIVE_STATE_DIR:-}"
 require_value "candidate directory" "${D2B_LIVE_CANDIDATE_DIR:-}"

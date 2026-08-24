@@ -1137,6 +1137,7 @@ impl CliZoneConnector {
                 | ZoneServiceKind::Zone
                 | ZoneServiceKind::Audit
                 | ZoneServiceKind::Support
+                | ZoneServiceKind::ConfigNixos
         ) || target.service() != service
             || target.transport() != TransportKind::LocalUnix
             || target.owner().zone() != &self.zone_path
@@ -1712,6 +1713,16 @@ fn validate_operation(
         | (ZoneServiceKind::Support, "SupportService/GenerateBundle", Some("support-bundle")) => {
             Ok(operation.to_owned())
         }
+        (
+            ZoneServiceKind::ConfigNixos,
+            "ConfigNixosService/ReadGuestConfig"
+                | "ConfigNixosService/Stage"
+                | "ConfigNixosService/Diff"
+                | "ConfigNixosService/Approve"
+                | "ConfigNixosService/Reject"
+                | "ConfigNixosService/Status",
+            Some("invoke"),
+        ) => Ok(operation.to_owned()),
         (ZoneServiceKind::Zone, "Attach" | "Create", Some("attach")) => Ok(operation.to_owned()),
         (ZoneServiceKind::Audit | ZoneServiceKind::Support, ..) => Err(ClientError::InvalidMethod),
         (_, _, Some(_)) => Err(ClientError::InvalidMethod),

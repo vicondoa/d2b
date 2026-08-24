@@ -37,11 +37,13 @@ pub enum ZoneServiceKind {
     Support,
     /// The credential service.
     Credential,
+    /// The service-only NixOS Guest configuration Provider.
+    ConfigNixos,
 }
 
 impl ZoneServiceKind {
     /// Exhaustive stable variant order.
-    pub const fn all() -> &'static [Self; 8] {
+    pub const fn all() -> &'static [Self; 9] {
         &[
             Self::Resource,
             Self::Zone,
@@ -51,6 +53,7 @@ impl ZoneServiceKind {
             Self::Audit,
             Self::Support,
             Self::Credential,
+            Self::ConfigNixos,
         ]
     }
 
@@ -65,6 +68,7 @@ impl ZoneServiceKind {
             Self::Audit => "d2b.audit.v3",
             Self::Support => "d2b.support.v3",
             Self::Credential => "d2b.credential.v3",
+            Self::ConfigNixos => "d2b.config-nixos.v3",
         }
     }
 
@@ -79,6 +83,7 @@ impl ZoneServiceKind {
             Self::Audit => "audit",
             Self::Support => "support",
             Self::Credential => "credential",
+            Self::ConfigNixos => "config-nixos",
         }
     }
 }
@@ -542,7 +547,8 @@ mod tests {
                 "controller",
                 "audit",
                 "support",
-                "credential"
+                "credential",
+                "config-nixos"
             ]
         );
         services.sort_unstable();

@@ -3,9 +3,12 @@
 // hundreds of call sites; the size trade-off is intentional and tracked
 // in plan.md §D-typed-error-boxing. Suppressed until that refactor lands.
 use std::collections::{BTreeMap, BTreeSet, HashMap, hash_map::Entry};
+#[cfg(test)]
 use std::ffi::OsStr;
 use std::fs::{self, File, OpenOptions};
-use std::io::{self, Read, Write};
+use std::io::{self, Read};
+#[cfg(test)]
+use std::io::Write;
 use std::os::fd::{AsFd, AsRawFd, OwnedFd, RawFd};
 use std::os::unix::fs::{FileTypeExt, MetadataExt, PermissionsExt};
 use std::os::unix::net::UnixStream;
@@ -71,9 +74,10 @@ use d2b_contracts_broker::broker_wire::{
     UsbipProxyReconcileRequest as BrokerUsbipProxyReconcileRequest,
     UsbipUnbindRequest as BrokerUsbipUnbindRequest,
 };
-use d2b_contracts_control::{
-    guest_proto as pb,
-    public_wire::{self, AuthRole, AuthStatusResponse, DeniedCommandHint, SocketReachability},
+#[cfg(test)]
+use d2b_contracts_control::guest_proto as pb;
+use d2b_contracts_control::public_wire::{
+    self, AuthRole, AuthStatusResponse, DeniedCommandHint, SocketReachability,
 };
 use d2b_contracts_resource::resource_proto as resource_wire;
 use d2b_contracts_resource::v3::identity::ReconnectGeneration;
@@ -85,6 +89,11 @@ use d2b_contracts_resource::v3::{
     network::NetworkSpec,
     process::ProcessSpec,
     volume::{VolumeAttachment, VolumeSpec},
+};
+#[cfg(not(test))]
+use d2b_contracts_resource::v3::{
+    ResourceName,
+    activation_nixos::NIXOS_GENERATION_RESOURCE_TYPE,
 };
 use d2b_contracts_zone_session::v3::resource_bundle::ResourceBundle;
 use d2b_core::bundle::Bundle;
@@ -135,6 +144,7 @@ use d2b_provider_shell_terminal::{
 use d2b_provider_transport_azure_relay::auth::{DEFAULT_SAS_TTL_SECS, RelayEndpoint};
 use d2b_provider_volume_local::diagnostics::storage_lifecycle;
 use d2b_realm_core::TargetName;
+use d2b_process_conformance::{ConfigurationDigest, GuestExecutionBinding};
 pub(crate) use d2bd_runtime::broker_transport::{
     broker_remaining_before_op, broker_response_kind, default_audit_join_context,
     dispatch_broker_request_to_socket, redact_broker_dispatch_failure_for_launcher,
@@ -560,6 +570,22 @@ struct ServerState {
     /// reconciliation, force-stop generations, and activation staging all
     /// resolve through this index; no process-global lock carries that state.
     zone_coordinator: Arc<Mutex<ZoneCoordinator>>,
+    /// Daemon-owned typed Guest configuration staging state.
+    config_staging:
+        Arc<Mutex<d2b_provider_config_nixos::ConfigStagingStore>>,
+    /// One shared authenticated ComponentSession per Guest target. Typed
+    /// health, activation, and Resource API callers must not race by opening
+    /// independent sessions with the same reconnect generation.
+    guest_component_sessions: Arc<
+        tokio::sync::Mutex<
+            HashMap<
+                String,
+                Arc<d2bd_runtime::guest_component_session::GuestComponentSessionClient>,
+            >,
+        >,
+    >,
+    guest_component_session_locks:
+        Arc<tokio::sync::Mutex<HashMap<String, Arc<tokio::sync::Mutex<()>>>>>,
     /// Per-VM console session table (ring buffers and drainer tasks) for
     /// `d2b console <vm>`. Sessions are created on first Attach and persist
     /// until the daemon restarts or the VM stops.
@@ -2557,6 +2583,9 @@ pub async fn serve(options: ServeOptions) -> Result<(), TypedError> {
         interaction_listeners: Arc::new(Mutex::new(None)),
         typed_shell_session_targets: d2bd_runtime::typed_shell_targets::new_cache(),
         zone_coordinator: d2bd_runtime::zone_authority::new_coordinator(),
+        config_staging: Arc::new(Mutex::new(Default::default())),
+        guest_component_sessions: Arc::new(tokio::sync::Mutex::new(HashMap::new())),
+        guest_component_session_locks: Arc::new(tokio::sync::Mutex::new(HashMap::new())),
         security_key_sessions: Arc::new(parking_lot::Mutex::new(
             crate::security_key::SkSessionTable::default(),
         )),
@@ -3078,6 +3107,8 @@ pub struct GuestServeOptions {
     pub broker_socket_path: PathBuf,
     pub broker_uid: u32,
     pub state_dir: PathBuf,
+    pub bundle_path: PathBuf,
+    pub guest_config_path: PathBuf,
     pub boot_id_path: PathBuf,
     pub local_private_key_path: Option<PathBuf>,
     pub parent_public_key_path: Option<PathBuf>,
@@ -3148,33 +3179,46 @@ pub async fn serve_guest(options: GuestServeOptions) -> Result<(), TypedError> {
     .map_err(|error| TypedError::InternalConfig {
         detail: error.to_string(),
     })?;
-    let runtime = d2bd_runtime::guest_mode::GuestRuntime::new(
-        identity,
-        options.broker_socket_path,
-        options.broker_uid,
-        d2bd_runtime::target_runtime::AdmissionLimits::guest_default(),
-    )
-    .map_err(|error| TypedError::InternalConfig {
-        detail: error.to_string(),
-    })?;
     if options.validate_only {
         return Ok(());
     }
     fs::create_dir_all(&options.state_dir).map_err(|_| TypedError::InternalConfig {
         detail: "guest state root unavailable".to_owned(),
     })?;
-    let local_private_path =
-        options
-            .local_private_key_path
-            .ok_or_else(|| TypedError::InternalConfig {
-                detail: "guest ComponentSession private key is unavailable".to_owned(),
-            })?;
-    let parent_public_path =
-        options
-            .parent_public_key_path
-            .ok_or_else(|| TypedError::InternalConfig {
-                detail: "parent Zone ComponentSession key is unavailable".to_owned(),
-            })?;
+    let runtime = d2bd_runtime::guest_mode::GuestRuntime::new(
+        identity.clone(),
+        options.broker_socket_path.clone(),
+        options.broker_uid,
+        d2bd_runtime::target_runtime::AdmissionLimits::guest_default(),
+        &options.state_dir,
+    )
+    .await
+    .map_err(|error| TypedError::InternalConfig {
+        detail: error.to_string(),
+    })?;
+    let bundle = BundleResolver::load(&options.bundle_path).map_err(|_| {
+        TypedError::InternalConfig {
+            detail: "guest process bundle unavailable".to_owned(),
+        }
+    })?;
+    let process_providers = Arc::new(process_provider_runtime::ProductionProcessProviders::new_for_mode(
+        bundle,
+        options.broker_socket_path.clone(),
+        BrokerCallerRole::LauncherUid {
+            uid: options.broker_uid,
+        },
+        d2bd_runtime::target_runtime::DaemonMode::Guest,
+    ));
+    let local_private_path = options
+        .local_private_key_path
+        .ok_or_else(|| TypedError::InternalConfig {
+            detail: "guest ComponentSession private key is unavailable".to_owned(),
+        })?;
+    let parent_public_path = options
+        .parent_public_key_path
+        .ok_or_else(|| TypedError::InternalConfig {
+            detail: "parent Zone ComponentSession key is unavailable".to_owned(),
+        })?;
     let parent_public = read_public_key32(&parent_public_path)?;
     let mut listener = runtime
         .bind_listener()
@@ -3191,43 +3235,242 @@ pub async fn serve_guest(options: GuestServeOptions) -> Result<(), TypedError> {
             context: "install Guest SIGINT handler".to_owned(),
             detail: "signal handler unavailable".to_owned(),
         })?;
+    let mut active: Option<(
+        tokio::task::JoinHandle<Result<(), d2b_session::SessionServerError>>,
+        tokio::task::JoinHandle<()>,
+        d2bd_runtime::guest_mode::GuestSessionLease,
+    )> = None;
     loop {
         let local_private = read_secret32(&local_private_path)?;
-        let accepted = tokio::select! {
-            _ = sigterm.recv() => break,
-            _ = sigint.recv() => break,
-            result = runtime.accept_from_parent(&mut listener, local_private, parent_public) => result,
-        };
-        let (mut session, lease) = match accepted {
-            Ok(session) => session,
-            Err(error) => {
-                if options.once {
-                    return Err(TypedError::InternalConfig {
-                        detail: error.to_string(),
-                    });
-                }
-                tracing::warn!(error = %error, "Guest ComponentSession handshake refused");
-                continue;
-            }
-        };
-        if options.once {
-            drop(lease);
-            return Ok(());
-        }
-        let shutdown = loop {
+        if let Some((mut serving, processing, lease)) = active.take() {
             tokio::select! {
-                _ = sigterm.recv() => break true,
-                _ = sigint.recv() => break true,
-                result = session.receive_ttrpc() => {
-                    if result.is_err() {
-                        break false;
+                _ = sigterm.recv() => {
+                    serving.abort();
+                    let _ = serving.await;
+                    processing.abort();
+                    let _ = processing.await;
+                    drop(lease);
+                    break;
+                },
+                _ = sigint.recv() => {
+                    serving.abort();
+                    let _ = serving.await;
+                    processing.abort();
+                    let _ = processing.await;
+                    drop(lease);
+                    break;
+                },
+                accepted = runtime.accept_from_parent(&mut listener, local_private, parent_public) => {
+                    let (session, new_lease) = match accepted {
+                        Ok(session) => session,
+                        Err(error) => {
+                            tracing::warn!(error = %error, "Guest ComponentSession handshake refused");
+                            active = Some((serving, processing, lease));
+                            continue;
+                        }
+                    };
+                    serving.abort();
+                    let _ = serving.await;
+                    processing.abort();
+                    let _ = processing.await;
+                    drop(lease);
+                    let route = session.route_binding();
+                    let resource_session = match runtime.resource_runtime().bind_session(&route) {
+                        Ok(session) => session,
+                        Err(error) => {
+                            tracing::warn!(error = %error, "Guest Resource API session binding refused");
+                            drop(new_lease);
+                            continue;
+                        }
+                    };
+                    let config_services = match guest_config_services(&identity, &route, &options.guest_config_path) {
+                        Ok(services) => services,
+                        Err(error) => {
+                            tracing::warn!(error = %error, "Guest config service binding refused");
+                            drop(new_lease);
+                            continue;
+                        }
+                    };
+                    let mut services = resource_session.ttrpc_services();
+                    services.extend(config_services);
+                    let ttrpc = session.into_ttrpc_handle();
+                    let resource_client = Arc::new(resource_session.client());
+                    let mut process_runtime =
+                        process_resource_runtime::ProcessResourceRuntime::new_for_target(
+                            identity.zone().clone(),
+                            Arc::clone(&process_providers),
+                            Some(identity.guest_ref().clone()),
+                        );
+                    if let Ok(generation) =
+                        d2b_contracts_resource::v3::ControllerGeneration::new(
+                            identity.controller_generation(),
+                        )
+                    {
+                        process_runtime.set_controller_generation(generation);
                     }
-                }
+                    process_runtime.set_guest_execution_binding(
+                        guest_process_execution_binding(
+                            &identity,
+                            route.reconnect_generation(),
+                        )?,
+                    );
+                    let process_store = resource_session.store_backend();
+                    let process_task = tokio::spawn(
+                        process_resource_runtime::run_guest_process_reconciliation(
+                            process_runtime,
+                            process_store,
+                            resource_client,
+                            identity.zone().clone(),
+                        ),
+                    );
+                    active = Some((
+                        tokio::spawn(async move {
+                            ttrpc
+                                .serve_ttrpc_services(services)
+                                .await
+                        }),
+                        process_task,
+                        new_lease,
+                    ));
+                },
+                result = &mut serving => {
+                    if let Ok(Err(error)) = result {
+                        tracing::debug!(error = %error, "Guest ComponentSession resource server stopped");
+                    }
+                    processing.abort();
+                    let _ = processing.await;
+                    drop(lease);
+                },
             }
-        };
-        drop(lease);
-        if shutdown {
-            break;
+        } else {
+            let accepted = tokio::select! {
+                _ = sigterm.recv() => break,
+                _ = sigint.recv() => break,
+                result = runtime.accept_from_parent(&mut listener, local_private, parent_public) => result,
+            };
+            let (session, lease) = match accepted {
+                Ok(session) => session,
+                Err(error) => {
+                    if options.once {
+                        return Err(TypedError::InternalConfig {
+                            detail: error.to_string(),
+                        });
+                    }
+                    tracing::warn!(error = %error, "Guest ComponentSession handshake refused");
+                    continue;
+                }
+            };
+            if options.once {
+                drop(lease);
+                return Ok(());
+            }
+            let route = session.route_binding();
+            let resource_session = match runtime.resource_runtime().bind_session(&route) {
+                Ok(session) => session,
+                Err(error) => {
+                    tracing::warn!(error = %error, "Guest Resource API session binding refused");
+                    drop(lease);
+                    continue;
+                }
+            };
+            let config_services = match guest_config_services(&identity, &route, &options.guest_config_path) {
+                Ok(services) => services,
+                Err(error) => {
+                    tracing::warn!(error = %error, "Guest config service binding refused");
+                    drop(lease);
+                    continue;
+                }
+            };
+            let mut services = resource_session.ttrpc_services();
+            services.extend(config_services);
+            let ttrpc = session.into_ttrpc_handle();
+            let resource_client = Arc::new(resource_session.client());
+            let mut process_runtime =
+                process_resource_runtime::ProcessResourceRuntime::new_for_target(
+                    identity.zone().clone(),
+                    Arc::clone(&process_providers),
+                    Some(identity.guest_ref().clone()),
+                );
+            if let Ok(generation) =
+                d2b_contracts_resource::v3::ControllerGeneration::new(
+                    identity.controller_generation(),
+                )
+            {
+                process_runtime.set_controller_generation(generation);
+            }
+            process_runtime.set_guest_execution_binding(
+                guest_process_execution_binding(&identity, route.reconnect_generation())?,
+            );
+            let process_store = resource_session.store_backend();
+            let process_task = tokio::spawn(
+                process_resource_runtime::run_guest_process_reconciliation(
+                    process_runtime,
+                    process_store,
+                    resource_client,
+                    identity.zone().clone(),
+                ),
+            );
+            active = Some((
+                tokio::spawn(async move {
+                    ttrpc
+                        .serve_ttrpc_services(services)
+                        .await
+                }),
+                process_task,
+                lease,
+            ));
+        }
+
+        fn guest_config_services(
+            identity: &d2bd_runtime::guest_mode::GuestIdentity,
+            route: &d2b_session::AuthenticatedSessionRouteBinding,
+            path: &Path,
+        ) -> Result<std::collections::HashMap<String, ttrpc::r#async::Service>, String> {
+            identity
+                .validate_route(route)
+                .map_err(|error| error.to_string())?;
+            let boot_digest = identity
+                .boot_identity()
+                .digest()
+                .iter()
+                .map(|byte| format!("{byte:02x}"))
+                .collect::<String>();
+            let backend = d2b_provider_config_nixos::GuestConfigReader::new(
+                identity.guest_ref().clone(),
+                format!("sha256:{boot_digest}"),
+                route.reconnect_generation().get(),
+                path,
+            )
+            .map_err(|error| error.code().to_owned())?;
+            Ok(d2b_provider_config_nixos::create_ttrpc_services(
+                std::sync::Arc::new(backend),
+            ))
+        }
+
+        fn guest_process_execution_binding(
+            identity: &d2bd_runtime::guest_mode::GuestIdentity,
+            session_generation: ReconnectGeneration,
+        ) -> Result<GuestExecutionBinding, TypedError> {
+            GuestExecutionBinding::new(
+                identity.guest_uid().clone(),
+                ConfigurationDigest::from_bytes(identity.boot_identity().digest()),
+                session_generation,
+                identity.assignment_epoch(),
+                ResourceGeneration::new(identity.provider_generation()).map_err(|_| {
+                    TypedError::InternalConfig {
+                        detail: "guest Provider generation is invalid".to_owned(),
+                    }
+                })?,
+                d2b_contracts_resource::v3::ControllerGeneration::new(
+                    identity.controller_generation(),
+                )
+                .map_err(|_| TypedError::InternalConfig {
+                    detail: "guest controller generation is invalid".to_owned(),
+                })?,
+            )
+            .map_err(|_| TypedError::InternalConfig {
+                detail: "guest Process execution binding is invalid".to_owned(),
+            })
         }
     }
     Ok(())
@@ -3318,6 +3561,7 @@ impl d2bd_runtime::supervisor::state::PidfdOpener for BrokerPidfdOpener<'_> {
                 expected_start_time_ticks,
                 resource_ref: None,
                 resource_uid: None,
+                guest_execution: None,
                 tracing_span_id: None,
             }),
             Duration::from_secs(10),
@@ -3800,6 +4044,7 @@ impl d2bd_runtime::usbipd_perenv_autostart::PerEnvUsbipdSpawner for BrokerPerEnv
             execution_ref: None,
             execution_domain: None,
             user_ref: None,
+            guest_execution: None,
             workload_identity: None,
             vm_id: VmId::new(spec.vm_id.clone()),
             role_id: RoleId::new(spec.role.role_id().to_owned()),
@@ -3809,6 +4054,7 @@ impl d2bd_runtime::usbipd_perenv_autostart::PerEnvUsbipdSpawner for BrokerPerEnv
             provider_identity: None,
             template_identity: None,
             generation: None,
+            activation_input: None,
             sandbox_plan: None,
             role: d2bd_runtime::usbipd_perenv_autostart::spawn_runner_role(spec),
             bundle_runner_intent_ref: BundleOpId::new(spec.intent_id()),
@@ -4691,6 +4937,236 @@ fn dispatch_resource_exec_create_request(
     ))
 }
 
+fn dispatch_config_nixos_service_request(
+    state: &ServerState,
+    peer: &PeerIdentity,
+    request: &Value,
+) -> Result<Value, TypedError> {
+    if !matches!(peer.role, PeerRole::Admin) {
+        return Err(TypedError::AuthzNotAdmin {
+            verb: "config-nixos".to_owned(),
+        });
+    }
+    if request.get("sessionVerb").and_then(Value::as_str) != Some("invoke") {
+        return Err(TypedError::WireInvalidFrame {
+            detail: "config-nixos service requires the invoke session verb".to_owned(),
+        });
+    }
+    let zone = request
+        .get("zoneRef")
+        .and_then(Value::as_str)
+        .and_then(|value| value.strip_prefix("Zone/"))
+        .and_then(|value| ZoneId::parse(value).ok())
+        .ok_or_else(|| TypedError::WireInvalidFrame {
+            detail: "config-nixos request has an invalid Zone reference".to_owned(),
+        })?;
+    let method = request
+        .get("method")
+        .and_then(Value::as_str)
+        .ok_or_else(|| TypedError::WireInvalidFrame {
+            detail: "config-nixos request is missing method".to_owned(),
+        })?;
+    let operation = d2b_provider_config_nixos::ConfigOperation::ALL
+        .into_iter()
+        .find(|candidate| candidate.as_str() == method)
+        .ok_or_else(|| TypedError::WireInvalidFrame {
+            detail: "config-nixos service operation is not supported on the operator route"
+                .to_owned(),
+        })?;
+    let payload = config_nixos_payload(request)?;
+    let service = d2b_provider_config_nixos::ConfigService;
+    service
+        .validate_operation(operation, &payload)
+        .map_err(config_nixos_wire_error)?;
+    let guest_ref = payload
+        .get("guestRef")
+        .and_then(Value::as_str)
+        .and_then(|value| ResourceRef::parse(value).ok())
+        .filter(|resource| resource.resource_type().as_str() == "Guest")
+        .ok_or_else(|| TypedError::WireInvalidFrame {
+            detail: "config-nixos request has an invalid Guest reference".to_owned(),
+        })?;
+    let plane = state
+        .resource_plane
+        .lock()
+        .map_err(|_| TypedError::InternalConfig {
+            detail: "resource plane unavailable".to_owned(),
+        })?
+        .clone()
+        .ok_or_else(|| TypedError::InternalConfig {
+            detail: "resource plane unavailable".to_owned(),
+        })?;
+    let runtime = plane
+        .zone(&zone)
+        .map_err(|_| TypedError::InternalConfig {
+            detail: "config-nixos Zone runtime unavailable".to_owned(),
+        })?;
+    let guest_lookup = json!({
+        "zoneRef": format!("Zone/{}", zone.as_str()),
+        "service": "d2b.resource.v3",
+        "method": "Get",
+        "resourceRef": guest_ref.to_canonical_string(),
+    });
+    let guest = block_on_future(runtime.dispatch_cli_request(&guest_lookup)).map_err(|_| {
+        TypedError::InternalConfig {
+            detail: "config-nixos Guest lookup failed".to_owned(),
+        }
+    })?;
+    if guest.get("kind").is_some() {
+        return Err(TypedError::AuthzNotAdmin {
+            verb: "config-nixos Guest is not in the requested Zone".to_owned(),
+        });
+    }
+
+    match operation {
+        d2b_provider_config_nixos::ConfigOperation::ReadGuestConfig => {
+            let sync: d2b_provider_config_nixos::ConfigSyncRequest =
+                serde_json::from_value(payload).map_err(|_| TypedError::WireInvalidFrame {
+                    detail: "config-nixos read request is malformed".to_owned(),
+                })?;
+            let response = read_guest_config_typed(
+                state,
+                &zone,
+                sync.guest_ref.name().as_str(),
+            )?;
+            serde_json::to_value(response).map_err(|_| TypedError::WireInvalidFrame {
+                detail: "config-nixos response encoding failed".to_owned(),
+            })
+        }
+        d2b_provider_config_nixos::ConfigOperation::Stage => {
+            let stage: d2b_provider_config_nixos::ConfigStageRequest =
+                serde_json::from_value(payload).map_err(|_| TypedError::WireInvalidFrame {
+                    detail: "config-nixos stage request is malformed".to_owned(),
+                })?;
+            let response = state
+                .config_staging
+                .lock()
+                .map_err(|_| TypedError::InternalConfig {
+                    detail: "config staging state unavailable".to_owned(),
+                })?
+                .stage(
+                    d2b_provider_config_nixos::ConfigCaller::Admin,
+                    &zone,
+                    &stage,
+                )
+                .map_err(config_nixos_wire_error)?;
+            serde_json::to_value(response).map_err(|_| TypedError::WireInvalidFrame {
+                detail: "config-nixos stage response encoding failed".to_owned(),
+            })
+        }
+        d2b_provider_config_nixos::ConfigOperation::Diff => {
+            let diff: d2b_provider_config_nixos::ConfigDiffRequest =
+                serde_json::from_value(payload).map_err(|_| TypedError::WireInvalidFrame {
+                    detail: "config-nixos diff request is malformed".to_owned(),
+                })?;
+            let response = state
+                .config_staging
+                .lock()
+                .map_err(|_| TypedError::InternalConfig {
+                    detail: "config staging state unavailable".to_owned(),
+                })?
+                .diff(
+                    d2b_provider_config_nixos::ConfigCaller::Admin,
+                    &zone,
+                    &diff,
+                )
+                .map_err(config_nixos_wire_error)?;
+            serde_json::to_value(response).map_err(|_| TypedError::WireInvalidFrame {
+                detail: "config-nixos diff response encoding failed".to_owned(),
+            })
+        }
+        d2b_provider_config_nixos::ConfigOperation::Approve => {
+            let approve: d2b_provider_config_nixos::ConfigApproveRequest =
+                serde_json::from_value(payload).map_err(|_| TypedError::WireInvalidFrame {
+                    detail: "config-nixos approve request is malformed".to_owned(),
+                })?;
+            let response = state
+                .config_staging
+                .lock()
+                .map_err(|_| TypedError::InternalConfig {
+                    detail: "config staging state unavailable".to_owned(),
+                })?
+                .approve(
+                    d2b_provider_config_nixos::ConfigCaller::Admin,
+                    &zone,
+                    &approve,
+                )
+                .map_err(config_nixos_wire_error)?;
+            serde_json::to_value(response).map_err(|_| TypedError::WireInvalidFrame {
+                detail: "config-nixos approve response encoding failed".to_owned(),
+            })
+        }
+        d2b_provider_config_nixos::ConfigOperation::Reject => {
+            let reject: d2b_provider_config_nixos::ConfigRejectRequest =
+                serde_json::from_value(payload).map_err(|_| TypedError::WireInvalidFrame {
+                    detail: "config-nixos reject request is malformed".to_owned(),
+                })?;
+            let response = state
+                .config_staging
+                .lock()
+                .map_err(|_| TypedError::InternalConfig {
+                    detail: "config staging state unavailable".to_owned(),
+                })?
+                .reject(
+                    d2b_provider_config_nixos::ConfigCaller::Admin,
+                    &zone,
+                    &reject,
+                )
+                .map_err(config_nixos_wire_error)?;
+            serde_json::to_value(response).map_err(|_| TypedError::WireInvalidFrame {
+                detail: "config-nixos reject response encoding failed".to_owned(),
+            })
+        }
+        d2b_provider_config_nixos::ConfigOperation::Status => {
+            let status: d2b_provider_config_nixos::ConfigStatusRequest =
+                serde_json::from_value(payload).map_err(|_| TypedError::WireInvalidFrame {
+                    detail: "config-nixos status request is malformed".to_owned(),
+                })?;
+            let response = state
+                .config_staging
+                .lock()
+                .map_err(|_| TypedError::InternalConfig {
+                    detail: "config staging state unavailable".to_owned(),
+                })?
+                .status(
+                    d2b_provider_config_nixos::ConfigCaller::Admin,
+                    &zone,
+                    &status,
+                )
+                .map_err(config_nixos_wire_error)?;
+            serde_json::to_value(response).map_err(|_| TypedError::WireInvalidFrame {
+                detail: "config-nixos status response encoding failed".to_owned(),
+            })
+        }
+    }
+}
+
+fn config_nixos_payload(request: &Value) -> Result<Value, TypedError> {
+    let mut payload = request
+        .as_object()
+        .ok_or_else(|| TypedError::WireInvalidFrame {
+            detail: "config-nixos request must be an object".to_owned(),
+        })?
+        .clone();
+    for key in [
+        "type",
+        "method",
+        "zoneRef",
+        "schemaVersion",
+        "service",
+        "sessionVerb",
+    ] {
+        payload.remove(key);
+    }
+    Ok(Value::Object(payload))
+}
+
+fn config_nixos_wire_error(error: d2b_provider_config_nixos::ConfigError) -> TypedError {
+    TypedError::WireInvalidFrame {
+        detail: error.code().to_owned(),
+    }
+}
+
 fn dispatch_resource_request(
     state: &ServerState,
     peer: &PeerIdentity,
@@ -4700,6 +5176,11 @@ fn dispatch_resource_request(
         return Ok(resource_runtime_error_frame(
             resource_runtime::ResourceRuntimeError::AuthenticationUnavailable,
         ));
+    }
+    if request.value().get("service").and_then(Value::as_str)
+        == Some(d2b_provider_config_nixos::SERVICE_PACKAGE)
+    {
+        return dispatch_config_nixos_service_request(state, peer, &request.value());
     }
     if request.method() == Some("HostCutover") {
         if !matches!(peer.role, PeerRole::Admin) {
@@ -4720,6 +5201,7 @@ fn dispatch_resource_request(
                 object.remove(key);
             }
         }
+
         let cutover: public_wire::HostCutoverRequest =
             serde_json::from_value(value).map_err(|error| TypedError::WireInvalidFrame {
                 detail: format!("hostCutover request malformed: {error}"),
@@ -6986,6 +7468,9 @@ mod workload_observability_tests {
             interaction_listeners: Arc::new(Mutex::new(None)),
             typed_shell_session_targets: d2bd_runtime::typed_shell_targets::new_cache(),
             zone_coordinator: d2bd_runtime::zone_authority::new_coordinator(),
+            config_staging: Arc::new(Mutex::new(Default::default())),
+            guest_component_sessions: Arc::new(tokio::sync::Mutex::new(HashMap::new())),
+        guest_component_session_locks: Arc::new(tokio::sync::Mutex::new(HashMap::new())),
             console_sessions: Arc::new(Mutex::new(console_session::ConsoleSessionTable::default())),
             security_key_sessions: Arc::new(parking_lot::Mutex::new(
                 crate::security_key::SkSessionTable::default(),
@@ -11023,50 +11508,332 @@ fn resolve_guest_control_probe_params(
     })
 }
 
+/// Establish one authenticated Guest ComponentSession from host-published
+/// descriptor and key material. The returned client is the sole host-side
+/// route to Guest Resource and service APIs.
+pub(crate) async fn connect_guest_component_session(
+    state: &ServerState,
+    vm: &str,
+) -> Result<
+    Arc<d2bd_runtime::guest_component_session::GuestComponentSessionClient>,
+    String,
+> {
+    connect_guest_component_session_with_mode(
+        state,
+        vm,
+        GuestComponentSessionCacheMode::Reuse,
+    )
+    .await
+}
+
+async fn connect_guest_component_session_fresh(
+    state: &ServerState,
+    vm: &str,
+) -> Result<
+    Arc<d2bd_runtime::guest_component_session::GuestComponentSessionClient>,
+    String,
+> {
+    connect_guest_component_session_with_mode(
+        state,
+        vm,
+        GuestComponentSessionCacheMode::Fresh,
+    )
+    .await
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum GuestComponentSessionCacheMode {
+    Reuse,
+    Fresh,
+}
+
+fn select_cached_guest_component_session<'a, T, F>(
+    mode: GuestComponentSessionCacheMode,
+    cached: Option<&'a T>,
+    identity: F,
+    expected_identity: &d2bd_runtime::guest_mode::GuestIdentity,
+) -> Option<&'a T>
+where
+    F: Fn(&T) -> &d2bd_runtime::guest_mode::GuestIdentity,
+{
+    if matches!(mode, GuestComponentSessionCacheMode::Reuse)
+        && let Some(cached) = cached
+        && identity(cached) == expected_identity
+    {
+        Some(cached)
+    } else {
+        None
+    }
+}
+
+async fn connect_guest_component_session_with_mode(
+    state: &ServerState,
+    vm: &str,
+    mode: GuestComponentSessionCacheMode,
+) -> Result<
+    Arc<d2bd_runtime::guest_component_session::GuestComponentSessionClient>,
+    String,
+> {
+    let key_lock = {
+        let mut locks = state.guest_component_session_locks.lock().await;
+        locks
+            .entry(vm.to_owned())
+            .or_insert_with(|| Arc::new(tokio::sync::Mutex::new(())))
+            .clone()
+    };
+    let _connect_lock = key_lock.lock().await;
+    let resolver = load_bundle_resolver(state).map_err(|_| "bundle-unavailable".to_owned())?;
+    let params = resolve_guest_control_probe_params(state, &resolver, vm)?;
+    let endpoint = d2bd_runtime::guest_component_session::GuestComponentSessionEndpoint {
+        socket_path: params.socket_path,
+        state_root: params.state_root.clone(),
+        expected_state_root_uid: params.expected_state_root_uid,
+        expected_state_root_gid: params.expected_state_root_gid,
+        expected_peer_uid: params.expected_peer_uid,
+        expected_peer_gid: params.expected_peer_gid,
+        setup_timeout: d2bd_runtime::guest_component_session::COMPONENT_SESSION_ATTEMPT_CAP,
+    };
+    let config =
+        d2bd_runtime::guest_component_session::GuestComponentSessionConfig::from_state_root(
+            &params.state_root,
+            endpoint,
+        )
+        .map_err(|_| "session-material-unavailable".to_owned())?;
+    {
+        let sessions = state.guest_component_sessions.lock().await;
+        if let Some(session) = select_cached_guest_component_session(
+            mode,
+            sessions.get(vm),
+            |session| session.identity(),
+            &config.identity,
+        ) {
+            return Ok(Arc::clone(session));
+        }
+    }
+    let expected_identity = config.identity.clone();
+    let client = tokio::time::timeout(
+        d2bd_runtime::guest_component_session::COMPONENT_SESSION_ATTEMPT_CAP,
+        config.connect(),
+    )
+    .await
+    .map_err(|_| "session-timeout".to_owned())?
+    .map_err(|_| "session-unavailable".to_owned())?;
+    if client.identity() != &expected_identity
+        || client.identity().guest_ref().resource_type().as_str() != "Guest"
+        || client.identity().guest_ref().name().as_str() != vm
+    {
+        return Err("session-identity-mismatch".to_owned());
+    }
+    let client = Arc::new(client);
+    let mut sessions = state.guest_component_sessions.lock().await;
+    if let Some(session) = select_cached_guest_component_session(
+        mode,
+        sessions.get(vm),
+        |session| session.identity(),
+        &expected_identity,
+    ) {
+        return Ok(Arc::clone(session));
+    }
+    sessions.insert(vm.to_owned(), Arc::clone(&client));
+    Ok(client)
+}
+
+pub(crate) async fn invalidate_guest_component_session(state: &ServerState, vm: &str) {
+    state.guest_component_sessions.lock().await.remove(vm);
+}
+
+#[cfg(test)]
+mod guest_component_session_cache_tests {
+    use super::*;
+
+    struct CachedSession {
+        identity: d2bd_runtime::guest_mode::GuestIdentity,
+        generation: u64,
+    }
+
+    fn identity() -> d2bd_runtime::guest_mode::GuestIdentity {
+        d2bd_runtime::guest_mode::GuestIdentity::new(
+            ResourceRef::parse("Guest/workload").expect("Guest ref"),
+            ResourceUid::parse("123e4567-e89b-42d3-a456-426614174000").expect("Guest UID"),
+            ZoneId::parse("work").expect("Zone"),
+            d2bd_runtime::guest_mode::BootIdentity::from_kernel_boot_id("guest-cache-test")
+                .expect("boot identity"),
+            d2b_contracts_resource::v3::identity::SessionPurpose::parse(
+                d2bd_runtime::guest_mode::GUEST_COMPONENT_SESSION_PURPOSE,
+            )
+            .expect("purpose"),
+            SchemaFingerprint::parse(
+                "sha256:0000000000000000000000000000000000000000000000000000000000000001",
+            )
+            .expect("schema"),
+            ReconnectGeneration::new(1).expect("reconnect generation"),
+            1,
+            1,
+            1,
+        )
+        .expect("Guest identity")
+    }
+
+    #[test]
+    fn normal_mode_reuses_matching_cached_client() {
+        let expected = identity();
+        let cached = CachedSession {
+            identity: expected.clone(),
+            generation: 5,
+        };
+
+        let selected = select_cached_guest_component_session(
+            GuestComponentSessionCacheMode::Reuse,
+            Some(&cached),
+            |session| &session.identity,
+            &expected,
+        );
+
+        assert_eq!(selected.map(|session| session.generation), Some(5));
+    }
+
+    #[test]
+    fn fresh_mode_uses_newly_authenticated_generation() {
+        let expected = identity();
+        let stale = CachedSession {
+            identity: expected.clone(),
+            generation: 5,
+        };
+        let authenticated = CachedSession {
+            identity: expected.clone(),
+            generation: 6,
+        };
+
+        let selected = select_cached_guest_component_session(
+            GuestComponentSessionCacheMode::Fresh,
+            Some(&stale),
+            |session| &session.identity,
+            &expected,
+        )
+        .unwrap_or(&authenticated);
+
+        assert_eq!(selected.generation, 6);
+    }
+}
+
+fn read_guest_config_typed(
+    state: &ServerState,
+    zone: &ZoneId,
+    vm: &str,
+) -> Result<d2b_provider_config_nixos::ConfigSyncResponse, TypedError> {
+    if d2bd_runtime::zone_authority::authoritative_zone_for_vm(&state.zone_coordinator, vm)
+        .ok()
+        .as_ref()
+        != Some(zone)
+    {
+        return Err(TypedError::GuestControlReadFailed {
+            kind: d2bd_runtime::typed_error::GuestControlReadErrorKind::AuthFailed,
+        });
+    }
+    ensure_vm_runtime_capability(
+        state,
+        vm,
+        RuntimeCapabilityGate::ConfigSync,
+        "config sync",
+    )?;
+    let guest_ref_text = format!("Guest/{vm}");
+    let guest_ref = ResourceRef::parse(&guest_ref_text).map_err(|_| {
+        TypedError::GuestControlReadFailed {
+            kind: d2bd_runtime::typed_error::GuestControlReadErrorKind::AuthFailed,
+        }
+    })?;
+    let sync = d2b_provider_config_nixos::ConfigSyncRequest::new(guest_ref).map_err(|_| {
+        TypedError::GuestControlReadFailed {
+            kind: d2bd_runtime::typed_error::GuestControlReadErrorKind::AuthFailed,
+        }
+    })?;
+    let response: d2b_provider_config_nixos::ConfigSyncResponse = block_on_future(async {
+        let session = connect_guest_component_session(state, vm)
+            .await
+            .map_err(|_| d2bd_runtime::typed_error::GuestControlReadErrorKind::Transport)?;
+        let client = d2b_provider_config_nixos::ConfigNixosClient::new(session.client());
+        let result = client
+            .call(
+                ttrpc::context::Context::default(),
+                d2b_provider_config_nixos::ConfigOperation::ReadGuestConfig,
+                &sync,
+            )
+            .await;
+        if result.is_err() {
+            invalidate_guest_component_session(state, vm).await;
+        }
+        result.map_err(config_read_error_kind)
+    })
+    .map_err(|kind| TypedError::GuestControlReadFailed { kind })?;
+    d2b_provider_config_nixos::decode_document(&response)
+        .map_err(|_| TypedError::GuestControlReadFailed {
+            kind: d2bd_runtime::typed_error::GuestControlReadErrorKind::Protocol,
+        })?;
+    Ok(response)
+}
+
+fn config_read_error_kind(
+    error: ttrpc::Error,
+) -> d2bd_runtime::typed_error::GuestControlReadErrorKind {
+    use d2bd_runtime::typed_error::GuestControlReadErrorKind as Kind;
+    if matches!(
+        &error,
+        ttrpc::Error::RpcStatus(status) if status.code() == ttrpc::Code::DEADLINE_EXCEEDED
+    ) {
+        return Kind::Timeout;
+    }
+    let ttrpc::Error::RpcStatus(status) = error else {
+        return Kind::Transport;
+    };
+    match status.code() {
+        ttrpc::Code::UNAVAILABLE => return Kind::Transport,
+        ttrpc::Code::RESOURCE_EXHAUSTED => return Kind::FileTooLarge,
+        ttrpc::Code::PERMISSION_DENIED => return Kind::ReadDenied,
+        ttrpc::Code::UNAUTHENTICATED => return Kind::AuthFailed,
+        _ => {}
+    }
+    match status.message() {
+        "config-document-too-large" => Kind::FileTooLarge,
+        "config-document-invalid-utf8" => Kind::Protocol,
+        "config-document-unavailable" => Kind::ReadDenied,
+        "config-session-stale" | "config-unauthorized" => Kind::AuthFailed,
+        "config-request-invalid"
+        | "config-document-empty"
+        | "config-document-encoding-failed" => Kind::Protocol,
+        _ => Kind::Transport,
+    }
+}
+
 /// ADMIN-ONLY public.sock verb: read the editable guest config working copy of
-/// `vm` over the authenticated guest-control bridge and return it as a base64
+/// `vm` over the authenticated ComponentSession config service and return it as a base64
 /// string. The admin authorization gate runs in `dispatch_request` BEFORE this
-/// handler. The orchestration runs on a dedicated OS thread (the
-/// synchronous-verb runtime boundary). The encoded payload is bounded so it fits both transport frames;
+/// handler. The encoded payload is bounded so it fits both transport frames;
 /// any guest content is never echoed into an error.
 fn dispatch_read_guest_config(
     state: &ServerState,
     caller_role: BrokerCallerRole,
     request: public_wire::ReadGuestConfigRequest,
 ) -> Result<Value, TypedError> {
-    ensure_vm_runtime_capability(
-        state,
-        &request.vm,
-        RuntimeCapabilityGate::ConfigSync,
-        "config sync",
-    )?;
-    ensure_vm_runtime_capability(
-        state,
-        &request.vm,
-        RuntimeCapabilityGate::GuestControl,
-        "read guest config",
-    )?;
-    let resolver = load_bundle_resolver(state)?;
-    let params =
-        resolve_guest_control_probe_params(state, &resolver, &request.vm).map_err(|detail| {
-            tracing::warn!(
-                kind = "critical",
-                subsystem = "guest-control-health",
-                error_kind = "transport-io",
-                "guest-control config read: probe params unresolved: {detail}"
-            );
-            TypedError::GuestControlReadFailed {
-                kind: d2bd_runtime::typed_error::GuestControlReadErrorKind::Transport,
-            }
-        })?;
-    let broker_path = broker_socket_path(state);
-    let bytes = guest_control_bridge::run_config_read_on_dedicated_thread(
-        params,
-        broker_path,
+    if !matches!(
         caller_role,
-        guest_control_bridge::GUEST_CONTROL_CONFIG_READ_TIMEOUT,
+        BrokerCallerRole::AdminUid { .. } | BrokerCallerRole::RootUid { .. }
+    ) {
+        return Err(TypedError::AuthzNotAdmin {
+            verb: "read guest config".to_owned(),
+        });
+    }
+    let zone = d2bd_runtime::zone_authority::authoritative_zone_for_vm(
+        &state.zone_coordinator,
+        &request.vm,
     )
-    .map_err(guest_control_bridge::map_guest_file_read_error)?;
+    .map_err(|_| TypedError::GuestControlReadFailed {
+        kind: d2bd_runtime::typed_error::GuestControlReadErrorKind::AuthFailed,
+    })?;
+    let response = read_guest_config_typed(state, &zone, &request.vm)?;
+    let bytes = response.document().map_err(|_| TypedError::GuestControlReadFailed {
+        kind: d2bd_runtime::typed_error::GuestControlReadErrorKind::Protocol,
+    })?;
+    let bytes = bytes.bytes().to_vec();
     let encoded = d2b_core::base64_codec::encode(&bytes);
     if !d2b_contracts_control::guest_wire::guest_config_encoded_within_frame_caps(encoded.len()) {
         return Err(TypedError::GuestControlReadFailed {
@@ -15390,7 +16157,9 @@ impl VmStartRunner<'_> {
                 provider_identity: None,
                 template_identity: None,
                 generation: None,
+                activation_input: None,
                 sandbox_plan: None,
+                guest_execution: None,
                 role: runner_role,
                 bundle_runner_intent_ref: BundleOpId::new(intent.intent_id.clone()),
                 runtime_allocations: vec![],
@@ -15588,56 +16357,49 @@ impl VmStartRunner<'_> {
         }
     }
 
-    /// State-aware readiness for a `GuestControlHealth` node. Resolves the
-    /// per-VM probe parameters from the trusted bundle and runs the
-    /// authenticated Health probe on a dedicated current-thread runtime
-    /// inside `spawn_blocking` (a strict runtime boundary: no `Handle::current`,
-    /// `block_in_place`, or nested runtime; nothing borrowed from
-    /// `ServerState` crosses the boundary). The retry loop is bounded by
-    /// `budget.readiness`; `guest_control_health_ready` decides ready.
-    async fn wait_for_guest_control_health(
+    /// State-aware readiness for the Guest session node. Readiness is the
+    /// authenticated ComponentSession; no Guest-local Endpoint projection,
+    /// feature health RPC, or legacy guest-control probe participates.
+    async fn wait_for_guest_component_session(
         &self,
         vm: &str,
         node: &ProcessNode,
         budget: d2bd_runtime::supervisor::dag::NodeBudget,
     ) -> Result<(), String> {
-        let params = resolve_guest_control_probe_params(self.state, self.resolver, vm)?;
-        let broker_path = broker_socket_path(self.state);
-        let caller_role = self.caller_role.clone();
-        let deadline = budget.readiness;
+        let deadline = Instant::now() + budget.readiness;
         let node_id = node.id.0.clone();
-        let run = tokio::task::spawn_blocking(move || {
-            let probe = guest_control_bridge::RealGuestControlProbe::with_caller_role(
-                broker_path,
-                caller_role,
-            );
-            let clock = guest_control_bridge::RealProbeClock::new();
-            guest_control_bridge::run_guest_control_readiness_loop(
-                &probe,
-                &params,
-                deadline,
-                guest_control_bridge::GUEST_CONTROL_ATTEMPT_CAP,
-                guest_control_bridge::GUEST_CONTROL_RETRY_BACKOFF,
-                &clock,
+        loop {
+            let remaining = deadline.saturating_duration_since(Instant::now());
+            if remaining.is_zero() {
+                return Err(format!("guest-component-session-not-ready:{node_id}"));
+            }
+            let attempt = tokio::time::timeout(
+                remaining.min(
+                    d2bd_runtime::guest_component_session::COMPONENT_SESSION_ATTEMPT_CAP,
+                ),
+                connect_guest_component_session_fresh(self.state, vm),
             )
-        })
-        .await
-        .map_err(|error| format!("guest-control-readiness-join:{error}"))?;
-
-        let ready = d2bd_runtime::guest_control_health::guest_control_health_ready(&run.outcome);
-        let obs = guest_control_bridge::ReadinessObservation::from_run(&run);
-        guest_control_bridge::emit_guest_control_readiness_event(&obs, ready);
-
-        if ready {
-            tracing::info!(
-                vm = %vm,
-                node = %node_id,
-                role_id = %tracked_role_id(node),
-                "guest-control-health node ready"
-            );
-            Ok(())
-        } else {
-            Err(format!("guest-control-health-not-ready:{node_id}"))
+            .await;
+            match attempt {
+                Ok(Ok(_session)) => {
+                    tracing::info!(
+                        vm = %vm,
+                        node = %node_id,
+                        role_id = %tracked_role_id(node),
+                        "Guest ComponentSession authenticated and ready"
+                    );
+                    return Ok(());
+                }
+                _ => {
+                    invalidate_guest_component_session(self.state, vm).await;
+                }
+            }
+            let delay = d2bd_runtime::guest_component_session::COMPONENT_SESSION_RETRY_BACKOFF
+                .min(deadline.saturating_duration_since(Instant::now()));
+            if delay.is_zero() {
+                return Err(format!("guest-component-session-not-ready:{node_id}"));
+            }
+            tokio::time::sleep(delay).await;
         }
     }
 }
@@ -15651,13 +16413,13 @@ impl d2bd_runtime::supervisor::dag::NodeRunner for VmStartRunner<'_> {
         readiness: &[ReadinessPredicate],
         budget: d2bd_runtime::supervisor::dag::NodeBudget,
     ) -> Result<(), String> {
-        // The authenticated guest-control Health node is readiness-only but
+        // The authenticated Guest ComponentSession node is readiness-only but
         // needs daemon state (per-VM vsock socket, peer credentials, the
         // broker-backed signer), so it cannot go through the stateless
         // `wait_for_readiness` path. Intercept it here; this also covers the
         // `spawn_and_check_process_alive` fall-through, which delegates here.
         if node.role == ProcessRole::GuestControlHealth {
-            return self.wait_for_guest_control_health(vm, node, budget).await;
+            return self.wait_for_guest_component_session(vm, node, budget).await;
         }
         if node.role == ProcessRole::SecurityKeyFrontend {
             // Security-key relay/frontend ownership belongs to the
@@ -15914,6 +16676,7 @@ fn signal_unregistered_spawned_runner(
         expected_start_time_ticks: Some(response.start_time_ticks),
         resource_ref: None,
         resource_uid: None,
+        guest_execution: None,
         tracing_span_id: None,
     });
     match dispatch_broker_request_as(state, request, caller_role) {
@@ -16512,6 +17275,10 @@ fn infer_runner_role_for_vm_stop(role_id: &str) -> Option<RunnerRole> {
         || role_id.contains("otel_host_bridge")
     {
         Some(RunnerRole::OtelHostBridge)
+    } else if role_id == RunnerRole::ActivationNixos.as_str()
+        || role_id.contains("activation-nixos")
+    {
+        Some(RunnerRole::ActivationNixos)
     } else {
         None
     }
@@ -16536,6 +17303,7 @@ fn vm_stop_role_priority(role: Option<RunnerRole>) -> u8 {
         Some(RunnerRole::Swtpm) => 6,
         Some(RunnerRole::Virtiofsd) => 7,
         Some(RunnerRole::SwtpmFlush) => 8,
+        Some(RunnerRole::ActivationNixos) => 9,
         None => 9,
     }
 }
@@ -16623,6 +17391,7 @@ fn signal_via_broker(
         expected_start_time_ticks: registration.as_ref().map(|entry| entry.start_time_ticks),
         resource_ref: None,
         resource_uid: None,
+        guest_execution: None,
         tracing_span_id: None,
     });
     match dispatch_broker_request_as(state, request, caller_role) {
@@ -16689,6 +17458,7 @@ fn deregister_runner_pidfd_via_broker(
             .map(|entry| entry.start_time_ticks),
         resource_ref: None,
         resource_uid: None,
+        guest_execution: None,
         tracing_span_id: None,
     });
     match dispatch_broker_request_as(state, request, caller_role) {
@@ -20225,7 +20995,9 @@ fn dispatch_broker_run_migrate_as(
     }
 }
 
+#[cfg(test)]
 const GUEST_SYSTEM_ACTIVATION_REJOIN_GRACE: Duration = Duration::from_secs(60);
+#[cfg(test)]
 const GUEST_SYSTEM_ACTIVATION_START_DEADLINE: Duration = Duration::from_secs(15);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -20325,6 +21097,7 @@ fn stage_configuration_ordinal(
         .stage_configuration_ordinal(zone, ordinal)
 }
 
+#[cfg(test)]
 fn commit_configuration_ordinal(
     state: &ServerState,
     zone: &ZoneId,
@@ -20336,6 +21109,7 @@ fn commit_configuration_ordinal(
         .commit_configuration_ordinal(zone)
 }
 
+#[cfg(test)]
 fn abort_configuration_ordinal(state: &ServerState, zone: &ZoneId) -> Result<(), CoordinatorError> {
     state
         .zone_coordinator
@@ -20352,6 +21126,7 @@ fn activation_marker_path(state: &ServerState, vm: &str) -> PathBuf {
     activation_marker_dir(state).join(format!("{vm}.json"))
 }
 
+#[cfg(test)]
 fn now_unix_secs() -> u64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -20359,6 +21134,7 @@ fn now_unix_secs() -> u64 {
         .as_secs()
 }
 
+#[cfg(test)]
 fn generate_activation_id() -> Result<String, TypedError> {
     let mut bytes = [0u8; 16];
     getrandom::getrandom(&mut bytes).map_err(|err| TypedError::InternalIo {
@@ -20388,6 +21164,7 @@ fn generate_activation_id() -> Result<String, TypedError> {
     ))
 }
 
+#[cfg(test)]
 fn switch_script_basename(path: &str) -> String {
     Path::new(path)
         .parent()
@@ -20398,12 +21175,14 @@ fn switch_script_basename(path: &str) -> String {
         .to_owned()
 }
 
+#[cfg(test)]
 fn switch_script_digest(path: &str) -> String {
     let mut hasher = Sha256::new();
     hasher.update(path.as_bytes());
     format!("{:x}", hasher.finalize())
 }
 
+#[cfg(test)]
 fn build_activation_marker(
     vm: &str,
     mode: BrokerActivationMode,
@@ -20427,6 +21206,7 @@ fn build_activation_marker(
     }
 }
 
+#[cfg(test)]
 fn write_activation_marker_blocking(
     path: &Path,
     marker: &HostActivationPendingMarker,
@@ -20448,6 +21228,7 @@ fn write_activation_marker_blocking(
     Ok(())
 }
 
+#[cfg(test)]
 fn write_activation_marker(
     state: &ServerState,
     marker: &HostActivationPendingMarker,
@@ -20466,6 +21247,7 @@ fn write_activation_marker(
         })
 }
 
+#[cfg(test)]
 fn clear_activation_marker(state: &ServerState, vm: &str) {
     let path = activation_marker_path(state, vm);
     let dir = activation_marker_dir(state);
@@ -20603,6 +21385,7 @@ fn activation_mode_label(mode: BrokerActivationMode) -> &'static str {
     }
 }
 
+#[cfg(test)]
 fn activation_guest_mode(
     mode: BrokerActivationMode,
 ) -> d2bd_runtime::guest_control_health::GuestSystemActivationMode {
@@ -20619,6 +21402,7 @@ fn activation_guest_mode(
 }
 
 #[derive(Debug, Clone)]
+#[cfg(test)]
 struct GuestActivationPlan {
     vm: String,
     mode: BrokerActivationMode,
@@ -20627,6 +21411,7 @@ struct GuestActivationPlan {
 }
 
 #[derive(Debug, Clone)]
+#[cfg(test)]
 enum GuestActivationTerminal {
     Succeeded,
     DefinitiveFailure {
@@ -20637,6 +21422,7 @@ enum GuestActivationTerminal {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[cfg(test)]
 enum GuestActivationFailureRemediation {
     GuestJournal,
     UpgradeGuest,
@@ -20667,6 +21453,7 @@ fn test_guest_activation_hook_installed() -> bool {
     false
 }
 
+#[cfg(test)]
 fn guest_activation_error_summary(
     error: &d2bd_runtime::guest_control_health::GuestSystemActivationError,
 ) -> String {
@@ -20691,6 +21478,7 @@ fn guest_activation_error_summary(
     }
 }
 
+#[cfg(test)]
 fn guest_activation_failure_remediation(
     error: &d2bd_runtime::guest_control_health::GuestSystemActivationError,
 ) -> GuestActivationFailureRemediation {
@@ -20702,6 +21490,7 @@ fn guest_activation_failure_remediation(
     }
 }
 
+#[cfg(test)]
 fn guest_activation_error_is_indeterminate(
     error: &d2bd_runtime::guest_control_health::GuestSystemActivationError,
 ) -> bool {
@@ -20719,6 +21508,7 @@ fn guest_activation_error_is_indeterminate(
     )
 }
 
+#[cfg(test)]
 fn guest_activation_error_is_not_found(
     error: &d2bd_runtime::guest_control_health::GuestSystemActivationError,
 ) -> bool {
@@ -20730,6 +21520,7 @@ fn guest_activation_error_is_not_found(
     )
 }
 
+#[cfg(test)]
 fn run_guest_system_activation(
     state: &ServerState,
     params: Option<guest_control_bridge::ProbeParams>,
@@ -20815,6 +21606,7 @@ fn run_guest_system_activation(
     )
 }
 
+#[cfg(test)]
 fn rejoin_guest_activation_status(
     state: &ServerState,
     params: guest_control_bridge::ProbeParams,
@@ -20868,6 +21660,7 @@ fn rejoin_guest_activation_status(
     }
 }
 
+#[cfg(test)]
 fn guest_activation_state_to_terminal(
     status: d2bd_runtime::guest_control_health::GuestSystemActivationStatus,
 ) -> GuestActivationTerminal {
@@ -20901,6 +21694,7 @@ fn guest_activation_state_to_terminal(
     }
 }
 
+#[cfg(test)]
 fn activation_state_label(state: pb::GuestActivationState) -> &'static str {
     match state {
         pb::GuestActivationState::GUEST_ACTIVATION_STATE_RUNNING => "running",
@@ -20943,7 +21737,270 @@ fn dispatch_broker_activation(
         );
     }
 
+    #[cfg(not(test))]
+    {
+        return dispatch_live_guest_activation_resource(state, request, verb, mode);
+    }
+    #[cfg(test)]
     dispatch_live_guest_activation(state, request, verb, mode, caller_role, None)
+}
+
+#[cfg(not(test))]
+fn dispatch_live_guest_activation_resource(
+    state: &ServerState,
+    request: public_wire::ActivationRequest,
+    verb: &'static str,
+    mode: BrokerActivationMode,
+) -> Result<Value, TypedError> {
+    if mode != BrokerActivationMode::Rollback && request.to_generation.is_some() {
+        return Ok(invalid_request_response_with_summary(
+            verb,
+            "a target generation is valid only for rollback".to_owned(),
+            "omit --to-generation for switch, test, and boot activation".to_owned(),
+        ));
+    }
+    let guard = match try_acquire_activation_lock(state, &request.vm) {
+        Ok(guard) => guard,
+        Err(frame) => return Ok(frame),
+    };
+    let zone = guard.zone().clone();
+    let resolver = load_bundle_resolver(state)?;
+    let plane = state
+        .resource_plane
+        .lock()
+        .map_err(|_| TypedError::InternalConfig {
+            detail: "resource plane unavailable".to_owned(),
+        })?
+        .clone()
+        .ok_or_else(|| TypedError::InternalConfig {
+            detail: "resource plane unavailable".to_owned(),
+        })?;
+    let runtime = plane
+        .zone(&zone)
+        .map_err(|_| TypedError::InternalConfig {
+            detail: "activation Zone runtime unavailable".to_owned(),
+        })?;
+    let guest_ref_text = format!("Guest/{}", request.vm);
+    let guest_ref = ResourceRef::parse(&guest_ref_text).map_err(|_| {
+        TypedError::InternalConfig {
+            detail: "activation Guest reference invalid".to_owned(),
+        }
+    })?;
+    let guest_ref_canonical = guest_ref.to_canonical_string();
+    let get_guest = json!({
+        "zoneRef": format!("Zone/{}", zone.as_str()),
+        "service": "d2b.resource.v3",
+        "method": "Get",
+        "resourceRef": guest_ref_canonical,
+    });
+    let guest = block_on_future(runtime.dispatch_cli_request(&get_guest)).map_err(|_| {
+        TypedError::InternalConfig {
+            detail: "activation Guest resource unavailable".to_owned(),
+        }
+    })?;
+    if guest.get("kind").is_some() {
+        return Err(TypedError::InternalConfig {
+            detail: "activation Guest resource unavailable".to_owned(),
+        });
+    }
+    let (ordinal, artifact) = if mode == BrokerActivationMode::Rollback {
+        let target_ordinal = request.to_generation.ok_or_else(|| {
+            TypedError::InternalConfig {
+                detail: "rollback target generation unavailable".to_owned(),
+            }
+        })?;
+        let list = json!({
+            "zoneRef": format!("Zone/{}", zone.as_str()),
+            "service": "d2b.resource.v3",
+            "method": "List",
+            "resourceType": NIXOS_GENERATION_RESOURCE_TYPE,
+            "executionRef": guest_ref.to_canonical_string(),
+            "limit": 256,
+        });
+        let resources = block_on_future(runtime.dispatch_cli_request(&list)).map_err(|_| {
+            TypedError::InternalConfig {
+                detail: "rollback generations unavailable".to_owned(),
+            }
+        })?;
+        let artifact = resources
+            .get("resources")
+            .and_then(Value::as_array)
+            .into_iter()
+            .flatten()
+            .find(|resource| {
+                resource
+                    .get("spec")
+                    .and_then(|spec| spec.get("executionRef"))
+                    .and_then(Value::as_str)
+                        == Some(guest_ref_canonical.as_str())
+                    && resource
+                        .pointer("/metadata/name")
+                        .and_then(Value::as_str)
+                        .and_then(|name| name.rsplit('-').next())
+                        .and_then(|value| value.parse::<u64>().ok())
+                        == Some(target_ordinal)
+            })
+            .and_then(|resource| {
+                resource
+                    .pointer("/spec/systemArtifactId")
+                    .and_then(Value::as_str)
+            })
+            .ok_or_else(|| TypedError::InternalConfig {
+                detail: "rollback target generation is not retained".to_owned(),
+            })?;
+        (target_ordinal, artifact.to_owned())
+    } else {
+        let activation = resolver
+            .find_activation_intent(&intent_id_activation(&request.vm))
+            .ok_or_else(|| TypedError::InternalConfig {
+                detail: "activation intent unavailable".to_owned(),
+            })?;
+        let ordinal = activation
+            .generation_number
+            .filter(|generation| *generation > 0)
+            .ok_or_else(|| TypedError::InternalConfig {
+                detail: "activation generation unavailable".to_owned(),
+            })?;
+        let artifact = guest
+            .pointer("/spec/systemArtifactId")
+            .and_then(Value::as_str)
+            .ok_or_else(|| TypedError::InternalConfig {
+                detail: "activation system artifact unavailable".to_owned(),
+            })?;
+        (ordinal, artifact.to_owned())
+    };
+    let generation_name = activation_generation_name(&request.vm, ordinal, mode);
+    let generation_ref = format!("{NIXOS_GENERATION_RESOURCE_TYPE}/{generation_name}");
+    let spec = json!({
+        "providerRef": "Provider/activation-nixos",
+        "executionRef": guest_ref_canonical,
+        "systemArtifactId": artifact,
+        "activationMode": resource_activation_mode_label(mode),
+    });
+    let create = json!({
+        "zoneRef": format!("Zone/{}", zone.as_str()),
+        "service": "d2b.resource.v3",
+        "method": "Create",
+        "resourceType": NIXOS_GENERATION_RESOURCE_TYPE,
+        "resourceName": generation_name,
+        "spec": spec,
+        "waitForReconcile": false,
+    });
+    let created = block_on_future(runtime.dispatch_cli_request(&create)).map_err(|_| {
+        TypedError::InternalConfig {
+            detail: "activation resource create failed".to_owned(),
+        }
+    })?;
+    if created
+        .get("kind")
+        .and_then(Value::as_str)
+        .is_some_and(|kind| kind != "resource-already-exists")
+    {
+        return Err(TypedError::InternalConfig {
+            detail: "activation resource create refused".to_owned(),
+        });
+    }
+    let deadline = Instant::now() + live_activation_timeout_for(state, &request.vm);
+    loop {
+        if Instant::now() >= deadline {
+            return Ok(broker_failure_response(
+                verb,
+                format!("activation resource for vm '{}' timed out", request.vm),
+                format!("retry `d2b {verb} {} --apply` after the Guest session recovers", request.vm),
+                None,
+            ));
+        }
+        let get = json!({
+            "zoneRef": format!("Zone/{}", zone.as_str()),
+            "service": "d2b.resource.v3",
+            "method": "Get",
+            "resourceRef": generation_ref,
+        });
+        let current = block_on_future(runtime.dispatch_cli_request(&get)).map_err(|_| {
+            TypedError::InternalConfig {
+                detail: "activation resource status unavailable".to_owned(),
+            }
+        })?;
+        let current_spec = current.get("spec");
+        if current_spec
+            .and_then(|spec| spec.get("executionRef"))
+            != spec.get("executionRef")
+            || current_spec
+                .and_then(|spec| spec.get("systemArtifactId"))
+                != spec.get("systemArtifactId")
+            || current_spec
+                .and_then(|spec| spec.get("activationMode"))
+                != spec.get("activationMode")
+        {
+            return Ok(invalid_request_response_with_summary(
+                verb,
+                format!(
+                    "activation resource '{}' is bound to a different immutable target",
+                    generation_ref
+                ),
+                "inspect the existing NixosGeneration resource and retry with its committed activation mode"
+                    .to_owned(),
+            ));
+        }
+        match current.pointer("/status/phase").and_then(Value::as_str) {
+            Some("Ready") | Some("Succeeded") => {
+                return Ok(applied_response(
+                    verb,
+                    format!(
+                        "d2b {verb} --apply reconciled activation resource for vm '{}' through the Resource API",
+                        request.vm
+                    ),
+                ));
+            }
+            Some("Failed") | Some("Degraded") => {
+                return Ok(broker_failure_response(
+                    verb,
+                    format!("activation resource for vm '{}' failed", request.vm),
+                    "inspect the typed activation resource status before retrying".to_owned(),
+                    None,
+                ));
+            }
+            _ => std::thread::sleep(Duration::from_millis(250)),
+        }
+    }
+}
+
+#[cfg(not(test))]
+fn activation_generation_name(vm: &str, ordinal: u64, mode: BrokerActivationMode) -> String {
+    let suffix = match mode {
+        BrokerActivationMode::Switch => "gen",
+        BrokerActivationMode::Boot => "boot",
+        BrokerActivationMode::Test => "test",
+        BrokerActivationMode::Rollback => "rollback",
+    };
+    let readable = format!("{vm}--{suffix}-{ordinal}");
+    if ResourceName::parse(readable.clone()).is_ok() {
+        return readable;
+    }
+    let mut digest = Sha256::new();
+    digest.update(b"d2b-activation-generation-v1");
+    digest.update([0]);
+    digest.update(vm.as_bytes());
+    digest.update([0]);
+    digest.update(suffix.as_bytes());
+    digest.update(ordinal.to_be_bytes());
+    let suffix = digest
+        .finalize()
+        .iter()
+        .take(12)
+        .map(|byte| format!("{byte:02x}"))
+        .collect::<String>();
+    format!("activation-gen-{suffix}")
+}
+
+#[cfg(not(test))]
+const fn resource_activation_mode_label(mode: BrokerActivationMode) -> &'static str {
+    match mode {
+        BrokerActivationMode::Switch => "switch",
+        BrokerActivationMode::Boot => "boot",
+        BrokerActivationMode::Test => "test",
+        BrokerActivationMode::Rollback => "switch",
+    }
 }
 
 fn dispatch_run_activation_phase(
@@ -21076,6 +22133,7 @@ fn dispatch_broker_activation_metadata_only(
     ))
 }
 
+#[cfg(test)]
 fn dispatch_live_guest_activation(
     state: &ServerState,
     request: public_wire::ActivationRequest,
@@ -22509,6 +23567,9 @@ mod public_status_tests {
             interaction_listeners: Arc::new(Mutex::new(None)),
             typed_shell_session_targets: d2bd_runtime::typed_shell_targets::new_cache(),
             zone_coordinator: d2bd_runtime::zone_authority::new_coordinator(),
+            config_staging: Arc::new(Mutex::new(Default::default())),
+            guest_component_sessions: Arc::new(tokio::sync::Mutex::new(HashMap::new())),
+        guest_component_session_locks: Arc::new(tokio::sync::Mutex::new(HashMap::new())),
             security_key_sessions: Arc::new(parking_lot::Mutex::new(
                 crate::security_key::SkSessionTable::default(),
             )),
@@ -25351,6 +26412,9 @@ mod detached_exec_routing_tests {
             interaction_listeners: Arc::new(Mutex::new(None)),
             typed_shell_session_targets: d2bd_runtime::typed_shell_targets::new_cache(),
             zone_coordinator: d2bd_runtime::zone_authority::new_coordinator(),
+            config_staging: Arc::new(Mutex::new(Default::default())),
+            guest_component_sessions: Arc::new(tokio::sync::Mutex::new(HashMap::new())),
+        guest_component_session_locks: Arc::new(tokio::sync::Mutex::new(HashMap::new())),
             security_key_sessions: Arc::new(parking_lot::Mutex::new(
                 crate::security_key::SkSessionTable::default(),
             )),
@@ -26099,6 +27163,9 @@ mod accept_loop_concurrency_tests {
             interaction_listeners: Arc::new(Mutex::new(None)),
             typed_shell_session_targets: d2bd_runtime::typed_shell_targets::new_cache(),
             zone_coordinator: d2bd_runtime::zone_authority::new_coordinator(),
+            config_staging: Arc::new(Mutex::new(Default::default())),
+            guest_component_sessions: Arc::new(tokio::sync::Mutex::new(HashMap::new())),
+        guest_component_session_locks: Arc::new(tokio::sync::Mutex::new(HashMap::new())),
             security_key_sessions: Arc::new(parking_lot::Mutex::new(
                 crate::security_key::SkSessionTable::default(),
             )),
@@ -26693,7 +27760,7 @@ mod accept_loop_concurrency_tests {
 
 #[cfg(test)]
 mod broker_dispatch_tests {
-    use std::collections::VecDeque;
+    use std::collections::{HashMap, VecDeque};
     use std::fs::File;
     use std::io::{self, IoSlice, Read, Write};
     use std::net::TcpListener;
@@ -26846,6 +27913,9 @@ mod broker_dispatch_tests {
             interaction_listeners: Arc::new(Mutex::new(None)),
             typed_shell_session_targets: d2bd_runtime::typed_shell_targets::new_cache(),
             zone_coordinator: d2bd_runtime::zone_authority::new_coordinator(),
+            config_staging: Arc::new(Mutex::new(Default::default())),
+            guest_component_sessions: Arc::new(tokio::sync::Mutex::new(HashMap::new())),
+        guest_component_session_locks: Arc::new(tokio::sync::Mutex::new(HashMap::new())),
             security_key_sessions: Arc::new(parking_lot::Mutex::new(
                 crate::security_key::SkSessionTable::default(),
             )),
@@ -26895,6 +27965,9 @@ mod broker_dispatch_tests {
             interaction_listeners: Arc::new(Mutex::new(None)),
             typed_shell_session_targets: d2bd_runtime::typed_shell_targets::new_cache(),
             zone_coordinator: d2bd_runtime::zone_authority::new_coordinator(),
+            config_staging: Arc::new(Mutex::new(Default::default())),
+            guest_component_sessions: Arc::new(tokio::sync::Mutex::new(HashMap::new())),
+        guest_component_session_locks: Arc::new(tokio::sync::Mutex::new(HashMap::new())),
             security_key_sessions: Arc::new(parking_lot::Mutex::new(
                 crate::security_key::SkSessionTable::default(),
             )),
@@ -28039,6 +29112,7 @@ mod broker_dispatch_tests {
                 "switch",
                 d2bd_runtime::wire::Request::Switch(ActivationRequest {
                     vm: "vm-a".to_owned(),
+                    to_generation: None,
                     flags: MutationFlags {
                         dry_run: true,
                         ..MutationFlags::default()
@@ -28049,6 +29123,7 @@ mod broker_dispatch_tests {
                 "boot",
                 d2bd_runtime::wire::Request::Boot(ActivationRequest {
                     vm: "vm-a".to_owned(),
+                    to_generation: None,
                     flags: MutationFlags {
                         dry_run: true,
                         ..MutationFlags::default()
@@ -28059,6 +29134,7 @@ mod broker_dispatch_tests {
                 "test",
                 d2bd_runtime::wire::Request::Test(ActivationRequest {
                     vm: "vm-a".to_owned(),
+                    to_generation: None,
                     flags: MutationFlags {
                         dry_run: true,
                         ..MutationFlags::default()
@@ -28069,6 +29145,7 @@ mod broker_dispatch_tests {
                 "rollback",
                 d2bd_runtime::wire::Request::Rollback(ActivationRequest {
                     vm: "vm-a".to_owned(),
+                    to_generation: None,
                     flags: MutationFlags {
                         dry_run: true,
                         ..MutationFlags::default()
@@ -28460,6 +29537,7 @@ mod broker_dispatch_tests {
             &state,
             ActivationRequest {
                 vm: "vm-a".to_owned(),
+                to_generation: None,
                 flags: MutationFlags {
                     apply: true,
                     ..MutationFlags::default()
@@ -28476,6 +29554,7 @@ mod broker_dispatch_tests {
             &test_state_with_broker_socket(unreachable_broker_socket_path("boot-unreachable")),
             ActivationRequest {
                 vm: "vm-a".to_owned(),
+                to_generation: None,
                 flags: MutationFlags {
                     apply: true,
                     ..MutationFlags::default()
@@ -28498,6 +29577,7 @@ mod broker_dispatch_tests {
             &state,
             ActivationRequest {
                 vm: "vm-a".to_owned(),
+                to_generation: None,
                 flags: MutationFlags {
                     apply: true,
                     ..MutationFlags::default()
@@ -28520,6 +29600,7 @@ mod broker_dispatch_tests {
             &state,
             ActivationRequest {
                 vm: "vm-a".to_owned(),
+                to_generation: None,
                 flags: MutationFlags {
                     apply: true,
                     ..MutationFlags::default()
@@ -28564,6 +29645,7 @@ mod broker_dispatch_tests {
             &state,
             ActivationRequest {
                 vm: "vm-a".to_owned(),
+                to_generation: None,
                 flags: MutationFlags {
                     apply: true,
                     ..MutationFlags::default()
@@ -28621,6 +29703,7 @@ mod broker_dispatch_tests {
             &state,
             ActivationRequest {
                 vm: "vm-a".to_owned(),
+                to_generation: None,
                 flags: MutationFlags {
                     apply: true,
                     ..MutationFlags::default()
@@ -28661,6 +29744,7 @@ mod broker_dispatch_tests {
             &state,
             ActivationRequest {
                 vm: "vm-a".to_owned(),
+                to_generation: None,
                 flags: MutationFlags {
                     apply: true,
                     ..MutationFlags::default()
@@ -28734,6 +29818,7 @@ mod broker_dispatch_tests {
             &state,
             ActivationRequest {
                 vm: "vm-a".to_owned(),
+                to_generation: None,
                 flags: MutationFlags {
                     apply: true,
                     ..MutationFlags::default()
@@ -28773,6 +29858,7 @@ mod broker_dispatch_tests {
             &state,
             ActivationRequest {
                 vm: "vm-a".to_owned(),
+                to_generation: None,
                 flags: MutationFlags {
                     apply: true,
                     ..MutationFlags::default()
@@ -28804,6 +29890,7 @@ mod broker_dispatch_tests {
             &state,
             ActivationRequest {
                 vm: "vm-a".to_owned(),
+                to_generation: None,
                 flags: MutationFlags {
                     apply: true,
                     ..MutationFlags::default()
@@ -28846,6 +29933,7 @@ mod broker_dispatch_tests {
             &state,
             ActivationRequest {
                 vm: "vm-a".to_owned(),
+                to_generation: None,
                 flags: MutationFlags {
                     apply: true,
                     ..MutationFlags::default()
@@ -29044,6 +30132,9 @@ mod broker_dispatch_tests {
             interaction_listeners: Arc::new(Mutex::new(None)),
             typed_shell_session_targets: d2bd_runtime::typed_shell_targets::new_cache(),
             zone_coordinator: d2bd_runtime::zone_authority::new_coordinator(),
+            config_staging: Arc::new(Mutex::new(Default::default())),
+            guest_component_sessions: Arc::new(tokio::sync::Mutex::new(HashMap::new())),
+        guest_component_session_locks: Arc::new(tokio::sync::Mutex::new(HashMap::new())),
             security_key_sessions: Arc::new(parking_lot::Mutex::new(
                 crate::security_key::SkSessionTable::default(),
             )),
@@ -29084,6 +30175,7 @@ mod broker_dispatch_tests {
                     execution_ref: None,
                     execution_domain: None,
                     user_ref: None,
+                    guest_execution: None,
                     provider_identity: None,
                     template_identity: None,
                     generation: None,
@@ -29291,6 +30383,9 @@ mod broker_dispatch_tests {
             interaction_listeners: Arc::new(Mutex::new(None)),
             typed_shell_session_targets: d2bd_runtime::typed_shell_targets::new_cache(),
             zone_coordinator: d2bd_runtime::zone_authority::new_coordinator(),
+            config_staging: Arc::new(Mutex::new(Default::default())),
+            guest_component_sessions: Arc::new(tokio::sync::Mutex::new(HashMap::new())),
+        guest_component_session_locks: Arc::new(tokio::sync::Mutex::new(HashMap::new())),
             security_key_sessions: Arc::new(parking_lot::Mutex::new(
                 crate::security_key::SkSessionTable::default(),
             )),
@@ -29378,6 +30473,7 @@ mod broker_dispatch_tests {
                         execution_ref: None,
                         execution_domain: None,
                         user_ref: None,
+                        guest_execution: None,
                         provider_identity: None,
                         template_identity: None,
                         generation: None,
@@ -29568,6 +30664,9 @@ mod broker_dispatch_tests {
             interaction_listeners: Arc::new(Mutex::new(None)),
             typed_shell_session_targets: d2bd_runtime::typed_shell_targets::new_cache(),
             zone_coordinator: d2bd_runtime::zone_authority::new_coordinator(),
+            config_staging: Arc::new(Mutex::new(Default::default())),
+            guest_component_sessions: Arc::new(tokio::sync::Mutex::new(HashMap::new())),
+        guest_component_session_locks: Arc::new(tokio::sync::Mutex::new(HashMap::new())),
             security_key_sessions: Arc::new(parking_lot::Mutex::new(
                 crate::security_key::SkSessionTable::default(),
             )),
@@ -30457,6 +31556,7 @@ mod broker_dispatch_tests {
                 execution_ref: None,
                 execution_domain: None,
                 user_ref: None,
+                guest_execution: None,
                 provider_identity: None,
                 template_identity: None,
                 generation: None,
@@ -31490,6 +32590,9 @@ mod broker_dispatch_tests {
             interaction_listeners: Arc::new(Mutex::new(None)),
             typed_shell_session_targets: d2bd_runtime::typed_shell_targets::new_cache(),
             zone_coordinator: d2bd_runtime::zone_authority::new_coordinator(),
+            config_staging: Arc::new(Mutex::new(Default::default())),
+            guest_component_sessions: Arc::new(tokio::sync::Mutex::new(HashMap::new())),
+        guest_component_session_locks: Arc::new(tokio::sync::Mutex::new(HashMap::new())),
             security_key_sessions: Arc::new(parking_lot::Mutex::new(
                 crate::security_key::SkSessionTable::default(),
             )),
@@ -31636,7 +32739,7 @@ mod broker_dispatch_tests {
         let result = readiness_predicate_ready(&predicate);
         assert_eq!(
             result,
-            Err("guest-control-health-needs-state-aware-path".to_owned()),
+            Err("guest-component-session-needs-state-aware-path".to_owned()),
             "stateless guest-control readiness MUST be a loud Err so a routing regression cannot masquerade as a benign never-ready"
         );
     }
@@ -32467,7 +33570,7 @@ mod broker_dispatch_tests {
     fn read_guest_config_dispatch_denies_launcher_before_any_side_effect() {
         // The broker socket is unreachable. If the admin gate did NOT
         // short-circuit, dispatch_read_guest_config would load the bundle
-        // resolver, resolve probe params, BrokerSign, and read guest bytes -
+        // resolver, establish ComponentSession, and read guest bytes -
         // producing a transport / broker error, never AuthzNotAdmin.
         // Receiving AuthzNotAdmin proves the launcher was denied at the gate
         // BEFORE any bundle load / probe / sign / guest-byte read.
@@ -32493,8 +33596,8 @@ mod broker_dispatch_tests {
     #[test]
     fn read_guest_config_dispatch_admin_clears_gate_and_reaches_handler() {
         // The admin peer clears the authz gate, so dispatch reaches the
-        // handler and fails LATER (the bundle vm has no guest-control node /
-        // the broker is unreachable) with a guest-control read or transport
+        // handler and fails LATER (the bundle vm has no config capability /
+        // the broker is unreachable) with a ComponentSession read or transport
         // error - never an authz error. This proves the gate is the only
         // thing denying the launcher above, not some unrelated failure.
         let state = test_state_with_broker_socket(unreachable_broker_socket_path(
@@ -32732,6 +33835,9 @@ mod broker_dispatch_tests {
             interaction_listeners: Arc::new(Mutex::new(None)),
             typed_shell_session_targets: d2bd_runtime::typed_shell_targets::new_cache(),
             zone_coordinator: d2bd_runtime::zone_authority::new_coordinator(),
+            config_staging: Arc::new(Mutex::new(Default::default())),
+            guest_component_sessions: Arc::new(tokio::sync::Mutex::new(HashMap::new())),
+        guest_component_session_locks: Arc::new(tokio::sync::Mutex::new(HashMap::new())),
             security_key_sessions: Arc::new(parking_lot::Mutex::new(
                 crate::security_key::SkSessionTable::default(),
             )),
@@ -32868,6 +33974,11 @@ mod broker_dispatch_tests {
             interaction_listeners: Arc::new(Mutex::new(None)),
             typed_shell_session_targets: d2bd_runtime::typed_shell_targets::new_cache(),
             zone_coordinator: d2bd_runtime::zone_authority::new_coordinator(),
+            config_staging: Arc::new(Mutex::new(
+                d2b_provider_config_nixos::ConfigStagingStore::default(),
+            )),
+            guest_component_sessions: Arc::new(tokio::sync::Mutex::new(HashMap::new())),
+        guest_component_session_locks: Arc::new(tokio::sync::Mutex::new(HashMap::new())),
             security_key_sessions: Arc::new(parking_lot::Mutex::new(
                 crate::security_key::SkSessionTable::default(),
             )),

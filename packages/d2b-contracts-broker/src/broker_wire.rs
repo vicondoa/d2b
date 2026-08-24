@@ -23,7 +23,8 @@ use d2b_contracts_resource::v3::process::{
     CapabilityClass, EnvironmentClass, NamespaceClass, UserNamespaceSpec,
 };
 use d2b_contracts_resource::v3::{
-    ArtifactId, IfName, ResourceBundleGenerationId, ResourceGeneration, ResourceRef, ResourceUid,
+    ActivationRunnerInput, ArtifactId, IfName, ResourceBundleGenerationId, ResourceGeneration,
+    ResourceRef, ResourceUid,
     execution_policy::ExecutionDomain, storage::ZoneStoreId,
 };
 use schemars::JsonSchema;
@@ -1330,7 +1331,7 @@ impl BrokerProfile {
             return false;
         }
         match self {
-            Self::Host => true,
+            Self::Host => !Self::request_targets_guest(request),
             Self::Guest => match request {
                 BrokerRequest::SpawnRunner(request) => {
                     request
@@ -1338,9 +1339,94 @@ impl BrokerProfile {
                         .as_ref()
                         .is_some_and(|target| target.resource_type().as_str() == "Guest")
                         && GUEST_LOCAL_RUNNER_ROLES.contains(&request.role)
+                        && request.guest_execution.as_ref().is_some_and(GuestExecutionBinding::is_valid)
                 }
+                BrokerRequest::StartSystemdUnit(request)
+                | BrokerRequest::ObserveSystemdUnit(request)
+                | BrokerRequest::CheckSystemdUserManager(request) => request
+                    .execution_ref
+                    .as_ref()
+                    .is_some_and(|target| target.resource_type().as_str() == "Guest")
+                    && request
+                        .guest_execution
+                        .as_ref()
+                        .is_some_and(GuestExecutionBinding::is_valid),
+                BrokerRequest::OpenPidfd(request) => request
+                    .guest_execution
+                    .as_ref()
+                    .is_some_and(GuestExecutionBinding::is_valid),
+                BrokerRequest::ObserveRunner(request) => request
+                    .guest_execution
+                    .as_ref()
+                    .is_some_and(GuestExecutionBinding::is_valid),
+                BrokerRequest::OpenSystemdUnitPidfd(request) => request
+                    .unit
+                    .execution_ref
+                    .as_ref()
+                    .is_some_and(|target| target.resource_type().as_str() == "Guest")
+                    && request
+                        .unit
+                        .guest_execution
+                        .as_ref()
+                        .is_some_and(GuestExecutionBinding::is_valid),
+                BrokerRequest::StopSystemdUnit(request) => request
+                    .unit
+                    .execution_ref
+                    .as_ref()
+                    .is_some_and(|target| target.resource_type().as_str() == "Guest")
+                    && request
+                        .unit
+                        .guest_execution
+                        .as_ref()
+                        .is_some_and(GuestExecutionBinding::is_valid),
+                BrokerRequest::SignalRunner(request) => request
+                    .guest_execution
+                    .as_ref()
+                    .is_some_and(GuestExecutionBinding::is_valid),
+                BrokerRequest::DeregisterRunnerPidfd(request) => request
+                    .guest_execution
+                    .as_ref()
+                    .is_some_and(GuestExecutionBinding::is_valid),
                 _ => true,
             },
+        }
+    }
+
+    fn request_targets_guest(request: &BrokerRequest) -> bool {
+        match request {
+            BrokerRequest::SpawnRunner(request) => request
+                .execution_ref
+                .as_ref()
+                .is_some_and(|target| target.resource_type().as_str() == "Guest")
+                || request.guest_execution.is_some(),
+            BrokerRequest::StartSystemdUnit(request)
+            | BrokerRequest::ObserveSystemdUnit(request)
+            | BrokerRequest::CheckSystemdUserManager(request) => request
+                .execution_ref
+                .as_ref()
+                .is_some_and(|target| target.resource_type().as_str() == "Guest")
+                || request.guest_execution.is_some(),
+            BrokerRequest::OpenSystemdUnitPidfd(request) => {
+                request.unit.guest_execution.is_some()
+                    || request
+                        .unit
+                        .execution_ref
+                        .as_ref()
+                        .is_some_and(|target| target.resource_type().as_str() == "Guest")
+            }
+            BrokerRequest::StopSystemdUnit(request) => {
+                request.unit.guest_execution.is_some()
+                    || request
+                        .unit
+                        .execution_ref
+                        .as_ref()
+                        .is_some_and(|target| target.resource_type().as_str() == "Guest")
+            }
+            BrokerRequest::OpenPidfd(request) => request.guest_execution.is_some(),
+            BrokerRequest::ObserveRunner(request) => request.guest_execution.is_some(),
+            BrokerRequest::SignalRunner(request) => request.guest_execution.is_some(),
+            BrokerRequest::DeregisterRunnerPidfd(request) => request.guest_execution.is_some(),
+            _ => false,
         }
     }
 }
@@ -2359,6 +2445,35 @@ pub struct QemuMediaHotplugResponse {
     pub events: Vec<QemuMediaHotplugEvent>,
 }
 
+/// Exact authenticated binding for a Guest-local Process lifecycle.
+///
+/// The values are commitments, not raw boot identifiers or transport
+/// handles. A Guest broker requires this tuple for every target-local
+/// Process operation and revalidates the boot commitment against its own
+/// kernel before executing the request.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct GuestExecutionBinding {
+    pub target_uid: ResourceUid,
+    pub boot_identity_digest: [u8; 32],
+    pub session_generation: u64,
+    pub assignment_epoch: u64,
+    pub provider_generation: u64,
+    pub controller_generation: u64,
+}
+
+impl GuestExecutionBinding {
+    /// Return whether all Guest execution commitments are populated.
+    pub fn is_valid(&self) -> bool {
+        self.target_uid.as_str().len() > 0
+            && self.boot_identity_digest != [0; 32]
+            && self.session_generation > 0
+            && self.assignment_epoch > 0
+            && self.provider_generation > 0
+            && self.controller_generation > 0
+    }
+}
+
 /// OpenPidfd daemon-side reconcile-and-adopt support. The daemon's
 /// `d2bd::supervisor::state::reconcile_and_adopt` loop sends this
 /// request for every snapshot the classifier returned `Adopt` for. The
@@ -2397,6 +2512,9 @@ pub struct OpenPidfdRequest {
     pub resource_ref: Option<ResourceRef>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub resource_uid: Option<ResourceUid>,
+    /// Exact Guest target/session binding for target-local Process adoption.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub guest_execution: Option<GuestExecutionBinding>,
     #[serde(default)]
     pub tracing_span_id: Option<TracingSpanId>,
 }
@@ -2446,6 +2564,9 @@ pub struct ObserveRunnerRequest {
     pub resource_ref: Option<ResourceRef>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub resource_uid: Option<ResourceUid>,
+    /// Exact Guest target/session binding for target-local Process adoption.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub guest_execution: Option<GuestExecutionBinding>,
     #[serde(default)]
     pub tracing_span_id: Option<TracingSpanId>,
 }
@@ -2548,6 +2669,9 @@ pub struct SystemdUnitIdentity {
     pub generation: u64,
     /// Content identity of the broker-resolved trusted bundle.
     pub bundle_content_identity: String,
+    /// Exact Guest target/session binding, when this is Guest-local.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub guest_execution: Option<GuestExecutionBinding>,
 }
 
 /// Shared trusted request fields for systemd unit operations.
@@ -2585,6 +2709,9 @@ pub struct SystemdUnitRequest {
     /// Canonical User resource bound to a user-domain launch.
     #[serde(default)]
     pub user_ref: Option<ResourceRef>,
+    /// Exact Guest target/session binding for target-local Process operations.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub guest_execution: Option<GuestExecutionBinding>,
     /// Typed sandbox requirements enforced by the broker's systemd launch
     /// adapter. Legacy VM runner callers omit this field.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -3169,6 +3296,9 @@ pub struct SignalRunnerRequest {
     pub resource_ref: Option<ResourceRef>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub resource_uid: Option<ResourceUid>,
+    /// Exact Guest target/session binding for target-local Process control.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub guest_execution: Option<GuestExecutionBinding>,
     #[serde(default)]
     pub tracing_span_id: Option<TracingSpanId>,
 }
@@ -3205,6 +3335,9 @@ pub struct DeregisterRunnerPidfdRequest {
     pub resource_ref: Option<ResourceRef>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub resource_uid: Option<ResourceUid>,
+    /// Exact Guest target/session binding for target-local Process cleanup.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub guest_execution: Option<GuestExecutionBinding>,
     #[serde(default)]
     pub tracing_span_id: Option<TracingSpanId>,
 }
@@ -3237,6 +3370,9 @@ pub enum RunnerRole {
     /// QEMU media runtime scaffold. The runtime Provider owns argv planning;
     /// the broker consumes the bundle-authoritative launch shape.
     QemuMedia,
+    /// Target-local one-shot NixOS activation runner. Guest mode may spawn
+    /// this role only from the bundle-authoritative process intent.
+    ActivationNixos,
     /// virtiofsd sidecar; one per `microvm.shares` row. The daemon/bundle
     /// provides argv from `nixos-modules/processes-json.nix`.
     Virtiofsd,
@@ -3295,6 +3431,7 @@ impl RunnerRole {
         match self {
             Self::CloudHypervisor => "cloud-hypervisor",
             Self::QemuMedia => "qemu-media",
+            Self::ActivationNixos => "activation-nixos-runner",
             Self::Virtiofsd => "virtiofsd",
             Self::Swtpm => "swtpm",
             Self::SwtpmFlush => "swtpm-flush",
@@ -3311,11 +3448,11 @@ impl RunnerRole {
 
 /// Closed set of runner roles that a Guest broker may spawn locally.
 ///
-/// The current runner vocabulary contains only host-side VM, device, relay,
-/// observability, and compositor helpers. Guest Process resources use the
-/// dedicated local effect classes instead, so this set is intentionally empty
-/// until a runner with an explicitly Guest-local contract is added.
-pub const GUEST_LOCAL_RUNNER_ROLES: &[RunnerRole] = &[];
+/// The current runner vocabulary contains mostly host-side VM, device, relay,
+/// observability, and compositor helpers. The activation runner is the one
+/// explicitly Guest-local role; future Guest Process roles must be added here
+/// together with their signed bundle contract and identity fencing.
+pub const GUEST_LOCAL_RUNNER_ROLES: &[RunnerRole] = &[RunnerRole::ActivationNixos];
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -3343,6 +3480,9 @@ pub struct SpawnRunnerRequest {
     pub template_identity: Option<[u8; 32]>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub generation: Option<u64>,
+    /// Typed stdin input admitted only for the activation-nixos runner role.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub activation_input: Option<ActivationRunnerInput>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub sandbox_plan: Option<SandboxLaunchPlan>,
     /// Role selector - picks the argv generator the broker applies to
@@ -3364,6 +3504,9 @@ pub struct SpawnRunnerRequest {
     /// Canonical User resource bound to a user-domain launch.
     #[serde(default)]
     pub user_ref: Option<ResourceRef>,
+    /// Exact Guest target/session binding for target-local Process launches.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub guest_execution: Option<GuestExecutionBinding>,
     /// Optional vsock CID / TAP fd slot allocated by the daemon at
     /// host-prepare time. The broker validates each entry against the
     /// bundle row and refuses any unexpected allocation slot. None
@@ -3433,6 +3576,8 @@ pub struct SpawnRunnerResponse {
     pub execution_domain: Option<ExecutionDomain>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub user_ref: Option<ResourceRef>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub guest_execution: Option<GuestExecutionBinding>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub provider_identity: Option<[u8; 32]>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -4592,12 +4737,14 @@ mod tests {
             provider_identity: None,
             template_identity: None,
             generation: None,
+            activation_input: None,
             sandbox_plan: None,
             role,
             bundle_runner_intent_ref: BundleOpId::new("runner:test"),
             execution_ref: Some(ResourceRef::parse(execution_ref).expect("valid execution ref")),
             execution_domain: None,
             user_ref: None,
+            guest_execution: None,
             runtime_allocations: Vec::new(),
             tracing_span_id: None,
             workload_identity: None,
@@ -4641,9 +4788,9 @@ mod tests {
                 role.as_str()
             );
             assert!(
-                spawn_runner_for_profile(role, "Guest/guest-vm")
+                !spawn_runner_for_profile(role, "Guest/guest-vm")
                     .allowed_by_profile(BrokerProfile::Host),
-                "Host profile behavior changed for Guest execution ref {}",
+                "Host profile must reject Guest execution ref {}",
                 role.as_str()
             );
             assert!(
@@ -4652,6 +4799,39 @@ mod tests {
                 role.as_str()
             );
         }
+    }
+
+    #[test]
+    fn guest_profile_requires_a_complete_target_execution_binding() {
+        let mut request = spawn_runner_for_profile(
+            RunnerRole::ActivationNixos,
+            "Guest/guest-vm",
+        );
+        request = match request {
+            BrokerRequest::SpawnRunner(mut request) => {
+                request.guest_execution = Some(GuestExecutionBinding {
+                    target_uid: ResourceUid::parse(
+                        "123e4567-e89b-42d3-a456-426614174000",
+                    )
+                    .expect("Guest UID"),
+                    boot_identity_digest: [7; 32],
+                    session_generation: 2,
+                    assignment_epoch: 3,
+                    provider_generation: 4,
+                    controller_generation: 5,
+                });
+                BrokerRequest::SpawnRunner(request)
+            }
+            _ => unreachable!("helper always builds SpawnRunner"),
+        };
+        assert!(request.allowed_by_profile(BrokerProfile::Guest));
+        assert!(!request.allowed_by_profile(BrokerProfile::Host));
+
+        let BrokerRequest::SpawnRunner(mut invalid) = request else {
+            unreachable!("helper always builds SpawnRunner");
+        };
+        invalid.guest_execution.as_mut().unwrap().assignment_epoch = 0;
+        assert!(!BrokerRequest::SpawnRunner(invalid).allowed_by_profile(BrokerProfile::Guest));
     }
 
     #[test]
@@ -4837,6 +5017,7 @@ mod tests {
             execution_ref: None,
             execution_domain: None,
             user_ref: None,
+            guest_execution: None,
             provider_identity: None,
             template_identity: None,
             generation: None,

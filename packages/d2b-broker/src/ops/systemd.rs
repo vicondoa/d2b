@@ -392,6 +392,7 @@ fn read_identity(
         template_identity: request.template_identity,
         generation: request.generation,
         bundle_content_identity: request.bundle_content_identity.clone(),
+        guest_execution: request.guest_execution.clone(),
     }))
 }
 
@@ -610,6 +611,7 @@ mod tests {
             template_identity: [2; 32],
             generation: 3,
             domain: SystemdUnitDomain::System,
+            guest_execution: None,
             sandbox_plan: None,
             tracing_span_id: None,
         }

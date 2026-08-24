@@ -379,7 +379,7 @@ impl ResolvedRunnerIntent {
         let execution_ref = node
             .execution_ref
             .clone()
-            .unwrap_or_else(|| format!("Guest/{vm_name}"));
+            .unwrap_or_else(|| default_execution_ref(vm_name, &node.role));
         let valid_execution_ref = execution_ref
             .split_once('/')
             .is_some_and(|(kind, name)| matches!(kind, "Host" | "Guest") && !name.is_empty());
@@ -455,6 +455,20 @@ impl ResolvedRunnerIntent {
             user_namespace: user_namespace.map(UserNamespaceSpec::from),
             umask: *umask,
         })
+    }
+}
+
+/// Resolve the legacy placement default for one trusted VM-DAG role.
+///
+/// Host-side infrastructure roles execute in the singleton Host target.
+/// The activation runner is the only legacy role whose default placement is
+/// the owning Guest. New resource-backed Process rows must carry an explicit
+/// `executionRef`.
+pub fn default_execution_ref(vm_name: &str, role: &ProcessRole) -> String {
+    if matches!(role, ProcessRole::ActivationNixosRunner) {
+        format!("Guest/{vm_name}")
+    } else {
+        "Host/host-system".to_owned()
     }
 }
 
@@ -2756,6 +2770,7 @@ fn runner_role_name(role: &ProcessRole) -> Option<&'static str> {
         ProcessRole::Audio => Some("audio"),
         ProcessRole::CloudHypervisorRunner => Some("cloud-hypervisor"),
         ProcessRole::QemuMediaRunner => Some("qemu-media"),
+        ProcessRole::ActivationNixosRunner => Some("activation-nixos-runner"),
         ProcessRole::VsockRelay => Some("vsock-relay"),
         ProcessRole::OtelHostBridge => Some("otel-host-bridge"),
         ProcessRole::Usbip => Some("usbip"),
@@ -2789,6 +2804,10 @@ fn legacy_runner_spec(vm_name: &str, role: &ProcessRole) -> Option<(String, Vec<
         // processes.json. There is no Cloud Hypervisor-compatible legacy
         // fallback for this runtime kind.
         ProcessRole::QemuMediaRunner => return None,
+        // Activation runners are Guest-local and have no host-side legacy
+        // fallback. Their executable and argv must be present in the
+        // trusted per-Guest process DAG.
+        ProcessRole::ActivationNixosRunner => return None,
         ProcessRole::VsockRelay => ("socat", format!("d2b-otel-relay@{vm_name}")),
         // OtelHostBridge must always carry the closed argv from
         // processes.json; it has no legacy singleton fallback.

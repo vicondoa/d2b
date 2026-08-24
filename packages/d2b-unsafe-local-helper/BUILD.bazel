@@ -40,7 +40,7 @@ rust_test(
         "CARGO_BIN_EXE_d2b-unsafe-local-helper": "$(rootpath :d2b-unsafe-local-helper)",
     },
     rustc_env = {"CARGO_BIN_EXE_d2b-unsafe-local-helper": "$(rootpath :d2b-unsafe-local-helper)"},
-    tags = ["local", "no-remote-cache"],
+    tags = ["no-remote-cache"],
     visibility = ["//visibility:public"],
     deps = [
         ":d2b_unsafe_local_helper",
@@ -55,7 +55,7 @@ rust_test(
     name = "d2b_unsafe_local_helper_test",
     compile_data = ["Cargo.toml"],
     crate = ":d2b_unsafe_local_helper",
-    tags = ["local", "no-remote-cache"],
+    tags = ["no-remote-cache"],
     data = [":d2b-unsafe-local-helper"],
     env = {"CARGO_BIN_EXE_d2b-unsafe-local-helper": "$(rootpath :d2b-unsafe-local-helper)"},
     rustc_env = {"CARGO_BIN_EXE_d2b-unsafe-local-helper": "$(rootpath :d2b-unsafe-local-helper)"},

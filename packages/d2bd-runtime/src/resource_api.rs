@@ -208,6 +208,12 @@ pub fn route_service_matches(
         .ok_or(ResourceRuntimeError::RequestInvalid)?;
     Ok(match method {
         "ZoneList" | "ZoneStatus" => service == "d2b.zone.v3",
+        "ConfigNixosService/ReadGuestConfig"
+        | "ConfigNixosService/Stage"
+        | "ConfigNixosService/Diff"
+        | "ConfigNixosService/Approve"
+        | "ConfigNixosService/Reject"
+        | "ConfigNixosService/Status" => service == "d2b.config-nixos.v3",
         _ => service == "d2b.resource.v3",
     })
 }

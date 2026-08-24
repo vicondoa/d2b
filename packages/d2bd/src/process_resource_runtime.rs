@@ -23,8 +23,12 @@ use d2b_contracts_resource::v3::{
     ZoneRevision,
     process::{EphemeralProcessSpec, ProcessSpec, RestartClass},
 };
+use d2b_process_conformance::GuestExecutionBinding;
 use d2b_resource_api::watch::ResourceWatch;
-use d2b_resource_api::{RedbBackend, ResourceApiClient, service::UnavailableUpgradeDispatcher};
+use d2b_resource_api::{
+    ResourceApiClient, ResourceStoreBackend,
+    service::{UnavailableUpgradeDispatcher, UpgradeDispatcher},
+};
 use d2b_resource_store::{
     StoreListRequest, StoreOperationContext, StoreProjection, StoreWatchRequest, StoredResource,
 };
@@ -71,6 +75,46 @@ impl core::fmt::Display for ProcessResourceRuntimeError {
 }
 
 impl std::error::Error for ProcessResourceRuntimeError {}
+
+#[async_trait::async_trait]
+pub(crate) trait ProcessResourceClient: Send + Sync {
+    async fn update_status(
+        &self,
+        request: wire::UpdateStatusRequest,
+    ) -> wire::UpdateStatusResponse;
+
+    async fn update_finalizers(
+        &self,
+        request: wire::UpdateFinalizersRequest,
+    ) -> wire::UpdateFinalizersResponse;
+
+    async fn delete(&self, request: wire::DeleteRequest) -> wire::DeleteResponse;
+}
+
+#[async_trait::async_trait]
+impl<S, U> ProcessResourceClient for ResourceApiClient<S, U>
+where
+    S: ResourceStoreBackend + 'static,
+    U: UpgradeDispatcher + 'static,
+{
+    async fn update_status(
+        &self,
+        request: wire::UpdateStatusRequest,
+    ) -> wire::UpdateStatusResponse {
+        ResourceApiClient::update_status(self, request).await
+    }
+
+    async fn update_finalizers(
+        &self,
+        request: wire::UpdateFinalizersRequest,
+    ) -> wire::UpdateFinalizersResponse {
+        ResourceApiClient::update_finalizers(self, request).await
+    }
+
+    async fn delete(&self, request: wire::DeleteRequest) -> wire::DeleteResponse {
+        ResourceApiClient::delete(self, request).await
+    }
+}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum DesiredProcess {
@@ -130,6 +174,7 @@ impl DesiredRecord {
 /// Durable generic process registry for one Zone.
 pub(crate) struct ProcessResourceRuntime {
     zone: ZoneId,
+    target: Option<ResourceRef>,
     providers: Arc<ProductionProcessProviders>,
     records: BTreeMap<ResourceRef, DesiredRecord>,
     terminal: BTreeSet<ResourceRef>,
@@ -139,7 +184,8 @@ pub(crate) struct ProcessResourceRuntime {
     completed_at: BTreeMap<ResourceRef, Instant>,
     next_restart_at: BTreeMap<ResourceRef, Instant>,
     controller_generation: ControllerGeneration,
-    status_client: Option<Arc<ResourceApiClient<RedbBackend, UnavailableUpgradeDispatcher>>>,
+    guest_execution: Option<GuestExecutionBinding>,
+    status_client: Option<Arc<dyn ProcessResourceClient>>,
 }
 
 impl core::fmt::Debug for ProcessResourceRuntime {
@@ -155,8 +201,17 @@ impl core::fmt::Debug for ProcessResourceRuntime {
 impl ProcessResourceRuntime {
     /// Construct a registry over the daemon-owned fixed Providers.
     pub(crate) fn new(zone: ZoneId, providers: Arc<ProductionProcessProviders>) -> Self {
+        Self::new_for_target(zone, providers, None)
+    }
+
+    pub(crate) fn new_for_target(
+        zone: ZoneId,
+        providers: Arc<ProductionProcessProviders>,
+        target: Option<ResourceRef>,
+    ) -> Self {
         Self {
             zone,
+            target,
             providers,
             records: BTreeMap::new(),
             terminal: BTreeSet::new(),
@@ -167,6 +222,7 @@ impl ProcessResourceRuntime {
             next_restart_at: BTreeMap::new(),
             controller_generation: ControllerGeneration::new(1)
                 .expect("controller generation one is valid"),
+            guest_execution: None,
             status_client: None,
         }
     }
@@ -175,10 +231,14 @@ impl ProcessResourceRuntime {
         self.controller_generation = generation;
     }
 
-    pub(crate) fn set_status_client(
-        &mut self,
-        status_client: Arc<ResourceApiClient<RedbBackend, UnavailableUpgradeDispatcher>>,
-    ) {
+    pub(crate) fn set_guest_execution_binding(&mut self, binding: GuestExecutionBinding) {
+        self.guest_execution = Some(binding);
+    }
+
+    pub(crate) fn set_status_client<C>(&mut self, status_client: Arc<C>)
+    where
+        C: ProcessResourceClient + 'static,
+    {
         self.status_client = Some(status_client);
     }
 
@@ -190,6 +250,7 @@ impl ProcessResourceRuntime {
             &record.provider_ref,
             self.controller_generation,
         )
+        .with_guest_execution(self.guest_execution.as_ref())
     }
 
     /// Reconcile a complete durable Process/EphemeralProcess snapshot.
@@ -197,7 +258,7 @@ impl ProcessResourceRuntime {
         &mut self,
         snapshot: Vec<StoredResource>,
     ) -> Result<(), ProcessResourceRuntimeError> {
-        let desired = decode_snapshot(&self.zone, snapshot)?;
+        let desired = decode_snapshot(&self.zone, self.target.as_ref(), snapshot)?;
         let desired_keys = desired.keys().cloned().collect::<BTreeSet<_>>();
         let removed = self
             .records
@@ -606,7 +667,7 @@ impl ProcessResourceRuntime {
             return Ok(record.clone());
         };
         update_status(
-            client,
+            client.as_ref(),
             record,
             phase,
             self.restart_counts
@@ -628,7 +689,7 @@ impl ProcessResourceRuntime {
         if record.has_runtime_finalizer() {
             return Ok(record.clone());
         }
-        update_finalizers(client, record, true).await
+        update_finalizers(client.as_ref(), record, true).await
     }
 
     async fn remove_finalizer(
@@ -641,7 +702,7 @@ impl ProcessResourceRuntime {
         if !record.has_runtime_finalizer() {
             return Ok(record.clone());
         }
-        update_finalizers(client, record, false).await
+        update_finalizers(client.as_ref(), record, false).await
     }
 
     fn ephemeral_ttl_elapsed(&self, key: &ResourceRef, record: &DesiredRecord) -> bool {
@@ -672,7 +733,7 @@ impl ProcessResourceRuntime {
         let Some(client) = &self.status_client else {
             return Ok(());
         };
-        delete_resource(client, record).await
+        delete_resource(client.as_ref(), record).await
     }
 
     async fn probe_record(
@@ -932,7 +993,7 @@ fn civil_from_days(days_since_epoch: i64) -> (i64, i64, i64) {
 }
 
 async fn update_status(
-    client: &ResourceApiClient<RedbBackend, UnavailableUpgradeDispatcher>,
+    client: &dyn ProcessResourceClient,
     record: &DesiredRecord,
     phase: ResourcePhase,
     restart_count: u32,
@@ -1080,7 +1141,7 @@ fn status_payload(
 }
 
 async fn update_finalizers(
-    client: &ResourceApiClient<RedbBackend, UnavailableUpgradeDispatcher>,
+    client: &dyn ProcessResourceClient,
     record: &DesiredRecord,
     add: bool,
 ) -> Result<DesiredRecord, ProcessResourceRuntimeError> {
@@ -1123,7 +1184,7 @@ async fn update_finalizers(
 }
 
 async fn delete_resource(
-    client: &ResourceApiClient<RedbBackend, UnavailableUpgradeDispatcher>,
+    client: &dyn ProcessResourceClient,
     record: &DesiredRecord,
 ) -> Result<(), ProcessResourceRuntimeError> {
     let mut mutation = wire::Mutation::new();
@@ -1194,6 +1255,7 @@ fn map_provider_error(error: String) -> ProcessResourceRuntimeError {
 
 fn decode_snapshot(
     zone: &ZoneId,
+    target: Option<&ResourceRef>,
     resources: Vec<StoredResource>,
 ) -> Result<BTreeMap<ResourceRef, DesiredRecord>, ProcessResourceRuntimeError> {
     let mut desired = BTreeMap::new();
@@ -1209,6 +1271,23 @@ fn decode_snapshot(
             .provider_ref()
             .cloned()
             .ok_or(ProcessResourceRuntimeError::InvalidResource)?;
+        let execution_ref = envelope
+            .spec()
+            .base()
+            .get("executionRef")
+            .and_then(|value| match value {
+                CanonicalJsonValue::String(value) => ResourceRef::parse(value).ok(),
+                _ => None,
+            })
+            .ok_or(ProcessResourceRuntimeError::InvalidResource)?;
+        let target_matches = if let Some(target) = target {
+            execution_ref == *target
+        } else {
+            execution_ref.resource_type().as_str() == "Host"
+        };
+        if !target_matches {
+            continue;
+        }
         if provider_ref.resource_type().as_str() != "Provider"
             || !matches!(
                 provider_ref.name().as_str(),
@@ -1305,6 +1384,54 @@ pub(crate) async fn list_process_snapshot(
         request.cursor = Some(cursor);
     }
     Ok(resources)
+}
+
+/// Relist generic Process resources through a session-bound Resource API
+/// backend. This mirrors the concrete Zone-store helper while preserving the
+/// backend's reconnect fence.
+pub(crate) async fn list_process_snapshot_backend<S: ResourceStoreBackend>(
+    store: &S,
+    zone: &ZoneId,
+) -> Result<Vec<StoredResource>, ProcessResourceRuntimeError> {
+    let mut request = process_list_request(zone);
+    let mut resources = Vec::new();
+    loop {
+        let result = store
+            .list(request.clone())
+            .await
+            .map_err(|_| ProcessResourceRuntimeError::Store)?;
+        resources.extend(result.resources);
+        let Some(cursor) = result.next_cursor else {
+            break;
+        };
+        request.cursor = Some(cursor);
+    }
+    Ok(resources)
+}
+
+/// Run Guest-local Process/EphemeralProcess reconciliation for one
+/// authenticated ComponentSession. The session-bound store is intentionally
+/// relisted instead of opening a second transport or watch implementation;
+/// reconnect fencing makes the loop stop at the first stale-session error.
+pub(crate) async fn run_guest_process_reconciliation<S>(
+    mut runtime: ProcessResourceRuntime,
+    store: Arc<S>,
+    client: Arc<ResourceApiClient<S, UnavailableUpgradeDispatcher>>,
+    zone: ZoneId,
+) where
+    S: ResourceStoreBackend + 'static,
+{
+    runtime.set_status_client(client);
+    loop {
+        let snapshot = match list_process_snapshot_backend(store.as_ref(), &zone).await {
+            Ok(snapshot) => snapshot,
+            Err(_) => return,
+        };
+        if let Err(error) = runtime.reconcile(snapshot).await {
+            tracing::warn!(zone = %zone.as_str(), error = %error, "Guest Process reconciliation degraded");
+        }
+        tokio::time::sleep(Duration::from_millis(250)).await;
+    }
 }
 
 /// Run the relist/watch reconciliation loop for one Zone.

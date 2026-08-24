@@ -26,7 +26,9 @@ use crate::identity::{
     WaitReapOwner,
 };
 use crate::port::{AdoptionCandidate, LaunchedProcess, ProcessLaunchEffectPort, StopClass};
-use crate::ticket::{CompiledDigests, LaunchTicket, OperationBinding};
+use crate::ticket::{
+    CompiledDigests, GuestExecutionBinding, LaunchTicket, OperationBinding,
+};
 
 /// Drive a future to completion on the calling thread.
 ///
@@ -209,6 +211,7 @@ pub mod fixtures {
         user_ref: Option<ResourceRef>,
         selected_provider: BoundedToken,
         expected_identity: BTreeSet<IdentityBinding>,
+        guest_execution_binding: bool,
     }
 
     impl TicketBuilder {
@@ -251,9 +254,16 @@ pub mod fixtures {
             self
         }
 
+        /// Omit the default Guest target binding for negative tests.
+        pub fn without_guest_execution_binding(mut self) -> Self {
+            self.guest_execution_binding = false;
+            self
+        }
+
         /// Build the ticket.
         pub fn build(self) -> Result<LaunchTicket, ProcessConformanceError> {
-            LaunchTicket::new(
+            let is_guest = self.execution_ref.resource_type().as_str() == "Guest";
+            let ticket = LaunchTicket::new(
                 self.process_ref,
                 operation_uid(),
                 ResourceGeneration::new(1).expect("nonzero"),
@@ -268,7 +278,21 @@ pub mod fixtures {
                 compiled_digests(),
                 OperationBinding::new(operation_uid(), 30_000)?,
                 self.expected_identity,
-            )
+            )?;
+            if is_guest && self.guest_execution_binding {
+                ticket.with_guest_execution_binding(GuestExecutionBinding::new(
+                    ResourceUid::parse("123e4567-e89b-42d3-a456-426614174000")
+                        .expect("fixture Guest UID"),
+                    ConfigurationDigest::from_bytes([8; 32]),
+                    d2b_contracts_resource::v3::identity::ReconnectGeneration::new(1)
+                        .expect("fixture session generation"),
+                    1,
+                    ResourceGeneration::new(1).expect("fixture Provider generation"),
+                    ControllerGeneration::new(1).expect("fixture controller generation"),
+                )?)
+            } else {
+                Ok(ticket)
+            }
         }
     }
 
@@ -281,6 +305,7 @@ pub mod fixtures {
             user_ref: None,
             selected_provider: token("system-systemd"),
             expected_identity: BTreeSet::from([IdentityBinding::Cgroup]),
+            guest_execution_binding: true,
         }
     }
 }

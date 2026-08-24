@@ -30,8 +30,7 @@ use nix::unistd::{dup, geteuid};
 #[cfg(not(feature = "layer1-bootstrap"))]
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-#[cfg(not(feature = "layer1-bootstrap"))]
-use sha2::Sha256;
+use sha2::{Digest, Sha256};
 #[cfg(not(feature = "layer1-bootstrap"))]
 use tracing::info;
 use tracing::warn;
@@ -61,7 +60,7 @@ use d2b_contracts_broker::broker_wire::BrokerProfile;
 #[cfg(not(feature = "layer1-bootstrap"))]
 use d2b_contracts_broker::broker_wire::{
     AuditJoinContext, BrokerCallerRole as CallerRole, BrokerProfile, BrokerRequest,
-    BrokerRequestEnvelope as RequestEnvelope, BrokerResponse, CanonicalAuditDigest,
+    BrokerRequestEnvelope as RequestEnvelope, BrokerResponse, CanonicalAuditDigest, RunnerRole,
 };
 #[cfg(feature = "layer1-bootstrap")]
 type AuditJoinContext = ();
@@ -1777,6 +1776,13 @@ fn handle_connection(
         );
         send_json_frame(fd.as_raw_fd(), &error.into_response())?;
         return Ok(());
+    }
+    #[cfg(not(feature = "layer1-bootstrap"))]
+    if config.profile == BrokerProfile::Guest {
+        if let Err(error) = validate_guest_process_binding(&request) {
+            send_json_frame(fd.as_raw_fd(), &error.into_response())?;
+            return Ok(());
+        }
     }
     #[cfg(not(feature = "layer1-bootstrap"))]
     let cutover_window = match cutover_window_active(config) {
@@ -4318,6 +4324,7 @@ fn dispatch_request_with_backend_and_request_fds<B: DispatchBackend>(
                     req.resource_uid.as_ref(),
                     req.pid,
                     req.expected_start_time_ticks,
+                    req.guest_execution.as_ref(),
                 )
             {
                 return Err(BrokerError::NoPidfd { runner_id });
@@ -4395,6 +4402,7 @@ fn dispatch_request_with_backend_and_request_fds<B: DispatchBackend>(
                                 req.resource_uid.as_ref(),
                                 req.pid,
                                 req.expected_start_time_ticks,
+                                req.guest_execution.as_ref(),
                             )
                         })
                 });
@@ -4471,6 +4479,56 @@ fn dispatch_request_with_backend_and_request_fds<B: DispatchBackend>(
                     requested: "0".to_owned(),
                     resolved: "nonzero".to_owned(),
                 });
+            }
+            match (&req.activation_input, req.role) {
+                (Some(input), RunnerRole::ActivationNixos) => {
+                    if input.target_generation == 0 {
+                        return Err(BrokerError::SpawnRunnerIntentMismatch {
+                            field: "activation_input.target_generation",
+                            requested: "0".to_owned(),
+                            resolved: "nonzero".to_owned(),
+                        });
+                    }
+                    let Some(_generation) = req.generation else {
+                        return Err(BrokerError::SpawnRunnerIntentMismatch {
+                            field: "generation",
+                            requested: "missing".to_owned(),
+                            resolved: "required-for-activation-input".to_owned(),
+                        });
+                    };
+                    let encoded = serde_json::to_vec(input).map_err(|_| {
+                        BrokerError::SpawnRunnerIntentMismatch {
+                            field: "activation_input",
+                            requested: "unserializable".to_owned(),
+                            resolved: "bounded-json".to_owned(),
+                        }
+                    })?;
+                    if encoded.len()
+                        > d2b_contracts_resource::v3::MAX_ACTIVATION_RUNNER_INPUT_BYTES
+                    {
+                        return Err(BrokerError::SpawnRunnerIntentMismatch {
+                            field: "activation_input",
+                            requested: encoded.len().to_string(),
+                            resolved: d2b_contracts_resource::v3::MAX_ACTIVATION_RUNNER_INPUT_BYTES
+                                .to_string(),
+                        });
+                    }
+                }
+                (Some(_), _) => {
+                    return Err(BrokerError::SpawnRunnerIntentMismatch {
+                        field: "activation_input",
+                        requested: "present".to_owned(),
+                        resolved: "activation-nixos-role-only".to_owned(),
+                    });
+                }
+                (None, RunnerRole::ActivationNixos) => {
+                    return Err(BrokerError::SpawnRunnerIntentMismatch {
+                        field: "activation_input",
+                        requested: "missing".to_owned(),
+                        resolved: "required-for-activation-nixos".to_owned(),
+                    });
+                }
+                (None, _) => {}
             }
             if req.resource_ref.is_some()
                 && (req.execution_ref.is_none()
@@ -4722,6 +4780,7 @@ fn dispatch_request_with_backend_and_request_fds<B: DispatchBackend>(
                     execution_ref: req.execution_ref.clone(),
                     execution_domain: req.execution_domain,
                     user_ref: req.user_ref.clone(),
+                    guest_execution: req.guest_execution.clone(),
                     provider_identity: req.provider_identity,
                     template_identity: req.template_identity,
                     generation: req.generation,
@@ -7739,6 +7798,7 @@ struct RunnerRegistration {
     start_time_ticks: u64,
     binary_path: PathBuf,
     cgroup_subtree: String,
+    guest_execution: Option<d2b_contracts_broker::broker_wire::GuestExecutionBinding>,
 }
 
 #[cfg(not(feature = "layer1-bootstrap"))]
@@ -7771,6 +7831,7 @@ fn register_runner_metadata(
             start_time_ticks,
             binary_path: intent.binary_path.clone(),
             cgroup_subtree: intent.cgroup_placement.subtree.clone(),
+            guest_execution: request.guest_execution.clone(),
         },
     );
     Ok(())
@@ -7805,6 +7866,7 @@ fn register_runner_metadata_from_open(
             start_time_ticks: request.expected_start_time_ticks,
             binary_path: intent.binary_path.clone(),
             cgroup_subtree: intent.cgroup_placement.subtree.clone(),
+            guest_execution: request.guest_execution.clone(),
         },
     );
     Ok(())
@@ -7843,11 +7905,54 @@ fn registration_matches(
     resource_uid: Option<&d2b_contracts_resource::v3::ResourceUid>,
     pid: Option<i32>,
     start_time_ticks: Option<u64>,
+    guest_execution: Option<
+        &d2b_contracts_broker::broker_wire::GuestExecutionBinding,
+    >,
 ) -> bool {
     registration.resource_ref.as_ref() == resource_ref
         && registration.resource_uid.as_ref() == resource_uid
         && pid.is_none_or(|pid| registration.pid == pid)
         && start_time_ticks.is_none_or(|ticks| registration.start_time_ticks == ticks)
+        && registration.guest_execution.as_ref() == guest_execution
+}
+
+#[cfg(not(feature = "layer1-bootstrap"))]
+fn rebind_guest_execution_registration(
+    registration: &mut RunnerRegistration,
+    requested: Option<&d2b_contracts_broker::broker_wire::GuestExecutionBinding>,
+) -> Result<bool, BrokerError> {
+    if requested.is_some_and(|binding| !binding.is_valid()) {
+        return Err(BrokerError::LiveHandler(
+            "guest runner execution binding changed".to_owned(),
+        ));
+    }
+    if registration.guest_execution.as_ref() == requested {
+        return Ok(false);
+    }
+
+    let (Some(current), Some(next)) = (registration.guest_execution.as_ref(), requested) else {
+        return Err(BrokerError::LiveHandler(
+            "guest runner execution binding changed".to_owned(),
+        ));
+    };
+    if current.target_uid != next.target_uid
+        || current.boot_identity_digest != next.boot_identity_digest
+        || current.assignment_epoch != next.assignment_epoch
+        || current.provider_generation != next.provider_generation
+        || current.controller_generation != next.controller_generation
+    {
+        return Err(BrokerError::LiveHandler(
+            "guest runner execution binding changed".to_owned(),
+        ));
+    }
+    if next.session_generation <= current.session_generation {
+        return Err(BrokerError::LiveHandler(
+            "guest runner session generation is not newer".to_owned(),
+        ));
+    }
+
+    registration.guest_execution = Some(next.clone());
+    Ok(true)
 }
 
 #[cfg(not(feature = "layer1-bootstrap"))]
@@ -7868,79 +7973,110 @@ fn observe_registered_runner(
         request.resource_ref.as_ref(),
         request.resource_uid.as_ref(),
     );
-    let registration = {
-        let registry = runner_metadata_registry().lock().map_err(|_| {
+    let registered = (|| -> Result<
+        Option<d2b_contracts_broker::broker_wire::ObserveRunnerResponse>,
+        BrokerError,
+    > {
+        // Keep the lock order aligned with deregistration: pidfd registry
+        // first, metadata second. This makes the binding update atomic with
+        // the live pidfd registration.
+        let pidfd_registry = runner_pidfd_registry().lock().map_err(|_| {
+            BrokerError::Protocol("runner pidfd registry mutex poisoned".to_owned())
+        })?;
+        let mut metadata_registry = runner_metadata_registry().lock().map_err(|_| {
             BrokerError::Protocol("runner metadata registry mutex poisoned".to_owned())
         })?;
-        registry.get(&runner_id).cloned()
-    };
-    let Some(registration) = registration else {
-        return discover_runner_candidate(request, intent);
-    };
-
-    let pidfd_registered = runner_pidfd_registry()
-        .lock()
-        .map_err(|_| BrokerError::Protocol("runner pidfd registry mutex poisoned".to_owned()))?
-        .contains_key(&runner_id);
-    if !pidfd_registered
-        || registration.vm_id != request.vm_id.as_str()
-        || registration.role_id != request.role_id.as_str()
-        || registration.role != request.role
-        || !registration_matches(
-            &registration,
-            request.resource_ref.as_ref(),
-            request.resource_uid.as_ref(),
-            None,
-            None,
-        )
-        || registration.bundle_runner_intent_ref != request.bundle_runner_intent_ref.as_str()
-        || registration.pid <= 0
-        || registration.start_time_ticks == 0
-        || registration.binary_path != intent.binary_path
-        || registration.cgroup_subtree != intent.cgroup_placement.subtree
-    {
-        return discover_runner_candidate(request, intent);
-    }
-
-    let Some(start_time_ticks) = read_proc_start_time_ticks(registration.pid)? else {
-        remove_runner_metadata(&runner_id);
-        return Ok(d2b_contracts_broker::broker_wire::ObserveRunnerResponse {
-            vm_id: request.vm_id.clone(),
-            role_id: request.role_id.clone(),
-            present: false,
-            pid: 0,
-            start_time_ticks: 0,
-            cgroup_verified: false,
-            executable_verified: false,
-        });
-    };
-    if start_time_ticks != registration.start_time_ticks {
-        return Err(BrokerError::LiveHandler(
-            "runner process identity changed".to_owned(),
-        ));
-    }
-    let cgroup_verified = proc_cgroup_matches(registration.pid, &registration.cgroup_subtree);
-    let executable_path = read_runner_executable(registration.pid);
-    let executable_verified = match executable_path {
-        Ok(ref path) => executable_paths_match(path, &registration.binary_path),
-        Err(ref error) if error.kind() == io::ErrorKind::PermissionDenied => {
-            // A registered pidfd and the broker-owned cgroup are the
-            // executable provenance established by this broker. Linux
-            // resets dumpability when a runner changes uid, so Yama blocks
-            // the redundant /proc/<pid>/exe read without CAP_SYS_PTRACE.
-            pidfd_registered && cgroup_verified
+        let registration = match metadata_registry.get(&runner_id).cloned() {
+            Some(registration) => registration,
+            None => return Ok(None),
+        };
+        let mut observed_registration = registration.clone();
+        let rebound = rebind_guest_execution_registration(
+            &mut observed_registration,
+            request.guest_execution.as_ref(),
+        )?;
+        let pidfd_registered = pidfd_registry.contains_key(&runner_id);
+        if !pidfd_registered
+            || observed_registration.vm_id != request.vm_id.as_str()
+            || observed_registration.role_id != request.role_id.as_str()
+            || observed_registration.role != request.role
+            || !registration_matches(
+                &observed_registration,
+                request.resource_ref.as_ref(),
+                request.resource_uid.as_ref(),
+                None,
+                None,
+                request.guest_execution.as_ref(),
+            )
+            || observed_registration.bundle_runner_intent_ref
+                != request.bundle_runner_intent_ref.as_str()
+            || observed_registration.pid <= 0
+            || observed_registration.start_time_ticks == 0
+            || observed_registration.binary_path != intent.binary_path
+            || observed_registration.cgroup_subtree != intent.cgroup_placement.subtree
+        {
+            Ok(None)
+        } else {
+            let Some(start_time_ticks) = read_proc_start_time_ticks(observed_registration.pid)?
+            else {
+                metadata_registry.remove(&runner_id);
+                return Ok(Some(
+                    d2b_contracts_broker::broker_wire::ObserveRunnerResponse {
+                        vm_id: request.vm_id.clone(),
+                        role_id: request.role_id.clone(),
+                        present: false,
+                        pid: 0,
+                        start_time_ticks: 0,
+                        cgroup_verified: false,
+                        executable_verified: false,
+                    },
+                ));
+            };
+            if start_time_ticks != observed_registration.start_time_ticks {
+                return Err(BrokerError::LiveHandler(
+                    "runner process identity changed".to_owned(),
+                ));
+            }
+            let cgroup_verified = proc_cgroup_matches(
+                observed_registration.pid,
+                &observed_registration.cgroup_subtree,
+            );
+            let executable_path = read_runner_executable(observed_registration.pid);
+            let executable_verified = match executable_path {
+                Ok(ref path) => executable_paths_match(path, &observed_registration.binary_path),
+                Err(ref error) if error.kind() == io::ErrorKind::PermissionDenied => {
+                    // A registered pidfd and the broker-owned cgroup are the
+                    // executable provenance established by this broker. Linux
+                    // resets dumpability when a runner changes uid, so Yama
+                    // blocks the redundant /proc/<pid>/exe read without
+                    // CAP_SYS_PTRACE.
+                    pidfd_registered && cgroup_verified
+                }
+                Err(_) => false,
+            };
+            if rebound {
+                if let Some(stored) = metadata_registry.get_mut(&runner_id) {
+                    stored.guest_execution = observed_registration.guest_execution.clone();
+                } else {
+                    return Err(BrokerError::LiveHandler(
+                        "runner registration disappeared".to_owned(),
+                    ));
+                }
+            }
+            Ok(Some(
+                d2b_contracts_broker::broker_wire::ObserveRunnerResponse {
+                    vm_id: request.vm_id.clone(),
+                    role_id: request.role_id.clone(),
+                    present: true,
+                    pid: observed_registration.pid,
+                    start_time_ticks,
+                    cgroup_verified,
+                    executable_verified,
+                },
+            ))
         }
-        Err(_) => false,
-    };
-    Ok(d2b_contracts_broker::broker_wire::ObserveRunnerResponse {
-        vm_id: request.vm_id.clone(),
-        role_id: request.role_id.clone(),
-        present: true,
-        pid: registration.pid,
-        start_time_ticks,
-        cgroup_verified,
-        executable_verified,
-    })
+    })()?;
+    registered.map_or_else(|| discover_runner_candidate(request, intent), Ok)
 }
 
 #[cfg(not(feature = "layer1-bootstrap"))]
@@ -8812,8 +8948,12 @@ impl DispatchBackend for LiveDispatchBackend {
             self.daemon_uid,
             self.daemon_gid,
         )?;
-        let mut outcome = crate::live_handlers::live_spawn_runner(plan_input, preopened.child_fds)
-            .map_err(|err| {
+        let mut outcome = crate::live_handlers::live_spawn_runner(
+            plan_input,
+            preopened.child_fds,
+            req.activation_input.as_ref(),
+        )
+        .map_err(|err| {
                 // Log the actual LiveHandlerError detail before wrapping it
                 // in the opaque BrokerError::LiveHandler envelope so
                 // operators can see WHY the spawn failed in journalctl.
@@ -10627,6 +10767,7 @@ fn runner_role_for_process_role(
         ProcessRole::Audio => Some(RunnerRole::Audio),
         ProcessRole::CloudHypervisorRunner => Some(RunnerRole::CloudHypervisor),
         ProcessRole::QemuMediaRunner => Some(RunnerRole::QemuMedia),
+        ProcessRole::ActivationNixosRunner => Some(RunnerRole::ActivationNixos),
         ProcessRole::VsockRelay => Some(RunnerRole::VsockRelay),
         ProcessRole::OtelHostBridge => Some(RunnerRole::OtelHostBridge),
         ProcessRole::Usbip => Some(RunnerRole::Usbip),
@@ -10640,6 +10781,54 @@ fn runner_role_for_process_role(
 }
 
 #[cfg(not(feature = "layer1-bootstrap"))]
+fn validate_guest_process_binding(
+    request: &d2b_contracts_broker::broker_wire::BrokerRequest,
+) -> Result<(), BrokerError> {
+    use d2b_contracts_broker::broker_wire::BrokerRequest;
+
+    let binding = match request {
+        BrokerRequest::SpawnRunner(request) => request.guest_execution.as_ref(),
+        BrokerRequest::OpenPidfd(request) => request.guest_execution.as_ref(),
+        BrokerRequest::ObserveRunner(request) => request.guest_execution.as_ref(),
+        BrokerRequest::StartSystemdUnit(request)
+        | BrokerRequest::ObserveSystemdUnit(request)
+        | BrokerRequest::CheckSystemdUserManager(request) => request.guest_execution.as_ref(),
+        BrokerRequest::OpenSystemdUnitPidfd(request) => request.unit.guest_execution.as_ref(),
+        BrokerRequest::StopSystemdUnit(request) => request.unit.guest_execution.as_ref(),
+        BrokerRequest::SignalRunner(request) => request.guest_execution.as_ref(),
+        BrokerRequest::DeregisterRunnerPidfd(request) => request.guest_execution.as_ref(),
+        _ => None,
+    };
+    let Some(binding) = binding else {
+        return Ok(());
+    };
+    if !binding.is_valid() {
+        return Err(BrokerError::SpawnRunnerIntentMismatch {
+            field: "guest_execution",
+            requested: "invalid".to_owned(),
+            resolved: "nonzero-target-session-boot-assignment-generations".to_owned(),
+        });
+    }
+    let boot_id = std::fs::read_to_string("/proc/sys/kernel/random/boot_id")
+        .map_err(|_| BrokerError::SpawnRunnerIntentMismatch {
+            field: "guest_execution.boot_identity_digest",
+            requested: "present".to_owned(),
+            resolved: "kernel-boot-identity-unavailable".to_owned(),
+        })?;
+    let mut digest = Sha256::new();
+    digest.update(b"d2b-kernel-boot-id-v1\0");
+    digest.update(boot_id.trim().as_bytes());
+    let expected: [u8; 32] = digest.finalize().into();
+    if binding.boot_identity_digest != expected {
+        return Err(BrokerError::SpawnRunnerIntentMismatch {
+            field: "guest_execution.boot_identity_digest",
+            requested: "mismatch".to_owned(),
+            resolved: "kernel-boot-identity".to_owned(),
+        });
+    }
+    Ok(())
+}
+
 #[cfg(not(feature = "layer1-bootstrap"))]
 fn validate_sandbox_launch_plan(
     req: &d2b_contracts_broker::broker_wire::SpawnRunnerRequest,
@@ -10891,6 +11080,66 @@ fn validate_spawn_runner_request_matches_intent(
             requested: req.role.as_str().to_owned(),
             resolved: expected_role.as_str().to_owned(),
         });
+    }
+    if req.resource_ref.is_some() {
+        let provider_identity_matches = ["system-minijail", "system-systemd"]
+            .into_iter()
+            .map(|provider| {
+                let mut digest = Sha256::new();
+                digest.update(b"d2b-process-provider-v1");
+                digest.update(provider.as_bytes());
+                let digest: [u8; 32] = digest.finalize().into();
+                digest
+            })
+            .any(|digest| req.provider_identity == Some(digest));
+        if !provider_identity_matches {
+            return Err(BrokerError::SpawnRunnerIntentMismatch {
+                field: "provider_identity",
+                requested: "mismatch".to_owned(),
+                resolved: "signed-process-provider".to_owned(),
+            });
+        }
+        let template_matches = [
+            Some(intent.role_id.as_str()),
+            Some(intent.profile_id.as_str()),
+            match intent.role {
+                d2b_core::processes::ProcessRole::SwtpmPreStartFlush => Some("swtpm-flush"),
+                d2b_core::processes::ProcessRole::Swtpm => Some("swtpm"),
+                d2b_core::processes::ProcessRole::Virtiofsd => Some("virtiofsd"),
+                d2b_core::processes::ProcessRole::Video => Some("video"),
+                d2b_core::processes::ProcessRole::Gpu => Some("gpu"),
+                d2b_core::processes::ProcessRole::GpuRenderNode => Some("gpu-render-node"),
+                d2b_core::processes::ProcessRole::Audio => Some("audio"),
+                d2b_core::processes::ProcessRole::CloudHypervisorRunner => {
+                    Some("cloud-hypervisor")
+                }
+                d2b_core::processes::ProcessRole::QemuMediaRunner => Some("qemu-media"),
+                d2b_core::processes::ProcessRole::ActivationNixosRunner => {
+                    Some("activation-nixos-runner")
+                }
+                d2b_core::processes::ProcessRole::VsockRelay => Some("vsock-relay"),
+                d2b_core::processes::ProcessRole::OtelHostBridge => Some("otel-host-bridge"),
+                d2b_core::processes::ProcessRole::Usbip => Some("usbip"),
+                d2b_core::processes::ProcessRole::WaylandProxy => Some("wayland-proxy"),
+                _ => None,
+            },
+        ]
+        .into_iter()
+        .flatten()
+        .any(|template| {
+            let mut digest = Sha256::new();
+            digest.update(b"d2b-process-template-v1");
+            digest.update(template.as_bytes());
+            let digest: [u8; 32] = digest.finalize().into();
+            req.template_identity == Some(digest)
+        });
+        if !template_matches {
+            return Err(BrokerError::SpawnRunnerIntentMismatch {
+                field: "template_identity",
+                requested: "mismatch".to_owned(),
+                resolved: "signed-process-template".to_owned(),
+            });
+        }
     }
     Ok(())
 }
@@ -13287,7 +13536,8 @@ mod tests {
     use d2b_contracts::types::BundleOpId;
     #[cfg(not(feature = "layer1-bootstrap"))]
     use d2b_contracts_broker::broker_wire::{
-        ActivationMode, ActivationPhase, RunActivationRequest, RunActivationResponse,
+        ActivationMode, ActivationPhase, GuestExecutionBinding, RunActivationRequest,
+        RunActivationResponse,
     };
     #[cfg(not(feature = "layer1-bootstrap"))]
     use d2b_core::bundle_resolver::{ResolvedActivationIntent, ResolvedStoreViewIntent};
@@ -13407,6 +13657,107 @@ mod tests {
 
         for (role, expected) in cases {
             assert_eq!(runner_role_for_process_role(&role), expected);
+        }
+    }
+
+    #[cfg(not(feature = "layer1-bootstrap"))]
+    fn guest_execution_binding(session_generation: u64) -> GuestExecutionBinding {
+        GuestExecutionBinding {
+            target_uid: d2b_contracts_resource::v3::ResourceUid::parse(
+                "123e4567-e89b-42d3-a456-426614174000",
+            )
+            .expect("Guest UID"),
+            boot_identity_digest: [7; 32],
+            session_generation,
+            assignment_epoch: 3,
+            provider_generation: 4,
+            controller_generation: 5,
+        }
+    }
+
+    #[cfg(not(feature = "layer1-bootstrap"))]
+    fn guest_runner_registration(binding: GuestExecutionBinding) -> RunnerRegistration {
+        RunnerRegistration {
+            vm_id: "guest-vm".to_owned(),
+            role_id: "guest-process".to_owned(),
+            resource_ref: None,
+            resource_uid: None,
+            role: d2b_contracts_broker::broker_wire::RunnerRole::CloudHypervisor,
+            bundle_runner_intent_ref: "runner:guest-vm:guest-process".to_owned(),
+            pid: 1,
+            start_time_ticks: 1,
+            binary_path: PathBuf::from("/bin/true"),
+            cgroup_subtree: "d2b.slice/guest-vm/guest-process".to_owned(),
+            guest_execution: Some(binding),
+        }
+    }
+
+    #[cfg(not(feature = "layer1-bootstrap"))]
+    #[test]
+    fn guest_runner_registration_rebinds_to_a_newer_session() {
+        let mut registration = guest_runner_registration(guest_execution_binding(1));
+        let next = guest_execution_binding(2);
+
+        assert!(rebind_guest_execution_registration(&mut registration, Some(&next))
+            .expect("newer session generation rebinds"));
+        assert_eq!(registration.guest_execution, Some(next.clone()));
+        assert!(
+            !rebind_guest_execution_registration(&mut registration, Some(&next))
+                .expect("same binding remains an exact match")
+        );
+    }
+
+    #[cfg(not(feature = "layer1-bootstrap"))]
+    #[test]
+    fn guest_runner_registration_rejects_stale_or_changed_bindings() {
+        for generation in [1, 0] {
+            let mut registration = guest_runner_registration(guest_execution_binding(2));
+            let stale = guest_execution_binding(generation);
+            assert!(
+                rebind_guest_execution_registration(&mut registration, Some(&stale)).is_err(),
+                "session generation {generation} must not replace generation 2"
+            );
+        }
+
+        let mut registration = guest_runner_registration(guest_execution_binding(2));
+        for changed in [
+            {
+                let mut binding = guest_execution_binding(3);
+                binding.target_uid = d2b_contracts_resource::v3::ResourceUid::parse(
+                    "223e4567-e89b-42d3-a456-426614174000",
+                )
+                .expect("Guest UID");
+                binding
+            },
+            {
+                let mut binding = guest_execution_binding(3);
+                binding.boot_identity_digest = [8; 32];
+                binding
+            },
+            {
+                let mut binding = guest_execution_binding(3);
+                binding.assignment_epoch = 4;
+                binding
+            },
+            {
+                let mut binding = guest_execution_binding(3);
+                binding.provider_generation = 5;
+                binding
+            },
+            {
+                let mut binding = guest_execution_binding(3);
+                binding.controller_generation = 6;
+                binding
+            },
+        ] {
+            assert!(
+                rebind_guest_execution_registration(&mut registration, Some(&changed)).is_err(),
+                "non-session binding changes must not be accepted as a reconnect"
+            );
+            assert_eq!(
+                registration.guest_execution,
+                Some(guest_execution_binding(2))
+            );
         }
     }
 
@@ -15668,6 +16019,7 @@ mod tests {
                 expected_start_time_ticks: 123456,
                 resource_ref: None,
                 resource_uid: None,
+                guest_execution: None,
                 tracing_span_id: Some(TracingSpanId::new("span-pidfd")),
             }),
             "OpenPidfd",
@@ -15697,6 +16049,7 @@ mod tests {
                 expected_start_time_ticks: None,
                 resource_ref: None,
                 resource_uid: None,
+                guest_execution: None,
                 tracing_span_id: Some(TracingSpanId::new("span-signal")),
             }),
             "SignalRunner",
@@ -15721,12 +16074,14 @@ mod tests {
                 execution_ref: None,
                 execution_domain: None,
                 user_ref: None,
+                guest_execution: None,
                 resource_ref: None,
                 resource_uid: None,
                 bundle_content_identity: None,
                 provider_identity: None,
                 template_identity: None,
                 generation: None,
+                activation_input: None,
                 sandbox_plan: None,
                 workload_identity: None,
                 vm_id: VmId::new("corp-vm"),
@@ -16172,12 +16527,14 @@ mod tests {
                 execution_ref: None,
                 execution_domain: None,
                 user_ref: None,
+                guest_execution: None,
                 resource_ref: None,
                 resource_uid: None,
                 bundle_content_identity: None,
                 provider_identity: None,
                 template_identity: None,
                 generation: None,
+                activation_input: None,
                 sandbox_plan: None,
                 workload_identity: None,
                 vm_id: VmId::new("corp-vm"),
@@ -16878,12 +17235,14 @@ mod tests {
                 execution_ref: None,
                 execution_domain: None,
                 user_ref: None,
+                guest_execution: None,
                 resource_ref: None,
                 resource_uid: None,
                 bundle_content_identity: None,
                 provider_identity: None,
                 template_identity: None,
                 generation: None,
+                activation_input: None,
                 sandbox_plan: None,
                 workload_identity: None,
                 vm_id: VmId::new("corp-vm"),
@@ -17017,12 +17376,14 @@ mod tests {
                 execution_ref: None,
                 execution_domain: None,
                 user_ref: None,
+                guest_execution: None,
                 resource_ref: None,
                 resource_uid: None,
                 bundle_content_identity: None,
                 provider_identity: None,
                 template_identity: None,
                 generation: None,
+                activation_input: None,
                 sandbox_plan: None,
                 workload_identity: None,
                 vm_id: VmId::new("corp-vm"),
@@ -17103,6 +17464,7 @@ mod tests {
                 expected_start_time_ticks: None,
                 resource_ref: None,
                 resource_uid: None,
+                guest_execution: None,
                 tracing_span_id: None,
             });
         let audit_context = DispatchAuditContext::from_request(&request, 5151, &caller_role)

@@ -6,7 +6,8 @@ use d2b_contracts_resource::v3::{
     ResourceRef,
 };
 use d2b_provider_activation_nixos::{
-    ActivationCaller, ActivationController, CallerRole, GenerationObservation, GenerationPhase,
+    activation_runner_name, activation_runner_ref, ActivationCaller, ActivationController,
+    CallerRole, GenerationObservation, GenerationPhase,
 };
 
 fn spec() -> NixosGenerationSpec {
@@ -51,7 +52,72 @@ fn compatible_generation_starts_one_typed_runner() {
         .unwrap();
     assert_eq!(result.runner_requests().len(), 1);
     assert!(result.runner_requests()[0].start_root);
+    assert_eq!(
+        result.runner_requests()[0].runner_name,
+        activation_runner_name(
+            &ResourceRef::parse(
+                "activation-nixos.d2bus.org.NixosGeneration/gen-7"
+            )
+            .unwrap()
+        )
+    );
     assert_eq!(result.phase(), ResourcePhase::Pending);
+}
+
+#[test]
+fn activation_runner_reference_is_stable_and_target_local() {
+    let generation =
+        ResourceRef::parse("activation-nixos.d2bus.org.NixosGeneration/gen-7").unwrap();
+    assert_eq!(activation_runner_ref(&generation), activation_runner_ref(&generation));
+    assert_eq!(
+        activation_runner_ref(&generation).resource_type().as_str(),
+        "EphemeralProcess"
+    );
+    assert_ne!(
+        activation_runner_ref(&generation),
+        activation_runner_ref(
+            &ResourceRef::parse("activation-nixos.d2bus.org.NixosGeneration/gen-8").unwrap()
+        )
+    );
+}
+
+#[test]
+fn activation_runner_spec_is_closed_and_bounded() {
+    let generation =
+        ResourceRef::parse("activation-nixos.d2bus.org.NixosGeneration/gen-7").unwrap();
+    let controller = ActivationController::new(3);
+    let planned = controller
+        .reconcile(
+            &spec(),
+            &caller(),
+            &[],
+            GenerationObservation::new("gen-7", GenerationPhase::Pending),
+        )
+        .unwrap();
+    let runner = d2b_provider_activation_nixos::activation_runner_spec(
+        &planned.runner_requests()[0],
+    );
+    let rendered = serde_json::to_value(&runner).expect("runner spec is serializable");
+    assert_eq!(
+        rendered["activationInput"]["systemArtifactId"],
+        "dev-vm-system"
+    );
+    assert_eq!(rendered["activationInput"]["targetGeneration"], 7);
+    assert_eq!(rendered["activationInput"]["activationMode"], "switch");
+    assert_eq!(
+        runner.execution().execution_ref(),
+        &ResourceRef::parse("Guest/dev-vm").unwrap()
+    );
+    assert_eq!(runner.execution().template().as_str(), "activation-nixos-runner");
+    assert_eq!(runner.execution().process_class(), d2b_contracts_resource::v3::ProcessClass::Worker);
+    assert!(runner.execution().sandbox().start_root());
+    assert!(runner.execution().sandbox().no_new_privileges());
+    assert_eq!(runner.start_deadline().as_str(), "120s");
+    assert_eq!(runner.runtime_deadline().as_str(), "600s");
+    assert_eq!(
+        activation_runner_name(&generation).as_str(),
+        "activation-nixos--runner--gen-7"
+    );
 }
 
 #[test]
