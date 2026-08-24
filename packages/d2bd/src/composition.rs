@@ -16816,6 +16816,64 @@ fn vm_supports_store_sync(resolver: &BundleResolver, vm: &str) -> bool {
     }
 }
 
+/// Reconcile the committed WaylandSession before the legacy VM DAG reaches
+/// the GPU edge. The durable display node remains outside DAG spawning; this
+/// path only creates and launches its Host Process child through the Resource
+/// API and Process Provider.
+fn reconcile_display_before_vm_start(
+    state: &ServerState,
+    vm: &str,
+    dag: &d2b_core::processes::VmProcessDag,
+) -> Result<(), String> {
+    if !dag.nodes.iter().any(is_durable_wayland_process_node) {
+        return Ok(());
+    }
+    let zone = d2bd_runtime::zone_authority::authoritative_zone_for_vm(
+        &state.zone_coordinator,
+        vm,
+    )
+    .map_err(|_| "display-session-zone-unavailable".to_owned())?;
+    let plane = state
+        .resource_plane
+        .lock()
+        .map_err(|_| "display-resource-plane-unavailable".to_owned())?
+        .clone()
+        .ok_or_else(|| "display-resource-plane-unavailable".to_owned())?;
+    let runtime = plane
+        .zone(&zone)
+        .map_err(|_| "display-resource-runtime-unavailable".to_owned())?;
+    let Some((session_ref, session_uid, spec)) =
+        block_on_future(runtime.committed_wayland_session_for_vm(vm))
+            .map_err(|_| "display-session-unavailable".to_owned())?
+    else {
+        return Err("display-session-missing".to_owned());
+    };
+    let result = {
+        let mut interactions = block_on_future(state.interaction_runtime.lock());
+        let runtime_set = interactions
+            .as_mut()
+            .ok_or_else(|| "display-interaction-runtime-unavailable".to_owned())?;
+        runtime_set
+            .reconcile_committed_display_for_vm_start(
+                &zone,
+                vm,
+                &session_ref,
+                &session_uid,
+                &spec,
+            )
+            .map_err(|error| error.to_string())?
+    };
+    if result.status.phase == d2b_provider_display_wayland::Phase::Failed {
+        return Err("display-session-reconcile-failed".to_owned());
+    }
+    if result.status.resource.proxy_process_ref.is_none() {
+        return Err("display-host-proxy-resource-missing".to_owned());
+    }
+    block_on_future(runtime.reconcile_process_resources(Arc::new(state.clone())))
+        .map_err(|_| "display-host-proxy-process-reconcile-failed".to_owned())?;
+    Ok(())
+}
+
 fn ensure_vm_runtime_capability(
     state: &ServerState,
     vm: &str,
@@ -19549,12 +19607,27 @@ fn dispatch_broker_vm_start_inner(
         .nodes
         .iter()
         .filter(|node| !is_guest_owned_process_node(node))
+        .filter(|node| !is_durable_wayland_process_node(node))
         .filter_map(|node| match vm_start_node_mode(&node.role) {
             VmStartNodeMode::LongLived(_) => Some(tracked_role_id(node)),
             _ => None,
         })
         .collect::<Vec<_>>();
     let _vm_start_lock = acquire_vm_start_lock(state, &request.vm)?;
+    if let Err(error) = reconcile_display_before_vm_start(state, &request.vm, dag) {
+        tracing::warn!(
+            vm = %request.vm,
+            error = %error,
+            "vm start: committed display reconciliation failed before DAG execution",
+        );
+        return Ok(daemon_failure_response(
+            VERB,
+            format!(
+                "vm start {}: committed WaylandSession display reconciliation failed ({error})",
+                request.vm
+            ),
+        ));
+    }
     // v1.1.1fu14 B3 + B7: prune entries whose backing process
     // has died (or whose PID has been reused) BEFORE checking
     // for existing registrations. This handles the
@@ -27851,7 +27924,7 @@ mod broker_dispatch_tests {
         note_force_shutdown_request, prove_role_cgroup_empty_or_escalate, provider_shutdown,
         read_activation_marker, redact_broker_dispatch_failure_for_launcher,
         redact_broker_error_for_launcher, resolve_store_view_intent_for_vm,
-        rollback_failed_vm_start, run_provider_graceful_shutdown,
+        reconcile_display_before_vm_start, rollback_failed_vm_start, run_provider_graceful_shutdown,
         same_vm_declared_usbip_start_claims_with_reader,
         same_vm_persisted_usbip_stop_claims_with_reader,
         stale_qemu_media_dependency_roles_from_entries, try_acquire_activation_lock,
@@ -30102,6 +30175,41 @@ mod broker_dispatch_tests {
         let expected_remediation = "Supervisor DAG aborted before every readiness deadline passed. Admin: inspect `journalctl -u d2bd` for the per-node supervisor audit.";
 
         assert_redacted_broker_error(&response, "vm start", "SpawnRunner", expected_remediation);
+    }
+
+    #[test]
+    fn graphics_vm_start_refuses_without_resource_backed_display_reconciliation() {
+        use d2b_core::processes::{NodeId, ProcessRole, VmProcessDag, VmProcessInvariants};
+
+        let state = test_state_with_broker_socket(unreachable_broker_socket_path(
+            "vm-start-display-resource-missing",
+        ));
+        let mut node = readiness_test_node();
+        node.id = NodeId("wayland-proxy".to_owned());
+        node.role = ProcessRole::WaylandProxy;
+        node.execution_ref = Some("Host/host-system".to_owned());
+        let dag = VmProcessDag {
+            workload_identity: None,
+            vm: "vm-a".to_owned(),
+            nodes: vec![node],
+            edges: Vec::new(),
+            invariants: VmProcessInvariants {
+                per_vm_audit_pipeline: true,
+                swtpm_pre_start_flush: false,
+                tpm_ownership_migration_without_running_vm_mutation: false,
+                usbip_gating: false,
+            },
+        };
+
+        assert_eq!(
+            reconcile_display_before_vm_start(&state, "vm-a", &dag),
+            Err("display-resource-plane-unavailable".to_owned()),
+            "graphics start must fail closed before the display socket wait"
+        );
+        assert!(
+            !state.pidfd_table.contains("vm-a", RunnerRole::WaylandProxy.as_str()),
+            "missing committed display state must not fall back to direct DAG spawning"
+        );
     }
 
     #[test]

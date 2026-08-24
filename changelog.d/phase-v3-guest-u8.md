@@ -12,3 +12,6 @@
   resource revision, and drain Process children before deleting Endpoints.
 - Remove the obsolete display-specific broker routing and Guest systemd
   fallback; production display execution now uses the signed Process path.
+- Reconcile the committed WaylandSession during trusted graphics VM start so
+  the Host proxy Process is resource-backed and launched before GPU readiness;
+  missing display sessions fail closed without a direct-spawn fallback.

@@ -475,6 +475,21 @@ where
         self.runtimes.get_mut(zone.as_str())
     }
 
+    /// Reconcile the committed WaylandSession for one exact VM before its
+    /// process DAG waits on the Host proxy socket.
+    pub(crate) fn reconcile_committed_display_for_vm_start(
+        &mut self,
+        zone: &ZoneId,
+        vm: &str,
+        session_ref: &ResourceRef,
+        session_uid: &ResourceUid,
+        spec: &WaylandSessionSpec,
+    ) -> Result<d2b_provider_display_wayland::ReconcileResult, DisplayRuntimeError> {
+        self.runtime_for_mut(zone)
+            .ok_or(DisplayRuntimeError::SessionUnauthenticated)?
+            .reconcile_committed_display_for_vm_start(vm, session_ref, session_uid, spec)
+    }
+
     /// Find the sole authenticated ComponentSession owned by one exact
     /// execution target and service across the daemon's Zone compositions.
     /// Absent, stale, or ambiguous sources fail closed.
@@ -2429,6 +2444,38 @@ where
             supervision,
             &policy,
         )
+    }
+
+    /// Reconcile a committed display session as part of an exact VM start.
+    ///
+    /// This reuses the typed DisplayService/Reconcile path but takes its
+    /// desired state only from the committed Zone resource. The live display
+    /// route and the committed session identity must agree before any child
+    /// Process resource can be created.
+    pub(crate) fn reconcile_committed_display_for_vm_start(
+        &mut self,
+        vm: &str,
+        session_ref: &ResourceRef,
+        session_uid: &ResourceUid,
+        spec: &WaylandSessionSpec,
+    ) -> Result<d2b_provider_display_wayland::ReconcileResult, DisplayRuntimeError> {
+        let expected_guest_name = format!("Guest/{vm}");
+        let expected_guest = ResourceRef::parse(&expected_guest_name)
+            .map_err(|_| DisplayRuntimeError::SessionMismatch)?;
+        let identity = self
+            .interaction_identity
+            .as_ref()
+            .ok_or(DisplayRuntimeError::SessionUnauthenticated)?;
+        if identity.wayland_session_ref() != session_ref
+            || identity.wayland_session_uid() != session_uid
+            || identity.subject_ref() != &expected_guest
+            || spec.guest_ref() != identity.subject_ref()
+            || spec.host_ref() != identity.host_execution_ref()
+            || spec.user_ref() != identity.user_ref()
+        {
+            return Err(DisplayRuntimeError::SessionMismatch);
+        }
+        self.reconcile_display_request(DisplayReconcileRequest { spec: spec.clone() })
     }
 
     /// Finalize display first, then drain clipboard/notification effects, and
@@ -7039,6 +7086,103 @@ mod tests {
             ),
         );
         runtimes
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn vm_start_display_reconcile_uses_the_committed_session_route() {
+        let directory = tempfile::tempdir().expect("display reconciliation directory");
+        let zone = ZoneId::parse("work").expect("zone");
+        let uid = nix::unistd::getuid().as_raw();
+        let runtime = Arc::new(AsyncMutex::new(Some(committed_test_interaction_runtime(
+            &zone, uid,
+        ))));
+        let path = directory.path().join("display.sock");
+        let listener = bind_interaction_listener(&path, uid).expect("display listener");
+        let (_client, server) = establish_test_client(
+            &listener,
+            &runtime,
+            &zone,
+            d2b_provider_display_wayland::SERVICE_PACKAGE,
+            uid,
+            &path,
+        )
+        .await;
+        for _ in 0..50 {
+            if runtime
+                .lock()
+                .await
+                .as_ref()
+                .and_then(|set| set.runtime_for(&zone))
+                .is_some_and(|composition| composition.has_service_session(
+                    d2b_provider_display_wayland::SERVICE_PACKAGE,
+                ))
+            {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(1)).await;
+        }
+
+        let spec = WaylandSessionSpec::new(
+            ResourceRef::parse("Guest/work").expect("guest"),
+            ResourceRef::parse("Host/host").expect("host"),
+            ResourceRef::parse("User/alice").expect("user"),
+            ResourceRef::parse(
+                "display-wayland.d2bus.org.WaylandPolicy/display-wayland",
+            )
+            .expect("policy"),
+            d2b_provider_display_wayland::DisplayIdentity::new(
+                "work",
+                "#112233",
+                "#223344",
+                "#334455",
+            )
+            .expect("display identity"),
+            true,
+        )
+        .expect("Wayland session");
+        let session_ref =
+            ResourceRef::parse("display-wayland.d2bus.org.WaylandSession/display-wayland")
+                .expect("session ref");
+        let session_uid =
+            ResourceUid::parse("33333333-3333-4333-8333-333333333333").expect("session uid");
+
+        let mut guard = runtime.lock().await;
+        let composition = guard
+            .as_mut()
+            .and_then(|set| set.runtime_for_mut(&zone))
+            .expect("committed interaction composition");
+        let result = composition
+            .reconcile_committed_display_for_vm_start(
+                "work",
+                &session_ref,
+                &session_uid,
+                &spec,
+            )
+            .expect("committed display reconciliation");
+        assert_eq!(
+            result.status.phase,
+            d2b_provider_display_wayland::Phase::Ready
+        );
+        assert_eq!(result.worker_actions.len(), 0);
+        assert_eq!(
+            result.status.resource.proxy_process_ref,
+            None,
+            "the hermetic effect port has no Resource API; production must supply the durable projection"
+        );
+        assert!(
+            composition
+                .reconcile_committed_display_for_vm_start(
+                    "other-vm",
+                    &session_ref,
+                    &session_uid,
+                    &spec,
+                )
+                .is_err(),
+            "a VM start for a different Guest must not reuse the committed session"
+        );
+        drop(guard);
+        server.abort();
+        drop(listener);
     }
 
     #[test]

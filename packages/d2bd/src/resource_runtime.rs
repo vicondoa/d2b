@@ -1565,6 +1565,72 @@ impl ZoneResourceRuntime {
         self.interaction_identity.as_ref()
     }
 
+    /// Resolve the one committed WaylandSession that owns a VM's display
+    /// lifecycle. A missing row is reported separately so VM start can fail
+    /// closed without inventing a display process or session identity.
+    pub(crate) async fn committed_wayland_session_for_vm(
+        &self,
+        vm: &str,
+    ) -> Result<
+        Option<(ResourceRef, ResourceUid, WaylandSessionSpec)>,
+        ResourceRuntimeError,
+    > {
+        if !self.readiness.resource_api_ready {
+            return Err(ResourceRuntimeError::PlaneUnavailable);
+        }
+        let expected_guest = ResourceRef::parse(&format!("Guest/{vm}"))
+            .map_err(|_| ResourceRuntimeError::InteractionConfigurationUnavailable)?;
+        let Some(identity) = self.interaction_identity.as_ref() else {
+            return Ok(None);
+        };
+        if identity.subject_ref() != &expected_guest {
+            return Err(ResourceRuntimeError::InteractionConfigurationUnavailable);
+        }
+        let resource = committed_resource(
+            &self.zone,
+            &self.store,
+            self.store_metadata.current_revision,
+            identity.wayland_session_ref(),
+        )
+        .await?;
+        let spec = committed_wayland_session_spec(
+            &self.zone,
+            self.store_metadata.current_revision,
+            &resource,
+        )?;
+        if spec.guest_ref() != &expected_guest || !spec.cross_domain_trusted() {
+            return Err(ResourceRuntimeError::InteractionConfigurationUnavailable);
+        }
+        if identity.wayland_session_ref() != &resource.resource_ref
+            || identity.wayland_session_uid() != &resource.uid
+            || identity.subject_ref() != spec.guest_ref()
+            || identity.host_execution_ref() != spec.host_ref()
+            || identity.user_ref() != spec.user_ref()
+        {
+            return Err(ResourceRuntimeError::InteractionConfigurationUnavailable);
+        }
+        let envelope = ResourceEnvelope::from_json(&resource.canonical_json)
+            .map_err(|_| ResourceRuntimeError::InteractionConfigurationUnavailable)?;
+        let deletion_requested = CanonicalJsonValue::parse(&resource.canonical_json)
+            .ok()
+            .is_some_and(|value| match value {
+                CanonicalJsonValue::Object(root) => root
+                    .get("metadata")
+                    .and_then(CanonicalJsonValue::as_object)
+                    .and_then(|metadata| metadata.get("deletionRequestedAt"))
+                    .is_some_and(|value| !matches!(value, CanonicalJsonValue::Null)),
+                _ => false,
+            });
+        if matches!(
+            envelope.status().phase(),
+            ResourcePhase::Failed | ResourcePhase::Deleted
+        ) || deletion_requested
+        {
+            return Err(ResourceRuntimeError::InteractionConfigurationUnavailable);
+        }
+        Ok(Some((resource.resource_ref, resource.uid, spec)))
+    }
+
     pub(crate) const fn interaction_provider_configuration_refused(&self) -> bool {
         self.interaction_provider_configuration_refused
     }
@@ -3060,7 +3126,12 @@ async fn committed_resource(
 ) -> Result<StoredResource, ResourceRuntimeError> {
     if !matches!(
         resource_ref.resource_type().as_str(),
-        "Guest" | "Host" | "Provider" | "User" | "display-wayland.d2bus.org.WaylandPolicy"
+        "Guest"
+            | "Host"
+            | "Provider"
+            | "User"
+            | "display-wayland.d2bus.org.WaylandPolicy"
+            | "display-wayland.d2bus.org.WaylandSession"
     ) {
         return Err(ResourceRuntimeError::InteractionConfigurationUnavailable);
     }

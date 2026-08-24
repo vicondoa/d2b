@@ -177,6 +177,10 @@ in
   # Host wayland-proxy node: present for crossDomainTrusted=true
   assert lib.assertMsg (builtins.length trustedWlproxyNodes == 1)
     "crossDomainTrusted=true should emit exactly one wayland-proxy host DAG node";
+  assert lib.assertMsg ((builtins.head trustedWlproxyNodes).executionRef == "Host/host-system")
+    "trusted wayland-proxy node should retain the Host execution reference for resource reconciliation";
+  assert lib.assertMsg ((builtins.head trustedWlproxyNodes).executionDomain == "system")
+    "trusted wayland-proxy node should retain the system execution domain for resource reconciliation";
   # Host wayland-proxy node: absent for crossDomainTrusted=false
   assert lib.assertMsg (builtins.length defaultWlproxyNodes == 0)
     "crossDomainTrusted=false should not emit a wayland-proxy host DAG node";
