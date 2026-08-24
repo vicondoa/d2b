@@ -274,7 +274,10 @@ if [ -z "${D2B_XTASK_BIN:-}" ] || [ ! -x "${D2B_XTASK_BIN}" ]; then
   bootstrap_log="$SCRATCH/bootstrap.log"
   bootstrap_flags=()
   if [ "$PROFILE" != local ]; then
-    bootstrap_flags+=(--shell_executable=/bin/bash)
+    bootstrap_flags+=(
+      --shell_executable=/bin/bash
+      --remote_download_outputs=all
+    )
   fi
   if ! (umask 077; : >"$bootstrap_log") || ! chmod 0600 "$bootstrap_log"; then
     rm -f -- "$bootstrap_log"
