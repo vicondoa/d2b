@@ -2,7 +2,7 @@
 //!
 //! The Provider owns ordering and retention.  The daemon supplies one
 //! dispatcher that maps these typed calls to Core authority admission,
-//! `SpawnRunner`, guest-control, and the closed broker projection operation.
+//! typed Process-resource effects and the closed broker projection operation.
 //! This module contains no broker dependency and therefore cannot bypass the
 //! typed supervisor boundary.
 
@@ -17,8 +17,8 @@ use crate::{
 /// Daemon-owned USBIP dispatch surface.
 ///
 /// Implementations must reserve Host-global claims before `bind_owned` or
-/// `spawn_attach_runner`, keep every lease until its close operation confirms,
-/// and use the broker's typed `SpawnRunner` path for attach processes.
+/// `ensure_attach_process`, keep every lease until its close operation
+/// confirms, and submit attach work as a typed Process-resource effect.
 pub trait UsbipBrokerDispatcher {
     /// Reserve the exact physical USB backing.
     fn reserve_physical(
@@ -63,29 +63,29 @@ pub trait UsbipBrokerDispatcher {
         slot: &BindingSlotLease,
     ) -> Result<BindingProxyLease, BindingLifecycleError>;
 
-    /// Spawn one attach runner through d2bd's typed SpawnRunner operation.
-    fn spawn_attach_runner(
+    /// Ensure one attach EphemeralProcess child.
+    fn ensure_attach_process(
         &mut self,
         binding: &BindingIdentity,
         proxy: &BindingProxyLease,
     ) -> Result<AttachProcessIdentity, BindingLifecycleError>;
 
-    /// Observe one persisted attach runner by pidfd and start time.
-    fn observe_attach_runner(
+    /// Observe one persisted attach Process child by its identity.
+    fn observe_attach_process(
         &mut self,
         binding: &BindingIdentity,
         identity: &AttachProcessIdentity,
     ) -> Result<crate::AttachmentObservation, BindingLifecycleError>;
 
-    /// Detach the Guest through the Binding-private endpoint.
-    fn detach_guest(
+    /// Delete the Binding-private Guest Endpoint.
+    fn delete_guest_endpoint(
         &mut self,
         binding: &BindingIdentity,
         proxy: &BindingProxyLease,
     ) -> Result<(), BindingLifecycleError>;
 
-    /// Close one exact attach runner after Guest detach.
-    fn close_attach_runner(
+    /// Delete one exact attach Process after Endpoint deletion.
+    fn delete_attach_process(
         &mut self,
         binding: &BindingIdentity,
         identity: &AttachProcessIdentity,
@@ -182,36 +182,36 @@ impl<D: UsbipBrokerDispatcher> BindingPort for ProductionPort<D> {
         self.dispatcher.start_proxy(binding, slot)
     }
 
-    fn spawn_attach_runner(
+    fn ensure_attach_process(
         &mut self,
         binding: &BindingIdentity,
         proxy: &BindingProxyLease,
     ) -> Result<AttachProcessIdentity, BindingLifecycleError> {
-        self.dispatcher.spawn_attach_runner(binding, proxy)
+        self.dispatcher.ensure_attach_process(binding, proxy)
     }
 
-    fn observe_attach_runner(
+    fn observe_attach_process(
         &mut self,
         binding: &BindingIdentity,
         identity: &AttachProcessIdentity,
     ) -> Result<crate::AttachmentObservation, BindingLifecycleError> {
-        self.dispatcher.observe_attach_runner(binding, identity)
+        self.dispatcher.observe_attach_process(binding, identity)
     }
 
-    fn detach_guest(
+    fn delete_guest_endpoint(
         &mut self,
         binding: &BindingIdentity,
         proxy: &BindingProxyLease,
     ) -> Result<(), BindingLifecycleError> {
-        self.dispatcher.detach_guest(binding, proxy)
+        self.dispatcher.delete_guest_endpoint(binding, proxy)
     }
 
-    fn close_attach_runner(
+    fn delete_attach_process(
         &mut self,
         binding: &BindingIdentity,
         identity: &AttachProcessIdentity,
     ) -> Result<(), BindingLifecycleError> {
-        self.dispatcher.close_attach_runner(binding, identity)
+        self.dispatcher.delete_attach_process(binding, identity)
     }
 
     fn close_proxy(

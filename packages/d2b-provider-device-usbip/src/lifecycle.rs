@@ -5,7 +5,58 @@
 //! a Binding finalizer from releasing a physical device that other Bindings
 //! might still use.
 
-use d2b_contracts_resource::v3::ResourceUid;
+use d2b_contracts_provider::v3::semantic_services::{
+    SemanticFamily,
+    child_resources::{
+        BindingChildKind, BindingChildPlacement, BindingChildRequest, BindingChildSet,
+        explicit_binding_children,
+    },
+};
+use d2b_contracts_resource::v3::ExecutionDomain;
+use d2b_contracts_resource::v3::{ResourceRef, ResourceUid};
+
+const USBIP_PROVIDER_REF: &str = "Provider/device-usbip";
+
+const USBIP_BINDING_CHILD_REQUESTS: [BindingChildRequest; 2] = [
+    BindingChildRequest::process(
+        BindingChildKind::Process,
+        BindingChildPlacement::Guest,
+        "guest-proxy",
+        "Provider/system-minijail",
+        "usbip-guest-proxy",
+        ExecutionDomain::System,
+        "service",
+    ),
+    BindingChildRequest::endpoint(
+        BindingChildPlacement::Guest,
+        "guest-endpoint",
+        "guest-proxy",
+    ),
+];
+
+/// Build the resource-backed children for one explicitly authored USB
+/// Binding.
+///
+/// The returned children are UID-free intents. The generic Process Provider
+/// owns launch, adoption, signalling, and reap; this Provider only describes
+/// its required children and observes their status.
+pub fn binding_child_resources(
+    binding_ref: &ResourceRef,
+    service_ref: &ResourceRef,
+    target_ref: &ResourceRef,
+) -> Result<
+    BindingChildSet,
+    d2b_contracts_provider::v3::semantic_services::child_resources::BindingChildError,
+> {
+    explicit_binding_children(
+        SemanticFamily::Usb,
+        binding_ref.clone(),
+        service_ref.clone(),
+        target_ref.clone(),
+        ResourceRef::parse(USBIP_PROVIDER_REF).expect("USBIP Provider reference is canonical"),
+        &USBIP_BINDING_CHILD_REQUESTS,
+    )
+}
 
 /// Opaque Host-global physical-backing reservation issued by the Core adapter.
 #[derive(Clone, PartialEq, Eq)]
@@ -272,7 +323,7 @@ impl core::fmt::Debug for ServiceLifecycle {
     }
 }
 
-/// Verified pidfd/start-time identity for a broker-spawned attach runner.
+/// Verified identity for a controller-created attach Process resource.
 #[derive(Clone, PartialEq, Eq)]
 pub struct AttachProcessIdentity {
     pid: u32,
@@ -348,19 +399,19 @@ impl core::fmt::Debug for BindingProxyLease {
     }
 }
 
-/// Restart observation of a previously stored attach-runner identity.
+/// Restart observation of a previously stored attach Process resource.
 #[derive(Clone, PartialEq, Eq)]
 pub enum AttachmentObservation {
-    /// A live runner matches the stored pidfd/start-time identity.
+    /// A live Process matches the stored identity.
     Matching {
         /// The exact Service admission slot restored with the runner.
         slot: BindingSlotLease,
         /// The exact private proxy restored with the runner.
         proxy: BindingProxyLease,
     },
-    /// No runner exists and normal reconciliation may create one.
+    /// No Process exists and normal reconciliation may create one.
     Missing,
-    /// A pid or bus identity was reused or could not be proven.
+    /// A process identity was reused or could not be proven.
     StaleIdentity,
 }
 
@@ -379,13 +430,13 @@ impl core::fmt::Debug for AttachmentObservation {
 pub enum BindingPhase {
     /// The Binding is not attached.
     WaitingForService,
-    /// A slot, proxy, or runner is being acquired.
+    /// A slot, proxy, or Process resource is being acquired.
     Attaching,
     /// The Binding owns a Guest attachment through its private proxy.
     Attached,
     /// Restart observation was ambiguous; no destructive mutation is allowed.
     Quarantined,
-    /// Guest, runner, proxy, and slot cleanup is underway.
+    /// Guest Endpoint, Process, proxy, and slot cleanup is underway.
     Releasing,
     /// Every Binding-owned effect is closed.
     Closed,
@@ -432,7 +483,7 @@ impl core::fmt::Display for BindingLifecycleError {
 
 impl std::error::Error for BindingLifecycleError {}
 
-/// Port through which a Binding reaches its supervisor and brokered runner.
+/// Port through which a Binding requests and observes child resources.
 pub trait BindingPort {
     /// Reserve the Service admission slot for this exact Binding.
     fn acquire_slot(
@@ -447,29 +498,35 @@ pub trait BindingPort {
         slot: &BindingSlotLease,
     ) -> Result<BindingProxyLease, BindingLifecycleError>;
 
-    /// Spawn the one-shot attach runner through d2bd's `SpawnRunner` path.
-    fn spawn_attach_runner(
+    /// Create or adopt the one-shot attach `EphemeralProcess` child.
+    ///
+    /// The Provider only submits a resource effect. The Process controller
+    /// owns launch, adoption, signalling, and reaping.
+    fn ensure_attach_process(
         &mut self,
         binding: &BindingIdentity,
         proxy: &BindingProxyLease,
     ) -> Result<AttachProcessIdentity, BindingLifecycleError>;
 
-    /// Verify a persisted attach runner by pidfd and start-time identity.
-    fn observe_attach_runner(
+    /// Observe the controller-owned attach Process by its identity.
+    fn observe_attach_process(
         &mut self,
         binding: &BindingIdentity,
         identity: &AttachProcessIdentity,
     ) -> Result<AttachmentObservation, BindingLifecycleError>;
 
-    /// Detach the Guest through the Binding-private Endpoint.
-    fn detach_guest(
+    /// Delete the Binding-private Guest Endpoint.
+    ///
+    /// The endpoint controller performs the authenticated Guest detach; a
+    /// Provider controller never calls a Guest feature RPC directly.
+    fn delete_guest_endpoint(
         &mut self,
         binding: &BindingIdentity,
         proxy: &BindingProxyLease,
     ) -> Result<(), BindingLifecycleError>;
 
-    /// Close the exact broker-spawned attach runner after Guest detach.
-    fn close_attach_runner(
+    /// Delete the owned attach `EphemeralProcess` after Endpoint deletion.
+    fn delete_attach_process(
         &mut self,
         binding: &BindingIdentity,
         identity: &AttachProcessIdentity,
@@ -567,7 +624,7 @@ impl BindingLifecycle {
                 .proxy
                 .as_ref()
                 .ok_or(BindingLifecycleError::AdmissionDenied)?;
-            self.attach = Some(port.spawn_attach_runner(&self.identity, proxy)?);
+            self.attach = Some(port.ensure_attach_process(&self.identity, proxy)?);
         }
         self.phase = BindingPhase::Attached;
         Ok(())
@@ -583,7 +640,7 @@ impl BindingLifecycle {
         if !self.is_same_zone() {
             return Err(BindingLifecycleError::WrongZone);
         }
-        match port.observe_attach_runner(&self.identity, &identity)? {
+        match port.observe_attach_process(&self.identity, &identity)? {
             AttachmentObservation::Matching { slot, proxy } => {
                 self.slot = Some(slot);
                 self.proxy = Some(proxy);
@@ -619,8 +676,8 @@ impl BindingLifecycle {
                 .proxy
                 .as_ref()
                 .ok_or(BindingLifecycleError::AdmissionDenied)?;
-            port.detach_guest(&self.identity, proxy)?;
-            port.close_attach_runner(&self.identity, identity)?;
+            port.delete_guest_endpoint(&self.identity, proxy)?;
+            port.delete_attach_process(&self.identity, identity)?;
             self.attach = None;
         }
         if let Some(proxy) = self.proxy.as_ref() {
@@ -643,7 +700,7 @@ impl core::fmt::Debug for BindingLifecycle {
             .field("phase", &self.phase)
             .field("has_slot", &self.slot.is_some())
             .field("has_proxy", &self.proxy.is_some())
-            .field("has_attach_runner", &self.attach.is_some())
+            .field("has_attach_process", &self.attach.is_some())
             .finish()
     }
 }

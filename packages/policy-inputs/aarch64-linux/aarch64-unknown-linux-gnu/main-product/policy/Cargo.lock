@@ -1332,6 +1332,7 @@ name = "d2b-provider-audio-pipewire"
 version = "0.0.0-bootstrap"
 dependencies = [
  "d2b-contracts",
+ "d2b-contracts-provider",
  "d2b-contracts-resource",
  "d2b-contracts-zone-session",
  "libc",
@@ -1463,6 +1464,7 @@ version = "0.0.0-bootstrap"
 dependencies = [
  "d2b-contracts",
  "d2b-contracts-broker",
+ "d2b-contracts-provider",
  "d2b-contracts-resource",
  "d2b-contracts-zone-session",
  "d2b-core",

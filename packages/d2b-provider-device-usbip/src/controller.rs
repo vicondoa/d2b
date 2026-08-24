@@ -1,15 +1,127 @@
 //! USB Service firewall and relay lifecycle controller.
 
-use d2b_contracts_resource::v3::{
-    ResourceGeneration,
-    ResourceUid,
-};
+use d2b_contracts_provider::v3::semantic_services::child_resources::BindingChildSet;
+use d2b_contracts_resource::v3::{ResourceGeneration, ResourceRef, ResourceUid};
 
+use crate::binding_child_resources;
 use crate::firewall::{
     FirewallConfirmationKind, FirewallDigest, FirewallGenerationFence, FirewallProjectionAction,
     FirewallProjectionIntent, FirewallToken, RelayAuthorityLease, UsbipEffectError,
     UsbipEffectPort,
 };
+
+/// Closed USB Binding lifecycle phase.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum UsbipBindingPhase {
+    /// Child resources are being admitted.
+    Pending,
+    /// Child resources are ready for attachment observation.
+    Ready,
+    /// A child resource or attachment is temporarily unavailable.
+    Degraded,
+    /// Child resources are draining.
+    Deleted,
+}
+
+/// USB Binding reconcile output.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct UsbipBindingReconcileResult {
+    /// Binding lifecycle phase.
+    pub phase: UsbipBindingPhase,
+    /// UID-free Process and Endpoint intents.
+    pub children: BindingChildSet,
+}
+
+/// Controller-level errors for USB Binding child admission.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum UsbipBindingControllerError {
+    /// Binding, Service, target, or Provider references were not admitted.
+    Admission,
+    /// Reconciliation was requested after finalization.
+    Finalized,
+}
+
+impl core::fmt::Display for UsbipBindingControllerError {
+    fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        formatter.write_str(match self {
+            Self::Admission => "usbip-binding-controller-admission-failed",
+            Self::Finalized => "usbip-binding-controller-finalized",
+        })
+    }
+}
+
+impl std::error::Error for UsbipBindingControllerError {}
+
+/// Provider-owned USB Binding controller.
+///
+/// This controller declares and observes child resources. Host bind,
+/// attachment launch, adoption, signalling, and reap stay behind the generic
+/// resource runtime and the typed lifecycle port.
+pub struct UsbipBindingController {
+    children: BindingChildSet,
+    phase: UsbipBindingPhase,
+}
+
+impl core::fmt::Debug for UsbipBindingController {
+    fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        formatter
+            .debug_struct("UsbipBindingController")
+            .field("phase", &self.phase)
+            .field("children", &self.children)
+            .finish()
+    }
+}
+
+impl UsbipBindingController {
+    /// Construct a Binding controller from explicit authored references.
+    pub fn new(
+        binding_ref: &ResourceRef,
+        service_ref: &ResourceRef,
+        target_ref: &ResourceRef,
+    ) -> Result<Self, UsbipBindingControllerError> {
+        let children = binding_child_resources(binding_ref, service_ref, target_ref)
+            .map_err(|_| UsbipBindingControllerError::Admission)?;
+        Ok(Self {
+            children,
+            phase: UsbipBindingPhase::Pending,
+        })
+    }
+
+    /// Return the current Binding lifecycle phase.
+    pub const fn phase(&self) -> UsbipBindingPhase {
+        self.phase
+    }
+
+    /// Borrow the current child intents.
+    pub const fn children(&self) -> &BindingChildSet {
+        &self.children
+    }
+
+    /// Observe Core-managed child readiness without spawning a feature
+    /// process.
+    pub fn observe_children(
+        &mut self,
+        ready: bool,
+    ) -> Result<UsbipBindingReconcileResult, UsbipBindingControllerError> {
+        if self.phase == UsbipBindingPhase::Deleted {
+            return Err(UsbipBindingControllerError::Finalized);
+        }
+        self.phase = if ready {
+            UsbipBindingPhase::Ready
+        } else {
+            UsbipBindingPhase::Degraded
+        };
+        Ok(UsbipBindingReconcileResult {
+            phase: self.phase,
+            children: self.children.clone(),
+        })
+    }
+
+    /// Mark the Binding deleted after Endpoint, then Process children drain.
+    pub fn finalize(&mut self) {
+        self.phase = UsbipBindingPhase::Deleted;
+    }
+}
 
 /// Zone-scoped opaque resource identity.
 #[derive(Clone, PartialEq, Eq)]

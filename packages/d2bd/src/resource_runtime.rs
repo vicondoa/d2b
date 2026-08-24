@@ -24,9 +24,15 @@ use crate::activation_resource_runtime::{
     stored_resource_from_wire,
 };
 use crate::audio_resource_runtime::{
-    AudioBindingRuntimeStatus, AudioResourceRuntime, AudioResourceRuntimeError,
-    audio_binding_status_value, audio_watch_request, list_audio_snapshot, remove_audio_finalizer,
-    run_audio_watch,
+    AUDIO_BINDING_TYPE, AudioBindingRuntimeStatus, AudioResourceRuntime, AudioResourceRuntimeError,
+    audio_binding_status_projection_with_status, audio_binding_status_value, audio_watch_request,
+    has_audio_finalizer, list_audio_resources, list_audio_snapshot, remove_audio_finalizer,
+    run_audio_watch, update_audio_finalizer,
+};
+use crate::binding_child_resource_runtime::reconcile_binding_children;
+use crate::semantic_binding_resource_runtime::{
+    reconcile_semantic_binding_resources, run_semantic_binding_watch,
+    semantic_binding_watch_request,
 };
 use crate::process_resource_runtime::{
     ProcessResourceRuntime, ProcessResourceRuntimeError, list_process_snapshot,
@@ -106,8 +112,8 @@ use d2bd_runtime::resource_runtime_support::{
     runtime_policy, store_identity, watch_needs_restart, zone_runtime_metadata,
 };
 pub use d2bd_runtime::resource_runtime_support::{
-    ZoneRuntimeReadiness, persist_resource_status, persist_resource_status_with_projection,
-    resource_bundle_materialization_operation_id,
+    ZoneRuntimeReadiness, bounded_operation_id, persist_resource_status,
+    persist_resource_status_with_projection, resource_bundle_materialization_operation_id,
 };
 use d2bd_runtime::resource_store_runtime::{MAX_ZONE_RUNTIMES, OpenedZoneStore};
 use nix::unistd::{Group, Uid, User};
@@ -546,6 +552,7 @@ pub struct ZoneResourceRuntime {
     zone_status: Mutex<ZoneStatusResource>,
     audio_runtime: Arc<Mutex<Option<AudioResourceRuntime>>>,
     audio_watch_task: Mutex<Option<tokio::task::JoinHandle<()>>>,
+    semantic_binding_watch_task: Mutex<Option<tokio::task::JoinHandle<()>>>,
     process_runtime: Arc<Mutex<Option<ProcessResourceRuntime>>>,
     process_watch_task: Mutex<Option<tokio::task::JoinHandle<()>>>,
     activation_runtime: Arc<Mutex<Option<ActivationResourceRuntime>>>,
@@ -1211,6 +1218,7 @@ impl ZoneResourceRuntime {
             zone_status: Mutex::new(zone_status),
             audio_runtime: Arc::new(Mutex::new(None)),
             audio_watch_task: Mutex::new(None),
+            semantic_binding_watch_task: Mutex::new(None),
             process_runtime: Arc::new(Mutex::new(None)),
             process_watch_task: Mutex::new(None),
             activation_runtime: Arc::new(Mutex::new(None)),
@@ -1653,6 +1661,7 @@ impl ZoneResourceRuntime {
         let binding_resources = snapshot.bindings.clone();
         let statuses;
         let pending_finalizers;
+        let child_owners;
         {
             let mut runtime = self
                 .audio_runtime
@@ -1665,17 +1674,48 @@ impl ZoneResourceRuntime {
                 .map_err(map_audio_runtime_error)?;
             statuses = registry.statuses();
             pending_finalizers = registry.take_pending_finalizers();
+            child_owners = registry
+                .child_owners(&binding_resources)
+                .map_err(map_audio_runtime_error)?;
         }
+        let client = self
+            .process_status_client
+            .as_ref()
+            .ok_or(ResourceRuntimeError::AuthenticationUnavailable)?;
+        for owner in &child_owners {
+            if owner.desired.is_some() && !has_audio_finalizer(&owner.resource) {
+                update_audio_finalizer(client, &owner.resource, true)
+                    .await
+                    .map_err(map_audio_runtime_error)?;
+            }
+        }
+        let converged_children =
+            reconcile_binding_children(&self.store, client, &self.zone, &child_owners)
+                .await
+                .map_err(|_| ResourceRuntimeError::CapabilityUnavailable)?;
         for resource in pending_finalizers {
-            remove_audio_finalizer(
-                self.process_status_client
-                    .as_ref()
-                    .ok_or(ResourceRuntimeError::AuthenticationUnavailable)?,
-                &resource,
-            )
-            .await
-            .map_err(map_audio_runtime_error)?;
+            if !converged_children.contains(&resource.resource_ref) {
+                continue;
+            }
+            remove_audio_finalizer(client, &resource)
+                .await
+                .map_err(map_audio_runtime_error)?;
         }
+        // Finalizer mutations advance the parent revision. Relist the
+        // authoritative Binding rows before status writes so their exact
+        // UID/revision preconditions remain current on startup.
+        let binding_resources = list_audio_resources(
+            &self.store,
+            &self.zone,
+            ResourceTypeName::parse(AUDIO_BINDING_TYPE).expect("static audio binding type"),
+            "binding-status",
+        )
+        .await
+        .map_err(|_| ResourceRuntimeError::StoreReadFailed)?;
+        let children =
+            crate::binding_child_resource_runtime::list_binding_children(&self.store, &self.zone)
+                .await
+                .map_err(|_| ResourceRuntimeError::CapabilityUnavailable)?;
         for status in statuses {
             let Some(resource) = binding_resources
                 .iter()
@@ -1683,12 +1723,14 @@ impl ZoneResourceRuntime {
             else {
                 return Err(ResourceRuntimeError::StoreReadFailed);
             };
-            persist_resource_status(
-                self.process_status_client
-                    .as_ref()
-                    .ok_or(ResourceRuntimeError::AuthenticationUnavailable)?,
+            let projection =
+                audio_binding_status_projection_with_status(resource, &children, &status.status)
+                    .map_err(map_audio_runtime_error)?;
+            persist_resource_status_with_projection(
+                client,
                 resource,
                 &audio_binding_status_value(status.status),
+                Some(&projection),
             )
             .await?;
         }
@@ -1715,6 +1757,61 @@ impl ZoneResourceRuntime {
             let task = tokio::spawn(run_audio_watch(watch, store, zone, registry, status_client));
             let mut watch_task = self
                 .audio_watch_task
+                .lock()
+                .map_err(|_| ResourceRuntimeError::WatchUnavailable)?;
+            if watch_task.is_none() {
+                *watch_task = Some(task);
+            } else {
+                task.abort();
+            }
+        }
+        Ok(())
+    }
+
+    /// Relist and reconcile USB, security-key, and telemetry Bindings.
+    ///
+    /// These Providers retain semantic authority in their own crates; the
+    /// daemon only admits their explicit child intents through Core.
+    pub(crate) async fn reconcile_semantic_binding_resources(
+        &self,
+    ) -> Result<(), ResourceRuntimeError> {
+        if !self.readiness.resource_api_ready {
+            return Ok(());
+        }
+        let client = self
+            .process_status_client
+            .as_ref()
+            .ok_or(ResourceRuntimeError::AuthenticationUnavailable)?;
+        reconcile_semantic_binding_resources(&self.store, client, &self.zone)
+            .await
+            .map_err(|error| match error {
+                crate::semantic_binding_resource_runtime::SemanticBindingRuntimeError::Store => {
+                    ResourceRuntimeError::StoreReadFailed
+                }
+                crate::semantic_binding_resource_runtime::SemanticBindingRuntimeError::InvalidResource
+                | crate::semantic_binding_resource_runtime::SemanticBindingRuntimeError::InvalidRelationship
+                | crate::semantic_binding_resource_runtime::SemanticBindingRuntimeError::Reconcile => {
+                    ResourceRuntimeError::CapabilityUnavailable
+                }
+            })?;
+        let start_watch = {
+            let mut watch_task = self
+                .semantic_binding_watch_task
+                .lock()
+                .map_err(|_| ResourceRuntimeError::WatchUnavailable)?;
+            watch_needs_restart(&mut watch_task)
+        };
+        if start_watch {
+            let watch = d2b_resource_api::watch::WatchService::new(Arc::clone(&self.store))
+                .open(semantic_binding_watch_request(&self.zone))
+                .await
+                .map_err(|_| ResourceRuntimeError::WatchUnavailable)?;
+            let store = Arc::clone(&self.store);
+            let zone = self.zone.clone();
+            let client = client.clone();
+            let task = tokio::spawn(run_semantic_binding_watch(watch, store, zone, client));
+            let mut watch_task = self
+                .semantic_binding_watch_task
                 .lock()
                 .map_err(|_| ResourceRuntimeError::WatchUnavailable)?;
             if watch_task.is_none() {
@@ -2398,6 +2495,7 @@ impl ZoneResourceRuntime {
             process_status_client,
             audio_watch_task,
             audio_runtime,
+            semantic_binding_watch_task,
             process_watch_task,
             process_runtime,
             activation_watch_task,
@@ -2419,6 +2517,13 @@ impl ZoneResourceRuntime {
             let _ = task.await;
         }
         drop(audio_runtime);
+        if let Some(task) = semantic_binding_watch_task
+            .into_inner()
+            .map_err(|_| ResourceRuntimeError::WatchUnavailable)?
+        {
+            task.abort();
+            let _ = task.await;
+        }
         if let Some(task) = process_watch_task
             .into_inner()
             .map_err(|_| ResourceRuntimeError::WatchUnavailable)?

@@ -37,18 +37,20 @@ parallel policy.
 
 ## Controllers / services / workers / binaries
 
-The source contains only the session-bound Provider agent, bounded emitter
-socket, structural metric ingress gate, strict configuration parser, and
-closed self-metric descriptors. Collector, forwarder, exporter, journald,
-ComponentSession transport, resource ownership, projection/share, and process
-launch remain separate completion work.
+The source contains the session-bound Provider agent, the
+`TelemetryBindingController`, bounded emitter socket, structural metric
+ingress gate, strict configuration parser, and closed self-metric descriptors.
+An authored telemetry Binding declares its collector and forwarder
+`Process`/`Endpoint` children; Core owns resource reconciliation and the
+generic Process Provider owns launch. Exporter, journald, ComponentSession
+transport, and projection/share remain outside this crate.
 
 ## Placement and dependencies
 
 The Provider runs as an ordinary optional process in its owning Zone. Its
-workspace dependencies are limited to `d2b-contracts` and
-`d2b-provider-toolkit` plus the low-level `rustix` fd-policy helper, the
-admitted neutral Provider boundaries. The toolkit
+workspace dependencies are limited to the split provider, resource, and
+Zone-session contracts plus `d2b-provider-toolkit` and the low-level `rustix`
+fd-policy helper. The toolkit
 supplies the diagnostic audit ring and session-facing values; authoritative
 audit durability and core telemetry emission stay outside this crate.
 This Provider does not and must not depend directly on `d2b-audit` or

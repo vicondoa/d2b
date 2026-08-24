@@ -5,6 +5,43 @@ use crate::{
     AudioReadiness, GuestAudioReadiness, HostAudioReadiness, MicDecision, SharedMicrophoneArbiter,
     SpeakerMixer, validate_audio_binding_in_zone, validate_audio_service,
 };
+use d2b_contracts_provider::v3::semantic_services::{
+    SemanticFamily,
+    child_resources::{
+        BindingChildKind, BindingChildPlacement, BindingChildRequest, BindingChildSet,
+        explicit_binding_children,
+    },
+};
+use d2b_contracts_resource::v3::{ExecutionDomain, ResourceRef};
+
+const AUDIO_PROVIDER_REF: &str = "Provider/audio-pipewire";
+
+const AUDIO_BINDING_CHILD_REQUESTS: [BindingChildRequest; 4] = [
+    BindingChildRequest::process(
+        BindingChildKind::Process,
+        BindingChildPlacement::Host,
+        "host-effect",
+        "Provider/system-minijail",
+        "vhost-user-sound-worker",
+        ExecutionDomain::System,
+        "worker",
+    ),
+    BindingChildRequest::endpoint(BindingChildPlacement::Host, "host-endpoint", "host-effect"),
+    BindingChildRequest::process(
+        BindingChildKind::Process,
+        BindingChildPlacement::Guest,
+        "guest-agent",
+        "Provider/system-systemd",
+        "guest-audio-agent",
+        ExecutionDomain::User,
+        "service",
+    ),
+    BindingChildRequest::endpoint(
+        BindingChildPlacement::Guest,
+        "guest-endpoint",
+        "guest-agent",
+    ),
+];
 
 /// Closed AudioBinding lifecycle phase.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -19,6 +56,78 @@ pub enum AudioBindingPhase {
     Deleted,
 }
 
+/// Per-channel observed speaker state.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct AudioSpeakerStatus {
+    /// Last desired speaker grant.
+    pub grant: AudioGrant,
+    /// Last desired speaker level.
+    pub level: Option<crate::LevelPercent>,
+    /// Whether the speaker state is currently enforced.
+    pub live_enforced: bool,
+}
+
+/// Per-channel observed microphone state.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct AudioMicrophoneStatus {
+    /// Last desired microphone grant.
+    pub grant: AudioGrant,
+    /// Last desired microphone gain.
+    pub gain: Option<crate::LevelPercent>,
+    /// Whether the microphone state is currently enforced.
+    pub live_enforced: bool,
+    /// Current Service-level arbitration state.
+    pub arbitration_state: AudioArbitrationState,
+}
+
+/// Closed microphone arbitration state.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AudioArbitrationState {
+    /// This Binding does not request microphone capture.
+    Inactive,
+    /// This Binding is waiting for the Service microphone lease.
+    Queued,
+    /// This Binding owns the Service microphone lease.
+    Active,
+    /// The Service could not admit this Binding.
+    Blocked,
+}
+
+/// The channels projected by an AudioBinding.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct AudioBindingChannels {
+    /// Speaker observation.
+    pub speaker: AudioSpeakerStatus,
+    /// Microphone observation.
+    pub mic: AudioMicrophoneStatus,
+}
+
+/// Aggregate host/guest enforcement posture.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AudioEnforcementPosture {
+    /// Both host and guest enforcement are available.
+    HostAndGuest,
+    /// Only host enforcement is available.
+    HostOnly,
+    /// Only guest enforcement is available.
+    GuestOnly,
+    /// No enforcement is currently available.
+    None,
+}
+
+/// Where the most recent mutable audio setting was applied.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AudioLastSetApplied {
+    /// Applied to both host and guest.
+    HostAndGuest,
+    /// Applied to the host only.
+    HostOnly,
+    /// Applied to the guest only.
+    GuestOnly,
+    /// No setting was applied in the current reconcile.
+    OfflineOnly,
+}
+
 /// Typed AudioBinding status projection.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct AudioBindingStatus {
@@ -30,6 +139,12 @@ pub struct AudioBindingStatus {
     pub guest_readiness: GuestAudioReadiness,
     /// Mic arbitration result.
     pub microphone: Option<MicDecision>,
+    /// Last observed channel state.
+    pub channels: AudioBindingChannels,
+    /// Aggregate host/guest enforcement posture.
+    pub enforcement_posture: AudioEnforcementPosture,
+    /// Application path for the most recent setting.
+    pub last_set_applied: AudioLastSetApplied,
 }
 
 /// Typed controller failures.
@@ -61,6 +176,15 @@ pub struct AudioReconcileResult {
     pub host_effect_applied: bool,
     /// Whether a guest-side effect was attempted.
     pub guest_effect_applied: bool,
+}
+
+/// Reconcile output including the child resources owned by the Binding.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AudioReconcileResultWithChildren {
+    /// Readiness and effect observations.
+    pub result: AudioReconcileResult,
+    /// UID-free Process and Endpoint intents.
+    pub children: BindingChildSet,
 }
 
 /// AudioBinding controller over existing audio policy and mediator ports.
@@ -101,6 +225,41 @@ impl<M: AudioMediator> AudioBindingController<M> {
         &self.mediator
     }
 
+    /// Build the explicit Host and Guest child resources for one Binding.
+    ///
+    /// The Binding and Service references are required inputs. A Ready
+    /// Service cannot produce these children without an authored Binding.
+    pub fn child_resources(
+        binding_ref: &ResourceRef,
+        binding: &AudioBindingSpec,
+    ) -> Result<BindingChildSet, AudioControllerError> {
+        crate::validate_audio_binding(binding).map_err(|_| AudioControllerError::Admission)?;
+        explicit_binding_children(
+            SemanticFamily::Audio,
+            binding_ref.clone(),
+            binding.service_ref.clone(),
+            binding.target_ref.clone(),
+            ResourceRef::parse(AUDIO_PROVIDER_REF).expect("audio Provider reference is canonical"),
+            &AUDIO_BINDING_CHILD_REQUESTS,
+        )
+        .map_err(|_| AudioControllerError::Admission)
+    }
+
+    /// Reconcile a Binding and return the resource-backed child intents.
+    pub fn reconcile_with_children(
+        &mut self,
+        binding_ref: &ResourceRef,
+        binding: &AudioBindingSpec,
+        service_zone: &str,
+        lease: AudioLeaseId,
+    ) -> Result<AudioReconcileResultWithChildren, AudioControllerError> {
+        validate_audio_binding_in_zone(binding, service_zone)
+            .map_err(|_| AudioControllerError::Admission)?;
+        let children = Self::child_resources(binding_ref, binding)?;
+        let result = self.reconcile(binding, service_zone, lease)?;
+        Ok(AudioReconcileResultWithChildren { result, children })
+    }
+
     /// Return the active microphone lease for status and recovery.
     pub fn active_microphone_lease(&self) -> Option<AudioLeaseId> {
         match self.microphone.lock() {
@@ -123,6 +282,8 @@ impl<M: AudioMediator> AudioBindingController<M> {
         let mut microphone = None;
         let mut host_effect_applied = false;
         let mut guest_effect_applied = false;
+        let mut speaker_live_enforced = false;
+        let mut microphone_live_enforced = false;
 
         if binding.grants.mic == AudioGrant::On {
             let already_active = self.active_microphone_lease() == Some(lease);
@@ -157,9 +318,18 @@ impl<M: AudioMediator> AudioBindingController<M> {
                 self.microphone_effect_applied = true;
                 host_effect_applied = true;
                 guest_effect_applied = guest_readiness == GuestAudioReadiness::Ready;
+                microphone_live_enforced = true;
+            } else {
+                microphone_live_enforced = self.microphone_effect_applied;
             }
         } else {
+            let was_active = self.active_microphone_lease() == Some(lease);
             self.release_microphone(lease)?;
+            if was_active {
+                host_effect_applied = true;
+                guest_effect_applied = guest_readiness == GuestAudioReadiness::Ready;
+                microphone_live_enforced = true;
+            }
         }
         if binding.grants.speaker == AudioGrant::On {
             let transition = self
@@ -175,6 +345,10 @@ impl<M: AudioMediator> AudioBindingController<M> {
                     return Err(AudioControllerError::Mediator(error));
                 }
                 host_effect_applied = true;
+                guest_effect_applied |= guest_readiness == GuestAudioReadiness::Ready;
+                speaker_live_enforced = true;
+            } else {
+                speaker_live_enforced = true;
             }
         } else if self.speaker.has_grant(lease) {
             let last = self.speaker.is_last_grant(lease);
@@ -186,6 +360,11 @@ impl<M: AudioMediator> AudioBindingController<M> {
             self.speaker
                 .set_grant(lease, false)
                 .map_err(|_| AudioControllerError::Admission)?;
+            if last {
+                host_effect_applied = true;
+                guest_effect_applied |= guest_readiness == GuestAudioReadiness::Ready;
+                speaker_live_enforced = true;
+            }
         }
         if let Some(level) = binding.grants.speaker_level {
             self.speaker
@@ -195,11 +374,26 @@ impl<M: AudioMediator> AudioBindingController<M> {
                 self.mediator
                     .set_channel_level(AudioChannel::Speaker, level)
                     .map_err(AudioControllerError::Mediator)?;
+                host_effect_applied = true;
+                guest_effect_applied |= guest_readiness == GuestAudioReadiness::Ready;
+                speaker_live_enforced = true;
             }
             self.speaker
                 .set_level(lease, level.get())
                 .map_err(|_| AudioControllerError::Admission)?;
+            if self.speaker.level(lease) == Some(level.get()) {
+                speaker_live_enforced = speaker_live_enforced || self.speaker.has_grant(lease);
+            }
+        }
+        if let Some(gain) = binding.grants.mic_gain
+            && microphone == Some(MicDecision::Granted)
+        {
+            self.mediator
+                .set_channel_level(AudioChannel::Microphone, gain)
+                .map_err(AudioControllerError::Mediator)?;
             host_effect_applied = true;
+            guest_effect_applied |= guest_readiness == GuestAudioReadiness::Ready;
+            microphone_live_enforced = true;
         }
 
         let phase = match microphone {
@@ -208,12 +402,48 @@ impl<M: AudioMediator> AudioBindingController<M> {
             _ if self.mediator.readiness() == AudioReadiness::Ready => AudioBindingPhase::Ready,
             _ => AudioBindingPhase::Degraded,
         };
+        let arbitration_state = match microphone {
+            Some(MicDecision::Granted) => AudioArbitrationState::Active,
+            Some(MicDecision::Queued) => AudioArbitrationState::Queued,
+            Some(MicDecision::QueueFull) => AudioArbitrationState::Blocked,
+            None => AudioArbitrationState::Inactive,
+        };
+        let enforcement_posture = match (
+            host_effect_applied || speaker_live_enforced || microphone_live_enforced,
+            guest_effect_applied,
+        ) {
+            (true, true) => AudioEnforcementPosture::HostAndGuest,
+            (true, false) => AudioEnforcementPosture::HostOnly,
+            (false, true) => AudioEnforcementPosture::GuestOnly,
+            (false, false) => AudioEnforcementPosture::None,
+        };
+        let last_set_applied = match (host_effect_applied, guest_effect_applied) {
+            (true, true) => AudioLastSetApplied::HostAndGuest,
+            (true, false) => AudioLastSetApplied::HostOnly,
+            (false, true) => AudioLastSetApplied::GuestOnly,
+            (false, false) => AudioLastSetApplied::OfflineOnly,
+        };
         Ok(AudioReconcileResult {
             status: AudioBindingStatus {
                 phase,
                 host_readiness,
                 guest_readiness,
                 microphone,
+                channels: AudioBindingChannels {
+                    speaker: AudioSpeakerStatus {
+                        grant: binding.grants.speaker,
+                        level: binding.grants.speaker_level,
+                        live_enforced: speaker_live_enforced,
+                    },
+                    mic: AudioMicrophoneStatus {
+                        grant: binding.grants.mic,
+                        gain: binding.grants.mic_gain,
+                        live_enforced: microphone_live_enforced,
+                        arbitration_state,
+                    },
+                },
+                enforcement_posture,
+                last_set_applied,
             },
             host_effect_applied,
             guest_effect_applied,
@@ -239,6 +469,19 @@ impl<M: AudioMediator> AudioBindingController<M> {
         lease: AudioLeaseId,
     ) -> Result<Option<AudioLeaseId>, AudioControllerError> {
         self.finalize_inner(lease)
+    }
+
+    /// Revoke effects after restart when no in-memory controller state can be
+    /// adopted. The caller must first establish that no surviving Binding
+    /// still owns the target's authority.
+    pub fn revoke_unmanaged(&mut self) -> Result<(), AudioControllerError> {
+        self.mediator
+            .set_channel_grant(AudioChannel::Microphone, AudioGrant::Off)
+            .map_err(AudioControllerError::Mediator)?;
+        self.mediator
+            .set_channel_grant(AudioChannel::Speaker, AudioGrant::Off)
+            .map_err(AudioControllerError::Mediator)?;
+        Ok(())
     }
 
     /// Apply the microphone effect for a lease promoted by another shared

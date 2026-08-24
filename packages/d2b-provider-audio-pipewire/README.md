@@ -34,9 +34,11 @@ cannot open PipeWire locally.
 ## Controllers / services / workers / binaries
 
 `AudioBindingController` uses the existing policy DTO and a typed
-`AudioMediator`. Private component templates omit live Process argv and
-socket arguments; the provider also owns the signed audio argv projection.
-Process launch remains owned by the Process Providers.
+`AudioMediator`, and emits deterministic Host/Guest `Process` and `Endpoint`
+child intents for each authored Binding. Private component templates omit live
+Process argv and socket arguments; the provider also owns the signed audio
+argv projection. Core reconciles the children and the generic Process
+Providers own launch, adoption, and teardown.
 
 ## Placement and dependencies
 

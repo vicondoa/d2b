@@ -283,6 +283,7 @@ use d2bd_runtime::admission::{PeerOverride, TEST_PEER_OVERRIDE, TEST_PEER_OVERRI
 mod audio_dispatch;
 mod audio_host_controller;
 mod audio_resource_runtime;
+mod binding_child_resource_runtime;
 mod cutover;
 pub mod interaction_composition;
 pub mod network_effect_port;
@@ -294,6 +295,7 @@ pub mod provider_shutdown;
 pub mod resource_runtime;
 pub mod security_key;
 mod security_key_effect_port;
+mod semantic_binding_resource_runtime;
 pub mod tpm_effect_port;
 pub mod usbip_production;
 
@@ -15746,6 +15748,11 @@ async fn open_resource_plane(
             .reconcile_audio_resources(Arc::new(state.clone()))
             .await
         {
+            let _ = runtime.shutdown().await;
+            let _ = plane.shutdown().await;
+            return Err(error);
+        }
+        if let Err(error) = runtime.reconcile_semantic_binding_resources().await {
             let _ = runtime.shutdown().await;
             let _ = plane.shutdown().await;
             return Err(error);
