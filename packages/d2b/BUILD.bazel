@@ -39,6 +39,7 @@ rust_library(
         "//packages/d2b-contracts-control:d2b_contracts_control",
         "//packages/d2b-core:d2b_core",
         "//packages/d2b-cutover:d2b_cutover",
+        "//packages/d2b-provider-config-nixos:d2b_provider_config_nixos",
         "//packages/d2b-realm-core:d2b_realm_core",
         "//packages/d2b-resource-client:d2b_resource_client",
         "//packages/d2b-zone-routing:d2b_zone_routing",

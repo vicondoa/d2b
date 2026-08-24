@@ -129,6 +129,15 @@ pub const GENERATED_OPERATION_CATALOG: &[OperationCatalogEntry] = &[
     interaction("d2b.notification.v3", "NotificationService/Reconcile"),
     interaction("d2b.notification.v3", "NotificationService/Deliver"),
     interaction("d2b.notification.v3", "NotificationService/Drain"),
+    interaction(
+        "d2b.config-nixos.v3",
+        "ConfigNixosService/ReadGuestConfig",
+    ),
+    interaction("d2b.config-nixos.v3", "ConfigNixosService/Stage"),
+    interaction("d2b.config-nixos.v3", "ConfigNixosService/Diff"),
+    interaction("d2b.config-nixos.v3", "ConfigNixosService/Approve"),
+    interaction("d2b.config-nixos.v3", "ConfigNixosService/Reject"),
+    interaction("d2b.config-nixos.v3", "ConfigNixosService/Status"),
 ];
 
 const fn resource(

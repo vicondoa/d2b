@@ -1,6 +1,10 @@
 //! Contracts for the activation-nixos Provider.
 
-use schemars::JsonSchema;
+use schemars::{
+    JsonSchema,
+    r#gen::SchemaGenerator,
+    schema::{Schema, SchemaObject},
+};
 use serde::{Deserialize, Deserializer, Serialize};
 
 use super::{ArtifactId, ResourceRef, ResourceTypeName, execution_policy::require_execution_ref};
@@ -9,6 +13,8 @@ use super::{ArtifactId, ResourceRef, ResourceTypeName, execution_policy::require
 pub const NIXOS_GENERATION_RESOURCE_TYPE: &str = "activation-nixos.d2bus.org.NixosGeneration";
 /// The only Provider admitted by the activation generation schema.
 pub const ACTIVATION_PROVIDER_REF: &str = "Provider/activation-nixos";
+/// Maximum serialized stdin envelope delivered to the activation helper.
+pub const MAX_ACTIVATION_RUNNER_INPUT_BYTES: usize = 2048;
 
 /// Target-local activation mode.
 #[derive(
@@ -24,6 +30,65 @@ pub enum ActivationMode {
     Test,
     /// Record an already active generation without running a helper.
     Adopt,
+}
+
+/// Closed input delivered to an activation-runner `EphemeralProcess`.
+///
+/// The broker serializes this value into the bounded stdin envelope consumed
+/// by `d2b-activation-helper`. It deliberately carries no executable,
+/// store path, target path, or caller-controlled bytes.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ActivationRunnerInput {
+    /// Private-catalog artifact identifier.
+    pub system_artifact_id: ArtifactId,
+    /// Target generation ordinal bound to the owning `NixosGeneration`.
+    #[schemars(schema_with = "nonzero_u64_schema")]
+    pub target_generation: u64,
+    /// Closed activation mode.
+    pub activation_mode: ActivationMode,
+}
+
+fn nonzero_u64_schema(generator: &mut SchemaGenerator) -> Schema {
+    let mut schema: SchemaObject = <u64>::json_schema(generator).into();
+    schema
+        .number
+        .get_or_insert_with(Default::default)
+        .minimum = Some(1.0);
+    schema.into()
+}
+
+/// Validation failure for a typed activation-runner input.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ActivationRunnerInputError {
+    /// Target generation ordinal was zero.
+    GenerationInvalid,
+}
+
+impl core::fmt::Display for ActivationRunnerInputError {
+    fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        formatter.write_str("activation-runner-generation-invalid")
+    }
+}
+
+impl std::error::Error for ActivationRunnerInputError {}
+
+impl ActivationRunnerInput {
+    /// Construct and validate one runner input.
+    pub fn new(
+        system_artifact_id: ArtifactId,
+        target_generation: u64,
+        activation_mode: ActivationMode,
+    ) -> Result<Self, ActivationRunnerInputError> {
+        if target_generation == 0 {
+            return Err(ActivationRunnerInputError::GenerationInvalid);
+        }
+        Ok(Self {
+            system_artifact_id,
+            target_generation,
+            activation_mode,
+        })
+    }
 }
 
 /// Provider-specific progress detail.
@@ -92,6 +157,8 @@ pub enum NixosGenerationSpecError {
     PriorGenerationRefInvalid,
     /// Artifact identifier was invalid or empty.
     ArtifactIdInvalid,
+    /// Target generation ordinal was zero.
+    GenerationInvalid,
 }
 
 impl core::fmt::Display for NixosGenerationSpecError {
@@ -101,6 +168,7 @@ impl core::fmt::Display for NixosGenerationSpecError {
             Self::ExecutionRefInvalid => "activation-execution-ref-invalid",
             Self::PriorGenerationRefInvalid => "activation-prior-generation-ref-invalid",
             Self::ArtifactIdInvalid => "activation-artifact-id-invalid",
+            Self::GenerationInvalid => "activation-generation-invalid",
         })
     }
 }

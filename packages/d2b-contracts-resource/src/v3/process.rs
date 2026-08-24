@@ -18,7 +18,7 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Deserializer, Serialize};
 
 use super::{
-    ResourceRef,
+    ActivationRunnerInput, ResourceRef,
     execution_policy::{
         BoundedToken, BudgetSpec, DurationMs, ExecutionDomain, PrimitiveSpecError, redacted_debug,
         require_execution_ref, require_resource_type,
@@ -1383,6 +1383,8 @@ impl<'de> Deserialize<'de> for ProcessSpec {
 pub struct EphemeralProcessSpec {
     #[serde(flatten)]
     execution: ExecutionSpec,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    activation_input: Option<ActivationRunnerInput>,
     start_deadline: DurationMs,
     runtime_deadline: DurationMs,
     successful_ttl: DurationMs,
@@ -1409,6 +1411,7 @@ impl EphemeralProcessSpec {
         check_duration(&failed_ttl, 0, 30 * 86_400_000)?;
         Ok(Self {
             execution,
+            activation_input: None,
             start_deadline,
             runtime_deadline,
             successful_ttl,
@@ -1432,6 +1435,28 @@ impl EphemeralProcessSpec {
     /// Borrow the shared execution fields.
     pub const fn execution(&self) -> &ExecutionSpec {
         &self.execution
+    }
+
+    /// Attach the only typed stdin input admitted to an activation runner.
+    pub fn with_activation_input(
+        mut self,
+        input: ActivationRunnerInput,
+    ) -> Result<Self, PrimitiveSpecError> {
+        if self.execution.template().as_str() != "activation-nixos-runner"
+            || !matches!(
+                self.execution.execution_ref().resource_type().as_str(),
+                "Host" | "Guest"
+            )
+        {
+            return Err(PrimitiveSpecError::ConflictingFields);
+        }
+        self.activation_input = Some(input);
+        Ok(self)
+    }
+
+    /// Borrow the typed activation-runner stdin input, when present.
+    pub const fn activation_input(&self) -> Option<&ActivationRunnerInput> {
+        self.activation_input.as_ref()
     }
 
     /// Borrow the successful terminal retention.
@@ -1491,6 +1516,8 @@ impl<'de> Deserialize<'de> for EphemeralProcessSpec {
             #[serde(default)]
             telemetry: TelemetrySpec,
             #[serde(default)]
+            activation_input: Option<ActivationRunnerInput>,
+            #[serde(default)]
             start_deadline: Option<DurationMs>,
             #[serde(default)]
             runtime_deadline: Option<DurationMs>,
@@ -1519,7 +1546,7 @@ impl<'de> Deserialize<'de> for EphemeralProcessSpec {
         }
         .into_execution()
         .map_err(serde::de::Error::custom)?;
-        Self::new(
+        let spec = Self::new(
             execution,
             wire.start_deadline
                 .unwrap_or_else(|| duration("60s", 1_000, 3_600_000)),
@@ -1531,7 +1558,13 @@ impl<'de> Deserialize<'de> for EphemeralProcessSpec {
                 .unwrap_or_else(|| duration("24h", 0, 30 * 86_400_000)),
             wire.incident_hold,
         )
-        .map_err(serde::de::Error::custom)
+        .map_err(serde::de::Error::custom)?;
+        match wire.activation_input {
+            Some(input) => spec
+                .with_activation_input(input)
+                .map_err(serde::de::Error::custom),
+            None => Ok(spec),
+        }
     }
 }
 

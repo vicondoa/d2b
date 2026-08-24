@@ -8,8 +8,9 @@ pub mod manifest;
 pub mod runner;
 
 pub use controller::{
-    ActivationCaller, ActivationController, ActivationError, CallerRole, GenerationObservation,
-    GenerationPhase, RetentionPlan, RunnerRequest, RunnerResult,
+    activation_runner_name, activation_runner_ref, activation_runner_spec, ActivationCaller,
+    ActivationController, ActivationError, CallerRole, GenerationObservation, GenerationPhase,
+    RetentionPlan, RunnerRequest, RunnerResult,
 };
 pub use manifest::ActivationManifest;
 pub use runner::{

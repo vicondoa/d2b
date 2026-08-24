@@ -175,7 +175,7 @@ impl<T: OwnedTransport> SessionEngine<T> {
         let timeout = Duration::from_millis(u64::from(identity.limits.handshake_deadline_ms));
         let result = match tokio::time::timeout(timeout, async move {
             identity
-                .validate_local_generation_discovery()
+                .validate_generation_discovery()
                 .map_err(SessionError::from)?;
             Self::establish_initiator_with_generation_discovery_inner(
                 transport,

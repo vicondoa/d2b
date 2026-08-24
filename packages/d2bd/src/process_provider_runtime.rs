@@ -25,8 +25,9 @@ use d2b_core::{
 };
 use d2b_process_conformance::{
     AdoptionOutcome, CompiledDigests, ConfigurationDigest, IdentityBinding, LaunchTicket,
-    OperationBinding, ProcessConformanceError, ProcessIdentityDigest, ProcessLaunchEffectPort,
-    ProcessProvider, ProcessStatusReport, ReadinessExpectation, SandboxCompiler, StopClass,
+    GuestExecutionBinding, OperationBinding, ProcessConformanceError, ProcessIdentityDigest,
+    ProcessLaunchEffectPort, ProcessProvider, ProcessStatusReport, ReadinessExpectation,
+    SandboxCompiler, StopClass,
 };
 use d2b_provider_supervisor::{
     BrokerProcessBackend, BrokerSystemdEffectOwner, BundleBackedLaunchResolver, ProviderSupervisor,
@@ -120,18 +121,19 @@ struct ManagedResource {
 
 fn resource_identity_matches(
     managed: &ManagedResource,
-    context: ProcessResourceContext<'_>,
+    context: &ProcessResourceContext<'_>,
 ) -> bool {
     managed.uid == *context.resource_uid && managed.generation == context.resource_generation
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone)]
 pub(crate) struct ProcessResourceContext<'a> {
     pub(crate) resource_ref: &'a ResourceRef,
     pub(crate) resource_uid: &'a ResourceUid,
     pub(crate) resource_generation: ResourceGeneration,
     pub(crate) provider_ref: &'a ResourceRef,
     pub(crate) controller_generation: ControllerGeneration,
+    pub(crate) guest_execution: Option<GuestExecutionBinding>,
 }
 
 impl<'a> ProcessResourceContext<'a> {
@@ -148,7 +150,16 @@ impl<'a> ProcessResourceContext<'a> {
             resource_generation,
             provider_ref,
             controller_generation,
+            guest_execution: None,
         }
+    }
+
+    pub(crate) fn with_guest_execution(
+        mut self,
+        binding: Option<&GuestExecutionBinding>,
+    ) -> Self {
+        self.guest_execution = binding.cloned();
+        self
     }
 }
 
@@ -335,6 +346,18 @@ impl ProductionProcessProviders {
         &self.fixed_effect
     }
 
+    fn validate_execution_target(&self, target: &ResourceRef) -> Result<(), String> {
+        let expected = match self.mode {
+            DaemonMode::Host => "Host",
+            DaemonMode::Guest => "Guest",
+        };
+        if target.resource_type().as_str() == expected {
+            Ok(())
+        } else {
+            Err("process-execution-target-not-owned-by-daemon".to_owned())
+        }
+    }
+
     /// Return whether this node is a daemon-owned Provider process.
     pub fn supports_node(node: &ProcessNode) -> bool {
         matches!(
@@ -344,6 +367,7 @@ impl ProductionProcessProviders {
                 | ProcessRole::Virtiofsd
                 | ProcessRole::CloudHypervisorRunner
                 | ProcessRole::QemuMediaRunner
+                | ProcessRole::ActivationNixosRunner
                 | ProcessRole::Gpu
                 | ProcessRole::GpuRenderNode
                 | ProcessRole::Audio
@@ -357,7 +381,10 @@ impl ProductionProcessProviders {
 
     /// Return whether this node remains supervised after its start step.
     pub fn is_long_lived(node: &ProcessNode) -> bool {
-        !matches!(node.role, ProcessRole::SwtpmPreStartFlush) && Self::supports_node(node)
+        !matches!(
+            node.role,
+            ProcessRole::SwtpmPreStartFlush | ProcessRole::ActivationNixosRunner
+        ) && Self::supports_node(node)
     }
 
     /// Return the stable role key used by the broker and daemon stop paths.
@@ -438,6 +465,13 @@ impl ProductionProcessProviders {
         node: &ProcessNode,
         timeout: Duration,
     ) -> Result<ProviderLaunch, String> {
+        let target = node
+            .execution_ref
+            .clone()
+            .unwrap_or_else(|| d2b_core::bundle_resolver::default_execution_ref(vm, &node.role));
+        self.validate_execution_target(&ResourceRef::parse(&target).map_err(|_| {
+            "process-execution-target-invalid".to_owned()
+        })?)?;
         let ticket = self.ticket_with_timeout(vm, node, timeout)?;
         let provider = self.provider_for(node);
         let report = match provider {
@@ -464,11 +498,13 @@ impl ProductionProcessProviders {
         spec: &ProcessSpec,
         timeout: Duration,
     ) -> Result<ProviderLaunch, String> {
+        self.validate_execution_target(spec.execution().execution_ref())?;
         let provider = managed_provider_from_ref(context.provider_ref)?;
         let ticket = resource_ticket(
             &self.bundle,
-            context,
+            &context,
             spec.execution(),
+            None,
             &serde_json::to_vec(spec).map_err(|_| "provider-ticket:serialization".to_owned())?,
             provider,
             timeout,
@@ -503,11 +539,13 @@ impl ProductionProcessProviders {
         spec: &EphemeralProcessSpec,
         timeout: Duration,
     ) -> Result<ProviderLaunch, String> {
+        self.validate_execution_target(spec.execution().execution_ref())?;
         let provider = managed_provider_from_ref(context.provider_ref)?;
         let ticket = resource_ticket(
             &self.bundle,
-            context,
+            &context,
             spec.execution(),
+            spec.activation_input(),
             &serde_json::to_vec(spec).map_err(|_| "provider-ticket:serialization".to_owned())?,
             provider,
             timeout,
@@ -648,6 +686,7 @@ impl ProductionProcessProviders {
         self.adopt_resource_with_execution(
             context,
             spec.execution(),
+            None,
             &serde_json::to_vec(spec).map_err(|_| "provider-ticket:serialization".to_owned())?,
         )
         .await
@@ -683,6 +722,7 @@ impl ProductionProcessProviders {
         self.adopt_resource_with_execution(
             context,
             spec.execution(),
+            spec.activation_input(),
             &serde_json::to_vec(spec).map_err(|_| "provider-ticket:serialization".to_owned())?,
         )
         .await
@@ -696,8 +736,9 @@ impl ProductionProcessProviders {
         spec: &ProcessSpec,
     ) -> Result<ProviderLiveness, String> {
         self.probe_resource_with_execution(
-            context,
+            &context,
             spec.execution(),
+            None,
             &serde_json::to_vec(spec).map_err(|_| "provider-ticket:serialization".to_owned())?,
         )
         .await
@@ -711,8 +752,9 @@ impl ProductionProcessProviders {
         spec: &EphemeralProcessSpec,
     ) -> Result<ProviderLiveness, String> {
         self.probe_resource_with_execution(
-            context,
+            &context,
             spec.execution(),
+            spec.activation_input(),
             &serde_json::to_vec(spec).map_err(|_| "provider-ticket:serialization".to_owned())?,
         )
         .await
@@ -730,6 +772,7 @@ impl ProductionProcessProviders {
         self.stop_resource_with_execution(
             context,
             spec.execution(),
+            None,
             &serde_json::to_vec(spec).map_err(|_| "provider-ticket:serialization".to_owned())?,
             term_timeout,
             kill_timeout,
@@ -749,6 +792,7 @@ impl ProductionProcessProviders {
         self.stop_resource_with_execution(
             context,
             spec.execution(),
+            spec.activation_input(),
             &serde_json::to_vec(spec).map_err(|_| "provider-ticket:serialization".to_owned())?,
             term_timeout,
             kill_timeout,
@@ -770,7 +814,7 @@ impl ProductionProcessProviders {
         else {
             return Ok(());
         };
-        if !resource_identity_matches(&managed, context) {
+        if !resource_identity_matches(&managed, &context) {
             return Err("provider-process-identity-changed".to_owned());
         }
         let result = match managed.provider {
@@ -812,13 +856,16 @@ impl ProductionProcessProviders {
         &self,
         context: ProcessResourceContext<'_>,
         execution: &d2b_contracts_resource::v3::process::ExecutionSpec,
+        activation_input: Option<&d2b_contracts_resource::v3::ActivationRunnerInput>,
         spec_bytes: &[u8],
     ) -> Result<ProviderAdoption, String> {
+        self.validate_execution_target(execution.execution_ref())?;
         let provider = managed_provider_from_ref(context.provider_ref)?;
         let ticket = resource_ticket(
             &self.bundle,
-            context,
+            &context,
             execution,
+            activation_input,
             spec_bytes,
             provider,
             Duration::from_secs(30),
@@ -852,15 +899,18 @@ impl ProductionProcessProviders {
 
     async fn probe_resource_with_execution(
         &self,
-        context: ProcessResourceContext<'_>,
+        context: &ProcessResourceContext<'_>,
         execution: &d2b_contracts_resource::v3::process::ExecutionSpec,
+        activation_input: Option<&d2b_contracts_resource::v3::ActivationRunnerInput>,
         spec_bytes: &[u8],
     ) -> Result<ProviderLiveness, String> {
+        self.validate_execution_target(execution.execution_ref())?;
         let provider = managed_provider_from_ref(context.provider_ref)?;
         let ticket = resource_ticket(
             &self.bundle,
             context,
             execution,
+            activation_input,
             spec_bytes,
             provider,
             Duration::from_secs(30),
@@ -903,10 +953,12 @@ impl ProductionProcessProviders {
         &self,
         context: ProcessResourceContext<'_>,
         execution: &d2b_contracts_resource::v3::process::ExecutionSpec,
+        activation_input: Option<&d2b_contracts_resource::v3::ActivationRunnerInput>,
         spec_bytes: &[u8],
         term_timeout: Duration,
         kill_timeout: Duration,
     ) -> Result<bool, String> {
+        self.validate_execution_target(execution.execution_ref())?;
         let managed = self
             .managed_resources
             .lock()
@@ -933,11 +985,16 @@ impl ProductionProcessProviders {
         let deadline = Instant::now() + term_timeout;
         loop {
             match self
-                .probe_resource_with_execution(context, execution, spec_bytes)
+                .probe_resource_with_execution(
+                    &context,
+                    execution,
+                    activation_input,
+                    spec_bytes,
+                )
                 .await?
             {
                 ProviderLiveness::Exited => {
-                    self.finalize_resource(context).await?;
+                    self.finalize_resource(context.clone()).await?;
                     return Ok(false);
                 }
                 ProviderLiveness::Alive => {}
@@ -964,11 +1021,16 @@ impl ProductionProcessProviders {
         let kill_deadline = Instant::now() + kill_timeout;
         loop {
             match self
-                .probe_resource_with_execution(context, execution, spec_bytes)
+                .probe_resource_with_execution(
+                    &context,
+                    execution,
+                    activation_input,
+                    spec_bytes,
+                )
                 .await?
             {
                 ProviderLiveness::Exited => {
-                    self.finalize_resource(context).await?;
+                    self.finalize_resource(context.clone()).await?;
                     return Ok(true);
                 }
                 ProviderLiveness::Alive | ProviderLiveness::Unknown => {}
@@ -1450,8 +1512,9 @@ fn configuration_digest(label: &str, value: &str) -> ConfigurationDigest {
 
 fn resource_ticket(
     bundle: &BundleResolver,
-    context: ProcessResourceContext<'_>,
+    context: &ProcessResourceContext<'_>,
     execution: &d2b_contracts_resource::v3::process::ExecutionSpec,
+    activation_input: Option<&d2b_contracts_resource::v3::ActivationRunnerInput>,
     spec_bytes: &[u8],
     provider: ManagedProvider,
     timeout: Duration,
@@ -1503,6 +1566,24 @@ fn resource_ticket(
         required_identity(provider),
     )
     .map_err(|error| format!("provider-ticket:{}", error.code()))?;
+    let ticket = match context.guest_execution.as_ref() {
+        Some(binding) if execution.execution_ref().resource_type().as_str() == "Guest" => ticket
+            .with_guest_execution_binding(binding.clone())
+            .map_err(|error| format!("provider-ticket:{}", error.code()))?,
+        Some(_) => {
+            return Err("provider-ticket:guest-binding-for-host".to_owned());
+        }
+        None if execution.execution_ref().resource_type().as_str() == "Guest" => {
+            return Err("provider-ticket:guest-binding-missing".to_owned());
+        }
+        None => ticket,
+    };
+    let ticket = match activation_input {
+        Some(input) => ticket
+            .with_activation_input(input.clone())
+            .map_err(|error| format!("provider-ticket:{}", error.code()))?,
+        None => ticket,
+    };
     let domain = execution.domain().unwrap_or(ExecutionDomain::System);
     let sandbox = if provider == ManagedProvider::Systemd {
         let spec = execution.sandbox();
@@ -1586,7 +1667,12 @@ fn build_ticket(
     let process_name = stable_token(&node.id.0);
     let process_ref = ResourceRef::parse(&format!("{process_type}/{process_name}"))
         .map_err(|_| ProcessConformanceError::InvalidTicket)?;
-    let execution_ref = ResourceRef::parse(&format!("Guest/{vm}"))
+    let execution_ref = ResourceRef::parse(
+        &node
+            .execution_ref
+            .clone()
+            .unwrap_or_else(|| d2b_core::bundle_resolver::default_execution_ref(vm, &node.role)),
+    )
         .map_err(|_| ProcessConformanceError::InvalidTicket)?;
     let owner_provider =
         BoundedToken::parse(provider_name).map_err(|_| ProcessConformanceError::InvalidTicket)?;
@@ -1849,7 +1935,7 @@ mod tests {
             &provider_ref,
             ControllerGeneration::new(1).expect("controller generation"),
         );
-        assert!(resource_identity_matches(&managed, context));
+        assert!(resource_identity_matches(&managed, &context));
         let stale_context = ProcessResourceContext::new(
             &resource_ref,
             &uid,
@@ -1857,7 +1943,7 @@ mod tests {
             &provider_ref,
             ControllerGeneration::new(1).expect("controller generation"),
         );
-        assert!(!resource_identity_matches(&managed, stale_context));
+        assert!(!resource_identity_matches(&managed, &stale_context));
     }
 
     #[test]

@@ -19,7 +19,10 @@ pub use controller::{
     CloudHypervisorError, CloudHypervisorPhase, CloudHypervisorReconcileOutcome,
     CloudHypervisorRecoveryState, SystemCloudHypervisorClock,
 };
-pub use health::{GuestControlHealth, GuestControlHealthError, GuestControlProbe};
+pub use health::{
+    GuestControlHealth, GuestControlHealthError, GuestControlProbe, GuestSessionEvidence,
+    GuestSessionEvidenceProbe,
+};
 pub use vmm_argv::{
     ChArgvError, ChArgvInput, ChNetIface, ChVsock, exec_arg0, generate_ch_argv,
 };

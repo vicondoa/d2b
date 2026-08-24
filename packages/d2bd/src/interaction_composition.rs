@@ -137,6 +137,10 @@ const INTERACTION_SERVICES: &[(&str, ServicePackage)] = &[
         d2b_provider_notification_desktop::SERVICE_PACKAGE,
         ServicePackage::NotificationV3,
     ),
+    (
+        d2b_provider_config_nixos::SERVICE_PACKAGE,
+        ServicePackage::ConfigNixosV3,
+    ),
 ];
 
 /// Return the exact ComponentSession policy for one daemon-owned interaction
@@ -3517,6 +3521,7 @@ impl BundleDisplayLaunchResolver {
                 resource_uid: observed.intent.resource_uid.clone(),
                 bundle_content_identity: observed.intent.bundle_content_identity.clone(),
                 sandbox_plan: observed.intent.sandbox_plan.clone(),
+                guest_execution: observed.intent.guest_execution.clone(),
                 pid: observed.pid,
                 start_time_ticks: observed.start_time_ticks,
                 cgroup_verified: observed.cgroup_verified,
@@ -3558,6 +3563,8 @@ impl BrokerLaunchResolver for BundleDisplayLaunchResolver {
             provider_identity,
             template_identity,
             generation: ticket.resource_generation().get(),
+            activation_input: None,
+            guest_execution: None,
             resource_ref: ticket.process_ref().clone(),
             resource_uid: ticket.process_uid().clone(),
             bundle_content_identity: self.bundle.audit_bundle_hash().to_owned(),
@@ -3618,6 +3625,8 @@ struct PersistedObservation {
     resource_uid: ResourceUid,
     bundle_content_identity: String,
     sandbox_plan: Option<SandboxLaunchPlan>,
+    #[serde(default)]
+    guest_execution: Option<d2b_contracts_broker::broker_wire::GuestExecutionBinding>,
     pid: i32,
     start_time_ticks: u64,
     cgroup_verified: bool,
@@ -3649,6 +3658,8 @@ fn load_observations(
                     provider_identity: record.provider_identity,
                     template_identity: record.template_identity,
                     generation: record.generation,
+                    activation_input: None,
+                    guest_execution: record.guest_execution,
                     resource_ref: record.resource_ref,
                     resource_uid: record.resource_uid,
                     bundle_content_identity: record.bundle_content_identity,
@@ -4797,6 +4808,7 @@ mod tests {
             resource_uid: ResourceUid::parse("22222222-2222-4222-8222-222222222222").unwrap(),
             bundle_content_identity: "sha256:test".to_owned(),
             sandbox_plan: None,
+            guest_execution: None,
             pid: 42,
             start_time_ticks: 99,
             cgroup_verified: true,

@@ -987,6 +987,7 @@ dependencies = [
  "d2b-contracts-zone-session",
  "d2b-core",
  "d2b-cutover",
+ "d2b-provider-config-nixos",
  "d2b-realm-core",
  "d2b-resource-client",
  "d2b-zone-routing",
@@ -1364,6 +1365,7 @@ dependencies = [
  "d2b-contracts-zone-session",
  "serde",
  "serde_json",
+ "sha2",
 ]
 
 [[package]]
@@ -1405,6 +1407,24 @@ dependencies = [
  "wayland-protocols",
  "wayland-protocols-misc",
  "wayland-protocols-wlr",
+]
+
+[[package]]
+name = "d2b-provider-config-nixos"
+version = "0.0.0-bootstrap"
+dependencies = [
+ "async-trait",
+ "base64",
+ "d2b-contracts-control",
+ "d2b-contracts-resource",
+ "d2b-contracts-zone-session",
+ "libc",
+ "rustix 0.38.44",
+ "schemars",
+ "serde",
+ "serde_json",
+ "sha2",
+ "ttrpc",
 ]
 
 [[package]]
@@ -1966,6 +1986,7 @@ dependencies = [
  "d2b-provider-activation-nixos",
  "d2b-provider-audio-pipewire",
  "d2b-provider-clipboard-wayland",
+ "d2b-provider-config-nixos",
  "d2b-provider-device-security-key",
  "d2b-provider-device-tpm",
  "d2b-provider-device-usbip",

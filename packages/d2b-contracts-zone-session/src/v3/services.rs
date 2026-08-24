@@ -33,6 +33,7 @@ pub enum V3Service {
     Audit,
     Support,
     Credential,
+    ConfigNixos,
 }
 
 impl V3Service {
@@ -47,6 +48,7 @@ impl V3Service {
             Self::Audit => "d2b.audit.v3",
             Self::Support => "d2b.support.v3",
             Self::Credential => "d2b.credential.v3",
+            Self::ConfigNixos => "d2b.config-nixos.v3",
         }
     }
 
@@ -58,7 +60,7 @@ impl V3Service {
     }
 
     /// Every service package in stable order.
-    pub const ALL: [Self; 8] = [
+    pub const ALL: [Self; 9] = [
         Self::Resource,
         Self::Zone,
         Self::ZoneLink,
@@ -67,6 +69,7 @@ impl V3Service {
         Self::Audit,
         Self::Support,
         Self::Credential,
+        Self::ConfigNixos,
     ];
 }
 

@@ -357,7 +357,7 @@
           ]
         },
         "executionRef": {
-          "description": "Canonical Host or Guest execution target for this trusted runner.\n\nOmitted by legacy bundles, which resolve to `Guest/<vm>`.",
+          "description": "Canonical Host or Guest execution target for this trusted runner.\n\nOmitted by legacy bundles, which resolve to the singleton Host target except for the Guest-local activation runner.",
           "type": [
             "string",
             "null"
@@ -499,6 +499,13 @@
           "type": "string",
           "enum": [
             "qemu-media-runner"
+          ]
+        },
+        {
+          "description": "Target-local one-shot NixOS activation runner.\n\nThis role is emitted only for the Guest execution target. The activation Provider creates an EphemeralProcess resource and the target-local process Provider resolves this role from the trusted bundle.",
+          "type": "string",
+          "enum": [
+            "activation-nixos-runner"
           ]
         },
         {

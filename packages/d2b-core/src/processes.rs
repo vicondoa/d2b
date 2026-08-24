@@ -72,7 +72,8 @@ pub struct ProcessNode {
     pub id: NodeId,
     /// Canonical Host or Guest execution target for this trusted runner.
     ///
-    /// Omitted by legacy bundles, which resolve to `Guest/<vm>`.
+    /// Omitted by legacy bundles, which resolve to the singleton Host target
+    /// except for the Guest-local activation runner.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub execution_ref: Option<String>,
     /// Canonical execution domain for this trusted runner.
@@ -255,6 +256,13 @@ pub enum ProcessRole {
     CloudHypervisorRunner,
     /// QEMU media runner.
     QemuMediaRunner,
+    /// Target-local one-shot NixOS activation runner.
+    ///
+    /// This role is emitted only for the Guest execution target. The
+    /// activation Provider creates an EphemeralProcess resource and the
+    /// target-local process Provider resolves this role from the trusted
+    /// bundle.
+    ActivationNixosRunner,
     /// vsock relay sidecar.
     VsockRelay,
     /// Host-to-observability-VM OTLP bridge.

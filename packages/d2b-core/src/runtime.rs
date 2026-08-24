@@ -347,6 +347,7 @@ impl From<&ProcessRole> for RuntimeServiceRole {
             }
             ProcessRole::Audio => Self::Audio,
             ProcessRole::CloudHypervisorRunner | ProcessRole::QemuMediaRunner => Self::Hypervisor,
+            ProcessRole::ActivationNixosRunner => Self::GuestControl,
             ProcessRole::VsockRelay => Self::Network,
             ProcessRole::GuestSshReadiness | ProcessRole::GuestControlHealth => Self::GuestControl,
             ProcessRole::Usbip | ProcessRole::SecurityKeyFrontend => Self::Usb,

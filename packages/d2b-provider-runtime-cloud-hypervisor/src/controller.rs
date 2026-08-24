@@ -10,7 +10,10 @@ use crate::{
     adoption::{AdoptionOutcome, ProcessIdentity, verify_identity},
     bootstrap_graph::{BootstrapGraph, DependencyReadiness},
     config::{CloudHypervisorConfig, CloudHypervisorGuestSettings},
-    health::{GuestControlHealth, GuestControlHealthError, GuestControlProbe},
+    health::{
+        GuestControlHealth, GuestControlHealthError, GuestSessionEvidence,
+        GuestSessionEvidenceProbe,
+    },
 };
 
 /// Cloud Hypervisor lifecycle phase.
@@ -153,6 +156,7 @@ pub struct CloudHypervisorController<E, P> {
     identity: Option<ProcessIdentity>,
     expected_identity: Option<ProcessIdentity>,
     health_failures: u8,
+    session_evidence: Option<GuestSessionEvidence>,
     finalizer: bool,
     adoption_started_at_unix_ms: Option<u64>,
     startup_started_at_unix_ms: Option<u64>,
@@ -163,7 +167,7 @@ pub struct CloudHypervisorController<E, P> {
 impl<E, P> CloudHypervisorController<E, P>
 where
     E: CloudHypervisorEffectPort + 'static,
-    P: GuestControlProbe + 'static,
+    P: GuestSessionEvidenceProbe + 'static,
 {
     /// Construct a controller with explicit dependency graph and ports.
     pub fn new(
@@ -189,6 +193,7 @@ where
             identity: None,
             expected_identity: None,
             health_failures: 0,
+            session_evidence: None,
             finalizer: true,
             adoption_started_at_unix_ms: None,
             startup_started_at_unix_ms: None,
@@ -243,6 +248,11 @@ where
     /// Return whether the finalizer remains installed.
     pub const fn finalizer_installed(&self) -> bool {
         self.finalizer
+    }
+
+    /// Return the latest authenticated Guest session evidence.
+    pub fn session_evidence(&self) -> Option<&GuestSessionEvidence> {
+        self.session_evidence.as_ref()
     }
 
     fn apply_health(
@@ -434,24 +444,30 @@ where
         } else {
             Duration::from_millis(u64::from(self.config.health_check_timeout_ms))
         };
-        let health = match timeout(
+        let evidence = match timeout(
             probe_timeout,
             self.probe
-                .probe(expected_cid, self.config.health_check_timeout_ms),
+                .observe(expected_cid, self.config.health_check_timeout_ms),
         )
         .await
         {
-            Ok(result) => result.map_err(CloudHypervisorError::GuestControl)?,
+            Ok(result) => result.map_err(|error| {
+                self.session_evidence = Some(GuestSessionEvidence::failed());
+                CloudHypervisorError::GuestControl(error)
+            })?,
             Err(_) if self.phase == CloudHypervisorPhase::Bootstrapping => {
+                self.session_evidence = Some(GuestSessionEvidence::failed());
                 return Err(self.startup_timeout());
             }
             Err(_) => {
+                self.session_evidence = Some(GuestSessionEvidence::failed());
                 return Err(CloudHypervisorError::GuestControl(
                     GuestControlHealthError::Timeout,
                 ));
             }
         };
-        self.apply_health(health)
+        self.session_evidence = Some(evidence.clone());
+        self.apply_health(evidence.health())
     }
 
     /// Adopt a process after the caller has rehydrated the expected identity
@@ -493,17 +509,21 @@ where
         self.identity = Some(candidate);
         self.guest_control_cid = Some(expected_cid);
         self.phase = CloudHypervisorPhase::VmmReady;
-        let health = match timeout(
+        let evidence = match timeout(
             self.startup_budget()?,
             self.probe
-                .probe(expected_cid, self.config.health_check_timeout_ms),
+                .observe(expected_cid, self.config.health_check_timeout_ms),
         )
         .await
         {
-            Ok(result) => result.map_err(CloudHypervisorError::GuestControl)?,
+            Ok(result) => result.map_err(|error| {
+                self.session_evidence = Some(GuestSessionEvidence::failed());
+                CloudHypervisorError::GuestControl(error)
+            })?,
             Err(_) => return Err(self.startup_timeout()),
         };
-        self.apply_health(health)
+        self.session_evidence = Some(evidence.clone());
+        self.apply_health(evidence.health())
     }
 
     /// Stop guest-control first, then the VMM process.

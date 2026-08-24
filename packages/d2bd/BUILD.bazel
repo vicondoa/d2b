@@ -38,6 +38,7 @@ d2bd_shared_deps = [
     "//packages/d2b-process-conformance:d2b_process_conformance",
     "//packages/d2b-provider:d2b_provider",
     "//packages/d2b-provider-activation-nixos:d2b_provider_activation_nixos",
+    "//packages/d2b-provider-config-nixos:d2b_provider_config_nixos",
     "//packages/d2b-provider-audio-pipewire:d2b_provider_audio_pipewire",
     "//packages/d2b-provider-clipboard-wayland:d2b_provider_clipboard_wayland",
     "//packages/d2b-provider-device-security-key:d2b_provider_device_security_key",

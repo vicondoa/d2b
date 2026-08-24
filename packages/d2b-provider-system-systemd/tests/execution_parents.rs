@@ -10,12 +10,14 @@
 use d2b_contracts_resource::v3::ResourceRef;
 use d2b_contracts_resource::v3::execution_policy::ExecutionDomain;
 use d2b_contracts_resource::v3::identity::ReconnectGeneration;
-use d2b_contracts_resource::v3::{ResourceGeneration, ZoneRevision};
+use d2b_contracts_resource::v3::{
+    ControllerGeneration, ResourceGeneration, ResourceUid, ZoneRevision,
+};
 use d2b_process_conformance::testing::{PortCall, ScriptedEffectPort, block_on, fixtures};
 use d2b_process_conformance::{
-    AdoptionCondition, AdoptionOutcome, ConfigurationDigest, IdentityBinding,
-    ProcessConformanceError, ProcessIdentityDigest, ProcessPhaseClass, ProcessProvider,
-    ReadinessExpectation, WaitReapOwner,
+    AdoptionCondition, AdoptionOutcome, ConfigurationDigest, GuestExecutionBinding,
+    IdentityBinding, ProcessConformanceError, ProcessIdentityDigest, ProcessPhaseClass,
+    ProcessProvider, ReadinessExpectation, WaitReapOwner,
 };
 use d2b_provider_system_systemd::{PROVIDER_NAME, SystemdProcessProvider};
 
@@ -39,6 +41,30 @@ fn launching() -> SystemdProcessProvider<ScriptedEffectPort> {
         required(),
         WaitReapOwner::ServiceManager,
     ))
+}
+
+fn guest_binding(provider: u64, session: u64, epoch: u64) -> GuestExecutionBinding {
+    GuestExecutionBinding::new(
+        ResourceUid::parse("123e4567-e89b-42d3-a456-426614174000").unwrap(),
+        ConfigurationDigest::from_bytes([8; 32]),
+        ReconnectGeneration::new(session).unwrap(),
+        epoch,
+        ResourceGeneration::new(provider).unwrap(),
+        ControllerGeneration::new(1).unwrap(),
+    )
+    .unwrap()
+}
+
+fn bind_guest(
+    ticket: d2b_process_conformance::LaunchTicket,
+    execution_ref: &ResourceRef,
+    binding: GuestExecutionBinding,
+) -> d2b_process_conformance::LaunchTicket {
+    if execution_ref.resource_type().as_str() == "Guest" {
+        ticket.with_guest_execution_binding(binding).unwrap()
+    } else {
+        ticket
+    }
 }
 
 fn host_ref() -> ResourceRef {
@@ -195,11 +221,16 @@ fn readiness_and_identity_seals_are_parent_neutral() {
 #[test]
 fn controller_launch_and_assignment_authority_remain_disjoint_on_each_parent() {
     for execution_ref in [host_ref(), guest_ref()] {
-        let launch = fixtures::ticket_builder()
+        let launch = bind_guest(
+            fixtures::ticket_builder()
             .selected_provider(PROVIDER_NAME)
             .execution_ref(execution_ref.clone())
+            .without_guest_execution_binding()
             .build()
-            .expect("conformant ticket")
+            .expect("conformant ticket"),
+            &execution_ref,
+            guest_binding(2, 4, 1),
+        )
             .with_resource_revision(ZoneRevision::new(1))
             .expect("revision binding")
             .with_controller_launch_binding(
@@ -211,11 +242,16 @@ fn controller_launch_and_assignment_authority_remain_disjoint_on_each_parent() {
             .expect("controller launch binding");
         d2b_process_conformance::suite::assert_controller_launch_has_no_resource_client(&launch);
 
-        let assignment = fixtures::ticket_builder()
+        let assignment = bind_guest(
+            fixtures::ticket_builder()
             .selected_provider(PROVIDER_NAME)
-            .execution_ref(execution_ref)
+            .execution_ref(execution_ref.clone())
+            .without_guest_execution_binding()
             .build()
-            .expect("conformant ticket")
+            .expect("conformant ticket"),
+            &execution_ref,
+            guest_binding(2, 4, 9),
+        )
             .with_resource_revision(ZoneRevision::new(1))
             .expect("revision binding")
             .with_assignment_binding(

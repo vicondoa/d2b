@@ -16,6 +16,8 @@ pub struct ActivationRunnerRequest {
     pub system_artifact_id: ArtifactId,
     /// Host or Guest target.
     pub execution_ref: ResourceRef,
+    /// Target generation ordinal.
+    pub target_generation: u64,
     /// Requested activation mode.
     pub activation_mode: ActivationMode,
 }
@@ -101,7 +103,8 @@ impl ActivationRunner {
         if !matches!(
             request.execution_ref.resource_type().as_str(),
             "Host" | "Guest"
-        ) {
+        ) || request.target_generation == 0
+        {
             return Err(ActivationRunnerError::InvalidRequest);
         }
         let outcome = helper.activate(request)?;

@@ -311,7 +311,7 @@ fn generic_process_template_lookup_does_not_require_resource_name_to_match_role_
     let resource_name = "audio-resource";
     let intent = resolver
         .find_runner_intent_for_process(
-            "Guest/test-vm",
+            "Host/host-system",
             d2b_core::processes::ProcessExecutionDomain::System,
             None,
             "audio",

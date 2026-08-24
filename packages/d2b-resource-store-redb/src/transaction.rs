@@ -797,6 +797,7 @@ pub(crate) fn empty_write_request_for_test(
             },
             mutations: Vec::new(),
         },
+        commit_fence: None,
         queue_permit,
         response,
     }

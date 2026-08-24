@@ -2029,7 +2029,7 @@ pub(super) struct ConfigStatusArgs {
 /// (no privileged surface), from `XDG_STATE_HOME` (or `HOME`). Tests
 /// override it per-thread via `set_test_staging_base` rather than mutating
 /// process-global env.
-pub(super) fn config_staging_base() -> PathBuf {
+pub(crate) fn config_staging_base() -> PathBuf {
     #[cfg(test)]
     if let Some(base) = TEST_STAGING_BASE.with(|b| b.borrow().clone()) {
         return base;
@@ -2038,7 +2038,7 @@ pub(super) fn config_staging_base() -> PathBuf {
         .map(PathBuf::from)
         .filter(|p| !p.as_os_str().is_empty())
         .or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".local/state")))
-        .unwrap_or_else(|| PathBuf::from("/tmp/d2b-state"));
+        .unwrap_or_else(|| PathBuf::from(".d2b-state"));
     base.join("d2b/config-staging")
 }
 
@@ -2056,17 +2056,17 @@ pub(super) fn set_test_staging_base(base: Option<PathBuf>) {
     TEST_STAGING_BASE.with(|b| *b.borrow_mut() = base);
 }
 
-pub(super) fn config_staging_path_in(base: &Path, vm: &str) -> PathBuf {
+pub(crate) fn config_staging_path_in(base: &Path, vm: &str) -> PathBuf {
     base.join(format!("{vm}.guest.nix"))
 }
 
-pub(super) fn config_staging_path(vm: &str) -> PathBuf {
+pub(crate) fn config_staging_path(vm: &str) -> PathBuf {
     config_staging_path_in(&config_staging_base(), vm)
 }
 
 /// Reject VM names that are not the framework's `^[a-z][a-z0-9-]*$`
 /// shape, so a VM arg can never traverse out of the staging dir.
-pub(super) fn config_validate_vm_name(vm: &str) -> Result<(), CliFailure> {
+pub(crate) fn config_validate_vm_name(vm: &str) -> Result<(), CliFailure> {
     let ok = !vm.is_empty()
         && vm.chars().next().is_some_and(|c| c.is_ascii_lowercase())
         && vm
@@ -2129,7 +2129,15 @@ pub(super) fn config_validate_staging_bytes(bytes: &[u8]) -> Result<(), CliFailu
 /// Core (testable) approve: validate the staging file, atomically write
 /// it onto `target`, then remove the staging file. Returns the byte
 /// count written.
-pub(super) fn config_approve_core(staging: &Path, target: &Path) -> Result<usize, CliFailure> {
+pub(crate) fn config_approve_core(staging: &Path, target: &Path) -> Result<usize, CliFailure> {
+    config_approve_core_with_digest(staging, target, None)
+}
+
+pub(crate) fn config_approve_core_with_digest(
+    staging: &Path,
+    target: &Path,
+    expected_sha256: Option<&str>,
+) -> Result<usize, CliFailure> {
     if !staging.exists() {
         return Err(CliFailure::new(
             1,
@@ -2142,6 +2150,16 @@ pub(super) fn config_approve_core(staging: &Path, target: &Path) -> Result<usize
     let bytes = std::fs::read(staging)
         .map_err(|e| CliFailure::new(1, format!("config approve: read staging: {e}")))?;
     config_validate_staging_bytes(&bytes)?;
+    if let Some(expected_sha256) = expected_sha256 {
+        let actual_sha256 = sha256_hex(&bytes);
+        if actual_sha256 != expected_sha256 {
+            return Err(CliFailure::new(
+                1,
+                "config approve: staged content changed after service approval; re-run `d2b config sync`"
+                    .to_owned(),
+            ));
+        }
+    }
     let parent = target.parent().filter(|p| !p.as_os_str().is_empty());
     if let Some(parent) = parent
         && !parent.exists()
@@ -2163,7 +2181,7 @@ pub(super) fn config_approve_core(staging: &Path, target: &Path) -> Result<usize
 
 /// Core (testable) reject: remove the staging file if present. Returns
 /// whether anything was removed.
-pub(super) fn config_reject_core(staging: &Path) -> Result<bool, CliFailure> {
+pub(crate) fn config_reject_core(staging: &Path) -> Result<bool, CliFailure> {
     if staging.exists() {
         std::fs::remove_file(staging)
             .map_err(|e| CliFailure::new(1, format!("config reject: {e}")))?;
@@ -2217,7 +2235,7 @@ pub(super) fn warn_all_pending_staged_configs() {
 /// atomic on the same filesystem, so a crash never leaves a partially
 /// written file (and never a non-empty truncated one that `approve`
 /// might later accept).
-pub(super) fn config_atomic_write(target: &Path, bytes: &[u8]) -> Result<(), CliFailure> {
+pub(crate) fn config_atomic_write(target: &Path, bytes: &[u8]) -> Result<(), CliFailure> {
     use std::io::Write as _;
     let parent = target.parent().filter(|p| !p.as_os_str().is_empty());
     let base = target
@@ -16562,8 +16580,9 @@ mod config_cmd_tests {
     use std::sync::atomic::{AtomicUsize, Ordering};
 
     use super::{
-        config_approve_core, config_atomic_write, config_reject_core, config_staging_path_in,
-        config_validate_remote_path, config_validate_staging_bytes, config_validate_vm_name,
+        config_approve_core, config_approve_core_with_digest, config_atomic_write,
+        config_reject_core, config_staging_path_in, config_validate_remote_path,
+        config_validate_staging_bytes, config_validate_vm_name,
     };
 
     static COUNTER: AtomicUsize = AtomicUsize::new(0);
@@ -16646,6 +16665,25 @@ mod config_cmd_tests {
             .filter(|e| e.file_name().to_string_lossy().contains("d2b-tmp"))
             .collect();
         assert!(leftovers.is_empty(), "approve left a temp file behind");
+    }
+
+    #[test]
+    fn approve_digest_mismatch_does_not_publish_changed_staging() {
+        let dir = scratch("approve-digest-mismatch");
+        let staging = config_staging_path_in(&dir, "work-aad");
+        let target = dir.join("work.guest.nix");
+        fs::write(&staging, b"{ changed = true; }\n").expect("write staging");
+        fs::write(&target, b"{ keep = true; }\n").expect("seed target");
+
+        let err = config_approve_core_with_digest(
+            &staging,
+            &target,
+            Some("sha256:0000000000000000000000000000000000000000000000000000000000000000"),
+        )
+        .expect_err("changed content must fail closed");
+        assert!(err.message.contains("changed after service approval"));
+        assert_eq!(fs::read(&target).expect("read target"), b"{ keep = true; }\n");
+        assert!(staging.exists());
     }
 
     #[test]

@@ -36,6 +36,9 @@ use crate::ops::spawn_runner::{
 use crate::ops::store_sync::generation_id_for_intent;
 use crate::ops::store_view_posture::plant_live_marker_with_matrix_posture;
 use d2b_contracts_broker::broker_wire::{ActivationMode, ActivationPhase};
+use d2b_contracts_resource::v3::{
+    ActivationRunnerInput, MAX_ACTIVATION_RUNNER_INPUT_BYTES,
+};
 use d2b_core::bundle_resolver::{HostRuntime, ResolvedActivationIntent, ResolvedStoreViewIntent};
 use d2b_core::minijail_profile::CgroupPlacement;
 use d2b_host::hardlink_farm;
@@ -1994,7 +1997,10 @@ pub(crate) fn policy_ref_device_classes(
         // terminal/file operations); guest-control-health is the daemon-side
         // authenticated Health probe, which speaks ttRPC over the guest-control
         // vsock and uses connect(2)/socket ioctls.
-        "w1-host-reconcile" | "w1-store-virtiofs-preflight" | "w1-guest-control-health" => {
+        "w1-host-reconcile"
+        | "w1-store-virtiofs-preflight"
+        | "w1-guest-control-health"
+        | "w1-activation-nixos-runner" => {
             Some(&[])
         }
         // swtpm is a software TPM emulator; no hardware device ioctls,
@@ -3491,6 +3497,7 @@ fn refresh_guest_control_fs_acl(plan: &SpawnRunnerPlan) -> Result<(), LiveHandle
 pub fn live_spawn_runner(
     plan_input: &SpawnRunnerPlanInput,
     mut pre_opened_device_fds: Vec<std::os::fd::OwnedFd>,
+    activation_input: Option<&ActivationRunnerInput>,
 ) -> Result<SpawnRunnerResult, LiveHandlerError> {
     let plan = preflight(plan_input).map_err(LiveHandlerError::SpawnPreflight)?;
 
@@ -3568,6 +3575,20 @@ pub fn live_spawn_runner(
     let memlock_limit_bytes = memlock_guest_bytes.map(|guest_bytes| {
         guest_bytes.saturating_add(qemu_media_memlock_headroom_bytes(guest_bytes))
     });
+    let activation_stdin = activation_input
+        .map(serde_json::to_vec)
+        .transpose()
+        .map_err(|error| LiveHandlerError::SpawnFailed {
+            detail: format!("activation input serialization failed: {error}"),
+        })?;
+    if activation_stdin
+        .as_ref()
+        .is_some_and(|bytes| bytes.len() > MAX_ACTIVATION_RUNNER_INPUT_BYTES)
+    {
+        return Err(LiveHandlerError::SpawnFailed {
+            detail: "activation input exceeds bounded stdin envelope".to_owned(),
+        });
+    }
     if let Some(guest_bytes) = memlock_guest_bytes {
         qemu_media_preflight_memlock_budget(qemu_media_memlock_preflight_required_bytes(
             guest_bytes,
@@ -3606,6 +3627,7 @@ pub fn live_spawn_runner(
         // execve.
         pre_opened_device_fds,
         memlock_limit_bytes,
+        activation_stdin,
     };
 
     let outcome = crate::sys::pidfd_sys::clone3_spawn_runner(
@@ -5042,7 +5064,7 @@ mod tests {
             user_namespace: None,
             umask: None,
         };
-        let err = live_spawn_runner(&plan, Vec::new()).unwrap_err();
+        let err = live_spawn_runner(&plan, Vec::new(), None).unwrap_err();
         assert!(matches!(err, LiveHandlerError::SpawnPreflight(_)));
     }
 
@@ -5701,7 +5723,8 @@ mod tests {
             umask: None,
         };
 
-        let outcome = live_spawn_runner(&plan, Vec::new()).expect("spawn privileged test child");
+        let outcome =
+            live_spawn_runner(&plan, Vec::new(), None).expect("spawn privileged test child");
         let wait_status = nix::sys::wait::waitpid(nix::unistd::Pid::from_raw(outcome.pid), None)
             .expect("wait for test child");
         assert!(matches!(

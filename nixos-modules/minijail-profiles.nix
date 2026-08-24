@@ -347,6 +347,30 @@ let
         seccompPolicyRef = "w1-guest-control-health";
         cgroupSubtree = "d2b.slice/${name}/guest-control-health";
       };
+
+      "${profileIdFor name "activation-nixos-runner"}" = mkProfile {
+        profileId = profileIdFor name "activation-nixos-runner";
+        role = "activation-nixos-runner";
+        principal = "d2b-${name}-activation";
+        uid = 0;
+        gid = 0;
+        seccompPolicyRef = "w1-activation-nixos-runner";
+        namespaces = defaultNamespaces // {
+          pid = true;
+        };
+        adr_carve_out = "Target-local activation helper requires its declared root identity inside the Guest sandbox.";
+        readOnlyPaths = [
+          "/etc/d2b"
+          "/nix/store"
+          "/nix/var/nix/profiles"
+          "/run/current-system"
+        ];
+        writablePaths = [
+          (mkWritablePath (stateDirOf name) "Write only target-local activation state.")
+        ];
+        cgroupSubtree = "d2b.slice/${name}/activation-nixos-runner";
+        controllers = serviceControllers;
+      };
     }
     // lib.optionalAttrs vm.tpm.enable {
       # Swtpm + SwtpmFlush minijail profiles.

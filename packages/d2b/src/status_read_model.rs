@@ -844,6 +844,7 @@ fn process_role_name(role: &d2b_core::processes::ProcessRole) -> String {
         d2b_core::processes::ProcessRole::Usbip => "usbip",
         d2b_core::processes::ProcessRole::WaylandProxy => "wayland-proxy",
         d2b_core::processes::ProcessRole::SecurityKeyFrontend => "security-key-frontend",
+        d2b_core::processes::ProcessRole::ActivationNixosRunner => "activation-nixos-runner",
     }
     .to_owned()
 }

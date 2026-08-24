@@ -52,6 +52,8 @@ pub const MAX_CONCURRENT_READS: usize = 16;
 /// Worker-enforced lifetime ceiling for an admitted read transaction.
 pub const READ_LIFETIME: Duration = Duration::from_millis(250);
 
+pub(crate) type CommitFence = Arc<dyn Fn() -> Result<(), StoreError> + Send + Sync>;
+
 /// Lightweight filtered view over one immutable decoded batch.
 #[derive(Clone)]
 pub struct SharedChangeBatch {
@@ -422,6 +424,14 @@ impl WriterHandle {
         &self,
         opened: OpenedMutation,
     ) -> Result<d2b_resource_store::StoreCommitResult, StoreError> {
+        self.commit_with_fence(opened, None).await
+    }
+
+    pub(crate) async fn commit_with_fence(
+        &self,
+        opened: OpenedMutation,
+        commit_fence: Option<CommitFence>,
+    ) -> Result<d2b_resource_store::StoreCommitResult, StoreError> {
         if self.quarantined.load(Ordering::Acquire) {
             return Err(crate::transaction::quarantined());
         }
@@ -485,6 +495,7 @@ impl WriterHandle {
             principal,
             resources,
             mutation: VerifiedWrite::from_opened(opened),
+            commit_fence,
             queue_permit,
             response,
         }))) {
@@ -714,6 +725,7 @@ pub(crate) struct WriteRequest {
     pub(crate) principal: String,
     pub(crate) resources: Vec<ResourceRef>,
     pub(crate) mutation: VerifiedWrite,
+    pub(crate) commit_fence: Option<CommitFence>,
     pub(crate) queue_permit: OwnedSemaphorePermit,
     pub(crate) response: oneshot::Sender<Result<d2b_resource_store::StoreCommitResult, StoreError>>,
 }
@@ -1103,13 +1115,31 @@ impl WriterActor {
                 u64::try_from(requests.len()).unwrap_or(u64::MAX),
                 Ordering::Relaxed,
             );
+            let mut accepted = Vec::with_capacity(requests.len());
+            for request in requests {
+                let sequence = request.sequence;
+                let fence_result = request
+                    .commit_fence
+                    .as_ref()
+                    .map_or(Ok(()), |fence| fence());
+                if let Err(error) = fence_result {
+                    self.clear_audit_intents(&[sequence]);
+                    drop(request.queue_permit);
+                    let _ = request.response.send(Err(error));
+                } else {
+                    accepted.push(request);
+                }
+            }
+            if accepted.is_empty() {
+                continue;
+            }
             let started = Instant::now();
-            let request_count = requests.len();
-            let sequences = requests
+            let request_count = accepted.len();
+            let sequences = accepted
                 .iter()
                 .map(|request| request.sequence)
                 .collect::<Vec<_>>();
-            let owned = requests
+            let owned = accepted
                 .into_iter()
                 .map(|request| {
                     drop(request.queue_permit);

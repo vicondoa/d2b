@@ -110,6 +110,11 @@ macro_rules! opaque_digest {
                 Self(bytes)
             }
 
+            /// Return the opaque digest bytes for a typed contract adapter.
+            pub const fn as_bytes(self) -> [u8; 32] {
+                self.0
+            }
+
             /// Render the digest as lowercase hex.
             pub fn to_hex(self) -> String {
                 let mut out = String::with_capacity(64);

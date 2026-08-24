@@ -26,6 +26,7 @@ members = [
     "packages/d2b-provider",
     "packages/d2b-provider-toolkit",
     "packages/d2b-provider-activation-nixos",
+    "packages/d2b-provider-config-nixos",
     "packages/d2b-provider-audio-pipewire",
     "packages/d2b-provider-clipboard-wayland",
     "packages/d2b-provider-display-wayland",

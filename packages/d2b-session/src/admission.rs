@@ -781,6 +781,17 @@ impl AuthenticatedTtrpcHandle {
         }
         result
     }
+
+    /// Serve generated ttrpc services on this already authenticated session.
+    ///
+    /// The handle contains only the correlated transport plane; authorization
+    /// and resource policy remain bound to the generated service adapter.
+    pub async fn serve_ttrpc_services(
+        self,
+        services: std::collections::HashMap<String, ttrpc::r#async::Service>,
+    ) -> std::result::Result<(), crate::SessionServerError> {
+        crate::serve_ttrpc_services(Arc::new(self.driver), services).await
+    }
 }
 
 impl fmt::Debug for AuthenticatedTtrpcHandle {
@@ -1196,6 +1207,14 @@ impl<C> AuthenticatedComponentSession<C> {
             self.cleanup_observer.record(OperationClass::Invoke, error);
         }
         result
+    }
+}
+
+impl AuthenticatedComponentSession<()> {
+    /// Split the transport plane after a session admitted without a
+    /// registration capability, such as a Guest target's parent session.
+    pub fn into_ttrpc_handle(self) -> AuthenticatedTtrpcHandle {
+        self.ttrpc_handle()
     }
 }
 

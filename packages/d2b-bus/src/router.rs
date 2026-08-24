@@ -1521,6 +1521,7 @@ impl UnixSubjectRecord {
                     ResourceRef::parse("Provider/clipboard-wayland").ok()
                 }
                 "d2b.notification.v3" => ResourceRef::parse("Provider/notification-desktop").ok(),
+                "d2b.config-nixos.v3" => ResourceRef::parse("Provider/config-nixos").ok(),
                 _ => self.provider_ref,
             }
         } else {
@@ -2877,6 +2878,7 @@ fn routes_for_admitted_session(
                 | "d2b.clipboard.bridge.v3"
                 | "d2b.clipboard.picker-coord.v3"
                 | "d2b.notification.v3"
+                | "d2b.config-nixos.v3"
         );
     if binding.provider_ref().is_none()
         || (binding.subject_ref().resource_type().as_str() != "Provider" && !guest_provider_service)

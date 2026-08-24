@@ -59,13 +59,6 @@ let
   unixSocketListening = mkReadiness "unix-socket-listening";
   tcpPort = host: port: mkReadiness "tcp-port" { inherit host port; };
   commandReady = mkReadiness "command";
-  # Authenticated guest-control Health readiness. Unlike a raw TCP-22
-  # probe this predicate fails CLOSED: the daemon completes a full
-  # Hello + token challenge-response + Health over the guest-control vsock
-  # before the node is ready. The daemon resolves the per-VM vsock socket,
-  # peer credentials, and broker-backed signer from its own trusted state.
-  guestControlHealthReady = vmName: { kind = "guest-control-health"; value = { vm = vmName; }; };
-
   extractOptValues = optFlag: extraArgs:
     let
       flags = if builtins.isList optFlag then optFlag else [ optFlag ];
@@ -893,6 +886,10 @@ use devices::virtio::vhost_user_backend::run_video_device;'
     assert (binaryPath == null) == (argv == [ ]);
     {
       inherit id role readiness;
+      executionRef =
+        if role == "activation-nixos-runner"
+        then "Guest/${name}"
+        else "Host/host-system";
       profile = profileFor name id;
     }
     // lib.optionalAttrs emitUnit { inherit unit; }
@@ -937,11 +934,17 @@ use devices::virtio::vhost_user_backend::run_video_device;'
       manifest = cfg.manifest.${name};
       microvm = d2bLib.vmRunner config name;
       hypervisorService = d2bLib.runtimeHypervisorService "nixos";
-      # The guest-control authenticated Health probe is the framework
-      # readiness gate on guest-control-capable VMs. Per-VM sshd/host-keys are
-      # retained for the SSH-compat window but are no longer the framework
-      # readiness signal, so a TCP-22 readiness node is no longer emitted.
+      # Guest sessions are authenticated independently from VM boot. Their
+      # evidence is projected through Guest/Endpoint status rather than a
+      # readiness-only health RPC.
       guestControlEnabled = vm.guest.control.enable;
+      activationRunner = name: {
+        binaryPath = "${d2bHostTools.activationHelper}/bin/d2b-activation-helper";
+        argv = [
+          "d2b-activation-helper"
+          "apply-generation"
+        ];
+      };
       virtiofsShares = lib.filter
         (share: (share.proto or "virtiofs") == "virtiofs")
         microvm.shares;
@@ -1124,8 +1127,13 @@ use devices::virtio::vhost_user_backend::run_video_device;'
       ++ lib.optional guestControlEnabled (node name {
         id = "guest-control-health";
         role = "guest-control-health";
-        readiness = [ (guestControlHealthReady name) ];
+        readiness = [ ];
       })
+      ++ lib.optional guestControlEnabled (mkRunnerNode name {
+        id = "activation-nixos-runner";
+        role = "activation-nixos-runner";
+        readiness = [ ];
+      } (activationRunner name))
       ++ lib.optional vm.usb.securityKey.enable (node name {
         # The sk-frontend DAG node tracks the readiness of the host-side
         # vsock socket endpoint that the guest frontend connects to. The
@@ -1172,10 +1180,10 @@ use devices::virtio::vhost_user_backend::run_video_device;'
         edgesFromNodes optionalSidecarBaseNodeIds "audio" "The audio sidecar starts only after every prerequisite sidecar is ready."
       )
       ++ edgesFromNodes preVmmNodeIds "cloud-hypervisor" "Cloud Hypervisor starts only after every prerequisite sidecar is ready."
-      ++ lib.optional guestControlEnabled
-        (edge "cloud-hypervisor" "guest-control-health" "Authenticated guest-control Health readiness is probed only after Cloud Hypervisor is running.")
       ++ lib.optional vm.usb.securityKey.enable
-        (edge "cloud-hypervisor" "sk-frontend" "The sk-frontend vsock endpoint tracking starts only after Cloud Hypervisor creates the base vsock socket.");
+        (edge "cloud-hypervisor" "sk-frontend" "The sk-frontend vsock endpoint tracking starts only after Cloud Hypervisor creates the base vsock socket.")
+      ++ lib.optional guestControlEnabled
+        (edge "cloud-hypervisor" "guest-control-health" "Guest ComponentSession health starts only after Cloud Hypervisor creates the Guest vsock endpoint.");
       invariants = {
         perVmAuditPipeline = true;
         swtpmPreStartFlush = true;

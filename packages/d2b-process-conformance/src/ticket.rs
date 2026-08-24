@@ -4,6 +4,7 @@ use std::collections::BTreeSet;
 use std::fmt;
 
 use d2b_contracts_resource::v3::{
+    ActivationRunnerInput,
     execution_policy::{BoundedToken, ExecutionDomain},
 };
 use d2b_contracts_resource::v3::{
@@ -205,6 +206,76 @@ struct ControllerAssignmentBinding {
     resource_client_binding: ConfigurationDigest,
 }
 
+/// Authenticated target binding required for Guest Process execution.
+///
+/// The Guest daemon derives this commitment from its enrolled Guest identity
+/// and current ComponentSession. It carries no raw boot id or transport
+/// handle, but fences every launch against Guest replacement, reconnect,
+/// controller, and assignment generations.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct GuestExecutionBinding {
+    target_uid: ResourceUid,
+    boot_identity_digest: ConfigurationDigest,
+    session_generation: ReconnectGeneration,
+    assignment_epoch: u64,
+    provider_generation: ResourceGeneration,
+    controller_generation: ControllerGeneration,
+}
+
+impl GuestExecutionBinding {
+    /// Construct an exact Guest target binding.
+    pub fn new(
+        target_uid: ResourceUid,
+        boot_identity_digest: ConfigurationDigest,
+        session_generation: ReconnectGeneration,
+        assignment_epoch: u64,
+        provider_generation: ResourceGeneration,
+        controller_generation: ControllerGeneration,
+    ) -> Result<Self, ProcessConformanceError> {
+        if boot_identity_digest.is_zero() || assignment_epoch == 0 {
+            return Err(ProcessConformanceError::InvalidTicket);
+        }
+        Ok(Self {
+            target_uid,
+            boot_identity_digest,
+            session_generation,
+            assignment_epoch,
+            provider_generation,
+            controller_generation,
+        })
+    }
+
+    /// Borrow the exact Guest Resource UID.
+    pub const fn target_uid(&self) -> &ResourceUid {
+        &self.target_uid
+    }
+
+    /// Return the kernel boot-identity commitment.
+    pub const fn boot_identity_digest(&self) -> ConfigurationDigest {
+        self.boot_identity_digest
+    }
+
+    /// Return the authenticated parent ComponentSession generation.
+    pub const fn session_generation(&self) -> ReconnectGeneration {
+        self.session_generation
+    }
+
+    /// Return the Core assignment epoch.
+    pub const fn assignment_epoch(&self) -> u64 {
+        self.assignment_epoch
+    }
+
+    /// Return the installed Provider generation.
+    pub const fn provider_generation(&self) -> ResourceGeneration {
+        self.provider_generation
+    }
+
+    /// Return the controller generation.
+    pub const fn controller_generation(&self) -> ControllerGeneration {
+        self.controller_generation
+    }
+}
+
 impl InheritedFdTable {
     /// Build a bounded private table binding.
     pub fn new(digest: ConfigurationDigest, count: u16) -> Result<Self, ProcessConformanceError> {
@@ -257,8 +328,10 @@ pub struct LaunchTicket {
     expected_identity: BTreeSet<IdentityBinding>,
     expected_identity_digest: Option<ProcessIdentityDigest>,
     readiness: ReadinessExpectation,
+    activation_input: Option<ActivationRunnerInput>,
     inherited_fd_table: InheritedFdTable,
     sandbox: Option<SandboxPlan>,
+    guest_execution: Option<GuestExecutionBinding>,
     controller_launch: Option<ControllerLaunchBinding>,
     assignment: Option<ControllerAssignmentBinding>,
 }
@@ -334,8 +407,10 @@ impl LaunchTicket {
             expected_identity,
             expected_identity_digest: None,
             readiness: ReadinessExpectation::None,
+            activation_input: None,
             inherited_fd_table,
             sandbox: None,
+            guest_execution: None,
             controller_launch: None,
             assignment: None,
         })
@@ -426,14 +501,51 @@ impl LaunchTicket {
         {
             return Err(ProcessConformanceError::InvalidTicket);
         }
+        if self.activation_input.is_some()
+            && (self.process_ref.resource_type().as_str() != "EphemeralProcess"
+                || self.template.as_str() != "activation-nixos-runner"
+                || !matches!(
+                    self.execution_ref.resource_type().as_str(),
+                    "Host" | "Guest"
+                )
+                || self
+                    .activation_input
+                    .as_ref()
+                    .is_some_and(|input| input.target_generation == 0))
+        {
+            return Err(ProcessConformanceError::InvalidTicket);
+        }
         if self
             .resource_revision
             .is_some_and(|revision| revision.get() == 0)
         {
             return Err(ProcessConformanceError::InvalidTicket);
         }
+        if self.execution_ref.resource_type().as_str() == "Guest"
+            && self.controller_launch.is_none()
+            && self.guest_execution.is_none()
+        {
+            return Err(ProcessConformanceError::InvalidTicket);
+        }
+        if self.execution_ref.resource_type().as_str() == "Host"
+            && self.guest_execution.is_some()
+        {
+            return Err(ProcessConformanceError::InvalidTicket);
+        }
         self.digests.validate()?;
         self.readiness.validate()?;
+        if let Some(binding) = &self.guest_execution {
+            if binding.controller_generation != self.controller_generation {
+                return Err(ProcessConformanceError::InvalidTicket);
+            }
+            if let Some(assignment) = &self.assignment
+                && (assignment.provider_generation != binding.provider_generation
+                    || assignment.session_generation != binding.session_generation
+                    || assignment.assignment_epoch != binding.assignment_epoch)
+            {
+                return Err(ProcessConformanceError::InvalidTicket);
+            }
+        }
         if let Some(binding) = self.controller_launch {
             if binding.provider_generation.get() == 0
                 || binding.target_session_generation.get() == 0
@@ -504,6 +616,49 @@ impl LaunchTicket {
     pub fn with_sandbox_plan(mut self, sandbox: SandboxPlan) -> Self {
         self.sandbox = Some(sandbox);
         self
+    }
+
+    /// Bind the closed activation-runner stdin input.
+    pub fn with_activation_input(
+        mut self,
+        input: ActivationRunnerInput,
+    ) -> Result<Self, ProcessConformanceError> {
+        if self.process_ref.resource_type().as_str() != "EphemeralProcess"
+            || self.template.as_str() != "activation-nixos-runner"
+            || !matches!(
+                self.execution_ref.resource_type().as_str(),
+                "Host" | "Guest"
+            )
+            || input.target_generation == 0
+        {
+            return Err(ProcessConformanceError::InvalidTicket);
+        }
+        self.activation_input = Some(input);
+        Ok(self)
+    }
+
+    /// Bind a generic Guest Process to its authenticated target/session.
+    pub fn with_guest_execution_binding(
+        mut self,
+        binding: GuestExecutionBinding,
+    ) -> Result<Self, ProcessConformanceError> {
+        if self.execution_ref.resource_type().as_str() != "Guest"
+            || self.guest_execution.is_some()
+        {
+            return Err(ProcessConformanceError::InvalidTicket);
+        }
+        self.guest_execution = Some(binding);
+        Ok(self)
+    }
+
+    /// Borrow the authenticated Guest execution binding, when present.
+    pub const fn guest_execution_binding(&self) -> Option<&GuestExecutionBinding> {
+        self.guest_execution.as_ref()
+    }
+
+    /// Borrow the closed activation-runner stdin input, when present.
+    pub const fn activation_input(&self) -> Option<&ActivationRunnerInput> {
+        self.activation_input.as_ref()
     }
 
     /// Borrow the typed sandbox plan, when this launch is a generic Process.
@@ -768,6 +923,50 @@ mod tests {
                 .build()
                 .is_ok()
         );
+    }
+
+    #[test]
+    fn guest_process_tickets_require_target_execution_binding() {
+        let ticket = fixtures::ticket_builder()
+            .execution_ref(ResourceRef::parse("Guest/dev-vm").unwrap())
+            .without_guest_execution_binding()
+            .build()
+            .unwrap();
+        assert_eq!(
+            ticket.validate(),
+            Err(ProcessConformanceError::InvalidTicket)
+        );
+    }
+
+    #[test]
+    fn guest_execution_binding_matches_assignment_identity() {
+        let session = d2b_contracts_resource::v3::identity::ReconnectGeneration::new(3).unwrap();
+        let binding = GuestExecutionBinding::new(
+            ResourceUid::parse("123e4567-e89b-42d3-a456-426614174000").unwrap(),
+            ConfigurationDigest::from_bytes([9; 32]),
+            session,
+            7,
+            ResourceGeneration::new(2).unwrap(),
+            ControllerGeneration::new(1).unwrap(),
+        )
+        .unwrap();
+        let ticket = fixtures::ticket_builder()
+            .execution_ref(ResourceRef::parse("Guest/dev-vm").unwrap())
+            .without_guest_execution_binding()
+            .build()
+            .unwrap()
+            .with_guest_execution_binding(binding)
+            .unwrap()
+            .with_resource_revision(ZoneRevision::new(1))
+            .unwrap()
+            .with_assignment_binding(
+                ResourceGeneration::new(2).unwrap(),
+                session,
+                7,
+                ConfigurationDigest::from_bytes([10; 32]),
+            )
+            .unwrap();
+        assert!(ticket.validate_assignment().is_ok());
     }
 
     #[test]
