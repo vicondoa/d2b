@@ -1,4 +1,4 @@
-{ config, lib, pkgs, d2bHostTools, ... }:
+{ config, lib, pkgs, d2bHostTools, d2bHostToolOverrides ? null, ... }:
 
 let
   cfg = config.d2b;
@@ -6,14 +6,22 @@ let
   prebuilt = if cfg.site.usePrebuiltHostTools then import ./prebuilt-packages.nix { inherit pkgs lib; } else { };
 
   d2bdSourcePackage = d2bHostTools.d2bd;
-  d2bdPackage = if prebuilt ? d2bd then prebuilt.d2bd else d2bdSourcePackage;
+  d2bdPackage = d2bLib.selectHostToolPackage {
+    overrides = d2bHostToolOverrides;
+    key = "d2bd";
+    fallback = if prebuilt ? d2bd then prebuilt.d2bd else d2bdSourcePackage;
+  };
 
   # the user-facing CLI is now the Rust d2b crate
   # (packages/d2b). The pre-v1.0 bash CLI was RETIRED in;
   # ships the daemon-native Rust CLI as the only
   # `d2b` binary on the host.
   d2bCliSourcePackage = d2bHostTools.d2b;
-  d2bCliPackage = if prebuilt ? d2b then prebuilt.d2b else d2bCliSourcePackage;
+  d2bCliPackage = d2bLib.selectHostToolPackage {
+    overrides = d2bHostToolOverrides;
+    key = "d2b";
+    fallback = if prebuilt ? d2b then prebuilt.d2b else d2bCliSourcePackage;
+  };
 
   netVmNames = map
     (envName: cfg.envs.${envName}.netName or "sys-${envName}-net")
@@ -98,7 +106,14 @@ let
   # check-then-act patterns. Lives in d2b-host because it
   # only depends on libc + nix; no IPC; no async runtime.
   d2bActivationHelperSourcePackage = d2bHostTools.activationHelper;
-  d2bActivationHelperPackage = if prebuilt ? "d2b-activation-helper" then prebuilt."d2b-activation-helper" else d2bActivationHelperSourcePackage;
+  d2bActivationHelperPackage = d2bLib.selectHostToolPackage {
+    overrides = d2bHostToolOverrides;
+    key = "activationHelper";
+    fallback =
+      if prebuilt ? "d2b-activation-helper"
+      then prebuilt."d2b-activation-helper"
+      else d2bActivationHelperSourcePackage;
+  };
 
   d2bGatewayRuntimeSourcePackage = d2bHostTools.gatewayRuntime;
   d2bGatewayRuntimePackage = if prebuilt ? "d2b-gateway-runtime" then prebuilt."d2b-gateway-runtime" else d2bGatewayRuntimeSourcePackage;

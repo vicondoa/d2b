@@ -43,7 +43,7 @@
 # namespace where /nix/store is lazily unmounted. Inside that
 # namespace /nix/store is just a directory on the root mount, so
 # hardlinks succeed.
-{ config, lib, pkgs, d2bHostTools, ... }:
+{ config, lib, pkgs, d2bHostTools, d2bHostToolOverrides ? null, ... }:
 
 let
   cfg = config.d2b;
@@ -55,7 +55,14 @@ let
     then import ../../../nixos-modules/prebuilt-packages.nix { inherit pkgs lib; }
     else { };
   activationHelperSourcePackage = d2bHostTools.activationHelper;
-  activationHelperPackage = if prebuilt ? "d2b-activation-helper" then prebuilt."d2b-activation-helper" else activationHelperSourcePackage;
+  activationHelperPackage = d2bLib.selectHostToolPackage {
+    overrides = d2bHostToolOverrides;
+    key = "activationHelper";
+    fallback =
+      if prebuilt ? "d2b-activation-helper"
+      then prebuilt."d2b-activation-helper"
+      else activationHelperSourcePackage;
+  };
   activationHelper = "${activationHelperPackage}/bin/d2b-activation-helper";
 
   # spectrum-ch package (cloud-hypervisor v52 with virtio-gpu patches).
