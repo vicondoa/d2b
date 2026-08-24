@@ -218,7 +218,6 @@ in
     # create or reconcile per-VM children without trusting a daemon-writable
     # parent. The per-VM leaves below remain d2bd:d2b for daemon-owned
     # sockets and guest-control artifacts.
-    (tmpfilesDir "/run/d2b-heavy-gates" "0755" "root" "root")
     (tmpfilesDir "/run/d2b/vms" "0750" "root" "d2b")
     (tmpfilesDir "/run/d2b/otel" "0750" "d2bd" "d2b")
     (tmpfilesDir "/run/d2b-gpu" "0750" "root" "d2b")
@@ -237,61 +236,6 @@ in
     # recompute the ACL mask down to r-x and clip d2bd's rwx access.
     (runtimeAclMask "/run/d2b")
   ];
-
-  # Numeric UIDs for normal users may be allocated only when the users
-  # activation step runs, so they cannot be embedded in static tmpfiles rules.
-  # Tmpfiles owns the fixed root; this activation step provisions slots for
-  # lifecycle users that NSS can resolve at activation time. Network-backed
-  # users may not resolve until networking and their identity provider are
-  # available, so they are deferred to the explicit post-login
-  # `make heavy-gate-provision` path. The gate remains fail-closed while their
-  # per-UID directory is absent. Existing regular slot inodes are repaired in
-  # place so a switch cannot replace an inode carrying a lock.
-  system.activationScripts.d2bHeavyGateProvision = lib.stringAfter [ "users" ] ''
-    set -eu
-    gate_root=/run/d2b-heavy-gates
-
-    if [ -L "$gate_root" ] || { [ -e "$gate_root" ] && [ ! -d "$gate_root" ]; }; then
-      echo "d2b heavy-gate provisioning: refusing an unsafe runtime root" >&2
-      exit 1
-    fi
-    ${pkgs.coreutils}/bin/install -d -m 0755 -o root -g root "$gate_root"
-
-    for user in ${lib.escapeShellArgs cfg.site.launcherUsers}; do
-      if ! passwd_record="$(${pkgs.getent}/bin/getent passwd "$user")"; then
-        echo "d2b heavy-gate provisioning: configured lifecycle user is unavailable during activation; skipping; run make heavy-gate-provision as that user after login" >&2
-        continue
-      fi
-      uid="$(${pkgs.coreutils}/bin/printf '%s\n' "$passwd_record" | ${pkgs.coreutils}/bin/cut -d: -f3)"
-      case "$uid" in
-        ""|*[!0-9]*)
-          echo "d2b heavy-gate provisioning: lifecycle user has no usable uid during activation; skipping; run make heavy-gate-provision as that user after login" >&2
-          continue
-          ;;
-      esac
-
-      uid_dir="$gate_root/uid-$uid"
-      if [ -L "$uid_dir" ] || { [ -e "$uid_dir" ] && [ ! -d "$uid_dir" ]; }; then
-        echo "d2b heavy-gate provisioning: refusing an unsafe per-user directory" >&2
-        exit 1
-      fi
-      ${pkgs.coreutils}/bin/install -d -m 0755 -o root -g root "$uid_dir"
-
-      for index in 0 1; do
-        slot="$uid_dir/slot-$index"
-        if [ -L "$slot" ] || { [ -e "$slot" ] && [ ! -f "$slot" ]; }; then
-          echo "d2b heavy-gate provisioning: refusing an unsafe slot file" >&2
-          exit 1
-        fi
-        if [ ! -e "$slot" ]; then
-          ${pkgs.coreutils}/bin/install -m 0600 -o "$uid" -g root /dev/null "$slot"
-        else
-          ${pkgs.coreutils}/bin/chown "$uid":root "$slot"
-          ${pkgs.coreutils}/bin/chmod 0600 "$slot"
-        fi
-      done
-    done
-  '';
 
   system.activationScripts.d2bGroupMigration =
     lib.stringAfter [ "users" ] ''

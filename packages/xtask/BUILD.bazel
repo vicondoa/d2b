@@ -28,7 +28,6 @@ rust_binary(
     crate_root = "src/main.rs",
     compile_data = [
         "Cargo.toml",
-        "src/heavy_gate.rs",
     ],
     visibility = ["//visibility:public"],
     deps = [
@@ -266,7 +265,7 @@ rust_test(
     env = {"CARGO_BIN_EXE_xtask": "$(rootpath :xtask)"},
     env_inherit = ["D2B_REPO_ROOT", "PATH"],
     rustc_env = {"CARGO_BIN_EXE_xtask": "$(rootpath :xtask)"},
-    tags = ["local", "no-remote-cache"],
+    tags = ["no-remote-cache"],
     visibility = ["//visibility:public"],
     deps = ["//packages/d2b-contracts-resource:d2b_contracts_resource",
         "//packages/d2b-contracts-zone-session:d2b_contracts_zone_session",  "//packages/d2b-contracts-provider:d2b_contracts_provider",] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
@@ -287,23 +286,6 @@ rust_test(
     env_inherit = ["D2B_REPO_ROOT", "PATH"],
     rustc_env = {"CARGO_BIN_EXE_xtask": "$(rootpath :xtask)"},
     tags = ["no-remote-cache"],
-    visibility = ["//visibility:public"],
-    deps = ["//packages/d2b-contracts-resource:d2b_contracts_resource",
-        "//packages/d2b-contracts-zone-session:d2b_contracts_zone_session",  "//packages/d2b-contracts-provider:d2b_contracts_provider",] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
-)
-
-rust_test(
-    name = "heavy_gate_reexec",
-    srcs = ["tests/heavy_gate_reexec.rs"],
-    compile_data = ["Cargo.toml"],
-    data = [
-        ":xtask",
-        "//bazel/checks/rust:source_hygiene_sources",
-    ],
-    env = {"CARGO_BIN_EXE_xtask": "$(rootpath :xtask)"},
-    env_inherit = ["PATH"],
-    rustc_env = {"CARGO_BIN_EXE_xtask": "$(rootpath :xtask)"},
-    tags = ["no-remote-cache", "no-remote-exec"],
     visibility = ["//visibility:public"],
     deps = ["//packages/d2b-contracts-resource:d2b_contracts_resource",
         "//packages/d2b-contracts-zone-session:d2b_contracts_zone_session",  "//packages/d2b-contracts-provider:d2b_contracts_provider",] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),

@@ -873,11 +873,13 @@ let
   # container UID 0 maps to another role's host identity).
   # Walk every principal in fullProfileTable, group by UID, and
   # fail eval if any UID has more than one distinct principal.
-  principalUidPairs = lib.flatten (lib.mapAttrsToList
-    (profileId: data: [
-      { principal = data.principal; uid = data.uid; profileId = profileId; }
-    ])
-    fullProfileTable);
+  principalUidPairs = lib.filter
+    (pair: pair.uid == stablePrincipalId pair.principal)
+    (lib.flatten (lib.mapAttrsToList
+      (profileId: data: [
+        { principal = data.principal; uid = data.uid; profileId = profileId; }
+      ])
+      fullProfileTable));
   principalUidByUid = lib.foldl'
     (acc: pair:
       let

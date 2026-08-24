@@ -38,25 +38,6 @@ test_suite(
     ],
 )
 
-test_suite(
-    name = "portable_rust_local",
-    tests = [
-        "//packages/d2b:cli_json_contract",
-        "//packages/d2b:stub_no_socket",
-        "//packages/d2b-host:guest_control_token_materializer",
-        "//packages/d2b-unsafe-local-helper:d2b_unsafe_local_helper_test",
-        "//packages/d2b-unsafe-local-helper:shell_supervisor",
-        "//packages/d2bd:d2bd_lib_test",
-        "//packages/d2bd:daemon_socket_acl",
-        "//packages/d2bd:daemon_state_lock",
-        "//packages/d2bd:daemon_state_persistence",
-        "//packages/d2bd:stub_no_socket",
-        "//packages/d2b-bus:production_watch_rss",
-        "//packages/xtask:buildbuddy_config",
-        "//packages/xtask:heavy_gate_reexec",
-    ],
-)
-
 filegroup(
     name = "source_hygiene_sources",
     srcs = [
