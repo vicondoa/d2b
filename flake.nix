@@ -178,6 +178,7 @@
           cp -r ${./packages/d2b-provider-display-wayland} $out/packages/d2b-provider-display-wayland
           cp -r ${./packages/d2b-provider-network-local} $out/packages/d2b-provider-network-local
           cp -r ${./packages/d2b-provider-notification-desktop} $out/packages/d2b-provider-notification-desktop
+          cp -r ${./packages/d2b-provider-observability-otel} $out/packages/d2b-provider-observability-otel
           cp -r ${./packages/d2b-provider-runtime-azure-container-apps} $out/packages/d2b-provider-runtime-azure-container-apps
           cp -r ${./packages/d2b-provider-runtime-cloud-hypervisor} $out/packages/d2b-provider-runtime-cloud-hypervisor
           cp -r ${./packages/d2b-provider-shell-terminal} $out/packages/d2b-provider-shell-terminal

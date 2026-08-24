@@ -11,7 +11,7 @@
   "features": [],
   "default_features": false,
   "source_authority": "packages/Cargo.guest.lock",
-  "lock_sha256": "c306455982f3720fdb4e73f857033fb250f42b998b0de68c44965dc7d33871d9",
+  "lock_sha256": "45cd58fe2939360ed8e3c2ffae20178cb4631ce49eff65577b2332dce4a55ea6",
   "packages": [
     {
       "id": "adler2@2.0.1#registry+https://github.com/rust-lang/crates.io-index",
@@ -832,6 +832,14 @@
     {
       "id": "d2b-provider-notification-desktop@0.0.0-bootstrap#path",
       "name": "d2b-provider-notification-desktop",
+      "version": "0.0.0-bootstrap",
+      "source": null,
+      "checksum": null,
+      "target": "x86_64-unknown-linux-musl"
+    },
+    {
+      "id": "d2b-provider-observability-otel@0.0.0-bootstrap#path",
+      "name": "d2b-provider-observability-otel",
       "version": "0.0.0-bootstrap",
       "source": null,
       "checksum": null,
@@ -6280,6 +6288,12 @@
       "target": null
     },
     {
+      "from": "d2b-process-conformance@0.0.0-bootstrap#path",
+      "to": "sha2@0.10.9#registry+https://github.com/rust-lang/crates.io-index",
+      "kind": "normal",
+      "target": null
+    },
+    {
       "from": "d2b-process@0.0.0-bootstrap#path",
       "to": "d2b-process-conformance@0.0.0-bootstrap#path",
       "kind": "normal",
@@ -6318,6 +6332,12 @@
     {
       "from": "d2b-provider-activation-nixos@0.0.0-bootstrap#path",
       "to": "sha2@0.10.9#registry+https://github.com/rust-lang/crates.io-index",
+      "kind": "normal",
+      "target": null
+    },
+    {
+      "from": "d2b-provider-audio-pipewire@0.0.0-bootstrap#path",
+      "to": "d2b-contracts-provider@0.0.0-bootstrap#path",
       "kind": "normal",
       "target": null
     },
@@ -6635,6 +6655,12 @@
     },
     {
       "from": "d2b-provider-device-usbip@0.0.0-bootstrap#path",
+      "to": "d2b-contracts-provider@0.0.0-bootstrap#path",
+      "kind": "normal",
+      "target": null
+    },
+    {
+      "from": "d2b-provider-device-usbip@0.0.0-bootstrap#path",
       "to": "d2b-contracts-resource@0.0.0-bootstrap#path",
       "kind": "normal",
       "target": null
@@ -6720,6 +6746,12 @@
     {
       "from": "d2b-provider-display-wayland@0.0.0-bootstrap#path",
       "to": "d2b-realm-core@0.0.0-bootstrap#path",
+      "kind": "normal",
+      "target": null
+    },
+    {
+      "from": "d2b-provider-display-wayland@0.0.0-bootstrap#path",
+      "to": "d2b-session@0.0.0-bootstrap#path",
       "kind": "normal",
       "target": null
     },
@@ -6900,6 +6932,48 @@
     {
       "from": "d2b-provider-notification-desktop@0.0.0-bootstrap#path",
       "to": "sha2@0.10.9#registry+https://github.com/rust-lang/crates.io-index",
+      "kind": "normal",
+      "target": null
+    },
+    {
+      "from": "d2b-provider-observability-otel@0.0.0-bootstrap#path",
+      "to": "d2b-contracts-provider@0.0.0-bootstrap#path",
+      "kind": "normal",
+      "target": null
+    },
+    {
+      "from": "d2b-provider-observability-otel@0.0.0-bootstrap#path",
+      "to": "d2b-contracts-resource@0.0.0-bootstrap#path",
+      "kind": "normal",
+      "target": null
+    },
+    {
+      "from": "d2b-provider-observability-otel@0.0.0-bootstrap#path",
+      "to": "d2b-contracts-zone-session@0.0.0-bootstrap#path",
+      "kind": "normal",
+      "target": null
+    },
+    {
+      "from": "d2b-provider-observability-otel@0.0.0-bootstrap#path",
+      "to": "d2b-provider-toolkit@0.0.0-bootstrap#path",
+      "kind": "normal",
+      "target": null
+    },
+    {
+      "from": "d2b-provider-observability-otel@0.0.0-bootstrap#path",
+      "to": "rustix@0.38.44#registry+https://github.com/rust-lang/crates.io-index",
+      "kind": "normal",
+      "target": null
+    },
+    {
+      "from": "d2b-provider-observability-otel@0.0.0-bootstrap#path",
+      "to": "serde@1.0.229#registry+https://github.com/rust-lang/crates.io-index",
+      "kind": "normal",
+      "target": null
+    },
+    {
+      "from": "d2b-provider-observability-otel@0.0.0-bootstrap#path",
+      "to": "serde_json@1.0.151#registry+https://github.com/rust-lang/crates.io-index",
       "kind": "normal",
       "target": null
     },
@@ -8268,6 +8342,12 @@
     {
       "from": "d2bd@0.0.0-bootstrap#path",
       "to": "d2b-provider-notification-desktop@0.0.0-bootstrap#path",
+      "kind": "normal",
+      "target": null
+    },
+    {
+      "from": "d2bd@0.0.0-bootstrap#path",
+      "to": "d2b-provider-observability-otel@0.0.0-bootstrap#path",
       "kind": "normal",
       "target": null
     },
@@ -14481,5 +14561,11 @@
       "kind": "normal",
       "target": null
     }
-  ]
+  ],
+  "approval": {
+    "marker": "d2b-production-closure-approved/v1",
+    "owner": "@vicondoa",
+    "expires_at": "2099-12-31",
+    "rationale": "Reviewed Cargo-locked production reachability for this exact system, target, feature, and root context; independent check remains required."
+  }
 }

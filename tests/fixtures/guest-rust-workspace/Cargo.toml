@@ -32,6 +32,7 @@ members = [
   "d2b-provider-display-wayland",
   "d2b-provider-network-local",
   "d2b-provider-notification-desktop",
+  "d2b-provider-observability-otel",
   "d2b-provider-runtime-azure-container-apps",
   "d2b-provider-runtime-cloud-hypervisor",
   "d2b-provider-shell-terminal",
