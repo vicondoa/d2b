@@ -277,7 +277,7 @@ if [ -z "${D2B_XTASK_BIN:-}" ] || [ ! -x "${D2B_XTASK_BIN}" ]; then
     echo "bazel-check: cannot create protected xtask bootstrap log" >&2
     exit 1
   fi
-  if ! "$bazel_bin" build --config=local //packages/xtask:xtask >"$bootstrap_log" 2>&1; then
+  if ! "$bazel_bin" build --config="$PROFILE" //packages/xtask:xtask >"$bootstrap_log" 2>&1; then
     rm -f -- "$bootstrap_log"
     echo "bazel-check: xtask bootstrap failed" >&2
     exit 1
