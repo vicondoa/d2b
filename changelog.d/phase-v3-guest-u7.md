@@ -15,3 +15,5 @@
   with the canonical full `ResourceSpec`.
 - Run the AudioBinding Guest worker as a system-domain Process without an
   unbound `userRef`, allowing the systemd Process Provider to converge it.
+- Derive Binding child deletion readiness only after deletion is requested, so
+  live children with no finalizers remain valid during relist.

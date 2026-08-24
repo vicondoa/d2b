@@ -545,6 +545,9 @@ fn deletion_requested(resource: &StoredResource) -> bool {
 }
 
 fn deletion_ready(resource: &StoredResource) -> bool {
+    if !deletion_requested(resource) {
+        return false;
+    }
     let Ok(value) = serde_json::from_slice::<serde_json::Value>(&resource.canonical_json) else {
         return false;
     };
@@ -712,6 +715,71 @@ mod tests {
             canonical_json: canonical,
             payload_digest: "sha256:test".to_owned(),
         }
+    }
+
+    fn set_deletion_state(
+        resource: &mut StoredResource,
+        deletion_requested: bool,
+        finalizers: &[&str],
+    ) {
+        let mut value = serde_json::from_slice::<serde_json::Value>(&resource.canonical_json)
+            .expect("resource JSON");
+        let metadata = value
+            .get_mut("metadata")
+            .and_then(serde_json::Value::as_object_mut)
+            .expect("metadata object");
+        metadata.insert(
+            "deletionRequestedAt".to_owned(),
+            if deletion_requested {
+                serde_json::json!("2026-08-19T00:00:00.000Z")
+            } else {
+                serde_json::Value::Null
+            },
+        );
+        metadata.insert(
+            "finalizers".to_owned(),
+            serde_json::json!(finalizers),
+        );
+        resource.canonical_json = CanonicalJsonValue::parse(
+            &serde_json::to_vec(&value).expect("resource serialization"),
+        )
+        .expect("canonical resource")
+        .to_canonical_bytes();
+    }
+
+    #[test]
+    fn relist_deletion_ready_requires_deletion_request() {
+        let child_ref = target("Process", "child");
+        let observe = |resource: &StoredResource| {
+            observed_child_from_resource(
+                HintTarget::new(
+                    resource.zone.clone(),
+                    resource.resource_ref.clone(),
+                    resource.uid.clone(),
+                ),
+                resource.revision,
+                &resource.canonical_json,
+                deletion_requested(resource),
+                deletion_ready(resource),
+            )
+        };
+
+        let live = stored_resource(&child_ref, None, "Ready");
+        let observed = observe(&live).expect("live child relists");
+        assert!(!observed.deletion_requested());
+        assert!(!observed.deletion_ready());
+
+        let mut requested = stored_resource(&child_ref, None, "Ready");
+        set_deletion_state(&mut requested, true, &[]);
+        let observed = observe(&requested).expect("requested child relists");
+        assert!(observed.deletion_requested());
+        assert!(observed.deletion_ready());
+
+        let mut finalizing = stored_resource(&child_ref, None, "Ready");
+        set_deletion_state(&mut finalizing, true, &["child-finalizer"]);
+        let observed = observe(&finalizing).expect("finalizing child relists");
+        assert!(observed.deletion_requested());
+        assert!(!observed.deletion_ready());
     }
 
     #[test]
