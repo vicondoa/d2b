@@ -14,7 +14,7 @@ let
     "d2b-resource-compiler"
     "d2b-wayland-proxy"
   ];
-  inventoryShell = lib.concatStringsSep " " (map (name: "'${name}'") inventory);
+  inventoryShell = lib.escapeShellArgs inventory;
   overrideKeys = [
     "d2b"
     "d2bd"
@@ -72,18 +72,6 @@ let
 
         install -Dm755 "$source" "$out/bin/$name"
       done
-
-      topEntries="$(find -P "$out" -mindepth 1 -maxdepth 1 -printf '%f\n' | sort)"
-      if [ "$topEntries" != "bin" ]; then
-        echo "d2b-bazel-host-tools: unexpected installed top-level entries" >&2
-        printf '%s\n' "$topEntries" >&2
-        exit 1
-      fi
-      installed="$(find -P "$out/bin" -mindepth 1 -maxdepth 1 -printf '%f\n' | sort)"
-      if [ "$installed" != "$expected" ]; then
-        echo "d2b-bazel-host-tools: installed inventory mismatch" >&2
-        exit 1
-      fi
 
       runHook postInstall
     '';

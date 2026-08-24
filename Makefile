@@ -272,6 +272,7 @@ heavy-lane-host-integration: heavy-lane-guard
 	stage_tool packages/d2b-provider-display-wayland/d2b-wayland-proxy d2b-wayland-proxy; \
 	bundle_store_path="$$(nix store add-path --name d2b-bazel-host-tools "$$stage")"; \
 	nix-store --add-root "$$run_dir/bundle-root" --indirect --realise "$$bundle_store_path" >/dev/null; \
+	rm -rf -- "$$stage"; \
 	echo "test-host-integration: Bazel host-tool bundle: $$bundle_store_path"; \
 	set --; \
 	for name in $$names; do \

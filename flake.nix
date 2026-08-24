@@ -632,10 +632,6 @@
                   inherit pkgs;
                   rawBundle = builtins.storePath hostToolBundleEnv;
                 };
-            hostToolOverrides =
-              if bazelHostTools == null
-              then null
-              else bazelHostTools.d2bHostToolOverrides;
             testSelf =
               if bazelHostTools == null then
                 self
@@ -644,7 +640,8 @@
                   nixosModules = self.nixosModules // {
                     default = {
                       imports = [ self.nixosModules.default ];
-                      _module.args.d2bHostToolOverrides = hostToolOverrides;
+                      _module.args.d2bHostToolOverrides =
+                        bazelHostTools.d2bHostToolOverrides;
                     };
                   };
                   packages = self.packages // {
