@@ -8,3 +8,8 @@
 - AudioBinding status now persists channel grants, levels and gains,
   arbitration, enforcement posture, and the last applied host/guest path
   alongside the observed Service and realization references.
+
+### Fixed
+
+- Admit Binding Endpoint children by validating their reserved `providerRef`
+  with the canonical full `ResourceSpec`.

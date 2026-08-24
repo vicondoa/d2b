@@ -1747,10 +1747,15 @@ fn validate_active_schema(
 }
 
 fn validate_standard_base(envelope: &ResourceEnvelope) -> Result<bool, StoreError> {
-    validate_standard_base_bytes(
-        envelope.resource_type().as_str(),
-        &envelope.spec().base().to_canonical_bytes(),
-    )
+    let bytes = if envelope.resource_type().as_str() == "Endpoint" {
+        envelope
+            .spec()
+            .canonical_bytes()
+            .map_err(|_| schema_invalid("resource-base-schema-invalid"))?
+    } else {
+        envelope.spec().base().to_canonical_bytes()
+    };
+    validate_standard_base_bytes(envelope.resource_type().as_str(), &bytes)
 }
 
 fn validate_standard_base_bytes(resource_type: &str, bytes: &[u8]) -> Result<bool, StoreError> {
@@ -4743,6 +4748,31 @@ mod tests {
     use redb::ReadableTableMetadata;
     use std::fs::OpenOptions;
 
+    const ENDPOINT_SPEC: &[u8] = br#"{"attachmentPolicy":{"maxAttachments":0,"supported":false},"consumerPolicy":{},"endpointClass":"service","lifecyclePolicy":"recycle-with-producer","locality":"zone-local","producerRef":"Process/wayland-proxy","providerRef":"Provider/display-wayland","purpose":"wayland-control","transport":"opaque-carriage","visibility":"provider"}"#;
+
+    fn endpoint_resource_value(spec: &[u8]) -> CanonicalJsonValue {
+        let mut value = CanonicalJsonValue::parse(RESOURCE).unwrap();
+        let CanonicalJsonValue::Object(root) = &mut value else {
+            unreachable!()
+        };
+        root.insert(
+            "type".to_owned(),
+            CanonicalJsonValue::String("Endpoint".to_owned()),
+        );
+        let CanonicalJsonValue::Object(metadata) = root.get_mut("metadata").unwrap() else {
+            unreachable!()
+        };
+        metadata.insert(
+            "name".to_owned(),
+            CanonicalJsonValue::String("wayland-endpoint".to_owned()),
+        );
+        root.insert(
+            "spec".to_owned(),
+            CanonicalJsonValue::parse(spec).unwrap(),
+        );
+        value
+    }
+
     const RESOURCE: &[u8] = br#"{"apiVersion":"resources.d2bus.org/v3","metadata":{"configurationGeneration":7,"createdAt":"2026-07-22T00:00:00.000Z","deletionRequestedAt":null,"finalizers":[],"generation":1,"managedBy":"configuration","name":"host-system","ownerRef":null,"revision":1,"uid":"123e4567-e89b-42d3-a456-426614174000","updatedAt":"2026-07-22T00:00:00.000Z","zone":"dev"},"spec":{"providerRef":"Provider/system-core","updatePolicy":{"disruptive":"manual","nonDisruptive":"automatic"}},"status":{"completedAt":null,"conditions":[],"lastReconciledAt":null,"observedGeneration":0,"outcome":null,"phase":"Pending","resource":{},"startedAt":null,"update":{"dependencies":{"count":0,"refs":[]},"disruption":"None","lastAssessedAt":null,"observedGeneration":0,"operationId":null,"owned":{"count":0,"refs":[]},"preserveState":true,"reasons":[],"state":"Unknown","targetGeneration":1}},"type":"Host"}"#;
 
     fn fixture() -> (tempfile::TempDir, Database, crate::StoreIdentity) {
@@ -4793,7 +4823,7 @@ mod tests {
                 subject_ref: ResourceRef::parse("Provider/system-core").unwrap(),
                 subject_uid: ResourceUid::parse("33333333-3333-4333-8333-333333333333").unwrap(),
                 targets: vec![AdmittedAuthorizationTarget {
-                    resource_type: ResourceTypeName::parse("Host").unwrap(),
+                    resource_type: mutation.target.resource_type().clone(),
                     resource_name: Some(mutation.target.name().clone()),
                     verb,
                     subresource: None,
@@ -6059,6 +6089,99 @@ mod tests {
             endpoint_producer(&malformed).unwrap_err().reason_code(),
             "endpoint-producer-ref-invalid"
         );
+    }
+
+    #[test]
+    fn endpoint_standard_validation_uses_full_spec_and_keeps_reserved_fields_out_of_base() {
+        let valid_value = endpoint_resource_value(ENDPOINT_SPEC);
+        let valid = ResourceEnvelope::from_json(&valid_value.to_canonical_bytes()).unwrap();
+        assert_eq!(valid.spec().canonical_bytes().unwrap(), ENDPOINT_SPEC);
+        assert_eq!(
+            valid
+                .spec()
+                .provider_ref()
+                .unwrap()
+                .to_canonical_string(),
+            "Provider/display-wayland"
+        );
+        assert!(valid.spec().base().get("providerRef").is_none());
+        assert!(validate_standard_base(&valid).unwrap());
+
+        let mut missing_value = valid_value.clone();
+        let CanonicalJsonValue::Object(root) = &mut missing_value else {
+            unreachable!()
+        };
+        let CanonicalJsonValue::Object(spec) = root.get_mut("spec").unwrap() else {
+            unreachable!()
+        };
+        spec.remove("providerRef");
+        let missing = ResourceEnvelope::from_json(&missing_value.to_canonical_bytes()).unwrap();
+        assert_eq!(
+            validate_standard_base(&missing).unwrap_err().reason_code(),
+            "resource-base-schema-invalid"
+        );
+
+        let mut invalid_value = valid_value;
+        let CanonicalJsonValue::Object(root) = &mut invalid_value else {
+            unreachable!()
+        };
+        let CanonicalJsonValue::Object(spec) = root.get_mut("spec").unwrap() else {
+            unreachable!()
+        };
+        spec.insert(
+            "providerRef".to_owned(),
+            CanonicalJsonValue::String("Host/host-system".to_owned()),
+        );
+        assert!(ResourceEnvelope::from_json(&invalid_value.to_canonical_bytes()).is_err());
+    }
+
+    #[test]
+    fn endpoint_create_admission_accepts_reserved_provider_ref() {
+        let (_directory, database, _identity) = fixture();
+        let producer = ResourceRef::parse("Host/host-system").unwrap();
+        let producer_uid = ResourceUid::parse("123e4567-e89b-42d3-a456-426614174001").unwrap();
+        apply_group(
+            &database,
+            vec![verified(
+                "seed-endpoint-producer",
+                create_mutation(producer),
+                producer_uid,
+            )],
+        )
+        .unwrap()
+        .results[0]
+            .as_ref()
+            .unwrap();
+
+        let target = ResourceRef::parse("Endpoint/wayland-endpoint").unwrap();
+        let mut mutation = create_mutation(target.clone());
+        let mut endpoint_value = endpoint_resource_value(ENDPOINT_SPEC);
+        let CanonicalJsonValue::Object(root) = &mut endpoint_value else {
+            unreachable!()
+        };
+        let CanonicalJsonValue::Object(spec) = root.get_mut("spec").unwrap() else {
+            unreachable!()
+        };
+        spec.insert(
+            "producerRef".to_owned(),
+            CanonicalJsonValue::String("Host/host-system".to_owned()),
+        );
+        mutation.canonical_resource = Some(endpoint_value.to_canonical_bytes());
+        let uid = ResourceUid::parse("123e4567-e89b-42d3-a456-426614174002").unwrap();
+
+        let committed = apply_group(&database, vec![verified("create-endpoint", mutation, uid)])
+            .unwrap();
+        committed.results[0].as_ref().unwrap();
+        let stored = stored_envelope(&database, &target);
+        assert_eq!(
+            stored
+                .spec()
+                .provider_ref()
+                .unwrap()
+                .to_canonical_string(),
+            "Provider/display-wayland"
+        );
+        assert!(stored.spec().base().get("providerRef").is_none());
     }
 
     #[test]

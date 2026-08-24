@@ -723,6 +723,36 @@ mod tests {
             OwnerMutation::Create { canonical_resource, .. }
                 if !canonical_resource.is_empty()
         )));
+        let endpoint_payload = plan
+            .mutations()
+            .iter()
+            .find_map(|mutation| match mutation {
+                OwnerMutation::Create {
+                    target,
+                    canonical_resource,
+                } if target.resource_type().as_str() == "Endpoint" => Some(canonical_resource),
+                _ => None,
+            })
+            .unwrap();
+        let CanonicalJsonValue::Object(root) =
+            CanonicalJsonValue::parse(endpoint_payload).unwrap()
+        else {
+            unreachable!()
+        };
+        let endpoint_spec = root.get("spec").unwrap();
+        let endpoint_spec =
+            serde_json::from_slice::<d2b_contracts_resource::v3::ResourceSpec>(
+                &endpoint_spec.to_canonical_bytes(),
+            )
+            .unwrap();
+        assert_eq!(
+            endpoint_spec
+                .provider_ref()
+                .unwrap()
+                .to_canonical_string(),
+            "Provider/audio-pipewire"
+        );
+        assert!(endpoint_spec.base().get("providerRef").is_none());
     }
 
     #[test]
