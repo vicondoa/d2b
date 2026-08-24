@@ -33,7 +33,7 @@ const AUDIO_BINDING_CHILD_REQUESTS: [BindingChildRequest; 4] = [
         "guest-agent",
         "Provider/system-systemd",
         "guest-audio-agent",
-        ExecutionDomain::User,
+        ExecutionDomain::System,
         "service",
     ),
     BindingChildRequest::endpoint(

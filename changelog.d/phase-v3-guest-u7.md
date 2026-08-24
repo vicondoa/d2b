@@ -13,3 +13,5 @@
 
 - Admit Binding Endpoint children by validating their reserved `providerRef`
   with the canonical full `ResourceSpec`.
+- Run the AudioBinding Guest worker as a system-domain Process without an
+  unbound `userRef`, allowing the systemd Process Provider to converge it.

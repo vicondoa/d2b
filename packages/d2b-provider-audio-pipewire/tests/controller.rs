@@ -1,4 +1,4 @@
-use d2b_contracts_resource::v3::ResourceRef;
+use d2b_contracts_resource::v3::{ExecutionDomain, ResourceRef};
 use d2b_provider_audio_pipewire::{
     AudioArbitrationState, AudioBindingController, AudioBindingPhase, AudioChannel, AudioGrant,
     AudioLeaseId, AudioMediator, AudioMediatorError, AudioReadiness, FakeAudioMediator,
@@ -438,6 +438,22 @@ fn explicit_binding_reconciliation_returns_host_and_guest_children() {
         result.children.teardown_order().first().unwrap().kind(),
         d2b_contracts_provider::v3::semantic_services::child_resources::BindingChildKind::Endpoint
     );
+    let guest_process = result.children.child("guest-agent").unwrap();
+    assert_eq!(guest_process.execution_ref(), &requested.target_ref);
+    assert_eq!(
+        guest_process.process_provider(),
+        Some("Provider/system-systemd")
+    );
+    assert_eq!(
+        guest_process.process_template(),
+        Some("guest-audio-agent")
+    );
+    assert_eq!(guest_process.process_class(), Some("service"));
+    assert_eq!(
+        guest_process.process_domain(),
+        Some(ExecutionDomain::System)
+    );
+    assert!(guest_process.process_user().is_none());
 }
 
 #[test]
