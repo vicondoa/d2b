@@ -17,6 +17,7 @@
 #   - wl-cross-domain-proxy remains in the guest closure
 #   - no DISPLAY session variable is set (xwayland is unsupported)
 #   - host wayland-proxy DAG node is emitted when crossDomainTrusted = true
+#   - QEMU-media keeps its legacy wayland-proxy DAG node and readiness edge
 #   - GPU runner --wayland-sock targets the filter socket, not the real compositor
 #   - GPU runner has no XDG_RUNTIME_DIR or WAYLAND_DISPLAY env vars
 #
@@ -107,6 +108,28 @@ let
             };
           };
         };
+
+        # QEMU-media keeps a same-target Host execution reference on its
+        # legacy Wayland proxy. The process identity and DAG edge distinguish
+        # it from the trusted graphics proxy.
+        d2b.vms.demo-media = {
+          enable = true;
+          env = "work";
+          index = 17;
+          runtime.kind = "qemu-media";
+          qemuMedia = {
+            bootDrive.slot = "cdrom";
+            source = {
+              ref = "installer-usb";
+              format = "iso";
+            };
+            removableSlots.cdrom.source = {
+              ref = "tools-usb";
+              format = "iso";
+              usbSelector.byIdName = "usb-Test_Tools_0001-0:0";
+            };
+          };
+        };
       })
     ];
   };
@@ -140,6 +163,16 @@ let
   defaultNodes = defaultDagRecord.nodes;
   defaultEdges = defaultDagRecord.edges;
   defaultWlproxyNodes = builtins.filter (n: n.id == "wayland-proxy") defaultNodes;
+
+  mediaDag = builtins.filter (dag: dag.vm == "demo-media") processes.vms;
+  mediaDagRecord = if mediaDag == [] then { nodes = [ ]; edges = [ ]; } else builtins.head mediaDag;
+  mediaNodes = mediaDagRecord.nodes;
+  mediaEdges = mediaDagRecord.edges;
+  mediaWlproxyNodes = builtins.filter (n: n.id == "wayland-proxy") mediaNodes;
+  mediaWlproxy = if mediaWlproxyNodes == [] then { } else builtins.head mediaWlproxyNodes;
+  mediaQemuNodes = builtins.filter (n: n.id == "qemu-media") mediaNodes;
+  mediaQemu = if mediaQemuNodes == [] then { } else builtins.head mediaQemuNodes;
+  mediaWlproxyArgv = mediaWlproxy.argv or [ ];
 
   # GPU argv assertions for the trusted VM
   trustedGpuNodes = builtins.filter (n: n.id == "gpu" || n.id == "gpu-render-node") trustedNodes;
@@ -181,6 +214,8 @@ in
     "trusted wayland-proxy node should retain the Host execution reference for resource reconciliation";
   assert lib.assertMsg ((builtins.head trustedWlproxyNodes).executionDomain == "system")
     "trusted wayland-proxy node should retain the system execution domain for resource reconciliation";
+  assert lib.assertMsg (hasArgPair trustedWlproxyArgv "--provider-kind" "local-vm")
+    "trusted wayland-proxy should retain the local-vm process identity";
   # Host wayland-proxy node: absent for crossDomainTrusted=false
   assert lib.assertMsg (builtins.length defaultWlproxyNodes == 0)
     "crossDomainTrusted=false should not emit a wayland-proxy host DAG node";
@@ -215,6 +250,26 @@ in
     "wayland-proxy argv should listen on the filter socket used by readiness";
   assert lib.assertMsg (hasArgPair trustedWlproxyArgv "--connect" "/run/user/1000/wayland-0")
     "wayland-proxy argv should connect to the real host compositor path";
+  # QEMU-media keeps the legacy DAG spawn despite the default Host target.
+  assert lib.assertMsg (builtins.length mediaWlproxyNodes == 1)
+    "qemu-media should emit exactly one legacy wayland-proxy DAG node";
+  assert lib.assertMsg (mediaWlproxy.executionRef == "Host/host-system")
+    "qemu-media wayland-proxy should retain the default Host execution reference";
+  assert lib.assertMsg (!(mediaWlproxy ? executionDomain))
+    "qemu-media wayland-proxy should not gain the trusted resource execution domain";
+  assert lib.assertMsg (hasArgPair mediaWlproxyArgv "--provider-kind" "qemu-media")
+    "qemu-media wayland-proxy should retain its qemu-media process identity";
+  assert lib.assertMsg (mediaWlproxy.readiness == [
+    { kind = "unix-socket-listening"; value = "/run/d2b-wlproxy/demo-media/wayland-0"; }
+  ])
+    "qemu-media wayland-proxy should retain its socket readiness predicate";
+  assert lib.assertMsg (builtins.length mediaQemuNodes == 1
+    && mediaQemu.role == "qemu-media-runner")
+    "qemu-media DAG should retain its legacy runner node";
+  assert lib.assertMsg (builtins.any
+    (e: e.from == "wayland-proxy" && e.to == "qemu-media")
+    mediaEdges)
+    "qemu-media DAG should retain the wayland-proxy socket readiness edge";
   # GPU env: no XDG_RUNTIME_DIR or WAYLAND_DISPLAY
   assert lib.assertMsg (!(builtins.any (e: lib.hasPrefix "XDG_RUNTIME_DIR=" e) trustedGpuEnv))
     "GPU runner env should not contain XDG_RUNTIME_DIR";

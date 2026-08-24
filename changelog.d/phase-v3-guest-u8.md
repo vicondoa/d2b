@@ -15,3 +15,5 @@
 - Reconcile the committed WaylandSession during trusted graphics VM start so
   the Host proxy Process is resource-backed and launched before GPU readiness;
   missing display sessions fail closed without a direct-spawn fallback.
+- Keep QEMU-media Wayland proxies in the legacy VM-start DAG by distinguishing
+  their existing process identity from trusted graphics resource nodes.

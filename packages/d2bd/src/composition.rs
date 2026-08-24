@@ -30186,7 +30186,9 @@ mod broker_dispatch_tests {
 
     #[test]
     fn graphics_vm_start_refuses_without_resource_backed_display_reconciliation() {
-        use d2b_core::processes::{NodeId, ProcessRole, VmProcessDag, VmProcessInvariants};
+        use d2b_core::processes::{
+            NodeId, ProcessExecutionDomain, ProcessRole, VmProcessDag, VmProcessInvariants,
+        };
 
         let state = test_state_with_broker_socket(unreachable_broker_socket_path(
             "vm-start-display-resource-missing",
@@ -30195,6 +30197,13 @@ mod broker_dispatch_tests {
         node.id = NodeId("wayland-proxy".to_owned());
         node.role = ProcessRole::WaylandProxy;
         node.execution_ref = Some("Host/host-system".to_owned());
+        node.execution_domain = Some(ProcessExecutionDomain::System);
+        node.binary_path = Some("/nix/store/d2b-wayland-proxy/bin/d2b-wayland-proxy".to_owned());
+        node.argv = vec![
+            "d2b-vm-a-wlproxy".to_owned(),
+            "--provider-kind".to_owned(),
+            "local-vm".to_owned(),
+        ];
         let dag = VmProcessDag {
             workload_identity: None,
             vm: "vm-a".to_owned(),
