@@ -30,6 +30,15 @@ D2B_MAKE_CLASSIFIED_GOALS := $(filter \
 D2B_MAKE_RECURSIVE := $(MAKE)
 D2B_MAKE_REENTRY ?= 0
 NIX_FLAKE := nix --extra-experimental-features 'nix-command flakes'
+D2B_BAZEL_PROFILE ?= local
+
+ifneq ($(strip $(BUILDBUDDY_CI_RUNNER_ROOT_DIR)),)
+D2B_BAZEL_BIN ?= $(shell command -v bazel)
+D2B_PROJECT_SHELL ?= d2b
+D2B_BAZEL_TEST_TAG_FILTERS ?= -local,-no-remote-exec,-manual,-exclusive,-gpu,-kvm
+export D2B_PROJECT_SHELL D2B_BAZEL_BIN
+endif
+
 D2B_MAKE_SHELL_READY := $(shell \
 	if [ "$${D2B_PROJECT_SHELL:-}" = d2b ] && \
 	   [ -n "$${D2B_BAZEL_BIN:-}" ] && [ -x "$${D2B_BAZEL_BIN}" ]; then \
@@ -112,10 +121,8 @@ check-ci:
 
 ## check-fast - compatibility alias for check; check-tier0 is the fast subset.
 
-## bazel-check - complete Bazel graph. Locally this defaults to the
-## BuildBuddy profile; the facade falls back to local execution when the
-## credential is unavailable. CI sets D2B_BAZEL_PROFILE=local.
-D2B_BAZEL_PROFILE ?= remote
+## bazel-check - complete Bazel graph. Local execution is the default;
+## BuildBuddy remote execution is an explicit opt-in.
 D2B_BAZEL_TEST_TAG_FILTERS ?= -manual,-gpu,-kvm
 
 BAZEL_RUN = \

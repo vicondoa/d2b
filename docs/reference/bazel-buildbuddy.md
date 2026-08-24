@@ -13,14 +13,17 @@ make check
 ```
 
 Run any public `make check*` or `make test*` alias directly from a
-Nix-enabled host. The Makefile detects the pinned d2b shell contract and
-re-enters `nix develop --no-write-lock-file .#bazel` exactly once when the
-contract is absent. It does not trust an unrelated Nix shell or a bare
-`IN_NIX_SHELL`; the shell must provide `D2B_PROJECT_SHELL=d2b` and an
-executable `D2B_BAZEL_BIN`. Multiple goals, `-j` parallelism, target-specific
-variables, the working directory, profile/trust variables, and the final exit
-status are preserved across re-entry. A re-entry with an incomplete contract
-fails closed instead of recursing.
+Nix-enabled host for an ordinary contributor checkout. The Makefile detects
+the pinned d2b shell contract and re-enters
+`nix develop --no-write-lock-file .#bazel` exactly once when the contract is
+absent. It does not trust an unrelated Nix shell or a bare `IN_NIX_SHELL`; the
+shell must provide `D2B_PROJECT_SHELL=d2b` and an executable `D2B_BAZEL_BIN`.
+In BuildBuddy Workflows, `BUILDBUDDY_CI_RUNNER_ROOT_DIR` marks the vendor
+runner, so Make uses its ambient Bazel and supplies the shell contract without
+Nix. Multiple goals, `-j` parallelism, target-specific variables, the working
+directory, profile/trust variables, and the final exit status are preserved
+across re-entry. A re-entry with an incomplete contract fails closed instead
+of recursing.
 
 For an interactive session, use the complete shell:
 
@@ -36,9 +39,10 @@ nix develop --no-write-lock-file .#bazel -c bazel test //packages/<crate>:<owner
 ```
 
 Direnv is optional; it may enter `nix develop` automatically but is not part
-of the contributor or CI contract. CI installs Nix and invokes the same
-public Make aliases with `D2B_BAZEL_PROFILE=local` and
-`D2B_BAZEL_UNTRUSTED=1`.
+of the contributor or CI contract. Plain Make aliases default to the local
+profile; use `D2B_BAZEL_PROFILE=remote` for developer remote execution. GitHub
+CI installs Nix and invokes the same public Make aliases with
+`D2B_BAZEL_PROFILE=local` and `D2B_BAZEL_UNTRUSTED=1`.
 
 ## One execution graph
 
@@ -105,22 +109,18 @@ The root `buildbuddy.yaml` defines one BuildBuddy Workflows action named
 `build / check`. It runs for pull requests targeting `v3` and pushes to `v3`,
 using `merge_with_base: true` for pull requests.
 
-The action invokes the retained `tests/tools/bazel-check` facade with the
-local profile:
+The action invokes the public Make entry point:
 
 ```bash
-env D2B_PROJECT_SHELL=d2b D2B_BAZEL_BIN="$(command -v bazel)" \
-  D2B_BAZEL_UNTRUSTED=1 \
-  D2B_BAZEL_TEST_TAG_FILTERS="-local,-no-remote-exec,-manual,-exclusive,-gpu,-kvm" \
-  tests/tools/bazel-check --profile local -- //bazel/checks:check
+make check
 ```
 
 BuildBuddy Workflows owns checkout, isolation, and GitHub status for the
-action. Its Ubuntu 22.04 hosted runner supplies the two shell-contract
-variables normally exported by the Nix development shell,
-`D2B_PROJECT_SHELL=d2b` and `D2B_BAZEL_BIN`, then reuses the facade's fixed
-graph and environment contract with the local profile. This avoids nesting the
-RBE profile or using a GitHub secret-bearing proxy. The GitHub Actions workflow
+action. Its Ubuntu 22.04 hosted runner supplies
+`BUILDBUDDY_CI_RUNNER_ROOT_DIR` and ambient Bazel; Make derives the shell
+contract, selects the local profile, and applies the remote-compatible tag
+exclusions without caller-supplied d2b variables. This avoids nesting the RBE
+profile or using a GitHub secret-bearing proxy. The GitHub Actions workflow
 remains the credential-free, local-only `check` implementation in
 `.github/workflows/pr-l1-static-fast.yml`.
 
@@ -226,8 +226,9 @@ also emit at least one `testResult` event in its BEP.
 Reproduce a failure through the same alias and profile:
 
 ```bash
-D2B_BAZEL_PROFILE=local make bazel-check
-D2B_BAZEL_PROFILE=local make test-rust-main
+make bazel-check
+D2B_BAZEL_PROFILE=remote make bazel-check
+D2B_BAZEL_PROFILE=remote make test-rust-main
 ```
 
 This keeps target exclusions, tags, credential handling, redaction, and

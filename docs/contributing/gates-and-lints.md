@@ -54,13 +54,16 @@ successful. The gate then removes only these validated paths before invoking
 Use top-level `Makefile` targets. Shell scripts under `tests/` are
 implementation details unless a target or `tests/AGENTS.md` says to run one.
 
-Run public gates as `make <target>` from a normal Nix-enabled host. The
-Makefile is the environment dispatcher: it detects the explicit
-`D2B_PROJECT_SHELL=d2b` and executable `D2B_BAZEL_BIN` contract, enters
-`nix develop --no-write-lock-file .#bazel` once when needed, and preserves the
-original goals, variables, profile, trust settings, and parallelism. It does
-not trust an unrelated `IN_NIX_SHELL` value. A missing Nix installation fails
-clearly; enter `nix develop` or install Nix before retrying.
+Run public gates as `make <target>` from a normal Nix-enabled host. Outside
+BuildBuddy Workflows, the Makefile is the environment dispatcher: it detects
+the explicit `D2B_PROJECT_SHELL=d2b` and executable `D2B_BAZEL_BIN` contract,
+enters `nix develop --no-write-lock-file .#bazel` once when needed, and
+preserves the original goals, variables, profile, trust settings, and
+parallelism. In BuildBuddy's runner context, Make derives that shell contract
+from `BUILDBUDDY_CI_RUNNER_ROOT_DIR`, uses the ambient Bazel, and defaults to
+the local profile with the remote-compatible tag exclusions. It does not
+trust an unrelated `IN_NIX_SHELL` value. A missing Nix installation outside
+BuildBuddy fails clearly; enter `nix develop` or install Nix before retrying.
 
 `nix develop` is the complete interactive contributor shell with the pinned
 Bazel and Rust toolchains. `nix develop --no-write-lock-file .#bazel` is the
@@ -138,10 +141,11 @@ make test-unit
 make check
 ```
 
-Local aliases use the BuildBuddy `remote` profile when credentials and trust
-permit it. CI invokes the same public Make aliases after installing Nix and
-sets `D2B_BAZEL_PROFILE=local` and `D2B_BAZEL_UNTRUSTED=1`; it does not wrap
-each target in a separate `nix develop` command.
+Plain local aliases use the `local` profile by default. Developer remote
+execution is an explicit `D2B_BAZEL_PROFILE=remote` opt-in. GitHub CI invokes
+the same public Make aliases after installing Nix and sets
+`D2B_BAZEL_PROFILE=local` and `D2B_BAZEL_UNTRUSTED=1`; it does not wrap each
+target in a separate `nix develop` command.
 The credential helper, trust partition, redaction, and typed one-retry
 pre-dispatch fallback live in `tests/tools/bazel-check`; do not duplicate
 those behaviors in Make or workflow code. Post-dispatch, analysis, policy,
@@ -149,13 +153,11 @@ build, and test failures fail closed.
 
 The committed GitHub Actions workflow exposes one stable required local
 `check` result. The protected `v3` BuildBuddy Workflows action is defined in
-the root `buildbuddy.yaml`; its hosted Ubuntu 22.04 runner reuses
-`tests/tools/bazel-check` with the local profile. It supplies the two
-shell-contract variables normally exported by the Nix development shell,
-`D2B_PROJECT_SHELL=d2b` and `D2B_BAZEL_BIN`, preserving the fixed
-graph/environment contract without nesting the RBE profile or using a GitHub
-secret-bearing proxy. A guarded performance skip is advisory and is not
-validation evidence.
+the root `buildbuddy.yaml` and runs exactly `make check`. Its hosted Ubuntu
+22.04 runner provides `BUILDBUDDY_CI_RUNNER_ROOT_DIR` and ambient Bazel; Make
+derives the shell contract and preserves the fixed graph/environment contract
+without nesting the RBE profile or using a GitHub secret-bearing proxy. A
+guarded performance skip is advisory and is not validation evidence.
 
 The fixture-contract lane remains enforcing and local-only. It materializes
 `D2B_FIXTURES` through the existing Bazel fixture target and fails when

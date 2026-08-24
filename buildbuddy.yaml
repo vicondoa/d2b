@@ -11,7 +11,4 @@ actions:
           - v3
     steps:
       - run: >-
-          env D2B_PROJECT_SHELL=d2b D2B_BAZEL_BIN="$(command -v bazel)"
-          D2B_BAZEL_UNTRUSTED=1
-          D2B_BAZEL_TEST_TAG_FILTERS="-local,-no-remote-exec,-manual,-exclusive,-gpu,-kvm"
-          tests/tools/bazel-check --profile local -- //bazel/checks:check
+          make check

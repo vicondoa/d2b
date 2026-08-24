@@ -177,10 +177,11 @@ head-changing update, validate the new head and obtain fresh independent
 review. Missing review evidence fails closed to fresh review. No actionable
 finding remains at merge.
 
-The Bazel graph is the single enforcing Layer-1 authority. Bare local
-`make check` uses BuildBuddy for eligible actions, while generated CI runs the
-same fixed target sets with local Bazel execution and no remote credential.
-Make remains a compatibility surface, not a scheduler. See [Bazel and
+The Bazel graph is the single enforcing Layer-1 authority. Plain local
+`make check` uses the local profile by default; developer remote execution is
+an explicit `D2B_BAZEL_PROFILE=remote` opt-in. Generated CI runs the same fixed
+target sets with local Bazel execution and no remote credential. Make remains a
+compatibility surface, not a scheduler. See [Bazel and
 BuildBuddy](../reference/bazel-buildbuddy.md) for execution, cache, failure,
 credential, and update contracts.
 

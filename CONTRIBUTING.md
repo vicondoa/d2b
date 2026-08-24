@@ -36,12 +36,14 @@ changed surface. See [tests/README.md](./tests/README.md) for the test layering
 and public conditional integration targets.
 
 `make check` invokes the public Bazel suite facade. Nested component and
-package-level suites own the complete Layer-1 graph. A developer host uses
-BuildBuddy for eligible actions; GitHub Layer-1 runs the same graph locally
-with `D2B_BAZEL_PROFILE=local` and `D2B_BAZEL_UNTRUSTED=1`. CI only needs Nix
-installed; Make selects the pinned shell and preserves those profile and trust
-variables. Cargo manifests and `Cargo.lock` remain rules_rs metadata
-authority, but Cargo is not a contributor or CI gate.
+package-level suites own the complete Layer-1 graph. Plain `make check` uses
+the local profile by default; developer remote execution requires the explicit
+`D2B_BAZEL_PROFILE=remote` opt-in. GitHub Layer-1 runs the same graph locally
+with `D2B_BAZEL_PROFILE=local` and `D2B_BAZEL_UNTRUSTED=1`. BuildBuddy
+Workflows runs exactly `make check` and its runner marker lets Make use
+ambient Bazel without Nix or caller-supplied d2b variables. Cargo manifests
+and `Cargo.lock` remain rules_rs metadata authority, but Cargo is not a
+contributor or CI gate.
 
 The `make test-lint` gate requires the declared `D2B_SHELLCHECK_BIN` and fails
 closed instead of using a host-provided shellcheck.

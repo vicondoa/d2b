@@ -79,7 +79,7 @@ fn write_fake_bazel(path: &Path, handles_build: bool) {
              --build_event_json_file=*) bep=\"${arg#*=}\" ;;\n\
            esac\n\
          done\n\
-         printf '%s\\n' \"$D2B_BAZEL_PROFILE|$PWD|$BAZEL_SH|$D2B_BAZEL_UNTRUSTED|$MAKEFLAGS|${D2B_BAZEL_JOB:-}|$*\" >> \"$D2B_FAKE_BAZEL_LOG\"\n",
+         printf '%s\\n' \"${D2B_BAZEL_PROFILE:-}|$PWD|${BAZEL_SH:-}|${D2B_BAZEL_UNTRUSTED:-}|${MAKEFLAGS:-}|${D2B_BAZEL_JOB:-}|$*\" >> \"$D2B_FAKE_BAZEL_LOG\"\n",
     );
     if handles_build {
         contents.push_str("if [ \"${1:-}\" = build ]; then exit 0; fi\n");
@@ -1585,6 +1585,177 @@ fn make_dispatches_multiple_goals_once_and_preserves_bazel_variables() {
 }
 
 #[test]
+fn make_uses_buildbuddy_runner_defaults_without_nix() {
+    let scratch = repo_root()
+        .join(".scratch")
+        .join(format!("make-buildbuddy-defaults-{}", std::process::id()));
+    let bin = scratch.join("bin");
+    std::fs::create_dir_all(&bin).expect("create BuildBuddy fake bin directory");
+
+    let bazel_log = scratch.join("bazel.log");
+    let bazel = bin.join("bazel");
+    write_fake_bazel(&bazel, false);
+    let xtask = scratch.join("xtask");
+    write_executable(
+        &xtask,
+        "#!/usr/bin/env bash\n\
+         set -eu\n",
+    );
+    let nix_count = scratch.join("nix.count");
+    let nix = bin.join("nix");
+    write_executable(
+        &nix,
+        "#!/bin/sh\n\
+         printf 'entered\\n' >> \"$D2B_FAKE_NIX_COUNT\"\n\
+         exit 99\n",
+    );
+
+    let path = format!(
+        "{}:{}",
+        bin.display(),
+        std::env::var("PATH").expect("PATH")
+    );
+    let output = Command::new("make")
+        .args([
+            "--no-print-directory",
+            "-C",
+            repo_root().to_str().expect("repository root path"),
+            "check",
+        ])
+        .env("PATH", path)
+        .env("BUILDBUDDY_CI_RUNNER_ROOT_DIR", &scratch)
+        .env("D2B_FAKE_BAZEL_LOG", &bazel_log)
+        .env("D2B_XTASK_BIN", &xtask)
+        .env("D2B_FAKE_NIX_COUNT", &nix_count)
+        .env("BAZEL_SH", "/bin/bash")
+        .env(
+            "D2B_BAZEL_CHECK_SCRATCH",
+            scratch.join("bazel-check-evidence"),
+        )
+        .env_remove("D2B_PROJECT_SHELL")
+        .env_remove("D2B_BAZEL_BIN")
+        .env_remove("D2B_BAZEL_PROFILE")
+        .env_remove("D2B_BAZEL_TEST_TAG_FILTERS")
+        .env_remove("D2B_BAZEL_UNTRUSTED")
+        .env_remove("D2B_MAKE_REENTRY")
+        .env_remove("IN_NIX_SHELL")
+        .output()
+        .expect("run make with the BuildBuddy runner marker");
+
+    assert!(
+        output.status.success(),
+        "BuildBuddy Make dispatch failed: {}{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(
+        !nix_count.exists(),
+        "BuildBuddy Make dispatch must not invoke Nix"
+    );
+    let bazel_output = std::fs::read_to_string(&bazel_log).expect("read fake Bazel log");
+    assert_eq!(bazel_output.lines().count(), 1);
+    let invocation = bazel_output.lines().next().expect("fake Bazel invocation");
+    assert_eq!(
+        invocation.split('|').next(),
+        Some("local"),
+        "BuildBuddy Make dispatch must default to the local Bazel profile"
+    );
+    assert!(
+        invocation.contains(
+            "--test_tag_filters=-local,-no-remote-exec,-manual,-exclusive,-gpu,-kvm"
+        ),
+        "BuildBuddy Make dispatch must exclude non-remote-compatible tags"
+    );
+
+    let _ = std::fs::remove_dir_all(scratch);
+}
+
+#[test]
+fn make_zero_environment_uses_nix_and_local_defaults() {
+    let scratch = repo_root()
+        .join(".scratch")
+        .join(format!("make-zero-environment-{}", std::process::id()));
+    let bin = scratch.join("bin");
+    std::fs::create_dir_all(&bin).expect("create zero-environment fake bin directory");
+
+    let bazel_log = scratch.join("bazel.log");
+    let bazel = scratch.join("bazel");
+    write_fake_bazel(&bazel, false);
+    let xtask = scratch.join("xtask");
+    write_executable(
+        &xtask,
+        "#!/usr/bin/env bash\n\
+         set -eu\n",
+    );
+    let nix_count = scratch.join("nix.count");
+    let nix = bin.join("nix");
+    write_fake_nix(&nix);
+
+    let path = format!(
+        "{}:{}",
+        bin.display(),
+        std::env::var("PATH").expect("PATH")
+    );
+    let output = Command::new("make")
+        .args([
+            "--no-print-directory",
+            "-C",
+            repo_root().to_str().expect("repository root path"),
+            "check",
+        ])
+        .env("PATH", path)
+        .env("D2B_FAKE_NIX_COUNT", &nix_count)
+        .env("D2B_FAKE_BAZEL", &bazel)
+        .env("D2B_FAKE_XTASK", &xtask)
+        .env("D2B_FAKE_BAZEL_LOG", &bazel_log)
+        .env("BAZEL_SH", "/bin/bash")
+        .env(
+            "D2B_BAZEL_CHECK_SCRATCH",
+            scratch.join("bazel-check-evidence"),
+        )
+        .env_remove("BUILDBUDDY_CI_RUNNER_ROOT_DIR")
+        .env_remove("D2B_PROJECT_SHELL")
+        .env_remove("D2B_BAZEL_BIN")
+        .env_remove("D2B_BAZEL_PROFILE")
+        .env_remove("D2B_BAZEL_TEST_TAG_FILTERS")
+        .env_remove("D2B_BAZEL_UNTRUSTED")
+        .env_remove("D2B_MAKE_REENTRY")
+        .env_remove("D2B_XTASK_BIN")
+        .env_remove("IN_NIX_SHELL")
+        .output()
+        .expect("run zero-environment make through the fake Nix shell");
+
+    assert!(
+        output.status.success(),
+        "zero-environment Make dispatch failed: {}{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(
+        std::fs::read_to_string(&nix_count)
+            .expect("read Nix re-entry count")
+            .lines()
+            .count(),
+        1,
+        "ordinary Make must enter the pinned shell exactly once"
+    );
+    let bazel_output = std::fs::read_to_string(&bazel_log).expect("read fake Bazel log");
+    assert_eq!(bazel_output.lines().count(), 1);
+    let invocation = bazel_output.lines().next().expect("fake Bazel invocation");
+    assert_eq!(
+        invocation.split('|').next(),
+        Some("local"),
+        "ordinary zero-environment Make must default to the local Bazel profile"
+    );
+    assert!(
+        invocation.contains("--test_tag_filters=-manual,-gpu,-kvm"),
+        "ordinary Make must retain the ordinary tag exclusions"
+    );
+
+    let _ = std::fs::remove_dir_all(scratch);
+}
+
+#[test]
 fn make_dry_run_does_not_enter_nix() {
     let scratch = repo_root()
         .join(".scratch")
@@ -1896,10 +2067,7 @@ fn buildbuddy_workflow_owns_the_protected_v3_check() {
           - v3
     steps:
       - run: >-
-          env D2B_PROJECT_SHELL=d2b D2B_BAZEL_BIN="$(command -v bazel)"
-          D2B_BAZEL_UNTRUSTED=1
-          D2B_BAZEL_TEST_TAG_FILTERS="-local,-no-remote-exec,-manual,-exclusive,-gpu,-kvm"
-          tests/tools/bazel-check --profile local -- //bazel/checks:check
+          make check
 "#,
         "BuildBuddy must use one exact protected v3 hosted check action"
     );

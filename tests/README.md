@@ -68,7 +68,7 @@ The source-hygiene gate fails closed when `D2B_SHELLCHECK_BIN` is unavailable.
 | `make test-integration` | type-9 podman container tests | conditional local host lane (podman; not the PR pipeline) |
 | `make test-host-integration` | type-10 runNixOSTest VM checks; set `D2B_VM_CHECK=<name>` for one named check | conditional local NixOS host lane (KVM; TCG fallback; not the PR pipeline) |
 | `make check-fast` | compatibility alias for `make check` | local + CI |
-| `make bazel-check` | Bazel aggregate suite used by `make check`. Defaults to BuildBuddy remotely; CI forces `D2B_BAZEL_PROFILE=local` | local or remote |
+| `make bazel-check` | Bazel aggregate suite used by `make check`. Defaults to local; use `D2B_BAZEL_PROFILE=remote` for developer remote execution | local or remote |
 | `D2B_LIVE=1 bash tests/integration/live/<x>.sh` | type-11 live-host tests | **manual, against a deployed d2b host** |
 
 `make check`, `make test-unit`, and `make bazel-check` invoke the same nested
@@ -79,9 +79,10 @@ target. Cargo manifests and `Cargo.lock` remain rules_rs metadata authority,
 while standalone crate Cargo commands are not documented or required gate
 evidence.
 
-Run these aliases directly from a normal Nix-enabled checkout. Make enters
-the pinned `.#bazel` shell automatically when the explicit d2b shell contract
-is absent, and enters it only once for a multi-goal or parallel invocation.
+Run these aliases directly from a normal Nix-enabled checkout. Outside
+BuildBuddy Workflows, Make enters the pinned `.#bazel` shell automatically when
+the explicit d2b shell contract is absent, and enters it only once for a
+multi-goal or parallel invocation.
 Inside `nix develop`, the complete interactive shell already supplies the
 pinned Bazel toolchain. Use the focused shell for one-shot labels:
 
@@ -93,9 +94,11 @@ The focused shell supplies Bazel, Make, jq, Git, Rustup, and the shell
 utilities used by `tests/tools/bazel-check`; no ambient host Bazel or jq is
 required. An unrelated Nix shell is not accepted as the d2b shell. Optional
 direnv integration is supported for interactive use but is not required.
-CI installs Nix and calls the same public Make aliases with
+GitHub Actions installs Nix and calls the same public Make aliases with
 `D2B_BAZEL_PROFILE=local` and `D2B_BAZEL_UNTRUSTED=1`, without a per-target
-`nix develop` wrapper.
+`nix develop` wrapper. BuildBuddy Workflows runs `make check` directly; its
+runner marker lets Make use the ambient Bazel without caller-supplied d2b
+variables.
 
 `make test-policy` does not schedule
 `tests/tools/guest-workspace-drift.py`. The retained

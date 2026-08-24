@@ -137,17 +137,15 @@ settings or claim atomic base binding.
 ## Critical subsystem index
 
 `make check` invokes the public Bazel suite facade and its nested Layer-1
-component and package suites. Bare local runs use the BuildBuddy profile for
-eligible actions and automatically fall back to local execution when no
-credential is available; CI runs the same suite graph through the local profile
-with no BuildBuddy credential. The separate root `buildbuddy.yaml` gives
-BuildBuddy Workflows ownership of the protected `v3` `build / check`; its
-hosted Ubuntu 22.04 runner executes the remote-compatible fixed Layer-1
-selection locally, without nesting the RBE profile or using a GitHub
-secret-bearing proxy. The GitHub Actions workflow remains the credential-free
-local check. Make aliases are thin facade entry points, while Cargo manifests
-and lockfiles remain rules_rs metadata authority rather than contributor
-workflow entry points.
+component and package suites. Plain local runs use the local profile by
+default; developer remote execution is an explicit `D2B_BAZEL_PROFILE=remote`
+opt-in. The separate root `buildbuddy.yaml` gives BuildBuddy Workflows
+ownership of the protected `v3` `build / check` and runs exactly `make check`;
+its hosted Ubuntu 22.04 runner lets Make use ambient Bazel without Nix and
+selects the remote-compatible fixed Layer-1 targets locally. The GitHub Actions
+workflow remains the credential-free local check. Make aliases are thin facade
+entry points, while Cargo manifests and lockfiles remain rules_rs metadata
+authority rather than contributor workflow entry points.
 
 The full invariants are in
 [`docs/contributing/critical-subsystems.md`](./docs/contributing/critical-subsystems.md).
