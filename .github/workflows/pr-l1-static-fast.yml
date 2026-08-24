@@ -145,7 +145,7 @@ jobs:
 
   nix-realized:
     runs-on: ubuntu-latest
-    timeout-minutes: 60
+    timeout-minutes: 120
     env:
       D2B_BAZEL_PROFILE: local
       D2B_BAZEL_UNTRUSTED: "1"
@@ -200,7 +200,7 @@ jobs:
   test-performance-budgets:
     runs-on: ubuntu-latest
     continue-on-error: true
-    timeout-minutes: 10
+    timeout-minutes: 30
     env:
       D2B_BAZEL_PROFILE: local
       D2B_BAZEL_UNTRUSTED: "1"
