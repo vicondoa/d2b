@@ -300,7 +300,11 @@ fn validate_policy(policy: &Value) -> Result<(), String> {
 #[test]
 fn checked_in_contexts_are_nonempty_and_structurally_valid() {
     let paths = closure_paths();
-    assert_eq!(paths.len(), 14, "expected both systems and all U2 contexts");
+    assert_eq!(
+        paths.len(),
+        16,
+        "expected both systems and all production contexts"
+    );
     for path in paths {
         validate_production_closure(&read_json(&path))
             .unwrap_or_else(|error| panic!("{}: {error}", path.display()));
@@ -520,8 +524,12 @@ fn guest_static_context_uses_reduced_guest_lock() {
     let closure = read_json(
         &repo_root()
             .join(CONTEXT_ROOT)
-            .join("x86_64-linux/x86_64-unknown-linux-musl/guestd-static/production/closure.json"),
+            .join("x86_64-linux/x86_64-unknown-linux-musl/guest-static/production/closure.json"),
     );
     assert_eq!(closure["source_authority"], "packages/Cargo.guest.lock");
+    assert_eq!(
+        closure["roots"],
+        serde_json::json!(["d2bd", "d2b-broker"])
+    );
     assert_ne!(closure["lock_sha256"], Value::String(String::new()));
 }

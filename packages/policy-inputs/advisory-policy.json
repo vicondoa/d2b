@@ -126,6 +126,24 @@
         "owner": "@vicondoa",
         "rationale": "Reviewed Cargo-locked production reachability for this exact system, target, feature, and root context; independent check remains required."
       }
+    },
+    "x86_64-linux/x86_64-unknown-linux-musl/guest-static": {
+      "advisories": [],
+      "approval": {
+        "expiresAt": "2099-12-31",
+        "marker": "d2b-production-closure-approved/v1",
+        "owner": "@vicondoa",
+        "rationale": "Reviewed Cargo-locked production reachability for this exact system, target, feature, and root context; independent check remains required."
+      }
+    },
+    "aarch64-linux/aarch64-unknown-linux-musl/guest-static": {
+      "advisories": [],
+      "approval": {
+        "expiresAt": "2099-12-31",
+        "marker": "d2b-production-closure-approved/v1",
+        "owner": "@vicondoa",
+        "rationale": "Reviewed Cargo-locked production reachability for this exact system, target, feature, and root context; independent check remains required."
+      }
     }
   },
   "protectedOwnership": {

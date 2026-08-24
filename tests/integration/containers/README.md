@@ -16,9 +16,10 @@ bootstraps it via `nix shell nixpkgs#podman`.
 that cannot be proven by a native Rust test or a nix eval. Today that is one
 case:
 
-- `ubuntu-host-check` - proves a statically-linked d2b binary
-  (`d2b-guestd-static`) runs on a stock `ubuntu:24.04` userland, i.e. the
-  guest-side binary is portable to the distros d2b targets.
+- `ubuntu-host-check` - proves the statically-linked shared `d2bd` Guest
+  target agent and `d2b-broker` Guest profile run on a stock `ubuntu:24.04`
+  userland, i.e. the Guest-side artifacts are portable to the distros d2b
+  targets.
 
 ## What this tier is deliberately NOT for
 

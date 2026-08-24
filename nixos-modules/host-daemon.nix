@@ -245,7 +245,7 @@ let
         User = realm.controller.daemon.user;
         Group = realm.controller.daemon.group;
         ExecStart =
-          "${d2bdPackage}/bin/d2bd serve " +
+          "${d2bdPackage}/bin/d2bd host " +
           "--config ${realm.controller.daemon.configPath} " +
           "--daemon-state-dir ${realm.paths.stateDir}";
         TimeoutStopSec = lib.mkDefault "${toString d2bdStopTimeoutSeconds}s";
@@ -497,7 +497,7 @@ in
         # subtree to the daemon user").
         User = "d2bd";
         Group = "d2bd";
-        ExecStart = "${d2bdPackage}/bin/d2bd serve --config /etc/d2b/daemon-config.json";
+        ExecStart = "${d2bdPackage}/bin/d2bd host --config /etc/d2b/daemon-config.json";
         ExecStop = "+${hostShutdownHook}";
         TimeoutStopSec = lib.mkDefault "${toString d2bdStopTimeoutSeconds}s";
         Restart = "on-failure";
@@ -507,10 +507,9 @@ in
         AmbientCapabilities = [ "" ];
         PrivateTmp = true;
         ProtectHome = true;
-        # AF_UNIX: public.sock + broker IPC + the per-VM guest-control
-        # vsock proxy socket the daemon-side authenticated Health probe
-        # connects to. AF_INET/AF_INET6 remain for the daemon's other TCP
-        # readiness probes (e.g. per-env usbipd backend ports).
+        # AF_UNIX: public.sock and broker IPC. AF_INET/AF_INET6 remain for
+        # the daemon's other TCP readiness probes (e.g. per-env usbipd
+        # backend ports); Guest ComponentSession transport is target-local.
         RestrictAddressFamilies = [ "AF_UNIX" "AF_INET" "AF_INET6" ];
         UMask = "0027";
         # Supplementary group so the daemon can create

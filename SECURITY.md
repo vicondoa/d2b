@@ -105,8 +105,8 @@ will introduce are:
   > capabilities (`capabilities = []`), `requiresStartRoot = false`,
   > and a `userNamespace` block mapping in-NS UID/GID 0 to the
   > per-share principal. Normal VM shares map to the per-VM runner
-  > principal; the guest-control token share maps to the narrower
-  > `d2b-<vm>-gctlfs` principal. The broker pre-establishes the
+  > principal; ComponentSession enrollment keys are not exposed through
+  > a virtiofs share. The broker pre-establishes the
   > namespace via `clone3(CLONE_NEWUSER)` + `/proc/<pid>/uid_map`
   > writes before exec; virtiofsd runs fake-root only inside the
   > per-share user NS. This is strictly stronger than v1.1.1: a

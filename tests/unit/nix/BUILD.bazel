@@ -26,6 +26,8 @@ exports_files([
     "cases/gateway-vm-2.nix",
     "cases/gateway-vm-3.nix",
     "cases/gateway-vm-guest.nix",
+    "cases/gateway-component-session.nix",
+    "cases/guest-component-session.nix",
     "cases/gateway-vm.nix",
     "cases/generation-cleanup-absent-network.nix",
     "cases/guest-qemu-media-spec.nix",
