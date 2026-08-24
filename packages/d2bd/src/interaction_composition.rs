@@ -19,6 +19,7 @@ use std::{
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 
+use crate::process_resource_runtime::PROCESS_RESTART_ANNOTATION;
 use crate::resource_runtime::{
     CommittedClipboardProviderConfiguration, CommittedInteractionIdentity,
     CommittedInteractionProviderConfiguration, CommittedNotificationProviderConfiguration,
@@ -28,30 +29,37 @@ use d2b_bus::{
     ComponentRequestReceiver, ComponentSessionAdmission, NoopBusObserver, OperationId,
     OperationSpec, RouteGenerations, RouteKey, RouteMember, RouteTarget, ZoneBus, ZoneRegistrar,
 };
-use d2b_contracts::types::{BundleOpId, RoleId, VmId};
-use d2b_contracts_broker::broker_wire::{BrokerCallerRole, RunnerRole, SandboxLaunchPlan};
+use d2b_contracts_resource::resource_proto as wire;
 use d2b_contracts_resource::v3::identity::{EvidenceClass, ServiceName};
 use d2b_contracts_resource::v3::{
-    ControllerGeneration, ResourceGeneration, ResourceRef, ResourceUid, ZoneId, ZoneRevision,
-    execution_policy::{BoundedToken, ExecutionDomain},
-    process::{CapabilityClass, EnvironmentClass, MappingClass, NamespaceClass, UserNamespaceSpec},
+    CanonicalJsonValue, RESOURCE_ENVELOPE_DOMAIN_TAG, ResourceEnvelope, ResourcePhase, ResourceRef,
+    ResourceUid, ZoneId, ZoneRevision,
+    canonical_digest,
+    endpoint::{
+        EndpointClass, EndpointConsumerPolicy, EndpointLifecyclePolicy, EndpointLocality,
+        EndpointOperation, EndpointSpec, EndpointTransport, EndpointVisibility,
+    },
+    execution_policy::{BoundedText, BoundedToken},
+    process::{ExecutionSpec, ProcessClass, ProcessSpec},
 };
 use d2b_contracts_zone_session::v3::component_session::{
     AttachmentKind, AttachmentPolicy, AttachmentPolicyKind, AttachmentPurpose, EndpointPolicy,
     EndpointPurpose, EndpointRole, IdentityEvidenceRequirement, LimitProfile,
     Locality as TransportLocality, NoiseProfile, PurposeClass, ServicePackage, TransportBinding,
-    TransportClass,
+    TransportClass, MAX_LOGICAL_MESSAGE_BYTES,
 };
-use d2b_core::{
-    bundle_resolver::{BundleResolver, ResolvedRunnerIntent},
-    processes::ProcessRole,
-};
+use d2b_process::ProcessLaunchEffectPort;
+#[cfg(test)]
 use d2b_process::{
-    CompiledDigests, IdentityBinding, LaunchTicket as ProcessLaunchTicket, ProcessEffectError,
-    ProcessIdentityDigest, ProcessLaunchEffectPort, ProcessRequest, StopClass,
+    CompiledDigests, IdentityBinding, LaunchTicket as ProcessLaunchTicket, OperationBinding,
+    StopClass,
 };
+#[cfg(test)]
 use d2b_process_conformance::ReadinessExpectation;
-use d2b_process_conformance::SandboxCompiler;
+use d2b_process_conformance::{
+    AdoptionCandidate, LaunchedProcess, PidfdEvidence, ProcessConformanceError,
+    ProcessIdentityDigest,
+};
 use d2b_provider_clipboard_wayland::{
     AttachmentClass, ClipboardProcessEffectPort, ClipboardServiceError,
 };
@@ -59,8 +67,8 @@ use d2b_provider_display_wayland::{
     AuthenticatedDisplaySession, CleanupState, DependencyState, DisplayController,
     DisplayDependencyProof, DisplayLaunchBinding, DisplayProcessEffectPort, DisplayProcessRole,
     DisplayRuntime, DisplayRuntimeError, FilterInput, LaunchGrants, VolumeState,
-    WaylandPolicySnapshot, WaylandSessionSpec, WorkerEffectError, WorkerLaunchReceipt,
-    WorkerRestartEvidence, WorkerState,
+    WaylandPolicySnapshot, WaylandSessionResourceStatus, WaylandSessionSpec, WorkerEffectError,
+    WorkerLaunchReceipt, WorkerRestartEvidence, WorkerState,
 };
 #[cfg(test)]
 use d2b_provider_notification_desktop::Category;
@@ -70,15 +78,12 @@ use d2b_provider_notification_desktop::{
     NotificationProcessEffectPort, NotificationRequest, NotificationSourceIdentity,
     SourceProcessEffectPort, SourceProcessEffectReceipt, SourceReconcileResult,
 };
-use d2b_provider_supervisor::{
-    BrokerLaunchIntent, BrokerLaunchResolver, BrokerObservedProcess, BrokerProcessBackend,
-    ProviderSupervisor,
-};
 use d2b_resource_api::authz::{
     ApiCatalog, BindingScope, BootstrapPhase, BoundSubject, CompiledRole, CompiledRoleBinding,
     NativeAuthorizer, PolicyRule, PolicySet, SessionVerb,
 };
-use d2b_resource_store::PolicySnapshot;
+use d2b_resource_api::{RedbBackend, ResourceApiClient, service::UnavailableUpgradeDispatcher};
+use d2b_resource_store::{PolicySnapshot, StoredResource};
 use d2b_session::{
     AuthenticatedSessionRouteBinding, ComponentSessionDriver, OwnedAttachment, OwnedTransport,
     SessionAcceptor, SessionEngine, TransportEvidence, operation_catalog_entry, ttrpc_stream_id,
@@ -87,7 +92,6 @@ use d2b_session_unix::{
     CreditPool, CreditScopeSet, PeerIdentityPolicy, SeqpacketSocket, UnixSeqpacketTransport,
     UnixSessionError, VerifiedPacket, VerifiedUnixPeer,
 };
-use nix::unistd::{Group, getgid};
 use notify_rust::{Notification as DesktopNotification, Urgency};
 use protobuf::Message;
 use rustix::net::{SocketFlags, accept_with};
@@ -394,16 +398,14 @@ where
 /// composition without calling [`Self::finalize`] is safe but leaves the
 /// ingress open until its normal owner is dropped; production shutdown calls
 /// `finalize` before releasing the ingress.
-pub struct InteractionComposition<S, G = UnavailableGuestFrontendEffects>
+pub struct InteractionComposition<S>
 where
     S: ProcessLaunchEffectPort + Clone + Send + Sync + 'static,
-    G: GuestFrontendEffectPort + 'static,
 {
     registrar: ZoneRegistrar,
     supervisor: S,
-    guest_frontend: G,
     sessions: BTreeMap<String, RegisteredInteractionSession>,
-    display: Option<DisplayRuntime<DisplaySupervisorEffects<S, G>>>,
+    display: Option<DisplayRuntime<DisplaySupervisorEffects<S>>>,
     clipboard: Option<d2b_provider_clipboard_wayland::ClipboardRuntime<InteractionDrainEffects>>,
     notification:
         Option<d2b_provider_notification_desktop::NotificationRuntime<InteractionDrainEffects>>,
@@ -411,26 +413,25 @@ where
     pending_guest_selection_events:
         BTreeMap<String, d2b_provider_clipboard_wayland::GuestSelectionEvent>,
     notification_port: Arc<Mutex<Box<dyn DesktopNotificationPort + Send>>>,
+    display_resource_client:
+        Option<Arc<ResourceApiClient<RedbBackend, UnavailableUpgradeDispatcher>>>,
     display_resource_evidence: Option<CoreDisplayResourceEvidence>,
     interaction_identity: Option<CommittedInteractionIdentity>,
     clipboard_configuration: Option<CommittedClipboardProviderConfiguration>,
     notification_configuration: Option<CommittedNotificationProviderConfiguration>,
 }
 
-/// Daemon-owned collection of independently Zone-bound Provider and
-/// Process/Shell compositions.
-pub struct InteractionRuntimeSet<S, G = UnavailableGuestFrontendEffects>
+/// Daemon-owned collection of independently Zone-bound compositions.
+pub struct InteractionRuntimeSet<S>
 where
     S: ProcessLaunchEffectPort + Clone + Send + Sync + 'static,
-    G: GuestFrontendEffectPort + 'static,
 {
-    runtimes: BTreeMap<String, InteractionComposition<S, G>>,
+    runtimes: BTreeMap<String, InteractionComposition<S>>,
 }
 
-impl<S, G> core::fmt::Debug for InteractionRuntimeSet<S, G>
+impl<S> core::fmt::Debug for InteractionRuntimeSet<S>
 where
     S: ProcessLaunchEffectPort + Clone + Send + Sync + 'static,
-    G: GuestFrontendEffectPort + 'static,
 {
     fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         formatter
@@ -440,10 +441,9 @@ where
     }
 }
 
-impl<S, G> InteractionRuntimeSet<S, G>
+impl<S> InteractionRuntimeSet<S>
 where
     S: ProcessLaunchEffectPort + Clone + Send + Sync + 'static,
-    G: GuestFrontendEffectPort + 'static,
 {
     /// Construct an empty Zone runtime set.
     pub fn new() -> Self {
@@ -453,7 +453,7 @@ where
     }
 
     /// Insert one fully Zone-bound runtime.
-    pub fn insert(&mut self, zone: ZoneId, runtime: InteractionComposition<S, G>) {
+    pub fn insert(&mut self, zone: ZoneId, runtime: InteractionComposition<S>) {
         self.runtimes.insert(zone.as_str().to_owned(), runtime);
     }
 
@@ -467,12 +467,27 @@ where
         self.runtimes.keys().map(String::as_str)
     }
 
-    fn runtime_for(&self, zone: &ZoneId) -> Option<&InteractionComposition<S, G>> {
+    fn runtime_for(&self, zone: &ZoneId) -> Option<&InteractionComposition<S>> {
         self.runtimes.get(zone.as_str())
     }
 
-    fn runtime_for_mut(&mut self, zone: &ZoneId) -> Option<&mut InteractionComposition<S, G>> {
+    fn runtime_for_mut(&mut self, zone: &ZoneId) -> Option<&mut InteractionComposition<S>> {
         self.runtimes.get_mut(zone.as_str())
+    }
+
+    /// Reconcile the committed WaylandSession for one exact VM before its
+    /// process DAG waits on the Host proxy socket.
+    pub(crate) fn reconcile_committed_display_for_vm_start(
+        &mut self,
+        zone: &ZoneId,
+        vm: &str,
+        session_ref: &ResourceRef,
+        session_uid: &ResourceUid,
+        spec: &WaylandSessionSpec,
+    ) -> Result<d2b_provider_display_wayland::ReconcileResult, DisplayRuntimeError> {
+        self.runtime_for_mut(zone)
+            .ok_or(DisplayRuntimeError::SessionUnauthenticated)?
+            .reconcile_committed_display_for_vm_start(vm, session_ref, session_uid, spec)
     }
 
     /// Find the sole authenticated ComponentSession owned by one exact
@@ -518,14 +533,13 @@ where
 
 /// Resolve one exact service-owned ComponentSession without converting a
 /// contended runtime lock into an absent source.
-pub(crate) fn blocking_component_session_driver_for_service<S, G>(
-    runtime: &Arc<AsyncMutex<Option<InteractionRuntimeSet<S, G>>>>,
+pub(crate) fn blocking_component_session_driver_for_service<S>(
+    runtime: &Arc<AsyncMutex<Option<InteractionRuntimeSet<S>>>>,
     service: &str,
     target: &ResourceRef,
 ) -> Option<d2b_session::SessionDriverHandle>
 where
     S: ProcessLaunchEffectPort + Clone + Send + Sync + 'static,
-    G: GuestFrontendEffectPort + 'static,
 {
     let runtime = runtime.blocking_lock();
     runtime
@@ -533,10 +547,9 @@ where
         .and_then(|runtime| runtime.component_session_driver_for_target(service, target))
 }
 
-impl<S, G> Default for InteractionRuntimeSet<S, G>
+impl<S> Default for InteractionRuntimeSet<S>
 where
     S: ProcessLaunchEffectPort + Clone + Send + Sync + 'static,
-    G: GuestFrontendEffectPort + 'static,
 {
     fn default() -> Self {
         Self::new()
@@ -552,234 +565,6 @@ enum InteractionDispatchError {
     InvalidPayload,
     RuntimeFailure,
     ResponseFailed,
-}
-
-/// Daemon-owned guest frontend lifecycle port. The Provider only asks for
-/// typed ensure/stop effects; the implementation owns guest-control
-/// authentication, service identity, and restart/adoption evidence.
-pub trait GuestFrontendEffectPort: Clone + Send {
-    fn ensure(
-        &mut self,
-        guest: &ResourceRef,
-        policy_generation: u64,
-        teardown_generation: u64,
-        session_digest: [u8; 32],
-    ) -> Result<WorkerLaunchReceipt, WorkerEffectError>;
-
-    fn stop(
-        &mut self,
-        guest: &ResourceRef,
-        policy_generation: u64,
-        teardown_generation: u64,
-        session_digest: [u8; 32],
-    ) -> Result<WorkerLaunchReceipt, WorkerEffectError>;
-}
-
-/// Closed default used by focused host-only composition tests. Production
-/// composition installs [`AuthenticatedGuestFrontendEffects`] instead.
-#[derive(Clone, Default)]
-pub struct UnavailableGuestFrontendEffects;
-
-impl GuestFrontendEffectPort for UnavailableGuestFrontendEffects {
-    fn ensure(
-        &mut self,
-        _guest: &ResourceRef,
-        _policy_generation: u64,
-        _teardown_generation: u64,
-        _session_digest: [u8; 32],
-    ) -> Result<WorkerLaunchReceipt, WorkerEffectError> {
-        Err(WorkerEffectError::WorkerUnavailable)
-    }
-
-    fn stop(
-        &mut self,
-        _guest: &ResourceRef,
-        policy_generation: u64,
-        teardown_generation: u64,
-        session_digest: [u8; 32],
-    ) -> Result<WorkerLaunchReceipt, WorkerEffectError> {
-        Ok(WorkerLaunchReceipt::from_supervisor(
-            DisplayProcessRole::GuestFrontend,
-            WorkerState::Terminal { deleted: true },
-            policy_generation,
-            teardown_generation,
-            session_digest,
-        ))
-    }
-}
-
-/// Production guest frontend effect owner. It resolves the guest's trusted
-/// VM process DAG, authenticates over guest-control, and controls only the
-/// closed `wayland-proxy.service` unit through the guest workload user.
-#[derive(Clone)]
-pub struct AuthenticatedGuestFrontendEffects {
-    resolver: BundleResolver,
-    broker_socket_path: PathBuf,
-    caller_role: BrokerCallerRole,
-    expected_state_root_uid: u32,
-    expected_state_root_gid: u32,
-}
-
-impl AuthenticatedGuestFrontendEffects {
-    pub fn new(
-        resolver: BundleResolver,
-        broker_socket_path: PathBuf,
-        caller_role: BrokerCallerRole,
-        expected_state_root_uid: u32,
-        expected_state_root_gid: u32,
-    ) -> Self {
-        Self {
-            resolver,
-            broker_socket_path,
-            caller_role,
-            expected_state_root_uid,
-            expected_state_root_gid,
-        }
-    }
-
-    fn params(
-        &self,
-        guest: &ResourceRef,
-    ) -> Result<crate::guest_control_bridge::ProbeParams, WorkerEffectError> {
-        let guest_name = guest
-            .to_canonical_string()
-            .strip_prefix("Guest/")
-            .map(str::to_owned)
-            .ok_or(WorkerEffectError::WorkerUnavailable)?;
-        let vm = if self.resolver.find_process_vm(&guest_name).is_some() {
-            guest_name
-        } else {
-            let mut candidates = self
-                .resolver
-                .processes
-                .vms
-                .iter()
-                .filter(|dag| {
-                    dag.nodes
-                        .iter()
-                        .any(|node| node.role == ProcessRole::WaylandProxy)
-                })
-                .map(|dag| dag.vm.as_str());
-            let Some(vm) = candidates.next() else {
-                return Err(WorkerEffectError::WorkerUnavailable);
-            };
-            if candidates.next().is_some() {
-                return Err(WorkerEffectError::WorkerUnavailable);
-            }
-            vm.to_owned()
-        };
-        let dag = self
-            .resolver
-            .find_process_vm(&vm)
-            .ok_or(WorkerEffectError::WorkerUnavailable)?;
-        let runner = dag
-            .nodes
-            .iter()
-            .find(|node| node.role == ProcessRole::CloudHypervisorRunner)
-            .ok_or(WorkerEffectError::WorkerUnavailable)?;
-        let socket_path = runner
-            .argv
-            .windows(2)
-            .find_map(|pair| {
-                (pair[0] == "--vsock").then(|| {
-                    pair[1]
-                        .split(',')
-                        .find_map(|field| field.strip_prefix("socket=").map(PathBuf::from))
-                })
-            })
-            .flatten()
-            .ok_or(WorkerEffectError::WorkerUnavailable)?;
-        let state_root = socket_path
-            .parent()
-            .map(PathBuf::from)
-            .ok_or(WorkerEffectError::WorkerUnavailable)?;
-        Ok(crate::guest_control_bridge::ProbeParams {
-            vm_id: vm,
-            socket_path,
-            state_root,
-            expected_state_root_uid: self.expected_state_root_uid,
-            expected_state_root_gid: self.expected_state_root_gid,
-            expected_peer_uid: runner.profile.uid,
-            expected_peer_gid: runner.profile.gid,
-        })
-    }
-}
-
-impl GuestFrontendEffectPort for AuthenticatedGuestFrontendEffects {
-    fn ensure(
-        &mut self,
-        guest: &ResourceRef,
-        policy_generation: u64,
-        teardown_generation: u64,
-        session_digest: [u8; 32],
-    ) -> Result<WorkerLaunchReceipt, WorkerEffectError> {
-        let params = self.params(guest)?;
-        let probe = crate::guest_control_bridge::RealGuestControlProbe::with_caller_role(
-            self.broker_socket_path.clone(),
-            self.caller_role.clone(),
-        );
-        let observed = probe
-            .wayland_service(
-                &params,
-                Duration::from_secs(10),
-                crate::guest_control_bridge::GuestWaylandServiceAction::Observe,
-            )
-            .map_err(|_| WorkerEffectError::WorkerUnavailable)?;
-        let evidence = if observed.active {
-            observed
-        } else {
-            probe
-                .wayland_service(
-                    &params,
-                    Duration::from_secs(10),
-                    crate::guest_control_bridge::GuestWaylandServiceAction::Ensure,
-                )
-                .map_err(|_| WorkerEffectError::LaunchRejected)?
-        };
-        if !evidence.active {
-            return Err(WorkerEffectError::LaunchRejected);
-        }
-        Ok(WorkerLaunchReceipt::from_supervisor(
-            DisplayProcessRole::GuestFrontend,
-            WorkerState::Ready {
-                generation: evidence.state_generation.max(1),
-            },
-            policy_generation,
-            teardown_generation,
-            session_digest,
-        ))
-    }
-
-    fn stop(
-        &mut self,
-        guest: &ResourceRef,
-        policy_generation: u64,
-        teardown_generation: u64,
-        session_digest: [u8; 32],
-    ) -> Result<WorkerLaunchReceipt, WorkerEffectError> {
-        let params = self.params(guest)?;
-        let probe = crate::guest_control_bridge::RealGuestControlProbe::with_caller_role(
-            self.broker_socket_path.clone(),
-            self.caller_role.clone(),
-        );
-        let evidence = probe
-            .wayland_service(
-                &params,
-                Duration::from_secs(10),
-                crate::guest_control_bridge::GuestWaylandServiceAction::Stop,
-            )
-            .map_err(|_| WorkerEffectError::CleanupIncomplete)?;
-        if evidence.active {
-            return Err(WorkerEffectError::CleanupIncomplete);
-        }
-        Ok(WorkerLaunchReceipt::from_supervisor(
-            DisplayProcessRole::GuestFrontend,
-            WorkerState::Terminal { deleted: true },
-            policy_generation,
-            teardown_generation,
-            session_digest,
-        ))
-    }
 }
 
 impl InteractionDispatchError {
@@ -977,6 +762,9 @@ fn encode_interaction_response(
     let bytes = response
         .write_to_bytes()
         .map_err(|_| InteractionDispatchError::ResponseFailed)?;
+    if bytes.len() > MAX_LOGICAL_MESSAGE_BYTES as usize {
+        return Err(InteractionDispatchError::ResponseFailed);
+    }
     let length =
         u32::try_from(bytes.len()).map_err(|_| InteractionDispatchError::ResponseFailed)?;
     let mut frame = Vec::from(MessageHeader::new_response(stream_id, length));
@@ -984,10 +772,9 @@ fn encode_interaction_response(
     Ok(frame)
 }
 
-impl<S, G> core::fmt::Debug for InteractionComposition<S, G>
+impl<S> core::fmt::Debug for InteractionComposition<S>
 where
     S: ProcessLaunchEffectPort + Clone + Send + Sync + 'static,
-    G: GuestFrontendEffectPort + 'static,
 {
     fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         formatter
@@ -1000,7 +787,7 @@ where
     }
 }
 
-impl<S> InteractionComposition<S, UnavailableGuestFrontendEffects>
+impl<S> InteractionComposition<S>
 where
     S: ProcessLaunchEffectPort + Clone + Send + Sync + 'static,
 {
@@ -1009,7 +796,6 @@ where
         Self::new_with_notification_port(
             registrar,
             supervisor,
-            UnavailableGuestFrontendEffects,
             Box::new(InteractionNotificationPort::default()),
         )
     }
@@ -1019,13 +805,11 @@ where
     pub fn new_with_notification_port(
         registrar: ZoneRegistrar,
         supervisor: S,
-        guest_frontend: UnavailableGuestFrontendEffects,
         notification_port: Box<dyn DesktopNotificationPort + Send>,
     ) -> Self {
         Self {
             registrar,
             supervisor,
-            guest_frontend,
             sessions: BTreeMap::new(),
             display: None,
             clipboard: None,
@@ -1033,6 +817,7 @@ where
             pending_picker_receipts: BTreeMap::new(),
             pending_guest_selection_events: BTreeMap::new(),
             notification_port: Arc::new(Mutex::new(notification_port)),
+            display_resource_client: None,
             display_resource_evidence: None,
             interaction_identity: None,
             clipboard_configuration: None,
@@ -1041,52 +826,10 @@ where
     }
 }
 
-impl<S, G> InteractionComposition<S, G>
+impl<S> InteractionComposition<S>
 where
     S: ProcessLaunchEffectPort + Clone + Send + Sync + 'static,
-    G: GuestFrontendEffectPort + 'static,
 {
-    /// Join a daemon-owned registrar, host supervisor, and authenticated guest
-    /// frontend effect owner.
-    pub fn new_with_guest_frontend(
-        registrar: ZoneRegistrar,
-        supervisor: S,
-        guest_frontend: G,
-    ) -> Self {
-        Self::new_with_guest_frontend_and_notification_port(
-            registrar,
-            supervisor,
-            guest_frontend,
-            Box::new(InteractionNotificationPort::default()),
-        )
-    }
-
-    /// Join daemon-owned effects with an injected desktop presentation
-    /// adapter.
-    pub fn new_with_guest_frontend_and_notification_port(
-        registrar: ZoneRegistrar,
-        supervisor: S,
-        guest_frontend: G,
-        notification_port: Box<dyn DesktopNotificationPort + Send>,
-    ) -> Self {
-        Self {
-            registrar,
-            supervisor,
-            guest_frontend,
-            sessions: BTreeMap::new(),
-            display: None,
-            clipboard: None,
-            notification: None,
-            pending_picker_receipts: BTreeMap::new(),
-            pending_guest_selection_events: BTreeMap::new(),
-            notification_port: Arc::new(Mutex::new(notification_port)),
-            display_resource_evidence: None,
-            interaction_identity: None,
-            clipboard_configuration: None,
-            notification_configuration: None,
-        }
-    }
-
     /// Borrow the registrar used for authenticated admission.
     pub const fn registrar(&self) -> &ZoneRegistrar {
         &self.registrar
@@ -1266,6 +1009,15 @@ where
         self.display_resource_evidence = Some(evidence);
     }
 
+    /// Route display worker lifecycle through the durable Process resources
+    /// owned by the system-core Resource API client.
+    pub(crate) fn bind_display_resource_client(
+        &mut self,
+        client: Arc<ResourceApiClient<RedbBackend, UnavailableUpgradeDispatcher>>,
+    ) {
+        self.display_resource_client = Some(client);
+    }
+
     /// Bind Core's sealed committed interaction Provider configuration.
     pub(crate) fn bind_interaction_provider_configuration(
         &mut self,
@@ -1403,6 +1155,14 @@ where
             .to_ascii_lowercase(),
         )
         .map_err(|_| "interaction-operation-invalid")?;
+        validate_interaction_attachments(
+            &attachments,
+            &service,
+            &request.method,
+            &frame,
+            &operation_id,
+        )
+        .map_err(|_| "interaction-attachment-mismatch")?;
         let operation = OperationSpec::new(operation_id, 60_000)
             .map_err(|_| "interaction-operation-invalid")?;
         let ingress = self
@@ -1832,13 +1592,20 @@ where
                         now_secs,
                     )
                     .map_err(|_| InteractionDispatchError::RuntimeFailure)?;
+                if bytes.len() > MAX_LOGICAL_MESSAGE_BYTES as usize {
+                    return Err(InteractionDispatchError::RuntimeFailure);
+                }
+                let response = serde_json::to_vec(&serde_json::json!({
+                    "materialized": true,
+                    "entry_digest": request.entry_digest,
+                    "bytes": bytes,
+                }))
+                .map_err(|_| InteractionDispatchError::RuntimeFailure)?;
+                if response.len() > MAX_LOGICAL_MESSAGE_BYTES as usize {
+                    return Err(InteractionDispatchError::RuntimeFailure);
+                }
                 Ok((
-                    serde_json::to_vec(&serde_json::json!({
-                        "materialized": true,
-                        "entry_digest": request.entry_digest,
-                        "bytes": bytes,
-                    }))
-                    .map_err(|_| InteractionDispatchError::RuntimeFailure)?,
+                    response,
                     false,
                 ))
             }
@@ -2000,7 +1767,11 @@ where
         attachment_class: AttachmentClass,
     ) -> Result<Vec<u8>, ClipboardServiceError> {
         if attachments.is_empty() {
-            return inline.ok_or(ClipboardServiceError::AttachmentRejected);
+            let bytes = inline.ok_or(ClipboardServiceError::AttachmentRejected)?;
+            if bytes.len() > MAX_LOGICAL_MESSAGE_BYTES as usize {
+                return Err(ClipboardServiceError::AttachmentRejected);
+            }
+            return Ok(bytes);
         }
         if inline.is_some() {
             return Err(ClipboardServiceError::AttachmentRejected);
@@ -2502,20 +2273,105 @@ where
             .ok_or(DisplayRuntimeError::SessionUnauthenticated)?
             .clone();
         let supervisor = self.supervisor.clone();
-        let guest_frontend = self.guest_frontend.clone();
-        let runtime = self.display.get_or_insert_with(|| {
-            DisplayRuntime::new(
-                controller,
-                DisplaySupervisorEffects::new_with_guest_frontend(supervisor, guest_frontend),
-            )
-        });
+        let resource_client = self.display_resource_client.clone();
+        let interaction_identity = self.interaction_identity.clone();
+        let zone = route.zone().clone();
+        let effects = match (resource_client, interaction_identity) {
+            (Some(client), Some(identity)) => DisplaySupervisorEffects::new_with_resource_client(
+                supervisor,
+                client,
+                zone.clone(),
+                identity.wayland_session_ref().clone(),
+                identity.wayland_session_uid().clone(),
+            ),
+            _ => {
+                #[cfg(test)]
+                {
+                    DisplaySupervisorEffects::new(supervisor)
+                }
+                #[cfg(not(test))]
+                {
+                    return Err(DisplayRuntimeError::Effect(
+                        WorkerEffectError::LaunchRejected,
+                    ));
+                }
+            }
+        };
+        let runtime = self
+            .display
+            .get_or_insert_with(|| DisplayRuntime::new(controller, effects));
         let result =
             runtime.reconcile_registered(&route, spec, dependencies, supervision, policy)?;
         if result.status.phase == d2b_provider_display_wayland::Phase::Ready {
             self.reconcile_dependents()
                 .map_err(|_| DisplayRuntimeError::ObservationUnavailable)?;
         }
+        self.persist_display_status(zone, &result)?;
         Ok(result)
+    }
+
+    fn persist_display_status(
+        &self,
+        zone: ZoneId,
+        result: &d2b_provider_display_wayland::ReconcileResult,
+    ) -> Result<(), DisplayRuntimeError> {
+        let (Some(client), Some(identity)) = (
+            self.display_resource_client.clone(),
+            self.interaction_identity.clone(),
+        ) else {
+            return Ok(());
+        };
+        let resource_ref = identity.wayland_session_ref().clone();
+        let resource_uid = identity.wayland_session_uid().clone();
+        let phase = format!("{:?}", result.status.phase);
+        let projection = wayland_session_resource_projection(&result.status.resource);
+        run_effect(move || async move {
+            let response = client
+                .get(resource_get_request(
+                    &zone,
+                    &resource_ref,
+                    "display-wayland-status-get",
+                ))
+                .await;
+            if response.error.is_some() {
+                return Err(WorkerEffectError::WorkerUnavailable);
+            }
+            let resource = response
+                .resource
+                .0
+                .ok_or(WorkerEffectError::WorkerUnavailable)?;
+            let envelope = ResourceEnvelope::from_json(&resource.canonical_json)
+                .map_err(|_| WorkerEffectError::WorkerUnavailable)?;
+            if envelope.resource_type().as_str() != "display-wayland.d2bus.org.WaylandSession"
+                || envelope.metadata().uid() != &resource_uid
+                || envelope.metadata().zone() != &zone
+                || ResourceRef::new(
+                    envelope.resource_type().clone(),
+                    envelope.metadata().name().clone(),
+                ) != resource_ref
+            {
+                return Err(WorkerEffectError::LaunchRejected);
+            }
+            let stored = StoredResource {
+                resource_ref,
+                zone,
+                uid: envelope.metadata().uid().clone(),
+                generation: envelope.metadata().generation().clone(),
+                revision: envelope.metadata().revision().clone(),
+                canonical_json: resource.canonical_json,
+                payload_digest: resource.payload_digest,
+            };
+            let status = serde_json::json!({ "phase": phase });
+            d2bd_runtime::resource_runtime_support::persist_resource_status_with_projection(
+                &client,
+                &stored,
+                &status,
+                Some(&projection),
+            )
+            .await
+            .map_err(|_| WorkerEffectError::WorkerUnavailable)
+        })
+        .map_err(DisplayRuntimeError::Effect)
     }
 
     fn reconcile_display_request(
@@ -2576,7 +2432,7 @@ where
         )
         .map_err(|_| DisplayRuntimeError::InvalidPolicy)?;
         let supervision = if let Some(display) = self.display.as_mut() {
-            display.refresh_supervision();
+            display.refresh_supervision()?;
             display.supervision()
         } else {
             WorkerRestartEvidence::from_supervisor(daemon_monotonic_ms(), None, None, 1)
@@ -2590,6 +2446,38 @@ where
         )
     }
 
+    /// Reconcile a committed display session as part of an exact VM start.
+    ///
+    /// This reuses the typed DisplayService/Reconcile path but takes its
+    /// desired state only from the committed Zone resource. The live display
+    /// route and the committed session identity must agree before any child
+    /// Process resource can be created.
+    pub(crate) fn reconcile_committed_display_for_vm_start(
+        &mut self,
+        vm: &str,
+        session_ref: &ResourceRef,
+        session_uid: &ResourceUid,
+        spec: &WaylandSessionSpec,
+    ) -> Result<d2b_provider_display_wayland::ReconcileResult, DisplayRuntimeError> {
+        let expected_guest_name = format!("Guest/{vm}");
+        let expected_guest = ResourceRef::parse(&expected_guest_name)
+            .map_err(|_| DisplayRuntimeError::SessionMismatch)?;
+        let identity = self
+            .interaction_identity
+            .as_ref()
+            .ok_or(DisplayRuntimeError::SessionUnauthenticated)?;
+        if identity.wayland_session_ref() != session_ref
+            || identity.wayland_session_uid() != session_uid
+            || identity.subject_ref() != &expected_guest
+            || spec.guest_ref() != identity.subject_ref()
+            || spec.host_ref() != identity.host_execution_ref()
+            || spec.user_ref() != identity.user_ref()
+        {
+            return Err(DisplayRuntimeError::SessionMismatch);
+        }
+        self.reconcile_display_request(DisplayReconcileRequest { spec: spec.clone() })
+    }
+
     /// Finalize display first, then drain clipboard/notification effects, and
     /// only then release the bus ingress.
     pub fn finalize(
@@ -2598,7 +2486,13 @@ where
     ) -> Result<d2b_provider_display_wayland::FinalizationReport, InteractionFinalizeError> {
         let (report, mut failure) = match self.display.as_mut() {
             Some(display) => match display.finalize(grace) {
-                Ok(report) => (report, None),
+                Ok(report) => {
+                    let remove_runtime = report.decision.remove_finalizer;
+                    if remove_runtime {
+                        self.display = None;
+                    }
+                    (report, None)
+                }
                 Err(error) => (
                     d2b_provider_display_wayland::FinalizationReport::empty(),
                     Some(InteractionFinalizeError::Display(error)),
@@ -2639,7 +2533,13 @@ where
     ) -> Result<d2b_provider_display_wayland::FinalizationReport, InteractionFinalizeError> {
         let (report, mut failure) = match self.display.as_mut() {
             Some(display) => match display.finalize(grace) {
-                Ok(report) => (report, None),
+                Ok(report) => {
+                    let remove_runtime = report.decision.remove_finalizer;
+                    if remove_runtime {
+                        self.display = None;
+                    }
+                    (report, None)
+                }
                 Err(error) => (
                     d2b_provider_display_wayland::FinalizationReport::empty(),
                     Some(InteractionFinalizeError::Display(error)),
@@ -2715,9 +2615,12 @@ where
         let service_cleanup = match service.as_str() {
             d2b_provider_display_wayland::SERVICE_PACKAGE if last_for_service => {
                 if let Some(display) = self.display.as_mut() {
-                    display
+                    let report = display
                         .finalize(d2b_provider_display_wayland::GraceState::Expired)
                         .map_err(|_| "display-finalization-failed".to_owned())?;
+                    if report.decision.remove_finalizer {
+                        self.display = None;
+                    }
                 } else {
                     self.display_resource_evidence = None;
                 }
@@ -2822,21 +2725,65 @@ impl core::fmt::Display for InteractionFinalizeError {
 
 impl std::error::Error for InteractionFinalizeError {}
 
-/// One daemon-owned process effect adapter for display workers.
+/// Process effect port used by the interaction composition when all display
+/// children are reconciled through durable Process resources.
 ///
-/// The adapter consumes display tickets into neutral Process tickets, then
-/// routes observe/adopt, launch, and exact stop through the shared
-/// [`ProcessLaunchEffectPort`].  The Provider never sees the neutral ticket
-/// or the retained process identity.
-pub struct DisplaySupervisorEffects<S, G = UnavailableGuestFrontendEffects> {
-    supervisor: S,
-    guest_frontend: G,
+/// The interaction Provider never owns a launch-capable process adapter.
+#[derive(Clone, Copy, Debug, Default)]
+pub(crate) struct UnavailableProcessEffectPort;
+
+impl ProcessLaunchEffectPort for UnavailableProcessEffectPort {
+    fn launch(
+        &self,
+        _ticket: &d2b_process_conformance::LaunchTicket,
+    ) -> impl Future<Output = Result<LaunchedProcess, ProcessConformanceError>> + Send {
+        async { Err(ProcessConformanceError::LaunchFailed) }
+    }
+
+    fn observe(
+        &self,
+        _ticket: &d2b_process_conformance::LaunchTicket,
+    ) -> impl Future<Output = Result<Option<AdoptionCandidate>, ProcessConformanceError>> + Send {
+        async { Err(ProcessConformanceError::LaunchFailed) }
+    }
+
+    fn open_pidfd(
+        &self,
+        _candidate: &AdoptionCandidate,
+    ) -> impl Future<Output = Result<PidfdEvidence, ProcessConformanceError>> + Send {
+        async { Err(ProcessConformanceError::PidfdUnavailable) }
+    }
+
+    fn stop(
+        &self,
+        _identity: &ProcessIdentityDigest,
+        _class: d2b_process_conformance::StopClass,
+    ) -> impl Future<Output = Result<(), ProcessConformanceError>> + Send {
+        async { Err(ProcessConformanceError::StopUnavailable) }
+    }
+}
+
+/// One daemon-owned effect adapter for display workers.
+///
+/// Production reconciliation materializes and observes the Host and Guest
+/// Process children through the Resource API. The process effect port is
+/// retained only for hermetic tests; no Provider receives a launch-capable
+/// adapter in the production composition.
+pub struct DisplaySupervisorEffects<S> {
+    _supervisor: S,
+    resource_client: Option<Arc<ResourceApiClient<RedbBackend, UnavailableUpgradeDispatcher>>>,
+    resource_zone: Option<ZoneId>,
+    wayland_session_ref: Option<ResourceRef>,
+    wayland_session_uid: Option<ResourceUid>,
+    resource_processes: BTreeMap<DisplayProcessRole, DurableDisplayProcess>,
+    resource_endpoints: BTreeMap<DisplayProcessRole, DurableDisplayEndpoint>,
     guest_subject: Option<ResourceRef>,
     host_execution_ref: Option<ResourceRef>,
+    #[cfg(test)]
     identities: BTreeMap<DisplayProcessRole, LiveWorker>,
-    guest_worker: Option<GuestWorker>,
-    consumed_grants: BTreeMap<[u8; 32], u64>,
+    #[cfg(test)]
     tickets: BTreeMap<DisplayProcessRole, ProcessLaunchTicket>,
+    consumed_grants: BTreeMap<[u8; 32], u64>,
     last_failures: BTreeMap<DisplayProcessRole, u64>,
     session_digest: [u8; 32],
     reconnect_generation: u64,
@@ -2844,6 +2791,7 @@ pub struct DisplaySupervisorEffects<S, G = UnavailableGuestFrontendEffects> {
     teardown_generation: u64,
 }
 
+#[cfg(test)]
 #[derive(Clone, Copy)]
 struct LiveWorker {
     identity: ProcessIdentityDigest,
@@ -2852,28 +2800,51 @@ struct LiveWorker {
     session_digest: [u8; 32],
 }
 
-#[derive(Clone, Copy)]
-struct GuestWorker {
-    policy_generation: u64,
-    teardown_generation: u64,
-    session_digest: [u8; 32],
+#[derive(Clone)]
+struct DurableDisplayProcess {
+    resource_ref: ResourceRef,
+    resource_uid: ResourceUid,
+    generation: u64,
+    revision: u64,
+    restart_count: u64,
+    deletion_requested: bool,
 }
 
-impl<S> DisplaySupervisorEffects<S, UnavailableGuestFrontendEffects>
+#[derive(Clone)]
+struct DurableDisplayEndpoint {
+    resource_ref: ResourceRef,
+    resource_uid: ResourceUid,
+    revision: u64,
+    generation: u64,
+    deletion_requested: bool,
+}
+
+impl<S> DisplaySupervisorEffects<S>
 where
     S: ProcessLaunchEffectPort + Clone + Send + Sync + 'static,
 {
-    /// Construct a display effect adapter over the daemon supervisor.
+    /// Construct a test-only display effect adapter.
+    #[cfg(test)]
     pub fn new(supervisor: S) -> Self {
+        Self::new_base(supervisor)
+    }
+
+    fn new_base(supervisor: S) -> Self {
         Self {
-            supervisor,
-            guest_frontend: UnavailableGuestFrontendEffects,
+            _supervisor: supervisor,
+            resource_client: None,
+            resource_zone: None,
+            wayland_session_ref: None,
+            wayland_session_uid: None,
+            resource_processes: BTreeMap::new(),
+            resource_endpoints: BTreeMap::new(),
             guest_subject: None,
             host_execution_ref: None,
+            #[cfg(test)]
             identities: BTreeMap::new(),
-            guest_worker: None,
-            consumed_grants: BTreeMap::new(),
+            #[cfg(test)]
             tickets: BTreeMap::new(),
+            consumed_grants: BTreeMap::new(),
             last_failures: BTreeMap::new(),
             session_digest: [0; 32],
             reconnect_generation: 0,
@@ -2882,80 +2853,1538 @@ where
         }
     }
 
-    /// Borrow the supervisor-owned process identities for diagnostics.
+    /// Construct an effect adapter whose worker lifecycle is owned by the
+    /// generic durable Process runtime.
+    pub fn new_with_resource_client(
+        supervisor: S,
+        resource_client: Arc<ResourceApiClient<RedbBackend, UnavailableUpgradeDispatcher>>,
+        zone: ZoneId,
+        wayland_session_ref: ResourceRef,
+        wayland_session_uid: ResourceUid,
+    ) -> Self {
+        let mut effects = Self::new_base(supervisor);
+        effects.resource_client = Some(resource_client);
+        effects.resource_zone = Some(zone);
+        effects.wayland_session_ref = Some(wayland_session_ref);
+        effects.wayland_session_uid = Some(wayland_session_uid);
+        effects
+    }
+
+    /// Return the number of locally tracked display workers.
     pub fn live_worker_count(&self) -> usize {
-        self.identities.len() + usize::from(self.guest_worker.is_some())
-    }
-}
-
-impl<S, G> DisplaySupervisorEffects<S, G>
-where
-    S: ProcessLaunchEffectPort + Clone + Send + Sync + 'static,
-    G: GuestFrontendEffectPort + 'static,
-{
-    /// Construct a display effect adapter with an independent guest
-    /// frontend lifecycle owner.
-    pub fn new_with_guest_frontend(supervisor: S, guest_frontend: G) -> Self {
-        Self {
-            supervisor,
-            guest_frontend,
-            guest_subject: None,
-            host_execution_ref: None,
-            identities: BTreeMap::new(),
-            guest_worker: None,
-            consumed_grants: BTreeMap::new(),
-            tickets: BTreeMap::new(),
-            last_failures: BTreeMap::new(),
-            session_digest: [0; 32],
-            reconnect_generation: 0,
-            policy_generation: 0,
-            teardown_generation: 0,
+        #[cfg(test)]
+        {
+            return self.identities.len();
+        }
+        #[cfg(not(test))]
+        {
+            self.resource_processes.len()
         }
     }
+
+    fn uses_durable_processes(&self) -> bool {
+        self.resource_client.is_some()
+            && self.resource_zone.is_some()
+            && self.wayland_session_ref.is_some()
+            && self.wayland_session_uid.is_some()
+    }
+
+    fn durable_process_ref(
+        &self,
+        role: DisplayProcessRole,
+    ) -> Result<ResourceRef, WorkerEffectError> {
+        let name = match role {
+            DisplayProcessRole::HostProxy => "display-host-proxy",
+            DisplayProcessRole::GuestFrontend => "display-guest-frontend",
+        };
+        let rendered = format!(
+            "Process/{name}-{}",
+            durable_display_suffix(
+                self.wayland_session_uid
+                    .as_ref()
+                    .ok_or(WorkerEffectError::LaunchRejected)?,
+                role,
+            )
+        );
+        ResourceRef::parse(&rendered).map_err(|_| WorkerEffectError::LaunchRejected)
+    }
+
+    fn durable_endpoint_ref(
+        &self,
+        role: DisplayProcessRole,
+    ) -> Result<ResourceRef, WorkerEffectError> {
+        let rendered = format!(
+            "Endpoint/display-endpoint-{}",
+            durable_display_suffix(
+                self.wayland_session_uid
+                    .as_ref()
+                    .ok_or(WorkerEffectError::LaunchRejected)?,
+                role,
+            )
+        );
+        ResourceRef::parse(&rendered).map_err(|_| WorkerEffectError::LaunchRejected)
+    }
+
+    fn durable_endpoint_payload(
+        &self,
+        role: DisplayProcessRole,
+        producer_ref: &ResourceRef,
+        generation: u64,
+    ) -> Result<Vec<u8>, WorkerEffectError> {
+        let zone = self
+            .resource_zone
+            .as_ref()
+            .ok_or(WorkerEffectError::LaunchRejected)?;
+        let owner_ref = self
+            .wayland_session_ref
+            .as_ref()
+            .ok_or(WorkerEffectError::LaunchRejected)?;
+        let provider_ref = ResourceRef::parse("Provider/display-wayland")
+            .map_err(|_| WorkerEffectError::LaunchRejected)?;
+        let (endpoint_class, transport, purpose, fingerprint) = match role {
+            DisplayProcessRole::HostProxy => (
+                EndpointClass::Data,
+                EndpointTransport::FdAttachment,
+                "wayland-cross-domain",
+                "display-wayland-data-v3",
+            ),
+            DisplayProcessRole::GuestFrontend => (
+                EndpointClass::Transport,
+                EndpointTransport::Vsock,
+                "guest-cross-domain",
+                "guest-frontend-v3",
+            ),
+        };
+        let endpoint_spec = EndpointSpec::new(
+            provider_ref,
+            producer_ref.clone(),
+            endpoint_class,
+            transport,
+            BoundedToken::parse(purpose).map_err(|_| WorkerEffectError::LaunchRejected)?,
+            Some(BoundedText::parse(fingerprint).map_err(|_| WorkerEffectError::LaunchRejected)?),
+            EndpointLocality::CrossDomain,
+            EndpointVisibility::Zone,
+            d2b_contracts_resource::v3::endpoint::EndpointAttachmentPolicy::new(
+                matches!(role, DisplayProcessRole::HostProxy),
+                u16::from(matches!(role, DisplayProcessRole::HostProxy)),
+            )
+            .map_err(|_| WorkerEffectError::LaunchRejected)?,
+            EndpointConsumerPolicy::new(Vec::new(), Vec::new(), vec![EndpointOperation::Resolve])
+                .map_err(|_| WorkerEffectError::LaunchRejected)?,
+            EndpointLifecyclePolicy::RecycleWithProducer,
+        )
+        .map_err(|_| WorkerEffectError::LaunchRejected)?;
+        let endpoint_ref = self.durable_endpoint_ref(role)?;
+        let payload = serde_json::json!({
+        "apiVersion": "resources.d2bus.org/v3",
+        "type": "Endpoint",
+        "metadata": {
+            "name": endpoint_ref.name().as_str(),
+            "zone": zone.as_str(),
+            "ownerRef": owner_ref.to_canonical_string(),
+            "finalizers": [],
+            "deletionRequestedAt": null,
+            "createdAt": "1970-01-01T00:00:00.000Z",
+            "updatedAt": "1970-01-01T00:00:00.000Z",
+            "managedBy": "controller",
+            "generation": generation.max(1),
+            "revision": 1
+        },
+        "spec": endpoint_spec,
+        "status": {
+            "completedAt": null,
+            "conditions": [],
+            "lastReconciledAt": null,
+            "observedGeneration": 0,
+            "outcome": null,
+            "phase": "Pending",
+            "resource": {
+                "readiness": "Pending",
+                "observedProducerGeneration": 0,
+                "observedResourceGeneration": generation.max(1),
+                "endpointGeneration": 0,
+                "connectionAvailability": "unavailable",
+                "leaseAvailability": "lease-required"
+            },
+            "startedAt": null,
+            "update": {
+                "dependencies": {"count": 0, "refs": []},
+                "disruption": "None",
+                "lastAssessedAt": null,
+                "observedGeneration": 0,
+                "operationId": null,
+                "owned": {"count": 0, "refs": []},
+                "preserveState": true,
+                "reasons": [],
+                "state": "Unknown",
+                "targetGeneration": generation.max(1)
+            }
+        }
+        });
+        let bytes = serde_json::to_vec(&payload).map_err(|_| WorkerEffectError::LaunchRejected)?;
+        ResourceEnvelope::from_json(
+            &CanonicalJsonValue::parse(&bytes)
+                .map_err(|_| WorkerEffectError::LaunchRejected)?
+                .to_canonical_bytes(),
+        )
+        .map_err(|_| WorkerEffectError::LaunchRejected)?;
+        Ok(CanonicalJsonValue::parse(&bytes)
+            .map_err(|_| WorkerEffectError::LaunchRejected)?
+            .to_canonical_bytes())
+    }
+
+    fn durable_process_payload(
+        &self,
+        role: DisplayProcessRole,
+        binding: &DisplayLaunchBinding,
+    ) -> Result<Vec<u8>, WorkerEffectError> {
+        let execution_ref = match role {
+            DisplayProcessRole::HostProxy => self
+                .host_execution_ref
+                .as_ref()
+                .ok_or(WorkerEffectError::LaunchRejected)?,
+            DisplayProcessRole::GuestFrontend => self
+                .guest_subject
+                .as_ref()
+                .ok_or(WorkerEffectError::LaunchRejected)?,
+        }
+        .clone();
+        let template = match role {
+            DisplayProcessRole::HostProxy => "wayland-proxy-worker",
+            DisplayProcessRole::GuestFrontend => "wayland-frontend-worker",
+        };
+        let provider = match role {
+            DisplayProcessRole::HostProxy => "Provider/system-minijail",
+            DisplayProcessRole::GuestFrontend => "Provider/system-systemd",
+        };
+        let process = ProcessSpec::minimal(
+            ExecutionSpec::minimal(
+                execution_ref,
+                ProcessClass::Worker,
+                BoundedToken::parse(template).map_err(|_| WorkerEffectError::LaunchRejected)?,
+            )
+            .map_err(|_| WorkerEffectError::LaunchRejected)?,
+        );
+        let mut spec =
+            serde_json::to_value(process).map_err(|_| WorkerEffectError::LaunchRejected)?;
+        let spec_object = spec
+            .as_object_mut()
+            .ok_or(WorkerEffectError::LaunchRejected)?;
+        spec_object.insert("providerRef".to_owned(), serde_json::json!(provider));
+        spec_object.insert(
+            "updatePolicy".to_owned(),
+            serde_json::json!({
+                "disruptive": "manual",
+                "nonDisruptive": "automatic"
+            }),
+        );
+        let process_ref = self.durable_process_ref(role)?;
+        let owner_ref = self
+            .wayland_session_ref
+            .as_ref()
+            .ok_or(WorkerEffectError::LaunchRejected)?;
+        let generation = binding.policy_generation().max(1);
+        let payload = serde_json::json!({
+            "apiVersion": "resources.d2bus.org/v3",
+            "type": "Process",
+            "metadata": {
+                "name": process_ref.name().as_str(),
+                "zone": self.resource_zone.as_ref()
+                    .ok_or(WorkerEffectError::LaunchRejected)?.as_str(),
+                "ownerRef": owner_ref.to_canonical_string(),
+                "annotations": {
+                    PROCESS_RESTART_ANNOTATION: generation.to_string()
+                },
+                "finalizers": [],
+                "deletionRequestedAt": null,
+                "createdAt": "1970-01-01T00:00:00.000Z",
+                "updatedAt": "1970-01-01T00:00:00.000Z",
+                "managedBy": "controller",
+                "generation": generation,
+                "revision": 1
+            },
+            "spec": spec,
+            "status": {
+                "completedAt": null,
+                "conditions": [],
+                "lastReconciledAt": null,
+                "observedGeneration": 0,
+                "outcome": null,
+                "phase": "Pending",
+                "resource": {},
+                "startedAt": null,
+                "update": {
+                    "dependencies": {"count": 0, "refs": []},
+                    "disruption": "None",
+                    "lastAssessedAt": null,
+                    "observedGeneration": 0,
+                    "operationId": null,
+                    "owned": {"count": 0, "refs": []},
+                    "preserveState": true,
+                    "reasons": [],
+                    "state": "Unknown",
+                    "targetGeneration": generation
+                }
+            }
+        });
+        let bytes = serde_json::to_vec(&payload).map_err(|_| WorkerEffectError::LaunchRejected)?;
+        CanonicalJsonValue::parse(&bytes)
+            .map(|value| value.to_canonical_bytes())
+            .map_err(|_| WorkerEffectError::LaunchRejected)
+    }
+
+    fn durable_state(
+        &self,
+        role: DisplayProcessRole,
+    ) -> Result<Option<(WorkerState, DurableDisplayProcess)>, WorkerEffectError> {
+        let Some(client) = self.resource_client.clone() else {
+            return Ok(None);
+        };
+        let zone = self
+            .resource_zone
+            .clone()
+            .ok_or(WorkerEffectError::WorkerUnavailable)?;
+        let process_ref = self.durable_process_ref(role)?;
+        let owner_ref = self
+            .wayland_session_ref
+            .clone()
+            .ok_or(WorkerEffectError::WorkerUnavailable)?;
+        let owner_uid = self
+            .wayland_session_uid
+            .clone()
+            .ok_or(WorkerEffectError::WorkerUnavailable)?;
+        let expected_execution_ref = match role {
+            DisplayProcessRole::HostProxy => self
+                .host_execution_ref
+                .clone()
+                .ok_or(WorkerEffectError::WorkerUnavailable)?,
+            DisplayProcessRole::GuestFrontend => self
+                .guest_subject
+                .clone()
+                .ok_or(WorkerEffectError::WorkerUnavailable)?,
+        };
+        let expected_generation = self.policy_generation.max(1);
+        run_effect(move || async move {
+            let response = client
+                .get(resource_get_request(
+                    &zone,
+                    &process_ref,
+                    "display-process-get",
+                ))
+                .await;
+            if let Some(error) = response.error.as_ref() {
+                if error.kind.enum_value_or_default()
+                    == d2b_contracts_resource::resource_proto::ResourceErrorKind::RESOURCE_ERROR_KIND_RESOURCE_NOT_FOUND
+                {
+                    return Ok(None);
+                }
+                return Err(WorkerEffectError::WorkerUnavailable);
+            }
+            let resource = response
+                .resource
+                .0
+                .ok_or(WorkerEffectError::WorkerUnavailable)?;
+            let envelope = ResourceEnvelope::from_json(&resource.canonical_json)
+                .map_err(|_| WorkerEffectError::WorkerUnavailable)?;
+            let owner_response = client
+                .get(resource_get_request(&zone, &owner_ref, "display-owner-get"))
+                .await;
+            let owner_resource = owner_response
+                .resource
+                .0
+                .ok_or(WorkerEffectError::WorkerUnavailable)?;
+            if owner_resource.identity.uid.as_deref() != Some(owner_uid.as_str()) {
+                return Err(WorkerEffectError::LaunchRejected);
+            }
+            let state = project_process_state(&envelope)?;
+            if !durable_envelope_matches(
+                &envelope,
+                role,
+                &process_ref,
+                &zone,
+                &owner_ref,
+                &owner_uid,
+                &expected_execution_ref,
+            ) {
+                return Err(WorkerEffectError::LaunchRejected);
+            }
+            let state = if display_policy_generation(&resource.canonical_json)
+                == Some(expected_generation)
+            {
+                state
+            } else {
+                WorkerState::Starting
+            };
+            let record = DurableDisplayProcess {
+                resource_ref: process_ref,
+                resource_uid: envelope.metadata().uid().clone(),
+                generation: envelope.metadata().generation().get(),
+                revision: envelope.metadata().revision().get(),
+                restart_count: process_restart_count(&resource.canonical_json),
+                deletion_requested: metadata_deletion_requested(&resource.canonical_json),
+            };
+            Ok(Some((state, record)))
+        })
+    }
+
+    fn ensure_durable_endpoint(
+        &mut self,
+        role: DisplayProcessRole,
+        producer: &DurableDisplayProcess,
+    ) -> Result<DurableDisplayEndpoint, WorkerEffectError> {
+        let client = self
+            .resource_client
+            .clone()
+            .ok_or(WorkerEffectError::LaunchRejected)?;
+        let zone = self
+            .resource_zone
+            .clone()
+            .ok_or(WorkerEffectError::LaunchRejected)?;
+        let endpoint_ref = self.durable_endpoint_ref(role)?;
+        let payload =
+            self.durable_endpoint_payload(role, &producer.resource_ref, producer.generation)?;
+        let owner_ref = self
+            .wayland_session_ref
+            .clone()
+            .ok_or(WorkerEffectError::LaunchRejected)?;
+        let owner_uid = self
+            .wayland_session_uid
+            .clone()
+            .ok_or(WorkerEffectError::LaunchRejected)?;
+        let producer_ref = producer.resource_ref.clone();
+        let result = run_effect(move || async move {
+            let owner = client
+                .get(resource_get_request(
+                    &zone,
+                    &owner_ref,
+                    "display-endpoint-owner-get",
+                ))
+                .await;
+            let owner_resource = owner
+                .resource
+                .0
+                .ok_or(WorkerEffectError::WorkerUnavailable)?;
+            if owner_resource.identity.uid.as_deref() != Some(owner_uid.as_str()) {
+                return Err(WorkerEffectError::LaunchRejected);
+            }
+            let get = client
+                .get(resource_get_request(
+                    &zone,
+                    &endpoint_ref,
+                    "display-endpoint-get",
+                ))
+                .await;
+            if let Some(resource) = get.resource.0 {
+                return endpoint_record_from_response(
+                    endpoint_ref,
+                    *resource,
+                    role,
+                    &zone,
+                    &owner_ref,
+                    &owner_uid,
+                    &producer_ref,
+                );
+            }
+            if let Some(error) = get.error.as_ref()
+                && error.kind.enum_value_or_default()
+                    != d2b_contracts_resource::resource_proto::ResourceErrorKind::RESOURCE_ERROR_KIND_RESOURCE_NOT_FOUND
+            {
+                return Err(WorkerEffectError::WorkerUnavailable);
+            }
+            let target = resource_wire_identity(&zone, &endpoint_ref, None, None);
+            let owner = resource_wire_identity(&zone, &owner_ref, Some(&owner_uid), None);
+            let mut body = wire::ResourceEnvelopeBytes::new();
+            body.identity = protobuf::MessageField::some(target.clone());
+            body.canonical_json = payload.clone();
+            body.payload_digest = canonical_digest(RESOURCE_ENVELOPE_DOMAIN_TAG, &payload);
+            let mut precondition = wire::Precondition::new();
+            precondition.kind = protobuf::EnumOrUnknown::new(
+                wire::PreconditionKind::PRECONDITION_KIND_CREATE_ABSENT,
+            );
+            let mut mutation = wire::Mutation::new();
+            mutation.kind = protobuf::EnumOrUnknown::new(wire::MutationKind::MUTATION_KIND_CREATE);
+            mutation.target = protobuf::MessageField::some(target);
+            mutation.precondition = protobuf::MessageField::some(precondition);
+            mutation.resource = protobuf::MessageField::some(body);
+            mutation.owner = protobuf::MessageField::some(owner);
+            let mut request = wire::CreateRequest::new();
+            request.meta = protobuf::MessageField::some(resource_request_meta(
+                &resource_operation_id_with_key(
+                    "display-endpoint-create",
+                    &zone,
+                    &endpoint_ref,
+                    &payload,
+                ),
+            ));
+            request.mutation = protobuf::MessageField::some(mutation);
+            let created = client.create(request).await;
+            if let Some(resource) = created.resource.0 {
+                return endpoint_record_from_response(
+                    endpoint_ref,
+                    *resource,
+                    role,
+                    &zone,
+                    &owner_ref,
+                    &owner_uid,
+                    &producer_ref,
+                );
+            }
+            if created.error.is_some() {
+                let adopted = client
+                    .get(resource_get_request(
+                        &zone,
+                        &endpoint_ref,
+                        "display-endpoint-adopt-get",
+                    ))
+                    .await;
+                if let Some(resource) = adopted.resource.0 {
+                    return endpoint_record_from_response(
+                        endpoint_ref,
+                        *resource,
+                        role,
+                        &zone,
+                        &owner_ref,
+                        &owner_uid,
+                        &producer_ref,
+                    );
+                }
+            }
+            Err(WorkerEffectError::WorkerUnavailable)
+        })?;
+        self.resource_endpoints.insert(role, result.clone());
+        Ok(result)
+    }
+
+    fn ensure_wayland_session_finalizer(&self) -> Result<(), WorkerEffectError> {
+        let client = self
+            .resource_client
+            .clone()
+            .ok_or(WorkerEffectError::LaunchRejected)?;
+        let zone = self
+            .resource_zone
+            .clone()
+            .ok_or(WorkerEffectError::LaunchRejected)?;
+        let session_ref = self
+            .wayland_session_ref
+            .clone()
+            .ok_or(WorkerEffectError::LaunchRejected)?;
+        run_effect(move || async move {
+            let response = client
+                .get(resource_get_request(
+                    &zone,
+                    &session_ref,
+                    "display-session-finalizer-get",
+                ))
+                .await;
+            let resource = response
+                .resource
+                .0
+                .ok_or(WorkerEffectError::WorkerUnavailable)?;
+            let envelope = ResourceEnvelope::from_json(&resource.canonical_json)
+                .map_err(|_| WorkerEffectError::WorkerUnavailable)?;
+            let has_finalizer = CanonicalJsonValue::parse(&resource.canonical_json)
+                .ok()
+                .and_then(|value| match value {
+                    CanonicalJsonValue::Object(root) => root
+                        .get("metadata")
+                        .and_then(CanonicalJsonValue::as_object)
+                        .and_then(|metadata| match metadata.get("finalizers") {
+                            Some(CanonicalJsonValue::Array(finalizers)) => Some(finalizers),
+                            _ => None,
+                        })
+                        .map(|finalizers| {
+                            finalizers.iter().any(|finalizer| {
+                                matches!(
+                                    finalizer,
+                                    CanonicalJsonValue::String(value)
+                                        if value == d2b_provider_display_wayland::FINALIZER
+                                )
+                            })
+                        }),
+                    _ => None,
+                })
+                .ok_or(WorkerEffectError::WorkerUnavailable)?;
+            if has_finalizer {
+                return Ok(());
+            }
+            let mut mutation = wire::Mutation::new();
+            mutation.kind = protobuf::EnumOrUnknown::new(
+                wire::MutationKind::MUTATION_KIND_UPDATE_FINALIZERS,
+            );
+            mutation.target = protobuf::MessageField::some(resource_wire_identity(
+                &zone,
+                &session_ref,
+                Some(envelope.metadata().uid()),
+                Some(envelope.metadata().revision().get()),
+            ));
+            let mut precondition = wire::Precondition::new();
+            precondition.kind =
+                protobuf::EnumOrUnknown::new(wire::PreconditionKind::PRECONDITION_KIND_EXACT_REVISION);
+            precondition.expected_revision = Some(envelope.metadata().revision().get());
+            precondition.expected_uid = Some(envelope.metadata().uid().as_str().to_owned());
+            mutation.precondition = protobuf::MessageField::some(precondition);
+            mutation
+                .add_finalizers
+                .push(d2b_provider_display_wayland::FINALIZER.to_owned());
+            let mut request = wire::UpdateFinalizersRequest::new();
+            request.meta = protobuf::MessageField::some(resource_request_meta(
+                &resource_operation_id_with_key(
+                    "display-session-finalizer-add",
+                    &zone,
+                    &session_ref,
+                    &resource.canonical_json,
+                ),
+            ));
+            request.mutation = protobuf::MessageField::some(mutation);
+            if client.update_finalizers(request).await.error.is_some() {
+                return Err(WorkerEffectError::WorkerUnavailable);
+            }
+            Ok(())
+        })
+        .map_err(|_| WorkerEffectError::WorkerUnavailable)
+    }
+
+    fn update_durable_endpoint_status(
+        &mut self,
+        role: DisplayProcessRole,
+        producer: &DurableDisplayProcess,
+        state: WorkerState,
+    ) -> Result<(), WorkerEffectError> {
+        let endpoint = self.ensure_durable_endpoint(role, producer)?;
+        if endpoint.deletion_requested {
+            return Err(WorkerEffectError::CleanupIncomplete);
+        }
+        let client = self
+            .resource_client
+            .clone()
+            .ok_or(WorkerEffectError::WorkerUnavailable)?;
+        let zone = self
+            .resource_zone
+            .clone()
+            .ok_or(WorkerEffectError::WorkerUnavailable)?;
+        let endpoint_ref = endpoint.resource_ref.clone();
+        let endpoint_uid = endpoint.resource_uid.clone();
+        let status_endpoint_ref = endpoint_ref.clone();
+        let status_endpoint_uid = endpoint_uid.clone();
+        let endpoint_revision = endpoint.revision;
+        let endpoint_generation = producer.restart_count.saturating_add(1).max(1);
+        let desired_phase = match state {
+            WorkerState::Ready { .. } => "Ready",
+            WorkerState::Failed { .. } => "Failed",
+            WorkerState::Terminal { deleted: true } => "Deleted",
+            WorkerState::Terminal { deleted: false } => "Succeeded",
+            WorkerState::Starting => "Pending",
+        };
+        let readiness = match state {
+            WorkerState::Ready { .. } => "Ready",
+            WorkerState::Failed { .. } => "Failed",
+            WorkerState::Terminal { deleted: true } => "Deleted",
+            WorkerState::Terminal { deleted: false } => "Unavailable",
+            WorkerState::Starting => "Pending",
+        };
+        let connection = matches!(state, WorkerState::Ready { .. });
+        let producer_ref = producer.resource_ref.clone();
+        let producer_generation = producer.generation;
+        let owner_ref = self
+            .wayland_session_ref
+            .clone()
+            .ok_or(WorkerEffectError::WorkerUnavailable)?;
+        let owner_uid = self
+            .wayland_session_uid
+            .clone()
+            .ok_or(WorkerEffectError::WorkerUnavailable)?;
+        let updated = run_effect(move || async move {
+            let current = client
+                .get(resource_get_request(
+                    &zone,
+                    &status_endpoint_ref,
+                    "display-endpoint-status-get",
+                ))
+                .await;
+            let current_resource = current
+                .resource
+                .0
+                .ok_or(WorkerEffectError::WorkerUnavailable)?;
+            let current_envelope = ResourceEnvelope::from_json(&current_resource.canonical_json)
+                .map_err(|_| WorkerEffectError::WorkerUnavailable)?;
+            if !durable_endpoint_matches(
+                &current_envelope,
+                role,
+                &status_endpoint_ref,
+                &zone,
+                &owner_ref,
+                &owner_uid,
+                &producer_ref,
+            ) {
+                return Err(WorkerEffectError::LaunchRejected);
+            }
+            let mut value = CanonicalJsonValue::parse(&current_resource.canonical_json)
+                .map_err(|_| WorkerEffectError::WorkerUnavailable)?;
+            let CanonicalJsonValue::Object(root) = &mut value else {
+                return Err(WorkerEffectError::WorkerUnavailable);
+            };
+            let Some(CanonicalJsonValue::Object(status)) = root.get_mut("status") else {
+                return Err(WorkerEffectError::WorkerUnavailable);
+            };
+            let current_phase = status.get("phase").cloned();
+            let current_generation = status
+                .get("resource")
+                .and_then(|resource| match resource {
+                    CanonicalJsonValue::Object(resource_status) => {
+                        resource_status.get("endpointGeneration")
+                    }
+                    _ => None,
+                })
+                .cloned();
+            if matches!(current_phase, Some(CanonicalJsonValue::String(value)) if value == desired_phase)
+                && matches!(current_generation, Some(CanonicalJsonValue::Integer(value)) if value == endpoint_generation as i64)
+            {
+                return Ok(current_resource);
+            }
+            status.insert(
+                "phase".to_owned(),
+                CanonicalJsonValue::String(desired_phase.to_owned()),
+            );
+            status.insert(
+                "observedGeneration".to_owned(),
+                CanonicalJsonValue::Integer(current_envelope.metadata().generation().get() as i64),
+            );
+            {
+                let Some(CanonicalJsonValue::Object(resource_status)) = status.get_mut("resource")
+                else {
+                    return Err(WorkerEffectError::WorkerUnavailable);
+                };
+                resource_status.insert(
+                    "readiness".to_owned(),
+                    CanonicalJsonValue::String(readiness.to_owned()),
+                );
+                resource_status.insert(
+                    "observedProducerGeneration".to_owned(),
+                    CanonicalJsonValue::Integer(producer_generation as i64),
+                );
+                resource_status.insert(
+                    "observedResourceGeneration".to_owned(),
+                    CanonicalJsonValue::Integer(
+                        current_envelope.metadata().generation().get() as i64
+                    ),
+                );
+                resource_status.insert(
+                    "endpointGeneration".to_owned(),
+                    CanonicalJsonValue::Integer(endpoint_generation as i64),
+                );
+                resource_status.insert(
+                    "connectionAvailability".to_owned(),
+                    CanonicalJsonValue::String(
+                        if connection {
+                            "available"
+                        } else {
+                            "unavailable"
+                        }
+                        .to_owned(),
+                    ),
+                );
+            }
+            if let Some(CanonicalJsonValue::Object(update)) = status.get_mut("update") {
+                update.insert(
+                    "observedGeneration".to_owned(),
+                    CanonicalJsonValue::Integer(
+                        current_envelope.metadata().generation().get() as i64
+                    ),
+                );
+            }
+            let canonical = value.to_canonical_bytes();
+            let mut operation_key =
+                format!("{}:{}:", status_endpoint_uid.as_str(), endpoint_revision).into_bytes();
+            operation_key.extend_from_slice(&canonical);
+            let operation_id = resource_operation_id_with_key(
+                "display-endpoint-status",
+                &zone,
+                &status_endpoint_ref,
+                &operation_key,
+            );
+            let envelope = ResourceEnvelope::from_json(&canonical)
+                .map_err(|_| WorkerEffectError::WorkerUnavailable)?;
+            let mut resource = wire::ResourceEnvelopeBytes::new();
+            resource.identity = protobuf::MessageField::some(resource_wire_identity(
+                &zone,
+                &status_endpoint_ref,
+                Some(&status_endpoint_uid),
+                Some(endpoint_revision),
+            ));
+            resource.canonical_json = canonical;
+            resource.payload_digest = envelope
+                .digest()
+                .map_err(|_| WorkerEffectError::WorkerUnavailable)?;
+            let mut mutation = wire::Mutation::new();
+            mutation.kind =
+                protobuf::EnumOrUnknown::new(wire::MutationKind::MUTATION_KIND_UPDATE_STATUS);
+            mutation.target = protobuf::MessageField::some(resource_wire_identity(
+                &zone,
+                &status_endpoint_ref,
+                Some(&status_endpoint_uid),
+                Some(endpoint_revision),
+            ));
+            let mut precondition = wire::Precondition::new();
+            precondition.kind = protobuf::EnumOrUnknown::new(
+                wire::PreconditionKind::PRECONDITION_KIND_EXACT_REVISION,
+            );
+            precondition.expected_revision = Some(endpoint_revision);
+            precondition.expected_uid = Some(status_endpoint_uid.as_str().to_owned());
+            mutation.precondition = protobuf::MessageField::some(precondition);
+            mutation.resource = protobuf::MessageField::some(resource);
+            mutation.owner = protobuf::MessageField::some(resource_wire_identity(
+                &zone,
+                &owner_ref,
+                Some(&owner_uid),
+                None,
+            ));
+            let mut request = wire::UpdateStatusRequest::new();
+            request.meta = protobuf::MessageField::some(resource_request_meta(
+                &operation_id,
+            ));
+            request.mutation = protobuf::MessageField::some(mutation);
+            let response = client.update_status(request).await;
+            if response.error.is_some() {
+                return Err(WorkerEffectError::WorkerUnavailable);
+            }
+            Ok(response
+                .resource
+                .0
+                .ok_or(WorkerEffectError::WorkerUnavailable)?)
+        })?;
+        let envelope = ResourceEnvelope::from_json(&updated.canonical_json)
+            .map_err(|_| WorkerEffectError::WorkerUnavailable)?;
+        let endpoint_generation = envelope
+            .status()
+            .resource()
+            .get("endpointGeneration")
+            .and_then(|value| match value {
+                CanonicalJsonValue::Integer(value) => u64::try_from(*value).ok(),
+                _ => None,
+            })
+            .unwrap_or(endpoint_generation);
+        self.resource_endpoints.insert(
+            role,
+            DurableDisplayEndpoint {
+                resource_ref: endpoint_ref,
+                resource_uid: endpoint_uid,
+                revision: updated
+                    .identity
+                    .as_ref()
+                    .and_then(|identity| identity.revision)
+                    .unwrap_or(endpoint_revision),
+                generation: endpoint_generation,
+                deletion_requested: metadata_deletion_requested(&updated.canonical_json),
+            },
+        );
+        Ok(())
+    }
+
+    fn stop_durable_endpoint(&mut self, role: DisplayProcessRole) -> Result<(), WorkerEffectError> {
+        let endpoint_ref = self.durable_endpoint_ref(role)?;
+        let owner_ref = self
+            .wayland_session_ref
+            .clone()
+            .ok_or(WorkerEffectError::CleanupIncomplete)?;
+        let owner_uid = self
+            .wayland_session_uid
+            .clone()
+            .ok_or(WorkerEffectError::CleanupIncomplete)?;
+        let producer_ref = self.durable_process_ref(role)?;
+        let deadline = Instant::now() + Duration::from_secs(2);
+        loop {
+            let client = self
+                .resource_client
+                .clone()
+                .ok_or(WorkerEffectError::CleanupIncomplete)?;
+            let zone = self
+                .resource_zone
+                .clone()
+                .ok_or(WorkerEffectError::CleanupIncomplete)?;
+            let current_endpoint_ref = endpoint_ref.clone();
+            let current_zone = zone.clone();
+            let current = run_effect(move || async move {
+                Ok(client
+                    .get(resource_get_request(
+                        &current_zone,
+                        &current_endpoint_ref,
+                        "display-endpoint-delete-reread",
+                    ))
+                    .await)
+            })?;
+            if current.resource.0.is_none() {
+                let is_not_found = current.error.as_ref().is_some_and(|error| {
+                    error.kind.enum_value_or_default()
+                        == d2b_contracts_resource::resource_proto::ResourceErrorKind::RESOURCE_ERROR_KIND_RESOURCE_NOT_FOUND
+                });
+                if is_not_found {
+                    self.resource_endpoints.remove(&role);
+                    return Ok(());
+                }
+                return Err(WorkerEffectError::CleanupIncomplete);
+            }
+            if current.error.is_some() {
+                return Err(WorkerEffectError::CleanupIncomplete);
+            }
+            let current_record = endpoint_record_from_response(
+                endpoint_ref.clone(),
+                *current
+                    .resource
+                    .0
+                    .ok_or(WorkerEffectError::CleanupIncomplete)?,
+                role,
+                &zone,
+                &owner_ref,
+                &owner_uid,
+                &producer_ref,
+            )?;
+            self.resource_endpoints
+                .insert(role, current_record.clone());
+            if !current_record.deletion_requested {
+                let uid = current_record.resource_uid.clone();
+                let revision = current_record.revision;
+                let target = current_record.resource_ref.clone();
+                let delete_key = format!("{}:{}", uid.as_str(), revision);
+                let client = self
+                    .resource_client
+                    .clone()
+                    .ok_or(WorkerEffectError::CleanupIncomplete)?;
+                let zone = self
+                    .resource_zone
+                    .clone()
+                    .ok_or(WorkerEffectError::CleanupIncomplete)?;
+                run_effect(move || async move {
+                    let mut mutation = wire::Mutation::new();
+                    mutation.kind =
+                        protobuf::EnumOrUnknown::new(wire::MutationKind::MUTATION_KIND_DELETE);
+                    mutation.target = protobuf::MessageField::some(resource_wire_identity(
+                        &zone,
+                        &target,
+                        Some(&uid),
+                        Some(revision),
+                    ));
+                    let mut precondition = wire::Precondition::new();
+                    precondition.kind = protobuf::EnumOrUnknown::new(
+                        wire::PreconditionKind::PRECONDITION_KIND_EXACT_REVISION,
+                    );
+                    precondition.expected_revision = Some(revision);
+                    precondition.expected_uid = Some(uid.as_str().to_owned());
+                    mutation.precondition = protobuf::MessageField::some(precondition);
+                    let mut request = wire::DeleteRequest::new();
+                    request.meta = protobuf::MessageField::some(resource_request_meta(
+                        &resource_operation_id_with_key(
+                            "display-endpoint-delete",
+                            &zone,
+                            &target,
+                            delete_key.as_bytes(),
+                        ),
+                    ));
+                    request.mutation = protobuf::MessageField::some(mutation);
+                    if client.delete(request).await.error.is_some() {
+                        return Err(WorkerEffectError::CleanupIncomplete);
+                    }
+                    Ok(())
+                })?;
+                continue;
+            }
+            if Instant::now() >= deadline {
+                return Err(WorkerEffectError::CleanupIncomplete);
+            }
+            thread::sleep(Duration::from_millis(50));
+        }
+    }
+
+    fn ensure_durable_process(
+        &mut self,
+        role: DisplayProcessRole,
+        binding: &DisplayLaunchBinding,
+    ) -> Result<WorkerLaunchReceipt, WorkerEffectError> {
+        self.ensure_wayland_session_finalizer()?;
+        let client = self
+            .resource_client
+            .clone()
+            .ok_or(WorkerEffectError::LaunchRejected)?;
+        let zone = self
+            .resource_zone
+            .clone()
+            .ok_or(WorkerEffectError::LaunchRejected)?;
+        let process_ref = self.durable_process_ref(role)?;
+        let payload = self.durable_process_payload(role, binding)?;
+        let owner_uid = self
+            .wayland_session_uid
+            .clone()
+            .ok_or(WorkerEffectError::LaunchRejected)?;
+        let owner_ref = self
+            .wayland_session_ref
+            .clone()
+            .ok_or(WorkerEffectError::LaunchRejected)?;
+        let expected_execution_ref = match role {
+            DisplayProcessRole::HostProxy => self
+                .host_execution_ref
+                .clone()
+                .ok_or(WorkerEffectError::LaunchRejected)?,
+            DisplayProcessRole::GuestFrontend => self
+                .guest_subject
+                .clone()
+                .ok_or(WorkerEffectError::LaunchRejected)?,
+        };
+        let expected_generation = binding.policy_generation().max(1);
+        let result = run_effect(move || async move {
+            let owner = client
+                .get(resource_get_request(&zone, &owner_ref, "display-owner-get"))
+                .await;
+            let owner_resource = owner
+                .resource
+                .0
+                .ok_or(WorkerEffectError::WorkerUnavailable)?;
+            if owner_resource.identity.uid.as_deref() != Some(owner_uid.as_str()) {
+                return Err(WorkerEffectError::LaunchRejected);
+            }
+            let get = client
+                .get(resource_get_request(
+                    &zone,
+                    &process_ref,
+                    "display-process-get",
+                ))
+                .await;
+            if let Some(resource) = get.resource.0 {
+                let resource = *resource;
+                let envelope = ResourceEnvelope::from_json(&resource.canonical_json)
+                    .map_err(|_| WorkerEffectError::WorkerUnavailable)?;
+                if !durable_envelope_matches(
+                    &envelope,
+                    role,
+                    &process_ref,
+                    &zone,
+                    &owner_ref,
+                    &owner_uid,
+                    &expected_execution_ref,
+                ) {
+                    return Err(WorkerEffectError::LaunchRejected);
+                }
+                let (resource, policy_replaced) =
+                    if display_policy_generation(&resource.canonical_json)
+                        == Some(expected_generation)
+                    {
+                        (resource, false)
+                    } else {
+                    let canonical_json = update_display_policy_annotation(
+                        &resource.canonical_json,
+                        expected_generation,
+                    )?;
+                    let uid = envelope.metadata().uid().clone();
+                    let revision = envelope.metadata().revision().get();
+                    let target =
+                        resource_wire_identity(&zone, &process_ref, Some(&uid), Some(revision));
+                    let mut body = wire::ResourceEnvelopeBytes::new();
+                    body.identity = protobuf::MessageField::some(target.clone());
+                    body.canonical_json = canonical_json.clone();
+                    body.payload_digest = ResourceEnvelope::from_json(&body.canonical_json)
+                        .map_err(|_| WorkerEffectError::WorkerUnavailable)?
+                        .digest()
+                        .map_err(|_| WorkerEffectError::WorkerUnavailable)?;
+                    let mut precondition = wire::Precondition::new();
+                    precondition.kind = protobuf::EnumOrUnknown::new(
+                        wire::PreconditionKind::PRECONDITION_KIND_EXACT_REVISION,
+                    );
+                    precondition.expected_revision = Some(revision);
+                    precondition.expected_uid = Some(uid.as_str().to_owned());
+                    let mut mutation = wire::Mutation::new();
+                    mutation.kind = protobuf::EnumOrUnknown::new(
+                        wire::MutationKind::MUTATION_KIND_UPDATE_METADATA,
+                    );
+                    mutation.target = protobuf::MessageField::some(target);
+                    mutation.precondition = protobuf::MessageField::some(precondition);
+                    mutation.owner = protobuf::MessageField::some(resource_wire_identity(
+                        &zone,
+                        &owner_ref,
+                        Some(&owner_uid),
+                        None,
+                    ));
+                    mutation.resource = protobuf::MessageField::some(body);
+                    let mut operation_key =
+                        format!("{}:{}:", uid.as_str(), revision).into_bytes();
+                    operation_key.extend_from_slice(&canonical_json);
+                    let mut request = wire::UpdateMetadataRequest::new();
+                    request.meta = protobuf::MessageField::some(resource_request_meta(
+                        &resource_operation_id_with_key(
+                            "display-process-policy-update",
+                            &zone,
+                            &process_ref,
+                            &operation_key,
+                        ),
+                    ));
+                    request.mutation = protobuf::MessageField::some(mutation);
+                    let updated = client.update_metadata(request).await;
+                    if updated.error.is_some() {
+                        return Err(WorkerEffectError::WorkerUnavailable);
+                    }
+                    (
+                        *updated
+                            .resource
+                            .0
+                            .ok_or(WorkerEffectError::WorkerUnavailable)?,
+                        true,
+                    )
+                };
+                let (state, record) = durable_record_from_response(
+                    process_ref,
+                    resource,
+                    role,
+                    expected_generation,
+                    &zone,
+                    &owner_ref,
+                    &owner_uid,
+                    &expected_execution_ref,
+                )?;
+                return Ok((
+                    if policy_replaced {
+                        WorkerState::Starting
+                    } else {
+                        state
+                    },
+                    record,
+                ));
+            }
+            if let Some(error) = get.error.as_ref()
+                && error.kind.enum_value_or_default()
+                    != d2b_contracts_resource::resource_proto::ResourceErrorKind::RESOURCE_ERROR_KIND_RESOURCE_NOT_FOUND
+            {
+                return Err(WorkerEffectError::WorkerUnavailable);
+            }
+            let target = resource_wire_identity(&zone, &process_ref, None, None);
+            let owner = resource_wire_identity(&zone, &owner_ref, Some(&owner_uid), None);
+            let mut body = wire::ResourceEnvelopeBytes::new();
+            body.identity = protobuf::MessageField::some(target.clone());
+            body.canonical_json = payload.clone();
+            body.payload_digest = canonical_digest(RESOURCE_ENVELOPE_DOMAIN_TAG, &payload);
+            let mut precondition = wire::Precondition::new();
+            precondition.kind = protobuf::EnumOrUnknown::new(
+                wire::PreconditionKind::PRECONDITION_KIND_CREATE_ABSENT,
+            );
+            let mut mutation = wire::Mutation::new();
+            mutation.kind = protobuf::EnumOrUnknown::new(wire::MutationKind::MUTATION_KIND_CREATE);
+            mutation.target = protobuf::MessageField::some(target);
+            mutation.precondition = protobuf::MessageField::some(precondition);
+            mutation.resource = protobuf::MessageField::some(body);
+            mutation.owner = protobuf::MessageField::some(owner);
+            let mut request = wire::CreateRequest::new();
+            request.meta = protobuf::MessageField::some(resource_request_meta(
+                &resource_operation_id_with_key(
+                    "display-process-create",
+                    &zone,
+                    &process_ref,
+                    &payload,
+                ),
+            ));
+            request.mutation = protobuf::MessageField::some(mutation);
+            let created = client.create(request).await;
+            if let Some(resource) = created.resource.0 {
+                return durable_record_from_response(
+                    process_ref,
+                    *resource,
+                    role,
+                    expected_generation,
+                    &zone,
+                    &owner_ref,
+                    &owner_uid,
+                    &expected_execution_ref,
+                );
+            }
+            if created.error.is_some() {
+                let adopted = client
+                    .get(resource_get_request(
+                        &zone,
+                        &process_ref,
+                        "display-process-adopt-get",
+                    ))
+                    .await;
+                if let Some(resource) = adopted.resource.0 {
+                    return durable_record_from_response(
+                        process_ref,
+                        *resource,
+                        role,
+                        expected_generation,
+                        &zone,
+                        &owner_ref,
+                        &owner_uid,
+                        &expected_execution_ref,
+                    );
+                }
+                return Err(WorkerEffectError::WorkerUnavailable);
+            }
+            Err(WorkerEffectError::WorkerUnavailable)
+        })?;
+        self.resource_processes.insert(role, result.1.clone());
+        self.ensure_durable_endpoint(role, &result.1)?;
+        self.update_durable_endpoint_status(role, &result.1, result.0)?;
+        Ok(WorkerLaunchReceipt::from_supervisor(
+            role,
+            result.0,
+            binding.policy_generation(),
+            binding.teardown_generation(),
+            self.session_digest,
+        ))
+    }
+
+    fn stop_durable_process(
+        &mut self,
+        role: DisplayProcessRole,
+    ) -> Result<WorkerLaunchReceipt, WorkerEffectError> {
+        let state = self.durable_state(role)?;
+        let Some((worker_state, record)) = state else {
+            self.stop_durable_endpoint(role)?;
+            self.resource_processes.remove(&role);
+            return Ok(WorkerLaunchReceipt::from_supervisor(
+                role,
+                WorkerState::Terminal { deleted: true },
+                self.policy_generation,
+                self.teardown_generation,
+                self.session_digest,
+            ));
+        };
+        self.resource_processes.insert(role, record.clone());
+        if !matches!(worker_state, WorkerState::Terminal { deleted: true }) && !record.deletion_requested {
+            let client = self
+                .resource_client
+                .clone()
+                .ok_or(WorkerEffectError::CleanupIncomplete)?;
+            let zone = self
+                .resource_zone
+                .clone()
+                .ok_or(WorkerEffectError::CleanupIncomplete)?;
+            let process_ref = record.resource_ref.clone();
+            let uid = record.resource_uid.clone();
+            let revision = record.revision;
+            let delete_key = format!("{}:{}", uid.as_str(), revision);
+            run_effect(move || async move {
+                let mut mutation = wire::Mutation::new();
+                mutation.kind =
+                    protobuf::EnumOrUnknown::new(wire::MutationKind::MUTATION_KIND_DELETE);
+                mutation.target = protobuf::MessageField::some(resource_wire_identity(
+                    &zone,
+                    &process_ref,
+                    Some(&uid),
+                    Some(revision),
+                ));
+                let mut precondition = wire::Precondition::new();
+                precondition.kind = protobuf::EnumOrUnknown::new(
+                    wire::PreconditionKind::PRECONDITION_KIND_EXACT_REVISION,
+                );
+                precondition.expected_revision = Some(revision);
+                precondition.expected_uid = Some(uid.as_str().to_owned());
+                mutation.precondition = protobuf::MessageField::some(precondition);
+                let mut request = wire::DeleteRequest::new();
+                request.meta = protobuf::MessageField::some(resource_request_meta(
+                    &resource_operation_id_with_key(
+                        "display-process-delete",
+                        &zone,
+                        &process_ref,
+                        delete_key.as_bytes(),
+                    ),
+                ));
+                request.mutation = protobuf::MessageField::some(mutation);
+                let response = client.delete(request).await;
+                if response.error.is_some() {
+                    return Err(WorkerEffectError::CleanupIncomplete);
+                }
+                Ok(())
+            })?;
+        }
+        let deadline = Instant::now() + Duration::from_secs(2);
+        let state = loop {
+            let observed_state = match self.durable_state(role)? {
+                None => {
+                    self.resource_processes.remove(&role);
+                    break WorkerState::Terminal { deleted: true };
+                }
+                Some((observed, current)) => {
+                    self.resource_processes.insert(role, current);
+                    observed
+                }
+            };
+            if observed_state.is_terminal() && observed_state.is_deleted() {
+                self.resource_processes.remove(&role);
+                break observed_state;
+            }
+            if Instant::now() >= deadline {
+                break observed_state;
+            }
+            thread::sleep(Duration::from_millis(50));
+        };
+        let mut process_deleted = false;
+        if state.is_terminal() {
+            self.stop_durable_endpoint(role)?;
+            if let Some(record) = self.resource_processes.get(&role).cloned() {
+                let client = self
+                    .resource_client
+                    .clone()
+                    .ok_or(WorkerEffectError::CleanupIncomplete)?;
+                let zone = self
+                    .resource_zone
+                    .clone()
+                    .ok_or(WorkerEffectError::CleanupIncomplete)?;
+                let process_ref = record.resource_ref.clone();
+                let uid = record.resource_uid.clone();
+                let revision = record.revision;
+                let delete_key = format!("{}:{}", uid.as_str(), revision);
+                run_effect(move || async move {
+                    let mut mutation = wire::Mutation::new();
+                    mutation.kind =
+                        protobuf::EnumOrUnknown::new(wire::MutationKind::MUTATION_KIND_DELETE);
+                    mutation.target = protobuf::MessageField::some(resource_wire_identity(
+                        &zone,
+                        &process_ref,
+                        Some(&uid),
+                        Some(revision),
+                    ));
+                    let mut precondition = wire::Precondition::new();
+                    precondition.kind = protobuf::EnumOrUnknown::new(
+                        wire::PreconditionKind::PRECONDITION_KIND_EXACT_REVISION,
+                    );
+                    precondition.expected_revision = Some(revision);
+                    precondition.expected_uid = Some(uid.as_str().to_owned());
+                    mutation.precondition = protobuf::MessageField::some(precondition);
+                    let mut request = wire::DeleteRequest::new();
+                    request.meta = protobuf::MessageField::some(resource_request_meta(
+                        &resource_operation_id_with_key(
+                            "display-process-drain",
+                            &zone,
+                            &process_ref,
+                            delete_key.as_bytes(),
+                        ),
+                    ));
+                    request.mutation = protobuf::MessageField::some(mutation);
+                    let _ = client.delete(request).await;
+                    Ok(())
+                })?;
+                let deadline = Instant::now() + Duration::from_secs(2);
+                loop {
+                    match self.durable_state(role)? {
+                        None => {
+                            self.resource_processes.remove(&role);
+                            process_deleted = true;
+                            break;
+                        }
+                        Some((_, current)) => {
+                            self.resource_processes.insert(role, current);
+                        }
+                    }
+                    if Instant::now() >= deadline {
+                        break;
+                    }
+                    thread::sleep(Duration::from_millis(50));
+                }
+            }
+        }
+        if process_deleted {
+            self.resource_processes.remove(&role);
+            return Ok(WorkerLaunchReceipt::from_supervisor(
+                role,
+                WorkerState::Terminal { deleted: true },
+                self.policy_generation,
+                self.teardown_generation,
+                self.session_digest,
+            ));
+        }
+        Ok(WorkerLaunchReceipt::from_supervisor(
+            role,
+            state,
+            self.policy_generation,
+            self.teardown_generation,
+            self.session_digest,
+        ))
+    }
 }
 
-impl<S, G> DisplayProcessEffectPort for DisplaySupervisorEffects<S, G>
+impl<S> DisplayProcessEffectPort for DisplaySupervisorEffects<S>
 where
     S: ProcessLaunchEffectPort + Clone + Send + Sync + 'static,
-    G: GuestFrontendEffectPort + 'static,
 {
-    fn current_supervision(&mut self) -> WorkerRestartEvidence {
-        let observed_at_ms = daemon_monotonic_ms();
+    fn bind_session(
+        &mut self,
+        session: &AuthenticatedDisplaySession,
+        spec: &WaylandSessionSpec,
+        policy_generation: u64,
+        teardown_generation: u64,
+    ) -> Result<(), WorkerEffectError> {
+        self.session_digest = spec.session_digest(session.controller_generation());
+        self.guest_subject = Some(session.guest_ref().clone());
+        self.host_execution_ref = Some(session.host_ref().clone());
+        self.reconnect_generation = session.reconnect_generation();
+        self.policy_generation = policy_generation;
+        self.teardown_generation = teardown_generation;
+        Ok(())
+    }
+
+    fn current_observation(
+        &mut self,
+    ) -> Result<Option<d2b_provider_display_wayland::ProcessObservation>, WorkerEffectError> {
+        if !self.uses_durable_processes() {
+            return Ok(None);
+        }
+        let mut states = BTreeMap::new();
         for role in [
             DisplayProcessRole::HostProxy,
             DisplayProcessRole::GuestFrontend,
         ] {
-            let Some(ticket) = self.tickets.get(&role).cloned() else {
-                continue;
-            };
-            let supervisor = self.supervisor.clone();
-            let alive = run_effect(move || async move {
-                let Some(candidate) = supervisor
-                    .observe(&ticket)
-                    .await
-                    .map_err(|_| WorkerEffectError::WorkerUnavailable)?
-                else {
-                    return Ok(false);
-                };
-                Ok(supervisor.open_pidfd(&candidate).await.is_ok())
-            })
-            .unwrap_or(false);
-            if alive {
-                self.last_failures.remove(&role);
-            } else {
-                self.last_failures.insert(role, observed_at_ms);
+            match self.durable_state(role) {
+                Ok(Some((state, record))) => {
+                    self.resource_processes.insert(role, record);
+                    let producer = self
+                        .resource_processes
+                        .get(&role)
+                        .cloned()
+                        .ok_or(WorkerEffectError::WorkerUnavailable)?;
+                    self.update_durable_endpoint_status(role, &producer, state)?;
+                    states.insert(role, state);
+                }
+                Ok(None) => {
+                    states.insert(role, WorkerState::Starting);
+                }
+                Err(error) => return Err(error),
             }
         }
-        WorkerRestartEvidence::from_supervisor(
-            observed_at_ms,
-            self.last_failures
-                .get(&DisplayProcessRole::HostProxy)
-                .copied(),
-            self.last_failures
-                .get(&DisplayProcessRole::GuestFrontend)
-                .copied(),
+        Ok(Some(
+            d2b_provider_display_wayland::ProcessObservation::from_daemon(
+                states
+                    .get(&DisplayProcessRole::HostProxy)
+                    .copied()
+                    .unwrap_or(WorkerState::Starting),
+                states
+                    .get(&DisplayProcessRole::GuestFrontend)
+                    .copied()
+                    .unwrap_or(WorkerState::Starting),
+                VolumeState::Present,
+                self.policy_generation,
+                self.teardown_generation.max(1),
+                self.session_digest,
+            ),
+        ))
+    }
+
+    fn resource_projection(
+        &mut self,
+    ) -> Result<Option<d2b_provider_display_wayland::WaylandSessionResourceStatus>, WorkerEffectError>
+    {
+        if !self.uses_durable_processes() {
+            return Ok(None);
+        }
+        Ok(Some(
+            d2b_provider_display_wayland::WaylandSessionResourceStatus {
+                proxy_process_ref: self
+                    .resource_processes
+                    .get(&DisplayProcessRole::HostProxy)
+                    .map(|process| process.resource_ref.clone()),
+                guest_frontend_process_ref: self
+                    .resource_processes
+                    .get(&DisplayProcessRole::GuestFrontend)
+                    .map(|process| process.resource_ref.clone()),
+                wayland_endpoint_ref: self
+                    .resource_endpoints
+                    .get(&DisplayProcessRole::HostProxy)
+                    .map(|endpoint| endpoint.resource_ref.clone()),
+                wayland_endpoint_generation: self
+                    .resource_endpoints
+                    .get(&DisplayProcessRole::HostProxy)
+                    .map(|endpoint| endpoint.generation),
+                policy_digest: String::new(),
+            },
+        ))
+    }
+
+    fn current_supervision(&mut self) -> Result<WorkerRestartEvidence, WorkerEffectError> {
+        if self.uses_durable_processes() {
+            let observed_at_ms = daemon_monotonic_ms();
+            let mut next_failures = self.last_failures.clone();
+            for role in [
+                DisplayProcessRole::HostProxy,
+                DisplayProcessRole::GuestFrontend,
+            ] {
+                let previous_failure = self.last_failures.get(&role).copied();
+                let failure = match self.durable_state(role) {
+                    Ok(Some((WorkerState::Failed { .. }, record))) => {
+                        self.resource_processes.insert(role, record);
+                        Some(previous_failure.unwrap_or(observed_at_ms))
+                    }
+                    Ok(Some((state, record))) => {
+                        self.resource_processes.insert(role, record);
+                        if state.is_terminal() && !state.is_deleted() {
+                            Some(previous_failure.unwrap_or(observed_at_ms))
+                        } else {
+                            None
+                        }
+                    }
+                    Ok(None) if self.resource_processes.contains_key(&role) => {
+                        Some(previous_failure.unwrap_or(observed_at_ms))
+                    }
+                    Ok(None) => None,
+                    Err(error) => return Err(error),
+                };
+                if let Some(failure) = failure {
+                    next_failures.insert(role, failure);
+                } else {
+                    next_failures.remove(&role);
+                }
+            }
+            self.last_failures = next_failures;
+            return Ok(WorkerRestartEvidence::from_supervisor(
+                observed_at_ms,
+                self.last_failures
+                    .get(&DisplayProcessRole::HostProxy)
+                    .copied(),
+                self.last_failures
+                    .get(&DisplayProcessRole::GuestFrontend)
+                    .copied(),
+                self.teardown_generation.max(1),
+            ));
+        }
+        #[cfg(test)]
+        {
+            let observed_at_ms = daemon_monotonic_ms();
+            for role in [
+                DisplayProcessRole::HostProxy,
+                DisplayProcessRole::GuestFrontend,
+            ] {
+                let Some(ticket) = self.tickets.get(&role).cloned() else {
+                    continue;
+                };
+                let supervisor = self._supervisor.clone();
+                let alive = run_effect(move || async move {
+                    let Some(candidate) = supervisor
+                        .observe(&ticket)
+                        .await
+                        .map_err(|_| WorkerEffectError::WorkerUnavailable)?
+                    else {
+                        return Ok(false);
+                    };
+                    Ok(supervisor.open_pidfd(&candidate).await.is_ok())
+                })
+                .unwrap_or(false);
+                if alive {
+                    self.last_failures.remove(&role);
+                } else {
+                    self.last_failures.insert(role, observed_at_ms);
+                }
+            }
+            return Ok(WorkerRestartEvidence::from_supervisor(
+                observed_at_ms,
+                self.last_failures
+                    .get(&DisplayProcessRole::HostProxy)
+                    .copied(),
+                self.last_failures
+                    .get(&DisplayProcessRole::GuestFrontend)
+                    .copied(),
+                self.teardown_generation.max(1),
+            ));
+        }
+        #[cfg(not(test))]
+        Ok(WorkerRestartEvidence::from_supervisor(
+            daemon_monotonic_ms(),
+            None,
+            None,
             self.teardown_generation.max(1),
-        )
+        ))
     }
 
     fn issue_launch_grants(
@@ -2982,9 +4411,10 @@ where
         self.reconnect_generation = session.reconnect_generation();
         self.policy_generation = policy.generation();
         self.teardown_generation = teardown_generation;
-        LaunchGrants::issue_for_supervisor(
+        LaunchGrants::issue_for_supervisor_with_controller_generation(
             session_digest,
             session.reconnect_generation(),
+            session.controller_generation(),
             teardown_generation,
         )
         .map_err(|_| WorkerEffectError::GrantUnavailable)
@@ -3002,154 +4432,122 @@ where
         let binding = DisplayLaunchBinding::from_ticket(ticket);
         if self
             .consumed_grants
-            .insert(binding.attachment_digest(), binding.teardown_generation())
-            .is_some()
+            .contains_key(&binding.attachment_digest())
         {
             return Err(WorkerEffectError::GrantUnavailable);
         }
-        if binding.role() == DisplayProcessRole::GuestFrontend {
-            let guest = self
-                .guest_subject
-                .as_ref()
-                .ok_or(WorkerEffectError::WorkerUnavailable)?
-                .clone();
-            if let Some(previous) = self.guest_worker {
-                self.guest_frontend
-                    .stop(
-                        &guest,
-                        previous.policy_generation,
-                        previous.teardown_generation,
-                        previous.session_digest,
-                    )
-                    .map_err(|_| WorkerEffectError::CleanupIncomplete)?;
-                self.guest_worker = None;
+        if self.uses_durable_processes() {
+            let receipt = self.ensure_durable_process(binding.role(), &binding)?;
+            self.consumed_grants
+                .insert(binding.attachment_digest(), binding.teardown_generation());
+            return Ok(receipt);
+        }
+        #[cfg(test)]
+        {
+            let execution_ref = match binding.role() {
+                DisplayProcessRole::HostProxy => self.host_execution_ref.as_ref(),
+                DisplayProcessRole::GuestFrontend => self.guest_subject.as_ref(),
             }
-            let receipt = self.guest_frontend.ensure(
-                &guest,
+            .ok_or(WorkerEffectError::LaunchRejected)?;
+            let process_ticket = process_ticket_for_session(
+                &binding,
+                execution_ref,
+                self.guest_subject.as_ref(),
+                self.session_digest,
+            )?;
+            let role = binding.role();
+            if let Some(previous) = self.identities.get(&role).copied() {
+                let supervisor = self._supervisor.clone();
+                run_effect(move || async move {
+                    supervisor
+                        .stop(&previous.identity, StopClass::Terminate)
+                        .await
+                        .map_err(|_| WorkerEffectError::CleanupIncomplete)
+                })?;
+                self.identities.remove(&role);
+            }
+            let supervisor = self._supervisor.clone();
+            let adoption_ticket = process_ticket.clone();
+            let adopted = run_effect(move || {
+                let supervisor = supervisor.clone();
+                let process_ticket = adoption_ticket.clone();
+                async move {
+                    if let Some(candidate) = supervisor
+                        .observe(&process_ticket)
+                        .await
+                        .map_err(|_| WorkerEffectError::WorkerUnavailable)?
+                    {
+                        match supervisor.open_pidfd(&candidate).await {
+                            Ok(_) => Ok(candidate.identity),
+                            Err(_) => Ok(supervisor
+                                .launch(&process_ticket)
+                                .await
+                                .map_err(|_| WorkerEffectError::LaunchRejected)?
+                                .identity),
+                        }
+                    } else {
+                        Ok(supervisor
+                            .launch(&process_ticket)
+                            .await
+                            .map_err(|_| WorkerEffectError::LaunchRejected)?
+                            .identity)
+                    }
+                }
+            })?;
+            self.identities.insert(
+                role,
+                LiveWorker {
+                    identity: adopted,
+                    policy_generation: binding.policy_generation(),
+                    teardown_generation: binding.teardown_generation(),
+                    session_digest: self.session_digest,
+                },
+            );
+            self.tickets.insert(role, process_ticket);
+            self.consumed_grants
+                .insert(binding.attachment_digest(), binding.teardown_generation());
+            return Ok(WorkerLaunchReceipt::from_supervisor(
+                role,
+                WorkerState::Ready { generation: 1 },
                 binding.policy_generation(),
                 binding.teardown_generation(),
                 self.session_digest,
-            )?;
-            self.guest_worker = Some(GuestWorker {
-                policy_generation: binding.policy_generation(),
-                teardown_generation: binding.teardown_generation(),
-                session_digest: self.session_digest,
-            });
-            return Ok(receipt);
+            ));
         }
-        let execution_ref = self
-            .host_execution_ref
-            .as_ref()
-            .ok_or(WorkerEffectError::LaunchRejected)?;
-        let process_ticket = process_ticket(&binding, execution_ref)?;
-        let role = binding.role();
-        if let Some(previous) = self.identities.get(&role).copied() {
-            let supervisor = self.supervisor.clone();
+        #[cfg(not(test))]
+        Err(WorkerEffectError::WorkerUnavailable)
+    }
+
+    fn stop(&mut self, role: DisplayProcessRole) -> Result<WorkerLaunchReceipt, WorkerEffectError> {
+        if self.uses_durable_processes() {
+            return self.stop_durable_process(role);
+        }
+        #[cfg(test)]
+        if let Some(worker) = self.identities.get(&role).copied() {
+            let supervisor = self._supervisor.clone();
             run_effect(move || async move {
                 supervisor
-                    .stop(&previous.identity, StopClass::Terminate)
+                    .stop(&worker.identity, StopClass::Terminate)
                     .await
                     .map_err(|_| WorkerEffectError::CleanupIncomplete)
             })?;
             self.identities.remove(&role);
-        }
-        let supervisor = self.supervisor.clone();
-        let adoption_ticket = process_ticket.clone();
-        let adopted = run_effect(move || {
-            let supervisor = supervisor.clone();
-            let process_ticket = adoption_ticket.clone();
-            async move {
-                if let Some(candidate) = supervisor
-                    .observe(&process_ticket)
-                    .await
-                    .map_err(|_| WorkerEffectError::WorkerUnavailable)?
-                {
-                    match supervisor.open_pidfd(&candidate).await {
-                        Ok(_) => Ok(candidate.identity),
-                        Err(_) => Ok(supervisor
-                            .launch(&process_ticket)
-                            .await
-                            .map_err(|_| WorkerEffectError::LaunchRejected)?
-                            .identity),
-                    }
-                } else {
-                    Ok(supervisor
-                        .launch(&process_ticket)
-                        .await
-                        .map_err(|_| WorkerEffectError::LaunchRejected)?
-                        .identity)
-                }
-            }
-        })?;
-        self.identities.insert(
-            role,
-            LiveWorker {
-                identity: adopted,
-                policy_generation: binding.policy_generation(),
-                teardown_generation: binding.teardown_generation(),
-                session_digest: self.session_digest,
-            },
-        );
-        self.tickets.insert(role, process_ticket);
-        Ok(WorkerLaunchReceipt::from_supervisor(
-            role,
-            WorkerState::Ready { generation: 1 },
-            binding.policy_generation(),
-            binding.teardown_generation(),
-            self.session_digest,
-        ))
-    }
-
-    fn stop(&mut self, role: DisplayProcessRole) -> Result<WorkerLaunchReceipt, WorkerEffectError> {
-        if role == DisplayProcessRole::GuestFrontend {
-            let Some(worker) = self.guest_worker else {
-                return Ok(WorkerLaunchReceipt::from_supervisor(
-                    role,
-                    WorkerState::Terminal { deleted: true },
-                    self.policy_generation,
-                    self.teardown_generation,
-                    self.session_digest,
-                ));
-            };
-            let guest = self
-                .guest_subject
-                .as_ref()
-                .ok_or(WorkerEffectError::WorkerUnavailable)?
-                .clone();
-            let receipt = self.guest_frontend.stop(
-                &guest,
-                worker.policy_generation,
-                worker.teardown_generation,
-                worker.session_digest,
-            )?;
-            self.guest_worker = None;
-            return Ok(receipt);
-        }
-        let Some(worker) = self.identities.get(&role).copied() else {
+            self.tickets.remove(&role);
+            self.last_failures.remove(&role);
             return Ok(WorkerLaunchReceipt::from_supervisor(
                 role,
                 WorkerState::Terminal { deleted: true },
-                self.policy_generation,
-                self.teardown_generation,
-                self.session_digest,
+                worker.policy_generation,
+                worker.teardown_generation,
+                worker.session_digest,
             ));
-        };
-        let supervisor = self.supervisor.clone();
-        run_effect(move || async move {
-            supervisor
-                .stop(&worker.identity, StopClass::Terminate)
-                .await
-                .map_err(|_| WorkerEffectError::CleanupIncomplete)
-        })?;
-        self.identities.remove(&role);
-        self.tickets.remove(&role);
-        self.last_failures.remove(&role);
+        }
         Ok(WorkerLaunchReceipt::from_supervisor(
             role,
             WorkerState::Terminal { deleted: true },
-            worker.policy_generation,
-            worker.teardown_generation,
-            worker.session_digest,
+            self.policy_generation,
+            self.teardown_generation,
+            self.session_digest,
         ))
     }
 
@@ -3166,11 +4564,7 @@ where
     }
 
     fn release_authority(&mut self) -> Result<CleanupState, WorkerEffectError> {
-        if self.identities.is_empty() && self.guest_worker.is_none() {
-            Ok(CleanupState::Complete)
-        } else {
-            Err(WorkerEffectError::CleanupIncomplete)
-        }
+        Ok(CleanupState::Complete)
     }
 }
 
@@ -3473,424 +4867,6 @@ impl NotificationProcessEffectPort for InteractionDrainEffects {
     }
 }
 
-fn process_ticket(
-    binding: &DisplayLaunchBinding,
-    execution_ref: &ResourceRef,
-) -> Result<ProcessLaunchTicket, WorkerEffectError> {
-    let role_name = match binding.role() {
-        DisplayProcessRole::HostProxy => "host-proxy",
-        DisplayProcessRole::GuestFrontend => "guest-frontend",
-    };
-    let process_ref = ResourceRef::parse(&format!("EphemeralProcess/display-{role_name}"))
-        .map_err(|_| WorkerEffectError::LaunchRejected)?;
-    let owner_provider =
-        BoundedToken::parse("display-wayland").map_err(|_| WorkerEffectError::LaunchRejected)?;
-    let component =
-        BoundedToken::parse(role_name).map_err(|_| WorkerEffectError::LaunchRejected)?;
-    let template =
-        BoundedToken::parse("display-worker").map_err(|_| WorkerEffectError::LaunchRejected)?;
-    let selected_provider =
-        BoundedToken::parse("system-systemd").map_err(|_| WorkerEffectError::LaunchRejected)?;
-    let process_uid = resource_uid(binding, b"process");
-    let operation_uid = resource_uid(binding, b"operation");
-    let generation = ResourceGeneration::new(binding.policy_generation())
-        .map_err(|_| WorkerEffectError::LaunchRejected)?;
-    let controller_generation = ControllerGeneration::new(binding.teardown_generation())
-        .map_err(|_| WorkerEffectError::LaunchRejected)?;
-    let digests = CompiledDigests {
-        sandbox: configuration_digest(binding, b"sandbox"),
-        budget: configuration_digest(binding, b"budget"),
-        mounts: configuration_digest(binding, b"mounts"),
-        devices: configuration_digest(binding, b"devices"),
-        network: configuration_digest(binding, b"network"),
-        endpoints: configuration_digest(binding, b"endpoints"),
-        fd_table: configuration_digest(binding, b"fd-table"),
-    };
-    let operation = d2b_process::OperationBinding::new(operation_uid, 30_000)
-        .map_err(|_| WorkerEffectError::LaunchRejected)?;
-    let expected_identity = [
-        IdentityBinding::Cgroup,
-        IdentityBinding::Executable,
-        IdentityBinding::Generation,
-        IdentityBinding::Template,
-    ]
-    .into_iter()
-    .collect();
-    ProcessLaunchTicket::new(
-        process_ref,
-        process_uid,
-        generation,
-        controller_generation,
-        owner_provider,
-        component,
-        template,
-        execution_ref.clone(),
-        ExecutionDomain::System,
-        None,
-        selected_provider,
-        digests,
-        operation,
-        expected_identity,
-    )
-    .map(|ticket| {
-        ticket
-            .with_readiness(ReadinessExpectation::condition(1_000).expect("fixed readiness"))
-            .with_inherited_fd_count(2)
-            .expect("fixed inherited descriptor bound")
-    })
-    .map_err(|_| WorkerEffectError::LaunchRejected)
-}
-
-fn display_sandbox_plan(
-    intent: &ResolvedRunnerIntent,
-    domain: ExecutionDomain,
-) -> Result<SandboxLaunchPlan, ProcessEffectError> {
-    let namespace_classes = [
-        (intent.namespaces.user, NamespaceClass::User),
-        (intent.namespaces.pid, NamespaceClass::Pid),
-        (intent.namespaces.mount, NamespaceClass::Mount),
-        (intent.namespaces.ipc, NamespaceClass::Ipc),
-        (intent.namespaces.uts, NamespaceClass::Uts),
-        (intent.namespaces.net, NamespaceClass::Network),
-    ]
-    .into_iter()
-    .filter_map(|(enabled, class)| enabled.then_some(class))
-    .collect();
-    let capability_classes = intent
-        .capabilities
-        .iter()
-        .map(|capability| match capability.as_str() {
-            "CAP_NET_BIND_SERVICE" => Ok(CapabilityClass::NetworkBind),
-            "CAP_NET_RAW" => Ok(CapabilityClass::NetworkRaw),
-            "CAP_NET_ADMIN" => Ok(CapabilityClass::NetworkAdmin),
-            "CAP_SYS_TIME" => Ok(CapabilityClass::SysTime),
-            "CAP_SYS_PTRACE" => Ok(CapabilityClass::SysPtrace),
-            "CAP_SYS_ADMIN" => Ok(CapabilityClass::SysAdmin),
-            "CAP_DAC_OVERRIDE" => Ok(CapabilityClass::DacOverride),
-            "CAP_FOWNER" => Ok(CapabilityClass::Fowner),
-            "CAP_CHOWN" => Ok(CapabilityClass::Chown),
-            "CAP_SETUID" => Ok(CapabilityClass::Setuid),
-            "CAP_SETGID" => Ok(CapabilityClass::Setgid),
-            "CAP_AUDIT_WRITE" => Ok(CapabilityClass::AuditWrite),
-            "CAP_KILL" => Ok(CapabilityClass::Kill),
-            _ => Err(ProcessEffectError::ResolutionFailed),
-        })
-        .collect::<Result<Vec<_>, _>>()?;
-    let seccomp_class = intent
-        .seccomp_policy_ref
-        .as_deref()
-        .ok_or(ProcessEffectError::ResolutionFailed)
-        .and_then(|reference| {
-            BoundedToken::parse(reference).map_err(|_| ProcessEffectError::ResolutionFailed)
-        })?;
-    let spec = d2b_contracts_resource::v3::process::SandboxSpec::new(
-        namespace_classes,
-        capability_classes,
-        seccomp_class,
-        true,
-        intent.root_carve_out,
-        EnvironmentClass::Minimal,
-        true,
-        intent.umask.map(|umask| format!("{umask:o}")),
-        0,
-        intent.user_namespace.map(|_| UserNamespaceSpec {
-            mapping_class: MappingClass::ProcessPrincipalRoot,
-        }),
-    )
-    .map_err(|_| ProcessEffectError::ResolutionFailed)?;
-    let compiled = SandboxCompiler
-        .compile_plan(&spec, domain, false)
-        .map_err(|_| ProcessEffectError::ResolutionFailed)?;
-    Ok(SandboxLaunchPlan {
-        digest: compiled.compiled().digest().to_hex(),
-        domain,
-        namespace_classes: spec.namespace_classes().to_vec(),
-        capability_classes: spec.capability_classes().to_vec(),
-        seccomp_class: spec.seccomp_class().clone(),
-        no_new_privileges: spec.no_new_privileges(),
-        start_root: spec.start_root(),
-        environment_class: spec.environment_class(),
-        read_only_root: spec.read_only_root(),
-        umask: spec.umask().map(str::to_owned),
-        oom_score_adj: spec.oom_score_adj(),
-        user_namespace: spec.user_namespace().copied(),
-    })
-}
-
-/// Daemon-owned resolver for display worker tickets.
-///
-/// The generic Process ticket intentionally contains no executable or broker
-/// role. This resolver binds the display worker to exactly one trusted
-/// Wayland-proxy row from the loaded bundle and retains only broker-safe
-/// observations for same-daemon reconciliation.
-#[derive(Clone)]
-pub struct BundleDisplayLaunchResolver {
-    bundle: Arc<BundleResolver>,
-    observations: Arc<Mutex<BTreeMap<String, BrokerObservedProcess>>>,
-    observation_path: Option<Arc<PathBuf>>,
-}
-
-impl BundleDisplayLaunchResolver {
-    /// Bind display launch resolution to the daemon's verified bundle.
-    pub fn new(bundle: BundleResolver) -> Self {
-        Self::with_observation_path_inner(bundle, None)
-    }
-
-    /// Bind resolution to the verified bundle and retain broker observations
-    /// across a daemon restart for pidfd adoption.
-    pub fn with_observation_path(bundle: BundleResolver, path: PathBuf) -> Self {
-        Self::with_observation_path_inner(bundle, Some(path))
-    }
-
-    fn with_observation_path_inner(bundle: BundleResolver, path: Option<PathBuf>) -> Self {
-        let observation_path = path.map(Arc::new);
-        let observations = observation_path
-            .as_deref()
-            .and_then(|path| load_observations(path).ok())
-            .unwrap_or_default();
-        Self {
-            bundle: Arc::new(bundle),
-            observations: Arc::new(Mutex::new(observations)),
-            observation_path,
-        }
-    }
-
-    fn resolve_intent(&self) -> Result<&ResolvedRunnerIntent, ProcessEffectError> {
-        let mut candidates = self
-            .bundle
-            .runner_intent_ids()
-            .filter_map(|id| self.bundle.find_runner_intent(id))
-            .filter(|intent| intent.role == ProcessRole::WaylandProxy);
-        let Some(intent) = candidates.next() else {
-            return Err(ProcessEffectError::ResolutionFailed);
-        };
-        if candidates.next().is_some() {
-            return Err(ProcessEffectError::ResolutionFailed);
-        }
-        Ok(intent)
-    }
-
-    fn observation_key(observed: &BrokerObservedProcess) -> String {
-        format!(
-            "{}:{}:{}",
-            observed.intent.vm_id.as_str(),
-            observed.intent.role_id.as_str(),
-            observed.pid
-        )
-    }
-
-    fn ticket_observation_key(request: &ProcessRequest) -> String {
-        request.ticket().process_uid().as_str().to_owned()
-    }
-
-    fn persist(&self) {
-        let Some(path) = self.observation_path.as_deref() else {
-            return;
-        };
-        let Ok(observations) = self.observations.lock() else {
-            return;
-        };
-        let records = observations
-            .iter()
-            .map(|(process_uid, observed)| PersistedObservation {
-                process_uid: process_uid.clone(),
-                vm_id: observed.intent.vm_id.as_str().to_owned(),
-                role_id: observed.intent.role_id.as_str().to_owned(),
-                role: observed.intent.role,
-                bundle_runner_intent_ref: observed
-                    .intent
-                    .bundle_runner_intent_ref
-                    .as_str()
-                    .to_owned(),
-                execution_ref: observed.intent.execution_ref.clone(),
-                domain: observed.intent.domain,
-                user_ref: observed.intent.user_ref.clone(),
-                provider_identity: observed.intent.provider_identity,
-                template_identity: observed.intent.template_identity,
-                generation: observed.intent.generation,
-                resource_ref: observed.intent.resource_ref.clone(),
-                resource_uid: observed.intent.resource_uid.clone(),
-                bundle_content_identity: observed.intent.bundle_content_identity.clone(),
-                sandbox_plan: observed.intent.sandbox_plan.clone(),
-                guest_execution: observed.intent.guest_execution.clone(),
-                pid: observed.pid,
-                start_time_ticks: observed.start_time_ticks,
-                cgroup_verified: observed.cgroup_verified,
-                executable_verified: observed.executable_verified,
-            })
-            .collect::<Vec<_>>();
-        let encoded = match serde_json::to_vec(&records) {
-            Ok(encoded) => encoded,
-            Err(_) => return,
-        };
-        let temporary = path.with_extension("json.new");
-        if std::fs::write(&temporary, encoded).is_ok() {
-            let _ = std::fs::rename(temporary, path);
-        }
-    }
-}
-
-impl BrokerLaunchResolver for BundleDisplayLaunchResolver {
-    fn resolve(&self, request: &ProcessRequest) -> Result<BrokerLaunchIntent, ProcessEffectError> {
-        let ticket = request.ticket();
-        if ticket.owner_provider().as_str() != "display-wayland"
-            || ticket.component().as_str() != "host-proxy"
-            || ticket.execution_ref().resource_type().as_str() != "Host"
-        {
-            return Err(ProcessEffectError::UnsupportedProvider);
-        }
-        let intent = self.resolve_intent()?;
-        let provider_identity = digest_identity("provider", ticket.owner_provider().as_str());
-        let template_identity = digest_identity("template", ticket.template().as_str());
-        let sandbox_plan = display_sandbox_plan(intent, ticket.domain())?;
-        Ok(BrokerLaunchIntent {
-            vm_id: VmId::new(intent.vm_name.clone()),
-            execution_ref: ticket.execution_ref().clone(),
-            domain: ticket.domain(),
-            user_ref: ticket.user_ref().cloned(),
-            role_id: RoleId::new(intent.role_id.clone()),
-            role: RunnerRole::WaylandProxy,
-            bundle_runner_intent_ref: BundleOpId::new(intent.intent_id.clone()),
-            provider_identity,
-            template_identity,
-            generation: ticket.resource_generation().get(),
-            activation_input: None,
-            guest_execution: None,
-            resource_ref: ticket.process_ref().clone(),
-            resource_uid: ticket.process_uid().clone(),
-            bundle_content_identity: self.bundle.audit_bundle_hash().to_owned(),
-            sandbox_plan: Some(sandbox_plan),
-        })
-    }
-
-    fn observe(
-        &self,
-        request: &ProcessRequest,
-    ) -> Result<Option<BrokerObservedProcess>, ProcessEffectError> {
-        let expected = self.resolve_intent()?;
-        let key = Self::ticket_observation_key(request);
-        let candidate = self
-            .observations
-            .lock()
-            .map_err(|_| ProcessEffectError::ObserveFailed)
-            .map(|observations| observations.get(&key).cloned())?;
-        Ok(candidate.filter(|observed| {
-            observed.intent.vm_id.as_str() == expected.vm_name
-                && observed.intent.role_id.as_str() == expected.role_id
-                && observed.intent.bundle_runner_intent_ref.as_str() == expected.intent_id
-                && observed.intent.role == RunnerRole::WaylandProxy
-                && observed.intent.generation == request.ticket().resource_generation().get()
-        }))
-    }
-
-    fn record_launched(&self, request: &ProcessRequest, observed: &BrokerObservedProcess) {
-        if let Ok(mut observations) = self.observations.lock() {
-            observations.insert(Self::ticket_observation_key(request), observed.clone());
-        }
-        self.persist();
-    }
-
-    fn record_stopped(&self, observed: &BrokerObservedProcess) {
-        if let Ok(mut observations) = self.observations.lock() {
-            let key = Self::observation_key(observed);
-            observations.retain(|_, candidate| Self::observation_key(candidate) != key);
-        }
-        self.persist();
-    }
-}
-
-#[derive(serde::Deserialize, serde::Serialize)]
-struct PersistedObservation {
-    process_uid: String,
-    vm_id: String,
-    execution_ref: ResourceRef,
-    domain: ExecutionDomain,
-    user_ref: Option<ResourceRef>,
-    role_id: String,
-    role: RunnerRole,
-    bundle_runner_intent_ref: String,
-    provider_identity: [u8; 32],
-    template_identity: [u8; 32],
-    generation: u64,
-    resource_ref: ResourceRef,
-    resource_uid: ResourceUid,
-    bundle_content_identity: String,
-    sandbox_plan: Option<SandboxLaunchPlan>,
-    #[serde(default)]
-    guest_execution: Option<d2b_contracts_broker::broker_wire::GuestExecutionBinding>,
-    pid: i32,
-    start_time_ticks: u64,
-    cgroup_verified: bool,
-    executable_verified: bool,
-}
-
-fn load_observations(
-    path: &std::path::Path,
-) -> Result<BTreeMap<String, BrokerObservedProcess>, ProcessEffectError> {
-    let bytes = match std::fs::read(path) {
-        Ok(bytes) => bytes,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(BTreeMap::new()),
-        Err(_) => return Err(ProcessEffectError::ObserveFailed),
-    };
-    let records = serde_json::from_slice::<Vec<PersistedObservation>>(&bytes)
-        .map_err(|_| ProcessEffectError::ObserveFailed)?;
-    Ok(records
-        .into_iter()
-        .map(|record| {
-            let observed = BrokerObservedProcess {
-                intent: BrokerLaunchIntent {
-                    vm_id: VmId::new(record.vm_id),
-                    execution_ref: record.execution_ref,
-                    domain: record.domain,
-                    user_ref: record.user_ref,
-                    role_id: RoleId::new(record.role_id),
-                    role: record.role,
-                    bundle_runner_intent_ref: BundleOpId::new(record.bundle_runner_intent_ref),
-                    provider_identity: record.provider_identity,
-                    template_identity: record.template_identity,
-                    generation: record.generation,
-                    activation_input: None,
-                    guest_execution: record.guest_execution,
-                    resource_ref: record.resource_ref,
-                    resource_uid: record.resource_uid,
-                    bundle_content_identity: record.bundle_content_identity,
-                    sandbox_plan: record.sandbox_plan,
-                },
-                pid: record.pid,
-                start_time_ticks: record.start_time_ticks,
-                cgroup_verified: record.cgroup_verified,
-                executable_verified: record.executable_verified,
-            };
-            (record.process_uid, observed)
-        })
-        .collect())
-}
-
-fn digest_identity(label: &str, value: &str) -> [u8; 32] {
-    let mut digest = Sha256::new();
-    digest.update(b"d2bd-display-broker-identity-v1");
-    digest.update(label.as_bytes());
-    digest.update([0]);
-    digest.update(value.as_bytes());
-    digest.finalize().into()
-}
-
-/// Construct the production broker-backed supervisor used by interaction
-/// runtimes. The caller role is daemon-derived; Providers never receive it.
-pub fn production_display_supervisor(
-    bundle: BundleResolver,
-    daemon_uid: u32,
-    observation_path: PathBuf,
-) -> ProviderSupervisor<BrokerProcessBackend<BundleDisplayLaunchResolver>> {
-    let backend = BrokerProcessBackend::with_socket_and_role(
-        BundleDisplayLaunchResolver::with_observation_path(bundle, observation_path),
-        d2b_contracts::BROKER_SOCKET_PATH,
-        std::time::Duration::from_secs(10),
-        BrokerCallerRole::RootUid { uid: daemon_uid },
-    );
-    ProviderSupervisor::new(backend)
-}
-
 /// Committed resource-plane state required to construct one interaction runtime.
 pub(crate) struct ProductionInteractionResourceState<'a> {
     zone: ZoneId,
@@ -3899,6 +4875,7 @@ pub(crate) struct ProductionInteractionResourceState<'a> {
     resource_ready: bool,
     configuration: Option<&'a CommittedInteractionProviderConfiguration>,
     identity: Option<&'a CommittedInteractionIdentity>,
+    system_core_client: Option<Arc<ResourceApiClient<RedbBackend, UnavailableUpgradeDispatcher>>>,
 }
 
 impl<'a> ProductionInteractionResourceState<'a> {
@@ -3910,6 +4887,9 @@ impl<'a> ProductionInteractionResourceState<'a> {
         resource_ready: bool,
         configuration: Option<&'a CommittedInteractionProviderConfiguration>,
         identity: Option<&'a CommittedInteractionIdentity>,
+        system_core_client: Option<
+            Arc<ResourceApiClient<RedbBackend, UnavailableUpgradeDispatcher>>,
+        >,
     ) -> Self {
         Self {
             zone,
@@ -3918,6 +4898,7 @@ impl<'a> ProductionInteractionResourceState<'a> {
             resource_ready,
             configuration,
             identity,
+            system_core_client,
         }
     }
 }
@@ -3926,7 +4907,10 @@ fn validate_production_interaction_resource_state<'b>(
     resource: &ProductionInteractionResourceState<'b>,
 ) -> Result<&'b CommittedInteractionIdentity, BusError> {
     let identity = resource.identity.ok_or(BusError::InvalidConfig)?;
-    if identity.subject_ref().resource_type().as_str() != "Guest"
+    if identity.wayland_session_ref().resource_type().as_str()
+        != "display-wayland.d2bus.org.WaylandSession"
+        || identity.wayland_session_uid().as_str().is_empty()
+        || identity.subject_ref().resource_type().as_str() != "Guest"
         || identity.host_execution_ref().resource_type().as_str() != "Host"
         || identity.user_ref().resource_type().as_str() != "User"
         || identity.display_provider_generation().get() == 0
@@ -3942,18 +4926,17 @@ fn validate_production_interaction_resource_state<'b>(
 /// trusted Zone. The registrar is created here, rather than in Provider code,
 /// and its resolver binds the verified local peer to committed resources.
 pub(crate) fn production_interaction_composition(
-    bundle: BundleResolver,
     daemon_uid: u32,
-    observation_path: PathBuf,
     resource: ProductionInteractionResourceState<'_>,
 ) -> Result<
-    InteractionComposition<
-        ProviderSupervisor<BrokerProcessBackend<BundleDisplayLaunchResolver>>,
-        AuthenticatedGuestFrontendEffects,
-    >,
+    InteractionComposition<UnavailableProcessEffectPort>,
     BusError,
 > {
     let identity = validate_production_interaction_resource_state(&resource)?;
+    let system_core_client = resource
+        .system_core_client
+        .clone()
+        .ok_or(BusError::InvalidConfig)?;
     let controller_generation = resource
         .committed_policy
         .controller_generation
@@ -4032,24 +5015,12 @@ pub(crate) fn production_interaction_composition(
         std::sync::Arc::new(NoopBusObserver),
         std::sync::Arc::new(d2b_bus::metrics::NoopBusTelemetry),
     )?;
-    let expected_state_root_gid = Group::from_name("users")
-        .ok()
-        .flatten()
-        .map(|group| group.gid.as_raw())
-        .unwrap_or_else(|| getgid().as_raw());
-    let guest_frontend = AuthenticatedGuestFrontendEffects::new(
-        bundle.clone(),
-        PathBuf::from(d2b_contracts::BROKER_SOCKET_PATH),
-        BrokerCallerRole::RootUid { uid: daemon_uid },
-        daemon_uid,
-        expected_state_root_gid,
-    );
-    let mut composition = InteractionComposition::new_with_guest_frontend_and_notification_port(
+    let mut composition = InteractionComposition::new_with_notification_port(
         registrar,
-        production_display_supervisor(bundle, daemon_uid, observation_path),
-        guest_frontend,
+        UnavailableProcessEffectPort,
         Box::new(NotifyRustNotificationPort::default()),
     );
+    composition.bind_display_resource_client(system_core_client);
     composition
         .registrar
         .install_committed_interaction_subject(CommittedInteractionSubjectInput {
@@ -4110,18 +5081,17 @@ fn unix_guest_subject_uid(uid: u32) -> ResourceUid {
     .expect("digest-derived test guest UID is valid")
 }
 
-/// Bind and retain the daemon-owned ComponentSession listeners for all fixed
-/// service packages. Providers do not open these sockets and no Provider-owned
-/// service unit is created.
-pub fn spawn_interaction_listeners<S, G>(
-    runtime: Arc<AsyncMutex<Option<InteractionRuntimeSet<S, G>>>>,
+/// Bind and retain the daemon-owned ComponentSession listeners for all
+/// interaction Provider service packages. Providers do not open these sockets
+/// and no Provider-owned service unit is created.
+pub fn spawn_interaction_listeners<S>(
+    runtime: Arc<AsyncMutex<Option<InteractionRuntimeSet<S>>>>,
     state_dir: PathBuf,
     zone: ZoneId,
     expected_peer_uid: u32,
 ) -> Result<InteractionListenerSet, String>
 where
     S: ProcessLaunchEffectPort + Clone + Send + Sync + 'static,
-    G: GuestFrontendEffectPort + 'static,
 {
     spawn_interaction_listeners_with_stop(
         runtime,
@@ -4134,8 +5104,8 @@ where
 
 /// Bind listeners using an existing shutdown token so independently
 /// Zone-bound listener sets can be stopped as one daemon-owned group.
-pub fn spawn_interaction_listeners_with_stop<S, G>(
-    runtime: Arc<AsyncMutex<Option<InteractionRuntimeSet<S, G>>>>,
+pub fn spawn_interaction_listeners_with_stop<S>(
+    runtime: Arc<AsyncMutex<Option<InteractionRuntimeSet<S>>>>,
     state_dir: PathBuf,
     zone: ZoneId,
     expected_peer_uid: u32,
@@ -4143,7 +5113,6 @@ pub fn spawn_interaction_listeners_with_stop<S, G>(
 ) -> Result<InteractionListenerSet, String>
 where
     S: ProcessLaunchEffectPort + Clone + Send + Sync + 'static,
-    G: GuestFrontendEffectPort + 'static,
 {
     ensure_owned_state_dir(&state_dir, expected_peer_uid).map_err(|error| error.to_string())?;
     let state_metadata =
@@ -4435,12 +5404,11 @@ fn bind_interaction_listener(path: &std::path::Path, expected_uid: u32) -> std::
 }
 
 #[derive(Clone)]
-struct InteractionAcceptContext<S, G>
+struct InteractionAcceptContext<S>
 where
     S: ProcessLaunchEffectPort + Clone + Send + Sync + 'static,
-    G: GuestFrontendEffectPort + 'static,
 {
-    runtime: Arc<AsyncMutex<Option<InteractionRuntimeSet<S, G>>>>,
+    runtime: Arc<AsyncMutex<Option<InteractionRuntimeSet<S>>>>,
     zone: ZoneId,
     service: String,
     expected_peer_uid: u32,
@@ -4449,10 +5417,9 @@ where
     active_handlers: Arc<AtomicUsize>,
 }
 
-fn interaction_accept_loop<S, G>(listener: Socket, context: InteractionAcceptContext<S, G>)
+fn interaction_accept_loop<S>(listener: Socket, context: InteractionAcceptContext<S>)
 where
     S: ProcessLaunchEffectPort + Clone + Send + Sync + 'static,
-    G: GuestFrontendEffectPort + 'static,
 {
     let InteractionAcceptContext {
         runtime,
@@ -4555,9 +5522,9 @@ fn reap_finished_handlers(handlers: &Mutex<Vec<thread::JoinHandle<()>>>) {
     }
 }
 
-async fn admit_interaction_socket<S, G>(
+async fn admit_interaction_socket<S>(
     socket: std::os::fd::OwnedFd,
-    runtime: Arc<AsyncMutex<Option<InteractionRuntimeSet<S, G>>>>,
+    runtime: Arc<AsyncMutex<Option<InteractionRuntimeSet<S>>>>,
     zone: ZoneId,
     service: String,
     expected_peer_uid: u32,
@@ -4565,7 +5532,6 @@ async fn admit_interaction_socket<S, G>(
 ) -> Result<(), String>
 where
     S: ProcessLaunchEffectPort + Clone + Send + Sync + 'static,
-    G: GuestFrontendEffectPort + 'static,
 {
     let policy = interaction_endpoint_policy(&service, 1)
         .ok_or_else(|| "unknown interaction service".to_owned())?;
@@ -4674,19 +5640,22 @@ where
                 continue;
             }
         };
+        let attachments = if request_accepts_clipboard_attachments(&frame) {
+            tokio::time::timeout(
+                Duration::from_secs(5),
+                request_receiver.recv_attachments(),
+            )
+            .await
+            .map_err(|_| "interaction-attachment-receive-timeout".to_owned())?
+            .map_err(|_| "interaction-attachment-receive-failed".to_owned())?
+        } else {
+            Vec::new()
+        };
         let mut guard = runtime.lock().await;
         let composition = guard
             .as_mut()
             .and_then(|set| set.runtime_for_mut(&zone))
             .ok_or_else(|| "interaction runtime unavailable".to_owned())?;
-        let attachments = if request_accepts_clipboard_attachments(&frame) {
-            request_receiver
-                .recv_attachments()
-                .await
-                .map_err(|_| "interaction-attachment-receive-failed".to_owned())?
-        } else {
-            Vec::new()
-        };
         if let Err(error) = composition
             .dispatch_component_request_for_session(&session_key, frame, attachments)
             .await
@@ -4719,10 +5688,161 @@ fn request_accepts_clipboard_attachments(frame: &[u8]) -> bool {
     ) {
         return false;
     }
+
     serde_json::from_slice::<ClipboardCaptureRequest>(&request.payload)
         .is_ok_and(|request| request.bytes.is_none())
 }
 
+fn clipboard_attachment_object_type_allowed(
+    object_type: d2b_contracts_zone_session::v3::component_session::KernelObjectType,
+) -> bool {
+    matches!(
+        object_type,
+        d2b_contracts_zone_session::v3::component_session::KernelObjectType::UnixStreamSocket
+            | d2b_contracts_zone_session::v3::component_session::KernelObjectType::UnixSeqpacketSocket
+            | d2b_contracts_zone_session::v3::component_session::KernelObjectType::PipeRead
+            | d2b_contracts_zone_session::v3::component_session::KernelObjectType::PipeWrite
+            | d2b_contracts_zone_session::v3::component_session::KernelObjectType::Memfd
+            | d2b_contracts_zone_session::v3::component_session::KernelObjectType::RegularFile
+    )
+}
+
+fn validate_interaction_attachments(
+    attachments: &[OwnedAttachment],
+    service: &str,
+    method: &str,
+    frame: &[u8],
+    operation_id: &OperationId,
+) -> Result<(), ()> {
+    if attachments.is_empty() {
+        return Ok(());
+    }
+    let clipboard_method = matches!(
+        (service, method),
+        (
+            d2b_provider_clipboard_wayland::BRIDGE_SERVICE,
+            "ClipboardBridgeService/CaptureGuest" | "ClipboardBridgeService/CaptureHost"
+        )
+    );
+    if !clipboard_method {
+        return Err(());
+    }
+    let mut expected_generation = None;
+    let mut expected_packet_sequence = None;
+    for attachment in attachments {
+        let descriptor = attachment.descriptor().ok_or(())?;
+        if descriptor.service.as_str() != service
+            || descriptor.kind != AttachmentKind::FileDescriptor
+            || !clipboard_attachment_object_type_allowed(descriptor.object_type)
+            || descriptor.access
+                != d2b_contracts_zone_session::v3::component_session::AttachmentAccess::ReadOnly
+            || descriptor.purpose != AttachmentPurpose::ClipboardTransfer
+            || descriptor
+                .operation_id
+                .as_ref()
+            .is_some_and(|id| id.as_bytes() != operation_id.as_str().as_bytes())
+        {
+            return Err(());
+        }
+        if expected_generation
+            .replace(descriptor.reconnect_generation)
+            .is_some_and(|generation| generation != descriptor.reconnect_generation)
+            || expected_packet_sequence
+                .replace(descriptor.packet_sequence)
+                .is_some_and(|sequence| sequence != descriptor.packet_sequence)
+        {
+            return Err(());
+        }
+        let request_id =
+            d2b_session::ttrpc_request_id(descriptor.reconnect_generation, frame).map_err(|_| ())?;
+        if descriptor.request_id != request_id {
+            return Err(());
+        }
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+fn process_ticket_for_session(
+    binding: &DisplayLaunchBinding,
+    execution_ref: &ResourceRef,
+    target_ref: Option<&ResourceRef>,
+    session_digest: [u8; 32],
+) -> Result<ProcessLaunchTicket, WorkerEffectError> {
+    let (role_name, template_name, selected_provider, inherited_fd_count) = match binding.role() {
+        DisplayProcessRole::HostProxy => ("host-proxy", "wayland-proxy", "system-minijail", 2),
+        DisplayProcessRole::GuestFrontend => {
+            ("guest-frontend", "wayland-proxy", "system-systemd", 1)
+        }
+    };
+    let suffix = display_session_suffix(session_digest);
+    let process_ref = ResourceRef::parse(&format!("Process/display-{role_name}-{suffix}"))
+        .map_err(|_| WorkerEffectError::LaunchRejected)?;
+    let owner_provider =
+        d2b_contracts_resource::v3::execution_policy::BoundedToken::parse("display-wayland").map_err(|_| WorkerEffectError::LaunchRejected)?;
+    let component =
+        d2b_contracts_resource::v3::execution_policy::BoundedToken::parse("process-controller").map_err(|_| WorkerEffectError::LaunchRejected)?;
+    let template = d2b_contracts_resource::v3::execution_policy::BoundedToken::parse(template_name)
+        .map_err(|_| WorkerEffectError::LaunchRejected)?;
+    let selected_provider = d2b_contracts_resource::v3::execution_policy::BoundedToken::parse(selected_provider)
+        .map_err(|_| WorkerEffectError::LaunchRejected)?;
+    let process_uid = session_resource_uid(session_digest, binding.role(), b"process");
+    let operation_uid = session_resource_uid(session_digest, binding.role(), b"operation");
+    let generation = d2b_contracts_resource::v3::ResourceGeneration::new(binding.policy_generation())
+        .map_err(|_| WorkerEffectError::LaunchRejected)?;
+    let controller_generation =
+        d2b_contracts_resource::v3::ControllerGeneration::new(binding.controller_generation())
+            .map_err(|_| WorkerEffectError::LaunchRejected)?;
+    let digests = CompiledDigests {
+        sandbox: configuration_digest(binding, b"sandbox"),
+        budget: configuration_digest(binding, b"budget"),
+        mounts: configuration_digest(binding, b"mounts"),
+        devices: configuration_digest(binding, b"devices"),
+        network: configuration_digest(binding, b"network"),
+        endpoints: configuration_digest(binding, b"endpoints"),
+        fd_table: configuration_digest(binding, b"fd-table"),
+    };
+    let operation = OperationBinding::new(operation_uid, 30_000)
+        .map_err(|_| WorkerEffectError::LaunchRejected)?;
+    let expected_identity = [
+        IdentityBinding::Cgroup,
+        IdentityBinding::Executable,
+        IdentityBinding::Generation,
+        IdentityBinding::Template,
+    ]
+    .into_iter()
+    .collect();
+    let ticket = ProcessLaunchTicket::new(
+        process_ref,
+        process_uid,
+        generation,
+        controller_generation,
+        owner_provider,
+        component,
+        template,
+        execution_ref.clone(),
+        d2b_contracts_resource::v3::execution_policy::ExecutionDomain::System,
+        None,
+        selected_provider,
+        digests,
+        operation,
+        expected_identity,
+    )
+    .map_err(|_| WorkerEffectError::LaunchRejected)?;
+    let ticket = if let Some(target_ref) = target_ref {
+        ticket
+            .with_target_ref(target_ref.clone())
+            .map_err(|_| WorkerEffectError::LaunchRejected)?
+    } else {
+        ticket
+    };
+    ticket
+        .with_readiness(ReadinessExpectation::condition(1_000).expect("fixed readiness"))
+        .with_inherited_fd_count(inherited_fd_count)
+        .map_err(|_| WorkerEffectError::LaunchRejected)
+}
+
+#[cfg(test)]
 fn configuration_digest(
     binding: &DisplayLaunchBinding,
     label: &[u8],
@@ -4737,37 +5857,438 @@ fn configuration_digest(
     d2b_process::ConfigurationDigest::from_bytes(digest.finalize().into())
 }
 
-fn resource_uid(binding: &DisplayLaunchBinding, label: &[u8]) -> ResourceUid {
+#[cfg(test)]
+fn display_session_suffix(session_digest: [u8; 32]) -> String {
+    let mut suffix = String::with_capacity(40);
+    for byte in session_digest.iter().take(20) {
+        suffix.push_str(&format!("{byte:02x}"));
+    }
+    suffix
+}
+
+#[cfg(test)]
+fn session_resource_uid(
+    session_digest: [u8; 32],
+    role: DisplayProcessRole,
+    label: &[u8],
+) -> ResourceUid {
     let mut digest = Sha256::new();
     digest.update(b"d2bd-display-resource-v1");
     digest.update(label);
-    digest.update(binding.attachment_digest());
-    digest.update(binding.policy_generation().to_be_bytes());
+    digest.update((role as u8).to_be_bytes());
+    digest.update(session_digest);
     let mut bytes: [u8; 16] = digest.finalize()[..16]
         .try_into()
         .expect("fixed digest length");
     bytes[6] = (bytes[6] & 0x0f) | 0x40;
     bytes[8] = (bytes[8] & 0x3f) | 0x80;
-    let value = format!(
+    ResourceUid::parse(format!(
         "{:02x}{:02x}{:02x}{:02x}-{:02x}{:02x}-{:02x}{:02x}-{:02x}{:02x}-{:02x}{:02x}{:02x}{:02x}{:02x}{:02x}",
-        bytes[0],
-        bytes[1],
-        bytes[2],
-        bytes[3],
-        bytes[4],
-        bytes[5],
-        bytes[6],
-        bytes[7],
-        bytes[8],
-        bytes[9],
-        bytes[10],
-        bytes[11],
-        bytes[12],
-        bytes[13],
-        bytes[14],
-        bytes[15],
+        bytes[0], bytes[1], bytes[2], bytes[3], bytes[4], bytes[5], bytes[6], bytes[7],
+        bytes[8], bytes[9], bytes[10], bytes[11], bytes[12], bytes[13], bytes[14], bytes[15],
+    ))
+    .expect("uuid bytes are canonical")
+}
+
+fn durable_display_suffix(owner_uid: &ResourceUid, role: DisplayProcessRole) -> String {
+    let mut digest = Sha256::new();
+    digest.update(b"d2bd-durable-display-process-v1");
+    digest.update(owner_uid.as_str().as_bytes());
+    digest.update([role as u8]);
+    let digest = digest.finalize();
+    let mut suffix = String::with_capacity(40);
+    for byte in digest.iter().take(20) {
+        suffix.push_str(&format!("{byte:02x}"));
+    }
+    suffix
+}
+
+fn resource_wire_identity(
+    zone: &ZoneId,
+    resource_ref: &ResourceRef,
+    uid: Option<&ResourceUid>,
+    revision: Option<u64>,
+) -> wire::ResourceIdentity {
+    let mut identity = wire::ResourceIdentity::new();
+    identity.zone = zone.as_str().to_owned();
+    identity.resource_type = resource_ref.resource_type().as_str().to_owned();
+    identity.name = resource_ref.name().as_str().to_owned();
+    identity.uid = uid.map(|value| value.as_str().to_owned());
+    identity.revision = revision;
+    identity
+}
+
+fn resource_get_request(
+    zone: &ZoneId,
+    resource_ref: &ResourceRef,
+    operation: &str,
+) -> wire::GetRequest {
+    let mut request = wire::GetRequest::new();
+    request.meta = protobuf::MessageField::some(resource_request_meta(&resource_operation_id(
+        operation,
+        zone,
+        resource_ref,
+    )));
+    request.target =
+        protobuf::MessageField::some(resource_wire_identity(zone, resource_ref, None, None));
+    request
+}
+
+fn wayland_session_resource_projection(
+    resource: &WaylandSessionResourceStatus,
+) -> serde_json::Value {
+    let mut projection = serde_json::Map::new();
+    if let Some(reference) = resource.proxy_process_ref.as_ref() {
+        projection.insert(
+            "proxyProcessRef".to_owned(),
+            serde_json::Value::String(reference.to_canonical_string()),
+        );
+    }
+    if let Some(reference) = resource.guest_frontend_process_ref.as_ref() {
+        projection.insert(
+            "guestFrontendProcessRef".to_owned(),
+            serde_json::Value::String(reference.to_canonical_string()),
+        );
+    }
+    if let Some(reference) = resource.wayland_endpoint_ref.as_ref() {
+        projection.insert(
+            "waylandEndpointRef".to_owned(),
+            serde_json::Value::String(reference.to_canonical_string()),
+        );
+    }
+    if let Some(generation) = resource.wayland_endpoint_generation {
+        projection.insert(
+            "waylandEndpointGeneration".to_owned(),
+            serde_json::Value::Number(generation.into()),
+        );
+    }
+    if !resource.policy_digest.is_empty() {
+        projection.insert(
+            "policyDigest".to_owned(),
+            serde_json::Value::String(resource.policy_digest.clone()),
+        );
+    }
+    serde_json::Value::Object(projection)
+}
+
+fn resource_operation_id(operation: &str, zone: &ZoneId, resource_ref: &ResourceRef) -> String {
+    let scope = format!(
+        "{}:{}",
+        zone.as_str(),
+        resource_ref.to_canonical_string()
     );
-    ResourceUid::parse(value).expect("uuid bytes are canonical")
+    let digest = Sha256::digest(scope.as_bytes());
+    let digest = digest
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect::<String>();
+    format!("{operation}:{digest}")
+}
+
+fn resource_operation_id_with_key(
+    operation: &str,
+    zone: &ZoneId,
+    resource_ref: &ResourceRef,
+    key: &[u8],
+) -> String {
+    let mut scope = Vec::with_capacity(
+        zone.as_str().len() + resource_ref.to_canonical_string().len() + key.len() + 2,
+    );
+    scope.extend_from_slice(zone.as_str().as_bytes());
+    scope.push(0);
+    scope.extend_from_slice(resource_ref.to_canonical_string().as_bytes());
+    scope.push(0);
+    scope.extend_from_slice(key);
+    let digest = Sha256::digest(scope);
+    let digest = digest
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect::<String>();
+    format!("{operation}:{digest}")
+}
+
+fn resource_request_meta(operation: &str) -> wire::RequestMeta {
+    let mut meta = wire::RequestMeta::new();
+    meta.operation_id = operation.to_owned();
+    meta.idempotency_key = operation.to_owned();
+    meta.correlation_id = operation.to_owned();
+    meta.trace_id = operation.to_owned();
+    meta.deadline_ms = 10_000;
+    meta
+}
+
+fn project_process_state(envelope: &ResourceEnvelope) -> Result<WorkerState, WorkerEffectError> {
+    let attempts = envelope
+        .status()
+        .resource()
+        .get("restartCount")
+        .and_then(|value| match value {
+            CanonicalJsonValue::Integer(value) => u8::try_from(*value).ok(),
+            _ => None,
+        })
+        .unwrap_or(0);
+    Ok(match envelope.status().phase() {
+        ResourcePhase::Ready => WorkerState::Ready {
+            generation: envelope
+                .status()
+                .observed_generation()
+                .get()
+                .max(envelope.metadata().generation().get())
+                .max(1),
+        },
+        ResourcePhase::Failed | ResourcePhase::Degraded => WorkerState::Failed { attempts },
+        ResourcePhase::Deleted => WorkerState::Terminal { deleted: true },
+        ResourcePhase::Succeeded => WorkerState::Terminal { deleted: false },
+        ResourcePhase::Pending | ResourcePhase::Unknown => WorkerState::Starting,
+    })
+}
+
+fn metadata_deletion_requested(bytes: &[u8]) -> bool {
+    let Ok(CanonicalJsonValue::Object(root)) = CanonicalJsonValue::parse(bytes) else {
+        return false;
+    };
+    matches!(
+        root.get("metadata")
+            .and_then(CanonicalJsonValue::as_object)
+            .and_then(|metadata| metadata.get("deletionRequestedAt")),
+        Some(value) if !matches!(value, CanonicalJsonValue::Null)
+    )
+}
+
+fn durable_envelope_matches(
+    envelope: &ResourceEnvelope,
+    role: DisplayProcessRole,
+    process_ref: &ResourceRef,
+    zone: &ZoneId,
+    owner_ref: &ResourceRef,
+    owner_uid: &ResourceUid,
+    expected_execution_ref: &ResourceRef,
+) -> bool {
+    let expected_provider = match role {
+        DisplayProcessRole::HostProxy => "system-minijail",
+        DisplayProcessRole::GuestFrontend => "system-systemd",
+    };
+    let expected_template = match role {
+        DisplayProcessRole::HostProxy => "wayland-proxy-worker",
+        DisplayProcessRole::GuestFrontend => "wayland-frontend-worker",
+    };
+    let Ok(process) =
+        serde_json::from_slice::<ProcessSpec>(&envelope.spec().base().to_canonical_bytes())
+    else {
+        return false;
+    };
+    envelope.resource_type().as_str() == "Process"
+        && ResourceRef::new(
+            envelope.resource_type().clone(),
+            envelope.metadata().name().clone(),
+        ) == *process_ref
+        && envelope.metadata().zone() == zone
+        && envelope.metadata().owner_ref() == Some(owner_ref)
+        && envelope.metadata().generation().get() != 0
+        && envelope.spec().provider_ref().is_some_and(|provider| {
+            provider.resource_type().as_str() == "Provider"
+                && provider.name().as_str() == expected_provider
+        })
+        && process.execution().execution_ref() == expected_execution_ref
+        && process.execution().template().as_str() == expected_template
+        && !owner_uid.as_str().is_empty()
+}
+
+fn durable_endpoint_matches(
+    envelope: &ResourceEnvelope,
+    role: DisplayProcessRole,
+    endpoint_ref: &ResourceRef,
+    zone: &ZoneId,
+    owner_ref: &ResourceRef,
+    owner_uid: &ResourceUid,
+    producer_ref: &ResourceRef,
+) -> bool {
+    let Ok(endpoint) = serde_json::from_slice::<EndpointSpec>(
+        &envelope
+            .spec()
+            .base_with_provider_ref()
+            .to_canonical_bytes(),
+    ) else {
+        return false;
+    };
+    let expected = match role {
+        DisplayProcessRole::HostProxy => (
+            EndpointClass::Data,
+            EndpointTransport::FdAttachment,
+            "wayland-cross-domain",
+            "display-wayland-data-v3",
+        ),
+        DisplayProcessRole::GuestFrontend => (
+            EndpointClass::Transport,
+            EndpointTransport::Vsock,
+            "guest-cross-domain",
+            "guest-frontend-v3",
+        ),
+    };
+    envelope.resource_type().as_str() == "Endpoint"
+        && ResourceRef::new(
+            envelope.resource_type().clone(),
+            envelope.metadata().name().clone(),
+        ) == *endpoint_ref
+        && envelope.metadata().zone() == zone
+        && envelope.metadata().owner_ref() == Some(owner_ref)
+        && endpoint.provider_ref().to_canonical_string() == "Provider/display-wayland"
+        && endpoint.producer_ref() == producer_ref
+        && endpoint.endpoint_class() == expected.0
+        && endpoint.transport() == expected.1
+        && endpoint.purpose().as_str() == expected.2
+        && endpoint
+            .service_fingerprint()
+            .is_some_and(|value| value.as_str() == expected.3)
+        && endpoint.locality() == EndpointLocality::CrossDomain
+        && endpoint.visibility() == EndpointVisibility::Zone
+        && endpoint.consumer_policy().allowed_operations() == [EndpointOperation::Resolve]
+        && endpoint.lifecycle_policy() == EndpointLifecyclePolicy::RecycleWithProducer
+        && !owner_uid.as_str().is_empty()
+}
+
+fn endpoint_record_from_response(
+    endpoint_ref: ResourceRef,
+    resource: wire::ResourceEnvelopeBytes,
+    role: DisplayProcessRole,
+    zone: &ZoneId,
+    owner_ref: &ResourceRef,
+    owner_uid: &ResourceUid,
+    producer_ref: &ResourceRef,
+) -> Result<DurableDisplayEndpoint, WorkerEffectError> {
+    let envelope = ResourceEnvelope::from_json(&resource.canonical_json)
+        .map_err(|_| WorkerEffectError::WorkerUnavailable)?;
+    if !durable_endpoint_matches(
+        &envelope,
+        role,
+        &endpoint_ref,
+        zone,
+        owner_ref,
+        owner_uid,
+        producer_ref,
+    ) {
+        return Err(WorkerEffectError::LaunchRejected);
+    }
+    let generation = envelope
+        .status()
+        .resource()
+        .get("endpointGeneration")
+        .and_then(|value| match value {
+            CanonicalJsonValue::Integer(value) => u64::try_from(*value).ok(),
+            _ => None,
+        })
+        .unwrap_or(0);
+    Ok(DurableDisplayEndpoint {
+        resource_ref: endpoint_ref,
+        resource_uid: envelope.metadata().uid().clone(),
+        revision: envelope.metadata().revision().get(),
+        generation,
+        deletion_requested: metadata_deletion_requested(&resource.canonical_json),
+    })
+}
+
+fn durable_record_from_response(
+    process_ref: ResourceRef,
+    resource: wire::ResourceEnvelopeBytes,
+    role: DisplayProcessRole,
+    expected_policy_generation: u64,
+    zone: &ZoneId,
+    owner_ref: &ResourceRef,
+    owner_uid: &ResourceUid,
+    expected_execution_ref: &ResourceRef,
+) -> Result<(WorkerState, DurableDisplayProcess), WorkerEffectError> {
+    let envelope = ResourceEnvelope::from_json(&resource.canonical_json)
+        .map_err(|_| WorkerEffectError::WorkerUnavailable)?;
+    if !durable_envelope_matches(
+        &envelope,
+        role,
+        &process_ref,
+        zone,
+        owner_ref,
+        owner_uid,
+        expected_execution_ref,
+    ) {
+        return Err(WorkerEffectError::LaunchRejected);
+    }
+    let state = if display_policy_generation(&resource.canonical_json)
+        == Some(expected_policy_generation)
+    {
+        project_process_state(&envelope)?
+    } else {
+        WorkerState::Starting
+    };
+    Ok((
+        state,
+        DurableDisplayProcess {
+            resource_ref: process_ref,
+            resource_uid: envelope.metadata().uid().clone(),
+            generation: envelope.metadata().generation().get(),
+            revision: envelope.metadata().revision().get(),
+            restart_count: process_restart_count(&resource.canonical_json),
+            deletion_requested: metadata_deletion_requested(&resource.canonical_json),
+        },
+    ))
+}
+
+fn display_policy_generation(bytes: &[u8]) -> Option<u64> {
+    let value = CanonicalJsonValue::parse(bytes).ok()?;
+    let CanonicalJsonValue::Object(root) = value else {
+        return None;
+    };
+    let CanonicalJsonValue::Object(metadata) = root.get("metadata")? else {
+        return None;
+    };
+    let CanonicalJsonValue::Object(annotations) = metadata.get("annotations")? else {
+        return None;
+    };
+    let CanonicalJsonValue::String(value) = annotations.get(PROCESS_RESTART_ANNOTATION)? else {
+        return None;
+    };
+    value.parse().ok()
+}
+
+fn process_restart_count(bytes: &[u8]) -> u64 {
+    let Ok(CanonicalJsonValue::Object(root)) = CanonicalJsonValue::parse(bytes) else {
+        return 0;
+    };
+    let Some(CanonicalJsonValue::Object(status)) = root.get("status") else {
+        return 0;
+    };
+    let Some(CanonicalJsonValue::Object(resource)) = status.get("resource") else {
+        return 0;
+    };
+    match resource.get("restartCount") {
+        Some(CanonicalJsonValue::Integer(value)) => u64::try_from(*value).unwrap_or(0),
+        _ => 0,
+    }
+}
+
+fn update_display_policy_annotation(
+    bytes: &[u8],
+    policy_generation: u64,
+) -> Result<Vec<u8>, WorkerEffectError> {
+    let mut value =
+        CanonicalJsonValue::parse(bytes).map_err(|_| WorkerEffectError::WorkerUnavailable)?;
+    let CanonicalJsonValue::Object(root) = &mut value else {
+        return Err(WorkerEffectError::WorkerUnavailable);
+    };
+    let Some(CanonicalJsonValue::Object(metadata)) = root.get_mut("metadata") else {
+        return Err(WorkerEffectError::WorkerUnavailable);
+    };
+    if !metadata.contains_key("annotations") {
+        metadata.insert(
+            "annotations".to_owned(),
+            CanonicalJsonValue::Object(BTreeMap::new()),
+        );
+    }
+    let Some(CanonicalJsonValue::Object(annotations)) = metadata.get_mut("annotations") else {
+        return Err(WorkerEffectError::WorkerUnavailable);
+    };
+    annotations.insert(
+        PROCESS_RESTART_ANNOTATION.to_owned(),
+        CanonicalJsonValue::String(policy_generation.to_string()),
+    );
+    Ok(value.to_canonical_bytes())
 }
 
 fn run_effect<T, F, Fut>(operation: F) -> Result<T, WorkerEffectError>
@@ -4793,11 +6314,14 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+    use d2b_contracts_resource::v3::{ControllerGeneration, ResourceGeneration};
     use d2b_contracts_zone_session::v3::component_session::RequestId;
     use d2b_process::{
         BackendLaunch, BackendObservation, ObservedIdentity, ProcessEffectBackend,
         ProcessEffectError, ProcessRequest, ProcessStopClass, WaitReapOwner,
     };
+    use d2b_process_conformance::IdentityBinding;
+    use d2b_provider_supervisor::ProviderSupervisor;
     use d2b_resource_api::authz::{
         ApiCatalog, BindingScope, BoundSubject, CompiledRole, CompiledRoleBinding,
         NativeAuthorizer, PolicyRule, PolicySet, SessionVerb,
@@ -4812,6 +6336,7 @@ mod tests {
         launches: std::sync::Arc<AtomicUsize>,
         observes: std::sync::Arc<AtomicUsize>,
         stops: std::sync::Arc<AtomicUsize>,
+        requests: std::sync::Arc<std::sync::Mutex<Vec<ProcessRequest>>>,
     }
 
     impl ProcessEffectBackend for Backend {
@@ -4819,8 +6344,9 @@ mod tests {
 
         fn launch(
             &self,
-            _request: ProcessRequest,
+            request: ProcessRequest,
         ) -> Result<BackendLaunch<Self::Handle>, ProcessEffectError> {
+            self.requests.lock().unwrap().push(request);
             let seed = self.launches.fetch_add(1, Ordering::AcqRel) as u8 + 1;
             Ok(BackendLaunch::new(
                 BackendObservation::new(
@@ -4857,119 +6383,154 @@ mod tests {
         }
     }
 
-    #[derive(Clone, Default)]
-    struct TestGuestFrontend;
-
-    type TestInteractionRuntime = Arc<
-        AsyncMutex<Option<InteractionRuntimeSet<ProviderSupervisor<Backend>, TestGuestFrontend>>>,
-    >;
-
-    impl GuestFrontendEffectPort for TestGuestFrontend {
-        fn ensure(
-            &mut self,
-            _guest: &ResourceRef,
-            policy_generation: u64,
-            teardown_generation: u64,
-            session_digest: [u8; 32],
-        ) -> Result<WorkerLaunchReceipt, WorkerEffectError> {
-            Ok(WorkerLaunchReceipt::from_supervisor(
-                DisplayProcessRole::GuestFrontend,
-                WorkerState::Ready { generation: 1 },
-                policy_generation,
-                teardown_generation,
-                session_digest,
-            ))
-        }
-
-        fn stop(
-            &mut self,
-            _guest: &ResourceRef,
-            policy_generation: u64,
-            teardown_generation: u64,
-            session_digest: [u8; 32],
-        ) -> Result<WorkerLaunchReceipt, WorkerEffectError> {
-            Ok(WorkerLaunchReceipt::from_supervisor(
-                DisplayProcessRole::GuestFrontend,
-                WorkerState::Terminal { deleted: true },
-                policy_generation,
-                teardown_generation,
-                session_digest,
-            ))
-        }
-    }
+    type TestInteractionRuntime =
+        Arc<AsyncMutex<Option<InteractionRuntimeSet<ProviderSupervisor<Backend>>>>>;
 
     #[test]
-    fn neutral_ticket_keeps_fd_metadata_and_supervises_exact_worker() {
-        let binding = DisplayLaunchBinding::from_ticket(
-            d2b_provider_display_wayland::LaunchTicket::new_for_daemon(
-                DisplayProcessRole::HostProxy,
-                Some(d2b_provider_display_wayland::AttachmentGrantHandle::from_daemon([1; 32])),
-                d2b_provider_display_wayland::AttachmentGrantHandle::from_daemon([2; 32]),
-                "sha256:".to_owned() + &"a".repeat(64),
-                1,
-                "session",
-                1,
-            )
-            .unwrap(),
+    fn durable_display_process_payloads_bind_owner_provider_template_and_target() {
+        let supervisor = d2b_provider_supervisor::ProviderSupervisor::new(Backend::default());
+        let mut effects = DisplaySupervisorEffects::new(supervisor);
+        effects.resource_zone = Some(ZoneId::parse("work").unwrap());
+        effects.wayland_session_ref = Some(
+            ResourceRef::parse("display-wayland.d2bus.org.WaylandSession/display-wayland").unwrap(),
         );
-        let host_ref = ResourceRef::parse("Host/host").unwrap();
-        let ticket = process_ticket(&binding, &host_ref).unwrap();
-        assert_eq!(ticket.execution_ref().to_canonical_string(), "Host/host");
-        assert_eq!(ticket.inherited_fd_table().count(), 2);
-        let _ = ticket.digests().fd_table;
-    }
+        effects.wayland_session_uid =
+            Some(ResourceUid::parse("aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa").unwrap());
+        effects.host_execution_ref = Some(ResourceRef::parse("Host/host-system").unwrap());
+        effects.guest_subject = Some(ResourceRef::parse("Guest/work").unwrap());
+        effects.session_digest = [42; 32];
 
-    #[test]
-    fn display_effect_observes_then_launches_and_stops_through_supervisor() {
-        let backend = Backend::default();
-        let supervisor = d2b_provider_supervisor::ProviderSupervisor::new(backend.clone());
-        let mut effects = DisplaySupervisorEffects::new(supervisor);
-        let ticket = d2b_provider_display_wayland::LaunchTicket::new_for_daemon(
+        let host_ticket = d2b_provider_display_wayland::LaunchTicket::new_for_daemon(
             DisplayProcessRole::HostProxy,
-            Some(d2b_provider_display_wayland::AttachmentGrantHandle::from_daemon([3; 32])),
-            d2b_provider_display_wayland::AttachmentGrantHandle::from_daemon([4; 32]),
+            Some(d2b_provider_display_wayland::AttachmentGrantHandle::from_daemon([1; 32])),
+            d2b_provider_display_wayland::AttachmentGrantHandle::from_daemon([2; 32]),
+            "sha256:".to_owned() + &"a".repeat(64),
+            7,
+            "session",
+            3,
+        )
+        .unwrap();
+        let guest_ticket = d2b_provider_display_wayland::LaunchTicket::new_for_daemon(
+            DisplayProcessRole::GuestFrontend,
+            None,
+            d2b_provider_display_wayland::AttachmentGrantHandle::from_daemon([3; 32]),
             "sha256:".to_owned() + &"b".repeat(64),
-            1,
+            7,
             "session",
-            1,
+            3,
         )
         .unwrap();
-        effects.policy_generation = 1;
-        effects.teardown_generation = 1;
-        effects.session_digest = [8; 32];
-        effects.host_execution_ref = Some(ResourceRef::parse("Host/host").unwrap());
-        effects.launch(ticket).unwrap();
-        effects.stop(DisplayProcessRole::HostProxy).unwrap();
-        assert_eq!(backend.observes.load(Ordering::Acquire), 1);
-        assert_eq!(backend.launches.load(Ordering::Acquire), 1);
-        assert_eq!(backend.stops.load(Ordering::Acquire), 1);
+        let host_binding = DisplayLaunchBinding::from_ticket(host_ticket);
+        let guest_binding = DisplayLaunchBinding::from_ticket(guest_ticket);
+
+        let host_payload = serde_json::from_slice::<serde_json::Value>(
+            &effects
+                .durable_process_payload(DisplayProcessRole::HostProxy, &host_binding)
+                .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(
+            host_payload["metadata"]["ownerRef"],
+            "display-wayland.d2bus.org.WaylandSession/display-wayland"
+        );
+        assert_eq!(
+            host_payload["spec"]["providerRef"],
+            "Provider/system-minijail"
+        );
+        assert_eq!(host_payload["spec"]["executionRef"], "Host/host-system");
+        assert_eq!(host_payload["spec"]["template"], "wayland-proxy-worker");
+
+        let guest_payload = serde_json::from_slice::<serde_json::Value>(
+            &effects
+                .durable_process_payload(DisplayProcessRole::GuestFrontend, &guest_binding)
+                .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(
+            guest_payload["spec"]["providerRef"],
+            "Provider/system-systemd"
+        );
+        assert_eq!(guest_payload["spec"]["executionRef"], "Guest/work");
+        assert_eq!(guest_payload["spec"]["template"], "wayland-frontend-worker");
+        assert_ne!(
+            effects
+                .durable_process_ref(DisplayProcessRole::HostProxy)
+                .unwrap(),
+            effects
+                .durable_process_ref(DisplayProcessRole::GuestFrontend)
+                .unwrap()
+        );
     }
 
     #[test]
-    fn display_supervision_refresh_uses_live_worker_observation() {
-        let backend = Backend::default();
-        let supervisor = d2b_provider_supervisor::ProviderSupervisor::new(backend.clone());
-        let mut effects = DisplaySupervisorEffects::new(supervisor);
-        effects.policy_generation = 1;
-        effects.teardown_generation = 1;
-        effects.session_digest = [10; 32];
-        effects.host_execution_ref = Some(ResourceRef::parse("Host/host").unwrap());
-        let ticket = d2b_provider_display_wayland::LaunchTicket::new_for_daemon(
-            DisplayProcessRole::HostProxy,
-            Some(d2b_provider_display_wayland::AttachmentGrantHandle::from_daemon([5; 32])),
-            d2b_provider_display_wayland::AttachmentGrantHandle::from_daemon([6; 32]),
-            "sha256:".to_owned() + &"c".repeat(64),
-            1,
-            "session",
-            1,
+    fn durable_display_process_names_survive_reconnects() {
+        let owner_uid =
+            ResourceUid::parse("aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa").expect("owner uid");
+        let host = durable_display_suffix(&owner_uid, DisplayProcessRole::HostProxy);
+        let guest = durable_display_suffix(&owner_uid, DisplayProcessRole::GuestFrontend);
+
+        assert_eq!(
+            host,
+            durable_display_suffix(&owner_uid, DisplayProcessRole::HostProxy)
+        );
+        assert_eq!(
+            guest,
+            durable_display_suffix(&owner_uid, DisplayProcessRole::GuestFrontend)
+        );
+        assert_ne!(host, guest);
+    }
+
+    #[test]
+    fn resource_operation_ids_are_valid_bounded_api_ids() {
+        let zone = ZoneId::parse("work").expect("zone");
+        let resource_ref = ResourceRef::parse(
+            "display-wayland.d2bus.org.WaylandSession/display-wayland",
         )
-        .unwrap();
-        effects.launch(ticket).unwrap();
-        let observation_before_refresh = daemon_monotonic_ms();
-        let evidence = effects.current_supervision();
-        assert!(evidence.observed_at_ms() >= observation_before_refresh);
-        assert!(evidence.proxy_last_failure_ms().is_some());
-        assert!(backend.observes.load(Ordering::Acquire) >= 2);
+        .expect("resource ref");
+        let operation = resource_operation_id("display-process-create", &zone, &resource_ref);
+        assert!(OperationId::parse(operation.clone()).is_ok());
+        assert!(!operation.contains('/'));
+        assert!(operation.len() <= 128);
+        let first = resource_operation_id_with_key(
+            "display-endpoint-delete",
+            &zone,
+            &resource_ref,
+            b"uid-a:1",
+        );
+        let retry = resource_operation_id_with_key(
+            "display-endpoint-delete",
+            &zone,
+            &resource_ref,
+            b"uid-a:1",
+        );
+        let changed_revision = resource_operation_id_with_key(
+            "display-endpoint-delete",
+            &zone,
+            &resource_ref,
+            b"uid-a:2",
+        );
+        assert_eq!(first, retry);
+        assert_ne!(first, changed_revision);
+        assert!(OperationId::parse(first).is_ok());
+    }
+
+    #[test]
+    fn durable_display_policy_annotation_is_canonical_and_fenced() {
+        let original = br#"{"metadata":{"annotations":{"existing":"keep"}}}"#;
+        let updated = update_display_policy_annotation(original, 17).expect("annotation update");
+        let value = CanonicalJsonValue::parse(&updated).expect("canonical metadata");
+
+        assert_eq!(display_policy_generation(&updated), Some(17));
+        assert_eq!(
+            value
+                .as_object()
+                .and_then(|root| root.get("metadata"))
+                .and_then(CanonicalJsonValue::as_object)
+                .and_then(|metadata| metadata.get("annotations"))
+                .and_then(CanonicalJsonValue::as_object)
+                .and_then(|annotations| annotations.get("existing")),
+            Some(&CanonicalJsonValue::String("keep".to_owned()))
+        );
     }
 
     #[test]
@@ -4984,67 +6545,6 @@ mod tests {
 
         assert_eq!(receipt.state(), WorkerState::Terminal { deleted: true });
         assert_eq!(effects.live_worker_count(), 0);
-    }
-
-    #[test]
-    fn persisted_observation_records_round_trip_without_raw_launch_authority() {
-        let directory = tempfile::tempdir().unwrap();
-        let path = directory.path().join("observations.json");
-        let record = PersistedObservation {
-            process_uid: "11111111-1111-4111-8111-111111111111".to_owned(),
-            vm_id: "guest-a".to_owned(),
-            execution_ref: ResourceRef::parse("Host/host-system").unwrap(),
-            domain: ExecutionDomain::System,
-            user_ref: None,
-            role_id: "wayland-proxy".to_owned(),
-            role: RunnerRole::WaylandProxy,
-            bundle_runner_intent_ref: "runner:guest-a:wayland-proxy".to_owned(),
-            provider_identity: [1; 32],
-            template_identity: [2; 32],
-            generation: 3,
-            resource_ref: ResourceRef::parse("EphemeralProcess/display-host-proxy").unwrap(),
-            resource_uid: ResourceUid::parse("22222222-2222-4222-8222-222222222222").unwrap(),
-            bundle_content_identity: "sha256:test".to_owned(),
-            sandbox_plan: None,
-            guest_execution: None,
-            pid: 42,
-            start_time_ticks: 99,
-            cgroup_verified: true,
-            executable_verified: true,
-        };
-        std::fs::write(&path, serde_json::to_vec(&[record]).unwrap()).unwrap();
-
-        let observations = load_observations(&path).unwrap();
-        let observed = observations
-            .get("11111111-1111-4111-8111-111111111111")
-            .unwrap();
-        assert_eq!(observed.pid, 42);
-        assert_eq!(observed.start_time_ticks, 99);
-        assert_eq!(observed.intent.role, RunnerRole::WaylandProxy);
-        assert_eq!(
-            observed.intent.execution_ref.to_canonical_string(),
-            "Host/host-system"
-        );
-        assert_eq!(
-            observed.intent.resource_ref.to_canonical_string(),
-            "EphemeralProcess/display-host-proxy"
-        );
-    }
-
-    #[test]
-    fn display_sandbox_plan_is_derived_from_trusted_runner_intent() {
-        let intent = d2b_core::test_support::ResolvedRunnerIntentBuilder::new()
-            .with_capabilities(vec!["CAP_NET_RAW".to_owned()])
-            .with_seccomp_policy_ref(Some("strict"))
-            .build();
-
-        let plan = display_sandbox_plan(&intent, ExecutionDomain::System).unwrap();
-
-        assert_eq!(plan.domain, ExecutionDomain::System);
-        assert_eq!(plan.capability_classes, vec![CapabilityClass::NetworkRaw]);
-        assert_eq!(plan.seccomp_class.as_str(), "strict");
-        assert!(plan.no_new_privileges);
-        assert!(plan.read_only_root);
     }
 
     #[test]
@@ -5084,6 +6584,30 @@ mod tests {
                 .service,
             ServicePackage::ProviderV3,
         );
+    }
+
+    #[test]
+    fn clipboard_attachment_admission_matches_provider_safe_descriptor_kinds() {
+        use d2b_contracts_zone_session::v3::component_session::KernelObjectType;
+
+        for object_type in [
+            KernelObjectType::UnixStreamSocket,
+            KernelObjectType::UnixSeqpacketSocket,
+            KernelObjectType::PipeRead,
+            KernelObjectType::PipeWrite,
+            KernelObjectType::Memfd,
+            KernelObjectType::RegularFile,
+        ] {
+            assert!(clipboard_attachment_object_type_allowed(object_type));
+        }
+        for object_type in [
+            KernelObjectType::Pidfd,
+            KernelObjectType::Directory,
+            KernelObjectType::Device,
+            KernelObjectType::WaylandSocket,
+        ] {
+            assert!(!clipboard_attachment_object_type_allowed(object_type));
+        }
     }
 
     #[test]
@@ -5355,7 +6879,7 @@ mod tests {
     fn test_interaction_composition(
         zone: &ZoneId,
         uid: u32,
-    ) -> InteractionComposition<ProviderSupervisor<Backend>, TestGuestFrontend> {
+    ) -> InteractionComposition<ProviderSupervisor<Backend>> {
         test_interaction_composition_with_identity(
             zone,
             uid,
@@ -5386,7 +6910,7 @@ mod tests {
         controller_generation: u64,
         clipboard_provider_uid: Option<ResourceUid>,
         notification_provider_uid: Option<ResourceUid>,
-    ) -> InteractionComposition<ProviderSupervisor<Backend>, TestGuestFrontend> {
+    ) -> InteractionComposition<ProviderSupervisor<Backend>> {
         let catalog = ApiCatalog::standard();
         let role = CompiledRole::new(
             ResourceRef::parse("Role/interaction-provider").expect("role reference"),
@@ -5486,11 +7010,8 @@ mod tests {
                 controller_generation: ControllerGeneration::new(controller_generation).unwrap(),
             })
             .unwrap();
-        let mut composition = InteractionComposition::new_with_guest_frontend(
-            registrar,
-            ProviderSupervisor::new(Backend::default()),
-            TestGuestFrontend,
-        );
+        let mut composition =
+            InteractionComposition::new(registrar, ProviderSupervisor::new(Backend::default()));
         composition.bind_display_resource_evidence(
             CoreDisplayResourceEvidence::from_committed_policy(
                 ResourceRef::parse("display-wayland.d2bus.org.WaylandPolicy/display-wayland")
@@ -5536,7 +7057,7 @@ mod tests {
     fn test_interaction_runtime(
         zone: &ZoneId,
         uid: u32,
-    ) -> InteractionRuntimeSet<ProviderSupervisor<Backend>, TestGuestFrontend> {
+    ) -> InteractionRuntimeSet<ProviderSupervisor<Backend>> {
         let mut runtimes = InteractionRuntimeSet::new();
         runtimes.insert(zone.clone(), test_interaction_composition(zone, uid));
         runtimes
@@ -5545,7 +7066,7 @@ mod tests {
     fn committed_test_interaction_runtime(
         zone: &ZoneId,
         transport_uid: u32,
-    ) -> InteractionRuntimeSet<ProviderSupervisor<Backend>, TestGuestFrontend> {
+    ) -> InteractionRuntimeSet<ProviderSupervisor<Backend>> {
         let mut runtimes = InteractionRuntimeSet::new();
         runtimes.insert(
             zone.clone(),
@@ -5567,11 +7088,125 @@ mod tests {
         runtimes
     }
 
+    #[tokio::test(flavor = "current_thread")]
+    async fn vm_start_display_reconcile_uses_the_committed_session_route() {
+        let directory = tempfile::tempdir().expect("display reconciliation directory");
+        let zone = ZoneId::parse("work").expect("zone");
+        let uid = nix::unistd::getuid().as_raw();
+        let runtime = Arc::new(AsyncMutex::new(Some(committed_test_interaction_runtime(
+            &zone, uid,
+        ))));
+        let path = directory.path().join("display.sock");
+        let listener = bind_interaction_listener(&path, uid).expect("display listener");
+        let (_client, server) = establish_test_client(
+            &listener,
+            &runtime,
+            &zone,
+            d2b_provider_display_wayland::SERVICE_PACKAGE,
+            uid,
+            &path,
+        )
+        .await;
+        for _ in 0..50 {
+            if runtime
+                .lock()
+                .await
+                .as_ref()
+                .and_then(|set| set.runtime_for(&zone))
+                .is_some_and(|composition| composition.has_service_session(
+                    d2b_provider_display_wayland::SERVICE_PACKAGE,
+                ))
+            {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(1)).await;
+        }
+
+        let spec = WaylandSessionSpec::new(
+            ResourceRef::parse("Guest/work").expect("guest"),
+            ResourceRef::parse("Host/host").expect("host"),
+            ResourceRef::parse("User/alice").expect("user"),
+            ResourceRef::parse(
+                "display-wayland.d2bus.org.WaylandPolicy/display-wayland",
+            )
+            .expect("policy"),
+            d2b_provider_display_wayland::DisplayIdentity::new(
+                "work",
+                "#112233",
+                "#223344",
+                "#334455",
+            )
+            .expect("display identity"),
+            true,
+        )
+        .expect("Wayland session");
+        let session_ref =
+            ResourceRef::parse("display-wayland.d2bus.org.WaylandSession/display-wayland")
+                .expect("session ref");
+        let session_uid =
+            ResourceUid::parse("33333333-3333-4333-8333-333333333333").expect("session uid");
+
+        let mut guard = runtime.lock().await;
+        let composition = guard
+            .as_mut()
+            .and_then(|set| set.runtime_for_mut(&zone))
+            .expect("committed interaction composition");
+        let result = composition
+            .reconcile_committed_display_for_vm_start(
+                "work",
+                &session_ref,
+                &session_uid,
+                &spec,
+            )
+            .expect("committed display reconciliation");
+        assert_eq!(
+            result.status.phase,
+            d2b_provider_display_wayland::Phase::Ready
+        );
+        assert_eq!(result.worker_actions.len(), 0);
+        assert_eq!(
+            result.status.resource.proxy_process_ref,
+            None,
+            "the hermetic effect port has no Resource API; production must supply the durable projection"
+        );
+        assert!(
+            composition
+                .reconcile_committed_display_for_vm_start(
+                    "other-vm",
+                    &session_ref,
+                    &session_uid,
+                    &spec,
+                )
+                .is_err(),
+            "a VM start for a different Guest must not reuse the committed session"
+        );
+        drop(guard);
+        server.abort();
+        drop(listener);
+    }
+
+    #[test]
+    fn completed_display_finalization_discards_runtime_for_reconnect() {
+        let zone = ZoneId::parse("dev").unwrap();
+        let mut composition = test_interaction_composition(&zone, 42);
+        composition.display = Some(DisplayRuntime::new(
+            DisplayController::new(2),
+            DisplaySupervisorEffects::new(ProviderSupervisor::new(Backend::default())),
+        ));
+
+        let report = composition
+            .finalize(d2b_provider_display_wayland::GraceState::Active)
+            .unwrap();
+
+        assert!(report.decision.remove_finalizer);
+        assert!(composition.display.is_none());
+    }
+
     fn provider_bound_test_interaction_composition(
         zone: &ZoneId,
         transport_uid: u32,
         guest_sources: &[(&str, &str)],
-    ) -> InteractionComposition<ProviderSupervisor<Backend>, TestGuestFrontend> {
+    ) -> InteractionComposition<ProviderSupervisor<Backend>> {
         let first_guest = ResourceRef::parse(guest_sources[0].0).unwrap();
         let first_uid = ResourceUid::parse(guest_sources[0].1).unwrap();
         let clipboard_provider_uid =
@@ -5619,7 +7254,7 @@ mod tests {
     fn display_only_test_interaction_composition(
         zone: &ZoneId,
         transport_uid: u32,
-    ) -> InteractionComposition<ProviderSupervisor<Backend>, TestGuestFrontend> {
+    ) -> InteractionComposition<ProviderSupervisor<Backend>> {
         test_interaction_composition_with_identity(
             zone,
             transport_uid,
@@ -6484,6 +8119,7 @@ mod tests {
             true,
             None,
             None,
+            None,
         );
         assert!(validate_production_interaction_resource_state(&missing).is_err());
 
@@ -6509,6 +8145,7 @@ mod tests {
             true,
             None,
             Some(&wrong),
+            None,
         );
         assert!(validate_production_interaction_resource_state(&wrong_state).is_err());
         assert_ne!(wrong.subject_uid(), &wrong_uid);

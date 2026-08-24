@@ -152,7 +152,7 @@ The matching guest-visible option lives in the imported
   allowlist). The `.bpf` files live alongside the crosvm binary under
   a `symlinkJoin`; the C parser fallback is never used.
 - **`wl-cross-domain-proxy`** packaged under `pkgs/` for the guest-side
-  virtio-gpu cross-domain bridge.
+  virtio-gpu cross-domain bridge and retained in trusted guest closures.
 
 ## Guest-side resources created
 
@@ -164,9 +164,15 @@ The matching guest-visible option lives in the imported
 - `microvm.graphics.crosvmPackage` = either `crosvmPatched`
   (cross-domain trusted) or a shell shim around `crosvmPatched` that
   strips `cross-domain` from `--params`.
-- `systemd.user.services.wayland-proxy` - when
-  `crossDomainTrusted = true`, runs `wl-cross-domain-proxy` for the
-  guest-side virtio-gpu cross-domain bridge.
+- The signed `wayland-frontend-worker` Guest Process child - when
+  `crossDomainTrusted = true`, runs `wl-cross-domain-proxy` through the
+  `WaylandSession` lifecycle; no direct `systemd.user.services` launch is
+  emitted.
+- The Host Process controller records the Guest frontend as durable intent but
+  does not launch or mark Guest execution Ready. A target-local Guest Process
+  controller must reconcile that child through the authenticated Guest
+  boundary; until then the display aggregate remains pending and no Host
+  service fallback is used.
 - `environment.sessionVariables` pinning `WAYLAND_DISPLAY`,
   `QT_QPA_PLATFORM`, `GDK_BACKEND`, `XDG_SESSION_TYPE`,
   `SDL_VIDEODRIVER`, `CLUTTER_BACKEND`, `MOZ_ENABLE_WAYLAND`, plus

@@ -36,6 +36,8 @@ let
   # break local validation.
   d2bWaylandProxyPackage = d2bWaylandProxySourcePackage;
   d2bWaylandProxyBinary = "${d2bWaylandProxyPackage}/bin/d2b-wayland-proxy";
+  wlCrossDomainProxyPackage = import ../pkgs/wl-cross-domain-proxy { inherit pkgs; };
+  wlCrossDomainProxyBinary = "${wlCrossDomainProxyPackage}/bin/wl-cross-domain-proxy";
 
   backendPort = envName: cfg._index.usbip.backendPorts.${envName};
 
@@ -684,6 +686,14 @@ let
       ] ++ denyArgs ++ allowArgs ++ maxVersionArgs ++ dmabufAllowArgs ++ dmabufDenyArgs;
     };
 
+  waylandFrontendRunner = name: {
+    binaryPath = wlCrossDomainProxyBinary;
+    # The guest desktop exports WAYLAND_DISPLAY=wayland-1. Use the explicit
+    # socket-name mode because this Process runs as a system service and does
+    # not inherit the user's session environment.
+    argv = [ "d2b-${name}-wayland-frontend" "--socket-name" "wayland-1" ];
+  };
+
   videoBinaryPath = _name:
     # the per-VM
     # `d2b-${name}-video.service` was deleted. The video
@@ -873,7 +883,20 @@ use devices::virtio::vhost_user_backend::run_video_device;'
     ownerGid = ownerProfile.gid;
   };
 
-  mkProcessNode = name: { id, role, readiness, unit ? null, binaryPath ? null, argv ? [ ], env ? [ ], planOps ? [ ], networkInterfaces ? [ ] }:
+  mkProcessNode = name: {
+    id,
+    role,
+    readiness,
+    unit ? null,
+    binaryPath ? null,
+    argv ? [ ],
+    env ? [ ],
+    planOps ? [ ],
+    networkInterfaces ? [ ],
+    executionRef ? null,
+    executionDomain ? null,
+    userRef ? null
+  }:
     let
       # `vm.supervisor` was removed per ADR 0015; every enabled VM remains
       # daemon-supervised. These unit names are only transient-effect
@@ -904,6 +927,15 @@ use devices::virtio::vhost_user_backend::run_video_device;'
     }
     // lib.optionalAttrs (networkInterfaces != [ ]) {
       inherit networkInterfaces;
+    }
+    // lib.optionalAttrs (executionRef != null) {
+      inherit executionRef;
+    }
+    // lib.optionalAttrs (executionDomain != null) {
+      inherit executionDomain;
+    }
+    // lib.optionalAttrs (userRef != null) {
+      inherit userRef;
     };
 
   mkRunnerNode = name: args: runner:
@@ -1058,10 +1090,19 @@ use devices::virtio::vhost_user_backend::run_video_device;'
       ++ lib.optional emitWaylandProxy (mkRunnerNode name {
         id = "wayland-proxy";
         role = "wayland-proxy";
+        executionRef = "Host/host-system";
+        executionDomain = "system";
         readiness = [
           (unixSocketListening "/run/d2b-wlproxy/${name}/wayland-0")
         ];
       } (waylandProxyRunner "local-vm" name vm))
+      ++ lib.optional emitWaylandProxy (mkRunnerNode name {
+        id = "wayland-frontend-worker";
+        role = "wayland-proxy";
+        executionRef = "Guest/${name}";
+        executionDomain = "system";
+        readiness = [ ];
+      } (waylandFrontendRunner name))
       ++ lib.optional vm.audio.enable (mkRunnerNode name {
         id = "audio";
         role = "audio";

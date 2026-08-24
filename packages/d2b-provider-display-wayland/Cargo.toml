@@ -40,6 +40,11 @@ wl-proxy = { version = "=0.1.2", git = "https://github.com/vicondoa/wl-proxy.git
     "suite-wlr-protocols",
 ] }
 
+[dev-dependencies]
+d2b-session = { path = "../d2b-session", version = "0.0.0-bootstrap", features = [
+    "test-support",
+] }
+
 [[test]]
 name = "provider_behavior"
 path = "tests/provider_behavior.rs"

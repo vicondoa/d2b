@@ -1299,6 +1299,7 @@ dependencies = [
  "d2b-contracts-zone-session",
  "serde",
  "serde_json",
+ "sha2",
 ]
 
 
@@ -1486,6 +1487,7 @@ dependencies = [
  "d2b-core",
  "d2b-provider-toolkit",
  "d2b-realm-core",
+ "d2b-session",
  "env_logger",
  "getrandom 0.2.17",
  "libc",

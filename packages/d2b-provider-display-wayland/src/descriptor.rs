@@ -44,6 +44,7 @@ impl DisplayProviderDescriptor {
         &[
             "display-wayland.d2bus.org.WaylandSession",
             "display-wayland.d2bus.org.WaylandPolicy",
+            "Endpoint",
         ]
     }
 

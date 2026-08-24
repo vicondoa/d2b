@@ -607,6 +607,29 @@ let
         umask = 7;
       };
     }
+    // lib.optionalAttrs (vm.graphics.enable && vm.graphics.crossDomainTrusted) {
+      # Guest frontend workers are resolved by the Guest systemd Provider.
+      # Keep the signed profile deliberately systemd-compatible: no host
+      # namespaces, capabilities, devices, or writable host paths.
+      "${profileIdFor name "wayland-frontend-worker"}" = mkProfile {
+        profileId = profileIdFor name "wayland-frontend-worker";
+        role = "wayland-proxy";
+        principal = "d2b-${name}-wlfrontend";
+        capabilities = [ ];
+        namespaces = {
+          ipc = false;
+          mount = false;
+          net = false;
+          pid = false;
+          user = false;
+          uts = false;
+        };
+        seccompPolicyRef = "strict";
+        cgroupSubtree = "d2b.slice/${name}/wayland-frontend-worker";
+        controllers = serviceControllers;
+        umask = 18;
+      };
+    }
     // lib.optionalAttrs vm.audio.enable {
       "${profileIdFor name "audio"}" = mkProfile {
         profileId = profileIdFor name "audio";

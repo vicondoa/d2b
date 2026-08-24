@@ -1386,13 +1386,34 @@ impl BundleResolver {
         user_ref: Option<&str>,
         template: &str,
     ) -> Option<&ResolvedRunnerIntent> {
+        self.find_runner_intent_for_process_in_vm(
+            None,
+            execution_ref,
+            execution_domain,
+            user_ref,
+            template,
+        )
+    }
+
+    /// Find the unique trusted Process runner intent, optionally restricted
+    /// to one VM when a shared Host execution reference is used.
+    pub fn find_runner_intent_for_process_in_vm(
+        &self,
+        vm_name: Option<&str>,
+        execution_ref: &str,
+        execution_domain: ProcessExecutionDomain,
+        user_ref: Option<&str>,
+        template: &str,
+    ) -> Option<&ResolvedRunnerIntent> {
         let mut matches = self.runner_intents.values().filter(|intent| {
-            intent.execution_ref == execution_ref
+            vm_name.is_none_or(|vm| intent.vm_name == vm)
+                && intent.execution_ref == execution_ref
                 && intent.execution_domain == execution_domain
                 && intent.user_ref.as_deref() == user_ref
                 && (intent.role_id == template
                     || intent.profile_id == template
-                    || runner_template_name(&intent.role) == Some(template))
+                    || runner_template_name(&intent.role) == Some(template)
+                    || process_template_name_matches(intent, template))
         });
         let first = matches.next()?;
         matches.next().is_none().then_some(first)
@@ -2780,6 +2801,23 @@ fn runner_role_name(role: &ProcessRole) -> Option<&'static str> {
 
 fn runner_template_name(role: &ProcessRole) -> Option<&'static str> {
     runner_role_name(role)
+}
+
+fn process_template_name_matches(intent: &ResolvedRunnerIntent, template: &str) -> bool {
+    if intent.role != ProcessRole::WaylandProxy {
+        return false;
+    }
+    match template {
+        "wayland-proxy-worker" => intent
+            .execution_ref
+            .split_once('/')
+            .is_some_and(|(kind, _)| kind == "Host"),
+        "wayland-frontend-worker" => intent
+            .execution_ref
+            .split_once('/')
+            .is_some_and(|(kind, _)| kind == "Guest"),
+        _ => false,
+    }
 }
 
 fn is_placeholder_runner_spec(binary_path: &str, argv: &[String], role_name: &str) -> bool {

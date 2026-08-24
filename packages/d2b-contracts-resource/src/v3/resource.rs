@@ -527,6 +527,23 @@ impl ResourceSpec {
         &self.base
     }
 
+    /// Render the type-specific base with the selected Provider reference.
+    ///
+    /// Most ResourceType contracts keep `providerRef` in the universal
+    /// desired-state layer.  EndpointSpec also validates that field as part
+    /// of its typed contract, so callers validating an Endpoint base use this
+    /// view to reconstruct the complete typed object.
+    pub fn base_with_provider_ref(&self) -> CanonicalJsonObject {
+        let mut fields = self.base.clone().into_inner();
+        if let Some(provider_ref) = &self.provider_ref {
+            fields.insert(
+                "providerRef".to_owned(),
+                CanonicalJsonValue::String(provider_ref.to_canonical_string()),
+            );
+        }
+        CanonicalJsonObject::from_inner(fields)
+    }
+
     /// Borrow the optional Provider extension.
     pub fn provider(&self) -> Option<&ProviderSpecExtension> {
         self.provider.as_ref()

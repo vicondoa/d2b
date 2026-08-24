@@ -310,7 +310,17 @@ impl BundleBackedLaunchResolver {
         ) {
             return Err(ProcessEffectError::UnsupportedProvider);
         }
-        let vm_name = ticket.execution_ref().name().as_str();
+        let vm_name = match (
+            ticket.execution_ref().resource_type().as_str(),
+            ticket.target_ref(),
+        ) {
+            ("Guest", None) => ticket.execution_ref().name().as_str(),
+            ("Host", None) => ticket.execution_ref().name().as_str(),
+            ("Host", Some(target)) if target.resource_type().as_str() == "Guest" => {
+                target.name().as_str()
+            }
+            _ => return Err(ProcessEffectError::IdentityChanged),
+        };
         let process_role_id = ticket.process_ref().name().as_str();
         let intent_id = intent_id_runner(vm_name, process_role_id);
         let expected_execution_ref = ticket.execution_ref().to_canonical_string();
@@ -320,7 +330,8 @@ impl BundleBackedLaunchResolver {
         };
         let expected_user_ref = ticket.user_ref().map(ResourceRef::to_canonical_string);
         let legacy_intent = self.bundle.find_runner_intent(&intent_id);
-        let generic_intent = self.bundle.find_runner_intent_for_process(
+        let generic_intent = self.bundle.find_runner_intent_for_process_in_vm(
+            Some(vm_name),
             &expected_execution_ref,
             expected_execution_domain,
             expected_user_ref.as_deref(),

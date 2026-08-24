@@ -48,6 +48,28 @@ pub fn tracked_role_id(node: &ProcessNode) -> String {
     }
 }
 
+/// Return whether this trusted node is owned by a Guest resource controller
+/// rather than the legacy host VM-start DAG.
+pub fn is_guest_owned_process_node(node: &ProcessNode) -> bool {
+    node.execution_ref
+        .as_deref()
+        .is_some_and(|execution_ref| execution_ref.starts_with("Guest/"))
+}
+
+/// Return whether this node is retained as signed template metadata for a
+/// durable WaylandSession Process rather than launched by the legacy VM DAG.
+///
+/// QEMU-media keeps its legacy `wayland-proxy` node without an execution
+/// reference, so it is intentionally not classified here.
+pub fn is_durable_wayland_process_node(node: &ProcessNode) -> bool {
+    node.role == ProcessRole::WaylandProxy
+        && matches!(
+            node.id.0.as_str(),
+            "wayland-proxy" | "wayland-frontend-worker"
+        )
+        && node.execution_ref.is_some()
+}
+
 pub fn node_requires_disk_init_dispatch(node: &ProcessNode) -> bool {
     node.plan_ops
         .iter()

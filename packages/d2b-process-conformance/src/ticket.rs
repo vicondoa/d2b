@@ -3,18 +3,13 @@
 use std::collections::BTreeSet;
 use std::fmt;
 
+use d2b_contracts_resource::v3::execution_policy::{BoundedToken, ExecutionDomain};
+use d2b_contracts_resource::v3::identity::ReconnectGeneration;
 use d2b_contracts_resource::v3::{
     ActivationRunnerInput,
-    execution_policy::{BoundedToken, ExecutionDomain},
+    ControllerGeneration, ResourceGeneration, ResourceRef, ResourceUid, ZoneRevision,
 };
-use d2b_contracts_resource::v3::{
-    ControllerGeneration,
-    ResourceGeneration,
-    ResourceRef,
-    ZoneRevision,
-    ResourceUid,
-};
-use d2b_contracts_resource::v3::identity::ReconnectGeneration;
+use sha2::{Digest, Sha256};
 
 use crate::error::ProcessConformanceError;
 use crate::identity::{ConfigurationDigest, IdentityBinding, ProcessIdentityDigest};
@@ -25,6 +20,44 @@ use crate::sandbox::SandboxPlan;
 pub const MAX_LAUNCH_DEADLINE_MS: u32 = 900_000;
 /// Maximum inherited descriptors represented by one private launch table.
 pub const MAX_INHERITED_FDS: u16 = 256;
+
+/// Compute the Core-owned commitment for a Process execution placement.
+///
+/// The bundle content identity is supplied only by the verified Core bundle
+/// resolver. The resulting digest binds that identity to the exact execution
+/// reference, optional cross-target selector, domain, user, template, and
+/// selected Provider before the ticket crosses into an effect adapter.
+pub fn execution_commitment(
+    bundle_content_identity: &str,
+    execution_ref: &ResourceRef,
+    target_ref: Option<&ResourceRef>,
+    domain: ExecutionDomain,
+    user_ref: Option<&ResourceRef>,
+    template: &BoundedToken,
+    selected_provider: &BoundedToken,
+) -> ConfigurationDigest {
+    let mut digest = Sha256::new();
+    digest.update(b"d2b-process-execution-commitment-v1");
+    let execution_ref = execution_ref.to_canonical_string();
+    let target_ref = target_ref.map(ResourceRef::to_canonical_string);
+    let user_ref = user_ref.map(ResourceRef::to_canonical_string);
+    for value in [
+        bundle_content_identity,
+        execution_ref.as_str(),
+        target_ref.as_deref().unwrap_or(""),
+        match domain {
+            ExecutionDomain::System => "system",
+            ExecutionDomain::User => "user",
+        },
+        user_ref.as_deref().unwrap_or(""),
+        template.as_str(),
+        selected_provider.as_str(),
+    ] {
+        digest.update(value.as_bytes());
+        digest.update([0]);
+    }
+    ConfigurationDigest::from_bytes(digest.finalize().into())
+}
 
 /// The compiled configuration digests bound into one ticket.
 ///
@@ -319,6 +352,7 @@ pub struct LaunchTicket {
     component: BoundedToken,
     template: BoundedToken,
     execution_ref: ResourceRef,
+    target_ref: Option<ResourceRef>,
     domain: ExecutionDomain,
     user_ref: Option<ResourceRef>,
     selected_provider: BoundedToken,
@@ -334,6 +368,7 @@ pub struct LaunchTicket {
     guest_execution: Option<GuestExecutionBinding>,
     controller_launch: Option<ControllerLaunchBinding>,
     assignment: Option<ControllerAssignmentBinding>,
+    execution_commitment: Option<ConfigurationDigest>,
 }
 
 impl LaunchTicket {
@@ -398,6 +433,7 @@ impl LaunchTicket {
             component,
             template,
             execution_ref,
+            target_ref: None,
             domain,
             user_ref,
             selected_provider,
@@ -413,7 +449,20 @@ impl LaunchTicket {
             guest_execution: None,
             controller_launch: None,
             assignment: None,
+            execution_commitment: None,
         })
+    }
+
+    /// Attach the Core-produced execution placement commitment.
+    pub fn with_execution_commitment(
+        mut self,
+        commitment: ConfigurationDigest,
+    ) -> Result<Self, ProcessConformanceError> {
+        if commitment.is_zero() || self.execution_commitment.is_some() {
+            return Err(ProcessConformanceError::InvalidTicket);
+        }
+        self.execution_commitment = Some(commitment);
+        Ok(self)
     }
 
     /// Bind the committed resource revision to this launch.
@@ -425,6 +474,22 @@ impl LaunchTicket {
             return Err(ProcessConformanceError::InvalidTicket);
         }
         self.resource_revision = Some(resource_revision);
+        Ok(self)
+    }
+
+    /// Bind a target selector for a cross-target Process launch.
+    ///
+    /// Host-scoped execution refs such as `Host/host-system` may serve
+    /// multiple VMs. The selector keeps the signed bundle lookup specific to
+    /// the Guest resource without changing the execution authority.
+    pub fn with_target_ref(
+        mut self,
+        target_ref: ResourceRef,
+    ) -> Result<Self, ProcessConformanceError> {
+        if target_ref.resource_type().as_str() != "Guest" || self.target_ref.is_some() {
+            return Err(ProcessConformanceError::InvalidTicket);
+        }
+        self.target_ref = Some(target_ref);
         Ok(self)
     }
 
@@ -497,6 +562,10 @@ impl LaunchTicket {
             "Host" | "Guest"
         ) || (self.domain == ExecutionDomain::User && self.user_ref.is_none())
             || (self.domain == ExecutionDomain::System && self.user_ref.is_some())
+            || self
+                .target_ref
+                .as_ref()
+                .is_some_and(|target| target.resource_type().as_str() != "Guest")
             || self.expected_identity.is_empty()
         {
             return Err(ProcessConformanceError::InvalidTicket);
@@ -735,6 +804,16 @@ impl LaunchTicket {
         &self.execution_ref
     }
 
+    /// Borrow the optional cross-target selector.
+    pub const fn target_ref(&self) -> Option<&ResourceRef> {
+        self.target_ref.as_ref()
+    }
+
+    /// Borrow the Core-produced execution placement commitment.
+    pub const fn execution_commitment(&self) -> Option<ConfigurationDigest> {
+        self.execution_commitment
+    }
+
     /// Return the resolved execution domain.
     pub const fn domain(&self) -> ExecutionDomain {
         self.domain
@@ -967,6 +1046,30 @@ mod tests {
             )
             .unwrap();
         assert!(ticket.validate_assignment().is_ok());
+    }
+
+    #[test]
+    fn cross_target_process_reference_is_guest_bound_and_single_use() {
+        let guest = ResourceRef::parse("Guest/dev-vm").unwrap();
+        let bound = fixtures::ticket_builder()
+            .build()
+            .unwrap()
+            .with_target_ref(guest.clone())
+            .unwrap();
+
+        assert_eq!(bound.target_ref(), Some(&guest));
+        assert!(bound.validate().is_ok());
+        assert_eq!(
+            bound.clone().with_target_ref(guest),
+            Err(ProcessConformanceError::InvalidTicket)
+        );
+        assert_eq!(
+            fixtures::ticket_builder()
+                .build()
+                .unwrap()
+                .with_target_ref(ResourceRef::parse("Host/host-system").unwrap()),
+            Err(ProcessConformanceError::InvalidTicket)
+        );
     }
 
     #[test]

@@ -454,6 +454,7 @@ rust_test(
         "//packages/d2b-contracts-zone-session:d2b_contracts_zone_session",
         "//packages/d2b-core-controller:d2b_core_controller_test_support",
         "//packages/d2b-provider-device-tpm:d2b_provider_device_tpm",
+        "//packages/d2b-provider-display-wayland:d2b_provider_display_wayland",
         "//packages/d2b-provider-network-local:d2b_provider_network_local",
         "//packages/d2b-provider-runtime-cloud-hypervisor:d2b_provider_runtime_cloud_hypervisor",
         "//packages/d2b-provider-volume-local:d2b_provider_volume_local",
