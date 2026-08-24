@@ -1349,10 +1349,7 @@ version = "0.0.0-bootstrap"
 dependencies = [
  "async-trait",
  "base64",
- "d2b-contracts-control",
  "d2b-contracts-resource",
- "d2b-contracts-zone-session",
- "libc",
  "rustix 0.38.44",
  "schemars",
  "serde",
@@ -1454,13 +1451,11 @@ dependencies = [
  "d2b-contracts",
  "d2b-contracts-control",
  "d2b-contracts-resource",
- "d2b-contracts-zone-session",
  "d2b-core",
  "d2b-provider-toolkit",
  "d2b-realm-core",
  "d2b-session",
  "env_logger",
- "getrandom 0.2.17",
  "libc",
  "log",
  "nix 0.29.0",
@@ -1707,13 +1702,11 @@ dependencies = [
  "async-trait",
  "d2b-contracts-resource",
  "d2b-contracts-zone-session",
- "d2b-provider",
  "d2b-session",
  "ring",
  "serde",
  "serde_json",
  "tokio",
- "tracing",
 ]
 
 
