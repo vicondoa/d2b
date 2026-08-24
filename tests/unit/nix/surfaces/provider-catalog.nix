@@ -6,5 +6,11 @@ import ../helpers/surface.nix {
   caseFiles = [{
     path = ../cases/provider-elf-shim.nix;
     names = [ "provider-elf-shim/positive-constructor" ];
+  } {
+    path = ../cases/provider-catalog.nix;
+    names = [
+      "provider-catalog/signed-placement-and-runtime-contract-is-retained"
+      "provider-catalog/signed-placement-contract-fails-closed-on-target-drift"
+    ];
   }];
 }

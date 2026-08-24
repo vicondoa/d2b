@@ -101,7 +101,7 @@ let
       { id = "store-virtiofs-preflight"; role = "storage"; optional = false; }
       { id = "virtiofsd"; role = "storage"; optional = false; }
       { id = "cloud-hypervisor"; role = "hypervisor"; optional = false; }
-      { id = "guest-control-health"; role = "guest-control"; optional = false; }
+      { id = "component-session"; role = "guest-control"; optional = false; }
       { id = "swtpm"; role = "tpm"; optional = true; }
       { id = "gpu"; role = "display"; optional = true; }
       { id = "audio"; role = "audio"; optional = true; }

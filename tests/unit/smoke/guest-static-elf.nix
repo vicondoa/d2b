@@ -5,9 +5,8 @@ pkgs.runCommand "d2b-guest-static-elf" {
 } ''
   readelf=${pkgs.pkgsStatic.binutils.bintools}/bin/readelf
   for bin in \
-    ${flake.packages.${system}.d2b-guestd-static}/bin/d2b-guestd \
-    ${flake.packages.${system}.d2b-exec-runner-static}/bin/d2b-exec-runner \
-    ${flake.packages.${system}.d2b-sk-frontend-static}/bin/d2b-sk-frontend \
+    ${flake.packages.${system}.d2bd-guest-static}/bin/d2bd \
+    ${flake.packages.${system}.d2b-broker-guest-static}/bin/d2b-broker \
     ${flake.packages.${system}.d2b-guest-shell-runner-static}/bin/d2b-guest-shell-runner
   do
     test -x "$bin"

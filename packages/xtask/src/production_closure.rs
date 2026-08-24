@@ -240,11 +240,21 @@ pub fn context_specs(root: &Path) -> Result<Vec<ContextSpec>, String> {
         });
         contexts.push(ContextSpec {
             system: system.to_owned(),
-            target: musl,
+            target: musl.clone(),
             name: "guestd-static".to_owned(),
             roots: vec!["d2b-guestd".to_owned()],
             features: Vec::new(),
             default_features: true,
+            source_authority: "packages/Cargo.guest.lock".to_owned(),
+            lock_path: "packages/Cargo.guest.lock".to_owned(),
+        });
+        contexts.push(ContextSpec {
+            system: system.to_owned(),
+            target: musl,
+            name: "guest-static".to_owned(),
+            roots: vec!["d2bd".to_owned(), "d2b-broker".to_owned()],
+            features: Vec::new(),
+            default_features: false,
             source_authority: "packages/Cargo.guest.lock".to_owned(),
             lock_path: "packages/Cargo.guest.lock".to_owned(),
         });
@@ -1409,6 +1419,9 @@ fn filtered_lock(root: &Path, lock_path: &str, closure: &Closure) -> Result<Stri
             continue;
         }
         output.push(String::new());
+    }
+    if output.last().is_some_and(String::is_empty) {
+        output.pop();
     }
     Ok(output.join("\n"))
 }

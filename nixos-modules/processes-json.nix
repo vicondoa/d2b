@@ -47,9 +47,7 @@ let
   vsockSocketForPort = socketPath: port: "${socketPath}_${toString port}";
   shareNodeId = share: "virtiofsd-${clean share.tag}";
   shareSocketPath = name: share:
-    if share.tag == "d2b-gctl"
-    then "/run/d2b/vms/${name}/guest-control/${clean share.tag}.sock"
-    else "/run/d2b/vms/${name}/${clean share.tag}.sock";
+    "/run/d2b/vms/${name}/${clean share.tag}.sock";
   volumeHostPath = name: volume: d2bLib.volumeHostPath cfg.store.stateDir name volume;
 
   mkReadiness = kind: value: { inherit kind value; };
@@ -937,7 +935,7 @@ use devices::virtio::vhost_user_backend::run_video_device;'
       # Guest sessions are authenticated independently from VM boot. Their
       # evidence is projected through Guest/Endpoint status rather than a
       # readiness-only health RPC.
-      guestControlEnabled = vm.guest.control.enable;
+      guestAgentEnabled = vm.guest.control.enable;
       activationRunner = name: {
         binaryPath = "${d2bHostTools.activationHelper}/bin/d2b-activation-helper";
         argv = [
@@ -1124,12 +1122,7 @@ use devices::virtio::vhost_user_backend::run_video_device;'
         readiness = [ (unixSocketExists "/run/d2b/otel/host-egress.sock") ];
         runner = otelHostBridgeRunner manifest;
       })
-      ++ lib.optional guestControlEnabled (node name {
-        id = "guest-control-health";
-        role = "guest-control-health";
-        readiness = [ ];
-      })
-      ++ lib.optional guestControlEnabled (mkRunnerNode name {
+      ++ lib.optional guestAgentEnabled (mkRunnerNode name {
         id = "activation-nixos-runner";
         role = "activation-nixos-runner";
         readiness = [ ];
@@ -1182,8 +1175,7 @@ use devices::virtio::vhost_user_backend::run_video_device;'
       ++ edgesFromNodes preVmmNodeIds "cloud-hypervisor" "Cloud Hypervisor starts only after every prerequisite sidecar is ready."
       ++ lib.optional vm.usb.securityKey.enable
         (edge "cloud-hypervisor" "sk-frontend" "The sk-frontend vsock endpoint tracking starts only after Cloud Hypervisor creates the base vsock socket.")
-      ++ lib.optional guestControlEnabled
-        (edge "cloud-hypervisor" "guest-control-health" "Guest ComponentSession health starts only after Cloud Hypervisor creates the Guest vsock endpoint.");
+      ;
       invariants = {
         perVmAuditPipeline = true;
         swtpmPreStartFlush = true;
@@ -1302,6 +1294,62 @@ use devices::virtio::vhost_user_backend::run_video_device;'
     };
   };
 
+  guestProcessResourceRows = lib.filter
+    (row:
+      builtins.elem row.resource.type [ "Process" "EphemeralProcess" ]
+      && builtins.isString (row.spec.executionRef or null)
+      && lib.hasPrefix "Guest/" row.spec.executionRef)
+    (cfg._resourceCompiler.processes.rows or [ ]);
+  guestProcessRefs = lib.unique (
+    (map
+      (row: row.spec.executionRef)
+      guestProcessResourceRows)
+    ++ (lib.concatLists (map
+      (dag:
+        lib.optional
+          (lib.any (node: (node.executionRef or null) == "Guest/${dag.vm}") dag.nodes)
+          "Guest/${dag.vm}")
+      data.vms)));
+  guestProcessInputsFor = guestRef:
+    let
+      resourceRows = lib.filter
+        (row: row.spec.executionRef == guestRef)
+        guestProcessResourceRows;
+      dagNodes = lib.concatLists (map
+        (dag:
+          if guestRef == "Guest/${dag.vm}"
+          then lib.filter
+            (node: (node.executionRef or null) == guestRef)
+            dag.nodes
+          else [ ])
+        data.vms);
+      resources = map
+        (row: {
+          apiVersion = "resources.d2bus.org/v3";
+          type = row.resource.type;
+          metadata = {
+            name = row.resourceName;
+            zone = row.zoneName;
+          };
+          spec = row.spec;
+        })
+        resourceRows;
+    in
+    {
+      guest = guestRef;
+      nodes = dagNodes;
+      resources = resources;
+    };
+  guestProcessInputsData = {
+    schemaVersion = "v1";
+    guests = map guestProcessInputsFor
+      (lib.sort lib.lessThan guestProcessRefs);
+  };
+  guestProcessInputsJson = builtins.toJSON guestProcessInputsData;
+  guestProcessInputsPath = pkgs.writeText
+    "d2b-guest-process-inputs.json"
+    guestProcessInputsJson;
+
   jsonText = builtins.toJSON data;
   jsonFile = pkgs.writeText "d2b-processes.json" jsonText;
   videoAssertions = lib.flatten (lib.mapAttrsToList (name: vm:
@@ -1339,6 +1387,14 @@ in
       inherit data jsonText;
       path = "${jsonFile}";
       installFileName = "processes.json";
+      classification = "contractPrivateNonSecret";
+      sensitivity = "nonSecret";
+    };
+    d2b._bundle.extraArtifacts.guestProcessInputs = {
+      data = guestProcessInputsData;
+      jsonText = guestProcessInputsJson;
+      path = guestProcessInputsPath;
+      installFileName = "guest-process-inputs.json";
       classification = "contractPrivateNonSecret";
       sensitivity = "nonSecret";
     };

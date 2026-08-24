@@ -186,6 +186,7 @@ in
   config = {
 
     environment.systemPackages = [ brokerPackage cutoverRunnerPackage ];
+    d2b._hostToolPackages.d2bBroker = brokerPackage;
     d2b._hostToolPackages.d2bCutoverRunner = cutoverRunnerPackage;
     d2b._bundle.cutoverRunnerPath = cutoverRunnerPath;
 

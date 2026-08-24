@@ -289,7 +289,6 @@ let
     ActivationNixosRunner = "Provider/activation-nixos";
     VsockRelay = "Provider/transport-vsock";
     OtelHostBridge = "Provider/observability-otel";
-    GuestControlHealth = "Provider/system-core";
     Usbip = "Provider/device-usbip";
     SecurityKeyFrontend = "Provider/device-security-key";
     WaylandProxy = "Provider/display-wayland";

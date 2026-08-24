@@ -33,6 +33,13 @@ in
       description = "Internal: resolved host d2bd package.";
     };
 
+    d2bBroker = lib.mkOption {
+      type = lib.types.nullOr lib.types.package;
+      default = null;
+      internal = true;
+      description = "Internal: resolved shared d2b-broker package.";
+    };
+
     d2bUnsafeLocalHelper = lib.mkOption {
       type = lib.types.nullOr lib.types.package;
       default = null;

@@ -7,9 +7,8 @@ set. Historical microvm.nix runner evidence lives in
 
 ## Framework-managed shares
 
-For a headless `corp-vm`, d2b emits these baseline shares. The
-guest-control token share is present only when
-`d2b.vms.corp-vm.guest.control.enable = true`.
+For a headless `corp-vm`, d2b emits these baseline shares. ComponentSession
+enrollment keys are not delivered through virtiofs.
 
 | Tag           | Socket                                   | Shared dir                                            | Mode |
 |---------------|------------------------------------------|-------------------------------------------------------|------|
@@ -17,7 +16,6 @@ guest-control token share is present only when
 | `d2b-meta`     | `/run/d2b/vms/corp-vm/d2b-meta.sock`  | `/var/lib/d2b/vms/corp-vm/store-view/meta`       | RO   |
 | `d2b-hkeys`    | `/run/d2b/vms/corp-vm/d2b-hkeys.sock` | `/var/lib/d2b/vms/corp-vm/host-keys`             | RW   |
 | `d2b-ssh-host` | `/run/d2b/vms/corp-vm/d2b-ssh-host.sock` | `/var/lib/d2b/vms/corp-vm/sshd-host-keys`      | RW   |
-| `d2b-gctl`     | `/run/d2b/vms/corp-vm/guest-control/d2b-gctl.sock` | `/var/lib/d2b/guest-control-corp-vm` | RO |
 
 CH connects to each socket via the `--fs socket=<path>,tag=<tag>`
 flag (see `ChArgvInput.fs_shares` in the
@@ -44,8 +42,7 @@ Flag semantics:
 
 - `--socket-path` - UDS the CH runner connects to. Daemon-owned;
   the broker places normal share sockets under
-  `/run/d2b/vms/<vm>/<tag>.sock`; `d2b-gctl` uses the isolated
-  `/run/d2b/vms/<vm>/guest-control/d2b-gctl.sock` path.
+  `/run/d2b/vms/<vm>/<tag>.sock`.
 - `--socket-group=<group>` - optional UDS group ownership. It is emitted
   only when `microvm.virtiofsd.group` is non-null.
 - `--shared-dir` - host path the guest sees through the tag.
@@ -62,8 +59,7 @@ Flag semantics:
 - `--inode-file-handles=prefer` - virtiofsd uses `name_to_handle_at`
   when the underlying filesystem supports it. Reduces the per-share
   fd budget; matches the audit shape.
-- `--readonly` - `ro-store`, `d2b-meta`, and the guest-control token
-  share (`d2b-gctl`) are read-only. `d2b-meta` is rooted at
+- `--readonly` - `ro-store` and `d2b-meta` are read-only. `d2b-meta` is rooted at
   `store-view/meta` and carries only guest-safe generation metadata
   (`current`, `store-paths`, `db.dump`, allow-listed `meta.json`); it
   never exposes `live/`, `state/`, `gcroots/`, or `sync.lock`. The
@@ -74,10 +70,7 @@ Flag semantics:
 Per ADR 0021 each virtiofsd instance runs fake-root inside a
 broker-pre-established single-entry user namespace and has zero host
 capabilities. Normal VM shares map namespace UID/GID 0 to the
-`d2b-<vm>-runner` stable principal. The guest-control token share
-(`d2b-gctl`) maps to the narrower `d2b-<vm>-gctlfs` stable
-principal and receives only the token directory/file ACLs plus its
-dedicated runtime socket directory.
+`d2b-<vm>-runner` stable principal.
 
 The CH runner's `--fs socket=<path>` line trusts the broker to have set
 the socket's group ownership/ACLs so Cloud Hypervisor can connect.

@@ -330,7 +330,7 @@ rec {
         (runtimeServiceSummary { id = "store-virtiofs-preflight"; role = "storage"; })
         (runtimeServiceSummary { id = "virtiofsd"; role = "storage"; })
         (runtimeServiceSummary { id = "cloud-hypervisor"; role = "hypervisor"; })
-        (runtimeServiceSummary { id = "guest-control-health"; role = "guest-control"; })
+        (runtimeServiceSummary { id = "component-session"; role = "guest-control"; })
         (runtimeServiceSummary { id = "swtpm"; role = "tpm"; optional = true; })
         (runtimeServiceSummary { id = "gpu"; role = "display"; optional = true; })
         (runtimeServiceSummary { id = "audio"; role = "audio"; optional = true; })

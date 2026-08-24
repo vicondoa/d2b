@@ -1083,34 +1083,19 @@ in
             type = lib.types.bool;
             default = false;
             description = ''
-              Enable the guest-control credential/share surface and the
-              `d2b-guestd` service wiring for this VM. The static
-              guest-control binaries are installed for every VM; this option
-              opts the VM into the live guest-control plane (credential share
-              plus guestd), which serves the readiness Health probe, `config
-              sync` reads (`ReadGuestFile`), and - when `guest.exec` is also
-              enabled - admin guest exec. All of it runs over the
-              authenticated guest-control vsock, not SSH.
+              Enable the Guest target agent and its enrolled
+              ComponentSession for this VM. The Guest evaluator starts
+              `d2bd guest` and the separate Guest-profile broker; it does not
+              create a local Zone store or public operator socket.
             '';
           };
           auth.tokenFile = lib.mkOption {
             type = lib.types.nullOr lib.types.str;
             default = null;
-            example = "/run/secrets/d2b/work/guest-control-token";
             description = ''
-              Absolute runtime path to an operator-managed guest-control token
-              file. Do not use Nix path literals such as `./token`; those can
-              copy secret material into `/nix/store`. When null, d2b
-              generates a stable per-VM fallback token under
-              `d2b.site.stateDir` outside the runner-writable per-VM
-              state root.
-
-              Runtime validation requires the source and its parent
-              directories to be symlink-free, the file to be regular,
-              root-owned, outside `/nix/store`, and inaccessible to
-              group/world permission bits. D2b materializes a
-              root-owned copy readable only by the dedicated
-              `d2b-<vm>-gctlfs` guest-control virtiofsd principal.
+              REMOVED. Guest enrollment uses the ComponentSession key
+              contract. This option is retained only as a fail-closed
+              migration diagnostic and must remain null.
             '';
           };
         };

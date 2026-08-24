@@ -6,10 +6,7 @@
 let
   inherit (pkgs) lib;
   nixosSystem = flake.inputs.nixpkgs.lib.nixosSystem;
-  expected = [
-    flake.packages.${system}.d2b-guestd-static
-    flake.packages.${system}.d2b-exec-runner-static
-  ];
+  expectedNames = [ "d2bd" "d2b-broker" ];
   nixos = nixosSystem {
     inherit system;
     modules = [
@@ -60,6 +57,16 @@ let
   };
   guestSystemPackages =
     nixos.config.d2b._computed.corp-vm.config.environment.systemPackages;
+  guestSystemPackageNames = map
+    (package: package.pname or (lib.getName package))
+    guestSystemPackages;
 in
-assert lib.all (pkg: builtins.elem pkg guestSystemPackages) expected;
-builtins.toJSON (map toString expected)
+assert lib.all
+  (name: lib.any
+    (packageName: packageName == name || lib.hasInfix name packageName)
+    guestSystemPackageNames)
+  expectedNames;
+builtins.toJSON {
+  expected = expectedNames;
+  actual = guestSystemPackageNames;
+}

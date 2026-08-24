@@ -207,6 +207,18 @@ let
         closurePaths = [ "${artifact.package}" ];
       })
     v3SystemArtifactIds);
+
+  guestClosureData = {
+    schemaVersion = 1;
+    entries = lib.sortOn (entry: "${entry.zone}/${entry.guest}")
+      (map
+        (entry: {
+          inherit (entry) artifactId guest relativePath zone;
+        })
+        (lib.attrValues v3Closures));
+  };
+  guestClosureJson = builtins.toJSON guestClosureData;
+  guestClosurePath = pkgs.writeText "d2b-guest-closures.json" guestClosureJson;
 in
 {
   options.d2b._bundle.closuresV3 = lib.mkOption {
@@ -236,6 +248,18 @@ in
         (_: closure:
           lib.nameValuePair "d2b/${closure.relativePath}" (privateEtc closure.path))
         v3Closures)
+      (lib.mapAttrs'
+        (_: closure:
+          lib.nameValuePair "d2b/${closure.relativePath}" (privateEtc closure.file))
+        v3ArtifactClosures)
     ];
+    d2b._bundle.extraArtifacts.guestClosures = {
+      data = guestClosureData;
+      jsonText = guestClosureJson;
+      path = guestClosurePath;
+      installFileName = "guest-closures.json";
+      classification = "contractPrivateNonSecret";
+      sensitivity = "nonSecret";
+    };
   };
 }

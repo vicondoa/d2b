@@ -189,10 +189,7 @@ let
         let
           shareTag = builtins.unsafeDiscardStringContext share.tag;
           shareNodeId = "virtiofsd-${shareTag}";
-          principal =
-            if shareTag == "d2b-gctl"
-            then "d2b-${name}-gctlfs"
-            else "d2b-${name}-runner";
+          principal = "d2b-${name}-runner";
         in {
           name = profileIdFor name shareNodeId;
           value = mkProfile {
@@ -207,15 +204,11 @@ let
             # no CAP_SETUID, no CAP_SYS_ADMIN on the host.
             capabilities = [ ];
             seccompPolicyRef = "w1-virtiofsd";
-            readOnlyPaths = [ "/nix/store" ]
-              ++ lib.optional (shareTag == "d2b-gctl") share.source;
-            writablePaths =
-              if shareTag == "d2b-gctl" then [
-                (mkWritablePath "${audioRuntimeDirOf name}/guest-control" "Expose the guest-control token virtiofs socket.")
-              ] else [
-                (mkWritablePath (stateDirOf name) "Materialize virtiofs sockets and VM-local store state.")
-                (mkWritablePath (runtimeDirOf name) "Expose broker-prepared virtiofs runtime sockets.")
-              ];
+            readOnlyPaths = [ "/nix/store" ];
+            writablePaths = [
+              (mkWritablePath (stateDirOf name) "Materialize virtiofs sockets and VM-local store state.")
+              (mkWritablePath (runtimeDirOf name) "Expose broker-prepared virtiofs runtime sockets.")
+            ];
             cgroupSubtree = "d2b.slice/${name}/${shareNodeId}";
             controllers = serviceControllers;
             # (ADR 0021): broker pre-creates a user NS
@@ -338,14 +331,6 @@ let
           "/dev/net/tun";
         cgroupSubtree = "d2b.slice/${name}/cloud-hypervisor";
         controllers = serviceControllers;
-      };
-
-      "${profileIdFor name "guest-control-health"}" = mkProfile {
-        profileId = profileIdFor name "guest-control-health";
-        role = "guest-control-health";
-        principal = "d2bd";
-        seccompPolicyRef = "w1-guest-control-health";
-        cgroupSubtree = "d2b.slice/${name}/guest-control-health";
       };
 
       "${profileIdFor name "activation-nixos-runner"}" = mkProfile {
@@ -720,7 +705,6 @@ let
         profileId = profileIdFor name "sk-frontend";
         role = "security-key-frontend";
         principal = "d2bd";
-        seccompPolicyRef = "w1-guest-control-health";
         cgroupSubtree = "d2b.slice/${name}/sk-frontend";
         controllers = serviceControllers;
       };

@@ -1228,7 +1228,7 @@ let
                 "store-virtiofs-preflight"
                 "virtiofsd"
                 "cloud-hypervisor"
-                "guest-control-health"
+                "component-session"
                 "swtpm"
                 "gpu"
                 "audio"
