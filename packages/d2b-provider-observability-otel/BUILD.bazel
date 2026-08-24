@@ -35,6 +35,18 @@ rust_test(
 )
 
 rust_test(
+    name = "binding_controller",
+    srcs = ["tests/binding_controller.rs"],
+    compile_data = ["Cargo.toml"],
+    visibility = ["//visibility:public"],
+    deps = [
+        "//packages/d2b-contracts-provider:d2b_contracts_provider",
+        "//packages/d2b-contracts-resource:d2b_contracts_resource",
+        ":d2b_provider_observability_otel",
+    ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
+)
+
+rust_test(
     name = "d2b_provider_observability_otel_test",
     compile_data = ["Cargo.toml"],
     crate = ":d2b_provider_observability_otel",

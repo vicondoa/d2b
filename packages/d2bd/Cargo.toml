@@ -50,6 +50,7 @@ d2b-provider = { path = "../d2b-provider", version = "0.0.0-bootstrap" }
 d2b-provider-device-tpm = { path = "../d2b-provider-device-tpm", version = "0.0.0-bootstrap" }
 d2b-provider-device-security-key = { path = "../d2b-provider-device-security-key", version = "0.0.0-bootstrap" }
 d2b-provider-device-usbip = { path = "../d2b-provider-device-usbip", version = "0.0.0-bootstrap" }
+d2b-provider-observability-otel = { path = "../d2b-provider-observability-otel", version = "0.0.0-bootstrap" }
 d2b-provider-display-wayland = { path = "../d2b-provider-display-wayland", version = "0.0.0-bootstrap" }
 d2b-provider-clipboard-wayland = { path = "../d2b-provider-clipboard-wayland", version = "0.0.0-bootstrap" }
 d2b-provider-notification-desktop = { path = "../d2b-provider-notification-desktop", version = "0.0.0-bootstrap", features = ["daemon-support"] }

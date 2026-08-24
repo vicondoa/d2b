@@ -89,6 +89,7 @@ pub struct ObservedChild {
     revision: ZoneRevision,
     payload_digest: String,
     deletion_requested: bool,
+    deletion_ready: bool,
 }
 
 impl ObservedChild {
@@ -99,8 +100,23 @@ impl ObservedChild {
         payload_digest: impl Into<String>,
         deletion_requested: bool,
     ) -> Result<Self, OwnerReconcileError> {
+        Self::with_deletion_state(target, revision, payload_digest, deletion_requested, false)
+    }
+
+    /// Construct an observed index row with the complete deletion state.
+    pub fn with_deletion_state(
+        target: HintTarget,
+        revision: ZoneRevision,
+        payload_digest: impl Into<String>,
+        deletion_requested: bool,
+        deletion_ready: bool,
+    ) -> Result<Self, OwnerReconcileError> {
         let payload_digest = payload_digest.into();
-        if revision.get() == 0 || payload_digest.is_empty() || payload_digest.len() > 128 {
+        if revision.get() == 0
+            || payload_digest.is_empty()
+            || payload_digest.len() > 128
+            || deletion_ready && !deletion_requested
+        {
             return Err(OwnerReconcileError::InvalidChild);
         }
         Ok(Self {
@@ -108,6 +124,7 @@ impl ObservedChild {
             revision,
             payload_digest,
             deletion_requested,
+            deletion_ready,
         })
     }
 
@@ -119,6 +136,17 @@ impl ObservedChild {
     /// Borrow the observed body digest.
     pub fn payload_digest(&self) -> &str {
         &self.payload_digest
+    }
+
+    /// Whether the Resource API has requested deletion for this child.
+    pub const fn deletion_requested(&self) -> bool {
+        self.deletion_requested
+    }
+
+    /// Whether the child has no remaining finalizers and can be physically
+    /// deleted on the next exact mutation.
+    pub const fn deletion_ready(&self) -> bool {
+        self.deletion_ready
     }
 }
 
@@ -147,6 +175,11 @@ pub enum OwnerMutation {
         canonical_resource: Vec<u8>,
     },
     RequestDeletion {
+        target: ResourceRef,
+        expected_uid: ResourceUid,
+        expected_revision: ZoneRevision,
+    },
+    Delete {
         target: ResourceRef,
         expected_uid: ResourceUid,
         expected_revision: ZoneRevision,
@@ -192,6 +225,16 @@ impl core::fmt::Debug for OwnerMutation {
                 .field("has_expected_uid", &true)
                 .field("expected_revision", expected_revision)
                 .finish(),
+            Self::Delete {
+                target,
+                expected_revision,
+                ..
+            } => f
+                .debug_struct("OwnerMutation::Delete")
+                .field("target_type", target.resource_type())
+                .field("has_expected_uid", &true)
+                .field("expected_revision", expected_revision)
+                .finish(),
         }
     }
 }
@@ -200,6 +243,7 @@ impl core::fmt::Debug for OwnerMutation {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct OwnerReconcilePlan {
     mutations: Vec<OwnerMutation>,
+    pending: bool,
 }
 
 impl OwnerReconcilePlan {
@@ -210,7 +254,7 @@ impl OwnerReconcilePlan {
 
     /// Whether the complete child set is converged.
     pub fn is_converged(&self) -> bool {
-        self.mutations.is_empty()
+        self.mutations.is_empty() && !self.pending
     }
 }
 
@@ -278,12 +322,19 @@ impl OwnerIndex {
             .cloned()
             .ok_or(OwnerReconcileError::OwnerNotRelisted)?;
         let mut mutations = Vec::new();
+        let mut pending = false;
         for (target, desired) in &desired_by_ref {
             match observed.get(target) {
                 None => mutations.push(OwnerMutation::Create {
                     target: target.clone(),
                     canonical_resource: desired.canonical_resource.clone(),
                 }),
+                Some(actual) if actual.deletion_requested => {
+                    // A deleting child cannot be recreated in place. Wait for
+                    // the next authoritative relist before declaring the
+                    // owner converged.
+                    pending = true;
+                }
                 Some(actual) if actual.payload_digest != desired.payload_digest => {
                     mutations.push(OwnerMutation::Repair {
                         target: target.clone(),
@@ -302,9 +353,19 @@ impl OwnerIndex {
                     expected_uid: actual.target.uid().clone(),
                     expected_revision: actual.revision,
                 });
+            } else if !desired_by_ref.contains_key(&target) {
+                if actual.deletion_ready() {
+                    mutations.push(OwnerMutation::Delete {
+                        target,
+                        expected_uid: actual.target.uid().clone(),
+                        expected_revision: actual.revision,
+                    });
+                } else {
+                    pending = true;
+                }
             }
         }
-        Ok(OwnerReconcilePlan { mutations })
+        Ok(OwnerReconcilePlan { mutations, pending })
     }
 
     /// Number of children in the latest complete relist.
@@ -550,6 +611,22 @@ mod tests {
         .unwrap()
     }
 
+    fn observed_deleting(
+        resource_type: &str,
+        name: &str,
+        suffix: u8,
+        revision: u64,
+        digest: &str,
+    ) -> ObservedChild {
+        ObservedChild::new(
+            target("work", resource_type, name, suffix),
+            ZoneRevision::new(revision),
+            digest,
+            true,
+        )
+        .unwrap()
+    }
+
     #[test]
     fn complete_relist_drives_create_repair_and_delete_plan() {
         let owner = target("work", "Guest", "desktop", 1);
@@ -629,6 +706,25 @@ mod tests {
             .plan(&owner, vec![desired("Process", "new", "new")])
             .unwrap();
         assert!(plan.is_converged());
+    }
+
+    #[test]
+    fn deleting_children_keep_owner_pending_until_relisted_absent() {
+        let owner = target("work", "Guest", "desktop", 1);
+        let mut index = OwnerIndex::new(limits());
+        index
+            .relist(
+                owner.clone(),
+                vec![observed_deleting("Endpoint", "endpoint", 2, 2, "current")],
+            )
+            .unwrap();
+
+        let plan = index.plan(&owner, Vec::new()).unwrap();
+        assert!(plan.mutations().is_empty());
+        assert!(!plan.is_converged());
+
+        index.relist(owner.clone(), Vec::new()).unwrap();
+        assert!(index.plan(&owner, Vec::new()).unwrap().is_converged());
     }
 
     #[test]

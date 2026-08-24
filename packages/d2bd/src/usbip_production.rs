@@ -3,7 +3,7 @@
 //! This is the composition point between the typed USBIP supervisor and the
 //! existing daemon/broker control plane.  Admission is held in a bounded
 //! Host-global ledger, bind/unbind use opaque bundle references, and attach
-//! uses `SpawnRunner` with pidfd registration before the Provider observes it.
+//! uses a typed Process-resource effect before the Provider observes it.
 
 use std::{
     collections::BTreeMap,
@@ -11,13 +11,11 @@ use std::{
         Arc, Mutex,
         atomic::{AtomicU64, Ordering},
     },
-    time::Duration,
 };
 
-use d2b_contracts::types::{BundleOpId, RoleId, VmId};
+use d2b_contracts::types::BundleOpId;
 use d2b_contracts_broker::broker_wire::{
-    BrokerCallerRole, BrokerRequest, BrokerResponse, RunnerRole, SpawnRunnerRequest,
-    UsbipBindRequest, UsbipUnbindRequest,
+    BrokerCallerRole, BrokerRequest, BrokerResponse, UsbipBindRequest, UsbipUnbindRequest,
 };
 use d2b_contracts_resource::v3::ResourceUid;
 use d2b_provider_device_usbip::{
@@ -28,10 +26,7 @@ use d2b_provider_device_usbip::{
 
 use d2b_core::device_usbip_adapter::UsbipCoreAdapter;
 
-use crate::{
-    ServerState, close_received_fds, dispatch_broker_request_as,
-    dispatch_broker_request_with_fds_timeout, duplicate_received_fd,
-};
+use crate::{ServerState, dispatch_broker_request_as};
 
 /// Trusted context resolved by Core for one Service/Binding pair.
 #[derive(Clone, PartialEq, Eq)]
@@ -104,31 +99,6 @@ impl UsbipBindingContext {
     }
 }
 
-/// Guest-side typed control used by the daemon dispatcher.
-pub trait GuestUsbipControl: Send + Sync + 'static {
-    /// Detach the exact Guest import through authenticated guest-control.
-    fn detach(
-        &self,
-        binding: &BindingIdentity,
-        proxy: &BindingProxyLease,
-    ) -> Result<(), BindingLifecycleError>;
-}
-
-/// Test-only no-op guest control. Production callers must inject the
-/// authenticated guest-control implementation.
-#[derive(Debug, Default, Clone, Copy)]
-pub struct NoGuestUsbipControl;
-
-impl GuestUsbipControl for NoGuestUsbipControl {
-    fn detach(
-        &self,
-        _binding: &BindingIdentity,
-        _proxy: &BindingProxyLease,
-    ) -> Result<(), BindingLifecycleError> {
-        Err(BindingLifecycleError::AdmissionDenied)
-    }
-}
-
 #[derive(Default)]
 pub(crate) struct AuthorityLedger {
     next_token: AtomicU64,
@@ -147,12 +117,49 @@ impl AuthorityLedger {
     }
 }
 
+/// Core-owned child-resource seam for USBIP Binding realization.
+///
+/// The daemon dispatcher supplies authority and broker effects, while this
+/// seam is responsible for creating, adopting, observing, and deleting the
+/// Binding's Endpoint and EphemeralProcess resources.  Keeping the seam
+/// explicit prevents a feature controller from falling back to a direct
+/// broker runner or pidfd lifecycle ownership.
+pub trait UsbipChildResourcePort {
+    /// Ensure or adopt the Guest attach EphemeralProcess child.
+    fn ensure_attach_process(
+        &mut self,
+        binding: &BindingIdentity,
+        proxy: &BindingProxyLease,
+    ) -> Result<AttachProcessIdentity, BindingLifecycleError>;
+
+    /// Observe the exact child identity after restart or reconnect.
+    fn observe_attach_process(
+        &mut self,
+        binding: &BindingIdentity,
+        identity: &AttachProcessIdentity,
+    ) -> Result<AttachmentObservation, BindingLifecycleError>;
+
+    /// Delete the Binding-owned Guest Endpoint.
+    fn delete_guest_endpoint(
+        &mut self,
+        binding: &BindingIdentity,
+        proxy: &BindingProxyLease,
+    ) -> Result<(), BindingLifecycleError>;
+
+    /// Delete the attach child after its Endpoint has drained.
+    fn delete_attach_process(
+        &mut self,
+        binding: &BindingIdentity,
+        identity: &AttachProcessIdentity,
+    ) -> Result<(), BindingLifecycleError>;
+}
+
 /// Daemon/broker-backed implementation of the Provider dispatcher.
-pub struct DaemonUsbipDispatcher<'a, G = NoGuestUsbipControl> {
+pub struct DaemonUsbipDispatcher<'a, C> {
     state: &'a ServerState,
     context: UsbipBindingContext,
     ledger: Arc<Mutex<AuthorityLedger>>,
-    guest: G,
+    child_resources: C,
     attach_identity: Option<AttachProcessIdentity>,
     attach_slot: Option<BindingSlotLease>,
     attach_proxy: Option<BindingProxyLease>,
@@ -162,19 +169,19 @@ pub struct DaemonUsbipDispatcher<'a, G = NoGuestUsbipControl> {
 }
 
 #[allow(dead_code)]
-impl<'a, G> DaemonUsbipDispatcher<'a, G> {
-    /// Construct one dispatcher over the daemon's broker and pidfd state.
+impl<'a, C> DaemonUsbipDispatcher<'a, C> {
+    /// Construct one dispatcher over the daemon's broker and Core child port.
     pub(crate) fn new(
         state: &'a ServerState,
         context: UsbipBindingContext,
         ledger: Arc<Mutex<AuthorityLedger>>,
-        guest: G,
+        child_resources: C,
     ) -> Self {
         Self {
             state,
             context,
             ledger,
-            guest,
+            child_resources,
             attach_identity: None,
             attach_slot: None,
             attach_proxy: None,
@@ -206,78 +213,9 @@ impl<'a, G> DaemonUsbipDispatcher<'a, G> {
     fn binding_key(binding: &BindingIdentity) -> String {
         binding.as_resource_uid().to_canonical_string()
     }
-
-    fn attach_role(binding: &BindingIdentity) -> String {
-        format!("usbip-attach:{}", Self::binding_key(binding))
-    }
-
-    fn spawn_runner(
-        &mut self,
-        binding: &BindingIdentity,
-        proxy: &BindingProxyLease,
-    ) -> Result<AttachProcessIdentity, BindingLifecycleError> {
-        let request = BrokerRequest::SpawnRunner(SpawnRunnerRequest {
-            execution_ref: None,
-            execution_domain: None,
-            user_ref: None,
-            guest_execution: None,
-            workload_identity: None,
-            vm_id: VmId::new(self.context.vm_id.clone()),
-            role_id: RoleId::new("usbip-attach".to_owned()),
-            resource_ref: None,
-            resource_uid: None,
-            bundle_content_identity: None,
-            provider_identity: None,
-            template_identity: None,
-            generation: None,
-            activation_input: None,
-            sandbox_plan: None,
-            role: RunnerRole::Usbip,
-            bundle_runner_intent_ref: BundleOpId::new(self.context.runner_intent_ref.clone()),
-            runtime_allocations: Vec::new(),
-            tracing_span_id: None,
-        });
-        let (response, received_fds) =
-            dispatch_broker_request_with_fds_timeout(self.state, request, Duration::from_secs(10))
-                .map_err(|_| BindingLifecycleError::Transient)?;
-        let BrokerResponse::SpawnRunner(response) = response else {
-            close_received_fds(&received_fds);
-            return Err(BindingLifecycleError::Transient);
-        };
-        let pidfd = duplicate_received_fd(
-            &received_fds,
-            response.pidfd_index,
-            "duplicate USBIP attach pidfd",
-        )
-        .map_err(|_| BindingLifecycleError::Transient)?;
-        close_received_fds(&received_fds);
-        let identity =
-            AttachProcessIdentity::from_adapter(response.pid as u32, response.start_time_ticks);
-        let role = Self::attach_role(binding);
-        self.state
-            .pidfd_table
-            .register(
-                self.context.vm_id.clone(),
-                role.clone(),
-                d2bd_runtime::supervisor::pidfd_table::PidfdEntry {
-                    pidfd,
-                    pid: response.pid,
-                    start_time_ticks: response.start_time_ticks,
-                },
-            )
-            .map_err(|_| BindingLifecycleError::Transient)?;
-        if self.state.pidfd_table.snapshot().is_err() {
-            self.state
-                .pidfd_table
-                .deregister(&self.context.vm_id, &role);
-            return Err(BindingLifecycleError::Transient);
-        }
-        let _ = proxy;
-        Ok(identity)
-    }
 }
 
-impl<'a, G: GuestUsbipControl> UsbipBrokerDispatcher for DaemonUsbipDispatcher<'a, G> {
+impl<'a, C: UsbipChildResourcePort> UsbipBrokerDispatcher for DaemonUsbipDispatcher<'a, C> {
     fn reserve_physical(
         &mut self,
         service_uid: &ResourceUid,
@@ -435,51 +373,34 @@ impl<'a, G: GuestUsbipControl> UsbipBrokerDispatcher for DaemonUsbipDispatcher<'
         Ok(proxy)
     }
 
-    fn spawn_attach_runner(
+    fn ensure_attach_process(
         &mut self,
         binding: &BindingIdentity,
         proxy: &BindingProxyLease,
     ) -> Result<AttachProcessIdentity, BindingLifecycleError> {
-        let identity = self.spawn_runner(binding, proxy)?;
+        let identity = self.child_resources.ensure_attach_process(binding, proxy)?;
         self.attach_identity = Some(identity.clone());
         Ok(identity)
     }
 
-    fn observe_attach_runner(
+    fn observe_attach_process(
         &mut self,
         binding: &BindingIdentity,
         identity: &AttachProcessIdentity,
     ) -> Result<AttachmentObservation, BindingLifecycleError> {
-        if !self
-            .state
-            .pidfd_table
-            .contains(&self.context.vm_id, &Self::attach_role(binding))
-        {
-            return Ok(AttachmentObservation::Missing);
-        }
-        if self.attach_identity.as_ref() != Some(identity) {
-            return Ok(AttachmentObservation::StaleIdentity);
-        }
-        let slot = self
-            .attach_slot
-            .clone()
-            .ok_or(BindingLifecycleError::AdmissionDenied)?;
-        let proxy = self
-            .attach_proxy
-            .clone()
-            .ok_or(BindingLifecycleError::AdmissionDenied)?;
-        Ok(AttachmentObservation::Matching { slot, proxy })
+        self.child_resources
+            .observe_attach_process(binding, identity)
     }
 
-    fn detach_guest(
+    fn delete_guest_endpoint(
         &mut self,
         binding: &BindingIdentity,
         proxy: &BindingProxyLease,
     ) -> Result<(), BindingLifecycleError> {
-        self.guest.detach(binding, proxy)
+        self.child_resources.delete_guest_endpoint(binding, proxy)
     }
 
-    fn close_attach_runner(
+    fn delete_attach_process(
         &mut self,
         binding: &BindingIdentity,
         identity: &AttachProcessIdentity,
@@ -487,14 +408,8 @@ impl<'a, G: GuestUsbipControl> UsbipBrokerDispatcher for DaemonUsbipDispatcher<'
         if self.attach_identity.as_ref() != Some(identity) {
             return Err(BindingLifecycleError::ForeignIdentity);
         }
-        let role = Self::attach_role(binding);
-        self.state
-            .pidfd_table
-            .signal(&self.context.vm_id, &role, libc::SIGTERM)
-            .map_err(|_| BindingLifecycleError::Transient)?;
-        self.state
-            .pidfd_table
-            .deregister(&self.context.vm_id, &role);
+        self.child_resources
+            .delete_attach_process(binding, identity)?;
         self.attach_identity = None;
         Ok(())
     }
@@ -539,19 +454,18 @@ impl<'a, G: GuestUsbipControl> UsbipBrokerDispatcher for DaemonUsbipDispatcher<'
 
 /// Construct a production Provider port from a daemon state and Core context.
 #[allow(dead_code)]
-pub(crate) fn production_port<'a, G: GuestUsbipControl>(
+pub(crate) fn production_port<'a, C: UsbipChildResourcePort>(
     state: &'a ServerState,
     context: UsbipBindingContext,
     ledger: Arc<Mutex<AuthorityLedger>>,
-    guest: G,
-) -> ProductionPort<DaemonUsbipDispatcher<'a, G>> {
-    DaemonUsbipDispatcher::new(state, context, ledger, guest).into_port()
+    child_resources: C,
+) -> ProductionPort<DaemonUsbipDispatcher<'a, C>> {
+    DaemonUsbipDispatcher::new(state, context, ledger, child_resources).into_port()
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{GuestUsbipControl, NoGuestUsbipControl, UsbipBindingContext};
-    use d2b_provider_device_usbip::{BindingIdentity, BindingLifecycleError, BindingProxyLease};
+    use super::UsbipBindingContext;
 
     fn context() -> UsbipBindingContext {
         UsbipBindingContext::before_host_effects(
@@ -584,20 +498,5 @@ mod tests {
         )
         .expect("matching USBIP context");
         assert_eq!(first, second);
-    }
-
-    #[test]
-    fn guest_control_must_be_injected_for_detach() {
-        let binding = BindingIdentity::from_controller(
-            d2b_contracts_resource::v3::ResourceUid::parse(
-                "123e4567-e89b-42d3-a456-426614174000",
-            )
-            .unwrap(),
-        );
-        let proxy = BindingProxyLease::from_adapter([5; 16]);
-        assert_eq!(
-            NoGuestUsbipControl.detach(&binding, &proxy),
-            Err(BindingLifecycleError::AdmissionDenied)
-        );
     }
 }

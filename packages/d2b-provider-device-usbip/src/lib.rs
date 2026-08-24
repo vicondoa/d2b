@@ -24,7 +24,8 @@ pub use arbitration::{UsbipArbitrator, UsbipClaim, UsbipClaimError};
 pub use busid::{BusId, FirewallOwnershipMarker, MAX_BUS_ID_BYTES, PhysicalUsbBackingToken};
 pub use controller::{
     NetworkDependency, ScopedResourceUid, UsbipController, UsbipControllerError, UsbipMetricLabels,
-    UsbipOperation, UsbipOutcome, UsbipServicePhase,
+    UsbipOperation, UsbipOutcome, UsbipServicePhase, UsbipBindingController,
+    UsbipBindingControllerError, UsbipBindingPhase, UsbipBindingReconcileResult,
 };
 pub use firewall::{
     FirewallConfirmation, FirewallConfirmationKind, FirewallDigest, FirewallGenerationFence,
@@ -35,7 +36,7 @@ pub use lifecycle::{
     AttachProcessIdentity, AttachmentObservation, BindingIdentity, BindingLifecycle,
     BindingLifecycleError, BindingPhase, BindingPort, BindingProxyLease, BindingSlotLease,
     OwnedBusBinding, PhysicalAuthorityLease, ServiceLifecycle, ServiceLifecycleError, ServicePhase,
-    ServicePort, ServiceRelayLease, SupervisorFinalizeError, UsbipSupervisor,
+    ServicePort, ServiceRelayLease, SupervisorFinalizeError, UsbipSupervisor, binding_child_resources,
 };
 pub use process::{AttachSource, EphemeralProcessIntent, EphemeralProcessKind, UsbipDaemonProcess};
 pub use production::{ProductionPort, UsbipBrokerDispatcher};

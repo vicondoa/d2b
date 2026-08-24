@@ -1271,6 +1271,17 @@ pub fn public_operation_id(request: &Value, peer_uid: u32, method: &str) -> Stri
         })
 }
 
+/// Return a Resource API-safe operation identity for an internal mutation.
+///
+/// Resource references contain `/`, and controller-generated operation
+/// identities are not allowed to carry arbitrary resource text. Hashing the
+/// complete semantic identity keeps the operation stable while fitting the
+/// bounded metadata-token contract.
+pub fn bounded_operation_id(operation: &str) -> String {
+    let digest = Sha256::digest(operation.as_bytes());
+    format!("d2b-op-sha256:{digest:x}")
+}
+
 pub fn compatibility_error_envelope(error: ResourceRuntimeError) -> Value {
     let (kind, retry_class, reason) = match error {
         ResourceRuntimeError::AuthenticationUnavailable
@@ -1643,6 +1654,7 @@ pub async fn persist_resource_status_with_projection(
     let Some(CanonicalJsonValue::Object(status)) = root.get_mut("status") else {
         return Err(ResourceRuntimeError::HandlerNotReady);
     };
+    let previous_status = CanonicalJsonValue::Object(status.clone());
     let now = current_status_timestamp().as_str().to_owned();
     status.insert("phase".to_owned(), phase.clone());
     status.insert(
@@ -1675,6 +1687,10 @@ pub async fn persist_resource_status_with_projection(
         CanonicalJsonValue::Integer(resource.generation.get() as i64),
     );
     update.insert("lastAssessedAt".to_owned(), CanonicalJsonValue::String(now));
+    let candidate_status = CanonicalJsonValue::Object(status.clone());
+    if status_semantically_equal(&previous_status, &candidate_status) {
+        return Ok(());
+    }
     let canonical = value.to_canonical_bytes();
     let envelope = ResourceEnvelope::from_json(&canonical)
         .map_err(|_| ResourceRuntimeError::HandlerNotReady)?;
@@ -1700,14 +1716,11 @@ pub async fn persist_resource_status_with_projection(
     precondition.expected_revision = Some(resource.revision.get());
     precondition.expected_uid = Some(resource.uid.as_str().to_owned());
 
-    let operation = format!(
+    let operation = bounded_operation_id(&format!(
         "system-core-status-{}-{}",
-        resource
-            .resource_ref
-            .to_canonical_string()
-            .replace('/', "-"),
+        resource.resource_ref.to_canonical_string(),
         resource.revision.get()
-    );
+    ));
     let mut mutation = wire::Mutation::new();
     mutation.kind = protobuf::EnumOrUnknown::new(wire::MutationKind::MUTATION_KIND_UPDATE_STATUS);
     mutation.target = protobuf::MessageField::some(identity);
@@ -1739,6 +1752,24 @@ pub async fn persist_resource_status_with_projection(
         return Err(ResourceRuntimeError::StoreReadFailed);
     }
     Ok(())
+}
+
+fn status_semantically_equal(
+    current: &CanonicalJsonValue,
+    candidate: &CanonicalJsonValue,
+) -> bool {
+    fn without_reconciliation_timestamps(mut value: CanonicalJsonValue) -> CanonicalJsonValue {
+        if let CanonicalJsonValue::Object(root) = &mut value {
+            root.remove("lastReconciledAt");
+            if let Some(CanonicalJsonValue::Object(update)) = root.get_mut("update") {
+                update.remove("lastAssessedAt");
+            }
+        }
+        value
+    }
+
+    without_reconciliation_timestamps(current.clone())
+        == without_reconciliation_timestamps(candidate.clone())
 }
 
 fn select_resource_projection(
@@ -1796,6 +1827,19 @@ mod tests {
             .to_canonical_bytes(),
             br#"{"phase":"Pending"}"#
         );
+    }
+
+    #[test]
+    fn status_timestamp_only_changes_are_semantically_equal() {
+        let current = CanonicalJsonValue::parse(
+            br#"{"lastReconciledAt":"2026-08-19T00:00:00.000Z","phase":"Ready","update":{"lastAssessedAt":"2026-08-19T00:00:00.000Z","state":"Current"}}"#,
+        )
+        .unwrap();
+        let candidate = CanonicalJsonValue::parse(
+            br#"{"lastReconciledAt":"2026-08-19T00:01:00.000Z","phase":"Ready","update":{"lastAssessedAt":"2026-08-19T00:01:00.000Z","state":"Current"}}"#,
+        )
+        .unwrap();
+        assert!(status_semantically_equal(&current, &candidate));
     }
 
     #[test]
