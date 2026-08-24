@@ -268,7 +268,13 @@
         mkBazelShellHook = testPath: ''
           export D2B_PROJECT_SHELL=d2b
           export D2B_BAZEL_BIN="${bazel920}/bin/bazel"
-          export BAZEL_SH="''${BAZEL_SH:-${bazelActionShell}/bin/bash}"
+          if [ -z "''${BAZEL_SH:-}" ]; then
+            if [ -x /bin/bash ]; then
+              export BAZEL_SH=/bin/bash
+            else
+              export BAZEL_SH="${bazelActionShell}/bin/bash"
+            fi
+          fi
           export D2B_SHELLCHECK_BIN="${pkgs.shellcheck}/bin/shellcheck"
           export D2B_BAZEL_TEST_PATH="${testPath}"
         '';
