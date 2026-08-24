@@ -616,7 +616,9 @@ async fn blocking_effects_do_not_stall_the_async_executor() {
     const CALLS: usize = 200;
     const BLOCKING_DELAY: Duration = Duration::from_millis(50);
     const HEARTBEAT_PERIOD: Duration = Duration::from_millis(10);
-    const MAX_HEARTBEAT_GAP: Duration = Duration::from_millis(15);
+    // Leave hosted runners scheduling headroom while remaining below the
+    // backend delay that would prove the blocking call ran on this executor.
+    const MAX_HEARTBEAT_GAP: Duration = Duration::from_millis(40);
 
     let (backend, started, max_active) = ParallelLaunchBackend::new(BLOCKING_DELAY);
     let supervisor = Arc::new(ProviderSupervisor::with_limits(

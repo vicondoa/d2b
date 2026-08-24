@@ -1771,6 +1771,12 @@ fn focused_bazel_shell_exports_the_complete_facade_contract() {
             "shared Bazel shell contract must export {export}"
         );
     }
+    assert!(
+        shell_contract.contains("if [ -x /bin/bash ]")
+            && shell_contract.contains("export BAZEL_SH=/bin/bash")
+            && shell_contract.contains("export BAZEL_SH=\"${bazelActionShell}/bin/bash\""),
+        "the shared shell must use native Bash on FHS hosts and fall back to the NixOS FHS wrapper"
+    );
 }
 
 #[test]

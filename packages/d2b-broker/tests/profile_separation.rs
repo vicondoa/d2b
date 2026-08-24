@@ -42,6 +42,8 @@ fn each_profile_requires_its_own_instance_bindings() {
         "--test-mode",
         "--authority-id",
         "host-authority",
+        "--d2bd-uid",
+        "1000",
         "--socket-path",
         "/run/d2b/host-broker.sock",
         "--state-dir",

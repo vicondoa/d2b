@@ -1145,6 +1145,7 @@ dependencies = [
  "d2b-contracts-zone-session",
  "serde",
  "serde_json",
+ "sha2",
 ]
 
 
@@ -1178,6 +1179,7 @@ name = "d2b-provider-audio-pipewire"
 version = "0.0.0-bootstrap"
 dependencies = [
  "d2b-contracts",
+ "d2b-contracts-provider",
  "d2b-contracts-resource",
  "d2b-contracts-zone-session",
  "libc",
@@ -1265,6 +1267,7 @@ version = "0.0.0-bootstrap"
 dependencies = [
  "d2b-contracts",
  "d2b-contracts-broker",
+ "d2b-contracts-provider",
  "d2b-contracts-resource",
  "d2b-contracts-zone-session",
  "d2b-core",
@@ -1286,6 +1289,7 @@ dependencies = [
  "d2b-core",
  "d2b-provider-toolkit",
  "d2b-realm-core",
+ "d2b-session",
  "env_logger",
  "getrandom 0.2.17",
  "libc",
@@ -1330,6 +1334,20 @@ dependencies = [
  "serde",
  "serde_json",
  "sha2",
+]
+
+
+[[package]]
+name = "d2b-provider-observability-otel"
+version = "0.0.0-bootstrap"
+dependencies = [
+ "d2b-contracts-provider",
+ "d2b-contracts-resource",
+ "d2b-contracts-zone-session",
+ "d2b-provider-toolkit",
+ "rustix 0.38.44",
+ "serde",
+ "serde_json",
 ]
 
 
@@ -1649,6 +1667,7 @@ dependencies = [
  "d2b-provider-display-wayland",
  "d2b-provider-network-local",
  "d2b-provider-notification-desktop",
+ "d2b-provider-observability-otel",
  "d2b-provider-runtime-azure-container-apps",
  "d2b-provider-runtime-cloud-hypervisor",
  "d2b-provider-shell-terminal",
