@@ -147,8 +147,10 @@ pre-dispatch fallback live in `tests/tools/bazel-check`; do not duplicate
 those behaviors in Make or workflow code. Post-dispatch, analysis, policy,
 build, and test failures fail closed.
 
-The committed fixed workflow exposes one stable required `check` result. A
-guarded performance skip is advisory and is not validation evidence.
+The committed GitHub Actions workflow exposes one stable required local
+`check` result. The protected `v3` BuildBuddy Workflows action is defined in
+the root `buildbuddy.yaml` and uses the same fixed Layer-1 graph remotely.
+A guarded performance skip is advisory and is not validation evidence.
 
 The fixture-contract lane remains enforcing and local-only. It materializes
 `D2B_FIXTURES` through the existing Bazel fixture target and fails when

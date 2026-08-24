@@ -140,9 +140,12 @@ settings or claim atomic base binding.
 component and package suites. Bare local runs use the BuildBuddy profile for
 eligible actions and automatically fall back to local execution when no
 credential is available; CI runs the same suite graph through the local profile
-with no BuildBuddy credential. Make aliases are thin facade entry points,
-while Cargo manifests and lockfiles remain rules_rs metadata authority rather
-than contributor workflow entry points.
+with no BuildBuddy credential. The separate root `buildbuddy.yaml` gives
+BuildBuddy Workflows ownership of the protected `v3` remote `build / check`;
+the GitHub Actions workflow remains the credential-free local check. Make
+aliases are thin facade entry points, while Cargo manifests and lockfiles
+remain rules_rs metadata authority rather than contributor workflow entry
+points.
 
 The full invariants are in
 [`docs/contributing/critical-subsystems.md`](./docs/contributing/critical-subsystems.md).

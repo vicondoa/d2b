@@ -183,6 +183,7 @@ rust_test(
         "//:Cargo.toml",
         "//:.bazelrc",
         "//:.bazelrc.user.example",
+        "//:buildbuddy.yaml",
         "//:Makefile",
         "//:.github/workflows/pr-l1-static-fast.yml",
         "//:flake.nix",

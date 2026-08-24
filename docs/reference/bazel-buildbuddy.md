@@ -99,6 +99,25 @@ GitHub Layer-1 jobs set `D2B_BAZEL_PROFILE=local` and
 set is committed in `.github/workflows/pr-l1-static-fast.yml` and must remain
 aligned with the public Make aliases.
 
+## Protected v3 BuildBuddy Workflow
+
+The root `buildbuddy.yaml` defines one BuildBuddy Workflows action named
+`build / check`. It runs for pull requests targeting `v3` and pushes to `v3`,
+using `merge_with_base: true` for pull requests.
+
+The action invokes the existing fixed Bazel facade directly:
+
+```bash
+bazel test --config=remote --build_tests_only --test_output=errors \
+  --test_tag_filters=-local,-no-remote-exec,-manual,-exclusive,-gpu,-kvm \
+  //bazel/checks:check
+```
+
+BuildBuddy Workflows supplies its authenticated Bazel flags. The GitHub
+Actions workflow remains the credential-free, local-only `check` implementation
+in `.github/workflows/pr-l1-static-fast.yml`; no GitHub proxy or second
+scheduler is part of this configuration.
+
 ## Developer invocation metadata
 
 For developer `remote` and protected `trusted-seed` runs, `tests/tools/bazel-check`

@@ -1879,6 +1879,31 @@ fn ci_uses_public_make_aliases_without_nested_nix_develop_wrappers() {
 }
 
 #[test]
+fn buildbuddy_workflow_owns_the_protected_v3_remote_check() {
+    let workflow = read_text("buildbuddy.yaml");
+    assert_eq!(
+        workflow,
+        r#"actions:
+  - name: "build / check"
+    triggers:
+      pull_request:
+        branches:
+          - v3
+        merge_with_base: true
+      push:
+        branches:
+          - v3
+    steps:
+      - run: >-
+          bazel test --config=remote --build_tests_only --test_output=errors
+          --test_tag_filters=-local,-no-remote-exec,-manual,-exclusive,-gpu,-kvm
+          //bazel/checks:check
+"#,
+        "BuildBuddy must use one exact protected v3 remote check action"
+    );
+}
+
+#[test]
 fn bazel_facade_owns_public_make_composition() {
     let makefile = read_text("Makefile");
     let facade = read_text("bazel/checks/BUILD.bazel");
