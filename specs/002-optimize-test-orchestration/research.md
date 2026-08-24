@@ -19,8 +19,9 @@ represent directly.
   workspaces may overlap under one CPU and memory budget.
 - Each heavy Cargo workspace receives an explicit `--jobs` quota. Static
   relative weights are converted into runtime quotas from the actual aggregate
-  budget, and Make limits simultaneous heavy lanes so constrained budgets can
-  linearize the graph. Cargo is not expected to acquire weighted Make tokens.
+  budget, and Make limits simultaneous CPU-intensive lanes so constrained
+  budgets can linearize the graph. Cargo is not expected to acquire weighted
+  Make tokens.
 - Recursive Make recipes use `+$(MAKE)` and preserve the inherited jobserver.
   Leaf-dispatch recipes are ordinary non-submake recipes: they contain neither
   `$(MAKE)` nor the `+` prefix, so GNU Make closes jobserver descriptors before

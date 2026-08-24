@@ -550,7 +550,7 @@ artifacts, complete Story 1, and exercise each desktop companion against it.
   historical context; current behavior follows the owning product contract and focused checks.
 - **FR-075**: The pre-ADR-046 operator lifecycle MUST remain functional until the explicit
   cutover. The implementation MUST enumerate and successfully build
-  `vmChecks.x86_64-linux.daemon-restart-vm-survival` through the existing heavy-gated
+  `vmChecks.x86_64-linux.daemon-restart-vm-survival` through the direct
   `make test-host-integration` target with no skip. The case MUST use the public `d2b vm`
   surface to start the configured VM, observe the explicit `Ready` state and guest
   reachability, restart `d2bd.service`, prove the same runner PID/start-time identity was
@@ -732,8 +732,11 @@ artifacts, complete Story 1, and exercise each desktop companion against it.
 
 #### Validation and release
 
-- **FR-029**: Every heavy validation lane MUST run through the single shared sole-use
-  semaphore, with no second lock, retry loop, or per-crate guard.
+- **FR-029 (SUPERSEDED)**: The former requirement that every heavy validation lane
+  run through a shared sole-use semaphore is retired. Bazel-backed lanes invoke
+  the existing Bazel facade directly, and retained Layer-2/manual lanes run
+  directly from their public Make targets or documented script invocations; no
+  replacement lock, wrapper, or scheduler is introduced.
 - **FR-030**: A failed hard performance or footprint target MUST be resolved by changing the
   design, and MUST NOT be resolved by weakening durability, authorization, or audit, nor by
   adding a sleep, a timeout, or a test exclusion. The hard targets are:

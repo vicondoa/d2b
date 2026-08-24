@@ -123,7 +123,7 @@ The layout policy is the enforcing check for the crate shape. Keep schema
 round trips, conformance, fault injection, redaction, and effect-port tests
 in `tests/` or the crate's `src/` unit-test modules.
 
-## Declare and run heavy tests
+## Declare and run integration tests
 
 An executable `integration/*.rs` fixture declares exactly one target in its
 first twenty lines:
@@ -133,8 +133,7 @@ first twenty lines:
 ```
 
 Use `container` for a foreign-userland or process fixture and
-`host-integration` for a NixOS/Host/Guest fixture. Run the public lanes, which
-acquire the shared heavy-test slot:
+`host-integration` for a NixOS/Host/Guest fixture. Run the public lanes directly:
 
 ```bash
 make test-integration
@@ -142,7 +141,7 @@ make test-host-integration
 ```
 
 Validate physical-device behavior manually on an appropriate host. Do not add
-an evidence script or invoke an internal heavy-lane target directly.
+an evidence script or invoke an internal lane target directly.
 
 Several current Provider directories are scaffolding and intentionally have
 an integration README but no executable runtime fixture:

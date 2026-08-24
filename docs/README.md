@@ -144,7 +144,7 @@ Task-oriented recipes. Prescriptive, copy-and-adapt.
 
 - [`how-to/create-provider.md`](./how-to/create-provider.md) -
   Provider crate layout, schema and Nix configuration, toolkit usage, and
-  hermetic or declared heavy-test lanes.
+  hermetic or declared integration lanes.
 - [`how-to/install-nixos-tier1.md`](./how-to/install-nixos-tier1.md) -
   module-first Tier-1 install path for NixOS hosts.
 - [`how-to/install-ubuntu-2404.md`](./how-to/install-ubuntu-2404.md) -

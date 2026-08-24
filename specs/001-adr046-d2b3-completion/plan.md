@@ -44,8 +44,8 @@ group-commit batch 16, read pool 4, concurrent reads 16, read lifetime 250 ms.
 **Testing**: Existing closed layer set - nix-unit eval cases, Rust unit and binary integration
 tests, rendered-artifact contract tests, policy lints, and flake checks at Layer 1; podman
 containers and `runNixOSTest` at Layer 2; hardware, live-host, and cloud tiers manual. No new
-top-level shell gate. Every heavy lane runs through the two-slot semaphore via its public
-`make` target.
+top-level shell gate. Layer-2 and manual lanes run directly from their public `make` targets
+or documented script invocations.
 
 **Target Platform**: `x86_64-linux` NixOS host with KVM, single trusted user. Graphics paths
 are x86_64-only by existing platform gate.
@@ -81,7 +81,7 @@ resources and 100 concurrent watches
 | **II. Broker-Mediated Audited Privilege** | FR-012 keeps every privileged host mutation on the audited broker path; D077 forbids any Provider process importing the broker, enforced by a policy lint. FR-070 adds a daemon-owned resource-mutation audit drainer, not a new service, and requires audit durability before success. `SO_PEERCRED` plus group membership at the public socket stays the sole initial local lifecycle authz surface and is never treated as a Resource API subject. Host-generation continuation consumes a sealed durable capability minted only after that classification; daemon identity, broker-socket credentials, and euid 0 never independently authorize. | PASS |
 | **III. Reasonable Isolation Over Convenience** | FR-009 default-denies cross-Zone reference; FR-014 fails closed on missing identity state rather than reinitializing; FR-066 requires authoritative registrar-derived subjects; FR-069 forbids partial publication; FR-071 isolates a failed Zone without making it ready. virtiofsd zero-capability and per-VM store-farm invariants are untouched. | PASS |
 | **IV. Contract-Driven Compatibility** | 3.0 is a deliberate major-version clean break with v3 schemas, versioned artifacts, and fail-closed drift gates (FR-031). The Zone desired-state schema is unchanged. | PASS |
-| **V. Test-Layer Discipline** | FR-032 pins coverage to the lowest hermetic layer and forbids a new top-level shell gate; FR-029 routes every heavy lane through the single semaphore; FR-033 retires superseded suites. | PASS |
+| **V. Test-Layer Discipline** | FR-032 pins coverage to the lowest hermetic layer and forbids a new top-level shell gate; superseded FR-029 no longer governs Layer-2/manual execution; FR-033 retires superseded suites. | PASS |
 | **VII. Traceable, Marker-Free Shipped Artifacts** | SC-018 requires release notes to omit internal implementation bookkeeping; FR-019 lands docs with their behavior. | PASS |
 
 **Gate result**: The implementation plan is ready for focused component validation. Broad
@@ -89,7 +89,7 @@ container, host, live, and hardware lanes are conditional on the changed surface
 
 **Execution model**: Work may proceed in parallel where files are disjoint, with each change
 validated in its owning scope and integrated through the normal pull-request protections.
-Heavy validation uses the public semaphore-protected targets.
+Layer-2 and manual validation use the direct public targets.
 
 ### C1 correction and version impact
 

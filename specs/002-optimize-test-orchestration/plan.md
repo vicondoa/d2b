@@ -233,13 +233,13 @@ The public target always logs its effective internal lane and Cargo budget and
 names `D2B_RUST_BUDGET` as the target-specific control. The internal recursive
 Make invocation owns the calculated active-lane cap.
 
-GNU Make's jobserver schedules eligible workspace lanes. Each CPU-heavy lane
+GNU Make's jobserver schedules eligible workspace lanes. Each CPU-intensive lane
 has a static relative weight, but its explicit Cargo `--jobs` and nextest
 test-thread quota is computed at runtime from `D2B_RUST_BUDGET`. The maximum
-number of simultaneous heavy lanes is also capped by the runtime budget, so a
-budget of `1` linearizes heavy work. Quotas are distributed deterministically
-across the active-lane cap, including remainder jobs, such that the largest
-possible active set never sums above the budget. Contract tests exercise
+number of simultaneous CPU-intensive lanes is also capped by the runtime
+budget, so a budget of `1` linearizes heavy work. Quotas are distributed
+deterministically across the active-lane cap, including remainder jobs, such that
+the largest possible active set never sums above the budget. Contract tests exercise
 budgets from `1` through the representative-host default. This preserves
 per-workspace Cargo limits without making constrained hosts edit the DAG.
 Same-target leaves are dependency-ordered as shown above.

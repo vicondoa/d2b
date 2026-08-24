@@ -2028,11 +2028,11 @@ fn bazel_facade_owns_public_make_composition() {
     );
     assert!(
         make_target_blocks(&makefile)
-            .get("heavy-lane-perf")
+            .get("perf")
             .is_some_and(|block| {
                 block.contains("$(BAZEL_RUN) //bazel/checks:test-performance-budgets")
             }),
-        "heavy-lane-perf must invoke the public performance suite directly"
+        "perf must invoke the public performance suite directly"
     );
 }
 
@@ -2075,14 +2075,7 @@ fn make_dispatch_classification_covers_bazel_and_recursive_validation_targets() 
     }
 
     assert!(
-        classes[1]
-            .1
-            .iter()
-            .any(|target| target == "heavy-lane-perf"),
-        "heavy-lane-perf must remain an explicit local dispatcher target"
-    );
-    assert!(
-        !owners.contains_key("heavy-gate-provision") && !owners.contains_key("clean"),
+        !owners.contains_key("clean"),
         "maintenance targets must not be classified merely by their names"
     );
 
@@ -2128,110 +2121,6 @@ fn make_dispatch_classification_covers_bazel_and_recursive_validation_targets() 
             );
         }
     }
-}
-
-#[test]
-fn make_dispatch_preserves_mixed_local_and_utility_goals_with_one_shell_entry() {
-    let scratch = repo_root()
-        .join(".scratch")
-        .join(format!("make-dispatch-mixed-{}", std::process::id()));
-    std::fs::create_dir_all(&scratch).expect("create mixed dispatcher scratch");
-
-    let nix_count = scratch.join("nix.count");
-    let bazel_log = scratch.join("bazel.log");
-    let fake_bazel = scratch.join("bazel");
-    let fake_nix = scratch.join("nix");
-    let fake_xtask = scratch.join("xtask");
-    let heavy_gate_bin = format!(
-        "HEAVY_GATE_BIN={}",
-        fake_xtask.to_str().expect("fake xtask path")
-    );
-    let make_wrapper = scratch.join("Makefile");
-    std::fs::write(
-        &make_wrapper,
-        format!(
-            "include {}\n\
-             heavy-lane-perf: override D2B_BAZEL_TEST_TAG_FILTERS := target-specific-filter\n",
-            repo_root().join("Makefile").display()
-        ),
-    )
-    .expect("write target-specific Make wrapper");
-    let recursive_make = format!("MAKE=make -f {}", make_wrapper.display());
-    write_executable(
-        &fake_xtask,
-        "#!/bin/sh\n\
-         set -eu\n\
-         if [ \"${1:-}\" = bazel-evidence ] && [ \"${2:-}\" = redact-log ]; then exit 0; fi\n\
-         if [ \"${1:-}\" = heavy-gate ] && [ \"${2:-}\" = verify-slot ]; then exit 0; fi\n\
-         exit 90\n",
-    );
-    write_fake_bazel(&fake_bazel, true);
-    write_fake_nix(&fake_nix);
-
-    let mut path = scratch.display().to_string();
-    path.push(':');
-    path.push_str(&std::env::var("PATH").unwrap_or_default());
-    let output = Command::new("make")
-        .args([
-            "--no-print-directory",
-            "-C",
-            repo_root().to_str().expect("repository root path"),
-            "-f",
-            make_wrapper
-                .to_str()
-                .expect("target-specific Make wrapper path"),
-            "-j2",
-            recursive_make.as_str(),
-            "D2B_MAKE_REENTRY=0",
-            "D2B_BAZEL_PROFILE=local",
-            heavy_gate_bin.as_str(),
-            "heavy-lane-perf",
-            "heavy-gate-build",
-        ])
-        .env("PATH", &path)
-        .env("D2B_FAKE_NIX_COUNT", &nix_count)
-        .env("D2B_FAKE_BAZEL", &fake_bazel)
-        .env("D2B_FAKE_XTASK", &fake_xtask)
-        .env("D2B_FAKE_BAZEL_LOG", &bazel_log)
-        .env("D2B_BAZEL_UNTRUSTED", "1")
-        .env("BAZEL_SH", "/bin/bash")
-        .env_remove("D2B_PROJECT_SHELL")
-        .env_remove("D2B_MAKE_REENTRY")
-        .output()
-        .expect("run mixed local and utility Make goals");
-
-    assert!(
-        output.status.success(),
-        "mixed Make goals failed: {}{}",
-        String::from_utf8_lossy(&output.stdout),
-        String::from_utf8_lossy(&output.stderr)
-    );
-    assert_eq!(
-        std::fs::read_to_string(&nix_count)
-            .expect("read mixed Nix re-entry count")
-            .lines()
-            .count(),
-        1,
-        "mixed local and utility goals entered Nix more than once"
-    );
-    let log = std::fs::read_to_string(&bazel_log).expect("read mixed Bazel log");
-    assert_eq!(
-        log.lines().count(),
-        2,
-        "mixed goals should run one Bazel utility build and one test"
-    );
-    assert!(
-        log.lines().all(|line| {
-            line.contains("local") && line.contains("|/bin/bash|1|") && line.contains("-j2")
-        }),
-        "mixed goals did not preserve profile, trust, and parallelism: {log}"
-    );
-    assert!(
-        log.lines()
-            .any(|line| line.contains("--test_tag_filters=target-specific-filter")),
-        "mixed goals did not preserve the target-specific Bazel filter: {log}"
-    );
-    let _ = std::fs::remove_dir_all(scratch);
 }
 
 #[test]

@@ -3,8 +3,7 @@
 - Added the fixture-dependent Rust contract lane to the manifest-driven local
   and pull-request test graph. It builds the fixture bundle and runs both the
   contract crate and the command-line output contract cases, which previously
-  executed in no lane at all, and it acquires the shared heavy-validation
-  semaphore before doing so.
+  executed in no lane at all.
 - Changelog fragment parsers now require canonical ASCII dash bullets so
   malformed release-note entries fail consistently.
 

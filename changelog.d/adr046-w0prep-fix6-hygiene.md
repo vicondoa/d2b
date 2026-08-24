@@ -13,8 +13,8 @@
   exemption so it matches the lint: one exact, case-sensitive marker, honoured
   only in the single pinned documenting file and only when it appears once,
   with `policy_adr046_envelopes` named as the authority for the exact spelling.
-- Corrected the contributor documentation for running heavy gates and folding
-  changelog fragments: the `xtask` alias resolves only from `packages/`, so the
-  documented invocation is now the root-safe
+- Corrected the contributor documentation for folding changelog fragments: the
+  `xtask` alias resolves only from `packages/`, so the documented invocation is
+  now the root-safe
   `cargo run --manifest-path packages/Cargo.toml -p xtask -- ...`, with the
   `cd packages && cargo xtask ...` alternative noted for the `sccache` path.

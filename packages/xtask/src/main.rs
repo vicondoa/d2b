@@ -97,7 +97,6 @@ mod bazel_evidence;
 mod changelog;
 mod delivery;
 mod gen_resource_schemas;
-mod heavy_gate;
 mod inventory;
 mod production_closure;
 mod provider_crate_policy;
@@ -423,7 +422,6 @@ fn main() -> std::process::ExitCode {
         [command, rest @ ..] if command == "redact-diagnostics" => {
             diagnostic_redaction::run_cli(rest)
         }
-        [command, rest @ ..] if command == "heavy-gate" => heavy_gate::run(rest),
         [command, rest @ ..] if command == "gen-package-policy-inputs" => {
             let result = repo_root()
                 .map_err(|error| error.to_string())
@@ -445,7 +443,7 @@ fn main() -> std::process::ExitCode {
         [command] if command == "check-provider-layout" => run_provider_layout(),
         _ => {
             eprintln!(
-                "usage: cargo run --manifest-path Cargo.toml -p xtask -- <gen-schemas|gen-zone-storage-schema|gen-cli-schemas|gen-zone-schemas|gen-zone-nix-options|gen-resource-schemas|gen-error-codes|gen-provider-packaging|gen-semantic-service-schemas|gen-cli-shell-artifacts|gen-guest-proto|gen-guest-ttrpc|gen-resource-proto|gen-resource-ttrpc|gen-daemon-api|gen-package-policy-inputs [--check|--write]|release-notes <version>|adr0035-inventory [--output <path>]|changelog-fold [--check]|bazel-evidence <check-security|security-digest|classify-failure|redact-log> ...|check-provider-crate-layout|check-provider-layout|redact-diagnostics --repo-root <path> [--home <path>] [--tail-lines <count>]|delivery wave <snapshot|validate-import|recovery-import|seal|merge-target|merge-eligibility|help> [options]|heavy-gate <-- <command> [args...] | verify-slot>>"
+                "usage: cargo run --manifest-path Cargo.toml -p xtask -- <gen-schemas|gen-zone-storage-schema|gen-cli-schemas|gen-zone-schemas|gen-zone-nix-options|gen-resource-schemas|gen-error-codes|gen-provider-packaging|gen-semantic-service-schemas|gen-cli-shell-artifacts|gen-guest-proto|gen-guest-ttrpc|gen-resource-proto|gen-resource-ttrpc|gen-daemon-api|gen-package-policy-inputs [--check|--write]|release-notes <version>|adr0035-inventory [--output <path>]|changelog-fold [--check]|bazel-evidence <check-security|security-digest|classify-failure|redact-log> ...|check-provider-crate-layout|check-provider-layout|redact-diagnostics --repo-root <path> [--home <path>] [--tail-lines <count>]|delivery wave <snapshot|validate-import|recovery-import|seal|merge-target|merge-eligibility|help> [options]>"
             );
             std::process::ExitCode::FAILURE
         }

@@ -12,8 +12,8 @@
 - Make recipes and shared test helpers now discard inherited Bash functions
   before resolving tool names. An exported function can no longer shadow a
   PATH stub or expected system binary and silently redirect a gate.
-- Runtime-ledger and heavy-gate build failures now retain actionable compiler
-  diagnostics through a shared path redactor. The filter resolves symlinks,
+- Runtime-ledger build failures now retain actionable compiler diagnostics
+  through a shared path redactor. The filter resolves symlinks,
   treats path metacharacters literally, respects path-component boundaries,
   redacts other absolute paths, and suppresses raw output explicitly if safe
   filtering is unavailable.

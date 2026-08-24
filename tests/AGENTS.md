@@ -66,22 +66,13 @@ parity result.
 |---|------|------------|----------|----------------|
 | 9 | **container** | Nix-OCI image under rootless podman; proves a static binary runs on a foreign non-Nix userland | `tests/integration/containers/*.sh` + `containerImages.<sys>.*` | `make test-integration` - conditional local host lane when the changed surface needs a foreign userland |
 | 10 | **VM (runNixOSTest)** | boots a real NixOS VM; asserts live daemon/broker/socket-activation/host-posture/kernel behaviour | `tests/host-integration/*.nix` + `vmChecks.<sys>.*` | `make test-host-integration` - conditional NixOS/KVM lane when the changed surface needs host behavior |
-| 11 | **live-host** | runs against a **real deployed** d2b host; destructive/stateful | `tests/integration/live/*.sh` | through the Bazel-built xtask heavy-gate semaphore; `D2B_LIVE=1` / sudo - **manual, never CI** |
+| 11 | **live-host** | runs against a **real deployed** d2b host; destructive/stateful | `tests/integration/live/*.sh` | `D2B_LIVE=1` / sudo - **manual, never CI** |
 
-Every retained Layer-2 tier (9-11) runs behind the Bazel-built xtask heavy-gate sole-use
-semaphore, never as a raw script. Use the gated public lane target
-(`make test-integration`, `make test-host-integration`;
-`make pre-tag` / `make smoke-lite` for the live-VM smoke gate), or wrap an
-ad-hoc live script as
-`make heavy-gate-build && bazel-bin/packages/xtask/xtask heavy-gate -- env
-D2B_LIVE=1 bash tests/integration/live/<name>.sh`.
-
-Invoking a live script directly no longer bypasses the semaphore: it re-executes
-through the gate exactly once when `D2B_HEAVY_GATE` is unset, so shared Nix
-store, Bazel output tree, and KVM are not oversubscribed. **Any new live or
-performance entrypoint must carry that same self-guard block**, or the
-fail-closed inventory guard (`every_live_and_heavy_entrypoint_routes_through_the_gate`)
-fails while walking on-disk scripts and the Makefile.
+Retained Layer-2 tiers (9-11) are direct conditional or manual surfaces, never
+part of the Bazel Layer-1 scheduler. Use the public Make targets
+(`make test-integration`, `make test-host-integration`, `make pre-tag`, and
+`make smoke-lite`) or invoke an individual script explicitly with its required
+opt-in variables. Do not add local scheduling or fan-out to these lanes.
 
 ## How to add a test (decision rule)
 
@@ -200,8 +191,8 @@ add a test census, successor pin, secondary inventory, or validator.
 ### Retained Layer-2 and manual scripts
 
 Layer-2 container, VM, live-host, and performance scripts remain
-manual or conditional surfaces. They run through the documented heavy-gate
-semaphore and are not part of the Bazel Layer-1 scheduler. A shell script may
+manual or conditional surfaces and are not part of the Bazel Layer-1 scheduler.
+A shell script may
 remain under `tests/tools/` or `tests/unit/` when it is the subject of a
 native Bazel test, a fixture materializer, a generator, or a Layer-2 lane; it
 must not schedule sibling Layer-1 work.

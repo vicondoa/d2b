@@ -10,7 +10,8 @@ directory.
 
 - Use the pinned Rust toolchain from `packages/rust-toolchain.toml`.
 - Use NixOS and `/dev/kvm` only for host or VM checks that the changed surface requires.
-- Keep heavy lanes within the repository semaphore and invoke public `make` targets only.
+- Run retained Layer-2/manual lanes directly from their public `make` targets or
+  documented script invocations.
 - Do not put generated or diagnostic state in the source tree.
 
 ## Focused implementation loop
@@ -41,8 +42,9 @@ make test-host-integration     # NixOS/KVM host behavior
 ```
 
 Use the applicable public live or hardware target for provider, host, device, or cutover
-changes. Do not substitute a skipped or advisory job for an enforcing check. Heavy lanes use
-the two-slot-per-UID semaphore; never invoke internal `heavy-lane-*` targets directly.
+changes. Do not substitute a skipped or advisory job for an enforcing check. Layer-2/manual
+lanes use the direct public Make targets; invoke retained scripts directly only
+with their documented opt-in variables.
 
 ## Product acceptance paths
 

@@ -3,8 +3,7 @@
 //!
 //! `cargo run --manifest-path Cargo.toml -p xtask -- delivery wave validate-import` records that one validator lane
 //! ran against one candidate and what it returned. Two lanes report into the
-//! same candidate: required GitHub CI and the heavy-gated local and host
-//! validators.
+//! same candidate: required GitHub CI and the local and host validators.
 //!
 //! # How raw output is kept out of Git
 //!
@@ -74,7 +73,7 @@ const LOG_CHUNK_BYTES: usize = 64 * 1024;
 pub enum EvidenceLane {
     /// Required GitHub CI (the Layer-1 `check` rollup).
     GithubCi,
-    /// The heavy-gated local and host validators run by the integrator.
+    /// The local and host validators run by the integrator.
     LocalHost,
 }
 

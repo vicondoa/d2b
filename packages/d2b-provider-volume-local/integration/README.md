@@ -25,4 +25,4 @@ shipped path.
 The hermetic provider suite additionally covers source-policy matching,
 block-image and tmpfs admission, ACL repair decisions, deterministic Export
 intents, and store-view readiness posture. Those checks stay in `tests/` so
-they do not require a heavy lane.
+they do not require a Layer-2 lane.

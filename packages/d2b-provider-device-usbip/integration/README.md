@@ -1,11 +1,11 @@
 # `d2b-provider-device-usbip` integration fixtures
 
 `attach_detach_lifecycle.rs` declares `host-integration` in its first line. The
-scenario belongs to `make test-host-integration`, which runs through the shared
-heavy-gate semaphore. It requires a booted NixOS test Host with the USBIP host
-and Guest modules, Provider process lifecycle, nftables, Network relay, and a
-fake approved USB backend. KVM is preferred but the host-integration lane may
-use its documented fallback.
+scenario belongs to `make test-host-integration`, which runs the manual
+host-integration lane directly. It requires a booted NixOS test Host with the
+USBIP host and Guest modules, Provider process lifecycle, nftables, Network
+relay, and a fake approved USB backend. KVM is preferred but the
+host-integration lane may use its documented fallback.
 
 The scenario must prove one Host backend, one relay authority per Network,
 exact per-device projection apply and remove, sibling Network marker

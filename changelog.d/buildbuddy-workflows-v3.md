@@ -8,3 +8,7 @@
 - Retire the standalone no-bash AST walker and its Make/Bazel policy targets;
   Bazel-owned Rust CLI and contract tests remain canonical for daemon-only
   typed behavior.
+- Retire the obsolete heavy-gate semaphore and its host provisioning.
+  Bazel-backed lanes invoke the existing Bazel facade directly, while retained
+  Layer-2 and manual scripts run directly from their public Make targets or
+  explicit invocation.

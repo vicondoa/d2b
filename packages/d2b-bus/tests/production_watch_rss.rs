@@ -52,7 +52,7 @@ struct WatchConnection {
 }
 
 #[test]
-#[ignore = "run the whole-process production watch RSS fixture through the public heavy gate"]
+#[ignore = "run the whole-process production watch RSS fixture manually"]
 fn production_backend_hard_fixture_rss() {
     if std::env::var_os(RSS_CHILD_ENV).is_some() {
         let runtime = tokio::runtime::Builder::new_current_thread()

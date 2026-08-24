@@ -48,8 +48,8 @@ Represents the smallest independently schedulable unit.
 - Leaves sharing a mutable Cargo target directory do not overlap.
 - Broker feature leaves remain in one serial chain.
 - Every required coverage id is owned by exactly one leaf in a local run.
-- The heavy-lane concurrency limit is no greater than the runtime aggregate
-  budget.
+- Layer-2/manual lanes are invoked directly and have no repository-owned
+  concurrency limit or scheduler.
 - Runtime Cargo and nextest quotas are derived from relative weights and the
   active-lane limit; every possible active set sums to no more than the runtime
   aggregate budget, including constrained overrides below the lane count.

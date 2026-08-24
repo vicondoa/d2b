@@ -2237,7 +2237,7 @@ const PRODUCTION_RSS_FIXTURE_ENV: &str = "D2B_REDB_PRODUCTION_RSS_FIXTURE";
 const PRODUCTION_RSS_CHILD_MARKER: &str = "PRODUCTION_REDB_FIXTURE";
 
 #[test]
-#[ignore = "run the whole-process production RSS fixture through the public heavy gate"]
+#[ignore = "run the whole-process production RSS fixture manually"]
 fn production_backend_hard_fixture_rss() {
     if std::env::var_os(PRODUCTION_RSS_CHILD_ENV).is_some() {
         let runtime = tokio::runtime::Builder::new_current_thread()

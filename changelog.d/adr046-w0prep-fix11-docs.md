@@ -8,7 +8,7 @@
   job, and
   distinguished the full pre-merge gate from the post-preflight development
   umbrella.
-- Reconciled heavy-gate provisioning, inherited-slot verification, and runtime
-  ledger guidance with their current fail-closed implementations.
+- Reconciled runtime-ledger guidance with its current fail-closed
+  implementation.
 - Removed superseded delivery-reference and policy-lint mechanism descriptions
   from earlier changelog fragments.

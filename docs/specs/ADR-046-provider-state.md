@@ -1022,7 +1022,7 @@ Every `packages/d2b-provider-<base>-<implementation>/` crate created by this or 
 | --- | --- |
 | `src/` | Implementation modules and binary entry points; colocated `#[cfg(test)]` unit tests for individual functions |
 | `tests/` | Hermetic Cargo integration tests: ResourceType conformance tests, controller reconcile logic, fault-injection scenarios that do not require a live daemon (use `Fixture`/`FakeProvider`/`DeterministicClock` from the controller toolkit) |
-| `integration/` | Heavier scenario tests requiring a container, real Host/Guest processes, cross-process coordination, or provider-system fixtures; invoked by the existing `make test-integration` / `make heavy-test-integration` orchestration rather than bare `cargo test` |
+| `integration/` | Scenario tests requiring a container, real Host/Guest processes, cross-process coordination, or provider-system fixtures; invoked by the existing `make test-integration` target rather than bare `cargo test` |
 | `README.md` | Documents: Provider identity and artifact ID; config schema (`spec.config.*` with types and defaults); ResourceTypes owned; controllers/services/workers/binaries and their roles; placement requirements (Host/Guest/user); dependencies and RBAC; security model; state surfaces; telemetry surfaces; build, test, and integration command reference; and future standalone-repo usage guide |
 
 `integration/` tests are not run by `cargo test` alone. Scenarios requiring a live daemon or a real mounted Volume belong in `integration/`; scenarios that can run against a fake Zone runtime belong in `tests/`. Both test trees are required; an empty `integration/` directory is not acceptable - at minimum it must contain a placeholder scenario and a `README.md` noting future scenarios.

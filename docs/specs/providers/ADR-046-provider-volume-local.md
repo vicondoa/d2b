@@ -2461,9 +2461,9 @@ Required test files and minimum coverage:
 
 ### `integration/`
 
-Heavier scenario tests requiring a container, real Host processes, real
+Scenario tests requiring a container, real Host processes, real
 filesystem mounts, cross-process coordination, or provider-system fixtures.
-Invoked by `make test-integration` / `make heavy-test-integration`, not by bare
+Invoked by `make test-integration`, not by bare
 `cargo test`.
 
 Required files:
@@ -2542,7 +2542,6 @@ Documents:
     cargo build -p d2b-provider-volume-local
     cargo test -p d2b-provider-volume-local
     make test-integration                        # runs integration/
-    make heavy-test-integration                  # with heavy-gate semaphore
     cargo xtask check-provider-crate-layout      # workspace policy check
     ```
 11. **Future standalone-repo usage**: how to vendor or depend on this crate

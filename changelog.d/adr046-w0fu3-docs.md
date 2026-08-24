@@ -42,11 +42,8 @@
 
 ### Changed
 
-- Contributor docs: aligned the test quick-start with shipped behaviour.
-  `tests/README.md` no longer claims that invoking a live script directly
-  bypasses the heavy-gate semaphore, matching `tests/AGENTS.md` and the scripts'
-  self-re-exec self-guard. `AGENTS.md` and `tests/README.md` now document the
-  `test-runtime-ledger` Layer-1 job as an aggregate per-crate process-CPU
-  budget gate with advisory per-test wall-clock diagnostics, no baseline, and
-  no historical-regression claim, noting that the `Makefile` and
+- Contributor docs: aligned the test quick-start with shipped behaviour and
+  documented the `test-runtime-ledger` Layer-1 job as an aggregate per-crate
+  process-CPU budget gate with advisory per-test wall-clock diagnostics, no
+  baseline, and no historical-regression claim, noting that the `Makefile` and
   `tests/layer1-jobs.json` are authoritative if the prose diverges.
