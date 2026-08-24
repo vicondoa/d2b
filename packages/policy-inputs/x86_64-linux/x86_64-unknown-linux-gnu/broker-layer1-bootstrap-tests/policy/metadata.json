@@ -4,7 +4,7 @@
   "features": [
     "layer1-bootstrap"
   ],
-  "lockSha256": "e65636dc0af9434d681df016a56a988313117547906b551f47f94b1fc9b1f7c1",
+  "lockSha256": "dad954b9c463223ab6e08da9cec014002d059925ad542746a60914ae828d2f5d",
   "policyPackageCount": 165,
   "policyPackageIds": [
     "adler2@2.0.1#registry+https://github.com/rust-lang/crates.io-index",

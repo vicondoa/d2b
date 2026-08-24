@@ -123,6 +123,8 @@ pub(crate) struct CommittedInteractionProviderConfiguration {
 
 #[derive(Clone)]
 pub(crate) struct CommittedInteractionIdentity {
+    wayland_session_ref: ResourceRef,
+    wayland_session_uid: ResourceUid,
     subject_ref: ResourceRef,
     subject_uid: ResourceUid,
     host_execution_ref: ResourceRef,
@@ -151,6 +153,12 @@ impl CommittedInteractionIdentity {
         notification_provider_uid: Option<ResourceUid>,
     ) -> Self {
         Self {
+            wayland_session_ref: ResourceRef::parse(
+                "display-wayland.d2bus.org.WaylandSession/display-wayland",
+            )
+            .expect("fixed test WaylandSession reference"),
+            wayland_session_uid: ResourceUid::parse("33333333-3333-4333-8333-333333333333")
+                .expect("fixed test WaylandSession UID"),
             subject_ref,
             subject_uid,
             host_execution_ref,
@@ -162,6 +170,14 @@ impl CommittedInteractionIdentity {
             notification_provider_generation,
             notification_provider_uid,
         }
+    }
+
+    pub(crate) fn wayland_session_ref(&self) -> &ResourceRef {
+        &self.wayland_session_ref
+    }
+
+    pub(crate) fn wayland_session_uid(&self) -> &ResourceUid {
+        &self.wayland_session_uid
     }
 
     pub(crate) fn subject_ref(&self) -> &ResourceRef {
@@ -1754,6 +1770,14 @@ impl ZoneResourceRuntime {
         {
             runtime.set_controller_generation(controller_generation);
         }
+        if let Some(identity) = &self.interaction_identity {
+            runtime.set_target_scope(
+                Some(identity.wayland_session_ref().clone()),
+                Some(identity.subject_ref().clone()),
+            );
+        } else {
+            runtime.set_target_scope(None, None);
+        }
         if let Some(status_client) = &self.process_status_client {
             runtime.set_status_client(Arc::clone(status_client));
         }
@@ -1763,6 +1787,19 @@ impl ZoneResourceRuntime {
             Err(_) => return Err(ResourceRuntimeError::CapabilityUnavailable),
         }
         result.map_err(map_process_runtime_error)?;
+        if let (Some(client), Some(identity)) = (
+            self.process_status_client.clone(),
+            self.interaction_identity.as_ref(),
+        ) {
+            crate::process_resource_runtime::reconcile_wayland_session_deletion(
+                &client,
+                &self.store,
+                &self.zone,
+                identity.wayland_session_ref(),
+            )
+            .await
+            .map_err(map_process_runtime_error)?;
+        }
 
         let start_watch = {
             let mut watch_task = self
@@ -1779,7 +1816,16 @@ impl ZoneResourceRuntime {
             let store = Arc::clone(&self.store);
             let zone = self.zone.clone();
             let registry = Arc::clone(&self.process_runtime);
-            let task = tokio::spawn(run_process_watch(watch, store, zone, registry));
+            let task = tokio::spawn(run_process_watch(
+                watch,
+                store,
+                zone,
+                registry,
+                self.process_status_client.clone(),
+                self.interaction_identity
+                    .as_ref()
+                    .map(|identity| identity.wayland_session_ref().clone()),
+            ));
             let mut watch_task = self
                 .process_watch_task
                 .lock()
@@ -2912,6 +2958,8 @@ async fn load_committed_interaction_identity(
     }
 
     Ok(Some(CommittedInteractionIdentity {
+        wayland_session_ref: session_resource.resource_ref,
+        wayland_session_uid: session_resource.uid,
         subject_ref,
         subject_uid,
         host_execution_ref,

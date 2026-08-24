@@ -19,15 +19,8 @@ use std::sync::{
     mpsc,
 };
 
-type InteractionSupervisor = d2b_provider_supervisor::ProviderSupervisor<
-    d2b_provider_supervisor::BrokerProcessBackend<
-        interaction_composition::BundleDisplayLaunchResolver,
-    >,
->;
-type InteractionRuntime = interaction_composition::InteractionRuntimeSet<
-    InteractionSupervisor,
-    interaction_composition::AuthenticatedGuestFrontendEffects,
->;
+type InteractionSupervisor = interaction_composition::UnavailableProcessEffectPort;
+type InteractionRuntime = interaction_composition::InteractionRuntimeSet<InteractionSupervisor>;
 type DaemonResourceApiClient = d2b_resource_api::ResourceApiClient<
     d2b_resource_api::RedbBackend,
     d2b_resource_api::service::UnavailableUpgradeDispatcher,
@@ -251,8 +244,9 @@ use d2bd_runtime::shell_backend::{
 #[cfg(test)]
 use d2bd_runtime::shell_backend::{SHELL_POLL_CAP, SHELL_POLL_SLACK};
 use d2bd_runtime::vm_start_support::{
-    VmStartNodeMode, node_requires_disk_init_dispatch, resolve_store_view_intent_for_vm,
-    tracked_role_id, vm_start_node_mode,
+    VmStartNodeMode, is_durable_wayland_process_node, is_guest_owned_process_node,
+    node_requires_disk_init_dispatch, resolve_store_view_intent_for_vm, tracked_role_id,
+    vm_start_node_mode,
 };
 pub use d2bd_runtime::workload_dispatch;
 use d2bd_runtime::workload_dispatch::{
@@ -2685,11 +2679,7 @@ pub async fn serve(options: ServeOptions) -> Result<(), TypedError> {
                                 continue;
                             }
                             match interaction_composition::production_interaction_composition(
-                                resolver.clone(),
                                 state.daemon_uid,
-                                state
-                                    .daemon_state_dir
-                                    .join(format!("interaction-display-observations-{zone}.json")),
                                 interaction_composition::ProductionInteractionResourceState::new(
                                     zone.clone(),
                                     resource.committed_policy_snapshot(),
@@ -2697,6 +2687,7 @@ pub async fn serve(options: ServeOptions) -> Result<(), TypedError> {
                                     true,
                                     resource.interaction_provider_configuration(),
                                     resource.interaction_identity(),
+                                    resource.process_resource_client(),
                                 ),
                             ) {
                                 Ok(runtime) => {
@@ -3512,19 +3503,41 @@ async fn finalize_daemon_interactions(state: &ServerState) -> Result<(), TypedEr
     {
         listeners.stop();
     }
-    if let Some(runtime) = state.interaction_runtime.lock().await.as_mut()
-        && let Err(error) = runtime
-            .finalize_async(d2b_provider_display_wayland::GraceState::Expired)
-            .await
-    {
-        tracing::error!(?error, "interaction Provider finalization failed");
+    let interaction_error = {
+        let mut runtime = state.interaction_runtime.lock().await;
+        if let Some(runtime) = runtime.as_mut()
+            && let Err(error) = runtime
+                .finalize_async(d2b_provider_display_wayland::GraceState::Expired)
+                .await
+        {
+            tracing::error!(?error, "interaction Provider finalization failed");
+            Some(TypedError::InternalIo {
+                context: "interaction Provider finalization".to_owned(),
+                detail: error.to_string(),
+            })
+        } else {
+            None
+        }
+    };
+    let runtime = state.interaction_runtime.lock().await.take();
+    // The interaction composition retains the Resource API client used by
+    // durable display children. Drop it before the resource plane's
+    // Arc::try_unwrap shutdown gate runs.
+    drop(runtime);
+    let resource_result = shutdown_resource_plane(state).await;
+    if let Some(error) = interaction_error {
+        if let Err(resource_error) = resource_result {
+            tracing::error!(
+                ?resource_error,
+                "resource-plane shutdown also failed after interaction finalization failure"
+            );
+        }
+        return Err(error);
     }
-    shutdown_resource_plane(state)
-        .await
-        .map_err(|error| TypedError::InternalIo {
-            context: "authoritative resource-plane shutdown audit".to_owned(),
-            detail: error.to_string(),
-        })
+    resource_result.map_err(|error| TypedError::InternalIo {
+        context: "authoritative resource-plane shutdown audit".to_owned(),
+        detail: error.to_string(),
+    })
 }
 
 pub async fn lock_only(options: LockOnlyOptions) -> Result<(), TypedError> {
@@ -16413,6 +16426,12 @@ impl d2bd_runtime::supervisor::dag::NodeRunner for VmStartRunner<'_> {
         readiness: &[ReadinessPredicate],
         budget: d2bd_runtime::supervisor::dag::NodeBudget,
     ) -> Result<(), String> {
+        if is_guest_owned_process_node(node) {
+            return Ok(());
+        }
+        if is_durable_wayland_process_node(node) {
+            return wait_for_readiness(node, readiness, budget.readiness, None);
+        }
         // The authenticated Guest ComponentSession node is readiness-only but
         // needs daemon state (per-VM vsock socket, peer credentials, the
         // broker-backed signer), so it cannot go through the stateless
@@ -16506,6 +16525,9 @@ impl d2bd_runtime::supervisor::dag::NodeRunner for VmStartRunner<'_> {
         node: &ProcessNode,
         budget: d2bd_runtime::supervisor::dag::NodeBudget,
     ) -> Result<(), String> {
+        if is_guest_owned_process_node(node) || is_durable_wayland_process_node(node) {
+            return Ok(());
+        }
         match vm_start_node_mode(&node.role) {
             VmStartNodeMode::LongLived(runner_role) => {
                 let launch = self.spawn_runner(vm, node, runner_role, budget.spawn)?;
@@ -16529,6 +16551,18 @@ impl d2bd_runtime::supervisor::dag::NodeRunner for VmStartRunner<'_> {
         readiness: &[ReadinessPredicate],
         timeout: Duration,
     ) -> d2bd_runtime::supervisor::dag::ApiReadyState {
+        if is_guest_owned_process_node(node) {
+            return d2bd_runtime::supervisor::dag::ApiReadyState::Yes;
+        }
+        if is_durable_wayland_process_node(node) {
+            return match wait_for_readiness(node, readiness, timeout, None) {
+                Ok(()) => d2bd_runtime::supervisor::dag::ApiReadyState::Yes,
+                Err(error) if error == format!("readiness-timeout:{}", node.id.0) => {
+                    d2bd_runtime::supervisor::dag::ApiReadyState::Timeout
+                }
+                Err(reason) => d2bd_runtime::supervisor::dag::ApiReadyState::Error { reason },
+            };
+        }
         // The split-readiness api-ready phase observes the already-spawned
         // long-lived runner, so wire in the liveness probe: a runner that
         // dies before the api-ready socket appears surfaces as an Error
@@ -19514,6 +19548,7 @@ fn dispatch_broker_vm_start_inner(
     let tracked_roles = dag
         .nodes
         .iter()
+        .filter(|node| !is_guest_owned_process_node(node))
         .filter_map(|node| match vm_start_node_mode(&node.role) {
             VmStartNodeMode::LongLived(_) => Some(tracked_role_id(node)),
             _ => None,

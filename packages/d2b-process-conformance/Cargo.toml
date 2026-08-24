@@ -14,3 +14,4 @@ d2b-contracts-resource = { path = "../d2b-contracts-resource", version = "0.0.0-
 d2b-contracts = { path = "../d2b-contracts", version = "0.0.0-bootstrap" }
 serde = { workspace = true }
 serde_json = { workspace = true }
+sha2.workspace = true

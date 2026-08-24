@@ -511,7 +511,10 @@ in
             #   audio   → PipeWire/Pulse only (no Wayland)
             #   gpu/gpu-render-node → Wayland only when no proxy is emitted,
             #                         no session socket grant when proxy is active
-            wlproxy_wayland_uids=$(${pkgs.jq}/bin/jq -r '.vms[] | select(.vm == "${name}") | .nodes[] | select(.role == "wayland-proxy") | .profile.uid' "$bundle_json" 2>/dev/null | ${pkgs.coreutils}/bin/sort -u)
+            # Only the Host execution owns the real compositor socket. The
+            # Guest frontend uses the same logical role for bundle/profile
+            # lookup but must never receive host Wayland ACLs.
+            wlproxy_wayland_uids=$(${pkgs.jq}/bin/jq -r '.vms[] | select(.vm == "${name}") | .nodes[] | select(.role == "wayland-proxy" and ((.executionRef // "") | startswith("Guest/") | not)) | .profile.uid' "$bundle_json" 2>/dev/null | ${pkgs.coreutils}/bin/sort -u)
             audio_session_uids=$(${pkgs.jq}/bin/jq -r '.vms[] | select(.vm == "${name}") | .nodes[] | select(.role == "audio") | .profile.uid' "$bundle_json" 2>/dev/null | ${pkgs.coreutils}/bin/sort -u)
             gpu_session_uids=$(${pkgs.jq}/bin/jq -r '.vms[] | select(.vm == "${name}") | .nodes[] | select(.role == "gpu" or .role == "gpu-render-node") | .profile.uid' "$bundle_json" 2>/dev/null | ${pkgs.coreutils}/bin/sort -u)
             wlproxy_client_uids=$(printf '%s\n%s\n' "$gpu_session_uids" "$qemu_media_session_uids" | ${pkgs.coreutils}/bin/sort -u)
@@ -549,7 +552,7 @@ in
                 done
               fi
             fi
-            for uid in $(${pkgs.jq}/bin/jq -r '.vms[] | select(.vm == "${name}") | .nodes[] | .profile.uid' "$bundle_json" | ${pkgs.coreutils}/bin/sort -u); do
+            for uid in $(${pkgs.jq}/bin/jq -r '.vms[] | select(.vm == "${name}") | .nodes[] | select(((.executionRef // "") | startswith("Guest/") | not)) | .profile.uid' "$bundle_json" | ${pkgs.coreutils}/bin/sort -u); do
               [ "$uid" = "0" ] && continue
               ${pkgs.acl}/bin/setfacl -m "u:$uid:x" /var/lib/d2b 2>/dev/null || true
               # Grant traversal on both shared runtime parents so numeric

@@ -1747,9 +1747,14 @@ fn validate_active_schema(
 }
 
 fn validate_standard_base(envelope: &ResourceEnvelope) -> Result<bool, StoreError> {
+    let spec = if envelope.resource_type().as_str() == "Endpoint" {
+        envelope.spec().base_with_provider_ref()
+    } else {
+        envelope.spec().base().clone()
+    };
     validate_standard_base_bytes(
         envelope.resource_type().as_str(),
-        &envelope.spec().base().to_canonical_bytes(),
+        &spec.to_canonical_bytes(),
     )
 }
 

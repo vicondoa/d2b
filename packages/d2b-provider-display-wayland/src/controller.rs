@@ -10,10 +10,7 @@ use crate::{
     },
     spec::WaylandSessionSpec,
 };
-use d2b_contracts_resource::v3::{
-    ResourceRef,
-    ZoneId,
-};
+use d2b_contracts_resource::v3::{ResourceRef, ZoneId};
 use d2b_provider_toolkit::{AuthenticatedComponentSession, AuthenticatedSessionRouteBinding};
 use sha2::{Digest, Sha256};
 use std::collections::BTreeMap;
@@ -184,6 +181,23 @@ pub struct WaylandSessionStatus {
     pub principal: Option<String>,
     /// Fixed finalizer identifier.
     pub finalizer: &'static str,
+    /// Durable child and policy projection.
+    pub resource: WaylandSessionResourceStatus,
+}
+
+/// Bounded `WaylandSession.status.resource` projection.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct WaylandSessionResourceStatus {
+    /// Stable Host proxy Process reference.
+    pub proxy_process_ref: Option<ResourceRef>,
+    /// Stable Guest frontend Process reference.
+    pub guest_frontend_process_ref: Option<ResourceRef>,
+    /// Stable cross-domain Wayland Endpoint reference.
+    pub wayland_endpoint_ref: Option<ResourceRef>,
+    /// Observed Endpoint generation.
+    pub wayland_endpoint_generation: Option<u64>,
+    /// Compiled policy digest.
+    pub policy_digest: String,
 }
 
 /// Result of one reconcile pass.
@@ -287,6 +301,23 @@ pub struct AuthenticatedDisplaySession {
 }
 
 impl AuthenticatedDisplaySession {
+    #[cfg(test)]
+    pub(crate) fn from_test(
+        guest_ref: ResourceRef,
+        host_ref: ResourceRef,
+        zone: ZoneId,
+        reconnect_generation: u64,
+        controller_generation: u64,
+    ) -> Self {
+        Self {
+            guest_ref,
+            host_ref,
+            zone,
+            reconnect_generation,
+            controller_generation,
+        }
+    }
+
     /// Project the caller identity from an admitted ComponentSession.
     pub fn from_component_session<C>(
         session: &AuthenticatedComponentSession<C>,
@@ -926,9 +957,11 @@ impl DisplayController {
         }
         let launch_tickets = if needs_worker_launch {
             let grants = grants.expect("launch grants checked before principal allocation");
-            let Some(tickets) = grants.into_worker_tickets_with_fence(
+            let expected_controller_generation = controller_generation.max(1);
+            let Some(tickets) = grants.into_worker_tickets_with_fence_and_controller(
                 session_digest,
                 spec.reconnect_generation(),
+                expected_controller_generation,
                 supervision.teardown_generation,
                 compiled.digest(),
                 policy.generation(),
@@ -1265,10 +1298,14 @@ impl DisplayController {
         WaylandSessionStatus {
             phase,
             conditions,
-            policy_digest,
+            policy_digest: policy_digest.clone(),
             policy_generation,
             principal: (!principal.is_empty()).then_some(principal),
             finalizer: FINALIZER,
+            resource: WaylandSessionResourceStatus {
+                policy_digest: policy_digest.clone(),
+                ..WaylandSessionResourceStatus::default()
+            },
         }
     }
 }

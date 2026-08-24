@@ -496,25 +496,10 @@ in
       EGL_LOG_LEVEL = "fatal";
     };
 
-    # wl-cross-domain-proxy provides the guest-side virtio-gpu
-    # cross-domain Wayland transport. It is gated on
-    # crossDomainTrusted so it does not crash-loop when the
-    # cross-domain crosvm context is absent (crossDomainTrusted=false
-    # strips the context-type from crosvm's --params, so no
-    # cross-domain channel exists for the proxy to connect to).
-    #
-    # Title rewriting and app-id prefixing are performed on the HOST
-    # side by d2b-wayland-proxy; the guest proxy does not use
-    # --tag or any filtering flag.
-    systemd.user.services.wayland-proxy = lib.mkIf config.d2b.graphics.crossDomainTrusted {
-      description = "Wayland cross-domain proxy (guest virtio-gpu transport)";
-      wantedBy = [ "default.target" ];
-      serviceConfig = {
-        ExecStart = "${wlCrossDomainProxy}/bin/wl-cross-domain-proxy";
-        Restart = "on-failure";
-        RestartSec = 5;
-      };
-    };
+    # Keep the guest-side virtio-gpu transport in the guest closure. Its
+    # lifecycle is owned by the WaylandSession Guest Process child rather
+    # than a direct systemd.user service.
+    environment.systemPackages = lib.optional config.d2b.graphics.crossDomainTrusted wlCrossDomainProxy;
 
     # security-r8-audio-8: in-guest foot-autostart removed.
     #

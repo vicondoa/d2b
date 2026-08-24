@@ -21,6 +21,7 @@ use d2b_contracts_resource::v3::{
     ResourceEnvelope,
     ResourceName,
     ResourceRef,
+    ResourceTypeName,
     ResourceUid,
     SchemaFingerprint,
     ZoneId,
@@ -43,6 +44,7 @@ use d2b_contracts_resource::v3::identity::{
     TransportBinding,
     STANDARD_RESOURCE_TYPES,
 };
+use d2b_provider_display_wayland::{DisplayIdentity, WaylandSessionSpec};
 use d2b_contracts_broker::broker_wire::{
     BrokerCallerRole, OpenZoneStoreResponse, ZoneStoreDisposition,
 };
@@ -329,11 +331,102 @@ fn list_request(resource_type: &str) -> wire::ListRequest {
     request
 }
 
-fn resource_policy(zone: &ZoneId, snapshot: PolicySnapshot) -> (PolicySet, AuthorizationState) {
-    let catalog = ApiCatalog::standard();
+fn get_request(resource_type: &str, name: &str, operation_id: &str) -> wire::GetRequest {
+    let mut request = wire::GetRequest::new();
+    let mut meta = wire::RequestMeta::new();
+    meta.operation_id = operation_id.to_owned();
+    meta.correlation_id = operation_id.to_owned();
+    request.meta = MessageField::some(meta);
+    let mut target = wire::ResourceIdentity::new();
+    target.zone = "work".to_owned();
+    target.resource_type = resource_type.to_owned();
+    target.name = name.to_owned();
+    request.target = MessageField::some(target);
+    let mut projection = wire::Projection::new();
+    projection.kind = EnumOrUnknown::new(wire::ProjectionKind::PROJECTION_KIND_FULL);
+    request.projection = MessageField::some(projection);
+    request
+}
+
+fn delete_request(
+    resource_type: &str,
+    name: &str,
+    revision: u64,
+    operation_id: &str,
+) -> wire::DeleteRequest {
+    let mut request = wire::DeleteRequest::new();
+    let mut meta = wire::RequestMeta::new();
+    meta.operation_id = operation_id.to_owned();
+    meta.correlation_id = operation_id.to_owned();
+    meta.idempotency_key = operation_id.to_owned();
+    request.meta = MessageField::some(meta);
+    let mut target = wire::ResourceIdentity::new();
+    target.zone = "work".to_owned();
+    target.resource_type = resource_type.to_owned();
+    target.name = name.to_owned();
+    let mut precondition = wire::Precondition::new();
+    precondition.kind =
+        EnumOrUnknown::new(wire::PreconditionKind::PRECONDITION_KIND_EXACT_REVISION);
+    precondition.expected_revision = Some(revision);
+    let mut mutation = wire::Mutation::new();
+    mutation.kind = EnumOrUnknown::new(wire::MutationKind::MUTATION_KIND_DELETE);
+    mutation.target = MessageField::some(target);
+    mutation.precondition = MessageField::some(precondition);
+    request.mutation = MessageField::some(mutation);
+    request
+}
+
+fn update_finalizers_request(
+    resource_type: &str,
+    name: &str,
+    revision: u64,
+    finalizer: &str,
+    add: bool,
+    operation_id: &str,
+) -> wire::UpdateFinalizersRequest {
+    let mut request = wire::UpdateFinalizersRequest::new();
+    let mut meta = wire::RequestMeta::new();
+    meta.operation_id = operation_id.to_owned();
+    meta.correlation_id = operation_id.to_owned();
+    meta.idempotency_key = operation_id.to_owned();
+    request.meta = MessageField::some(meta);
+    let mut target = wire::ResourceIdentity::new();
+    target.zone = "work".to_owned();
+    target.resource_type = resource_type.to_owned();
+    target.name = name.to_owned();
+    let mut precondition = wire::Precondition::new();
+    precondition.kind =
+        EnumOrUnknown::new(wire::PreconditionKind::PRECONDITION_KIND_EXACT_REVISION);
+    precondition.expected_revision = Some(revision);
+    let mut mutation = wire::Mutation::new();
+    mutation.kind = EnumOrUnknown::new(wire::MutationKind::MUTATION_KIND_UPDATE_FINALIZERS);
+    mutation.target = MessageField::some(target);
+    mutation.precondition = MessageField::some(precondition);
+    if add {
+        mutation.add_finalizers.push(finalizer.to_owned());
+    } else {
+        mutation.remove_finalizers.push(finalizer.to_owned());
+    }
+    request.mutation = MessageField::some(mutation);
+    request
+}
+
+fn resource_policy(
+    zone: &ZoneId,
+    snapshot: PolicySnapshot,
+) -> (ApiCatalog, PolicySet, AuthorizationState) {
+    let catalog = ApiCatalog::with_extensions([
+        ResourceTypeName::parse("display-wayland.d2bus.org.WaylandPolicy").unwrap(),
+        ResourceTypeName::parse("display-wayland.d2bus.org.WaylandSession").unwrap(),
+    ])
+    .unwrap();
     let resource_types = STANDARD_RESOURCE_TYPES
         .iter()
         .map(|name| d2b_contracts_resource::v3::ResourceTypeName::parse(*name).unwrap())
+        .chain([
+            ResourceTypeName::parse("display-wayland.d2bus.org.WaylandPolicy").unwrap(),
+            ResourceTypeName::parse("display-wayland.d2bus.org.WaylandSession").unwrap(),
+        ])
         .collect::<Vec<_>>();
     let resource_verbs = [
         ResourceVerb::Get,
@@ -396,20 +489,22 @@ fn resource_policy(zone: &ZoneId, snapshot: PolicySnapshot) -> (PolicySet, Autho
         bootstrap_phase: BootstrapPhase::Disabled,
         now_tick: 1,
     };
-    (policy, state)
+    (catalog, policy, state)
 }
 
-async fn seed_host_resource(
+async fn open_seeded_resource_api(
     zone: &ZoneId,
     database_path: &std::path::Path,
     marker_path: &std::path::Path,
-    marker_identity: &str,
     store_identity: StoreIdentity,
     snapshot: PolicySnapshot,
+) -> (
+    std::sync::Arc<RedbResourceStore>,
+    ResourceBusAdapter<RedbBackend, d2b_resource_api::service::UnavailableUpgradeDispatcher>,
 ) {
-    let (policy, state) = resource_policy(zone, snapshot);
+    let (catalog, policy, state) = resource_policy(zone, snapshot);
     let authorizer =
-        std::sync::Arc::new(NativeAuthorizer::new(ApiCatalog::standard(), Some(policy)).unwrap());
+        std::sync::Arc::new(NativeAuthorizer::new(catalog, Some(policy)).unwrap());
     let acceptor = authorizer
         .take_store_seal(store_identity.seal_identity())
         .unwrap();
@@ -486,7 +581,25 @@ async fn seed_host_resource(
             .map_or("<none>", |error| error.reason.as_str())
     );
     assert_eq!(target.to_canonical_string(), "Host/host-system");
-    drop(client);
+    (store, adapter)
+}
+
+async fn seed_host_resource(
+    zone: &ZoneId,
+    database_path: &std::path::Path,
+    marker_path: &std::path::Path,
+    marker_identity: &str,
+    store_identity: StoreIdentity,
+    snapshot: PolicySnapshot,
+) {
+    let (store, adapter) = open_seeded_resource_api(
+        zone,
+        database_path,
+        marker_path,
+        store_identity,
+        snapshot,
+    )
+    .await;
     drop(adapter);
     let store = std::sync::Arc::try_unwrap(store).expect("release seed store");
     store
@@ -505,6 +618,7 @@ async fn create_operator_resource(
     name: &str,
     provider_ref: &str,
     operation_id: &str,
+    owner_ref: Option<&str>,
 ) {
     let mut spec = match resource_type {
         "Volume" => serde_json::to_value(zone_provider_acceptance::volume_spec())
@@ -515,19 +629,112 @@ async fn create_operator_resource(
             serde_json::to_value(DeviceSpec::emulated_exclusive()).expect("serialize Device spec")
         }
         "Guest" => serde_json::to_value(GuestSpec::system_default()).expect("serialize Guest spec"),
+        "display-wayland.d2bus.org.WaylandSession" => serde_json::to_value(
+            WaylandSessionSpec::new(
+                ResourceRef::parse("Guest/workstation").expect("valid Guest ref"),
+                ResourceRef::parse("Host/host-system").expect("valid Host ref"),
+                ResourceRef::parse("User/alice").expect("valid User ref"),
+                ResourceRef::parse(
+                    "display-wayland.d2bus.org.WaylandPolicy/display-wayland",
+                )
+                .expect("valid WaylandPolicy ref"),
+                DisplayIdentity::new("display", "#112233", "#223344", "#334455")
+                    .expect("valid display identity"),
+                true,
+            )
+            .expect("valid WaylandSession spec")
+            .with_virgl_video(false),
+        )
+        .expect("serialize WaylandSession spec"),
+        "Process" => {
+            serde_json::to_value(d2b_contracts_resource::v3::process::ProcessSpec::minimal(
+                d2b_contracts_resource::v3::process::ExecutionSpec::minimal(
+                    ResourceRef::parse(if name.contains("guest") {
+                        "Guest/workstation"
+                    } else {
+                        "Host/host-system"
+                    })
+                    .expect("valid Process execution ref"),
+                    d2b_contracts_resource::v3::process::ProcessClass::Worker,
+                    d2b_contracts_resource::v3::execution_policy::BoundedToken::parse(
+                        if name.contains("guest") {
+                            "wayland-frontend-worker"
+                        } else {
+                            "wayland-proxy-worker"
+                        },
+                    )
+                    .expect("valid Process template"),
+                )
+                .expect("minimal Process execution"),
+            ))
+            .expect("serialize Process spec")
+        }
+        "Endpoint" => serde_json::to_value(
+            d2b_contracts_resource::v3::endpoint::EndpointSpec::new(
+                ResourceRef::parse(provider_ref).expect("valid Endpoint provider ref"),
+                ResourceRef::parse(if name.contains("guest") {
+                    "Process/display-guest-frontend"
+                } else {
+                    "Process/display-host-proxy"
+                })
+                .expect("valid Endpoint producer ref"),
+                d2b_contracts_resource::v3::endpoint::EndpointClass::Data,
+                d2b_contracts_resource::v3::endpoint::EndpointTransport::FdAttachment,
+                d2b_contracts_resource::v3::execution_policy::BoundedToken::parse(
+                    "wayland-cross-domain",
+                )
+                .expect("valid Endpoint purpose"),
+                Some(
+                    d2b_contracts_resource::v3::execution_policy::BoundedText::parse(
+                        "display-wayland-data-v3",
+                    )
+                    .expect("valid Endpoint fingerprint"),
+                ),
+                d2b_contracts_resource::v3::endpoint::EndpointLocality::CrossDomain,
+                d2b_contracts_resource::v3::endpoint::EndpointVisibility::Zone,
+                d2b_contracts_resource::v3::endpoint::EndpointAttachmentPolicy::new(true, 1)
+                    .expect("valid Endpoint attachment policy"),
+                d2b_contracts_resource::v3::endpoint::EndpointConsumerPolicy::new(
+                    Vec::new(),
+                    Vec::new(),
+                    vec![d2b_contracts_resource::v3::endpoint::EndpointOperation::Resolve],
+                )
+                .expect("valid Endpoint consumer policy"),
+                d2b_contracts_resource::v3::endpoint::EndpointLifecyclePolicy::RecycleWithProducer,
+            )
+            .expect("valid Endpoint spec"),
+        )
+        .expect("serialize Endpoint spec"),
         _ => panic!("unsupported operator acceptance resource type"),
     };
     let spec_object = spec
         .as_object_mut()
         .expect("typed operator spec is an object");
-    spec_object.insert("providerRef".to_owned(), json!(provider_ref));
-    spec_object.insert(
-        "updatePolicy".to_owned(),
+    if matches!(
+        resource_type,
+        "Volume" | "Network" | "Device" | "Guest" | "Process"
+    ) {
+        spec_object.insert("providerRef".to_owned(), json!(provider_ref));
+        spec_object.insert(
+            "updatePolicy".to_owned(),
+            json!({
+                "disruptive": "manual",
+                "nonDisruptive": "automatic"
+            }),
+        );
+    }
+    let status_resource = if resource_type == "Endpoint" {
         json!({
-            "disruptive": "manual",
-            "nonDisruptive": "automatic"
-        }),
-    );
+            "readiness": "Pending",
+            "observedProducerGeneration": 0,
+            "observedResourceGeneration": 1,
+            "endpointGeneration": 0,
+            "connectionAvailability": "unavailable",
+            "leaseAvailability": "lease-required"
+        })
+    } else {
+        json!({})
+    };
     let payload = CanonicalJsonValue::parse(
         &serde_json::to_vec(&json!({
             "apiVersion": "resources.d2bus.org/v3",
@@ -539,7 +746,7 @@ async fn create_operator_resource(
                 "generation": 1,
                 "managedBy": "configuration",
                 "name": name,
-                "ownerRef": null,
+                "ownerRef": owner_ref,
                 "revision": 1,
                 "updatedAt": "2026-07-22T00:00:00.000Z",
                 "zone": "work"
@@ -552,7 +759,7 @@ async fn create_operator_resource(
                 "observedGeneration": 0,
                 "outcome": null,
                 "phase": "Pending",
-                "resource": {},
+                "resource": status_resource,
                 "startedAt": null,
                 "update": {
                     "dependencies": {"count": 0, "refs": []},
@@ -593,6 +800,14 @@ async fn create_operator_resource(
     meta.operation_id = operation_id.to_owned();
     meta.correlation_id = operation_id.to_owned();
     meta.idempotency_key = operation_id.to_owned();
+    if let Some(owner_ref) = owner_ref {
+        let owner_ref = ResourceRef::parse(owner_ref).expect("valid resource owner ref");
+        let mut owner = wire::ResourceIdentity::new();
+        owner.zone = "work".to_owned();
+        owner.resource_type = owner_ref.resource_type().as_str().to_owned();
+        owner.name = owner_ref.name().as_str().to_owned();
+        mutation.owner = MessageField::some(owner);
+    }
     request.meta = MessageField::some(meta);
     request.mutation = MessageField::some(mutation);
     let response = client.create(request).await;
@@ -697,6 +912,706 @@ async fn authenticated_operator_reaches_ready_resource_plane_and_refuses_other_s
     );
     drop(client);
     runtime.shutdown().await.expect("shutdown resource runtime");
+}
+
+#[tokio::test]
+async fn durable_process_and_endpoint_crud_survives_redb_reopen_and_drain() {
+    let directory = tempfile::tempdir().expect("resource-plane directory");
+    let zone = ZoneId::parse("work").unwrap();
+    let marker_identity = format!("sha256:{}", "f".repeat(64));
+    let database_path = directory.path().join("store.redb");
+    let marker_path = directory.path().join("store.marker");
+    let snapshot = PolicySnapshot {
+        policy_revision: 1,
+        api_catalog_revision: 1,
+        active_configuration_revision: ConfigurationGeneration::new(1).unwrap(),
+        controller_generation: Some(ControllerGeneration::new(1).unwrap()),
+    };
+    let store_identity = StoreIdentity::new(
+        StoreSlot::new(0).unwrap(),
+        stable_uid("store", &marker_identity),
+        zone.clone(),
+        stable_uid("zone", zone.as_str()),
+        d2b_contracts_resource::v3::Timestamp::parse("1970-01-01T00:00:00.000Z").unwrap(),
+        snapshot,
+    );
+    seed_host_resource(
+        &zone,
+        &database_path,
+        &marker_path,
+        &marker_identity,
+        store_identity,
+        snapshot,
+    )
+    .await;
+
+    let database = OpenOptions::new()
+        .read(true)
+        .write(true)
+        .open(&database_path)
+        .expect("reopen redb file");
+    let mut runtime = ZoneResourceRuntime::open(
+        zone.clone(),
+        OpenedZoneStore {
+            response: OpenZoneStoreResponse {
+                zone_store_id: ZoneStoreId::parse("zone-store-work").unwrap(),
+                store_identity: marker_identity.clone(),
+                disposition: ZoneStoreDisposition::Opened,
+                fd_index: 0,
+            },
+            database_fd: database.into(),
+            external_inventory: None,
+        },
+    )
+    .await
+    .expect("open production Zone runtime");
+    runtime.set_provider_path_ready(true);
+    assert!(runtime.readiness().is_ready());
+
+    let (operator_ref, operator_uid) = ZoneResourceRuntime::operator_subject_identity();
+    let client = runtime
+        .bind_operator_resource_client(operator_context(&zone, operator_ref, operator_uid))
+        .expect("bind authenticated operator Resource API client");
+    let session_owner = None;
+    create_operator_resource(
+        client.as_ref(),
+        "Process",
+        "display-host-proxy",
+        "Provider/system-minijail",
+        "create-display-host-proxy",
+        session_owner,
+    )
+    .await;
+    create_operator_resource(
+        client.as_ref(),
+        "Process",
+        "display-guest-frontend",
+        "Provider/system-systemd",
+        "create-display-guest-frontend",
+        session_owner,
+    )
+    .await;
+    create_operator_resource(
+        client.as_ref(),
+        "Endpoint",
+        "display-host-endpoint",
+        "Provider/display-wayland",
+        "create-display-host-endpoint",
+        session_owner,
+    )
+    .await;
+    create_operator_resource(
+        client.as_ref(),
+        "Endpoint",
+        "display-guest-endpoint",
+        "Provider/display-wayland",
+        "create-display-guest-endpoint",
+        session_owner,
+    )
+    .await;
+
+    let processes = client.list(list_request("Process")).await;
+    assert!(
+        processes.error.is_none(),
+        "list durable Process resources failed: {:?}",
+        processes.error
+    );
+    let process_names = processes
+        .resources
+        .iter()
+        .filter_map(|resource| resource.identity.as_ref())
+        .map(|identity| identity.name.as_str())
+        .collect::<Vec<_>>();
+    assert!(process_names.contains(&"display-host-proxy"));
+    assert!(process_names.contains(&"display-guest-frontend"));
+
+    let endpoint = client
+        .get(get_request(
+            "Endpoint",
+            "display-host-endpoint",
+            "get-display-host-endpoint",
+        ))
+        .await;
+    assert!(
+        endpoint.error.is_none(),
+        "get durable Endpoint failed: {:?}",
+        endpoint.error
+    );
+    let endpoint = endpoint
+        .resource
+        .as_ref()
+        .expect("durable Endpoint response");
+    assert_eq!(
+        endpoint
+            .identity
+            .as_ref()
+            .expect("Endpoint identity")
+            .resource_type,
+        "Endpoint"
+    );
+    let endpoint_revision = endpoint
+        .identity
+        .as_ref()
+        .expect("Endpoint identity")
+        .revision
+        .expect("Endpoint revision");
+    ResourceEnvelope::from_json(&endpoint.canonical_json).expect("valid Endpoint envelope");
+    let delete_endpoint = client
+        .delete(delete_request(
+            "Endpoint",
+            "display-host-endpoint",
+            endpoint_revision,
+            "delete-display-host-endpoint",
+        ))
+        .await;
+    assert!(
+        delete_endpoint.error.is_none(),
+        "delete Endpoint failed: {:?}",
+        delete_endpoint.error
+    );
+    let delete_endpoint = client
+        .delete(delete_request(
+            "Endpoint",
+            "display-host-endpoint",
+            delete_endpoint.revision,
+            "delete-drained-display-host-endpoint",
+        ))
+        .await;
+    assert!(
+        delete_endpoint.error.is_none(),
+        "delete drained Endpoint failed: {:?}",
+        delete_endpoint.error
+    );
+
+    let process = client
+        .get(get_request(
+            "Process",
+            "display-host-proxy",
+            "get-display-host-proxy",
+        ))
+        .await;
+    assert!(
+        process.error.is_none(),
+        "get durable Process failed: {:?}",
+        process.error
+    );
+    let process = process.resource.as_ref().expect("durable Process response");
+    let process_identity = process.identity.as_ref().expect("Process identity");
+    let process_revision = process_identity.revision.expect("Process revision");
+    ResourceEnvelope::from_json(&process.canonical_json).expect("valid Process envelope");
+    assert_eq!(
+        serde_json::from_slice::<serde_json::Value>(&process.canonical_json).expect("Process JSON")
+            ["spec"]["executionRef"],
+        "Host/host-system"
+    );
+
+    let finalizer = "display-wayland.d2bus.org/children";
+    let add_finalizer = client
+        .update_finalizers(update_finalizers_request(
+            "Process",
+            "display-host-proxy",
+            process_revision,
+            finalizer,
+            true,
+            "add-display-finalizer",
+        ))
+        .await;
+    assert!(
+        add_finalizer.error.is_none(),
+        "add Process finalizer failed: {:?}",
+        add_finalizer.error
+    );
+    let delete_revision = add_finalizer.revision;
+    let delete = client
+        .delete(delete_request(
+            "Process",
+            "display-host-proxy",
+            delete_revision,
+            "delete-display-host-proxy",
+        ))
+        .await;
+    assert!(
+        delete.error.is_none(),
+        "delete Process failed: {:?}",
+        delete.error
+    );
+    let retained = client
+        .get(get_request(
+            "Process",
+            "display-host-proxy",
+            "get-deleting-display-host-proxy",
+        ))
+        .await;
+    assert!(
+        retained.error.is_none(),
+        "finalized Process must remain readable while draining: {:?}",
+        retained.error
+    );
+    let retained = retained.resource.as_ref().expect("retained Process");
+    let retained_json =
+        serde_json::from_slice::<serde_json::Value>(&retained.canonical_json).expect("JSON");
+    assert!(retained_json["metadata"]["deletionRequestedAt"].is_string());
+    assert_eq!(
+        retained_json["metadata"]["finalizers"]
+            .as_array()
+            .expect("Process finalizers"),
+        &[json!(finalizer)]
+    );
+    let remove_finalizer = client
+        .update_finalizers(update_finalizers_request(
+            "Process",
+            "display-host-proxy",
+            retained
+                .identity
+                .as_ref()
+                .expect("retained Process identity")
+                .revision
+                .expect("retained Process revision"),
+            finalizer,
+            false,
+            "drain-display-finalizer",
+        ))
+        .await;
+    assert!(
+        remove_finalizer.error.is_none(),
+        "remove Process finalizer failed: {:?}",
+        remove_finalizer.error
+    );
+    let delete_drained = client
+        .delete(delete_request(
+            "Process",
+            "display-host-proxy",
+            remove_finalizer.revision,
+            "delete-drained-display-host-proxy",
+        ))
+        .await;
+    assert!(
+        delete_drained.error.is_none(),
+        "delete drained Process failed: {:?}",
+        delete_drained.error
+    );
+    let removed = client
+        .get(get_request(
+            "Process",
+            "display-host-proxy",
+            "get-drained-display-host-proxy",
+        ))
+        .await;
+    assert!(
+        removed.resource.is_none(),
+        "drained Process must be removed from Redb"
+    );
+    assert!(
+        removed.error.is_some(),
+        "drained Process lookup must report not found"
+    );
+    drop(client);
+    runtime.shutdown().await.expect("shutdown resource runtime");
+
+    let database = OpenOptions::new()
+        .read(true)
+        .write(true)
+        .open(&database_path)
+        .expect("reopen redb file after drain");
+    let mut reopened = ZoneResourceRuntime::open(
+        zone.clone(),
+        OpenedZoneStore {
+            response: OpenZoneStoreResponse {
+                zone_store_id: ZoneStoreId::parse("zone-store-work").unwrap(),
+                store_identity: marker_identity,
+                disposition: ZoneStoreDisposition::Opened,
+                fd_index: 0,
+            },
+            database_fd: database.into(),
+            external_inventory: None,
+        },
+    )
+    .await
+    .expect("reopen production Zone runtime");
+    reopened.set_provider_path_ready(true);
+    let (operator_ref, operator_uid) = ZoneResourceRuntime::operator_subject_identity();
+    let client = reopened
+        .bind_operator_resource_client(operator_context(&zone, operator_ref, operator_uid))
+        .expect("rebind authenticated operator Resource API client");
+    let remaining = client.list(list_request("Process")).await;
+    assert!(
+        remaining.error.is_none(),
+        "list Process after reopen failed: {:?}",
+        remaining.error
+    );
+    assert!(
+        remaining
+            .resources
+            .iter()
+            .filter_map(|resource| resource.identity.as_ref())
+            .all(|identity| identity.name != "display-host-proxy")
+    );
+    let endpoint_after_reopen = client
+        .get(get_request(
+            "Endpoint",
+            "display-guest-endpoint",
+            "get-display-guest-endpoint-after-reopen",
+        ))
+        .await;
+    assert!(
+        endpoint_after_reopen.error.is_none(),
+        "Endpoint did not survive Redb reopen: {:?}",
+        endpoint_after_reopen.error
+    );
+    drop(client);
+    reopened
+        .shutdown()
+        .await
+        .expect("shutdown reopened resource runtime");
+}
+
+#[tokio::test]
+async fn wayland_session_owner_deletion_is_child_and_endpoint_first() {
+    let directory = tempfile::tempdir().expect("resource-plane directory");
+    let zone = ZoneId::parse("work").unwrap();
+    let marker_identity = format!("sha256:{}", "d".repeat(64));
+    let database_path = directory.path().join("store.redb");
+    let marker_path = directory.path().join("store.marker");
+    let snapshot = PolicySnapshot {
+        policy_revision: 1,
+        api_catalog_revision: 1,
+        active_configuration_revision: ConfigurationGeneration::new(1).unwrap(),
+        controller_generation: Some(ControllerGeneration::new(1).unwrap()),
+    };
+    let store_identity = StoreIdentity::new(
+        StoreSlot::new(0).unwrap(),
+        stable_uid("store", &marker_identity),
+        zone.clone(),
+        stable_uid("zone", zone.as_str()),
+        d2b_contracts_resource::v3::Timestamp::parse("1970-01-01T00:00:00.000Z").unwrap(),
+        snapshot,
+    );
+    let (store, adapter) = open_seeded_resource_api(
+        &zone,
+        &database_path,
+        &marker_path,
+        store_identity,
+        snapshot,
+    )
+    .await;
+    let client = adapter.client();
+    let session_ref = "display-wayland.d2bus.org.WaylandSession/display-wayland";
+    create_operator_resource(
+        &client,
+        "display-wayland.d2bus.org.WaylandSession",
+        "display-wayland",
+        "Provider/display-wayland",
+        "create-wayland-session-owner",
+        None,
+    )
+    .await;
+    let session = client
+        .get(get_request(
+            "display-wayland.d2bus.org.WaylandSession",
+            "display-wayland",
+            "get-wayland-session-owner",
+        ))
+        .await;
+    assert!(
+        session.error.is_none(),
+        "get WaylandSession failed: {:?}",
+        session.error
+    );
+    let session_revision = session
+        .resource
+        .as_ref()
+        .expect("WaylandSession response")
+        .identity
+        .as_ref()
+        .expect("WaylandSession identity")
+        .revision
+        .expect("WaylandSession revision");
+    let add_finalizer = client
+        .update_finalizers(update_finalizers_request(
+            "display-wayland.d2bus.org.WaylandSession",
+            "display-wayland",
+            session_revision,
+            "display-wayland.d2bus.org/proxy-stopped",
+            true,
+            "add-wayland-session-owner-finalizer",
+        ))
+        .await;
+    assert!(
+        add_finalizer.error.is_none(),
+        "add WaylandSession finalizer failed: {:?}",
+        add_finalizer.error
+    );
+
+    create_operator_resource(
+        &client,
+        "Process",
+        "display-host-proxy",
+        "Provider/system-minijail",
+        "create-wayland-owner-host-process",
+        Some(session_ref),
+    )
+    .await;
+    create_operator_resource(
+        &client,
+        "Process",
+        "display-guest-frontend",
+        "Provider/system-systemd",
+        "create-wayland-owner-guest-process",
+        Some(session_ref),
+    )
+    .await;
+    create_operator_resource(
+        &client,
+        "Endpoint",
+        "display-host-endpoint",
+        "Provider/display-wayland",
+        "create-wayland-owner-host-endpoint",
+        Some(session_ref),
+    )
+    .await;
+    create_operator_resource(
+        &client,
+        "Endpoint",
+        "display-guest-endpoint",
+        "Provider/display-wayland",
+        "create-wayland-owner-guest-endpoint",
+        Some(session_ref),
+    )
+    .await;
+
+    let session = client
+        .get(get_request(
+            "display-wayland.d2bus.org.WaylandSession",
+            "display-wayland",
+            "get-wayland-session-before-delete",
+        ))
+        .await;
+    let delete_requested = client
+        .delete(delete_request(
+            "display-wayland.d2bus.org.WaylandSession",
+            "display-wayland",
+            session
+                .resource
+                .as_ref()
+                .expect("WaylandSession before delete")
+                .identity
+                .as_ref()
+                .expect("WaylandSession identity before delete")
+                .revision
+                .expect("WaylandSession revision before delete"),
+            "request-wayland-session-delete",
+        ))
+        .await;
+    assert!(
+        delete_requested.error.is_none(),
+        "WaylandSession deletion request failed: {:?}",
+        delete_requested.error
+    );
+    let deleting_session = client
+        .get(get_request(
+            "display-wayland.d2bus.org.WaylandSession",
+            "display-wayland",
+            "get-deleting-wayland-session",
+        ))
+        .await;
+    let deleting_session = deleting_session
+        .resource
+        .as_ref()
+        .expect("deleting WaylandSession");
+    let deleting_json =
+        serde_json::from_slice::<serde_json::Value>(&deleting_session.canonical_json)
+            .expect("deleting WaylandSession JSON");
+    assert!(deleting_json["metadata"]["deletionRequestedAt"].is_string());
+    let remove_finalizer = client
+        .update_finalizers(update_finalizers_request(
+            "display-wayland.d2bus.org.WaylandSession",
+            "display-wayland",
+            deleting_session
+                .identity
+                .as_ref()
+                .expect("deleting WaylandSession identity")
+                .revision
+                .expect("deleting WaylandSession revision"),
+            "display-wayland.d2bus.org/proxy-stopped",
+            false,
+            "remove-wayland-session-owner-finalizer",
+        ))
+        .await;
+    assert!(
+        remove_finalizer.error.is_none(),
+        "remove WaylandSession finalizer failed: {:?}",
+        remove_finalizer.error
+    );
+    let blocked = client
+        .delete(delete_request(
+            "display-wayland.d2bus.org.WaylandSession",
+            "display-wayland",
+            remove_finalizer.revision,
+            "delete-wayland-session-with-children",
+        ))
+        .await;
+    assert_eq!(
+        blocked
+            .error
+            .as_ref()
+            .map(|error| error.reason.as_str()),
+        Some("owned-children-remain"),
+        "owner deletion must remain blocked until child resources drain"
+    );
+
+    for (resource_type, name, operation_id) in [
+        ("Endpoint", "display-host-endpoint", "delete-wayland-host-endpoint"),
+        ("Endpoint", "display-guest-endpoint", "delete-wayland-guest-endpoint"),
+    ] {
+        let endpoint = client
+            .get(get_request(resource_type, name, &format!("get-{operation_id}")))
+            .await;
+        let endpoint = endpoint.resource.as_ref().expect("Endpoint before delete");
+        let revision = endpoint
+            .identity
+            .as_ref()
+            .expect("Endpoint identity before delete")
+            .revision
+            .expect("Endpoint revision before delete");
+        let requested = client
+            .delete(delete_request(resource_type, name, revision, operation_id))
+            .await;
+        assert!(
+            requested.error.is_none(),
+            "Endpoint deletion request failed: {:?}",
+            requested.error
+        );
+        let retained = client
+            .get(get_request(
+                resource_type,
+                name,
+                &format!("get-deleting-{operation_id}"),
+            ))
+            .await;
+        let retained = retained.resource.as_ref().expect("deleting Endpoint");
+        let drained = client
+            .delete(delete_request(
+                resource_type,
+                name,
+                retained
+                    .identity
+                    .as_ref()
+                    .expect("deleting Endpoint identity")
+                    .revision
+                    .expect("deleting Endpoint revision"),
+                &format!("drain-{operation_id}"),
+            ))
+            .await;
+        assert!(
+            drained.error.is_none(),
+            "Endpoint drain failed: {:?}",
+            drained.error
+        );
+    }
+
+    for (name, operation_id) in [
+        ("display-host-proxy", "delete-wayland-host-process"),
+        ("display-guest-frontend", "delete-wayland-guest-process"),
+    ] {
+        let process = client
+            .get(get_request(
+                "Process",
+                name,
+                &format!("get-{operation_id}"),
+            ))
+            .await;
+        let process = process.resource.as_ref().expect("Process before delete");
+        let requested = client
+            .delete(delete_request(
+                "Process",
+                name,
+                process
+                    .identity
+                    .as_ref()
+                    .expect("Process identity before delete")
+                    .revision
+                    .expect("Process revision before delete"),
+                operation_id,
+            ))
+            .await;
+        assert!(
+            requested.error.is_none(),
+            "Process deletion request failed: {:?}",
+            requested.error
+        );
+        let retained = client
+            .get(get_request(
+                "Process",
+                name,
+                &format!("get-deleting-{operation_id}"),
+            ))
+            .await;
+        let drained = client
+            .delete(delete_request(
+                "Process",
+                name,
+                retained
+                    .resource
+                    .as_ref()
+                    .expect("deleting Process")
+                    .identity
+                    .as_ref()
+                    .expect("deleting Process identity")
+                    .revision
+                    .expect("deleting Process revision"),
+                &format!("drain-{operation_id}"),
+            ))
+            .await;
+        assert!(
+            drained.error.is_none(),
+            "Process drain failed: {:?}",
+            drained.error
+        );
+    }
+
+    let session = client
+        .get(get_request(
+            "display-wayland.d2bus.org.WaylandSession",
+            "display-wayland",
+            "get-drained-wayland-session",
+        ))
+        .await;
+    let drained = client
+        .delete(delete_request(
+            "display-wayland.d2bus.org.WaylandSession",
+            "display-wayland",
+            session
+                .resource
+                .as_ref()
+                .expect("draining WaylandSession")
+                .identity
+                .as_ref()
+                .expect("draining WaylandSession identity")
+                .revision
+                .expect("draining WaylandSession revision"),
+            "drain-wayland-session",
+        ))
+        .await;
+    assert!(
+        drained.error.is_none(),
+        "WaylandSession physical deletion failed: {:?}",
+        drained.error
+    );
+    let removed = client
+        .get(get_request(
+            "display-wayland.d2bus.org.WaylandSession",
+            "display-wayland",
+            "get-removed-wayland-session",
+        ))
+        .await;
+    assert!(
+        removed.resource.is_none() && removed.error.is_some(),
+        "WaylandSession must be removed after all owned children drain"
+    );
+    drop(client);
+    drop(adapter);
+    let store = std::sync::Arc::try_unwrap(store).expect("release seeded resource store");
+    store.shutdown().await.expect("shutdown seeded resource store");
 }
 
 #[tokio::test]
@@ -1031,6 +1946,7 @@ async fn authenticated_operator_drives_wave6_resources_through_production_bounda
             name,
             "Provider/system-core",
             operation_id,
+            None,
         )
         .await;
     }
