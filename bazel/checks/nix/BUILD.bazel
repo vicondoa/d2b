@@ -24,6 +24,7 @@ _SURFACES = {
             "docs/reference/schemas/v3/providers/transport-azure-relay.transport-settings.json",
             "docs/reference/schemas/v3/providers/transport-vsock.transport-binding.json",
             "nixos-modules/rust-host-tools.nix",
+            "nixos-modules/vm-evaluator.nix",
             "nix/prebuilt.json",
             "nix/prebuilt.nix",
             "nixos-modules/guest-broker.nix",
