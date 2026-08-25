@@ -411,6 +411,8 @@ pub enum AttachmentObservation {
     },
     /// No Process exists and normal reconciliation may create one.
     Missing,
+    /// The exact child exists but has not reached Ready.
+    NotReady,
     /// A process identity was reused or could not be proven.
     StaleIdentity,
 }
@@ -420,6 +422,7 @@ impl core::fmt::Debug for AttachmentObservation {
         match self {
             Self::Matching { .. } => formatter.write_str("AttachmentObservation::Matching"),
             Self::Missing => formatter.write_str("AttachmentObservation::Missing"),
+            Self::NotReady => formatter.write_str("AttachmentObservation::NotReady"),
             Self::StaleIdentity => formatter.write_str("AttachmentObservation::StaleIdentity"),
         }
     }
@@ -590,7 +593,7 @@ impl BindingLifecycle {
         self.service_zone_uid == self.binding_zone_uid
     }
 
-    /// Acquire the Service slot, then proxy, then brokered attach runner.
+    /// Acquire the Service slot, then proxy, then wait for the Guest Process.
     fn activate<P: BindingPort>(
         &mut self,
         service: &ServiceLifecycle,
@@ -624,7 +627,21 @@ impl BindingLifecycle {
                 .proxy
                 .as_ref()
                 .ok_or(BindingLifecycleError::AdmissionDenied)?;
-            self.attach = Some(port.ensure_attach_process(&self.identity, proxy)?);
+            let identity = port.ensure_attach_process(&self.identity, proxy)?;
+            match port.observe_attach_process(&self.identity, &identity)? {
+                AttachmentObservation::Matching { slot, proxy } => {
+                    self.slot = Some(slot);
+                    self.proxy = Some(proxy);
+                    self.attach = Some(identity);
+                }
+                AttachmentObservation::Missing | AttachmentObservation::NotReady => {
+                    return Err(BindingLifecycleError::Transient);
+                }
+                AttachmentObservation::StaleIdentity => {
+                    self.phase = BindingPhase::Quarantined;
+                    return Err(BindingLifecycleError::Quarantined);
+                }
+            }
         }
         self.phase = BindingPhase::Attached;
         Ok(())
@@ -652,6 +669,10 @@ impl BindingLifecycle {
                 self.slot = None;
                 self.proxy = None;
                 self.phase = BindingPhase::WaitingForService;
+            }
+            AttachmentObservation::NotReady => {
+                self.attach = None;
+                self.phase = BindingPhase::Attaching;
             }
             AttachmentObservation::StaleIdentity => {
                 self.attach = None;

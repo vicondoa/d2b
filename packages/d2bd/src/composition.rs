@@ -12,7 +12,6 @@ use std::path::{Path, PathBuf};
 use std::sync::{
     Arc, Mutex,
     atomic::{AtomicU64, Ordering},
-    mpsc,
 };
 
 type InteractionSupervisor = interaction_composition::UnavailableProcessEffectPort;
@@ -58,8 +57,6 @@ use d2b_contracts_broker::broker_wire::{
     UpdateHostsFileRequest as BrokerUpdateHostsFileRequest,
     UsbipBindFirewallRuleRequest as BrokerUsbipBindFirewallRuleRequest,
     UsbipBindRequest as BrokerUsbipBindRequest,
-    UsbipExplicitBindRequest as BrokerUsbipExplicitBindRequest,
-    UsbipExplicitFirewallRuleRequest as BrokerUsbipExplicitFirewallRuleRequest,
     UsbipProxyReconcileRequest as BrokerUsbipProxyReconcileRequest,
     UsbipUnbindRequest as BrokerUsbipUnbindRequest,
 };
@@ -279,7 +276,6 @@ const VM_RUNNER_ROLE_ID: &str = "ch-runner";
 const VM_STOP_TIMEOUT: Duration = Duration::from_secs(30);
 const PROVIDER_SHUTDOWN_POLL_INTERVAL: Duration = Duration::from_millis(250);
 const PUBLIC_STATUS_PROVIDER_PROBE_TIMEOUT: Duration = Duration::from_millis(100);
-const USBIP_SYSFS_PRESENCE_TIMEOUT: Duration = Duration::from_millis(250);
 const EMPTY_VMM_CLEANUP_GRACE: Duration = Duration::from_secs(5);
 const CGROUP_EMPTY_POST_KILL_WAIT: Duration = Duration::from_secs(5);
 const GATEWAY_DISPLAY_SESSION_TTL: Duration = Duration::from_secs(3600);
@@ -5155,6 +5151,12 @@ fn dispatch_resource_request(
         }
         return result;
     }
+    if matches!(
+        request.method(),
+        Some("DeviceUsbAttach" | "DeviceUsbDetach" | "DeviceUsbProbe")
+    ) {
+        return dispatch_device_usb_resource_request(state, peer, &request.value());
+    }
     if process_resource_detached_create_request(&request.value()) {
         return dispatch_resource_exec_create_request(state, peer, &request.value());
     }
@@ -5232,6 +5234,134 @@ fn dispatch_resource_request(
     match block_on_future(runtime.dispatch_public_cli_request(&request.value(), peer.uid)) {
         Ok(value) => Ok(value),
         Err(error) => Ok(resource_runtime_error_frame(error)),
+    }
+}
+
+fn dispatch_device_usb_resource_request(
+    state: &ServerState,
+    peer: &PeerIdentity,
+    request: &Value,
+) -> Result<Value, TypedError> {
+    let method = request
+        .get("method")
+        .and_then(Value::as_str)
+        .ok_or_else(|| TypedError::WireInvalidFrame {
+            detail: "Device USB request is missing method".to_owned(),
+        })?;
+    if method == "DeviceUsbProbe" {
+        return dispatch_broker_usbip_probe(state, broker_caller_role_for_peer(peer));
+    }
+
+    let device_ref = request
+        .get("resourceRef")
+        .and_then(Value::as_str)
+        .and_then(|value| ResourceRef::parse(value).ok())
+        .ok_or_else(|| TypedError::WireInvalidFrame {
+            detail: "Device USB request requires a Device resourceRef".to_owned(),
+        })?;
+    if device_ref.resource_type().as_str() != "Device" {
+        return Err(TypedError::WireInvalidFrame {
+            detail: "Device USB request resourceRef must name Device".to_owned(),
+        });
+    }
+    let verb = match method {
+        "DeviceUsbAttach" => "usb attach",
+        "DeviceUsbDetach" => "usb detach",
+        _ => {
+            return Err(TypedError::WireUnsupportedRequest {
+                request_type: method.to_owned(),
+            });
+        }
+    };
+    let runtime = resolve_resource_runtime(state, request).map_err(|_error| {
+        TypedError::RuntimeCapabilityUnsupported {
+            vm: device_ref.name().as_str().to_owned(),
+            runtime_kind: "component-session".to_owned(),
+            capability: "usbip-guest-import".to_owned(),
+            verb: verb.to_owned(),
+        }
+    })?;
+    let device = block_on_future(runtime.dispatch_public_cli_request(
+        &json!({
+            "method": "Get",
+            "service": "d2b.resource.v3",
+            "zoneRef": request.get("zoneRef").cloned().unwrap_or(Value::Null),
+            "resourceRef": device_ref.to_canonical_string(),
+        }),
+        peer.uid,
+    ))
+    .map_err(|_| TypedError::RuntimeCapabilityUnsupported {
+        vm: device_ref.name().as_str().to_owned(),
+        runtime_kind: "component-session".to_owned(),
+        capability: "usbip-guest-import".to_owned(),
+        verb: verb.to_owned(),
+    })?;
+    if device
+        .get("type")
+        .and_then(Value::as_str)
+        .is_some_and(|kind| kind == "error")
+    {
+        return Ok(device);
+    }
+    if device.pointer("/spec/providerRef").and_then(Value::as_str)
+        != Some("Provider/device-usbip")
+    {
+        return Err(TypedError::RuntimeCapabilityUnsupported {
+            vm: device_ref.name().as_str().to_owned(),
+            runtime_kind: "component-session".to_owned(),
+            capability: "usbip-guest-import".to_owned(),
+            verb: verb.to_owned(),
+        });
+    }
+    let owner_ref = device
+        .pointer("/metadata/ownerRef")
+        .and_then(Value::as_str)
+        .and_then(|value| ResourceRef::parse(value).ok())
+        .filter(|value| value.resource_type().as_str() == "Guest")
+        .ok_or_else(|| TypedError::RuntimeCapabilityUnsupported {
+            vm: device_ref.name().as_str().to_owned(),
+            runtime_kind: "component-session".to_owned(),
+            capability: "usbip-guest-import".to_owned(),
+            verb: verb.to_owned(),
+        })?;
+    let bus_id = request
+        .get("busId")
+        .or_else(|| request.get("busid"))
+        .and_then(Value::as_str)
+        .ok_or_else(|| TypedError::WireInvalidFrame {
+            detail: "Device USB request requires busId".to_owned(),
+        })?;
+    let flags = public_wire::MutationFlags {
+        dry_run: request
+            .get("dryRun")
+            .and_then(Value::as_bool)
+            .unwrap_or(false),
+        apply: request
+            .get("apply")
+            .and_then(Value::as_bool)
+            .unwrap_or(false),
+        json: false,
+    };
+    match method {
+        "DeviceUsbAttach" => dispatch_broker_usbip_bind(
+            state,
+            broker_caller_role_for_peer(peer),
+            public_wire::UsbipBindCliRequest {
+                vm: owner_ref.name().as_str().to_owned(),
+                bus_id: bus_id.to_owned(),
+                flags,
+            },
+        ),
+        "DeviceUsbDetach" => dispatch_broker_usbip_unbind(
+            state,
+            broker_caller_role_for_peer(peer),
+            public_wire::UsbipUnbindCliRequest {
+                vm: owner_ref.name().as_str().to_owned(),
+                bus_id: bus_id.to_owned(),
+                flags,
+            },
+        ),
+        _ => unreachable!("closed Device USB method match"),
     }
 }
 
@@ -8980,15 +9110,24 @@ fn build_known_hosts_entry(entry: &ManifestVmEntry) -> Result<Option<String>, Ty
     Ok(Some(format!("{static_ip} {host_public_key}")))
 }
 
+fn usbip_guest_import_unavailable(vm: &str, verb: &str) -> TypedError {
+    TypedError::RuntimeCapabilityUnsupported {
+        vm: vm.to_owned(),
+        runtime_kind: "component-session".to_owned(),
+        capability: "usbip-guest-import".to_owned(),
+        verb: verb.to_owned(),
+    }
+}
+
 fn dispatch_broker_usbip_bind(
     state: &ServerState,
     caller_role: BrokerCallerRole,
     request: public_wire::UsbipBindCliRequest,
 ) -> Result<Value, TypedError> {
     const VERB: &str = "usb attach";
-    if let Some(response) = mutating_verb_preflight(VERB, &request.flags, Some(request.vm.as_str()))
-    {
-        return Ok(response);
+    if !request.flags.dry_run && !request.flags.apply {
+        return Ok(mutating_verb_preflight(VERB, &request.flags, Some(request.vm.as_str()))
+            .expect("missing mutation flags produce a preflight response"));
     }
     let resolver = load_bundle_resolver(state)?;
     ensure_manifest_entry_runtime_capability(
@@ -8998,132 +9137,17 @@ fn dispatch_broker_usbip_bind(
         VERB,
     )?;
     if vm_is_qemu_media(&resolver, &request.vm)? {
+        if let Some(response) =
+            mutating_verb_preflight(VERB, &request.flags, Some(request.vm.as_str()))
+        {
+            return Ok(response);
+        }
         return dispatch_broker_qemu_media_attach(state, request, caller_role);
     }
     if let Err(response) = validate_usbip_bus_id_for_daemon(VERB, &request.bus_id) {
         return Ok(response);
     }
-
-    // Fail-closed pre-flight checks for explicit attach:
-    //  1. Sysfs presence: reject if the device is not physically present.
-    //  2. Active claim exclusivity: reject if another VM already holds this busid.
-    // Both checks run before any broker call or firewall mutation.
-    check_sysfs_busid_present(&request.bus_id, VERB)?;
-    check_usbip_claim_exclusivity(&request.bus_id, &request.vm, VERB)?;
-
-    let Some(manifest_entry) = resolver.find_manifest_vm(&request.vm) else {
-        return Ok(daemon_failure_response(
-            VERB,
-            format!("VM '{}' is not present in the trusted manifest", request.vm),
-        ));
-    };
-    let manifest_entry = serde_json::to_value(manifest_entry).unwrap_or(Value::Null);
-    if let Err(response) = ensure_usbip_attach_vm_is_running(
-        state,
-        &request.vm,
-        &request.bus_id,
-        VERB,
-        &manifest_entry,
-        resolver.find_process_vm(&request.vm),
-    ) {
-        return Ok(response);
-    }
-
-    // Determine attach path: declared (static bundle intent) vs. explicit.
-    let vm_entry = resolver.find_manifest_vm(&request.vm);
-    let env = vm_entry.and_then(|e| e.env.as_deref()).unwrap_or("");
-    let firewall_id = intent_id_usbip_firewall(env, &request.bus_id);
-    let bind_id = intent_id_usbip_bind(env, &request.vm, &request.bus_id);
-    let has_declared_intents = resolver.find_usbip_firewall_intent(&firewall_id).is_some()
-        && resolver.find_usbip_bind_intent(&bind_id).is_some();
-
-    if has_declared_intents {
-        // Declared path: use bundle-ref broker ops (existing behavior).
-        let bundle_usbip_bind_intent_ref = BundleOpId::new(bind_id);
-        if let Err(response) = dispatch_broker_ack_request_as(
-            state,
-            VERB,
-            "UsbipBind",
-            BrokerRequest::UsbipBind(BrokerUsbipBindRequest {
-                bundle_usbip_bind_intent_ref,
-                tracing_span_id: None,
-            }),
-            caller_role.clone(),
-        ) {
-            return Ok(response);
-        }
-        if let Err(response) = ensure_usbipd_env_ready_for_attach(
-            state,
-            &resolver,
-            &request.vm,
-            &request.bus_id,
-            VERB,
-            None,
-        ) {
-            compensate_usbip_bind_failure(state, &resolver, &request.vm, &request.bus_id, VERB);
-            return Ok(response);
-        }
-        if let Err(response) = dispatch_broker_ack_request_as(
-            state,
-            VERB,
-            "UsbipProxyReconcile",
-            BrokerRequest::UsbipProxyReconcile(BrokerUsbipProxyReconcileRequest {
-                scope_id: ScopeId::new(format!("vm:{}", request.vm)),
-                tracing_span_id: None,
-            }),
-            caller_role.clone(),
-        ) {
-            compensate_usbip_bind_failure(state, &resolver, &request.vm, &request.bus_id, VERB);
-            return Ok(response);
-        }
-    } else {
-        // Explicit path: no static bundle intents required.
-        let host_uplink_ip = vm_entry
-            .and_then(|e| e.usbipd_host_ip.as_deref())
-            .unwrap_or("")
-            .to_owned();
-        let net_uplink_ip = vm_entry
-            .and_then(|e| e.static_ip.as_deref())
-            .unwrap_or("")
-            .to_owned();
-        if let Err(response) = dispatch_broker_ack_request_as(
-            state,
-            VERB,
-            "UsbipExplicitFirewallRule",
-            BrokerRequest::UsbipExplicitFirewallRule(BrokerUsbipExplicitFirewallRuleRequest {
-                bus_id: request.bus_id.clone(),
-                env: env.to_owned(),
-                host_uplink_ip,
-                net_uplink_ip,
-                tracing_span_id: None,
-            }),
-            caller_role.clone(),
-        ) {
-            return Ok(response);
-        }
-        if let Err(response) = dispatch_broker_ack_request_as(
-            state,
-            VERB,
-            "UsbipExplicitBind",
-            BrokerRequest::UsbipExplicitBind(BrokerUsbipExplicitBindRequest {
-                bus_id: request.bus_id.clone(),
-                vm: request.vm.clone(),
-                env: env.to_owned(),
-                tracing_span_id: None,
-            }),
-            caller_role.clone(),
-        ) {
-            return Ok(response);
-        }
-    }
-
-    Ok(applied_response(
-        VERB,
-        format!(
-            "d2b usb attach --apply: bound busid '{}' for vm '{}'; target-local USBIP Process reconciliation owns import",
-            request.bus_id, request.vm
-        ),
-    ))
+    Err(usbip_guest_import_unavailable(&request.vm, VERB))
 }
 
 fn validate_usbip_bus_id_for_daemon(verb: &str, bus_id: &str) -> Result<(), Value> {
@@ -9133,136 +9157,6 @@ fn validate_usbip_bus_id_for_daemon(verb: &str, bus_id: &str) -> Result<(), Valu
             format!("USBIP busid '{bus_id}' does not match the canonical sysfs bus-id shape"),
         )
     })
-}
-
-/// Check whether a validated sysfs busid is currently present in
-/// `/sys/bus/usb/devices/<busid>/idVendor`. Returns `Ok(())` if the
-/// `idVendor` attribute file is readable (device physically present),
-/// or `Err(TypedError::UsbipBusidNotPresent)` if absent (fail-closed gate).
-///
-/// This is the fail-closed sysfs presence check for explicit attach:
-/// reject before any broker call or firewall mutation if the device is absent.
-fn check_sysfs_busid_present(busid: &str, verb: &str) -> Result<(), TypedError> {
-    let sysfs_path = PathBuf::from(format!("/sys/bus/usb/devices/{busid}/idVendor"));
-    let (tx, rx) = mpsc::channel();
-    let busid_for_log = busid.to_owned();
-    std::thread::Builder::new()
-        .name("d2b-usb-sysfs-present".to_owned())
-        .spawn(move || {
-            let _ = tx.send(std::fs::metadata(sysfs_path).is_ok());
-        })
-        .map_err(|error| TypedError::InternalIo {
-            context: "spawn USB sysfs presence helper".to_owned(),
-            detail: error.to_string(),
-        })?;
-    match rx.recv_timeout(USBIP_SYSFS_PRESENCE_TIMEOUT) {
-        Ok(true) => Ok(()),
-        Ok(false) => Err(TypedError::UsbipBusidNotPresent {
-            busid: busid.to_owned(),
-            verb: verb.to_owned(),
-        }),
-        Err(mpsc::RecvTimeoutError::Timeout) => {
-            tracing::warn!(
-                busid = %busid_for_log,
-                timeout_ms = USBIP_SYSFS_PRESENCE_TIMEOUT.as_millis() as u64,
-                "USB sysfs presence check timed out"
-            );
-            Err(TypedError::UsbipBusidNotPresent {
-                busid: busid.to_owned(),
-                verb: verb.to_owned(),
-            })
-        }
-        Err(mpsc::RecvTimeoutError::Disconnected) => Err(TypedError::UsbipBusidNotPresent {
-            busid: busid.to_owned(),
-            verb: verb.to_owned(),
-        }),
-    }
-}
-
-/// Read the current owner of the per-busid OFD lock file under
-/// `/run/d2b/locks/usbip/<busid>`.
-///
-/// Returns `None` if the lock file does not exist or has no content
-/// (uncontested). Returns `Some(owner_vm)` if another VM holds the claim.
-///
-/// The daemon uses this for the active-claim exclusivity check:
-/// if the busid is already locked by a different VM, the explicit attach
-/// is rejected fail-closed before any broker call.
-fn read_usbip_active_claim_owner(busid: &str) -> Option<String> {
-    let lock_path = d2b_contracts::usbip::UsbipDaemonClaimRecord::lock_path_for_busid(busid);
-    std::fs::read_to_string(&lock_path)
-        .ok()
-        .map(|content| content.trim().to_owned())
-        .filter(|s| !s.is_empty())
-}
-
-/// Check that no other VM holds the active claim for a busid.
-/// Returns `Ok(())` if the busid is uncontested or already owned by `requesting_vm`.
-/// Returns `Err(TypedError::UsbipExplicitClaimConflict)` if another VM holds the claim.
-fn check_usbip_claim_exclusivity(
-    busid: &str,
-    requesting_vm: &str,
-    verb: &str,
-) -> Result<(), TypedError> {
-    match read_usbip_active_claim_owner(busid) {
-        Some(owner) if owner != requesting_vm => Err(TypedError::UsbipExplicitClaimConflict {
-            busid: busid.to_owned(),
-            owner_vm: owner,
-            verb: verb.to_owned(),
-        }),
-        _ => Ok(()),
-    }
-}
-
-fn usbip_bind_intent_ref_for_daemon(
-    resolver: &BundleResolver,
-    vm: &str,
-    bus_id: &str,
-    verb: &str,
-) -> Result<BundleOpId, Value> {
-    let Some(entry) = resolver.manifest.vms.get(vm) else {
-        return Err(daemon_failure_response(
-            verb,
-            format!("VM '{vm}' is not present in the trusted manifest"),
-        ));
-    };
-    let Some(env) = entry.env.as_deref() else {
-        return Err(daemon_failure_response(
-            verb,
-            format!("VM '{vm}' is not attached to a d2b env"),
-        ));
-    };
-    Ok(BundleOpId::new(intent_id_usbip_bind(env, vm, bus_id)))
-}
-
-fn ensure_usbip_attach_vm_is_running(
-    state: &ServerState,
-    vm: &str,
-    bus_id: &str,
-    verb: &str,
-    manifest_entry: &Value,
-    process_vm: Option<&d2b_core::processes::VmProcessDag>,
-) -> Result<(), Value> {
-    let lifecycle = public_vm_lifecycle(state, vm, manifest_entry, process_vm);
-    let lifecycle_state = lifecycle
-        .get("state")
-        .and_then(Value::as_str)
-        .unwrap_or("Unknown");
-    if lifecycle_state == "Running" {
-        return Ok(());
-    }
-
-    Err(invalid_request_response_with_summary(
-        verb,
-        format!(
-            "VM '{vm}' is {state}, so USB attach cannot reach the target-local USBIP Process",
-            state = lifecycle_state.to_ascii_lowercase()
-        ),
-        format!(
-            "VM '{vm}' is {state}, so USB attach cannot reach the target-local USBIP Process. Start the VM first with `d2b vm start {vm} --apply`, wait until it is running, then retry `d2b usb attach {vm} {bus_id} --apply`.",
-            state = lifecycle_state.to_ascii_lowercase()
-        ),
-    ))
 }
 
 fn usbip_lifecycle_claim_for_intent(
@@ -9566,10 +9460,18 @@ impl d2b_provider_device_usbip::reconcile_state::UsbipVmStopCarrierCleanup
 {
     fn detach_guest_import(
         &mut self,
-        _claim: &d2b_provider_device_usbip::reconcile_state::UsbipLifecycleClaim,
+        claim: &d2b_provider_device_usbip::reconcile_state::UsbipLifecycleClaim,
         _attempt: &d2b_provider_device_usbip::reconcile_state::UsbipReconcileAttemptContext,
     ) -> Result<(), d2b_provider_device_usbip::reconcile_state::UsbipLifecycleStepError> {
-        Ok(())
+        Err(
+            d2b_provider_device_usbip::reconcile_state::UsbipLifecycleStepError::new(
+                d2b_provider_device_usbip::reconcile_state::UsbipLifecycleFailureKind::GuestFailed,
+                format!(
+                    "target-local USBIP Process detach is unavailable for {}:{}",
+                    claim.vm, claim.bus_id
+                ),
+            ),
+        )
     }
 
     fn cleanup_host_carrier_preserve_claim(
@@ -9951,45 +9853,6 @@ fn probe_usbip_claim_locks_for_vm_without_bundle(
     UsbipClaimLockProbe::None
 }
 
-fn compensate_usbip_bind_failure(
-    state: &ServerState,
-    resolver: &BundleResolver,
-    vm: &str,
-    bus_id: &str,
-    verb: &str,
-) {
-    let intent_ref = match usbip_bind_intent_ref_for_daemon(resolver, vm, bus_id, verb) {
-        Ok(intent_ref) => intent_ref,
-        Err(response) => {
-            tracing::warn!(vm = %vm, bus_id = %bus_id, response = %response, "USBIP attach compensation could not resolve bind intent");
-            return;
-        }
-    };
-    if let Err(response) = dispatch_broker_ack_request(
-        state,
-        verb,
-        "UsbipUnbind",
-        BrokerRequest::UsbipUnbind(BrokerUsbipUnbindRequest {
-            bundle_usbip_bind_intent_ref: intent_ref,
-            preserve_durable_claim: false,
-            tracing_span_id: None,
-        }),
-    ) {
-        tracing::warn!(vm = %vm, bus_id = %bus_id, response = %response, "USBIP attach compensation unbind failed");
-    }
-    if let Err(response) = dispatch_broker_ack_request(
-        state,
-        verb,
-        "UsbipProxyReconcile",
-        BrokerRequest::UsbipProxyReconcile(BrokerUsbipProxyReconcileRequest {
-            scope_id: ScopeId::new(format!("vm:{vm}")),
-            tracing_span_id: None,
-        }),
-    ) {
-        tracing::warn!(vm = %vm, bus_id = %bus_id, response = %response, "USBIP attach compensation proxy reconcile failed");
-    }
-}
-
 fn ensure_usbipd_env_ready_for_attach(
     state: &ServerState,
     resolver: &BundleResolver,
@@ -10100,9 +9963,9 @@ fn dispatch_broker_usbip_unbind(
     request: public_wire::UsbipUnbindCliRequest,
 ) -> Result<Value, TypedError> {
     const VERB: &str = "usb detach";
-    if let Some(response) = mutating_verb_preflight(VERB, &request.flags, Some(request.vm.as_str()))
-    {
-        return Ok(response);
+    if !request.flags.dry_run && !request.flags.apply {
+        return Ok(mutating_verb_preflight(VERB, &request.flags, Some(request.vm.as_str()))
+            .expect("missing mutation flags produce a preflight response"));
     }
     let resolver = load_bundle_resolver(state)?;
     ensure_manifest_entry_runtime_capability(
@@ -10112,52 +9975,18 @@ fn dispatch_broker_usbip_unbind(
         VERB,
     )?;
     if vm_is_qemu_media(&resolver, &request.vm)? {
+        if let Some(response) =
+            mutating_verb_preflight(VERB, &request.flags, Some(request.vm.as_str()))
+        {
+            return Ok(response);
+        }
         return dispatch_broker_qemu_media_detach(state, request, caller_role);
     }
     if let Err(response) = validate_usbip_bus_id_for_daemon(VERB, &request.bus_id) {
         return Ok(response);
     }
-    let intent_ref =
-        match usbip_bind_intent_ref_for_daemon(&resolver, &request.vm, &request.bus_id, VERB) {
-            Ok(intent_ref) => intent_ref,
-            Err(response) => return Ok(response),
-        };
-
-
-    if let Err(response) = dispatch_broker_ack_request_as(
-        state,
-        VERB,
-        "UsbipUnbind",
-        BrokerRequest::UsbipUnbind(BrokerUsbipUnbindRequest {
-            bundle_usbip_bind_intent_ref: intent_ref,
-            preserve_durable_claim: false,
-            tracing_span_id: None,
-        }),
-        caller_role.clone(),
-    ) {
-        return Ok(response);
-    }
-
-    if let Err(response) = dispatch_broker_ack_request_as(
-        state,
-        VERB,
-        "UsbipProxyReconcile",
-        BrokerRequest::UsbipProxyReconcile(BrokerUsbipProxyReconcileRequest {
-            scope_id: ScopeId::new(format!("vm:{}", request.vm)),
-            tracing_span_id: None,
-        }),
-        caller_role.clone(),
-    ) {
-        return Ok(response);
-    }
-
-    Ok(applied_response(
-        VERB,
-        format!(
-            "d2b usb detach --apply: detached busid '{}' from vm '{}' and released the host claim",
-            request.bus_id, request.vm
-        ),
-    ))
+    let _ = (resolver, caller_role);
+    Err(usbip_guest_import_unavailable(&request.vm, VERB))
 }
 
 fn vm_is_qemu_media(resolver: &BundleResolver, vm: &str) -> Result<bool, TypedError> {
@@ -10337,7 +10166,6 @@ fn dispatch_broker_usbip_probe(
     state: &ServerState,
     caller_role: BrokerCallerRole,
 ) -> Result<Value, TypedError> {
-    const VERB: &str = "usb probe";
     let resolver =
         BundleResolver::load(&state.config.artifacts.bundle_path).map_err(|err| match err {
             d2b_core::error::Error::Bundle(BundleError::Tampered { path, reason }) => {
@@ -10353,20 +10181,6 @@ fn dispatch_broker_usbip_probe(
         .usbip_bind_intent_ids()
         .map(str::to_owned)
         .collect();
-    if !usbip_intent_ids.is_empty()
-        && let Err(response) = dispatch_broker_ack_request_as(
-            state,
-            VERB,
-            "UsbipProxyReconcile",
-            BrokerRequest::UsbipProxyReconcile(BrokerUsbipProxyReconcileRequest {
-                scope_id: ScopeId::new("host"),
-                tracing_span_id: None,
-            }),
-            caller_role.clone(),
-        )
-    {
-        return Ok(response);
-    }
     let mut entries: Vec<_> = usbip_intent_ids
         .iter()
         .map(String::as_str)
@@ -10399,7 +10213,7 @@ fn usbip_probe_entry_from_intent(
     };
     let mut degraded_reasons = Vec::new();
     let mut remediation_commands = Vec::new();
-    let guest_import = public_wire::UsbipGuestImportState::Unknown;
+    let guest_import = public_wire::UsbipGuestImportState::Unavailable;
     let (host, topology_policy, host_reason) = public_host_usb_probe_from_sysfs(intent);
     if let Some(reason) = host_reason {
         degraded_reasons.push(reason);
@@ -10431,16 +10245,7 @@ fn usbip_probe_entry_from_intent(
         }
         degraded_reasons.push(usbip_probe_degraded_reason_from_internal(
             d2b_provider_device_usbip::reconcile_state::UsbipDegradedReason::GuestImportUnavailable,
-            Some(format!(
-                "Guest USB import status is owned by the target-local USBIP Process; reconcile `d2b usb attach {vm} {bus} --apply`.",
-                vm = intent.vm_name,
-                bus = intent.bus_id
-            )),
-        ));
-        remediation_commands.push(format!(
-            "d2b usb attach {vm} {bus} --apply",
-            vm = intent.vm_name,
-            bus = intent.bus_id
+            Some("Guest USB import requires a target-local USBIP Process path that is unavailable; the host claim is not a successful attachment.".to_owned()),
         ));
     } else if matches!(
         durable_state,
@@ -18101,6 +17906,15 @@ fn dispatch_broker_vm_start_as(
         return Ok(response);
     }
 
+    let resolver = load_bundle_resolver(state)?;
+    if resolver
+        .usbip_bind_intent_ids()
+        .filter_map(|intent_id| resolver.find_usbip_bind_intent(intent_id))
+        .any(|intent| intent.vm_name == request.vm)
+    {
+        return Err(usbip_guest_import_unavailable(&request.vm, VERB));
+    }
+
     let provider_route_available = match state
         .provider_runtime
         .lifecycle_route_available(&request.vm)
@@ -23236,52 +23050,14 @@ mod public_status_tests {
     }
 
     #[test]
-    fn usb_attach_apply_stopped_vm_returns_actionable_start_remediation() {
-        let (state, _dir) = test_state();
-        let frame = ensure_usbip_attach_vm_is_running(
-            &state,
-            "vm-a",
-            "1-2",
-            "usb attach",
-            &manifest_entry(),
-            None,
-        )
-        .expect_err("stopped VM must fail");
-
+    fn usbip_guest_import_unavailable_is_typed_and_fail_closed() {
+        let error = usbip_guest_import_unavailable("vm-a", "usb attach");
+        assert_eq!(error.kind(), "runtime-capability-unsupported");
+        assert_eq!(error.exit_code(), 70);
         assert_eq!(
-            frame.get("type").and_then(Value::as_str),
-            Some("mutatingVerbResponse")
+            error.to_envelope().message,
+            "vm 'vm-a' uses runtime 'component-session', which does not support capability 'usbip-guest-import' required by 'usb attach'"
         );
-        assert_eq!(
-            frame.get("outcome").and_then(Value::as_str),
-            Some("invalid-request")
-        );
-        let remediation = frame
-            .get("remediation")
-            .and_then(Value::as_str)
-            .expect("remediation");
-        assert!(remediation.contains("VM 'vm-a' is stopped"));
-        assert!(remediation.contains("d2b vm start vm-a --apply"));
-        assert!(remediation.contains("d2b usb attach vm-a 1-2 --apply"));
-        assert!(!remediation.contains("component-session transport unavailable"));
-
-        state
-            .pidfd_table
-            .register(
-                "vm-a".to_owned(),
-                VM_RUNNER_ROLE_ID.to_owned(),
-                current_process_entry(),
-            )
-            .expect("register ch runner");
-        ensure_usbip_attach_vm_is_running(
-            &state,
-            "vm-a",
-            "1-2",
-            "usb attach",
-            &manifest_entry(),
-            None,
-        )
-        .expect("running VM preflight passes");
     }
 
     fn make_broker_error_response(kind: &str, message: &str) -> BrokerErrorResponse {
@@ -26660,6 +26436,19 @@ mod broker_dispatch_tests {
             "update destructive_mutating_requests when the mutating request surface changes"
         );
         for (verb, request) in requests {
+            if matches!(verb, "usbipBind" | "usbipUnbind") {
+                match dispatch_request(&state, &peer, request) {
+                    Err(TypedError::BundleTampered { .. }) => {}
+                    Err(TypedError::RuntimeCapabilityUnsupported { capability, .. }) => {
+                        assert_eq!(capability, "usbip-guest-import");
+                    }
+                    Ok(response) => panic!(
+                        "admin USBIP dry-run unexpectedly returned success: {response}"
+                    ),
+                    Err(error) => panic!("admin USBIP dry-run returned wrong error: {error:?}"),
+                }
+                continue;
+            }
             let response = dispatch_request(&state, &peer, request)
                 .unwrap_or_else(|err| panic!("admin request {verb} unexpectedly failed: {err:?}"));
             assert_eq!(
@@ -26678,6 +26467,69 @@ mod broker_dispatch_tests {
                 Some("dry-run-planned")
             );
         }
+    }
+
+    #[test]
+    fn usbip_dry_run_requires_guest_import_capability() {
+        let root = test_daemon_state_dir("usbip-dry-run-unavailable");
+        let artifacts = write_usbip_lifecycle_bundle_artifacts(&root);
+        let mut state =
+            test_state_with_broker_socket(unreachable_broker_socket_path("usbip-dry-run"));
+        state.config.artifacts = artifacts;
+
+        let error = dispatch_request(
+            &state,
+            &admin_peer(),
+            d2bd_runtime::wire::Request::UsbipBind(
+                d2b_contracts_control::public_wire::UsbipBindCliRequest {
+                    vm: "vm-a".to_owned(),
+                    bus_id: "1-2".to_owned(),
+                    flags: MutationFlags {
+                        dry_run: true,
+                        ..MutationFlags::default()
+                    },
+                },
+            ),
+        )
+        .expect_err("USBIP dry-run must not claim host-only success");
+
+        assert!(matches!(
+            error,
+            TypedError::RuntimeCapabilityUnsupported {
+                capability,
+                verb,
+                ..
+            } if capability == "usbip-guest-import" && verb == "usb attach"
+        ));
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn usbip_vm_start_fails_closed_before_runner_when_guest_import_is_unavailable() {
+        let root = test_daemon_state_dir("usbip-start-unavailable");
+        let artifacts = write_usbip_lifecycle_bundle_artifacts(&root);
+        let mut state =
+            test_state_with_broker_socket(unreachable_broker_socket_path("usbip-start"));
+        state.config.artifacts = artifacts;
+
+        let error = dispatch_broker_vm_start(
+            &state,
+            public_wire::VmLifecycleRequest {
+                vm: "vm-a".to_owned(),
+                flags: MutationFlags {
+                    apply: true,
+                    ..MutationFlags::default()
+                },
+                force: false,
+                no_wait_api: true,
+            },
+        )
+        .expect_err("unavailable USBIP start must fail before starting the VM");
+
+        assert_eq!(error.kind(), "runtime-capability-unsupported");
+        assert_eq!(error.exit_code(), 70);
+        assert!(!state.pidfd_table.contains("vm-a", VM_RUNNER_ROLE_ID));
+        let _ = fs::remove_dir_all(&root);
     }
 
     fn host_shutdown_peer() -> PeerIdentity {

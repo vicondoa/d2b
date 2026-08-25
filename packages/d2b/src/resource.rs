@@ -784,7 +784,7 @@ fn device_usb(
                 "DeviceUsbAttach",
                 json!({
                     "resourceRef": resource_ref.to_canonical_string(),
-                    "busid": args.busid,
+                    "busId": args.busid,
                     "dryRun": args.dry_run,
                     "apply": args.apply,
                 }),
@@ -797,7 +797,7 @@ fn device_usb(
                 "DeviceUsbDetach",
                 json!({
                     "resourceRef": resource_ref.to_canonical_string(),
-                    "busid": args.busid,
+                    "busId": args.busid,
                     "dryRun": args.dry_run,
                     "apply": args.apply,
                 }),

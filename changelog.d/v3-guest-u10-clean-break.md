@@ -17,3 +17,9 @@
 - Require a configured non-root workload user for persistent Guest shell
   service wiring and keep ComponentSession evaluation aligned with the active
   `d2b.sshUser` field.
+- Fail non-qemu USBIP attach, detach, and VM-start reconciliation closed with
+  typed `runtime-capability-unsupported` when the target-local
+  `usbip-guest-proxy` Process and ComponentSession path is unavailable. Host
+  bind, proxy reconciliation, and claim release are no longer reported or
+  performed as successful USB attachment work; VM-stop cleanup preserves the
+  claim until Guest detach is available.

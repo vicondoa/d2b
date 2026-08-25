@@ -7674,7 +7674,7 @@ pub(super) fn usb_mutating_verb(
     let flags = require_mutation_flag(verb, dry_run, apply, json_mode)?;
     require_known_vm(context, vm, json_mode)?;
     let qemu_media = vm_is_qemu_media_runtime(context, vm)?;
-    if qemu_media && let Err(err) = validate_usb_bus_id(bus_id) {
+    if let Err(err) = validate_usb_bus_id(bus_id) {
         return Err(CliFailure::new(
             2,
             format!("{verb}: invalid busid selector: {err}"),
@@ -7732,56 +7732,20 @@ pub(super) fn usb_mutating_verb(
         }
         return Ok(0);
     }
-    let planned: Vec<&str> = if verb == "usb attach" {
-        vec![
-            "UsbipBind",
-            "UsbipBindFirewallRule",
-            "SpawnRunner(sys-<env>-usbipd/backend)",
-            "SpawnRunner(sys-<env>-usbipd/proxy)",
-            "UsbipProxyReconcile",
-            "TargetUsbipImport(attach)",
-        ]
-    } else {
-        vec![
-            "TargetUsbipImport(detach)",
-            "UsbipUnbind",
-            "UsbipProxyReconcile",
-        ]
-    };
-    let summary = serde_json::json!({
-        "command": verb,
-        "mode": "dry-run",
-        "vm": vm,
-        "busId": bus_id,
-        "planned": planned,
-        "notes": if verb == "usb attach" {
-            "USBIP dry-run reports the daemon → broker bind/lock, firewall, backend/proxy ensurement, reconcile plan, and authenticated target-local import without mutating host or guest state."
-        } else {
-            "USBIP dry-run reports authenticated target-local import cleanup plus the daemon → broker unbind/reconcile plan without mutating host or guest state."
-        },
-    });
-    if json_mode {
-        let mut rendered = serde_json::to_string_pretty(&summary)
-            .map_err(|e| CliFailure::new(1, format!("serialize: {e}")))?;
-        rendered.push('\n');
-        print_stdout(&rendered);
-    } else {
-        let action = if verb == "usb attach" {
-            "bind and lock, apply the USBIP firewall carve-out, ensure the per-env backend/proxy for"
-        } else {
-            "unbind"
-        };
-        if verb == "usb attach" {
-            print_stdout(&format!(
-                "d2b {verb} --dry-run: would {action} busid '{bus_id}' for vm '{vm}', reconcile the USBIP proxy, and ask the target-local Process to import the device\n"
-            ));
-        } else {
-            print_stdout(&format!(
-                "d2b {verb} --dry-run: would ask the target-local Process to detach busid '{bus_id}' for vm '{vm}', {action} it on the host, and reconcile the USBIP proxy\n"
-            ));
-        }
-    }
-    Ok(0)
+    emit_host_error(
+        &host_error_envelope(
+            &format!("d2b {verb} unavailable"),
+            "usbip-guest-import-unavailable",
+            70,
+            "The target-local USBIP Process and authenticated Guest import path.",
+            &format!(
+                "VM '{vm}' has no available target-local USBIP import/detach implementation; no host USBIP mutation was planned or performed."
+            ),
+            "Use a build that includes the signed target-local USBIP Process over ComponentSession, then retry the command.",
+            "docs/reference/components-usbip.md#guest-side-attachment",
+        ),
+        json_mode,
+    )
 }
 
 pub(super) fn cmd_usb_probe(

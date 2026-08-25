@@ -6,6 +6,12 @@ VM restart. For field-level contracts, see
 [`components-usbip.md`](../reference/components-usbip.md) and
 [`usb-probe.md`](../reference/cli-output/usb-probe.md).
 
+> **Current U10 limitation:** the signed target-local USBIP Process and its
+> authenticated ComponentSession effect adapter are not wired into `d2bd`.
+> Non-qemu attach, detach, and VM-start USBIP reconciliation therefore fail
+> closed before host mutation. Probe remains read-only and reports Guest import
+> as unavailable; a host claim alone is not a successful attachment.
+
 ## Before you start
 
 Run the commands as a d2b admin: either a user in the `d2b` lifecycle
@@ -27,8 +33,9 @@ Host prerequisites:
   match an allowlist entry.
 
 Guest prerequisites are provided by `usbip.yubikey = true`: the guest loads
-`vhci_hcd`, includes the guest `usbip` tool, and exposes component-session USBIP
-status/import operations.
+`vhci_hcd` and includes the guest `usbip` tool. The target-local Process and
+authenticated ComponentSession USBIP status/import operations remain a future
+signed Process contract.
 
 Example host snippet:
 
@@ -88,86 +95,52 @@ A healthy row is `bound` with the desired session claim and converged host,
 proxy, and guest state. A same-VM session claim after restart is expected to
 show as `degraded` until active carrier state is replayed.
 
-## 3. Attach a declared device
+## 3. Check attach availability
 
-Use the busid from the declaration/probe. The VM must be running before apply
-because component-session performs the in-guest import.
+Use the busid from the declaration/probe when validating the declaration. The
+current non-qemu apply path is unavailable and does not bind the host device:
 
 ```bash
-d2b guest start corp-vm --apply
 d2b device usb attach corp-vm 1-2 --apply
-d2b device usb probe
 ```
 
-If the VM is stopped, attach fails before host mutation. Start the VM, wait for
-it to report running, then retry the same attach command.
+Expect a typed `runtime-capability-unsupported` error until the signed
+target-local USBIP Process path is shipped.
 
 ## 4. Recover a same-VM session claim after restart
 
 VM stop/restart preserves same-VM USBIP session claims within the current host
-boot/session but tears down active carriers/imports where safe. On the next
-VM start, d2b replays host bind/proxy state and asks target-local Process to import again.
-After a host reboot, `/run/d2b/locks/usbip` is recreated empty and the
-operator should attach the device again. To verify the replay after an
-intentional VM restart, run:
+boot/session. Until Guest detach/import is available, d2b does not replay host
+bind/proxy state and preserves the claim instead. After a host reboot,
+`/run/d2b/locks/usbip` is recreated empty. Use probe to inspect the observed
+state:
 
 ```bash
 d2b device usb probe
-d2b guest restart corp-vm --apply
-d2b device usb probe
 ```
 
-If the post-restart probe still prints a degraded row, prefer its `command:`
-line. For the common `guest-import-unavailable` or carrier replay case, run:
-
-```bash
-d2b device usb attach corp-vm 1-2 --apply
-d2b device usb probe
-```
-
-If the row shows the same VM still owns the session claim and the host is already
-bound (`SESSION-CLAIM=held-by-desired-owner`,
-`HOST-BIND=bound-to-usbip-host`) but `GUEST=detached`, this is a convergable
-same-owner state. Re-run the printed `d2b device usb attach <name> <busid> --apply`
-command. The daemon rechecks the per-env firewall/proxy path and asks target-local Process to
-import the device again; it does not release the claim or require raw host
-`usbip` commands.
-
-If the VM is stopped instead of restarted, start it first:
-
-```bash
-d2b guest start corp-vm --apply
-d2b device usb attach corp-vm 1-2 --apply
-d2b device usb probe
-```
-
-Do not release a session claim just because the active carrier is down; release
-it only when you want the VM to stop owning that busid during this host session.
+Do not release a session claim just because the active carrier is down; the
+current daemon cannot safely perform Guest detach or host release.
 
 ## 5. Release a claim
 
-For a normal release:
+The current non-qemu detach path is unavailable and preserves the claim:
 
 ```bash
 d2b device usb detach corp-vm 1-2 --apply
 d2b device usb probe
 ```
 
-If detach reports that revocation cannot be isolated, use the busid named in
-the error. D2b could not prove that one busid stream can be revoked without
-affecting unrelated same-env streams. Stop the owning VM so the stream drains,
-then detach again:
-
-```bash
-d2b guest stop corp-vm --apply
-d2b device usb detach corp-vm 1-2 --apply
-d2b device usb probe
-```
-
-Only use an explicit env-level drain/recycle operation when bouncing unrelated
-same-env USB streams is acceptable.
+Expect a typed `runtime-capability-unsupported` error. Do not edit the lock,
+unbind the host device, or stop a shared proxy manually; release is deferred
+until Guest detach can be authenticated and drained.
 
 ## Common troubleshooting
+
+Until the U10 limitation is removed, remediation commands that attach or
+detach non-qemu USBIP are prospective only and return
+`runtime-capability-unsupported`; they must not be replaced with manual host
+USBIP, lock, firewall, or proxy mutations.
 
 | Symptom from `d2b device usb probe` or `d2b guest status` | What it means | Remediation |
 | --- | --- | --- |

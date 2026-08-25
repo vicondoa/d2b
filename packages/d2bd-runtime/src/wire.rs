@@ -2,7 +2,7 @@ use crate::typed_error::{ErrorEnvelope, TypedError};
 use d2b_contracts::{FeatureFlag, Hello, HelloOk, HelloRejected, HelloRejectedReason, Version};
 use d2b_contracts_broker::broker_wire::ExportBrokerAuditResponse;
 use d2b_contracts_control::public_wire::{self, AuditResponse, AuthStatusResponse};
-use d2b_contracts_resource::v3::IfName;
+use d2b_contracts_resource::v3::{IfName, ResourceRef};
 use semver::{Version as SemverVersion, VersionReq};
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value, json};
@@ -170,6 +170,21 @@ impl Request {
             | Self::GatewayDisplay(_)
             | Self::Workload(_)
             | Self::Audio(public_wire::AudioOp::Status(_)) => OpLockClass::ReadOnly,
+            Self::Resource(request)
+                if matches!(
+                    request.method(),
+                    Some("DeviceUsbAttach" | "DeviceUsbDetach")
+                ) =>
+            {
+                let target = request
+                    .fields
+                    .get("resourceRef")
+                    .and_then(Value::as_str)
+                    .and_then(|value| ResourceRef::parse(value).ok())
+                    .map(|value| value.to_canonical_string())
+                    .unwrap_or_else(|| "usb-resource".to_owned());
+                OpLockClass::PerVm(target)
+            }
             Self::Resource(request)
                 if matches!(
                     request.method(),

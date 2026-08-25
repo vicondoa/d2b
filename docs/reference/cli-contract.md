@@ -768,22 +768,22 @@ Host and bridge diagnostics are a host surface, not a Guest Resource status.
 
 ### `device usb attach`
 
-**Synopsis:** `d2b device usb attach <vm> <busid> [--dry-run | --apply] [--human] [--json]`
+**Synopsis:** `d2b device usb attach <device> <busid> [--dry-run | --apply] [--human] [--json]`
 
 **Flags**
 
 | Flag | Type | Default | Semantics |
 | --- | --- | --- | --- |
-| `--dry-run` | boolean | `false` | Print the daemon → broker USBIP attach plan plus the authenticated target-local Process import step without mutating host or guest state. |
-| `--apply` | boolean | `false` | Ask `d2bd` to run three fail-closed pre-flight checks (sysfs presence, USB-capable gate, active claim exclusivity), then dispatch the appropriate broker path: **declared path** (when a static bundle intent exists for the busid - `UsbipBind` + firewall carve-out + `UsbipProxyReconcile`), or **explicit path** (when no declared intent exists - `UsbipExplicitFirewallRule` + `UsbipExplicitBind` per-device ops), then ask target-local Process over authenticated component-session to import the selected busid. |
-| `--json` | boolean | `false` | Emit the dry-run summary as structured JSON. |
-| `--human` | boolean | `false` | Force the human dry-run summary on stdout. |
+| `--dry-run` | boolean | `false` | Send a typed Resource API intent. Non-qemu USBIP requests report `runtime-capability-unsupported`; they do not claim a host or Guest plan. |
+| `--apply` | boolean | `false` | Require the Device resource to resolve to the USBIP Provider and require the signed target-local Guest Process/ComponentSession import path. Until that path is wired, fail closed before host bind, proxy reconciliation, or claim mutation. |
+| `--json` | boolean | `false` | Emit the daemon response as structured JSON. |
+| `--human` | boolean | `false` | Force human-readable daemon output. |
 
 **Arguments**
 
 | Argument | Semantics |
 | --- | --- |
-| `vm` | Required VM name. |
+| `device` | Required `Device/<name>` ResourceRef. |
 | `busid` | Required host USB busid in the canonical `B-P[.P...]` form (for example `1-2` or `2-1.4`). Does not require the busid to be pre-declared in the NixOS bundle configuration. |
 
 **Exit codes**
@@ -793,65 +793,28 @@ Host and bridge diagnostics are a host surface, not a Guest Resource status.
 | `0` | Success. | - |
 | `1` | `d2bd` is unreachable, or the daemon returned a non-typed USBIP failure. | [`daemon-down`](./error-codes.md#daemon-down) |
 | `2` | Missing VM / busid or another usage error. | [`usage`](./error-codes.md#usage) |
-| `67` | The USB device busid is not present in sysfs (`usbip-busid-not-present`), or another VM already holds an active claim on this busid (`usbip-explicit-claim-conflict`). | [`usbip-busid-not-present`](./error-codes.md#usbip-busid-not-present), [`usbip-explicit-claim-conflict`](./error-codes.md#usbip-explicit-claim-conflict) |
-| `78` | The daemon reached the broker but the native USBIP apply path was refused. | [`broker-error`](./error-codes.md#broker-error) |
+| `70` | The target-local USBIP Process or authenticated Guest import path is unavailable. | [`runtime-capability-unsupported`](./error-codes.md#runtime-capability-unsupported) |
 
 **Human example**
 
 ```text
-$ d2b device usb attach corp-vm 1-2 --dry-run
-d2b device usb attach --dry-run: would bind and lock, apply the USBIP firewall carve-out, ensure the per-env backend/proxy for busid '1-2' for vm 'corp-vm', reconcile the USBIP proxy, and ask target-local Process to import the device
+$ d2b device usb attach Device/corp-vm 1-2 --dry-run
+d2b device usb attach: runtime capability 'usbip-guest-import' is unavailable; no host USBIP mutation was performed
 ```
-
-**Explicit attach (present-busid, no static allowlist required)**
-
-`d2b device usb attach` accepts any USB device that is physically present in sysfs
-without requiring a static busid or vendor allowlist in the NixOS configuration.
-The daemon selects the **explicit path** when no declared bundle intent exists for
-the requested busid. Three fail-closed checks run before any broker call:
-
-1. **Sysfs presence** - the daemon checks `/sys/bus/usb/devices/<busid>/idVendor`.
-   If absent, the attach fails with `UsbipBusidNotPresent` (exit 67) and guides
-   the operator to plug in the device before retrying.
-2. **USB-capable gate** - the VM must have `RuntimeCapabilityGate::UsbHotplug`
-   declared in its manifest. Non-USB-capable VMs fail with a typed
-   `RuntimeCapabilityUnsupported` error.
-3. **Active claim exclusivity** - the daemon reads the OFD lock under
-   `/run/d2b/locks/usbip/<busid>`. If another VM already holds the claim, the
-   attach fails with `UsbipExplicitClaimConflict` (exit 67) naming the owner VM
-   and guiding the operator to detach from the owner first.
-
-The explicit path dispatches `UsbipExplicitFirewallRule` (env-scoped nftables
-rule keyed on the per-env uplink IPs) and `UsbipExplicitBind` (per-device backend
-setup). Both ops are currently typed stubs; the live per-device backend handler
-is deferred to later implementation. The declared path (static bundle intents) is
-unaffected.
 
 **Status**
 
-The native CLI sends one intent to `d2bd`; the daemon drives broker host
-USBIP state and authenticated target-local Process import cleanup/attach over component-session.
-If the target VM is stopped, `--apply` fails before host mutation with an
-actionable usage error: start the Guest with
-`d2b guest start <name> --apply`, wait until it is Ready, then retry
-`d2b device usb attach <vm> <busid> --apply`. This preflight does not create a
-degraded USB state. If an earlier failed apply left a stale or bound USBIP
-session claim, start the VM and rerun the attach or run
-`d2b device usb detach <vm> <busid> --apply`; the attach/detach paths and
-`d2b device usb probe` all run the USBIP proxy reconcile pass, and `device usb probe`
-shows the session claim as cleared once the lock/proxy state is consistent.
-
-Prerequisites for `--apply` are: the target VM is running and component-session
-advertises USBIP status/import, the bundle declares a USBIP bind/firewall intent
-for the VM/busid, policy/topology checks allow the physical device, the
-`usbip-host` module and per-env backend/proxy carrier can be prepared, and no
-other owner holds the busid session claim. Failing prerequisites surface as
-typed errors or as `d2b device usb probe` degraded reasons with exact remediation
-commands.
+The native CLI sends one Device Resource API intent to `d2bd`. For non-qemu
+USBIP, the daemon currently returns `runtime-capability-unsupported` before
+host bind, firewall/proxy mutation, or claim release because no signed
+target-local USBIP Process effect adapter is wired. `d2b device usb probe`
+remains observational and reports Guest import as unavailable. Qemu-media
+hotplug remains a separate runtime path.
 
 **Native**
 
-- `--apply` routes through `d2bd` → broker + target-local Process. There is no SSH fallback for USBIP.
+- `--apply` routes through the typed Device Resource API. There is no SSH or
+  guestd fallback for USBIP.
 
 **Bash**
 
@@ -859,22 +822,22 @@ commands.
 
 ### `device usb detach`
 
-**Synopsis:** `d2b device usb detach <vm> <busid> [--dry-run | --apply] [--human] [--json]`
+**Synopsis:** `d2b device usb detach <device> <busid> [--dry-run | --apply] [--human] [--json]`
 
 **Flags**
 
 | Flag | Type | Default | Semantics |
 | --- | --- | --- | --- |
-| `--dry-run` | boolean | `false` | Print the daemon → broker USBIP unbind plan without mutating host state. |
-| `--apply` | boolean | `false` | Ask `d2bd` to run `UsbipUnbind` followed by `UsbipProxyReconcile` for the selected VM/busid pair. |
-| `--json` | boolean | `false` | Emit the dry-run summary as structured JSON. |
-| `--human` | boolean | `false` | Force the human dry-run summary on stdout. |
+| `--dry-run` | boolean | `false` | Send a typed Resource API intent. Non-qemu USBIP requests report `runtime-capability-unsupported` without claiming a host teardown plan. |
+| `--apply` | boolean | `false` | Require the signed target-local Guest Process/ComponentSession detach path. Until that path is wired, fail closed before host unbind, proxy reconciliation, or claim release. |
+| `--json` | boolean | `false` | Emit the daemon response as structured JSON. |
+| `--human` | boolean | `false` | Force human-readable daemon output. |
 
 **Arguments**
 
 | Argument | Semantics |
 | --- | --- |
-| `vm` | Required VM name. |
+| `device` | Required `Device/<name>` ResourceRef. |
 | `busid` | Required host USB busid in the canonical `B-P[.P...]` form. |
 
 **Exit codes**
@@ -884,33 +847,33 @@ commands.
 | `0` | Success. | - |
 | `1` | `d2bd` is unreachable, or the daemon returned a non-typed USBIP failure. | [`daemon-down`](./error-codes.md#daemon-down) |
 | `2` | Missing VM / busid or another usage error. | [`usage`](./error-codes.md#usage) |
-| `78` | The daemon reached the broker but the native USBIP apply path was refused. | [`broker-error`](./error-codes.md#broker-error) |
+| `70` | The target-local USBIP Process or authenticated Guest detach path is unavailable. | [`runtime-capability-unsupported`](./error-codes.md#runtime-capability-unsupported) |
 
 **Human example**
 
 ```text
-$ d2b device usb detach corp-vm 1-2 --dry-run
-d2b device usb detach --dry-run: would ask target-local Process to detach busid '1-2' for vm 'corp-vm', unbind it on the host, and reconcile the USBIP proxy
+$ d2b device usb detach Device/corp-vm 1-2 --dry-run
+d2b device usb detach: runtime capability 'usbip-guest-import' is unavailable; no host USBIP mutation was performed
 ```
 
 **Status**
 
-The native CLI first asks target-local Process to detach matching imports, then drives the
-daemon → broker `UsbipUnbind` / `UsbipProxyReconcile` path. Explicit detach is
-the only normal path that releases a USBIP session claim. VM stop/restart keeps
-the claim for the same VM within the current host boot/session so restart
-reconciliation can re-import the device; a host reboot clears the `/run` lock.
+The native CLI sends one Device Resource API intent to `d2bd`. For non-qemu
+USBIP, the daemon currently returns `runtime-capability-unsupported` before
+Guest detach or host unbind because no signed target-local USBIP Process effect
+adapter is wired. The claim is retained for safe retry; a host reboot still
+clears the `/run` lock.
 
-Single-busid detach never stops the shared per-env proxy. If the daemon cannot
-prove firewall-withdrawal-before-flow-kill ordering plus an exact VM/proxy
-cleanup tuple, `--apply` fails closed with a revocation-isolation error and
-preserves the session claim for manual drain/recovery. The public error names the
-target busid. The safe next step is to stop the VM so the stream drains, then
-rerun `d2b device usb detach <vm> <busid> --apply`.
+When the Guest effect path is implemented, single-busid detach must never stop
+the shared per-env proxy. If the daemon cannot prove
+firewall-withdrawal-before-flow-kill ordering plus an exact VM/proxy cleanup
+tuple, `--apply` must fail closed and preserve the session claim for manual
+drain/recovery.
 
 **Native**
 
-- `--apply` routes through `d2bd` → broker `UsbipUnbind` then `UsbipProxyReconcile`.
+- `--apply` routes through the typed Device Resource API. There is no SSH or
+  guestd fallback for USBIP.
 
 **Bash**
 
@@ -940,7 +903,7 @@ rerun `d2b device usb detach <vm> <busid> --apply`.
 | `0` | Success. | - |
 | `1` | `d2bd` is unreachable or does not expose the native USBIP probe request. | [`daemon-down`](./error-codes.md#daemon-down) |
 | `2` | Unsupported invocation shape. | [`usage`](./error-codes.md#usage) |
-| `78` | The daemon reached the broker but the `UsbipProxyReconcile` pass failed. | [`broker-error`](./error-codes.md#broker-error) |
+| `78` | The daemon could not refresh an independent qemu-media registry. | [`broker-error`](./error-codes.md#broker-error) |
 
 **Human example**
 
@@ -948,9 +911,8 @@ rerun `d2b device usb detach <vm> <busid> --apply`.
 $ d2b device usb probe
 VM                       ENV          BUSID        STATUS     SESSION-CLAIM          HOST-BIND                CARRIER        PROXY        GUEST      POLICY
 corp-vm                  work         1-2          degraded   held-by-desired-owner  unknown                  unknown        unknown      detached   allowed
-  degraded guest-import-unavailable: the guest USBIP import has not converged
-  remediation: Run `d2b device usb attach corp-vm 1-2 --apply` after the VM is running.
-  command: d2b device usb attach corp-vm 1-2 --apply
+  degraded guest-import-unavailable: Guest USB import requires a target-local USBIP Process path that is unavailable; the host claim is not a successful attachment.
+  remediation: Use a build that includes the signed target-local USBIP Process over ComponentSession, then retry the command.
 ```
 
 **`--json` example** - schema: [`usb-probe.schema.json`](./cli-output/usb-probe.schema.json); prose companion: [`usb-probe.md`](./cli-output/usb-probe.md).
@@ -976,7 +938,7 @@ corp-vm                  work         1-2          degraded   held-by-desired-ow
         "proxy": "unknown"
       },
       "guest": {
-        "import": "detached"
+        "import": "unavailable"
       },
       "topologyPolicy": {
         "topology": "unknown",
@@ -985,13 +947,11 @@ corp-vm                  work         1-2          degraded   held-by-desired-ow
       "degradedReasons": [
         {
           "code": "guest-import-unavailable",
-          "summary": "the guest USBIP import has not converged",
-          "remediation": "Run `d2b device usb attach corp-vm 1-2 --apply` after the VM is running."
+          "summary": "Guest USB import requires a target-local USBIP Process path that is unavailable; the host claim is not a successful attachment.",
+          "remediation": "Use a build that includes the signed target-local USBIP Process over ComponentSession, then retry the command."
         }
       ],
-      "remediationCommands": [
-        "d2b device usb attach corp-vm 1-2 --apply"
-      ]
+      "remediationCommands": []
     }
   ]
 }
@@ -999,8 +959,8 @@ corp-vm                  work         1-2          degraded   held-by-desired-ow
 
 **Status**
 
-Probe is a read-only daemon RPC backed by the broker's
-`UsbipProxyReconcile` validation pass. The JSON and human forms split:
+Probe is a read-only daemon RPC. It does not reconcile or mutate the host
+proxy for non-qemu USBIP. The JSON and human forms split:
 
 - the **session claim** (`missing`, `held-by-desired-owner`,
   `held-by-other-owner`, `stale-owner`, `corrupt`, or `not-applicable`);
@@ -1021,13 +981,11 @@ reconciled. Public output uses redacted state labels and summaries rather
 than raw sysfs paths, raw serials, stderr, or policy internals.
 
 VM restart reconciliation preserves same-VM session claims for the current host
-boot/session, detaches guest imports, and only runs host unbind after firewall
-withdrawal plus targeted stream cleanup is proven. It then replays host
-bind/proxy and guest import after component-session readiness. Runtime absence,
-proxy unavailability, or guest import unavailability surfaces as degraded USB
-state. Required policy/topology failures fail before device exposure and must be
-remediated by fixing the declaration, rebuilding, and rerunning the lifecycle
-command.
+boot/session. Until the signed target-local USBIP Process path is available,
+start and detach stop before host release, while Guest import unavailability
+surfaces as degraded USB state. Required policy/topology failures fail before
+device exposure and must be remediated by fixing the declaration, rebuilding,
+and rerunning the lifecycle command.
 
 **Native**
 
@@ -3326,9 +3284,9 @@ detached state lives in target-local Process's detached registry).
 | `guest start` | `rust-native` | Typed Guest lifecycle request; production UpdateSpec dispatch is a later-wave blocker. |
 | `guest stop` | `rust-native` | Typed Guest lifecycle request; production UpdateSpec dispatch is a later-wave blocker. |
 | `guest restart` | `rust-native` | Typed Guest lifecycle request; production UpdateSpec dispatch is a later-wave blocker. |
-| `device usb attach` | `rust-native` | USBIP attach parses and dispatches one intent to `d2bd`; the daemon coordinates broker host bind/firewall/proxy state and authenticated target-local Process import over component-session. |
-| `device usb detach` | `rust-native` | USBIP detach parses and dispatches one intent to `d2bd`; the daemon asks target-local Process to detach matching imports, then runs broker `UsbipUnbind` / `UsbipProxyReconcile`. |
-| `device usb probe` | `rust-native` | USBIP probe is a read-only daemon query backed by the broker's `UsbipProxyReconcile` validation pass. |
+| `device usb attach` | `rust-native` | USBIP attach dispatches one typed Device Resource intent to `d2bd`; non-qemu requests fail closed until the signed target-local Process import effect path is available. |
+| `device usb detach` | `rust-native` | USBIP detach dispatches one typed Device Resource intent to `d2bd`; non-qemu requests fail closed before Guest or host teardown until the signed target-local Process detach effect path is available. |
+| `device usb probe` | `rust-native` | USBIP probe is a read-only daemon query that reports host/claim layers and Guest import unavailability without proxy mutation. |
 | `guest console` | `rust-native` | The Rust CLI owns help / argument validation and attaches to the daemon-native foreground console handoff via `ConsoleOp`, with provider-capability-aware streaming across Cloud Hypervisor, qemu-media, and ACA targets; see [provider capability matrix](./provider-capability-matrix.md). |
 | `audio status` | `rust-native` | The Rust CLI dispatches `AudioOp::Status` and renders provider-capability-aware per-target audio state/errors across Cloud Hypervisor, qemu-media, and ACA; see [provider capability matrix](./provider-capability-matrix.md). |
 | `audio mic` | `rust-native` | The Rust CLI dispatches microphone grant/revoke through `AudioOp::Mute`, persisting policy and applying host/guest enforcement according to provider capability. |

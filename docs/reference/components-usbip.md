@@ -7,22 +7,19 @@
 
 ## What this component does
 
-Enables on-demand passthrough of a host-side YubiKey (USB vendor ID
-`1050`) into a VM via USBIP. When `d2b.site.yubikey.enable = true`
-and some enabled VM in an env sets `usbip.yubikey = true`, the host
-materializes a broker-spawned per-env `usbipd` backend listening on TCP
-`<backendPort>` (usbipd has no `--host` flag, so it binds to
-`0.0.0.0`; firewall rules - see "Host-side resources" - restrict
-backend ingress to host loopback, so it's the operational equivalent
-of a loopback bind but enforced via netfilter rather than by the
-socket). A broker-spawned per-env `socat` proxy binds exactly the env's
-uplink-bridge IP at TCP 3240; the guest loads `vhci_hcd`, ships the
-`usbip` CLI, and advertises target-local Process's `UsbipImport` capability so
-`d2bd` can import/detach through authenticated component-session. The
-hot-plug ceremony is daemon-owned: host bind/unbind and firewall/proxy
-reconcile go through the privileged broker, while guest attach/detach goes
-through target-local Process. The CLI sends one intent to `d2bd`; it never SSHes into
-the guest for USBIP.
+Enables the guest-side kernel and package prerequisites for on-demand
+passthrough of a host-side YubiKey (USB vendor ID `1050`) into a VM via USBIP.
+When `d2b.site.yubikey.enable = true` and some enabled VM in an env sets
+`usbip.yubikey = true`, the host materializes a broker-spawned per-env
+`usbipd` backend and proxy as described below. The guest loads `vhci_hcd` and
+ships the `usbip` CLI.
+
+The signed target-local USBIP Process and its authenticated ComponentSession
+effect adapter are not currently wired into the daemon. Until that contract
+exists, non-qemu USBIP attach, detach, and VM-start reconciliation fail closed
+with `runtime-capability-unsupported`; no host bind, proxy reconciliation, or
+claim release is reported as a successful guest attachment. The CLI never
+SSHes into the guest or uses guestd.
 
 The component itself only declares the **guest-side** wiring. All
 host-side machinery (usbipd backend + proxy broker-spawned runners,
@@ -53,14 +50,13 @@ owners and remediation:
   fixing the declaration or attaching the approved physical device, then
   rebuilding before retry.
 
-VM stop/restart cleans up guest imports and only runs host unbind when firewall
-withdrawal plus targeted stream cleanup can be proven first; otherwise it keeps
-the same-VM session claim for manual recovery. VM start reconciles same-VM
-session claims from the current host session after component-session readiness by
-replaying host bind/proxy state and re-importing in the guest. Runtime absence,
-proxy/backend unavailability, or guest import unavailability degrades
-`d2b device usb probe` / `d2b guest status <name>` without pretending the row is healthy.
-Required policy/topology failures remain fail-closed.
+VM stop/restart must drain the guest import before host release. Because the
+target-local USBIP Process is currently unavailable, stop cleanup preserves the
+same-VM session claim and does not unbind or release host state. VM start does
+not replay host bind/proxy state while the Guest status path is unavailable.
+`d2b device usb probe` reports guest import as unavailable and keeps affected
+claims degraded rather than pretending the row is healthy. Required
+policy/topology failures remain fail-closed.
 
 ## Options (host-side)
 
@@ -198,8 +194,9 @@ Per host (in [`host.nix`](../../nixos-modules/host.nix)):
 
 ## Runtime prerequisite contract
 
-For `d2b device usb attach <name> <busid> --apply` to expose a device, all of
-these must be true:
+For a future implementation,
+`d2b device usb attach <name> <busid> --apply` may expose a device only when
+all of these are true:
 
 1. the target VM is running and component-session advertises USBIP status/import;
 2. the bundle declares USBIP bind/firewall intents for the VM and busid;
@@ -214,24 +211,24 @@ Stable operator remediation uses lifecycle verbs rather than direct lock or
 sysfs mutation. Keep procedural recovery in the how-to runbook:
 [Troubleshoot USBIP passthrough](../how-to/troubleshoot-usbip.md).
 
-CLI contract (`d2b device usb attach|detach|probe` in the Rust CLI):
+Current CLI behavior (`d2b device usb attach|detach|probe` in the Rust CLI):
 
 - Sends one apply/dry-run intent to `d2bd`.
-- `attach --apply`: target-local Process first detaches any stale matching import, the
-  broker binds/locks the host busid and reconciles firewall/proxy state, then
-  target-local Process imports the device inside the VM.
-- `detach --apply`: for the generic per-env L4 proxy, the daemon first requires
-  an immediate-revocation proof: firewall block/withdrawal must precede any
-  targeted conntrack deletion or TCP established-socket kill for a proven
-  VM/proxy tuple whose source is not hidden by SNAT and whose anti-spoofing
-  posture is proven. When that proof is unavailable, detach returns the public
-  revocation-isolation failure with the target busid and preserves the
-  broker-owned claim for manual drain/recovery instead of silently leaving
-  an established stream or bouncing unrelated same-env streams.
+- `attach --apply` and `detach --apply`: non-qemu requests return typed
+  `runtime-capability-unsupported` until the target-local Process and
+  authenticated Guest import/detach effect path is available. They do not
+  bind, unbind, reconcile the host proxy, or release the claim.
+- `probe`: reports the observed host and claim layers, marks Guest import
+  unavailable, and does not mutate the host proxy.
+
+When the Guest effect path is implemented, detach must first prove firewall
+withdrawal and targeted stream cleanup for the generic per-env L4 proxy before
+releasing host state. Ambiguous or shared streams must continue to fail closed.
 
 ### Proxy synchronization strategy
 
-The current proxy is per-env, not per-busid: a `socat` L4 listener forwards
+When the Guest effect path is available, the proxy is per-env, not per-busid:
+a `socat` L4 listener forwards
 `<env.hostUplinkIp>:3240` to that env's loopback backend port. Synchronization
 therefore follows the conservative daemon plan in
 `packages/d2b-provider-device-usbip/src/reconcile_state.rs`:
@@ -255,6 +252,11 @@ therefore follows the conservative daemon plan in
 This means a single VM restart in an env must not disconnect unrelated active
 USBIP streams in that same env.
 
+The current U10 daemon does not execute this host-side synchronization for
+non-qemu USBIP requests: attach and start stop before host bind/proxy effects,
+probe is observational, and stop/detach preserve the claim until Guest detach
+can be authenticated.
+
 ## Guest-side resources created
 
 The entire `components/usbip.nix` is two lines of payload:
@@ -268,10 +270,11 @@ The entire `components/usbip.nix` is two lines of payload:
 
 - `vhci_hcd` lets `usbip attach` materialise the redirected device
   as `/dev/hidraw<N>` (or a raw USB node) inside the guest kernel.
-- The `usbip` CLI is needed in-guest so target-local Process can issue `usbip port`,
-  `usbip detach`, and `usbip attach` after authenticating the host over
-  component-session. Host-side `usbip bind/unbind`, firewall, and proxy
-  reconciliation dispatch through the daemon → broker path.
+- The `usbip` CLI is reserved for the future signed target-local Process to
+  issue `usbip port`, `usbip detach`, and `usbip attach` after authenticating
+  the host over ComponentSession. No current daemon path invokes those guest
+  commands. Host-side `usbip bind/unbind`, firewall, and proxy reconciliation
+  remain broker-owned and are withheld when Guest import is unavailable.
 
 ## Runtime invariants
 
