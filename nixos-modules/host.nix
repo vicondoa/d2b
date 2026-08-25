@@ -230,8 +230,8 @@ in
             in {
               environment.etc."d2b/guest-config.nix".source = vm'.guestConfigFile;
               systemd.tmpfiles.rules = [
-                "d /var/lib/d2b-guest 0750 ${owner} users -"
-                "C /var/lib/d2b-guest/guest-config.nix 0640 ${owner} users - /etc/d2b/guest-config.nix"
+                "d /var/lib/d2b 0750 ${owner} users -"
+                "C /var/lib/d2b/guest-config.nix 0640 ${owner} users - /etc/d2b/guest-config.nix"
               ];
             }
           )

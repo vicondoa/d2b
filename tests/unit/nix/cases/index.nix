@@ -77,6 +77,7 @@ let
       env = "zeta";
       index = 12;
       ssh.user = "alice";
+      guestConfigFile = builtins.toFile "zed-guest-config.nix" "{ ... }: { }";
       tpm.enable = true;
       usbip = {
         yubikey = true;
@@ -502,6 +503,21 @@ in
       SystemKeepFree=512M
       RuntimeMaxUse=128M
     '';
+  };
+
+  "index/guest-config-working-copy-matches-component-session-path" = {
+    expr = {
+      path = cfg.d2b._computed.zed.config.d2b.componentSession.guestConfigPath;
+      tmpfiles = lib.filter
+        (rule: lib.hasInfix "guest-config.nix" rule)
+        cfg.d2b._computed.zed.config.systemd.tmpfiles.rules;
+    };
+    expected = {
+      path = "/var/lib/d2b/guest-config.nix";
+      tmpfiles = [
+        "C /var/lib/d2b/guest-config.nix 0640 alice users - /etc/d2b/guest-config.nix"
+      ];
+    };
   };
 
   "index/home-lan-metadata" = {
