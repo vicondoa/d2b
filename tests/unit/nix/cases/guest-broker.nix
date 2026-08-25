@@ -80,6 +80,7 @@ let
       ];
       specialArgs = {
         inherit d2bHostTools;
+        d2bHostToolOverrides = null;
         name = "guest-test";
         d2bUsePrebuiltHostTools = usePrebuilt;
       };
