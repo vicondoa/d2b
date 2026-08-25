@@ -222,6 +222,7 @@ heavy-lane-host-integration: heavy-lane-guard
 	trap 'exit 129' HUP; \
 	trap 'exit 130' INT; \
 	trap 'exit 143' TERM; \
+	trap 'exit 131' QUIT; \
 	attic_cache=""; \
 	attic_config=""; \
 	if [ -n "$${XDG_CONFIG_HOME:-}" ]; then \
@@ -238,7 +239,7 @@ heavy-lane-host-integration: heavy-lane-guard
 	attic_meta="$$(ATTIC_CONFIG="$$attic_config" nix eval --impure --json --expr 'let config = builtins.fromTOML (builtins.readFile (builtins.getEnv "ATTIC_CONFIG")); names = builtins.attrNames (config.servers or {}); server = if config ? "default-server" then config."default-server" else if builtins.length names == 1 then builtins.head names else throw "ambiguous Attic servers"; endpoint = config.servers.$${server}.endpoint or (throw "missing Attic endpoint"); in { inherit server endpoint; }' 2>/dev/null)" || fail_attic_state; \
 	attic_server="$$(printf '%s' "$$attic_meta" | jq -er '.server | select(test("^[A-Za-z0-9][A-Za-z0-9._+-]*$$"))')" || fail_attic_state; \
 	attic_base="$$(printf '%s' "$$attic_meta" | jq -er '.endpoint | capture("^(?<scheme>https?)://(?<authority>[^/@?#]+)(?:/[^?#]*)?$$") | ((.scheme | ascii_downcase) + "://" + (.authority | ascii_downcase))')" || fail_attic_state; \
-	attic_name="$$(nix config show --json | jq -er --arg base "$$attic_base" '.substituters.value | if type == "string" then split(" ") else . end | map(try capture("^(?<scheme>https?)://(?<authority>[^/@?#]+)(?<path>/[^?#]*)?$$") catch empty | select(((.scheme | ascii_downcase) + "://" + (.authority | ascii_downcase)) == $$base) | ((.path // "") | rtrimstr("/") | split("/") | last)) | map(select(test("^[A-Za-z0-9][A-Za-z0-9_+-]*$$"))) | select(length == 1) | .[0]')" || fail_attic_state; \
+	attic_name="$$(nix config show --json | jq -er --arg base "$$attic_base" '.substituters.value | if type == "string" then split(" ") else . end | map(try capture("^(?<scheme>https?)://(?<authority>[^/@?#]+)(?<path>/[^?#]*)?(?:\\?[^#]*)?$$") catch empty | select(((.scheme | ascii_downcase) + "://" + (.authority | ascii_downcase)) == $$base) | ((.path // "") | rtrimstr("/") | split("/") | last)) | map(select(test("^[A-Za-z0-9][A-Za-z0-9_+-]*$$"))) | select(length == 1) | .[0]')" || fail_attic_state; \
 	attic_cache="$$attic_server:$$attic_name"; \
 	if ! attic cache info "$$attic_cache" >"$$run_dir/attic-info.log" 2>&1; then \
 	echo "test-host-integration: configured Attic cache preflight failed" >&2; \
@@ -270,8 +271,7 @@ heavy-lane-host-integration: heavy-lane-guard
 	stage_tool packages/d2b-unsafe-local-helper/d2b-unsafe-local-helper d2b-unsafe-local-helper; \
 	stage_tool packages/d2b-resource-compiler/d2b-resource-compiler d2b-resource-compiler; \
 	stage_tool packages/d2b-provider-display-wayland/d2b-wayland-proxy d2b-wayland-proxy; \
-	bundle_store_path="$$(nix store add-path --name d2b-bazel-host-tools "$$stage")"; \
-	nix-store --add-root "$$run_dir/bundle-root" --indirect --realise "$$bundle_store_path" >/dev/null; \
+	bundle_store_path="$$(D2B_BAZEL_STAGE="$$stage" nix build --impure --out-link "$$run_dir/bundle-root" --print-out-paths --expr 'builtins.path { path = builtins.getEnv "D2B_BAZEL_STAGE"; name = "d2b-bazel-host-tools"; }')"; \
 	rm -rf -- "$$stage"; \
 	echo "test-host-integration: Bazel host-tool bundle: $$bundle_store_path"; \
 	set --; \
@@ -279,7 +279,7 @@ heavy-lane-host-integration: heavy-lane-guard
 	set -- "$$@" "git+file://$$root#vmChecks.$$system.$$name"; \
 	done; \
 	echo "test-host-integration: building vmChecks: $$names"; \
-	D2B_HOST_TOOL_BUNDLE="$$bundle_store_path" D2B_HOST_RUNTIME_PATH= \
+	D2B_HOST_TOOL_BUNDLE="$$bundle_store_path" D2B_HOST_RUNTIME_PATH="$$run_dir/absent-host-runtime.json" \
 	nix build --impure --out-link "$$run_dir/result" --print-build-logs --print-out-paths "$$@" >"$$run_dir/outputs"; \
 	cat "$$run_dir/outputs"; \
 	if [ -n "$$attic_cache" ]; then \
