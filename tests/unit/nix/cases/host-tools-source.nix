@@ -15,6 +15,8 @@ let
     builtins.readFile (flakeRoot + "/bazel/checks/fixtures/BUILD.bazel");
   hostToolsSource =
     builtins.readFile (flakeRoot + "/nixos-modules/rust-host-tools.nix");
+  vmEvaluatorSource =
+    builtins.readFile (flakeRoot + "/nixos-modules/vm-evaluator.nix");
   hostSourceLines = lib.splitString "\n" hostToolsSource;
   hostSourceBuilderLines =
     lib.filter (line: lib.hasInfix "src = hostSource;" line) hostSourceLines;
@@ -36,6 +38,15 @@ in
     expr = lib.hasInfix "cp -r " hostToolsSource
       && lib.hasInfix ''packagesSrc}/. "$out/"'' hostToolsSource
       && builtins.length hostSourceBuilderLines == 2;
+    expected = true;
+  };
+
+  "host-tools-source/guest-evaluator-uses-host-tool-overrides" = {
+    expr = lib.all (needle: lib.hasInfix needle vmEvaluatorSource) [
+      "broker = d2bHostToolOverrides.broker"
+      "d2bd = d2bHostToolOverrides.d2bd"
+      "d2bHostTools = guestHostTools"
+    ];
     expected = true;
   };
 }
