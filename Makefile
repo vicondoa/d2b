@@ -283,10 +283,18 @@ heavy-lane-host-integration: heavy-lane-guard
 	nix build --impure --out-link "$$run_dir/result" --print-build-logs --print-out-paths "$$@" >"$$run_dir/outputs"; \
 	cat "$$run_dir/outputs"; \
 	if [ -n "$$attic_cache" ]; then \
-	: >"$$run_dir/attic-closure"; \
+	: >"$$run_dir/attic-closure-all"; \
 	while IFS= read -r output; do \
-	nix-store -qR --include-outputs "$$(nix-store -qd "$$output")"; \
-	done <"$$run_dir/outputs" | sort -u >"$$run_dir/attic-closure-all"; \
+	drv="$$(nix-store -qd "$$output")" || { \
+	echo "test-host-integration: could not resolve a vmCheck derivation for Attic" >&2; \
+	exit 1; \
+	}; \
+	if ! nix-store -qR --include-outputs "$$drv" >>"$$run_dir/attic-closure-all"; then \
+	echo "test-host-integration: could not resolve a vmCheck dependency closure for Attic" >&2; \
+	exit 1; \
+	fi; \
+	done <"$$run_dir/outputs"; \
+	sort -u -o "$$run_dir/attic-closure-all" "$$run_dir/attic-closure-all"; \
 	awk 'NR == FNR { skip[$$0] = 1; next } !skip[$$0]' \
 	"$$run_dir/outputs" "$$run_dir/attic-closure-all" >"$$run_dir/attic-closure"; \
 	if [ ! -s "$$run_dir/attic-closure" ]; then \
