@@ -240,14 +240,78 @@ pub(crate) fn binding_children_ready(
     }
     desired.iter().all(|intent| {
         let Some(child) = children.iter().find(|child| {
-            child.resource_ref == *intent.resource_ref()
-                && child_owner_ref(child) == Some(owner.resource.resource_ref.clone())
-                && !deletion_requested(child)
+            child_matches_intent(owner, intent, child)
         }) else {
             return false;
         };
         child_ready(intent, child)
     })
+}
+
+fn child_matches_intent(
+    owner: &BindingChildOwner,
+    intent: &d2b_contracts_provider::v3::semantic_services::child_resources::BindingChildIntent,
+    child: &StoredResource,
+) -> bool {
+    if child.resource_ref != *intent.resource_ref()
+        || child.zone != owner.resource.zone
+        || child_owner_ref(child) != Some(owner.resource.resource_ref.clone())
+        || deletion_requested(child)
+    {
+        return false;
+    }
+    let Ok(value) = serde_json::from_slice::<serde_json::Value>(&child.canonical_json) else {
+        return false;
+    };
+    let Some(spec) = value.get("spec").and_then(serde_json::Value::as_object) else {
+        return false;
+    };
+    match intent.kind() {
+        BindingChildKind::Process | BindingChildKind::EphemeralProcess => {
+            let expected_provider = intent
+                .process_provider()
+                .unwrap_or("Provider/system-systemd");
+            if spec.get("providerRef").and_then(serde_json::Value::as_str)
+                != Some(expected_provider)
+                || spec.get("executionRef").and_then(serde_json::Value::as_str)
+                    != Some(intent.execution_ref().to_canonical_string().as_str())
+                || spec.get("template").and_then(serde_json::Value::as_str)
+                    != intent.process_template()
+                || spec.get("processClass").and_then(serde_json::Value::as_str)
+                    != intent.process_class()
+            {
+                return false;
+            }
+            if let Some(domain) = intent.process_domain() {
+                let expected = match domain {
+                    d2b_contracts_resource::v3::ExecutionDomain::System => "system",
+                    d2b_contracts_resource::v3::ExecutionDomain::User => "user",
+                };
+                if spec.get("domain").and_then(serde_json::Value::as_str) != Some(expected) {
+                    return false;
+                }
+            }
+            match intent.process_user() {
+                Some(user_ref)
+                    if spec.get("userRef").and_then(serde_json::Value::as_str)
+                        != Some(user_ref.to_canonical_string().as_str()) =>
+                {
+                    false
+                }
+                None if spec.get("userRef").is_some_and(|value| !value.is_null()) => false,
+                _ => true,
+            }
+        }
+        BindingChildKind::Endpoint => {
+            spec.get("providerRef").and_then(serde_json::Value::as_str)
+                == Some(intent.provider_ref().to_canonical_string().as_str())
+                && spec.get("producerRef").and_then(serde_json::Value::as_str)
+                    == intent
+                        .producer_ref()
+                        .map(|producer| producer.to_canonical_string())
+                        .as_deref()
+        }
+    }
 }
 
 fn child_ready(
@@ -856,8 +920,81 @@ mod tests {
         ));
         assert!(binding_children_ready(
             &owner,
-            &[stored_resource(&child_ref, Some(&binding_ref), "Ready")]
+            &[stored_resource_with_spec(
+                &child_ref,
+                Some(&binding_ref),
+                "Ready",
+                serde_json::json!({
+                    "executionRef": "Host/host-system",
+                    "providerRef": "Provider/system-minijail",
+                    "template": "usbip-relay",
+                    "processClass": "service",
+                    "domain": "system"
+                }),
+            )]
         ));
+    }
+
+    #[test]
+    fn readiness_requires_the_exact_guest_execution_target() {
+        let binding_ref = target("usb.d2bus.org.UsbBinding", "work");
+        let service_ref = target("usb.d2bus.org.UsbService", "work");
+        let guest_ref = target("Guest", "work");
+        let provider_ref = target("Provider", "device-usbip");
+        let desired = explicit_binding_children(
+            SemanticFamily::Usb,
+            binding_ref.clone(),
+            service_ref,
+            guest_ref.clone(),
+            provider_ref,
+            &[BindingChildRequest::process(
+                BindingChildKind::Process,
+                BindingChildPlacement::Guest,
+                "proxy",
+                "Provider/system-minijail",
+                "usbip-guest-proxy",
+                d2b_contracts_resource::v3::ExecutionDomain::System,
+                "service",
+            )],
+        )
+        .expect("child intent");
+        let child_ref = desired
+            .child("proxy")
+            .expect("proxy child")
+            .resource_ref()
+            .clone();
+        let owner = BindingChildOwner {
+            resource: stored_resource(&binding_ref, None, "Pending"),
+            desired: Some(desired),
+            fenced: false,
+        };
+        let wrong_guest = stored_resource_with_spec(
+            &child_ref,
+            Some(&binding_ref),
+            "Ready",
+            serde_json::json!({
+                "executionRef": "Guest/other",
+                "providerRef": "Provider/system-minijail",
+                "template": "usbip-guest-proxy",
+                "processClass": "service",
+                "domain": "system"
+            }),
+        );
+        assert!(!binding_children_ready(&owner, &[wrong_guest]));
+
+        let matching_guest = stored_resource_with_spec(
+            &child_ref,
+            Some(&binding_ref),
+            "Ready",
+            serde_json::json!({
+                "executionRef": guest_ref.to_canonical_string(),
+                "providerRef": "Provider/system-minijail",
+                "template": "usbip-guest-proxy",
+                "processClass": "service",
+                "domain": "system"
+            }),
+        );
+        assert!(binding_children_ready(&owner, &[matching_guest]));
     }
 
     #[test]

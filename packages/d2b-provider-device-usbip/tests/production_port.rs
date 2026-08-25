@@ -159,6 +159,7 @@ fn production_port_keeps_binding_teardown_before_service_release() {
             "slot",
             "proxy",
             "ensure-process",
+            "observe-process",
             "delete-endpoint",
             "delete-process",
             "close-proxy",

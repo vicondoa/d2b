@@ -1,26 +1,17 @@
 # ADR 0028: Guest control plane over virtio-vsock
 
-- Status: Accepted
+- Status: Superseded by ADR 0043 and U10 ComponentSession clean break
 - Date: 2026-06-08
 - Related: ADR 0010 (wire protocol and typed errors), ADR 0015
   (daemon-only clean break), ADR 0017 (no bash fallbacks), ADR 0018
   (microvm.nix removal), ADR 0024 (in-VM guest config sync)
 
-> **Update (W16) - current shipped reality.** The guest-control plane
-> described here has landed: `d2b-guestd` serves `Hello`/`Health`/
-> `Capabilities`, the bounded `ReadGuestFile` read, and the exec
-> lifecycle RPCs over the authenticated vsock channel. `d2b config
-> sync` reads the guest config working copy over `ReadGuestFile` (no
-> `ssh cat`) and **fails closed** on a VM whose running generation does
-> not declare the guest-control transport - the SSH compatibility path
-> sketched below is **not yet wired** into the command. `d2b vm
-> konsole` runs `d2b vm exec -it` over guest-control (no SSH), and
-> the admin-only `d2b vm exec` verb shipped alongside it. The DAG
-> readiness node is `guest-control-health`, not `guest-ssh-readiness`.
-> Per-VM SSH keys are retained only for the remaining compatibility
-> surfaces (notably `usb attach --apply`). There is no separate
-> guest-control field on `d2b status` yet. The original decision
-> text below is preserved as the historical record.
+> **Historical record.** U10 removed the standalone Guest daemon, this
+> feature-specific ttRPC contract, its generated bindings, token-share
+> broker operation, and SSH compatibility path. Current Guest control uses
+> the enrolled ComponentSession and signed target-local Processes described
+> by ADR 0043. The original decision text below is retained only to explain
+> the superseded design and migration history; it is not a current contract.
 
 ## Context
 
@@ -314,8 +305,8 @@ when the interactive path is usable (the PTY spawner is wired, which requires
 the exec-runner helper to be present).
 
 The full interactive contract - mode matrix, helper-exec handshake, merged
-output, VEOF close, resize/signal ordering, and teardown - is specified in the
-[interactive TTY exec reference](../reference/guest-control-exec-interactive-tty.md).
+output, VEOF close, resize/signal ordering, and teardown - is now covered by
+the current [CLI contract](../reference/cli-contract.md#exec).
 
 ## Feasibility gate
 
@@ -482,7 +473,7 @@ for failing a must-pass row.
   enums, never guest-derived free-form text or transport/socket paths.
   The closed W0 enum set and allowed state/reason/remediation mappings
   live in
-  [the chunked stdio reference](../reference/guest-control-exec-io-chunked-stdio.md#health-status-model).
+  [the current CLI contract](../reference/cli-contract.md#exec).
   W0 reserves these states for the implementing schema: `healthy`,
   `degraded`, `unavailable-old-generation`, `listener-absent`,
   `transport-unreachable`, `auth-failed`, `protocol-mismatch`, and

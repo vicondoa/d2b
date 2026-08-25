@@ -35,7 +35,7 @@ const PROTECTED_CODEOWNERS_RULES: &[&str] = &[
     "/packages/xtask/tests/policy_production_closure.rs @vicondoa",
     "/Makefile @vicondoa",
     "/flake.nix @vicondoa",
-    "/nixos-modules/guest-control.nix @vicondoa",
+    "/nixos-modules/component-session.nix @vicondoa",
     "/nixos-modules/host-activation.nix @vicondoa",
     "/nixos-modules/host-broker.nix @vicondoa",
     "/nixos-modules/host-daemon.nix @vicondoa",
@@ -302,7 +302,7 @@ fn checked_in_contexts_are_nonempty_and_structurally_valid() {
     let paths = closure_paths();
     assert_eq!(
         paths.len(),
-        16,
+        14,
         "expected both systems and all production contexts"
     );
     for path in paths {

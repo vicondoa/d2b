@@ -26,10 +26,7 @@ realm workload row that points at it:
 
 ```nix
 d2b.vms.work = {
-  ssh.user = "alice";
-
-  guest.control.enable = true;
-  guest.exec.enable = true;
+  guest.componentSession.enable = true;
   guest.shell.enable = true;
 };
 
@@ -115,7 +112,7 @@ this rendered shape.
 
 When realm workload metadata is present, d2b-wlterm groups shell-capable
 workloads by realm and displays canonical targets such as
-`shellbox.work.d2b`. It still uses the d2bd public socket and guest-control
+`shellbox.work.d2b`. It still uses the d2bd public socket and component-session
 capability checks; it does not read root-owned d2b bundle artifacts directly.
 
 ## Configure Waybar
@@ -152,5 +149,5 @@ d2b guest status shellbox
 ```
 
 If `d2b-wlterm list` reports a typed shell capability error, confirm that the
-VM has `guest.control.enable`, `guest.exec.enable`, and `guest.shell.enable`
-set and that the VM was restarted after switching the host configuration.
+VM has `guest.componentSession.enable` and `guest.shell.enable` set and that
+the VM was restarted after switching the host configuration.

@@ -76,7 +76,7 @@ exports_files([
     "surfaces/desktop-interaction.nix",
     "surfaces/eval-jobs.nix",
     "surfaces/examples.nix",
-    "surfaces/guest-control.nix",
+    "surfaces/component-session.nix",
     "surfaces/network.nix",
     "surfaces/process-sandbox.nix",
     "surfaces/provider-catalog.nix",

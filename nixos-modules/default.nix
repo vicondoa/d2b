@@ -73,7 +73,6 @@ in
     ../packages/d2b-provider-volume-local/nix/store.nix
     ./manifest.nix
     ./bundle.nix
-    ./guest-control-host.nix
     ./host-json.nix
     ./processes-json.nix
     ../packages/d2b-provider-volume-local/nix/storage-json.nix

@@ -147,8 +147,8 @@ remediation; do not work around it by moving the gate into `/tmp` or another
 user-owned location.
 
 Current live-host scripts include `d2b-store.sh` for per-VM store
-adoption and `usbip-guestd-lifecycle.sh` for USBIP guestd attach/detach across
-a `d2bd` restart. The USBIP script requires
+adoption and `usbip-lifecycle.sh` for USBIP attach/detach across a `d2bd`
+restart. The USBIP script requires
 `D2B_USBIP_VM=<vm>` and `D2B_USBIP_BUSID=<busid>` and uses only `d2b usb`
 verbs for USB state changes.
 

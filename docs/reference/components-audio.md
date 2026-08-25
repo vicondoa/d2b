@@ -24,9 +24,9 @@ Console and audio are provider-capability-aware daemon surfaces; the
 per-provider capability matrix and enforcement model are documented in
 [provider capability matrix](./provider-capability-matrix.md) and
 [ADR 0041](../adr/0041-console-and-audio-controls.md). The matrix covers
-Cloud Hypervisor NixOS VMs (vhost-user-sound + guestd enforcement),
+Cloud Hypervisor NixOS VMs (vhost-user-sound + target-local Process enforcement),
 qemu-media targets (host/qemu subset only; guest enforcement unsupported),
-and ACA sandboxes (remote guestd policy only; no local host mutations).
+and ACA sandboxes (remote provider-agent policy only; no local host mutations).
 
 Each VM has independent **mic** and **speaker** grants. The
 host-side state file is `/var/lib/d2b/vms/<vm>/state/audio-state.json`.

@@ -497,7 +497,7 @@ let
                 Primary application/launch command for this workload.
                 Emitted as the `Exec=` field in generated `.desktop`
                 metadata.  When null, d2b derives a default based on the
-                workload kind and available guest-control capabilities.
+                workload kind and available component-session capabilities.
               '';
             };
 

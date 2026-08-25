@@ -2,7 +2,7 @@ load("@crates//:defs.bzl", "all_crate_deps")
 load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test", "rust_doc_test")
 
 exports_files(
-    ["BUILD.bazel", "Cargo.toml", "guest_control.proto"],
+    ["BUILD.bazel", "Cargo.toml"],
     visibility = ["//visibility:public"],
 )
 
@@ -11,21 +11,6 @@ d2b_contracts_control_srcs = glob(["src/**/*.rs"], allow_empty = True)
 filegroup(
     name = "daemon_api_sources",
     srcs = glob(["src/*.rs"]),
-    visibility = ["//visibility:public"],
-)
-
-filegroup(
-    name = "guest_control_proto_source",
-    srcs = ["guest_control.proto"],
-    visibility = ["//visibility:public"],
-)
-
-filegroup(
-    name = "guest_proto_generated",
-    srcs = [
-        "src/generated/guest_control.rs",
-        "src/generated/mod.rs",
-    ],
     visibility = ["//visibility:public"],
 )
 
@@ -38,14 +23,6 @@ rust_library(
         "//packages/d2b-contracts:d2b_contracts",
         "//packages/d2b-contracts-resource:d2b_contracts_resource",
     ] + all_crate_deps(normal = True, cargo_only = True),
-)
-
-rust_test(
-    name = "guest_control",
-    srcs = ["tests/guest_control.rs"],
-    compile_data = ["Cargo.toml", "guest_control.proto"],
-    visibility = ["//visibility:public"],
-    deps = [":d2b_contracts_control"] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
 )
 
 rust_test(
@@ -70,7 +47,7 @@ rust_doc_test(
 
 filegroup(
     name = "cargo_workspace_sources",
-    srcs = ["guest_control.proto"] + glob(
+    srcs = glob(
         [
             "Cargo.lock",
             "Cargo.toml",

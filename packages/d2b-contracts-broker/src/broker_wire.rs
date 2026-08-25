@@ -10,7 +10,6 @@
 
 use d2b_contracts::audit_wire::validate_audit_page;
 pub use d2b_contracts::audit_wire::{AuditExportCursor, AuditExportEntry, AuditExportErrorCode};
-use d2b_contracts::auth_wire::AUTH_NONCE_LEN;
 pub use d2b_contracts::store_verify_wire::{
     StoreVerifyRequest, StoreVerifyResponse, StoreVerifyStatus, StoreVerifyUnknownReason,
 };
@@ -94,7 +93,6 @@ pub enum BrokerRequest {
     /// the bootstrap `Hello` shape so the connection layer doesn't need
     /// a side-channel.
     Hello(HelloRequest),
-    GuestControlSign(GuestControlSignRequest),
     InjectSecretById(SecretByIdRequest),
     LaunchMinijailChild(LaunchMinijailChildRequest),
     ModprobeIfAllowed(ModprobeIfAllowedRequest),
@@ -671,7 +669,6 @@ impl BrokerRequest {
             Self::DelegateCgroupV2(_) => "DelegateCgroupV2",
             Self::ExportBrokerAudit(_) => "ExportBrokerAudit",
             Self::Hello(_) => "Hello",
-            Self::GuestControlSign(_) => "GuestControlSign",
             Self::InjectSecretById(_) => "InjectSecretById",
             Self::LaunchMinijailChild(_) => "LaunchMinijailChild",
             Self::ModprobeIfAllowed(_) => "ModprobeIfAllowed",
@@ -762,7 +759,6 @@ impl BrokerRequest {
     pub fn opaque_target_id(&self) -> &'static str {
         match self {
             Self::Hello(_) => "daemon-handshake",
-            Self::GuestControlSign(_) => "guest-control-auth",
             Self::ValidateBundle => "bundle",
             Self::ResourceActivationAudit(_) => "resource-activation-audit",
             Self::ExportBrokerAudit(_) => "audit-log",
@@ -868,10 +864,6 @@ impl BrokerRequest {
             Self::DelegateCgroupV2(request) => (
                 request.scope_id.to_string(),
                 format!("{}:{}", self.op_name(), request.scope_id),
-            ),
-            Self::GuestControlSign(request) => (
-                request.vm_id.to_string(),
-                format!("{}:{}", self.op_name(), request.vm_id),
             ),
             Self::InjectSecretById(request)
             | Self::ReadSecretById(request)
@@ -1453,7 +1445,6 @@ pub const HOST_OPERATION_CATALOG: &[&str] = &[
     "DelegateCgroupV2",
     "ExportBrokerAudit",
     "Hello",
-    "GuestControlSign",
     "InjectSecretById",
     "LaunchMinijailChild",
     "ModprobeIfAllowed",
@@ -1760,7 +1751,6 @@ pub enum BrokerResponse {
     /// capability-negotiate and the broker can audit the connection
     /// without a separate side-channel.
     Hello(HelloResponse),
-    GuestControlSign(GuestControlSignResponse),
     QemuMediaEnroll(QemuMediaEnrollResponse),
     QemuMediaRefreshRegistry(QemuMediaRefreshRegistryResponse),
     QemuMediaBoot(QemuMediaHotplugResponse),
@@ -2102,114 +2092,6 @@ pub enum BrokerAuditSeverity {
 
 fn default_audit_export_limit() -> u32 {
     256
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
-#[serde(rename_all = "kebab-case")]
-pub enum GuestControlProofRole {
-    HostProof,
-    GuestProof,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
-#[serde(rename_all = "kebab-case")]
-pub enum GuestControlDirection {
-    HostToGuest,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
-#[serde(rename_all = "kebab-case")]
-pub enum GuestControlAuthPurpose {
-    GuestControlAuthV1,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(transparent)]
-pub struct GuestBootIdWire(pub String);
-
-impl GuestBootIdWire {
-    pub fn new(value: impl Into<String>) -> Self {
-        Self(value.into())
-    }
-
-    pub fn as_str(&self) -> &str {
-        &self.0
-    }
-}
-
-impl JsonSchema for GuestBootIdWire {
-    fn schema_name() -> String {
-        "GuestBootIdWire".to_owned()
-    }
-
-    fn json_schema(_gen: &mut schemars::r#gen::SchemaGenerator) -> schemars::schema::Schema {
-        schemars::schema::Schema::Object(schemars::schema::SchemaObject {
-            instance_type: Some(schemars::schema::SingleOrVec::Single(Box::new(
-                schemars::schema::InstanceType::String,
-            ))),
-            string: Some(Box::new(schemars::schema::StringValidation {
-                min_length: Some(1),
-                max_length: Some(128),
-                ..Default::default()
-            })),
-            ..Default::default()
-        })
-    }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct GuestControlSignRequest {
-    pub vm_id: VmId,
-    pub role: GuestControlProofRole,
-    pub protocol_version: u32,
-    pub direction: GuestControlDirection,
-    pub purpose: GuestControlAuthPurpose,
-    pub guest_control_port: u32,
-    #[serde(default)]
-    pub peer_cid: Option<u32>,
-    #[schemars(length(min = 32, max = 32))]
-    pub host_nonce: Vec<u8>,
-    #[schemars(length(min = 32, max = 32))]
-    pub guest_nonce: Vec<u8>,
-    pub guest_boot_id: GuestBootIdWire,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub capabilities_hash: Option<String>,
-    #[serde(default)]
-    pub tracing_span_id: Option<TracingSpanId>,
-}
-
-impl GuestControlSignRequest {
-    pub fn validate_shape(&self) -> Result<(), &'static str> {
-        if self.host_nonce.len() != AUTH_NONCE_LEN || self.guest_nonce.len() != AUTH_NONCE_LEN {
-            return Err("nonce-length");
-        }
-        if self.guest_boot_id.as_str().is_empty() || self.guest_boot_id.as_str().len() > 128 {
-            return Err("guest-boot-id");
-        }
-        match self.role {
-            GuestControlProofRole::HostProof if self.capabilities_hash.is_some() => {
-                Err("host-proof-capabilities-hash")
-            }
-            GuestControlProofRole::GuestProof => {
-                let Some(hash) = self.capabilities_hash.as_ref() else {
-                    return Err("guest-proof-missing-capabilities-hash");
-                };
-                if hash.is_empty() || hash.len() > 128 {
-                    return Err("capabilities-hash");
-                }
-                Ok(())
-            }
-            _ => Ok(()),
-        }
-    }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct GuestControlSignResponse {
-    #[schemars(length(min = 32, max = 32))]
-    pub tag: Vec<u8>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]

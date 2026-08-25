@@ -211,7 +211,7 @@ config with no reservation for the new VM.
 **Symptom.** The new VM boots (cloud-hypervisor + all sidecars reach
 process-alive), its tap attaches to `br-<env>-lan`, but it never gets
 its reserved DHCP lease, so it never reaches the network. d2b's
-`guest-ssh-readiness` node times out at the deadline and the whole VM
+`component-session-health` node times out at the deadline and the whole VM
 start **rolls back**. From the operator's seat the new VM "just won't
 start" with no obvious cause - the real fault is a stale sibling
 `sys-<env>-net`. Reproduced 2026-06-07 adding `work-ssd` to the `work`

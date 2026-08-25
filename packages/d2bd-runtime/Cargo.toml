@@ -42,7 +42,6 @@ serde.workspace = true
 serde_json.workspace = true
 sha2 = "0.10"
 socket2 = "0.5"
-subtle = "2.6"
 tokio = { version = "1", features = ["macros", "rt-multi-thread", "sync", "time", "net"] }
 tracing = "0.1"
 ttrpc = { version = "0.9.0", default-features = false, features = ["async", "sync"] }
@@ -53,4 +52,3 @@ d2b-core = { path = "../d2b-core", version = "0.0.0-bootstrap", features = ["tes
 d2b-core-controller = { path = "../d2b-core-controller", version = "0.0.0-bootstrap", features = ["test-support"] }
 regex = "1"
 tempfile = "3"
-tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }

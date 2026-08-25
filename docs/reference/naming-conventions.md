@@ -60,7 +60,7 @@ public workload target form is:
 During the v2 transition, `d2b.realms.<realm>.workloads.<workload>.legacyVmName`
 maps that public workload id to the existing local VM substrate. For example,
 `workloads.aad.legacyVmName = "work-aad"` makes `aad.work.d2b` resolve to the
-local `work-aad` VM for status and guest-control exec while preserving
+local `work-aad` VM for status and ComponentSession exec while preserving
 `/var/lib/d2b/vms/work-aad`.
 
 These constraints let the CLI, manifest, and host-side units resolve resources

@@ -1,23 +1,16 @@
 # ADR 0029: Migrate framework SSH operations to typed guest-control RPCs
 
-- Status: Accepted (Unreleased)
+- Status: Superseded by U10 ComponentSession clean break
 - Date: 2026-06-09
 - Related: ADR 0015 (daemon-only clean break), ADR 0024 (in-VM guest
   config editing, sync, and containment), ADR 0028 (guest-control plane
   over vsock)
 
-> **Update (W16) - current shipped reality.** This migration landed.
-> Framework readiness gates on the fail-closed `guest-control-health`
-> DAG node (authenticated guest-control `Health`), not the raw TCP-22
-> `guest-ssh-readiness` node. `config sync` reads the guest config
-> working copy over the typed bounded `ReadGuestFile` RPC; on a VM whose
-> running generation does not declare the guest-control transport it
-> **fails closed** - the operator SSH compatibility transport described
-> below is **not yet wired** into the command. `d2b vm konsole` now
-> runs over guest-control (no SSH) via the shipped admin-only `d2b
-> vm exec`. Per-VM SSH keys remain only for the surviving compatibility
-> surfaces (notably `usb attach --apply`). The original decision text
-> below is preserved as the historical record.
+> **Historical record.** U10 removed the feature-specific guest-control RPC,
+> standalone Guest daemon, and SSH compatibility route described here. Current
+> readiness and execution use the enrolled ComponentSession and signed
+> target-local Processes. The original decision text below is retained only as
+> migration history.
 
 ## Context
 

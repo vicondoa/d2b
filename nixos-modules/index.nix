@@ -846,8 +846,6 @@ let
         defaultName = vm.guest.shell.defaultName;
         maxSessions = vm.guest.shell.maxSessions;
         maxAttached = vm.guest.shell.maxAttached;
-        controlEnabled = vm.guest.control.enable;
-        execEnabled = vm.guest.exec.enable;
       }) shellVms;
     };
 

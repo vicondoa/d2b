@@ -1,10 +1,15 @@
 # ADR 0030: Guest exec runs as the workload user in a PAM login session
 
-- Status: Accepted (Unreleased)
+- Status: Accepted (historical implementation details superseded by U10)
 - Date: 2026-06-13
 - Related: ADR 0028 (guest-control plane over vsock), ADR 0029 (migrate
   framework SSH operations to typed guest-control RPCs), ADR 0015
   (daemon-only clean break)
+
+> **Current implementation note.** The workload-user and PAM-session invariant
+> remains, but U10 routes it through signed target-local Process resources and
+> ComponentSession rather than the standalone Guest daemon or guest-control
+> RPC described below.
 
 ## Context
 

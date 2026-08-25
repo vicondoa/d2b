@@ -319,6 +319,41 @@ fn matching_restart_adopts_and_stale_identity_quarantines_without_effects() {
 }
 
 #[test]
+fn binding_is_not_attached_until_the_guest_process_is_ready() {
+    let zone = uid("123e4567-e89b-42d3-a456-426614174000");
+    let mut port = FakePort {
+        observation: AttachmentObservation::Missing,
+        ..Default::default()
+    };
+    let mut service =
+        ServiceLifecycle::new(zone.clone(), uid("223e4567-e89b-42d3-a456-426614174001"));
+    service.activate(true, zone.clone(), &mut port).unwrap();
+    port.calls.clear();
+    let mut supervisor = UsbipSupervisor::new(service);
+    supervisor
+        .add_binding(BindingLifecycle::new(
+            zone.clone(),
+            zone,
+            BindingIdentity::from_controller(uid("323e4567-e89b-42d3-a456-426614174002")),
+        ))
+        .unwrap();
+
+    assert_eq!(
+        supervisor.activate_binding(0, &mut port),
+        Err(BindingLifecycleError::Transient)
+    );
+    assert_eq!(
+        port.calls,
+        [
+            "slot",
+            "proxy",
+            "ensure-attach-process",
+            "observe-attach-process",
+        ]
+    );
+}
+
+#[test]
 fn missing_restart_identity_drops_slot_and_proxy_before_reactivate() {
     let zone = uid("123e4567-e89b-42d3-a456-426614174000");
     let mut port = FakePort::default();
@@ -339,6 +374,10 @@ fn missing_restart_identity_drops_slot_and_proxy_before_reactivate() {
     supervisor
         .adopt_binding(0, AttachProcessIdentity::from_adapter(7, 11), &mut port)
         .unwrap();
+    port.observation = AttachmentObservation::Matching {
+        slot: BindingSlotLease::from_adapter([4; 16]),
+        proxy: BindingProxyLease::from_adapter([5; 16]),
+    };
     supervisor.activate_binding(0, &mut port).unwrap();
     assert_eq!(
         port.calls,
@@ -347,6 +386,7 @@ fn missing_restart_identity_drops_slot_and_proxy_before_reactivate() {
             "slot",
             "proxy",
             "ensure-attach-process",
+            "observe-attach-process",
         ]
     );
 }
@@ -378,6 +418,7 @@ fn binding_closes_its_process_before_service_unbinds_and_releases_authority() {
             "slot",
             "proxy",
             "ensure-attach-process",
+            "observe-attach-process",
             "delete-guest-endpoint",
             "delete-attach-process",
             "close-proxy",

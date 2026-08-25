@@ -61,7 +61,8 @@ Firefox-specific, browser-specific, or URL-specific fields. A shell item owns
 presentation metadata and selects persistent-shell semantics. This keeps
 provider routing common:
 
-- local VM exec items use authenticated guest control;
+- local VM exec items use authenticated ComponentSession and target-local
+  Process resources;
 - unsafe-local exec items use the same-uid helper;
 - provider-managed runtimes advertise or refuse configured launch;
 - shell items use the persistent-shell operation family.

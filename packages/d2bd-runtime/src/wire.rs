@@ -2,7 +2,7 @@ use crate::typed_error::{ErrorEnvelope, TypedError};
 use d2b_contracts::{FeatureFlag, Hello, HelloOk, HelloRejected, HelloRejectedReason, Version};
 use d2b_contracts_broker::broker_wire::ExportBrokerAuditResponse;
 use d2b_contracts_control::public_wire::{self, AuditResponse, AuthStatusResponse};
-use d2b_contracts_resource::v3::IfName;
+use d2b_contracts_resource::v3::{IfName, ResourceRef};
 use semver::{Version as SemverVersion, VersionReq};
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value, json};
@@ -54,8 +54,6 @@ pub enum Request {
     HostInstall(public_wire::HostInstallRequest),
     HostReconcile(public_wire::HostReconcileRequest),
     HostCutover(public_wire::HostCutoverRequest),
-    ReadGuestConfig(public_wire::ReadGuestConfigRequest),
-    Exec(public_wire::ExecOp),
     Console(public_wire::ConsoleOp),
     GatewayDisplay(public_wire::GatewayDisplayOp),
     Workload(public_wire::WorkloadOp),
@@ -116,8 +114,6 @@ impl Request {
             Self::HostInstall(_) => "hostInstall",
             Self::HostReconcile(_) => "hostReconcile",
             Self::HostCutover(_) => "hostCutover",
-            Self::ReadGuestConfig(_) => "readGuestConfig",
-            Self::Exec(_) => "exec",
             Self::Console(_) => "console",
             Self::GatewayDisplay(_) => "gatewayDisplay",
             Self::Workload(_) => "workload",
@@ -170,12 +166,25 @@ impl Request {
             | Self::KeysList
             | Self::KeysShow(_)
             | Self::UsbipProbe
-            | Self::ReadGuestConfig(_)
-            | Self::Exec(_)
             | Self::Console(_)
             | Self::GatewayDisplay(_)
             | Self::Workload(_)
             | Self::Audio(public_wire::AudioOp::Status(_)) => OpLockClass::ReadOnly,
+            Self::Resource(request)
+                if matches!(
+                    request.method(),
+                    Some("DeviceUsbAttach" | "DeviceUsbDetach")
+                ) =>
+            {
+                let target = request
+                    .fields
+                    .get("resourceRef")
+                    .and_then(Value::as_str)
+                    .and_then(|value| ResourceRef::parse(value).ok())
+                    .map(|value| value.to_canonical_string())
+                    .unwrap_or_else(|| "usb-resource".to_owned());
+                OpLockClass::PerVm(target)
+            }
             Self::Resource(request)
                 if matches!(
                     request.method(),
@@ -389,18 +398,6 @@ pub fn parse_request(bytes: &[u8]) -> Result<Request, TypedError> {
         "hostCutover" => serde_json::from_value(Value::Object(object.clone()))
             .map(Request::HostCutover)
             .map_err(map_parse_error),
-        "readGuestConfig" => serde_json::from_value(Value::Object(object.clone()))
-            .map(Request::ReadGuestConfig)
-            .map_err(map_parse_error),
-        "exec" => {
-            // `opId` is an envelope-level correlation id; it is not a
-            // field of the adjacently-tagged `ExecOp`, so strip it before the
-            // closed-enum deserialize.
-            object.remove("opId");
-            serde_json::from_value(Value::Object(object.clone()))
-                .map(Request::Exec)
-                .map_err(map_parse_error)
-        }
         "console" => {
             object.remove("opId");
             serde_json::from_value(Value::Object(object.clone()))
@@ -421,49 +418,6 @@ pub fn parse_request(bytes: &[u8]) -> Result<Request, TypedError> {
         })),
         _ => Err(TypedError::WireUnsupportedRequest { request_type }),
     }
-}
-
-/// Extract the envelope-level `opId` from an exec request frame, defaulting to
-/// `0` when absent. The owner connection echoes this id on the matching
-/// response so a long-poll reply and an urgent control reply can be correlated
-/// out of order without the CLI mismatching frames.
-pub fn exec_op_id(bytes: &[u8]) -> u64 {
-    serde_json::from_slice::<Value>(bytes)
-        .ok()
-        .and_then(|value| value.get("opId").and_then(Value::as_u64))
-        .unwrap_or(0)
-}
-
-/// Parse an exec op frame into its correlating `opId` and the multiplexed op.
-/// Used by the owner reader so it can dispatch each op to the session worker
-/// without blocking on the previous op's reply.
-pub fn parse_exec_op(bytes: &[u8]) -> Result<(u64, public_wire::ExecOp), TypedError> {
-    let mut value: Value =
-        serde_json::from_slice(bytes).map_err(|err| TypedError::WireInvalidFrame {
-            detail: err.to_string(),
-        })?;
-    let object = value
-        .as_object_mut()
-        .ok_or_else(|| TypedError::WireInvalidFrame {
-            detail: "request frame must be a JSON object".to_owned(),
-        })?;
-    let request_type = object
-        .get("type")
-        .and_then(Value::as_str)
-        .ok_or_else(|| TypedError::WireInvalidFrame {
-            detail: "missing request type".to_owned(),
-        })?
-        .to_owned();
-    if request_type != "exec" {
-        return Err(TypedError::WireUnsupportedRequest { request_type });
-    }
-    object.remove("type");
-    let op_id = object
-        .remove("opId")
-        .and_then(|value| value.as_u64())
-        .unwrap_or(0);
-    let op = serde_json::from_value(Value::Object(object.clone())).map_err(map_parse_error)?;
-    Ok((op_id, op))
 }
 
 pub fn negotiate_version(
@@ -614,20 +568,6 @@ pub fn mutating_verb_response(payload: public_wire::MutatingVerbResponse) -> Val
     value
 }
 
-/// Serialize a `ReadGuestConfigResponse` as the daemon wire frame the CLI
-/// `config sync` client expects. The `contentBase64` field is the standard
-/// padded base64 of the raw guest config bytes.
-pub fn read_guest_config_response(payload: public_wire::ReadGuestConfigResponse) -> Value {
-    let mut value = serde_json::to_value(&payload).unwrap_or_else(|_| json!({}));
-    if let Some(obj) = value.as_object_mut() {
-        obj.insert(
-            "type".to_owned(),
-            Value::String("readGuestConfigResponse".to_owned()),
-        );
-    }
-    value
-}
-
 /// Serialize an `ExecOpResponse` as the `execResponse` daemon wire frame the
 /// CLI `vm exec` owner connection expects. The adjacently-tagged
 /// `{ "op": …, "result": … }` body is preserved and a `type` tag is added.
@@ -635,15 +575,6 @@ pub fn exec_response(payload: &public_wire::ExecOpResponse) -> Value {
     let mut value = serde_json::to_value(payload).unwrap_or_else(|_| json!({}));
     if let Some(obj) = value.as_object_mut() {
         obj.insert("type".to_owned(), Value::String("execResponse".to_owned()));
-    }
-    value
-}
-
-/// `execResponse` frame tagged with the correlating envelope `opId`.
-pub fn exec_response_with_id(op_id: u64, payload: &public_wire::ExecOpResponse) -> Value {
-    let mut value = exec_response(payload);
-    if let Some(obj) = value.as_object_mut() {
-        obj.insert("opId".to_owned(), Value::from(op_id));
     }
     value
 }
@@ -680,18 +611,6 @@ pub fn audio_response(payload: &public_wire::AudioOpResponse) -> Value {
             "type".to_owned(),
             Value::String("audioOpResponse".to_owned()),
         );
-    }
-    value
-}
-
-/// `error` frame tagged with the correlating envelope `opId` so the owner
-/// connection can return an out-of-order op error without the CLI mismatching
-/// it against a different in-flight op.
-pub fn error_frame_with_id(op_id: u64, error: &TypedError) -> Value {
-    let mut value =
-        serde_json::to_value(error_frame(error)).unwrap_or_else(|_| json!({ "type": "error" }));
-    if let Some(obj) = value.as_object_mut() {
-        obj.insert("opId".to_owned(), Value::from(op_id));
     }
     value
 }
@@ -734,6 +653,18 @@ mod tests {
         let frame = br#"{"type":"shell","op":"list","args":{"vm":"corp-vm"}}"#;
         let error = parse_request(frame).expect_err("retired shell request must reject");
         assert_eq!(error.kind(), "wire-unsupported-request");
+    }
+
+    #[test]
+    fn retired_component_session_requests_are_not_dispatched() {
+        for frame in [
+            br#"{"type":"exec","op":"list","args":{"vm":"corp-vm"}}"#.as_slice(),
+            br#"{"type":"readGuestConfig","vm":"corp-vm"}"#.as_slice(),
+        ] {
+            let error =
+                parse_request(frame).expect_err("retired component-session request must reject");
+            assert_eq!(error.kind(), "wire-unsupported-request");
+        }
     }
 
     #[test]

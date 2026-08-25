@@ -3,7 +3,7 @@ use d2b_contracts_resource::v3::{
     ZoneId,
 };
 use d2b_provider_transport_vsock::{
-    GuestControlKey, GuestIdentity, MAX_REPLAY_ENTRIES, PeerCid, SessionAuthority, SessionProof,
+    SessionKey, GuestIdentity, MAX_REPLAY_ENTRIES, PeerCid, SessionAuthority, SessionProof,
     SessionRejectReason, SessionState,
 };
 use ring::rand::{SystemRandom, generate};
@@ -26,7 +26,7 @@ fn identity(cid: u32) -> GuestIdentity {
 
 #[test]
 fn correct_cid_signature_guest_zone_and_session_establish_ready() {
-    let key = GuestControlKey::from_core([7; 32]);
+    let key = SessionKey::from_core([7; 32]);
     let expected = identity(42);
     let mut authority = SessionAuthority::new(expected.clone(), key.clone(), 3);
     let proof = SessionProof::sign(&key, &expected, nonce_for(1), 3);
@@ -41,7 +41,7 @@ fn correct_cid_signature_guest_zone_and_session_establish_ready() {
 
 #[test]
 fn cid_reuse_and_replay_are_rejected() {
-    let key = GuestControlKey::from_core([8; 32]);
+    let key = SessionKey::from_core([8; 32]);
     let expected = identity(42);
     let mut authority = SessionAuthority::new(expected.clone(), key.clone(), 3);
     let proof = SessionProof::sign(&key, &expected, nonce_for(2), 3);
@@ -75,7 +75,7 @@ fn cid_reuse_and_replay_are_rejected() {
 
 #[test]
 fn replay_cache_refuses_new_sessions_at_its_bound() {
-    let key = GuestControlKey::from_core([3; 32]);
+    let key = SessionKey::from_core([3; 32]);
     let expected = identity(42);
     let mut authority = SessionAuthority::new(expected.clone(), key.clone(), 3);
     for index in 0..MAX_REPLAY_ENTRIES {
@@ -100,8 +100,8 @@ fn replay_cache_refuses_new_sessions_at_its_bound() {
 #[test]
 fn guest_zone_and_signature_mismatches_are_refused() {
     let expected = identity(42);
-    let key = GuestControlKey::from_core([3; 32]);
-    let wrong_key = GuestControlKey::from_core([4; 32]);
+    let key = SessionKey::from_core([3; 32]);
+    let wrong_key = SessionKey::from_core([4; 32]);
     let mut authority = SessionAuthority::new(expected.clone(), key.clone(), 3);
 
     let guest = GuestIdentity::new(

@@ -14,10 +14,30 @@ let
     mkdir -p "$out/bin"
     touch "$out/bin/d2b-broker"
   '';
+  shellRunner = pkgs.runCommand "d2b-guest-shell-runner-component-session-test" { } ''
+    mkdir -p "$out/bin"
+    touch "$out/bin/d2b-guest-shell-runner"
+  '';
   optionSinks = { lib, ... }: {
+    options.assertions = lib.mkOption {
+      type = lib.types.listOf lib.types.anything;
+      default = [ ];
+    };
+    options.d2b.sshUser = lib.mkOption {
+      type = lib.types.nullOr lib.types.str;
+      default = null;
+    };
     options.environment.systemPackages = lib.mkOption {
       type = lib.types.listOf lib.types.package;
       default = [ ];
+    };
+    options.environment.etc = lib.mkOption {
+      type = lib.types.attrsOf lib.types.anything;
+      default = { };
+    };
+    options.security.pam.services = lib.mkOption {
+      type = lib.types.attrsOf lib.types.anything;
+      default = { };
     };
     options.systemd.services = lib.mkOption {
       type = lib.types.attrsOf lib.types.anything;
@@ -36,22 +56,19 @@ let
       default = { };
     };
   };
-  hostTools = { inherit d2bd broker; };
+  hostTools = {
+    inherit d2bd broker;
+    d2b-guest-shell-runner-static = shellRunner;
+  };
+  componentSessionModule = import (flakeRoot + "/nixos-modules/component-session.nix");
   evaluated = (mkGuestEval {
     modules = [
       optionSinks
-      (import (flakeRoot + "/nixos-modules/guest-control.nix"))
+      componentSessionModule
       ({ ... }: {
-        d2b.guestControl = {
+        d2b.componentSession = {
           enable = true;
           guestConfigPath = null;
-          usbipPath = null;
-          exec = {
-            enable = false;
-            execUser = null;
-            detachedMaxRuntimeSec = 0;
-            interactiveMaxRuntimeSec = 0;
-          };
           shell = {
             enable = false;
             defaultName = "default";
@@ -67,8 +84,44 @@ let
       name = "guest";
     };
   }).config;
+  shellModule = {
+    d2b.componentSession = {
+      enable = true;
+      guestConfigPath = null;
+      shell = {
+        enable = true;
+        defaultName = "default";
+        maxSessions = 8;
+        maxAttached = 1;
+      };
+    };
+  };
+  mkShellEval = user:
+    (mkGuestEval {
+      modules = [
+        optionSinks
+        componentSessionModule
+        shellModule
+      ] ++ lib.optional (user != null) {
+        d2b.sshUser = user;
+      };
+      specialArgs = {
+        d2bInputs = { };
+        d2bHostTools = hostTools;
+        name = "guest";
+      };
+    }).config;
+  validShell = mkShellEval "alice";
+  missingShell = mkShellEval null;
+  rootShell = mkShellEval "root";
   service = evaluated.systemd.services.d2bd-guest.serviceConfig;
   packagePaths = map toString evaluated.environment.systemPackages;
+  shellService = validShell.systemd.services.d2b-shpool-daemon.serviceConfig;
+  assertionMessages = cfg:
+    map (assertion: assertion.message)
+      (lib.filter (assertion: !(assertion.assertion or false)) cfg.assertions);
+  hasFailure = cfg: needle:
+    lib.any (message: lib.hasInfix needle message) (assertionMessages cfg);
 in
 {
   "guest-component-session/starts-d2bd-guest" = {
@@ -110,7 +163,7 @@ in
     };
   };
 
-  "guest-component-session/does-not-install-legacy-guestd" = {
+  "guest-component-session/does-not-install-retired-guest-agent" = {
     expr = {
       package = lib.any (path: lib.hasInfix "d2b-guestd" path) packagePaths;
       service = builtins.hasAttr "d2b-guestd" evaluated.systemd.services;
@@ -121,5 +174,30 @@ in
       service = false;
       credential = false;
     };
+  };
+
+  "guest-component-session/shell-enabled-valid-user-wires-service" = {
+    expr = {
+      service = builtins.hasAttr "d2b-shpool-daemon" validShell.systemd.services;
+      user = shellService.User;
+      pam = builtins.hasAttr "d2b-shpool-daemon" validShell.security.pam.services;
+      linger = validShell.users.users.alice.linger;
+    };
+    expected = {
+      service = true;
+      user = "alice";
+      pam = true;
+      linger = true;
+    };
+  };
+
+  "guest-component-session/shell-enabled-rejects-missing-user" = {
+    expr = hasFailure missingShell "requires a configured non-root workload user";
+    expected = true;
+  };
+
+  "guest-component-session/shell-enabled-rejects-root-user" = {
+    expr = hasFailure rootShell "requires a configured non-root workload user";
+    expected = true;
   };
 }

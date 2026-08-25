@@ -29,20 +29,16 @@ d2b_broker_shared_deps = [
     "//packages/d2b-audit:d2b_audit",
     "//packages/d2b-contracts:d2b_contracts",
     "//packages/d2b-contracts-broker:d2b_contracts_broker",
-    "//packages/d2b-contracts-control:d2b_contracts_control",
     "//packages/d2b-realm-core:d2b_realm_core",
     "//packages/d2b-contracts-resource:d2b_contracts_resource",
-        "//packages/d2b-contracts-zone-session:d2b_contracts_zone_session",
 ]
 
 d2b_broker_test_support_deps = [
     "//packages/d2b-audit:d2b_audit_test_support",
     "//packages/d2b-contracts:d2b_contracts_test_support",
     "//packages/d2b-contracts-broker:d2b_contracts_broker",
-    "//packages/d2b-contracts-control:d2b_contracts_control",
     "//packages/d2b-realm-core:d2b_realm_core",
     "//packages/d2b-contracts-resource:d2b_contracts_resource",
-        "//packages/d2b-contracts-zone-session:d2b_contracts_zone_session",
 ]
 
 rust_library(
@@ -127,7 +123,6 @@ rust_binary(
     visibility = ["//visibility:public"],
     deps = [
         "//packages/d2b-contracts-resource:d2b_contracts_resource",
-        "//packages/d2b-contracts-zone-session:d2b_contracts_zone_session",
         ":d2b_broker",
     ] + all_crate_deps(normal = True, cargo_only = True),
 )
@@ -140,7 +135,6 @@ rust_binary(
     visibility = ["//visibility:public"],
     deps = [
         "//packages/d2b-contracts-resource:d2b_contracts_resource",
-        "//packages/d2b-contracts-zone-session:d2b_contracts_zone_session",
         ":d2b_broker_layer1_bootstrap",
     ] + all_crate_deps(normal = True, cargo_only = True),
 )
@@ -156,7 +150,6 @@ rust_test(
     visibility = ["//visibility:public"],
     deps = [
         "//packages/d2b-contracts-resource:d2b_contracts_resource",
-        "//packages/d2b-contracts-zone-session:d2b_contracts_zone_session",
         ":d2b_broker_test_support",
         "//packages/d2b-contracts:d2b_contracts_test_support",
         "//packages/d2b-core:d2b_core_test_support",
@@ -179,7 +172,6 @@ rust_test(
     visibility = ["//visibility:public"],
     deps = [
         "//packages/d2b-contracts-resource:d2b_contracts_resource",
-        "//packages/d2b-contracts-zone-session:d2b_contracts_zone_session",
         "//packages/d2b-contracts:d2b_contracts_test_support",
     ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
 )
@@ -195,7 +187,6 @@ rust_test(
     visibility = ["//visibility:public"],
     deps = [
         "//packages/d2b-contracts-resource:d2b_contracts_resource",
-        "//packages/d2b-contracts-zone-session:d2b_contracts_zone_session",
         "//packages/d2b-contracts:d2b_contracts_test_support",
         "//packages/d2b-contracts-broker:d2b_contracts_broker",
     ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
@@ -217,7 +208,6 @@ rust_test(
     visibility = ["//visibility:public"],
     deps = [
         "//packages/d2b-contracts-resource:d2b_contracts_resource",
-        "//packages/d2b-contracts-zone-session:d2b_contracts_zone_session",
     ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
 )
 
@@ -232,7 +222,6 @@ rust_test(
     visibility = ["//visibility:public"],
     deps = [
         "//packages/d2b-contracts-resource:d2b_contracts_resource",
-        "//packages/d2b-contracts-zone-session:d2b_contracts_zone_session",
         ":d2b_broker_test_support",
         "//packages/d2b-contracts:d2b_contracts_test_support",
         "//packages/d2b-contracts-broker:d2b_contracts_broker",
@@ -251,7 +240,6 @@ rust_test(
     visibility = ["//visibility:public"],
     deps = [
         "//packages/d2b-contracts-resource:d2b_contracts_resource",
-        "//packages/d2b-contracts-zone-session:d2b_contracts_zone_session",
         ":d2b_broker_test_support",
     ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
 )
@@ -267,7 +255,6 @@ rust_test(
     visibility = ["//visibility:public"],
     deps = [
         "//packages/d2b-contracts-resource:d2b_contracts_resource",
-        "//packages/d2b-contracts-zone-session:d2b_contracts_zone_session",
         ":d2b_broker_test_support",
         "//packages/d2b-contracts:d2b_contracts_test_support",
         "//packages/d2b-contracts-broker:d2b_contracts_broker",
@@ -287,7 +274,6 @@ rust_test(
     visibility = ["//visibility:public"],
     deps = [
         "//packages/d2b-contracts-resource:d2b_contracts_resource",
-        "//packages/d2b-contracts-zone-session:d2b_contracts_zone_session",
         ":d2b_broker_fake_backends_test_support",
     ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
 )
@@ -303,7 +289,6 @@ rust_test(
     visibility = ["//visibility:public"],
     deps = [
         "//packages/d2b-contracts-resource:d2b_contracts_resource",
-        "//packages/d2b-contracts-zone-session:d2b_contracts_zone_session",
         ":d2b_broker_test_support",
     ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
 )
@@ -319,7 +304,6 @@ rust_test(
     visibility = ["//visibility:public"],
     deps = [
         "//packages/d2b-contracts-resource:d2b_contracts_resource",
-        "//packages/d2b-contracts-zone-session:d2b_contracts_zone_session",
         ":d2b_broker_test_support",
         "//packages/d2b-contracts:d2b_contracts_test_support",
         "//packages/d2b-contracts-broker:d2b_contracts_broker",
@@ -344,7 +328,6 @@ rust_test(
     visibility = ["//visibility:public"],
     deps = [
         "//packages/d2b-contracts-resource:d2b_contracts_resource",
-        "//packages/d2b-contracts-zone-session:d2b_contracts_zone_session",
         ":d2b_broker_test_support",
         "//packages/d2b-contracts:d2b_contracts_test_support",
         "//packages/d2b-contracts-broker:d2b_contracts_broker",
@@ -362,7 +345,6 @@ rust_test(
     visibility = ["//visibility:public"],
     deps = [
         "//packages/d2b-contracts-resource:d2b_contracts_resource",
-        "//packages/d2b-contracts-zone-session:d2b_contracts_zone_session",
         ":d2b_broker_test_support",
     ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
 )
@@ -382,7 +364,6 @@ rust_test(
     visibility = ["//visibility:public"],
     deps = [
         "//packages/d2b-contracts-resource:d2b_contracts_resource",
-        "//packages/d2b-contracts-zone-session:d2b_contracts_zone_session",
         ":d2b_broker_test_support",
         "//packages/d2b-contracts:d2b_contracts_test_support",
         "//packages/d2b-contracts-broker:d2b_contracts_broker",
@@ -401,7 +382,6 @@ rust_test(
     visibility = ["//visibility:public"],
     deps = [
         "//packages/d2b-contracts-resource:d2b_contracts_resource",
-        "//packages/d2b-contracts-zone-session:d2b_contracts_zone_session",
         ":d2b_broker_test_support",
         "//packages/d2b-contracts:d2b_contracts_test_support",
         "//packages/d2b-contracts-broker:d2b_contracts_broker",
@@ -421,7 +401,6 @@ rust_test(
     tags = broker_test_tags(),
     deps = [
         "//packages/d2b-contracts-resource:d2b_contracts_resource",
-        "//packages/d2b-contracts-zone-session:d2b_contracts_zone_session",
     ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
 )
 
@@ -483,7 +462,6 @@ rust_test(
         "//packages/d2b-contracts:d2b_contracts_test_support",
         "//packages/d2b-contracts-broker:d2b_contracts_broker",
         "//packages/d2b-contracts-resource:d2b_contracts_resource",
-        "//packages/d2b-contracts-zone-session:d2b_contracts_zone_session",
         ":d2b_broker_test_support",
     ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
 )

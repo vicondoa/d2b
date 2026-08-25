@@ -1991,15 +1991,15 @@ pub(crate) fn policy_ref_device_classes(
         // virtiofsd accesses /dev/fuse via read/write; FUSE_NO_IOCTL
         // sentinel → permissive BPF (FUSE mount handshake needs ioctls).
         "w1-virtiofsd" => Some(&[DeviceClass::Fuse]),
-        // host-reconcile, store-virtiofs-preflight, guest-control-health:
+        // host-reconcile, store-virtiofs-preflight, component-session-health:
         // no device binds → permissive BPF. host-reconcile and
         // store-virtiofs-preflight run the nix toolchain (many ioctls for
-        // terminal/file operations); guest-control-health is the daemon-side
-        // authenticated Health probe, which speaks ttRPC over the guest-control
+        // terminal/file operations); component-session-health is the daemon-side
+        // authenticated Health probe, which speaks ttRPC over the component-session
         // vsock and uses connect(2)/socket ioctls.
         "w1-host-reconcile"
         | "w1-store-virtiofs-preflight"
-        | "w1-guest-control-health"
+        | "w1-component-session-health"
         | "w1-activation-nixos-runner" => {
             Some(&[])
         }
@@ -2284,7 +2284,7 @@ fn setfacl_fd_safe(path: &Path, acl_spec: &str, kind: AclPathKind) -> Result<(),
 }
 
 /// The fd-safe setfacl stage that failed. A closed-set classification so
-/// guest-control callers can build path-free, acl-spec-free error
+/// component-session callers can build path-free, acl-spec-free error
 /// details (the raw path / acl spec never escapes into logs or audit).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum SetfaclStage {
@@ -2299,9 +2299,9 @@ enum SetfaclStage {
 /// `legacy_detail` carries the historical path-bearing message for the
 /// observability/device/session callers that already embed paths in
 /// their error strings. The structured `stage` / `errno_kind` /
-/// `raw_os_error` fields let the guest-control path build a path-free,
+/// `raw_os_error` fields let the component-session path build a path-free,
 /// acl-spec-free detail that satisfies the hash-only observability
-/// contract. The guest-control formatter MUST NOT read `legacy_detail`.
+/// contract. The component-session formatter MUST NOT read `legacy_detail`.
 #[derive(Debug, PartialEq, Eq)]
 struct SetfaclFailure {
     stage: SetfaclStage,
@@ -2320,37 +2320,19 @@ impl SetfaclFailure {
         }
     }
 
-    /// Path-free, acl-spec-free failure detail for the guest-control
+    /// Path-free, acl-spec-free failure detail for the component-session
     /// observability contract. Carries only the closed-set operation
     /// label, target class, daemon principal, failed stage, and the
     /// numeric errno / `io::ErrorKind`. Never the raw socket / state-dir
     /// path or the acl-spec string.
-    fn guest_control_detail(&self, op_label: &str, target_class: &str) -> String {
+    fn component_session_detail(&self, op_label: &str, target_class: &str) -> String {
         let errno = self
             .raw_os_error
             .map(|code| code.to_string())
             .unwrap_or_else(|| "none".to_owned());
         format!(
-            "guest-control vsock daemon ACL {op_label} on {target_class} failed: \
-             principal={GUEST_CONTROL_DAEMON_PRINCIPAL} stage={} kind={:?} errno={errno}",
-            self.stage_label(),
-            self.errno_kind,
-        )
-    }
-
-    /// Path-free detail for the guest-control fs-share (`d2b-gctl`) consumer
-    /// ACL path. The consumer is the per-VM cloud-hypervisor runner (not the
-    /// daemon), so this reports the CH-runner principal class rather than
-    /// `d2bd`. Carries only closed-set op/target/stage/errno labels -
-    /// never the raw socket/state-dir path, the acl-spec, or a uid-by-value.
-    fn guest_control_fs_detail(&self, op_label: &str, target_class: &str) -> String {
-        let errno = self
-            .raw_os_error
-            .map(|code| code.to_string())
-            .unwrap_or_else(|| "none".to_owned());
-        format!(
-            "guest-control fs-share consumer ACL {op_label} on {target_class} failed: \
-             principal={GUEST_CONTROL_FS_CONSUMER_PRINCIPAL} stage={} kind={:?} errno={errno}",
+            "component-session vsock daemon ACL {op_label} on {target_class} failed: \
+             principal={COMPONENT_SESSION_DAEMON_PRINCIPAL} stage={} kind={:?} errno={errno}",
             self.stage_label(),
             self.errno_kind,
         )
@@ -2444,7 +2426,7 @@ fn setfacl_fd_safe_op_classed(
 /// path was absent). The returned identity is consumed by path-free
 /// audit hashing so audit records never carry raw socket/state-dir
 /// paths. The error string is the historical path-bearing form for
-/// the observability/device/session callers; guest-control callers use
+/// the observability/device/session callers; component-session callers use
 /// [`setfacl_fd_safe_op_classed`] for a path-free detail instead.
 fn setfacl_fd_safe_op(
     path: &Path,
@@ -2962,8 +2944,7 @@ fn refresh_spawn_runner_acls(plan: &SpawnRunnerPlan) -> Result<(), LiveHandlerEr
         }
     }
     refresh_obs_vsock_acl(plan)?;
-    refresh_guest_control_vsock_acl(plan)?;
-    refresh_guest_control_fs_acl(plan)?;
+    refresh_component_session_vsock_acl(plan)?;
 
     Ok(())
 }
@@ -3001,40 +2982,17 @@ fn grant_daemon_api_socket_acl(api_socket: PathBuf) {
     });
 }
 
-/// The system principal the framework grants daemon-side guest-control
+/// The system principal the framework grants daemon-side component-session
 /// vsock access to. The `d2bd` daemon owns the per-VM lifecycle DAG
-/// and is the only host process that connects to the guest-control
+/// and is the only host process that connects to the component-session
 /// vsock socket for the readiness probe / config-sync over the bridge.
-const GUEST_CONTROL_DAEMON_PRINCIPAL: &str = "d2bd";
-
-/// The runner principal-class the framework grants guest-control fs-share
-/// (`d2b-gctl`) connect access to: the per-VM cloud-hypervisor runner. The
-/// `d2b-gctl` token virtiofs share is the only CROSS-PRINCIPAL fs share -
-/// it is served by the narrower `gctlfs` principal (ADR 0021), so its 0700
-/// socket is owned by `gctlfs`, not the CH runner. CH connects to that
-/// vhost-user fs backend socket during device-init (the `--fs
-/// socket=...,tag=d2b-gctl` element emitted by `processes-json.nix`), but
-/// the inherited `default:u:$ch_uid` grant is masked out by the 0700
-/// socket's `mask::---`. This label names the consumer for the hash-only
-/// audit without leaking a uid-by-value.
-const GUEST_CONTROL_FS_CONSUMER_PRINCIPAL: &str = "cloud-hypervisor-runner";
-
-/// The setfacl `-m` spec that lifts the `d2b-gctl` socket's masked-out
-/// CH-runner named entry: grant the runner uid `rw` AND pin the ACL mask
-/// to `rw`. The explicit `m::rw` is load-bearing - without it the 0700
-/// socket's `mask::---` keeps the named entry's effective perms at `---`
-/// and CH's connect still EACCESes. The mask grants no execute and does
-/// not touch owner/owning-group/other, so it raises effective perms for
-/// the CH-runner named entry only.
-fn guest_control_fs_socket_acl_spec(uid: u32) -> String {
-    format!("u:{uid}:rw,m::rw")
-}
+const COMPONENT_SESSION_DAEMON_PRINCIPAL: &str = "d2bd";
 
 /// Extract the cloud-hypervisor `--vsock socket=<path>` argument for a
 /// CH runner plan. Gated on the CH runner's seccomp policy ref so the
 /// daemon-vsock ACL is only ever attached to a real cloud-hypervisor
 /// runner's vsock socket, never to any other role's argv.
-fn cloud_hypervisor_vsock_socket_arg(plan: &SpawnRunnerPlan) -> Option<PathBuf> {
+fn cloud_hypervisor_component_session_socket_arg(plan: &SpawnRunnerPlan) -> Option<PathBuf> {
     if plan.seccomp_policy_ref.as_deref() != Some("w1-cloud-hypervisor-runner") {
         return None;
     }
@@ -3048,17 +3006,17 @@ fn cloud_hypervisor_vsock_socket_arg(plan: &SpawnRunnerPlan) -> Option<PathBuf> 
     })
 }
 
-/// Path-free digest of a guest-control vsock ACL mutation, for audit.
+/// Path-free digest of a component-session vsock ACL mutation, for audit.
 ///
 /// Returns `sha256:<hex>` over the operation, the target class, and the
 /// target's resolved `(dev, ino)` - never the raw socket / state-dir
-/// path. The guest-control observability contract forbids raw vsock /
+/// path. The component-session observability contract forbids raw vsock /
 /// socket / state-dir paths in spans, logs, metrics, and audit.
-fn guest_control_acl_diff_hash(op: &str, target_class: &str, dev: u64, ino: u64) -> String {
+fn component_session_acl_diff_hash(op: &str, target_class: &str, dev: u64, ino: u64) -> String {
     use sha2::Digest as _;
     use std::fmt::Write as _;
     let mut hasher = sha2::Sha256::new();
-    hasher.update(b"guest-control-vsock-acl\0");
+    hasher.update(b"component-session-vsock-acl\0");
     hasher.update(op.as_bytes());
     hasher.update([0]);
     hasher.update(target_class.as_bytes());
@@ -3073,26 +3031,26 @@ fn guest_control_acl_diff_hash(op: &str, target_class: &str, dev: u64, ino: u64)
     out
 }
 
-/// Emit a hash-only audit event for a guest-control vsock ACL mutation.
+/// Emit a hash-only audit event for a component-session vsock ACL mutation.
 /// Closed-enum labels only; no raw paths, uids-by-value, or content.
-fn audit_guest_control_vsock_acl(op: &str, target_class: &str, dev: u64, ino: u64) {
+fn audit_component_session_vsock_acl(op: &str, target_class: &str, dev: u64, ino: u64) {
     tracing::info!(
         kind = "critical",
-        subsystem = "guest-control-health",
+        subsystem = "component-session-health",
         op = op,
-        daemon_principal = GUEST_CONTROL_DAEMON_PRINCIPAL,
+        daemon_principal = COMPONENT_SESSION_DAEMON_PRINCIPAL,
         target_class = target_class,
-        acl_diff_hash = %guest_control_acl_diff_hash(op, target_class, dev, ino),
+        acl_diff_hash = %component_session_acl_diff_hash(op, target_class, dev, ino),
         result = "ok",
-        "guest-control vsock daemon ACL mutation",
+        "component-session vsock daemon ACL mutation",
     );
 }
 
 /// Path-free wrapper over [`setfacl_fd_safe_op_classed`] for the
-/// guest-control ACL path: on failure, builds a detail string carrying
+/// component-session ACL path: on failure, builds a detail string carrying
 /// only the closed-set op/target-class/stage/errno classification -
 /// never the raw socket/state-dir path or the acl-spec string.
-fn setfacl_guest_control(
+fn setfacl_component_session(
     path: &Path,
     op: &str,
     acl_spec: &str,
@@ -3101,41 +3059,7 @@ fn setfacl_guest_control(
     target_class: &str,
 ) -> Result<Option<(u64, u64)>, String> {
     setfacl_fd_safe_op_classed(path, op, acl_spec, kind)
-        .map_err(|failure| failure.guest_control_detail(op_label, target_class))
-}
-
-/// Path-free wrapper over [`setfacl_fd_safe_op_classed`] for the
-/// guest-control fs-share (`d2b-gctl`) CONSUMER ACL path: identical to
-/// [`setfacl_guest_control`] but reports the cloud-hypervisor-runner
-/// consumer principal class on failure instead of the daemon principal.
-fn setfacl_guest_control_fs(
-    path: &Path,
-    op: &str,
-    acl_spec: &str,
-    kind: AclPathKind,
-    op_label: &str,
-    target_class: &str,
-) -> Result<Option<(u64, u64)>, String> {
-    setfacl_fd_safe_op_classed(path, op, acl_spec, kind)
-        .map_err(|failure| failure.guest_control_fs_detail(op_label, target_class))
-}
-
-/// Emit a hash-only audit event for a guest-control fs-share consumer ACL
-/// mutation (the cloud-hypervisor runner's connect grant on the `d2b-gctl`
-/// virtiofs socket / its parent dir). Closed-enum labels only; no raw
-/// paths, uids-by-value, or content - same contract as
-/// [`audit_guest_control_vsock_acl`].
-fn audit_guest_control_fs_acl(op: &str, target_class: &str, dev: u64, ino: u64) {
-    tracing::info!(
-        kind = "critical",
-        subsystem = "guest-control-health",
-        op = op,
-        consumer_principal = GUEST_CONTROL_FS_CONSUMER_PRINCIPAL,
-        target_class = target_class,
-        acl_diff_hash = %guest_control_acl_diff_hash(op, target_class, dev, ino),
-        result = "ok",
-        "guest-control fs-share consumer ACL mutation",
-    );
+        .map_err(|failure| failure.component_session_detail(op_label, target_class))
 }
 
 /// Whether the daemon needs an explicit `--x` grant to traverse `path`.
@@ -3163,14 +3087,14 @@ fn current_path_dev_ino(path: &Path) -> Result<Option<(u64, u64)>, SetfaclFailur
 
 /// Grant the daemon `u:d2bd:--x` on every non-world-traversable
 /// directory from the filesystem root down to `leaf` (inclusive), so the
-/// daemon can `connect()` to the per-VM guest-control socket through the
+/// daemon can `connect()` to the per-VM component-session socket through the
 /// full ancestor chain - not just the immediate parent. World-
 /// traversable directories already grant search to everyone and are
 /// skipped. The immediate per-VM leaf is audited as `state-dir`; higher
 /// non-world-x ancestors as `ancestor`. These grants are additive and
 /// idempotent; they are never revoked because sibling VMs and the
 /// per-VM api-socket also depend on them.
-fn grant_guest_control_traversal_acls(leaf: &Path) -> Result<(), String> {
+fn grant_component_session_traversal_acls(leaf: &Path) -> Result<(), String> {
     let mut chain: Vec<&Path> = leaf
         .ancestors()
         .filter(|component| !component.as_os_str().is_empty())
@@ -3184,24 +3108,24 @@ fn grant_guest_control_traversal_acls(leaf: &Path) -> Result<(), String> {
             "ancestor"
         };
         let needs = dir_needs_daemon_traverse(dir)
-            .map_err(|failure| failure.guest_control_detail("grant", target_class))?;
+            .map_err(|failure| failure.component_session_detail("grant", target_class))?;
         if needs == Some(true)
-            && let Some((dev, ino)) = setfacl_guest_control(
+            && let Some((dev, ino)) = setfacl_component_session(
                 dir,
                 "-m",
-                &format!("u:{GUEST_CONTROL_DAEMON_PRINCIPAL}:--x"),
+                &format!("u:{COMPONENT_SESSION_DAEMON_PRINCIPAL}:--x"),
                 AclPathKind::Directory,
                 "grant",
                 target_class,
             )?
         {
-            audit_guest_control_vsock_acl("grant", target_class, dev, ino);
+            audit_component_session_vsock_acl("grant", target_class, dev, ino);
         }
     }
     Ok(())
 }
 
-/// Grant `u:d2bd:rw` on the guest-control vsock socket inode, then
+/// Grant `u:d2bd:rw` on the component-session vsock socket inode, then
 /// re-stat the path to confirm it still resolves to the same `(dev,
 /// ino)` the fd-based setfacl mutated (inode pinning). If the
 /// socket was replaced (or vanished) between the setfacl and the
@@ -3209,11 +3133,11 @@ fn grant_guest_control_traversal_acls(leaf: &Path) -> Result<(), String> {
 /// and report not-ready (`Ok(false)`) so the caller retries against the
 /// current, live inode. Returns `Ok(false)` while the socket has not yet
 /// been created by cloud-hypervisor.
-fn grant_guest_control_socket_acl_once(socket: &Path) -> Result<bool, String> {
-    let Some((dev, ino)) = setfacl_guest_control(
+fn grant_component_session_socket_acl_once(socket: &Path) -> Result<bool, String> {
+    let Some((dev, ino)) = setfacl_component_session(
         socket,
         "-m",
-        &format!("u:{GUEST_CONTROL_DAEMON_PRINCIPAL}:rw"),
+        &format!("u:{COMPONENT_SESSION_DAEMON_PRINCIPAL}:rw"),
         AclPathKind::Socket,
         "grant",
         "vsock-socket",
@@ -3222,17 +3146,17 @@ fn grant_guest_control_socket_acl_once(socket: &Path) -> Result<bool, String> {
         return Ok(false);
     };
     match current_path_dev_ino(socket)
-        .map_err(|failure| failure.guest_control_detail("grant", "vsock-socket"))?
+        .map_err(|failure| failure.component_session_detail("grant", "vsock-socket"))?
     {
         Some(current) if current == (dev, ino) => {
-            audit_guest_control_vsock_acl("grant", "vsock-socket", dev, ino);
+            audit_component_session_vsock_acl("grant", "vsock-socket", dev, ino);
             Ok(true)
         }
         _ => Ok(false),
     }
 }
 
-/// Revoke the daemon-principal guest-control vsock ACL from the socket
+/// Revoke the daemon-principal component-session vsock ACL from the socket
 /// inode. Best-effort, idempotent, and path-free: a missing socket is a
 /// no-op. Scoped to the per-VM socket inode only - the shared/ancestor
 /// traversal grants are intentionally retained (the daemon also needs
@@ -3241,16 +3165,16 @@ fn grant_guest_control_socket_acl_once(socket: &Path) -> Result<bool, String> {
 /// carrying the socket path (`SignalRunner` has only vm_id/role_id/
 /// signal), so revoke runs as a revoke-then-grant at the next CH
 /// (re-)spawn so a replaced/disabled socket cannot retain a stale grant.
-fn revoke_guest_control_vsock_acl(socket: &Path) -> Result<(), String> {
-    if let Some((dev, ino)) = setfacl_guest_control(
+fn revoke_component_session_vsock_acl(socket: &Path) -> Result<(), String> {
+    if let Some((dev, ino)) = setfacl_component_session(
         socket,
         "-x",
-        &format!("u:{GUEST_CONTROL_DAEMON_PRINCIPAL}"),
+        &format!("u:{COMPONENT_SESSION_DAEMON_PRINCIPAL}"),
         AclPathKind::Socket,
         "revoke",
         "vsock-socket",
     )? {
-        audit_guest_control_vsock_acl("revoke", "vsock-socket", dev, ino);
+        audit_component_session_vsock_acl("revoke", "vsock-socket", dev, ino);
     }
     Ok(())
 }
@@ -3260,24 +3184,24 @@ fn revoke_guest_control_vsock_acl(socket: &Path) -> Result<(), String> {
 /// ~30s, matching the obs-vsock precedent). The traversal ACLs are
 /// granted synchronously before this thread starts, so the retry only
 /// re-attempts the socket grant. Logs are path-free.
-fn spawn_guest_control_vsock_acl_retry(socket: PathBuf) {
+fn spawn_component_session_vsock_acl_retry(socket: PathBuf) {
     std::thread::spawn(move || {
         for _ in 0..120 {
-            match grant_guest_control_socket_acl_once(&socket) {
+            match grant_component_session_socket_acl_once(&socket) {
                 Ok(true) => return,
                 Ok(false) => {}
                 Err(_) => {
                     tracing::debug!(
-                        subsystem = "guest-control-health",
-                        "guest-control vsock daemon ACL refresh not ready yet",
+                        subsystem = "component-session-health",
+                        "component-session vsock daemon ACL refresh not ready yet",
                     );
                 }
             }
             std::thread::sleep(std::time::Duration::from_millis(250));
         }
         tracing::warn!(
-            subsystem = "guest-control-health",
-            "guest-control vsock daemon ACL refresh timed out",
+            subsystem = "component-session-health",
+            "component-session vsock daemon ACL refresh timed out",
         );
     });
 }
@@ -3292,191 +3216,38 @@ fn spawn_guest_control_vsock_acl_retry(socket: PathBuf) {
 /// daemon never loses search on the per-VM state dir (the api-socket
 /// depends on it too); if the socket is not yet present, a bounded retry
 /// thread completes the socket grant.
-fn refresh_guest_control_vsock_acl(plan: &SpawnRunnerPlan) -> Result<(), LiveHandlerError> {
-    let Some(socket) = cloud_hypervisor_vsock_socket_arg(plan) else {
+fn refresh_component_session_vsock_acl(plan: &SpawnRunnerPlan) -> Result<(), LiveHandlerError> {
+    let Some(socket) = cloud_hypervisor_component_session_socket_arg(plan) else {
         return Ok(());
     };
     let Some(parent) = socket.parent().map(Path::to_path_buf) else {
         return Err(LiveHandlerError::SpawnFailed {
-            detail: "guest-control vsock path has no parent".to_owned(),
+            detail: "component-session vsock path has no parent".to_owned(),
         });
     };
 
-    if let Err(detail) = revoke_guest_control_vsock_acl(&socket) {
+    if let Err(detail) = revoke_component_session_vsock_acl(&socket) {
         tracing::debug!(
-            subsystem = "guest-control-health",
+            subsystem = "component-session-health",
             detail = %detail,
-            "pre-grant guest-control daemon ACL revoke (best-effort)",
+            "pre-grant component-session daemon ACL revoke (best-effort)",
         );
     }
 
-    grant_guest_control_traversal_acls(&parent).map_err(|detail| {
+    grant_component_session_traversal_acls(&parent).map_err(|detail| {
         LiveHandlerError::SpawnFailed {
-            detail: format!("refresh guest-control traversal ACLs: {detail}"),
+            detail: format!("refresh component-session traversal ACLs: {detail}"),
         }
     })?;
 
-    match grant_guest_control_socket_acl_once(&socket) {
+    match grant_component_session_socket_acl_once(&socket) {
         Ok(true) => Ok(()),
         Ok(false) => {
-            spawn_guest_control_vsock_acl_retry(socket);
+            spawn_component_session_vsock_acl_retry(socket);
             Ok(())
         }
         Err(detail) => Err(LiveHandlerError::SpawnFailed {
-            detail: format!("refresh guest-control vsock daemon ACL: {detail}"),
-        }),
-    }
-}
-
-/// Extract the cloud-hypervisor `--fs socket=<path>,tag=d2b-gctl` argument
-/// for a CH runner plan, or `None` for any non-CH runner / a CH plan
-/// without the guest-control token share.
-///
-/// Cloud Hypervisor's `--fs` takes a variadic list of value elements
-/// (`socket=...,tag=...`) - one per share - so this scans EVERY argv
-/// element (never just the first after `--fs`) for the element whose
-/// comma-separated fields include exactly `tag=d2b-gctl`, and returns its
-/// absolute `socket=` value. Gated on the CH runner's seccomp policy ref
-/// so the grant is only ever attached to a real cloud-hypervisor runner.
-fn cloud_hypervisor_guest_control_fs_socket_arg(plan: &SpawnRunnerPlan) -> Option<PathBuf> {
-    if plan.seccomp_policy_ref.as_deref() != Some("w1-cloud-hypervisor-runner") {
-        return None;
-    }
-    plan.argv.iter().find_map(|arg| {
-        let arg = arg.trim_matches('"');
-        let fields: Vec<&str> = arg.split(',').collect();
-        if !fields.contains(&"tag=d2b-gctl") {
-            return None;
-        }
-        fields
-            .iter()
-            .find_map(|field| field.strip_prefix("socket="))
-            .map(PathBuf::from)
-            .filter(|path| path.is_absolute())
-    })
-}
-
-/// Grant the CH runner uid execute (search) on the `d2b-gctl` socket's
-/// parent (the per-VM `guest-control` dir) so CH can traverse to the
-/// socket. Idempotent with the host-activation `u:$ch_uid:--x` grant;
-/// re-asserting it here makes the spawn path self-healing if the dir was
-/// recreated. Path-free + hash-only audited.
-fn grant_guest_control_fs_traversal_acl(parent: &Path, uid: u32) -> Result<(), String> {
-    if let Some((dev, ino)) = setfacl_guest_control_fs(
-        parent,
-        "-m",
-        &format!("u:{uid}:--x"),
-        AclPathKind::Directory,
-        "grant",
-        "gctlfs-dir",
-    )? {
-        audit_guest_control_fs_acl("grant", "gctlfs-dir", dev, ino);
-    }
-    Ok(())
-}
-
-/// Grant `u:<ch_uid>:rw` on the `d2b-gctl` virtiofs socket inode, with an
-/// explicit `m::rw` mask so the 0700 socket's `mask::---` is deterministically
-/// lifted to cover the CH-runner named entry (without enabling execute in the
-/// mask). Then re-stat to confirm the same `(dev, ino)` (inode pinning): if
-/// the socket was replaced/vanished between the setfacl and the re-stat, the
-/// grant landed on a stale inode - do not audit success and report not-ready
-/// (`Ok(false)`) so the caller retries the live inode. `Ok(false)` while the
-/// socket has not yet been created by the gctlfs virtiofsd.
-fn grant_guest_control_fs_socket_acl_once(socket: &Path, uid: u32) -> Result<bool, String> {
-    let Some((dev, ino)) = setfacl_guest_control_fs(
-        socket,
-        "-m",
-        &guest_control_fs_socket_acl_spec(uid),
-        AclPathKind::Socket,
-        "grant",
-        "gctlfs-socket",
-    )?
-    else {
-        return Ok(false);
-    };
-    match current_path_dev_ino(socket)
-        .map_err(|failure| failure.guest_control_fs_detail("grant", "gctlfs-socket"))?
-    {
-        Some(current) if current == (dev, ino) => {
-            audit_guest_control_fs_acl("grant", "gctlfs-socket", dev, ino);
-            Ok(true)
-        }
-        _ => Ok(false),
-    }
-}
-
-/// Retry the CH-runner `d2b-gctl` socket ACL grant in a background thread
-/// until the gctlfs virtiofsd has created the socket. Bounded to ~60s
-/// (240 × 250ms) so it covers cloud-hypervisor's own ~1-minute vhost-user
-/// backend connect-retry window. The traversal grant is applied
-/// synchronously before this thread starts; this only re-attempts the
-/// socket grant. Logs are path-free.
-fn spawn_guest_control_fs_acl_retry(socket: PathBuf, uid: u32) {
-    std::thread::spawn(move || {
-        for _ in 0..240 {
-            match grant_guest_control_fs_socket_acl_once(&socket, uid) {
-                Ok(true) => return,
-                Ok(false) => {}
-                Err(_) => {
-                    tracing::debug!(
-                        subsystem = "guest-control-health",
-                        consumer_principal = GUEST_CONTROL_FS_CONSUMER_PRINCIPAL,
-                        "guest-control fs-share consumer ACL refresh not ready yet",
-                    );
-                }
-            }
-            std::thread::sleep(std::time::Duration::from_millis(250));
-        }
-        tracing::warn!(
-            subsystem = "guest-control-health",
-            consumer_principal = GUEST_CONTROL_FS_CONSUMER_PRINCIPAL,
-            "guest-control fs-share consumer ACL refresh timed out",
-        );
-    });
-}
-
-/// Grant the cloud-hypervisor runner connect access to the `d2b-gctl`
-/// virtiofs socket. No-op for any non-CH runner or a CH plan without the
-/// guest-control token share.
-///
-/// The `d2b-gctl` share is the only CROSS-PRINCIPAL fs share (served by the
-/// narrower `gctlfs` principal, so CH does not own its socket as it does
-/// the runner-owned shares). The gctlfs virtiofsd runs in the broker's
-/// user namespace (ADR 0021) where `--socket-group` does not take effect
-/// on the host-visible socket, leaving it `0700 gctlfs:gctlfs` with
-/// `mask::---` - which masks out the `default:u:$ch_uid` grant the
-/// host-activation default ACL inherits onto the socket. Grant the CH
-/// runner uid search on the parent and `rw` on the socket (lifting the
-/// mask) so CH's vhost-user backend connect succeeds. The socket is a DAG
-/// predecessor of cloud-hypervisor, so the synchronous grant normally
-/// lands before CH spawns; a bounded retry covers the rare absent-socket
-/// race.
-fn refresh_guest_control_fs_acl(plan: &SpawnRunnerPlan) -> Result<(), LiveHandlerError> {
-    let Some(socket) = cloud_hypervisor_guest_control_fs_socket_arg(plan) else {
-        return Ok(());
-    };
-    let Some(parent) = socket.parent().map(Path::to_path_buf) else {
-        return Err(LiveHandlerError::SpawnFailed {
-            detail: "guest-control fs-share socket path has no parent".to_owned(),
-        });
-    };
-    let uid = plan.uid;
-
-    grant_guest_control_fs_traversal_acl(&parent, uid).map_err(|detail| {
-        LiveHandlerError::SpawnFailed {
-            detail: format!("refresh guest-control fs-share traversal ACL: {detail}"),
-        }
-    })?;
-
-    match grant_guest_control_fs_socket_acl_once(&socket, uid) {
-        Ok(true) => Ok(()),
-        Ok(false) => {
-            spawn_guest_control_fs_acl_retry(socket, uid);
-            Ok(())
-        }
-        Err(detail) => Err(LiveHandlerError::SpawnFailed {
-            detail: format!("refresh guest-control fs-share consumer ACL: {detail}"),
+            detail: format!("refresh component-session vsock daemon ACL: {detail}"),
         }),
     }
 }
@@ -5272,7 +5043,7 @@ mod tests {
         );
 
         assert_eq!(
-            cloud_hypervisor_vsock_socket_arg(&plan),
+            cloud_hypervisor_component_session_socket_arg(&plan),
             Some(PathBuf::from("/var/lib/d2b/vms/corp-vm/vsock.sock"))
         );
     }
@@ -5290,7 +5061,7 @@ mod tests {
             "w1-vsock-relay",
         );
 
-        assert_eq!(cloud_hypervisor_vsock_socket_arg(&plan), None);
+        assert_eq!(cloud_hypervisor_component_session_socket_arg(&plan), None);
     }
 
     #[test]
@@ -5304,183 +5075,14 @@ mod tests {
             "w1-cloud-hypervisor-runner",
         );
 
-        assert_eq!(cloud_hypervisor_vsock_socket_arg(&plan), None);
+        assert_eq!(cloud_hypervisor_component_session_socket_arg(&plan), None);
     }
 
     #[test]
-    fn parses_guest_control_fs_socket_for_ch_runner_heavy_vm() {
-        // CH `--fs` is variadic: many `socket=...,tag=...` value elements,
-        // with `d2b-gctl` LAST after ro-store / d2b-meta / d2b-hkeys. The
-        // parser must scan every element, not just the first after `--fs`.
-        let plan = test_spawn_plan_with_argv(
-            vec![
-                "cloud-hypervisor".to_owned(),
-                "--fs".to_owned(),
-                "socket=/run/d2b/vms/work-aad/ro-store.sock,tag=ro-store".to_owned(),
-                "socket=/run/d2b/vms/work-aad/d2b-meta.sock,tag=d2b-meta".to_owned(),
-                "socket=/run/d2b/vms/work-aad/d2b-hkeys.sock,tag=d2b-hkeys".to_owned(),
-                "socket=/run/d2b/vms/work-aad/guest-control/d2b-gctl.sock,tag=d2b-gctl".to_owned(),
-                "--api-socket".to_owned(),
-                "/var/lib/d2b/vms/work-aad/work-aad.sock".to_owned(),
-            ],
-            "w1-cloud-hypervisor-runner",
-        );
-
-        assert_eq!(
-            cloud_hypervisor_guest_control_fs_socket_arg(&plan),
-            Some(PathBuf::from(
-                "/run/d2b/vms/work-aad/guest-control/d2b-gctl.sock"
-            ))
-        );
-    }
-
-    #[test]
-    fn guest_control_fs_socket_gated_on_ch_runner_policy() {
-        // Same d2b-gctl share element but a non-CH seccomp policy: the
-        // consumer ACL must never attach to a non-cloud-hypervisor runner.
-        let plan = test_spawn_plan_with_argv(
-            vec![
-                "virtiofsd".to_owned(),
-                "socket=/run/d2b/vms/work-aad/guest-control/d2b-gctl.sock,tag=d2b-gctl".to_owned(),
-            ],
-            "w1-virtiofsd",
-        );
-
-        assert_eq!(cloud_hypervisor_guest_control_fs_socket_arg(&plan), None);
-    }
-
-    #[test]
-    fn guest_control_fs_socket_absent_without_d2b_gctl_share() {
-        // A guest-control-disabled VM: CH runner with fs shares but no
-        // d2b-gctl tag. The grant must be a no-op.
-        let plan = test_spawn_plan_with_argv(
-            vec![
-                "cloud-hypervisor".to_owned(),
-                "--fs".to_owned(),
-                "socket=/run/d2b/vms/work-aad/ro-store.sock,tag=ro-store".to_owned(),
-                "socket=/run/d2b/vms/work-aad/d2b-meta.sock,tag=d2b-meta".to_owned(),
-            ],
-            "w1-cloud-hypervisor-runner",
-        );
-
-        assert_eq!(cloud_hypervisor_guest_control_fs_socket_arg(&plan), None);
-    }
-
-    #[test]
-    fn guest_control_fs_socket_rejects_relative_socket_path() {
-        let plan = test_spawn_plan_with_argv(
-            vec![
-                "cloud-hypervisor".to_owned(),
-                "--fs".to_owned(),
-                "socket=relative/d2b-gctl.sock,tag=d2b-gctl".to_owned(),
-            ],
-            "w1-cloud-hypervisor-runner",
-        );
-
-        assert_eq!(cloud_hypervisor_guest_control_fs_socket_arg(&plan), None);
-    }
-
-    #[test]
-    fn guest_control_fs_socket_parser_rejects_near_miss_tag() {
-        // A share whose tag merely CONTAINS `d2b-gctl` as a prefix
-        // (`tag=d2b-gctl-foo`) must not be mistaken for the token share:
-        // the parser does an exact comma-field match, never a substring
-        // match, so a future regression to substring matching would
-        // mis-grant the consumer ACL onto the wrong share.
-        let plan = test_spawn_plan_with_argv(
-            vec![
-                "cloud-hypervisor".to_owned(),
-                "--fs".to_owned(),
-                "socket=/run/d2b/vms/work-aad/d2b-gctl-foo.sock,tag=d2b-gctl-foo".to_owned(),
-            ],
-            "w1-cloud-hypervisor-runner",
-        );
-
-        assert_eq!(cloud_hypervisor_guest_control_fs_socket_arg(&plan), None);
-    }
-
-    #[test]
-    fn guest_control_fs_socket_grant_not_ready_for_absent_socket() {
-        // Hermetic: before the gctlfs virtiofsd creates the d2b-gctl
-        // socket, the consumer socket grant must report not-ready
-        // (Ok(false)) so the caller retries - never erroring (which would
-        // fail the cloud-hypervisor spawn outright) and never touching a
-        // foreign inode. This is the exact race the bounded retry thread
-        // exists to tolerate.
-        let dir = TestDir::new("gc-fs-acl");
-        let socket = dir.join("d2b-gctl.sock");
-        assert!(!socket.exists());
-        assert_eq!(
-            grant_guest_control_fs_socket_acl_once(&socket, 4242),
-            Ok(false),
-            "absent socket must report not-ready",
-        );
-    }
-
-    #[test]
-    fn guest_control_fs_socket_acl_spec_pins_mask() {
-        // Regression guard: the `m::rw` mask token is load-bearing. The
-        // 0700 d2b-gctl socket's `mask::---` masks out the inherited
-        // CH-runner named entry, so the grant MUST pin the mask to `rw`
-        // (not the bare `u:<uid>:rw` the vsock precedent uses). Dropping
-        // `,m::rw` would silently reintroduce the original EACCES/boot
-        // hang with every other unit test still green. The mask must not
-        // grant execute.
-        let spec = guest_control_fs_socket_acl_spec(1628571);
-        assert_eq!(spec, "u:1628571:rw,m::rw");
-        assert!(spec.contains("m::rw"), "mask token missing: {spec}");
-        assert!(
-            !spec.contains('x'),
-            "mask/entry must not grant execute: {spec}"
-        );
-    }
-
-    #[test]
-    fn guest_control_fs_detail_is_path_free() {
-        // The fs-share consumer error formatter must never leak a
-        // path-bearing legacy detail: it carries only closed-set class
-        // tokens (op/target-class/stage), the CH-runner consumer
-        // principal, the io::ErrorKind, and the numeric errno - same
-        // path-free contract as the daemon `guest_control_detail` twin.
-        let failure = SetfaclFailure {
-            stage: SetfaclStage::Apply,
-            errno_kind: std::io::ErrorKind::PermissionDenied,
-            raw_os_error: Some(13),
-            legacy_detail: "setfacl -m u:1628571:rw,m::rw on \
-                 /run/d2b/vms/corp-vm/guest-control/d2b-gctl.sock: denied"
-                .to_owned(),
-        };
-        let detail = failure.guest_control_fs_detail("grant", "gctlfs-socket");
-        assert!(
-            !detail.contains('/'),
-            "detail must not embed any path: {detail}"
-        );
-        assert!(
-            !detail.contains("d2b-gctl.sock"),
-            "detail leaked socket name: {detail}"
-        );
-        assert!(!detail.contains(":rw"), "detail leaked acl spec: {detail}");
-        assert!(
-            !detail.contains("1628571"),
-            "detail leaked uid-by-value: {detail}"
-        );
-        assert!(
-            detail.contains("gctlfs-socket"),
-            "missing target class: {detail}"
-        );
-        assert!(detail.contains("stage=apply"), "missing stage: {detail}");
-        assert!(detail.contains("errno=13"), "missing errno: {detail}");
-        assert!(
-            detail.contains(GUEST_CONTROL_FS_CONSUMER_PRINCIPAL),
-            "missing consumer principal: {detail}"
-        );
-    }
-
-    #[test]
-    fn guest_control_acl_diff_hash_is_path_free_and_stable() {
-        let h1 = guest_control_acl_diff_hash("grant", "vsock-socket", 0x10, 0x20);
-        let h2 = guest_control_acl_diff_hash("grant", "vsock-socket", 0x10, 0x20);
-        let h3 = guest_control_acl_diff_hash("revoke", "vsock-socket", 0x10, 0x20);
+    fn component_session_acl_diff_hash_is_path_free_and_stable() {
+        let h1 = component_session_acl_diff_hash("grant", "vsock-socket", 0x10, 0x20);
+        let h2 = component_session_acl_diff_hash("grant", "vsock-socket", 0x10, 0x20);
+        let h3 = component_session_acl_diff_hash("revoke", "vsock-socket", 0x10, 0x20);
         assert_eq!(h1, h2, "hash must be deterministic for identical inputs");
         assert_ne!(h1, h3, "op must affect the hash");
         assert!(h1.starts_with("sha256:"));
@@ -5490,7 +5092,7 @@ mod tests {
     }
 
     #[test]
-    fn guest_control_acl_grant_not_ready_for_absent_socket() {
+    fn component_session_acl_grant_not_ready_for_absent_socket() {
         // Hermetic: before cloud-hypervisor creates the vsock socket,
         // the socket grant must report not-ready (Ok(false)) so the
         // caller retries - never erroring and never touching a foreign
@@ -5499,7 +5101,7 @@ mod tests {
         let socket = dir.join("vsock.sock");
         assert!(!socket.exists());
         assert_eq!(
-            grant_guest_control_socket_acl_once(&socket),
+            grant_component_session_socket_acl_once(&socket),
             Ok(false),
             "absent socket must report not-ready",
         );
@@ -5510,13 +5112,13 @@ mod tests {
         // without invoking the host setfacl binary on real ancestors -
         // which a TestDir rooted under a non-world-x CI path (e.g.
         // `/home/runner`, mode 0750) would otherwise trigger.
-        revoke_guest_control_vsock_acl(&socket).expect("revoke of absent socket is a no-op");
+        revoke_component_session_vsock_acl(&socket).expect("revoke of absent socket is a no-op");
     }
 
     #[test]
-    fn setfacl_failure_guest_control_detail_is_path_free() {
+    fn setfacl_failure_component_session_detail_is_path_free() {
         // A path-bearing legacy detail must never leak through the
-        // guest-control formatter: it carries only closed-set class
+        // component-session formatter: it carries only closed-set class
         // tokens (op/target-class/stage), the daemon principal, the
         // io::ErrorKind, and the numeric errno.
         let failure = SetfaclFailure {
@@ -5526,7 +5128,7 @@ mod tests {
             legacy_detail: "setfacl -m u:d2bd:rw on /var/lib/d2b/vms/corp-vm/vsock.sock: denied"
                 .to_owned(),
         };
-        let detail = failure.guest_control_detail("grant", "vsock-socket");
+        let detail = failure.component_session_detail("grant", "vsock-socket");
         assert!(
             !detail.contains('/'),
             "detail must not embed any path: {detail}"
@@ -5543,7 +5145,7 @@ mod tests {
         assert!(detail.contains("stage=apply"), "missing stage: {detail}");
         assert!(detail.contains("errno=13"), "missing errno: {detail}");
         assert!(
-            detail.contains(GUEST_CONTROL_DAEMON_PRINCIPAL),
+            detail.contains(COMPONENT_SESSION_DAEMON_PRINCIPAL),
             "missing daemon principal: {detail}"
         );
         // No-errno case renders a stable token.
@@ -5553,7 +5155,7 @@ mod tests {
             raw_os_error: None,
             legacy_detail: "refusing setfacl on /secret/path".to_owned(),
         };
-        let detail = mismatch.guest_control_detail("revoke", "state-dir");
+        let detail = mismatch.component_session_detail("revoke", "state-dir");
         assert!(
             !detail.contains('/'),
             "detail must not embed any path: {detail}"

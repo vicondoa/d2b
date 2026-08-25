@@ -76,7 +76,6 @@ pub struct RuntimeDisplayCapabilities {
 pub struct RuntimeGuestCapabilities {
     pub config_sync: bool,
     pub exec: bool,
-    pub guest_control: bool,
     pub in_guest_observability: bool,
     pub keys: bool,
     #[serde(default)]
@@ -105,7 +104,7 @@ pub enum RuntimeServiceRole {
     Audio,
     Video,
     Network,
-    GuestControl,
+    ComponentSession,
     Usb,
     Observability,
 }

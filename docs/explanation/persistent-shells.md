@@ -25,7 +25,7 @@ expected to survive:
 
 - the local CLI disconnecting;
 - the terminal window closing;
-- guestd restart when guestd can adopt the still-running shell pool;
+- target-local Process restart when target-local Process can adopt the still-running shell pool;
 - unsafe-local helper or d2bd reconnect while the verified user scope and
   supervisor remain alive.
 
@@ -50,7 +50,7 @@ not load realm credentials or provider transports.
 
 Persistent shells do not add TCP or UDP listeners, network ports, or
 network-bound debug/metrics surfaces. The host-to-guest path reuses the existing
-daemon public socket and authenticated guest-control transport.
+daemon public socket and authenticated component-session transport.
 
 Unsafe-local uses only same-UID Unix sockets. Its per-shell listener lives
 beneath the validated user runtime directory and is not a root service, broker

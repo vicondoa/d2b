@@ -8,9 +8,7 @@ rust_library(
     srcs = glob(["src/**/*.rs"]),
     compile_data = ["Cargo.toml"],
     deps = [
-        "//packages/d2b-contracts-control:d2b_contracts_control",
         "//packages/d2b-contracts-resource:d2b_contracts_resource",
-        "//packages/d2b-contracts-zone-session:d2b_contracts_zone_session",
     ] + all_crate_deps(normal = True, cargo_only = True),
     visibility = ["//visibility:public"],
 )

@@ -29,11 +29,11 @@ pub fn readiness_predicate_ready(predicate: &ReadinessPredicate) -> Result<bool,
         // daemon-state-aware path (it needs the per-VM vsock socket, peer
         // credentials, and a broker-backed signer that this stateless helper
         // cannot reach). The live readiness path intercepts
-        // `GuestControlHealth` nodes in `VmStartRunner::spawn_and_wait_ready`
+        // `ComponentSessionHealth` nodes in `VmStartRunner::spawn_and_wait_ready`
         // before this generic evaluation is reached, so hitting this arm means
         // the state-aware routing regressed. Fail LOUD rather than silently
         // never-ready so the regression surfaces immediately.
-        ReadinessPredicate::GuestControlHealth { .. } => {
+        ReadinessPredicate::ComponentSessionHealth { .. } => {
             Err("guest-component-session-needs-state-aware-path".to_owned())
         }
     }

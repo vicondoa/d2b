@@ -1,4 +1,3 @@
-use crate::guest_wire::ExecState;
 pub use d2b_contracts::audit_wire::{AuditExportCursor, AuditExportEntry};
 use d2b_contracts::types::MediaRef;
 use d2b_contracts::{
@@ -22,6 +21,22 @@ use schemars::{
 };
 use serde::{Deserialize, Serialize};
 use std::fmt;
+
+/// Lifecycle state projected for a target-local Process or
+/// EphemeralProcess resource.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "kebab-case")]
+pub enum ExecState {
+    Created,
+    Running,
+    Exited,
+    Signaled,
+    Cancelled,
+    SlowConsumerCancelled,
+    ProtocolError,
+    LostTarget,
+    Reaped,
+}
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(tag = "kind", content = "payload")]
@@ -97,21 +112,9 @@ pub enum PublicRequest {
     /// Host-wide cutover and scoped-reset operation family.
     #[serde(rename = "host cutover")]
     HostCutover(HostCutoverRequest),
-    /// Read the editable guest config working copy of `vm` over the
-    /// authenticated guest-control bridge and return it as a base64 string.
-    /// ADMIN-ONLY (it crosses into the guest over the authenticated
-    /// transport): the daemon enforces `PeerRole::Admin` BEFORE any probe /
-    /// sign / read. The CLI's `config sync` uses this on guest-control VMs
-    /// instead of an SSH transfer.
-    #[serde(rename = "read guest config")]
-    ReadGuestConfig(ReadGuestConfigRequest),
     /// Multiplexed, ADMIN-ONLY operation on a daemon-held authenticated
-    /// guest-control exec session. A single owner connection issues a
-    /// `Start` op then drives the session with the remaining ops
-    /// (`WriteStdin`/`ReadOutput`/`Signal`/`Resize`/`Wait`/`Close`). The
-    /// daemon enforces `PeerRole::Admin` BEFORE any session lookup, vsock
-    /// connect, auth, or `ExecCreate`. `d2b vm exec` drives this verb;
-    /// it never crosses SSH.
+    /// Process resource session. A single owner connection issues a `Start`
+    /// op then drives the session with named-stream operations.
     #[serde(rename = "exec")]
     Exec(ExecOp),
     /// Console streaming operation (ADR 0041).
@@ -172,8 +175,6 @@ pub enum PublicResponse {
     StoreVerify(StoreVerifyResponse),
     #[serde(rename = "mutating verb")]
     MutatingVerb(MutatingVerbResponse),
-    #[serde(rename = "read guest config")]
-    ReadGuestConfig(ReadGuestConfigResponse),
     #[serde(rename = "exec")]
     Exec(ExecOpResponse),
     #[serde(rename = "console")]
@@ -589,32 +590,11 @@ pub struct StoreVerifyRequest {
 
 pub type StoreVerifyResponse = d2b_contracts::store_verify_wire::StoreVerifyResponse;
 
-/// `read guest config` request payload. The daemon resolves the per-VM vsock
-/// socket + peer credentials from the trusted bundle; the client supplies only
-/// the VM name.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct ReadGuestConfigRequest {
-    pub vm: String,
-}
-
-/// `read guest config` response payload. `contentBase64` is the standard
-/// padded base64 of the RAW guest config bytes. The encoded payload is bounded
-/// by `READ_GUEST_CONFIG_ENCODED_MAX_BYTES` (derived from
-/// `READ_GUEST_FILE_MAX_BYTES`) so it always fits within the public.sock and
-/// ttRPC frames. The CLI decodes it and computes size + sha256 from the
-/// DECODED bytes - never from any guest-reported value.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct ReadGuestConfigResponse {
-    pub content_base64: String,
-}
-
 /// Maximum decoded stdin chunk per `WriteStdin` op and decoded output chunk
-/// per `ReadOutput` op (`DEFAULT_MAX_CHUNK_BYTES`). The base64 envelope of a
+/// per `ReadOutput` op. The base64 envelope of a
 /// 64 KiB chunk (~87 KiB) stays well under the 1 MiB public.sock frame, so a
 /// single exec op never approaches the frame cap.
-pub const EXEC_MAX_CHUNK_BYTES: u64 = crate::guest_wire::DEFAULT_MAX_CHUNK_BYTES;
+pub const EXEC_MAX_CHUNK_BYTES: u64 = 64 * 1024;
 
 /// Output stream selector for `ReadOutput`. A closed enum - the daemon never
 /// forwards an unspecified stream to the guest.
@@ -1791,8 +1771,8 @@ pub enum ConsoleProviderKind {
     LocalHypervisor,
     /// qemu-media VM with a broker-owned fd-backed console backend.
     QemuMedia,
-    /// ACA sandbox with a guestd-compatible agent over the provider peer
-    /// transport (no local socket or broker fd involved).
+    /// ACA sandbox with a provider agent over the provider peer transport
+    /// (no local socket or broker fd involved).
     AcaSandbox,
 }
 
@@ -2089,13 +2069,13 @@ pub enum AudioChannel {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "kebab-case")]
 pub enum AudioEnforcementPosture {
-    /// Host-side PipeWire policy and guest-side guestd policy both applied.
+    /// Host-side PipeWire policy and target-local Process policy both applied.
     HostAndGuest,
-    /// Host-side enforcement only; guestd is absent or the provider does not
-    /// support guest enforcement.
+    /// Host-side enforcement only; the provider does not support target-local
+    /// enforcement.
     HostOnly,
-    /// Guest-side guestd enforcement only; no local PipeWire node (e.g.
-    /// ACA sandbox with a guestd-compatible agent).
+    /// Target-local Process enforcement only; no local PipeWire node (for
+    /// example, an ACA sandbox with a provider agent).
     GuestOnly,
     /// Neither host nor guest enforcement is supported for this target.
     Unsupported,
@@ -2112,8 +2092,8 @@ pub enum AudioEnforcementPosture {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "kebab-case")]
 pub enum AudioErrorKind {
-    /// The provider is expected to expose a guestd-compatible agent but none
-    /// was found; operator remediation is required.
+    /// The provider is expected to expose a target-local audio Process but
+    /// none was found; operator remediation is required.
     ProviderMisconfigured,
     /// The requested VM was not found in the bundle.
     VmNotFound,
@@ -2135,7 +2115,7 @@ pub enum AudioProviderKind {
     LocalHypervisor,
     /// qemu-media VM with a declared qemu audio backend.
     QemuMedia,
-    /// ACA sandbox with a guestd-compatible agent for audio policy.
+    /// ACA sandbox with a provider agent for audio policy.
     AcaSandbox,
 }
 
@@ -2239,9 +2219,10 @@ pub struct AudioStatusResult {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "kebab-case")]
 pub enum AudioSetApplied {
-    /// Applied to both host (PipeWire/qemu) and guest (guestd).
+    /// Applied to both host (PipeWire/qemu) and the target-local Process.
     HostAndGuest,
-    /// Applied to host only; guestd enforcement was unavailable or degraded.
+    /// Applied to host only; target-local enforcement was unavailable or
+    /// degraded.
     HostOnly,
     /// Applied to guest only (ACA sandbox; no local host audio state written).
     GuestOnly,

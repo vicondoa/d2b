@@ -13,7 +13,7 @@
 /packages/xtask/tests/policy_production_closure.rs @vicondoa
 /Makefile @vicondoa
 /flake.nix @vicondoa
-/nixos-modules/guest-control.nix @vicondoa
+/nixos-modules/component-session.nix @vicondoa
 /nixos-modules/host-activation.nix @vicondoa
 /nixos-modules/host-broker.nix @vicondoa
 /nixos-modules/host-daemon.nix @vicondoa

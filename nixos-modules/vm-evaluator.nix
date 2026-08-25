@@ -48,7 +48,7 @@ let
       modules = [
         ./vm-options.nix
         ./vm-guest-base.nix
-        ./guest-control.nix
+        ./component-session.nix
         ./guest-broker.nix
         # Inherit host nixpkgs policy so per-VM evals honor the consumer's
         # allowUnfree / overlays / security fixes without re-stating them in

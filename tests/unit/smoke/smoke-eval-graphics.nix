@@ -12,7 +12,7 @@
 # Strictly evaluating `config.d2b.manifest` here forces the
 # readOnly path and would re-surface a regression of #29 immediately.
 #
-# Also asserts the v3 guest control-plane wiring:
+# Also asserts the v3 ComponentSession wiring:
 #   - guest frontend is a signed Guest Process node, not a user service
 #   - wl-cross-domain-proxy remains in the guest closure
 #   - no DISPLAY session variable is set (xwayland is unsupported)

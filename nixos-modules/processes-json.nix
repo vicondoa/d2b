@@ -277,7 +277,7 @@ let
       supportsNotifySocket = true;
       vsockOpts =
         if hasUserVsockExtraArg then
-          throw "d2b.vms.${name}.config.microvm.cloud-hypervisor.extraArgs must not set --vsock; d2b owns the Cloud Hypervisor vsock device for guest control and observability"
+          throw "d2b.vms.${name}.config.microvm.cloud-hypervisor.extraArgs must not set --vsock; d2b owns the Cloud Hypervisor vsock device for ComponentSession and observability"
         else
           "cid=${toString vsockCID},socket=${vsockPath}";
       virtiofsShares = lib.filter (share: (share.proto or "virtiofs") == "virtiofs") microvm.shares;
@@ -967,7 +967,7 @@ use devices::virtio::vhost_user_backend::run_video_device;'
       # Guest sessions are authenticated independently from VM boot. Their
       # evidence is projected through Guest/Endpoint status rather than a
       # readiness-only health RPC.
-      guestAgentEnabled = vm.guest.control.enable;
+      componentSessionEnabled = vm.guest.componentSession.enable;
       activationRunner = name: {
         binaryPath = "${d2bHostTools.activationHelper}/bin/d2b-activation-helper";
         argv = [
@@ -1163,7 +1163,7 @@ use devices::virtio::vhost_user_backend::run_video_device;'
         readiness = [ (unixSocketExists "/run/d2b/otel/host-egress.sock") ];
         runner = otelHostBridgeRunner manifest;
       })
-      ++ lib.optional guestAgentEnabled (mkRunnerNode name {
+      ++ lib.optional componentSessionEnabled (mkRunnerNode name {
         id = "activation-nixos-runner";
         role = "activation-nixos-runner";
         readiness = [ ];

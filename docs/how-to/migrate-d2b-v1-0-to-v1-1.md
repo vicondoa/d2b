@@ -6,6 +6,10 @@ v1.0 (released 2025-Q4) and v1.1 (released 2026-Q2). v1.1 is the
 listed under CHANGELOG § "Deferred items" is closed,
 and several latent v0.x compatibility shims are removed.
 
+> Historical migration guide. Current v3 Guests use `d2bd guest`,
+> ComponentSession, and signed target-local Processes; this guide does not
+> describe the current Guest control contract.
+
 ## Prerequisites
 
 Before upgrading from v1.0 to v1.1, satisfy these prerequisites in

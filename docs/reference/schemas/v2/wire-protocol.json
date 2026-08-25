@@ -478,21 +478,21 @@
       "description": "How audio enforcement is applied for a target VM (ADR 0041).\n\nThis enum describes only *successful* enforcement outcomes. Provider misconfiguration is not a successful outcome and is reported exclusively through [`AudioVmError`] with `kind = AudioErrorKind::ProviderMisconfigured`.",
       "oneOf": [
         {
-          "description": "Host-side PipeWire policy and guest-side guestd policy both applied.",
+          "description": "Host-side PipeWire policy and target-local Process policy both applied.",
           "type": "string",
           "enum": [
             "host-and-guest"
           ]
         },
         {
-          "description": "Host-side enforcement only; guestd is absent or the provider does not support guest enforcement.",
+          "description": "Host-side enforcement only; the provider does not support target-local enforcement.",
           "type": "string",
           "enum": [
             "host-only"
           ]
         },
         {
-          "description": "Guest-side guestd enforcement only; no local PipeWire node (e.g. ACA sandbox with a guestd-compatible agent).",
+          "description": "Target-local Process enforcement only; no local PipeWire node (for example, an ACA sandbox with a provider agent).",
           "type": "string",
           "enum": [
             "guest-only"
@@ -511,7 +511,7 @@
       "description": "Low-cardinality error kind for a per-VM audio failure.\n\nUsed in [`AudioVmError`] and [`VmAudioErrorOutputV1`](crate::cli_output::VmAudioErrorOutputV1) so that both the wire protocol and the generated CLI schema carry enum constraints rather than a free-form string.\n\nSerde names match the canonical wire strings exactly.",
       "oneOf": [
         {
-          "description": "The provider is expected to expose a guestd-compatible agent but none was found; operator remediation is required.",
+          "description": "The provider is expected to expose a target-local audio Process but none was found; operator remediation is required.",
           "type": "string",
           "enum": [
             "provider-misconfigured"
@@ -711,7 +711,7 @@
           ]
         },
         {
-          "description": "ACA sandbox with a guestd-compatible agent for audio policy.",
+          "description": "ACA sandbox with a provider agent for audio policy.",
           "type": "string",
           "enum": [
             "aca-sandbox"
@@ -723,14 +723,14 @@
       "description": "Whether a set-volume or mute operation was applied and through which path.",
       "oneOf": [
         {
-          "description": "Applied to both host (PipeWire/qemu) and guest (guestd).",
+          "description": "Applied to both host (PipeWire/qemu) and the target-local Process.",
           "type": "string",
           "enum": [
             "host-and-guest"
           ]
         },
         {
-          "description": "Applied to host only; guestd enforcement was unavailable or degraded.",
+          "description": "Applied to host only; target-local enforcement was unavailable or degraded.",
           "type": "string",
           "enum": [
             "host-only"
@@ -1735,24 +1735,6 @@
             },
             "payload": {
               "$ref": "#/definitions/HelloRequest"
-            }
-          }
-        },
-        {
-          "type": "object",
-          "required": [
-            "kind",
-            "payload"
-          ],
-          "properties": {
-            "kind": {
-              "type": "string",
-              "enum": [
-                "GuestControlSign"
-              ]
-            },
-            "payload": {
-              "$ref": "#/definitions/GuestControlSignRequest"
             }
           }
         },
@@ -3364,24 +3346,6 @@
             "kind": {
               "type": "string",
               "enum": [
-                "GuestControlSign"
-              ]
-            },
-            "payload": {
-              "$ref": "#/definitions/GuestControlSignResponse"
-            }
-          }
-        },
-        {
-          "type": "object",
-          "required": [
-            "kind",
-            "payload"
-          ],
-          "properties": {
-            "kind": {
-              "type": "string",
-              "enum": [
                 "QemuMediaEnroll"
               ]
             },
@@ -4464,7 +4428,7 @@
           ]
         },
         {
-          "description": "ACA sandbox with a guestd-compatible agent over the provider peer transport (no local socket or broker fd involved).",
+          "description": "ACA sandbox with a provider agent over the provider peer transport (no local socket or broker fd involved).",
           "type": "string",
           "enum": [
             "aca-sandbox"
@@ -6874,6 +6838,7 @@
       "additionalProperties": false
     },
     "ExecState": {
+      "description": "Lifecycle state projected for a target-local Process or EphemeralProcess resource.",
       "type": "string",
       "enum": [
         "created",
@@ -6883,7 +6848,7 @@
         "cancelled",
         "slow-consumer-cancelled",
         "protocol-error",
-        "lost-guestd",
+        "lost-target",
         "reaped"
       ]
     },
@@ -7745,133 +7710,6 @@
         "wayland-unavailable",
         "proxy-unavailable"
       ]
-    },
-    "GuestBootIdWire": {
-      "type": "string",
-      "maxLength": 128,
-      "minLength": 1
-    },
-    "GuestControlAuthPurpose": {
-      "type": "string",
-      "enum": [
-        "guest-control-auth-v1"
-      ]
-    },
-    "GuestControlDirection": {
-      "type": "string",
-      "enum": [
-        "host-to-guest"
-      ]
-    },
-    "GuestControlProofRole": {
-      "type": "string",
-      "enum": [
-        "host-proof",
-        "guest-proof"
-      ]
-    },
-    "GuestControlSignRequest": {
-      "type": "object",
-      "required": [
-        "direction",
-        "guestBootId",
-        "guestControlPort",
-        "guestNonce",
-        "hostNonce",
-        "protocolVersion",
-        "purpose",
-        "role",
-        "vmId"
-      ],
-      "properties": {
-        "capabilitiesHash": {
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "direction": {
-          "$ref": "#/definitions/GuestControlDirection"
-        },
-        "guestBootId": {
-          "$ref": "#/definitions/GuestBootIdWire"
-        },
-        "guestControlPort": {
-          "type": "integer",
-          "format": "uint32",
-          "minimum": 0.0
-        },
-        "guestNonce": {
-          "type": "array",
-          "items": {
-            "type": "integer",
-            "format": "uint8",
-            "minimum": 0.0
-          },
-          "maxItems": 32,
-          "minItems": 32
-        },
-        "hostNonce": {
-          "type": "array",
-          "items": {
-            "type": "integer",
-            "format": "uint8",
-            "minimum": 0.0
-          },
-          "maxItems": 32,
-          "minItems": 32
-        },
-        "peerCid": {
-          "default": null,
-          "type": [
-            "integer",
-            "null"
-          ],
-          "format": "uint32",
-          "minimum": 0.0
-        },
-        "protocolVersion": {
-          "type": "integer",
-          "format": "uint32",
-          "minimum": 0.0
-        },
-        "purpose": {
-          "$ref": "#/definitions/GuestControlAuthPurpose"
-        },
-        "role": {
-          "$ref": "#/definitions/GuestControlProofRole"
-        },
-        "tracingSpanId": {
-          "default": null,
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "vmId": {
-          "type": "string"
-        }
-      },
-      "additionalProperties": false
-    },
-    "GuestControlSignResponse": {
-      "type": "object",
-      "required": [
-        "tag"
-      ],
-      "properties": {
-        "tag": {
-          "type": "array",
-          "items": {
-            "type": "integer",
-            "format": "uint8",
-            "minimum": 0.0
-          },
-          "maxItems": 32,
-          "minItems": 32
-        }
-      },
-      "additionalProperties": false
     },
     "GuestExecutionBinding": {
       "description": "Exact authenticated binding for a Guest-local Process lifecycle.\n\nThe values are commitments, not raw boot identifiers or transport handles. A Guest broker requires this tuple for every target-local Process operation and revalidates the boot commitment against its own kernel before executing the request.",
@@ -8880,7 +8718,7 @@
           ]
         },
         {
-          "description": "A provider required by an audio or console operation is present but not in a state where enforcement can proceed (e.g. expected guestd agent absent). Operator remediation required.",
+          "description": "A provider required by an audio or console operation is present but not in a state where enforcement can proceed (e.g. expected target-local Process absent). Operator remediation required.",
           "type": "string",
           "enum": [
             "provider-misconfigured"
@@ -10959,26 +10797,7 @@
           }
         },
         {
-          "description": "Read the editable guest config working copy of `vm` over the authenticated guest-control bridge and return it as a base64 string. ADMIN-ONLY (it crosses into the guest over the authenticated transport): the daemon enforces `PeerRole::Admin` BEFORE any probe / sign / read. The CLI's `config sync` uses this on guest-control VMs instead of an SSH transfer.",
-          "type": "object",
-          "required": [
-            "kind",
-            "payload"
-          ],
-          "properties": {
-            "kind": {
-              "type": "string",
-              "enum": [
-                "read guest config"
-              ]
-            },
-            "payload": {
-              "$ref": "#/definitions/ReadGuestConfigRequest"
-            }
-          }
-        },
-        {
-          "description": "Multiplexed, ADMIN-ONLY operation on a daemon-held authenticated guest-control exec session. A single owner connection issues a `Start` op then drives the session with the remaining ops (`WriteStdin`/`ReadOutput`/`Signal`/`Resize`/`Wait`/`Close`). The daemon enforces `PeerRole::Admin` BEFORE any session lookup, vsock connect, auth, or `ExecCreate`. `d2b vm exec` drives this verb; it never crosses SSH.",
+          "description": "Multiplexed, ADMIN-ONLY operation on a daemon-held authenticated Process resource session. A single owner connection issues a `Start` op then drives the session with named-stream operations.",
           "type": "object",
           "required": [
             "kind",
@@ -11339,24 +11158,6 @@
             },
             "payload": {
               "$ref": "#/definitions/MutatingVerbResponse"
-            }
-          }
-        },
-        {
-          "type": "object",
-          "required": [
-            "kind",
-            "payload"
-          ],
-          "properties": {
-            "kind": {
-              "type": "string",
-              "enum": [
-                "read guest config"
-              ]
-            },
-            "payload": {
-              "$ref": "#/definitions/ReadGuestConfigResponse"
             }
           }
         },
@@ -11989,32 +11790,6 @@
         "unknown",
         "connection-lost-during-shutdown"
       ]
-    },
-    "ReadGuestConfigRequest": {
-      "description": "`read guest config` request payload. The daemon resolves the per-VM vsock socket + peer credentials from the trusted bundle; the client supplies only the VM name.",
-      "type": "object",
-      "required": [
-        "vm"
-      ],
-      "properties": {
-        "vm": {
-          "type": "string"
-        }
-      },
-      "additionalProperties": false
-    },
-    "ReadGuestConfigResponse": {
-      "description": "`read guest config` response payload. `contentBase64` is the standard padded base64 of the RAW guest config bytes. The encoded payload is bounded by `READ_GUEST_CONFIG_ENCODED_MAX_BYTES` (derived from `READ_GUEST_FILE_MAX_BYTES`) so it always fits within the public.sock and ttRPC frames. The CLI decodes it and computes size + sha256 from the DECODED bytes - never from any guest-reported value.",
-      "type": "object",
-      "required": [
-        "contentBase64"
-      ],
-      "properties": {
-        "contentBase64": {
-          "type": "string"
-        }
-      },
-      "additionalProperties": false
     },
     "RealmId": {
       "type": "string",
@@ -12720,7 +12495,6 @@
       "required": [
         "configSync",
         "exec",
-        "guestControl",
         "inGuestObservability",
         "keys",
         "ssh"
@@ -12730,9 +12504,6 @@
           "type": "boolean"
         },
         "exec": {
-          "type": "boolean"
-        },
-        "guestControl": {
           "type": "boolean"
         },
         "inGuestObservability": {
@@ -12842,7 +12613,7 @@
         "audio",
         "video",
         "network",
-        "guest-control",
+        "component-session",
         "usb",
         "observability"
       ]

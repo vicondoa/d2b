@@ -2,6 +2,10 @@
 
 `processes.json` is the private supervision artifact. It encodes the per-VM process DAG, typed readiness predicates, cgroup placement, restart policy, and minijail profile references that `d2bd` uses to launch and reconcile roles.
 
+> Historical v1 schema. It is retained only for archived artifact decoding;
+> v3 emits the ComponentSession Process contract and no longer emits the
+> `guestSshReadiness` role.
+
 Producer: `nixos-modules/manifest-processes.nix` emits this artifact; `packages/d2b-core` parses it.
 
 Schema: [`processes.json`](./processes.json) (forward reference; generated with `bazel run //packages/xtask:xtask -- gen-schemas`).

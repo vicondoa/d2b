@@ -163,18 +163,11 @@ declared schema; see "Cardinality bounds" below.
   `changes(d2b_daemon_uptime_seconds[5m]) > 0` for a restart
   alert.
 
-### `d2b_daemon_guest_control_exec_total`
+### `d2b_daemon_component_session_shell_total`
 
 - **Type:** counter
 - **Labels:** `subsystem`, `outcome`, `error_kind`
-- **Meaning:** Cumulative count of guest-control exec session/op outcomes by
-  subsystem, closed outcome, and bounded error bucket.
-
-### `d2b_daemon_guest_control_shell_total`
-
-- **Type:** counter
-- **Labels:** `subsystem`, `outcome`, `error_kind`
-- **Meaning:** Cumulative count of guest-control persistent-shell management and
+- **Meaning:** Cumulative count of ComponentSession persistent-shell management and
   attached-owner outcomes. Shell names, session ids, terminal session handles, attach ids,
   terminal stream ids, provider/resource ids, provider endpoints,
   provider credentials, process environments, working directories, helper
@@ -185,12 +178,11 @@ declared schema; see "Cardinality bounds" below.
 - **Type:** counter
 - **Labels:** `provider`, `component`, `operation`, `outcome`, `error_kind`
 - **Meaning:** Provider-neutral persistent-shell lifecycle outcomes. Providers
-  are `guest-control` and `unsafe-local`; component is the closed value `shell`;
+  are `component-session` and `unsafe-local`; component is the closed value `shell`;
   operations are `list`, `create`, `attach`, `detach`, `kill`, and `close`.
   Outcomes and error kinds are closed daemon enums. No uid, target, shell name,
   operation/session id, supervisor metadata, terminal bytes, helper diagnostic,
-  path, environment, or cwd is a label. The guest-control-specific counter above
-  remains available for compatibility.
+  path, environment, or cwd is a label.
 
 ### `d2b_daemon_workload_availability`
 
@@ -234,8 +226,8 @@ declared schema; see "Cardinality bounds" below.
 | `mode` | closed activation mode enum | 4 |
 | `status` | closed activation phase outcome enum | bounded by daemon code |
 | `reason` | closed degraded reason enum | bounded by daemon code |
-| `subsystem` | closed guest-control subsystem enum | bounded by daemon code |
-| `outcome` (guest-control) | closed enum | bounded by daemon code |
+| `subsystem` | closed ComponentSession subsystem enum | bounded by daemon code |
+| `outcome` (ComponentSession) | closed enum | bounded by daemon code |
 | `error_kind` | normalized daemon error bucket | bounded by daemon code |
 | `provider` (shell) | closed shell backend enum | 2 |
 | `component` (shell) | constant `shell` | 1 |

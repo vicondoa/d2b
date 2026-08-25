@@ -1018,9 +1018,7 @@ dependencies = [
  "d2b-audit",
  "d2b-contracts",
  "d2b-contracts-broker",
- "d2b-contracts-control",
  "d2b-contracts-resource",
- "d2b-contracts-zone-session",
  "d2b-core",
  "d2b-host",
  "d2b-realm-core",
@@ -1100,7 +1098,6 @@ version = "0.0.0-bootstrap"
 dependencies = [
  "d2b-contracts",
  "d2b-contracts-resource",
- "protobuf",
  "schemars",
  "serde",
  "serde_json",
@@ -1219,13 +1216,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "d2b-exec-runner"
-version = "0.0.0-bootstrap"
-dependencies = [
- "rustix 0.38.44",
-]
-
-[[package]]
 name = "d2b-gateway"
 version = "0.0.0-bootstrap"
 dependencies = [
@@ -1278,25 +1268,6 @@ dependencies = [
  "serde",
  "serde_json",
  "thiserror 2.0.20",
-]
-
-[[package]]
-name = "d2b-guestd"
-version = "0.0.0-bootstrap"
-dependencies = [
- "async-trait",
- "d2b-contracts",
- "d2b-contracts-control",
- "d2b-exec-runner",
- "d2b-realm-core",
- "futures",
- "hmac",
- "protobuf",
- "rustix 0.38.44",
- "sha2",
- "tokio",
- "tokio-vsock",
- "ttrpc",
 ]
 
 [[package]]
@@ -1417,10 +1388,7 @@ version = "0.0.0-bootstrap"
 dependencies = [
  "async-trait",
  "base64",
- "d2b-contracts-control",
  "d2b-contracts-resource",
- "d2b-contracts-zone-session",
- "libc",
  "rustix 0.38.44",
  "schemars",
  "serde",
@@ -1514,13 +1482,11 @@ dependencies = [
  "d2b-contracts",
  "d2b-contracts-control",
  "d2b-contracts-resource",
- "d2b-contracts-zone-session",
  "d2b-core",
  "d2b-provider-toolkit",
  "d2b-realm-core",
  "d2b-session",
  "env_logger",
- "getrandom 0.2.17",
  "libc",
  "log",
  "nix 0.29.0",
@@ -1749,16 +1715,13 @@ name = "d2b-provider-transport-vsock"
 version = "0.0.0-bootstrap"
 dependencies = [
  "async-trait",
- "d2b-contracts-control",
  "d2b-contracts-resource",
  "d2b-contracts-zone-session",
- "d2b-provider",
  "d2b-session",
  "ring",
  "serde",
  "serde_json",
  "tokio",
- "tracing",
 ]
 
 [[package]]
@@ -1971,7 +1934,6 @@ dependencies = [
 name = "d2bd"
 version = "0.0.0-bootstrap"
 dependencies = [
- "arc-swap",
  "async-trait",
  "clap",
  "d2b-audit",
@@ -2024,14 +1986,11 @@ dependencies = [
  "notify-rust",
  "parking_lot",
  "protobuf",
- "regex",
  "rustix 0.38.44",
- "semver",
  "serde",
  "serde_json",
  "sha2",
  "socket2 0.5.10",
- "subtle",
  "tempfile",
  "tokio",
  "tracing",
@@ -2075,11 +2034,9 @@ dependencies = [
  "serde_json",
  "sha2",
  "socket2 0.5.10",
- "subtle",
  "tempfile",
  "tokio",
  "tracing",
- "tracing-subscriber",
  "ttrpc",
  "uzers",
 ]

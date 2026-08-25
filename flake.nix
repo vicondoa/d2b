@@ -141,8 +141,8 @@
 
       providerElfShim = import ./nix/provider-elf-shim.nix;
       # The Guest static workspace mirrors the shared daemon/broker dependency
-      # closure. The legacy guestd and frontend crates remain copied as
-      # migration inputs; ordinary Guest packaging does not install them.
+      # closure. Guest packaging contains only the shared daemon, broker,
+      # and signed Provider workspace inputs.
       mkGuestRustPackagesSrc = pkgs:
         pkgs.runCommand "d2b-guest-rust-src" { } ''
           mkdir -p $out/packages
@@ -162,8 +162,6 @@
           cp -r ${./packages/d2b-gateway} $out/packages/d2b-gateway
           cp -r ${./packages/d2b-gateway-runtime} $out/packages/d2b-gateway-runtime
           cp -r ${./packages/d2b-host} $out/packages/d2b-host
-          cp -r ${./packages/d2b-guestd} $out/packages/d2b-guestd
-          cp -r ${./packages/d2b-exec-runner} $out/packages/d2b-exec-runner
           cp -r ${./packages/d2b-sk-frontend} $out/packages/d2b-sk-frontend
           cp -r ${./packages/d2b-process} $out/packages/d2b-process
           cp -r ${./packages/d2b-process-conformance} $out/packages/d2b-process-conformance
@@ -529,9 +527,6 @@
         d2bd-guest-static = guestStaticPackage "d2bd" "d2bd";
         d2b-broker-guest-static =
           guestStaticPackage "d2b-broker" "d2b-broker";
-        d2b-guestd-static = guestStaticPackage "d2b-guestd" "d2b-guestd";
-        d2b-exec-runner-static =
-          guestStaticPackage "d2b-exec-runner" "d2b-exec-runner";
         d2b-sk-frontend-static =
           guestStaticPackage "d2b-sk-frontend" "d2b-sk-frontend";
         d2b-guest-shell-runner-static = guestShellRunnerStatic;
@@ -984,7 +979,7 @@
             graphics.videoSidecar = true;
             audio.enable = true;
             usbip.yubikey = true;
-            guest.control.enable = true;
+            guest.componentSession.enable = true;
             tpm.enable = true;
             observability.enable = true;
             config = {

@@ -173,8 +173,8 @@ zone_closed_enum!(
         ZoneLink = 3 => "zone-link",
         /// The one-time IKpsk2 enrollment bootstrap, which terminates.
         Bootstrap = 4 => "bootstrap",
-        /// Guest control traffic.
-        GuestControl = 5 => "guest-control",
+        /// ComponentSession traffic.
+        ComponentSession = 5 => "component-session",
         /// Bulk resource transfer.
         ResourceTransfer = 6 => "resource-transfer",
         /// Provider agent control traffic.
@@ -348,7 +348,7 @@ mod tests {
         (EndpointPurpose::ResourceService, 2, "resource-service"),
         (EndpointPurpose::ZoneLink, 3, "zone-link"),
         (EndpointPurpose::Bootstrap, 4, "bootstrap"),
-        (EndpointPurpose::GuestControl, 5, "guest-control"),
+        (EndpointPurpose::ComponentSession, 5, "component-session"),
         (EndpointPurpose::ResourceTransfer, 6, "resource-transfer"),
         (EndpointPurpose::ProviderControl, 7, "provider-control"),
         (

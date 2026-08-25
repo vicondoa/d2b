@@ -207,11 +207,31 @@ Managed paths, restart adoption, locks, leases, cleanup, and degraded-state repo
 
 These are the framework's contract with consumers. Loosening one silently turns a previously-rejected misconfig into runtime breakage. New assertions need a matching case in `tests/unit/nix/cases/assertions.nix`.
 
-## Guest-control exec session table
+## ComponentSession exec session table
 
-**Where:** `packages/d2bd/src/{exec_session,exec_session_real}.rs`, `run_exec_owner` in `packages/d2bd/src/lib.rs`, `packages/d2b/src/exec_client.rs`, `packages/d2b-contracts-control/src/public_wire.rs` (`ExecOp`/`ExecOpResponse`)
+**Where:** `packages/d2bd-runtime/src/{exec_session,exec_session_real}.rs`,
+`packages/d2b/src/exec_client.rs`, and
+`packages/d2b-contracts-control/src/public_wire.rs` (`ExecOp`/`ExecOpResponse`)
 
-Arbitrary `d2b vm exec` is **admin-only**; configured `d2b launch` local-VM items may use the same detached guest-control backend with launcher authority because argv is resolved exclusively from the hash-verified private bundle. Both run through `d2bd` plus authenticated guest-control vsock to `guestd`. Attached exec uses the daemon's in-process **session table**: per-session workers own one authenticated guest-control client and proxy typed exec ops. **guestd runs every exec as the VM's workload user (`ssh.user`) inside a real PAM login session (`systemd-run --property=PAMName=login --uid=<user>`) - never as root; the wire `user` field is ignored and the target user is host-fixed, bare `argv[0]` is resolved by the workload user's login `PATH`, and each attached exec runs in a process-unique named transient unit (`d2b-exec-<…>.service`) that teardown stops via `systemctl kill` so a quiet command cannot outlive owner-disconnect, cancel, or the runtime ceiling. Operators elevate with `sudo` inside the session.** Detached non-TTY exec is enabled with `d2b vm exec -d <vm> -- <cmd>` and managed through VM-first verbs (`d2b vm exec <vm> list`, `logs <id>`, `status <id>`, `kill <id>`); command forms always require `--`, so those verb words remain valid VM names. Detached jobs and configured local-VM launches also run as the workload user, never root: the root detached runner only owns trusted slot/log files, re-validates the non-root uid before spawning the workload unit, and fails terminally rather than falling back to direct root execution. Guestd reconciles detached runner/workload units on startup, cleans orphaned workloads, and runs a periodic reaper for terminal records and retained logs; `kill` maps to idempotent two-phase `ExecCancel` (SIGTERM/grace/SIGKILL). There is **no per-VM systemd unit, no new broker op, and no SSH** - the guest owns the PTY; the host only flips termios for attached TTY via an RAII raw-mode guard restored on every exit/error/panic. The admin `SO_PEERCRED` check runs before arbitrary exec session setup; configured launch instead requires local launcher/admin authority and a trusted configured item. Old/non-guest-control generations fail closed (exit `70`) with no proxy and no SSH fallback. Session-table caps (global/per-UID/per-VM), detached slot/log quotas, and rate limits are enforced before connect/auth or create. Attached audit emits one redacted kind=critical session-establishment event (vm/peer_uid/tty); detached create/kill daemon audit carries only vm/peer_uid/action/result/exec_id, while configured-launch audit adds target/item/operation correlation without execution details. Opaque session handles, argv, stdio, env, cwd, and paths never reach any Debug/trace/audit/metric surface. Validate with the `exec_session`/`exec_client` hermetic test matrices.
+Arbitrary `d2b vm exec` is **admin-only**; configured `d2b launch` local-VM
+items may use the same target-local Process backend with launcher authority
+because argv is resolved exclusively from the hash-verified private bundle.
+Both paths run through `d2bd` and an authenticated ComponentSession. Attached
+exec uses the daemon's in-process **session table**, while target-local
+Processes own command execution and the guest PTY. Detached non-TTY exec is
+represented by `EphemeralProcess` resources and managed through bounded
+Resource API operations. There is **no per-VM systemd unit, no direct feature
+spawn, no broker operation for exec, and no SSH fallback**. The admin
+`SO_PEERCRED` check runs before arbitrary exec session setup; configured launch
+instead requires local launcher/admin authority and a trusted configured item.
+Old or incompatible peers fail closed before controller authority or feature
+behavior. Session-table caps, detached slot/log quotas, and rate limits are
+enforced before connect/auth or create. Attached audit emits redacted
+session-establishment events, while detached create/kill audit carries only
+bounded target, peer, action/result, and opaque execution correlation. Opaque
+session handles, argv, stdio, env, cwd, and paths never reach any
+Debug/trace/audit/metric surface. Validate with the `exec_session` and
+`exec_client` hermetic test matrices.
 
 ## Unsafe-local persistent shells
 

@@ -13,7 +13,7 @@ capabilities, rate-limit/backoff/circuit behavior, credential boundary,
 safe diagnostics rules, and error shapes for provider-managed sandboxes.
 
 For nodes where d2b owns the full host stack (hypervisor, broker,
-guest-control), see [remote full-host nodes](./remote-full-host-nodes.md).
+ComponentSession), see [remote full-host nodes](./remote-full-host-nodes.md).
 
 ---
 
@@ -29,7 +29,7 @@ host `d2bd`, `d2b-broker`, KVM subsystem, vsock channel, cgroup
 subtree, namespace hierarchy, full-host lifecycle, or device-hotplug surface
 on a provider-managed node. ADR 0039 defines one exception to the old
 exec-only model: a provider-managed sandbox may advertise persistent shell
-only when it runs a guestd-compatible d2b agent that exposes shell
+only when it runs a provider-agent-compatible d2b agent that exposes shell
 control and terminal-v1 streams over the constellation peer transport.
 
 This model is distinct from a **remote full-host node** (see
@@ -42,7 +42,7 @@ key differences:
 | --- | --- | --- |
 | Who owns lifecycle | Cloud provider API | Remote `d2bd` + `d2b-broker` |
 | Broker presence | None | Full broker on the remote host |
-| Guest-control / vsock | No vsock or raw guest-control tunnel; persistent-shell-capable sandboxes require a guestd-compatible agent over constellation peer transport. | Present |
+| ComponentSession / vsock | No vsock or raw ComponentSession tunnel; persistent-shell-capable sandboxes require a provider-agent-compatible agent over constellation peer transport. | Present |
 | KVM / hypervisor | Absent | Present |
 | Cgroup / namespace authority | Absent | Present (remote host) |
 | systemd | Absent | Present (remote host) |
@@ -63,13 +63,13 @@ table is not supported; operations requiring it receive
 | Capability | Azure Container Apps support | Notes |
 | --- | --- | --- |
 | `lifecycle` | Conditional | Advertised only when sandbox defaults are configured; create/start/stop/list map to the Azure Container Apps sandbox data plane. |
-| `exec` | ✓ | Synchronous Azure Container Apps `executeShellCommand`; returns a derived execution id, not a durable guest-control session. |
-| `persistent-shell` | No | Live ADR 0039 capability. The executeShellCommand-only adapter must not advertise persistent shell; support requires a guestd-compatible in-sandbox agent over the constellation peer transport. |
+| `exec` | ✓ | Synchronous Azure Container Apps `executeShellCommand`; returns a derived execution id, not a durable ComponentSession session. |
+| `persistent-shell` | No | Live ADR 0039 capability. The executeShellCommand-only adapter must not advertise persistent shell; support requires a provider-agent-compatible in-sandbox agent over the constellation peer transport. |
 | `logs` | ✗ | No retained-log stream in this adapter. |
 | `pty` | ✗ | No interactive TTY or stdio attachment. |
 | `file-copy` | ✗ | No bounded file-copy API. |
 | `port-forward` | ✗ | No generic tunnel or port-forward API. |
-| `vsock` | ✗ | No guest-control vsock channel. |
+| `vsock` | ✗ | No ComponentSession vsock channel. |
 | `virtiofs` | ✗ | No per-workload /nix/store hardlink farm or virtiofsd share. |
 | `window-forwarding` / `display-streaming` | ✗ | No Wayland/virtio-gpu or video sidecar. |
 | `clipboard` | ✗ | No clipboard bridge. |
@@ -105,7 +105,7 @@ provider itself uses deterministic workload labels to discover upstream
 state before creating or retrying mutating lifecycle calls.
 
 Persistent shell support is a separate provider trait surface. A
-guestd-compatible sandbox that advertises `persistent-shell` handles
+provider-agent-compatible sandbox that advertises `persistent-shell` handles
 `ShellList`, `ShellAttach`, `ShellDetach`, and `ShellKill` through a
 `PersistentShellProvider`-style seam and binds attach to an authorized
 `shell-pty` stream. This seam is not `WorkloadProvider::exec`, not durable
@@ -115,30 +115,30 @@ typed capability denials for `Shell*` operations.
 
 ---
 
-## guestd-compatible provider-agent bootstrap contract
+## Provider-agent bootstrap contract
 
 A provider-managed sandbox may advertise `persistent-shell` only after its
-provider reports a complete, non-secret guestd-compatible bootstrap contract:
+provider reports a complete, non-secret provider-agent-compatible bootstrap contract:
 
-1. The sandbox image places the guestd-compatible d2b agent binary in the
+1. The sandbox image places the provider-agent-compatible d2b agent binary in the
    image under provider control.
 2. Auth bootstrap material is short-lived and relay-scoped; long-lived realm,
    provider, and Relay rule credentials remain gateway-side only.
 3. The agent learns only an ADR 0032 peer-transport rendezvous, not a raw
-   guest-control/vsock endpoint and not a provider-specific shell channel.
+   ComponentSession/vsock endpoint and not a provider-specific shell channel.
 4. The sandbox has a workload identity suitable for acquiring its scoped relay
    sender material.
 5. The persistent-shell helper is available in the sandbox image.
 6. The agent reports bounded effective shell limits (`maxSessions` 1-256,
    `maxAttached` 1-64, and `maxAttached <= maxSessions`).
 7. Health and capability advertisement come from the in-sandbox agent, with
-   generation metadata for the guest boot, guestd instance, and shell daemon.
+   generation metadata for the guest boot, provider-agent instance, and shell daemon.
 
 If any prerequisite is absent or malformed, the provider advertises no
 `persistent-shell` capability. The current Azure Container Apps
 `executeShellCommand` adapter intentionally reports the fail-closed bootstrap
 shape: it may advertise `exec` and provider-managed isolation, but it does not
-claim persistent shell until an ACA image can boot the guestd-compatible agent.
+claim persistent shell until an ACA image can boot the provider-agent-compatible agent.
 
 ---
 
@@ -150,16 +150,16 @@ with `UnsupportedFeature` or `CapabilityDenied`; there are no fallbacks.
 
 - **No broker operation forwarding.** The adapter never forwards raw
   `d2b-broker` frames to the container runtime.
-- **No raw guest-control or vsock frames.** The current
-  executeShellCommand-only Azure Container Apps adapter has no guestd instance
+- **No raw ComponentSession or vsock frames.** The current
+  executeShellCommand-only Azure Container Apps adapter has no provider-agent instance
   and no vsock channel to attach or tunnel. Future persistent-shell-capable
-  provider sandboxes must use a guestd-compatible d2b agent over the ADR
-  0032 peer transport; they still do not expose raw guest-control frames or a
+  provider sandboxes must use a provider-agent-compatible d2b agent over the ADR
+  0032 peer transport; they still do not expose raw ComponentSession frames or a
   provider-specific shell channel.
 - **No exec-to-shell fallback.** `executeShellCommand`,
   `WorkloadProvider::exec`, and durable execution are one-shot/durable exec
   surfaces, not ADR 0039 persistent shell. A sandbox without a
-  guestd-compatible agent and `persistent-shell` capability refuses `Shell*`
+  provider-agent-compatible agent and `persistent-shell` capability refuses `Shell*`
   operations with `CapabilityDenied` or `UnsupportedFeature`.
 - **No pidfd or fd passing.** No file descriptors are exchanged with
   the container runtime.
@@ -322,7 +322,7 @@ unchanged; retry hint fields remain internal.
 | `circuit-open` | `Backpressure` | Circuit breaker is open for this upstream; message includes remaining open duration. | Wait for the duration in the error message before retrying. |
 | `credential-acquisition-failed` | `AuthenticationFailed` | The gateway could not acquire a managed/workload identity token. | Verify explicit managed/workload identity configuration. |
 | `upstream-authorization-failed` | `Unauthorized` | Azure Container Apps returned 403 for an otherwise formed request. | Verify the managed identity has the required Azure Container Apps data-plane role. |
-| `unsupported-operation` | `UnsupportedFeature` | The operation kind is outside the Azure Container Apps adapter's scope. | Use a full-host node for operations requiring broker/guest-control/exec. |
+| `unsupported-operation` | `UnsupportedFeature` | The operation kind is outside the Azure Container Apps adapter's scope. | Use a full-host node for operations requiring broker/ComponentSession/exec. |
 | `capability-denied` | `CapabilityDenied` | The required capability is absent from the adapter's capability set. | See the capability matrix above. |
 | `provider-unavailable` | `ProviderAllocationFailed` | Azure Container Apps management API is unreachable or returned an unrecoverable 5xx. | Check provider status and retry after the circuit window if one is reported. |
 
@@ -338,7 +338,7 @@ adapter:
 
 - Interactive exec sessions or attached TTY to running containers.
 - Persistent named shell sessions; ADR 0039 defines this for a
-  guestd-compatible in-sandbox agent and explicitly excludes mapping it to
+  provider-agent-compatible in-sandbox agent and explicitly excludes mapping it to
   `executeShellCommand`. The pure provider trait/DTO seam exists, but the
   Azure Container Apps runtime adapter does not implement it.
 - Live stdio streaming (current support is polling-based log read only).
@@ -359,7 +359,7 @@ the capability matrix above.
 
 - [ADR 0039 - constellation persistent shell routing](../adr/0039-constellation-persistent-shell-routing.md) - the live core contract for persistent shells on remote/provider targets.
 - [Remote full-host nodes](./remote-full-host-nodes.md) - the model
-  for nodes that run their own `d2bd`/broker/guest-control stack.
+  for nodes that run their own `d2bd`/broker/ComponentSession stack.
 - [Azure Relay transport](./transport-azure-relay.md) - the Relay
   WebSocket transport used for sandbox sender connections.
 - [Realm core](./realm-core.md) - typed error shapes,

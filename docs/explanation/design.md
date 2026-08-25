@@ -320,7 +320,7 @@ Pretending otherwise would be dishonest.
   Every mutating verb - lifecycle (`vm start`/`vm stop`/`vm restart`/
   `switch`), host-prepare, key rotation, USBIP bind, store verify,
   config sync (`readGuestConfig`), and the destructive
-  guest-control exec verb (`vm exec`, which runs commands as the VM's
+  component-session exec verb (`vm exec`, which runs commands as the VM's
   workload user in a PAM login session - never as root) - is gated to
   the admin role
   (`d2b.site.adminUsers`, checked via `SO_PEERCRED` at accept
@@ -605,10 +605,10 @@ up sidecar config changes. The framework provides two paths:
   closure. Use this when `d2b guest list` exposes a pending update in
   `[pending restart]` after a `nixos-rebuild switch`.
 - `d2b activation switch Guest/<name> --apply` - full Guest closure rebuild + live
-  activation through the daemon's authenticated guest-control path
+  activation through the daemon's authenticated component-session path
   (no VM reboot). Use this when you edited the VM's own NixOS module.
   The host publishes the prepared toplevel into the VM's store view;
-  guestd runs the activation inside the guest, not through host
+  target-local Process runs the activation inside the guest, not through host
   systemd.
 
 #### Pending-restart detection via `booted` vs `current`
@@ -715,8 +715,8 @@ That same store-view boundary is the activation boundary. A host build
 produces the VM's NixOS `system.build.toplevel`, then the
 broker/store-view path publishes the closure into the per-VM live store
 pool. The guest sees the pool through virtiofs as its `/nix/store`.
-For live `switch`, `test`, and `rollback`, `d2bd` asks guestd over
-authenticated guest-control to activate the prepared toplevel inside
+For live `switch`, `test`, and `rollback`, `d2bd` asks target-local Process over
+authenticated component-session to activate the prepared toplevel inside
 the running VM and waits for guest activation status before committing
 host generation metadata through the broker. If the VM is stopped,
 offline, or too old to advertise guest activation, live activation
@@ -738,7 +738,7 @@ is the daily-driver interface. Verbs include `list`, `status`,
 the pre-v1.0 bash CLI (and the generated `nixos-modules/cli.nix`
 shell script) was retired in v1.0. Host mutations dispatch through
 `d2bd` → `d2b-broker`; live guest activation dispatches
-through `d2bd` → authenticated guest-control and only uses the
+through `d2bd` → authenticated component-session and only uses the
 broker to publish/commit host-owned generation metadata (see
 [ADR 0015](../adr/0015-daemon-only-clean-break.md) and
 [ADR 0017](../adr/0017-no-bash-fallbacks-invariant.md)). The
@@ -951,10 +951,10 @@ mutating verbs to the admin role (`d2b.site.adminUsers`, the
 `dispatch_request` table. Most host-mutating verbs route through
 `d2b-broker`, where each host mutation is recorded as an
 audited `OpAuditRecord` in `broker-<utc-date>.jsonl`. The
-guest-control verbs are the exception: `readGuestConfig`
-(config sync) reads the guest's config over the typed guest-control
+component-session verbs are the exception: `readGuestConfig`
+(config sync) reads the guest's config over the typed component-session
 channel rather than mutating the host, and `vm exec`
-proxies a guest-control exec session - running as the VM's workload
+proxies a component-session exec session - running as the VM's workload
 user (`ssh.user`, never root) in a PAM login session - whose
 establishment and termination are
 recorded as *leak-safe daemon-side* lifecycle events in
@@ -1226,8 +1226,8 @@ evaluation, so it is contained on three independent axes (see
   tree. An approved file is trusted, operator-reviewed host Nix - no
   more privileged than config the operator writes by hand.
 - **No new attack surface.** The transport is a host-initiated read
-  over the authenticated guest-control vsock (the daemon's
-  `ReadGuestConfig` → guestd `ReadGuestFile` path) - no virtiofs share,
+  over the authenticated component-session vsock (the daemon's
+  `ReadGuestConfig` → target-local Process `ReadGuestFile` path) - no virtiofs share,
   no new socket, no writable host-backed mount; the guest never
   initiates a connection into the host control plane, and there is no
   SSH fallback (an old-generation guest that does not advertise
@@ -1395,7 +1395,7 @@ signal:
   existing closure. Use this when you ran `nixos-rebuild
   switch` and a sidecar config changed.
 - `d2b activation switch Guest/<name> --apply` does a Guest closure rebuild + live
-  guest-control activation through the daemon (no VM reboot). Use this
+  component-session activation through the daemon (no VM reboot). Use this
   when you edited the VM's own NixOS module. Stopped VMs use
   `d2b boot <vm> --apply` for offline staging instead of host-side
   activation.
@@ -1606,7 +1606,7 @@ portability work splits that into three layers:
    `SO_PEERCRED` at `accept(2)` time. The daemon then resolves the
    peer uid against `d2b.site.launcherUsers` (connection) and
    `d2b.site.adminUsers` (the *role* gate for destructive /
-   host-prepare / key-rotation / guest-control verbs). There is no
+   host-prepare / key-rotation / component-session verbs). There is no
    separate `d2b-admin` socket or group - admin is a
    `SO_PEERCRED`-derived role on the single public socket, not a
    second endpoint. See ADR 0002.

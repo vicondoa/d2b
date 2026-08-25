@@ -95,8 +95,8 @@ Supported predicate kinds (per
 - `tcp-port: { host, port }` - TCP `connect()` against
   `host:port`. A generic predicate kind retained for old-generation
   compatibility; the framework no longer emits it as the readiness
-  signal (see `guest-control-health` below).
-- `guest-control-health: { vm }` - legacy daemon-side guest-control Health
+  signal (see `component-session-health` below).
+- `component-session-health: { vm }` - legacy daemon-side component-session Health
   probe retained only for old bundle decoding; new Nix output does not emit
   this predicate.
 - `command: [argv...]` - daemon-spawned probe child exits 0.

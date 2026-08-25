@@ -2779,8 +2779,7 @@ fn runner_role_name(role: &ProcessRole) -> Option<&'static str> {
     match role {
         ProcessRole::HostReconcile
         | ProcessRole::StoreVirtiofsPreflight
-        | ProcessRole::GuestSshReadiness
-        | ProcessRole::GuestControlHealth
+        | ProcessRole::ComponentSessionHealth
         | ProcessRole::SecurityKeyFrontend => None,
         ProcessRole::SwtpmPreStartFlush => Some("swtpm-flush"),
         ProcessRole::Swtpm => Some("swtpm"),
@@ -2859,8 +2858,7 @@ fn legacy_runner_spec(vm_name: &str, role: &ProcessRole) -> Option<(String, Vec<
         ProcessRole::WaylandProxy => return None,
         ProcessRole::HostReconcile
         | ProcessRole::StoreVirtiofsPreflight
-        | ProcessRole::GuestSshReadiness
-        | ProcessRole::GuestControlHealth
+        | ProcessRole::ComponentSessionHealth
         | ProcessRole::SecurityKeyFrontend => return None,
     };
     Some((

@@ -12,6 +12,12 @@
 | Depends on | `ADR-046-terminology-and-identities`, `ADR-046-componentsession-and-bus`, `ADR-046-zone-routing`, `ADR-046-provider-model-and-packaging`, `ADR-046-resources-zone-control`, `ADR-046-resource-api-and-authorization`, `ADR-046-resources-host-guest-process-user`, `ADR-046-provider-state` |
 | Supersedes | `packages/d2bd/src/guest_control_vsock.rs` transport probe (→ allocator-issued endpoint via VsockEffectPort); `packages/d2b-host/src/vsock_relay_argv.rs` socat relay (→ native FramedVsockTransport in Provider service); `NativeVsock`/`CloudHypervisorVsock` in `d2b-session-unix/src/vsock.rs` (→ FramedVsockTransport implementing OwnedTransport adapted as service-Provider transport bridge) |
 
+> **Current-state note (U10).** The baseline Guest-control transport rows are
+> historical disposition records. The active enrolled transport helper is
+> `packages/d2bd-runtime/src/component_session_vsock.rs`; it carries only the
+> ComponentSession connection setup and delegates identity/authentication to
+> the session engine. No legacy Guest protocol or token-share path remains.
+
 ## Source and reuse policy
 
 The pre-ADR-0045 v3 baseline has no generic vsock transport Provider or

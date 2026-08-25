@@ -462,8 +462,7 @@ pub fn runner_role_for_process_role(role: &ProcessRole) -> Option<RunnerRole> {
         ProcessRole::ActivationNixosRunner => Some(RunnerRole::ActivationNixos),
         ProcessRole::HostReconcile
         | ProcessRole::StoreVirtiofsPreflight
-        | ProcessRole::GuestSshReadiness
-        | ProcessRole::GuestControlHealth
+        | ProcessRole::ComponentSessionHealth
         | ProcessRole::SecurityKeyFrontend => None,
     }
 }
@@ -1018,7 +1017,7 @@ mod tests {
             Some(RunnerRole::Gpu)
         );
         assert_eq!(
-            runner_role_for_process_role(&ProcessRole::GuestControlHealth),
+            runner_role_for_process_role(&ProcessRole::ComponentSessionHealth),
             None
         );
         assert_eq!(

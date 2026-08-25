@@ -354,7 +354,6 @@ pub struct RealmControllerRuntimeCapabilities {
     pub lifecycle: bool,
     pub display: bool,
     pub usb_hotplug: bool,
-    pub guest_control: bool,
     pub exec: bool,
     pub config_sync: bool,
     pub ssh: bool,
@@ -403,7 +402,6 @@ pub struct RealmControllerDisplayOperationCapabilities {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct RealmControllerGuestOperationCapabilities {
-    pub guest_control: bool,
     pub exec: bool,
     pub shell: bool,
     pub config_sync: bool,
@@ -450,7 +448,7 @@ pub struct RealmControllerLocalWorkloadPaths {
     pub state_dir: PathTemplate,
     pub run_dir: PathTemplate,
     pub store_view: PathTemplate,
-    pub guest_control_dir: PathTemplate,
+    pub component_session_dir: PathTemplate,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]

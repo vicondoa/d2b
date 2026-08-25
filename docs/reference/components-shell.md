@@ -26,20 +26,17 @@ d2b.vms.<vm>.guest.shell = {
 
 Enabling `guest.shell` requires:
 
-- `guest.control.enable = true`;
-- `guest.exec.enable = true`;
-- a non-root workload user (`ssh.user`);
-- a runtime/provider that supports guest-control shell operation capability.
+- `guest.componentSession.enable = true`;
+- a runtime/provider that supports the signed target-local shell Process.
 
-`qemu-media` and providers without guest-control reject non-default
+`qemu-media` and providers without component-session reject non-default
 `guest.shell.*` settings at eval time.
 
 ## Guest wiring
 
 When enabled for a workload user, the guest module:
 
-- passes `--shell-enable`, `--shell-default-name`, `--shell-max-sessions`, and
-  `--shell-max-attached` to guestd;
+- passes the shell policy to the signed target-local Process;
 - wires the static `d2b-guest-shell-runner` and `systemctl` paths;
 - declares `d2b-shpool-daemon.service` as the workload user with
   `PAMName=d2b-shpool-daemon`;
@@ -64,7 +61,7 @@ Supported providers emit a per-VM manifest block:
 }
 ```
 
-Providers without guest-control emit `shell = null`. The manifest never exposes
+Providers without component-session emit `shell = null`. The manifest never exposes
 runtime helper sockets, terminal handles, shpool state paths, or live session
 names beyond the configured default.
 

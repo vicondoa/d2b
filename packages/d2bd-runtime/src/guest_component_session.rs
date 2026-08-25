@@ -22,8 +22,8 @@ use d2b_session_unix::FramedVsockTransport;
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    guest_control_vsock::{
-        GuestControlTransportProbeResult, connect_guest_control_vsock,
+    component_session_vsock::{
+        ComponentSessionTransportProbeResult, connect_component_session_vsock,
     },
     guest_mode::{BootIdentity, GuestIdentity},
 };
@@ -200,7 +200,7 @@ impl GuestComponentSessionClient {
         guest_public: [u8; 32],
     ) -> Result<Self, GuestComponentSessionClientError> {
         let connected = tokio::task::spawn_blocking(move || {
-            connect_guest_control_vsock(
+            connect_component_session_vsock(
                 &endpoint.socket_path,
                 &endpoint.state_root,
                 endpoint.expected_state_root_uid,
@@ -213,8 +213,8 @@ impl GuestComponentSessionClient {
         .await
         .map_err(|_| GuestComponentSessionClientError::Transport)?;
         let connected = match connected {
-            GuestControlTransportProbeResult::Connected(stream) => stream,
-            GuestControlTransportProbeResult::Failed(_) => {
+            ComponentSessionTransportProbeResult::Connected(stream) => stream,
+            ComponentSessionTransportProbeResult::Failed(_) => {
                 return Err(GuestComponentSessionClientError::Transport);
             }
         };
@@ -237,7 +237,7 @@ impl GuestComponentSessionClient {
         }
 
         fn connected_stream_to_transport(
-            connected: crate::guest_control_vsock::GuestControlConnectedStream,
+            connected: crate::component_session_vsock::ComponentSessionConnectedStream,
         ) -> Result<
             FramedVsockTransport<tokio::net::UnixStream>,
             GuestComponentSessionClientError,

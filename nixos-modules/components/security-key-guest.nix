@@ -91,7 +91,7 @@ in
         # Not privileged: runs as root only to open /dev/uhid (mode 0600
         # root:root on some kernels). If the guest sets uhid to 0660
         # root:input, we can drop to the login user with
-        # User = config.d2b.guestControl.exec.execUser or similar.
+        # The signed Guest Process keeps ownership of this virtual device.
         # Keep as root for simplicity; the uhid fd scope is limited to the
         # virtual device we own.
         PrivateTmp = true;

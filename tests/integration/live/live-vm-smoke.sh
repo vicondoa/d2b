@@ -230,11 +230,11 @@ probe_common() {
     fail_check "$vm: Guest did not become Ready within ${D2B_SMOKE_READY_BUDGET}s"
   fi
 
-  # 3. Guest-control exec reachability + uname.
+  # 3. ComponentSession Process reachability + uname.
   if wait_for_guest_exec "$vm" "$D2B_SMOKE_EXEC_BUDGET" uname -a; then
-    pass_check "$vm: guest-control exec uname -a succeeded within ${D2B_SMOKE_EXEC_BUDGET}s"
+    pass_check "$vm: component-session exec uname -a succeeded within ${D2B_SMOKE_EXEC_BUDGET}s"
   else
-    fail_check "$vm: guest-control exec unreachable after ${D2B_SMOKE_EXEC_BUDGET}s"
+    fail_check "$vm: component-session exec unreachable after ${D2B_SMOKE_EXEC_BUDGET}s"
     return 1
   fi
 
@@ -461,7 +461,7 @@ probe_audio() {
     return
   fi
   if ! wait_for_guest_exec "$vm" 30 uname -a; then
-    fail_check "$vm: guest-control exec unreachable within 30s after audio restart"
+    fail_check "$vm: component-session exec unreachable within 30s after audio restart"
     return
   fi
   local card_count_after

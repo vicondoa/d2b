@@ -232,7 +232,7 @@ the expected dependency shape without adding a second scheduler or inventory:
 
 | Representative change | Query | Expected shape |
 | --- | --- | --- |
-| USBIP Provider implementation | `bazel query 'rdeps(//packages/..., //packages/d2b-provider-device-usbip:d2b_provider_device_usbip)'` | The Provider's tests, `d2bd` composition/final link, and direct `d2b` integration tests only; no `d2bd-runtime`, `d2b-guestd`, sibling Provider, or foundational-contract target. |
+| USBIP Provider implementation | `bazel query 'rdeps(//packages/..., //packages/d2b-provider-device-usbip:d2b_provider_device_usbip)'` | The Provider's tests, `d2bd` composition/final link, and direct `d2b` integration tests only; no `d2bd-runtime`, sibling Provider, or foundational-contract target. |
 | Broker contract | `bazel query 'rdeps(//packages/..., //packages/d2b-contracts-broker:d2b_contracts_broker)'` | Broker/control-plane consumers only; resource-only and desktop interaction Providers remain absent. |
 | Network Nix surface | `bazel query 'kind("source file", deps(//bazel/checks/nix:nix-unit-network))'` | Only the network surface expression, its selected case, network modules, shared Nix evaluator helpers, and declared tools. Sibling Nix surfaces remain separate labels. |
 | Documentation-only | `bazel query 'rdeps(//..., //:docs/reference/bazel-buildbuddy.md)'` | Documentation/source-hygiene owners only; no product Rust test or Nix surface target. |

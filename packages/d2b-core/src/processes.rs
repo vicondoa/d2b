@@ -267,19 +267,12 @@ pub enum ProcessRole {
     VsockRelay,
     /// Host-to-observability-VM OTLP bridge.
     OtelHostBridge,
-    /// Guest SSH readiness probe.
+    /// Authenticated ComponentSession Health readiness probe.
     ///
-    /// Retained for the SSH-compatibility window (old-generation VMs that
-    /// predate guestd). New generations use [`ProcessRole::GuestControlHealth`]
-    /// for framework readiness instead.
-    GuestSshReadiness,
-    /// Authenticated guest-control Health readiness probe.
-    ///
-    /// Replaces [`ProcessRole::GuestSshReadiness`] as the framework readiness
-    /// gate on guest-control-capable VMs: readiness is a full authenticated
-    /// Hello + token challenge-response + Health over the guest-control vsock,
-    /// not a raw TCP-22 probe. It fails CLOSED.
-    GuestControlHealth,
+    /// Readiness is a full authenticated ComponentSession identity exchange
+    /// and Health check over the enrolled vsock, not a raw TCP-22 probe.
+    /// It fails closed.
+    ComponentSessionHealth,
     /// USBIP proxy or attach helper.
     Usbip,
     /// Guest-side CTAPHID relay frontend via UHID virtual HID device and
@@ -375,16 +368,16 @@ pub enum ReadinessPredicate {
     Command(Vec<String>),
     /// Component-specific predicate named by the emitter.
     ComponentSpecific(String),
-    /// Authenticated guest-control Health probe. Readiness requires a
-    /// full Hello + token challenge-response + Health over the guest-control
-    /// vsock - the host-side probe. Unlike [`Self::ComponentSpecific`]
+    /// Authenticated component-session Health probe. Readiness requires a
+    /// full identity-bound handshake + Health over the ComponentSession vsock -
+    /// the host-side probe. Unlike [`Self::ComponentSpecific`]
     /// (which reports ready unconditionally and would fail OPEN), this predicate
     /// fails CLOSED: it is ready only when the daemon completes the
     /// authenticated probe and the guest reports a healthy/degraded state, and
     /// never ready for an old-generation / unreachable / auth-failed / timed-out
     /// guest. The daemon resolves the per-VM vsock socket, peer credentials, and
-    /// broker-backed signer from its own trusted state.
-    GuestControlHealth { vm: String },
+    /// enrolled identity evidence from its own trusted state.
+    ComponentSessionHealth { vm: String },
 }
 
 /// v0.4.0 invariants preserved in the process contract.

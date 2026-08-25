@@ -269,26 +269,16 @@ in
             {
               d2b.sshUser = vm'.ssh.user;
               d2b.sudo = vm'.sudo;
-              d2b.guestControl.enable = vm'.guest.control.enable;
+              d2b.componentSession.enable = vm'.guest.componentSession.enable;
               # D17: thread the operator-editable working-copy path into
               # the guest independently of ssh.user so config-nixos exposes
               # the bounded GuestConfig capability exactly when there is a
               # guestConfigFile to sync.
-              d2b.guestControl.guestConfigPath =
+              d2b.componentSession.guestConfigPath =
                 if vm'.guestConfigFile != null
-                then "/var/lib/d2b-guest/guest-config.nix"
+                then "/var/lib/d2b/guest-config.nix"
                 else null;
-              d2b.guestControl.exec = {
-                enable = lib.mkForce vm'.guest.exec.enable;
-                # The host-fixed workload user every exec runs as (never root),
-                # derived from the per-VM workload user. The target-local
-                # Process Provider runs every exec as this user in a PAM login
-                # session.
-                execUser = lib.mkForce vm'.ssh.user;
-                detachedMaxRuntimeSec = lib.mkForce vm'.guest.exec.detachedMaxRuntimeSec;
-                interactiveMaxRuntimeSec = lib.mkForce vm'.guest.exec.interactiveMaxRuntimeSec;
-              };
-              d2b.guestControl.shell = {
+              d2b.componentSession.shell = {
                 enable = lib.mkForce vm'.guest.shell.enable;
                 defaultName = lib.mkForce vm'.guest.shell.defaultName;
                 maxSessions = lib.mkForce vm'.guest.shell.maxSessions;

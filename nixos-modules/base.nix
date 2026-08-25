@@ -106,7 +106,7 @@ in
   # Fires on every boot AND whenever the host publishes steady-state
   # store metadata by bumping `current` (via the path-trigger below).
   # Live `d2b switch <vm>` additionally runs through authenticated
-  # guest-control activation before the broker commits the host-side
+  # component-session activation before the broker commits the host-side
   # current pointers.
   # ---------------------------------------------------------------------------
   systemd.services.d2b-load-store-db = {

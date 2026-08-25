@@ -14,6 +14,12 @@
 | Foundation | `fd5b0067` - docs: establish d2b 3.0 Provider control-plane foundation |
 | Main reuse | Permitted (copy/adapt); main is not current-state evidence |
 
+> **Current-state note (U10).** This map is a baseline disposition record, not
+> a runtime inventory. The legacy Guest daemon, feature-specific guest-control
+> protocol, token-share path, and production bridges listed below are deleted
+> on the U10 head. Current execution is owned by `d2bd guest`, ComponentSession,
+> signed Provider Processes, and the Guest-profile broker.
+
 ---
 
 ## §0 Purpose and Notation
@@ -71,7 +77,7 @@ Target columns use **ADR 0046 names**. This table is the authoritative translati
 | `WorkloadProviderKind` enum | **`UnsafeLocal` variant → `Host` ResourceType** (not `Guest.spec.providerRef`); `LocalVm`/`QemuMedia`/`ProviderManaged` variants → `Guest.spec.providerRef` pointing to respective Provider resource | D042/D050; UnsafeLocal selects Host not Guest |
 | `WorkloadExecutionPosture` | `ExecutionPolicy` fields shared by Host and Guest | `d2b-realm-core/src/workload.rs:83` |
 | Provider traits/adapters/factories | Zone-local `Provider` resource + controller/service/worker Processes | |
-| guest-control ttrpc/vsock | current evidence of guestd vsock protocol; target is ComponentSession/d2b-bus | D001 - ComponentSession copies from main `a1cc0b2d` |
+| guest-control ttrpc/vsock | deleted legacy protocol; current owner is ComponentSession/d2b-bus | D001 - retained only as baseline disposition evidence |
 | `d2b-realm-router` session types | REPLACE target; current v3 session impl to be removed | Do NOT copy from v3 |
 | `AllocatorEngine` / `HostResourceKind` leases | Zone bootstrap resource provisioning (Network/CgroupSubtree) | Currently schema-only |
 
@@ -522,8 +528,8 @@ They are the replacement target, not a reuse source. ComponentSession copies fro
 
 | Symbol / Binary | Evidence | Current Definition / Callers | Disposition | Target | Work Item |
 |----------------|----------|------------------------------|-------------|--------|-----------|
-| `d2b-guestd` - PAM login, workload user exec, `ExecOp` handler | production-reachable | Guest-control ttrpc/vsock server; callers: d2bd exec_session via guest-control | REPLACE | ComponentSession `Exec` service inside Guest; vsock transport → ComponentSession bootstrap | `ADR046-session-001` |
-| `d2b-guestd` - detached runner / unit lifecycle | production-reachable | Detached exec jobs under transient user scope | ADAPT | `EphemeralProcess` worker inside Guest; keep PAM login semantics | `ADR046-primitives-002` |
+| `d2b-guestd` - PAM login, workload user exec, `ExecOp` handler | deleted | Legacy Guest-control ttrpc/vsock server | DELETE | ComponentSession `Exec` service and signed Process resources | `ADR046-session-001` |
+| `d2b-guestd` - detached runner / unit lifecycle | deleted | Legacy detached exec jobs under transient user scope | DELETE | `EphemeralProcess` worker inside Guest | `ADR046-primitives-002` |
 | `d2b-userd` - `main.rs` exits 78 for service mode; `lib.rs`: `UserExecSession` trait (attach/resize), `UserSocketPolicy`/`UserdTransport`, `UserdConfig`, `UserSessionIdentity`, `UserAttachRequest`, `UserOutputCursor`, `UserdError`; `USERD_LISTENS_ON_VSOCK = false` | production-reachable | Main exits 78 (`"service mode is not implemented"`); lib defines user exec/session traits consumed by d2bd attach path; callers: d2bd user attach handler | REPLACE | Fixed user supervisor Process (`Provider/system-systemd` user domain) + `Provider/system-systemd` user Process effects; remove public `d2b userd` verb and stub after parity | `ADR046-primitives-003` |
 
 ### 1.11 `d2b-clipd`
@@ -567,7 +573,7 @@ catalog; `RunnerRole` is the supervisor-side enum).
 | `NetRunner` | production-reachable | Per-env tap/bridge/nft setup runner | `EphemeralProcess` (executionRef → `Host`) | `Provider/system-core` |
 | `StoreSync` | production-reachable | Per-VM `/nix/store` hardlink farm sync; broker `store_view_farm` op | `EphemeralProcess` (executionRef → `Host`) | `Provider/system-core` |
 | `ActivationHelper` | production-reachable | Per-host activation; broker `HostPrepare` | `EphemeralProcess` (executionRef → `Host`) | `Provider/system-core` |
-| `GuestControlForwarder` | production-reachable | Guest-control vsock bridge | REPLACE | ComponentSession guest-control bootstrap replaces this role; old vsock protocol inert at d2b 3.0 cutover, no compatibility window | `ADR046-session-001` |
+| `GuestControlForwarder` | deleted | Legacy Guest-control vsock bridge | DELETE | ComponentSession bootstrap and target-local Process resources | `ADR046-session-001` |
 | `RealmController` | production-reachable | Per-realm controller process; d2bd spawns via broker | `Process` (Zone runtime controller) | Zone runtime bootstrap |
 | `RealmBroker` | production-reachable | Per-realm broker process; socket-activated PID1 unit at `b5ddbed6` → REPLACE with parent-spawned Zone process per ADR 0046 | `Process` (Zone broker) | Zone runtime bootstrap |
 | `KeyRotation` | production-reachable | SSH key rotation; broker `KeyRotation` op | `EphemeralProcess` (executionRef → `Host`) | `Provider/system-core` |
@@ -904,7 +910,7 @@ Main crate: `packages/d2b-session-unix/`. Not present on v3 baseline.
 |----------------|----------------------|------------------|----------------|-------------------------------|
 | `d2b-session-unix/src/adapter.rs` | `UnixSeqpacketTransport`, `PeerIdentityPolicy` (accepted/pathname/inherited_socketpair variants), `UnixAttachmentPayload`, `OwnedUnixAttachment` | AF_UNIX SOCK_SEQPACKET transport implementing `OwnedTransport`; `SO_PEERCRED` identity policy; FD ancillary data ownership | `packages/d2b-session-unix/src/adapter.rs` | `PeerIdentityPolicy::inherited_socketpair` for testing: retain. Do not assume main's specific socket path constants. |
 | `d2b-session-unix/src/socket.rs` | `AncillaryCapacity`, `OutboundPacket`, `PacketBurst`, `SentPacket`, all send/receive helpers | Ancillary FD capacity calculation from `AttachmentPolicy`; packet batching; `cmsg` ancillary layout | `packages/d2b-session-unix/src/socket.rs` | No domain assumptions; depends on `v2_component_session` `AttachmentPolicy`; copy together |
-| `d2b-session-unix/src/vsock.rs` | `FramedVsockTransport<S>`, `NativeVsockTransport`, `NativeVsockListener` | Framed vsock implementing `OwnedTransport`; used for guest-control transport to guestd | `packages/d2b-session-unix/src/vsock.rs` | Replace vsock port constants (use v3 bundle-configured ports, not main hardcoded values) |
+| `d2b-session-unix/src/vsock.rs` | `FramedVsockTransport<S>`, `NativeVsockTransport`, `NativeVsockListener` | Framed vsock implementing `OwnedTransport`; used by the enrolled ComponentSession transport | `packages/d2b-session-unix/src/vsock.rs` | Replace vsock port constants (use v3 bundle-configured ports, not main hardcoded values) |
 | `d2b-session-unix/src/descriptor.rs` | `PeerCredentials`, `FirstPacketCredentials`, `ObjectIdentity`, `PidfdIdentityPolicy`, `DescriptorPolicy`, `AcceptedAttachment` | Received FD classification; pidfd identity binding; first-packet directional credential verification | `packages/d2b-session-unix/src/descriptor.rs` | No domain assumptions; clean copy |
 | `d2b-session-unix/src/credit.rs` | `CreditPool`, `CreditScopeSet`, `CreditBundle`, `CreditError`, `CreditScope` | Multi-scope attachment credit reservations; atomic rollback on partial failure; `MAX_PROCESS_ATTACHMENT_CREDITS` / `MAX_HOST_ATTACHMENT_CREDITS` from wire contract | `packages/d2b-session-unix/src/credit.rs` | Limits reference `v2_component_session` constants; copy both |
 | `d2b-session-unix/src/pidfd.rs` | `PidfdEvidence`, `PidfdIdentityVerifier` trait, `PidfdInfoSource` trait, `ProcPidfdIdentityVerifier`, `parse_pidfd_fdinfo`, `DigestEvidenceCallback` | Pidfd identity proof via `/proc/self/fd/<fd>` fdinfo parsing; fail-closed on parse error | `packages/d2b-session-unix/src/pidfd.rs` | No domain assumptions; clean copy |

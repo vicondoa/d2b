@@ -68,7 +68,6 @@ fn realm_controllers_fixture() -> serde_json::Value {
                                 "lifecycle": true,
                                 "display": true,
                                 "usbHotplug": true,
-                                "guestControl": true,
                                 "exec": true,
                                 "configSync": true,
                                 "ssh": true,
@@ -96,7 +95,6 @@ fn realm_controllers_fixture() -> serde_json::Value {
                                     "waylandProxy": true
                                 },
                                 "guest": {
-                                    "guestControl": true,
                                     "exec": true,
                                     "shell": true,
                                     "configSync": true,
@@ -133,7 +131,6 @@ fn realm_controllers_fixture() -> serde_json::Value {
                                     "lifecycle": true,
                                     "display": true,
                                     "usbHotplug": true,
-                                    "guestControl": true,
                                     "exec": true,
                                     "configSync": true,
                                     "ssh": true,
@@ -161,7 +158,6 @@ fn realm_controllers_fixture() -> serde_json::Value {
                                         "waylandProxy": true
                                     },
                                     "guest": {
-                                        "guestControl": true,
                                         "exec": true,
                                         "shell": true,
                                         "configSync": true,
@@ -185,7 +181,7 @@ fn realm_controllers_fixture() -> serde_json::Value {
                                 "stateDir": "/var/lib/d2b/vms/corp-vm",
                                 "runDir": "/run/d2b/vms/corp-vm",
                                 "storeView": "/var/lib/d2b/vms/corp-vm/store-view",
-                                "guestControlDir": "/run/d2b/vms/corp-vm/guest-control"
+                                "componentSessionDir": "/run/d2b/vms/corp-vm/component-session"
                             }
                         }
                     ],

@@ -13,7 +13,6 @@
 
 use std::{
     cell::RefCell,
-    ffi::OsString,
     io,
     os::unix::net::UnixListener,
     path::PathBuf,
@@ -23,7 +22,6 @@ use std::{
 
 use clap::Parser;
 use d2b_core::workload_identity::WorkloadTarget;
-use d2b_realm_core::WorkloadProviderKind;
 use d2b_provider_display_wayland::wayland_proxy::filter::{
     FilterStateHandler, VirtualClipboardState, build_state, install_client_handlers,
 };
@@ -35,11 +33,8 @@ use d2b_provider_display_wayland::wayland_proxy::{
     identity::ProxyIdentity,
     policy::{FilterPolicy, PolicyInput},
     readiness::{ProxyReadinessFailure, ProxyReadinessStage, ReadinessReporter},
-    terminal::{
-        TerminalChild, TerminalRuntime, child_exit_code, chmod_socket_strict,
-        unlink_stale_socket_path,
-    },
 };
+use d2b_realm_core::WorkloadProviderKind;
 use env_logger::Env;
 use rustix::event::{PollFd, PollFlags, poll};
 use smallvec::{SmallVec, smallvec};
@@ -174,18 +169,6 @@ struct Args {
     )]
     border_label_position: LabelPosition,
 
-    /// Launch a foreground WezTerm child through a randomized single-use proxy socket.
-    #[arg(long = "host-terminal")]
-    host_terminal: bool,
-
-    /// Terminal program to launch in --host-terminal mode.
-    #[arg(long = "terminal-program", default_value = "wezterm")]
-    terminal_program: OsString,
-
-    /// Arguments passed to the terminal program after `--` in --host-terminal mode.
-    #[arg(last = true, allow_hyphen_values = true)]
-    terminal_args: Vec<OsString>,
-
     /// Connected Unix stream used for typed readiness events.
     #[arg(long = "readiness-socket", value_name = "PATH")]
     readiness_socket: Option<PathBuf>,
@@ -286,16 +269,6 @@ fn configured_first_client_timeout(args: &Args, identity: &ProxyIdentity) -> Opt
         })
 }
 
-fn validate_execution_mode(args: &Args, identity: &ProxyIdentity) -> Result<(), String> {
-    if identity.provider_kind() == WorkloadProviderKind::UnsafeLocal && args.host_terminal {
-        return Err(
-            "--host-terminal is compatibility-only; unsafe-local apps must be launched by the authenticated helper"
-                .to_owned(),
-        );
-    }
-    Ok(())
-}
-
 fn bound_poll_timeout_to_deadline(base_ms: i32, deadline: Instant, now: Instant) -> i32 {
     base_ms.min(
         deadline
@@ -313,10 +286,6 @@ fn main() {
         eprintln!("d2b-wayland-proxy: {error}");
         std::process::exit(1);
     });
-    if let Err(error) = validate_execution_mode(&args, &identity) {
-        eprintln!("d2b-wayland-proxy: {error}");
-        std::process::exit(1);
-    }
     let mut readiness = match &args.readiness_socket {
         Some(path) => ReadinessReporter::connect(identity.clone(), path).unwrap_or_else(|_| {
             eprintln!("d2b-wayland-proxy: typed readiness channel unavailable");
@@ -426,7 +395,7 @@ fn main() {
         );
     }
 
-    let upstream = resolve_upstream(&args, &identity).unwrap_or_else(|e| {
+    let upstream = resolve_upstream(&args).unwrap_or_else(|e| {
         let _ = readiness.failed(
             ProxyReadinessStage::Upstream,
             ProxyReadinessFailure::UpstreamUnavailable,
@@ -435,17 +404,7 @@ fn main() {
         std::process::exit(1);
     });
 
-    let terminal_runtime = if args.host_terminal {
-        Some(
-            TerminalRuntime::prepare(&identity.bridge_component()).unwrap_or_else(|e| {
-                eprintln!("d2b-wayland-proxy: failed to prepare host-terminal runtime: {e}");
-                std::process::exit(1);
-            }),
-        )
-    } else {
-        None
-    };
-    let listen_path = resolve_listen_path(&args, terminal_runtime.as_ref()).unwrap_or_else(|e| {
+    let listen_path = resolve_listen_path(&args).unwrap_or_else(|e| {
         eprintln!("d2b-wayland-proxy: {e}");
         std::process::exit(1);
     });
@@ -474,11 +433,7 @@ fn main() {
     // Step 4: create the listen socket AFTER successful upstream connect.
     // Remove a stale socket if present so restart cycles are idempotent.
     if listen_path.exists() {
-        let stale_result = if terminal_runtime.is_some() {
-            unlink_stale_socket_path(&listen_path)
-        } else {
-            std::fs::remove_file(&listen_path)
-        };
+        let stale_result = std::fs::remove_file(&listen_path);
         if let Err(e) = stale_result {
             let _ = readiness.failed(
                 ProxyReadinessStage::Listener,
@@ -506,19 +461,6 @@ fn main() {
             std::process::exit(1);
         }
     };
-    if terminal_runtime.is_some()
-        && let Err(e) = chmod_socket_strict(&listen_path)
-    {
-        let _ = readiness.failed(
-            ProxyReadinessStage::Listener,
-            ProxyReadinessFailure::ListenerUnavailable,
-        );
-        eprintln!(
-            "d2b-wayland-proxy: failed to secure listen socket `{}`: {e}",
-            listen_path.display()
-        );
-        std::process::exit(1);
-    }
     if readiness.ready(ProxyReadinessStage::Listener).is_err() {
         eprintln!("d2b-wayland-proxy: typed readiness channel unavailable");
         std::process::exit(1);
@@ -532,25 +474,6 @@ fn main() {
         upstream
     );
 
-    let mut terminal_child = terminal_runtime.as_ref().map(|runtime| {
-        TerminalChild::spawn(&args.terminal_program, &args.terminal_args, runtime).unwrap_or_else(
-            |e| {
-                let _ = readiness.failed(
-                    ProxyReadinessStage::FirstClient,
-                    ProxyReadinessFailure::ClientRejected,
-                );
-                eprintln!("d2b-wayland-proxy: failed to launch host terminal child: {e}");
-                std::process::exit(1);
-            },
-        )
-    });
-    if terminal_child.is_some() {
-        log::info!(
-            "[d2b-wlproxy] target={} event=host-terminal-launched mux=per-target",
-            identity.canonical_target()
-        );
-    }
-
     let first_client_timeout = configured_first_client_timeout(&args, &identity);
 
     // Step 5: dispatch loop.
@@ -560,45 +483,25 @@ fn main() {
         policy,
         bridge_config,
         border_config,
-        terminal_child.as_mut(),
         AcceptLoopControl {
             readiness,
             first_client_timeout,
         },
     );
-    if let Some(child) = terminal_child.as_mut()
-        && exit_code != 0
-    {
-        child.terminate();
-    }
-    drop(terminal_runtime);
     std::process::exit(exit_code);
 }
 
-fn resolve_upstream(args: &Args, identity: &ProxyIdentity) -> Result<String, String> {
+fn resolve_upstream(args: &Args) -> Result<String, String> {
     if let Some(connect) = &args.connect {
         return Ok(connect.clone());
-    }
-    if args.host_terminal && identity.provider_kind() != WorkloadProviderKind::UnsafeLocal {
-        return std::env::var("WAYLAND_DISPLAY").map_err(|_| {
-            "WAYLAND_DISPLAY is required by compatibility host-terminal mode".to_owned()
-        });
     }
     Err("--connect is required; d2b never falls back to a direct compositor route".to_owned())
 }
 
-fn resolve_listen_path(
-    args: &Args,
-    terminal_runtime: Option<&TerminalRuntime>,
-) -> Result<PathBuf, String> {
-    match (&args.listen, terminal_runtime) {
-        (Some(path), None) => Ok(path.clone()),
-        (Some(_), Some(_)) => {
-            Err("--listen cannot be combined with randomized --host-terminal mode".to_owned())
-        }
-        (None, Some(runtime)) => Ok(runtime.listen_socket().to_owned()),
-        (None, None) => Err("--listen is required unless --host-terminal is used".to_owned()),
-    }
+fn resolve_listen_path(args: &Args) -> Result<PathBuf, String> {
+    args.listen
+        .clone()
+        .ok_or_else(|| "--listen is required".to_owned())
 }
 
 struct AcceptLoopControl {
@@ -625,7 +528,6 @@ fn accept_loop(
     policy: FilterPolicy,
     bridge_config: BridgeConfig,
     border_config: BorderConfig,
-    mut terminal_child: Option<&mut TerminalChild>,
     control: AcceptLoopControl,
 ) -> i32 {
     let AcceptLoopControl {
@@ -683,26 +585,9 @@ fn accept_loop(
                 ProxyReadinessStage::FirstClient,
                 ProxyReadinessFailure::FirstClientTimeout,
             );
-            if let Some(child) = terminal_child.as_mut() {
-                child.terminate();
-            }
             state.destroy();
             diag.borrow_mut().flush_suppressed();
             return 70;
-        }
-        if let Some(child) = terminal_child.as_mut() {
-            match child.try_wait() {
-                Ok(Some(status)) => {
-                    state.destroy();
-                    diag.borrow_mut().flush_suppressed();
-                    return child_exit_code(status);
-                }
-                Ok(None) => {}
-                Err(error) => {
-                    log::warn!("[d2b-wlproxy] target={vm} event=host-terminal-wait error={error}");
-                    break;
-                }
-            }
         }
         let (listener_ready, _state_ready, bridge_ready) = {
             let now = Instant::now();
@@ -717,7 +602,6 @@ fn accept_loop(
                 listener_backoff_until,
                 clipboard_ref.bridge_retry_deadline(),
                 now,
-                terminal_child.is_some(),
             );
             let timeout = first_client_deadline
                 .map(|deadline| bound_poll_timeout_to_deadline(timeout, deadline, now))
@@ -797,9 +681,6 @@ fn accept_loop(
                         )
                         .is_err()
                         {
-                            if let Some(child) = terminal_child.as_mut() {
-                                child.terminate();
-                            }
                             state.destroy();
                             diag.borrow_mut().flush_suppressed();
                             return 70;
@@ -894,7 +775,6 @@ fn accept_poll_timeout_ms(
     listener_backoff_until: Option<Instant>,
     bridge_retry_until: Option<Instant>,
     now: Instant,
-    watching_child: bool,
 ) -> i32 {
     let backoff_timeout = listener_backoff_until
         .map(|until| until.saturating_duration_since(now))
@@ -902,15 +782,9 @@ fn accept_poll_timeout_ms(
     let bridge_timeout = bridge_retry_until
         .map(|until| until.saturating_duration_since(now))
         .unwrap_or(diag_timeout);
-    let child_timeout = if watching_child {
-        Duration::from_millis(100)
-    } else {
-        diag_timeout
-    };
     diag_timeout
         .min(backoff_timeout)
         .min(bridge_timeout)
-        .min(child_timeout)
         .as_millis()
         .min(i32::MAX as u128) as i32
 }
@@ -956,7 +830,7 @@ mod tests {
     }
 
     #[test]
-    fn border_cli_parses_colors_and_legacy_shape_flags() {
+    fn border_cli_parses_colors_and_shape_flags() {
         let args = Args::try_parse_from([
             "d2b-wayland-proxy",
             "--listen",
@@ -994,39 +868,13 @@ mod tests {
     }
 
     #[test]
-    fn host_terminal_cli_does_not_require_static_listen_or_connect() {
-        let args = Args::try_parse_from([
-            "d2b-wayland-proxy",
-            "--host-terminal",
-            "--vm-name",
-            "work",
-            "--",
-            "start",
-            "--always-new-process",
-        ])
-        .expect("parse args");
-
-        assert!(args.host_terminal);
-        assert_eq!(args.vm_name.as_deref(), Some("work"));
-        assert!(args.listen.is_none());
-        assert!(args.connect.is_none());
-        assert_eq!(
-            args.terminal_args,
-            vec![
-                OsString::from("start"),
-                OsString::from("--always-new-process")
-            ]
-        );
-    }
-
-    #[test]
     fn regular_proxy_still_requires_explicit_listen_and_connect() {
         let args = Args::try_parse_from(["d2b-wayland-proxy", "--vm-name", "work"])
             .expect("deferred validation keeps clap errors friendly");
-        let identity = resolve_identity(&args).expect("legacy identity");
+        assert!(args.listen.is_none());
 
-        assert!(resolve_listen_path(&args, None).is_err());
-        assert!(resolve_upstream(&args, &identity).is_err());
+        assert!(resolve_listen_path(&args).is_err());
+        assert!(resolve_upstream(&args).is_err());
     }
 
     #[test]
@@ -1047,7 +895,7 @@ mod tests {
         assert_eq!(identity.provider_kind(), WorkloadProviderKind::UnsafeLocal);
         assert!(identity.legacy_vm_name().is_none());
         assert!(
-            resolve_upstream(&args, &identity)
+            resolve_upstream(&args)
                 .expect_err("unsafe-local never guesses a compositor")
                 .contains("never falls back")
         );
@@ -1067,26 +915,6 @@ mod tests {
         .expect("parse args");
 
         assert!(resolve_identity(&args).is_err());
-    }
-
-    #[test]
-    fn unsafe_local_rejects_direct_child_mode_so_scope_lifecycles_stay_separate() {
-        let args = Args::try_parse_from([
-            "d2b-wayland-proxy",
-            "--target",
-            "browser.host.d2b",
-            "--provider-kind",
-            "unsafe-local",
-            "--host-terminal",
-        ])
-        .expect("parse args");
-        let identity = resolve_identity(&args).unwrap();
-
-        assert!(
-            validate_execution_mode(&args, &identity)
-                .expect_err("unsafe-local app must not be child-coupled to proxy")
-                .contains("authenticated helper")
-        );
     }
 
     #[test]
@@ -1190,13 +1018,7 @@ mod tests {
             PollFlags::IN | PollFlags::ERR | PollFlags::HUP
         );
         assert_eq!(
-            accept_poll_timeout_ms(
-                Duration::from_secs(60),
-                Some(backoff_until),
-                None,
-                now,
-                false,
-            ),
+            accept_poll_timeout_ms(Duration::from_secs(60), Some(backoff_until), None, now,),
             50
         );
         assert_eq!(
@@ -1205,7 +1027,6 @@ mod tests {
                 Some(now + Duration::from_secs(5)),
                 Some(now + Duration::from_millis(25)),
                 now,
-                false,
             ),
             25
         );
@@ -1219,17 +1040,8 @@ mod tests {
             now
         ));
         assert_eq!(
-            accept_poll_timeout_ms(Duration::from_millis(25), Some(now), None, now, false),
+            accept_poll_timeout_ms(Duration::from_millis(25), Some(now), None, now),
             0
-        );
-    }
-
-    #[test]
-    fn child_watch_bounds_accept_poll_timeout() {
-        let now = Instant::now();
-        assert_eq!(
-            accept_poll_timeout_ms(Duration::from_secs(60), None, None, now, true),
-            100
         );
     }
 

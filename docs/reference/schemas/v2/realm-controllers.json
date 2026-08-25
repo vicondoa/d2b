@@ -247,7 +247,6 @@
       "required": [
         "configSync",
         "exec",
-        "guestControl",
         "inGuestObservability",
         "keys",
         "shell",
@@ -258,9 +257,6 @@
           "type": "boolean"
         },
         "exec": {
-          "type": "boolean"
-        },
-        "guestControl": {
           "type": "boolean"
         },
         "inGuestObservability": {
@@ -424,13 +420,13 @@
     "RealmControllerLocalWorkloadPaths": {
       "type": "object",
       "required": [
-        "guestControlDir",
+        "componentSessionDir",
         "runDir",
         "stateDir",
         "storeView"
       ],
       "properties": {
-        "guestControlDir": {
+        "componentSessionDir": {
           "$ref": "#/definitions/PathTemplate"
         },
         "runDir": {
@@ -594,7 +590,6 @@
         "configSync",
         "display",
         "exec",
-        "guestControl",
         "inGuestObservability",
         "keys",
         "lifecycle",
@@ -610,9 +605,6 @@
           "type": "boolean"
         },
         "exec": {
-          "type": "boolean"
-        },
-        "guestControl": {
           "type": "boolean"
         },
         "inGuestObservability": {

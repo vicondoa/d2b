@@ -693,7 +693,8 @@ pub enum UsbipVmCarrierCleanupMode {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum UsbipVmCarrierCleanupAction {
-    /// Ask guestd to remove any imported USBIP device before the VM disappears.
+    /// Ask the target-local USBIP Process to remove any imported device before
+    /// the VM disappears.
     DetachGuestImport,
     /// Block/withdraw the host firewall carve-out before any flow termination.
     WithdrawFirewallCarveout,
@@ -873,24 +874,11 @@ fn mark_cleanup_action_failed(
     UsbipVmCarrierCleanupExecutionError::ActionFailed { action, reason }
 }
 
-fn detach_guest_import_failure_allows_host_cleanup(reason: &str) -> bool {
-    let reason = reason.to_ascii_lowercase();
-    reason.contains("guest-control transport unavailable")
-        || reason.contains("could not resolve guest-control transport")
-        || reason.contains("cannot reach guest-control")
-        || reason.contains("guest-control unreachable")
-        || reason.contains("vm unreachable")
-        || reason.contains("dead vm")
-        || reason.contains("vm dead")
-        || reason.contains("vm is dead")
-        || reason.contains("vm is stopped")
-        || reason.contains("vm is not running")
-}
-
 /// Execute a VM USBIP carrier cleanup plan without releasing the host-session claim
 /// unless the plan is an explicit detach and every earlier cleanup step
-/// succeeded. A guest-detach failure caused by a dead or unreachable VM remains
-/// visible in the report but does not block host-side firewall/unbind cleanup.
+/// succeeded. Guest detach is always the first owned effect; a missing or
+/// unreachable Guest therefore preserves the host claim and all host-side
+/// carrier state for safe retry.
 pub fn execute_usbip_vm_carrier_cleanup<E: UsbipVmCarrierCleanupExecutor>(
     plan: &UsbipVmCarrierCleanupPlan,
     executor: &mut E,
@@ -907,7 +895,6 @@ pub fn execute_usbip_vm_carrier_cleanup<E: UsbipVmCarrierCleanupExecutor>(
     };
     let mut host_unbound = false;
     let mut acl_revoked = false;
-    let mut deferred_error = None;
 
     for action in &plan.actions {
         use UsbipVmCarrierCleanupAction as Action;
@@ -1003,23 +990,13 @@ pub fn execute_usbip_vm_carrier_cleanup<E: UsbipVmCarrierCleanupExecutor>(
         match result {
             Ok(()) => report.completed.push(*action),
             Err(reason) => {
-                if matches!(action, Action::DetachGuestImport)
-                    && detach_guest_import_failure_allows_host_cleanup(&reason)
-                {
-                    deferred_error = Some(mark_cleanup_action_failed(&mut report, *action, reason));
-                    continue;
-                }
                 let err = mark_cleanup_action_failed(&mut report, *action, reason);
                 return Err((report, err));
             }
         }
     }
 
-    if let Some(err) = deferred_error {
-        Err((report, err))
-    } else {
-        Ok(report)
-    }
+    Ok(report)
 }
 
 /// Guest-side import state for the target VM.
@@ -1412,13 +1389,13 @@ impl UsbipDegradedReason {
                 "restart or reconcile the per-environment USBIP proxy before guest attach"
             }
             UsbipDegradedReasonCode::GuestImportUnavailable => {
-                "check guest-control USBIP capability and retry the attach after host export is healthy"
+                "check component-session USBIP capability and retry the attach after host export is healthy"
             }
             UsbipDegradedReasonCode::StaleHostState => {
                 "rerun USB detach/reconcile to drain host export and proxy state for the removed claim"
             }
             UsbipDegradedReasonCode::StaleGuestState => {
-                "rerun USB detach/reconcile so guestd removes stale imported-device state"
+                "rerun USB detach/reconcile so the target-local Process removes stale imported-device state"
             }
             UsbipDegradedReasonCode::ProbeIncomplete => {
                 "retry the USB probe; if it repeats, verify the declaration has a stable physical selector"
@@ -1825,7 +1802,7 @@ impl UsbipStepFailureReasonKind {
             }
             Self::InvalidInput => "retry with a valid declared USB selector",
             Self::TransportUnavailable => {
-                "verify guest-control and USBIP transport readiness, then retry"
+                "verify component-session and USBIP transport readiness, then retry"
             }
             Self::Other => {
                 "run `d2b usb probe` and retry the lifecycle verb after the reported posture is healthy"
@@ -2535,7 +2512,7 @@ pub struct UsbipHostRuntimeState {
 pub struct UsbipGuestRuntimeState {
     /// Guest import state.
     pub import: UsbipGuestImportState,
-    /// Owner generation echoed by guestd when available.
+    /// Owner generation echoed by the target-local USBIP Process when available.
     pub generation: Option<u64>,
 }
 
@@ -2595,7 +2572,10 @@ impl UsbipLifecycleFailureKind {
     pub const fn prevents_required_exposure(&self) -> bool {
         matches!(
             self,
-            Self::PolicyMismatch | Self::MissingBundleIntent | Self::LockConflict
+            Self::PolicyMismatch
+                | Self::MissingBundleIntent
+                | Self::LockConflict
+                | Self::GuestFailed
         )
     }
 }
@@ -2710,6 +2690,17 @@ pub fn reconcile_usbip_vm_start_claims<E: UsbipVmStartReconcileExecutor>(
     let mut reports = Vec::with_capacity(claims.len());
     for claim in claims {
         let mut report = UsbipLifecycleClaimReport::new(claim);
+        let guest_state = match executor.guest_status(claim, attempt) {
+            Ok(state) => {
+                report.completed.push(UsbipLifecycleStep::GuestStatus);
+                state
+            }
+            Err(error) => {
+                report.push_degraded(&error, claim.required);
+                reports.push(report);
+                continue;
+            }
+        };
         match executor.replay_host_bind(claim, attempt) {
             Ok(()) => report.completed.push(UsbipLifecycleStep::HostBindReplay),
             Err(error) => {
@@ -2726,18 +2717,11 @@ pub fn reconcile_usbip_vm_start_claims<E: UsbipVmStartReconcileExecutor>(
                 continue;
             }
         }
-        match executor.guest_status(claim, attempt) {
-            Ok(UsbipGuestImportState::Imported) => {
-                report.completed.push(UsbipLifecycleStep::GuestStatus);
+        if !matches!(guest_state, UsbipGuestImportState::Imported) {
+            match executor.guest_import(claim, attempt) {
+                Ok(()) => report.completed.push(UsbipLifecycleStep::GuestImport),
+                Err(error) => report.push_degraded(&error, claim.required),
             }
-            Ok(_) => {
-                report.completed.push(UsbipLifecycleStep::GuestStatus);
-                match executor.guest_import(claim, attempt) {
-                    Ok(()) => report.completed.push(UsbipLifecycleStep::GuestImport),
-                    Err(error) => report.push_degraded(&error, claim.required),
-                }
-            }
-            Err(error) => report.push_degraded(&error, claim.required),
         }
         reports.push(report);
     }
@@ -2780,7 +2764,14 @@ pub fn cleanup_usbip_vm_stop_claims<E: UsbipVmStopCarrierCleanup>(
         let mut report = UsbipLifecycleClaimReport::new(claim);
         match executor.detach_guest_import(claim, attempt) {
             Ok(()) => report.completed.push(UsbipLifecycleStep::GuestDetach),
-            Err(error) => report.push_degraded(&error, false),
+            Err(error) => {
+                report.push_degraded(&error, claim.required);
+                report
+                    .completed
+                    .push(UsbipLifecycleStep::PreserveDurableClaim);
+                reports.push(report);
+                continue;
+            }
         }
 
         let flow_observation = match executor.observe_proxy_flow_for_cleanup(claim, attempt) {
@@ -4287,28 +4278,22 @@ mod tests {
     }
 
     #[test]
-    fn carrier_cleanup_continues_host_teardown_when_guest_detach_vm_unreachable() {
+    fn carrier_cleanup_does_not_release_host_when_guest_detach_vm_unreachable() {
         let plan = plan_usbip_vm_carrier_cleanup(
             UsbipVmCarrierCleanupMode::ExplicitDetach,
             UsbipProxyFlowObservation::NoEstablishedSession,
         );
         let mut executor = VmCarrierCleanupFixtureExecutor::failing(
             UsbipVmCarrierCleanupAction::DetachGuestImport,
-            "guest-control USBIP import failed for vm 'corp-vm': guest-control transport unavailable",
+            "component-session USBIP import failed for vm 'corp-vm': component-session transport unavailable",
         );
 
         let (report, err) = execute_usbip_vm_carrier_cleanup(&plan, &mut executor)
-            .expect_err("unreachable guest detach stays degraded after host cleanup");
+            .expect_err("unreachable guest detach preserves host state");
 
         assert_eq!(
             executor.calls,
-            vec![
-                UsbipVmCarrierCleanupAction::DetachGuestImport,
-                UsbipVmCarrierCleanupAction::WithdrawFirewallCarveout,
-                UsbipVmCarrierCleanupAction::HostUnbind,
-                UsbipVmCarrierCleanupAction::RevokeBackendAcl,
-                UsbipVmCarrierCleanupAction::ReleaseDurableClaim,
-            ]
+            vec![UsbipVmCarrierCleanupAction::DetachGuestImport]
         );
         assert_eq!(
             report.failed.as_ref().map(|(action, _)| *action),
@@ -4319,21 +4304,17 @@ mod tests {
                 .completed
                 .contains(&UsbipVmCarrierCleanupAction::DetachGuestImport)
         );
-        assert!(
-            report
-                .completed
-                .contains(&UsbipVmCarrierCleanupAction::WithdrawFirewallCarveout)
-        );
-        assert!(
-            report
-                .completed
-                .contains(&UsbipVmCarrierCleanupAction::HostUnbind)
-        );
+        assert!(!report
+            .completed
+            .contains(&UsbipVmCarrierCleanupAction::HostUnbind));
+        assert!(!report
+            .completed
+            .contains(&UsbipVmCarrierCleanupAction::ReleaseDurableClaim));
         assert_eq!(
             err,
             UsbipVmCarrierCleanupExecutionError::ActionFailed {
                 action: UsbipVmCarrierCleanupAction::DetachGuestImport,
-                reason: "guest-control USBIP import failed for vm 'corp-vm': guest-control transport unavailable".to_owned(),
+                reason: "component-session USBIP import failed for vm 'corp-vm': component-session transport unavailable".to_owned(),
             }
         );
     }
@@ -4632,12 +4613,31 @@ mod tests {
         assert_eq!(
             executor.calls,
             vec![
+                UsbipLifecycleStep::GuestStatus,
                 UsbipLifecycleStep::HostBindReplay,
                 UsbipLifecycleStep::ProxyReady,
-                UsbipLifecycleStep::GuestStatus,
                 UsbipLifecycleStep::GuestImport,
             ]
         );
+    }
+
+    #[test]
+    fn lifecycle_start_requires_guest_status_before_host_bind() {
+        let mut executor = LifecycleFixtureExecutor::fail_start(
+            UsbipLifecycleStep::GuestStatus,
+            UsbipLifecycleFailureKind::GuestFailed,
+        );
+
+        let report =
+            reconcile_usbip_vm_start_claims(&[lifecycle_claim()], &lifecycle_attempt(), &mut executor);
+
+        assert!(report.fatal());
+        assert_eq!(report.degraded_count(), 1);
+        assert_eq!(
+            report.claims[0].degraded[0].code,
+            UsbipDegradedReasonCode::GuestImportUnavailable
+        );
+        assert_eq!(executor.calls, vec![UsbipLifecycleStep::GuestStatus]);
     }
 
     #[test]
@@ -4656,7 +4656,13 @@ mod tests {
             report.claims[0].degraded[0].code,
             UsbipDegradedReasonCode::DeviceDepartedBeforeClaim
         );
-        assert_eq!(executor.calls, vec![UsbipLifecycleStep::HostBindReplay]);
+        assert_eq!(
+            executor.calls,
+            vec![
+                UsbipLifecycleStep::GuestStatus,
+                UsbipLifecycleStep::HostBindReplay
+            ]
+        );
     }
 
     #[test]
@@ -4675,7 +4681,13 @@ mod tests {
             report.claims[0].degraded[0].code,
             UsbipDegradedReasonCode::PolicyFailed
         );
-        assert_eq!(executor.calls, vec![UsbipLifecycleStep::HostBindReplay]);
+        assert_eq!(
+            executor.calls,
+            vec![
+                UsbipLifecycleStep::GuestStatus,
+                UsbipLifecycleStep::HostBindReplay
+            ]
+        );
     }
 
     #[test]

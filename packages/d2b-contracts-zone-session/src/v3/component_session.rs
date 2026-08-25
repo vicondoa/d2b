@@ -308,7 +308,7 @@ closed_enum!(EndpointPurpose {
     ResourceService = 2 => "resource-service",
     ZoneLink = 3 => "zone-link",
     Bootstrap = 4 => "bootstrap",
-    GuestControl = 5 => "guest-control",
+    ComponentSession = 5 => "component-session",
     ResourceTransfer = 6 => "resource-transfer",
     ProviderControl = 7 => "provider-control",
     SensitiveCredential = 8 => "sensitive-credential",

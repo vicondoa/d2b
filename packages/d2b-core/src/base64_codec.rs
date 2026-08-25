@@ -1,6 +1,6 @@
 //! Minimal, dependency-free standard (RFC 4648) base64 codec with padding.
 //!
-//! The guest-control config-read transport carries raw guest bytes as a
+//! The component-session config-read transport carries raw guest bytes as a
 //! base64 string in the public.sock `ReadGuestConfig` response (the wire
 //! envelope is JSON, so raw `Vec<u8>` would be serialized as a number array
 //! and balloon the frame). This module keeps the framework free of an extra

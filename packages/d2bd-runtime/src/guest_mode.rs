@@ -51,10 +51,10 @@ pub const GUEST_COMPONENT_SESSION_SERVICE: ServicePackage = ServicePackage::Reso
 /// The session schema domain used by the Guest target agent.
 pub const GUEST_COMPONENT_SESSION_SCHEMA_DOMAIN: &[u8] = b"d2b-guest-component-session-v3";
 
-/// Reject the retired feature-specific guest-control prelude before any
+/// Reject a retired feature-specific Guest prelude before any
 /// feature payload or per-session state is allocated.
-pub fn reject_legacy_guest_control_prelude(bytes: &[u8]) -> Result<(), GuestModeError> {
-    if bytes.starts_with(crate::guest_control_vsock::GUEST_CONTROL_CONNECT_LINE)
+pub fn reject_legacy_guest_prelude(bytes: &[u8]) -> Result<(), GuestModeError> {
+    if bytes.starts_with(crate::component_session_vsock::COMPONENT_SESSION_CONNECT_LINE)
         || bytes.starts_with(b"D2BGC")
     {
         return Err(GuestModeError::OldProtocol);
@@ -913,13 +913,13 @@ mod tests {
     }
 
     #[test]
-    fn retired_guest_control_prelude_is_rejected_before_allocation() {
+    fn retired_guest_prelude_is_rejected_before_allocation() {
         assert!(matches!(
-            reject_legacy_guest_control_prelude(b"CONNECT 14318\n"),
+            reject_legacy_guest_prelude(b"CONNECT 14318\n"),
             Err(GuestModeError::OldProtocol)
         ));
         assert!(matches!(
-            reject_legacy_guest_control_prelude(b"D2BGC-old"),
+            reject_legacy_guest_prelude(b"D2BGC-old"),
             Err(GuestModeError::OldProtocol)
         ));
     }

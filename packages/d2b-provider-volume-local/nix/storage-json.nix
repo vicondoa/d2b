@@ -419,9 +419,9 @@ let
         invariants = [ "no-symlink" "scope-authorization-required" ];
       })
       (mkPath {
-        id = "path:vm-run-guest-control:${name}";
+        id = "path:vm-run-component-session:${name}";
         scope = "vm:${name}";
-        path = "/run/d2b/vms/${name}/guest-control";
+        path = "/run/d2b/vms/${name}/component-session";
         lifecycle = "boot-scoped-readoptable";
         persistence = "boot-scoped";
         owner = principal "user" "d2bd";

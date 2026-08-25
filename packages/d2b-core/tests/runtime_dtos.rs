@@ -12,7 +12,6 @@ fn local_nixos_advertises_positive_operation_axes() {
     let runtime = RuntimeMetadata::local_nixos();
 
     assert!(runtime.capabilities.lifecycle);
-    assert!(runtime.capabilities.guest_control);
     assert!(runtime.operation_capabilities.lifecycle.start);
     assert!(runtime.operation_capabilities.lifecycle.switch);
     assert!(runtime.operation_capabilities.display.graphics);
@@ -40,10 +39,7 @@ fn local_nixos_advertises_positive_operation_axes() {
     assert!(runtime.services.iter().any(|service| service.optional));
 
     let value = serde_json::to_value(runtime).expect("serializes");
-    assert_eq!(
-        value.pointer("/operationCapabilities/guest/guestControl"),
-        Some(&json!(true))
-    );
+    assert!(value.pointer("/operationCapabilities/guest/componentSession").is_none());
     assert!(value.pointer("/services/3/processRole").is_none());
     assert_eq!(
         value.pointer("/autostartPolicy"),
@@ -52,11 +48,10 @@ fn local_nixos_advertises_positive_operation_axes() {
 }
 
 #[test]
-fn local_qemu_media_uses_same_axes_without_guest_control() {
+fn local_qemu_media_uses_same_axes_without_guest_operations() {
     let runtime = RuntimeMetadata::local_qemu_media();
 
     assert!(runtime.capabilities.lifecycle);
-    assert!(!runtime.capabilities.guest_control);
     assert!(runtime.operation_capabilities.lifecycle.start);
     assert!(!runtime.operation_capabilities.lifecycle.switch);
     assert!(runtime.operation_capabilities.media.qemu_media);
@@ -79,7 +74,6 @@ fn legacy_runtime_metadata_defaults_new_fields() {
             "configSync": true,
             "display": true,
             "exec": true,
-            "guestControl": true,
             "inGuestObservability": true,
             "keys": true,
             "lifecycle": true,

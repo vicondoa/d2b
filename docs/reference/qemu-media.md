@@ -5,7 +5,7 @@
 `runtime.kind = "qemu-media"` declares a manually started local QEMU VM
 for external media workflows. It uses d2b's daemon/broker control
 plane, but not the per-VM NixOS evaluator, Cloud Hypervisor, store
-sync, guest-control, SSH, or in-guest observability paths.
+sync, component-session, SSH, or in-guest observability paths.
 
 For the general VM runtime selection policy, including why qemu-media is
 not selected as a full VM runtime, see
@@ -21,7 +21,7 @@ not selected as a full VM runtime, see
 | Boot media | After the runner is alive, `d2bd` asks the broker to run `QemuMediaBoot`; the broker opens the declared boot source, sends the fd to QEMU over QMP, attaches USB storage, waits for QMP success responses, then continues QEMU. |
 | Hotplug | `d2b device usb attach` / `detach` route to `QemuMediaAttach` / `QemuMediaDetach`, not USBIP. |
 | Shutdown | `d2b guest stop <name> --apply` sends broker-mediated QMP `system_powerdown`, waits for `query-status` to report a stopped guest or the VMM pidfd to exit, then uses QMP `quit` / forced pidfd cleanup only as needed. |
-| Unsupported capabilities | guest-control, exec, config-sync, SSH, store-sync, keys, and in-guest observability. |
+| Unsupported capabilities | component-session, exec, config-sync, SSH, store-sync, keys, and in-guest observability. |
 
 ## Options
 

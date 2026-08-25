@@ -30,10 +30,10 @@ see [provider-managed sandboxes](./provider-managed-sandboxes.md).
 ## What a remote full-host node is
 
 A remote full-host node is a host running its own `d2bd`,
-`d2b-broker`, and guest-control stack that a gateway guest
+`d2b-broker`, and component-session stack that a gateway guest
 can reach through a transport peer session. From the gateway's point
 of view, the remote host appears as a named `NodeId` in a realm with
-a declared capability set. All lifecycle, broker, and guest-control
+a declared capability set. All lifecycle, broker, and component-session
 work executes on the remote host itself; the gateway routes typed
 operation requests and receives typed responses.
 
@@ -124,7 +124,7 @@ A node that has not advertised `logs` cannot receive retained-log requests.
 `persistent-shell`. Remote full-host nodes advertise it only after their daemon
 implements the shell operation family. Shell routing reaches the remote daemon
 as semantic `Shell*` operations and the remote daemon re-originates local
-guest-control shell RPCs near the guest.
+component-session shell RPCs near the guest.
 All `Shell*` remote operations require an explicit workload target. A shell
 request without `workload` fails at route preflight with `missing-workload`
 before any remote peer can observe it.
@@ -151,7 +151,7 @@ established transport session. Routing proceeds as follows:
    client. The adapter never exposes a raw byte/frame tunnel to callers.
 5. The remote node's local `d2bd` receives the operation request,
    enforces its own realm/capability policy, and invokes the local
-   broker or guest-control path.
+   broker or component-session path.
 6. The remote node returns a semantic response to the gateway.
 7. The gateway records the result in dedup state and returns the response to
    the requesting peer.
@@ -159,7 +159,7 @@ established transport session. Routing proceeds as follows:
 The gateway never forwards:
 
 - raw broker operation frames or payloads;
-- guest-control frames or vsock data;
+- component-session frames or vsock data;
 - pidfds or file descriptors;
 - host paths, endpoint strings, or socket addresses;
 - relay, provider, or realm credentials;
@@ -169,7 +169,7 @@ The gateway never forwards:
   authz envelope.
 
 The remote host re-originates all side effects through its own
-`d2bd`/broker/guest-control stack. The gateway is a routing
+`d2bd`/broker/component-session stack. The gateway is a routing
 intermediary, not an execution proxy.
 
 ---
@@ -337,7 +337,7 @@ does not implement fallbacks or workarounds.
 | Surface | Boundary |
 | --- | --- |
 | Raw broker operation forwarding | The gateway never forwards raw `d2b-broker` frames. All broker work stays on the remote host. |
-| Guest-control frame tunneling | Guest-control (vsock) frames are not proxied through the gateway. Persistent shell routes as [ADR 0039](../adr/0039-constellation-persistent-shell-routing.md) semantic `Shell*` operations; the remote `d2bd` opens its own guest-control sessions near the guest. |
+| ComponentSession frame tunneling | ComponentSession frames are not proxied through the gateway. Persistent shell routes as [ADR 0039](../adr/0039-constellation-persistent-shell-routing.md) semantic `Shell*` operations; the remote `d2bd` opens its own sessions near the guest. |
 | Pidfd / fd forwarding | File descriptors, pidfds, and socket handles are never sent across the transport session. |
 | Host path and endpoint exposure | Host-local paths, socket addresses, runner argv, and endpoint strings are not visible in the operation envelope or in gateway audit records. |
 | Provider/relay credential forwarding | Transport and realm credentials remain in the layer that owns them and are never placed in operation payloads. |
@@ -361,7 +361,7 @@ only. The following items are deferred to later work:
 - Provider-provisioned remote hosts (see the
   [provider-managed sandbox](./provider-managed-sandboxes.md)
   model for provider-scoped work).
-- Daemon, CLI, guestd, and live provider-agent runtime forwarding for
+- Daemon, CLI, target-local Process, and live provider-agent runtime forwarding for
   persistent shell remote/provider targets ([ADR 0039](../adr/0039-constellation-persistent-shell-routing.md)).
 - Automatic capability refresh without re-registration.
 - End-user principal delegation across a gateway; the preview binds the

@@ -35,8 +35,7 @@ pub fn vm_start_node_mode(role: &ProcessRole) -> VmStartNodeMode {
         ProcessRole::WaylandProxy => VmStartNodeMode::LongLived(RunnerRole::WaylandProxy),
         ProcessRole::HostReconcile
         | ProcessRole::StoreVirtiofsPreflight
-        | ProcessRole::GuestSshReadiness
-        | ProcessRole::GuestControlHealth
+        | ProcessRole::ComponentSessionHealth
         | ProcessRole::SecurityKeyFrontend => VmStartNodeMode::ReadinessOnly,
     }
 }

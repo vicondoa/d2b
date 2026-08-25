@@ -12,6 +12,12 @@
 | Depends on | `ADR-046-terminology-and-identities`, `ADR-046-resource-object-model`, `ADR-046-primitive-resource-composition`, `ADR-046-provider-model-and-packaging`, `ADR-046-core-controllers` |
 | Supersedes | Current `nixos-modules/options-realms*.nix`, `options-envs.nix`, `options-vms.nix`, `index.nix`, `bundle*.nix`, `*-json.nix`, and generated `/etc/d2b/*.json` |
 
+> **Current-state note (U10).** The baseline migration rows below predate the
+> clean-break removal of the standalone Guest daemon and guest-control
+> modules. Current Nix emits `d2bd guest`, the Guest-profile broker,
+> ComponentSession enrollment, and signed Provider Process inputs; deleted
+> baseline rows remain historical evidence only.
+
 ## Source, reuse, and evidence policy
 
 This spec uses `b5ddbed6` as its authoritative factual baseline.

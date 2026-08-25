@@ -26,9 +26,6 @@ pub fn request_invalidates_public_status_model(request: &crate::wire::Request) -
             | crate::wire::Request::AuthStatus
             | crate::wire::Request::KeysList
             | crate::wire::Request::KeysShow(_)
-            | crate::wire::Request::Exec(public_wire::ExecOp::List(_))
-            | crate::wire::Request::Exec(public_wire::ExecOp::Logs(_))
-            | crate::wire::Request::Exec(public_wire::ExecOp::Status(_))
             | crate::wire::Request::Workload(public_wire::WorkloadOp::List(_))
             | crate::wire::Request::Workload(public_wire::WorkloadOp::Status(_))
             | crate::wire::Request::Audio(public_wire::AudioOp::Status(_))

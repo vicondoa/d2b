@@ -1,13 +1,13 @@
-//! Authenticated guest-control health contract.
+//! Authenticated component-session health contract.
 
 use std::fmt;
 
 use async_trait::async_trait;
 use d2b_contracts_resource::v3::ResourceRef;
 
-/// Health result for the authenticated guest-control session.
+/// Health result for the authenticated component-session session.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum GuestControlHealth {
+pub enum GuestSessionHealth {
     /// Process and authenticated probe are ready.
     Ready,
     /// The transport/session is temporarily unavailable.
@@ -18,10 +18,8 @@ pub enum GuestControlHealth {
 
 /// Redacted evidence produced by an authenticated Guest ComponentSession.
 ///
-/// The optional identity fields are absent only for the temporary
-/// compatibility adapter below. New probes must construct evidence with
-/// [`GuestSessionEvidence::current`], which binds the Guest, boot identity,
-/// reconnect generation, capabilities, and controller readiness together.
+/// The evidence binds the Guest, boot identity, reconnect generation,
+/// capabilities, and controller readiness together.
 #[derive(Clone, PartialEq, Eq)]
 pub struct GuestSessionEvidence {
     guest_ref: Option<ResourceRef>,
@@ -30,7 +28,7 @@ pub struct GuestSessionEvidence {
     capabilities: Vec<String>,
     controller_ready: bool,
     endpoint_ready: bool,
-    health: GuestControlHealth,
+    health: GuestSessionHealth,
 }
 
 impl GuestSessionEvidence {
@@ -42,20 +40,20 @@ impl GuestSessionEvidence {
         capabilities: impl IntoIterator<Item = String>,
         controller_ready: bool,
         endpoint_ready: bool,
-    ) -> Result<Self, GuestControlHealthError> {
+    ) -> Result<Self, GuestSessionError> {
         let boot_identity_digest = boot_identity_digest.into();
         if guest_ref.resource_type().as_str() != "Guest"
             || guest_ref.name().as_str().is_empty()
             || reconnect_generation == 0
             || !valid_digest(&boot_identity_digest)
         {
-            return Err(GuestControlHealthError::AuthenticationFailed);
+            return Err(GuestSessionError::AuthenticationFailed);
         }
         let capabilities = validate_capabilities(capabilities)?;
         let health = if controller_ready && endpoint_ready {
-            GuestControlHealth::Ready
+            GuestSessionHealth::Ready
         } else {
-            GuestControlHealth::Degraded
+            GuestSessionHealth::Degraded
         };
         Ok(Self {
             guest_ref: Some(guest_ref),
@@ -72,7 +70,7 @@ impl GuestSessionEvidence {
     pub fn stale(
         guest_ref: ResourceRef,
         reconnect_generation: u64,
-    ) -> Result<Self, GuestControlHealthError> {
+    ) -> Result<Self, GuestSessionError> {
         let mut evidence = Self::current(
             guest_ref,
             "sha256:".to_owned() + &"0".repeat(64),
@@ -81,12 +79,12 @@ impl GuestSessionEvidence {
             false,
             false,
         )?;
-        evidence.health = GuestControlHealth::Degraded;
+        evidence.health = GuestSessionHealth::Degraded;
         Ok(evidence)
     }
 
     /// Return the current health projection.
-    pub const fn health(&self) -> GuestControlHealth {
+    pub const fn health(&self) -> GuestSessionHealth {
         self.health
     }
 
@@ -110,7 +108,7 @@ impl GuestSessionEvidence {
         &self.capabilities
     }
 
-    /// Return whether the Guest controller reported readiness.
+    /// Return whether the target-local controller reported readiness.
     pub const fn controller_ready(&self) -> bool {
         self.controller_ready
     }
@@ -120,22 +118,19 @@ impl GuestSessionEvidence {
         self.endpoint_ready
     }
 
-    pub(crate) fn compatibility(health: GuestControlHealth) -> Self {
+    pub(crate) fn failed() -> Self {
         Self {
             guest_ref: None,
             boot_identity_digest: None,
             reconnect_generation: None,
             capabilities: Vec::new(),
-            controller_ready: matches!(health, GuestControlHealth::Ready),
-            endpoint_ready: matches!(health, GuestControlHealth::Ready),
-            health,
+            controller_ready: false,
+            endpoint_ready: false,
+            health: GuestSessionHealth::Failed,
         }
     }
-
-    pub(crate) fn failed() -> Self {
-        Self::compatibility(GuestControlHealth::Failed)
-    }
 }
+
 
 impl fmt::Debug for GuestSessionEvidence {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -161,7 +156,7 @@ fn valid_digest(value: &str) -> bool {
 
 fn validate_capabilities(
     capabilities: impl IntoIterator<Item = String>,
-) -> Result<Vec<String>, GuestControlHealthError> {
+) -> Result<Vec<String>, GuestSessionError> {
     let capabilities = capabilities.into_iter().collect::<Vec<_>>();
     if capabilities.len() > 64
         || capabilities.iter().any(|capability| {
@@ -171,15 +166,15 @@ fn validate_capabilities(
                 || capability.chars().any(char::is_whitespace)
         })
     {
-        return Err(GuestControlHealthError::Protocol);
+        return Err(GuestSessionError::Protocol);
     }
     Ok(capabilities)
 }
 
-/// Stable guest-control health failures.
+/// Stable component-session health failures.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum GuestControlHealthError {
-    /// Wrong guest-control identity or CID.
+pub enum GuestSessionError {
+    /// Wrong component-session identity or CID.
     WrongIdentity,
     /// Signature or replay verification failed.
     AuthenticationFailed,
@@ -191,31 +186,17 @@ pub enum GuestControlHealthError {
     Disconnected,
 }
 
-impl GuestControlHealthError {
+impl GuestSessionError {
     /// Return the stable error code.
     pub const fn code(self) -> &'static str {
         match self {
-            Self::WrongIdentity => "guest-control-wrong-identity",
-            Self::AuthenticationFailed => "guest-control-authentication-failed",
-            Self::Timeout => "guest-control-timeout",
-            Self::Protocol => "guest-control-protocol",
-            Self::Disconnected => "guest-control-disconnected",
+            Self::WrongIdentity => "component-session-wrong-identity",
+            Self::AuthenticationFailed => "component-session-authentication-failed",
+            Self::Timeout => "component-session-timeout",
+            Self::Protocol => "component-session-protocol",
+            Self::Disconnected => "component-session-disconnected",
         }
     }
-}
-
-/// Injected authenticated guest-control probe.
-#[async_trait]
-pub trait GuestControlProbe: Send + Sync {
-    /// Probe one exact guest identity.
-    async fn probe(
-        &self,
-        expected_cid: u32,
-        deadline_ms: u32,
-    ) -> Result<GuestControlHealth, GuestControlHealthError>;
-
-    /// Close the authenticated guest-control session before VMM teardown.
-    async fn close(&self, expected_cid: u32) -> Result<(), GuestControlHealthError>;
 }
 
 /// Authenticated Guest ComponentSession evidence probe.
@@ -226,29 +207,8 @@ pub trait GuestSessionEvidenceProbe: Send + Sync {
         &self,
         expected_cid: u32,
         deadline_ms: u32,
-    ) -> Result<GuestSessionEvidence, GuestControlHealthError>;
+    ) -> Result<GuestSessionEvidence, GuestSessionError>;
 
     /// Close the authenticated Guest session before VMM teardown.
-    async fn close(&self, expected_cid: u32) -> Result<(), GuestControlHealthError>;
-}
-
-/// Keep the retired probe seam as a narrow compatibility adapter while
-/// callers migrate to [`GuestSessionEvidenceProbe`].
-#[async_trait]
-impl<T> GuestSessionEvidenceProbe for T
-where
-    T: GuestControlProbe + ?Sized,
-{
-    async fn observe(
-        &self,
-        expected_cid: u32,
-        deadline_ms: u32,
-    ) -> Result<GuestSessionEvidence, GuestControlHealthError> {
-        let health = self.probe(expected_cid, deadline_ms).await?;
-        Ok(GuestSessionEvidence::compatibility(health))
-    }
-
-    async fn close(&self, expected_cid: u32) -> Result<(), GuestControlHealthError> {
-        GuestControlProbe::close(self, expected_cid).await
-    }
+    async fn close(&self, expected_cid: u32) -> Result<(), GuestSessionError>;
 }

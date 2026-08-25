@@ -20,7 +20,7 @@ mod topology;
 
 pub use audit::{TransportAuditEvent, TransportAuditOperation, TransportAuditOutcome};
 pub use auth::{
-    GuestControlKey, GuestIdentity, PeerCid, ReadySession, SessionAuthority, SessionProof,
+    SessionKey, GuestIdentity, PeerCid, ReadySession, SessionAuthority, SessionProof,
     SessionRejectReason, SessionState,
 };
 pub use bridge::{

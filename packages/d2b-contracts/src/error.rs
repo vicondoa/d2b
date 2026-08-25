@@ -50,8 +50,8 @@ pub enum Kind {
     #[serde(rename = "bundle-tampered")]
     BundleTampered,
     /// A provider required by an audio or console operation is present but
-    /// not in a state where enforcement can proceed (e.g. expected guestd
-    /// agent absent). Operator remediation required.
+    /// not in a state where enforcement can proceed (e.g. expected
+    /// target-local Process absent). Operator remediation required.
     #[serde(rename = "provider-misconfigured")]
     ProviderMisconfigured,
     #[serde(rename = "provider-artifact-output-ambiguous")]
@@ -228,7 +228,7 @@ static ERROR_KIND_RECORDS: [ErrorKindRecord; 37] = [
         exit_code: 80,
         owning_command: "provider",
         message_template: "provider for {vm} is misconfigured: {reason}",
-        remediation: "Check the provider configuration for the VM and verify the expected guestd-compatible agent or sidecar is running.",
+        remediation: "Check the provider configuration for the VM and verify the expected target-local Process or sidecar is running.",
         docs_anchor: "#provider-misconfigured",
     },
     ErrorKindRecord {
@@ -630,7 +630,7 @@ impl Error {
     }
 
     /// Provider required by an audio or console operation is present but
-    /// misconfigured (e.g. expected guestd agent absent).
+    /// misconfigured (e.g. expected target-local Process absent).
     pub fn provider_misconfigured(vm: impl Into<String>, reason: impl Into<String>) -> Self {
         Self::Audio(AudioError::ProviderMisconfigured {
             vm: vm.into(),
@@ -755,7 +755,7 @@ impl From<AudioError> for Error {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum AudioError {
     /// Provider required by an audio or console operation is present but
-    /// misconfigured (e.g. expected guestd agent absent).
+    /// misconfigured (e.g. expected target-local Process absent).
     ProviderMisconfigured { vm: String, reason: String },
 }
 
@@ -1421,7 +1421,7 @@ mod tests {
                 "internal-io",
             ),
             (
-                Error::provider_misconfigured("corp-vm", "guestd agent not found"),
+                Error::provider_misconfigured("corp-vm", "target-local Process not found"),
                 "provider-misconfigured",
             ),
             // BundleTampered: the message contains the path, so the

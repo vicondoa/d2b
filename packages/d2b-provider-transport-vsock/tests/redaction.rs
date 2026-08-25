@@ -3,7 +3,7 @@ use d2b_contracts_resource::v3::{
     ZoneId,
 };
 use d2b_provider_transport_vsock::{
-    GuestControlKey, GuestIdentity, OpaqueBindingId, OpaqueEndpointId, PeerCid, SessionAuthority,
+    SessionKey, GuestIdentity, OpaqueBindingId, OpaqueEndpointId, PeerCid, SessionAuthority,
     SessionProof, VsockTransportSettings,
 };
 use ring::rand::{SystemRandom, generate};
@@ -23,7 +23,7 @@ fn diagnostics_do_not_expose_endpoint_binding_cid_or_signature_material() {
         "secret-boot",
     )
     .unwrap();
-    let key = GuestControlKey::from_core([9; 32]);
+    let key = SessionKey::from_core([9; 32]);
     let authority = SessionAuthority::new(identity.clone(), key.clone(), 1);
     let proof = SessionProof::sign(&key, &identity, nonce(), 1);
     let rendered = format!("{endpoint:?} {binding:?} {identity:?} {proof:?} {authority:?}");

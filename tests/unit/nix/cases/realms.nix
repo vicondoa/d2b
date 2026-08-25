@@ -1215,7 +1215,7 @@ let
                 stateDir = "/var/lib/d2b/vms/homebox";
                 runDir = "/run/d2b/vms/homebox";
                 storeView = "/var/lib/d2b/vms/homebox/store-view";
-                guestControlDir = "/run/d2b/vms/homebox/guest-control";
+                componentSessionDir = "/run/d2b/vms/homebox/component-session";
               };
               runtimeKind = "nixos";
               providerId = "local-cloud-hypervisor";

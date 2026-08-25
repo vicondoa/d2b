@@ -1,6 +1,6 @@
 //! Shared USBIP wire validation helpers and explicit-attach DTOs.
 //!
-//! Bus IDs cross the CLI, daemon, broker, and guest-control boundary. Keep the
+//! Bus IDs cross the CLI, daemon, broker, and component-session boundary. Keep the
 //! shape check here so every layer rejects the same traversal-/shell-unsafe
 //! strings before they reach a subprocess argv.
 //!

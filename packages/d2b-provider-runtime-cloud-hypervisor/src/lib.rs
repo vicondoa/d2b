@@ -20,8 +20,7 @@ pub use controller::{
     CloudHypervisorRecoveryState, SystemCloudHypervisorClock,
 };
 pub use health::{
-    GuestControlHealth, GuestControlHealthError, GuestControlProbe, GuestSessionEvidence,
-    GuestSessionEvidenceProbe,
+    GuestSessionError, GuestSessionEvidence, GuestSessionEvidenceProbe, GuestSessionHealth,
 };
 pub use vmm_argv::{
     ChArgvError, ChArgvInput, ChNetIface, ChVsock, exec_arg0, generate_ch_argv,
