@@ -193,6 +193,13 @@ let
     };
   }]).config;
   signedEntry = lib.head signedCfg.d2b._providerCatalog.publicEntries;
+  nullCatalogCfg = (mkEvalCatalog [{
+    d2b.artifacts.system = {
+      package = pkgs.writeText "provider-catalog-null" "system";
+      type = "nixos-system";
+      catalog = null;
+    };
+  }]).config;
   signedFailure = artifacts:
     let evaluated = (mkEvalCatalog [{
       d2b.artifacts = artifacts;
@@ -641,6 +648,12 @@ in
               targetKind = "guest";
             }
           ];
+        };
+
+        "provider-catalog/null-catalog-has-no-signed-contract" = {
+          expr = builtins.deepSeq nullCatalogCfg.assertions
+            (lib.all (assertion: assertion.assertion) nullCatalogCfg.assertions);
+          expected = true;
         };
         failure = signedFailure {
           broken = {

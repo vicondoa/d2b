@@ -194,7 +194,10 @@ let
 
   signedContractAssertions = id:
     let
-      catalog = artifacts.${id}.catalog or { };
+      catalog =
+        if builtins.isAttrs artifacts.${id}.catalog
+        then artifacts.${id}.catalog
+        else { };
       placementPresent = lib.any
         (field: builtins.hasAttr field catalog)
         shape.placementContractFields;

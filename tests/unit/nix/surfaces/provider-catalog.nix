@@ -11,6 +11,7 @@ import ../helpers/surface.nix {
     names = [
       "provider-catalog/signed-placement-and-runtime-contract-is-retained"
       "provider-catalog/signed-placement-contract-fails-closed-on-target-drift"
+      "provider-catalog/null-catalog-has-no-signed-contract"
     ];
   }];
 }
