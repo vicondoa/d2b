@@ -12,6 +12,11 @@
 | Depends on | `ADR-046-resource-object-model`, `ADR-046-primitive-resource-composition`, `ADR-046-resource-api-and-authorization`, `ADR-046-resource-reconciliation`, `ADR-046-provider-model-and-packaging`, `ADR-046-components-processes-and-sandbox`, `ADR-046-resources-volume`, `ADR-046-provider-state`, `ADR-046-componentsession-and-bus`, `ADR-046-nix-configuration`, `ADR-046-telemetry-audit-and-support`, `ADR-046-resources-host-guest-process-user` |
 | Supersedes | `nixos-modules/components/audio/host.nix`, `nixos-modules/components/audio/guest.nix`, `packages/d2b-core/src/audio_policy.rs`, `packages/d2bd/src/audio_dispatch.rs`, `packages/d2bd/src/audio_host_controller.rs`, `packages/d2b-host/src/audio_argv.rs` |
 
+> **Current-state note (U10).** Baseline rows naming the deleted Guest daemon,
+> guest-control bridge, or `guestControl.*` Nix options are historical. The
+> active guest-side effect owner is the signed target-local audio Process and
+> its typed ComponentSession service.
+
 ## Purpose
 
 This spec exhaustively defines the `audio-pipewire` Provider for d2b 3.0. It

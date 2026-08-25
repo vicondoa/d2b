@@ -16,9 +16,10 @@ bootstraps it via `nix shell nixpkgs#podman`.
 that cannot be proven by a native Rust test or a nix eval. Today that is one
 case:
 
-- `ubuntu-host-check` - proves a statically-linked d2b binary
-  (`d2b-guestd-static`) runs on a stock `ubuntu:24.04` userland, i.e. the
-  guest-side binary is portable to the distros d2b targets.
+- `ubuntu-host-check` - proves the statically-linked shared `d2bd` Guest
+  target agent and `d2b-broker` Guest profile run on a stock `ubuntu:24.04`
+  userland, i.e. the Guest-side artifacts are portable to the distros d2b
+  targets.
 
 ## What this tier is deliberately NOT for
 
@@ -27,7 +28,7 @@ already exists, far more cheaply and without containers:
 
 | What | Where | Cost |
 | --- | --- | --- |
-| Broker adopts the socket-activated fd (`LISTEN_FDS` fd-3 handoff) + serves a Hello round-trip | `packages/d2b-priv-broker/tests/socket_activation.rs` | ~0.4 s, unprivileged |
+| Broker adopts the socket-activated fd (`LISTEN_FDS` fd-3 handoff) + serves a Hello round-trip | `packages/d2b-broker/tests/socket_activation.rs` | ~0.4 s, unprivileged |
 | Daemon binds `public.sock`, serves Hello/vmStart, `SO_PEERCRED` authz, writes the version file | `packages/d2bd/tests/daemon_*.rs` | native, hermetic |
 | Unit shape + `Wants=`/ordering, broker capability set, tmpfiles, evidence-record shape | `tests/unit/nix/cases/{broker-socket-activation,d2bd-startup-smoke}.nix` | nix eval, fail-closed |
 

@@ -321,9 +321,9 @@ fn committed_profiles_share_authentication_and_worker_policy() {
         "Rustc must use BuildBuddy remote execution and cache"
     );
     assert!(
-        !bazelrc.contains("build:remote --strategy=TestRunner=local")
-            && !bazelrc.contains("build:trusted-seed --strategy=TestRunner=local"),
-        "remote and trusted-seed profiles must defer test locality to target tags"
+        bazelrc.contains("build:remote --strategy=TestRunner=local")
+            && bazelrc.contains("build:trusted-seed --strategy=TestRunner=local"),
+        "remote profiles must compile on BuildBuddy and run Bazel test wrappers in the pinned local shell"
     );
     assert!(
         bazelrc.contains("--jobs=50"),
@@ -680,6 +680,7 @@ fn warning_after_cache_hit_fails_a_successful_local_run() {
                cached=false\n\
                : > '{}'\n\
              fi\n\
+             printf 'warning: synthetic cached test warning\\n'\n\
              printf 'warning: synthetic cached test warning\\n' > '{}'\n\
              printf '{{\"id\":{{\"testResult\":{{\"label\":\"//:test\"}}}},\"testResult\":{{\"testActionOutput\":[{{\"name\":\"test.log\",\"uri\":\"file://{}\"}}],\"cachedLocally\":%s,\"status\":\"PASSED\"}}}}\\n' \"$cached\" > \"$bep\"\n\
              exit 0\n",
@@ -723,58 +724,16 @@ fn warning_after_cache_hit_fails_a_successful_local_run() {
 }
 
 #[test]
-fn non_file_cached_test_log_uri_fails_closed_without_retry() {
-    let scratch = repo_root().join(".scratch").join(format!(
-        "bazel-check-warning-bytestream-{}",
-        std::process::id()
-    ));
-    std::fs::create_dir_all(&scratch).expect("create wrapper test scratch");
-    let bazel = scratch.join("bazel");
-    let profile_log = scratch.join("profiles");
-    let credential = scratch.join("credential");
-    std::fs::write(&credential, "credential").expect("write fake credential");
-    write_executable(
-        &bazel,
-        &format!(
-            "#!/usr/bin/env bash\n\
-             printf '%s\\n' \"$D2B_BAZEL_PROFILE\" >> '{}'\n\
-             for arg in \"$@\"; do\n\
-               case \"$arg\" in\n\
-                 --build_event_json_file=*) bep=\"${{arg#*=}}\" ;;\n\
-               esac\n\
-             done\n\
-             printf '{{\"id\":{{\"testResult\":{{\"label\":\"//:test\"}}}},\"testResult\":{{\"testActionOutput\":[{{\"name\":\"test.log\",\"uri\":\"bytestream://cache/test.log\"}}],\"cachedLocally\":true,\"status\":\"PASSED\"}}}}\\n' > \"$bep\"\n\
-             exit 0\n",
-            profile_log.display(),
-        ),
+fn warning_guard_captures_all_test_output_in_the_main_log() {
+    let wrapper = read_text("tests/tools/bazel-check");
+    assert!(
+        wrapper.contains("--test_output=all"),
+        "the warning guard must capture passing and cached test output"
     );
-
-    let output = Command::new("bash")
-        .arg(repo_root().join("tests/tools/bazel-check"))
-        .args(["--profile", "remote", "--", "//:test"])
-        .env("D2B_BAZEL_BIN", &bazel)
-        .env("D2B_PROJECT_SHELL", "d2b")
-        .env("D2B_XTASK_BIN", env!("CARGO_BIN_EXE_xtask"))
-        .env("D2B_BUILDBUDDY_CREDENTIAL_FILE", &credential)
-        .env_remove("D2B_BAZEL_UNTRUSTED")
-        .env_remove("GITHUB_ACTIONS")
-        .env("D2B_BAZEL_CHECK_SCRATCH", scratch.join("evidence"))
-        .output()
-        .expect("run bazel-check");
-
-    assert_eq!(output.status.code(), Some(1));
-    let diagnostics = format!(
-        "{}{}",
-        String::from_utf8_lossy(&output.stdout),
-        String::from_utf8_lossy(&output.stderr)
+    assert!(
+        !wrapper.contains("test_logs_have_warning"),
+        "the warning guard must not depend on BuildBuddy bytestream test-log URIs"
     );
-    assert!(diagnostics.contains("warning scan failed"));
-    assert!(!diagnostics.contains("bazel-check: local passed"));
-    assert_eq!(
-        std::fs::read_to_string(&profile_log).expect("read fake Bazel profiles"),
-        "remote\n"
-    );
-    let _ = std::fs::remove_dir_all(scratch);
 }
 
 #[test]
@@ -1812,6 +1771,12 @@ fn focused_bazel_shell_exports_the_complete_facade_contract() {
             "shared Bazel shell contract must export {export}"
         );
     }
+    assert!(
+        shell_contract.contains("if [ -x /bin/bash ]")
+            && shell_contract.contains("export BAZEL_SH=/bin/bash")
+            && shell_contract.contains("export BAZEL_SH=\"${bazelActionShell}/bin/bash\""),
+        "the shared shell must use native Bash on FHS hosts and fall back to the NixOS FHS wrapper"
+    );
 }
 
 #[test]
@@ -1939,7 +1904,6 @@ fn bazel_facade_owns_public_make_composition() {
         ":test-rust-main",
         ":test-rust-broker",
         ":test-rust-guest-shell-runner",
-        ":test-rust-local",
     ] {
         assert!(
             rust.iter().any(|label| label == component),
@@ -1985,7 +1949,6 @@ fn bazel_facade_owns_public_make_composition() {
             "test-rust-leaf-guest-shell-runner",
             "test-rust-guest-shell-runner",
         ),
-        ("test-rust-leaf-no-bash-ast", "test-rust-no-bash-ast"),
         ("test-rust-leaf-supply-chain", "test-rust-supply-chain"),
     ] {
         assert_eq!(
@@ -1995,18 +1958,12 @@ fn bazel_facade_owns_public_make_composition() {
         );
     }
     assert!(
-        test_suite_labels(&facade, "test-rust-local")
-            .iter()
-            .all(|label| label == "//bazel/checks/rust:portable_rust_local"),
-        "local Rust coverage must remain in the tag-driven local suite"
-    );
-    assert!(
         make_target_blocks(&makefile)
-            .get("heavy-lane-perf")
+            .get("perf")
             .is_some_and(|block| {
                 block.contains("$(BAZEL_RUN) //bazel/checks:test-performance-budgets")
             }),
-        "heavy-lane-perf must invoke the public performance suite directly"
+        "perf must invoke the public performance suite directly"
     );
 }
 
@@ -2047,25 +2004,14 @@ fn make_dispatch_classification_covers_bazel_and_recursive_validation_targets() 
             "{target} is classified but has no Make target definition"
         );
     }
-
     assert!(
-        classes[1]
-            .1
-            .iter()
-            .any(|target| target == "heavy-lane-perf"),
-        "heavy-lane-perf must remain an explicit local dispatcher target"
-    );
-    assert!(
-        !owners.contains_key("heavy-gate-provision") && !owners.contains_key("clean"),
+        !owners.contains_key("clean"),
         "maintenance targets must not be classified merely by their names"
     );
 
     let bazel_targets = &classes[0].1;
     for (target, block) in &blocks {
-        if target == "__d2b_make_dispatch" {
-            continue;
-        }
-        if target == "$(D2B_MAKE_BAZEL_TARGETS)" {
+        if target == "__d2b_make_dispatch" || target == "$(D2B_MAKE_BAZEL_TARGETS)" {
             continue;
         }
         let executable_lines = block
@@ -2105,145 +2051,9 @@ fn make_dispatch_classification_covers_bazel_and_recursive_validation_targets() 
 }
 
 #[test]
-fn make_dispatch_preserves_mixed_local_and_utility_goals_with_one_shell_entry() {
-    let scratch = repo_root()
-        .join(".scratch")
-        .join(format!("make-dispatch-mixed-{}", std::process::id()));
-    std::fs::create_dir_all(&scratch).expect("create mixed dispatcher scratch");
-
-    let nix_count = scratch.join("nix.count");
-    let bazel_log = scratch.join("bazel.log");
-    let fake_bazel = scratch.join("bazel");
-    let fake_nix = scratch.join("nix");
-    let fake_xtask = scratch.join("xtask");
-    let heavy_gate_bin = format!(
-        "HEAVY_GATE_BIN={}",
-        fake_xtask.to_str().expect("fake xtask path")
-    );
-    let make_wrapper = scratch.join("Makefile");
-    std::fs::write(
-        &make_wrapper,
-        format!(
-            "include {}\n\
-             heavy-lane-perf: override D2B_BAZEL_TEST_TAG_FILTERS := target-specific-filter\n",
-            repo_root().join("Makefile").display()
-        ),
-    )
-    .expect("write target-specific Make wrapper");
-    let recursive_make = format!("MAKE=make -f {}", make_wrapper.display());
-    write_executable(
-        &fake_xtask,
-        "#!/bin/sh\n\
-         set -eu\n\
-         if [ \"${1:-}\" = bazel-evidence ] && [ \"${2:-}\" = redact-log ]; then exit 0; fi\n\
-         if [ \"${1:-}\" = heavy-gate ] && [ \"${2:-}\" = verify-slot ]; then exit 0; fi\n\
-         exit 90\n",
-    );
-    write_fake_bazel(&fake_bazel, true);
-    write_fake_nix(&fake_nix);
-
-    let mut path = scratch.display().to_string();
-    path.push(':');
-    path.push_str(&std::env::var("PATH").unwrap_or_default());
-    let output = Command::new("make")
-        .args([
-            "--no-print-directory",
-            "-C",
-            repo_root().to_str().expect("repository root path"),
-            "-f",
-            make_wrapper
-                .to_str()
-                .expect("target-specific Make wrapper path"),
-            "-j2",
-            recursive_make.as_str(),
-            "D2B_MAKE_REENTRY=0",
-            "D2B_BAZEL_PROFILE=local",
-            heavy_gate_bin.as_str(),
-            "heavy-lane-perf",
-            "heavy-gate-build",
-        ])
-        .env("PATH", &path)
-        .env("D2B_FAKE_NIX_COUNT", &nix_count)
-        .env("D2B_FAKE_BAZEL", &fake_bazel)
-        .env("D2B_FAKE_XTASK", &fake_xtask)
-        .env("D2B_FAKE_BAZEL_LOG", &bazel_log)
-        .env("D2B_BAZEL_UNTRUSTED", "1")
-        .env("BAZEL_SH", "/bin/bash")
-        .env_remove("D2B_PROJECT_SHELL")
-        .env_remove("D2B_MAKE_REENTRY")
-        .output()
-        .expect("run mixed local and utility Make goals");
-
-    assert!(
-        output.status.success(),
-        "mixed Make goals failed: {}{}",
-        String::from_utf8_lossy(&output.stdout),
-        String::from_utf8_lossy(&output.stderr)
-    );
-    assert_eq!(
-        std::fs::read_to_string(&nix_count)
-            .expect("read mixed Nix re-entry count")
-            .lines()
-            .count(),
-        1,
-        "mixed local and utility goals entered Nix more than once"
-    );
-    let log = std::fs::read_to_string(&bazel_log).expect("read mixed Bazel log");
-    assert_eq!(
-        log.lines().count(),
-        2,
-        "mixed goals should run one Bazel utility build and one test"
-    );
-    assert!(
-        log.lines().all(|line| {
-            line.contains("local") && line.contains("|/bin/bash|1|") && line.contains("-j2")
-        }),
-        "mixed goals did not preserve profile, trust, and parallelism: {log}"
-    );
-    assert!(
-        log.lines()
-            .any(|line| line.contains("--test_tag_filters=target-specific-filter")),
-        "mixed goals did not preserve the target-specific Bazel filter: {log}"
-    );
-    let _ = std::fs::remove_dir_all(scratch);
-}
-
-#[test]
-fn audited_local_rust_suite_is_complete_and_tag_driven() {
-    let build = read_text("bazel/checks/rust/BUILD.bazel");
+fn rust_package_tests_do_not_force_local_compilation() {
     let d2b = read_text("packages/d2b/BUILD.bazel");
     let facade = read_text("bazel/checks/BUILD.bazel");
-    let labels = test_suite_labels(&build, "portable_rust_local");
-    let mut unique = BTreeSet::new();
-    assert!(!labels.is_empty(), "portable_rust_local must not be empty");
-    for label in labels {
-        assert!(
-            unique.insert(label.clone()),
-            "{label} is duplicated in portable_rust_local"
-        );
-        let relative = label
-            .strip_prefix("//")
-            .unwrap_or_else(|| panic!("invalid local Rust label {label}"));
-        let (package, target) = relative
-            .split_once(':')
-            .unwrap_or_else(|| panic!("local Rust label has no target: {label}"));
-        let package_build = read_text(&format!("{package}/BUILD.bazel"));
-        let block = rule_block(
-            &package_build,
-            target,
-            &["rust_test(", "sh_test(", "filegroup("],
-        );
-        let tags = rule_tags(block);
-        assert!(
-            tags.contains("local") || tags.contains("no-remote-exec"),
-            "{label} is in portable_rust_local without a locality tag"
-        );
-        assert!(
-            !(tags.contains("local") && tags.contains("no-remote-exec")),
-            "{label} redundantly combines local and no-remote-exec"
-        );
-    }
-    let mut tagged_package_tests = BTreeSet::new();
     for package_suite in test_suite_labels(&facade, "rust-main-packages") {
         let relative = package_suite
             .strip_prefix("//")
@@ -2276,22 +2086,12 @@ fn audited_local_rust_suite_is_complete_and_tag_driven() {
                 continue;
             };
             let tags = rule_tags(&block);
-            if tags.contains("local") || tags.contains("no-remote-exec") {
-                tagged_package_tests.insert(format!("//{package}:{target}"));
-            }
+            assert!(
+                !tags.contains("local") && !tags.contains("no-remote-exec"),
+                "//{package}:{target} must compile through BuildBuddy"
+            );
         }
     }
-    assert_eq!(
-        tagged_package_tests, unique,
-        "the local Rust suite must cover exactly the tagged tests in the main package graph"
-    );
-    let makefile = read_text("Makefile");
-    assert!(
-        makefile.contains(
-            "test-rust-main: D2B_BAZEL_TEST_TAG_FILTERS := -local,-no-remote-exec,-manual,-exclusive,-gpu,-kvm"
-        ),
-        "remote Rust main must exclude both local tag classes"
-    );
     let hermetic = rule_block(&d2b, "auth_status_contract", &["rust_test("]);
     assert!(
         !hermetic.contains("\"local\"") && !hermetic.contains("no-remote-cache"),
@@ -2417,6 +2217,11 @@ fn developer_profiles_publish_the_tested_checkout_metadata() {
     let relative_xtask = xtask
         .strip_prefix(&scratch)
         .expect("xtask stub must be below the test scratch directory");
+    let test_path = format!(
+        "{}:{}",
+        bin.display(),
+        std::env::var("PATH").expect("test PATH must be present")
+    );
 
     let run = |profile: &str, capture: &Path, trusted: bool| {
         let mut command = Command::new("bash");
@@ -2437,7 +2242,7 @@ fn developer_profiles_publish_the_tested_checkout_metadata() {
             .env("D2B_CAPTURE_ARGS", capture)
             .env(
                 "PATH",
-                format!("{}:{}", bin.display(), std::env::var("PATH").unwrap()),
+                &test_path,
             );
         if trusted {
             command
@@ -2472,6 +2277,20 @@ fn developer_profiles_publish_the_tested_checkout_metadata() {
         !local.contains("--build_metadata="),
         "local profile must not publish developer metadata"
     );
+    assert!(
+        local
+            .lines()
+            .any(|argument| argument == format!("--action_env=PATH={test_path}")),
+        "local profile must pass its test PATH to Bazel actions"
+    );
+    for (profile, arguments) in [("remote", &remote), ("trusted-seed", &trusted)] {
+        assert!(
+            !arguments
+                .lines()
+                .any(|argument| argument.starts_with("--action_env=PATH=")),
+            "{profile} profile must retain the worker-standard action PATH"
+        );
+    }
     let remote_metadata = remote
         .lines()
         .filter(|argument| argument.starts_with("--build_metadata="))

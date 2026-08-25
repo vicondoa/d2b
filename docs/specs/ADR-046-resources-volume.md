@@ -314,7 +314,6 @@ time and re-resolves on any User resource revision change that affects the UID b
 | `boot` | Removed on next host/Zone boot; entry is /run/-scoped | `CleanupPolicy::Boot` |
 | `process-exit-with-proof` | Removed after the owning Process exits (verified by pidfd) | `CleanupPolicy::ProcessExitWithProof` |
 | `vm-stop-with-proof` | Removed when the owning Guest stops (verified by controller) | `CleanupPolicy::VmStopWithProof` |
-| `cutover-only` | Removed on cutover/generation switch | `CleanupPolicy::CutoverOnly` |
 | `owner-controlled` | Lifecycle is owned by the controller that mounts/creates the Volume | `CleanupPolicy::External` |
 
 ### AdoptionPolicy
@@ -687,13 +686,13 @@ enforces:
 | Entry path (relative) | Type | Invariants | Notes |
 | --- | --- | --- | --- |
 | `` (root) | directory | no-symlink, scope-authorization-required | root: `d2bd:users 0755` |
-| `live` | directory | no-symlink, broker-opaque-id-only | hardlink farm root; `cutover-only` cleanup |
+| `live` | directory | no-symlink, broker-opaque-id-only | hardlink farm root; `never` cleanup |
 | `live/.d2b-marker-<vm>` | file | no-symlink, same-filesystem, hardlink-farm-no-recursion, broker-opaque-id-only | zero-length readiness marker; `d2bd:users 0444` |
 | `meta` | directory | no-symlink, same-filesystem, hardlink-farm-no-recursion, broker-opaque-id-only | generation meta tree; guest-served via virtiofsd |
-| `meta/generations` | directory | no-symlink, same-filesystem, hardlink-farm-no-recursion, broker-opaque-id-only | cutover-only cleanup |
+| `meta/generations` | directory | no-symlink, same-filesystem, hardlink-farm-no-recursion, broker-opaque-id-only | never cleanup |
 | `meta/current` | symlink | broker-opaque-id-only | noFollow: false; points at generations/<N> |
 | `state` | directory | no-symlink, broker-opaque-id-only | host-only; NOT guest-served; `d2bd:users 0700`; holds `state/generations/<id>/` |
-| `gcroots` | directory | no-symlink, same-filesystem, hardlink-farm-no-recursion, broker-opaque-id-only | host-only, at store-view root (NOT under `meta/`); cutover-only cleanup; `d2bd:users 0755` |
+| `gcroots` | directory | no-symlink, same-filesystem, hardlink-farm-no-recursion, broker-opaque-id-only | host-only, at store-view root (NOT under `meta/`); never cleanup; `d2bd:users 0755` |
 | `sync.lock` | file | no-symlink, broker-opaque-id-only | OFD lock; never unlink; leaseClass: none |
 
 **Spec correction**: `nixos-modules/storage-json.nix` (baseline `b5ddbed6`) declares
@@ -1132,7 +1131,7 @@ The virtiofsd worker is tested by:
 | `path:vm-state:<vm>` | `$storeStateDir/<vm>` | Volume root for per-Guest state | Guest owns as Volume with `kind: state` |
 | `path:vm-run:<vm>` | `/run/d2b/vms/<vm>` | Zone/Guest runtime root directory; not a Volume | system-core Host runtime path; volume-virtiofs stores export sockets here as a private implementation detail |
 | `path:store-view:<vm>` | `$storeStateDir/<vm>/store-view` | `Volume/store-view-<vm>` root | volume-local, kind: durable |
-| `path:store-view-live:<vm>` | `.../store-view/live` | LayoutEntry `live` | cutover-only, broker-opaque-id-only |
+| `path:store-view-live:<vm>` | `.../store-view/live` | LayoutEntry `live` | never, broker-opaque-id-only |
 | `path:store-view-marker:<vm>` | `.../store-view/live/.d2b-marker-<vm>` | LayoutEntry `live/.d2b-marker-<vm>` | zero-length file, hardlink-farm invariants |
 | `path:store-view-meta:<vm>` | `.../store-view/meta` | LayoutEntry `meta` | same-filesystem, hardlink-farm; guest-served |
 | `path:store-view-generations:<vm>` | `.../store-view/meta/generations` | LayoutEntry `meta/generations` | same |
@@ -1484,13 +1483,13 @@ d2b.zones."dev".resources."store-view-work-vm" = {
     kind = "durable";
     layout = [
       { path = ""; type = "directory"; ownerRef = "User/d2bd"; groupRef = "User/users"; mode = "0755"; }
-      { path = "live"; type = "directory"; invariants = [ "no-symlink" "broker-opaque-id-only" ]; cleanupPolicy = "cutover-only"; repairPolicy = "exact-owner"; ownerRef = "User/d2bd"; groupRef = "User/users"; mode = "0755"; }
+      { path = "live"; type = "directory"; invariants = [ "no-symlink" "broker-opaque-id-only" ]; cleanupPolicy = "never"; repairPolicy = "exact-owner"; ownerRef = "User/d2bd"; groupRef = "User/users"; mode = "0755"; }
       { path = "live/.d2b-marker-work-vm"; type = "file"; ownerRef = "User/d2bd"; groupRef = "User/users"; mode = "0444"; invariants = [ "no-symlink" "same-filesystem" "hardlink-farm-no-recursion" "broker-opaque-id-only" ]; repairPolicy = "exact-owner"; }
       { path = "meta"; type = "directory"; invariants = [ "no-symlink" "same-filesystem" "hardlink-farm-no-recursion" "broker-opaque-id-only" ]; repairPolicy = "exact-owner"; ownerRef = "User/d2bd"; groupRef = "User/users"; mode = "0755"; }
-      { path = "meta/generations"; type = "directory"; invariants = [ "no-symlink" "same-filesystem" "hardlink-farm-no-recursion" "broker-opaque-id-only" ]; cleanupPolicy = "cutover-only"; repairPolicy = "exact-owner"; ownerRef = "User/d2bd"; groupRef = "User/users"; mode = "0755"; }
-      { path = "meta/current"; type = "symlink"; target = "generations/0"; noFollow = false; invariants = [ "broker-opaque-id-only" ]; cleanupPolicy = "cutover-only"; repairPolicy = "exact-owner"; ownerRef = "User/d2bd"; groupRef = "User/users"; mode = "0777"; }
+      { path = "meta/generations"; type = "directory"; invariants = [ "no-symlink" "same-filesystem" "hardlink-farm-no-recursion" "broker-opaque-id-only" ]; cleanupPolicy = "never"; repairPolicy = "exact-owner"; ownerRef = "User/d2bd"; groupRef = "User/users"; mode = "0755"; }
+      { path = "meta/current"; type = "symlink"; target = "generations/0"; noFollow = false; invariants = [ "broker-opaque-id-only" ]; cleanupPolicy = "never"; repairPolicy = "exact-owner"; ownerRef = "User/d2bd"; groupRef = "User/users"; mode = "0777"; }
       { path = "state"; type = "directory"; invariants = [ "no-symlink" "broker-opaque-id-only" ]; repairPolicy = "exact-owner"; ownerRef = "User/d2bd"; groupRef = "User/users"; mode = "0700"; }  # host-only; NOT guest-served
-      { path = "gcroots"; type = "directory"; invariants = [ "no-symlink" "same-filesystem" "hardlink-farm-no-recursion" "broker-opaque-id-only" ]; cleanupPolicy = "cutover-only"; repairPolicy = "exact-owner"; ownerRef = "User/d2bd"; groupRef = "User/users"; mode = "0755"; }  # at store-view root, NOT under meta/
+      { path = "gcroots"; type = "directory"; invariants = [ "no-symlink" "same-filesystem" "hardlink-farm-no-recursion" "broker-opaque-id-only" ]; cleanupPolicy = "never"; repairPolicy = "exact-owner"; ownerRef = "User/d2bd"; groupRef = "User/users"; mode = "0755"; }  # at store-view root, NOT under meta/
       { path = "sync.lock"; type = "file"; ownerRef = "User/d2bd"; groupRef = "User/users"; mode = "0640"; leaseClass = "none"; invariants = [ "no-symlink" "broker-opaque-id-only" ]; restartPolicy = "preserve-across-controller-restart"; }
     ];
     views = {

@@ -189,10 +189,7 @@ let
         let
           shareTag = builtins.unsafeDiscardStringContext share.tag;
           shareNodeId = "virtiofsd-${shareTag}";
-          principal =
-            if shareTag == "d2b-gctl"
-            then "d2b-${name}-gctlfs"
-            else "d2b-${name}-runner";
+          principal = "d2b-${name}-runner";
         in {
           name = profileIdFor name shareNodeId;
           value = mkProfile {
@@ -207,15 +204,11 @@ let
             # no CAP_SETUID, no CAP_SYS_ADMIN on the host.
             capabilities = [ ];
             seccompPolicyRef = "w1-virtiofsd";
-            readOnlyPaths = [ "/nix/store" ]
-              ++ lib.optional (shareTag == "d2b-gctl") share.source;
-            writablePaths =
-              if shareTag == "d2b-gctl" then [
-                (mkWritablePath "${audioRuntimeDirOf name}/guest-control" "Expose the guest-control token virtiofs socket.")
-              ] else [
-                (mkWritablePath (stateDirOf name) "Materialize virtiofs sockets and VM-local store state.")
-                (mkWritablePath (runtimeDirOf name) "Expose broker-prepared virtiofs runtime sockets.")
-              ];
+            readOnlyPaths = [ "/nix/store" ];
+            writablePaths = [
+              (mkWritablePath (stateDirOf name) "Materialize virtiofs sockets and VM-local store state.")
+              (mkWritablePath (runtimeDirOf name) "Expose broker-prepared virtiofs runtime sockets.")
+            ];
             cgroupSubtree = "d2b.slice/${name}/${shareNodeId}";
             controllers = serviceControllers;
             # (ADR 0021): broker pre-creates a user NS
@@ -340,12 +333,28 @@ let
         controllers = serviceControllers;
       };
 
-      "${profileIdFor name "guest-control-health"}" = mkProfile {
-        profileId = profileIdFor name "guest-control-health";
-        role = "guest-control-health";
-        principal = "d2bd";
-        seccompPolicyRef = "w1-guest-control-health";
-        cgroupSubtree = "d2b.slice/${name}/guest-control-health";
+      "${profileIdFor name "activation-nixos-runner"}" = mkProfile {
+        profileId = profileIdFor name "activation-nixos-runner";
+        role = "activation-nixos-runner";
+        principal = "d2b-${name}-activation";
+        uid = 0;
+        gid = 0;
+        seccompPolicyRef = "w1-activation-nixos-runner";
+        namespaces = defaultNamespaces // {
+          pid = true;
+        };
+        adr_carve_out = "Target-local activation helper requires its declared root identity inside the Guest sandbox.";
+        readOnlyPaths = [
+          "/etc/d2b"
+          "/nix/store"
+          "/nix/var/nix/profiles"
+          "/run/current-system"
+        ];
+        writablePaths = [
+          (mkWritablePath (stateDirOf name) "Write only target-local activation state.")
+        ];
+        cgroupSubtree = "d2b.slice/${name}/activation-nixos-runner";
+        controllers = serviceControllers;
       };
     }
     // lib.optionalAttrs vm.tpm.enable {
@@ -515,7 +524,7 @@ let
         # deviceBinds is intentionally empty: /dev/dri/renderD128 is
         # pre-opened by the broker parent and passed to the user-NS child
         # via fd inheritance (RENDER_NODE_INHERITED_FD = 10 protocol
-        # constant in d2b-priv-broker/src/sys.rs). No bind-mount.
+        # constant in d2b-broker/src/sys.rs). No bind-mount.
         deviceBinds = [ ];
         # No real host compositor bind-mount: the GPU runner connects to
         # the per-VM proxy socket at /run/d2b-wlproxy/<vm>/wayland-0.
@@ -581,6 +590,29 @@ let
         # the per-VM runtime dir default ACL then grants crosvm's
         # named-user entry rw via the GPU UID.
         umask = 7;
+      };
+    }
+    // lib.optionalAttrs (vm.graphics.enable && vm.graphics.crossDomainTrusted) {
+      # Guest frontend workers are resolved by the Guest systemd Provider.
+      # Keep the signed profile deliberately systemd-compatible: no host
+      # namespaces, capabilities, devices, or writable host paths.
+      "${profileIdFor name "wayland-frontend-worker"}" = mkProfile {
+        profileId = profileIdFor name "wayland-frontend-worker";
+        role = "wayland-proxy";
+        principal = "d2b-${name}-wlfrontend";
+        capabilities = [ ];
+        namespaces = {
+          ipc = false;
+          mount = false;
+          net = false;
+          pid = false;
+          user = false;
+          uts = false;
+        };
+        seccompPolicyRef = "strict";
+        cgroupSubtree = "d2b.slice/${name}/wayland-frontend-worker";
+        controllers = serviceControllers;
+        umask = 18;
       };
     }
     // lib.optionalAttrs vm.audio.enable {
@@ -696,7 +728,6 @@ let
         profileId = profileIdFor name "sk-frontend";
         role = "security-key-frontend";
         principal = "d2bd";
-        seccompPolicyRef = "w1-guest-control-health";
         cgroupSubtree = "d2b.slice/${name}/sk-frontend";
         controllers = serviceControllers;
       };
@@ -849,11 +880,13 @@ let
   # container UID 0 maps to another role's host identity).
   # Walk every principal in fullProfileTable, group by UID, and
   # fail eval if any UID has more than one distinct principal.
-  principalUidPairs = lib.flatten (lib.mapAttrsToList
-    (profileId: data: [
-      { principal = data.principal; uid = data.uid; profileId = profileId; }
-    ])
-    fullProfileTable);
+  principalUidPairs = lib.filter
+    (pair: pair.uid == stablePrincipalId pair.principal)
+    (lib.flatten (lib.mapAttrsToList
+      (profileId: data: [
+        { principal = data.principal; uid = data.uid; profileId = profileId; }
+      ])
+      fullProfileTable));
   principalUidByUid = lib.foldl'
     (acc: pair:
       let

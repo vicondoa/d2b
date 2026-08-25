@@ -29,7 +29,6 @@ impl RuntimeMetadata {
                 config_sync: true,
                 display: true,
                 exec: true,
-                guest_control: true,
                 in_guest_observability: true,
                 keys: true,
                 lifecycle: true,
@@ -66,8 +65,8 @@ impl RuntimeMetadata {
                     false,
                 ),
                 RuntimeServiceSummary::from_process_role(
-                    "guest-control-health",
-                    ProcessRole::GuestControlHealth,
+                    "component-session-health",
+                    ProcessRole::ComponentSessionHealth,
                     false,
                 ),
                 RuntimeServiceSummary::from_process_role("swtpm", ProcessRole::Swtpm, true),
@@ -86,7 +85,6 @@ impl RuntimeMetadata {
                 config_sync: false,
                 display: true,
                 exec: false,
-                guest_control: false,
                 in_guest_observability: false,
                 keys: false,
                 lifecycle: true,
@@ -160,7 +158,6 @@ pub struct RuntimeCapabilities {
     pub config_sync: bool,
     pub display: bool,
     pub exec: bool,
-    pub guest_control: bool,
     pub in_guest_observability: bool,
     pub keys: bool,
     pub lifecycle: bool,
@@ -196,7 +193,6 @@ impl RuntimeOperationCapabilities {
             guest: RuntimeGuestCapabilities {
                 config_sync: true,
                 exec: true,
-                guest_control: true,
                 in_guest_observability: true,
                 keys: true,
                 shell: true,
@@ -284,7 +280,6 @@ pub struct RuntimeDisplayCapabilities {
 pub struct RuntimeGuestCapabilities {
     pub config_sync: bool,
     pub exec: bool,
-    pub guest_control: bool,
     pub in_guest_observability: bool,
     pub keys: bool,
     #[serde(default)]
@@ -330,7 +325,7 @@ pub enum RuntimeServiceRole {
     Audio,
     Video,
     Network,
-    GuestControl,
+    ComponentSession,
     Usb,
     Observability,
 }
@@ -347,8 +342,9 @@ impl From<&ProcessRole> for RuntimeServiceRole {
             }
             ProcessRole::Audio => Self::Audio,
             ProcessRole::CloudHypervisorRunner | ProcessRole::QemuMediaRunner => Self::Hypervisor,
+            ProcessRole::ActivationNixosRunner => Self::Host,
             ProcessRole::VsockRelay => Self::Network,
-            ProcessRole::GuestSshReadiness | ProcessRole::GuestControlHealth => Self::GuestControl,
+            ProcessRole::ComponentSessionHealth => Self::ComponentSession,
             ProcessRole::Usbip | ProcessRole::SecurityKeyFrontend => Self::Usb,
             ProcessRole::OtelHostBridge => Self::Observability,
         }

@@ -18,8 +18,8 @@ broker's `SpawnRunner` / `OpenPidfd` ops.
 | Resource                                | Pattern                                |
 | --------------------------------------- | -------------------------------------- |
 | Public daemon (supervisor)              | `d2bd.service`                     |
-| Privileged broker socket                | `d2b-priv-broker.socket`           |
-| Privileged broker service               | `d2b-priv-broker.service`          |
+| Privileged broker socket                | `d2b-broker.socket`           |
+| Privileged broker service               | `d2b-broker.service`          |
 | Lifecycle permission group              | `d2b` (singleton)                  |
 
 VM names are validated at eval time:
@@ -110,7 +110,7 @@ per-VM units are emitted):
   descendants; the restarted daemon re-adopts existing runners. The
   existing guarded `ExecStop` host-shutdown hook remains the all-VM
   teardown path and runs only when the system manager is stopping.
-- `d2b-priv-broker.service` is socket-activated. It reloads the
+- `d2b-broker.service` is socket-activated. It reloads the
   current bundle resolver for each accepted request so a running broker
   does not dispatch stale runner intents after a switch, and it never
   holds in-flight session state across requests.
@@ -125,7 +125,7 @@ and the exact remediation command (`d2b vm restart <vm>` for clean down+up,
 
 New per-VM work belongs **inside the daemon's DAG executor**
 (`packages/d2bd-runtime/src/supervisor/`), with privileged effects routed through a
-typed `d2b-priv-broker` op declared in `packages/d2b-contracts/` and audited in
+typed `d2b-broker` op declared in `packages/d2b-contracts/` and audited in
 `/var/lib/d2b/audit/broker-<utc-date>.jsonl`. Do not introduce a
 `systemd.services.*` declaration in `nixos-modules/` for per-VM work. Denylist coverage is owner-local or structural; run the focused
 Nix-unit and daemon tests when changing this surface. See

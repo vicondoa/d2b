@@ -12,10 +12,12 @@
 # Strictly evaluating `config.d2b.manifest` here forces the
 # readOnly path and would re-surface a regression of #29 immediately.
 #
-# Also asserts the Wave 2 wiring:
-#   - guest proxy service uses wl-cross-domain-proxy
+# Also asserts the v3 ComponentSession wiring:
+#   - guest frontend is a signed Guest Process node, not a user service
+#   - wl-cross-domain-proxy remains in the guest closure
 #   - no DISPLAY session variable is set (xwayland is unsupported)
 #   - host wayland-proxy DAG node is emitted when crossDomainTrusted = true
+#   - QEMU-media keeps its legacy wayland-proxy DAG node and readiness edge
 #   - GPU runner --wayland-sock targets the filter socket, not the real compositor
 #   - GPU runner has no XDG_RUNTIME_DIR or WAYLAND_DISPLAY env vars
 #
@@ -106,6 +108,28 @@ let
             };
           };
         };
+
+        # QEMU-media keeps a same-target Host execution reference on its
+        # legacy Wayland proxy. The process identity and DAG edge distinguish
+        # it from the trusted graphics proxy.
+        d2b.vms.demo-media = {
+          enable = true;
+          env = "work";
+          index = 17;
+          runtime.kind = "qemu-media";
+          qemuMedia = {
+            bootDrive.slot = "cdrom";
+            source = {
+              ref = "installer-usb";
+              format = "iso";
+            };
+            removableSlots.cdrom.source = {
+              ref = "tools-usb";
+              format = "iso";
+              usbSelector.byIdName = "usb-Test_Tools_0001-0:0";
+            };
+          };
+        };
       })
     ];
   };
@@ -116,12 +140,6 @@ let
   defaultSessionVars =
     nixos.config.d2b._computed.demo-gfx.config.environment.sessionVariables;
 
-  # Guest service assertions for trusted VM (crossDomainTrusted=true)
-  trustedGuestServices =
-    nixos.config.d2b._computed.demo-cd.config.systemd.user.services;
-  trustedProxyExec =
-    nixos.config.d2b._computed.demo-cd.config.systemd.user.services.wayland-proxy.serviceConfig.ExecStart;
-
   # Host DAG node assertions: look for wayland-proxy node in processes bundle
   processes = nixos.config.d2b._bundle.processesJson.data;
   trustedDag = builtins.filter (dag: dag.vm == "demo-cd") processes.vms;
@@ -131,6 +149,9 @@ let
   trustedWlproxyNodes = builtins.filter (n: n.id == "wayland-proxy") trustedNodes;
   trustedWlproxyArgv = if trustedWlproxyNodes == [] then [] else (builtins.head trustedWlproxyNodes).argv;
   trustedWlproxyEnv = if trustedWlproxyNodes == [] then [] else ((builtins.head trustedWlproxyNodes).env or []);
+  trustedFrontendNodes = builtins.filter (n: n.id == "wayland-frontend-worker") trustedNodes;
+  trustedFrontend = if trustedFrontendNodes == [] then { } else builtins.head trustedFrontendNodes;
+  trustedGuestPackages = nixos.config.d2b._computed.demo-cd.config.environment.systemPackages;
   hasArgPair = argv: flag: value:
     let len = builtins.length argv;
     in len >= 2 && builtins.any
@@ -143,6 +164,16 @@ let
   defaultEdges = defaultDagRecord.edges;
   defaultWlproxyNodes = builtins.filter (n: n.id == "wayland-proxy") defaultNodes;
 
+  mediaDag = builtins.filter (dag: dag.vm == "demo-media") processes.vms;
+  mediaDagRecord = if mediaDag == [] then { nodes = [ ]; edges = [ ]; } else builtins.head mediaDag;
+  mediaNodes = mediaDagRecord.nodes;
+  mediaEdges = mediaDagRecord.edges;
+  mediaWlproxyNodes = builtins.filter (n: n.id == "wayland-proxy") mediaNodes;
+  mediaWlproxy = if mediaWlproxyNodes == [] then { } else builtins.head mediaWlproxyNodes;
+  mediaQemuNodes = builtins.filter (n: n.id == "qemu-media") mediaNodes;
+  mediaQemu = if mediaQemuNodes == [] then { } else builtins.head mediaQemuNodes;
+  mediaWlproxyArgv = mediaWlproxy.argv or [ ];
+
   # GPU argv assertions for the trusted VM
   trustedGpuNodes = builtins.filter (n: n.id == "gpu" || n.id == "gpu-render-node") trustedNodes;
   trustedGpuArgv = if trustedGpuNodes == [] then [] else (builtins.head trustedGpuNodes).argv;
@@ -154,23 +185,37 @@ let
   defaultGpuArgv = if defaultGpuNodes == [] then [] else (builtins.head defaultGpuNodes).argv;
   defaultGpuEnv = if defaultGpuNodes == [] then [] else ((builtins.head defaultGpuNodes).env or []);
 in
-  # Guest proxy: default VM should have no wayland-proxy service (crossDomainTrusted=false)
+  # Guest frontend: no direct user service remains for either VM.
   assert lib.assertMsg (!(guestServices ? wayland-proxy))
     "default graphics VM (crossDomainTrusted=false) should not have a wayland-proxy guest service";
-  # Guest proxy: trusted VM should use wl-cross-domain-proxy
-  assert lib.assertMsg (lib.hasInfix "wl-cross-domain-proxy" trustedProxyExec)
-    "crossDomainTrusted=true should use wl-cross-domain-proxy in guest proxy service";
-  # No Xwayland args in the proxy (xwayland is unsupported)
-  assert lib.assertMsg (!(lib.hasInfix "--x-display" trustedProxyExec))
-    "proxy service should not include --x-display";
-  assert lib.assertMsg (!(lib.hasInfix "--xwayland-binary" trustedProxyExec))
-    "proxy service should not include --xwayland-binary";
+  assert lib.assertMsg (!(nixos.config.d2b._computed.demo-cd.config.systemd.user.services ? wayland-proxy))
+    "trusted graphics VM should not have a wayland-proxy guest service";
+  assert lib.assertMsg (builtins.length trustedFrontendNodes == 1)
+    "crossDomainTrusted=true should emit exactly one Guest frontend Process node";
+  assert lib.assertMsg (trustedFrontend.executionRef == "Guest/demo-cd")
+    "Guest frontend Process should target the demo-cd guest execution reference";
+  assert lib.assertMsg (trustedFrontend.executionDomain == "system")
+    "Guest frontend Process should use the system execution domain";
+  assert lib.assertMsg (lib.hasInfix "wl-cross-domain-proxy" trustedFrontend.binaryPath)
+    "Guest frontend Process should use wl-cross-domain-proxy";
+  assert lib.assertMsg (hasArgPair trustedFrontend.argv "--socket-name" "wayland-1")
+    "Guest frontend Process should bind the guest desktop wayland-1 socket";
+  assert lib.assertMsg (builtins.any
+    (pkg: lib.hasInfix "wl-cross-domain-proxy" (pkg.name or ""))
+    trustedGuestPackages)
+    "trusted graphics VM should retain wl-cross-domain-proxy in its guest closure";
   # No DISPLAY session variable (xwayland disabled)
   assert lib.assertMsg (!(defaultSessionVars ? DISPLAY))
     "default graphics VM should not set DISPLAY";
   # Host wayland-proxy node: present for crossDomainTrusted=true
   assert lib.assertMsg (builtins.length trustedWlproxyNodes == 1)
     "crossDomainTrusted=true should emit exactly one wayland-proxy host DAG node";
+  assert lib.assertMsg ((builtins.head trustedWlproxyNodes).executionRef == "Host/host-system")
+    "trusted wayland-proxy node should retain the Host execution reference for resource reconciliation";
+  assert lib.assertMsg ((builtins.head trustedWlproxyNodes).executionDomain == "system")
+    "trusted wayland-proxy node should retain the system execution domain for resource reconciliation";
+  assert lib.assertMsg (hasArgPair trustedWlproxyArgv "--provider-kind" "local-vm")
+    "trusted wayland-proxy should retain the local-vm process identity";
   # Host wayland-proxy node: absent for crossDomainTrusted=false
   assert lib.assertMsg (builtins.length defaultWlproxyNodes == 0)
     "crossDomainTrusted=false should not emit a wayland-proxy host DAG node";
@@ -205,6 +250,26 @@ in
     "wayland-proxy argv should listen on the filter socket used by readiness";
   assert lib.assertMsg (hasArgPair trustedWlproxyArgv "--connect" "/run/user/1000/wayland-0")
     "wayland-proxy argv should connect to the real host compositor path";
+  # QEMU-media keeps the legacy DAG spawn despite the default Host target.
+  assert lib.assertMsg (builtins.length mediaWlproxyNodes == 1)
+    "qemu-media should emit exactly one legacy wayland-proxy DAG node";
+  assert lib.assertMsg (mediaWlproxy.executionRef == "Host/host-system")
+    "qemu-media wayland-proxy should retain the default Host execution reference";
+  assert lib.assertMsg (!(mediaWlproxy ? executionDomain))
+    "qemu-media wayland-proxy should not gain the trusted resource execution domain";
+  assert lib.assertMsg (hasArgPair mediaWlproxyArgv "--provider-kind" "qemu-media")
+    "qemu-media wayland-proxy should retain its qemu-media process identity";
+  assert lib.assertMsg (mediaWlproxy.readiness == [
+    { kind = "unix-socket-listening"; value = "/run/d2b-wlproxy/demo-media/wayland-0"; }
+  ])
+    "qemu-media wayland-proxy should retain its socket readiness predicate";
+  assert lib.assertMsg (builtins.length mediaQemuNodes == 1
+    && mediaQemu.role == "qemu-media-runner")
+    "qemu-media DAG should retain its legacy runner node";
+  assert lib.assertMsg (builtins.any
+    (e: e.from == "wayland-proxy" && e.to == "qemu-media")
+    mediaEdges)
+    "qemu-media DAG should retain the wayland-proxy socket readiness edge";
   # GPU env: no XDG_RUNTIME_DIR or WAYLAND_DISPLAY
   assert lib.assertMsg (!(builtins.any (e: lib.hasPrefix "XDG_RUNTIME_DIR=" e) trustedGpuEnv))
     "GPU runner env should not contain XDG_RUNTIME_DIR";

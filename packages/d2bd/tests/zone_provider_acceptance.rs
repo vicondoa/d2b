@@ -14,15 +14,21 @@ use std::{
 };
 
 use async_trait::async_trait;
+use d2b_contracts_provider::v3::{
+    ArtifactDigest, BinaryRef, ComponentDescriptor, ComponentExecution, ComponentTargetCapability,
+    ComponentType, ControllerInstanceScope, ControllerTargetKind, EffectPortClass,
+};
 use d2b_contracts_resource::v3::{
-    ResourceBundleGenerationId,
-    ResourceGeneration,
-    ResourceRef,
-    ResourceUid,
+    ControllerGeneration, ResourceBundleGenerationId, ResourceGeneration, ResourceRef,
+    ResourceTypeName, ResourceUid, SchemaFingerprint, ZoneId, ZoneRevision,
     execution_policy::BoundedToken,
     guest::GuestSpec,
-    network::{AttachmentGenerationFence, AttachmentHandle, DhcpSpec, DnsSpec, Ipv4Cidr, IsolationSpec, MdnsSpec, NetworkSpec, RoutingSpec},
-    process::ProcessSpec,
+    identity::ReconnectGeneration,
+    network::{
+        AttachmentGenerationFence, AttachmentHandle, DhcpSpec, DnsSpec, Ipv4Cidr, IsolationSpec,
+        MdnsSpec, NetworkSpec, RoutingSpec,
+    },
+    process::{ProcessClass, ProcessSpec},
     volume::{EntryType, VolumeSpec},
 };
 use d2b_provider_device_tpm::{
@@ -39,11 +45,11 @@ use d2b_provider_network_local::{
 use d2b_provider_runtime_cloud_hypervisor::{
     CloudHypervisorClock, CloudHypervisorConfig, CloudHypervisorController,
     CloudHypervisorEffectPort, CloudHypervisorError, CloudHypervisorGuestSettings,
-    CloudHypervisorPhase, CloudHypervisorReconcileOutcome, ConsoleType, GuestControlHealth,
-    GuestControlProbe,
+    CloudHypervisorPhase, CloudHypervisorReconcileOutcome, ConsoleType, GuestSessionEvidence,
+    GuestSessionEvidenceProbe,
     adoption::ProcessIdentity,
     bootstrap_graph::{AttachmentRef, BootstrapGraph},
-    health::GuestControlHealthError,
+    health::GuestSessionError,
 };
 use d2b_provider_volume_local::{
     DriftClass, MarkerState, OwnerProof, QuotaCapability, VolumeLayoutEffectPort,
@@ -52,6 +58,11 @@ use d2b_provider_volume_local::{
 use d2bd_runtime::resource_operator_activation::{
     Wave6BoundaryError, Wave6Dependencies, Wave6ProviderBoundary, Wave6ReconcileResult,
     Wave6Resource, Wave6ResourceSet,
+};
+use d2bd_runtime::target_runtime::{
+    AdmissionLimits, ControllerAssignmentRequest, ControllerChildObservation,
+    ControllerProcessPhase, ControllerResourceVerb, ControllerSessionBinding, DaemonMode,
+    ProviderDeployment,
 };
 use serde_json::json;
 
@@ -906,30 +917,50 @@ impl CloudHypervisorClock for FixedCloudClock {
     }
 }
 
-struct FilesystemGuestControl {
+struct FilesystemGuestSession {
     ready: PathBuf,
 }
 
 #[async_trait]
-impl GuestControlProbe for FilesystemGuestControl {
-    async fn probe(&self, _: u32, _: u32) -> Result<GuestControlHealth, GuestControlHealthError> {
+impl GuestSessionEvidenceProbe for FilesystemGuestSession {
+    async fn observe(
+        &self,
+        _: u32,
+        _: u32,
+    ) -> Result<GuestSessionEvidence, GuestSessionError> {
         match fs::read_to_string(&self.ready) {
-            Ok(value) if value == "ready" => Ok(GuestControlHealth::Ready),
-            Ok(_) => Ok(GuestControlHealth::Degraded),
-            Err(_) => Err(GuestControlHealthError::Disconnected),
+            Ok(value) if value == "ready" => GuestSessionEvidence::current(
+                ResourceRef::parse("Guest/test").unwrap(),
+                "sha256:0000000000000000000000000000000000000000000000000000000000000001",
+                1,
+                [],
+                true,
+                true,
+            )
+            .map_err(|_| GuestSessionError::Protocol),
+            Ok(_) => GuestSessionEvidence::current(
+                ResourceRef::parse("Guest/test").unwrap(),
+                "sha256:0000000000000000000000000000000000000000000000000000000000000001",
+                1,
+                [],
+                false,
+                false,
+            )
+            .map_err(|_| GuestSessionError::Protocol),
+            Err(_) => Err(GuestSessionError::Disconnected),
         }
     }
 
-    async fn close(&self, _: u32) -> Result<(), GuestControlHealthError> {
-        fs::write(&self.ready, b"closed").map_err(|_| GuestControlHealthError::Disconnected)
+    async fn close(&self, _: u32) -> Result<(), GuestSessionError> {
+        fs::write(&self.ready, b"closed").map_err(|_| GuestSessionError::Disconnected)
     }
 }
 
 fn cloud_controller(
     effect: Arc<RealCloudHypervisorEffect>,
-    probe: Arc<FilesystemGuestControl>,
+    probe: Arc<FilesystemGuestSession>,
     expected: Option<ProcessIdentity>,
-) -> CloudHypervisorController<RealCloudHypervisorEffect, FilesystemGuestControl> {
+) -> CloudHypervisorController<RealCloudHypervisorEffect, FilesystemGuestSession> {
     let config = CloudHypervisorConfig {
         controller_execution_ref: ResourceRef::parse("Host/host-system").unwrap(),
         default_vcpus: 2,
@@ -973,14 +1004,14 @@ fn cloud_controller(
 
 #[tokio::test]
 async fn cloud_hypervisor_zone_waits_dependencies_reaches_ready_and_adopts_process() {
-    let directory = tempfile::tempdir().expect("Guest-control state directory");
-    let ready_path = directory.path().join("guest-control");
+    let directory = tempfile::tempdir().expect("ComponentSession state directory");
+    let ready_path = directory.path().join("component-session");
     fs::write(&ready_path, b"ready").unwrap();
     let effect = Arc::new(RealCloudHypervisorEffect {
         process: Mutex::new(None),
         pidfds: Mutex::new(Vec::new()),
     });
-    let probe = Arc::new(FilesystemGuestControl { ready: ready_path });
+    let probe = Arc::new(FilesystemGuestSession { ready: ready_path });
     let mut controller = cloud_controller(Arc::clone(&effect), Arc::clone(&probe), None);
 
     assert_eq!(
@@ -1025,17 +1056,17 @@ pub struct Wave6RealBoundary {
     tpm: FilesystemTpm,
     tpm_controller: Mutex<Option<TpmResourceController>>,
     cloud_effect: Arc<RealCloudHypervisorEffect>,
-    cloud_probe: Arc<FilesystemGuestControl>,
-    guest_controller:
-        Mutex<Option<CloudHypervisorController<RealCloudHypervisorEffect, FilesystemGuestControl>>>,
+    cloud_probe: Arc<FilesystemGuestSession>,
+    guest_sessionler:
+        Mutex<Option<CloudHypervisorController<RealCloudHypervisorEffect, FilesystemGuestSession>>>,
 }
 
 impl Wave6RealBoundary {
     pub fn new(root: impl Into<PathBuf>) -> Self {
         let root = root.into();
         fs::create_dir_all(&root).expect("create Wave 6 provider effect root");
-        let guest_control = root.join("guest-control");
-        fs::write(&guest_control, b"ready").expect("seed guest-control readiness");
+        let guest_session = root.join("component-session");
+        fs::write(&guest_session, b"ready").expect("seed component-session readiness");
         Self {
             volume: FilesystemVolume::new(root.join("volume")),
             network: FilesystemNetworkBoundary::new(root.join("network")),
@@ -1045,10 +1076,10 @@ impl Wave6RealBoundary {
                 process: Mutex::new(None),
                 pidfds: Mutex::new(Vec::new()),
             }),
-            cloud_probe: Arc::new(FilesystemGuestControl {
-                ready: guest_control,
+            cloud_probe: Arc::new(FilesystemGuestSession {
+                ready: guest_session,
             }),
-            guest_controller: Mutex::new(None),
+            guest_sessionler: Mutex::new(None),
             root,
         }
     }
@@ -1063,11 +1094,11 @@ impl Wave6RealBoundary {
         .map_err(|_| Wave6BoundaryError::Effect)
     }
 
-    fn guest_controller(
+    fn guest_sessionler(
         &self,
         expected: Option<ProcessIdentity>,
     ) -> Result<
-        CloudHypervisorController<RealCloudHypervisorEffect, FilesystemGuestControl>,
+        CloudHypervisorController<RealCloudHypervisorEffect, FilesystemGuestSession>,
         Wave6BoundaryError,
     > {
         Ok(cloud_controller(
@@ -1148,12 +1179,12 @@ impl Wave6ProviderBoundary for Wave6RealBoundary {
         dependencies: Wave6Dependencies,
     ) -> Result<Wave6ReconcileResult, Wave6BoundaryError> {
         let mut controller = self
-            .guest_controller
+            .guest_sessionler
             .lock()
             .map_err(|_| Wave6BoundaryError::Effect)?
             .take()
             .map(Ok)
-            .unwrap_or_else(|| self.guest_controller(None))?;
+            .unwrap_or_else(|| self.guest_sessionler(None))?;
         let outcome = controller
             .reconcile(
                 dependencies.network_ready,
@@ -1163,7 +1194,7 @@ impl Wave6ProviderBoundary for Wave6RealBoundary {
             )
             .await
             .map_err(|_| Wave6BoundaryError::Effect)?;
-        self.guest_controller
+        self.guest_sessionler
             .lock()
             .map_err(|_| Wave6BoundaryError::Effect)?
             .replace(controller);
@@ -1208,7 +1239,7 @@ impl Wave6ProviderBoundary for Wave6RealBoundary {
 
         let (recovery, identity) = {
             let mut guest_guard = self
-                .guest_controller
+                .guest_sessionler
                 .lock()
                 .map_err(|_| Wave6BoundaryError::Effect)?;
             let controller = guest_guard.take().ok_or(Wave6BoundaryError::Lifecycle)?;
@@ -1220,7 +1251,7 @@ impl Wave6ProviderBoundary for Wave6RealBoundary {
             (controller.recovery_state(), identity)
         };
         let mut restarted = self
-            .guest_controller(Some(identity))?
+            .guest_sessionler(Some(identity))?
             .restore_recovery_state(recovery)
             .map_err(|_| Wave6BoundaryError::Lifecycle)?;
         restarted
@@ -1231,7 +1262,7 @@ impl Wave6ProviderBoundary for Wave6RealBoundary {
             return Err(Wave6BoundaryError::Lifecycle);
         }
         *self
-            .guest_controller
+            .guest_sessionler
             .lock()
             .map_err(|_| Wave6BoundaryError::Effect)? = Some(restarted);
         Ok(())
@@ -1242,7 +1273,7 @@ impl Wave6ProviderBoundary for Wave6RealBoundary {
         _resource: &Wave6Resource,
     ) -> Result<(), Wave6BoundaryError> {
         let mut controller = self
-            .guest_controller
+            .guest_sessionler
             .lock()
             .map_err(|_| Wave6BoundaryError::Effect)?
             .take()
@@ -1358,4 +1389,231 @@ impl Wave6ProviderBoundary for Wave6RealBoundary {
         }
         Ok(())
     }
+}
+
+fn u4_controller_descriptor() -> ComponentDescriptor {
+    let digest = ArtifactDigest::parse(format!("sha256:{}", "a".repeat(64))).unwrap();
+    ComponentDescriptor::new(
+        BoundedToken::parse("process-controller").unwrap(),
+        ComponentType::Controller,
+        [ResourceTypeName::parse("Process").unwrap()],
+        [BoundedToken::parse("reconcile").unwrap()],
+        [d2b_contracts_resource::v3::execution_policy::ExecutionDomain::System],
+        8,
+        digest.clone(),
+        [],
+        false,
+    )
+    .unwrap()
+    .with_execution(ComponentExecution::Launchable {
+        binary_ref: BinaryRef::parse("process-controller").unwrap(),
+    })
+    .with_controller_placement(
+        ControllerInstanceScope::PerResourceTarget,
+        [ControllerTargetKind::Host, ControllerTargetKind::Guest],
+    )
+    .unwrap()
+    .with_target_capabilities([
+        ComponentTargetCapability::new(
+            ControllerTargetKind::Host,
+            digest.clone(),
+            [EffectPortClass::Process],
+        )
+        .unwrap(),
+        ComponentTargetCapability::new(
+            ControllerTargetKind::Guest,
+            digest,
+            [EffectPortClass::Process],
+        )
+        .unwrap(),
+    ])
+    .unwrap()
+}
+
+#[test]
+fn controller_process_acceptance_fences_assignment_and_cleanup() {
+    let deployment =
+        ProviderDeployment::new(DaemonMode::Guest, AdmissionLimits::guest_default()).unwrap();
+    let provider = ResourceRef::parse("Provider/runtime").unwrap();
+    let target = ResourceRef::parse("Guest/workload").unwrap();
+    let process = deployment
+        .create_controller_process(
+            ZoneId::parse("work").unwrap(),
+            provider.clone(),
+            &u4_controller_descriptor(),
+            ResourceGeneration::new(1).unwrap(),
+            ResourceGeneration::new(2).unwrap(),
+            ControllerGeneration::new(3).unwrap(),
+            ReconnectGeneration::new(4).unwrap(),
+            ZoneRevision::new(5),
+            target.clone(),
+            ResourceRef::parse("Provider/system-systemd").unwrap(),
+            true,
+        )
+        .unwrap();
+    assert_eq!(
+        process.process_spec().execution().process_class(),
+        ProcessClass::Controller
+    );
+    assert_eq!(
+        process.finalizer(),
+        "provider-controller.d2bus.org/children"
+    );
+    assert!(
+        process
+            .owned_resource_types()
+            .contains(&ResourceTypeName::parse("Process").expect("Process type"))
+    );
+
+    let readiness = SchemaFingerprint::parse(format!("sha256:{}", "b".repeat(64))).unwrap();
+    deployment
+        .begin_controller_launch(process.process_ref(), readiness.clone())
+        .unwrap();
+    assert!(matches!(
+        deployment.admit_controller_assignment(ControllerAssignmentRequest::new(
+            process.process_ref().clone(),
+            ResourceRef::parse("Process/child").unwrap(),
+            ResourceUid::parse("123e4567-e89b-42d3-a456-426614174000").unwrap(),
+            ResourceGeneration::new(1).unwrap(),
+            ZoneRevision::new(6),
+            provider.clone(),
+            target.clone(),
+            ReconnectGeneration::new(7).unwrap(),
+        )),
+        Err(d2bd_runtime::target_runtime::DeploymentError::ControllerNotReady)
+    ));
+    deployment
+        .controller_launch_succeeded(process.process_ref(), [1; 32])
+        .unwrap();
+    let session = deployment
+        .admit_controller_session(ControllerSessionBinding::new(
+            process.process_ref().clone(),
+            process.zone().clone(),
+            provider.clone(),
+            target.clone(),
+            process.provider_generation(),
+            process.controller_generation(),
+            process.target_session_generation(),
+            ReconnectGeneration::new(7).unwrap(),
+            readiness,
+        ))
+        .unwrap();
+    let assignment = deployment
+        .admit_controller_assignment(ControllerAssignmentRequest::new(
+            process.process_ref().clone(),
+            ResourceRef::parse("Process/child").unwrap(),
+            ResourceUid::parse("123e4567-e89b-42d3-a456-426614174000").unwrap(),
+            ResourceGeneration::new(1).unwrap(),
+            ZoneRevision::new(6),
+            provider,
+            target,
+            session.generation(),
+        ))
+        .unwrap();
+    assert!(assignment.is_active());
+    assert!(
+        assignment
+            .resource_types()
+            .contains(&ResourceTypeName::parse("Process").expect("Process type"))
+    );
+    assert!(assignment.allows(ControllerResourceVerb::UpdateStatus));
+    assert!(assignment.allows(ControllerResourceVerb::Watch));
+    drop(session);
+    assert!(!assignment.is_active());
+    assert_eq!(
+        deployment.controller_phase(process.process_ref()),
+        Some(ControllerProcessPhase::Revoked)
+    );
+
+    deployment
+        .record_controller_child(
+            process.process_ref(),
+            ResourceRef::parse("Process/child").unwrap(),
+            ResourceUid::parse("223e4567-e89b-42d3-a456-426614174001").unwrap(),
+        )
+        .unwrap();
+    let child_uid = ResourceUid::parse("223e4567-e89b-42d3-a456-426614174001").unwrap();
+    deployment
+        .adopt_controller_children(
+            process.process_ref(),
+            [ControllerChildObservation::verified(
+                ResourceRef::parse("Process/child").unwrap(),
+                child_uid.clone(),
+            )],
+        )
+        .unwrap();
+    deployment
+        .remove_controller_child(
+            process.process_ref(),
+            ResourceRef::parse("Process/child").unwrap(),
+            &child_uid,
+        )
+        .unwrap();
+    deployment
+        .prepare_controller_cleanup(process.process_ref(), process.process_ref())
+        .unwrap();
+    assert!(
+        deployment
+            .controller_finalizer_held(process.process_ref())
+            .unwrap()
+    );
+    deployment
+        .complete_controller_cleanup(process.process_ref(), process.process_ref())
+        .unwrap();
+    assert!(
+        !deployment
+            .controller_finalizer_held(process.process_ref())
+            .unwrap()
+    );
+}
+
+#[test]
+fn host_and_guest_sessionler_process_resources_keep_one_process_shape() {
+    let descriptor = u4_controller_descriptor();
+    let host_deployment =
+        ProviderDeployment::new(DaemonMode::Host, AdmissionLimits::host_default()).unwrap();
+    let guest_deployment =
+        ProviderDeployment::new(DaemonMode::Guest, AdmissionLimits::guest_default()).unwrap();
+    let provider = ResourceRef::parse("Provider/runtime").unwrap();
+    let process_provider = ResourceRef::parse("Provider/system-systemd").unwrap();
+    let host = host_deployment
+        .create_controller_process(
+            ZoneId::parse("work").unwrap(),
+            provider.clone(),
+            &descriptor,
+            ResourceGeneration::new(1).unwrap(),
+            ResourceGeneration::new(2).unwrap(),
+            ControllerGeneration::new(3).unwrap(),
+            ReconnectGeneration::new(4).unwrap(),
+            ZoneRevision::new(5),
+            ResourceRef::parse("Host/host-system").unwrap(),
+            process_provider.clone(),
+            true,
+        )
+        .unwrap();
+    let guest = guest_deployment
+        .create_controller_process(
+            ZoneId::parse("work").unwrap(),
+            provider,
+            &descriptor,
+            ResourceGeneration::new(1).unwrap(),
+            ResourceGeneration::new(2).unwrap(),
+            ControllerGeneration::new(3).unwrap(),
+            ReconnectGeneration::new(4).unwrap(),
+            ZoneRevision::new(5),
+            ResourceRef::parse("Guest/workload").unwrap(),
+            process_provider,
+            true,
+        )
+        .unwrap();
+    assert_ne!(host.process_ref(), guest.process_ref());
+    assert_eq!(
+        host.process_spec().execution().process_class(),
+        guest.process_spec().execution().process_class()
+    );
+    assert_eq!(host.process_provider_ref(), guest.process_provider_ref());
+    assert_eq!(
+        host.required_effect_classes(),
+        guest.required_effect_classes()
+    );
 }

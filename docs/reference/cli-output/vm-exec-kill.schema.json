@@ -37,6 +37,7 @@
       ]
     },
     "ExecState": {
+      "description": "Lifecycle state projected for a target-local Process or EphemeralProcess resource.",
       "type": "string",
       "enum": [
         "created",
@@ -46,7 +47,7 @@
         "cancelled",
         "slow-consumer-cancelled",
         "protocol-error",
-        "lost-guestd",
+        "lost-target",
         "reaped"
       ]
     }

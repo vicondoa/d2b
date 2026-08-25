@@ -419,7 +419,6 @@ mod tests {
             host_path: "host.json".to_owned(),
             processes_path: "processes.json".to_owned(),
             privileges_path: "privileges.json".to_owned(),
-            cutover_runner_path: None,
             storage_path: storage_contract.as_ref().map(|_| "storage.json".to_owned()),
             sync_path: sync_contract.as_ref().map(|_| "sync.json".to_owned()),
             allocator_path: None,
@@ -573,7 +572,6 @@ mod tests {
     fn processes() -> ProcessesJson {
         ProcessesJson {
             schema_version: "v2".to_owned(),
-            cutover_runner: None,
             vms: vec![VmProcessDag {
                 workload_identity: None,
                 vm: "corp-vm".to_owned(),
@@ -653,7 +651,7 @@ mod tests {
 
     fn manifest() -> ManifestV04 {
         ManifestV04::from_slice(
-            br#"{"_manifest":{"manifestVersion":6},"_observability":{"enabled":false,"obsVsockCid":0,"obsVsockHostSocket":"","signozOtlpGrpcPort":4317,"signozOtlpHttpPort":4318,"signozUrl":"","vmName":""},"corp-vm":{"apiSocket":"/run/d2b/vms/corp-vm/api.sock","audio":false,"audioService":"","audioStateFile":"","bridge":"d2b-brTEST","env":"work","mtu":null,"mssClamp":null,"lan":null,"gpuSocket":"","graphics":false,"isNetVm":false,"name":"corp-vm","netVm":null,"observability":{"agentSocket":"","enabled":false,"vsockCid":0,"vsockHostSocket":""},"runtime":{"kind":"nixos","provider":{"id":"local-cloud-hypervisor","type":"local","driver":"cloud-hypervisor"},"capabilities":{"lifecycle":true,"display":true,"usbHotplug":true,"guestControl":true,"exec":true,"configSync":true,"ssh":true,"storeSync":true,"keys":true,"inGuestObservability":true}},"sshUser":"alice","stateDir":"/var/lib/d2b/vms/corp-vm","staticIp":"10.20.0.10","tap":"d2b-tTEST","tpm":false,"tpmSocket":"","usbipYubikey":false,"usbipdHostIp":null}}"#,
+            br#"{"_manifest":{"manifestVersion":6},"_observability":{"enabled":false,"obsVsockCid":0,"obsVsockHostSocket":"","signozOtlpGrpcPort":4317,"signozOtlpHttpPort":4318,"signozUrl":"","vmName":""},"corp-vm":{"apiSocket":"/run/d2b/vms/corp-vm/api.sock","audio":false,"audioService":"","audioStateFile":"","bridge":"d2b-brTEST","env":"work","mtu":null,"mssClamp":null,"lan":null,"gpuSocket":"","graphics":false,"isNetVm":false,"name":"corp-vm","netVm":null,"observability":{"agentSocket":"","enabled":false,"vsockCid":0,"vsockHostSocket":""},"runtime":{"kind":"nixos","provider":{"id":"local-cloud-hypervisor","type":"local","driver":"cloud-hypervisor"},"capabilities":{"lifecycle":true,"display":true,"usbHotplug":true,"exec":true,"configSync":true,"ssh":true,"storeSync":true,"keys":true,"inGuestObservability":true}},"sshUser":"alice","stateDir":"/var/lib/d2b/vms/corp-vm","staticIp":"10.20.0.10","tap":"d2b-tTEST","tpm":false,"tpmSocket":"","usbipYubikey":false,"usbipdHostIp":null}}"#,
         ).expect("minimal ManifestV04")
     }
 }

@@ -76,14 +76,14 @@
       "description": "Whether a set-volume or mute operation was applied and through which path.",
       "oneOf": [
         {
-          "description": "Applied to both host (PipeWire/qemu) and guest (guestd).",
+          "description": "Applied to both host (PipeWire/qemu) and the target-local Process.",
           "type": "string",
           "enum": [
             "host-and-guest"
           ]
         },
         {
-          "description": "Applied to host only; guestd enforcement was unavailable or degraded.",
+          "description": "Applied to host only; target-local enforcement was unavailable or degraded.",
           "type": "string",
           "enum": [
             "host-only"

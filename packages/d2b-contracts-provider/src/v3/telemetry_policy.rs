@@ -188,7 +188,7 @@ pub const METRIC_LABEL_POLICY: &[(&str, &[&str])] = &[
             "local-vm",
             "qemu-media",
             "unsafe-local",
-            "guest-control",
+            "component-session",
         ],
     ),
     ("domain", &["system", "user"]),

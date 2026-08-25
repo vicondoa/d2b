@@ -17,7 +17,7 @@
       },
       {
         "from": "ch",
-        "to": "guest-control-health"
+        "to": "component-session-health"
       }
     ],
     "nodes": [
@@ -38,8 +38,8 @@
         "role": "cloud-hypervisor-runner"
       },
       {
-        "id": "guest-control-health",
-        "role": "guest-control-health"
+        "id": "component-session-health",
+        "role": "component-session-health"
       }
     ]
   },

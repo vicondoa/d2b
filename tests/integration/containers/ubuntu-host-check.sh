@@ -5,17 +5,6 @@ HERE=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" >/dev/null 2>&1 && pwd)
 ROOT=${ROOT:-$(cd -- "$HERE/../../.." >/dev/null 2>&1 && pwd)}
 export ROOT
 
-# --- heavy-gate sole-use semaphore (ADR 0046) ------------------------------
-# This is a runnable type-9 container entrypoint: it does real Nix builds and
-# rootless podman work whether invoked standalone or from tests/test-integration.sh.
-# It must never bypass the sole-use heavy-gate semaphore, so instead of trusting
-# the forgeable D2B_HEAVY_GATE marker it verifies a real slot (re-using an
-# inherited one when the aggregating runner already holds it, acquiring one via
-# re-exec otherwise).
-# shellcheck source=tests/tools/heavy-gate-reexec.sh
-. "$ROOT/tests/tools/heavy-gate-reexec.sh"
-d2b_heavy_gate_reexec "$ROOT" "$0" "$@"
-
 # shellcheck source=tests/integration/containers/lib.sh
 . "$HERE/lib.sh"
 
@@ -37,16 +26,38 @@ if ! artifact=$(nlc_build_image ubuntu-host-check); then
     && [ -e "$NLC_ROOT/tests/integration/containers/images/ubuntu-host-check.nix" ] \
     && [ ! -e "$flake_out/tests/integration/containers/images/ubuntu-host-check.nix" ]; then
     nlc_log "containerImages.$system.ubuntu-host-check is absent from the git+file snapshot; using static package output for this uncommitted worktree"
-    artifact=$(nix build --no-link --print-out-paths \
-      "git+file://$NLC_ROOT#packages.${system}.d2b-guestd-static" 2>/dev/null | tail -1) \
-      || nlc_fail "could not build packages.$system.d2b-guestd-static"
+    d2bd_artifact=$(nix build --no-link --print-out-paths \
+      "git+file://$NLC_ROOT#packages.${system}.d2bd-guest-static" 2>/dev/null | tail -1) \
+      || nlc_fail "could not build packages.$system.d2bd-guest-static"
+    broker_artifact=$(nix build --no-link --print-out-paths \
+      "git+file://$NLC_ROOT#packages.${system}.d2b-broker-guest-static" 2>/dev/null | tail -1) \
+      || nlc_fail "could not build packages.$system.d2b-broker-guest-static"
   else
     nlc_fail "could not build containerImages.$system.ubuntu-host-check"
   fi
 fi
 
-[ -x "$artifact/bin/d2b-guestd" ] \
-  || nlc_fail "d2b-guestd static binary missing from $artifact"
+if [ -n "${artifact:-}" ] \
+  && { [ ! -x "$artifact/bin/d2bd" ] || [ ! -x "$artifact/bin/d2b-broker" ]; }; then
+  d2bd_artifact=$(nix build --no-link --print-out-paths \
+    "git+file://$NLC_ROOT#packages.${system}.d2bd-guest-static" 2>/dev/null | tail -1) \
+    || nlc_fail "could not build packages.$system.d2bd-guest-static"
+  broker_artifact=$(nix build --no-link --print-out-paths \
+    "git+file://$NLC_ROOT#packages.${system}.d2b-broker-guest-static" 2>/dev/null | tail -1) \
+    || nlc_fail "could not build packages.$system.d2b-broker-guest-static"
+fi
+
+if [ -n "${d2bd_artifact:-}" ]; then
+  [ -x "$d2bd_artifact/bin/d2bd" ] \
+    || nlc_fail "d2bd static binary missing from $d2bd_artifact"
+  [ -x "$broker_artifact/bin/d2b-broker" ] \
+    || nlc_fail "d2b-broker static binary missing from $broker_artifact"
+else
+  [ -x "$artifact/bin/d2bd" ] \
+    || nlc_fail "d2bd static binary missing from $artifact"
+  [ -x "$artifact/bin/d2b-broker" ] \
+    || nlc_fail "d2b-broker static binary missing from $artifact"
+fi
 
 container_name="d2b-ubuntu-hostcheck-$$"
 cleanup() {
@@ -55,14 +66,23 @@ cleanup() {
 trap cleanup EXIT
 
 set +e
+volume_args=()
+command='/bin/sh -eu -c '\''cat /etc/os-release; /d2bLib/bin/d2bd --help; /d2bLib/bin/d2b-broker invalid 2>&1 || test $? -eq 2'\'''
+if [ -n "${d2bd_artifact:-}" ]; then
+  volume_args+=(--volume "$d2bd_artifact:/d2bDaemon:ro")
+  volume_args+=(--volume "$broker_artifact:/d2bBroker:ro")
+  command='/bin/sh -eu -c '\''cat /etc/os-release; /d2bDaemon/bin/d2bd --help; /d2bBroker/bin/d2b-broker invalid 2>&1 || test $? -eq 2'\'''
+else
+  volume_args+=(--volume "$artifact:/d2bLib:ro")
+fi
 output=$("${NLC_PODMAN[@]}" run \
   --rm \
   --name "$container_name" \
   --pull=missing \
   --network none \
-  --volume "$artifact:/d2bLib:ro" \
+  "${volume_args[@]}" \
   docker.io/library/ubuntu:24.04 \
-  /bin/sh -eu -c 'cat /etc/os-release; /d2bLib/bin/d2b-guestd --version' 2>&1)
+  bash -c "$command" 2>&1)
 status=$?
 set -e
 
@@ -75,5 +95,6 @@ printf '%s\n' "$output" >&2
 
 nlc_assert_contains "$output" "ID=ubuntu" "os-release"
 nlc_assert_contains "$output" 'VERSION_ID="24.04"' "os-release"
-nlc_assert_contains "$output" "d2b-guestd 0.0.0-bootstrap" "d2b-guestd --version"
-nlc_ok "d2b-guestd-static executes on Ubuntu 24.04 under rootless podman"
+nlc_assert_contains "$output" "Usage: d2bd" "d2bd --help"
+nlc_assert_contains "$output" "unknown profile: invalid" "d2b-broker profile validation"
+nlc_ok "shared d2bd and d2b-broker static binaries execute on Ubuntu 24.04 under rootless podman"

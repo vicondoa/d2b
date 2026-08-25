@@ -326,8 +326,9 @@ Guest configuration is still built on the host, but guest activation
 stays inside the guest. The host build produces the VM's NixOS
 `system.build.toplevel`; d2b's broker/store-view path publishes
 that closure into the per-VM live store pool; virtiofs serves that pool
-as the guest's `/nix/store`; and guestd activates the prepared toplevel
-inside the running VM for `switch`, `test`, and live `rollback`.
+as the guest's `/nix/store`; and the target-local activation Process applies
+the prepared toplevel inside the running VM for `switch`, `test`, and live
+`rollback`.
 Stopped VMs do not run live activation from the host: use `d2b boot
 <vm> --apply` to stage the declared toplevel for the next start.
 
@@ -397,27 +398,22 @@ The Rust `d2b` CLI is the only operator surface. Run
 - **Not yet implemented**: `console`, `audio status|mic|speaker|off`
   return a typed exit-78 envelope until the daemon-native surface
   ships. Argument parsing and shell completions still work.
-- **Guest control** (admin-only): `vm exec` runs a command inside a
-  VM over the authenticated guest-control vsock - no SSH -
+- **Guest Process execution** (admin-only): `vm exec` runs a command inside a
+  VM through the authenticated ComponentSession - no SSH -
   (`d2b exec run Guest/<name> -- <cmd…>`). It is restricted
   to callers in `d2b.site.adminUsers`, the role gate enforced via
   `SO_PEERCRED` at the daemon socket.
 
-To enable guest exec on a VM: set `d2b.vms.<vm>.guest.control.enable
-= true` and `guest.exec.enable = true` (the VM must have a workload user
-via `ssh.user`); add your operator account to `d2b.site.adminUsers`;
-rebuild and let the notify-ready daemon restart into the new generation
-(or run `sudo systemctl restart d2bd` explicitly);
-then start the VM on the guest-control generation and run the verbs.
-Every exec runs the requested command as the VM's workload user
-(`ssh.user`) - **never root** - inside a real PAM login session, so
-graphical and login-shell workflows see the same environment an SSH
-login would (`XDG_RUNTIME_DIR`, `WAYLAND_DISPLAY`, the login-shell
-profile). Operators elevate with `sudo` inside the session.
+To enable the Guest target agent on a VM, set
+`d2b.vms.<vm>.guest.componentSession.enable = true`; add your operator
+account to `d2b.site.adminUsers`, then rebuild and restart the VM. Exec
+requests are admitted as target-local `Process` resources and executed only
+from signed Provider templates; no caller-supplied SSH transport or host
+process is involved.
 
 Run-state ships in `/var/lib/d2b/`; per-host config emitted by
 the NixOS module ships in `/etc/d2b/` (bundle + privileges +
-processes JSON files consumed by `d2bd` / `d2b-priv-broker`).
+processes JSON files consumed by `d2bd` / `d2b-broker`).
 
 For typed exit codes and JSON envelopes, see
 [`docs/reference/cli-contract.md`](docs/reference/cli-contract.md).

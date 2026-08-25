@@ -103,7 +103,6 @@
         "configSync",
         "display",
         "exec",
-        "guestControl",
         "inGuestObservability",
         "keys",
         "lifecycle",
@@ -119,9 +118,6 @@
           "type": "boolean"
         },
         "exec": {
-          "type": "boolean"
-        },
-        "guestControl": {
           "type": "boolean"
         },
         "inGuestObservability": {
@@ -176,7 +172,6 @@
       "required": [
         "configSync",
         "exec",
-        "guestControl",
         "inGuestObservability",
         "keys",
         "ssh"
@@ -186,9 +181,6 @@
           "type": "boolean"
         },
         "exec": {
-          "type": "boolean"
-        },
-        "guestControl": {
           "type": "boolean"
         },
         "inGuestObservability": {
@@ -376,7 +368,7 @@
         "audio",
         "video",
         "network",
-        "guest-control",
+        "component-session",
         "usb",
         "observability"
       ]

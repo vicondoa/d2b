@@ -26,16 +26,6 @@ set -euo pipefail
 HERE=$(dirname "$(readlink -f "$0")")
 ROOT=${ROOT:-$(cd "$HERE/../../.." && pwd)}
 
-# --- heavy-gate sole-use semaphore (ADR 0046) ------------------------------
-# This live lane mutates real host, KVM, and daemon state, so it must never
-# bypass the sole-use heavy-gate semaphore. The mere presence of
-# D2B_HEAVY_GATE is not trusted: the shared helper asks the wrapper to verify
-# this process genuinely holds a slot and re-execs through the gate exactly
-# once when it does not.
-# shellcheck source=tests/tools/heavy-gate-reexec.sh
-. "$ROOT/tests/tools/heavy-gate-reexec.sh"
-d2b_heavy_gate_reexec "$ROOT" "$0" "$@"
-
 # ---------------------------------------------------------------------------
 # Source lib.sh helpers when available; otherwise define minimal stubs.
 # ---------------------------------------------------------------------------
@@ -88,8 +78,8 @@ if [ ! -e /dev/kvm ]; then
   exit 77
 fi
 
-if ! systemctl is-active --quiet d2b-priv-broker 2>/dev/null; then
-  log "==> SKIP: d2b-priv-broker is not active (systemctl is-active returned non-zero)"
+if ! systemctl is-active --quiet d2b-broker 2>/dev/null; then
+  log "==> SKIP: d2b-broker is not active (systemctl is-active returned non-zero)"
   exit 77
 fi
 
@@ -240,11 +230,11 @@ probe_common() {
     fail_check "$vm: Guest did not become Ready within ${D2B_SMOKE_READY_BUDGET}s"
   fi
 
-  # 3. Guest-control exec reachability + uname.
+  # 3. ComponentSession Process reachability + uname.
   if wait_for_guest_exec "$vm" "$D2B_SMOKE_EXEC_BUDGET" uname -a; then
-    pass_check "$vm: guest-control exec uname -a succeeded within ${D2B_SMOKE_EXEC_BUDGET}s"
+    pass_check "$vm: component-session exec uname -a succeeded within ${D2B_SMOKE_EXEC_BUDGET}s"
   else
-    fail_check "$vm: guest-control exec unreachable after ${D2B_SMOKE_EXEC_BUDGET}s"
+    fail_check "$vm: component-session exec unreachable after ${D2B_SMOKE_EXEC_BUDGET}s"
     return 1
   fi
 
@@ -471,7 +461,7 @@ probe_audio() {
     return
   fi
   if ! wait_for_guest_exec "$vm" 30 uname -a; then
-    fail_check "$vm: guest-control exec unreachable within 30s after audio restart"
+    fail_check "$vm: component-session exec unreachable within 30s after audio restart"
     return
   fi
   local card_count_after

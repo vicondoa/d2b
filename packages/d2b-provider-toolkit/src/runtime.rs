@@ -14,7 +14,12 @@ use std::{
     time::Duration,
 };
 
-use d2b_contracts_resource::v3::ResourceRef;
+use d2b_contracts_provider::v3::{
+    ComponentDescriptor, ComponentExecution, ComponentType, ControllerTargetKind, EffectPortClass,
+};
+use d2b_contracts_resource::v3::{
+    ControllerGeneration, ResourceGeneration, ResourceRef,
+};
 use d2b_session::{AuthenticatedComponentSession, AuthenticatedSessionRouteBinding};
 
 const STARTING: u8 = 0;
@@ -59,6 +64,9 @@ pub enum ProviderRuntimeError {
     SessionUnauthenticated,
     /// The generated Provider service loop failed after readiness.
     SessionLoopFailed,
+    /// A signed controller descriptor is not launchable on the requested
+    /// target.
+    ControllerDescriptorInvalid,
 }
 
 impl fmt::Display for ProviderRuntimeError {
@@ -69,6 +77,7 @@ impl fmt::Display for ProviderRuntimeError {
             Self::ReadinessIo => "provider-runtime-readiness-io",
             Self::SessionUnauthenticated => "provider-runtime-session-unauthenticated",
             Self::SessionLoopFailed => "provider-runtime-session-loop-failed",
+            Self::ControllerDescriptorInvalid => "provider-runtime-controller-descriptor-invalid",
         })
     }
 }
@@ -77,6 +86,7 @@ impl std::error::Error for ProviderRuntimeError {}
 
 struct RuntimeState {
     admitted: usize,
+    ready_route: Option<AuthenticatedSessionRouteBinding>,
 }
 
 /// A non-cloneable process lifecycle owner.
@@ -87,6 +97,11 @@ struct RuntimeState {
 pub struct ProviderEntrypoint {
     name: &'static str,
     provider_ref: Option<ResourceRef>,
+    execution_ref: Option<ResourceRef>,
+    process_ref: Option<ResourceRef>,
+    target_kind: Option<ControllerTargetKind>,
+    provider_generation: Option<ResourceGeneration>,
+    controller_generation: Option<ControllerGeneration>,
     service: Option<&'static str>,
     lifecycle: AtomicU8,
     state: Arc<(Mutex<RuntimeState>, Condvar)>,
@@ -100,6 +115,34 @@ pub struct ProviderEntrypoint {
 /// Provider name, or Zone string.
 pub struct ProviderSessionAdmission {
     route: AuthenticatedSessionRouteBinding,
+}
+
+impl ProviderSessionAdmission {
+    /// Borrow the authenticated routing metadata.
+    pub const fn route(&self) -> &AuthenticatedSessionRouteBinding {
+        &self.route
+    }
+
+    /// Return the authenticated Provider generation.
+    pub const fn provider_generation(
+        &self,
+    ) -> Option<d2b_contracts_resource::v3::ResourceGeneration> {
+        self.route.provider_generation()
+    }
+
+    /// Return the authenticated controller generation.
+    pub const fn controller_generation(
+        &self,
+    ) -> Option<d2b_contracts_resource::v3::ControllerGeneration> {
+        self.route.controller_generation()
+    }
+
+    /// Return the authenticated ComponentSession generation.
+    pub const fn reconnect_generation(
+        &self,
+    ) -> d2b_contracts_resource::v3::identity::ReconnectGeneration {
+        self.route.reconnect_generation()
+    }
 }
 
 impl fmt::Debug for ProviderSessionAdmission {
@@ -132,10 +175,63 @@ impl ProviderEntrypoint {
         Ok(Self {
             name,
             provider_ref: None,
+            execution_ref: None,
+            process_ref: None,
+            target_kind: None,
+            provider_generation: None,
+            controller_generation: None,
             service: None,
             lifecycle: AtomicU8::new(STARTING),
-            state: Arc::new((Mutex::new(RuntimeState { admitted: 0 }), Condvar::new())),
+            state: Arc::new((
+                Mutex::new(RuntimeState {
+                    admitted: 0,
+                    ready_route: None,
+                }),
+                Condvar::new(),
+            )),
         })
+    }
+
+    /// Construct a target-local controller lifecycle from a signed component
+    /// descriptor.
+    ///
+    /// The descriptor is an admission input only. This method never resolves
+    /// an executable or starts a process; the fixed Process Provider and its
+    /// effect adapter own that boundary.
+    pub fn from_signed_controller(
+        name: &'static str,
+        provider_ref: ResourceRef,
+        service: &'static str,
+        descriptor: &ComponentDescriptor,
+        target: ControllerTargetKind,
+    ) -> Result<Self, ProviderRuntimeError> {
+        if descriptor.component_type() != ComponentType::Controller
+            || !matches!(
+                descriptor.execution(),
+                ComponentExecution::Launchable { .. }
+            )
+            || !matches!(
+                target,
+                ControllerTargetKind::Host | ControllerTargetKind::Guest
+            )
+            || !descriptor.supported_target_kinds().contains(&target)
+        {
+            return Err(ProviderRuntimeError::ControllerDescriptorInvalid);
+        }
+        let Some(capability) = descriptor.target_capability(target) else {
+            return Err(ProviderRuntimeError::ControllerDescriptorInvalid);
+        };
+        if !capability
+            .required_effect_classes()
+            .contains(&EffectPortClass::Process)
+            || is_zero_digest(descriptor.config_digest().as_str())
+            || is_zero_digest(capability.artifact_digest().as_str())
+        {
+            return Err(ProviderRuntimeError::ControllerDescriptorInvalid);
+        }
+        let mut runtime = Self::with_provider(name, provider_ref, service)?;
+        runtime.target_kind = Some(target);
+        Ok(runtime)
     }
 
     /// Construct a lifecycle owner bound to one compiled Provider identity
@@ -152,6 +248,55 @@ impl ProviderEntrypoint {
         runtime.provider_ref = Some(provider_ref);
         runtime.service = Some(service);
         Ok(runtime)
+    }
+
+    /// Bind this lifecycle owner to one exact Host or Guest execution target.
+    pub fn with_execution_target(
+        mut self,
+        execution_ref: ResourceRef,
+    ) -> Result<Self, ProviderRuntimeError> {
+        let target_kind = match execution_ref.resource_type().as_str() {
+            "Host" => ControllerTargetKind::Host,
+            "Guest" => ControllerTargetKind::Guest,
+            _ => return Err(ProviderRuntimeError::InvalidName),
+        };
+        if self.execution_ref.is_some()
+            || self
+                .target_kind
+                .is_some_and(|expected| expected != target_kind)
+        {
+            return Err(ProviderRuntimeError::InvalidName);
+        }
+        self.execution_ref = Some(execution_ref);
+        self.target_kind = Some(target_kind);
+        Ok(self)
+    }
+
+    /// Bind this lifecycle owner to the exact controller Process identity.
+    pub fn with_controller_process(
+        mut self,
+        process_ref: ResourceRef,
+    ) -> Result<Self, ProviderRuntimeError> {
+        if process_ref.resource_type().as_str() != "Process" || self.process_ref.is_some() {
+            return Err(ProviderRuntimeError::InvalidName);
+        }
+        self.process_ref = Some(process_ref);
+        Ok(self)
+    }
+
+    /// Bind this lifecycle owner to one exact Provider and controller
+    /// generation.
+    pub fn with_generations(
+        mut self,
+        provider_generation: ResourceGeneration,
+        controller_generation: ControllerGeneration,
+    ) -> Result<Self, ProviderRuntimeError> {
+        if self.provider_generation.is_some() || self.controller_generation.is_some() {
+            return Err(ProviderRuntimeError::InvalidName);
+        }
+        self.provider_generation = Some(provider_generation);
+        self.controller_generation = Some(controller_generation);
+        Ok(self)
     }
 
     /// Return the current process lifecycle.
@@ -193,6 +338,9 @@ impl ProviderEntrypoint {
         &self,
         session: &AuthenticatedComponentSession<C>,
     ) -> Result<ProviderSessionAdmission, ProviderRuntimeError> {
+        if self.lifecycle() != ProviderLifecycle::Starting {
+            return Err(ProviderRuntimeError::NotAccepting);
+        }
         let Some(expected_provider) = &self.provider_ref else {
             return Err(ProviderRuntimeError::SessionUnauthenticated);
         };
@@ -202,8 +350,40 @@ impl ProviderEntrypoint {
         let route = session.route_binding();
         if route.provider_ref() != Some(expected_provider)
             || route.service().as_str() != expected_service
-            || route.provider_generation().is_none()
-            || route.reconnect_generation().get() == 0
+        {
+            return Err(ProviderRuntimeError::SessionUnauthenticated);
+        }
+        self.validate_authenticated_route(&route)?;
+        Ok(ProviderSessionAdmission { route })
+    }
+
+    /// Validate redacted route evidence before assignment or readiness.
+    pub fn validate_authenticated_route(
+        &self,
+        route: &AuthenticatedSessionRouteBinding,
+    ) -> Result<(), ProviderRuntimeError> {
+        if !self.route_matches_expected(route) {
+            return Err(ProviderRuntimeError::SessionUnauthenticated);
+        }
+        Ok(())
+    }
+
+    /// Admit a reconnecting controller session without widening its
+    /// Provider, subject, target, or controller-generation identity.
+    pub fn admit_authenticated_reconnect<C>(
+        &self,
+        session: &AuthenticatedComponentSession<C>,
+    ) -> Result<ProviderSessionAdmission, ProviderRuntimeError> {
+        if self.lifecycle() != ProviderLifecycle::Ready {
+            return Err(ProviderRuntimeError::NotAccepting);
+        }
+        let route = session.route_binding();
+        let previous = self
+            .ready_route()
+            .ok_or(ProviderRuntimeError::SessionUnauthenticated)?;
+        if !self.route_matches_expected(&route)
+            || !same_controller_identity(&previous, &route)
+            || route.reconnect_generation() <= previous.reconnect_generation()
         {
             return Err(ProviderRuntimeError::SessionUnauthenticated);
         }
@@ -220,9 +400,79 @@ impl ProviderEntrypoint {
     ) -> Result<(), ProviderRuntimeError> {
         let live_route = live_session.route_binding();
         self.validate_authenticated_ready(registration, &session, &live_route)?;
+        let route = session.route.clone();
         drop(session);
         let mut stdout = io::stdout().lock();
-        self.publish_ready_to(&mut stdout)
+        self.publish_ready_to(&mut stdout)?;
+        let (lock, _) = &*self.state;
+        let mut state = lock
+            .lock()
+            .map_err(|_| ProviderRuntimeError::NotAccepting)?;
+        state.ready_route = Some(route);
+        Ok(())
+    }
+
+    /// Return whether this controller completed authenticated readiness.
+    pub fn is_controller_ready(&self) -> bool {
+        self.lifecycle() == ProviderLifecycle::Ready
+            && self
+                .state
+                .0
+                .lock()
+                .ok()
+                .is_some_and(|state| state.ready_route.is_some())
+    }
+
+    /// Check that assignment authority is bound to the exact ready session.
+    pub fn is_ready_for_route(&self, route: &AuthenticatedSessionRouteBinding) -> bool {
+        if self.lifecycle() != ProviderLifecycle::Ready {
+            return false;
+        }
+        self.state
+            .0
+            .lock()
+            .ok()
+            .and_then(|state| state.ready_route.clone())
+            .is_some_and(|ready| ready == *route)
+    }
+
+    /// Return redacted routing metadata for the current ready session.
+    pub fn ready_route(&self) -> Option<AuthenticatedSessionRouteBinding> {
+        if self.lifecycle() != ProviderLifecycle::Ready {
+            return None;
+        }
+        self.state
+            .0
+            .lock()
+            .ok()
+            .and_then(|state| state.ready_route.clone())
+    }
+
+    /// Replace the retained route after Core has revoked the prior
+    /// generation and admitted an authenticated reconnect.
+    pub fn rebind_authenticated_route(
+        &self,
+        admission: ProviderSessionAdmission,
+    ) -> Result<(), ProviderRuntimeError> {
+        if self.lifecycle() != ProviderLifecycle::Ready
+            || !self.route_matches_expected(&admission.route)
+        {
+            return Err(ProviderRuntimeError::SessionUnauthenticated);
+        }
+        let (lock, _) = &*self.state;
+        let mut state = lock
+            .lock()
+            .map_err(|_| ProviderRuntimeError::NotAccepting)?;
+        let Some(previous) = state.ready_route.as_ref() else {
+            return Err(ProviderRuntimeError::SessionUnauthenticated);
+        };
+        if !same_controller_identity(previous, &admission.route)
+            || admission.route.reconnect_generation() <= previous.reconnect_generation()
+        {
+            return Err(ProviderRuntimeError::SessionUnauthenticated);
+        }
+        state.ready_route = Some(admission.route);
+        Ok(())
     }
 
     fn publish_ready_to<W: Write>(&self, writer: &mut W) -> Result<(), ProviderRuntimeError> {
@@ -251,12 +501,57 @@ impl ProviderEntrypoint {
             .map_err(|_| ProviderRuntimeError::NotAccepting)?;
         if !Arc::ptr_eq(&registration.state, &self.state)
             || state.admitted == 0
+            || self.lifecycle() != ProviderLifecycle::Starting
+            || !self.route_matches_expected(live_route)
             || session.route.reconnect_generation().get() == 0
+            || session.route.controller_generation().is_none()
             || session.route != *live_route
         {
             return Err(ProviderRuntimeError::SessionUnauthenticated);
         }
         Ok(())
+    }
+
+    fn route_matches_expected(&self, route: &AuthenticatedSessionRouteBinding) -> bool {
+        self.provider_ref
+            .as_ref()
+            .is_some_and(|expected| route.provider_ref() == Some(expected))
+            && self
+                .service
+                .is_some_and(|expected| route.service().as_str() == expected)
+            && route.provider_generation().is_some()
+            && route.controller_generation().is_some()
+            && route.reconnect_generation().get() != 0
+            && self
+                .provider_generation
+                .is_none_or(|expected| route.provider_generation() == Some(expected))
+            && self
+                .controller_generation
+                .is_none_or(|expected| route.controller_generation() == Some(expected))
+            && self
+                .execution_ref
+                .as_ref()
+                .is_none_or(|expected| route.context().execution_ref() == Some(expected))
+            && self
+                .target_kind
+                .is_none_or(|expected| {
+                    route
+                        .context()
+                        .execution_ref()
+                        .is_some_and(|reference| match expected {
+                            ControllerTargetKind::Host => {
+                                reference.resource_type().as_str() == "Host"
+                            }
+                            ControllerTargetKind::Guest => {
+                                reference.resource_type().as_str() == "Guest"
+                            }
+                            ControllerTargetKind::Zone => false,
+                        })
+                })
+            && self
+                .process_ref
+                .as_ref()
+                .is_none_or(|expected| route.context().process_ref() == Some(expected))
     }
 
     fn transition_ready(&self) -> Result<(), ProviderRuntimeError> {
@@ -291,9 +586,37 @@ impl ProviderEntrypoint {
         let drained = state.admitted == 0 && !wait.timed_out();
         if drained {
             self.lifecycle.store(STOPPED, Ordering::Release);
+            state.ready_route = None;
         }
         drained
     }
+}
+
+pub(crate) fn same_controller_identity(
+    left: &AuthenticatedSessionRouteBinding,
+    right: &AuthenticatedSessionRouteBinding,
+) -> bool {
+    left.zone() == right.zone()
+        && left.subject_ref() == right.subject_ref()
+        && left.subject_uid() == right.subject_uid()
+        && left.evidence_class() == right.evidence_class()
+        && left.locality() == right.locality()
+        && left.service() == right.service()
+        && left.schema() == right.schema()
+        && left.provider_ref() == right.provider_ref()
+        && left.provider_generation() == right.provider_generation()
+        && left.controller_generation() == right.controller_generation()
+        && left.context().zone_ref() == right.context().zone_ref()
+        && left.context().session_purpose() == right.context().session_purpose()
+        && left.context().transport_binding() == right.context().transport_binding()
+        && left.context().execution_ref() == right.context().execution_ref()
+        && left.context().process_ref() == right.context().process_ref()
+}
+
+fn is_zero_digest(value: &str) -> bool {
+    value
+        .strip_prefix("sha256:")
+        .is_some_and(|hex| !hex.is_empty() && hex.bytes().all(|byte| byte == b'0'))
 }
 
 /// One local registration held until its service is fully drained.
@@ -322,7 +645,51 @@ impl Drop for ProviderAdmission {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use d2b_contracts_provider::v3::{
+        ArtifactDigest, BinaryRef, ComponentTargetCapability, EffectPortClass,
+    };
     use d2b_contracts_resource::v3::ResourceRef;
+    use d2b_contracts_resource::v3::execution_policy::{BoundedToken, ExecutionDomain};
+    use d2b_contracts_resource::v3::identity::ResourceTypeName;
+
+    fn signed_controller_descriptor() -> ComponentDescriptor {
+        let digest = ArtifactDigest::parse(format!("sha256:{}", "a".repeat(64))).unwrap();
+        ComponentDescriptor::new(
+            BoundedToken::parse("controller").unwrap(),
+            ComponentType::Controller,
+            [ResourceTypeName::parse("Volume").unwrap()],
+            [BoundedToken::parse("reconcile").unwrap()],
+            [ExecutionDomain::System],
+            1,
+            digest.clone(),
+            [],
+            false,
+        )
+        .unwrap()
+        .with_execution(ComponentExecution::Launchable {
+            binary_ref: BinaryRef::parse("controller").unwrap(),
+        })
+        .with_controller_placement(
+            d2b_contracts_provider::v3::ControllerInstanceScope::PerResourceTarget,
+            [ControllerTargetKind::Host, ControllerTargetKind::Guest],
+        )
+        .unwrap()
+        .with_target_capabilities([
+            ComponentTargetCapability::new(
+                ControllerTargetKind::Host,
+                digest.clone(),
+                [EffectPortClass::Process],
+            )
+            .unwrap(),
+            ComponentTargetCapability::new(
+                ControllerTargetKind::Guest,
+                digest,
+                [EffectPortClass::Process],
+            )
+            .unwrap(),
+        ])
+        .unwrap()
+    }
 
     #[test]
     fn readiness_is_not_published_before_registration() {
@@ -331,6 +698,7 @@ mod tests {
         let admission = runtime.admit().unwrap();
         assert!(runtime.publish_ready().is_ok());
         assert_eq!(runtime.lifecycle(), ProviderLifecycle::Ready);
+        assert!(!runtime.is_controller_ready());
         drop(admission);
         assert!(runtime.drain(Duration::from_millis(10)));
         assert_eq!(runtime.lifecycle(), ProviderLifecycle::Stopped);
@@ -417,4 +785,205 @@ mod tests {
             Err(ProviderRuntimeError::SessionUnauthenticated)
         );
     }
+
+    #[test]
+    fn controller_readiness_requires_a_controller_generation() {
+        let runtime = ProviderEntrypoint::with_provider(
+            "Provider/test",
+            ResourceRef::parse("Provider/test").unwrap(),
+            "d2b.provider.v3",
+        )
+        .unwrap();
+        let registration = runtime.admit().unwrap();
+        let route = AuthenticatedSessionRouteBinding::for_test(
+            Some(ResourceRef::parse("Provider/test").unwrap()),
+            "d2b.provider.v3",
+            1,
+            Some(1),
+            None,
+        );
+        let admission = ProviderSessionAdmission {
+            route: route.clone(),
+        };
+        assert_eq!(
+            runtime.validate_authenticated_route(&route),
+            Err(ProviderRuntimeError::SessionUnauthenticated)
+        );
+        assert_eq!(
+            runtime.validate_authenticated_ready(&registration, &admission, &route),
+            Err(ProviderRuntimeError::SessionUnauthenticated)
+        );
+    }
+
+    #[test]
+    fn a_foreign_session_admission_cannot_publish_this_entrypoint_ready() {
+        let runtime = ProviderEntrypoint::with_provider(
+            "Provider/test",
+            ResourceRef::parse("Provider/test").unwrap(),
+            "d2b.provider.v3",
+        )
+        .unwrap();
+        let foreign = ProviderEntrypoint::with_provider(
+            "Provider/foreign",
+            ResourceRef::parse("Provider/foreign").unwrap(),
+            "d2b.provider.v3",
+        )
+        .unwrap();
+        let registration = runtime.admit().unwrap();
+        let foreign_registration = foreign.admit().unwrap();
+        let foreign_route = AuthenticatedSessionRouteBinding::for_test(
+            Some(ResourceRef::parse("Provider/foreign").unwrap()),
+            "d2b.provider.v3",
+            1,
+            Some(1),
+            Some(1),
+        );
+        let foreign_admission = ProviderSessionAdmission {
+            route: foreign_route.clone(),
+        };
+        assert_eq!(
+            runtime
+                .validate_authenticated_ready(&registration, &foreign_admission, &foreign_route,),
+            Err(ProviderRuntimeError::SessionUnauthenticated)
+        );
+        drop(foreign_registration);
+    }
+
+    #[test]
+    fn reconnect_rebind_requires_the_same_controller_identity_and_a_new_generation() {
+        let runtime = ProviderEntrypoint::with_provider(
+            "Provider/test",
+            ResourceRef::parse("Provider/test").unwrap(),
+            "d2b.provider.v3",
+        )
+        .unwrap();
+        let first = AuthenticatedSessionRouteBinding::for_test(
+            Some(ResourceRef::parse("Provider/test").unwrap()),
+            "d2b.provider.v3",
+            1,
+            Some(1),
+            Some(1),
+        );
+        runtime.transition_ready().unwrap();
+        runtime.state.0.lock().unwrap().ready_route = Some(first.clone());
+
+        let next = AuthenticatedSessionRouteBinding::for_test(
+            Some(ResourceRef::parse("Provider/test").unwrap()),
+            "d2b.provider.v3",
+            2,
+            Some(1),
+            Some(1),
+        );
+        runtime
+            .rebind_authenticated_route(ProviderSessionAdmission {
+                route: next.clone(),
+            })
+            .expect("new reconnect generation");
+        assert!(runtime.is_ready_for_route(&next));
+        assert_eq!(
+            runtime.rebind_authenticated_route(ProviderSessionAdmission { route: first }),
+            Err(ProviderRuntimeError::SessionUnauthenticated)
+        );
+    }
+
+    #[test]
+    fn signed_controller_construction_rejects_non_launchable_or_unsupported_roles() {
+        let descriptor = signed_controller_descriptor();
+        let runtime = ProviderEntrypoint::from_signed_controller(
+            "Provider/test",
+            ResourceRef::parse("Provider/test").unwrap(),
+            "d2b.provider.v3",
+            &descriptor,
+            ControllerTargetKind::Guest,
+        )
+        .expect("signed Guest controller");
+        assert_eq!(runtime.lifecycle(), ProviderLifecycle::Starting);
+
+        let targeted = ProviderEntrypoint::with_provider(
+            "Provider/test",
+            ResourceRef::parse("Provider/test").unwrap(),
+            "d2b.provider.v3",
+        )
+        .unwrap()
+        .with_execution_target(ResourceRef::parse("Guest/dev-vm").unwrap())
+        .unwrap();
+        let host_route = AuthenticatedSessionRouteBinding::for_test(
+            Some(ResourceRef::parse("Provider/test").unwrap()),
+            "d2b.provider.v3",
+            1,
+            Some(1),
+            Some(1),
+        );
+        assert_eq!(
+            runtime.validate_authenticated_route(&host_route),
+            Err(ProviderRuntimeError::SessionUnauthenticated)
+        );
+        assert_eq!(
+            targeted.validate_authenticated_route(&host_route),
+            Err(ProviderRuntimeError::SessionUnauthenticated)
+        );
+        let generation_bound = ProviderEntrypoint::with_provider(
+            "Provider/test",
+            ResourceRef::parse("Provider/test").unwrap(),
+            "d2b.provider.v3",
+        )
+        .unwrap()
+        .with_generations(
+            ResourceGeneration::new(2).unwrap(),
+            ControllerGeneration::new(2).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(
+            generation_bound.validate_authenticated_route(&host_route),
+            Err(ProviderRuntimeError::SessionUnauthenticated)
+        );
+        let process_bound = ProviderEntrypoint::with_provider(
+            "Provider/test",
+            ResourceRef::parse("Provider/test").unwrap(),
+            "d2b.provider.v3",
+        )
+        .unwrap()
+        .with_controller_process(ResourceRef::parse("Process/controller").unwrap())
+        .unwrap();
+        assert_eq!(
+            process_bound.validate_authenticated_route(&host_route),
+            Err(ProviderRuntimeError::SessionUnauthenticated)
+        );
+
+        let invalid_target = ProviderEntrypoint::from_signed_controller(
+            "Provider/test",
+            ResourceRef::parse("Provider/test").unwrap(),
+            "d2b.provider.v3",
+            &descriptor,
+            ControllerTargetKind::Zone,
+        );
+        assert!(matches!(
+            invalid_target,
+            Err(ProviderRuntimeError::ControllerDescriptorInvalid)
+        ));
+
+        let in_process = ComponentDescriptor::new(
+            BoundedToken::parse("controller").unwrap(),
+            ComponentType::Controller,
+            [ResourceTypeName::parse("Volume").unwrap()],
+            [BoundedToken::parse("reconcile").unwrap()],
+            [ExecutionDomain::System],
+            1,
+            ArtifactDigest::parse(format!("sha256:{}", "b".repeat(64))).unwrap(),
+            [],
+            false,
+        )
+        .unwrap();
+        assert!(matches!(
+            ProviderEntrypoint::from_signed_controller(
+                "Provider/test",
+                ResourceRef::parse("Provider/test").unwrap(),
+                "d2b.provider.v3",
+                &in_process,
+                ControllerTargetKind::Guest,
+            ),
+            Err(ProviderRuntimeError::ControllerDescriptorInvalid)
+        ));
+    }
+
 }

@@ -290,8 +290,7 @@ deprecations ship one minor release before removal.
   with CLI projections, Guest-resident Entrablau identity custody, fast hermetic
   tests with integration-only slow coverage, and Noise-protected
   ComponentSession/d2b-bus channels on the `d2bus.org` public namespace,
-  together with the security/threat-model, reset/cutover, feasibility,
-  reset, cutover, and feasibility contracts. No crates, services,
+  together with the security/threat-model and feasibility contracts. No crates, services,
   controllers, or Providers are created.
 
 
@@ -481,8 +480,7 @@ deprecations ship one minor release before removal.
 - Added macvtap-backed external network attachment for env net VMs, including
   independent egress NAT, port forwards, and mDNS/`.local` reflection.
 - Added generated storage and synchronization contracts, read-only startup
-  validation, `d2b host doctor --read-only`, and
-  `d2b host migrate-storage --dry-run`.
+  validation, and `d2b host doctor --read-only`.
 - Added provider-aware graceful VM shutdown with configurable global and per-VM
   timeouts, plus explicit `--force` lifecycle overrides.
 - Added experimental remote full-host and provider-managed Azure Container Apps
@@ -796,7 +794,7 @@ deprecations ship one minor release before removal.
   no-orphan; a `setsid`/double-fork escapee is a documented trusted-root
   limitation). Interactive detached exec remains unsupported; use
   non-TTY `d2b vm exec -d` for detached commands. See
-  [`docs/reference/guest-control-exec-interactive-tty.md`](docs/reference/guest-control-exec-interactive-tty.md)
+  [`docs/reference/cli-contract.md`](docs/reference/cli-contract.md#exec)
   and the interactive-exec section of
   [ADR 0028](docs/adr/0028-guest-control-plane-over-vsock.md). The
   guest-control wire contract is unchanged (the TTY surface was already

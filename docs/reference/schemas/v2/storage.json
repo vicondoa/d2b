@@ -116,7 +116,6 @@
         "boot",
         "process-exit-with-proof",
         "vm-stop-with-proof",
-        "cutover-only",
         "external"
       ]
     },

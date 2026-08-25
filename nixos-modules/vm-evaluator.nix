@@ -22,10 +22,17 @@
 #     networking, services, etc. - driven by the consumer's
 #     `vm.config` module list).
 { inputs }:
-{ config, lib, pkgs, ... }:
+{ config, lib, pkgs, d2bHostTools ? null, d2bHostToolOverrides ? null, ... }:
 
 let
   cfg = config.d2b;
+  guestHostTools =
+    if d2bHostToolOverrides == null
+    then d2bHostTools
+    else d2bHostTools // {
+      broker = d2bHostToolOverrides.broker;
+      d2bd = d2bHostToolOverrides.d2bd;
+    };
 
   # Build a per-VM NixOS evaluation using the host's nixpkgs path.
   # `nixos/lib/eval-config.nix` is the standard NixOS eval entrypoint -
@@ -48,7 +55,8 @@ let
       modules = [
         ./vm-options.nix
         ./vm-guest-base.nix
-        ./guest-control.nix
+        ./component-session.nix
+        ./guest-broker.nix
         # Inherit host nixpkgs policy so per-VM evals honor the consumer's
         # allowUnfree / overlays / security fixes without re-stating them in
         # each per-VM module.
@@ -61,7 +69,11 @@ let
       specialArgs =
         { inherit inputs; }
         // cfg.site.extraSpecialArgs
-        // { d2bInputs = inputs; };
+        // {
+          d2bInputs = inputs;
+          d2bHostTools = guestHostTools;
+          d2bUsePrebuiltHostTools = cfg.site.usePrebuiltHostTools;
+        };
       inherit (pkgs.stdenv.hostPlatform) system;
     };
 

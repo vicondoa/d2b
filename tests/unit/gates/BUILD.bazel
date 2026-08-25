@@ -17,14 +17,14 @@ sh_test(
     srcs = ["performance-budgets.sh"],
     data = [
         "//packages/d2b:d2b",
-        "//packages/d2b-priv-broker:d2b_priv_broker",
+        "//packages/d2b-broker:d2b_broker",
         "//packages/d2bd:d2bd",
         "//packages/xtask:xtask",
         "//:tests_root_sources",
         "//bazel/checks/rust:source_hygiene_sources",
     ],
     env = {
-        "D2B_BROKER_BIN": "$(execpath //packages/d2b-priv-broker:d2b_priv_broker)",
+        "D2B_BROKER_BIN": "$(execpath //packages/d2b-broker:d2b_broker)",
         "D2B_CLI_BIN": "$(execpath //packages/d2b:d2b)",
         "D2B_DAEMON_BIN": "$(execpath //packages/d2bd:d2bd)",
         "D2B_XTASK_BIN": "$(execpath //packages/xtask:xtask)",

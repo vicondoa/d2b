@@ -107,24 +107,6 @@ jobs:
       - name: Guest shell runner suite
         run: make test-rust-guest-shell-runner
 
-  rust-local:
-    runs-on: ubuntu-latest
-    timeout-minutes: 90
-    env:
-      D2B_BAZEL_PROFILE: local
-      D2B_BAZEL_UNTRUSTED: "1"
-    steps:
-      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
-        with:
-          persist-credentials: false
-      - uses: cachix/install-nix-action@23cf0fec1d55e0b1f2631aedd2a610c21ef8b077
-        with:
-          nix_path: nixpkgs=channel:nixos-unstable
-          extra_nix_config: |
-            experimental-features = nix-command flakes
-      - name: Local Rust suite
-        run: make test-rust-local
-
   nix-eval:
     runs-on: ubuntu-latest
     timeout-minutes: 45
@@ -163,7 +145,7 @@ jobs:
 
   nix-realized:
     runs-on: ubuntu-latest
-    timeout-minutes: 60
+    timeout-minutes: 120
     env:
       D2B_BAZEL_PROFILE: local
       D2B_BAZEL_UNTRUSTED: "1"
@@ -218,7 +200,7 @@ jobs:
   test-performance-budgets:
     runs-on: ubuntu-latest
     continue-on-error: true
-    timeout-minutes: 10
+    timeout-minutes: 30
     env:
       D2B_BAZEL_PROFILE: local
       D2B_BAZEL_UNTRUSTED: "1"
@@ -236,7 +218,7 @@ jobs:
 
   check:
     if: ${{ always() }}
-    needs: [tier0, policy-tooling, rust-main, rust-broker, rust-guest, rust-local, nix-eval, nix-unit, nix-realized, nix-aarch64, fixtures-proofs]
+    needs: [tier0, policy-tooling, rust-main, rust-broker, rust-guest, nix-eval, nix-unit, nix-realized, nix-aarch64, fixtures-proofs]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5

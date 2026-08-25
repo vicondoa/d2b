@@ -11,20 +11,21 @@ mod policy;
 mod portal;
 mod principal;
 mod process;
-#[allow(missing_docs)]
-pub mod wayland_proxy_argv;
-#[allow(missing_docs)]
-pub mod wayland_proxy;
 mod readiness;
 mod runtime;
 mod spec;
+#[allow(missing_docs)]
+pub mod wayland_proxy;
+#[allow(missing_docs)]
+pub mod wayland_proxy_argv;
 
 pub use audit::{DisplayAuditKind, DisplayAuditOutcome, DisplayAuditRecord};
 pub use controller::{
     AuthenticatedDisplaySession, CapabilityReadiness, CleanupState, DependencyReadiness,
     DependencyState, DisplayController, DisplayDependencyProof, FinalizationDecision,
     FinalizationInput, GraceState, Phase, PrincipalReleaseReceipt, ReconcileResult,
-    SessionCondition, StopRequest, WaylandPolicySnapshot, WaylandSessionStatus,
+    SessionCondition, StopRequest, WaylandPolicySnapshot, WaylandSessionResourceStatus,
+    WaylandSessionStatus,
 };
 pub use descriptor::{DisplayDescriptorError, DisplayProviderDescriptor};
 pub use metrics::{DisplayTelemetryField, DisplayTelemetryFrame, MetricOutcome};
@@ -41,16 +42,16 @@ pub use process::{
     VolumeState, WorkerAction, WorkerRestartEvidence, WorkerState, WorkerSupervisor,
     WorkerSupervisorError,
 };
-pub use wayland_proxy_argv::{
-    WaylandProxyArgvError, WaylandProxyArgvInput, WaylandProxyBorderConfig,
-    WaylandProxyBorderLabelConfig, WaylandProxyBorderLabelPosition, generate_wayland_proxy_argv,
-};
 pub use readiness::ProxyReadinessEvent;
 pub use runtime::{
     DisplayProcessEffectPort, DisplayRuntime, DisplayRuntimeError, FinalizationReport,
     WorkerEffectError, WorkerLaunchReceipt,
 };
 pub use spec::{DisplayIdentity, DisplayLabelPosition, WaylandSessionSpec, WaylandSpecError};
+pub use wayland_proxy_argv::{
+    WaylandProxyArgvError, WaylandProxyArgvInput, WaylandProxyBorderConfig,
+    WaylandProxyBorderLabelConfig, WaylandProxyBorderLabelPosition, generate_wayland_proxy_argv,
+};
 
 /// Canonical Provider reference.
 pub const PROVIDER_REF: &str = "Provider/display-wayland";

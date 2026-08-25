@@ -219,6 +219,21 @@ in
         implementationEndpointRefs = [ ];
       };
     };
+
+    "resource-sharing/does-not-synthesize-bindings" = {
+      expr = lib.all
+        (resource: !(lib.elem resource.type [
+          "audio.d2bus.org.AudioBinding"
+          "security-key.d2bus.org.SecurityKeyBinding"
+          "telemetry.d2bus.org.TelemetryBinding"
+          "usb.d2bus.org.UsbBinding"
+        ]))
+        (lib.flatten
+          (lib.mapAttrsToList
+            (_: resources: lib.attrValues resources)
+            cfg.d2b._resourceCompiler.sharing.generatedResources));
+      expected = true;
+    };
   };
 
   "resource-sharing/no-authored-projection-service" = {

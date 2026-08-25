@@ -110,13 +110,10 @@ let
     (name: vm:
       let
         runnerPrincipal = stablePrincipal "d2b-${name}-runner";
-        gctlfsPrincipal = stablePrincipal "d2b-${name}-gctlfs";
       in
       lib.concatLists [
         (runtimeAclUser "/run/d2b" runnerPrincipal "--x")
-        (runtimeAclUser "/run/d2b" gctlfsPrincipal "--x")
         (runtimeAclUser "/run/d2b/vms" runnerPrincipal "--x")
-        (runtimeAclUser "/run/d2b/vms" gctlfsPrincipal "--x")
         (lib.optionals vm.tpm.enable (runtimeAclUser "/run/d2b" "d2b-${name}-swtpm" "--x"))
         (lib.optionals vm.tpm.enable (runtimeAclUser "/run/d2b/vms" "d2b-${name}-swtpm" "--x"))
         (lib.optionals vm.audio.enable (runtimeAclUser "/run/d2b" "d2b-${name}-snd" "--x"))
@@ -149,17 +146,14 @@ let
     (name: vm:
       let
         vmRunDir = "/run/d2b/vms/${name}";
-        guestControlRunDir = "${vmRunDir}/guest-control";
         gpuRunDir = "/run/d2b-gpu/${name}";
         videoRunDir = "/run/d2b-video/${name}";
         wlproxyRunDir = "/run/d2b-wlproxy/${name}";
         runnerPrincipal = stablePrincipal "d2b-${name}-runner";
-        gctlfsPrincipal = stablePrincipal "d2b-${name}-gctlfs";
       in
       lib.concatLists [
       (tmpfilesDir "/var/lib/d2b/vms/${name}" "3770" "d2bd" "users")
       (runtimeLeafDir vmRunDir "1770" "d2bd" "d2b")
-      (runtimeLeafDir guestControlRunDir "0770" "d2bd" "d2b")
       (runtimeLeafDir gpuRunDir "0770" "d2bd" "d2b")
       (runtimeLeafDir videoRunDir "0770" "d2bd" "d2b")
       (runtimeLeafDir wlproxyRunDir "0770" "d2bd" "d2b")
@@ -168,13 +162,7 @@ let
       (tmpfilesDir "/var/lib/d2b/vms/${name}/store-view/meta" "0755" "d2bd" "users")
       (runtimeAclMask vmRunDir)
       (runtimeAclUser vmRunDir runnerPrincipal "rwx")
-      (runtimeAclUser vmRunDir gctlfsPrincipal "--x")
       (runtimeDefaultAclUser vmRunDir runnerPrincipal "rwx")
-      (runtimeAclMask guestControlRunDir)
-      (runtimeAclUser guestControlRunDir runnerPrincipal "--x")
-      (runtimeAclUser guestControlRunDir gctlfsPrincipal "rwx")
-      (runtimeDefaultAclUser guestControlRunDir runnerPrincipal "rwx")
-      (runtimeDefaultAclUser guestControlRunDir gctlfsPrincipal "rwx")
       (lib.optionals vm.tpm.enable (tmpfilesAcl "/var/lib/d2b/vms/${name}" "u:d2b-${name}-swtpm:--x"))
       (lib.optionals vm.tpm.enable (runtimeAclUser vmRunDir "d2b-${name}-swtpm" "rwx"))
       (lib.optionals vm.graphics.enable (tmpfilesAcl "/var/lib/d2b/vms/${name}" "u:d2b-${name}-gpu:rwx"))
@@ -228,8 +216,7 @@ in
     # Shared runtime parents stay root-owned so broker path-safety checks can
     # create or reconcile per-VM children without trusting a daemon-writable
     # parent. The per-VM leaves below remain d2bd:d2b for daemon-owned
-    # sockets and guest-control artifacts.
-    (tmpfilesDir "/run/d2b-heavy-gates" "0755" "root" "root")
+    # sockets and per-VM runtime artifacts.
     (tmpfilesDir "/run/d2b/vms" "0750" "root" "d2b")
     (tmpfilesDir "/run/d2b/otel" "0750" "d2bd" "d2b")
     (tmpfilesDir "/run/d2b-gpu" "0750" "root" "d2b")
@@ -248,61 +235,6 @@ in
     # recompute the ACL mask down to r-x and clip d2bd's rwx access.
     (runtimeAclMask "/run/d2b")
   ];
-
-  # Numeric UIDs for normal users may be allocated only when the users
-  # activation step runs, so they cannot be embedded in static tmpfiles rules.
-  # Tmpfiles owns the fixed root; this activation step provisions slots for
-  # lifecycle users that NSS can resolve at activation time. Network-backed
-  # users may not resolve until networking and their identity provider are
-  # available, so they are deferred to the explicit post-login
-  # `make heavy-gate-provision` path. The gate remains fail-closed while their
-  # per-UID directory is absent. Existing regular slot inodes are repaired in
-  # place so a switch cannot replace an inode carrying a lock.
-  system.activationScripts.d2bHeavyGateProvision = lib.stringAfter [ "users" ] ''
-    set -eu
-    gate_root=/run/d2b-heavy-gates
-
-    if [ -L "$gate_root" ] || { [ -e "$gate_root" ] && [ ! -d "$gate_root" ]; }; then
-      echo "d2b heavy-gate provisioning: refusing an unsafe runtime root" >&2
-      exit 1
-    fi
-    ${pkgs.coreutils}/bin/install -d -m 0755 -o root -g root "$gate_root"
-
-    for user in ${lib.escapeShellArgs cfg.site.launcherUsers}; do
-      if ! passwd_record="$(${pkgs.getent}/bin/getent passwd "$user")"; then
-        echo "d2b heavy-gate provisioning: configured lifecycle user is unavailable during activation; skipping; run make heavy-gate-provision as that user after login" >&2
-        continue
-      fi
-      uid="$(${pkgs.coreutils}/bin/printf '%s\n' "$passwd_record" | ${pkgs.coreutils}/bin/cut -d: -f3)"
-      case "$uid" in
-        ""|*[!0-9]*)
-          echo "d2b heavy-gate provisioning: lifecycle user has no usable uid during activation; skipping; run make heavy-gate-provision as that user after login" >&2
-          continue
-          ;;
-      esac
-
-      uid_dir="$gate_root/uid-$uid"
-      if [ -L "$uid_dir" ] || { [ -e "$uid_dir" ] && [ ! -d "$uid_dir" ]; }; then
-        echo "d2b heavy-gate provisioning: refusing an unsafe per-user directory" >&2
-        exit 1
-      fi
-      ${pkgs.coreutils}/bin/install -d -m 0755 -o root -g root "$uid_dir"
-
-      for index in 0 1; do
-        slot="$uid_dir/slot-$index"
-        if [ -L "$slot" ] || { [ -e "$slot" ] && [ ! -f "$slot" ]; }; then
-          echo "d2b heavy-gate provisioning: refusing an unsafe slot file" >&2
-          exit 1
-        fi
-        if [ ! -e "$slot" ]; then
-          ${pkgs.coreutils}/bin/install -m 0600 -o "$uid" -g root /dev/null "$slot"
-        else
-          ${pkgs.coreutils}/bin/chown "$uid":root "$slot"
-          ${pkgs.coreutils}/bin/chmod 0600 "$slot"
-        fi
-      done
-    done
-  '';
 
   system.activationScripts.d2bGroupMigration =
     lib.stringAfter [ "users" ] ''
@@ -487,17 +419,13 @@ in
   # entries produces the same ACL state. Runs after every
   # `nixos-rebuild switch` so a bundle update with new role
   # UIDs is automatically reflected.
-  system.activationScripts.d2bRoleUidAcls = lib.stringAfter [ "users" "d2bGuestControlTokens" ] ''
+  system.activationScripts.d2bRoleUidAcls = lib.stringAfter [ "users" ] ''
     set +u
     bundle_json=/etc/d2b/processes.json
     if [ -r "$bundle_json" ]; then
       ${lib.concatStringsSep "\n" (lib.mapAttrsToList
         (name: _: ''
-          guest_control_virtiofsd_uids=$(${pkgs.jq}/bin/jq -r '.vms[] | select(.vm == "${name}") | .nodes[] | select(.id == "virtiofsd-d2b-gctl") | .profile.uid' "$bundle_json" 2>/dev/null | ${pkgs.coreutils}/bin/sort -u)
-          guest_control_ch_uids=$(${pkgs.jq}/bin/jq -r '.vms[] | select(.vm == "${name}") | .nodes[] | select(.id == "cloud-hypervisor") | .profile.uid' "$bundle_json" 2>/dev/null | ${pkgs.coreutils}/bin/sort -u)
           qemu_media_session_uids=$(${pkgs.jq}/bin/jq -r '.vms[] | select(.vm == "${name}") | .nodes[] | select(.role == "qemu-media-runner") | .profile.uid' "$bundle_json" 2>/dev/null | ${pkgs.coreutils}/bin/sort -u)
-          ${activationHelper} clear-acl-on-path --path "/var/lib/d2b/guest-control-${name}" --require-kind directory --setfacl-bin "${pkgs.acl}/bin/setfacl" 2>/dev/null || true
-          ${activationHelper} clear-acl-on-path --path "/var/lib/d2b/guest-control-${name}/token" --require-kind regular --setfacl-bin "${pkgs.acl}/bin/setfacl" 2>/dev/null || true
           qemu_media_acl_mask_repair=0
           for uid in $qemu_media_session_uids; do
             [ "$uid" = "0" ] && continue
@@ -508,55 +436,6 @@ in
             ${pkgs.acl}/bin/setfacl -m "u:$uid:x" /run/d2b/vms 2>/dev/null || true
             ${pkgs.acl}/bin/setfacl -m "u:$uid:rwx" /run/d2b/vms/${name} 2>/dev/null || true
             ${pkgs.acl}/bin/setfacl -d -m "u:$uid:rwx" /run/d2b/vms/${name} 2>/dev/null || true
-          done
-          for uid in $guest_control_virtiofsd_uids; do
-            [ "$uid" = "0" ] && continue
-            ${pkgs.acl}/bin/setfacl -m "u:$uid:x" /var/lib/d2b 2>/dev/null || true
-            ${pkgs.acl}/bin/setfacl -m "u:$uid:x" /run/d2b 2>/dev/null || true
-            ${activationHelper} setfacl-on-path \
-              --path "/var/lib/d2b/guest-control-${name}" \
-              --acl-spec "u:$uid:rx" \
-              --also-spec "mask:r-x" \
-              --require-kind directory \
-              --setfacl-bin "${pkgs.acl}/bin/setfacl" \
-              2>/dev/null || true
-            ${activationHelper} setfacl-on-path \
-              --path "/var/lib/d2b/guest-control-${name}/token" \
-              --acl-spec "u:$uid:r" \
-              --also-spec "mask:r--" \
-              --require-kind regular \
-              --setfacl-bin "${pkgs.acl}/bin/setfacl" \
-              2>/dev/null || true
-            d2bd_uid=$(${pkgs.getent}/bin/getent passwd d2bd | ${pkgs.coreutils}/bin/cut -d: -f3)
-            d2b_gid=$(${pkgs.getent}/bin/getent group d2b | ${pkgs.coreutils}/bin/cut -d: -f3)
-            if [ -n "$d2bd_uid" ] && [ -n "$d2b_gid" ]; then
-              ${activationHelper} enforce-dir-posture --path /run/d2b/vms/${name} --uid "$d2bd_uid" --gid "$d2b_gid" --mode 0750 2>/dev/null || true
-              ${activationHelper} enforce-dir-posture --path /run/d2b/vms/${name}/guest-control --uid "$d2bd_uid" --gid "$d2b_gid" --mode 0750 2>/dev/null || true
-            fi
-            ${activationHelper} clear-acl-on-path --path /run/d2b/vms/${name}/guest-control --require-kind directory --setfacl-bin "${pkgs.acl}/bin/setfacl" 2>/dev/null || true
-            ${activationHelper} setfacl-on-path \
-              --path "/run/d2b/vms/${name}" \
-              --acl-spec "u:$uid:--x" \
-              --require-kind directory \
-              --setfacl-bin "${pkgs.acl}/bin/setfacl" \
-              2>/dev/null || true
-            ${activationHelper} setfacl-on-path \
-              --path "/run/d2b/vms/${name}/guest-control" \
-              --acl-spec "u:$uid:rwx" \
-              --also-spec "default:u:$uid:rwx" \
-              --require-kind directory \
-              --setfacl-bin "${pkgs.acl}/bin/setfacl" \
-              2>/dev/null || true
-            for ch_uid in $guest_control_ch_uids; do
-              [ "$ch_uid" = "0" ] && continue
-              ${activationHelper} setfacl-on-path \
-                --path "/run/d2b/vms/${name}/guest-control" \
-                --acl-spec "u:$ch_uid:--x" \
-                --also-spec "default:u:$ch_uid:rwX" \
-                --require-kind directory \
-                --setfacl-bin "${pkgs.acl}/bin/setfacl" \
-                2>/dev/null || true
-            done
           done
           if [ -d /var/lib/d2b/vms/${name} ]; then
             # Security fix:
@@ -578,7 +457,10 @@ in
             #   audio   → PipeWire/Pulse only (no Wayland)
             #   gpu/gpu-render-node → Wayland only when no proxy is emitted,
             #                         no session socket grant when proxy is active
-            wlproxy_wayland_uids=$(${pkgs.jq}/bin/jq -r '.vms[] | select(.vm == "${name}") | .nodes[] | select(.role == "wayland-proxy") | .profile.uid' "$bundle_json" 2>/dev/null | ${pkgs.coreutils}/bin/sort -u)
+            # Only the Host execution owns the real compositor socket. The
+            # Guest frontend uses the same logical role for bundle/profile
+            # lookup but must never receive host Wayland ACLs.
+            wlproxy_wayland_uids=$(${pkgs.jq}/bin/jq -r '.vms[] | select(.vm == "${name}") | .nodes[] | select(.role == "wayland-proxy" and ((.executionRef // "") | startswith("Guest/") | not)) | .profile.uid' "$bundle_json" 2>/dev/null | ${pkgs.coreutils}/bin/sort -u)
             audio_session_uids=$(${pkgs.jq}/bin/jq -r '.vms[] | select(.vm == "${name}") | .nodes[] | select(.role == "audio") | .profile.uid' "$bundle_json" 2>/dev/null | ${pkgs.coreutils}/bin/sort -u)
             gpu_session_uids=$(${pkgs.jq}/bin/jq -r '.vms[] | select(.vm == "${name}") | .nodes[] | select(.role == "gpu" or .role == "gpu-render-node") | .profile.uid' "$bundle_json" 2>/dev/null | ${pkgs.coreutils}/bin/sort -u)
             wlproxy_client_uids=$(printf '%s\n%s\n' "$gpu_session_uids" "$qemu_media_session_uids" | ${pkgs.coreutils}/bin/sort -u)
@@ -587,7 +469,6 @@ in
             overlay_uid=$(${pkgs.jq}/bin/jq -r '.vms[] | select(.vm == "${name}") | .nodes[] | .planOps[]? | select(.kind == "diskInit" and (.targetPath | endswith("/store-overlay.img"))) | .ownerUid' "$bundle_json" 2>/dev/null | ${pkgs.coreutils}/bin/head -n1)
             overlay_gid=$(${pkgs.jq}/bin/jq -r '.vms[] | select(.vm == "${name}") | .nodes[] | .planOps[]? | select(.kind == "diskInit" and (.targetPath | endswith("/store-overlay.img"))) | .ownerGid' "$bundle_json" 2>/dev/null | ${pkgs.coreutils}/bin/head -n1)
             overlay_size_mib=$(${pkgs.jq}/bin/jq -r '.vms[] | select(.vm == "${name}") | .nodes[] | .planOps[]? | select(.kind == "diskInit" and (.targetPath | endswith("/store-overlay.img"))) | (.sizeBytes / 1048576 | floor)' "$bundle_json" 2>/dev/null | ${pkgs.coreutils}/bin/head -n1)
-            guest_control_virtiofsd_uids=$(${pkgs.jq}/bin/jq -r '.vms[] | select(.vm == "${name}") | .nodes[] | select(.id == "virtiofsd-d2b-gctl") | .profile.uid' "$bundle_json" 2>/dev/null | ${pkgs.coreutils}/bin/sort -u)
             if [ -n "$overlay_uid" ] && [ "$overlay_uid" != "null" ] && \
                [ -n "$overlay_gid" ] && [ "$overlay_gid" != "null" ] && \
                [ -n "$overlay_size_mib" ] && [ "$overlay_size_mib" != "null" ]; then
@@ -616,62 +497,13 @@ in
                 done
               fi
             fi
-            for uid in $(${pkgs.jq}/bin/jq -r '.vms[] | select(.vm == "${name}") | .nodes[] | .profile.uid' "$bundle_json" | ${pkgs.coreutils}/bin/sort -u); do
+            for uid in $(${pkgs.jq}/bin/jq -r '.vms[] | select(.vm == "${name}") | .nodes[] | select(((.executionRef // "") | startswith("Guest/") | not)) | .profile.uid' "$bundle_json" | ${pkgs.coreutils}/bin/sort -u); do
               [ "$uid" = "0" ] && continue
               ${pkgs.acl}/bin/setfacl -m "u:$uid:x" /var/lib/d2b 2>/dev/null || true
               # Grant traversal on both shared runtime parents so numeric
               # per-role UIDs can reach /run/d2b/vms/<vm> sockets.
               ${pkgs.acl}/bin/setfacl -m "u:$uid:x" /run/d2b 2>/dev/null || true
               ${pkgs.acl}/bin/setfacl -m "u:$uid:x" /run/d2b/vms 2>/dev/null || true
-              if echo "$guest_control_virtiofsd_uids" | ${pkgs.gnugrep}/bin/grep -qx "$uid"; then
-                ${activationHelper} clear-acl-on-path --path "/var/lib/d2b/guest-control-${name}" --require-kind directory --setfacl-bin "${pkgs.acl}/bin/setfacl" 2>/dev/null || true
-                ${activationHelper} clear-acl-on-path --path "/var/lib/d2b/guest-control-${name}/token" --require-kind regular --setfacl-bin "${pkgs.acl}/bin/setfacl" 2>/dev/null || true
-                ${activationHelper} setfacl-on-path \
-                  --path "/var/lib/d2b/guest-control-${name}" \
-                  --acl-spec "u:$uid:rx" \
-                  --also-spec "mask:r-x" \
-                  --require-kind directory \
-                  --setfacl-bin "${pkgs.acl}/bin/setfacl" \
-                  2>/dev/null || true
-                ${activationHelper} setfacl-on-path \
-                  --path "/var/lib/d2b/guest-control-${name}/token" \
-                  --acl-spec "u:$uid:r" \
-                  --also-spec "mask:r--" \
-                  --require-kind regular \
-                  --setfacl-bin "${pkgs.acl}/bin/setfacl" \
-                  2>/dev/null || true
-                d2bd_uid=$(${pkgs.getent}/bin/getent passwd d2bd | ${pkgs.coreutils}/bin/cut -d: -f3)
-                d2b_gid=$(${pkgs.getent}/bin/getent group d2b | ${pkgs.coreutils}/bin/cut -d: -f3)
-                if [ -n "$d2bd_uid" ] && [ -n "$d2b_gid" ]; then
-                  ${activationHelper} enforce-dir-posture --path /run/d2b/vms/${name} --uid "$d2bd_uid" --gid "$d2b_gid" --mode 0750 2>/dev/null || true
-                  ${activationHelper} enforce-dir-posture --path /run/d2b/vms/${name}/guest-control --uid "$d2bd_uid" --gid "$d2b_gid" --mode 0750 2>/dev/null || true
-                fi
-                ${activationHelper} clear-acl-on-path --path /run/d2b/vms/${name}/guest-control --require-kind directory --setfacl-bin "${pkgs.acl}/bin/setfacl" 2>/dev/null || true
-                ${activationHelper} setfacl-on-path \
-                  --path "/run/d2b/vms/${name}" \
-                  --acl-spec "u:$uid:--x" \
-                  --require-kind directory \
-                  --setfacl-bin "${pkgs.acl}/bin/setfacl" \
-                  2>/dev/null || true
-                ${activationHelper} setfacl-on-path \
-                  --path "/run/d2b/vms/${name}/guest-control" \
-                  --acl-spec "u:$uid:rwx" \
-                  --also-spec "default:u:$uid:rwx" \
-                  --require-kind directory \
-                  --setfacl-bin "${pkgs.acl}/bin/setfacl" \
-                  2>/dev/null || true
-                for ch_uid in $guest_control_ch_uids; do
-                  [ "$ch_uid" = "0" ] && continue
-                  ${activationHelper} setfacl-on-path \
-                    --path "/run/d2b/vms/${name}/guest-control" \
-                    --acl-spec "u:$ch_uid:--x" \
-                    --also-spec "default:u:$ch_uid:rwX" \
-                    --require-kind directory \
-                    --setfacl-bin "${pkgs.acl}/bin/setfacl" \
-                    2>/dev/null || true
-                done
-                continue
-              fi
               if echo "$otel_host_bridge_uids" | ${pkgs.gnugrep}/bin/grep -qx "$uid"; then
                 ${pkgs.acl}/bin/setfacl -m "u:$uid:rwx" /run/d2b/otel 2>/dev/null || true
                 ${pkgs.acl}/bin/setfacl -d -m "u:$uid:rwx" /run/d2b/otel 2>/dev/null || true

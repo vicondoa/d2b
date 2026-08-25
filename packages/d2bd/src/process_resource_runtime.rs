@@ -13,32 +13,37 @@ use std::{
 
 use d2b_contracts_resource::resource_proto as wire;
 use d2b_contracts_resource::v3::{
-    CanonicalJsonValue,
-    ControllerGeneration,
-    ResourceEnvelope,
-    ResourcePhase,
-    ResourceRef,
-    ResourceTypeName,
-    ZoneId,
-    ZoneRevision,
+    CanonicalJsonValue, ControllerGeneration, ResourceEnvelope, ResourcePhase, ResourceRef,
+    ResourceTypeName, ZoneId, ZoneRevision,
     process::{EphemeralProcessSpec, ProcessSpec, RestartClass},
 };
+use d2b_process_conformance::GuestExecutionBinding;
 use d2b_resource_api::watch::ResourceWatch;
-use d2b_resource_api::{RedbBackend, ResourceApiClient, service::UnavailableUpgradeDispatcher};
+use d2b_resource_api::{
+    RedbBackend, ResourceApiClient, ResourceStoreBackend,
+    service::{UnavailableUpgradeDispatcher, UpgradeDispatcher},
+};
 use d2b_resource_store::{
-    StoreListRequest, StoreOperationContext, StoreProjection, StoreWatchRequest, StoredResource,
+    StoreGetRequest, StoreListRequest, StoreOperationContext, StoreProjection,
+    StoreWatchRequest, StoreErrorKind, StoredResource,
 };
 use d2b_resource_store_redb::RedbResourceStore;
+use sha2::{Digest, Sha256};
 
 use crate::process_provider_runtime::{
-    ProcessResourceContext, ProductionProcessProviders, ProviderAdoption, ProviderLiveness,
+    GUEST_EXECUTION_UNAVAILABLE, ProcessResourceContext, ProductionProcessProviders,
+    ProviderAdoption, ProviderLiveness,
 };
+use d2bd_runtime::target_runtime::DaemonMode;
 
 const PROCESS_TYPE: &str = "Process";
 const EPHEMERAL_PROCESS_TYPE: &str = "EphemeralProcess";
 const MINIJAIL_PROVIDER: &str = "system-minijail";
 const SYSTEMD_PROVIDER: &str = "system-systemd";
 const PROCESS_RUNTIME_FINALIZER: &str = "process-runtime.d2bus.org/cleanup";
+const WAYLAND_SESSION_TYPE: &str = "display-wayland.d2bus.org.WaylandSession";
+const WAYLAND_SESSION_FINALIZER: &str = "display-wayland.d2bus.org/proxy-stopped";
+pub(crate) const PROCESS_RESTART_ANNOTATION: &str = "d2b.d2bus.org/restart-generation";
 
 /// Stable failures for the daemon-owned generic process path.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -71,6 +76,46 @@ impl core::fmt::Display for ProcessResourceRuntimeError {
 }
 
 impl std::error::Error for ProcessResourceRuntimeError {}
+
+#[async_trait::async_trait]
+pub(crate) trait ProcessResourceClient: Send + Sync {
+    async fn update_status(
+        &self,
+        request: wire::UpdateStatusRequest,
+    ) -> wire::UpdateStatusResponse;
+
+    async fn update_finalizers(
+        &self,
+        request: wire::UpdateFinalizersRequest,
+    ) -> wire::UpdateFinalizersResponse;
+
+    async fn delete(&self, request: wire::DeleteRequest) -> wire::DeleteResponse;
+}
+
+#[async_trait::async_trait]
+impl<S, U> ProcessResourceClient for ResourceApiClient<S, U>
+where
+    S: ResourceStoreBackend + 'static,
+    U: UpgradeDispatcher + 'static,
+{
+    async fn update_status(
+        &self,
+        request: wire::UpdateStatusRequest,
+    ) -> wire::UpdateStatusResponse {
+        ResourceApiClient::update_status(self, request).await
+    }
+
+    async fn update_finalizers(
+        &self,
+        request: wire::UpdateFinalizersRequest,
+    ) -> wire::UpdateFinalizersResponse {
+        ResourceApiClient::update_finalizers(self, request).await
+    }
+
+    async fn delete(&self, request: wire::DeleteRequest) -> wire::DeleteResponse {
+        ResourceApiClient::delete(self, request).await
+    }
+}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum DesiredProcess {
@@ -105,8 +150,24 @@ impl DesiredRecord {
             && self.resource.resource_ref == other.resource.resource_ref
             && self.resource.uid == other.resource.uid
             && self.resource.generation == other.resource.generation
+            && restart_annotation(&self.resource) == restart_annotation(&other.resource)
             && self.provider_ref == other.provider_ref
             && self.process == other.process
+    }
+
+    fn owner_ref(&self) -> Option<ResourceRef> {
+        let CanonicalJsonValue::Object(root) =
+            CanonicalJsonValue::parse(&self.resource.canonical_json).ok()?
+        else {
+            return None;
+        };
+        let CanonicalJsonValue::Object(metadata) = root.get("metadata")? else {
+            return None;
+        };
+        let CanonicalJsonValue::String(owner) = metadata.get("ownerRef")? else {
+            return None;
+        };
+        ResourceRef::parse(owner).ok()
     }
 
     fn deletion_requested(&self) -> bool {
@@ -130,6 +191,7 @@ impl DesiredRecord {
 /// Durable generic process registry for one Zone.
 pub(crate) struct ProcessResourceRuntime {
     zone: ZoneId,
+    target: Option<ResourceRef>,
     providers: Arc<ProductionProcessProviders>,
     records: BTreeMap<ResourceRef, DesiredRecord>,
     terminal: BTreeSet<ResourceRef>,
@@ -139,7 +201,12 @@ pub(crate) struct ProcessResourceRuntime {
     completed_at: BTreeMap<ResourceRef, Instant>,
     next_restart_at: BTreeMap<ResourceRef, Instant>,
     controller_generation: ControllerGeneration,
-    status_client: Option<Arc<ResourceApiClient<RedbBackend, UnavailableUpgradeDispatcher>>>,
+    guest_execution: Option<GuestExecutionBinding>,
+    /// Optional owner and target selector for resources using a shared Host
+    /// execution reference, retained across relist/watch passes.
+    target_owner_ref: Option<ResourceRef>,
+    target_ref: Option<ResourceRef>,
+    status_client: Option<Arc<dyn ProcessResourceClient>>,
 }
 
 impl core::fmt::Debug for ProcessResourceRuntime {
@@ -152,11 +219,33 @@ impl core::fmt::Debug for ProcessResourceRuntime {
     }
 }
 
+fn scoped_target_ref(
+    record: &DesiredRecord,
+    target_owner_ref: Option<&ResourceRef>,
+    target_ref: Option<&ResourceRef>,
+) -> Option<ResourceRef> {
+    match (target_owner_ref, target_ref, record.owner_ref()) {
+        (Some(expected_owner), Some(target), Some(owner)) if expected_owner == &owner => {
+            Some(target.clone())
+        }
+        _ => None,
+    }
+}
+
 impl ProcessResourceRuntime {
     /// Construct a registry over the daemon-owned fixed Providers.
     pub(crate) fn new(zone: ZoneId, providers: Arc<ProductionProcessProviders>) -> Self {
+        Self::new_for_target(zone, providers, None)
+    }
+
+    pub(crate) fn new_for_target(
+        zone: ZoneId,
+        providers: Arc<ProductionProcessProviders>,
+        target: Option<ResourceRef>,
+    ) -> Self {
         Self {
             zone,
+            target,
             providers,
             records: BTreeMap::new(),
             terminal: BTreeSet::new(),
@@ -167,6 +256,9 @@ impl ProcessResourceRuntime {
             next_restart_at: BTreeMap::new(),
             controller_generation: ControllerGeneration::new(1)
                 .expect("controller generation one is valid"),
+            guest_execution: None,
+            target_owner_ref: None,
+            target_ref: None,
             status_client: None,
         }
     }
@@ -175,21 +267,39 @@ impl ProcessResourceRuntime {
         self.controller_generation = generation;
     }
 
-    pub(crate) fn set_status_client(
+    pub(crate) fn set_guest_execution_binding(&mut self, binding: GuestExecutionBinding) {
+        self.guest_execution = Some(binding);
+    }
+
+    pub(crate) fn set_target_scope(
         &mut self,
-        status_client: Arc<ResourceApiClient<RedbBackend, UnavailableUpgradeDispatcher>>,
+        target_owner_ref: Option<ResourceRef>,
+        target_ref: Option<ResourceRef>,
     ) {
+        self.target_owner_ref = target_owner_ref;
+        self.target_ref = target_ref;
+    }
+
+    pub(crate) fn set_status_client<C>(&mut self, status_client: Arc<C>)
+    where
+        C: ProcessResourceClient + 'static,
+    {
         self.status_client = Some(status_client);
     }
 
     fn context<'a>(&self, record: &'a DesiredRecord) -> ProcessResourceContext<'a> {
+        let target_ref =
+            scoped_target_ref(record, self.target_owner_ref.as_ref(), self.target_ref.as_ref());
         ProcessResourceContext::new(
             &record.resource.resource_ref,
             &record.resource.uid,
             record.resource.generation,
+            record.resource.revision,
             &record.provider_ref,
             self.controller_generation,
+            target_ref,
         )
+        .with_guest_execution(self.guest_execution.as_ref())
     }
 
     /// Reconcile a complete durable Process/EphemeralProcess snapshot.
@@ -197,7 +307,7 @@ impl ProcessResourceRuntime {
         &mut self,
         snapshot: Vec<StoredResource>,
     ) -> Result<(), ProcessResourceRuntimeError> {
-        let desired = decode_snapshot(&self.zone, snapshot)?;
+        let desired = decode_snapshot(&self.zone, self.target.as_ref(), snapshot, self.providers.mode())?;
         let desired_keys = desired.keys().cloned().collect::<BTreeSet<_>>();
         let removed = self
             .records
@@ -210,6 +320,7 @@ impl ProcessResourceRuntime {
                 self.stop_record(&record).await?;
                 self.records.remove(&key);
             }
+
             self.terminal.remove(&key);
             self.terminal_failed.remove(&key);
             self.restart_counts.remove(&key);
@@ -263,12 +374,12 @@ impl ProcessResourceRuntime {
                 if !self.providers.has_active_resource(&key) {
                     match &record.process {
                         DesiredProcess::Process(spec) => {
-                            match self
-                                .providers
-                                .adopt_resource(self.context(&record), spec)
-                                .await
-                                .map_err(map_provider_error)?
-                            {
+                            let adoption = deletion_adoption(
+                                self.providers
+                                    .adopt_resource(self.context(&record), spec)
+                                    .await,
+                            )?;
+                            match adoption {
                                 ProviderAdoption::Quarantined(_) => {
                                     return Err(ProcessResourceRuntimeError::IdentityAmbiguous);
                                 }
@@ -276,12 +387,12 @@ impl ProcessResourceRuntime {
                             }
                         }
                         DesiredProcess::Ephemeral(spec) => {
-                            match self
-                                .providers
-                                .adopt_ephemeral_resource(self.context(&record), spec)
-                                .await
-                                .map_err(map_provider_error)?
-                            {
+                            let adoption = deletion_adoption(
+                                self.providers
+                                    .adopt_ephemeral_resource(self.context(&record), spec)
+                                    .await,
+                            )?;
+                            match adoption {
                                 ProviderAdoption::Quarantined(_) => {
                                     return Err(ProcessResourceRuntimeError::IdentityAmbiguous);
                                 }
@@ -606,7 +717,7 @@ impl ProcessResourceRuntime {
             return Ok(record.clone());
         };
         update_status(
-            client,
+            client.as_ref(),
             record,
             phase,
             self.restart_counts
@@ -628,7 +739,7 @@ impl ProcessResourceRuntime {
         if record.has_runtime_finalizer() {
             return Ok(record.clone());
         }
-        update_finalizers(client, record, true).await
+        update_finalizers(client.as_ref(), record, true).await
     }
 
     async fn remove_finalizer(
@@ -641,7 +752,7 @@ impl ProcessResourceRuntime {
         if !record.has_runtime_finalizer() {
             return Ok(record.clone());
         }
-        update_finalizers(client, record, false).await
+        update_finalizers(client.as_ref(), record, false).await
     }
 
     fn ephemeral_ttl_elapsed(&self, key: &ResourceRef, record: &DesiredRecord) -> bool {
@@ -672,7 +783,7 @@ impl ProcessResourceRuntime {
         let Some(client) = &self.status_client else {
             return Ok(());
         };
-        delete_resource(client, record).await
+        delete_resource(client.as_ref(), record).await
     }
 
     async fn probe_record(
@@ -932,7 +1043,7 @@ fn civil_from_days(days_since_epoch: i64) -> (i64, i64, i64) {
 }
 
 async fn update_status(
-    client: &ResourceApiClient<RedbBackend, UnavailableUpgradeDispatcher>,
+    client: &dyn ProcessResourceClient,
     record: &DesiredRecord,
     phase: ResourcePhase,
     restart_count: u32,
@@ -1080,7 +1191,7 @@ fn status_payload(
 }
 
 async fn update_finalizers(
-    client: &ResourceApiClient<RedbBackend, UnavailableUpgradeDispatcher>,
+    client: &dyn ProcessResourceClient,
     record: &DesiredRecord,
     add: bool,
 ) -> Result<DesiredRecord, ProcessResourceRuntimeError> {
@@ -1123,7 +1234,7 @@ async fn update_finalizers(
 }
 
 async fn delete_resource(
-    client: &ResourceApiClient<RedbBackend, UnavailableUpgradeDispatcher>,
+    client: &dyn ProcessResourceClient,
     record: &DesiredRecord,
 ) -> Result<(), ProcessResourceRuntimeError> {
     let mut mutation = wire::Mutation::new();
@@ -1192,9 +1303,23 @@ fn map_provider_error(error: String) -> ProcessResourceRuntimeError {
     }
 }
 
+fn deletion_adoption(
+    result: Result<ProviderAdoption, String>,
+) -> Result<ProviderAdoption, ProcessResourceRuntimeError> {
+    match result {
+        Ok(adoption) => Ok(adoption),
+        Err(error) if error == GUEST_EXECUTION_UNAVAILABLE => {
+            Err(ProcessResourceRuntimeError::ProviderEffect)
+        }
+        Err(error) => Err(map_provider_error(error)),
+    }
+}
+
 fn decode_snapshot(
     zone: &ZoneId,
+    target: Option<&ResourceRef>,
     resources: Vec<StoredResource>,
+    mode: DaemonMode,
 ) -> Result<BTreeMap<ResourceRef, DesiredRecord>, ProcessResourceRuntimeError> {
     let mut desired = BTreeMap::new();
     for resource in resources {
@@ -1209,6 +1334,23 @@ fn decode_snapshot(
             .provider_ref()
             .cloned()
             .ok_or(ProcessResourceRuntimeError::InvalidResource)?;
+        let execution_ref = envelope
+            .spec()
+            .base()
+            .get("executionRef")
+            .and_then(|value| match value {
+                CanonicalJsonValue::String(value) => ResourceRef::parse(value).ok(),
+                _ => None,
+            })
+            .ok_or(ProcessResourceRuntimeError::InvalidResource)?;
+        let target_matches = if let Some(target) = target {
+            execution_ref == *target
+        } else {
+            execution_ref.resource_type().as_str() == "Host"
+        };
+        if !target_matches {
+            continue;
+        }
         if provider_ref.resource_type().as_str() != "Provider"
             || !matches!(
                 provider_ref.name().as_str(),
@@ -1228,6 +1370,21 @@ fn decode_snapshot(
             ),
             _ => continue,
         };
+        if mode == DaemonMode::Host
+            && match &process {
+                DesiredProcess::Process(spec) => {
+                    spec.execution().execution_ref().resource_type().as_str() == "Guest"
+                }
+                DesiredProcess::Ephemeral(spec) => {
+                    spec.execution().execution_ref().resource_type().as_str() == "Guest"
+                }
+            }
+        {
+            // A Host Process controller cannot reconcile a Guest-local child.
+            // Leave the intent pending for the authenticated Guest controller
+            // rather than claiming failure or running it through host effects.
+            continue;
+        }
         let record = DesiredRecord {
             resource: resource.clone(),
             provider_ref,
@@ -1238,6 +1395,23 @@ fn decode_snapshot(
         }
     }
     Ok(desired)
+}
+
+fn restart_annotation(resource: &StoredResource) -> Option<String> {
+    let value = CanonicalJsonValue::parse(&resource.canonical_json).ok()?;
+    let CanonicalJsonValue::Object(root) = value else {
+        return None;
+    };
+    let CanonicalJsonValue::Object(metadata) = root.get("metadata")? else {
+        return None;
+    };
+    let CanonicalJsonValue::Object(annotations) = metadata.get("annotations")? else {
+        return None;
+    };
+    match annotations.get(PROCESS_RESTART_ANNOTATION) {
+        Some(CanonicalJsonValue::String(value)) => Some(value.clone()),
+        _ => None,
+    }
 }
 
 /// Build the generic Process relist request.
@@ -1307,12 +1481,359 @@ pub(crate) async fn list_process_snapshot(
     Ok(resources)
 }
 
+/// Relist generic Process resources through a session-bound Resource API
+/// backend. This mirrors the concrete Zone-store helper while preserving the
+/// backend's reconnect fence.
+pub(crate) async fn list_process_snapshot_backend<S: ResourceStoreBackend>(
+    store: &S,
+    zone: &ZoneId,
+) -> Result<Vec<StoredResource>, ProcessResourceRuntimeError> {
+    let mut request = process_list_request(zone);
+    let mut resources = Vec::new();
+    loop {
+        let result = store
+            .list(request.clone())
+            .await
+            .map_err(|_| ProcessResourceRuntimeError::Store)?;
+        resources.extend(result.resources);
+        let Some(cursor) = result.next_cursor else {
+            break;
+        };
+        request.cursor = Some(cursor);
+    }
+    Ok(resources)
+}
+
+/// Run Guest-local Process/EphemeralProcess reconciliation for one
+/// authenticated ComponentSession. The session-bound store is intentionally
+/// relisted instead of opening a second transport or watch implementation;
+/// reconnect fencing makes the loop stop at the first stale-session error.
+pub(crate) async fn run_guest_process_reconciliation<S>(
+    mut runtime: ProcessResourceRuntime,
+    store: Arc<S>,
+    client: Arc<ResourceApiClient<S, UnavailableUpgradeDispatcher>>,
+    zone: ZoneId,
+) where
+    S: ResourceStoreBackend + 'static,
+{
+    runtime.set_status_client(client);
+    loop {
+        let snapshot = match list_process_snapshot_backend(store.as_ref(), &zone).await {
+            Ok(snapshot) => snapshot,
+            Err(_) => return,
+        };
+        if let Err(error) = runtime.reconcile(snapshot).await {
+            tracing::warn!(zone = %zone.as_str(), error = %error, "Guest Process reconciliation degraded");
+        }
+        tokio::time::sleep(Duration::from_millis(250)).await;
+    }
+}
+
+/// Drain a deleted WaylandSession through its durable Process and Endpoint
+/// children before releasing the session finalizer.
+pub(crate) async fn reconcile_wayland_session_deletion(
+    client: &ResourceApiClient<RedbBackend, UnavailableUpgradeDispatcher>,
+    store: &RedbResourceStore,
+    zone: &ZoneId,
+    session_ref: &ResourceRef,
+) -> Result<(), ProcessResourceRuntimeError> {
+    for _ in 0..8 {
+        let session = match store
+            .get(StoreGetRequest {
+                operation: cleanup_operation("wayland-session-get", session_ref, 0),
+                zone: zone.clone(),
+                target: session_ref.clone(),
+                expected_uid: None,
+                projection: StoreProjection::Full,
+            })
+            .await
+        {
+            Ok(resource) => resource,
+            Err(error) if error.kind() == StoreErrorKind::ResourceNotFound => return Ok(()),
+            Err(_) => return Err(ProcessResourceRuntimeError::Store),
+        };
+        if session.resource_ref.resource_type().as_str() != WAYLAND_SESSION_TYPE
+            || !metadata_deletion_requested(&session)
+        {
+            return Ok(());
+        }
+
+        let children = list_cleanup_children(store, zone).await?;
+        let owned_processes = children
+            .iter()
+            .filter(|resource| {
+                resource.resource_ref.resource_type().as_str() == PROCESS_TYPE
+                    && metadata_owner_ref(resource).as_ref() == Some(session_ref)
+            })
+            .cloned()
+            .collect::<Vec<_>>();
+        let owned_endpoints = children
+            .iter()
+            .filter(|resource| {
+                resource.resource_ref.resource_type().as_str() == "Endpoint"
+                    && metadata_owner_ref(resource).as_ref() == Some(session_ref)
+            })
+            .cloned()
+            .collect::<Vec<_>>();
+        let mut changed = false;
+
+        for process in &owned_processes {
+            if !metadata_deletion_requested(process) {
+                changed |=
+                    request_cleanup_delete(client, process, "wayland-child-process-delete").await;
+            } else if matches!(
+                status_phase(process),
+                Some(ResourcePhase::Succeeded | ResourcePhase::Failed | ResourcePhase::Deleted)
+            ) && !owned_endpoints.iter().any(|endpoint| {
+                endpoint_producer_ref(endpoint).as_ref() == Some(&process.resource_ref)
+            }) {
+                changed |=
+                    request_cleanup_delete(client, process, "wayland-child-process-drain").await;
+            }
+        }
+
+        for endpoint in &owned_endpoints {
+            let producer = endpoint_producer_ref(endpoint);
+            let producer_terminal = producer.as_ref().is_none_or(|producer| {
+                owned_processes
+                    .iter()
+                    .find(|process| &process.resource_ref == producer)
+                    .is_none_or(|process| {
+                        matches!(
+                            status_phase(process),
+                            Some(
+                                ResourcePhase::Succeeded
+                                    | ResourcePhase::Failed
+                                    | ResourcePhase::Deleted
+                            )
+                        )
+                    })
+            });
+            if producer_terminal && !metadata_deletion_requested(endpoint) {
+                changed |=
+                    request_cleanup_delete(client, endpoint, "wayland-child-endpoint-delete")
+                        .await;
+            } else if producer_terminal && metadata_deletion_requested(endpoint) {
+                changed |=
+                    request_cleanup_delete(client, endpoint, "wayland-child-endpoint-drain").await;
+            }
+        }
+
+        let refreshed_children = list_cleanup_children(store, zone).await?;
+        let remaining = refreshed_children.iter().any(|resource| {
+            matches!(
+                resource.resource_ref.resource_type().as_str(),
+                PROCESS_TYPE | "Endpoint"
+            ) && metadata_owner_ref(resource).as_ref() == Some(session_ref)
+        });
+        if !remaining {
+            let current = store
+                .get(StoreGetRequest {
+                    operation: cleanup_operation("wayland-session-finalizer-get", session_ref, 0),
+                    zone: zone.clone(),
+                    target: session_ref.clone(),
+                    expected_uid: None,
+                    projection: StoreProjection::Full,
+                })
+                .await
+                .map_err(|_| ProcessResourceRuntimeError::Store)?;
+            if metadata_has_finalizer(&current, WAYLAND_SESSION_FINALIZER) {
+                changed |= request_cleanup_finalizer(
+                    client,
+                    &current,
+                    WAYLAND_SESSION_FINALIZER,
+                    false,
+                )
+                .await;
+            } else {
+                changed |=
+                    request_cleanup_delete(client, &current, "wayland-session-delete").await;
+            }
+        }
+        if !changed {
+            break;
+        }
+    }
+    Ok(())
+}
+
+async fn list_cleanup_children(
+    store: &RedbResourceStore,
+    zone: &ZoneId,
+) -> Result<Vec<StoredResource>, ProcessResourceRuntimeError> {
+    let mut request = StoreListRequest {
+        operation: StoreOperationContext {
+            operation_id: "wayland-session-cleanup-list".to_owned(),
+            idempotency_key: None,
+            correlation_id: "wayland-session-cleanup-list".to_owned(),
+            trace_id: None,
+            deadline_ms: 10_000,
+        },
+        zone: zone.clone(),
+        resource_types: vec![
+            ResourceTypeName::parse(PROCESS_TYPE).expect("static Process type"),
+            ResourceTypeName::parse("Endpoint").expect("static Endpoint type"),
+        ],
+        resource_names: Vec::new(),
+        filters: Vec::new(),
+        page_size: 256,
+        cursor: None,
+        projection: StoreProjection::Full,
+    };
+    let mut resources = Vec::new();
+    loop {
+        let result = store
+            .list(request.clone())
+            .await
+            .map_err(|_| ProcessResourceRuntimeError::Store)?;
+        resources.extend(result.resources);
+        let Some(cursor) = result.next_cursor else {
+            break;
+        };
+        request.cursor = Some(cursor);
+    }
+    Ok(resources)
+}
+
+fn cleanup_operation(action: &str, resource_ref: &ResourceRef, revision: u64) -> StoreOperationContext {
+    let operation_id = cleanup_operation_id(action, resource_ref, revision);
+    StoreOperationContext {
+        operation_id: operation_id.clone(),
+        idempotency_key: None,
+        correlation_id: operation_id,
+        trace_id: None,
+        deadline_ms: 10_000,
+    }
+}
+
+fn cleanup_operation_id(action: &str, resource_ref: &ResourceRef, revision: u64) -> String {
+    let mut digest = Sha256::new();
+    digest.update(action.as_bytes());
+    digest.update([0]);
+    digest.update(resource_ref.to_canonical_string().as_bytes());
+    digest.update(revision.to_be_bytes());
+    let digest = digest.finalize();
+    let suffix = digest
+        .iter()
+        .take(12)
+        .map(|byte| format!("{byte:02x}"))
+        .collect::<String>();
+    format!("{action}-{suffix}")
+}
+
+fn metadata_deletion_requested(resource: &StoredResource) -> bool {
+    metadata_value(resource, "deletionRequestedAt")
+        .is_some_and(|value| !matches!(value, CanonicalJsonValue::Null))
+}
+
+fn metadata_has_finalizer(resource: &StoredResource, expected: &str) -> bool {
+    metadata_value(resource, "finalizers").is_some_and(|value| {
+        matches!(
+            value,
+            CanonicalJsonValue::Array(values)
+                if values.iter().any(|value| {
+                    matches!(value, CanonicalJsonValue::String(value) if value == expected)
+                })
+        )
+    })
+}
+
+fn metadata_owner_ref(resource: &StoredResource) -> Option<ResourceRef> {
+    let CanonicalJsonValue::String(value) = metadata_value(resource, "ownerRef")? else {
+        return None;
+    };
+    ResourceRef::parse(&value).ok()
+}
+
+fn endpoint_producer_ref(resource: &StoredResource) -> Option<ResourceRef> {
+    let value = CanonicalJsonValue::parse(&resource.canonical_json).ok()?;
+    let CanonicalJsonValue::Object(root) = value else {
+        return None;
+    };
+    let CanonicalJsonValue::Object(spec) = root.get("spec")? else {
+        return None;
+    };
+    let CanonicalJsonValue::String(value) = spec.get("producerRef")? else {
+        return None;
+    };
+    ResourceRef::parse(&value).ok()
+}
+
+fn cleanup_wire_identity(resource: &StoredResource) -> wire::ResourceIdentity {
+    let mut identity = wire::ResourceIdentity::new();
+    identity.zone = resource.zone.as_str().to_owned();
+    identity.resource_type = resource.resource_ref.resource_type().as_str().to_owned();
+    identity.name = resource.resource_ref.name().as_str().to_owned();
+    identity.uid = Some(resource.uid.as_str().to_owned());
+    identity.generation = Some(resource.generation.get());
+    identity.revision = Some(resource.revision.get());
+    identity
+}
+
+async fn request_cleanup_delete(
+    client: &ResourceApiClient<RedbBackend, UnavailableUpgradeDispatcher>,
+    resource: &StoredResource,
+    action: &str,
+) -> bool {
+    let mut mutation = wire::Mutation::new();
+    mutation.kind = protobuf::EnumOrUnknown::new(wire::MutationKind::MUTATION_KIND_DELETE);
+    mutation.target = protobuf::MessageField::some(cleanup_wire_identity(resource));
+    let mut precondition = wire::Precondition::new();
+    precondition.kind =
+        protobuf::EnumOrUnknown::new(wire::PreconditionKind::PRECONDITION_KIND_EXACT_REVISION);
+    precondition.expected_revision = Some(resource.revision.get());
+    precondition.expected_uid = Some(resource.uid.as_str().to_owned());
+    mutation.precondition = protobuf::MessageField::some(precondition);
+    let mut request = wire::DeleteRequest::new();
+    request.meta = protobuf::MessageField::some(request_meta(
+        &cleanup_operation_id(action, &resource.resource_ref, resource.revision.get()),
+    ));
+    request.mutation = protobuf::MessageField::some(mutation);
+    client.delete(request).await.error.is_none()
+}
+
+async fn request_cleanup_finalizer(
+    client: &ResourceApiClient<RedbBackend, UnavailableUpgradeDispatcher>,
+    resource: &StoredResource,
+    finalizer: &str,
+    add: bool,
+) -> bool {
+    let mut mutation = wire::Mutation::new();
+    mutation.kind =
+        protobuf::EnumOrUnknown::new(wire::MutationKind::MUTATION_KIND_UPDATE_FINALIZERS);
+    mutation.target = protobuf::MessageField::some(cleanup_wire_identity(resource));
+    let mut precondition = wire::Precondition::new();
+    precondition.kind =
+        protobuf::EnumOrUnknown::new(wire::PreconditionKind::PRECONDITION_KIND_EXACT_REVISION);
+    precondition.expected_revision = Some(resource.revision.get());
+    precondition.expected_uid = Some(resource.uid.as_str().to_owned());
+    mutation.precondition = protobuf::MessageField::some(precondition);
+    if add {
+        mutation.add_finalizers.push(finalizer.to_owned());
+    } else {
+        mutation.remove_finalizers.push(finalizer.to_owned());
+    }
+    let mut request = wire::UpdateFinalizersRequest::new();
+    let action = if add {
+        "wayland-session-finalizer-add"
+    } else {
+        "wayland-session-finalizer-remove"
+    };
+    request.meta = protobuf::MessageField::some(request_meta(
+        &cleanup_operation_id(action, &resource.resource_ref, resource.revision.get()),
+    ));
+    request.mutation = protobuf::MessageField::some(mutation);
+    client.update_finalizers(request).await.error.is_none()
+}
+
 /// Run the relist/watch reconciliation loop for one Zone.
 pub(crate) async fn run_process_watch(
     mut watch: ResourceWatch,
     store: Arc<RedbResourceStore>,
     zone: ZoneId,
     registry: Arc<Mutex<Option<ProcessResourceRuntime>>>,
+    status_client: Option<Arc<ResourceApiClient<RedbBackend, UnavailableUpgradeDispatcher>>>,
+    wayland_session_ref: Option<ResourceRef>,
 ) {
     loop {
         match tokio::time::timeout(Duration::from_secs(1), watch.recv()).await {
@@ -1347,6 +1868,17 @@ pub(crate) async fn run_process_watch(
         if result.is_err() {
             tracing::warn!(zone = %zone.as_str(), "generic Process reconciliation degraded");
         }
+        if let (Some(client), Some(session_ref)) =
+            (status_client.as_ref(), wayland_session_ref.as_ref())
+            && let Err(error) =
+                reconcile_wayland_session_deletion(client, &store, &zone, session_ref).await
+        {
+            tracing::warn!(
+                zone = %zone.as_str(),
+                error = %error,
+                "WaylandSession deletion drain degraded"
+            );
+        }
     }
 }
 
@@ -1371,6 +1903,18 @@ mod tests {
             "audio-pipewire",
             "the decoder keeps Provider identity opaque until the fixed allow-list"
         );
+    }
+
+    #[test]
+    fn deletion_retains_finalizer_when_guest_execution_is_unavailable() {
+        assert!(matches!(
+            deletion_adoption(Err(GUEST_EXECUTION_UNAVAILABLE.to_owned())),
+            Err(ProcessResourceRuntimeError::ProviderEffect)
+        ));
+        assert!(matches!(
+            deletion_adoption(Err("provider-ticket:other".to_owned())),
+            Err(ProcessResourceRuntimeError::ProviderEffect)
+        ));
     }
 
     #[test]
@@ -1437,5 +1981,54 @@ mod tests {
         )
         .expect("process spec");
         assert_eq!(process_drain_timeout(&process), Duration::from_secs(11));
+    }
+
+    #[test]
+    fn guest_target_selector_is_limited_to_the_wayland_session_owner() {
+        let session_ref = ResourceRef::parse(
+            "display-wayland.d2bus.org.WaylandSession/display-wayland",
+        )
+        .expect("session ref");
+        let guest_ref = ResourceRef::parse("Guest/work").expect("guest ref");
+        let provider_ref = ResourceRef::parse("Provider/system-minijail").expect("provider ref");
+        let process = serde_json::from_str::<ProcessSpec>(
+            r#"{"executionRef":"Host/host-system","processClass":"worker","template":"reaction"}"#,
+        )
+        .expect("process");
+        let make_record = |owner_ref: &str| DesiredRecord {
+            resource: StoredResource {
+                resource_ref: ResourceRef::parse("Process/worker").expect("process ref"),
+                zone: ZoneId::parse("work").expect("zone"),
+                uid: d2b_contracts_resource::v3::ResourceUid::parse(
+                    "123e4567-e89b-42d3-a456-426614174000",
+                )
+                .expect("uid"),
+                generation: d2b_contracts_resource::v3::ResourceGeneration::new(1)
+                    .expect("generation"),
+                revision: ZoneRevision::new(1),
+                canonical_json: format!(r#"{{"metadata":{{"ownerRef":"{owner_ref}"}}}}"#)
+                    .into_bytes(),
+                payload_digest: "sha256:".to_owned(),
+            },
+            provider_ref: provider_ref.clone(),
+            process: DesiredProcess::Process(process.clone()),
+        };
+
+        assert_eq!(
+            scoped_target_ref(
+                &make_record(session_ref.to_canonical_string().as_str()),
+                Some(&session_ref),
+                Some(&guest_ref),
+            ),
+            Some(guest_ref.clone())
+        );
+        assert_eq!(
+            scoped_target_ref(
+                &make_record("Provider/other"),
+                Some(&session_ref),
+                Some(&guest_ref),
+            ),
+            None
+        );
     }
 }

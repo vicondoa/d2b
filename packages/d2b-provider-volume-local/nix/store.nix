@@ -823,11 +823,11 @@ in
     # the broker's Virtiofsd SpawnRunner role owns virtiofsd
     # supervision end-to-end, including the marker-file gate
     # (now enforced via `BundleResolver::ResolvedRunnerIntent`'s
-    # pre-spawn validation in `d2b-priv-broker::runtime`),
+    # pre-spawn validation in `d2b-broker::runtime`),
     # the hardened exec wrapper (Rust generator output in
     # `d2b-provider-volume-virtiofs/src/virtiofsd_argv.rs`), and the
     # CapabilityBoundingSet
-    # (broker spawn-time `set_capabilities` in `d2b-priv-broker::sys`).
+    # (broker spawn-time `set_capabilities` in `d2b-broker::sys`).
     # The drop-ins block that lived here would target a unit that
     # no longer exists; deleted.
     systemd.services = {

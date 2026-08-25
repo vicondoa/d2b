@@ -75,6 +75,10 @@ let
   ]).config;
   gatewayGuestCfg = goodCfg.d2b._computed."sys-work-gateway".config;
   gatewayGuestService = gatewayGuestCfg.systemd.services.d2bd.serviceConfig;
+  gatewayGuestAgentService = gatewayGuestCfg.systemd.services.d2bd-guest.serviceConfig;
+  gatewayGuestBrokerService =
+    gatewayGuestCfg.systemd.services.d2b-broker-guest.serviceConfig;
+  gatewayChildBrokerService = gatewayGuestCfg.systemd.services.d2b-broker.serviceConfig;
   gatewayGuestTmpfiles = gatewayGuestCfg.systemd.tmpfiles.rules;
   hostTmpfiles = goodCfg.systemd.tmpfiles.rules;
   gatewayJson = builtins.fromJSON gatewayGuestCfg.environment.etc."d2b/gateway.json".text;
@@ -503,6 +507,35 @@ let
       capabilityBoundingSet = [ "" ];
       ambientCapabilities = [ "" ];
       restartIfChanged = false;
+    };
+  };
+
+  "gateway-vm/separates-parent-guest-and-child-zone-authorities" = {
+    expr = {
+      guestMode = lib.hasInfix "/bin/d2bd guest " gatewayGuestAgentService.ExecStart;
+      childMode = lib.hasInfix "/bin/d2bd host " gatewayGuestService.ExecStart;
+      guestPublicSocket = lib.hasInfix "public.sock" gatewayGuestAgentService.ExecStart;
+      guestBrokerMode = lib.hasInfix "/bin/d2b-broker guest " gatewayGuestBrokerService.ExecStart;
+      childBrokerMode = lib.hasInfix "/bin/d2b-broker host " gatewayChildBrokerService.ExecStart;
+      guestBrokerSocket =
+        gatewayGuestCfg.systemd.sockets.d2b-broker-guest.socketConfig.ListenSequentialPacket;
+      childBrokerSocket =
+        gatewayGuestCfg.systemd.sockets.d2b-broker.socketConfig.ListenSequentialPacket;
+      guestState = lib.hasInfix "--state-dir /var/lib/d2b/guest-state"
+        gatewayGuestAgentService.ExecStart;
+      childState = lib.hasInfix "--state-dir /var/lib/d2b "
+        gatewayChildBrokerService.ExecStart;
+    };
+    expected = {
+      guestMode = true;
+      childMode = true;
+      guestPublicSocket = false;
+      guestBrokerMode = true;
+      childBrokerMode = true;
+      guestBrokerSocket = "/run/d2b/guest-broker.sock";
+      childBrokerSocket = "/run/d2b/priv.sock";
+      guestState = true;
+      childState = true;
     };
   };
 

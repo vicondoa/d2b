@@ -305,6 +305,8 @@ Descriptor fields include:
 - component ID/type/binary/template;
 - exported ResourceTypes/methods;
 - supported Host/Guest Provider capabilities;
+- closed controller instance scope and supported target kinds;
+- concrete per-target component artifact and required EffectPort classes;
 - allowed `system|user` domains;
 - cardinality;
 - config projection;
@@ -435,6 +437,16 @@ compiles an offline sorted exact-digest catalog:
 - conformance attestation;
 - support channel;
 - support contact.
+
+The signed manifest portion of the catalog additionally carries the closed
+placement contract: each controller role's `instanceScope` and
+`supportedTargetKinds`, each component's per-target `targetCapabilities`
+(concrete component artifact digest plus required EffectPort classes), each
+owned ResourceType's `placementAnchor`, and the target runtime's `d2bdDigest`
+and `brokerDigest`. Host and Guest entries for one OS/architecture MUST use
+identical daemon and broker digests. These fields are generated as
+`placementContractFields` and `runtimeContractFields` in the catalog shape;
+they are not free-form Provider selectors.
 
 Selection is exact digest. No runtime marketplace, download, PATH scan,
 directory discovery, latest, or version-range solving.

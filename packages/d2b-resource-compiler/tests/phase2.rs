@@ -9,21 +9,29 @@ use base64::{Engine as _, engine::general_purpose::STANDARD};
 use d2b_contracts_provider::v3::{
     ArtifactDigest,
     ArtifactDigestSet,
+    ComponentTargetCapability,
     CompatibilityRange,
     ComponentDescriptor,
     ComponentType,
+    ControllerInstanceScope,
+    ControllerTargetKind,
+    EffectPortClass,
     PolicyEvaluation,
     ProviderManifest,
+    ResourceApiBinding,
     RevocationState,
     SignatureState,
+    StandardCapabilityMatrix,
     TrustEvidence,
-    provider::{BinaryRef, ComponentExecution, UpgradeDisposition, UpgradePolicy},
+    provider::{
+        BinaryRef, ComponentExecution, TargetRuntimeArtifacts, UpgradeDisposition, UpgradePolicy,
+    },
 };
 use d2b_contracts_resource::v3::{
     ArtifactId, CanonicalJsonValue, ResourceTypeName, canonical_json_bytes,
     execution_policy::{BoundedToken, ExecutionDomain},
     identity::SchemaFingerprint,
-    resource_schema::SchemaVersion,
+    resource_schema::{PlacementAnchor, SchemaVersion},
 };
 use d2b_core::provider_artifact::{
     AnchoredDir, Argv, Envp, ExecutableFile, LaunchError, LayoutDir, LayoutError, LayoutPath,
@@ -247,12 +255,44 @@ fn manifest(
         false,
     )
     .unwrap()
-    .with_execution(execution);
+    .with_execution(execution)
+    .with_controller_placement(
+        ControllerInstanceScope::PerResourceTarget,
+        [ControllerTargetKind::Host, ControllerTargetKind::Guest],
+    )
+    .unwrap()
+    .with_target_capabilities([
+        ComponentTargetCapability::new(
+            ControllerTargetKind::Host,
+            config_digest.clone(),
+            [EffectPortClass::Storage],
+        )
+        .unwrap(),
+        ComponentTargetCapability::new(
+            ControllerTargetKind::Guest,
+            config_digest.clone(),
+            [EffectPortClass::Storage],
+        )
+        .unwrap(),
+    ])
+    .unwrap();
+    let binding = ResourceApiBinding::new_with_placement(
+        ResourceTypeName::parse("Volume").unwrap(),
+        SchemaVersion::new(1, 0).unwrap(),
+        fingerprint(),
+        SchemaVersion::new(1, 0).unwrap(),
+        fingerprint(),
+        StandardCapabilityMatrix::default(),
+        None,
+        None,
+        PlacementAnchor::ExecutionRef,
+    )
+    .unwrap();
     ProviderManifest::new(
         ArtifactId::parse(artifact_id).unwrap(),
         ArtifactDigestSet {
             package: package_digest,
-            executable: executable_digest,
+            executable: executable_digest.clone(),
             manifest: ArtifactDigest::parse(
                 "sha256:0000000000000000000000000000000000000000000000000000000000000001",
             )
@@ -286,7 +326,7 @@ fn manifest(
             state_schema_version: SchemaVersion::new(1, 0).unwrap(),
         },
         [component],
-        [],
+        [binding],
         [],
         UpgradePolicy {
             drain_before_upgrade: true,
@@ -294,6 +334,21 @@ fn manifest(
             preserves_durable_state: true,
         },
     )
+    .unwrap()
+    .with_target_runtime_artifacts([
+        TargetRuntimeArtifacts::new(
+            ControllerTargetKind::Host,
+            executable_digest.clone(),
+            executable_digest.clone(),
+        )
+        .unwrap(),
+        TargetRuntimeArtifacts::new(
+            ControllerTargetKind::Guest,
+            executable_digest.clone(),
+            executable_digest.clone(),
+        )
+        .unwrap(),
+    ])
     .unwrap()
 }
 

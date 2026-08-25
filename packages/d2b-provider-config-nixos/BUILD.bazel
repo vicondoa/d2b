@@ -1,0 +1,68 @@
+load("@crates//:defs.bzl", "all_crate_deps")
+load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test", "rust_doc_test")
+
+exports_files(["BUILD.bazel", "Cargo.toml"], visibility = ["//visibility:public"])
+
+rust_library(
+    name = "d2b_provider_config_nixos",
+    srcs = glob(["src/**/*.rs"]),
+    compile_data = ["Cargo.toml"],
+    deps = [
+        "//packages/d2b-contracts-resource:d2b_contracts_resource",
+    ] + all_crate_deps(normal = True, cargo_only = True),
+    visibility = ["//visibility:public"],
+)
+
+rust_test(
+    name = "service_contract",
+    srcs = ["tests/service_contract.rs"],
+    compile_data = ["Cargo.toml"],
+    deps = [
+        ":d2b_provider_config_nixos",
+        "//packages/d2b-contracts-resource:d2b_contracts_resource",
+    ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
+)
+
+rust_test(
+    name = "config_lifecycle",
+    srcs = ["tests/config_lifecycle.rs"],
+    compile_data = ["Cargo.toml"],
+    deps = [
+        ":d2b_provider_config_nixos",
+        "//packages/d2b-contracts-resource:d2b_contracts_resource",
+    ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
+)
+
+rust_test(
+    name = "redaction",
+    srcs = ["tests/redaction.rs"],
+    compile_data = ["Cargo.toml"],
+    deps = [
+        ":d2b_provider_config_nixos",
+        "//packages/d2b-contracts-resource:d2b_contracts_resource",
+    ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
+)
+
+rust_doc_test(
+    name = "d2b_provider_config_nixos_doc_test",
+    crate = ":d2b_provider_config_nixos",
+)
+
+filegroup(
+    name = "cargo_workspace_sources",
+    srcs = glob(
+        [
+            "Cargo.lock",
+            "Cargo.toml",
+            "benches/**/*.rs",
+            "build.rs",
+            "examples/**/*.rs",
+            "src/**/*.rs",
+            "tests/**/*.rs",
+        ],
+        allow_empty = True,
+    ),
+    visibility = ["//visibility:public"],
+)
+
+test_suite(name = "all-tests", tests = [":service_contract", ":config_lifecycle", ":redaction"])

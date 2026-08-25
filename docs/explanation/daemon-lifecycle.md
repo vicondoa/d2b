@@ -13,14 +13,13 @@ control plane.
 
 Each VM declared in the public manifest gets its own
 [`VmProcessDag`](../reference/manifest-schema.md) under
-`processes.json`. The headless shape is a linear 5-node DAG:
+`processes.json`. The headless shape is a linear 4-node DAG:
 
 ```text
 host-reconcile
    └─→ store-preflight
          └─→ virtiofsd-ro-store
-               └─→ ch
-                     └─→ guest-control-health
+         └─→ ch
 ```
 
 Roles, from
@@ -38,15 +37,10 @@ Roles, from
   argv emitted by the
   [`runtime-cloud-hypervisor`](../../packages/d2b-provider-runtime-cloud-hypervisor/src/vmm_argv.rs)
   Provider.
-- `guest-control-health` - daemon-side authenticated guest-control
-  Health probe (full Hello + token challenge-response + Health over the
-  guest-control vsock). It is the framework readiness gate on
-  guest-control-capable VMs (`d2b.vms.<vm>.guest.control.enable =
-  true`) and fails **closed**: never ready for an old-generation,
-  unreachable, auth-failed, or timed-out guest. Per-VM sshd/host-keys
-  are retained as a compat surface but never gate readiness: the
-  legacy raw TCP-22 `ssh-ready` / `guest-ssh-readiness` DAG node was
-  removed and is no longer emitted for any VM.
+- `component-session` - the Guest-side `d2bd guest` target agent owns the
+  enrolled parent-Zone ComponentSession. It is not a host DAG node and does
+  not create a host public socket or local Zone store; session evidence and
+  target-local resource status provide readiness.
 
 Optional roles wired by per-VM features:
 
@@ -101,12 +95,10 @@ Supported predicate kinds (per
 - `tcp-port: { host, port }` - TCP `connect()` against
   `host:port`. A generic predicate kind retained for old-generation
   compatibility; the framework no longer emits it as the readiness
-  signal (see `guest-control-health` below).
-- `guest-control-health: { vm }` - daemon-side authenticated
-  guest-control Health probe. Fails **closed**: ready only when the
-  daemon completes the authenticated Hello + token challenge-response +
-  Health exchange over the guest-control vsock. This is the framework
-  readiness gate for guest-control-capable VMs.
+  signal (see `component-session-health` below).
+- `component-session-health: { vm }` - legacy daemon-side component-session Health
+  probe retained only for old bundle decoding; new Nix output does not emit
+  this predicate.
 - `command: [argv...]` - daemon-spawned probe child exits 0.
 - `component-specific: <name>` - escape hatch named by the role's
   emitter; the supervisor delegates the check.
@@ -155,8 +147,8 @@ primary VMM stop/cleanup decision.
 ## Host shutdown and reboot integration
 
 NixOS still declares only the three ADR-0015 root-visible units:
-`d2bd.service`, `d2b-priv-broker.socket`, and
-`d2b-priv-broker.service`. There is no per-VM or extra guest-shutdown
+`d2bd.service`, `d2b-broker.socket`, and
+`d2b-broker.service`. There is no per-VM or extra guest-shutdown
 systemd unit. Instead, `d2bd.service` has an `ExecStop` hook that first
 checks the systemd manager state with absolute systemd helper paths. It runs
 the all-VM shutdown hook only when the system manager is stopping for host

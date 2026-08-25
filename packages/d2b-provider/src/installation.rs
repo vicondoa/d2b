@@ -25,7 +25,11 @@
 //! no type here carries authority. An [`InstalledProvider`] is a decision
 //! that has already been reached, not a capability that can be presented.
 
+use std::collections::BTreeSet;
+
 use d2b_contracts_provider::v3::{
+    ControllerTargetKind,
+    EffectPortClass,
     ProviderManifest,
     ProviderSpec,
 };
@@ -112,6 +116,50 @@ pub struct InstalledProvider {
     provider_ref: ResourceRef,
 }
 
+/// The fixed EffectPort classes available from one Host or Guest target
+/// profile during Provider installation.
+#[derive(Clone, PartialEq, Eq)]
+pub struct TargetInstallProfile {
+    target_kind: ControllerTargetKind,
+    supported_effect_classes: BTreeSet<EffectPortClass>,
+}
+
+impl TargetInstallProfile {
+    /// Construct a target profile from the fixed daemon composition.
+    pub fn new(
+        target_kind: ControllerTargetKind,
+        supported_effect_classes: impl IntoIterator<Item = EffectPortClass>,
+    ) -> Self {
+        Self {
+            target_kind,
+            supported_effect_classes: supported_effect_classes.into_iter().collect(),
+        }
+    }
+
+    /// Return the target kind.
+    pub const fn target_kind(&self) -> ControllerTargetKind {
+        self.target_kind
+    }
+
+    /// Borrow the profile's supported EffectPort classes.
+    pub const fn supported_effect_classes(&self) -> &BTreeSet<EffectPortClass> {
+        &self.supported_effect_classes
+    }
+}
+
+impl core::fmt::Debug for TargetInstallProfile {
+    fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        formatter
+            .debug_struct("TargetInstallProfile")
+            .field("target_kind", &self.target_kind)
+            .field(
+                "effect_class_count",
+                &self.supported_effect_classes.len(),
+            )
+            .finish_non_exhaustive()
+    }
+}
+
 impl InstalledProvider {
     /// The admitted `Provider/<name>` reference.
     pub const fn provider_ref(&self) -> &ResourceRef {
@@ -142,9 +190,13 @@ pub fn admit_installation(
     readiness: ProviderReadiness,
 ) -> Result<InstalledProvider, RegistryBuildError> {
     descriptor.validate()?;
+    manifest
+        .validate_installation_contract()
+        .map_err(|_| RegistryBuildError::ArtifactNotAdmissible)?;
     if spec.artifact_id() != manifest.artifact_id() {
         return Err(RegistryBuildError::ArtifactSelectionMismatch);
     }
+
     manifest
         .admit(
             required_api.api_major(),
@@ -161,6 +213,25 @@ pub fn admit_installation(
     Ok(InstalledProvider {
         provider_ref: descriptor.provider_ref().clone(),
     })
+}
+
+/// Admit a Provider installation against one fixed target profile.
+pub fn admit_installation_for_target(
+    spec: &ProviderSpec,
+    manifest: &ProviderManifest,
+    descriptor: &ProviderDescriptor,
+    required_api: &RequiredProviderApi,
+    readiness: ProviderReadiness,
+    profile: &TargetInstallProfile,
+) -> Result<InstalledProvider, RegistryBuildError> {
+    let installed = admit_installation(spec, manifest, descriptor, required_api, readiness)?;
+    manifest
+        .validate_target_effects(
+            profile.target_kind(),
+            profile.supported_effect_classes(),
+        )
+        .map_err(|_| RegistryBuildError::ArtifactNotAdmissible)?;
+    Ok(installed)
 }
 
 /// Whether every method the registry descriptor publishes appears in the
@@ -188,14 +259,21 @@ mod tests {
     use d2b_contracts_provider::v3::{
         ArtifactDigest,
         ArtifactDigestSet,
+        BinaryRef,
         ComponentDescriptor,
+        ComponentExecution,
+        ComponentTargetCapability,
         ComponentType,
+        ControllerInstanceScope,
+        ControllerTargetKind,
+        EffectPortClass,
         PolicyEvaluation,
         ResourceApiBinding,
         RevocationState,
         SignatureState,
         StandardCapabilityMatrix,
         TrustEvidence,
+        TargetRuntimeArtifacts,
         UpgradeDisposition,
         UpgradePolicy,
     };
@@ -205,7 +283,7 @@ mod tests {
         ConfigurationGeneration,
         ResourceGeneration,
         ResourceTypeName,
-        resource_schema::SchemaVersion,
+        resource_schema::{PlacementAnchor, SchemaVersion},
     };
     use d2b_contracts_resource::v3::identity::ServiceName;
     use d2b_contracts_zone_session::v3::zone_routing::ZonePath;
@@ -252,8 +330,31 @@ mod tests {
             [],
             false,
         )
+        .unwrap()
+        .with_execution(ComponentExecution::Launchable {
+            binary_ref: BinaryRef::parse("volume-controller").unwrap(),
+        })
+        .with_controller_placement(
+            ControllerInstanceScope::PerResourceTarget,
+            [ControllerTargetKind::Host, ControllerTargetKind::Guest],
+        )
+        .unwrap()
+        .with_target_capabilities([
+            ComponentTargetCapability::new(
+                ControllerTargetKind::Host,
+                ArtifactDigest::parse(DIGEST).unwrap(),
+                [EffectPortClass::Storage],
+            )
+            .unwrap(),
+            ComponentTargetCapability::new(
+                ControllerTargetKind::Guest,
+                ArtifactDigest::parse(DIGEST).unwrap(),
+                [EffectPortClass::Storage],
+            )
+            .unwrap(),
+        ])
         .unwrap();
-        let binding = ResourceApiBinding::new(
+        let binding = ResourceApiBinding::new_with_placement(
             ResourceTypeName::parse("Volume").unwrap(),
             SchemaVersion::new(1, 0).unwrap(),
             fingerprint("2"),
@@ -262,6 +363,7 @@ mod tests {
             StandardCapabilityMatrix::default(),
             None,
             None,
+            PlacementAnchor::ExecutionRef,
         )
         .unwrap();
         let digest = ArtifactDigest::parse(DIGEST).unwrap();
@@ -273,7 +375,7 @@ mod tests {
                 manifest: digest.clone(),
                 config: digest.clone(),
                 schema: digest.clone(),
-                service: digest,
+                service: digest.clone(),
             },
             trust,
             d2b_contracts_provider::v3::provider::CompatibilityRange {
@@ -291,6 +393,21 @@ mod tests {
                 preserves_durable_state: true,
             },
         )
+        .unwrap()
+        .with_target_runtime_artifacts([
+            TargetRuntimeArtifacts::new(
+                ControllerTargetKind::Host,
+                digest.clone(),
+                digest.clone(),
+            )
+            .unwrap(),
+            TargetRuntimeArtifacts::new(
+                ControllerTargetKind::Guest,
+                digest.clone(),
+                digest.clone(),
+            )
+            .unwrap(),
+        ])
         .unwrap()
     }
 
@@ -336,6 +453,40 @@ mod tests {
             &ResourceRef::parse("Provider/volume-local").unwrap()
         );
         assert_eq!(format!("{installed:?}"), "InstalledProvider(<redacted>)");
+    }
+
+    #[test]
+    fn target_profile_must_support_every_signed_effect_class() {
+        let profile = TargetInstallProfile::new(
+            ControllerTargetKind::Host,
+            [EffectPortClass::Runtime],
+        );
+        assert_eq!(
+            admit_installation_for_target(
+                &spec("provider-volume-local"),
+                &manifest(trusted()),
+                &descriptor(&["assess-update"]),
+                &required(),
+                ProviderReadiness::Ready,
+                &profile,
+            )
+            .unwrap_err(),
+            RegistryBuildError::ArtifactNotAdmissible
+        );
+
+        let profile = TargetInstallProfile::new(
+            ControllerTargetKind::Host,
+            [EffectPortClass::Storage],
+        );
+        assert!(admit_installation_for_target(
+            &spec("provider-volume-local"),
+            &manifest(trusted()),
+            &descriptor(&["assess-update"]),
+            &required(),
+            ProviderReadiness::Ready,
+            &profile,
+        )
+        .is_ok());
     }
 
     #[test]

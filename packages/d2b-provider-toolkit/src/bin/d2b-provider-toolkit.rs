@@ -59,6 +59,8 @@ fn emit_command(args: &mut impl Iterator<Item = std::ffi::OsString>) -> Result<(
         .map_err(|_| "failed to read the manifest from stdin".to_owned())?;
     let manifest = serde_json::from_slice::<ProviderManifest>(&input)
         .map_err(|_| "failed to parse the Provider manifest from stdin".to_owned())?;
+    manifest::validate_for_installation(&manifest)
+        .map_err(|_| "Provider manifest failed placement admission".to_owned())?;
     let bytes = manifest::emit_canonical(&manifest);
     write_output(Path::new(&output), &bytes)
 }

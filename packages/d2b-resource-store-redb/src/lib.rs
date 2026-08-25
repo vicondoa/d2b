@@ -31,6 +31,7 @@ use d2b_contracts_resource::v3::{
     canonical_digest, identity::STANDARD_RESOURCE_TYPES,
 };
 use d2b_resource_store::mutation_seal::{MutationSealAcceptor, SealedMutation};
+use d2b_resource_store::MutationSealBody;
 use d2b_resource_store::{
     PolicySnapshot, StoreCommitResult, StoreError, StoreGetRequest, StoreInspectSchemaRequest,
     StoreListRequest, StoreListResult, StoreResolveRequest, StoreResolvedIdentity,
@@ -1204,6 +1205,38 @@ impl RedbResourceStore {
     ) -> Result<StoreCommitResult, StoreError> {
         let opened = self.seal.open(sealed)?;
         self.writer.commit(opened).await
+    }
+
+    /// Commit evidence after an owner has applied additional validation to
+    /// the opened mutation body.
+    pub async fn commit_verified_with<F>(
+        &self,
+        sealed: SealedMutation,
+        validate: F,
+    ) -> Result<StoreCommitResult, StoreError>
+    where
+        F: FnOnce(&MutationSealBody) -> Result<(), StoreError>,
+    {
+        let opened = self.seal.open(sealed)?;
+        validate(opened.body())?;
+        self.writer.commit(opened).await
+    }
+
+    /// Commit evidence with a final serialized-writer fence.
+    pub async fn commit_verified_with_fence<F>(
+        &self,
+        sealed: SealedMutation,
+        validate: F,
+        commit_fence: impl Fn() -> Result<(), StoreError> + Send + Sync + 'static,
+    ) -> Result<StoreCommitResult, StoreError>
+    where
+        F: FnOnce(&MutationSealBody) -> Result<(), StoreError>,
+    {
+        let opened = self.seal.open(sealed)?;
+        validate(opened.body())?;
+        self.writer
+            .commit_with_fence(opened, Some(Arc::new(commit_fence)))
+            .await
     }
 }
 

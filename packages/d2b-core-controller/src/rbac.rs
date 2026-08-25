@@ -5,12 +5,7 @@ use std::{
     sync::{Mutex, MutexGuard},
 };
 
-use d2b_contracts_resource::v3::{
-    ConfigurationGeneration,
-    ResourceRef,
-    ResourceUid,
-    ZoneRevision,
-};
+use d2b_contracts_resource::v3::{ConfigurationGeneration, ResourceRef, ResourceUid, ZoneRevision};
 
 /// Policy revisions that make one positive decision valid.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]

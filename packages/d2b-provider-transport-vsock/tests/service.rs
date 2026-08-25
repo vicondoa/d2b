@@ -4,7 +4,7 @@ use d2b_contracts_resource::v3::{
     ZoneId,
 };
 use d2b_provider_transport_vsock::{
-    CLOSE_GRACE_MS, GuestControlKey, GuestIdentity, MAX_ACTIVE_TRANSPORTS, NamedStreamError,
+    CLOSE_GRACE_MS, SessionKey, GuestIdentity, MAX_ACTIVE_TRANSPORTS, NamedStreamError,
     NamedStreamId, NamedStreamPort, OpaqueBindingId, OpaqueEndpointId, OpenTransportRequest,
     PeerCid, ReadySession, ServiceError, SessionAuthority, SessionProof, TransportPhase,
     TransportRole, VsockEffectError, VsockEffectPort, VsockTransportService,
@@ -114,7 +114,7 @@ fn identity() -> GuestIdentity {
 
 fn session() -> ReadySession {
     let identity = identity();
-    let key = GuestControlKey::from_core([1; 32]);
+    let key = SessionKey::from_core([1; 32]);
     let mut authority = SessionAuthority::new(identity.clone(), key.clone(), 1);
     authority
         .authenticate(

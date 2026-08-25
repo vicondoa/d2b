@@ -15,7 +15,8 @@ use d2b_resource_store::mutation_seal::{
 use d2b_resource_store::{
     AdmittedAuthorization, AdmittedAuthorizationTarget, AdmittedVerb, ExpectedRevision,
     PolicySnapshot, PreparedStoreMutation, ResourceMutationKind, StoreGetRequest, StoreListRequest,
-    StoreMutation, StoreOperationContext, StoreProjection, StoreSlot, StoreWatchRequest,
+    StoreError, StoreErrorKind, StoreMutation, StoreOperationContext, StoreProjection, StoreSlot,
+    StoreWatchRequest,
 };
 use redb::{Database, Durability, ReadableDatabase, ReadableTable, ReadableTableMetadata};
 use rustix::io::{FdFlags, fcntl_getfd, fcntl_setfd};
@@ -226,6 +227,7 @@ fn create_seal_body_for_type(
                 remove_finalizers: Vec::new(),
                 wait_for_reconcile: false,
                 reconcile_deadline_ms: None,
+                assignment: None,
             },
             None,
             Some(payload_digest),
@@ -434,6 +436,7 @@ fn seed_host(directory: &tempfile::TempDir, name: &str) {
         owner_uid: None,
         controller_binding_id: "Provider/system-core".to_owned(),
         payload_digest: envelope.digest().unwrap(),
+        assignment: None,
     };
     let value = encode(ValueKind::ResourceRecord, &record).unwrap();
     let type_value = encode(
@@ -523,6 +526,7 @@ fn seed_two_hosts(directory: &tempfile::TempDir) {
         owner_uid: None,
         controller_binding_id: "Provider/system-core".to_owned(),
         payload_digest: envelope.digest().unwrap(),
+        assignment: None,
     };
     let write = database.begin_write().unwrap();
     let value = crate::transaction::encode(ValueKind::ResourceRecord, &record).unwrap();
@@ -774,6 +778,59 @@ fn resource_mutation_audit_class_is_not_privileged_by_default() {
         super::audit_write_class(&role),
         d2b_audit::AuditWriteClass::Privileged
     );
+}
+
+#[tokio::test]
+async fn serialized_commit_fence_rejects_revoked_mutation() {
+    let (_directory, file, marker) = provisioned_store();
+    let store_identity = identity();
+    let (issuer, acceptor) = mutation_seal_pair(store_identity.seal_identity());
+    let store = RedbResourceStore::provision_owned(
+        file,
+        marker,
+        store_identity,
+        acceptor,
+    )
+    .await
+    .unwrap();
+    let canonical = create_body("revoked");
+    let payload_digest = canonical_digest(RESOURCE_ENVELOPE_DOMAIN_TAG, &canonical);
+    let error = store
+        .commit_verified_with_fence(
+            issuer.seal(create_seal_body(
+                "revoked-commit",
+                "revoked",
+                payload_digest,
+            )),
+            |_| Ok(()),
+            || {
+                Err(StoreError::new(
+                    StoreErrorKind::ResourcePlaneUnavailable,
+                    None,
+                    None,
+                    d2b_contracts_resource::v3::RetryClass::AfterDelay,
+                    "session-revoked",
+                ))
+            },
+        )
+        .await
+        .expect_err("revoked mutation must not reach the writer");
+    assert_eq!(error.reason_code(), "session-revoked");
+    assert_eq!(
+        store
+            .get(StoreGetRequest {
+                operation: operation("revoked-read"),
+                zone: ZoneId::parse("work").unwrap(),
+                target: ResourceRef::parse("Host/revoked").unwrap(),
+                expected_uid: None,
+                projection: StoreProjection::Full,
+            })
+            .await
+            .expect_err("revoked resource must not be committed")
+            .reason_code(),
+        "resource-not-found"
+    );
+    store.shutdown().await.unwrap();
 }
 
 #[tokio::test]
@@ -2376,6 +2433,7 @@ fn prepare_production_rss_fixture() -> tempfile::TempDir {
                 owner_uid: None,
                 controller_binding_id: "Provider/system-core".to_owned(),
                 payload_digest,
+                assignment: None,
             };
             let value = crate::transaction::encode(ValueKind::ResourceRecord, &record)
                 .expect("production RSS fixture resource encoding");

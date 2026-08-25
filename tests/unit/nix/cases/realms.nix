@@ -589,7 +589,6 @@ let
   };
   lifecycleCfg = (mkEval [ lifecycleBase ]).config;
   lifecycleGroups = user: lifecycleCfg.users.users.${user}.extraGroups or [ ];
-  runnerSource = builtins.readFile (flakeRoot + "/packages/d2b-cutover/src/runner.rs");
 in
 let
   allCases = {
@@ -723,8 +722,8 @@ let
             daemonPrincipalIsShared = false;
           };
           broker = {
-            socketUnitName = "${homeUnitPrefix}-priv-broker.socket";
-            serviceUnitName = "${homeUnitPrefix}-priv-broker.service";
+            socketUnitName = "${homeUnitPrefix}-broker.socket";
+            serviceUnitName = "${homeUnitPrefix}-broker.service";
             materializedSocket = true;
             materializedService = true;
           };
@@ -987,9 +986,9 @@ let
         units = {
           homeDaemon = {
             wantedBy = homeDaemonUnit.wantedBy;
-            wantsRootBrokerSocket = builtins.elem "d2b-priv-broker.socket" homeDaemonUnit.wants;
-            afterRootBrokerSocket = builtins.elem "d2b-priv-broker.socket" homeDaemonUnit.after;
-            afterRootBrokerService = builtins.elem "d2b-priv-broker.service" homeDaemonUnit.after;
+            wantsRootBrokerSocket = builtins.elem "d2b-broker.socket" homeDaemonUnit.wants;
+            afterRootBrokerSocket = builtins.elem "d2b-broker.socket" homeDaemonUnit.after;
+            afterRootBrokerService = builtins.elem "d2b-broker.service" homeDaemonUnit.after;
             wantsBrokerSocket = builtins.elem home.broker.socketUnitName homeDaemonUnit.wants;
             afterBrokerSocket = builtins.elem home.broker.socketUnitName homeDaemonUnit.after;
             afterBrokerService = builtins.elem home.broker.serviceUnitName homeDaemonUnit.after;
@@ -1188,8 +1187,8 @@ let
           user = "root";
           group = realms.byPath.home.controller.broker.group;
           socketPath = "/run/d2b/realms/home/broker.sock";
-          socketUnitName = "${homeUnitPrefix}-priv-broker.socket";
-          serviceUnitName = "${homeUnitPrefix}-priv-broker.service";
+          socketUnitName = "${homeUnitPrefix}-broker.socket";
+          serviceUnitName = "${homeUnitPrefix}-broker.service";
           auditDir = "/var/lib/d2b/audit/realms/home";
           materializedSocket = true;
           materializedService = true;
@@ -1215,7 +1214,7 @@ let
                 stateDir = "/var/lib/d2b/vms/homebox";
                 runDir = "/run/d2b/vms/homebox";
                 storeView = "/var/lib/d2b/vms/homebox/store-view";
-                guestControlDir = "/run/d2b/vms/homebox/guest-control";
+                componentSessionDir = "/run/d2b/vms/homebox/component-session";
               };
               runtimeKind = "nixos";
               providerId = "local-cloud-hypervisor";
@@ -1228,7 +1227,7 @@ let
                 "store-virtiofs-preflight"
                 "virtiofsd"
                 "cloud-hypervisor"
-                "guest-control-health"
+                "component-session"
                 "swtpm"
                 "gpu"
                 "audio"
@@ -1448,8 +1447,8 @@ let
         unitOrdering = {
           childAfterParent = builtins.elem home.daemon.serviceName devDaemonUnit.after;
           parentDoesNotAfterChild = !(builtins.elem dev.daemon.serviceName homeDaemonUnit.after);
-          parentAfterRootBrokerSocket = builtins.elem "d2b-priv-broker.socket" homeDaemonUnit.after;
-          parentAfterRootBrokerService = builtins.elem "d2b-priv-broker.service" homeDaemonUnit.after;
+          parentAfterRootBrokerSocket = builtins.elem "d2b-broker.socket" homeDaemonUnit.after;
+          parentAfterRootBrokerService = builtins.elem "d2b-broker.service" homeDaemonUnit.after;
         };
         socketAccess = {
           inherit (homeBrokerSocket.socketConfig) ListenSequentialPacket SocketGroup SocketMode;
@@ -2037,18 +2036,6 @@ let
       adminCount = 1;
       launcherCount = 1;
       overlapCount = 1;
-    };
-  };
-  "realms/host-local-runner-socket-contract-stays-closed" = {
-    expr = {
-      traversalMode = lib.hasInfix "0o710" runnerSource;
-      socketMode = lib.hasInfix "0o660" runnerSource;
-      peerCredentials = lib.hasInfix "PeerCredentials" runnerSource;
-    };
-    expected = {
-      traversalMode = true;
-      socketMode = true;
-      peerCredentials = true;
     };
   };
 };

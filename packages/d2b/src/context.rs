@@ -15,22 +15,23 @@ use std::{
     time::{Duration, Instant},
 };
 
-use d2b_contracts_resource::v3::{
-    CanonicalJsonObject,
-    ResourceErrorKind,
-    ResourceRef,
-    ResourceTypeName,
-    RetryClass,
-    ZoneId,
+use d2b_contracts_control::public_wire::{
+    ExecReadOutputResult, ExecStream, ExecWriteStdinResult, NamedProcessStreamErrorKind,
+    NamedProcessStreamRequest, NamedProcessStreamRequestFrame, NamedProcessStreamResponse,
+    NamedProcessStreamResponseFrame,
 };
 use d2b_contracts_resource::v3::identity::STANDARD_RESOURCE_TYPES;
+use d2b_contracts_resource::v3::{
+    CanonicalJsonObject, ResourceErrorKind, ResourceRef, ResourceTypeName, RetryClass, ZoneId,
+};
 use d2b_resource_client::{
-    CallOptions, CancellationToken, ClientError, ConnectedSession, ConnectedZoneSession,
-    MetadataInput, NamedStreamTransport, ProcessAttachClient, ProcessAttachOpenRequest,
-    ProcessAttachOptions, ProcessAttachTarget, ResourceCallOptions, ResourceVerb, RetryPolicy,
-    RouteRecord, RouteTable, ServiceOwner, SystemClock, TargetInput, TerminalSize, TransportKind,
-    TransportSelection, WallClock, ZoneClient, ZonePeerIdentity, ZoneServiceKind,
-    ZoneSessionConnector, ZoneSessionPin, ZoneSocketConnector, resource_verb_is_mutating,
+    AssignmentIdentity, CallOptions, CancellationToken, ClientError, ConnectedSession,
+    ConnectedZoneSession, MetadataInput, NamedStreamTransport, ProcessAttachClient,
+    ProcessAttachOpenRequest, ProcessAttachOptions, ProcessAttachTarget, ResourceCallOptions,
+    ResourceVerb, RetryPolicy, RouteRecord, RouteTable, ScopedResourceMutation, ServiceOwner,
+    SystemClock, TargetInput, TerminalSize, TransportKind, TransportSelection, WallClock,
+    ZoneClient, ZonePeerIdentity, ZoneServiceKind, ZoneSessionConnector, ZoneSessionPin,
+    ZoneSocketConnector, resource_verb_is_mutating,
 };
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
@@ -1136,6 +1137,7 @@ impl CliZoneConnector {
                 | ZoneServiceKind::Zone
                 | ZoneServiceKind::Audit
                 | ZoneServiceKind::Support
+                | ZoneServiceKind::ConfigNixos
         ) || target.service() != service
             || target.transport() != TransportKind::LocalUnix
             || target.owner().zone() != &self.zone_path
@@ -1251,20 +1253,26 @@ impl std::fmt::Debug for CliConnectedSession {
 /// close messages on the admitted named stream.
 struct CliAttachStream {
     closed: AtomicBool,
+    teardown_sent: AtomicBool,
     eof: AtomicBool,
     socket: Option<Arc<Mutex<SeqpacketUnixSocket>>>,
     stdin_offset: Mutex<u64>,
     stdout_offset: AtomicU64,
+    next_request_id: AtomicU64,
+    control_sequence: AtomicU64,
 }
 
 impl CliAttachStream {
     fn new(socket: Option<Arc<Mutex<SeqpacketUnixSocket>>>) -> Self {
         Self {
             closed: AtomicBool::new(false),
+            teardown_sent: AtomicBool::new(false),
             eof: AtomicBool::new(false),
             socket,
             stdin_offset: Mutex::new(0),
             stdout_offset: AtomicU64::new(0),
+            next_request_id: AtomicU64::new(1),
+            control_sequence: AtomicU64::new(1),
         }
     }
 }
@@ -1276,12 +1284,15 @@ impl NamedStreamTransport for CliAttachStream {
 
     fn resize(&self, size: TerminalSize) -> impl Future<Output = Result<(), ClientError>> + Send {
         ready(
-            self.stream_round_trip(json!({
-                "type": "namedStreamResize",
-                "rows": size.rows(),
-                "cols": size.cols(),
-            }))
-            .map(|_| ()),
+            self.stream_round_trip(NamedProcessStreamRequest::Resize {
+                control_seq: self.control_sequence.fetch_add(1, Ordering::AcqRel),
+                rows: u32::from(size.rows()),
+                cols: u32::from(size.cols()),
+            })
+            .and_then(|response| match response {
+                NamedProcessStreamResponse::Delivered(_) => Ok(()),
+                _ => Err(ClientError::ContractViolation),
+            }),
         )
     }
 
@@ -1290,30 +1301,36 @@ impl NamedStreamTransport for CliAttachStream {
             return ready(Err(ClientError::Cancelled));
         }
         let result = self
-            .stream_round_trip(json!({
-                "type": "namedStreamReceive",
-                "offset": self.stdout_offset.load(Ordering::Acquire),
-                "maxLen": d2b_contracts_control::public_wire::EXEC_MAX_CHUNK_BYTES,
-            }))
-            .and_then(|value| {
-                let data = value
-                    .get("dataBase64")
-                    .and_then(Value::as_str)
-                    .ok_or(ClientError::ContractViolation)
-                    .and_then(|data| {
-                        d2b_core::base64_codec::decode(data)
-                            .map_err(|_| ClientError::ContractViolation)
-                    })?;
-                if let Some(offset) = value.get("nextOffset").and_then(Value::as_u64) {
-                    self.stdout_offset.store(offset, Ordering::Release);
-                }
-                if value.get("eof").and_then(Value::as_bool) == Some(true) {
-                    self.eof.store(true, Ordering::Release);
-                    if data.is_empty() {
-                        return Err(ClientError::Cancelled);
+            .stream_round_trip(NamedProcessStreamRequest::Read {
+                stream: ExecStream::Stdout,
+                offset: self.stdout_offset.load(Ordering::Acquire),
+                max_len: d2b_contracts_control::public_wire::EXEC_MAX_CHUNK_BYTES,
+                wait: true,
+                timeout_ms: 50,
+            })
+            .and_then(|response| match response {
+                NamedProcessStreamResponse::Output(ExecReadOutputResult {
+                    data_base64,
+                    next_offset,
+                    eof,
+                    ..
+                }) => {
+                    let data = d2b_core::base64_codec::decode(&data_base64)
+                        .map_err(|_| ClientError::ContractViolation)?;
+                    self.stdout_offset.store(next_offset, Ordering::Release);
+                    if eof {
+                        self.eof.store(true, Ordering::Release);
+                        if data.is_empty() {
+                            return Err(ClientError::Cancelled);
+                        }
                     }
+                    Ok(data)
                 }
-                Ok(data)
+                NamedProcessStreamResponse::Terminal(_) => {
+                    self.eof.store(true, Ordering::Release);
+                    Err(ClientError::Cancelled)
+                }
+                _ => Err(ClientError::ContractViolation),
             });
         ready(result)
     }
@@ -1321,23 +1338,45 @@ impl NamedStreamTransport for CliAttachStream {
     fn close(&self) -> impl Future<Output = Result<(), ClientError>> + Send {
         self.closed.store(true, Ordering::Release);
         let result = if self.socket.is_some() {
-            self.stream_round_trip(json!({"type": "namedStreamClose"}))
-                .map(|_| ())
+            self.stream_round_trip(NamedProcessStreamRequest::Close)
+                .and_then(|response| match response {
+                    NamedProcessStreamResponse::Closed(_) => Ok(()),
+                    _ => Err(ClientError::ContractViolation),
+                })
         } else {
             Ok(())
         };
+        if result.is_ok() {
+            self.teardown_sent.store(true, Ordering::Release);
+        }
         ready(result)
     }
 
     fn cancel(&self) -> impl Future<Output = Result<(), ClientError>> + Send {
         self.closed.store(true, Ordering::Release);
         let result = if self.socket.is_some() {
-            self.stream_round_trip(json!({"type": "namedStreamCancel"}))
-                .map(|_| ())
+            self.stream_round_trip(NamedProcessStreamRequest::Cancel)
+                .and_then(|response| match response {
+                    NamedProcessStreamResponse::Closed(_)
+                    | NamedProcessStreamResponse::Delivered(_) => Ok(()),
+                    _ => Err(ClientError::ContractViolation),
+                })
         } else {
             Ok(())
         };
+        if result.is_ok() {
+            self.teardown_sent.store(true, Ordering::Release);
+        }
         ready(result)
+    }
+}
+
+impl Drop for CliAttachStream {
+    fn drop(&mut self) {
+        if self.teardown_sent.swap(true, Ordering::AcqRel) || self.socket.is_none() {
+            return;
+        }
+        let _ = self.stream_round_trip(NamedProcessStreamRequest::Cancel);
     }
 }
 
@@ -1350,30 +1389,32 @@ impl CliAttachStream {
         let deadline = Instant::now() + Duration::from_secs(5);
         let mut consumed = 0;
         while consumed < bytes.len() {
-            let value = self.stream_round_trip(json!({
-                "type": "namedStreamSend",
-                "offset": *offset,
-                "dataBase64": d2b_core::base64_codec::encode(&bytes[consumed..]),
-            }))?;
-            let accepted = value
-                .get("acceptedLen")
-                .and_then(Value::as_u64)
-                .and_then(|value| usize::try_from(value).ok())
-                .ok_or(ClientError::ContractViolation)?;
-            let next_offset = value
-                .get("nextOffset")
-                .and_then(Value::as_u64)
-                .ok_or(ClientError::ContractViolation)?;
+            let response = self.stream_round_trip(NamedProcessStreamRequest::Stdin {
+                offset: *offset,
+                chunk_base64: d2b_core::base64_codec::encode(&bytes[consumed..]),
+                eof: false,
+            })?;
+            let NamedProcessStreamResponse::Stdin(ExecWriteStdinResult {
+                accepted_len,
+                next_offset,
+                backpressured,
+                stdin_closed,
+            }) = response
+            else {
+                return Err(ClientError::ContractViolation);
+            };
+            let accepted =
+                usize::try_from(accepted_len).map_err(|_| ClientError::ContractViolation)?;
             if accepted > bytes.len() - consumed
                 || next_offset != (*offset).saturating_add(accepted as u64)
             {
                 return Err(ClientError::ContractViolation);
             }
             if accepted == 0 {
-                if value.get("stdinClosed").and_then(Value::as_bool) == Some(true) {
+                if stdin_closed {
                     return Err(ClientError::SessionLost);
                 }
-                if value.get("backpressured").and_then(Value::as_bool) != Some(true) {
+                if !backpressured {
                     return Err(ClientError::ContractViolation);
                 }
                 if Instant::now() >= deadline {
@@ -1391,21 +1432,58 @@ impl CliAttachStream {
         Ok(())
     }
 
-    fn stream_round_trip(&self, request: Value) -> Result<Value, ClientError> {
+    fn stream_round_trip(
+        &self,
+        request: NamedProcessStreamRequest,
+    ) -> Result<NamedProcessStreamResponse, ClientError> {
         let socket = self.socket.as_ref().ok_or(ClientError::ContractViolation)?;
-        let bytes = serde_json::to_vec(&request).map_err(|_| ClientError::ContractViolation)?;
+        let request_id = self.next_request_id.fetch_add(1, Ordering::AcqRel);
+        if request_id == 0 {
+            return Err(ClientError::ContractViolation);
+        }
+        let frame = NamedProcessStreamRequestFrame::new(request_id, request);
+        let bytes = serde_json::to_vec(&frame).map_err(|_| ClientError::ContractViolation)?;
         let mut socket = socket.lock().map_err(|_| ClientError::SessionLost)?;
         socket
             .send_frame(&bytes)
             .map_err(|_| ClientError::TransportFailed)?;
         let response = socket.recv_frame().map_err(|_| ClientError::SessionLost)?;
-        let value: Value =
+        let frame: NamedProcessStreamResponseFrame =
             serde_json::from_slice(&response).map_err(|_| ClientError::ContractViolation)?;
-        if value.get("type").and_then(Value::as_str) == Some("error") {
-            return Err(remote_client_error(&value));
+        if frame.request_id != request_id {
+            return Err(ClientError::ContractViolation);
         }
-        Ok(value)
+        if let NamedProcessStreamResponse::Error(error) = frame.response {
+            return Err(named_stream_client_error(error.kind));
+        }
+        Ok(frame.response)
     }
+}
+
+fn named_stream_client_error(kind: NamedProcessStreamErrorKind) -> ClientError {
+    let (kind, retry) = match kind {
+        NamedProcessStreamErrorKind::Authorization => (
+            ResourceErrorKind::AuthorizationDenied,
+            RetryClass::Reauthorize,
+        ),
+        NamedProcessStreamErrorKind::StaleSession | NamedProcessStreamErrorKind::NotFound => {
+            (ResourceErrorKind::ResourceNotFound, RetryClass::Never)
+        }
+        NamedProcessStreamErrorKind::Backpressure => {
+            (ResourceErrorKind::Backpressure, RetryClass::AfterDelay)
+        }
+        NamedProcessStreamErrorKind::Protocol => {
+            (ResourceErrorKind::ResourceSchemaInvalid, RetryClass::Never)
+        }
+        NamedProcessStreamErrorKind::Timeout => {
+            (ResourceErrorKind::Timeout, RetryClass::AfterDelay)
+        }
+        NamedProcessStreamErrorKind::Disconnected => (
+            ResourceErrorKind::ResourceProviderUnavailable,
+            RetryClass::AfterDelay,
+        ),
+    };
+    ClientError::Remote { kind, retry }
 }
 
 impl ConnectedZoneSession for CliConnectedSession {
@@ -1427,6 +1505,18 @@ impl ConnectedZoneSession for CliConnectedSession {
     ) -> impl Future<Output = Result<CanonicalJsonObject, ClientError>> + Send {
         let result = self.invoke(target, payload, relative_timeout_nanos);
         ready(result)
+    }
+
+    fn call_scoped_commit_batch(
+        &self,
+        _assignment: AssignmentIdentity,
+        _mutations: Vec<ScopedResourceMutation>,
+        _payload: CanonicalJsonObject,
+        _relative_timeout_nanos: u64,
+    ) -> impl Future<Output = Result<CanonicalJsonObject, ClientError>> + Send {
+        // The CLI public socket is an operator route, not a controller
+        // ComponentSession. Never downgrade a scoped write to plain CommitBatch.
+        ready(Err(ClientError::ContractViolation))
     }
 }
 
@@ -1623,6 +1713,16 @@ fn validate_operation(
         | (ZoneServiceKind::Support, "SupportService/GenerateBundle", Some("support-bundle")) => {
             Ok(operation.to_owned())
         }
+        (
+            ZoneServiceKind::ConfigNixos,
+            "ConfigNixosService/ReadGuestConfig"
+                | "ConfigNixosService/Stage"
+                | "ConfigNixosService/Diff"
+                | "ConfigNixosService/Approve"
+                | "ConfigNixosService/Reject"
+                | "ConfigNixosService/Status",
+            Some("invoke"),
+        ) => Ok(operation.to_owned()),
         (ZoneServiceKind::Zone, "Attach" | "Create", Some("attach")) => Ok(operation.to_owned()),
         (ZoneServiceKind::Audit | ZoneServiceKind::Support, ..) => Err(ClientError::InvalidMethod),
         (_, _, Some(_)) => Err(ClientError::InvalidMethod),
@@ -1658,17 +1758,6 @@ fn resource_verb(method: &str, mutating: bool) -> ResourceVerb {
         ResourceVerb::Create
     } else {
         canonical_verb(method)
-    }
-}
-
-#[cfg(test)]
-mod resource_verb_tests {
-    use super::*;
-
-    #[test]
-    fn host_cutover_mutations_use_a_mutating_resource_verb() {
-        assert_eq!(resource_verb("HostCutover", true), ResourceVerb::Create);
-        assert_eq!(resource_verb("HostCutover", false), ResourceVerb::Get);
     }
 }
 
@@ -2346,6 +2435,29 @@ mod tests {
     }
 
     #[test]
+    fn cli_attach_stream_drop_sends_a_typed_cancel_frame() {
+        let (client, server) = socketpair(
+            AddressFamily::Unix,
+            SockType::SeqPacket,
+            None,
+            SockFlag::SOCK_CLOEXEC,
+        )
+        .unwrap();
+        let server = std::thread::spawn(move || {
+            let mut server = SeqpacketUnixSocket::from_owned_fd(server);
+            let request: NamedProcessStreamRequestFrame =
+                serde_json::from_slice(&server.recv_frame().unwrap()).unwrap();
+            assert_eq!(request.request_id, 1);
+            assert!(matches!(request.request, NamedProcessStreamRequest::Cancel));
+        });
+        let stream = CliAttachStream::new(Some(Arc::new(Mutex::new(
+            SeqpacketUnixSocket::from_owned_fd(client),
+        ))));
+        drop(stream);
+        server.join().unwrap();
+    }
+
+    #[test]
     fn cli_attach_stream_retries_partial_stdin_writes() {
         let (client, server) = socketpair(
             AddressFamily::Unix,
@@ -2356,35 +2468,65 @@ mod tests {
         .unwrap();
         let server = std::thread::spawn(move || {
             let mut server = SeqpacketUnixSocket::from_owned_fd(server);
-            let first: Value = serde_json::from_slice(&server.recv_frame().unwrap()).unwrap();
-            assert_eq!(first["type"], "namedStreamSend");
-            assert_eq!(first["offset"], 0);
+            let first: NamedProcessStreamRequestFrame =
+                serde_json::from_slice(&server.recv_frame().unwrap()).unwrap();
+            assert_eq!(first.request_id, 1);
+            let NamedProcessStreamRequest::Stdin {
+                offset,
+                chunk_base64,
+                eof,
+            } = first.request
+            else {
+                panic!("expected stdin frame");
+            };
+            assert_eq!(offset, 0);
+            assert!(!eof);
+            assert_eq!(
+                d2b_core::base64_codec::decode(&chunk_base64).unwrap(),
+                b"abc"
+            );
             server
                 .send_frame(
-                    &serde_json::to_vec(&json!({
-                        "acceptedLen": 1,
-                        "nextOffset": 1,
-                        "backpressured": true,
-                        "stdinClosed": false,
-                    }))
+                    &serde_json::to_vec(&NamedProcessStreamResponseFrame::new(
+                        1,
+                        NamedProcessStreamResponse::Stdin(ExecWriteStdinResult {
+                            accepted_len: 1,
+                            next_offset: 1,
+                            backpressured: true,
+                            stdin_closed: false,
+                        }),
+                    ))
                     .unwrap(),
                 )
                 .unwrap();
-            let second: Value = serde_json::from_slice(&server.recv_frame().unwrap()).unwrap();
-            assert_eq!(second["type"], "namedStreamSend");
-            assert_eq!(second["offset"], 1);
+            let second: NamedProcessStreamRequestFrame =
+                serde_json::from_slice(&server.recv_frame().unwrap()).unwrap();
+            assert_eq!(second.request_id, 2);
+            let NamedProcessStreamRequest::Stdin {
+                offset,
+                chunk_base64,
+                eof,
+            } = second.request
+            else {
+                panic!("expected stdin frame");
+            };
+            assert_eq!(offset, 1);
+            assert!(!eof);
             assert_eq!(
-                d2b_core::base64_codec::decode(second["dataBase64"].as_str().unwrap()).unwrap(),
+                d2b_core::base64_codec::decode(&chunk_base64).unwrap(),
                 b"bc"
             );
             server
                 .send_frame(
-                    &serde_json::to_vec(&json!({
-                        "acceptedLen": 2,
-                        "nextOffset": 3,
-                        "backpressured": false,
-                        "stdinClosed": false,
-                    }))
+                    &serde_json::to_vec(&NamedProcessStreamResponseFrame::new(
+                        2,
+                        NamedProcessStreamResponse::Stdin(ExecWriteStdinResult {
+                            accepted_len: 2,
+                            next_offset: 3,
+                            backpressured: false,
+                            stdin_closed: false,
+                        }),
+                    ))
                     .unwrap(),
                 )
                 .unwrap();
@@ -2408,15 +2550,29 @@ mod tests {
         .unwrap();
         let server = std::thread::spawn(move || {
             let mut server = SeqpacketUnixSocket::from_owned_fd(server);
-            let request: Value = serde_json::from_slice(&server.recv_frame().unwrap()).unwrap();
-            assert_eq!(request["type"], "namedStreamReceive");
+            let request: NamedProcessStreamRequestFrame =
+                serde_json::from_slice(&server.recv_frame().unwrap()).unwrap();
+            assert_eq!(request.request_id, 1);
+            assert!(matches!(
+                request.request,
+                NamedProcessStreamRequest::Read {
+                    stream: ExecStream::Stdout,
+                    ..
+                }
+            ));
             server
                 .send_frame(
-                    &serde_json::to_vec(&json!({
-                        "dataBase64": d2b_core::base64_codec::encode(b"done"),
-                        "nextOffset": 4,
-                        "eof": true,
-                    }))
+                    &serde_json::to_vec(&NamedProcessStreamResponseFrame::new(
+                        1,
+                        NamedProcessStreamResponse::Output(ExecReadOutputResult {
+                            data_base64: d2b_core::base64_codec::encode(b"done"),
+                            next_offset: 4,
+                            eof: true,
+                            dropped_bytes: 0,
+                            truncated: false,
+                            timed_out: false,
+                        }),
+                    ))
                     .unwrap(),
                 )
                 .unwrap();
@@ -2445,19 +2601,32 @@ mod tests {
         let expected = stdin.clone();
         let server = std::thread::spawn(move || {
             let mut server = SeqpacketUnixSocket::from_owned_fd(server);
-            let request: Value = serde_json::from_slice(&server.recv_frame().unwrap()).unwrap();
-            assert_eq!(request["type"], "namedStreamSend");
-            let data =
-                d2b_core::base64_codec::decode(request["dataBase64"].as_str().unwrap()).unwrap();
+            let request: NamedProcessStreamRequestFrame =
+                serde_json::from_slice(&server.recv_frame().unwrap()).unwrap();
+            let NamedProcessStreamRequest::Stdin {
+                offset,
+                chunk_base64,
+                eof,
+            } = request.request
+            else {
+                panic!("expected stdin frame");
+            };
+            assert_eq!(request.request_id, 1);
+            assert_eq!(offset, 0);
+            assert!(!eof);
+            let data = d2b_core::base64_codec::decode(&chunk_base64).unwrap();
             assert_eq!(data, expected);
             server
                 .send_frame(
-                    &serde_json::to_vec(&json!({
-                        "acceptedLen": data.len(),
-                        "nextOffset": data.len(),
-                        "backpressured": false,
-                        "stdinClosed": false,
-                    }))
+                    &serde_json::to_vec(&NamedProcessStreamResponseFrame::new(
+                        1,
+                        NamedProcessStreamResponse::Stdin(ExecWriteStdinResult {
+                            accepted_len: data.len() as u64,
+                            next_offset: data.len() as u64,
+                            backpressured: false,
+                            stdin_closed: false,
+                        }),
+                    ))
                     .unwrap(),
                 )
                 .unwrap();
@@ -2521,115 +2690,6 @@ mod tests {
         let write = call_options(deadline, ResourceVerb::UpdateSpec).unwrap();
         assert!(write.metadata.has_idempotency_key());
         assert_eq!(write.retry.max_attempts(), 1);
-    }
-
-    #[test]
-    fn host_cutover_preview_and_apply_decode_as_canonical_resource_responses() {
-        use d2b_contracts_control::public_wire::{HostCutoverOperation, HostCutoverResponse};
-
-        for operation in [HostCutoverOperation::Preview, HostCutoverOperation::Apply] {
-            let response = serde_json::to_vec(&HostCutoverResponse {
-                operation,
-                operation_id: Some("cutover-test".to_owned()),
-                state: "planned".to_owned(),
-                phase: 0,
-                preview_digest: Some("sha256:".to_owned() + &"a".repeat(64)),
-                summary: "redaction-safe cutover response".to_owned(),
-                mutation_accepted: matches!(operation, HostCutoverOperation::Apply),
-                inventory: None,
-            })
-            .expect("response JSON");
-            let client = Arc::new(MockClient {
-                requests: Mutex::new(Vec::new()),
-                response,
-            });
-            let zone_path = zone_path("local-root").expect("zone path");
-            let owner = owner_for_zone(&zone_path);
-            let connector = CliZoneConnector {
-                zone_name: "local-root".to_owned(),
-                zone_path: zone_path.clone(),
-                socket_path: PathBuf::from("/run/d2b/public.sock"),
-                service: ZoneServiceKind::Resource,
-                operation: "HostCutover".to_owned(),
-                session_verb: None,
-                handshake_timeout: Duration::from_secs(1),
-                injected: Some(client),
-            };
-            let client = ZoneClient::new(
-                RouteTable::new(vec![RouteRecord::new(
-                    owner.clone(),
-                    TransportKind::LocalUnix,
-                )]),
-                connector,
-            );
-            let target = TargetInput::Service {
-                owner,
-                service: ZoneServiceKind::Resource,
-            };
-            let connection = block_on(client.connect(
-                &target,
-                ZoneServiceKind::Resource,
-                TransportSelection::exact(TransportKind::LocalUnix),
-            ))
-            .expect("connect");
-            let deadline = ZoneContext::deadline(Some("30s")).expect("deadline");
-            let options = call_options(deadline, ResourceVerb::Get).expect("call options");
-            let cancellation = CancellationToken::default();
-            let payload = CanonicalJsonObject::parse(
-                serde_json::to_vec(&json!({
-                    "operation": operation,
-                }))
-                .expect("request JSON")
-                .as_slice(),
-            )
-            .expect("canonical request");
-            let request = ResourceCallOptions::new(payload, false, &cancellation);
-            let decoded =
-                block_on(client.call_connected(&connection, ResourceVerb::Get, options, request))
-                    .expect("canonical response");
-            assert_eq!(
-                decoded.get("operation"),
-                Some(&d2b_contracts_resource::v3::CanonicalJsonValue::String(
-                    serde_json::to_value(operation)
-                        .expect("operation")
-                        .as_str()
-                        .expect("operation string")
-                        .to_owned(),
-                ))
-            );
-        }
-    }
-
-    #[test]
-    fn host_cutover_error_response_remains_typed_and_redacted() {
-        let error = decode_cli_response(
-            br#"{"type":"error","error":{"errorClass":"authorization-denied","retryClass":"never","message":"secret-subject"}}"#,
-        )
-        .expect_err("error response");
-        assert!(matches!(
-            error,
-            ClientError::Remote {
-                kind: ResourceErrorKind::AuthorizationDenied,
-                ..
-            }
-        ));
-        let context = ZoneContext::with_client(
-            "local-root",
-            "/run/d2b/public.sock",
-            Arc::new(MockClient {
-                requests: Mutex::new(Vec::new()),
-                response: br#"{"ok":true}"#.to_vec(),
-            }),
-        )
-        .expect("context");
-        let failure = context.client_failure(error, OutputMode::Json);
-        assert!(!failure.message.contains("secret-subject"));
-        assert!(
-            !failure
-                .rendered_stderr
-                .unwrap_or_default()
-                .contains("secret-subject")
-        );
     }
 
     #[test]

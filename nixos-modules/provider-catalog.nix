@@ -41,6 +41,9 @@ let
   # shape is pinned here rather than left free-form because exact-digest
   # selection compares these values literally.
   digestPattern = "sha256:[0-9a-f]{64}";
+  signedContractFields = shape.placementContractFields
+    ++ shape.runtimeContractFields;
+  catalogFields = shape.fields ++ signedContractFields;
 
   artifactModule = types.submodule ({ name, config, ... }: {
     options = {
@@ -104,7 +107,7 @@ let
         entry =
           if artifact.catalog == null
           then { }
-          else lib.filterAttrs (fieldName: _: lib.elem fieldName shape.fields) artifact.catalog;
+          else lib.filterAttrs (fieldName: _: lib.elem fieldName catalogFields) artifact.catalog;
       })
     artifactIds;
 
@@ -148,7 +151,7 @@ let
   unknownFields = id:
     if artifacts.${id}.catalog == null
     then [ ]
-    else lib.filter (field: !(lib.elem field shape.fields))
+    else lib.filter (field: !(lib.elem field catalogFields))
       (lib.attrNames artifacts.${id}.catalog);
 
   badDigests = id:
@@ -159,6 +162,163 @@ let
         let value = artifacts.${id}.catalog.${field} or null;
         in value == null || builtins.match digestPattern (toString value) == null)
       shape.digestFields;
+
+  targetKinds = [ "zone" "host" "guest" ];
+  effectClasses = [
+    "runtime"
+    "transport"
+    "substrate"
+    "process"
+    "volume"
+    "storage"
+    "network"
+    "device"
+    "display"
+    "audio"
+    "credential"
+    "observability"
+  ];
+  placementScopes = [
+    "zone-singleton"
+    "fixed-execution-target"
+    "per-resource-target"
+  ];
+  placementAnchors = [ "zone" "execution-ref" ];
+  targetCapabilityKeys = [
+    "artifactDigest"
+    "requiredEffectClasses"
+    "targetKind"
+  ];
+  validContractDigest = value:
+    builtins.isString value && builtins.match digestPattern value != null;
+
+  signedContractAssertions = id:
+    let
+      catalog =
+        if builtins.isAttrs artifacts.${id}.catalog
+        then artifacts.${id}.catalog
+        else { };
+      placementPresent = lib.any
+        (field: builtins.hasAttr field catalog)
+        shape.placementContractFields;
+      runtimePresent = lib.any
+        (field: builtins.hasAttr field catalog)
+        shape.runtimeContractFields;
+      scope = catalog.instanceScope or null;
+      supported =
+        if builtins.isList (catalog.supportedTargetKinds or null)
+        then catalog.supportedTargetKinds
+        else [ ];
+      capabilities =
+        if builtins.isList (catalog.targetCapabilities or null)
+        then catalog.targetCapabilities
+        else [ ];
+      capabilityTargets = map
+        (capability:
+          if builtins.isAttrs capability
+          then capability.targetKind or null
+          else null)
+        capabilities;
+      capabilityValid = capability:
+        let
+          effects =
+            if builtins.isAttrs capability
+              && builtins.isList (capability.requiredEffectClasses or null)
+            then capability.requiredEffectClasses
+            else [ ];
+        in
+        builtins.isAttrs capability
+        && lib.sort lib.lessThan (lib.attrNames capability) == targetCapabilityKeys
+        && builtins.elem (capability.targetKind or null) targetKinds
+        && validContractDigest (capability.artifactDigest or null)
+        && builtins.isList (capability.requiredEffectClasses or null)
+        && lib.length (lib.unique effects) == lib.length effects
+        && lib.all (class: builtins.elem class effectClasses) effects;
+      scopeShape =
+        if scope == "zone-singleton"
+        then supported == [ "zone" ] && capabilities != [ ]
+        else if scope == "fixed-execution-target"
+        then lib.length supported == 1 && !(builtins.elem "zone" supported)
+        else if scope == "per-resource-target"
+        then supported != [ ] && !(builtins.elem "zone" supported)
+        else false;
+    in
+    (lib.optionals placementPresent [
+      {
+        assertion = lib.all
+          (field: builtins.hasAttr field catalog)
+          shape.placementContractFields;
+        message = ''
+          d2b.artifacts."${id}".catalog must carry the complete signed
+          controller placement contract (${lib.concatStringsSep ", " shape.placementContractFields}).
+        '';
+      }
+      {
+        assertion = builtins.elem scope placementScopes;
+        message = ''
+          d2b.artifacts."${id}".catalog.instanceScope must be one of
+          ${lib.concatStringsSep ", " placementScopes}.
+        '';
+      }
+      {
+        assertion = builtins.isList supported
+          && supported != [ ]
+          && builtins.all builtins.isString supported
+          && lib.length (lib.unique supported) == lib.length supported
+          && lib.sort lib.lessThan supported == supported
+          && lib.all (target: builtins.elem target targetKinds) supported;
+        message = ''
+          d2b.artifacts."${id}".catalog.supportedTargetKinds must be a
+          sorted, unique, non-empty subset of zone, host, and guest.
+        '';
+      }
+      {
+        assertion = builtins.isList capabilities
+          && capabilities != [ ]
+          && lib.length capabilities <= 3
+          && builtins.all builtins.isAttrs capabilities
+          && builtins.all builtins.isString capabilityTargets
+          && lib.length (lib.unique capabilityTargets) == lib.length capabilityTargets
+          && lib.sort lib.lessThan capabilityTargets == supported
+          && lib.all capabilityValid capabilities;
+        message = ''
+          d2b.artifacts."${id}".catalog.targetCapabilities must provide one
+          complete signed capability for every supported target kind.
+        '';
+      }
+      {
+        assertion = builtins.elem (catalog.placementAnchor or null) placementAnchors;
+        message = ''
+          d2b.artifacts."${id}".catalog.placementAnchor must be zone or execution-ref.
+        '';
+      }
+      {
+        assertion = scopeShape;
+        message = ''
+          d2b.artifacts."${id}".catalog signed placement scope is incompatible
+          with its supported target kinds.
+        '';
+      }
+    ])
+    ++ (lib.optionals runtimePresent [
+      {
+        assertion = lib.all
+          (field: builtins.hasAttr field catalog)
+          shape.runtimeContractFields;
+        message = ''
+          d2b.artifacts."${id}".catalog must carry both signed shared runtime
+          artifact digests (${lib.concatStringsSep ", " shape.runtimeContractFields}).
+        '';
+      }
+      {
+        assertion = validContractDigest (catalog.d2bdDigest or null)
+          && validContractDigest (catalog.brokerDigest or null);
+        message = ''
+          d2b.artifacts."${id}".catalog.d2bdDigest and brokerDigest must be
+          lowercase sha256 digests.
+        '';
+      }
+    ]);
 
   maxOutputNameLength = 16;
   maxOutputNamesInMessage = 4;
@@ -298,7 +458,7 @@ in
       })
       artifactIds)
 
-    # No field outside the frozen set.
+    # No field outside the generated catalog or signed runtime contract sets.
     ++ (map
       (id: {
         assertion = unknownFields id == [ ];
@@ -326,5 +486,10 @@ in
 
     # Provider packages must name one determinate output before any later
     # required-output validation can diagnose the artifact layout.
-    ++ (map providerOutputSelection artifactIds);
+    ++ (map providerOutputSelection artifactIds)
+
+    # Placement and shared-runtime fields are optional until a Provider
+    # package publishes its signed manifest, but once any is present the
+    # complete closed contract is validated.
+    ++ (lib.concatMap signedContractAssertions artifactIds);
 }

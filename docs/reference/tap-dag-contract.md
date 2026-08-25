@@ -82,7 +82,7 @@ apply-nftables-rules  --->  bring-up-tap-interface  --->  pre-open-vhost-net-fd
    race where packets traverse the bridge before the firewall
    policy is in place.
 2. `ApplyNmUnmanaged` (host-wide, not per-VM) - enforced inside
-   the broker handler via [`TapCreateGate`](../../packages/d2b-priv-broker/src/ops/tap.rs).
+   the broker handler via [`TapCreateGate`](../../packages/d2b-broker/src/ops/tap.rs).
    The broker REFUSES `CreateTapFd` / `CreatePersistentTap`
    unless the prior `ApplyNmUnmanaged` op recorded either
    `NmUnmanagedOutcome::Applied` or
@@ -273,7 +273,7 @@ ownership marker so `ApplyNmUnmanaged` can succeed), the next
 - **Host-prep DAG**: [host-prep-dag.md](./host-prep-dag.md) -
   parent contract for the per-VM DAG this step lives in.
 - **Bridge port flags**: [`packages/d2b-host/src/bridge_port.rs`](../../packages/d2b-host/src/bridge_port.rs).
-- **Tap broker handlers**: [`packages/d2b-priv-broker/src/ops/tap.rs`](../../packages/d2b-priv-broker/src/ops/tap.rs).
+- **Tap broker handlers**: [`packages/d2b-broker/src/ops/tap.rs`](../../packages/d2b-broker/src/ops/tap.rs).
 - **Derived ifname emitter**: [`packages/d2b-host/src/ifname.rs`](../../packages/d2b-host/src/ifname.rs).
 - **Host config DTO**: [`packages/d2b-core/src/host.rs`](../../packages/d2b-core/src/host.rs) - `ChNetHandoffMode`, `IfNameMapping`, `HostChConfig`.
 - **Failure envelope**: [`packages/d2b-host/src/host_prep_dag.rs`](../../packages/d2b-host/src/host_prep_dag.rs) - `HostPrepStepFailed`.

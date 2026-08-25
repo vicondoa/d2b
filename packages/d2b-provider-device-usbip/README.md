@@ -50,15 +50,17 @@ absence.
 Long-lived workers are one shared Host backend, one multiplexed relay Endpoint
 per Network, and one private proxy per attached Binding. Their signed templates
 are `usbip-daemon`, `usbip-relay`, and `usbip-guest-proxy`. Module load, physical
-claim, bind, unbind, and Guest attach or detach are one-shot semantic effects,
-not additional Process resources.
+claim, bind, and unbind remain one-shot semantic effects. An authored Binding
+declares its Guest Endpoint and `EphemeralProcess` child; Core reconciles those
+children and the generic Process Provider owns launch, adoption, signalling,
+and reap.
 
 Service and Binding teardown are deliberately separate. A Binding detaches its
-Guest, closes its broker-spawned attach runner, removes its private proxy, and
+Guest Endpoint, deletes its attach Process, removes its private proxy, and
 releases its Service slot. The supervisor drains every Binding before the
 Service unbinds its exact owned device and releases relay then physical
-Host-global authority. Restart adopts only a matching runner pidfd/start-time
-identity; an ambiguous identity is quarantined without a destructive effect.
+Host-global authority. Restart adopts only a matching child identity; an
+ambiguous identity is quarantined without a destructive effect.
 
 ## Placement and dependencies
 

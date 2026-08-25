@@ -257,7 +257,6 @@
         "pidfd-proof-required",
         "cgroup-empty-proof-required",
         "file-record-owner-match",
-        "cutover-only",
         "manual-recovery"
       ]
     },

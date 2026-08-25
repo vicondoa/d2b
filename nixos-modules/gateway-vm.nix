@@ -23,6 +23,7 @@ let
     if pkg != null then pkg else unavailableHostToolPackage name;
 
   d2bdPackage = hostToolPackage "d2bd" "d2bd";
+  d2bBrokerPackage = hostToolPackage "d2bBroker" "d2b-broker";
   d2bPackage = hostToolPackage "d2b" "d2b";
   d2bGatewayRuntimePackage = hostToolPackage "d2bGatewayRuntime" "d2b-gateway-runtime";
 
@@ -56,6 +57,7 @@ let
       env = gw.env;
       index = gw.index;
       ssh.user = lib.mkDefault "gateway";
+      guest.componentSession.enable = true;
       config = { lib, pkgs, ... }: {
         networking.hostName = lib.mkDefault gw.vmName;
         users.groups.d2b = { };
@@ -68,6 +70,10 @@ let
         users.users.gateway = {
           isNormalUser = true;
           extraGroups = [ "wheel" "d2b" ];
+        };
+        d2b.componentSession = {
+          guestRef = "Guest/${gw.vmName}";
+          zone = gw.realm;
         };
         environment.etc."d2b/daemon-config.json".text = builtins.toJSON {
           publicSocketPath = "/run/d2b/public.sock";
@@ -164,6 +170,7 @@ let
           curl
           d2bPackage
           d2bdPackage
+          d2bBrokerPackage
           d2bGatewayRuntimePackage
         ];
         systemd.tmpfiles.rules = [
@@ -177,20 +184,96 @@ let
           "d /run/d2b/state 0700 d2bd d2bd -"
           "d /var/lib/d2b 0750 d2bd d2bd -"
           "d /var/lib/d2b/daemon-state 0700 d2bd d2bd -"
+          "d /var/lib/d2b/audit 0750 root d2bd -"
+          "d /var/lib/d2b/current-bundle 0755 root root -"
+          "d /run/d2b/broker 0750 root d2bd -"
           "d /var/cache/d2b 0750 root d2bd -"
         ] ++ (map (dir: "d ${dir} 0700 d2bd d2bd -") (gatewayStateDirs gw));
+        systemd.sockets.d2b-broker = {
+          description = "d2b child-Zone privileged broker socket";
+          wantedBy = [ "sockets.target" ];
+          requires = [ "systemd-tmpfiles-setup.service" ];
+          after = [ "systemd-tmpfiles-setup.service" ];
+          socketConfig = {
+            ListenSequentialPacket = "/run/d2b/priv.sock";
+            SocketUser = "root";
+            SocketGroup = "d2bd";
+            SocketMode = "0660";
+            Accept = false;
+            FileDescriptorName = "priv.sock";
+          };
+        };
+        systemd.services.d2b-broker = {
+          description = "d2b child-Zone privileged broker";
+          requires = [ "d2b-broker.socket" ];
+          after = [ "d2b-broker.socket" "local-fs.target" ];
+          environment = {
+            RUST_LOG = lib.mkDefault "info";
+            D2B_BROKER_NFT_BINARY = "${pkgs.nftables}/bin/nft";
+            D2B_BROKER_IP_BINARY = "${pkgs.iproute2}/bin/ip";
+            D2B_BROKER_USBIP_BINARY = "${pkgs.linuxPackages_latest.usbip}/bin/usbip";
+          };
+          path = with pkgs; [ nftables acl iproute2 util-linux ];
+          serviceConfig = {
+            Type = "notify";
+            NotifyAccess = "main";
+            User = "root";
+            Group = "d2bd";
+            CapabilityBoundingSet = [
+              "CAP_CHOWN"
+              "CAP_DAC_OVERRIDE"
+              "CAP_DAC_READ_SEARCH"
+              "CAP_FOWNER"
+              "CAP_FSETID"
+              "CAP_IPC_LOCK"
+              "CAP_KILL"
+              "CAP_LEASE"
+              "CAP_MKNOD"
+              "CAP_NET_ADMIN"
+              "CAP_NET_RAW"
+              "CAP_SETFCAP"
+              "CAP_SETGID"
+              "CAP_SETPCAP"
+              "CAP_SETUID"
+              "CAP_SYS_ADMIN"
+              "CAP_SYS_RESOURCE"
+            ];
+            AmbientCapabilities = [ "" ];
+            NoNewPrivileges = false;
+            KillMode = "process";
+            PrivateTmp = true;
+            ProtectHome = false;
+            ProtectClock = true;
+            ProtectProc = "invisible";
+            RestrictAddressFamilies = [ "AF_UNIX" "AF_VSOCK" "AF_INET" "AF_INET6" ];
+            UMask = "0027";
+            ExecStart =
+              "${d2bBrokerPackage}/bin/d2b-broker host "
+              + "--authority-id child-zone-${name} "
+              + "--audit-dir /var/lib/d2b/audit "
+              + "--bundle-path /etc/d2b/bundle.json "
+              + "--state-dir /var/lib/d2b "
+              + "--d2bd-uid 997 "
+              + "--d2bd-gid 997";
+            Restart = "on-failure";
+            RestartSec = "2s";
+            StandardOutput = "journal";
+            StandardError = "journal";
+            SyslogIdentifier = "d2b-broker-child-zone";
+          };
+        };
         systemd.services.d2bd = {
           description = "d2b realm gateway daemon";
           wantedBy = [ "multi-user.target" ];
-          after = [ "network-online.target" ];
-          wants = [ "network-online.target" ];
+          after = [ "network-online.target" "d2b-broker.socket" ];
+          wants = [ "network-online.target" "d2b-broker.socket" ];
           restartIfChanged = false;
           serviceConfig = {
             Type = "simple";
             User = "d2bd";
             Group = "d2bd";
             SupplementaryGroups = [ "d2b" ];
-            ExecStart = "${d2bdPackage}/bin/d2bd serve --config /etc/d2b/daemon-config.json";
+            ExecStart = "${d2bdPackage}/bin/d2bd host --config /etc/d2b/daemon-config.json";
             Restart = "on-failure";
             RestartSec = "2s";
             NoNewPrivileges = true;

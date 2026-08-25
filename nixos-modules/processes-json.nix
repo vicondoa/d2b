@@ -40,6 +40,8 @@ let
     fallback = d2bWaylandProxySourcePackage;
   };
   d2bWaylandProxyBinary = "${d2bWaylandProxyPackage}/bin/d2b-wayland-proxy";
+  wlCrossDomainProxyPackage = import ../pkgs/wl-cross-domain-proxy { inherit pkgs; };
+  wlCrossDomainProxyBinary = "${wlCrossDomainProxyPackage}/bin/wl-cross-domain-proxy";
 
   backendPort = envName: cfg._index.usbip.backendPorts.${envName};
 
@@ -51,9 +53,7 @@ let
   vsockSocketForPort = socketPath: port: "${socketPath}_${toString port}";
   shareNodeId = share: "virtiofsd-${clean share.tag}";
   shareSocketPath = name: share:
-    if share.tag == "d2b-gctl"
-    then "/run/d2b/vms/${name}/guest-control/${clean share.tag}.sock"
-    else "/run/d2b/vms/${name}/${clean share.tag}.sock";
+    "/run/d2b/vms/${name}/${clean share.tag}.sock";
   volumeHostPath = name: volume: d2bLib.volumeHostPath cfg.store.stateDir name volume;
 
   mkReadiness = kind: value: { inherit kind value; };
@@ -63,13 +63,6 @@ let
   unixSocketListening = mkReadiness "unix-socket-listening";
   tcpPort = host: port: mkReadiness "tcp-port" { inherit host port; };
   commandReady = mkReadiness "command";
-  # Authenticated guest-control Health readiness. Unlike a raw TCP-22
-  # probe this predicate fails CLOSED: the daemon completes a full
-  # Hello + token challenge-response + Health over the guest-control vsock
-  # before the node is ready. The daemon resolves the per-VM vsock socket,
-  # peer credentials, and broker-backed signer from its own trusted state.
-  guestControlHealthReady = vmName: { kind = "guest-control-health"; value = { vm = vmName; }; };
-
   extractOptValues = optFlag: extraArgs:
     let
       flags = if builtins.isList optFlag then optFlag else [ optFlag ];
@@ -288,7 +281,7 @@ let
       supportsNotifySocket = true;
       vsockOpts =
         if hasUserVsockExtraArg then
-          throw "d2b.vms.${name}.config.microvm.cloud-hypervisor.extraArgs must not set --vsock; d2b owns the Cloud Hypervisor vsock device for guest control and observability"
+          throw "d2b.vms.${name}.config.microvm.cloud-hypervisor.extraArgs must not set --vsock; d2b owns the Cloud Hypervisor vsock device for ComponentSession and observability"
         else
           "cid=${toString vsockCID},socket=${vsockPath}";
       virtiofsShares = lib.filter (share: (share.proto or "virtiofs") == "virtiofs") microvm.shares;
@@ -695,6 +688,14 @@ let
       ] ++ denyArgs ++ allowArgs ++ maxVersionArgs ++ dmabufAllowArgs ++ dmabufDenyArgs;
     };
 
+  waylandFrontendRunner = name: {
+    binaryPath = wlCrossDomainProxyBinary;
+    # The guest desktop exports WAYLAND_DISPLAY=wayland-1. Use the explicit
+    # socket-name mode because this Process runs as a system service and does
+    # not inherit the user's session environment.
+    argv = [ "d2b-${name}-wayland-frontend" "--socket-name" "wayland-1" ];
+  };
+
   videoBinaryPath = _name:
     # the per-VM
     # `d2b-${name}-video.service` was deleted. The video
@@ -884,7 +885,20 @@ use devices::virtio::vhost_user_backend::run_video_device;'
     ownerGid = ownerProfile.gid;
   };
 
-  mkProcessNode = name: { id, role, readiness, unit ? null, binaryPath ? null, argv ? [ ], env ? [ ], planOps ? [ ], networkInterfaces ? [ ] }:
+  mkProcessNode = name: {
+    id,
+    role,
+    readiness,
+    unit ? null,
+    binaryPath ? null,
+    argv ? [ ],
+    env ? [ ],
+    planOps ? [ ],
+    networkInterfaces ? [ ],
+    executionRef ? null,
+    executionDomain ? null,
+    userRef ? null
+  }:
     let
       # `vm.supervisor` was removed per ADR 0015; every enabled VM remains
       # daemon-supervised. These unit names are only transient-effect
@@ -897,6 +911,10 @@ use devices::virtio::vhost_user_backend::run_video_device;'
     assert (binaryPath == null) == (argv == [ ]);
     {
       inherit id role readiness;
+      executionRef =
+        if role == "activation-nixos-runner"
+        then "Guest/${name}"
+        else "Host/host-system";
       profile = profileFor name id;
     }
     // lib.optionalAttrs emitUnit { inherit unit; }
@@ -911,6 +929,15 @@ use devices::virtio::vhost_user_backend::run_video_device;'
     }
     // lib.optionalAttrs (networkInterfaces != [ ]) {
       inherit networkInterfaces;
+    }
+    // lib.optionalAttrs (executionRef != null) {
+      inherit executionRef;
+    }
+    // lib.optionalAttrs (executionDomain != null) {
+      inherit executionDomain;
+    }
+    // lib.optionalAttrs (userRef != null) {
+      inherit userRef;
     };
 
   mkRunnerNode = name: args: runner:
@@ -941,11 +968,17 @@ use devices::virtio::vhost_user_backend::run_video_device;'
       manifest = cfg.manifest.${name};
       microvm = d2bLib.vmRunner config name;
       hypervisorService = d2bLib.runtimeHypervisorService "nixos";
-      # The guest-control authenticated Health probe is the framework
-      # readiness gate on guest-control-capable VMs. Per-VM sshd/host-keys are
-      # retained for the SSH-compat window but are no longer the framework
-      # readiness signal, so a TCP-22 readiness node is no longer emitted.
-      guestControlEnabled = vm.guest.control.enable;
+      # Guest sessions are authenticated independently from VM boot. Their
+      # evidence is projected through Guest/Endpoint status rather than a
+      # readiness-only health RPC.
+      componentSessionEnabled = vm.guest.componentSession.enable;
+      activationRunner = name: {
+        binaryPath = "${d2bHostTools.activationHelper}/bin/d2b-activation-helper";
+        argv = [
+          "d2b-activation-helper"
+          "apply-generation"
+        ];
+      };
       virtiofsShares = lib.filter
         (share: (share.proto or "virtiofs") == "virtiofs")
         microvm.shares;
@@ -1059,10 +1092,19 @@ use devices::virtio::vhost_user_backend::run_video_device;'
       ++ lib.optional emitWaylandProxy (mkRunnerNode name {
         id = "wayland-proxy";
         role = "wayland-proxy";
+        executionRef = "Host/host-system";
+        executionDomain = "system";
         readiness = [
           (unixSocketListening "/run/d2b-wlproxy/${name}/wayland-0")
         ];
       } (waylandProxyRunner "local-vm" name vm))
+      ++ lib.optional emitWaylandProxy (mkRunnerNode name {
+        id = "wayland-frontend-worker";
+        role = "wayland-proxy";
+        executionRef = "Guest/${name}";
+        executionDomain = "system";
+        readiness = [ ];
+      } (waylandFrontendRunner name))
       ++ lib.optional vm.audio.enable (mkRunnerNode name {
         id = "audio";
         role = "audio";
@@ -1125,11 +1167,11 @@ use devices::virtio::vhost_user_backend::run_video_device;'
         readiness = [ (unixSocketExists "/run/d2b/otel/host-egress.sock") ];
         runner = otelHostBridgeRunner manifest;
       })
-      ++ lib.optional guestControlEnabled (node name {
-        id = "guest-control-health";
-        role = "guest-control-health";
-        readiness = [ (guestControlHealthReady name) ];
-      })
+      ++ lib.optional componentSessionEnabled (mkRunnerNode name {
+        id = "activation-nixos-runner";
+        role = "activation-nixos-runner";
+        readiness = [ ];
+      } (activationRunner name))
       ++ lib.optional vm.usb.securityKey.enable (node name {
         # The sk-frontend DAG node tracks the readiness of the host-side
         # vsock socket endpoint that the guest frontend connects to. The
@@ -1176,10 +1218,9 @@ use devices::virtio::vhost_user_backend::run_video_device;'
         edgesFromNodes optionalSidecarBaseNodeIds "audio" "The audio sidecar starts only after every prerequisite sidecar is ready."
       )
       ++ edgesFromNodes preVmmNodeIds "cloud-hypervisor" "Cloud Hypervisor starts only after every prerequisite sidecar is ready."
-      ++ lib.optional guestControlEnabled
-        (edge "cloud-hypervisor" "guest-control-health" "Authenticated guest-control Health readiness is probed only after Cloud Hypervisor is running.")
       ++ lib.optional vm.usb.securityKey.enable
-        (edge "cloud-hypervisor" "sk-frontend" "The sk-frontend vsock endpoint tracking starts only after Cloud Hypervisor creates the base vsock socket.");
+        (edge "cloud-hypervisor" "sk-frontend" "The sk-frontend vsock endpoint tracking starts only after Cloud Hypervisor creates the base vsock socket.")
+      ;
       invariants = {
         perVmAuditPipeline = true;
         swtpmPreStartFlush = true;
@@ -1289,14 +1330,63 @@ use devices::virtio::vhost_user_backend::run_video_device;'
     (lib.mapAttrsToList vmDag normalNixosVms)
     ++ (lib.mapAttrsToList qemuMediaDag qemuMediaVms)
     ++ (lib.mapAttrsToList usbipdDag cfg._index.usbip.envMeta);
-  } // lib.optionalAttrs (config.d2b._bundle.cutoverRunnerPath != null) {
-    cutoverRunner = {
-    binaryPath = config.d2b._bundle.cutoverRunnerPath;
-    persistent = false;
-    cgroupPlacement = "outside-d2b.slice";
-    singleBootstrapFd = true;
-    };
   };
+
+  guestProcessResourceRows = lib.filter
+    (row:
+      builtins.elem row.resource.type [ "Process" "EphemeralProcess" ]
+      && builtins.isString (row.spec.executionRef or null)
+      && lib.hasPrefix "Guest/" row.spec.executionRef)
+    (cfg._resourceCompiler.processes.rows or [ ]);
+  guestProcessRefs = lib.unique (
+    (map
+      (row: row.spec.executionRef)
+      guestProcessResourceRows)
+    ++ (lib.concatLists (map
+      (dag:
+        lib.optional
+          (lib.any (node: (node.executionRef or null) == "Guest/${dag.vm}") dag.nodes)
+          "Guest/${dag.vm}")
+      data.vms)));
+  guestProcessInputsFor = guestRef:
+    let
+      resourceRows = lib.filter
+        (row: row.spec.executionRef == guestRef)
+        guestProcessResourceRows;
+      dagNodes = lib.concatLists (map
+        (dag:
+          if guestRef == "Guest/${dag.vm}"
+          then lib.filter
+            (node: (node.executionRef or null) == guestRef)
+            dag.nodes
+          else [ ])
+        data.vms);
+      resources = map
+        (row: {
+          apiVersion = "resources.d2bus.org/v3";
+          type = row.resource.type;
+          metadata = {
+            name = row.resourceName;
+            zone = row.zoneName;
+          };
+          spec = row.spec;
+        })
+        resourceRows;
+    in
+    {
+      guest = guestRef;
+      nodes = dagNodes;
+      resources = resources;
+    };
+  guestProcessInputsData = {
+    schemaVersion = "v1";
+    guests = map guestProcessInputsFor
+      (lib.sort lib.lessThan guestProcessRefs);
+  };
+  guestProcessInputsJson = builtins.toJSON guestProcessInputsData;
+  guestProcessInputsPath = pkgs.writeText
+    "d2b-guest-process-inputs.json"
+    guestProcessInputsJson;
 
   jsonText = builtins.toJSON data;
   jsonFile = pkgs.writeText "d2b-processes.json" jsonText;
@@ -1335,6 +1425,14 @@ in
       inherit data jsonText;
       path = "${jsonFile}";
       installFileName = "processes.json";
+      classification = "contractPrivateNonSecret";
+      sensitivity = "nonSecret";
+    };
+    d2b._bundle.extraArtifacts.guestProcessInputs = {
+      data = guestProcessInputsData;
+      jsonText = guestProcessInputsJson;
+      path = guestProcessInputsPath;
+      installFileName = "guest-process-inputs.json";
       classification = "contractPrivateNonSecret";
       sensitivity = "nonSecret";
     };

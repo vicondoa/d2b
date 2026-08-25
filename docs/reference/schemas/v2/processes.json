@@ -8,17 +8,6 @@
     "vms"
   ],
   "properties": {
-    "cutoverRunner": {
-      "description": "Optional out-of-band host cutover runner contract.",
-      "anyOf": [
-        {
-          "$ref": "#/definitions/CutoverRunnerProcess"
-        },
-        {
-          "type": "null"
-        }
-      ]
-    },
     "schemaVersion": {
       "description": "Schema version used by this artifact.",
       "type": "string"
@@ -85,35 +74,6 @@
       "maxLength": 160,
       "minLength": 1,
       "pattern": "^[A-Za-z0-9][A-Za-z0-9._:/@+-]*$"
-    },
-    "CutoverRunnerProcess": {
-      "description": "Private process contract for the one-shot cutover runner.",
-      "type": "object",
-      "required": [
-        "binaryPath",
-        "cgroupPlacement",
-        "persistent",
-        "singleBootstrapFd"
-      ],
-      "properties": {
-        "binaryPath": {
-          "description": "Trusted store path installed by the host-tool emitter.",
-          "type": "string"
-        },
-        "cgroupPlacement": {
-          "description": "Closed placement label proving it is outside the VM slice.",
-          "type": "string"
-        },
-        "persistent": {
-          "description": "The runner is never a declared persistent unit.",
-          "type": "boolean"
-        },
-        "singleBootstrapFd": {
-          "description": "The broker transfers exactly one bootstrap descriptor.",
-          "type": "boolean"
-        }
-      },
-      "additionalProperties": false
     },
     "DagEdge": {
       "description": "Directed dependency edge in the per-VM DAG.",
@@ -357,7 +317,7 @@
           ]
         },
         "executionRef": {
-          "description": "Canonical Host or Guest execution target for this trusted runner.\n\nOmitted by legacy bundles, which resolve to `Guest/<vm>`.",
+          "description": "Canonical Host or Guest execution target for this trusted runner.\n\nOmitted by legacy bundles, which resolve to the singleton Host target except for the Guest-local activation runner.",
           "type": [
             "string",
             "null"
@@ -502,6 +462,13 @@
           ]
         },
         {
+          "description": "Target-local one-shot NixOS activation runner.\n\nThis role is emitted only for the Guest execution target. The activation Provider creates an EphemeralProcess resource and the target-local process Provider resolves this role from the trusted bundle.",
+          "type": "string",
+          "enum": [
+            "activation-nixos-runner"
+          ]
+        },
+        {
           "description": "vsock relay sidecar.",
           "type": "string",
           "enum": [
@@ -516,17 +483,10 @@
           ]
         },
         {
-          "description": "Guest SSH readiness probe.\n\nRetained for the SSH-compatibility window (old-generation VMs that predate guestd). New generations use [`ProcessRole::GuestControlHealth`] for framework readiness instead.",
+          "description": "Authenticated ComponentSession Health readiness probe.\n\nReadiness is a full authenticated ComponentSession identity exchange and Health check over the enrolled vsock, not a raw TCP-22 probe. It fails closed.",
           "type": "string",
           "enum": [
-            "guest-ssh-readiness"
-          ]
-        },
-        {
-          "description": "Authenticated guest-control Health readiness probe.\n\nReplaces [`ProcessRole::GuestSshReadiness`] as the framework readiness gate on guest-control-capable VMs: readiness is a full authenticated Hello + token challenge-response + Health over the guest-control vsock, not a raw TCP-22 probe. It fails CLOSED.",
-          "type": "string",
-          "enum": [
-            "guest-control-health"
+            "component-session-health"
           ]
         },
         {
@@ -706,7 +666,7 @@
           }
         },
         {
-          "description": "Authenticated guest-control Health probe. Readiness requires a full Hello + token challenge-response + Health over the guest-control vsock - the host-side probe. Unlike [`Self::ComponentSpecific`] (which reports ready unconditionally and would fail OPEN), this predicate fails CLOSED: it is ready only when the daemon completes the authenticated probe and the guest reports a healthy/degraded state, and never ready for an old-generation / unreachable / auth-failed / timed-out guest. The daemon resolves the per-VM vsock socket, peer credentials, and broker-backed signer from its own trusted state.",
+          "description": "Authenticated component-session Health probe. Readiness requires a full identity-bound handshake + Health over the ComponentSession vsock - the host-side probe. Unlike [`Self::ComponentSpecific`] (which reports ready unconditionally and would fail OPEN), this predicate fails CLOSED: it is ready only when the daemon completes the authenticated probe and the guest reports a healthy/degraded state, and never ready for an old-generation / unreachable / auth-failed / timed-out guest. The daemon resolves the per-VM vsock socket, peer credentials, and enrolled identity evidence from its own trusted state.",
           "type": "object",
           "required": [
             "kind",
@@ -716,7 +676,7 @@
             "kind": {
               "type": "string",
               "enum": [
-                "guest-control-health"
+                "component-session-health"
               ]
             },
             "value": {

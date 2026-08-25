@@ -2,9 +2,9 @@ use std::sync::Arc;
 
 use d2b_process_conformance::testing::{PortCall, ScriptedEffectPort, block_on, fixtures};
 use d2b_process_conformance::{
-    AdoptionCandidate, IdentityBinding, LaunchTicket, LaunchedProcess, PidfdEvidence,
-    ProcessConformanceError, ProcessIdentityDigest, ProcessLaunchEffectPort, StopClass,
-    WaitReapOwner,
+    AdoptionCandidate, AdoptionOutcome, IdentityBinding, LaunchTicket, LaunchedProcess,
+    PidfdEvidence, ProcessConformanceError, ProcessIdentityDigest, ProcessLaunchEffectPort,
+    StopClass, WaitReapOwner,
 };
 use d2b_provider_system_systemd::controller::{
     SystemdProcessController, SystemdReconcileAction, SystemdReconcileResult,
@@ -53,6 +53,51 @@ impl ProcessLaunchEffectPort for PendingEffectPort {
         _class: StopClass,
     ) -> Result<(), ProcessConformanceError> {
         std::future::pending().await
+    }
+}
+
+#[derive(Debug)]
+struct LaunchPendingControlPort {
+    launch_entered: Arc<tokio::sync::Notify>,
+}
+
+impl LaunchPendingControlPort {
+    fn new() -> Self {
+        Self {
+            launch_entered: Arc::new(tokio::sync::Notify::new()),
+        }
+    }
+}
+
+impl ProcessLaunchEffectPort for LaunchPendingControlPort {
+    async fn launch(
+        &self,
+        _ticket: &LaunchTicket,
+    ) -> Result<LaunchedProcess, ProcessConformanceError> {
+        self.launch_entered.notify_one();
+        std::future::pending().await
+    }
+
+    async fn observe(
+        &self,
+        _ticket: &LaunchTicket,
+    ) -> Result<Option<AdoptionCandidate>, ProcessConformanceError> {
+        Ok(None)
+    }
+
+    async fn open_pidfd(
+        &self,
+        _candidate: &AdoptionCandidate,
+    ) -> Result<PidfdEvidence, ProcessConformanceError> {
+        Ok(PidfdEvidence::held())
+    }
+
+    async fn stop(
+        &self,
+        _identity: &ProcessIdentityDigest,
+        _class: StopClass,
+    ) -> Result<(), ProcessConformanceError> {
+        Ok(())
     }
 }
 
@@ -145,6 +190,51 @@ fn controller_rejects_launches_when_the_bounded_permit_is_saturated() {
                 .unwrap_err(),
             ProcessConformanceError::DeadlineExceeded
         );
+        first.abort();
+    });
+}
+
+#[test]
+fn launch_slots_do_not_block_adoption_or_stop() {
+    let ticket = fixtures::ticket_builder()
+        .expected_identity(required())
+        .build()
+        .expect("valid ticket");
+    let identity = ProcessIdentityDigest::from_bytes([0x22; 32]);
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_time()
+        .build()
+        .expect("runtime");
+    runtime.block_on(async {
+        let port = LaunchPendingControlPort::new();
+        let entered = Arc::clone(&port.launch_entered);
+        let controller = Arc::new(SystemdProcessController::new(
+            SystemdProcessProvider::new(port),
+            SystemdProviderConfig::new(1, 1, 1, 1).expect("bounded config"),
+        ));
+        let first_controller = Arc::clone(&controller);
+        let first_ticket = ticket.clone();
+        let first = tokio::spawn(async move {
+            first_controller
+                .reconcile(SystemdReconcileAction::Start(&first_ticket))
+                .await
+        });
+        entered.notified().await;
+
+        assert!(matches!(
+            controller
+                .reconcile(SystemdReconcileAction::Adopt(&ticket))
+                .await
+                .expect("adoption remains admitted"),
+            SystemdReconcileResult::Adoption(AdoptionOutcome::Absent)
+        ));
+        assert!(matches!(
+            controller
+                .reconcile(SystemdReconcileAction::Stop(&identity, StopClass::Drain))
+                .await
+                .expect("stop remains admitted"),
+            SystemdReconcileResult::Stopped
+        ));
         first.abort();
     });
 }

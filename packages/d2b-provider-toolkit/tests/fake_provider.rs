@@ -15,15 +15,21 @@ use std::collections::BTreeMap;
 use d2b_contracts_provider::v3::{
     ArtifactDigest,
     ArtifactDigestSet,
+    BinaryRef,
     CapabilitySupport,
     CompatibilityRange,
     ComponentDescriptor,
+    ComponentExecution,
+    ComponentTargetCapability,
     ComponentStateKind,
     ComponentStateNamespace,
     ComponentStateView,
     ComponentType,
+    ControllerInstanceScope,
+    ControllerTargetKind,
     DependencyAlias,
     DependencyDeclaration,
+    EffectPortClass,
     PolicyEvaluation,
     ProviderManifest,
     ProviderSpec,
@@ -33,6 +39,7 @@ use d2b_contracts_provider::v3::{
     StandardCapabilityMatrix,
     StorageNeed,
     TrustEvidence,
+    TargetRuntimeArtifacts,
     UpgradeDisposition,
     UpgradePolicy,
 };
@@ -44,7 +51,7 @@ use d2b_contracts_resource::v3::{
     execution_policy::{BoundedToken, ExecutionDomain},
     ResourceTypeName,
     SchemaFingerprint,
-    resource_schema::SchemaVersion,
+    resource_schema::{PlacementAnchor, SchemaVersion},
     volume::ViewRight,
     volume_state::{MigrationPolicy, PersistenceClass, SensitivityClass, VolumeStateSchemaId},
 };
@@ -110,6 +117,29 @@ pub fn controller() -> ComponentDescriptor {
         false,
     )
     .expect("a controller owning one ResourceType is valid")
+    .with_execution(ComponentExecution::Launchable {
+        binary_ref: BinaryRef::parse("volume-controller").expect("valid binary ref"),
+    })
+    .with_controller_placement(
+        ControllerInstanceScope::PerResourceTarget,
+        [ControllerTargetKind::Host, ControllerTargetKind::Guest],
+    )
+    .unwrap()
+    .with_target_capabilities([
+        ComponentTargetCapability::new(
+            ControllerTargetKind::Host,
+            ArtifactDigest::parse(DIGEST).expect("valid digest"),
+            [EffectPortClass::Storage],
+        )
+        .unwrap(),
+        ComponentTargetCapability::new(
+            ControllerTargetKind::Guest,
+            ArtifactDigest::parse(DIGEST).expect("valid digest"),
+            [EffectPortClass::Storage],
+        )
+        .unwrap(),
+    ])
+    .expect("target capabilities are valid")
 }
 
 fn state_namespace() -> ComponentStateNamespace {
@@ -141,7 +171,7 @@ fn state_namespace() -> ComponentStateNamespace {
 }
 
 pub fn binding() -> ResourceApiBinding {
-    ResourceApiBinding::new(
+    ResourceApiBinding::new_with_placement(
         ResourceTypeName::parse("Volume").expect("standard type"),
         SchemaVersion::new(1, 0).expect("valid version"),
         fingerprint("2"),
@@ -154,6 +184,7 @@ pub fn binding() -> ResourceApiBinding {
         .expect("a single-entry matrix is valid"),
         None,
         None,
+        PlacementAnchor::ExecutionRef,
     )
     .expect("a binding for an owned ResourceType is valid")
 }
@@ -182,6 +213,22 @@ pub fn manifest_with(
             preserves_durable_state: true,
         },
     )
+    .and_then(|manifest| {
+        manifest.with_target_runtime_artifacts([
+            TargetRuntimeArtifacts::new(
+                ControllerTargetKind::Host,
+                ArtifactDigest::parse(DIGEST).expect("valid digest"),
+                ArtifactDigest::parse(DIGEST).expect("valid digest"),
+            )
+            .unwrap(),
+            TargetRuntimeArtifacts::new(
+                ControllerTargetKind::Guest,
+                ArtifactDigest::parse(DIGEST).expect("valid digest"),
+                ArtifactDigest::parse(DIGEST).expect("valid digest"),
+            )
+            .unwrap(),
+        ])
+    })
 }
 
 pub fn manifest() -> ProviderManifest {
@@ -285,18 +332,7 @@ fn a_declared_state_volume_is_visible_and_a_stateless_provider_declares_none() {
         .expect("a stateful manifest is valid");
     assert!(manifest.declares_state_volume());
 
-    let stateless = ComponentDescriptor::new(
-        BoundedToken::parse("volume-controller").expect("valid id"),
-        ComponentType::Controller,
-        [ResourceTypeName::parse("Volume").expect("standard type")],
-        [BoundedToken::parse("assess-update").expect("valid method")],
-        [ExecutionDomain::System],
-        1,
-        ArtifactDigest::parse(DIGEST).expect("valid digest"),
-        [],
-        false,
-    )
-    .expect("a stateless controller is valid");
+    let stateless = controller();
     let manifest = manifest_with(trusted(), vec![stateless], vec![binding()])
         .expect("a stateless manifest is valid");
     // An empty ProviderStateSet is a normal outcome, not a defect.

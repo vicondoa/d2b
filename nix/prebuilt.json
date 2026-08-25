@@ -10,9 +10,10 @@
       "url": "https://github.com/vicondoa/d2b/releases/download/v1.4.1/d2b-activation-helper-1.4.1-x86_64-linux.tar.gz",
       "hash": "sha256-krP84+rfDOi/7EghxtPqjIWMx9Klryz9JLFMPZnGV8M="
     },
-    "d2b-priv-broker": {
+    "d2b-broker": {
       "url": "https://github.com/vicondoa/d2b/releases/download/v1.4.1/d2b-priv-broker-1.4.1-x86_64-linux.tar.gz",
-      "hash": "sha256-qY5eXFpenVG6UrgwwV4nQC+QQxFr3O+mJHVdOSj256A="
+      "hash": "sha256-qY5eXFpenVG6UrgwwV4nQC+QQxFr3O+mJHVdOSj256A=",
+      "sourceBinary": "d2b-priv-broker"
     },
     "d2b-unsafe-local-helper": {
       "url": "https://github.com/vicondoa/d2b/releases/download/v1.4.1/d2b-unsafe-local-helper-1.4.1-x86_64-linux.tar.gz",

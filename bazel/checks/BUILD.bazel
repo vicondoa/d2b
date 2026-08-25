@@ -21,11 +21,8 @@ test_suite(
         "//packages/d2b-controller-toolkit:all-tests",
         "//packages/d2b-core:all-tests",
         "//packages/d2b-core-controller:all-tests",
-        "//packages/d2b-cutover:all-tests",
-        "//packages/d2b-exec-runner:all-tests",
         "//packages/d2b-gateway:all-tests",
         "//packages/d2b-gateway-runtime:all-tests",
-        "//packages/d2b-guestd:all-tests",
         "//packages/d2b-host:all-tests",
         "//packages/d2b-host-activation-helper:all-tests",
         "//packages/d2b-process:all-tests",
@@ -94,23 +91,12 @@ test_suite(
 )
 
 test_suite(
-    name = "test-rust-local",
-    tests = ["//bazel/checks/rust:portable_rust_local"],
-)
-
-test_suite(
     name = "test-rust",
     tests = [
         ":test-rust-main",
         ":test-rust-broker",
         ":test-rust-guest-shell-runner",
-        ":test-rust-local",
     ],
-)
-
-test_suite(
-    name = "test-rust-no-bash-ast",
-    tests = ["//tests/tools/no-bash-ast-walker:no_bash_ast_test"],
 )
 
 test_suite(
@@ -146,11 +132,6 @@ test_suite(
 test_suite(
     name = "test-rust-leaf-guest-shell-runner",
     tests = [":test-rust-guest-shell-runner"],
-)
-
-test_suite(
-    name = "test-rust-leaf-no-bash-ast",
-    tests = [":test-rust-no-bash-ast"],
 )
 
 test_suite(

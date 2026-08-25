@@ -49,21 +49,21 @@ Rebuild the host once (`d2b activation switch Guest/work --apply`). The guest no
 - `/var/lib/d2b-guest/guest-config.nix` - a **writable** working
   copy, seeded once from the baseline. It is owned by the VM's
   `ssh.user` when one is declared, and by `root` otherwise (the
-  guest-control exec path can edit it either way).
+  component-session exec path can edit it either way).
 
-### Prerequisite: the guest-control channel
+### Prerequisite: the component-session channel
 
 `config sync` reads the edited file over the authenticated
-**guest-control** vsock - the daemon's `ReadGuestConfig` →
-guestd `ReadGuestFile` path - not over SSH. It is wired exactly when
-the VM both enables guest-control and declares a `guestConfigFile`:
+**component-session** vsock - the daemon's `ReadGuestConfig` →
+target-local Process `ReadGuestFile` path - not over SSH. It is wired exactly when
+the VM both enables component-session and declares a `guestConfigFile`:
 
 ```nix
-d2b.vms.work.guest.control.enable = true;   # the guest-control credential + guestd service
+d2b.vms.work.guest.componentSession.enable = true; # enable the target-local Process service
 d2b.vms.work.guestConfigFile = ./vms/work.guest.nix;
 ```
 
-With those set, guestd advertises the `ReadGuestFile` capability and
+With those set, target-local Process advertises the `ReadGuestFile` capability and
 serves a bounded read of exactly the working-copy path. Without them
 the capability stays absent and `config sync` **fails closed** with a
 typed error - it never falls back to SSH. `ssh.user` is **not**
@@ -92,7 +92,7 @@ When `ssh.user` is unset the working copy is owned by `root`.
    d2b activation config sync Guest/work
    ```
 
-   This pulls the edited file over the authenticated guest-control
+   This pulls the edited file over the authenticated component-session
    channel into a host-side staging copy
    (`~/.local/state/d2b/config-staging/work.guest.nix`). The host
    treats it as untrusted data - nothing is evaluated yet.
@@ -144,7 +144,7 @@ edit isn't silently forgotten before you approve it.
 - The CLI never auto-writes your config tree: `approve` only writes the
   `--to` path you name. It never touches anything you don't point it at.
 - `config sync` is host-initiated (the host reads the guest's working
-  copy over the authenticated guest-control vsock). The guest never
+  copy over the authenticated component-session vsock). The guest never
   initiates a connection to the host control plane, and there is no new
   socket or virtiofs share.
 - If `/var` is not persistent in your VM, the writable working copy is

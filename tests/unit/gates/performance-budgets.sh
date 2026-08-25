@@ -13,18 +13,6 @@ if [ "${D2B_PERF_STABLE:-0}" != 1 ]; then
   exit 0
 fi
 
-# --- heavy-gate sole-use semaphore (ADR 0046) ------------------------------
-# Enforcing the budgets spins up daemon/broker/VM-start timing work that
-# contends for the shared host, so real runs must never bypass the sole-use
-# heavy-gate semaphore. This guard sits AFTER the D2B_PERF_STABLE skip so the
-# cheap SKIP path (the common case)
-# never acquires a slot. The mere presence of D2B_HEAVY_GATE is not trusted:
-# the shared helper verifies this process genuinely holds a slot and re-execs
-# through the gate exactly once when it does not.
-# shellcheck source=tests/tools/heavy-gate-reexec.sh
-. "$ROOT/tests/tools/heavy-gate-reexec.sh"
-d2b_heavy_gate_reexec "$ROOT" "$0" "$@"
-
 if [ -z "${D2B_PERF_IN_NIX_SHELL:-}" ] && ! command -v python3 >/dev/null 2>&1; then
   if ! command -v nix >/dev/null 2>&1; then
     fail "performance budgets require python3 (or nix to provide it) once D2B_PERF_STABLE=1 is set"
@@ -44,7 +32,7 @@ add_cleanup "rm -rf -- \"$scratch\""
 bundle_root=$(d2b_cli_smoke_bundle_tree)
 cli_bin=$(d2b_cli_native_bin)
 daemon_bin=$(d2b_daemon_native_bin)
-[ -x "${D2B_BROKER_BIN:-}" ] || fail "D2B_BROKER_BIN must name the declared //packages/d2b-priv-broker:d2b_priv_broker artifact"
+[ -x "${D2B_BROKER_BIN:-}" ] || fail "D2B_BROKER_BIN must name the declared //packages/d2b-broker:d2b_broker artifact"
 broker_bin="$D2B_BROKER_BIN"
 
 wait_for_socket() {

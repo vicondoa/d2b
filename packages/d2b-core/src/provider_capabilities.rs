@@ -13,8 +13,8 @@ use serde::{Deserialize, Serialize};
 
 /// Host-side audio enforcement mechanism for a provider.
 ///
-/// Separate from [`AudioGuestEnforcementKind`] so that host and guest
-/// capabilities can evolve independently, and so "guestd enforced" is
+/// Separate from [`AudioGuestEnforcementKind`] so that host and target-local
+/// capabilities can evolve independently, and so target-side enforcement is
 /// never a valid description of host-side audio behaviour.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "kebab-case")]
@@ -32,19 +32,16 @@ pub enum AudioHostEnforcementKind {
 
 /// Guest-side audio enforcement mechanism for a provider.
 ///
-/// Separate from [`AudioHostEnforcementKind`] so that guest enforcement via
-/// guestd cannot be conflated with host-side PipeWire or qemu enforcement.
+/// Separate from [`AudioHostEnforcementKind`] so that target-local Process
+/// enforcement cannot be conflated with host-side PipeWire or qemu enforcement.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "kebab-case")]
 pub enum AudioGuestEnforcementKind {
-    /// Guest-side enforcement is not supported (qemu-media VMs, local-only
-    /// providers, or provider sandboxes without a running guestd agent).
+    /// Guest-side enforcement is not supported.
     #[default]
     Unsupported,
-    /// guestd-capable audio policy via the authenticated guest-control
-    /// transport (Cloud Hypervisor NixOS VMs) or provider peer transport
-    /// (ACA sandboxes with a guestd-compatible agent).
-    GuestdCapable,
+    /// Guest-side enforcement is provided by a signed target-local Process.
+    ProcessCapable,
 }
 
 /// Per-provider audio capability row, used by the daemon to select the
@@ -62,11 +59,11 @@ pub struct AudioProviderCapability {
 
 impl AudioProviderCapability {
     /// Capability row for Cloud Hypervisor NixOS VMs: PipeWire vhost-user-sound
-    /// host enforcement plus guestd guest enforcement.
+    /// host enforcement plus a signed target-local audio Process.
     pub fn cloud_hypervisor_nixos() -> Self {
         Self {
             host_enforcement: AudioHostEnforcementKind::PipeWireVhostUserSound,
-            guest_enforcement: AudioGuestEnforcementKind::GuestdCapable,
+            guest_enforcement: AudioGuestEnforcementKind::ProcessCapable,
             needs_local_state_file: true,
         }
     }
@@ -82,12 +79,11 @@ impl AudioProviderCapability {
     }
 
     /// Capability row for ACA sandbox targets: no local host enforcement;
-    /// guest enforcement via the guestd-compatible sandbox agent over the
-    /// provider peer transport.
+    /// guest enforcement via the signed target-local audio Process.
     pub fn aca_sandbox() -> Self {
         Self {
             host_enforcement: AudioHostEnforcementKind::None,
-            guest_enforcement: AudioGuestEnforcementKind::GuestdCapable,
+            guest_enforcement: AudioGuestEnforcementKind::ProcessCapable,
             needs_local_state_file: false,
         }
     }
@@ -105,7 +101,7 @@ pub enum ConsoleBackendKind {
     /// Local hypervisor console backend (Cloud Hypervisor serial socket or
     /// broker-owned fd).
     LocalHypervisor,
-    /// Provider relay transport (ACA sandbox via ADR 0032 guestd route).
+    /// Provider relay transport (ACA sandbox via the provider relay route).
     ProviderRelay,
 }
 

@@ -1,6 +1,6 @@
 { inputs }:
 
-{ config, pkgs, lib, ... }:
+{ config, pkgs, lib, d2bHostTools ? null, d2bHostToolOverrides ? null, ... }:
 
 let
   d2bLib = import ./lib.nix { inherit lib; };
@@ -14,7 +14,7 @@ let
   # lib.nix helpers (vmRunner / vmToplevel / vmDeclaredRunner)
   # read it.
   vmSubmodule = (import ./vm-submodule.nix { inherit inputs; })
-    { inherit config lib pkgs; };
+    { inherit config lib pkgs d2bHostTools d2bHostToolOverrides; };
   composeVm = vmSubmodule._composeVm;
 
   cfg = config.d2b;
@@ -194,13 +194,6 @@ in
           tag = "d2b-obs-sec";
           proto = "virtiofs";
         };
-        guestControlShare = lib.optional vm'.guest.control.enable {
-          source = "${cfg.site.stateDir}/guest-control-${name}";
-          mountPoint = "/run/d2b-guest-control-host";
-          tag = "d2b-gctl";
-          proto = "virtiofs";
-          readOnly = true;
-        };
         composedModules = [
           # Framework guest baseline + d2b-managed sshd host keys.
           ./base.nix
@@ -231,14 +224,14 @@ in
               # the GuestConfig target and exists independently of any
               # SSH metadata. `ssh.user` only chooses ownership when it
               # is set; when absent the framework defaults ownership to
-              # root (guestd reads the copy, and the guest-control exec
-              # path edits it, as root).
+              # root (the Guest config-nixos service reads the copy, and the
+              # target-local Process path edits it under its own policy).
               owner = if vm'.ssh.user != null then vm'.ssh.user else "root";
             in {
               environment.etc."d2b/guest-config.nix".source = vm'.guestConfigFile;
               systemd.tmpfiles.rules = [
-                "d /var/lib/d2b-guest 0750 ${owner} users -"
-                "C /var/lib/d2b-guest/guest-config.nix 0640 ${owner} users - /etc/d2b/guest-config.nix"
+                "d /var/lib/d2b-guest 0750 ${owner} d2bd -"
+                "C /var/lib/d2b-guest/guest-config.nix 0640 ${owner} d2bd - /etc/d2b/guest-config.nix"
               ];
             }
           )
@@ -276,25 +269,16 @@ in
             {
               d2b.sshUser = vm'.ssh.user;
               d2b.sudo = vm'.sudo;
-              d2b.guestControl.enable = vm'.guest.control.enable;
+              d2b.componentSession.enable = vm'.guest.componentSession.enable;
               # D17: thread the operator-editable working-copy path into
-              # the guest independently of ssh.user so guestd advertises
-              # the ReadGuestFile capability exactly when there is a
+              # the guest independently of ssh.user so config-nixos exposes
+              # the bounded GuestConfig capability exactly when there is a
               # guestConfigFile to sync.
-              d2b.guestControl.guestConfigPath =
+              d2b.componentSession.guestConfigPath =
                 if vm'.guestConfigFile != null
                 then "/var/lib/d2b-guest/guest-config.nix"
                 else null;
-              d2b.guestControl.exec = {
-                enable = lib.mkForce vm'.guest.exec.enable;
-                # The host-fixed workload user every exec runs as (never root),
-                # derived from the per-VM workload user. guestd runs every exec
-                # as this user in a PAM login session.
-                execUser = lib.mkForce vm'.ssh.user;
-                detachedMaxRuntimeSec = lib.mkForce vm'.guest.exec.detachedMaxRuntimeSec;
-                interactiveMaxRuntimeSec = lib.mkForce vm'.guest.exec.interactiveMaxRuntimeSec;
-              };
-              d2b.guestControl.shell = {
+              d2b.componentSession.shell = {
                 enable = lib.mkForce vm'.guest.shell.enable;
                 defaultName = lib.mkForce vm'.guest.shell.defaultName;
                 maxSessions = lib.mkForce vm'.guest.shell.maxSessions;
@@ -344,7 +328,7 @@ in
                   tag = "d2b-ssh-host";
                   proto = "virtiofs";
                 }
-              ] ++ obsSecretsShare ++ guestControlShare);
+              ] ++ obsSecretsShare);
             }
           ];
       in (composeVm name composedModules) // {

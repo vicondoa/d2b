@@ -5,6 +5,12 @@ use std::{
     sync::Mutex,
 };
 
+use d2b_contracts_resource::v3::{
+    ResourceRef,
+    execution_policy::{BoundedToken, ExecutionDomain},
+    process::{ExecutionSpec, ProcessClass, ProcessSpec},
+};
+
 use crate::{
     Authorizer, ExecutionTarget, ShellPool, ShellSession, ShellTerminalError, Subject,
     session::{OutputRing, RingReplay, SupervisorIdentity},
@@ -206,6 +212,76 @@ struct AuthorityState {
     next_capability: u64,
 }
 
+/// The target-local Process resource created for one ShellSession supervisor.
+#[derive(Clone, PartialEq, Eq)]
+pub struct SupervisorProcessResource {
+    resource_ref: ResourceRef,
+    owner_ref: ResourceRef,
+    spec: ProcessSpec,
+}
+
+impl SupervisorProcessResource {
+    /// Build the target-local Process intent owned by one ShellSession.
+    pub fn for_session(session: &ShellSession) -> Self {
+        let resource_ref = session.supervisor_process_ref().clone();
+        let owner_ref =
+            ResourceRef::parse(&format!("{}/{}", session.resource_type(), session.name()))
+                .expect("validated ShellSession resource reference");
+        let execution = ExecutionSpec::new(
+            session.supervisor_execution_ref().clone(),
+            Some(ExecutionDomain::User),
+            Some(session.supervisor_user_ref().clone()),
+            ProcessClass::Service,
+            BoundedToken::parse("shell-supervisor-main").expect("static process template"),
+            None,
+            Vec::new(),
+            Vec::new(),
+            Default::default(),
+            Default::default(),
+            None,
+            Vec::new(),
+            Default::default(),
+        )
+        .expect("validated supervisor Process execution spec");
+        Self {
+            resource_ref,
+            owner_ref,
+            spec: ProcessSpec::minimal(execution),
+        }
+    }
+
+    /// Borrow the target-local Process identity.
+    pub const fn resource_ref(&self) -> &ResourceRef {
+        &self.resource_ref
+    }
+
+    /// Borrow the ShellSession owner reference.
+    pub const fn owner_ref(&self) -> &ResourceRef {
+        &self.owner_ref
+    }
+
+    /// Borrow the Process resource spec.
+    pub const fn spec(&self) -> &ProcessSpec {
+        &self.spec
+    }
+}
+
+impl SupervisorProcessResource {
+    fn from_session(session: &ShellSession) -> Self {
+        Self::for_session(session)
+    }
+}
+
+impl std::fmt::Debug for SupervisorProcessResource {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("SupervisorProcessResource")
+            .field("resource_ref", &"<redacted>")
+            .field("owner_ref", &"<redacted>")
+            .finish_non_exhaustive()
+    }
+}
+
 /// Daemon-owned authority operations required by controller and supervisor processes.
 ///
 /// Production implementations must forward every operation to one durable
@@ -222,6 +298,15 @@ pub trait ShellAuthorityPort: Send + Sync {
 
     /// Atomically create one exact session authority and mint its grant.
     fn open_session(&self, session: &ShellSession) -> Result<SessionGrant, ShellTerminalError>;
+
+    /// Create or adopt the session's target-local supervisor Process child.
+    ///
+    /// This is a resource-intent operation only. The controller never gets a
+    /// process handle and never spawns the child itself.
+    fn ensure_supervisor_process(&self, session: &ShellSession) -> Result<(), ShellTerminalError>;
+
+    /// Delete the session's supervisor Process child after its streams close.
+    fn remove_supervisor_process(&self, session: &ShellSession) -> Result<(), ShellTerminalError>;
 
     /// Verify that a recovered session remains the exact authoritative incumbent.
     fn verify_recovery(
@@ -306,18 +391,19 @@ pub trait ShellAuthorityPort: Send + Sync {
     ) -> Result<(), ShellTerminalError>;
 }
 
-/// Hermetic daemon-authority model for tests and integration fakes.
+/// Daemon-owned session-generation, capability, and attachment ledger.
 ///
-/// This type deliberately models a single daemon owner. Production callers
-/// must implement [`ShellAuthorityPort`] with the daemon's durable authority
-/// service and construct one client in each controller or supervisor process.
+/// The ledger deliberately contains no resource-store or process authority.
+/// A production daemon composes it with its authenticated Resource API adapter,
+/// while the public [`InMemoryShellAuthority`] wrapper uses it for hermetic
+/// tests.
 #[derive(Default)]
-pub struct InMemoryShellAuthority {
+pub struct ShellAuthorityLedger {
     state: Mutex<AuthorityState>,
 }
 
-impl InMemoryShellAuthority {
-    /// Construct an empty test authority owner.
+impl ShellAuthorityLedger {
+    /// Construct an empty daemon authority ledger.
     pub fn new() -> Self {
         Self::default()
     }
@@ -326,6 +412,38 @@ impl InMemoryShellAuthority {
         self.state
             .lock()
             .map_err(|_| ShellTerminalError::CapacityExceeded)
+    }
+
+    /// Validate that a Provider-reconstructed session still matches the
+    /// authority ledger without touching its test-only Process map.
+    pub fn validate_session(&self, session: &ShellSession) -> Result<(), ShellTerminalError> {
+        let state = self.lock()?;
+        let Some(entry) = state.sessions.get(session.name()) else {
+            return Err(ShellTerminalError::SupervisorAmbiguous);
+        };
+        if entry.fingerprint != SessionFingerprint::from_session(session) {
+            return Err(ShellTerminalError::StaleSessionGeneration);
+        }
+        Ok(())
+    }
+
+    /// Return whether any authenticated attachment still owns this session.
+    pub fn has_active_attachments(
+        &self,
+        session: &ShellSession,
+    ) -> Result<bool, ShellTerminalError> {
+        let state = self.lock()?;
+        let Some(entry) = state.sessions.get(session.name()) else {
+            return Err(ShellTerminalError::SupervisorAmbiguous);
+        };
+        if entry.fingerprint != SessionFingerprint::from_session(session) {
+            return Err(ShellTerminalError::StaleSessionGeneration);
+        }
+        Ok(state.pools.get(session.pool_name()).is_some_and(|pool| {
+            pool.entries
+                .iter()
+                .any(|attachment| attachment.session_name == session.name())
+        }))
     }
 
     fn pool_mut<'a>(
@@ -370,13 +488,13 @@ impl InMemoryShellAuthority {
     }
 }
 
-impl std::fmt::Debug for InMemoryShellAuthority {
+impl std::fmt::Debug for ShellAuthorityLedger {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        formatter.write_str("InMemoryShellAuthority(<test-only>)")
+        formatter.write_str("ShellAuthorityLedger(<daemon-owned>)")
     }
 }
 
-impl ShellAuthorityPort for InMemoryShellAuthority {
+impl ShellAuthorityPort for ShellAuthorityLedger {
     fn restore_pool(
         &self,
         pool: &ShellPool,
@@ -440,6 +558,14 @@ impl ShellAuthorityPort for InMemoryShellAuthority {
             1,
             SessionCapability::from_authority(capability_id, 1, session.name().to_owned()),
         ))
+    }
+
+    fn ensure_supervisor_process(&self, session: &ShellSession) -> Result<(), ShellTerminalError> {
+        self.validate_session(session)
+    }
+
+    fn remove_supervisor_process(&self, session: &ShellSession) -> Result<(), ShellTerminalError> {
+        self.validate_session(session)
     }
 
     fn verify_recovery(
@@ -724,11 +850,198 @@ impl ShellAuthorityPort for InMemoryShellAuthority {
     }
 }
 
+/// Hermetic authority wrapper for provider unit and integration tests.
+///
+/// Production composition uses [`ShellAuthorityLedger`] directly and supplies
+/// the Resource API process adapter at the daemon boundary.
+#[derive(Default)]
+pub struct InMemoryShellAuthority {
+    ledger: ShellAuthorityLedger,
+    supervisor_processes: Mutex<BTreeMap<String, SupervisorProcessResource>>,
+}
+
+impl InMemoryShellAuthority {
+    /// Construct an empty test authority owner.
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Return the currently declared supervisor Process resource.
+    pub fn supervisor_process_resource(
+        &self,
+        session_name: &str,
+    ) -> Option<SupervisorProcessResource> {
+        self.supervisor_processes
+            .lock()
+            .ok()
+            .and_then(|processes| processes.get(session_name).cloned())
+    }
+
+    fn ensure_supervisor_process_state(
+        &self,
+        session: &ShellSession,
+    ) -> Result<(), ShellTerminalError> {
+        self.ledger.validate_session(session)?;
+        let value = SupervisorProcessResource::from_session(session);
+        let mut processes = self
+            .supervisor_processes
+            .lock()
+            .map_err(|_| ShellTerminalError::SupervisorAmbiguous)?;
+        if let Some(existing) = processes.get(session.name()) {
+            if existing != &value {
+                return Err(ShellTerminalError::SupervisorAmbiguous);
+            }
+            return Ok(());
+        }
+        processes.insert(session.name().to_owned(), value);
+        Ok(())
+    }
+
+    fn remove_supervisor_process_state(
+        &self,
+        session: &ShellSession,
+    ) -> Result<(), ShellTerminalError> {
+        self.ledger.validate_session(session)?;
+        if self.ledger.has_active_attachments(session)? {
+            return Err(ShellTerminalError::CapacityExceeded);
+        }
+        self.supervisor_processes
+            .lock()
+            .map_err(|_| ShellTerminalError::SupervisorAmbiguous)?
+            .remove(session.name());
+        Ok(())
+    }
+}
+
+impl std::fmt::Debug for InMemoryShellAuthority {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str("InMemoryShellAuthority(<test-only>)")
+    }
+}
+
+impl ShellAuthorityPort for InMemoryShellAuthority {
+    fn restore_pool(
+        &self,
+        pool: &ShellPool,
+        attached_streams: u32,
+    ) -> Result<(), ShellTerminalError> {
+        self.ledger.restore_pool(pool, attached_streams)
+    }
+
+    fn open_session(&self, session: &ShellSession) -> Result<SessionGrant, ShellTerminalError> {
+        self.ledger.open_session(session)
+    }
+
+    fn ensure_supervisor_process(&self, session: &ShellSession) -> Result<(), ShellTerminalError> {
+        self.ensure_supervisor_process_state(session)
+    }
+
+    fn remove_supervisor_process(&self, session: &ShellSession) -> Result<(), ShellTerminalError> {
+        self.remove_supervisor_process_state(session)
+    }
+
+    fn verify_recovery(
+        &self,
+        session: &ShellSession,
+        identity: &SupervisorIdentity,
+    ) -> Result<bool, ShellTerminalError> {
+        self.ledger.verify_recovery(session, identity)
+    }
+
+    fn advance_session(
+        &self,
+        session: &ShellSession,
+        retired_identity: Option<&SupervisorIdentity>,
+    ) -> Result<SessionGrant, ShellTerminalError> {
+        self.ledger.advance_session(session, retired_identity)
+    }
+
+    fn claim_supervisor(
+        &self,
+        session: &ShellSession,
+        identity: &SupervisorIdentity,
+    ) -> Result<(), ShellTerminalError> {
+        self.ledger.claim_supervisor(session, identity)
+    }
+
+    fn validate_session(
+        &self,
+        session: &ShellSession,
+        identity: &SupervisorIdentity,
+    ) -> Result<(), ShellTerminalError> {
+        ShellAuthorityPort::validate_session(&self.ledger, session, identity)
+    }
+
+    fn consume_capability(
+        &self,
+        session: &ShellSession,
+        identity: &SupervisorIdentity,
+        capability: &SessionCapability,
+    ) -> Result<(), ShellTerminalError> {
+        self.ledger
+            .consume_capability(session, identity, capability)
+    }
+
+    fn admit_capability_attachment(
+        &self,
+        session: &ShellSession,
+        identity: &SupervisorIdentity,
+        capability: &SessionCapability,
+    ) -> Result<Attachment, ShellTerminalError> {
+        self.ledger
+            .admit_capability_attachment(session, identity, capability)
+    }
+
+    fn reserve_attachment(
+        &self,
+        session: &ShellSession,
+        identity: &SupervisorIdentity,
+    ) -> Result<Attachment, ShellTerminalError> {
+        self.ledger.reserve_attachment(session, identity)
+    }
+
+    fn release_attachment(
+        &self,
+        session: &ShellSession,
+        attachment: &Attachment,
+    ) -> Result<(), ShellTerminalError> {
+        self.ledger.release_attachment(session, attachment)
+    }
+
+    fn reconcile_pool_attachments(
+        &self,
+        pool: &ShellPool,
+        attached_streams: u32,
+    ) -> Result<(), ShellTerminalError> {
+        self.ledger
+            .reconcile_pool_attachments(pool, attached_streams)
+    }
+
+    fn retire_proven_stale(
+        &self,
+        pool: &ShellPool,
+        stale_attachments: &[Attachment],
+        attached_streams: u32,
+    ) -> Result<(), ShellTerminalError> {
+        self.ledger
+            .retire_proven_stale(pool, stale_attachments, attached_streams)
+    }
+
+    fn finalize_session(
+        &self,
+        session: &ShellSession,
+        identity: Option<&SupervisorIdentity>,
+    ) -> Result<(), ShellTerminalError> {
+        self.ledger.finalize_session(session, identity)
+    }
+}
+
 /// A successful attachment response with redacted terminal replay bytes.
 pub struct AttachReceipt {
     generation: u64,
     replay: RingReplay,
     attachment: Attachment,
+    stream_name: &'static str,
 }
 
 impl AttachReceipt {
@@ -745,6 +1058,11 @@ impl AttachReceipt {
     /// Return the opaque handle that releases this attachment on disconnect.
     pub fn attachment(&self) -> Attachment {
         self.attachment.clone()
+    }
+
+    /// Return the sole authenticated ComponentSession stream name.
+    pub const fn stream_name(&self) -> &'static str {
+        self.stream_name
     }
 }
 
@@ -801,7 +1119,13 @@ impl SessionSupervisor {
             generation,
             replay: self.ring.tail(request.tail_bytes as usize),
             attachment,
+            stream_name: super::TERMINAL_STREAM,
         })
+    }
+
+    /// Borrow the Process child resource represented by this supervisor.
+    pub const fn process_ref(&self) -> &ResourceRef {
+        self.session.supervisor_process_ref()
     }
 
     /// Consume a one-shot capability after rechecking the current request authority.
@@ -821,6 +1145,7 @@ impl SessionSupervisor {
             generation,
             replay: self.ring.tail(0),
             attachment,
+            stream_name: super::TERMINAL_STREAM,
         })
     }
 

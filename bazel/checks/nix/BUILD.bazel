@@ -16,14 +16,31 @@ _SURFACES = {
             "nixos-modules/processes-json.nix",
         ],
     },
-    "guest-control": {
-        "cases": [],
+    "broker-profiles": {
+        "cases": ["guest-broker", "host-tools-source", "prebuilt-broker"],
+        "package": "bazel/checks/fixtures",
+        "files": [
+            "bazel/checks/fixtures/BUILD.bazel",
+            "docs/reference/schemas/v3/providers/transport-azure-relay.transport-settings.json",
+            "docs/reference/schemas/v3/providers/transport-vsock.transport-binding.json",
+            "nixos-modules/rust-host-tools.nix",
+            "nixos-modules/vm-evaluator.nix",
+            "nix/prebuilt.json",
+            "nix/prebuilt.nix",
+            "nixos-modules/guest-broker.nix",
+            "nixos-modules/host-broker.nix",
+            "nixos-modules/prebuilt-packages.nix",
+        ],
+        "modules": [],
+    },
+    "component-session": {
+        "cases": ["gateway-component-session", "guest-component-session"],
         "files": [
             "nixos-modules/vm-evaluator.nix",
         ],
         "modules": [
-            "nixos-modules/guest-control.nix",
-            "nixos-modules/guest-control-host.nix",
+            "nixos-modules/component-session.nix",
+            "nixos-modules/guest-broker.nix",
             "nixos-modules/processes-json.nix",
             "nixos-modules/vm-guest-base.nix",
         ],
@@ -87,10 +104,11 @@ _SURFACES = {
         ],
     },
     "provider-catalog": {
-        "cases": ["provider-elf-shim"],
+        "cases": ["provider-catalog", "provider-elf-shim"],
         "package": "packages/d2b-provider-activation-nixos",
         "files": [
             "nix/provider-elf-shim.nix",
+            "nixos-modules/generated/provider-catalog-shape.nix",
         ],
         "modules": [
             "nixos-modules/provider-catalog.nix",
@@ -367,6 +385,15 @@ nix_native_test(
 )
 
 nix_native_test(
+    name = "flake-eval-x86-realized-guest-static",
+    command = 'build --no-write-lock-file --no-link --print-out-paths "$FLAKE_REF#checks.x86_64-linux.guest-static-elf" >/dev/null',
+    lane = "flake-realized-guest-static",
+    max_kib = 14665373,
+    data = ["//:flake.lock"],
+    timeout = "eternal",
+)
+
+nix_native_test(
     name = "flake-eval-aarch64",
     command = 'eval --no-write-lock-file --raw "$FLAKE_REF#checks.aarch64-linux.eval-minimal.drvPath" >/dev/null',
     lane = "flake-aarch64",
@@ -386,6 +413,7 @@ test_suite(
         ":flake-eval-x86-realized-gas-city",
         ":flake-eval-x86-realized-supply-chain",
         ":flake-eval-x86-realized-package-output",
+        ":flake-eval-x86-realized-guest-static",
     ],
 )
 

@@ -2,21 +2,12 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use d2b_contracts_resource::v3::{
-    ControllerGeneration,
-    ResourceGeneration,
-    ResourceName,
-    ResourceRef,
-    ResourceTypeName,
-    ResourceUid,
-    SchemaFingerprint,
-};
 use d2b_contracts_resource::v3::identity::{
-    AuthenticatedSubjectContext,
-    EvidenceClass,
-    Locality,
-    ServiceName,
-    SessionPurpose,
+    AuthenticatedSubjectContext, EvidenceClass, Locality, ServiceName, SessionPurpose,
+};
+use d2b_contracts_resource::v3::{
+    ControllerGeneration, ResourceGeneration, ResourceName, ResourceRef, ResourceTypeName,
+    ResourceUid, SchemaFingerprint,
 };
 
 /// Borrowed subject evidence admitted by the authenticated session adapter.
@@ -319,15 +310,10 @@ impl AuthorizationHandler {
 #[cfg(test)]
 mod tests {
     use d2b_contracts_resource::v3::SchemaFingerprint;
-use d2b_contracts_resource::v3::identity::{
-    BindingDigest,
-    ReconnectGeneration,
-    ServiceName,
-    SessionBinding,
-    SessionPurpose,
-    TranscriptHash,
-    TransportBinding,
-};
+    use d2b_contracts_resource::v3::identity::{
+        BindingDigest, ReconnectGeneration, ServiceName, SessionBinding, SessionPurpose,
+        TranscriptHash, TransportBinding,
+    };
 
     use super::*;
 

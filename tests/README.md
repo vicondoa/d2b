@@ -66,7 +66,7 @@ The source-hygiene gate fails closed when `D2B_SHELLCHECK_BIN` is unavailable.
 | `make test-policy` | composed Bazel source, workspace/lock, supply-chain, and changelog policy suites | local + CI |
 | `make test-performance-budgets` | advisory performance canary; without `D2B_PERF_STABLE=1` it reports `SKIP` and enforces nothing | local + CI |
 | `make test-integration` | type-9 podman container tests | conditional local host lane (podman; not the PR pipeline) |
-| `make test-host-integration` | type-10 runNixOSTest VM checks; locally builds nine host tools with Bazel, injects them into the checks, and optionally uploads their built dependency closures to Attic | conditional local NixOS host lane (KVM; TCG fallback; not the PR pipeline) |
+| `make test-host-integration` | type-10 runNixOSTest VM checks; locally builds eight host tools with Bazel, injects them into the checks, and optionally uploads their built dependency closures to Attic | conditional local NixOS host lane (KVM; TCG fallback; not the PR pipeline) |
 | `make check-fast` | compatibility alias for `make check` | local + CI |
 | `make bazel-check` | Bazel aggregate suite used by `make check`. Defaults to BuildBuddy remotely; CI forces `D2B_BAZEL_PROFILE=local` | local or remote |
 | `make heavy-gate-build && bazel-bin/packages/xtask/xtask heavy-gate -- env D2B_LIVE=1 bash tests/integration/live/<x>.sh` | type-11 live-host tests, through the heavy-gate semaphore | **manual, against a deployed d2b host** |
@@ -79,7 +79,7 @@ target. Cargo manifests and `Cargo.lock` remain rules_rs metadata authority,
 while standalone crate Cargo commands are not documented or required gate
 evidence.
 
-`make test-host-integration` first builds the fixed nine host tools with local
+`make test-host-integration` first builds the fixed eight host tools with local
 Bazel, injects the staged bundle into the selected NixOS `vmChecks`, and then
 uploads their built dependency closures to configured Attic in one operation.
 The `vmCheck` result paths are excluded so capability skips are never cached as
@@ -158,8 +158,8 @@ remediation; do not work around it by moving the gate into `/tmp` or another
 user-owned location.
 
 Current live-host scripts include `d2b-store.sh` for per-VM store
-adoption and `usbip-guestd-lifecycle.sh` for USBIP guestd attach/detach across
-a `d2bd` restart. The USBIP script requires
+adoption and `usbip-lifecycle.sh` for USBIP attach/detach across a `d2bd`
+restart. The USBIP script requires
 `D2B_USBIP_VM=<vm>` and `D2B_USBIP_BUSID=<busid>` and uses only `d2b usb`
 verbs for USB state changes.
 

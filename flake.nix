@@ -140,23 +140,69 @@
         };
 
       providerElfShim = import ./nix/provider-elf-shim.nix;
+      # The Guest static workspace mirrors the shared daemon/broker dependency
+      # closure. Guest packaging contains only the shared daemon, broker,
+      # and signed Provider workspace inputs.
       mkGuestRustPackagesSrc = pkgs:
         pkgs.runCommand "d2b-guest-rust-src" { } ''
           mkdir -p $out/packages
-          cp -r ${./packages/d2b-realm-core} $out/packages/d2b-realm-core
-          cp -r ${./packages/d2b-core} $out/packages/d2b-core
+          cp -r ${./packages/d2b-audit} $out/packages/d2b-audit
+          cp -r ${./packages/d2b-broker} $out/packages/d2b-broker
+          cp -r ${./packages/d2b-bus} $out/packages/d2b-bus
           cp -r ${./packages/d2b-contracts} $out/packages/d2b-contracts
+          cp -r ${./packages/d2b-contracts-broker} $out/packages/d2b-contracts-broker
           cp -r ${./packages/d2b-contracts-control} $out/packages/d2b-contracts-control
+          cp -r ${./packages/d2b-contracts-provider} $out/packages/d2b-contracts-provider
           cp -r ${./packages/d2b-contracts-resource} $out/packages/d2b-contracts-resource
-          cp -r ${./packages/d2b-guestd} $out/packages/d2b-guestd
-          cp -r ${./packages/d2b-exec-runner} $out/packages/d2b-exec-runner
+          cp -r ${./packages/d2b-contracts-zone-session} $out/packages/d2b-contracts-zone-session
+          cp -r ${./packages/d2b-controller-toolkit} $out/packages/d2b-controller-toolkit
+          cp -r ${./packages/d2b-core} $out/packages/d2b-core
+          cp -r ${./packages/d2b-core-controller} $out/packages/d2b-core-controller
+          cp -r ${./packages/d2b-gateway} $out/packages/d2b-gateway
+          cp -r ${./packages/d2b-gateway-runtime} $out/packages/d2b-gateway-runtime
+          cp -r ${./packages/d2b-host} $out/packages/d2b-host
           cp -r ${./packages/d2b-sk-frontend} $out/packages/d2b-sk-frontend
+          cp -r ${./packages/d2b-process} $out/packages/d2b-process
+          cp -r ${./packages/d2b-process-conformance} $out/packages/d2b-process-conformance
+          cp -r ${./packages/d2b-provider} $out/packages/d2b-provider
+          cp -r ${./packages/d2b-provider-activation-nixos} $out/packages/d2b-provider-activation-nixos
+          cp -r ${./packages/d2b-provider-audio-pipewire} $out/packages/d2b-provider-audio-pipewire
+          cp -r ${./packages/d2b-provider-clipboard-wayland} $out/packages/d2b-provider-clipboard-wayland
+          cp -r ${./packages/d2b-provider-config-nixos} $out/packages/d2b-provider-config-nixos
+          cp -r ${./packages/d2b-provider-device-security-key} $out/packages/d2b-provider-device-security-key
+          cp -r ${./packages/d2b-provider-device-tpm} $out/packages/d2b-provider-device-tpm
+          cp -r ${./packages/d2b-provider-device-usbip} $out/packages/d2b-provider-device-usbip
+          cp -r ${./packages/d2b-provider-display-wayland} $out/packages/d2b-provider-display-wayland
+          cp -r ${./packages/d2b-provider-network-local} $out/packages/d2b-provider-network-local
+          cp -r ${./packages/d2b-provider-notification-desktop} $out/packages/d2b-provider-notification-desktop
+          cp -r ${./packages/d2b-provider-observability-otel} $out/packages/d2b-provider-observability-otel
+          cp -r ${./packages/d2b-provider-runtime-azure-container-apps} $out/packages/d2b-provider-runtime-azure-container-apps
+          cp -r ${./packages/d2b-provider-runtime-cloud-hypervisor} $out/packages/d2b-provider-runtime-cloud-hypervisor
+          cp -r ${./packages/d2b-provider-shell-terminal} $out/packages/d2b-provider-shell-terminal
+          cp -r ${./packages/d2b-provider-supervisor} $out/packages/d2b-provider-supervisor
+          cp -r ${./packages/d2b-provider-system-core} $out/packages/d2b-provider-system-core
+          cp -r ${./packages/d2b-provider-system-minijail} $out/packages/d2b-provider-system-minijail
+          cp -r ${./packages/d2b-provider-system-systemd} $out/packages/d2b-provider-system-systemd
+          cp -r ${./packages/d2b-provider-toolkit} $out/packages/d2b-provider-toolkit
+          cp -r ${./packages/d2b-provider-transport-azure-relay} $out/packages/d2b-provider-transport-azure-relay
+          cp -r ${./packages/d2b-provider-volume-local} $out/packages/d2b-provider-volume-local
+          cp -r ${./packages/d2b-realm-core} $out/packages/d2b-realm-core
+          cp -r ${./packages/d2b-resource-api} $out/packages/d2b-resource-api
+          cp -r ${./packages/d2b-resource-store} $out/packages/d2b-resource-store
+          cp -r ${./packages/d2b-resource-store-redb} $out/packages/d2b-resource-store-redb
+          cp -r ${./packages/d2b-session} $out/packages/d2b-session
+          cp -r ${./packages/d2b-session-unix} $out/packages/d2b-session-unix
+          cp -r ${./packages/d2b-telemetry} $out/packages/d2b-telemetry
+          cp -r ${./packages/d2b-zone-routing} $out/packages/d2b-zone-routing
+          cp -r ${./packages/d2bd} $out/packages/d2bd
+          cp -r ${./packages/d2bd-runtime} $out/packages/d2bd-runtime
+          mkdir -p $out/docs/reference/schemas/v3/providers
+          cp ${./docs/reference/schemas/v3/providers/transport-azure-relay.transport-settings.json} \
+            $out/docs/reference/schemas/v3/providers/transport-azure-relay.transport-settings.json
+          cp ${./docs/reference/schemas/v3/providers/transport-vsock.transport-binding.json} \
+            $out/docs/reference/schemas/v3/providers/transport-vsock.transport-binding.json
           cp ${./packages/Cargo.guest.lock} $out/packages/Cargo.lock
-          chmod -R u+w $out/packages/d2b-core
-          chmod -R u+w $out/packages/d2b-contracts
-          chmod -R u+w $out/packages/d2b-contracts-control
-          chmod -R u+w $out/packages/d2b-contracts-resource
-          chmod -R u+w $out/packages/d2b-realm-core
+          chmod -R u+w $out/packages
           cp ${./tests/fixtures/guest-rust-workspace/d2b-contracts.Cargo.toml} \
             $out/packages/d2b-contracts/Cargo.toml
           cp ${./tests/fixtures/guest-rust-workspace/d2b-realm-core.Cargo.toml} \
@@ -219,7 +265,13 @@
         mkBazelShellHook = testPath: ''
           export D2B_PROJECT_SHELL=d2b
           export D2B_BAZEL_BIN="${bazel920}/bin/bazel"
-          export BAZEL_SH="''${BAZEL_SH:-${bazelActionShell}/bin/bash}"
+          if [ -z "''${BAZEL_SH:-}" ]; then
+            if [ -x /bin/bash ]; then
+              export BAZEL_SH=/bin/bash
+            else
+              export BAZEL_SH="${bazelActionShell}/bin/bash"
+            fi
+          fi
           export D2B_SHELLCHECK_BIN="${pkgs.shellcheck}/bin/shellcheck"
           export D2B_BAZEL_TEST_PATH="${testPath}"
         '';
@@ -366,7 +418,10 @@
             version = "0.0.0-bootstrap";
             src = guestRustPackagesSrc;
             sourceRoot = "d2b-guest-rust-src/packages";
-            inherit cargoLock;
+            cargoLock = {
+              lockFile = ./packages/Cargo.guest.lock;
+              outputHashes."wl-proxy-0.1.2" = "sha256-1yO1zgzSyzQ2DnDMpVxcnI5BsTNvXfzIUS+RNlPj4A8=";
+            };
             cargoBuildFlags = [ "--package" packageName "--bin" binName ];
             doCheck = false;
             RUSTC_WRAPPER = "";
@@ -468,9 +523,9 @@
           install -Dm644 ${./completions/d2b.zsh}  "$out/share/zsh/site-functions/_d2b"
           install -Dm644 ${./completions/d2b.fish} "$out/share/fish/vendor_completions.d/d2b.fish"
         '';
-        d2b-guestd-static = guestStaticPackage "d2b-guestd" "d2b-guestd";
-        d2b-exec-runner-static =
-          guestStaticPackage "d2b-exec-runner" "d2b-exec-runner";
+        d2bd-guest-static = guestStaticPackage "d2bd" "d2bd";
+        d2b-broker-guest-static =
+          guestStaticPackage "d2b-broker" "d2b-broker";
         d2b-sk-frontend-static =
           guestStaticPackage "d2b-sk-frontend" "d2b-sk-frontend";
         d2b-guest-shell-runner-static = guestShellRunnerStatic;
@@ -576,7 +631,7 @@
       # userland - e.g. proving a static d2b binary runs on stock Ubuntu.
       # It deliberately does NOT boot systemd for daemon/socket activation;
       # that is covered natively by
-      # packages/d2b-priv-broker/tests/socket_activation.rs plus nix-unit.
+      # packages/d2b-broker/tests/socket_activation.rs plus nix-unit.
       # See tests/integration/containers/README.md.
       #
       # Auto-discovered from tests/integration/containers/images/*.nix: each image module is
@@ -956,7 +1011,7 @@
             graphics.videoSidecar = true;
             audio.enable = true;
             usbip.yubikey = true;
-            guest.control.enable = true;
+            guest.componentSession.enable = true;
             tpm.enable = true;
             observability.enable = true;
             config = {
@@ -1136,7 +1191,7 @@
         } // args);
         rustToolchainChannel =
           (builtins.fromTOML (builtins.readFile ./rust-toolchain.toml)).toolchain.channel;
-        brokerManifestToml = builtins.fromTOML (builtins.readFile ./packages/d2b-priv-broker/Cargo.toml);
+        brokerManifestToml = builtins.fromTOML (builtins.readFile ./packages/d2b-broker/Cargo.toml);
         mainManifestToml = builtins.fromTOML (builtins.readFile ./Cargo.toml);
         assertRustToolchain = ''
           rustc --version | grep -F "${rustToolchainChannel}"
@@ -1381,9 +1436,14 @@
         guest-rust-deny = let
           guestVendor = pkgs.rustPlatform.importCargoLock {
             lockFile = ./packages/Cargo.guest.lock;
+            outputHashes."wl-proxy-0.1.2" = "sha256-1yO1zgzSyzQ2DnDMpVxcnI5BsTNvXfzIUS+RNlPj4A8=";
           };
           cargoConfig = ''
             [source.crates-io]
+            replace-with = "vendored-sources"
+            [source."git+https://github.com/vicondoa/wl-proxy.git?rev=072945b59fef21a2a8166460454280d543f48772#072945b59fef21a2a8166460454280d543f48772"]
+            git = "https://github.com/vicondoa/wl-proxy.git"
+            rev = "072945b59fef21a2a8166460454280d543f48772"
             replace-with = "vendored-sources"
             [source.vendored-sources]
             directory = "${guestVendor}"

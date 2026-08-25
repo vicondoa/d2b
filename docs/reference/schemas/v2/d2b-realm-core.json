@@ -7687,14 +7687,14 @@
       "type": "object",
       "required": [
         "guest_boot_id",
-        "guestd_instance_id",
+        "session_instance_id",
         "shell_daemon_instance_id"
       ],
       "properties": {
         "guest_boot_id": {
           "$ref": "#/definitions/ProtocolToken"
         },
-        "guestd_instance_id": {
+        "session_instance_id": {
           "$ref": "#/definitions/ProtocolToken"
         },
         "shell_daemon_instance_id": {

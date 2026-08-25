@@ -25,7 +25,7 @@ const PROTECTED_CODEOWNERS_RULES: &[&str] = &[
     "/Cargo.toml @vicondoa",
     "/Cargo.lock @vicondoa",
     "/packages/Cargo.guest.lock @vicondoa",
-    "/packages/d2b-priv-broker/Cargo.toml @vicondoa",
+    "/packages/d2b-broker/Cargo.toml @vicondoa",
     "/packages/d2b-guest-shell-runner/Cargo.toml @vicondoa",
     "/packages/policy-inputs/** @vicondoa",
     "/packages/policy-inputs/advisory-policy.json @vicondoa",
@@ -35,7 +35,7 @@ const PROTECTED_CODEOWNERS_RULES: &[&str] = &[
     "/packages/xtask/tests/policy_production_closure.rs @vicondoa",
     "/Makefile @vicondoa",
     "/flake.nix @vicondoa",
-    "/nixos-modules/guest-control.nix @vicondoa",
+    "/nixos-modules/component-session.nix @vicondoa",
     "/nixos-modules/host-activation.nix @vicondoa",
     "/nixos-modules/host-broker.nix @vicondoa",
     "/nixos-modules/host-daemon.nix @vicondoa",
@@ -300,7 +300,11 @@ fn validate_policy(policy: &Value) -> Result<(), String> {
 #[test]
 fn checked_in_contexts_are_nonempty_and_structurally_valid() {
     let paths = closure_paths();
-    assert_eq!(paths.len(), 14, "expected both systems and all U2 contexts");
+    assert_eq!(
+        paths.len(),
+        14,
+        "expected both systems and all production contexts"
+    );
     for path in paths {
         validate_production_closure(&read_json(&path))
             .unwrap_or_else(|error| panic!("{}: {error}", path.display()));
@@ -520,8 +524,12 @@ fn guest_static_context_uses_reduced_guest_lock() {
     let closure = read_json(
         &repo_root()
             .join(CONTEXT_ROOT)
-            .join("x86_64-linux/x86_64-unknown-linux-musl/guestd-static/production/closure.json"),
+            .join("x86_64-linux/x86_64-unknown-linux-musl/guest-static/production/closure.json"),
     );
     assert_eq!(closure["source_authority"], "packages/Cargo.guest.lock");
+    assert_eq!(
+        closure["roots"],
+        serde_json::json!(["d2bd", "d2b-broker"])
+    );
     assert_ne!(closure["lock_sha256"], Value::String(String::new()));
 }

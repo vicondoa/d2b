@@ -9,7 +9,7 @@ pub enum CloudHypervisorAuditOperation {
     Adopt,
     /// Finalize.
     Finalize,
-    /// Guest-control health.
+    /// ComponentSession health.
     Health,
 }
 

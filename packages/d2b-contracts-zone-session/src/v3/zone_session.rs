@@ -173,8 +173,8 @@ zone_closed_enum!(
         ZoneLink = 3 => "zone-link",
         /// The one-time IKpsk2 enrollment bootstrap, which terminates.
         Bootstrap = 4 => "bootstrap",
-        /// Guest control traffic.
-        GuestControl = 5 => "guest-control",
+        /// ComponentSession traffic.
+        ComponentSession = 5 => "component-session",
         /// Bulk resource transfer.
         ResourceTransfer = 6 => "resource-transfer",
         /// Provider agent control traffic.
@@ -232,7 +232,8 @@ zone_closed_enum!(
     /// Tags 1 through 6 are preserved from the component-session assignment.
     /// Tags 7 and 8 are the appended Zone service packages. Tags 9 through
     /// 13 carry the interaction Provider packages shared with
-    /// ComponentSession. Protobuf field numbers for the v3 services are
+    /// ComponentSession. Tag 14 carries the service-only config-nixos
+    /// Provider. Protobuf field numbers for the v3 services are
     /// frozen independently of the v2 assignments and are not restated by
     /// this module.
     ServicePackage {
@@ -262,6 +263,8 @@ zone_closed_enum!(
         ClipboardPickerCoordV3 = 12 => "d2b.clipboard.picker-coord.v3",
         /// The desktop notification Provider package.
         NotificationV3 = 13 => "d2b.notification.v3",
+        /// The service-only NixOS configuration Provider package.
+        ConfigNixosV3 = 14 => "d2b.config-nixos.v3",
     }
 );
 
@@ -345,7 +348,7 @@ mod tests {
         (EndpointPurpose::ResourceService, 2, "resource-service"),
         (EndpointPurpose::ZoneLink, 3, "zone-link"),
         (EndpointPurpose::Bootstrap, 4, "bootstrap"),
-        (EndpointPurpose::GuestControl, 5, "guest-control"),
+        (EndpointPurpose::ComponentSession, 5, "component-session"),
         (EndpointPurpose::ResourceTransfer, 6, "resource-transfer"),
         (EndpointPurpose::ProviderControl, 7, "provider-control"),
         (
@@ -395,6 +398,11 @@ mod tests {
             "d2b.clipboard.picker-coord.v3",
         ),
         (ServicePackage::NotificationV3, 13, "d2b.notification.v3"),
+        (
+            ServicePackage::ConfigNixosV3,
+            14,
+            "d2b.config-nixos.v3",
+        ),
     ];
 
     #[test]
@@ -493,7 +501,7 @@ mod tests {
             Err(BinaryError::UnknownEnumTag)
         );
         assert_eq!(
-            ServicePackage::from_tag(14),
+            ServicePackage::from_tag(15),
             Err(BinaryError::UnknownEnumTag)
         );
     }

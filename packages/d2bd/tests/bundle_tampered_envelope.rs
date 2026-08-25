@@ -248,6 +248,10 @@ fn daemon_vm_start_returns_bundle_tampered_envelope() {
         "processesPath": artifacts_dir.join("processes.json"),
         "closuresDir": artifacts_dir.join("closures")
     });
+    config["realmControllersConfigPath"] =
+        serde_json::json!(artifacts_dir.join("realm-controllers.json"));
+    config["realmIdentityConfigPath"] =
+        serde_json::json!(artifacts_dir.join("realm-identity.json"));
     fs::write(
         &fixture.config_path,
         serde_json::to_vec_pretty(&config).expect("serialize daemon config"),

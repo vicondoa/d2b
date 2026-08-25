@@ -14,7 +14,7 @@ ships it as:
 /run/current-system/sw/share/d2b/vms.json
 ```
 
-The Rust CLI, `d2bd`, and `d2b-priv-broker` consume this public
+The Rust CLI, `d2bd`, and `d2b-broker` consume this public
 inventory. Private bundle artifacts live beside it and are documented in
 [`manifest-bundle.md`](./manifest-bundle.md).
 
@@ -46,7 +46,6 @@ inventory. Private bundle artifacts live beside it and are documented in
         "lifecycle": true,
         "display": true,
         "usbHotplug": true,
-        "guestControl": true,
         "exec": true,
         "configSync": true,
         "ssh": true,
@@ -74,7 +73,6 @@ inventory. Private bundle artifacts live beside it and are documented in
            "waylandProxy": true
          },
          "guest": {
-           "guestControl": true,
            "exec": true,
            "shell": true,
            "configSync": true,
@@ -152,7 +150,7 @@ Fields are listed in `nixos-modules/manifest.nix` declaration order.
 | Field | Type | Required | Description |
 | --- | --- | --- | --- |
 | `name` | string | yes | VM name; matches the enclosing top-level key. Pattern `^[a-z][a-z0-9-]*$` (enforced by `nixos-modules/assertions.nix`). |
-| `runtime` | object | yes | Runtime/provider metadata and provider support matrix. Shape: `{ kind, provider: { id, type, driver }, capabilities, operationCapabilities, autostartPolicy, services }`. `operationCapabilities` groups positive operation support by lifecycle/media/display/guest/storage axis; `operationCapabilities.guest.shell` records provider support for the staged persistent-shell operation. `services[]` contains bounded provider-neutral service summaries. `qemu-media` uses provider `local-qemu-media`/driver `qemu`; its supported capabilities are lifecycle/display/USB hotplug, while guest-control, exec, shell, config-sync, SSH, store-sync, keys, and in-guest observability are unsupported. |
+| `runtime` | object | yes | Runtime/provider metadata and provider support matrix. Shape: `{ kind, provider: { id, type, driver }, capabilities, operationCapabilities, autostartPolicy, services }`. `operationCapabilities` groups positive operation support by lifecycle/media/display/guest/storage axis; `operationCapabilities.guest.shell` records provider support for the staged persistent-shell operation. `services[]` contains bounded provider-neutral service summaries. `qemu-media` uses provider `local-qemu-media`/driver `qemu`; its supported capabilities are lifecycle/display/USB hotplug, while exec, shell, config-sync, SSH, store-sync, keys, and in-guest observability are unsupported. |
 | `lifecycle` | object | yes | Per-VM lifecycle policy. Shape: `{ gracefulShutdown: { enable, timeoutSeconds }, liveActivation: { timeoutSeconds } }`. `gracefulShutdown` controls provider-aware guest shutdown before forced VMM cleanup; its timeout is a nullable 1-600 second per-VM override. `liveActivation.timeoutSeconds` is a nullable 1-3600 second per-VM override for in-guest `switch`/`test`/`rollback`; `null` means the daemon default from `/etc/d2b/daemon-config.json` applies. |
 | `autostart` | boolean | yes | Mirror of `d2b.vms.<name>.autostart`. When true, the VM is eligible for d2bd's host-boot autostart pass; graphics and qemu-media provider guards can still make a VM manual-only. Older v6/v7 manifests may omit this additive field and are treated as opting in for compatibility with the former heuristic. |
 | `graphics` | boolean | yes | Mirror of `d2b.vms.<name>.graphics.enable`. The CLI uses it to pick the launch path. |
@@ -176,7 +174,7 @@ Fields are listed in `nixos-modules/manifest.nix` declaration order.
 | `audioStateFile` | string \| null | yes | Live audio-grant state file (`<stateDir>/state/audio-state.json`). Null for providers without the d2b audio sidecar. |
 | `audioService` | string \| null | yes | Retired field. Always null; the audio sidecar is broker-spawned through the daemon DAG. |
 | `observability` | object | yes | Per-VM observability transport metadata (`enabled`, base `vsockCid`/`vsockHostSocket`, guest `agentSocket`). See [Per-VM observability block](#per-vm-observability-block). |
-| `shell` | object \| null | yes | Persistent guest shell policy metadata for providers that support the authenticated guest-control terminal substrate. Null for providers without d2b guest-control. Shape: `{ enabled, defaultName, maxSessions, maxAttached }`; `defaultName` matches `^[A-Za-z0-9_][A-Za-z0-9._-]{0,63}$`, `maxSessions` is 1-256, and `maxAttached` is 1-64. This is policy/capability metadata only; runtime helper sockets, shpool state, terminal handles, and session names beyond the configured default are never included in the world-readable manifest. |
+| `shell` | object \| null | yes | Persistent guest shell policy metadata for providers that support the authenticated ComponentSession terminal substrate. Null for providers without ComponentSession. Shape: `{ enabled, defaultName, maxSessions, maxAttached }`; `defaultName` matches `^[A-Za-z0-9_][A-Za-z0-9._-]{0,63}$`, `maxSessions` is 1-256, and `maxAttached` is 1-64. This is policy/capability metadata only; runtime helper sockets, shpool state, terminal handles, and session names beyond the configured default are never included in the world-readable manifest. |
 | `staticIp` | string \| null | yes | The VM's static LAN IP. Derived for env-attached VMs; null when no IP source applies. |
 | `sshUser` | string \| null | yes | Username for `d2b`-driven SSH. Mirrors `d2b.vms.<name>.ssh.user`. Null for headless net VMs. |
 
@@ -200,11 +198,11 @@ Version history:
   Hypervisor vsock semantics - the per-VM `observability.vsockCid` /
   `observability.vsockHostSocket` fields define the host-owned base
   Cloud Hypervisor vsock device shared by observability and guest
-  control, not only the observability relay. These two changes each
+  session, not only the observability relay. These two changes each
   landed as a `4` on separate branches and are unified at `5`.
 - v6: adds per-VM runtime/provider metadata and provider capability
   summaries. Provider-specific socket/vsock fields are now nullable so
-  `qemu-media` entries do not fabricate Cloud Hypervisor, guest-control,
+  `qemu-media` entries do not fabricate Cloud Hypervisor, ComponentSession,
   SSH, store-sync, key, or in-guest-observability artifacts.
 - v6 additive: adds per-VM nullable `shell` policy metadata and
   `runtime.operationCapabilities.guest.shell`. This is additive and does not bump
@@ -242,8 +240,8 @@ about the vsock path without knowing SigNoz internals.
 | Field | Type | Required | Description |
 | --- | --- | --- | --- |
 | `enabled` | boolean | yes | Whether telemetry collection is enabled for this VM. |
-| `vsockCid` | unsigned integer \| null | yes | Deterministic base Cloud Hypervisor vsock CID for nixos/Cloud Hypervisor VMs. Null for providers without d2b guest-control or in-guest observability. |
-| `vsockHostSocket` | string \| null | yes | Host-side Cloud Hypervisor vsock socket for this VM. Null for providers without d2b guest-control or in-guest observability. |
+| `vsockCid` | unsigned integer \| null | yes | Deterministic base Cloud Hypervisor vsock CID for nixos/Cloud Hypervisor VMs. Null for providers without d2b ComponentSession or in-guest observability. |
+| `vsockHostSocket` | string \| null | yes | Host-side Cloud Hypervisor vsock socket for this VM. Null for providers without d2b ComponentSession or in-guest observability. |
 | `agentSocket` | string \| null | yes | Guest-local OTLP socket path used by the guest collector. Null for providers without in-guest observability. |
 
 The per-VM block is emitted for every VM so clients do not need to infer

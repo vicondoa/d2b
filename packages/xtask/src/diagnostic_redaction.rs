@@ -50,6 +50,7 @@ impl DiagnosticRedactor {
     }
 }
 
+#[cfg(test)]
 pub(crate) fn redact_path(path: &Path) -> String {
     let Ok(repo_root) = crate::repo_root() else {
         return "<path>".to_owned();

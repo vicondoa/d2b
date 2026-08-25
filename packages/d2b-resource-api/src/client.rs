@@ -4,6 +4,7 @@ use std::sync::Arc;
 
 use d2b_contracts_resource::resource_proto as wire;
 use d2b_contracts_resource::v3::identity::AuthenticatedSubjectContext;
+use d2b_core_controller::controller_assignment::ScopedResourceMutation;
 
 use crate::{
     ResourceStoreBackend,
@@ -91,6 +92,18 @@ where
         request: wire::CommitBatchRequest,
     ) -> wire::CommitBatchResponse {
         self.service.commit_batch(self.trusted(request)).await
+    }
+
+    /// Commit a batch carrying the bus-admitted assignment fence into every
+    /// store mutation without opening a second transport.
+    pub async fn scoped_commit_batch(
+        &self,
+        request: wire::CommitBatchRequest,
+        scoped_mutations: Vec<ScopedResourceMutation>,
+    ) -> wire::CommitBatchResponse {
+        self.service
+            .commit_scoped_batch(self.trusted(request), scoped_mutations)
+            .await
     }
 
     pub async fn resolve_ref(&self, request: wire::ResolveRefRequest) -> wire::ResolveRefResponse {

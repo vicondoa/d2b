@@ -35,9 +35,9 @@ daemon owns sync; there is no per-VM `store-sync` unit.
 
 ## TPM persistence (per-VM swtpm)
 
-**Where:** `/var/lib/d2b/vms/<vm>/swtpm/`; spawned via broker `SpawnRunner` from `packages/d2b-provider-device-tpm/src/swtpm_argv.rs` and supervised by `d2bd` as a child of the VM's DAG. The broker **provisions + hardens** this dir on first start (`packages/d2b-priv-broker/src/ops/swtpm_dir.rs`, gated on `seccomp_policy_ref == "w1-swtpm"`): fd-safe create (owner `d2b-<vm>-swtpm`, mode 0700, inherited ACLs cleared), reconcile-in-place on a correct-owner existing dir, fail-closed on owner/type/symlink mismatch, ancestor `--x` traverse ACL, stale `tpm.sock` unlink - emitting the path-free `PrepareSwtpmDir` audit op.
+**Where:** `/var/lib/d2b/vms/<vm>/swtpm/`; spawned via broker `SpawnRunner` from `packages/d2b-provider-device-tpm/src/swtpm_argv.rs` and supervised by `d2bd` as a child of the VM's DAG. The broker **provisions + hardens** this dir on first start (`packages/d2b-broker/src/ops/swtpm_dir.rs`, gated on `seccomp_policy_ref == "w1-swtpm"`): fd-safe create (owner `d2b-<vm>-swtpm`, mode 0700, inherited ACLs cleared), reconcile-in-place on a correct-owner existing dir, fail-closed on owner/type/symlink mismatch, ancestor `--x` traverse ACL, stale `tpm.sock` unlink - emitting the path-free `PrepareSwtpmDir` audit op.
 
-Holds the per-VM TPM 2.0 NVRAM + EK seed. **Wiping it looks like device tampering to any IdP** (Entra ID, Intune, Bitlocker-style policies) and forces re-enrollment. Never zero it casually. The per-VM state root is `3770` (setgid **+ sticky**) so a non-owner role UID cannot rename/replace the `swtpm/` entry; an identity-bound, root-owned marker at `/var/lib/d2b/swtpm-markers/<vm>` makes a *previously-provisioned-then-missing/replaced* dir **fail the VM start closed** (`previously-provisioned-swtpm-state-missing`) rather than silently re-creating an empty TPM. The state directory's ACLs are asserted by `tests/unit/smoke/smoke-eval-tpm.nix`; the broker hardening by `packages/d2b-priv-broker/src/ops/swtpm_dir.rs` tests.
+Holds the per-VM TPM 2.0 NVRAM + EK seed. **Wiping it looks like device tampering to any IdP** (Entra ID, Intune, Bitlocker-style policies) and forces re-enrollment. Never zero it casually. The per-VM state root is `3770` (setgid **+ sticky**) so a non-owner role UID cannot rename/replace the `swtpm/` entry; an identity-bound, root-owned marker at `/var/lib/d2b/swtpm-markers/<vm>` makes a *previously-provisioned-then-missing/replaced* dir **fail the VM start closed** (`previously-provisioned-swtpm-state-missing`) rather than silently re-creating an empty TPM. The state directory's ACLs are asserted by `tests/unit/smoke/smoke-eval-tpm.nix`; the broker hardening by `packages/d2b-broker/src/ops/swtpm_dir.rs` tests.
 
 ## USBIP passthrough
 
@@ -139,6 +139,38 @@ inventory, snapshot, or nested fixture workspace is required.
 
 Controller and core-reconciliation engines are test-only and unwired from the absent production store/watch dispatcher. An EffectPort call is permitted only after durable resource commit and consumption of the matching `CommittedRevisionProof`; abort, conflict, stale proof, or restart ambiguity cannot release an effect. Preserve per-resource single flight, bounded fair admission, deterministic owner/dependency propagation, and restart-safe idempotency when wiring the production path.
 
+## Controller assignment and scoped routing
+
+**Where:** `packages/d2b-contracts-provider/src/v3/provider.rs`, `packages/d2b-core-controller/src/controller_assignment.rs`, `packages/d2b-bus/src/{authorization,router,session_seam_tests}.rs`, and `packages/d2bd/tests/resource_operator_activation.rs`
+
+Provider manifests carry a closed controller placement contract:
+`instanceScope`, supported target kinds, per-target component artifacts, and
+required EffectPort classes. Core owns one assignment registry. Each lease
+binds the resource UID and revision, provider and controller generations,
+controller role, exact target, session generation, and assignment epoch.
+Target readiness, role scope, and resource placement are checked without a
+fallback target.
+
+Resource-client leases are non-clonable and cannot widen their query or
+mutation scope. Queries always add the assignment-owned resource filter and
+reject caller-supplied attempts to replace it; mutating verbs carry the same
+assignment identity. Scoped commit transport is versioned, size-bounded, and
+rejects stale, forged, released, or revoked-session evidence. Host and Guest
+controller routes therefore remain target-scoped and single-owner across
+reconnects and handoff.
+
+## Broker host and guest profiles
+
+**Where:** `packages/d2b-broker/src/{runtime,protocol}.rs`, `packages/d2b-broker/tests/{guest_profile,host_profile,profile_separation}.rs`, `nixos-modules/{host-broker,guest-broker}.nix`, and `tests/unit/nix/surfaces/broker-profiles.nix`
+
+The broker profile is selected only at process start. Host and Guest
+instances have distinct authority, socket, state, and audit bindings; a
+request cannot select or switch profiles. The Guest profile admits only its
+closed local operation set and rejects host-only effects before bundle
+dispatch or mutation, while the Host profile retains the complete host
+operation catalog. Keep these checks in the owner-local broker tests and
+broker profile Nix cases; do not restore the retired central policy package.
+
 ## Unsafe-local provider, launcher, and persistent-shell helper
 
 **Where:** `nixos-modules/options-realms-workloads.nix`, `nixos-modules/unsafe-local-workloads-json.nix`, `packages/d2b-core/src/unsafe_local_workloads.rs`, `packages/d2b-contracts-control/src/unsafe_local_wire.rs`, `packages/d2b-unsafe-local-helper/src/{shell_runtime,shell_supervisor,shell_socket,output_ring,tty_exec}.rs`, and `docs/reference/unsafe-local-provider.md`
@@ -157,11 +189,11 @@ Version-pinned via `manifestVersion`. Adding, removing, or renaming a per-VM fie
 
 Sensitive bundle artifacts install at `root:d2bd` 0640 and ground every broker/sandbox/runner behaviour. `d2b-core` DTOs are canonical; `d2b._bundle` is the typed internal artifact table that owns JSON data, install names, classifications, and `/etc/d2b` materialization for every bundle artifact. Add new bundle artifacts through `nixos-modules/bundle-artifacts.nix` instead of hand-writing parallel install logic in each emitter. Committed schemas under `docs/reference/schemas/v2/` ARE the contract and `//packages/xtask:gen_schemas_drift` enforces their owner-local generator through `make test-drift`. Breaking the schema without an intentional `bundleVersion`/`schemaVersion` bump silently breaks every downstream consumer.
 
-## Control plane - `d2bd` + `d2b-priv-broker`
+## Control plane - `d2bd` + `d2b-broker`
 
-**Where:** `packages/d2b-contracts/**` + `packages/d2b-core/**` + `packages/d2bd/**` + `packages/d2b-priv-broker/**` (sibling workspace; `unsafe_code = "deny"` with quarantined `src/sys.rs` for fd-passing FFI) + `packages/d2b/**` + `docs/reference/{cli-contract,daemon-api,error-codes,privileges}.md` + the fixed daemon Layer-1 gate set
+**Where:** `packages/d2b-contracts/**` + `packages/d2b-core/**` + `packages/d2bd/**` + `packages/d2b-broker/**` (sibling workspace; `unsafe_code = "deny"` with quarantined `src/sys.rs` for fd-passing FFI) + `packages/d2b/**` + `docs/reference/{cli-contract,daemon-api,error-codes,privileges}.md` + the fixed daemon Layer-1 gate set
 
-The **only** persistent root surfaces the framework declares. `d2b-priv-broker.socket` is socket-activated: systemd creates/binds/listens/sets-ACL before the broker starts; the broker adopts fd 3 via `SD_LISTEN_FDS` and MUST NOT self-bind, self-fchmod, or self-fchown when `SD_LISTEN_FDS=1`. `d2bd.service` carries `Wants=d2b-priv-broker.socket` (not `Requires=`) so the daemon keeps serving while the broker is idle. The broker reloads the current bundle resolver per accepted request so it does not dispatch stale runner intents after a switch. The broker drops to the `d2bd` group and uses `SO_PEERCRED` at accept time for authz (launcher / admin / deny). Every host mutation flows through a typed broker op (cgroup v2 delegation, TAP/bridge lifecycle, `ApplyNftables`, `ApplyNmUnmanaged`, `ApplySysctl`, `UpdateHostsFile`, `ModprobeIfAllowed`, `UsbipBindFirewallRule`, `SpawnRunner`, `OpenPidfd`) and is recorded as an `OpAuditRecord` in `/var/lib/d2b/audit/broker-<utc-date>.jsonl` (root-owned `0640 root:d2bd`, append-only `O_APPEND`, daily rotation, 14-day default retention overridable via `d2b.site.audit.retentionDays`). Relevant enforcing coverage includes `tests/unit/nix/cases/broker-socket-activation.nix`, `tests/unit/nix/cases/broker-caps.nix`, and daemon startup integration tests under `packages/d2bd/tests/`. Security-critical behavior remains owner-local or structural. See [ADR 0015](../adr/0015-daemon-only-clean-break.md).
+The **only** persistent root surfaces the framework declares. `d2b-broker.socket` is socket-activated: systemd creates/binds/listens/sets-ACL before the broker starts; the broker adopts fd 3 via `SD_LISTEN_FDS` and MUST NOT self-bind, self-fchmod, or self-fchown when `SD_LISTEN_FDS=1`. `d2bd.service` carries `Wants=d2b-broker.socket` (not `Requires=`) so the daemon keeps serving while the broker is idle. The broker reloads the current bundle resolver per accepted request so it does not dispatch stale runner intents after a switch. The broker drops to the `d2bd` group and uses `SO_PEERCRED` at accept time for authz (launcher / admin / deny). Every host mutation flows through a typed broker op (cgroup v2 delegation, TAP/bridge lifecycle, `ApplyNftables`, `ApplyNmUnmanaged`, `ApplySysctl`, `UpdateHostsFile`, `ModprobeIfAllowed`, `UsbipBindFirewallRule`, `SpawnRunner`, `OpenPidfd`) and is recorded as an `OpAuditRecord` in `/var/lib/d2b/audit/broker-<utc-date>.jsonl` (root-owned `0640 root:d2bd`, append-only `O_APPEND`, daily rotation, 14-day default retention overridable via `d2b.site.audit.retentionDays`). Relevant enforcing coverage includes `tests/unit/nix/cases/broker-socket-activation.nix`, `tests/unit/nix/cases/broker-caps.nix`, and daemon startup integration tests under `packages/d2bd/tests/`. Security-critical behavior remains owner-local or structural. See [ADR 0015](../adr/0015-daemon-only-clean-break.md).
 
 ## Storage lifecycle / restart / synchronization
 
@@ -175,11 +207,31 @@ Managed paths, restart adoption, locks, leases, cleanup, and degraded-state repo
 
 These are the framework's contract with consumers. Loosening one silently turns a previously-rejected misconfig into runtime breakage. New assertions need a matching case in `tests/unit/nix/cases/assertions.nix`.
 
-## Guest-control exec session table
+## ComponentSession exec session table
 
-**Where:** `packages/d2bd/src/{exec_session,exec_session_real}.rs`, `run_exec_owner` in `packages/d2bd/src/lib.rs`, `packages/d2b/src/exec_client.rs`, `packages/d2b-contracts-control/src/public_wire.rs` (`ExecOp`/`ExecOpResponse`)
+**Where:** `packages/d2bd-runtime/src/{exec_session,exec_session_real}.rs`,
+`packages/d2b/src/exec_client.rs`, and
+`packages/d2b-contracts-control/src/public_wire.rs` (`ExecOp`/`ExecOpResponse`)
 
-Arbitrary `d2b vm exec` is **admin-only**; configured `d2b launch` local-VM items may use the same detached guest-control backend with launcher authority because argv is resolved exclusively from the hash-verified private bundle. Both run through `d2bd` plus authenticated guest-control vsock to `guestd`. Attached exec uses the daemon's in-process **session table**: per-session workers own one authenticated guest-control client and proxy typed exec ops. **guestd runs every exec as the VM's workload user (`ssh.user`) inside a real PAM login session (`systemd-run --property=PAMName=login --uid=<user>`) - never as root; the wire `user` field is ignored and the target user is host-fixed, bare `argv[0]` is resolved by the workload user's login `PATH`, and each attached exec runs in a process-unique named transient unit (`d2b-exec-<…>.service`) that teardown stops via `systemctl kill` so a quiet command cannot outlive owner-disconnect, cancel, or the runtime ceiling. Operators elevate with `sudo` inside the session.** Detached non-TTY exec is enabled with `d2b vm exec -d <vm> -- <cmd>` and managed through VM-first verbs (`d2b vm exec <vm> list`, `logs <id>`, `status <id>`, `kill <id>`); command forms always require `--`, so those verb words remain valid VM names. Detached jobs and configured local-VM launches also run as the workload user, never root: the root detached runner only owns trusted slot/log files, re-validates the non-root uid before spawning the workload unit, and fails terminally rather than falling back to direct root execution. Guestd reconciles detached runner/workload units on startup, cleans orphaned workloads, and runs a periodic reaper for terminal records and retained logs; `kill` maps to idempotent two-phase `ExecCancel` (SIGTERM/grace/SIGKILL). There is **no per-VM systemd unit, no new broker op, and no SSH** - the guest owns the PTY; the host only flips termios for attached TTY via an RAII raw-mode guard restored on every exit/error/panic. The admin `SO_PEERCRED` check runs before arbitrary exec session setup; configured launch instead requires local launcher/admin authority and a trusted configured item. Old/non-guest-control generations fail closed (exit `70`) with no proxy and no SSH fallback. Session-table caps (global/per-UID/per-VM), detached slot/log quotas, and rate limits are enforced before connect/auth or create. Attached audit emits one redacted kind=critical session-establishment event (vm/peer_uid/tty); detached create/kill daemon audit carries only vm/peer_uid/action/result/exec_id, while configured-launch audit adds target/item/operation correlation without execution details. Opaque session handles, argv, stdio, env, cwd, and paths never reach any Debug/trace/audit/metric surface. Validate with the `exec_session`/`exec_client` hermetic test matrices.
+Arbitrary `d2b vm exec` is **admin-only**; configured `d2b launch` local-VM
+items may use the same target-local Process backend with launcher authority
+because argv is resolved exclusively from the hash-verified private bundle.
+Both paths run through `d2bd` and an authenticated ComponentSession. Attached
+exec uses the daemon's in-process **session table**, while target-local
+Processes own command execution and the guest PTY. Detached non-TTY exec is
+represented by `EphemeralProcess` resources and managed through bounded
+Resource API operations. There is **no per-VM systemd unit, no direct feature
+spawn, no broker operation for exec, and no SSH fallback**. The admin
+`SO_PEERCRED` check runs before arbitrary exec session setup; configured launch
+instead requires local launcher/admin authority and a trusted configured item.
+Old or incompatible peers fail closed before controller authority or feature
+behavior. Session-table caps, detached slot/log quotas, and rate limits are
+enforced before connect/auth or create. Attached audit emits redacted
+session-establishment events, while detached create/kill audit carries only
+bounded target, peer, action/result, and opaque execution correlation. Opaque
+session handles, argv, stdio, env, cwd, and paths never reach any
+Debug/trace/audit/metric surface. Validate with the `exec_session` and
+`exec_client` hermetic test matrices.
 
 ## Unsafe-local persistent shells
 
@@ -201,9 +253,9 @@ The framework owns `${cfg.site.keysDir}/<vm>_ed25519`. `d2b keys rotate` MUST NO
 
 ## virtiofsd sandbox model
 
-**Where:** `nixos-modules/minijail-profiles.nix` (virtiofsdProfiles), `packages/d2b-priv-broker/src/sys.rs` (`clone3_spawn_runner` user-NS path), `nixos-modules/processes-json.nix` (argv emit)
+**Where:** `nixos-modules/minijail-profiles.nix` (virtiofsdProfiles), `packages/d2b-broker/src/sys.rs` (`clone3_spawn_runner` user-NS path), `nixos-modules/processes-json.nix` (argv emit)
 
-virtiofsd profiles MUST declare zero host capabilities (`capabilities = []`), `requiresStartRoot = false`, and a `userNamespace` block mapping in-NS UID/GID 0 to the per-share principal. Normal VM shares map to `d2b-<vm>-runner`; the guest-control token share (`d2b-gctl`) maps to the narrower `d2b-<vm>-gctlfs` principal. The broker pre-establishes the user namespace via `clone3(CLONE_NEWUSER)` + `pipe2` sync + `/proc/<pid>/uid_map` writes BEFORE virtiofsd's first instruction runs. virtiofsd argv MUST include `--sandbox=chroot --inode-file-handles=never` and `--readonly` for every `readOnly` share (`ro-store`, `d2b-gctl`). Reintroducing host caps, `requiresStartRoot=true`, or `--sandbox=namespace` violates [ADR 0021](../adr/0021-broker-user-namespace-for-virtiofsd.md). Rendered profile and argv coverage is owned by the provider and broker tests.
+virtiofsd profiles MUST declare zero host capabilities (`capabilities = []`), `requiresStartRoot = false`, and a `userNamespace` block mapping in-NS UID/GID 0 to the per-share principal. Normal VM shares map to `d2b-<vm>-runner`; ComponentSession enrollment keys are not delivered through a virtiofs share. The broker pre-establishes the user namespace via `clone3(CLONE_NEWUSER)` + `pipe2` sync + `/proc/<pid>/uid_map` writes BEFORE virtiofsd's first instruction runs. virtiofsd argv MUST include `--sandbox=chroot --inode-file-handles=never` and `--readonly` for every `readOnly` share (`ro-store`, `d2b-meta`, and host-key shares). Reintroducing host caps, `requiresStartRoot=true`, or `--sandbox=namespace` violates [ADR 0021](../adr/0021-broker-user-namespace-for-virtiofsd.md). Rendered profile and argv coverage is owned by the provider and broker tests.
 
 ## cgroup slice naming and ownership markers
 

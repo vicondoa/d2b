@@ -22,26 +22,26 @@ pkgs.testers.runNixOSTest {
 
     start_all()
 
-    machine.wait_for_unit("d2b-priv-broker.socket")
+    machine.wait_for_unit("d2b-broker.socket")
     machine.wait_for_unit("d2bd.service")
 
     # The broker is socket-activated, but starting the service directly keeps a
     # live Type=notify process long enough to read its /proc posture.
-    machine.succeed("systemctl start d2b-priv-broker.service")
+    machine.succeed("systemctl start d2b-broker.service")
     broker_pid = machine.succeed(
         "for i in $(seq 1 100); do "
-        "pid=$(systemctl show -p MainPID --value d2b-priv-broker.service); "
+        "pid=$(systemctl show -p MainPID --value d2b-broker.service); "
         "if [ -n \"$pid\" ] && [ \"$pid\" != 0 ] && [ -r \"/proc/$pid/status\" ]; then "
         "echo \"$pid\"; exit 0; fi; "
         "sleep 0.2; "
         "done; "
-        "systemctl status --no-pager d2b-priv-broker.service >&2; "
+        "systemctl status --no-pager d2b-broker.service >&2; "
         "exit 1"
     ).strip()
-    print(f"live d2b-priv-broker PID: {broker_pid}")
+    print(f"live d2b-broker PID: {broker_pid}")
 
     unit_raw = machine.succeed(
-        "systemctl show d2b-priv-broker.service "
+        "systemctl show d2b-broker.service "
         "-p CapabilityBoundingSet "
         "-p AmbientCapabilities "
         "-p NoNewPrivileges "
@@ -50,7 +50,7 @@ pkgs.testers.runNixOSTest {
         "-p Slice "
         "-p SystemCallFilter"
     )
-    print("rendered d2b-priv-broker.service posture:\n" + unit_raw)
+    print("rendered d2b-broker.service posture:\n" + unit_raw)
     unit = dict(line.split("=", 1) for line in unit_raw.strip().splitlines() if "=" in line)
 
     status_raw = machine.succeed(f"cat /proc/{broker_pid}/status")

@@ -12,9 +12,11 @@ pub mod authority;
 pub mod authority_persistence;
 pub mod authz;
 pub mod authz_audit;
+pub mod binding_children;
 pub mod budgets;
 pub mod cleanup;
 pub mod configuration;
+pub mod controller_assignment;
 pub mod controllers;
 pub mod coordinator;
 pub mod dependencies;
@@ -40,6 +42,16 @@ pub mod zone_links;
 pub mod zone_status;
 pub mod zonelink;
 
+pub use binding_children::{
+    BindingChildMaterializationError, BindingChildReconciler, BindingChildResource,
+    materialize_child_create_payload, observed_child_from_resource, semantic_child_digest,
+};
+pub use controller_assignment::{
+    AssignmentEpoch, AssignmentError, AssignmentIdentity, AssignmentPhase, AssignmentRequest,
+    AssignmentTarget, AssignmentTransportError, AssignmentVerb, ControllerAssignmentRegistry,
+    ControllerRoleContract, MAX_SCOPED_COMMIT_TRANSPORT_BYTES, ResourceClientLease,
+    ScopedCommitTransport, ScopedResourceFilter, ScopedResourceMutation, ScopedResourceQuery,
+};
 pub use controllers::{
     AggregateHealth, CoreHandlerKind, CoreHandlerRegistry, CurrencyAggregation,
     CurrencyAggregationError, HandlerOutcome, HandlerPhase, HandlerStatus,

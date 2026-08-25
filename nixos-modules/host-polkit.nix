@@ -33,7 +33,7 @@ let
   #   * `d2bd.service` - the public daemon. It may restart after a
   #     `nixos-rebuild switch`; VM runners survive via KillMode=process
   #     and daemon re-adoption.
-  #   * `d2b-priv-broker.service` + `d2b-priv-broker.socket` -
+  #   * `d2b-broker.service` + `d2b-broker.socket` -
   #     the privileged broker pair. Socket-activated; operators may
   #     bounce them to recover from a stuck handler.
   #
@@ -51,8 +51,8 @@ let
   # ---------------------------------------------------------------------------
   launcherAllowedUnits = [
     "d2bd.service"
-    "d2b-priv-broker.service"
-    "d2b-priv-broker.socket"
+    "d2b-broker.service"
+    "d2b-broker.socket"
   ];
 
   launcherAllowedUnitsJs =

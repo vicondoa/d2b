@@ -10,6 +10,9 @@ description: "Task list for completing the ADR-046 Provider control plane (d2b 3
 [data-model.md](./data-model.md), [contracts/](./contracts/),
 [spec-coverage.md](./spec-coverage.md)
 
+> Historical task record. The host cutover feature was removed before release;
+> cutover implementation tasks below are permanently not applicable.
+
 ## How this task list is organized
 
 This is not a greenfield feature. The task set preserves implementation work for the live

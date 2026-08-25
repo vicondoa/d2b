@@ -320,7 +320,7 @@ Pretending otherwise would be dishonest.
   Every mutating verb - lifecycle (`vm start`/`vm stop`/`vm restart`/
   `switch`), host-prepare, key rotation, USBIP bind, store verify,
   config sync (`readGuestConfig`), and the destructive
-  guest-control exec verb (`vm exec`, which runs commands as the VM's
+  component-session exec verb (`vm exec`, which runs commands as the VM's
   workload user in a PAM login session - never as root) - is gated to
   the admin role
   (`d2b.site.adminUsers`, checked via `SO_PEERCRED` at accept
@@ -475,7 +475,7 @@ Everything else is derived.
 > `nixos-modules/host-wrapper.nix` were deleted in v1.0. The section
 > below documents the legacy architecture for historical context;
 > in v1.0 the per-VM lifecycle is fully owned by `d2bd`'s
-> supervisor DAG dispatched through `d2b-priv-broker`'s
+> supervisor DAG dispatched through `d2b-broker`'s
 > `SpawnRunner` / `SignalRunner` ops, and runner lifecycle-of-record
 > is the broker-registered pidfd table. See
 > [§ Launcher authorisation](#launcher-authorisation-v10-so_peercred--d2b-group)
@@ -527,7 +527,7 @@ audit and backup scripts can reason about.
 ### Per-VM sidecars
 
 > **v1.0 status (ADR 0015):** in v1.0 daemon-only, the per-VM sidecars
-> listed below are spawned by `d2b-priv-broker` via the supervisor
+> listed below are spawned by `d2b-broker` via the supervisor
 > DAG (`SpawnRunner` requests) and registered in the pidfd table for
 > lifecycle ownership. Historically, they were emitted as
 > independent systemd units under `nixos-modules/host-sidecars.nix`; in
@@ -605,10 +605,10 @@ up sidecar config changes. The framework provides two paths:
   closure. Use this when `d2b guest list` exposes a pending update in
   `[pending restart]` after a `nixos-rebuild switch`.
 - `d2b activation switch Guest/<name> --apply` - full Guest closure rebuild + live
-  activation through the daemon's authenticated guest-control path
+  activation through the daemon's authenticated component-session path
   (no VM reboot). Use this when you edited the VM's own NixOS module.
   The host publishes the prepared toplevel into the VM's store view;
-  guestd runs the activation inside the guest, not through host
+  target-local Process runs the activation inside the guest, not through host
   systemd.
 
 #### Pending-restart detection via `booted` vs `current`
@@ -715,8 +715,8 @@ That same store-view boundary is the activation boundary. A host build
 produces the VM's NixOS `system.build.toplevel`, then the
 broker/store-view path publishes the closure into the per-VM live store
 pool. The guest sees the pool through virtiofs as its `/nix/store`.
-For live `switch`, `test`, and `rollback`, `d2bd` asks guestd over
-authenticated guest-control to activate the prepared toplevel inside
+For live `switch`, `test`, and `rollback`, `d2bd` asks target-local Process over
+authenticated component-session to activate the prepared toplevel inside
 the running VM and waits for guest activation status before committing
 host generation metadata through the broker. If the VM is stopped,
 offline, or too old to advertise guest activation, live activation
@@ -737,8 +737,8 @@ is the daily-driver interface. Verbs include `list`, `status`,
 `keys`, `host`, and `audit`. The CLI is the Rust binary, full stop:
 the pre-v1.0 bash CLI (and the generated `nixos-modules/cli.nix`
 shell script) was retired in v1.0. Host mutations dispatch through
-`d2bd` → `d2b-priv-broker`; live guest activation dispatches
-through `d2bd` → authenticated guest-control and only uses the
+`d2bd` → `d2b-broker`; live guest activation dispatches
+through `d2bd` → authenticated component-session and only uses the
 broker to publish/commit host-owned generation metadata (see
 [ADR 0015](../adr/0015-daemon-only-clean-break.md) and
 [ADR 0017](../adr/0017-no-bash-fallbacks-invariant.md)). The
@@ -841,7 +841,7 @@ patterns, see [the naming conventions reference](../reference/naming-conventions
 | VM name (`d2b.vms.<vm>`)              | `^[a-z][a-z0-9-]*$`, ≤ ... no `sys-` prefix, not `launcher` | assertions.nix |
 | Env name (`d2b.envs.<env>`)           | `^[a-z][a-z0-9-]*$`, length ≤ 8 (IFNAMSIZ-1=15 minus `br--lan` = 7) | network.nix |
 | `d2bd.service`                        | non-root daemon (v1.0; per ADR 0015 the only persistent user-facing d2b unit besides the broker) | host-daemon.nix |
-| `d2b-priv-broker.{socket,service}`    | socket-activated privileged broker (v1.0) | host-broker.nix              |
+| `d2b-broker.{socket,service}`    | socket-activated privileged broker (v1.0) | host-broker.nix              |
 | `microvm@<vm>.service`                    | upstream microvm.nix unit (still emitted for direct-debug bypass; not the lifecycle-of-record in v1.0) | microvm.nix |
 | `d2b.slice/<vm>/<role>`               | per-VM broker-spawned runner leaves (v1.0 replaces legacy `d2b-<vm>-{gpu,video,snd,swtpm,store-sync,usbip}.service`) | broker SpawnRunner |
 | `d2b.slice/sys-<env>/usbipd-{backend,proxy}` | per-env USBIP runner leaves (v1.0 replaces legacy `d2b-sys-<env>-usbipd-{backend,proxy}.service`) | broker SpawnRunner |
@@ -949,12 +949,12 @@ uid/gid, refuses requests from peers outside the `d2b` group /
 mutating verbs to the admin role (`d2b.site.adminUsers`, the
 *role* gate). Per-verb authorisation lives in the daemon's
 `dispatch_request` table. Most host-mutating verbs route through
-`d2b-priv-broker`, where each host mutation is recorded as an
+`d2b-broker`, where each host mutation is recorded as an
 audited `OpAuditRecord` in `broker-<utc-date>.jsonl`. The
-guest-control verbs are the exception: `readGuestConfig`
-(config sync) reads the guest's config over the typed guest-control
+component-session verbs are the exception: `readGuestConfig`
+(config sync) reads the guest's config over the typed component-session
 channel rather than mutating the host, and `vm exec`
-proxies a guest-control exec session - running as the VM's workload
+proxies a component-session exec session - running as the VM's workload
 user (`ssh.user`, never root) in a PAM login session - whose
 establishment and termination are
 recorded as *leak-safe daemon-side* lifecycle events in
@@ -1226,8 +1226,8 @@ evaluation, so it is contained on three independent axes (see
   tree. An approved file is trusted, operator-reviewed host Nix - no
   more privileged than config the operator writes by hand.
 - **No new attack surface.** The transport is a host-initiated read
-  over the authenticated guest-control vsock (the daemon's
-  `ReadGuestConfig` → guestd `ReadGuestFile` path) - no virtiofs share,
+  over the authenticated component-session vsock (the daemon's
+  `ReadGuestConfig` → target-local Process `ReadGuestFile` path) - no virtiofs share,
   no new socket, no writable host-backed mount; the guest never
   initiates a connection into the host control plane, and there is no
   SSH fallback (an old-generation guest that does not advertise
@@ -1395,7 +1395,7 @@ signal:
   existing closure. Use this when you ran `nixos-rebuild
   switch` and a sidecar config changed.
 - `d2b activation switch Guest/<name> --apply` does a Guest closure rebuild + live
-  guest-control activation through the daemon (no VM reboot). Use this
+  component-session activation through the daemon (no VM reboot). Use this
   when you edited the VM's own NixOS module. Stopped VMs use
   `d2b boot <vm> --apply` for offline staging instead of host-side
   activation.
@@ -1606,7 +1606,7 @@ portability work splits that into three layers:
    `SO_PEERCRED` at `accept(2)` time. The daemon then resolves the
    peer uid against `d2b.site.launcherUsers` (connection) and
    `d2b.site.adminUsers` (the *role* gate for destructive /
-   host-prepare / key-rotation / guest-control verbs). There is no
+   host-prepare / key-rotation / component-session verbs). There is no
    separate `d2b-admin` socket or group - admin is a
    `SO_PEERCRED`-derived role on the single public socket, not a
    second endpoint. See ADR 0002.

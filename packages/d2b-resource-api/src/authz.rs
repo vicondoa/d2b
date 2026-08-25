@@ -6,38 +6,23 @@ use std::{
 };
 
 use d2b_contracts_resource::v3::identity::STANDARD_RESOURCE_TYPES;
+use d2b_contracts_resource::v3::identity::{AuthenticatedSubjectContext, EvidenceClass, Locality};
 use d2b_contracts_resource::v3::{
-    ControllerGeneration,
-    MAX_ROLE_BINDING_SUBJECTS,
-    MAX_ROLE_RULE_EXECUTION_REFS,
-    MAX_ROLE_RULE_RESOURCE_NAMES,
-    MAX_ROLE_RULE_RESOURCE_TYPES,
-    MAX_ROLE_RULE_VERBS,
-    MAX_ROLE_RULES,
-    ResourceErrorKind,
-    ResourceName,
-    ResourceRef,
-    ResourceTypeName,
-    ResourceUid,
-    ZoneId,
-    ZoneRevision,
-};
-use d2b_contracts_resource::v3::identity::{
-    AuthenticatedSubjectContext,
-    EvidenceClass,
-    Locality,
+    ControllerGeneration, MAX_ROLE_BINDING_SUBJECTS, MAX_ROLE_RULE_EXECUTION_REFS,
+    MAX_ROLE_RULE_RESOURCE_NAMES, MAX_ROLE_RULE_RESOURCE_TYPES, MAX_ROLE_RULE_VERBS,
+    MAX_ROLE_RULES, ResourceErrorKind, ResourceName, ResourceRef, ResourceTypeName, ResourceUid,
+    ZoneId, ZoneRevision,
 };
 use d2b_contracts_zone_session::v3::{
-    RoleBindingSpec,
-    RoleResourceVerb,
-    RoleRule,
-    RoleSessionVerb,
-    RoleSpec,
+    RoleBindingSpec, RoleResourceVerb, RoleRule, RoleSessionVerb, RoleSpec,
+};
+use d2b_core_controller::controller_assignment::{
+    AssignmentError, AssignmentIdentity, AssignmentTarget, ScopedResourceMutation,
 };
 use d2b_core_controller::rbac::{AuthorizationCacheKey, PolicyRevisionSet, PositiveDecisionCache};
 use d2b_resource_store::{
     AdmittedAuthorization, AdmittedAuthorizationTarget, AdmittedVerb, PolicySnapshot,
-    StoreMutation, StoreOperationContext, StoreSealIdentity, StoreSlot,
+    ResourceAssignmentFence, StoreMutation, StoreOperationContext, StoreSealIdentity, StoreSlot,
 };
 use sha2::{Digest, Sha256};
 
@@ -946,6 +931,34 @@ pub struct AuthorizationGrant {
     permit: AdmissionPermit,
 }
 
+/// Convert Core's assignment identity to the storage-neutral mutation fence.
+pub fn assignment_fence(
+    identity: &AssignmentIdentity,
+) -> Result<ResourceAssignmentFence, AssignmentError> {
+    let target = match identity.target() {
+        AssignmentTarget::Zone(zone) => ResourceRef::parse(&format!("Zone/{}", zone.as_str()))
+            .map_err(|_| AssignmentError::TargetMismatch)?,
+        AssignmentTarget::Execution { reference, .. } => reference.clone(),
+    };
+    Ok(ResourceAssignmentFence {
+        resource_uid: identity.resource_uid().clone(),
+        resource_revision: identity.resource_revision(),
+        provider_generation: identity.provider_generation(),
+        controller_generation: identity.controller_generation(),
+        controller_role: identity.controller_role().clone(),
+        target,
+        session_generation: identity.session_generation(),
+        epoch: identity.epoch().get(),
+    })
+}
+
+/// Build a mutation fence from a controller-scoped mutation.
+pub fn assignment_fence_for_mutation(
+    mutation: &ScopedResourceMutation,
+) -> Result<ResourceAssignmentFence, AssignmentError> {
+    assignment_fence(mutation.assignment())
+}
+
 impl core::fmt::Debug for AuthorizationGrant {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         f.write_str("AuthorizationGrant(<redacted>)")
@@ -1801,20 +1814,13 @@ impl std::error::Error for AuthorizationPolicyError {}
 #[cfg(test)]
 mod tests {
     use super::*;
+    use d2b_contracts_resource::v3::identity::{
+        BindingDigest, ReconnectGeneration, ServiceName, SessionBinding, SessionPurpose,
+        TranscriptHash, TransportBinding,
+    };
     use d2b_contracts_resource::v3::{
-    ConfigurationGeneration,
-    ResourceGeneration,
-    SchemaFingerprint,
-};
-use d2b_contracts_resource::v3::identity::{
-    BindingDigest,
-    ReconnectGeneration,
-    ServiceName,
-    SessionBinding,
-    SessionPurpose,
-    TranscriptHash,
-    TransportBinding,
-};
+        ConfigurationGeneration, ResourceGeneration, SchemaFingerprint,
+    };
 
     fn test_issuer() -> AdmissionIssuer {
         crate::admission::admission_pair().0

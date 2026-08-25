@@ -9,6 +9,7 @@ use d2b_contracts_resource::v3::{
     ConfigurationGeneration, ControllerGeneration, FinalizerId, ResourceGeneration, ResourceName,
     ResourceRef, ResourceTypeName, ResourceUid, ZoneId, ZoneRevision,
 };
+use d2b_contracts_resource::v3::identity::ReconnectGeneration;
 
 pub use error::{
     MAX_STORE_SLOTS, MutationOrdinal, MutationOrdinalError, SealIdentityMismatch, StoreError,
@@ -262,6 +263,8 @@ pub struct StoreMutation {
     pub remove_finalizers: Vec<FinalizerId>,
     pub wait_for_reconcile: bool,
     pub reconcile_deadline_ms: Option<u64>,
+    /// Optional Core-issued assignment fence for controller-owned writes.
+    pub assignment: Option<ResourceAssignmentFence>,
 }
 
 impl core::fmt::Debug for StoreMutation {
@@ -279,6 +282,36 @@ impl core::fmt::Debug for StoreMutation {
                 "has_reconcile_deadline",
                 &self.reconcile_deadline_ms.is_some(),
             )
+            .field("has_assignment_fence", &self.assignment.is_some())
+            .finish()
+    }
+}
+
+/// Storage-neutral assignment evidence attached to one controller mutation.
+#[derive(Clone, PartialEq, Eq)]
+pub struct ResourceAssignmentFence {
+    pub resource_uid: ResourceUid,
+    pub resource_revision: ZoneRevision,
+    pub provider_generation: ResourceGeneration,
+    pub controller_generation: ControllerGeneration,
+    pub controller_role: ResourceRef,
+    pub target: ResourceRef,
+    pub session_generation: ReconnectGeneration,
+    pub epoch: u64,
+}
+
+impl core::fmt::Debug for ResourceAssignmentFence {
+    fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        formatter
+            .debug_struct("ResourceAssignmentFence")
+            .field("resource_uid", &"<redacted>")
+            .field("resource_revision", &self.resource_revision)
+            .field("provider_generation", &self.provider_generation)
+            .field("controller_generation", &self.controller_generation)
+            .field("controller_role", &"<redacted>")
+            .field("target", &"<redacted>")
+            .field("session_generation", &self.session_generation)
+            .field("epoch", &"<redacted>")
             .finish()
     }
 }
@@ -544,6 +577,7 @@ mod tests {
             remove_finalizers: Vec::new(),
             wait_for_reconcile: true,
             reconcile_deadline_ms: Some(12),
+            assignment: None,
         };
         let admitted_target = AdmittedAuthorizationTarget {
             resource_type,

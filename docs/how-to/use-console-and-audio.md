@@ -15,7 +15,7 @@
   Confirm with `d2b guest status <name>` - the audio field appears in the
   capability summary for audio-enabled VMs.
 - For `d2b guest console` on an ACA sandbox, the sandbox must be running a
-  guestd-compatible in-sandbox agent. If it is absent, the daemon
+  provider relay agent. If it is absent, the daemon
   returns a typed `provider-misconfigured` error with remediation
   text; there is no console fallback.
 - Graphics VMs do not have a serial console surface. Use
@@ -75,8 +75,8 @@
    The `enforcement` field reflects which side of the policy was
    applied:
 
-   - `host-and-guest` - host and guest enforcement are active (Cloud
-     Hypervisor NixOS VMs with guestd).
+   - `host-and-guest` - host and target-local Process enforcement are active
+     (Cloud Hypervisor NixOS VMs).
    - `host-only` - only host-side policy is available or applied.
    - `guest-only` - only guest/provider policy is available or applied.
    - `unsupported` - the provider does not support guest enforcement.
@@ -162,8 +162,8 @@ Collapsed cards show a subtle badge for states that need attention:
 | Badge | Meaning | Action |
 | --- | --- | --- |
 | `host-only` | qemu-media host subset only; guest enforcement unavailable. | Expected; no action required. |
-| `provider-misconfigured` | ACA sandbox missing guestd agent. | Deploy the guestd-compatible in-sandbox agent. |
-| `degraded` | Cloud Hypervisor guest-side did not apply while host succeeded. | Check guestd status inside the VM. |
+| `provider-misconfigured` | ACA sandbox missing provider relay agent. | Deploy the provider-agent-compatible in-sandbox agent. |
+| `degraded` | Cloud Hypervisor target-local Process did not apply while host succeeded. | Check the target-local Process status inside the VM. |
 | `unsupported` | Provider advertises no audio capability. | Verify the VM's audio configuration. |
 
 `d2b-wlcontrol` communicates only through the daemon's public socket.

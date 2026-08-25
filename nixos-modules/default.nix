@@ -57,7 +57,7 @@ in
     # host-otel-relay-acl.nix retired per ADR 0018.
     # The OTel host-bridge + per-VM relay ACL contract moved into the
     # broker pre-spawn pipeline (`SpawnRunner{role: OtelHostBridge}`
-    # in `packages/d2b-priv-broker/src/runtime.rs`). The retired
+    # in `packages/d2b-broker/src/runtime.rs`). The retired
     # module file is kept as a stub for one release for diff
     # readability; consumers should not import it directly. A future
     # commit deletes the stub file outright.
@@ -74,7 +74,6 @@ in
     ../packages/d2b-provider-volume-local/nix/store.nix
     ./manifest.nix
     ./bundle.nix
-    ./guest-control-host.nix
     ./host-json.nix
     ./processes-json.nix
     ../packages/d2b-provider-volume-local/nix/storage-json.nix

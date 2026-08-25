@@ -106,9 +106,6 @@ The contracts. Stable interfaces a consumer can depend on.
 - [`reference/constellation-observability.md`](./reference/constellation-observability.md) -
   bounded `d2b op inspect`, TraceContext propagation, degraded partial
   results, and telemetry redaction/cardinality constraints.
-- [`reference/guest-control-persistent-shell.md`](./reference/guest-control-persistent-shell.md) -
-  guest-control shell RPCs, terminal-generic streaming, shell states,
-  close causes, and redaction contracts.
 - [`reference/remote-full-host-nodes.md`](./reference/remote-full-host-nodes.md) -
   gateway-managed remote d2b hosts: registration, capability gating,
   operation routing, idempotency, and the non-tunneling boundary.

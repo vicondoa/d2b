@@ -40,7 +40,7 @@ prepare` can answer four questions before touching the command:
 
 `d2bd` runs as an unprivileged system user. It performs no
 privileged mutation itself; instead, every mutating step is forwarded
-to `d2b-priv-broker` over a `0600` private Unix socket
+to `d2b-broker` over a `0600` private Unix socket
 (`priv.sock`). The broker:
 
 - only ever speaks a **closed enum** of typed operations (see

@@ -3,6 +3,78 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "additionalProperties": false,
   "definitions": {
+    "ActivationMode": {
+      "description": "Target-local activation mode.",
+      "oneOf": [
+        {
+          "description": "Activate immediately for the running target.",
+          "enum": [
+            "switch"
+          ],
+          "type": "string"
+        },
+        {
+          "description": "Select the generation for the next boot.",
+          "enum": [
+            "boot"
+          ],
+          "type": "string"
+        },
+        {
+          "description": "Activate temporarily until the next boot.",
+          "enum": [
+            "test"
+          ],
+          "type": "string"
+        },
+        {
+          "description": "Record an already active generation without running a helper.",
+          "enum": [
+            "adopt"
+          ],
+          "type": "string"
+        }
+      ]
+    },
+    "ActivationRunnerInput": {
+      "additionalProperties": false,
+      "description": "Closed input delivered to an activation-runner `EphemeralProcess`.\n\nThe broker serializes this value into the bounded stdin envelope consumed by `d2b-activation-helper`. It deliberately carries no executable, store path, target path, or caller-controlled bytes.",
+      "properties": {
+        "activationMode": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/ActivationMode"
+            }
+          ],
+          "description": "Closed activation mode."
+        },
+        "systemArtifactId": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/ArtifactId"
+            }
+          ],
+          "description": "Private-catalog artifact identifier."
+        },
+        "targetGeneration": {
+          "description": "Target generation ordinal bound to the owning `NixosGeneration`.",
+          "format": "uint64",
+          "minimum": 1.0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "activationMode",
+        "systemArtifactId",
+        "targetGeneration"
+      ],
+      "type": "object"
+    },
+    "ArtifactId": {
+      "maxLength": 63,
+      "minLength": 1,
+      "type": "string"
+    },
     "BoundedToken": {
       "maxLength": 63,
       "minLength": 1,
@@ -544,6 +616,16 @@
       "additionalProperties": false,
       "description": "The EphemeralProcess ResourceType base spec.\n\nEphemeralProcess is the one-shot process itself, never a job that references a Process, and it carries no restart, readiness, health check, or adoption field.",
       "properties": {
+        "activationInput": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/ActivationRunnerInput"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
         "budget": {
           "$ref": "#/definitions/BudgetSpec"
         },

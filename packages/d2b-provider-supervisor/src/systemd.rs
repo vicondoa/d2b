@@ -6,9 +6,9 @@ use std::os::fd::OwnedFd;
 use std::sync::Mutex;
 
 use d2b_contracts_broker::broker_wire::{
-    BrokerCallerRole, BrokerRequest, BrokerResponse, OpenSystemdUnitPidfdRequest,
-    StopSystemdUnitRequest, SystemdStopClass, SystemdUnitDomain, SystemdUnitIdentity,
-    SystemdUnitRequest,
+    BrokerCallerRole, BrokerProfile, BrokerRequest, BrokerResponse, OpenSystemdUnitPidfdRequest,
+    GuestExecutionBinding, StopSystemdUnitRequest, SystemdStopClass, SystemdUnitDomain,
+    SystemdUnitIdentity, SystemdUnitRequest,
 };
 use d2b_contracts_resource::v3::execution_policy::ExecutionDomain;
 use d2b_process::{
@@ -40,6 +40,7 @@ pub struct SystemdInvocationIdentity {
     template_identity: [u8; 32],
     generation: u64,
     bundle_content_identity: String,
+    guest_execution: Option<GuestExecutionBinding>,
 }
 
 /// Immutable bundle binding carried by a systemd runtime identity.
@@ -94,6 +95,7 @@ impl SystemdInvocationIdentity {
             template_identity,
             generation: context.generation,
             bundle_content_identity: context.bundle_content_identity,
+            guest_execution: None,
         })
     }
 
@@ -108,6 +110,14 @@ impl SystemdInvocationIdentity {
         digest.update(self.template_identity);
         digest.update(self.generation.to_le_bytes());
         digest.update(self.bundle_content_identity.as_bytes());
+        if let Some(binding) = &self.guest_execution {
+            digest.update(binding.target_uid.as_str().as_bytes());
+            digest.update(binding.boot_identity_digest);
+            digest.update(binding.session_generation.to_le_bytes());
+            digest.update(binding.assignment_epoch.to_le_bytes());
+            digest.update(binding.provider_generation.to_le_bytes());
+            digest.update(binding.controller_generation.to_le_bytes());
+        }
         ProcessIdentityDigest::from_bytes(digest.finalize().into())
     }
 
@@ -136,11 +146,12 @@ impl SystemdInvocationIdentity {
             template_identity: self.template_identity,
             generation: self.generation,
             bundle_content_identity: self.bundle_content_identity.clone(),
+            guest_execution: self.guest_execution.clone(),
         }
     }
 
     pub(crate) fn from_wire(identity: &SystemdUnitIdentity) -> Result<Self, ProcessEffectError> {
-        Self::new(
+        let mut value = Self::new(
             identity.invocation_id,
             identity.cgroup_identity,
             NonZeroU32::new(identity.main_pid).ok_or(ProcessEffectError::IdentityChanged)?,
@@ -151,7 +162,9 @@ impl SystemdInvocationIdentity {
                 identity.generation,
                 identity.bundle_content_identity.clone(),
             )?,
-        )
+        )?;
+        value.guest_execution = identity.guest_execution.clone();
+        Ok(value)
     }
 }
 
@@ -462,6 +475,7 @@ pub struct BrokerSystemdEffectOwner {
     resolver: BundleBackedLaunchResolver,
     socket_path: std::path::PathBuf,
     io_timeout: std::time::Duration,
+    profile: BrokerProfile,
     caller_role: BrokerCallerRole,
     requests: Mutex<BTreeMap<ProcessIdentityDigest, SystemdUnitRequest>>,
 }
@@ -484,17 +498,37 @@ impl BrokerSystemdEffectOwner {
         io_timeout: std::time::Duration,
         caller_role: BrokerCallerRole,
     ) -> Self {
+        Self::with_socket_profile_and_role(
+            resolver,
+            socket_path,
+            io_timeout,
+            BrokerProfile::Host,
+            caller_role,
+        )
+    }
+
+    /// Build an owner bound to one fixed broker profile and caller identity.
+    pub fn with_socket_profile_and_role(
+        resolver: BundleBackedLaunchResolver,
+        socket_path: impl Into<std::path::PathBuf>,
+        io_timeout: std::time::Duration,
+        profile: BrokerProfile,
+        caller_role: BrokerCallerRole,
+    ) -> Self {
         Self {
             resolver,
             socket_path: socket_path.into(),
             io_timeout,
+            profile,
             caller_role,
             requests: Mutex::new(BTreeMap::new()),
         }
     }
 
     fn request(&self, request: BrokerRequest) -> Result<BrokerFrame, ProcessEffectError> {
-        if matches!(self.caller_role, BrokerCallerRole::NotAuthorized) {
+        if matches!(self.caller_role, BrokerCallerRole::NotAuthorized)
+            || !request.allowed_by_profile(self.profile)
+        {
             return Err(ProcessEffectError::LaunchFailed);
         }
         broker_round_trip(
@@ -528,6 +562,7 @@ impl BrokerSystemdEffectOwner {
             template_identity: intent.template_identity,
             generation: intent.generation,
             domain,
+            guest_execution: intent.guest_execution.clone(),
             sandbox_plan: intent.sandbox_plan.clone(),
             tracing_span_id: None,
         };
@@ -578,6 +613,7 @@ impl BrokerSystemdEffectOwner {
             || wire.template_identity != intent.template_identity
             || wire.generation != intent.generation
             || wire.bundle_content_identity != intent.bundle_content_identity
+            || wire.guest_execution != intent.guest_execution
             || wire.main_pid == 0
         {
             return Err(ProcessEffectError::IdentityChanged);

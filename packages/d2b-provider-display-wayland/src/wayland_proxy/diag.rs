@@ -302,10 +302,10 @@ mod tests {
     }
 
     #[test]
-    fn rate_limiter_bounds_guest_controlled_label_cardinality() {
+    fn rate_limiter_bounds_component_sessionled_label_cardinality() {
         let mut rl = DiagRateLimiter::new("test-vm".to_owned());
         for index in 0..(MAX_BUCKETS + 64) {
-            let label = format!("guest-controlled-interface-{index}");
+            let label = format!("component-sessionled-interface-{index}");
             let _ = rl.warn("bind-denied", &label, || "bounded".to_owned());
         }
 

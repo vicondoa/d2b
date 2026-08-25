@@ -1,19 +1,17 @@
 use std::path::PathBuf;
 
-/// Closed enum of guest-control config-read failure classes. Each maps to a
+/// Closed enum of component-session config-read failure classes. Each maps to a
 /// distinct wire `kind` slug; the daemon never attaches a path, byte, or
 /// guest-supplied string to the failure, so the public envelope is leak-free.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum GuestControlReadErrorKind {
+pub enum ConfigReadErrorKind {
     /// Connect / CONNECT-ACK / handshake transport failure (incl. unreachable,
     /// old-generation listener, broker signer error).
     Transport,
-    /// Authenticated handshake rejected (token / nonce / stale session).
+    /// Authenticated identity or session evidence rejected.
     AuthFailed,
     /// Malformed or out-of-contract guest response.
     Protocol,
-    /// The guest authenticated but does not advertise `ReadGuestFile`.
-    CapabilityUnavailable,
     /// The guest config working copy does not exist.
     FileNotFound,
     /// The guest config exceeds the read cap.
@@ -26,50 +24,43 @@ pub enum GuestControlReadErrorKind {
     Timeout,
 }
 
-impl GuestControlReadErrorKind {
+impl ConfigReadErrorKind {
     pub fn wire_kind(self) -> &'static str {
         match self {
-            Self::Transport => "guest-control-transport-unavailable",
-            Self::AuthFailed => "guest-control-auth-failed",
-            Self::Protocol => "guest-control-protocol-error",
-            Self::CapabilityUnavailable => "guest-control-capability-unavailable",
-            Self::FileNotFound => "guest-control-file-not-found",
-            Self::FileTooLarge => "guest-control-file-too-large",
-            Self::PathUnsafe => "guest-control-path-unsafe",
-            Self::ReadDenied => "guest-control-read-denied",
-            Self::Timeout => "guest-control-timeout",
+            Self::Transport => "component-session-transport-unavailable",
+            Self::AuthFailed => "component-session-auth-failed",
+            Self::Protocol => "component-session-protocol-error",
+            Self::FileNotFound => "component-session-file-not-found",
+            Self::FileTooLarge => "component-session-file-too-large",
+            Self::PathUnsafe => "component-session-path-unsafe",
+            Self::ReadDenied => "component-session-read-denied",
+            Self::Timeout => "component-session-timeout",
         }
     }
 
     fn human_message(self) -> &'static str {
         match self {
-            Self::Transport => "guest-control transport to the VM is unavailable",
-            Self::AuthFailed => "guest-control authentication to the VM failed",
-            Self::Protocol => "the guest returned a malformed guest-control response",
-            Self::CapabilityUnavailable => {
-                "the guest does not advertise the read-guest-file capability"
-            }
+            Self::Transport => "component-session transport to the VM is unavailable",
+            Self::AuthFailed => "component-session authentication to the VM failed",
+            Self::Protocol => "the guest returned a malformed component-session response",
             Self::FileNotFound => "the guest config working copy does not exist",
             Self::FileTooLarge => "the guest config exceeds the read size cap",
             Self::PathUnsafe => "the guest config path failed the guest-side safety check",
             Self::ReadDenied => "the guest denied the config read",
-            Self::Timeout => "the guest-control config read timed out",
+            Self::Timeout => "the component-session config read timed out",
         }
     }
 
     fn remediation(self) -> &'static str {
         match self {
             Self::Transport | Self::Timeout => {
-                "confirm the VM is running and guest-control-health is ready (`d2b vm status <vm>`), then retry"
+                "confirm the VM is running and component-session-health is ready (`d2b vm status <vm>`), then retry"
             }
             Self::AuthFailed => {
-                "the guest rejected the authenticated handshake; rotate the VM's guest-control material and restart the VM"
+                "the guest rejected the authenticated handshake; rotate the VM's component-session material and restart the VM"
             }
             Self::Protocol => {
-                "the guest-control protocol versions are skewed; rebuild the guest with a matching d2b generation"
-            }
-            Self::CapabilityUnavailable => {
-                "rebuild the guest with the read-guest-file capability enabled (current d2b generation)"
+                "the component-session protocol versions are skewed; rebuild the guest with a matching d2b generation"
             }
             Self::FileNotFound => {
                 "create the editable guest config working copy inside the VM before syncing"
@@ -79,23 +70,23 @@ impl GuestControlReadErrorKind {
                 "ensure the guest config path is a regular file with no symlink or parent-escape component"
             }
             Self::ReadDenied => {
-                "grant the guest-control reader access to the guest config path inside the VM"
+                "grant the component-session reader access to the guest config path inside the VM"
             }
         }
     }
 }
 
-/// Closed enum of guest-control **exec** failure classes (establishment, per-op
+/// Closed enum of component-session **exec** failure classes (establishment, per-op
 /// proxy, and session-table reservation). Each maps to a distinct wire `kind`
 /// slug and a CLI-meaningful exit code; the daemon never attaches argv, env,
 /// output bytes, a session handle, or any guest-supplied string to the failure,
 /// so the public envelope is leak-free.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum GuestControlExecErrorKind {
+pub enum ProcessExecErrorKind {
     /// Connect / handshake transport failure (incl. unreachable, broker signer
     /// error).
     Transport,
-    /// Authenticated handshake or per-op auth rejected (token / nonce / stale).
+    /// Authenticated identity or per-op session evidence rejected.
     Auth,
     /// Malformed or out-of-contract guest response, or an internal protocol
     /// violation (offset/control-seq mismatch).
@@ -103,12 +94,12 @@ pub enum GuestControlExecErrorKind {
     /// The per-op or establishment deadline elapsed.
     Timeout,
     /// The guest does not advertise exec at all (old generation / exec-disabled
-    /// build). No session, no SSH fallback.
+    /// build). No session or alternate transport is attempted.
     OldGeneration,
-    /// The guest authenticated but does not advertise a required exec
-    /// capability (e.g. `EXEC_TTY` for an interactive session).
+    /// The target-local Process does not support the requested exec shape
+    /// (for example, an interactive session without a terminal stream).
     Capability,
-    /// The guest authenticated but does not advertise detached exec support.
+    /// The target-local Process does not support detached execution.
     DetachedUnavailable,
     /// A concurrent-session cap (global / per-uid / per-vm) was hit.
     SessionCapacity,
@@ -128,30 +119,30 @@ pub enum GuestControlExecErrorKind {
     Internal,
 }
 
-impl GuestControlExecErrorKind {
+impl ProcessExecErrorKind {
     pub fn wire_kind(self) -> &'static str {
         match self {
-            Self::Transport => "guest-control-transport-unavailable",
-            Self::Auth => "guest-control-auth-failed",
-            Self::Protocol => "guest-control-protocol-error",
-            Self::Timeout => "guest-control-timeout",
-            Self::OldGeneration => "guest-control-unavailable-old-generation",
-            Self::Capability => "guest-control-capability-unavailable",
-            Self::DetachedUnavailable => "guest-control-exec-detached-unavailable",
+            Self::Transport => "component-session-transport-unavailable",
+            Self::Auth => "component-session-auth-failed",
+            Self::Protocol => "component-session-protocol-error",
+            Self::Timeout => "component-session-timeout",
+            Self::OldGeneration => "component-session-unavailable-old-generation",
+            Self::Capability => "component-session-capability-unavailable",
+            Self::DetachedUnavailable => "component-session-exec-detached-unavailable",
             Self::SessionCapacity => "exec-session-capacity",
             Self::RateLimited => "exec-session-rate-limited",
-            Self::StaleSession => "guest-control-stale-session",
-            Self::ExecNotFound => "guest-control-exec-not-found",
-            Self::ExecExpired => "guest-control-exec-expired",
-            Self::InvalidProgram => "guest-control-invalid-program",
-            Self::GuestError => "guest-control-exec-error",
-            Self::Internal => "guest-control-exec-internal",
+            Self::StaleSession => "component-session-stale-session",
+            Self::ExecNotFound => "component-session-exec-not-found",
+            Self::ExecExpired => "component-session-exec-expired",
+            Self::InvalidProgram => "component-session-invalid-program",
+            Self::GuestError => "component-session-exec-error",
+            Self::Internal => "component-session-exec-internal",
         }
     }
 
     /// Exit code surfaced in the public envelope. The CLI applies its own
     /// exec exit-code contract on top of the wire `kind`; these values are the
-    /// fallback for a client that does not specialise exec handling.
+    /// fallback for a client that does not specialize exec handling.
     fn exit_code(self) -> u8 {
         match self {
             Self::Transport | Self::Timeout => 69,
@@ -166,16 +157,16 @@ impl GuestControlExecErrorKind {
 
     fn human_message(self) -> &'static str {
         match self {
-            Self::Transport => "guest-control transport to the VM is unavailable",
-            Self::Auth => "guest-control authentication to the VM failed",
-            Self::Protocol => "the guest returned a malformed guest-control exec response",
-            Self::Timeout => "the guest-control exec operation timed out",
-            Self::OldGeneration => "the VM generation does not support guest-control exec",
+            Self::Transport => "component-session transport to the VM is unavailable",
+            Self::Auth => "component-session authentication to the VM failed",
+            Self::Protocol => "the guest returned a malformed component-session exec response",
+            Self::Timeout => "the component-session exec operation timed out",
+            Self::OldGeneration => "the VM generation does not support component-session exec",
             Self::Capability => "the guest does not advertise a required exec capability",
             Self::DetachedUnavailable => "detached exec is unavailable for this VM",
             Self::SessionCapacity => "the exec session table is at capacity",
             Self::RateLimited => "exec session starts are rate limited for this caller",
-            Self::StaleSession => "the guest-control exec session is stale",
+            Self::StaleSession => "the component-session exec session is stale",
             Self::ExecNotFound => "the requested detached exec was not found",
             Self::ExecExpired => "the requested detached exec has expired",
             Self::InvalidProgram => {
@@ -189,29 +180,29 @@ impl GuestControlExecErrorKind {
     fn remediation(self) -> &'static str {
         match self {
             Self::Transport | Self::Timeout => {
-                "confirm the VM is running and guest-control-health is ready (`d2b vm status <vm>`), then retry"
+                "confirm the VM is running and component-session-health is ready (`d2b vm status <vm>`), then retry"
             }
             Self::Auth => {
-                "the guest rejected the authenticated handshake; rotate the VM's guest-control material and restart the VM"
+                "the guest rejected the authenticated handshake; rotate the VM's component-session material and restart the VM"
             }
             Self::Protocol => {
-                "the guest-control protocol versions are skewed; rebuild the guest with a matching d2b generation"
+                "the component-session protocol versions are skewed; rebuild the guest with a matching d2b generation"
             }
             Self::OldGeneration => {
-                "rebuild and switch the VM to the current d2b generation so guest-control exec is available; d2b does not fall back to SSH"
+                "rebuild and switch the VM to the current d2b generation so the target-local Process is available; no alternate transport is attempted"
             }
             Self::Capability => {
-                "ensure guest-control exec is enabled on the VM (`guest.exec.enable = true`) and the guest is rebuilt to the current d2b generation; an interactive session additionally requires the guest TTY capability"
+                "ensure the signed target-local Process template supports the requested exec shape and rebuild the VM; an interactive session additionally requires a terminal stream"
             }
             Self::DetachedUnavailable => {
-                "rebuild and restart the VM with detached exec support enabled so the guest advertises EXEC_DETACHED"
+                "rebuild and restart the VM with a signed target-local Process template that supports detached execution"
             }
             Self::SessionCapacity => {
                 "wait for an in-flight exec session to finish or close an idle one, then retry"
             }
             Self::RateLimited => "reduce the rate of `d2b vm exec` invocations and retry",
             Self::StaleSession => {
-                "retry after confirming the VM is still running; if the failure persists, restart the VM to refresh guest-control session state"
+                "retry after confirming the VM is still running; if the failure persists, restart the VM to refresh component-session session state"
             }
             Self::ExecNotFound => {
                 "run `d2b vm exec <vm> list` to find retained detached exec ids, then retry with a listed id"
@@ -232,11 +223,11 @@ impl GuestControlExecErrorKind {
     }
 }
 
-/// Closed enum of guest-control **shell** failure classes. The daemon never
+/// Closed enum of component-session **shell** failure classes. The daemon never
 /// attaches shell names, session handles, terminal bytes, or guest-supplied
 /// strings to this error; the enum is the only public payload.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum GuestControlShellErrorKind {
+pub enum ComponentSessionShellErrorKind {
     Transport,
     Auth,
     Protocol,
@@ -395,21 +386,21 @@ impl WorkloadLaunchErrorKind {
     }
 }
 
-impl GuestControlShellErrorKind {
+impl ComponentSessionShellErrorKind {
     pub fn wire_kind(self) -> &'static str {
         match self {
-            Self::Transport => "guest-control-shell-transport-unavailable",
-            Self::Auth => "guest-control-shell-auth-failed",
-            Self::Protocol => "guest-control-shell-protocol-error",
-            Self::Timeout => "guest-control-shell-timeout",
-            Self::Capability => "guest-control-shell-capability-unavailable",
-            Self::StaleSession => "guest-control-shell-stale-session",
-            Self::Capacity => "guest-control-shell-capacity",
-            Self::AlreadyAttached => "guest-control-shell-already-attached",
-            Self::NotFound => "guest-control-shell-not-found",
-            Self::OutputGap => "guest-control-shell-output-gap",
-            Self::GuestError => "guest-control-shell-error",
-            Self::Internal => "guest-control-shell-internal",
+            Self::Transport => "component-session-shell-transport-unavailable",
+            Self::Auth => "component-session-shell-auth-failed",
+            Self::Protocol => "component-session-shell-protocol-error",
+            Self::Timeout => "component-session-shell-timeout",
+            Self::Capability => "component-session-shell-capability-unavailable",
+            Self::StaleSession => "component-session-shell-stale-session",
+            Self::Capacity => "component-session-shell-capacity",
+            Self::AlreadyAttached => "component-session-shell-already-attached",
+            Self::NotFound => "component-session-shell-not-found",
+            Self::OutputGap => "component-session-shell-output-gap",
+            Self::GuestError => "component-session-shell-error",
+            Self::Internal => "component-session-shell-internal",
         }
     }
 
@@ -426,12 +417,12 @@ impl GuestControlShellErrorKind {
 
     fn human_message(self) -> &'static str {
         match self {
-            Self::Transport => "guest-control shell transport to the VM is unavailable",
-            Self::Auth => "guest-control shell authentication to the VM failed",
-            Self::Protocol => "the guest returned a malformed guest-control shell response",
-            Self::Timeout => "the guest-control shell operation timed out",
+            Self::Transport => "component-session shell transport to the VM is unavailable",
+            Self::Auth => "component-session shell authentication to the VM failed",
+            Self::Protocol => "the guest returned a malformed component-session shell response",
+            Self::Timeout => "the component-session shell operation timed out",
             Self::Capability => "the guest does not advertise a required shell capability",
-            Self::StaleSession => "the guest-control shell session is stale",
+            Self::StaleSession => "the component-session shell session is stale",
             Self::Capacity => "the persistent shell session table is at capacity",
             Self::AlreadyAttached => "the persistent shell is already attached",
             Self::NotFound => "the persistent shell session was not found",
@@ -444,13 +435,13 @@ impl GuestControlShellErrorKind {
     fn remediation(self) -> &'static str {
         match self {
             Self::Transport | Self::Timeout => {
-                "confirm the VM is running and guest-control-health is ready (`d2b vm status <vm>`), then retry"
+                "confirm the VM is running and component-session-health is ready (`d2b vm status <vm>`), then retry"
             }
             Self::Auth => {
-                "the guest rejected the authenticated handshake; rotate the VM's guest-control material and restart the VM"
+                "the guest rejected the authenticated handshake; rotate the VM's component-session material and restart the VM"
             }
             Self::Protocol => {
-                "the guest-control protocol versions are skewed; rebuild the guest with a matching d2b generation"
+                "the component-session protocol versions are skewed; rebuild the guest with a matching d2b generation"
             }
             Self::Capability => {
                 "enable persistent guest shell support for the VM and rebuild/restart the guest so it advertises shell capabilities"
@@ -468,7 +459,9 @@ impl GuestControlShellErrorKind {
             Self::OutputGap => {
                 "reattach to redraw the persistent shell; terminal output before the gap is no longer available"
             }
-            Self::GuestError => "inspect guestd shell state and retry the shell operation",
+            Self::GuestError => {
+                "inspect target-local shell Process state and retry the shell operation"
+            }
             Self::Internal => {
                 "retry; if the failure persists inspect the daemon log for the typed shell-session record"
             }
@@ -642,9 +635,9 @@ pub enum TypedError {
     /// complete before the caller's single absolute deadline. Distinct
     /// from [`Self::InternalBrokerUnavailable`] (a fast connect/transport
     /// failure) so a genuine deadline exhaustion can be surfaced as a
-    /// timeout end to end - the guest-control signer maps this to
-    /// [`crate::guest_control_health::GuestControlHealthError::Timeout`]
-    /// (slug `guest-control-timeout`) instead of collapsing it into a
+    /// timeout end to end - the component-session signer maps this to
+    /// timeout.
+    /// (slug `component-session-timeout`) instead of collapsing it into a
     /// generic signer/transport failure.
     InternalBrokerTimeout {
         path: PathBuf,
@@ -791,22 +784,22 @@ pub enum TypedError {
         capability: String,
         verb: String,
     },
-    /// Authenticated guest-control config read failed. The closed-enum `kind`
+    /// Authenticated component-session config read failed. The closed-enum `kind`
     /// is the ONLY payload - never a path, byte, or guest-supplied string - so
     /// the public envelope cannot leak guest content.
-    GuestControlReadFailed {
-        kind: GuestControlReadErrorKind,
+    ConfigReadFailed {
+        kind: ConfigReadErrorKind,
     },
-    /// Authenticated guest-control **exec** failed (establishment, per-op proxy,
+    /// Authenticated component-session **exec** failed (establishment, per-op proxy,
     /// or session-table reservation). The closed-enum `kind` is the ONLY
     /// payload - never argv, env, output, a session handle, or a guest string.
-    GuestControlExecFailed {
-        kind: GuestControlExecErrorKind,
+    ProcessExecFailed {
+        kind: ProcessExecErrorKind,
     },
-    /// Authenticated guest-control **shell** failed. Closed-enum kind only; no
+    /// Authenticated component-session **shell** failed. Closed-enum kind only; no
     /// shell name, session handle, terminal bytes, or guest string.
-    GuestControlShellFailed {
-        kind: GuestControlShellErrorKind,
+    ComponentSessionShellFailed {
+        kind: ComponentSessionShellErrorKind,
     },
     UnsafeLocalShellFailed {
         kind: UnsafeLocalShellErrorKind,
@@ -830,7 +823,7 @@ pub enum TypedError {
         vm: String,
     },
     /// The console provider for this VM is misconfigured. Used for ACA
-    /// sandboxes when a guestd-compatible agent is absent (ADR 0041).
+    /// sandboxes when the provider relay agent is absent (ADR 0041).
     ConsoleProviderMisconfigured {
         vm: String,
         detail: String,
@@ -928,9 +921,9 @@ impl TypedError {
             Self::UsbipBusidNotPresent { .. } => "usbip-busid-not-present",
             Self::UsbipExplicitClaimConflict { .. } => "usbip-explicit-claim-conflict",
             Self::RuntimeCapabilityUnsupported { .. } => "runtime-capability-unsupported",
-            Self::GuestControlReadFailed { kind } => kind.wire_kind(),
-            Self::GuestControlExecFailed { kind } => kind.wire_kind(),
-            Self::GuestControlShellFailed { kind } => kind.wire_kind(),
+            Self::ConfigReadFailed { kind } => kind.wire_kind(),
+            Self::ProcessExecFailed { kind } => kind.wire_kind(),
+            Self::ComponentSessionShellFailed { kind } => kind.wire_kind(),
             Self::UnsafeLocalShellFailed { kind } => kind.wire_kind(),
             Self::WorkloadLaunchFailed { kind } => kind.wire_kind(),
             Self::DaemonBusy => "daemon-busy",
@@ -981,11 +974,11 @@ impl TypedError {
             Self::UsbipBusidNotPresent { .. } => 67,
             Self::UsbipExplicitClaimConflict { .. } => 67,
             Self::RuntimeCapabilityUnsupported { .. } => 70,
-            // Guest-control config read failures share one exit code; the
+            // ComponentSession config read failures share one exit code; the
             // distinct `kind` slug carries the sub-class.
-            Self::GuestControlReadFailed { .. } => 70,
-            Self::GuestControlExecFailed { kind } => kind.exit_code(),
-            Self::GuestControlShellFailed { kind } => kind.exit_code(),
+            Self::ConfigReadFailed { .. } => 70,
+            Self::ProcessExecFailed { kind } => kind.exit_code(),
+            Self::ComponentSessionShellFailed { kind } => kind.exit_code(),
             Self::UnsafeLocalShellFailed { kind } => kind.exit_code(),
             Self::WorkloadLaunchFailed { kind } => kind.exit_code(),
             // Shares the EX_TEMPFAIL-class exit code with the other
@@ -1118,9 +1111,9 @@ impl TypedError {
                     "vm '{vm}' uses runtime '{runtime_kind}', which does not support capability '{capability}' required by '{verb}'"
                 )
             }
-            Self::GuestControlReadFailed { kind } => kind.human_message().to_owned(),
-            Self::GuestControlExecFailed { kind } => kind.human_message().to_owned(),
-            Self::GuestControlShellFailed { kind } => kind.human_message().to_owned(),
+            Self::ConfigReadFailed { kind } => kind.human_message().to_owned(),
+            Self::ProcessExecFailed { kind } => kind.human_message().to_owned(),
+            Self::ComponentSessionShellFailed { kind } => kind.human_message().to_owned(),
             Self::UnsafeLocalShellFailed { kind } => kind.human_message().to_owned(),
             Self::WorkloadLaunchFailed { kind } => kind.human_message().to_owned(),
             Self::DaemonBusy => "the daemon is at its in-flight connection limit".to_owned(),
@@ -1172,11 +1165,11 @@ impl TypedError {
                     .to_owned()
             }
             Self::InternalBrokerUnavailable { .. } => {
-                "start d2b-priv-broker or disable audit requests until the broker is available"
+                "start d2b-broker or disable audit requests until the broker is available"
                     .to_owned()
             }
             Self::InternalBrokerTimeout { .. } => {
-                "check that d2b-priv-broker is responsive (not backlogged or half-open) and retry; the round trip exceeded the caller's deadline"
+                "check that d2b-broker is responsive (not backlogged or half-open) and retry; the round trip exceeded the caller's deadline"
                     .to_owned()
             }
             Self::InternalConfig { .. } => {
@@ -1267,9 +1260,9 @@ impl TypedError {
                     "use a VM/runtime that supports '{capability}', or use the qemu-media lifecycle/media verbs that are available for runtime '{runtime_kind}'"
                 )
             }
-            Self::GuestControlReadFailed { kind } => kind.remediation().to_owned(),
-            Self::GuestControlExecFailed { kind } => kind.remediation().to_owned(),
-            Self::GuestControlShellFailed { kind } => kind.remediation().to_owned(),
+            Self::ConfigReadFailed { kind } => kind.remediation().to_owned(),
+            Self::ProcessExecFailed { kind } => kind.remediation().to_owned(),
+            Self::ComponentSessionShellFailed { kind } => kind.remediation().to_owned(),
             Self::UnsafeLocalShellFailed { kind } => kind.remediation().to_owned(),
             Self::WorkloadLaunchFailed { kind } => kind.remediation().to_owned(),
             Self::DaemonBusy => {
@@ -1450,9 +1443,9 @@ impl TypedError {
             | Self::UsbipBusidNotPresent { .. }
             | Self::UsbipExplicitClaimConflict { .. }
             | Self::RuntimeCapabilityUnsupported { .. }
-            | Self::GuestControlReadFailed { .. }
-            | Self::GuestControlExecFailed { .. }
-            | Self::GuestControlShellFailed { .. }
+            | Self::ConfigReadFailed { .. }
+            | Self::ProcessExecFailed { .. }
+            | Self::ComponentSessionShellFailed { .. }
             | Self::UnsafeLocalShellFailed { .. }
             | Self::WorkloadLaunchFailed { .. }
             | Self::DaemonBusy
@@ -1595,44 +1588,40 @@ mod tests {
     }
 
     #[test]
-    fn guest_control_read_failed_kinds_are_distinct_and_leak_free() {
+    fn component_session_read_failed_kinds_are_distinct_and_leak_free() {
         let kinds = [
             (
-                GuestControlReadErrorKind::Transport,
-                "guest-control-transport-unavailable",
+                ConfigReadErrorKind::Transport,
+                "component-session-transport-unavailable",
             ),
             (
-                GuestControlReadErrorKind::AuthFailed,
-                "guest-control-auth-failed",
+                ConfigReadErrorKind::AuthFailed,
+                "component-session-auth-failed",
             ),
             (
-                GuestControlReadErrorKind::Protocol,
-                "guest-control-protocol-error",
+                ConfigReadErrorKind::Protocol,
+                "component-session-protocol-error",
             ),
             (
-                GuestControlReadErrorKind::CapabilityUnavailable,
-                "guest-control-capability-unavailable",
+                ConfigReadErrorKind::FileNotFound,
+                "component-session-file-not-found",
             ),
             (
-                GuestControlReadErrorKind::FileNotFound,
-                "guest-control-file-not-found",
+                ConfigReadErrorKind::FileTooLarge,
+                "component-session-file-too-large",
             ),
             (
-                GuestControlReadErrorKind::FileTooLarge,
-                "guest-control-file-too-large",
+                ConfigReadErrorKind::PathUnsafe,
+                "component-session-path-unsafe",
             ),
             (
-                GuestControlReadErrorKind::PathUnsafe,
-                "guest-control-path-unsafe",
+                ConfigReadErrorKind::ReadDenied,
+                "component-session-read-denied",
             ),
-            (
-                GuestControlReadErrorKind::ReadDenied,
-                "guest-control-read-denied",
-            ),
-            (GuestControlReadErrorKind::Timeout, "guest-control-timeout"),
+            (ConfigReadErrorKind::Timeout, "component-session-timeout"),
         ];
         for (kind, slug) in kinds {
-            let err = TypedError::GuestControlReadFailed { kind };
+            let err = TypedError::ConfigReadFailed { kind };
             assert_eq!(err.kind(), slug);
             assert_eq!(err.exit_code(), 70);
             // Neither the human message nor the remediation may leak a host or
@@ -1643,36 +1632,36 @@ mod tests {
     }
 
     #[test]
-    fn guest_control_exec_failed_kinds_are_leak_free() {
+    fn component_session_exec_failed_kinds_are_leak_free() {
         // Every exec failure kind (including the serde/protocol and
         // transport classes) must surface a non-empty, leak-free public
         // message + remediation - no host path, argv, env, output bytes, or
         // session handle. The daemon never attaches guest-supplied content to
-        // a `GuestControlExecFailed` envelope, so iterating the closed enum is
+        // a `ProcessExecFailed` envelope, so iterating the closed enum is
         // sufficient sentinel coverage for the failure path.
         let kinds = [
-            GuestControlExecErrorKind::Transport,
-            GuestControlExecErrorKind::Auth,
-            GuestControlExecErrorKind::Protocol,
-            GuestControlExecErrorKind::Timeout,
-            GuestControlExecErrorKind::OldGeneration,
-            GuestControlExecErrorKind::Capability,
-            GuestControlExecErrorKind::DetachedUnavailable,
-            GuestControlExecErrorKind::SessionCapacity,
-            GuestControlExecErrorKind::RateLimited,
-            GuestControlExecErrorKind::StaleSession,
-            GuestControlExecErrorKind::ExecNotFound,
-            GuestControlExecErrorKind::ExecExpired,
-            GuestControlExecErrorKind::InvalidProgram,
-            GuestControlExecErrorKind::GuestError,
-            GuestControlExecErrorKind::Internal,
+            ProcessExecErrorKind::Transport,
+            ProcessExecErrorKind::Auth,
+            ProcessExecErrorKind::Protocol,
+            ProcessExecErrorKind::Timeout,
+            ProcessExecErrorKind::OldGeneration,
+            ProcessExecErrorKind::Capability,
+            ProcessExecErrorKind::DetachedUnavailable,
+            ProcessExecErrorKind::SessionCapacity,
+            ProcessExecErrorKind::RateLimited,
+            ProcessExecErrorKind::StaleSession,
+            ProcessExecErrorKind::ExecNotFound,
+            ProcessExecErrorKind::ExecExpired,
+            ProcessExecErrorKind::InvalidProgram,
+            ProcessExecErrorKind::GuestError,
+            ProcessExecErrorKind::Internal,
         ];
         for kind in kinds {
-            let err = TypedError::GuestControlExecFailed { kind };
+            let err = TypedError::ProcessExecFailed { kind };
             let slug = err.kind();
             assert!(
-                slug.starts_with("guest-control-") || slug.starts_with("exec-session-"),
-                "slug={slug} does not use a guest-control / exec-session prefix"
+                slug.starts_with("component-session-") || slug.starts_with("exec-session-"),
+                "slug={slug} does not use a component-session / exec-session prefix"
             );
             assert!(!err.message().is_empty(), "kind={slug} message empty");
             assert!(
@@ -1694,27 +1683,27 @@ mod tests {
     }
 
     #[test]
-    fn guest_control_shell_failed_kinds_are_leak_free() {
+    fn component_session_shell_failed_kinds_are_leak_free() {
         let kinds = [
-            GuestControlShellErrorKind::Transport,
-            GuestControlShellErrorKind::Auth,
-            GuestControlShellErrorKind::Protocol,
-            GuestControlShellErrorKind::Timeout,
-            GuestControlShellErrorKind::Capability,
-            GuestControlShellErrorKind::StaleSession,
-            GuestControlShellErrorKind::Capacity,
-            GuestControlShellErrorKind::AlreadyAttached,
-            GuestControlShellErrorKind::NotFound,
-            GuestControlShellErrorKind::OutputGap,
-            GuestControlShellErrorKind::GuestError,
-            GuestControlShellErrorKind::Internal,
+            ComponentSessionShellErrorKind::Transport,
+            ComponentSessionShellErrorKind::Auth,
+            ComponentSessionShellErrorKind::Protocol,
+            ComponentSessionShellErrorKind::Timeout,
+            ComponentSessionShellErrorKind::Capability,
+            ComponentSessionShellErrorKind::StaleSession,
+            ComponentSessionShellErrorKind::Capacity,
+            ComponentSessionShellErrorKind::AlreadyAttached,
+            ComponentSessionShellErrorKind::NotFound,
+            ComponentSessionShellErrorKind::OutputGap,
+            ComponentSessionShellErrorKind::GuestError,
+            ComponentSessionShellErrorKind::Internal,
         ];
         for kind in kinds {
-            let err = TypedError::GuestControlShellFailed { kind };
+            let err = TypedError::ComponentSessionShellFailed { kind };
             let slug = err.kind();
             assert!(
-                slug.starts_with("guest-control-shell-"),
-                "slug={slug} does not use guest-control-shell prefix"
+                slug.starts_with("component-session-shell-"),
+                "slug={slug} does not use component-session-shell prefix"
             );
             assert!(!err.message().is_empty(), "kind={slug} message empty");
             assert!(

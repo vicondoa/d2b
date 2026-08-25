@@ -104,14 +104,14 @@ let
         then envIndexMap.${envName}
         else null;
       baseVsockCid =
-        if isNixosRuntime then d2bLib.guestControlVsockCid {
+        if isNixosRuntime then d2bLib.componentSessionVsockCid {
           inherit name envIndex;
           index = vm.index;
           isNetVm = asNetVmForEnv != null;
           isObservabilityVm = obsCfg.enable && name == obsCfg.vmName;
         } else null;
       baseVsockHostSocket =
-        if isNixosRuntime then d2bLib.guestControlVsockHostSocket stateRoot else null;
+        if isNixosRuntime then d2bLib.componentSessionVsockHostSocket stateRoot else null;
     in
     {
       inherit name;
@@ -227,7 +227,7 @@ let
       vmName = obsCfg.vmName;
       obsVsockCid = 1000;
       obsVsockHostSocket =
-        d2bLib.guestControlVsockHostSocket "${config.d2b.store.stateDir}/${obsCfg.vmName}";
+        d2bLib.componentSessionVsockHostSocket "${config.d2b.store.stateDir}/${obsCfg.vmName}";
       signozUrl = "http://${obsCfg.signoz.listenAddress}:${toString obsCfg.signoz.listenPort}";
       signozOtlpGrpcPort = obsCfg.signoz.otlpGrpcPort;
       signozOtlpHttpPort = obsCfg.signoz.otlpHttpPort;
@@ -266,7 +266,6 @@ let
       lifecycle = lib.mkOption { type = lib.types.bool; };
       display = lib.mkOption { type = lib.types.bool; };
       usbHotplug = lib.mkOption { type = lib.types.bool; };
-      guestControl = lib.mkOption { type = lib.types.bool; };
       exec = lib.mkOption { type = lib.types.bool; };
       configSync = lib.mkOption { type = lib.types.bool; };
       ssh = lib.mkOption { type = lib.types.bool; };
@@ -316,7 +315,6 @@ let
         type = lib.types.submodule {
           freeformType = null;
           options = {
-            guestControl = lib.mkOption { type = lib.types.bool; };
             exec = lib.mkOption { type = lib.types.bool; };
             shell = lib.mkOption { type = lib.types.bool; };
             configSync = lib.mkOption { type = lib.types.bool; };
@@ -353,7 +351,7 @@ let
           "audio"
           "video"
           "network"
-          "guest-control"
+          "component-session"
           "usb"
           "observability"
         ];
@@ -469,7 +467,7 @@ let
           Hypervisor VMs. Env-backed VMs use `100 + envIndex * 1000 + slot`,
           where slot 1 is reserved for the env net VM and workload VMs use
           `d2b.vms.<vm>.index`. Null for providers that do not expose
-          d2b guest-control or in-guest observability.
+          d2b component-session or in-guest observability.
         '';
       };
 
@@ -477,7 +475,7 @@ let
         type = lib.types.nullOr lib.types.str;
         description = ''
           Host-side Unix socket backing this VM's Cloud Hypervisor vsock
-          device. Null for providers without d2b guest-control or
+          device. Null for providers without d2b component-session or
           in-guest observability.
         '';
       };
@@ -733,8 +731,8 @@ let
         type = lib.types.nullOr manifestShellType;
         description = ''
           Persistent guest shell policy metadata for providers that support the
-          authenticated guest-control terminal substrate. Null for runtime
-          providers without d2b guest-control.
+          authenticated component-session terminal substrate. Null for runtime
+          providers without d2b component-session.
         '';
       };
     };
@@ -804,7 +802,7 @@ in
         * 4 - base Cloud Hypervisor vsock semantics. Keeps the v3
           shape, but defines per-VM `observability.vsockCid` and
           `observability.vsockHostSocket` as the host-owned base
-          vsock device used by observability today and guest control in
+          vsock device used by observability today and ComponentSession in
           later waves. Pinned by
           `d2b_core::manifest_v04::MANIFEST_VERSION_CURRENT`; the
           broker / daemon refuse any other value with a
@@ -823,7 +821,7 @@ in
         * 6 - adds per-VM runtime/provider metadata and provider
           capability summaries, and makes provider-specific socket/vsock
           fields nullable so qemu-media entries do not fabricate Cloud
-          Hypervisor, guest-control, SSH, store-sync, key, or
+          Hypervisor, component-session, SSH, store-sync, key, or
           in-guest-observability artifacts.
         * 7 - adds per-VM lifecycle.gracefulShutdown metadata so d2bd
           can apply VM-specific graceful guest-shutdown policy while

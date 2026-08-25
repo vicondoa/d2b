@@ -100,40 +100,6 @@ rust_test(
 )
 
 rust_test(
-    name = "guest_control_token_materializer",
-    srcs = ["tests/guest_control_token_materializer.rs"],
-    compile_data = ["Cargo.toml"],
-    data = [
-        ":d2b-activation-helper",
-        "//:nixos-modules/guest-control-token-materialize.py",
-    ],
-    env = {
-        "CARGO_BIN_EXE_d2b-activation-helper": "$(rootpath :d2b-activation-helper)",
-        "D2B_GUEST_CONTROL_TOKEN_MATERIALIZER": "$(rootpath //:nixos-modules/guest-control-token-materialize.py)",
-    },
-    env_inherit = ["PATH"],
-    rustc_env = {"CARGO_BIN_EXE_d2b-activation-helper": "$(rootpath :d2b-activation-helper)"},
-    tags = ["no-remote-cache", "no-remote-exec"],
-    visibility = ["//visibility:public"],
-    deps = ["//packages/d2b-contracts-resource:d2b_contracts_resource",
-        "//packages/d2b-contracts-zone-session:d2b_contracts_zone_session", ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
-)
-
-rust_test(
-    name = "guest_vsock_ttrpc_compile",
-    srcs = ["tests/guest_vsock_ttrpc_compile.rs"],
-    compile_data = ["Cargo.toml"],
-    data = [":d2b-activation-helper"],
-    env = {"CARGO_BIN_EXE_d2b-activation-helper": "$(rootpath :d2b-activation-helper)"},
-    rustc_env = {"CARGO_BIN_EXE_d2b-activation-helper": "$(rootpath :d2b-activation-helper)"},
-    visibility = ["//visibility:public"],
-    deps = [
-        "//packages/d2b-contracts-resource:d2b_contracts_resource",
-        "//packages/d2b-contracts-zone-session:d2b_contracts_zone_session",
-    ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
-)
-
-rust_test(
     name = "host_generation",
     srcs = ["tests/host_generation.rs"],
     compile_data = ["Cargo.toml"],

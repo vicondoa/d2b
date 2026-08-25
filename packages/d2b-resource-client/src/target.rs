@@ -9,12 +9,9 @@
 
 use core::fmt;
 
+use d2b_contracts_resource::v3::{ResourceName, ResourceRef, ResourceTypeName};
 use d2b_contracts_zone_session::v3::zone_routing::ZonePath;
-use d2b_contracts_resource::v3::{
-    ResourceName,
-    ResourceRef,
-    ResourceTypeName,
-};
+use d2b_core_controller::controller_assignment::AssignmentTarget;
 
 use crate::ClientError;
 
@@ -40,11 +37,13 @@ pub enum ZoneServiceKind {
     Support,
     /// The credential service.
     Credential,
+    /// The service-only NixOS Guest configuration Provider.
+    ConfigNixos,
 }
 
 impl ZoneServiceKind {
     /// Exhaustive stable variant order.
-    pub const fn all() -> &'static [Self; 8] {
+    pub const fn all() -> &'static [Self; 9] {
         &[
             Self::Resource,
             Self::Zone,
@@ -54,6 +53,7 @@ impl ZoneServiceKind {
             Self::Audit,
             Self::Support,
             Self::Credential,
+            Self::ConfigNixos,
         ]
     }
 
@@ -68,6 +68,7 @@ impl ZoneServiceKind {
             Self::Audit => "d2b.audit.v3",
             Self::Support => "d2b.support.v3",
             Self::Credential => "d2b.credential.v3",
+            Self::ConfigNixos => "d2b.config-nixos.v3",
         }
     }
 
@@ -82,6 +83,7 @@ impl ZoneServiceKind {
             Self::Audit => "audit",
             Self::Support => "support",
             Self::Credential => "credential",
+            Self::ConfigNixos => "config-nixos",
         }
     }
 }
@@ -405,6 +407,24 @@ impl ResolvedTarget {
     pub fn resource_ref(&self) -> Option<ResourceRef> {
         self.owner.resource_ref()
     }
+
+    /// Check that this resolved route is exactly the assignment target.
+    pub fn matches_assignment(&self, assignment: &AssignmentTarget) -> bool {
+        match assignment {
+            AssignmentTarget::Zone(zone) => {
+                self.owner.zone().depth() == 1
+                    && self
+                        .owner
+                        .zone()
+                        .labels()
+                        .first()
+                        .is_some_and(|label| label.as_str() == zone.as_str())
+            }
+            AssignmentTarget::Execution { reference, .. } => {
+                self.resource_ref().as_ref() == Some(reference)
+            }
+        }
+    }
 }
 
 impl fmt::Debug for ResolvedTarget {
@@ -527,7 +547,8 @@ mod tests {
                 "controller",
                 "audit",
                 "support",
-                "credential"
+                "credential",
+                "config-nixos"
             ]
         );
         services.sort_unstable();

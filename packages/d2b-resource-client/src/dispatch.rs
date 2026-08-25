@@ -11,10 +11,7 @@
 use core::time::Duration;
 use std::{sync::Arc, time::Instant};
 
-use d2b_contracts_resource::v3::{
-    ResourceError,
-    RetryClass,
-};
+use d2b_contracts_resource::v3::{ResourceError, RetryClass};
 
 use crate::{
     CallOptions, CancellationToken, ClientError, MAX_REQUEST_LIFETIME_MS, ResolvedTarget,
@@ -338,10 +335,7 @@ mod tests {
         MetadataInput, REQUEST_ID_BYTES, RetryPolicy, RouteRecord, RouteTable, ServiceOwner,
         TargetInput, TargetResolver, TransportKind, TransportSelection, target::fixtures::zone,
     };
-    use d2b_contracts_resource::v3::{
-    ResourceErrorKind,
-    ResourceErrorReason,
-};
+    use d2b_contracts_resource::v3::{ResourceErrorKind, ResourceErrorReason};
 
     const ISSUED: u64 = 1_000;
 

@@ -4,7 +4,7 @@ use d2b_contracts_resource::v3::{
     ZoneId,
 };
 use d2b_provider_transport_vsock::{
-    GuestControlKey, GuestIdentity, NativeGuestRelay, PeerCid, RelayBinding, RelayEffectError,
+    SessionKey, GuestIdentity, NativeGuestRelay, PeerCid, RelayBinding, RelayEffectError,
     RelayEffectPort, RelayObservation, RelayPhase, SessionAuthority, SessionProof,
 };
 use ring::rand::{SystemRandom, generate};
@@ -123,7 +123,7 @@ fn finalization_closes_relay_before_releasing_cid_authority() {
     runtime.block_on(async {
         let port = FakeRelayPort::default();
         let calls = Arc::clone(&port.calls);
-        let key = GuestControlKey::from_core([7; 32]);
+        let key = SessionKey::from_core([7; 32]);
         let guest = binding().guest().clone();
         let mut authority = SessionAuthority::new(guest.clone(), key.clone(), 1);
         let session = authority
@@ -203,7 +203,7 @@ fn reserve_failure_leaves_relay_retryable() {
         let port = FakeRelayPort::default();
         let fail_reserve = Arc::clone(&port.fail_reserve);
         *port.fail_reserve.lock().unwrap() = true;
-        let key = GuestControlKey::from_core([7; 32]);
+        let key = SessionKey::from_core([7; 32]);
         let guest = binding().guest().clone();
         let mut authority = SessionAuthority::new(guest.clone(), key.clone(), 1);
         let session = authority
@@ -239,7 +239,7 @@ fn failed_cid_release_retains_authority_for_retry() {
     runtime.block_on(async {
         let port = FakeRelayPort::default();
         let fail_release = Arc::clone(&port.fail_release);
-        let key = GuestControlKey::from_core([7; 32]);
+        let key = SessionKey::from_core([7; 32]);
         let guest = binding().guest().clone();
         let mut authority = SessionAuthority::new(guest.clone(), key.clone(), 1);
         let session = authority
@@ -274,7 +274,7 @@ fn listener_close_failure_keeps_cid_authority_for_retry() {
         *port.fail_close_listener.lock().unwrap() = true;
         let calls = Arc::clone(&port.calls);
         let fail_close_listener = Arc::clone(&port.fail_close_listener);
-        let key = GuestControlKey::from_core([7; 32]);
+        let key = SessionKey::from_core([7; 32]);
         let guest = binding().guest().clone();
         let mut authority = SessionAuthority::new(guest.clone(), key.clone(), 1);
         let session = authority

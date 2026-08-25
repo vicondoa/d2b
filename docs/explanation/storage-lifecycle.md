@@ -127,13 +127,13 @@ attacker cannot flood the violation lane and evict normal audit history.
 
 ## Migration posture
 
-The storage cutover is allowed to be disruptive once. During that planned
+The storage layout migration is allowed to be disruptive once. During that planned
 downtime, d2b may clear old boot-scoped runtime files and lock records
 after proving VMs and runner processes are stopped. Persistent data such as
 TPM NVRAM, store-view metadata, SSH keys, daemon adoption metadata, audit
 history, host-runtime metadata, and disk images is preserved and verified.
 
-After the cutover, normal restarts are continuation events again.
+After the migration, normal restarts are continuation events again.
 
 ## Logical backup and restore
 

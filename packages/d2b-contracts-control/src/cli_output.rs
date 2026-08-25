@@ -61,7 +61,7 @@ pub struct VmExecCreateOutputV1 {
     pub command: String,
     pub vm: String,
     pub exec_id: String,
-    pub state: crate::guest_wire::ExecState,
+    pub state: crate::public_wire::ExecState,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
@@ -86,7 +86,7 @@ pub struct VmExecListOutputV1 {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct VmExecListEntryOutputV1 {
     pub exec_id: String,
-    pub state: crate::guest_wire::ExecState,
+    pub state: crate::public_wire::ExecState,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub exit_code: Option<i32>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -112,7 +112,7 @@ pub struct VmExecStatusOutputV1 {
     pub command: String,
     pub vm: String,
     pub exec_id: String,
-    pub state: crate::guest_wire::ExecState,
+    pub state: crate::public_wire::ExecState,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub reason: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -158,7 +158,7 @@ pub struct VmExecKillOutputV1 {
     pub vm: String,
     pub exec_id: String,
     pub result: crate::public_wire::ExecDetachedKillOutcome,
-    pub state: crate::guest_wire::ExecState,
+    pub state: crate::public_wire::ExecState,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]

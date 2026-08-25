@@ -51,6 +51,7 @@ use d2b_contracts_resource::v3::{
 };
 
 pub mod audio;
+pub mod child_resources;
 pub mod security_key;
 pub mod telemetry;
 pub mod usb;

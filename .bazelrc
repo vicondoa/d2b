@@ -42,6 +42,7 @@ build:remote --@rules_rust//rust/settings:extra_rustc_flag=-Clink-arg=-fuse-ld=b
 build:remote --@rules_rust//rust/settings:extra_exec_rustc_flag=-Clink-arg=-fuse-ld=bfd
 build:remote --action_env=PATH=/run/current-system/sw/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 build:remote --test_env=PATH=/run/current-system/sw/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+build:remote --strategy=TestRunner=local
 build:remote --remote_download_minimal
 build:remote --jobs=50
 build:remote --remote_cache_compression
@@ -63,6 +64,7 @@ build:trusted-seed --@rules_rust//rust/settings:extra_rustc_flag=-Clink-arg=-fus
 build:trusted-seed --@rules_rust//rust/settings:extra_exec_rustc_flag=-Clink-arg=-fuse-ld=bfd
 build:trusted-seed --action_env=PATH=/run/current-system/sw/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 build:trusted-seed --test_env=PATH=/run/current-system/sw/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+build:trusted-seed --strategy=TestRunner=local
 build:trusted-seed --remote_upload_local_results=true
 build:trusted-seed --remote_cache_async=false
 build:trusted-seed --remote_download_minimal

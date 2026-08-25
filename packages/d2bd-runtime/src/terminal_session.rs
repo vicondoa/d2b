@@ -106,6 +106,13 @@ pub trait TerminalBackend: Send + Sync {
     async fn wait(&self, timeout_ms: u64, timeout: Duration) -> Result<WaitOutcome, Self::Error>;
 
     async fn close_stdin(&self, offset: u64, timeout: Duration) -> Result<(), Self::Error>;
+
+    /// Cancel the established process and release any transport-owned
+    /// attachment. Backends that do not own a cancellable remote process may
+    /// keep the default no-op implementation.
+    async fn cancel(&self, _control_seq: u64, _timeout: Duration) -> Result<(), Self::Error> {
+        Ok(())
+    }
 }
 
 #[cfg(test)]

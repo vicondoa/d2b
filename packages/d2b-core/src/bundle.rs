@@ -22,9 +22,6 @@ pub struct Bundle {
     pub processes_path: String,
     /// Private privileges.json artifact path.
     pub privileges_path: String,
-    /// Trusted store path for the one-shot cutover runner.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub cutover_runner_path: Option<String>,
     /// Private storage lifecycle artifact path.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub storage_path: Option<String>,

@@ -143,6 +143,26 @@ let
   artifactForPackage = name: package:
     (artifactFor name) // { inherit package; };
 
+  signedPlacementContract = name: {
+    instanceScope = "per-resource-target";
+    supportedTargetKinds = [ "guest" "host" ];
+    targetCapabilities = [
+      {
+        artifactDigest = "sha256:${builtins.hashString "sha256" "${name}/guest"}";
+        requiredEffectClasses = [ "process" ];
+        targetKind = "guest";
+      }
+      {
+        artifactDigest = "sha256:${builtins.hashString "sha256" "${name}/host"}";
+        requiredEffectClasses = [ "process" ];
+        targetKind = "host";
+      }
+    ];
+    placementAnchor = "execution-ref";
+    d2bdDigest = "sha256:${builtins.hashString "sha256" "${name}/d2bd"}";
+    brokerDigest = "sha256:${builtins.hashString "sha256" "${name}/broker"}";
+  };
+
   rawMultiOutput = builtins.derivation {
     name = "provider-catalog-raw-multi-output";
     system = pkgs.system;
@@ -165,6 +185,26 @@ let
 
   cfg = (mkEvalCatalog [ authored ]).config;
   catalog = cfg.d2b._providerCatalog;
+  signedCfg = (mkEvalCatalog [{
+    d2b.artifacts.provider-signed = {
+      package = pkgs.writeText "provider-signed" "provider-signed";
+      type = "provider";
+      catalog = (entryFor "provider-signed") // signedPlacementContract "provider-signed";
+    };
+  }]).config;
+  signedEntry = lib.head signedCfg.d2b._providerCatalog.publicEntries;
+  nullCatalogCfg = (mkEvalCatalog [{
+    d2b.artifacts.system = {
+      package = pkgs.writeText "provider-catalog-null" "system";
+      type = "nixos-system";
+      catalog = null;
+    };
+  }]).config;
+  signedFailure = artifacts:
+    let evaluated = (mkEvalCatalog [{
+      d2b.artifacts = artifacts;
+    }]).config;
+    in lib.head (lib.filter (assertion: !assertion.assertion) evaluated.assertions);
 
   # The same three artifacts, authored in a different order and built from a
   # reversed list rather than a literal attribute set. The compiled catalog
@@ -567,6 +607,64 @@ in
     expr = lib.sort (a: b: a < b)
       (lib.attrNames (lib.head catalog.publicEntries).entry);
     expected = lib.sort (a: b: a < b) shape.fields;
+  };
+
+  "provider-catalog/signed-placement-and-runtime-contract-is-retained" = {
+    expr = {
+      placement = {
+        scope = signedEntry.entry.instanceScope;
+        targets = signedEntry.entry.supportedTargetKinds;
+        anchor = signedEntry.entry.placementAnchor;
+        capabilities = signedEntry.entry.targetCapabilities;
+      };
+      runtime = {
+        d2bd = signedEntry.entry.d2bdDigest;
+        broker = signedEntry.entry.brokerDigest;
+      };
+    };
+    expected = {
+      placement = {
+        scope = "per-resource-target";
+        targets = [ "guest" "host" ];
+        anchor = "execution-ref";
+        capabilities = (signedPlacementContract "provider-signed").targetCapabilities;
+      };
+      runtime = {
+        d2bd = (signedPlacementContract "provider-signed").d2bdDigest;
+        broker = (signedPlacementContract "provider-signed").brokerDigest;
+      };
+    };
+  };
+
+  "provider-catalog/signed-placement-contract-fails-closed-on-target-drift" = {
+    expr =
+      let
+        broken = signedPlacementContract "broken" // {
+          supportedTargetKinds = [ "guest" "host" ];
+          targetCapabilities = [
+            {
+              artifactDigest = "sha256:${builtins.hashString "sha256" "broken/guest"}";
+              requiredEffectClasses = [ "process" ];
+              targetKind = "guest";
+            }
+          ];
+        };
+
+        failure = signedFailure {
+          broken = {
+            package = pkgs.writeText "provider-broken" "provider-broken";
+            type = "provider";
+            catalog = (entryFor "broken") // broken;
+          };
+        };
+      in lib.hasInfix "targetCapabilities" failure.message;
+    expected = true;
+  };
+
+  "provider-catalog/null-catalog-has-no-signed-contract" = {
+    expr = builtins.deepSeq nullCatalogCfg.assertions
+      (lib.all (assertion: assertion.assertion) nullCatalogCfg.assertions);
+    expected = true;
   };
 
   # The excluded mechanisms travel with the catalog, so a consumer reading it

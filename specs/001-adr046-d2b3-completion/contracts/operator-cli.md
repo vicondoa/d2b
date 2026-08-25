@@ -2,6 +2,9 @@
 
 **Owning spec**: `ADR-046-cli-and-operations`
 
+> Historical contract record. The host cutover feature was removed before
+> release, so no cutover verbs or v1 preview/apply contract are shipped.
+
 ## What this surface is
 
 The `d2b` binary is the only operator surface. There is no bash fallback and no env-knob
@@ -20,7 +23,7 @@ companion reads this surface or the socket beside it.
 | --- | --- | --- |
 | CLI-1 | Resource inspection and committed-pending-audit behavior follows the handler-list and recovery contracts in the owning product specifications. | FR-016, FR-069, FR-070, SC-005, SC-032, SC-033 |
 | CLI-2 | Every failure names a specific cause and an actionable next step. | FR-017, SC-004 |
-| CLI-3 | Cutover verbs provide a non-mutating preview and an apply gated on explicit intent plus exact content-bound consent. | FR-020, FR-021 |
+| CLI-3 | **Superseded:** no host cutover verbs or v1 preview/apply contract are shipped. | FR-020, FR-021 |
 | CLI-4 | The apply path refuses to pass the rollback boundary without a recorded recovery-point attestation. | FR-043, SC-025 |
 | CLI-5 | Retired verbs are absent, and successor behavior is documented and tested where compatibility requires it. | FR-023 |
 | CLI-6 | `d2b userd` is removed only after parity with the fixed user supervisor Process. | FR-041 |

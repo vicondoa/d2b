@@ -114,6 +114,18 @@ const EXCLUDED_MECHANISMS: &[&str] = &[
     "version-range-solving",
 ];
 
+/// Placement fields emitted by the signed Provider manifest contract.
+const PLACEMENT_CONTRACT_FIELDS: &[&str] = &[
+    "instanceScope",
+    "supportedTargetKinds",
+    "targetCapabilities",
+    "placementAnchor",
+];
+
+/// Shared Host/Guest runtime artifact fields emitted by the signed manifest
+/// contract.
+const RUNTIME_CONTRACT_FIELDS: &[&str] = &["d2bdDigest", "brokerDigest"];
+
 fn nix_string(value: &str) -> String {
     let mut escaped = String::with_capacity(value.len() + 2);
     escaped.push('"');
@@ -202,6 +214,28 @@ fn generated_catalog_shape_module() -> String {
         )
     ));
 
+    out.push_str("\n  # Signed placement-contract fields carried by the Provider\n");
+    out.push_str("  # manifest and consumed by Core admission.\n");
+    out.push_str(&format!(
+        "  placementContractFields = {};\n",
+        nix_string_list(
+            PLACEMENT_CONTRACT_FIELDS
+                .iter()
+                .map(|field| (*field).to_owned()),
+            2
+        )
+    ));
+    out.push_str("\n  # Signed shared daemon and broker artifact fields.\n");
+    out.push_str(&format!(
+        "  runtimeContractFields = {};\n",
+        nix_string_list(
+            RUNTIME_CONTRACT_FIELDS
+                .iter()
+                .map(|field| (*field).to_owned()),
+            2
+        )
+    ));
+
     out.push_str("}\n");
     out
 }
@@ -282,6 +316,20 @@ mod tests {
         sorted.sort_unstable();
         sorted.dedup();
         assert_eq!(EXCLUDED_MECHANISMS, sorted.as_slice());
+    }
+
+    #[test]
+    fn signed_contract_field_groups_are_closed_and_deterministic() {
+        assert_eq!(
+            PLACEMENT_CONTRACT_FIELDS,
+            &[
+                "instanceScope",
+                "supportedTargetKinds",
+                "targetCapabilities",
+                "placementAnchor",
+            ]
+        );
+        assert_eq!(RUNTIME_CONTRACT_FIELDS, &["d2bdDigest", "brokerDigest"]);
     }
 
     #[test]

@@ -326,6 +326,7 @@ pub struct LaunchGrants {
     frontend_gpu: Option<AttachmentGrantHandle>,
     session_digest: [u8; 32],
     reconnect_generation: u64,
+    controller_generation: u64,
     teardown_generation: u64,
 }
 
@@ -340,37 +341,66 @@ impl LaunchGrants {
         reconnect_generation: u64,
         teardown_generation: u64,
     ) -> Result<Self, &'static str> {
-        if reconnect_generation == 0 || teardown_generation == 0 || session_digest == [0; 32] {
-            return Err("display-grant-session-invalid");
-        }
-        Ok(Self::from_supervisor_for_session_with_frontend(
-            AttachmentGrantHandle::from_supervisor(grant_commitment(
-                b"compositor",
-                session_digest,
-                reconnect_generation,
-                teardown_generation,
-            )),
-            AttachmentGrantHandle::from_supervisor(grant_commitment(
-                b"gpu",
-                session_digest,
-                reconnect_generation,
-                teardown_generation,
-            )),
-            AttachmentGrantHandle::from_supervisor(grant_commitment(
-                b"frontend-gpu",
-                session_digest,
-                reconnect_generation,
-                teardown_generation,
-            )),
+        Self::issue_for_supervisor_with_controller_generation(
             session_digest,
             reconnect_generation,
+            1,
             teardown_generation,
-        ))
+        )
+    }
+
+    /// Issue grants bound to the authenticated controller generation.
+    pub fn issue_for_supervisor_with_controller_generation(
+        session_digest: [u8; 32],
+        reconnect_generation: u64,
+        controller_generation: u64,
+        teardown_generation: u64,
+    ) -> Result<Self, &'static str> {
+        if reconnect_generation == 0
+            || controller_generation == 0
+            || teardown_generation == 0
+            || session_digest == [0; 32]
+        {
+            return Err("display-grant-session-invalid");
+        }
+        Ok(
+            Self::from_supervisor_for_session_with_frontend_and_controller(
+                AttachmentGrantHandle::from_supervisor(grant_commitment(
+                    b"compositor",
+                    session_digest,
+                    reconnect_generation,
+                    controller_generation,
+                    teardown_generation,
+                )),
+                AttachmentGrantHandle::from_supervisor(grant_commitment(
+                    b"gpu",
+                    session_digest,
+                    reconnect_generation,
+                    controller_generation,
+                    teardown_generation,
+                )),
+                AttachmentGrantHandle::from_supervisor(grant_commitment(
+                    b"frontend-gpu",
+                    session_digest,
+                    reconnect_generation,
+                    controller_generation,
+                    teardown_generation,
+                )),
+                session_digest,
+                reconnect_generation,
+                controller_generation,
+                teardown_generation,
+            ),
+        )
     }
 
     /// Construct launch grants at the private Core/Supervisor boundary.
-    #[allow(dead_code)]
-    pub(crate) const fn from_supervisor(
+    /// Construct a bounded observation from Process controller evidence.
+    ///
+    /// The daemon uses this when projecting durable Process child status into
+    /// the aggregate WaylandSession runtime. It carries no process handles or
+    /// launch authority.
+    pub const fn from_supervisor(
         compositor: AttachmentGrantHandle,
         gpu: AttachmentGrantHandle,
     ) -> Self {
@@ -380,6 +410,7 @@ impl LaunchGrants {
             frontend_gpu: None,
             session_digest: [0; 32],
             reconnect_generation: 0,
+            controller_generation: 1,
             teardown_generation: 1,
         }
     }
@@ -398,6 +429,7 @@ impl LaunchGrants {
             frontend_gpu: None,
             session_digest,
             reconnect_generation,
+            controller_generation: 1,
             teardown_generation: 1,
         }
     }
@@ -412,12 +444,36 @@ impl LaunchGrants {
         reconnect_generation: u64,
         teardown_generation: u64,
     ) -> Self {
+        Self::from_supervisor_for_session_with_frontend_and_controller(
+            compositor,
+            gpu,
+            frontend_gpu,
+            session_digest,
+            reconnect_generation,
+            1,
+            teardown_generation,
+        )
+    }
+
+    /// Construct grants for both workers and one authenticated controller
+    /// generation.
+    #[allow(dead_code)]
+    pub(crate) const fn from_supervisor_for_session_with_frontend_and_controller(
+        compositor: AttachmentGrantHandle,
+        gpu: AttachmentGrantHandle,
+        frontend_gpu: AttachmentGrantHandle,
+        session_digest: [u8; 32],
+        reconnect_generation: u64,
+        controller_generation: u64,
+        teardown_generation: u64,
+    ) -> Self {
         Self {
             compositor,
             gpu,
             frontend_gpu: Some(frontend_gpu),
             session_digest,
             reconnect_generation,
+            controller_generation,
             teardown_generation,
         }
     }
@@ -497,10 +553,40 @@ impl LaunchGrants {
         identity_label: &str,
         actions: &[WorkerAction],
     ) -> Option<Vec<LaunchTicket>> {
+        let expected_controller_generation = self.controller_generation;
+        self.into_worker_tickets_with_fence_and_controller(
+            expected_session_digest,
+            expected_reconnect_generation,
+            expected_controller_generation,
+            expected_teardown_generation,
+            policy_digest,
+            policy_generation,
+            identity_label,
+            actions,
+        )
+    }
+
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "the sealed launch boundary keeps all session and fence evidence explicit"
+    )]
+    pub(crate) fn into_worker_tickets_with_fence_and_controller(
+        self,
+        expected_session_digest: [u8; 32],
+        expected_reconnect_generation: u64,
+        expected_controller_generation: u64,
+        expected_teardown_generation: u64,
+        policy_digest: &str,
+        policy_generation: u64,
+        identity_label: &str,
+        actions: &[WorkerAction],
+    ) -> Option<Vec<LaunchTicket>> {
         if self.session_digest != expected_session_digest
             || self.reconnect_generation != expected_reconnect_generation
+            || self.controller_generation != expected_controller_generation
             || self.teardown_generation != expected_teardown_generation
             || self.reconnect_generation == 0
+            || self.controller_generation == 0
             || self.teardown_generation == 0
         {
             return None;
@@ -520,13 +606,14 @@ impl LaunchGrants {
             };
             let gpu_grant = gpu_grant?;
             tickets.push(
-                LaunchTicket::new_for_role(
+                LaunchTicket::new_for_role_with_controller_generation(
                     role,
                     compositor_grant,
                     gpu_grant,
                     policy_digest,
                     policy_generation,
                     identity_label,
+                    expected_controller_generation,
                     expected_teardown_generation,
                 )
                 .ok()?,
@@ -548,6 +635,7 @@ pub struct DisplayLaunchBinding {
     attachment_digest: [u8; 32],
     policy_digest: [u8; 32],
     policy_generation: u64,
+    controller_generation: u64,
     teardown_generation: u64,
 }
 
@@ -568,6 +656,7 @@ impl DisplayLaunchBinding {
             attachment_digest,
             policy_digest,
             policy_generation: ticket.policy_generation,
+            controller_generation: ticket.controller_generation,
             teardown_generation: ticket.teardown_generation,
         }
     }
@@ -590,6 +679,11 @@ impl DisplayLaunchBinding {
     /// Return the policy generation.
     pub const fn policy_generation(self) -> u64 {
         self.policy_generation
+    }
+
+    /// Return the authenticated controller generation.
+    pub const fn controller_generation(self) -> u64 {
+        self.controller_generation
     }
 
     /// Return the teardown generation.
@@ -615,6 +709,7 @@ fn grant_commitment(
     label: &[u8],
     session_digest: [u8; 32],
     reconnect_generation: u64,
+    controller_generation: u64,
     teardown_generation: u64,
 ) -> [u8; 32] {
     let mut digest = Sha256::new();
@@ -623,6 +718,7 @@ fn grant_commitment(
     digest.update([0]);
     digest.update(session_digest);
     digest.update(reconnect_generation.to_be_bytes());
+    digest.update(controller_generation.to_be_bytes());
     digest.update(teardown_generation.to_be_bytes());
     digest.finalize().into()
 }
@@ -711,6 +807,27 @@ impl Default for ProcessObservation {
 }
 
 impl ProcessObservation {
+    /// Construct an observation projected by the daemon's durable Process
+    /// runtime.  The projection carries lifecycle and fencing evidence only;
+    /// worker identities remain inside the daemon effect owner.
+    pub const fn from_daemon(
+        proxy: WorkerState,
+        frontend: WorkerState,
+        volume: VolumeState,
+        policy_generation: u64,
+        teardown_generation: u64,
+        session_digest: [u8; 32],
+    ) -> Self {
+        Self {
+            proxy,
+            frontend,
+            volume,
+            policy_generation,
+            teardown_generation,
+            session_digest,
+        }
+    }
+
     #[allow(dead_code)]
     pub(crate) const fn from_supervisor(
         proxy: WorkerState,
@@ -851,6 +968,7 @@ pub struct LaunchTicket {
     policy_digest: String,
     policy_generation: u64,
     identity_label: String,
+    controller_generation: u64,
     teardown_generation: u64,
 }
 
@@ -911,11 +1029,36 @@ impl LaunchTicket {
         identity_label: impl Into<String>,
         teardown_generation: u64,
     ) -> Result<Self, &'static str> {
+        Self::new_for_role_with_controller_generation(
+            role,
+            compositor_grant,
+            gpu_grant,
+            policy_digest,
+            policy_generation,
+            identity_label,
+            1,
+            teardown_generation,
+        )
+    }
+
+    /// Construct one role-specific ticket with an authenticated controller
+    /// generation.
+    pub(crate) fn new_for_role_with_controller_generation(
+        role: DisplayProcessRole,
+        compositor_grant: Option<AttachmentGrantHandle>,
+        gpu_grant: AttachmentGrantHandle,
+        policy_digest: impl Into<String>,
+        policy_generation: u64,
+        identity_label: impl Into<String>,
+        controller_generation: u64,
+        teardown_generation: u64,
+    ) -> Result<Self, &'static str> {
         let policy_digest = policy_digest.into();
         let identity_label = identity_label.into();
         if !policy_digest.starts_with("sha256:")
             || identity_label.is_empty()
             || identity_label.len() > 64
+            || controller_generation == 0
             || teardown_generation == 0
             || (role == DisplayProcessRole::HostProxy && compositor_grant.is_none())
         {
@@ -928,6 +1071,7 @@ impl LaunchTicket {
             policy_digest,
             policy_generation,
             identity_label,
+            controller_generation,
             teardown_generation,
         })
     }
@@ -979,6 +1123,11 @@ impl LaunchTicket {
     /// Return the authenticated policy generation.
     pub const fn policy_generation(&self) -> u64 {
         self.policy_generation
+    }
+
+    /// Return the authenticated controller generation.
+    pub const fn controller_generation(&self) -> u64 {
+        self.controller_generation
     }
 
     /// Borrow the bounded identity label.

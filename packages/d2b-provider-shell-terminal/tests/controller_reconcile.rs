@@ -46,6 +46,78 @@ fn controller_creates_one_pool_derived_session_without_provider_state() {
 }
 
 #[test]
+fn opening_a_session_creates_and_finalizing_deletes_its_process_resource() {
+    let authority = Arc::new(InMemoryShellAuthority::new());
+    let mut controller = ShellTerminalController::new(authority.clone());
+    controller.insert_pool(pool()).unwrap();
+    let admin = Subject::new("dev", CallerOrigin::Local, [Role::ZoneAdmin]);
+    let opened = controller
+        .open_session(
+            &admin,
+            OpenSessionRequest::new("guest-alice", "main", None).unwrap(),
+        )
+        .unwrap();
+
+    let process = authority
+        .supervisor_process_resource(opened.session().name())
+        .expect("session supervisor Process resource");
+    assert_eq!(
+        process.resource_ref().to_canonical_string(),
+        "Process/guest-alice-main"
+    );
+    assert_eq!(
+        process.owner_ref().to_canonical_string(),
+        "shell-terminal.d2bus.org.ShellSession/guest-alice-main"
+    );
+    assert_eq!(
+        process
+            .spec()
+            .execution()
+            .execution_ref()
+            .to_canonical_string(),
+        "Guest/work"
+    );
+    assert_eq!(
+        process
+            .spec()
+            .execution()
+            .user_ref()
+            .expect("user-domain supervisor")
+            .to_canonical_string(),
+        "User/alice"
+    );
+
+    controller
+        .finalize_session(&admin, opened.session().name(), None)
+        .unwrap();
+    assert!(
+        authority
+            .supervisor_process_resource(opened.session().name())
+            .is_none(),
+        "finalization must delete the target-local Process resource"
+    );
+}
+
+#[test]
+fn shell_session_declares_a_process_child_for_its_supervisor() {
+    let pool = pool();
+    let session =
+        ShellSession::from_pool(&pool, "guest-alice-main", "main", None).expect("valid session");
+    assert_eq!(
+        session.supervisor_process_ref().to_canonical_string(),
+        "Process/guest-alice-main"
+    );
+    assert_eq!(
+        session.supervisor_execution_ref().to_canonical_string(),
+        "Guest/work"
+    );
+    assert_eq!(
+        session.supervisor_user_ref().to_canonical_string(),
+        "User/alice"
+    );
+}
+
+#[test]
 fn unauthorized_requests_fail_before_resource_lookup() {
     let mut controller = controller();
     let viewer = Subject::new("dev", CallerOrigin::Local, [Role::Viewer]);
@@ -74,6 +146,11 @@ fn restored_sessions_block_recreation_after_controller_restart() {
             OpenSessionRequest::new("guest-alice", "main", None).unwrap(),
         )
         .unwrap();
+    assert!(
+        authority
+            .supervisor_process_resource(opened.session().name())
+            .is_some()
+    );
     let identity =
         SupervisorIdentity::new([1; 32], [2; 32], opened.supervisor_generation()).unwrap();
     let mut old_supervisor = opened.start_supervisor(identity.clone()).unwrap();
@@ -86,7 +163,7 @@ fn restored_sessions_block_recreation_after_controller_restart() {
         .unwrap()
         .attachment();
 
-    let mut recovered_controller = ShellTerminalController::new(authority);
+    let mut recovered_controller = ShellTerminalController::new(authority.clone());
     recovered_controller.restore_pool(pool(), 1).unwrap();
     assert_eq!(
         recovered_controller
@@ -112,11 +189,9 @@ fn restored_sessions_block_recreation_after_controller_restart() {
     let restarted = recovered_controller
         .restart_supervisor(&admin, opened.session().name(), Some(&identity))
         .unwrap();
-    let mut new_supervisor = restarted
-        .start_supervisor(
-            SupervisorIdentity::new([3; 32], [4; 32], restarted.supervisor_generation()).unwrap(),
-        )
-        .unwrap();
+    let new_identity =
+        SupervisorIdentity::new([3; 32], [4; 32], restarted.supervisor_generation()).unwrap();
+    let mut new_supervisor = restarted.start_supervisor(new_identity.clone()).unwrap();
     assert!(matches!(
         old_supervisor.attach(
             &admin,
@@ -134,17 +209,22 @@ fn restored_sessions_block_recreation_after_controller_restart() {
         Err(d2b_provider_shell_terminal::ShellTerminalError::CapacityExceeded)
     ));
     old_supervisor.detach(&admin, old_attachment).unwrap();
-    assert!(
-        new_supervisor
-            .attach(
-                &admin,
-                d2b_provider_shell_terminal::AttachRequest::new(
-                    restarted.supervisor_generation(),
-                    0,
-                )
+    let new_attachment = new_supervisor
+        .attach(
+            &admin,
+            d2b_provider_shell_terminal::AttachRequest::new(restarted.supervisor_generation(), 0)
                 .unwrap(),
-            )
-            .is_ok()
+        )
+        .unwrap()
+        .attachment();
+    new_supervisor.detach(&admin, new_attachment).unwrap();
+    recovered_controller
+        .finalize_session(&admin, opened.session().name(), Some(&new_identity))
+        .unwrap();
+    assert!(
+        authority
+            .supervisor_process_resource(opened.session().name())
+            .is_none()
     );
 }
 

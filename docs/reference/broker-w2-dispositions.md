@@ -28,14 +28,10 @@ side-effect audit operation that never reaches the wire dispatcher).
 | DeletePersistentTap | promoted-live | Resolves the trusted attachment identity and removes the persistent TAP once both generation fences match and the VMM descriptor is closed. | live in production broker |
 | DeregisterRunnerPidfd | promoted-live | Removes the runner pidfd registry entry idempotently and returns whether an entry was present. | live in production broker |
 | DiskInit | promoted-live | Resolves trusted disk-init plans for the VM and creates, validates, or safely repairs disk images before runner spawn; ambiguous existing data fails closed. | live in production broker |
-| CutoverAudit | promoted-live | Records the admitted cutover runner's durable audit transition through the broker audit chain. | live in production broker |
-| CutoverEffect | promoted-live | Executes the closed, capability-bound cutover effect vocabulary and records the resulting disposition. | live in production broker |
 | ExportBrokerAudit | callable-read-only | Reads the append-only broker audit log, requires `caller_role: AdminUid { uid }`, and streams redacted lines back to `d2bd`. | live read-only callable |
-| GuestControlSign | callable-read-only | Computes the per-VM guest-control auth tag over the bound transcript; returns only the transcript-bound MAC tag. | guest-control live callable |
 | Hello | callable-read-only | Daemon-only handshake; returns `HelloOk` with the broker capability list. | live read-only callable |
 | InjectSecretById | stubbed-unimplemented | Returns `BrokerError::Unimplemented`; secret write paths are not implemented. | future work |
 | LaunchMinijailChild | stubbed-unimplemented | Returns `BrokerError::Unimplemented`; privileged child launch is not implemented. | future work |
-| LaunchCutoverRunner | promoted-live | Admits the one-shot cutover runner with one bootstrap descriptor and a capability-bound operation registry entry. | live in production broker |
 | ModprobeIfAllowed | promoted-live | Resolves the trusted module policy, checks the host module posture, and runs the live modprobe handler when allowed. | live in production broker |
 | MigrateLegacySwtpmState | promoted-live | Resolves the trusted legacy swtpm intent and performs crash-safe, byte-preserving journal/marker migration with replay and source retirement. | live in production broker |
 | ObserveRunner | promoted-live | Re-discovers a declared runner and returns bounded process identity and cgroup verification metadata. | live in production broker |

@@ -1,10 +1,6 @@
-//! Guest-bound proof-of-possession and replay-safe session admission.
+//! Guest-bound proof-of-possession and replay-safe ComponentSession admission.
 
 use crate::limits::MAX_REPLAY_ENTRIES;
-use d2b_contracts_control::guest_auth::{
-    AUTH_NONCE_LEN, AuthDirection, AuthPurpose, GUEST_CONTROL_AUTH_PORT, GuestAuthTranscript,
-    ProofRole, encode_transcript,
-};
 use d2b_contracts_resource::v3::{
     ResourceRef,
     ZoneId,
@@ -35,20 +31,20 @@ impl fmt::Debug for PeerCid {
     }
 }
 
-/// Guest-control signing key held by the trusted Core adapter.
+/// ComponentSession signing key held by the trusted Core adapter.
 #[derive(Clone, PartialEq, Eq)]
-pub struct GuestControlKey([u8; 32]);
+pub struct SessionKey([u8; 32]);
 
-impl GuestControlKey {
+impl SessionKey {
     /// Construct a key at the trusted Core adapter boundary.
     pub const fn from_core(value: [u8; 32]) -> Self {
         Self(value)
     }
 }
 
-impl fmt::Debug for GuestControlKey {
+impl fmt::Debug for SessionKey {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter.write_str("GuestControlKey(<redacted>)")
+        formatter.write_str("SessionKey(<redacted>)")
     }
 }
 
@@ -101,7 +97,7 @@ impl fmt::Debug for GuestIdentity {
     }
 }
 
-/// Proof presented by a Guest-control peer.
+/// Proof presented by a Guest ComponentSession peer.
 #[derive(Clone)]
 pub struct SessionProof {
     identity: GuestIdentity,
@@ -113,7 +109,7 @@ pub struct SessionProof {
 impl SessionProof {
     /// Sign one exact Guest, Zone, CID, boot, nonce, and generation tuple.
     pub fn sign(
-        key: &GuestControlKey,
+        key: &SessionKey,
         identity: &GuestIdentity,
         nonce: [u8; 32],
         generation: u64,
@@ -237,14 +233,14 @@ impl fmt::Debug for ReadySession {
 /// Replay-safe authority for one exact Guest and Zone.
 pub struct SessionAuthority {
     expected: GuestIdentity,
-    key: GuestControlKey,
+    key: SessionKey,
     generation: u64,
     replayed: HashSet<[u8; 32]>,
 }
 
 impl SessionAuthority {
     /// Construct an authority with one current boot/generation binding.
-    pub fn new(expected: GuestIdentity, key: GuestControlKey, generation: u64) -> Self {
+    pub fn new(expected: GuestIdentity, key: SessionKey, generation: u64) -> Self {
         Self {
             expected,
             key,
@@ -299,34 +295,29 @@ impl fmt::Debug for SessionAuthority {
 }
 
 fn sign_tag(
-    key: &GuestControlKey,
+    key: &SessionKey,
     identity: &GuestIdentity,
     nonce: &[u8; 32],
     generation: u64,
 ) -> [u8; TAG_BYTES] {
-    let mut capabilities = Vec::with_capacity(identity.zone.as_str().len() + 8);
-    capabilities.extend_from_slice(identity.zone.as_str().as_bytes());
-    capabilities.extend_from_slice(&generation.to_be_bytes());
-    let guest_nonce = [0_u8; AUTH_NONCE_LEN];
-    let transcript = GuestAuthTranscript {
-        role: ProofRole::Host,
-        direction: AuthDirection::HostToGuest,
-        purpose: AuthPurpose::GuestControlAuthV1,
-        vm_id: &identity.guest.to_canonical_string(),
-        protocol_version: 1,
-        guest_control_port: GUEST_CONTROL_AUTH_PORT,
-        peer_cid: Some(identity.cid.0),
-        host_nonce: nonce,
-        guest_nonce: &guest_nonce,
-        guest_boot_id: &identity.boot_id,
-        capabilities_hash: Some(&capabilities),
-    };
-    let transcript = encode_transcript(&transcript);
+    let mut transcript = Vec::with_capacity(160);
+    transcript.extend_from_slice(b"d2b-component-session-auth-v1\0");
+    append_field(&mut transcript, identity.guest.to_canonical_string().as_bytes());
+    append_field(&mut transcript, identity.zone.as_str().as_bytes());
+    append_field(&mut transcript, &identity.cid.0.to_be_bytes());
+    append_field(&mut transcript, identity.boot_id.as_bytes());
+    append_field(&mut transcript, &generation.to_be_bytes());
+    append_field(&mut transcript, nonce);
     let signing_key = hmac::Key::new(hmac::HMAC_SHA256, &key.0);
     let tag = hmac::sign(&signing_key, &transcript);
     let mut output = [0_u8; TAG_BYTES];
     output.copy_from_slice(tag.as_ref());
     output
+}
+
+fn append_field(transcript: &mut Vec<u8>, value: &[u8]) {
+    transcript.extend_from_slice(&(value.len() as u32).to_be_bytes());
+    transcript.extend_from_slice(value);
 }
 
 fn constant_time_equal(left: &[u8; TAG_BYTES], right: &[u8; TAG_BYTES]) -> bool {

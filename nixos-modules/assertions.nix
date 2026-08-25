@@ -959,7 +959,7 @@ let
     message = ''
       d2b migration-required (legacy-surface-detected: d2b.gateways):
       `d2b.gateways` and its old gateway/ACA sandbox fields were removed as a
-      public configuration surface by the realm-native cutover.
+      public configuration surface by the realm-native migration.
 
       Move non-secret coordinates into the realm-native schema, for example:
 
@@ -1117,7 +1117,7 @@ let
     (pair:
       socketPathTooLong pair.socket
       || socketPathTooLong "${pair.socket}_${toString d2bLib.observabilityOtlpVsockPort}"
-      || socketPathTooLong "${pair.socket}_${toString d2bLib.guestControlVsockPort}")
+      || socketPathTooLong "${pair.socket}_${toString d2bLib.componentSessionVsockPort}")
     vmVsockSocketPairs;
 
   vmAssertions = lib.mapAttrsToList
@@ -1246,35 +1246,6 @@ let
 
           See CHANGELOG.md and the
           entrablau README for the full migration recipe.
-        '';
-      }
-      {
-        # `d2b.vms.<name>.guest.exec.allowRoot` was removed:
-        # guest-control exec now ALWAYS runs as the VM's workload
-        # user (`ssh.user`) inside a PAM login session, never root.
-        # The option is a kept-but-internal stub (options-vms.nix) so
-        # legacy assignments land on this friendly message instead of
-        # a cryptic "option does not exist" module-system error.
-        assertion = !(vm.enable && vm.guest.exec.allowRoot);
-        message = ''
-          d2b.vms.${name}.guest.exec.allowRoot was removed.
-          Guest-control exec now always runs as the VM's workload
-          user (`ssh.user`) inside a PAM login session - never as
-          root. There is no root-exec mode. Remove
-          `guest.exec.allowRoot = ...;`; to run a command as root,
-          elevate with `sudo` inside the exec session.
-        '';
-      }
-      {
-        # `d2b.vms.<name>.guest.exec.users` was removed: there is
-        # no per-VM exec user allowlist; exec always targets the
-        # single workload user (`ssh.user`). Kept-but-internal stub.
-        assertion = !(vm.enable && vm.guest.exec.users != [ ]);
-        message = ''
-          d2b.vms.${name}.guest.exec.users was removed.
-          Guest-control exec now always targets the VM's single
-          workload user (`ssh.user`); there is no per-VM exec user
-          allowlist. Remove `guest.exec.users = [ ... ];`.
         '';
       }
       {
@@ -1511,19 +1482,15 @@ let
         }
         {
           assertion =
-            !vm.guest.control.enable
-            && vm.guest.control.auth.tokenFile == null
-            && !vm.guest.exec.enable
-            && !vm.guest.exec.allowRoot
-            && vm.guest.exec.users == [ ]
+            !vm.guest.componentSession.enable
             && !vm.guest.shell.enable
             && vm.guest.shell.defaultName == "default"
             && vm.guest.shell.maxSessions == 8
             && vm.guest.shell.maxAttached == 1;
           message = ''
             d2b.vms.${name}: runtime.kind = "qemu-media" is incompatible
-            with guest-control, guest exec, and persistent shell options.
-            Disable guest.control.*, guest.exec.*, and guest.shell.* for this
+            with ComponentSession, target-local execution, and persistent shell options.
+            Disable guest.componentSession.* and guest.shell.* for this
             manual-only runtime.
           '';
         }

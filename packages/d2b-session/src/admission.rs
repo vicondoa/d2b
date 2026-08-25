@@ -729,6 +729,16 @@ fn validate_ttrpc_permit(permit: &AuthorizedSessionOperation, now_tick: u64) -> 
 }
 
 impl AuthenticatedTtrpcHandle {
+    /// Clone the driver for a named-stream owner that remains under the
+    /// authenticated ComponentSession lifetime.
+    ///
+    /// The returned handle carries no subject or authorization lease. It is
+    /// exposed only to daemon composition after the session has been
+    /// registered, where the owning route and target are already fixed.
+    pub fn component_session_driver(&self) -> SessionDriverHandle {
+        self.driver.clone()
+    }
+
     /// Mint an attempt guard that can synchronously fence an admitted write.
     pub fn attempt_guard(&self) -> crate::Cancellation {
         crate::Cancellation::new()
@@ -780,6 +790,17 @@ impl AuthenticatedTtrpcHandle {
             self.cleanup_observer.record(OperationClass::Invoke, error);
         }
         result
+    }
+
+    /// Serve generated ttrpc services on this already authenticated session.
+    ///
+    /// The handle contains only the correlated transport plane; authorization
+    /// and resource policy remain bound to the generated service adapter.
+    pub async fn serve_ttrpc_services(
+        self,
+        services: std::collections::HashMap<String, ttrpc::r#async::Service>,
+    ) -> std::result::Result<(), crate::SessionServerError> {
+        crate::serve_ttrpc_services(Arc::new(self.driver), services).await
     }
 }
 
@@ -1196,6 +1217,14 @@ impl<C> AuthenticatedComponentSession<C> {
             self.cleanup_observer.record(OperationClass::Invoke, error);
         }
         result
+    }
+}
+
+impl AuthenticatedComponentSession<()> {
+    /// Split the transport plane after a session admitted without a
+    /// registration capability, such as a Guest target's parent session.
+    pub fn into_ttrpc_handle(self) -> AuthenticatedTtrpcHandle {
+        self.ttrpc_handle()
     }
 }
 

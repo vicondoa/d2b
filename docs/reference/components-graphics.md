@@ -23,7 +23,7 @@ When `graphics.crossDomainTrusted = true` and
 the guest socket, while the host-side `d2b-wayland-proxy` runs as a
 broker-spawned `wayland-proxy` role and mediates access to the real host
 compositor. `d2bd` supervises the daemon-owned process DAG and asks
-`d2b-priv-broker` to spawn the wayland proxy, GPU sidecar
+`d2b-broker` to spawn the wayland proxy, GPU sidecar
 (`crosvm device gpu`), and cloud-hypervisor runner as pidfd-tracked
 runners. The GPU sidecar runs as the dedicated per-VM
 `d2b-<vm>-gpu` system user, not as the operator's Wayland user.
@@ -62,26 +62,14 @@ protocol features remain disabled until the proxy can validate seat-bound
 requests safely, avoiding guest application crashes from invalid forwarded
 text-input requests under Niri-backed cross-domain Wayland.
 
-## Host-app terminal proxy mode
+## Host-app terminal integration
 
 The flake exports `packages.<system>.d2b-wayland-proxy` for host tools such as
 `d2b-wlterm` that must resolve the supported proxy binary without relying on an
-internal package path or the operator's `PATH`. The binary also has a
-foreground host-terminal launch path:
-
-```bash
-d2b-wayland-proxy --host-terminal --vm-name work --border-enable -- wezterm start
-```
-
-In this mode the proxy derives the upstream compositor from `--connect` or
-`$WAYLAND_DISPLAY`, creates a randomized single-use listen socket below
-`$XDG_RUNTIME_DIR/d2b-wayland-proxy/<vm>/`, forces that directory to `0700`,
-removes only stale socket files at the selected paths, and chmods the listen
-socket to `0600` before launching the child. `WAYLAND_DISPLAY` is set to the
-single-use proxy socket and `WEZTERM_UNIX_SOCKET` is set to a randomized
-per-VM mux socket, so the terminal does not reuse the operator's global WezTerm
-daemon. The proxy opens a close-on-exec pidfd for the child, waits in the
-foreground, and removes the single-use socket paths when the process exits.
+internal package path or the operator's `PATH`. The proxy accepts only an
+explicit upstream compositor and listen socket; desktop terminal processes
+are launched by their owning signed Process or companion, never by the
+Wayland proxy.
 
 The same Wayland security policy applies to the terminal child: ordinary
 application globals needed by WezTerm remain available, privileged globals such
@@ -152,7 +140,7 @@ The matching guest-visible option lives in the imported
   allowlist). The `.bpf` files live alongside the crosvm binary under
   a `symlinkJoin`; the C parser fallback is never used.
 - **`wl-cross-domain-proxy`** packaged under `pkgs/` for the guest-side
-  virtio-gpu cross-domain bridge.
+  virtio-gpu cross-domain bridge and retained in trusted guest closures.
 
 ## Guest-side resources created
 
@@ -164,9 +152,15 @@ The matching guest-visible option lives in the imported
 - `microvm.graphics.crosvmPackage` = either `crosvmPatched`
   (cross-domain trusted) or a shell shim around `crosvmPatched` that
   strips `cross-domain` from `--params`.
-- `systemd.user.services.wayland-proxy` - when
-  `crossDomainTrusted = true`, runs `wl-cross-domain-proxy` for the
-  guest-side virtio-gpu cross-domain bridge.
+- The signed `wayland-frontend-worker` Guest Process child - when
+  `crossDomainTrusted = true`, runs `wl-cross-domain-proxy` through the
+  `WaylandSession` lifecycle; no direct `systemd.user.services` launch is
+  emitted.
+- The Host Process controller records the Guest frontend as durable intent but
+  does not launch or mark Guest execution Ready. A target-local Guest Process
+  controller must reconcile that child through the authenticated Guest
+  boundary; until then the display aggregate remains pending and no Host
+  service fallback is used.
 - `environment.sessionVariables` pinning `WAYLAND_DISPLAY`,
   `QT_QPA_PLATFORM`, `GDK_BACKEND`, `XDG_SESSION_TYPE`,
   `SDL_VIDEODRIVER`, `CLUTTER_BACKEND`, `MOZ_ENABLE_WAYLAND`, plus

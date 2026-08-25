@@ -15,7 +15,7 @@ use crate::{
     AuthenticatedDisplaySession, CleanupState, DependencyState, DisplayController,
     DisplayDependencyProof, DisplayProcessRole, FinalizationDecision, FinalizationInput,
     GraceState, LaunchGrants, ProcessObservation, StopRequest, VolumeState, WaylandPolicySnapshot,
-    WaylandSessionSpec, WorkerState, process::WorkerRestartEvidence,
+    WaylandSessionResourceStatus, WaylandSessionSpec, WorkerState, process::WorkerRestartEvidence,
 };
 
 /// Failure returned by the daemon-owned display effect port.
@@ -145,16 +145,47 @@ impl WorkerLaunchReceipt {
 
 /// Daemon-owned effect port for display workers and finalization.
 ///
-/// Implementations must route launch, observe, stop, and cleanup through
-/// `d2b-provider-supervisor` and the existing typed process effect adapter.
-/// The Provider receives no pidfd, socket path, argv, or broker handle.
+/// Implementations must route launch, observation, stop, and cleanup through
+/// daemon-owned Process resources and the existing typed effect adapters. The
+/// Provider receives no pidfd, socket path, argv, or broker handle.
 pub trait DisplayProcessEffectPort {
+    /// Bind the authenticated session before any durable child observation.
+    ///
+    /// Resource-backed effect owners need the execution references and
+    /// generation fence while relisting children on the first pass.  The
+    /// default keeps hermetic effect ports source-compatible.
+    fn bind_session(
+        &mut self,
+        _session: &AuthenticatedDisplaySession,
+        _spec: &WaylandSessionSpec,
+        _policy_generation: u64,
+        _teardown_generation: u64,
+    ) -> Result<(), WorkerEffectError> {
+        Ok(())
+    }
+
+    /// Return the latest durable child observation, when one is available.
+    ///
+    /// Resource-backed effect owners use this to project Process status into
+    /// the aggregate runtime before the next controller pass. Direct
+    /// hermetic effect owners may leave the default empty.
+    fn current_observation(&mut self) -> Result<Option<ProcessObservation>, WorkerEffectError> {
+        Ok(None)
+    }
+
     /// Read current daemon-owned retry/adoption evidence before reconciliation.
     ///
     /// Production effect owners obtain this from the persisted supervisor
     /// observation; hermetic effect ports may retain the bounded default.
-    fn current_supervision(&mut self) -> WorkerRestartEvidence {
-        WorkerRestartEvidence::from_supervisor(0, None, None, 1)
+    fn current_supervision(&mut self) -> Result<WorkerRestartEvidence, WorkerEffectError> {
+        Ok(WorkerRestartEvidence::from_supervisor(0, None, None, 1))
+    }
+
+    /// Return the bounded aggregate status projection for durable children.
+    fn resource_projection(
+        &mut self,
+    ) -> Result<Option<WaylandSessionResourceStatus>, WorkerEffectError> {
+        Ok(None)
     }
 
     /// Issue one fresh, session-bound launch grant bundle.
@@ -257,8 +288,19 @@ where
     }
 
     /// Refresh retry/adoption evidence from the daemon-owned effect owner.
-    pub fn refresh_supervision(&mut self) {
-        self.supervision = self.effects.current_supervision();
+    pub fn refresh_supervision(&mut self) -> Result<(), DisplayRuntimeError> {
+        self.supervision = self
+            .effects
+            .current_supervision()
+            .map_err(DisplayRuntimeError::Effect)?;
+        if let Some(observation) = self
+            .effects
+            .current_observation()
+            .map_err(DisplayRuntimeError::Effect)?
+        {
+            self.observation = observation;
+        }
+        Ok(())
     }
 
     /// Project the authenticated display dependency only after both workers
@@ -313,6 +355,21 @@ where
         {
             return Err(DisplayRuntimeError::SessionMismatch);
         }
+        self.effects
+            .bind_session(
+                &authenticated,
+                spec,
+                policy.generation(),
+                supervision.teardown_generation,
+            )
+            .map_err(DisplayRuntimeError::Effect)?;
+        if let Some(observation) = self
+            .effects
+            .current_observation()
+            .map_err(DisplayRuntimeError::Effect)?
+        {
+            self.observation = observation;
+        }
         self.supervision = supervision;
         let mut result = self
             .controller
@@ -327,11 +384,10 @@ where
             )
             .map_err(|_| DisplayRuntimeError::InvalidPolicy)?;
         if !result.worker_actions.is_empty() {
-            let fence = grant_fence(&authenticated, supervision);
+            let fence = grant_fence(&authenticated, supervision, policy.generation());
             if self.issued_grants.contains(&fence) {
-                return Err(DisplayRuntimeError::Effect(
-                    WorkerEffectError::GrantUnavailable,
-                ));
+                self.apply_resource_projection(&mut result)?;
+                return Ok(result);
             }
             let grants = self
                 .effects
@@ -360,7 +416,7 @@ where
                 .map_err(|_| DisplayRuntimeError::InvalidPolicy)?
                 .launch_tickets;
             if launch_tickets.is_empty() {
-                return self
+                result = self
                     .controller
                     .reconcile_authenticated_session(
                         session,
@@ -371,7 +427,9 @@ where
                         None,
                         policy,
                     )
-                    .map_err(|_| DisplayRuntimeError::InvalidPolicy);
+                    .map_err(|_| DisplayRuntimeError::InvalidPolicy)?;
+                self.apply_resource_projection(&mut result)?;
+                return Ok(result);
             }
             for ticket in launch_tickets {
                 let receipt = self
@@ -399,6 +457,7 @@ where
                 )
                 .map_err(|_| DisplayRuntimeError::InvalidPolicy)?;
         }
+        self.apply_resource_projection(&mut result)?;
         Ok(result)
     }
 
@@ -422,6 +481,21 @@ where
         {
             return Err(DisplayRuntimeError::SessionMismatch);
         }
+        self.effects
+            .bind_session(
+                &authenticated,
+                spec,
+                policy.generation(),
+                supervision.teardown_generation,
+            )
+            .map_err(DisplayRuntimeError::Effect)?;
+        if let Some(observation) = self
+            .effects
+            .current_observation()
+            .map_err(DisplayRuntimeError::Effect)?
+        {
+            self.observation = observation;
+        }
         self.supervision = supervision;
         let mut result = self
             .controller
@@ -436,11 +510,10 @@ where
             )
             .map_err(|_| DisplayRuntimeError::InvalidPolicy)?;
         if !result.worker_actions.is_empty() {
-            let fence = grant_fence(&authenticated, supervision);
+            let fence = grant_fence(&authenticated, supervision, policy.generation());
             if self.issued_grants.contains(&fence) {
-                return Err(DisplayRuntimeError::Effect(
-                    WorkerEffectError::GrantUnavailable,
-                ));
+                self.apply_resource_projection(&mut result)?;
+                return Ok(result);
             }
             let proof = self
                 .controller
@@ -470,7 +543,7 @@ where
                 .map_err(|_| DisplayRuntimeError::InvalidPolicy)?
                 .launch_tickets;
             if launch_tickets.is_empty() {
-                return self
+                result = self
                     .controller
                     .reconcile_authenticated_route(
                         route,
@@ -481,7 +554,9 @@ where
                         None,
                         policy,
                     )
-                    .map_err(|_| DisplayRuntimeError::InvalidPolicy);
+                    .map_err(|_| DisplayRuntimeError::InvalidPolicy)?;
+                self.apply_resource_projection(&mut result)?;
+                return Ok(result);
             }
             for ticket in launch_tickets {
                 let receipt = self
@@ -509,6 +584,7 @@ where
                 )
                 .map_err(|_| DisplayRuntimeError::InvalidPolicy)?;
         }
+        self.apply_resource_projection(&mut result)?;
         Ok(result)
     }
 
@@ -525,6 +601,27 @@ where
             receipt.teardown_generation(),
             receipt.session_digest(),
         );
+    }
+
+    fn apply_resource_projection(
+        &mut self,
+        result: &mut crate::ReconcileResult,
+    ) -> Result<(), DisplayRuntimeError> {
+        if let Some(projection) = self
+            .effects
+            .resource_projection()
+            .map_err(DisplayRuntimeError::Effect)?
+        {
+            result.status.resource = WaylandSessionResourceStatus {
+                policy_digest: if projection.policy_digest.is_empty() {
+                    result.status.policy_digest.clone()
+                } else {
+                    projection.policy_digest
+                },
+                ..projection
+            };
+        }
+        Ok(())
     }
 
     /// Finalize in the required order: stop workers, delete the transient
@@ -616,6 +713,7 @@ where
 fn grant_fence(
     session: &AuthenticatedDisplaySession,
     supervision: WorkerRestartEvidence,
+    policy_generation: u64,
 ) -> [u8; 32] {
     let mut digest = Sha256::new();
     digest.update(session.guest_ref().to_canonical_string().as_bytes());
@@ -623,7 +721,7 @@ fn grant_fence(
     digest.update(session.zone().as_str().as_bytes());
     digest.update(session.reconnect_generation().to_be_bytes());
     digest.update(session.controller_generation().to_be_bytes());
-    digest.update(supervision.observed_at_ms.to_be_bytes());
+    digest.update(policy_generation.to_be_bytes());
     digest.update(
         supervision
             .proxy_last_failure_ms
@@ -686,10 +784,7 @@ impl FinalizationReport {
 mod tests {
     use super::*;
     use crate::{DisplayIdentity, FilterInput, WorkerState, process::VolumeState};
-    use d2b_contracts_resource::v3::{
-    ResourceRef,
-    ZoneId,
-};
+    use d2b_contracts_resource::v3::{ResourceRef, ZoneId};
 
     #[derive(Default)]
     struct Effects {
@@ -697,23 +792,26 @@ mod tests {
         stops: Vec<DisplayProcessRole>,
         cleanup: Vec<&'static str>,
         nonce: u64,
+        launch_state: Option<WorkerState>,
+        session_digest: [u8; 32],
     }
 
     impl DisplayProcessEffectPort for Effects {
         fn issue_launch_grants(
             &mut self,
             session: &AuthenticatedDisplaySession,
-            _spec: &WaylandSessionSpec,
+            spec: &WaylandSessionSpec,
             _policy: &WaylandPolicySnapshot,
             _proof: Option<&DisplayDependencyProof>,
             teardown_generation: u64,
         ) -> Result<LaunchGrants, WorkerEffectError> {
             self.nonce = self.nonce.saturating_add(1);
+            self.session_digest = spec.session_digest(session.controller_generation());
             Ok(LaunchGrants::from_supervisor_for_session_with_frontend(
                 crate::process::AttachmentGrantHandle::from_supervisor([1; 32]),
                 crate::process::AttachmentGrantHandle::from_supervisor([2; 32]),
                 crate::process::AttachmentGrantHandle::from_supervisor([3; 32]),
-                [7; 32],
+                self.session_digest,
                 session.reconnect_generation(),
                 teardown_generation,
             ))
@@ -726,10 +824,11 @@ mod tests {
             self.launches.push(ticket.role());
             Ok(WorkerLaunchReceipt::from_supervisor(
                 ticket.role(),
-                WorkerState::Ready { generation: 1 },
+                self.launch_state
+                    .unwrap_or(WorkerState::Ready { generation: 1 }),
                 ticket.policy_generation(),
                 ticket.teardown_generation(),
-                [7; 32],
+                self.session_digest,
             ))
         }
 
@@ -811,5 +910,82 @@ mod tests {
             vec!["volume", "portal", "principal", "authority"]
         );
         let _ = spec;
+    }
+
+    #[test]
+    fn grant_fence_ignores_observation_poll_timestamp() {
+        let session = AuthenticatedDisplaySession::from_test(
+            ResourceRef::parse("Guest/work-vm").unwrap(),
+            ResourceRef::parse("Host/host-system").unwrap(),
+            ZoneId::parse("dev").unwrap(),
+            3,
+            7,
+        );
+        let first = WorkerRestartEvidence::from_supervisor(100, Some(80), None, 4);
+        let second = WorkerRestartEvidence::from_supervisor(101, Some(80), None, 4);
+        assert_eq!(
+            grant_fence(&session, first, 9),
+            grant_fence(&session, second, 9)
+        );
+    }
+
+    #[test]
+    fn repeated_reconcile_while_workers_starting_remains_pending() {
+        let spec = WaylandSessionSpec::new(
+            ResourceRef::parse("Guest/test").unwrap(),
+            ResourceRef::parse("Host/test").unwrap(),
+            ResourceRef::parse("User/alice").unwrap(),
+            ResourceRef::parse("display-wayland.d2bus.org.WaylandPolicy/default").unwrap(),
+            DisplayIdentity::new("test", "#7fc8ff", "#45475a", "#f38ab8").unwrap(),
+            true,
+        )
+        .unwrap();
+        let policy = WaylandPolicySnapshot::from_test_core(
+            spec.policy_ref().clone(),
+            ZoneId::parse("dev").unwrap(),
+            1,
+            FilterInput::default(),
+            FilterInput::default(),
+        )
+        .unwrap();
+        let route = AuthenticatedSessionRouteBinding::for_test(
+            Some(ResourceRef::parse(crate::PROVIDER_REF).unwrap()),
+            crate::SERVICE_PACKAGE,
+            1,
+            Some(1),
+            Some(1),
+        );
+        let effects = Effects {
+            launch_state: Some(WorkerState::Starting),
+            ..Effects::default()
+        };
+        let mut runtime = DisplayRuntime::new(DisplayController::new(2), effects);
+        let supervision = WorkerRestartEvidence::from_supervisor(1, None, None, 1);
+
+        let first = runtime
+            .reconcile_registered(
+                &route,
+                &spec,
+                DependencyState::ready(),
+                supervision,
+                &policy,
+            )
+            .unwrap();
+        assert_eq!(first.status.phase, crate::controller::Phase::Pending);
+        assert_eq!(runtime.effects.nonce, 1);
+        assert_eq!(runtime.effects.launches.len(), 2);
+
+        let second = runtime
+            .reconcile_registered(
+                &route,
+                &spec,
+                DependencyState::ready(),
+                supervision,
+                &policy,
+            )
+            .unwrap();
+        assert_eq!(second.status.phase, crate::controller::Phase::Pending);
+        assert_eq!(runtime.effects.nonce, 1);
+        assert_eq!(runtime.effects.launches.len(), 2);
     }
 }

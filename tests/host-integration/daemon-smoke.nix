@@ -36,7 +36,7 @@ pkgs.testers.runNixOSTest {
 
     # 1. Broker socket is created + listening before its service (socket
     #    activation): systemd binds/ACLs the AF_UNIX socket up front.
-    machine.wait_for_unit("d2b-priv-broker.socket")
+    machine.wait_for_unit("d2b-broker.socket")
 
     # 2. The unprivileged public daemon comes up. It Wants= (not Requires=) the
     #    broker socket, so it serves while the broker stays idle.
@@ -99,8 +99,8 @@ pkgs.testers.runNixOSTest {
     )
     required = {
         "d2bd.service",
-        "d2b-priv-broker.socket",
-        "d2b-priv-broker.service",
+        "d2b-broker.socket",
+        "d2b-broker.service",
     }
     assert declared == required, (
         f"unexpected framework acceptance census: {declared}"
@@ -116,6 +116,6 @@ pkgs.testers.runNixOSTest {
 
     # 5. The broker service is socket-activated (not running until a request),
     #    while the socket is listening. A clean idle posture.
-    machine.succeed("systemctl is-active d2b-priv-broker.socket")
+    machine.succeed("systemctl is-active d2b-broker.socket")
   '';
 }

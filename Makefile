@@ -11,21 +11,18 @@
 D2B_MAKE_BAZEL_TARGETS := \
 	check check-fast check-tier0 bazel-check test-unit \
 	test-lint test-rust test-rust-main test-rust-broker \
-	test-rust-guest-shell-runner test-rust-local test-rust-no-bash-ast \
+	test-rust-guest-shell-runner \
 	test-rust-schema test-rust-supply-chain test-rust-leaf-main-workspace \
 	test-rust-leaf-schema test-rust-leaf-fixture-contracts test-rust-leaf-broker \
-	test-rust-leaf-guest-shell-runner test-rust-leaf-no-bash-ast \
+	test-rust-leaf-guest-shell-runner \
 	test-rust-leaf-supply-chain test-fixture-contracts test-proofs test-flake \
 	test-flake-realized test-flake-aarch64 test-flake-x86 test-nix-unit \
 	test-performance-budgets test-drift test-policy test-changelog
 D2B_MAKE_LOCAL_TARGETS := \
 	check-ci test-integration test-host-integration perf \
-	pre-tag smoke-lite heavy-check heavy-test-integration \
-	heavy-test-host-integration heavy-flake-check heavy-lane-integration \
-	heavy-lane-host-integration heavy-lane-perf heavy-lane-pre-tag \
-	heavy-lane-smoke-lite heavy-lane-guard
+	pre-tag smoke-lite heavy-check heavy-flake-check
 # Meta helpers that invoke Bazel directly but are not Layer-1 test aliases.
-D2B_MAKE_UTILITY_TARGETS := heavy-gate-build changelog-fold
+D2B_MAKE_UTILITY_TARGETS := changelog-fold
 
 D2B_MAKE_GOALS := $(if $(strip $(MAKECMDGOALS)),$(MAKECMDGOALS),$(.DEFAULT_GOAL))
 D2B_MAKE_CLASSIFIED_GOALS := $(filter \
@@ -79,23 +76,19 @@ SHELL := $(CURDIR)/tests/tools/scrub-shell-environment
         bazel-check \
         test-unit \
         test-lint test-rust test-rust-main \
-        test-rust-broker test-rust-guest-shell-runner test-rust-local test-rust-no-bash-ast \
+        test-rust-broker test-rust-guest-shell-runner \
         test-rust-schema test-rust-supply-chain \
         test-rust-leaf-main-workspace \
         test-rust-leaf-schema \
         test-rust-leaf-fixture-contracts test-rust-leaf-broker \
-        test-rust-leaf-guest-shell-runner test-rust-leaf-no-bash-ast \
+        test-rust-leaf-guest-shell-runner \
         test-rust-leaf-supply-chain \
         test-fixture-contracts test-proofs test-flake test-flake-realized \
         test-flake-aarch64 test-flake-x86 test-nix-unit \
         test-performance-budgets \
         test-drift test-policy test-changelog \
         test-integration test-host-integration perf \
-        heavy-lane-guard heavy-lane-integration heavy-lane-host-integration \
-        heavy-lane-perf \
-        heavy-lane-pre-tag heavy-lane-smoke-lite \
-        heavy-gate-build heavy-gate-provision heavy-check heavy-flake-check \
-        heavy-test-integration heavy-test-host-integration \
+        heavy-check heavy-flake-check \
         clean
 
 # Current Nix system double, used to address per-system flake.checks attrs.
@@ -112,8 +105,8 @@ SYSTEM ?= $(shell nix eval --extra-experimental-features 'nix-command flakes' \
 #   make test-<layer>   focused Bazel suite.
 #   make test-integration  type-9 container integration; local host/manual pre-PR.
 #   make test-host-integration  type-10 runNixOSTest; local NixOS/KVM pre-PR.
-#   make heavy-<lane>      the same lane, serialized through the two-slot
-#                          per-uid heavy-gate semaphore (see "Heavy lanes").
+#   make heavy-check     full Layer-1 check.
+#   make heavy-flake-check  full flake realization.
 # ===========================================================================
 
 ## check-ci - run the Layer-1 gate, then the conditional container lane.
@@ -146,16 +139,8 @@ $(D2B_MAKE_BAZEL_TARGETS):
 # Sub-targets. Each target is a thin alias over one public Bazel suite.
 # ===========================================================================
 
-## test-integration - L2 podman container integration tests. Public heavy lane:
-## it acquires a heavy-gate slot, then runs the raw work behind the gate so it
-## can never oversubscribe a concurrent lane, even when invoked directly or via
-## `make check-ci`.
-test-integration: heavy-gate-build
-	$(HEAVY_GATE) $(MAKE) heavy-lane-integration
-
-## heavy-lane-integration - the raw L2 container work. Internal: reachable only
-## from inside the gate (see heavy-lane-guard).
-heavy-lane-integration: heavy-lane-guard
+## test-integration - L2 podman container integration tests.
+test-integration:
 	bash tests/test-integration.sh
 
 # ===========================================================================
@@ -170,12 +155,8 @@ heavy-lane-integration: heavy-lane-guard
 ## successor to the `D2B_LIVE`-against-the-real-host scripts. Needs KVM (a local
 ## NixOS host; TCG software emulation is the slow fallback when /dev/kvm is
 ## absent). x86_64-linux only (a same-system VM builder is required).
-## Public heavy lane: acquires a slot, then runs the raw work behind the gate.
 ## Set D2B_VM_CHECK=<name> to build one named vmChecks entry.
-test-host-integration: heavy-gate-build
-	$(HEAVY_GATE) $(MAKE) heavy-lane-host-integration
-
-heavy-lane-host-integration: heavy-lane-guard
+test-host-integration:
 	@set -eu; \
 	system="$$(nix eval --raw --impure --expr builtins.currentSystem)"; \
 	if [ "$$system" != "x86_64-linux" ]; then \
@@ -251,10 +232,9 @@ heavy-lane-host-integration: heavy-lane-guard
 	'$(BAZEL_BIN)' build --config=local \
 	//packages/d2b:d2b \
 	//packages/d2bd:d2bd \
-	//packages/d2b-priv-broker:d2b-priv-broker \
+	//packages/d2b-broker:d2b-broker \
 	//packages/d2b-host:d2b-activation-helper \
 	//packages/d2b-host-activation-helper:d2b-host-activation-helper \
-	//packages/d2b-cutover:d2b-cutover-runner \
 	//packages/d2b-unsafe-local-helper:d2b-unsafe-local-helper \
 	//packages/d2b-resource-compiler:d2b-resource-compiler \
 	//packages/d2b-provider-display-wayland:d2b-wayland-proxy; \
@@ -264,10 +244,9 @@ heavy-lane-host-integration: heavy-lane-guard
 	stage_tool() { source="$$(realpath -e "$$bazel_bin/$$1")"; case "$$source" in "$$bazel_bin"/*) ;; *) echo "test-host-integration: Bazel output escaped bazel-bin" >&2; return 1;; esac; [ -f "$$source" ] && [ -x "$$source" ] || { echo "test-host-integration: invalid Bazel output $$1" >&2; return 1; }; install -m 755 "$$source" "$$stage/$$2"; }; \
 	stage_tool packages/d2b/d2b d2b; \
 	stage_tool packages/d2bd/d2bd d2bd; \
-	stage_tool packages/d2b-priv-broker/d2b-priv-broker d2b-priv-broker; \
+	stage_tool packages/d2b-broker/d2b-broker d2b-broker; \
 	stage_tool packages/d2b-host/d2b-activation-helper d2b-activation-helper; \
 	stage_tool packages/d2b-host-activation-helper/d2b-host-activation-helper d2b-host-activation-helper; \
-	stage_tool packages/d2b-cutover/d2b-cutover-runner d2b-cutover-runner; \
 	stage_tool packages/d2b-unsafe-local-helper/d2b-unsafe-local-helper d2b-unsafe-local-helper; \
 	stage_tool packages/d2b-resource-compiler/d2b-resource-compiler d2b-resource-compiler; \
 	stage_tool packages/d2b-provider-display-wayland/d2b-wayland-proxy d2b-wayland-proxy; \
@@ -287,7 +266,12 @@ heavy-lane-host-integration: heavy-lane-guard
 	echo "test-host-integration: could not resolve a vmCheck derivation for Attic" >&2; \
 	exit 1; \
 	}; \
-	if ! nix-store -qR --include-outputs "$$drv" >>"$$run_dir/attic-closure-all"; then \
+	if [ "$$drv" = "unknown-deriver" ]; then \
+	closure_source="$$output"; \
+	else \
+	closure_source="$$drv"; \
+	fi; \
+	if ! nix-store -qR --include-outputs "$$closure_source" >>"$$run_dir/attic-closure-all"; then \
 	echo "test-host-integration: could not resolve a vmCheck dependency closure for Attic" >&2; \
 	exit 1; \
 	fi; \
@@ -306,136 +290,30 @@ heavy-lane-host-integration: heavy-lane-guard
 	echo "test-host-integration: Attic closure upload succeeded"; \
 	fi
 
-## Public heavy lanes: acquire a slot, then run the raw work behind the gate.
-perf: heavy-gate-build
-	$(HEAVY_GATE) $(MAKE) heavy-lane-perf
-
-heavy-lane-perf: heavy-lane-guard
+## perf - run the advisory performance budget suite.
+perf:
 	$(BAZEL_RUN) //bazel/checks:test-performance-budgets
 
-## heavy-lane-guard - fail closed when a heavy-lane internal target is invoked
-## outside the gate. It does not trust the mere presence of D2B_HEAVY_GATE
-## (any process can export that); instead it asks the wrapper to verify that
-## this process genuinely holds a slot via its open file description lock.
-##
-## verify-slot reports its verdict purely through its exit status, so branch on
-## the typed codes rather than collapsing every nonzero status into one:
-##
-##   0  a genuinely held slot            -> proceed
-##   3  no slot is held                  -> reacquire by running the PUBLIC lane
-##                                          (which acquires a slot and re-runs
-##                                          this lane through the gate). A shared
-##                                          prerequisite cannot exec that itself
-##                                          without double-running the parent
-##                                          recipe, so guide the operator to the
-##                                          acquiring entrypoint and fail closed
-##                                          with the typed unheld code.
-##   *  the verifier itself malfunctioned -> propagate the exact code unchanged
-##                                          and fail closed
-##
-## Collapsing 3 and every malfunction into one "outside the semaphore" exit hid
-## a broken gate behind a slot-bypass message; keeping the codes distinct lets a
-## caller tell "ran the raw target directly" apart from "the verifier is broken".
-heavy-lane-guard: heavy-gate-build
-	@rc=0; $(HEAVY_GATE_BIN) heavy-gate verify-slot || rc=$$?; \
-	if [ "$$rc" -eq 0 ]; then \
-	  exit 0; \
-	elif [ "$$rc" -eq 3 ]; then \
-	  echo "heavy lane invoked outside the heavy-gate semaphore (no slot held)." >&2; \
-	  echo "Run the public lane (e.g. 'make test-integration'), which acquires a slot" >&2; \
-	  echo "and re-runs this lane through the gate; do not run the internal target directly." >&2; \
-	  exit "$$rc"; \
-	else \
-	  echo "heavy-gate verify-slot failed closed (exit $$rc); refusing to run heavy work unsynchronised." >&2; \
-	  exit "$$rc"; \
-	fi
-
-# ===========================================================================
-# Heavy lanes.
-#
-# Every Layer-2, host-integration, live, and perf-heavy command runs
-# through ONE semaphore: `xtask heavy-gate`. It grants two slots per uid
-# via open file description locks, so concurrent lanes cannot oversubscribe the
-# shared Nix store or KVM device. Do not add a second
-# lock file, sleep-and-retry loop, or per-crate heavy-lane guard.
-#
-# Run the heavy-* target instead of the bare target whenever another heavy lane
-# might be running; the bare targets stay available for a serial console.
-# ===========================================================================
-
 BAZEL_BIN ?= $(if $(D2B_BAZEL_BIN),$(D2B_BAZEL_BIN),bazel)
-HEAVY_GATE_BIN := $(CURDIR)/bazel-bin/packages/xtask/xtask
-HEAVY_GATE = $(HEAVY_GATE_BIN) heavy-gate --
+## heavy-check - the complete Layer-1 check.
+heavy-check:
+	$(BAZEL_RUN) //bazel/checks:check
 
-## heavy-gate-build - build the semaphore wrapper through its Bazel owner.
-heavy-gate-build:
-	'$(BAZEL_BIN)' build --config=local //packages/xtask:xtask
-
-## heavy-gate-provision - create or repair the protected slot namespace for the
-## current numeric uid without resolving a user name through NSS. This is the
-## explicit post-login path for network-backed users and the developer setup
-## path on hosts that do not consume the NixOS module. Because /run is a tmpfs,
-## run it once per boot when the gate reports missing provisioning. It never
-## creates a fallback under a user-owned root.
-heavy-gate-provision:
-	@target_uid="$$(id -u)"; \
-	sudo -- sh -eu -c '\
-	  target_uid="$$1"; root=/run/d2b-heavy-gates; \
-	  case "$$target_uid" in ""|*[!0-9]*) echo "heavy-gate provisioning: invalid target uid" >&2; exit 1;; esac; \
-	  if [ -L "$$root" ] || { [ -e "$$root" ] && [ ! -d "$$root" ]; }; then echo "heavy-gate provisioning: refusing an unsafe runtime root" >&2; exit 1; fi; \
-	  install -d -m 0755 -o root -g root "$$root"; \
-	  uid_dir="$$root/uid-$$target_uid"; \
-	  if [ -L "$$uid_dir" ] || { [ -e "$$uid_dir" ] && [ ! -d "$$uid_dir" ]; }; then echo "heavy-gate provisioning: refusing an unsafe per-user directory" >&2; exit 1; fi; \
-	  install -d -m 0755 -o root -g root "$$uid_dir"; \
-	  for index in 0 1; do \
-	    slot="$$uid_dir/slot-$$index"; \
-	    if [ -L "$$slot" ] || { [ -e "$$slot" ] && [ ! -f "$$slot" ]; }; then echo "heavy-gate provisioning: refusing an unsafe slot file" >&2; exit 1; fi; \
-	    if [ ! -e "$$slot" ]; then install -m 0600 -o "$$target_uid" -g root /dev/null "$$slot"; else chown "$$target_uid":root "$$slot"; chmod 0600 "$$slot"; fi; \
-	  done; \
-	  echo "heavy-gate provisioning: protected slots are ready for this boot"' \
-	  sh "$$target_uid"
-
-## heavy-check - the Layer-1 PR-equivalent gate under the heavy-lane semaphore.
-heavy-check: heavy-gate-build
-	$(HEAVY_GATE) $(BAZEL_RUN) //bazel/checks:check
-
-## heavy-test-integration / -host-integration - explicit aliases for
-## the public heavy lanes, kept for muscle memory and scripts. The public lanes
-## now acquire the semaphore themselves; a redundant outer gate here is safe
-## because the inner invocation verifies and reuses the inherited slot.
-heavy-test-integration: test-integration
-heavy-test-host-integration: test-host-integration
-
-## heavy-flake-check - the building `nix flake check` under the semaphore.
-##                     `make test-flake` is the cheap --no-build sibling.
-heavy-flake-check: heavy-gate-build
-	$(HEAVY_GATE) $(NIX_FLAKE) flake check --print-build-logs
+## heavy-flake-check - the building `nix flake check`; `make test-flake` is the
+## cheap --no-build sibling.
+heavy-flake-check:
+	$(NIX_FLAKE) flake check --print-build-logs
 
 # --- pre-existing maintainer targets ---------------------------------------
 
 ## pre-tag - run the full live-VM smoke gate before tagging a release.
 ##           Requires: KVM, d2b active, both personal-dev and work-aad VMs declared.
 ##           Exits non-zero on any probe failure.  Updates $${TMPDIR:-/tmp}/d2b-smoke-run-log.txt.
-##           Public heavy lane: acquires a slot, then runs the raw live work behind
-##           the gate - the live smoke suite is the most destructive, stateful lane
-##           in the tree and must never bypass the sole-use semaphore.
-pre-tag: heavy-gate-build
-	$(HEAVY_GATE) $(MAKE) heavy-lane-pre-tag
-
-## heavy-lane-pre-tag - the raw full live-VM smoke work. Internal: reachable only
-## from inside the gate (see heavy-lane-guard).
-heavy-lane-pre-tag: heavy-lane-guard
+pre-tag:
 	bash tests/integration/live/live-vm-smoke.sh --full
 
 ## smoke-lite - run the single-VM lite smoke gate (≤5 min).
-##              Public heavy lane: acquires a slot, then runs the raw live work
-##              behind the gate.
-smoke-lite: heavy-gate-build
-	$(HEAVY_GATE) $(MAKE) heavy-lane-smoke-lite
-
-## heavy-lane-smoke-lite - the raw lite live-VM smoke work. Internal: reachable
-## only from inside the gate (see heavy-lane-guard).
-heavy-lane-smoke-lite: heavy-lane-guard
+smoke-lite:
 	bash tests/integration/live/live-vm-smoke.sh --lite
 
 .PHONY: changelog-fold

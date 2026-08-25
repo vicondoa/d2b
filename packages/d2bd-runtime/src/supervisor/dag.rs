@@ -516,7 +516,7 @@ mod tests {
     }
 
     /// Audit-shape headless DAG:
-    /// host-reconcile -> store-preflight -> virtiofsd -> ch -> ssh-ready
+    /// host-reconcile -> store-preflight -> virtiofsd -> ch -> component-session
     fn audit_headless_dag() -> VmProcessDag {
         VmProcessDag {
             workload_identity: None,
@@ -526,7 +526,7 @@ mod tests {
                 dummy_node("store-preflight", ProcessRole::StoreVirtiofsPreflight),
                 dummy_node("virtiofsd-ro-store", ProcessRole::Virtiofsd),
                 dummy_node("ch", ProcessRole::CloudHypervisorRunner),
-                dummy_node("ssh-ready", ProcessRole::GuestSshReadiness),
+                dummy_node("component-session", ProcessRole::ComponentSessionHealth),
             ],
             edges: vec![
                 DagEdge {
@@ -546,8 +546,8 @@ mod tests {
                 },
                 DagEdge {
                     from: NodeId("ch".to_owned()),
-                    to: NodeId("ssh-ready".to_owned()),
-                    reason: "guest SSH probe needs running guest".to_owned(),
+                    to: NodeId("component-session".to_owned()),
+                    reason: "component-session probe needs running guest".to_owned(),
                 },
             ],
             invariants: dummy_invariants(),
@@ -580,7 +580,7 @@ mod tests {
             "store-preflight",
             "virtiofsd-ro-store",
             "ch",
-            "ssh-ready",
+            "component-session",
         ]
         .into_iter()
         .map(|s| NodeId(s.to_owned()))
@@ -833,7 +833,7 @@ mod tests {
             "store-preflight",
             "virtiofsd-ro-store",
             "ch",
-            "ssh-ready",
+            "component-session",
         ];
         assert_eq!(observed, expected);
     }
@@ -863,7 +863,7 @@ mod tests {
                 "ready:store-preflight".to_owned(),
                 "fail:virtiofsd-ro-store".to_owned(),
                 "skip:ch".to_owned(),
-                "skip:ssh-ready".to_owned(),
+                "skip:component-session".to_owned(),
             ]
         );
 
@@ -971,12 +971,14 @@ mod tests {
     #[tokio::test]
     async fn no_wait_api_stops_after_split_node_even_when_later_readiness_exists() {
         let mut dag = split_readiness_dag();
-        dag.nodes
-            .push(dummy_node("ssh-ready", ProcessRole::GuestSshReadiness));
+        dag.nodes.push(dummy_node(
+            "component-session",
+            ProcessRole::ComponentSessionHealth,
+        ));
         dag.edges.push(DagEdge {
             from: NodeId("ch".to_owned()),
-            to: NodeId("ssh-ready".to_owned()),
-            reason: "guest ssh after ch".to_owned(),
+            to: NodeId("component-session".to_owned()),
+            reason: "component session after ch".to_owned(),
         });
         let runner = FakeSplitRunner {
             spawn_order: Mutex::new(Vec::new()),
@@ -998,8 +1000,8 @@ mod tests {
             !report
                 .history
                 .iter()
-                .any(|entry| entry.node_id == NodeId("ssh-ready".to_owned())),
-            "no-wait-api should not wait for guest SSH readiness after process-alive"
+                .any(|entry| entry.node_id == NodeId("component-session".to_owned())),
+            "no-wait-api should not wait for component-session readiness after process-alive"
         );
     }
 

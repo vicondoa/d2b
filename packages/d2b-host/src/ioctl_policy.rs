@@ -151,7 +151,7 @@ fn class_ioctls(class: DeviceClass) -> &'static [constants::Number] {
         // are NOT in this declarative allowlist because the broker is
         // the only legitimate caller and it issues those ioctls via
         // raw libc bypassing the per-role policy
-        // (packages/d2b-priv-broker/src/ops/tap.rs:
+        // (packages/d2b-broker/src/ops/tap.rs:
         // live_create_persistent_tap). Long-lived runners like
         // cloud-hypervisor open /dev/net/tun + TUNSETIFF to attach to
         // a PRE-EXISTING persistent TAP; they MUST NOT be granted the

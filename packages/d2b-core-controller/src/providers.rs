@@ -1,13 +1,7 @@
 //! Provider lifecycle validation and child-resource planning.
 
-use d2b_contracts_provider::v3::{
-    ComponentType,
-    ProviderManifest,
-};
-use d2b_contracts_resource::v3::{
-    ResourceRef,
-    SchemaFingerprint,
-};
+use d2b_contracts_provider::v3::{ComponentType, ProviderManifest};
+use d2b_contracts_resource::v3::{ResourceRef, SchemaFingerprint};
 
 /// Provider lifecycle phase derived from exact child observations.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -135,6 +129,9 @@ impl ProviderHandler {
                 required_descriptor_fingerprint,
             )
             .map_err(|_| ProviderError::TrustOrCompatibilityDenied)?;
+        manifest
+            .validate_installation_contract()
+            .map_err(|_| ProviderError::GraphInvalid)?;
         if !observation.package_present {
             return Err(ProviderError::PackageUnavailable);
         }
@@ -210,24 +207,17 @@ impl ProviderHandler {
 
 #[cfg(test)]
 mod tests {
+    use d2b_contracts_provider::v3::UpgradePolicy as ProviderUpgradePolicy;
     use d2b_contracts_provider::v3::{
-    UpgradePolicy as ProviderUpgradePolicy,
-};
-    use d2b_contracts_provider::v3::{
-    ArtifactDigest,
-    ArtifactDigestSet,
-    CompatibilityRange,
-    ComponentDescriptor,
-    PolicyEvaluation,
-    RevocationState,
-    SignatureState,
-    TrustEvidence,
-    UpgradeDisposition,
-};
-use d2b_contracts_resource::v3::{
-    ArtifactId,
-    execution_policy::{BoundedToken, ExecutionDomain},
-};
+        ArtifactDigest, ArtifactDigestSet, BinaryRef, CompatibilityRange, ComponentDescriptor,
+        ComponentExecution, ComponentTargetCapability, ControllerTargetKind, EffectPortClass,
+        PolicyEvaluation, RevocationState, SignatureState, TargetRuntimeArtifacts, TrustEvidence,
+        UpgradeDisposition,
+    };
+    use d2b_contracts_resource::v3::{
+        ArtifactId,
+        execution_policy::{BoundedToken, ExecutionDomain},
+    };
 
     use super::*;
 
@@ -267,8 +257,7 @@ use d2b_contracts_resource::v3::{
                 api_major: 3,
                 api_minor: 0,
                 descriptor_fingerprint: fingerprint(),
-                state_schema_version: d2b_contracts_resource::v3::SchemaVersion::new(1, 0)
-                    .unwrap(),
+                state_schema_version: d2b_contracts_resource::v3::SchemaVersion::new(1, 0).unwrap(),
             },
             [ComponentDescriptor::new(
                 BoundedToken::parse("service").unwrap(),
@@ -281,6 +270,24 @@ use d2b_contracts_resource::v3::{
                 [],
                 false,
             )
+            .unwrap()
+            .with_execution(ComponentExecution::Launchable {
+                binary_ref: BinaryRef::parse("service").unwrap(),
+            })
+            .with_target_capabilities([
+                ComponentTargetCapability::new(
+                    ControllerTargetKind::Host,
+                    digest(),
+                    [EffectPortClass::Runtime],
+                )
+                .unwrap(),
+                ComponentTargetCapability::new(
+                    ControllerTargetKind::Guest,
+                    digest(),
+                    [EffectPortClass::Runtime],
+                )
+                .unwrap(),
+            ])
             .unwrap()],
             [],
             [],
@@ -290,6 +297,11 @@ use d2b_contracts_resource::v3::{
                 preserves_durable_state: true,
             },
         )
+        .unwrap()
+        .with_target_runtime_artifacts([
+            TargetRuntimeArtifacts::new(ControllerTargetKind::Host, digest(), digest()).unwrap(),
+            TargetRuntimeArtifacts::new(ControllerTargetKind::Guest, digest(), digest()).unwrap(),
+        ])
         .unwrap()
     }
 

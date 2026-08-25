@@ -109,13 +109,13 @@ is stable; `--apply` routes through the daemon-native dispatch
       {"id": "store-preflight",     "role": "store-virtiofs-preflight"},
       {"id": "virtiofsd-ro-store",  "role": "virtiofsd"},
       {"id": "ch",                  "role": "cloud-hypervisor-runner"},
-      {"id": "guest-control-health", "role": "guest-control-health"}
+      {"id": "component-session-health", "role": "component-session-health"}
     ],
     "edges": [
       {"from": "host-reconcile",     "to": "store-preflight"},
       {"from": "store-preflight",    "to": "virtiofsd-ro-store"},
       {"from": "virtiofsd-ro-store", "to": "ch"},
-      {"from": "ch",                 "to": "guest-control-health"}
+      {"from": "ch",                 "to": "component-session-health"}
     ]
   },
   "notes": "vm dry-run reports the DAG the supervisor would drive; --apply routes through the daemon-native dispatch (v1.0 daemon-only per ADR 0015)."
@@ -141,12 +141,10 @@ is different from the original draft:
    `SpawnRunner` handler is live and returns pidfds over SCM_RIGHTS;
    the daemon can re-open / re-adopt them through the live
    `OpenPidfd` path.
-4. `guest-control-health` - the daemon runs the authenticated
-   guest-control Health probe (Hello + token challenge-response +
-   Health over the guest-control vsock) on guest-control-capable VMs.
-   It fails closed and is the guest-readiness gate; SSH is a compat
-   surface only, so the legacy raw TCP-22 `ssh-ready` /
-   `guest-ssh-readiness` node was removed and is no longer emitted.
+4. `component-session-health` - the daemon runs the authenticated
+   ComponentSession Health probe on ComponentSession-enabled VMs. It fails
+   closed and is the Guest-readiness gate; no raw TCP-22 readiness or SSH
+   execution fallback is emitted.
 
 The operator-facing routing changed: `d2b guest start corp-vm --apply`
 no longer stops at the old `daemon-down` placeholder by default.

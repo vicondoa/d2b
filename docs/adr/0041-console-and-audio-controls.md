@@ -9,6 +9,11 @@
   hypervisor runtime seam), ADR 0039 (constellation persistent shell
   routing)
 
+> **Current implementation note (U10).** Guest-side console, audio, and
+> terminal effects are owned by signed target-local Processes and typed
+> ComponentSession services. The standalone Guest daemon and guest-control
+> RPCs named in the baseline context are no longer shipped.
+
 ## Context
 
 The Rust CLI already exposes native `d2b console <vm>` and

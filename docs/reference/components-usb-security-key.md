@@ -68,9 +68,9 @@ The following conditions are enforced at NixOS eval time (before any build):
    cannot both be set for the same VM. The assertion message names the
    conflicting VM.
 
-3. **Guest control prerequisite**: `usb.securityKey.enable = true` requires
-   `guest.control.enable = true` on the same VM (the DAG supervisor needs
-   guest control to manage the frontend node lifecycle).
+3. **ComponentSession prerequisite**: `usb.securityKey.enable = true` requires
+   `guest.componentSession.enable = true` on the same VM (the DAG supervisor needs
+   ComponentSession to manage the frontend node lifecycle).
 
 ## Device selectors
 
@@ -96,7 +96,7 @@ stable label, USB vendor/product IDs, and an optional serial:
 
 The host broker owns the following runtime resources. They are **not** declared
 as NixOS systemd services or static units; they are created and torn down by
-the `d2bd`/`d2b-priv-broker` pipeline at runtime:
+the `d2bd`/`d2b-broker` pipeline at runtime:
 
 | Resource | Owner | Path / name |
 |----------|-------|-------------|

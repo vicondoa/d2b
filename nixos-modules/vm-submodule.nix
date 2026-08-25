@@ -9,11 +9,11 @@
 #
 # No upstream microvm.nix dependency anywhere in this graph.
 { inputs }:
-{ config, lib, pkgs, ... }:
+{ config, lib, pkgs, d2bHostTools ? null, d2bHostToolOverrides ? null, ... }:
 
 let
   evaluator = (import ./vm-evaluator.nix { inherit inputs; })
-    { inherit config lib pkgs; };
+    { inherit config lib pkgs d2bHostTools d2bHostToolOverrides; };
 in
 {
   _composeVm = evaluator._composeVm;

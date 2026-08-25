@@ -120,7 +120,7 @@ let
         `recursive` is hard-pinned to false and the daemon-side
         enforcer additionally asserts the carve-out by name (see
         packages/d2b-host/src/ownership_matrix.rs). `required` is
-        false: native (post-cutover) VMs never had this artifact, so
+        false: native VMs never had this artifact, so
         its absence must not fail preflight; migrated VMs still have
         it checked/postured when present.
       '';
@@ -356,7 +356,7 @@ in
             lazily-created paths (`store-view/live/.d2b-marker-<vm>`,
             `store-view/state/integrity-unknown.json`) and for legacy
             recovery artifacts (`store`, `store-meta`) absent on
-            native post-cutover VMs.
+            native VMs.
           '';
         };
         recursive = mkOption {

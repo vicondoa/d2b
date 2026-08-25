@@ -71,7 +71,6 @@ let
     "broker"
     "activationHelper"
     "hostActivationHelper"
-    "cutoverRunner"
     "unsafeLocalHelper"
     "resourceCompiler"
     "waylandProxy"
@@ -263,7 +262,6 @@ rec {
       lifecycle = true;
       display = true;
       usbHotplug = true;
-      guestControl = true;
       exec = true;
       configSync = true;
       ssh = true;
@@ -293,7 +291,6 @@ rec {
       waylandProxy = true;
     };
     guest = {
-      guestControl = true;
       exec = true;
       shell = true;
       configSync = true;
@@ -313,7 +310,6 @@ rec {
       lifecycle = true;
       display = true;
       usbHotplug = true;
-      guestControl = false;
       exec = false;
       configSync = false;
       ssh = false;
@@ -343,7 +339,6 @@ rec {
       waylandProxy = false;
     };
     guest = {
-      guestControl = false;
       exec = false;
       shell = false;
       configSync = false;
@@ -393,7 +388,7 @@ rec {
         (runtimeServiceSummary { id = "store-virtiofs-preflight"; role = "storage"; })
         (runtimeServiceSummary { id = "virtiofsd"; role = "storage"; })
         (runtimeServiceSummary { id = "cloud-hypervisor"; role = "hypervisor"; })
-        (runtimeServiceSummary { id = "guest-control-health"; role = "guest-control"; })
+        (runtimeServiceSummary { id = "component-session"; role = "component-session"; })
         (runtimeServiceSummary { id = "swtpm"; role = "tpm"; optional = true; })
         (runtimeServiceSummary { id = "gpu"; role = "display"; optional = true; })
         (runtimeServiceSummary { id = "audio"; role = "audio"; optional = true; })
@@ -476,7 +471,7 @@ rec {
     neededForBoot = true;
   };
 
-  guestControlVsockPort = 14318;
+  componentSessionVsockPort = 14318;
   observabilityOtlpVsockPort = 14317;
   # AF_VSOCK port used by the d2b security-key CTAPHID relay frontend.
   # The guest sk-frontend connects on this port to the host broker.
@@ -487,7 +482,7 @@ rec {
   # reserve slot 1 for the env net VM and use d2b.vms.<vm>.index
   # for workloads (10..250). The stride intentionally exceeds the
   # maximum workload index so adjacent envs cannot collide.
-  guestControlVsockCid = { name, envIndex ? null, index ? null, isNetVm ? false, isObservabilityVm ? false }:
+  componentSessionVsockCid = { name, envIndex ? null, index ? null, isNetVm ? false, isObservabilityVm ? false }:
     if isObservabilityVm then observabilityStackVsockCid
     else if envIndex != null then
       let slot = if isNetVm then 1 else index; in
@@ -495,7 +490,7 @@ rec {
     else
       4096 + lib.fromHexString (builtins.substring 0 6 (builtins.hashString "md5" name));
 
-  guestControlVsockHostSocket = stateRoot: "${stateRoot}/vsock.sock";
+  componentSessionVsockHostSocket = stateRoot: "${stateRoot}/vsock.sock";
 
   volumeSerialIssues = volumes:
     let

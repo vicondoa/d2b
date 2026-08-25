@@ -6,6 +6,10 @@ This guide covers the v2 realm-native control-plane transition. It is written
 for operators with an existing v1.2/v1.3 local d2b host and one or more local
 VMs already running on `d2b.envs` / `d2b.vms.<vm>.env`.
 
+> Historical migration guide. Current v3 Guests use `d2bd guest`,
+> ComponentSession, and signed target-local Processes; the older transport
+> references below are retained only for v1.x/v2 upgrades.
+
 ## What changes
 
 - Existing local VM names and `d2b.vms.<vm>.env` placement continue to work.
@@ -44,7 +48,7 @@ large VM state, rewrite `/var/lib/d2b/vms/<vm>`, or migrate network bridges.
 
 ## Step 1: keep existing envs and VMs
 
-Do not remove or rename `d2b.envs` or `d2b.vms.<vm>.env` during the v2 cutover.
+Do not remove or rename `d2b.envs` or `d2b.vms.<vm>.env` during the v2 transition.
 Those declarations remain the active runtime substrate.
 
 For example, keep this:

@@ -39,10 +39,6 @@ const RUNTIME_FILES: &[(&str, &str)] = &[
         include_str!("../src/exec_detached.rs"),
     ),
     (
-        "src/exec_owner_io.rs",
-        include_str!("../src/exec_owner_io.rs"),
-    ),
-    (
         "src/exec_session.rs",
         include_str!("../src/exec_session.rs"),
     ),
@@ -55,21 +51,11 @@ const RUNTIME_FILES: &[(&str, &str)] = &[
         include_str!("../src/exec_support.rs"),
     ),
     (
-        "src/guest_control_bridge.rs",
-        include_str!("../src/guest_control_bridge.rs"),
+        "src/component_session_vsock.rs",
+        include_str!("../src/component_session_vsock.rs"),
     ),
-    (
-        "src/guest_control_health.rs",
-        include_str!("../src/guest_control_health.rs"),
-    ),
-    (
-        "src/guest_control_runtime.rs",
-        include_str!("../src/guest_control_runtime.rs"),
-    ),
-    (
-        "src/guest_control_vsock.rs",
-        include_str!("../src/guest_control_vsock.rs"),
-    ),
+    ("src/guest_mode.rs", include_str!("../src/guest_mode.rs")),
+    ("src/host_mode.rs", include_str!("../src/host_mode.rs")),
     ("src/json_io.rs", include_str!("../src/json_io.rs")),
     (
         "src/kernel_module_check.rs",
@@ -163,6 +149,10 @@ const RUNTIME_FILES: &[(&str, &str)] = &[
         "src/terminal_session.rs",
         include_str!("../src/terminal_session.rs"),
     ),
+    (
+        "src/target_runtime.rs",
+        include_str!("../src/target_runtime.rs"),
+    ),
     ("src/typed_error.rs", include_str!("../src/typed_error.rs")),
     (
         "src/typed_shell_targets.rs",
@@ -224,6 +214,7 @@ fn runtime_uses_narrow_direct_contracts() {
         "d2b-contracts",
         "d2b-contracts-broker",
         "d2b-contracts-control",
+        "d2b-contracts-provider",
         "d2b-contracts-resource",
         "d2b-contracts-zone-session",
     ] {

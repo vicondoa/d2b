@@ -30,7 +30,7 @@ state lock is acquired and after the pidfd table is restored, but
 
 The check does **not** invoke `modprobe`, `modinfo`, or any
 side-effecting helper. Mutating module load remains the broker's
-responsibility (`d2b-priv-broker::ops::modprobe`).
+responsibility (`d2b-broker::ops::modprobe`).
 
 If `/proc/modules` cannot be read, the check treats *every* module as
 absent - required modules then read as missing and the daemon

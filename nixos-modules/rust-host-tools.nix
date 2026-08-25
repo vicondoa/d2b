@@ -117,7 +117,6 @@ let
   hostPackages = [
     "d2bd"
     "d2b"
-    "d2b-cutover"
     "d2b-host"
     "d2b-host-activation-helper"
     "d2b-gateway-runtime"
@@ -176,7 +175,7 @@ let
   });
 
   brokerCargoArtifacts = craneLib.buildDepsOnly (commonBuildArgs // {
-    pname = "d2b-priv-broker";
+    pname = "d2b-broker";
     version = "0.0.0-bootstrap";
     dummySrc = dummySource;
     sourceRoot = "d2b-provider-rust-src";
@@ -184,8 +183,8 @@ let
     cargoLock = brokerCargoLock;
     cargoVendorDir = brokerCargoVendorDir;
     inherit outputHashes;
-    cargoCheckExtraArgs = "--package d2b-priv-broker --no-default-features";
-    cargoBuildExtraArgs = "--package d2b-priv-broker --no-default-features";
+    cargoCheckExtraArgs = "--package d2b-broker --no-default-features";
+    cargoBuildExtraArgs = "--package d2b-broker --no-default-features";
   });
 
   installBinaries = binaries:
@@ -214,7 +213,7 @@ let
     });
 
   broker = craneLib.buildPackage (commonBuildArgs // {
-    pname = "d2b-priv-broker";
+    pname = "d2b-broker";
     version = "0.0.0-bootstrap";
     cargoArtifacts = brokerCargoArtifacts;
     inherit outputHashes;
@@ -224,7 +223,7 @@ let
     cargoLock = brokerCargoLock;
     cargoVendorDir = brokerCargoVendorDir;
     cargoBuildExtraArgs = "--no-default-features";
-    installPhaseCommand = installBinaries [ "d2b-priv-broker" ];
+    installPhaseCommand = installBinaries [ "d2b-broker" ];
   });
 in
 {
@@ -241,10 +240,6 @@ in
   activationHelper = mkMainPackage {
     package = "d2b-host";
     binaries = [ "d2b-activation-helper" ];
-  };
-  cutoverRunner = mkMainPackage {
-    package = "d2b-cutover";
-    binaries = [ "d2b-cutover-runner" ];
   };
   hostActivationHelper = mkMainPackage {
     package = "d2b-host-activation-helper";

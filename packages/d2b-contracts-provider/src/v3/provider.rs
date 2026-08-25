@@ -40,7 +40,9 @@ use d2b_contracts_resource::v3::{
     ResourceTypeName,
     SchemaFingerprint,
     resource::ResourceEnvelope,
-    resource_schema::{CanonicalJsonObject, ExtensionSchemaId, SchemaVersion},
+    resource_schema::{
+        CanonicalJsonObject, ExtensionSchemaId, PlacementAnchor, SchemaVersion,
+    },
     volume::{MAX_VIEWS, ViewRight, ViewSpec},
     volume_state::{MigrationPolicy, PersistenceClass, SensitivityClass, VolumeStateSchema, VolumeStateSchemaId},
 };
@@ -65,7 +67,12 @@ pub const MAX_COMPONENT_RESOURCE_TYPES: usize = 8;
 
 /// Maximum methods one component exports.
 pub const MAX_COMPONENT_METHODS: usize = 32;
-
+/// Maximum required EffectPort classes on one target capability.
+pub const MAX_COMPONENT_EFFECT_CLASSES: usize = 16;
+/// Maximum target capability declarations on one component.
+pub const MAX_COMPONENT_TARGET_CAPABILITIES: usize = 3;
+/// Maximum signed component cardinality.
+pub const MAX_COMPONENT_CARDINALITY: u32 = 256;
 /// Maximum entries in one signed standard capability matrix.
 pub const MAX_CAPABILITY_MATRIX_ENTRIES: usize = 32;
 
@@ -140,6 +147,30 @@ pub enum ProviderContractError {
     PlacementHostCustodyViolation,
     /// The schema category requires Guest-local custody.
     GuestLocalRequired,
+    /// A controller role omitted its closed instance scope.
+    ControllerScopeMissing,
+    /// A controller role declared a target set incompatible with its scope.
+    ControllerScopeInvalid,
+    /// A target capability was declared more than once.
+    DuplicateTargetCapability,
+    /// A target capability does not carry a concrete signed artifact.
+    ComponentArtifactMissing,
+    /// A controller's Host and Guest target artifacts differ.
+    ComponentArtifactMismatch,
+    /// The component execution mode is not valid for its signed role.
+    ComponentExecutionInvalid,
+    /// A placement anchor does not match the registered ResourceType schema.
+    PlacementAnchorMismatch,
+    /// A ResourceApiBinding omitted its placement anchor.
+    PlacementAnchorMissing,
+    /// The shared daemon or broker artifact differs between Host and Guest.
+    SharedRuntimeArtifactMismatch,
+    /// A target-local component has no matching shared runtime artifacts.
+    RuntimeArtifactMissing,
+    /// The manifest advertises a target without a component capability.
+    TargetCapabilityMissing,
+    /// A target profile does not support a signed required EffectPort class.
+    EffectClassUnsupported,
 }
 
 impl core::fmt::Display for ProviderContractError {
@@ -189,6 +220,18 @@ impl ProviderContractError {
             Self::ComponentQuotaTooSmall => "component-quota-too-small",
             Self::PlacementHostCustodyViolation => "placement-host-custody-violation",
             Self::GuestLocalRequired => "guest-local-required",
+            Self::ControllerScopeMissing => "controller-scope-missing",
+            Self::ControllerScopeInvalid => "controller-scope-invalid",
+            Self::DuplicateTargetCapability => "duplicate-target-capability",
+            Self::ComponentArtifactMissing => "component-artifact-missing",
+            Self::ComponentArtifactMismatch => "component-artifact-mismatch",
+            Self::ComponentExecutionInvalid => "component-execution-invalid",
+            Self::PlacementAnchorMismatch => "placement-anchor-mismatch",
+            Self::PlacementAnchorMissing => "placement-anchor-missing",
+            Self::SharedRuntimeArtifactMismatch => "shared-runtime-artifact-mismatch",
+            Self::RuntimeArtifactMissing => "runtime-artifact-missing",
+            Self::TargetCapabilityMissing => "target-capability-missing",
+            Self::EffectClassUnsupported => "effect-class-unsupported",
         }
     }
 }
@@ -555,6 +598,196 @@ pub enum ComponentType {
     /// authority. Everything it needs is inherited through its
     /// LaunchTicket.
     Worker,
+}
+
+/// The closed instance cardinality model for a signed controller role.
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize, JsonSchema,
+)]
+#[serde(rename_all = "kebab-case")]
+pub enum ControllerInstanceScope {
+    /// One controller for the containing Zone.
+    ZoneSingleton,
+    /// One controller at one fixed Host or Guest target.
+    FixedExecutionTarget,
+    /// One controller instance per resolved resource target.
+    PerResourceTarget,
+}
+
+/// The target kinds a signed component may advertise.
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize, JsonSchema,
+)]
+#[serde(rename_all = "lowercase")]
+pub enum ControllerTargetKind {
+    /// The containing Zone, used only by Zone-singleton roles.
+    Zone,
+    /// The physical Host execution target.
+    Host,
+    /// A workload or nested Guest execution target.
+    Guest,
+}
+
+/// A closed Provider-neutral EffectPort class.
+///
+/// These are capability classes, not broker operation names. A target profile
+/// intersects the signed set before a component receives any effect port.
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize, JsonSchema,
+)]
+#[serde(rename_all = "kebab-case")]
+pub enum EffectPortClass {
+    Runtime,
+    Transport,
+    Substrate,
+    Process,
+    Volume,
+    Storage,
+    Network,
+    Device,
+    Display,
+    Audio,
+    Credential,
+    Observability,
+}
+
+/// A signed component artifact and its required effect classes for one target.
+#[derive(Clone, PartialEq, Eq, Serialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ComponentTargetCapability {
+    target_kind: ControllerTargetKind,
+    artifact_digest: ArtifactDigest,
+    required_effect_classes: BTreeSet<EffectPortClass>,
+}
+
+impl ComponentTargetCapability {
+    /// Construct one target capability with a concrete signed artifact.
+    pub fn new(
+        target_kind: ControllerTargetKind,
+        artifact_digest: ArtifactDigest,
+        required_effect_classes: impl IntoIterator<Item = EffectPortClass>,
+    ) -> Result<Self, ProviderContractError> {
+        let required_effect_classes: BTreeSet<_> = required_effect_classes.into_iter().collect();
+        if required_effect_classes.len() > MAX_COMPONENT_EFFECT_CLASSES {
+            return Err(ProviderContractError::BoundExceeded);
+        }
+        Ok(Self {
+            target_kind,
+            artifact_digest,
+            required_effect_classes,
+        })
+    }
+
+    /// Return the target kind this capability serves.
+    pub const fn target_kind(&self) -> ControllerTargetKind {
+        self.target_kind
+    }
+
+    /// Borrow the concrete signed component artifact digest.
+    pub const fn artifact_digest(&self) -> &ArtifactDigest {
+        &self.artifact_digest
+    }
+
+    /// Borrow the required EffectPort classes.
+    pub const fn required_effect_classes(&self) -> &BTreeSet<EffectPortClass> {
+        &self.required_effect_classes
+    }
+}
+
+impl core::fmt::Debug for ComponentTargetCapability {
+    fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        formatter
+            .debug_struct("ComponentTargetCapability")
+            .field("target_kind", &self.target_kind)
+            .field("effect_class_count", &self.required_effect_classes.len())
+            .finish_non_exhaustive()
+    }
+}
+
+impl<'de> Deserialize<'de> for ComponentTargetCapability {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        #[derive(Deserialize)]
+        #[serde(rename_all = "camelCase", deny_unknown_fields)]
+        struct Wire {
+            target_kind: ControllerTargetKind,
+            artifact_digest: ArtifactDigest,
+            #[serde(default)]
+            required_effect_classes: BTreeSet<EffectPortClass>,
+        }
+        let wire = Wire::deserialize(deserializer)?;
+        Self::new(
+            wire.target_kind,
+            wire.artifact_digest,
+            wire.required_effect_classes,
+        )
+        .map_err(serde::de::Error::custom)
+    }
+}
+
+/// Shared daemon and broker artifacts selected for one target kind.
+#[derive(Clone, PartialEq, Eq, Serialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct TargetRuntimeArtifacts {
+    target_kind: ControllerTargetKind,
+    d2bd_digest: ArtifactDigest,
+    broker_digest: ArtifactDigest,
+}
+
+impl TargetRuntimeArtifacts {
+    /// Construct one target runtime artifact declaration.
+    pub fn new(
+        target_kind: ControllerTargetKind,
+        d2bd_digest: ArtifactDigest,
+        broker_digest: ArtifactDigest,
+    ) -> Result<Self, ProviderContractError> {
+        if matches!(target_kind, ControllerTargetKind::Zone) {
+            return Err(ProviderContractError::ControllerScopeInvalid);
+        }
+        Ok(Self {
+            target_kind,
+            d2bd_digest,
+            broker_digest,
+        })
+    }
+
+    /// Return the target kind.
+    pub const fn target_kind(&self) -> ControllerTargetKind {
+        self.target_kind
+    }
+
+    /// Borrow the shared `d2bd` artifact digest.
+    pub const fn d2bd_digest(&self) -> &ArtifactDigest {
+        &self.d2bd_digest
+    }
+
+    /// Borrow the shared broker artifact digest.
+    pub const fn broker_digest(&self) -> &ArtifactDigest {
+        &self.broker_digest
+    }
+}
+
+impl core::fmt::Debug for TargetRuntimeArtifacts {
+    fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        formatter
+            .debug_struct("TargetRuntimeArtifacts")
+            .field("target_kind", &self.target_kind)
+            .finish_non_exhaustive()
+    }
+}
+
+impl<'de> Deserialize<'de> for TargetRuntimeArtifacts {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        #[derive(Deserialize)]
+        #[serde(rename_all = "camelCase", deny_unknown_fields)]
+        struct Wire {
+            target_kind: ControllerTargetKind,
+            d2bd_digest: ArtifactDigest,
+            broker_digest: ArtifactDigest,
+        }
+        let wire = Wire::deserialize(deserializer)?;
+        Self::new(wire.target_kind, wire.d2bd_digest, wire.broker_digest)
+            .map_err(serde::de::Error::custom)
+    }
 }
 
 /// The closed dependency alias set a manifest may declare.
@@ -1111,6 +1344,12 @@ pub struct ComponentDescriptor {
     exported_methods: BTreeSet<BoundedToken>,
     allowed_domains: BTreeSet<ExecutionDomain>,
     cardinality: u32,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    instance_scope: Option<ControllerInstanceScope>,
+    #[serde(skip_serializing_if = "BTreeSet::is_empty")]
+    supported_target_kinds: BTreeSet<ControllerTargetKind>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    target_capabilities: Vec<ComponentTargetCapability>,
     config_digest: ArtifactDigest,
     dependencies: BTreeSet<DependencyDeclaration>,
     declares_state_volume: bool,
@@ -1149,6 +1388,7 @@ impl ComponentDescriptor {
             || exported_methods.len() > MAX_COMPONENT_METHODS
             || allowed_domains.is_empty()
             || cardinality == 0
+            || cardinality > MAX_COMPONENT_CARDINALITY
         {
             return Err(ProviderContractError::BoundExceeded);
         }
@@ -1188,6 +1428,9 @@ impl ComponentDescriptor {
             exported_methods,
             allowed_domains,
             cardinality,
+            instance_scope: None,
+            supported_target_kinds: BTreeSet::new(),
+            target_capabilities: Vec::new(),
             config_digest,
             dependencies: dependency_set,
             declares_state_volume,
@@ -1259,6 +1502,142 @@ impl ComponentDescriptor {
         self.cardinality
     }
 
+    /// Set the closed controller instance scope and supported target kinds.
+    pub fn with_controller_placement(
+        mut self,
+        instance_scope: ControllerInstanceScope,
+        supported_target_kinds: impl IntoIterator<Item = ControllerTargetKind>,
+    ) -> Result<Self, ProviderContractError> {
+        let supported_target_kinds: BTreeSet<_> = supported_target_kinds.into_iter().collect();
+        if supported_target_kinds.is_empty() {
+            return Err(ProviderContractError::ControllerScopeMissing);
+        }
+        self.instance_scope = Some(instance_scope);
+        self.supported_target_kinds = supported_target_kinds;
+        Ok(self)
+    }
+
+    /// Set the signed target-specific component artifacts and effect classes.
+    pub fn with_target_capabilities(
+        mut self,
+        target_capabilities: impl IntoIterator<Item = ComponentTargetCapability>,
+    ) -> Result<Self, ProviderContractError> {
+        let target_capabilities: Vec<_> = target_capabilities.into_iter().collect();
+        if target_capabilities.len() > MAX_COMPONENT_TARGET_CAPABILITIES {
+            return Err(ProviderContractError::BoundExceeded);
+        }
+        let mut targets = BTreeSet::new();
+        for capability in &target_capabilities {
+            if !targets.insert(capability.target_kind()) {
+                return Err(ProviderContractError::DuplicateTargetCapability);
+            }
+        }
+        self.target_capabilities = target_capabilities;
+        Ok(self)
+    }
+
+    /// Return the controller instance scope, if this is a controller role.
+    pub const fn instance_scope(&self) -> Option<ControllerInstanceScope> {
+        self.instance_scope
+    }
+
+    /// Borrow the controller target kinds this descriptor advertises.
+    pub const fn supported_target_kinds(&self) -> &BTreeSet<ControllerTargetKind> {
+        &self.supported_target_kinds
+    }
+
+    /// Borrow target-specific signed component capabilities.
+    pub fn target_capabilities(&self) -> &[ComponentTargetCapability] {
+        &self.target_capabilities
+    }
+
+    /// Find the target capability for one target kind.
+    pub fn target_capability(
+        &self,
+        target_kind: ControllerTargetKind,
+    ) -> Option<&ComponentTargetCapability> {
+        self.target_capabilities
+            .iter()
+            .find(|capability| capability.target_kind() == target_kind)
+    }
+
+    fn validate_role_contract(
+        &self,
+        artifact_id: &ArtifactId,
+    ) -> Result<(), ProviderContractError> {
+        let capability_targets: BTreeSet<_> = self
+            .target_capabilities
+            .iter()
+            .map(ComponentTargetCapability::target_kind)
+            .collect();
+
+        match self.component_type {
+            ComponentType::Controller => {
+                if capability_targets != self.supported_target_kinds {
+                    return Err(ProviderContractError::TargetCapabilityMissing);
+                }
+                let scope = self
+                    .instance_scope
+                    .ok_or(ProviderContractError::ControllerScopeMissing)?;
+                let valid_scope = match scope {
+                    ControllerInstanceScope::ZoneSingleton => {
+                        self.cardinality == 1
+                            && self.supported_target_kinds
+                                == BTreeSet::from([ControllerTargetKind::Zone])
+                    }
+                    ControllerInstanceScope::FixedExecutionTarget => {
+                        self.cardinality == 1
+                            && self.supported_target_kinds.len() == 1
+                            && !self
+                                .supported_target_kinds
+                                .contains(&ControllerTargetKind::Zone)
+                    }
+                    ControllerInstanceScope::PerResourceTarget => {
+                        self.cardinality > 0
+                            && !self.supported_target_kinds.is_empty()
+                            && !self
+                                .supported_target_kinds
+                                .contains(&ControllerTargetKind::Zone)
+                    }
+                };
+                if !valid_scope {
+                    return Err(ProviderContractError::ControllerScopeInvalid);
+                }
+                let host_artifact = self
+                    .target_capability(ControllerTargetKind::Host)
+                    .map(ComponentTargetCapability::artifact_digest);
+                let guest_artifact = self
+                    .target_capability(ControllerTargetKind::Guest)
+                    .map(ComponentTargetCapability::artifact_digest);
+                if let (Some(host), Some(guest)) = (host_artifact, guest_artifact) {
+                    if host != guest {
+                        return Err(ProviderContractError::ComponentArtifactMismatch);
+                    }
+                }
+                if matches!(self.execution, ComponentExecution::InProcessBootstrap)
+                    && !matches!(
+                        artifact_id.as_str(),
+                        "system-core" | "system-minijail"
+                    )
+                {
+                    return Err(ProviderContractError::ComponentExecutionInvalid);
+                }
+            }
+            ComponentType::Service | ComponentType::Worker => {
+                if self.instance_scope.is_some() || !self.supported_target_kinds.is_empty() {
+                    return Err(ProviderContractError::ControllerScopeInvalid);
+                }
+                if self.target_capabilities.is_empty() {
+                    return Err(ProviderContractError::TargetCapabilityMissing);
+                }
+                if matches!(self.execution, ComponentExecution::InProcessBootstrap) {
+                    return Err(ProviderContractError::ComponentExecutionInvalid);
+                }
+            }
+        }
+        Ok(())
+    }
+
     /// The digest of this component's config projection.
     pub const fn config_digest(&self) -> &ArtifactDigest {
         &self.config_digest
@@ -1310,6 +1689,12 @@ impl<'de> Deserialize<'de> for ComponentDescriptor {
             exported_methods: BTreeSet<BoundedToken>,
             allowed_domains: BTreeSet<ExecutionDomain>,
             cardinality: u32,
+            #[serde(default)]
+            instance_scope: Option<ControllerInstanceScope>,
+            #[serde(default)]
+            supported_target_kinds: BTreeSet<ControllerTargetKind>,
+            #[serde(default)]
+            target_capabilities: Vec<ComponentTargetCapability>,
             config_digest: ArtifactDigest,
             #[serde(default)]
             dependencies: BTreeSet<DependencyDeclaration>,
@@ -1343,6 +1728,16 @@ impl<'de> Deserialize<'de> for ComponentDescriptor {
             false,
         )
         .map(|descriptor| descriptor.with_execution(execution))
+        .and_then(|descriptor| {
+            let descriptor = if let Some(scope) = wire.instance_scope {
+                descriptor.with_controller_placement(scope, wire.supported_target_kinds)?
+            } else if !wire.supported_target_kinds.is_empty() {
+                return Err(ProviderContractError::ControllerScopeInvalid);
+            } else {
+                descriptor
+            };
+            descriptor.with_target_capabilities(wire.target_capabilities)
+        })
         .and_then(|descriptor| descriptor.with_state_namespaces(wire.state_namespaces))
         .map_err(serde::de::Error::custom)
     }
@@ -1466,6 +1861,8 @@ redacted_debug!(ExtensionSchemaRegistration);
 #[serde(rename_all = "camelCase")]
 pub struct ResourceApiBinding {
     resource_type: ResourceTypeName,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    placement_anchor: Option<PlacementAnchor>,
     base_spec_version: SchemaVersion,
     base_spec_fingerprint: SchemaFingerprint,
     base_status_version: SchemaVersion,
@@ -1490,6 +1887,67 @@ impl ResourceApiBinding {
         spec_extension: Option<ExtensionSchemaRegistration>,
         status_extension: Option<ExtensionSchemaRegistration>,
     ) -> Result<Self, ProviderContractError> {
+        let placement_anchor = PlacementAnchor::canonical_for(&resource_type);
+        Self::new_inner(
+            resource_type,
+            placement_anchor,
+            base_spec_version,
+            base_spec_fingerprint,
+            base_status_version,
+            base_status_fingerprint,
+            capability_matrix,
+            spec_extension,
+            status_extension,
+        )
+    }
+
+    /// Construct a ResourceApiBinding with an explicit closed placement
+    /// anchor.
+    #[allow(clippy::too_many_arguments)]
+    pub fn new_with_placement(
+        resource_type: ResourceTypeName,
+        base_spec_version: SchemaVersion,
+        base_spec_fingerprint: SchemaFingerprint,
+        base_status_version: SchemaVersion,
+        base_status_fingerprint: SchemaFingerprint,
+        capability_matrix: StandardCapabilityMatrix,
+        spec_extension: Option<ExtensionSchemaRegistration>,
+        status_extension: Option<ExtensionSchemaRegistration>,
+        placement_anchor: PlacementAnchor,
+    ) -> Result<Self, ProviderContractError> {
+        placement_anchor
+            .validate_for(&resource_type)
+            .map_err(|_| ProviderContractError::PlacementAnchorMismatch)?;
+        Self::new_inner(
+            resource_type,
+            Some(placement_anchor),
+            base_spec_version,
+            base_spec_fingerprint,
+            base_status_version,
+            base_status_fingerprint,
+            capability_matrix,
+            spec_extension,
+            status_extension,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn new_inner(
+        resource_type: ResourceTypeName,
+        placement_anchor: Option<PlacementAnchor>,
+        base_spec_version: SchemaVersion,
+        base_spec_fingerprint: SchemaFingerprint,
+        base_status_version: SchemaVersion,
+        base_status_fingerprint: SchemaFingerprint,
+        capability_matrix: StandardCapabilityMatrix,
+        spec_extension: Option<ExtensionSchemaRegistration>,
+        status_extension: Option<ExtensionSchemaRegistration>,
+    ) -> Result<Self, ProviderContractError> {
+        if let Some(placement_anchor) = placement_anchor {
+            placement_anchor
+                .validate_for(&resource_type)
+                .map_err(|_| ProviderContractError::PlacementAnchorMismatch)?;
+        }
         for registration in [spec_extension.as_ref(), status_extension.as_ref()]
             .into_iter()
             .flatten()
@@ -1500,6 +1958,7 @@ impl ResourceApiBinding {
         }
         Ok(Self {
             resource_type,
+            placement_anchor,
             base_spec_version,
             base_spec_fingerprint,
             base_status_version,
@@ -1513,6 +1972,12 @@ impl ResourceApiBinding {
     /// The bound ResourceType.
     pub const fn resource_type(&self) -> &ResourceTypeName {
         &self.resource_type
+    }
+
+    /// Return the registered placement anchor, if this binding was built
+    /// through the legacy constructor for an unknown qualified type.
+    pub const fn placement_anchor(&self) -> Option<&PlacementAnchor> {
+        self.placement_anchor.as_ref()
     }
 
     /// The base spec schema version this binding implements.
@@ -1570,6 +2035,8 @@ impl<'de> Deserialize<'de> for ResourceApiBinding {
         #[serde(rename_all = "camelCase", deny_unknown_fields)]
         struct Wire {
             resource_type: ResourceTypeName,
+            #[serde(default)]
+            placement_anchor: Option<PlacementAnchor>,
             base_spec_version: SchemaVersion,
             base_spec_fingerprint: SchemaFingerprint,
             base_status_version: SchemaVersion,
@@ -1582,8 +2049,9 @@ impl<'de> Deserialize<'de> for ResourceApiBinding {
             status_extension: Option<ExtensionSchemaRegistration>,
         }
         let wire = Wire::deserialize(deserializer)?;
-        Self::new(
+        Self::new_inner(
             wire.resource_type,
+            wire.placement_anchor,
             wire.base_spec_version,
             wire.base_spec_fingerprint,
             wire.base_status_version,
@@ -1936,6 +2404,8 @@ pub struct ProviderManifest {
     components: Vec<ComponentDescriptor>,
     api_bindings: Vec<ResourceApiBinding>,
     projection_factories: Vec<ProjectionFactory>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    runtime_artifacts: Vec<TargetRuntimeArtifacts>,
     upgrade_policy: UpgradePolicy,
 }
 
@@ -1987,12 +2457,20 @@ impl ProviderManifest {
         }
         let mut bound_types = BTreeSet::new();
         for binding in &api_bindings {
+            if binding.placement_anchor().is_none() {
+                return Err(ProviderContractError::PlacementAnchorMissing);
+            }
             if !bound_types.insert(binding.resource_type().clone()) {
                 return Err(ProviderContractError::DuplicateDeclaration);
             }
             if !owned_types.contains(binding.resource_type()) {
                 return Err(ProviderContractError::MissingRequiredField);
             }
+        }
+        if owned_types.iter().any(|resource_type| {
+            !bound_types.contains(resource_type)
+        }) {
+            return Err(ProviderContractError::MissingRequiredField);
         }
         for factory in &projection_factories {
             if !bound_types.contains(factory.service_type()) {
@@ -2017,8 +2495,132 @@ impl ProviderManifest {
             components,
             api_bindings,
             projection_factories,
+            runtime_artifacts: Vec::new(),
             upgrade_policy,
         })
+    }
+
+    /// Validate the shared Host and Guest daemon/broker artifact declarations.
+    pub fn validate_runtime_artifacts(
+        entries: impl IntoIterator<Item = TargetRuntimeArtifacts>,
+    ) -> Result<(), ProviderContractError> {
+        let entries: Vec<_> = entries.into_iter().collect();
+        if entries.len() > 3 {
+            return Err(ProviderContractError::BoundExceeded);
+        }
+        let mut seen = BTreeSet::new();
+        for entry in &entries {
+            if !seen.insert(entry.target_kind()) {
+                return Err(ProviderContractError::DuplicateDeclaration);
+            }
+        }
+        let host = entries
+            .iter()
+            .find(|entry| entry.target_kind() == ControllerTargetKind::Host);
+        let guest = entries
+            .iter()
+            .find(|entry| entry.target_kind() == ControllerTargetKind::Guest);
+        if let (Some(host), Some(guest)) = (host, guest)
+            && (host.d2bd_digest() != guest.d2bd_digest()
+                || host.broker_digest() != guest.broker_digest())
+        {
+            return Err(ProviderContractError::SharedRuntimeArtifactMismatch);
+        }
+        Ok(())
+    }
+
+    /// Attach the signed shared daemon and broker artifacts to this manifest.
+    pub fn with_target_runtime_artifacts(
+        mut self,
+        entries: impl IntoIterator<Item = TargetRuntimeArtifacts>,
+    ) -> Result<Self, ProviderContractError> {
+        let mut entries: Vec<_> = entries.into_iter().collect();
+        Self::validate_runtime_artifacts(entries.clone())?;
+        entries.sort_by_key(TargetRuntimeArtifacts::target_kind);
+        self.runtime_artifacts = entries;
+        Ok(self)
+    }
+
+    /// Validate every placement, component artifact, effect, and shared
+    /// runtime declaration needed before installation.
+    pub fn validate_installation_contract(&self) -> Result<(), ProviderContractError> {
+        for component in &self.components {
+            component.validate_role_contract(&self.artifact_id)?;
+            if component.component_type() == ComponentType::Controller {
+                let scope = component
+                    .instance_scope()
+                    .ok_or(ProviderContractError::ControllerScopeMissing)?;
+                let expected_anchor = match scope {
+                    ControllerInstanceScope::ZoneSingleton => PlacementAnchor::Zone,
+                    ControllerInstanceScope::FixedExecutionTarget
+                    | ControllerInstanceScope::PerResourceTarget => PlacementAnchor::ExecutionRef,
+                };
+                for resource_type in component.exported_resource_types() {
+                    let binding = self
+                        .binding_for(resource_type)
+                        .ok_or(ProviderContractError::MissingRequiredField)?;
+                    let placement_anchor = binding
+                        .placement_anchor()
+                        .ok_or(ProviderContractError::PlacementAnchorMissing)?;
+                    if PlacementAnchor::canonical_for(resource_type)
+                        .is_some_and(|canonical_anchor| canonical_anchor != *placement_anchor)
+                    {
+                        return Err(ProviderContractError::PlacementAnchorMismatch);
+                    }
+                    if *placement_anchor != expected_anchor {
+                        return Err(ProviderContractError::ControllerScopeInvalid);
+                    }
+                }
+            }
+        }
+        let mut required_targets = BTreeSet::new();
+        for component in &self.components {
+            for capability in component.target_capabilities() {
+                if matches!(
+                    capability.target_kind(),
+                    ControllerTargetKind::Host | ControllerTargetKind::Guest
+                ) {
+                    required_targets.insert(capability.target_kind());
+                }
+            }
+        }
+        Self::validate_runtime_artifacts(self.runtime_artifacts.clone())?;
+        for target in required_targets {
+            if !self
+                .runtime_artifacts
+                .iter()
+                .any(|entry| entry.target_kind() == target)
+            {
+                return Err(ProviderContractError::RuntimeArtifactMissing);
+            }
+        }
+        Ok(())
+    }
+
+    /// Validate the signed EffectPort requirements against one target
+    /// profile's supported classes.
+    pub fn validate_target_effects(
+        &self,
+        target_kind: ControllerTargetKind,
+        supported_effect_classes: &BTreeSet<EffectPortClass>,
+    ) -> Result<(), ProviderContractError> {
+        let mut advertised = false;
+        for component in &self.components {
+            let Some(capability) = component.target_capability(target_kind) else {
+                continue;
+            };
+            advertised = true;
+            if !capability
+                .required_effect_classes()
+                .is_subset(supported_effect_classes)
+            {
+                return Err(ProviderContractError::EffectClassUnsupported);
+            }
+        }
+        if !advertised {
+            return Err(ProviderContractError::TargetCapabilityMissing);
+        }
+        Ok(())
     }
 
     /// The artifact identifier a Provider spec selects this manifest with.
@@ -2056,6 +2658,11 @@ impl ProviderManifest {
         &self.projection_factories
     }
 
+    /// Borrow the shared daemon and broker artifacts by target kind.
+    pub fn runtime_artifacts(&self) -> &[TargetRuntimeArtifacts] {
+        &self.runtime_artifacts
+    }
+
     /// The upgrade, drain, and restart policy.
     pub const fn upgrade_policy(&self) -> &UpgradePolicy {
         &self.upgrade_policy
@@ -2091,6 +2698,7 @@ impl ProviderManifest {
         required_fingerprint: &SchemaFingerprint,
     ) -> Result<(), ProviderContractError> {
         self.trust.admit()?;
+        self.validate_installation_contract()?;
         self.compatibility
             .admits(required_major, required_minor, required_fingerprint)
     }
@@ -2120,6 +2728,8 @@ impl<'de> Deserialize<'de> for ProviderManifest {
             api_bindings: Vec<ResourceApiBinding>,
             #[serde(default)]
             projection_factories: Vec<ProjectionFactory>,
+            #[serde(default)]
+            runtime_artifacts: Vec<TargetRuntimeArtifacts>,
             upgrade_policy: UpgradePolicy,
         }
         let wire = Wire::deserialize(deserializer)?;
@@ -2133,6 +2743,9 @@ impl<'de> Deserialize<'de> for ProviderManifest {
             wire.projection_factories,
             wire.upgrade_policy,
         )
+        .and_then(|manifest| {
+            manifest.with_target_runtime_artifacts(wire.runtime_artifacts)
+        })
         .map_err(serde::de::Error::custom)
     }
 }
@@ -2219,7 +2832,7 @@ mod tests {
         "sha256:0000000000000000000000000000000000000000000000000000000000000002";
 
     const MINIMAL_PROVIDER_SPEC: &[u8] = br#"{"artifactId":"provider-wayland","config":{}}"#;
-    const STATEFUL_COMPONENT: &[u8] = br#"{"allowedDomains":["system"],"cardinality":1,"componentId":"volume-controller","componentType":"controller","configDigest":"sha256:0000000000000000000000000000000000000000000000000000000000000002","declaresStateVolume":true,"dependencies":[{"alias":"volume","required":true}],"exportedMethods":["assess-update"],"exportedResourceTypes":["Volume"],"stateNamespaces":[{"id":"main-state","kind":"state","migrationPolicy":"pre-launch-required","persistenceClass":"persistent","placementMode":"guest-local","quotaBytes":4096,"schemaDigest":"sha256:0000000000000000000000000000000000000000000000000000000000000001","schemaId":"example-provider.d2bus.org/controller/main-state","schemaVersion":"1.0","sealingRequired":false,"sensitivityClass":"private","storageNeed":"secret","views":{"main":{"rights":["read","write","create","delete","traverse"]}}}]}"#;
+    const STATEFUL_COMPONENT: &[u8] = br#"{"allowedDomains":["system"],"binaryRef":"volume-controller","cardinality":1,"componentId":"volume-controller","componentType":"controller","configDigest":"sha256:0000000000000000000000000000000000000000000000000000000000000002","declaresStateVolume":true,"dependencies":[{"alias":"volume","required":true}],"exportedMethods":["assess-update"],"exportedResourceTypes":["Volume"],"instanceScope":"per-resource-target","stateNamespaces":[{"id":"main-state","kind":"state","migrationPolicy":"pre-launch-required","persistenceClass":"persistent","placementMode":"guest-local","quotaBytes":4096,"schemaDigest":"sha256:0000000000000000000000000000000000000000000000000000000000000001","schemaId":"example-provider.d2bus.org/controller/main-state","schemaVersion":"1.0","sealingRequired":false,"sensitivityClass":"private","storageNeed":"secret","views":{"main":{"rights":["read","write","create","delete","traverse"]}}}],"supportedTargetKinds":["host","guest"],"targetCapabilities":[{"artifactDigest":"sha256:0000000000000000000000000000000000000000000000000000000000000002","requiredEffectClasses":["storage"],"targetKind":"host"},{"artifactDigest":"sha256:0000000000000000000000000000000000000000000000000000000000000002","requiredEffectClasses":["storage"],"targetKind":"guest"}]}"#;
 
     fn fingerprint(hex_tail: &str) -> SchemaFingerprint {
         SchemaFingerprint::parse(format!("sha256:{}{hex_tail}", "0".repeat(63))).unwrap()
@@ -2278,6 +2891,29 @@ mod tests {
             false,
         )
         .unwrap()
+        .with_execution(ComponentExecution::Launchable {
+            binary_ref: BinaryRef::parse("volume-controller").unwrap(),
+        })
+        .with_controller_placement(
+            ControllerInstanceScope::PerResourceTarget,
+            [ControllerTargetKind::Host, ControllerTargetKind::Guest],
+        )
+        .unwrap()
+        .with_target_capabilities([
+            ComponentTargetCapability::new(
+                ControllerTargetKind::Host,
+                ArtifactDigest::parse(DIGEST_B).unwrap(),
+                [EffectPortClass::Storage],
+            )
+            .unwrap(),
+            ComponentTargetCapability::new(
+                ControllerTargetKind::Guest,
+                ArtifactDigest::parse(DIGEST_B).unwrap(),
+                [EffectPortClass::Storage],
+            )
+            .unwrap(),
+        ])
+        .unwrap()
     }
 
     fn state_views() -> BTreeMap<String, ComponentStateView> {
@@ -2328,7 +2964,7 @@ mod tests {
     }
 
     fn binding() -> ResourceApiBinding {
-        ResourceApiBinding::new(
+        ResourceApiBinding::new_with_placement(
             ResourceTypeName::parse("Volume").unwrap(),
             SchemaVersion::new(1, 0).unwrap(),
             fingerprint("2"),
@@ -2341,6 +2977,7 @@ mod tests {
             .unwrap(),
             None,
             None,
+            PlacementAnchor::ExecutionRef,
         )
         .unwrap()
     }
@@ -2411,6 +3048,21 @@ mod tests {
             },
         )
         .unwrap()
+        .with_target_runtime_artifacts([
+            TargetRuntimeArtifacts::new(
+                ControllerTargetKind::Host,
+                ArtifactDigest::parse(DIGEST_A).unwrap(),
+                ArtifactDigest::parse(DIGEST_A).unwrap(),
+            )
+            .unwrap(),
+            TargetRuntimeArtifacts::new(
+                ControllerTargetKind::Guest,
+                ArtifactDigest::parse(DIGEST_A).unwrap(),
+                ArtifactDigest::parse(DIGEST_A).unwrap(),
+            )
+            .unwrap(),
+        ])
+        .unwrap()
     }
 
     fn manifest_with_projection_factory(
@@ -2429,7 +3081,23 @@ mod tests {
             false,
         )
         .unwrap();
-        let binding = ResourceApiBinding::new(
+        let controller = controller
+            .with_execution(ComponentExecution::Launchable {
+                binary_ref: BinaryRef::parse("semantic-controller").unwrap(),
+            })
+            .with_controller_placement(
+                ControllerInstanceScope::ZoneSingleton,
+                [ControllerTargetKind::Zone],
+            )
+            .unwrap()
+            .with_target_capabilities([ComponentTargetCapability::new(
+                ControllerTargetKind::Zone,
+                ArtifactDigest::parse(DIGEST_A).unwrap(),
+                [EffectPortClass::Runtime],
+            )
+            .unwrap()])
+            .unwrap();
+        let binding = ResourceApiBinding::new_with_placement(
             service_type,
             SchemaVersion::new(1, 0).unwrap(),
             fingerprint("2"),
@@ -2438,6 +3106,7 @@ mod tests {
             StandardCapabilityMatrix::default(),
             None,
             None,
+            PlacementAnchor::Zone,
         )
         .unwrap();
         ProviderManifest::new(
@@ -2454,6 +3123,244 @@ mod tests {
                 preserves_durable_state: true,
             },
         )
+    }
+
+    #[test]
+    fn controller_placement_contract_round_trips_and_requires_one_instance_scope() {
+        let component = ComponentDescriptor::new(
+            BoundedToken::parse("process-controller").unwrap(),
+            ComponentType::Controller,
+            [
+                ResourceTypeName::parse("Process").unwrap(),
+                ResourceTypeName::parse("EphemeralProcess").unwrap(),
+            ],
+            [BoundedToken::parse("assess-update").unwrap()],
+            [ExecutionDomain::System],
+            32,
+            ArtifactDigest::parse(DIGEST_A).unwrap(),
+            [],
+            false,
+        )
+        .unwrap()
+        .with_execution(ComponentExecution::Launchable {
+            binary_ref: BinaryRef::parse("process-controller").unwrap(),
+        })
+        .with_controller_placement(
+            ControllerInstanceScope::PerResourceTarget,
+            [ControllerTargetKind::Host, ControllerTargetKind::Guest],
+        )
+        .unwrap()
+        .with_target_capabilities([
+            ComponentTargetCapability::new(
+                ControllerTargetKind::Host,
+                ArtifactDigest::parse(DIGEST_A).unwrap(),
+                [EffectPortClass::Process],
+            )
+            .unwrap(),
+            ComponentTargetCapability::new(
+                ControllerTargetKind::Guest,
+                ArtifactDigest::parse(DIGEST_A).unwrap(),
+                [EffectPortClass::Process],
+            )
+            .unwrap(),
+        ])
+        .unwrap();
+
+        let bytes = canonical_json_bytes(&component).unwrap();
+        let parsed: ComponentDescriptor = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(parsed, component);
+        assert_eq!(
+            parsed.instance_scope(),
+            Some(ControllerInstanceScope::PerResourceTarget)
+        );
+        assert_eq!(
+            parsed.supported_target_kinds(),
+            &BTreeSet::from([ControllerTargetKind::Host, ControllerTargetKind::Guest])
+        );
+        assert_eq!(parsed.target_capabilities().len(), 2);
+    }
+
+    #[test]
+    fn placement_anchor_is_registered_and_rejects_incompatible_resource_schema() {
+        let process = ResourceTypeName::parse("Process").unwrap();
+        let valid = ResourceApiBinding::new_with_placement(
+            process.clone(),
+            SchemaVersion::new(1, 0).unwrap(),
+            fingerprint("2"),
+            SchemaVersion::new(1, 0).unwrap(),
+            fingerprint("3"),
+            StandardCapabilityMatrix::default(),
+            None,
+            None,
+            PlacementAnchor::ExecutionRef,
+        )
+        .unwrap();
+        assert_eq!(valid.placement_anchor(), Some(&PlacementAnchor::ExecutionRef));
+
+        assert_eq!(
+            ResourceApiBinding::new_with_placement(
+                process,
+                SchemaVersion::new(1, 0).unwrap(),
+                fingerprint("2"),
+                SchemaVersion::new(1, 0).unwrap(),
+                fingerprint("3"),
+                StandardCapabilityMatrix::default(),
+                None,
+                None,
+                PlacementAnchor::Zone,
+            )
+            .unwrap_err(),
+            ProviderContractError::PlacementAnchorMismatch
+        );
+    }
+
+    #[test]
+    fn same_platform_runtime_artifacts_must_match_across_host_and_guest() {
+        let host = TargetRuntimeArtifacts::new(
+            ControllerTargetKind::Host,
+            ArtifactDigest::parse(DIGEST_A).unwrap(),
+            ArtifactDigest::parse(DIGEST_A).unwrap(),
+        )
+        .unwrap();
+        let guest = TargetRuntimeArtifacts::new(
+            ControllerTargetKind::Guest,
+            ArtifactDigest::parse(DIGEST_B).unwrap(),
+            ArtifactDigest::parse(DIGEST_A).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(
+            ProviderManifest::validate_runtime_artifacts([host, guest]),
+            Err(ProviderContractError::SharedRuntimeArtifactMismatch)
+        );
+    }
+
+    #[test]
+    fn same_platform_controller_components_use_one_artifact_digest() {
+        let mut subject = manifest();
+        subject.components[0].target_capabilities[1].artifact_digest =
+            ArtifactDigest::parse(DIGEST_A).unwrap();
+
+        assert_eq!(
+            subject.validate_installation_contract(),
+            Err(ProviderContractError::ComponentArtifactMismatch)
+        );
+    }
+
+    #[test]
+    fn zone_singleton_cannot_own_execution_ref_resources() {
+        let mut subject = manifest();
+        let process = ResourceTypeName::parse("Process").unwrap();
+        subject.components[0].exported_resource_types = BTreeSet::from([process.clone()]);
+        subject.api_bindings[0].resource_type = process;
+        subject.api_bindings[0].placement_anchor = Some(PlacementAnchor::ExecutionRef);
+        let component = &mut subject.components[0];
+        component.instance_scope = Some(ControllerInstanceScope::ZoneSingleton);
+        component.supported_target_kinds = BTreeSet::from([ControllerTargetKind::Zone]);
+        component.target_capabilities = vec![
+            ComponentTargetCapability::new(
+                ControllerTargetKind::Zone,
+                ArtifactDigest::parse(DIGEST_B).unwrap(),
+                [],
+            )
+            .unwrap(),
+        ];
+
+        assert_eq!(
+            subject.validate_installation_contract(),
+            Err(ProviderContractError::ControllerScopeInvalid)
+        );
+    }
+
+    #[test]
+    fn per_resource_target_cannot_own_zone_resources() {
+        let mut subject = manifest();
+        let wayland =
+            ResourceTypeName::parse("display-wayland.d2bus.org.WaylandSession").unwrap();
+        subject.components[0].exported_resource_types = BTreeSet::from([wayland.clone()]);
+        subject.api_bindings[0].resource_type = wayland;
+        subject.api_bindings[0].placement_anchor = Some(PlacementAnchor::Zone);
+        subject.components[0].instance_scope = Some(ControllerInstanceScope::PerResourceTarget);
+        subject.components[0].supported_target_kinds =
+            BTreeSet::from([ControllerTargetKind::Host, ControllerTargetKind::Guest]);
+        subject.components[0].target_capabilities = vec![
+            ComponentTargetCapability::new(
+                ControllerTargetKind::Host,
+                ArtifactDigest::parse(DIGEST_B).unwrap(),
+                [],
+            )
+            .unwrap(),
+            ComponentTargetCapability::new(
+                ControllerTargetKind::Guest,
+                ArtifactDigest::parse(DIGEST_B).unwrap(),
+                [],
+            )
+            .unwrap(),
+        ];
+
+        assert_eq!(
+            subject.validate_installation_contract(),
+            Err(ProviderContractError::ControllerScopeInvalid)
+        );
+    }
+
+    #[test]
+    fn volume_cannot_bypass_controller_scope_admission() {
+        let mut subject = manifest();
+        subject.api_bindings[0].placement_anchor = Some(PlacementAnchor::Zone);
+
+        assert_eq!(
+            subject.validate_installation_contract(),
+            Err(ProviderContractError::ControllerScopeInvalid)
+        );
+    }
+
+    #[test]
+    fn installation_validation_fences_missing_scope_and_runtime_artifacts() {
+        let mut missing_runtime = manifest();
+        missing_runtime.runtime_artifacts.clear();
+        assert_eq!(
+            missing_runtime.validate_installation_contract(),
+            Err(ProviderContractError::RuntimeArtifactMissing)
+        );
+
+        let mut missing_scope = controller();
+        missing_scope.instance_scope = None;
+        missing_scope.supported_target_kinds.clear();
+        missing_scope.target_capabilities.clear();
+        let invalid = ProviderManifest::new(
+            ArtifactId::parse("provider-volume-local").unwrap(),
+            digests(),
+            trusted(),
+            compatibility(),
+            [missing_scope],
+            [binding()],
+            [],
+            UpgradePolicy {
+                drain_before_upgrade: true,
+                max_automatic_disposition: UpgradeDisposition::InPlace,
+                preserves_durable_state: true,
+            },
+        )
+        .unwrap()
+        .with_target_runtime_artifacts([
+            TargetRuntimeArtifacts::new(
+                ControllerTargetKind::Host,
+                ArtifactDigest::parse(DIGEST_A).unwrap(),
+                ArtifactDigest::parse(DIGEST_A).unwrap(),
+            )
+            .unwrap(),
+            TargetRuntimeArtifacts::new(
+                ControllerTargetKind::Guest,
+                ArtifactDigest::parse(DIGEST_A).unwrap(),
+                ArtifactDigest::parse(DIGEST_A).unwrap(),
+            )
+            .unwrap(),
+        ])
+        .unwrap();
+        assert_eq!(
+            invalid.validate_installation_contract(),
+            Err(ProviderContractError::ControllerScopeMissing)
+        );
     }
 
     #[test]
@@ -2511,7 +3418,7 @@ mod tests {
         let parsed: ComponentDescriptor = serde_json::from_slice(&bytes).unwrap();
         assert!(parsed.state_namespaces().is_empty());
         assert!(!parsed.declares_state_volume());
-        assert_eq!(parsed.execution(), &ComponentExecution::InProcessBootstrap);
+        assert!(parsed.execution().is_launchable());
     }
 
     #[test]
@@ -2920,6 +3827,24 @@ mod tests {
     }
 
     #[test]
+    fn component_cardinality_is_bounded_before_installation() {
+        assert_eq!(
+            ComponentDescriptor::new(
+                BoundedToken::parse("bounded-controller").unwrap(),
+                ComponentType::Controller,
+                [ResourceTypeName::parse("Volume").unwrap()],
+                [],
+                [ExecutionDomain::System],
+                u32::MAX,
+                ArtifactDigest::parse(DIGEST_A).unwrap(),
+                [],
+                false,
+            ),
+            Err(ProviderContractError::BoundExceeded)
+        );
+    }
+
+    #[test]
     fn an_unlisted_optional_capability_is_not_supported() {
         let matrix = StandardCapabilityMatrix::new([
             (
@@ -3240,6 +4165,30 @@ mod tests {
             false,
         )
         .unwrap();
+        let duplicate_controller = duplicate_controller
+            .with_execution(ComponentExecution::Launchable {
+                binary_ref: BinaryRef::parse("second-volume-controller").unwrap(),
+            })
+            .with_controller_placement(
+                ControllerInstanceScope::PerResourceTarget,
+                [ControllerTargetKind::Host, ControllerTargetKind::Guest],
+            )
+            .unwrap()
+            .with_target_capabilities([
+                ComponentTargetCapability::new(
+                    ControllerTargetKind::Host,
+                    ArtifactDigest::parse(DIGEST_A).unwrap(),
+                    [EffectPortClass::Storage],
+                )
+                .unwrap(),
+                ComponentTargetCapability::new(
+                    ControllerTargetKind::Guest,
+                    ArtifactDigest::parse(DIGEST_A).unwrap(),
+                    [EffectPortClass::Storage],
+                )
+                .unwrap(),
+            ])
+            .unwrap();
         assert_eq!(
             ProviderManifest::new(
                 ArtifactId::parse("provider-volume-local").unwrap(),
@@ -3254,7 +4203,7 @@ mod tests {
             Err(ProviderContractError::DuplicateDeclaration)
         );
 
-        let unowned_binding = ResourceApiBinding::new(
+        let unowned_binding = ResourceApiBinding::new_with_placement(
             ResourceTypeName::parse("Network").unwrap(),
             SchemaVersion::new(1, 0).unwrap(),
             fingerprint("2"),
@@ -3263,6 +4212,7 @@ mod tests {
             StandardCapabilityMatrix::default(),
             None,
             None,
+            PlacementAnchor::Zone,
         )
         .unwrap();
         assert_eq!(

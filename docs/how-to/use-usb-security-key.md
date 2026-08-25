@@ -29,8 +29,8 @@ When the security-key proxy is active for a VM:
 - A host configured with d2b v0.4 or later.
 - A FIDO2-class device connected to the host (YubiKey 5, Security Key NFC,
   etc.).
-- The target VM has `guest.control.enable = true` (required for the guest
-  frontend DAG node to be supervised).
+- The target VM has `guest.componentSession.enable = true` (required for the
+  Guest frontend Process to be supervised).
 - You are **not** currently using `usbip.yubikey = true` on the same physical
   device for the same VM. Proxy and USBIP ownership of the same device are
   mutually exclusive; see

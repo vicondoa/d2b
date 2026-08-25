@@ -1,6 +1,6 @@
 ### Changed
 
-- `make test-host-integration` now builds the fixed nine host tools with local
+- `make test-host-integration` now builds the fixed eight host tools with local
   Bazel, injects them into the selected NixOS VM checks, and uploads successful
   dependency closures to a configured Attic cache without caching the VM test
   results themselves. When Attic or its configuration is unavailable, the lane

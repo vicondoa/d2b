@@ -14,14 +14,10 @@ use std::{
 };
 
 use d2b_contracts_broker::broker_wire::BrokerCallerRole;
+use d2b_contracts_resource::v3::execution_policy::{BoundedToken, ExecutionDomain};
 use d2b_contracts_resource::v3::{
-    execution_policy::{BoundedToken, ExecutionDomain},
-};
-use d2b_contracts_resource::v3::{
-    ControllerGeneration,
-    ResourceGeneration,
-    ResourceRef,
-    ResourceUid,
+    ControllerGeneration, ResourceGeneration, ResourceRef, ResourceUid, ZoneRevision,
+    process::ReadinessClass,
     process::{EphemeralProcessSpec, ProcessSpec},
 };
 use d2b_core::{
@@ -30,8 +26,9 @@ use d2b_core::{
 };
 use d2b_process_conformance::{
     AdoptionOutcome, CompiledDigests, ConfigurationDigest, IdentityBinding, LaunchTicket,
-    OperationBinding, ProcessConformanceError, ProcessIdentityDigest, ProcessLaunchEffectPort,
-    ProcessProvider, ProcessStatusReport, ReadinessExpectation, SandboxCompiler, StopClass,
+    GuestExecutionBinding, OperationBinding, ProcessConformanceError, ProcessIdentityDigest,
+    ProcessLaunchEffectPort, ProcessProvider, ProcessStatusReport, ReadinessExpectation,
+    SandboxCompiler, StopClass, execution_commitment,
 };
 use d2b_provider_supervisor::{
     BrokerProcessBackend, BrokerSystemdEffectOwner, BundleBackedLaunchResolver, ProviderSupervisor,
@@ -39,10 +36,17 @@ use d2b_provider_supervisor::{
 };
 use d2b_provider_system_minijail::{MinijailProcessProvider, launch::PlatformGate};
 use d2b_provider_system_systemd::SystemdProcessProvider;
+use d2bd_runtime::target_runtime::{ControllerProcessResource, DaemonMode};
+use d2bd_runtime::vm_start_support::{
+    is_durable_wayland_process_node, is_guest_owned_process_node,
+};
 use sha2::{Digest, Sha256};
+
+use crate::provider_effects::FixedEffectAdapter;
 
 /// The fixed process Provider names wired by the daemon.
 pub const FIXED_PROCESS_PROVIDER_NAMES: [&str; 2] = ["system-minijail", "system-systemd"];
+pub(crate) const GUEST_EXECUTION_UNAVAILABLE: &str = "provider-ticket:guest-execution-unavailable";
 
 type BrokerProcessSupervisor = ProviderSupervisor<BrokerProcessBackend<BundleBackedLaunchResolver>>;
 type BrokerSystemdSupervisor = ProviderSupervisor<SystemdProcessBackend<BrokerSystemdEffectOwner>>;
@@ -118,22 +122,30 @@ struct ManagedResource {
     identity: ProcessIdentityDigest,
     uid: ResourceUid,
     generation: ResourceGeneration,
+    controller_generation: ControllerGeneration,
+    execution_ref: ResourceRef,
 }
 
 fn resource_identity_matches(
     managed: &ManagedResource,
-    context: ProcessResourceContext<'_>,
+    context: &ProcessResourceContext<'_>,
 ) -> bool {
-    managed.uid == *context.resource_uid && managed.generation == context.resource_generation
+    managed.uid == *context.resource_uid
+        && managed.generation == context.resource_generation
+        && managed.controller_generation == context.controller_generation
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone)]
 pub(crate) struct ProcessResourceContext<'a> {
     pub(crate) resource_ref: &'a ResourceRef,
     pub(crate) resource_uid: &'a ResourceUid,
     pub(crate) resource_generation: ResourceGeneration,
+    pub(crate) resource_revision: ZoneRevision,
     pub(crate) provider_ref: &'a ResourceRef,
     pub(crate) controller_generation: ControllerGeneration,
+    pub(crate) guest_execution: Option<GuestExecutionBinding>,
+    /// Optional Guest selector for a shared Host execution reference.
+    pub(crate) target_ref: Option<ResourceRef>,
 }
 
 impl<'a> ProcessResourceContext<'a> {
@@ -141,16 +153,29 @@ impl<'a> ProcessResourceContext<'a> {
         resource_ref: &'a ResourceRef,
         resource_uid: &'a ResourceUid,
         resource_generation: ResourceGeneration,
+        resource_revision: ZoneRevision,
         provider_ref: &'a ResourceRef,
         controller_generation: ControllerGeneration,
+        target_ref: Option<ResourceRef>,
     ) -> Self {
         Self {
             resource_ref,
             resource_uid,
             resource_generation,
+            resource_revision,
             provider_ref,
             controller_generation,
+            guest_execution: None,
+            target_ref,
         }
+    }
+
+    pub(crate) fn with_guest_execution(
+        mut self,
+        binding: Option<&GuestExecutionBinding>,
+    ) -> Self {
+        self.guest_execution = binding.cloned();
+        self
     }
 }
 
@@ -231,6 +256,8 @@ pub struct ProductionProcessProviders {
     minijail: MinijailProcessProvider<BrokerProcessSupervisor>,
     systemd: SystemdProcessProvider<BrokerSystemdSupervisor>,
     bundle: BundleResolver,
+    mode: DaemonMode,
+    fixed_effect: FixedEffectAdapter,
     managed: Mutex<BTreeMap<(String, String), ManagedProcess>>,
     managed_resources: Mutex<BTreeMap<ResourceRef, ManagedResource>>,
 }
@@ -251,24 +278,42 @@ impl ProductionProcessProviders {
         broker_socket: impl Into<PathBuf>,
         caller_role: BrokerCallerRole,
     ) -> Self {
+        Self::new_for_mode(bundle, broker_socket, caller_role, DaemonMode::Host)
+    }
+
+    /// Construct both fixed process Providers over a mode-bound broker.
+    ///
+    /// The mode is selected once at construction. It is passed to both
+    /// concrete broker adapters and cannot be widened by a Process ticket.
+    pub fn new_for_mode(
+        bundle: BundleResolver,
+        broker_socket: impl Into<PathBuf>,
+        caller_role: BrokerCallerRole,
+        mode: DaemonMode,
+    ) -> Self {
         let broker_socket = broker_socket.into();
+        let fixed_socket = broker_socket.clone();
+        let daemon_uid = caller_uid(&caller_role);
         let resolver = BundleBackedLaunchResolver::new(bundle.clone()).with_observation_socket(
             broker_socket.clone(),
             Duration::from_secs(10),
             caller_role.clone(),
         );
-        let minijail_backend = BrokerProcessBackend::with_socket_and_role(
+        let minijail_backend = BrokerProcessBackend::with_socket_profile_and_role(
             resolver.clone(),
             broker_socket.clone(),
             Duration::from_secs(10),
+            mode.broker_profile(),
             caller_role.clone(),
         );
-        let systemd_owner = BrokerSystemdEffectOwner::with_socket(
+        let systemd_owner = BrokerSystemdEffectOwner::with_socket_profile_and_role(
             resolver,
             broker_socket,
             Duration::from_secs(10),
+            mode.broker_profile(),
             caller_role,
         );
+        let fixed_effect = FixedEffectAdapter::for_mode(mode, fixed_socket, daemon_uid);
         let platform_gate = detect_minijail_platform_gate();
         Self {
             minijail: MinijailProcessProvider::with_platform_gate(
@@ -279,9 +324,21 @@ impl ProductionProcessProviders {
                 SystemdProcessBackend::new(systemd_owner),
             )),
             bundle,
+            mode,
+            fixed_effect,
             managed: Mutex::new(BTreeMap::new()),
             managed_resources: Mutex::new(BTreeMap::new()),
         }
+    }
+
+    /// Return the fixed daemon mode bound to these Process Providers.
+    pub const fn mode(&self) -> DaemonMode {
+        self.mode
+    }
+
+    /// Return the broker profile sealed into both concrete Process adapters.
+    pub const fn broker_profile(&self) -> d2b_contracts_broker::broker_wire::BrokerProfile {
+        self.mode.broker_profile()
     }
 
     /// Borrow the daemon-owned minijail Provider.
@@ -299,29 +356,53 @@ impl ProductionProcessProviders {
         &FIXED_PROCESS_PROVIDER_NAMES
     }
 
+    /// Borrow the fixed mode-bound effect adapter used by controller
+    /// launches.
+    pub const fn fixed_effect(&self) -> &FixedEffectAdapter {
+        &self.fixed_effect
+    }
+
+    fn validate_execution_target(&self, target: &ResourceRef) -> Result<(), String> {
+        let expected = match self.mode {
+            DaemonMode::Host => "Host",
+            DaemonMode::Guest => "Guest",
+        };
+        if target.resource_type().as_str() == expected {
+            Ok(())
+        } else {
+            Err("process-execution-target-not-owned-by-daemon".to_owned())
+        }
+    }
+
     /// Return whether this node is a daemon-owned Provider process.
     pub fn supports_node(node: &ProcessNode) -> bool {
-        matches!(
-            node.role,
-            ProcessRole::SwtpmPreStartFlush
-                | ProcessRole::Swtpm
-                | ProcessRole::Virtiofsd
-                | ProcessRole::CloudHypervisorRunner
-                | ProcessRole::QemuMediaRunner
-                | ProcessRole::Gpu
-                | ProcessRole::GpuRenderNode
-                | ProcessRole::Audio
-                | ProcessRole::Video
-                | ProcessRole::VsockRelay
-                | ProcessRole::OtelHostBridge
-                | ProcessRole::Usbip
-                | ProcessRole::WaylandProxy
-        )
+        !is_guest_owned_process_node(node)
+            && !is_durable_wayland_process_node(node)
+            && matches!(
+                node.role,
+                ProcessRole::SwtpmPreStartFlush
+                    | ProcessRole::Swtpm
+                    | ProcessRole::Virtiofsd
+                    | ProcessRole::CloudHypervisorRunner
+                    | ProcessRole::QemuMediaRunner
+                    | ProcessRole::ActivationNixosRunner
+                    | ProcessRole::Gpu
+                    | ProcessRole::GpuRenderNode
+                    | ProcessRole::Audio
+                    | ProcessRole::Video
+                    | ProcessRole::VsockRelay
+                    | ProcessRole::OtelHostBridge
+                    | ProcessRole::Usbip
+                    | ProcessRole::WaylandProxy
+            )
     }
 
     /// Return whether this node remains supervised after its start step.
     pub fn is_long_lived(node: &ProcessNode) -> bool {
-        !matches!(node.role, ProcessRole::SwtpmPreStartFlush) && Self::supports_node(node)
+        !matches!(
+            node.role,
+            ProcessRole::SwtpmPreStartFlush | ProcessRole::ActivationNixosRunner
+        ) && Self::supports_node(node)
     }
 
     /// Return the stable role key used by the broker and daemon stop paths.
@@ -402,6 +483,16 @@ impl ProductionProcessProviders {
         node: &ProcessNode,
         timeout: Duration,
     ) -> Result<ProviderLaunch, String> {
+        if !Self::supports_node(node) {
+            return Err("provider-node-unsupported".to_owned());
+        }
+        let target = node
+            .execution_ref
+            .clone()
+            .unwrap_or_else(|| d2b_core::bundle_resolver::default_execution_ref(vm, &node.role));
+        self.validate_execution_target(&ResourceRef::parse(&target).map_err(|_| {
+            "process-execution-target-invalid".to_owned()
+        })?)?;
         let ticket = self.ticket_with_timeout(vm, node, timeout)?;
         let provider = self.provider_for(node);
         let report = match provider {
@@ -428,14 +519,19 @@ impl ProductionProcessProviders {
         spec: &ProcessSpec,
         timeout: Duration,
     ) -> Result<ProviderLaunch, String> {
+        self.validate_execution_target(spec.execution().execution_ref())?;
         let provider = managed_provider_from_ref(context.provider_ref)?;
+        validate_resource_execution_target(self.mode, &context, spec.execution())?;
         let ticket = resource_ticket(
             &self.bundle,
-            context,
+            &context,
             spec.execution(),
+            None,
             &serde_json::to_vec(spec).map_err(|_| "provider-ticket:serialization".to_owned())?,
             provider,
+            self.mode,
             timeout,
+            Some(spec.readiness().class()),
         )?;
         let report = match provider {
             ManagedProvider::Minijail => self
@@ -451,8 +547,10 @@ impl ProductionProcessProviders {
             context.resource_ref,
             context.resource_uid,
             context.resource_generation,
+            context.controller_generation,
             provider,
             report.identity,
+            spec.execution().execution_ref(),
         )?;
         Ok(ProviderLaunch {
             identity: report.identity,
@@ -467,14 +565,19 @@ impl ProductionProcessProviders {
         spec: &EphemeralProcessSpec,
         timeout: Duration,
     ) -> Result<ProviderLaunch, String> {
+        self.validate_execution_target(spec.execution().execution_ref())?;
         let provider = managed_provider_from_ref(context.provider_ref)?;
+        validate_resource_execution_target(self.mode, &context, spec.execution())?;
         let ticket = resource_ticket(
             &self.bundle,
-            context,
+            &context,
             spec.execution(),
+            spec.activation_input(),
             &serde_json::to_vec(spec).map_err(|_| "provider-ticket:serialization".to_owned())?,
             provider,
+            self.mode,
             timeout,
+            None,
         )?;
         let report = match provider {
             ManagedProvider::Minijail => self
@@ -490,12 +593,128 @@ impl ProductionProcessProviders {
             context.resource_ref,
             context.resource_uid,
             context.resource_generation,
+            context.controller_generation,
             provider,
             report.identity,
+            spec.execution().execution_ref(),
         )?;
         Ok(ProviderLaunch {
             identity: report.identity,
         })
+    }
+
+    /// Launch a signed target-local controller Process.
+    ///
+    /// The controller is represented by a normal Process ticket. The fixed
+    /// adapter validates the target mode first, then the selected Process
+    /// Provider delivers the ticket through its mode-bound broker backend.
+    pub(crate) async fn launch_controller(
+        &self,
+        resource: &ControllerProcessResource,
+        target_readiness_digest: ConfigurationDigest,
+        timeout: Duration,
+    ) -> Result<ProviderLaunch, String> {
+        self.validate_controller_target(resource)?;
+        let provider = managed_provider_from_ref(resource.process_provider_ref())?;
+        let ticket = controller_launch_ticket(
+            self.bundle.audit_bundle_hash(),
+            resource,
+            provider,
+            target_readiness_digest,
+            timeout,
+        )?;
+        self.fixed_effect
+            .validate_controller_ticket(&ticket)
+            .map_err(|error| error.to_string())?;
+        let report = match provider {
+            ManagedProvider::Minijail => self
+                .minijail
+                .launch(&ticket)
+                .await
+                .map_err(provider_error)?,
+            ManagedProvider::Systemd => {
+                self.systemd.launch(&ticket).await.map_err(provider_error)?
+            }
+        };
+        self.remember_resource(
+            resource.process_ref(),
+            resource.uid(),
+            resource.resource_generation(),
+            resource.controller_generation(),
+            provider,
+            report.identity,
+            resource.target(),
+        )?;
+        Ok(ProviderLaunch {
+            identity: report.identity,
+        })
+    }
+
+    /// Adopt a signed target-local controller Process after daemon restart.
+    pub(crate) async fn adopt_controller(
+        &self,
+        resource: &ControllerProcessResource,
+        target_readiness_digest: ConfigurationDigest,
+    ) -> Result<ProviderAdoption, String> {
+        self.validate_controller_target(resource)?;
+        let provider = managed_provider_from_ref(resource.process_provider_ref())?;
+        let ticket = controller_launch_ticket(
+            self.bundle.audit_bundle_hash(),
+            resource,
+            provider,
+            target_readiness_digest,
+            Duration::from_secs(30),
+        )?;
+        self.fixed_effect
+            .validate_controller_ticket(&ticket)
+            .map_err(|error| error.to_string())?;
+        let outcome = match provider {
+            ManagedProvider::Minijail => {
+                self.minijail.adopt(&ticket).await.map_err(provider_error)?
+            }
+            ManagedProvider::Systemd => {
+                self.systemd.adopt(&ticket).await.map_err(provider_error)?
+            }
+        };
+        match outcome {
+            AdoptionOutcome::Absent => Ok(ProviderAdoption::Absent),
+            AdoptionOutcome::Adopted(report) => {
+                self.remember_resource(
+                    resource.process_ref(),
+                    resource.uid(),
+                    resource.resource_generation(),
+                    resource.controller_generation(),
+                    provider,
+                    report.identity,
+                    resource.target(),
+                )?;
+                Ok(ProviderAdoption::Adopted(report))
+            }
+            AdoptionOutcome::Quarantined(report) => {
+                self.forget_resource(resource.process_ref());
+                Ok(ProviderAdoption::Quarantined(report))
+            }
+        }
+    }
+
+    fn validate_controller_target(
+        &self,
+        resource: &ControllerProcessResource,
+    ) -> Result<(), String> {
+        let expected = match self.mode {
+            DaemonMode::Host => "Host",
+            DaemonMode::Guest => "Guest",
+        };
+        if resource.target().resource_type().as_str() != expected {
+            return Err("provider-controller-target-denied".to_owned());
+        }
+        if !resource
+            .required_effect_classes()
+            .contains(&d2b_contracts_provider::v3::EffectPortClass::Process)
+        {
+            return Err("provider-controller-effect-class-denied".to_owned());
+        }
+        Ok(())
     }
 
     /// Adopt one durable Process resource with the controller generation
@@ -508,7 +727,9 @@ impl ProductionProcessProviders {
         self.adopt_resource_with_execution(
             context,
             spec.execution(),
+            None,
             &serde_json::to_vec(spec).map_err(|_| "provider-ticket:serialization".to_owned())?,
+            Some(spec.readiness().class()),
         )
         .await
     }
@@ -543,7 +764,9 @@ impl ProductionProcessProviders {
         self.adopt_resource_with_execution(
             context,
             spec.execution(),
+            spec.activation_input(),
             &serde_json::to_vec(spec).map_err(|_| "provider-ticket:serialization".to_owned())?,
+            None,
         )
         .await
     }
@@ -556,9 +779,11 @@ impl ProductionProcessProviders {
         spec: &ProcessSpec,
     ) -> Result<ProviderLiveness, String> {
         self.probe_resource_with_execution(
-            context,
+            &context,
             spec.execution(),
+            None,
             &serde_json::to_vec(spec).map_err(|_| "provider-ticket:serialization".to_owned())?,
+            Some(spec.readiness().class()),
         )
         .await
     }
@@ -571,9 +796,11 @@ impl ProductionProcessProviders {
         spec: &EphemeralProcessSpec,
     ) -> Result<ProviderLiveness, String> {
         self.probe_resource_with_execution(
-            context,
+            &context,
             spec.execution(),
+            spec.activation_input(),
             &serde_json::to_vec(spec).map_err(|_| "provider-ticket:serialization".to_owned())?,
+            None,
         )
         .await
     }
@@ -590,7 +817,9 @@ impl ProductionProcessProviders {
         self.stop_resource_with_execution(
             context,
             spec.execution(),
+            None,
             &serde_json::to_vec(spec).map_err(|_| "provider-ticket:serialization".to_owned())?,
+            Some(spec.readiness().class()),
             term_timeout,
             kill_timeout,
         )
@@ -609,7 +838,9 @@ impl ProductionProcessProviders {
         self.stop_resource_with_execution(
             context,
             spec.execution(),
+            spec.activation_input(),
             &serde_json::to_vec(spec).map_err(|_| "provider-ticket:serialization".to_owned())?,
+            None,
             term_timeout,
             kill_timeout,
         )
@@ -630,8 +861,11 @@ impl ProductionProcessProviders {
         else {
             return Ok(());
         };
-        if !resource_identity_matches(&managed, context) {
+        if !resource_identity_matches(&managed, &context) {
             return Err("provider-process-identity-changed".to_owned());
+        }
+        if !execution_target_allowed(self.mode, &managed.execution_ref) {
+            return Err(GUEST_EXECUTION_UNAVAILABLE.to_owned());
         }
         let result = match managed.provider {
             ManagedProvider::Minijail => self
@@ -672,16 +906,23 @@ impl ProductionProcessProviders {
         &self,
         context: ProcessResourceContext<'_>,
         execution: &d2b_contracts_resource::v3::process::ExecutionSpec,
+        activation_input: Option<&d2b_contracts_resource::v3::ActivationRunnerInput>,
         spec_bytes: &[u8],
+        readiness: Option<ReadinessClass>,
     ) -> Result<ProviderAdoption, String> {
+        self.validate_execution_target(execution.execution_ref())?;
         let provider = managed_provider_from_ref(context.provider_ref)?;
+        validate_resource_execution_target(self.mode, &context, execution)?;
         let ticket = resource_ticket(
             &self.bundle,
-            context,
+            &context,
             execution,
+            activation_input,
             spec_bytes,
             provider,
+            self.mode,
             Duration::from_secs(30),
+            readiness,
         )?;
         let outcome = match provider {
             ManagedProvider::Minijail => {
@@ -698,8 +939,10 @@ impl ProductionProcessProviders {
                     context.resource_ref,
                     context.resource_uid,
                     context.resource_generation,
+                    context.controller_generation,
                     provider,
                     report.identity,
+                    execution.execution_ref(),
                 )?;
                 Ok(ProviderAdoption::Adopted(report))
             }
@@ -712,18 +955,25 @@ impl ProductionProcessProviders {
 
     async fn probe_resource_with_execution(
         &self,
-        context: ProcessResourceContext<'_>,
+        context: &ProcessResourceContext<'_>,
         execution: &d2b_contracts_resource::v3::process::ExecutionSpec,
+        activation_input: Option<&d2b_contracts_resource::v3::ActivationRunnerInput>,
         spec_bytes: &[u8],
+        readiness: Option<ReadinessClass>,
     ) -> Result<ProviderLiveness, String> {
+        self.validate_execution_target(execution.execution_ref())?;
         let provider = managed_provider_from_ref(context.provider_ref)?;
+        validate_resource_execution_target(self.mode, &context, execution)?;
         let ticket = resource_ticket(
             &self.bundle,
-            context,
+            &context,
             execution,
+            activation_input,
             spec_bytes,
             provider,
+            self.mode,
             Duration::from_secs(30),
+            readiness,
         )?;
         let candidate = match provider {
             ManagedProvider::Minijail => self
@@ -763,10 +1013,13 @@ impl ProductionProcessProviders {
         &self,
         context: ProcessResourceContext<'_>,
         execution: &d2b_contracts_resource::v3::process::ExecutionSpec,
+        activation_input: Option<&d2b_contracts_resource::v3::ActivationRunnerInput>,
         spec_bytes: &[u8],
+        readiness: Option<ReadinessClass>,
         term_timeout: Duration,
         kill_timeout: Duration,
     ) -> Result<bool, String> {
+        validate_resource_execution_target(self.mode, &context, execution)?;
         let managed = self
             .managed_resources
             .lock()
@@ -774,8 +1027,7 @@ impl ProductionProcessProviders {
             .get(context.resource_ref)
             .cloned()
             .ok_or_else(|| "provider-process-not-found".to_owned())?;
-        if managed.uid != *context.resource_uid || managed.generation != context.resource_generation
-        {
+        if !resource_identity_matches(&managed, &context) {
             return Err("provider-process-identity-changed".to_owned());
         }
         match self
@@ -793,11 +1045,17 @@ impl ProductionProcessProviders {
         let deadline = Instant::now() + term_timeout;
         loop {
             match self
-                .probe_resource_with_execution(context, execution, spec_bytes)
+                .probe_resource_with_execution(
+                    &context,
+                    execution,
+                    activation_input,
+                    spec_bytes,
+                    readiness,
+                )
                 .await?
             {
                 ProviderLiveness::Exited => {
-                    self.finalize_resource(context).await?;
+                    self.finalize_resource(context.clone()).await?;
                     return Ok(false);
                 }
                 ProviderLiveness::Alive => {}
@@ -824,11 +1082,17 @@ impl ProductionProcessProviders {
         let kill_deadline = Instant::now() + kill_timeout;
         loop {
             match self
-                .probe_resource_with_execution(context, execution, spec_bytes)
+                .probe_resource_with_execution(
+                    &context,
+                    execution,
+                    activation_input,
+                    spec_bytes,
+                    readiness,
+                )
                 .await?
             {
                 ProviderLiveness::Exited => {
-                    self.finalize_resource(context).await?;
+                    self.finalize_resource(context.clone()).await?;
                     return Ok(true);
                 }
                 ProviderLiveness::Alive | ProviderLiveness::Unknown => {}
@@ -846,6 +1110,9 @@ impl ProductionProcessProviders {
         vm: &str,
         node: &ProcessNode,
     ) -> Result<ProviderAdoption, String> {
+        if !Self::supports_node(node) {
+            return Err("provider-node-unsupported".to_owned());
+        }
         let ticket = self.ticket(vm, node)?;
         let outcome = match self.provider_for(node) {
             ManagedProvider::Minijail => {
@@ -947,6 +1214,9 @@ impl ProductionProcessProviders {
         term_timeout: Duration,
         kill_timeout: Duration,
     ) -> Result<bool, String> {
+        if !Self::supports_node(node) {
+            return Err("provider-node-unsupported".to_owned());
+        }
         let key = (vm.to_owned(), Self::tracked_role_id(node));
         let managed = self
             .managed
@@ -1002,6 +1272,9 @@ impl ProductionProcessProviders {
 
     /// Finalize a terminal Provider process and remove its local authority.
     pub async fn finalize_node(&self, vm: &str, node: &ProcessNode) -> Result<(), String> {
+        if !Self::supports_node(node) {
+            return Err("provider-node-unsupported".to_owned());
+        }
         let key = (vm.to_owned(), Self::tracked_role_id(node));
         let Some(managed) = self
             .managed
@@ -1094,8 +1367,10 @@ impl ProductionProcessProviders {
         resource_ref: &ResourceRef,
         uid: &ResourceUid,
         generation: ResourceGeneration,
+        controller_generation: ControllerGeneration,
         provider: ManagedProvider,
         identity: ProcessIdentityDigest,
+        execution_ref: &ResourceRef,
     ) -> Result<(), String> {
         self.managed_resources
             .lock()
@@ -1107,6 +1382,8 @@ impl ProductionProcessProviders {
                     identity,
                     uid: uid.clone(),
                     generation,
+                    controller_generation,
+                    execution_ref: execution_ref.clone(),
                 },
             );
         Ok(())
@@ -1177,6 +1454,15 @@ fn provider_error(error: ProcessConformanceError) -> String {
     error.code().to_owned()
 }
 
+fn caller_uid(caller: &BrokerCallerRole) -> u32 {
+    match caller {
+        BrokerCallerRole::AdminUid { uid }
+        | BrokerCallerRole::LauncherUid { uid }
+        | BrokerCallerRole::RootUid { uid } => *uid,
+        BrokerCallerRole::NotAuthorized => 0,
+    }
+}
+
 fn managed_provider_from_ref(provider_ref: &ResourceRef) -> Result<ManagedProvider, String> {
     match provider_ref.name().as_str() {
         "system-minijail" => Ok(ManagedProvider::Minijail),
@@ -1185,21 +1471,198 @@ fn managed_provider_from_ref(provider_ref: &ResourceRef) -> Result<ManagedProvid
     }
 }
 
-fn resource_ticket(
-    bundle: &BundleResolver,
-    context: ProcessResourceContext<'_>,
-    execution: &d2b_contracts_resource::v3::process::ExecutionSpec,
-    spec_bytes: &[u8],
+fn controller_launch_ticket(
+    bundle_content_identity: &str,
+    resource: &ControllerProcessResource,
     provider: ManagedProvider,
+    target_readiness_digest: ConfigurationDigest,
     timeout: Duration,
 ) -> Result<LaunchTicket, String> {
+    let owner_provider = BoundedToken::parse(resource.provider_ref().name().as_str())
+        .map_err(|_| "provider-ticket:invalid-owner-provider")?;
+    let selected_provider = BoundedToken::parse(resource.process_provider_ref().name().as_str())
+        .map_err(|_| "provider-ticket:invalid-process-provider")?;
+    let component = resource.component_id().clone();
+    let operation_scope = format!(
+        "{}:{}:{}:{}",
+        component.as_str(),
+        resource.provider_generation().get(),
+        resource.controller_generation().get(),
+        resource.target_session_generation().get(),
+    );
+    let operation_uid = stable_uid(
+        "controller-launch",
+        &resource.process_ref().to_canonical_string(),
+        &operation_scope,
+        resource.resource_generation().get(),
+    );
+    let deadline_ms = timeout.as_millis().clamp(1, 900_000) as u32;
+    let operation = OperationBinding::new(operation_uid, deadline_ms)
+        .map_err(|_| "provider-ticket:invalid-operation")?;
+    let mut ticket = LaunchTicket::new(
+        resource.process_ref().clone(),
+        resource.uid().clone(),
+        resource.resource_generation(),
+        resource.controller_generation(),
+        owner_provider,
+        component.clone(),
+        component,
+        resource.target().clone(),
+        ExecutionDomain::System,
+        None,
+        selected_provider,
+        compiled_controller_digests(resource, provider, &target_readiness_digest),
+        operation,
+        required_identity(provider),
+    )
+    .map_err(|error| format!("provider-ticket:{}", error.code()))?;
+    let sandbox = SandboxCompiler
+        .compile_plan(
+            resource.process_spec().execution().sandbox(),
+            ExecutionDomain::System,
+            false,
+        )
+        .map_err(|error| format!("provider-ticket:{}", error.code()))?;
+    let signed_descriptor_digest = configuration_digest(
+        "signed-descriptor",
+        resource.signed_descriptor_digest().as_str(),
+    );
+    let commitment = execution_commitment(
+        bundle_content_identity,
+        ticket.execution_ref(),
+        ticket.target_ref(),
+        ticket.domain(),
+        ticket.user_ref(),
+        ticket.template(),
+        ticket.selected_provider(),
+    );
+    ticket = ticket
+        .with_resource_revision(resource.resource_revision())
+        .map_err(|error| format!("provider-ticket:{}", error.code()))?
+        .with_controller_launch_binding(
+            resource.provider_generation(),
+            resource.target_session_generation(),
+            signed_descriptor_digest,
+            target_readiness_digest,
+        )
+        .map_err(|error| format!("provider-ticket:{}", error.code()))?
+        .with_execution_commitment(commitment)
+        .map_err(|error| format!("provider-ticket:{}", error.code()))?
+        .with_sandbox_plan(sandbox)
+        .with_readiness(ReadinessExpectation::None);
+    Ok(ticket)
+}
+
+fn compiled_controller_digests(
+    resource: &ControllerProcessResource,
+    provider: ManagedProvider,
+    readiness: &ConfigurationDigest,
+) -> CompiledDigests {
+    fn digest(label: &str, bytes: &[u8]) -> ConfigurationDigest {
+        let mut hasher = Sha256::new();
+        hasher.update(b"d2bd-provider-controller-ticket-v1");
+        hasher.update(label.as_bytes());
+        hasher.update([0]);
+        hasher.update(bytes);
+        ConfigurationDigest::from_bytes(hasher.finalize().into())
+    }
+    let context = format!(
+        "{}:{}:{}:{}",
+        resource.process_ref().to_canonical_string(),
+        resource.signed_descriptor_digest().as_str(),
+        resource.artifact_digest().as_str(),
+        match provider {
+            ManagedProvider::Minijail => "system-minijail",
+            ManagedProvider::Systemd => "system-systemd",
+        },
+    );
+    let bytes = format!("{context}:{}", readiness.to_hex()).into_bytes();
+    CompiledDigests {
+        sandbox: digest("sandbox", &bytes),
+        budget: digest("budget", &bytes),
+        mounts: digest("mounts", &bytes),
+        devices: digest("devices", &bytes),
+        network: digest("network", &bytes),
+        endpoints: digest("endpoints", &bytes),
+        fd_table: digest("fd-table", &bytes),
+    }
+}
+
+fn configuration_digest(label: &str, value: &str) -> ConfigurationDigest {
+    let mut hasher = Sha256::new();
+    hasher.update(b"d2bd-provider-configuration-digest-v1");
+    hasher.update(label.as_bytes());
+    hasher.update([0]);
+    hasher.update(value.as_bytes());
+    ConfigurationDigest::from_bytes(hasher.finalize().into())
+}
+
+fn execution_target_allowed(mode: DaemonMode, execution_ref: &ResourceRef) -> bool {
+    match mode {
+        DaemonMode::Host => execution_ref.resource_type().as_str() == "Host",
+        DaemonMode::Guest => execution_ref.resource_type().as_str() == "Guest",
+    }
+}
+
+fn validate_resource_execution_target(
+    mode: DaemonMode,
+    context: &ProcessResourceContext<'_>,
+    execution: &d2b_contracts_resource::v3::process::ExecutionSpec,
+) -> Result<(), String> {
+    // A Host daemon has no authenticated cross-target Process session yet.
+    // Reject Guest refs before ticket construction so they cannot fall
+    // through to the Host broker's local systemd/minijail adapters.
+    let execution_ref = execution.execution_ref();
+    if !matches!(execution_ref.resource_type().as_str(), "Host" | "Guest") {
+        return Err("provider-ticket:invalid-execution-ref".to_owned());
+    }
+    if !execution_target_allowed(mode, execution_ref) {
+        return Err(match mode {
+            DaemonMode::Host => GUEST_EXECUTION_UNAVAILABLE,
+            DaemonMode::Guest => "provider-ticket:host-execution-denied",
+        }
+        .to_owned());
+    }
+    if execution_ref.resource_type().as_str() == "Host"
+        && let Some(target) = context.target_ref.as_ref()
+        && target.resource_type().as_str() != "Guest"
+    {
+        return Err("provider-ticket:invalid-target".to_owned());
+    }
+    Ok(())
+}
+
+fn resource_ticket(
+    bundle: &BundleResolver,
+    context: &ProcessResourceContext<'_>,
+    execution: &d2b_contracts_resource::v3::process::ExecutionSpec,
+    activation_input: Option<&d2b_contracts_resource::v3::ActivationRunnerInput>,
+    spec_bytes: &[u8],
+    provider: ManagedProvider,
+    mode: DaemonMode,
+    timeout: Duration,
+    readiness: Option<ReadinessClass>,
+) -> Result<LaunchTicket, String> {
+    validate_resource_execution_target(mode, context, execution)?;
     let execution_domain = match execution.domain().unwrap_or(ExecutionDomain::System) {
         ExecutionDomain::System => d2b_core::processes::ProcessExecutionDomain::System,
         ExecutionDomain::User => d2b_core::processes::ProcessExecutionDomain::User,
     };
     let user_ref = execution.user_ref().map(ResourceRef::to_canonical_string);
+    let target_vm_name = match execution.execution_ref().resource_type().as_str() {
+        "Guest" => Some(execution.execution_ref().name().as_str()),
+        "Host" => match context.target_ref.as_ref() {
+            Some(target) if target.resource_type().as_str() == "Guest" => {
+                Some(target.name().as_str())
+            }
+            Some(_) => return Err("provider-ticket:invalid-target".to_owned()),
+            None => None,
+        },
+        _ => return Err("provider-ticket:invalid-execution-ref".to_owned()),
+    };
     if bundle
-        .find_runner_intent_for_process(
+        .find_runner_intent_for_process_in_vm(
+            target_vm_name,
             &execution.execution_ref().to_canonical_string(),
             execution_domain,
             user_ref.as_deref(),
@@ -1222,7 +1685,7 @@ fn resource_ticket(
         generation,
     );
     let deadline_ms = timeout.as_millis().clamp(1, 900_000) as u32;
-    let ticket = LaunchTicket::new(
+    let mut ticket = LaunchTicket::new(
         context.resource_ref.clone(),
         context.resource_uid.clone(),
         context.resource_generation,
@@ -1240,6 +1703,40 @@ fn resource_ticket(
         required_identity(provider),
     )
     .map_err(|error| format!("provider-ticket:{}", error.code()))?;
+    if execution.execution_ref().resource_type().as_str() == "Host"
+        && let Some(target_ref) = context.target_ref.as_ref()
+    {
+        ticket = ticket
+            .with_target_ref(target_ref.clone())
+            .map_err(|error| format!("provider-ticket:{}", error.code()))?;
+    }
+    let ticket = match context.guest_execution.as_ref() {
+        Some(binding) if execution.execution_ref().resource_type().as_str() == "Guest" => ticket
+            .with_guest_execution_binding(binding.clone())
+            .map_err(|error| format!("provider-ticket:{}", error.code()))?,
+        Some(_) => {
+            return Err("provider-ticket:guest-binding-for-host".to_owned());
+        }
+        None if execution.execution_ref().resource_type().as_str() == "Guest" => {
+            return Err("provider-ticket:guest-binding-missing".to_owned());
+        }
+        None => ticket,
+    };
+    let ticket = match activation_input {
+        Some(input) => ticket
+            .with_activation_input(input.clone())
+            .map_err(|error| format!("provider-ticket:{}", error.code()))?,
+        None => ticket,
+    };
+    let commitment = execution_commitment(
+        bundle.audit_bundle_hash(),
+        ticket.execution_ref(),
+        ticket.target_ref(),
+        ticket.domain(),
+        ticket.user_ref(),
+        ticket.template(),
+        ticket.selected_provider(),
+    );
     let domain = execution.domain().unwrap_or(ExecutionDomain::System);
     let sandbox = if provider == ManagedProvider::Systemd {
         let spec = execution.sandbox();
@@ -1265,9 +1762,28 @@ fn resource_ticket(
             .compile_plan(execution.sandbox(), domain, false)
             .map_err(|error| format!("provider-ticket:{}", error.code()))?
     };
+    let readiness = resource_readiness_expectation(readiness, timeout)?;
     Ok(ticket
+        .with_resource_revision(context.resource_revision)
+        .map_err(|error| format!("provider-ticket:{}", error.code()))?
+        .with_execution_commitment(commitment)
+        .map_err(|error| format!("provider-ticket:{}", error.code()))?
         .with_sandbox_plan(sandbox)
-        .with_readiness(ReadinessExpectation::None))
+        .with_readiness(readiness))
+}
+
+fn resource_readiness_expectation(
+    readiness: Option<ReadinessClass>,
+    timeout: Duration,
+) -> Result<ReadinessExpectation, String> {
+    match readiness {
+        Some(ReadinessClass::ReadyCondition) => {
+            let timeout_ms = timeout.as_millis().clamp(1, 900_000) as u32;
+            ReadinessExpectation::condition(timeout_ms)
+                .map_err(|_| "provider-ticket:invalid-readiness".to_owned())
+        }
+        Some(ReadinessClass::ProviderDefined) | None => Ok(ReadinessExpectation::None),
+    }
 }
 
 fn compiled_resource_digests(
@@ -1323,7 +1839,12 @@ fn build_ticket(
     let process_name = stable_token(&node.id.0);
     let process_ref = ResourceRef::parse(&format!("{process_type}/{process_name}"))
         .map_err(|_| ProcessConformanceError::InvalidTicket)?;
-    let execution_ref = ResourceRef::parse(&format!("Guest/{vm}"))
+    let execution_ref = ResourceRef::parse(
+        &node
+            .execution_ref
+            .clone()
+            .unwrap_or_else(|| d2b_core::bundle_resolver::default_execution_ref(vm, &node.role)),
+    )
         .map_err(|_| ProcessConformanceError::InvalidTicket)?;
     let owner_provider =
         BoundedToken::parse(provider_name).map_err(|_| ProcessConformanceError::InvalidTicket)?;
@@ -1332,6 +1853,15 @@ fn build_ticket(
     let template = BoundedToken::parse(stable_token(&node.id.0))
         .map_err(|_| ProcessConformanceError::InvalidTicket)?;
     let selected_provider = owner_provider.clone();
+    let commitment = execution_commitment(
+        bundle.audit_bundle_hash(),
+        &execution_ref,
+        None,
+        ExecutionDomain::System,
+        None,
+        &template,
+        &selected_provider,
+    );
     let generation = stable_generation(bundle);
     let digests = compiled_digests(bundle, vm, node, provider);
     let operation_uid = stable_uid("operation", vm, &node.id.0, generation);
@@ -1352,7 +1882,10 @@ fn build_ticket(
         OperationBinding::new(operation_uid, deadline_ms)?,
         required_identity(provider),
     )?;
-    Ok(ticket.with_readiness(ReadinessExpectation::None))
+    Ok(ticket
+        .with_execution_commitment(commitment)
+        .map_err(|_| ProcessConformanceError::InvalidTicket)?
+        .with_readiness(ReadinessExpectation::None))
 }
 
 fn required_identity(provider: ManagedProvider) -> std::collections::BTreeSet<IdentityBinding> {
@@ -1481,6 +2014,68 @@ fn stable_token(value: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use d2b_contracts_provider::v3::{
+        ArtifactDigest, BinaryRef, ComponentDescriptor, ComponentExecution,
+        ComponentTargetCapability, ComponentType, ControllerInstanceScope, ControllerTargetKind,
+        EffectPortClass,
+    };
+    use d2b_contracts_resource::v3::{
+        ControllerGeneration, ResourceGeneration, ResourceRef, ResourceTypeName, ZoneId,
+        ZoneRevision,
+        execution_policy::{BoundedToken, ExecutionDomain},
+        identity::ReconnectGeneration,
+    };
+    use d2bd_runtime::target_runtime::ProviderDeployment;
+
+    fn controller_resource() -> ControllerProcessResource {
+        let digest = ArtifactDigest::parse(format!("sha256:{}", "a".repeat(64))).unwrap();
+        let descriptor = ComponentDescriptor::new(
+            BoundedToken::parse("process-controller").unwrap(),
+            ComponentType::Controller,
+            [ResourceTypeName::parse("Process").unwrap()],
+            [BoundedToken::parse("reconcile").unwrap()],
+            [ExecutionDomain::System],
+            8,
+            digest.clone(),
+            [],
+            false,
+        )
+        .unwrap()
+        .with_execution(ComponentExecution::Launchable {
+            binary_ref: BinaryRef::parse("process-controller").unwrap(),
+        })
+        .with_controller_placement(
+            ControllerInstanceScope::PerResourceTarget,
+            [ControllerTargetKind::Guest],
+        )
+        .unwrap()
+        .with_target_capabilities([ComponentTargetCapability::new(
+            ControllerTargetKind::Guest,
+            digest,
+            [EffectPortClass::Process],
+        )
+        .unwrap()])
+        .unwrap();
+        ProviderDeployment::new(
+            DaemonMode::Guest,
+            d2bd_runtime::target_runtime::AdmissionLimits::guest_default(),
+        )
+        .unwrap()
+        .create_controller_process(
+            ZoneId::parse("work").unwrap(),
+            ResourceRef::parse("Provider/runtime").unwrap(),
+            &descriptor,
+            ResourceGeneration::new(1).unwrap(),
+            ResourceGeneration::new(2).unwrap(),
+            ControllerGeneration::new(3).unwrap(),
+            ReconnectGeneration::new(4).unwrap(),
+            ZoneRevision::new(5),
+            ResourceRef::parse("Guest/workload").unwrap(),
+            ResourceRef::parse("Provider/system-systemd").unwrap(),
+            true,
+        )
+        .unwrap()
+    }
 
     #[test]
     fn stable_uids_are_uuid_v4_shaped_and_repeatable() {
@@ -1496,6 +2091,77 @@ mod tests {
         assert_eq!(stable_token("audio-sidecar"), "audio-sidecar");
         assert!(stable_token("/var/lib/d2b/audio").starts_with("process-"));
         assert!(stable_token("UpperCase").starts_with("process-"));
+    }
+
+    #[test]
+    fn durable_process_readiness_is_not_reduced_to_liveness() {
+        assert_eq!(
+            resource_readiness_expectation(
+                Some(ReadinessClass::ReadyCondition),
+                Duration::from_secs(7),
+            )
+            .expect("bounded readiness"),
+            ReadinessExpectation::Condition { timeout_ms: 7_000 }
+        );
+        assert_eq!(
+            resource_readiness_expectation(None, Duration::from_secs(7))
+                .expect("ephemeral readiness"),
+            ReadinessExpectation::None
+        );
+    }
+
+    #[test]
+    fn host_process_providers_reject_guest_execution_before_ticket_creation() {
+        let resource_ref = ResourceRef::parse("Process/guest-worker").expect("resource ref");
+        let uid = ResourceUid::parse("123e4567-e89b-42d3-a456-426614174000").expect("uid");
+        let provider_ref = ResourceRef::parse("Provider/system-systemd").expect("provider ref");
+        let context = ProcessResourceContext::new(
+            &resource_ref,
+            &uid,
+            ResourceGeneration::new(1).expect("generation"),
+            ZoneRevision::new(1),
+            &provider_ref,
+            ControllerGeneration::new(1).expect("controller generation"),
+            None,
+        );
+        let execution = d2b_contracts_resource::v3::process::ExecutionSpec::minimal(
+            ResourceRef::parse("Guest/workload").expect("guest ref"),
+            d2b_contracts_resource::v3::process::ProcessClass::Worker,
+            BoundedToken::parse("guest-worker").expect("template"),
+        )
+        .expect("execution");
+
+        assert_eq!(
+            validate_resource_execution_target(DaemonMode::Host, &context, &execution),
+            Err(GUEST_EXECUTION_UNAVAILABLE.to_owned())
+        );
+    }
+
+    #[test]
+    fn guest_process_providers_reject_host_execution() {
+        let resource_ref = ResourceRef::parse("Process/host-worker").expect("resource ref");
+        let uid = ResourceUid::parse("123e4567-e89b-42d3-a456-426614174000").expect("uid");
+        let provider_ref = ResourceRef::parse("Provider/system-systemd").expect("provider ref");
+        let context = ProcessResourceContext::new(
+            &resource_ref,
+            &uid,
+            ResourceGeneration::new(1).expect("generation"),
+            ZoneRevision::new(1),
+            &provider_ref,
+            ControllerGeneration::new(1).expect("controller generation"),
+            None,
+        );
+        let execution = d2b_contracts_resource::v3::process::ExecutionSpec::minimal(
+            ResourceRef::parse("Host/host-system").expect("host ref"),
+            d2b_contracts_resource::v3::process::ProcessClass::Worker,
+            BoundedToken::parse("host-worker").expect("template"),
+        )
+        .expect("execution");
+
+        assert_eq!(
+            validate_resource_execution_target(DaemonMode::Guest, &context, &execution),
+            Err("provider-ticket:host-execution-denied".to_owned())
+        );
     }
 
     #[test]
@@ -1516,23 +2182,39 @@ mod tests {
             identity: ProcessIdentityDigest::from_bytes([7; 32]),
             uid: uid.clone(),
             generation: ResourceGeneration::new(4).expect("generation"),
+            controller_generation: ControllerGeneration::new(1).expect("controller generation"),
+            execution_ref: ResourceRef::parse("Host/host-system").expect("execution ref"),
         };
         let context = ProcessResourceContext::new(
             &resource_ref,
             &uid,
             ResourceGeneration::new(4).expect("generation"),
+            ZoneRevision::new(4),
             &provider_ref,
             ControllerGeneration::new(1).expect("controller generation"),
+            None,
         );
-        assert!(resource_identity_matches(&managed, context));
+        assert!(resource_identity_matches(&managed, &context));
         let stale_context = ProcessResourceContext::new(
             &resource_ref,
             &uid,
             ResourceGeneration::new(3).expect("generation"),
+            ZoneRevision::new(3),
             &provider_ref,
             ControllerGeneration::new(1).expect("controller generation"),
+            None,
         );
-        assert!(!resource_identity_matches(&managed, stale_context));
+        assert!(!resource_identity_matches(&managed, &stale_context));
+        let stale_controller = ProcessResourceContext::new(
+            &resource_ref,
+            &uid,
+            ResourceGeneration::new(4).expect("generation"),
+            ZoneRevision::new(4),
+            &provider_ref,
+            ControllerGeneration::new(2).expect("controller generation"),
+            None,
+        );
+        assert!(!resource_identity_matches(&managed, &stale_controller));
     }
 
     #[test]
@@ -1541,5 +2223,38 @@ mod tests {
         assert!(retryable_stop_error("process-fate-unknown"));
         assert!(!retryable_stop_error("identity-mismatch"));
         assert!(!retryable_stop_error("permission-denied"));
+    }
+
+    #[test]
+    fn controller_launch_ticket_binds_target_descriptor_and_session_without_assignment() {
+        let resource = controller_resource();
+        let readiness = ConfigurationDigest::from_bytes([7; 32]);
+        let ticket = controller_launch_ticket(
+            "test-bundle",
+            &resource,
+            ManagedProvider::Systemd,
+            readiness,
+            Duration::from_secs(5),
+        )
+        .expect("controller ticket");
+        assert!(ticket.validate_controller_launch().is_ok());
+        assert_eq!(ticket.process_ref(), resource.process_ref());
+        assert_eq!(ticket.execution_ref(), resource.target());
+        assert_eq!(
+            ticket.provider_generation(),
+            Some(resource.provider_generation())
+        );
+        assert_eq!(
+            ticket.target_session_generation(),
+            Some(resource.target_session_generation())
+        );
+        assert_eq!(
+            ticket.resource_revision(),
+            Some(resource.resource_revision())
+        );
+        assert!(ticket.signed_descriptor_digest().is_some());
+        assert!(!ticket.has_assignment_binding());
+        assert!(ticket.resource_client_binding().is_none());
+        assert!(ticket.execution_commitment().is_some());
     }
 }

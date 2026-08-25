@@ -24,6 +24,7 @@ pub use authority::{
 pub use cid::{CidTranslationError, GuestCid, RelayCid, SecurityKeyCidTranslator};
 pub use controller::{
     SecurityKeyController, SecurityKeyControllerError, SecurityKeyReconcileOutcome,
+    SecurityKeyReconcileResultWithChildren,
 };
 pub use descriptor::{
     SECURITY_KEY_BINDING_RESOURCE_TYPE, SECURITY_KEY_PROJECTION_PROTOCOL_VERSION,

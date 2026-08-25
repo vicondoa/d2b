@@ -557,14 +557,14 @@ mod tests {
         let wait = ExecWaitResult {
             running: false,
             terminal_status: Some(crate::public_wire::ExecTerminalStatus::Error {
-                slug: "lost-guestd".to_owned(),
+                slug: "component-session-target-lost".to_owned(),
             }),
         };
         let terminal: crate::terminal_wire::TerminalWaitResult = wait.clone().into();
         assert_eq!(
             terminal.terminal_status,
             Some(TerminalStatus::Error {
-                slug: "lost-guestd".to_owned()
+                slug: "component-session-target-lost".to_owned()
             })
         );
         let round_trip: ExecWaitResult = terminal.into();

@@ -18,7 +18,7 @@ applications remain integrated with the host desktop.
 ## Ownership and architecture
 
 d2b owns its microVM substrate end to end. The daemon-only control plane is
-`d2bd` plus `d2b-priv-broker`: the daemon supervises lifecycle DAGs and the
+`d2bd` plus `d2b-broker`: the daemon supervises lifecycle DAGs and the
 privileged broker performs audited host mutations. The framework declares no
 per-VM systemd templates and keeps runner processes behind typed broker
 operations.

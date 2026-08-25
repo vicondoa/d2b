@@ -5,8 +5,7 @@ use std::{
     time::{Duration, Instant},
 };
 
-use d2b_contracts_zone_session::v3::{
-    component_session::{
+use d2b_contracts_zone_session::v3::component_session::{
     AttachmentAccess, AttachmentCreditClass, AttachmentDescriptor, AttachmentKind,
     AttachmentPacket, AttachmentPolicyKind, BoundedVec, CancelAck, CancelRequest, CancelResult,
     ChannelClass, ChannelId, CloseReason, CloseRecord, EndpointPolicy, EndpointPolicyIdentity,
@@ -14,7 +13,6 @@ use d2b_contracts_zone_session::v3::{
     KeepaliveRecord, KernelObjectType, LimitProfile, MAX_PACKET_ATTACHMENTS, MetricLabels,
     MetricReason, MetricResult, NoiseProfile, OperationClass, OperationId, PREFACE_LEN,
     RecordHeader, RecordKind, Remediation, RequestId, ServicePackage, SessionErrorCode,
-},
 };
 
 use crate::{
@@ -177,7 +175,7 @@ impl<T: OwnedTransport> SessionEngine<T> {
         let timeout = Duration::from_millis(u64::from(identity.limits.handshake_deadline_ms));
         let result = match tokio::time::timeout(timeout, async move {
             identity
-                .validate_local_generation_discovery()
+                .validate_generation_discovery()
                 .map_err(SessionError::from)?;
             Self::establish_initiator_with_generation_discovery_inner(
                 transport,
@@ -313,6 +311,49 @@ impl<T: OwnedTransport> SessionEngine<T> {
         .await
     }
 
+    /// Establish a responder while accepting a strictly newer reconnect
+    /// generation from the authenticated offer. All policy fields remain
+    /// exact; only `reconnect_generation` may advance beyond the supplied
+    /// floor.
+    pub async fn establish_responder_with_generation_floor(
+        transport: T,
+        policy: EndpointPolicy,
+        credentials: HandshakeCredentials,
+        minimum_generation: u64,
+        now: Instant,
+    ) -> Result<Self> {
+        if minimum_generation == 0 {
+            return Err(SessionError::new(SessionErrorCode::GenerationMismatch));
+        }
+        let descriptor = transport.descriptor();
+        let metric_policy = policy.clone();
+        let timeout = Duration::from_millis(u64::from(policy.limits.handshake_deadline_ms));
+        let result = match tokio::time::timeout(
+            timeout,
+            Self::establish_responder_inner_with_generation_floor(
+                transport,
+                policy,
+                credentials,
+                minimum_generation,
+                now,
+            ),
+        )
+        .await
+        {
+            Ok(result) => result,
+            Err(_) => Err(SessionError::new(SessionErrorCode::HandshakeTimeout)),
+        };
+        record_establishment(
+            Arc::new(NoopMetrics).as_ref(),
+            descriptor,
+            metric_policy.purpose,
+            metric_policy.service,
+            metric_policy.noise_profile,
+            &result,
+        );
+        result
+    }
+
     pub async fn establish_responder_with_metrics(
         transport: T,
         policy: EndpointPolicy,
@@ -344,9 +385,26 @@ impl<T: OwnedTransport> SessionEngine<T> {
     }
 
     async fn establish_responder_inner(
+        transport: T,
+        policy: EndpointPolicy,
+        credentials: HandshakeCredentials,
+        now: Instant,
+    ) -> Result<Self> {
+        Self::establish_responder_inner_with_generation_floor(
+            transport,
+            policy,
+            credentials,
+            0,
+            now,
+        )
+        .await
+    }
+
+    async fn establish_responder_inner_with_generation_floor(
         mut transport: T,
         policy: EndpointPolicy,
         credentials: HandshakeCredentials,
+        minimum_generation: u64,
         now: Instant,
     ) -> Result<Self> {
         validate_transport(&transport, &policy)?;
@@ -374,7 +432,23 @@ impl<T: OwnedTransport> SessionEngine<T> {
             return Err(SessionError::new(SessionErrorCode::MalformedPreface));
         }
 
-        let negotiated = negotiate_offer(&first[..PREFACE_LEN], &first[PREFACE_LEN..], &policy)?;
+        let offer = HandshakeOffer::decode_canonical(&first[PREFACE_LEN..])
+            .map_err(|_| SessionError::new(SessionErrorCode::MalformedHandshake))?;
+        if minimum_generation != 0 && offer.reconnect_generation < minimum_generation {
+            return Err(SessionError::new(SessionErrorCode::GenerationMismatch));
+        }
+        let negotiated_policy = if minimum_generation == 0 {
+            policy.clone()
+        } else {
+            EndpointPolicyIdentity::from(&policy)
+                .with_generation(offer.reconnect_generation)
+                .map_err(SessionError::from)?
+        };
+        let negotiated = negotiate_offer(
+            &first[..PREFACE_LEN],
+            &first[PREFACE_LEN..],
+            &negotiated_policy,
+        )?;
         let mut noise = NoiseHandshake::new(HandshakeRole::Responder, &negotiated, credentials)?;
         let request =
             receive_clean(&mut transport, policy.limits.protected_ciphertext_bytes).await?;

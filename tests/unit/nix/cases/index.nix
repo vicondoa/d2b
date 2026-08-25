@@ -77,6 +77,7 @@ let
       env = "zeta";
       index = 12;
       ssh.user = "alice";
+      guestConfigFile = builtins.toFile "zed-guest-config.nix" "{ ... }: { }";
       tpm.enable = true;
       usbip = {
         yubikey = true;
@@ -84,8 +85,7 @@ let
       };
       audio.enable = x86;
       observability.enable = true;
-      guest.control.enable = true;
-      guest.exec.enable = true;
+      guest.componentSession.enable = true;
       guest.shell = {
         enable = true;
         defaultName = "ops";
@@ -505,6 +505,25 @@ in
     '';
   };
 
+  "index/guest-config-working-copy-matches-component-session-path" = {
+    expr = {
+      path = cfg.d2b._computed.zed.config.d2b.componentSession.guestConfigPath;
+      directory = builtins.elem
+        "d /var/lib/d2b-guest 0750 alice d2bd -"
+        cfg.d2b._computed.zed.config.systemd.tmpfiles.rules;
+      tmpfiles = lib.filter
+        (rule: lib.hasInfix "guest-config.nix" rule)
+        cfg.d2b._computed.zed.config.systemd.tmpfiles.rules;
+    };
+    expected = {
+      path = "/var/lib/d2b-guest/guest-config.nix";
+      directory = true;
+      tmpfiles = [
+        "C /var/lib/d2b-guest/guest-config.nix 0640 alice d2bd - /etc/d2b/guest-config.nix"
+      ];
+    };
+  };
+
   "index/home-lan-metadata" = {
     expr = {
       envNames = index.externalNetwork.envNames;
@@ -725,8 +744,6 @@ in
           defaultName = "ops";
           maxSessions = 3;
           maxAttached = 2;
-          controlEnabled = true;
-          execEnabled = true;
         };
       };
     };

@@ -1,4 +1,4 @@
-# d2b-priv-broker.{socket,service}
+# d2b-broker.{socket,service}
 #
 # Socket-activated privileged broker per ADR 0001 (`unsafe_code =
 # "deny"` quarantine boundary). Daemon connects to /run/d2b/priv.sock
@@ -31,21 +31,10 @@ let
     overrides = d2bHostToolOverrides;
     key = "broker";
     fallback =
-      if prebuilt ? "d2b-priv-broker"
-      then prebuilt."d2b-priv-broker"
+      if prebuilt ? "selectPackage"
+      then prebuilt.selectPackage "d2b-broker" brokerSourcePackage
       else brokerSourcePackage;
   };
-  cutoverRunnerSourcePackage = d2bHostTools.cutoverRunner;
-  cutoverRunnerPackage = d2bLib.selectHostToolPackage {
-    overrides = d2bHostToolOverrides;
-    key = "cutoverRunner";
-    fallback =
-      if prebuilt ? "d2b-cutover-runner"
-      then prebuilt."d2b-cutover-runner"
-      else cutoverRunnerSourcePackage;
-  };
-  cutoverRunnerPath = "${cutoverRunnerPackage}/bin/d2b-cutover-runner";
-
   bundleManifestPath =
     cfg.site.bundle.currentManifest or "/etc/d2b/bundle.json";
 
@@ -93,7 +82,6 @@ let
       D2B_BROKER_NFT_BINARY = "${pkgs.nftables}/bin/nft";
       D2B_BROKER_IP_BINARY = "${pkgs.iproute2}/bin/ip";
       D2B_BROKER_USBIP_BINARY = "${pkgs.linuxPackages_latest.usbip}/bin/usbip";
-      D2B_CUTOVER_RUNNER_PATH = cutoverRunnerPath;
     };
     path = with pkgs; [
       nftables
@@ -144,7 +132,8 @@ let
       SystemCallArchitectures = "native";
       UMask = "0027";
       ExecStart =
-        "${brokerPackage}/bin/d2b-priv-broker serve " +
+        "${brokerPackage}/bin/d2b-broker host " +
+        "--authority-id realm-${realm.id} " +
         "--audit-dir ${realm.controller.broker.auditDir} " +
         "--audit-retention-days ${toString auditRetentionDays} " +
         "--bundle-path ${bundleManifestPath} " +
@@ -157,7 +146,7 @@ let
       RestartSec = "2s";
       StandardOutput = "journal";
       StandardError = "journal";
-      SyslogIdentifier = "d2b-realm-priv-broker";
+      SyslogIdentifier = "d2b-realm-broker";
     };
   };
   realmBrokerSockets = lib.listToAttrs (map
@@ -192,9 +181,8 @@ in
   # `docs/how-to/migrate-nixos-to-daemon.md` § Recovery.
   config = {
 
-    environment.systemPackages = [ brokerPackage cutoverRunnerPackage ];
-    d2b._hostToolPackages.d2bCutoverRunner = cutoverRunnerPackage;
-    d2b._bundle.cutoverRunnerPath = cutoverRunnerPath;
+    environment.systemPackages = [ brokerPackage ];
+    d2b._hostToolPackages.d2bBroker = brokerPackage;
 
     # broker-owned state + bundle dirs; /run/d2b itself is owned by
     # root:d2b 1770 with explicit ACLs from host-daemon.nix (canonical;
@@ -227,7 +215,7 @@ in
     # via SD_LISTEN_FDS=1 LISTEN_FDS=1 LISTEN_FDNAMES=priv.sock and
     # MUST NOT bind/listen itself when activated this way.
     systemd.sockets = {
-      d2b-priv-broker = {
+      d2b-broker = {
       description = "d2b privileged broker socket";
       wantedBy = [ "sockets.target" ];
       requires = [ "systemd-tmpfiles-setup.service" ];
@@ -244,7 +232,7 @@ in
     } // realmBrokerSockets;
 
     systemd.services = {
-      d2b-priv-broker = {
+      d2b-broker = {
       description = "d2b privileged broker (uid 0 host-mutation surface)";
       documentation = [
         "https://github.com/vicondoa/d2b/blob/main/docs/adr/0002-non-root-daemon-and-privileged-broker.md"
@@ -253,11 +241,11 @@ in
       # Socket-activated; service activation comes from the socket unit.
       # No wantedBy here.
       requires = [
-        "d2b-priv-broker.socket"
+        "d2b-broker.socket"
         "systemd-tmpfiles-setup.service"
       ];
       after = [
-        "d2b-priv-broker.socket"
+        "d2b-broker.socket"
         "systemd-tmpfiles-setup.service"
         "local-fs.target"
       ];
@@ -273,7 +261,6 @@ in
         D2B_BROKER_IP_BINARY = "${pkgs.iproute2}/bin/ip";
         # usbip binary from linuxPackages_latest.usbip.
         D2B_BROKER_USBIP_BINARY = "${pkgs.linuxPackages_latest.usbip}/bin/usbip";
-        D2B_CUTOVER_RUNNER_PATH = cutoverRunnerPath;
       };
 
       # ApplyNftables / SpawnRunner mount-prep ops invoke nft /
@@ -290,7 +277,7 @@ in
         # Type=notify so the daemon can deterministically observe
         # READY=1 after the broker has adopted the listen fd and
         # completed cgroup delegation. Pair with sd_notify(READY=1)
-        # in packages/d2b-priv-broker/src/runtime.rs after the
+        # in packages/d2b-broker/src/runtime.rs after the
         # SD_LISTEN_FDS adoption + cgroup delegation sequence.
         #
         Type = "notify";
@@ -389,11 +376,11 @@ in
         # must be optional for ExecStartPre: systemd loads EnvironmentFile
         # before every command in the service, and ExecStartPre is what
         # creates the file before ExecStart consumes it.
-        EnvironmentFile = "-/run/d2b/broker/priv-broker.env";
-        ExecStartPre = "+${pkgs.writeShellScript "d2b-priv-broker-prep" ''
+        EnvironmentFile = "-/run/d2b/broker/broker.env";
+        ExecStartPre = "+${pkgs.writeShellScript "d2b-broker-prep" ''
           set -euo pipefail
-          env_file=/run/d2b/broker/priv-broker.env
-          env_tmp=/run/d2b/broker/priv-broker.env.new
+          env_file=/run/d2b/broker/broker.env
+          env_tmp=/run/d2b/broker/broker.env.new
           uid=$(${pkgs.coreutils}/bin/id -u d2bd)
           gid=$(${pkgs.coreutils}/bin/id -g d2bd)
           umask 0077
@@ -410,7 +397,8 @@ in
         # MUST adopt the inherited fd; the --socket-path flag is the
         # non-activated-mode fallback only.
         ExecStart =
-          "${brokerPackage}/bin/d2b-priv-broker serve " +
+          "${brokerPackage}/bin/d2b-broker host " +
+          "--authority-id host " +
           "--audit-dir /var/lib/d2b/audit " +
           "--audit-retention-days ${toString auditRetentionDays} " +
           "--bundle-path ${bundleManifestPath} " +
@@ -423,7 +411,7 @@ in
 
         StandardOutput = "journal";
         StandardError = "journal";
-        SyslogIdentifier = "d2b-priv-broker";
+        SyslogIdentifier = "d2b-broker";
       };
       };
 
@@ -443,8 +431,8 @@ in
       # `daemonExperimental.enable = false` drops the daemon config),
       # since systemd merges these at the unit-file level.
       d2bd = {
-        wants = [ "d2b-priv-broker.socket" ];
-        after = [ "d2b-priv-broker.socket" ];
+        wants = [ "d2b-broker.socket" ];
+        after = [ "d2b-broker.socket" ];
       };
     } // realmBrokerServices;
   };

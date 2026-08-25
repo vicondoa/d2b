@@ -19,21 +19,24 @@ use std::{
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use crate::activation_resource_runtime::{
-    ActivationResourceRuntime, ActivationResourceRuntimeError, activation_watch_request,
-    list_activation_snapshot, run_activation_watch,
+    ActivationResourceRuntime, ActivationResourceRuntimeError, GuestActivationResourceClient,
+    activation_watch_request, list_activation_snapshot, run_activation_watch,
+    stored_resource_from_wire,
 };
 use crate::audio_resource_runtime::{
-    AudioBindingRuntimeStatus, AudioResourceRuntime, AudioResourceRuntimeError,
-    audio_binding_status_value, audio_watch_request, list_audio_snapshot, remove_audio_finalizer,
-    run_audio_watch,
+    AUDIO_BINDING_TYPE, AudioBindingRuntimeStatus, AudioResourceRuntime, AudioResourceRuntimeError,
+    audio_binding_status_projection_with_status, audio_binding_status_value, audio_watch_request,
+    has_audio_finalizer, list_audio_resources, list_audio_snapshot, remove_audio_finalizer,
+    run_audio_watch, update_audio_finalizer,
+};
+use crate::binding_child_resource_runtime::reconcile_binding_children;
+use crate::semantic_binding_resource_runtime::{
+    reconcile_semantic_binding_resources, run_semantic_binding_watch,
+    semantic_binding_watch_request,
 };
 use crate::process_resource_runtime::{
     ProcessResourceRuntime, ProcessResourceRuntimeError, list_process_snapshot,
     process_watch_request, run_process_watch,
-};
-use d2bd_runtime::resource_operator_activation::{
-    Wave6AcceptanceReport, Wave6Dependencies, Wave6ProviderBoundary, Wave6ReconcileResult,
-    select_wave6_resources,
 };
 use d2b_audit::{AuditSink, DurabilityEvidence};
 use d2b_bus::{BusAuthorizer, BusConfig, BusIngress, ZoneBus, ZoneRegistrar};
@@ -43,34 +46,24 @@ use d2b_contracts_broker::broker_wire::ZoneStoreDisposition;
 use d2b_contracts_provider::v3::provider::ProviderSpec;
 use d2b_contracts_resource::resource_proto as wire;
 #[cfg(test)]
+use d2b_contracts_resource::v3::{ConfigurationGeneration, ControllerGeneration};
 use d2b_contracts_resource::v3::{
-    ConfigurationGeneration,
-    ControllerGeneration,
-};
-use d2b_contracts_zone_session::v3::{
-    ZoneStatusResource,
-    resource_bundle::ResourceBundle,
-};
-use d2b_contracts_resource::v3::{
-    ResourceEnvelope,
-    ResourceGeneration,
-    ResourceName,
-    ResourcePhase,
-    ResourceRef,
-    ResourceTypeName,
-    ResourceUid,
-    ZoneId,
-    ZoneRevision,
+    CanonicalJsonValue, NixosGenerationSpec, ResourceEnvelope, ResourceGeneration, ResourceName,
+    ResourcePhase, ResourceRef, ResourceTypeName, ResourceUid, ZoneId, ZoneRevision,
 };
 use d2b_contracts_resource::v3::{
     host::{HOST_PROVIDER_REF, HostSpec},
     user::UserSpec,
 };
+use d2b_contracts_zone_session::v3::{ZoneStatusResource, resource_bundle::ResourceBundle};
 use d2b_core_controller::authority::{
     AuthorityRequest, AuthorityReservation, ExternalNicClaimRequest, ExternalNicRecoveryInventory,
     ExternalNicReservation, HostGlobalAuthorityIndex, TrustedExternalNicInventory,
 };
 use d2b_core_controller::authority_persistence::AuthorityRecoveryCoordinator;
+use d2b_core_controller::controller_assignment::{
+    AssignmentError, AssignmentIdentity, AssignmentRequest, ResourceClientLease,
+};
 use d2b_core_controller::controllers::HandlerPhase;
 use d2b_core_controller::main::{
     CoreProcess, RecoverySnapshot, RuntimeReadiness as CoreRuntimeReadiness, StartupStage,
@@ -104,17 +97,23 @@ use d2b_session::SessionServerError;
 use d2bd_runtime::authority_persistence::RedbAuthorityPersistence;
 pub use d2bd_runtime::resource_api::ResourceRuntimeError;
 use d2bd_runtime::resource_api::{parse_list_request, route_service_matches};
+use d2bd_runtime::resource_operator_activation::{
+    Wave6AcceptanceReport, Wave6Dependencies, Wave6ProviderBoundary, Wave6ReconcileResult,
+    select_wave6_resources,
+};
 use d2bd_runtime::resource_runtime_support::{
-    SystemCoreReconcileResult, compatibility_error_envelope, configuration_cleanup_pending,
-    current_status_timestamp, encode_public_get_response, encode_public_list_response,
-    ensure_bootstrap_host_resource, handler_phase_to_zone_phase, host_phase_for_resource_count,
-    initial_policy_snapshot, map_startup_error, materialize_zone_resource_bundle,
-    public_list_request, public_operation_id, public_request_meta, register_system_core_session,
-    runtime_authorizer, runtime_policy, store_identity, watch_needs_restart, zone_runtime_metadata,
+    AssignmentRegistry, SystemCoreReconcileResult, compatibility_error_envelope,
+    configuration_cleanup_pending, current_status_timestamp, encode_public_get_response,
+    encode_public_list_response, encode_public_resource, ensure_bootstrap_host_resource,
+    handler_phase_to_zone_phase, host_phase_for_resource_count, initial_policy_snapshot,
+    map_startup_error,
+    materialize_zone_resource_bundle, new_assignment_registry, public_list_request,
+    public_operation_id, public_request_meta, register_system_core_session, runtime_authorizer,
+    runtime_policy, store_identity, watch_needs_restart, zone_runtime_metadata,
 };
 pub use d2bd_runtime::resource_runtime_support::{
-    ZoneRuntimeReadiness, persist_resource_status, persist_resource_status_with_projection,
-    resource_bundle_materialization_operation_id,
+    ZoneRuntimeReadiness, bounded_operation_id, persist_resource_status,
+    persist_resource_status_with_projection, resource_bundle_materialization_operation_id,
 };
 use d2bd_runtime::resource_store_runtime::{MAX_ZONE_RUNTIMES, OpenedZoneStore};
 use nix::unistd::{Group, Uid, User};
@@ -130,6 +129,8 @@ pub(crate) struct CommittedInteractionProviderConfiguration {
 
 #[derive(Clone)]
 pub(crate) struct CommittedInteractionIdentity {
+    wayland_session_ref: ResourceRef,
+    wayland_session_uid: ResourceUid,
     subject_ref: ResourceRef,
     subject_uid: ResourceUid,
     host_execution_ref: ResourceRef,
@@ -158,6 +159,12 @@ impl CommittedInteractionIdentity {
         notification_provider_uid: Option<ResourceUid>,
     ) -> Self {
         Self {
+            wayland_session_ref: ResourceRef::parse(
+                "display-wayland.d2bus.org.WaylandSession/display-wayland",
+            )
+            .expect("fixed test WaylandSession reference"),
+            wayland_session_uid: ResourceUid::parse("33333333-3333-4333-8333-333333333333")
+                .expect("fixed test WaylandSession UID"),
             subject_ref,
             subject_uid,
             host_execution_ref,
@@ -169,6 +176,14 @@ impl CommittedInteractionIdentity {
             notification_provider_generation,
             notification_provider_uid,
         }
+    }
+
+    pub(crate) fn wayland_session_ref(&self) -> &ResourceRef {
+        &self.wayland_session_ref
+    }
+
+    pub(crate) fn wayland_session_uid(&self) -> &ResourceUid {
+        &self.wayland_session_uid
     }
 
     pub(crate) fn subject_ref(&self) -> &ResourceRef {
@@ -545,6 +560,7 @@ pub struct ZoneResourceRuntime {
     policy_installed: bool,
     controller_endpoint_registered: bool,
     watch_admitted: bool,
+    assignments: AssignmentRegistry,
     authority_index: Arc<tokio::sync::Mutex<HostGlobalAuthorityIndex>>,
     authority_persistence: Arc<RedbAuthorityPersistence>,
     authority_recovery: Arc<AuthorityRecoveryCoordinator>,
@@ -552,6 +568,7 @@ pub struct ZoneResourceRuntime {
     zone_status: Mutex<ZoneStatusResource>,
     audio_runtime: Arc<Mutex<Option<AudioResourceRuntime>>>,
     audio_watch_task: Mutex<Option<tokio::task::JoinHandle<()>>>,
+    semantic_binding_watch_task: Mutex<Option<tokio::task::JoinHandle<()>>>,
     process_runtime: Arc<Mutex<Option<ProcessResourceRuntime>>>,
     process_watch_task: Mutex<Option<tokio::task::JoinHandle<()>>>,
     activation_runtime: Arc<Mutex<Option<ActivationResourceRuntime>>>,
@@ -808,6 +825,7 @@ impl ZoneResourceRuntime {
             })
             .unwrap_or_default();
         let authorizer = Arc::new(runtime_authorizer(&bundle_resource_types)?);
+        let assignments = new_assignment_registry();
         let acceptor = authorizer
             .take_store_seal(store_identity.seal_identity())
             .map_err(|_| ResourceRuntimeError::StoreSealUnavailable)?;
@@ -991,6 +1009,7 @@ impl ZoneResourceRuntime {
                     ResourceRuntimeError::AuthorizationUnavailable
                 })?;
             let bus_authorizer = BusAuthorizer::from_shared(Arc::clone(&authorizer), state.clone())
+                .map(|authorizer| authorizer.with_assignment_registry(Arc::clone(&assignments)))
                 .map_err(|error| {
                     tracing::error!(zone = %zone.as_str(), error = ?error, "resource runtime bus authorizer setup failed");
                     ResourceRuntimeError::AuthorizationUnavailable
@@ -1207,6 +1226,7 @@ impl ZoneResourceRuntime {
             policy_installed,
             controller_endpoint_registered,
             watch_admitted,
+            assignments,
             authority_index,
             authority_persistence,
             authority_recovery,
@@ -1214,6 +1234,7 @@ impl ZoneResourceRuntime {
             zone_status: Mutex::new(zone_status),
             audio_runtime: Arc::new(Mutex::new(None)),
             audio_watch_task: Mutex::new(None),
+            semantic_binding_watch_task: Mutex::new(None),
             process_runtime: Arc::new(Mutex::new(None)),
             process_watch_task: Mutex::new(None),
             activation_runtime: Arc::new(Mutex::new(None)),
@@ -1237,6 +1258,49 @@ impl ZoneResourceRuntime {
     /// Return the startup readiness projection.
     pub const fn readiness(&self) -> ZoneRuntimeReadiness {
         self.readiness
+    }
+
+    /// Borrow the Zone-scoped Core assignment registry.
+    pub fn assignment_registry(&self) -> AssignmentRegistry {
+        Arc::clone(&self.assignments)
+    }
+
+    /// Admit one controller assignment through the Zone-owned registry.
+    ///
+    /// Controller deployment supplies only the committed resource, signed
+    /// role, installed generations, and authenticated session generation.
+    /// The registry remains the single owner of assignment epochs and target
+    /// conflicts; callers never receive a store handle.
+    pub fn admit_controller_assignment(
+        &self,
+        request: AssignmentRequest<'_>,
+    ) -> Result<ResourceClientLease, AssignmentError> {
+        self.assignments
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .admit(request)
+    }
+
+    /// Revoke assignments bound to a disconnected ComponentSession generation.
+    pub fn revoke_controller_assignments(
+        &self,
+        generation: d2b_contracts_resource::v3::identity::ReconnectGeneration,
+    ) {
+        self.assignments
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .revoke_session(generation);
+    }
+
+    /// Mark one assignment as draining before a target or generation handoff.
+    pub fn drain_controller_assignment(
+        &self,
+        identity: &AssignmentIdentity,
+    ) -> Result<(), AssignmentError> {
+        self.assignments
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .begin_drain(identity)
     }
 
     /// Return the policy revision committed in the opened resource store.
@@ -1278,6 +1342,15 @@ impl ZoneResourceRuntime {
         let adapter = ResourceBusAdapter::bind_component_session(Arc::clone(&self.api), subject)
             .map_err(|_| ResourceRuntimeError::ResourceApiBindFailed)?;
         Ok(Arc::new(adapter.client()))
+    }
+
+    /// Borrow the daemon-owned Resource API client used by the target-local
+    /// process reconciler. The client is present only after the Zone's
+    /// authenticated system-core session has been enrolled.
+    pub(crate) fn process_resource_client(
+        &self,
+    ) -> Option<Arc<ResourceApiClient<RedbBackend, UnavailableUpgradeDispatcher>>> {
+        self.process_status_client.clone()
     }
 
     /// Persist a provider reconcile phase through the authenticated Resource
@@ -1500,6 +1573,72 @@ impl ZoneResourceRuntime {
         self.interaction_identity.as_ref()
     }
 
+    /// Resolve the one committed WaylandSession that owns a VM's display
+    /// lifecycle. A missing row is reported separately so VM start can fail
+    /// closed without inventing a display process or session identity.
+    pub(crate) async fn committed_wayland_session_for_vm(
+        &self,
+        vm: &str,
+    ) -> Result<
+        Option<(ResourceRef, ResourceUid, WaylandSessionSpec)>,
+        ResourceRuntimeError,
+    > {
+        if !self.readiness.resource_api_ready {
+            return Err(ResourceRuntimeError::PlaneUnavailable);
+        }
+        let expected_guest = ResourceRef::parse(&format!("Guest/{vm}"))
+            .map_err(|_| ResourceRuntimeError::InteractionConfigurationUnavailable)?;
+        let Some(identity) = self.interaction_identity.as_ref() else {
+            return Ok(None);
+        };
+        if identity.subject_ref() != &expected_guest {
+            return Err(ResourceRuntimeError::InteractionConfigurationUnavailable);
+        }
+        let resource = committed_resource(
+            &self.zone,
+            &self.store,
+            self.store_metadata.current_revision,
+            identity.wayland_session_ref(),
+        )
+        .await?;
+        let spec = committed_wayland_session_spec(
+            &self.zone,
+            self.store_metadata.current_revision,
+            &resource,
+        )?;
+        if spec.guest_ref() != &expected_guest || !spec.cross_domain_trusted() {
+            return Err(ResourceRuntimeError::InteractionConfigurationUnavailable);
+        }
+        if identity.wayland_session_ref() != &resource.resource_ref
+            || identity.wayland_session_uid() != &resource.uid
+            || identity.subject_ref() != spec.guest_ref()
+            || identity.host_execution_ref() != spec.host_ref()
+            || identity.user_ref() != spec.user_ref()
+        {
+            return Err(ResourceRuntimeError::InteractionConfigurationUnavailable);
+        }
+        let envelope = ResourceEnvelope::from_json(&resource.canonical_json)
+            .map_err(|_| ResourceRuntimeError::InteractionConfigurationUnavailable)?;
+        let deletion_requested = CanonicalJsonValue::parse(&resource.canonical_json)
+            .ok()
+            .is_some_and(|value| match value {
+                CanonicalJsonValue::Object(root) => root
+                    .get("metadata")
+                    .and_then(CanonicalJsonValue::as_object)
+                    .and_then(|metadata| metadata.get("deletionRequestedAt"))
+                    .is_some_and(|value| !matches!(value, CanonicalJsonValue::Null)),
+                _ => false,
+            });
+        if matches!(
+            envelope.status().phase(),
+            ResourcePhase::Failed | ResourcePhase::Deleted
+        ) || deletion_requested
+        {
+            return Err(ResourceRuntimeError::InteractionConfigurationUnavailable);
+        }
+        Ok(Some((resource.resource_ref, resource.uid, spec)))
+    }
+
     pub(crate) const fn interaction_provider_configuration_refused(&self) -> bool {
         self.interaction_provider_configuration_refused
     }
@@ -1604,6 +1743,7 @@ impl ZoneResourceRuntime {
         let binding_resources = snapshot.bindings.clone();
         let statuses;
         let pending_finalizers;
+        let child_owners;
         {
             let mut runtime = self
                 .audio_runtime
@@ -1616,17 +1756,48 @@ impl ZoneResourceRuntime {
                 .map_err(map_audio_runtime_error)?;
             statuses = registry.statuses();
             pending_finalizers = registry.take_pending_finalizers();
+            child_owners = registry
+                .child_owners(&binding_resources)
+                .map_err(map_audio_runtime_error)?;
         }
+        let client = self
+            .process_status_client
+            .as_ref()
+            .ok_or(ResourceRuntimeError::AuthenticationUnavailable)?;
+        for owner in &child_owners {
+            if owner.desired.is_some() && !has_audio_finalizer(&owner.resource) {
+                update_audio_finalizer(client, &owner.resource, true)
+                    .await
+                    .map_err(map_audio_runtime_error)?;
+            }
+        }
+        let converged_children =
+            reconcile_binding_children(&self.store, client, &self.zone, &child_owners)
+                .await
+                .map_err(|_| ResourceRuntimeError::CapabilityUnavailable)?;
         for resource in pending_finalizers {
-            remove_audio_finalizer(
-                self.process_status_client
-                    .as_ref()
-                    .ok_or(ResourceRuntimeError::AuthenticationUnavailable)?,
-                &resource,
-            )
-            .await
-            .map_err(map_audio_runtime_error)?;
+            if !converged_children.contains(&resource.resource_ref) {
+                continue;
+            }
+            remove_audio_finalizer(client, &resource)
+                .await
+                .map_err(map_audio_runtime_error)?;
         }
+        // Finalizer mutations advance the parent revision. Relist the
+        // authoritative Binding rows before status writes so their exact
+        // UID/revision preconditions remain current on startup.
+        let binding_resources = list_audio_resources(
+            &self.store,
+            &self.zone,
+            ResourceTypeName::parse(AUDIO_BINDING_TYPE).expect("static audio binding type"),
+            "binding-status",
+        )
+        .await
+        .map_err(|_| ResourceRuntimeError::StoreReadFailed)?;
+        let children =
+            crate::binding_child_resource_runtime::list_binding_children(&self.store, &self.zone)
+                .await
+                .map_err(|_| ResourceRuntimeError::CapabilityUnavailable)?;
         for status in statuses {
             let Some(resource) = binding_resources
                 .iter()
@@ -1634,12 +1805,14 @@ impl ZoneResourceRuntime {
             else {
                 return Err(ResourceRuntimeError::StoreReadFailed);
             };
-            persist_resource_status(
-                self.process_status_client
-                    .as_ref()
-                    .ok_or(ResourceRuntimeError::AuthenticationUnavailable)?,
+            let projection =
+                audio_binding_status_projection_with_status(resource, &children, &status.status)
+                    .map_err(map_audio_runtime_error)?;
+            persist_resource_status_with_projection(
+                client,
                 resource,
                 &audio_binding_status_value(status.status),
+                Some(&projection),
             )
             .await?;
         }
@@ -1666,6 +1839,61 @@ impl ZoneResourceRuntime {
             let task = tokio::spawn(run_audio_watch(watch, store, zone, registry, status_client));
             let mut watch_task = self
                 .audio_watch_task
+                .lock()
+                .map_err(|_| ResourceRuntimeError::WatchUnavailable)?;
+            if watch_task.is_none() {
+                *watch_task = Some(task);
+            } else {
+                task.abort();
+            }
+        }
+        Ok(())
+    }
+
+    /// Relist and reconcile USB, security-key, and telemetry Bindings.
+    ///
+    /// These Providers retain semantic authority in their own crates; the
+    /// daemon only admits their explicit child intents through Core.
+    pub(crate) async fn reconcile_semantic_binding_resources(
+        &self,
+    ) -> Result<(), ResourceRuntimeError> {
+        if !self.readiness.resource_api_ready {
+            return Ok(());
+        }
+        let client = self
+            .process_status_client
+            .as_ref()
+            .ok_or(ResourceRuntimeError::AuthenticationUnavailable)?;
+        reconcile_semantic_binding_resources(&self.store, client, &self.zone)
+            .await
+            .map_err(|error| match error {
+                crate::semantic_binding_resource_runtime::SemanticBindingRuntimeError::Store => {
+                    ResourceRuntimeError::StoreReadFailed
+                }
+                crate::semantic_binding_resource_runtime::SemanticBindingRuntimeError::InvalidResource
+                | crate::semantic_binding_resource_runtime::SemanticBindingRuntimeError::InvalidRelationship
+                | crate::semantic_binding_resource_runtime::SemanticBindingRuntimeError::Reconcile => {
+                    ResourceRuntimeError::CapabilityUnavailable
+                }
+            })?;
+        let start_watch = {
+            let mut watch_task = self
+                .semantic_binding_watch_task
+                .lock()
+                .map_err(|_| ResourceRuntimeError::WatchUnavailable)?;
+            watch_needs_restart(&mut watch_task)
+        };
+        if start_watch {
+            let watch = d2b_resource_api::watch::WatchService::new(Arc::clone(&self.store))
+                .open(semantic_binding_watch_request(&self.zone))
+                .await
+                .map_err(|_| ResourceRuntimeError::WatchUnavailable)?;
+            let store = Arc::clone(&self.store);
+            let zone = self.zone.clone();
+            let client = client.clone();
+            let task = tokio::spawn(run_semantic_binding_watch(watch, store, zone, client));
+            let mut watch_task = self
+                .semantic_binding_watch_task
                 .lock()
                 .map_err(|_| ResourceRuntimeError::WatchUnavailable)?;
             if watch_task.is_none() {
@@ -1705,6 +1933,14 @@ impl ZoneResourceRuntime {
         {
             runtime.set_controller_generation(controller_generation);
         }
+        if let Some(identity) = &self.interaction_identity {
+            runtime.set_target_scope(
+                Some(identity.wayland_session_ref().clone()),
+                Some(identity.subject_ref().clone()),
+            );
+        } else {
+            runtime.set_target_scope(None, None);
+        }
         if let Some(status_client) = &self.process_status_client {
             runtime.set_status_client(Arc::clone(status_client));
         }
@@ -1714,6 +1950,19 @@ impl ZoneResourceRuntime {
             Err(_) => return Err(ResourceRuntimeError::CapabilityUnavailable),
         }
         result.map_err(map_process_runtime_error)?;
+        if let (Some(client), Some(identity)) = (
+            self.process_status_client.clone(),
+            self.interaction_identity.as_ref(),
+        ) {
+            crate::process_resource_runtime::reconcile_wayland_session_deletion(
+                &client,
+                &self.store,
+                &self.zone,
+                identity.wayland_session_ref(),
+            )
+            .await
+            .map_err(map_process_runtime_error)?;
+        }
 
         let start_watch = {
             let mut watch_task = self
@@ -1730,7 +1979,16 @@ impl ZoneResourceRuntime {
             let store = Arc::clone(&self.store);
             let zone = self.zone.clone();
             let registry = Arc::clone(&self.process_runtime);
-            let task = tokio::spawn(run_process_watch(watch, store, zone, registry));
+            let task = tokio::spawn(run_process_watch(
+                watch,
+                store,
+                zone,
+                registry,
+                self.process_status_client.clone(),
+                self.interaction_identity
+                    .as_ref()
+                    .map(|identity| identity.wayland_session_ref().clone()),
+            ));
             let mut watch_task = self
                 .process_watch_task
                 .lock()
@@ -1746,7 +2004,7 @@ impl ZoneResourceRuntime {
 
     /// Relist and reconcile durable NixOS generation resources owned by this
     /// Zone. Activation effects remain behind the typed broker or the
-    /// authenticated guest-control bridge.
+    /// authenticated Guest ComponentSession route.
     pub(crate) async fn reconcile_activation_resources(
         &self,
         state: Arc<crate::ServerState>,
@@ -1757,16 +2015,45 @@ impl ZoneResourceRuntime {
         let snapshot = list_activation_snapshot(&self.store, &self.zone)
             .await
             .map_err(map_activation_runtime_error)?;
+        let process_snapshot = crate::process_resource_runtime::list_process_snapshot(
+            &self.store,
+            &self.zone,
+        )
+        .await
+        .map_err(map_process_runtime_error)?;
         let runtime = match self.activation_runtime.lock() {
             Ok(mut guard) => guard.take(),
             Err(_) => return Err(ResourceRuntimeError::CapabilityUnavailable),
         };
         let mut runtime =
             runtime.unwrap_or_else(|| ActivationResourceRuntime::new(self.zone.clone()));
+        runtime.clear_guest_clients();
         if let Some(status_client) = &self.process_status_client {
             runtime.set_status_client(Arc::clone(status_client));
         }
-        let result = runtime.reconcile(Arc::clone(&state), snapshot).await;
+        let guest_targets = guest_activation_targets(&snapshot);
+        let mut process_snapshot = process_snapshot;
+        for guest in guest_targets {
+            let Ok(session) = crate::connect_guest_component_session(&state, &guest).await
+            else {
+                continue;
+            };
+            match list_guest_process_snapshot(&session, &self.zone, &guest).await {
+                Ok(resources) => {
+                    runtime.set_guest_client(
+                        guest.clone(),
+                        Arc::new(GuestActivationResourceClient::new(Arc::clone(&session))),
+                    );
+                    process_snapshot.extend(resources);
+                }
+                Err(()) => {
+                    crate::invalidate_guest_component_session(&state, &guest).await;
+                }
+            }
+        }
+        let result = runtime
+            .reconcile(Arc::clone(&state), snapshot, process_snapshot)
+            .await;
         match self.activation_runtime.lock() {
             Ok(mut guard) => *guard = Some(runtime),
             Err(_) => return Err(ResourceRuntimeError::CapabilityUnavailable),
@@ -2071,6 +2358,34 @@ impl ZoneResourceRuntime {
                     .await;
                 encode_public_list_response(response)
             }
+            "Create" => {
+                let request_wire = public_create_request(self, request, &operation_id).await?;
+                let response = client.create(request_wire).await;
+                encode_public_create_response(response)
+            }
+            "UpdateSpec" => {
+                let request_wire =
+                    public_update_spec_request(&client, self, request, &operation_id).await?;
+                let response = client.update_spec(request_wire).await;
+                encode_public_update_spec_response(response)
+            }
+            "UpdateStatus" => {
+                let request_wire =
+                    public_update_status_request(&client, self, request, &operation_id).await?;
+                let response = client.update_status(request_wire).await;
+                encode_public_update_status_response(response)
+            }
+            "UpdateFinalizers" => {
+                let request_wire = public_update_finalizers_request(self, request, &operation_id)?;
+                let response = client.update_finalizers(request_wire).await;
+                encode_public_update_finalizers_response(response)
+            }
+            "Delete" => {
+                let request_wire =
+                    public_delete_request(self, request, &operation_id).await?;
+                let response = client.delete(request_wire).await;
+                encode_public_delete_response(response)
+            }
             _ => Err(ResourceRuntimeError::CapabilityUnavailable),
         }
     }
@@ -2292,6 +2607,7 @@ impl ZoneResourceRuntime {
             process_status_client,
             audio_watch_task,
             audio_runtime,
+            semantic_binding_watch_task,
             process_watch_task,
             process_runtime,
             activation_watch_task,
@@ -2313,6 +2629,13 @@ impl ZoneResourceRuntime {
             let _ = task.await;
         }
         drop(audio_runtime);
+        if let Some(task) = semantic_binding_watch_task
+            .into_inner()
+            .map_err(|_| ResourceRuntimeError::WatchUnavailable)?
+        {
+            task.abort();
+            let _ = task.await;
+        }
         if let Some(task) = process_watch_task
             .into_inner()
             .map_err(|_| ResourceRuntimeError::WatchUnavailable)?
@@ -2806,6 +3129,8 @@ async fn load_committed_interaction_identity(
     }
 
     Ok(Some(CommittedInteractionIdentity {
+        wayland_session_ref: session_resource.resource_ref,
+        wayland_session_uid: session_resource.uid,
         subject_ref,
         subject_uid,
         host_execution_ref,
@@ -2906,7 +3231,12 @@ async fn committed_resource(
 ) -> Result<StoredResource, ResourceRuntimeError> {
     if !matches!(
         resource_ref.resource_type().as_str(),
-        "Guest" | "Host" | "Provider" | "User" | "display-wayland.d2bus.org.WaylandPolicy"
+        "Guest"
+            | "Host"
+            | "Provider"
+            | "User"
+            | "display-wayland.d2bus.org.WaylandPolicy"
+            | "display-wayland.d2bus.org.WaylandSession"
     ) {
         return Err(ResourceRuntimeError::InteractionConfigurationUnavailable);
     }
@@ -3337,12 +3667,759 @@ fn map_process_runtime_error(error: ProcessResourceRuntimeError) -> ResourceRunt
     }
 }
 
+pub(crate) fn guest_activation_targets(resources: &[StoredResource]) -> BTreeSet<String> {
+    resources
+        .iter()
+        .filter(|resource| {
+            resource.resource_ref.resource_type().as_str()
+                == d2b_contracts_resource::v3::activation_nixos::NIXOS_GENERATION_RESOURCE_TYPE
+        })
+        .filter_map(|resource| {
+            let envelope = ResourceEnvelope::from_json(&resource.canonical_json).ok()?;
+            let spec = serde_json::from_slice::<NixosGenerationSpec>(
+                &envelope.spec().base().to_canonical_bytes(),
+            )
+            .ok()?;
+            (spec.execution_ref().resource_type().as_str() == "Guest")
+                .then(|| spec.execution_ref().name().as_str().to_owned())
+        })
+        .collect()
+}
+
+pub(crate) async fn list_guest_process_snapshot(
+    session: &d2bd_runtime::guest_component_session::GuestComponentSessionClient,
+    zone: &ZoneId,
+    guest: &str,
+) -> Result<Vec<StoredResource>, ()> {
+    let mut request = wire::ListRequest::new();
+    let mut meta = wire::RequestMeta::new();
+    meta.operation_id = "activation-guest-process-relist".to_owned();
+    meta.idempotency_key = meta.operation_id.clone();
+    meta.correlation_id = meta.operation_id.clone();
+    meta.trace_id = meta.operation_id.clone();
+    meta.deadline_ms = 10_000;
+    request.meta = protobuf::MessageField::some(meta);
+    request.resource_types = vec!["Process".to_owned(), "EphemeralProcess".to_owned()];
+    request.page_size = 256;
+    let mut projection = wire::Projection::new();
+    projection.kind = protobuf::EnumOrUnknown::new(
+        wire::ProjectionKind::PROJECTION_KIND_FULL,
+    );
+    request.projection = protobuf::MessageField::some(projection);
+
+    let client = session.resource_service_client();
+    let mut resources = Vec::new();
+    loop {
+        let response = client
+            .list(ttrpc::context::Context::default(), &request)
+            .await
+            .map_err(|_| ())?;
+        if response.error.is_some() {
+            return Err(());
+        }
+        for resource in &response.resources {
+            let resource = stored_resource_from_wire(resource).ok_or(())?;
+            if resource.zone != *zone {
+                return Err(());
+            }
+            let expected_target = ResourceRef::parse(&format!("Guest/{guest}")).map_err(|_| ())?;
+            let envelope = ResourceEnvelope::from_json(&resource.canonical_json).map_err(|_| ())?;
+            let execution_ref = envelope
+                .spec()
+                .base()
+                .get("executionRef")
+                .and_then(|value| match value {
+                    CanonicalJsonValue::String(value) => ResourceRef::parse(value).ok(),
+                    _ => None,
+                })
+                .ok_or(())?;
+            if execution_ref != expected_target {
+                return Err(());
+            }
+            resources.push(resource);
+        }
+        let Some(cursor) = response.next_cursor.as_ref().cloned() else {
+            break;
+        };
+        request.cursor = protobuf::MessageField::some(cursor);
+    }
+    Ok(resources)
+}
+
 fn map_activation_runtime_error(error: ActivationResourceRuntimeError) -> ResourceRuntimeError {
     match error {
         ActivationResourceRuntimeError::Store => ResourceRuntimeError::StoreReadFailed,
         ActivationResourceRuntimeError::InvalidResource
         | ActivationResourceRuntimeError::Policy => ResourceRuntimeError::CapabilityUnavailable,
     }
+}
+
+async fn public_create_request(
+    runtime: &ZoneResourceRuntime,
+    request: &Value,
+    operation_id: &str,
+) -> Result<wire::CreateRequest, ResourceRuntimeError> {
+    let resource_type = request
+        .get("resourceType")
+        .and_then(Value::as_str)
+        .ok_or(ResourceRuntimeError::RequestInvalid)
+        .and_then(|value| {
+            ResourceTypeName::parse(value.to_owned())
+                .map_err(|_| ResourceRuntimeError::RequestInvalid)
+        })?;
+    let input = request
+        .get("resource")
+        .or_else(|| request.get("spec"))
+        .ok_or(ResourceRuntimeError::RequestInvalid)?;
+    let (name, spec) = if is_resource_envelope(input) {
+        let name = input
+            .pointer("/metadata/name")
+            .and_then(Value::as_str)
+            .ok_or(ResourceRuntimeError::RequestInvalid)?;
+        let spec = input
+            .get("spec")
+            .cloned()
+            .ok_or(ResourceRuntimeError::RequestInvalid)?;
+        (name.to_owned(), spec)
+    } else {
+        let name = request
+            .get("resourceName")
+            .and_then(Value::as_str)
+            .or_else(|| {
+                input
+                    .get("metadata")
+                    .and_then(|value| value.get("name"))
+                    .and_then(Value::as_str)
+            })
+            .ok_or(ResourceRuntimeError::RequestInvalid)?;
+        (name.to_owned(), input.clone())
+    };
+    let payload = public_create_payload(
+        runtime,
+        &resource_type,
+        &name,
+        &spec,
+        request.get("ownerRef").and_then(Value::as_str),
+    )
+    .await?;
+    let identity = public_identity(runtime, &resource_type, &name, None, None, None);
+    let mut mutation = wire::Mutation::new();
+    mutation.kind = protobuf::EnumOrUnknown::new(wire::MutationKind::MUTATION_KIND_CREATE);
+    mutation.target = protobuf::MessageField::some(identity.clone());
+    mutation.precondition = protobuf::MessageField::some(create_precondition());
+    mutation.resource = protobuf::MessageField::some(public_resource_body(identity, payload)?);
+    apply_public_mutation_options(&mut mutation, request)?;
+    let mut result = wire::CreateRequest::new();
+    result.meta = protobuf::MessageField::some(public_request_meta(operation_id));
+    result.mutation = protobuf::MessageField::some(mutation);
+    Ok(result)
+}
+
+async fn public_update_spec_request(
+    client: &ResourceApiClient<RedbBackend, UnavailableUpgradeDispatcher>,
+    runtime: &ZoneResourceRuntime,
+    request: &Value,
+    operation_id: &str,
+) -> Result<wire::UpdateSpecRequest, ResourceRuntimeError> {
+    let target = public_target_ref(request)?;
+    let current = public_get_resource(client, runtime, &target, operation_id).await?;
+    let spec = request
+        .get("spec")
+        .cloned()
+        .ok_or(ResourceRuntimeError::RequestInvalid)?;
+    let payload = replace_public_field(&current, "spec", spec)?;
+    let current_uid = public_uid(&current)?;
+    let current_revision = public_revision(&current)?;
+    let expected_revision = public_expected_revision(request)?.unwrap_or(current_revision);
+    let identity = public_identity(
+        runtime,
+        target.resource_type(),
+        target.name().as_str(),
+        Some(&current_uid),
+        Some(public_generation(&current)?),
+        Some(expected_revision),
+    );
+    let mut mutation = public_body_mutation(
+        wire::MutationKind::MUTATION_KIND_UPDATE_SPEC,
+        identity,
+        exact_public_precondition(expected_revision, &current_uid),
+        payload,
+    )?;
+    apply_public_mutation_options(&mut mutation, request)?;
+    let mut result = wire::UpdateSpecRequest::new();
+    result.meta = protobuf::MessageField::some(public_request_meta(operation_id));
+    result.mutation = protobuf::MessageField::some(mutation);
+    Ok(result)
+}
+
+async fn public_update_status_request(
+    client: &ResourceApiClient<RedbBackend, UnavailableUpgradeDispatcher>,
+    runtime: &ZoneResourceRuntime,
+    request: &Value,
+    operation_id: &str,
+) -> Result<wire::UpdateStatusRequest, ResourceRuntimeError> {
+    let target = public_target_ref(request)?;
+    let current = public_get_resource(client, runtime, &target, operation_id).await?;
+    let status = request
+        .get("status")
+        .cloned()
+        .or_else(|| request.get("resource").and_then(|value| value.get("status")).cloned())
+        .ok_or(ResourceRuntimeError::RequestInvalid)?;
+    let payload = replace_public_field(&current, "status", status)?;
+    let current_uid = public_uid(&current)?;
+    let current_revision = public_revision(&current)?;
+    let expected_revision = public_expected_revision(request)?.unwrap_or(current_revision);
+    let identity = public_identity(
+        runtime,
+        target.resource_type(),
+        target.name().as_str(),
+        Some(&current_uid),
+        Some(public_generation(&current)?),
+        Some(expected_revision),
+    );
+    let mutation = public_body_mutation(
+        wire::MutationKind::MUTATION_KIND_UPDATE_STATUS,
+        identity,
+        exact_public_precondition(expected_revision, &current_uid),
+        payload,
+    )?;
+    let mut result = wire::UpdateStatusRequest::new();
+    result.meta = protobuf::MessageField::some(public_request_meta(operation_id));
+    result.mutation = protobuf::MessageField::some(mutation);
+    Ok(result)
+}
+
+fn public_update_finalizers_request(
+    runtime: &ZoneResourceRuntime,
+    request: &Value,
+    operation_id: &str,
+) -> Result<wire::UpdateFinalizersRequest, ResourceRuntimeError> {
+    let target = public_target_ref(request)?;
+    let uid = request
+        .get("uid")
+        .and_then(Value::as_str)
+        .map(|value| ResourceUid::parse(value.to_owned()))
+        .transpose()
+        .map_err(|_| ResourceRuntimeError::RequestInvalid)?;
+    let expected_revision =
+        public_expected_revision(request)?.ok_or(ResourceRuntimeError::RequestInvalid)?;
+    let uid = uid.ok_or(ResourceRuntimeError::RequestInvalid)?;
+    let identity = public_identity(
+        runtime,
+        target.resource_type(),
+        target.name().as_str(),
+        Some(&uid),
+        None,
+        Some(expected_revision),
+    );
+    let mut mutation = wire::Mutation::new();
+    mutation.kind =
+        protobuf::EnumOrUnknown::new(wire::MutationKind::MUTATION_KIND_UPDATE_FINALIZERS);
+    mutation.target = protobuf::MessageField::some(identity);
+    mutation.precondition =
+        protobuf::MessageField::some(exact_public_precondition(expected_revision, &uid));
+    mutation.add_finalizers = public_string_array(request, "addFinalizers")?;
+    mutation.remove_finalizers = public_string_array(request, "removeFinalizers")?;
+    if mutation.add_finalizers.is_empty() && mutation.remove_finalizers.is_empty() {
+        return Err(ResourceRuntimeError::RequestInvalid);
+    }
+    let mut result = wire::UpdateFinalizersRequest::new();
+    result.meta = protobuf::MessageField::some(public_request_meta(operation_id));
+    result.mutation = protobuf::MessageField::some(mutation);
+    Ok(result)
+}
+
+async fn public_delete_request(
+    runtime: &ZoneResourceRuntime,
+    request: &Value,
+    operation_id: &str,
+) -> Result<wire::DeleteRequest, ResourceRuntimeError> {
+    let target = public_target_ref(request)?;
+    let expected_revision = public_expected_revision(request)?;
+    let uid = request
+        .get("uid")
+        .and_then(Value::as_str)
+        .map(|value| ResourceUid::parse(value.to_owned()))
+        .transpose()
+        .map_err(|_| ResourceRuntimeError::RequestInvalid)?;
+    let identity = public_identity(
+        runtime,
+        target.resource_type(),
+        target.name().as_str(),
+        uid.as_ref(),
+        None,
+        expected_revision,
+    );
+    let mut mutation = wire::Mutation::new();
+    mutation.kind = protobuf::EnumOrUnknown::new(wire::MutationKind::MUTATION_KIND_DELETE);
+    mutation.target = protobuf::MessageField::some(identity.clone());
+    let precondition = match expected_revision {
+        Some(revision) => {
+            let uid = uid.ok_or(ResourceRuntimeError::RequestInvalid)?;
+            exact_public_precondition(revision, &uid)
+        }
+        None => {
+            let mut precondition = wire::Precondition::new();
+            precondition.kind =
+                protobuf::EnumOrUnknown::new(wire::PreconditionKind::PRECONDITION_KIND_EXACT_REVISION);
+            precondition.expected_revision = Some(1);
+            precondition
+        }
+    };
+    mutation.precondition = protobuf::MessageField::some(precondition);
+    apply_public_mutation_options(&mut mutation, request)?;
+    let mut result = wire::DeleteRequest::new();
+    result.meta = protobuf::MessageField::some(public_request_meta(operation_id));
+    result.mutation = protobuf::MessageField::some(mutation);
+    Ok(result)
+}
+
+fn public_target_ref(request: &Value) -> Result<ResourceRef, ResourceRuntimeError> {
+    request
+        .get("resourceRef")
+        .and_then(Value::as_str)
+        .ok_or(ResourceRuntimeError::RequestInvalid)
+        .and_then(|value| {
+            ResourceRef::parse(value).map_err(|_| ResourceRuntimeError::RequestInvalid)
+        })
+}
+
+fn public_expected_revision(request: &Value) -> Result<Option<u64>, ResourceRuntimeError> {
+    let Some(value) = request.get("expectedRevision") else {
+        return Ok(None);
+    };
+    if value.is_null() {
+        return Ok(None);
+    }
+    let value = value
+        .as_u64()
+        .or_else(|| value.as_str().and_then(|value| value.parse().ok()))
+        .filter(|value| *value > 0)
+        .ok_or(ResourceRuntimeError::RequestInvalid)?;
+    Ok(Some(value))
+}
+
+fn public_uid(resource: &Value) -> Result<ResourceUid, ResourceRuntimeError> {
+    resource
+        .pointer("/metadata/uid")
+        .and_then(Value::as_str)
+        .ok_or(ResourceRuntimeError::ResponseInvalid)
+        .and_then(|value| {
+            ResourceUid::parse(value.to_owned()).map_err(|_| ResourceRuntimeError::ResponseInvalid)
+        })
+}
+
+fn public_revision(resource: &Value) -> Result<u64, ResourceRuntimeError> {
+    resource
+        .pointer("/metadata/revision")
+        .and_then(Value::as_u64)
+        .filter(|value| *value > 0)
+        .ok_or(ResourceRuntimeError::ResponseInvalid)
+}
+
+fn public_generation(resource: &Value) -> Result<u64, ResourceRuntimeError> {
+    resource
+        .pointer("/metadata/generation")
+        .and_then(Value::as_u64)
+        .filter(|value| *value > 0)
+        .ok_or(ResourceRuntimeError::ResponseInvalid)
+}
+
+async fn public_get_resource(
+    client: &ResourceApiClient<RedbBackend, UnavailableUpgradeDispatcher>,
+    runtime: &ZoneResourceRuntime,
+    target: &ResourceRef,
+    operation_id: &str,
+) -> Result<Value, ResourceRuntimeError> {
+    let mut meta = public_request_meta(operation_id);
+    meta.deadline_ms = 30_000;
+    let response = client
+        .get(wire::GetRequest {
+            meta: protobuf::MessageField::some(meta),
+            target: protobuf::MessageField::some(public_identity(
+                runtime,
+                target.resource_type(),
+                target.name().as_str(),
+                None,
+                None,
+                None,
+            )),
+            projection: {
+                let mut projection = wire::Projection::new();
+                projection.kind =
+                    protobuf::EnumOrUnknown::new(wire::ProjectionKind::PROJECTION_KIND_FULL);
+                protobuf::MessageField::some(projection)
+            },
+            special_fields: protobuf::SpecialFields::new(),
+        })
+        .await;
+    if response.error.is_some() {
+        return Err(ResourceRuntimeError::RequestInvalid);
+    }
+    let resource = response
+        .resource
+        .as_ref()
+        .ok_or(ResourceRuntimeError::ResponseInvalid)?;
+    encode_public_resource(resource)
+}
+
+fn public_identity(
+    runtime: &ZoneResourceRuntime,
+    resource_type: &ResourceTypeName,
+    name: &str,
+    uid: Option<&ResourceUid>,
+    generation: Option<u64>,
+    revision: Option<u64>,
+) -> wire::ResourceIdentity {
+    wire::ResourceIdentity {
+        zone: runtime.zone.to_canonical_string(),
+        resource_type: resource_type.to_canonical_string(),
+        name: name.to_owned(),
+        uid: uid.map(|value| value.as_str().to_owned()),
+        generation,
+        revision,
+        special_fields: protobuf::SpecialFields::new(),
+    }
+}
+
+fn create_precondition() -> wire::Precondition {
+    let mut precondition = wire::Precondition::new();
+    precondition.kind =
+        protobuf::EnumOrUnknown::new(wire::PreconditionKind::PRECONDITION_KIND_CREATE_ABSENT);
+    precondition
+}
+
+fn exact_public_precondition(revision: u64, uid: &ResourceUid) -> wire::Precondition {
+    let mut precondition = wire::Precondition::new();
+    precondition.kind =
+        protobuf::EnumOrUnknown::new(wire::PreconditionKind::PRECONDITION_KIND_EXACT_REVISION);
+    precondition.expected_revision = Some(revision);
+    precondition.expected_uid = Some(uid.as_str().to_owned());
+    precondition
+}
+
+fn public_body_mutation(
+    kind: wire::MutationKind,
+    identity: wire::ResourceIdentity,
+    precondition: wire::Precondition,
+    payload: Vec<u8>,
+) -> Result<wire::Mutation, ResourceRuntimeError> {
+    let mut mutation = wire::Mutation::new();
+    mutation.kind = protobuf::EnumOrUnknown::new(kind);
+    mutation.target = protobuf::MessageField::some(identity.clone());
+    mutation.precondition = protobuf::MessageField::some(precondition);
+    mutation.resource = protobuf::MessageField::some(public_resource_body(identity, payload)?);
+    Ok(mutation)
+}
+
+fn public_resource_body(
+    identity: wire::ResourceIdentity,
+    payload: Vec<u8>,
+) -> Result<wire::ResourceEnvelopeBytes, ResourceRuntimeError> {
+    let envelope =
+        ResourceEnvelope::from_json(&payload).map_err(|_| ResourceRuntimeError::RequestInvalid)?;
+    let digest = envelope
+        .digest()
+        .map_err(|_| ResourceRuntimeError::RequestInvalid)?;
+    let mut body = wire::ResourceEnvelopeBytes::new();
+    body.identity = protobuf::MessageField::some(identity);
+    body.canonical_json = payload;
+    body.payload_digest = digest;
+    Ok(body)
+}
+
+fn apply_public_mutation_options(
+    mutation: &mut wire::Mutation,
+    request: &Value,
+) -> Result<(), ResourceRuntimeError> {
+    mutation.wait_for_reconcile = request
+        .get("waitForReconcile")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+    mutation.reconcile_deadline_ms = request
+        .get("reconcileDeadlineMs")
+        .and_then(|value| {
+            value
+                .as_u64()
+                .or_else(|| value.as_str().and_then(|value| value.parse().ok()))
+        })
+        .unwrap_or(0);
+    if !mutation.wait_for_reconcile && mutation.reconcile_deadline_ms != 0 {
+        return Err(ResourceRuntimeError::RequestInvalid);
+    }
+    Ok(())
+}
+
+fn public_string_array(
+    request: &Value,
+    field: &str,
+) -> Result<Vec<String>, ResourceRuntimeError> {
+    let Some(value) = request.get(field) else {
+        return Ok(Vec::new());
+    };
+    let values = value
+        .as_array()
+        .ok_or(ResourceRuntimeError::RequestInvalid)?;
+    values
+        .iter()
+        .map(|value| {
+            value
+                .as_str()
+                .map(str::to_owned)
+                .ok_or(ResourceRuntimeError::RequestInvalid)
+        })
+        .collect()
+}
+
+fn is_resource_envelope(value: &Value) -> bool {
+    value.get("metadata").is_some()
+        && value.get("spec").is_some()
+        && (value.get("type").is_some() || value.get("apiVersion").is_some())
+}
+
+async fn public_create_payload(
+    runtime: &ZoneResourceRuntime,
+    resource_type: &ResourceTypeName,
+    name: &str,
+    spec: &Value,
+    owner_ref: Option<&str>,
+) -> Result<Vec<u8>, ResourceRuntimeError> {
+    let metadata = runtime
+        .store
+        .runtime_metadata()
+        .await
+        .map_err(|_| ResourceRuntimeError::StoreReadFailed)?;
+    let timestamp = current_status_timestamp();
+    let value = json!({
+        "apiVersion": "resources.d2bus.org/v3",
+        "type": resource_type.to_canonical_string(),
+        "metadata": {
+            "configurationGeneration": metadata.policy_snapshot.active_configuration_revision.get(),
+            "createdAt": timestamp,
+            "deletionRequestedAt": null,
+            "finalizers": [],
+            "generation": 1,
+            "managedBy": "api",
+            "name": name,
+            "ownerRef": owner_ref,
+            "revision": 1,
+            "updatedAt": timestamp,
+            "zone": runtime.zone.as_str()
+        },
+        "spec": spec,
+        "status": {
+            "completedAt": null,
+            "conditions": [],
+            "lastReconciledAt": null,
+            "observedGeneration": 0,
+            "outcome": null,
+            "phase": "Pending",
+            "resource": {},
+            "startedAt": null,
+            "update": {
+                "dependencies": {"count": 0, "refs": []},
+                "disruption": "None",
+                "lastAssessedAt": 0,
+                "observedGeneration": 0,
+                "operationId": null,
+                "owned": {"count": 0, "refs": []},
+                "preserveState": true,
+                "reasons": [],
+                "state": "Unknown",
+                "targetGeneration": 1
+            }
+        }
+    });
+    if value
+        .get("spec")
+        .and_then(Value::as_object)
+        .is_none()
+    {
+        return Err(ResourceRuntimeError::RequestInvalid);
+    }
+    let bytes = serde_json::to_vec(&value).map_err(|_| ResourceRuntimeError::RequestInvalid)?;
+    let canonical = CanonicalJsonValue::parse(&bytes)
+        .map_err(|_| ResourceRuntimeError::RequestInvalid)?
+        .to_canonical_bytes();
+    ResourceEnvelope::from_json(&canonical)
+        .map_err(|_| ResourceRuntimeError::RequestInvalid)?;
+    Ok(canonical)
+}
+
+fn replace_public_field(
+    current: &Value,
+    field: &str,
+    replacement: Value,
+) -> Result<Vec<u8>, ResourceRuntimeError> {
+    let mut value = current.clone();
+    value
+        .as_object_mut()
+        .and_then(|root| root.get_mut(field))
+        .map(|field_value| *field_value = replacement)
+        .ok_or(ResourceRuntimeError::RequestInvalid)?;
+    let bytes = serde_json::to_vec(&value).map_err(|_| ResourceRuntimeError::RequestInvalid)?;
+    let canonical = CanonicalJsonValue::parse(&bytes)
+        .map_err(|_| ResourceRuntimeError::RequestInvalid)?
+        .to_canonical_bytes();
+    ResourceEnvelope::from_json(&canonical)
+        .map_err(|_| ResourceRuntimeError::RequestInvalid)?;
+    Ok(canonical)
+}
+
+fn encode_public_create_response(
+    response: wire::CreateResponse,
+) -> Result<Value, ResourceRuntimeError> {
+    encode_public_mutation_response(
+        response.error.as_ref(),
+        response.resource.as_ref(),
+        None,
+        response.revision,
+        Some(response.disposition.enum_value().unwrap_or(
+            wire::ReconcileDisposition::RECONCILE_DISPOSITION_UNSPECIFIED,
+        )),
+        Some(response.status_persistence.enum_value().unwrap_or(
+            wire::StatusPersistence::STATUS_PERSISTENCE_UNSPECIFIED,
+        )),
+        response.last_persisted_status_revision,
+        response.reconcile_projection.as_ref(),
+    )
+}
+
+fn encode_public_update_spec_response(
+    response: wire::UpdateSpecResponse,
+) -> Result<Value, ResourceRuntimeError> {
+    encode_public_mutation_response(
+        response.error.as_ref(),
+        response.resource.as_ref(),
+        None,
+        response.revision,
+        Some(response.disposition.enum_value().unwrap_or(
+            wire::ReconcileDisposition::RECONCILE_DISPOSITION_UNSPECIFIED,
+        )),
+        Some(response.status_persistence.enum_value().unwrap_or(
+            wire::StatusPersistence::STATUS_PERSISTENCE_UNSPECIFIED,
+        )),
+        response.last_persisted_status_revision,
+        response.reconcile_projection.as_ref(),
+    )
+}
+
+fn encode_public_update_status_response(
+    response: wire::UpdateStatusResponse,
+) -> Result<Value, ResourceRuntimeError> {
+    encode_public_mutation_response(
+        response.error.as_ref(),
+        response.resource.as_ref(),
+        None,
+        response.revision,
+        None,
+        None,
+        None,
+        None,
+    )
+}
+
+fn encode_public_update_finalizers_response(
+    response: wire::UpdateFinalizersResponse,
+) -> Result<Value, ResourceRuntimeError> {
+    encode_public_mutation_response(
+        response.error.as_ref(),
+        response.resource.as_ref(),
+        None,
+        response.revision,
+        None,
+        None,
+        None,
+        None,
+    )
+}
+
+fn encode_public_delete_response(
+    response: wire::DeleteResponse,
+) -> Result<Value, ResourceRuntimeError> {
+    encode_public_mutation_response(
+        response.error.as_ref(),
+        None,
+        response.resource.as_ref(),
+        response.revision,
+        Some(response.disposition.enum_value().unwrap_or(
+            wire::ReconcileDisposition::RECONCILE_DISPOSITION_UNSPECIFIED,
+        )),
+        None,
+        None,
+        None,
+    )
+}
+
+fn encode_public_mutation_response(
+    error: Option<&wire::ResourceError>,
+    resource: Option<&wire::ResourceEnvelopeBytes>,
+    identity: Option<&wire::ResourceIdentity>,
+    revision: u64,
+    disposition: Option<wire::ReconcileDisposition>,
+    status_persistence: Option<wire::StatusPersistence>,
+    last_persisted_status_revision: Option<u64>,
+    reconcile_projection: Option<&wire::ResourceEnvelopeBytes>,
+) -> Result<Value, ResourceRuntimeError> {
+    if let Some(error) = error {
+        return Ok(d2bd_runtime::resource_runtime_support::public_api_error(error));
+    }
+    let mut body = serde_json::Map::new();
+    if let Some(resource) = resource {
+        body.insert("resource".to_owned(), encode_public_resource(resource)?);
+    }
+    if let Some(identity) = identity {
+        body.insert(
+            "resourceRef".to_owned(),
+            Value::String(format!("{}/{}", identity.resource_type, identity.name)),
+        );
+    }
+    body.insert("revision".to_owned(), Value::from(revision));
+    if let Some(disposition) = disposition.filter(|value| {
+        *value != wire::ReconcileDisposition::RECONCILE_DISPOSITION_UNSPECIFIED
+    }) {
+        body.insert(
+            "disposition".to_owned(),
+            Value::String(
+                match disposition {
+                    wire::ReconcileDisposition::RECONCILE_DISPOSITION_CONVERGED => "Converged",
+                    wire::ReconcileDisposition::RECONCILE_DISPOSITION_PROGRESSING => "Progressing",
+                    wire::ReconcileDisposition::RECONCILE_DISPOSITION_BLOCKED => "Blocked",
+                    wire::ReconcileDisposition::RECONCILE_DISPOSITION_UPGRADE_REQUIRED => {
+                        "UpgradeRequired"
+                    }
+                    wire::ReconcileDisposition::RECONCILE_DISPOSITION_FAILED => "Failed",
+                    wire::ReconcileDisposition::RECONCILE_DISPOSITION_UNSPECIFIED => "Unspecified",
+                }
+                .to_owned(),
+            ),
+        );
+    }
+    if let Some(status_persistence) = status_persistence.filter(|value| {
+        *value != wire::StatusPersistence::STATUS_PERSISTENCE_UNSPECIFIED
+    }) {
+        body.insert(
+            "statusPersistence".to_owned(),
+            Value::String(
+                match status_persistence {
+                    wire::StatusPersistence::STATUS_PERSISTENCE_PENDING => "pending",
+                    wire::StatusPersistence::STATUS_PERSISTENCE_COMMITTED => "committed",
+                    wire::StatusPersistence::STATUS_PERSISTENCE_UNSPECIFIED => "unspecified",
+                }
+                .to_owned(),
+            ),
+        );
+    }
+    if let Some(revision) = last_persisted_status_revision {
+        body.insert("lastPersistedStatusRevision".to_owned(), Value::from(revision));
+    }
+    if let Some(projection) = reconcile_projection {
+        body.insert(
+            "reconcileProjection".to_owned(),
+            encode_public_resource(projection)?,
+        );
+    }
+    Ok(Value::Object(body))
 }
 
 /// All Zone runtimes owned by one daemon.
@@ -3511,8 +4588,7 @@ mod tests {
                 },
             },
         });
-        let canonical_json =
-            d2b_contracts_resource::v3::canonical_json_bytes(&envelope).unwrap();
+        let canonical_json = d2b_contracts_resource::v3::canonical_json_bytes(&envelope).unwrap();
         let parsed = ResourceEnvelope::from_json(&canonical_json).unwrap();
         StoredResource {
             resource_ref: ResourceRef::parse(&format!("Provider/{name}")).unwrap(),
@@ -4096,8 +5172,10 @@ mod tests {
                 1000,
             )
             .await
-            .unwrap_err();
-        assert_eq!(direct_delete, ResourceRuntimeError::CapabilityUnavailable);
+            .unwrap();
+        assert_eq!(direct_delete["type"], "error");
+        assert_eq!(direct_delete["error"]["kind"], "resource-conflict");
+        assert_eq!(direct_delete["error"]["retryClass"], "reauthorize");
         runtime.shutdown().await.unwrap();
     }
 }

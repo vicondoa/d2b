@@ -12,6 +12,11 @@
 | Depends on | `ADR-046-resources-device`, `ADR-046-resources-network`, `ADR-046-resources-zone-control`, `ADR-046-zone-routing`, `ADR-046-components-processes-and-sandbox`, `ADR-046-provider-model-and-packaging`, `ADR-046-resource-reconciliation`, `ADR-046-telemetry-audit-and-support`, `ADR-046-componentsession-and-bus`, `ADR-046-nix-configuration`, `ADR-046-resource-api-and-authorization`, `ADR-046-provider-state` |
 | Supersedes | `nixos-modules/components/usbip.nix` (host-side), per-env usbipd systemd units in `nixos-modules/network.nix`, `ProcessRole::Usbip` / `RunnerRole::Usbip` in current v3 baseline |
 
+> **Current-state note (U10).** Guest import and detach are owned by the
+> signed target-local USBIP Process over ComponentSession. The baseline
+> guest-control and `guestControl.usbipPath` references below are historical;
+> host bind, firewall, proxy, and claim ownership remain in this Provider.
+
 ---
 
 ## Purpose

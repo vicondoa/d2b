@@ -118,7 +118,6 @@ let
     hostPath = "/etc/d2b/host.json";
     processesPath = "/etc/d2b/processes.json";
     privilegesPath = "/etc/d2b/privileges.json";
-    cutoverRunnerPath = config.d2b._bundle.cutoverRunnerPath;
     storagePath = "/etc/d2b/storage.json";
     syncPath = "/etc/d2b/sync.json";
     allocatorPath = "/etc/d2b/allocator.json";

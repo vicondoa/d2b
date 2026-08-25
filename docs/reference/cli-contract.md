@@ -73,8 +73,8 @@ fallback. When `--item` is omitted, the CLI selects `defaultItem`, then an only
 item, otherwise returns the available item ids and names.
 
 For local-VM exec items, d2bd derives an opaque guest exec id from the
-authenticated requester, operation id, target, and item id. Guestd persists that
-id with the detached exec record, so replay after a daemon restart returns the
+authenticated requester, operation id, target, and item id. The target-local
+Process persists that id with the detached exec record, so replay after a daemon restart returns the
 existing exec instead of spawning a duplicate. A replay whose trusted argv hash
 does not match fails closed.
 
@@ -350,13 +350,13 @@ targets route through the configured gateway entrypoint when supported.
 
 The realm target grammar is
 `<workload>.<realm>[.<ancestor>...].d2b`. Bare local VM names stay on the
-existing host fast path until the runtime/Nix cutover lands. Fully qualified
+existing host fast path until the runtime/Nix transition lands. Fully qualified
 realm targets must resolve through the realm access layer; missing entrypoints
 fail closed with an actionable `missing-realm-entrypoint` error rather than
 falling back to SSH or a generic tunnel.
 
 `d2b guest list --zone <zone>` runs `d2b guest list` against the
-realm gateway through the same local guest-control exec path. It does not
+realm gateway through the same local component-session exec path. It does not
 make the host persist a remote node/workload registry.
 
 ### `vm display`
@@ -768,22 +768,22 @@ Host and bridge diagnostics are a host surface, not a Guest Resource status.
 
 ### `device usb attach`
 
-**Synopsis:** `d2b device usb attach <vm> <busid> [--dry-run | --apply] [--human] [--json]`
+**Synopsis:** `d2b device usb attach <device> <busid> [--dry-run | --apply] [--human] [--json]`
 
 **Flags**
 
 | Flag | Type | Default | Semantics |
 | --- | --- | --- | --- |
-| `--dry-run` | boolean | `false` | Print the daemon → broker USBIP attach plan plus the authenticated guestd import step without mutating host or guest state. |
-| `--apply` | boolean | `false` | Ask `d2bd` to run three fail-closed pre-flight checks (sysfs presence, USB-capable gate, active claim exclusivity), then dispatch the appropriate broker path: **declared path** (when a static bundle intent exists for the busid - `UsbipBind` + firewall carve-out + `UsbipProxyReconcile`), or **explicit path** (when no declared intent exists - `UsbipExplicitFirewallRule` + `UsbipExplicitBind` per-device ops), then ask guestd over authenticated guest-control to import the selected busid. |
-| `--json` | boolean | `false` | Emit the dry-run summary as structured JSON. |
-| `--human` | boolean | `false` | Force the human dry-run summary on stdout. |
+| `--dry-run` | boolean | `false` | Send a typed Resource API intent. Non-qemu USBIP requests report `runtime-capability-unsupported`; they do not claim a host or Guest plan. |
+| `--apply` | boolean | `false` | Require the Device resource to resolve to the USBIP Provider and require the signed target-local Guest Process/ComponentSession import path. Until that path is wired, fail closed before host bind, proxy reconciliation, or claim mutation. |
+| `--json` | boolean | `false` | Emit the daemon response as structured JSON. |
+| `--human` | boolean | `false` | Force human-readable daemon output. |
 
 **Arguments**
 
 | Argument | Semantics |
 | --- | --- |
-| `vm` | Required VM name. |
+| `device` | Required `Device/<name>` ResourceRef. |
 | `busid` | Required host USB busid in the canonical `B-P[.P...]` form (for example `1-2` or `2-1.4`). Does not require the busid to be pre-declared in the NixOS bundle configuration. |
 
 **Exit codes**
@@ -793,65 +793,28 @@ Host and bridge diagnostics are a host surface, not a Guest Resource status.
 | `0` | Success. | - |
 | `1` | `d2bd` is unreachable, or the daemon returned a non-typed USBIP failure. | [`daemon-down`](./error-codes.md#daemon-down) |
 | `2` | Missing VM / busid or another usage error. | [`usage`](./error-codes.md#usage) |
-| `67` | The USB device busid is not present in sysfs (`usbip-busid-not-present`), or another VM already holds an active claim on this busid (`usbip-explicit-claim-conflict`). | [`usbip-busid-not-present`](./error-codes.md#usbip-busid-not-present), [`usbip-explicit-claim-conflict`](./error-codes.md#usbip-explicit-claim-conflict) |
-| `78` | The daemon reached the broker but the native USBIP apply path was refused. | [`broker-error`](./error-codes.md#broker-error) |
+| `70` | The target-local USBIP Process or authenticated Guest import path is unavailable. | [`runtime-capability-unsupported`](./error-codes.md#runtime-capability-unsupported) |
 
 **Human example**
 
 ```text
-$ d2b device usb attach corp-vm 1-2 --dry-run
-d2b device usb attach --dry-run: would bind and lock, apply the USBIP firewall carve-out, ensure the per-env backend/proxy for busid '1-2' for vm 'corp-vm', reconcile the USBIP proxy, and ask guestd to import the device
+$ d2b device usb attach Device/corp-vm 1-2 --dry-run
+d2b device usb attach: runtime capability 'usbip-guest-import' is unavailable; no host USBIP mutation was performed
 ```
-
-**Explicit attach (present-busid, no static allowlist required)**
-
-`d2b device usb attach` accepts any USB device that is physically present in sysfs
-without requiring a static busid or vendor allowlist in the NixOS configuration.
-The daemon selects the **explicit path** when no declared bundle intent exists for
-the requested busid. Three fail-closed checks run before any broker call:
-
-1. **Sysfs presence** - the daemon checks `/sys/bus/usb/devices/<busid>/idVendor`.
-   If absent, the attach fails with `UsbipBusidNotPresent` (exit 67) and guides
-   the operator to plug in the device before retrying.
-2. **USB-capable gate** - the VM must have `RuntimeCapabilityGate::UsbHotplug`
-   declared in its manifest. Non-USB-capable VMs fail with a typed
-   `RuntimeCapabilityUnsupported` error.
-3. **Active claim exclusivity** - the daemon reads the OFD lock under
-   `/run/d2b/locks/usbip/<busid>`. If another VM already holds the claim, the
-   attach fails with `UsbipExplicitClaimConflict` (exit 67) naming the owner VM
-   and guiding the operator to detach from the owner first.
-
-The explicit path dispatches `UsbipExplicitFirewallRule` (env-scoped nftables
-rule keyed on the per-env uplink IPs) and `UsbipExplicitBind` (per-device backend
-setup). Both ops are currently typed stubs; the live per-device backend handler
-is deferred to later implementation. The declared path (static bundle intents) is
-unaffected.
 
 **Status**
 
-The native CLI sends one intent to `d2bd`; the daemon drives broker host
-USBIP state and authenticated guestd import cleanup/attach over guest-control.
-If the target VM is stopped, `--apply` fails before host mutation with an
-actionable usage error: start the Guest with
-`d2b guest start <name> --apply`, wait until it is Ready, then retry
-`d2b device usb attach <vm> <busid> --apply`. This preflight does not create a
-degraded USB state. If an earlier failed apply left a stale or bound USBIP
-session claim, start the VM and rerun the attach or run
-`d2b device usb detach <vm> <busid> --apply`; the attach/detach paths and
-`d2b device usb probe` all run the USBIP proxy reconcile pass, and `device usb probe`
-shows the session claim as cleared once the lock/proxy state is consistent.
-
-Prerequisites for `--apply` are: the target VM is running and guest-control
-advertises USBIP status/import, the bundle declares a USBIP bind/firewall intent
-for the VM/busid, policy/topology checks allow the physical device, the
-`usbip-host` module and per-env backend/proxy carrier can be prepared, and no
-other owner holds the busid session claim. Failing prerequisites surface as
-typed errors or as `d2b device usb probe` degraded reasons with exact remediation
-commands.
+The native CLI sends one Device Resource API intent to `d2bd`. For non-qemu
+USBIP, the daemon currently returns `runtime-capability-unsupported` before
+host bind, firewall/proxy mutation, or claim release because no signed
+target-local USBIP Process effect adapter is wired. `d2b device usb probe`
+remains observational and reports Guest import as unavailable. Qemu-media
+hotplug remains a separate runtime path.
 
 **Native**
 
-- `--apply` routes through `d2bd` → broker + guestd. There is no SSH fallback for USBIP.
+- `--apply` routes through the typed Device Resource API. There is no SSH or
+  guestd fallback for USBIP.
 
 **Bash**
 
@@ -859,22 +822,22 @@ commands.
 
 ### `device usb detach`
 
-**Synopsis:** `d2b device usb detach <vm> <busid> [--dry-run | --apply] [--human] [--json]`
+**Synopsis:** `d2b device usb detach <device> <busid> [--dry-run | --apply] [--human] [--json]`
 
 **Flags**
 
 | Flag | Type | Default | Semantics |
 | --- | --- | --- | --- |
-| `--dry-run` | boolean | `false` | Print the daemon → broker USBIP unbind plan without mutating host state. |
-| `--apply` | boolean | `false` | Ask `d2bd` to run `UsbipUnbind` followed by `UsbipProxyReconcile` for the selected VM/busid pair. |
-| `--json` | boolean | `false` | Emit the dry-run summary as structured JSON. |
-| `--human` | boolean | `false` | Force the human dry-run summary on stdout. |
+| `--dry-run` | boolean | `false` | Send a typed Resource API intent. Non-qemu USBIP requests report `runtime-capability-unsupported` without claiming a host teardown plan. |
+| `--apply` | boolean | `false` | Require the signed target-local Guest Process/ComponentSession detach path. Until that path is wired, fail closed before host unbind, proxy reconciliation, or claim release. |
+| `--json` | boolean | `false` | Emit the daemon response as structured JSON. |
+| `--human` | boolean | `false` | Force human-readable daemon output. |
 
 **Arguments**
 
 | Argument | Semantics |
 | --- | --- |
-| `vm` | Required VM name. |
+| `device` | Required `Device/<name>` ResourceRef. |
 | `busid` | Required host USB busid in the canonical `B-P[.P...]` form. |
 
 **Exit codes**
@@ -884,33 +847,33 @@ commands.
 | `0` | Success. | - |
 | `1` | `d2bd` is unreachable, or the daemon returned a non-typed USBIP failure. | [`daemon-down`](./error-codes.md#daemon-down) |
 | `2` | Missing VM / busid or another usage error. | [`usage`](./error-codes.md#usage) |
-| `78` | The daemon reached the broker but the native USBIP apply path was refused. | [`broker-error`](./error-codes.md#broker-error) |
+| `70` | The target-local USBIP Process or authenticated Guest detach path is unavailable. | [`runtime-capability-unsupported`](./error-codes.md#runtime-capability-unsupported) |
 
 **Human example**
 
 ```text
-$ d2b device usb detach corp-vm 1-2 --dry-run
-d2b device usb detach --dry-run: would ask guestd to detach busid '1-2' for vm 'corp-vm', unbind it on the host, and reconcile the USBIP proxy
+$ d2b device usb detach Device/corp-vm 1-2 --dry-run
+d2b device usb detach: runtime capability 'usbip-guest-import' is unavailable; no host USBIP mutation was performed
 ```
 
 **Status**
 
-The native CLI first asks guestd to detach matching imports, then drives the
-daemon → broker `UsbipUnbind` / `UsbipProxyReconcile` path. Explicit detach is
-the only normal path that releases a USBIP session claim. VM stop/restart keeps
-the claim for the same VM within the current host boot/session so restart
-reconciliation can re-import the device; a host reboot clears the `/run` lock.
+The native CLI sends one Device Resource API intent to `d2bd`. For non-qemu
+USBIP, the daemon currently returns `runtime-capability-unsupported` before
+Guest detach or host unbind because no signed target-local USBIP Process effect
+adapter is wired. The claim is retained for safe retry; a host reboot still
+clears the `/run` lock.
 
-Single-busid detach never stops the shared per-env proxy. If the daemon cannot
-prove firewall-withdrawal-before-flow-kill ordering plus an exact VM/proxy
-cleanup tuple, `--apply` fails closed with a revocation-isolation error and
-preserves the session claim for manual drain/recovery. The public error names the
-target busid. The safe next step is to stop the VM so the stream drains, then
-rerun `d2b device usb detach <vm> <busid> --apply`.
+When the Guest effect path is implemented, single-busid detach must never stop
+the shared per-env proxy. If the daemon cannot prove
+firewall-withdrawal-before-flow-kill ordering plus an exact VM/proxy cleanup
+tuple, `--apply` must fail closed and preserve the session claim for manual
+drain/recovery.
 
 **Native**
 
-- `--apply` routes through `d2bd` → broker `UsbipUnbind` then `UsbipProxyReconcile`.
+- `--apply` routes through the typed Device Resource API. There is no SSH or
+  guestd fallback for USBIP.
 
 **Bash**
 
@@ -940,7 +903,7 @@ rerun `d2b device usb detach <vm> <busid> --apply`.
 | `0` | Success. | - |
 | `1` | `d2bd` is unreachable or does not expose the native USBIP probe request. | [`daemon-down`](./error-codes.md#daemon-down) |
 | `2` | Unsupported invocation shape. | [`usage`](./error-codes.md#usage) |
-| `78` | The daemon reached the broker but the `UsbipProxyReconcile` pass failed. | [`broker-error`](./error-codes.md#broker-error) |
+| `78` | The daemon could not refresh an independent qemu-media registry. | [`broker-error`](./error-codes.md#broker-error) |
 
 **Human example**
 
@@ -948,9 +911,8 @@ rerun `d2b device usb detach <vm> <busid> --apply`.
 $ d2b device usb probe
 VM                       ENV          BUSID        STATUS     SESSION-CLAIM          HOST-BIND                CARRIER        PROXY        GUEST      POLICY
 corp-vm                  work         1-2          degraded   held-by-desired-owner  unknown                  unknown        unknown      detached   allowed
-  degraded guest-import-unavailable: the guest USBIP import has not converged
-  remediation: Run `d2b device usb attach corp-vm 1-2 --apply` after the VM is running.
-  command: d2b device usb attach corp-vm 1-2 --apply
+  degraded guest-import-unavailable: Guest USB import requires a target-local USBIP Process path that is unavailable; the host claim is not a successful attachment.
+  remediation: Use a build that includes the signed target-local USBIP Process over ComponentSession, then retry the command.
 ```
 
 **`--json` example** - schema: [`usb-probe.schema.json`](./cli-output/usb-probe.schema.json); prose companion: [`usb-probe.md`](./cli-output/usb-probe.md).
@@ -976,7 +938,7 @@ corp-vm                  work         1-2          degraded   held-by-desired-ow
         "proxy": "unknown"
       },
       "guest": {
-        "import": "detached"
+        "import": "unavailable"
       },
       "topologyPolicy": {
         "topology": "unknown",
@@ -985,13 +947,11 @@ corp-vm                  work         1-2          degraded   held-by-desired-ow
       "degradedReasons": [
         {
           "code": "guest-import-unavailable",
-          "summary": "the guest USBIP import has not converged",
-          "remediation": "Run `d2b device usb attach corp-vm 1-2 --apply` after the VM is running."
+          "summary": "Guest USB import requires a target-local USBIP Process path that is unavailable; the host claim is not a successful attachment.",
+          "remediation": "Use a build that includes the signed target-local USBIP Process over ComponentSession, then retry the command."
         }
       ],
-      "remediationCommands": [
-        "d2b device usb attach corp-vm 1-2 --apply"
-      ]
+      "remediationCommands": []
     }
   ]
 }
@@ -999,8 +959,8 @@ corp-vm                  work         1-2          degraded   held-by-desired-ow
 
 **Status**
 
-Probe is a read-only daemon RPC backed by the broker's
-`UsbipProxyReconcile` validation pass. The JSON and human forms split:
+Probe is a read-only daemon RPC. It does not reconcile or mutate the host
+proxy for non-qemu USBIP. The JSON and human forms split:
 
 - the **session claim** (`missing`, `held-by-desired-owner`,
   `held-by-other-owner`, `stale-owner`, `corrupt`, or `not-applicable`);
@@ -1021,13 +981,11 @@ reconciled. Public output uses redacted state labels and summaries rather
 than raw sysfs paths, raw serials, stderr, or policy internals.
 
 VM restart reconciliation preserves same-VM session claims for the current host
-boot/session, detaches guest imports, and only runs host unbind after firewall
-withdrawal plus targeted stream cleanup is proven. It then replays host
-bind/proxy and guest import after guest-control readiness. Runtime absence,
-proxy unavailability, or guest import unavailability surfaces as degraded USB
-state. Required policy/topology failures fail before device exposure and must be
-remediated by fixing the declaration, rebuilding, and rerunning the lifecycle
-command.
+boot/session. Until the signed target-local USBIP Process path is available,
+start and detach stop before host release, while Guest import unavailability
+surfaces as degraded USB state. Required policy/topology failures fail before
+device exposure and must be remediated by fixing the declaration, rebuilding,
+and rerunning the lifecycle command.
 
 **Native**
 
@@ -1243,7 +1201,7 @@ until the daemon handler ships.
 | `0` | Success. | - |
 | `1` | Console launch or output read failure. | [`generic`](./error-codes.md#generic) |
 | `2` | Unknown VM, missing argument, or graphics VM selected. | [`usage`](./error-codes.md#usage) |
-| `80` | `provider-misconfigured`: ACA sandbox without an active guestd-compatible console transport; see [ACA console - provider misconfiguration](./provider-capability-matrix.md#aca-console--provider-misconfiguration). | [`provider-misconfigured`](./error-codes.md#provider-misconfigured) |
+| `80` | `provider-misconfigured`: ACA sandbox without an active target-local Process-compatible console transport; see [ACA console - provider misconfiguration](./provider-capability-matrix.md#aca-console--provider-misconfiguration). | [`provider-misconfigured`](./error-codes.md#provider-misconfigured) |
 
 **Human example**
 
@@ -1258,7 +1216,7 @@ output.
 
 **Status**
 
-The Rust CLI dispatches `ConsoleOp` to `d2bd` over the public socket. The daemon owns a persistent ring-buffer drainer per VM and hands the attached operator session reads from that buffer. Provider-capability resolution runs before attach; ACA targets without an active guestd-compatible terminal transport surface a typed `provider-misconfigured` error (exit `80`) rather than falling back to any shell channel. See [provider capability matrix](./provider-capability-matrix.md) for the per-provider transport model; the design is governed by [ADR 0041](../adr/0041-console-and-audio-controls.md) and [ADR 0015](../adr/0015-daemon-only-clean-break.md).
+The Rust CLI dispatches `ConsoleOp` to `d2bd` over the public socket. The daemon owns a persistent ring-buffer drainer per VM and hands the attached operator session reads from that buffer. Provider-capability resolution runs before attach; ACA targets without an active target-local Process-compatible terminal transport surface a typed `provider-misconfigured` error (exit `80`) rather than falling back to any shell channel. See [provider capability matrix](./provider-capability-matrix.md) for the per-provider transport model; the design is governed by [ADR 0041](../adr/0041-console-and-audio-controls.md) and [ADR 0015](../adr/0015-daemon-only-clean-break.md).
 
 **Native**
 
@@ -1291,7 +1249,7 @@ The Rust CLI dispatches `ConsoleOp` to `d2bd` over the public socket. The daemon
 | `0` | Success. Per-target `enforcement: unsupported` (e.g. qemu-media guest-side) is reported in the output body, not as an error exit. | - |
 | `1` | Unexpected filesystem or state probe failure. | [`generic`](./error-codes.md#generic) |
 | `2` | Unknown VM or unsupported invocation shape. | [`usage`](./error-codes.md#usage) |
-| `80` | `provider-misconfigured`: ACA sandbox without an active guestd audio transport; see [provider capability matrix](./provider-capability-matrix.md#aca-audio). | [`provider-misconfigured`](./error-codes.md#provider-misconfigured) |
+| `80` | `provider-misconfigured`: ACA sandbox without an active target-local Process audio transport; see [provider capability matrix](./provider-capability-matrix.md#aca-audio). | [`provider-misconfigured`](./error-codes.md#provider-misconfigured) |
 
 **Human example**
 
@@ -1306,7 +1264,7 @@ device:   detached
 
 **Status**
 
-The Rust CLI dispatches `AudioOp::GetState` to `d2bd` over the public socket. Provider capability resolution runs before any state access; Cloud Hypervisor NixOS VMs read OFD-locked state from `/run/d2b/audio/<vm>.json`, qemu-media VMs report `enforcement: unsupported` for guest-side, and ACA sandbox VMs route through provider guestd. Multi-target queries return per-target errors so one misconfigured provider does not fail the entire response. See [provider capability matrix](./provider-capability-matrix.md) for the per-provider enforcement model.
+The Rust CLI dispatches `AudioOp::GetState` to `d2bd` over the public socket. Provider capability resolution runs before any state access; Cloud Hypervisor NixOS VMs read OFD-locked state from `/run/d2b/audio/<vm>.json`, qemu-media VMs report `enforcement: unsupported` for guest-side, and ACA sandbox VMs route through provider target-local Process. Multi-target queries return per-target errors so one misconfigured provider does not fail the entire response. See [provider capability matrix](./provider-capability-matrix.md) for the per-provider enforcement model.
 
 **Native**
 
@@ -1340,7 +1298,7 @@ The Rust CLI dispatches `AudioOp::GetState` to `d2bd` over the public socket. Pr
 | `0` | Success. State is persisted and enforcement applied; `applied: host-only` is reported only for providers such as qemu-media where guest enforcement is unsupported. | - |
 | `1` | Audio state write, sidecar, or hotplug failure. | [`generic`](./error-codes.md#generic) |
 | `2` | Bad state literal, unknown VM, or audio not enabled for the VM. | [`usage`](./error-codes.md#usage) |
-| `80` | `provider-misconfigured`: ACA sandbox without an active guestd audio transport. | [`provider-misconfigured`](./error-codes.md#provider-misconfigured) |
+| `80` | `provider-misconfigured`: ACA sandbox without an active target-local Process audio transport. | [`provider-misconfigured`](./error-codes.md#provider-misconfigured) |
 
 **Human example**
 
@@ -1357,7 +1315,7 @@ device:   will-attach-on-next-up
 
 **Status**
 
-The Rust CLI dispatches `AudioOp::SetMic` to `d2bd` over the public socket. The daemon writes OFD-locked state atomically and, where guest enforcement is supported, applies the guest mic grant via guestd before reporting `host-and-guest`. Providers without guest enforcement, such as qemu-media, report the explicit `host-only` posture. See [provider capability matrix](./provider-capability-matrix.md) for the per-provider enforcement model.
+The Rust CLI dispatches `AudioOp::SetMic` to `d2bd` over the public socket. The daemon writes OFD-locked state atomically and, where guest enforcement is supported, applies the guest mic grant via target-local Process before reporting `host-and-guest`. Providers without guest enforcement, such as qemu-media, report the explicit `host-only` posture. See [provider capability matrix](./provider-capability-matrix.md) for the per-provider enforcement model.
 
 **Native**
 
@@ -1391,7 +1349,7 @@ The Rust CLI dispatches `AudioOp::SetMic` to `d2bd` over the public socket. The 
 | `0` | Success. State is persisted and enforcement applied; `applied: host-only` is reported only for providers such as qemu-media where guest enforcement is unsupported. | - |
 | `1` | Audio state write, sidecar, or hotplug failure. | [`generic`](./error-codes.md#generic) |
 | `2` | Bad state literal, unknown VM, or audio not enabled for the VM. | [`usage`](./error-codes.md#usage) |
-| `80` | `provider-misconfigured`: ACA sandbox without an active guestd audio transport. | [`provider-misconfigured`](./error-codes.md#provider-misconfigured) |
+| `80` | `provider-misconfigured`: ACA sandbox without an active target-local Process audio transport. | [`provider-misconfigured`](./error-codes.md#provider-misconfigured) |
 
 **Human example**
 
@@ -1441,7 +1399,7 @@ The Rust CLI dispatches `AudioOp::SetSpeaker` to `d2bd` over the public socket. 
 | `0` | Success. Calling the command against a VM that never had audio enabled is an idempotent no-op. `applied: host-only` is reported only for providers such as qemu-media where guest enforcement is unsupported. | - |
 | `1` | Audio state write or sidecar failure. | [`generic`](./error-codes.md#generic) |
 | `2` | Missing or unknown VM name. | [`usage`](./error-codes.md#usage) |
-| `80` | `provider-misconfigured`: ACA sandbox without an active guestd audio transport. | [`provider-misconfigured`](./error-codes.md#provider-misconfigured) |
+| `80` | `provider-misconfigured`: ACA sandbox without an active target-local Process audio transport. | [`provider-misconfigured`](./error-codes.md#provider-misconfigured) |
 
 **Human example**
 
@@ -1521,14 +1479,14 @@ Build is a native non-destructive planner that renders the eval/build preview wi
 `activation switch` is a daemon-native live Guest activation verb. If neither
 mutation flag is set, the CLI prints the parity notice and defaults to
 `--dry-run`; `--apply` requires the VM to be running and reachable over
-guest-control.
+component-session.
 
 **Flags**
 
 | Flag | Type | Default | Semantics |
 | --- | --- | --- | --- |
 | `--dry-run` | boolean | implicit if neither mutation flag is set | Plan the activation without mutating the guest. |
-| `--apply` | boolean | `false` | Publish the prepared VM closure into the VM's live store pool, ask guestd to activate that prepared toplevel inside the running guest, poll guest activation status, then commit the successful generation through the broker. |
+| `--apply` | boolean | `false` | Publish the prepared VM closure into the VM's live store pool, ask target-local Process to activate that prepared toplevel inside the running guest, poll guest activation status, then commit the successful generation through the broker. |
 | `--json` | boolean | `false` | Emit the dry-run summary or typed mutating-verb envelope as JSON. |
 | `--human` | boolean | `false` | Force the human summary on stdout. |
 
@@ -1543,7 +1501,7 @@ guest-control.
 | Code | Meaning | Typed error / reference |
 | --- | --- | --- |
 | `0` | Dry-run plan rendered or `--apply` completed successfully. | - |
-| `1` | `d2bd` is unreachable or guest-control transport fails before a typed activation result is available. | [`daemon-down`](./error-codes.md#daemon-down), [`generic`](./error-codes.md#generic) |
+| `1` | `d2bd` is unreachable or component-session transport fails before a typed activation result is available. | [`daemon-down`](./error-codes.md#daemon-down), [`generic`](./error-codes.md#generic) |
 | `2` | Unknown flag or unsupported invocation shape. | [`usage`](./error-codes.md#usage) |
 | `70` | The named VM is not declared in the active manifest. | [`not-found`](./error-codes.md#not-found) |
 | `78` | Host store publication, broker commit, guest activation capability, or guest activation status failed closed. | [`broker-error`](./error-codes.md#broker-error), [`not-yet-implemented`](./error-codes.md#not-yet-implemented) |
@@ -1573,8 +1531,8 @@ Guest/corp-vm: activation=applied
 **Native**
 
 - `--apply`: routes through `d2bd`, which prepares/publishes the
-  closure, opens the authenticated guest-control activation flow, waits
-  for guestd status, and only then asks the broker to commit host-side
+  closure, opens the authenticated component-session activation flow, waits
+  for target-local Process status, and only then asks the broker to commit host-side
   generation metadata. Successful commits publish both legacy activation
   metadata and split store-view `state/current` / `meta/current` pointers.
   Daemon-unreachable surfaces `daemon-down` exit 1;
@@ -1601,7 +1559,7 @@ mutation flag is set, the CLI prints the parity notice and defaults to
 | Flag | Type | Default | Semantics |
 | --- | --- | --- | --- |
 | `--dry-run` | boolean | implicit if neither mutation flag is set | Plan the offline staging update without mutating guest or host generation state. |
-| `--apply` | boolean | `false` | Publish the prepared VM closure into the VM's live store pool and commit it as the toplevel to use on the next VM start; no guest-control activation is attempted. |
+| `--apply` | boolean | `false` | Publish the prepared VM closure into the VM's live store pool and commit it as the toplevel to use on the next VM start; no component-session activation is attempted. |
 | `--json` | boolean | `false` | Emit the dry-run summary or typed mutating-verb envelope as JSON. |
 | `--human` | boolean | `false` | Force the human summary on stdout. |
 
@@ -1624,7 +1582,7 @@ mutation flag is set, the CLI prints the parity notice and defaults to
 `boot --apply` is the explicit way to stage a new toplevel while the VM
 is stopped/offline. It only changes the host-side generation selected
 for the next start; it does not run guest activation in the current
-guest and does not require guest-control capability.
+guest and does not require component-session capability.
 
 **Human example**
 
@@ -1636,7 +1594,7 @@ d2b boot --apply staged next-boot toplevel (vm=corp-vm, mode=boot, summary=stage
 **Native**
 
 - `--apply`: routes through `d2bd` and the broker-backed store
-  publication/commit path only. It intentionally skips guest-control
+  publication/commit path only. It intentionally skips component-session
   activation because there may be no running guest.
 - The `D2B_NATIVE_ONLY=1` / `D2B_LEGACY_BASH_OPT_IN=1` env vars
   were retired; the daemon-only contract is the only path.
@@ -1653,14 +1611,14 @@ d2b boot --apply staged next-boot toplevel (vm=corp-vm, mode=boot, summary=stage
 `test` is a daemon-native live guest activation verb for temporary
 activation until reboot. If neither mutation flag is set, the CLI prints
 the parity notice and defaults to `--dry-run`; `--apply` requires the VM
-to be running and reachable over guest-control.
+to be running and reachable over component-session.
 
 **Flags**
 
 | Flag | Type | Default | Semantics |
 | --- | --- | --- | --- |
 | `--dry-run` | boolean | implicit if neither mutation flag is set | Plan the activation without mutating the guest. |
-| `--apply` | boolean | `false` | Publish the prepared VM closure into the VM's live store pool, ask guestd to run a test activation of that prepared toplevel inside the running guest, poll guest activation status, then commit the successful host-side metadata needed to observe the temporary generation. |
+| `--apply` | boolean | `false` | Publish the prepared VM closure into the VM's live store pool, ask target-local Process to run a test activation of that prepared toplevel inside the running guest, poll guest activation status, then commit the successful host-side metadata needed to observe the temporary generation. |
 | `--json` | boolean | `false` | Emit the dry-run summary or typed mutating-verb envelope as JSON. |
 | `--human` | boolean | `false` | Force the human summary on stdout. |
 
@@ -1675,26 +1633,26 @@ to be running and reachable over guest-control.
 | Code | Meaning | Typed error / reference |
 | --- | --- | --- |
 | `0` | Dry-run plan rendered or `--apply` completed successfully. | - |
-| `1` | `d2bd` is unreachable or guest-control transport fails before a typed activation result is available. | [`daemon-down`](./error-codes.md#daemon-down), [`generic`](./error-codes.md#generic) |
+| `1` | `d2bd` is unreachable or component-session transport fails before a typed activation result is available. | [`daemon-down`](./error-codes.md#daemon-down), [`generic`](./error-codes.md#generic) |
 | `2` | Unknown flag or unsupported invocation shape. | [`usage`](./error-codes.md#usage) |
 | `70` | The named VM is not declared in the active manifest. | [`not-found`](./error-codes.md#not-found) |
 | `78` | Host store publication, broker commit, guest activation capability, or guest activation status failed closed. | [`broker-error`](./error-codes.md#broker-error), [`not-yet-implemented`](./error-codes.md#not-yet-implemented) |
 
 Stopped/offline VMs fail closed for `test --apply`. Use `boot --apply`
-for offline staging, or start the VM and retry once guest-control
+for offline staging, or start the VM and retry once component-session
 advertises activation support.
 
 **Human example**
 
 ```text
 $ d2b test corp-vm --apply
-d2b test --apply activated in guest via guest-control (vm=corp-vm, mode=test, summary=activated until reboot, generationNumber=42)
+d2b test --apply activated in guest via component-session (vm=corp-vm, mode=test, summary=activated until reboot, generationNumber=42)
 ```
 
 **Native**
 
-- `--apply`: routes through `d2bd`, guest-control activation, and a
-  broker commit after guestd reports success. There is no host-side
+- `--apply`: routes through `d2bd`, component-session activation, and a
+  broker commit after target-local Process reports success. There is no host-side
   execution of guest activation scripts.
 - The `D2B_NATIVE_ONLY=1` / `D2B_LEGACY_BASH_OPT_IN=1` env vars
   were retired; the daemon-only contract is the only path.
@@ -1711,14 +1669,14 @@ d2b test --apply activated in guest via guest-control (vm=corp-vm, mode=test, su
 `rollback` is a daemon-native live guest rollback verb. If neither
 mutation flag is set, the CLI prints the parity notice and defaults to
 `--dry-run`; live `--apply` requires the VM to be running and reachable
-over guest-control.
+over component-session.
 
 **Flags**
 
 | Flag | Type | Default | Semantics |
 | --- | --- | --- | --- |
 | `--dry-run` | boolean | implicit if neither mutation flag is set | Plan the activation without mutating the guest. |
-| `--apply` | boolean | `false` | Select the previous prepared VM toplevel, ensure it is published into the VM's live store pool, ask guestd to activate it inside the running guest, poll guest activation status, then commit the successful rollback generation through the broker. |
+| `--apply` | boolean | `false` | Select the previous prepared VM toplevel, ensure it is published into the VM's live store pool, ask target-local Process to activate it inside the running guest, poll guest activation status, then commit the successful rollback generation through the broker. |
 | `--json` | boolean | `false` | Emit the dry-run summary or typed mutating-verb envelope as JSON. |
 | `--human` | boolean | `false` | Force the human summary on stdout. |
 
@@ -1733,7 +1691,7 @@ over guest-control.
 | Code | Meaning | Typed error / reference |
 | --- | --- | --- |
 | `0` | Dry-run plan rendered or `--apply` completed successfully. | - |
-| `1` | `d2bd` is unreachable or guest-control transport fails before a typed activation result is available. | [`daemon-down`](./error-codes.md#daemon-down), [`generic`](./error-codes.md#generic) |
+| `1` | `d2bd` is unreachable or component-session transport fails before a typed activation result is available. | [`daemon-down`](./error-codes.md#daemon-down), [`generic`](./error-codes.md#generic) |
 | `2` | Unknown flag or unsupported invocation shape. | [`usage`](./error-codes.md#usage) |
 | `70` | The named VM is not declared in the active manifest. | [`not-found`](./error-codes.md#not-found) |
 | `78` | Host store publication, broker commit, guest activation capability, or guest activation status failed closed. | [`broker-error`](./error-codes.md#broker-error), [`not-yet-implemented`](./error-codes.md#not-yet-implemented) |
@@ -1747,13 +1705,13 @@ run guest activation from the host.
 
 ```text
 $ d2b rollback corp-vm --apply
-d2b rollback --apply activated previous toplevel in guest via guest-control (vm=corp-vm, mode=rollback, summary=rolled back, generationNumber=41)
+d2b rollback --apply activated previous toplevel in guest via component-session (vm=corp-vm, mode=rollback, summary=rolled back, generationNumber=41)
 ```
 
 **Native**
 
-- `--apply`: routes through `d2bd`, guest-control activation, and a
-  broker commit after guestd reports success. There is no host-side
+- `--apply`: routes through `d2bd`, component-session activation, and a
+  broker commit after target-local Process reports success. There is no host-side
   execution of guest activation scripts.
 - The `D2B_NATIVE_ONLY=1` / `D2B_LEGACY_BASH_OPT_IN=1` env vars
   were retired; the daemon-only contract is the only path.
@@ -2145,7 +2103,7 @@ Keys show is a native preview that reports daemon-resolved key metadata placehol
 
 | Flag | Type | Default | Semantics |
 | --- | --- | --- | --- |
-| `--dry-run` | boolean | implicit if neither mutation flag is set | Plan the key rotation without changing managed host keys or guest auth state. |
+| `--dry-run` | boolean | implicit if neither mutation flag is set | Plan the key rotation without changing managed host keys or session material. |
 | `--apply` | boolean | `false` | Perform the managed-key rotation. |
 | `--json` | boolean | `false` | Emit the dry-run summary or typed mutating-verb envelope as JSON. |
 | `--human` | boolean | `false` | Force the human summary on stdout. |
@@ -2458,104 +2416,6 @@ host destroy --dry-run: no d2b-owned resources to remove
 
 - In v1.0 daemon-only, `exec_legacy_passthrough` always returns the typed `not-yet-implemented` envelope (exit 78 per ADR 0015); the historical bash-fallback shim was retired in v1.0.
 
-### `host migrate-storage`
-
-**Synopsis:** `d2b host migrate-storage [--dry-run | --apply | --rollback --from-checkpoint <id>] [--human | --json]`
-
-**Status**
-
-Plans the one-time breaking storage layout cutover. The current build is
-read-only for this verb: `--dry-run` emits a checkpoint ID, the exact
-rollback command, preflight requirements, preserved persistent data,
-cutover-only cleanup candidates, and fail-closed hazards. `--apply` and
-`--rollback` fail closed until the broker-backed mover ships.
-
-**Flags**
-
-| Flag | Type | Default | Semantics |
-| --- | --- | --- | --- |
-| `--dry-run` | boolean | required unless `--apply` or `--rollback` is set | Plan the storage cutover without moving or deleting host state. |
-| `--apply` | boolean | `false` | Apply the storage cutover. Currently returns a typed not-implemented envelope. |
-| `--rollback` | boolean | `false` | Roll back from a checkpoint. Currently returns a typed not-implemented envelope. |
-| `--from-checkpoint` | string | required with `--rollback` | Checkpoint ID from the dry-run plan. |
-| `--json` | boolean | `false` | Emit the dry-run plan or typed refusal envelope as JSON. |
-| `--human` | boolean | `false` | Emit the human dry-run plan. |
-
-**Arguments**
-
-| Argument | Semantics |
-| --- | --- |
-| _(none)_ | Storage cutover planning is global. |
-
-**Dry-run JSON shape**
-
-```json
-{
-  "command": "host migrate-storage",
-  "mode": "dry-run",
-  "checkpointId": "storage-cutover-…",
-  "rollbackCommand": "d2b host migrate-storage --rollback --from-checkpoint storage-cutover-…",
-  "vmCount": 2,
-  "vms": ["corp-vm", "work-vm"],
-  "preflightRequirements": [
-    "all d2b VMs stopped",
-    "d2bd.service stopped",
-    "d2b-priv-broker.service stopped",
-    "net VMs stopped; guest routing, TAP connectivity, and dependent bridge traffic will be interrupted"
-  ],
-  "preserve": [
-    "per-VM swtpm NVRAM and swtpm identity markers",
-    "declared host bridges, TAP naming intent, nftables/NM/networkd ownership metadata, and network-preflight evidence"
-  ],
-  "cutoverOnlyCleanup": [
-    "/run/d2b-gpu",
-    "boot-scoped runtime socket files only after all d2b services are stopped"
-  ],
-  "failClosedHazards": [
-    "symlink or path traversal inside any moved path",
-    "recursive operations traversing hardlink farms or mutating shared /nix/store inodes",
-    "any attempt to unlink lock files during cutover rather than leaving /run locks for reboot/tmpfs cleanup"
-  ],
-  "applyStatus": "not-implemented-in-this-build"
-}
-```
-
-**Exit codes**
-
-| Code | Meaning | Typed error / reference |
-| --- | --- | --- |
-| `0` | Dry-run plan rendered. | - |
-| `2` | Unknown flag or invalid flag combination. | [`usage`](./error-codes.md#usage) |
-| `78` | `--apply` or `--rollback` requested before the broker-backed mover is available. | `storage-migration-apply-not-implemented`, `storage-migration-rollback-not-implemented` |
-
-**Human example**
-
-```text
-$ d2b host migrate-storage --dry-run
-host migrate-storage --dry-run: checkpoint=storage-cutover-… vm_count=2
-rollback command: d2b host migrate-storage --rollback --from-checkpoint storage-cutover-…
-preflight requirements:
-  - all d2b VMs stopped
-  - d2bd.service stopped
-  - d2b-priv-broker.service stopped
-  - net VMs stopped; guest routing, TAP connectivity, and dependent bridge traffic will be interrupted
-```
-
-**Native**
-
-- `--dry-run` is a rust-native read-only planner.
-- `--apply` and `--rollback` fail closed with typed exit-78 envelopes until the
-  broker-backed mover lands. There is no bash fallback and no manual
-  chmod/chown/setfacl remediation.
-
-**Bash**
-
-- No bash implementation exists. The Rust CLI owns this surface.
-
-The dry-run text deliberately avoids manual `chmod`/`chown`/`setfacl`
-instructions. Operators should treat the checkpoint ID and rollback command as
-the handoff contract for the later broker-backed cutover implementation.
-
 ### `host reconcile-otel-acls` (reserved)
 
 **Synopsis:** `d2b host reconcile-otel-acls [--dry-run | --apply] [--human | --json]`
@@ -2864,65 +2724,18 @@ Auth status is a read-only daemon query that reports caller mapping, socket reac
 
 ### `config sync`
 
-**Synopsis:** `d2b activation config sync <vm> [--guest-path <path>] [--host <h>] [--user <u>] [--key <path>] [--known-hosts <path>] [--dry-run] [--json]`
+**Synopsis:** `d2b activation config sync Guest/<name> [--dry-run] [--json]`
 
-<a id="config-sync-guest-control-transport"></a>
-On a guest-control-capable VM, `config sync` reads the VM's canonical
-guest config working copy (default `/var/lib/d2b-guest/guest-config.nix`)
-over the authenticated **guest-control transport** - a typed
-`readGuestConfig` request to `d2bd` over the daemon public socket.
-There is no SSH: no ssh/scp process is spawned, and the SSH-shaped flags
-(`--host`/`--user`/`--key`/`--known-hosts`) and a non-default
-`--guest-path` are rejected up front with `guest-control-ssh-flag-rejected`
-(exit `2`). JSON responses carry `transport: "guest-control"`.
+Reads the canonical Guest configuration document through the authenticated
+ConfigNixos service on the ComponentSession and writes a bounded, validated
+copy to the host-side staging area. `--dry-run` reports the resource reference
+and document identifier without contacting the target or reading guest bytes.
+The operation is admin-only and fails closed when the target-local service,
+ComponentSession, or document contract is unavailable. No SSH, raw file
+transfer, or caller-supplied path is accepted.
 
-The host treats the received bytes as untrusted data: the read is bounded
-(1 MiB hard cap + a per-attempt timeout, so a hostile guest cannot
-OOM/hang the host), the host re-enforces the size cap and recomputes size
-+ sha256 from the received bytes (never a guest-reported value), the
-content is validated (non-empty, valid UTF-8), and the result is
-atomically written to a host-side **staging** file
-(`${XDG_STATE_HOME:-~/.local/state}/d2b/config-staging/<vm>.guest.nix`).
-The staging copy is never evaluated until approved.
-
-`--dry-run` selects and reports the transport WITHOUT contacting the
-daemon or reading any guest bytes: it emits `transport: "guest-control"`
-plus the planned staging target only - never an SSH argv and never guest
-content.
-
-Fail-closed behaviour:
-
-- `config sync` is **admin-only**: `readGuestConfig` is gated to the
-  `d2b-admin` role (`d2b.site.adminUsers`) at the daemon's
-  `SO_PEERCRED` accept time. A launcher-role caller is rejected with the
-  typed `authz-not-admin` error (exit `75`, AUTH) before any socket
-  request reads guest bytes. The staging-only verbs (`diff`/`approve`/
-  `reject`/`status`) dispatch no daemon verb and are not admin-gated.
-- A known VM whose generation does not declare the guest-control transport
-  (old or partial generation) is rejected with
-  `guest-control-unavailable-old-generation` (exit `70`); no socket request
-  is sent and nothing is staged. The operator SSH-compatibility transport
-  is not wired into this command.
-- When the daemon socket is unreachable, the command reports
-  `guest-control-transport-unavailable` (exit `70`).
-- Per-kind read errors surfaced by the daemon
-  (`guest-control-file-not-found`, `guest-control-file-too-large`,
-  `guest-control-path-unsafe`, `guest-control-read-denied`,
-  `guest-control-timeout`, `guest-control-protocol-error`,
-  `guest-control-auth-failed`, `guest-control-capability-unavailable`)
-  each map to exit `70` with their slug and never echo guest content,
-  paths, or transport detail.
-
-`d2b host shutdown-hook --apply` is intentionally absent from the public
-clap/completion surface and is invoked by `d2bd.service` only while the host
-manager is stopping. When that hook connects as uid `0`, the daemon assigns the
-narrow `HostShutdown` role. This role can dispatch only `vmStop`; it cannot run
-admin-only operator verbs such as exec, USB attach/detach, host prepare/destroy,
-audit export, key rotation, or config sync.
-
-**Disposition:** `rust-native` - host-initiated typed `readGuestConfig`
-over the daemon public socket; no SSH, no virtiofs, no new privileged
-surface.
+**Disposition:** `rust-native` - host-initiated typed ConfigNixos service call
+over the daemon Resource API; no new privileged surface.
 
 ### `config diff`
 
@@ -2974,14 +2787,15 @@ All `config` verbs share these exit codes:
 | --- | --- |
 | `0` | Success (including `diff` whether or not files differ). |
 | `1` | Runtime error: nothing staged, a low-level public-socket I/O failure on `config sync` (send/receive frame), size-cap/timeout on the staging verbs, missing `--to`/`--against` target dir, I/O error. |
-| `2` | Usage error (bad/missing arguments; surfaced by `clap`), or `config sync` SSH-shaped flags rejected on a guest-control VM (`guest-control-ssh-flag-rejected`). |
-| `70` | `config sync` only. The VM is not declared in the active manifest (`require_known_vm`); the VM's generation does not declare the guest-control transport (`guest-control-unavailable-old-generation`); the daemon socket is unreachable (`guest-control-transport-unavailable`); or a per-kind guest-control read error (`guest-control-file-not-found`, `guest-control-file-too-large`, `guest-control-path-unsafe`, `guest-control-read-denied`, `guest-control-timeout`, `guest-control-protocol-error`, `guest-control-auth-failed`, `guest-control-capability-unavailable`). The staging-only verbs (`diff`/`approve`/`reject`/`status`) do not consult the manifest or transport and so never return `70`. |
+| `2` | Usage error (bad/missing arguments; surfaced by `clap`). |
+| `70` | `config sync` only. The target or ConfigNixos service is unavailable, the ComponentSession cannot be established, or a typed document read/validation error occurs. The staging-only verbs (`diff`/`approve`/`reject`/`status`) do not consult the target service and so never return `70`. |
 | `75` | `config sync` only. The caller is not in `d2b.site.adminUsers`. `config sync` dispatches the admin-only `ReadGuestConfig` daemon verb, so a launcher-role peer is rejected with the typed `authz-not-admin` (AUTH) error - exit `75`, the daemon's reserved authz code - before any guest read. The staging-only verbs (`diff`/`approve`/`reject`/`status`) dispatch no daemon verb and so never return `75`. |
 
 With `--json` each verb emits a single stdout object:
 
-- `config sync` → `{ "command": "config sync", "vm", "transport": "guest-control", "staging", "bytes", "sha256" }`
-  (or `{ "command": "config sync", "mode": "dry-run", "vm", "transport": "guest-control", "staging", "guestFile" }` under `--dry-run` - no SSH argv, no guest bytes).
+- `config sync` → `{ "command": "config sync", "vm", "transport": "component-session", "staging", "bytes", "sha256" }`
+  (or `{ "command": "config sync", "mode": "dry-run", "resourceRef", "identifier" }`
+  under `--dry-run` - no target contact and no guest bytes).
 - `config diff` → `{ "command": "config diff", "vm", "against", "staging", "differs": <bool>, "diff": <string> }`.
 - `config approve` → `{ "command": "config approve", "vm", "target", "bytes" }`.
 - `config reject` → `{ "command": "config reject", "vm", "removed": <bool> }`.
@@ -3017,7 +2831,7 @@ List, status, detach, and kill are typed Resource requests. The retired public
 policy are resolved from the hash-verified private bundle and the exact
 requester-UID helper. Disconnect and named-stream close detach only; kill tears
 down only the verified shell scope. The host does not load realm credentials,
-provider transports, raw guest-control frames, SSH, or provider-native shell
+provider transports, raw component-session frames, SSH, or provider-native shell
 APIs.
 
 All shell actions remain admin-only. Launcher authorization for configured exec
@@ -3140,7 +2954,7 @@ v3 Resource envelope; management commands use `EphemeralProcess/<name>`.
 **Bash**
 
 - There is no live bash fallback for this verb; old-generation VMs fail
-  closed with a typed guest-control error.
+  closed with a typed component-session error.
 
 **Flags**
 
@@ -3185,7 +2999,7 @@ the same login environment an interactive SSH login would
 (`XDG_RUNTIME_DIR`, `WAYLAND_DISPLAY`, login-shell profile). `argv[0]`
 may be a bare program name or relative path; the workload user's login
 shell resolves it through that user's login `PATH` before `exec`. The
-wire `user` field is host-fixed by `guestd` and ignored; operators
+wire `user` field is host-fixed by `target-local Process` and ignored; operators
 elevate with `sudo` inside the session. The console replacement is:
 
 ```console
@@ -3205,7 +3019,7 @@ Modes:
   `--json`.
 - **`-i`/`--interactive`**: forwards host stdin to the guest command
   (non-blocking, partial-write aware) until EOF, which closes the guest
-  stdin. The guest-control transport forwards stdin **only** in PTY
+  stdin. The component-session transport forwards stdin **only** in PTY
   mode, so `-i` **must** be paired with `-t` (use `-it`); `-i` without
   `-t` is a usage error.
 - **`-d`/`--detach`**: creates a non-interactive detached exec, prints
@@ -3251,7 +3065,7 @@ Detached management:
   retained stdout/stderr bytes to the corresponding host streams and
   prints only bounded metadata warnings to stderr when bytes were
   dropped or truncated. An expired detached record is a typed failure
-  (`guest-control-exec-expired`, exit `76`), not a warning. JSON emits
+  (`component-session-exec-expired`, exit `76`), not a warning. JSON emits
   `{ "command": "vm exec logs", "vm": "<vm>", "execId": "<id>",
   "stdoutBase64", "stderrBase64", "startOffset", "endOffset",
   "droppedBytes", "truncated" }`, plus per-stream
@@ -3261,14 +3075,14 @@ Detached management:
   dropped and truncated
   accounting is metadata, not log content.
 - **kill** - `d2b exec kill EphemeralProcess/<id>`: public name for
-  `ExecCancel`. Guestd requests graceful termination, waits a bounded
+  `ExecCancel`. target-local Process requests graceful termination, waits a bounded
   grace window, then force-kills the workload if needed. The operation is
   idempotent: human output confirms the result, and JSON emits
   `{ "command": "vm exec kill", "vm": "<vm>", "execId": "<id>",
   "result": "cancelling"|"already-terminal", "state": "<state>" }`.
 
-Detached exec is supervised inside `guestd` and its in-guest detached
-runner. It does not add a privileged broker operation. Guestd reconciles
+Detached exec is supervised inside `target-local Process` and its in-guest detached
+runner. It does not add a privileged broker operation. target-local Process reconciles
 detached runner/workload units before advertising detached capability,
 re-adopts structurally valid work, cleans orphaned workload units, and
 runs a periodic reaper for terminal records and retained-log slots.
@@ -3280,12 +3094,12 @@ runs a periodic reaper for terminal records and retained-log slots.
 | `0` | cli | Detached create/list/status/logs/kill succeeded. |
 | `0`-`255` | guest | Attached guest command `WIFEXITED` status passes through unchanged. |
 | `128+N` | guest | An attached guest command was killed by signal `N` (`WIFSIGNALED`). |
-| `2` | cli / guest-control | Usage error: missing command after `--`, unknown management verb without `--`, missing detached exec id, malformed `--env`, `-d` with `-i`/`-t`, `-t` without a terminal, `-i` without `-t`, `--json` combined with `-i`/`-t`, or guest-side `INVALID_PROGRAM` (`guest-control-invalid-program`) for an empty/leading-`-` program. |
-| `69` | transport | The guest-control transport was unreachable, a per-op/establishment deadline elapsed, or `guestd` disappeared before the exec reported a terminal status (`guest-control-transport-unavailable`, `guest-control-timeout`, `guest-control-lost-guestd`). |
-| `70` | guest-control | The VM generation does not support guest-control exec, or it lacks a required exec capability (`guest-control-unavailable-old-generation`, `guest-control-capability-unavailable`, `guest-control-exec-detached-unavailable`). No SSH fallback. |
-| `75` | guest-control | The exec session table is at capacity, `Start` was rate limited, or an established session was cancelled/reaped before a terminal guest status arrived (`exec-session-capacity`, `exec-session-rate-limited`, `exec-session-cancelled`, `exec-session-reaped`). |
-| `76` | protocol / guest-control | The guest returned a malformed/out-of-contract response, returned an op error, or no longer retains the requested detached record (`guest-control-protocol-error`, `guest-control-exec-error`, `guest-control-exec-not-found`, `guest-control-exec-expired`). |
-| `77` | guest-control | The authenticated guest-control handshake was rejected (`guest-control-auth-failed`), the daemon's admin gate refused a non-admin caller (`authz-not-admin`), or a stale exec session was detected (`guest-control-stale-session`). |
+| `2` | cli / component-session | Usage error: missing command after `--`, unknown management verb without `--`, missing detached exec id, malformed `--env`, `-d` with `-i`/`-t`, `-t` without a terminal, `-i` without `-t`, `--json` combined with `-i`/`-t`, or guest-side `INVALID_PROGRAM` (`component-session-invalid-program`) for an empty/leading-`-` program. |
+| `69` | transport | The ComponentSession transport was unreachable, a per-op/establishment deadline elapsed, or the target-local Process disappeared before the exec reported a terminal status (`component-session-transport-unavailable`, `component-session-timeout`, `component-session-target-lost`). |
+| `70` | component-session | The VM generation does not support component-session exec, or it lacks a required exec capability (`component-session-unavailable-old-generation`, `component-session-capability-unavailable`, `component-session-exec-detached-unavailable`). No SSH fallback. |
+| `75` | component-session | The exec session table is at capacity, `Start` was rate limited, or an established session was cancelled/reaped before a terminal guest status arrived (`exec-session-capacity`, `exec-session-rate-limited`, `exec-session-cancelled`, `exec-session-reaped`). |
+| `76` | protocol / component-session | The guest returned a malformed/out-of-contract response, returned an op error, or no longer retains the requested detached record (`component-session-protocol-error`, `component-session-exec-error`, `component-session-exec-not-found`, `component-session-exec-expired`). |
+| `77` | component-session | The authenticated ComponentSession evidence was rejected (`component-session-auth-failed`), the daemon's admin gate refused a non-admin caller (`authz-not-admin`), or a stale exec session was detected (`component-session-stale-session`). |
 | `42` | internal | Daemon-internal or CLI-internal failure driving exec. |
 
 **Human example**
@@ -3347,7 +3161,7 @@ shares the shell status number.
 single terminal stdout object.
 
 - success → `{ "command": "vm exec", "vm", "source": "guest", "exitCode", "reason": "exited"|"signaled", "guestExitCode"?|"signal"?, "stdoutBase64", "stderrBase64", "stdoutTruncated", "stderrTruncated" }`. Only a true guest `WIFEXITED`/`WIFSIGNALED` terminal is a success.
-- failure → `{ "command": "vm exec", "vm", "source": "transport"|"guest-control"|"protocol"|"internal"|"cli", "reason": "<wire-kind>", "exitCode", "transportExitCode"?, "message", "remediation"? }`. Abnormal terminal kinds (`lost-guestd`, `cancelled`, `reaped`) and a malformed/missing terminal status are failures with a reserved code and a non-`guest` source - never a synthesized guest exit. A failure envelope never carries captured stdio bytes. Usage errors (`source: "cli"`, exit `2`) also emit one envelope.
+- failure → `{ "command": "vm exec", "vm", "source": "transport"|"component-session"|"protocol"|"internal"|"cli", "reason": "<wire-kind>", "exitCode", "transportExitCode"?, "message", "remediation"? }`. Abnormal terminal kinds (`component-session-target-lost`, `cancelled`, `reaped`) and a malformed/missing terminal status are failures with a reserved code and a non-`guest` source - never a synthesized guest exit. A failure envelope never carries captured stdio bytes. Usage errors (`source: "cli"`, exit `2`) also emit one envelope.
 
 Captured output in JSON envelopes is bounded; `stdoutTruncated` /
 `stderrTruncated` flag a clamp. argv, env, cwd, and stdio bytes never
@@ -3358,9 +3172,9 @@ Detached create/kill daemon audit is similarly redacted: VM, peer uid,
 closed action/result enums, and the opaque exec id only.
 
 **Disposition:** `rust-native` - daemon public socket → authenticated
-guest-control session → `guestd` exec RPCs; no SSH, no host PTY, no new
+ComponentSession session → target-local Process exec RPCs; no SSH, no host PTY, no new
 privileged broker op (attached sessions live in-process in `d2bd`;
-detached state lives in guestd's detached registry).
+detached state lives in target-local Process's detached registry).
 
 ## Dispatch capability table
 
@@ -3372,9 +3186,9 @@ detached state lives in guestd's detached registry).
 | `guest start` | `rust-native` | Typed Guest lifecycle request; production UpdateSpec dispatch is a later-wave blocker. |
 | `guest stop` | `rust-native` | Typed Guest lifecycle request; production UpdateSpec dispatch is a later-wave blocker. |
 | `guest restart` | `rust-native` | Typed Guest lifecycle request; production UpdateSpec dispatch is a later-wave blocker. |
-| `device usb attach` | `rust-native` | USBIP attach parses and dispatches one intent to `d2bd`; the daemon coordinates broker host bind/firewall/proxy state and authenticated guestd import over guest-control. |
-| `device usb detach` | `rust-native` | USBIP detach parses and dispatches one intent to `d2bd`; the daemon asks guestd to detach matching imports, then runs broker `UsbipUnbind` / `UsbipProxyReconcile`. |
-| `device usb probe` | `rust-native` | USBIP probe is a read-only daemon query backed by the broker's `UsbipProxyReconcile` validation pass. |
+| `device usb attach` | `rust-native` | USBIP attach dispatches one typed Device Resource intent to `d2bd`; non-qemu requests fail closed until the signed target-local Process import effect path is available. |
+| `device usb detach` | `rust-native` | USBIP detach dispatches one typed Device Resource intent to `d2bd`; non-qemu requests fail closed before Guest or host teardown until the signed target-local Process detach effect path is available. |
+| `device usb probe` | `rust-native` | USBIP probe is a read-only daemon query that reports host/claim layers and Guest import unavailability without proxy mutation. |
 | `guest console` | `rust-native` | The Rust CLI owns help / argument validation and attaches to the daemon-native foreground console handoff via `ConsoleOp`, with provider-capability-aware streaming across Cloud Hypervisor, qemu-media, and ACA targets; see [provider capability matrix](./provider-capability-matrix.md). |
 | `audio status` | `rust-native` | The Rust CLI dispatches `AudioOp::Status` and renders provider-capability-aware per-target audio state/errors across Cloud Hypervisor, qemu-media, and ACA; see [provider capability matrix](./provider-capability-matrix.md). |
 | `audio mic` | `rust-native` | The Rust CLI dispatches microphone grant/revoke through `AudioOp::Mute`, persisting policy and applying host/guest enforcement according to provider capability. |
@@ -3396,71 +3210,8 @@ detached state lives in guestd's detached registry).
 | `host prepare` | `rust-native` | The Rust CLI owns dry-run output (wired live); `--apply` is **not yet wired** - it returns the typed `daemon-down` envelope (exit `1`) today (use `--dry-run` for now). When the daemon-side dispatch ships, `--apply` will route through the daemon-backed `ApplyNftables` / `ApplyRoute` / `ApplySysctl` / `UpdateHostsFile` / `ApplyNmUnmanaged` sequence, with broker failures surfacing `broker-error` (exit `78`); a Tier-0 host is refused today (exit `78`). The historical bash fallback was retired in v1.0. |
 | `host destroy` | `rust-native` | The Rust CLI owns dry-run output (wired live); `--apply` is **not yet wired** - it returns the typed `daemon-down` envelope (exit `1`) today (use `--dry-run` for now). When the daemon-side dispatch ships, `--apply` will route through the reverse-order daemon-backed host-reconcile sequence, with broker failures surfacing `broker-error` (exit `78`); a Tier-0 host is refused today (exit `78`). The historical bash fallback was retired in v1.0. |
 | `host doctor` | `rust-native` | Host doctor is a read-only daemon health probe; `--read-only` is mandatory and there is no bash fallback for mutation forms. |
-| `host migrate-storage` | `rust-native` | Storage cutover dry-run planning is native and read-only; `--apply` / `--rollback` fail closed until the broker-backed mover lands. |
 | `host install` | `rust-native` | Host install owns its dry-run preview in Rust and routes `--apply` through the daemon → broker `RunHostInstall` path without broker-error fallback to bash. |
 | `migrate` | `rust-native` | Dry-run analysis is native; `--apply` routes through `d2bd` → broker `RunMigrate`. Daemon-unreachable / native-handler-deferred conditions surface typed envelopes (exit `1` / exit `78` per ADR 0015); the historical bash fallback was retired in v1.0. |
 | `auth status` | `rust-native` | Auth status is a read-only daemon query that reports caller mapping, socket reachability, and authorization hints. |
 | `exec run/attach/wait/status/list/logs/kill` | `rust-native` | Typed EphemeralProcess Resource operations over the Zone session; no SSH or VM lifecycle alias. |
-| `shell open/attach/list/status/detach/kill` | `rust-native` | Admin-only qualified ShellSession Resource lifecycle plus ProcessAttachClient named streams. Local VMs use authenticated guest-control; unsafe-local uses the exact requester-UID helper and a validated terminal fd. No retired `ShellOp`, SSH, host-shell fallback, root unit, per-VM service, or broker op. |
-
-### Host cutover and scoped reset
-
-The cutover surface is:
-
-```text
-d2b host cutover preview [--system-artifact-id <ID>] [--source-system-artifact-id <ID>]
-d2b host cutover status --operation-id <ID>
-d2b host cutover hold --operation-id <ID> --reason <TEXT>
-d2b host cutover resume --operation-id <ID> [--fresh-consent-digest <DIGEST>]
-d2b host cutover apply --operation-id <ID> --candidate-id <ID> \
-  --revision-plan-id <ID> --source-system-artifact-id <ID> \
-  --preview-digest <DIGEST> \
-  --recovery-digest <DIGEST> --operator-id <ID> --consent-digest <DIGEST> \
-  --handoff-file <JSON>
-d2b host cutover rollback --operation-id <ID>
-d2b host cutover verify --operation-id <ID>
-d2b host cutover doctor --operation-id <ID>
-d2b host cutover finalize --operation-id <ID> --consent-file <JSON> \
-  --finalization-file <JSON>
-d2b host cutover reset --scope <zone|provider|guest> --target <ID> \
-  --operation-id <ID> --candidate-id <ID> --revision-plan-id <ID> \
-  --preview-digest <DIGEST> --consent-digest <DIGEST> --consent-file <JSON>
-```
-
-`preview` is mutation-free and reports only redaction-safe inventory counts
-and canonical digests. One-time cutover `preview`, `apply`, `verify`, and
-`finalize` reject `--zone`; the operation is host-wide. Scoped reset is a
-separate authority and requires its own scope, target, preview, and consent.
-Reset admission binds the scope and target into a distinct operation capability;
-it does not reuse the host-wide cutover capability. Destructive durable-Volume
-reset additionally requires `--destroy-durable-volumes`,
-`--destructive-consent-file`, and its matching digest; the default remains
-Preserve.
-`apply --handoff-file` supplies the existing typed host-generation handoff;
-the CLI first obtains runner admission through `d2bd`, then submits the
-handoff directly to the runner socket once the journal reaches the native
-phase-4 disposition boundary; earlier phase skips are refused. If an admitted
-runner is already present, a repeated apply with the handoff resumes through
-that runner instead of requesting a duplicate launch; an admission-only retry
-must supply the handoff file.
-The candidate handoff's `systemArtifactId` and the preserved rollback
-`sourceSystemArtifactId` are included in the admitted operation contract and
-the preview/consent binding; a different artifact identity is refused before
-any closure activation effect. Supply the same candidate and source artifact
-identities to `preview` that are named by the corresponding typed handoffs.
-If the apply response is lost after admission, the CLI emits the observed
-runner state with `mutationAccepted=false` rather than converting an
-possibly-mutating operation into a definitive command refusal.
-`rollback --handoff-file` supplies the pre-apply generation handoff when the
-native rollback boundary is at phase 4; the broker restores that typed
-generation before the journal is terminally rolled back.
-JSON evidence files are parsed through the canonical JSON profile and
-normalized before the typed request crosses the Zone resource transport.
-After admission, `status`, `hold`, `resume`, `rollback`, `verify`, `doctor`, and
-`finalize` use the runner-owned Unix socket so they remain available while
-`d2bd` is drained; `doctor` falls back to daemon observation before drain.
-Verification refuses without authoritative post-activation
-observations rather than inferring health from preview data. The journal is
-root-owned mode `0600` and is never printed by the CLI. Hold and resume
-advance only after the privileged audit boundary returns durable evidence;
-otherwise they return a typed refusal without changing the journal.
+| `shell open/attach/list/status/detach/kill` | `rust-native` | Admin-only qualified ShellSession Resource lifecycle plus ProcessAttachClient named streams. Local VMs use authenticated component-session; unsafe-local uses the exact requester-UID helper and a validated terminal fd. No retired `ShellOp`, SSH, host-shell fallback, root unit, per-VM service, or broker op. |

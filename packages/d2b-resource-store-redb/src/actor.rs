@@ -7,7 +7,9 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use d2b_audit::OperationIdentity;
 use d2b_audit::{DurabilityEvidence, DurabilityOutcome, Reconciliation, ZoneOperationKey};
-use d2b_contracts_resource::v3::{ResourceRef, ResourceTypeName, ZoneId, ZoneRevision};
+use d2b_contracts_resource::v3::{
+    ResourceRef, ResourceTypeName, ResourceUid, ZoneId, ZoneRevision,
+};
 use d2b_resource_store::{
     ExpectedRevision, ResourceMutationKind, StoreError, StoreFilter, StoreGetRequest,
     StoreInspectSchemaRequest, StoreListRequest, StoreListResult, StoreProjection,
@@ -49,6 +51,8 @@ pub const READ_POOL_THREADS: usize = 4;
 pub const MAX_CONCURRENT_READS: usize = 16;
 /// Worker-enforced lifetime ceiling for an admitted read transaction.
 pub const READ_LIFETIME: Duration = Duration::from_millis(250);
+
+pub(crate) type CommitFence = Arc<dyn Fn() -> Result<(), StoreError> + Send + Sync>;
 
 /// Lightweight filtered view over one immutable decoded batch.
 #[derive(Clone)]
@@ -420,6 +424,14 @@ impl WriterHandle {
         &self,
         opened: OpenedMutation,
     ) -> Result<d2b_resource_store::StoreCommitResult, StoreError> {
+        self.commit_with_fence(opened, None).await
+    }
+
+    pub(crate) async fn commit_with_fence(
+        &self,
+        opened: OpenedMutation,
+        commit_fence: Option<CommitFence>,
+    ) -> Result<d2b_resource_store::StoreCommitResult, StoreError> {
         if self.quarantined.load(Ordering::Acquire) {
             return Err(crate::transaction::quarantined());
         }
@@ -483,6 +495,7 @@ impl WriterHandle {
             principal,
             resources,
             mutation: VerifiedWrite::from_opened(opened),
+            commit_fence,
             queue_permit,
             response,
         }))) {
@@ -712,6 +725,7 @@ pub(crate) struct WriteRequest {
     pub(crate) principal: String,
     pub(crate) resources: Vec<ResourceRef>,
     pub(crate) mutation: VerifiedWrite,
+    pub(crate) commit_fence: Option<CommitFence>,
     pub(crate) queue_permit: OwnedSemaphorePermit,
     pub(crate) response: oneshot::Sender<Result<d2b_resource_store::StoreCommitResult, StoreError>>,
 }
@@ -1101,13 +1115,31 @@ impl WriterActor {
                 u64::try_from(requests.len()).unwrap_or(u64::MAX),
                 Ordering::Relaxed,
             );
+            let mut accepted = Vec::with_capacity(requests.len());
+            for request in requests {
+                let sequence = request.sequence;
+                let fence_result = request
+                    .commit_fence
+                    .as_ref()
+                    .map_or(Ok(()), |fence| fence());
+                if let Err(error) = fence_result {
+                    self.clear_audit_intents(&[sequence]);
+                    drop(request.queue_permit);
+                    let _ = request.response.send(Err(error));
+                } else {
+                    accepted.push(request);
+                }
+            }
+            if accepted.is_empty() {
+                continue;
+            }
             let started = Instant::now();
-            let request_count = requests.len();
-            let sequences = requests
+            let request_count = accepted.len();
+            let sequences = accepted
                 .iter()
                 .map(|request| request.sequence)
                 .collect::<Vec<_>>();
-            let owned = requests
+            let owned = accepted
                 .into_iter()
                 .map(|request| {
                     drop(request.queue_permit);
@@ -2105,11 +2137,11 @@ fn read_list(
         {
             continue;
         }
-        if !filters_match(&request.filters, resource_type, name) {
-            continue;
-        }
         let record: ResourceRecord = decode(ValueKind::ResourceRecord, value.value())?;
         let mut resource = stored_resource(&request.zone, &resource_ref, &record)?;
+        if !filters_match(&request.filters, resource_type, name, &resource.uid) {
+            continue;
+        }
         project_resource(&mut resource, request.projection)?;
         resources.push((key.value().to_vec(), resource));
         if resources.len() > page_size {
@@ -2234,10 +2266,16 @@ fn hex_decode(value: &str) -> Result<Vec<u8>, StoreError> {
         .collect()
 }
 
-fn filters_match(filters: &[StoreFilter], resource_type: &str, name: &str) -> bool {
+fn filters_match(
+    filters: &[StoreFilter],
+    resource_type: &str,
+    name: &str,
+    uid: &ResourceUid,
+) -> bool {
     filters.iter().all(|filter| match filter.field.as_str() {
         "metadata.name" => filter.values.iter().any(|value| value == name),
         "type" => filter.values.iter().any(|value| value == resource_type),
+        "assignment.resourceUid" => filter.values.iter().any(|value| value == uid.as_str()),
         _ => false,
     })
 }
@@ -2371,6 +2409,29 @@ mod tests {
             ],
         )
         .unwrap()
+    }
+
+    #[test]
+    fn assignment_filter_is_exact_and_does_not_widen_a_watch() {
+        let uid = ResourceUid::parse("123e4567-e89b-42d3-a456-426614174000").unwrap();
+        assert!(filters_match(
+            &[StoreFilter {
+                field: "assignment.resourceUid".to_owned(),
+                values: vec![uid.as_str().to_owned()],
+            }],
+            "Process",
+            "worker",
+            &uid,
+        ));
+        assert!(!filters_match(
+            &[StoreFilter {
+                field: "assignment.resourceUid".to_owned(),
+                values: vec!["223e4567-e89b-42d3-a456-426614174001".to_owned(),],
+            }],
+            "Process",
+            "worker",
+            &uid,
+        ));
     }
 
     #[test]

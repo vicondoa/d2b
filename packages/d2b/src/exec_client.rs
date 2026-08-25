@@ -1,9 +1,8 @@
 //! CLI-side `d2b vm exec` owner-connection FSM + host terminal safety.
 //!
-//! `d2b vm exec` routes one owner connection over the daemon `public.sock`
-//! `exec` verb: a single `Start` op establishes the daemon-held authenticated
-//! guest-control session, then the remaining ops
-//! (`WriteStdin`/`ReadOutput`/`Signal`/`Resize`/`Wait`/`Close`) drive it. The
+//! `d2b vm exec` establishes one Process/EphemeralProcess resource owner over
+//! the daemon `public.sock`, then drives the authenticated named stream with
+//! (`WriteStdin`/`ReadOutput`/`Signal`/`Resize`/`Wait`/`Close`) operations. The
 //! CLI never opens a new connection per op and never allocates a host PTY -
 //! the guest owns the PTY (helper-exec). This module is the pure FSM +
 //! host-termios safety; the real socket/signal/host wiring lives in `lib.rs`
@@ -16,7 +15,9 @@ use std::sync::{Arc, Mutex};
 use d2b_contracts_control::public_wire::{
     ExecCloseArgs, ExecOp, ExecOpResponse, ExecReadOutputArgs, ExecReadOutputResult,
     ExecResizeArgs, ExecSignalArgs, ExecStartResult, ExecStream, ExecTerminalStatus, ExecWaitArgs,
-    ExecWaitResult, ExecWriteStdinArgs, ExecWriteStdinResult,
+    ExecWaitResult, ExecWriteStdinArgs, ExecWriteStdinResult, NamedProcessStreamErrorKind,
+    NamedProcessStreamRequest, NamedProcessStreamRequestFrame, NamedProcessStreamResponse,
+    NamedProcessStreamResponseFrame,
 };
 use d2b_core::base64_codec;
 use serde_json::Value;
@@ -30,14 +31,14 @@ use crate::terminal_client::{TerminalHostIo, TerminalSignalSource, TerminalTrans
 // avoid the pre-existing CLI exit codes 2/3/33/78.
 /// Transport unreachable or a per-op/establishment deadline elapsed.
 pub const EXIT_EXEC_TRANSPORT: i32 = 69;
-/// The VM generation does not support guest-control exec, or it lacks a
-/// required exec capability. Reuses the guest-control-config class (70).
+/// The VM generation does not support component-session exec, or it lacks a
+/// required exec capability. Reuses the component-session-config class (70).
 pub const EXIT_EXEC_OLD_GENERATION: i32 = 70;
 /// The exec session table is at capacity, or Start was rate limited.
 pub const EXIT_EXEC_CAPACITY: i32 = 75;
 /// The guest returned a malformed/out-of-contract response, or rejected the op.
 pub const EXIT_EXEC_PROTOCOL: i32 = 76;
-/// The authenticated guest-control handshake was rejected.
+/// The authenticated component-session handshake was rejected.
 pub const EXIT_EXEC_AUTH: i32 = 77;
 /// Daemon-internal or CLI-internal failure driving the session.
 pub const EXIT_EXEC_INTERNAL: i32 = 42;
@@ -55,8 +56,8 @@ pub enum ExecFailureSource {
     Transport,
     /// The guest authenticated but the VM/guest rejected the request
     /// (old-generation, capability, capacity, rate-limit, auth), or the
-    /// daemon's guest-control admin gate refused the caller (not-admin).
-    GuestControl,
+    /// daemon's component-session admin gate refused the caller (not-admin).
+    ComponentSession,
     /// Malformed or out-of-contract response.
     Protocol,
     /// CLI/daemon-internal failure.
@@ -67,7 +68,7 @@ impl ExecFailureSource {
     pub fn as_str(self) -> &'static str {
         match self {
             Self::Transport => "transport",
-            Self::GuestControl => "guest-control",
+            Self::ComponentSession => "component-session",
             Self::Protocol => "protocol",
             Self::Internal => "internal",
         }
@@ -105,27 +106,27 @@ impl ExecClientError {
 
     pub fn transport(message: impl Into<String>) -> Self {
         Self::new(
-            "guest-control-transport-unavailable",
+            "component-session-transport-unavailable",
             EXIT_EXEC_TRANSPORT,
             ExecFailureSource::Transport,
             message,
-            "confirm the VM is running and guest-control-health is ready (`d2b vm status <vm>`), then retry",
+            "confirm the VM is running and component-session-health is ready (`d2b vm status <vm>`), then retry",
         )
     }
 
     pub fn protocol(message: impl Into<String>) -> Self {
         Self::new(
-            "guest-control-protocol-error",
+            "component-session-protocol-error",
             EXIT_EXEC_PROTOCOL,
             ExecFailureSource::Protocol,
             message,
-            "the guest-control protocol is skewed; rebuild the guest with a matching d2b generation",
+            "the component-session protocol is skewed; rebuild the guest with a matching d2b generation",
         )
     }
 
     pub fn internal(message: impl Into<String>) -> Self {
         Self::new(
-            "guest-control-exec-internal",
+            "component-session-exec-internal",
             EXIT_EXEC_INTERNAL,
             ExecFailureSource::Internal,
             message,
@@ -148,29 +149,29 @@ impl ExecClientError {
     /// Map an abnormal terminal slug (a closed daemon-side terminal-state
     /// constant, never a guest-supplied string) to a transport/protocol
     /// failure. An abnormal terminal is NEVER a guest exit: it carries a
-    /// reserved CLI exit code with `source` `transport`/`guest-control`/
+    /// reserved CLI exit code with `source` `transport`/`component-session`/
     /// `protocol`, never `guest`.
     pub fn from_abnormal_slug(slug: &str) -> Self {
         match slug {
-            "lost-guestd" => Self::new(
-                "guest-control-lost-guestd",
+            "component-session-target-lost" => Self::new(
+                "component-session-target-lost",
                 EXIT_EXEC_TRANSPORT,
                 ExecFailureSource::Transport,
-                "the guest-control daemon (guestd) for this VM became unreachable before \
+                "the component-session target for this VM became unreachable before \
                  the command reported a terminal status",
-                "confirm the VM is running and guest-control-health is ready (`d2b vm status <vm>`), then retry",
+                "confirm the VM is running and component-session-health is ready (`d2b vm status <vm>`), then retry",
             ),
             "cancelled" | "slow-consumer-cancelled" => Self::new(
                 "exec-session-cancelled",
                 EXIT_EXEC_CAPACITY,
-                ExecFailureSource::GuestControl,
+                ExecFailureSource::ComponentSession,
                 "the exec session was cancelled before the command reported a terminal status",
                 "retry; the daemon may be shedding load or the session deadline elapsed",
             ),
             "reaped" => Self::new(
                 "exec-session-reaped",
                 EXIT_EXEC_CAPACITY,
-                ExecFailureSource::GuestControl,
+                ExecFailureSource::ComponentSession,
                 "the exec session slot was reclaimed before the command reported a terminal status",
                 "retry; the session was reaped after a terminal-cleanup timeout",
             ),
@@ -182,31 +183,176 @@ impl ExecClientError {
 /// The CLI exit code + failure source for a daemon wire `kind` slug.
 pub fn exit_for_kind(kind: &str) -> (i32, ExecFailureSource) {
     match kind {
-        "guest-control-transport-unavailable" | "guest-control-timeout" => {
+        "component-session-transport-unavailable" | "component-session-timeout" => {
             (EXIT_EXEC_TRANSPORT, ExecFailureSource::Transport)
         }
-        "guest-control-unavailable-old-generation"
-        | "guest-control-capability-unavailable"
-        | "guest-control-exec-detached-unavailable" => {
-            (EXIT_EXEC_OLD_GENERATION, ExecFailureSource::GuestControl)
+        "resource-provider-unavailable" | "resource-not-found" | "session-disconnected" => {
+            (EXIT_EXEC_TRANSPORT, ExecFailureSource::Transport)
+        }
+        "backpressure" => (EXIT_EXEC_CAPACITY, ExecFailureSource::ComponentSession),
+        "component-session-unavailable-old-generation"
+        | "component-session-capability-unavailable"
+        | "component-session-exec-detached-unavailable" => {
+            (EXIT_EXEC_OLD_GENERATION, ExecFailureSource::ComponentSession)
         }
         "exec-session-capacity" | "exec-session-rate-limited" => {
-            (EXIT_EXEC_CAPACITY, ExecFailureSource::GuestControl)
+            (EXIT_EXEC_CAPACITY, ExecFailureSource::ComponentSession)
         }
-        "guest-control-protocol-error"
-        | "guest-control-exec-error"
-        | "guest-control-exec-not-found"
-        | "guest-control-exec-expired" => (EXIT_EXEC_PROTOCOL, ExecFailureSource::Protocol),
-        "guest-control-invalid-program" => (2, ExecFailureSource::GuestControl),
-        "guest-control-auth-failed" => (EXIT_EXEC_AUTH, ExecFailureSource::GuestControl),
-        "guest-control-stale-session" => (EXIT_EXEC_AUTH, ExecFailureSource::GuestControl),
+        "component-session-protocol-error"
+        | "component-session-exec-error"
+        | "component-session-exec-not-found"
+        | "component-session-exec-expired" => (EXIT_EXEC_PROTOCOL, ExecFailureSource::Protocol),
+        "component-session-invalid-program" => (2, ExecFailureSource::ComponentSession),
+        "component-session-auth-failed" => (EXIT_EXEC_AUTH, ExecFailureSource::ComponentSession),
+        "component-session-stale-session" | "stale-session" => {
+            (EXIT_EXEC_AUTH, ExecFailureSource::ComponentSession)
+        }
         // The daemon's admin gate refused the caller before any guest contact
         // (caller not in `d2b.site.adminUsers`). It is an authorization
         // failure, NOT an internal bug - map it to the AUTH reserved code so
         // it does not fall through to the internal (42) default.
-        "authz-not-admin" => (EXIT_EXEC_AUTH, ExecFailureSource::GuestControl),
-        "guest-control-exec-internal" => (EXIT_EXEC_INTERNAL, ExecFailureSource::Internal),
+        "authz-not-admin" => (EXIT_EXEC_AUTH, ExecFailureSource::ComponentSession),
+        "component-session-exec-internal" => (EXIT_EXEC_INTERNAL, ExecFailureSource::Internal),
         _ => (EXIT_EXEC_INTERNAL, ExecFailureSource::Internal),
+    }
+}
+
+/// Translate one established Exec operation to the authenticated named-stream
+/// request carried by its Process or ShellSession attachment.
+///
+/// Start and detached-management operations are Resource API calls and
+/// therefore do not belong on an already-open named stream.
+pub fn named_stream_request(op: &ExecOp) -> Result<NamedProcessStreamRequest, ExecClientError> {
+    named_stream_request_with_offset(op, 0)
+}
+
+/// Translate an Exec operation while supplying the current stdin cursor for a
+/// `Close` half-close.
+pub fn named_stream_request_with_offset(
+    op: &ExecOp,
+    stdin_offset: u64,
+) -> Result<NamedProcessStreamRequest, ExecClientError> {
+    match op {
+        ExecOp::WriteStdin(args) => Ok(NamedProcessStreamRequest::Stdin {
+            offset: args.offset,
+            chunk_base64: args.chunk_base64.clone(),
+            eof: args.eof,
+        }),
+        ExecOp::ReadOutput(args) => Ok(NamedProcessStreamRequest::Read {
+            stream: args.stream,
+            offset: args.offset,
+            max_len: args.max_len,
+            wait: args.wait,
+            timeout_ms: args.timeout_ms,
+        }),
+        ExecOp::Signal(args) => Ok(NamedProcessStreamRequest::Signal {
+            control_seq: args.op_id,
+            signo: args.signo,
+        }),
+        ExecOp::Resize(args) => Ok(NamedProcessStreamRequest::Resize {
+            control_seq: args.op_id,
+            rows: args.rows,
+            cols: args.cols,
+        }),
+        ExecOp::Wait(args) => Ok(NamedProcessStreamRequest::Wait {
+            timeout_ms: args.timeout_ms,
+        }),
+        ExecOp::Close(_) => Ok(NamedProcessStreamRequest::CloseStdin {
+            offset: stdin_offset,
+        }),
+        ExecOp::Start(_)
+        | ExecOp::List(_)
+        | ExecOp::Logs(_)
+        | ExecOp::Status(_)
+        | ExecOp::Kill(_) => Err(ExecClientError::protocol(
+            "operation is not valid on a Process named stream",
+        )),
+    }
+}
+
+/// Wrap one named-stream request in its bounded in-stream correlation frame.
+pub fn named_stream_request_frame(
+    op: &ExecOp,
+    request_id: u64,
+    stdin_offset: u64,
+) -> Result<NamedProcessStreamRequestFrame, ExecClientError> {
+    if request_id == 0 {
+        return Err(ExecClientError::protocol(
+            "named-stream request id must be non-zero",
+        ));
+    }
+    Ok(NamedProcessStreamRequestFrame::new(
+        request_id,
+        named_stream_request_with_offset(op, stdin_offset)?,
+    ))
+}
+
+/// Translate one named-stream response into the existing Exec wire result.
+pub fn named_stream_response(
+    response: NamedProcessStreamResponse,
+) -> Result<ExecOpResponse, ExecClientError> {
+    named_stream_response_for(None, response)
+}
+
+/// Decode one correlated named-stream response and restore the existing Exec
+/// result envelope.
+pub fn named_stream_response_frame(
+    op: &ExecOp,
+    bytes: &[u8],
+) -> Result<(u64, ExecOpResponse), ExecClientError> {
+    let frame: NamedProcessStreamResponseFrame = serde_json::from_slice(bytes)
+        .map_err(|_| ExecClientError::protocol("named-stream response frame was malformed"))?;
+    if frame.request_id == 0 {
+        return Err(ExecClientError::protocol(
+            "named-stream response id must be non-zero",
+        ));
+    }
+    let request = named_stream_request(op)?;
+    Ok((
+        frame.request_id,
+        named_stream_response_for(Some(&request), frame.response)?,
+    ))
+}
+
+/// Translate a named-stream response while preserving whether a delivered
+/// acknowledgement belongs to a signal or resize operation.
+pub fn named_stream_response_for(
+    request: Option<&NamedProcessStreamRequest>,
+    response: NamedProcessStreamResponse,
+) -> Result<ExecOpResponse, ExecClientError> {
+    match response {
+        NamedProcessStreamResponse::Stdin(result) => Ok(ExecOpResponse::WriteStdin(result)),
+        NamedProcessStreamResponse::Output(result) => Ok(ExecOpResponse::ReadOutput(result)),
+        NamedProcessStreamResponse::Delivered(result) => match request {
+            Some(NamedProcessStreamRequest::Resize { .. }) => Ok(ExecOpResponse::Resize(result)),
+            _ => Ok(ExecOpResponse::Signal(result)),
+        },
+        NamedProcessStreamResponse::Wait(result) => Ok(ExecOpResponse::Wait(result)),
+        NamedProcessStreamResponse::Closed(result) => Ok(ExecOpResponse::Close(
+            d2b_contracts_control::public_wire::ExecCloseResult {
+                stdin_closed: result.stdin_closed,
+            },
+        )),
+        NamedProcessStreamResponse::Terminal(status) => Ok(ExecOpResponse::Wait(ExecWaitResult {
+            running: false,
+            terminal_status: Some(status),
+        })),
+        NamedProcessStreamResponse::Error(error) => {
+            let kind = match error.kind {
+                NamedProcessStreamErrorKind::Authorization => "component-session-auth-failed",
+                NamedProcessStreamErrorKind::StaleSession => "stale-session",
+                NamedProcessStreamErrorKind::NotFound => "component-session-exec-not-found",
+                NamedProcessStreamErrorKind::Backpressure => "backpressure",
+                NamedProcessStreamErrorKind::Protocol => "component-session-protocol-error",
+                NamedProcessStreamErrorKind::Timeout => "component-session-timeout",
+                NamedProcessStreamErrorKind::Disconnected => "session-disconnected",
+            };
+            Err(ExecClientError::from_daemon_error(
+                kind,
+                "the authenticated Process named stream rejected the operation",
+                "inspect the Process resource status and retry when its ComponentSession is ready",
+            ))
+        }
     }
 }
 
@@ -301,7 +447,7 @@ pub fn exit_code_for_terminal(status: &ExecTerminalStatus) -> i32 {
         ExecTerminalStatus::Exited { code } => (*code).clamp(0, 255),
         ExecTerminalStatus::Signaled { signal } => 128 + (*signal as i32),
         ExecTerminalStatus::Error { slug } => match slug.as_str() {
-            "lost-guestd" => EXIT_EXEC_TRANSPORT,
+            "component-session-target-lost" => EXIT_EXEC_TRANSPORT,
             "cancelled" | "reaped" | "slow-consumer-cancelled" => EXIT_EXEC_CAPACITY,
             _ => EXIT_EXEC_PROTOCOL,
         },
@@ -678,23 +824,6 @@ fn write_output<H: ExecHostIo>(
         .map_err(|error| ExecClientError::internal(format!("writing host output failed: {error}")))
 }
 
-/// Encode an [`ExecOp`] as the `exec` daemon wire frame: the adjacently-tagged
-/// `{ "op": …, "args": … }` body with a `type: "exec"` discriminator and an
-/// envelope-level `opId` correlation id. The daemon echoes `opId` on
-/// the matching response so a pending long-poll and an urgent control reply can
-/// be matched out of order.
-pub fn encode_exec_op_frame(op: &ExecOp, op_id: u64) -> Result<Vec<u8>, ExecClientError> {
-    let mut value = serde_json::to_value(op)
-        .map_err(|error| ExecClientError::internal(format!("encoding exec op failed: {error}")))?;
-    let object = value
-        .as_object_mut()
-        .ok_or_else(|| ExecClientError::internal("encoded exec op was not a JSON object"))?;
-    object.insert("type".to_owned(), Value::String("exec".to_owned()));
-    object.insert("opId".to_owned(), Value::from(op_id));
-    serde_json::to_vec(&value)
-        .map_err(|error| ExecClientError::internal(format!("serializing exec op failed: {error}")))
-}
-
 /// Decode an `execResponse` (or `error`) daemon wire frame into an
 /// [`ExecOpResponse`], mapping a daemon error frame to a typed
 /// [`ExecClientError`] with the CLI exec exit-code contract.
@@ -730,7 +859,7 @@ fn decode_error_frame(value: &Value) -> ExecClientError {
     let kind = error
         .get("kind")
         .and_then(Value::as_str)
-        .unwrap_or("guest-control-exec-internal");
+        .unwrap_or("component-session-exec-internal");
     let message = error
         .get("message")
         .and_then(Value::as_str)
@@ -1513,27 +1642,27 @@ mod tests {
     #[test]
     fn abnormal_terminal_slugs_map_to_transport_or_protocol_not_guest() {
         // Abnormal terminal kinds carry reserved codes with a
-        // transport/guest-control/protocol source, NEVER `guest`.
+        // transport/component-session/protocol source, NEVER `guest`.
         let cases = [
             (
-                "lost-guestd",
+                "component-session-target-lost",
                 EXIT_EXEC_TRANSPORT,
                 ExecFailureSource::Transport,
             ),
             (
                 "cancelled",
                 EXIT_EXEC_CAPACITY,
-                ExecFailureSource::GuestControl,
+                ExecFailureSource::ComponentSession,
             ),
             (
                 "slow-consumer-cancelled",
                 EXIT_EXEC_CAPACITY,
-                ExecFailureSource::GuestControl,
+                ExecFailureSource::ComponentSession,
             ),
             (
                 "reaped",
                 EXIT_EXEC_CAPACITY,
-                ExecFailureSource::GuestControl,
+                ExecFailureSource::ComponentSession,
             ),
             (
                 "protocol-error",
@@ -1903,7 +2032,7 @@ mod tests {
     fn exit_code_for_terminal_maps_abnormal_slugs() {
         assert_eq!(
             exit_code_for_terminal(&ExecTerminalStatus::Error {
-                slug: "lost-guestd".to_owned()
+                slug: "component-session-target-lost".to_owned()
             }),
             EXIT_EXEC_TRANSPORT
         );
@@ -1928,32 +2057,32 @@ mod tests {
         use ExecFailureSource::*;
         let cases = [
             (
-                "guest-control-transport-unavailable",
+                "component-session-transport-unavailable",
                 EXIT_EXEC_TRANSPORT,
                 Transport,
             ),
-            ("guest-control-timeout", EXIT_EXEC_TRANSPORT, Transport),
+            ("component-session-timeout", EXIT_EXEC_TRANSPORT, Transport),
             (
-                "guest-control-unavailable-old-generation",
+                "component-session-unavailable-old-generation",
                 EXIT_EXEC_OLD_GENERATION,
-                GuestControl,
+                ComponentSession,
             ),
             (
-                "guest-control-capability-unavailable",
+                "component-session-capability-unavailable",
                 EXIT_EXEC_OLD_GENERATION,
-                GuestControl,
+                ComponentSession,
             ),
-            ("exec-session-capacity", EXIT_EXEC_CAPACITY, GuestControl),
+            ("exec-session-capacity", EXIT_EXEC_CAPACITY, ComponentSession),
             (
                 "exec-session-rate-limited",
                 EXIT_EXEC_CAPACITY,
-                GuestControl,
+                ComponentSession,
             ),
-            ("guest-control-protocol-error", EXIT_EXEC_PROTOCOL, Protocol),
-            ("guest-control-exec-error", EXIT_EXEC_PROTOCOL, Protocol),
-            ("guest-control-auth-failed", EXIT_EXEC_AUTH, GuestControl),
-            ("authz-not-admin", EXIT_EXEC_AUTH, GuestControl),
-            ("guest-control-exec-internal", EXIT_EXEC_INTERNAL, Internal),
+            ("component-session-protocol-error", EXIT_EXEC_PROTOCOL, Protocol),
+            ("component-session-exec-error", EXIT_EXEC_PROTOCOL, Protocol),
+            ("component-session-auth-failed", EXIT_EXEC_AUTH, ComponentSession),
+            ("authz-not-admin", EXIT_EXEC_AUTH, ComponentSession),
+            ("component-session-exec-internal", EXIT_EXEC_INTERNAL, Internal),
             ("totally-unknown-slug", EXIT_EXEC_INTERNAL, Internal),
         ];
         for (slug, code, source) in cases {
@@ -1968,10 +2097,10 @@ mod tests {
         // with the same numeric exit. The two are disambiguated by source.
         let guest_70 = exit_code_for_terminal(&ExecTerminalStatus::Exited { code: 70 });
         let (old_gen_70, old_gen_source) =
-            exit_for_kind("guest-control-unavailable-old-generation");
+            exit_for_kind("component-session-unavailable-old-generation");
         assert_eq!(guest_70, 70);
         assert_eq!(old_gen_70, 70);
-        assert_eq!(old_gen_source, ExecFailureSource::GuestControl);
+        assert_eq!(old_gen_source, ExecFailureSource::ComponentSession);
     }
 
     // ---- (h) redaction: no stdio / argv bytes in error surfaces -----------
@@ -2012,5 +2141,63 @@ mod tests {
             assert!(!err.kind.is_empty());
             assert!(!err.remediation.is_empty());
         }
+    }
+
+    #[test]
+    fn named_stream_mapping_preserves_control_operation_and_redaction() {
+        let resize = ExecOp::Resize(ExecResizeArgs {
+            session: "opaque-session".to_owned(),
+            rows: 24,
+            cols: 80,
+            op_id: 9,
+        });
+        let request = named_stream_request(&resize).expect("resize maps to named stream");
+        assert!(matches!(
+            request,
+            NamedProcessStreamRequest::Resize {
+                control_seq: 9,
+                rows: 24,
+                cols: 80
+            }
+        ));
+        let close = named_stream_request_with_offset(
+            &ExecOp::Close(ExecCloseArgs {
+                session: "opaque-session".to_owned(),
+            }),
+            12,
+        )
+        .expect("close maps to a named-stream half-close");
+        assert!(matches!(
+            close,
+            NamedProcessStreamRequest::CloseStdin { offset: 12 }
+        ));
+        let frame = named_stream_request_frame(&resize, 17, 12).expect("frame has correlation");
+        assert_eq!(frame.request_id, 17);
+        let response_frame =
+            d2b_contracts_control::public_wire::NamedProcessStreamResponseFrame::new(
+                17,
+                NamedProcessStreamResponse::Delivered(ExecControlResult { delivered: true }),
+            );
+        let (_, decoded) = named_stream_response_frame(
+            &resize,
+            &serde_json::to_vec(&response_frame).expect("response frame serializes"),
+        )
+        .expect("response frame decodes");
+        assert!(matches!(decoded, ExecOpResponse::Resize(_)));
+        let response = named_stream_response_for(
+            Some(&request),
+            NamedProcessStreamResponse::Delivered(ExecControlResult { delivered: true }),
+        )
+        .expect("resize response maps");
+        assert!(matches!(response, ExecOpResponse::Resize(_)));
+
+        let error = named_stream_response(NamedProcessStreamResponse::Error(
+            d2b_contracts_control::public_wire::NamedProcessStreamError {
+                kind: NamedProcessStreamErrorKind::Disconnected,
+            },
+        ))
+        .expect_err("disconnect is a typed failure");
+        assert_eq!(error.kind, "session-disconnected");
+        assert!(!format!("{error:?}").contains("opaque-session"));
     }
 }

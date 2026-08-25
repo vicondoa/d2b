@@ -134,4 +134,19 @@
     "runtime-marketplace"
     "version-range-solving"
   ];
+
+  # Signed placement-contract fields carried by the Provider
+  # manifest and consumed by Core admission.
+  placementContractFields = [
+    "instanceScope"
+    "supportedTargetKinds"
+    "targetCapabilities"
+    "placementAnchor"
+  ];
+
+  # Signed shared daemon and broker artifact fields.
+  runtimeContractFields = [
+    "d2bdDigest"
+    "brokerDigest"
+  ];
 }

@@ -130,7 +130,7 @@ let
   # host-sidecars.nix. The TPM sidecar is now spawned by the
   # d2b priv-broker as `SpawnRunner{role: Swtpm}`; the
   # equivalent pre-start session-flush + socket ACL handoff lives
-  # in `packages/d2b-priv-broker/src/runners/swtpm.rs`. The
+  # in `packages/d2b-broker/src/runners/swtpm.rs`. The
   # legacy per-VM systemd assertions (ExecStartPre/ExecStartPost,
   # microvm@ wants/after wiring, host-sidecars.nix flush helper
   # source check) are deferred to a forthcoming

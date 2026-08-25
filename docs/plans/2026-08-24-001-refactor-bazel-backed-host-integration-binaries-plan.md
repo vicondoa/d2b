@@ -171,7 +171,6 @@ Product Contract clarified without scope change: R7, R11, AE2, and F1 bind confi
 | `broker` | `d2b-priv-broker` | `//packages/d2b-priv-broker:d2b-priv-broker` |
 | `activationHelper` | `d2b-activation-helper` | `//packages/d2b-host:d2b-activation-helper` |
 | `hostActivationHelper` | `d2b-host-activation-helper` | `//packages/d2b-host-activation-helper:d2b-host-activation-helper` |
-| `cutoverRunner` | `d2b-cutover-runner` | `//packages/d2b-cutover:d2b-cutover-runner` |
 | `unsafeLocalHelper` | `d2b-unsafe-local-helper` | `//packages/d2b-unsafe-local-helper:d2b-unsafe-local-helper` |
 | `resourceCompiler` | `d2b-resource-compiler` | `//packages/d2b-resource-compiler:d2b-resource-compiler` |
 | `waylandProxy` | `d2b-wayland-proxy` | `//packages/d2b-provider-display-wayland:d2b-wayland-proxy` |

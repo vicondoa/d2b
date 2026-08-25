@@ -12,7 +12,7 @@
 //!   did **not** seal the host boundary.
 //! * [`QemuAudioController`] - offline-only enforcement for qemu-media VMs.
 //!   Writing the state file IS the policy for qemu-media; no live runtime
-//!   enforcement exists and no guestd call is made.
+//!   enforcement exists and no target-local Process call is made.
 //! * `FakeHostController` - test-only injectable with configurable results.
 //!   Gated behind `#[cfg(test)]` so it never compiles into production builds.
 //!
@@ -207,7 +207,7 @@ impl HostAudioController for PipeWireHostController {
 /// accurate: the host state file is updated; there is no guest enforcement
 /// path for qemu-media VMs.
 ///
-/// The controller never calls guestd - the qemu-media capability row has
+/// The controller never calls a target-local Process - the qemu-media capability row has
 /// `guest_enforcement = Unsupported`, and that invariant is enforced at the
 /// dispatch layer, not here.
 #[derive(Debug, Clone, Copy, Default)]
@@ -472,7 +472,6 @@ mod tests {
         use d2b_core::processes::{ProcessesJson, VmProcessDag, VmProcessInvariants};
         let processes = ProcessesJson {
             schema_version: "v3".to_owned(),
-            cutover_runner: None,
             vms: vec![VmProcessDag {
                 workload_identity: None,
                 vm: "corp-vm".to_owned(),
@@ -500,7 +499,6 @@ mod tests {
         ]);
         let processes = ProcessesJson {
             schema_version: "v3".to_owned(),
-            cutover_runner: None,
             vms: vec![VmProcessDag {
                 workload_identity: None,
                 vm: "corp-vm".to_owned(),

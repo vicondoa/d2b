@@ -3,8 +3,10 @@
 This directory contains the surviving normative specifications for
 [ADR 0046](../adr/0046-d2b-3-provider-control-plane.md). The parent decision
 and these Markdown files are the source of truth for the planned provider
-control plane. Contributor workflow, delivery records, and generated
-validation indexes are not part of this set.
+control plane. The retired reset-and-cutover specification remains in the
+repository as historical decision context, but is not a current contract.
+Contributor workflow, delivery records, and generated validation indexes are
+not part of this set.
 
 ## Foundation and platform
 
@@ -24,7 +26,6 @@ validation indexes are not part of this set.
 - [Nix configuration](ADR-046-nix-configuration.md)
 - [Current-code migration map](ADR-046-current-code-migration-map.md)
 - [Feasibility and spikes](ADR-046-feasibility-and-spikes.md)
-- [Reset and cutover](ADR-046-reset-and-cutover.md)
 
 ## Resource catalog
 
@@ -54,7 +55,7 @@ Each specification begins with a metadata table containing:
 | --- | --- |
 | Spec ID | Stable `ADR-046-<spec-name>` identifier |
 | Parent | `ADR 0046` |
-| Status | `Proposed` or `Accepted` |
+| Status | `Proposed`, `Accepted`, or `Superseded` for historical records |
 | Version | Monotonic integer |
 | Baseline | Exact source revision analyzed |
 | Normative | `Yes` |

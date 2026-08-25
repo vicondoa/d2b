@@ -156,8 +156,8 @@ talks to PipeWire as a regular client, so:
 - **Guest side** (from `usbip.yubikey = true`):
   - The `vhci_hcd` kernel module is loaded so the guest has a
     virtual USB host controller.
-  - The `usbip` userspace CLI is installed for authenticated guestd
-    import/detach operations.
+  - The `usbip` userspace CLI is installed for authenticated target-local
+    Process import/detach operations.
 
 Declare the approved busid in the copied example and use the read-only probe to
 confirm host observation:
@@ -229,7 +229,7 @@ implicitly by the host activation script) produces:
     bridge - workload VMs cannot reach the host's neighbours.
 
 - **Root-visible services:** `d2bd.service`,
-  `d2b-priv-broker.socket`, and `d2b-priv-broker.service`.
+  `d2b-broker.socket`, and `d2b-broker.service`.
   Per-VM runners (cloud-hypervisor, virtiofsd, swtpm, GPU/audio/USBIP
   sidecars) are broker-spawned and supervised by `d2bd`, not by
   per-VM systemd templates.

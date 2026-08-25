@@ -159,13 +159,7 @@ pub const METRIC_INVENTORY: &[MetricDescriptor] = &[
         buckets_seconds: &[],
     },
     MetricDescriptor {
-        name: "d2b_daemon_guest_control_exec_total",
-        kind: MetricKind::Counter,
-        labels: &["subsystem", "outcome", "error_kind"],
-        buckets_seconds: &[],
-    },
-    MetricDescriptor {
-        name: "d2b_daemon_guest_control_shell_total",
+        name: "d2b_daemon_component_session_shell_total",
         kind: MetricKind::Counter,
         labels: &["subsystem", "outcome", "error_kind"],
         buckets_seconds: &[],
@@ -492,11 +486,8 @@ fn help_text(name: &str) -> &'static str {
         "d2b_daemon_ssh_host_key_drift_total" => "Per-VM SSH host-key drift detections.",
         "d2b_daemon_pidfd_table_size" => "Live pidfd entries held by the supervisor.",
         "d2b_daemon_uptime_seconds" => "Seconds since the daemon process started.",
-        "d2b_daemon_guest_control_exec_total" => {
-            "Cumulative count of guest-control exec session/op outcomes by error_kind."
-        }
-        "d2b_daemon_guest_control_shell_total" => {
-            "Cumulative count of guest-control shell session/op outcomes by error_kind."
+        "d2b_daemon_component_session_shell_total" => {
+            "Cumulative count of ComponentSession shell session/op outcomes by error_kind."
         }
         "d2b_daemon_shell_lifecycle_total" => {
             "Cumulative provider-neutral persistent-shell lifecycle outcomes."
@@ -584,7 +575,7 @@ fn normalize_label_value(key: &str, value: &str) -> String {
             "cloud_hypervisor",
             "qemu_media",
             "unknown",
-            "guest-control",
+            "component-session",
             "unsafe-local",
             "local-vm",
             "provider-managed",
@@ -672,7 +663,7 @@ fn normalize_label_value(key: &str, value: &str) -> String {
             "metadata-only",
             "unknown",
         ][..],
-        "subsystem" => &["guest-control-exec", "guest-control-shell", "unknown"][..],
+        "subsystem" => &["component-session-shell", "unknown"][..],
         "operation" => &[
             "create",
             "attach",
@@ -864,8 +855,7 @@ mod tests {
                 "d2b_daemon_ssh_host_key_drift_total",
                 "d2b_daemon_pidfd_table_size",
                 "d2b_daemon_uptime_seconds",
-                "d2b_daemon_guest_control_exec_total",
-                "d2b_daemon_guest_control_shell_total",
+                "d2b_daemon_component_session_shell_total",
                 "d2b_daemon_shell_lifecycle_total",
                 "d2b_daemon_workload_availability",
                 "d2b_daemon_workload_lifecycle_total",
@@ -947,7 +937,7 @@ mod tests {
         // Every label key the daemon's core registry renders must be in
         // an APPROVED, low-cardinality allowlist. This is an allowlist
         // (not a forbidden-list on an empty registry), so a NEW metric
-        // that introduces an unapproved label key - or a guest-control
+        // that introduces an unapproved label key - or a component-session
         // closed-enum field (health_state, ...) promoted to a
         // metric label - fails this test. The allowlist is hardcoded and
         // independent of METRIC_INVENTORY so widening the inventory cannot
@@ -1018,7 +1008,7 @@ mod tests {
         }
 
         // Belt-and-suspenders: the high-cardinality / sensitive
-        // guest-control readiness closed-enum fields must NEVER appear as
+        // component-session readiness closed-enum fields must NEVER appear as
         // a metric label key. (`subsystem` and `error_kind` are allowed
         // above as bounded exec labels and are intentionally NOT in this
         // forbidden set.)
@@ -1052,7 +1042,7 @@ mod tests {
         ] {
             assert!(
                 !body.contains(&format!("{forbidden}=\"")),
-                "guest-control field {forbidden:?} leaked as a metric label"
+                "component-session field {forbidden:?} leaked as a metric label"
             );
         }
     }

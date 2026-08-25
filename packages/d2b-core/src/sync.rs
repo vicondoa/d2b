@@ -120,7 +120,6 @@ pub enum LockStaleKind {
     PidfdProofRequired,
     CgroupEmptyProofRequired,
     FileRecordOwnerMatch,
-    CutoverOnly,
     ManualRecovery,
 }
 

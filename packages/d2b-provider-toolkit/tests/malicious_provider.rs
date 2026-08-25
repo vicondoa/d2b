@@ -15,13 +15,19 @@ use d2b_contracts_provider::v3::semantic_services::catalog;
 use d2b_contracts_provider::v3::{
     ArtifactDigest,
     ArtifactDigestSet,
+    BinaryRef,
     BindingTargetType,
     CapabilitySupport,
     CompatibilityRange,
     ComponentDescriptor,
+    ComponentExecution,
+    ComponentTargetCapability,
     ComponentType,
+    ControllerInstanceScope,
+    ControllerTargetKind,
     DependencyAlias,
     DependencyDeclaration,
+    EffectPortClass,
     Exportability,
     ExtensionSchemaRegistration,
     PolicyEvaluation,
@@ -33,6 +39,7 @@ use d2b_contracts_provider::v3::{
     SignatureState,
     StandardCapabilityMatrix,
     TrustEvidence,
+    TargetRuntimeArtifacts,
     UpgradeDisposition,
     UpgradePolicy,
 };
@@ -45,7 +52,7 @@ use d2b_contracts_resource::v3::{
     execution_policy::{BoundedToken, ExecutionDomain},
     ResourceTypeName,
     SchemaFingerprint,
-    resource_schema::{ExtensionSchemaId, SchemaVersion, canonical_json_bytes},
+    resource_schema::{ExtensionSchemaId, PlacementAnchor, SchemaVersion, canonical_json_bytes},
 };
 use d2b_contracts_resource::v3::identity::{
     Locality,
@@ -104,6 +111,29 @@ fn controller(component_id: &str) -> ComponentDescriptor {
         false,
     )
     .expect("a controller owning one ResourceType is valid")
+    .with_execution(ComponentExecution::Launchable {
+        binary_ref: BinaryRef::parse(component_id).expect("valid binary ref"),
+    })
+    .with_controller_placement(
+        ControllerInstanceScope::PerResourceTarget,
+        [ControllerTargetKind::Host, ControllerTargetKind::Guest],
+    )
+    .expect("valid controller placement")
+    .with_target_capabilities([
+        ComponentTargetCapability::new(
+            ControllerTargetKind::Host,
+            ArtifactDigest::parse(DIGEST).expect("valid digest"),
+            [EffectPortClass::Storage],
+        )
+        .expect("valid host capability"),
+        ComponentTargetCapability::new(
+            ControllerTargetKind::Guest,
+            ArtifactDigest::parse(DIGEST).expect("valid digest"),
+            [EffectPortClass::Storage],
+        )
+        .expect("valid guest capability"),
+    ])
+    .expect("valid target capabilities")
 }
 
 fn controller_for_resource(resource_type: &str) -> ComponentDescriptor {
@@ -119,11 +149,35 @@ fn controller_for_resource(resource_type: &str) -> ComponentDescriptor {
         false,
     )
     .expect("a controller owning one ResourceType is valid")
+    .with_execution(ComponentExecution::Launchable {
+        binary_ref: BinaryRef::parse("semantic-controller").expect("valid binary ref"),
+    })
+    .with_controller_placement(
+        ControllerInstanceScope::PerResourceTarget,
+        [ControllerTargetKind::Host, ControllerTargetKind::Guest],
+    )
+    .expect("valid controller placement")
+    .with_target_capabilities([
+        ComponentTargetCapability::new(
+            ControllerTargetKind::Host,
+            ArtifactDigest::parse(DIGEST).expect("valid digest"),
+            [EffectPortClass::Runtime],
+        )
+        .expect("valid host capability"),
+        ComponentTargetCapability::new(
+            ControllerTargetKind::Guest,
+            ArtifactDigest::parse(DIGEST).expect("valid digest"),
+            [EffectPortClass::Runtime],
+        )
+        .expect("valid guest capability"),
+    ])
+    .expect("valid target capabilities")
 }
 
 fn binding_for(resource_type: &str) -> ResourceApiBinding {
-    ResourceApiBinding::new(
-        ResourceTypeName::parse(resource_type).expect("valid type"),
+    let resource_type = ResourceTypeName::parse(resource_type).expect("valid type");
+    ResourceApiBinding::new_with_placement(
+        resource_type.clone(),
         SchemaVersion::new(1, 0).expect("valid version"),
         fingerprint("2"),
         SchemaVersion::new(1, 0).expect("valid version"),
@@ -135,6 +189,7 @@ fn binding_for(resource_type: &str) -> ResourceApiBinding {
         .expect("a single-entry matrix is valid"),
         None,
         None,
+        PlacementAnchor::canonical_for(&resource_type).unwrap_or(PlacementAnchor::ExecutionRef),
     )
     .expect("a binding is valid")
 }
@@ -216,6 +271,22 @@ fn manifest_with(
             preserves_durable_state: true,
         },
     )
+    .and_then(|manifest| {
+        manifest.with_target_runtime_artifacts([
+            TargetRuntimeArtifacts::new(
+                ControllerTargetKind::Host,
+                ArtifactDigest::parse(DIGEST).expect("valid digest"),
+                ArtifactDigest::parse(DIGEST).expect("valid digest"),
+            )
+            .expect("valid host runtime artifacts"),
+            TargetRuntimeArtifacts::new(
+                ControllerTargetKind::Guest,
+                ArtifactDigest::parse(DIGEST).expect("valid digest"),
+                ArtifactDigest::parse(DIGEST).expect("valid digest"),
+            )
+            .expect("valid guest runtime artifacts"),
+        ])
+    })
 }
 
 fn manifest_for_factory(

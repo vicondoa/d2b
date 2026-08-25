@@ -250,7 +250,7 @@ fn bundle_resolver_loads_runner_intents_for_workload_vm() {
     );
 
     // The cloud-hypervisor and virtiofsd nodes are both runner-shaped
-    // (vs HostReconcile/StoreVirtiofsPreflight/GuestSshReadiness which
+    // (vs HostReconcile/StoreVirtiofsPreflight/ComponentSessionHealth which
     // are readiness-only and skipped by build_runner_intents).
     let ch_present = intent_ids.iter().any(|id| id.contains("cloud-hypervisor"));
     let vfsd_present = intent_ids.iter().any(|id| id.contains("virtiofsd"));

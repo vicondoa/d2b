@@ -1,12 +1,59 @@
-use d2b_contracts_resource::v3::ResourceUid;
+use d2b_contracts_resource::v3::{ResourceRef, ResourceUid};
 use d2b_provider_device_usbip::{
     AttachProcessIdentity, AttachmentObservation, BindingIdentity, BindingLifecycle,
     BindingLifecycleError, BindingPort, BindingProxyLease, BindingSlotLease, ServiceLifecycle,
-    ServiceLifecycleError, ServicePhase, ServicePort, UsbipSupervisor,
+    ServiceLifecycleError, ServicePhase, ServicePort, UsbipBindingController, UsbipBindingPhase,
+    UsbipSupervisor, binding_child_resources,
 };
 
 fn uid(value: &str) -> ResourceUid {
     ResourceUid::parse(value).unwrap()
+}
+
+#[test]
+fn explicit_binding_children_are_resource_backed_and_ordered_for_teardown() {
+    let children = binding_child_resources(
+        &ResourceRef::parse("usb.d2bus.org.UsbBinding/keyboard").unwrap(),
+        &ResourceRef::parse("usb.d2bus.org.UsbService/usb-bus").unwrap(),
+        &ResourceRef::parse("Guest/guest-a").unwrap(),
+    )
+    .unwrap();
+
+    assert_eq!(children.iter().count(), 2);
+    assert_eq!(children.at(d2b_contracts_provider::v3::semantic_services::child_resources::BindingChildPlacement::Host).count(), 0);
+    assert_eq!(children.at(d2b_contracts_provider::v3::semantic_services::child_resources::BindingChildPlacement::Guest).count(), 2);
+    assert_eq!(
+        children
+            .teardown_order()
+            .iter()
+            .map(|child| child.role())
+            .collect::<Vec<_>>(),
+            vec![
+                "guest-endpoint",
+                "guest-proxy"
+            ]
+    );
+    assert_eq!(
+            children.child("guest-endpoint").unwrap().producer_ref(),
+            Some(children.child("guest-proxy").unwrap().resource_ref())
+    );
+}
+
+#[test]
+fn binding_controller_only_observes_core_managed_children() {
+    let binding = ResourceRef::parse("usb.d2bus.org.UsbBinding/keyboard").unwrap();
+    let service = ResourceRef::parse("usb.d2bus.org.UsbService/usb-bus").unwrap();
+    let target = ResourceRef::parse("Guest/guest-a").unwrap();
+    let mut controller = UsbipBindingController::new(&binding, &service, &target).unwrap();
+
+    assert_eq!(controller.phase(), UsbipBindingPhase::Pending);
+    assert_eq!(
+        controller.observe_children(true).unwrap().phase,
+        UsbipBindingPhase::Ready
+    );
+    controller.finalize();
+    assert_eq!(controller.phase(), UsbipBindingPhase::Deleted);
+    assert!(controller.observe_children(true).is_err());
 }
 
 struct FakePort {
@@ -110,39 +157,39 @@ impl BindingPort for FakePort {
         Ok(BindingProxyLease::from_adapter([5; 16]))
     }
 
-    fn spawn_attach_runner(
+    fn ensure_attach_process(
         &mut self,
         _: &BindingIdentity,
         _: &BindingProxyLease,
     ) -> Result<AttachProcessIdentity, BindingLifecycleError> {
-        self.calls.push("spawn-attach");
+        self.calls.push("ensure-attach-process");
         Ok(AttachProcessIdentity::from_adapter(7, 11))
     }
 
-    fn observe_attach_runner(
+    fn observe_attach_process(
         &mut self,
         _: &BindingIdentity,
         _: &AttachProcessIdentity,
     ) -> Result<AttachmentObservation, BindingLifecycleError> {
-        self.calls.push("observe-attach");
+        self.calls.push("observe-attach-process");
         Ok(self.observation.clone())
     }
 
-    fn detach_guest(
+    fn delete_guest_endpoint(
         &mut self,
         _: &BindingIdentity,
         _: &BindingProxyLease,
     ) -> Result<(), BindingLifecycleError> {
-        self.calls.push("detach-guest");
+        self.calls.push("delete-guest-endpoint");
         Ok(())
     }
 
-    fn close_attach_runner(
+    fn delete_attach_process(
         &mut self,
         _: &BindingIdentity,
         _: &AttachProcessIdentity,
     ) -> Result<(), BindingLifecycleError> {
-        self.calls.push("close-attach");
+        self.calls.push("delete-attach-process");
         Ok(())
     }
 
@@ -230,14 +277,14 @@ fn matching_restart_adopts_and_stale_identity_quarantines_without_effects() {
     supervisor
         .adopt_binding(0, AttachProcessIdentity::from_adapter(7, 11), &mut port)
         .unwrap();
-    assert_eq!(port.calls, ["observe-attach"]);
+    assert_eq!(port.calls, ["observe-attach-process"]);
     supervisor.finalize(&mut port).unwrap();
     assert_eq!(
         port.calls,
         [
-            "observe-attach",
-            "detach-guest",
-            "close-attach",
+            "observe-attach-process",
+            "delete-guest-endpoint",
+            "delete-attach-process",
             "close-proxy",
             "release-slot"
         ]
@@ -257,7 +304,7 @@ fn matching_restart_adopts_and_stale_identity_quarantines_without_effects() {
     supervisor
         .adopt_binding(0, AttachProcessIdentity::from_adapter(8, 12), &mut port)
         .unwrap();
-    assert_eq!(port.calls, ["observe-attach"]);
+    assert_eq!(port.calls, ["observe-attach-process"]);
     assert_eq!(
         supervisor.activate_binding(0, &mut port),
         Err(BindingLifecycleError::Quarantined)
@@ -268,7 +315,42 @@ fn matching_restart_adopts_and_stale_identity_quarantines_without_effects() {
             BindingLifecycleError::Quarantined
         ))
     );
-    assert_eq!(port.calls, ["observe-attach"]);
+    assert_eq!(port.calls, ["observe-attach-process"]);
+}
+
+#[test]
+fn binding_is_not_attached_until_the_guest_process_is_ready() {
+    let zone = uid("123e4567-e89b-42d3-a456-426614174000");
+    let mut port = FakePort {
+        observation: AttachmentObservation::Missing,
+        ..Default::default()
+    };
+    let mut service =
+        ServiceLifecycle::new(zone.clone(), uid("223e4567-e89b-42d3-a456-426614174001"));
+    service.activate(true, zone.clone(), &mut port).unwrap();
+    port.calls.clear();
+    let mut supervisor = UsbipSupervisor::new(service);
+    supervisor
+        .add_binding(BindingLifecycle::new(
+            zone.clone(),
+            zone,
+            BindingIdentity::from_controller(uid("323e4567-e89b-42d3-a456-426614174002")),
+        ))
+        .unwrap();
+
+    assert_eq!(
+        supervisor.activate_binding(0, &mut port),
+        Err(BindingLifecycleError::Transient)
+    );
+    assert_eq!(
+        port.calls,
+        [
+            "slot",
+            "proxy",
+            "ensure-attach-process",
+            "observe-attach-process",
+        ]
+    );
 }
 
 #[test]
@@ -292,10 +374,20 @@ fn missing_restart_identity_drops_slot_and_proxy_before_reactivate() {
     supervisor
         .adopt_binding(0, AttachProcessIdentity::from_adapter(7, 11), &mut port)
         .unwrap();
+    port.observation = AttachmentObservation::Matching {
+        slot: BindingSlotLease::from_adapter([4; 16]),
+        proxy: BindingProxyLease::from_adapter([5; 16]),
+    };
     supervisor.activate_binding(0, &mut port).unwrap();
     assert_eq!(
         port.calls,
-        ["observe-attach", "slot", "proxy", "spawn-attach",]
+        [
+            "observe-attach-process",
+            "slot",
+            "proxy",
+            "ensure-attach-process",
+            "observe-attach-process",
+        ]
     );
 }
 
@@ -325,9 +417,10 @@ fn binding_closes_its_process_before_service_unbinds_and_releases_authority() {
             "bind",
             "slot",
             "proxy",
-            "spawn-attach",
-            "detach-guest",
-            "close-attach",
+            "ensure-attach-process",
+            "observe-attach-process",
+            "delete-guest-endpoint",
+            "delete-attach-process",
             "close-proxy",
             "release-slot",
             "unbind",

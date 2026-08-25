@@ -46,13 +46,9 @@ pub enum W3BrokerOperation {
     UpdateHostsFile,
     BindUnixSocket,
     SetSocketAcl,
-    GuestControlSign,
     ModprobeIfAllowed,
     UsbipBindFirewallRule,
     MigrateLegacySwtpmState,
-    LaunchCutoverRunner,
-    CutoverAudit,
-    CutoverEffect,
     /// Open the FIDO/CTAP hidraw node for the broker-configured device
     /// selector. Typed stub until the live host-broker handler is implemented.
     SecurityKeyOpenDevice,
@@ -89,13 +85,9 @@ impl W3BrokerOperation {
             Self::UpdateHostsFile => "UpdateHostsFile",
             Self::BindUnixSocket => "BindUnixSocket",
             Self::SetSocketAcl => "SetSocketAcl",
-            Self::GuestControlSign => "GuestControlSign",
             Self::ModprobeIfAllowed => "ModprobeIfAllowed",
             Self::UsbipBindFirewallRule => "UsbipBindFirewallRule",
             Self::MigrateLegacySwtpmState => "MigrateLegacySwtpmState",
-            Self::LaunchCutoverRunner => "LaunchCutoverRunner",
-            Self::CutoverAudit => "CutoverAudit",
-            Self::CutoverEffect => "CutoverEffect",
             Self::SecurityKeyOpenDevice => "SecurityKeyOpenDevice",
             Self::SecurityKeyApplyUdevRules => "SecurityKeyApplyUdevRules",
         }
@@ -128,13 +120,9 @@ impl W3BrokerOperation {
             Self::UpdateHostsFile,
             Self::BindUnixSocket,
             Self::SetSocketAcl,
-            Self::GuestControlSign,
             Self::ModprobeIfAllowed,
             Self::UsbipBindFirewallRule,
             Self::MigrateLegacySwtpmState,
-            Self::LaunchCutoverRunner,
-            Self::CutoverAudit,
-            Self::CutoverEffect,
             Self::SecurityKeyOpenDevice,
             Self::SecurityKeyApplyUdevRules,
         ]
@@ -186,11 +174,6 @@ impl W3BrokerOperation {
                 destructive: true,
                 secret_access: false,
             },
-            Self::GuestControlSign => W3OperationFlags {
-                audit: true,
-                destructive: false,
-                secret_access: true,
-            },
             Self::ModprobeIfAllowed => W3OperationFlags {
                 audit: true,
                 destructive: true,
@@ -204,16 +187,6 @@ impl W3BrokerOperation {
             Self::MigrateLegacySwtpmState => W3OperationFlags {
                 audit: true,
                 destructive: true,
-                secret_access: false,
-            },
-            Self::LaunchCutoverRunner | Self::CutoverEffect => W3OperationFlags {
-                audit: true,
-                destructive: true,
-                secret_access: false,
-            },
-            Self::CutoverAudit => W3OperationFlags {
-                audit: true,
-                destructive: false,
                 secret_access: false,
             },
             // SecurityKeyOpenDevice: opens a single FIDO hidraw fd; read-only
@@ -270,17 +243,14 @@ mod tests {
         assert!(W3BrokerOperation::DeleteBridge.flags().destructive);
         assert!(W3BrokerOperation::DeletePersistentTap.flags().destructive);
         assert!(!W3BrokerOperation::UsbipBindFirewallRule.flags().destructive);
-        assert!(W3BrokerOperation::LaunchCutoverRunner.flags().destructive);
-        assert!(!W3BrokerOperation::CutoverAudit.flags().destructive);
-        assert!(W3BrokerOperation::CutoverEffect.flags().destructive);
     }
 
     #[test]
-    fn only_guest_control_sign_grants_secret_access() {
+    fn no_remaining_operation_grants_secret_access() {
         for op in W3BrokerOperation::all() {
             assert_eq!(
                 op.flags().secret_access,
-                *op == W3BrokerOperation::GuestControlSign,
+                false,
                 "unexpected secret_access flag for {op:?}"
             );
         }

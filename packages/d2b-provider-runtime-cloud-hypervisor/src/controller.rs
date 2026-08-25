@@ -10,7 +10,10 @@ use crate::{
     adoption::{AdoptionOutcome, ProcessIdentity, verify_identity},
     bootstrap_graph::{BootstrapGraph, DependencyReadiness},
     config::{CloudHypervisorConfig, CloudHypervisorGuestSettings},
-    health::{GuestControlHealth, GuestControlHealthError, GuestControlProbe},
+    health::{
+        GuestSessionHealth, GuestSessionError, GuestSessionEvidence,
+        GuestSessionEvidenceProbe,
+    },
 };
 
 /// Cloud Hypervisor lifecycle phase.
@@ -23,15 +26,15 @@ pub enum CloudHypervisorPhase {
     Starting,
     /// VMM process is ready.
     VmmReady,
-    /// Guest-control is probing.
+    /// ComponentSession is probing.
     Bootstrapping,
-    /// Guest and guest-control are ready.
+    /// Guest and component-session are ready.
     Ready,
     /// Restart adoption or health is degraded.
     Degraded,
     /// Failed closed.
     Failed,
-    /// Finalizing guest-control before process stop.
+    /// Finalizing component-session before process stop.
     Finalizing,
     /// Finalized.
     Finalized,
@@ -63,11 +66,11 @@ pub enum CloudHypervisorError {
     DependencyNotReady,
     /// Process identity was ambiguous.
     AdoptionAmbiguous,
-    /// Guest-control authentication failed.
-    GuestControl(GuestControlHealthError),
+    /// ComponentSession authentication failed.
+    GuestSession(GuestSessionError),
     /// VMM effect failed.
     Effect,
-    /// Launch or initial guest-control probing exceeded the startup deadline.
+    /// Launch or initial component-session probing exceeded the startup deadline.
     StartupDeadlineExceeded,
     /// Finalization was requested after completion.
     InvalidState,
@@ -79,7 +82,7 @@ impl std::fmt::Display for CloudHypervisorError {
             Self::InvalidConfiguration => "cloud-hypervisor-invalid-configuration",
             Self::DependencyNotReady => "dependency-not-ready",
             Self::AdoptionAmbiguous => "process-adoption-ambiguous",
-            Self::GuestControl(error) => error.code(),
+            Self::GuestSession(error) => error.code(),
             Self::Effect => "cloud-hypervisor-effect-failed",
             Self::StartupDeadlineExceeded => "cloud-hypervisor-startup-deadline-exceeded",
             Self::InvalidState => "cloud-hypervisor-invalid-state",
@@ -153,17 +156,18 @@ pub struct CloudHypervisorController<E, P> {
     identity: Option<ProcessIdentity>,
     expected_identity: Option<ProcessIdentity>,
     health_failures: u8,
+    session_evidence: Option<GuestSessionEvidence>,
     finalizer: bool,
     adoption_started_at_unix_ms: Option<u64>,
     startup_started_at_unix_ms: Option<u64>,
-    guest_control_cid: Option<u32>,
+    guest_session_cid: Option<u32>,
     clock: Arc<dyn CloudHypervisorClock>,
 }
 
 impl<E, P> CloudHypervisorController<E, P>
 where
     E: CloudHypervisorEffectPort + 'static,
-    P: GuestControlProbe + 'static,
+    P: GuestSessionEvidenceProbe + 'static,
 {
     /// Construct a controller with explicit dependency graph and ports.
     pub fn new(
@@ -189,10 +193,11 @@ where
             identity: None,
             expected_identity: None,
             health_failures: 0,
+            session_evidence: None,
             finalizer: true,
             adoption_started_at_unix_ms: None,
             startup_started_at_unix_ms: None,
-            guest_control_cid: None,
+            guest_session_cid: None,
             clock: Arc::new(SystemCloudHypervisorClock),
         })
     }
@@ -245,19 +250,24 @@ where
         self.finalizer
     }
 
+    /// Return the latest authenticated Guest session evidence.
+    pub fn session_evidence(&self) -> Option<&GuestSessionEvidence> {
+        self.session_evidence.as_ref()
+    }
+
     fn apply_health(
         &mut self,
-        health: GuestControlHealth,
+        health: GuestSessionHealth,
     ) -> Result<CloudHypervisorReconcileOutcome, CloudHypervisorError> {
         match health {
-            GuestControlHealth::Ready => {
+            GuestSessionHealth::Ready => {
                 self.health_failures = 0;
                 self.phase = CloudHypervisorPhase::Ready;
                 self.startup_started_at_unix_ms = None;
                 self.adoption_started_at_unix_ms = None;
                 Ok(CloudHypervisorReconcileOutcome::Converged)
             }
-            GuestControlHealth::Degraded => {
+            GuestSessionHealth::Degraded => {
                 self.health_failures = self.health_failures.saturating_add(1);
                 if self.health_failures >= self.config.health_check_failure_threshold {
                     self.phase = CloudHypervisorPhase::Degraded;
@@ -266,11 +276,11 @@ where
                     after_ms: self.config.health_check_interval_ms,
                 })
             }
-            GuestControlHealth::Failed => {
+            GuestSessionHealth::Failed => {
                 self.health_failures = self.config.health_check_failure_threshold;
                 self.phase = CloudHypervisorPhase::Failed;
-                Err(CloudHypervisorError::GuestControl(
-                    GuestControlHealthError::AuthenticationFailed,
+                Err(CloudHypervisorError::GuestSession(
+                    GuestSessionError::AuthenticationFailed,
                 ))
             }
         }
@@ -428,30 +438,36 @@ where
         if self.phase != CloudHypervisorPhase::Ready {
             self.phase = CloudHypervisorPhase::Bootstrapping;
         }
-        self.guest_control_cid = Some(expected_cid);
+        self.guest_session_cid = Some(expected_cid);
         let probe_timeout = if self.phase == CloudHypervisorPhase::Bootstrapping {
             self.startup_budget()?
         } else {
             Duration::from_millis(u64::from(self.config.health_check_timeout_ms))
         };
-        let health = match timeout(
+        let evidence = match timeout(
             probe_timeout,
             self.probe
-                .probe(expected_cid, self.config.health_check_timeout_ms),
+                .observe(expected_cid, self.config.health_check_timeout_ms),
         )
         .await
         {
-            Ok(result) => result.map_err(CloudHypervisorError::GuestControl)?,
+            Ok(result) => result.map_err(|error| {
+                self.session_evidence = Some(GuestSessionEvidence::failed());
+                CloudHypervisorError::GuestSession(error)
+            })?,
             Err(_) if self.phase == CloudHypervisorPhase::Bootstrapping => {
+                self.session_evidence = Some(GuestSessionEvidence::failed());
                 return Err(self.startup_timeout());
             }
             Err(_) => {
-                return Err(CloudHypervisorError::GuestControl(
-                    GuestControlHealthError::Timeout,
+                self.session_evidence = Some(GuestSessionEvidence::failed());
+                return Err(CloudHypervisorError::GuestSession(
+                    GuestSessionError::Timeout,
                 ));
             }
         };
-        self.apply_health(health)
+        self.session_evidence = Some(evidence.clone());
+        self.apply_health(evidence.health())
     }
 
     /// Adopt a process after the caller has rehydrated the expected identity
@@ -491,22 +507,26 @@ where
             Err(_) => return Err(self.startup_timeout()),
         }
         self.identity = Some(candidate);
-        self.guest_control_cid = Some(expected_cid);
+        self.guest_session_cid = Some(expected_cid);
         self.phase = CloudHypervisorPhase::VmmReady;
-        let health = match timeout(
+        let evidence = match timeout(
             self.startup_budget()?,
             self.probe
-                .probe(expected_cid, self.config.health_check_timeout_ms),
+                .observe(expected_cid, self.config.health_check_timeout_ms),
         )
         .await
         {
-            Ok(result) => result.map_err(CloudHypervisorError::GuestControl)?,
+            Ok(result) => result.map_err(|error| {
+                self.session_evidence = Some(GuestSessionEvidence::failed());
+                CloudHypervisorError::GuestSession(error)
+            })?,
             Err(_) => return Err(self.startup_timeout()),
         };
-        self.apply_health(health)
+        self.session_evidence = Some(evidence.clone());
+        self.apply_health(evidence.health())
     }
 
-    /// Stop guest-control first, then the VMM process.
+    /// Stop component-session first, then the VMM process.
     pub async fn finalize(&mut self) -> Result<(), CloudHypervisorError> {
         if !self.finalizer {
             return Ok(());
@@ -519,7 +539,7 @@ where
             Err(_) => return Err(CloudHypervisorError::StartupDeadlineExceeded),
         };
         let Some(candidate) = candidate else {
-            if let Some(cid) = self.guest_control_cid {
+            if let Some(cid) = self.guest_session_cid {
                 let _ = timeout(finalization_timeout, self.probe.close(cid)).await;
             }
             self.finalizer = false;
@@ -539,9 +559,9 @@ where
             Err(_) => return Err(CloudHypervisorError::StartupDeadlineExceeded),
         }
         self.identity = Some(candidate);
-        if let Some(cid) = self.guest_control_cid {
+        if let Some(cid) = self.guest_session_cid {
             match timeout(finalization_timeout, self.probe.close(cid)).await {
-                Ok(result) => result.map_err(CloudHypervisorError::GuestControl)?,
+                Ok(result) => result.map_err(CloudHypervisorError::GuestSession)?,
                 Err(_) => return Err(CloudHypervisorError::StartupDeadlineExceeded),
             }
         }

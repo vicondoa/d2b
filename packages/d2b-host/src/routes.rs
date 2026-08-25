@@ -391,7 +391,7 @@ pub fn run_route_preflight(input: &RoutePreflightInput<'_>) -> Result<(), RouteP
 /// trusted bundle so a foreign actor that mutates routes / nft /
 /// hosts after `host prepare --apply` cannot let the VM come up
 /// against unintended state. Surfaced to the broker `Up` runtime
-/// and to `d2b-priv-broker::ops::route::apply` so the same code
+/// and to `d2b-broker::ops::route::apply` so the same code
 /// drives both call sites.
 pub fn run_route_preflight_for_vm(
     vm_id: &str,

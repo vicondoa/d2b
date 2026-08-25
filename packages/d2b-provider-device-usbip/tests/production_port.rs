@@ -71,42 +71,42 @@ impl UsbipBrokerDispatcher for RecordingDispatcher {
         Ok(BindingProxyLease::from_adapter([5; 16]))
     }
 
-    fn spawn_attach_runner(
+    fn ensure_attach_process(
         &mut self,
         _: &BindingIdentity,
         _: &BindingProxyLease,
     ) -> Result<AttachProcessIdentity, BindingLifecycleError> {
-        self.calls.push("spawn-runner");
+        self.calls.push("ensure-process");
         Ok(AttachProcessIdentity::from_adapter(7, 11))
     }
 
-    fn observe_attach_runner(
+    fn observe_attach_process(
         &mut self,
         _: &BindingIdentity,
         _: &AttachProcessIdentity,
     ) -> Result<AttachmentObservation, BindingLifecycleError> {
-        self.calls.push("observe-runner");
+        self.calls.push("observe-process");
         Ok(AttachmentObservation::Matching {
             slot: BindingSlotLease::from_adapter([4; 16]),
             proxy: BindingProxyLease::from_adapter([5; 16]),
         })
     }
 
-    fn detach_guest(
+    fn delete_guest_endpoint(
         &mut self,
         _: &BindingIdentity,
         _: &BindingProxyLease,
     ) -> Result<(), BindingLifecycleError> {
-        self.calls.push("detach-guest");
+        self.calls.push("delete-endpoint");
         Ok(())
     }
 
-    fn close_attach_runner(
+    fn delete_attach_process(
         &mut self,
         _: &BindingIdentity,
         _: &AttachProcessIdentity,
     ) -> Result<(), BindingLifecycleError> {
-        self.calls.push("close-runner");
+        self.calls.push("delete-process");
         Ok(())
     }
 
@@ -158,9 +158,10 @@ fn production_port_keeps_binding_teardown_before_service_release() {
             "bind",
             "slot",
             "proxy",
-            "spawn-runner",
-            "detach-guest",
-            "close-runner",
+            "ensure-process",
+            "observe-process",
+            "delete-endpoint",
+            "delete-process",
             "close-proxy",
             "release-slot",
             "unbind",

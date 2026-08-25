@@ -68,7 +68,7 @@ let
           stateDir = cfg.manifest.${vmName}.stateDir;
           runDir = "/run/d2b/vms/${vmName}";
           storeView = "${toString cfg.store.stateDir}/${vmName}/store-view";
-          guestControlDir = "/run/d2b/vms/${vmName}/guest-control";
+          componentSessionDir = "/run/d2b/vms/${vmName}/component-session";
         };
       };
       # Realm-native workload identity: present for explicit realm workload

@@ -7,6 +7,7 @@
 use std::{collections::BTreeSet, error::Error, fmt};
 
 use d2b_provider::{ProviderDescriptor, ProviderRegistryBuilder, RegistryBuildError};
+use d2b_contracts_provider::v3::ProviderManifest;
 
 /// A value accepted by [`register_exact_instances`].
 pub trait ExactRegistration<I> {
@@ -31,6 +32,8 @@ pub enum ToolkitError {
     DuplicateProvider,
     /// The runtime registry rejected the transaction.
     Registry(RegistryBuildError),
+    /// The signed manifest failed placement or target-artifact admission.
+    ManifestInvalid,
 }
 
 impl fmt::Display for ToolkitError {
@@ -40,6 +43,7 @@ impl fmt::Display for ToolkitError {
             Self::DescriptorInvalid => "provider descriptor is invalid",
             Self::DuplicateProvider => "duplicate provider registration",
             Self::Registry(_) => "provider registry rejected registration",
+            Self::ManifestInvalid => "provider manifest failed placement admission",
         })
     }
 }
@@ -85,6 +89,13 @@ where
         builder.register_instance(descriptor, instance)?;
     }
     Ok(())
+}
+
+/// Validate a signed Provider manifest before registration.
+pub fn validate_manifest_registration(manifest: &ProviderManifest) -> Result<(), ToolkitError> {
+    manifest
+        .validate_installation_contract()
+        .map_err(|_| ToolkitError::ManifestInvalid)
 }
 
 #[cfg(test)]

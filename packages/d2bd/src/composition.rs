@@ -3,9 +3,8 @@
 // hundreds of call sites; the size trade-off is intentional and tracked
 // in plan.md §D-typed-error-boxing. Suppressed until that refactor lands.
 use std::collections::{BTreeMap, BTreeSet, HashMap, hash_map::Entry};
-use std::ffi::OsStr;
 use std::fs::{self, File, OpenOptions};
-use std::io::{self, Read, Write};
+use std::io::{self, Read};
 use std::os::fd::{AsFd, AsRawFd, OwnedFd, RawFd};
 use std::os::unix::fs::{FileTypeExt, MetadataExt, PermissionsExt};
 use std::os::unix::net::UnixStream;
@@ -13,17 +12,13 @@ use std::path::{Path, PathBuf};
 use std::sync::{
     Arc, Mutex,
     atomic::{AtomicU64, Ordering},
-    mpsc,
 };
 
-type InteractionSupervisor = d2b_provider_supervisor::ProviderSupervisor<
-    d2b_provider_supervisor::BrokerProcessBackend<
-        interaction_composition::BundleDisplayLaunchResolver,
-    >,
->;
-type InteractionRuntime = interaction_composition::InteractionRuntimeSet<
-    InteractionSupervisor,
-    interaction_composition::AuthenticatedGuestFrontendEffects,
+type InteractionSupervisor = interaction_composition::UnavailableProcessEffectPort;
+type InteractionRuntime = interaction_composition::InteractionRuntimeSet<InteractionSupervisor>;
+type DaemonResourceApiClient = d2b_resource_api::ResourceApiClient<
+    d2b_resource_api::RedbBackend,
+    d2b_resource_api::service::UnavailableUpgradeDispatcher,
 >;
 use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
@@ -62,29 +57,28 @@ use d2b_contracts_broker::broker_wire::{
     UpdateHostsFileRequest as BrokerUpdateHostsFileRequest,
     UsbipBindFirewallRuleRequest as BrokerUsbipBindFirewallRuleRequest,
     UsbipBindRequest as BrokerUsbipBindRequest,
-    UsbipExplicitBindRequest as BrokerUsbipExplicitBindRequest,
-    UsbipExplicitFirewallRuleRequest as BrokerUsbipExplicitFirewallRuleRequest,
     UsbipProxyReconcileRequest as BrokerUsbipProxyReconcileRequest,
     UsbipUnbindRequest as BrokerUsbipUnbindRequest,
 };
-use d2b_contracts_control::{
-    guest_proto as pb,
-    public_wire::{self, AuthRole, AuthStatusResponse, DeniedCommandHint, SocketReachability},
+use d2b_contracts_control::public_wire::{
+    self, AuthRole, AuthStatusResponse, DeniedCommandHint, SocketReachability,
 };
-use d2b_contracts_zone_session::v3::resource_bundle::ResourceBundle;
+use d2b_contracts_resource::resource_proto as resource_wire;
+use d2b_contracts_resource::v3::identity::ReconnectGeneration;
 use d2b_contracts_resource::v3::storage::ZoneStoreId;
 use d2b_contracts_resource::v3::{
-    ResourceBundleGenerationId,
-    ResourceErrorKind,
-    ResourceGeneration,
-    ResourceRef,
-    ResourceUid,
-    ZoneId,
+    ResourceBundleGenerationId, ResourceErrorKind, ResourceGeneration, ResourceRef, ResourceUid,
+    SchemaFingerprint, ZoneId,
     guest::GuestSpec,
     network::NetworkSpec,
     process::ProcessSpec,
     volume::{VolumeAttachment, VolumeSpec},
 };
+use d2b_contracts_resource::v3::{
+    ResourceName,
+    activation_nixos::NIXOS_GENERATION_RESOURCE_TYPE,
+};
+use d2b_contracts_zone_session::v3::resource_bundle::ResourceBundle;
 use d2b_core::bundle::Bundle;
 use d2b_core::bundle_resolver::{
     BundleResolver, intent_id_activation, intent_id_bridge_env, intent_id_gc_host,
@@ -126,9 +120,14 @@ use d2b_provider_network_local::{
 use d2b_provider_runtime_azure_container_apps::gateway::{
     AcaConfig, AcaDiskImageSource, AcaSandboxDefaults, AcaWorkloadProvider,
 };
+use d2b_provider_shell_terminal::{
+    DEFAULT_OUTPUT_RING_CAPACITY, ExecutionTarget, PoolSpec, ShellAuthorityLedger,
+    ShellAuthorityPort, ShellPool, ShellSession, ShellTerminalError, SupervisorProcessResource,
+};
 use d2b_provider_transport_azure_relay::auth::{DEFAULT_SAS_TTL_SECS, RelayEndpoint};
 use d2b_provider_volume_local::diagnostics::storage_lifecycle;
 use d2b_realm_core::TargetName;
+use d2b_process_conformance::{ConfigurationDigest, GuestExecutionBinding};
 pub(crate) use d2bd_runtime::broker_transport::{
     broker_remaining_before_op, broker_response_kind, default_audit_join_context,
     dispatch_broker_request_to_socket, redact_broker_dispatch_failure_for_launcher,
@@ -195,6 +194,11 @@ pub use d2bd_runtime::daemon_config::{
     shutdown_degraded_report_path, startup_autostart_pre_degraded_vms,
     storage_lifecycle_report_path,
 };
+pub use d2bd_runtime::exec_detached;
+pub use d2bd_runtime::exec_session;
+use d2bd_runtime::exec_session::ExecGuestConnector;
+pub use d2bd_runtime::exec_session_real;
+pub(crate) use d2bd_runtime::exec_support::map_exec_reserve_error;
 pub use d2bd_runtime::runtime_capability::{
     RuntimeCapabilityGate, ensure_manifest_entry_runtime_capability,
 };
@@ -205,31 +209,21 @@ pub use d2bd_runtime::runtime_process::{
     sd_notify_payload, sd_notify_ready, sd_notify_status, validate_lock_parent,
     write_daemon_version_file,
 };
-pub use d2bd_runtime::exec_detached;
-pub(crate) use d2bd_runtime::exec_owner_io;
-pub use d2bd_runtime::exec_session;
-#[cfg(test)]
-use d2bd_runtime::exec_support::map_exec_op_error;
-pub(crate) use d2bd_runtime::exec_support::{
-    emit_exec_established_event, exec_error_kind_label, exec_metric_into, map_exec_establish_error,
-    map_exec_reserve_error,
-};
-pub use d2bd_runtime::exec_session_real;
-pub use d2bd_runtime::guest_control_bridge;
 use d2bd_runtime::runtime_util::{
     block_on_future, duplicate_received_fd, hex_bytes, projection_digest_bytes,
 };
 use d2bd_runtime::shell_backend::{
-    SHELL_MANAGEMENT_TIMEOUT, guest_advertises_capability, map_shell_attach_response,
-    map_shell_detach_response, map_shell_health_error, map_shell_kill_response,
-    map_shell_list_response, shell_capability_failed, shell_error_to_typed, shell_failed,
-    shell_poll_timeout, shell_protocol_failed, shell_transport_failed,
+    SHELL_MANAGEMENT_TIMEOUT, shell_capability_failed, shell_failed, shell_protocol_failed,
+    shell_transport_failed,
 };
+#[cfg(test)]
+use d2bd_runtime::shell_backend::shell_poll_timeout;
 #[cfg(test)]
 use d2bd_runtime::shell_backend::{SHELL_POLL_CAP, SHELL_POLL_SLACK};
 use d2bd_runtime::vm_start_support::{
-    VmStartNodeMode, node_requires_disk_init_dispatch, resolve_store_view_intent_for_vm,
-    tracked_role_id, vm_start_node_mode,
+    VmStartNodeMode, is_durable_wayland_process_node, is_guest_owned_process_node,
+    node_requires_disk_init_dispatch, resolve_store_view_intent_for_vm, tracked_role_id,
+    vm_start_node_mode,
 };
 pub use d2bd_runtime::workload_dispatch;
 use d2bd_runtime::workload_dispatch::{
@@ -260,7 +254,7 @@ use d2bd_runtime::admission::{PeerOverride, TEST_PEER_OVERRIDE, TEST_PEER_OVERRI
 mod audio_dispatch;
 mod audio_host_controller;
 mod audio_resource_runtime;
-mod cutover;
+mod binding_child_resource_runtime;
 pub mod interaction_composition;
 pub mod network_effect_port;
 pub mod process_provider_runtime;
@@ -271,6 +265,7 @@ pub mod provider_shutdown;
 pub mod resource_runtime;
 pub mod security_key;
 mod security_key_effect_port;
+mod semantic_binding_resource_runtime;
 pub mod tpm_effect_port;
 pub mod usbip_production;
 
@@ -280,11 +275,73 @@ const VM_RUNNER_ROLE_ID: &str = "ch-runner";
 const VM_STOP_TIMEOUT: Duration = Duration::from_secs(30);
 const PROVIDER_SHUTDOWN_POLL_INTERVAL: Duration = Duration::from_millis(250);
 const PUBLIC_STATUS_PROVIDER_PROBE_TIMEOUT: Duration = Duration::from_millis(100);
-const PUBLIC_STATUS_GUEST_USBIP_TIMEOUT: Duration = Duration::from_millis(250);
-const USBIP_SYSFS_PRESENCE_TIMEOUT: Duration = Duration::from_millis(250);
 const EMPTY_VMM_CLEANUP_GRACE: Duration = Duration::from_secs(5);
 const CGROUP_EMPTY_POST_KILL_WAIT: Duration = Duration::from_secs(5);
 const GATEWAY_DISPLAY_SESSION_TTL: Duration = Duration::from_secs(3600);
+
+/// The static composition root is one artifact for both process-start modes.
+pub const D2BD_ARTIFACT_FAMILY: &str = "d2bd";
+
+/// Stable build identity shared by Host and Guest compositions. The actual
+/// executable digest remains the package artifact digest; this value is the
+/// mode-independent family identity used in runtime evidence and tests.
+pub fn shared_artifact_digest() -> String {
+    let mut digest = Sha256::new();
+    digest.update(D2BD_ARTIFACT_FAMILY.as_bytes());
+    digest.update(env!("CARGO_PKG_VERSION").as_bytes());
+    digest.update(b"\0d2b-v3\0");
+    format!("sha256:{:x}", digest.finalize())
+}
+
+/// Shared ProviderDeployment and fixed EffectPort composition for one daemon
+/// instance. Provider selection remains static in this crate; lifecycle and
+/// admission behavior live in `d2bd-runtime`.
+#[derive(Debug, Clone)]
+pub struct StaticProviderComposition {
+    mode: d2bd_runtime::target_runtime::DaemonMode,
+    deployment: d2bd_runtime::target_runtime::ProviderDeployment,
+    effects: provider_effects::FixedEffectAdapter,
+}
+
+impl StaticProviderComposition {
+    pub fn new(
+        mode: d2bd_runtime::target_runtime::DaemonMode,
+        broker_socket: PathBuf,
+        daemon_uid: u32,
+        limits: d2bd_runtime::target_runtime::AdmissionLimits,
+    ) -> Result<Self, d2bd_runtime::target_runtime::AdmissionError> {
+        let deployment = d2bd_runtime::target_runtime::ProviderDeployment::new(mode, limits)?;
+        let effects = match mode {
+            d2bd_runtime::target_runtime::DaemonMode::Host => {
+                provider_effects::FixedEffectAdapter::host(broker_socket, daemon_uid)
+            }
+            d2bd_runtime::target_runtime::DaemonMode::Guest => {
+                provider_effects::FixedEffectAdapter::guest(broker_socket, daemon_uid)
+            }
+        };
+        Ok(Self {
+            mode,
+            deployment,
+            effects,
+        })
+    }
+
+    pub const fn mode(&self) -> d2bd_runtime::target_runtime::DaemonMode {
+        self.mode
+    }
+
+    pub fn deployment(&self) -> &d2bd_runtime::target_runtime::ProviderDeployment {
+        &self.deployment
+    }
+
+    pub fn effects(&self) -> &provider_effects::FixedEffectAdapter {
+        &self.effects
+    }
+
+    pub fn artifact_digest(&self) -> String {
+        shared_artifact_digest()
+    }
+}
 
 /// Write deadline for the typed refusal frame (authz reject / busy) the
 /// accept loop sends before closing - never block the accept loop on a
@@ -295,8 +352,8 @@ const ACCEPT_REFUSAL_WRITE_DEADLINE: Duration = Duration::from_secs(2);
 const HELLO_READ_DEADLINE: Duration = Duration::from_secs(10);
 /// Read deadline for each subsequent request frame on a persistent
 /// connection. A timeout closes the connection gracefully and frees the
-/// handler slot. Cleared before an exec handoff (the exec owner blocks
-/// on the PTY indefinitely).
+/// handler slot. Resource and shell owner loops apply their own bounded
+/// deadlines after admission.
 const REQUEST_READ_DEADLINE: Duration = Duration::from_secs(60);
 #[cfg(test)]
 mod owner_connection_test_hook {
@@ -436,9 +493,9 @@ struct ServerState {
     /// Daemon-side audit log for supervisor events (e.g. api-ready
     /// timeout) that are not emitted by the broker.
     daemon_audit: Arc<d2bd_runtime::daemon_audit::DaemonAuditLog>,
-    /// In-process exec session table (caps + opaque handles) for
+    /// In-process Process-session table (caps + opaque handles) for
     /// `d2b vm exec`. There is no per-VM unit and no broker op: a
-    /// session is a daemon-held authenticated guest-control client owned by a
+    /// session is a daemon-held authenticated named-stream client owned by a
     /// spawned worker.
     exec_sessions: Arc<exec_session::SessionTable>,
     /// Gateway display orchestrator state. Persisted for the daemon lifetime so
@@ -463,6 +520,9 @@ struct ServerState {
     /// trusted bundle/storage admission is incomplete; public resource
     /// requests fail closed rather than falling back to the legacy path.
     resource_plane: Arc<Mutex<Option<Arc<resource_runtime::ResourcePlane>>>>,
+    #[cfg(not(test))]
+    /// Persistent daemon-owned ShellSession Process authority.
+    shell_authority: Arc<DaemonShellAuthority>,
     /// Daemon-owned interaction Provider composition and its authenticated
     /// ComponentSession registrations.
     interaction_runtime: Arc<tokio::sync::Mutex<Option<InteractionRuntime>>>,
@@ -480,6 +540,22 @@ struct ServerState {
     /// reconciliation, force-stop generations, and activation staging all
     /// resolve through this index; no process-global lock carries that state.
     zone_coordinator: Arc<Mutex<ZoneCoordinator>>,
+    /// Daemon-owned typed Guest configuration staging state.
+    config_staging:
+        Arc<Mutex<d2b_provider_config_nixos::ConfigStagingStore>>,
+    /// One shared authenticated ComponentSession per Guest target. Typed
+    /// health, activation, and Resource API callers must not race by opening
+    /// independent sessions with the same reconnect generation.
+    guest_component_sessions: Arc<
+        tokio::sync::Mutex<
+            HashMap<
+                String,
+                Arc<d2bd_runtime::guest_component_session::GuestComponentSessionClient>,
+            >,
+        >,
+    >,
+    guest_component_session_locks:
+        Arc<tokio::sync::Mutex<HashMap<String, Arc<tokio::sync::Mutex<()>>>>>,
     /// Per-VM console session table (ring buffers and drainer tasks) for
     /// `d2b console <vm>`. Sessions are created on first Attach and persist
     /// until the daemon restarts or the VM stops.
@@ -489,24 +565,1598 @@ struct ServerState {
     #[allow(dead_code)]
     unsafe_local_helpers: Arc<d2bd_runtime::unsafe_local_helper::HelperRegistry>,
 }
+const PROCESS_RUNTIME_FINALIZER: &str = "process-runtime.d2bus.org/cleanup";
 
-impl d2bd_runtime::exec_detached::DetachedExecContext for ServerState {
-    fn load_bundle_resolver(&self) -> Result<BundleResolver, TypedError> {
-        load_bundle_resolver(self)
-    }
+/// The production ShellSession authority. Session grants and attachment
+/// accounting remain daemon-owned, while each supervisor is represented by a
+/// durable target-local Process resource in the Zone store.
+#[derive(Clone)]
+struct DaemonShellAuthority {
+    ledger: Arc<ShellAuthorityLedger>,
+    resource_plane: Arc<Mutex<Option<Arc<resource_runtime::ResourcePlane>>>>,
+}
 
-    fn resolve_guest_control_probe_params(
-        &self,
-        resolver: &BundleResolver,
-        vm: &str,
-    ) -> Result<guest_control_bridge::ProbeParams, String> {
-        resolve_guest_control_probe_params(self, resolver, vm)
-    }
-
-    fn broker_socket_path(&self) -> PathBuf {
-        broker_socket_path(self)
+impl std::fmt::Debug for DaemonShellAuthority {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str("DaemonShellAuthority(<resource-api>)")
     }
 }
+
+impl DaemonShellAuthority {
+    fn new(resource_plane: Arc<Mutex<Option<Arc<resource_runtime::ResourcePlane>>>>) -> Self {
+        Self {
+            ledger: Arc::new(ShellAuthorityLedger::new()),
+            resource_plane,
+        }
+    }
+
+    fn client_for_session(
+        &self,
+        session: &ShellSession,
+    ) -> Result<(ZoneId, Arc<DaemonResourceApiClient>), ShellTerminalError> {
+        let zone = ZoneId::parse(session.zone()).map_err(|_| ShellTerminalError::WrongZone)?;
+        let client = self.client_for_zone(&zone)?;
+        Ok((zone, client))
+    }
+
+    fn client_for_zone(
+        &self,
+        zone: &ZoneId,
+    ) -> Result<Arc<DaemonResourceApiClient>, ShellTerminalError> {
+        let plane = self
+            .resource_plane
+            .lock()
+            .map_err(|_| ShellTerminalError::SupervisorAmbiguous)?
+            .clone()
+            .ok_or(ShellTerminalError::SupervisorAmbiguous)?;
+        let runtime = plane
+            .zone(&zone)
+            .map_err(|_| ShellTerminalError::SupervisorAmbiguous)?;
+        let client = runtime
+            .process_resource_client()
+            .ok_or(ShellTerminalError::SupervisorAmbiguous)?;
+        Ok(client)
+    }
+
+    fn get_process(
+        &self,
+        client: &DaemonResourceApiClient,
+        zone: &ZoneId,
+        process: &SupervisorProcessResource,
+    ) -> Result<Option<d2b_contracts_resource::v3::ResourceEnvelope>, ShellTerminalError> {
+        Self::get_resource(client, zone, process.resource_ref(), "shell-process-get")
+    }
+
+    fn get_resource(
+        client: &DaemonResourceApiClient,
+        zone: &ZoneId,
+        resource_ref: &ResourceRef,
+        operation: &str,
+    ) -> Result<Option<d2b_contracts_resource::v3::ResourceEnvelope>, ShellTerminalError> {
+        let target = Self::shell_resource_identity(zone, resource_ref);
+        let mut projection = resource_wire::Projection::new();
+        projection.kind =
+            protobuf::EnumOrUnknown::new(resource_wire::ProjectionKind::PROJECTION_KIND_FULL);
+        let mut request = resource_wire::GetRequest::new();
+        request.meta = protobuf::MessageField::some(Self::shell_resource_request_meta(operation));
+        request.target = protobuf::MessageField::some(target);
+        request.projection = protobuf::MessageField::some(projection);
+        let response = block_on_future(client.get(request));
+        let Some(resource) = response.resource.as_ref() else {
+            return match response
+                .error
+                .as_ref()
+                .and_then(|error| error.kind.enum_value().ok())
+            {
+                Some(resource_wire::ResourceErrorKind::RESOURCE_ERROR_KIND_RESOURCE_NOT_FOUND) => {
+                    Ok(None)
+                }
+                _ => Err(ShellTerminalError::SupervisorAmbiguous),
+            };
+        };
+        d2b_contracts_resource::v3::ResourceEnvelope::from_json(&resource.canonical_json)
+            .map(Some)
+            .map_err(|_| ShellTerminalError::SupervisorAmbiguous)
+    }
+
+    fn create_resource(
+        &self,
+        client: &DaemonResourceApiClient,
+        zone: &ZoneId,
+        resource_ref: &ResourceRef,
+        owner_ref: Option<&ResourceRef>,
+        payload: Vec<u8>,
+        operation: &str,
+    ) -> Result<(), ShellTerminalError> {
+        let target = Self::shell_resource_identity(zone, resource_ref);
+        let mut body = resource_wire::ResourceEnvelopeBytes::new();
+        body.identity = protobuf::MessageField::some(target.clone());
+        body.canonical_json = payload.clone();
+        body.payload_digest = d2b_contracts_resource::v3::canonical_digest(
+            d2b_contracts_resource::v3::RESOURCE_ENVELOPE_DOMAIN_TAG,
+            &payload,
+        );
+        let mut precondition = resource_wire::Precondition::new();
+        precondition.kind = protobuf::EnumOrUnknown::new(
+            resource_wire::PreconditionKind::PRECONDITION_KIND_CREATE_ABSENT,
+        );
+        let mut mutation = resource_wire::Mutation::new();
+        mutation.kind =
+            protobuf::EnumOrUnknown::new(resource_wire::MutationKind::MUTATION_KIND_CREATE);
+        mutation.target = protobuf::MessageField::some(target);
+        mutation.precondition = protobuf::MessageField::some(precondition);
+        mutation.resource = protobuf::MessageField::some(body);
+        if let Some(owner_ref) = owner_ref {
+            mutation.owner =
+                protobuf::MessageField::some(Self::shell_resource_identity(zone, owner_ref));
+        }
+        let mut request = resource_wire::CreateRequest::new();
+        request.meta = protobuf::MessageField::some(Self::shell_resource_request_meta(operation));
+        request.mutation = protobuf::MessageField::some(mutation);
+        let response = block_on_future(client.create(request));
+        if response.error.is_some() {
+            return Err(ShellTerminalError::SupervisorAmbiguous);
+        }
+        Ok(())
+    }
+
+    fn process_matches(
+        envelope: &d2b_contracts_resource::v3::ResourceEnvelope,
+        process: &SupervisorProcessResource,
+    ) -> bool {
+        if envelope.resource_type().as_str() != "Process"
+            || envelope.metadata().owner_ref() != Some(process.owner_ref())
+            || envelope
+                .spec()
+                .provider_ref()
+                .map(ResourceRef::to_canonical_string)
+                != Some("Provider/system-systemd".to_owned())
+            || envelope.status().phase() == d2b_contracts_resource::v3::ResourcePhase::Deleted
+        {
+            return false;
+        }
+        let expected = serde_json::to_vec(process.spec()).ok();
+        let actual = envelope.spec().base().to_canonical_bytes();
+        expected.is_some_and(|expected| {
+            serde_json::from_slice::<Value>(&expected).ok()
+                == serde_json::from_slice::<Value>(&actual).ok()
+        })
+    }
+
+    fn process_has_finalizer(envelope: &d2b_contracts_resource::v3::ResourceEnvelope) -> bool {
+        serde_json::to_value(envelope.metadata())
+            .ok()
+            .and_then(|metadata| metadata.get("finalizers").cloned())
+            .and_then(|finalizers| finalizers.as_array().cloned())
+            .is_some_and(|finalizers| {
+                finalizers
+                    .iter()
+                    .any(|finalizer| finalizer.as_str() == Some(PROCESS_RUNTIME_FINALIZER))
+            })
+    }
+
+    fn add_process_finalizer(
+        &self,
+        client: &DaemonResourceApiClient,
+        zone: &ZoneId,
+        process: &SupervisorProcessResource,
+        envelope: &d2b_contracts_resource::v3::ResourceEnvelope,
+    ) -> Result<(), ShellTerminalError> {
+        let mut mutation = resource_wire::Mutation::new();
+        mutation.kind = protobuf::EnumOrUnknown::new(
+            resource_wire::MutationKind::MUTATION_KIND_UPDATE_FINALIZERS,
+        );
+        mutation.target =
+            protobuf::MessageField::some(Self::shell_resource_identity_with_revision(
+                zone,
+                process.resource_ref(),
+                envelope.metadata().uid(),
+                envelope.metadata().generation().get(),
+                envelope.metadata().revision().get(),
+            ));
+        mutation.precondition = protobuf::MessageField::some({
+            let mut precondition = resource_wire::Precondition::new();
+            precondition.kind = protobuf::EnumOrUnknown::new(
+                resource_wire::PreconditionKind::PRECONDITION_KIND_EXACT_REVISION,
+            );
+            precondition.expected_revision = Some(envelope.metadata().revision().get());
+            precondition
+        });
+        mutation
+            .add_finalizers
+            .push(PROCESS_RUNTIME_FINALIZER.to_owned());
+        let mut request = resource_wire::UpdateFinalizersRequest::new();
+        let operation = format!(
+            "shell-process-finalizer-{}",
+            shell_ref_digest(&[process.resource_ref().name().as_str()])
+        );
+        request.meta = protobuf::MessageField::some(Self::shell_resource_request_meta(&operation));
+        request.mutation = protobuf::MessageField::some(mutation);
+        let response = block_on_future(client.update_finalizers(request));
+        if response.error.is_some() {
+            return Err(ShellTerminalError::SupervisorAmbiguous);
+        }
+        Ok(())
+    }
+
+    fn create_process(
+        &self,
+        client: &DaemonResourceApiClient,
+        zone: &ZoneId,
+        process: &SupervisorProcessResource,
+    ) -> Result<(), ShellTerminalError> {
+        let mut spec = serde_json::to_value(process.spec())
+            .map_err(|_| ShellTerminalError::SupervisorAmbiguous)?;
+        spec.as_object_mut()
+            .ok_or(ShellTerminalError::SupervisorAmbiguous)?
+            .insert(
+                "providerRef".to_owned(),
+                Value::String("Provider/system-systemd".to_owned()),
+            );
+        let payload = Self::shell_process_resource_payload(
+            zone,
+            process.resource_ref(),
+            Some(process.owner_ref()),
+            spec,
+        )?;
+        let operation = format!(
+            "shell-process-create-{}",
+            shell_ref_digest(&[process.resource_ref().name().as_str()])
+        );
+        self.create_resource(
+            client,
+            zone,
+            process.resource_ref(),
+            Some(process.owner_ref()),
+            payload,
+            &operation,
+        )
+    }
+
+    fn delete_process(
+        &self,
+        client: &DaemonResourceApiClient,
+        zone: &ZoneId,
+        process: &SupervisorProcessResource,
+        envelope: &d2b_contracts_resource::v3::ResourceEnvelope,
+    ) -> Result<(), ShellTerminalError> {
+        let mut mutation = resource_wire::Mutation::new();
+        mutation.kind =
+            protobuf::EnumOrUnknown::new(resource_wire::MutationKind::MUTATION_KIND_DELETE);
+        mutation.target =
+            protobuf::MessageField::some(Self::shell_resource_identity_with_revision(
+                zone,
+                process.resource_ref(),
+                envelope.metadata().uid(),
+                envelope.metadata().generation().get(),
+                envelope.metadata().revision().get(),
+            ));
+        let mut precondition = resource_wire::Precondition::new();
+        precondition.kind = protobuf::EnumOrUnknown::new(
+            resource_wire::PreconditionKind::PRECONDITION_KIND_EXACT_REVISION,
+        );
+        precondition.expected_revision = Some(envelope.metadata().revision().get());
+        mutation.precondition = protobuf::MessageField::some(precondition);
+        let mut request = resource_wire::DeleteRequest::new();
+        let operation = format!(
+            "shell-process-delete-{}",
+            shell_ref_digest(&[process.resource_ref().name().as_str()])
+        );
+        request.meta = protobuf::MessageField::some(Self::shell_resource_request_meta(&operation));
+        request.mutation = protobuf::MessageField::some(mutation);
+        let response = block_on_future(client.delete(request));
+        match response
+            .error
+            .as_ref()
+            .and_then(|error| error.kind.enum_value().ok())
+        {
+            None
+            | Some(resource_wire::ResourceErrorKind::RESOURCE_ERROR_KIND_RESOURCE_NOT_FOUND) => {
+                Ok(())
+            }
+            Some(_) => Err(ShellTerminalError::SupervisorAmbiguous),
+        }
+    }
+
+    fn shell_resource_request_meta(operation: &str) -> resource_wire::RequestMeta {
+        let mut meta = resource_wire::RequestMeta::new();
+        meta.operation_id = operation.to_owned();
+        meta.idempotency_key = operation.to_owned();
+        meta.correlation_id = operation.to_owned();
+        meta.trace_id = operation.to_owned();
+        meta.deadline_ms = 30_000;
+        meta
+    }
+
+    fn shell_resource_identity(
+        zone: &ZoneId,
+        resource_ref: &ResourceRef,
+    ) -> resource_wire::ResourceIdentity {
+        let mut identity = resource_wire::ResourceIdentity::new();
+        identity.zone = zone.as_str().to_owned();
+        identity.resource_type = resource_ref.resource_type().as_str().to_owned();
+        identity.name = resource_ref.name().as_str().to_owned();
+        identity
+    }
+
+    fn shell_resource_identity_with_revision(
+        zone: &ZoneId,
+        resource_ref: &ResourceRef,
+        uid: &ResourceUid,
+        generation: u64,
+        revision: u64,
+    ) -> resource_wire::ResourceIdentity {
+        let mut identity = Self::shell_resource_identity(zone, resource_ref);
+        identity.uid = Some(uid.as_str().to_owned());
+        identity.generation = Some(generation);
+        identity.revision = Some(revision);
+        identity
+    }
+
+    fn shell_process_resource_payload(
+        zone: &ZoneId,
+        resource_ref: &ResourceRef,
+        owner_ref: Option<&ResourceRef>,
+        spec: Value,
+    ) -> Result<Vec<u8>, ShellTerminalError> {
+        Self::shell_resource_payload(
+            zone,
+            resource_ref,
+            owner_ref,
+            spec,
+            &[PROCESS_RUNTIME_FINALIZER],
+        )
+    }
+
+    fn shell_resource_payload(
+        zone: &ZoneId,
+        resource_ref: &ResourceRef,
+        owner_ref: Option<&ResourceRef>,
+        spec: Value,
+        finalizers: &[&str],
+    ) -> Result<Vec<u8>, ShellTerminalError> {
+        let metadata = json!({
+            "name": resource_ref.name().as_str(),
+            "zone": zone.as_str(),
+            "generation": 1,
+            "revision": 1,
+            "ownerRef": owner_ref.map(ResourceRef::to_canonical_string),
+            "finalizers": finalizers,
+            "deletionRequestedAt": null,
+            "createdAt": "1970-01-01T00:00:00.000Z",
+            "updatedAt": "1970-01-01T00:00:00.000Z",
+            "managedBy": "controller",
+        });
+        let value = json!({
+            "apiVersion": "resources.d2bus.org/v3",
+            "type": resource_ref.resource_type().as_str(),
+            "metadata": metadata,
+            "spec": spec,
+            "status": {
+                "completedAt": null,
+                "conditions": [],
+                "lastReconciledAt": null,
+                "observedGeneration": 0,
+                "outcome": null,
+                "phase": "Pending",
+                "resource": {},
+                "startedAt": null,
+                "update": {
+                    "dependencies": {"count": 0, "refs": []},
+                    "disruption": "None",
+                    "lastAssessedAt": null,
+                    "observedGeneration": 0,
+                    "operationId": null,
+                    "owned": {"count": 0, "refs": []},
+                    "preserveState": true,
+                    "reasons": [],
+                    "state": "Unknown",
+                    "targetGeneration": 1
+                }
+            }
+        });
+        let bytes =
+            serde_json::to_vec(&value).map_err(|_| ShellTerminalError::SupervisorAmbiguous)?;
+        let mut validation = value;
+        validation
+            .get_mut("metadata")
+            .and_then(Value::as_object_mut)
+            .ok_or(ShellTerminalError::SupervisorAmbiguous)?
+            .insert(
+                "uid".to_owned(),
+                Value::String("00000000-0000-4000-8000-000000000000".to_owned()),
+            );
+        let validation =
+            serde_json::to_vec(&validation).map_err(|_| ShellTerminalError::SupervisorAmbiguous)?;
+        d2b_contracts_resource::v3::ResourceEnvelope::from_json(&validation)
+            .map_err(|_| ShellTerminalError::SupervisorAmbiguous)?;
+        d2b_contracts_resource::v3::CanonicalJsonValue::parse(&bytes)
+            .map(|value| value.to_canonical_bytes())
+            .map_err(|_| ShellTerminalError::SupervisorAmbiguous)
+    }
+}
+
+impl DaemonShellAuthority {
+    fn restore_pool(
+        &self,
+        pool: &ShellPool,
+        attached_streams: u32,
+    ) -> Result<(), ShellTerminalError> {
+        self.ledger.restore_pool(pool, attached_streams)
+    }
+
+    fn open_session(
+        &self,
+        session: &ShellSession,
+    ) -> Result<d2b_provider_shell_terminal::SessionGrant, ShellTerminalError> {
+        self.ledger.open_session(session)
+    }
+
+    fn ensure_supervisor_process(&self, session: &ShellSession) -> Result<(), ShellTerminalError> {
+        self.ledger.validate_session(session)?;
+        self.ensure_supervisor_process_resource(session)
+    }
+
+    fn ensure_supervisor_process_resource(
+        &self,
+        session: &ShellSession,
+    ) -> Result<(), ShellTerminalError> {
+        let (zone, client) = self.client_for_session(session)?;
+        self.ensure_shell_session_anchor(&client, &zone, session)?;
+        let process = SupervisorProcessResource::for_session(session);
+        match self.get_process(&client, &zone, &process)? {
+            Some(envelope) if Self::process_matches(&envelope, &process) => {
+                if Self::process_has_finalizer(&envelope) {
+                    Ok(())
+                } else {
+                    self.add_process_finalizer(&client, &zone, &process, &envelope)
+                }
+            }
+            Some(_) => Err(ShellTerminalError::SupervisorAmbiguous),
+            None => match self.create_process(&client, &zone, &process) {
+                Ok(()) => Ok(()),
+                Err(_) => match self.get_process(&client, &zone, &process)? {
+                    Some(envelope) if Self::process_matches(&envelope, &process) => {
+                        if Self::process_has_finalizer(&envelope) {
+                            Ok(())
+                        } else {
+                            self.add_process_finalizer(&client, &zone, &process, &envelope)
+                        }
+                    }
+                    _ => Err(ShellTerminalError::SupervisorAmbiguous),
+                },
+            },
+        }
+    }
+
+    fn ensure_shell_session_anchor(
+        &self,
+        client: &DaemonResourceApiClient,
+        zone: &ZoneId,
+        session: &ShellSession,
+    ) -> Result<(), ShellTerminalError> {
+        let session_ref =
+            ResourceRef::parse(&format!("{}/{}", session.resource_type(), session.name()))
+                .map_err(|_| ShellTerminalError::SupervisorAmbiguous)?;
+        if Self::get_resource(client, zone, &session_ref, "shell-session-anchor-get")?.is_some() {
+            return Ok(());
+        }
+        let spec = json!({
+            "providerRef": "Provider/shell-terminal",
+            "executionRef": session.supervisor_execution_ref().to_canonical_string(),
+            "userRef": session.supervisor_user_ref().to_canonical_string(),
+            "loginShellRef": session.login_shell_ref(),
+            "sessionName": session.session_name(),
+            "outputRingCapacity": session.output_ring_capacity(),
+            "desiredLifecycle": "running",
+        });
+        let operation = format!(
+            "shell-session-anchor-create-{}",
+            shell_ref_digest(&[session.name()])
+        );
+        let payload = Self::shell_resource_payload(zone, &session_ref, None, spec, &[])?;
+        match self.create_resource(client, zone, &session_ref, None, payload, &operation) {
+            Ok(()) => Ok(()),
+            Err(_) => Self::get_resource(client, zone, &session_ref, &operation)
+                .map(|resource| resource.is_some())
+                .and_then(|present| {
+                    present
+                        .then_some(())
+                        .ok_or(ShellTerminalError::SupervisorAmbiguous)
+                }),
+        }
+    }
+
+    fn remove_supervisor_process_resource(
+        &self,
+        session: &ShellSession,
+    ) -> Result<(), ShellTerminalError> {
+        let (zone, client) = self.client_for_session(session)?;
+        let process = SupervisorProcessResource::for_session(session);
+        let Some(envelope) = self.get_process(&client, &zone, &process)? else {
+            return Ok(());
+        };
+        if envelope.status().phase() == d2b_contracts_resource::v3::ResourcePhase::Deleted {
+            return Ok(());
+        }
+        if !Self::process_matches(&envelope, &process) {
+            return Err(ShellTerminalError::SupervisorAmbiguous);
+        }
+        self.delete_process(&client, &zone, &process, &envelope)
+    }
+
+    fn ensure_shell_resources(
+        &self,
+        pool: &ShellPool,
+        session: &ShellSession,
+    ) -> Result<bool, ShellTerminalError> {
+        let zone = ZoneId::parse(pool.zone()).map_err(|_| ShellTerminalError::WrongZone)?;
+        if session.zone() != pool.zone()
+            || session.execution_target() != pool.execution_target()
+            || session.workload_user() != pool.workload_user()
+            || session.login_shell_ref() != pool.spec().login_shell_ref()
+        {
+            return Err(ShellTerminalError::SupervisorAmbiguous);
+        }
+        let client = self.client_for_zone(&zone)?;
+        let pool_ref = ResourceRef::parse(&format!("{}/{}", pool.resource_type(), pool.name()))
+            .map_err(|_| ShellTerminalError::SupervisorAmbiguous)?;
+        let pool_spec = json!({
+            "providerRef": "Provider/shell-terminal",
+            "executionRef": format!(
+                "{}/{}",
+                if pool.execution_target().is_host() { "Host" } else { "Guest" },
+                pool.execution_target().name()
+            ),
+            "userRef": format!("User/{}", pool.workload_user()),
+            "loginShellRef": pool.spec().login_shell_ref(),
+            "maxSessions": pool.spec().max_sessions(),
+            "maxAttached": pool.spec().max_attached(),
+            "outputRingCapacity": pool.spec().output_ring_capacity(),
+        });
+        let pool_operation = format!("shell-pool-create-{}", shell_ref_digest(&[pool.name()]));
+        let _ =
+            self.ensure_resource(&client, &zone, &pool_ref, None, pool_spec, &pool_operation)?;
+
+        let session_ref =
+            ResourceRef::parse(&format!("{}/{}", session.resource_type(), session.name()))
+                .map_err(|_| ShellTerminalError::SupervisorAmbiguous)?;
+        let session_spec = json!({
+            "providerRef": "Provider/shell-terminal",
+            "poolRef": pool_ref.to_canonical_string(),
+            "executionRef": session.supervisor_execution_ref().to_canonical_string(),
+            "userRef": session.supervisor_user_ref().to_canonical_string(),
+            "loginShellRef": session.login_shell_ref(),
+            "sessionName": session.session_name(),
+            "outputRingCapacity": session.output_ring_capacity(),
+            "desiredLifecycle": "running",
+        });
+        let session_operation = format!(
+            "shell-session-create-{}",
+            shell_ref_digest(&[session.name()])
+        );
+        let session_created = self.ensure_resource(
+            &client,
+            &zone,
+            &session_ref,
+            Some(&pool_ref),
+            session_spec,
+            &session_operation,
+        )?;
+        Ok(session_created)
+    }
+
+    fn ensure_resource(
+        &self,
+        client: &DaemonResourceApiClient,
+        zone: &ZoneId,
+        resource_ref: &ResourceRef,
+        owner_ref: Option<&ResourceRef>,
+        spec: Value,
+        operation: &str,
+    ) -> Result<bool, ShellTerminalError> {
+        let expected_spec = spec.clone();
+        let matches = |envelope: &d2b_contracts_resource::v3::ResourceEnvelope| {
+            envelope.resource_type() == resource_ref.resource_type()
+                && envelope.metadata().name() == resource_ref.name()
+                && envelope.metadata().owner_ref() == owner_ref
+                && envelope.status().phase() != d2b_contracts_resource::v3::ResourcePhase::Deleted
+                && serde_json::from_slice::<Value>(&envelope.spec().base().to_canonical_bytes())
+                    .ok()
+                    .is_some_and(|actual| actual == expected_spec)
+        };
+        match Self::get_resource(client, zone, resource_ref, operation) {
+            Ok(Some(envelope)) if matches(&envelope) => return Ok(false),
+            Ok(Some(_)) => return Err(ShellTerminalError::SupervisorAmbiguous),
+            Ok(None) => {}
+            Err(error) => return Err(error),
+        }
+        let payload = Self::shell_resource_payload(zone, resource_ref, owner_ref, spec, &[])?;
+        match self.create_resource(client, zone, resource_ref, owner_ref, payload, operation) {
+            Ok(()) => Ok(true),
+            Err(_) => match Self::get_resource(client, zone, resource_ref, operation)? {
+                Some(envelope) if matches(&envelope) => Ok(false),
+                _ => Err(ShellTerminalError::SupervisorAmbiguous),
+            },
+        }
+    }
+}
+
+/// Production Process resource adapter used by attached and detached
+/// execution owners. Resource creation is durable; stream I/O is carried by
+/// the already enrolled target-local ComponentSession.
+struct ComponentSessionProcessResourcePort {
+    client: Arc<DaemonResourceApiClient>,
+    driver: d2b_session::SessionDriverHandle,
+    zone: ZoneId,
+    execution_ref: ResourceRef,
+    resource_ref: Option<ResourceRef>,
+    domain: String,
+    user_ref: Option<String>,
+    template: String,
+    allow_create: bool,
+}
+
+impl std::fmt::Debug for ComponentSessionProcessResourcePort {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str("ComponentSessionProcessResourcePort(<redacted>)")
+    }
+}
+
+impl ComponentSessionProcessResourcePort {
+    fn ephemeral_spec(
+        &self,
+        execution_ref: &ResourceRef,
+        detached: bool,
+    ) -> Result<Value, exec_session::ExecEstablishError> {
+        if !matches!(execution_ref.resource_type().as_str(), "Host" | "Guest") {
+            return Err(exec_session::ExecEstablishError::Protocol);
+        }
+        let mut spec = serde_json::json!({
+            "providerRef": "Provider/system-systemd",
+            "executionRef": execution_ref.to_canonical_string(),
+            "domain": self.domain,
+            "processClass": "worker",
+            "template": self.template,
+            "startDeadline": "60s",
+            "runtimeDeadline": if detached { "24h" } else { "6h" },
+            "successfulTtl": "1h",
+            "failedTtl": "24h",
+            "incidentHold": false,
+        });
+        let object = spec
+            .as_object_mut()
+            .ok_or(exec_session::ExecEstablishError::Protocol)?;
+        object.insert(
+            "userRef".to_owned(),
+            self.user_ref
+                .as_ref()
+                .map_or(Value::Null, |user_ref| Value::String(user_ref.clone())),
+        );
+        Ok(spec)
+    }
+
+    fn create_request(
+        &self,
+        resource_ref: &ResourceRef,
+        spec: Value,
+    ) -> Result<resource_wire::CreateRequest, exec_session::ExecEstablishError> {
+        let payload = DaemonShellAuthority::shell_process_resource_payload(
+            &self.zone,
+            resource_ref,
+            None,
+            spec,
+        )
+        .map_err(|_| exec_session::ExecEstablishError::Protocol)?;
+        let target = DaemonShellAuthority::shell_resource_identity(&self.zone, resource_ref);
+        let mut body = resource_wire::ResourceEnvelopeBytes::new();
+        body.identity = protobuf::MessageField::some(target.clone());
+        body.canonical_json = payload.clone();
+        body.payload_digest = d2b_contracts_resource::v3::canonical_digest(
+            d2b_contracts_resource::v3::RESOURCE_ENVELOPE_DOMAIN_TAG,
+            &payload,
+        );
+        let mut precondition = resource_wire::Precondition::new();
+        precondition.kind = protobuf::EnumOrUnknown::new(
+            resource_wire::PreconditionKind::PRECONDITION_KIND_CREATE_ABSENT,
+        );
+        let mut mutation = resource_wire::Mutation::new();
+        mutation.kind =
+            protobuf::EnumOrUnknown::new(resource_wire::MutationKind::MUTATION_KIND_CREATE);
+        mutation.target = protobuf::MessageField::some(target);
+        mutation.precondition = protobuf::MessageField::some(precondition);
+        mutation.resource = protobuf::MessageField::some(body);
+        let mut request = resource_wire::CreateRequest::new();
+        let operation = format!(
+            "process-resource-create-{}",
+            shell_ref_digest(&[resource_ref.name().as_str()])
+        );
+        request.meta = protobuf::MessageField::some(
+            DaemonShellAuthority::shell_resource_request_meta(&operation),
+        );
+        request.mutation = protobuf::MessageField::some(mutation);
+        Ok(request)
+    }
+}
+
+#[async_trait]
+impl exec_session_real::ProcessResourcePort for ComponentSessionProcessResourcePort {
+    async fn create_ephemeral_process(
+        &self,
+        execution_ref: &ResourceRef,
+        spec: &exec_session::ExecStartSpec,
+    ) -> Result<exec_session_real::EphemeralProcessHandle, exec_session::ExecEstablishError> {
+        let Some(resource_ref) = self.resource_ref.as_ref() else {
+            return Err(exec_session::ExecEstablishError::Capability);
+        };
+        let expected_spec = self.ephemeral_spec(execution_ref, spec.detached)?;
+        match self.get_resource(resource_ref).await {
+            Ok(Some(existing)) => {
+                let existing_execution =
+                    existing
+                        .spec()
+                        .base()
+                        .get("executionRef")
+                        .and_then(|value| match value {
+                            d2b_contracts_resource::v3::CanonicalJsonValue::String(value) => {
+                                Some(value.as_str())
+                            }
+                            _ => None,
+                        });
+                let expected_execution = execution_ref.to_canonical_string();
+                let existing_spec =
+                    serde_json::from_slice::<Value>(&existing.spec().base().to_canonical_bytes())
+                        .ok();
+                if existing_execution != Some(expected_execution.as_str())
+                    || existing_spec.as_ref() != Some(&expected_spec)
+                {
+                    return Err(exec_session::ExecEstablishError::Capability);
+                }
+                return exec_session_real::EphemeralProcessHandle::new(
+                    ResourceRef::parse(&format!(
+                        "EphemeralProcess/{}",
+                        existing.metadata().name().as_str()
+                    ))
+                    .map_err(|_| exec_session::ExecEstablishError::Protocol)?,
+                    0,
+                    0,
+                    0,
+                );
+            }
+            Ok(None) => {}
+            Err(error) => return Err(resource_error_to_establish(&error)),
+        }
+        if !self.allow_create {
+            return Err(exec_session::ExecEstablishError::Capability);
+        }
+        let request = self.create_request(resource_ref, expected_spec)?;
+        let response = self.client.create(request).await;
+        if let Some(error) = response.error.as_ref() {
+            return Err(resource_error_to_establish(error));
+        }
+        let resource_ref = response
+            .resource
+            .as_ref()
+            .and_then(|resource| resource.identity.as_ref())
+            .and_then(|identity| {
+                let value = format!("{}/{}", identity.resource_type, identity.name);
+                ResourceRef::parse(&value).ok()
+            })
+            .ok_or(exec_session::ExecEstablishError::Protocol)?;
+        exec_session_real::EphemeralProcessHandle::new(resource_ref, 0, 0, 0)
+    }
+
+    async fn attach_process(
+        &self,
+        process: &exec_session_real::EphemeralProcessHandle,
+        _tty: bool,
+        _initial_size: Option<(u32, u32)>,
+    ) -> Result<Arc<dyn exec_session::ExecGuestClient>, exec_session::ExecEstablishError> {
+        match self.get_resource(process.resource_ref()).await {
+            Ok(Some(_)) => {}
+            Ok(None) => return Err(exec_session::ExecEstablishError::Capability),
+            Err(error) => return Err(resource_error_to_establish(&error)),
+        }
+        exec_session_real::open_component_session_process(
+            self.driver.clone(),
+            next_component_session_stream_number(),
+        )
+        .await
+    }
+}
+
+#[async_trait]
+impl exec_detached::DetachedProcessResourcePort for ComponentSessionProcessResourcePort {
+    async fn create_ephemeral_process(
+        &self,
+        execution_ref: &ResourceRef,
+        spec: &exec_session::ExecStartSpec,
+    ) -> Result<public_wire::ExecDetachedCreateResult, exec_session::ExecOpError> {
+        let Some(resource_ref) = self.resource_ref.as_ref() else {
+            return Err(exec_session::ExecOpError::Capability);
+        };
+        let expected_spec = self
+            .ephemeral_spec(execution_ref, spec.detached)
+            .map_err(establish_error_as_exec_error)?;
+        match self.get_resource(resource_ref).await {
+            Ok(Some(existing)) => {
+                let existing_execution =
+                    existing
+                        .spec()
+                        .base()
+                        .get("executionRef")
+                        .and_then(|value| match value {
+                            d2b_contracts_resource::v3::CanonicalJsonValue::String(value) => {
+                                Some(value.as_str())
+                            }
+                            _ => None,
+                        });
+                let expected_execution = execution_ref.to_canonical_string();
+                let existing_spec =
+                    serde_json::from_slice::<Value>(&existing.spec().base().to_canonical_bytes())
+                        .ok();
+                if existing_execution != Some(expected_execution.as_str())
+                    || existing_spec.as_ref() != Some(&expected_spec)
+                {
+                    return Err(exec_session::ExecOpError::Capability);
+                }
+                let bytes = existing
+                    .canonical_bytes()
+                    .map_err(|_| exec_session::ExecOpError::Protocol)?;
+                let state = detached_status_from_resource(&bytes)
+                    .map_err(|_| exec_session::ExecOpError::Protocol)?
+                    .state;
+                return Ok(public_wire::ExecDetachedCreateResult {
+                    exec_id: resource_ref.name().as_str().to_owned(),
+                    state,
+                });
+            }
+            Ok(None) => {}
+            Err(error) => return Err(resource_error_to_op(&error)),
+        }
+        let request = self
+            .create_request(resource_ref, expected_spec)
+            .map_err(establish_error_as_exec_error)?;
+        let response = self.client.create(request).await;
+        if let Some(error) = response.error.as_ref() {
+            return Err(resource_error_to_op(error));
+        }
+        let exec_id = response
+            .resource
+            .as_ref()
+            .and_then(|resource| resource.identity.as_ref())
+            .map(|identity| identity.name.clone())
+            .ok_or(exec_session::ExecOpError::Protocol)?;
+        Ok(public_wire::ExecDetachedCreateResult {
+            exec_id,
+            state: d2b_contracts_control::public_wire::ExecState::Running,
+        })
+    }
+
+    async fn list_ephemeral_processes(
+        &self,
+        execution_ref: &ResourceRef,
+    ) -> Result<public_wire::ExecDetachedListResult, exec_session::ExecOpError> {
+        let mut request = resource_wire::ListRequest::new();
+        let operation = format!(
+            "process-resource-list-{}",
+            shell_ref_digest(&[execution_ref.name().as_str()])
+        );
+        request.meta = protobuf::MessageField::some(
+            DaemonShellAuthority::shell_resource_request_meta(&operation),
+        );
+        request.resource_types.push("EphemeralProcess".to_owned());
+        let mut filter = resource_wire::ListFilter::new();
+        filter.field = "spec.executionRef".to_owned();
+        filter.values.push(execution_ref.to_canonical_string());
+        request.filters.push(filter);
+        request.page_size = 256;
+        let mut projection = resource_wire::Projection::new();
+        projection.kind =
+            protobuf::EnumOrUnknown::new(resource_wire::ProjectionKind::PROJECTION_KIND_FULL);
+        request.projection = protobuf::MessageField::some(projection);
+        let response = self.client.list(request).await;
+        if let Some(error) = response.error.as_ref() {
+            return Err(resource_error_to_op(error));
+        }
+        let execs = response
+            .resources
+            .iter()
+            .filter_map(|resource| {
+                detached_status_from_resource(&resource.canonical_json)
+                    .ok()
+                    .map(|status| public_wire::ExecDetachedListEntry {
+                        exec_id: status.exec_id,
+                        state: status.state,
+                        started_at: String::new(),
+                        start_offset: status.start_offset,
+                        end_offset: status.end_offset,
+                        exit_code: status.exit_code,
+                        signal: status.signal,
+                        stdout_start_offset: status.start_offset,
+                        stdout_end_offset: status.end_offset,
+                        stderr_start_offset: status.start_offset,
+                        stderr_end_offset: status.end_offset,
+                        dropped_bytes: status.dropped_bytes,
+                        stdout_dropped_bytes: 0,
+                        stderr_dropped_bytes: 0,
+                        truncated: status.truncated,
+                        stdout_truncated: status.truncated,
+                        stderr_truncated: status.truncated,
+                    })
+            })
+            .collect();
+        Ok(public_wire::ExecDetachedListResult { execs })
+    }
+
+    async fn status_ephemeral_process(
+        &self,
+        process_ref: &ResourceRef,
+    ) -> Result<public_wire::ExecDetachedStatusResult, exec_session::ExecOpError> {
+        let envelope = self
+            .get_resource(process_ref)
+            .await
+            .map_err(|error| resource_error_to_op(&error))?
+            .ok_or(exec_session::ExecOpError::Guest(
+                exec_session::ProcessOpError::ExecNotFound,
+            ))?;
+        let bytes = envelope
+            .canonical_bytes()
+            .map_err(|_| exec_session::ExecOpError::Protocol)?;
+        detached_status_from_resource(&bytes).map_err(|_| exec_session::ExecOpError::Protocol)
+    }
+
+    async fn logs_ephemeral_process(
+        &self,
+        process_ref: &ResourceRef,
+        stdout_offset: Option<u64>,
+        stderr_offset: Option<u64>,
+        max_len: Option<u64>,
+    ) -> Result<public_wire::ExecDetachedLogsResult, exec_session::ExecOpError> {
+        if self
+            .get_resource(process_ref)
+            .await
+            .map_err(|error| resource_error_to_op(&error))?
+            .is_none()
+        {
+            return Err(exec_session::ExecOpError::Guest(
+                exec_session::ProcessOpError::ExecNotFound,
+            ));
+        }
+        let client = exec_session_real::open_component_session_process(
+            self.driver.clone(),
+            next_component_session_stream_number(),
+        )
+        .await
+        .map_err(establish_error_as_exec_error)?;
+        let max_len = max_len.unwrap_or(u64::from(public_wire::EXEC_MAX_CHUNK_BYTES));
+        let stdout_offset = stdout_offset.unwrap_or(0);
+        let stderr_offset = stderr_offset.unwrap_or(0);
+        let result = async {
+            let stdout = client
+                .read_output(
+                    d2bd_runtime::terminal_session::OutputStreamSel::Stdout,
+                    stdout_offset,
+                    max_len,
+                    false,
+                    0,
+                    SHELL_MANAGEMENT_TIMEOUT,
+                )
+                .await
+                .map_err(|_| exec_session::ExecOpError::Transport)?;
+            let stderr = client
+                .read_output(
+                    d2bd_runtime::terminal_session::OutputStreamSel::Stderr,
+                    stderr_offset,
+                    max_len.saturating_sub(stdout.data.len() as u64),
+                    false,
+                    0,
+                    SHELL_MANAGEMENT_TIMEOUT,
+                )
+                .await
+                .map_err(|_| exec_session::ExecOpError::Transport)?;
+            Ok::<_, exec_session::ExecOpError>((stdout, stderr))
+        }
+        .await;
+        let _ = client.cancel(0, SHELL_MANAGEMENT_TIMEOUT).await;
+        let (stdout, stderr) = result?;
+        Ok(public_wire::ExecDetachedLogsResult {
+            exec_id: process_ref.name().as_str().to_owned(),
+            stdout_base64: d2b_core::base64_codec::encode(&stdout.data),
+            stderr_base64: d2b_core::base64_codec::encode(&stderr.data),
+            start_offset: stdout_offset,
+            end_offset: stdout.next_offset,
+            dropped_bytes: stdout.dropped_bytes.saturating_add(stderr.dropped_bytes),
+            truncated: stdout.truncated || stderr.truncated,
+            stdout_start_offset: stdout_offset,
+            stdout_end_offset: stdout.next_offset,
+            stdout_next_offset: stdout.next_offset,
+            stdout_eof: stdout.eof,
+            stdout_dropped_bytes: stdout.dropped_bytes,
+            stdout_truncated: stdout.truncated,
+            stderr_start_offset: stderr_offset,
+            stderr_end_offset: stderr.next_offset,
+            stderr_next_offset: stderr.next_offset,
+            stderr_eof: stderr.eof,
+            stderr_dropped_bytes: stderr.dropped_bytes,
+            stderr_truncated: stderr.truncated,
+        })
+    }
+
+    async fn kill_ephemeral_process(
+        &self,
+        process_ref: &ResourceRef,
+    ) -> Result<public_wire::ExecDetachedKillResult, exec_session::ExecOpError> {
+        let Some(envelope) = self
+            .get_resource(process_ref)
+            .await
+            .map_err(|error| resource_error_to_op(&error))?
+        else {
+            return Ok(public_wire::ExecDetachedKillResult {
+                exec_id: process_ref.name().as_str().to_owned(),
+                result: public_wire::ExecDetachedKillOutcome::AlreadyTerminal,
+                state: d2b_contracts_control::public_wire::ExecState::Exited,
+            });
+        };
+        let envelope_bytes = envelope
+            .canonical_bytes()
+            .map_err(|_| exec_session::ExecOpError::Protocol)?;
+        let state = detached_status_from_resource(&envelope_bytes)
+            .map_err(|_| exec_session::ExecOpError::Protocol)?
+            .state;
+        if !matches!(
+            state,
+            d2b_contracts_control::public_wire::ExecState::Created
+                | d2b_contracts_control::public_wire::ExecState::Running
+        ) {
+            return Ok(public_wire::ExecDetachedKillResult {
+                exec_id: process_ref.name().as_str().to_owned(),
+                result: public_wire::ExecDetachedKillOutcome::AlreadyTerminal,
+                state,
+            });
+        }
+        let mut mutation = resource_wire::Mutation::new();
+        mutation.kind =
+            protobuf::EnumOrUnknown::new(resource_wire::MutationKind::MUTATION_KIND_DELETE);
+        mutation.target = protobuf::MessageField::some(
+            DaemonShellAuthority::shell_resource_identity_with_revision(
+                &self.zone,
+                process_ref,
+                envelope.metadata().uid(),
+                envelope.metadata().generation().get(),
+                envelope.metadata().revision().get(),
+            ),
+        );
+        let mut precondition = resource_wire::Precondition::new();
+        precondition.kind = protobuf::EnumOrUnknown::new(
+            resource_wire::PreconditionKind::PRECONDITION_KIND_EXACT_REVISION,
+        );
+        precondition.expected_revision = Some(envelope.metadata().revision().get());
+        mutation.precondition = protobuf::MessageField::some(precondition);
+        let mut request = resource_wire::DeleteRequest::new();
+        let operation = format!(
+            "process-resource-delete-{}",
+            shell_ref_digest(&[process_ref.name().as_str()])
+        );
+        request.meta = protobuf::MessageField::some(
+            DaemonShellAuthority::shell_resource_request_meta(&operation),
+        );
+        request.mutation = protobuf::MessageField::some(mutation);
+        let response = self.client.delete(request).await;
+        if let Some(error) = response.error.as_ref()
+            && error.kind.enum_value().ok()
+                != Some(resource_wire::ResourceErrorKind::RESOURCE_ERROR_KIND_RESOURCE_NOT_FOUND)
+        {
+            return Err(resource_error_to_op(error));
+        }
+        Ok(public_wire::ExecDetachedKillResult {
+            exec_id: process_ref.name().as_str().to_owned(),
+            result: public_wire::ExecDetachedKillOutcome::Cancelling,
+            state,
+        })
+    }
+}
+
+impl ComponentSessionProcessResourcePort {
+    async fn get_resource(
+        &self,
+        process_ref: &ResourceRef,
+    ) -> Result<Option<d2b_contracts_resource::v3::ResourceEnvelope>, resource_wire::ResourceError>
+    {
+        let mut target = DaemonShellAuthority::shell_resource_identity(&self.zone, process_ref);
+        target.resource_type = "EphemeralProcess".to_owned();
+        let mut projection = resource_wire::Projection::new();
+        projection.kind =
+            protobuf::EnumOrUnknown::new(resource_wire::ProjectionKind::PROJECTION_KIND_FULL);
+        let mut request = resource_wire::GetRequest::new();
+        let operation = format!(
+            "process-resource-get-{}",
+            shell_ref_digest(&[process_ref.name().as_str()])
+        );
+        request.meta = protobuf::MessageField::some(
+            DaemonShellAuthority::shell_resource_request_meta(&operation),
+        );
+        request.target = protobuf::MessageField::some(target);
+        request.projection = protobuf::MessageField::some(projection);
+        let response = self.client.get(request).await;
+        let Some(resource) = response.resource.as_ref() else {
+            if let Some(error) = response.error.as_ref() {
+                if error.kind.enum_value().ok()
+                    == Some(
+                        resource_wire::ResourceErrorKind::RESOURCE_ERROR_KIND_RESOURCE_NOT_FOUND,
+                    )
+                {
+                    return Ok(None);
+                }
+                return Err(error.clone());
+            }
+            return Err(resource_wire::ResourceError::new());
+        };
+        let envelope =
+            d2b_contracts_resource::v3::ResourceEnvelope::from_json(&resource.canonical_json)
+                .map_err(|_| resource_wire::ResourceError::new())?;
+        let execution = envelope
+            .spec()
+            .base()
+            .get("executionRef")
+            .and_then(|value| match value {
+                d2b_contracts_resource::v3::CanonicalJsonValue::String(value) => {
+                    ResourceRef::parse(value).ok()
+                }
+                _ => None,
+            });
+        if execution.as_ref() != Some(&self.execution_ref) {
+            return Err(resource_wire::ResourceError::new());
+        }
+        Ok(Some(envelope))
+    }
+}
+
+impl ShellAuthorityPort for DaemonShellAuthority {
+    fn restore_pool(
+        &self,
+        pool: &ShellPool,
+        attached_streams: u32,
+    ) -> Result<(), ShellTerminalError> {
+        DaemonShellAuthority::restore_pool(self, pool, attached_streams)
+    }
+
+    fn open_session(
+        &self,
+        session: &ShellSession,
+    ) -> Result<d2b_provider_shell_terminal::SessionGrant, ShellTerminalError> {
+        DaemonShellAuthority::open_session(self, session)
+    }
+
+    fn ensure_supervisor_process(&self, session: &ShellSession) -> Result<(), ShellTerminalError> {
+        DaemonShellAuthority::ensure_supervisor_process(self, session)
+    }
+
+    fn remove_supervisor_process(&self, session: &ShellSession) -> Result<(), ShellTerminalError> {
+        self.ledger.validate_session(session)?;
+        if self.ledger.has_active_attachments(session)? {
+            return Err(ShellTerminalError::CapacityExceeded);
+        }
+        self.remove_supervisor_process_resource(session)
+    }
+
+    fn verify_recovery(
+        &self,
+        session: &ShellSession,
+        identity: &d2b_provider_shell_terminal::SupervisorIdentity,
+    ) -> Result<bool, ShellTerminalError> {
+        self.ledger.verify_recovery(session, identity)
+    }
+
+    fn advance_session(
+        &self,
+        session: &ShellSession,
+        retired_identity: Option<&d2b_provider_shell_terminal::SupervisorIdentity>,
+    ) -> Result<d2b_provider_shell_terminal::SessionGrant, ShellTerminalError> {
+        self.ledger.advance_session(session, retired_identity)
+    }
+
+    fn claim_supervisor(
+        &self,
+        session: &ShellSession,
+        identity: &d2b_provider_shell_terminal::SupervisorIdentity,
+    ) -> Result<(), ShellTerminalError> {
+        self.ledger.claim_supervisor(session, identity)
+    }
+
+    fn validate_session(
+        &self,
+        session: &ShellSession,
+        identity: &d2b_provider_shell_terminal::SupervisorIdentity,
+    ) -> Result<(), ShellTerminalError> {
+        ShellAuthorityPort::validate_session(self.ledger.as_ref(), session, identity)
+    }
+
+    fn consume_capability(
+        &self,
+        session: &ShellSession,
+        identity: &d2b_provider_shell_terminal::SupervisorIdentity,
+        capability: &d2b_provider_shell_terminal::SessionCapability,
+    ) -> Result<(), ShellTerminalError> {
+        self.ledger
+            .consume_capability(session, identity, capability)
+    }
+
+    fn admit_capability_attachment(
+        &self,
+        session: &ShellSession,
+        identity: &d2b_provider_shell_terminal::SupervisorIdentity,
+        capability: &d2b_provider_shell_terminal::SessionCapability,
+    ) -> Result<d2b_provider_shell_terminal::Attachment, ShellTerminalError> {
+        self.ledger
+            .admit_capability_attachment(session, identity, capability)
+    }
+
+    fn reserve_attachment(
+        &self,
+        session: &ShellSession,
+        identity: &d2b_provider_shell_terminal::SupervisorIdentity,
+    ) -> Result<d2b_provider_shell_terminal::Attachment, ShellTerminalError> {
+        self.ledger.reserve_attachment(session, identity)
+    }
+
+    fn release_attachment(
+        &self,
+        session: &ShellSession,
+        attachment: &d2b_provider_shell_terminal::Attachment,
+    ) -> Result<(), ShellTerminalError> {
+        self.ledger.release_attachment(session, attachment)
+    }
+
+    fn reconcile_pool_attachments(
+        &self,
+        pool: &ShellPool,
+        attached_streams: u32,
+    ) -> Result<(), ShellTerminalError> {
+        self.ledger
+            .reconcile_pool_attachments(pool, attached_streams)
+    }
+
+    fn retire_proven_stale(
+        &self,
+        pool: &ShellPool,
+        stale_attachments: &[d2b_provider_shell_terminal::Attachment],
+        attached_streams: u32,
+    ) -> Result<(), ShellTerminalError> {
+        self.ledger
+            .retire_proven_stale(pool, stale_attachments, attached_streams)
+    }
+
+    fn finalize_session(
+        &self,
+        session: &ShellSession,
+        identity: Option<&d2b_provider_shell_terminal::SupervisorIdentity>,
+    ) -> Result<(), ShellTerminalError> {
+        self.ledger.finalize_session(session, identity)
+    }
+}
+
+/// A single production routing decision for Process-family owners. `None`
+/// means that either the target-local Resource API or its enrolled
+/// ComponentSession is genuinely absent, in which case callers must use the
+/// existing typed unavailable port.
+struct RoutedProcessResourcePort(Option<ComponentSessionProcessResourcePort>);
+
+impl std::fmt::Debug for RoutedProcessResourcePort {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str("RoutedProcessResourcePort(<redacted>)")
+    }
+}
+
+#[async_trait]
+impl exec_session_real::ProcessResourcePort for RoutedProcessResourcePort {
+    async fn create_ephemeral_process(
+        &self,
+        execution_ref: &ResourceRef,
+        spec: &exec_session::ExecStartSpec,
+    ) -> Result<exec_session_real::EphemeralProcessHandle, exec_session::ExecEstablishError> {
+        let Some(port) = self.0.as_ref() else {
+            let _ = (execution_ref, spec);
+            return Err(exec_session::ExecEstablishError::Capability);
+        };
+        port.create_ephemeral_process(execution_ref, spec).await
+    }
+
+    async fn attach_process(
+        &self,
+        process: &exec_session_real::EphemeralProcessHandle,
+        tty: bool,
+        initial_size: Option<(u32, u32)>,
+    ) -> Result<Arc<dyn exec_session::ExecGuestClient>, exec_session::ExecEstablishError> {
+        let Some(port) = self.0.as_ref() else {
+            let _ = (process, tty, initial_size);
+            return Err(exec_session::ExecEstablishError::Capability);
+        };
+        port.attach_process(process, tty, initial_size).await
+    }
+}
+
+#[async_trait]
+impl exec_detached::DetachedProcessResourcePort for RoutedProcessResourcePort {
+    async fn create_ephemeral_process(
+        &self,
+        execution_ref: &ResourceRef,
+        spec: &exec_session::ExecStartSpec,
+    ) -> Result<public_wire::ExecDetachedCreateResult, exec_session::ExecOpError> {
+        let Some(port) = self.0.as_ref() else {
+            let _ = (execution_ref, spec);
+            return Err(exec_session::ExecOpError::DetachedUnavailable);
+        };
+        port.create_ephemeral_process(execution_ref, spec).await
+    }
+
+    async fn list_ephemeral_processes(
+        &self,
+        execution_ref: &ResourceRef,
+    ) -> Result<public_wire::ExecDetachedListResult, exec_session::ExecOpError> {
+        let Some(port) = self.0.as_ref() else {
+            let _ = execution_ref;
+            return Err(exec_session::ExecOpError::DetachedUnavailable);
+        };
+        port.list_ephemeral_processes(execution_ref).await
+    }
+
+    async fn status_ephemeral_process(
+        &self,
+        process_ref: &ResourceRef,
+    ) -> Result<public_wire::ExecDetachedStatusResult, exec_session::ExecOpError> {
+        let Some(port) = self.0.as_ref() else {
+            let _ = process_ref;
+            return Err(exec_session::ExecOpError::DetachedUnavailable);
+        };
+        port.status_ephemeral_process(process_ref).await
+    }
+
+    async fn logs_ephemeral_process(
+        &self,
+        process_ref: &ResourceRef,
+        stdout_offset: Option<u64>,
+        stderr_offset: Option<u64>,
+        max_len: Option<u64>,
+    ) -> Result<public_wire::ExecDetachedLogsResult, exec_session::ExecOpError> {
+        let Some(port) = self.0.as_ref() else {
+            let _ = (process_ref, stdout_offset, stderr_offset, max_len);
+            return Err(exec_session::ExecOpError::DetachedUnavailable);
+        };
+        port.logs_ephemeral_process(process_ref, stdout_offset, stderr_offset, max_len)
+            .await
+    }
+
+    async fn kill_ephemeral_process(
+        &self,
+        process_ref: &ResourceRef,
+    ) -> Result<public_wire::ExecDetachedKillResult, exec_session::ExecOpError> {
+        let Some(port) = self.0.as_ref() else {
+            let _ = process_ref;
+            return Err(exec_session::ExecOpError::DetachedUnavailable);
+        };
+        port.kill_ephemeral_process(process_ref).await
+    }
+}
+
+fn production_process_resource_port(
+    state: &ServerState,
+    request: &Value,
+    execution_ref: &ResourceRef,
+) -> RoutedProcessResourcePort {
+    let resource_ref = process_resource_ref(request);
+    if resource_ref.is_none() && request.get("method").and_then(Value::as_str) != Some("List") {
+        return RoutedProcessResourcePort(None);
+    }
+    let Some(zone) = request
+        .get("zoneRef")
+        .and_then(Value::as_str)
+        .and_then(|value| value.strip_prefix("Zone/"))
+        .and_then(|value| ZoneId::parse(value.to_owned()).ok())
+    else {
+        return RoutedProcessResourcePort(None);
+    };
+    let Some(client) = state
+        .resource_plane
+        .lock()
+        .ok()
+        .and_then(|plane| plane.clone())
+        .and_then(|plane| plane.zone(&zone).ok())
+        .and_then(|runtime| runtime.process_resource_client())
+    else {
+        return RoutedProcessResourcePort(None);
+    };
+    let Some(driver) = production_component_session_driver_for_service(
+        state,
+        interaction_composition::PROCESS_ATTACH_SERVICE,
+        execution_ref,
+    ) else {
+        return RoutedProcessResourcePort(None);
+    };
+    let template = request
+        .get("template")
+        .and_then(Value::as_str)
+        .unwrap_or("shell-terminal")
+        .to_owned();
+    if d2b_contracts_resource::v3::execution_policy::BoundedToken::parse(&template).is_err() {
+        return RoutedProcessResourcePort(None);
+    }
+    let domain = request
+        .get("domain")
+        .and_then(Value::as_str)
+        .unwrap_or("user")
+        .to_owned();
+    if !matches!(domain.as_str(), "system" | "user") {
+        return RoutedProcessResourcePort(None);
+    }
+    let requested_user_ref = request
+        .get("userRef")
+        .and_then(Value::as_str)
+        .map(ToOwned::to_owned);
+    let needs_execution_spec = matches!(
+        request.get("method").and_then(Value::as_str),
+        Some("Create" | "Attach")
+    );
+    let user_ref = if domain == "user" {
+        let trusted_user_ref = resolve_process_user_ref(state, execution_ref);
+        if requested_user_ref
+            .as_deref()
+            .is_some_and(|requested| Some(requested) != trusted_user_ref.as_deref())
+        {
+            return RoutedProcessResourcePort(None);
+        }
+        trusted_user_ref
+    } else {
+        requested_user_ref
+    };
+    if domain == "user" && needs_execution_spec && user_ref.is_none() {
+        return RoutedProcessResourcePort(None);
+    }
+    if let Some(user_ref) = user_ref.as_deref()
+        && ResourceRef::parse(user_ref)
+            .ok()
+            .is_none_or(|value| value.resource_type().as_str() != "User")
+    {
+        return RoutedProcessResourcePort(None);
+    }
+    RoutedProcessResourcePort(Some(ComponentSessionProcessResourcePort {
+        client,
+        driver,
+        zone,
+        execution_ref: execution_ref.clone(),
+        resource_ref,
+        domain,
+        user_ref,
+        template,
+        allow_create: request.get("method").and_then(Value::as_str) != Some("Attach"),
+    }))
+}
+
+fn resolve_process_user_ref(state: &ServerState, execution_ref: &ResourceRef) -> Option<String> {
+    if execution_ref.resource_type().as_str() != "Guest" {
+        return None;
+    }
+    let manifest = load_manifest(&state.config.artifacts.public_manifest_path).ok()?;
+    let user = manifest
+        .get(execution_ref.name().as_str())?
+        .get("sshUser")
+        .and_then(Value::as_str)?;
+    ResourceRef::parse(&format!("User/{user}"))
+        .ok()
+        .map(|value| value.to_canonical_string())
+}
+
+fn production_component_session_driver(
+    state: &ServerState,
+    target: &str,
+) -> Option<d2b_session::SessionDriverHandle> {
+    let target = ResourceRef::parse(&format!("Guest/{target}")).ok()?;
+    production_component_session_driver_for_service(
+        state,
+        interaction_composition::SHELL_SESSION_SERVICE,
+        &target,
+    )
+}
+
+fn production_component_session_driver_for_service(
+    state: &ServerState,
+    service: &str,
+    target: &ResourceRef,
+) -> Option<d2b_session::SessionDriverHandle> {
+    interaction_composition::blocking_component_session_driver_for_service(
+        &state.interaction_runtime,
+        service,
+        target,
+    )
+}
+
+fn resource_error_to_establish(
+    error: &resource_wire::ResourceError,
+) -> exec_session::ExecEstablishError {
+    match error.kind.enum_value().ok() {
+        Some(resource_wire::ResourceErrorKind::RESOURCE_ERROR_KIND_AUTHORIZATION_DENIED) => {
+            exec_session::ExecEstablishError::Auth
+        }
+        Some(
+            resource_wire::ResourceErrorKind::RESOURCE_ERROR_KIND_RESOURCE_PROVIDER_UNAVAILABLE
+            | resource_wire::ResourceErrorKind::RESOURCE_ERROR_KIND_RESOURCE_PLANE_UNAVAILABLE
+            | resource_wire::ResourceErrorKind::RESOURCE_ERROR_KIND_TIMEOUT
+            | resource_wire::ResourceErrorKind::RESOURCE_ERROR_KIND_BACKPRESSURE,
+        ) => exec_session::ExecEstablishError::Transport,
+        Some(
+            resource_wire::ResourceErrorKind::RESOURCE_ERROR_KIND_UNSUPPORTED_CAPABILITY
+            | resource_wire::ResourceErrorKind::RESOURCE_ERROR_KIND_RESOURCE_NOT_FOUND
+            | resource_wire::ResourceErrorKind::RESOURCE_ERROR_KIND_RESOURCE_ALREADY_EXISTS
+            | resource_wire::ResourceErrorKind::RESOURCE_ERROR_KIND_RESOURCE_CONFLICT,
+        ) => exec_session::ExecEstablishError::Capability,
+        _ => exec_session::ExecEstablishError::Protocol,
+    }
+}
+
+fn resource_error_to_op(error: &resource_wire::ResourceError) -> exec_session::ExecOpError {
+    match resource_error_to_establish(error) {
+        exec_session::ExecEstablishError::Transport => exec_session::ExecOpError::Transport,
+        exec_session::ExecEstablishError::Auth => exec_session::ExecOpError::Auth,
+        exec_session::ExecEstablishError::Capability => exec_session::ExecOpError::Capability,
+        exec_session::ExecEstablishError::Protocol => exec_session::ExecOpError::Protocol,
+        exec_session::ExecEstablishError::Timeout => exec_session::ExecOpError::Timeout,
+        exec_session::ExecEstablishError::OldGeneration => exec_session::ExecOpError::OldGeneration,
+        exec_session::ExecEstablishError::Guest(error) => exec_session::ExecOpError::Guest(error),
+    }
+}
+
+fn detached_status_from_resource(
+    bytes: &[u8],
+) -> Result<public_wire::ExecDetachedStatusResult, ()> {
+    let envelope =
+        d2b_contracts_resource::v3::ResourceEnvelope::from_json(bytes).map_err(|_| ())?;
+    if envelope.resource_type().as_str() != "EphemeralProcess" {
+        return Err(());
+    }
+    let value: Value = serde_json::from_slice(bytes).map_err(|_| ())?;
+    let phase = value
+        .pointer("/status/phase")
+        .and_then(Value::as_str)
+        .ok_or(())?;
+    let state = match phase {
+        "Pending" | "Ready" | "Degraded" => d2b_contracts_control::public_wire::ExecState::Running,
+        "Succeeded" | "Deleted" => d2b_contracts_control::public_wire::ExecState::Exited,
+        "Failed" => d2b_contracts_control::public_wire::ExecState::ProtocolError,
+        _ => d2b_contracts_control::public_wire::ExecState::ProtocolError,
+    };
+    let reason = value
+        .pointer("/status/outcome/code")
+        .and_then(Value::as_str)
+        .map(ToOwned::to_owned);
+    Ok(public_wire::ExecDetachedStatusResult {
+        exec_id: envelope.metadata().name().as_str().to_owned(),
+        state,
+        reason,
+        exit_code: None,
+        signal: None,
+        start_offset: 0,
+        end_offset: 0,
+        dropped_bytes: 0,
+        truncated: false,
+    })
+}
+
+fn next_component_session_stream_number() -> u16 {
+    u16::try_from(next_internal_process_stream_id() % u64::from(u16::MAX))
+        .unwrap_or(1)
+        .max(1)
+}
+
+fn next_internal_process_stream_id() -> u64 {
+    static STREAM_ID: AtomicU64 = AtomicU64::new(1);
+    loop {
+        let value = STREAM_ID.fetch_add(1, Ordering::Relaxed);
+        if value != 0 {
+            return value;
+        }
+    }
+}
+
 
 fn admission_config(state: &ServerState) -> AdmissionConfig {
     AdmissionConfig {
@@ -841,6 +2491,8 @@ pub async fn serve(options: ServeOptions) -> Result<(), TypedError> {
         runtime_identity.daemon_uid.as_raw(),
         unsafe_local_helper_uids,
     ));
+    #[cfg(not(test))]
+    let resource_plane = Arc::new(Mutex::new(None));
     let state = ServerState {
         daemon_uid: runtime_identity.daemon_uid.as_raw(),
         config,
@@ -874,11 +2526,19 @@ pub async fn serve(options: ServeOptions) -> Result<(), TypedError> {
                 detail: "provider lifecycle state unavailable".to_owned(),
             })?,
         ),
+        #[cfg(not(test))]
+        resource_plane: Arc::clone(&resource_plane),
+        #[cfg(test)]
         resource_plane: Arc::new(Mutex::new(None)),
+        #[cfg(not(test))]
+        shell_authority: Arc::new(DaemonShellAuthority::new(Arc::clone(&resource_plane))),
         interaction_runtime: Arc::new(tokio::sync::Mutex::new(None)),
         interaction_listeners: Arc::new(Mutex::new(None)),
         typed_shell_session_targets: d2bd_runtime::typed_shell_targets::new_cache(),
         zone_coordinator: d2bd_runtime::zone_authority::new_coordinator(),
+        config_staging: Arc::new(Mutex::new(Default::default())),
+        guest_component_sessions: Arc::new(tokio::sync::Mutex::new(HashMap::new())),
+        guest_component_session_locks: Arc::new(tokio::sync::Mutex::new(HashMap::new())),
         security_key_sessions: Arc::new(parking_lot::Mutex::new(
             crate::security_key::SkSessionTable::default(),
         )),
@@ -978,11 +2638,7 @@ pub async fn serve(options: ServeOptions) -> Result<(), TypedError> {
                                 continue;
                             }
                             match interaction_composition::production_interaction_composition(
-                                resolver.clone(),
                                 state.daemon_uid,
-                                state
-                                    .daemon_state_dir
-                                    .join(format!("interaction-display-observations-{zone}.json")),
                                 interaction_composition::ProductionInteractionResourceState::new(
                                     zone.clone(),
                                     resource.committed_policy_snapshot(),
@@ -990,6 +2646,7 @@ pub async fn serve(options: ServeOptions) -> Result<(), TypedError> {
                                     true,
                                     resource.interaction_provider_configuration(),
                                     resource.interaction_identity(),
+                                    resource.process_resource_client(),
                                 ),
                             ) {
                                 Ok(runtime) => {
@@ -1044,7 +2701,7 @@ pub async fn serve(options: ServeOptions) -> Result<(), TypedError> {
                                     .expect("interaction listener lock") = Some(listeners);
                                 tracing::info!(
                                     listener_count = paths.len(),
-                                    "interaction Provider ComponentSession listeners ready",
+                                    "ComponentSession listeners ready",
                                 );
                             }
                         } else {
@@ -1383,6 +3040,419 @@ pub async fn serve(options: ServeOptions) -> Result<(), TypedError> {
     Ok(())
 }
 
+/// Process-start Guest mode options. These options contain only the Guest
+/// target identity and its own broker/state roots; Host bundle, public socket,
+/// and realm paths are intentionally absent.
+#[derive(Debug, Clone)]
+pub struct GuestServeOptions {
+    pub guest_ref: String,
+    pub guest_uid: String,
+    pub zone: String,
+    pub purpose: String,
+    pub schema_fingerprint: String,
+    pub reconnect_generation: u64,
+    pub provider_generation: u64,
+    pub controller_generation: u64,
+    pub assignment_epoch: u64,
+    pub broker_socket_path: PathBuf,
+    pub broker_uid: u32,
+    pub state_dir: PathBuf,
+    pub bundle_path: PathBuf,
+    pub guest_config_path: PathBuf,
+    pub boot_id_path: PathBuf,
+    pub local_private_key_path: Option<PathBuf>,
+    pub parent_public_key_path: Option<PathBuf>,
+    pub validate_only: bool,
+    pub once: bool,
+}
+
+/// Start the fixed Guest target agent. Unlike [`serve`], this path never
+/// loads `DaemonConfig`, binds a public operator socket, opens a Zone store,
+/// or loads realm credentials.
+pub async fn serve_guest(options: GuestServeOptions) -> Result<(), TypedError> {
+    if !options.state_dir.is_absolute() || !options.broker_socket_path.is_absolute() {
+        return Err(TypedError::InternalConfig {
+            detail: "guest mode requires absolute state and broker paths".to_owned(),
+        });
+    }
+    // The production path is sealed to the kernel's boot-id file. A custom
+    // path is accepted only by the validation-only characterization route,
+    // which never establishes a session or allocates Guest authority.
+    let boot_id_path = if options.validate_only {
+        options.boot_id_path
+    } else {
+        PathBuf::from(d2bd_runtime::guest_mode::KERNEL_BOOT_ID_PATH)
+    };
+    let boot = d2bd_runtime::guest_mode::BootIdentity::read(&boot_id_path).map_err(|_| {
+        TypedError::InternalConfig {
+            detail: "guest kernel boot identity unavailable".to_owned(),
+        }
+    })?;
+    let guest_ref =
+        ResourceRef::parse(&options.guest_ref).map_err(|_| TypedError::InternalConfig {
+            detail: "guest identity reference is invalid".to_owned(),
+        })?;
+    let guest_uid =
+        ResourceUid::parse(options.guest_uid).map_err(|_| TypedError::InternalConfig {
+            detail: "guest identity UID is invalid".to_owned(),
+        })?;
+    let zone = ZoneId::parse(options.zone).map_err(|_| TypedError::InternalConfig {
+        detail: "guest Zone identity is invalid".to_owned(),
+    })?;
+    let purpose = d2b_contracts_resource::v3::identity::SessionPurpose::parse(options.purpose)
+        .map_err(|_| TypedError::InternalConfig {
+            detail: "guest session purpose is invalid".to_owned(),
+        })?;
+    let schema = SchemaFingerprint::parse(options.schema_fingerprint).map_err(|_| {
+        TypedError::InternalConfig {
+            detail: "guest session schema fingerprint is invalid".to_owned(),
+        }
+    })?;
+    let reconnect_generation =
+        ReconnectGeneration::new(options.reconnect_generation).map_err(|_| {
+            TypedError::InternalConfig {
+                detail: "guest reconnect generation is invalid".to_owned(),
+            }
+        })?;
+    let identity = d2bd_runtime::guest_mode::GuestIdentity::new(
+        guest_ref,
+        guest_uid,
+        zone,
+        boot,
+        purpose,
+        schema,
+        reconnect_generation,
+        options.provider_generation,
+        options.controller_generation,
+        options.assignment_epoch,
+    )
+    .map_err(|error| TypedError::InternalConfig {
+        detail: error.to_string(),
+    })?;
+    if options.validate_only {
+        return Ok(());
+    }
+    fs::create_dir_all(&options.state_dir).map_err(|_| TypedError::InternalConfig {
+        detail: "guest state root unavailable".to_owned(),
+    })?;
+    let runtime = d2bd_runtime::guest_mode::GuestRuntime::new(
+        identity.clone(),
+        options.broker_socket_path.clone(),
+        options.broker_uid,
+        d2bd_runtime::target_runtime::AdmissionLimits::guest_default(),
+        &options.state_dir,
+    )
+    .await
+    .map_err(|error| TypedError::InternalConfig {
+        detail: error.to_string(),
+    })?;
+    let bundle = BundleResolver::load(&options.bundle_path).map_err(|_| {
+        TypedError::InternalConfig {
+            detail: "guest process bundle unavailable".to_owned(),
+        }
+    })?;
+    let process_providers = Arc::new(process_provider_runtime::ProductionProcessProviders::new_for_mode(
+        bundle,
+        options.broker_socket_path.clone(),
+        BrokerCallerRole::LauncherUid {
+            uid: options.broker_uid,
+        },
+        d2bd_runtime::target_runtime::DaemonMode::Guest,
+    ));
+    let local_private_path = options
+        .local_private_key_path
+        .ok_or_else(|| TypedError::InternalConfig {
+            detail: "guest ComponentSession private key is unavailable".to_owned(),
+        })?;
+    let parent_public_path = options
+        .parent_public_key_path
+        .ok_or_else(|| TypedError::InternalConfig {
+            detail: "parent Zone ComponentSession key is unavailable".to_owned(),
+        })?;
+    let parent_public = read_public_key32(&parent_public_path)?;
+    let mut listener = runtime
+        .bind_listener()
+        .map_err(|error| TypedError::InternalConfig {
+            detail: error.to_string(),
+        })?;
+    let mut sigterm = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
+        .map_err(|_| TypedError::InternalIo {
+            context: "install Guest SIGTERM handler".to_owned(),
+            detail: "signal handler unavailable".to_owned(),
+        })?;
+    let mut sigint = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::interrupt())
+        .map_err(|_| TypedError::InternalIo {
+            context: "install Guest SIGINT handler".to_owned(),
+            detail: "signal handler unavailable".to_owned(),
+        })?;
+    let mut active: Option<(
+        tokio::task::JoinHandle<Result<(), d2b_session::SessionServerError>>,
+        tokio::task::JoinHandle<()>,
+        d2bd_runtime::guest_mode::GuestSessionLease,
+    )> = None;
+    loop {
+        let local_private = read_secret32(&local_private_path)?;
+        if let Some((mut serving, processing, lease)) = active.take() {
+            tokio::select! {
+                _ = sigterm.recv() => {
+                    serving.abort();
+                    let _ = serving.await;
+                    processing.abort();
+                    let _ = processing.await;
+                    drop(lease);
+                    break;
+                },
+                _ = sigint.recv() => {
+                    serving.abort();
+                    let _ = serving.await;
+                    processing.abort();
+                    let _ = processing.await;
+                    drop(lease);
+                    break;
+                },
+                accepted = runtime.accept_from_parent(&mut listener, local_private, parent_public) => {
+                    let (session, new_lease) = match accepted {
+                        Ok(session) => session,
+                        Err(error) => {
+                            tracing::warn!(error = %error, "Guest ComponentSession handshake refused");
+                            active = Some((serving, processing, lease));
+                            continue;
+                        }
+                    };
+                    serving.abort();
+                    let _ = serving.await;
+                    processing.abort();
+                    let _ = processing.await;
+                    drop(lease);
+                    let route = session.route_binding();
+                    let resource_session = match runtime.resource_runtime().bind_session(&route) {
+                        Ok(session) => session,
+                        Err(error) => {
+                            tracing::warn!(error = %error, "Guest Resource API session binding refused");
+                            drop(new_lease);
+                            continue;
+                        }
+                    };
+                    let config_services = match guest_config_services(&identity, &route, &options.guest_config_path) {
+                        Ok(services) => services,
+                        Err(error) => {
+                            tracing::warn!(error = %error, "Guest config service binding refused");
+                            drop(new_lease);
+                            continue;
+                        }
+                    };
+                    let mut services = resource_session.ttrpc_services();
+                    services.extend(config_services);
+                    let ttrpc = session.into_ttrpc_handle();
+                    let resource_client = Arc::new(resource_session.client());
+                    let mut process_runtime =
+                        process_resource_runtime::ProcessResourceRuntime::new_for_target(
+                            identity.zone().clone(),
+                            Arc::clone(&process_providers),
+                            Some(identity.guest_ref().clone()),
+                        );
+                    if let Ok(generation) =
+                        d2b_contracts_resource::v3::ControllerGeneration::new(
+                            identity.controller_generation(),
+                        )
+                    {
+                        process_runtime.set_controller_generation(generation);
+                    }
+                    process_runtime.set_guest_execution_binding(
+                        guest_process_execution_binding(
+                            &identity,
+                            route.reconnect_generation(),
+                        )?,
+                    );
+                    let process_store = resource_session.store_backend();
+                    let process_task = tokio::spawn(
+                        process_resource_runtime::run_guest_process_reconciliation(
+                            process_runtime,
+                            process_store,
+                            resource_client,
+                            identity.zone().clone(),
+                        ),
+                    );
+                    active = Some((
+                        tokio::spawn(async move {
+                            ttrpc
+                                .serve_ttrpc_services(services)
+                                .await
+                        }),
+                        process_task,
+                        new_lease,
+                    ));
+                },
+                result = &mut serving => {
+                    if let Ok(Err(error)) = result {
+                        tracing::debug!(error = %error, "Guest ComponentSession resource server stopped");
+                    }
+                    processing.abort();
+                    let _ = processing.await;
+                    drop(lease);
+                },
+            }
+        } else {
+            let accepted = tokio::select! {
+                _ = sigterm.recv() => break,
+                _ = sigint.recv() => break,
+                result = runtime.accept_from_parent(&mut listener, local_private, parent_public) => result,
+            };
+            let (session, lease) = match accepted {
+                Ok(session) => session,
+                Err(error) => {
+                    if options.once {
+                        return Err(TypedError::InternalConfig {
+                            detail: error.to_string(),
+                        });
+                    }
+                    tracing::warn!(error = %error, "Guest ComponentSession handshake refused");
+                    continue;
+                }
+            };
+            if options.once {
+                drop(lease);
+                return Ok(());
+            }
+            let route = session.route_binding();
+            let resource_session = match runtime.resource_runtime().bind_session(&route) {
+                Ok(session) => session,
+                Err(error) => {
+                    tracing::warn!(error = %error, "Guest Resource API session binding refused");
+                    drop(lease);
+                    continue;
+                }
+            };
+            let config_services = match guest_config_services(&identity, &route, &options.guest_config_path) {
+                Ok(services) => services,
+                Err(error) => {
+                    tracing::warn!(error = %error, "Guest config service binding refused");
+                    drop(lease);
+                    continue;
+                }
+            };
+            let mut services = resource_session.ttrpc_services();
+            services.extend(config_services);
+            let ttrpc = session.into_ttrpc_handle();
+            let resource_client = Arc::new(resource_session.client());
+            let mut process_runtime =
+                process_resource_runtime::ProcessResourceRuntime::new_for_target(
+                    identity.zone().clone(),
+                    Arc::clone(&process_providers),
+                    Some(identity.guest_ref().clone()),
+                );
+            if let Ok(generation) =
+                d2b_contracts_resource::v3::ControllerGeneration::new(
+                    identity.controller_generation(),
+                )
+            {
+                process_runtime.set_controller_generation(generation);
+            }
+            process_runtime.set_guest_execution_binding(
+                guest_process_execution_binding(&identity, route.reconnect_generation())?,
+            );
+            let process_store = resource_session.store_backend();
+            let process_task = tokio::spawn(
+                process_resource_runtime::run_guest_process_reconciliation(
+                    process_runtime,
+                    process_store,
+                    resource_client,
+                    identity.zone().clone(),
+                ),
+            );
+            active = Some((
+                tokio::spawn(async move {
+                    ttrpc
+                        .serve_ttrpc_services(services)
+                        .await
+                }),
+                process_task,
+                lease,
+            ));
+        }
+
+        fn guest_config_services(
+            identity: &d2bd_runtime::guest_mode::GuestIdentity,
+            route: &d2b_session::AuthenticatedSessionRouteBinding,
+            path: &Path,
+        ) -> Result<std::collections::HashMap<String, ttrpc::r#async::Service>, String> {
+            identity
+                .validate_route(route)
+                .map_err(|error| error.to_string())?;
+            let boot_digest = identity
+                .boot_identity()
+                .digest()
+                .iter()
+                .map(|byte| format!("{byte:02x}"))
+                .collect::<String>();
+            let backend = d2b_provider_config_nixos::GuestConfigReader::new(
+                identity.guest_ref().clone(),
+                format!("sha256:{boot_digest}"),
+                route.reconnect_generation().get(),
+                path,
+            )
+            .map_err(|error| error.code().to_owned())?;
+            Ok(d2b_provider_config_nixos::create_ttrpc_services(
+                std::sync::Arc::new(backend),
+            ))
+        }
+
+        fn guest_process_execution_binding(
+            identity: &d2bd_runtime::guest_mode::GuestIdentity,
+            session_generation: ReconnectGeneration,
+        ) -> Result<GuestExecutionBinding, TypedError> {
+            GuestExecutionBinding::new(
+                identity.guest_uid().clone(),
+                ConfigurationDigest::from_bytes(identity.boot_identity().digest()),
+                session_generation,
+                identity.assignment_epoch(),
+                ResourceGeneration::new(identity.provider_generation()).map_err(|_| {
+                    TypedError::InternalConfig {
+                        detail: "guest Provider generation is invalid".to_owned(),
+                    }
+                })?,
+                d2b_contracts_resource::v3::ControllerGeneration::new(
+                    identity.controller_generation(),
+                )
+                .map_err(|_| TypedError::InternalConfig {
+                    detail: "guest controller generation is invalid".to_owned(),
+                })?,
+            )
+            .map_err(|_| TypedError::InternalConfig {
+                detail: "guest Process execution binding is invalid".to_owned(),
+            })
+        }
+    }
+    Ok(())
+}
+
+fn read_secret32(path: &Path) -> Result<d2b_session::Secret32, TypedError> {
+    let bytes = fs::read(path).map_err(|_| TypedError::InternalConfig {
+        detail: "guest ComponentSession private key unavailable".to_owned(),
+    })?;
+    let bytes: [u8; 32] = bytes.try_into().map_err(|_| TypedError::InternalConfig {
+        detail: "guest ComponentSession private key has invalid length".to_owned(),
+    })?;
+    d2b_session::Secret32::new(bytes).map_err(|_| TypedError::InternalConfig {
+        detail: "guest ComponentSession private key is invalid".to_owned(),
+    })
+}
+
+fn read_public_key32(path: &Path) -> Result<[u8; 32], TypedError> {
+    let bytes = fs::read(path).map_err(|_| TypedError::InternalConfig {
+        detail: "parent Zone ComponentSession key unavailable".to_owned(),
+    })?;
+    let bytes: [u8; 32] = bytes.try_into().map_err(|_| TypedError::InternalConfig {
+        detail: "parent Zone ComponentSession key has invalid length".to_owned(),
+    })?;
+    if bytes == [0; 32] {
+        return Err(TypedError::InternalConfig {
+            detail: "parent Zone ComponentSession key is invalid".to_owned(),
+        });
+    }
+    Ok(bytes)
+}
+
 async fn finalize_daemon_interactions(state: &ServerState) -> Result<(), TypedError> {
     if let Some(listeners) = state
         .interaction_listeners
@@ -1392,19 +3462,41 @@ async fn finalize_daemon_interactions(state: &ServerState) -> Result<(), TypedEr
     {
         listeners.stop();
     }
-    if let Some(runtime) = state.interaction_runtime.lock().await.as_mut()
-        && let Err(error) = runtime
-            .finalize_async(d2b_provider_display_wayland::GraceState::Expired)
-            .await
-    {
-        tracing::error!(?error, "interaction Provider finalization failed");
+    let interaction_error = {
+        let mut runtime = state.interaction_runtime.lock().await;
+        if let Some(runtime) = runtime.as_mut()
+            && let Err(error) = runtime
+                .finalize_async(d2b_provider_display_wayland::GraceState::Expired)
+                .await
+        {
+            tracing::error!(?error, "interaction Provider finalization failed");
+            Some(TypedError::InternalIo {
+                context: "interaction Provider finalization".to_owned(),
+                detail: error.to_string(),
+            })
+        } else {
+            None
+        }
+    };
+    let runtime = state.interaction_runtime.lock().await.take();
+    // The interaction composition retains the Resource API client used by
+    // durable display children. Drop it before the resource plane's
+    // Arc::try_unwrap shutdown gate runs.
+    drop(runtime);
+    let resource_result = shutdown_resource_plane(state).await;
+    if let Some(error) = interaction_error {
+        if let Err(resource_error) = resource_result {
+            tracing::error!(
+                ?resource_error,
+                "resource-plane shutdown also failed after interaction finalization failure"
+            );
+        }
+        return Err(error);
     }
-    shutdown_resource_plane(state)
-        .await
-        .map_err(|error| TypedError::InternalIo {
-            context: "authoritative resource-plane shutdown audit".to_owned(),
-            detail: error.to_string(),
-        })
+    resource_result.map_err(|error| TypedError::InternalIo {
+        context: "authoritative resource-plane shutdown audit".to_owned(),
+        detail: error.to_string(),
+    })
 }
 
 pub async fn lock_only(options: LockOnlyOptions) -> Result<(), TypedError> {
@@ -1441,6 +3533,7 @@ impl d2bd_runtime::supervisor::state::PidfdOpener for BrokerPidfdOpener<'_> {
                 expected_start_time_ticks,
                 resource_ref: None,
                 resource_uid: None,
+                guest_execution: None,
                 tracing_span_id: None,
             }),
             Duration::from_secs(10),
@@ -1923,6 +4016,7 @@ impl d2bd_runtime::usbipd_perenv_autostart::PerEnvUsbipdSpawner for BrokerPerEnv
             execution_ref: None,
             execution_domain: None,
             user_ref: None,
+            guest_execution: None,
             workload_identity: None,
             vm_id: VmId::new(spec.vm_id.clone()),
             role_id: RoleId::new(spec.role.role_id().to_owned()),
@@ -1932,6 +4026,7 @@ impl d2bd_runtime::usbipd_perenv_autostart::PerEnvUsbipdSpawner for BrokerPerEnv
             provider_identity: None,
             template_identity: None,
             generation: None,
+            activation_input: None,
             sandbox_plan: None,
             role: d2bd_runtime::usbipd_perenv_autostart::spawn_runner_role(spec),
             bundle_runner_intent_ref: BundleOpId::new(spec.intent_id()),
@@ -2084,7 +4179,6 @@ fn handle_connection_authorized(
         KnownFeatureFlag::ExportBrokerAudit.wire_value(),
         KnownFeatureFlag::ConfiguredLaunchV1.wire_value(),
         KnownFeatureFlag::UnsafeLocalProviderV1.wire_value(),
-        KnownFeatureFlag::CutoverRunnerV1.wire_value(),
     ];
     let capabilities = advertised_capabilities
         .into_iter()
@@ -2170,12 +4264,9 @@ fn handle_connection_authorized(
                 }
             }
         }
-        // Exec takes over the connection as the long-lived owner connection.
-        // Admin (SO_PEERCRED) is verified here, BEFORE any session work; then
-        // the connection + a cheap ServerState clone move to a SPAWNED owner
-        // handler. The admission permit moves with it so the in-flight slot
-        // is held for the lifetime of the exec session, not just the read.
-        if let d2bd_runtime::wire::Request::Exec(op) = &request {
+        if let d2bd_runtime::wire::Request::Resource(resource) = &request
+            && process_resource_owner_request(&resource.value())
+        {
             if !matches!(peer.role, PeerRole::Admin) {
                 let error = TypedError::AuthzNotAdmin {
                     verb: "exec".to_owned(),
@@ -2183,44 +4274,33 @@ fn handle_connection_authorized(
                 let _ = write_json_frame(&stream, &d2bd_runtime::wire::error_frame(&error));
                 continue;
             }
-            if matches!(op, public_wire::ExecOp::Start(_)) {
-                // Recover the establishing op's envelope `opId` so the Start
-                // reply (and any establish error) echoes it for client
-                // correlation. Detached Start is also handled by the owner body,
-                // but returns after one ExecCreate instead of reserving a
-                // session slot or entering the attached FSM.
-                let first_op_id = d2bd_runtime::wire::exec_op_id(&frame);
-                let owner_state = state.clone();
-                let owner_peer = peer.clone();
-                let op = op.clone();
-                // The exec owner blocks on the PTY indefinitely; clear the
-                // request read deadline before handing off the socket.
-                set_frame_read_deadline(&stream, None);
-                let owner_permit = permit;
-                match std::thread::Builder::new()
-                    .name("d2b-exec-owner".to_owned())
-                    .spawn(move || {
-                        run_exec_owner(
-                            stream,
-                            owner_state,
-                            owner_peer,
-                            first_op_id,
-                            op,
-                            owner_permit,
-                        );
-                    }) {
-                    Ok(_) => return Ok(()),
-                    Err(err) => {
-                        return Err(TypedError::InternalIo {
-                            context: "spawn exec owner handler".to_owned(),
-                            detail: err.to_string(),
-                        });
-                    }
+            set_frame_read_deadline(&stream, None);
+            let owner_state = state.clone();
+            let owner_peer = peer.clone();
+            let owner_request = resource.value();
+            let owner_permit = permit;
+            match std::thread::Builder::new()
+                .name("d2b-process-owner".to_owned())
+                .spawn(move || {
+                    run_process_resource_owner(
+                        stream,
+                        owner_state,
+                        owner_peer,
+                        owner_request,
+                        owner_permit,
+                    );
+                }) {
+                Ok(_) => return Ok(()),
+                Err(err) => {
+                    return Err(TypedError::InternalIo {
+                        context: "spawn Process resource owner".to_owned(),
+                        detail: err.to_string(),
+                    });
                 }
             }
         }
         // Gateway display operations can perform provider/relay orchestration.
-        // Hand them off the serial accept loop just like exec owner sessions.
+        // Hand them off the serial accept loop just like Process owner sessions.
         if let d2bd_runtime::wire::Request::GatewayDisplay(op) = &request {
             if gateway_display_op_requires_admin(op) && !matches!(peer.role, PeerRole::Admin) {
                 let error = TypedError::AuthzNotAdmin {
@@ -2406,15 +4486,6 @@ fn dispatch_request_locked(
         d2bd_runtime::wire::Request::HostReconcile(req) => {
             dispatch_broker_host_reconcile_as(state, req, broker_caller_role_for_peer(peer))
         }
-        d2bd_runtime::wire::Request::HostCutover(req) => cutover::dispatch(state, peer, req),
-        d2bd_runtime::wire::Request::ReadGuestConfig(req) => {
-            dispatch_read_guest_config(state, broker_caller_role_for_peer(peer), req)
-        }
-        // Attached Exec::Start is intercepted in `handle_connection` (it takes
-        // over the connection as the owner connection and is handled on a
-        // spawned worker off the serial accept loop). Detached management ops
-        // are ordinary one-shot requests.
-        d2bd_runtime::wire::Request::Exec(op) => dispatch_exec_management(state, peer, op),
         d2bd_runtime::wire::Request::Console(op) => dispatch_console(state, peer, op),
         d2bd_runtime::wire::Request::GatewayDisplay(op) => {
             dispatch_gateway_display(state, peer, op)
@@ -2436,6 +4507,597 @@ fn dispatch_request_locked(
     }
 }
 
+fn process_resource_owner_request(request: &Value) -> bool {
+    request.get("resourceType").and_then(Value::as_str) == Some("EphemeralProcess")
+        && matches!(
+            request.get("method").and_then(Value::as_str),
+            Some("Create" | "Attach")
+        )
+        && request.get("sessionVerb").and_then(Value::as_str) == Some("attach")
+}
+
+fn process_resource_ref(request: &Value) -> Option<ResourceRef> {
+    request
+        .get("resourceRef")
+        .and_then(Value::as_str)
+        .and_then(|value| ResourceRef::parse(value).ok())
+        .filter(|resource| resource.resource_type().as_str() == "EphemeralProcess")
+        .or_else(|| {
+            request
+                .get("opId")
+                .and_then(Value::as_u64)
+                .and_then(|op_id| {
+                    ResourceRef::parse(&format!("EphemeralProcess/exec-{op_id}")).ok()
+                })
+        })
+        .or_else(|| {
+            request
+                .get("requestId")
+                .and_then(Value::as_str)
+                .and_then(|request_id| {
+                    let name = format!("EphemeralProcess/exec-{}", shell_ref_digest(&[request_id]));
+                    ResourceRef::parse(&name).ok()
+                })
+        })
+        .or_else(|| {
+            request
+                .get("name")
+                .and_then(Value::as_str)
+                .and_then(|name| ResourceRef::parse(&format!("EphemeralProcess/{name}")).ok())
+        })
+        .or_else(|| {
+            request
+                .get("command")
+                .and_then(Value::as_array)
+                .and_then(|command| {
+                    let command = command.iter().filter_map(Value::as_str).collect::<Vec<_>>();
+                    let name = format!("EphemeralProcess/exec-{}", shell_ref_digest(&command));
+                    ResourceRef::parse(&name).ok()
+                })
+        })
+}
+
+
+fn process_resource_management_request(request: &Value) -> bool {
+    request.get("resourceType").and_then(Value::as_str) == Some("EphemeralProcess")
+        && matches!(
+            request.get("method").and_then(Value::as_str),
+            Some("List" | "Status" | "Logs" | "Kill")
+        )
+}
+
+fn process_resource_detached_create_request(request: &Value) -> bool {
+    request.get("resourceType").and_then(Value::as_str) == Some("EphemeralProcess")
+        && request.get("method").and_then(Value::as_str) == Some("Create")
+        && request.get("sessionVerb").and_then(Value::as_str) != Some("attach")
+}
+
+fn map_resource_exec_error(error: exec_session::ExecOpError, vm: &str) -> TypedError {
+    match error {
+        exec_session::ExecOpError::Auth => TypedError::AuthzNotAdmin {
+            verb: "exec".to_owned(),
+        },
+        exec_session::ExecOpError::Capability | exec_session::ExecOpError::DetachedUnavailable => {
+            TypedError::RuntimeCapabilityUnsupported {
+                vm: vm.to_owned(),
+                runtime_kind: "component-session".to_owned(),
+                capability: "process-attach".to_owned(),
+                verb: "exec".to_owned(),
+            }
+        }
+        exec_session::ExecOpError::Timeout => TypedError::ProcessExecFailed {
+            kind: d2bd_runtime::typed_error::ProcessExecErrorKind::Timeout,
+        },
+        exec_session::ExecOpError::Transport => TypedError::ProcessExecFailed {
+            kind: d2bd_runtime::typed_error::ProcessExecErrorKind::Transport,
+        },
+        exec_session::ExecOpError::StaleSession | exec_session::ExecOpError::OldGeneration => {
+            TypedError::ProcessExecFailed {
+                kind: d2bd_runtime::typed_error::ProcessExecErrorKind::OldGeneration,
+            }
+        }
+        exec_session::ExecOpError::Protocol | exec_session::ExecOpError::Guest(_) => {
+            TypedError::ProcessExecFailed {
+                kind: d2bd_runtime::typed_error::ProcessExecErrorKind::Protocol,
+            }
+        }
+    }
+}
+
+fn establish_error_as_exec_error(
+    error: exec_session::ExecEstablishError,
+) -> exec_session::ExecOpError {
+    match error {
+        exec_session::ExecEstablishError::Transport => exec_session::ExecOpError::Transport,
+        exec_session::ExecEstablishError::Auth => exec_session::ExecOpError::Auth,
+        exec_session::ExecEstablishError::Protocol => exec_session::ExecOpError::Protocol,
+        exec_session::ExecEstablishError::Timeout => exec_session::ExecOpError::Timeout,
+        exec_session::ExecEstablishError::OldGeneration => exec_session::ExecOpError::OldGeneration,
+        exec_session::ExecEstablishError::Capability => exec_session::ExecOpError::Capability,
+        exec_session::ExecEstablishError::Guest(inner) => exec_session::ExecOpError::Guest(inner),
+    }
+}
+
+fn process_resource_execution_ref(request: &Value) -> Result<(String, ResourceRef), TypedError> {
+    let execution_ref = request
+        .get("executionRef")
+        .and_then(Value::as_str)
+        .ok_or_else(|| TypedError::ProcessExecFailed {
+            kind: d2bd_runtime::typed_error::ProcessExecErrorKind::Protocol,
+        })?;
+    let execution_ref =
+        ResourceRef::parse(execution_ref).map_err(|_| TypedError::ProcessExecFailed {
+            kind: d2bd_runtime::typed_error::ProcessExecErrorKind::Protocol,
+        })?;
+    let vm = execution_ref.name().as_str().to_owned();
+    if execution_ref.resource_type().as_str() != "Guest" {
+        return Err(TypedError::RuntimeCapabilityUnsupported {
+            vm,
+            runtime_kind: "component-session".to_owned(),
+            capability: "process-attach".to_owned(),
+            verb: "exec".to_owned(),
+        });
+    }
+    Ok((vm, execution_ref))
+}
+
+fn process_resource_execution_ref_from_resource(
+    state: &ServerState,
+    request: &Value,
+) -> Result<(String, ResourceRef), TypedError> {
+    let zone = request
+        .get("zoneRef")
+        .and_then(Value::as_str)
+        .and_then(|value| value.strip_prefix("Zone/"))
+        .and_then(|value| ZoneId::parse(value.to_owned()).ok())
+        .ok_or_else(|| TypedError::ProcessExecFailed {
+            kind: d2bd_runtime::typed_error::ProcessExecErrorKind::Protocol,
+        })?;
+    let process_ref = request
+        .get("resourceRef")
+        .and_then(Value::as_str)
+        .and_then(|value| ResourceRef::parse(value).ok())
+        .filter(|value| value.resource_type().as_str() == "EphemeralProcess")
+        .ok_or_else(|| TypedError::ProcessExecFailed {
+            kind: d2bd_runtime::typed_error::ProcessExecErrorKind::Protocol,
+        })?;
+    let client = state
+        .resource_plane
+        .lock()
+        .ok()
+        .and_then(|plane| plane.clone())
+        .and_then(|plane| plane.zone(&zone).ok())
+        .and_then(|runtime| runtime.process_resource_client())
+        .ok_or_else(|| TypedError::RuntimeCapabilityUnsupported {
+            vm: process_ref.name().as_str().to_owned(),
+            runtime_kind: "component-session".to_owned(),
+            capability: "process-attach".to_owned(),
+            verb: "exec".to_owned(),
+        })?;
+    let mut target = DaemonShellAuthority::shell_resource_identity(&zone, &process_ref);
+    target.resource_type = "EphemeralProcess".to_owned();
+    let mut projection = resource_wire::Projection::new();
+    projection.kind =
+        protobuf::EnumOrUnknown::new(resource_wire::ProjectionKind::PROJECTION_KIND_FULL);
+    let mut get = resource_wire::GetRequest::new();
+    get.meta = protobuf::MessageField::some(DaemonShellAuthority::shell_resource_request_meta(
+        "process-resource-resolve-target",
+    ));
+    get.target = protobuf::MessageField::some(target);
+    get.projection = protobuf::MessageField::some(projection);
+    let response = block_on_future(client.get(get));
+    let resource = response.resource.as_ref().ok_or_else(|| {
+        response
+            .error
+            .as_ref()
+            .map(|error| {
+                map_resource_exec_error(resource_error_to_op(error), process_ref.name().as_str())
+            })
+            .unwrap_or_else(|| TypedError::ProcessExecFailed {
+                kind: d2bd_runtime::typed_error::ProcessExecErrorKind::Protocol,
+            })
+    })?;
+    let envelope = d2b_contracts_resource::v3::ResourceEnvelope::from_json(
+        &resource.canonical_json,
+    )
+    .map_err(|_| TypedError::ProcessExecFailed {
+        kind: d2bd_runtime::typed_error::ProcessExecErrorKind::Protocol,
+    })?;
+    if envelope.resource_type().as_str() != "EphemeralProcess" {
+        return Err(TypedError::ProcessExecFailed {
+            kind: d2bd_runtime::typed_error::ProcessExecErrorKind::Protocol,
+        });
+    }
+    let spec = envelope.spec().base().to_canonical_bytes();
+    let spec: Value =
+        serde_json::from_slice(&spec).map_err(|_| TypedError::ProcessExecFailed {
+            kind: d2bd_runtime::typed_error::ProcessExecErrorKind::Protocol,
+        })?;
+    let execution_ref = spec
+        .get("executionRef")
+        .and_then(Value::as_str)
+        .and_then(|value| ResourceRef::parse(value).ok())
+        .filter(|value| matches!(value.resource_type().as_str(), "Host" | "Guest"))
+        .ok_or_else(|| TypedError::ProcessExecFailed {
+            kind: d2bd_runtime::typed_error::ProcessExecErrorKind::Protocol,
+        })?;
+    Ok((execution_ref.name().as_str().to_owned(), execution_ref))
+}
+
+fn dispatch_resource_exec_request(
+    state: &ServerState,
+    peer: &PeerIdentity,
+    request: &Value,
+) -> Result<Value, TypedError> {
+    if !matches!(peer.role, PeerRole::Admin) {
+        return Err(TypedError::AuthzNotAdmin {
+            verb: "exec".to_owned(),
+        });
+    }
+    let (vm, execution_ref) = if request.get("executionRef").is_some() {
+        process_resource_execution_ref(request)?
+    } else {
+        process_resource_execution_ref_from_resource(state, request)?
+    };
+    let client = exec_detached::ResourceDetachedClient::new(
+        production_process_resource_port(state, request, &execution_ref),
+        execution_ref,
+    )
+    .map_err(|error| map_resource_exec_error(error, &vm))?;
+    let process_ref = request
+        .get("resourceRef")
+        .and_then(Value::as_str)
+        .and_then(|value| ResourceRef::parse(value).ok());
+    let method = request.get("method").and_then(Value::as_str);
+    let response = match method {
+        Some("List") => {
+            let result = block_on_future(client.list())
+                .map_err(|error| map_resource_exec_error(error, &vm))?;
+            public_wire::ExecOpResponse::List(result)
+        }
+
+        Some("Status") => {
+            let process_ref = process_ref.ok_or_else(|| TypedError::ProcessExecFailed {
+                kind: d2bd_runtime::typed_error::ProcessExecErrorKind::Protocol,
+            })?;
+            let result = block_on_future(client.status(&process_ref))
+                .map_err(|error| map_resource_exec_error(error, &vm))?;
+            public_wire::ExecOpResponse::Status(result)
+        }
+        Some("Logs") => {
+            let process_ref = process_ref.ok_or_else(|| TypedError::ProcessExecFailed {
+                kind: d2bd_runtime::typed_error::ProcessExecErrorKind::Protocol,
+            })?;
+            let stdout_offset = request.get("stdoutOffset").and_then(Value::as_u64);
+            let stderr_offset = request.get("stderrOffset").and_then(Value::as_u64);
+            let max_len = request.get("maxLen").and_then(Value::as_u64);
+            let result =
+                block_on_future(client.logs(&process_ref, stdout_offset, stderr_offset, max_len))
+                    .map_err(|error| map_resource_exec_error(error, &vm))?;
+            public_wire::ExecOpResponse::Logs(result)
+        }
+        Some("Kill") => {
+            let process_ref = process_ref.ok_or_else(|| TypedError::ProcessExecFailed {
+                kind: d2bd_runtime::typed_error::ProcessExecErrorKind::Protocol,
+            })?;
+            let result = block_on_future(client.kill(&process_ref))
+                .map_err(|error| map_resource_exec_error(error, &vm))?;
+            public_wire::ExecOpResponse::Kill(result)
+        }
+        _ => {
+            return Err(TypedError::ProcessExecFailed {
+                kind: d2bd_runtime::typed_error::ProcessExecErrorKind::Protocol,
+            });
+        }
+    };
+    Ok(d2bd_runtime::wire::exec_response(&response))
+}
+
+fn dispatch_resource_exec_create_request(
+    state: &ServerState,
+    peer: &PeerIdentity,
+    request: &Value,
+) -> Result<Value, TypedError> {
+    if !matches!(peer.role, PeerRole::Admin | PeerRole::Launcher) {
+        return Err(TypedError::AuthzNotAdmin {
+            verb: "exec".to_owned(),
+        });
+    }
+    let (vm, execution_ref) = process_resource_execution_ref(request)?;
+    let spec = exec_session::ExecStartSpec {
+        vm: vm.clone(),
+        request_id: request
+            .get("opId")
+            .and_then(Value::as_u64)
+            .map(|value| value.to_string())
+            .or_else(|| {
+                request
+                    .get("requestId")
+                    .and_then(Value::as_str)
+                    .map(ToOwned::to_owned)
+            }),
+        argv: request
+            .get("argv")
+            .and_then(Value::as_array)
+            .map(|argv| {
+                argv.iter()
+                    .filter_map(Value::as_str)
+                    .map(ToOwned::to_owned)
+                    .collect()
+            })
+            .or_else(|| {
+                request
+                    .get("command")
+                    .and_then(Value::as_array)
+                    .map(|argv| {
+                        argv.iter()
+                            .filter_map(Value::as_str)
+                            .map(ToOwned::to_owned)
+                            .collect()
+                    })
+            })
+            .unwrap_or_default(),
+        tty: false,
+        detached: true,
+        env: request
+            .get("env")
+            .and_then(Value::as_array)
+            .map(|env| {
+                env.iter()
+                    .filter_map(Value::as_str)
+                    .filter_map(|value| value.split_once('='))
+                    .map(|(key, value)| (key.to_owned(), value.to_owned()))
+                    .collect()
+            })
+            .unwrap_or_default(),
+        cwd: request
+            .get("cwd")
+            .and_then(Value::as_str)
+            .map(ToOwned::to_owned),
+        term_size: None,
+    };
+    let client = exec_detached::ResourceDetachedClient::new(
+        production_process_resource_port(state, request, &execution_ref),
+        execution_ref,
+    )
+    .map_err(|error| map_resource_exec_error(error, &vm))?;
+    let result = block_on_future(client.create(&spec))
+        .map_err(|error| map_resource_exec_error(error, &vm))?;
+    Ok(d2bd_runtime::wire::exec_response(
+        &public_wire::ExecOpResponse::DetachedCreate(result),
+    ))
+}
+
+fn dispatch_config_nixos_service_request(
+    state: &ServerState,
+    peer: &PeerIdentity,
+    request: &Value,
+) -> Result<Value, TypedError> {
+    if !matches!(peer.role, PeerRole::Admin) {
+        return Err(TypedError::AuthzNotAdmin {
+            verb: "config-nixos".to_owned(),
+        });
+    }
+    if request.get("sessionVerb").and_then(Value::as_str) != Some("invoke") {
+        return Err(TypedError::WireInvalidFrame {
+            detail: "config-nixos service requires the invoke session verb".to_owned(),
+        });
+    }
+    let zone = request
+        .get("zoneRef")
+        .and_then(Value::as_str)
+        .and_then(|value| value.strip_prefix("Zone/"))
+        .and_then(|value| ZoneId::parse(value).ok())
+        .ok_or_else(|| TypedError::WireInvalidFrame {
+            detail: "config-nixos request has an invalid Zone reference".to_owned(),
+        })?;
+    let method = request
+        .get("method")
+        .and_then(Value::as_str)
+        .ok_or_else(|| TypedError::WireInvalidFrame {
+            detail: "config-nixos request is missing method".to_owned(),
+        })?;
+    let operation = d2b_provider_config_nixos::ConfigOperation::ALL
+        .into_iter()
+        .find(|candidate| candidate.as_str() == method)
+        .ok_or_else(|| TypedError::WireInvalidFrame {
+            detail: "config-nixos service operation is not supported on the operator route"
+                .to_owned(),
+        })?;
+    let payload = config_nixos_payload(request)?;
+    let service = d2b_provider_config_nixos::ConfigService;
+    service
+        .validate_operation(operation, &payload)
+        .map_err(config_nixos_wire_error)?;
+    let guest_ref = payload
+        .get("guestRef")
+        .and_then(Value::as_str)
+        .and_then(|value| ResourceRef::parse(value).ok())
+        .filter(|resource| resource.resource_type().as_str() == "Guest")
+        .ok_or_else(|| TypedError::WireInvalidFrame {
+            detail: "config-nixos request has an invalid Guest reference".to_owned(),
+        })?;
+    let plane = state
+        .resource_plane
+        .lock()
+        .map_err(|_| TypedError::InternalConfig {
+            detail: "resource plane unavailable".to_owned(),
+        })?
+        .clone()
+        .ok_or_else(|| TypedError::InternalConfig {
+            detail: "resource plane unavailable".to_owned(),
+        })?;
+    let runtime = plane
+        .zone(&zone)
+        .map_err(|_| TypedError::InternalConfig {
+            detail: "config-nixos Zone runtime unavailable".to_owned(),
+        })?;
+    let guest_lookup = json!({
+        "zoneRef": format!("Zone/{}", zone.as_str()),
+        "service": "d2b.resource.v3",
+        "method": "Get",
+        "resourceRef": guest_ref.to_canonical_string(),
+    });
+    let guest = block_on_future(runtime.dispatch_cli_request(&guest_lookup)).map_err(|_| {
+        TypedError::InternalConfig {
+            detail: "config-nixos Guest lookup failed".to_owned(),
+        }
+    })?;
+    if guest.get("kind").is_some() {
+        return Err(TypedError::AuthzNotAdmin {
+            verb: "config-nixos Guest is not in the requested Zone".to_owned(),
+        });
+    }
+
+    match operation {
+        d2b_provider_config_nixos::ConfigOperation::ReadGuestConfig => {
+            let sync: d2b_provider_config_nixos::ConfigSyncRequest =
+                serde_json::from_value(payload).map_err(|_| TypedError::WireInvalidFrame {
+                    detail: "config-nixos read request is malformed".to_owned(),
+                })?;
+            let response = read_guest_config_typed(
+                state,
+                &zone,
+                sync.guest_ref.name().as_str(),
+            )?;
+            serde_json::to_value(response).map_err(|_| TypedError::WireInvalidFrame {
+                detail: "config-nixos response encoding failed".to_owned(),
+            })
+        }
+        d2b_provider_config_nixos::ConfigOperation::Stage => {
+            let stage: d2b_provider_config_nixos::ConfigStageRequest =
+                serde_json::from_value(payload).map_err(|_| TypedError::WireInvalidFrame {
+                    detail: "config-nixos stage request is malformed".to_owned(),
+                })?;
+            let response = state
+                .config_staging
+                .lock()
+                .map_err(|_| TypedError::InternalConfig {
+                    detail: "config staging state unavailable".to_owned(),
+                })?
+                .stage(
+                    d2b_provider_config_nixos::ConfigCaller::Admin,
+                    &zone,
+                    &stage,
+                )
+                .map_err(config_nixos_wire_error)?;
+            serde_json::to_value(response).map_err(|_| TypedError::WireInvalidFrame {
+                detail: "config-nixos stage response encoding failed".to_owned(),
+            })
+        }
+        d2b_provider_config_nixos::ConfigOperation::Diff => {
+            let diff: d2b_provider_config_nixos::ConfigDiffRequest =
+                serde_json::from_value(payload).map_err(|_| TypedError::WireInvalidFrame {
+                    detail: "config-nixos diff request is malformed".to_owned(),
+                })?;
+            let response = state
+                .config_staging
+                .lock()
+                .map_err(|_| TypedError::InternalConfig {
+                    detail: "config staging state unavailable".to_owned(),
+                })?
+                .diff(
+                    d2b_provider_config_nixos::ConfigCaller::Admin,
+                    &zone,
+                    &diff,
+                )
+                .map_err(config_nixos_wire_error)?;
+            serde_json::to_value(response).map_err(|_| TypedError::WireInvalidFrame {
+                detail: "config-nixos diff response encoding failed".to_owned(),
+            })
+        }
+        d2b_provider_config_nixos::ConfigOperation::Approve => {
+            let approve: d2b_provider_config_nixos::ConfigApproveRequest =
+                serde_json::from_value(payload).map_err(|_| TypedError::WireInvalidFrame {
+                    detail: "config-nixos approve request is malformed".to_owned(),
+                })?;
+            let response = state
+                .config_staging
+                .lock()
+                .map_err(|_| TypedError::InternalConfig {
+                    detail: "config staging state unavailable".to_owned(),
+                })?
+                .approve(
+                    d2b_provider_config_nixos::ConfigCaller::Admin,
+                    &zone,
+                    &approve,
+                )
+                .map_err(config_nixos_wire_error)?;
+            serde_json::to_value(response).map_err(|_| TypedError::WireInvalidFrame {
+                detail: "config-nixos approve response encoding failed".to_owned(),
+            })
+        }
+        d2b_provider_config_nixos::ConfigOperation::Reject => {
+            let reject: d2b_provider_config_nixos::ConfigRejectRequest =
+                serde_json::from_value(payload).map_err(|_| TypedError::WireInvalidFrame {
+                    detail: "config-nixos reject request is malformed".to_owned(),
+                })?;
+            let response = state
+                .config_staging
+                .lock()
+                .map_err(|_| TypedError::InternalConfig {
+                    detail: "config staging state unavailable".to_owned(),
+                })?
+                .reject(
+                    d2b_provider_config_nixos::ConfigCaller::Admin,
+                    &zone,
+                    &reject,
+                )
+                .map_err(config_nixos_wire_error)?;
+            serde_json::to_value(response).map_err(|_| TypedError::WireInvalidFrame {
+                detail: "config-nixos reject response encoding failed".to_owned(),
+            })
+        }
+        d2b_provider_config_nixos::ConfigOperation::Status => {
+            let status: d2b_provider_config_nixos::ConfigStatusRequest =
+                serde_json::from_value(payload).map_err(|_| TypedError::WireInvalidFrame {
+                    detail: "config-nixos status request is malformed".to_owned(),
+                })?;
+            let response = state
+                .config_staging
+                .lock()
+                .map_err(|_| TypedError::InternalConfig {
+                    detail: "config staging state unavailable".to_owned(),
+                })?
+                .status(
+                    d2b_provider_config_nixos::ConfigCaller::Admin,
+                    &zone,
+                    &status,
+                )
+                .map_err(config_nixos_wire_error)?;
+            serde_json::to_value(response).map_err(|_| TypedError::WireInvalidFrame {
+                detail: "config-nixos status response encoding failed".to_owned(),
+            })
+        }
+    }
+}
+
+fn config_nixos_payload(request: &Value) -> Result<Value, TypedError> {
+    let mut payload = request
+        .as_object()
+        .ok_or_else(|| TypedError::WireInvalidFrame {
+            detail: "config-nixos request must be an object".to_owned(),
+        })?
+        .clone();
+    for key in [
+        "type",
+        "method",
+        "zoneRef",
+        "schemaVersion",
+        "service",
+        "sessionVerb",
+    ] {
+        payload.remove(key);
+    }
+    Ok(Value::Object(payload))
+}
+
+fn config_nixos_wire_error(error: d2b_provider_config_nixos::ConfigError) -> TypedError {
+    TypedError::WireInvalidFrame {
+        detail: error.code().to_owned(),
+    }
+}
+
 fn dispatch_resource_request(
     state: &ServerState,
     peer: &PeerIdentity,
@@ -2446,39 +5108,22 @@ fn dispatch_resource_request(
             resource_runtime::ResourceRuntimeError::AuthenticationUnavailable,
         ));
     }
-    if request.method() == Some("HostCutover") {
-        if !matches!(peer.role, PeerRole::Admin) {
-            return Err(TypedError::AuthzNotAdmin {
-                verb: "hostCutover".to_owned(),
-            });
-        }
-        let mut value = request.value();
-        if let Value::Object(object) = &mut value {
-            for key in [
-                "type",
-                "method",
-                "zoneRef",
-                "schemaVersion",
-                "service",
-                "sessionVerb",
-            ] {
-                object.remove(key);
-            }
-        }
-        let cutover: public_wire::HostCutoverRequest =
-            serde_json::from_value(value).map_err(|error| TypedError::WireInvalidFrame {
-                detail: format!("hostCutover request malformed: {error}"),
-            })?;
-        let operation = cutover.operation;
-        let result = cutover::dispatch(state, peer, cutover);
-        if let Err(error) = &result {
-            tracing::warn!(
-                cutover_operation = ?operation,
-                error_kind = error.kind(),
-                "host cutover resource dispatch refused"
-            );
-        }
-        return result;
+    if request.value().get("service").and_then(Value::as_str)
+        == Some(d2b_provider_config_nixos::SERVICE_PACKAGE)
+    {
+        return dispatch_config_nixos_service_request(state, peer, &request.value());
+    }
+    if matches!(
+        request.method(),
+        Some("DeviceUsbAttach" | "DeviceUsbDetach" | "DeviceUsbProbe")
+    ) {
+        return dispatch_device_usb_resource_request(state, peer, &request.value());
+    }
+    if process_resource_detached_create_request(&request.value()) {
+        return dispatch_resource_exec_create_request(state, peer, &request.value());
+    }
+    if process_resource_management_request(&request.value()) {
+        return dispatch_resource_exec_request(state, peer, &request.value());
     }
     let typed_shell = typed_shell_resource_request(&request.value());
     let runtime = match if typed_shell {
@@ -2551,6 +5196,134 @@ fn dispatch_resource_request(
     match block_on_future(runtime.dispatch_public_cli_request(&request.value(), peer.uid)) {
         Ok(value) => Ok(value),
         Err(error) => Ok(resource_runtime_error_frame(error)),
+    }
+}
+
+fn dispatch_device_usb_resource_request(
+    state: &ServerState,
+    peer: &PeerIdentity,
+    request: &Value,
+) -> Result<Value, TypedError> {
+    let method = request
+        .get("method")
+        .and_then(Value::as_str)
+        .ok_or_else(|| TypedError::WireInvalidFrame {
+            detail: "Device USB request is missing method".to_owned(),
+        })?;
+    if method == "DeviceUsbProbe" {
+        return dispatch_broker_usbip_probe(state, broker_caller_role_for_peer(peer));
+    }
+
+    let device_ref = request
+        .get("resourceRef")
+        .and_then(Value::as_str)
+        .and_then(|value| ResourceRef::parse(value).ok())
+        .ok_or_else(|| TypedError::WireInvalidFrame {
+            detail: "Device USB request requires a Device resourceRef".to_owned(),
+        })?;
+    if device_ref.resource_type().as_str() != "Device" {
+        return Err(TypedError::WireInvalidFrame {
+            detail: "Device USB request resourceRef must name Device".to_owned(),
+        });
+    }
+    let verb = match method {
+        "DeviceUsbAttach" => "usb attach",
+        "DeviceUsbDetach" => "usb detach",
+        _ => {
+            return Err(TypedError::WireUnsupportedRequest {
+                request_type: method.to_owned(),
+            });
+        }
+    };
+    let runtime = resolve_resource_runtime(state, request).map_err(|_error| {
+        TypedError::RuntimeCapabilityUnsupported {
+            vm: device_ref.name().as_str().to_owned(),
+            runtime_kind: "component-session".to_owned(),
+            capability: "usbip-guest-import".to_owned(),
+            verb: verb.to_owned(),
+        }
+    })?;
+    let device = block_on_future(runtime.dispatch_public_cli_request(
+        &json!({
+            "method": "Get",
+            "service": "d2b.resource.v3",
+            "zoneRef": request.get("zoneRef").cloned().unwrap_or(Value::Null),
+            "resourceRef": device_ref.to_canonical_string(),
+        }),
+        peer.uid,
+    ))
+    .map_err(|_| TypedError::RuntimeCapabilityUnsupported {
+        vm: device_ref.name().as_str().to_owned(),
+        runtime_kind: "component-session".to_owned(),
+        capability: "usbip-guest-import".to_owned(),
+        verb: verb.to_owned(),
+    })?;
+    if device
+        .get("type")
+        .and_then(Value::as_str)
+        .is_some_and(|kind| kind == "error")
+    {
+        return Ok(device);
+    }
+    if device.pointer("/spec/providerRef").and_then(Value::as_str)
+        != Some("Provider/device-usbip")
+    {
+        return Err(TypedError::RuntimeCapabilityUnsupported {
+            vm: device_ref.name().as_str().to_owned(),
+            runtime_kind: "component-session".to_owned(),
+            capability: "usbip-guest-import".to_owned(),
+            verb: verb.to_owned(),
+        });
+    }
+    let owner_ref = device
+        .pointer("/metadata/ownerRef")
+        .and_then(Value::as_str)
+        .and_then(|value| ResourceRef::parse(value).ok())
+        .filter(|value| value.resource_type().as_str() == "Guest")
+        .ok_or_else(|| TypedError::RuntimeCapabilityUnsupported {
+            vm: device_ref.name().as_str().to_owned(),
+            runtime_kind: "component-session".to_owned(),
+            capability: "usbip-guest-import".to_owned(),
+            verb: verb.to_owned(),
+        })?;
+    let bus_id = request
+        .get("busId")
+        .or_else(|| request.get("busid"))
+        .and_then(Value::as_str)
+        .ok_or_else(|| TypedError::WireInvalidFrame {
+            detail: "Device USB request requires busId".to_owned(),
+        })?;
+    let flags = public_wire::MutationFlags {
+        dry_run: request
+            .get("dryRun")
+            .and_then(Value::as_bool)
+            .unwrap_or(false),
+        apply: request
+            .get("apply")
+            .and_then(Value::as_bool)
+            .unwrap_or(false),
+        json: false,
+    };
+    match method {
+        "DeviceUsbAttach" => dispatch_broker_usbip_bind(
+            state,
+            broker_caller_role_for_peer(peer),
+            public_wire::UsbipBindCliRequest {
+                vm: owner_ref.name().as_str().to_owned(),
+                bus_id: bus_id.to_owned(),
+                flags,
+            },
+        ),
+        "DeviceUsbDetach" => dispatch_broker_usbip_unbind(
+            state,
+            broker_caller_role_for_peer(peer),
+            public_wire::UsbipUnbindCliRequest {
+                vm: owner_ref.name().as_str().to_owned(),
+                bus_id: bus_id.to_owned(),
+                flags,
+            },
+        ),
+        _ => unreachable!("closed Device USB method match"),
     }
 }
 
@@ -3975,26 +6748,26 @@ fn list_all_typed_shell_sessions(
 fn typed_shell_resource_error_frame(error: &TypedError) -> Value {
     use d2b_contracts_resource::v3::ResourceErrorKind;
     use d2bd_runtime::typed_error::{
-        GuestControlShellErrorKind as Guest, UnsafeLocalShellErrorKind as UnsafeHost,
+        ComponentSessionShellErrorKind as Guest, UnsafeLocalShellErrorKind as UnsafeHost,
     };
 
     let kind = match error {
         TypedError::AuthzNotAdmin { .. } => ResourceErrorKind::AuthorizationDenied,
         TypedError::WorkloadTargetNotFound { .. }
-        | TypedError::GuestControlShellFailed {
+        | TypedError::ComponentSessionShellFailed {
             kind: Guest::NotFound | Guest::StaleSession,
         }
         | TypedError::UnsafeLocalShellFailed {
             kind: UnsafeHost::NotFound | UnsafeHost::StaleSession,
         } => ResourceErrorKind::ResourceNotFound,
-        TypedError::GuestControlShellFailed {
+        TypedError::ComponentSessionShellFailed {
             kind: Guest::Capability,
         }
         | TypedError::UnsafeLocalShellFailed {
             kind: UnsafeHost::ShellUnavailable,
         } => ResourceErrorKind::UnsupportedCapability,
         TypedError::RuntimeCapabilityUnsupported { .. } => ResourceErrorKind::UnsupportedCapability,
-        TypedError::GuestControlShellFailed {
+        TypedError::ComponentSessionShellFailed {
             kind: Guest::Transport,
         }
         | TypedError::UnsafeLocalShellFailed {
@@ -4011,19 +6784,19 @@ fn typed_shell_resource_error_frame(error: &TypedError) -> Value {
                 | UnsafeHost::ProxyUnavailable
                 | UnsafeHost::FirstClientTimeout,
         } => ResourceErrorKind::ResourceProviderUnavailable,
-        TypedError::GuestControlShellFailed {
+        TypedError::ComponentSessionShellFailed {
             kind: Guest::Timeout,
         }
         | TypedError::UnsafeLocalShellFailed {
             kind: UnsafeHost::Timeout,
         } => ResourceErrorKind::Timeout,
-        TypedError::GuestControlShellFailed {
+        TypedError::ComponentSessionShellFailed {
             kind: Guest::Capacity,
         }
         | TypedError::UnsafeLocalShellFailed {
             kind: UnsafeHost::QueueFull,
         } => ResourceErrorKind::Backpressure,
-        TypedError::GuestControlShellFailed {
+        TypedError::ComponentSessionShellFailed {
             kind: Guest::AlreadyAttached,
         }
         | TypedError::UnsafeLocalShellFailed {
@@ -4042,6 +6815,68 @@ fn typed_shell_resource_error_frame(error: &TypedError) -> Value {
             "remediation": "inspect the ShellSession Provider state and retry after its authoritative runtime is ready",
         }
     })
+}
+
+fn write_named_process_stream_error(
+    stream: &Socket,
+    request_id: u64,
+    error: TypedError,
+) -> Result<(), TypedError> {
+    use d2bd_runtime::typed_error::{
+        ComponentSessionShellErrorKind as Guest, UnsafeLocalShellErrorKind as UnsafeHost,
+    };
+    let kind = match &error {
+        TypedError::AuthzNotAdmin { .. } => public_wire::NamedProcessStreamErrorKind::Authorization,
+        TypedError::ComponentSessionShellFailed {
+            kind: Guest::StaleSession,
+        }
+        | TypedError::UnsafeLocalShellFailed {
+            kind: UnsafeHost::StaleSession,
+        } => public_wire::NamedProcessStreamErrorKind::StaleSession,
+        TypedError::ComponentSessionShellFailed {
+            kind: Guest::NotFound,
+        }
+        | TypedError::UnsafeLocalShellFailed {
+            kind: UnsafeHost::NotFound,
+        } => public_wire::NamedProcessStreamErrorKind::NotFound,
+        TypedError::ComponentSessionShellFailed {
+            kind: Guest::Capacity,
+        }
+        | TypedError::UnsafeLocalShellFailed {
+            kind: UnsafeHost::QueueFull,
+        } => public_wire::NamedProcessStreamErrorKind::Backpressure,
+        TypedError::ComponentSessionShellFailed {
+            kind: Guest::Timeout,
+        }
+        | TypedError::UnsafeLocalShellFailed {
+            kind: UnsafeHost::Timeout,
+        } => public_wire::NamedProcessStreamErrorKind::Timeout,
+        TypedError::ComponentSessionShellFailed {
+            kind: Guest::Transport,
+        }
+        | TypedError::UnsafeLocalShellFailed {
+            kind:
+                UnsafeHost::HelperUnavailable
+                | UnsafeHost::HelperStale
+                | UnsafeHost::UserManagerUnavailable
+                | UnsafeHost::EnvironmentInvalid
+                | UnsafeHost::ExecutableUnavailable
+                | UnsafeHost::ScopeCreateFailed
+                | UnsafeHost::ScopeIdentityMismatch
+                | UnsafeHost::GraphicalSessionInactive
+                | UnsafeHost::WaylandUnavailable
+                | UnsafeHost::ProxyUnavailable
+                | UnsafeHost::FirstClientTimeout,
+        } => public_wire::NamedProcessStreamErrorKind::Disconnected,
+        _ => public_wire::NamedProcessStreamErrorKind::Protocol,
+    };
+    let response = public_wire::NamedProcessStreamResponseFrame::new(
+        request_id,
+        public_wire::NamedProcessStreamResponse::Error(public_wire::NamedProcessStreamError {
+            kind,
+        }),
+    );
+    write_json_frame(stream, &response)
 }
 
 fn dispatch_workload(
@@ -4391,15 +7226,6 @@ fn dispatch_local_vm_launcher(
     resolved: &workload_dispatch::ResolvedExec,
 ) -> Result<(public_wire::LauncherExecDisposition, Option<String>), TypedError> {
     ensure_vm_runtime_capability(state, vm, RuntimeCapabilityGate::Exec, "launch")?;
-    let request = public_wire::ExecStartArgs {
-        vm: vm.to_owned(),
-        argv: resolved.argv.as_slice().to_vec(),
-        tty: false,
-        detached: true,
-        env: None,
-        cwd: None,
-        term_size: None,
-    };
     let mut fingerprint = Sha256::new();
     fingerprint.update(requester_uid.to_le_bytes());
     fingerprint.update(operation_id.as_str().as_bytes());
@@ -4409,12 +7235,35 @@ fn dispatch_local_vm_launcher(
         "workload-launch:{}",
         hex_bytes(&fingerprint.finalize()[..16])
     );
-    let result = exec_detached::create_idempotent_as(
-        state,
-        &request,
-        request_id,
-        BrokerCallerRole::LauncherUid { uid: requester_uid },
-    )?;
+    let spec = exec_session::ExecStartSpec {
+        vm: vm.to_owned(),
+        request_id: Some(request_id.clone()),
+        argv: resolved.argv.as_slice().to_vec(),
+        tty: false,
+        detached: true,
+        env: Vec::new(),
+        cwd: None,
+        term_size: None,
+    };
+    let execution_ref = ResourceRef::parse(&format!("Guest/{vm}")).map_err(|_| {
+        TypedError::RuntimeCapabilityUnsupported {
+            vm: vm.to_owned(),
+            runtime_kind: "component-session".to_owned(),
+            capability: "process-create".to_owned(),
+            verb: "launch".to_owned(),
+        }
+    })?;
+    let resource_request = serde_json::json!({
+        "zoneRef": "Zone/local-root",
+        "requestId": request_id,
+    });
+    let client = exec_detached::ResourceDetachedClient::new(
+        production_process_resource_port(state, &resource_request, &execution_ref),
+        execution_ref,
+    )
+    .map_err(|error| map_resource_exec_error(error, vm))?;
+    let result = block_on_future(client.create(&spec))
+        .map_err(|error| map_resource_exec_error(error, vm))?;
     emit_detached_create_audit(state, requester_uid, vm, &result.exec_id);
     Ok((
         public_wire::LauncherExecDisposition::Committed,
@@ -4649,6 +7498,9 @@ mod workload_observability_tests {
             interaction_listeners: Arc::new(Mutex::new(None)),
             typed_shell_session_targets: d2bd_runtime::typed_shell_targets::new_cache(),
             zone_coordinator: d2bd_runtime::zone_authority::new_coordinator(),
+            config_staging: Arc::new(Mutex::new(Default::default())),
+            guest_component_sessions: Arc::new(tokio::sync::Mutex::new(HashMap::new())),
+        guest_component_session_locks: Arc::new(tokio::sync::Mutex::new(HashMap::new())),
             console_sessions: Arc::new(Mutex::new(console_session::ConsoleSessionTable::default())),
             security_key_sessions: Arc::new(parking_lot::Mutex::new(
                 crate::security_key::SkSessionTable::default(),
@@ -6128,59 +8980,6 @@ impl IdSource for DaemonGatewayIds {
     }
 }
 
-fn dispatch_exec_management(
-    state: &ServerState,
-    peer: &PeerIdentity,
-    op: public_wire::ExecOp,
-) -> Result<Value, TypedError> {
-    if let Some(vm) = exec_op_vm(&op) {
-        ensure_vm_runtime_capability(state, vm, RuntimeCapabilityGate::Exec, "exec")?;
-    }
-    let response = match op {
-        public_wire::ExecOp::List(args) => public_wire::ExecOpResponse::List(
-            exec_detached::list_as(state, &args, broker_caller_role_for_peer(peer))?,
-        ),
-        public_wire::ExecOp::Logs(args) => public_wire::ExecOpResponse::Logs(
-            exec_detached::logs_as(state, &args, broker_caller_role_for_peer(peer))?,
-        ),
-        public_wire::ExecOp::Status(args) => public_wire::ExecOpResponse::Status(
-            exec_detached::status_as(state, &args, broker_caller_role_for_peer(peer))?,
-        ),
-        public_wire::ExecOp::Kill(args) => {
-            let result = exec_detached::kill_as(state, &args, broker_caller_role_for_peer(peer));
-            emit_detached_kill_audit(state, peer.uid, &args.vm, result.as_ref());
-            public_wire::ExecOpResponse::Kill(result?)
-        }
-        public_wire::ExecOp::Start(_)
-        | public_wire::ExecOp::WriteStdin(_)
-        | public_wire::ExecOp::ReadOutput(_)
-        | public_wire::ExecOp::Signal(_)
-        | public_wire::ExecOp::Resize(_)
-        | public_wire::ExecOp::Wait(_)
-        | public_wire::ExecOp::Close(_) => {
-            return Err(TypedError::GuestControlExecFailed {
-                kind: d2bd_runtime::typed_error::GuestControlExecErrorKind::Protocol,
-            });
-        }
-    };
-    Ok(d2bd_runtime::wire::exec_response(&response))
-}
-
-fn exec_op_vm(op: &public_wire::ExecOp) -> Option<&str> {
-    match op {
-        public_wire::ExecOp::Start(args) => Some(args.vm.as_str()),
-        public_wire::ExecOp::List(args) => Some(args.vm.as_str()),
-        public_wire::ExecOp::Logs(args) => Some(args.vm.as_str()),
-        public_wire::ExecOp::Status(args) => Some(args.vm.as_str()),
-        public_wire::ExecOp::Kill(args) => Some(args.vm.as_str()),
-        public_wire::ExecOp::WriteStdin(_)
-        | public_wire::ExecOp::ReadOutput(_)
-        | public_wire::ExecOp::Signal(_)
-        | public_wire::ExecOp::Resize(_)
-        | public_wire::ExecOp::Wait(_)
-        | public_wire::ExecOp::Close(_) => None,
-    }
-}
 
 fn dispatch_keys_list(state: &ServerState) -> Result<Value, TypedError> {
     let bundle: Bundle = load_json(&state.config.artifacts.bundle_path)?;
@@ -6273,15 +9072,24 @@ fn build_known_hosts_entry(entry: &ManifestVmEntry) -> Result<Option<String>, Ty
     Ok(Some(format!("{static_ip} {host_public_key}")))
 }
 
+fn usbip_guest_import_unavailable(vm: &str, verb: &str) -> TypedError {
+    TypedError::RuntimeCapabilityUnsupported {
+        vm: vm.to_owned(),
+        runtime_kind: "component-session".to_owned(),
+        capability: "usbip-guest-import".to_owned(),
+        verb: verb.to_owned(),
+    }
+}
+
 fn dispatch_broker_usbip_bind(
     state: &ServerState,
     caller_role: BrokerCallerRole,
     request: public_wire::UsbipBindCliRequest,
 ) -> Result<Value, TypedError> {
     const VERB: &str = "usb attach";
-    if let Some(response) = mutating_verb_preflight(VERB, &request.flags, Some(request.vm.as_str()))
-    {
-        return Ok(response);
+    if !request.flags.dry_run && !request.flags.apply {
+        return Ok(mutating_verb_preflight(VERB, &request.flags, Some(request.vm.as_str()))
+            .expect("missing mutation flags produce a preflight response"));
     }
     let resolver = load_bundle_resolver(state)?;
     ensure_manifest_entry_runtime_capability(
@@ -6291,153 +9099,17 @@ fn dispatch_broker_usbip_bind(
         VERB,
     )?;
     if vm_is_qemu_media(&resolver, &request.vm)? {
+        if let Some(response) =
+            mutating_verb_preflight(VERB, &request.flags, Some(request.vm.as_str()))
+        {
+            return Ok(response);
+        }
         return dispatch_broker_qemu_media_attach(state, request, caller_role);
     }
     if let Err(response) = validate_usbip_bus_id_for_daemon(VERB, &request.bus_id) {
         return Ok(response);
     }
-
-    // Fail-closed pre-flight checks for explicit attach:
-    //  1. Sysfs presence: reject if the device is not physically present.
-    //  2. Active claim exclusivity: reject if another VM already holds this busid.
-    // Both checks run before any broker call or firewall mutation.
-    check_sysfs_busid_present(&request.bus_id, VERB)?;
-    check_usbip_claim_exclusivity(&request.bus_id, &request.vm, VERB)?;
-
-    let Some(manifest_entry) = resolver.find_manifest_vm(&request.vm) else {
-        return Ok(daemon_failure_response(
-            VERB,
-            format!("VM '{}' is not present in the trusted manifest", request.vm),
-        ));
-    };
-    let manifest_entry = serde_json::to_value(manifest_entry).unwrap_or(Value::Null);
-    if let Err(response) = ensure_usbip_attach_vm_is_running(
-        state,
-        &request.vm,
-        &request.bus_id,
-        VERB,
-        &manifest_entry,
-        resolver.find_process_vm(&request.vm),
-    ) {
-        return Ok(response);
-    }
-    if let Err(summary) = run_guest_usbip_import(
-        state,
-        &resolver,
-        &request.vm,
-        &request.bus_id,
-        caller_role.clone(),
-        d2bd_runtime::guest_control_health::GuestUsbipAction::Detach,
-    ) {
-        return Ok(daemon_failure_response(VERB, summary));
-    }
-
-    // Determine attach path: declared (static bundle intent) vs. explicit.
-    let vm_entry = resolver.find_manifest_vm(&request.vm);
-    let env = vm_entry.and_then(|e| e.env.as_deref()).unwrap_or("");
-    let firewall_id = intent_id_usbip_firewall(env, &request.bus_id);
-    let bind_id = intent_id_usbip_bind(env, &request.vm, &request.bus_id);
-    let has_declared_intents = resolver.find_usbip_firewall_intent(&firewall_id).is_some()
-        && resolver.find_usbip_bind_intent(&bind_id).is_some();
-
-    if has_declared_intents {
-        // Declared path: use bundle-ref broker ops (existing behavior).
-        let bundle_usbip_bind_intent_ref = BundleOpId::new(bind_id);
-        if let Err(response) = dispatch_broker_ack_request_as(
-            state,
-            VERB,
-            "UsbipBind",
-            BrokerRequest::UsbipBind(BrokerUsbipBindRequest {
-                bundle_usbip_bind_intent_ref,
-                tracing_span_id: None,
-            }),
-            caller_role.clone(),
-        ) {
-            return Ok(response);
-        }
-        if let Err(response) = ensure_usbipd_env_ready_for_attach(
-            state,
-            &resolver,
-            &request.vm,
-            &request.bus_id,
-            VERB,
-            None,
-        ) {
-            compensate_usbip_bind_failure(state, &resolver, &request.vm, &request.bus_id, VERB);
-            return Ok(response);
-        }
-        if let Err(response) = dispatch_broker_ack_request_as(
-            state,
-            VERB,
-            "UsbipProxyReconcile",
-            BrokerRequest::UsbipProxyReconcile(BrokerUsbipProxyReconcileRequest {
-                scope_id: ScopeId::new(format!("vm:{}", request.vm)),
-                tracing_span_id: None,
-            }),
-            caller_role.clone(),
-        ) {
-            compensate_usbip_bind_failure(state, &resolver, &request.vm, &request.bus_id, VERB);
-            return Ok(response);
-        }
-    } else {
-        // Explicit path: no static bundle intents required.
-        let host_uplink_ip = vm_entry
-            .and_then(|e| e.usbipd_host_ip.as_deref())
-            .unwrap_or("")
-            .to_owned();
-        let net_uplink_ip = vm_entry
-            .and_then(|e| e.static_ip.as_deref())
-            .unwrap_or("")
-            .to_owned();
-        if let Err(response) = dispatch_broker_ack_request_as(
-            state,
-            VERB,
-            "UsbipExplicitFirewallRule",
-            BrokerRequest::UsbipExplicitFirewallRule(BrokerUsbipExplicitFirewallRuleRequest {
-                bus_id: request.bus_id.clone(),
-                env: env.to_owned(),
-                host_uplink_ip,
-                net_uplink_ip,
-                tracing_span_id: None,
-            }),
-            caller_role.clone(),
-        ) {
-            return Ok(response);
-        }
-        if let Err(response) = dispatch_broker_ack_request_as(
-            state,
-            VERB,
-            "UsbipExplicitBind",
-            BrokerRequest::UsbipExplicitBind(BrokerUsbipExplicitBindRequest {
-                bus_id: request.bus_id.clone(),
-                vm: request.vm.clone(),
-                env: env.to_owned(),
-                tracing_span_id: None,
-            }),
-            caller_role.clone(),
-        ) {
-            return Ok(response);
-        }
-    }
-
-    if let Err(summary) = run_guest_usbip_import(
-        state,
-        &resolver,
-        &request.vm,
-        &request.bus_id,
-        caller_role,
-        d2bd_runtime::guest_control_health::GuestUsbipAction::Attach,
-    ) {
-        compensate_usbip_bind_failure(state, &resolver, &request.vm, &request.bus_id, VERB);
-        return Ok(daemon_failure_response(VERB, summary));
-    }
-    Ok(applied_response(
-        VERB,
-        format!(
-            "d2b usb attach --apply: bound busid '{}' for vm '{}' and imported it via guestd",
-            request.bus_id, request.vm
-        ),
-    ))
+    Err(usbip_guest_import_unavailable(&request.vm, VERB))
 }
 
 fn validate_usbip_bus_id_for_daemon(verb: &str, bus_id: &str) -> Result<(), Value> {
@@ -6447,215 +9119,6 @@ fn validate_usbip_bus_id_for_daemon(verb: &str, bus_id: &str) -> Result<(), Valu
             format!("USBIP busid '{bus_id}' does not match the canonical sysfs bus-id shape"),
         )
     })
-}
-
-/// Check whether a validated sysfs busid is currently present in
-/// `/sys/bus/usb/devices/<busid>/idVendor`. Returns `Ok(())` if the
-/// `idVendor` attribute file is readable (device physically present),
-/// or `Err(TypedError::UsbipBusidNotPresent)` if absent (fail-closed gate).
-///
-/// This is the fail-closed sysfs presence check for explicit attach:
-/// reject before any broker call or firewall mutation if the device is absent.
-fn check_sysfs_busid_present(busid: &str, verb: &str) -> Result<(), TypedError> {
-    let sysfs_path = PathBuf::from(format!("/sys/bus/usb/devices/{busid}/idVendor"));
-    let (tx, rx) = mpsc::channel();
-    let busid_for_log = busid.to_owned();
-    std::thread::Builder::new()
-        .name("d2b-usb-sysfs-present".to_owned())
-        .spawn(move || {
-            let _ = tx.send(std::fs::metadata(sysfs_path).is_ok());
-        })
-        .map_err(|error| TypedError::InternalIo {
-            context: "spawn USB sysfs presence helper".to_owned(),
-            detail: error.to_string(),
-        })?;
-    match rx.recv_timeout(USBIP_SYSFS_PRESENCE_TIMEOUT) {
-        Ok(true) => Ok(()),
-        Ok(false) => Err(TypedError::UsbipBusidNotPresent {
-            busid: busid.to_owned(),
-            verb: verb.to_owned(),
-        }),
-        Err(mpsc::RecvTimeoutError::Timeout) => {
-            tracing::warn!(
-                busid = %busid_for_log,
-                timeout_ms = USBIP_SYSFS_PRESENCE_TIMEOUT.as_millis() as u64,
-                "USB sysfs presence check timed out"
-            );
-            Err(TypedError::UsbipBusidNotPresent {
-                busid: busid.to_owned(),
-                verb: verb.to_owned(),
-            })
-        }
-        Err(mpsc::RecvTimeoutError::Disconnected) => Err(TypedError::UsbipBusidNotPresent {
-            busid: busid.to_owned(),
-            verb: verb.to_owned(),
-        }),
-    }
-}
-
-/// Read the current owner of the per-busid OFD lock file under
-/// `/run/d2b/locks/usbip/<busid>`.
-///
-/// Returns `None` if the lock file does not exist or has no content
-/// (uncontested). Returns `Some(owner_vm)` if another VM holds the claim.
-///
-/// The daemon uses this for the active-claim exclusivity check:
-/// if the busid is already locked by a different VM, the explicit attach
-/// is rejected fail-closed before any broker call.
-fn read_usbip_active_claim_owner(busid: &str) -> Option<String> {
-    let lock_path = d2b_contracts::usbip::UsbipDaemonClaimRecord::lock_path_for_busid(busid);
-    std::fs::read_to_string(&lock_path)
-        .ok()
-        .map(|content| content.trim().to_owned())
-        .filter(|s| !s.is_empty())
-}
-
-/// Check that no other VM holds the active claim for a busid.
-/// Returns `Ok(())` if the busid is uncontested or already owned by `requesting_vm`.
-/// Returns `Err(TypedError::UsbipExplicitClaimConflict)` if another VM holds the claim.
-fn check_usbip_claim_exclusivity(
-    busid: &str,
-    requesting_vm: &str,
-    verb: &str,
-) -> Result<(), TypedError> {
-    match read_usbip_active_claim_owner(busid) {
-        Some(owner) if owner != requesting_vm => Err(TypedError::UsbipExplicitClaimConflict {
-            busid: busid.to_owned(),
-            owner_vm: owner,
-            verb: verb.to_owned(),
-        }),
-        _ => Ok(()),
-    }
-}
-
-fn usbip_bind_intent_ref_for_daemon(
-    resolver: &BundleResolver,
-    vm: &str,
-    bus_id: &str,
-    verb: &str,
-) -> Result<BundleOpId, Value> {
-    let Some(entry) = resolver.manifest.vms.get(vm) else {
-        return Err(daemon_failure_response(
-            verb,
-            format!("VM '{vm}' is not present in the trusted manifest"),
-        ));
-    };
-    let Some(env) = entry.env.as_deref() else {
-        return Err(daemon_failure_response(
-            verb,
-            format!("VM '{vm}' is not attached to a d2b env"),
-        ));
-    };
-    Ok(BundleOpId::new(intent_id_usbip_bind(env, vm, bus_id)))
-}
-
-fn ensure_usbip_attach_vm_is_running(
-    state: &ServerState,
-    vm: &str,
-    bus_id: &str,
-    verb: &str,
-    manifest_entry: &Value,
-    process_vm: Option<&d2b_core::processes::VmProcessDag>,
-) -> Result<(), Value> {
-    let lifecycle = public_vm_lifecycle(state, vm, manifest_entry, process_vm);
-    let lifecycle_state = lifecycle
-        .get("state")
-        .and_then(Value::as_str)
-        .unwrap_or("Unknown");
-    if lifecycle_state == "Running" {
-        return Ok(());
-    }
-
-    Err(invalid_request_response_with_summary(
-        verb,
-        format!(
-            "VM '{vm}' is {state}, so USB attach cannot reach guest-control",
-            state = lifecycle_state.to_ascii_lowercase()
-        ),
-        format!(
-            "VM '{vm}' is {state}, so USB attach cannot reach guest-control. Start the VM first with `d2b vm start {vm} --apply`, wait until it is running, then retry `d2b usb attach {vm} {bus_id} --apply`.",
-            state = lifecycle_state.to_ascii_lowercase()
-        ),
-    ))
-}
-
-fn run_guest_usbip_import(
-    state: &ServerState,
-    resolver: &BundleResolver,
-    vm: &str,
-    bus_id: &str,
-    caller_role: BrokerCallerRole,
-    action: d2bd_runtime::guest_control_health::GuestUsbipAction,
-) -> Result<d2bd_runtime::guest_control_health::GuestUsbipImportResult, String> {
-    let Some(entry) = resolver.manifest.vms.get(vm) else {
-        return Err(format!("VM '{vm}' is not present in the trusted manifest"));
-    };
-    let Some(host) = entry.usbipd_host_ip.as_deref() else {
-        return Err(format!(
-            "VM '{vm}' has no per-env USBIP host IP in the trusted manifest"
-        ));
-    };
-    let params = resolve_guest_control_probe_params(state, resolver, vm).map_err(|detail| {
-        tracing::warn!(
-            kind = "critical",
-            subsystem = "guest-control-usbip",
-            error_kind = "transport-io",
-            "guest-control USBIP import: probe params unresolved: {detail}"
-        );
-        format!(
-            "guest-control USBIP import for vm '{vm}' could not resolve guest-control transport"
-        )
-    })?;
-    guest_control_bridge::run_usbip_import_on_dedicated_thread(
-        params,
-        broker_socket_path(state),
-        caller_role,
-        action,
-        host.to_owned(),
-        bus_id.to_owned(),
-        guest_control_bridge::GUEST_CONTROL_USBIP_IMPORT_TIMEOUT,
-    )
-    .map_err(|error| guest_usbip_import_error_summary(vm, error))
-}
-
-fn run_guest_usbip_status(
-    state: &ServerState,
-    resolver: &BundleResolver,
-    vm: &str,
-    bus_id: &str,
-    caller_role: BrokerCallerRole,
-    timeout: Duration,
-) -> Result<d2bd_runtime::guest_control_health::GuestUsbipStatusResult, GuestUsbipStatusError> {
-    let Some(entry) = resolver.manifest.vms.get(vm) else {
-        return Err(GuestUsbipStatusError::Failed(format!(
-            "VM '{vm}' is not present in the trusted manifest"
-        )));
-    };
-    let Some(host) = entry.usbipd_host_ip.as_deref() else {
-        return Err(GuestUsbipStatusError::Failed(format!(
-            "VM '{vm}' has no per-env USBIP host IP in the trusted manifest"
-        )));
-    };
-    let params = resolve_guest_control_probe_params(state, resolver, vm).map_err(|detail| {
-        tracing::warn!(
-            kind = "critical",
-            subsystem = "guest-control-usbip",
-            error_kind = "transport-io",
-            "guest-control USBIP status: probe params unresolved: {detail}"
-        );
-        GuestUsbipStatusError::Failed(format!(
-            "guest-control USBIP status for vm '{vm}' could not resolve guest-control transport"
-        ))
-    })?;
-    guest_control_bridge::run_usbip_status_on_dedicated_thread(
-        params,
-        broker_socket_path(state),
-        caller_role,
-        Some(host.to_owned()),
-        Some(bus_id.to_owned()),
-        timeout,
-    )
-    .map_err(|error| classify_guest_usbip_status_error(vm, error))
 }
 
 fn usbip_lifecycle_claim_for_intent(
@@ -6668,14 +9131,16 @@ fn usbip_lifecycle_claim_for_intent(
         .vms
         .get(vm)
         .and_then(|entry| entry.usbipd_host_ip.clone())?;
-    Some(d2b_provider_device_usbip::reconcile_state::UsbipLifecycleClaim {
-        vm: vm.to_owned(),
-        env: intent.env.clone(),
-        bus_id: intent.bus_id.clone(),
-        host,
-        claim_ref: intent.intent_id.clone(),
-        required: true,
-    })
+    Some(
+        d2b_provider_device_usbip::reconcile_state::UsbipLifecycleClaim {
+            vm: vm.to_owned(),
+            env: intent.env.clone(),
+            bus_id: intent.bus_id.clone(),
+            host,
+            claim_ref: intent.intent_id.clone(),
+            required: true,
+        },
+    )
 }
 
 fn read_usbip_claim_lock_owner_path(lock_path: &Path) -> io::Result<String> {
@@ -6923,57 +9388,27 @@ impl d2b_provider_device_usbip::reconcile_state::UsbipVmStartReconcileExecutor
 
     fn guest_status(
         &mut self,
-        claim: &d2b_provider_device_usbip::reconcile_state::UsbipLifecycleClaim,
+        _claim: &d2b_provider_device_usbip::reconcile_state::UsbipLifecycleClaim,
         _attempt: &d2b_provider_device_usbip::reconcile_state::UsbipReconcileAttemptContext,
     ) -> Result<
         d2b_provider_device_usbip::reconcile_state::UsbipGuestImportState,
         d2b_provider_device_usbip::reconcile_state::UsbipLifecycleStepError,
     > {
-        let status = run_guest_usbip_status(
-            self.state,
-            self.resolver,
-            &claim.vm,
-            &claim.bus_id,
-            self.caller_role.clone(),
-            guest_control_bridge::GUEST_CONTROL_USBIP_IMPORT_TIMEOUT,
-        )
-        .map_err(|error| {
-            d2b_provider_device_usbip::reconcile_state::UsbipLifecycleStepError::new(
-                d2b_provider_device_usbip::reconcile_state::UsbipLifecycleFailureKind::GuestFailed,
-                error.summary().to_owned(),
-            )
-        })?;
-        let imported = status
-            .imports
-            .iter()
-            .any(|entry| entry.host == claim.host && entry.bus_id == claim.bus_id);
-        Ok(if imported {
-            d2b_provider_device_usbip::reconcile_state::UsbipGuestImportState::Imported
-        } else {
-            d2b_provider_device_usbip::reconcile_state::UsbipGuestImportState::Detached
-        })
+        Err(d2b_provider_device_usbip::reconcile_state::UsbipLifecycleStepError::new(
+            d2b_provider_device_usbip::reconcile_state::UsbipLifecycleFailureKind::GuestFailed,
+            "target-local USBIP Process status is unavailable",
+        ))
     }
 
     fn guest_import(
         &mut self,
-        claim: &d2b_provider_device_usbip::reconcile_state::UsbipLifecycleClaim,
+        _claim: &d2b_provider_device_usbip::reconcile_state::UsbipLifecycleClaim,
         _attempt: &d2b_provider_device_usbip::reconcile_state::UsbipReconcileAttemptContext,
     ) -> Result<(), d2b_provider_device_usbip::reconcile_state::UsbipLifecycleStepError> {
-        run_guest_usbip_import(
-            self.state,
-            self.resolver,
-            &claim.vm,
-            &claim.bus_id,
-            self.caller_role.clone(),
-            d2bd_runtime::guest_control_health::GuestUsbipAction::Attach,
-        )
-        .map(|_| ())
-        .map_err(|summary| {
-            d2b_provider_device_usbip::reconcile_state::UsbipLifecycleStepError::new(
-                d2b_provider_device_usbip::reconcile_state::UsbipLifecycleFailureKind::GuestFailed,
-                summary,
-            )
-        })
+        Err(d2b_provider_device_usbip::reconcile_state::UsbipLifecycleStepError::new(
+            d2b_provider_device_usbip::reconcile_state::UsbipLifecycleFailureKind::GuestFailed,
+            "target-local USBIP Process import is unavailable",
+        ))
     }
 }
 
@@ -6990,27 +9425,15 @@ impl d2b_provider_device_usbip::reconcile_state::UsbipVmStopCarrierCleanup
         claim: &d2b_provider_device_usbip::reconcile_state::UsbipLifecycleClaim,
         _attempt: &d2b_provider_device_usbip::reconcile_state::UsbipReconcileAttemptContext,
     ) -> Result<(), d2b_provider_device_usbip::reconcile_state::UsbipLifecycleStepError> {
-        let resolver = load_bundle_resolver(self.state).map_err(|error| {
+        Err(
             d2b_provider_device_usbip::reconcile_state::UsbipLifecycleStepError::new(
                 d2b_provider_device_usbip::reconcile_state::UsbipLifecycleFailureKind::GuestFailed,
-                format!("{error:?}"),
-            )
-        })?;
-        run_guest_usbip_import(
-            self.state,
-            &resolver,
-            &claim.vm,
-            &claim.bus_id,
-            self.caller_role.clone(),
-            d2bd_runtime::guest_control_health::GuestUsbipAction::Detach,
+                format!(
+                    "target-local USBIP Process detach is unavailable for {}:{}",
+                    claim.vm, claim.bus_id
+                ),
+            ),
         )
-        .map(|_| ())
-        .map_err(|summary| {
-            d2b_provider_device_usbip::reconcile_state::UsbipLifecycleStepError::new(
-                d2b_provider_device_usbip::reconcile_state::UsbipLifecycleFailureKind::GuestFailed,
-                summary,
-            )
-        })
     }
 
     fn cleanup_host_carrier_preserve_claim(
@@ -7089,9 +9512,9 @@ fn usbip_lifecycle_report_summary(
         .claims
         .iter()
         .filter(|claim| {
-            claim
-                .completed
-                .contains(&d2b_provider_device_usbip::reconcile_state::UsbipLifecycleStep::GuestImport)
+            claim.completed.contains(
+                &d2b_provider_device_usbip::reconcile_state::UsbipLifecycleStep::GuestImport,
+            )
         })
         .count();
     let preserved = report
@@ -7139,9 +9562,9 @@ fn new_usbip_reconcile_attempt(
     let correlation_id =
         d2b_provider_device_usbip::reconcile_state::UsbipReconcileCorrelationId::new(&bounded)
             .or_else(|| {
-                d2b_provider_device_usbip::reconcile_state::UsbipReconcileCorrelationId::new(format!(
-                    "usb-{phase}"
-                ))
+                d2b_provider_device_usbip::reconcile_state::UsbipReconcileCorrelationId::new(
+                    format!("usb-{phase}"),
+                )
             })
             .expect("static USBIP reconcile correlation id is valid");
     d2b_provider_device_usbip::reconcile_state::UsbipReconcileAttemptContext { correlation_id }
@@ -7392,104 +9815,6 @@ fn probe_usbip_claim_locks_for_vm_without_bundle(
     UsbipClaimLockProbe::None
 }
 
-fn guest_usbip_import_error_summary(
-    vm: &str,
-    error: d2bd_runtime::guest_control_health::GuestUsbipImportError,
-) -> String {
-    use d2bd_runtime::guest_control_health::{
-        GuestControlHealthError as H, GuestUsbipImportError as E,
-    };
-    let detail = match error {
-        E::Probe(H::TransportIo) | E::Probe(H::Signer) | E::Probe(H::Ttrpc) => {
-            "guest-control transport unavailable"
-        }
-        E::Probe(H::Timeout) => "guest-control USBIP import timed out",
-        E::Probe(H::AuthFailed) | E::Probe(H::StaleSession) => {
-            "guest-control authentication failed"
-        }
-        E::Probe(H::Protocol) | E::Protocol => "guest-control USBIP protocol error",
-        E::CapabilityUnavailable => "guest does not advertise USBIP import capability",
-        E::UsbipUnavailable => "guestd has no usable usbip binary",
-        E::InvalidBusId => "guestd rejected the USBIP busid",
-        E::InvalidHost => "guestd rejected the USBIP backend host",
-        E::CommandFailed => "guest usbip command failed",
-        E::CommandTimeout => "guest usbip command timed out",
-        E::InvalidOutput => "guest usbip command output was invalid",
-    };
-    format!("guest-control USBIP import failed for vm '{vm}': {detail}")
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-enum GuestUsbipStatusError {
-    Timeout(String),
-    Failed(String),
-}
-
-impl GuestUsbipStatusError {
-    fn summary(&self) -> &str {
-        match self {
-            Self::Timeout(summary) | Self::Failed(summary) => summary,
-        }
-    }
-}
-
-fn classify_guest_usbip_status_error(
-    vm: &str,
-    error: d2bd_runtime::guest_control_health::GuestUsbipImportError,
-) -> GuestUsbipStatusError {
-    let is_timeout = matches!(
-        error,
-        d2bd_runtime::guest_control_health::GuestUsbipImportError::Probe(
-            d2bd_runtime::guest_control_health::GuestControlHealthError::Timeout
-        ) | d2bd_runtime::guest_control_health::GuestUsbipImportError::CommandTimeout
-    );
-    let summary = guest_usbip_import_error_summary(vm, error);
-    if is_timeout {
-        GuestUsbipStatusError::Timeout(summary)
-    } else {
-        GuestUsbipStatusError::Failed(summary)
-    }
-}
-
-fn compensate_usbip_bind_failure(
-    state: &ServerState,
-    resolver: &BundleResolver,
-    vm: &str,
-    bus_id: &str,
-    verb: &str,
-) {
-    let intent_ref = match usbip_bind_intent_ref_for_daemon(resolver, vm, bus_id, verb) {
-        Ok(intent_ref) => intent_ref,
-        Err(response) => {
-            tracing::warn!(vm = %vm, bus_id = %bus_id, response = %response, "USBIP attach compensation could not resolve bind intent");
-            return;
-        }
-    };
-    if let Err(response) = dispatch_broker_ack_request(
-        state,
-        verb,
-        "UsbipUnbind",
-        BrokerRequest::UsbipUnbind(BrokerUsbipUnbindRequest {
-            bundle_usbip_bind_intent_ref: intent_ref,
-            preserve_durable_claim: false,
-            tracing_span_id: None,
-        }),
-    ) {
-        tracing::warn!(vm = %vm, bus_id = %bus_id, response = %response, "USBIP attach compensation unbind failed");
-    }
-    if let Err(response) = dispatch_broker_ack_request(
-        state,
-        verb,
-        "UsbipProxyReconcile",
-        BrokerRequest::UsbipProxyReconcile(BrokerUsbipProxyReconcileRequest {
-            scope_id: ScopeId::new(format!("vm:{vm}")),
-            tracing_span_id: None,
-        }),
-    ) {
-        tracing::warn!(vm = %vm, bus_id = %bus_id, response = %response, "USBIP attach compensation proxy reconcile failed");
-    }
-}
-
 fn ensure_usbipd_env_ready_for_attach(
     state: &ServerState,
     resolver: &BundleResolver,
@@ -7600,9 +9925,9 @@ fn dispatch_broker_usbip_unbind(
     request: public_wire::UsbipUnbindCliRequest,
 ) -> Result<Value, TypedError> {
     const VERB: &str = "usb detach";
-    if let Some(response) = mutating_verb_preflight(VERB, &request.flags, Some(request.vm.as_str()))
-    {
-        return Ok(response);
+    if !request.flags.dry_run && !request.flags.apply {
+        return Ok(mutating_verb_preflight(VERB, &request.flags, Some(request.vm.as_str()))
+            .expect("missing mutation flags produce a preflight response"));
     }
     let resolver = load_bundle_resolver(state)?;
     ensure_manifest_entry_runtime_capability(
@@ -7612,67 +9937,18 @@ fn dispatch_broker_usbip_unbind(
         VERB,
     )?;
     if vm_is_qemu_media(&resolver, &request.vm)? {
+        if let Some(response) =
+            mutating_verb_preflight(VERB, &request.flags, Some(request.vm.as_str()))
+        {
+            return Ok(response);
+        }
         return dispatch_broker_qemu_media_detach(state, request, caller_role);
     }
     if let Err(response) = validate_usbip_bus_id_for_daemon(VERB, &request.bus_id) {
         return Ok(response);
     }
-    let intent_ref =
-        match usbip_bind_intent_ref_for_daemon(&resolver, &request.vm, &request.bus_id, VERB) {
-            Ok(intent_ref) => intent_ref,
-            Err(response) => return Ok(response),
-        };
-
-    if let Err(summary) = run_guest_usbip_import(
-        state,
-        &resolver,
-        &request.vm,
-        &request.bus_id,
-        caller_role.clone(),
-        d2bd_runtime::guest_control_health::GuestUsbipAction::Detach,
-    ) {
-        tracing::warn!(
-            vm = %request.vm,
-            bus_id = %request.bus_id,
-            summary = %summary,
-            "USBIP guest detach failed; continuing host-side detach cleanup"
-        );
-    }
-
-    if let Err(response) = dispatch_broker_ack_request_as(
-        state,
-        VERB,
-        "UsbipUnbind",
-        BrokerRequest::UsbipUnbind(BrokerUsbipUnbindRequest {
-            bundle_usbip_bind_intent_ref: intent_ref,
-            preserve_durable_claim: false,
-            tracing_span_id: None,
-        }),
-        caller_role.clone(),
-    ) {
-        return Ok(response);
-    }
-
-    if let Err(response) = dispatch_broker_ack_request_as(
-        state,
-        VERB,
-        "UsbipProxyReconcile",
-        BrokerRequest::UsbipProxyReconcile(BrokerUsbipProxyReconcileRequest {
-            scope_id: ScopeId::new(format!("vm:{}", request.vm)),
-            tracing_span_id: None,
-        }),
-        caller_role.clone(),
-    ) {
-        return Ok(response);
-    }
-
-    Ok(applied_response(
-        VERB,
-        format!(
-            "d2b usb detach --apply: detached busid '{}' from vm '{}' and released the host claim",
-            request.bus_id, request.vm
-        ),
-    ))
+    let _ = (resolver, caller_role);
+    Err(usbip_guest_import_unavailable(&request.vm, VERB))
 }
 
 fn vm_is_qemu_media(resolver: &BundleResolver, vm: &str) -> Result<bool, TypedError> {
@@ -7852,7 +10128,6 @@ fn dispatch_broker_usbip_probe(
     state: &ServerState,
     caller_role: BrokerCallerRole,
 ) -> Result<Value, TypedError> {
-    const VERB: &str = "usb probe";
     let resolver =
         BundleResolver::load(&state.config.artifacts.bundle_path).map_err(|err| match err {
             d2b_core::error::Error::Bundle(BundleError::Tampered { path, reason }) => {
@@ -7868,31 +10143,13 @@ fn dispatch_broker_usbip_probe(
         .usbip_bind_intent_ids()
         .map(str::to_owned)
         .collect();
-    if !usbip_intent_ids.is_empty()
-        && let Err(response) = dispatch_broker_ack_request_as(
-            state,
-            VERB,
-            "UsbipProxyReconcile",
-            BrokerRequest::UsbipProxyReconcile(BrokerUsbipProxyReconcileRequest {
-                scope_id: ScopeId::new("host"),
-                tracing_span_id: None,
-            }),
-            caller_role.clone(),
-        )
-    {
-        return Ok(response);
-    }
     let mut entries: Vec<_> = usbip_intent_ids
         .iter()
         .map(String::as_str)
         .filter_map(|intent_id| resolver.find_usbip_bind_intent(intent_id))
         .map(|intent| {
             usbip_probe_entry_from_intent(
-                state,
-                &resolver,
                 intent,
-                caller_role.clone(),
-                Some(guest_control_bridge::GUEST_CONTROL_USBIP_IMPORT_TIMEOUT),
             )
         })
         .collect();
@@ -7903,11 +10160,7 @@ fn dispatch_broker_usbip_probe(
 }
 
 fn usbip_probe_entry_from_intent(
-    state: &ServerState,
-    resolver: &BundleResolver,
     intent: &d2b_core::bundle_resolver::ResolvedUsbipBindIntent,
-    caller_role: BrokerCallerRole,
-    guest_status_timeout: Option<Duration>,
 ) -> public_wire::UsbipProbeEntry {
     let owner_vm = fs::read_to_string(&intent.lock_path)
         .ok()
@@ -7922,7 +10175,7 @@ fn usbip_probe_entry_from_intent(
     };
     let mut degraded_reasons = Vec::new();
     let mut remediation_commands = Vec::new();
-    let mut guest_import = public_wire::UsbipGuestImportState::Unknown;
+    let guest_import = public_wire::UsbipGuestImportState::Unavailable;
     let (host, topology_policy, host_reason) = public_host_usb_probe_from_sysfs(intent);
     if let Some(reason) = host_reason {
         degraded_reasons.push(reason);
@@ -7952,68 +10205,10 @@ fn usbip_probe_entry_from_intent(
                 )),
             ));
         }
-        let guest_status_requested = guest_status_timeout.is_some();
-        if let Some(guest_status_timeout) = guest_status_timeout {
-            match run_guest_usbip_status(
-                state,
-                resolver,
-                &intent.vm_name,
-                &intent.bus_id,
-                caller_role,
-                guest_status_timeout,
-            ) {
-                Ok(status) => {
-                    let imported = status
-                        .imports
-                        .iter()
-                        .any(|entry| entry.bus_id == intent.bus_id);
-                    guest_import = if imported {
-                        public_wire::UsbipGuestImportState::Imported
-                    } else {
-                        public_wire::UsbipGuestImportState::Detached
-                    };
-                    if !imported {
-                        degraded_reasons.push(usbip_probe_degraded_reason_from_internal(
-                            d2b_provider_device_usbip::reconcile_state::UsbipDegradedReason::GuestImportUnavailable,
-                            Some(format!(
-                                "Run `d2b usb attach {vm} {bus} --apply` after the VM is running.",
-                                vm = intent.vm_name,
-                                bus = intent.bus_id
-                            )),
-                        ));
-                        remediation_commands.push(format!(
-                            "d2b usb attach {vm} {bus} --apply",
-                            vm = intent.vm_name,
-                            bus = intent.bus_id
-                        ));
-                    }
-                }
-                Err(error) => push_guest_usbip_status_error(
-                    error,
-                    &intent.vm_name,
-                    &intent.bus_id,
-                    &mut guest_import,
-                    &mut degraded_reasons,
-                    &mut remediation_commands,
-                ),
-            }
-        }
-        if !guest_status_requested
-            || matches!(
-                guest_import,
-                public_wire::UsbipGuestImportState::Unknown
-                    | public_wire::UsbipGuestImportState::Unavailable
-            )
-        {
-            degraded_reasons.push(usbip_probe_degraded_reason_from_internal(
-                d2b_provider_device_usbip::reconcile_state::UsbipDegradedReason::ProbeIncomplete,
-                Some(format!(
-                    "Run `d2b usb attach {vm} {bus} --apply` to reconcile host and guest USB state.",
-                    vm = intent.vm_name,
-                    bus = intent.bus_id
-                )),
-            ));
-        }
+        degraded_reasons.push(usbip_probe_degraded_reason_from_internal(
+            d2b_provider_device_usbip::reconcile_state::UsbipDegradedReason::GuestImportUnavailable,
+            Some("Guest USB import requires a target-local USBIP Process path that is unavailable; the host claim is not a successful attachment.".to_owned()),
+        ));
     } else if matches!(
         durable_state,
         public_wire::UsbipDurableClaimState::HeldByOtherOwner
@@ -8081,35 +10276,6 @@ fn usbip_probe_entry_from_intent(
         topology_policy,
         degraded_reasons,
         remediation_commands,
-    }
-}
-
-fn push_guest_usbip_status_error(
-    error: GuestUsbipStatusError,
-    vm: &str,
-    bus_id: &str,
-    guest_import: &mut public_wire::UsbipGuestImportState,
-    degraded_reasons: &mut Vec<public_wire::UsbipProbeDegradedReason>,
-    remediation_commands: &mut Vec<String>,
-) {
-    if matches!(error, GuestUsbipStatusError::Timeout(_)) {
-        *guest_import = public_wire::UsbipGuestImportState::Unknown;
-        degraded_reasons.push(usbip_probe_degraded_reason_from_internal(
-            d2b_provider_device_usbip::reconcile_state::UsbipDegradedReason::GuestImportUnavailable,
-            Some(format!(
-                "{}; retry `d2b usb probe` for a full diagnostic budget.",
-                error.summary()
-            )),
-        ));
-    } else {
-        *guest_import = public_wire::UsbipGuestImportState::Unavailable;
-        degraded_reasons.push(usbip_probe_degraded_reason_from_internal(
-            d2b_provider_device_usbip::reconcile_state::UsbipDegradedReason::GuestImportUnavailable,
-            Some(format!(
-                "Start the VM with `d2b vm start {vm} --apply`, then run `d2b usb attach {vm} {bus_id} --apply`."
-            )),
-        ));
-        remediation_commands.push(format!("d2b usb attach {vm} {bus_id} --apply"));
     }
 }
 
@@ -8276,24 +10442,14 @@ fn usbip_probe_degraded_reason_from_internal(
 }
 
 fn public_usb_status_for_vm(
-    state: &ServerState,
     resolver: &BundleResolver,
     vm: &str,
-    caller_role: BrokerCallerRole,
 ) -> Option<public_wire::UsbipVmStatus> {
     let entries: Vec<_> = resolver
         .usbip_bind_intent_ids()
         .filter_map(|intent_id| resolver.find_usbip_bind_intent(intent_id))
         .filter(|intent| intent.vm_name == vm)
-        .map(|intent| {
-            usbip_probe_entry_from_intent(
-                state,
-                resolver,
-                intent,
-                caller_role.clone(),
-                Some(PUBLIC_STATUS_GUEST_USBIP_TIMEOUT),
-            )
-        })
+        .map(usbip_probe_entry_from_intent)
         .collect();
     if entries.is_empty() {
         return None;
@@ -8603,30 +10759,30 @@ fn broker_socket_path(state: &ServerState) -> PathBuf {
 /// is `d2bd:users`. Existing-code-is-canon: the probe reconciles its
 /// `expected_state_root_uid/gid` to the actual runtime owner; the tmpfiles vs
 /// activation divergence is to be confirmed against a live host.
-const GUEST_CONTROL_STATE_ROOT_GROUP: &str = "users";
+const COMPONENT_SESSION_STATE_ROOT_GROUP: &str = "users";
 
 /// Resolve the canonical runtime owner `(uid, gid)` of the per-VM state
-/// directory for the guest-control probe's `expected_state_root_uid/gid`.
+/// directory for the ComponentSession endpoint's ownership checks.
 /// Derived independently of the peer-credential identity. Fails CLOSED if
 /// either identity is unresolvable.
-fn resolve_guest_control_state_root_owner(state: &ServerState) -> Result<(u32, u32), String> {
+fn resolve_component_session_state_root_owner(state: &ServerState) -> Result<(u32, u32), String> {
     let uid = User::from_name(&state.config.daemon_user)
         .ok()
         .flatten()
         .map(|user| user.uid.as_raw())
         .ok_or_else(|| {
             format!(
-                "guest-control-probe:unresolved-state-root-user:{}",
+                "component-session:unresolved-state-root-user:{}",
                 state.config.daemon_user
             )
         })?;
-    let gid = Group::from_name(GUEST_CONTROL_STATE_ROOT_GROUP)
+    let gid = Group::from_name(COMPONENT_SESSION_STATE_ROOT_GROUP)
         .ok()
         .flatten()
         .map(|group| group.gid.as_raw())
         .ok_or_else(|| {
             format!(
-                "guest-control-probe:unresolved-state-root-group:{GUEST_CONTROL_STATE_ROOT_GROUP}"
+                "component-session:unresolved-state-root-group:{COMPONENT_SESSION_STATE_ROOT_GROUP}"
             )
         })?;
     Ok((uid, gid))
@@ -8645,102 +10801,333 @@ fn cloud_hypervisor_vsock_socket(argv: &[String]) -> Option<PathBuf> {
     })
 }
 
-/// Resolve the guest-control probe parameters for `vm` from the trusted
-/// bundle: the per-VM vsock socket path + its parent state-root, the
+/// Resolve the ComponentSession endpoint for `vm` from the trusted bundle:
+/// the per-VM vsock socket path + its parent state-root, the
 /// cloud-hypervisor runner's peer credentials (principal
 /// `d2b-<vm>-runner`), and the canonical state-root owner. Fails CLOSED if
 /// any identity is unresolvable.
-fn resolve_guest_control_probe_params(
+fn resolve_component_session_endpoint(
     state: &ServerState,
     resolver: &BundleResolver,
     vm: &str,
-) -> Result<guest_control_bridge::ProbeParams, String> {
+) -> Result<d2bd_runtime::guest_component_session::GuestComponentSessionEndpoint, String> {
     let dag = resolver
         .find_process_vm(vm)
-        .ok_or_else(|| "guest-control-probe:no-process-dag".to_owned())?;
+        .ok_or_else(|| "component-session:no-process-dag".to_owned())?;
     let ch = dag
         .nodes
         .iter()
         .find(|node| node.role == ProcessRole::CloudHypervisorRunner)
-        .ok_or_else(|| "guest-control-probe:no-cloud-hypervisor-node".to_owned())?;
+        .ok_or_else(|| "component-session:no-cloud-hypervisor-node".to_owned())?;
     let socket_path = cloud_hypervisor_vsock_socket(&ch.argv)
-        .ok_or_else(|| "guest-control-probe:no-vsock-socket".to_owned())?;
+        .ok_or_else(|| "component-session:no-vsock-socket".to_owned())?;
     let state_root = socket_path
         .parent()
         .map(Path::to_path_buf)
-        .ok_or_else(|| "guest-control-probe:vsock-socket-no-parent".to_owned())?;
+        .ok_or_else(|| "component-session:vsock-socket-no-parent".to_owned())?;
     let (expected_state_root_uid, expected_state_root_gid) =
-        resolve_guest_control_state_root_owner(state)?;
-    Ok(guest_control_bridge::ProbeParams {
-        vm_id: vm.to_owned(),
+        resolve_component_session_state_root_owner(state)?;
+    Ok(d2bd_runtime::guest_component_session::GuestComponentSessionEndpoint {
         socket_path,
         state_root,
         expected_state_root_uid,
         expected_state_root_gid,
         expected_peer_uid: ch.profile.uid,
         expected_peer_gid: ch.profile.gid,
+        setup_timeout: d2bd_runtime::guest_component_session::COMPONENT_SESSION_ATTEMPT_CAP,
     })
 }
 
-/// ADMIN-ONLY public.sock verb: read the editable guest config working copy of
-/// `vm` over the authenticated guest-control bridge and return it as a base64
-/// string. The admin authorization gate runs in `dispatch_request` BEFORE this
-/// handler. The orchestration runs on a dedicated OS thread (the
-/// synchronous-verb runtime boundary). The encoded payload is bounded so it fits both transport frames;
-/// any guest content is never echoed into an error.
-fn dispatch_read_guest_config(
+/// Establish one authenticated Guest ComponentSession from host-published
+/// descriptor and key material. The returned client is the sole host-side
+/// route to Guest Resource and service APIs.
+pub(crate) async fn connect_guest_component_session(
     state: &ServerState,
-    caller_role: BrokerCallerRole,
-    request: public_wire::ReadGuestConfigRequest,
-) -> Result<Value, TypedError> {
+    vm: &str,
+) -> Result<
+    Arc<d2bd_runtime::guest_component_session::GuestComponentSessionClient>,
+    String,
+> {
+    connect_guest_component_session_with_mode(
+        state,
+        vm,
+        GuestComponentSessionCacheMode::Reuse,
+    )
+    .await
+}
+
+async fn connect_guest_component_session_fresh(
+    state: &ServerState,
+    vm: &str,
+) -> Result<
+    Arc<d2bd_runtime::guest_component_session::GuestComponentSessionClient>,
+    String,
+> {
+    connect_guest_component_session_with_mode(
+        state,
+        vm,
+        GuestComponentSessionCacheMode::Fresh,
+    )
+    .await
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum GuestComponentSessionCacheMode {
+    Reuse,
+    Fresh,
+}
+
+fn select_cached_guest_component_session<'a, T, F>(
+    mode: GuestComponentSessionCacheMode,
+    cached: Option<&'a T>,
+    identity: F,
+    expected_identity: &d2bd_runtime::guest_mode::GuestIdentity,
+) -> Option<&'a T>
+where
+    F: Fn(&T) -> &d2bd_runtime::guest_mode::GuestIdentity,
+{
+    if matches!(mode, GuestComponentSessionCacheMode::Reuse)
+        && let Some(cached) = cached
+        && identity(cached) == expected_identity
+    {
+        Some(cached)
+    } else {
+        None
+    }
+}
+
+async fn connect_guest_component_session_with_mode(
+    state: &ServerState,
+    vm: &str,
+    mode: GuestComponentSessionCacheMode,
+) -> Result<
+    Arc<d2bd_runtime::guest_component_session::GuestComponentSessionClient>,
+    String,
+> {
+    let key_lock = {
+        let mut locks = state.guest_component_session_locks.lock().await;
+        locks
+            .entry(vm.to_owned())
+            .or_insert_with(|| Arc::new(tokio::sync::Mutex::new(())))
+            .clone()
+    };
+    let _connect_lock = key_lock.lock().await;
+    let resolver = load_bundle_resolver(state).map_err(|_| "bundle-unavailable".to_owned())?;
+    let endpoint = resolve_component_session_endpoint(state, &resolver, vm)?;
+    let state_root = endpoint.state_root.clone();
+    let config =
+        d2bd_runtime::guest_component_session::GuestComponentSessionConfig::from_state_root(
+            state_root,
+            endpoint,
+        )
+        .map_err(|_| "session-material-unavailable".to_owned())?;
+    {
+        let sessions = state.guest_component_sessions.lock().await;
+        if let Some(session) = select_cached_guest_component_session(
+            mode,
+            sessions.get(vm),
+            |session| session.identity(),
+            &config.identity,
+        ) {
+            return Ok(Arc::clone(session));
+        }
+    }
+    let expected_identity = config.identity.clone();
+    let client = tokio::time::timeout(
+        d2bd_runtime::guest_component_session::COMPONENT_SESSION_ATTEMPT_CAP,
+        config.connect(),
+    )
+    .await
+    .map_err(|_| "session-timeout".to_owned())?
+    .map_err(|_| "session-unavailable".to_owned())?;
+    if client.identity() != &expected_identity
+        || client.identity().guest_ref().resource_type().as_str() != "Guest"
+        || client.identity().guest_ref().name().as_str() != vm
+    {
+        return Err("session-identity-mismatch".to_owned());
+    }
+    let client = Arc::new(client);
+    let mut sessions = state.guest_component_sessions.lock().await;
+    if let Some(session) = select_cached_guest_component_session(
+        mode,
+        sessions.get(vm),
+        |session| session.identity(),
+        &expected_identity,
+    ) {
+        return Ok(Arc::clone(session));
+    }
+    sessions.insert(vm.to_owned(), Arc::clone(&client));
+    Ok(client)
+}
+
+pub(crate) async fn invalidate_guest_component_session(state: &ServerState, vm: &str) {
+    state.guest_component_sessions.lock().await.remove(vm);
+}
+
+#[cfg(test)]
+mod guest_component_session_cache_tests {
+    use super::*;
+
+    struct CachedSession {
+        identity: d2bd_runtime::guest_mode::GuestIdentity,
+        generation: u64,
+    }
+
+    fn identity() -> d2bd_runtime::guest_mode::GuestIdentity {
+        d2bd_runtime::guest_mode::GuestIdentity::new(
+            ResourceRef::parse("Guest/workload").expect("Guest ref"),
+            ResourceUid::parse("123e4567-e89b-42d3-a456-426614174000").expect("Guest UID"),
+            ZoneId::parse("work").expect("Zone"),
+            d2bd_runtime::guest_mode::BootIdentity::from_kernel_boot_id("guest-cache-test")
+                .expect("boot identity"),
+            d2b_contracts_resource::v3::identity::SessionPurpose::parse(
+                d2bd_runtime::guest_mode::GUEST_COMPONENT_SESSION_PURPOSE,
+            )
+            .expect("purpose"),
+            SchemaFingerprint::parse(
+                "sha256:0000000000000000000000000000000000000000000000000000000000000001",
+            )
+            .expect("schema"),
+            ReconnectGeneration::new(1).expect("reconnect generation"),
+            1,
+            1,
+            1,
+        )
+        .expect("Guest identity")
+    }
+
+    #[test]
+    fn normal_mode_reuses_matching_cached_client() {
+        let expected = identity();
+        let cached = CachedSession {
+            identity: expected.clone(),
+            generation: 5,
+        };
+
+        let selected = select_cached_guest_component_session(
+            GuestComponentSessionCacheMode::Reuse,
+            Some(&cached),
+            |session| &session.identity,
+            &expected,
+        );
+
+        assert_eq!(selected.map(|session| session.generation), Some(5));
+    }
+
+    #[test]
+    fn fresh_mode_uses_newly_authenticated_generation() {
+        let expected = identity();
+        let stale = CachedSession {
+            identity: expected.clone(),
+            generation: 5,
+        };
+        let authenticated = CachedSession {
+            identity: expected.clone(),
+            generation: 6,
+        };
+
+        let selected = select_cached_guest_component_session(
+            GuestComponentSessionCacheMode::Fresh,
+            Some(&stale),
+            |session| &session.identity,
+            &expected,
+        )
+        .unwrap_or(&authenticated);
+
+        assert_eq!(selected.generation, 6);
+    }
+}
+
+fn read_guest_config_typed(
+    state: &ServerState,
+    zone: &ZoneId,
+    vm: &str,
+) -> Result<d2b_provider_config_nixos::ConfigSyncResponse, TypedError> {
+    if d2bd_runtime::zone_authority::authoritative_zone_for_vm(&state.zone_coordinator, vm)
+        .ok()
+        .as_ref()
+        != Some(zone)
+    {
+        return Err(TypedError::ConfigReadFailed {
+            kind: d2bd_runtime::typed_error::ConfigReadErrorKind::AuthFailed,
+        });
+    }
     ensure_vm_runtime_capability(
         state,
-        &request.vm,
+        vm,
         RuntimeCapabilityGate::ConfigSync,
         "config sync",
     )?;
-    ensure_vm_runtime_capability(
-        state,
-        &request.vm,
-        RuntimeCapabilityGate::GuestControl,
-        "read guest config",
-    )?;
-    let resolver = load_bundle_resolver(state)?;
-    let params =
-        resolve_guest_control_probe_params(state, &resolver, &request.vm).map_err(|detail| {
-            tracing::warn!(
-                kind = "critical",
-                subsystem = "guest-control-health",
-                error_kind = "transport-io",
-                "guest-control config read: probe params unresolved: {detail}"
-            );
-            TypedError::GuestControlReadFailed {
-                kind: d2bd_runtime::typed_error::GuestControlReadErrorKind::Transport,
-            }
+    let guest_ref_text = format!("Guest/{vm}");
+    let guest_ref = ResourceRef::parse(&guest_ref_text).map_err(|_| {
+        TypedError::ConfigReadFailed {
+            kind: d2bd_runtime::typed_error::ConfigReadErrorKind::AuthFailed,
+        }
+    })?;
+    let sync = d2b_provider_config_nixos::ConfigSyncRequest::new(guest_ref).map_err(|_| {
+        TypedError::ConfigReadFailed {
+            kind: d2bd_runtime::typed_error::ConfigReadErrorKind::AuthFailed,
+        }
+    })?;
+    let response: d2b_provider_config_nixos::ConfigSyncResponse = block_on_future(async {
+        let session = connect_guest_component_session(state, vm)
+            .await
+            .map_err(|_| d2bd_runtime::typed_error::ConfigReadErrorKind::Transport)?;
+        let client = d2b_provider_config_nixos::ConfigNixosClient::new(session.client());
+        let result = client
+            .call(
+                ttrpc::context::Context::default(),
+                d2b_provider_config_nixos::ConfigOperation::ReadGuestConfig,
+                &sync,
+            )
+            .await;
+        if result.is_err() {
+            invalidate_guest_component_session(state, vm).await;
+        }
+        result.map_err(config_read_error_kind)
+    })
+    .map_err(|kind| TypedError::ConfigReadFailed { kind })?;
+    d2b_provider_config_nixos::decode_document(&response)
+        .map_err(|_| TypedError::ConfigReadFailed {
+            kind: d2bd_runtime::typed_error::ConfigReadErrorKind::Protocol,
         })?;
-    let broker_path = broker_socket_path(state);
-    let bytes = guest_control_bridge::run_config_read_on_dedicated_thread(
-        params,
-        broker_path,
-        caller_role,
-        guest_control_bridge::GUEST_CONTROL_CONFIG_READ_TIMEOUT,
-    )
-    .map_err(guest_control_bridge::map_guest_file_read_error)?;
-    let encoded = d2b_core::base64_codec::encode(&bytes);
-    if !d2b_contracts_control::guest_wire::guest_config_encoded_within_frame_caps(encoded.len()) {
-        return Err(TypedError::GuestControlReadFailed {
-            kind: d2bd_runtime::typed_error::GuestControlReadErrorKind::FileTooLarge,
-        });
-    }
-    Ok(d2bd_runtime::wire::read_guest_config_response(
-        public_wire::ReadGuestConfigResponse {
-            content_base64: encoded,
-        },
-    ))
+    Ok(response)
 }
 
-const SHELL_METRIC: &str = "d2b_daemon_guest_control_shell_total";
-const SHELL_SUBSYSTEM: &str = "guest-control-shell";
+fn config_read_error_kind(
+    error: ttrpc::Error,
+) -> d2bd_runtime::typed_error::ConfigReadErrorKind {
+    use d2bd_runtime::typed_error::ConfigReadErrorKind as Kind;
+    if matches!(
+        &error,
+        ttrpc::Error::RpcStatus(status) if status.code() == ttrpc::Code::DEADLINE_EXCEEDED
+    ) {
+        return Kind::Timeout;
+    }
+    let ttrpc::Error::RpcStatus(status) = error else {
+        return Kind::Transport;
+    };
+    match status.code() {
+        ttrpc::Code::UNAVAILABLE => return Kind::Transport,
+        ttrpc::Code::RESOURCE_EXHAUSTED => return Kind::FileTooLarge,
+        ttrpc::Code::PERMISSION_DENIED => return Kind::ReadDenied,
+        ttrpc::Code::UNAUTHENTICATED => return Kind::AuthFailed,
+        _ => {}
+    }
+    match status.message() {
+        "config-document-too-large" => Kind::FileTooLarge,
+        "config-document-invalid-utf8" => Kind::Protocol,
+        "config-document-unavailable" => Kind::ReadDenied,
+        "config-session-stale" | "config-unauthorized" => Kind::AuthFailed,
+        "config-request-invalid"
+        | "config-document-empty"
+        | "config-document-encoding-failed" => Kind::Protocol,
+        _ => Kind::Transport,
+    }
+}
+
+const SHELL_METRIC: &str = "d2b_daemon_component_session_shell_total";
+const SHELL_SUBSYSTEM: &str = "component-session-shell";
 const SHELL_LIFECYCLE_METRIC: &str = "d2b_daemon_shell_lifecycle_total";
 const SHELL_LIFECYCLE_OPERATIONS: &[&str] =
     &["list", "create", "attach", "detach", "kill", "close"];
@@ -8777,9 +11164,9 @@ const SHELL_LIFECYCLE_ERRORS: &[&str] = &[
 ];
 
 fn shell_error_kind_label(error: &TypedError) -> &'static str {
-    use d2bd_runtime::typed_error::GuestControlShellErrorKind as K;
+    use d2bd_runtime::typed_error::ComponentSessionShellErrorKind as K;
     match error {
-        TypedError::GuestControlShellFailed { kind } => match kind {
+        TypedError::ComponentSessionShellFailed { kind } => match kind {
             K::Transport => "transport",
             K::Auth => "auth",
             K::Protocol => "protocol",
@@ -8876,7 +11263,7 @@ fn shell_metric_for_provider(
             ("error_kind", error_kind),
         ],
     );
-    if provider == d2bd_runtime::shell_backend::ShellProvider::GuestControl {
+    if provider == d2bd_runtime::shell_backend::ShellProvider::ComponentSession {
         shell_metric(state, outcome, error_kind);
     }
 }
@@ -8891,7 +11278,7 @@ fn shell_provider_for_error(error: &TypedError) -> d2bd_runtime::shell_backend::
         {
             d2bd_runtime::shell_backend::ShellProvider::UnsafeLocal
         }
-        _ => d2bd_runtime::shell_backend::ShellProvider::GuestControl,
+        _ => d2bd_runtime::shell_backend::ShellProvider::ComponentSession,
     }
 }
 
@@ -8918,6 +11305,280 @@ enum ShellManagementOp {
     },
 }
 
+fn daemon_shell_authority(state: &ServerState) -> Arc<DaemonShellAuthority> {
+    #[cfg(not(test))]
+    {
+        Arc::clone(&state.shell_authority)
+    }
+    #[cfg(test)]
+    {
+        Arc::new(DaemonShellAuthority::new(Arc::clone(&state.resource_plane)))
+    }
+}
+
+fn shell_resource_client(
+    state: &ServerState,
+) -> Result<(ZoneId, Arc<DaemonResourceApiClient>), TypedError> {
+    let zone = ZoneId::parse("local-root").map_err(|_| shell_protocol_failed())?;
+    let authority = daemon_shell_authority(state);
+    let client = authority
+        .client_for_zone(&zone)
+        .map_err(|_| shell_capability_failed())?;
+    Ok((zone, client))
+}
+
+fn require_guest_component_session(
+    state: &ServerState,
+    vm: &str,
+) -> Result<d2b_session::SessionDriverHandle, TypedError> {
+    production_component_session_driver(state, vm).ok_or_else(|| {
+        TypedError::RuntimeCapabilityUnsupported {
+            vm: vm.to_owned(),
+            runtime_kind: "component-session".to_owned(),
+            capability: "persistent-shell".to_owned(),
+            verb: "shell".to_owned(),
+        }
+    })
+}
+
+fn shell_resource_get(
+    client: &DaemonResourceApiClient,
+    zone: &ZoneId,
+    name: &public_wire::ShellName,
+) -> Result<Option<d2b_contracts_resource::v3::ResourceEnvelope>, TypedError> {
+    let resource_ref = ResourceRef::parse(&format!(
+        "shell-terminal.d2bus.org.ShellSession/{}",
+        name.as_str()
+    ))
+    .map_err(|_| shell_protocol_failed())?;
+    let mut request = resource_wire::GetRequest::new();
+    request.meta = protobuf::MessageField::some(DaemonShellAuthority::shell_resource_request_meta(
+        "shell-session-get",
+    ));
+    request.target = protobuf::MessageField::some(DaemonShellAuthority::shell_resource_identity(
+        zone,
+        &resource_ref,
+    ));
+    let mut projection = resource_wire::Projection::new();
+    projection.kind =
+        protobuf::EnumOrUnknown::new(resource_wire::ProjectionKind::PROJECTION_KIND_FULL);
+    request.projection = protobuf::MessageField::some(projection);
+    let response = block_on_future(client.get(request));
+    let Some(resource) = response.resource.as_ref() else {
+        return match response
+            .error
+            .as_ref()
+            .and_then(|error| error.kind.enum_value().ok())
+        {
+            Some(resource_wire::ResourceErrorKind::RESOURCE_ERROR_KIND_RESOURCE_NOT_FOUND) => {
+                Ok(None)
+            }
+            Some(_) | None => Err(response
+                .error
+                .as_ref()
+                .map(shell_resource_api_error)
+                .unwrap_or_else(shell_protocol_failed)),
+        };
+    };
+    d2b_contracts_resource::v3::ResourceEnvelope::from_json(&resource.canonical_json)
+        .map(Some)
+        .map_err(|_| shell_protocol_failed())
+}
+
+fn shell_resource_api_error(error: &resource_wire::ResourceError) -> TypedError {
+    match error.kind.enum_value().ok() {
+        Some(resource_wire::ResourceErrorKind::RESOURCE_ERROR_KIND_AUTHORIZATION_DENIED) => {
+            TypedError::AuthzNotAdmin {
+                verb: "shell".to_owned(),
+            }
+        }
+        Some(resource_wire::ResourceErrorKind::RESOURCE_ERROR_KIND_TIMEOUT) => {
+            shell_failed(d2bd_runtime::typed_error::ComponentSessionShellErrorKind::Timeout)
+        }
+        Some(
+            resource_wire::ResourceErrorKind::RESOURCE_ERROR_KIND_RESOURCE_PROVIDER_UNAVAILABLE
+            | resource_wire::ResourceErrorKind::RESOURCE_ERROR_KIND_RESOURCE_PLANE_UNAVAILABLE,
+        ) => shell_transport_failed(),
+        Some(resource_wire::ResourceErrorKind::RESOURCE_ERROR_KIND_BACKPRESSURE) => {
+            shell_failed(d2bd_runtime::typed_error::ComponentSessionShellErrorKind::Capacity)
+        }
+        Some(
+            resource_wire::ResourceErrorKind::RESOURCE_ERROR_KIND_RESOURCE_NOT_FOUND
+            | resource_wire::ResourceErrorKind::RESOURCE_ERROR_KIND_RESOURCE_ALREADY_EXISTS
+            | resource_wire::ResourceErrorKind::RESOURCE_ERROR_KIND_RESOURCE_CONFLICT,
+        ) => shell_failed(d2bd_runtime::typed_error::ComponentSessionShellErrorKind::NotFound),
+        _ => shell_protocol_failed(),
+    }
+}
+
+fn map_shell_authority_error(error: ShellTerminalError) -> TypedError {
+    match error {
+        ShellTerminalError::CapacityExceeded => {
+            shell_failed(d2bd_runtime::typed_error::ComponentSessionShellErrorKind::Capacity)
+        }
+        ShellTerminalError::StaleSessionGeneration
+        | ShellTerminalError::CapabilityReused
+        | ShellTerminalError::CapabilitySessionMismatch
+        | ShellTerminalError::AttachmentUnknown => {
+            shell_failed(d2bd_runtime::typed_error::ComponentSessionShellErrorKind::StaleSession)
+        }
+        ShellTerminalError::NotAuthorized => TypedError::AuthzNotAdmin {
+            verb: "shell".to_owned(),
+        },
+        ShellTerminalError::WrongZone
+        | ShellTerminalError::InvalidName
+        | ShellTerminalError::CapacityOutOfRange
+        | ShellTerminalError::InvalidLoginShell
+        | ShellTerminalError::RelayHostUserDomainDenied
+        | ShellTerminalError::WorkloadIdentityMismatch
+        | ShellTerminalError::GuestUserDomainUnsupported
+        | ShellTerminalError::SupervisorAmbiguous => shell_protocol_failed(),
+    }
+}
+
+fn shell_session_entry(
+    bytes: &[u8],
+    default_name: &public_wire::ShellName,
+) -> Result<public_wire::ShellListEntry, TypedError> {
+    let value: Value = serde_json::from_slice(bytes).map_err(|_| shell_protocol_failed())?;
+    let name = value
+        .pointer("/metadata/name")
+        .and_then(Value::as_str)
+        .and_then(|name| public_wire::ShellName::new(name).ok())
+        .ok_or_else(shell_protocol_failed)?;
+    let attached = value
+        .pointer("/status/resource/attached")
+        .and_then(Value::as_bool)
+        .or_else(|| value.pointer("/status/attached").and_then(Value::as_bool))
+        .unwrap_or(false);
+    let state = match value.pointer("/status/phase").and_then(Value::as_str) {
+        Some("Failed") | Some("Degraded") => public_wire::ShellSessionState::FeatureDisabled,
+        Some("Deleted") => public_wire::ShellSessionState::Killed,
+        _ if attached => public_wire::ShellSessionState::Attached,
+        _ => public_wire::ShellSessionState::Detached,
+    };
+    Ok(public_wire::ShellListEntry {
+        is_default: name == *default_name,
+        name,
+        state,
+        attached,
+    })
+}
+
+fn production_guest_shell_list(
+    state: &ServerState,
+    vm: &str,
+) -> Result<public_wire::ShellListResult, TypedError> {
+    let _driver = require_guest_component_session(state, vm)?;
+    let (zone, client) = shell_resource_client(state)?;
+    let target = ResourceRef::parse(&format!("Guest/{vm}")).map_err(|_| shell_protocol_failed())?;
+    let default_name = public_wire::ShellName::new("primary").expect("valid default shell name");
+    let mut request = resource_wire::ListRequest::new();
+    request.meta = protobuf::MessageField::some(DaemonShellAuthority::shell_resource_request_meta(
+        "shell-session-list",
+    ));
+    request
+        .resource_types
+        .push("shell-terminal.d2bus.org.ShellSession".to_owned());
+    let mut filter = resource_wire::ListFilter::new();
+    filter.field = "spec.executionRef".to_owned();
+    filter.values.push(target.to_canonical_string());
+    request.filters.push(filter);
+    request.page_size = 256;
+    let mut projection = resource_wire::Projection::new();
+    projection.kind =
+        protobuf::EnumOrUnknown::new(resource_wire::ProjectionKind::PROJECTION_KIND_FULL);
+    request.projection = protobuf::MessageField::some(projection);
+    let response = block_on_future(client.list(request));
+    if let Some(error) = response.error.as_ref() {
+        return Err(shell_resource_api_error(error));
+    }
+    let sessions = response
+        .resources
+        .iter()
+        .map(|resource| shell_session_entry(&resource.canonical_json, &default_name))
+        .collect::<Result<Vec<_>, _>>()?;
+    let _ = zone;
+    Ok(public_wire::ShellListResult {
+        default_name,
+        sessions,
+    })
+}
+
+fn production_guest_shell_detach(
+    state: &ServerState,
+    vm: &str,
+    name: Option<public_wire::ShellName>,
+) -> Result<public_wire::ShellDetachResult, TypedError> {
+    let _driver = require_guest_component_session(state, vm)?;
+    let (zone, client) = shell_resource_client(state)?;
+    let name = name.unwrap_or_else(|| public_wire::ShellName::new("primary").expect("default"));
+    let Some(envelope) = shell_resource_get(&client, &zone, &name)? else {
+        return Err(TypedError::WorkloadTargetNotFound {
+            target: format!("shell-terminal.d2bus.org.ShellSession/{}", name.as_str()),
+        });
+    };
+    let _ = envelope;
+    Ok(public_wire::ShellDetachResult {
+        resolved_name: name,
+        detached: true,
+        cause: Some(public_wire::ShellCloseCause::ClientDetach),
+    })
+}
+
+fn production_guest_shell_kill(
+    state: &ServerState,
+    vm: &str,
+    name: public_wire::ShellName,
+) -> Result<public_wire::ShellKillResult, TypedError> {
+    let _driver = require_guest_component_session(state, vm)?;
+    let (zone, client) = shell_resource_client(state)?;
+    let Some(envelope) = shell_resource_get(&client, &zone, &name)? else {
+        return Err(TypedError::WorkloadTargetNotFound {
+            target: format!("shell-terminal.d2bus.org.ShellSession/{}", name.as_str()),
+        });
+    };
+    let session = shell_session_from_resource(&envelope)?;
+    daemon_shell_authority(state)
+        .remove_supervisor_process_resource(&session)
+        .map_err(map_shell_authority_error)?;
+    let resource_ref = ResourceRef::parse(&format!(
+        "shell-terminal.d2bus.org.ShellSession/{}",
+        name.as_str()
+    ))
+    .map_err(|_| shell_protocol_failed())?;
+    let mut mutation = resource_wire::Mutation::new();
+    mutation.kind = protobuf::EnumOrUnknown::new(resource_wire::MutationKind::MUTATION_KIND_DELETE);
+    mutation.target =
+        protobuf::MessageField::some(DaemonShellAuthority::shell_resource_identity_with_revision(
+            &zone,
+            &resource_ref,
+            envelope.metadata().uid(),
+            envelope.metadata().generation().get(),
+            envelope.metadata().revision().get(),
+        ));
+    let mut precondition = resource_wire::Precondition::new();
+    precondition.kind = protobuf::EnumOrUnknown::new(
+        resource_wire::PreconditionKind::PRECONDITION_KIND_EXACT_REVISION,
+    );
+    precondition.expected_revision = Some(envelope.metadata().revision().get());
+    mutation.precondition = protobuf::MessageField::some(precondition);
+    let mut request = resource_wire::DeleteRequest::new();
+    request.meta = protobuf::MessageField::some(DaemonShellAuthority::shell_resource_request_meta(
+        "shell-session-kill",
+    ));
+    request.mutation = protobuf::MessageField::some(mutation);
+    let response = block_on_future(client.delete(request));
+    if let Some(error) = response.error.as_ref() {
+        return Err(shell_resource_api_error(error));
+    }
+    Ok(public_wire::ShellKillResult {
+        name,
+        killed: true,
+        state: public_wire::ShellSessionState::Killed,
+    })
+}
+
 fn dispatch_shell_management(
     state: &ServerState,
     peer: &PeerIdentity,
@@ -8940,33 +11601,12 @@ fn dispatch_shell_management(
             })?;
             let (result, provider, target, operation_digest) = match resolved.route.clone() {
                 WorkloadRoute::LocalVm { vm } => {
-                    let result = run_guest_shell_management(
-                        state,
-                        &vm,
-                        broker_caller_role_for_peer(peer),
-                        |client, metadata| {
-                            let mut request = pb::ShellListRequest::new();
-                            request.metadata = protobuf::MessageField::some(metadata);
-                            async move {
-                                let response: pb::ShellListResponse = client
-                                    .unary_with_timeout(
-                                        "ShellList",
-                                        request,
-                                        SHELL_MANAGEMENT_TIMEOUT,
-                                    )
-                                    .await
-                                    .map_err(map_shell_health_error)?;
-                                shell_error_to_typed(response.error.as_ref())?;
-                                map_shell_list_response(response)
-                            }
-                        },
-                    )
-                    .inspect_err(|error| {
+                    let result = production_guest_shell_list(state, &vm).inspect_err(|error| {
                         record_shell_dispatch_failure(
                             state,
                             peer.uid,
                             &vm,
-                            d2bd_runtime::shell_backend::ShellProvider::GuestControl,
+                            d2bd_runtime::shell_backend::ShellProvider::ComponentSession,
                             "list",
                             None,
                             error,
@@ -8974,7 +11614,7 @@ fn dispatch_shell_management(
                     })?;
                     (
                         result,
-                        d2bd_runtime::shell_backend::ShellProvider::GuestControl,
+                        d2bd_runtime::shell_backend::ShellProvider::ComponentSession,
                         vm,
                         None,
                     )
@@ -9059,42 +11699,21 @@ fn dispatch_shell_management(
             })?;
             let (result, provider, target, operation_digest) = match resolved.route.clone() {
                 WorkloadRoute::LocalVm { vm } => {
-                    let result = run_guest_shell_management(
-                        state,
-                        &vm,
-                        broker_caller_role_for_peer(peer),
-                        |client, metadata| {
-                            let mut request = pb::ShellDetachRequest::new();
-                            request.metadata = protobuf::MessageField::some(metadata);
-                            request.name = name.map(|name| name.as_str().to_owned());
-                            async move {
-                                let response: pb::ShellDetachResponse = client
-                                    .unary_with_timeout(
-                                        "ShellDetach",
-                                        request,
-                                        SHELL_MANAGEMENT_TIMEOUT,
-                                    )
-                                    .await
-                                    .map_err(map_shell_health_error)?;
-                                shell_error_to_typed(response.error.as_ref())?;
-                                map_shell_detach_response(response)
-                            }
-                        },
-                    )
-                    .inspect_err(|error| {
-                        record_shell_dispatch_failure(
-                            state,
-                            peer.uid,
-                            &vm,
-                            d2bd_runtime::shell_backend::ShellProvider::GuestControl,
-                            "detach",
-                            None,
-                            error,
-                        );
-                    })?;
+                    let result = production_guest_shell_detach(state, &vm, name.clone())
+                        .inspect_err(|error| {
+                            record_shell_dispatch_failure(
+                                state,
+                                peer.uid,
+                                &vm,
+                                d2bd_runtime::shell_backend::ShellProvider::ComponentSession,
+                                "detach",
+                                None,
+                                error,
+                            );
+                        })?;
                     (
                         result,
-                        d2bd_runtime::shell_backend::ShellProvider::GuestControl,
+                        d2bd_runtime::shell_backend::ShellProvider::ComponentSession,
                         vm,
                         None,
                     )
@@ -9176,43 +11795,21 @@ fn dispatch_shell_management(
             })?;
             let (result, provider, target, operation_digest) = match resolved.route.clone() {
                 WorkloadRoute::LocalVm { vm } => {
-                    let guest_name = requested_name.clone();
-                    let result = run_guest_shell_management(
-                        state,
-                        &vm,
-                        broker_caller_role_for_peer(peer),
-                        |client, metadata| {
-                            let mut request = pb::ShellKillRequest::new();
-                            request.metadata = protobuf::MessageField::some(metadata);
-                            request.name = guest_name.as_str().to_owned();
-                            async move {
-                                let response: pb::ShellKillResponse = client
-                                    .unary_with_timeout(
-                                        "ShellKill",
-                                        request,
-                                        SHELL_MANAGEMENT_TIMEOUT,
-                                    )
-                                    .await
-                                    .map_err(map_shell_health_error)?;
-                                shell_error_to_typed(response.error.as_ref())?;
-                                map_shell_kill_response(response)
-                            }
-                        },
-                    )
-                    .inspect_err(|error| {
-                        record_shell_dispatch_failure(
-                            state,
-                            peer.uid,
-                            &vm,
-                            d2bd_runtime::shell_backend::ShellProvider::GuestControl,
-                            "kill",
-                            None,
-                            error,
-                        );
-                    })?;
+                    let result = production_guest_shell_kill(state, &vm, requested_name.clone())
+                        .inspect_err(|error| {
+                            record_shell_dispatch_failure(
+                                state,
+                                peer.uid,
+                                &vm,
+                                d2bd_runtime::shell_backend::ShellProvider::ComponentSession,
+                                "kill",
+                                None,
+                                error,
+                            );
+                        })?;
                     (
                         result,
-                        d2bd_runtime::shell_backend::ShellProvider::GuestControl,
+                        d2bd_runtime::shell_backend::ShellProvider::ComponentSession,
                         vm,
                         None,
                     )
@@ -9411,14 +12008,14 @@ fn record_resolved_shell_failure(
                 .unwrap_or_else(|| unresolved_shell_audit_target().to_owned()),
         ),
         WorkloadRoute::LocalVm { vm } => (
-            d2bd_runtime::shell_backend::ShellProvider::GuestControl,
+            d2bd_runtime::shell_backend::ShellProvider::ComponentSession,
             vm.clone(),
         ),
         WorkloadRoute::CapabilityUnavailable { provider } => (
             if *provider == d2b_realm_core::WorkloadProviderKind::UnsafeLocal {
                 d2bd_runtime::shell_backend::ShellProvider::UnsafeLocal
             } else {
-                d2bd_runtime::shell_backend::ShellProvider::GuestControl
+                d2bd_runtime::shell_backend::ShellProvider::ComponentSession
             },
             resolved
                 .identity
@@ -9442,8 +12039,8 @@ fn shell_audit_provider(
     provider: d2bd_runtime::shell_backend::ShellProvider,
 ) -> d2bd_runtime::daemon_audit::ShellAuditProvider {
     match provider {
-        d2bd_runtime::shell_backend::ShellProvider::GuestControl => {
-            d2bd_runtime::daemon_audit::ShellAuditProvider::GuestControl
+        d2bd_runtime::shell_backend::ShellProvider::ComponentSession => {
+            d2bd_runtime::daemon_audit::ShellAuditProvider::ComponentSession
         }
         d2bd_runtime::shell_backend::ShellProvider::UnsafeLocal => {
             d2bd_runtime::daemon_audit::ShellAuditProvider::UnsafeLocal
@@ -9580,6 +12177,121 @@ fn typed_shell_execution_target(value: &str) -> Result<String, TypedError> {
         "Guest" => Ok(execution_ref.name().as_str().to_owned()),
         _ => Err(shell_protocol_failed()),
     }
+}
+
+fn guest_shell_session(
+    state: &ServerState,
+    vm: &str,
+    name: &public_wire::ShellName,
+) -> Result<(ShellPool, ShellSession), TypedError> {
+    let resolver = load_bundle_resolver(state)?;
+    let entry =
+        resolver
+            .manifest
+            .vms
+            .get(vm)
+            .ok_or_else(|| TypedError::WorkloadTargetNotFound {
+                target: vm.to_owned(),
+            })?;
+    let shell = entry
+        .shell
+        .as_ref()
+        .filter(|shell| shell.enabled)
+        .ok_or_else(shell_capability_failed)?;
+    let workload_user = entry
+        .ssh_user
+        .as_deref()
+        .ok_or_else(shell_capability_failed)?;
+    let pool_name = format!("{vm}-shell");
+    let pool = ShellPool::new(
+        pool_name,
+        "local-root",
+        PoolSpec::new(
+            ExecutionTarget::guest(vm.to_owned()),
+            workload_user,
+            "artifact://shells/bash-login",
+            shell.max_sessions,
+            shell.max_attached,
+            DEFAULT_OUTPUT_RING_CAPACITY,
+        )
+        .map_err(|_| shell_protocol_failed())?,
+    )
+    .map_err(|_| shell_protocol_failed())?;
+    let session =
+        ShellSession::from_pool_with_resource_name(&pool, name.as_str(), name.as_str(), None)
+            .map_err(|_| shell_protocol_failed())?;
+    Ok((pool, session))
+}
+
+fn shell_session_from_resource(
+    envelope: &d2b_contracts_resource::v3::ResourceEnvelope,
+) -> Result<ShellSession, TypedError> {
+    if envelope.resource_type().as_str() != "shell-terminal.d2bus.org.ShellSession" {
+        return Err(shell_protocol_failed());
+    }
+    let spec = serde_json::from_slice::<Value>(&envelope.spec().base().to_canonical_bytes())
+        .map_err(|_| shell_protocol_failed())?;
+    let execution_ref = spec
+        .get("executionRef")
+        .and_then(Value::as_str)
+        .and_then(|value| ResourceRef::parse(value).ok())
+        .filter(|value| matches!(value.resource_type().as_str(), "Host" | "Guest"))
+        .ok_or_else(shell_protocol_failed)?;
+    let user_ref = spec
+        .get("userRef")
+        .and_then(Value::as_str)
+        .and_then(|value| ResourceRef::parse(value).ok())
+        .filter(|value| value.resource_type().as_str() == "User")
+        .ok_or_else(shell_protocol_failed)?;
+    let pool_name = spec
+        .get("poolRef")
+        .and_then(Value::as_str)
+        .and_then(|value| ResourceRef::parse(value).ok())
+        .filter(|value| value.resource_type().as_str() == "shell-terminal.d2bus.org.ShellPool")
+        .map(|value| value.name().as_str().to_owned())
+        .unwrap_or_else(|| "shell".to_owned());
+    let login_shell_ref = spec
+        .get("loginShellRef")
+        .and_then(Value::as_str)
+        .ok_or_else(shell_protocol_failed)?;
+    let target = if execution_ref.resource_type().as_str() == "Host" {
+        ExecutionTarget::host(execution_ref.name().as_str().to_owned())
+    } else {
+        ExecutionTarget::guest(execution_ref.name().as_str().to_owned())
+    };
+    let pool = ShellPool::new(
+        pool_name,
+        envelope.metadata().zone().as_str(),
+        PoolSpec::new(
+            target,
+            user_ref.name().as_str().to_owned(),
+            login_shell_ref.to_owned(),
+            spec.get("maxSessions")
+                .and_then(Value::as_u64)
+                .and_then(|value| u32::try_from(value).ok())
+                .unwrap_or(8),
+            spec.get("maxAttached")
+                .and_then(Value::as_u64)
+                .and_then(|value| u32::try_from(value).ok())
+                .unwrap_or(1),
+            spec.get("outputRingCapacity")
+                .and_then(Value::as_u64)
+                .unwrap_or(DEFAULT_OUTPUT_RING_CAPACITY),
+        )
+        .map_err(|_| shell_protocol_failed())?,
+    )
+    .map_err(|_| shell_protocol_failed())?;
+    let session_name = spec
+        .get("sessionName")
+        .and_then(Value::as_str)
+        .unwrap_or(envelope.metadata().name().as_str());
+    ShellSession::from_pool_with_resource_name(
+        &pool,
+        envelope.metadata().name().as_str(),
+        session_name,
+        spec.get("outputRingCapacity").and_then(Value::as_u64),
+    )
+    .map_err(|_| shell_protocol_failed())
 }
 
 fn configured_shell_targets(state: &ServerState) -> Result<Vec<String>, TypedError> {
@@ -9845,6 +12557,317 @@ fn spawn_typed_shell_owner(
         })
 }
 
+fn process_stream_response(
+    runtime: &tokio::runtime::Handle,
+    client: &dyn exec_session::ExecGuestClient,
+    request: public_wire::NamedProcessStreamRequest,
+    control_sequence: &mut u64,
+) -> Result<(public_wire::NamedProcessStreamResponse, bool), exec_session::ExecOpError> {
+    use d2bd_runtime::terminal_session::OutputStreamSel;
+    match request {
+        public_wire::NamedProcessStreamRequest::Stdin {
+            offset,
+            chunk_base64,
+            eof,
+        } => {
+            let data = d2b_core::base64_codec::decode(&chunk_base64)
+                .map_err(|_| exec_session::ExecOpError::Protocol)?;
+            let result = runtime.block_on(client.write_stdin(
+                offset,
+                data,
+                eof,
+                SHELL_MANAGEMENT_TIMEOUT,
+            ))?;
+            Ok((
+                public_wire::NamedProcessStreamResponse::Stdin(public_wire::ExecWriteStdinResult {
+                    accepted_len: result.accepted_len,
+                    next_offset: result.next_offset,
+                    backpressured: result.backpressured,
+                    stdin_closed: result.stdin_closed,
+                }),
+                false,
+            ))
+        }
+        public_wire::NamedProcessStreamRequest::Read {
+            stream,
+            offset,
+            max_len,
+            wait,
+            timeout_ms,
+        } => {
+            let result = runtime.block_on(client.read_output(
+                match stream {
+                    public_wire::ExecStream::Stdout => OutputStreamSel::Stdout,
+                    public_wire::ExecStream::Stderr => OutputStreamSel::Stderr,
+                },
+                offset,
+                max_len,
+                wait,
+                timeout_ms,
+                SHELL_MANAGEMENT_TIMEOUT,
+            ))?;
+            Ok((
+                public_wire::NamedProcessStreamResponse::Output(
+                    public_wire::ExecReadOutputResult {
+                        data_base64: d2b_core::base64_codec::encode(&result.data),
+                        next_offset: result.next_offset,
+                        eof: result.eof,
+                        dropped_bytes: result.dropped_bytes,
+                        truncated: result.truncated,
+                        timed_out: result.timed_out,
+                    },
+                ),
+                false,
+            ))
+        }
+        public_wire::NamedProcessStreamRequest::Signal { control_seq, signo } => {
+            if control_seq == 0 || control_seq <= *control_sequence {
+                return Err(exec_session::ExecOpError::OldGeneration);
+            }
+            runtime.block_on(client.signal(control_seq, signo, SHELL_MANAGEMENT_TIMEOUT))?;
+            *control_sequence = control_seq;
+            Ok((
+                public_wire::NamedProcessStreamResponse::Delivered(
+                    public_wire::ExecControlResult { delivered: true },
+                ),
+                false,
+            ))
+        }
+        public_wire::NamedProcessStreamRequest::Resize {
+            control_seq,
+            rows,
+            cols,
+        } => {
+            if control_seq == 0 || control_seq <= *control_sequence {
+                return Err(exec_session::ExecOpError::OldGeneration);
+            }
+            runtime.block_on(client.resize(control_seq, rows, cols, SHELL_MANAGEMENT_TIMEOUT))?;
+            *control_sequence = control_seq;
+            Ok((
+                public_wire::NamedProcessStreamResponse::Delivered(
+                    public_wire::ExecControlResult { delivered: true },
+                ),
+                false,
+            ))
+        }
+        public_wire::NamedProcessStreamRequest::CloseStdin { offset } => {
+            runtime.block_on(client.close_stdin(offset, SHELL_MANAGEMENT_TIMEOUT))?;
+            Ok((
+                public_wire::NamedProcessStreamResponse::Closed(public_wire::ExecCloseResult {
+                    stdin_closed: true,
+                }),
+                false,
+            ))
+        }
+        public_wire::NamedProcessStreamRequest::Wait { timeout_ms } => {
+            let result = runtime.block_on(client.wait(timeout_ms, SHELL_MANAGEMENT_TIMEOUT))?;
+            let terminal_status = result.terminal.map(|terminal| match terminal {
+                d2bd_runtime::terminal_session::TerminalKind::Exited(code) => {
+                    public_wire::ExecTerminalStatus::Exited { code }
+                }
+                d2bd_runtime::terminal_session::TerminalKind::Signaled(signal) => {
+                    public_wire::ExecTerminalStatus::Signaled { signal }
+                }
+                d2bd_runtime::terminal_session::TerminalKind::Error(slug) => {
+                    public_wire::ExecTerminalStatus::Error {
+                        slug: slug.to_owned(),
+                    }
+                }
+            });
+            Ok((
+                public_wire::NamedProcessStreamResponse::Wait(public_wire::ExecWaitResult {
+                    running: result.running,
+                    terminal_status,
+                }),
+                false,
+            ))
+        }
+        public_wire::NamedProcessStreamRequest::Cancel => {
+            runtime.block_on(client.cancel(0, SHELL_MANAGEMENT_TIMEOUT))?;
+            Ok((
+                public_wire::NamedProcessStreamResponse::Closed(public_wire::ExecCloseResult {
+                    stdin_closed: true,
+                }),
+                true,
+            ))
+        }
+        public_wire::NamedProcessStreamRequest::Close => {
+            runtime.block_on(client.cancel(0, SHELL_MANAGEMENT_TIMEOUT))?;
+            Ok((
+                public_wire::NamedProcessStreamResponse::Closed(public_wire::ExecCloseResult {
+                    stdin_closed: true,
+                }),
+                true,
+            ))
+        }
+    }
+}
+
+fn run_process_resource_owner(
+    stream: Socket,
+    state: ServerState,
+    peer: PeerIdentity,
+    request: Value,
+    _conn_permit: Option<d2bd_runtime::concurrency::ConnPermit>,
+) {
+    #[cfg(test)]
+    {
+        if let Some(hook) = owner_connection_test_hook::active() {
+            hook();
+            drop(stream);
+            return;
+        }
+    }
+    let (vm, execution_ref) = match if request.get("executionRef").is_some() {
+        process_resource_execution_ref(&request)
+    } else {
+        process_resource_execution_ref_from_resource(&state, &request)
+    } {
+        Ok(value) => value,
+        Err(error) => {
+            let _ = write_json_frame(&stream, &d2bd_runtime::wire::error_frame(&error));
+            return;
+        }
+    };
+    let _slot = match state.exec_sessions.reserve(peer.uid, &vm) {
+        Ok(slot) => slot,
+        Err(error) => {
+            let error = map_exec_reserve_error(error);
+            let _ = write_json_frame(&stream, &d2bd_runtime::wire::error_frame(&error));
+            return;
+        }
+    };
+    let spec = exec_session::ExecStartSpec {
+        vm: vm.clone(),
+        request_id: request
+            .get("opId")
+            .and_then(Value::as_u64)
+            .map(|value| value.to_string()),
+        argv: request
+            .get("argv")
+            .and_then(Value::as_array)
+            .map(|argv| {
+                argv.iter()
+                    .filter_map(Value::as_str)
+                    .map(ToOwned::to_owned)
+                    .collect()
+            })
+            .unwrap_or_default(),
+        tty: request.get("tty").and_then(Value::as_bool).unwrap_or(false),
+        detached: request
+            .get("detached")
+            .and_then(Value::as_bool)
+            .unwrap_or(false),
+        env: Vec::new(),
+        cwd: request
+            .get("cwd")
+            .and_then(Value::as_str)
+            .map(ToOwned::to_owned),
+        term_size: request
+            .get("initialSize")
+            .and_then(Value::as_object)
+            .and_then(|size| {
+                size.get("rows")
+                    .and_then(Value::as_u64)
+                    .zip(size.get("cols").and_then(Value::as_u64))
+                    .map(|(rows, cols)| (rows as u32, cols as u32))
+            }),
+    };
+    let resource_ref = process_resource_ref(&request);
+    let Some(resource_ref) = resource_ref else {
+        let error = TypedError::ProcessExecFailed {
+            kind: d2bd_runtime::typed_error::ProcessExecErrorKind::Protocol,
+        };
+        let _ = write_json_frame(&stream, &d2bd_runtime::wire::error_frame(&error));
+        return;
+    };
+    let connector = match exec_session_real::ResourceExecConnector::new(
+        production_process_resource_port(&state, &request, &execution_ref),
+        execution_ref,
+    ) {
+        Ok(connector) => connector,
+        Err(error) => {
+            let error = map_resource_exec_error(establish_error_as_exec_error(error), &vm);
+            let _ = write_json_frame(&stream, &d2bd_runtime::wire::error_frame(&error));
+            return;
+        }
+    };
+    let rt = match tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+    {
+        Ok(rt) => rt,
+        Err(_) => {
+            let error = TypedError::ProcessExecFailed {
+                kind: d2bd_runtime::typed_error::ProcessExecErrorKind::Internal,
+            };
+            let _ = write_json_frame(&stream, &d2bd_runtime::wire::error_frame(&error));
+            return;
+        }
+    };
+    let established = match rt.block_on(connector.establish(&spec)) {
+        Ok(established) => established,
+        Err(error) => {
+            let error = map_resource_exec_error(establish_error_as_exec_error(error), &vm);
+            let _ = write_json_frame(&stream, &d2bd_runtime::wire::error_frame(&error));
+            return;
+        }
+    };
+    let initial = serde_json::json!({
+        "attached": true,
+        "resourceRef": resource_ref.to_canonical_string(),
+        "tty": spec.tty,
+    });
+    if write_json_frame(&stream, &initial).is_err() {
+        let _ = rt.block_on(established.client.cancel(
+            established.control_seq.saturating_add(1),
+            SHELL_MANAGEMENT_TIMEOUT,
+        ));
+        return;
+    }
+    let mut control_sequence = established.control_seq;
+    let client = established.client;
+    while let Ok(frame) = read_frame(&stream) {
+        let request: public_wire::NamedProcessStreamRequestFrame =
+            match serde_json::from_slice(&frame) {
+                Ok(request) => request,
+                Err(_) => {
+                    let _ = write_named_process_stream_error(&stream, 0, shell_protocol_failed());
+                    break;
+                }
+            };
+        let request_id = request.request_id;
+        let result = process_stream_response(
+            rt.handle(),
+            client.as_ref(),
+            request.request,
+            &mut control_sequence,
+        );
+        let (response, terminal) = match result {
+            Ok(result) => result,
+            Err(error) => {
+                let typed = map_resource_exec_error(error, &vm);
+                let _ = write_named_process_stream_error(&stream, request_id, typed);
+                continue;
+            }
+        };
+        let frame = public_wire::NamedProcessStreamResponseFrame::new(request_id, response);
+        if write_json_frame(
+            &stream,
+            &serde_json::to_value(frame).unwrap_or_else(|_| serde_json::json!({})),
+        )
+        .is_err()
+        {
+            break;
+        }
+        if terminal {
+            break;
+        }
+    }
+    let _ =
+        rt.block_on(client.cancel(control_sequence.saturating_add(1), SHELL_MANAGEMENT_TIMEOUT));
+}
+
 fn run_typed_shell_owner(
     stream: Socket,
     state: ServerState,
@@ -9969,11 +12992,52 @@ fn run_typed_shell_owner(
             .unwrap_or(false),
         initial_terminal_size: size,
     };
+    if matches!(
+        resolve_shell_target(&state, &target)
+            .map(|resolved| resolved.route)
+            .as_ref(),
+        Ok(workload_dispatch::WorkloadRoute::LocalVm { .. })
+    ) {
+        let (pool, session) = match guest_shell_session(&state, &target, &name) {
+            Ok(value) => value,
+            Err(error) => {
+                let _ = write_json_frame(&stream, &typed_shell_resource_error_frame(&error));
+                return;
+            }
+        };
+        let authority = daemon_shell_authority(&state);
+        let session_created = match authority.ensure_shell_resources(&pool, &session) {
+            Ok(created) => created,
+            Err(error) => {
+                let error = map_shell_authority_error(error);
+                let _ = write_json_frame(&stream, &typed_shell_resource_error_frame(&error));
+                return;
+            }
+        };
+        if creating && session_created {
+            if let Err(error) = authority.restore_pool(&pool, 0) {
+                let error = map_shell_authority_error(error);
+                let _ = write_json_frame(&stream, &typed_shell_resource_error_frame(&error));
+                return;
+            }
+            if let Err(error) = authority.open_session(&session) {
+                let error = map_shell_authority_error(error);
+                let _ = write_json_frame(&stream, &typed_shell_resource_error_frame(&error));
+                return;
+            }
+        }
+        if let Err(error) = authority.ensure_supervisor_process_resource(&session) {
+            let error = map_shell_authority_error(error);
+            let _ = write_json_frame(&stream, &typed_shell_resource_error_frame(&error));
+            return;
+        }
+    }
     let established = match rt.block_on(establish_shell_backend(
         &state,
         peer.uid,
         broker_caller_role_for_peer(&peer),
         &attach,
+        production_component_session_driver(&state, &target),
     )) {
         Ok(value) => value,
         Err(error) => {
@@ -10064,7 +13128,7 @@ fn run_typed_shell_owner(
     .is_err()
     {
         let mut control_sequence = established.initial_control_sequence;
-        d2bd_runtime::shell_backend::best_effort_close(
+        d2bd_runtime::shell_backend::best_effort_cancel(
             established.backend.as_ref(),
             rt.handle(),
             &mut control_sequence,
@@ -10098,96 +13162,190 @@ fn run_typed_shell_owner(
     let mut control_sequence = established.initial_control_sequence;
     let mut close_result = None;
     while let Ok(frame) = read_frame(&stream) {
-        let value: Value = match serde_json::from_slice(&frame) {
-            Ok(value) => value,
-            Err(_) => break,
-        };
-        let kind = value.get("type").and_then(Value::as_str).unwrap_or("");
-        if matches!(kind, "namedStreamClose" | "namedStreamCancel") {
+        let request: public_wire::NamedProcessStreamRequestFrame =
+            match serde_json::from_slice(&frame) {
+                Ok(request) => request,
+                Err(_) => {
+                    let _ = write_named_process_stream_error(
+                        &stream,
+                        0,
+                        d2bd_runtime::shell_backend::shell_protocol_failed(),
+                    );
+                    break;
+                }
+            };
+        let request_id = request.request_id;
+        let close_stdin = matches!(
+            &request.request,
+            public_wire::NamedProcessStreamRequest::CloseStdin { .. }
+        );
+        let close = matches!(
+            &request.request,
+            public_wire::NamedProcessStreamRequest::Close
+                | public_wire::NamedProcessStreamRequest::Cancel
+        );
+        if close {
             let result = established
                 .backend
                 .close_attachment(rt.handle(), &mut control_sequence);
             match result {
                 Ok(_) => {
                     close_result = Some(d2bd_runtime::daemon_audit::ShellAuditResult::Closed);
-                    let _ = write_json_frame(&stream, &json!({"closed": true}));
+                    let response = public_wire::NamedProcessStreamResponseFrame::new(
+                        request_id,
+                        public_wire::NamedProcessStreamResponse::Closed(
+                            public_wire::ExecCloseResult { stdin_closed: true },
+                        ),
+                    );
+                    let _ = write_json_frame(
+                        &stream,
+                        &serde_json::to_value(response).unwrap_or_else(|_| json!({})),
+                    );
                 }
                 Err(error) => {
                     close_result = Some(d2bd_runtime::daemon_audit::ShellAuditResult::Refused);
-                    let _ = write_json_frame(&stream, &typed_shell_resource_error_frame(&error));
+                    let _ = write_named_process_stream_error(&stream, request_id, error);
                 }
             }
             break;
         }
-        let op = match kind {
-            "namedStreamSend" => {
-                let data = value
-                    .get("dataBase64")
-                    .and_then(Value::as_str)
-                    .and_then(|data| d2b_core::base64_codec::decode(data).ok())
-                    .unwrap_or_default();
+        let op = match request.request {
+            public_wire::NamedProcessStreamRequest::Stdin {
+                offset,
+                chunk_base64,
+                eof,
+            } => {
+                if d2b_core::base64_codec::decode(&chunk_base64).is_err() {
+                    let _ = write_named_process_stream_error(
+                        &stream,
+                        request_id,
+                        shell_protocol_failed(),
+                    );
+                    continue;
+                }
                 d2bd_runtime::shell_backend::ShellTerminalOp::WriteStdin(
                     d2b_contracts_control::terminal_wire::TerminalWriteStdin {
                         session: session.clone(),
-                        offset: value.get("offset").and_then(Value::as_u64).unwrap_or(0),
-                        chunk_base64: d2b_core::base64_codec::encode(&data),
-                        eof: false,
+                        offset,
+                        chunk_base64,
+                        eof,
                     },
                 )
             }
-            "namedStreamReceive" => d2bd_runtime::shell_backend::ShellTerminalOp::ReadOutput(
+            public_wire::NamedProcessStreamRequest::CloseStdin { offset } => {
+                d2bd_runtime::shell_backend::ShellTerminalOp::WriteStdin(
+                    d2b_contracts_control::terminal_wire::TerminalWriteStdin {
+                        session: session.clone(),
+                        offset,
+                        chunk_base64: String::new(),
+                        eof: true,
+                    },
+                )
+            }
+            public_wire::NamedProcessStreamRequest::Read {
+                stream: public_wire::ExecStream::Stdout,
+                offset,
+                max_len,
+                wait,
+                timeout_ms,
+            } => d2bd_runtime::shell_backend::ShellTerminalOp::ReadOutput(
                 d2b_contracts_control::terminal_wire::TerminalReadOutput {
                     session: session.clone(),
                     stream: d2b_contracts_control::terminal_wire::TerminalStream::Stdout,
-                    offset: value.get("offset").and_then(Value::as_u64).unwrap_or(0),
-                    max_len: value.get("maxLen").and_then(Value::as_u64).unwrap_or(65536),
-                    wait: true,
-                    timeout_ms: 50,
+                    offset,
+                    max_len,
+                    wait,
+                    timeout_ms,
                 },
             ),
-            "namedStreamResize" => d2bd_runtime::shell_backend::ShellTerminalOp::Resize(
-                d2b_contracts_control::terminal_wire::TerminalResize {
-                    session: session.clone(),
-                    op_id: control_sequence.saturating_add(1),
-                    rows: value.get("rows").and_then(Value::as_u64).unwrap_or(24) as u32,
-                    cols: value.get("cols").and_then(Value::as_u64).unwrap_or(80) as u32,
-                },
-            ),
-            _ => {
-                let _ = write_json_frame(
-                    &stream,
-                    &typed_shell_resource_error_frame(&shell_protocol_failed()),
-                );
+            public_wire::NamedProcessStreamRequest::Read { .. }
+            | public_wire::NamedProcessStreamRequest::Signal { .. }
+            | public_wire::NamedProcessStreamRequest::Wait { .. } => {
+                let _ =
+                    write_named_process_stream_error(&stream, request_id, shell_protocol_failed());
                 continue;
             }
+            public_wire::NamedProcessStreamRequest::Resize {
+                control_seq,
+                rows,
+                cols,
+            } => {
+                if control_seq == 0 || control_seq <= control_sequence {
+                    let _ = write_named_process_stream_error(
+                        &stream,
+                        request_id,
+                        shell_failed(
+                            d2bd_runtime::typed_error::ComponentSessionShellErrorKind::StaleSession,
+                        ),
+                    );
+                    continue;
+                }
+                control_sequence = control_seq.saturating_sub(1);
+                d2bd_runtime::shell_backend::ShellTerminalOp::Resize(
+                    d2b_contracts_control::terminal_wire::TerminalResize {
+                        session: session.clone(),
+                        op_id: control_seq,
+                        rows,
+                        cols,
+                    },
+                )
+            }
+            public_wire::NamedProcessStreamRequest::Close
+            | public_wire::NamedProcessStreamRequest::Cancel => unreachable!(),
         };
-        match established
+        let response = match established
             .backend
             .handle_op(rt.handle(), &mut control_sequence, op)
         {
             Ok(Some(d2bd_runtime::shell_backend::ShellTerminalResponse::WriteStdin(result))) => {
-                let _ = write_json_frame(
-                    &stream,
-                    &serde_json::to_value(result).unwrap_or_else(|_| json!({})),
-                );
+                if close_stdin {
+                    public_wire::NamedProcessStreamResponse::Closed(public_wire::ExecCloseResult {
+                        stdin_closed: result.stdin_closed,
+                    })
+                } else {
+                    public_wire::NamedProcessStreamResponse::Stdin(
+                        public_wire::ExecWriteStdinResult {
+                            accepted_len: result.accepted_len,
+                            next_offset: result.next_offset,
+                            backpressured: result.backpressured,
+                            stdin_closed: result.stdin_closed,
+                        },
+                    )
+                }
             }
             Ok(Some(d2bd_runtime::shell_backend::ShellTerminalResponse::ReadOutput(result))) => {
-                let _ = write_json_frame(
-                    &stream,
-                    &serde_json::to_value(result).unwrap_or_else(|_| json!({})),
-                );
+                public_wire::NamedProcessStreamResponse::Output(public_wire::ExecReadOutputResult {
+                    data_base64: result.data_base64,
+                    next_offset: result.next_offset,
+                    eof: result.eof,
+                    dropped_bytes: result.dropped_bytes,
+                    truncated: result.truncated,
+                    timed_out: result.timed_out,
+                })
             }
-            Ok(Some(_)) => {
-                let _ = write_json_frame(&stream, &json!({"delivered": true}));
+            Ok(Some(d2bd_runtime::shell_backend::ShellTerminalResponse::Delivered)) => {
+                public_wire::NamedProcessStreamResponse::Delivered(public_wire::ExecControlResult {
+                    delivered: true,
+                })
             }
             Ok(None) => break,
             Err(error) => {
-                let _ = write_json_frame(&stream, &typed_shell_resource_error_frame(&error));
+                let _ = write_named_process_stream_error(&stream, request_id, error);
+                continue;
             }
+        };
+        let response = public_wire::NamedProcessStreamResponseFrame::new(request_id, response);
+        if write_json_frame(
+            &stream,
+            &serde_json::to_value(response).unwrap_or_else(|_| json!({})),
+        )
+        .is_err()
+        {
+            break;
         }
     }
     let close_result = close_result.unwrap_or_else(|| {
-        d2bd_runtime::shell_backend::best_effort_close(
+        d2bd_runtime::shell_backend::best_effort_cancel(
             established.backend.as_ref(),
             rt.handle(),
             &mut control_sequence,
@@ -10203,61 +13361,12 @@ fn run_typed_shell_owner(
     shell_metric_for_provider(&state, established.provider, "close", "closed", "none");
 }
 
-struct GuestShellBackend {
-    client: Arc<d2bd_runtime::guest_control_health::TtrpcGuestControlClient>,
-    vm: String,
-    session_id: String,
-    guest_boot_id: String,
-}
-
-impl std::fmt::Debug for GuestShellBackend {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("GuestShellBackend")
-            .field("vm", &self.vm)
-            .field("session_id", &"<redacted>")
-            .field("guest_boot_id", &"<redacted>")
-            .finish_non_exhaustive()
-    }
-}
-
-impl d2bd_runtime::shell_backend::ShellBackend for GuestShellBackend {
-    fn handle_op(
-        &self,
-        runtime: &tokio::runtime::Handle,
-        control_sequence: &mut u64,
-        op: d2bd_runtime::shell_backend::ShellTerminalOp,
-    ) -> Result<Option<d2bd_runtime::shell_backend::ShellTerminalResponse>, TypedError> {
-        handle_shell_owner_op(
-            runtime,
-            self.client.as_ref(),
-            &self.vm,
-            &self.session_id,
-            &self.guest_boot_id,
-            control_sequence,
-            op,
-        )
-    }
-
-    fn close_attachment(
-        &self,
-        runtime: &tokio::runtime::Handle,
-        _control_sequence: &mut u64,
-    ) -> Result<public_wire::ShellDetachResult, TypedError> {
-        shell_close_attach_with_runtime(
-            runtime,
-            self.client.as_ref(),
-            &self.vm,
-            &self.session_id,
-            &self.guest_boot_id,
-        )
-    }
-}
-
 async fn establish_shell_backend(
     state: &ServerState,
     peer_uid: u32,
     caller_role: BrokerCallerRole,
     attach: &public_wire::ShellAttachArgs,
+    component_session_driver: Option<d2b_session::SessionDriverHandle>,
 ) -> Result<d2bd_runtime::shell_backend::EstablishedShell, TypedError> {
     use workload_dispatch::WorkloadRoute;
 
@@ -10265,37 +13374,40 @@ async fn establish_shell_backend(
 
     match resolved.route {
         WorkloadRoute::LocalVm { vm } => {
-            let mut guest_attach = attach.clone();
-            guest_attach.vm = vm.clone();
-            let (client, guest_boot_id, response) =
-                establish_guest_shell_owner_async(state, &guest_attach, caller_role.clone())
-                    .await?;
-            shell_error_to_typed(response.error.as_ref())?;
-            let session_id = response.session_id.clone().ok_or_else(|| {
-                tracing::warn!(
-                    vm = %vm,
-                    resolved_name_valid = %public_wire::ShellName::new(&response.resolved_name).is_ok(),
-                    state = ?response.state.enum_value(),
-                    force_evicted = response.force_evicted,
-                    error_present = response.error.is_some(),
-                    "shell attach response missing session id"
-                );
-                shell_protocol_failed()
-            })?;
-            let initial_control_sequence = response.control_seq;
-            let attach = map_shell_attach_response(response)?;
+            let Some(driver) = component_session_driver else {
+                let _ = (state, peer_uid, caller_role, attach);
+                return Err(TypedError::RuntimeCapabilityUnsupported {
+                    vm,
+                    runtime_kind: "component-session".to_owned(),
+                    capability: "persistent-shell".to_owned(),
+                    verb: "shell".to_owned(),
+                });
+            };
+            let public_session = new_public_shell_session_handle()?;
+            let resolved_name = attach
+                .name
+                .clone()
+                .unwrap_or_else(|| public_wire::ShellName::new("primary").expect("valid name"));
+            let backend = d2bd_runtime::shell_backend::ComponentSessionShellBackend::open(
+                driver,
+                next_component_session_stream_number(),
+                public_session.clone(),
+                resolved_name.clone(),
+            )
+            .await
+            .map_err(|_| shell_transport_failed())?;
             Ok(d2bd_runtime::shell_backend::EstablishedShell {
-                backend: Arc::new(GuestShellBackend {
-                    client,
-                    vm: vm.clone(),
-                    session_id,
-                    guest_boot_id,
-                }),
-                attach,
+                backend: Arc::new(backend),
+                attach: public_wire::ShellAttachResult {
+                    session: public_session,
+                    resolved_name,
+                    state: public_wire::ShellSessionState::Attached,
+                    force_evicted: false,
+                },
                 target: vm,
-                provider: d2bd_runtime::shell_backend::ShellProvider::GuestControl,
+                provider: d2bd_runtime::shell_backend::ShellProvider::ComponentSession,
                 operation_digest: None,
-                initial_control_sequence,
+                initial_control_sequence: 0,
             })
         }
         WorkloadRoute::UnsafeLocal => {
@@ -10514,329 +13626,9 @@ fn map_shell_helper_registry_error(
     }
 }
 
-async fn establish_guest_shell_owner_async(
-    state: &ServerState,
-    attach: &public_wire::ShellAttachArgs,
-    caller_role: BrokerCallerRole,
-) -> Result<
-    (
-        Arc<d2bd_runtime::guest_control_health::TtrpcGuestControlClient>,
-        String,
-        pb::ShellAttachResponse,
-    ),
-    TypedError,
-> {
-    ensure_vm_runtime_capability(
-        state,
-        &attach.vm,
-        RuntimeCapabilityGate::GuestControl,
-        "shell",
-    )?;
-    let resolver = load_bundle_resolver(state)?;
-    let params = resolve_guest_control_probe_params(state, &resolver, &attach.vm)
-        .map_err(|_| shell_transport_failed())?;
-    let broker_path = broker_socket_path(state);
-    let budget = d2bd_runtime::guest_control_health::AttemptBudget::from_now(
-        SHELL_MANAGEMENT_TIMEOUT,
-        guest_control_bridge::GUEST_CONTROL_ATTEMPT_CAP,
-    );
-    let signer = guest_control_bridge::BrokerSigner::with_caller_role(
-        broker_path,
-        budget,
-        caller_role.clone(),
-    );
-    let nonce = guest_control_bridge::host_nonce().map_err(|_| shell_transport_failed())?;
-    let client = guest_control_bridge::connect_and_build_client(&params, budget)
-        .map_err(map_shell_health_error)?;
-    let evidence = d2bd_runtime::guest_control_health::probe_guest_control_health(
-        &params.vm_id,
-        Some(guest_control_bridge::VMADDR_CID_HOST),
-        nonce,
-        &client,
-        &signer,
-    )
-    .await
-    .map_err(map_shell_health_error)?;
-    if !guest_advertises_capability(
-        &evidence.health.capabilities,
-        pb::GuestCapability::GUEST_CAPABILITY_SHELL_ATTACHED,
-    ) {
-        return Err(shell_capability_failed());
-    }
-    if attach.force
-        && !guest_advertises_capability(
-            &evidence.health.capabilities,
-            pb::GuestCapability::GUEST_CAPABILITY_SHELL_FORCE_ATTACH,
-        )
-    {
-        return Err(shell_capability_failed());
-    }
-    let mut request = pb::ShellAttachRequest::new();
-    request.metadata = protobuf::MessageField::some(shell_request_metadata(&params.vm_id));
-    request.name = attach.name.as_ref().map(|name| name.as_str().to_owned());
-    request.force = attach.force;
-    let mut size = pb::TerminalSize::new();
-    size.rows = attach.initial_terminal_size.rows;
-    size.cols = attach.initial_terminal_size.cols;
-    request.initial_terminal_size = protobuf::MessageField::some(size);
-    let response: pb::ShellAttachResponse = client
-        .unary_with_timeout("ShellAttach", request, SHELL_MANAGEMENT_TIMEOUT)
-        .await
-        .map_err(map_shell_health_error)?;
-    shell_error_to_typed(response.error.as_ref())?;
-    Ok((Arc::new(client), evidence.guest_boot_id, response))
-}
-
-fn shell_request_metadata(vm: &str) -> pb::RequestMetadata {
-    let mut metadata = pb::RequestMetadata::new();
-    metadata.vm_id = vm.to_owned();
-    metadata.request_id = "guest-control-shell".to_owned();
-    metadata.protocol_version = d2b_contracts_control::guest_wire::GUEST_CONTROL_PROTOCOL_VERSION;
-    metadata
-}
-
-fn shell_terminal_metadata(
-    vm: &str,
-    session_id: &str,
-    guest_boot_id: &str,
-) -> pb::TerminalRequestMetadata {
-    let mut metadata = pb::TerminalRequestMetadata::new();
-    metadata.common = protobuf::MessageField::some(shell_request_metadata(vm));
-    metadata.session_id = session_id.to_owned();
-    metadata.guest_boot_id = guest_boot_id.to_owned();
-    metadata.kind = protobuf::EnumOrUnknown::new(pb::TerminalKind::TERMINAL_KIND_SHELL);
-    metadata
-}
-
-fn ensure_shell_owner_session(
-    request_session: &str,
-    owner_session: &str,
-) -> Result<(), TypedError> {
-    if request_session == owner_session {
-        Ok(())
-    } else {
-        Err(shell_failed(
-            d2bd_runtime::typed_error::GuestControlShellErrorKind::StaleSession,
-        ))
-    }
-}
-
-fn handle_shell_owner_op(
-    rt: &tokio::runtime::Handle,
-    client: &d2bd_runtime::guest_control_health::TtrpcGuestControlClient,
-    vm: &str,
-    session_id: &str,
-    guest_boot_id: &str,
-    control_seq: &mut u64,
-    op: d2bd_runtime::shell_backend::ShellTerminalOp,
-) -> Result<Option<d2bd_runtime::shell_backend::ShellTerminalResponse>, TypedError> {
-    use d2b_contracts_control::terminal_wire as tw;
-    match op {
-        d2bd_runtime::shell_backend::ShellTerminalOp::WriteStdin(args) => {
-            ensure_shell_owner_session(&args.session, session_id)?;
-            let data = d2b_core::base64_codec::decode(&args.chunk_base64)
-                .map_err(|_| shell_protocol_failed())?;
-            let mut request = pb::TerminalWriteStdinRequest::new();
-            request.metadata = protobuf::MessageField::some(shell_terminal_metadata(
-                vm,
-                session_id,
-                guest_boot_id,
-            ));
-            request.offset = args.offset;
-            request.data = data;
-            request.close_after = args.eof;
-            let response: pb::WriteStdinResponse = rt
-                .block_on(client.unary_with_timeout(
-                    "TerminalWriteStdin",
-                    request,
-                    SHELL_MANAGEMENT_TIMEOUT,
-                ))
-                .map_err(map_shell_health_error)?;
-            if let Some(error) = response.error.as_ref() {
-                tracing::warn!(
-                    vm = %vm,
-                    op = "write-stdin",
-                    error_kind = ?error.kind.enum_value(),
-                    "shell terminal guest error"
-                );
-            }
-            shell_error_to_typed(response.error.as_ref())?;
-            Ok(Some(
-                d2bd_runtime::shell_backend::ShellTerminalResponse::WriteStdin(
-                    tw::TerminalWriteStdinResult {
-                        accepted_len: response.accepted_len,
-                        next_offset: response.next_offset,
-                        backpressured: response.blocked_ms > 0,
-                        stdin_closed: matches!(
-                            response.stdin_state.enum_value(),
-                            Ok(pb::StdinState::STDIN_STATE_CLOSED
-                                | pb::StdinState::STDIN_STATE_CLOSED_BY_PROCESS
-                                | pb::StdinState::STDIN_STATE_CLOSING)
-                        ),
-                    },
-                ),
-            ))
-        }
-        d2bd_runtime::shell_backend::ShellTerminalOp::ReadOutput(args) => {
-            ensure_shell_owner_session(&args.session, session_id)?;
-            let mut request = pb::TerminalReadOutputRequest::new();
-            request.metadata = protobuf::MessageField::some(shell_terminal_metadata(
-                vm,
-                session_id,
-                guest_boot_id,
-            ));
-            request.stream = protobuf::EnumOrUnknown::new(match args.stream {
-                tw::TerminalStream::Stdout => pb::OutputStream::OUTPUT_STREAM_STDOUT,
-                tw::TerminalStream::Stderr => pb::OutputStream::OUTPUT_STREAM_STDERR,
-            });
-            request.offset = args.offset;
-            request.max_len = args
-                .max_len
-                .min(d2b_contracts_control::public_wire::EXEC_MAX_CHUNK_BYTES);
-            request.wait = args.wait;
-            let (timeout_ms, op_deadline) = shell_poll_timeout(args.timeout_ms, args.wait);
-            request.timeout_ms = timeout_ms;
-            let response: pb::ReadOutputResponse = rt
-                .block_on(client.unary_with_timeout("TerminalReadOutput", request, op_deadline))
-                .map_err(map_shell_health_error)?;
-            if let Some(error) = response.error.as_ref() {
-                tracing::warn!(
-                    vm = %vm,
-                    op = "read-output",
-                    error_kind = ?error.kind.enum_value(),
-                    "shell terminal guest error"
-                );
-            }
-            shell_error_to_typed(response.error.as_ref())?;
-            Ok(Some(
-                d2bd_runtime::shell_backend::ShellTerminalResponse::ReadOutput(
-                    tw::TerminalReadOutputChunk {
-                        data_base64: d2b_core::base64_codec::encode(&response.data),
-                        next_offset: response.next_offset,
-                        eof: response.eof,
-                        dropped_bytes: response.dropped_bytes,
-                        truncated: response.truncated,
-                        timed_out: response.timed_out,
-                    },
-                ),
-            ))
-        }
-        d2bd_runtime::shell_backend::ShellTerminalOp::Resize(args) => {
-            ensure_shell_owner_session(&args.session, session_id)?;
-            *control_seq = control_seq.saturating_add(1);
-            let mut request = pb::TerminalTtyWinResizeRequest::new();
-            request.metadata = protobuf::MessageField::some(shell_terminal_metadata(
-                vm,
-                session_id,
-                guest_boot_id,
-            ));
-            request.control_seq = *control_seq;
-            request.rows = args.rows;
-            request.cols = args.cols;
-            let response: pb::ControlAck = rt
-                .block_on(client.unary_with_timeout(
-                    "TerminalTtyWinResize",
-                    request,
-                    SHELL_MANAGEMENT_TIMEOUT,
-                ))
-                .map_err(map_shell_health_error)?;
-            shell_error_to_typed(response.error.as_ref())?;
-            Ok(Some(
-                d2bd_runtime::shell_backend::ShellTerminalResponse::Delivered,
-            ))
-        }
-    }
-}
-
-fn shell_close_attach_with_runtime(
-    rt: &tokio::runtime::Handle,
-    client: &d2bd_runtime::guest_control_health::TtrpcGuestControlClient,
-    vm: &str,
-    session_id: &str,
-    guest_boot_id: &str,
-) -> Result<public_wire::ShellDetachResult, TypedError> {
-    let mut request = pb::ShellCloseAttachRequest::new();
-    request.metadata =
-        protobuf::MessageField::some(shell_terminal_metadata(vm, session_id, guest_boot_id));
-    let response: pb::ShellDetachResponse = rt
-        .block_on(client.unary_with_timeout("ShellCloseAttach", request, SHELL_MANAGEMENT_TIMEOUT))
-        .map_err(map_shell_health_error)?;
-    shell_error_to_typed(response.error.as_ref())?;
-    map_shell_detach_response(response)
-}
-
-fn run_guest_shell_management<F, Fut, T>(
-    state: &ServerState,
-    vm: &str,
-    caller_role: BrokerCallerRole,
-    f: F,
-) -> Result<T, TypedError>
-where
-    F: FnOnce(
-        Arc<d2bd_runtime::guest_control_health::TtrpcGuestControlClient>,
-        pb::RequestMetadata,
-    ) -> Fut,
-    Fut: Future<Output = Result<T, TypedError>>,
-{
-    ensure_vm_runtime_capability(state, vm, RuntimeCapabilityGate::GuestControl, "shell")?;
-    let resolver = load_bundle_resolver(state)?;
-    let params = resolve_guest_control_probe_params(state, &resolver, vm).map_err(|detail| {
-        tracing::warn!(
-            kind = "critical",
-            subsystem = "guest-control-shell",
-            error_kind = "transport-io",
-            "guest-control shell: probe params unresolved: {detail}"
-        );
-        shell_transport_failed()
-    })?;
-    let broker_path = broker_socket_path(state);
-    block_on_future(async move {
-        let budget = d2bd_runtime::guest_control_health::AttemptBudget::from_now(
-            SHELL_MANAGEMENT_TIMEOUT,
-            guest_control_bridge::GUEST_CONTROL_ATTEMPT_CAP,
-        );
-        let signer = guest_control_bridge::BrokerSigner::with_caller_role(
-            broker_path,
-            budget,
-            caller_role.clone(),
-        );
-        let nonce = guest_control_bridge::host_nonce().map_err(|_| shell_transport_failed())?;
-        let client = guest_control_bridge::connect_and_build_client(&params, budget)
-            .map_err(map_shell_health_error)?;
-        let evidence = d2bd_runtime::guest_control_health::probe_guest_control_health(
-            &params.vm_id,
-            Some(guest_control_bridge::VMADDR_CID_HOST),
-            nonce,
-            &client,
-            &signer,
-        )
-        .await
-        .map_err(map_shell_health_error)?;
-        if !guest_advertises_capability(
-            &evidence.health.capabilities,
-            pb::GuestCapability::GUEST_CAPABILITY_SHELL_MANAGEMENT,
-        ) {
-            return Err(shell_capability_failed());
-        }
-        let mut metadata = pb::RequestMetadata::new();
-        metadata.vm_id = params.vm_id.clone();
-        metadata.request_id = "guest-control-shell".to_owned();
-        metadata.protocol_version =
-            d2b_contracts_control::guest_wire::GUEST_CONTROL_PROTOCOL_VERSION;
-        f(Arc::new(client), metadata).await
-    })
-}
-
-/// Increment the closed-label exec outcome counter. `outcome` and `error_kind`
-/// are the only labels besides the constant subsystem; all three are drawn
-/// from a hard allowlist (no vm/uid/handle/argv ever becomes a label).
-fn exec_metric(state: &ServerState, outcome: &'static str, error_kind: &'static str) {
-    exec_metric_into(&state.metrics_registry, outcome, error_kind);
-}
-
 fn emit_detached_create_audit(state: &ServerState, peer_uid: u32, vm: &str, exec_id: &str) {
     if let Err(err) = state.daemon_audit.write_event(
-        &d2bd_runtime::daemon_audit::DaemonEvent::GuestControlExecDetachedCreate {
+        &d2bd_runtime::daemon_audit::DaemonEvent::ComponentSessionExecDetachedCreate {
             vm: vm.to_owned(),
             peer_uid,
             action: d2bd_runtime::daemon_audit::DetachedExecAuditAction::Create,
@@ -10851,362 +13643,6 @@ fn emit_detached_create_audit(state: &ServerState, peer_uid: u32, vm: &str, exec
     }
 }
 
-fn emit_detached_kill_audit(
-    state: &ServerState,
-    peer_uid: u32,
-    vm: &str,
-    result: Result<&public_wire::ExecDetachedKillResult, &TypedError>,
-) {
-    let (audit_result, exec_id) = match result {
-        Ok(kill) => (
-            match kill.result {
-                public_wire::ExecDetachedKillOutcome::Cancelling => {
-                    d2bd_runtime::daemon_audit::DetachedExecAuditResult::Cancelling
-                }
-                public_wire::ExecDetachedKillOutcome::AlreadyTerminal => {
-                    d2bd_runtime::daemon_audit::DetachedExecAuditResult::AlreadyTerminal
-                }
-            },
-            kill.exec_id.as_str(),
-        ),
-        Err(_) => (
-            d2bd_runtime::daemon_audit::DetachedExecAuditResult::Error,
-            "<redacted-on-error>",
-        ),
-    };
-    if let Err(err) = state.daemon_audit.write_event(
-        &d2bd_runtime::daemon_audit::DaemonEvent::GuestControlExecDetachedKill {
-            vm: vm.to_owned(),
-            peer_uid,
-            action: d2bd_runtime::daemon_audit::DetachedExecAuditAction::Cancel,
-            result: audit_result,
-            exec_id: exec_id.to_owned(),
-        },
-    ) {
-        tracing::warn!(
-            error = %err,
-            "failed to write detached exec kill daemon audit event"
-        );
-    }
-}
-
-/// Owner-connection handler for an exec session. Runs on a SPAWNED thread off
-/// the serial accept loop: the public.sock accept loop never blocks for
-/// the lifetime of an exec. SO_PEERCRED admin was verified before the spawn.
-///
-/// Lifecycle (non-detached): reserve a session slot (cap-checked BEFORE any
-/// connect/auth/ExecCreate), spawn the per-session worker, relay the establish
-/// reply, then proxy one op per frame. The connection's EOF/POLLHUP closes the
-/// command channel, which returns the worker, drops the runtime, and drops the
-/// authenticated client - prompting the guest `close_connection` and PTY
-/// teardown. The slot is released when its RAII guard drops on return.
-fn run_exec_owner(
-    stream: Socket,
-    state: ServerState,
-    peer: PeerIdentity,
-    first_op_id: u64,
-    first_op: public_wire::ExecOp,
-    // Admission permit held for the lifetime of the exec session so the
-    // in-flight connection slot is released only on owner termination.
-    _conn_permit: Option<d2bd_runtime::concurrency::ConnPermit>,
-) {
-    // Test seam: when an accept-loop test installs the owner-body hook, run it
-    // (holding `stream` - and thus the owner session - open for as long as the
-    // hook blocks) and return without touching real bundle/guest state. Placing
-    // the hook HERE, in the owner body itself, is what lets a test distinguish
-    // an off-loop spawn from an inline call: a hypothetical inline
-    // `handle_connection` would run this body - and block in the hook - on the
-    // accept-loop thread, so its caller would never observe a prompt return.
-    #[cfg(test)]
-    {
-        if let Some(hook) = owner_connection_test_hook::active() {
-            hook();
-            drop(stream);
-            return;
-        }
-    }
-    // The owner socket is read by the reader (this thread) and written by a
-    // dedicated writer thread concurrently; SOCK_SEQPACKET send/recv on the
-    // same fd from two threads is safe, so share it behind an `Arc`.
-    let stream = Arc::new(stream);
-    let public_wire::ExecOp::Start(start) = first_op else {
-        // A non-`Start` first op on a fresh owner connection has no session.
-        let error = TypedError::GuestControlExecFailed {
-            kind: d2bd_runtime::typed_error::GuestControlExecErrorKind::Protocol,
-        };
-        let _ = write_json_frame(
-            stream.as_ref(),
-            &d2bd_runtime::wire::error_frame_with_id(first_op_id, &error),
-        );
-        exec_metric(&state, "error", "protocol");
-        return;
-    };
-
-    if let Err(error) =
-        ensure_vm_runtime_capability(&state, &start.vm, RuntimeCapabilityGate::Exec, "exec")
-    {
-        let _ = write_json_frame(
-            stream.as_ref(),
-            &d2bd_runtime::wire::error_frame_with_id(first_op_id, &error),
-        );
-        exec_metric(&state, "error", error.kind());
-        return;
-    }
-
-    if start.argv.is_empty() {
-        let error = TypedError::GuestControlExecFailed {
-            kind: d2bd_runtime::typed_error::GuestControlExecErrorKind::Protocol,
-        };
-        let _ = write_json_frame(
-            stream.as_ref(),
-            &d2bd_runtime::wire::error_frame_with_id(first_op_id, &error),
-        );
-        exec_metric(&state, "error", "protocol");
-        return;
-    }
-    if start.detached {
-        match exec_detached::create_as(&state, &start, broker_caller_role_for_peer(&peer)) {
-            Ok(result) => {
-                emit_detached_create_audit(&state, peer.uid, &start.vm, &result.exec_id);
-                let response = public_wire::ExecOpResponse::DetachedCreate(result);
-                if write_json_frame(
-                    stream.as_ref(),
-                    &d2bd_runtime::wire::exec_response_with_id(first_op_id, &response),
-                )
-                .is_err()
-                {
-                    exec_metric(&state, "error", "transport");
-                    return;
-                }
-                exec_metric(&state, "established", "none");
-            }
-            Err(error) => {
-                let kind = exec_error_kind_label(&error);
-                let _ = write_json_frame(
-                    stream.as_ref(),
-                    &d2bd_runtime::wire::error_frame_with_id(first_op_id, &error),
-                );
-                exec_metric(&state, "error", kind);
-            }
-        }
-        return;
-    }
-
-    let resolver = match load_bundle_resolver(&state) {
-        Ok(resolver) => resolver,
-        Err(_) => {
-            let error = TypedError::GuestControlExecFailed {
-                kind: d2bd_runtime::typed_error::GuestControlExecErrorKind::Transport,
-            };
-            let _ = write_json_frame(
-                stream.as_ref(),
-                &d2bd_runtime::wire::error_frame_with_id(first_op_id, &error),
-            );
-            exec_metric(&state, "error", "transport");
-            return;
-        }
-    };
-    let params = match resolve_guest_control_probe_params(&state, &resolver, &start.vm) {
-        Ok(params) => params,
-        Err(_) => {
-            // No process DAG / no vsock socket: the VM is not a guest-control
-            // generation. Fail closed (old-generation), never SSH.
-            let error = TypedError::GuestControlExecFailed {
-                kind: d2bd_runtime::typed_error::GuestControlExecErrorKind::OldGeneration,
-            };
-            let _ = write_json_frame(
-                stream.as_ref(),
-                &d2bd_runtime::wire::error_frame_with_id(first_op_id, &error),
-            );
-            exec_metric(&state, "error", "old-generation");
-            return;
-        }
-    };
-
-    // Reserve a session slot BEFORE any connect/auth/ExecCreate. The
-    // guard releases the slot on every return path below.
-    let slot = match state.exec_sessions.reserve(peer.uid, &start.vm) {
-        Ok(slot) => slot,
-        Err(reserve_error) => {
-            let error = map_exec_reserve_error(reserve_error);
-            let kind = exec_error_kind_label(&error);
-            let _ = write_json_frame(
-                stream.as_ref(),
-                &d2bd_runtime::wire::error_frame_with_id(first_op_id, &error),
-            );
-            exec_metric(&state, "error", kind);
-            return;
-        }
-    };
-    let handle = slot.handle().to_owned();
-
-    let spec = exec_session::ExecStartSpec {
-        vm: start.vm.clone(),
-        request_id: None,
-        argv: start.argv.clone(),
-        tty: start.tty,
-        detached: start.detached,
-        env: start
-            .env
-            .unwrap_or_default()
-            .into_iter()
-            .map(|var| (var.key, var.value))
-            .collect(),
-        cwd: start.cwd.clone(),
-        term_size: start.term_size.map(|size| (size.rows, size.cols)),
-    };
-
-    let deadlines = exec_session::ExecOpDeadlines::default();
-    let connector: Arc<dyn exec_session::ExecGuestConnector> =
-        Arc::new(exec_session_real::RealExecConnector::new(
-            params,
-            broker_socket_path(&state),
-            broker_caller_role_for_peer(&peer),
-            deadlines,
-        ));
-
-    // The terminal-cleanup reaper shuts down the owner socket so a
-    // stalled owner that never closes after the command goes terminal does not
-    // pin the session slot. It only fires AFTER the command is terminal, never
-    // while the command is live.
-    let owner_reaper: Arc<dyn exec_session::OwnerReaper> =
-        Arc::new(exec_owner_io::SocketShutdownReaper::new(stream.as_raw_fd()));
-
-    let (control_tx, control_rx) = tokio::sync::mpsc::channel::<exec_session::WorkerCommand>(16);
-    let (establish_tx, establish_rx) = tokio::sync::oneshot::channel();
-    let worker = exec_session::spawn_session_worker(exec_session::WorkerSpawn {
-        connector,
-        spec,
-        deadlines,
-        establish_tx,
-        control_rx,
-        terminal_ttl: exec_session::EXEC_TERMINAL_CLEANUP_TTL,
-        clock: Arc::new(exec_session::SystemClock),
-        owner_reaper,
-    });
-
-    let info = match establish_rx.blocking_recv() {
-        Ok(Ok(info)) => info,
-        Ok(Err(establish_error)) => {
-            let error = map_exec_establish_error(establish_error);
-            let kind = exec_error_kind_label(&error);
-            let _ = write_json_frame(
-                stream.as_ref(),
-                &d2bd_runtime::wire::error_frame_with_id(first_op_id, &error),
-            );
-            exec_metric(&state, "error", kind);
-            drop(control_tx);
-            let _ = worker.join();
-            return;
-        }
-        Err(_) => {
-            // Worker thread vanished before replying (panic / runtime build
-            // failure already mapped to Transport). Surface an internal error.
-            let error = TypedError::GuestControlExecFailed {
-                kind: d2bd_runtime::typed_error::GuestControlExecErrorKind::Internal,
-            };
-            let _ = write_json_frame(
-                stream.as_ref(),
-                &d2bd_runtime::wire::error_frame_with_id(first_op_id, &error),
-            );
-            exec_metric(&state, "error", "internal");
-            let _ = worker.join();
-            return;
-        }
-    };
-
-    // One kind=critical session-establishment span (NO per-op span/audit).
-    emit_exec_established_event(&start.vm, peer.uid, info.tty);
-    exec_metric(&state, "established", "none");
-    // Bounded lifecycle audit (leak-safe: vm + admin uid + tty only).
-    let _ = state.daemon_audit.write_event(
-        &d2bd_runtime::daemon_audit::DaemonEvent::GuestControlExecEstablished {
-            vm: start.vm.clone(),
-            peer_uid: peer.uid,
-            tty: info.tty,
-        },
-    );
-
-    // Spawn the owner writer thread BEFORE committing the session with a start
-    // response. An OS thread-spawn failure must surface as a typed internal
-    // error for the establishing op rather than panic the handler (a process
-    // exhausting its thread limit is a recoverable resource failure, not a
-    // daemon-fatal bug). With the writer up first, that failure cleanly replaces
-    // the start response.
-    let (writer, item_tx, inflight) =
-        match exec_owner_io::spawn_exec_owner_writer(&stream, &state.metrics_registry) {
-            Ok(parts) => parts,
-            Err(_) => {
-                let error = TypedError::GuestControlExecFailed {
-                    kind: d2bd_runtime::typed_error::GuestControlExecErrorKind::Internal,
-                };
-                let _ = write_json_frame(
-                    stream.as_ref(),
-                    &d2bd_runtime::wire::error_frame_with_id(first_op_id, &error),
-                );
-                exec_metric(&state, "error", "internal");
-                drop(control_tx);
-                let _ = worker.join();
-                exec_metric(&state, "closed", "none");
-                let _ = state.daemon_audit.write_event(
-                    &d2bd_runtime::daemon_audit::DaemonEvent::GuestControlExecTerminated {
-                        vm: start.vm.clone(),
-                        peer_uid: peer.uid,
-                    },
-                );
-                return;
-            }
-        };
-
-    let start_response = exec_session::start_response(&handle, &info);
-    if write_json_frame(
-        stream.as_ref(),
-        &d2bd_runtime::wire::exec_response_with_id(first_op_id, &start_response),
-    )
-    .is_err()
-    {
-        drop(item_tx);
-        drop(control_tx);
-        let _ = writer.join();
-        let _ = worker.join();
-        exec_metric(&state, "closed", "none");
-        let _ = state.daemon_audit.write_event(
-            &d2bd_runtime::daemon_audit::DaemonEvent::GuestControlExecTerminated {
-                vm: start.vm.clone(),
-                peer_uid: peer.uid,
-            },
-        );
-        return;
-    }
-
-    // Drive the owner connection: a reader (this thread) dispatches frames to
-    // the worker WITHOUT blocking on each reply, and the writer thread drains
-    // op-id-tagged replies back to the socket. `control_tx` is moved in and
-    // dropped after the reader returns, so an owner disconnect during a
-    // long-poll tears the worker down (cancelling the poll) promptly.
-    exec_owner_io::run_exec_owner_io(
-        &stream,
-        control_tx,
-        item_tx,
-        inflight,
-        writer,
-        &state.metrics_registry,
-        &handle,
-    );
-
-    let _ = worker.join();
-    drop(slot);
-    exec_metric(&state, "closed", "none");
-    let _ = state.daemon_audit.write_event(
-        &d2bd_runtime::daemon_audit::DaemonEvent::GuestControlExecTerminated {
-            vm: start.vm.clone(),
-            peer_uid: peer.uid,
-        },
-    );
-}
-
-/// A reply frame the owner writer must emit, carried from the per-op awaiter to
-/// the single socket-writing task so all owner-socket sends happen on one task.
 pub(crate) fn dispatch_broker_legacy_tpm_migration(
     state: &ServerState,
     vm_id: VmId,
@@ -11965,6 +14401,11 @@ async fn open_resource_plane(
             let _ = plane.shutdown().await;
             return Err(error);
         }
+        if let Err(error) = runtime.reconcile_semantic_binding_resources().await {
+            let _ = runtime.shutdown().await;
+            let _ = plane.shutdown().await;
+            return Err(error);
+        }
         let _ = runtime.audio_binding_statuses();
         if let Err(error) = runtime.require_ready() {
             let _ = runtime.shutdown().await;
@@ -12372,7 +14813,9 @@ impl VmStartRunner<'_> {
                 provider_identity: None,
                 template_identity: None,
                 generation: None,
+                activation_input: None,
                 sandbox_plan: None,
+                guest_execution: None,
                 role: runner_role,
                 bundle_runner_intent_ref: BundleOpId::new(intent.intent_id.clone()),
                 runtime_allocations: vec![],
@@ -12570,56 +15013,49 @@ impl VmStartRunner<'_> {
         }
     }
 
-    /// State-aware readiness for a `GuestControlHealth` node. Resolves the
-    /// per-VM probe parameters from the trusted bundle and runs the
-    /// authenticated Health probe on a dedicated current-thread runtime
-    /// inside `spawn_blocking` (a strict runtime boundary: no `Handle::current`,
-    /// `block_in_place`, or nested runtime; nothing borrowed from
-    /// `ServerState` crosses the boundary). The retry loop is bounded by
-    /// `budget.readiness`; `guest_control_health_ready` decides ready.
-    async fn wait_for_guest_control_health(
+    /// State-aware readiness for the Guest session node. Readiness is the
+    /// authenticated ComponentSession; no Guest-local Endpoint projection,
+    /// feature health RPC, or legacy component-session probe participates.
+    async fn wait_for_guest_component_session(
         &self,
         vm: &str,
         node: &ProcessNode,
         budget: d2bd_runtime::supervisor::dag::NodeBudget,
     ) -> Result<(), String> {
-        let params = resolve_guest_control_probe_params(self.state, self.resolver, vm)?;
-        let broker_path = broker_socket_path(self.state);
-        let caller_role = self.caller_role.clone();
-        let deadline = budget.readiness;
+        let deadline = Instant::now() + budget.readiness;
         let node_id = node.id.0.clone();
-        let run = tokio::task::spawn_blocking(move || {
-            let probe = guest_control_bridge::RealGuestControlProbe::with_caller_role(
-                broker_path,
-                caller_role,
-            );
-            let clock = guest_control_bridge::RealProbeClock::new();
-            guest_control_bridge::run_guest_control_readiness_loop(
-                &probe,
-                &params,
-                deadline,
-                guest_control_bridge::GUEST_CONTROL_ATTEMPT_CAP,
-                guest_control_bridge::GUEST_CONTROL_RETRY_BACKOFF,
-                &clock,
+        loop {
+            let remaining = deadline.saturating_duration_since(Instant::now());
+            if remaining.is_zero() {
+                return Err(format!("guest-component-session-not-ready:{node_id}"));
+            }
+            let attempt = tokio::time::timeout(
+                remaining.min(
+                    d2bd_runtime::guest_component_session::COMPONENT_SESSION_ATTEMPT_CAP,
+                ),
+                connect_guest_component_session_fresh(self.state, vm),
             )
-        })
-        .await
-        .map_err(|error| format!("guest-control-readiness-join:{error}"))?;
-
-        let ready = d2bd_runtime::guest_control_health::guest_control_health_ready(&run.outcome);
-        let obs = guest_control_bridge::ReadinessObservation::from_run(&run);
-        guest_control_bridge::emit_guest_control_readiness_event(&obs, ready);
-
-        if ready {
-            tracing::info!(
-                vm = %vm,
-                node = %node_id,
-                role_id = %tracked_role_id(node),
-                "guest-control-health node ready"
-            );
-            Ok(())
-        } else {
-            Err(format!("guest-control-health-not-ready:{node_id}"))
+            .await;
+            match attempt {
+                Ok(Ok(_session)) => {
+                    tracing::info!(
+                        vm = %vm,
+                        node = %node_id,
+                        role_id = %tracked_role_id(node),
+                        "Guest ComponentSession authenticated and ready"
+                    );
+                    return Ok(());
+                }
+                _ => {
+                    invalidate_guest_component_session(self.state, vm).await;
+                }
+            }
+            let delay = d2bd_runtime::guest_component_session::COMPONENT_SESSION_RETRY_BACKOFF
+                .min(deadline.saturating_duration_since(Instant::now()));
+            if delay.is_zero() {
+                return Err(format!("guest-component-session-not-ready:{node_id}"));
+            }
+            tokio::time::sleep(delay).await;
         }
     }
 }
@@ -12633,19 +15069,25 @@ impl d2bd_runtime::supervisor::dag::NodeRunner for VmStartRunner<'_> {
         readiness: &[ReadinessPredicate],
         budget: d2bd_runtime::supervisor::dag::NodeBudget,
     ) -> Result<(), String> {
-        // The authenticated guest-control Health node is readiness-only but
-        // needs daemon state (per-VM vsock socket, peer credentials, the
-        // broker-backed signer), so it cannot go through the stateless
+        if is_guest_owned_process_node(node) {
+            return Ok(());
+        }
+        if is_durable_wayland_process_node(node) {
+            return wait_for_readiness(node, readiness, budget.readiness, None);
+        }
+        // The authenticated Guest ComponentSession node is readiness-only but
+        // needs daemon state (per-VM transport endpoint and peer credentials),
+        // so it cannot go through the stateless
         // `wait_for_readiness` path. Intercept it here; this also covers the
         // `spawn_and_check_process_alive` fall-through, which delegates here.
-        if node.role == ProcessRole::GuestControlHealth {
-            return self.wait_for_guest_control_health(vm, node, budget).await;
+        if node.role == ProcessRole::ComponentSessionHealth {
+            return self.wait_for_guest_component_session(vm, node, budget).await;
         }
         if node.role == ProcessRole::SecurityKeyFrontend {
             // Security-key relay/frontend ownership belongs to the
             // Provider/device-security-key controller. The legacy daemon
             // accept loop is not allowed to open a blanket hidraw device;
-            // this legacy DAG node is readiness-only during the cutover.
+            // this legacy DAG node is readiness-only during the transition.
             return wait_for_readiness(node, readiness, budget.readiness, None);
         }
         match vm_start_node_mode(&node.role) {
@@ -12726,6 +15168,9 @@ impl d2bd_runtime::supervisor::dag::NodeRunner for VmStartRunner<'_> {
         node: &ProcessNode,
         budget: d2bd_runtime::supervisor::dag::NodeBudget,
     ) -> Result<(), String> {
+        if is_guest_owned_process_node(node) || is_durable_wayland_process_node(node) {
+            return Ok(());
+        }
         match vm_start_node_mode(&node.role) {
             VmStartNodeMode::LongLived(runner_role) => {
                 let launch = self.spawn_runner(vm, node, runner_role, budget.spawn)?;
@@ -12749,6 +15194,18 @@ impl d2bd_runtime::supervisor::dag::NodeRunner for VmStartRunner<'_> {
         readiness: &[ReadinessPredicate],
         timeout: Duration,
     ) -> d2bd_runtime::supervisor::dag::ApiReadyState {
+        if is_guest_owned_process_node(node) {
+            return d2bd_runtime::supervisor::dag::ApiReadyState::Yes;
+        }
+        if is_durable_wayland_process_node(node) {
+            return match wait_for_readiness(node, readiness, timeout, None) {
+                Ok(()) => d2bd_runtime::supervisor::dag::ApiReadyState::Yes,
+                Err(error) if error == format!("readiness-timeout:{}", node.id.0) => {
+                    d2bd_runtime::supervisor::dag::ApiReadyState::Timeout
+                }
+                Err(reason) => d2bd_runtime::supervisor::dag::ApiReadyState::Error { reason },
+            };
+        }
         // The split-readiness api-ready phase observes the already-spawned
         // long-lived runner, so wire in the liveness probe: a runner that
         // dies before the api-ready socket appears surfaces as an Error
@@ -12896,6 +15353,7 @@ fn signal_unregistered_spawned_runner(
         expected_start_time_ticks: Some(response.start_time_ticks),
         resource_ref: None,
         resource_uid: None,
+        guest_execution: None,
         tracing_span_id: None,
     });
     match dispatch_broker_request_as(state, request, caller_role) {
@@ -12999,6 +15457,64 @@ fn vm_supports_store_sync(resolver: &BundleResolver, vm: &str) -> bool {
         Some(entry) => entry.runtime.capabilities.store_sync,
         None => true,
     }
+}
+
+/// Reconcile the committed WaylandSession before the legacy VM DAG reaches
+/// the GPU edge. The durable display node remains outside DAG spawning; this
+/// path only creates and launches its Host Process child through the Resource
+/// API and Process Provider.
+fn reconcile_display_before_vm_start(
+    state: &ServerState,
+    vm: &str,
+    dag: &d2b_core::processes::VmProcessDag,
+) -> Result<(), String> {
+    if !dag.nodes.iter().any(is_durable_wayland_process_node) {
+        return Ok(());
+    }
+    let zone = d2bd_runtime::zone_authority::authoritative_zone_for_vm(
+        &state.zone_coordinator,
+        vm,
+    )
+    .map_err(|_| "display-session-zone-unavailable".to_owned())?;
+    let plane = state
+        .resource_plane
+        .lock()
+        .map_err(|_| "display-resource-plane-unavailable".to_owned())?
+        .clone()
+        .ok_or_else(|| "display-resource-plane-unavailable".to_owned())?;
+    let runtime = plane
+        .zone(&zone)
+        .map_err(|_| "display-resource-runtime-unavailable".to_owned())?;
+    let Some((session_ref, session_uid, spec)) =
+        block_on_future(runtime.committed_wayland_session_for_vm(vm))
+            .map_err(|_| "display-session-unavailable".to_owned())?
+    else {
+        return Err("display-session-missing".to_owned());
+    };
+    let result = {
+        let mut interactions = block_on_future(state.interaction_runtime.lock());
+        let runtime_set = interactions
+            .as_mut()
+            .ok_or_else(|| "display-interaction-runtime-unavailable".to_owned())?;
+        runtime_set
+            .reconcile_committed_display_for_vm_start(
+                &zone,
+                vm,
+                &session_ref,
+                &session_uid,
+                &spec,
+            )
+            .map_err(|error| error.to_string())?
+    };
+    if result.status.phase == d2b_provider_display_wayland::Phase::Failed {
+        return Err("display-session-reconcile-failed".to_owned());
+    }
+    if result.status.resource.proxy_process_ref.is_none() {
+        return Err("display-host-proxy-resource-missing".to_owned());
+    }
+    block_on_future(runtime.reconcile_process_resources(Arc::new(state.clone())))
+        .map_err(|_| "display-host-proxy-process-reconcile-failed".to_owned())?;
+    Ok(())
 }
 
 fn ensure_vm_runtime_capability(
@@ -13442,7 +15958,6 @@ fn broker_caller_uid(caller_role: &BrokerCallerRole) -> u32 {
         BrokerCallerRole::AdminUid { uid }
         | BrokerCallerRole::LauncherUid { uid }
         | BrokerCallerRole::RootUid { uid } => *uid,
-        BrokerCallerRole::CutoverRunner { .. } => 0,
         BrokerCallerRole::NotAuthorized => 0,
     }
 }
@@ -13494,6 +16009,10 @@ fn infer_runner_role_for_vm_stop(role_id: &str) -> Option<RunnerRole> {
         || role_id.contains("otel_host_bridge")
     {
         Some(RunnerRole::OtelHostBridge)
+    } else if role_id == RunnerRole::ActivationNixos.as_str()
+        || role_id.contains("activation-nixos")
+    {
+        Some(RunnerRole::ActivationNixos)
     } else {
         None
     }
@@ -13518,6 +16037,7 @@ fn vm_stop_role_priority(role: Option<RunnerRole>) -> u8 {
         Some(RunnerRole::Swtpm) => 6,
         Some(RunnerRole::Virtiofsd) => 7,
         Some(RunnerRole::SwtpmFlush) => 8,
+        Some(RunnerRole::ActivationNixos) => 9,
         None => 9,
     }
 }
@@ -13605,6 +16125,7 @@ fn signal_via_broker(
         expected_start_time_ticks: registration.as_ref().map(|entry| entry.start_time_ticks),
         resource_ref: None,
         resource_uid: None,
+        guest_execution: None,
         tracing_span_id: None,
     });
     match dispatch_broker_request_as(state, request, caller_role) {
@@ -13671,6 +16192,7 @@ fn deregister_runner_pidfd_via_broker(
             .map(|entry| entry.start_time_ticks),
         resource_ref: None,
         resource_uid: None,
+        guest_execution: None,
         tracing_span_id: None,
     });
     match dispatch_broker_request_as(state, request, caller_role) {
@@ -15345,6 +17867,15 @@ fn dispatch_broker_vm_start_as(
         return Ok(response);
     }
 
+    let resolver = load_bundle_resolver(state)?;
+    if resolver
+        .usbip_bind_intent_ids()
+        .filter_map(|intent_id| resolver.find_usbip_bind_intent(intent_id))
+        .any(|intent| intent.vm_name == request.vm)
+    {
+        return Err(usbip_guest_import_unavailable(&request.vm, VERB));
+    }
+
     let provider_route_available = match state
         .provider_runtime
         .lifecycle_route_available(&request.vm)
@@ -15726,12 +18257,28 @@ fn dispatch_broker_vm_start_inner(
     let tracked_roles = dag
         .nodes
         .iter()
+        .filter(|node| !is_guest_owned_process_node(node))
+        .filter(|node| !is_durable_wayland_process_node(node))
         .filter_map(|node| match vm_start_node_mode(&node.role) {
             VmStartNodeMode::LongLived(_) => Some(tracked_role_id(node)),
             _ => None,
         })
         .collect::<Vec<_>>();
     let _vm_start_lock = acquire_vm_start_lock(state, &request.vm)?;
+    if let Err(error) = reconcile_display_before_vm_start(state, &request.vm, dag) {
+        tracing::warn!(
+            vm = %request.vm,
+            error = %error,
+            "vm start: committed display reconciliation failed before DAG execution",
+        );
+        return Ok(daemon_failure_response(
+            VERB,
+            format!(
+                "vm start {}: committed WaylandSession display reconciliation failed ({error})",
+                request.vm
+            ),
+        ));
+    }
     // v1.1.1fu14 B3 + B7: prune entries whose backing process
     // has died (or whose PID has been reused) BEFORE checking
     // for existing registrations. This handles the
@@ -16256,7 +18803,7 @@ fn vm_start_runner_exited_response(
          If this is the swtpm (per-VM TPM) runner, the TPM state must not be wiped: \
          clearing /var/lib/d2b/vms/{vm}/swtpm looks like device tampering to your \
          identity provider and forces re-enrollment. Admin: inspect \
-         `journalctl -u d2bd` and `journalctl -u d2b-priv-broker` for the \
+         `journalctl -u d2bd` and `journalctl -u d2b-broker` for the \
          swtpm exit detail before retrying `d2b vm up {vm}`."
     );
     broker_failure_response("vm start", summary, remediation, None)
@@ -17207,9 +19754,6 @@ fn dispatch_broker_run_migrate_as(
     }
 }
 
-const GUEST_SYSTEM_ACTIVATION_REJOIN_GRACE: Duration = Duration::from_secs(60);
-const GUEST_SYSTEM_ACTIVATION_START_DEADLINE: Duration = Duration::from_secs(15);
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 enum HostActivationMarkerState {
@@ -17307,164 +19851,12 @@ fn stage_configuration_ordinal(
         .stage_configuration_ordinal(zone, ordinal)
 }
 
-fn commit_configuration_ordinal(
-    state: &ServerState,
-    zone: &ZoneId,
-) -> Result<Option<u64>, CoordinatorError> {
-    state
-        .zone_coordinator
-        .lock()
-        .map_err(|_| CoordinatorError::ZoneNotRegistered)?
-        .commit_configuration_ordinal(zone)
-}
-
-fn abort_configuration_ordinal(state: &ServerState, zone: &ZoneId) -> Result<(), CoordinatorError> {
-    state
-        .zone_coordinator
-        .lock()
-        .map_err(|_| CoordinatorError::ZoneNotRegistered)?
-        .abort_configuration_ordinal(zone)
-}
-
 fn activation_marker_dir(state: &ServerState) -> PathBuf {
     state.daemon_state_dir.join("activations")
 }
 
 fn activation_marker_path(state: &ServerState, vm: &str) -> PathBuf {
     activation_marker_dir(state).join(format!("{vm}.json"))
-}
-
-fn now_unix_secs() -> u64 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_secs()
-}
-
-fn generate_activation_id() -> Result<String, TypedError> {
-    let mut bytes = [0u8; 16];
-    getrandom::getrandom(&mut bytes).map_err(|err| TypedError::InternalIo {
-        context: "generate activation id".to_owned(),
-        detail: err.to_string(),
-    })?;
-    bytes[6] = (bytes[6] & 0x0f) | 0x40;
-    bytes[8] = (bytes[8] & 0x3f) | 0x80;
-    Ok(format!(
-        "{:02x}{:02x}{:02x}{:02x}-{:02x}{:02x}-{:02x}{:02x}-{:02x}{:02x}-{:02x}{:02x}{:02x}{:02x}{:02x}{:02x}",
-        bytes[0],
-        bytes[1],
-        bytes[2],
-        bytes[3],
-        bytes[4],
-        bytes[5],
-        bytes[6],
-        bytes[7],
-        bytes[8],
-        bytes[9],
-        bytes[10],
-        bytes[11],
-        bytes[12],
-        bytes[13],
-        bytes[14],
-        bytes[15],
-    ))
-}
-
-fn switch_script_basename(path: &str) -> String {
-    Path::new(path)
-        .parent()
-        .and_then(Path::parent)
-        .and_then(Path::file_name)
-        .and_then(OsStr::to_str)
-        .unwrap_or("unknown")
-        .to_owned()
-}
-
-fn switch_script_digest(path: &str) -> String {
-    let mut hasher = Sha256::new();
-    hasher.update(path.as_bytes());
-    format!("{:x}", hasher.finalize())
-}
-
-fn build_activation_marker(
-    vm: &str,
-    mode: BrokerActivationMode,
-    generation_number: Option<u64>,
-    activation_id: &str,
-    switch_script_path: &str,
-    state: HostActivationMarkerState,
-) -> HostActivationPendingMarker {
-    let now = now_unix_secs();
-    HostActivationPendingMarker {
-        schema_version: 1,
-        vm: vm.to_owned(),
-        mode: activation_mode_label(mode).to_owned(),
-        generation_number,
-        activation_id: activation_id.to_owned(),
-        switch_script_basename: switch_script_basename(switch_script_path),
-        switch_script_sha256: switch_script_digest(switch_script_path),
-        state,
-        created_unix_secs: now,
-        updated_unix_secs: now,
-    }
-}
-
-fn write_activation_marker_blocking(
-    path: &Path,
-    marker: &HostActivationPendingMarker,
-) -> io::Result<()> {
-    let parent = path
-        .parent()
-        .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "marker path has no parent"))?;
-    fs::create_dir_all(parent)?;
-    let tmp = parent.join(format!(".{}.{}.tmp", marker.vm, marker.activation_id));
-    {
-        let mut file = OpenOptions::new().create_new(true).write(true).open(&tmp)?;
-        file.write_all(&serde_json::to_vec_pretty(marker).map_err(io::Error::other)?)?;
-        file.write_all(b"\n")?;
-        file.set_permissions(fs::Permissions::from_mode(0o640))?;
-        file.sync_all()?;
-    }
-    fs::rename(&tmp, path)?;
-    File::open(parent)?.sync_all()?;
-    Ok(())
-}
-
-fn write_activation_marker(
-    state: &ServerState,
-    marker: &HostActivationPendingMarker,
-) -> Result<(), TypedError> {
-    let path = activation_marker_path(state, &marker.vm);
-    let marker = marker.clone();
-    std::thread::spawn(move || write_activation_marker_blocking(&path, &marker))
-        .join()
-        .map_err(|_| TypedError::InternalIo {
-            context: "write activation pending marker".to_owned(),
-            detail: "marker writer thread panicked".to_owned(),
-        })?
-        .map_err(|err| TypedError::InternalIo {
-            context: "write activation pending marker".to_owned(),
-            detail: err.to_string(),
-        })
-}
-
-fn clear_activation_marker(state: &ServerState, vm: &str) {
-    let path = activation_marker_path(state, vm);
-    let dir = activation_marker_dir(state);
-    let vm = vm.to_owned();
-    let _ = std::thread::spawn(move || {
-        match fs::remove_file(&path) {
-            Ok(()) => {}
-            Err(err) if err.kind() == io::ErrorKind::NotFound => {}
-            Err(err) => {
-                tracing::warn!(vm = %vm, error = %err, path = %path.display(), "clear activation marker failed");
-            }
-        }
-        if let Ok(parent) = File::open(&dir) {
-            let _ = parent.sync_all();
-        }
-    })
-    .join();
 }
 
 fn read_activation_marker(state: &ServerState, vm: &str) -> Option<HostActivationPendingMarker> {
@@ -17585,315 +19977,6 @@ fn activation_mode_label(mode: BrokerActivationMode) -> &'static str {
     }
 }
 
-fn activation_guest_mode(
-    mode: BrokerActivationMode,
-) -> d2bd_runtime::guest_control_health::GuestSystemActivationMode {
-    match mode {
-        BrokerActivationMode::Test => {
-            d2bd_runtime::guest_control_health::GuestSystemActivationMode::Test
-        }
-        BrokerActivationMode::Switch
-        | BrokerActivationMode::Rollback
-        | BrokerActivationMode::Boot => {
-            d2bd_runtime::guest_control_health::GuestSystemActivationMode::Switch
-        }
-    }
-}
-
-#[derive(Debug, Clone)]
-struct GuestActivationPlan {
-    vm: String,
-    mode: BrokerActivationMode,
-    activation_id: String,
-    switch_script_path: String,
-}
-
-#[derive(Debug, Clone)]
-enum GuestActivationTerminal {
-    Succeeded,
-    DefinitiveFailure {
-        summary: String,
-        remediation: GuestActivationFailureRemediation,
-    },
-    Indeterminate(String),
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum GuestActivationFailureRemediation {
-    GuestJournal,
-    UpgradeGuest,
-}
-
-#[cfg(test)]
-type TestGuestActivationHook =
-    Arc<dyn Fn(GuestActivationPlan) -> GuestActivationTerminal + Send + Sync + 'static>;
-
-#[cfg(test)]
-fn test_guest_activation_hook_cell() -> &'static Mutex<Option<TestGuestActivationHook>> {
-    use std::sync::OnceLock;
-
-    static HOOK: OnceLock<Mutex<Option<TestGuestActivationHook>>> = OnceLock::new();
-    HOOK.get_or_init(|| Mutex::new(None))
-}
-
-#[cfg(test)]
-fn test_guest_activation_hook_installed() -> bool {
-    test_guest_activation_hook_cell()
-        .lock()
-        .expect("guest activation hook")
-        .is_some()
-}
-
-#[cfg(not(test))]
-fn test_guest_activation_hook_installed() -> bool {
-    false
-}
-
-fn guest_activation_error_summary(
-    error: &d2bd_runtime::guest_control_health::GuestSystemActivationError,
-) -> String {
-    use d2bd_runtime::guest_control_health::GuestControlHealthError as H;
-    use d2bd_runtime::guest_control_health::GuestSystemActivationError as E;
-    match error {
-        E::CapabilityUnavailable => {
-            "guest-control system activation capability unavailable".to_owned()
-        }
-        E::GuestRejected(kind) => format!("guest rejected activation request ({kind:?})"),
-        E::Protocol => "guest-control activation protocol error".to_owned(),
-        E::Probe(H::Timeout) => "guest-control activation timed out".to_owned(),
-        E::Probe(H::TransportIo) | E::Probe(H::Ttrpc) => {
-            "guest-control transport dropped during activation".to_owned()
-        }
-        E::Probe(H::AuthFailed) => {
-            "guest-control authentication failed during activation".to_owned()
-        }
-        E::Probe(H::Signer) => "guest-control activation signer failed".to_owned(),
-        E::Probe(H::Protocol) => "guest-control activation protocol error".to_owned(),
-        E::Probe(H::StaleSession) => "guest-control stale session during activation".to_owned(),
-    }
-}
-
-fn guest_activation_failure_remediation(
-    error: &d2bd_runtime::guest_control_health::GuestSystemActivationError,
-) -> GuestActivationFailureRemediation {
-    match error {
-        d2bd_runtime::guest_control_health::GuestSystemActivationError::CapabilityUnavailable => {
-            GuestActivationFailureRemediation::UpgradeGuest
-        }
-        _ => GuestActivationFailureRemediation::GuestJournal,
-    }
-}
-
-fn guest_activation_error_is_indeterminate(
-    error: &d2bd_runtime::guest_control_health::GuestSystemActivationError,
-) -> bool {
-    use d2b_contracts_control::guest_proto::GuestControlErrorKind as Kind;
-    matches!(
-        error,
-        d2bd_runtime::guest_control_health::GuestSystemActivationError::Probe(
-            d2bd_runtime::guest_control_health::GuestControlHealthError::TransportIo
-                | d2bd_runtime::guest_control_health::GuestControlHealthError::Ttrpc
-                | d2bd_runtime::guest_control_health::GuestControlHealthError::Timeout
-        ) | d2bd_runtime::guest_control_health::GuestSystemActivationError::GuestRejected(
-            Kind::GUEST_CONTROL_ERROR_KIND_ACTIVATION_NOT_FOUND
-                | Kind::GUEST_CONTROL_ERROR_KIND_ACTIVATION_STATUS_UNAVAILABLE
-        )
-    )
-}
-
-fn guest_activation_error_is_not_found(
-    error: &d2bd_runtime::guest_control_health::GuestSystemActivationError,
-) -> bool {
-    matches!(
-        error,
-        d2bd_runtime::guest_control_health::GuestSystemActivationError::GuestRejected(
-            pb::GuestControlErrorKind::GUEST_CONTROL_ERROR_KIND_ACTIVATION_NOT_FOUND
-        )
-    )
-}
-
-fn run_guest_system_activation(
-    state: &ServerState,
-    params: Option<guest_control_bridge::ProbeParams>,
-    plan: GuestActivationPlan,
-    caller_role: BrokerCallerRole,
-) -> GuestActivationTerminal {
-    tracing::info!(
-        vm = %plan.vm,
-        mode = activation_mode_label(plan.mode),
-        activation_id = %plan.activation_id,
-        "starting guest-control system activation"
-    );
-    #[cfg(test)]
-    if let Some(hook) = test_guest_activation_hook_cell()
-        .lock()
-        .expect("guest activation hook")
-        .clone()
-    {
-        return hook(plan);
-    }
-
-    let Some(params) = params else {
-        return GuestActivationTerminal::DefinitiveFailure {
-            summary: "guest-control transport parameters unavailable".to_owned(),
-            remediation: GuestActivationFailureRemediation::UpgradeGuest,
-        };
-    };
-    let live_timeout = live_activation_timeout_for(state, &plan.vm);
-    let start = d2bd_runtime::guest_control_health::GuestSystemActivationStart {
-        activation_id: plan.activation_id.clone(),
-        switch_script_path: plan.switch_script_path.clone(),
-        mode: activation_guest_mode(plan.mode),
-        timeout_ms: u64::try_from(live_timeout.as_millis()).unwrap_or(u64::MAX),
-    };
-    let started = match guest_control_bridge::run_activation_start_on_dedicated_thread(
-        params.clone(),
-        state.config.broker_socket_path.clone(),
-        caller_role.clone(),
-        start,
-        GUEST_SYSTEM_ACTIVATION_START_DEADLINE,
-    ) {
-        Ok(status) => status,
-        Err(error) => {
-            let summary = guest_activation_error_summary(&error);
-            return if guest_activation_error_is_indeterminate(&error) {
-                match rejoin_guest_activation_status(
-                    state,
-                    params,
-                    plan.activation_id.clone(),
-                    caller_role.clone(),
-                    live_timeout + GUEST_SYSTEM_ACTIVATION_REJOIN_GRACE,
-                ) {
-                    GuestActivationTerminal::Indeterminate(detail) => {
-                        GuestActivationTerminal::Indeterminate(format!("{summary}; {detail}"))
-                    }
-                    terminal => terminal,
-                }
-            } else {
-                GuestActivationTerminal::DefinitiveFailure {
-                    summary,
-                    remediation: guest_activation_failure_remediation(&error),
-                }
-            };
-        }
-    };
-    if !matches!(
-        started.state,
-        pb::GuestActivationState::GUEST_ACTIVATION_STATE_RUNNING
-            | pb::GuestActivationState::GUEST_ACTIVATION_STATE_SUCCEEDED
-    ) {
-        return guest_activation_state_to_terminal(started);
-    }
-    if started.state == pb::GuestActivationState::GUEST_ACTIVATION_STATE_SUCCEEDED {
-        return GuestActivationTerminal::Succeeded;
-    }
-
-    rejoin_guest_activation_status(
-        state,
-        params,
-        plan.activation_id,
-        caller_role,
-        live_timeout + GUEST_SYSTEM_ACTIVATION_REJOIN_GRACE,
-    )
-}
-
-fn rejoin_guest_activation_status(
-    state: &ServerState,
-    params: guest_control_bridge::ProbeParams,
-    activation_id: String,
-    caller_role: BrokerCallerRole,
-    rejoin_deadline: Duration,
-) -> GuestActivationTerminal {
-    let deadline = Instant::now() + rejoin_deadline;
-    let mut consecutive_not_found = 0_u32;
-    loop {
-        let remaining = deadline.saturating_duration_since(Instant::now());
-        if remaining.is_zero() {
-            return GuestActivationTerminal::Indeterminate(
-                "guest activation status deadline elapsed".to_owned(),
-            );
-        }
-        match guest_control_bridge::run_activation_status_on_dedicated_thread(
-            params.clone(),
-            state.config.broker_socket_path.clone(),
-            caller_role.clone(),
-            activation_id.clone(),
-            remaining.min(Duration::from_secs(15)),
-        ) {
-            Ok(status) => match status.state {
-                pb::GuestActivationState::GUEST_ACTIVATION_STATE_RUNNING => {
-                    consecutive_not_found = 0;
-                    std::thread::sleep(Duration::from_millis(250));
-                }
-                _ => return guest_activation_state_to_terminal(status),
-            },
-            Err(error) if guest_activation_error_is_indeterminate(&error) => {
-                if guest_activation_error_is_not_found(&error) {
-                    consecutive_not_found = consecutive_not_found.saturating_add(1);
-                    if consecutive_not_found >= 12 {
-                        return GuestActivationTerminal::Indeterminate(
-                            "guest activation was not found after reconnect; start RPC may not have reached guestd".to_owned(),
-                        );
-                    }
-                } else {
-                    consecutive_not_found = 0;
-                }
-                std::thread::sleep(Duration::from_millis(250));
-            }
-            Err(error) => {
-                return GuestActivationTerminal::DefinitiveFailure {
-                    summary: guest_activation_error_summary(&error),
-                    remediation: guest_activation_failure_remediation(&error),
-                };
-            }
-        }
-    }
-}
-
-fn guest_activation_state_to_terminal(
-    status: d2bd_runtime::guest_control_health::GuestSystemActivationStatus,
-) -> GuestActivationTerminal {
-    match status.state {
-        pb::GuestActivationState::GUEST_ACTIVATION_STATE_SUCCEEDED => {
-            GuestActivationTerminal::Succeeded
-        }
-        pb::GuestActivationState::GUEST_ACTIVATION_STATE_FAILED => {
-            GuestActivationTerminal::DefinitiveFailure {
-                summary: format!(
-                    "guest activation failed (exit={:?}, signal={:?}, status={:?})",
-                    status.exit_code, status.signal, status.status_code
-                ),
-                remediation: GuestActivationFailureRemediation::GuestJournal,
-            }
-        }
-        pb::GuestActivationState::GUEST_ACTIVATION_STATE_TIMED_OUT => {
-            GuestActivationTerminal::DefinitiveFailure {
-                summary: "guest activation timed out".to_owned(),
-                remediation: GuestActivationFailureRemediation::GuestJournal,
-            }
-        }
-        pb::GuestActivationState::GUEST_ACTIVATION_STATE_LOST
-        | pb::GuestActivationState::GUEST_ACTIVATION_STATE_UNSPECIFIED
-        | pb::GuestActivationState::GUEST_ACTIVATION_STATE_RUNNING => {
-            GuestActivationTerminal::Indeterminate(format!(
-                "guest activation status is {}",
-                activation_state_label(status.state)
-            ))
-        }
-    }
-}
-
-fn activation_state_label(state: pb::GuestActivationState) -> &'static str {
-    match state {
-        pb::GuestActivationState::GUEST_ACTIVATION_STATE_RUNNING => "running",
-        pb::GuestActivationState::GUEST_ACTIVATION_STATE_SUCCEEDED => "succeeded",
-        pb::GuestActivationState::GUEST_ACTIVATION_STATE_FAILED => "failed",
-        pb::GuestActivationState::GUEST_ACTIVATION_STATE_TIMED_OUT => "timed-out",
-        pb::GuestActivationState::GUEST_ACTIVATION_STATE_LOST => "lost",
-        pb::GuestActivationState::GUEST_ACTIVATION_STATE_UNSPECIFIED => "unspecified",
-    }
-}
-
 fn dispatch_broker_activation(
     state: &ServerState,
     request: public_wire::ActivationRequest,
@@ -17907,14 +19990,12 @@ fn dispatch_broker_activation(
     }
 
     if mode == BrokerActivationMode::Boot {
-        if !test_guest_activation_hook_installed() {
-            ensure_vm_runtime_capability(
-                state,
-                &request.vm,
-                RuntimeCapabilityGate::ConfigSync,
-                verb,
-            )?;
-        }
+        ensure_vm_runtime_capability(
+            state,
+            &request.vm,
+            RuntimeCapabilityGate::ConfigSync,
+            verb,
+        )?;
         return dispatch_broker_activation_metadata_only(
             state,
             request,
@@ -17925,7 +20006,263 @@ fn dispatch_broker_activation(
         );
     }
 
-    dispatch_live_guest_activation(state, request, verb, mode, caller_role, None)
+    let _ = caller_role;
+    dispatch_live_guest_activation_resource(state, request, verb, mode)
+}
+
+fn dispatch_live_guest_activation_resource(
+    state: &ServerState,
+    request: public_wire::ActivationRequest,
+    verb: &'static str,
+    mode: BrokerActivationMode,
+) -> Result<Value, TypedError> {
+    if mode != BrokerActivationMode::Rollback && request.to_generation.is_some() {
+        return Ok(invalid_request_response_with_summary(
+            verb,
+            "a target generation is valid only for rollback".to_owned(),
+            "omit --to-generation for switch, test, and boot activation".to_owned(),
+        ));
+    }
+    let guard = match try_acquire_activation_lock(state, &request.vm) {
+        Ok(guard) => guard,
+        Err(frame) => return Ok(frame),
+    };
+    let zone = guard.zone().clone();
+    let resolver = load_bundle_resolver(state)?;
+    let plane = state
+        .resource_plane
+        .lock()
+        .map_err(|_| TypedError::InternalConfig {
+            detail: "resource plane unavailable".to_owned(),
+        })?
+        .clone()
+        .ok_or_else(|| TypedError::InternalConfig {
+            detail: "resource plane unavailable".to_owned(),
+        })?;
+    let runtime = plane
+        .zone(&zone)
+        .map_err(|_| TypedError::InternalConfig {
+            detail: "activation Zone runtime unavailable".to_owned(),
+        })?;
+    let guest_ref_text = format!("Guest/{}", request.vm);
+    let guest_ref = ResourceRef::parse(&guest_ref_text).map_err(|_| {
+        TypedError::InternalConfig {
+            detail: "activation Guest reference invalid".to_owned(),
+        }
+    })?;
+    let guest_ref_canonical = guest_ref.to_canonical_string();
+    let get_guest = json!({
+        "zoneRef": format!("Zone/{}", zone.as_str()),
+        "service": "d2b.resource.v3",
+        "method": "Get",
+        "resourceRef": guest_ref_canonical,
+    });
+    let guest = block_on_future(runtime.dispatch_cli_request(&get_guest)).map_err(|_| {
+        TypedError::InternalConfig {
+            detail: "activation Guest resource unavailable".to_owned(),
+        }
+    })?;
+    if guest.get("kind").is_some() {
+        return Err(TypedError::InternalConfig {
+            detail: "activation Guest resource unavailable".to_owned(),
+        });
+    }
+    let (ordinal, artifact) = if mode == BrokerActivationMode::Rollback {
+        let target_ordinal = request.to_generation.ok_or_else(|| {
+            TypedError::InternalConfig {
+                detail: "rollback target generation unavailable".to_owned(),
+            }
+        })?;
+        let list = json!({
+            "zoneRef": format!("Zone/{}", zone.as_str()),
+            "service": "d2b.resource.v3",
+            "method": "List",
+            "resourceType": NIXOS_GENERATION_RESOURCE_TYPE,
+            "executionRef": guest_ref.to_canonical_string(),
+            "limit": 256,
+        });
+        let resources = block_on_future(runtime.dispatch_cli_request(&list)).map_err(|_| {
+            TypedError::InternalConfig {
+                detail: "rollback generations unavailable".to_owned(),
+            }
+        })?;
+        let artifact = resources
+            .get("resources")
+            .and_then(Value::as_array)
+            .into_iter()
+            .flatten()
+            .find(|resource| {
+                resource
+                    .get("spec")
+                    .and_then(|spec| spec.get("executionRef"))
+                    .and_then(Value::as_str)
+                        == Some(guest_ref_canonical.as_str())
+                    && resource
+                        .pointer("/metadata/name")
+                        .and_then(Value::as_str)
+                        .and_then(|name| name.rsplit('-').next())
+                        .and_then(|value| value.parse::<u64>().ok())
+                        == Some(target_ordinal)
+            })
+            .and_then(|resource| {
+                resource
+                    .pointer("/spec/systemArtifactId")
+                    .and_then(Value::as_str)
+            })
+            .ok_or_else(|| TypedError::InternalConfig {
+                detail: "rollback target generation is not retained".to_owned(),
+            })?;
+        (target_ordinal, artifact.to_owned())
+    } else {
+        let activation = resolver
+            .find_activation_intent(&intent_id_activation(&request.vm))
+            .ok_or_else(|| TypedError::InternalConfig {
+                detail: "activation intent unavailable".to_owned(),
+            })?;
+        let ordinal = activation
+            .generation_number
+            .filter(|generation| *generation > 0)
+            .ok_or_else(|| TypedError::InternalConfig {
+                detail: "activation generation unavailable".to_owned(),
+            })?;
+        let artifact = guest
+            .pointer("/spec/systemArtifactId")
+            .and_then(Value::as_str)
+            .ok_or_else(|| TypedError::InternalConfig {
+                detail: "activation system artifact unavailable".to_owned(),
+            })?;
+        (ordinal, artifact.to_owned())
+    };
+    let generation_name = activation_generation_name(&request.vm, ordinal, mode);
+    let generation_ref = format!("{NIXOS_GENERATION_RESOURCE_TYPE}/{generation_name}");
+    let spec = json!({
+        "providerRef": "Provider/activation-nixos",
+        "executionRef": guest_ref_canonical,
+        "systemArtifactId": artifact,
+        "activationMode": resource_activation_mode_label(mode),
+    });
+    let create = json!({
+        "zoneRef": format!("Zone/{}", zone.as_str()),
+        "service": "d2b.resource.v3",
+        "method": "Create",
+        "resourceType": NIXOS_GENERATION_RESOURCE_TYPE,
+        "resourceName": generation_name,
+        "spec": spec,
+        "waitForReconcile": false,
+    });
+    let created = block_on_future(runtime.dispatch_cli_request(&create)).map_err(|_| {
+        TypedError::InternalConfig {
+            detail: "activation resource create failed".to_owned(),
+        }
+    })?;
+    if created
+        .get("kind")
+        .and_then(Value::as_str)
+        .is_some_and(|kind| kind != "resource-already-exists")
+    {
+        return Err(TypedError::InternalConfig {
+            detail: "activation resource create refused".to_owned(),
+        });
+    }
+    let deadline = Instant::now() + live_activation_timeout_for(state, &request.vm);
+    loop {
+        if Instant::now() >= deadline {
+            return Ok(broker_failure_response(
+                verb,
+                format!("activation resource for vm '{}' timed out", request.vm),
+                format!("retry `d2b {verb} {} --apply` after the Guest session recovers", request.vm),
+                None,
+            ));
+        }
+        let get = json!({
+            "zoneRef": format!("Zone/{}", zone.as_str()),
+            "service": "d2b.resource.v3",
+            "method": "Get",
+            "resourceRef": generation_ref,
+        });
+        let current = block_on_future(runtime.dispatch_cli_request(&get)).map_err(|_| {
+            TypedError::InternalConfig {
+                detail: "activation resource status unavailable".to_owned(),
+            }
+        })?;
+        let current_spec = current.get("spec");
+        if current_spec
+            .and_then(|spec| spec.get("executionRef"))
+            != spec.get("executionRef")
+            || current_spec
+                .and_then(|spec| spec.get("systemArtifactId"))
+                != spec.get("systemArtifactId")
+            || current_spec
+                .and_then(|spec| spec.get("activationMode"))
+                != spec.get("activationMode")
+        {
+            return Ok(invalid_request_response_with_summary(
+                verb,
+                format!(
+                    "activation resource '{}' is bound to a different immutable target",
+                    generation_ref
+                ),
+                "inspect the existing NixosGeneration resource and retry with its committed activation mode"
+                    .to_owned(),
+            ));
+        }
+        match current.pointer("/status/phase").and_then(Value::as_str) {
+            Some("Ready") | Some("Succeeded") => {
+                return Ok(applied_response(
+                    verb,
+                    format!(
+                        "d2b {verb} --apply reconciled activation resource for vm '{}' through the Resource API",
+                        request.vm
+                    ),
+                ));
+            }
+            Some("Failed") | Some("Degraded") => {
+                return Ok(broker_failure_response(
+                    verb,
+                    format!("activation resource for vm '{}' failed", request.vm),
+                    "inspect the typed activation resource status before retrying".to_owned(),
+                    None,
+                ));
+            }
+            _ => std::thread::sleep(Duration::from_millis(250)),
+        }
+    }
+}
+
+fn activation_generation_name(vm: &str, ordinal: u64, mode: BrokerActivationMode) -> String {
+    let suffix = match mode {
+        BrokerActivationMode::Switch => "gen",
+        BrokerActivationMode::Boot => "boot",
+        BrokerActivationMode::Test => "test",
+        BrokerActivationMode::Rollback => "rollback",
+    };
+    let readable = format!("{vm}--{suffix}-{ordinal}");
+    if ResourceName::parse(readable.clone()).is_ok() {
+        return readable;
+    }
+    let mut digest = Sha256::new();
+    digest.update(b"d2b-activation-generation-v1");
+    digest.update([0]);
+    digest.update(vm.as_bytes());
+    digest.update([0]);
+    digest.update(suffix.as_bytes());
+    digest.update(ordinal.to_be_bytes());
+    let suffix = digest
+        .finalize()
+        .iter()
+        .take(12)
+        .map(|byte| format!("{byte:02x}"))
+        .collect::<String>();
+    format!("activation-gen-{suffix}")
+}
+
+const fn resource_activation_mode_label(mode: BrokerActivationMode) -> &'static str {
+    match mode {
+        BrokerActivationMode::Switch => "switch",
+        BrokerActivationMode::Boot => "boot",
+        BrokerActivationMode::Test => "test",
+        BrokerActivationMode::Rollback => "switch",
+    }
 }
 
 fn dispatch_run_activation_phase(
@@ -18053,271 +20390,6 @@ fn dispatch_broker_activation_metadata_only(
             response.vm,
             activation_mode_label(response.mode),
             response.summary,
-            generation_suffix,
-        ),
-    ))
-}
-
-fn dispatch_live_guest_activation(
-    state: &ServerState,
-    request: public_wire::ActivationRequest,
-    verb: &'static str,
-    mode: BrokerActivationMode,
-    caller_role: BrokerCallerRole,
-    system_artifact_id: Option<d2b_contracts_resource::v3::ArtifactId>,
-) -> Result<Value, TypedError> {
-    let _guard = match try_acquire_activation_lock(state, &request.vm) {
-        Ok(guard) => guard,
-        Err(frame) => return Ok(frame),
-    };
-
-    if !state
-        .pidfd_table
-        .still_alive_same_start_time(&request.vm, VM_RUNNER_ROLE_ID)
-    {
-        return Ok(invalid_request_response_with_summary(
-            verb,
-            format!(
-                "VM '{}' is stopped/offline; {verb} requires live guest activation",
-                request.vm
-            ),
-            format!(
-                "start the VM with `d2b vm start {} --apply` and retry `d2b {verb} {} --apply`; for offline next-boot staging use `d2b boot {} --apply`",
-                request.vm, request.vm, request.vm
-            ),
-        ));
-    }
-
-    if !test_guest_activation_hook_installed() {
-        ensure_vm_runtime_capability(state, &request.vm, RuntimeCapabilityGate::ConfigSync, verb)?;
-    }
-
-    let probe_params = if test_guest_activation_hook_installed() {
-        None
-    } else {
-        let resolver = load_bundle_resolver(state)?;
-        ensure_vm_runtime_capability(
-            state,
-            &request.vm,
-            RuntimeCapabilityGate::GuestControl,
-            verb,
-        )?;
-        match resolve_guest_control_probe_params(state, &resolver, &request.vm) {
-            Ok(params) => Some(params),
-            Err(detail) => {
-                tracing::warn!(
-                    vm = %request.vm,
-                    subsystem = "guest-control-activation",
-                    "guest-control activation: probe params unresolved: {detail}"
-                );
-                return Ok(invalid_request_response_with_summary(
-                    verb,
-                    format!(
-                        "guest-control activation for vm '{}' could not resolve guest-control transport",
-                        request.vm
-                    ),
-                    format!(
-                        "Admin: rebuild/start vm '{}' with guest-control enabled, then retry `d2b {verb} {} --apply`.",
-                        request.vm, request.vm
-                    ),
-                ));
-            }
-        }
-    };
-
-    let prepare = match dispatch_run_activation_phase(
-        state,
-        &request,
-        verb,
-        mode,
-        BrokerActivationPhase::Prepare,
-        caller_role.clone(),
-        system_artifact_id.clone(),
-    ) {
-        Ok(response) => response,
-        Err(frame) => return Ok(frame),
-    };
-    let Some(switch_script_path) = prepare.guest_switch_script_path.clone() else {
-        return Ok(daemon_failure_response(
-            verb,
-            format!(
-                "RunActivation prepare for vm '{}' did not return a guest switch script path",
-                request.vm
-            ),
-        ));
-    };
-    let activation_id = generate_activation_id()?;
-    if let Some(ordinal) = prepare.generation_number
-        && let Err(error) = stage_configuration_ordinal(state, _guard.zone(), ordinal)
-    {
-        return Ok(invalid_request_response_with_summary(
-            verb,
-            format!(
-                "configuration staging for vm '{}' is unavailable",
-                request.vm
-            ),
-            format!(
-                "the Zone configuration publisher refused this generation ({error}); retry after the existing Zone activation is resolved"
-            ),
-        ));
-    }
-    let mut marker = build_activation_marker(
-        &request.vm,
-        mode,
-        prepare.generation_number,
-        &activation_id,
-        &switch_script_path,
-        HostActivationMarkerState::Pending,
-    );
-    let marker_started = Instant::now();
-    match write_activation_marker(state, &marker) {
-        Ok(()) => {
-            record_activation_phase_metric(
-                state,
-                "marker-write",
-                mode,
-                "success",
-                marker_started.elapsed(),
-            );
-            record_activation_degraded_metric(state, true);
-        }
-        Err(error) => {
-            record_activation_phase_metric(
-                state,
-                "marker-write",
-                mode,
-                "failure",
-                marker_started.elapsed(),
-            );
-            if prepare.generation_number.is_some() {
-                let _ = abort_configuration_ordinal(state, _guard.zone());
-            }
-            return Err(error);
-        }
-    }
-
-    let guest_started = Instant::now();
-    let guest = run_guest_system_activation(
-        state,
-        probe_params,
-        GuestActivationPlan {
-            vm: request.vm.clone(),
-            mode,
-            activation_id: activation_id.clone(),
-            switch_script_path: switch_script_path.clone(),
-        },
-        caller_role.clone(),
-    );
-    match guest {
-        GuestActivationTerminal::Succeeded => {
-            record_activation_phase_metric(
-                state,
-                "guest",
-                mode,
-                "success",
-                guest_started.elapsed(),
-            );
-        }
-        GuestActivationTerminal::DefinitiveFailure {
-            summary,
-            remediation,
-        } => {
-            record_activation_phase_metric(
-                state,
-                "guest",
-                mode,
-                "failure",
-                guest_started.elapsed(),
-            );
-            if prepare.generation_number.is_some() {
-                let _ = abort_configuration_ordinal(state, _guard.zone());
-            }
-            clear_activation_marker(state, &request.vm);
-            record_activation_degraded_metric(state, false);
-            let remediation = match remediation {
-                GuestActivationFailureRemediation::GuestJournal => format!(
-                    "Inspect the guest journal for `d2b-activation-{}` and retry after fixing the guest activation failure. If this VM uses Entra/Himmelblau or another identity-bound user service, complete the in-guest provider prompt (for example `aad-tool hello`) and retry, or use `d2b boot {} --apply` followed by a VM restart when live user-session activation is expected to block.",
-                    activation_id, request.vm
-                ),
-                GuestActivationFailureRemediation::UpgradeGuest => format!(
-                    "The running guest does not support in-guest activation. Use `d2b boot {} --apply`, then restart the VM with `d2b vm restart {} --apply` to boot the generation that includes the guest activation capability.",
-                    request.vm, request.vm
-                ),
-            };
-            return Ok(broker_failure_response(
-                verb,
-                format!("guest activation failed for vm '{}': {summary}", request.vm),
-                remediation,
-                None,
-            ));
-        }
-        GuestActivationTerminal::Indeterminate(summary) => {
-            record_activation_phase_metric(
-                state,
-                "guest",
-                mode,
-                "indeterminate",
-                guest_started.elapsed(),
-            );
-            marker.state = HostActivationMarkerState::Indeterminate;
-            marker.updated_unix_secs = now_unix_secs();
-            let _ = write_activation_marker(state, &marker);
-            record_activation_degraded_metric(state, true);
-            return Ok(broker_failure_response(
-                verb,
-                format!(
-                    "guest activation indeterminate for vm '{}': {summary}",
-                    request.vm
-                ),
-                format!(
-                    "The host kept an activation-pending marker for vm '{}'. Check `d2b status {}` and retry once guest-control is healthy; broker commit was not run.",
-                    request.vm, request.vm
-                ),
-                None,
-            ));
-        }
-    }
-
-    let commit = match dispatch_run_activation_phase(
-        state,
-        &request,
-        verb,
-        mode,
-        BrokerActivationPhase::Commit,
-        caller_role,
-        system_artifact_id,
-    ) {
-        Ok(response) => response,
-        Err(frame) => {
-            marker.state = HostActivationMarkerState::Indeterminate;
-            marker.updated_unix_secs = now_unix_secs();
-            let _ = write_activation_marker(state, &marker);
-            record_activation_degraded_metric(state, true);
-            return Ok(frame);
-        }
-    };
-    if prepare.generation_number.is_some()
-        && let Err(error) = commit_configuration_ordinal(state, _guard.zone())
-    {
-        tracing::warn!(
-            vm = %request.vm,
-            error = %error,
-            "configuration publisher could not record the committed Zone generation",
-        );
-    }
-    clear_activation_marker(state, &request.vm);
-    record_activation_degraded_metric(state, false);
-    let generation_suffix = commit
-        .generation_number
-        .map(|generation| format!(", generationNumber={generation}"))
-        .unwrap_or_default();
-    Ok(applied_response(
-        verb,
-        format!(
-            "d2b {verb} --apply prepared the VM store view via the broker, ran activation inside the guest over guest-control, then committed metadata via the broker (vm={}, mode={}, summary={}{})",
-            commit.vm,
-            activation_mode_label(commit.mode),
-            commit.summary,
             generation_suffix,
         ),
     ))
@@ -19079,7 +21151,7 @@ fn publish_public_frame_if_stable(
 
 fn build_public_status(
     state: &ServerState,
-    caller_role: BrokerCallerRole,
+    _caller_role: BrokerCallerRole,
     request: public_wire::StatusRequest,
 ) -> Result<Value, TypedError> {
     let PublicRequestArtifacts {
@@ -19108,7 +21180,6 @@ fn build_public_status(
                     .as_ref()
                     .and_then(|idx| idx.identity_for_vm(name))
                     .and_then(|id| serde_json::to_value(id).ok());
-                let caller_role = caller_role.clone();
                 scope.spawn(move || {
                     let lifecycle = public_vm_lifecycle(state, name, manifest_entry, process_vm);
                     let runtime_kind = public_runtime_kind(manifest_entry);
@@ -19146,10 +21217,8 @@ fn build_public_status(
                         "usb": usb_resolver
                             .and_then(|resolver| {
                                 public_usb_status_for_vm(
-                                    state,
                                     resolver,
                                     name,
-                                    caller_role.clone(),
                                 )
                             }),
                         "services": services,
@@ -19491,6 +21560,9 @@ mod public_status_tests {
             interaction_listeners: Arc::new(Mutex::new(None)),
             typed_shell_session_targets: d2bd_runtime::typed_shell_targets::new_cache(),
             zone_coordinator: d2bd_runtime::zone_authority::new_coordinator(),
+            config_staging: Arc::new(Mutex::new(Default::default())),
+            guest_component_sessions: Arc::new(tokio::sync::Mutex::new(HashMap::new())),
+        guest_component_session_locks: Arc::new(tokio::sync::Mutex::new(HashMap::new())),
             security_key_sessions: Arc::new(parking_lot::Mutex::new(
                 crate::security_key::SkSessionTable::default(),
             )),
@@ -20257,7 +22329,7 @@ mod public_status_tests {
                             "lifecycle": true,
                             "display": false,
                             "usbHotplug": true,
-                            "guestControl": true,
+
                             "exec": true,
                             "configSync": true,
                             "ssh": true,
@@ -20304,7 +22376,7 @@ mod public_status_tests {
                             "lifecycle": true,
                             "display": false,
                             "usbHotplug": false,
-                            "guestControl": true,
+
                             "exec": true,
                             "configSync": true,
                             "ssh": true,
@@ -20488,7 +22560,7 @@ mod public_status_tests {
                 "capabilities": {
                     "configSync": false,
                     "exec": false,
-                    "guestControl": false,
+
                     "keys": false,
                     "ssh": false,
                     "storeSync": false,
@@ -20784,7 +22856,6 @@ mod public_status_tests {
             vec![
                 "config-sync",
                 "exec",
-                "guest-control",
                 "in-guest-observability",
                 "keys",
                 "ssh",
@@ -20799,7 +22870,6 @@ mod public_status_tests {
             vec![
                 "config-sync",
                 "exec",
-                "guest-control",
                 "keys",
                 "ssh",
                 "store-sync"
@@ -20941,88 +23011,13 @@ mod public_status_tests {
     }
 
     #[test]
-    fn usb_attach_apply_stopped_vm_returns_actionable_start_remediation() {
-        let (state, _dir) = test_state();
-        let frame = ensure_usbip_attach_vm_is_running(
-            &state,
-            "vm-a",
-            "1-2",
-            "usb attach",
-            &manifest_entry(),
-            None,
-        )
-        .expect_err("stopped VM must fail");
-
+    fn usbip_guest_import_unavailable_is_typed_and_fail_closed() {
+        let error = usbip_guest_import_unavailable("vm-a", "usb attach");
+        assert_eq!(error.kind(), "runtime-capability-unsupported");
+        assert_eq!(error.exit_code(), 70);
         assert_eq!(
-            frame.get("type").and_then(Value::as_str),
-            Some("mutatingVerbResponse")
-        );
-        assert_eq!(
-            frame.get("outcome").and_then(Value::as_str),
-            Some("invalid-request")
-        );
-        let remediation = frame
-            .get("remediation")
-            .and_then(Value::as_str)
-            .expect("remediation");
-        assert!(remediation.contains("VM 'vm-a' is stopped"));
-        assert!(remediation.contains("d2b vm start vm-a --apply"));
-        assert!(remediation.contains("d2b usb attach vm-a 1-2 --apply"));
-        assert!(!remediation.contains("guest-control transport unavailable"));
-
-        state
-            .pidfd_table
-            .register(
-                "vm-a".to_owned(),
-                VM_RUNNER_ROLE_ID.to_owned(),
-                current_process_entry(),
-            )
-            .expect("register ch runner");
-        ensure_usbip_attach_vm_is_running(
-            &state,
-            "vm-a",
-            "1-2",
-            "usb attach",
-            &manifest_entry(),
-            None,
-        )
-        .expect("running VM preflight passes");
-    }
-
-    #[test]
-    fn guest_usbip_status_timeout_is_unknown_without_start_remediation() {
-        let mut guest_import = public_wire::UsbipGuestImportState::Unavailable;
-        let mut degraded_reasons = Vec::new();
-        let mut remediation_commands = vec!["d2b usb attach stale 1-2 --apply".to_owned()];
-
-        push_guest_usbip_status_error(
-            GuestUsbipStatusError::Timeout(
-                "guest-control USBIP import failed for vm 'corp-vm': guest-control USBIP import timed out"
-                    .to_owned(),
-            ),
-            "corp-vm",
-            "1-2",
-            &mut guest_import,
-            &mut degraded_reasons,
-            &mut remediation_commands,
-        );
-
-        assert_eq!(guest_import, public_wire::UsbipGuestImportState::Unknown);
-        assert!(
-            degraded_reasons
-                .iter()
-                .any(|reason| reason.remediation.contains("full diagnostic budget"))
-        );
-        assert!(
-            !degraded_reasons
-                .iter()
-                .any(|reason| reason.remediation.contains("vm start corp-vm")),
-            "status timeout must not tell operators to start an already-running VM"
-        );
-        assert_eq!(
-            remediation_commands,
-            vec!["d2b usb attach stale 1-2 --apply"],
-            "timeouts do not add attach/start remediation commands"
+            error.to_envelope().message,
+            "vm 'vm-a' uses runtime 'component-session', which does not support capability 'usbip-guest-import' required by 'usb attach'"
         );
     }
 
@@ -21853,24 +23848,398 @@ fn dispatch_auth_status(state: &ServerState, peer: &PeerIdentity) -> Value {
 mod detached_exec_routing_tests {
     use super::*;
     use d2bd_runtime::supervisor::pidfd_table::{BrokerReapLog, PidfdTable};
-
-    use d2b_contracts_control::guest_proto as pb;
-    use d2b_contracts_control::guest_wire::ExecState;
-    use d2b_contracts_control::public_wire::{
-        ExecDetachedKillOutcome, ExecDetachedKillResult, ExecDetachedListEntry,
-        ExecDetachedListResult, ExecDetachedLogsResult, ExecDetachedStatusResult, ExecOp,
-        ExecStartArgs,
-    };
     use nix::sys::socket::{AddressFamily, SockFlag, SockType, socketpair};
-    use protobuf::EnumOrUnknown;
     use serde_json::Value;
     use std::sync::Arc;
 
-    fn audit_digest(value: &str) -> String {
-        d2b_contracts_resource::v3::canonical_digest(
-            "d2b:daemon-audit-redaction:v1",
-            value.as_bytes(),
+    fn seqpacket_pair() -> (Socket, Socket) {
+        let (a, b) = socketpair(
+            AddressFamily::Unix,
+            SockType::SeqPacket,
+            None,
+            SockFlag::empty(),
         )
+        .expect("seqpacket socketpair");
+        (Socket::from(a), Socket::from(b))
+    }
+
+    fn recv_reply(socket: &Socket) -> Value {
+        let frame = read_frame(socket).expect("read reply frame");
+        serde_json::from_slice(&frame).expect("decode reply frame")
+    }
+
+    fn hello_frame() -> Vec<u8> {
+        serde_json::to_vec(&serde_json::json!({
+            "type": "hello",
+            "clientVersion": ">=0.4.0, <0.5.0",
+        }))
+        .expect("encode hello frame")
+    }
+
+    struct PeerOverrideEnv {
+        _lock: std::sync::MutexGuard<'static, ()>,
+    }
+
+    impl PeerOverrideEnv {
+        fn launcher() -> Self {
+            let lock = TEST_PEER_OVERRIDE_LOCK
+                .lock()
+                .unwrap_or_else(|p| p.into_inner());
+            *TEST_PEER_OVERRIDE.lock().unwrap_or_else(|p| p.into_inner()) = Some(PeerOverride {
+                uid: 1000,
+                gid: 1000,
+                username: Some("launcher".to_owned()),
+                groups: Some(Vec::new()),
+            });
+            Self { _lock: lock }
+        }
+    }
+
+    impl Drop for PeerOverrideEnv {
+        fn drop(&mut self) {
+            *TEST_PEER_OVERRIDE.lock().unwrap_or_else(|p| p.into_inner()) = None;
+        }
+    }
+
+    #[test]
+    fn production_connection_dispatch_has_no_retired_exec_or_guest_shell_caller() {
+        let source = include_str!("composition.rs");
+        let connection_start = source
+            .find("fn handle_connection_authorized(")
+            .expect("authorized connection handler");
+        let connection_end = source[connection_start..]
+            .find("\nfn run_gateway_display_owner(")
+            .map(|offset| connection_start + offset)
+            .expect("authorized connection handler end");
+        let connection = &source[connection_start..connection_end];
+        assert!(connection.contains("run_process_resource_owner"));
+        assert!(!connection.contains("run_exec_owner"));
+        assert!(!connection.contains("establish_guest_shell_owner_async"));
+        assert!(!connection.contains("GuestShellBackend"));
+
+        let shell_start = source
+            .find("async fn establish_shell_backend(")
+            .expect("shell backend resolver");
+        let shell_end = source[shell_start..]
+            .find("\nfn resolve_shell_target(")
+            .map(|offset| shell_start + offset)
+            .expect("shell backend resolver end");
+        let shell = &source[shell_start..shell_end];
+        assert!(shell.contains("ComponentSessionShellBackend::open"));
+        assert!(!shell.contains("establish_guest_shell_owner_async"));
+        assert!(!shell.contains("GuestShellBackend"));
+
+        let process_start = source
+            .find("fn run_process_resource_owner(")
+            .expect("Process owner handler");
+        let process_end = source[process_start..]
+            .find("\nfn run_typed_shell_owner(")
+            .map(|offset| process_start + offset)
+            .expect("Process owner handler end");
+        let process = &source[process_start..process_end];
+        assert!(process.contains("ResourceExecConnector::new"));
+        assert!(process.contains("production_process_resource_port"));
+        assert!(!process.contains("UnavailableProcessResourcePort"));
+        assert!(source.contains("ResourceDetachedClient::new"));
+        assert!(source.contains("ShellAuthorityLedger"));
+        assert!(source.contains("ensure_shell_resources"));
+        assert!(source.contains("remove_supervisor_process_resource"));
+        let production = source
+            .split_once("#[cfg(test)]")
+            .map_or(source, |(production, _)| production);
+        assert!(!production.contains("InMemoryShellAuthority"));
+    }
+
+    #[test]
+    fn process_resource_ref_covers_all_create_request_identity_forms() {
+        let explicit = serde_json::json!({
+            "resourceRef": "EphemeralProcess/explicit",
+            "opId": 7,
+            "requestId": "request",
+            "name": "named",
+            "command": ["true"],
+        });
+        assert_eq!(
+            process_resource_ref(&explicit)
+                .expect("explicit resource ref")
+                .to_canonical_string(),
+            "EphemeralProcess/explicit"
+        );
+
+        let op_id = serde_json::json!({"opId": 7});
+        assert_eq!(
+            process_resource_ref(&op_id)
+                .expect("operation resource ref")
+                .to_canonical_string(),
+            "EphemeralProcess/exec-7"
+        );
+
+        let request_id = serde_json::json!({"requestId": "request"});
+        let request_id_ref = process_resource_ref(&request_id).expect("request resource ref");
+        assert_eq!(
+            request_id_ref.to_canonical_string(),
+            format!("EphemeralProcess/exec-{}", shell_ref_digest(&["request"]))
+        );
+
+        let command = serde_json::json!({"command": ["true", "--version"]});
+        let command_ref = process_resource_ref(&command).expect("command resource ref");
+        assert_eq!(
+            command_ref.to_canonical_string(),
+            format!(
+                "EphemeralProcess/exec-{}",
+                shell_ref_digest(&["true", "--version"])
+            )
+        );
+    }
+
+    #[test]
+    fn shell_supervisor_process_intent_is_owner_and_finalizer_bound() {
+        let zone = ZoneId::parse("dev").expect("zone");
+        let pool = ShellPool::new(
+            "guest-alice",
+            zone.as_str(),
+            PoolSpec::new(
+                ExecutionTarget::guest("work"),
+                "alice",
+                "artifact://shells/bash-login",
+                1,
+                1,
+                4096,
+            )
+            .expect("pool spec"),
+        )
+        .expect("pool");
+        let session =
+            ShellSession::from_pool(&pool, "guest-alice-main", "main", None).expect("session");
+        let process = SupervisorProcessResource::for_session(&session);
+        let mut spec = serde_json::to_value(process.spec()).expect("process spec");
+        spec.as_object_mut().expect("process spec object").insert(
+            "providerRef".to_owned(),
+            Value::String("Provider/system-systemd".to_owned()),
+        );
+        let payload = DaemonShellAuthority::shell_process_resource_payload(
+            &zone,
+            process.resource_ref(),
+            Some(process.owner_ref()),
+            spec,
+        )
+        .expect("resource payload");
+        let value: Value = serde_json::from_slice(&payload).expect("payload JSON");
+        assert_eq!(
+            value.pointer("/metadata/ownerRef").and_then(Value::as_str),
+            Some("shell-terminal.d2bus.org.ShellSession/guest-alice-main")
+        );
+        assert_eq!(
+            value
+                .pointer("/metadata/finalizers/0")
+                .and_then(Value::as_str),
+            Some(PROCESS_RUNTIME_FINALIZER)
+        );
+        assert_eq!(
+            value.pointer("/spec/providerRef").and_then(Value::as_str),
+            Some("Provider/system-systemd")
+        );
+        assert_eq!(
+            value.pointer("/spec/executionRef").and_then(Value::as_str),
+            Some("Guest/work")
+        );
+        assert_eq!(
+            value.pointer("/spec/template").and_then(Value::as_str),
+            Some("shell-supervisor-main")
+        );
+        let mut stored = value;
+        stored
+            .get_mut("metadata")
+            .and_then(Value::as_object_mut)
+            .expect("metadata")
+            .insert(
+                "uid".to_owned(),
+                Value::String("123e4567-e89b-42d3-a456-426614174000".to_owned()),
+            );
+        let stored = serde_json::to_vec(&stored).expect("stored process");
+        let envelope =
+            d2b_contracts_resource::v3::ResourceEnvelope::from_json(&stored).expect("envelope");
+        assert!(DaemonShellAuthority::process_matches(&envelope, &process));
+        assert!(DaemonShellAuthority::process_has_finalizer(&envelope));
+    }
+
+    #[test]
+    fn shell_session_resource_anchor_precedes_supervisor_process() {
+        let zone = ZoneId::parse("local-root").expect("zone");
+        let pool = ShellPool::new(
+            "work-shell",
+            zone.as_str(),
+            PoolSpec::new(
+                ExecutionTarget::guest("work"),
+                "alice",
+                "artifact://shells/bash-login",
+                8,
+                1,
+                4096,
+            )
+            .expect("pool spec"),
+        )
+        .expect("pool");
+        let session = ShellSession::from_pool_with_resource_name(&pool, "primary", "primary", None)
+            .expect("session");
+        let pool_ref =
+            ResourceRef::parse("shell-terminal.d2bus.org.ShellPool/work-shell").expect("pool ref");
+        let spec = serde_json::json!({
+            "providerRef": "Provider/shell-terminal",
+            "poolRef": pool_ref.to_canonical_string(),
+            "executionRef": "Guest/work",
+            "userRef": "User/alice",
+            "loginShellRef": "artifact://shells/bash-login",
+            "sessionName": "primary",
+            "outputRingCapacity": 4096,
+            "desiredLifecycle": "running",
+        });
+        let session_ref =
+            ResourceRef::parse("shell-terminal.d2bus.org.ShellSession/primary").unwrap();
+        let payload = DaemonShellAuthority::shell_resource_payload(
+            &zone,
+            &session_ref,
+            Some(&pool_ref),
+            spec,
+            &[],
+        )
+        .expect("session payload");
+        let value: Value = serde_json::from_slice(&payload).expect("payload JSON");
+        assert_eq!(
+            value.pointer("/metadata/ownerRef").and_then(Value::as_str),
+            Some(pool_ref.to_canonical_string().as_str())
+        );
+        assert!(
+            value
+                .pointer("/metadata/finalizers")
+                .and_then(Value::as_array)
+                .is_some_and(Vec::is_empty)
+        );
+        assert_eq!(
+            value.pointer("/spec/executionRef").and_then(Value::as_str),
+            Some(
+                session
+                    .supervisor_execution_ref()
+                    .to_canonical_string()
+                    .as_str()
+            )
+        );
+    }
+
+    #[test]
+    fn process_resource_defaults_user_domain_from_guest_manifest() {
+        let state = test_state(exec_session::ExecSessionCaps::default());
+        let execution_ref = ResourceRef::parse("Guest/work").expect("guest target");
+        assert_eq!(
+            resolve_process_user_ref(&state, &execution_ref).as_deref(),
+            Some("User/alice")
+        );
+    }
+
+    #[test]
+    fn process_resource_create_denies_launcher_before_resource_port() {
+        let _env = PeerOverrideEnv::launcher();
+        let mut state = test_state(exec_session::ExecSessionCaps::default());
+        state.config.launcher_users = vec!["launcher".to_owned()];
+        let (daemon, client) = seqpacket_pair();
+        let run_state = state.clone();
+        let handle = std::thread::spawn(move || handle_connection(daemon, &run_state, None));
+
+        write_frame(&client, &hello_frame()).expect("client sends hello");
+        assert_eq!(recv_reply(&client)["type"], "helloOk");
+        write_frame(
+            &client,
+            &serde_json::to_vec(&serde_json::json!({
+                "type": "resourceRequest",
+                "method": "Create",
+                "service": "d2b.resource.v3",
+                "sessionVerb": "attach",
+                "zoneRef": "Zone/local-root",
+                "resourceType": "EphemeralProcess",
+                "resourceRef": "EphemeralProcess/exec-1",
+                "executionRef": "Guest/work",
+                "tty": false,
+                "detached": false,
+                "argv": ["true"],
+            }))
+            .unwrap(),
+        )
+        .expect("client sends Process create");
+        let reply = recv_reply(&client);
+        assert_eq!(reply["error"]["kind"], "authz-not-admin");
+        drop(client);
+        handle
+            .join()
+            .expect("daemon thread joins")
+            .expect("connection exits after client EOF");
+    }
+
+    #[test]
+    fn admin_process_resource_create_uses_resource_connector_and_fails_closed_without_session() {
+        let state = test_state(exec_session::ExecSessionCaps::default());
+        let (daemon, client) = seqpacket_pair();
+        let owner_state = state.clone();
+        run_process_resource_owner(
+            daemon,
+            owner_state,
+            admin_peer(),
+            serde_json::json!({
+                "resourceType": "EphemeralProcess",
+                "resourceRef": "EphemeralProcess/exec-1",
+                "executionRef": "Guest/work",
+                "tty": false,
+                "detached": false,
+                "argv": ["true"],
+            }),
+            None,
+        );
+        let reply = recv_reply(&client);
+        assert_eq!(reply["type"], "error");
+        assert_eq!(reply["error"]["kind"], "runtime-capability-unsupported");
+        assert!(
+            reply["error"]["message"]
+                .as_str()
+                .is_some_and(|message| message.contains("component-session"))
+        );
+        assert_eq!(state.exec_sessions.len(), 0);
+    }
+
+    #[test]
+    fn process_resource_management_keeps_admin_only_authorization() {
+        let state = test_state(exec_session::ExecSessionCaps::default());
+        let request = serde_json::json!({
+            "resourceType": "EphemeralProcess",
+            "method": "List",
+            "executionRef": "Guest/work",
+        });
+        assert_eq!(
+            dispatch_resource_exec_request(&state, &launcher_peer(), &request)
+                .unwrap_err()
+                .kind(),
+            "authz-not-admin"
+        );
+        let error = dispatch_resource_exec_request(&state, &admin_peer(), &request).unwrap_err();
+        assert_eq!(error.kind(), "runtime-capability-unsupported");
+    }
+
+    #[test]
+    fn detached_process_resource_create_allows_launcher_role_before_provider_admission() {
+        let state = test_state(exec_session::ExecSessionCaps::default());
+        let request = serde_json::json!({
+            "resourceType": "EphemeralProcess",
+            "method": "Create",
+            "sessionVerb": "invoke",
+            "executionRef": "Guest/work",
+            "detached": true,
+            "argv": ["true"],
+        });
+        let error =
+            dispatch_resource_exec_create_request(&state, &launcher_peer(), &request).unwrap_err();
+        assert_eq!(error.kind(), "runtime-capability-unsupported");
+        assert!(
+            !error.message().contains("not authorized"),
+            "launcher admission must reach the resource Provider boundary"
+        );
     }
 
     fn test_state(caps: exec_session::ExecSessionCaps) -> ServerState {
@@ -21933,7 +24302,7 @@ mod detached_exec_routing_tests {
                             "lifecycle": true,
                             "display": false,
                             "usbHotplug": false,
-                            "guestControl": true,
+
                             "exec": true,
                             "configSync": true,
                             "ssh": true,
@@ -21981,6 +24350,9 @@ mod detached_exec_routing_tests {
             interaction_listeners: Arc::new(Mutex::new(None)),
             typed_shell_session_targets: d2bd_runtime::typed_shell_targets::new_cache(),
             zone_coordinator: d2bd_runtime::zone_authority::new_coordinator(),
+            config_staging: Arc::new(Mutex::new(Default::default())),
+            guest_component_sessions: Arc::new(tokio::sync::Mutex::new(HashMap::new())),
+        guest_component_session_locks: Arc::new(tokio::sync::Mutex::new(HashMap::new())),
             security_key_sessions: Arc::new(parking_lot::Mutex::new(
                 crate::security_key::SkSessionTable::default(),
             )),
@@ -22005,668 +24377,17 @@ mod detached_exec_routing_tests {
         }
     }
 
-    fn seqpacket_pair() -> (Socket, Socket) {
-        let (a, b) = socketpair(
-            AddressFamily::Unix,
-            SockType::SeqPacket,
-            None,
-            SockFlag::empty(),
-        )
-        .expect("seqpacket socketpair");
-        (Socket::from(a), Socket::from(b))
-    }
 
-    fn recv_reply(socket: &Socket) -> Value {
-        let bytes = read_frame(socket).expect("client reads reply");
-        serde_json::from_slice(&bytes).expect("reply is JSON")
-    }
-
-    fn detached_start(argv0: &str) -> ExecOp {
-        ExecOp::Start(ExecStartArgs {
-            vm: "work".to_owned(),
-            argv: vec![argv0.to_owned()],
-            tty: false,
-            detached: true,
-            env: Some(vec![public_wire::ExecEnvVar {
-                key: "SENTINEL_ENV_KEY".to_owned(),
-                value: "SENTINEL_ENV_VALUE".to_owned(),
-            }]),
-            cwd: Some("SENTINEL_CWD".to_owned()),
-            term_size: None,
-        })
-    }
-
-    fn hello_frame() -> Vec<u8> {
-        serde_json::to_vec(&serde_json::json!({
-            "type": "hello",
-            "clientVersion": ">=0.4.0, <0.5.0",
-        }))
-        .expect("encode hello frame")
-    }
-
-    fn exec_frame(op_id: u64, op: &ExecOp) -> Vec<u8> {
-        let mut value = serde_json::to_value(op).expect("encode exec op");
-        let object = value.as_object_mut().expect("exec op object");
-        object.insert("type".to_owned(), serde_json::json!("exec"));
-        object.insert("opId".to_owned(), serde_json::json!(op_id));
-        serde_json::to_vec(&value).expect("serialize exec frame")
-    }
-
-    struct PeerOverrideEnv {
-        _lock: std::sync::MutexGuard<'static, ()>,
-    }
-
-    impl PeerOverrideEnv {
-        fn launcher() -> Self {
-            let lock = TEST_PEER_OVERRIDE_LOCK
-                .lock()
-                .unwrap_or_else(|p| p.into_inner());
-            *TEST_PEER_OVERRIDE.lock().unwrap_or_else(|p| p.into_inner()) = Some(PeerOverride {
-                uid: 1000,
-                gid: 1000,
-                username: Some("launcher".to_owned()),
-                groups: Some(Vec::new()),
-            });
-            Self { _lock: lock }
-        }
-    }
-
-    impl Drop for PeerOverrideEnv {
-        fn drop(&mut self) {
-            *TEST_PEER_OVERRIDE.lock().unwrap_or_else(|p| p.into_inner()) = None;
-        }
-    }
-
-    #[test]
-    fn detached_create_is_one_shot_and_does_not_reserve_attached_session() {
-        let caps = exec_session::ExecSessionCaps {
-            global: 0,
-            ..exec_session::ExecSessionCaps::default()
-        };
-        let state = test_state(caps);
-        let hook = Arc::new(|request| {
-            assert_eq!(
-                request,
-                exec_detached::DetachedTestRequest::Create {
-                    vm: "work".to_owned(),
-                    request_id: None,
-                    argv_len: 1,
-                    env_len: 1,
-                    has_cwd: true,
-                }
-            );
-            Ok(exec_detached::DetachedTestResponse::Create(
-                public_wire::ExecDetachedCreateResult {
-                    exec_id: "exec-detached-1".to_owned(),
-                    state: ExecState::Running,
-                },
-            ))
-        });
-        let _guard = exec_detached::set_test_hook(hook);
-        let (daemon, client) = seqpacket_pair();
-        let run_state = state.clone();
-        let handle = std::thread::spawn(move || {
-            run_exec_owner(
-                daemon,
-                run_state,
-                admin_peer(),
-                77,
-                detached_start("SENTINEL_ARGV"),
-                None,
-            );
-        });
-
-        let reply = recv_reply(&client);
-        handle.join().expect("detached owner returns");
-        assert_eq!(reply["type"], "execResponse");
-        assert_eq!(reply["opId"], 77);
-        assert_eq!(reply["op"], "detachedCreate");
-        assert_eq!(reply["result"]["execId"], "exec-detached-1");
-        assert_eq!(reply["result"]["state"], "running");
-        assert_eq!(
-            state.exec_sessions.len(),
-            0,
-            "detached create must not reserve an attached session slot"
-        );
-
-        let records = state.daemon_audit.captured.lock().expect("audit capture");
-        assert_eq!(records.len(), 1, "detached create writes one audit event");
-        assert!(!records[0].contains("SENTINEL_ARGV"));
-        assert!(!records[0].contains("SENTINEL_ENV"));
-        assert!(!records[0].contains("SENTINEL_CWD"));
-        let record: Value = serde_json::from_str(&records[0]).expect("parse audit");
-        assert_eq!(
-            record["event"]["kind"].as_str(),
-            Some("guest_control_exec_detached_create")
-        );
-        assert_eq!(
-            record["event"]["vm"].as_str(),
-            Some(audit_digest("work").as_str())
-        );
-        assert!(record["event"]["peer_uid"].is_null());
-        assert_eq!(record["event"]["action"].as_str(), Some("create"));
-        assert_eq!(record["event"]["result"].as_str(), Some("created"));
-        assert_eq!(
-            record["event"]["exec_id"].as_str(),
-            Some(audit_digest("exec-detached-1").as_str())
-        );
-    }
-
-    #[test]
-    fn idempotent_detached_create_forwards_guest_request_id() {
-        let state = test_state(exec_session::ExecSessionCaps::default());
-        let expected = "workload-launch:0123456789abcdef0123456789abcdef";
-        let hook = Arc::new(move |request| {
-            let exec_detached::DetachedTestRequest::Create { request_id, .. } = request else {
-                panic!("idempotent create hook received management request");
-            };
-            assert_eq!(request_id.as_deref(), Some(expected));
-            Ok(exec_detached::DetachedTestResponse::Create(
-                public_wire::ExecDetachedCreateResult {
-                    exec_id: "0123456789abcdef0123456789abcdef".to_owned(),
-                    state: ExecState::Running,
-                },
-            ))
-        });
-        let _guard = exec_detached::set_test_hook(hook);
-        let ExecOp::Start(start) = detached_start("true") else {
-            unreachable!("detached_start always returns ExecOp::Start")
-        };
-
-        let result = exec_detached::create_idempotent(&state, &start, expected.to_owned()).unwrap();
-        assert_eq!(result.exec_id, "0123456789abcdef0123456789abcdef");
-    }
-
-    #[test]
-    fn local_workload_launcher_wires_detached_create_audit() {
-        let source = include_str!("composition.rs");
-        let start = source
-            .find("fn dispatch_local_vm_launcher(")
-            .expect("local VM launcher function");
-        let end = source[start..]
-            .find("\nconst WORKLOAD_PROVIDERS:")
-            .map(|offset| start + offset)
-            .expect("local VM launcher function end");
-        let body = &source[start..end];
-
-        assert!(body.contains("exec_detached::create_idempotent"));
-        assert!(body.contains("emit_detached_create_audit"));
-        assert!(body.contains("&result.exec_id"));
-    }
-
-    #[test]
-    fn detached_create_denies_launcher_before_owner_backend_or_session_table() {
-        use std::sync::atomic::{AtomicUsize, Ordering};
-
-        let _env = PeerOverrideEnv::launcher();
-        let mut state = test_state(exec_session::ExecSessionCaps::default());
-        state.config.launcher_users = vec!["launcher".to_owned()];
-        state.config.admin_users = vec![];
-        let touched = Arc::new(AtomicUsize::new(0));
-        let hook_touched = Arc::clone(&touched);
-        let _guard = exec_detached::set_test_hook(Arc::new(move |request| {
-            hook_touched.fetch_add(1, Ordering::SeqCst);
-            panic!("launcher denial must not touch detached create backend: {request:?}");
-        }));
-        let (daemon, client) = seqpacket_pair();
-        let run_state = state.clone();
-        let handle = std::thread::spawn(move || handle_connection(daemon, &run_state, None));
-
-        write_frame(&client, &hello_frame()).expect("client sends hello");
-        let hello_ok = recv_reply(&client);
-        assert_eq!(hello_ok["type"], "helloOk");
-        write_frame(&client, &exec_frame(88, &detached_start("true")))
-            .expect("client sends detached create");
-        let reply = recv_reply(&client);
-        drop(client);
-        handle
-            .join()
-            .expect("daemon thread joins")
-            .expect("connection exits after client EOF");
-
-        assert_eq!(reply["type"], "error");
-        assert_eq!(reply["error"]["kind"], "authz-not-admin");
-        assert_eq!(reply["error"]["exitCode"], 75);
-        assert_eq!(state.exec_sessions.len(), 0);
-        assert_eq!(
-            touched.load(Ordering::SeqCst),
-            0,
-            "admin gate must short-circuit before detached create backend"
-        );
-    }
-
-    #[test]
-    fn exec_detached_not_advertised_surfaces_clear_error() {
-        let caps = vec![
-            EnumOrUnknown::new(pb::GuestCapability::GUEST_CAPABILITY_EXEC_ATTACHED),
-            EnumOrUnknown::new(pb::GuestCapability::GUEST_CAPABILITY_EXEC_LOGS),
-        ];
-        let err = exec_detached::gate_detached_capabilities(&caps)
-            .expect_err("missing EXEC_DETACHED must fail");
-        let typed = map_exec_op_error(err);
-        assert_eq!(typed.kind(), "guest-control-exec-detached-unavailable");
-        assert_eq!(typed.exit_code(), 70);
-        assert!(typed.message().contains("detached exec"));
-    }
-
-    fn management_success_hook() -> exec_detached::DetachedTestHook {
-        Arc::new(|request| match request {
-            exec_detached::DetachedTestRequest::List { vm } => {
-                assert_eq!(vm, "work");
-                Ok(exec_detached::DetachedTestResponse::List(
-                    ExecDetachedListResult {
-                        execs: vec![ExecDetachedListEntry {
-                            exec_id: "exec-1".to_owned(),
-                            state: ExecState::Running,
-                            exit_code: None,
-                            signal: None,
-                            started_at: "1700000001".to_owned(),
-                            start_offset: 1,
-                            end_offset: 9,
-                            stdout_start_offset: 1,
-                            stdout_end_offset: 5,
-                            stderr_start_offset: 2,
-                            stderr_end_offset: 9,
-                            dropped_bytes: 3,
-                            stdout_dropped_bytes: 1,
-                            stderr_dropped_bytes: 2,
-                            truncated: true,
-                            stdout_truncated: false,
-                            stderr_truncated: true,
-                        }],
-                    },
-                ))
-            }
-            exec_detached::DetachedTestRequest::Logs {
-                vm,
-                exec_id,
-                stdout_offset,
-                stderr_offset,
-                max_len,
-            } => {
-                assert_eq!((vm.as_str(), exec_id.as_str()), ("work", "exec-1"));
-                assert_eq!(stdout_offset, None);
-                assert_eq!(stderr_offset, None);
-                assert_eq!(max_len, None);
-                Ok(exec_detached::DetachedTestResponse::Logs(
-                    ExecDetachedLogsResult {
-                        exec_id,
-                        stdout_base64: "b3V0".to_owned(),
-                        stderr_base64: "ZXJy".to_owned(),
-                        start_offset: 1,
-                        end_offset: 9,
-                        dropped_bytes: 4,
-                        truncated: true,
-                        stdout_start_offset: 1,
-                        stdout_end_offset: 5,
-                        stdout_next_offset: 5,
-                        stdout_eof: true,
-                        stdout_dropped_bytes: 1,
-                        stdout_truncated: false,
-                        stderr_start_offset: 2,
-                        stderr_end_offset: 9,
-                        stderr_next_offset: 7,
-                        stderr_eof: false,
-                        stderr_dropped_bytes: 3,
-                        stderr_truncated: true,
-                    },
-                ))
-            }
-            exec_detached::DetachedTestRequest::Status { vm, exec_id } => {
-                assert_eq!((vm.as_str(), exec_id.as_str()), ("work", "exec-1"));
-                Ok(exec_detached::DetachedTestResponse::Status(
-                    ExecDetachedStatusResult {
-                        exec_id,
-                        state: ExecState::Exited,
-                        reason: None,
-                        exit_code: Some(0),
-                        signal: None,
-                        start_offset: 1,
-                        end_offset: 9,
-                        dropped_bytes: 4,
-                        truncated: true,
-                    },
-                ))
-            }
-            exec_detached::DetachedTestRequest::Kill { vm, exec_id } => {
-                assert_eq!((vm.as_str(), exec_id.as_str()), ("work", "exec-1"));
-                Ok(exec_detached::DetachedTestResponse::Kill(
-                    ExecDetachedKillResult {
-                        exec_id,
-                        result: ExecDetachedKillOutcome::Cancelling,
-                        state: ExecState::Cancelled,
-                    },
-                ))
-            }
-            exec_detached::DetachedTestRequest::Create { .. } => {
-                panic!("management hook should not receive create")
-            }
-        })
-    }
-
-    #[test]
-    fn management_verbs_route_to_one_shot_detached_backend() {
-        let state = test_state(exec_session::ExecSessionCaps::default());
-        let _guard = exec_detached::set_test_hook(management_success_hook());
-        let peer = admin_peer();
-
-        let list = dispatch_request(
-            &state,
-            &peer,
-            d2bd_runtime::wire::Request::Exec(ExecOp::List(public_wire::ExecDetachedListArgs {
-                vm: "work".to_owned(),
-            })),
-        )
-        .expect("list dispatch succeeds");
-        assert_eq!(list["type"], "execResponse");
-        assert_eq!(list["op"], "list");
-        assert_eq!(list["result"]["execs"][0]["execId"], "exec-1");
-        assert_eq!(list["result"]["execs"][0]["startOffset"], 1);
-        assert_eq!(list["result"]["execs"][0]["endOffset"], 9);
-        assert_eq!(list["result"]["execs"][0]["stdoutStartOffset"], 1);
-        assert_eq!(list["result"]["execs"][0]["stdoutEndOffset"], 5);
-        assert_eq!(list["result"]["execs"][0]["stderrStartOffset"], 2);
-        assert_eq!(list["result"]["execs"][0]["stderrEndOffset"], 9);
-        assert_eq!(list["result"]["execs"][0]["droppedBytes"], 3);
-        assert_eq!(list["result"]["execs"][0]["stdoutDroppedBytes"], 1);
-        assert_eq!(list["result"]["execs"][0]["stderrDroppedBytes"], 2);
-        assert_eq!(list["result"]["execs"][0]["truncated"], true);
-        assert_eq!(list["result"]["execs"][0]["stdoutTruncated"], false);
-        assert_eq!(list["result"]["execs"][0]["stderrTruncated"], true);
-        assert!(!list.to_string().contains("argv"));
-
-        let logs = dispatch_request(
-            &state,
-            &peer,
-            d2bd_runtime::wire::Request::Exec(ExecOp::Logs(public_wire::ExecDetachedLogsArgs {
-                vm: "work".to_owned(),
-                exec_id: "exec-1".to_owned(),
-                stdout_offset: None,
-                stderr_offset: None,
-                max_len: None,
-            })),
-        )
-        .expect("logs dispatch succeeds");
-        assert_eq!(logs["op"], "logs");
-        assert_eq!(logs["result"]["stdoutBase64"], "b3V0");
-        assert_eq!(logs["result"]["stderrBase64"], "ZXJy");
-        assert_eq!(logs["result"]["startOffset"], 1);
-        assert_eq!(logs["result"]["endOffset"], 9);
-        assert_eq!(logs["result"]["droppedBytes"], 4);
-        assert_eq!(logs["result"]["truncated"], true);
-        assert_eq!(logs["result"]["stdoutStartOffset"], 1);
-        assert_eq!(logs["result"]["stdoutEndOffset"], 5);
-        assert_eq!(logs["result"]["stdoutNextOffset"], 5);
-        assert_eq!(logs["result"]["stdoutEof"], true);
-        assert_eq!(logs["result"]["stdoutDroppedBytes"], 1);
-        assert_eq!(logs["result"]["stdoutTruncated"], false);
-        assert_eq!(logs["result"]["stderrStartOffset"], 2);
-        assert_eq!(logs["result"]["stderrEndOffset"], 9);
-        assert_eq!(logs["result"]["stderrNextOffset"], 7);
-        assert_eq!(logs["result"]["stderrEof"], false);
-        assert_eq!(logs["result"]["stderrDroppedBytes"], 3);
-        assert_eq!(logs["result"]["stderrTruncated"], true);
-
-        let status = dispatch_request(
-            &state,
-            &peer,
-            d2bd_runtime::wire::Request::Exec(ExecOp::Status(
-                public_wire::ExecDetachedStatusArgs {
-                    vm: "work".to_owned(),
-                    exec_id: "exec-1".to_owned(),
-                },
-            )),
-        )
-        .expect("status dispatch succeeds");
-        assert_eq!(status["op"], "status");
-        assert_eq!(status["result"]["state"], "exited");
-        assert_eq!(status["result"]["exitCode"], 0);
-        assert_eq!(status["result"]["startOffset"], 1);
-        assert_eq!(status["result"]["endOffset"], 9);
-        assert_eq!(status["result"]["droppedBytes"], 4);
-        assert_eq!(status["result"]["truncated"], true);
-
-        let kill = dispatch_request(
-            &state,
-            &peer,
-            d2bd_runtime::wire::Request::Exec(ExecOp::Kill(public_wire::ExecDetachedKillArgs {
-                vm: "work".to_owned(),
-                exec_id: "exec-1".to_owned(),
-            })),
-        )
-        .expect("kill dispatch succeeds");
-        assert_eq!(kill["op"], "kill");
-        assert_eq!(kill["result"]["result"], "cancelling");
-        assert_eq!(kill["result"]["state"], "cancelled");
-
-        let records = state.daemon_audit.captured.lock().expect("audit capture");
-        assert_eq!(records.len(), 1, "kill writes one audit event");
-        let record: Value = serde_json::from_str(&records[0]).expect("parse kill audit");
-        assert_eq!(
-            record["event"]["kind"].as_str(),
-            Some("guest_control_exec_detached_kill")
-        );
-        assert_eq!(
-            record["event"]["vm"].as_str(),
-            Some(audit_digest("work").as_str())
-        );
-        assert!(record["event"]["peer_uid"].is_null());
-        assert_eq!(record["event"]["action"].as_str(), Some("cancel"));
-        assert_eq!(record["event"]["result"].as_str(), Some("cancelling"));
-        assert_eq!(
-            record["event"]["exec_id"].as_str(),
-            Some(audit_digest("exec-1").as_str())
-        );
-    }
-
-    #[test]
-    fn detached_kill_duplicate_maps_already_terminal_and_audits_idempotent_result() {
-        let state = test_state(exec_session::ExecSessionCaps::default());
-        let _guard = exec_detached::set_test_hook(Arc::new(|request| match request {
-            exec_detached::DetachedTestRequest::Kill { vm, exec_id } => {
-                assert_eq!((vm.as_str(), exec_id.as_str()), ("work", "exec-1"));
-                Ok(exec_detached::DetachedTestResponse::Kill(
-                    ExecDetachedKillResult {
-                        exec_id,
-                        result: ExecDetachedKillOutcome::AlreadyTerminal,
-                        state: ExecState::Exited,
-                    },
-                ))
-            }
-            other => panic!("unexpected detached backend request: {other:?}"),
-        }));
-
-        let kill = dispatch_request(
-            &state,
-            &admin_peer(),
-            d2bd_runtime::wire::Request::Exec(ExecOp::Kill(public_wire::ExecDetachedKillArgs {
-                vm: "work".to_owned(),
-                exec_id: "exec-1".to_owned(),
-            })),
-        )
-        .expect("kill dispatch succeeds");
-        assert_eq!(kill["op"], "kill");
-        assert_eq!(kill["result"]["result"], "already-terminal");
-        assert_eq!(kill["result"]["state"], "exited");
-
-        let records = state.daemon_audit.captured.lock().expect("audit capture");
-        assert_eq!(records.len(), 1, "kill writes one audit event");
-        let record: Value = serde_json::from_str(&records[0]).expect("parse kill audit");
-        assert_eq!(record["event"]["result"].as_str(), Some("already-terminal"));
-        assert_eq!(
-            record["event"]["exec_id"].as_str(),
-            Some(audit_digest("exec-1").as_str())
-        );
-    }
-
-    #[test]
-    fn detached_kill_error_audit_redacts_unvalidated_caller_exec_id() {
-        use d2bd_runtime::typed_error::GuestControlExecErrorKind as K;
-
-        let state = test_state(exec_session::ExecSessionCaps::default());
-        let _guard = exec_detached::set_test_hook(Arc::new(|request| match request {
-            exec_detached::DetachedTestRequest::Kill { vm, exec_id } => {
-                assert_eq!(vm, "work");
-                assert_eq!(exec_id, "SENTINEL_UNVALIDATED_EXEC_ID\nwith-control");
-                Err(TypedError::GuestControlExecFailed {
-                    kind: K::ExecNotFound,
-                })
-            }
-            other => panic!("unexpected detached backend request: {other:?}"),
-        }));
-
-        let err = dispatch_request(
-            &state,
-            &admin_peer(),
-            d2bd_runtime::wire::Request::Exec(ExecOp::Kill(public_wire::ExecDetachedKillArgs {
-                vm: "work".to_owned(),
-                exec_id: "SENTINEL_UNVALIDATED_EXEC_ID\nwith-control".to_owned(),
-            })),
-        )
-        .expect_err("kill should surface backend error");
-        assert_eq!(err.kind(), "guest-control-exec-not-found");
-
-        let records = state.daemon_audit.captured.lock().expect("audit capture");
-        assert_eq!(records.len(), 1, "kill errors still write one audit event");
-        assert!(
-            !records[0].contains("SENTINEL_UNVALIDATED_EXEC_ID"),
-            "audit must not persist unvalidated caller exec_id: {}",
-            records[0]
-        );
-        let record: Value = serde_json::from_str(&records[0]).expect("parse kill audit");
-        assert_eq!(record["event"]["result"].as_str(), Some("error"));
-        assert_eq!(
-            record["event"]["exec_id"].as_str(),
-            Some(audit_digest("<redacted-on-error>").as_str())
-        );
-    }
-
-    fn management_ops() -> Vec<ExecOp> {
-        vec![
-            ExecOp::List(public_wire::ExecDetachedListArgs {
-                vm: "work".to_owned(),
-            }),
-            ExecOp::Logs(public_wire::ExecDetachedLogsArgs {
-                vm: "work".to_owned(),
-                exec_id: "exec-1".to_owned(),
-                stdout_offset: None,
-                stderr_offset: None,
-                max_len: None,
-            }),
-            ExecOp::Status(public_wire::ExecDetachedStatusArgs {
-                vm: "work".to_owned(),
-                exec_id: "exec-1".to_owned(),
-            }),
-            ExecOp::Kill(public_wire::ExecDetachedKillArgs {
-                vm: "work".to_owned(),
-                exec_id: "exec-1".to_owned(),
-            }),
-        ]
-    }
-
-    fn detached_create_and_management_ops() -> Vec<ExecOp> {
-        let mut ops = vec![detached_start("true")];
-        ops.extend(management_ops());
-        ops
-    }
-
-    #[test]
-    fn detached_exec_ops_deny_launcher_before_backend_or_session_table() {
-        use std::sync::atomic::{AtomicUsize, Ordering};
-
-        let state = test_state(exec_session::ExecSessionCaps::default());
-        let touched = Arc::new(AtomicUsize::new(0));
-        let hook_touched = Arc::clone(&touched);
-        let _guard = exec_detached::set_test_hook(Arc::new(move |request| {
-            hook_touched.fetch_add(1, Ordering::SeqCst);
-            panic!("launcher denial must not touch detached backend: {request:?}");
-        }));
-
-        for op in detached_create_and_management_ops() {
-            let err = dispatch_request(
-                &state,
-                &launcher_peer(),
-                d2bd_runtime::wire::Request::Exec(op),
-            )
-            .expect_err("launcher must be denied before exec backend");
-            match &err {
-                TypedError::AuthzNotAdmin { verb } => assert_eq!(verb, "exec"),
-                other => panic!("expected AuthzNotAdmin for exec, got {other:?}"),
-            }
-            assert_eq!(err.exit_code(), 75);
-            assert_eq!(state.exec_sessions.len(), 0);
-        }
-        assert_eq!(
-            touched.load(Ordering::SeqCst),
-            0,
-            "admin gate must short-circuit before detached backend"
-        );
-    }
-
-    #[test]
-    fn management_verbs_preserve_typed_guest_error_mapping() {
-        use d2bd_runtime::typed_error::GuestControlExecErrorKind as K;
-        for expected in [
-            K::StaleSession,
-            K::ExecNotFound,
-            K::ExecExpired,
-            K::Protocol,
-        ] {
-            for op in management_ops() {
-                let state = test_state(exec_session::ExecSessionCaps::default());
-                let _guard = exec_detached::set_test_hook(Arc::new(move |_| {
-                    Err(TypedError::GuestControlExecFailed { kind: expected })
-                }));
-                let err =
-                    dispatch_request(&state, &admin_peer(), d2bd_runtime::wire::Request::Exec(op))
-                        .expect_err("management op should surface typed error");
-                assert_eq!(err.kind(), expected.wire_kind());
-            }
-        }
-    }
-
-    #[test]
-    fn invalid_program_maps_to_actionable_exec_error() {
-        let mut guest_error = pb::GuestControlError::new();
-        guest_error.kind =
-            EnumOrUnknown::new(pb::GuestControlErrorKind::GUEST_CONTROL_ERROR_KIND_INVALID_PROGRAM);
-        let op_error = exec_session_real::map_guest_control_error(&guest_error);
-        assert_eq!(
-            op_error,
-            exec_session::ExecOpError::Guest(exec_session::GuestOpError::InvalidProgram)
-        );
-
-        let typed = map_exec_op_error(op_error);
-        assert_eq!(typed.kind(), "guest-control-invalid-program");
-        assert_eq!(typed.exit_code(), 2);
-        assert!(
-            typed.message().contains(
-                "command must be a program name or absolute path and must not start with '-'"
-            ),
-            "unexpected message: {}",
-            typed.message()
-        );
-        assert!(
-            !typed.remediation().contains("already exited"),
-            "invalid-program remediation must not use stale exec wording"
-        );
-
-        let establish = map_exec_establish_error(exec_session::ExecEstablishError::Guest(
-            exec_session::GuestOpError::InvalidProgram,
-        ));
-        assert_eq!(establish.kind(), "guest-control-invalid-program");
-        assert_eq!(establish.message(), typed.message());
-    }
 }
 
 /// The public.sock accept loop is serial: it accepts one connection, runs
-/// `handle_connection`, then accepts the next. An exec session's owner
-/// connection is long-lived, so `handle_connection` MUST hand the exec session
-/// off to a spawned owner thread and return immediately - otherwise the single
-/// accept loop would be pinned for the entire lifetime of one exec session and
-/// no other client could be served. These hermetic tests drive
+/// `handle_connection`, then accepts the next. A Process resource owner
+/// connection is long-lived, so `handle_connection` MUST hand it off to a
+/// spawned owner thread and return immediately - otherwise the single accept
+/// loop would be pinned for the lifetime of one process attachment and no
+/// other client could be served. These hermetic tests drive
 /// `handle_connection` over a real `SOCK_SEQPACKET` pair (no live VM) and prove
-/// the exec branch spawns-and-returns while a second request is still served.
+/// the Process branch spawns-and-returns while a second request is still served.
 #[cfg(test)]
 mod accept_loop_concurrency_tests {
     use super::*;
@@ -22675,7 +24396,6 @@ mod accept_loop_concurrency_tests {
     use std::sync::mpsc;
     use std::time::Duration;
 
-    use d2b_contracts_control::public_wire::{ExecOp, ExecStartArgs};
     use serde_json::json;
     use tempfile::TempDir;
 
@@ -22728,6 +24448,9 @@ mod accept_loop_concurrency_tests {
             interaction_listeners: Arc::new(Mutex::new(None)),
             typed_shell_session_targets: d2bd_runtime::typed_shell_targets::new_cache(),
             zone_coordinator: d2bd_runtime::zone_authority::new_coordinator(),
+            config_staging: Arc::new(Mutex::new(Default::default())),
+            guest_component_sessions: Arc::new(tokio::sync::Mutex::new(HashMap::new())),
+        guest_component_session_locks: Arc::new(tokio::sync::Mutex::new(HashMap::new())),
             security_key_sessions: Arc::new(parking_lot::Mutex::new(
                 crate::security_key::SkSessionTable::default(),
             )),
@@ -22766,21 +24489,22 @@ mod accept_loop_concurrency_tests {
         .expect("encode workload list frame")
     }
 
-    fn exec_start_frame(op_id: u64) -> Vec<u8> {
-        let op = ExecOp::Start(ExecStartArgs {
-            vm: "work".to_owned(),
-            argv: vec!["true".to_owned()],
-            tty: false,
-            detached: false,
-            env: None,
-            cwd: None,
-            term_size: None,
-        });
-        let mut value = serde_json::to_value(&op).expect("encode exec op");
-        let object = value.as_object_mut().expect("exec op object");
-        object.insert("type".to_owned(), json!("exec"));
-        object.insert("opId".to_owned(), json!(op_id));
-        serde_json::to_vec(&value).expect("serialize exec frame")
+    fn process_resource_start_frame(op_id: u64) -> Vec<u8> {
+        serde_json::to_vec(&json!({
+            "type": "resourceRequest",
+            "method": "Create",
+            "service": "d2b.resource.v3",
+            "sessionVerb": "attach",
+            "zoneRef": "Zone/local-root",
+            "resourceType": "EphemeralProcess",
+            "resourceRef": format!("EphemeralProcess/exec-{op_id}"),
+            "executionRef": "Guest/work",
+            "tty": false,
+            "detached": false,
+            "argv": ["true"],
+            "opId": op_id,
+        }))
+        .expect("serialize Process resource frame")
     }
 
     /// Scoped guard for the test SO_PEERCRED override so a panic still clears
@@ -22905,17 +24629,17 @@ mod accept_loop_concurrency_tests {
     }
 
     #[test]
-    fn exec_dispatch_returns_to_the_accept_loop_and_a_second_request_is_served() {
+    fn process_dispatch_returns_to_the_accept_loop_and_a_second_request_is_served() {
         use std::sync::{Condvar, Mutex};
 
         let _env = PeerOverrideEnv::admin();
         let (state, _state_dir) = admin_exec_state();
         let state = Arc::new(state);
 
-        // Install an owner-body hook that genuinely HOLDS the exec owner session
+        // Install an owner-body hook that genuinely HOLDS the Process owner session
         // open: it flags `running`, signals `entered`, then blocks until the
         // test releases it. Because the hook runs at the top of
-        // `run_exec_owner`, a hypothetical inline `handle_connection` would block
+        // `run_process_resource_owner`, a hypothetical inline `handle_connection` would block
         // HERE on the accept-loop thread and never return - the watchdog below
         // would fire. An off-loop spawn (the real behaviour) returns Ok promptly
         // while this body is still blocked.
@@ -22955,12 +24679,13 @@ mod accept_loop_concurrency_tests {
         });
         owner_connection_test_hook::set(hook);
 
-        // --- Connection A: opens a long-lived exec owner session. ---
+        // --- Connection A: opens a long-lived Process resource owner session. ---
         let (server_a, client_a) = seqpacket_pair();
         // SOCK_SEQPACKET preserves message boundaries, so both datagrams can be
         // buffered before the daemon reads them.
         write_frame(&client_a, &hello_frame()).expect("client A sends hello");
-        write_frame(&client_a, &exec_start_frame(1)).expect("client A sends exec start");
+        write_frame(&client_a, &process_resource_start_frame(1))
+            .expect("client A sends Process create");
         // The client deliberately keeps its end OPEN for the session's lifetime.
 
         let state_a = Arc::clone(&state);
@@ -22970,7 +24695,7 @@ mod accept_loop_concurrency_tests {
             let _ = done_tx.send(result.is_ok());
         });
 
-        // The owner body must actually be entered (the exec branch dispatched a
+        // The owner body must actually be entered (the Process branch dispatched a
         // real, blocking owner session - not a fast-failed stub).
         {
             let (lock, cv) = &*shared;
@@ -22980,20 +24705,20 @@ mod accept_loop_concurrency_tests {
             while !s.entered {
                 let remaining = deadline
                     .checked_sub(start.elapsed())
-                    .expect("exec owner body was not entered within the deadline");
+                    .expect("Process owner body was not entered within the deadline");
                 let (guard, timeout) = cv.wait_timeout(s, remaining).expect("hook entered wait");
                 s = guard;
-                assert!(!timeout.timed_out(), "exec owner body was not entered");
+                assert!(!timeout.timed_out(), "Process owner body was not entered");
             }
         }
 
-        // handle_connection must have returned Ok PROMPTLY even though the owner
+        // handle_connection must have returned Ok PROMPTLY even though the Process owner
         // body is still blocked in the hook. An inline implementation would be
         // stuck in the hook on this very thread's predecessor and never send.
         let returned = done_rx.recv_timeout(Duration::from_secs(10));
         assert!(
             matches!(returned, Ok(true)),
-            "handle_connection must spawn the exec owner off the serial accept \
+            "handle_connection must spawn the Process owner off the serial accept \
              loop and return Ok promptly, not run the session inline (got \
              {returned:?})"
         );
@@ -23007,7 +24732,7 @@ mod accept_loop_concurrency_tests {
             let s = lock.lock().expect("hook state lock");
             assert!(
                 s.running && !s.release,
-                "the exec owner session must still be held open after \
+                "the Process owner session must still be held open after \
                  handle_connection returned (off-loop dispatch)"
             );
         }
@@ -23036,7 +24761,7 @@ mod accept_loop_concurrency_tests {
         let result_b = handle_connection(server_b, &state, None);
         assert!(
             result_b.is_ok(),
-            "the second connection must be served while the exec owner is held \
+            "the second connection must be served while the Process owner is held \
              open: {result_b:?}"
         );
         let response = client_b.join().expect("client B thread joins");
@@ -23065,7 +24790,7 @@ mod accept_loop_concurrency_tests {
     fn typed_shell_owner_keeps_admission_permit_until_owner_exits() {
         use std::sync::Mutex;
 
-        // Serialize this process-global owner hook with the exec handoff test.
+        // Serialize this process-global owner hook with the Process owner test.
         let _env = PeerOverrideEnv::admin();
         let (mut state, _state_dir) = admin_exec_state();
         state.conn_semaphore = d2bd_runtime::concurrency::ConnSemaphore::new(1);
@@ -23320,34 +25045,31 @@ mod accept_loop_concurrency_tests {
 
 #[cfg(test)]
 mod broker_dispatch_tests {
-    use std::collections::VecDeque;
+    use std::collections::{HashMap, VecDeque};
     use std::fs::File;
     use std::io::{self, IoSlice, Read, Write};
-    use std::net::TcpListener;
     use std::os::fd::{AsRawFd, RawFd};
     use std::os::unix::fs::PermissionsExt;
     use std::os::unix::net::UnixListener;
     use std::path::{Path, PathBuf};
     use std::process::{Child, Command};
     use std::sync::atomic::{AtomicU64, Ordering};
-    use std::sync::{Arc, Mutex, MutexGuard, OnceLock};
+    use std::sync::{Arc, Mutex};
     use std::time::{Duration, Instant};
     use std::{fs, thread};
 
     use d2b_contracts::types::{RoleId, VmId};
     use d2b_contracts_broker::broker_wire::{
-        ActivationMode as BrokerActivationMode, ActivationPhase as BrokerActivationPhase,
-        BrokerCallerRole, BrokerErrorResponse, BrokerRequest, BrokerRequestEnvelope,
+        BrokerCallerRole, BrokerRequest, BrokerRequestEnvelope,
         BrokerResponse, ChildExitKind, ChildExitStatus, ChildReapedNotification,
         DeregisterRunnerPidfdResponse, PollChildReapedResponse, RunnerRole, RunnerSignal,
         SignalRunnerResponse, SpawnRunnerResponse,
     };
-    use d2b_contracts_control::guest_proto as pb;
     use d2b_contracts_control::public_wire;
     use d2b_contracts_control::public_wire::{
         ActivationRequest, GcRequest, HostDestroyRequest, HostInstallRequest, HostPrepareRequest,
         KeysRotateRequest, MigrateRequest, MutationFlags, RotateKnownHostRequest,
-        ShellSessionState, StatusRequest, TrustRequest, VmLifecycleRequest,
+        ShellSessionState, TrustRequest, VmLifecycleRequest,
     };
     use d2b_core::bundle_resolver::BundleResolver;
     use d2b_core::processes::ProcessRole;
@@ -23361,26 +25083,24 @@ mod broker_dispatch_tests {
 
     use super::provider_shutdown::GracefulVmShutdown;
     use super::{
-        ArtifactPaths, DaemonConfig, HostActivationMarkerState, PeerIdentity, PeerRole,
+        ArtifactPaths, DaemonConfig, PeerIdentity, PeerRole,
         ProviderGracefulInputs, QemuBrokerShutdownProvider, ServerState,
         UsbipBackgroundReconcileGuard, VM_RUNNER_ROLE_ID, VmShutdownOutcome, VmStartNodeMode,
-        activation_marker_path, adopt_orphaned_runners_on_startup_with, block_on_future,
-        bounded_usbip_owner_label, dispatch_broker_boot, dispatch_broker_gc,
+        adopt_orphaned_runners_on_startup_with, block_on_future,
+        bounded_usbip_owner_label, dispatch_broker_gc,
         dispatch_broker_host_destroy, dispatch_broker_host_prepare, dispatch_broker_keys_rotate,
-        dispatch_broker_rollback, dispatch_broker_rotate_known_host,
-        dispatch_broker_run_host_install, dispatch_broker_run_migrate, dispatch_broker_switch,
-        dispatch_broker_test, dispatch_broker_trust, dispatch_broker_vm_restart,
+        dispatch_broker_rotate_known_host, dispatch_broker_run_host_install,
+        dispatch_broker_run_migrate, dispatch_broker_trust, dispatch_broker_vm_restart,
         dispatch_broker_vm_start, dispatch_broker_vm_stop, dispatch_broker_vm_stop_with_timeout,
-        dispatch_request, dispatch_status, force_shutdown_generation, map_shell_attach_response,
-        map_shell_detach_response, map_shell_kill_response, map_shell_list_response,
+        dispatch_request, force_shutdown_generation,
         note_force_shutdown_request, prove_role_cgroup_empty_or_escalate, provider_shutdown,
-        read_activation_marker, redact_broker_dispatch_failure_for_launcher,
+        redact_broker_dispatch_failure_for_launcher,
         redact_broker_error_for_launcher, resolve_store_view_intent_for_vm,
-        rollback_failed_vm_start, run_provider_graceful_shutdown,
+        reconcile_display_before_vm_start, rollback_failed_vm_start, run_provider_graceful_shutdown,
         same_vm_declared_usbip_start_claims_with_reader,
         same_vm_persisted_usbip_stop_claims_with_reader,
-        stale_qemu_media_dependency_roles_from_entries, try_acquire_activation_lock,
-        usbip_start_reconciles_synchronously, vm_start_node_mode,
+        stale_qemu_media_dependency_roles_from_entries, usbip_start_reconciles_synchronously,
+        vm_start_node_mode,
     };
     use d2bd_runtime::supervisor::pidfd_table::{
         BrokerReapLog, PidfdEntry, PidfdRegistration, PidfdTable, WaitTermination,
@@ -23473,6 +25193,9 @@ mod broker_dispatch_tests {
             interaction_listeners: Arc::new(Mutex::new(None)),
             typed_shell_session_targets: d2bd_runtime::typed_shell_targets::new_cache(),
             zone_coordinator: d2bd_runtime::zone_authority::new_coordinator(),
+            config_staging: Arc::new(Mutex::new(Default::default())),
+            guest_component_sessions: Arc::new(tokio::sync::Mutex::new(HashMap::new())),
+        guest_component_session_locks: Arc::new(tokio::sync::Mutex::new(HashMap::new())),
             security_key_sessions: Arc::new(parking_lot::Mutex::new(
                 crate::security_key::SkSessionTable::default(),
             )),
@@ -23522,6 +25245,9 @@ mod broker_dispatch_tests {
             interaction_listeners: Arc::new(Mutex::new(None)),
             typed_shell_session_targets: d2bd_runtime::typed_shell_targets::new_cache(),
             zone_coordinator: d2bd_runtime::zone_authority::new_coordinator(),
+            config_staging: Arc::new(Mutex::new(Default::default())),
+            guest_component_sessions: Arc::new(tokio::sync::Mutex::new(HashMap::new())),
+        guest_component_session_locks: Arc::new(tokio::sync::Mutex::new(HashMap::new())),
             security_key_sessions: Arc::new(parking_lot::Mutex::new(
                 crate::security_key::SkSessionTable::default(),
             )),
@@ -23644,7 +25370,7 @@ mod broker_dispatch_tests {
                             "lifecycle": true,
                             "display": true,
                             "usbHotplug": true,
-                            "guestControl": true,
+
                             "exec": true,
                             "configSync": true,
                             "ssh": true,
@@ -24044,7 +25770,7 @@ mod broker_dispatch_tests {
                             "lifecycle": true,
                             "display": true,
                             "usbHotplug": true,
-                            "guestControl": true,
+
                             "exec": true,
                             "configSync": true,
                             "ssh": true,
@@ -24207,122 +25933,6 @@ mod broker_dispatch_tests {
         (socket_path, join)
     }
 
-    struct GuestActivationHookGuard;
-
-    impl Drop for GuestActivationHookGuard {
-        fn drop(&mut self) {
-            *super::test_guest_activation_hook_cell()
-                .lock()
-                .expect("guest activation hook") = None;
-        }
-    }
-
-    fn install_guest_activation_hook<F>(hook: F) -> GuestActivationHookGuard
-    where
-        F: Fn(super::GuestActivationPlan) -> super::GuestActivationTerminal + Send + Sync + 'static,
-    {
-        *super::test_guest_activation_hook_cell()
-            .lock()
-            .expect("guest activation hook") = Some(Arc::new(hook));
-        GuestActivationHookGuard
-    }
-
-    fn activation_test_serial() -> MutexGuard<'static, ()> {
-        static SERIAL: OnceLock<Mutex<()>> = OnceLock::new();
-        SERIAL
-            .get_or_init(|| Mutex::new(()))
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner())
-    }
-
-    fn run_activation_response(
-        request: &d2b_contracts_broker::broker_wire::RunActivationRequest,
-        summary: &str,
-    ) -> BrokerResponse {
-        BrokerResponse::RunActivation(d2b_contracts_broker::broker_wire::RunActivationResponse {
-            mode: request.mode,
-            vm: request.vm.clone(),
-            generation_number: Some(42),
-            guest_switch_script_path: (request.phase
-                == d2b_contracts_broker::broker_wire::ActivationPhase::Prepare)
-                .then(|| {
-                    "/nix/store/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa-vm-a-system/bin/switch-to-configuration"
-                        .to_owned()
-                }),
-            summary: summary.to_owned(),
-        })
-    }
-
-    /// The production `BrokerSigner` must forward a `GuestControlSign`
-    /// request to the broker byte-for-byte (every field), not just the
-    /// subset a `RecordingSigner` would observe in-process. This drives
-    /// the real `dispatch_broker_request_to_socket` framing path against
-    /// a fake seqpacket broker that records the decoded request.
-    #[test]
-    fn broker_signer_forwards_guest_control_sign_request_verbatim() {
-        use crate::guest_control_bridge::{BrokerSigner, GUEST_CONTROL_ATTEMPT_CAP};
-        use d2b_contracts::types::VmId;
-        use d2b_contracts_broker::broker_wire::{
-            BrokerCallerRole, GuestBootIdWire, GuestControlAuthPurpose, GuestControlDirection,
-            GuestControlProofRole, GuestControlSignRequest, GuestControlSignResponse,
-        };
-        use d2b_contracts_control::guest_auth::{AUTH_NONCE_LEN, GUEST_CONTROL_AUTH_PORT};
-        use d2b_contracts_control::guest_wire::GUEST_CONTROL_PROTOCOL_VERSION;
-        use d2bd_runtime::guest_control_health::{AttemptBudget, GuestControlSigner};
-
-        let request = GuestControlSignRequest {
-            vm_id: VmId::new("corp-vm"),
-            role: GuestControlProofRole::GuestProof,
-            protocol_version: GUEST_CONTROL_PROTOCOL_VERSION,
-            direction: GuestControlDirection::HostToGuest,
-            purpose: GuestControlAuthPurpose::GuestControlAuthV1,
-            guest_control_port: GUEST_CONTROL_AUTH_PORT,
-            peer_cid: Some(7),
-            host_nonce: vec![0x11; AUTH_NONCE_LEN],
-            guest_nonce: vec![0x22; AUTH_NONCE_LEN],
-            guest_boot_id: GuestBootIdWire::new("boot-xyz"),
-            capabilities_hash: Some("caps-sha256".to_owned()),
-            tracing_span_id: None,
-        };
-        let expected = request.clone();
-        let recorded: Arc<Mutex<Vec<GuestControlSignRequest>>> = Arc::new(Mutex::new(Vec::new()));
-        let recorded_server = Arc::clone(&recorded);
-        let response_tag = vec![0xCDu8; 32];
-        let response_tag_server = response_tag.clone();
-        let (socket_path, broker) = start_test_broker_server(
-            "guest-control-sign-verbatim",
-            1,
-            move |_, env, fd| match env.request {
-                BrokerRequest::GuestControlSign(req) => {
-                    recorded_server.lock().unwrap().push(req);
-                    write_test_json_frame(
-                        fd,
-                        &BrokerResponse::GuestControlSign(GuestControlSignResponse {
-                            tag: response_tag_server.clone(),
-                        }),
-                    )
-                    .expect("write sign response");
-                }
-                other => panic!("unexpected broker request {other:?}"),
-            },
-        );
-        let signer = BrokerSigner::with_caller_role(
-            socket_path,
-            AttemptBudget::from_now(Duration::from_secs(10), GUEST_CONTROL_ATTEMPT_CAP),
-            BrokerCallerRole::AdminUid { uid: 1000 },
-        );
-        let response = signer.sign(request).expect("broker signer succeeds");
-        broker.join().expect("broker join");
-
-        assert_eq!(response.tag, response_tag);
-        let recorded = recorded.lock().unwrap();
-        assert_eq!(recorded.len(), 1, "exactly one request forwarded");
-        assert_eq!(
-            recorded[0], expected,
-            "BrokerSigner must forward every GuestControlSign field verbatim",
-        );
-    }
-
     #[test]
     fn broker_remaining_before_op_fails_closed_after_deadline() {
         // D1: the whole-round-trip deadline check returns the remaining
@@ -24345,79 +25955,6 @@ mod broker_dispatch_tests {
             err,
             d2bd_runtime::typed_error::TypedError::InternalBrokerTimeout { .. }
         ));
-    }
-
-    #[test]
-    fn broker_signer_slow_broker_is_deadline_bounded_and_maps_to_timeout() {
-        // D1: a stalled/backlogged broker must NOT let one sign exceed its
-        // per-attempt deadline by multiples. The whole connect+write+read
-        // round trip is bounded by the single slice the signer draws from
-        // the shared absolute attempt budget; a deadline exhaustion
-        // surfaces as Timeout (slug guest-control-timeout) end to end, not
-        // a generic Signer failure. The fake broker reads the request then
-        // holds the connection OPEN without responding so the client's
-        // read blocks until its own deadline.
-        use crate::guest_control_bridge::{BrokerSigner, GUEST_CONTROL_ATTEMPT_CAP};
-        use d2b_contracts::types::VmId;
-        use d2b_contracts_broker::broker_wire::{
-            BrokerCallerRole, GuestBootIdWire, GuestControlAuthPurpose, GuestControlDirection,
-            GuestControlProofRole, GuestControlSignRequest,
-        };
-        use d2b_contracts_control::guest_auth::{AUTH_NONCE_LEN, GUEST_CONTROL_AUTH_PORT};
-        use d2b_contracts_control::guest_wire::GUEST_CONTROL_PROTOCOL_VERSION;
-        use d2bd_runtime::guest_control_health::{
-            AttemptBudget, GuestControlHealthError, GuestControlSigner,
-        };
-
-        let attempt = Duration::from_millis(300);
-        let broker_stall = Duration::from_millis(1500);
-        let (socket_path, broker) =
-            start_test_broker_server("guest-control-sign-slow", 1, move |_, env, _fd| {
-                match env.request {
-                    BrokerRequest::GuestControlSign(_) => {
-                        // Keep the accepted connection open without a
-                        // reply so the client's read times out at its own
-                        // deadline, then drop it.
-                        thread::sleep(broker_stall);
-                    }
-                    other => panic!("unexpected broker request {other:?}"),
-                }
-            });
-        let signer = BrokerSigner::with_caller_role(
-            socket_path,
-            AttemptBudget::from_now(attempt, GUEST_CONTROL_ATTEMPT_CAP),
-            BrokerCallerRole::AdminUid { uid: 1000 },
-        );
-        let request = GuestControlSignRequest {
-            vm_id: VmId::new("corp-vm"),
-            role: GuestControlProofRole::HostProof,
-            protocol_version: GUEST_CONTROL_PROTOCOL_VERSION,
-            direction: GuestControlDirection::HostToGuest,
-            purpose: GuestControlAuthPurpose::GuestControlAuthV1,
-            guest_control_port: GUEST_CONTROL_AUTH_PORT,
-            peer_cid: Some(crate::guest_control_bridge::VMADDR_CID_HOST),
-            host_nonce: vec![0x11; AUTH_NONCE_LEN],
-            guest_nonce: vec![0x22; AUTH_NONCE_LEN],
-            guest_boot_id: GuestBootIdWire::new("boot-1"),
-            capabilities_hash: None,
-            tracing_span_id: None,
-        };
-        let started = Instant::now();
-        let result = signer.sign(request);
-        let elapsed = started.elapsed();
-        broker.join().expect("broker join");
-
-        assert_eq!(
-            result,
-            Err(GuestControlHealthError::Timeout),
-            "a stalled broker sign must surface as Timeout, not Signer"
-        );
-        // The sign returned near its OWN deadline slice, NOT after the
-        // (5x larger) broker stall: the round trip is deadline-bounded.
-        assert!(
-            elapsed < attempt * 3,
-            "sign must be deadline-bounded (no multiples of the slice); took {elapsed:?}"
-        );
     }
 
     fn read_child_start_time(child: &Child) -> u64 {
@@ -24666,6 +26203,7 @@ mod broker_dispatch_tests {
                 "switch",
                 d2bd_runtime::wire::Request::Switch(ActivationRequest {
                     vm: "vm-a".to_owned(),
+                    to_generation: None,
                     flags: MutationFlags {
                         dry_run: true,
                         ..MutationFlags::default()
@@ -24676,6 +26214,7 @@ mod broker_dispatch_tests {
                 "boot",
                 d2bd_runtime::wire::Request::Boot(ActivationRequest {
                     vm: "vm-a".to_owned(),
+                    to_generation: None,
                     flags: MutationFlags {
                         dry_run: true,
                         ..MutationFlags::default()
@@ -24686,6 +26225,7 @@ mod broker_dispatch_tests {
                 "test",
                 d2bd_runtime::wire::Request::Test(ActivationRequest {
                     vm: "vm-a".to_owned(),
+                    to_generation: None,
                     flags: MutationFlags {
                         dry_run: true,
                         ..MutationFlags::default()
@@ -24696,6 +26236,7 @@ mod broker_dispatch_tests {
                 "rollback",
                 d2bd_runtime::wire::Request::Rollback(ActivationRequest {
                     vm: "vm-a".to_owned(),
+                    to_generation: None,
                     flags: MutationFlags {
                         dry_run: true,
                         ..MutationFlags::default()
@@ -24856,6 +26397,19 @@ mod broker_dispatch_tests {
             "update destructive_mutating_requests when the mutating request surface changes"
         );
         for (verb, request) in requests {
+            if matches!(verb, "usbipBind" | "usbipUnbind") {
+                match dispatch_request(&state, &peer, request) {
+                    Err(TypedError::BundleTampered { .. }) => {}
+                    Err(TypedError::RuntimeCapabilityUnsupported { capability, .. }) => {
+                        assert_eq!(capability, "usbip-guest-import");
+                    }
+                    Ok(response) => panic!(
+                        "admin USBIP dry-run unexpectedly returned success: {response}"
+                    ),
+                    Err(error) => panic!("admin USBIP dry-run returned wrong error: {error:?}"),
+                }
+                continue;
+            }
             let response = dispatch_request(&state, &peer, request)
                 .unwrap_or_else(|err| panic!("admin request {verb} unexpectedly failed: {err:?}"));
             assert_eq!(
@@ -24874,6 +26428,69 @@ mod broker_dispatch_tests {
                 Some("dry-run-planned")
             );
         }
+    }
+
+    #[test]
+    fn usbip_dry_run_requires_guest_import_capability() {
+        let root = test_daemon_state_dir("usbip-dry-run-unavailable");
+        let artifacts = write_usbip_lifecycle_bundle_artifacts(&root);
+        let mut state =
+            test_state_with_broker_socket(unreachable_broker_socket_path("usbip-dry-run"));
+        state.config.artifacts = artifacts;
+
+        let error = dispatch_request(
+            &state,
+            &admin_peer(),
+            d2bd_runtime::wire::Request::UsbipBind(
+                d2b_contracts_control::public_wire::UsbipBindCliRequest {
+                    vm: "vm-a".to_owned(),
+                    bus_id: "1-2".to_owned(),
+                    flags: MutationFlags {
+                        dry_run: true,
+                        ..MutationFlags::default()
+                    },
+                },
+            ),
+        )
+        .expect_err("USBIP dry-run must not claim host-only success");
+
+        assert!(matches!(
+            error,
+            TypedError::RuntimeCapabilityUnsupported {
+                capability,
+                verb,
+                ..
+            } if capability == "usbip-guest-import" && verb == "usb attach"
+        ));
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn usbip_vm_start_fails_closed_before_runner_when_guest_import_is_unavailable() {
+        let root = test_daemon_state_dir("usbip-start-unavailable");
+        let artifacts = write_usbip_lifecycle_bundle_artifacts(&root);
+        let mut state =
+            test_state_with_broker_socket(unreachable_broker_socket_path("usbip-start"));
+        state.config.artifacts = artifacts;
+
+        let error = dispatch_broker_vm_start(
+            &state,
+            public_wire::VmLifecycleRequest {
+                vm: "vm-a".to_owned(),
+                flags: MutationFlags {
+                    apply: true,
+                    ..MutationFlags::default()
+                },
+                force: false,
+                no_wait_api: true,
+            },
+        )
+        .expect_err("unavailable USBIP start must fail before starting the VM");
+
+        assert_eq!(error.kind(), "runtime-capability-unsupported");
+        assert_eq!(error.exit_code(), 70);
+        assert!(!state.pidfd_table.contains("vm-a", VM_RUNNER_ROLE_ID));
+        let _ = fs::remove_dir_all(&root);
     }
 
     fn host_shutdown_peer() -> PeerIdentity {
@@ -25076,447 +26693,6 @@ mod broker_dispatch_tests {
     }
 
     #[test]
-    fn switch_broker_unreachable_returns_broker_error() {
-        let _serial = activation_test_serial();
-        let state =
-            test_state_with_broker_socket(unreachable_broker_socket_path("switch-unreachable"));
-        let _runner = register_sleep_runner(&state, "vm-a", false);
-        let _hook =
-            install_guest_activation_hook(|_| panic!("unreachable broker must prevent guest"));
-        let response = dispatch_broker_switch(
-            &state,
-            ActivationRequest {
-                vm: "vm-a".to_owned(),
-                flags: MutationFlags {
-                    apply: true,
-                    ..MutationFlags::default()
-                },
-            },
-        )
-        .expect("switch response");
-        assert_unreachable_broker_response(response, "switch", "RunActivation");
-    }
-
-    #[test]
-    fn boot_broker_unreachable_returns_broker_error() {
-        let response = dispatch_broker_boot(
-            &test_state_with_broker_socket(unreachable_broker_socket_path("boot-unreachable")),
-            ActivationRequest {
-                vm: "vm-a".to_owned(),
-                flags: MutationFlags {
-                    apply: true,
-                    ..MutationFlags::default()
-                },
-            },
-        )
-        .expect("boot response");
-        assert_unreachable_broker_response(response, "boot", "RunActivation");
-    }
-
-    #[test]
-    fn test_broker_unreachable_returns_broker_error() {
-        let _serial = activation_test_serial();
-        let state =
-            test_state_with_broker_socket(unreachable_broker_socket_path("test-unreachable"));
-        let _runner = register_sleep_runner(&state, "vm-a", false);
-        let _hook =
-            install_guest_activation_hook(|_| panic!("unreachable broker must prevent guest"));
-        let response = dispatch_broker_test(
-            &state,
-            ActivationRequest {
-                vm: "vm-a".to_owned(),
-                flags: MutationFlags {
-                    apply: true,
-                    ..MutationFlags::default()
-                },
-            },
-        )
-        .expect("test response");
-        assert_unreachable_broker_response(response, "test", "RunActivation");
-    }
-
-    #[test]
-    fn rollback_broker_unreachable_returns_broker_error() {
-        let _serial = activation_test_serial();
-        let state =
-            test_state_with_broker_socket(unreachable_broker_socket_path("rollback-unreachable"));
-        let _runner = register_sleep_runner(&state, "vm-a", false);
-        let _hook =
-            install_guest_activation_hook(|_| panic!("unreachable broker must prevent guest"));
-        let response = dispatch_broker_rollback(
-            &state,
-            ActivationRequest {
-                vm: "vm-a".to_owned(),
-                flags: MutationFlags {
-                    apply: true,
-                    ..MutationFlags::default()
-                },
-            },
-        )
-        .expect("rollback response");
-        assert_unreachable_broker_response(response, "rollback", "RunActivation");
-    }
-
-    #[test]
-    fn activation_switch_sequences_prepare_guest_commit_and_clears_marker() {
-        let _serial = activation_test_serial();
-        let phases = Arc::new(Mutex::new(Vec::new()));
-        let phases_server = Arc::clone(&phases);
-        let (socket_path, broker) =
-            start_test_broker_server("activation-sequence", 2, move |_, env, fd| {
-                match env.request {
-                    BrokerRequest::RunActivation(request) => {
-                        phases_server.lock().unwrap().push(request.phase);
-                        assert_eq!(request.mode, BrokerActivationMode::Switch);
-                        write_test_json_frame(fd, &run_activation_response(&request, "ok"))
-                            .expect("write activation response");
-                    }
-                    other => panic!("unexpected broker request: {other:?}"),
-                }
-            });
-        let state = test_state_with_broker_socket(socket_path);
-        let _runner = register_sleep_runner(&state, "vm-a", false);
-        let guest_calls = Arc::new(Mutex::new(Vec::new()));
-        let guest_calls_hook = Arc::clone(&guest_calls);
-        let _hook = install_guest_activation_hook(move |plan| {
-            guest_calls_hook.lock().unwrap().push((
-                plan.vm.clone(),
-                plan.mode,
-                plan.switch_script_path.clone(),
-            ));
-            super::GuestActivationTerminal::Succeeded
-        });
-
-        let response = dispatch_broker_switch(
-            &state,
-            ActivationRequest {
-                vm: "vm-a".to_owned(),
-                flags: MutationFlags {
-                    apply: true,
-                    ..MutationFlags::default()
-                },
-            },
-        )
-        .expect("switch response");
-
-        assert_eq!(
-            response.get("outcome").and_then(Value::as_str),
-            Some("applied")
-        );
-        assert!(!activation_marker_path(&state, "vm-a").exists());
-        assert_eq!(
-            *phases.lock().unwrap(),
-            vec![
-                BrokerActivationPhase::Prepare,
-                BrokerActivationPhase::Commit
-            ]
-        );
-        assert_eq!(guest_calls.lock().unwrap().len(), 1);
-        assert!(
-            response
-                .get("summary")
-                .and_then(Value::as_str)
-                .unwrap_or_default()
-                .contains("guest-control")
-        );
-        broker.join().expect("join broker");
-    }
-
-    #[test]
-    fn activation_guest_failure_prevents_commit_and_clears_marker() {
-        let _serial = activation_test_serial();
-        let (socket_path, broker) =
-            start_test_broker_server("activation-guest-failure", 1, move |_, env, fd| {
-                match env.request {
-                    BrokerRequest::RunActivation(request) => {
-                        assert_eq!(request.phase, BrokerActivationPhase::Prepare);
-                        write_test_json_frame(fd, &run_activation_response(&request, "prepared"))
-                            .expect("write prepare response");
-                    }
-                    other => panic!("unexpected broker request: {other:?}"),
-                }
-            });
-        let state = test_state_with_broker_socket(socket_path);
-        let _runner = register_sleep_runner(&state, "vm-a", false);
-        let _hook =
-            install_guest_activation_hook(|_| super::GuestActivationTerminal::DefinitiveFailure {
-                summary: "exit=1".to_owned(),
-                remediation: super::GuestActivationFailureRemediation::GuestJournal,
-            });
-
-        let response = dispatch_broker_test(
-            &state,
-            ActivationRequest {
-                vm: "vm-a".to_owned(),
-                flags: MutationFlags {
-                    apply: true,
-                    ..MutationFlags::default()
-                },
-            },
-        )
-        .expect("test response");
-
-        assert_eq!(
-            response.get("outcome").and_then(Value::as_str),
-            Some("broker-error")
-        );
-        assert!(!activation_marker_path(&state, "vm-a").exists());
-        broker.join().expect("join broker");
-    }
-
-    #[test]
-    fn activation_indeterminate_keeps_marker_and_status_degrades() {
-        let _serial = activation_test_serial();
-        let (socket_path, broker) =
-            start_test_broker_server("activation-indeterminate", 1, move |_, env, fd| {
-                match env.request {
-                    BrokerRequest::RunActivation(request) => {
-                        assert_eq!(request.phase, BrokerActivationPhase::Prepare);
-                        write_test_json_frame(fd, &run_activation_response(&request, "prepared"))
-                            .expect("write prepare response");
-                    }
-                    other => panic!("unexpected broker request: {other:?}"),
-                }
-            });
-        let state = test_state_with_broker_socket(socket_path);
-        let _runner = register_sleep_runner(&state, "vm-a", false);
-        let _hook = install_guest_activation_hook(|_| {
-            super::GuestActivationTerminal::Indeterminate("transport dropped".to_owned())
-        });
-
-        let response = dispatch_broker_rollback(
-            &state,
-            ActivationRequest {
-                vm: "vm-a".to_owned(),
-                flags: MutationFlags {
-                    apply: true,
-                    ..MutationFlags::default()
-                },
-            },
-        )
-        .expect("rollback response");
-
-        assert_eq!(
-            response.get("outcome").and_then(Value::as_str),
-            Some("broker-error")
-        );
-        let marker = read_activation_marker(&state, "vm-a").expect("marker kept");
-        assert_eq!(marker.state, HostActivationMarkerState::Indeterminate);
-        let status = dispatch_status(
-            &state,
-            StatusRequest {
-                check_bridges: false,
-                vm: Some("vm-a".to_owned()),
-            },
-        )
-        .expect("status");
-        assert_eq!(
-            status
-                .pointer("/status/entries/0/lifecycle/degraded")
-                .and_then(Value::as_bool),
-            Some(true)
-        );
-        assert_eq!(
-            status
-                .pointer("/status/entries/0/lifecycle/degradedReasons/0/reason")
-                .and_then(Value::as_str),
-            Some("activation-indeterminate")
-        );
-        broker.join().expect("join broker");
-    }
-
-    #[test]
-    fn activation_prepare_failure_prevents_guest_start() {
-        let _serial = activation_test_serial();
-        let (socket_path, broker) =
-            start_test_broker_server("activation-prepare-failure", 1, move |_, env, fd| match env
-                .request
-            {
-                BrokerRequest::RunActivation(request) => {
-                    assert_eq!(request.phase, BrokerActivationPhase::Prepare);
-                    write_test_json_frame(
-                        fd,
-                        &BrokerResponse::Error(BrokerErrorResponse {
-                            kind: "Broker.LiveHandlerFailed".to_owned(),
-                            operation: "RunActivation".to_owned(),
-                            target_wave: None,
-                            message: "prepare failed".to_owned(),
-                            action: "fix".to_owned(),
-                        }),
-                    )
-                    .expect("write error");
-                }
-                other => panic!("unexpected broker request: {other:?}"),
-            });
-        let state = test_state_with_broker_socket(socket_path);
-        let _runner = register_sleep_runner(&state, "vm-a", false);
-        let called = Arc::new(Mutex::new(false));
-        let called_hook = Arc::clone(&called);
-        let _hook = install_guest_activation_hook(move |_| {
-            *called_hook.lock().unwrap() = true;
-            super::GuestActivationTerminal::Succeeded
-        });
-
-        let response = dispatch_broker_switch(
-            &state,
-            ActivationRequest {
-                vm: "vm-a".to_owned(),
-                flags: MutationFlags {
-                    apply: true,
-                    ..MutationFlags::default()
-                },
-            },
-        )
-        .expect("switch response");
-
-        assert_eq!(
-            response.get("outcome").and_then(Value::as_str),
-            Some("broker-error")
-        );
-        assert!(!*called.lock().unwrap());
-        broker.join().expect("join broker");
-    }
-
-    #[test]
-    fn activation_boot_is_metadata_only_and_does_not_call_guest() {
-        let _serial = activation_test_serial();
-        let (socket_path, broker) =
-            start_test_broker_server("activation-boot-metadata", 1, move |_, env, fd| {
-                match env.request {
-                    BrokerRequest::RunActivation(request) => {
-                        assert_eq!(request.mode, BrokerActivationMode::Boot);
-                        assert_eq!(request.phase, BrokerActivationPhase::MetadataOnly);
-                        write_test_json_frame(fd, &run_activation_response(&request, "metadata"))
-                            .expect("write metadata response");
-                    }
-                    other => panic!("unexpected broker request: {other:?}"),
-                }
-            });
-        let state = test_state_with_broker_socket(socket_path);
-        let _hook =
-            install_guest_activation_hook(|_| panic!("boot must not call guest activation"));
-
-        let response = dispatch_broker_boot(
-            &state,
-            ActivationRequest {
-                vm: "vm-a".to_owned(),
-                flags: MutationFlags {
-                    apply: true,
-                    ..MutationFlags::default()
-                },
-            },
-        )
-        .expect("boot response");
-
-        assert_eq!(
-            response.get("outcome").and_then(Value::as_str),
-            Some("applied")
-        );
-        assert!(
-            response
-                .get("summary")
-                .and_then(Value::as_str)
-                .unwrap_or_default()
-                .contains("metadata only")
-        );
-        broker.join().expect("join broker");
-    }
-
-    #[test]
-    fn activation_stopped_vm_and_capability_missing_fail_closed() {
-        let _serial = activation_test_serial();
-        let state =
-            test_state_with_broker_socket(unreachable_broker_socket_path("activation-stopped"));
-        let stopped = dispatch_broker_switch(
-            &state,
-            ActivationRequest {
-                vm: "vm-a".to_owned(),
-                flags: MutationFlags {
-                    apply: true,
-                    ..MutationFlags::default()
-                },
-            },
-        )
-        .expect("switch response");
-        assert_eq!(
-            stopped.get("outcome").and_then(Value::as_str),
-            Some("invalid-request")
-        );
-        assert!(
-            stopped
-                .get("remediation")
-                .and_then(Value::as_str)
-                .unwrap_or_default()
-                .contains("d2b boot vm-a --apply")
-        );
-
-        let (socket_path, broker) = start_test_broker_server(
-            "activation-capability-missing",
-            1,
-            move |_, env, fd| match env.request {
-                BrokerRequest::RunActivation(request) => {
-                    assert_eq!(request.phase, BrokerActivationPhase::Prepare);
-                    write_test_json_frame(fd, &run_activation_response(&request, "prepared"))
-                        .expect("write prepare response");
-                }
-                other => panic!("unexpected broker request: {other:?}"),
-            },
-        );
-        let state = test_state_with_broker_socket(socket_path);
-        let _runner = register_sleep_runner(&state, "vm-a", false);
-        let _hook =
-            install_guest_activation_hook(|_| super::GuestActivationTerminal::DefinitiveFailure {
-                summary: "guest-control system activation capability unavailable".to_owned(),
-                remediation: super::GuestActivationFailureRemediation::UpgradeGuest,
-            });
-        let missing = dispatch_broker_switch(
-            &state,
-            ActivationRequest {
-                vm: "vm-a".to_owned(),
-                flags: MutationFlags {
-                    apply: true,
-                    ..MutationFlags::default()
-                },
-            },
-        )
-        .expect("switch response");
-        assert_eq!(
-            missing.get("outcome").and_then(Value::as_str),
-            Some("broker-error")
-        );
-        assert!(
-            missing
-                .get("summary")
-                .and_then(Value::as_str)
-                .unwrap_or_default()
-                .contains("capability unavailable")
-        );
-        assert!(
-            missing
-                .get("remediation")
-                .and_then(Value::as_str)
-                .unwrap_or_default()
-                .contains("d2b boot vm-a --apply")
-        );
-        broker.join().expect("join broker");
-    }
-
-    #[test]
-    fn activation_same_vm_lock_rejects_concurrent_request() {
-        let _serial = activation_test_serial();
-        let state =
-            test_state_with_broker_socket(unreachable_broker_socket_path("activation-lock"));
-        let guard = try_acquire_activation_lock(&state, "vm-a").expect("first activation lock");
-        let second = try_acquire_activation_lock(&state, "vm-a");
-        assert!(second.is_err(), "second activation must be rejected");
-        drop(guard);
-        assert!(
-            try_acquire_activation_lock(&state, "vm-a").is_ok(),
-            "lock releases after guard drop"
-        );
-    }
-
-    #[test]
     fn gc_broker_unreachable_returns_broker_error() {
         let response = dispatch_broker_gc(
             &test_state_with_broker_socket(unreachable_broker_socket_path("gc-unreachable")),
@@ -25609,6 +26785,50 @@ mod broker_dispatch_tests {
     }
 
     #[test]
+    fn graphics_vm_start_refuses_without_resource_backed_display_reconciliation() {
+        use d2b_core::processes::{
+            NodeId, ProcessExecutionDomain, ProcessRole, VmProcessDag, VmProcessInvariants,
+        };
+
+        let state = test_state_with_broker_socket(unreachable_broker_socket_path(
+            "vm-start-display-resource-missing",
+        ));
+        let mut node = readiness_test_node();
+        node.id = NodeId("wayland-proxy".to_owned());
+        node.role = ProcessRole::WaylandProxy;
+        node.execution_ref = Some("Host/host-system".to_owned());
+        node.execution_domain = Some(ProcessExecutionDomain::System);
+        node.binary_path = Some("/nix/store/d2b-wayland-proxy/bin/d2b-wayland-proxy".to_owned());
+        node.argv = vec![
+            "d2b-vm-a-wlproxy".to_owned(),
+            "--provider-kind".to_owned(),
+            "local-vm".to_owned(),
+        ];
+        let dag = VmProcessDag {
+            workload_identity: None,
+            vm: "vm-a".to_owned(),
+            nodes: vec![node],
+            edges: Vec::new(),
+            invariants: VmProcessInvariants {
+                per_vm_audit_pipeline: true,
+                swtpm_pre_start_flush: false,
+                tpm_ownership_migration_without_running_vm_mutation: false,
+                usbip_gating: false,
+            },
+        };
+
+        assert_eq!(
+            reconcile_display_before_vm_start(&state, "vm-a", &dag),
+            Err("display-resource-plane-unavailable".to_owned()),
+            "graphics start must fail closed before the display socket wait"
+        );
+        assert!(
+            !state.pidfd_table.contains("vm-a", RunnerRole::WaylandProxy.as_str()),
+            "missing committed display state must not fall back to direct DAG spawning"
+        );
+    }
+
+    #[test]
     #[cfg_attr(
         not(test_root),
         ignore = "P2fu1 software-r2 (longstanding pre-existing): same root/owner requirement as vm_start_broker_unreachable_returns_broker_error."
@@ -25671,6 +26891,9 @@ mod broker_dispatch_tests {
             interaction_listeners: Arc::new(Mutex::new(None)),
             typed_shell_session_targets: d2bd_runtime::typed_shell_targets::new_cache(),
             zone_coordinator: d2bd_runtime::zone_authority::new_coordinator(),
+            config_staging: Arc::new(Mutex::new(Default::default())),
+            guest_component_sessions: Arc::new(tokio::sync::Mutex::new(HashMap::new())),
+        guest_component_session_locks: Arc::new(tokio::sync::Mutex::new(HashMap::new())),
             security_key_sessions: Arc::new(parking_lot::Mutex::new(
                 crate::security_key::SkSessionTable::default(),
             )),
@@ -25711,6 +26934,7 @@ mod broker_dispatch_tests {
                     execution_ref: None,
                     execution_domain: None,
                     user_ref: None,
+                    guest_execution: None,
                     provider_identity: None,
                     template_identity: None,
                     generation: None,
@@ -25800,8 +27024,6 @@ mod broker_dispatch_tests {
         fs::remove_file(&share_ro_socket).ok();
         fs::remove_file(&share_meta_socket).ok();
         fs::remove_file(&api_socket).ok();
-        let ssh_listener = TcpListener::bind("127.0.0.1:0").expect("bind ssh readiness port");
-        let ssh_port = ssh_listener.local_addr().expect("ssh listener addr").port();
         let artifacts = write_custom_vm_start_bundle_artifacts(
             &daemon_state_dir,
             &api_socket,
@@ -25857,12 +27079,12 @@ mod broker_dispatch_tests {
                                 ]
                             },
                             {
-                                "id": "guest-ssh-readiness",
-                                "role": "guest-ssh-readiness",
+                                "id": "component-session-health",
+                                "role": "component-session-health",
                                 "unit": null,
-                                "profile": minimal_role_profile("vm-vm-a-guest-ssh-readiness", "d2b.slice/vm-a/guest-ssh-readiness"),
+                                "profile": minimal_role_profile("vm-vm-a-component-session-health", "d2b.slice/vm-a/component-session-health"),
                                 "readiness": [
-                                    { "kind": "tcp-port", "value": { "host": "127.0.0.1", "port": ssh_port } }
+                                    { "kind": "component-specific", "value": "component-session healthy" }
                                 ]
                             }
                         ],
@@ -25872,7 +27094,7 @@ mod broker_dispatch_tests {
                             { "from": "store-virtiofs-preflight", "to": "virtiofsd-d2b-meta", "reason": "share two" },
                             { "from": "virtiofsd-ro-store", "to": "cloud-hypervisor", "reason": "share one ready" },
                             { "from": "virtiofsd-d2b-meta", "to": "cloud-hypervisor", "reason": "share two ready" },
-                            { "from": "cloud-hypervisor", "to": "guest-ssh-readiness", "reason": "ssh after ch" }
+                            { "from": "cloud-hypervisor", "to": "component-session-health", "reason": "component session after ch" }
                         ],
                         "invariants": {
                             "swtpmPreStartFlush": true,
@@ -25918,6 +27140,9 @@ mod broker_dispatch_tests {
             interaction_listeners: Arc::new(Mutex::new(None)),
             typed_shell_session_targets: d2bd_runtime::typed_shell_targets::new_cache(),
             zone_coordinator: d2bd_runtime::zone_authority::new_coordinator(),
+            config_staging: Arc::new(Mutex::new(Default::default())),
+            guest_component_sessions: Arc::new(tokio::sync::Mutex::new(HashMap::new())),
+        guest_component_session_locks: Arc::new(tokio::sync::Mutex::new(HashMap::new())),
             security_key_sessions: Arc::new(parking_lot::Mutex::new(
                 crate::security_key::SkSessionTable::default(),
             )),
@@ -26005,6 +27230,7 @@ mod broker_dispatch_tests {
                         execution_ref: None,
                         execution_domain: None,
                         user_ref: None,
+                        guest_execution: None,
                         provider_identity: None,
                         template_identity: None,
                         generation: None,
@@ -26195,6 +27421,9 @@ mod broker_dispatch_tests {
             interaction_listeners: Arc::new(Mutex::new(None)),
             typed_shell_session_targets: d2bd_runtime::typed_shell_targets::new_cache(),
             zone_coordinator: d2bd_runtime::zone_authority::new_coordinator(),
+            config_staging: Arc::new(Mutex::new(Default::default())),
+            guest_component_sessions: Arc::new(tokio::sync::Mutex::new(HashMap::new())),
+        guest_component_session_locks: Arc::new(tokio::sync::Mutex::new(HashMap::new())),
             security_key_sessions: Arc::new(parking_lot::Mutex::new(
                 crate::security_key::SkSessionTable::default(),
             )),
@@ -27084,6 +28313,7 @@ mod broker_dispatch_tests {
                 execution_ref: None,
                 execution_domain: None,
                 user_ref: None,
+                guest_execution: None,
                 provider_identity: None,
                 template_identity: None,
                 generation: None,
@@ -28117,6 +29347,9 @@ mod broker_dispatch_tests {
             interaction_listeners: Arc::new(Mutex::new(None)),
             typed_shell_session_targets: d2bd_runtime::typed_shell_targets::new_cache(),
             zone_coordinator: d2bd_runtime::zone_authority::new_coordinator(),
+            config_staging: Arc::new(Mutex::new(Default::default())),
+            guest_component_sessions: Arc::new(tokio::sync::Mutex::new(HashMap::new())),
+        guest_component_session_locks: Arc::new(tokio::sync::Mutex::new(HashMap::new())),
             security_key_sessions: Arc::new(parking_lot::Mutex::new(
                 crate::security_key::SkSessionTable::default(),
             )),
@@ -28249,22 +29482,22 @@ mod broker_dispatch_tests {
     }
 
     #[test]
-    fn stateless_readiness_for_guest_control_health_fails_loud() {
+    fn stateless_readiness_for_component_session_health_fails_loud() {
         use d2b_core::processes::ReadinessPredicate;
         use d2bd_runtime::readiness::readiness_predicate_ready;
 
-        // The live readiness path intercepts `GuestControlHealth` nodes in
+        // The live readiness path intercepts `ComponentSessionHealth` nodes in
         // `VmStartRunner::spawn_and_wait_ready` and never reaches the stateless
         // helper. If the stateless arm is ever hit, the state-aware routing
         // regressed, so it MUST fail loud (not silently never-ready).
-        let predicate = ReadinessPredicate::GuestControlHealth {
+        let predicate = ReadinessPredicate::ComponentSessionHealth {
             vm: "work".to_owned(),
         };
         let result = readiness_predicate_ready(&predicate);
         assert_eq!(
             result,
-            Err("guest-control-health-needs-state-aware-path".to_owned()),
-            "stateless guest-control readiness MUST be a loud Err so a routing regression cannot masquerade as a benign never-ready"
+            Err("guest-component-session-needs-state-aware-path".to_owned()),
+            "stateless component-session readiness MUST be a loud Err so a routing regression cannot masquerade as a benign never-ready"
         );
     }
 
@@ -28517,21 +29750,21 @@ mod broker_dispatch_tests {
     }
 
     #[test]
-    fn guest_control_health_is_readiness_only_node_mode() {
+    fn component_session_health_is_readiness_only_node_mode() {
         use super::{VmStartNodeMode, vm_start_node_mode};
         use d2b_core::processes::ProcessRole;
 
-        // GuestControlHealth must remain a readiness-only node (no runner is
+        // ComponentSessionHealth must remain a readiness-only node (no runner is
         // spawned for it); the state-aware probe is driven by the readiness
         // interception, not by a long-lived/one-shot spawn.
         assert!(matches!(
-            vm_start_node_mode(&ProcessRole::GuestControlHealth),
+            vm_start_node_mode(&ProcessRole::ComponentSessionHealth),
             VmStartNodeMode::ReadinessOnly
         ));
     }
 
     #[test]
-    fn guest_control_health_empty_readiness_fallthrough_is_intercepted() {
+    fn component_session_health_empty_readiness_fallthrough_is_intercepted() {
         use super::{VmStartNodeMode, vm_start_node_mode, wait_for_readiness};
         use d2b_core::processes::{NodeId, ProcessNode, ProcessRole};
         use std::time::Duration;
@@ -28540,8 +29773,8 @@ mod broker_dispatch_tests {
             execution_ref: None,
             execution_domain: None,
             user_ref: None,
-            id: NodeId("guest-control-health".to_owned()),
-            role: ProcessRole::GuestControlHealth,
+            id: NodeId("component-session-health".to_owned()),
+            role: ProcessRole::ComponentSessionHealth,
             unit: None,
             binary_path: None,
             argv: vec![],
@@ -28561,28 +29794,28 @@ mod broker_dispatch_tests {
         // probe. `spawn_and_check_process_alive` (the process-alive fast
         // path, e.g. `--no-wait-api`) delegates the node to
         // `spawn_and_wait_ready(vm, node, &[], budget)` with exactly this
-        // empty slice. If a GuestControlHealth node ever reached
-        // `wait_for_readiness`, an absent/auth-failing guest-control
+        // empty slice. If a ComponentSessionHealth node ever reached
+        // `wait_for_readiness`, an absent/auth-failing component-session
         // listener would be reported "ready" with NO authenticated probe.
         assert_eq!(
             wait_for_readiness(&node, &[], Duration::from_millis(0), None),
             Ok(()),
             "empty readiness is trivially ready; the authenticated probe \
-             must be reached via the GuestControlHealth interception, never \
+             must be reached via the ComponentSessionHealth interception, never \
              via this helper"
         );
 
-        // GUARD: GuestControlHealth is a ReadinessOnly node, so
+        // GUARD: ComponentSessionHealth is a ReadinessOnly node, so
         // `spawn_and_check_process_alive` does NOT take the LongLived
         // process-alive-only short-circuit (which registers a node as alive
         // after spawn with no probe at all). It falls through to
-        // `spawn_and_wait_ready`, whose `node.role == GuestControlHealth`
-        // special case runs `wait_for_guest_control_health` BEFORE the empty
+        // `spawn_and_wait_ready`, whose `node.role == ComponentSessionHealth`
+        // special case runs `wait_for_component_session_health` BEFORE the empty
         // readiness slice can reach the trivially-ready `wait_for_readiness`.
-        // Were GuestControlHealth ever made LongLived, or the interception
+        // Were ComponentSessionHealth ever made LongLived, or the interception
         // removed, the authenticated probe would be bypassed on this path.
         assert!(matches!(
-            vm_start_node_mode(&ProcessRole::GuestControlHealth),
+            vm_start_node_mode(&ProcessRole::ComponentSessionHealth),
             VmStartNodeMode::ReadinessOnly
         ));
     }
@@ -28607,8 +29840,8 @@ mod broker_dispatch_tests {
         let no_vsock = vec!["cloud-hypervisor".to_owned(), "--api-socket".to_owned()];
         assert_eq!(cloud_hypervisor_vsock_socket(&no_vsock), None);
 
-        // Old-generation / pre-guest-control CH argv: a `--vsock` device with no
-        // `socket=` subfield resolves to None, which `resolve_guest_control_probe_params`
+        // Old-generation / pre-component-session CH argv: a `--vsock` device with no
+        // `socket=` subfield resolves to None, which `resolve_component_session_probe_params`
         // turns into a fail-closed `no-vsock-socket` error (no endpoint to probe,
         // so exec never proxies and never falls back).
         let vsock_without_socket = vec![
@@ -28643,65 +29876,6 @@ mod broker_dispatch_tests {
         // Audio status is read-only and remains launcher-readable; audio
         // mutations are gated by the AudioOp arm in dispatch_request_locked.
         assert!(!verb_requires_admin("audio"));
-    }
-
-    #[test]
-    fn shell_guest_responses_map_to_public_dtos() {
-        let mut attach = pb::ShellAttachResponse::new();
-        attach.session_id = Some("shell-1".to_owned());
-        attach.resolved_name = "default".to_owned();
-        attach.state = protobuf::EnumOrUnknown::new(pb::ShellState::SHELL_STATE_ATTACHED);
-        attach.force_evicted = true;
-        let attach = map_shell_attach_response(attach).expect("attach maps");
-        assert_eq!(attach.session, "shell-1");
-        assert_eq!(attach.resolved_name.as_str(), "default");
-        assert_eq!(attach.state, ShellSessionState::Attached);
-        assert!(attach.force_evicted);
-
-        let mut list = pb::ShellListResponse::new();
-        list.default_name = "default".to_owned();
-        let mut entry = pb::ShellListEntry::new();
-        entry.name = "ops_1".to_owned();
-        entry.state = protobuf::EnumOrUnknown::new(pb::ShellState::SHELL_STATE_DETACHED);
-        entry.attached = false;
-        entry.is_default = false;
-        list.sessions.push(entry);
-        let list = map_shell_list_response(list).expect("list maps");
-        assert_eq!(list.default_name.as_str(), "default");
-        assert_eq!(list.sessions[0].name.as_str(), "ops_1");
-        assert_eq!(list.sessions[0].state, ShellSessionState::Detached);
-
-        let mut detach = pb::ShellDetachResponse::new();
-        detach.resolved_name = "default".to_owned();
-        detach.detached = false;
-        detach.cause =
-            protobuf::EnumOrUnknown::new(pb::ShellCloseCause::SHELL_CLOSE_CAUSE_CLIENT_DETACH);
-        let detach = map_shell_detach_response(detach).expect("detach maps");
-        assert_eq!(detach.resolved_name.as_str(), "default");
-        assert!(!detach.detached);
-        assert!(detach.cause.is_some());
-
-        let mut kill = pb::ShellKillResponse::new();
-        kill.name = "default".to_owned();
-        kill.killed = false;
-        kill.state = protobuf::EnumOrUnknown::new(pb::ShellState::SHELL_STATE_KILLED);
-        let kill = map_shell_kill_response(kill).expect("kill maps");
-        assert_eq!(kill.name.as_str(), "default");
-        assert!(!kill.killed);
-        assert_eq!(kill.state, ShellSessionState::Killed);
-    }
-
-    #[test]
-    fn shell_guest_error_maps_before_required_attach_fields() {
-        let mut attach = pb::ShellAttachResponse::new();
-        let mut error = pb::GuestControlError::new();
-        error.kind = protobuf::EnumOrUnknown::new(
-            pb::GuestControlErrorKind::GUEST_CONTROL_ERROR_KIND_SHELL_POOL_UNAVAILABLE,
-        );
-        attach.error = protobuf::MessageField::some(error);
-
-        let err = map_shell_attach_response(attach).expect_err("guest error maps");
-        assert_eq!(err.kind(), "guest-control-shell-capability-unavailable");
     }
 
     #[test]
@@ -29052,13 +30226,6 @@ mod broker_dispatch_tests {
     }
 
     #[test]
-    fn shell_owner_rejects_stale_session_ids() {
-        let err = super::ensure_shell_owner_session("stale-session", "owner-session")
-            .expect_err("stale session must fail");
-        assert_eq!(err.kind(), "guest-control-shell-stale-session");
-    }
-
-    #[test]
     fn shell_audit_digest_correlates_on_resolved_name_not_session_id() {
         let vm = "corp-vm";
         let resolved_name = "default";
@@ -29088,59 +30255,6 @@ mod broker_dispatch_tests {
         let target = super::unresolved_shell_audit_target();
         assert_eq!(target, "unresolved");
         assert!(!target.contains(canary));
-    }
-
-    #[test]
-    fn read_guest_config_dispatch_denies_launcher_before_any_side_effect() {
-        // The broker socket is unreachable. If the admin gate did NOT
-        // short-circuit, dispatch_read_guest_config would load the bundle
-        // resolver, resolve probe params, BrokerSign, and read guest bytes -
-        // producing a transport / broker error, never AuthzNotAdmin.
-        // Receiving AuthzNotAdmin proves the launcher was denied at the gate
-        // BEFORE any bundle load / probe / sign / guest-byte read.
-        let state = test_state_with_broker_socket(unreachable_broker_socket_path(
-            "read-guest-config-authz",
-        ));
-        let request = d2bd_runtime::wire::Request::ReadGuestConfig(
-            d2b_contracts_control::public_wire::ReadGuestConfigRequest {
-                vm: "vm-a".to_owned(),
-            },
-        );
-        let err = dispatch_request(&state, &launcher_peer(), request)
-            .expect_err("launcher must be denied readGuestConfig");
-        match &err {
-            d2bd_runtime::typed_error::TypedError::AuthzNotAdmin { verb } => {
-                assert_eq!(verb, "readGuestConfig");
-            }
-            other => panic!("expected AuthzNotAdmin for readGuestConfig, got {other:?}"),
-        }
-        assert_eq!(err.exit_code(), 75);
-    }
-
-    #[test]
-    fn read_guest_config_dispatch_admin_clears_gate_and_reaches_handler() {
-        // The admin peer clears the authz gate, so dispatch reaches the
-        // handler and fails LATER (the bundle vm has no guest-control node /
-        // the broker is unreachable) with a guest-control read or transport
-        // error - never an authz error. This proves the gate is the only
-        // thing denying the launcher above, not some unrelated failure.
-        let state = test_state_with_broker_socket(unreachable_broker_socket_path(
-            "read-guest-config-admin",
-        ));
-        let request = d2bd_runtime::wire::Request::ReadGuestConfig(
-            d2b_contracts_control::public_wire::ReadGuestConfigRequest {
-                vm: "vm-a".to_owned(),
-            },
-        );
-        let err = dispatch_request(&state, &admin_peer(), request)
-            .expect_err("the read must fail after the gate is cleared");
-        assert!(
-            !matches!(
-                err,
-                d2bd_runtime::typed_error::TypedError::AuthzNotAdmin { .. }
-            ),
-            "admin must clear the authz gate, got {err:?}"
-        );
     }
 
     // --- OtelHostBridge degraded-mode envelope injection ---
@@ -29208,7 +30322,7 @@ mod broker_dispatch_tests {
                             "lifecycle": true,
                             "display": false,
                             "usbHotplug": false,
-                            "guestControl": false,
+
                             "exec": false,
                             "configSync": false,
                             "ssh": false,
@@ -29359,6 +30473,9 @@ mod broker_dispatch_tests {
             interaction_listeners: Arc::new(Mutex::new(None)),
             typed_shell_session_targets: d2bd_runtime::typed_shell_targets::new_cache(),
             zone_coordinator: d2bd_runtime::zone_authority::new_coordinator(),
+            config_staging: Arc::new(Mutex::new(Default::default())),
+            guest_component_sessions: Arc::new(tokio::sync::Mutex::new(HashMap::new())),
+        guest_component_session_locks: Arc::new(tokio::sync::Mutex::new(HashMap::new())),
             security_key_sessions: Arc::new(parking_lot::Mutex::new(
                 crate::security_key::SkSessionTable::default(),
             )),
@@ -29495,6 +30612,11 @@ mod broker_dispatch_tests {
             interaction_listeners: Arc::new(Mutex::new(None)),
             typed_shell_session_targets: d2bd_runtime::typed_shell_targets::new_cache(),
             zone_coordinator: d2bd_runtime::zone_authority::new_coordinator(),
+            config_staging: Arc::new(Mutex::new(
+                d2b_provider_config_nixos::ConfigStagingStore::default(),
+            )),
+            guest_component_sessions: Arc::new(tokio::sync::Mutex::new(HashMap::new())),
+        guest_component_session_locks: Arc::new(tokio::sync::Mutex::new(HashMap::new())),
             security_key_sessions: Arc::new(parking_lot::Mutex::new(
                 crate::security_key::SkSessionTable::default(),
             )),

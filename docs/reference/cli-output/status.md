@@ -22,7 +22,7 @@ form: it does **not** inline the bridge-health table.
 | `current` | string or `null` | Target of `/var/lib/d2b/vms/<vm>/current`. | Stable wire contract. |
 | `booted` | string or `null` | Target of `/var/lib/d2b/vms/<vm>/booted`. | Stable wire contract. |
 | `pendingRestart` | boolean | True when the VM is running and `booted != current`. | Stable wire contract. |
-| `apiReady` | string, object, or `null` | Optional last daemon-observed Cloud Hypervisor API readiness state. Simple values are `yes`, `pending`, or `timeout`; the legacy object form is `{ "error": "<readiness error text>" }`. Omitted, or legacy `null`, means no readiness result is known. Guest-control rollout must use a separate negotiated bounded status field rather than extending this free-form error string. | Stable wire contract. |
+| `apiReady` | string, object, or `null` | Optional last daemon-observed Cloud Hypervisor API readiness state. Simple values are `yes`, `pending`, or `timeout`; the legacy object form is `{ "error": "<readiness error text>" }`. Omitted, or legacy `null`, means no readiness result is known. ComponentSession readiness remains a separate typed Process role rather than an extension of this field. | Stable wire contract. |
 | `declaredRoles` | array of strings | Process-DAG roles declared for the VM in the trusted bundle. Video-enabled VMs include `video`; graphics VMs without `graphics.videoSidecar` omit it. | Stable wire contract. |
 | `readiness` | array of strings | Readiness predicates rendered as strings. Video-enabled VMs include `unix-socket-listening:/run/d2b-video/<vm>/video.sock`; graphics VMs with video disabled omit video readiness because the video sidecar is a default-off capability. | Stable wire contract. |
 | `runtime` | string | Daemon runtime state label. | Stable wire contract. |
@@ -44,10 +44,9 @@ form: it does **not** inline the bridge-health table.
 ## Stability promise
 
 The top-level keys and service-subkeys are frozen within this schema
-revision. Guest-control rollout will add a negotiated guest-control status
-field in the release that implements guest-control; until that schema revision lands,
-operators discover old-generation guest-control state through the ADR 0028
-compatibility surfaces rather than an ad hoc extra key.
+revision. ComponentSession readiness is represented by the typed
+`component-session-health` Process role and typed incompatibility errors; it is
+not encoded by extending `apiReady` or by adding an ad hoc status key.
 
 ## Human example
 

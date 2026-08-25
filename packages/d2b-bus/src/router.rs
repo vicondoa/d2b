@@ -25,6 +25,10 @@ use d2b_contracts_resource::v3::identity::{
     ServiceName,
     SessionBinding,
 };
+use d2b_core_controller::controller_assignment::{
+    AssignmentIdentity, AssignmentVerb, ScopedCommitTransport, ScopedResourceFilter,
+    ScopedResourceMutation, ScopedResourceQuery,
+};
 use d2b_resource_api::authz::{
     ApiMethod, AuthorizationRequest, AuthorizationState, AuthorizationTarget, PolicySet,
     ResourceVerb, SessionVerb,
@@ -33,7 +37,8 @@ use d2b_resource_api::watch::{WatchFrame, WatchSink, WatchSinkError};
 use d2b_session::{
     AuthenticatedComponentSession, AuthenticatedSessionRouteBinding, AuthenticatedTtrpcHandle,
     GENERATED_OPERATION_CATALOG, OperationKind, SessionAcceptor, SessionAuthorizationRequest,
-    SessionCancellationHandle, SessionOperation, SessionRegistrationCapability,
+    SessionCancellationHandle, SessionDriverHandle, SessionOperation,
+    SessionRegistrationCapability,
     contract::{EndpointPolicy, ServicePackage},
     resource_operation, rewrite_ttrpc_stream_id, ttrpc_request_id, ttrpc_stream_id,
 };
@@ -217,6 +222,7 @@ pub struct ResourceQuery {
     resource_types: Vec<ResourceTypeName>,
     resource_names: Vec<ResourceName>,
     filters: Vec<ResourceFilter>,
+    assignment: Option<AssignmentIdentity>,
 }
 
 impl ResourceQuery {
@@ -237,6 +243,36 @@ impl ResourceQuery {
             resource_types,
             resource_names,
             filters,
+            assignment: None,
+        })
+    }
+
+    /// Consume a controller-minted query without allowing its assignment
+    /// filter to be dropped or widened.
+    pub fn from_scoped(query: ScopedResourceQuery) -> Result<Self, BusError> {
+        let (assignment, resource_types, resource_names, scoped_filters) = query.into_parts();
+        if resource_types.is_empty()
+            || resource_types.len() > 64
+            || resource_names.len() > 64
+            || scoped_filters.len() > 64
+        {
+            return Err(BusError::InvalidResourceCall);
+        }
+        let filters = scoped_filters
+            .into_iter()
+            .map(resource_filter_from_scoped)
+            .collect::<Result<Vec<_>, _>>()?;
+        if !filters
+            .iter()
+            .any(|filter| filter.field == "assignment.resourceUid")
+        {
+            return Err(BusError::InvalidResourceCall);
+        }
+        Ok(Self {
+            resource_types,
+            resource_names,
+            filters,
+            assignment: Some(assignment),
         })
     }
 
@@ -253,6 +289,11 @@ impl ResourceQuery {
     /// Borrow the exact filters.
     pub fn filters(&self) -> &[ResourceFilter] {
         &self.filters
+    }
+
+    /// Borrow the assignment evidence, when this query is controller-scoped.
+    pub const fn assignment(&self) -> Option<&AssignmentIdentity> {
+        self.assignment.as_ref()
     }
 }
 
@@ -279,6 +320,10 @@ pub enum ResourceCall {
     UpdateFinalizers(ResourceRef),
     Delete(ResourceRef),
     CommitBatch(Vec<(ResourceRef, ResourceVerb)>),
+    ScopedCommitBatch {
+        assignment: AssignmentIdentity,
+        mutations: Vec<ScopedResourceMutation>,
+    },
     ResolveRef(ResourceRef),
     InspectSchema(ResourceTypeName),
     Upgrade(ResourceRef),
@@ -360,6 +405,39 @@ impl ResourceCall {
                         .collect(),
                 )
             }
+            Self::ScopedCommitBatch {
+                assignment,
+                mutations,
+            } => {
+                if mutations.is_empty()
+                    || mutations.len() > 128
+                    || mutations.iter().any(|mutation| {
+                        mutation.assignment() != assignment
+                            || !mutation.verb().is_mutating()
+                            || mutation.verb() == AssignmentVerb::CommitBatch
+                    })
+                {
+                    return Err(BusError::InvalidResourceCall);
+                }
+                (
+                    ApiMethod::CommitBatch,
+                    mutations
+                        .iter()
+                        .map(|mutation| {
+                            let subresource = match mutation.verb() {
+                                AssignmentVerb::UpdateStatus => Some("status"),
+                                AssignmentVerb::UpdateFinalizers => Some("finalizers"),
+                                _ => None,
+                            };
+                            exact_target(
+                                mutation.target(),
+                                resource_verb_for_assignment(mutation.verb()),
+                                subresource,
+                            )
+                        })
+                        .collect(),
+                )
+            }
             Self::ResolveRef(target) => (
                 ApiMethod::ResolveRef,
                 vec![exact_target(target, ResourceVerb::Get, None)],
@@ -402,9 +480,27 @@ impl ResourceCall {
             Self::UpdateFinalizers(_) => ApiMethod::UpdateFinalizers,
             Self::Delete(_) => ApiMethod::Delete,
             Self::CommitBatch(_) => ApiMethod::CommitBatch,
+            Self::ScopedCommitBatch { .. } => ApiMethod::CommitBatch,
             Self::ResolveRef(_) => ApiMethod::ResolveRef,
             Self::InspectSchema(_) => ApiMethod::InspectSchema,
             Self::Upgrade(_) => ApiMethod::Upgrade,
+        }
+    }
+
+    /// Borrow the assignment evidence attached to this resource call.
+    pub fn assignment(&self) -> Option<&AssignmentIdentity> {
+        match self {
+            Self::List(query) | Self::Watch(query) => query.assignment(),
+            Self::ScopedCommitBatch { assignment, .. } => Some(assignment),
+            _ => None,
+        }
+    }
+
+    /// Borrow the controller mutations carried by a scoped commit call.
+    pub fn scoped_mutations(&self) -> Option<&[ScopedResourceMutation]> {
+        match self {
+            Self::ScopedCommitBatch { mutations, .. } => Some(mutations),
+            _ => None,
         }
     }
 
@@ -419,7 +515,11 @@ impl ResourceCall {
             | Self::Delete(target)
             | Self::ResolveRef(target)
             | Self::Upgrade(target) => Some(target),
-            Self::List(_) | Self::Watch(_) | Self::CommitBatch(_) | Self::InspectSchema(_) => None,
+            Self::List(_)
+            | Self::Watch(_)
+            | Self::CommitBatch(_)
+            | Self::ScopedCommitBatch { .. }
+            | Self::InspectSchema(_) => None,
         }
     }
 
@@ -437,7 +537,11 @@ impl ResourceCall {
             | Self::Delete(target)
             | Self::ResolveRef(target)
             | Self::Upgrade(target) => target == route_target,
-            Self::List(_) | Self::Watch(_) | Self::CommitBatch(_) | Self::InspectSchema(_) => false,
+            Self::List(_)
+            | Self::Watch(_)
+            | Self::CommitBatch(_)
+            | Self::ScopedCommitBatch { .. }
+            | Self::InspectSchema(_) => false,
         }
     }
 }
@@ -454,7 +558,7 @@ impl core::fmt::Debug for ResourceCall {
             Self::UpdateMetadata(_) => "UpdateMetadata",
             Self::UpdateFinalizers(_) => "UpdateFinalizers",
             Self::Delete(_) => "Delete",
-            Self::CommitBatch(_) => "CommitBatch",
+            Self::CommitBatch(_) | Self::ScopedCommitBatch { .. } => "CommitBatch",
             Self::ResolveRef(_) => "ResolveRef",
             Self::InspectSchema(_) => "InspectSchema",
             Self::Upgrade(_) => "Upgrade",
@@ -488,7 +592,10 @@ fn query_targets(query: &ResourceQuery, verb: ResourceVerb) -> Vec<Authorization
                     resource_name: None,
                     verb,
                     subresource: None,
-                    execution_ref: None,
+                    execution_ref: query
+                        .assignment()
+                        .and_then(|assignment| assignment.target().execution_ref())
+                        .cloned(),
                 }]
             } else {
                 query
@@ -499,12 +606,49 @@ fn query_targets(query: &ResourceQuery, verb: ResourceVerb) -> Vec<Authorization
                         resource_name: Some(name.clone()),
                         verb,
                         subresource: None,
-                        execution_ref: None,
+                        execution_ref: query
+                            .assignment()
+                            .and_then(|assignment| assignment.target().execution_ref())
+                            .cloned(),
                     })
                     .collect()
             }
         })
         .collect()
+}
+
+fn resource_filter_from_scoped(filter: ScopedResourceFilter) -> Result<ResourceFilter, BusError> {
+    if filter.field().is_empty()
+        || filter.field().len() > 64
+        || !filter
+            .field()
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'-' | b'_'))
+        || filter.values().is_empty()
+        || filter.values().len() > 64
+        || (filter.field() == "assignment.resourceUid" && !filter.assignment_bound())
+    {
+        return Err(BusError::InvalidResourceCall);
+    }
+    Ok(ResourceFilter {
+        field: filter.field().to_owned(),
+        values: filter.values().to_vec(),
+    })
+}
+
+fn resource_verb_for_assignment(verb: AssignmentVerb) -> ResourceVerb {
+    match verb {
+        AssignmentVerb::Get => ResourceVerb::Get,
+        AssignmentVerb::List => ResourceVerb::List,
+        AssignmentVerb::Watch => ResourceVerb::Watch,
+        AssignmentVerb::Create => ResourceVerb::Create,
+        AssignmentVerb::UpdateSpec => ResourceVerb::UpdateSpec,
+        AssignmentVerb::UpdateStatus => ResourceVerb::UpdateStatus,
+        AssignmentVerb::UpdateMetadata => ResourceVerb::UpdateMetadata,
+        AssignmentVerb::UpdateFinalizers => ResourceVerb::UpdateFinalizers,
+        AssignmentVerb::Delete => ResourceVerb::Delete,
+        AssignmentVerb::CommitBatch => unreachable!("batch wrapper is not a mutation target"),
+    }
 }
 
 /// Method invocation delivered only after exact route and authorization checks.
@@ -1328,7 +1472,7 @@ impl UnixSubjectRecord {
         mut self,
         execution_ref: ResourceRef,
     ) -> d2b_session::Result<Self> {
-        if execution_ref.resource_type().as_str() != "Host" {
+        if !matches!(execution_ref.resource_type().as_str(), "Host" | "Guest") {
             return Err(d2b_session::SessionError::new(
                 d2b_session::contract::SessionErrorCode::SubjectMismatch,
             ));
@@ -1378,6 +1522,7 @@ impl UnixSubjectRecord {
                     ResourceRef::parse("Provider/clipboard-wayland").ok()
                 }
                 "d2b.notification.v3" => ResourceRef::parse("Provider/notification-desktop").ok(),
+                "d2b.config-nixos.v3" => ResourceRef::parse("Provider/config-nixos").ok(),
                 _ => self.provider_ref,
             }
         } else {
@@ -1522,7 +1667,8 @@ impl core::fmt::Debug for AuthoritativeUnixSubjectResolver {
     }
 }
 
-/// Trusted committed state used to install daemon-owned interaction subjects.
+/// Trusted committed state used to install daemon-owned interaction and
+/// Process/Shell attach subjects.
 pub struct CommittedInteractionSubjectInput {
     /// The Guest identity committed by the display WaylandSession.
     pub display_subject_ref: ResourceRef,
@@ -2279,6 +2425,23 @@ impl crate::registry::BusEndpoint for ComponentEndpoint {
         let mut outbound_frame = request.payload().to_vec();
         rewrite_ttrpc_stream_id(&mut outbound_frame, internal_stream_id)
             .map_err(|_| EndpointError::Rejected)?;
+        if let Some(ResourceCall::ScopedCommitBatch {
+            assignment,
+            mutations,
+        }) = request.resource_call()
+        {
+            let transport = ScopedCommitTransport::new(assignment.clone(), mutations.clone())
+                .map_err(|_| EndpointError::Rejected)?;
+            outbound_frame =
+                d2b_resource_api::attach_scoped_commit_frame(&outbound_frame, &transport)
+                    .map_err(|_| EndpointError::Rejected)?;
+        } else if matches!(
+            request.resource_call(),
+            Some(ResourceCall::CommitBatch(_))
+        ) {
+            d2b_resource_api::reject_scoped_commit_frame(&outbound_frame)
+                .map_err(|_| EndpointError::Rejected)?;
+        }
         let request_id = ttrpc_request_id(self.generation, &outbound_frame)
             .map_err(|_| EndpointError::Rejected)?;
         let target = request
@@ -2433,10 +2596,11 @@ impl ZoneRegistrar {
         )
     }
 
-    /// Install the daemon-owned interaction subject projection from the
-    /// committed resource snapshot. The Unix peer UID authenticates the
-    /// transport only; the Guest/Host refs, resource generations, and
-    /// controller generation are all supplied by trusted committed state.
+    /// Install the daemon-owned interaction and Process/Shell subject
+    /// projection from the committed resource snapshot. The Unix peer UID
+    /// authenticates the transport only; the Guest/Host refs, resource
+    /// generations, and controller generation are all supplied by trusted
+    /// committed state.
     pub fn install_committed_interaction_subject(
         &self,
         committed: CommittedInteractionSubjectInput,
@@ -2459,7 +2623,7 @@ impl ZoneRegistrar {
             ResourceRef::parse("Provider/display-wayland").expect("fixed display Provider ref"),
             display_generation,
         )];
-        let mut subjects = Vec::with_capacity(5);
+        let mut subjects = Vec::with_capacity(6);
         for (service, provider_ref, generation) in services {
             subjects.push(
                 UnixSubjectRecord::guest_for_uid(
@@ -2474,6 +2638,21 @@ impl ZoneRegistrar {
                 .for_service(service),
             );
         }
+        // Process and ShellSession named streams use the generic Provider
+        // package on the wire, but their listener identities are retained by
+        // d2bd. Bind that package to the enrolled Guest's own execution
+        // reference rather than borrowing the display Host route.
+        subjects.push(
+            UnixSubjectRecord::guest_for_uid(
+                display_subject_ref.clone(),
+                display_subject_uid.clone(),
+                zone_ref.clone(),
+                expected_peer_uid,
+            )?
+            .with_controller_generation(controller_generation)
+            .with_execution_ref(display_subject_ref.clone())?
+            .for_service(ServicePackage::ProviderV3),
+        );
         if let Some(generation) = clipboard_generation {
             let (subject_ref, subject_uid, provider_ref) =
                 if let Some(provider_uid) = clipboard_provider_uid {
@@ -2717,6 +2896,7 @@ fn routes_for_admitted_session(
                 | "d2b.clipboard.bridge.v3"
                 | "d2b.clipboard.picker-coord.v3"
                 | "d2b.notification.v3"
+                | "d2b.config-nixos.v3"
         );
     if binding.provider_ref().is_none()
         || (binding.subject_ref().resource_type().as_str() != "Provider" && !guest_provider_service)
@@ -2888,6 +3068,14 @@ impl Drop for OperationLease {
 }
 
 impl BusIngress {
+    /// Clone the authenticated ComponentSession driver for a daemon-owned
+    /// target-local named-stream owner.
+    pub fn component_session_driver(&self) -> Option<SessionDriverHandle> {
+        self.attachments
+            .as_ref()
+            .map(AuthenticatedTtrpcHandle::component_session_driver)
+    }
+
     /// Clone the daemon-owned request receiver for one session loop.
     pub fn component_request_receiver(&self) -> ComponentRequestReceiver {
         ComponentRequestReceiver {
@@ -3029,6 +3217,28 @@ impl BusIngress {
             self.core.observe_error(BusEvent::Invoke, error);
         }
         result
+    }
+
+    /// Invoke one assignment-scoped atomic commit over the existing Resource
+    /// bus route.
+    pub async fn invoke_scoped_commit_batch(
+        &self,
+        route: RouteKey,
+        operation: OperationSpec,
+        assignment: AssignmentIdentity,
+        mutations: Vec<ScopedResourceMutation>,
+        payload: Vec<u8>,
+    ) -> Result<BusResponse, BusError> {
+        self.invoke_resource(
+            route,
+            operation,
+            ResourceCall::ScopedCommitBatch {
+                assignment,
+                mutations,
+            },
+            payload,
+        )
+        .await
     }
 
     async fn invoke_inner(
@@ -3651,7 +3861,7 @@ use d2b_contracts_resource::v3::identity::{
     SessionPurpose,
     TranscriptHash,
     TransportBinding,
-};
+    };
     use d2b_controller_toolkit::{
         OperationContext, PendingQueue, PriorityLane, QueueHint, ResourceKey, TriggerReason,
         TriggerSet,
@@ -4481,6 +4691,7 @@ use d2b_contracts_resource::v3::identity::{
                     remove_finalizers: Vec::new(),
                     wait_for_reconcile: false,
                     reconcile_deadline_ms: None,
+                    assignment: None,
                 },
                 None,
                 Some(digest),
@@ -6157,9 +6368,7 @@ use d2b_contracts_resource::v3::identity::{
     #[test]
     fn endpoint_session_failures_preserve_actionable_details_and_closed_labels() {
         use crate::registry::EndpointFailureClass;
-        use d2b_contracts_zone_session::v3::{
-    component_session::{Remediation, SessionErrorCode},
-};
+        use d2b_contracts_zone_session::v3::component_session::{Remediation, SessionErrorCode};
 
         let cases = [
             (

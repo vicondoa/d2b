@@ -30,7 +30,7 @@ The current invariants are:
 | --- | --- |
 | `metadataOnly` | The file is descriptive metadata, not a runtime activation command. |
 | `noSystemdUnitsMaterialized` | Legacy double-negative kept for the v2 schema: `true` means every controller row is metadata-only with no emitted systemd unit/socket; `false` means at least one host-local realm materializes daemon/broker units or sockets. |
-| `preservesGlobalDaemonBehavior` | Existing `d2bd.service`, `d2b-priv-broker.socket`, and `d2b-priv-broker.service` behavior is unchanged. |
+| `preservesGlobalDaemonBehavior` | Existing `d2bd.service`, `d2b-broker.socket`, and `d2b-broker.service` behavior is unchanged. |
 | `preservesDirectUnixSocketSemantics` | Future realm clients are expected to authenticate to the owning realm socket directly, not through a host byte proxy. |
 
 ## Deterministic names
@@ -124,8 +124,8 @@ state.
 
 `localRuntime.providers[]` copies the local runtime provider catalog entries
 used by the realm's workloads, including the provider id (`local-cloud-hypervisor`
-or `local-qemu-media`), local driver, legacy capability summary, operation
-capability summary, autostart policy, and role/service summaries.
+or `local-qemu-media`), local driver, capability summary, operation capability
+summary, autostart policy, and role/service summaries.
 
 `localRuntime.workloads[]` records the VM workload id, VM name, owning env,
 runtime metadata, and the preserved host paths:
@@ -135,7 +135,7 @@ runtime metadata, and the preserved host paths:
 | `paths.stateDir` | Existing per-VM persistent state root, such as `/var/lib/d2b/vms/<vm>`. |
 | `paths.runDir` | Existing per-VM runtime directory under `/run/d2b/vms/<vm>`. |
 | `paths.storeView` | Existing per-VM store-view hardlink farm root. |
-| `paths.guestControlDir` | Existing guest-control socket directory. |
+| `paths.componentSessionDir` | Existing ComponentSession socket directory. |
 
 The `localRuntime.invariants` block must keep `metadataOnly`,
 `existingGlobalVmPathsPreserved`, `noStateMigrationDuringActivation`, and

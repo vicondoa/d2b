@@ -13,8 +13,11 @@ use std::{
     time::Duration,
 };
 
-use d2b_contracts_zone_session::v3::zone_routing::ZonePath;
+use d2b_contracts_control::public_wire::{
+    NamedProcessStreamRequestFrame, NamedProcessStreamResponseFrame,
+};
 use d2b_contracts_resource::v3::ResourceRef;
+use d2b_contracts_zone_session::v3::zone_routing::ZonePath;
 
 use crate::{
     AttemptDisposition, CallDriver, CallOptions, CancellationToken, ClientError, MethodProfile,
@@ -34,6 +37,11 @@ const STREAM_OPEN: u8 = 0;
 const STREAM_CLOSING: u8 = 1;
 const STREAM_CLOSED: u8 = 2;
 const SHELL_SESSION_TYPE: &str = "shell-terminal.d2bus.org.ShellSession";
+/// The authenticated named stream used by Process and EphemeralProcess
+/// attachments.
+pub const PROCESS_ATTACH_STREAM_NAME: &str = "process";
+/// The authenticated named stream used by persistent ShellSession resources.
+pub const SHELL_SESSION_STREAM_NAME: &str = "terminal";
 
 /// Resource classes that may be named by an attach request.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -134,6 +142,16 @@ impl ProcessAttachTarget {
             Self::EphemeralProcess { .. } => ProcessAttachKind::EphemeralProcess,
             Self::ConfiguredLauncher { .. } => ProcessAttachKind::ConfiguredLauncher,
             Self::ShellSession { .. } => ProcessAttachKind::ShellSession,
+        }
+    }
+
+    /// Return the fixed named-stream contract for this target class.
+    pub const fn stream_name(&self) -> &'static str {
+        match self {
+            Self::EphemeralProcess { .. } | Self::ConfiguredLauncher { .. } => {
+                PROCESS_ATTACH_STREAM_NAME
+            }
+            Self::ShellSession { .. } => SHELL_SESSION_STREAM_NAME,
         }
     }
 
@@ -311,6 +329,11 @@ impl ProcessAttachOpenRequest {
         self.options
     }
 
+    /// Return the fixed authenticated stream name selected by the target.
+    pub const fn stream_name(&self) -> &'static str {
+        self.target.stream_name()
+    }
+
     /// Borrow the opaque request correlation id.
     pub const fn request_id(&self) -> &[u8; REQUEST_ID_BYTES] {
         &self.request_id
@@ -404,6 +427,11 @@ impl<S> ProcessAttachStream<S> {
         &self.target
     }
 
+    /// Return the fixed named-stream contract for this attachment.
+    pub const fn stream_name(&self) -> &'static str {
+        self.target.stream_name()
+    }
+
     /// Whether the named stream has been closed or cancelled.
     pub fn is_closed(&self) -> bool {
         self.state.load(Ordering::Acquire) == STREAM_CLOSED
@@ -441,6 +469,18 @@ where
         self.transport.send(bytes.to_vec()).await
     }
 
+    /// Send one canonical Process named-stream request frame.
+    pub async fn send_frame(
+        &self,
+        frame: &NamedProcessStreamRequestFrame,
+    ) -> Result<(), ClientError> {
+        if frame.request_id == 0 {
+            return Err(ClientError::ContractViolation);
+        }
+        let bytes = serde_json::to_vec(frame).map_err(|_| ClientError::ContractViolation)?;
+        self.send(&bytes).await
+    }
+
     /// Deliver a terminal-size control update without interpreting stdin.
     pub async fn resize(&self, size: TerminalSize) -> Result<(), ClientError> {
         self.require_open()?;
@@ -455,6 +495,17 @@ where
             self.state.store(STREAM_CLOSED, Ordering::Release);
         }
         result
+    }
+
+    /// Receive and decode one canonical Process named-stream response frame.
+    pub async fn receive_frame(&self) -> Result<NamedProcessStreamResponseFrame, ClientError> {
+        let bytes = self.receive().await?;
+        let frame: NamedProcessStreamResponseFrame =
+            serde_json::from_slice(&bytes).map_err(|_| ClientError::ContractViolation)?;
+        if frame.request_id == 0 {
+            return Err(ClientError::ContractViolation);
+        }
+        Ok(frame)
     }
 
     /// Close the named stream exactly once.
@@ -756,12 +807,8 @@ mod tests {
         },
     };
 
+    use d2b_contracts_resource::v3::{CanonicalJsonObject, ResourceErrorKind, RetryClass};
     use d2b_contracts_zone_session::v3::zone_routing::ZoneLabelId;
-use d2b_contracts_resource::v3::{
-    CanonicalJsonObject,
-    ResourceErrorKind,
-    RetryClass,
-};
 
     use super::*;
     use crate::{
@@ -987,6 +1034,7 @@ use d2b_contracts_resource::v3::{
             )
             .await
             .unwrap();
+        assert_eq!(attached.stream_name(), PROCESS_ATTACH_STREAM_NAME);
         assert_eq!(
             requested_services.lock().unwrap().as_slice(),
             &[ZoneServiceKind::Zone]
@@ -997,6 +1045,46 @@ use d2b_contracts_resource::v3::{
         attached.close().await.unwrap();
         assert_eq!(stream.closes.load(Ordering::Acquire), 1);
         assert!(attached.is_closed());
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn process_attach_stream_round_trips_the_shared_named_frame_codec() {
+        let response = NamedProcessStreamResponseFrame::new(
+            17,
+            d2b_contracts_control::public_wire::NamedProcessStreamResponse::Delivered(
+                d2b_contracts_control::public_wire::ExecControlResult { delivered: true },
+            ),
+        );
+        let stream = Arc::new(FakeStream {
+            received: Mutex::new(VecDeque::from([serde_json::to_vec(&response).unwrap()])),
+            ..Default::default()
+        });
+        let request = NamedProcessStreamRequestFrame::new(
+            17,
+            d2b_contracts_control::public_wire::NamedProcessStreamRequest::Close,
+        );
+        let session = Arc::new(FakeSession::new(vec![Ok(Arc::clone(&stream))], None));
+        let requested_services = Arc::new(Mutex::new(Vec::new()));
+        let client = client(FakeConnector {
+            session,
+            pin: pin(ZoneServiceKind::Zone),
+            requested_services,
+        });
+        let attached = client
+            .attach(
+                target(),
+                ProcessAttachOptions::non_tty(false),
+                call_options(1),
+                TransportSelection::exact(TransportKind::LocalUnix),
+                &CancellationToken::default(),
+            )
+            .await
+            .unwrap();
+        attached.send_frame(&request).await.unwrap();
+        let sent: NamedProcessStreamRequestFrame =
+            serde_json::from_slice(&stream.sent.lock().unwrap()[0]).unwrap();
+        assert_eq!(sent, request);
+        assert_eq!(attached.receive_frame().await.unwrap(), response);
     }
 
     #[tokio::test(flavor = "current_thread")]
@@ -1099,6 +1187,7 @@ use d2b_contracts_resource::v3::{
             .unwrap_err(),
             ClientError::InvalidTarget
         );
+        assert_eq!(target().stream_name(), PROCESS_ATTACH_STREAM_NAME);
         assert_eq!(
             ProcessAttachTarget::configured_launcher(
                 zone("dev"),
@@ -1137,6 +1226,7 @@ use d2b_contracts_resource::v3::{
             ProcessAttachTarget::shell_session(zone("dev"), shell.clone(), Some(host), false)
                 .expect("qualified shell target");
         assert_eq!(target.kind(), ProcessAttachKind::ShellSession);
+        assert_eq!(target.stream_name(), SHELL_SESSION_STREAM_NAME);
         assert_eq!(target.resource_ref(), &shell);
 
         assert_eq!(

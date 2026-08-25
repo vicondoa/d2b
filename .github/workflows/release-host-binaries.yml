@@ -105,7 +105,7 @@ jobs:
             packages/d2b-wayland-proxy/Cargo.toml \
             packages/d2b-unsafe-local-helper/Cargo.toml \
             packages/d2b-host/Cargo.toml \
-            packages/d2b-priv-broker/Cargo.toml
+            packages/d2b-broker/Cargo.toml
           do
             package_version=$(sed -n 's/^[[:space:]]*version[[:space:]]*=[[:space:]]*"\([^"]*\)".*/\1/p' "$manifest" | head -1)
             [ "$package_version" = "$VERSION" ] || {
@@ -126,7 +126,7 @@ jobs:
           }
 
           manifest_version=$(jq -r 'if .version == null then "null" else (.version | strings) end' nix/prebuilt.json)
-          expected_keys='["d2b","d2b-activation-helper","d2b-priv-broker","d2b-unsafe-local-helper","d2b-wayland-proxy","d2bd"]'
+          expected_keys='["d2b","d2b-activation-helper","d2b-broker","d2b-unsafe-local-helper","d2b-wayland-proxy","d2bd"]'
           if [ "$manifest_version" = "null" ]; then
             jq -e '.version == null and .system == "x86_64-linux" and .binaries == {}' \
               nix/prebuilt.json >/dev/null || {
@@ -145,7 +145,7 @@ jobs:
             for binary in \
               d2b \
               d2b-activation-helper \
-              d2b-priv-broker \
+              d2b-broker \
               d2b-unsafe-local-helper \
               d2b-wayland-proxy \
               d2bd
@@ -246,7 +246,7 @@ jobs:
             packages/d2b-wayland-proxy/Cargo.toml \
             packages/d2b-unsafe-local-helper/Cargo.toml \
             packages/d2b-host/Cargo.toml \
-            packages/d2b-priv-broker/Cargo.toml
+            packages/d2b-broker/Cargo.toml
           do
             package_version=$(sed -n 's/^[[:space:]]*version[[:space:]]*=[[:space:]]*"\([^"]*\)".*/\1/p' "$manifest" | head -1)
             [ "$package_version" = "$VERSION" ] || {
@@ -341,7 +341,7 @@ jobs:
             --package d2b-host --bin d2b-activation-helper
           rustup run "$PINNED" cargo build --release --locked \
             --manifest-path Cargo.toml \
-            --package d2b-priv-broker --bin d2b-priv-broker --no-default-features
+            --package d2b-broker --bin d2b-broker --no-default-features
 
           rm -rf dist
           mkdir -p dist/bin
@@ -350,12 +350,12 @@ jobs:
           cp target/release/d2b-wayland-proxy dist/bin/
           cp target/release/d2b-unsafe-local-helper dist/bin/
           cp target/release/d2b-activation-helper dist/bin/
-          cp target/release/d2b-priv-broker dist/bin/
+          cp target/release/d2b-broker dist/bin/
 
           for binary in \
             d2b \
             d2b-activation-helper \
-            d2b-priv-broker \
+            d2b-broker \
             d2b-unsafe-local-helper \
             d2b-wayland-proxy \
             d2bd
@@ -461,7 +461,7 @@ jobs:
             packages/d2b-wayland-proxy/Cargo.toml \
             packages/d2b-unsafe-local-helper/Cargo.toml \
             packages/d2b-host/Cargo.toml \
-            packages/d2b-priv-broker/Cargo.toml
+            packages/d2b-broker/Cargo.toml
           do
             package_version=$(sed -n 's/^[[:space:]]*version[[:space:]]*=[[:space:]]*"\([^"]*\)".*/\1/p' "$manifest" | head -1)
             [ "$package_version" = "$VERSION" ] || {
@@ -473,7 +473,7 @@ jobs:
           flake_versions=$(sed -n 's/^[[:space:]]*version[[:space:]]*=[[:space:]]*"\([^"]*\)".*/\1/p' flake.nix | sort -u)
           [ "$(printf '%s\n' "$flake_versions" | awk -v expected="$VERSION" '$0 != expected && NF { count++ } END { print count + 0 }')" -eq 0 ]
 
-          expected_keys='["d2b","d2b-activation-helper","d2b-priv-broker","d2b-unsafe-local-helper","d2b-wayland-proxy","d2bd"]'
+          expected_keys='["d2b","d2b-activation-helper","d2b-broker","d2b-unsafe-local-helper","d2b-wayland-proxy","d2bd"]'
           manifest_version=$(jq -r 'if .version == null then "null" else (.version | strings) end' nix/prebuilt.json)
           if [ "$manifest_version" = "null" ]; then
             jq -e '.version == null and .system == "x86_64-linux" and .binaries == {}' nix/prebuilt.json >/dev/null
@@ -492,7 +492,7 @@ jobs:
           for binary in \
             d2b \
             d2b-activation-helper \
-            d2b-priv-broker \
+            d2b-broker \
             d2b-unsafe-local-helper \
             d2b-wayland-proxy \
             d2bd
@@ -612,7 +612,7 @@ jobs:
           asset_names=(
             "d2b-${VERSION}-x86_64-linux.tar.gz"
             "d2b-activation-helper-${VERSION}-x86_64-linux.tar.gz"
-            "d2b-priv-broker-${VERSION}-x86_64-linux.tar.gz"
+            "d2b-broker-${VERSION}-x86_64-linux.tar.gz"
             "d2b-unsafe-local-helper-${VERSION}-x86_64-linux.tar.gz"
             "d2b-wayland-proxy-${VERSION}-x86_64-linux.tar.gz"
             "d2bd-${VERSION}-x86_64-linux.tar.gz"
@@ -703,7 +703,7 @@ jobs:
             case "$1" in
               "d2b-${VERSION}-x86_64-linux.tar.gz" \
                 | "d2b-activation-helper-${VERSION}-x86_64-linux.tar.gz" \
-                | "d2b-priv-broker-${VERSION}-x86_64-linux.tar.gz" \
+                | "d2b-broker-${VERSION}-x86_64-linux.tar.gz" \
                 | "d2b-unsafe-local-helper-${VERSION}-x86_64-linux.tar.gz" \
                 | "d2b-wayland-proxy-${VERSION}-x86_64-linux.tar.gz" \
                 | "d2bd-${VERSION}-x86_64-linux.tar.gz" \

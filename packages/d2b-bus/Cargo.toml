@@ -17,6 +17,7 @@ d2b-contracts-resource = { path = "../d2b-contracts-resource", version = "0.0.0-
 async-trait = "0.1"
 d2b-audit = { path = "../d2b-audit", version = "0.0.0-bootstrap" }
 d2b-contracts = { path = "../d2b-contracts", version = "0.0.0-bootstrap" }
+d2b-core-controller = { path = "../d2b-core-controller", version = "0.0.0-bootstrap" }
 d2b-resource-api = { path = "../d2b-resource-api", version = "0.0.0-bootstrap" }
 d2b-resource-store = { path = "../d2b-resource-store", version = "0.0.0-bootstrap" }
 d2b-telemetry = { path = "../d2b-telemetry", version = "0.0.0-bootstrap" }
@@ -30,11 +31,14 @@ tokio = { workspace = true, features = ["io-util", "rt", "sync", "time"] }
 
 [dev-dependencies]
 d2b-controller-toolkit = { path = "../d2b-controller-toolkit", version = "0.0.0-bootstrap" }
+d2b-contracts-provider = { path = "../d2b-contracts-provider", version = "0.0.0-bootstrap" }
 d2b-resource-store-redb = { path = "../d2b-resource-store-redb", version = "0.0.0-bootstrap" }
 quote = "1"
 syn = { version = "2", features = ["full", "visit"] }
 tempfile = "3"
 tokio = { workspace = true, features = ["macros", "rt", "sync", "test-util"] }
+protobuf = "3.7.2"
+ttrpc = { workspace = true, features = ["async"] }
 
 [[test]]
 name = "production_watch_rss"

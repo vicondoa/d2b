@@ -11,7 +11,13 @@ use std::{
 };
 
 use d2b_contracts_provider::v3::{
-    provider::{ArtifactDigest, ArtifactDigestSet, CompatibilityRange, ComponentDescriptor, ComponentType, PolicyEvaluation, ProviderManifest, ResourceApiBinding, RevocationState, SignatureState, StandardCapabilityMatrix, TrustEvidence, UpgradeDisposition, UpgradePolicy},
+    provider::{
+        ArtifactDigest, ArtifactDigestSet, BinaryRef, CompatibilityRange, ComponentDescriptor,
+        ComponentExecution, ComponentTargetCapability, ComponentType, ControllerInstanceScope,
+        ControllerTargetKind, EffectPortClass, PolicyEvaluation, ProviderManifest,
+        ResourceApiBinding, RevocationState, SignatureState, StandardCapabilityMatrix,
+        TargetRuntimeArtifacts, TrustEvidence, UpgradeDisposition, UpgradePolicy,
+    },
 };
 use d2b_contracts_resource::v3::{
     execution_policy::{BoundedToken, ExecutionDomain},
@@ -19,7 +25,7 @@ use d2b_contracts_resource::v3::{
 use d2b_contracts_resource::v3::{
     ArtifactId,
     identity::{ResourceTypeName, SchemaFingerprint},
-    resource_schema::SchemaVersion,
+    resource_schema::{PlacementAnchor, SchemaVersion},
 };
 use d2b_provider::{
     AdmissionOptions, CancellationToken, ProviderClass, ProviderMethodName,
@@ -32,7 +38,7 @@ use d2b_provider_toolkit::{
 use sha2::{Digest, Sha256};
 
 const MANIFEST_DIGEST_VECTOR: &str =
-    "sha256:74fd4995e645525d106ff96cc147a9d7d596d96ae178a6d1f2db085dbb4db9fb";
+    "sha256:2eecca84f4898bb0890c3fd4b80fc1394f5d28bd305c6b7e5c06bccec3086474";
 const MANIFEST_DIGEST: &str =
     "sha256:0000000000000000000000000000000000000000000000000000000000000001";
 static TEMP_FILE_SEQUENCE: AtomicU64 = AtomicU64::new(0);
@@ -232,8 +238,31 @@ fn test_manifest() -> ProviderManifest {
         [],
         false,
     )
-    .expect("valid component");
-    let binding = ResourceApiBinding::new(
+    .expect("valid component")
+    .with_execution(ComponentExecution::Launchable {
+        binary_ref: BinaryRef::parse("volume-controller").expect("valid binary ref"),
+    })
+    .with_controller_placement(
+        ControllerInstanceScope::PerResourceTarget,
+        [ControllerTargetKind::Host, ControllerTargetKind::Guest],
+    )
+    .expect("valid controller placement")
+    .with_target_capabilities([
+        ComponentTargetCapability::new(
+            ControllerTargetKind::Host,
+            digest.clone(),
+            [EffectPortClass::Storage],
+        )
+        .expect("valid host capability"),
+        ComponentTargetCapability::new(
+            ControllerTargetKind::Guest,
+            digest.clone(),
+            [EffectPortClass::Storage],
+        )
+        .expect("valid guest capability"),
+    ])
+    .expect("valid target capabilities");
+    let binding = ResourceApiBinding::new_with_placement(
         ResourceTypeName::parse("Volume").expect("valid resource type"),
         SchemaVersion::new(1, 0).expect("valid schema version"),
         fingerprint("2"),
@@ -242,6 +271,7 @@ fn test_manifest() -> ProviderManifest {
         StandardCapabilityMatrix::default(),
         None,
         None,
+        PlacementAnchor::ExecutionRef,
     )
     .expect("valid binding");
     ProviderManifest::new(
@@ -252,7 +282,7 @@ fn test_manifest() -> ProviderManifest {
             manifest: digest.clone(),
             config: digest.clone(),
             schema: digest.clone(),
-            service: digest,
+            service: digest.clone(),
         },
         TrustEvidence {
             publisher: BoundedToken::parse("first-party").expect("valid publisher"),
@@ -284,6 +314,21 @@ fn test_manifest() -> ProviderManifest {
         },
     )
     .expect("valid manifest")
+    .with_target_runtime_artifacts([
+        TargetRuntimeArtifacts::new(
+            ControllerTargetKind::Host,
+            digest.clone(),
+            digest.clone(),
+        )
+        .expect("valid host runtime artifacts"),
+        TargetRuntimeArtifacts::new(
+            ControllerTargetKind::Guest,
+            digest.clone(),
+            digest.clone(),
+        )
+        .expect("valid guest runtime artifacts"),
+    ])
+    .expect("valid shared runtime artifacts")
 }
 
 fn fingerprint(tail: &str) -> SchemaFingerprint {

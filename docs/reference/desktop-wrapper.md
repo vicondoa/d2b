@@ -10,7 +10,7 @@ Every graphics-enabled VM (`d2b.vms.<vm>.graphics.enable = true`)
 gets an auto-generated `d2b-launch-<vm>.desktop` entry installed
 under `share/applications/`. The wrapper script the entry's `Exec`
 line points at is the **daemon path** - it drives the VM through
-`d2bd → d2b-priv-broker → SpawnRunner`, not the legacy bash
+`d2bd → d2b-broker → SpawnRunner`, not the legacy bash
 `d2b guest start` / `microvm@<vm>.service` chain.
 
 ## Why a typed contract
@@ -66,17 +66,17 @@ of the store.
    GPU sidecar connects to the host compositor socket that step 1 already
    waited for; the role-local `/run/d2b-gpu/<vm>/wayland-0` path is
    only visible inside the GPU runner's mount namespace. The daemon's
-   `guest-control-health` DAG node only gates guest-control readiness;
+   `component-session-health` DAG node only gates ComponentSession readiness;
    the graphics socket can race slightly behind on cold starts.
-4. **Wait for guest-control readiness.** Waits for the VM's
-   `guest-control-health` gate (the authenticated guest-control Health
+4. **Wait for ComponentSession readiness.** Waits for the VM's
+   `component-session-health` gate (the authenticated ComponentSession Health
    probe) rather than a raw SSH probe. The historical wrapper polled
    `<sshUser>@<staticIp>` with the per-VM key; the daemon-native path no
    longer depends on SSH for terminal access.
 5. **Exec Konsole.** Replaces the wrapper with a chromed Konsole
    running `d2b exec run Guest/<name> -- <login-shell>`, which creates an
-   interactive guest-control session (admin-only, runs as the VM's
-   workload user, no SSH).
+   interactive ComponentSession backed by a target-local Process (admin-only,
+   no SSH).
    `StartupWMClass=org.kde.konsole` matches Konsole's fixed Wayland
    app_id.
 
@@ -105,7 +105,7 @@ and `journalctl -u d2bd.service`.
   of scope; that's UX styling, not a lifecycle contract. See
   `nixos-modules/cli.nix` `desktopItems`.
 - The in-VM session opened via `d2b exec run` is not pinned
-  here. The wrapper hands off to Konsole + the guest-control
+  here. The wrapper hands off to Konsole + the ComponentSession
   interactive session; what the operator runs once they're in the VM
   is their concern.
 - Headless VMs do not get a `.desktop` wrapper at all

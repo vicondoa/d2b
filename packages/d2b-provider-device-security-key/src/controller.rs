@@ -1,7 +1,14 @@
 //! Security-key Device controller facade.
 
 use core::fmt;
-use d2b_contracts_resource::v3::ResourceUid;
+use d2b_contracts_provider::v3::semantic_services::{
+    SemanticFamily,
+    child_resources::{
+        BindingChildKind, BindingChildPlacement, BindingChildRequest, BindingChildSet,
+        explicit_binding_children, explicit_binding_children_with_user,
+    },
+};
+use d2b_contracts_resource::v3::{ExecutionDomain, ResourceRef, ResourceUid};
 
 use crate::effect_port::{
     DeviceId, InventoryEffectError, InventoryObservation, ObservationPolicyId,
@@ -12,13 +19,48 @@ use crate::{
     SecurityKeyLease, SecurityKeyLeaseError, SecurityKeySessionId, SessionRecord, SessionResult,
     SessionRing,
 };
-use d2b_contracts_resource::v3::ResourceRef;
+const SECURITY_KEY_PROVIDER_REF: &str = "Provider/device-security-key";
+
+const SECURITY_KEY_BINDING_CHILD_REQUESTS: [BindingChildRequest; 2] = [
+    BindingChildRequest::process(
+        BindingChildKind::Process,
+        BindingChildPlacement::Guest,
+        "guest-frontend",
+        "Provider/system-systemd",
+        "sk-frontend",
+        ExecutionDomain::User,
+        "service",
+    ),
+    BindingChildRequest::endpoint(
+        BindingChildPlacement::Guest,
+        "guest-endpoint",
+        "guest-frontend",
+    ),
+];
+
+const SECURITY_KEY_BINDING_CHILD_REQUESTS_WITH_USER: [BindingChildRequest; 2] = [
+    BindingChildRequest::process_for_user(
+        BindingChildKind::Process,
+        BindingChildPlacement::Guest,
+        "guest-frontend",
+        "Provider/system-systemd",
+        "sk-frontend",
+        "service",
+    ),
+    BindingChildRequest::endpoint(
+        BindingChildPlacement::Guest,
+        "guest-endpoint",
+        "guest-frontend",
+    ),
+];
 
 /// Controller-level failures.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SecurityKeyControllerError {
     /// Lease state rejected the requested operation.
     Lease(SecurityKeyLeaseError),
+    /// Binding or Service references failed semantic admission.
+    Admission,
     /// Session ring could not be created.
     RingCapacity,
     /// An effect failed while recording a terminal session.
@@ -29,6 +71,7 @@ impl fmt::Display for SecurityKeyControllerError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter.write_str(match self {
             Self::Lease(error) => error.code(),
+            Self::Admission => "security-key-controller-admission-failed",
             Self::RingCapacity => "security-key-session-ring-capacity-out-of-range",
             Self::Effect(error) => error.code(),
         })
@@ -44,6 +87,15 @@ pub enum SecurityKeyReconcileOutcome {
     Active,
     /// The terminal session was recorded and authority released.
     Completed,
+}
+
+/// Reconcile output including the child resources owned by a Binding.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SecurityKeyReconcileResultWithChildren {
+    /// Lease/session outcome.
+    pub outcome: SecurityKeyReconcileOutcome,
+    /// UID-free Process and Endpoint intents.
+    pub children: BindingChildSet,
 }
 
 /// Device-security-key controller state.
@@ -83,6 +135,84 @@ impl SecurityKeyController {
     /// Borrow the underlying lease state.
     pub const fn lease(&self) -> &SecurityKeyLease {
         &self.lease
+    }
+
+    /// Build the explicit Host relay and Guest frontend children for one
+    /// authored security-key Binding.
+    ///
+    /// `target_ref` is the Guest execution target extracted from the Binding's
+    /// target object. The caller must provide the authored Binding and its
+    /// existing Service; a Service alone never creates consumer children.
+    pub fn child_resources(
+        binding_ref: &ResourceRef,
+        service_ref: &ResourceRef,
+        target_ref: &ResourceRef,
+    ) -> Result<BindingChildSet, SecurityKeyControllerError> {
+        if target_ref.resource_type().as_str() != "Guest" {
+            return Err(SecurityKeyControllerError::Admission);
+        }
+        explicit_binding_children(
+            SemanticFamily::SecurityKey,
+            binding_ref.clone(),
+            service_ref.clone(),
+            target_ref.clone(),
+            ResourceRef::parse(SECURITY_KEY_PROVIDER_REF)
+                .expect("security-key Provider reference is canonical"),
+            &SECURITY_KEY_BINDING_CHILD_REQUESTS,
+        )
+        .map_err(|_| SecurityKeyControllerError::Admission)
+    }
+
+    /// Build security-key children while binding the frontend to the
+    /// authored workload User identity.
+    pub fn child_resources_for_user(
+        binding_ref: &ResourceRef,
+        service_ref: &ResourceRef,
+        target_ref: &ResourceRef,
+        user_ref: &ResourceRef,
+    ) -> Result<BindingChildSet, SecurityKeyControllerError> {
+        if target_ref.resource_type().as_str() != "Guest"
+            || user_ref.resource_type().as_str() != "User"
+        {
+            return Err(SecurityKeyControllerError::Admission);
+        }
+        explicit_binding_children_with_user(
+            SemanticFamily::SecurityKey,
+            binding_ref.clone(),
+            service_ref.clone(),
+            target_ref.clone(),
+            ResourceRef::parse(SECURITY_KEY_PROVIDER_REF)
+                .expect("security-key Provider reference is canonical"),
+            Some(user_ref.clone()),
+            &SECURITY_KEY_BINDING_CHILD_REQUESTS_WITH_USER,
+        )
+        .map_err(|_| SecurityKeyControllerError::Admission)
+    }
+
+    /// Return the session outcome together with the explicit Binding children.
+    pub fn reconcile_with_children(
+        &mut self,
+        binding_ref: &ResourceRef,
+        service_ref: &ResourceRef,
+        target_ref: &ResourceRef,
+        outcome: SecurityKeyReconcileOutcome,
+    ) -> Result<SecurityKeyReconcileResultWithChildren, SecurityKeyControllerError> {
+        let children = Self::child_resources(binding_ref, service_ref, target_ref)?;
+        Ok(SecurityKeyReconcileResultWithChildren { outcome, children })
+    }
+
+    /// Return the reconcile output with an explicit workload User identity.
+    pub fn reconcile_with_children_for_user(
+        &mut self,
+        binding_ref: &ResourceRef,
+        service_ref: &ResourceRef,
+        target_ref: &ResourceRef,
+        user_ref: &ResourceRef,
+        outcome: SecurityKeyReconcileOutcome,
+    ) -> Result<SecurityKeyReconcileResultWithChildren, SecurityKeyControllerError> {
+        let children =
+            Self::child_resources_for_user(binding_ref, service_ref, target_ref, user_ref)?;
+        Ok(SecurityKeyReconcileResultWithChildren { outcome, children })
     }
 
     /// Observe the exact physical Device through Core's injected port.

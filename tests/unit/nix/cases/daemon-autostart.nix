@@ -204,8 +204,8 @@ in
   };
   "daemon-lifecycle/broker-shutdown-ordering" = {
     expr =
-      builtins.elem "d2b-priv-broker.service" lifecycleCfg.systemd.services.d2bd.after
-      && builtins.elem "d2b-priv-broker.socket" lifecycleCfg.systemd.services.d2bd.after
+      builtins.elem "d2b-broker.service" lifecycleCfg.systemd.services.d2bd.after
+      && builtins.elem "d2b-broker.socket" lifecycleCfg.systemd.services.d2bd.after
       && builtins.elem "dbus.service" lifecycleCfg.systemd.services.d2bd.after;
     expected = true;
   };

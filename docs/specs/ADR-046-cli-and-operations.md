@@ -12,6 +12,12 @@
 | Depends on | `ADR-046-terminology-and-identities`, `ADR-046-resource-object-model`, `ADR-046-resource-api-and-authorization`, `ADR-046-provider-model-and-packaging`, `ADR-046-components-processes-and-sandbox`, `ADR-046-componentsession-and-bus` |
 | Supersedes | Current v3 `d2b` CLI contract (`packages/d2b/src/lib.rs` at baseline) |
 
+> **Current-state note (U10).** Baseline rows that name the removed Guest
+> daemon or guest-control transport are historical disposition records. The
+> current CLI reaches Guest execution, shell, activation, config, audio, and
+> USB behavior through Resource API, ComponentSession, named streams, and
+> signed target-local Processes.
+
 ## Purpose
 
 This spec defines every public-facing CLI command, argument, output format, exit
@@ -79,7 +85,7 @@ the "target:" annotation.
 | `ProcessRole::Gpu`/`GpuRenderNode` | `d2b-core/src/processes.rs:209,211` | `Process` under `Provider/device-gpu` |
 | `ProcessRole::Audio` | `d2b-core/src/processes.rs:213` | `Process` under audio-pipewire Provider |
 | `ProcessRole::HostReconcile` | `d2b-core/src/processes.rs:196` | Realm controller bootstrap step; not a standalone CLI-visible Process |
-| `ProcessRole::GuestControlHealth` | `d2b-core/src/processes.rs:235` | Guest readiness probe integrated into Guest controller reconcile loop; not a standalone Process ResourceType |
+| `ProcessRole::ComponentSessionHealth` | `d2b-core/src/processes.rs` | Guest readiness probe integrated into Guest controller reconcile loop; not a standalone Process ResourceType |
 | `ProcessRole::GuestSshReadiness` | `d2b-core/src/processes.rs:228` | Deleted at v3 clean cutover; no compatibility retention |
 | `VmProcessDag` | `d2b-core/src/processes.rs` | Per-Guest/Provider `Process` resource DAG; target managed by Provider controller |
 | `RealmControllersJson`, `RealmControllerLocalWorkload { vm_name, identity }` | `d2b-core/src/realm_controller_config.rs` | Zone Nix-authored Guest resources; `vm_name` → `Guest/<name>` resource name; `identity.canonical_target` → `WorkloadId` = `Guest/<name>` resource name |
@@ -2384,7 +2390,7 @@ The following table maps every current v3 CLI verb to its v3 status.
 | `d2b host prepare` | **Retained** | `d2b host prepare` | `cmd_host_prepare` @ lib.rs:4468 | reachable |
 | `d2b host destroy` | **Retained** | `d2b host destroy` | `cmd_host_destroy` @ lib.rs:4549 | reachable |
 | `d2b host doctor` | **Retained** | `d2b host doctor` | `cmd_host_doctor` @ lib.rs:4752 | reachable |
-| `d2b host migrate-storage` | Deleted after reset | *(none; storage ADR 0034 reset)* | `cmd_host_migrate_storage` @ lib.rs:4867 | reachable |
+| `d2b host migrate-storage` | Deleted at 3.0 | *(none)* | *(removed; no current implementation)* | deleted |
 | `d2b host install` | **Retained** | `d2b host install` | `cmd_host_install` @ lib.rs:5007 | reachable |
 | `d2b host reconcile` | **Retained** | `d2b host reconcile` | `cmd_host_reconcile` @ lib.rs:5070 | reachable |
 | `d2b host validate` | **Retained** | `d2b host validate` | `cmd_host_validate` @ lib.rs:4941 | reachable |
@@ -2418,9 +2424,8 @@ below are deleted at the 3.0 clean break. The removal criterion for each is:
 its live v3 successor is implemented and tested, and the v2 source path
 (`cmd_*` function) is deleted in the same wave.
 
-`d2b host migrate-storage` is deleted after the v3 storage reset completes; it
-has no v3 successor because the layout cutover it served is a one-time v1→v2
-migration.
+`d2b host migrate-storage` has no v3 successor because the one-time v1→v2
+storage migration surface was removed from the shipped CLI.
 
 `d2b clipboard picker` is already removed from the dispatch table in the v3
 baseline (only a deprecation notice remains at `lib.rs:2424`).

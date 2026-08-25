@@ -186,7 +186,7 @@ let
     let
       workloadId = config.id;
       # stateDir default respects legacyVmName so existing on-disk state
-      # (TPM, store-view, guest-control token, …) is preserved when the
+      # (TPM, store-view, ComponentSession enrollment, …) is preserved when the
       # workload wraps a legacy d2b.vms entry.  No activation-time migration
       # ever occurs; the path is purely a default override.
       defaultStateDir =
@@ -259,7 +259,7 @@ let
             Primary state directory for this workload.  When `legacyVmName`
             is set the default maps to `/var/lib/d2b/vms/<legacyVmName>`,
             preserving existing on-disk state (TPM, store-view, audio state,
-            guest-control token, …) without any activation-time migration.
+            ComponentSession enrollment, …) without any activation-time migration.
             When `legacyVmName` is null the default is
             `/var/lib/d2b/vms/<workload-id>`. It is null for
             `kind = "unsafe-local"` because the provider owns no host VM
@@ -497,7 +497,7 @@ let
                 Primary application/launch command for this workload.
                 Emitted as the `Exec=` field in generated `.desktop`
                 metadata.  When null, d2b derives a default based on the
-                workload kind and available guest-control capabilities.
+                workload kind and available component-session capabilities.
               '';
             };
 

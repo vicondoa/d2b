@@ -21,4 +21,4 @@ the Rust CLI, daemon, and broker.
   bump and matching schema update.
 - Per-VM rows carry runtime/provider metadata. Provider-specific socket and
   vsock fields may be null for local providers that do not expose the
-  corresponding Cloud Hypervisor or guest-control artifact.
+  corresponding Cloud Hypervisor or ComponentSession artifact.

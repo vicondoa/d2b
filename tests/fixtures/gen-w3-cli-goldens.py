@@ -326,7 +326,7 @@ W3_ROWS = {
         "host-check-error", 1,
         "Whether the broker can create a TAP fd via TUNSETIFF.",
         "TUNSETIFF returned EPERM; CAP_NET_ADMIN missing from the broker capability set.",
-        "Ensure d2b-priv-broker.service carries CAP_NET_ADMIN.",
+        "Ensure d2b-broker.service carries CAP_NET_ADMIN.",
     ),
     ("host-check", "stale-lock"): (
         "host-check-error", 1,

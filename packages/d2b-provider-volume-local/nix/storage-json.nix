@@ -37,7 +37,7 @@ let
       owner ? principal "user" "d2bd",
       group ? principal "group" "d2bd",
       mode ? modeForKind kind,
-      creator ? actor "broker" "d2b-priv-broker",
+      creator ? actor "broker" "d2b-broker",
       writers ? [ creator ],
       readers ? [ (actor "daemon" "d2bd") ],
       cleanupPolicy ? "never",
@@ -208,7 +208,7 @@ let
       group = principal "group" "d2bd";
       mode = "0750";
       creator = actor "nix-module" "tmpfiles";
-      writers = [ (actor "broker" "d2b-priv-broker") ];
+      writers = [ (actor "broker" "d2b-broker") ];
       cleanupPolicy = "boot";
       repairPolicy = "nix-activation";
       leaseClass = "file-record";
@@ -258,11 +258,11 @@ let
       owner = principal "user" "root";
       group = principal "group" "d2bd";
       mode = "0750";
-      creator = actor "broker" "d2b-priv-broker";
-      writers = [ (actor "broker" "d2b-priv-broker") ];
+      creator = actor "broker" "d2b-broker";
+      writers = [ (actor "broker" "d2b-broker") ];
       readers = [
         (actor "daemon" "d2bd")
-        (actor "broker" "d2b-priv-broker")
+        (actor "broker" "d2b-broker")
       ];
       cleanupPolicy = "never";
       repairPolicy = "broker-reconcile";
@@ -311,9 +311,9 @@ let
       owner = principal "user" "root";
       group = principal "group" "root";
       mode = "0700";
-      creator = actor "broker" "d2b-priv-broker";
-      writers = [ (actor "broker" "d2b-priv-broker") ];
-      readers = [ (actor "broker" "d2b-priv-broker") ];
+      creator = actor "broker" "d2b-broker";
+      writers = [ (actor "broker" "d2b-broker") ];
+      readers = [ (actor "broker" "d2b-broker") ];
       cleanupPolicy = "never";
       repairPolicy = "broker-fail-closed";
       invariants = [ "no-symlink" "root-owned-parent" "broker-opaque-id-only" "scope-authorization-required" ];
@@ -328,11 +328,11 @@ let
       owner = principal "user" "root";
       group = principal "group" "d2bd";
       mode = "0640";
-      creator = actor "broker" "d2b-priv-broker";
-      writers = [ (actor "broker" "d2b-priv-broker") ];
+      creator = actor "broker" "d2b-broker";
+      writers = [ (actor "broker" "d2b-broker") ];
       readers = [
         (actor "daemon" "d2bd")
-        (actor "broker" "d2b-priv-broker")
+        (actor "broker" "d2b-broker")
         (actor "operator" "host-doctor")
       ];
       cleanupPolicy = "boot";
@@ -348,9 +348,9 @@ let
       owner = principal "user" "root";
       group = principal "group" "root";
       mode = "0700";
-      creator = actor "broker" "d2b-priv-broker";
-      writers = [ (actor "broker" "d2b-priv-broker") ];
-      readers = [ (actor "broker" "d2b-priv-broker") ];
+      creator = actor "broker" "d2b-broker";
+      writers = [ (actor "broker" "d2b-broker") ];
+      readers = [ (actor "broker" "d2b-broker") ];
       cleanupPolicy = "never";
       repairPolicy = "broker-fail-closed";
       sensitivity = "secret-adjacent";
@@ -389,11 +389,11 @@ let
         creator = actor "nix-module" "tmpfiles";
         writers = [
           (actor "daemon" "d2bd")
-          (actor "broker" "d2b-priv-broker")
+          (actor "broker" "d2b-broker")
         ];
         readers = [
           (actor "daemon" "d2bd")
-          (actor "broker" "d2b-priv-broker")
+          (actor "broker" "d2b-broker")
         ];
         cleanupPolicy = "never";
         repairPolicy = "nix-activation";
@@ -411,7 +411,7 @@ let
         creator = actor "nix-module" "tmpfiles";
         writers = [
           (actor "daemon" "d2bd")
-          (actor "broker" "d2b-priv-broker")
+          (actor "broker" "d2b-broker")
         ];
         cleanupPolicy = "boot";
         repairPolicy = "nix-activation";
@@ -419,9 +419,9 @@ let
         invariants = [ "no-symlink" "scope-authorization-required" ];
       })
       (mkPath {
-        id = "path:vm-run-guest-control:${name}";
+        id = "path:vm-run-component-session:${name}";
         scope = "vm:${name}";
-        path = "/run/d2b/vms/${name}/guest-control";
+        path = "/run/d2b/vms/${name}/component-session";
         lifecycle = "boot-scoped-readoptable";
         persistence = "boot-scoped";
         owner = principal "user" "d2bd";
@@ -430,7 +430,7 @@ let
         creator = actor "nix-module" "tmpfiles";
         writers = [
           (actor "daemon" "d2bd")
-          (actor "broker" "d2b-priv-broker")
+          (actor "broker" "d2b-broker")
         ];
         cleanupPolicy = "boot";
         repairPolicy = "nix-activation";
@@ -492,10 +492,10 @@ let
         group = principal "group" "users";
         mode = "0755";
         creator = actor "nix-module" "tmpfiles";
-        writers = [ (actor "broker" "d2b-priv-broker") ];
+        writers = [ (actor "broker" "d2b-broker") ];
         readers = [
           (actor "daemon" "d2bd")
-          (actor "broker" "d2b-priv-broker")
+          (actor "broker" "d2b-broker")
           (actor "role" "role:${name}:virtiofsd")
         ];
         cleanupPolicy = "never";
@@ -510,13 +510,13 @@ let
         group = principal "group" "users";
         mode = "0755";
         creator = actor "nix-module" "tmpfiles";
-        writers = [ (actor "broker" "d2b-priv-broker") ];
+        writers = [ (actor "broker" "d2b-broker") ];
         readers = [
           (actor "daemon" "d2bd")
-          (actor "broker" "d2b-priv-broker")
+          (actor "broker" "d2b-broker")
           (actor "role" "role:${name}:virtiofsd")
         ];
-        cleanupPolicy = "cutover-only";
+        cleanupPolicy = "never";
         repairPolicy = "broker-reconcile";
         invariants = [ "no-symlink" "broker-opaque-id-only" ];
       })
@@ -528,8 +528,8 @@ let
         owner = principal "user" "d2bd";
         group = principal "group" "users";
         mode = "0444";
-        creator = actor "broker" "d2b-priv-broker";
-        writers = [ (actor "broker" "d2b-priv-broker") ];
+        creator = actor "broker" "d2b-broker";
+        writers = [ (actor "broker" "d2b-broker") ];
         readers = [
           (actor "daemon" "d2bd")
           (actor "role" "role:${name}:virtiofsd")
@@ -546,10 +546,10 @@ let
         group = principal "group" "users";
         mode = "0755";
         creator = actor "nix-module" "tmpfiles";
-        writers = [ (actor "broker" "d2b-priv-broker") ];
+        writers = [ (actor "broker" "d2b-broker") ];
         readers = [
           (actor "daemon" "d2bd")
-          (actor "broker" "d2b-priv-broker")
+          (actor "broker" "d2b-broker")
           (actor "role" "role:${name}:virtiofsd")
         ];
         cleanupPolicy = "never";
@@ -563,13 +563,13 @@ let
         owner = principal "user" "d2bd";
         group = principal "group" "users";
         mode = "0755";
-        creator = actor "broker" "d2b-priv-broker";
-        writers = [ (actor "broker" "d2b-priv-broker") ];
+        creator = actor "broker" "d2b-broker";
+        writers = [ (actor "broker" "d2b-broker") ];
         readers = [
           (actor "daemon" "d2bd")
           (actor "role" "role:${name}:virtiofsd")
         ];
-        cleanupPolicy = "cutover-only";
+        cleanupPolicy = "never";
         repairPolicy = "broker-reconcile";
         invariants = [ "no-symlink" "same-filesystem" "hardlink-farm-no-recursion" "broker-opaque-id-only" ];
       })
@@ -580,10 +580,10 @@ let
         owner = principal "user" "d2bd";
         group = principal "group" "users";
         mode = "0755";
-        creator = actor "broker" "d2b-priv-broker";
-        writers = [ (actor "broker" "d2b-priv-broker") ];
+        creator = actor "broker" "d2b-broker";
+        writers = [ (actor "broker" "d2b-broker") ];
         readers = [ (actor "daemon" "d2bd") ];
-        cleanupPolicy = "cutover-only";
+        cleanupPolicy = "never";
         repairPolicy = "broker-reconcile";
         invariants = [ "no-symlink" "same-filesystem" "hardlink-farm-no-recursion" "broker-opaque-id-only" ];
       })
@@ -595,13 +595,13 @@ let
         owner = principal "user" "d2bd";
         group = principal "group" "users";
         mode = "0777";
-        creator = actor "broker" "d2b-priv-broker";
-        writers = [ (actor "broker" "d2b-priv-broker") ];
+        creator = actor "broker" "d2b-broker";
+        writers = [ (actor "broker" "d2b-broker") ];
         readers = [
           (actor "daemon" "d2bd")
           (actor "role" "role:${name}:virtiofsd")
         ];
-        cleanupPolicy = "cutover-only";
+        cleanupPolicy = "never";
         repairPolicy = "broker-reconcile";
         noFollow = false;
         invariants = [ "broker-opaque-id-only" ];
@@ -614,11 +614,11 @@ let
         owner = principal "user" "d2bd";
         group = principal "group" "users";
         mode = "0640";
-        creator = actor "broker" "d2b-priv-broker";
-        writers = [ (actor "broker" "d2b-priv-broker") ];
+        creator = actor "broker" "d2b-broker";
+        writers = [ (actor "broker" "d2b-broker") ];
         readers = [
           (actor "daemon" "d2bd")
-          (actor "broker" "d2b-priv-broker")
+          (actor "broker" "d2b-broker")
         ];
         cleanupPolicy = "never";
         repairPolicy = "broker-reconcile";
@@ -637,12 +637,12 @@ let
         owner = uidPrincipal (d2bLib.stablePrincipalId ("d2b-" + name + "-swtpm"));
         group = gidPrincipal (d2bLib.stablePrincipalId ("d2b-" + name + "-swtpm"));
         mode = "0700";
-        creator = actor "broker" "d2b-priv-broker";
+        creator = actor "broker" "d2b-broker";
         writers = [
-          (actor "broker" "d2b-priv-broker")
+          (actor "broker" "d2b-broker")
           (actor "role" "role:${name}:swtpm")
         ];
-        readers = [ (actor "broker" "d2b-priv-broker") ];
+        readers = [ (actor "broker" "d2b-broker") ];
         cleanupPolicy = "never";
         repairPolicy = "broker-fail-closed";
         sensitivity = "secret-adjacent";
@@ -656,9 +656,9 @@ let
         owner = principal "user" "root";
         group = principal "group" "root";
         mode = "0600";
-        creator = actor "broker" "d2b-priv-broker";
-        writers = [ (actor "broker" "d2b-priv-broker") ];
-        readers = [ (actor "broker" "d2b-priv-broker") ];
+        creator = actor "broker" "d2b-broker";
+        writers = [ (actor "broker" "d2b-broker") ];
+        readers = [ (actor "broker" "d2b-broker") ];
         cleanupPolicy = "never";
         repairPolicy = "broker-fail-closed";
         sensitivity = "secret-adjacent";
@@ -678,11 +678,11 @@ let
         mode = "0750";
         creator = actor "nix-module" "tmpfiles";
         writers = [
-          (actor "broker" "d2b-priv-broker")
+          (actor "broker" "d2b-broker")
           (actor "role" "role:${name}:qemu-media")
         ];
         readers = [
-          (actor "broker" "d2b-priv-broker")
+          (actor "broker" "d2b-broker")
           (actor "role" "role:${name}:qemu-media")
         ];
         cleanupPolicy = "never";
@@ -700,7 +700,7 @@ let
         mode = "0750";
         creator = actor "nix-module" "tmpfiles";
         writers = [
-          (actor "broker" "d2b-priv-broker")
+          (actor "broker" "d2b-broker")
           (actor "role" "role:${name}:qemu-media")
         ];
         cleanupPolicy = "boot";
@@ -725,9 +725,9 @@ let
         group = principal "group" "d2b-${name}-qemu-media";
         mode = "0660";
         creator = actor "role" "role:${name}:qemu-media";
-        writers = [ (actor "broker" "d2b-priv-broker") ];
+        writers = [ (actor "broker" "d2b-broker") ];
         readers = [
-          (actor "broker" "d2b-priv-broker")
+          (actor "broker" "d2b-broker")
         ];
         cleanupPolicy = "process-exit-with-proof";
         repairPolicy = "broker-fail-closed";
@@ -741,9 +741,9 @@ let
         owner = principal "user" "root";
         group = principal "group" "root";
         mode = "0700";
-        creator = actor "broker" "d2b-priv-broker";
-        writers = [ (actor "broker" "d2b-priv-broker") ];
-        readers = [ (actor "broker" "d2b-priv-broker") ];
+        creator = actor "broker" "d2b-broker";
+        writers = [ (actor "broker" "d2b-broker") ];
+        readers = [ (actor "broker" "d2b-broker") ];
         cleanupPolicy = "never";
         repairPolicy = "broker-fail-closed";
         sensitivity = "secret-adjacent";
@@ -757,9 +757,9 @@ let
         owner = principal "user" "root";
         group = principal "group" "root";
         mode = "0600";
-        creator = actor "broker" "d2b-priv-broker";
-        writers = [ (actor "broker" "d2b-priv-broker") ];
-        readers = [ (actor "broker" "d2b-priv-broker") ];
+        creator = actor "broker" "d2b-broker";
+        writers = [ (actor "broker" "d2b-broker") ];
+        readers = [ (actor "broker" "d2b-broker") ];
         cleanupPolicy = "never";
         repairPolicy = "broker-fail-closed";
         sensitivity = "secret-adjacent";
@@ -787,11 +787,11 @@ let
         creator = actor "nix-module" "tmpfiles";
         writers = [
           (actor "daemon" "d2bd")
-          (actor "broker" "d2b-priv-broker")
+          (actor "broker" "d2b-broker")
         ];
         readers = [
           (actor "daemon" "d2bd")
-          (actor "broker" "d2b-priv-broker")
+          (actor "broker" "d2b-broker")
         ];
         cleanupPolicy = "never";
         repairPolicy = "nix-activation";
@@ -814,11 +814,11 @@ let
         creator = actor "nix-module" "tmpfiles";
         writers = [
           (actor "daemon" "d2bd")
-          (actor "broker" "d2b-priv-broker")
+          (actor "broker" "d2b-broker")
         ];
         readers = [
           (actor "daemon" "d2bd")
-          (actor "broker" "d2b-priv-broker")
+          (actor "broker" "d2b-broker")
           (actor "operator" "audio-cli")
         ];
         cleanupPolicy = "never";
@@ -844,11 +844,11 @@ let
         creator = actor "nix-module" "tmpfiles";
         writers = [
           (actor "daemon" "d2bd")
-          (actor "broker" "d2b-priv-broker")
+          (actor "broker" "d2b-broker")
         ];
         readers = [
           (actor "daemon" "d2bd")
-          (actor "broker" "d2b-priv-broker")
+          (actor "broker" "d2b-broker")
         ];
         # Advisory OFD lock file: never unlink (preserve lock semantics
         # across daemon restarts). cleanupPolicy "boot" means on next boot
@@ -876,7 +876,7 @@ let
               if lib.hasPrefix "/run/" writable.path then "boot-scoped" else "persistent";
             owner = uidPrincipal node.profile.uid;
             group = gidPrincipal node.profile.gid;
-            creator = actor "broker" "d2b-priv-broker";
+            creator = actor "broker" "d2b-broker";
             writers = [ (actor "role" "role:${dag.vm}:${node.id}") ];
             readers = [
               (actor "daemon" "d2bd")
@@ -910,7 +910,7 @@ let
             writers = [ (actor "role" "role:${dag.vm}:${node.id}") ];
             readers = [
               (actor "daemon" "d2bd")
-              (actor "broker" "d2b-priv-broker")
+              (actor "broker" "d2b-broker")
             ];
             cleanupPolicy = "process-exit-with-proof";
             leaseClass = "process-pidfd";
@@ -936,8 +936,8 @@ let
             owner = uidPrincipal op.ownerUid;
             group = gidPrincipal op.ownerGid;
             mode = modeString op.mode;
-            creator = actor "broker" "d2b-priv-broker";
-            writers = [ (actor "broker" "d2b-priv-broker") ];
+            creator = actor "broker" "d2b-broker";
+            writers = [ (actor "broker" "d2b-broker") ];
             readers = [ (actor "role" "role:${dag.vm}:cloud-hypervisor") ];
             cleanupPolicy = "never";
             repairPolicy = "broker-reconcile";

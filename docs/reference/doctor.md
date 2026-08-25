@@ -195,7 +195,7 @@ interval.
 **Broker replay-buffer depth**: the D7 `ChildReaped` replay-buffer depth
 (in-memory ring of up to 256 events, used to handle d2bd
 disconnect/reconnect) is **not yet observable** via a stable CLI command
-(`d2b-priv-broker --report-state` is not implemented in v1.2). The
+(`d2b-broker --report-state` is not implemented in v1.2). The
 `data.bufferDepth` field in the JSON output is always `null` for v1.2.
 When D7 fully lands the IPC mechanism, this field will carry the actual
 depth and the probe will add Warn (buffer ≥ 200 of 256) and Fail (buffer

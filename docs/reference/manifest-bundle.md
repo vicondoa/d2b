@@ -111,4 +111,3 @@ references below.
 | `manifest_v04.json` | [`schemas/v2/manifest_v04.md`](./schemas/v2/manifest_v04.md) | `schemas/v2/manifest_v04.json` |
 | `wire-protocol.json` | [`schemas/v2/wire-protocol.md`](./schemas/v2/wire-protocol.md) | `schemas/v2/wire-protocol.json` |
 | unsafe-local helper protocol | [`schemas/v2/unsafe-local-helper-wire.md`](./schemas/v2/unsafe-local-helper-wire.md) | `schemas/v2/unsafe-local-helper-wire.json` |
-| guest-control protocol | [`schemas/v2/guest-control.md`](./schemas/v2/guest-control.md) | `schemas/v2/guest-control.json` |

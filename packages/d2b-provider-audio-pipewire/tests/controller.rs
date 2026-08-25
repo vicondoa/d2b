@@ -1,8 +1,9 @@
-use d2b_contracts_resource::v3::ResourceRef;
+use d2b_contracts_resource::v3::{ExecutionDomain, ResourceRef};
 use d2b_provider_audio_pipewire::{
-    AudioBindingController, AudioBindingPhase, AudioChannel, AudioGrant, AudioLeaseId,
-    AudioMediator, AudioMediatorError, AudioReadiness, FakeAudioMediator, GuestAudioReadiness,
-    HostAudioReadiness, LevelPercent, shared_microphone_arbiter, validate_audio_binding,
+    AudioArbitrationState, AudioBindingController, AudioBindingPhase, AudioChannel, AudioGrant,
+    AudioLeaseId, AudioMediator, AudioMediatorError, AudioReadiness, FakeAudioMediator,
+    GuestAudioReadiness, HostAudioReadiness, LevelPercent, shared_microphone_arbiter,
+    validate_audio_binding,
 };
 
 #[derive(Debug)]
@@ -84,6 +85,43 @@ fn binding_controller_keeps_host_and_guest_readiness_separate() {
     assert_eq!(
         result.status.host_readiness,
         d2b_provider_audio_pipewire::HostAudioReadiness::Ready
+    );
+    assert_eq!(result.status.channels.speaker.grant, AudioGrant::On);
+    assert!(result.status.channels.speaker.live_enforced);
+    assert_eq!(
+        result.status.channels.mic.arbitration_state,
+        AudioArbitrationState::Inactive
+    );
+    assert_eq!(
+        result.status.last_set_applied,
+        d2b_provider_audio_pipewire::AudioLastSetApplied::HostAndGuest
+    );
+}
+
+#[test]
+fn controller_projects_levels_and_microphone_arbitration() {
+    let mediator = FakeAudioMediator::ready();
+    let mut controller = AudioBindingController::new(mediator);
+    let mut requested = binding();
+    requested.grants.mic = AudioGrant::On;
+    requested.grants.speaker = AudioGrant::On;
+    requested.grants.speaker_level = Some(LevelPercent::new(75).unwrap());
+    requested.grants.mic_gain = Some(LevelPercent::new(40).unwrap());
+
+    let result = controller
+        .reconcile(&requested, "zone-a", AudioLeaseId::new(1))
+        .unwrap();
+
+    assert_eq!(
+        result.status.channels.speaker.level,
+        requested.grants.speaker_level
+    );
+    assert!(result.status.channels.speaker.live_enforced);
+    assert_eq!(result.status.channels.mic.gain, requested.grants.mic_gain);
+    assert!(result.status.channels.mic.live_enforced);
+    assert_eq!(
+        result.status.channels.mic.arbitration_state,
+        AudioArbitrationState::Active
     );
 }
 
@@ -362,4 +400,78 @@ fn speaker_release_keeps_other_consumers_granted() {
         .unwrap();
 
     assert_eq!(controller.mediator().grant(), AudioGrant::On);
+}
+
+#[test]
+fn explicit_binding_reconciliation_returns_host_and_guest_children() {
+    let binding_ref =
+        ResourceRef::parse("audio.d2bus.org.AudioBinding/mic").expect("canonical Binding");
+    let requested = binding();
+    let mut controller = AudioBindingController::new(FakeAudioMediator::ready());
+
+    let result = controller
+        .reconcile_with_children(&binding_ref, &requested, "zone-a", AudioLeaseId::new(1))
+        .unwrap();
+
+    assert_eq!(result.children.iter().count(), 4);
+    assert_eq!(
+        result
+            .children
+            .at(
+                d2b_contracts_provider::v3::semantic_services::child_resources::
+                    BindingChildPlacement::Host,
+            )
+            .count(),
+        2
+    );
+    assert_eq!(
+        result
+            .children
+            .at(
+                d2b_contracts_provider::v3::semantic_services::child_resources::
+                    BindingChildPlacement::Guest,
+            )
+            .count(),
+        2
+    );
+    assert_eq!(
+        result.children.teardown_order().first().unwrap().kind(),
+        d2b_contracts_provider::v3::semantic_services::child_resources::BindingChildKind::Endpoint
+    );
+    let guest_process = result.children.child("guest-agent").unwrap();
+    assert_eq!(guest_process.execution_ref(), &requested.target_ref);
+    assert_eq!(
+        guest_process.process_provider(),
+        Some("Provider/system-systemd")
+    );
+    assert_eq!(
+        guest_process.process_template(),
+        Some("guest-audio-agent")
+    );
+    assert_eq!(guest_process.process_class(), Some("service"));
+    assert_eq!(
+        guest_process.process_domain(),
+        Some(ExecutionDomain::System)
+    );
+    assert!(guest_process.process_user().is_none());
+}
+
+#[test]
+fn ready_audio_service_without_an_authored_binding_has_no_children() {
+    let service_ref =
+        ResourceRef::parse("audio.d2bus.org.AudioService/host-audio").expect("canonical Service");
+    let target_ref = ResourceRef::parse("Guest/dev-vm").expect("canonical Guest");
+    let service_only_ref = service_ref.clone();
+    let service_only =
+        d2b_provider_audio_pipewire::AudioBindingSpec::new(service_ref, target_ref, "zone-a")
+            .unwrap();
+
+    assert_eq!(
+        AudioBindingController::<FakeAudioMediator>::child_resources(
+            &service_only_ref,
+            &service_only,
+        )
+        .unwrap_err(),
+        d2b_provider_audio_pipewire::AudioControllerError::Admission
+    );
 }

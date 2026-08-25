@@ -25,8 +25,10 @@ pub use authority::{
     SpeakerMixer, shared_microphone_arbiter,
 };
 pub use controller::{
-    AudioBindingController, AudioBindingPhase, AudioBindingStatus, AudioControllerError,
-    AudioReconcileResult, register_service,
+    AudioArbitrationState, AudioBindingChannels, AudioBindingController, AudioBindingPhase,
+    AudioBindingStatus, AudioControllerError, AudioEnforcementPosture, AudioLastSetApplied,
+    AudioMicrophoneStatus, AudioReconcileResult, AudioReconcileResultWithChildren,
+    AudioSpeakerStatus, register_service,
 };
 pub use manifest::AudioManifest;
 pub use mediator::{

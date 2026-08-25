@@ -4,7 +4,7 @@
 > artifact checks.
 
 The d2b daemon (`d2bd`) and the privileged broker
-(`d2b-priv-broker`) both emit OpenTelemetry spans and structured
+(`d2b-broker`) both emit OpenTelemetry spans and structured
 `tracing` events. Those spans flow to the native SigNoz backend through
 the `OtelHostBridge` broker role and the `sys-obs` collector. To keep
 the backend's ClickHouse cardinality budget bounded **and** to prevent
@@ -92,7 +92,7 @@ than emitting the path itself.
 
 ### Broker bundle-load span (canonical reference)
 
-Before (`packages/d2b-priv-broker/src/runtime.rs`, pre-`b6f4ac9`):
+Before (`packages/d2b-broker/src/runtime.rs`, pre-`b6f4ac9`):
 
 ```rust
 tracing::info!(

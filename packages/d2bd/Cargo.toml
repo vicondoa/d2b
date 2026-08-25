@@ -12,7 +12,6 @@ workspace = true
 d2bd-runtime = { path = "../d2bd-runtime", version = "0.0.0-bootstrap" }
 d2b-contracts-provider = { path = "../d2b-contracts-provider", version = "0.0.0-bootstrap" }
 d2b-contracts-zone-session = { path = "../d2b-contracts-zone-session", version = "0.0.0-bootstrap" }
-arc-swap = "1"
 async-trait = "0.1"
 clap = { version = "4.5", features = ["derive"] }
 getrandom = "0.2"
@@ -26,14 +25,16 @@ d2b-core-controller = { path = "../d2b-core-controller", version = "0.0.0-bootst
 d2b-provider-system-core = { path = "../d2b-provider-system-core", version = "0.0.0-bootstrap" }
 d2b-provider-system-minijail = { path = "../d2b-provider-system-minijail", version = "0.0.0-bootstrap" }
 d2b-provider-system-systemd = { path = "../d2b-provider-system-systemd", version = "0.0.0-bootstrap" }
+d2b-provider-shell-terminal = { path = "../d2b-provider-shell-terminal", version = "0.0.0-bootstrap" }
 d2b-provider-supervisor = { path = "../d2b-provider-supervisor", version = "0.0.0-bootstrap" }
 d2b-provider-activation-nixos = { path = "../d2b-provider-activation-nixos", version = "0.0.0-bootstrap" }
+d2b-provider-config-nixos = { path = "../d2b-provider-config-nixos", version = "0.0.0-bootstrap" }
 d2b-provider-volume-local = { path = "../d2b-provider-volume-local", version = "0.0.0-bootstrap" }
 d2b-process = { path = "../d2b-process", version = "0.0.0-bootstrap" }
 d2b-process-conformance = { path = "../d2b-process-conformance", version = "0.0.0-bootstrap" }
 d2b-bus = { path = "../d2b-bus", version = "0.0.0-bootstrap" }
 d2b-session = { path = "../d2b-session", version = "0.0.0-bootstrap" }
-d2b-session-unix = { path = "../d2b-session-unix", version = "0.0.0-bootstrap", features = ["host-socket"] }
+d2b-session-unix = { path = "../d2b-session-unix", version = "0.0.0-bootstrap", features = ["host-socket", "native-vsock"] }
 d2b-resource-api = { path = "../d2b-resource-api", version = "0.0.0-bootstrap" }
 d2b-resource-store = { path = "../d2b-resource-store", version = "0.0.0-bootstrap" }
 d2b-resource-store-redb = { path = "../d2b-resource-store-redb", version = "0.0.0-bootstrap" }
@@ -42,12 +43,12 @@ d2b-contracts = { path = "../d2b-contracts", version = "0.0.0-bootstrap" }
 d2b-contracts-broker = { path = "../d2b-contracts-broker", version = "0.0.0-bootstrap" }
 d2b-contracts-control = { path = "../d2b-contracts-control", version = "0.0.0-bootstrap" }
 d2b-contracts-resource = { path = "../d2b-contracts-resource", version = "0.0.0-bootstrap" }
-d2b-cutover = { path = "../d2b-cutover", version = "0.0.0-bootstrap" }
 d2b-audit = { path = "../d2b-audit", version = "0.0.0-bootstrap" }
 d2b-provider = { path = "../d2b-provider", version = "0.0.0-bootstrap" }
 d2b-provider-device-tpm = { path = "../d2b-provider-device-tpm", version = "0.0.0-bootstrap" }
 d2b-provider-device-security-key = { path = "../d2b-provider-device-security-key", version = "0.0.0-bootstrap" }
 d2b-provider-device-usbip = { path = "../d2b-provider-device-usbip", version = "0.0.0-bootstrap" }
+d2b-provider-observability-otel = { path = "../d2b-provider-observability-otel", version = "0.0.0-bootstrap" }
 d2b-provider-display-wayland = { path = "../d2b-provider-display-wayland", version = "0.0.0-bootstrap" }
 d2b-provider-clipboard-wayland = { path = "../d2b-provider-clipboard-wayland", version = "0.0.0-bootstrap" }
 d2b-provider-notification-desktop = { path = "../d2b-provider-notification-desktop", version = "0.0.0-bootstrap", features = ["daemon-support"] }
@@ -63,7 +64,6 @@ d2b-gateway-runtime = { path = "../d2b-gateway-runtime", version = "0.0.0-bootst
 d2b-provider-runtime-azure-container-apps = { path = "../d2b-provider-runtime-azure-container-apps", version = "0.0.0-bootstrap" }
 d2b-provider-transport-azure-relay = { path = "../d2b-provider-transport-azure-relay", version = "0.0.0-bootstrap" }
 protobuf = "3.7.2"
-semver = "1"
 serde.workspace = true
 sha2 = "0.10"
 tracing = "0.1"
@@ -75,11 +75,9 @@ tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
 serde_json.workspace = true
 socket2 = "0.5"
-subtle = "2.6"
 tempfile = "3"
 tokio = { version = "1", features = ["macros", "rt-multi-thread", "signal", "sync", "time", "net"] }
 ttrpc = { version = "0.9.0", default-features = false, features = ["async", "sync"] }
-uzers = "0.12"
 
 [dev-dependencies]
 d2bd-runtime = { path = "../d2bd-runtime", version = "0.0.0-bootstrap", features = ["test-support"] }
@@ -87,5 +85,4 @@ d2b-core = { path = "../d2b-core", version = "0.0.0-bootstrap", features = ["tes
 d2b-core-controller = { path = "../d2b-core-controller", version = "0.0.0-bootstrap", features = ["test-support"] }
 d2b-provider-display-wayland = { path = "../d2b-provider-display-wayland", version = "0.0.0-bootstrap", features = ["test-support"] }
 d2b-provider-volume-local = { path = "../d2b-provider-volume-local", version = "0.0.0-bootstrap" }
-regex = "1"
 tempfile = "3"

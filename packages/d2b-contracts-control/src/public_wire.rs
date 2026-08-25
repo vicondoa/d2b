@@ -1,4 +1,3 @@
-use crate::guest_wire::ExecState;
 pub use d2b_contracts::audit_wire::{AuditExportCursor, AuditExportEntry};
 use d2b_contracts::types::MediaRef;
 use d2b_contracts::{
@@ -22,6 +21,22 @@ use schemars::{
 };
 use serde::{Deserialize, Serialize};
 use std::fmt;
+
+/// Lifecycle state projected for a target-local Process or
+/// EphemeralProcess resource.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "kebab-case")]
+pub enum ExecState {
+    Created,
+    Running,
+    Exited,
+    Signaled,
+    Cancelled,
+    SlowConsumerCancelled,
+    ProtocolError,
+    LostTarget,
+    Reaped,
+}
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(tag = "kind", content = "payload")]
@@ -94,24 +109,9 @@ pub enum PublicRequest {
     /// The CLI exposes this as `d2b host reconcile --network --apply`.
     #[serde(rename = "host reconcile")]
     HostReconcile(HostReconcileRequest),
-    /// Host-wide cutover and scoped-reset operation family.
-    #[serde(rename = "host cutover")]
-    HostCutover(HostCutoverRequest),
-    /// Read the editable guest config working copy of `vm` over the
-    /// authenticated guest-control bridge and return it as a base64 string.
-    /// ADMIN-ONLY (it crosses into the guest over the authenticated
-    /// transport): the daemon enforces `PeerRole::Admin` BEFORE any probe /
-    /// sign / read. The CLI's `config sync` uses this on guest-control VMs
-    /// instead of an SSH transfer.
-    #[serde(rename = "read guest config")]
-    ReadGuestConfig(ReadGuestConfigRequest),
     /// Multiplexed, ADMIN-ONLY operation on a daemon-held authenticated
-    /// guest-control exec session. A single owner connection issues a
-    /// `Start` op then drives the session with the remaining ops
-    /// (`WriteStdin`/`ReadOutput`/`Signal`/`Resize`/`Wait`/`Close`). The
-    /// daemon enforces `PeerRole::Admin` BEFORE any session lookup, vsock
-    /// connect, auth, or `ExecCreate`. `d2b vm exec` drives this verb;
-    /// it never crosses SSH.
+    /// Process resource session. A single owner connection issues a `Start`
+    /// op then drives the session with named-stream operations.
     #[serde(rename = "exec")]
     Exec(ExecOp),
     /// Console streaming operation (ADR 0041).
@@ -159,9 +159,6 @@ pub enum PublicResponse {
     Audit(AuditResponse),
     #[serde(rename = "host check")]
     HostCheck(HostCheckResponse),
-    /// Host-wide cutover or scoped-reset response.
-    #[serde(rename = "host cutover")]
-    HostCutover(HostCutoverResponse),
     #[serde(rename = "keys list")]
     KeysList(KeysListResponse),
     #[serde(rename = "keys show")]
@@ -172,8 +169,6 @@ pub enum PublicResponse {
     StoreVerify(StoreVerifyResponse),
     #[serde(rename = "mutating verb")]
     MutatingVerb(MutatingVerbResponse),
-    #[serde(rename = "read guest config")]
-    ReadGuestConfig(ReadGuestConfigResponse),
     #[serde(rename = "exec")]
     Exec(ExecOpResponse),
     #[serde(rename = "console")]
@@ -515,6 +510,9 @@ fn is_false(value: &bool) -> bool {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ActivationRequest {
     pub vm: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(range(min = 1))]
+    pub to_generation: Option<u64>,
     #[serde(default, flatten)]
     pub flags: MutationFlags,
 }
@@ -586,32 +584,11 @@ pub struct StoreVerifyRequest {
 
 pub type StoreVerifyResponse = d2b_contracts::store_verify_wire::StoreVerifyResponse;
 
-/// `read guest config` request payload. The daemon resolves the per-VM vsock
-/// socket + peer credentials from the trusted bundle; the client supplies only
-/// the VM name.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct ReadGuestConfigRequest {
-    pub vm: String,
-}
-
-/// `read guest config` response payload. `contentBase64` is the standard
-/// padded base64 of the RAW guest config bytes. The encoded payload is bounded
-/// by `READ_GUEST_CONFIG_ENCODED_MAX_BYTES` (derived from
-/// `READ_GUEST_FILE_MAX_BYTES`) so it always fits within the public.sock and
-/// ttRPC frames. The CLI decodes it and computes size + sha256 from the
-/// DECODED bytes - never from any guest-reported value.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct ReadGuestConfigResponse {
-    pub content_base64: String,
-}
-
 /// Maximum decoded stdin chunk per `WriteStdin` op and decoded output chunk
-/// per `ReadOutput` op (`DEFAULT_MAX_CHUNK_BYTES`). The base64 envelope of a
+/// per `ReadOutput` op. The base64 envelope of a
 /// 64 KiB chunk (~87 KiB) stays well under the 1 MiB public.sock frame, so a
 /// single exec op never approaches the frame cap.
-pub const EXEC_MAX_CHUNK_BYTES: u64 = crate::guest_wire::DEFAULT_MAX_CHUNK_BYTES;
+pub const EXEC_MAX_CHUNK_BYTES: u64 = 64 * 1024;
 
 /// Output stream selector for `ReadOutput`. A closed enum - the daemon never
 /// forwards an unspecified stream to the guest.
@@ -1258,6 +1235,258 @@ pub enum ExecOpResponse {
     Kill(ExecDetachedKillResult),
 }
 
+/// Request carried by an authenticated Process or ShellSession named stream.
+///
+/// The stream itself binds the resource and caller, so no session handle,
+/// execution target, user, argv, environment, cwd, or transport locator is
+/// repeated in these messages.
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(
+    tag = "kind",
+    content = "payload",
+    rename_all = "camelCase",
+    deny_unknown_fields
+)]
+pub enum NamedProcessStreamRequest {
+    /// Send one bounded stdin chunk.
+    Stdin {
+        offset: u64,
+        chunk_base64: String,
+        #[serde(default)]
+        eof: bool,
+    },
+    /// Request one bounded output chunk.
+    Read {
+        stream: ExecStream,
+        offset: u64,
+        max_len: u64,
+        #[serde(default)]
+        wait: bool,
+        #[serde(default)]
+        timeout_ms: u64,
+    },
+    /// Deliver one allowlisted signal to the process.
+    Signal { control_seq: u64, signo: u32 },
+    /// Resize the attached terminal.
+    Resize {
+        control_seq: u64,
+        rows: u32,
+        cols: u32,
+    },
+    /// Half-close stdin without tearing down the process.
+    CloseStdin { offset: u64 },
+    /// Cancel the attached process and named stream.
+    Cancel,
+    /// Cleanly close the attached named stream without cancelling its process.
+    Close,
+    /// Poll the process terminal state.
+    Wait { timeout_ms: u64 },
+}
+
+impl fmt::Debug for NamedProcessStreamRequest {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Stdin {
+                offset,
+                chunk_base64,
+                eof,
+            } => formatter
+                .debug_struct("NamedProcessStreamRequest::Stdin")
+                .field("offset", offset)
+                .field("chunk_base64_len", &chunk_base64.len())
+                .field("eof", eof)
+                .finish(),
+            Self::Read {
+                stream,
+                offset,
+                max_len,
+                wait,
+                timeout_ms,
+            } => formatter
+                .debug_struct("NamedProcessStreamRequest::Read")
+                .field("stream", stream)
+                .field("offset", offset)
+                .field("max_len", max_len)
+                .field("wait", wait)
+                .field("timeout_ms", timeout_ms)
+                .finish(),
+            Self::Signal { control_seq, signo } => formatter
+                .debug_struct("NamedProcessStreamRequest::Signal")
+                .field("control_seq", control_seq)
+                .field("signo", signo)
+                .finish(),
+            Self::Resize {
+                control_seq,
+                rows,
+                cols,
+            } => formatter
+                .debug_struct("NamedProcessStreamRequest::Resize")
+                .field("control_seq", control_seq)
+                .field("rows", rows)
+                .field("cols", cols)
+                .finish(),
+            Self::CloseStdin { offset } => formatter
+                .debug_struct("NamedProcessStreamRequest::CloseStdin")
+                .field("offset", offset)
+                .finish(),
+            Self::Cancel => formatter.write_str("NamedProcessStreamRequest::Cancel"),
+            Self::Close => formatter.write_str("NamedProcessStreamRequest::Close"),
+            Self::Wait { timeout_ms } => formatter
+                .debug_struct("NamedProcessStreamRequest::Wait")
+                .field("timeout_ms", timeout_ms)
+                .finish(),
+        }
+    }
+}
+
+/// Response carried by an authenticated Process or ShellSession named stream.
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(
+    tag = "kind",
+    content = "payload",
+    rename_all = "camelCase",
+    deny_unknown_fields
+)]
+pub enum NamedProcessStreamResponse {
+    /// Acknowledge a stdin write.
+    Stdin(ExecWriteStdinResult),
+    /// Return one output chunk.
+    Output(ExecReadOutputResult),
+    /// Acknowledge a control operation.
+    Delivered(ExecControlResult),
+    /// Return the current terminal state.
+    Wait(ExecWaitResult),
+    /// Confirm stdin half-close or clean named-stream close.
+    Closed(ExecCloseResult),
+    /// Return a terminal disposition.
+    Terminal(ExecTerminalStatus),
+    /// Refuse the stream operation with a closed redacted error class.
+    Error(NamedProcessStreamError),
+}
+
+impl fmt::Debug for NamedProcessStreamResponse {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Stdin(result) => formatter
+                .debug_tuple("NamedProcessStreamResponse::Stdin")
+                .field(result)
+                .finish(),
+            Self::Output(result) => formatter
+                .debug_tuple("NamedProcessStreamResponse::Output")
+                .field(result)
+                .finish(),
+            Self::Delivered(result) => formatter
+                .debug_tuple("NamedProcessStreamResponse::Delivered")
+                .field(result)
+                .finish(),
+            Self::Wait(result) => formatter
+                .debug_tuple("NamedProcessStreamResponse::Wait")
+                .field(result)
+                .finish(),
+            Self::Closed(result) => formatter
+                .debug_tuple("NamedProcessStreamResponse::Closed")
+                .field(result)
+                .finish(),
+            Self::Terminal(result) => match result {
+                ExecTerminalStatus::Exited { code } => formatter
+                    .debug_struct("NamedProcessStreamResponse::Terminal")
+                    .field("kind", &"exited")
+                    .field("code", code)
+                    .finish(),
+                ExecTerminalStatus::Signaled { signal } => formatter
+                    .debug_struct("NamedProcessStreamResponse::Terminal")
+                    .field("kind", &"signaled")
+                    .field("signal", signal)
+                    .finish(),
+                ExecTerminalStatus::Error { .. } => formatter
+                    .debug_struct("NamedProcessStreamResponse::Terminal")
+                    .field("kind", &"error")
+                    .finish(),
+            },
+            Self::Error(result) => formatter
+                .debug_tuple("NamedProcessStreamResponse::Error")
+                .field(result)
+                .finish(),
+        }
+    }
+}
+
+/// Closed failure vocabulary for named Process/ShellSession streams.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "kebab-case")]
+pub enum NamedProcessStreamErrorKind {
+    /// The authenticated session cannot perform this operation.
+    Authorization,
+    /// The resource or controller generation is stale.
+    StaleSession,
+    /// The named stream or process is no longer available.
+    NotFound,
+    /// The stream credit or process quota is exhausted.
+    Backpressure,
+    /// The request was malformed or violated the resource contract.
+    Protocol,
+    /// The bounded operation deadline elapsed.
+    Timeout,
+    /// The authenticated ComponentSession disconnected.
+    Disconnected,
+}
+
+/// Redacted named-stream failure.
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct NamedProcessStreamError {
+    pub kind: NamedProcessStreamErrorKind,
+}
+
+impl fmt::Debug for NamedProcessStreamError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("NamedProcessStreamError")
+            .field("kind", &self.kind)
+            .finish()
+    }
+}
+
+/// Correlated request frame carried by a Process/ShellSession stream.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct NamedProcessStreamRequestFrame {
+    /// Bounded in-stream correlation id.
+    pub request_id: u64,
+    /// The typed operation.
+    pub request: NamedProcessStreamRequest,
+}
+
+impl NamedProcessStreamRequestFrame {
+    /// Construct one correlated request frame.
+    pub const fn new(request_id: u64, request: NamedProcessStreamRequest) -> Self {
+        Self {
+            request_id,
+            request,
+        }
+    }
+}
+
+/// Correlated response frame carried by a Process/ShellSession stream.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct NamedProcessStreamResponseFrame {
+    /// Request id being completed.
+    pub request_id: u64,
+    /// The typed operation result.
+    pub response: NamedProcessStreamResponse,
+}
+
+impl NamedProcessStreamResponseFrame {
+    /// Construct one correlated response frame.
+    pub const fn new(request_id: u64, response: NamedProcessStreamResponse) -> Self {
+        Self {
+            request_id,
+            response,
+        }
+    }
+}
+
 #[derive(Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 #[serde(transparent)]
 pub struct ShellName(String);
@@ -1536,8 +1765,8 @@ pub enum ConsoleProviderKind {
     LocalHypervisor,
     /// qemu-media VM with a broker-owned fd-backed console backend.
     QemuMedia,
-    /// ACA sandbox with a guestd-compatible agent over the provider peer
-    /// transport (no local socket or broker fd involved).
+    /// ACA sandbox with a provider agent over the provider peer transport
+    /// (no local socket or broker fd involved).
     AcaSandbox,
 }
 
@@ -1834,13 +2063,13 @@ pub enum AudioChannel {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "kebab-case")]
 pub enum AudioEnforcementPosture {
-    /// Host-side PipeWire policy and guest-side guestd policy both applied.
+    /// Host-side PipeWire policy and target-local Process policy both applied.
     HostAndGuest,
-    /// Host-side enforcement only; guestd is absent or the provider does not
-    /// support guest enforcement.
+    /// Host-side enforcement only; the provider does not support target-local
+    /// enforcement.
     HostOnly,
-    /// Guest-side guestd enforcement only; no local PipeWire node (e.g.
-    /// ACA sandbox with a guestd-compatible agent).
+    /// Target-local Process enforcement only; no local PipeWire node (for
+    /// example, an ACA sandbox with a provider agent).
     GuestOnly,
     /// Neither host nor guest enforcement is supported for this target.
     Unsupported,
@@ -1857,8 +2086,8 @@ pub enum AudioEnforcementPosture {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "kebab-case")]
 pub enum AudioErrorKind {
-    /// The provider is expected to expose a guestd-compatible agent but none
-    /// was found; operator remediation is required.
+    /// The provider is expected to expose a target-local audio Process but
+    /// none was found; operator remediation is required.
     ProviderMisconfigured,
     /// The requested VM was not found in the bundle.
     VmNotFound,
@@ -1880,7 +2109,7 @@ pub enum AudioProviderKind {
     LocalHypervisor,
     /// qemu-media VM with a declared qemu audio backend.
     QemuMedia,
-    /// ACA sandbox with a guestd-compatible agent for audio policy.
+    /// ACA sandbox with a provider agent for audio policy.
     AcaSandbox,
 }
 
@@ -1984,9 +2213,10 @@ pub struct AudioStatusResult {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "kebab-case")]
 pub enum AudioSetApplied {
-    /// Applied to both host (PipeWire/qemu) and guest (guestd).
+    /// Applied to both host (PipeWire/qemu) and the target-local Process.
     HostAndGuest,
-    /// Applied to host only; guestd enforcement was unavailable or degraded.
+    /// Applied to host only; target-local enforcement was unavailable or
+    /// degraded.
     HostOnly,
     /// Applied to guest only (ACA sandbox; no local host audio state written).
     GuestOnly,
@@ -2066,151 +2296,6 @@ pub struct HostReconcileRequest {
     /// Re-run the per-env nftables / route / sysctl reconcile.
     #[serde(default)]
     pub network: bool,
-}
-
-/// One host cutover or scoped-reset command.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct HostCutoverRequest {
-    /// Requested operation.
-    pub operation: HostCutoverOperation,
-    /// Existing operation identity for status or continuation.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub operation_id: Option<String>,
-    /// Candidate identity bound to the request.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub candidate_id: Option<String>,
-    /// Revision-plan identity bound to the request.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub revision_plan_id: Option<String>,
-    /// System artifact identity bound to the frozen cutover preview and handoff.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub system_artifact_id: Option<String>,
-    /// Preserved source artifact identity bound to native rollback.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub source_system_artifact_id: Option<String>,
-    /// Exact preview digest.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub preview_digest: Option<String>,
-    /// Qualified recovery digest for cutover apply.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub recovery_digest: Option<String>,
-    /// Bound operator identity.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub operator_id: Option<String>,
-    /// Exact apply or finalization consent digest.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub consent_digest: Option<String>,
-    /// Canonical serialized U3 apply consent.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub consent_json: Option<String>,
-    /// Separate destructive reset consent digest.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub destructive_consent_digest: Option<String>,
-    /// Canonical destructive reset consent artifact.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub destructive_consent_json: Option<String>,
-    /// Whether this reset explicitly authorizes durable-Volume destruction.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub destroy_durable_volumes: Option<bool>,
-    /// Canonical serialized qualified recovery attestation.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub recovery_attestation_json: Option<String>,
-    /// Host identity digest bound by the recovery attestation.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub host_digest: Option<String>,
-    /// Fresh consent used by a non-owner Admin to resume.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub fresh_consent_digest: Option<String>,
-    /// Bounded hold reason.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub reason: Option<String>,
-    /// Scoped reset authority, required only for `reset`.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub reset_scope: Option<HostCutoverResetScope>,
-    /// Opaque target identity for a scoped reset.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub target: Option<String>,
-    /// Zone selection is forbidden for one-time cutover operations.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub zone: Option<String>,
-}
-
-/// Closed host cutover command vocabulary.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
-#[serde(rename_all = "kebab-case")]
-pub enum HostCutoverOperation {
-    /// Build a mutation-free preview.
-    Preview,
-    /// Read the current redacted status.
-    Status,
-    /// Set an operator hold.
-    Hold,
-    /// Clear a hold and resume.
-    Resume,
-    /// Consume apply consent and launch the runner.
-    Apply,
-    /// Roll back before the native boundary.
-    Rollback,
-    /// Verify every configured Zone.
-    Verify,
-    /// Read-only cutover health diagnostics.
-    Doctor,
-    /// Consume phase-10 consent.
-    Finalize,
-    /// Run a distinct scoped reset.
-    Reset,
-}
-
-/// Closed scoped-reset authority vocabulary.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
-#[serde(rename_all = "kebab-case")]
-pub enum HostCutoverResetScope {
-    /// Reset one Zone.
-    Zone,
-    /// Reset one Provider.
-    Provider,
-    /// Reset one Guest.
-    Guest,
-}
-
-/// Redaction-safe host cutover response.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct HostCutoverResponse {
-    /// Command that produced this response.
-    pub operation: HostCutoverOperation,
-    /// Opaque operation identity, when one exists.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub operation_id: Option<String>,
-    /// Redacted U3 operation state.
-    pub state: String,
-    /// Current protocol phase number.
-    pub phase: u8,
-    /// Preview digest, when the operation has a preview.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub preview_digest: Option<String>,
-    /// Redaction-safe summary.
-    pub summary: String,
-    /// Whether this response represents an accepted mutation.
-    pub mutation_accepted: bool,
-    /// Inventory summary without paths, secrets, or host identifiers.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub inventory: Option<HostCutoverInventorySummary>,
-}
-
-/// Redaction-safe inventory summary for a host-wide preview.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct HostCutoverInventorySummary {
-    /// Number of configured Zones included.
-    pub zone_count: u32,
-    /// Number of classified inventory items.
-    pub item_count: u32,
-    /// Canonical inventory digest.
-    pub inventory_digest: String,
-    /// Whether every configured Zone was observed.
-    pub complete: bool,
 }
 
 /// Mutating-verb daemon response shape.
@@ -2888,7 +2973,10 @@ fn default_true() -> bool {
 #[cfg(test)]
 mod tests {
     use super::{
-        AuditResponse, LevelPercent, MutationFlags, PublicRequest, PublicResponse, RuntimeSummary,
+        AuditResponse, ExecReadOutputResult, ExecStream, ExecTerminalStatus, LevelPercent,
+        MutationFlags, NamedProcessStreamError, NamedProcessStreamErrorKind,
+        NamedProcessStreamRequest, NamedProcessStreamRequestFrame, NamedProcessStreamResponse,
+        NamedProcessStreamResponseFrame, PublicRequest, PublicResponse, RuntimeSummary,
         VmLifecycleRequest, VmLifecycleState,
     };
     use d2b_contracts::{
@@ -2902,6 +2990,82 @@ mod tests {
     fn vm_lifecycle_keeps_booted_variant() {
         let encoded = serde_json::to_string(&VmLifecycleState::Booted).expect("serializes");
         assert_eq!(encoded, "\"Booted\"");
+    }
+
+    #[test]
+    fn named_process_stream_frames_round_trip_without_identity_fields() {
+        let request = NamedProcessStreamRequest::Stdin {
+            offset: 7,
+            chunk_base64: "c2VjcmV0".to_owned(),
+            eof: false,
+        };
+        let value = serde_json::to_value(&request).expect("request serializes");
+        assert_eq!(value["kind"], "stdin");
+        assert!(value.get("session").is_none());
+        let decoded: NamedProcessStreamRequest =
+            serde_json::from_value(value).expect("request decodes");
+        assert_eq!(decoded, request);
+        let close = NamedProcessStreamRequest::Close;
+        assert_eq!(
+            serde_json::from_value::<NamedProcessStreamRequest>(
+                serde_json::to_value(&close).expect("close serializes")
+            )
+            .expect("close decodes"),
+            close
+        );
+        let frame = NamedProcessStreamRequestFrame::new(11, request);
+        let decoded: NamedProcessStreamRequestFrame =
+            serde_json::from_value(serde_json::to_value(&frame).expect("request frame serializes"))
+                .expect("request frame decodes");
+        assert_eq!(decoded.request_id, 11);
+
+        let response = NamedProcessStreamResponse::Output(ExecReadOutputResult {
+            data_base64: "c2VjcmV0".to_owned(),
+            next_offset: 13,
+            eof: false,
+            dropped_bytes: 0,
+            truncated: false,
+            timed_out: false,
+        });
+        let rendered = format!("{response:?}");
+        assert!(!rendered.contains("c2VjcmV0"));
+        let terminal = NamedProcessStreamResponse::Terminal(ExecTerminalStatus::Exited { code: 0 });
+        assert_eq!(
+            serde_json::from_value::<NamedProcessStreamResponse>(
+                serde_json::to_value(terminal).expect("terminal serializes")
+            )
+            .expect("terminal decodes"),
+            NamedProcessStreamResponse::Terminal(ExecTerminalStatus::Exited { code: 0 })
+        );
+        let terminal_error = NamedProcessStreamResponse::Terminal(ExecTerminalStatus::Error {
+            slug: "D2B_TERMINAL_LEAK_CANARY".to_owned(),
+        });
+        assert!(!format!("{terminal_error:?}").contains("D2B_TERMINAL_LEAK_CANARY"));
+        let error = NamedProcessStreamResponse::Error(NamedProcessStreamError {
+            kind: NamedProcessStreamErrorKind::Disconnected,
+        });
+        assert_eq!(
+            serde_json::from_value::<NamedProcessStreamResponse>(
+                serde_json::to_value(error).expect("error serializes")
+            )
+            .expect("error decodes"),
+            NamedProcessStreamResponse::Error(NamedProcessStreamError {
+                kind: NamedProcessStreamErrorKind::Disconnected,
+            })
+        );
+        let response_frame = NamedProcessStreamResponseFrame::new(
+            11,
+            NamedProcessStreamResponse::Terminal(ExecTerminalStatus::Exited { code: 0 }),
+        );
+        assert_eq!(
+            serde_json::from_value::<NamedProcessStreamResponseFrame>(
+                serde_json::to_value(response_frame).expect("response frame serializes")
+            )
+            .expect("response frame decodes")
+            .request_id,
+            11
+        );
+        let _ = ExecStream::Stdout;
     }
 
     #[test]

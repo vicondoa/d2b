@@ -211,7 +211,7 @@ config with no reservation for the new VM.
 **Symptom.** The new VM boots (cloud-hypervisor + all sidecars reach
 process-alive), its tap attaches to `br-<env>-lan`, but it never gets
 its reserved DHCP lease, so it never reaches the network. d2b's
-`guest-ssh-readiness` node times out at the deadline and the whole VM
+`component-session-health` node times out at the deadline and the whole VM
 start **rolls back**. From the operator's seat the new VM "just won't
 start" with no obvious cause - the real fault is a stale sibling
 `sys-<env>-net`. Reproduced 2026-06-07 adding `work-ssd` to the `work`
@@ -335,7 +335,7 @@ alongside the per-op privileges matrix enforcement.
 
 ## Per-op privileges-matrix enforcement at broker (Phase 6 security-hardening)
 
-`packages/d2b-priv-broker/src/runtime.rs` documents the Phase A
+`packages/d2b-broker/src/runtime.rs` documents the Phase A
 runner-control trust model above the `SignalRunner` and
 `DeregisterRunnerPidfd` handlers: ADR 0015 treats `d2bd` as part
 of the daemon-only TCB, `envelope.caller_role` is audit-only at the
@@ -418,7 +418,7 @@ All in comments / doc-strings, e.g.
 `packages/d2b-host/src/virtiofsd_argv.rs`,
 `packages/d2b-host/src/swtpm_argv.rs`,
 `packages/d2b-host/src/gpu_argv.rs`,
-`packages/d2b-priv-broker/src/ops/spawn_runner.rs`,
+`packages/d2b-broker/src/ops/spawn_runner.rs`,
 `packages/d2bd/src/pidfs_probe.rs`,
 `packages/d2bd/src/ch_stats.rs`,
 `packages/d2b-core/src/bundle_resolver.rs` (e.g. line 2265
@@ -577,7 +577,7 @@ inconsistency). The supervisor decision logic needs to either:
 
 **Files to start from.**
 
-- `packages/d2b-priv-broker/src/sys.rs` - the reaper claims to
+- `packages/d2b-broker/src/sys.rs` - the reaper claims to
   use `waitid(P_PIDFD)` + signalfd; verify it runs.
 - `packages/d2bd/src/supervisor/pidfd.rs` -
   `PidfdTable::snapshot` writes the file; check where entries are
@@ -664,7 +664,7 @@ operator's login was a hard prerequisite for invoking the CLI.
 
 **Files / code paths to start from.**
 
-- `packages/d2b-priv-broker/src/live_handlers.rs` - `SpawnRunner`
+- `packages/d2b-broker/src/live_handlers.rs` - `SpawnRunner`
   handler; the audio policy ref is `w1-audio`.
 - `packages/d2bd/src/supervisor/pidfd.rs` - pidfd lifecycle; this
   is where the respawn-on-death watchdog needs to land.

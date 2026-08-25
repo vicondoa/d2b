@@ -400,8 +400,8 @@ let
         user = "root";
         group = principal;
         socketPath = realm.paths.brokerSocket;
-        socketUnitName = "${unitPrefix}-priv-broker.socket";
-        serviceUnitName = "${unitPrefix}-priv-broker.service";
+        socketUnitName = "${unitPrefix}-broker.socket";
+        serviceUnitName = "${unitPrefix}-broker.service";
         auditDir = realm.paths.auditDir;
         materializedSocket = brokerMaterialized;
         materializedService = brokerMaterialized;
@@ -520,7 +520,7 @@ let
 
   # v3 cross-Zone index.  This is deliberately derived from the unified
   # resource declarations rather than from the legacy env/VM tables above.
-  # The legacy index remains available to the pre-cutover emitters until
+  # The legacy index remains available to the compatibility emitters until
   # their consumers move to the v3 artifact.
   v3ResourceRows = zoneName: zone:
     lib.mapAttrsToList
@@ -846,8 +846,6 @@ let
         defaultName = vm.guest.shell.defaultName;
         maxSessions = vm.guest.shell.maxSessions;
         maxAttached = vm.guest.shell.maxAttached;
-        controlEnabled = vm.guest.control.enable;
-        execEnabled = vm.guest.exec.enable;
       }) shellVms;
     };
 

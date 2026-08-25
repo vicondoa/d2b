@@ -80,7 +80,7 @@ let
       lifecycle = true;
       display = true;
       usbHotplug = true;
-      guestControl = true;
+      componentSession = true;
       exec = true;
       configSync = true;
       ssh = true;
@@ -92,7 +92,7 @@ let
       lifecycle = { start = true; stop = true; restart = true; switch = true; hostPrepare = true; };
       media = { usbHotplug = true; removableMedia = false; qemuMedia = false; };
       display = { display = true; graphics = true; video = true; waylandProxy = true; };
-      guest = { guestControl = true; exec = true; shell = true; configSync = true; ssh = true; keys = true; inGuestObservability = true; };
+      guest = { componentSession = true; exec = true; shell = true; configSync = true; ssh = true; keys = true; inGuestObservability = true; };
       storage = { storeSync = true; virtiofs = true; volumes = true; };
     };
     autostartPolicy = "host-boot-eligible";
@@ -101,7 +101,7 @@ let
       { id = "store-virtiofs-preflight"; role = "storage"; optional = false; }
       { id = "virtiofsd"; role = "storage"; optional = false; }
       { id = "cloud-hypervisor"; role = "hypervisor"; optional = false; }
-      { id = "guest-control-health"; role = "guest-control"; optional = false; }
+      { id = "component-session"; role = "component-session"; optional = false; }
       { id = "swtpm"; role = "tpm"; optional = true; }
       { id = "gpu"; role = "display"; optional = true; }
       { id = "audio"; role = "audio"; optional = true; }
@@ -120,7 +120,7 @@ let
       lifecycle = true;
       display = true;
       usbHotplug = true;
-      guestControl = false;
+      componentSession = false;
       exec = false;
       configSync = false;
       ssh = false;
@@ -132,7 +132,7 @@ let
       lifecycle = { start = true; stop = true; restart = true; switch = false; hostPrepare = true; };
       media = { usbHotplug = true; removableMedia = true; qemuMedia = true; };
       display = { display = true; graphics = false; video = false; waylandProxy = false; };
-      guest = { guestControl = false; exec = false; shell = false; configSync = false; ssh = false; keys = false; inGuestObservability = false; };
+      guest = { componentSession = false; exec = false; shell = false; configSync = false; ssh = false; keys = false; inGuestObservability = false; };
       storage = { storeSync = false; virtiofs = false; volumes = false; };
     };
     autostartPolicy = "manual-only";
@@ -658,8 +658,8 @@ let
         && !(lib.elem "cloud-hypervisor-runner" positiveQemuRoles);
       noStoreVirtiofs = !(lib.elem "store-virtiofs-preflight" positiveQemuNodeIds)
         && !(lib.any (role: role == "virtiofsd" || role == "store-virtiofs-preflight") positiveQemuRoles);
-      noGuestControl = !(lib.elem "guest-control-health" positiveQemuNodeIds)
-        && !(lib.elem "guest-control-health" positiveQemuRoles);
+      noComponentSession = !(lib.elem "component-session-health" positiveQemuNodeIds)
+        && !(lib.elem "component-session-health" positiveQemuRoles);
       noMediaPathInArgv =
         !(lib.any (arg: lib.hasInfix "/var/lib/d2b/media" arg) positiveQemuRunner.argv);
       noVhostNetPathInArgv =
@@ -668,7 +668,7 @@ let
     expected = {
       noCloudHypervisor = true;
       noStoreVirtiofs = true;
-      noGuestControl = true;
+      noComponentSession = true;
       noMediaPathInArgv = true;
       noVhostNetPathInArgv = true;
     };
@@ -894,8 +894,8 @@ let
     expected = true;
   };
 
-  "external-vm-kind/rejects-guest-control" = {
-    expr = hasFailure { vmAttrs.guest.control.enable = true; } "guest-control, guest exec, and persistent shell";
+  "external-vm-kind/rejects-component-session" = {
+    expr = hasFailure { vmAttrs.guest.componentSession.enable = true; } "ComponentSession, target-local execution, and persistent shell";
     expected = true;
   };
 

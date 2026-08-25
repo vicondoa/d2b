@@ -387,7 +387,7 @@ mod tests {
                         "lifecycle": true,
                         "display": true,
                         "usbHotplug": true,
-                        "guestControl": true,
+
                         "exec": true,
                         "configSync": true,
                         "ssh": true,

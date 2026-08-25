@@ -6,7 +6,8 @@ mod supervisor;
 pub use controller::{OpenSessionRequest, OpenSessionResult, ShellTerminalController};
 pub use supervisor::{
     AttachReceipt, AttachRequest, Attachment, InMemoryShellAuthority, SessionCapability,
-    SessionGrant, SessionSupervisor, ShellAuthorityPort,
+    SessionGrant, SessionSupervisor, ShellAuthorityLedger, ShellAuthorityPort,
+    SupervisorProcessResource,
 };
 
 /// Public controller ComponentSession service name.

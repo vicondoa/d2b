@@ -8,7 +8,6 @@ const REQUIRED_AGGREGATE_JOBS: &[&str] = &[
     "rust-main",
     "rust-broker",
     "rust-guest",
-    "rust-local",
     "nix-eval",
     "nix-unit",
     "nix-realized",

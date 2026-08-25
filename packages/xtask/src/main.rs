@@ -19,7 +19,6 @@ use d2b_contracts_control::cli_output::{
     VmDisplayCloseOutputV1, VmDisplayListOutputV1, VmExecCreateOutputV1, VmExecKillOutputV1,
     VmExecListOutputV1, VmExecLogsOutputV1, VmExecStatusOutputV1,
 };
-use d2b_contracts_control::guest_wire::GuestControlSchema;
 use d2b_contracts_control::public_wire;
 use d2b_contracts_control::unsafe_local_wire::UnsafeLocalHelperWireSchema;
 use d2b_contracts_resource::v3::storage::ZoneStoreStorageRow;
@@ -97,7 +96,6 @@ mod bazel_evidence;
 mod changelog;
 mod delivery;
 mod gen_resource_schemas;
-mod heavy_gate;
 mod inventory;
 mod production_closure;
 mod provider_crate_policy;
@@ -397,8 +395,6 @@ fn main() -> std::process::ExitCode {
         [command] if command == "gen-cli-shell-artifacts" => {
             run_task("gen-cli-shell-artifacts", gen_cli_shell_artifacts)
         }
-        [command] if command == "gen-guest-proto" => run_task("gen-guest-proto", gen_guest_proto),
-        [command] if command == "gen-guest-ttrpc" => run_task("gen-guest-ttrpc", gen_guest_ttrpc),
         [command] if command == "gen-resource-proto" => {
             run_task("gen-resource-proto", gen_resource_proto)
         }
@@ -423,7 +419,6 @@ fn main() -> std::process::ExitCode {
         [command, rest @ ..] if command == "redact-diagnostics" => {
             diagnostic_redaction::run_cli(rest)
         }
-        [command, rest @ ..] if command == "heavy-gate" => heavy_gate::run(rest),
         [command, rest @ ..] if command == "gen-package-policy-inputs" => {
             let result = repo_root()
                 .map_err(|error| error.to_string())
@@ -445,7 +440,7 @@ fn main() -> std::process::ExitCode {
         [command] if command == "check-provider-layout" => run_provider_layout(),
         _ => {
             eprintln!(
-                "usage: cargo run --manifest-path Cargo.toml -p xtask -- <gen-schemas|gen-zone-storage-schema|gen-cli-schemas|gen-zone-schemas|gen-zone-nix-options|gen-resource-schemas|gen-error-codes|gen-provider-packaging|gen-semantic-service-schemas|gen-cli-shell-artifacts|gen-guest-proto|gen-guest-ttrpc|gen-resource-proto|gen-resource-ttrpc|gen-daemon-api|gen-package-policy-inputs [--check|--write]|release-notes <version>|adr0035-inventory [--output <path>]|changelog-fold [--check]|bazel-evidence <check-security|security-digest|classify-failure|redact-log> ...|check-provider-crate-layout|check-provider-layout|redact-diagnostics --repo-root <path> [--home <path>] [--tail-lines <count>]|delivery wave <snapshot|validate-import|recovery-import|seal|merge-target|merge-eligibility|help> [options]|heavy-gate <-- <command> [args...] | verify-slot>>"
+                "usage: cargo run --manifest-path Cargo.toml -p xtask -- <gen-schemas|gen-zone-storage-schema|gen-cli-schemas|gen-zone-schemas|gen-zone-nix-options|gen-resource-schemas|gen-error-codes|gen-provider-packaging|gen-semantic-service-schemas|gen-cli-shell-artifacts|gen-resource-proto|gen-resource-ttrpc|gen-daemon-api|gen-package-policy-inputs [--check|--write]|release-notes <version>|adr0035-inventory [--output <path>]|changelog-fold [--check]|bazel-evidence <check-security|security-digest|classify-failure|redact-log> ...|check-provider-crate-layout|check-provider-layout|redact-diagnostics --repo-root <path> [--home <path>] [--tail-lines <count>]|delivery wave <snapshot|validate-import|recovery-import|seal|merge-target|merge-eligibility|help> [options]>"
             );
             std::process::ExitCode::FAILURE
         }
@@ -551,28 +546,6 @@ fn run_inventory(output_path: Option<PathBuf>) -> std::process::ExitCode {
     }
 }
 
-fn gen_guest_ttrpc() -> Result<Vec<PathBuf>, Box<dyn std::error::Error>> {
-    let repo_root = repo_root()?;
-    let proto_dir = repo_root.join("packages/d2b-contracts-control");
-    let proto = proto_dir.join("guest_control.proto");
-    let out_dir = repo_root.join("packages/d2b-guestd/src/generated");
-    fs::create_dir_all(&out_dir)?;
-
-    ttrpc_codegen::Codegen::new()
-        .out_dir(&out_dir)
-        .input(&proto)
-        .include(&proto_dir)
-        .customize(ttrpc_codegen::Customize {
-            async_server: true,
-            ..Default::default()
-        })
-        .run()?;
-
-    let out_file = out_dir.join("guest_control_ttrpc.rs");
-    sanitize_generated_rust(&out_file)?;
-    Ok(vec![out_file])
-}
-
 fn gen_resource_ttrpc() -> Result<Vec<PathBuf>, Box<dyn std::error::Error>> {
     let repo_root = repo_root()?;
     let proto_dir = repo_root.join("packages/d2b-contracts-resource/proto");
@@ -593,33 +566,6 @@ fn gen_resource_ttrpc() -> Result<Vec<PathBuf>, Box<dyn std::error::Error>> {
 
     let out_file = out_dir.join("d2b_resource_v3_ttrpc.rs");
     sanitize_generated_rust(&out_file)?;
-    Ok(vec![out_file])
-}
-
-fn gen_guest_proto() -> Result<Vec<PathBuf>, Box<dyn std::error::Error>> {
-    let repo_root = repo_root()?;
-    let proto_dir = repo_root.join("packages/d2b-contracts-control");
-    let proto = proto_dir.join("guest_control.proto");
-    let out_dir = repo_root.join("packages/d2b-contracts-control/src/generated");
-    fs::create_dir_all(&out_dir)?;
-    let out_file = out_dir.join("guest_control.rs");
-    let temp_proto_dir = create_exclusive_temp_dir("d2b-guest-proto")?;
-    let temp_proto = temp_proto_dir.join("guest_control.proto");
-    fs::write(
-        &temp_proto,
-        message_only_proto(&fs::read_to_string(&proto)?, "GuestControl")?,
-    )?;
-
-    protobuf_codegen::Codegen::new()
-        .pure()
-        .include(&temp_proto_dir)
-        .input(&temp_proto)
-        .out_dir(&out_dir)
-        .run()?;
-
-    sanitize_generated_rust(&out_file)?;
-    write_guest_generated_mod(&out_dir)?;
-    let _ = fs::remove_dir_all(&temp_proto_dir);
     Ok(vec![out_file])
 }
 
@@ -655,14 +601,6 @@ fn write_contract_generated_mod(out_dir: &Path) -> Result<(), Box<dyn std::error
     fs::write(
         out_dir.join("mod.rs"),
         "// @generated\n\npub mod d2b_resource_v3;\n",
-    )?;
-    Ok(())
-}
-
-fn write_guest_generated_mod(out_dir: &Path) -> Result<(), Box<dyn std::error::Error>> {
-    fs::write(
-        out_dir.join("mod.rs"),
-        "// @generated\n\npub mod guest_control;\n",
     )?;
     Ok(())
 }
@@ -880,10 +818,6 @@ fn schema_documents() -> Vec<(&'static str, RootSchema)> {
         (
             "wire-protocol.json",
             schemars::schema_for!(WireProtocolSchema),
-        ),
-        (
-            "guest-control.json",
-            schemars::schema_for!(GuestControlSchema),
         ),
         ("manifest_v04.json", schemars::schema_for!(ManifestV04)),
         ("audio-state.json", schemars::schema_for!(AudioPolicyState)),

@@ -76,7 +76,7 @@ See [the unsafe-local provider contract](docs/reference/unsafe-local-provider.md
 ### Portability roadmap
 
 The portability work introduces a non-root `d2bd` daemon plus a
-minimal root-owned `d2b-priv-broker` (see ADRs 0001-0008 under
+minimal root-owned `d2b-broker` (see ADRs 0001-0008 under
 [`docs/adr/`](docs/adr/)). The new trust boundaries the daemon work
 will introduce are:
 
@@ -105,8 +105,8 @@ will introduce are:
   > capabilities (`capabilities = []`), `requiresStartRoot = false`,
   > and a `userNamespace` block mapping in-NS UID/GID 0 to the
   > per-share principal. Normal VM shares map to the per-VM runner
-  > principal; the guest-control token share maps to the narrower
-  > `d2b-<vm>-gctlfs` principal. The broker pre-establishes the
+  > principal; ComponentSession enrollment keys are not exposed through
+  > a virtiofs share. The broker pre-establishes the
   > namespace via `clone3(CLONE_NEWUSER)` + `/proc/<pid>/uid_map`
   > writes before exec; virtiofsd runs fake-root only inside the
   > per-share user NS. This is strictly stronger than v1.1.1: a
@@ -164,7 +164,7 @@ The new trust-boundary statements are:
   NetworkManager unmanaged config, and `modprobe` state on behalf
   of `d2bd`, gated entirely by the closed broker enum plus the
   trusted bundle. Every operation has a typed handler under
-  `packages/d2b-priv-broker/src/ops/` and re-derives its
+  `packages/d2b-broker/src/ops/` and re-derives its
   operating paths from the bundle, never from caller input.
 - Compromise of `d2bd` cannot escalate to arbitrary host
   mutation beyond the declared broker enum variants. Unknown
@@ -195,25 +195,21 @@ The new trust-boundary statements are:
   trust-boundary delta; only the per-busid
   `UsbipBindFirewallRule` skeleton is covered.
 
-### Guest-control exec trust boundary
+### ComponentSession exec trust boundary
 
 `d2b vm exec` runs a command inside a VM over
-the authenticated guest-control vsock channel - there is no SSH. The
+the authenticated ComponentSession channel - there is no SSH. The
 trust-boundary statements are:
 
 - **Admin-only, destructive.** Guest exec is a destructive verb: the
   `SO_PEERCRED` caller must be in `d2b.site.adminUsers` (the
   daemon-side role gate above), on top of the `d2b`-group
-  connection gate. Per-VM exec must also be enabled in the bundle
-  (`guest.control.enable` + `guest.exec.enable`). Every exec runs the
-  requested command as the VM's workload user (`ssh.user`) - **never
-  root** - inside a real PAM login session (`systemd-run
-  --property=PAMName=login --uid=<user>`); the wire `user` field is
-  host-fixed by guestd and ignored, and operators elevate with `sudo`
-  inside the session.
+  connection gate. Every exec is admitted as a target-local `Process` or
+  `EphemeralProcess` from a signed Provider template; caller-supplied SSH
+  transport and host process execution are not accepted.
 - **Leak-safe daemon-side audit.** The daemon records attached exec
-  lifecycle events (`GuestControlExecEstablished` /
-  `GuestControlExecTerminated`) to its own
+  lifecycle events (`component_session_exec_established` /
+  `component_session_exec_terminated`) to its own
   `daemon-events-<utc-date>.jsonl`, carrying ONLY the VM name, the
   admin `peer_uid`, and the negotiated `tty` shape. Detached create and
   kill/cancel write separate redacted daemon audit events carrying ONLY

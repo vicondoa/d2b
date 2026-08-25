@@ -12,23 +12,6 @@ pub struct ProcessesJson {
     pub schema_version: String,
     /// Per-VM process DAGs.
     pub vms: Vec<VmProcessDag>,
-    /// Optional out-of-band host cutover runner contract.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub cutover_runner: Option<CutoverRunnerProcess>,
-}
-
-/// Private process contract for the one-shot cutover runner.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct CutoverRunnerProcess {
-    /// Trusted store path installed by the host-tool emitter.
-    pub binary_path: String,
-    /// The runner is never a declared persistent unit.
-    pub persistent: bool,
-    /// Closed placement label proving it is outside the VM slice.
-    pub cgroup_placement: String,
-    /// The broker transfers exactly one bootstrap descriptor.
-    pub single_bootstrap_fd: bool,
 }
 
 /// Process DAG for one VM.
@@ -72,7 +55,8 @@ pub struct ProcessNode {
     pub id: NodeId,
     /// Canonical Host or Guest execution target for this trusted runner.
     ///
-    /// Omitted by legacy bundles, which resolve to `Guest/<vm>`.
+    /// Omitted by legacy bundles, which resolve to the singleton Host target
+    /// except for the Guest-local activation runner.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub execution_ref: Option<String>,
     /// Canonical execution domain for this trusted runner.
@@ -255,23 +239,23 @@ pub enum ProcessRole {
     CloudHypervisorRunner,
     /// QEMU media runner.
     QemuMediaRunner,
+    /// Target-local one-shot NixOS activation runner.
+    ///
+    /// This role is emitted only for the Guest execution target. The
+    /// activation Provider creates an EphemeralProcess resource and the
+    /// target-local process Provider resolves this role from the trusted
+    /// bundle.
+    ActivationNixosRunner,
     /// vsock relay sidecar.
     VsockRelay,
     /// Host-to-observability-VM OTLP bridge.
     OtelHostBridge,
-    /// Guest SSH readiness probe.
+    /// Authenticated ComponentSession Health readiness probe.
     ///
-    /// Retained for the SSH-compatibility window (old-generation VMs that
-    /// predate guestd). New generations use [`ProcessRole::GuestControlHealth`]
-    /// for framework readiness instead.
-    GuestSshReadiness,
-    /// Authenticated guest-control Health readiness probe.
-    ///
-    /// Replaces [`ProcessRole::GuestSshReadiness`] as the framework readiness
-    /// gate on guest-control-capable VMs: readiness is a full authenticated
-    /// Hello + token challenge-response + Health over the guest-control vsock,
-    /// not a raw TCP-22 probe. It fails CLOSED.
-    GuestControlHealth,
+    /// Readiness is a full authenticated ComponentSession identity exchange
+    /// and Health check over the enrolled vsock, not a raw TCP-22 probe.
+    /// It fails closed.
+    ComponentSessionHealth,
     /// USBIP proxy or attach helper.
     Usbip,
     /// Guest-side CTAPHID relay frontend via UHID virtual HID device and
@@ -367,16 +351,16 @@ pub enum ReadinessPredicate {
     Command(Vec<String>),
     /// Component-specific predicate named by the emitter.
     ComponentSpecific(String),
-    /// Authenticated guest-control Health probe. Readiness requires a
-    /// full Hello + token challenge-response + Health over the guest-control
-    /// vsock - the host-side probe. Unlike [`Self::ComponentSpecific`]
+    /// Authenticated component-session Health probe. Readiness requires a
+    /// full identity-bound handshake + Health over the ComponentSession vsock -
+    /// the host-side probe. Unlike [`Self::ComponentSpecific`]
     /// (which reports ready unconditionally and would fail OPEN), this predicate
     /// fails CLOSED: it is ready only when the daemon completes the
     /// authenticated probe and the guest reports a healthy/degraded state, and
     /// never ready for an old-generation / unreachable / auth-failed / timed-out
     /// guest. The daemon resolves the per-VM vsock socket, peer credentials, and
-    /// broker-backed signer from its own trusted state.
-    GuestControlHealth { vm: String },
+    /// enrolled identity evidence from its own trusted state.
+    ComponentSessionHealth { vm: String },
 }
 
 /// v0.4.0 invariants preserved in the process contract.

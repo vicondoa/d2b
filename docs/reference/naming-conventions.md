@@ -7,7 +7,7 @@ Canonical reference for host-visible d2b naming. AGENTS.md and the design doc ke
 | Resource | Pattern | Notes |
 | --- | --- | --- |
 | Daemon | `d2bd.service` | v1.0 non-root daemon; the only persistent user-facing system unit d2b declares besides the broker (per ADR 0015). |
-| Privileged broker | `d2b-priv-broker.{socket,service}` | v1.0 socket-activated privileged dispatcher for every audited host mutation. |
+| Privileged broker | `d2b-broker.{socket,service}` | v1.0 socket-activated privileged dispatcher for every audited host mutation. |
 | Per-VM runner leaves | `d2b.slice/<vm>/<role>` | v1.0 broker-spawned runner cgroup leaves (replaces legacy `d2b-<vm>-{gpu,video,snd,swtpm,store-sync}.service`). |
 | Per-env runner leaves | `d2b.slice/sys-<env>/usbipd-{backend,proxy}` | v1.0 broker-spawned per-env USBIP runners (replaces legacy `d2b-sys-<env>-usbipd-{backend,proxy}.service`). |
 | Legacy per-VM lifecycle wrapper | `d2b@<vm>.service` | Retired in v1.0 (per ADR 0015); v1.0 lifecycle dispatches through `d2bd` → broker `SpawnRunner` instead. |
@@ -60,7 +60,7 @@ public workload target form is:
 During the v2 transition, `d2b.realms.<realm>.workloads.<workload>.legacyVmName`
 maps that public workload id to the existing local VM substrate. For example,
 `workloads.aad.legacyVmName = "work-aad"` makes `aad.work.d2b` resolve to the
-local `work-aad` VM for status and guest-control exec while preserving
+local `work-aad` VM for status and ComponentSession exec while preserving
 `/var/lib/d2b/vms/work-aad`.
 
 These constraints let the CLI, manifest, and host-side units resolve resources

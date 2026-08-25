@@ -195,7 +195,7 @@ pub fn security_key_factory_fingerprint()
 fn base_binding(
     member: &SemanticTypeContract,
 ) -> Result<ResourceApiBinding, ProviderContractError> {
-    ResourceApiBinding::new(
+    ResourceApiBinding::new_with_placement(
         member.resource_type().clone(),
         member.spec().version(),
         member.spec().fingerprint().clone(),
@@ -204,5 +204,6 @@ fn base_binding(
         StandardCapabilityMatrix::default(),
         None::<ExtensionSchemaRegistration>,
         None::<ExtensionSchemaRegistration>,
+        d2b_contracts_resource::v3::resource_schema::PlacementAnchor::Zone,
     )
 }

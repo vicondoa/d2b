@@ -18,7 +18,7 @@ let
   };
 
   cfg = (mkEval [ minimal ]).config;
-  svcCfg = cfg.systemd.services.d2b-priv-broker.serviceConfig or { };
+  svcCfg = cfg.systemd.services.d2b-broker.serviceConfig or { };
   sliceCfg = cfg.systemd.slices.d2b.sliceConfig or { };
   tmpfiles = cfg.systemd.tmpfiles.rules;
 in
@@ -56,7 +56,7 @@ in
     expected = {
       execStartPreAvoidsSetEnvironment = true;
       execStartAvoidsSetEnvironment = true;
-      usesOptionalUnitLocalEnvironmentFile = "-/run/d2b/broker/priv-broker.env";
+      usesOptionalUnitLocalEnvironmentFile = "-/run/d2b/broker/broker.env";
       environmentFileParentNotGroupWritable = true;
     };
   };

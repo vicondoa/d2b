@@ -10,7 +10,6 @@
 
 use d2b_contracts::audit_wire::validate_audit_page;
 pub use d2b_contracts::audit_wire::{AuditExportCursor, AuditExportEntry, AuditExportErrorCode};
-use d2b_contracts::auth_wire::AUTH_NONCE_LEN;
 pub use d2b_contracts::store_verify_wire::{
     StoreVerifyRequest, StoreVerifyResponse, StoreVerifyStatus, StoreVerifyUnknownReason,
 };
@@ -23,7 +22,8 @@ use d2b_contracts_resource::v3::process::{
     CapabilityClass, EnvironmentClass, NamespaceClass, UserNamespaceSpec,
 };
 use d2b_contracts_resource::v3::{
-    ArtifactId, IfName, ResourceBundleGenerationId, ResourceGeneration, ResourceRef, ResourceUid,
+    ActivationRunnerInput, ArtifactId, IfName, ResourceBundleGenerationId, ResourceGeneration,
+    ResourceRef, ResourceUid,
     execution_policy::ExecutionDomain, storage::ZoneStoreId,
 };
 use schemars::JsonSchema;
@@ -37,16 +37,6 @@ pub enum BrokerRequest {
     /// handoff. The broker resolves all host effects from its trusted
     /// installed-generation state; no path or command crosses the wire.
     ApplyHostGenerationHandoff(crate::host_generation::ApplyHostGenerationHandoff),
-    /// Launch one operation-scoped cutover runner before control-plane drain.
-    ///
-    /// The request must carry exactly one SCM_RIGHTS bootstrap descriptor.
-    /// The broker resolves the runner executable from its trusted server
-    /// configuration and never accepts a path or command over the wire.
-    LaunchCutoverRunner(LaunchCutoverRunnerRequest),
-    /// Append one durable, operation-scoped cutover audit record.
-    CutoverAudit(CutoverAuditRequest),
-    /// Dispatch one closed operation-scoped cutover or reset effect.
-    CutoverEffect(CutoverEffectRequest),
     ApplyNftables(ApplyNftablesRequest),
     /// Apply or remove one Provider-owned nftables projection.
     ///
@@ -93,7 +83,6 @@ pub enum BrokerRequest {
     /// the bootstrap `Hello` shape so the connection layer doesn't need
     /// a side-channel.
     Hello(HelloRequest),
-    GuestControlSign(GuestControlSignRequest),
     InjectSecretById(SecretByIdRequest),
     LaunchMinijailChild(LaunchMinijailChildRequest),
     ModprobeIfAllowed(ModprobeIfAllowedRequest),
@@ -338,310 +327,6 @@ pub struct ApplyHostGenerationHandoffResponse {
     pub summary: String,
 }
 
-/// Request to launch the one-shot cutover runner.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct LaunchCutoverRunnerRequest {
-    /// Opaque operation identity used to derive runner-owned state.
-    pub operation_id: BundleOpId,
-    /// Required index of the single bootstrap fd attachment.
-    pub bootstrap_fd_index: u32,
-    /// Digest of the capability transferred over the bootstrap fd. The broker
-    /// binds this value to the operation before spawning the runner.
-    pub capability_digest: CanonicalAuditDigest,
-    /// Capability expiry copied from the single-use bootstrap.
-    pub expires_at_ms: u64,
-}
-
-/// Response from the cutover runner launch.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct LaunchCutoverRunnerResponse {
-    /// Opaque operation identity.
-    pub operation_id: BundleOpId,
-    /// Child pid observed at launch.
-    pub pid: i32,
-    /// `/proc/<pid>/stat` start-time captured by the broker.
-    pub start_time_ticks: u64,
-    /// Index of the returned pidfd, when the broker supplies one.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub pidfd_index: Option<u32>,
-}
-
-/// Closed transition vocabulary for cutover audit publication.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
-#[serde(rename_all = "kebab-case")]
-pub enum CutoverAuditTransition {
-    /// A hold request was durably recorded.
-    HoldRequested,
-    /// A hold clear/resume was durably recorded.
-    HoldCleared,
-    /// A phase began after its journal record.
-    PhaseStarted,
-    /// A phase completed after its typed effect.
-    PhaseCompleted,
-    /// A typed effect began.
-    EffectStarted,
-    /// A typed effect completed.
-    EffectCompleted,
-    /// A terminal outcome was recorded.
-    Terminal,
-}
-
-impl CutoverAuditTransition {
-    /// Return the stable audit disposition label.
-    pub const fn as_str(self) -> &'static str {
-        match self {
-            Self::HoldRequested => "hold-requested",
-            Self::HoldCleared => "hold-cleared",
-            Self::PhaseStarted => "phase-started",
-            Self::PhaseCompleted => "phase-completed",
-            Self::EffectStarted => "effect-started",
-            Self::EffectCompleted => "effect-completed",
-            Self::Terminal => "terminal",
-        }
-    }
-}
-
-/// Request to publish one durable cutover audit transition.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct CutoverAuditRequest {
-    /// Operation identity bound by the runner capability.
-    pub operation_id: BundleOpId,
-    /// Current U3 phase number.
-    pub phase: u8,
-    /// Closed transition kind.
-    pub transition: CutoverAuditTransition,
-    /// Digest of the immutable operation request.
-    pub request_digest: CanonicalAuditDigest,
-    /// Digest of a bounded hold reason, when present.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub reason_digest: Option<CanonicalAuditDigest>,
-}
-
-/// Durable audit publication response.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct CutoverAuditResponse {
-    /// Stable record identity returned only after fsync and directory sync.
-    pub record_id: CanonicalAuditDigest,
-}
-
-/// Closed authority carried by a cutover effect request.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
-#[serde(rename_all = "kebab-case")]
-pub enum CutoverEffectAuthority {
-    /// Host-wide cutover authority.
-    Cutover,
-    /// Zone-scoped reset authority.
-    ResetZone,
-    /// Provider-scoped reset authority.
-    ResetProvider,
-    /// Guest-scoped reset authority.
-    ResetGuest,
-}
-
-/// Closed effect vocabulary shared with the U3 allowlist.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
-#[serde(rename_all = "kebab-case")]
-pub enum CutoverEffectKind {
-    HostDrain,
-    CutoverDisposition,
-    ResourceStoreCreate,
-    ProviderInstall,
-    ZoneActivation,
-    GuestActivation,
-    Verification,
-    CutoverFinalization,
-    ScopedZoneReset,
-    ScopedProviderReset,
-    ScopedGuestReset,
-    DestroyDurableVolume,
-    PreserveSource,
-    QuarantineDestination,
-    CutoverBroker,
-    ClosureActivation,
-    ApplyAdmission,
-}
-
-/// Typed payloads for cutover effects that reuse existing broker operations.
-///
-/// Every variant is itself a closed broker request. It carries no host path,
-/// command, uid/gid, or free-form mutation text.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
-#[serde(tag = "kind", content = "payload")]
-pub enum CutoverEffectPayload {
-    None,
-    ApplyAdmission(CutoverAdmissionRequest),
-    Storage(ReconcileStorageScopeRequest),
-    ZoneStore(OpenZoneStoreRequest),
-    StoreSync(StoreSyncRequest),
-    StoreVerify(StoreVerifyRequest),
-    Verification(CutoverVerificationRequest),
-    Activation(RunActivationRequest),
-    Systemd(Box<SystemdUnitRequest>),
-    Quarantine {
-        staged_id: BundleOpId,
-        source_id: BundleOpId,
-        marker_digest: CanonicalAuditDigest,
-    },
-    Finalization {
-        artifacts: Vec<ArtifactId>,
-        disposition_digest: CanonicalAuditDigest,
-        consent_digest: CanonicalAuditDigest,
-    },
-    DestroyDurableVolume {
-        storage_ref: BundleOpId,
-        marker_digest: CanonicalAuditDigest,
-        consent_digest: CanonicalAuditDigest,
-    },
-}
-
-/// Broker-owned phase-9 verification admission. The supplied Zone identities
-/// are expected evidence bindings only; the broker returns the live
-/// observations from its trusted bundle and host checks.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct CutoverVerificationRequest {
-    pub expected_zone_ids: Vec<BundleOpId>,
-}
-
-/// One broker-owned Zone verification observation.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct CutoverZoneVerification {
-    pub zone_id: BundleOpId,
-    pub healthy: bool,
-}
-
-/// Broker-owned phase-9 verification observations.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct CutoverVerificationResponse {
-    pub zones: Vec<CutoverZoneVerification>,
-    pub sources_preserved: bool,
-    pub identity_digests_match: bool,
-    pub candidate_current: bool,
-}
-
-/// Broker-owned apply admission observations. These fields are never
-/// caller-authored; the broker derives them from its trusted bundle and live
-/// host ownership state.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct CutoverAdmissionResponse {
-    pub candidate_current: bool,
-    pub markers_valid: bool,
-    pub ownership_valid: bool,
-    pub predicates_hold: bool,
-}
-
-/// Typed request for the broker-owned apply admission observation.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct CutoverAdmissionRequest {
-    /// Candidate artifact resolved and verified before host drain.
-    pub system_artifact_id: Option<ArtifactId>,
-    /// Preserved source artifact resolved and verified before host drain.
-    pub source_system_artifact_id: Option<ArtifactId>,
-}
-
-/// Closed replay behavior for an operation-scoped effect.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
-#[serde(rename_all = "kebab-case")]
-pub enum CutoverReplayClass {
-    Repeatable,
-    ReopenByJournaledIdentity,
-    QuarantineOnly,
-}
-
-impl CutoverEffectAuthority {
-    /// Return whether this authority permits the effect kind.
-    pub const fn permits(self, effect: CutoverEffectKind) -> bool {
-        match self {
-            Self::Cutover => !matches!(
-                effect,
-                CutoverEffectKind::ScopedZoneReset
-                    | CutoverEffectKind::ScopedProviderReset
-                    | CutoverEffectKind::ScopedGuestReset
-                    | CutoverEffectKind::DestroyDurableVolume
-            ),
-            Self::ResetZone => matches!(
-                effect,
-                CutoverEffectKind::ApplyAdmission
-                    | CutoverEffectKind::ScopedZoneReset
-                    | CutoverEffectKind::DestroyDurableVolume
-                    | CutoverEffectKind::PreserveSource
-                    | CutoverEffectKind::QuarantineDestination
-                    | CutoverEffectKind::Verification
-            ),
-            Self::ResetProvider => matches!(
-                effect,
-                CutoverEffectKind::ApplyAdmission
-                    | CutoverEffectKind::ScopedProviderReset
-                    | CutoverEffectKind::DestroyDurableVolume
-                    | CutoverEffectKind::PreserveSource
-                    | CutoverEffectKind::QuarantineDestination
-                    | CutoverEffectKind::Verification
-            ),
-            Self::ResetGuest => matches!(
-                effect,
-                CutoverEffectKind::ApplyAdmission
-                    | CutoverEffectKind::ScopedGuestReset
-                    | CutoverEffectKind::DestroyDurableVolume
-                    | CutoverEffectKind::PreserveSource
-                    | CutoverEffectKind::QuarantineDestination
-                    | CutoverEffectKind::Verification
-            ),
-        }
-    }
-}
-
-/// Typed operation-scoped effect request.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct CutoverEffectRequest {
-    pub operation_id: BundleOpId,
-    pub authority: CutoverEffectAuthority,
-    pub phase: u8,
-    pub effect_id: BundleOpId,
-    pub effect: CutoverEffectKind,
-    pub replay_class: CutoverReplayClass,
-    pub request_digest: CanonicalAuditDigest,
-    pub capability_digest: CanonicalAuditDigest,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub identity: Option<BundleOpId>,
-    /// Existing typed generation handoff used only by `ClosureActivation`.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub handoff: Option<crate::host_generation::ApplyHostGenerationHandoff>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub payload: Option<CutoverEffectPayload>,
-}
-
-/// Typed effect result.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
-#[serde(rename_all = "kebab-case")]
-pub enum CutoverEffectOutcome {
-    Succeeded,
-    Failed,
-    Ambiguous,
-}
-
-/// Typed operation-scoped effect response.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct CutoverEffectResponse {
-    pub outcome: CutoverEffectOutcome,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub identity: Option<BundleOpId>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub verification: Option<CutoverVerificationResponse>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub admission: Option<CutoverAdmissionResponse>,
-    pub audit_record_id: CanonicalAuditDigest,
-}
-
 impl BrokerRequest {
     /// Stable operation name for audit records.
     ///
@@ -652,9 +337,6 @@ impl BrokerRequest {
     pub fn op_name(&self) -> &'static str {
         match self {
             Self::ApplyHostGenerationHandoff(_) => "ApplyHostGenerationHandoff",
-            Self::LaunchCutoverRunner(_) => "LaunchCutoverRunner",
-            Self::CutoverAudit(_) => "CutoverAudit",
-            Self::CutoverEffect(_) => "CutoverEffect",
             Self::ApplyNftables(_) => "ApplyNftables",
             Self::ApplyNftablesProjection(_) => "ApplyNftablesProjection",
             Self::ApplyNmUnmanaged(_) => "ApplyNmUnmanaged",
@@ -670,7 +352,6 @@ impl BrokerRequest {
             Self::DelegateCgroupV2(_) => "DelegateCgroupV2",
             Self::ExportBrokerAudit(_) => "ExportBrokerAudit",
             Self::Hello(_) => "Hello",
-            Self::GuestControlSign(_) => "GuestControlSign",
             Self::InjectSecretById(_) => "InjectSecretById",
             Self::LaunchMinijailChild(_) => "LaunchMinijailChild",
             Self::ModprobeIfAllowed(_) => "ModprobeIfAllowed",
@@ -744,6 +425,15 @@ impl BrokerRequest {
         }
     }
 
+    /// Return whether this request is admitted by a fixed broker profile.
+    ///
+    /// The profile is selected by the broker process at startup. It is not
+    /// carried on the wire, so a request cannot switch or widen the active
+    /// authority domain.
+    pub fn allowed_by_profile(&self, profile: BrokerProfile) -> bool {
+        profile.allows_request(self)
+    }
+
     /// Stable category label for the audit's "opaque_target_id"
     /// column. Mirrors `BootstrapCall::opaque_target_id` semantics:
     /// classify the kind of target without leaking caller-supplied
@@ -752,7 +442,6 @@ impl BrokerRequest {
     pub fn opaque_target_id(&self) -> &'static str {
         match self {
             Self::Hello(_) => "daemon-handshake",
-            Self::GuestControlSign(_) => "guest-control-auth",
             Self::ValidateBundle => "bundle",
             Self::ResourceActivationAudit(_) => "resource-activation-audit",
             Self::ExportBrokerAudit(_) => "audit-log",
@@ -858,10 +547,6 @@ impl BrokerRequest {
             Self::DelegateCgroupV2(request) => (
                 request.scope_id.to_string(),
                 format!("{}:{}", self.op_name(), request.scope_id),
-            ),
-            Self::GuestControlSign(request) => (
-                request.vm_id.to_string(),
-                format!("{}:{}", self.op_name(), request.vm_id),
             ),
             Self::InjectSecretById(request)
             | Self::ReadSecretById(request)
@@ -1074,15 +759,6 @@ impl BrokerRequest {
                     request.intent.target_generation
                 ),
             ),
-            Self::LaunchCutoverRunner(request) => (
-                request.operation_id.to_string(),
-                format!(
-                    "{}:{}:{}",
-                    self.op_name(),
-                    request.operation_id,
-                    request.bootstrap_fd_index
-                ),
-            ),
             Self::RunActivation(request) => (
                 request.vm.clone(),
                 format!(
@@ -1234,17 +910,12 @@ impl BrokerRequest {
             Self::ValidateBundle
             | Self::ExportBrokerAudit(_)
             | Self::Hello(_)
-            | Self::CutoverAudit(_)
-            | Self::CutoverEffect(_)
             | Self::PauseBroker
             | Self::PollChildReaped
             | Self::ResumeBroker => return None,
         };
         Some((
-            d2b_contracts_resource::v3::canonical_digest(
-                "d2b:broker-zone:v2",
-                scope.as_bytes(),
-            ),
+            d2b_contracts_resource::v3::canonical_digest("d2b:broker-zone:v2", scope.as_bytes()),
             d2b_contracts_resource::v3::canonical_digest(
                 "d2b:broker-operation:v2",
                 operation.as_bytes(),
@@ -1261,8 +932,6 @@ impl BrokerRequest {
             Self::OpenPeerPidfdFromAcceptedSocket(_)
                 | Self::ValidateBundle
                 | Self::ExportBrokerAudit(_)
-                | Self::CutoverAudit(_)
-                | Self::CutoverEffect(_)
                 | Self::Hello(_)
                 | Self::PauseBroker
                 | Self::PollChildReaped
@@ -1270,6 +939,275 @@ impl BrokerRequest {
         )
     }
 }
+
+/// Fixed privileged-broker authority profiles.
+///
+/// Host and Guest use the same wire and executable, but each process starts
+/// with one closed operation catalog. The catalog is deliberately kept next
+/// to the wire operation names so adding a request requires an explicit
+/// profile decision.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum BrokerProfile {
+    /// Host and realm authorities may use the complete host catalog.
+    Host,
+    /// Guest authorities may use only local process effects and read-only
+    /// broker lifecycle operations.
+    Guest,
+}
+
+impl BrokerProfile {
+    /// Stable process-start profile label.
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Host => "host",
+            Self::Guest => "guest",
+        }
+    }
+
+    /// Closed Host operation catalog.
+    pub const fn host_operations() -> &'static [&'static str] {
+        HOST_OPERATION_CATALOG
+    }
+
+    /// Closed Guest operation catalog.
+    pub const fn guest_operations() -> &'static [&'static str] {
+        GUEST_OPERATION_CATALOG
+    }
+
+    /// Return the operation catalog for this profile.
+    pub const fn operations(self) -> &'static [&'static str] {
+        match self {
+            Self::Host => Self::host_operations(),
+            Self::Guest => Self::guest_operations(),
+        }
+    }
+
+    /// Check the stable operation name against the profile catalog.
+    pub fn allows_operation(self, operation: &str) -> bool {
+        self.operations().contains(&operation)
+    }
+
+    /// Check both the closed catalog and profile-specific target constraints.
+    pub fn allows_request(self, request: &BrokerRequest) -> bool {
+        if !self.allows_operation(request.op_name()) {
+            return false;
+        }
+        match self {
+            Self::Host => !Self::request_targets_guest(request),
+            Self::Guest => match request {
+                BrokerRequest::SpawnRunner(request) => {
+                    request
+                        .execution_ref
+                        .as_ref()
+                        .is_some_and(|target| target.resource_type().as_str() == "Guest")
+                        && GUEST_LOCAL_RUNNER_ROLES.contains(&request.role)
+                        && request.guest_execution.as_ref().is_some_and(GuestExecutionBinding::is_valid)
+                }
+                BrokerRequest::StartSystemdUnit(request)
+                | BrokerRequest::ObserveSystemdUnit(request)
+                | BrokerRequest::CheckSystemdUserManager(request) => request
+                    .execution_ref
+                    .as_ref()
+                    .is_some_and(|target| target.resource_type().as_str() == "Guest")
+                    && request
+                        .guest_execution
+                        .as_ref()
+                        .is_some_and(GuestExecutionBinding::is_valid),
+                BrokerRequest::OpenPidfd(request) => request
+                    .guest_execution
+                    .as_ref()
+                    .is_some_and(GuestExecutionBinding::is_valid),
+                BrokerRequest::ObserveRunner(request) => request
+                    .guest_execution
+                    .as_ref()
+                    .is_some_and(GuestExecutionBinding::is_valid),
+                BrokerRequest::OpenSystemdUnitPidfd(request) => request
+                    .unit
+                    .execution_ref
+                    .as_ref()
+                    .is_some_and(|target| target.resource_type().as_str() == "Guest")
+                    && request
+                        .unit
+                        .guest_execution
+                        .as_ref()
+                        .is_some_and(GuestExecutionBinding::is_valid),
+                BrokerRequest::StopSystemdUnit(request) => request
+                    .unit
+                    .execution_ref
+                    .as_ref()
+                    .is_some_and(|target| target.resource_type().as_str() == "Guest")
+                    && request
+                        .unit
+                        .guest_execution
+                        .as_ref()
+                        .is_some_and(GuestExecutionBinding::is_valid),
+                BrokerRequest::SignalRunner(request) => request
+                    .guest_execution
+                    .as_ref()
+                    .is_some_and(GuestExecutionBinding::is_valid),
+                BrokerRequest::DeregisterRunnerPidfd(request) => request
+                    .guest_execution
+                    .as_ref()
+                    .is_some_and(GuestExecutionBinding::is_valid),
+                _ => true,
+            },
+        }
+    }
+
+    fn request_targets_guest(request: &BrokerRequest) -> bool {
+        match request {
+            BrokerRequest::SpawnRunner(request) => request
+                .execution_ref
+                .as_ref()
+                .is_some_and(|target| target.resource_type().as_str() == "Guest")
+                || request.guest_execution.is_some(),
+            BrokerRequest::StartSystemdUnit(request)
+            | BrokerRequest::ObserveSystemdUnit(request)
+            | BrokerRequest::CheckSystemdUserManager(request) => request
+                .execution_ref
+                .as_ref()
+                .is_some_and(|target| target.resource_type().as_str() == "Guest")
+                || request.guest_execution.is_some(),
+            BrokerRequest::OpenSystemdUnitPidfd(request) => {
+                request.unit.guest_execution.is_some()
+                    || request
+                        .unit
+                        .execution_ref
+                        .as_ref()
+                        .is_some_and(|target| target.resource_type().as_str() == "Guest")
+            }
+            BrokerRequest::StopSystemdUnit(request) => {
+                request.unit.guest_execution.is_some()
+                    || request
+                        .unit
+                        .execution_ref
+                        .as_ref()
+                        .is_some_and(|target| target.resource_type().as_str() == "Guest")
+            }
+            BrokerRequest::OpenPidfd(request) => request.guest_execution.is_some(),
+            BrokerRequest::ObserveRunner(request) => request.guest_execution.is_some(),
+            BrokerRequest::SignalRunner(request) => request.guest_execution.is_some(),
+            BrokerRequest::DeregisterRunnerPidfd(request) => request.guest_execution.is_some(),
+            _ => false,
+        }
+    }
+}
+
+/// Every request currently defined by the broker wire. Host mode is closed
+/// over this list rather than using an open-ended default.
+pub const HOST_OPERATION_CATALOG: &[&str] = &[
+    "ApplyHostGenerationHandoff",
+    "ApplyNftables",
+    "ApplyNftablesProjection",
+    "ApplyNmUnmanaged",
+    "ApplyRoute",
+    "ApplySysctl",
+    "BindUnixSocket",
+    "CreateOrReconcileUsersGroups",
+    "CreateBridge",
+    "DeleteBridge",
+    "CreatePersistentTap",
+    "DeletePersistentTap",
+    "CreateTapFd",
+    "DelegateCgroupV2",
+    "ExportBrokerAudit",
+    "Hello",
+    "InjectSecretById",
+    "LaunchMinijailChild",
+    "ModprobeIfAllowed",
+    "OpenCgroupDir",
+    "OpenDevice",
+    "OpenFuse",
+    "OpenHidrawSecurityKey",
+    "OpenKvm",
+    "QemuMediaEnroll",
+    "QemuMediaRefreshRegistry",
+    "QemuMediaBoot",
+    "QemuMediaSystemPowerdown",
+    "QemuMediaQueryStatus",
+    "QemuMediaQuit",
+    "QemuMediaAttach",
+    "QemuMediaDetach",
+    "OpenPidfd",
+    "OpenPeerPidfdFromAcceptedSocket",
+    "ObserveRunner",
+    "PipeWireAudio",
+    "StartSystemdUnit",
+    "CheckSystemdUserManager",
+    "ObserveSystemdUnit",
+    "OpenSystemdUnitPidfd",
+    "StopSystemdUnit",
+    "OpenZoneStore",
+    "OpenVhostNet",
+    "PauseBroker",
+    "PollChildReaped",
+    "PrepareRuntimeDir",
+    "PrepareStateDir",
+    "MigrateLegacySwtpmState",
+    "ReconcileStorageScope",
+    "ValidateLockSpec",
+    "PrepareStoreView",
+    "StoreSync",
+    "StoreVerify",
+    "ReadSecretById",
+    "ResumeBroker",
+    "RotateSecretById",
+    "RunHostInstall",
+    "RunMigrate",
+    "RunActivation",
+    "RunGc",
+    "RunKeysRotate",
+    "RunHostKeyTrust",
+    "RunRotateKnownHost",
+    "SetBridgePortFlags",
+    "SetSocketAcl",
+    "SetupMountNamespace",
+    "CgroupKill",
+    "SignalRunner",
+    "DeregisterRunnerPidfd",
+    "SpawnRunner",
+    "UpdateHostsFile",
+    "UsbipBind",
+    "UsbipBindFirewallRule",
+    "UsbipProxyReconcile",
+    "UsbipUnbind",
+    "UsbipExplicitBind",
+    "UsbipExplicitFirewallRule",
+    "ResourceActivationAudit",
+    "ValidateBundle",
+    "SeedDnsmasqLease",
+    "BindMountFromHardlinkFarm",
+    "OwnershipMatrixCheck",
+    "SshHostKeyPreflight",
+    "DiskInit",
+    "SecurityKeyOpenDevice",
+    "SecurityKeyApplyUdevRules",
+];
+
+/// Guest-local process and broker lifecycle effects. Host networking,
+/// devices, storage, realm, and allocator operations are intentionally
+/// absent from this catalog.
+pub const GUEST_OPERATION_CATALOG: &[&str] = &[
+    "Hello",
+    "ExportBrokerAudit",
+    "ValidateBundle",
+    "OpenPidfd",
+    "OpenPeerPidfdFromAcceptedSocket",
+    "ObserveRunner",
+    "StartSystemdUnit",
+    "CheckSystemdUserManager",
+    "ObserveSystemdUnit",
+    "OpenSystemdUnitPidfd",
+    "StopSystemdUnit",
+    "PollChildReaped",
+    "PrepareRuntimeDir",
+    "PrepareStateDir",
+    "SetupMountNamespace",
+    "CgroupKill",
+    "SignalRunner",
+    "DeregisterRunnerPidfd",
+    "SpawnRunner",
+];
 
 /// Broker-side installer driver. The broker resolves the bundle's
 /// `installer:host` intent row (synthesised by
@@ -1451,12 +1389,6 @@ pub struct HelloRequest {
 pub enum BrokerResponse {
     /// Result of one source-to-target generation handoff.
     ApplyHostGenerationHandoff(ApplyHostGenerationHandoffResponse),
-    /// Result of launching the operation-scoped cutover runner.
-    LaunchCutoverRunner(LaunchCutoverRunnerResponse),
-    /// Durable cutover audit publication result.
-    CutoverAudit(CutoverAuditResponse),
-    /// Typed operation-scoped effect result.
-    CutoverEffect(CutoverEffectResponse),
     Ack(AckResponse),
     CreatePersistentTap(TapReadyResponse),
     CreateTapFd(TapReadyResponse),
@@ -1480,7 +1412,6 @@ pub enum BrokerResponse {
     /// capability-negotiate and the broker can audit the connection
     /// without a separate side-channel.
     Hello(HelloResponse),
-    GuestControlSign(GuestControlSignResponse),
     QemuMediaEnroll(QemuMediaEnrollResponse),
     QemuMediaRefreshRegistry(QemuMediaRefreshRegistryResponse),
     QemuMediaBoot(QemuMediaHotplugResponse),
@@ -1824,114 +1755,6 @@ fn default_audit_export_limit() -> u32 {
     256
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
-#[serde(rename_all = "kebab-case")]
-pub enum GuestControlProofRole {
-    HostProof,
-    GuestProof,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
-#[serde(rename_all = "kebab-case")]
-pub enum GuestControlDirection {
-    HostToGuest,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
-#[serde(rename_all = "kebab-case")]
-pub enum GuestControlAuthPurpose {
-    GuestControlAuthV1,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(transparent)]
-pub struct GuestBootIdWire(pub String);
-
-impl GuestBootIdWire {
-    pub fn new(value: impl Into<String>) -> Self {
-        Self(value.into())
-    }
-
-    pub fn as_str(&self) -> &str {
-        &self.0
-    }
-}
-
-impl JsonSchema for GuestBootIdWire {
-    fn schema_name() -> String {
-        "GuestBootIdWire".to_owned()
-    }
-
-    fn json_schema(_gen: &mut schemars::r#gen::SchemaGenerator) -> schemars::schema::Schema {
-        schemars::schema::Schema::Object(schemars::schema::SchemaObject {
-            instance_type: Some(schemars::schema::SingleOrVec::Single(Box::new(
-                schemars::schema::InstanceType::String,
-            ))),
-            string: Some(Box::new(schemars::schema::StringValidation {
-                min_length: Some(1),
-                max_length: Some(128),
-                ..Default::default()
-            })),
-            ..Default::default()
-        })
-    }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct GuestControlSignRequest {
-    pub vm_id: VmId,
-    pub role: GuestControlProofRole,
-    pub protocol_version: u32,
-    pub direction: GuestControlDirection,
-    pub purpose: GuestControlAuthPurpose,
-    pub guest_control_port: u32,
-    #[serde(default)]
-    pub peer_cid: Option<u32>,
-    #[schemars(length(min = 32, max = 32))]
-    pub host_nonce: Vec<u8>,
-    #[schemars(length(min = 32, max = 32))]
-    pub guest_nonce: Vec<u8>,
-    pub guest_boot_id: GuestBootIdWire,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub capabilities_hash: Option<String>,
-    #[serde(default)]
-    pub tracing_span_id: Option<TracingSpanId>,
-}
-
-impl GuestControlSignRequest {
-    pub fn validate_shape(&self) -> Result<(), &'static str> {
-        if self.host_nonce.len() != AUTH_NONCE_LEN || self.guest_nonce.len() != AUTH_NONCE_LEN {
-            return Err("nonce-length");
-        }
-        if self.guest_boot_id.as_str().is_empty() || self.guest_boot_id.as_str().len() > 128 {
-            return Err("guest-boot-id");
-        }
-        match self.role {
-            GuestControlProofRole::HostProof if self.capabilities_hash.is_some() => {
-                Err("host-proof-capabilities-hash")
-            }
-            GuestControlProofRole::GuestProof => {
-                let Some(hash) = self.capabilities_hash.as_ref() else {
-                    return Err("guest-proof-missing-capabilities-hash");
-                };
-                if hash.is_empty() || hash.len() > 128 {
-                    return Err("capabilities-hash");
-                }
-                Ok(())
-            }
-            _ => Ok(()),
-        }
-    }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct GuestControlSignResponse {
-    #[schemars(length(min = 32, max = 32))]
-    pub tag: Vec<u8>,
-}
-
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct SecretByIdRequest {
@@ -2165,6 +1988,35 @@ pub struct QemuMediaHotplugResponse {
     pub events: Vec<QemuMediaHotplugEvent>,
 }
 
+/// Exact authenticated binding for a Guest-local Process lifecycle.
+///
+/// The values are commitments, not raw boot identifiers or transport
+/// handles. A Guest broker requires this tuple for every target-local
+/// Process operation and revalidates the boot commitment against its own
+/// kernel before executing the request.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct GuestExecutionBinding {
+    pub target_uid: ResourceUid,
+    pub boot_identity_digest: [u8; 32],
+    pub session_generation: u64,
+    pub assignment_epoch: u64,
+    pub provider_generation: u64,
+    pub controller_generation: u64,
+}
+
+impl GuestExecutionBinding {
+    /// Return whether all Guest execution commitments are populated.
+    pub fn is_valid(&self) -> bool {
+        self.target_uid.as_str().len() > 0
+            && self.boot_identity_digest != [0; 32]
+            && self.session_generation > 0
+            && self.assignment_epoch > 0
+            && self.provider_generation > 0
+            && self.controller_generation > 0
+    }
+}
+
 /// OpenPidfd daemon-side reconcile-and-adopt support. The daemon's
 /// `d2bd::supervisor::state::reconcile_and_adopt` loop sends this
 /// request for every snapshot the classifier returned `Adopt` for. The
@@ -2203,6 +2055,9 @@ pub struct OpenPidfdRequest {
     pub resource_ref: Option<ResourceRef>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub resource_uid: Option<ResourceUid>,
+    /// Exact Guest target/session binding for target-local Process adoption.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub guest_execution: Option<GuestExecutionBinding>,
     #[serde(default)]
     pub tracing_span_id: Option<TracingSpanId>,
 }
@@ -2252,6 +2107,9 @@ pub struct ObserveRunnerRequest {
     pub resource_ref: Option<ResourceRef>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub resource_uid: Option<ResourceUid>,
+    /// Exact Guest target/session binding for target-local Process adoption.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub guest_execution: Option<GuestExecutionBinding>,
     #[serde(default)]
     pub tracing_span_id: Option<TracingSpanId>,
 }
@@ -2354,6 +2212,9 @@ pub struct SystemdUnitIdentity {
     pub generation: u64,
     /// Content identity of the broker-resolved trusted bundle.
     pub bundle_content_identity: String,
+    /// Exact Guest target/session binding, when this is Guest-local.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub guest_execution: Option<GuestExecutionBinding>,
 }
 
 /// Shared trusted request fields for systemd unit operations.
@@ -2391,6 +2252,9 @@ pub struct SystemdUnitRequest {
     /// Canonical User resource bound to a user-domain launch.
     #[serde(default)]
     pub user_ref: Option<ResourceRef>,
+    /// Exact Guest target/session binding for target-local Process operations.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub guest_execution: Option<GuestExecutionBinding>,
     /// Typed sandbox requirements enforced by the broker's systemd launch
     /// adapter. Legacy VM runner callers omit this field.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -2975,6 +2839,9 @@ pub struct SignalRunnerRequest {
     pub resource_ref: Option<ResourceRef>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub resource_uid: Option<ResourceUid>,
+    /// Exact Guest target/session binding for target-local Process control.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub guest_execution: Option<GuestExecutionBinding>,
     #[serde(default)]
     pub tracing_span_id: Option<TracingSpanId>,
 }
@@ -3011,6 +2878,9 @@ pub struct DeregisterRunnerPidfdRequest {
     pub resource_ref: Option<ResourceRef>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub resource_uid: Option<ResourceUid>,
+    /// Exact Guest target/session binding for target-local Process cleanup.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub guest_execution: Option<GuestExecutionBinding>,
     #[serde(default)]
     pub tracing_span_id: Option<TracingSpanId>,
 }
@@ -3043,6 +2913,9 @@ pub enum RunnerRole {
     /// QEMU media runtime scaffold. The runtime Provider owns argv planning;
     /// the broker consumes the bundle-authoritative launch shape.
     QemuMedia,
+    /// Target-local one-shot NixOS activation runner. Guest mode may spawn
+    /// this role only from the bundle-authoritative process intent.
+    ActivationNixos,
     /// virtiofsd sidecar; one per `microvm.shares` row. The daemon/bundle
     /// provides argv from `nixos-modules/processes-json.nix`.
     Virtiofsd,
@@ -3101,6 +2974,7 @@ impl RunnerRole {
         match self {
             Self::CloudHypervisor => "cloud-hypervisor",
             Self::QemuMedia => "qemu-media",
+            Self::ActivationNixos => "activation-nixos-runner",
             Self::Virtiofsd => "virtiofsd",
             Self::Swtpm => "swtpm",
             Self::SwtpmFlush => "swtpm-flush",
@@ -3114,6 +2988,14 @@ impl RunnerRole {
         }
     }
 }
+
+/// Closed set of runner roles that a Guest broker may spawn locally.
+///
+/// The current runner vocabulary contains mostly host-side VM, device, relay,
+/// observability, and compositor helpers. The activation runner is the one
+/// explicitly Guest-local role; future Guest Process roles must be added here
+/// together with their signed bundle contract and identity fencing.
+pub const GUEST_LOCAL_RUNNER_ROLES: &[RunnerRole] = &[RunnerRole::ActivationNixos];
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -3141,6 +3023,9 @@ pub struct SpawnRunnerRequest {
     pub template_identity: Option<[u8; 32]>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub generation: Option<u64>,
+    /// Typed stdin input admitted only for the activation-nixos runner role.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub activation_input: Option<ActivationRunnerInput>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub sandbox_plan: Option<SandboxLaunchPlan>,
     /// Role selector - picks the argv generator the broker applies to
@@ -3162,6 +3047,9 @@ pub struct SpawnRunnerRequest {
     /// Canonical User resource bound to a user-domain launch.
     #[serde(default)]
     pub user_ref: Option<ResourceRef>,
+    /// Exact Guest target/session binding for target-local Process launches.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub guest_execution: Option<GuestExecutionBinding>,
     /// Optional vsock CID / TAP fd slot allocated by the daemon at
     /// host-prepare time. The broker validates each entry against the
     /// bundle row and refuses any unexpected allocation slot. None
@@ -3231,6 +3119,8 @@ pub struct SpawnRunnerResponse {
     pub execution_domain: Option<ExecutionDomain>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub user_ref: Option<ResourceRef>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub guest_execution: Option<GuestExecutionBinding>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub provider_identity: Option<[u8; 32]>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -3349,11 +3239,6 @@ pub enum BrokerCallerRole {
     RootUid {
         uid: u32,
     },
-    /// Operation-scoped runner peer admitted only to closed cutover ops.
-    CutoverRunner {
-        operation_id: BundleOpId,
-        capability_digest: CanonicalAuditDigest,
-    },
     #[default]
     NotAuthorized,
 }
@@ -3363,17 +3248,11 @@ impl BrokerCallerRole {
         matches!(self, Self::AdminUid { .. })
     }
 
-    /// Return whether this is the operation-scoped runner peer class.
-    pub fn is_cutover_runner(&self) -> bool {
-        matches!(self, Self::CutoverRunner { .. })
-    }
-
     pub fn for_display(&self) -> &'static str {
         match self {
             Self::AdminUid { .. } => "d2b-admin",
             Self::LauncherUid { .. } => "d2b-launcher",
             Self::RootUid { .. } => "RootUid",
-            Self::CutoverRunner { .. } => "d2b-cutover-runner",
             Self::NotAuthorized => "d2b-not-authorized",
         }
     }
@@ -3637,17 +3516,6 @@ mod tests {
             "d2b-admin"
         );
         assert_eq!(
-            BrokerCallerRole::CutoverRunner {
-                operation_id: BundleOpId::new("op"),
-                capability_digest: CanonicalAuditDigest::parse(
-                    "sha256:".to_owned() + &"a".repeat(64)
-                )
-                .unwrap(),
-            }
-            .for_display(),
-            "d2b-cutover-runner"
-        );
-        assert_eq!(
             BrokerCallerRole::NotAuthorized.for_display(),
             "d2b-not-authorized"
         );
@@ -3659,13 +3527,6 @@ mod tests {
             BrokerCallerRole::AdminUid { uid: 1000 },
             BrokerCallerRole::LauncherUid { uid: 1001 },
             BrokerCallerRole::RootUid { uid: 0 },
-            BrokerCallerRole::CutoverRunner {
-                operation_id: BundleOpId::new("op"),
-                capability_digest: CanonicalAuditDigest::parse(
-                    "sha256:".to_owned() + &"a".repeat(64),
-                )
-                .unwrap(),
-            },
             BrokerCallerRole::NotAuthorized,
         ] {
             let json = serde_json::to_string(&role).unwrap();
@@ -4380,6 +4241,113 @@ mod tests {
         }
     }
 
+    fn spawn_runner_for_profile(role: RunnerRole, execution_ref: &str) -> BrokerRequest {
+        BrokerRequest::SpawnRunner(SpawnRunnerRequest {
+            vm_id: VmId::new("guest-vm"),
+            role_id: RoleId::new(role.as_str()),
+            resource_ref: None,
+            resource_uid: None,
+            bundle_content_identity: None,
+            provider_identity: None,
+            template_identity: None,
+            generation: None,
+            activation_input: None,
+            sandbox_plan: None,
+            role,
+            bundle_runner_intent_ref: BundleOpId::new("runner:test"),
+            execution_ref: Some(ResourceRef::parse(execution_ref).expect("valid execution ref")),
+            execution_domain: None,
+            user_ref: None,
+            guest_execution: None,
+            runtime_allocations: Vec::new(),
+            tracing_span_id: None,
+            workload_identity: None,
+        })
+    }
+
+    #[test]
+    fn profile_spawn_runner_role_matrix_is_closed() {
+        // No current RunnerRole is Guest-local. Guest Process resources use
+        // the dedicated local effect classes instead; a future runner role
+        // must be added to this allowlist deliberately.
+        let guest_local_roles: &[RunnerRole] = &[];
+        let all_roles = [
+            RunnerRole::CloudHypervisor,
+            RunnerRole::QemuMedia,
+            RunnerRole::Virtiofsd,
+            RunnerRole::Swtpm,
+            RunnerRole::SwtpmFlush,
+            RunnerRole::Gpu,
+            RunnerRole::Audio,
+            RunnerRole::Video,
+            RunnerRole::VsockRelay,
+            RunnerRole::Usbip,
+            RunnerRole::OtelHostBridge,
+            RunnerRole::WaylandProxy,
+        ];
+
+        for role in all_roles {
+            let expected_guest = guest_local_roles.contains(&role);
+            assert_eq!(
+                spawn_runner_for_profile(role, "Guest/guest-vm")
+                    .allowed_by_profile(BrokerProfile::Guest),
+                expected_guest,
+                "Guest profile role {} must match the closed Guest-local allowlist",
+                role.as_str()
+            );
+            assert!(
+                !spawn_runner_for_profile(role, "Host/host")
+                    .allowed_by_profile(BrokerProfile::Guest),
+                "Guest profile must reject Host execution ref for {}",
+                role.as_str()
+            );
+            assert!(
+                !spawn_runner_for_profile(role, "Guest/guest-vm")
+                    .allowed_by_profile(BrokerProfile::Host),
+                "Host profile must reject Guest execution ref {}",
+                role.as_str()
+            );
+            assert!(
+                spawn_runner_for_profile(role, "Host/host").allowed_by_profile(BrokerProfile::Host),
+                "Host profile behavior changed for Host execution ref {}",
+                role.as_str()
+            );
+        }
+    }
+
+    #[test]
+    fn guest_profile_requires_a_complete_target_execution_binding() {
+        let mut request = spawn_runner_for_profile(
+            RunnerRole::ActivationNixos,
+            "Guest/guest-vm",
+        );
+        request = match request {
+            BrokerRequest::SpawnRunner(mut request) => {
+                request.guest_execution = Some(GuestExecutionBinding {
+                    target_uid: ResourceUid::parse(
+                        "123e4567-e89b-42d3-a456-426614174000",
+                    )
+                    .expect("Guest UID"),
+                    boot_identity_digest: [7; 32],
+                    session_generation: 2,
+                    assignment_epoch: 3,
+                    provider_generation: 4,
+                    controller_generation: 5,
+                });
+                BrokerRequest::SpawnRunner(request)
+            }
+            _ => unreachable!("helper always builds SpawnRunner"),
+        };
+        assert!(request.allowed_by_profile(BrokerProfile::Guest));
+        assert!(!request.allowed_by_profile(BrokerProfile::Host));
+
+        let BrokerRequest::SpawnRunner(mut invalid) = request else {
+            unreachable!("helper always builds SpawnRunner");
+        };
+        invalid.guest_execution.as_mut().unwrap().assignment_epoch = 0;
+        assert!(!BrokerRequest::SpawnRunner(invalid).allowed_by_profile(BrokerProfile::Guest));
+    }
+
     #[test]
     fn spawn_runner_rejects_each_legacy_authority_field() {
         // argv, env, uid, gid, caps, seccomp_profile,
@@ -4563,6 +4531,7 @@ mod tests {
             execution_ref: None,
             execution_domain: None,
             user_ref: None,
+            guest_execution: None,
             provider_identity: None,
             template_identity: None,
             generation: None,

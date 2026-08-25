@@ -239,7 +239,7 @@ let
             assertion = builtins.elem (attrOr entry "cleanupPolicy" "never")
               [
                 "never" "boot" "process-exit-with-proof" "vm-stop-with-proof"
-                "cutover-only" "owner-controlled" "external" "process-exit"
+                "owner-controlled" "external" "process-exit"
               ];
             message = "${where}.cleanupPolicy is invalid.";
           }

@@ -66,8 +66,9 @@ the Core-issued authority lease and relay LaunchTicket private.
 
 The Host relay is unprivileged and receives only the opaque LaunchTicket. The
 Guest frontend is user-domain and receives only its Core-issued attachment.
-This crate declares those workers; Core and the existing process system
-provide their actual placement and supervision.
+For an authored Binding, this crate declares the Guest frontend `Process` and
+`Endpoint` children, including the admitted workload User identity. Core and
+the existing process system provide their actual placement and supervision.
 
 ## Placement and dependencies
 

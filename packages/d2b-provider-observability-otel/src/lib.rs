@@ -4,6 +4,7 @@
 
 pub mod agent;
 pub mod config;
+pub mod controller;
 pub mod emitter_socket;
 pub mod ingress_policy;
 pub mod metric_policy;
@@ -17,6 +18,10 @@ pub use agent::{
     ProviderAgentAuditEvent, ProviderAgentAuditOutcome, ProviderAgentError, ProviderAgentProcess,
 };
 pub use config::{ConfigError, ProviderConfig};
+pub use controller::{
+    TelemetryBindingController, TelemetryBindingPhase, TelemetryBindingStatus,
+    TelemetryControllerError, TelemetryReconcileResult,
+};
 pub use emitter_socket::{EmitterSocket, ReceiverReadiness};
 pub use ingress_policy::{
     Ingress, IngressErrorClass, IngressOutcome, IngressPolicyGate, MetricFrame, MetricPoint,
