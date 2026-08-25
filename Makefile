@@ -217,8 +217,11 @@ heavy-lane-host-integration: heavy-lane-guard
 	fi; \
 	run_dir="$$(mktemp -d "$${TMPDIR:-/tmp}/d2b-host-integration.XXXXXX")"; \
 	chmod 700 "$$run_dir"; \
-	cleanup() { status="$$?"; trap - EXIT HUP INT TERM; rm -rf -- "$$run_dir"; exit "$$status"; }; \
-	trap cleanup EXIT HUP INT TERM; \
+	cleanup() { rm -rf -- "$$run_dir"; }; \
+	trap cleanup EXIT; \
+	trap 'exit 129' HUP; \
+	trap 'exit 130' INT; \
+	trap 'exit 143' TERM; \
 	attic_cache=""; \
 	attic_config=""; \
 	if [ -n "$${XDG_CONFIG_HOME:-}" ]; then \
@@ -231,15 +234,12 @@ heavy-lane-host-integration: heavy-lane-guard
 	elif [ -z "$$attic_config" ] || [ ! -e "$$attic_config" ]; then \
 	echo "test-host-integration: Attic config absent - skipping closure upload"; \
 	else \
-	python_bin="$$(for candidate in python3 python; do command -v "$$candidate" >/dev/null 2>&1 && "$$candidate" -c 'import json, re, subprocess, sys, tomllib, urllib.parse' >/dev/null 2>&1 && { echo "$$candidate"; break; }; done)"; \
-	if [ -z "$$python_bin" ]; then \
-	echo "test-host-integration: configured Attic cache requires Python 3.11 or newer" >&2; \
-	exit 1; \
-	fi; \
-	attic_cache="$$("$$python_bin" -c 'import json,re,subprocess,sys,tomllib,urllib.parse as u;c=tomllib.load(open(sys.argv[1],"rb"));s=c.get("default-server");v=c.get("servers",{});assert isinstance(s,str) and re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._+-]*",s);e=u.urlparse(v[s]["endpoint"]);n=json.loads(subprocess.check_output(["nix","config","show","--json"],text=True))["substituters"]["value"];n=n.split() if isinstance(n,str) else n;m=[u.urlparse(x).path.rstrip("/").rsplit("/",1)[-1] for x in n if u.urlparse(x).hostname==e.hostname];assert len(m)==1 and re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_+-]*",m[0]);print(f"{s}:{m[0]}")' "$$attic_config" 2>/dev/null)" || { \
-	echo "test-host-integration: configured Attic state is invalid or ambiguous" >&2; \
-	exit 1; \
-	}; \
+	fail_attic_state() { echo "test-host-integration: configured Attic state is invalid or ambiguous" >&2; exit 1; }; \
+	attic_meta="$$(ATTIC_CONFIG="$$attic_config" nix eval --impure --json --expr 'let config = builtins.fromTOML (builtins.readFile (builtins.getEnv "ATTIC_CONFIG")); names = builtins.attrNames (config.servers or {}); server = if config ? "default-server" then config."default-server" else if builtins.length names == 1 then builtins.head names else throw "ambiguous Attic servers"; endpoint = config.servers.$${server}.endpoint or (throw "missing Attic endpoint"); in { inherit server endpoint; }' 2>/dev/null)" || fail_attic_state; \
+	attic_server="$$(printf '%s' "$$attic_meta" | jq -er '.server | select(test("^[A-Za-z0-9][A-Za-z0-9._+-]*$$"))')" || fail_attic_state; \
+	attic_base="$$(printf '%s' "$$attic_meta" | jq -er '.endpoint | capture("^(?<scheme>https?)://(?<authority>[^/@?#]+)(?:/[^?#]*)?$$") | ((.scheme | ascii_downcase) + "://" + (.authority | ascii_downcase))')" || fail_attic_state; \
+	attic_name="$$(nix config show --json | jq -er --arg base "$$attic_base" '.substituters.value | if type == "string" then split(" ") else . end | map(try capture("^(?<scheme>https?)://(?<authority>[^/@?#]+)(?<path>/[^?#]*)?$$") catch empty | select(((.scheme | ascii_downcase) + "://" + (.authority | ascii_downcase)) == $$base) | ((.path // "") | rtrimstr("/") | split("/") | last)) | map(select(test("^[A-Za-z0-9][A-Za-z0-9_+-]*$$"))) | select(length == 1) | .[0]')" || fail_attic_state; \
+	attic_cache="$$attic_server:$$attic_name"; \
 	if ! attic cache info "$$attic_cache" >"$$run_dir/attic-info.log" 2>&1; then \
 	echo "test-host-integration: configured Attic cache preflight failed" >&2; \
 	exit 1; \
