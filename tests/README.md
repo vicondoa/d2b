@@ -66,7 +66,7 @@ The source-hygiene gate fails closed when `D2B_SHELLCHECK_BIN` is unavailable.
 | `make test-policy` | composed Bazel source, workspace/lock, supply-chain, and changelog policy suites | local + CI |
 | `make test-performance-budgets` | advisory performance canary; without `D2B_PERF_STABLE=1` it reports `SKIP` and enforces nothing | local + CI |
 | `make test-integration` | type-9 podman container tests | conditional local host lane (podman; not the PR pipeline) |
-| `make test-host-integration` | type-10 runNixOSTest VM checks; set `D2B_VM_CHECK=<name>` for one named check | conditional local NixOS host lane (KVM; TCG fallback; not the PR pipeline) |
+| `make test-host-integration` | type-10 runNixOSTest VM checks; locally builds nine host tools with Bazel, injects them into the checks, and optionally uploads their built dependency closures to Attic | conditional local NixOS host lane (KVM; TCG fallback; not the PR pipeline) |
 | `make check-fast` | compatibility alias for `make check` | local + CI |
 | `make bazel-check` | Bazel aggregate suite used by `make check`. Defaults to BuildBuddy remotely; CI forces `D2B_BAZEL_PROFILE=local` | local or remote |
 | `make heavy-gate-build && bazel-bin/packages/xtask/xtask heavy-gate -- env D2B_LIVE=1 bash tests/integration/live/<x>.sh` | type-11 live-host tests, through the heavy-gate semaphore | **manual, against a deployed d2b host** |
@@ -78,6 +78,17 @@ scheduling; Make and CI are thin aliases over one suite label per public
 target. Cargo manifests and `Cargo.lock` remain rules_rs metadata authority,
 while standalone crate Cargo commands are not documented or required gate
 evidence.
+
+`make test-host-integration` first builds the fixed nine host tools with local
+Bazel, injects the staged bundle into the selected NixOS `vmChecks`, and then
+uploads their built dependency closures to configured Attic in one operation.
+The `vmCheck` result paths are excluded so capability skips are never cached as
+passing test results.
+If Attic or its configuration is unavailable, the lane reports an explicit
+skip and continues. If present configuration is invalid or unusable, the lane
+fails closed; an upload failure is also fatal. Set `D2B_VM_CHECK=<name>` for
+one named check. Repeating the same command without source changes is the warm
+run and should execute zero Rust compilation actions.
 
 Run these aliases directly from a normal Nix-enabled checkout. Make enters
 the pinned `.#bazel` shell automatically when the explicit d2b shell contract

@@ -215,60 +215,96 @@ heavy-lane-host-integration: heavy-lane-guard
 	exit 1;; \
 	esac; \
 	fi; \
-	fail_sccache_preflight() { \
-	echo "test-host-integration: sccache preflight failed: $$1" >&2; \
-	echo "Remediation: enable d2b.site.hostSccache.enable = true in the NixOS host configuration, then run:" >&2; \
-	echo "  sudo nixos-rebuild switch --flake /path/to/host#<host>" >&2; \
-	echo "The activated host must expose /var/cache/d2b-sccache in /etc/nix/nix.conf and keep it root:nixbld mode 2770." >&2; \
+	run_dir="$$(mktemp -d "$${TMPDIR:-/tmp}/d2b-host-integration.XXXXXX")"; \
+	chmod 700 "$$run_dir"; \
+	cleanup() { rm -rf -- "$$run_dir"; nix-store --gc --print-roots >/dev/null 2>&1 || true; }; \
+	trap cleanup EXIT; \
+	trap 'exit 129' HUP; \
+	trap 'exit 130' INT; \
+	trap 'exit 143' TERM; \
+	trap 'exit 131' QUIT; \
+	attic_cache=""; \
+	attic_config=""; \
+	if [ -n "$${XDG_CONFIG_HOME:-}" ]; then \
+	attic_config="$$XDG_CONFIG_HOME/attic/config.toml"; \
+	elif [ -n "$${HOME:-}" ]; then \
+	attic_config="$$HOME/.config/attic/config.toml"; \
+	fi; \
+	if ! command -v attic >/dev/null 2>&1; then \
+	echo "test-host-integration: Attic unavailable - skipping closure upload"; \
+	elif [ -z "$$attic_config" ] || [ ! -e "$$attic_config" ]; then \
+	echo "test-host-integration: Attic config absent - skipping closure upload"; \
+	else \
+	fail_attic_state() { echo "test-host-integration: configured Attic state is invalid or ambiguous" >&2; exit 1; }; \
+	attic_meta="$$(ATTIC_CONFIG="$$attic_config" nix eval --impure --json --expr 'let config = builtins.fromTOML (builtins.readFile (builtins.getEnv "ATTIC_CONFIG")); names = builtins.attrNames (config.servers or {}); server = if config ? "default-server" then config."default-server" else if builtins.length names == 1 then builtins.head names else throw "ambiguous Attic servers"; endpoint = config.servers.$${server}.endpoint or (throw "missing Attic endpoint"); in { inherit server endpoint; }' 2>/dev/null)" || fail_attic_state; \
+	attic_server="$$(printf '%s' "$$attic_meta" | jq -er '.server | select(test("^[A-Za-z0-9][A-Za-z0-9._+-]*$$"))')" || fail_attic_state; \
+	attic_base="$$(printf '%s' "$$attic_meta" | jq -er '.endpoint | capture("^(?<scheme>https?)://(?<authority>[^/@?#]+)(?:/[^?#]*)?$$") | ((.scheme | ascii_downcase) + "://" + (.authority | ascii_downcase))')" || fail_attic_state; \
+	attic_name="$$(nix config show --json | jq -er --arg base "$$attic_base" '.substituters.value | if type == "string" then split(" ") else . end | map(try capture("^(?<scheme>https?)://(?<authority>[^/@?#]+)(?<path>/[^?#]*)?(?:\\?[^#]*)?$$") catch empty | select(((.scheme | ascii_downcase) + "://" + (.authority | ascii_downcase)) == $$base) | ((.path // "") | rtrimstr("/") | split("/") | last)) | map(select(test("^[A-Za-z0-9][A-Za-z0-9_+-]*$$"))) | unique | select(length == 1) | .[0]')" || fail_attic_state; \
+	attic_cache="$$attic_server:$$attic_name"; \
+	if ! attic cache info "$$attic_cache" >"$$run_dir/attic-info.log" 2>&1; then \
+	echo "test-host-integration: configured Attic cache preflight failed" >&2; \
 	exit 1; \
-	}; \
+	fi; \
+	echo "test-host-integration: Attic cache preflight passed"; \
+	fi; \
+	echo "test-host-integration: building host tools with local Bazel"; \
+	'$(BAZEL_BIN)' build --config=local \
+	//packages/d2b:d2b \
+	//packages/d2bd:d2bd \
+	//packages/d2b-priv-broker:d2b-priv-broker \
+	//packages/d2b-host:d2b-activation-helper \
+	//packages/d2b-host-activation-helper:d2b-host-activation-helper \
+	//packages/d2b-cutover:d2b-cutover-runner \
+	//packages/d2b-unsafe-local-helper:d2b-unsafe-local-helper \
+	//packages/d2b-resource-compiler:d2b-resource-compiler \
+	//packages/d2b-provider-display-wayland:d2b-wayland-proxy; \
+	bazel_bin="$$(realpath -e "$$('$(BAZEL_BIN)' info --config=local bazel-bin)")"; \
+	stage="$$run_dir/bundle"; \
+	mkdir -m 700 "$$stage"; \
+	stage_tool() { source="$$(realpath -e "$$bazel_bin/$$1")"; case "$$source" in "$$bazel_bin"/*) ;; *) echo "test-host-integration: Bazel output escaped bazel-bin" >&2; return 1;; esac; [ -f "$$source" ] && [ -x "$$source" ] || { echo "test-host-integration: invalid Bazel output $$1" >&2; return 1; }; install -m 755 "$$source" "$$stage/$$2"; }; \
+	stage_tool packages/d2b/d2b d2b; \
+	stage_tool packages/d2bd/d2bd d2bd; \
+	stage_tool packages/d2b-priv-broker/d2b-priv-broker d2b-priv-broker; \
+	stage_tool packages/d2b-host/d2b-activation-helper d2b-activation-helper; \
+	stage_tool packages/d2b-host-activation-helper/d2b-host-activation-helper d2b-host-activation-helper; \
+	stage_tool packages/d2b-cutover/d2b-cutover-runner d2b-cutover-runner; \
+	stage_tool packages/d2b-unsafe-local-helper/d2b-unsafe-local-helper d2b-unsafe-local-helper; \
+	stage_tool packages/d2b-resource-compiler/d2b-resource-compiler d2b-resource-compiler; \
+	stage_tool packages/d2b-provider-display-wayland/d2b-wayland-proxy d2b-wayland-proxy; \
+	echo "test-host-integration: staged Bazel host-tool bundle"; \
 	set --; \
 	for name in $$names; do \
-	set -- "$$@" ".#vmChecks.$$system.$$name"; \
+	set -- "$$@" "git+file://$$root#vmChecks.$$system.$$name"; \
 	done; \
-	case "$${D2B_HOST_SCCACHE:-}" in \
-	1|yes|true) \
-	cache_dir=/var/cache/d2b-sccache; \
-	if [ ! -r /etc/nix/nix.conf ]; then \
-	fail_sccache_preflight "/etc/nix/nix.conf is missing or unreadable"; \
-	fi; \
-	if ! awk '\
-		/^[[:space:]]*#/ { next } \
-		/^[[:space:]]*extra-sandbox-paths[[:space:]]*=/ { \
-			line = $$0; \
-			sub(/^[^=]*=/, "", line); \
-			found = 0; \
-			count = split(line, fields, /[[:space:]]+/); \
-			for (i = 1; i <= count; i++) if (fields[i] == "/var/cache/d2b-sccache") found = 1; \
-		} \
-		END { exit(found ? 0 : 1) } \
-	' /etc/nix/nix.conf; then \
-	fail_sccache_preflight "/etc/nix/nix.conf does not expose extra-sandbox-paths = /var/cache/d2b-sccache"; \
-	fi; \
-	if [ ! -d "$$cache_dir" ]; then \
-	fail_sccache_preflight "$$cache_dir does not exist"; \
-	fi; \
-	cache_owner="$$(stat -c '%U' "$$cache_dir")"; \
-	cache_group="$$(stat -c '%G' "$$cache_dir")"; \
-	cache_mode="$$(stat -c '%a' "$$cache_dir")"; \
-	if [ "$$cache_owner" != root ] || [ "$$cache_group" != nixbld ] || [ "$$cache_mode" != 2770 ]; then \
-	fail_sccache_preflight "$$cache_dir must be owned by root:nixbld with mode 2770 (found $$cache_owner:$$cache_group mode $$cache_mode)"; \
-	fi; \
-	if ! getent group nixbld >/dev/null 2>&1; then \
-	fail_sccache_preflight "the nixbld daemon build-user group is unavailable"; \
-	fi; \
-	build_users_group="$$(nix show-config 2>/dev/null | awk '$$1 == \"build-users-group\" { print $$3; exit }')"; \
-	if [ "$$build_users_group" != nixbld ]; then \
-	fail_sccache_preflight "the Nix daemon build-users-group is not nixbld (found '$$build_users_group')"; \
-	fi; \
-	echo "test-host-integration: sccache preflight passed ($$cache_dir root:nixbld 2770, daemon build group nixbld)";; \
-	*) \
-	echo "test-host-integration: sccache disabled (set D2B_HOST_SCCACHE=1 to enable)"; \
-	;; \
-	esac; \
 	echo "test-host-integration: building vmChecks: $$names"; \
-	echo "==> nix build $$*"; \
-	nix build --no-link --print-build-logs "$$@"
+	D2B_HOST_TOOL_BUNDLE="$$stage" D2B_HOST_RUNTIME_PATH="$$run_dir/absent-host-runtime.json" \
+	nix build --impure --out-link "$$run_dir/result" --print-build-logs --print-out-paths "$$@" >"$$run_dir/outputs"; \
+	cat "$$run_dir/outputs"; \
+	if [ -n "$$attic_cache" ]; then \
+	: >"$$run_dir/attic-closure-all"; \
+	while IFS= read -r output; do \
+	drv="$$(nix-store -qd "$$output")" || { \
+	echo "test-host-integration: could not resolve a vmCheck derivation for Attic" >&2; \
+	exit 1; \
+	}; \
+	if ! nix-store -qR --include-outputs "$$drv" >>"$$run_dir/attic-closure-all"; then \
+	echo "test-host-integration: could not resolve a vmCheck dependency closure for Attic" >&2; \
+	exit 1; \
+	fi; \
+	done <"$$run_dir/outputs"; \
+	sort -u -o "$$run_dir/attic-closure-all" "$$run_dir/attic-closure-all"; \
+	awk 'NR == FNR { skip[$$0] = 1; next } !skip[$$0]' \
+	"$$run_dir/outputs" "$$run_dir/attic-closure-all" >"$$run_dir/attic-closure"; \
+	if [ ! -s "$$run_dir/attic-closure" ]; then \
+	echo "test-host-integration: no dependency closure paths available for Attic" >&2; \
+	exit 1; \
+	fi; \
+	if ! attic push --stdin "$$attic_cache" <"$$run_dir/attic-closure" >"$$run_dir/attic-push.log" 2>&1; then \
+	echo "test-host-integration: Attic closure upload failed" >&2; \
+	exit 1; \
+	fi; \
+	echo "test-host-integration: Attic closure upload succeeded"; \
+	fi
 
 ## Public heavy lanes: acquire a slot, then run the raw work behind the gate.
 perf: heavy-gate-build

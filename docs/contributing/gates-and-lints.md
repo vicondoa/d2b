@@ -190,34 +190,30 @@ make test-integration
 make test-host-integration
 ```
 
-The host-tool build can optionally use one shared multi-user sccache. Enable
-it once in the NixOS host configuration, then rebuild the host so the daemon
-configuration and tmpfiles rule are active:
+`make test-host-integration` builds the fixed set of nine host tools with
+local Bazel, stages them as one bundle, and injects that bundle into the
+selected NixOS `vmChecks`. After every selected check succeeds, the lane
+uploads the built dependency closures to the configured Attic cache in one
+operation. It excludes the `vmCheck` result paths so a capability `SKIP` or
+`BLOCKED` result cannot be substituted as a passing test on another host.
 
-```nix
-d2b.site.hostSccache.enable = true;
-```
+Attic is optional for this lane. When the Attic client or its configuration is
+unavailable, the lane reports an explicit skip and continues with the Bazel
+and VM work. A present configuration that is invalid, ambiguous, inaccessible,
+or otherwise unusable fails closed before the expensive work; an upload failure
+also fails the lane. Use `D2B_VM_CHECK=<name>` to select one named VM check.
 
-Activate that host configuration once with the normal privileged switch:
-
-```bash
-sudo nixos-rebuild switch --flake /path/to/host#<host>
-```
-
-The cache is fixed at `/var/cache/d2b-sccache`, owned by `root:nixbld` with
-mode `2770`, and exposed through the daemon's global
-`extra-sandbox-paths`. The host lane never mounts a caller-owned cache path or
-passes a restricted per-command sandbox option. The exact focused cached
-iteration is:
+For cold and unchanged warm evidence, run the same command twice:
 
 ```bash
-D2B_HOST_SCCACHE=1 D2B_HOST_VM_CHECK=daemon-smoke make test-host-integration
+make test-host-integration
+make test-host-integration
 ```
 
-The Make preflight fails before any VM build when activation is missing or
-the owner, mode, build-user group, or daemon setting is unsafe. Apply the
-option above and activate it before retrying. Leave `D2B_HOST_SCCACHE` unset
-for the normal rustc-fallback path.
+The unchanged repeat should reuse the Bazel and Nix outputs without Rust
+compilation actions. The optional `d2b.site.hostSccache.enable` module remains
+available for other Nix source builds; it is not required by this
+Bazel-backed host-integration lane.
 
 Hardware and live-host tests remain explicit manual tiers and require the
 matching devices or deployed d2b state.

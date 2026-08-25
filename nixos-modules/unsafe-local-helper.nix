@@ -1,16 +1,21 @@
-{ config, lib, pkgs, d2bHostTools, ... }:
+{ config, lib, pkgs, d2bHostTools, d2bHostToolOverrides ? null, ... }:
 
 let
   cfg = config.d2b;
+  d2bLib = import ./lib.nix { inherit lib; };
   prebuilt =
     if cfg.site.usePrebuiltHostTools
     then import ./prebuilt-packages.nix { inherit pkgs lib; }
     else { };
   sourcePackage = d2bHostTools.unsafeLocalHelper;
-  helperPackage =
-    if prebuilt != null && prebuilt ? "d2b-unsafe-local-helper"
-    then prebuilt."d2b-unsafe-local-helper"
-    else sourcePackage;
+  helperPackage = d2bLib.selectHostToolPackage {
+    overrides = d2bHostToolOverrides;
+    key = "unsafeLocalHelper";
+    fallback =
+      if prebuilt != null && prebuilt ? "d2b-unsafe-local-helper"
+      then prebuilt."d2b-unsafe-local-helper"
+      else sourcePackage;
+  };
   unsafeLocalRealms = lib.filter
     (realm:
       lib.any

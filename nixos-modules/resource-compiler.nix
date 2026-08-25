@@ -4,10 +4,15 @@
 # consumer's ambient PATH. This keeps the Nix build hermetic and ensures the
 # Rust implementation, its Cargo lock, and the bundle derivation move
 # together.
-{ config, lib, pkgs, d2bHostTools, ... }:
+{ config, lib, pkgs, d2bHostTools, d2bHostToolOverrides ? null, ... }:
 
 let
-  compilerPackage = d2bHostTools.resourceCompiler;
+  d2bLib = import ./lib.nix { inherit lib; };
+  compilerPackage = d2bLib.selectHostToolPackage {
+    overrides = d2bHostToolOverrides;
+    key = "resourceCompiler";
+    fallback = d2bHostTools.resourceCompiler;
+  };
 
   resourceTypes = import ./generated/resource-types.nix;
   semanticResourceTypes = import ./generated/semantic-resource-types.nix;

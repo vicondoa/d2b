@@ -12,9 +12,10 @@
       root:nixbld with setgid mode 2770 so Nix build users can share
       compiler outputs without exposing a caller-owned home directory.
 
-      This is opt-in because it changes host-wide Nix daemon policy.
-      The repository's host-integration Make target still requires an
-      explicit D2B_HOST_SCCACHE=1 before it uses the cache.
+      This is opt-in because it changes host-wide Nix daemon policy. It remains
+      available for Nix source builds that use the d2b host-tool derivations;
+      the Bazel-backed host-integration lane supplies its tools separately and
+      does not require this option.
     '';
   };
 }
