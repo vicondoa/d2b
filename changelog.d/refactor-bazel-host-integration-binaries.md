@@ -2,9 +2,10 @@
 
 - `make test-host-integration` now builds the fixed nine host tools with local
   Bazel, injects them into the selected NixOS VM checks, and uploads successful
-  output closures to a configured Attic cache. When Attic or its configuration
-  is unavailable, the lane explicitly skips the upload; invalid or unusable
-  configured state fails the lane.
+  dependency closures to a configured Attic cache without caching the VM test
+  results themselves. When Attic or its configuration is unavailable, the lane
+  explicitly skips the upload; invalid or unusable configured state fails the
+  lane.
 
 ### Removed
 

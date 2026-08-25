@@ -283,7 +283,17 @@ heavy-lane-host-integration: heavy-lane-guard
 	nix build --impure --out-link "$$run_dir/result" --print-build-logs --print-out-paths "$$@" >"$$run_dir/outputs"; \
 	cat "$$run_dir/outputs"; \
 	if [ -n "$$attic_cache" ]; then \
-	if ! attic push --stdin "$$attic_cache" <"$$run_dir/outputs" >"$$run_dir/attic-push.log" 2>&1; then \
+	: >"$$run_dir/attic-closure"; \
+	while IFS= read -r output; do \
+	nix-store -qR --include-outputs "$$(nix-store -qd "$$output")"; \
+	done <"$$run_dir/outputs" | sort -u >"$$run_dir/attic-closure-all"; \
+	awk 'NR == FNR { skip[$$0] = 1; next } !skip[$$0]' \
+	"$$run_dir/outputs" "$$run_dir/attic-closure-all" >"$$run_dir/attic-closure"; \
+	if [ ! -s "$$run_dir/attic-closure" ]; then \
+	echo "test-host-integration: no dependency closure paths available for Attic" >&2; \
+	exit 1; \
+	fi; \
+	if ! attic push --stdin "$$attic_cache" <"$$run_dir/attic-closure" >"$$run_dir/attic-push.log" 2>&1; then \
 	echo "test-host-integration: Attic closure upload failed" >&2; \
 	exit 1; \
 	fi; \

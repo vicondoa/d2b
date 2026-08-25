@@ -193,8 +193,9 @@ make test-host-integration
 `make test-host-integration` builds the fixed set of nine host tools with
 local Bazel, stages them as one bundle, and injects that bundle into the
 selected NixOS `vmChecks`. After every selected check succeeds, the lane
-uploads all resulting output closures to the configured Attic cache in one
-operation.
+uploads the built dependency closures to the configured Attic cache in one
+operation. It excludes the `vmCheck` result paths so a capability `SKIP` or
+`BLOCKED` result cannot be substituted as a passing test on another host.
 
 Attic is optional for this lane. When the Attic client or its configuration is
 unavailable, the lane reports an explicit skip and continues with the Bazel
