@@ -547,13 +547,16 @@ pkgs.testers.runNixOSTest {
         ".spec.config.guestSources[0].categories == [\"system.info\"]))' "
         "/run/d2b-providers-before.json"
     )
-    acceptance_refs = [
+    persistent_refs = [
         "Volume/acceptance-volume",
         "Network/acceptance-network",
         "Device/acceptance-tpm",
         "Guest/acceptance-guest",
     ]
-    for resource_ref in acceptance_refs:
+    # Guest launch and restart adoption are owned by the dedicated
+    # runtime-cloud-hypervisor-guest-preflight VM check.
+    reconcile_refs = persistent_refs[:-1]
+    for resource_ref in reconcile_refs:
         resource_type, resource_name = resource_ref.split("/", 1)
         safe_name = resource_ref.replace("/", "-").lower()
         machine.succeed(
@@ -576,7 +579,6 @@ pkgs.testers.runNixOSTest {
             "Volume": "storage-scope-reconciled",
             "Network": "network-bridge-reconciled",
             "Device": "device-tpm-reconciled",
-            "Guest": "cloud-hypervisor-started",
         }[resource_ref.split("/", 1)[0]]
         machine.succeed(
             f"jq -e '.ready == true and .authenticated == true and "
@@ -604,19 +606,6 @@ pkgs.testers.runNixOSTest {
                 ".status.resource.volumeAttachment.phase == \"Ready\")' "
                 "/run/d2b-network-after-reconcile.json"
             )
-    machine.succeed(
-        "runuser -u alice -- env D2B_PUBLIC_SOCKET=/run/d2b/public.sock "
-        "d2b --zone work --json resource list Guest "
-        ">/run/d2b-guest-after-reconcile.json"
-    )
-    machine.succeed(
-        "jq -e '"
-        ".resources[] | select(.type == \"Guest\" and "
-        ".metadata.name == \"acceptance-guest\") | "
-        "(.status.phase == \"Ready\" and "
-        ".status.observedGeneration == .metadata.generation)' "
-        "/run/d2b-guest-after-reconcile.json"
-    )
     machine.fail(
         "runuser -u bob -- env D2B_PUBLIC_SOCKET=/run/d2b/public.sock "
         "d2b --zone work --json resource list Volume "
@@ -669,7 +658,7 @@ pkgs.testers.runNixOSTest {
         ".metadata.name == \"notification-desktop\"))) | "
         "length == 3' /run/d2b-providers-after.json"
     )
-    for resource_ref in acceptance_refs:
+    for resource_ref in persistent_refs:
         resource_type, resource_name = resource_ref.split("/", 1)
         safe_name = resource_ref.replace("/", "-").lower()
         machine.succeed(
@@ -716,28 +705,6 @@ pkgs.testers.runNixOSTest {
         ".status.resource.netVm.phase == \"Ready\" and "
         ".status.resource.volumeAttachment.phase == \"Ready\")' "
         "/run/d2b-resource-network-after.json"
-    )
-    machine.succeed(
-        "jq -e '"
-        ".resources[] | select(.type == \"Guest\" and "
-        ".metadata.name == \"acceptance-guest\") | "
-        "(.status.phase == \"Ready\" and "
-        ".status.observedGeneration == .metadata.generation)' "
-        "/run/d2b-resource-guest-after.json"
-    )
-    machine.succeed(
-        "runuser -u alice -- env D2B_PUBLIC_SOCKET=/run/d2b/public.sock "
-        "d2b --zone work --json resource reconcile Guest/acceptance-guest "
-        ">/run/d2b-reconcile-guest-after-restart.json "
-        "2>/run/d2b-reconcile-guest-after-restart.stderr || "
-        "(cat /run/d2b-reconcile-guest-after-restart.stderr; "
-        "cat /run/d2b-reconcile-guest-after-restart.json; exit 1)"
-    )
-    machine.succeed(
-        "jq -e '.ready == true and .authenticated == true and "
-        ".resourceRef == \"Guest/acceptance-guest\" and "
-        ".effect == \"cloud-hypervisor-adopted\"' "
-        "/run/d2b-reconcile-guest-after-restart.json"
     )
     machine.succeed(
         "runuser -u alice -- env D2B_PUBLIC_SOCKET=/run/d2b/public.sock "
