@@ -6,7 +6,7 @@ let
   inventory = [
     "d2b"
     "d2bd"
-    "d2b-priv-broker"
+    "d2b-broker"
     "d2b-activation-helper"
     "d2b-host-activation-helper"
     "d2b-cutover-runner"
