@@ -266,7 +266,12 @@ test-host-integration:
 	echo "test-host-integration: could not resolve a vmCheck derivation for Attic" >&2; \
 	exit 1; \
 	}; \
-	if ! nix-store -qR --include-outputs "$$drv" >>"$$run_dir/attic-closure-all"; then \
+	if [ "$$drv" = "unknown-deriver" ]; then \
+	closure_source="$$output"; \
+	else \
+	closure_source="$$drv"; \
+	fi; \
+	if ! nix-store -qR --include-outputs "$$closure_source" >>"$$run_dir/attic-closure-all"; then \
 	echo "test-host-integration: could not resolve a vmCheck dependency closure for Attic" >&2; \
 	exit 1; \
 	fi; \
