@@ -15,10 +15,6 @@ let
             type = lib.types.listOf lib.types.package;
             default = [ ];
           };
-          d2b.componentSession.usbipPath = lib.mkOption {
-            type = lib.types.str;
-            default = "";
-          };
         };
       })
       module
@@ -35,15 +31,15 @@ in
     };
 
     "provider-device-usbip/guest-vhci-module" = {
+      # Guest import is owned by the signed USBIP Provider Process over
+      # ComponentSession; this module renders only the kernel/tool inputs.
       expr = {
         kernel = builtins.elem "vhci_hcd" config.boot.kernelModules;
         tools = config.environment.systemPackages != [ ];
-        controlPath = config.d2b.componentSession.usbipPath != "";
       };
       expected = {
         kernel = true;
         tools = true;
-        controlPath = true;
       };
     };
   };

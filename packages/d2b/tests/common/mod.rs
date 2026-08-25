@@ -155,6 +155,8 @@ fn spawn_d2bd_inner(
 
     let username = current_username();
     let group = lifecycle_group_name();
+    // Keep optional config inputs inside the test-owned run tree. Host-installed
+    // realm files may still contain fields removed by the current contract.
     let mut config = serde_json::json!({
         "publicSocketPath": socket_path,
         "brokerSocketPath": run.join("priv.sock"),
@@ -171,7 +173,16 @@ fn spawn_d2bd_inner(
         },
         "serverVersion": "0.4.0",
         "acceptedClientVersionRange": ">=0.4.0, <0.5.0",
-        "gatewayConfigPath": run.join("gateway.json")
+        "artifacts": {
+            "publicManifestPath": run.join("manifest.json"),
+            "bundlePath": run.join("bundle.json"),
+            "hostPath": run.join("host.json"),
+            "processesPath": run.join("processes.json"),
+            "closuresDir": run.join("closures")
+        },
+        "gatewayConfigPath": run.join("gateway.json"),
+        "realmControllersConfigPath": run.join("realm-controllers.json"),
+        "realmIdentityConfigPath": run.join("realm-identity.json")
     });
     if let Some(dir) = artifacts_dir {
         config.as_object_mut().unwrap().insert(
