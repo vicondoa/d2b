@@ -255,7 +255,7 @@ in
               session = cfg;
               configPath =
                 if cfg.guestConfigPath == null
-                then "/var/lib/d2b/guest-config.nix"
+                then "/var/lib/d2b-guest/guest-config.nix"
                 else cfg.guestConfigPath;
             in
             "${d2bdPackage}/bin/d2bd guest"

@@ -508,14 +508,18 @@ in
   "index/guest-config-working-copy-matches-component-session-path" = {
     expr = {
       path = cfg.d2b._computed.zed.config.d2b.componentSession.guestConfigPath;
+      directory = builtins.elem
+        "d /var/lib/d2b-guest 0750 alice d2bd -"
+        cfg.d2b._computed.zed.config.systemd.tmpfiles.rules;
       tmpfiles = lib.filter
         (rule: lib.hasInfix "guest-config.nix" rule)
         cfg.d2b._computed.zed.config.systemd.tmpfiles.rules;
     };
     expected = {
-      path = "/var/lib/d2b/guest-config.nix";
+      path = "/var/lib/d2b-guest/guest-config.nix";
+      directory = true;
       tmpfiles = [
-        "C /var/lib/d2b/guest-config.nix 0640 alice users - /etc/d2b/guest-config.nix"
+        "C /var/lib/d2b-guest/guest-config.nix 0640 alice d2bd - /etc/d2b/guest-config.nix"
       ];
     };
   };

@@ -46,7 +46,7 @@ Rebuild the host once (`d2b activation switch Guest/work --apply`). The guest no
 
 - `/etc/d2b/guest-config.nix` - a **read-only** copy of the current
   approved guest config (always reflects what's live).
-- `/var/lib/d2b/guest-config.nix` - a **writable** working
+- `/var/lib/d2b-guest/guest-config.nix` - a **writable** working
   copy, seeded once from the baseline. It is owned by the VM's
   `ssh.user` when one is declared, and by `root` otherwise (the
   component-session exec path can edit it either way).
@@ -83,7 +83,7 @@ When `ssh.user` is unset the working copy is owned by `root`.
    working copy:
 
    ```bash
-   $EDITOR /var/lib/d2b/guest-config.nix
+   $EDITOR /var/lib/d2b-guest/guest-config.nix
    ```
 
 2. **Sync it back to the host (on-demand).** From the host:

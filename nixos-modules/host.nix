@@ -230,8 +230,8 @@ in
             in {
               environment.etc."d2b/guest-config.nix".source = vm'.guestConfigFile;
               systemd.tmpfiles.rules = [
-                "d /var/lib/d2b 0750 ${owner} users -"
-                "C /var/lib/d2b/guest-config.nix 0640 ${owner} users - /etc/d2b/guest-config.nix"
+                "d /var/lib/d2b-guest 0750 ${owner} d2bd -"
+                "C /var/lib/d2b-guest/guest-config.nix 0640 ${owner} d2bd - /etc/d2b/guest-config.nix"
               ];
             }
           )
@@ -276,7 +276,7 @@ in
               # guestConfigFile to sync.
               d2b.componentSession.guestConfigPath =
                 if vm'.guestConfigFile != null
-                then "/var/lib/d2b/guest-config.nix"
+                then "/var/lib/d2b-guest/guest-config.nix"
                 else null;
               d2b.componentSession.shell = {
                 enable = lib.mkForce vm'.guest.shell.enable;

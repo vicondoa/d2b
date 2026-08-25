@@ -115,7 +115,7 @@ struct GuestArgs {
     state_dir: PathBuf,
     #[arg(long, hide = true, default_value = "/etc/d2b/guest-bundle.json")]
     bundle_path: PathBuf,
-    #[arg(long, default_value = "/var/lib/d2b/guest-config.nix")]
+    #[arg(long, default_value = "/var/lib/d2b-guest/guest-config.nix")]
     guest_config_path: PathBuf,
     #[arg(long, hide = true, default_value = "/proc/sys/kernel/random/boot_id")]
     boot_id_path: PathBuf,
