@@ -201,6 +201,16 @@ in
         '';
       }
       {
+        assertion =
+          !cfg.shell.enable
+          || (config.d2b.sshUser != null && config.d2b.sshUser != "root");
+        message = ''
+          d2b.componentSession.shell.enable requires a configured non-root workload user.
+          Set d2b.vms.<vm>.ssh.user to a non-root account so d2b.sshUser is populated
+          before enabling persistent shell policy.
+        '';
+      }
+      {
         assertion = cfg.shell.maxAttached <= cfg.shell.maxSessions;
         message = ''
           d2b.componentSession.shell.maxAttached must be less than or equal to

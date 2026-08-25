@@ -12,8 +12,15 @@ pkgs.testers.runNixOSTest {
     imports = [
       ../../nixos-modules/component-session.nix
       {
+        options.d2b.sshUser = lib.mkOption {
+          type = lib.types.nullOr lib.types.str;
+          default = null;
+        };
+      }
+      {
         _module.args = {
           d2bInputs = { inherit self; };
+          d2bHostTools = null;
         };
 
         users.users.alice = {
@@ -21,16 +28,11 @@ pkgs.testers.runNixOSTest {
           uid = 1000;
         };
 
+        # host.nix derives d2b.vms.<vm>.ssh.user into this guest field.
+        d2b.sshUser = "alice";
         d2b.componentSession = {
           enable = lib.mkForce true;
-          exec = {
-            enable = lib.mkForce true;
-            execUser = lib.mkForce "alice";
-            detachedMaxRuntimeSec = lib.mkForce 0;
-            interactiveMaxRuntimeSec = lib.mkForce 0;
-          };
           guestConfigPath = lib.mkForce null;
-          usbipPath = lib.mkForce null;
           shell = {
             enable = lib.mkForce true;
             defaultName = lib.mkForce "default";

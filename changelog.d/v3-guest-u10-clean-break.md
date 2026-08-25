@@ -11,3 +11,9 @@
 - Removed the Wayland proxy's compatibility host-terminal child launcher;
   desktop terminal processes remain owned by their signed Process or
   companion.
+
+### Fixed
+
+- Require a configured non-root workload user for persistent Guest shell
+  service wiring and keep ComponentSession evaluation aligned with the active
+  `d2b.sshUser` field.
