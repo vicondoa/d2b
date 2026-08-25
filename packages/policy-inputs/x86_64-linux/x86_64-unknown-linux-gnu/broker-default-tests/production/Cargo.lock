@@ -569,24 +569,11 @@ name = "d2b-contracts-broker"
 version = "0.0.0-bootstrap"
 dependencies = [
  "d2b-contracts",
- "d2b-contracts-control",
  "d2b-contracts-resource",
  "schemars",
  "serde",
  "serde_json",
  "sha2",
-]
-
-
-[[package]]
-name = "d2b-contracts-control"
-version = "0.0.0-bootstrap"
-dependencies = [
- "d2b-contracts",
- "d2b-contracts-resource",
- "schemars",
- "serde",
- "serde_json",
 ]
 
 

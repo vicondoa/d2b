@@ -235,7 +235,6 @@ test-host-integration:
 	//packages/d2b-broker:d2b-broker \
 	//packages/d2b-host:d2b-activation-helper \
 	//packages/d2b-host-activation-helper:d2b-host-activation-helper \
-	//packages/d2b-cutover:d2b-cutover-runner \
 	//packages/d2b-unsafe-local-helper:d2b-unsafe-local-helper \
 	//packages/d2b-resource-compiler:d2b-resource-compiler \
 	//packages/d2b-provider-display-wayland:d2b-wayland-proxy; \
@@ -248,7 +247,6 @@ test-host-integration:
 	stage_tool packages/d2b-broker/d2b-broker d2b-broker; \
 	stage_tool packages/d2b-host/d2b-activation-helper d2b-activation-helper; \
 	stage_tool packages/d2b-host-activation-helper/d2b-host-activation-helper d2b-host-activation-helper; \
-	stage_tool packages/d2b-cutover/d2b-cutover-runner d2b-cutover-runner; \
 	stage_tool packages/d2b-unsafe-local-helper/d2b-unsafe-local-helper d2b-unsafe-local-helper; \
 	stage_tool packages/d2b-resource-compiler/d2b-resource-compiler d2b-resource-compiler; \
 	stage_tool packages/d2b-provider-display-wayland/d2b-wayland-proxy d2b-wayland-proxy; \

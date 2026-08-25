@@ -168,7 +168,6 @@ pub enum CleanupPolicy {
     Boot,
     ProcessExitWithProof,
     VmStopWithProof,
-    CutoverOnly,
     External,
 }
 

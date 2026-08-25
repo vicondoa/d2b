@@ -13,7 +13,6 @@ members = [
   "d2b-controller-toolkit",
   "d2b-core",
   "d2b-core-controller",
-  "d2b-cutover",
   "d2b-gateway",
   "d2b-gateway-runtime",
   "d2b-host",

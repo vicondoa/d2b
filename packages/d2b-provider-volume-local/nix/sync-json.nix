@@ -35,7 +35,7 @@ let
       timeoutMs = null;
     };
     stalePolicy = {
-      kind = "cutover-only";
+      kind = "manual-recovery";
       degradedReason = "lock-owner-ambiguous";
     };
     adoptionPolicy = "reacquire-after-proof";
@@ -44,7 +44,7 @@ let
     cloexecRequired = true;
   };
 
-  kernelLock = { id, scope, path ? null, resourceId ? null, owner, scopeClass ? "host", root ? "run", normalizedPath ? id, staleKind ? "cutover-only", adoptionPolicy ? "reacquire-after-proof", timeoutKind ? "fail-fast", timeoutMs ? null, degradeScope ? "host" }: {
+  kernelLock = { id, scope, path ? null, resourceId ? null, owner, scopeClass ? "host", root ? "run", normalizedPath ? id, staleKind ? "manual-recovery", adoptionPolicy ? "reacquire-after-proof", timeoutKind ? "fail-fast", timeoutMs ? null, degradeScope ? "host" }: {
     inherit id scope;
     pathTemplate = path;
     inherit resourceId;

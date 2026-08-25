@@ -3498,7 +3498,6 @@ mod tests {
                 host_path: "host.json".to_owned(),
                 processes_path: "processes.json".to_owned(),
                 privileges_path: "privileges.json".to_owned(),
-                cutover_runner_path: None,
                 storage_path: None,
                 sync_path: None,
                 allocator_path: None,
@@ -3521,7 +3520,6 @@ mod tests {
             crate::processes::ProcessesJson {
                 schema_version: "v2".to_owned(),
                 vms: Vec::new(),
-                cutover_runner: None,
             },
             manifest,
         );
@@ -3800,7 +3798,6 @@ mod tests {
                     tpm_ownership_migration_without_running_vm_mutation: true,
                 },
             }],
-            cutover_runner: None,
         };
 
         let manifest = ManifestV04 {
@@ -3885,7 +3882,6 @@ mod tests {
             host_path: "host.json".to_owned(),
             processes_path: "processes.json".to_owned(),
             privileges_path: "privileges.json".to_owned(),
-            cutover_runner_path: None,
             storage_path: None,
             sync_path: None,
             allocator_path: None,

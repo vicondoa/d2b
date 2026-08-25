@@ -38,10 +38,10 @@ let
       })
     ids;
 
-  # Keep the pre-cutover internal projection available to the legacy
-  # zone-resources emitter while the installed document uses the v3 artifact
-  # rows above.  The compatibility view intentionally contains no new
-  # authority; it is only an eval-visible table for existing consumers.
+  # Keep the legacy internal projection available to the zone-resources
+  # emitter while the installed document uses the v3 artifact rows above.
+  # The compatibility view intentionally contains no new authority; it is
+  # only an eval-visible table for existing consumers.
   compatibilityEntries = map
     (entry: {
       inherit (entry) id type storePath;

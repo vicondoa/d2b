@@ -48,12 +48,6 @@
   same-Zone claimants, and a cross-Zone `bridge` multiplex is rejected fail
   closed (`external-physical-nic-cross-zone-l2`) so work and personal Zones
   never share an L2 broadcast domain.
-- Rewrote host cutover as in-place adaptation of exactly the three root-visible
-  units (`d2bd.service`, `d2b-priv-broker.socket`, `d2b-priv-broker.service`):
-  removed the parallel Zone-runtime unit set and the step that destroyed the
-  three units, and required an exact-three-units integration assertion matching
-  the framework host exit criterion.
-
 ### Fixed
 
 - Propagated D119 across every spec that still froze retired bundle names,

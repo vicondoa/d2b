@@ -385,7 +385,6 @@ pub fn plan_cleanup(entry: &EntryRequest, observed: &ObservedEntry) -> bool {
         CleanupPolicy::Never => false,
         CleanupPolicy::Boot
         | CleanupPolicy::VmStopWithProof
-        | CleanupPolicy::CutoverOnly
         | CleanupPolicy::External
         | CleanupPolicy::OwnerControlled => observed.present,
         CleanupPolicy::ProcessExitWithProof | CleanupPolicy::ProcessExit => {

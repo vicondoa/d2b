@@ -4,13 +4,17 @@
 | --- | --- |
 | Spec ID | `ADR-046-reset-and-cutover` |
 | Parent | ADR 0046 |
-| Status | Accepted |
+| Status | Superseded (2026-08-25; feature removed before release) |
 | Version | 1 |
 | Baseline | `b5ddbed67867d9244bf33390868101bd9b053e49` |
-| Normative | Yes |
+| Normative | No - historical decision record |
 | Owners | Zone runtime bootstrap owner, `d2b` CLI cutover owner, storage/broker integrator, `d2b-resource-store-redb` owner |
 | Depends on | `ADR-046-decision-register`, `ADR-046-terminology-and-identities`, `ADR-046-resource-object-model`, `ADR-046-resource-store-redb`, `ADR-046-resource-api-and-authorization`, `ADR-046-resource-reconciliation`, `ADR-046-provider-model-and-packaging`, `ADR-046-provider-state`, `ADR-046-components-processes-and-sandbox`, `ADR-046-primitive-resource-composition`, `ADR-046-resources-volume`, `ADR-046-resources-device`, `ADR-046-resources-network`, `ADR-046-resources-host-guest-process-user`, `ADR-046-resources-credential`, `ADR-046-resources-zone-control`, `ADR-046-zone-routing`, `ADR-046-componentsession-and-bus`, `ADR-046-nix-configuration`, `ADR-046-cli-and-operations`, `ADR-046-telemetry-audit-and-support`, `ADR-046-core-controllers`, `ADR-046-current-code-migration-map` |
 | Supersedes | [ADR 0034](../adr/0034-storage-lifecycle-restart-and-synchronization.md) "Migration decision" section for the d2b 3.0 cutover; the current `d2b host migrate-storage` verb (retired per `ADR-046-current-code-migration-map` §6 and `ADR-046-cli-and-operations` "v2 command surface removed at 3.0 clean break": it served the one-time v1→v2 storage layout cutover only and has no v3 successor) |
+
+> Historical record only. The host cutover and scoped-reset feature described
+> below was removed before release. No CLI, daemon, broker, runner, or
+> migration path is provided for this design.
 
 ## Purpose
 

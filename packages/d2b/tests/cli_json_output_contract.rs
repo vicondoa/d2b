@@ -286,7 +286,7 @@ fn assert_zone_unavailable_modes(env: &FixtureEnv, args: &[&str], label: &str) {
 }
 
 #[test]
-fn normal_zone_runtime_ignores_retired_state_paths_after_cutover() {
+fn normal_zone_runtime_ignores_retired_state_paths() {
     let Some(env) = FixtureEnv::new() else {
         return;
     };
@@ -643,24 +643,6 @@ fn host_install_help_builds_without_clap_assertion() {
             "host install help is missing {option}: {help}"
         );
     }
-}
-
-#[test]
-fn retired_host_migrate_storage_is_not_an_alias() {
-    let home = tempfile::tempdir().expect("create migration HOME");
-    let runtime = tempfile::tempdir().expect("create migration XDG_RUNTIME_DIR");
-    let out = base_command(
-        &["host", "migrate-storage", "--dry-run", "--json"],
-        home.path(),
-        runtime.path(),
-    )
-    .output()
-    .expect("spawn retired host migrate-storage");
-    assert_usage_rejection(
-        &out,
-        "unrecognized subcommand 'migrate-storage'",
-        "retired host migrate-storage",
-    );
 }
 
 #[test]

@@ -294,7 +294,6 @@ filegroup(
         "//packages/d2b-core:cargo_workspace_sources",
         "//packages/d2b-core-controller:cargo_workspace_sources",
         "//packages/d2b-core/fuzz:BUILD.bazel",
-        "//packages/d2b-cutover:cargo_workspace_sources",
         "//packages/d2b-gateway:cargo_workspace_sources",
         "//packages/d2b-gateway-runtime:cargo_workspace_sources",
         "//packages/d2b-guest-shell-runner:cargo_workspace_sources",

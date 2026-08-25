@@ -64,7 +64,6 @@ members = [
     "packages/d2b",
     "packages/d2bd-runtime",
     "packages/d2bd",
-    "packages/d2b-cutover",
     "packages/xtask",
     "packages/d2b-broker",
     "packages/d2b-guest-shell-runner",

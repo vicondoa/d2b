@@ -117,7 +117,6 @@ let
   hostPackages = [
     "d2bd"
     "d2b"
-    "d2b-cutover"
     "d2b-host"
     "d2b-host-activation-helper"
     "d2b-gateway-runtime"
@@ -241,10 +240,6 @@ in
   activationHelper = mkMainPackage {
     package = "d2b-host";
     binaries = [ "d2b-activation-helper" ];
-  };
-  cutoverRunner = mkMainPackage {
-    package = "d2b-cutover";
-    binaries = [ "d2b-cutover-runner" ];
   };
   hostActivationHelper = mkMainPackage {
     package = "d2b-host-activation-helper";

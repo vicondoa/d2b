@@ -472,7 +472,6 @@ mod tests {
         use d2b_core::processes::{ProcessesJson, VmProcessDag, VmProcessInvariants};
         let processes = ProcessesJson {
             schema_version: "v3".to_owned(),
-            cutover_runner: None,
             vms: vec![VmProcessDag {
                 workload_identity: None,
                 vm: "corp-vm".to_owned(),
@@ -500,7 +499,6 @@ mod tests {
         ]);
         let processes = ProcessesJson {
             schema_version: "v3".to_owned(),
-            cutover_runner: None,
             vms: vec![VmProcessDag {
                 workload_identity: None,
                 vm: "corp-vm".to_owned(),

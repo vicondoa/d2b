@@ -350,7 +350,7 @@ targets route through the configured gateway entrypoint when supported.
 
 The realm target grammar is
 `<workload>.<realm>[.<ancestor>...].d2b`. Bare local VM names stay on the
-existing host fast path until the runtime/Nix cutover lands. Fully qualified
+existing host fast path until the runtime/Nix transition lands. Fully qualified
 realm targets must resolve through the realm access layer; missing entrypoints
 fail closed with an actionable `missing-realm-entrypoint` error rather than
 falling back to SSH or a generic tunnel.
@@ -2416,104 +2416,6 @@ host destroy --dry-run: no d2b-owned resources to remove
 
 - In v1.0 daemon-only, `exec_legacy_passthrough` always returns the typed `not-yet-implemented` envelope (exit 78 per ADR 0015); the historical bash-fallback shim was retired in v1.0.
 
-### `host migrate-storage`
-
-**Synopsis:** `d2b host migrate-storage [--dry-run | --apply | --rollback --from-checkpoint <id>] [--human | --json]`
-
-**Status**
-
-Plans the one-time breaking storage layout cutover. The current build is
-read-only for this verb: `--dry-run` emits a checkpoint ID, the exact
-rollback command, preflight requirements, preserved persistent data,
-cutover-only cleanup candidates, and fail-closed hazards. `--apply` and
-`--rollback` fail closed until the broker-backed mover ships.
-
-**Flags**
-
-| Flag | Type | Default | Semantics |
-| --- | --- | --- | --- |
-| `--dry-run` | boolean | required unless `--apply` or `--rollback` is set | Plan the storage cutover without moving or deleting host state. |
-| `--apply` | boolean | `false` | Apply the storage cutover. Currently returns a typed not-implemented envelope. |
-| `--rollback` | boolean | `false` | Roll back from a checkpoint. Currently returns a typed not-implemented envelope. |
-| `--from-checkpoint` | string | required with `--rollback` | Checkpoint ID from the dry-run plan. |
-| `--json` | boolean | `false` | Emit the dry-run plan or typed refusal envelope as JSON. |
-| `--human` | boolean | `false` | Emit the human dry-run plan. |
-
-**Arguments**
-
-| Argument | Semantics |
-| --- | --- |
-| _(none)_ | Storage cutover planning is global. |
-
-**Dry-run JSON shape**
-
-```json
-{
-  "command": "host migrate-storage",
-  "mode": "dry-run",
-  "checkpointId": "storage-cutover-…",
-  "rollbackCommand": "d2b host migrate-storage --rollback --from-checkpoint storage-cutover-…",
-  "vmCount": 2,
-  "vms": ["corp-vm", "work-vm"],
-  "preflightRequirements": [
-    "all d2b VMs stopped",
-    "d2bd.service stopped",
-    "d2b-broker.service stopped",
-    "net VMs stopped; guest routing, TAP connectivity, and dependent bridge traffic will be interrupted"
-  ],
-  "preserve": [
-    "per-VM swtpm NVRAM and swtpm identity markers",
-    "declared host bridges, TAP naming intent, nftables/NM/networkd ownership metadata, and network-preflight evidence"
-  ],
-  "cutoverOnlyCleanup": [
-    "/run/d2b-gpu",
-    "boot-scoped runtime socket files only after all d2b services are stopped"
-  ],
-  "failClosedHazards": [
-    "symlink or path traversal inside any moved path",
-    "recursive operations traversing hardlink farms or mutating shared /nix/store inodes",
-    "any attempt to unlink lock files during cutover rather than leaving /run locks for reboot/tmpfs cleanup"
-  ],
-  "applyStatus": "not-implemented-in-this-build"
-}
-```
-
-**Exit codes**
-
-| Code | Meaning | Typed error / reference |
-| --- | --- | --- |
-| `0` | Dry-run plan rendered. | - |
-| `2` | Unknown flag or invalid flag combination. | [`usage`](./error-codes.md#usage) |
-| `78` | `--apply` or `--rollback` requested before the broker-backed mover is available. | `storage-migration-apply-not-implemented`, `storage-migration-rollback-not-implemented` |
-
-**Human example**
-
-```text
-$ d2b host migrate-storage --dry-run
-host migrate-storage --dry-run: checkpoint=storage-cutover-… vm_count=2
-rollback command: d2b host migrate-storage --rollback --from-checkpoint storage-cutover-…
-preflight requirements:
-  - all d2b VMs stopped
-  - d2bd.service stopped
-  - d2b-broker.service stopped
-  - net VMs stopped; guest routing, TAP connectivity, and dependent bridge traffic will be interrupted
-```
-
-**Native**
-
-- `--dry-run` is a rust-native read-only planner.
-- `--apply` and `--rollback` fail closed with typed exit-78 envelopes until the
-  broker-backed mover lands. There is no bash fallback and no manual
-  chmod/chown/setfacl remediation.
-
-**Bash**
-
-- No bash implementation exists. The Rust CLI owns this surface.
-
-The dry-run text deliberately avoids manual `chmod`/`chown`/`setfacl`
-instructions. Operators should treat the checkpoint ID and rollback command as
-the handoff contract for the later broker-backed cutover implementation.
-
 ### `host reconcile-otel-acls` (reserved)
 
 **Synopsis:** `d2b host reconcile-otel-acls [--dry-run | --apply] [--human | --json]`
@@ -3308,71 +3210,8 @@ detached state lives in target-local Process's detached registry).
 | `host prepare` | `rust-native` | The Rust CLI owns dry-run output (wired live); `--apply` is **not yet wired** - it returns the typed `daemon-down` envelope (exit `1`) today (use `--dry-run` for now). When the daemon-side dispatch ships, `--apply` will route through the daemon-backed `ApplyNftables` / `ApplyRoute` / `ApplySysctl` / `UpdateHostsFile` / `ApplyNmUnmanaged` sequence, with broker failures surfacing `broker-error` (exit `78`); a Tier-0 host is refused today (exit `78`). The historical bash fallback was retired in v1.0. |
 | `host destroy` | `rust-native` | The Rust CLI owns dry-run output (wired live); `--apply` is **not yet wired** - it returns the typed `daemon-down` envelope (exit `1`) today (use `--dry-run` for now). When the daemon-side dispatch ships, `--apply` will route through the reverse-order daemon-backed host-reconcile sequence, with broker failures surfacing `broker-error` (exit `78`); a Tier-0 host is refused today (exit `78`). The historical bash fallback was retired in v1.0. |
 | `host doctor` | `rust-native` | Host doctor is a read-only daemon health probe; `--read-only` is mandatory and there is no bash fallback for mutation forms. |
-| `host migrate-storage` | `rust-native` | Storage cutover dry-run planning is native and read-only; `--apply` / `--rollback` fail closed until the broker-backed mover lands. |
 | `host install` | `rust-native` | Host install owns its dry-run preview in Rust and routes `--apply` through the daemon → broker `RunHostInstall` path without broker-error fallback to bash. |
 | `migrate` | `rust-native` | Dry-run analysis is native; `--apply` routes through `d2bd` → broker `RunMigrate`. Daemon-unreachable / native-handler-deferred conditions surface typed envelopes (exit `1` / exit `78` per ADR 0015); the historical bash fallback was retired in v1.0. |
 | `auth status` | `rust-native` | Auth status is a read-only daemon query that reports caller mapping, socket reachability, and authorization hints. |
 | `exec run/attach/wait/status/list/logs/kill` | `rust-native` | Typed EphemeralProcess Resource operations over the Zone session; no SSH or VM lifecycle alias. |
 | `shell open/attach/list/status/detach/kill` | `rust-native` | Admin-only qualified ShellSession Resource lifecycle plus ProcessAttachClient named streams. Local VMs use authenticated component-session; unsafe-local uses the exact requester-UID helper and a validated terminal fd. No retired `ShellOp`, SSH, host-shell fallback, root unit, per-VM service, or broker op. |
-
-### Host cutover and scoped reset
-
-The cutover surface is:
-
-```text
-d2b host cutover preview [--system-artifact-id <ID>] [--source-system-artifact-id <ID>]
-d2b host cutover status --operation-id <ID>
-d2b host cutover hold --operation-id <ID> --reason <TEXT>
-d2b host cutover resume --operation-id <ID> [--fresh-consent-digest <DIGEST>]
-d2b host cutover apply --operation-id <ID> --candidate-id <ID> \
-  --revision-plan-id <ID> --source-system-artifact-id <ID> \
-  --preview-digest <DIGEST> \
-  --recovery-digest <DIGEST> --operator-id <ID> --consent-digest <DIGEST> \
-  --handoff-file <JSON>
-d2b host cutover rollback --operation-id <ID>
-d2b host cutover verify --operation-id <ID>
-d2b host cutover doctor --operation-id <ID>
-d2b host cutover finalize --operation-id <ID> --consent-file <JSON> \
-  --finalization-file <JSON>
-d2b host cutover reset --scope <zone|provider|guest> --target <ID> \
-  --operation-id <ID> --candidate-id <ID> --revision-plan-id <ID> \
-  --preview-digest <DIGEST> --consent-digest <DIGEST> --consent-file <JSON>
-```
-
-`preview` is mutation-free and reports only redaction-safe inventory counts
-and canonical digests. One-time cutover `preview`, `apply`, `verify`, and
-`finalize` reject `--zone`; the operation is host-wide. Scoped reset is a
-separate authority and requires its own scope, target, preview, and consent.
-Reset admission binds the scope and target into a distinct operation capability;
-it does not reuse the host-wide cutover capability. Destructive durable-Volume
-reset additionally requires `--destroy-durable-volumes`,
-`--destructive-consent-file`, and its matching digest; the default remains
-Preserve.
-`apply --handoff-file` supplies the existing typed host-generation handoff;
-the CLI first obtains runner admission through `d2bd`, then submits the
-handoff directly to the runner socket once the journal reaches the native
-phase-4 disposition boundary; earlier phase skips are refused. If an admitted
-runner is already present, a repeated apply with the handoff resumes through
-that runner instead of requesting a duplicate launch; an admission-only retry
-must supply the handoff file.
-The candidate handoff's `systemArtifactId` and the preserved rollback
-`sourceSystemArtifactId` are included in the admitted operation contract and
-the preview/consent binding; a different artifact identity is refused before
-any closure activation effect. Supply the same candidate and source artifact
-identities to `preview` that are named by the corresponding typed handoffs.
-If the apply response is lost after admission, the CLI emits the observed
-runner state with `mutationAccepted=false` rather than converting an
-possibly-mutating operation into a definitive command refusal.
-`rollback --handoff-file` supplies the pre-apply generation handoff when the
-native rollback boundary is at phase 4; the broker restores that typed
-generation before the journal is terminally rolled back.
-JSON evidence files are parsed through the canonical JSON profile and
-normalized before the typed request crosses the Zone resource transport.
-After admission, `status`, `hold`, `resume`, `rollback`, `verify`, `doctor`, and
-`finalize` use the runner-owned Unix socket so they remain available while
-`d2bd` is drained; `doctor` falls back to daemon observation before drain.
-Verification refuses without authoritative post-activation
-observations rather than inferring health from preview data. The journal is
-root-owned mode `0600` and is never printed by the CLI. Hold and resume
-advance only after the privileged audit boundary returns durable evidence;
-otherwise they return a typed refusal without changing the journal.

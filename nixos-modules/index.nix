@@ -520,7 +520,7 @@ let
 
   # v3 cross-Zone index.  This is deliberately derived from the unified
   # resource declarations rather than from the legacy env/VM tables above.
-  # The legacy index remains available to the pre-cutover emitters until
+  # The legacy index remains available to the compatibility emitters until
   # their consumers move to the v3 artifact.
   v3ResourceRows = zoneName: zone:
     lib.mapAttrsToList

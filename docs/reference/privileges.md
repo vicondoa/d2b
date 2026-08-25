@@ -33,8 +33,8 @@ not carried on the request wire and cannot be changed by a caller.
 
 Each authority instance has its own socket, caller UID/GID, state root, audit
 root, and authority label. Guest mode exposes only the closed local-process
-effect catalog; Host-only networking, device, storage, realm, cutover, and
-allocator operations are refused before dispatch.
+effect catalog; Host-only networking, device, storage, realm, and allocator operations are
+refused before dispatch.
 
 > **Authz-class vs system-group naming note.** The **Allowed groups**
 > column below uses the broker's **authz class** identifiers
@@ -124,13 +124,6 @@ allocator operations are refused before dispatch.
 > subject to the Zone Role and RoleBinding policy; the operation row only
 > classifies the authenticated local daemon request.
 
-> **Host cutover is an admin-only public daemon operation.** The `host cutover`
-> command family is destructive, retains metadata-only secret access, and
-> requires broker admission. It appears in `PrivilegesJson.publicOperations`
-> with only the `d2b-admin` authz class; the daemon enforces that classification
-> before any cutover broker request is emitted. See the [CLI contract](cli-contract.md)
-> and [U4 cutover runner admission](#u4-cutover-runner-admission).
-
 ## Operation catalog (PROTOCOL_VERSION = 5)
 
 The currently implemented broker operation catalog. Every row carries
@@ -142,9 +135,6 @@ The currently implemented broker operation catalog. Every row carries
 | `OpenCgroupDir` | cgroup | per VM / role | live | no | no | `d2b-launcher` + `d2b-admin` | yes | deny | `cgroup_id`, `path_class` | [0011](../adr/0011-cgroup-v2-delegation-and-pidfd-handoff.md) |
 | `CgroupKill` | cgroup | per VM / role leaf | live | yes (writes `cgroup.kill` on a leaf) | no | `d2b-launcher` + `d2b-admin` | yes | deny | Request DTO (opaque IDs only): `vm_id`, `role_id`. Audit `operation_fields` (broker-derived after subject resolution): `cgroup_id`, `path_class` (one of `vm-role-leaf` / `host-scoped-leaf`; omitted on subject-resolution failure, which is recorded as `decision: denied-unknown` + `error_kind: unknown-subject` in the audit header). Refused with `cgroup-kill-on-ancestor-refused` if the resolved path's `path_class` is `slice` / `vm-interior`. The daemon invokes this op only as last-resort escalation after `pidfd_send_signal(SIGTERM)` does not drain the leaf within the role's grace period. | [0011](../adr/0011-cgroup-v2-delegation-and-pidfd-handoff.md) |
 | `ApplyHostGenerationHandoff` | host generation | global | live | yes | metadata-only | `d2bd` | yes | deny | Source and target generation identifiers plus fixed outcome metadata; raw store paths and activation arguments never cross the wire. | [ADR-046 activation-nixos](../specs/providers/ADR-046-provider-activation-nixos.md) |
-| `LaunchCutoverRunner` | cutover-runner | global | live | yes | metadata-only | `d2bd` | yes | deny | `operation_id`, `capability_digest`, `expires_at_ms`, `bootstrap_fd_index` | U4 cutover runner admission |
-| `CutoverAudit` | cutover-audit | global | live | no | metadata-only | `d2b-cutover-runner` | yes | deny | `operation_id`, `phase`, `transition`, `request_digest`, `reason_digest` | U4 cutover runner admission |
-| `CutoverEffect` | cutover-effect | global | live | yes | metadata-only | `d2b-cutover-runner` | yes | deny | `operation_id`, `authority`, `phase`, `effect_id`, `effect`, `replay_class`, `request_digest`, `capability_digest`, `outcome` | U4 cutover runner admission |
 | `ObserveRunner` | runner | per VM / role | live | no | metadata-only | `d2bd` | yes | deny | Bounded process identity, start-time, cgroup, and executable verification metadata. | [0011](../adr/0011-cgroup-v2-delegation-and-pidfd-handoff.md) |
 | `PipeWireAudio` | audio | per VM / role / channel | live | yes | no | `d2bd` | yes | deny | Bounded channel and action outcome; no PipeWire path, node identifier, or stream handle. | [ADR-046 audio-pipewire](../specs/providers/ADR-046-provider-audio-pipewire.md) |
 | `StartSystemdUnit` | systemd unit | per VM / role | live | yes | no | `d2bd` | yes | deny | Typed transient-unit identity and bounded start outcome; free-form properties are refused. | [ADR-046 system-systemd](../specs/providers/ADR-046-provider-system-systemd.md) |
@@ -843,32 +833,3 @@ write live-host validation evidence.
 | `usbip` backend | `vm-sys-<env>-usbipd-backend` | uid 0 carve-out + `CAP_NET_RAW` | host module `usbip-host` (not `vhci_hcd`, which is the guest module); long-lived per-env `usbipd` backend. `usbipd` must write the kernel `usbip_sockfd` sysfs attribute as host-root, so the broker gives this one runner a scoped root carve-out with a private PID namespace and fresh procfs; `/etc`, `/var`, `/home`, `/root`, `/run`, `/tmp`, `/boot`, `/mnt`, `/media`, `/srv`, and `/opt` masked; `/dev` masked; and only the currently locked `/dev/bus/usb/<bus>/<dev>` node(s) rebound writable. | owner-local USBIP and broker tests |
 | `usbip` proxy | `vm-sys-<env>-usbipd-proxy` | empty | self-binding TCP proxy from `<env.hostUplinkIp>:3240` to `127.0.0.1:<backendPort>`; no device access | owner-local USBIP and broker tests |
 | `otel-host-bridge` | (host-scoped) `d2b-otel-host-bridge` | empty (fd-only contract; no AF_VSOCK socket creation) | bind set: `/run/d2b/otel`, CH vsock host socket, `host-egress.sock` (RW listen target); broker rejects bundle intent whose source VM ≠ `observability.vmName` | owner-local observability and broker tests |
-
-
-## U4 cutover runner admission
-
-`LaunchCutoverRunner` is a narrow pre-drain broker admission operation. It is
-Admin-only, accepts exactly one SCM_RIGHTS bootstrap descriptor, and resolves
-the runner executable from trusted broker configuration. It is not a
-`SpawnRunner` uid-0 exception, does not place the child in a per-VM unit, and
-does not authorize any cutover effect by itself. The adapted runner peer may
-use only `CutoverAudit` and `CutoverEffect`; both operations bind the
-operation and capability digests, and the broker reloads the current bundle
-before resolving trusted runner or activation intents. Audit responses are
-returned only after the broker audit file and directory are durable.
-The launch request binds the transferred capability digest in the broker's
-operation registry; later runner requests with a missing, replayed, or
-mismatched or expired digest are refused, including after a broker restart.
-After the HostDrain effect succeeds, the broker enters a persisted
-cutover-window allowlist: only that operation's runner may call
-`CutoverAudit` or `CutoverEffect`; ordinary daemon operations are denied until
-the window is closed. Quarantine, finalization, and durable-Volume destruction
-consume marker-bound opaque payloads; they never accept generic delete or raw
-path requests.
-Recursive removal is descriptor-anchored: it refuses symlinks, foreign owners,
-hardlinks, special files, and device changes, and uses `unlinkat` against the
-opened operation-owned directory.
-
-## Related ADRs
-
-- [ADR 0015: daemon-only clean break](../adr/0015-daemon-only-clean-break.md) - the architectural decision record that defines the daemon-only root surface of `d2bd` + `d2b-broker`.

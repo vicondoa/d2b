@@ -9,7 +9,6 @@ fn host_profile_keeps_the_complete_closed_operation_catalog() {
         "OpenZoneStore",
         "SpawnRunner",
         "ApplyHostGenerationHandoff",
-        "LaunchCutoverRunner",
         "ExportBrokerAudit",
         "ValidateBundle",
     ] {

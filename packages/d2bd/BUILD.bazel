@@ -31,7 +31,6 @@ d2bd_shared_deps = [
     "//packages/d2b-contracts:d2b_contracts",
     "//packages/d2b-contracts-broker:d2b_contracts_broker",
     "//packages/d2b-contracts-control:d2b_contracts_control",
-    "//packages/d2b-cutover:d2b_cutover",
     "//packages/d2b-gateway:d2b_gateway",
     "//packages/d2b-gateway-runtime:d2b_gateway_runtime",
     "//packages/d2b-process:d2b_process",

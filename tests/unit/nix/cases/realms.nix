@@ -589,7 +589,6 @@ let
   };
   lifecycleCfg = (mkEval [ lifecycleBase ]).config;
   lifecycleGroups = user: lifecycleCfg.users.users.${user}.extraGroups or [ ];
-  runnerSource = builtins.readFile (flakeRoot + "/packages/d2b-cutover/src/runner.rs");
 in
 let
   allCases = {
@@ -2037,18 +2036,6 @@ let
       adminCount = 1;
       launcherCount = 1;
       overlapCount = 1;
-    };
-  };
-  "realms/host-local-runner-socket-contract-stays-closed" = {
-    expr = {
-      traversalMode = lib.hasInfix "0o710" runnerSource;
-      socketMode = lib.hasInfix "0o660" runnerSource;
-      peerCredentials = lib.hasInfix "PeerCredentials" runnerSource;
-    };
-    expected = {
-      traversalMode = true;
-      socketMode = true;
-      peerCredentials = true;
     };
   };
 };

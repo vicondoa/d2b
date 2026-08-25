@@ -55,7 +55,6 @@ fn guest_profile_rejects_every_host_only_effect_class() {
         "StoreSync",
         "RunHostInstall",
         "RunMigrate",
-        "CutoverEffect",
         "UsbipBind",
         "SecurityKeyOpenDevice",
     ] {

@@ -1,4 +1,4 @@
-//! Typed migration-error envelopes for realm-native clean cutover surfaces.
+//! Typed migration-error envelopes for realm-native migration surfaces.
 
 use crate::ids::CorrelationId;
 use schemars::{

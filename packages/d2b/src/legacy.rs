@@ -346,9 +346,6 @@ pub(super) enum HostCommand {
     Destroy(HostDestroyArgs),
     /// Read-only deep diagnostics for the daemon + broker state.
     Doctor(HostDoctorArgs),
-    /// Plan the one-time storage layout cutover. --apply is fail-closed until broker support lands.
-    #[command(name = "migrate-storage")]
-    MigrateStorage(HostMigrateStorageArgs),
     /// Install d2bd + broker units onto the host. --apply mutates.
     Install(HostInstallArgs),
     /// Reconcile host network state (re-run bridge/route/nftables reconcile without starting any VM).
@@ -444,26 +441,6 @@ pub(super) struct HostDoctorArgs {
     pub(crate) json: bool,
     #[arg(long, conflicts_with = "json")]
     pub(crate) human: bool,
-}
-
-#[derive(Debug, Args)]
-pub(super) struct HostMigrateStorageArgs {
-    /// Plan the storage cutover without mutating host state.
-    #[arg(long, conflicts_with_all = ["apply", "rollback"])]
-    dry_run: bool,
-    /// Apply the storage cutover. Currently fails closed until broker support lands.
-    #[arg(long, conflicts_with_all = ["dry_run", "rollback"])]
-    apply: bool,
-    /// Roll back from a named storage cutover checkpoint.
-    #[arg(long, conflicts_with_all = ["dry_run", "apply"], requires = "from_checkpoint")]
-    rollback: bool,
-    /// Checkpoint ID to roll back.
-    #[arg(long, value_name = "ID", requires = "rollback")]
-    from_checkpoint: Option<String>,
-    #[arg(long, conflicts_with = "human")]
-    json: bool,
-    #[arg(long, conflicts_with = "json")]
-    human: bool,
 }
 
 #[derive(Debug, Args)]
@@ -1538,7 +1515,6 @@ pub(super) fn daemon_supported_features() -> Vec<d2b_contracts::FeatureFlag> {
         KnownFeatureFlag::ExportBrokerAudit.wire_value(),
         KnownFeatureFlag::ConfiguredLaunchV1.wire_value(),
         KnownFeatureFlag::UnsafeLocalProviderV1.wire_value(),
-        KnownFeatureFlag::CutoverRunnerV1.wire_value(),
     ]
 }
 
@@ -3739,163 +3715,6 @@ pub(super) fn cmd_host_doctor(
         print_stdout(&doctor::render_human(&report));
     }
     Ok(exit_code)
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub(super) struct StorageMigrationPlan {
-    command: &'static str,
-    mode: &'static str,
-    checkpoint_id: String,
-    rollback_command: String,
-    vm_count: usize,
-    vms: Vec<String>,
-    preflight_requirements: Vec<&'static str>,
-    preserve: Vec<&'static str>,
-    cutover_only_cleanup: Vec<&'static str>,
-    fail_closed_hazards: Vec<&'static str>,
-    apply_status: &'static str,
-}
-
-pub(super) fn storage_migration_checkpoint_id(vms: &[String]) -> String {
-    let mut basis = String::from("storage-cutover-v1\n");
-    let mut sorted = vms.to_vec();
-    sorted.sort();
-    for vm in &sorted {
-        let _ = writeln!(basis, "{vm}");
-    }
-    let digest = sha256_hex(basis.as_bytes());
-    let suffix = digest
-        .strip_prefix("sha256:")
-        .unwrap_or(digest.as_str())
-        .chars()
-        .take(12)
-        .collect::<String>();
-    format!("storage-cutover-{suffix}")
-}
-
-pub(super) fn build_storage_migration_plan(manifest: &ManifestDocument) -> StorageMigrationPlan {
-    let mut vms: Vec<String> = manifest.vms().iter().map(|vm| vm.name.clone()).collect();
-    vms.sort();
-    let checkpoint_id = storage_migration_checkpoint_id(&vms);
-    let rollback_command =
-        format!("d2b host migrate-storage --rollback --from-checkpoint {checkpoint_id}");
-    StorageMigrationPlan {
-        command: "host migrate-storage",
-        mode: "dry-run",
-        checkpoint_id,
-        rollback_command,
-        vm_count: vms.len(),
-        vms,
-        preflight_requirements: vec![
-            "all d2b VMs stopped",
-            "d2bd.service stopped",
-            "d2b-broker.service stopped",
-            "operator accepts planned downtime for the one-time storage layout cutover",
-            "net VMs stopped; guest routing, TAP connectivity, and dependent bridge traffic will be interrupted",
-        ],
-        preserve: vec![
-            "per-VM swtpm NVRAM and swtpm identity markers",
-            "framework SSH keys and guest sshd host keys",
-            "VM disk images and declared persistent volumes",
-            "store-view generation metadata and gcroots",
-            "daemon diagnostic reports, audit logs, host-runtime metadata, and non-authority adoption history",
-            "declared host bridges, TAP naming intent, nftables/NM/networkd ownership metadata, and network-preflight evidence",
-        ],
-        cutover_only_cleanup: vec![
-            "/run/d2b-gpu",
-            "/run/d2b-video",
-            "/run/d2b-wlproxy",
-            "/var/lib/d2b/component-session-<vm>",
-            "boot-scoped runtime socket files only after all d2b services are stopped",
-            "runtime network helper sockets and stale TAP pid/metadata files after all d2b services are stopped",
-            "stale migration markers from retired storage waves",
-        ],
-        fail_closed_hazards: vec![
-            "symlink or path traversal inside any moved path",
-            "foreign ownership markers on a d2b-managed path",
-            "recursive operations traversing hardlink farms or mutating shared /nix/store inodes",
-            "missing swtpm marker for a previously provisioned TPM VM",
-            "any candidate outside the generated storage root set",
-            "any open d2b daemon, broker, runner, net VM, or workload VM file descriptor",
-            "any attempt to unlink lock files during cutover rather than leaving /run locks for reboot/tmpfs cleanup",
-        ],
-        apply_status: "not-implemented-in-this-build",
-    }
-}
-
-pub(super) fn cmd_host_migrate_storage(
-    context: &LegacyContext,
-    args: &HostMigrateStorageArgs,
-) -> Result<i32, CliFailure> {
-    if args.rollback {
-        let checkpoint = args.from_checkpoint.as_deref().unwrap_or("<missing>");
-        return emit_host_error(
-            &host_error_envelope(
-                "Storage rollback is not implemented in this build",
-                "storage-migration-rollback-not-implemented",
-                78,
-                "Rollback request for a storage cutover checkpoint.",
-                &format!("rollback requested from checkpoint {checkpoint}"),
-                "Keep the host stopped and use the checkpoint metadata to file an issue; do not repair with recursive chmod/chown/setfacl.",
-                "docs/reference/cli-contract.md#host-migrate-storage",
-            ),
-            args.json,
-        );
-    }
-
-    let flags = require_explicit_mutation_flag(
-        "host migrate-storage",
-        args.dry_run,
-        args.apply,
-        args.json,
-    )?;
-    if flags.apply {
-        return emit_host_error(
-            &host_error_envelope(
-                "Storage cutover apply is not implemented in this build",
-                "storage-migration-apply-not-implemented",
-                78,
-                "Broker-backed storage cutover mover availability.",
-                "apply requested, but only dry-run checkpoint planning is available",
-                "Run `d2b host migrate-storage --dry-run` and wait for the broker-backed apply implementation before moving persistent state.",
-                "docs/reference/cli-contract.md#host-migrate-storage",
-            ),
-            args.json,
-        );
-    }
-
-    let manifest = context.load_manifest()?;
-    let plan = build_storage_migration_plan(&manifest);
-    if args.json {
-        let mut rendered = serde_json::to_string_pretty(&plan).map_err(|err| {
-            CliFailure::new(
-                1,
-                format!("failed to serialize storage migration plan: {err}"),
-            )
-        })?;
-        rendered.push('\n');
-        print_stdout(&rendered);
-    } else {
-        print_stdout(&format!(
-            "host migrate-storage --dry-run: checkpoint={} vm_count={}\n",
-            plan.checkpoint_id, plan.vm_count
-        ));
-        print_stdout(&format!("rollback command: {}\n", plan.rollback_command));
-        print_stdout("preflight requirements:\n");
-        for requirement in &plan.preflight_requirements {
-            print_stdout(&format!("  - {requirement}\n"));
-        }
-        print_stdout("persistent data preserved:\n");
-        for item in &plan.preserve {
-            print_stdout(&format!("  - {item}\n"));
-        }
-        print_stdout("cutover-only cleanup candidates:\n");
-        for item in &plan.cutover_only_cleanup {
-            print_stdout(&format!("  - {item}\n"));
-        }
-    }
-    Ok(0)
 }
 
 pub(super) fn cmd_host_validate(

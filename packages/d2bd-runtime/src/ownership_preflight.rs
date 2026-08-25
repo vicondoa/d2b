@@ -115,8 +115,7 @@ const CANONICAL_MATRIX: &[EntrySpec] = &[
         group_template: "users",
         mode: 0o0755,
         kind: EntryKind::Dir,
-        // LEGACY RECOVERY ARTIFACT - optional (absent on native,
-        // post-cutover VMs).
+        // LEGACY RECOVERY ARTIFACT - optional (absent on native VMs).
         required: false,
         // HARDLINK FARM CARVE-OUT - must stay false. The
         // `d2b_host::ownership_matrix::should_recurse` invariant

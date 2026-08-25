@@ -4,9 +4,13 @@
 
 **Created**: 2026-07-29
 
-**Status**: Specification reconciled - implementation continuation pending
+**Status**: Superseded on 2026-08-25 - the host cutover feature was removed before release
 
 **Input**: User description: "I want to create a spec for finishing implementation of ADR-046 (docs/adr) - d2b 3.0. W0-W1 have been implemented and merged into the v3 branch. there are detailed specs for it in docs/specs."
+
+> Historical specification only. The cutover implementation and its user-facing
+> option were removed before release. The requirements and task records below
+> are not current implementation or operator instructions.
 
 ## Context
 

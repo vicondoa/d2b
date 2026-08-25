@@ -21,7 +21,6 @@ test_suite(
         "//packages/d2b-controller-toolkit:all-tests",
         "//packages/d2b-core:all-tests",
         "//packages/d2b-core-controller:all-tests",
-        "//packages/d2b-cutover:all-tests",
         "//packages/d2b-gateway:all-tests",
         "//packages/d2b-gateway-runtime:all-tests",
         "//packages/d2b-host:all-tests",

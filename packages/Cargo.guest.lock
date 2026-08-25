@@ -845,8 +845,7 @@ name = "d2b-contracts-broker"
 version = "0.0.0-bootstrap"
 dependencies = [
  "d2b-contracts",
- "d2b-contracts-control",
- "d2b-contracts-resource",
+  "d2b-contracts-resource",
  "schemars",
  "serde",
  "serde_json",
@@ -959,18 +958,6 @@ dependencies = [
  "serde_json",
  "sha2",
  "tokio",
-]
-
-[[package]]
-name = "d2b-cutover"
-version = "0.0.0-bootstrap"
-dependencies = [
- "d2b-contracts",
- "d2b-contracts-broker",
- "d2b-contracts-resource",
- "nix 0.29.0",
- "serde",
- "serde_json",
 ]
 
 [[package]]
@@ -1534,8 +1521,7 @@ dependencies = [
  "d2b-contracts-zone-session",
  "d2b-core",
  "d2b-core-controller",
- "d2b-cutover",
- "d2b-gateway",
+  "d2b-gateway",
  "d2b-gateway-runtime",
  "d2b-host",
  "d2b-process",
@@ -1587,8 +1573,7 @@ dependencies = [
  "tracing",
  "tracing-subscriber",
  "ttrpc",
- "uzers",
-]
+ ]
 
 [[package]]
 name = "d2bd-runtime"

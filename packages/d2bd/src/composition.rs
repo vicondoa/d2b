@@ -255,7 +255,6 @@ mod audio_dispatch;
 mod audio_host_controller;
 mod audio_resource_runtime;
 mod binding_child_resource_runtime;
-mod cutover;
 pub mod interaction_composition;
 pub mod network_effect_port;
 pub mod process_provider_runtime;
@@ -4180,7 +4179,6 @@ fn handle_connection_authorized(
         KnownFeatureFlag::ExportBrokerAudit.wire_value(),
         KnownFeatureFlag::ConfiguredLaunchV1.wire_value(),
         KnownFeatureFlag::UnsafeLocalProviderV1.wire_value(),
-        KnownFeatureFlag::CutoverRunnerV1.wire_value(),
     ];
     let capabilities = advertised_capabilities
         .into_iter()
@@ -4488,7 +4486,6 @@ fn dispatch_request_locked(
         d2bd_runtime::wire::Request::HostReconcile(req) => {
             dispatch_broker_host_reconcile_as(state, req, broker_caller_role_for_peer(peer))
         }
-        d2bd_runtime::wire::Request::HostCutover(req) => cutover::dispatch(state, peer, req),
         d2bd_runtime::wire::Request::Console(op) => dispatch_console(state, peer, op),
         d2bd_runtime::wire::Request::GatewayDisplay(op) => {
             dispatch_gateway_display(state, peer, op)
@@ -5115,41 +5112,6 @@ fn dispatch_resource_request(
         == Some(d2b_provider_config_nixos::SERVICE_PACKAGE)
     {
         return dispatch_config_nixos_service_request(state, peer, &request.value());
-    }
-    if request.method() == Some("HostCutover") {
-        if !matches!(peer.role, PeerRole::Admin) {
-            return Err(TypedError::AuthzNotAdmin {
-                verb: "hostCutover".to_owned(),
-            });
-        }
-        let mut value = request.value();
-        if let Value::Object(object) = &mut value {
-            for key in [
-                "type",
-                "method",
-                "zoneRef",
-                "schemaVersion",
-                "service",
-                "sessionVerb",
-            ] {
-                object.remove(key);
-            }
-        }
-
-        let cutover: public_wire::HostCutoverRequest =
-            serde_json::from_value(value).map_err(|error| TypedError::WireInvalidFrame {
-                detail: format!("hostCutover request malformed: {error}"),
-            })?;
-        let operation = cutover.operation;
-        let result = cutover::dispatch(state, peer, cutover);
-        if let Err(error) = &result {
-            tracing::warn!(
-                cutover_operation = ?operation,
-                error_kind = error.kind(),
-                "host cutover resource dispatch refused"
-            );
-        }
-        return result;
     }
     if matches!(
         request.method(),
@@ -15125,7 +15087,7 @@ impl d2bd_runtime::supervisor::dag::NodeRunner for VmStartRunner<'_> {
             // Security-key relay/frontend ownership belongs to the
             // Provider/device-security-key controller. The legacy daemon
             // accept loop is not allowed to open a blanket hidraw device;
-            // this legacy DAG node is readiness-only during the cutover.
+            // this legacy DAG node is readiness-only during the transition.
             return wait_for_readiness(node, readiness, budget.readiness, None);
         }
         match vm_start_node_mode(&node.role) {
@@ -15996,7 +15958,6 @@ fn broker_caller_uid(caller_role: &BrokerCallerRole) -> u32 {
         BrokerCallerRole::AdminUid { uid }
         | BrokerCallerRole::LauncherUid { uid }
         | BrokerCallerRole::RootUid { uid } => *uid,
-        BrokerCallerRole::CutoverRunner { .. } => 0,
         BrokerCallerRole::NotAuthorized => 0,
     }
 }

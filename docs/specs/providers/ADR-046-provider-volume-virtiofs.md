@@ -1271,13 +1271,13 @@ d2b.zones."dev".resources."store-view-work-vm" = {
     kind = "durable";
     layout = [
       { path = "";              type = "directory"; ownerRef = "User/d2bd"; groupRef = "User/users"; mode = "0755"; }
-      { path = "live";          type = "directory"; invariants = ["no-symlink" "broker-opaque-id-only"]; cleanupPolicy = "cutover-only"; repairPolicy = "exact-owner"; ownerRef = "User/d2bd"; groupRef = "User/users"; mode = "0755"; }
+      { path = "live";          type = "directory"; invariants = ["no-symlink" "broker-opaque-id-only"]; cleanupPolicy = "never"; repairPolicy = "exact-owner"; ownerRef = "User/d2bd"; groupRef = "User/users"; mode = "0755"; }
       { path = "live/.d2b-marker-work-vm"; type = "file"; ownerRef = "User/d2bd"; groupRef = "User/users"; mode = "0444"; invariants = ["no-symlink" "same-filesystem" "hardlink-farm-no-recursion" "broker-opaque-id-only"]; repairPolicy = "exact-owner"; }
       { path = "meta";          type = "directory"; invariants = ["no-symlink" "same-filesystem" "hardlink-farm-no-recursion" "broker-opaque-id-only"]; repairPolicy = "exact-owner"; ownerRef = "User/d2bd"; groupRef = "User/users"; mode = "0755"; }
-      { path = "meta/generations"; type = "directory"; invariants = ["no-symlink" "same-filesystem" "hardlink-farm-no-recursion" "broker-opaque-id-only"]; cleanupPolicy = "cutover-only"; repairPolicy = "exact-owner"; ownerRef = "User/d2bd"; groupRef = "User/users"; mode = "0755"; }
-      { path = "meta/current";  type = "symlink"; target = "generations/0"; noFollow = false; invariants = ["broker-opaque-id-only"]; cleanupPolicy = "cutover-only"; repairPolicy = "exact-owner"; ownerRef = "User/d2bd"; groupRef = "User/users"; mode = "0777"; }
+      { path = "meta/generations"; type = "directory"; invariants = ["no-symlink" "same-filesystem" "hardlink-farm-no-recursion" "broker-opaque-id-only"]; cleanupPolicy = "never"; repairPolicy = "exact-owner"; ownerRef = "User/d2bd"; groupRef = "User/users"; mode = "0755"; }
+      { path = "meta/current";  type = "symlink"; target = "generations/0"; noFollow = false; invariants = ["broker-opaque-id-only"]; cleanupPolicy = "never"; repairPolicy = "exact-owner"; ownerRef = "User/d2bd"; groupRef = "User/users"; mode = "0777"; }
       { path = "state";         type = "directory"; invariants = ["no-symlink" "broker-opaque-id-only"]; repairPolicy = "exact-owner"; ownerRef = "User/d2bd"; groupRef = "User/users"; mode = "0700"; }
-      { path = "gcroots";       type = "directory"; invariants = ["no-symlink" "same-filesystem" "hardlink-farm-no-recursion" "broker-opaque-id-only"]; cleanupPolicy = "cutover-only"; repairPolicy = "exact-owner"; ownerRef = "User/d2bd"; groupRef = "User/users"; mode = "0755"; }
+      { path = "gcroots";       type = "directory"; invariants = ["no-symlink" "same-filesystem" "hardlink-farm-no-recursion" "broker-opaque-id-only"]; cleanupPolicy = "never"; repairPolicy = "exact-owner"; ownerRef = "User/d2bd"; groupRef = "User/users"; mode = "0755"; }
       { path = "sync.lock";     type = "file"; ownerRef = "User/d2bd"; groupRef = "User/users"; mode = "0640"; leaseClass = "none"; invariants = ["no-symlink" "broker-opaque-id-only"]; restartPolicy = "preserve-across-controller-restart"; }
     ];
     views = {

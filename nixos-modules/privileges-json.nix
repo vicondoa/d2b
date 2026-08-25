@@ -285,18 +285,6 @@ let
     "auditMode": "yes"
   },
   {
-    "operation": "host cutover",
-    "subject": "host cutover",
-    "scope": "global",
-    "allowedGroups": [
-      "d2b-admin"
-    ],
-    "destructive": true,
-    "secretAccess": "metadata-only",
-    "brokerRequired": "yes",
-    "auditMode": "yes"
-  },
-  {
     "operation": "host prepare",
     "subject": "host",
     "scope": "global",
@@ -383,18 +371,6 @@ let
   {
     "operation": "host destroy --apply",
     "subject": "host",
-    "scope": "global",
-    "allowedGroups": [
-      "d2b-admin"
-    ],
-    "destructive": true,
-    "secretAccess": "possible-paths-only",
-    "brokerRequired": "yes",
-    "auditMode": "yes"
-  },
-  {
-    "operation": "host migrate-storage --apply",
-    "subject": "host/storage",
     "scope": "global",
     "allowedGroups": [
       "d2b-admin"
@@ -1768,42 +1744,6 @@ let
     ],
     "destructive": true,
     "secretAccess": "none",
-    "brokerRequired": "yes",
-    "auditMode": "yes"
-  },
-  {
-    "operation": "LaunchCutoverRunner",
-    "subject": "cutover-runner",
-    "scope": "global",
-    "allowedGroups": [
-      "d2bd"
-    ],
-    "destructive": true,
-    "secretAccess": "metadata-only",
-    "brokerRequired": "yes",
-    "auditMode": "yes"
-  },
-  {
-    "operation": "CutoverAudit",
-    "subject": "cutover-audit",
-    "scope": "global",
-    "allowedGroups": [
-      "d2b-cutover-runner"
-    ],
-    "destructive": false,
-    "secretAccess": "metadata-only",
-    "brokerRequired": "yes",
-    "auditMode": "yes"
-  },
-  {
-    "operation": "CutoverEffect",
-    "subject": "cutover-effect",
-    "scope": "global",
-    "allowedGroups": [
-      "d2b-cutover-runner"
-    ],
-    "destructive": true,
-    "secretAccess": "metadata-only",
     "brokerRequired": "yes",
     "auditMode": "yes"
   },

@@ -12,23 +12,6 @@ pub struct ProcessesJson {
     pub schema_version: String,
     /// Per-VM process DAGs.
     pub vms: Vec<VmProcessDag>,
-    /// Optional out-of-band host cutover runner contract.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub cutover_runner: Option<CutoverRunnerProcess>,
-}
-
-/// Private process contract for the one-shot cutover runner.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct CutoverRunnerProcess {
-    /// Trusted store path installed by the host-tool emitter.
-    pub binary_path: String,
-    /// The runner is never a declared persistent unit.
-    pub persistent: bool,
-    /// Closed placement label proving it is outside the VM slice.
-    pub cgroup_placement: String,
-    /// The broker transfers exactly one bootstrap descriptor.
-    pub single_bootstrap_fd: bool,
 }
 
 /// Process DAG for one VM.

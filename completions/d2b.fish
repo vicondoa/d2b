@@ -147,23 +147,22 @@ complete -c d2b -n "__fish_d2b_using_subcommand reconcile" -l json -d 'Emit the 
 complete -c d2b -n "__fish_d2b_using_subcommand reconcile" -l human -d 'Force human-readable terminal output'
 complete -c d2b -n "__fish_d2b_using_subcommand reconcile" -l no-deadline -d 'Suppress the command default deadline'
 complete -c d2b -n "__fish_d2b_using_subcommand reconcile" -s h -l help -d 'Print help'
-complete -c d2b -n "__fish_d2b_using_subcommand host; and not __fish_seen_subcommand_from get list status check prepare destroy doctor install reconcile validate cutover" -l zone -d 'Address a declared Zone. Without this flag the nearest local runtime is selected' -r
-complete -c d2b -n "__fish_d2b_using_subcommand host; and not __fish_seen_subcommand_from get list status check prepare destroy doctor install reconcile validate cutover" -l deadline -d 'Bound all Zone requests and streams' -r
-complete -c d2b -n "__fish_d2b_using_subcommand host; and not __fish_seen_subcommand_from get list status check prepare destroy doctor install reconcile validate cutover" -l json -d 'Emit the stable JSON envelope'
-complete -c d2b -n "__fish_d2b_using_subcommand host; and not __fish_seen_subcommand_from get list status check prepare destroy doctor install reconcile validate cutover" -l human -d 'Force human-readable terminal output'
-complete -c d2b -n "__fish_d2b_using_subcommand host; and not __fish_seen_subcommand_from get list status check prepare destroy doctor install reconcile validate cutover" -l no-deadline -d 'Suppress the command default deadline'
-complete -c d2b -n "__fish_d2b_using_subcommand host; and not __fish_seen_subcommand_from get list status check prepare destroy doctor install reconcile validate cutover" -s h -l help -d 'Print help'
-complete -c d2b -n "__fish_d2b_using_subcommand host; and not __fish_seen_subcommand_from get list status check prepare destroy doctor install reconcile validate cutover" -f -a "get"
-complete -c d2b -n "__fish_d2b_using_subcommand host; and not __fish_seen_subcommand_from get list status check prepare destroy doctor install reconcile validate cutover" -f -a "list"
-complete -c d2b -n "__fish_d2b_using_subcommand host; and not __fish_seen_subcommand_from get list status check prepare destroy doctor install reconcile validate cutover" -f -a "status"
-complete -c d2b -n "__fish_d2b_using_subcommand host; and not __fish_seen_subcommand_from get list status check prepare destroy doctor install reconcile validate cutover" -f -a "check"
-complete -c d2b -n "__fish_d2b_using_subcommand host; and not __fish_seen_subcommand_from get list status check prepare destroy doctor install reconcile validate cutover" -f -a "prepare"
-complete -c d2b -n "__fish_d2b_using_subcommand host; and not __fish_seen_subcommand_from get list status check prepare destroy doctor install reconcile validate cutover" -f -a "destroy"
-complete -c d2b -n "__fish_d2b_using_subcommand host; and not __fish_seen_subcommand_from get list status check prepare destroy doctor install reconcile validate cutover" -f -a "doctor"
-complete -c d2b -n "__fish_d2b_using_subcommand host; and not __fish_seen_subcommand_from get list status check prepare destroy doctor install reconcile validate cutover" -f -a "install"
-complete -c d2b -n "__fish_d2b_using_subcommand host; and not __fish_seen_subcommand_from get list status check prepare destroy doctor install reconcile validate cutover" -f -a "reconcile"
-complete -c d2b -n "__fish_d2b_using_subcommand host; and not __fish_seen_subcommand_from get list status check prepare destroy doctor install reconcile validate cutover" -f -a "validate"
-complete -c d2b -n "__fish_d2b_using_subcommand host; and not __fish_seen_subcommand_from get list status check prepare destroy doctor install reconcile validate cutover" -f -a "cutover"
+complete -c d2b -n "__fish_d2b_using_subcommand host; and not __fish_seen_subcommand_from get list status check prepare destroy doctor install reconcile validate" -l zone -d 'Address a declared Zone. Without this flag the nearest local runtime is selected' -r
+complete -c d2b -n "__fish_d2b_using_subcommand host; and not __fish_seen_subcommand_from get list status check prepare destroy doctor install reconcile validate" -l deadline -d 'Bound all Zone requests and streams' -r
+complete -c d2b -n "__fish_d2b_using_subcommand host; and not __fish_seen_subcommand_from get list status check prepare destroy doctor install reconcile validate" -l json -d 'Emit the stable JSON envelope'
+complete -c d2b -n "__fish_d2b_using_subcommand host; and not __fish_seen_subcommand_from get list status check prepare destroy doctor install reconcile validate" -l human -d 'Force human-readable terminal output'
+complete -c d2b -n "__fish_d2b_using_subcommand host; and not __fish_seen_subcommand_from get list status check prepare destroy doctor install reconcile validate" -l no-deadline -d 'Suppress the command default deadline'
+complete -c d2b -n "__fish_d2b_using_subcommand host; and not __fish_seen_subcommand_from get list status check prepare destroy doctor install reconcile validate" -s h -l help -d 'Print help'
+complete -c d2b -n "__fish_d2b_using_subcommand host; and not __fish_seen_subcommand_from get list status check prepare destroy doctor install reconcile validate" -f -a "get"
+complete -c d2b -n "__fish_d2b_using_subcommand host; and not __fish_seen_subcommand_from get list status check prepare destroy doctor install reconcile validate" -f -a "list"
+complete -c d2b -n "__fish_d2b_using_subcommand host; and not __fish_seen_subcommand_from get list status check prepare destroy doctor install reconcile validate" -f -a "status"
+complete -c d2b -n "__fish_d2b_using_subcommand host; and not __fish_seen_subcommand_from get list status check prepare destroy doctor install reconcile validate" -f -a "check"
+complete -c d2b -n "__fish_d2b_using_subcommand host; and not __fish_seen_subcommand_from get list status check prepare destroy doctor install reconcile validate" -f -a "prepare"
+complete -c d2b -n "__fish_d2b_using_subcommand host; and not __fish_seen_subcommand_from get list status check prepare destroy doctor install reconcile validate" -f -a "destroy"
+complete -c d2b -n "__fish_d2b_using_subcommand host; and not __fish_seen_subcommand_from get list status check prepare destroy doctor install reconcile validate" -f -a "doctor"
+complete -c d2b -n "__fish_d2b_using_subcommand host; and not __fish_seen_subcommand_from get list status check prepare destroy doctor install reconcile validate" -f -a "install"
+complete -c d2b -n "__fish_d2b_using_subcommand host; and not __fish_seen_subcommand_from get list status check prepare destroy doctor install reconcile validate" -f -a "reconcile"
+complete -c d2b -n "__fish_d2b_using_subcommand host; and not __fish_seen_subcommand_from get list status check prepare destroy doctor install reconcile validate" -f -a "validate"
 complete -c d2b -n "__fish_d2b_using_subcommand host; and __fish_seen_subcommand_from get" -l zone -d 'Address a declared Zone. Without this flag the nearest local runtime is selected' -r
 complete -c d2b -n "__fish_d2b_using_subcommand host; and __fish_seen_subcommand_from get" -l deadline -d 'Bound all Zone requests and streams' -r
 complete -c d2b -n "__fish_d2b_using_subcommand host; and __fish_seen_subcommand_from get" -l json -d 'Emit the stable JSON envelope'
@@ -253,22 +252,6 @@ complete -c d2b -n "__fish_d2b_using_subcommand host; and __fish_seen_subcommand
 complete -c d2b -n "__fish_d2b_using_subcommand host; and __fish_seen_subcommand_from validate" -l human -d 'Force human-readable terminal output'
 complete -c d2b -n "__fish_d2b_using_subcommand host; and __fish_seen_subcommand_from validate" -l no-deadline -d 'Suppress the command default deadline'
 complete -c d2b -n "__fish_d2b_using_subcommand host; and __fish_seen_subcommand_from validate" -s h -l help -d 'Print help'
-complete -c d2b -n "__fish_d2b_using_subcommand host; and __fish_seen_subcommand_from cutover" -l zone -d 'Address a declared Zone. Without this flag the nearest local runtime is selected' -r
-complete -c d2b -n "__fish_d2b_using_subcommand host; and __fish_seen_subcommand_from cutover" -l deadline -d 'Bound all Zone requests and streams' -r
-complete -c d2b -n "__fish_d2b_using_subcommand host; and __fish_seen_subcommand_from cutover" -l json -d 'Emit the stable JSON envelope'
-complete -c d2b -n "__fish_d2b_using_subcommand host; and __fish_seen_subcommand_from cutover" -l human -d 'Force human-readable terminal output'
-complete -c d2b -n "__fish_d2b_using_subcommand host; and __fish_seen_subcommand_from cutover" -l no-deadline -d 'Suppress the command default deadline'
-complete -c d2b -n "__fish_d2b_using_subcommand host; and __fish_seen_subcommand_from cutover" -s h -l help -d 'Print help'
-complete -c d2b -n "__fish_d2b_using_subcommand host; and __fish_seen_subcommand_from cutover" -f -a "preview"
-complete -c d2b -n "__fish_d2b_using_subcommand host; and __fish_seen_subcommand_from cutover" -f -a "status"
-complete -c d2b -n "__fish_d2b_using_subcommand host; and __fish_seen_subcommand_from cutover" -f -a "hold"
-complete -c d2b -n "__fish_d2b_using_subcommand host; and __fish_seen_subcommand_from cutover" -f -a "resume"
-complete -c d2b -n "__fish_d2b_using_subcommand host; and __fish_seen_subcommand_from cutover" -f -a "apply"
-complete -c d2b -n "__fish_d2b_using_subcommand host; and __fish_seen_subcommand_from cutover" -f -a "rollback"
-complete -c d2b -n "__fish_d2b_using_subcommand host; and __fish_seen_subcommand_from cutover" -f -a "verify"
-complete -c d2b -n "__fish_d2b_using_subcommand host; and __fish_seen_subcommand_from cutover" -f -a "doctor"
-complete -c d2b -n "__fish_d2b_using_subcommand host; and __fish_seen_subcommand_from cutover" -f -a "finalize"
-complete -c d2b -n "__fish_d2b_using_subcommand host; and __fish_seen_subcommand_from cutover" -f -a "reset"
 complete -c d2b -n "__fish_d2b_using_subcommand guest; and not __fish_seen_subcommand_from get list status start stop restart create update-spec delete console" -l zone -d 'Address a declared Zone. Without this flag the nearest local runtime is selected' -r
 complete -c d2b -n "__fish_d2b_using_subcommand guest; and not __fish_seen_subcommand_from get list status start stop restart create update-spec delete console" -l deadline -d 'Bound all Zone requests and streams' -r
 complete -c d2b -n "__fish_d2b_using_subcommand guest; and not __fish_seen_subcommand_from get list status start stop restart create update-spec delete console" -l json -d 'Emit the stable JSON envelope'

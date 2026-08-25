@@ -53,7 +53,6 @@ pub const RECOVERY_EVIDENCE_VALIDATION: &str = "recovery-point-attestation";
 /// Candidate-addressed delivery record names.
 pub const BINDING_REQUEST_FILE: &str = "binding-request.json";
 pub const TERMINAL_FAILURE_FILE: &str = "terminal-failure.json";
-pub const CUTOVER_RESULT_FILE: &str = "cutover-result.json";
 pub const MERGE_ATTEMPT_FILE: &str = "merge-attempt.json";
 pub const POST_MERGE_RECONCILIATION_FILE: &str = "post-merge-reconciliation.json";
 pub const POST_MERGE_SEAL_FILE: &str = "post-merge-seal.json";
@@ -62,7 +61,6 @@ pub const CLOSE_FILE: &str = "close.json";
 
 const BINDING_REQUEST_ARTIFACT_KIND: &str = "d2b-delivery/binding-request";
 const TERMINAL_FAILURE_ARTIFACT_KIND: &str = "d2b-delivery/terminal-failure";
-const CUTOVER_RESULT_ARTIFACT_KIND: &str = "d2b-delivery/cutover-result";
 const MERGE_ATTEMPT_ARTIFACT_KIND: &str = "d2b-delivery/merge-attempt";
 const POST_MERGE_RECONCILIATION_ARTIFACT_KIND: &str = "d2b-delivery/post-merge-reconciliation";
 const POST_MERGE_SEAL_ARTIFACT_KIND: &str = "d2b-delivery/post-merge-seal";
@@ -697,8 +695,6 @@ pub enum TerminalFailureReason {
     TargetDrift,
     /// Bound evidence changed.
     EvidenceDrift,
-    /// Cutover did not complete.
-    CutoverFailed,
     /// Merge result or resulting tree did not match.
     MergeMismatch,
     /// Closure or attestation validation failed.
@@ -713,8 +709,6 @@ pub enum DurableDeliveryState {
     Converging,
     /// The sole binding request exists.
     Bound,
-    /// Cutover succeeded and delivery continues.
-    CutoverSucceeded,
     /// A merge attempt has been recorded.
     MergeAttempted,
     /// The exact post-merge tree was sealed.
@@ -910,61 +904,6 @@ impl TerminalFailureRecord {
         validate_record_header(
             &self.artifact_kind,
             TERMINAL_FAILURE_ARTIFACT_KIND,
-            self.schema_version,
-            &self.binding,
-        )
-    }
-}
-
-/// Cutover result outcome.
-#[derive(Clone, Copy, Debug, Deserialize, Eq, JsonSchema, PartialEq, Serialize)]
-#[serde(rename_all = "kebab-case")]
-pub enum CutoverResultStatus {
-    /// Phase 0-9 cutover and verification succeeded.
-    Succeeded,
-    /// Cutover failed and must become terminal.
-    Failed,
-}
-
-/// Candidate-bound cutover result record.
-#[derive(Clone, Deserialize, Eq, JsonSchema, PartialEq, Serialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct CutoverResultRecord {
-    /// Record kind.
-    pub artifact_kind: String,
-    /// Delivery state schema.
-    pub schema_version: u32,
-    /// Complete candidate binding.
-    pub binding: DeliveryBinding,
-    /// Cutover result.
-    pub result: CutoverResultStatus,
-    /// Publication time.
-    pub verified_at_unix: RecoveryUnixSeconds,
-}
-
-impl CutoverResultRecord {
-    /// Construct a cutover result.
-    pub fn new(
-        binding: DeliveryBinding,
-        result: CutoverResultStatus,
-        verified_at_unix: u64,
-    ) -> RecoveryResult<Self> {
-        let record = Self {
-            artifact_kind: CUTOVER_RESULT_ARTIFACT_KIND.to_owned(),
-            schema_version: DELIVERY_SCHEMA_VERSION,
-            binding,
-            result,
-            verified_at_unix: RecoveryUnixSeconds::new(verified_at_unix)?,
-        };
-        record.validate()?;
-        Ok(record)
-    }
-
-    /// Validate the fixed record shape.
-    pub fn validate(&self) -> RecoveryResult<()> {
-        validate_record_header(
-            &self.artifact_kind,
-            CUTOVER_RESULT_ARTIFACT_KIND,
             self.schema_version,
             &self.binding,
         )
@@ -1305,27 +1244,11 @@ impl<'a> DeliveryLedger<'a> {
             .write_json_once(TERMINAL_FAILURE_FILE, record)
     }
 
-    /// Publish the phase-9 cutover result.
-    pub fn publish_cutover_result(&self, record: &CutoverResultRecord) -> Result<String> {
-        record.validate().map_err(to_delivery_error)?;
-        self.ensure_bound()?;
-        self.ensure_no_terminal()?;
-        if record.result == CutoverResultStatus::Failed {
-            self.publish_failure_for(
-                record.binding.clone(),
-                TerminalFailureReason::CutoverFailed,
-                record.verified_at_unix,
-            )?;
-        }
-        self.candidate.write_json_once(CUTOVER_RESULT_FILE, record)
-    }
-
     /// Publish the guarded merge attempt.
     pub fn publish_merge_attempt(&self, record: &MergeAttemptRecord) -> Result<String> {
         record.validate().map_err(to_delivery_error)?;
         self.ensure_bound()?;
         self.ensure_no_terminal()?;
-        self.ensure_cutover_succeeded()?;
         if record.result != MergeAttemptStatus::Succeeded {
             self.publish_failure_for(
                 record.binding.clone(),
@@ -1344,7 +1267,6 @@ impl<'a> DeliveryLedger<'a> {
         record.validate().map_err(to_delivery_error)?;
         self.ensure_bound()?;
         self.ensure_no_terminal()?;
-        self.ensure_cutover_succeeded()?;
         self.ensure_merge_succeeded()?;
         if !record.exact_tree || record.expected_tree_oid != record.binding.tree_oid {
             self.publish_failure_for(
@@ -1362,7 +1284,6 @@ impl<'a> DeliveryLedger<'a> {
         record.validate().map_err(to_delivery_error)?;
         self.ensure_bound()?;
         self.ensure_no_terminal()?;
-        self.ensure_cutover_succeeded()?;
         self.ensure_merge_succeeded()?;
         if record.tree_oid != record.binding.tree_oid {
             return Err(DeliveryError::new(
@@ -1439,9 +1360,6 @@ impl<'a> DeliveryLedger<'a> {
         if self.candidate.artifact_exists(MERGE_ATTEMPT_FILE)? {
             return Ok(DurableDeliveryState::MergeAttempted);
         }
-        if self.candidate.artifact_exists(CUTOVER_RESULT_FILE)? {
-            return Ok(DurableDeliveryState::CutoverSucceeded);
-        }
         if self.candidate.artifact_exists(BINDING_REQUEST_FILE)? {
             return Ok(DurableDeliveryState::Bound);
         }
@@ -1453,7 +1371,6 @@ impl<'a> DeliveryLedger<'a> {
         for file in [
             BINDING_REQUEST_FILE,
             TERMINAL_FAILURE_FILE,
-            CUTOVER_RESULT_FILE,
             MERGE_ATTEMPT_FILE,
             POST_MERGE_RECONCILIATION_FILE,
             POST_MERGE_SEAL_FILE,
@@ -1570,20 +1487,6 @@ impl<'a> DeliveryLedger<'a> {
             ))
         } else {
             Ok(())
-        }
-    }
-
-    fn ensure_cutover_succeeded(&self) -> Result<()> {
-        let record: CutoverResultRecord = self
-            .candidate
-            .read_json(CUTOVER_RESULT_FILE)
-            .map_err(|_| DeliveryError::new("cutover result is required before merge"))?;
-        if record.result == CutoverResultStatus::Succeeded {
-            Ok(())
-        } else {
-            Err(DeliveryError::new(
-                "a failed cutover result cannot continue to merge",
-            ))
         }
     }
 
@@ -2307,12 +2210,6 @@ mod tests {
             )
             .expect("bind");
         ledger
-            .publish_cutover_result(
-                &CutoverResultRecord::new(binding.clone(), CutoverResultStatus::Succeeded, 2_001)
-                    .expect("cutover"),
-            )
-            .expect("cutover result");
-        ledger
             .publish_merge_attempt(
                 &MergeAttemptRecord::new(
                     binding.clone(),
@@ -2351,12 +2248,6 @@ mod tests {
                 &BindingRequestRecord::new(binding.clone(), 0, 2_000).expect("binding"),
             )
             .expect("bind");
-        ledger
-            .publish_cutover_result(
-                &CutoverResultRecord::new(binding.clone(), CutoverResultStatus::Succeeded, 2_001)
-                    .expect("cutover"),
-            )
-            .expect("cutover");
         ledger
             .publish_merge_attempt(
                 &MergeAttemptRecord::new(
@@ -2516,12 +2407,6 @@ mod tests {
                 &BindingRequestRecord::new(binding.clone(), 0, 2_000).expect("binding"),
             )
             .expect("bind");
-        ledger
-            .publish_cutover_result(
-                &CutoverResultRecord::new(binding.clone(), CutoverResultStatus::Succeeded, 2_001)
-                    .expect("cutover"),
-            )
-            .expect("cutover");
         ledger
             .publish_merge_attempt(
                 &MergeAttemptRecord::new(

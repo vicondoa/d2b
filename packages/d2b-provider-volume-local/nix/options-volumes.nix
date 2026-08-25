@@ -157,7 +157,6 @@ let
           "boot"
           "process-exit-with-proof"
           "vm-stop-with-proof"
-          "cutover-only"
           "external"
           "owner-controlled"
           "process-exit"
@@ -488,7 +487,7 @@ let
         sensitivity = "private";
         createPolicy = "create-if-absent";
         repairPolicy = "exact-owner";
-        cleanupPolicy = "cutover-only";
+        cleanupPolicy = "never";
         adoptionPolicy = "adopt-with-live-owner-proof";
         restartPolicy = "preserve-across-controller-restart";
         leaseClass = "none";
@@ -509,7 +508,7 @@ let
         sensitivity = "private";
         createPolicy = "create-if-absent";
         repairPolicy = "exact-owner";
-        cleanupPolicy = "cutover-only";
+        cleanupPolicy = "never";
         adoptionPolicy = "adopt-with-live-owner-proof";
         restartPolicy = "preserve-across-controller-restart";
         leaseClass = "none";
@@ -561,7 +560,7 @@ let
         sensitivity = "private";
         createPolicy = "create-if-absent";
         repairPolicy = "exact-owner";
-        cleanupPolicy = "cutover-only";
+        cleanupPolicy = "never";
         adoptionPolicy = "adopt-with-live-owner-proof";
         restartPolicy = "preserve-across-controller-restart";
         leaseClass = "none";
@@ -588,7 +587,7 @@ let
         sensitivity = "private";
         createPolicy = "create-if-absent";
         repairPolicy = "exact-owner";
-        cleanupPolicy = "cutover-only";
+        cleanupPolicy = "never";
         adoptionPolicy = "adopt-with-live-owner-proof";
         restartPolicy = "preserve-across-controller-restart";
         leaseClass = "none";
@@ -629,7 +628,7 @@ let
         sensitivity = "private";
         createPolicy = "create-if-absent";
         repairPolicy = "exact-owner";
-        cleanupPolicy = "cutover-only";
+        cleanupPolicy = "never";
         adoptionPolicy = "adopt-with-live-owner-proof";
         restartPolicy = "preserve-across-controller-restart";
         leaseClass = "none";

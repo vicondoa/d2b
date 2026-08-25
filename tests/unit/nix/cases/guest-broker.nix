@@ -10,13 +10,7 @@ let
     mkdir -p "$out/bin"
     touch "$out/bin/d2b-broker"
   '';
-  cutoverRunner = pkgs.runCommand "d2b-cutover-guest-broker-test" { } ''
-    mkdir -p "$out/bin"
-    touch "$out/bin/d2b-cutover-runner"
-  '';
-  d2bHostTools = {
-    inherit broker cutoverRunner;
-  };
+  d2bHostTools = { inherit broker; };
 
   optionSinks = { lib, ... }: {
     options.d2b = lib.mkOption {

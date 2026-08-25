@@ -32,19 +32,6 @@ rust_test(
 )
 
 rust_test(
-    name = "cutover_wire",
-    srcs = ["tests/cutover_wire.rs"],
-    compile_data = ["Cargo.toml"],
-    visibility = ["//visibility:public"],
-    deps = [
-        ":d2b_contracts_broker",
-        "//packages/d2b-contracts:d2b_contracts",
-        "//packages/d2b-contracts-control:d2b_contracts_control",
-        "//packages/d2b-contracts-resource:d2b_contracts_resource",
-    ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
-)
-
-rust_test(
     name = "d2b_contracts_broker_test",
     compile_data = ["Cargo.toml"],
     crate = ":d2b_contracts_broker",

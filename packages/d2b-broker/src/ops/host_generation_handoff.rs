@@ -169,9 +169,9 @@ impl HandoffEffect for ActivationHelperEffect {
 
 /// Resolve and verify one private system artifact without activating it.
 ///
-/// This is used during cutover admission, before the runner is allowed to
-/// drain the daemon. The helper remains the sole authority for catalog,
-/// store-path, and package-digest validation.
+/// This is used before a host-generation handoff is activated. The helper
+/// remains the sole authority for catalog, store-path, and package-digest
+/// validation.
 pub fn validate_artifact_with_helper(
     helper_path: &Path,
     artifact_id: &ArtifactId,

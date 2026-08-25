@@ -17,5 +17,4 @@ serde_json.workspace = true
 sha2.workspace = true
 
 [dev-dependencies]
-d2b-contracts-control = { path = "../d2b-contracts-control", version = "0.0.0-bootstrap" }
 serde_json.workspace = true

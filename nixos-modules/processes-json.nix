@@ -1330,13 +1330,6 @@ use devices::virtio::vhost_user_backend::run_video_device;'
     (lib.mapAttrsToList vmDag normalNixosVms)
     ++ (lib.mapAttrsToList qemuMediaDag qemuMediaVms)
     ++ (lib.mapAttrsToList usbipdDag cfg._index.usbip.envMeta);
-  } // lib.optionalAttrs (config.d2b._bundle.cutoverRunnerPath != null) {
-    cutoverRunner = {
-    binaryPath = config.d2b._bundle.cutoverRunnerPath;
-    persistent = false;
-    cgroupPlacement = "outside-d2b.slice";
-    singleBootstrapFd = true;
-    };
   };
 
   guestProcessResourceRows = lib.filter

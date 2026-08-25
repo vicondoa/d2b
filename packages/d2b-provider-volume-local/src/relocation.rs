@@ -58,7 +58,7 @@ pub enum RelocationAction {
     ActivateDestination,
     /// Reconcile virtiofs Export children against the destination source.
     RepointAttachments,
-    /// Remove the source finalizer only after complete cutover.
+    /// Remove the source finalizer only after complete relocation.
     RemoveSourceFinalizer,
     /// Delete the unfinalized source Volume.
     DeleteSource,

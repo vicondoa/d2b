@@ -959,7 +959,7 @@ let
     message = ''
       d2b migration-required (legacy-surface-detected: d2b.gateways):
       `d2b.gateways` and its old gateway/ACA sandbox fields were removed as a
-      public configuration surface by the realm-native cutover.
+      public configuration surface by the realm-native migration.
 
       Move non-secret coordinates into the realm-native schema, for example:
 

@@ -477,7 +477,6 @@ pub(crate) fn modern_run(raw_args: Vec<OsString>) -> i32 {
                 | host::HostCommand::Reconcile(_)
                 | host::HostCommand::Validate(_)
                 | host::HostCommand::Doctor(_)
-                | host::HostCommand::Cutover(_),
         })
     ) || matches!(&cli.command, ModernCommand::Auth(_));
     let user_domain = raw_args
@@ -636,38 +635,6 @@ mod tests {
         }
     }
 
-    #[test]
-    fn modern_parser_covers_all_host_cutover_operations() {
-        for args in [
-            &["d2b", "host", "cutover", "preview"][..],
-            &["d2b", "host", "cutover", "status", "--operation-id", "op"][..],
-            &[
-                "d2b",
-                "host",
-                "cutover",
-                "hold",
-                "--operation-id",
-                "op",
-                "--reason",
-                "incident",
-            ][..],
-            &["d2b", "host", "cutover", "resume", "--operation-id", "op"][..],
-            &["d2b", "host", "cutover", "apply"][..],
-            &["d2b", "host", "cutover", "rollback", "--operation-id", "op"][..],
-            &["d2b", "host", "cutover", "verify", "--operation-id", "op"][..],
-            &["d2b", "host", "cutover", "doctor", "--operation-id", "op"][..],
-            &["d2b", "host", "cutover", "finalize", "--operation-id", "op"][..],
-            &[
-                "d2b", "host", "cutover", "reset", "--scope", "zone", "--target", "zone-id",
-            ][..],
-        ] {
-            ModernCli::try_parse_from(args)
-                .unwrap_or_else(|error| panic!("cutover command did not parse: {args:?}: {error}"));
-        }
-        let cli = ModernCli::try_parse_from(["d2b", "--zone", "dev", "host", "cutover", "preview"])
-            .expect("zone is parsed before the command-local refusal");
-        assert_eq!(cli.zone.as_deref(), Some("dev"));
-    }
 
     #[test]
     fn built_in_registry_is_unique_and_matches_expected_size() {

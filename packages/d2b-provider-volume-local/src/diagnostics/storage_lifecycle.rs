@@ -419,7 +419,6 @@ mod tests {
             host_path: "host.json".to_owned(),
             processes_path: "processes.json".to_owned(),
             privileges_path: "privileges.json".to_owned(),
-            cutover_runner_path: None,
             storage_path: storage_contract.as_ref().map(|_| "storage.json".to_owned()),
             sync_path: sync_contract.as_ref().map(|_| "sync.json".to_owned()),
             allocator_path: None,
@@ -573,7 +572,6 @@ mod tests {
     fn processes() -> ProcessesJson {
         ProcessesJson {
             schema_version: "v2".to_owned(),
-            cutover_runner: None,
             vms: vec![VmProcessDag {
                 workload_identity: None,
                 vm: "corp-vm".to_owned(),

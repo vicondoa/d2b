@@ -26,7 +26,6 @@ fn trusted_bundle_resolves_network_operation_rows_without_wire_paths() {
             host_path: "host.json".to_owned(),
             processes_path: "processes.json".to_owned(),
             privileges_path: "privileges.json".to_owned(),
-            cutover_runner_path: None,
             storage_path: None,
             sync_path: None,
             allocator_path: None,
@@ -48,7 +47,6 @@ fn trusted_bundle_resolves_network_operation_rows_without_wire_paths() {
         host,
         ProcessesJson {
             schema_version: "v2".to_owned(),
-            cutover_runner: None,
             vms: Vec::new(),
         },
         ManifestV04::from_slice(MANIFEST_JSON).expect("manifest fixture parses"),
@@ -101,7 +99,6 @@ fn resolver_with_bundle_hash(bundle_hash: Option<String>) -> BundleResolver {
             host_path: "host.json".to_owned(),
             processes_path: "processes.json".to_owned(),
             privileges_path: "privileges.json".to_owned(),
-            cutover_runner_path: None,
             storage_path: None,
             sync_path: None,
             allocator_path: None,
@@ -123,7 +120,6 @@ fn resolver_with_bundle_hash(bundle_hash: Option<String>) -> BundleResolver {
         serde_json::from_str(HOST_JSON).expect("host fixture parses"),
         ProcessesJson {
             schema_version: "v2".to_owned(),
-            cutover_runner: None,
             vms: Vec::new(),
         },
         ManifestV04::from_slice(MANIFEST_JSON).expect("manifest fixture parses"),

@@ -291,8 +291,8 @@ also provide the remaining lifetime required for apply, verification, guarded
 merge, and post-merge seal; the validator does not estimate those durations.
 
 The candidate delivery state is external and candidate-addressed. Binding
-request, terminal failure, cutover result, merge attempt, post-merge
+request, terminal failure, merge attempt, post-merge
 reconciliation, post-merge seal, finalization, and close records are published
 once through the fd-relative synchronized writer. A binding failure, expiry,
-candidate or evidence drift, cutover failure, or merge/tree mismatch writes one
+candidate or evidence drift, or merge/tree mismatch writes one
 terminal failure and cannot be replaced.

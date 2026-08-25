@@ -32,7 +32,7 @@ pub enum MigrationPhase {
     Staging,
     /// The signed migration worker is running.
     Migrating,
-    /// Worker output is complete and awaits the atomic cutover.
+    /// Worker output is complete and awaits the atomic commit.
     ReadyToCommit,
     /// A precommit failure is removing staging while active state is preserved.
     RollingBack,
@@ -191,7 +191,7 @@ impl MigrationState {
         )
     }
 
-    /// Record successful worker completion and request atomic cutover.
+    /// Record successful worker completion and request atomic commit.
     pub fn worker_succeeded(&mut self) -> Result<MigrationTransition, MigrationError> {
         self.advance(
             MigrationPhase::Migrating,
@@ -227,7 +227,7 @@ impl MigrationState {
         )
     }
 
-    /// Complete cutover only after the external marker proves the target.
+    /// Complete the commit only after the external marker proves the target.
     pub fn commit(
         &mut self,
         marker: MarkerDisposition,

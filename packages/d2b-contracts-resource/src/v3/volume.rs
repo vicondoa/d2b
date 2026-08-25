@@ -292,7 +292,6 @@ pub enum CleanupPolicy {
     Boot,
     ProcessExitWithProof,
     VmStopWithProof,
-    CutoverOnly,
     External,
     /// Compatibility spelling for controller-owned cleanup.
     OwnerControlled,

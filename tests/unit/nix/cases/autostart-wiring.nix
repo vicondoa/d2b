@@ -5,7 +5,7 @@
 # deleted, autostart is driven by the `d2bd.service` daemon (it reads
 # `d2b.vms.<name>.autostart` out of the bundle and brings VMs up via
 # the broker `SpawnRunner{role: CloudHypervisor}` op). This gate is the
-# inverse of its pre-cutover form:
+# inverse of the retired per-VM service form:
 #
 #   - `systemd.services."d2b@"` (and per-instance attrs) MUST NOT exist
 #     (template deleted);

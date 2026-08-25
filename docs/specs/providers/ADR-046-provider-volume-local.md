@@ -334,7 +334,6 @@ that affects the UID binding.
 | `boot` | Removed on next host/Zone boot; entry is `/run/`-scoped | `CleanupPolicy::Boot` |
 | `process-exit-with-proof` | Removed after owning Process exits (verified by pidfd) | `CleanupPolicy::ProcessExitWithProof` |
 | `vm-stop-with-proof` | Removed when owning Guest stops (verified by controller) | `CleanupPolicy::VmStopWithProof` |
-| `cutover-only` | Removed on cutover/generation switch | `CleanupPolicy::CutoverOnly` |
 | `owner-controlled` | Lifecycle owned by the mounting controller | `CleanupPolicy::External` |
 
 ### AdoptionPolicy
@@ -567,7 +566,7 @@ spec:
       noFollow: true
       invariants: [no-symlink, broker-opaque-id-only]
       createPolicy: create-if-absent
-      cleanupPolicy: cutover-only
+      cleanupPolicy: never
     - path: live/.d2b-marker-<vm>
       type: file
       ownerRef: User/d2bd
@@ -589,7 +588,7 @@ spec:
       groupRef: User/users
       mode: "0755"
       invariants: [no-symlink, same-filesystem, hardlink-farm-no-recursion, broker-opaque-id-only]
-      cleanupPolicy: cutover-only
+      cleanupPolicy: never
     - path: meta/current
       type: symlink
       ownerRef: User/d2bd
@@ -612,7 +611,7 @@ spec:
       groupRef: User/users
       mode: "0755"
       invariants: [no-symlink, same-filesystem, hardlink-farm-no-recursion, broker-opaque-id-only]
-      cleanupPolicy: cutover-only
+      cleanupPolicy: never
       # host-only; at store-view root (NOT under meta/); see spec correction below
     - path: sync.lock
       type: file

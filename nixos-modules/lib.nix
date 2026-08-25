@@ -71,7 +71,6 @@ let
     "broker"
     "activationHelper"
     "hostActivationHelper"
-    "cutoverRunner"
     "unsafeLocalHelper"
     "resourceCompiler"
     "waylandProxy"

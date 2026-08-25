@@ -158,7 +158,6 @@
           cp -r ${./packages/d2b-controller-toolkit} $out/packages/d2b-controller-toolkit
           cp -r ${./packages/d2b-core} $out/packages/d2b-core
           cp -r ${./packages/d2b-core-controller} $out/packages/d2b-core-controller
-          cp -r ${./packages/d2b-cutover} $out/packages/d2b-cutover
           cp -r ${./packages/d2b-gateway} $out/packages/d2b-gateway
           cp -r ${./packages/d2b-gateway-runtime} $out/packages/d2b-gateway-runtime
           cp -r ${./packages/d2b-host} $out/packages/d2b-host

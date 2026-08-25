@@ -339,7 +339,6 @@ mod tests {
 
         let processes = ProcessesJson {
             schema_version: "v2".to_owned(),
-            cutover_runner: None,
             vms: Vec::new(),
         };
 
@@ -413,7 +412,6 @@ mod tests {
             host_path: "host.json".to_owned(),
             processes_path: "processes.json".to_owned(),
             privileges_path: "privileges.json".to_owned(),
-            cutover_runner_path: None,
             storage_path: None,
             sync_path: None,
             allocator_path: None,

@@ -516,7 +516,7 @@ let
           (actor "broker" "d2b-broker")
           (actor "role" "role:${name}:virtiofsd")
         ];
-        cleanupPolicy = "cutover-only";
+        cleanupPolicy = "never";
         repairPolicy = "broker-reconcile";
         invariants = [ "no-symlink" "broker-opaque-id-only" ];
       })
@@ -569,7 +569,7 @@ let
           (actor "daemon" "d2bd")
           (actor "role" "role:${name}:virtiofsd")
         ];
-        cleanupPolicy = "cutover-only";
+        cleanupPolicy = "never";
         repairPolicy = "broker-reconcile";
         invariants = [ "no-symlink" "same-filesystem" "hardlink-farm-no-recursion" "broker-opaque-id-only" ];
       })
@@ -583,7 +583,7 @@ let
         creator = actor "broker" "d2b-broker";
         writers = [ (actor "broker" "d2b-broker") ];
         readers = [ (actor "daemon" "d2bd") ];
-        cleanupPolicy = "cutover-only";
+        cleanupPolicy = "never";
         repairPolicy = "broker-reconcile";
         invariants = [ "no-symlink" "same-filesystem" "hardlink-farm-no-recursion" "broker-opaque-id-only" ];
       })
@@ -601,7 +601,7 @@ let
           (actor "daemon" "d2bd")
           (actor "role" "role:${name}:virtiofsd")
         ];
-        cleanupPolicy = "cutover-only";
+        cleanupPolicy = "never";
         repairPolicy = "broker-reconcile";
         noFollow = false;
         invariants = [ "broker-opaque-id-only" ];

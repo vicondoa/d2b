@@ -48,7 +48,7 @@ large VM state, rewrite `/var/lib/d2b/vms/<vm>`, or migrate network bridges.
 
 ## Step 1: keep existing envs and VMs
 
-Do not remove or rename `d2b.envs` or `d2b.vms.<vm>.env` during the v2 cutover.
+Do not remove or rename `d2b.envs` or `d2b.vms.<vm>.env` during the v2 transition.
 Those declarations remain the active runtime substrate.
 
 For example, keep this:
