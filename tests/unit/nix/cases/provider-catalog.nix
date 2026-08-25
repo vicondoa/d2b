@@ -650,11 +650,6 @@ in
           ];
         };
 
-        "provider-catalog/null-catalog-has-no-signed-contract" = {
-          expr = builtins.deepSeq nullCatalogCfg.assertions
-            (lib.all (assertion: assertion.assertion) nullCatalogCfg.assertions);
-          expected = true;
-        };
         failure = signedFailure {
           broken = {
             package = pkgs.writeText "provider-broken" "provider-broken";
@@ -663,6 +658,12 @@ in
           };
         };
       in lib.hasInfix "targetCapabilities" failure.message;
+    expected = true;
+  };
+
+  "provider-catalog/null-catalog-has-no-signed-contract" = {
+    expr = builtins.deepSeq nullCatalogCfg.assertions
+      (lib.all (assertion: assertion.assertion) nullCatalogCfg.assertions);
     expected = true;
   };
 
