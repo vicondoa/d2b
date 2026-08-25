@@ -31,6 +31,7 @@ let
 in
 {
   _module.args.d2bHostTools = d2bHostTools;
+  _module.args.d2bHostToolOverrides = lib.mkDefault null;
 
   imports = [
     ./options.nix

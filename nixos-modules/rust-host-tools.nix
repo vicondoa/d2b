@@ -148,7 +148,7 @@ let
     exec "$@"
   '';
 
-  # Constant sandbox path so pure CI and host-int realize the same host-tool
+  # Constant sandbox path for Nix source builds that use these host-tool
   # derivations. The directory is absent in the default sandbox, so the
   # wrapper falls back to rustc. A host that enables the d2b site cache option
   # exposes this fixed path through the Nix daemon's global sandbox settings.

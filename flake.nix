@@ -679,6 +679,36 @@
         if system == "x86_64-linux" then
           let
             pkgs = nixpkgsFor.${system};
+            hostToolBundleEnv = builtins.getEnv "D2B_HOST_TOOL_BUNDLE";
+            bazelHostTools =
+              if hostToolBundleEnv == "" then
+                null
+              else
+                import ./nix/test-support/bazel-host-tools.nix {
+                  inherit pkgs;
+                  rawBundle = builtins.path {
+                    path = /. + hostToolBundleEnv;
+                    name = "d2b-bazel-host-tools";
+                  };
+                };
+            testSelf =
+              if bazelHostTools == null then
+                self
+              else
+                self // {
+                  nixosModules = self.nixosModules // {
+                    default = {
+                      imports = [ self.nixosModules.default ];
+                      _module.args.d2bHostToolOverrides =
+                        bazelHostTools.d2bHostToolOverrides;
+                    };
+                  };
+                  packages = self.packages // {
+                    ${system} = self.packages.${system} // {
+                      d2b-wayland-proxy = bazelHostTools.package;
+                    };
+                  };
+                };
             testDir = ./tests/host-integration;
             testFiles = if builtins.pathExists testDir
               then builtins.attrNames (nixpkgs.lib.filterAttrs
@@ -690,7 +720,10 @@
               else [ ];
             mkTest = file: {
               name = nixpkgs.lib.removeSuffix ".nix" file;
-              value = import (testDir + "/${file}") { inherit pkgs self; };
+              value = import (testDir + "/${file}") {
+                inherit pkgs;
+                self = testSelf;
+              };
             };
           in builtins.listToAttrs (map mkTest testFiles)
         else { });

@@ -12,7 +12,7 @@
 # CAP_CHOWN outside the cgroup-delegation startup window).
 { inputs }:
 
-{ pkgs, lib, config, d2bHostTools, ... }:
+{ pkgs, lib, config, d2bHostTools, d2bHostToolOverrides ? null, ... }:
 
 let
   cfg = config.d2b;
@@ -27,15 +27,23 @@ let
   brokerSourcePackage = d2bHostTools.broker.overrideAttrs (_: {
     meta.description = "d2b privileged broker (uid 0 host-mutation surface)";
   });
-  brokerPackage =
-    if prebuilt ? "selectPackage"
-    then prebuilt.selectPackage "d2b-broker" brokerSourcePackage
-    else brokerSourcePackage;
+  brokerPackage = d2bLib.selectHostToolPackage {
+    overrides = d2bHostToolOverrides;
+    key = "broker";
+    fallback =
+      if prebuilt ? "selectPackage"
+      then prebuilt.selectPackage "d2b-broker" brokerSourcePackage
+      else brokerSourcePackage;
+  };
   cutoverRunnerSourcePackage = d2bHostTools.cutoverRunner;
-  cutoverRunnerPackage =
-    if prebuilt ? "d2b-cutover-runner"
-    then prebuilt."d2b-cutover-runner"
-    else cutoverRunnerSourcePackage;
+  cutoverRunnerPackage = d2bLib.selectHostToolPackage {
+    overrides = d2bHostToolOverrides;
+    key = "cutoverRunner";
+    fallback =
+      if prebuilt ? "d2b-cutover-runner"
+      then prebuilt."d2b-cutover-runner"
+      else cutoverRunnerSourcePackage;
+  };
   cutoverRunnerPath = "${cutoverRunnerPackage}/bin/d2b-cutover-runner";
 
   bundleManifestPath =

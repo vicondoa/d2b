@@ -1,4 +1,4 @@
-{ config, lib, pkgs, d2bHostTools, ... }:
+{ config, lib, pkgs, d2bHostTools, d2bHostToolOverrides ? null, ... }:
 
 let
   clean = builtins.unsafeDiscardStringContext;
@@ -33,8 +33,12 @@ let
   # The filter is tied to the checked-out policy implementation and is cheap
   # enough to build in the eval smoke fixtures. Keep it source-built even when
   # other host tools use release prebuilts so missing release assets cannot
-  # break local validation.
-  d2bWaylandProxyPackage = d2bWaylandProxySourcePackage;
+  # break local validation. The private test-only override remains available.
+  d2bWaylandProxyPackage = d2bLib.selectHostToolPackage {
+    overrides = d2bHostToolOverrides;
+    key = "waylandProxy";
+    fallback = d2bWaylandProxySourcePackage;
+  };
   d2bWaylandProxyBinary = "${d2bWaylandProxyPackage}/bin/d2b-wayland-proxy";
   wlCrossDomainProxyPackage = import ../pkgs/wl-cross-domain-proxy { inherit pkgs; };
   wlCrossDomainProxyBinary = "${wlCrossDomainProxyPackage}/bin/wl-cross-domain-proxy";

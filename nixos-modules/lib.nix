@@ -65,6 +65,68 @@ let
       }
     ];
 
+  hostToolOverrideKeys = [
+    "d2b"
+    "d2bd"
+    "broker"
+    "activationHelper"
+    "hostActivationHelper"
+    "cutoverRunner"
+    "unsafeLocalHelper"
+    "resourceCompiler"
+    "waylandProxy"
+  ];
+
+  formatHostToolOverrideKeys = keys:
+    if keys == [ ] then "<none>" else lib.concatStringsSep ", " keys;
+
+  validateHostToolOverrides = overrides:
+    if builtins.isNull overrides then
+      null
+    else if !builtins.isAttrs overrides then
+      throw "d2b: d2bHostToolOverrides must be null or an attribute set"
+    else
+      let
+        keys = builtins.attrNames overrides;
+        missing = lib.filter
+          (key: !(builtins.elem key keys))
+          hostToolOverrideKeys;
+        unknown = lib.filter
+          (key: !(builtins.elem key hostToolOverrideKeys))
+          keys;
+        nullValues = lib.filter
+          (key: builtins.isNull overrides.${key})
+          keys;
+      in
+      if keys == [ ] then
+        throw "d2b: d2bHostToolOverrides must not be empty"
+      else if missing != [ ] || unknown != [ ] then
+        throw ''
+          d2b: d2bHostToolOverrides must contain exactly the host-tool keys
+          (${formatHostToolOverrideKeys hostToolOverrideKeys}); missing:
+          ${formatHostToolOverrideKeys missing}; unknown:
+          ${formatHostToolOverrideKeys unknown}
+        ''
+      else if nullValues != [ ] then
+        throw ''
+          d2b: d2bHostToolOverrides values must be non-null packages; null:
+          ${formatHostToolOverrideKeys nullValues}
+        ''
+      else
+        overrides;
+
+  selectHostToolPackage =
+    { overrides ? null, key, fallback }:
+    if !(builtins.elem key hostToolOverrideKeys) then
+      throw "d2b: unknown d2bHostToolOverrides selector key '${key}'"
+    else
+      let
+        validatedOverrides = validateHostToolOverrides overrides;
+      in
+      if builtins.isNull validatedOverrides
+      then fallback
+      else validatedOverrides.${key};
+
   # d2b_read_audio_state <vm>
   # ------------------------------------------------------------
   # Fail-closed reader for /var/lib/d2b/<vm>/audio-state.json.
@@ -131,6 +193,7 @@ rec {
   inherit d2bReadAudioState;
   inherit hasConfiguredLocalVmLaunch privateConfiguredWorkloadCounts;
   inherit privateConfiguredWorkloadLimits privateConfiguredWorkloadCountAssertions;
+  inherit selectHostToolPackage;
 
   cleanRustPackagesSource = packagesPath:
     lib.cleanSourceWith {

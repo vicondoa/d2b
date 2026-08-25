@@ -30,7 +30,7 @@
 #   - d2bMigrateOwnership   - repair orphan swtpm-state UIDs after
 #                                 service-user renames, gated on
 #                                 `tpm.enable` and skipped for running VMs.
-{ config, pkgs, lib, d2bHostTools, ... }:
+{ config, pkgs, lib, d2bHostTools, d2bHostToolOverrides ? null, ... }:
 
 let
   cfg = config.d2b;
@@ -52,9 +52,20 @@ let
   # snippet references `${activationHelper}` to get the absolute
   # store-path of the binary.
   activationHelperSourcePackage = d2bHostTools.activationHelper;
-  activationHelperPackage = if prebuilt ? "d2b-activation-helper" then prebuilt."d2b-activation-helper" else activationHelperSourcePackage;
+  activationHelperPackage = d2bLib.selectHostToolPackage {
+    overrides = d2bHostToolOverrides;
+    key = "activationHelper";
+    fallback =
+      if prebuilt ? "d2b-activation-helper"
+      then prebuilt."d2b-activation-helper"
+      else activationHelperSourcePackage;
+  };
   activationHelper = "${activationHelperPackage}/bin/d2b-activation-helper";
-  groupMigrationHelperPackage = d2bHostTools.hostActivationHelper;
+  groupMigrationHelperPackage = d2bLib.selectHostToolPackage {
+    overrides = d2bHostToolOverrides;
+    key = "hostActivationHelper";
+    fallback = d2bHostTools.hostActivationHelper;
+  };
   groupMigrationHelper = "${groupMigrationHelperPackage}/bin/d2b-host-activation-helper";
   legacyLauncherGid = config.users.groups.d2b-launcher.gid or null;
   legacyLaunchersGid = config.users.groups.d2b-launchers.gid or null;
