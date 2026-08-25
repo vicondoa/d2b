@@ -630,7 +630,10 @@
               else
                 import ./nix/test-support/bazel-host-tools.nix {
                   inherit pkgs;
-                  rawBundle = builtins.storePath hostToolBundleEnv;
+                  rawBundle = builtins.path {
+                    path = /. + hostToolBundleEnv;
+                    name = "d2b-bazel-host-tools";
+                  };
                 };
             testSelf =
               if bazelHostTools == null then
