@@ -12,7 +12,6 @@ let
     "defaultDomain"
     "allowedDomains"
     "defaultUserRef"
-    "budget"
     "networkAttachments"
     "deviceAttachments"
     "volumeAttachmentDefaults"
@@ -58,6 +57,7 @@ let
     "networkUsage"
     "deviceUsage"
     "telemetry"
+    "activationInput"
     "startDeadline"
     "runtimeDeadline"
     "successfulTtl"
@@ -84,6 +84,81 @@ let
 
   tokenPattern = "^[a-z][a-z0-9-]{0,62}$";
   durationPattern = "^[0-9]+(ms|s|m|h)$";
+
+  defaultBudget = {
+    cpu = { request = null; limit = null; };
+    memory = { request = null; limit = null; };
+    pids = { limit = null; };
+    fds = { limit = null; };
+    ioWeight = null;
+    networkEgressBps = null;
+    threadLimit = null;
+  };
+
+  executionDefaults = {
+    domain = null;
+    userRef = null;
+    configRef = null;
+    credentialRefs = [ ];
+    mounts = [ ];
+    sandbox = {
+      namespaceClasses = [ ];
+      capabilityClasses = [ ];
+      seccompClass = "strict";
+      noNewPrivileges = true;
+      startRoot = false;
+      environmentClass = "minimal";
+      readOnlyRoot = true;
+      umask = "0022";
+      oomScoreAdj = 0;
+      userNamespace = null;
+    };
+    budget = { };
+    networkUsage = null;
+    deviceUsage = [ ];
+    telemetry = {
+      metricsEnabled = true;
+      tracingEnabled = true;
+      logLevel = "info";
+      sensitiveLabels = false;
+    };
+  };
+
+  processDefaults = executionDefaults // {
+    desiredLifecycle = "running";
+    restartPolicy = {
+      class = "on-failure";
+      backoffBase = "1s";
+      backoffMax = "60s";
+      backoffMultiplierMilli = 2000;
+      maxRestarts = null;
+      resetAfter = "300s";
+    };
+    readiness = {
+      initialDelay = "0s";
+      timeout = "30s";
+      failureThreshold = 3;
+      successThreshold = 1;
+      class = "ready-condition";
+    };
+    healthCheck = {
+      enabled = false;
+      interval = "30s";
+      timeout = "5s";
+      failureThreshold = 3;
+      class = "provider-defined";
+    };
+    adoptionPolicy = "adopt-on-restart";
+    drainTimeout = "30s";
+  };
+
+  ephemeralDefaults = executionDefaults // {
+    startDeadline = "60s";
+    runtimeDeadline = "300s";
+    successfulTtl = "1h";
+    failedTtl = "24h";
+    incidentHold = false;
+  };
 
   attrOr = attrs: name: fallback:
     if builtins.isAttrs attrs && builtins.hasAttr name attrs
@@ -181,6 +256,12 @@ let
           then row.zone.resources.${parsed.name}
           else null;
       allowedDomains = if target == null then [ ] else target.spec.allowedDomains or [ ];
+      effectiveDomain =
+        if (spec.domain or null) != null
+        then spec.domain
+        else if target != null
+        then target.spec.defaultDomain or null
+        else null;
       targetNoIsolation =
         target != null
         && target.type == "Host"
@@ -217,20 +298,23 @@ let
         message = "${row.path}.spec.executionRef must resolve to a Host or Guest in the same Zone.";
       }
       {
-        assertion = builtins.elem (spec.domain or null) [ "system" "user" ];
+        assertion = (spec.domain or null) == null
+          || builtins.elem spec.domain [ "system" "user" ];
         message = "${row.path}.spec.domain must be system or user.";
       }
       {
-        assertion = target == null || builtins.elem (spec.domain or null) allowedDomains;
+        assertion = target == null
+          || effectiveDomain == null
+          || builtins.elem effectiveDomain allowedDomains;
         message = "${row.path}.spec.domain must be allowed by its execution target.";
       }
       {
-        assertion = !targetNoIsolation || (spec.domain or null) == "user";
+        assertion = !targetNoIsolation || effectiveDomain == "user";
         message = "${row.path}.spec.domain must be user for a no-isolation Host target.";
       }
       {
         assertion =
-          (spec.domain or null) != "user"
+          effectiveDomain != "user"
           || (spec.userRef or null) != null
           || (target != null && (target.spec.defaultUserRef or null) != null);
         message = "${row.path}.spec.userRef is required for user-domain execution when the target has no default user.";
@@ -298,8 +382,16 @@ let
     let
       spec = row.spec;
       fields = if row.resource.type == "Process" then processFields else ephemeralFields;
-      selected = lib.filterAttrs (key: _: builtins.elem key fields) spec;
-    in selected;
+      selectedRaw = lib.filterAttrs (key: _: builtins.elem key fields) spec;
+      selected =
+        if selectedRaw ? budget && selectedRaw.budget == defaultBudget
+        then selectedRaw // { budget = { }; }
+        else selectedRaw;
+      defaults =
+        if row.resource.type == "Process"
+        then processDefaults
+        else ephemeralDefaults;
+    in lib.recursiveUpdate defaults selected;
 
   canonicalResource = row: {
     apiVersion = "resources.d2bus.org/v3";

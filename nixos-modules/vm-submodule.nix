@@ -2,7 +2,7 @@
 #
 # Wraps the d2b-owned per-VM evaluator (`vm-evaluator.nix`) for
 # `host.nix`'s consumption. This file
-# stays as the single entry-point for `composeVm` so host.nix
+# stays as the single entry-point for `composeVm` and `_evalGuest` so host.nix
 # imports it once. The actual NixOS evaluation logic lives in
 # `vm-evaluator.nix`; `vm-options.nix` defines the per-VM
 # `microvm.*` option set the evaluator layers in.
@@ -17,5 +17,6 @@ let
 in
 {
   _composeVm = evaluator._composeVm;
+  _evalGuest = evaluator._evalGuest;
   config = { };
 }

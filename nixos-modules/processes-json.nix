@@ -1338,50 +1338,89 @@ use devices::virtio::vhost_user_backend::run_video_device;'
       && builtins.isString (row.spec.executionRef or null)
       && lib.hasPrefix "Guest/" row.spec.executionRef)
     (cfg._resourceCompiler.processes.rows or [ ]);
-  guestProcessRefs = lib.unique (
+  guestProcessTargets = lib.unique (
     (map
-      (row: row.spec.executionRef)
+      (row: {
+        zoneName = row.zoneName;
+        guestRef = row.spec.executionRef;
+      })
       guestProcessResourceRows)
     ++ (lib.concatLists (map
       (dag:
         lib.optional
           (lib.any (node: (node.executionRef or null) == "Guest/${dag.vm}") dag.nodes)
-          "Guest/${dag.vm}")
+          {
+            zoneName = null;
+            guestRef = "Guest/${dag.vm}";
+          })
       data.vms)));
-  guestProcessInputsFor = guestRef:
+  guestProcessTargetsSorted = lib.sort
+    (left: right:
+      let
+        leftZone = if left.zoneName == null then "" else left.zoneName;
+        rightZone = if right.zoneName == null then "" else right.zoneName;
+      in "${leftZone}/${left.guestRef}" < "${rightZone}/${right.guestRef}")
+    guestProcessTargets;
+  canonicalProcessFor = row:
     let
+      processCompiler =
+        if builtins.isAttrs (cfg._resourceCompiler or { })
+          && builtins.isAttrs (cfg._resourceCompiler.processes or { })
+        then cfg._resourceCompiler.processes
+        else { };
+      byZone =
+        if builtins.hasAttr row.zoneName (processCompiler.byZone or { })
+        then processCompiler.byZone.${row.zoneName}
+        else { };
+    in
+    if builtins.hasAttr row.resourceName byZone
+    then byZone.${row.resourceName}
+    else null;
+  guestProcessInputsFor = target:
+    let
+      guestRef = target.guestRef;
+      zoneName = target.zoneName;
       resourceRows = lib.filter
-        (row: row.spec.executionRef == guestRef)
+        (row:
+          zoneName != null
+          && row.zoneName == zoneName
+          && row.spec.executionRef == guestRef)
         guestProcessResourceRows;
       dagNodes = lib.concatLists (map
         (dag:
-          if guestRef == "Guest/${dag.vm}"
+          if zoneName == null && guestRef == "Guest/${dag.vm}"
           then lib.filter
             (node: (node.executionRef or null) == guestRef)
             dag.nodes
           else [ ])
         data.vms);
       resources = map
-        (row: {
-          apiVersion = "resources.d2bus.org/v3";
-          type = row.resource.type;
-          metadata = {
-            name = row.resourceName;
-            zone = row.zoneName;
-          };
-          spec = row.spec;
-        })
+        (row:
+          let projected = canonicalProcessFor row;
+          in if projected != null
+          then projected
+          else {
+            apiVersion = "resources.d2bus.org/v3";
+            type = row.resource.type;
+            metadata = {
+              name = row.resourceName;
+              zone = row.zoneName;
+            };
+            spec = row.spec;
+          })
         resourceRows;
     in
     {
       guest = guestRef;
       nodes = dagNodes;
       resources = resources;
+    } // lib.optionalAttrs (zoneName != null) {
+      zone = zoneName;
     };
   guestProcessInputsData = {
     schemaVersion = "v1";
     guests = map guestProcessInputsFor
-      (lib.sort lib.lessThan guestProcessRefs);
+      guestProcessTargetsSorted;
   };
   guestProcessInputsJson = builtins.toJSON guestProcessInputsData;
   guestProcessInputsPath = pkgs.writeText

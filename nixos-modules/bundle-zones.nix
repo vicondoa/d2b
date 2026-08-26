@@ -79,6 +79,15 @@ let
     if cfg ? _artifactCatalogV3 && cfg._artifactCatalogV3 ? path
     then cfg._artifactCatalogV3.path
     else null;
+  processResources = zoneName:
+    let
+      compiler = cfg._resourceCompiler or { };
+      processes = compiler.processes or { };
+      byZone = processes.byZone or { };
+    in
+    if builtins.hasAttr zoneName byZone
+    then byZone.${zoneName}
+    else { };
 
   stripRuntime = value:
     if builtins.isAttrs value
@@ -110,7 +119,8 @@ let
   zoneResources = zoneName: zone:
     zone.resources
     // (cfg._resourceCompiler.volumeGenerated.byZone.${zoneName} or { })
-    // (cfg._resourceCompiler.volumeShorthand.${zoneName} or { });
+    // (cfg._resourceCompiler.volumeShorthand.${zoneName} or { })
+    // processResources zoneName;
 
   projectedResource = zoneName: resourceName: resource:
     if resource.type == "Device"

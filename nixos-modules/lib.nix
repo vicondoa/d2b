@@ -621,6 +621,72 @@ rec {
   # backward compat with consumers that touch the path.
   vmDeclaredRunner = _config: _name: null;
 
+  v3GuestSystemFor = guestSystems: zone: name:
+    let
+      byZone =
+        if builtins.isAttrs guestSystems
+          && builtins.hasAttr zone guestSystems
+          && builtins.isAttrs guestSystems.${zone}
+        then guestSystems.${zone}
+        else { };
+    in
+    if builtins.hasAttr name byZone
+    then byZone.${name}
+    else null;
+
+  v3GuestConfigFor = guestSystem:
+    if guestSystem == null then null
+    else if builtins.isAttrs guestSystem && builtins.hasAttr "config" guestSystem
+    then guestSystem.config
+    else if builtins.isAttrs guestSystem
+    then guestSystem
+    else null;
+
+  v3GuestEvaluatorReady = guestSystem:
+    let
+      guestConfig = v3GuestConfigFor guestSystem;
+      guestSystemConfig =
+        if builtins.isAttrs guestConfig
+          && builtins.hasAttr "system" guestConfig
+        then guestConfig.system
+        else { };
+      guestBuild =
+        if builtins.isAttrs guestSystemConfig
+          && builtins.hasAttr "build" guestSystemConfig
+        then guestSystemConfig.build
+        else { };
+    in
+    builtins.isAttrs guestConfig
+    && builtins.isAttrs guestSystemConfig
+    && builtins.isAttrs guestBuild
+    && builtins.hasAttr "toplevel" guestBuild;
+
+  v3GuestRows =
+    { zones
+    , guestSystems ? { }
+    , artifacts ? { }
+    }:
+    lib.concatMap
+      (zoneName:
+        let zone = zones.${zoneName};
+        in lib.mapAttrsToList
+          (resourceName: resource:
+            let
+              spec = resource.spec or { };
+              artifactId = spec.systemArtifactId or null;
+            in {
+              inherit zoneName resourceName resource spec;
+              system = v3GuestSystemFor guestSystems zoneName resourceName;
+              artifact =
+                if artifactId != null
+                  && builtins.isAttrs artifacts
+                  && builtins.hasAttr artifactId artifacts
+                then artifacts.${artifactId}
+                else null;
+            })
+          (lib.filterAttrs (_: resource: resource.type == "Guest") zone.resources))
+      (lib.sort lib.lessThan (lib.attrNames zones));
+
   # guestConfigForbiddenNamespaces - namespace-containment policy check
   # for the per-VM guest-editable `guestConfigFile`.
   #

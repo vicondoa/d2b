@@ -97,6 +97,29 @@ _SURFACES = {
             "nixos-modules/resources-zone-control.nix",
         ],
     },
+    "zone-control": {
+        "cases": ["zone-control"],
+        "package": "packages/d2b-provider-volume-local",
+        "files": [
+            "nixos-modules/generated/provider-catalog-shape.nix",
+            "nixos-modules/generated/zone-spec-canonical.nix",
+            "nixos-modules/resources-bundle.nix",
+            "nixos-modules/resources.nix",
+            "nixos-modules/zone-resources-json.nix",
+        ],
+        "modules": [
+            "nixos-modules/bundle-artifacts.nix",
+            "nixos-modules/bundle-zones.nix",
+            "nixos-modules/options-artifacts.nix",
+            "nixos-modules/options-resources.nix",
+            "nixos-modules/options-zones-resources.nix",
+            "nixos-modules/options-zones.nix",
+            "nixos-modules/provider-catalog.nix",
+            "nixos-modules/resources-zones-processes.nix",
+            "nixos-modules/zone-resources.nix",
+            "packages/d2b-provider-volume-local/nix/options-volumes.nix",
+        ],
+    },
     "desktop-interaction": {
         "cases": [],
         "modules": [

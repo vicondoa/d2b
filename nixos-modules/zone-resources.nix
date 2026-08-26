@@ -44,10 +44,21 @@ let
   emittedResources = resources:
     lib.filterAttrs (_: resource: resource.type != "Zone") resources;
 
+  processResources = zoneName:
+    let
+      compiler = cfg._resourceCompiler or { };
+      processes = compiler.processes or { };
+      byZone = processes.byZone or { };
+    in
+    if builtins.hasAttr zoneName byZone
+    then byZone.${zoneName}
+    else { };
+
   zoneResources = zoneName: zone:
     zone.resources
     // (cfg._resourceCompiler.volumeGenerated.byZone.${zoneName} or { })
-    // (cfg._resourceCompiler.volumeShorthand.${zoneName} or { });
+    // (cfg._resourceCompiler.volumeShorthand.${zoneName} or { })
+    // processResources zoneName;
 
   executionPolicyDefaults = {
     providerRef = null;

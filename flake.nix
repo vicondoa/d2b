@@ -1587,6 +1587,46 @@
       lib = nixpkgs.lib.makeExtensible (_: {
         evalFixture = system: self.checks.${system}.eval-fixture-contracts.fixtureData;
         buildProviderElfShim = providerElfShim;
+        evalGuest = {
+          system ? builtins.currentSystem,
+          extraSpecialArgs ? { },
+          nixpkgsConfig ? { },
+          nixpkgsOverlays ? [ ],
+          ...
+        }@args:
+          let
+            guestInputs = inputs // { inherit self; };
+            guestPkgs = nixpkgsFor.${system};
+            guestTools = {
+              broker = self.packages.${system}.d2b-broker-guest-static;
+              d2bd = self.packages.${system}.d2bd-guest-static;
+              d2b-guest-shell-runner-static =
+                self.packages.${system}.d2b-guest-shell-runner-static;
+            };
+            evaluator = (import ./nixos-modules/vm-evaluator.nix {
+              inputs = guestInputs;
+            }) {
+              config = {
+                d2b.site = {
+                  inherit extraSpecialArgs;
+                  usePrebuiltHostTools = false;
+                };
+                nixpkgs = {
+                  config = nixpkgsConfig;
+                  overlays = nixpkgsOverlays;
+                };
+              };
+              lib = guestPkgs.lib;
+              pkgs = guestPkgs;
+              d2bHostTools = guestTools;
+            };
+          in
+          evaluator._evalGuest (builtins.removeAttrs args [
+            "system"
+            "extraSpecialArgs"
+            "nixpkgsConfig"
+            "nixpkgsOverlays"
+          ]);
       });
 
     };

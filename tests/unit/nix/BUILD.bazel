@@ -58,6 +58,7 @@ exports_files([
     "cases/realms-workloads.nix",
     "cases/realms-zone-control.nix",
     "cases/realm-workloads.nix",
+    "cases/zone-control.nix",
     "cases/requested-vm-config.nix",
     "cases/resources-bundle-telemetry.nix",
     "cases/resource-sharing.nix",
@@ -82,4 +83,5 @@ exports_files([
     "surfaces/provider-catalog.nix",
     "surfaces/realm-zone.nix",
     "surfaces/storage-volume.nix",
+    "surfaces/zone-control.nix",
 ])

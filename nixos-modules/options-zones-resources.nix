@@ -288,6 +288,12 @@ let
           else null;
       domain = spec.domain or null;
       allowedDomains = if targetResource == null then [ ] else targetResource.spec.allowedDomains or [ ];
+      effectiveDomain =
+        if domain != null
+        then domain
+        else if targetResource != null
+        then targetResource.spec.defaultDomain or null
+        else null;
       userRef = spec.userRef or null;
       userResolved =
         let parsed = parseRef userRef;
@@ -314,11 +320,13 @@ let
         message = "${row.path}.spec.providerRef must resolve to a Provider in the same Zone.";
       }
       {
-        assertion = builtins.elem domain [ "system" "user" ];
+        assertion = domain == null || builtins.elem domain [ "system" "user" ];
         message = "${row.path}.spec.domain must be system or user.";
       }
       {
-        assertion = targetResource == null || builtins.elem domain allowedDomains;
+        assertion = targetResource == null
+          || effectiveDomain == null
+          || builtins.elem effectiveDomain allowedDomains;
         message = "${row.path}.spec.domain must be allowed by its execution target.";
       }
       {
