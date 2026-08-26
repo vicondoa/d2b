@@ -2313,6 +2313,7 @@ mod tests {
         ];
         let input = CompileInput {
             zone: "local-root".to_owned(),
+            zone_uid: None,
             resources,
             provider_schema_digests: BTreeMap::new(),
             providers: Vec::new(),
@@ -2420,6 +2421,7 @@ mod tests {
         ];
         let input = CompileInput {
             zone: "local-root".to_owned(),
+            zone_uid: None,
             resources,
             provider_schema_digests: BTreeMap::new(),
             providers: Vec::new(),
