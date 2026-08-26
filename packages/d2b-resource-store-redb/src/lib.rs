@@ -347,13 +347,20 @@ pub struct StoreIdentity {
     store_uuid: ResourceUid,
     zone: ZoneId,
     zone_uid: ResourceUid,
+    store_epoch: u64,
     created_at: String,
     revisions: PolicySnapshot,
 }
 
 /// Mutable revision metadata rehydrated from one opened Zone store.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct StoreRuntimeMetadata {
+    /// Store UID read from the durable metadata row.
+    pub store_uid: ResourceUid,
+    /// Zone self-resource UID read from the durable metadata row.
+    pub zone_uid: ResourceUid,
+    /// Store identity epoch read from the durable metadata row.
+    pub store_epoch: u64,
     pub current_revision: ZoneRevision,
     pub compaction_floor: ZoneRevision,
     pub policy_snapshot: PolicySnapshot,
@@ -417,6 +424,7 @@ impl StoreIdentity {
             store_uuid,
             zone,
             zone_uid,
+            store_epoch: 1,
             created_at: created_at.as_str().to_owned(),
             revisions,
         }
@@ -428,6 +436,22 @@ impl StoreIdentity {
 
     pub const fn zone_uid(&self) -> &ResourceUid {
         &self.zone_uid
+    }
+
+    /// Borrow the immutable physical store UID.
+    pub const fn store_uid(&self) -> &ResourceUid {
+        &self.store_uuid
+    }
+
+    /// Return the immutable store identity epoch.
+    pub const fn store_epoch(&self) -> u64 {
+        self.store_epoch
+    }
+
+    /// Bind the identity to a nonzero store epoch.
+    pub fn with_store_epoch(mut self, store_epoch: u64) -> Self {
+        self.store_epoch = store_epoch;
+        self
     }
 
     pub(crate) const fn store_uuid(&self) -> &ResourceUid {
@@ -451,6 +475,7 @@ impl StoreIdentity {
 
     pub fn seal_identity(&self) -> StoreSealIdentity {
         StoreSealIdentity::new(self.slot, self.zone.clone(), self.store_uuid.clone())
+            .with_store_epoch(self.store_epoch)
     }
 }
 
@@ -832,6 +857,11 @@ impl RedbResourceStore {
     pub async fn runtime_metadata(&self) -> Result<StoreRuntimeMetadata, StoreError> {
         let meta = self.reads.meta().await?;
         Ok(StoreRuntimeMetadata {
+            store_uid: ResourceUid::parse(meta.store_uuid.clone())
+                .map_err(|_| transaction::integrity("store-meta-store-uid-invalid"))?,
+            zone_uid: ResourceUid::parse(meta.zone_uid.clone())
+                .map_err(|_| transaction::integrity("store-meta-zone-uid-invalid"))?,
+            store_epoch: meta.store_epoch,
             current_revision: ZoneRevision::new(meta.current_revision),
             compaction_floor: ZoneRevision::new(meta.compaction_floor),
             policy_snapshot: policy_snapshot_from_meta(&meta)?,
@@ -1244,6 +1274,11 @@ fn validate_acceptor(
     identity: &StoreIdentity,
     acceptor: &MutationSealAcceptor,
 ) -> Result<(), StoreError> {
+    if identity.store_epoch == 0 {
+        return Err(
+            transaction::integrity("store-epoch-invalid").with_store_slot(identity.slot())
+        );
+    }
     if let Err(mismatch) = acceptor.diagnose(&identity.seal_identity()) {
         return Err(transaction::integrity(mismatch.reason_code()).with_store_slot(identity.slot()));
     }
@@ -1301,10 +1336,11 @@ pub(crate) fn validate_provisioning_marker(
 
 fn provisioning_marker_bytes(identity: &StoreIdentity) -> String {
     format!(
-        "d2b-redb-store/v1\n{}\n{}\n{}\n{}\n",
+        "d2b-redb-store/v2\n{}\n{}\n{}\n{}\n{}\n",
         identity.store_uuid.as_str(),
         identity.zone.as_str(),
         identity.zone_uid.as_str(),
+        identity.store_epoch,
         identity.created_at
     )
 }

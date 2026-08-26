@@ -22,7 +22,7 @@ use d2b_contracts_provider::v3::{
 use d2b_contracts_resource::v3::{
     ArtifactId, CanonicalJsonValue, NIXOS_GENERATION_RESOURCE_TYPE, canonical_json_bytes,
     framed_canonical_digest, identity::STANDARD_RESOURCE_TYPES, is_canonical_digest,
-    resource::RESOURCE_API_VERSION,
+    resource::RESOURCE_API_VERSION, ResourceUid,
 };
 use d2b_resource_compiler::{
     ArtifactCatalogEntry, CatalogDigests, Diagnostic, StaticPublisherKeys, compile_linux_artifact,
@@ -134,6 +134,8 @@ impl From<Diagnostic> for CliError {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct CompileInput {
     zone: String,
+    #[serde(default)]
+    zone_uid: Option<String>,
     resources: Vec<Value>,
     #[serde(default)]
     provider_schema_digests: BTreeMap<String, String>,
@@ -179,6 +181,8 @@ struct BundleOutput<'a> {
     resources: &'a [Value],
     schema_version: u32,
     zone: &'a str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    zone_uid: Option<&'a str>,
 }
 
 #[derive(Debug)]
@@ -283,6 +287,11 @@ fn compile(
         ));
     }
     let strict_secrets = strict_override.unwrap_or(input.strict_secrets);
+    if let Some(zone_uid) = input.zone_uid.as_deref() {
+        ResourceUid::parse(zone_uid.to_owned()).map_err(|_| {
+            CliError::new("resource-compiler-zone-uid-invalid", "declared Zone UID is invalid")
+        })?;
+    }
 
     let artifact_catalog_digest = verify_artifact_catalog(&input)?;
     let compiled_providers = compile_providers(&input)?;
@@ -314,6 +323,7 @@ fn compile(
         resources: &input.resources,
         schema_version: 3,
         zone: &input.zone,
+        zone_uid: input.zone_uid.as_deref(),
     };
     let output_bytes = canonical_json_bytes(&output).map_err(|_| {
         CliError::new(

@@ -316,6 +316,15 @@ let
   framedDigest = domain: payload:
     builtins.hashString "sha256" (framedDigestPreimage domain payload);
 
+  # Stable compiler identity for a Zone/store binding. The version and
+  # variant bits keep the deterministic value within the canonical UUIDv4
+  # grammar while the domain separates Zone and store identities.
+  stableUid = domain: value:
+    let
+      hash = builtins.hashString "sha256" "${domain}:${value}";
+    in
+    "${builtins.substring 0 8 hash}-${builtins.substring 8 4 hash}-4${builtins.substring 13 3 hash}-8${builtins.substring 17 3 hash}-${builtins.substring 20 12 hash}";
+
   canonicalMetadata = zoneName: resource:
     let
       metadata = attrOr resource "metadata" { };
@@ -422,6 +431,7 @@ in
     framedDigest
     framedDigestPreimage
     forbiddenRows
+    stableUid
     sortResources
     validateBundle
     validateResource

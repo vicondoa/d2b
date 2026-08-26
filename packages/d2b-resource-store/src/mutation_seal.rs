@@ -37,6 +37,7 @@ pub struct StoreSealIdentity {
     slot: StoreSlot,
     zone: ZoneId,
     store_uuid: ResourceUid,
+    store_epoch: u64,
 }
 
 impl StoreSealIdentity {
@@ -45,7 +46,14 @@ impl StoreSealIdentity {
             slot,
             zone,
             store_uuid,
+            store_epoch: 1,
         }
+    }
+
+    /// Bind the seal identity to a nonzero store epoch.
+    pub fn with_store_epoch(mut self, store_epoch: u64) -> Self {
+        self.store_epoch = store_epoch;
+        self
     }
 
     pub const fn zone(&self) -> &ZoneId {
@@ -223,6 +231,9 @@ fn diagnose_identity(
     }
     if declared.store_uuid != expected.store_uuid {
         return Err(SealIdentityMismatch::Store);
+    }
+    if declared.store_epoch != expected.store_epoch {
+        return Err(SealIdentityMismatch::Epoch);
     }
     Ok(())
 }

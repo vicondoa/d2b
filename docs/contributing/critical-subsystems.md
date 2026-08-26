@@ -97,11 +97,13 @@ invariants are:
 8. A UUID, authority address, or database path never appears in diagnostics,
    telemetry, or audit data.
 9. A store UUID is the canonical `ResourceUid`; it is compared only as a
-   diagnosable identity component after the private authority check.
+   diagnosable identity component after the private authority check, together
+   with the immutable store epoch.
 10. `StoreSlot` is a bounded, deterministic composition correlator. It is
     never persisted, serialized, placed on the wire, or compared as identity.
-11. Store opening checks Zone, store UUID, and slot agreement for the acceptor,
-    and every startup error carries the slot of the store producing it.
+11. Store opening checks Zone, store UUID, store epoch, and slot agreement for
+    the acceptor, and every startup error carries the slot of the store
+    producing it.
 
 The issuer is retained by the native authorizer and the acceptor crosses into
 the concrete backend by value. A downstream crate can construct an inert pair

@@ -21,6 +21,7 @@ use d2b_resource_store::{StoreOperationContext, StoreResolveRequest};
 use d2b_resource_store_redb::{
     AuthorityOperation, AuthorityOperationState as StoreAuthorityOperationState, RedbResourceStore,
 };
+use crate::zone_authority::ZONE_GENERATION_PUBLICATION_OPERATION_PREFIX;
 
 /// Production authority persistence owner for one Zone redb store.
 pub struct RedbAuthorityPersistence {
@@ -272,6 +273,11 @@ async fn recovery_receipt(
     let mut operation_ids = std::collections::BTreeSet::new();
 
     for row in rows {
+        // The all-Zone publication marker shares the store's durable
+        // operation transaction but is not a Host-global authority claim.
+        if is_zone_generation_publication(&row) {
+            continue;
+        }
         if !operation_ids.insert(row.operation_id.clone()) {
             return Err(AuthorityPersistenceError::RowInvalid);
         }
@@ -327,4 +333,62 @@ async fn recovery_receipt(
     }
 
     Ok(AuthorityRecoveryData::new(operations, prepared_operations))
+}
+
+fn is_zone_generation_publication(row: &AuthorityOperation) -> bool {
+    row.operation_id
+        .starts_with(ZONE_GENERATION_PUBLICATION_OPERATION_PREFIX)
+        && serde_json::from_slice::<serde_json::Value>(&row.payload)
+            .ok()
+            .is_some_and(|value| {
+                value
+                    .get("publication")
+                    .and_then(serde_json::Value::as_str)
+                    == Some("zone-resource-plane")
+            })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn generation_publication_rows_are_not_rehydrated_as_host_authority() {
+        let row = AuthorityOperation {
+            operation_id: format!(
+                "{ZONE_GENERATION_PUBLICATION_OPERATION_PREFIX}sha256:{}",
+                "a".repeat(64)
+            ),
+            payload: serde_json::to_vec(&serde_json::json!({
+                "publication": "zone-resource-plane"
+            }))
+            .expect("publication payload"),
+            state: StoreAuthorityOperationState::Pending,
+        };
+        assert!(is_zone_generation_publication(&row));
+    }
+
+    #[test]
+    fn malformed_or_other_operation_rows_still_fail_closed() {
+        for row in [
+            AuthorityOperation {
+                operation_id: format!(
+                    "{ZONE_GENERATION_PUBLICATION_OPERATION_PREFIX}sha256:{}",
+                    "b".repeat(64)
+                ),
+                payload: b"not-json".to_vec(),
+                state: StoreAuthorityOperationState::Pending,
+            },
+            AuthorityOperation {
+                operation_id: "authority-operation".to_owned(),
+                payload: serde_json::to_vec(&serde_json::json!({
+                    "publication": "zone-resource-plane"
+                }))
+                .expect("payload"),
+                state: StoreAuthorityOperationState::Pending,
+            },
+        ] {
+            assert!(!is_zone_generation_publication(&row));
+        }
+    }
 }

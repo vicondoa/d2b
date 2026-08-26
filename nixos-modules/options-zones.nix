@@ -3,6 +3,7 @@
 let
   cfg = config.d2b;
   resourceTypes = import ./resources.nix { inherit lib; };
+  identityModel = import ./resources-bundle.nix { inherit lib; };
 
   zoneNamePattern = "^[a-z][a-z0-9-]{0,62}$";
 
@@ -476,6 +477,7 @@ in
           metadata = {
             name = zoneName;
             zone = zoneName;
+            uid = identityModel.stableUid "d2b:v3:zone-uid" zoneName;
           };
           spec = { };
         })

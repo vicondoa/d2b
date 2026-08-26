@@ -817,6 +817,8 @@
             };
           };
 
+          d2b.zones.local-root = { };
+
           d2b.realms.host = {
             allowedUsers = [ "alice" ];
             policy.allowUnsafeLocal = true;
@@ -945,7 +947,7 @@
           bundle = smokeEval.config.d2b._bundle;
           manifestPkg = smokeEval.config.d2b._manifestPkg;
         in pkgs.runCommand "d2b-fixture-smoke" { } ''
-          mkdir -p $out $out/closures
+          mkdir -p $out $out/closures $out/zones/local-root $out/zones/work
           cp ${bundle.privilegesJson.path} $out/privileges.json
           cp ${bundle.hostJson.path} $out/host.json
           cp ${bundle.processesJson.path} $out/processes.json
@@ -958,6 +960,9 @@
           cp ${bundle.realmWorkloadsLauncherV2Json.path} $out/realm-workloads-launcher-v2.json
           cp ${bundle.unsafeLocalWorkloadsJson.path} $out/unsafe-local-workloads.json
           cp ${bundle.bundle.path} $out/bundle.json
+          cp ${bundle.zoneResourceBundles.local-root.path} $out/zones/local-root/resource-bundle.json
+          cp ${bundle.extraArtifacts."zoneStorage-local-root".path} $out/zones/local-root/storage.json
+          cp ${bundle.extraArtifacts."zoneStorage-work".path} $out/zones/work/storage.json
           cp ${manifestPkg}/share/d2b/vms.json $out/manifest.json
           ${nixpkgs.lib.concatStringsSep "\n" (nixpkgs.lib.mapAttrsToList
             (vm: c: "cp ${c.path} $out/closures/${vm}.json")

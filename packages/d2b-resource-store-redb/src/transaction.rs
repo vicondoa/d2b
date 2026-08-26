@@ -184,6 +184,8 @@ pub(crate) struct StoreMeta {
     pub store_uuid: String,
     pub zone_name: String,
     pub zone_uid: String,
+    #[serde(default = "default_store_epoch")]
+    pub store_epoch: u64,
     pub created_at: String,
     pub schema_version: u32,
     pub current_revision: u64,
@@ -194,6 +196,10 @@ pub(crate) struct StoreMeta {
     pub controller_generation: Option<u64>,
     pub clean_shutdown: bool,
     pub backup_generation: u64,
+}
+
+fn default_store_epoch() -> u64 {
+    1
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -855,6 +861,7 @@ pub(crate) fn initialize(
         store_uuid: identity.store_uuid.as_str().to_owned(),
         zone_name: identity.zone.as_str().to_owned(),
         zone_uid: identity.zone_uid.as_str().to_owned(),
+        store_epoch: identity.store_epoch(),
         created_at: identity.created_at.clone(),
         schema_version: PHYSICAL_SCHEMA_VERSION,
         current_revision: 0,
@@ -1179,6 +1186,8 @@ fn validate_store_identity(
     if meta.store_uuid != identity.store_uuid.as_str()
         || meta.zone_name != identity.zone.as_str()
         || meta.zone_uid != identity.zone_uid.as_str()
+        || meta.store_epoch == 0
+        || meta.store_epoch != identity.store_epoch()
         || meta.created_at != identity.created_at
         || meta.compaction_floor > meta.current_revision
     {
@@ -2513,7 +2522,14 @@ pub(crate) fn apply_group_with_hook(
         let mut verified = verified;
         for prepared in &mut verified.mutations {
             if prepared.mutation.kind == ResourceMutationKind::Create {
-                prepared.resource_uid = Some(mint_resource_uid()?);
+                prepared.resource_uid = if prepared.mutation.target.resource_type().as_str()
+                    == "Zone"
+                    && prepared.mutation.target.name().as_str() == meta.zone_name
+                {
+                    Some(ResourceUid::parse(meta.zone_uid.clone()).map_err(integrity)?)
+                } else {
+                    Some(mint_resource_uid()?)
+                };
             }
         }
         let finalized =

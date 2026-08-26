@@ -525,6 +525,14 @@ let
   generationByZone = lib.mapAttrs
     (zoneName: _zone: (bundleFor zoneName).contentHash)
     cfg.zones;
+  zoneIdentityByZone = lib.mapAttrs
+    (zoneName: _zone: {
+      zoneUid = resourceBundle.stableUid "d2b:v3:zone-uid" zoneName;
+      storeUid = resourceBundle.stableUid "d2b:v3:store-uid" zoneName;
+      storeEpoch = 1;
+      bundleGeneration = (bundleFor zoneName).contentHash;
+    })
+    cfg.zones;
 
   # This projection is deliberately sealed: consumers receive only the
   # parent map, its digest, and the bundle generation identity. The compiler
@@ -543,6 +551,7 @@ in
       types = controlTypes;
       byZone = controlResourcesByZone;
       generations = generationByZone;
+      identities = zoneIdentityByZone;
       allocatorTopology = allocatorTopology;
       parentMap = parentMap;
       parentMapDigest = parentMapDigest;

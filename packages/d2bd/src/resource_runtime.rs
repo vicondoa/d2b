@@ -48,8 +48,9 @@ use d2b_contracts_resource::resource_proto as wire;
 #[cfg(test)]
 use d2b_contracts_resource::v3::{ConfigurationGeneration, ControllerGeneration};
 use d2b_contracts_resource::v3::{
-    CanonicalJsonValue, NixosGenerationSpec, ResourceEnvelope, ResourceGeneration, ResourceName,
-    ResourcePhase, ResourceRef, ResourceTypeName, ResourceUid, ZoneId, ZoneRevision,
+    CanonicalJsonValue, NixosGenerationSpec, ResourceBundleGenerationId, ResourceEnvelope,
+    ResourceGeneration, ResourceName, ResourcePhase, ResourceRef, ResourceTypeName, ResourceUid,
+    ZoneId, ZoneRevision,
 };
 use d2b_contracts_resource::v3::{
     host::{HOST_PROVIDER_REF, HostSpec},
@@ -90,8 +91,8 @@ use d2b_resource_store::{
     StoredResource,
 };
 use d2b_resource_store_redb::{
-    BrokerEvidenceIndex, LogicalBackup, RedbResourceStore, StoreRuntimeMetadata,
-    write_provisioning_marker,
+    AuthorityOperationState, BrokerEvidenceIndex, LogicalBackup, RedbResourceStore,
+    StoreRuntimeMetadata, write_provisioning_marker,
 };
 use d2b_session::SessionServerError;
 use d2bd_runtime::authority_persistence::RedbAuthorityPersistence;
@@ -105,17 +106,23 @@ use d2bd_runtime::resource_runtime_support::{
     AssignmentRegistry, SystemCoreReconcileResult, compatibility_error_envelope,
     configuration_cleanup_pending, current_status_timestamp, encode_public_get_response,
     encode_public_list_response, encode_public_resource, ensure_bootstrap_host_resource,
+    ensure_bootstrap_zone_resource,
     handler_phase_to_zone_phase, host_phase_for_resource_count, initial_policy_snapshot,
     map_startup_error,
     materialize_zone_resource_bundle, new_assignment_registry, public_list_request,
     public_operation_id, public_request_meta, register_system_core_session, runtime_authorizer,
-    runtime_policy, store_identity, watch_needs_restart, zone_runtime_metadata,
+    runtime_policy, store_identity, store_identity_for_authority, validate_zone_resource_bundle,
+    validate_zone_self_resource, watch_needs_restart, zone_runtime_metadata,
 };
 pub use d2bd_runtime::resource_runtime_support::{
     ZoneRuntimeReadiness, bounded_operation_id, persist_resource_status,
     persist_resource_status_with_projection, resource_bundle_materialization_operation_id,
 };
 use d2bd_runtime::resource_store_runtime::{MAX_ZONE_RUNTIMES, OpenedZoneStore};
+use d2bd_runtime::zone_authority::{
+    ZoneAuthorityIdentity, ZONE_GENERATION_PUBLICATION_OPERATION_PREFIX,
+    complete_generation_set_digest,
+};
 use nix::unistd::{Group, Uid, User};
 use serde::Deserialize;
 use serde_json::{Value, json};
@@ -538,9 +545,61 @@ const fn default_notification_ack_timeout() -> u64 {
     3_600
 }
 
+fn generation_publication_operation_id(
+    set_generation: &ResourceBundleGenerationId,
+) -> String {
+    format!(
+        "{ZONE_GENERATION_PUBLICATION_OPERATION_PREFIX}{}",
+        set_generation.as_str()
+    )
+}
+
+fn generation_publication_payload(
+    set_generation: &ResourceBundleGenerationId,
+    binding_digest: &str,
+    generations: &BTreeMap<ZoneId, ResourceBundleGenerationId>,
+) -> Result<Vec<u8>, ResourceRuntimeError> {
+    let generation_set = generations
+        .iter()
+        .map(|(zone, generation)| (zone.as_str().to_owned(), generation.as_str().to_owned()))
+        .collect::<BTreeMap<_, _>>();
+    serde_json::to_vec(&json!({
+        "claimDigest": set_generation.as_str(),
+        "storeBindingDigest": binding_digest,
+        "publication": "zone-resource-plane",
+        "generationSet": generation_set,
+        "state": "pending"
+    }))
+    .map_err(|_| ResourceRuntimeError::HandlerNotReady)
+}
+
+fn generation_publication_payload_matches(
+    payload: &[u8],
+    set_generation: &ResourceBundleGenerationId,
+    binding_digest: &str,
+    generations: &BTreeMap<ZoneId, ResourceBundleGenerationId>,
+) -> bool {
+    let Ok(value) = serde_json::from_slice::<Value>(payload) else {
+        return false;
+    };
+    let expected_generation_set = generations
+        .iter()
+        .map(|(zone, generation)| (zone.as_str().to_owned(), generation.as_str().to_owned()))
+        .collect::<BTreeMap<_, _>>();
+    value.get("claimDigest").and_then(Value::as_str) == Some(set_generation.as_str())
+        && value.get("storeBindingDigest").and_then(Value::as_str) == Some(binding_digest)
+        && value.get("publication").and_then(Value::as_str) == Some("zone-resource-plane")
+        && value.get("generationSet")
+            == serde_json::to_value(expected_generation_set)
+                .ok()
+                .as_ref()
+}
+
 /// A production Resource API and core-controller runtime for one Zone.
 pub struct ZoneResourceRuntime {
     zone: ZoneId,
+    authority_identity: Option<ZoneAuthorityIdentity>,
+    bootstrap_provisioned_store: bool,
     store_id: String,
     store: Arc<RedbResourceStore>,
     store_metadata: StoreRuntimeMetadata,
@@ -606,6 +665,7 @@ impl core::fmt::Debug for ZoneResourceRuntime {
         formatter
             .debug_struct("ZoneResourceRuntime")
             .field("zone", &self.zone)
+            .field("has_authority_identity", &self.authority_identity.is_some())
             .field("store_id", &"<opaque>")
             .field("current_revision", &self.store_metadata.current_revision)
             .field("readiness", &self.readiness)
@@ -623,6 +683,7 @@ impl ZoneResourceRuntime {
             Arc::new(BrokerEvidenceIndex::default()),
             None,
             false,
+            None,
             None,
         )
         .await
@@ -642,6 +703,7 @@ impl ZoneResourceRuntime {
             None,
             false,
             None,
+            None,
         )
         .await
     }
@@ -660,6 +722,7 @@ impl ZoneResourceRuntime {
             broker_evidence,
             None,
             false,
+            None,
             None,
         )
         .await
@@ -682,22 +745,20 @@ impl ZoneResourceRuntime {
             Some(telemetry_path.into()),
             false,
             None,
+            None,
         )
         .await
     }
 
-    /// Open a newly provisioned production Zone with the immutable bootstrap
-    /// policy and system-core Host authority required for first readiness.
-    ///
-    /// Existing stores are never promoted by this path; their durable policy
-    /// snapshot remains the authority for restart and migration decisions.
-    pub(crate) async fn open_production_with_audit_and_evidence_and_telemetry(
+    /// Open a production Zone with a bundle-bound immutable identity.
+    pub(crate) async fn open_production_with_identity(
         zone: ZoneId,
         opened: OpenedZoneStore,
         audit_sink: Arc<AuditSink>,
         broker_evidence: Arc<BrokerEvidenceIndex>,
         telemetry_path: impl Into<std::path::PathBuf>,
         desired_bundle: ResourceBundle,
+        authority_identity: ZoneAuthorityIdentity,
     ) -> Result<Self, ResourceRuntimeError> {
         Self::open_internal(
             zone,
@@ -707,6 +768,7 @@ impl ZoneResourceRuntime {
             Some(telemetry_path.into()),
             true,
             Some(desired_bundle),
+            Some(authority_identity),
         )
         .await
     }
@@ -719,6 +781,7 @@ impl ZoneResourceRuntime {
         telemetry_path: Option<std::path::PathBuf>,
         bootstrap_provisioned_store: bool,
         desired_bundle: Option<ResourceBundle>,
+        authority_identity: Option<ZoneAuthorityIdentity>,
     ) -> Result<Self, ResourceRuntimeError> {
         #[cfg(test)]
         let audit_sink = audit_sink.or_else(|| {
@@ -758,6 +821,7 @@ impl ZoneResourceRuntime {
             telemetry_path,
             bootstrap_provisioned_store,
             desired_bundle,
+            authority_identity,
         )
         .await
     }
@@ -777,6 +841,7 @@ impl ZoneResourceRuntime {
             None,
             false,
             None,
+            None,
         )
         .await
     }
@@ -791,6 +856,7 @@ impl ZoneResourceRuntime {
         telemetry_path: Option<std::path::PathBuf>,
         bootstrap_provisioned_store: bool,
         desired_bundle: Option<ResourceBundle>,
+        authority_identity: Option<ZoneAuthorityIdentity>,
     ) -> Result<Self, ResourceRuntimeError> {
         let expected_store_id = format!("zone-store-{}", zone.as_str());
         if opened.response.zone_store_id.as_str() != expected_store_id {
@@ -807,7 +873,24 @@ impl ZoneResourceRuntime {
         }
 
         let disposition = opened.response.disposition;
-        let store_identity = store_identity(&zone, &opened.response.store_identity)?;
+        let store_identity = if let Some(authority) = authority_identity.as_ref() {
+            let bundle = desired_bundle
+                .as_ref()
+                .ok_or(ResourceRuntimeError::IdentityUnbound)?;
+            if bundle.zone_uid() != Some(authority.zone_uid())
+                || bundle.integrity().content_hash != authority.bundle_generation().as_str()
+            {
+                return Err(ResourceRuntimeError::HandlerNotReady);
+            }
+            if !d2b_contracts_resource::v3::is_canonical_digest(
+                &opened.response.store_identity,
+            ) {
+                return Err(ResourceRuntimeError::BrokerResponseMismatch);
+            }
+            store_identity_for_authority(&zone, authority)?
+        } else {
+            store_identity(&zone, &opened.response.store_identity)?
+        };
         let store_identity =
             if bootstrap_provisioned_store && disposition == ZoneStoreDisposition::Provisioned {
                 store_identity.with_revisions(initial_policy_snapshot()?)
@@ -918,6 +1001,25 @@ impl ZoneResourceRuntime {
             .runtime_metadata()
             .await
             .map_err(|_| ResourceRuntimeError::StoreReadFailed)?;
+        if let Some(authority) = authority_identity.as_ref() {
+            if store_metadata.zone_uid != *authority.zone_uid()
+                || store_metadata.store_uid != *authority.store_uid()
+                || store_metadata.store_epoch != authority.store_epoch()
+            {
+                return Err(ResourceRuntimeError::HandlerNotReady);
+            }
+            if disposition == ZoneStoreDisposition::Opened
+                && store_metadata.policy_snapshot.policy_revision != 0
+            {
+                validate_zone_self_resource(
+                    &store,
+                    &zone,
+                    authority.zone_uid(),
+                    authority.store_uid(),
+                )
+                .await?;
+            }
+        }
         tracing::error!(
             zone = %zone.as_str(),
             disposition = ?disposition,
@@ -954,6 +1056,7 @@ impl ZoneResourceRuntime {
         let mut ingress = None;
         let mut service_task = None;
         let mut process_status_client = None;
+        let defer_activation = authority_identity.is_some();
         let (
             resource_api_ready,
             local_session_ready,
@@ -1031,22 +1134,48 @@ impl ZoneResourceRuntime {
                 tracing::error!(zone = %zone.as_str(), error = ?error, "resource runtime system-core session registration failed");
             })?;
             process_status_client = Some(Arc::clone(&status_client));
-            if let Some(bundle) = desired_bundle.as_ref() {
-                materialize_zone_resource_bundle(&zone, bundle, &store, &status_client)
+            if defer_activation {
+                bus = Some(zone_bus);
+                registrar = Some(zone_registrar);
+                ingress = Some(zone_ingress);
+                service_task = Some(zone_service_task);
+                (
+                    true,
+                    true,
+                    true,
+                    true,
+                    true,
+                    core.stage(),
+                    SystemCoreStatusEmitter::new()
+                        .emit(
+                            ZoneStatusInput::new(ResourcePhase::Pending, Vec::new())
+                                .with_runtime_metadata(zone_runtime_metadata(
+                                    &store_metadata,
+                                    0,
+                                    false,
+                                    0,
+                                    Some(current_status_timestamp()),
+                                )),
+                        )
+                        .map_err(|_| ResourceRuntimeError::HandlerNotReady)?,
+                    Some(state),
+                )
+            } else {
+                if bootstrap_provisioned_store && disposition == ZoneStoreDisposition::Provisioned {
+                    ensure_bootstrap_host_resource(&zone, &store, &status_client).await?;
+                }
+                if let Some(bundle) = desired_bundle.as_ref() {
+                    materialize_zone_resource_bundle(&zone, bundle, &store, &status_client)
+                        .await
+                        .inspect_err(|error| {
+                            tracing::error!(zone = %zone.as_str(), error = ?error, "resource runtime Zone bundle materialization failed");
+                        })?;
+                }
+                let store_metadata = store
+                    .runtime_metadata()
                     .await
-                    .inspect_err(|error| {
-                        tracing::error!(zone = %zone.as_str(), error = ?error, "resource runtime Zone bundle materialization failed");
-                    })?;
-            } else if bootstrap_provisioned_store
-                && disposition == ZoneStoreDisposition::Provisioned
-            {
-                ensure_bootstrap_host_resource(&zone, &store, &status_client).await?;
-            }
-            let store_metadata = store
-                .runtime_metadata()
-                .await
-                .map_err(|_| ResourceRuntimeError::StoreReadFailed)?;
-            (
+                    .map_err(|_| ResourceRuntimeError::StoreReadFailed)?;
+                (
                 interaction_provider_configuration,
                 interaction_provider_configuration_refused,
             ) = match load_interaction_provider_configuration(
@@ -1195,6 +1324,7 @@ impl ZoneResourceRuntime {
                     .map_err(|_| ResourceRuntimeError::HandlerNotReady)?,
                 Some(state),
             )
+            }
         };
         let store_metadata = store
             .runtime_metadata()
@@ -1202,7 +1332,10 @@ impl ZoneResourceRuntime {
             .map_err(|_| ResourceRuntimeError::StoreReadFailed)?;
         Ok(Self {
             zone,
-            store_id: expected_store_id,
+            authority_identity,
+                bootstrap_provisioned_store: bootstrap_provisioned_store
+                    && disposition == ZoneStoreDisposition::Provisioned,
+                store_id: expected_store_id,
             store,
             store_metadata,
             backend,
@@ -1243,6 +1376,358 @@ impl ZoneResourceRuntime {
             interaction_identity,
             interaction_provider_configuration_refused,
         })
+    }
+
+    /// Materialize the verified bundle after the complete local generation
+    /// has passed its read-only validation barrier.
+    pub(crate) async fn materialize_desired_bundle(
+        &self,
+        bundle: &ResourceBundle,
+    ) -> Result<(), ResourceRuntimeError> {
+        let client = self
+            .process_status_client
+            .as_ref()
+            .ok_or(ResourceRuntimeError::AuthenticationUnavailable)?;
+        materialize_zone_resource_bundle(&self.zone, bundle, &self.store, client).await
+    }
+
+    /// Validate the desired bundle without advancing this Zone store.
+    pub(crate) async fn validate_desired_bundle(
+        &self,
+        bundle: &ResourceBundle,
+    ) -> Result<(), ResourceRuntimeError> {
+        validate_zone_resource_bundle(&self.zone, bundle, &self.store).await
+    }
+
+    /// Durably stage the complete local generation set in the coordinator
+    /// Zone's operation ledger. The operation is idempotent across daemon
+    /// restarts and retired rows do not fence a later generation.
+    pub(crate) async fn prepare_generation_publication(
+        &self,
+        set_generation: &ResourceBundleGenerationId,
+        generations: &BTreeMap<ZoneId, ResourceBundleGenerationId>,
+    ) -> Result<(), ResourceRuntimeError> {
+        let zones = generations.keys().cloned().collect::<BTreeSet<_>>();
+        let expected_set_generation = complete_generation_set_digest(&zones, generations)
+            .map_err(|_| ResourceRuntimeError::HandlerNotReady)?;
+        if &expected_set_generation != set_generation {
+            return Err(ResourceRuntimeError::HandlerNotReady);
+        }
+        let authority = self
+            .authority_identity
+            .as_ref()
+            .ok_or(ResourceRuntimeError::IdentityUnbound)?;
+        if generations.get(&self.zone) != Some(authority.bundle_generation()) {
+            return Err(ResourceRuntimeError::HandlerNotReady);
+        }
+        let operation_id = generation_publication_operation_id(set_generation);
+        let binding_digest = self.store.authority_binding_digest(set_generation.as_str());
+        let payload = generation_publication_payload(
+            set_generation,
+            &binding_digest,
+            generations,
+        )?;
+        let operations = self
+            .store
+            .authority_operations()
+            .await
+            .map_err(|_| ResourceRuntimeError::HandlerNotReady)?;
+        if operations.iter().any(|operation| {
+            operation
+                .operation_id
+                .starts_with(ZONE_GENERATION_PUBLICATION_OPERATION_PREFIX)
+                && operation.operation_id != operation_id
+                && !matches!(
+                    operation.state,
+                    AuthorityOperationState::Closed | AuthorityOperationState::Released
+                )
+        }) {
+            return Err(ResourceRuntimeError::HandlerNotReady);
+        }
+        if let Some(operation) = operations
+            .iter()
+            .find(|operation| operation.operation_id == operation_id)
+        {
+            if !generation_publication_payload_matches(
+                &operation.payload,
+                set_generation,
+                &binding_digest,
+                generations,
+            ) {
+                return Err(ResourceRuntimeError::HandlerNotReady);
+            }
+            return Ok(());
+        }
+        self.store
+            .prepare_authority_operation(operation_id, payload, set_generation.as_str())
+            .await
+            .map(|_| ())
+            .map_err(|_| ResourceRuntimeError::HandlerNotReady)
+    }
+
+    /// Mark a fully materialized generation set as published, then close and
+    /// release its marker so a later generation can be admitted.
+    pub(crate) async fn commit_generation_publication(
+        &self,
+        set_generation: &ResourceBundleGenerationId,
+        generations: &BTreeMap<ZoneId, ResourceBundleGenerationId>,
+    ) -> Result<(), ResourceRuntimeError> {
+        let zones = generations.keys().cloned().collect::<BTreeSet<_>>();
+        let expected_set_generation = complete_generation_set_digest(&zones, generations)
+            .map_err(|_| ResourceRuntimeError::HandlerNotReady)?;
+        if &expected_set_generation != set_generation {
+            return Err(ResourceRuntimeError::HandlerNotReady);
+        }
+        let authority = self
+            .authority_identity
+            .as_ref()
+            .ok_or(ResourceRuntimeError::IdentityUnbound)?;
+        if generations.get(&self.zone) != Some(authority.bundle_generation()) {
+            return Err(ResourceRuntimeError::HandlerNotReady);
+        }
+        let operation_id = generation_publication_operation_id(set_generation);
+        let binding_digest = self.store.authority_binding_digest(set_generation.as_str());
+        let operation = self
+            .store
+            .authority_operations()
+            .await
+            .map_err(|_| ResourceRuntimeError::HandlerNotReady)?
+            .into_iter()
+            .find(|operation| operation.operation_id == operation_id)
+            .ok_or(ResourceRuntimeError::HandlerNotReady)?;
+        if !generation_publication_payload_matches(
+            &operation.payload,
+            set_generation,
+            &binding_digest,
+            generations,
+        ) {
+            return Err(ResourceRuntimeError::HandlerNotReady);
+        }
+        let state = operation.state;
+        if matches!(
+            state,
+            AuthorityOperationState::Closed | AuthorityOperationState::Released
+        ) {
+            return Ok(());
+        }
+        let capability = self
+            .store
+            .resume_authority_operation(operation_id, &binding_digest)
+            .await
+            .map_err(|_| ResourceRuntimeError::HandlerNotReady)?;
+        match state {
+            AuthorityOperationState::Pending | AuthorityOperationState::EffectRetryable => {
+                capability
+                    .record_effect(AuthorityOperationState::EffectConfirmed)
+                    .await
+                    .map_err(|_| ResourceRuntimeError::HandlerNotReady)?;
+                capability
+                    .record_close()
+                    .await
+                    .map_err(|_| ResourceRuntimeError::HandlerNotReady)?;
+            }
+            AuthorityOperationState::EffectConfirmed => {
+                capability
+                    .record_close()
+                    .await
+                    .map_err(|_| ResourceRuntimeError::HandlerNotReady)?;
+            }
+            AuthorityOperationState::Closing => {}
+            AuthorityOperationState::EffectTerminal => {
+                return Err(ResourceRuntimeError::HandlerNotReady);
+            }
+            AuthorityOperationState::Closed | AuthorityOperationState::Released => {
+                unreachable!("terminal publication state returned above")
+            }
+        }
+        capability
+            .release()
+            .await
+            .map_err(|_| ResourceRuntimeError::HandlerNotReady)
+    }
+
+    /// Materialize a validated bundle and provision bootstrap rows only after
+    /// the complete local generation set has been durably prepared.
+    pub(crate) async fn prepare_published_bundle(
+        &self,
+        bundle: &ResourceBundle,
+    ) -> Result<(), ResourceRuntimeError> {
+        self.materialize_desired_bundle(bundle).await?;
+        if self.bootstrap_provisioned_store {
+            let client = self
+                .process_status_client
+                .as_ref()
+                .ok_or(ResourceRuntimeError::AuthenticationUnavailable)?;
+            if let Some(authority) = self.authority_identity.as_ref() {
+                ensure_bootstrap_zone_resource(
+                    &self.zone,
+                    authority.zone_uid(),
+                    &self.store,
+                    client,
+                )
+                .await?;
+            }
+            ensure_bootstrap_host_resource(&self.zone, &self.store, client).await?;
+        }
+        Ok(())
+    }
+
+    /// Finish the deferred startup path after the complete bundle is visible
+    /// in the store.  Every system-core read, status write, and readiness
+    /// transition below therefore observes the published desired resources.
+    pub(crate) async fn activate_published_bundle(
+        &mut self,
+    ) -> Result<(), ResourceRuntimeError> {
+        let store_metadata = self
+            .store
+            .runtime_metadata()
+            .await
+            .map_err(|_| ResourceRuntimeError::StoreReadFailed)?;
+        let status_client = self
+            .process_status_client
+            .as_ref()
+            .cloned()
+            .ok_or(ResourceRuntimeError::AuthenticationUnavailable)?;
+
+        (
+            self.interaction_provider_configuration,
+            self.interaction_provider_configuration_refused,
+        ) = match load_interaction_provider_configuration(
+            &self.zone,
+            &self.store,
+            store_metadata.current_revision,
+        )
+        .await
+        {
+            Ok(None) => (None, false),
+            Ok(Some(configuration)) if configuration.is_complete() => {
+                (Some(configuration), false)
+            }
+            Ok(Some(_)) => {
+                tracing::error!(
+                    zone = %self.zone.as_str(),
+                    "resource runtime committed interaction Provider configuration is incomplete",
+                );
+                (None, true)
+            }
+            Err(error) => {
+                tracing::error!(
+                    zone = %self.zone.as_str(),
+                    error = %error,
+                    "resource runtime committed interaction Provider configuration load failed",
+                );
+                (None, true)
+            }
+        };
+        self.interaction_identity = match load_committed_interaction_identity(
+            &self.zone,
+            &self.store,
+            store_metadata.current_revision,
+            self.interaction_provider_configuration.as_ref(),
+        )
+        .await
+        {
+            Ok(identity) => identity,
+            Err(error) => {
+                tracing::error!(
+                    zone = %self.zone.as_str(),
+                    error = %error,
+                    "resource runtime committed interaction identity load failed",
+                );
+                self.interaction_provider_configuration_refused = true;
+                None
+            }
+        };
+        let system_core =
+            reconcile_system_core_resources(&self.zone, &self.store, status_client.clone())
+                .await
+                .inspect_err(|error| {
+                    tracing::error!(
+                        zone = %self.zone.as_str(),
+                        error = ?error,
+                        "resource runtime system-core reconciliation failed",
+                    );
+                })?;
+        let aggregate_handler_phase = if system_core.host_phase == HandlerPhase::Ready
+            && system_core.user_phase == HandlerPhase::Ready
+        {
+            HandlerPhase::Ready
+        } else {
+            HandlerPhase::Degraded
+        };
+        let store_metadata = self
+            .store
+            .runtime_metadata()
+            .await
+            .map_err(|_| ResourceRuntimeError::StoreReadFailed)?;
+        let stage = {
+            let recovered_authority = self.authority_index.lock().await;
+            let mut core = self
+                .core
+                .lock()
+                .map_err(|_| ResourceRuntimeError::CoreStartupFailed)?;
+            core.start_production(
+                CoreRuntimeReadiness {
+                    store_ready: true,
+                    resource_api_ready: true,
+                    local_bus_ready: true,
+                    controller_endpoint_registered: true,
+                    authenticated_system_core_session: true,
+                },
+                RecoverySnapshot {
+                    startup_epoch: 0,
+                    checkpoint_revision: store_metadata.current_revision.get(),
+                    active_configuration_revision: store_metadata
+                        .policy_snapshot
+                        .active_configuration_revision
+                        .get(),
+                    provider_lease_count: 0,
+                    controller_lease_count: 0,
+                    ambiguous_operation_count: 0,
+                    watch_admitted: true,
+                },
+                &recovered_authority,
+            )
+            .map_err(map_startup_error)?;
+            d2bd_runtime::resource_runtime_support::mark_core_handlers(
+                &mut core,
+                aggregate_handler_phase,
+                store_metadata.current_revision.get(),
+            )?;
+            core.publish_readiness().map_err(map_startup_error)?
+        };
+        self.store_metadata = self
+            .store
+            .runtime_metadata()
+            .await
+            .map_err(|_| ResourceRuntimeError::StoreReadFailed)?;
+        self.zone_status = Mutex::new(
+            SystemCoreStatusEmitter::new()
+                .emit(
+                    ZoneStatusInput::new(system_core.core_phase, Vec::new())
+                        .with_system_core_phases(
+                            handler_phase_to_zone_phase(system_core.host_phase),
+                            handler_phase_to_zone_phase(system_core.user_phase),
+                        )
+                        .with_runtime_metadata(zone_runtime_metadata(
+                            &self.store_metadata,
+                            system_core.total_resource_count,
+                            system_core.generation_cleanup_pending,
+                            system_core.cleanup_pending_count,
+                            Some(current_status_timestamp()),
+                        )),
+                )
+                .map_err(|_| ResourceRuntimeError::HandlerNotReady)?,
+        );
+        self.readiness = ZoneRuntimeReadiness {
+            store_ready: true,
+            resource_api_ready: true,
+            local_session_ready: true,
+            provider_path_ready: self.readiness.provider_path_ready,
+            authority_ready: true,
+            core_stage: stage,
+        };
+        Ok(())
     }
 
     /// Borrow the authoritative Zone identity.
@@ -4534,11 +5019,404 @@ mod tests {
     use super::*;
     use std::{fs::OpenOptions, os::fd::AsRawFd, sync::Arc};
 
+    use d2b_contracts_resource::v3::{
+        CanonicalJsonObject, Timestamp,
+        storage::{ZoneStoreIdentity, ZoneStoreStorageRow},
+    };
+    use d2b_contracts_zone_session::v3::resource_bundle::{
+        BundleResource, BundleResourceMetadata,
+    };
     use d2b_resource_store::mutation_seal::mutation_seal_pair;
     use d2b_resource_store_redb::write_provisioning_marker;
 
     fn test_audit_sink(directory: &std::path::Path, name: &str) -> Arc<AuditSink> {
         Arc::new(AuditSink::open(directory.join(name)).unwrap())
+    }
+
+    struct PublicationStoreFixture {
+        _directory: tempfile::TempDir,
+        database_path: std::path::PathBuf,
+        response_identity: String,
+        zone: ZoneId,
+        identity: d2b_resource_store_redb::StoreIdentity,
+    }
+
+    impl PublicationStoreFixture {
+        async fn new() -> Self {
+            let directory = tempfile::tempdir().unwrap();
+            let database_path = directory.path().join("store.redb");
+            let zone = ZoneId::parse("work").unwrap();
+            let response_identity = "sha256:".to_owned() + &"1".repeat(64);
+            let identity = store_identity(&zone, &response_identity).unwrap();
+            let database = OpenOptions::new()
+                .create_new(true)
+                .read(true)
+                .write(true)
+                .open(&database_path)
+                .unwrap();
+            let mut marker = OpenOptions::new()
+                .create_new(true)
+                .read(true)
+                .write(true)
+                .open(directory.path().join(".d2b-store-marker"))
+                .unwrap();
+            write_provisioning_marker(&mut marker, &identity).unwrap();
+            RedbResourceStore::provision_owned(
+                database,
+                marker,
+                identity.clone(),
+                mutation_seal_pair(identity.seal_identity()).1,
+            )
+            .await
+            .unwrap()
+            .shutdown()
+            .await
+            .unwrap();
+            Self {
+                _directory: directory,
+                database_path,
+                response_identity,
+                zone,
+                identity,
+            }
+        }
+
+        async fn open(&self, bundle: &ResourceBundle) -> ZoneResourceRuntime {
+            let database = OpenOptions::new()
+                .read(true)
+                .write(true)
+                .open(&self.database_path)
+                .unwrap();
+            let mut runtime = ZoneResourceRuntime::open(
+                self.zone.clone(),
+                OpenedZoneStore {
+                    response: OpenZoneStoreResponse {
+                        zone_store_id:
+                            d2b_contracts_resource::v3::storage::ZoneStoreId::parse(
+                                "zone-store-work",
+                            )
+                            .unwrap(),
+                        store_identity: self.response_identity.clone(),
+                        disposition: ZoneStoreDisposition::Opened,
+                        fd_index: 0,
+                    },
+                    database_fd: database.into(),
+                    external_inventory: None,
+                },
+            )
+            .await
+            .unwrap();
+            let storage = publication_storage_row(&self.zone, &self.identity);
+            runtime.authority_identity = Some(
+                ZoneAuthorityIdentity::from_bundle_and_storage(&self.zone, bundle, &storage)
+                    .unwrap(),
+            );
+            runtime
+        }
+
+        fn generation_set(
+            &self,
+            bundle: &ResourceBundle,
+        ) -> (
+            ResourceBundleGenerationId,
+            BTreeMap<ZoneId, ResourceBundleGenerationId>,
+        ) {
+            let generation =
+                ResourceBundleGenerationId::parse(bundle.integrity().content_hash.clone())
+                    .unwrap();
+            let generations = BTreeMap::from([(self.zone.clone(), generation)]);
+            let set_generation = complete_generation_set_digest(
+                &BTreeSet::from([self.zone.clone()]),
+                &generations,
+            )
+            .unwrap();
+            (set_generation, generations)
+        }
+    }
+
+    fn publication_storage_row(
+        zone: &ZoneId,
+        identity: &d2b_resource_store_redb::StoreIdentity,
+    ) -> ZoneStoreStorageRow {
+        let storage_identity = ZoneStoreIdentity::new(
+            identity.zone_uid().clone(),
+            identity.store_uid().clone(),
+            identity.store_epoch(),
+        )
+        .unwrap();
+        serde_json::from_value(json!({
+            "identity": storage_identity,
+            "zoneStoreId": format!("zone-store-{}", zone.as_str()),
+            "storageOwnerPrincipal": "d2b-zonert",
+            "parentDirectoryId": format!("zone-store-parent-{}", zone.as_str()),
+            "ownership": {
+                "owner": "d2b-zonert", "group": "d2b-zonert",
+                "mode": "0640", "linkCount": 1
+            },
+            "auxiliaryDirectories": {
+                "audit": {
+                    "directoryId": format!("zone-store-audit-{}", zone.as_str()),
+                    "owner": "d2bd", "group": "d2bd",
+                    "mode": "0700", "repairOwner": "privileged-broker"
+                },
+                "telemetry": {
+                    "directoryId": format!("zone-store-telemetry-{}", zone.as_str()),
+                    "owner": "d2bd", "group": "d2bd",
+                    "mode": "0700", "repairOwner": "privileged-broker"
+                }
+            },
+            "filesystem": "regular-file-anchored-fd-relative-no-follow",
+            "locking": "ofd-close-on-exec",
+            "marker": {
+                "identityMarkerId": format!("zone-store-marker-{}", zone.as_str())
+            },
+            "replacementDetection": "fail-closed-on-missing-replaced-or-identity-mismatch",
+            "fsync": "database-and-parent-directory",
+            "publication": {
+                "descriptor": "owned-descriptor-close-on-exec-verified-before-concurrency",
+                "replacement": "atomic-rename-retain-prior-quarantine-ambiguity"
+            }
+        }))
+        .unwrap()
+    }
+
+    fn publication_bundle(
+        zone: &ZoneId,
+        zone_uid: &ResourceUid,
+        value: &str,
+    ) -> ResourceBundle {
+        let resource = BundleResource::new(
+            ResourceTypeName::parse("Host").unwrap(),
+            BundleResourceMetadata::new(
+                ResourceName::parse(format!("generation-{value}")).unwrap(),
+                zone.clone(),
+                None,
+                BTreeMap::new(),
+                BTreeMap::new(),
+            ),
+            CanonicalJsonObject::parse(format!(r#"{{"value":"{value}"}}"#).as_bytes()).unwrap(),
+        )
+        .unwrap();
+        ResourceBundle::new(
+            zone.clone(),
+            vec![resource],
+            "sha256:".to_owned() + &"f".repeat(64),
+            BTreeMap::new(),
+            BTreeMap::new(),
+            Timestamp::parse("2026-08-26T00:00:00.000Z").unwrap(),
+        )
+        .unwrap()
+        .with_zone_uid(zone_uid.clone())
+    }
+
+    async fn publish_generation(
+        runtime: &ZoneResourceRuntime,
+        set_generation: &ResourceBundleGenerationId,
+        generations: &BTreeMap<ZoneId, ResourceBundleGenerationId>,
+    ) {
+        runtime
+            .prepare_generation_publication(set_generation, generations)
+            .await
+            .unwrap();
+        runtime
+            .commit_generation_publication(set_generation, generations)
+            .await
+            .unwrap();
+    }
+
+    async fn publication_state(
+        runtime: &ZoneResourceRuntime,
+        set_generation: &ResourceBundleGenerationId,
+    ) -> AuthorityOperationState {
+        runtime
+            .store
+            .authority_operations()
+            .await
+            .unwrap()
+            .into_iter()
+            .find(|operation| {
+                operation.operation_id == generation_publication_operation_id(set_generation)
+            })
+            .unwrap()
+            .state
+    }
+
+    #[tokio::test]
+    async fn generation_publication_retires_a_before_admitting_b() {
+        let fixture = PublicationStoreFixture::new().await;
+        let bundle_a = publication_bundle(
+            &fixture.zone,
+            fixture.identity.zone_uid(),
+            "a",
+        );
+        let bundle_b = publication_bundle(
+            &fixture.zone,
+            fixture.identity.zone_uid(),
+            "b",
+        );
+
+        let runtime_a = fixture.open(&bundle_a).await;
+        let (set_a, generations_a) = fixture.generation_set(&bundle_a);
+        publish_generation(&runtime_a, &set_a, &generations_a).await;
+        assert_eq!(
+            publication_state(&runtime_a, &set_a).await,
+            AuthorityOperationState::Released
+        );
+        runtime_a.shutdown().await.unwrap();
+
+        let runtime_b = fixture.open(&bundle_b).await;
+        let (set_b, generations_b) = fixture.generation_set(&bundle_b);
+        publish_generation(&runtime_b, &set_b, &generations_b).await;
+        assert_eq!(
+            publication_state(&runtime_b, &set_b).await,
+            AuthorityOperationState::Released
+        );
+        runtime_b.shutdown().await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn generation_publication_restart_recovers_confirmed_a_idempotently() {
+        let fixture = PublicationStoreFixture::new().await;
+        let bundle_a = publication_bundle(
+            &fixture.zone,
+            fixture.identity.zone_uid(),
+            "a",
+        );
+        let runtime_a = fixture.open(&bundle_a).await;
+        let (set_a, generations_a) = fixture.generation_set(&bundle_a);
+        runtime_a
+            .prepare_generation_publication(&set_a, &generations_a)
+            .await
+            .unwrap();
+        let operation_id = generation_publication_operation_id(&set_a);
+        let binding_digest = runtime_a.store.authority_binding_digest(set_a.as_str());
+        let capability = runtime_a
+            .store
+            .resume_authority_operation(operation_id, &binding_digest)
+            .await
+            .unwrap();
+        capability
+            .record_effect(AuthorityOperationState::EffectConfirmed)
+            .await
+            .unwrap();
+        drop(capability);
+        runtime_a.shutdown().await.unwrap();
+
+        let runtime_restart = fixture.open(&bundle_a).await;
+        publish_generation(&runtime_restart, &set_a, &generations_a).await;
+        assert_eq!(
+            publication_state(&runtime_restart, &set_a).await,
+            AuthorityOperationState::Released
+        );
+        runtime_restart.shutdown().await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn generation_publication_pending_and_retryable_a_fence_b() {
+        for retryable in [false, true] {
+            let fixture = PublicationStoreFixture::new().await;
+            let bundle_a = publication_bundle(
+                &fixture.zone,
+                fixture.identity.zone_uid(),
+                if retryable { "retryable" } else { "pending" },
+            );
+            let bundle_b = publication_bundle(
+                &fixture.zone,
+                fixture.identity.zone_uid(),
+                "b",
+            );
+            let runtime_a = fixture.open(&bundle_a).await;
+            let (set_a, generations_a) = fixture.generation_set(&bundle_a);
+            runtime_a
+                .prepare_generation_publication(&set_a, &generations_a)
+                .await
+                .unwrap();
+            if retryable {
+                let binding_digest = runtime_a.store.authority_binding_digest(set_a.as_str());
+                let capability = runtime_a
+                    .store
+                    .resume_authority_operation(
+                        generation_publication_operation_id(&set_a),
+                        &binding_digest,
+                    )
+                    .await
+                    .unwrap();
+                capability
+                    .record_effect(AuthorityOperationState::EffectRetryable)
+                    .await
+                    .unwrap();
+            }
+            runtime_a.shutdown().await.unwrap();
+
+            let runtime_b = fixture.open(&bundle_b).await;
+            let (set_b, generations_b) = fixture.generation_set(&bundle_b);
+            assert!(
+                runtime_b
+                    .prepare_generation_publication(&set_b, &generations_b)
+                    .await
+                    .is_err()
+            );
+            runtime_b.shutdown().await.unwrap();
+        }
+    }
+
+    #[tokio::test]
+    async fn generation_publication_unclosed_or_unreleased_a_does_not_admit_b() {
+        // A failed close leaves EffectConfirmed; a failed release leaves Closing.
+        for (close_recorded, expected_state) in [
+            (false, AuthorityOperationState::EffectConfirmed),
+            (true, AuthorityOperationState::Closing),
+        ] {
+            let fixture = PublicationStoreFixture::new().await;
+            let bundle_a = publication_bundle(
+                &fixture.zone,
+                fixture.identity.zone_uid(),
+                if close_recorded { "closing" } else { "confirmed" },
+            );
+            let bundle_b = publication_bundle(
+                &fixture.zone,
+                fixture.identity.zone_uid(),
+                "b",
+            );
+            let runtime_a = fixture.open(&bundle_a).await;
+            let (set_a, generations_a) = fixture.generation_set(&bundle_a);
+            runtime_a
+                .prepare_generation_publication(&set_a, &generations_a)
+                .await
+                .unwrap();
+            let binding_digest = runtime_a.store.authority_binding_digest(set_a.as_str());
+            let capability = runtime_a
+                .store
+                .resume_authority_operation(
+                    generation_publication_operation_id(&set_a),
+                    &binding_digest,
+                )
+                .await
+                .unwrap();
+            capability
+                .record_effect(AuthorityOperationState::EffectConfirmed)
+                .await
+                .unwrap();
+            if close_recorded {
+                capability.record_close().await.unwrap();
+            }
+            drop(capability);
+            assert_eq!(
+                publication_state(&runtime_a, &set_a).await,
+                expected_state
+            );
+            runtime_a.shutdown().await.unwrap();
+
+            let runtime_b = fixture.open(&bundle_b).await;
+            let (set_b, generations_b) = fixture.generation_set(&bundle_b);
+            assert!(
+                runtime_b
+                    .prepare_generation_publication(&set_b, &generations_b)
+                    .await
+                    .is_err()
+            );
+            runtime_b.shutdown().await.unwrap();
+        }
     }
 
     fn committed_provider_resource(name: &str, artifact_id: &str, config: Value) -> StoredResource {
@@ -4679,6 +5557,67 @@ mod tests {
             configuration.notification().unwrap().observer_user_ref(),
             &ResourceRef::parse("User/alice").unwrap()
         );
+    }
+
+    #[test]
+    fn generation_publication_marker_binds_one_complete_set_across_restart() {
+        let zones = BTreeSet::from([
+            ZoneId::parse("local-root").unwrap(),
+            ZoneId::parse("work").unwrap(),
+        ]);
+        let generations = BTreeMap::from([
+            (
+                ZoneId::parse("local-root").unwrap(),
+                ResourceBundleGenerationId::parse(
+                    "sha256:".to_owned() + &"a".repeat(64),
+                )
+                .unwrap(),
+            ),
+            (
+                ZoneId::parse("work").unwrap(),
+                ResourceBundleGenerationId::parse(
+                    "sha256:".to_owned() + &"b".repeat(64),
+                )
+                .unwrap(),
+            ),
+        ]);
+        let set_generation =
+            complete_generation_set_digest(&zones, &generations).expect("complete generation");
+        let binding_digest = "sha256:".to_owned() + &"c".repeat(64);
+        let payload =
+            generation_publication_payload(&set_generation, &binding_digest, &generations)
+                .expect("publication payload");
+        assert!(generation_publication_payload_matches(
+            &payload,
+            &set_generation,
+            &binding_digest,
+            &generations,
+        ));
+
+        let mut recovered: Value = serde_json::from_slice(&payload).expect("payload JSON");
+        recovered["state"] = Value::String("effect-confirmed".to_owned());
+        let recovered = serde_json::to_vec(&recovered).expect("recovered payload");
+        assert!(generation_publication_payload_matches(
+            &recovered,
+            &set_generation,
+            &binding_digest,
+            &generations,
+        ));
+
+        let mut mixed = generations.clone();
+        mixed.insert(
+            ZoneId::parse("work").unwrap(),
+            ResourceBundleGenerationId::parse(
+                "sha256:".to_owned() + &"d".repeat(64),
+            )
+            .unwrap(),
+        );
+        assert!(!generation_publication_payload_matches(
+            &recovered,
+            &set_generation,
+            &binding_digest,
+            &mixed,
+        ));
     }
 
     #[test]

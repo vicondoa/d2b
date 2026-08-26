@@ -72,6 +72,7 @@ in
       resourcesJson,
       providerSchemaDigestsJson,
       zoneJson,
+      zoneUidJson,
       artifactCatalogPreimageJson,
       artifactCatalogPath ? null,
       schemaValidationPath ? null,
@@ -88,6 +89,7 @@ in
           resourcesJson
           providerSchemaDigestsJson
           zoneJson
+          zoneUidJson
           artifactCatalogPreimageJson
           ;
         inherit artifactCatalogPathArg;
@@ -134,6 +136,8 @@ in
           cat "$resourcesJsonPath"
           printf '%s' ',"schemaVersion":3,"zone":'
           printf '%s' "$zoneJson"
+          printf '%s' ',"zoneUid":'
+          printf '%s' "$zoneUidJson"
           printf '%s' '}'
         } > "$out"
       '';

@@ -768,16 +768,18 @@ fn zone_uid_and_artifact_catalog_mismatch_fail_before_activation() {
     let mut controller = ZoneConfigController::with_defaults(zone());
     controller
         .activate(
-            BundleActivation::new(bundle('a', [input("Device", "gpu", "first")]))
-                .with_zone_uid(Some(uid)),
+            BundleActivation::new(
+                bundle('a', [input("Device", "gpu", "first")]).with_zone_uid(uid.clone()),
+            ),
             &[],
             &timestamp(),
         )
         .unwrap();
     let error = controller
         .activate(
-            BundleActivation::new(bundle('b', [input("Device", "gpu", "second")]))
-                .with_zone_uid(Some(other_uid)),
+            BundleActivation::new(
+                bundle('b', [input("Device", "gpu", "second")]).with_zone_uid(other_uid),
+            ),
             &[],
             &timestamp(),
         )

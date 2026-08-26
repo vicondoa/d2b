@@ -4,6 +4,7 @@
 let
   cfg = config.d2b;
   specCanonical = import ./generated/zone-spec-canonical.nix;
+  resourcesBundle = import ./resources-bundle.nix { inherit lib; };
   artifactRenderer = import ./zone-resources-json.nix { inherit pkgs; };
   apiVersion = "resources.d2bus.org/v3";
 
@@ -185,6 +186,7 @@ let
     in {
       schemaVersion = 3;
       bundleVersion = 1;
+      zoneUid = resourcesBundle.stableUid "d2b:v3:zone-uid" zoneName;
       zone = zoneName;
       inherit resources;
       generatedAt = "1970-01-01T00:00:00.000Z";
@@ -198,6 +200,7 @@ let
       resourcesJson = builtins.toJSON data.resources;
       providerSchemaDigestsJson = builtins.toJSON data.providerSchemaDigests;
       zoneJson = builtins.toJSON zoneName;
+      zoneUidJson = builtins.toJSON data.zoneUid;
       artifactCatalogPath = artifactCatalogPath;
       schemaValidationPath = schemaValidationPath;
     };

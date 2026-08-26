@@ -86,7 +86,7 @@ use crate::realm_workloads_launcher::RealmWorkloadsLauncherV2Json;
 use crate::storage::StorageJson;
 use crate::sync::SyncJson;
 use crate::unsafe_local_workloads::{UnsafeLocalWorkload, UnsafeLocalWorkloadsJson};
-use d2b_contracts_resource::v3::IfName;
+use d2b_contracts_resource::v3::{IfName, storage::ZoneStoreStorageRow};
 use d2b_realm_core::RealmIdentityConfigJson;
 use sha2::Digest as _;
 use std::collections::{BTreeMap, BTreeSet};
@@ -103,6 +103,7 @@ pub struct BundleResolver {
     pub host: HostJson,
     pub processes: ProcessesJson,
     zone_resource_bundles: BTreeMap<String, Vec<u8>>,
+    zone_storage_rows: BTreeMap<String, ZoneStoreStorageRow>,
     pub storage: Option<StorageJson>,
     pub sync: Option<SyncJson>,
     pub realm_controllers: Option<RealmControllersJson>,
@@ -140,6 +141,7 @@ struct ParsedBundleArtifacts {
     host: HostJson,
     processes: ProcessesJson,
     zone_resource_bundles: BTreeMap<String, Vec<u8>>,
+    zone_storage_rows: BTreeMap<String, ZoneStoreStorageRow>,
     storage: Option<StorageJson>,
     sync: Option<SyncJson>,
     realm_controllers: Option<RealmControllersJson>,
@@ -1104,6 +1106,7 @@ impl BundleResolver {
                 host,
                 processes,
                 zone_resource_bundles: BTreeMap::new(),
+                zone_storage_rows: BTreeMap::new(),
                 storage: None,
                 sync: None,
                 realm_controllers: None,
@@ -1125,6 +1128,7 @@ impl BundleResolver {
             host,
             processes,
             zone_resource_bundles,
+            zone_storage_rows,
             storage,
             sync,
             realm_controllers,
@@ -1167,6 +1171,7 @@ impl BundleResolver {
             host,
             processes,
             zone_resource_bundles,
+            zone_storage_rows,
             storage,
             sync,
             realm_controllers,
@@ -1221,6 +1226,7 @@ impl BundleResolver {
                 host,
                 processes,
                 zone_resource_bundles: BTreeMap::new(),
+                zone_storage_rows: BTreeMap::new(),
                 storage,
                 sync,
                 realm_controllers,
@@ -1263,6 +1269,7 @@ impl BundleResolver {
             Error::manifest_parse_error("processes.json", manifest_parse_reason(&e.to_string()))
         })?;
         let zone_resource_bundles = load_zone_resource_bundles(&bundle, bundle_root, policy)?;
+        let zone_storage_rows = load_zone_storage_rows(&bundle, bundle_root, policy)?;
         let storage = load_optional_storage_artifact(&bundle, bundle_root, policy)?;
         let sync = load_optional_sync_artifact(&bundle, bundle_root, policy)?;
         let realm_controllers =
@@ -1283,6 +1290,7 @@ impl BundleResolver {
                 host,
                 processes,
                 zone_resource_bundles,
+                zone_storage_rows,
                 storage,
                 sync,
                 realm_controllers,
@@ -1306,6 +1314,24 @@ impl BundleResolver {
     /// remains in `d2bd`, which owns the Resource API activation boundary.
     pub fn zone_resource_bundle_bytes(&self, zone: &str) -> Option<&[u8]> {
         self.zone_resource_bundles.get(zone).map(Vec::as_slice)
+    }
+
+    /// Return the Zone identities that have a verified resource bundle.
+    pub fn zone_resource_bundle_zones(
+        &self,
+    ) -> Result<BTreeSet<d2b_contracts_resource::v3::ZoneId>, &'static str> {
+        self.zone_resource_bundles
+            .keys()
+            .map(|zone| {
+                d2b_contracts_resource::v3::ZoneId::parse(zone.clone())
+                    .map_err(|_| "bundle Zone resource bundle index invalid")
+            })
+            .collect()
+    }
+
+    /// Return the verified broker-owned storage row for one Zone.
+    pub fn zone_storage_row(&self, zone: &str) -> Option<&ZoneStoreStorageRow> {
+        self.zone_storage_rows.get(zone)
     }
 
     pub fn audit_bundle_hash(&self) -> &str {
@@ -3241,6 +3267,45 @@ fn load_zone_resource_bundles(
         }
     }
     Ok(bundles)
+}
+
+/// Load the integrity-pinned per-Zone storage rows emitted by Nix.
+fn load_zone_storage_rows(
+    bundle: &Bundle,
+    bundle_root: &Path,
+    policy: &BundleVerifyPolicy,
+) -> Result<BTreeMap<String, ZoneStoreStorageRow>, Error> {
+    let mut rows = BTreeMap::new();
+    let Some(artifact_hashes) = bundle.artifact_hashes.as_ref() else {
+        return Ok(rows);
+    };
+    for key in artifact_hashes.keys() {
+        let Some(zone_path) = key.strip_prefix("zones/") else {
+            continue;
+        };
+        let Some(zone_name) = zone_path.strip_suffix("/storage.json") else {
+            continue;
+        };
+        if zone_name.is_empty() || zone_name.contains('/') || zone_name.contains('\\') {
+            return Err(Error::manifest_parse_error(
+                "storage.json",
+                "Zone storage row path is invalid",
+            ));
+        }
+        let row_path = resolve_bundle_ref(bundle_root, key);
+        let bytes = secure_open_and_read(&row_path, policy)?;
+        verify_artifact_hash(&row_path, &bytes, bundle.artifact_hashes.as_ref(), key)?;
+        let row: ZoneStoreStorageRow = serde_json::from_slice(&bytes).map_err(|error| {
+            Error::manifest_parse_error("storage.json", manifest_parse_reason(&error.to_string()))
+        })?;
+        if rows.insert(zone_name.to_owned(), row).is_some() {
+            return Err(Error::manifest_parse_error(
+                "storage.json",
+                "duplicate Zone storage row",
+            ));
+        }
+    }
+    Ok(rows)
 }
 
 fn load_optional_storage_artifact(

@@ -2,6 +2,7 @@
 
 let
   cfg = config.d2b;
+  identity = import ../../../nixos-modules/resources-bundle.nix { inherit lib; };
   enabledEnvNames = builtins.attrNames (lib.filterAttrs (_: env: env.enable) cfg.envs);
   declaredZoneNames = builtins.attrNames (cfg._zoneCompiler.topology or { });
   # The compiler topology is the authoritative declared-Zone index. Keep
@@ -11,6 +12,11 @@ let
     ([ cfg._zoneCompiler.localRoot ] ++ enabledEnvNames ++ declaredZoneNames);
 
   storageRow = zoneName: {
+    identity = {
+      zoneUid = identity.stableUid "d2b:v3:zone-uid" zoneName;
+      storeUid = identity.stableUid "d2b:v3:store-uid" zoneName;
+      storeEpoch = 1;
+    };
     zoneStoreId = "zone-store-${zoneName}";
     storageOwnerPrincipal = "d2b-zonert";
     parentDirectoryId = "zone-store-parent-${zoneName}";

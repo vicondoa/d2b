@@ -12,10 +12,11 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Deserializer, Serialize};
 
 use d2b_contracts_resource::v3::{
-    ResourceRef,
-    ResourceTypeName,
-    ZoneId,
-    resource_schema::{CanonicalJsonObject, CanonicalJsonValue, canonical_json_bytes, framed_canonical_digest, is_canonical_digest},
+    ResourceRef, ResourceTypeName, ResourceUid, ZoneId,
+    resource_schema::{
+        CanonicalJsonObject, CanonicalJsonValue, canonical_json_bytes, framed_canonical_digest,
+        is_canonical_digest,
+    },
 };
 
 /// The canonical domain tag used for the resource array content hash.
@@ -26,6 +27,10 @@ pub const ARTIFACT_CATALOG_DOMAIN_TAG: &str = "d2b:v3:artifact-catalog";
 pub const MAX_BUNDLE_RESOURCES: usize = 16_384;
 /// Maximum schema/provider fingerprint entries in a private bundle.
 pub const MAX_BUNDLE_FINGERPRINTS: usize = 256;
+/// Bundle schema version accepted by the Zone runtime.
+pub const RESOURCE_BUNDLE_SCHEMA_VERSION: u32 = 3;
+/// Bundle envelope version accepted by the Zone runtime.
+pub const RESOURCE_BUNDLE_VERSION: u32 = 1;
 
 /// Author-controlled metadata carried by a bundle resource item.
 #[derive(Clone, PartialEq, Eq, Serialize, JsonSchema)]
@@ -228,6 +233,9 @@ pub struct ResourceBundle {
     pub bundle_version: u32,
     /// Enclosing Zone.
     pub zone: ZoneId,
+    /// Immutable Zone self-resource identity when the bundle is bound.
+    #[serde(default)]
+    pub zone_uid: Option<ResourceUid>,
     /// Content/integrity pins.
     #[serde(flatten)]
     pub integrity: BundleIntegrityPin,
@@ -278,9 +286,10 @@ impl ResourceBundle {
         }
         let content_hash = digest_resources(&resources)?;
         Ok(Self {
-            schema_version: 3,
-            bundle_version: 1,
+            schema_version: RESOURCE_BUNDLE_SCHEMA_VERSION,
+            bundle_version: RESOURCE_BUNDLE_VERSION,
             zone,
+            zone_uid: None,
             integrity: BundleIntegrityPin {
                 content_hash,
                 artifact_catalog_digest,
@@ -290,6 +299,17 @@ impl ResourceBundle {
             resources,
             generated_at,
         })
+    }
+
+    /// Bind the bundle to the immutable Zone self-resource identity.
+    pub fn with_zone_uid(mut self, zone_uid: ResourceUid) -> Self {
+        self.zone_uid = Some(zone_uid);
+        self
+    }
+
+    /// Borrow the immutable Zone self-resource identity, when supplied.
+    pub const fn zone_uid(&self) -> Option<&ResourceUid> {
+        self.zone_uid.as_ref()
     }
 
     /// Parse and verify a bundle through canonical duplicate-key decoding.
@@ -303,7 +323,9 @@ impl ResourceBundle {
 
     /// Verify ordering, Zone identity, and content hash.
     pub fn verify(&self) -> Result<(), ResourceBundleError> {
-        if self.schema_version != 3 || self.bundle_version != 1 {
+        if self.schema_version != RESOURCE_BUNDLE_SCHEMA_VERSION
+            || self.bundle_version != RESOURCE_BUNDLE_VERSION
+        {
             return Err(ResourceBundleError::UnsupportedVersion);
         }
         if !is_digest(&self.integrity.artifact_catalog_digest)
@@ -470,6 +492,7 @@ mod tests {
 
     #[test]
     fn bundle_sorts_rows_and_hashes_only_the_resource_array() {
+        let zone_uid = ResourceUid::parse("123e4567-e89b-42d3-a456-426614174000").unwrap();
         let bundle = ResourceBundle::new(
             ZoneId::parse("dev").unwrap(),
             vec![resource("Process", "z"), resource("Host", "a")],
@@ -479,8 +502,10 @@ mod tests {
             timestamp(),
         )
         .unwrap();
+        let bundle = bundle.with_zone_uid(zone_uid.clone());
         assert_eq!(bundle.resources[0].resource_type().as_str(), "Host");
         assert_eq!(bundle.resources[1].metadata().name().as_str(), "z");
+        assert_eq!(bundle.zone_uid(), Some(&zone_uid));
         let bytes = canonical_json_bytes(&bundle).unwrap();
         assert_eq!(ResourceBundle::from_json(&bytes).unwrap(), bundle);
     }

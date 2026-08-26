@@ -1337,6 +1337,11 @@ fn diagnose_names_the_disagreeing_component_without_rendering_it() {
         matching.diagnose(&store.seal_identity()),
         Err(d2b_resource_store::SealIdentityMismatch::Store)
     );
+    let epoch = identity().with_store_epoch(2);
+    assert_eq!(
+        matching.diagnose(&epoch.seal_identity()),
+        Err(d2b_resource_store::SealIdentityMismatch::Epoch)
+    );
     assert_eq!(
         d2b_resource_store::SealIdentityMismatch::Zone.reason_code(),
         "mutation-seal-acceptor-zone-mismatch"
@@ -1344,6 +1349,10 @@ fn diagnose_names_the_disagreeing_component_without_rendering_it() {
     assert_eq!(
         d2b_resource_store::SealIdentityMismatch::Store.reason_code(),
         "mutation-seal-acceptor-store-mismatch"
+    );
+    assert_eq!(
+        d2b_resource_store::SealIdentityMismatch::Epoch.reason_code(),
+        "mutation-seal-acceptor-store-epoch-mismatch"
     );
 }
 
@@ -2221,6 +2230,7 @@ fn persisted_dtos_reject_unknown_fields() {
         store_uuid: "11111111-1111-4111-8111-111111111111".to_owned(),
         zone_name: "work".to_owned(),
         zone_uid: "22222222-2222-4222-8222-222222222222".to_owned(),
+        store_epoch: 1,
         created_at: "2026-07-31T00:00:00.000Z".to_owned(),
         schema_version: 1,
         current_revision: 0,

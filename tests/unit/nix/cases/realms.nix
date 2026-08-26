@@ -1817,6 +1817,12 @@ let
       generationMatches =
         zoneControlCfg.d2b._resourceCompiler.zoneControl.generations.child
         == zoneControlCfg.d2b._bundle.zoneResourceBundlesV3.child.data.contentHash;
+      zoneUidMatches =
+        zoneControlCfg.d2b._resourceCompiler.zoneControl.identities.child.zoneUid
+        == zoneControlCfg.d2b._zoneCompiler.selfResources.child.metadata.uid;
+      zoneUidsDistinct =
+        zoneControlCfg.d2b._zoneCompiler.selfResources.local-root.metadata.uid
+        != zoneControlCfg.d2b._zoneCompiler.selfResources.child.metadata.uid;
       resourceTypes = map
         (resource: resource.type)
         zoneControlCfg.d2b._resourceCompiler.zoneControl.byZone.child;
@@ -1826,6 +1832,8 @@ let
       parent = "local-root";
       zoneSpec = { };
       generationMatches = true;
+      zoneUidMatches = true;
+      zoneUidsDistinct = true;
       resourceTypes = [ "Provider" "ZoneLink" ];
     };
   };

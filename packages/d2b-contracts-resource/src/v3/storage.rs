@@ -1,8 +1,8 @@
 //! Closed storage contract for one Zone resource store.
 //!
-//! The row carries only broker-resolved opaque identifiers. It deliberately has
-//! no path-bearing type or field, so a caller cannot smuggle a host path across
-//! the storage-owner boundary.
+//! The row carries broker-resolved opaque identifiers plus the immutable
+//! Zone/store tuple. It deliberately has no path-bearing type or field, so a
+//! caller cannot smuggle a host path across the storage-owner boundary.
 
 use schemars::{
     JsonSchema,
@@ -10,6 +10,8 @@ use schemars::{
     schema::{InstanceType, Schema, SchemaObject, SingleOrVec, StringValidation},
 };
 use serde::{Deserialize, Deserializer, Serialize};
+
+use super::ResourceUid;
 
 /// Maximum byte length of a broker-resolved Zone storage identifier.
 pub const MAX_ZONE_STORAGE_ID_BYTES: usize = 160;
@@ -25,6 +27,8 @@ pub enum ZoneStorageContractError {
     InvalidMode,
     /// A database inode must have exactly one link.
     InvalidLinkCount,
+    /// A store epoch must be nonzero.
+    InvalidEpoch,
 }
 
 impl core::fmt::Display for ZoneStorageContractError {
@@ -33,6 +37,7 @@ impl core::fmt::Display for ZoneStorageContractError {
             Self::InvalidOpaqueId => "Zone storage identifier is invalid",
             Self::InvalidMode => "Zone store database mode is invalid",
             Self::InvalidLinkCount => "Zone store database link count must be one",
+            Self::InvalidEpoch => "Zone store epoch must be nonzero",
         })
     }
 }
@@ -137,6 +142,70 @@ opaque_storage_id!(
     ZoneStorePrincipal,
     "Validated local storage-owner, file-owner, or file-group principal."
 );
+
+/// Immutable identity shared by the Zone self-resource and its store.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ZoneStoreIdentity {
+    /// Immutable UID of the Zone self-resource.
+    zone_uid: ResourceUid,
+    /// Immutable UID of the physical Zone store.
+    store_uid: ResourceUid,
+    /// Monotone identity epoch, advanced only when a store is reprovisioned.
+    #[schemars(range(min = 1))]
+    store_epoch: u64,
+}
+
+impl ZoneStoreIdentity {
+    /// Construct one immutable Zone/store identity.
+    pub fn new(
+        zone_uid: ResourceUid,
+        store_uid: ResourceUid,
+        store_epoch: u64,
+    ) -> Result<Self, ZoneStorageContractError> {
+        if store_epoch == 0 {
+            return Err(ZoneStorageContractError::InvalidEpoch);
+        }
+        Ok(Self {
+            zone_uid,
+            store_uid,
+            store_epoch,
+        })
+    }
+
+    /// Borrow the immutable Zone UID.
+    pub const fn zone_uid(&self) -> &ResourceUid {
+        &self.zone_uid
+    }
+
+    /// Borrow the immutable store UID.
+    pub const fn store_uid(&self) -> &ResourceUid {
+        &self.store_uid
+    }
+
+    /// Return the immutable store epoch.
+    pub const fn store_epoch(&self) -> u64 {
+        self.store_epoch
+    }
+}
+
+impl<'de> Deserialize<'de> for ZoneStoreIdentity {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        #[derive(Deserialize)]
+        #[serde(rename_all = "camelCase", deny_unknown_fields)]
+        struct Wire {
+            zone_uid: ResourceUid,
+            store_uid: ResourceUid,
+            store_epoch: u64,
+        }
+
+        let wire = Wire::deserialize(deserializer)?;
+        Self::new(wire.zone_uid, wire.store_uid, wire.store_epoch).map_err(serde::de::Error::custom)
+    }
+}
 
 /// Exact database-inode ownership and metadata requirements.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
@@ -361,6 +430,8 @@ pub struct ZoneStorePublicationInvariant {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ZoneStoreStorageRow {
+    /// Immutable Zone/store identity binding.
+    pub identity: ZoneStoreIdentity,
     /// Opaque identifier for the database file.
     pub zone_store_id: ZoneStoreId,
     /// Principal with authority to provision, validate, and open the store.
@@ -391,6 +462,11 @@ mod tests {
 
     fn valid_row() -> serde_json::Value {
         serde_json::json!({
+            "identity": {
+                "zoneUid": "123e4567-e89b-42d3-a456-426614174000",
+                "storeUid": "223e4567-e89b-42d3-a456-426614174001",
+                "storeEpoch": 1
+            },
             "zoneStoreId": "zone-store-local-root",
             "storageOwnerPrincipal": "d2b-zonert",
             "parentDirectoryId": "zone-store-parent-local-root",
@@ -460,6 +536,7 @@ mod tests {
     #[test]
     fn every_invariant_is_required() {
         for field in [
+            "identity",
             "zoneStoreId",
             "storageOwnerPrincipal",
             "parentDirectoryId",
@@ -477,6 +554,18 @@ mod tests {
             assert!(
                 serde_json::from_value::<ZoneStoreStorageRow>(candidate).is_err(),
                 "missing invariant {field} must be rejected"
+            );
+        }
+
+        for field in ["zoneUid", "storeUid", "storeEpoch"] {
+            let mut candidate = valid_row();
+            candidate["identity"]
+                .as_object_mut()
+                .expect("identity object")
+                .remove(field);
+            assert!(
+                serde_json::from_value::<ZoneStoreStorageRow>(candidate).is_err(),
+                "missing identity invariant {field} must be rejected"
             );
         }
 
@@ -552,5 +641,39 @@ mod tests {
         let mut mode = valid_row();
         mode["ownership"]["mode"] = serde_json::json!("not-a-mode");
         assert!(serde_json::from_value::<ZoneStoreStorageRow>(mode).is_err());
+    }
+
+    #[test]
+    fn zone_store_identity_requires_a_nonzero_epoch() {
+        let zone_uid =
+            crate::v3::ResourceUid::parse("123e4567-e89b-42d3-a456-426614174000").unwrap();
+        let store_uid =
+            crate::v3::ResourceUid::parse("223e4567-e89b-42d3-a456-426614174001").unwrap();
+        let identity = ZoneStoreIdentity::new(zone_uid.clone(), store_uid.clone(), 7)
+            .expect("nonzero store epoch");
+        assert_eq!(identity.zone_uid(), &zone_uid);
+        assert_eq!(identity.store_uid(), &store_uid);
+        assert_eq!(identity.store_epoch(), 7);
+        assert!(
+            ZoneStoreIdentity::new(identity.zone_uid().clone(), identity.store_uid().clone(), 0)
+                .is_err()
+        );
+        assert!(
+            serde_json::from_value::<ZoneStoreIdentity>(serde_json::json!({
+                "zoneUid": identity.zone_uid(),
+                "storeUid": identity.store_uid(),
+                "storeEpoch": 0,
+            }))
+            .is_err()
+        );
+        assert_eq!(
+            serde_json::from_value::<ZoneStoreIdentity>(serde_json::json!({
+                "zoneUid": identity.zone_uid(),
+                "storeUid": identity.store_uid(),
+                "storeEpoch": identity.store_epoch(),
+            }))
+            .unwrap(),
+            identity
+        );
     }
 }

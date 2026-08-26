@@ -248,6 +248,7 @@ let
     in {
       schemaVersion = 3;
       bundleVersion = 1;
+      zoneUid = resourcesBundle.stableUid "d2b:v3:zone-uid" zoneName;
       zone = zoneName;
       inherit contentHash;
       artifactCatalogDigest = catalogDigest;
@@ -261,6 +262,7 @@ let
       compilerInput = pkgs.writeText "d2b-resource-compiler-${zoneName}.json"
         (builtins.toJSON {
           zone = zoneName;
+          zoneUid = data.zoneUid;
           resources = data.resources;
           providerSchemaDigests = data.providerSchemaDigests;
           providers = providerInputs cfg.zones.${zoneName};

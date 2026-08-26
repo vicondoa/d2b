@@ -113,6 +113,11 @@ let
     userGroup = zoneStorageEnvCfg.users.users.d2b-zonert.group;
   };
   expectedZoneStorageData = {
+    identity = {
+      zoneUid = "28a45728-7bb0-42b7-801a-85d6f04a8625";
+      storeUid = "9d658646-6819-46b6-8364-9076af6668dc";
+      storeEpoch = 1;
+    };
     zoneStoreId = "zone-store-local-root";
     storageOwnerPrincipal = "d2b-zonert";
     parentDirectoryId = "zone-store-parent-local-root";

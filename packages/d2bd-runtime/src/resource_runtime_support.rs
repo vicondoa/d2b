@@ -11,12 +11,14 @@ use std::{
 };
 
 use crate::resource_api::{ParsedListRequest, ResourceRuntimeError};
+use crate::zone_authority::ZoneAuthorityIdentity;
 use d2b_bus::{BusIngress, ZoneRegistrar};
 use d2b_contracts_resource::resource_proto as wire;
 use d2b_contracts_resource::v3::identity::STANDARD_RESOURCE_TYPES;
 use d2b_contracts_zone_session::v3::{
     component_session::{AttachmentPolicy, EndpointPolicy, EndpointPurpose, EndpointRole, IdentityEvidenceRequirement, LimitProfile, Locality, NoiseProfile, PurposeClass, ServicePackage, TransportBinding as ComponentTransportBinding, TransportClass},
     resource_bundle::ResourceBundle,
+    zone::validate_self_resource,
 };
 use d2b_contracts_resource::v3::{
     CanonicalJsonValue,
@@ -38,6 +40,7 @@ use d2b_contracts_resource::v3::{
     Timestamp,
     ZoneId,
     ZoneRevision,
+    ManagedBy,
     host::HOST_PROVIDER_REF,
 };
 use d2b_contracts_resource::v3::identity::{
@@ -793,16 +796,182 @@ pub async fn ensure_bootstrap_host_resource(
     Ok(())
 }
 
+/// Ensure the store-owned Zone self-resource exists before publishing a
+/// provisioned runtime.
+pub async fn ensure_bootstrap_zone_resource(
+    zone: &ZoneId,
+    zone_uid: &ResourceUid,
+    store: &RedbResourceStore,
+    client: &ResourceApiClient<RedbBackend, UnavailableUpgradeDispatcher>,
+) -> Result<(), ResourceRuntimeError> {
+    let zone_type =
+        ResourceTypeName::parse("Zone").map_err(|_| ResourceRuntimeError::HandlerNotReady)?;
+    let page = store
+        .list(StoreListRequest {
+            operation: StoreOperationContext {
+                operation_id: "system-core-bootstrap-list-zone".to_owned(),
+                idempotency_key: None,
+                correlation_id: "system-core-bootstrap-list-zone".to_owned(),
+                trace_id: None,
+                deadline_ms: 10_000,
+            },
+            zone: zone.clone(),
+            resource_types: vec![zone_type.clone()],
+            resource_names: Vec::new(),
+            filters: Vec::new(),
+            page_size: 2,
+            cursor: None,
+            projection: StoreProjection::Full,
+        })
+        .await
+        .map_err(|_| ResourceRuntimeError::StoreReadFailed)?;
+    if !page.resources.is_empty() {
+        return validate_zone_self_resource_rows(
+            zone,
+            zone_uid,
+            &page.resources,
+        );
+    }
+
+    let payload = CanonicalJsonValue::parse(
+        &serde_json::to_vec(&json!({
+            "apiVersion": "resources.d2bus.org/v3",
+            "metadata": {
+                "ownerRef": null,
+                "finalizers": [],
+                "deletionRequestedAt": null
+            },
+            "spec": {},
+            "status": {
+                "completedAt": null,
+                "conditions": [],
+                "lastReconciledAt": null,
+                "observedGeneration": 0,
+                "outcome": null,
+                "phase": "Pending",
+                "resource": {},
+                "startedAt": null,
+                "update": {
+                    "dependencies": {"count": 0, "refs": []},
+                    "disruption": "None",
+                    "lastAssessedAt": null,
+                    "observedGeneration": 0,
+                    "operationId": null,
+                    "owned": {"count": 0, "refs": []},
+                    "preserveState": true,
+                    "reasons": [],
+                    "state": "Unknown",
+                    "targetGeneration": 1
+                }
+            },
+            "type": "Zone"
+        }))
+        .map_err(|_| ResourceRuntimeError::HandlerNotReady)?,
+    )
+    .map_err(|_| ResourceRuntimeError::HandlerNotReady)?
+    .to_canonical_bytes();
+    let identity = resource_identity(
+        zone,
+        &zone_type,
+        &ResourceName::parse(zone.as_str())
+            .map_err(|_| ResourceRuntimeError::HandlerNotReady)?,
+        None,
+    );
+    let mut body = wire::ResourceEnvelopeBytes::new();
+    body.identity = protobuf::MessageField::some(identity.clone());
+    body.payload_digest = d2b_contracts_resource::v3::canonical_digest(
+        d2b_contracts_resource::v3::RESOURCE_ENVELOPE_DOMAIN_TAG,
+        &payload,
+    );
+    body.canonical_json = payload;
+    let mut precondition = wire::Precondition::new();
+    precondition.kind =
+        protobuf::EnumOrUnknown::new(wire::PreconditionKind::PRECONDITION_KIND_CREATE_ABSENT);
+    let mut mutation = wire::Mutation::new();
+    mutation.kind = protobuf::EnumOrUnknown::new(wire::MutationKind::MUTATION_KIND_CREATE);
+    mutation.target = protobuf::MessageField::some(identity);
+    mutation.precondition = protobuf::MessageField::some(precondition);
+    mutation.resource = protobuf::MessageField::some(body);
+    let mut request = wire::CreateRequest::new();
+    let mut meta = wire::RequestMeta::new();
+    meta.operation_id = "system-core-bootstrap-zone".to_owned();
+    meta.correlation_id = meta.operation_id.clone();
+    meta.idempotency_key = meta.operation_id.clone();
+    request.meta = protobuf::MessageField::some(meta);
+    request.mutation = protobuf::MessageField::some(mutation);
+    let response = client.create(request).await;
+    if response.error.is_some() {
+        return Err(ResourceRuntimeError::HandlerNotReady);
+    }
+    validate_zone_self_resource(store, zone, zone_uid, store.identity().store_uid()).await
+}
+
 /// Materialize the verified Nix Zone bundle through the authenticated
-/// system-core Resource API before any production composition reads the
-/// store.  The store remains the authority for UIDs, revisions, ownership,
-/// and update generation; this function only supplies desired state.
+/// system-core Resource API before production reconciliation reads the store
+/// as desired state.  The store remains the authority for UIDs, revisions,
+/// ownership, and update generation; this function only supplies desired
+/// state.
 pub async fn materialize_zone_resource_bundle(
     zone: &ZoneId,
     bundle: &ResourceBundle,
     store: &RedbResourceStore,
     client: &ResourceApiClient<RedbBackend, UnavailableUpgradeDispatcher>,
 ) -> Result<(), ResourceRuntimeError> {
+    let mutations = plan_zone_resource_bundle(zone, bundle, store).await?;
+    if mutations.is_empty() {
+        return Ok(());
+    }
+
+    let operation_id = resource_bundle_materialization_operation_id(zone, bundle)?;
+    let mut request = wire::CommitBatchRequest::new();
+    let mut meta = wire::RequestMeta::new();
+    meta.operation_id = operation_id.clone();
+    meta.idempotency_key = operation_id.clone();
+    meta.correlation_id = operation_id;
+    request.meta = protobuf::MessageField::some(meta);
+    request.mutations = mutations;
+    let response = client.commit_batch(request).await;
+    if let Some(error) = response.error.as_ref() {
+        tracing::error!(
+            zone = %zone.as_str(),
+            error_kind = ?error.kind,
+            reason = %error.reason.as_str(),
+            "authenticated Zone resource bundle materialization failed",
+        );
+        return Err(ResourceRuntimeError::HandlerNotReady);
+    }
+    Ok(())
+}
+
+/// Validate a bundle against the current store without issuing a mutation.
+///
+/// Composition uses this read-only pass for every local Zone before the
+/// durable publication operation is prepared.  In particular, stale
+/// configuration rows cannot be discovered only after an earlier Zone has
+/// advanced.
+pub async fn validate_zone_resource_bundle(
+    zone: &ZoneId,
+    bundle: &ResourceBundle,
+    store: &RedbResourceStore,
+) -> Result<(), ResourceRuntimeError> {
+    let _ = plan_zone_resource_bundle(zone, bundle, store).await?;
+    Ok(())
+}
+
+async fn plan_zone_resource_bundle(
+    zone: &ZoneId,
+    bundle: &ResourceBundle,
+    store: &RedbResourceStore,
+) -> Result<Vec<wire::Mutation>, ResourceRuntimeError> {
+    bundle
+        .verify()
+        .map_err(|_| ResourceRuntimeError::HandlerNotReady)?;
+    let bundle_zone_uid = bundle
+        .zone_uid()
+        .ok_or(ResourceRuntimeError::IdentityUnbound)?;
+    if store.identity().zone() != zone || store.identity().zone_uid() != bundle_zone_uid {
+        return Err(ResourceRuntimeError::HandlerNotReady);
+    }
     let metadata = store
         .runtime_metadata()
         .await
@@ -837,6 +1006,7 @@ pub async fn materialize_zone_resource_bundle(
             break;
         }
     }
+    reject_stale_guest_network_rows(&existing, bundle)?;
 
     let mut pending = bundle.resources.iter().collect::<Vec<_>>();
     let mut ordered = Vec::with_capacity(pending.len());
@@ -870,6 +1040,14 @@ pub async fn materialize_zone_resource_bundle(
         if let Some(current) = existing.get(&resource_ref) {
             let current_envelope = ResourceEnvelope::from_json(&current.canonical_json)
                 .map_err(|_| ResourceRuntimeError::HandlerNotReady)?;
+            if current_envelope.metadata().managed_by() != ManagedBy::Configuration
+                || current_envelope
+                    .metadata()
+                    .configuration_generation()
+                    .is_none()
+            {
+                return Err(ResourceRuntimeError::HandlerNotReady);
+            }
             if current_envelope.metadata().owner_ref() != resource.metadata().owner_ref() {
                 return Err(ResourceRuntimeError::HandlerNotReady);
             }
@@ -893,26 +1071,29 @@ pub async fn materialize_zone_resource_bundle(
             mutations.push(create_mutation(zone, resource, payload)?);
         }
     }
-    if mutations.is_empty() {
-        return Ok(());
-    }
+    Ok(mutations)
+}
 
-    let operation_id = resource_bundle_materialization_operation_id(zone, bundle);
-    let mut request = wire::CommitBatchRequest::new();
-    let mut meta = wire::RequestMeta::new();
-    meta.operation_id = operation_id.clone();
-    meta.idempotency_key = operation_id.clone();
-    meta.correlation_id = operation_id;
-    request.meta = protobuf::MessageField::some(meta);
-    request.mutations = mutations;
-    let response = client.commit_batch(request).await;
-    if let Some(error) = response.error.as_ref() {
-        tracing::error!(
-            zone = %zone.as_str(),
-            error_kind = ?error.kind,
-            reason = %error.reason.as_str(),
-            "authenticated Zone resource bundle materialization failed",
-        );
+fn reject_stale_guest_network_rows(
+    existing: &BTreeMap<ResourceRef, StoredResource>,
+    bundle: &ResourceBundle,
+) -> Result<(), ResourceRuntimeError> {
+    let desired = bundle
+        .resources
+        .iter()
+        .map(|resource| {
+            ResourceRef::new(
+                resource.resource_type().clone(),
+                resource.metadata().name().clone(),
+            )
+        })
+        .collect::<BTreeSet<_>>();
+    if existing.keys().any(|resource_ref| {
+        matches!(
+            resource_ref.resource_type().as_str(),
+            "Guest" | "Network"
+        ) && !desired.contains(resource_ref)
+    }) {
         return Err(ResourceRuntimeError::HandlerNotReady);
     }
     Ok(())
@@ -921,12 +1102,81 @@ pub async fn materialize_zone_resource_bundle(
 pub fn resource_bundle_materialization_operation_id(
     zone: &ZoneId,
     bundle: &ResourceBundle,
-) -> String {
-    format!(
-        "resource-bundle-materialization:{}:{}",
-        zone.as_str(),
+) -> Result<String, ResourceRuntimeError> {
+    if &bundle.zone != zone {
+        return Err(ResourceRuntimeError::HandlerNotReady);
+    }
+    if bundle.zone_uid().is_none() {
+        return Err(ResourceRuntimeError::IdentityUnbound);
+    }
+    Ok(format!(
+        "resource-bundle-materialization:{}",
         bundle.integrity().content_hash
+    ))
+}
+
+/// Validate the immutable identity of an existing Zone self-resource.
+pub async fn validate_zone_self_resource(
+    store: &RedbResourceStore,
+    zone: &ZoneId,
+    zone_uid: &ResourceUid,
+    store_uid: &ResourceUid,
+) -> Result<(), ResourceRuntimeError> {
+    if store.identity().zone_uid() != zone_uid || store.identity().store_uid() != store_uid {
+        return Err(ResourceRuntimeError::HandlerNotReady);
+    }
+    let page = store
+        .list(StoreListRequest {
+            operation: StoreOperationContext {
+                operation_id: "zone-self-resource-validation".to_owned(),
+                idempotency_key: None,
+                correlation_id: "zone-self-resource-validation".to_owned(),
+                trace_id: None,
+                deadline_ms: 10_000,
+            },
+            zone: zone.clone(),
+            resource_types: vec![
+                ResourceTypeName::parse("Zone")
+                    .map_err(|_| ResourceRuntimeError::HandlerNotReady)?,
+            ],
+            resource_names: Vec::new(),
+            filters: Vec::new(),
+            page_size: 16,
+            cursor: None,
+            projection: StoreProjection::Full,
+        })
+        .await
+        .map_err(|_| ResourceRuntimeError::StoreReadFailed)?;
+    validate_zone_self_resource_rows(zone, zone_uid, &page.resources)
+}
+
+fn validate_zone_self_resource_rows(
+    zone: &ZoneId,
+    zone_uid: &ResourceUid,
+    resources: &[StoredResource],
+) -> Result<(), ResourceRuntimeError> {
+    if resources.len() != 1 {
+        return Err(ResourceRuntimeError::HandlerNotReady);
+    }
+    let resource = resources
+        .first()
+        .ok_or(ResourceRuntimeError::HandlerNotReady)?;
+    let envelope = ResourceEnvelope::from_json(&resource.canonical_json)
+        .map_err(|_| ResourceRuntimeError::HandlerNotReady)?;
+    if envelope.resource_type().as_str() != "Zone" {
+        return Err(ResourceRuntimeError::HandlerNotReady);
+    }
+    validate_self_resource(
+        zone,
+        zone_uid,
+        envelope.metadata().name(),
+        envelope.metadata().zone(),
+        envelope.metadata().uid(),
+        envelope.metadata().owner_ref(),
+        envelope.metadata().finalizers(),
+        resources.len(),
     )
+    .map_err(|_| ResourceRuntimeError::HandlerNotReady)
 }
 
 fn create_resource_payload(
@@ -1128,6 +1378,28 @@ pub fn store_identity(
         created_at,
         revisions,
     ))
+}
+
+/// Build the redb identity expected by a verified Zone authority tuple.
+pub fn store_identity_for_authority(
+    zone: &ZoneId,
+    authority: &ZoneAuthorityIdentity,
+) -> Result<StoreIdentity, ResourceRuntimeError> {
+    let created_at = Timestamp::parse("1970-01-01T00:00:00.000Z")
+        .map_err(|_| ResourceRuntimeError::StoreOpenFailed)?;
+    let mut revisions = initial_policy_snapshot()?;
+    revisions.policy_revision = 0;
+    Ok(
+        StoreIdentity::new(
+            StoreSlot::new(0).map_err(|_| ResourceRuntimeError::StoreOpenFailed)?,
+            authority.store_uid().clone(),
+            zone.clone(),
+            authority.zone_uid().clone(),
+            created_at,
+            revisions,
+        )
+        .with_store_epoch(authority.store_epoch()),
+    )
 }
 
 pub fn stable_uid(domain: &str, value: &str) -> ResourceUid {
@@ -1847,6 +2119,77 @@ mod tests {
         let first = stable_uid("store", "sha256:aaa");
         assert_eq!(first, stable_uid("store", "sha256:aaa"));
         assert_ne!(first, stable_uid("store", "sha256:bbb"));
+    }
+
+    #[test]
+    fn bundle_mutation_identity_requires_zone_uid() {
+        let bundle = ResourceBundle::new(
+            ZoneId::parse("work").unwrap(),
+            Vec::new(),
+            "sha256:".to_owned() + &"a".repeat(64),
+            BTreeMap::new(),
+            BTreeMap::new(),
+            Timestamp::parse("2026-08-26T00:00:00.000Z").unwrap(),
+        )
+        .unwrap()
+        .with_zone_uid(ResourceUid::parse("123e4567-e89b-42d3-a456-426614174000").unwrap());
+        let operation = resource_bundle_materialization_operation_id(
+            &ZoneId::parse("work").unwrap(),
+            &bundle,
+        )
+        .unwrap();
+        assert!(operation.contains("resource-bundle-materialization:"));
+        assert!(!operation.contains("123e4567-e89b-42d3-a456-426614174000"));
+        assert_eq!(
+            resource_bundle_materialization_operation_id(
+                &ZoneId::parse("work").unwrap(),
+                &ResourceBundle::new(
+                    ZoneId::parse("work").unwrap(),
+                    Vec::new(),
+                    "sha256:".to_owned() + &"a".repeat(64),
+                    BTreeMap::new(),
+                    BTreeMap::new(),
+                    Timestamp::parse("2026-08-26T00:00:00.000Z").unwrap(),
+                )
+                .unwrap(),
+            ),
+            Err(ResourceRuntimeError::IdentityUnbound)
+        );
+    }
+
+    #[test]
+    fn extra_guest_or_network_rows_are_rejected_before_materialization_planning() {
+        let zone = ZoneId::parse("work").unwrap();
+        let bundle = ResourceBundle::new(
+            zone.clone(),
+            Vec::new(),
+            "sha256:".to_owned() + &"a".repeat(64),
+            BTreeMap::new(),
+            BTreeMap::new(),
+            Timestamp::parse("2026-08-26T00:00:00.000Z").unwrap(),
+        )
+        .unwrap()
+        .with_zone_uid(ResourceUid::parse("123e4567-e89b-42d3-a456-426614174000").unwrap());
+        for (resource_type, digest) in [("Guest", 'b'), ("Network", 'c')] {
+            let stale_ref_text = format!("{resource_type}/stale");
+            let stale_ref = ResourceRef::parse(&stale_ref_text).unwrap();
+            let stale = StoredResource {
+                resource_ref: stale_ref.clone(),
+                zone: zone.clone(),
+                uid: ResourceUid::parse("223e4567-e89b-42d3-a456-426614174000").unwrap(),
+                generation: ResourceGeneration::new(1).unwrap(),
+                revision: ZoneRevision::new(1),
+                canonical_json: Vec::new(),
+                payload_digest: format!("sha256:{}", digest.to_string().repeat(64)),
+            };
+            let existing = BTreeMap::from([(stale_ref, stale)]);
+            let before = existing.clone();
+            assert_eq!(
+                reject_stale_guest_network_rows(&existing, &bundle),
+                Err(ResourceRuntimeError::HandlerNotReady)
+            );
+            assert_eq!(existing, before);
+        }
     }
 
     #[test]

@@ -134,6 +134,7 @@ pub(crate) use d2bd_runtime::broker_transport::{
     redact_broker_error_for_launcher,
 };
 use d2bd_runtime::concurrency::resolve_max_inflight_connections;
+use d2bd_runtime::zone_authority::complete_generation_set_digest;
 pub(crate) use d2bd_runtime::json_io::{
     load_json, load_manifest, read_trimmed_file, resolve_bundle_artifact_path,
 };
@@ -14200,8 +14201,12 @@ fn ensure_resource_activation_broker_evidence(
     bundle: &ResourceBundle,
     broker_evidence: &d2b_resource_store_redb::BrokerEvidenceIndex,
 ) -> Result<(), resource_runtime::ResourceRuntimeError> {
-    let operation_id = resource_runtime::resource_bundle_materialization_operation_id(zone, bundle);
-    let zone_identity = AuditZoneId::derive(zone.as_str())
+    let operation_id =
+        resource_runtime::resource_bundle_materialization_operation_id(zone, bundle)?;
+    let zone_uid = bundle
+        .zone_uid()
+        .ok_or(resource_runtime::ResourceRuntimeError::IdentityUnbound)?;
+    let zone_identity = AuditZoneId::derive(zone_uid.as_str())
         .map_err(|_| resource_runtime::ResourceRuntimeError::HandlerNotReady)?;
     let operation_identity = OperationIdentity::derive(&operation_id)
         .map_err(|_| resource_runtime::ResourceRuntimeError::HandlerNotReady)?;
@@ -14241,6 +14246,18 @@ fn ensure_resource_activation_broker_evidence(
     }
 }
 
+async fn shutdown_unpublished_runtimes(
+    runtimes: &mut Vec<(
+        ZoneId,
+        resource_runtime::ZoneResourceRuntime,
+        ResourceBundle,
+    )>,
+) {
+    while let Some((_, runtime, _)) = runtimes.pop() {
+        let _ = runtime.shutdown().await;
+    }
+}
+
 async fn open_resource_plane(
     state: &ServerState,
     resolver: &BundleResolver,
@@ -14264,60 +14281,68 @@ async fn open_resource_plane(
             return Err(resource_runtime::ResourceRuntimeError::ZoneStoreIdInvalid);
         }
     };
-    for zone in zones {
-        tracing::error!(zone = %zone.as_str(), "resource plane opening authoritative Zone");
+    let mut prepared_inputs = BTreeMap::new();
+    let mut prepared_generations = BTreeMap::new();
+    for zone in &zones {
         let desired_bundle = resolver
             .zone_resource_bundle_bytes(zone.as_str())
-            .ok_or_else(|| {
-                tracing::error!(zone = %zone.as_str(), "resource plane Zone bundle is missing");
-                resource_runtime::ResourceRuntimeError::HandlerNotReady
-            })
+            .ok_or(resource_runtime::ResourceRuntimeError::HandlerNotReady)
             .and_then(|bytes| {
-                let bundle = ResourceBundle::from_json(bytes).map_err(|error| {
+                ResourceBundle::from_json(bytes).map_err(|error| {
                     tracing::error!(
                         zone = %zone.as_str(),
                         error = ?error,
                         "resource plane Zone bundle is invalid"
                     );
                     resource_runtime::ResourceRuntimeError::HandlerNotReady
-                })?;
-                if bundle.zone.as_str() != zone.as_str() {
-                    tracing::error!(
-                        requested_zone = %zone.as_str(),
-                        bundle_zone = %bundle.zone.as_str(),
-                        "resource plane Zone bundle identity mismatch"
-                    );
-                    return Err(resource_runtime::ResourceRuntimeError::HandlerNotReady);
-                }
-                tracing::error!(
-                    zone = %zone.as_str(),
-                    resource_count = bundle.resources.len(),
-                    "resource plane Zone bundle loaded"
-                );
-                Ok(bundle)
+                })
             })?;
+        let storage = resolver
+            .zone_storage_row(zone.as_str())
+            .ok_or(resource_runtime::ResourceRuntimeError::HandlerNotReady)?;
+        let authority = d2bd_runtime::zone_authority::ZoneAuthorityIdentity::from_bundle_and_storage(
+            zone,
+            &desired_bundle,
+            storage,
+        )
+        .map_err(|error| {
+            tracing::error!(
+                zone = %zone.as_str(),
+                error = %error,
+                "resource plane Zone identity binding failed"
+            );
+            resource_runtime::ResourceRuntimeError::HandlerNotReady
+        })?;
+        prepared_generations.insert(zone.clone(), authority.bundle_generation().clone());
+        prepared_inputs.insert(zone.clone(), (desired_bundle, authority));
+    }
+
+    let set_generation = complete_generation_set_digest(&zones, &prepared_generations)
+        .map_err(|_| resource_runtime::ResourceRuntimeError::HandlerNotReady)?;
+    let mut prepared_runtimes = Vec::with_capacity(zones.len());
+    for zone in zones {
+        tracing::error!(zone = %zone.as_str(), "resource plane opening authoritative Zone");
+        let (desired_bundle, authority) = match prepared_inputs.remove(&zone) {
+            Some(input) => input,
+            None => {
+                shutdown_unpublished_runtimes(&mut prepared_runtimes).await;
+                return Err(resource_runtime::ResourceRuntimeError::HandlerNotReady);
+            }
+        };
+        tracing::error!(
+            zone = %zone.as_str(),
+            resource_count = desired_bundle.resources.len(),
+            "resource plane Zone bundle loaded"
+        );
+        let materialization_bundle = desired_bundle.clone();
         let opened = match open_zone_store_from_broker(state, &zone) {
             Ok(opened) => opened,
             Err(error) => {
                 tracing::error!(zone = ?zone, error = ?error, "Zone resource store broker open failed");
-                let _ = plane.shutdown().await;
+                shutdown_unpublished_runtimes(&mut prepared_runtimes).await;
                 return Err(resource_runtime::ResourceRuntimeError::StoreOpenFailed);
             }
         };
-        if let Err(error) = ensure_resource_activation_broker_evidence(
-            state,
-            &zone,
-            &desired_bundle,
-            &broker_evidence,
-        ) {
-            tracing::error!(
-                zone = %zone.as_str(),
-                error = ?error,
-                "resource activation broker evidence unavailable"
-            );
-            let _ = plane.shutdown().await;
-            return Err(error);
-        }
         let zone_state_dir = state
             .daemon_state_dir
             .parent()
@@ -14328,7 +14353,7 @@ async fn open_resource_plane(
         let telemetry_path = zone_state_dir.join("telemetry").join("emitter.sock");
         #[cfg(not(test))]
         if !audit_dir.is_absolute() {
-            let _ = plane.shutdown().await;
+            shutdown_unpublished_runtimes(&mut prepared_runtimes).await;
             return Err(resource_runtime::ResourceRuntimeError::StoreOpenFailed);
         }
         let audit_sink = match AuditSink::open(&audit_dir) {
@@ -14340,35 +14365,105 @@ async fn open_resource_plane(
                     error = ?error,
                     "Zone resource audit sink open failed",
                 );
-                let _ = plane.shutdown().await;
+                shutdown_unpublished_runtimes(&mut prepared_runtimes).await;
                 return Err(resource_runtime::ResourceRuntimeError::StoreOpenFailed);
             }
         };
         let zone_name = zone.as_str().to_owned();
         let mut runtime =
-            match resource_runtime::ZoneResourceRuntime::open_production_with_audit_and_evidence_and_telemetry(
-                zone,
+            match resource_runtime::ZoneResourceRuntime::open_production_with_identity(
+                zone.clone(),
                 opened,
                 audit_sink,
                 Arc::clone(&broker_evidence),
                 telemetry_path,
                 desired_bundle,
+                authority,
             )
             .await
             {
                 Ok(runtime) => runtime,
                 Err(error) => {
                     tracing::error!(zone = %zone_name, error = ?error, "Zone resource runtime store open failed");
-                    let _ = plane.shutdown().await;
+                    shutdown_unpublished_runtimes(&mut prepared_runtimes).await;
                     return Err(error);
                 }
             };
         runtime.set_provider_path_ready(provider_ready);
+        prepared_runtimes.push((zone, runtime, materialization_bundle));
+    }
+
+    for index in 0..prepared_runtimes.len() {
+        let validation = {
+            let (_, runtime, bundle) = &prepared_runtimes[index];
+            runtime.validate_desired_bundle(bundle).await
+        };
+        if let Err(error) = validation {
+            shutdown_unpublished_runtimes(&mut prepared_runtimes).await;
+            return Err(error);
+        }
+    }
+
+    let coordinator_index = prepared_runtimes
+        .iter()
+        .position(|(zone, _, _)| zone.as_str() == "local-root")
+        .ok_or_else(|| {
+            resource_runtime::ResourceRuntimeError::HandlerNotReady
+        })?;
+    let prepare_result = prepared_runtimes[coordinator_index]
+        .1
+        .prepare_generation_publication(&set_generation, &prepared_generations)
+        .await;
+    if let Err(error) = prepare_result {
+        shutdown_unpublished_runtimes(&mut prepared_runtimes).await;
+        return Err(error);
+    }
+
+    for index in 0..prepared_runtimes.len() {
+        let preparation = {
+            let (_, runtime, bundle) = &prepared_runtimes[index];
+            runtime.prepare_published_bundle(bundle).await
+        };
+        if let Err(error) = preparation {
+            shutdown_unpublished_runtimes(&mut prepared_runtimes).await;
+            return Err(error);
+        }
+    }
+    let commit_result = prepared_runtimes[coordinator_index]
+        .1
+        .commit_generation_publication(&set_generation, &prepared_generations)
+        .await;
+    if let Err(error) = commit_result {
+        shutdown_unpublished_runtimes(&mut prepared_runtimes).await;
+        return Err(error);
+    }
+
+    for index in 0..prepared_runtimes.len() {
+        let evidence_result = {
+            let (zone, _, bundle) = &prepared_runtimes[index];
+            ensure_resource_activation_broker_evidence(state, zone, bundle, &broker_evidence)
+        };
+        if let Err(error) = evidence_result {
+            shutdown_unpublished_runtimes(&mut prepared_runtimes).await;
+            return Err(error);
+        }
+    }
+
+    let mut remaining = prepared_runtimes.into_iter();
+    while let Some((_zone, mut runtime, _)) = remaining.next() {
         let installed_provider_count = state
             .provider_runtime
             .registered_provider_count()
             .try_into()
             .unwrap_or(u32::MAX);
+        if let Err(error) = runtime.activate_published_bundle().await {
+            let _ = runtime.shutdown().await;
+            let _ = plane.shutdown().await;
+            while let Some((_, runtime, _)) = remaining.next() {
+                let _ = runtime.shutdown().await;
+            }
+            return Err(error);
+        }
         let _ = runtime.publish_provider_counts(
             installed_provider_count,
             if provider_ready {
@@ -14383,6 +14478,9 @@ async fn open_resource_plane(
         {
             let _ = runtime.shutdown().await;
             let _ = plane.shutdown().await;
+            while let Some((_, runtime, _)) = remaining.next() {
+                let _ = runtime.shutdown().await;
+            }
             return Err(error);
         }
         if let Err(error) = runtime
@@ -14391,6 +14489,9 @@ async fn open_resource_plane(
         {
             let _ = runtime.shutdown().await;
             let _ = plane.shutdown().await;
+            while let Some((_, runtime, _)) = remaining.next() {
+                let _ = runtime.shutdown().await;
+            }
             return Err(error);
         }
         if let Err(error) = runtime
@@ -14399,33 +14500,81 @@ async fn open_resource_plane(
         {
             let _ = runtime.shutdown().await;
             let _ = plane.shutdown().await;
+            while let Some((_, runtime, _)) = remaining.next() {
+                let _ = runtime.shutdown().await;
+            }
             return Err(error);
         }
         if let Err(error) = runtime.reconcile_semantic_binding_resources().await {
             let _ = runtime.shutdown().await;
             let _ = plane.shutdown().await;
+            while let Some((_, runtime, _)) = remaining.next() {
+                let _ = runtime.shutdown().await;
+            }
             return Err(error);
         }
         let _ = runtime.audio_binding_statuses();
         if let Err(error) = runtime.require_ready() {
             let _ = runtime.shutdown().await;
             let _ = plane.shutdown().await;
+            while let Some((_, runtime, _)) = remaining.next() {
+                let _ = runtime.shutdown().await;
+            }
             return Err(error);
         }
         if !runtime.device_tpm_controller_registered() {
             let _ = runtime.shutdown().await;
             let _ = plane.shutdown().await;
+            while let Some((_, runtime, _)) = remaining.next() {
+                let _ = runtime.shutdown().await;
+            }
             return Err(resource_runtime::ResourceRuntimeError::ProviderPathUnavailable);
         }
         if let Err(error) = plane.insert(runtime) {
             let _ = plane.shutdown().await;
+            while let Some((_, runtime, _)) = remaining.next() {
+                let _ = runtime.shutdown().await;
+            }
             return Err(error);
         }
     }
     if plane.ready_zone_count() == 0 {
+        let _ = plane.shutdown().await;
         return Err(resource_runtime::ResourceRuntimeError::PlaneUnavailable);
     }
     Ok(Arc::new(plane))
+}
+
+#[cfg(test)]
+mod zone_publication_order_tests {
+    #[test]
+    fn complete_set_validation_and_durable_prepare_precede_all_mutating_reconcile() {
+        let source = include_str!("composition.rs");
+        let source = source
+            .split_once("async fn open_resource_plane")
+            .and_then(|(_, source)| source.split_once("const BROKER_AUDIT_EVIDENCE_PAGE_LIMIT"))
+            .map(|(source, _)| source)
+            .expect("resource-plane source span");
+        let position = |needle: &str| {
+            source
+                .find(needle)
+                .unwrap_or_else(|| panic!("missing publication step: {needle}"))
+        };
+        let validation = position("validate_desired_bundle");
+        let durable_prepare = position("prepare_generation_publication");
+        let materialization = position("prepare_published_bundle");
+        let durable_commit = position("commit_generation_publication");
+        let evidence = position("ensure_resource_activation_broker_evidence");
+        let activation = position("activate_published_bundle");
+        let process_reconcile = position("reconcile_process_resources");
+
+        assert!(validation < durable_prepare);
+        assert!(durable_prepare < materialization);
+        assert!(materialization < durable_commit);
+        assert!(durable_commit < evidence);
+        assert!(evidence < activation);
+        assert!(activation < process_reconcile);
+    }
 }
 
 const BROKER_AUDIT_EVIDENCE_PAGE_LIMIT: u32 = 16;
