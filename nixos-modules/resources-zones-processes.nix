@@ -266,6 +266,13 @@ let
         target != null
         && target.type == "Host"
         && (target.spec.isolationPosture or null) == "none";
+      providerResolved =
+        resolvesAs row.zone.resources [ "Provider" ] providerRef
+        || ((row.generated or false)
+          && builtins.elem providerRef [
+            "Provider/system-minijail"
+            "Provider/system-systemd"
+          ]);
       durationFields =
         if row.resource.type == "Process"
         then [ "drainTimeout" ]
@@ -290,7 +297,7 @@ let
         message = "${row.path}.spec contains a retired executable or runtime field.";
       }
       {
-        assertion = resolvesAs row.zone.resources [ "Provider" ] providerRef;
+        assertion = providerResolved;
         message = "${row.path}.spec.providerRef must resolve to a Provider in the same Zone.";
       }
       {
@@ -378,6 +385,76 @@ let
     WaylandProxy = "Provider/display-wayland";
   };
 
+  # Provider packages publish their Process intents through one fixed,
+  # owner-keyed compiler table. This is an internal merge seam, not a public
+  # extension registry or a second resource vocabulary.
+  providerProjectionOwners = [
+    "volume-local"
+    "volume-virtiofs"
+    "device-gpu"
+    "device-usbip"
+    "device-security-key"
+    "device-tpm"
+    "display-wayland"
+    "audio-pipewire"
+    "clipboard-wayland"
+    "notification-desktop"
+    "activation-nixos"
+    "observability-otel"
+    "shell-terminal"
+    "runtime-cloud-hypervisor"
+    "runtime-qemu-media"
+    "runtime-azure-container-apps"
+    "runtime-azure-virtual-machine"
+  ];
+
+  providerProjectionKeys = {
+    "volume-local" = "providerProjectionVolumeLocal";
+    "volume-virtiofs" = "providerProjectionVolumeVirtiofs";
+    "device-gpu" = "providerProjectionDeviceGpu";
+    "device-usbip" = "providerProjectionDeviceUsbip";
+    "device-security-key" = "providerProjectionDeviceSecurityKey";
+    "device-tpm" = "providerProjectionDeviceTpm";
+    "display-wayland" = "providerProjectionDisplayWayland";
+    "audio-pipewire" = "providerProjectionAudioPipewire";
+    "clipboard-wayland" = "providerProjectionClipboardWayland";
+    "notification-desktop" = "providerProjectionNotificationDesktop";
+    "activation-nixos" = "providerProjectionActivationNixos";
+    "observability-otel" = "providerProjectionObservabilityOtel";
+    "shell-terminal" = "providerProjectionShellTerminal";
+    "runtime-cloud-hypervisor" = "providerProjectionRuntimeCloudHypervisor";
+    "runtime-qemu-media" = "providerProjectionRuntimeQemuMedia";
+    "runtime-azure-container-apps" = "providerProjectionRuntimeAzureContainerApps";
+    "runtime-azure-virtual-machine" = "providerProjectionRuntimeAzureVirtualMachine";
+  };
+
+  providerProjection = owner:
+    let
+      table = cfg._resourceCompiler or { };
+      key = builtins.getAttr owner providerProjectionKeys;
+    in if builtins.hasAttr key table
+    then builtins.getAttr key table
+    else { };
+
+  providerProcessRows = lib.concatMap
+    (owner:
+      let projection = providerProjection owner;
+      in if !(projection.enabled or false)
+      then [ ]
+      else lib.concatMap
+        (zoneName:
+          lib.mapAttrsToList
+            (resourceName: resource: {
+              inherit zoneName resourceName resource;
+              path = "d2b.zones.${zoneName}.resources.${resourceName}";
+              spec = resource.spec or { };
+              zone = cfg.zones.${zoneName};
+              generated = true;
+            })
+            ((projection.processesByZone or { }).${zoneName} or { }))
+        (lib.sort lib.lessThan (lib.attrNames ((projection.processesByZone or { })))))
+    providerProjectionOwners;
+
   canonical = row:
     let
       spec = row.spec;
@@ -420,15 +497,15 @@ let
         };
       })
     { }
-    rows;
+    (rows ++ providerProcessRows);
 in
 {
   config = {
-    assertions = lib.concatMap processAssertions rows;
+    assertions = lib.concatMap processAssertions (rows ++ providerProcessRows);
     d2b._resourceCompiler.processes = {
       byZone = compiled;
       roles = roleProviderMap;
-      rows = rows;
+      rows = rows ++ providerProcessRows;
     };
   };
 }

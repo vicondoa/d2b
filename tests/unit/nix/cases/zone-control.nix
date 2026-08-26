@@ -100,6 +100,63 @@ let
 
   invalidMessages = extra:
     map (assertion: assertion.message) (invalidAssertions extra);
+
+  disabledProjection = (mkModuleEval [
+    assertionsModule
+    validFixture
+    {
+      d2b._resourceCompiler.providerProjectionRuntimeQemuMedia = lib.mkForce {
+        enabled = false;
+        processesByZone.alpha.leaked-process = {
+          type = "Process";
+          metadata = {
+            name = "leaked-process";
+            zone = "alpha";
+            ownerRef = "Provider/runtime";
+          };
+          spec = {
+            providerRef = "Provider/system-systemd";
+            executionRef = "Guest/guest";
+            processClass = "service";
+            template = "leaked-process";
+          };
+        };
+        resourcesByZone = {
+          alpha.leaked = {
+            type = "User";
+            metadata = {
+              name = "leaked";
+              zone = "alpha";
+            };
+            spec = { };
+          };
+        };
+        guestPatchesByZone.alpha.guest = {
+          provider = {
+            leaked = true;
+          };
+        };
+        privateArtifact = {
+          schemaVersion = 1;
+          providerRef = "Provider/runtime-qemu-media";
+          processRefs = [ ];
+          endpointRefs = [ ];
+        };
+      };
+      d2b._resourceCompiler.volumeGenerated = lib.mkForce {
+        byZone.alpha.compat-leaked = {
+          type = "User";
+          metadata = {
+            name = "compat-leaked";
+            zone = "alpha";
+          };
+          spec = { };
+        };
+        users = [ ];
+        providers = [ ];
+      };
+    }
+  ]).config;
 in
 {
   "zone-control/headless-guest-and-provider-process-render" =
@@ -191,6 +248,36 @@ in
       expected = {
         guestZones = [ "alpha" "beta" ];
         processZones = [ "alpha" "beta" ];
+      };
+    };
+
+  "zone-control/disabled-provider-projection-does-not-merge" =
+    let
+      cfg = disabledProjection;
+      resources = bundleResources cfg "alpha";
+      compatibility =
+        cfg.d2b._bundle.zoneResourceBundlesCompatibility.alpha.data.resources;
+      guest = findResource "Guest" "guest" resources;
+    in {
+      expr = {
+        bundleLeaked = findResource "User" "leaked" resources == null;
+        compatibilityProjectionLeaked =
+          findResource "User" "compat-leaked" resources == null;
+        compatibilityLeaked =
+          findResource "User" "leaked" compatibility == null;
+        processLeaked =
+          findResource "Process" "leaked-process" resources == null;
+        guestPatched = builtins.hasAttr "provider" guest.spec;
+        privateArtifact = builtins.hasAttr "runtime-qemu-media"
+          cfg.d2b._bundle.extraArtifacts;
+      };
+      expected = {
+        bundleLeaked = true;
+        compatibilityProjectionLeaked = true;
+        compatibilityLeaked = true;
+        processLeaked = true;
+        guestPatched = false;
+        privateArtifact = false;
       };
     };
 

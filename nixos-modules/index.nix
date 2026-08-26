@@ -919,7 +919,23 @@ in
     ./zone-resources.nix
     ./bundle-zones.nix
     ./resources-zones-processes.nix
+    ../packages/d2b-provider-runtime-cloud-hypervisor/nix/default.nix
+    ../packages/d2b-provider-runtime-azure-container-apps/nix/default.nix
+    ../packages/d2b-provider-runtime-azure-virtual-machine/nix/default.nix
+    ../packages/d2b-provider-runtime-qemu-media/nix/projection.nix
+    ../packages/d2b-provider-volume-virtiofs/nix/default.nix
     ../packages/d2b-provider-volume-local/nix/resources-zones-volumes.nix
+    ../packages/d2b-provider-device-gpu/nix/default.nix
+    ../packages/d2b-provider-device-usbip/nix/default.nix
+    ../packages/d2b-provider-device-security-key/nix/default.nix
+    ../packages/d2b-provider-device-tpm/nix/default.nix
+    ../packages/d2b-provider-display-wayland/nix/projection.nix
+    ../packages/d2b-provider-audio-pipewire/nix/projection.nix
+    ../packages/d2b-provider-clipboard-wayland/nix/projection.nix
+    ../packages/d2b-provider-notification-desktop/nix/projection.nix
+    ../packages/d2b-provider-activation-nixos/nix/projection.nix
+    ../packages/d2b-provider-observability-otel/nix/projection.nix
+    ../packages/d2b-provider-shell-terminal/nix/default.nix
     ./resources-device.nix
     ../packages/d2b-provider-volume-local/nix/resources-volume.nix
 

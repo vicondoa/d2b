@@ -17,7 +17,7 @@
 #            `/run/d2b-obs-secrets/` (read-only)
 #   Guest:   stack services' `LoadCredential`
 #            points at the in-VM mount path (see
-#            `components/observability/stack.nix`).
+#            `packages/d2b-provider-observability-otel/nix/stack.nix`).
 #
 # Consumers no longer need to declare anything inside the stack VM
 # to gain host-side access to the admin password: `sudo cat

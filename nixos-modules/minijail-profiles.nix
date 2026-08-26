@@ -825,7 +825,7 @@ let
   # Host-scoped OTel host-bridge
   # profile. Replaces the singleton
   # `d2b-otel-host-bridge.service` (singleton scheduled for
-  # removal in `nixos-modules/components/observability/host.nix`).
+  # removal in `packages/d2b-provider-observability-otel/nix/host.nix`).
   # The role runs under `RunnerRole::OtelHostBridge` and receives
   # pre-opened vsock fds from the broker via SCM_RIGHTS; the
   # in-jail profile MUST NOT permit AF_VSOCK / AF_UNIX socket

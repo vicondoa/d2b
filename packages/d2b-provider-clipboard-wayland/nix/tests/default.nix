@@ -10,6 +10,12 @@ let
       type = lib.types.attrsOf lib.types.anything;
       default = { };
     };
+    options.d2b._resourceCompiler = lib.mkOption {
+      type = lib.types.attrs;
+      default = { };
+      internal = true;
+      visible = false;
+    };
   };
   resources = {
     host = { type = "Host"; };
@@ -40,6 +46,41 @@ let
         }; }
     ];
   };
+  projected = lib.evalModules {
+    modules = [
+      base
+      (import ../projection.nix)
+      {
+        config.d2b.zones.dev.resources = {
+          host = { type = "Host"; spec = { }; };
+          user = { type = "User"; spec = { }; };
+          guest = { type = "Guest"; spec = { }; };
+          clipboard-wayland = {
+            type = "Provider";
+            spec.config = {
+              hostExecutionRef = "Host/host";
+              hostUserRef = "User/user";
+              guestSources = [ { guestRef = "Guest/guest"; } ];
+            };
+          };
+        };
+      }
+    ];
+  };
+  invalidProjection = lib.evalModules {
+    modules = [
+      base
+      (import ../projection.nix)
+      {
+        config.d2b.zones.dev.resources.clipboard-wayland = {
+          type = "Provider";
+          spec.config = {
+            unsupported = true;
+          };
+        };
+      }
+    ];
+  };
   allTrue = value: lib.all (assertion: assertion.assertion) value.config.assertions;
   anyFalse = value: lib.any (assertion: !assertion.assertion) value.config.assertions;
 in
@@ -56,6 +97,24 @@ in
     };
     "provider-clipboard-wayland/rejects-cross-zone-transfer" = {
       expr = anyFalse invalid;
+      expected = true;
+    };
+    "provider-clipboard-wayland/projects-guest-source" = {
+      expr = {
+        processes = lib.attrNames (projected.config.d2b._resourceCompiler
+          .providerProjectionClipboardWayland.processesByZone.dev);
+        endpoint = lib.attrNames (projected.config.d2b._resourceCompiler
+          .providerProjectionClipboardWayland.resourcesByZone.dev);
+      };
+      expected = {
+        processes = [ "clipboard-guest-guest" "clipboard-host" ];
+        endpoint = [ "clipboard-bridge" ];
+      };
+    };
+    "provider-clipboard-wayland/rejects-unknown-provider-field" = {
+      expr = lib.any
+        (record: !record.assertion)
+        invalidProjection.config.assertions;
       expected = true;
     };
   };

@@ -48,6 +48,7 @@ test_suite(
         "//packages/d2b:usb_contract",
         "//packages/d2b:usb_sk_contract",
         "//packages/d2b-contracts-zone-session:generation_bundle",
+        "//packages/d2b-provider-runtime-qemu-media:fixture_projection",
     ],
 )
 

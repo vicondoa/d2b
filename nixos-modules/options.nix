@@ -2,8 +2,8 @@
 #
 # Per-VM declarations live under `d2b.vms.<name>`. Component toggles
 # (graphics.enable / tpm.enable / usbip.* / audio.* / audit.*) are
-# defined on the per-VM submodule; the matching component file under
-# `nixos-modules/components/` is conditionally imported by host.nix.
+# defined on the per-VM submodule; the matching Provider-owned Guest module
+# under `packages/d2b-provider-*/nix/` is conditionally imported by host.nix.
 #
 # Realm-native declarations live under `d2b.realms.<realm>`.  Each realm
 # may carry `network.*` (env-replacement bridge/subnet/externalNetwork/

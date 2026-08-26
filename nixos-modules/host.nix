@@ -199,14 +199,14 @@ in
           ./base.nix
           ./guest-sshd-host-keys.nix
         ]
-          ++ lib.optional vm'.graphics.enable ./components/graphics.nix
-          ++ lib.optional vm'.tpm.enable ./components/tpm.nix
-          ++ lib.optional vm'.usbip.yubikey ./components/usbip.nix
-          ++ lib.optional vm'.usb.securityKey.enable ./components/security-key-guest.nix
+          ++ lib.optional vm'.graphics.enable ../packages/d2b-provider-device-gpu/nix/guest.nix
+          ++ lib.optional vm'.tpm.enable ../packages/d2b-provider-device-tpm/nix/guest.nix
+          ++ lib.optional vm'.usbip.yubikey ../packages/d2b-provider-device-usbip/nix/guest.nix
+          ++ lib.optional vm'.usb.securityKey.enable ../packages/d2b-provider-device-security-key/nix/guest.nix
           ++ lib.optional vm'.audio.enable ../packages/d2b-provider-audio-pipewire/nix/guest.nix
           ++ lib.optional vm'.audit.enable ./components/audit.nix
-          ++ lib.optional (vm'.graphics.enable && vm'.graphics.videoSidecar) ./components/video/guest.nix
-          ++ lib.optional vm'.observability.enable ./components/observability/guest.nix
+          ++ lib.optional (vm'.graphics.enable && vm'.graphics.videoSidecar) ../packages/d2b-provider-device-gpu/nix/video-guest.nix
+          ++ lib.optional vm'.observability.enable ../packages/d2b-provider-observability-otel/nix/guest.nix
           ++ lib.optional vm'.homeManager.enable ./components/home-manager.nix
           ++ lib.optional (derived != null) (envWorkloadGuestModule derived)
           ++ [ vm'.config ]

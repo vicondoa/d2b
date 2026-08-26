@@ -708,7 +708,7 @@ let
 
   # crosvmVideo derivation
   # relocated here from the deleted
-  # nixos-modules/components/video/host.nix. The overlay adds the
+  # packages/d2b-provider-device-gpu/nix/guest.nix. The overlay adds the
   # video-decoder + vaapi + media features to crosvm and patches
   # in the vhost-user video backend from
   # pkgs/vhost-user-video/. The binary path is consumed by the

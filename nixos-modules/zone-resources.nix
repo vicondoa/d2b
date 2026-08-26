@@ -54,10 +54,81 @@ let
     then byZone.${zoneName}
     else { };
 
+  providerProjectionOwners = [
+    "volume-local"
+    "volume-virtiofs"
+    "device-gpu"
+    "device-usbip"
+    "device-security-key"
+    "device-tpm"
+    "display-wayland"
+    "audio-pipewire"
+    "clipboard-wayland"
+    "notification-desktop"
+    "activation-nixos"
+    "observability-otel"
+    "shell-terminal"
+    "runtime-cloud-hypervisor"
+    "runtime-qemu-media"
+    "runtime-azure-container-apps"
+    "runtime-azure-virtual-machine"
+  ];
+
+  providerProjectionKeys = {
+    "volume-local" = "providerProjectionVolumeLocal";
+    "volume-virtiofs" = "providerProjectionVolumeVirtiofs";
+    "device-gpu" = "providerProjectionDeviceGpu";
+    "device-usbip" = "providerProjectionDeviceUsbip";
+    "device-security-key" = "providerProjectionDeviceSecurityKey";
+    "device-tpm" = "providerProjectionDeviceTpm";
+    "display-wayland" = "providerProjectionDisplayWayland";
+    "audio-pipewire" = "providerProjectionAudioPipewire";
+    "clipboard-wayland" = "providerProjectionClipboardWayland";
+    "notification-desktop" = "providerProjectionNotificationDesktop";
+    "activation-nixos" = "providerProjectionActivationNixos";
+    "observability-otel" = "providerProjectionObservabilityOtel";
+    "shell-terminal" = "providerProjectionShellTerminal";
+    "runtime-cloud-hypervisor" = "providerProjectionRuntimeCloudHypervisor";
+    "runtime-qemu-media" = "providerProjectionRuntimeQemuMedia";
+    "runtime-azure-container-apps" = "providerProjectionRuntimeAzureContainerApps";
+    "runtime-azure-virtual-machine" = "providerProjectionRuntimeAzureVirtualMachine";
+  };
+
+  providerProjection = owner:
+    let
+      table = cfg._resourceCompiler or { };
+      key = builtins.getAttr owner providerProjectionKeys;
+    in if builtins.hasAttr key table
+    then builtins.getAttr key table
+    else { };
+
+  providerResources = zoneName:
+    lib.foldl'
+      (result: owner:
+        let projection = providerProjection owner;
+        in if (projection.enabled or false)
+          then result
+            // ((projection.resourcesByZone or { }).${zoneName} or { })
+          else result)
+      { }
+      providerProjectionOwners;
+
+  providerGuestPatches = zoneName: resourceName:
+    lib.foldl'
+      (result: owner:
+        let projection = providerProjection owner;
+        in if (projection.enabled or false)
+          then lib.recursiveUpdate result
+            (((projection.guestPatchesByZone or { }).${zoneName}
+              or { }).${resourceName} or { })
+          else result)
+      { }
+      providerProjectionOwners;
+
   zoneResources = zoneName: zone:
     zone.resources
-    // (cfg._resourceCompiler.volumeGenerated.byZone.${zoneName} or { })
     // (cfg._resourceCompiler.volumeShorthand.${zoneName} or { })
+    // providerResources zoneName
     // processResources zoneName;
 
   executionPolicyDefaults = {
@@ -148,15 +219,25 @@ let
     // lib.optionalAttrs (labels != { }) { inherit labels; }
     // lib.optionalAttrs (annotations != { }) { inherit annotations; };
 
-  canonicalResource = zoneName: resourceName: resource: {
-    inherit apiVersion;
-    inherit (resource) type;
-    metadata = {
-      name = resourceName;
-      zone = zoneName;
-    } // optionalMetadata resource;
-    spec = canonicalSpec resource;
-  };
+  canonicalResource = zoneName: resourceName: resource:
+    let
+      guestPatch =
+        if resource.type == "Guest"
+        then providerGuestPatches zoneName resourceName
+        else { };
+      patched =
+        if resource.type == "Guest" && guestPatch != { }
+        then resource // { spec = lib.recursiveUpdate (resource.spec or { }) guestPatch; }
+        else resource;
+    in {
+      inherit apiVersion;
+      inherit (patched) type;
+      metadata = {
+        name = resourceName;
+        zone = zoneName;
+      } // optionalMetadata patched;
+      spec = canonicalSpec patched;
+    };
 
   sortResources = resources:
     lib.sort

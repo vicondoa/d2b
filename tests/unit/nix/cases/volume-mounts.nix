@@ -95,18 +95,33 @@ let
       package = volumeArtifact;
       type = "provider";
     };
+    d2b.artifacts.volume-virtiofs = {
+      package = volumeArtifact;
+      type = "provider";
+    };
     d2b.zones.local-root.resources = {
       alice.type = "User";
       volume-local = {
         type = "Provider";
         spec = {
           artifactId = "volume-local";
-          config = { };
+          config.controllerExecutionRef = "Host/host-system";
+        };
+      };
+      volume-virtiofs = {
+        type = "Provider";
+        spec = {
+          artifactId = "volume-virtiofs";
+          config.controllerExecutionRef = "Host/host-system";
         };
       };
       host-system = {
         type = "Host";
         spec.providerRef = "Provider/volume-local";
+      };
+      tpm = {
+        type = "Device";
+        spec.providerRef = "Provider/device-tpm";
       };
       state = volumeResource;
     };
@@ -118,7 +133,10 @@ let
     {
       d2b.zones.local-root.resources.guest = {
         type = "Guest";
-        spec.tpmEnabled = true;
+        spec.deviceAttachments = [{
+          deviceRef = "Device/tpm";
+          exclusive = true;
+        }];
       };
     }
   ]).config;
@@ -144,6 +162,13 @@ let
           socketGroup = null;
         };
       }];
+      d2b.zones.local-root.resources.volume-virtiofs = {
+        type = "Provider";
+        spec = {
+          artifactId = "volume-virtiofs";
+          config.controllerExecutionRef = "Host/host-system";
+        };
+      };
       d2b.zones.local-root.resources.guest = {
         type = "Guest";
         spec = { };
@@ -418,11 +443,14 @@ in
   "volume-mounts/v3-virtiofs-attachment-emits-vfd-user-and-provider" = {
     expr = {
       vfd = attachmentVolume.d2b._resourceCompiler.volumeGenerated.byZone.local-root."vol-state-vfd".type;
-      provider = attachmentVolume.d2b._resourceCompiler.volumeGenerated.byZone.local-root.volume-virtiofs.spec.artifactId;
+      provider = attachmentVolume.d2b.zones.local-root.resources.volume-virtiofs.spec.artifactId;
+      providerSynthesized = builtins.hasAttr "volume-virtiofs"
+        attachmentVolume.d2b._resourceCompiler.volumeGenerated.byZone.local-root;
     };
     expected = {
       vfd = "User";
-      provider = "volume-virtiofs-provider";
+      provider = "volume-virtiofs";
+      providerSynthesized = false;
     };
   };
   "volume-mounts/v3-volume-bundle-digest-covers-all-resources" = {

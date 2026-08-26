@@ -17,9 +17,9 @@
 #     conditionally by host.nix per-VM when `homeManager.enable =
 #     true`; the partial application flows through there.
 #
-# Components live in sibling files (components/graphics.nix,
-# components/audit.nix, etc.) and are conditionally imported per-VM
-# by host.nix.
+# Provider-specific Guest and host projections live in their owning
+# package `nix/` trees. Legacy component paths remain thin import shims
+# until the pre-Zone option hierarchy is removed.
 { inputs }:
 
 { config, lib, pkgs, ... }:
@@ -88,7 +88,7 @@ in
     ./privileges-json.nix
     ./closures-json.nix
     ./minijail-profiles.nix
-    ./ui-colors.nix
+    ../packages/d2b-provider-display-wayland/nix/ui-colors.nix
     ../packages/d2b-provider-display-wayland/nix/default.nix
     ../packages/d2b-provider-notification-desktop/nix/default.nix
     ../packages/d2b-provider-clipboard-wayland/nix/default.nix
@@ -99,7 +99,7 @@ in
     (import ./host-broker.nix { inherit inputs; })
     ../packages/d2b-provider-audio-pipewire/nix/host.nix
     ../packages/d2b-provider-audio-pipewire/nix/default.nix
-    ./components/observability/default.nix
+    ../packages/d2b-provider-observability-otel/nix/default.nix
     ../packages/d2b-provider-display-wayland/nix/niri-vm-borders.nix
   ];
 
