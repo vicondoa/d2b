@@ -171,6 +171,7 @@ pub struct ResourceService<S, U = UnavailableUpgradeDispatcher> {
     store: CheckedResourceStore<S>,
     authorizer: Arc<NativeAuthorizer>,
     upgrade: Arc<U>,
+    zone_uid: Option<ResourceUid>,
 }
 
 impl<S, U> core::fmt::Debug for ResourceService<S, U> {
@@ -187,11 +188,23 @@ where
         store: Arc<S>,
         authorizer: Arc<NativeAuthorizer>,
     ) -> Result<Self, StoreBindingError> {
+        Self::new_with_zone_uid(store, authorizer, None)
+    }
+
+    /// Construct the Resource API with the immutable Zone UID supplied by the
+    /// trusted Zone runtime. This identity is used only for sealed downstream
+    /// authorization evidence.
+    pub fn new_with_zone_uid(
+        store: Arc<S>,
+        authorizer: Arc<NativeAuthorizer>,
+        zone_uid: Option<ResourceUid>,
+    ) -> Result<Self, StoreBindingError> {
         let store_binding = authorizer.take_store_binding()?;
         Ok(Self {
             store: CheckedResourceStore::new(store, store_binding),
             authorizer,
             upgrade: Arc::new(UnavailableUpgradeDispatcher),
+            zone_uid,
         })
     }
 }
@@ -211,6 +224,7 @@ where
             store: CheckedResourceStore::new(store, store_binding),
             authorizer,
             upgrade,
+            zone_uid: None,
         })
     }
 
@@ -730,10 +744,12 @@ where
             Ok(operation) => operation,
             Err(error) => return batch_error(error),
         };
-        let admitted = match grant.admit(
-            parsed.into_iter().map(|item| item.store).collect(),
-            operation,
-        ) {
+        let mutations = parsed.into_iter().map(|item| item.store).collect();
+        let admitted = match self.zone_uid.as_ref() {
+            Some(zone_uid) => grant.admit_with_zone_uid(mutations, operation, zone_uid.clone()),
+            None => grant.admit(mutations, operation),
+        };
+        let admitted = match admitted {
             Ok(admitted) => admitted,
             Err(_) => {
                 return batch_error(ResourceError::terminal(
@@ -967,7 +983,15 @@ where
         validate_request(&trusted.request)?;
         let parsed = parse_mutation(mutation, &route, trusted)?;
         let operation = operation_context(trusted.meta(), true, &trusted.authorization_state)?;
-        let admitted = grant.admit(vec![parsed.store], operation).map_err(|_| {
+        let admitted = match self.zone_uid.as_ref() {
+            Some(zone_uid) => grant.admit_with_zone_uid(
+                vec![parsed.store],
+                operation,
+                zone_uid.clone(),
+            ),
+            None => grant.admit(vec![parsed.store], operation),
+        }
+        .map_err(|_| {
             ResourceError::terminal(
                 ResourceErrorKind::InternalIntegrityFailure,
                 "admission-invariant-violated",

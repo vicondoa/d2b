@@ -3,6 +3,16 @@
 //! The crate deliberately has no adapter registration in another service.
 //! A Zone runtime must own the single registration authority and provide
 //! authenticated session claims before any route becomes reachable.
+//!
+//! The retired raw committed-subject configuration is not a public API:
+//!
+//! ```compile_fail
+//! use d2b_bus::CommittedInteractionSubjectInput;
+//!
+//! fn construct() {
+//!     let _ = CommittedInteractionSubjectInput {};
+//! }
+//! ```
 
 #[cfg(test)]
 extern crate self as d2b_bus;
@@ -37,7 +47,8 @@ pub use registry::{
 };
 pub use router::{
     BusClock, BusConfig, BusError, BusEvent, BusFailureReason, BusIngress, BusObserver, BusStream,
-    CancellationOutcome, CancellationReceipt, CommittedInteractionSubjectInput,
+    CancellationOutcome, CancellationReceipt, CommittedInteractionSubjectInstall,
+    CommittedInteractionSubjectIssuer,
     ComponentRequestReceiver, ComponentSessionAdmission, DeliveredInvocation, DeliveredStream,
     LocalOperationLease, ManualClock, NoopBusObserver, ResourceCall, ResourceFilter, ResourceQuery,
     ZoneBus, ZoneRegistrar,

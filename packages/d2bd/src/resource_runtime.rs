@@ -39,7 +39,10 @@ use crate::process_resource_runtime::{
     process_watch_request, run_process_watch,
 };
 use d2b_audit::{AuditSink, DurabilityEvidence};
-use d2b_bus::{BusAuthorizer, BusConfig, BusIngress, ZoneBus, ZoneRegistrar};
+use d2b_bus::{
+    BusAuthorizer, BusConfig, BusIngress, CommittedInteractionSubjectInstall,
+    CommittedInteractionSubjectIssuer, ZoneBus, ZoneRegistrar,
+};
 #[cfg(test)]
 use d2b_contracts_broker::broker_wire::OpenZoneStoreResponse;
 use d2b_contracts_broker::broker_wire::ZoneStoreDisposition;
@@ -103,17 +106,19 @@ use d2bd_runtime::resource_operator_activation::{
     select_wave6_resources,
 };
 use d2bd_runtime::resource_runtime_support::{
-    AssignmentRegistry, SystemCoreReconcileResult, compatibility_error_envelope,
+    AssignmentRegistry, PolicySubjectFingerprint, SystemCoreReconcileResult,
     configuration_cleanup_pending, current_status_timestamp, encode_public_get_response,
     encode_public_list_response, encode_public_resource, ensure_bootstrap_host_resource,
-    ensure_bootstrap_zone_resource,
-    handler_phase_to_zone_phase, host_phase_for_resource_count, initial_policy_snapshot,
-    map_startup_error,
+    ensure_bootstrap_zone_resource, handler_phase_to_zone_phase, host_phase_for_resource_count,
+    initial_policy_snapshot, map_startup_error,
     materialize_zone_resource_bundle, new_assignment_registry, public_list_request,
-    public_operation_id, public_request_meta, register_system_core_session, runtime_authorizer,
-    runtime_policy, store_identity, store_identity_for_authority, validate_zone_resource_bundle,
-    validate_zone_self_resource, watch_needs_restart, zone_runtime_metadata,
+    public_operation_id, public_request_meta, refreshed_policy_subject_fingerprints,
+    register_system_core_session, runtime_authorizer, runtime_policy, store_identity,
+    store_identity_for_authority, validate_zone_resource_bundle, validate_zone_self_resource,
+    watch_needs_restart, zone_runtime_metadata,
 };
+#[cfg(test)]
+use d2bd_runtime::resource_runtime_support::compatibility_error_envelope;
 pub use d2bd_runtime::resource_runtime_support::{
     ZoneRuntimeReadiness, bounded_operation_id, persist_resource_status,
     persist_resource_status_with_projection, resource_bundle_materialization_operation_id,
@@ -136,6 +141,7 @@ pub(crate) struct CommittedInteractionProviderConfiguration {
 
 #[derive(Clone)]
 pub(crate) struct CommittedInteractionIdentity {
+    zone: ZoneId,
     wayland_session_ref: ResourceRef,
     wayland_session_uid: ResourceUid,
     subject_ref: ResourceRef,
@@ -154,6 +160,7 @@ impl CommittedInteractionIdentity {
     #[cfg(test)]
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn for_test(
+        zone: ZoneId,
         subject_ref: ResourceRef,
         subject_uid: ResourceUid,
         host_execution_ref: ResourceRef,
@@ -166,6 +173,7 @@ impl CommittedInteractionIdentity {
         notification_provider_uid: Option<ResourceUid>,
     ) -> Self {
         Self {
+            zone,
             wayland_session_ref: ResourceRef::parse(
                 "display-wayland.d2bus.org.WaylandSession/display-wayland",
             )
@@ -183,6 +191,29 @@ impl CommittedInteractionIdentity {
             notification_provider_generation,
             notification_provider_uid,
         }
+    }
+
+    pub(crate) fn seal_interaction_subject_install(
+        &self,
+        issuer: CommittedInteractionSubjectIssuer,
+        expected_peer_uid: u32,
+    ) -> d2b_session::Result<CommittedInteractionSubjectInstall> {
+        issuer.seal(
+            self.zone.clone(),
+            self.subject_ref.clone(),
+            self.subject_uid.clone(),
+            expected_peer_uid,
+            self.host_execution_ref.clone(),
+            self.display_provider_generation,
+            self.clipboard_provider_generation,
+            self.notification_provider_generation,
+            self.clipboard_provider_uid.clone(),
+            self.notification_provider_uid.clone(),
+        )
+    }
+
+    pub(crate) const fn zone(&self) -> &ZoneId {
+        &self.zone
     }
 
     pub(crate) fn wayland_session_ref(&self) -> &ResourceRef {
@@ -217,16 +248,8 @@ impl CommittedInteractionIdentity {
         self.display_provider_generation
     }
 
-    pub(crate) const fn clipboard_provider_generation(&self) -> Option<ResourceGeneration> {
-        self.clipboard_provider_generation
-    }
-
     pub(crate) fn clipboard_provider_uid(&self) -> Option<&ResourceUid> {
         self.clipboard_provider_uid.as_ref()
-    }
-
-    pub(crate) const fn notification_provider_generation(&self) -> Option<ResourceGeneration> {
-        self.notification_provider_generation
     }
 
     pub(crate) fn notification_provider_uid(&self) -> Option<&ResourceUid> {
@@ -606,14 +629,18 @@ pub struct ZoneResourceRuntime {
     backend: Arc<RedbBackend>,
     api: Arc<ResourceService<RedbBackend>>,
     authorizer: Arc<NativeAuthorizer>,
-    authorization_state: Option<AuthorizationState>,
-    #[allow(dead_code)]
+    authorization_state: Mutex<Option<AuthorizationState>>,
+    policy_refresh: Mutex<()>,
+    bundle_resource_types: Vec<ResourceTypeName>,
+    policy_subject_fingerprints:
+        Mutex<BTreeMap<(ResourceRef, ResourceRef), PolicySubjectFingerprint>>,
+    policy_loaded: Mutex<bool>,
     bus: Option<ZoneBus>,
     registrar: Mutex<Option<ZoneRegistrar>>,
     ingress: Mutex<Option<BusIngress>>,
     service_task: Mutex<Option<tokio::task::JoinHandle<Result<(), SessionServerError>>>>,
     process_status_client:
-        Option<Arc<ResourceApiClient<RedbBackend, UnavailableUpgradeDispatcher>>>,
+        Mutex<Option<Arc<ResourceApiClient<RedbBackend, UnavailableUpgradeDispatcher>>>>,
     core: Mutex<CoreProcess>,
     readiness: ZoneRuntimeReadiness,
     policy_installed: bool,
@@ -1043,8 +1070,14 @@ impl ZoneResourceRuntime {
         }
         let backend = Arc::new(RedbBackend::from_arc(Arc::clone(&store)));
         let api = Arc::new(
-            ResourceService::new(Arc::clone(&backend), Arc::clone(&authorizer))
-                .map_err(|_| ResourceRuntimeError::ResourceApiBindFailed)?,
+            ResourceService::new_with_zone_uid(
+                Arc::clone(&backend),
+                Arc::clone(&authorizer),
+                authority_identity
+                    .as_ref()
+                    .map(|authority| authority.zone_uid().clone()),
+            )
+            .map_err(|_| ResourceRuntimeError::ResourceApiBindFailed)?,
         );
         let mut interaction_provider_configuration = None;
         let mut interaction_provider_configuration_refused = false;
@@ -1341,12 +1374,16 @@ impl ZoneResourceRuntime {
             backend,
             api,
             authorizer,
-            authorization_state,
+            authorization_state: Mutex::new(authorization_state),
+            policy_refresh: Mutex::new(()),
+            bundle_resource_types,
+            policy_subject_fingerprints: Mutex::new(BTreeMap::new()),
+            policy_loaded: Mutex::new(false),
             bus,
             registrar: Mutex::new(registrar),
             ingress: Mutex::new(ingress),
             service_task: Mutex::new(service_task),
-            process_status_client,
+            process_status_client: Mutex::new(process_status_client),
             core: Mutex::new(core),
             readiness: ZoneRuntimeReadiness {
                 store_ready: true,
@@ -1384,11 +1421,8 @@ impl ZoneResourceRuntime {
         &self,
         bundle: &ResourceBundle,
     ) -> Result<(), ResourceRuntimeError> {
-        let client = self
-            .process_status_client
-            .as_ref()
-            .ok_or(ResourceRuntimeError::AuthenticationUnavailable)?;
-        materialize_zone_resource_bundle(&self.zone, bundle, &self.store, client).await
+        let client = self.status_client()?;
+        materialize_zone_resource_bundle(&self.zone, bundle, &self.store, &client).await
     }
 
     /// Validate the desired bundle without advancing this Zone store.
@@ -1554,20 +1588,17 @@ impl ZoneResourceRuntime {
     ) -> Result<(), ResourceRuntimeError> {
         self.materialize_desired_bundle(bundle).await?;
         if self.bootstrap_provisioned_store {
-            let client = self
-                .process_status_client
-                .as_ref()
-                .ok_or(ResourceRuntimeError::AuthenticationUnavailable)?;
+            let client = self.status_client()?;
             if let Some(authority) = self.authority_identity.as_ref() {
                 ensure_bootstrap_zone_resource(
                     &self.zone,
                     authority.zone_uid(),
                     &self.store,
-                    client,
+                    &client,
                 )
                 .await?;
             }
-            ensure_bootstrap_host_resource(&self.zone, &self.store, client).await?;
+            ensure_bootstrap_host_resource(&self.zone, &self.store, &client).await?;
         }
         Ok(())
     }
@@ -1578,16 +1609,13 @@ impl ZoneResourceRuntime {
     pub(crate) async fn activate_published_bundle(
         &mut self,
     ) -> Result<(), ResourceRuntimeError> {
+        self.refresh_authorization_policy().await?;
         let store_metadata = self
             .store
             .runtime_metadata()
             .await
             .map_err(|_| ResourceRuntimeError::StoreReadFailed)?;
-        let status_client = self
-            .process_status_client
-            .as_ref()
-            .cloned()
-            .ok_or(ResourceRuntimeError::AuthenticationUnavailable)?;
+        let status_client = self.status_client()?;
 
         (
             self.interaction_provider_configuration,
@@ -1798,18 +1826,224 @@ impl ZoneResourceRuntime {
 
     /// Return the durable resource revision used to fence interaction
     /// evidence against a later store commit.
-    pub const fn current_revision(&self) -> ZoneRevision {
-        self.store_metadata.current_revision
+    pub fn current_revision(&self) -> ZoneRevision {
+        self.authorization_state
+            .lock()
+            .ok()
+            .and_then(|state| state.as_ref().map(|state| state.zone_policy_revision))
+            .unwrap_or(self.store_metadata.current_revision)
     }
 
-    /// Bind a Resource API client to an authenticated local operator subject.
+    /// Refresh the native authorization projection from the current committed
+    /// Role, RoleBinding, and local subject rows before admitting public work.
+    pub(crate) async fn refresh_authorization_policy(&self) -> Result<(), ResourceRuntimeError> {
+        let _refresh = self
+            .policy_refresh
+            .lock()
+            .map_err(|_| ResourceRuntimeError::AuthorizationUnavailable)?;
+        let metadata = self
+            .store
+            .runtime_metadata()
+            .await
+            .map_err(|_| ResourceRuntimeError::PolicyUnavailable)?;
+        let current = self
+            .authorization_state
+            .lock()
+            .map_err(|_| ResourceRuntimeError::PolicyUnavailable)?
+            .clone();
+        let policy_loaded = *self
+            .policy_loaded
+            .lock()
+            .map_err(|_| ResourceRuntimeError::PolicyUnavailable)?;
+        if policy_loaded
+            && current.as_ref().is_some_and(|state| {
+                state.snapshot == metadata.policy_snapshot
+                    && state.zone_policy_revision == metadata.current_revision
+            })
+        {
+            return Ok(());
+        }
+        if metadata.policy_snapshot.policy_revision == 0 {
+            return Err(ResourceRuntimeError::PolicyUnavailable);
+        }
+        let resources = d2bd_runtime::resource_runtime_support::load_committed_policy_resources(
+            &self.store,
+            &self.zone,
+            &format!(
+                "authorization-policy-refresh:{}",
+                metadata.current_revision.get()
+            ),
+        )
+        .await?;
+        let current_metadata = self
+            .store
+            .runtime_metadata()
+            .await
+            .map_err(|_| ResourceRuntimeError::PolicyUnavailable)?;
+        if current_metadata != metadata {
+            return Err(ResourceRuntimeError::PolicyUnavailable);
+        }
+        let previous = self
+            .policy_subject_fingerprints
+            .lock()
+            .map_err(|_| ResourceRuntimeError::IdentityUnbound)?
+            .clone();
+        let fingerprints = refreshed_policy_subject_fingerprints(&resources, &previous)?;
+        let (policy, state) = d2bd_runtime::resource_runtime_support::compile_committed_policy(
+            &self.zone,
+            metadata.policy_snapshot,
+            metadata.current_revision,
+            &self.bundle_resource_types,
+            &resources,
+        )?;
+        self.authorizer
+            .replace_policy(policy.clone(), &state)
+            .map_err(|_| ResourceRuntimeError::AuthorizationUnavailable)?;
+        if let Some(bus) = &self.bus {
+            bus.replace_policy(policy, state.clone())
+                .map_err(|_| ResourceRuntimeError::AuthorizationUnavailable)?;
+        }
+        if let Err(error) = self.refresh_system_core_session(state.clone()).await {
+            self.authorizer.mark_policy_unavailable();
+            if let Some(bus) = &self.bus {
+                bus.mark_policy_unavailable();
+            }
+            if let Ok(mut installed) = self.authorization_state.lock() {
+                *installed = None;
+            }
+            if let Ok(mut loaded) = self.policy_loaded.lock() {
+                *loaded = false;
+            }
+            return Err(error);
+        }
+        *self
+            .authorization_state
+            .lock()
+            .map_err(|_| ResourceRuntimeError::AuthorizationUnavailable)? = Some(state);
+        *self
+            .policy_subject_fingerprints
+            .lock()
+            .map_err(|_| ResourceRuntimeError::AuthorizationUnavailable)? = fingerprints;
+        *self
+            .policy_loaded
+            .lock()
+            .map_err(|_| ResourceRuntimeError::AuthorizationUnavailable)? = true;
+        Ok(())
+    }
+
+    /// Re-enroll the fixed internal system-core session after a policy
+    /// revision change so its old lease cannot continue past the fence.
+    async fn refresh_system_core_session(
+        &self,
+        state: AuthorizationState,
+    ) -> Result<(), ResourceRuntimeError> {
+        let mut registrar = self
+            .registrar
+            .lock()
+            .map_err(|_| ResourceRuntimeError::AuthenticationUnavailable)?
+            .take();
+        let mut ingress = self
+            .ingress
+            .lock()
+            .map_err(|_| ResourceRuntimeError::AuthenticationUnavailable)?
+            .take();
+        let task = self
+            .service_task
+            .lock()
+            .map_err(|_| ResourceRuntimeError::AuthenticationUnavailable)?
+            .take();
+        if let (Some(registrar), Some(mut ingress)) = (registrar.as_mut(), ingress.as_mut()) {
+            registrar
+                .revoke_in_place(&mut ingress)
+                .await
+                .map_err(|_| ResourceRuntimeError::AuthenticationUnavailable)?;
+        }
+        if let Some(task) = task {
+            task.abort();
+            let _ = task.await;
+        }
+        let Some(mut registrar) = registrar else {
+            return Ok(());
+        };
+        let (new_ingress, new_task, status_client) = register_system_core_session(
+            &mut registrar,
+            Arc::clone(&self.api),
+            Arc::clone(&self.authorizer),
+            state,
+        )
+        .await?;
+        *self
+            .registrar
+            .lock()
+            .map_err(|_| ResourceRuntimeError::AuthenticationUnavailable)? = Some(registrar);
+        *self
+            .ingress
+            .lock()
+            .map_err(|_| ResourceRuntimeError::AuthenticationUnavailable)? = Some(new_ingress);
+        *self
+            .service_task
+            .lock()
+            .map_err(|_| ResourceRuntimeError::AuthenticationUnavailable)? = Some(new_task);
+        *self
+            .process_status_client
+            .lock()
+            .map_err(|_| ResourceRuntimeError::AuthenticationUnavailable)? =
+            Some(status_client);
+        Ok(())
+    }
+
+    /// Authenticate a root-listener peer against this Zone's committed User
+    /// resource before any specialized public operation is dispatched.
+    pub(crate) async fn authenticate_public_peer(
+        &self,
+        peer_uid: u32,
+        operation_id: &str,
+    ) -> Result<(), ResourceRuntimeError> {
+        self.refresh_authorization_policy().await?;
+        let resolved_user = d2bd_runtime::resource_runtime_support::resolve_zone_user(
+            &self.store,
+            &self.zone,
+            peer_uid,
+            &format!("{operation_id}:user"),
+        )
+        .await?;
+        let context = d2bd_runtime::resource_runtime_support::local_user_subject_context(
+            &self.zone,
+            &resolved_user,
+            operation_id,
+        )?;
+        let state = self
+            .authorization_state
+            .lock()
+            .map_err(|_| ResourceRuntimeError::AuthenticationUnavailable)?
+            .clone()
+            .ok_or(ResourceRuntimeError::AuthenticationUnavailable)?;
+        let subject = self
+            .authorizer
+            .issue_authenticated_subject(context, state)
+            .map_err(|_| ResourceRuntimeError::AuthorizationUnavailable)?;
+        self.bind_operator_resource_client(subject).map(|_| ())
+    }
+
+    /// Bind a Resource API client to a sealed Resource API session subject.
     ///
-    /// The caller supplies claims produced by the authenticated
-    /// ComponentSession boundary. This performs the final live-policy
-    /// admission and returns the same checked Resource API client used by the
-    /// registered system-core session; it never turns a Unix peer or request
-    /// payload into a subject.
-    pub fn bind_operator_resource_client(
+    /// The wrapper is issued only after ComponentSession or root-listener
+    /// authentication and native policy evaluation. Callers cannot construct
+    /// it from a request payload.
+    pub(crate) fn bind_operator_resource_client(
+        &self,
+        subject: d2b_resource_api::AuthenticatedSubjectContext,
+    ) -> Result<
+        Arc<ResourceApiClient<RedbBackend, UnavailableUpgradeDispatcher>>,
+        ResourceRuntimeError,
+    > {
+        let adapter = ResourceBusAdapter::bind_component_session(Arc::clone(&self.api), subject)
+            .map_err(|_| ResourceRuntimeError::ResourceApiBindFailed)?;
+        Ok(Arc::new(adapter.client()))
+    }
+
+    #[cfg(feature = "test-support")]
+    pub fn bind_operator_resource_client_for_test(
         &self,
         context: d2b_contracts_resource::v3::identity::AuthenticatedSubjectContext,
     ) -> Result<
@@ -1818,15 +2052,15 @@ impl ZoneResourceRuntime {
     > {
         let state = self
             .authorization_state
+            .lock()
+            .map_err(|_| ResourceRuntimeError::AuthenticationUnavailable)?
             .clone()
             .ok_or(ResourceRuntimeError::AuthenticationUnavailable)?;
         let subject = self
             .authorizer
             .issue_authenticated_subject(context, state)
             .map_err(|_| ResourceRuntimeError::AuthorizationUnavailable)?;
-        let adapter = ResourceBusAdapter::bind_component_session(Arc::clone(&self.api), subject)
-            .map_err(|_| ResourceRuntimeError::ResourceApiBindFailed)?;
-        Ok(Arc::new(adapter.client()))
+        self.bind_operator_resource_client(subject)
     }
 
     /// Borrow the daemon-owned Resource API client used by the target-local
@@ -1835,7 +2069,21 @@ impl ZoneResourceRuntime {
     pub(crate) fn process_resource_client(
         &self,
     ) -> Option<Arc<ResourceApiClient<RedbBackend, UnavailableUpgradeDispatcher>>> {
-        self.process_status_client.clone()
+        self.process_status_client
+            .lock()
+            .ok()
+            .and_then(|client| client.clone())
+    }
+
+    fn status_client(
+        &self,
+    ) -> Result<Arc<ResourceApiClient<RedbBackend, UnavailableUpgradeDispatcher>>, ResourceRuntimeError>
+    {
+        self.process_status_client
+            .lock()
+            .map_err(|_| ResourceRuntimeError::AuthenticationUnavailable)?
+            .clone()
+            .ok_or(ResourceRuntimeError::AuthenticationUnavailable)
     }
 
     /// Persist a provider reconcile phase through the authenticated Resource
@@ -1899,15 +2147,14 @@ impl ZoneResourceRuntime {
         }
         let status = json!({ "phase": phase });
         let client = self
-            .process_status_client
-            .as_ref()
-            .ok_or(ResourceRuntimeError::ControllerEndpointUnavailable)?;
+            .status_client()
+            .map_err(|_| ResourceRuntimeError::ControllerEndpointUnavailable)?;
         let projection = resource_projection.or_else(|| {
             current
                 .get("status")
                 .and_then(|status| status.get("resource"))
         });
-        persist_resource_status_with_projection(client, &resource, &status, projection).await
+        persist_resource_status_with_projection(&client, &resource, &status, projection).await
     }
 
     /// Drive the complete Wave 6 acceptance sequence through the
@@ -2038,12 +2285,6 @@ impl ZoneResourceRuntime {
             removed: true,
             device_state_retained,
         })
-    }
-
-    /// Return the stable operator subject identity admitted by the local
-    /// Resource API policy.
-    pub fn operator_subject_identity() -> (ResourceRef, ResourceUid) {
-        d2bd_runtime::resource_runtime_support::operator_subject_identity()
     }
 
     /// Borrow sealed, committed interaction Provider configuration when the
@@ -2245,26 +2486,23 @@ impl ZoneResourceRuntime {
                 .child_owners(&binding_resources)
                 .map_err(map_audio_runtime_error)?;
         }
-        let client = self
-            .process_status_client
-            .as_ref()
-            .ok_or(ResourceRuntimeError::AuthenticationUnavailable)?;
+        let client = self.status_client()?;
         for owner in &child_owners {
             if owner.desired.is_some() && !has_audio_finalizer(&owner.resource) {
-                update_audio_finalizer(client, &owner.resource, true)
+                update_audio_finalizer(&client, &owner.resource, true)
                     .await
                     .map_err(map_audio_runtime_error)?;
             }
         }
         let converged_children =
-            reconcile_binding_children(&self.store, client, &self.zone, &child_owners)
+            reconcile_binding_children(&self.store, &client, &self.zone, &child_owners)
                 .await
                 .map_err(|_| ResourceRuntimeError::CapabilityUnavailable)?;
         for resource in pending_finalizers {
             if !converged_children.contains(&resource.resource_ref) {
                 continue;
             }
-            remove_audio_finalizer(client, &resource)
+            remove_audio_finalizer(&client, &resource)
                 .await
                 .map_err(map_audio_runtime_error)?;
         }
@@ -2294,7 +2532,7 @@ impl ZoneResourceRuntime {
                 audio_binding_status_projection_with_status(resource, &children, &status.status)
                     .map_err(map_audio_runtime_error)?;
             persist_resource_status_with_projection(
-                client,
+                &client,
                 resource,
                 &audio_binding_status_value(status.status),
                 Some(&projection),
@@ -2316,11 +2554,7 @@ impl ZoneResourceRuntime {
             let store = Arc::clone(&self.store);
             let zone = self.zone.clone();
             let registry = Arc::clone(&self.audio_runtime);
-            let status_client = self
-                .process_status_client
-                .as_ref()
-                .ok_or(ResourceRuntimeError::AuthenticationUnavailable)?
-                .clone();
+            let status_client = self.status_client()?;
             let task = tokio::spawn(run_audio_watch(watch, store, zone, registry, status_client));
             let mut watch_task = self
                 .audio_watch_task
@@ -2345,11 +2579,8 @@ impl ZoneResourceRuntime {
         if !self.readiness.resource_api_ready {
             return Ok(());
         }
-        let client = self
-            .process_status_client
-            .as_ref()
-            .ok_or(ResourceRuntimeError::AuthenticationUnavailable)?;
-        reconcile_semantic_binding_resources(&self.store, client, &self.zone)
+        let client = self.status_client()?;
+        reconcile_semantic_binding_resources(&self.store, &client, &self.zone)
             .await
             .map_err(|error| match error {
                 crate::semantic_binding_resource_runtime::SemanticBindingRuntimeError::Store => {
@@ -2426,8 +2657,8 @@ impl ZoneResourceRuntime {
         } else {
             runtime.set_target_scope(None, None);
         }
-        if let Some(status_client) = &self.process_status_client {
-            runtime.set_status_client(Arc::clone(status_client));
+        if let Some(status_client) = self.process_resource_client() {
+            runtime.set_status_client(status_client);
         }
         let result = runtime.reconcile(snapshot).await;
         match self.process_runtime.lock() {
@@ -2436,7 +2667,7 @@ impl ZoneResourceRuntime {
         }
         result.map_err(map_process_runtime_error)?;
         if let (Some(client), Some(identity)) = (
-            self.process_status_client.clone(),
+            self.process_resource_client(),
             self.interaction_identity.as_ref(),
         ) {
             crate::process_resource_runtime::reconcile_wayland_session_deletion(
@@ -2469,7 +2700,7 @@ impl ZoneResourceRuntime {
                 store,
                 zone,
                 registry,
-                self.process_status_client.clone(),
+                self.process_resource_client(),
                 self.interaction_identity
                     .as_ref()
                     .map(|identity| identity.wayland_session_ref().clone()),
@@ -2513,8 +2744,8 @@ impl ZoneResourceRuntime {
         let mut runtime =
             runtime.unwrap_or_else(|| ActivationResourceRuntime::new(self.zone.clone()));
         runtime.clear_guest_clients();
-        if let Some(status_client) = &self.process_status_client {
-            runtime.set_status_client(Arc::clone(status_client));
+        if let Some(status_client) = self.process_resource_client() {
+            runtime.set_status_client(status_client);
         }
         let guest_targets = guest_activation_targets(&snapshot);
         let mut process_snapshot = process_snapshot;
@@ -2757,7 +2988,8 @@ impl ZoneResourceRuntime {
     /// caller with uid zero. The public socket uses
     /// [`Self::dispatch_public_cli_request`] with the authenticated
     /// `SO_PEERCRED` uid instead.
-    pub async fn dispatch_cli_request(
+    #[cfg(test)]
+    pub(crate) async fn dispatch_cli_request(
         &self,
         request: &Value,
     ) -> Result<Value, ResourceRuntimeError> {
@@ -2775,7 +3007,7 @@ impl ZoneResourceRuntime {
     /// Resource API client as the registered ComponentSession path. The peer
     /// uid is never read from the JSON envelope and is included in the
     /// transport/transcript binding used by the authorizer.
-    pub async fn dispatch_public_cli_request(
+    pub(crate) async fn dispatch_public_cli_request(
         &self,
         request: &Value,
         peer_uid: u32,
@@ -2794,13 +3026,47 @@ impl ZoneResourceRuntime {
         if !route_service_matches(request.get("service"), method)? {
             return Err(ResourceRuntimeError::RouteMismatch);
         }
+        if [
+            "subject",
+            "subjectRef",
+            "subjectUid",
+            "principal",
+            "principalRef",
+            "role",
+            "uid",
+            "user",
+            "userRef",
+        ]
+        .iter()
+        .any(|field| request.get(*field).is_some())
+        {
+            return Err(ResourceRuntimeError::RequestInvalid);
+        }
         let operation_id = public_operation_id(request, peer_uid, method);
-        let context = d2bd_runtime::resource_runtime_support::local_operator_subject_context(
+        self.refresh_authorization_policy().await?;
+        let resolved_user = d2bd_runtime::resource_runtime_support::resolve_zone_user(
+            &self.store,
             &self.zone,
             peer_uid,
+            &format!("{}:user", operation_id),
+        )
+        .await?;
+        let context = d2bd_runtime::resource_runtime_support::local_user_subject_context(
+            &self.zone,
+            &resolved_user,
             &operation_id,
         )?;
-        let client = self.bind_operator_resource_client(context)?;
+        let state = self
+            .authorization_state
+            .lock()
+            .map_err(|_| ResourceRuntimeError::AuthenticationUnavailable)?
+            .clone()
+            .ok_or(ResourceRuntimeError::AuthenticationUnavailable)?;
+        let subject = self
+            .authorizer
+            .issue_authenticated_subject(context, state)
+            .map_err(|_| ResourceRuntimeError::AuthorizationUnavailable)?;
+        let client = self.bind_operator_resource_client(subject)?;
         match method {
             "Get" => {
                 let resource_ref = request
@@ -3614,6 +3880,7 @@ async fn load_committed_interaction_identity(
     }
 
     Ok(Some(CommittedInteractionIdentity {
+        zone: zone.clone(),
         wayland_session_ref: session_resource.resource_ref,
         wayland_session_uid: session_resource.uid,
         subject_ref,
@@ -6089,6 +6356,20 @@ mod tests {
         .unwrap();
         assert_eq!(runtime.store_metadata.policy_snapshot, revisions);
 
+        let forged_claim = runtime
+            .dispatch_public_cli_request(
+                &json!({
+                    "method": "List",
+                    "zoneRef": "Zone/work",
+                    "resourceType": "Host",
+                    "subjectRef": "User/alice",
+                }),
+                1000,
+            )
+            .await
+            .unwrap_err();
+        assert_eq!(forged_claim, ResourceRuntimeError::RequestInvalid);
+
         let peer_route = runtime
             .dispatch_public_cli_request(
                 &json!({
@@ -6099,22 +6380,8 @@ mod tests {
                 1000,
             )
             .await
-            .unwrap();
-        assert!(peer_route["resources"].is_array());
-        let direct_delete = runtime
-            .dispatch_public_cli_request(
-                &json!({
-                    "method": "Delete",
-                    "zoneRef": "Zone/work",
-                    "resourceRef": "Host/host-system",
-                }),
-                1000,
-            )
-            .await
-            .unwrap();
-        assert_eq!(direct_delete["type"], "error");
-        assert_eq!(direct_delete["error"]["kind"], "resource-conflict");
-        assert_eq!(direct_delete["error"]["retryClass"], "reauthorize");
+            .unwrap_err();
+        assert_eq!(peer_route.code(), "resource-runtime-identity-unbound");
         runtime.shutdown().await.unwrap();
     }
 }

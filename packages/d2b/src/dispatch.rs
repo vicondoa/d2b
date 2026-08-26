@@ -479,18 +479,12 @@ pub(crate) fn modern_run(raw_args: Vec<OsString>) -> i32 {
                 | host::HostCommand::Doctor(_)
         })
     ) || matches!(&cli.command, ModernCommand::Auth(_));
-    let user_domain = raw_args
-        .windows(2)
-        .any(|window| window[0] == "--domain" && window[1] == "user")
-        || raw_args
-            .iter()
-            .any(|arg| arg.to_string_lossy() == "--domain=user");
     let context = if local_host_command {
         ZoneContext::local_only_with_explicit_zone(
             cli.zone.is_some() || std::env::var_os("D2B_ZONE").is_some(),
         )
     } else {
-        match ZoneContext::discover_for_domain(cli.zone.as_deref(), user_domain) {
+        match ZoneContext::discover(cli.zone.as_deref()) {
             Ok(context) => context,
             Err(error) => {
                 let mode = output_mode(cli.json, cli.human).unwrap_or(OutputMode::Json);

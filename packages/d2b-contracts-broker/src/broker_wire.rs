@@ -3239,6 +3239,9 @@ pub enum BrokerCallerRole {
     RootUid {
         uid: u32,
     },
+    HostShutdownUid {
+        uid: u32,
+    },
     #[default]
     NotAuthorized,
 }
@@ -3253,6 +3256,7 @@ impl BrokerCallerRole {
             Self::AdminUid { .. } => "d2b-admin",
             Self::LauncherUid { .. } => "d2b-launcher",
             Self::RootUid { .. } => "RootUid",
+            Self::HostShutdownUid { .. } => "d2b-host-shutdown",
             Self::NotAuthorized => "d2b-not-authorized",
         }
     }
@@ -3503,6 +3507,7 @@ mod tests {
     fn broker_caller_role_admin_passes_predicate() {
         assert!(BrokerCallerRole::AdminUid { uid: 1000 }.is_admin_uid());
         assert!(!BrokerCallerRole::LauncherUid { uid: 1000 }.is_admin_uid());
+        assert!(!BrokerCallerRole::HostShutdownUid { uid: 0 }.is_admin_uid());
     }
 
     #[test]
@@ -3527,6 +3532,7 @@ mod tests {
             BrokerCallerRole::AdminUid { uid: 1000 },
             BrokerCallerRole::LauncherUid { uid: 1001 },
             BrokerCallerRole::RootUid { uid: 0 },
+            BrokerCallerRole::HostShutdownUid { uid: 0 },
             BrokerCallerRole::NotAuthorized,
         ] {
             let json = serde_json::to_string(&role).unwrap();

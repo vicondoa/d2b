@@ -318,6 +318,13 @@ fn operator_context(
     )
 }
 
+fn test_operator_subject_identity() -> (ResourceRef, ResourceUid) {
+    (
+        ResourceRef::parse("User/d2bd-operator").unwrap(),
+        ResourceUid::parse("22222222-2222-4222-8222-222222222222").unwrap(),
+    )
+}
+
 fn list_request(resource_type: &str) -> wire::ListRequest {
     let mut request = wire::ListRequest::new();
     let mut meta = wire::RequestMeta::new();
@@ -886,9 +893,9 @@ async fn authenticated_operator_reaches_ready_resource_plane_and_refuses_other_s
     println!("runtime readiness: {:?}", runtime.readiness());
     assert!(runtime.readiness().is_ready());
 
-    let (operator_ref, operator_uid) = ZoneResourceRuntime::operator_subject_identity();
+    let (operator_ref, operator_uid) = test_operator_subject_identity();
     let client = runtime
-        .bind_operator_resource_client(operator_context(&zone, operator_ref, operator_uid))
+        .bind_operator_resource_client_for_test(operator_context(&zone, operator_ref, operator_uid))
         .expect("bind authenticated operator Resource API client");
     let response = client.list(list_request("Volume")).await;
     assert!(
@@ -901,7 +908,7 @@ async fn authenticated_operator_reaches_ready_resource_plane_and_refuses_other_s
             .map_or("<none>", |error| error.reason.as_str())
     );
 
-    let refused = runtime.bind_operator_resource_client(operator_context(
+    let refused = runtime.bind_operator_resource_client_for_test(operator_context(
         &zone,
         ResourceRef::parse("User/not-authorized").unwrap(),
         ResourceUid::parse("33333333-3333-4333-8333-333333333333").unwrap(),
@@ -968,9 +975,9 @@ async fn durable_process_and_endpoint_crud_survives_redb_reopen_and_drain() {
     runtime.set_provider_path_ready(true);
     assert!(runtime.readiness().is_ready());
 
-    let (operator_ref, operator_uid) = ZoneResourceRuntime::operator_subject_identity();
+    let (operator_ref, operator_uid) = test_operator_subject_identity();
     let client = runtime
-        .bind_operator_resource_client(operator_context(&zone, operator_ref, operator_uid))
+        .bind_operator_resource_client_for_test(operator_context(&zone, operator_ref, operator_uid))
         .expect("bind authenticated operator Resource API client");
     let session_owner = None;
     create_operator_resource(
@@ -1229,9 +1236,9 @@ async fn durable_process_and_endpoint_crud_survives_redb_reopen_and_drain() {
     .await
     .expect("reopen production Zone runtime");
     reopened.set_provider_path_ready(true);
-    let (operator_ref, operator_uid) = ZoneResourceRuntime::operator_subject_identity();
+    let (operator_ref, operator_uid) = test_operator_subject_identity();
     let client = reopened
-        .bind_operator_resource_client(operator_context(&zone, operator_ref, operator_uid))
+        .bind_operator_resource_client_for_test(operator_context(&zone, operator_ref, operator_uid))
         .expect("rebind authenticated operator Resource API client");
     let remaining = client.list(list_request("Process")).await;
     assert!(
@@ -1667,13 +1674,13 @@ async fn scoped_status_finalizer_batch_reaches_redb_atomically_and_rebinds_assig
     .expect("open production Zone runtime");
     runtime.set_provider_path_ready(true);
 
-    let (operator_ref, operator_uid) = ZoneResourceRuntime::operator_subject_identity();
+    let (operator_ref, operator_uid) = test_operator_subject_identity();
     let controller_generation = runtime
         .committed_policy_snapshot()
         .controller_generation
         .expect("runtime controller generation");
     let client = runtime
-        .bind_operator_resource_client(
+        .bind_operator_resource_client_for_test(
             operator_context(&zone, operator_ref, operator_uid)
                 .with_controller_generation(controller_generation),
         )
@@ -1930,9 +1937,9 @@ async fn authenticated_operator_drives_wave6_resources_through_production_bounda
     runtime.set_provider_path_ready(true);
     assert!(runtime.readiness().is_ready());
 
-    let (operator_ref, operator_uid) = ZoneResourceRuntime::operator_subject_identity();
+    let (operator_ref, operator_uid) = test_operator_subject_identity();
     let client = runtime
-        .bind_operator_resource_client(operator_context(&zone, operator_ref, operator_uid))
+        .bind_operator_resource_client_for_test(operator_context(&zone, operator_ref, operator_uid))
         .expect("bind authenticated operator Resource API client");
     for (resource_type, name, operation_id) in [
         ("Volume", "store", "seed-wave6-volume"),
@@ -1978,7 +1985,7 @@ async fn authenticated_operator_drives_wave6_resources_through_production_bounda
         "Guest/workstation"
     );
 
-    let refused = runtime.bind_operator_resource_client(operator_context(
+    let refused = runtime.bind_operator_resource_client_for_test(operator_context(
         &zone,
         ResourceRef::parse("User/not-authorized").unwrap(),
         ResourceUid::parse("33333333-3333-4333-8333-333333333333").unwrap(),

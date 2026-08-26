@@ -1161,6 +1161,29 @@ impl ZoneBus {
         )
     }
 
+    /// Construct a bus and the Zone-runtime-only committed subject issuer.
+    pub fn with_interaction_subject_issuer(
+        zone: ZoneId,
+        authorizer: BusAuthorizer,
+        config: BusConfig,
+    ) -> Result<
+        (
+            Self,
+            ZoneRegistrar,
+            CommittedInteractionSubjectIssuer,
+        ),
+        BusError,
+    > {
+        Self::with_clock_observer_and_metrics_and_interaction_subject_issuer(
+            zone,
+            authorizer,
+            config,
+            Arc::new(SystemClock::new()),
+            Arc::new(NoopBusObserver),
+            Arc::new(NoopBusTelemetry),
+        )
+    }
+
     /// Construct a bus with an injected monotonic clock.
     pub fn with_clock(
         zone: ZoneId,
@@ -1178,14 +1201,16 @@ impl ZoneBus {
         clock: Arc<dyn BusClock>,
         observer: Arc<dyn BusObserver>,
     ) -> Result<(Self, ZoneRegistrar), BusError> {
-        Self::with_clock_observer_and_metrics(
+        let (bus, registrar, _) = Self::with_clock_observer_and_metrics_internal(
             zone,
             authorizer,
             config,
             clock,
             observer,
             Arc::new(NoopBusTelemetry),
-        )
+            false,
+        )?;
+        Ok((bus, registrar))
     }
 
     /// Construct a bus with an observer and the bounded telemetry handoff.
@@ -1197,6 +1222,64 @@ impl ZoneBus {
         observer: Arc<dyn BusObserver>,
         metrics: Arc<dyn BusTelemetry>,
     ) -> Result<(Self, ZoneRegistrar), BusError> {
+        let (bus, registrar, _) = Self::with_clock_observer_and_metrics_internal(
+            zone,
+            authorizer,
+            config,
+            clock,
+            observer,
+            metrics,
+            false,
+        )?;
+        Ok((bus, registrar))
+    }
+
+    /// Construct a bus with the opt-in committed subject issuer for the
+    /// Zone-runtime composition path.
+    pub fn with_clock_observer_and_metrics_and_interaction_subject_issuer(
+        zone: ZoneId,
+        authorizer: BusAuthorizer,
+        config: BusConfig,
+        clock: Arc<dyn BusClock>,
+        observer: Arc<dyn BusObserver>,
+        metrics: Arc<dyn BusTelemetry>,
+    ) -> Result<
+        (
+            Self,
+            ZoneRegistrar,
+            CommittedInteractionSubjectIssuer,
+        ),
+        BusError,
+    > {
+        let (bus, registrar, issuer) = Self::with_clock_observer_and_metrics_internal(
+            zone,
+            authorizer,
+            config,
+            clock,
+            observer,
+            metrics,
+            true,
+        )?;
+        let issuer = issuer.ok_or(BusError::InvalidConfig)?;
+        Ok((bus, registrar, issuer))
+    }
+
+    fn with_clock_observer_and_metrics_internal(
+        zone: ZoneId,
+        authorizer: BusAuthorizer,
+        config: BusConfig,
+        clock: Arc<dyn BusClock>,
+        observer: Arc<dyn BusObserver>,
+        metrics: Arc<dyn BusTelemetry>,
+        issue_interaction_subject_issuer: bool,
+    ) -> Result<
+        (
+            Self,
+            ZoneRegistrar,
+            Option<CommittedInteractionSubjectIssuer>,
+        ),
+        BusError,
+    > {
         if config.max_payload_bytes == 0
             || config.max_routes_per_session == 0
             || config.max_total_routes == 0
@@ -1206,6 +1289,16 @@ impl ZoneBus {
         {
             return Err(BusError::InvalidConfig);
         }
+        let interaction_subject_authority = if issue_interaction_subject_issuer {
+            Some(Arc::new(InteractionSubjectAuthority {
+                zone: zone.clone(),
+                controller_generation: authorizer
+                    .controller_generation()
+                    .ok_or(BusError::InvalidConfig)?,
+            }))
+        } else {
+            None
+        };
         let operations =
             OperationTable::new(config.max_operations, config.max_operations_per_session)?;
         let streams = StreamBridge::with_observer_and_metrics(
@@ -1250,7 +1343,15 @@ impl ZoneBus {
                     resolver_zone,
                     config.max_total_routes,
                 ),
+                interaction_subjects: interaction_subject_authority.as_ref().map(|authority| {
+                    InteractionSubjectRegistrar {
+                        authority: Arc::clone(authority),
+                    }
+                }),
             },
+            interaction_subject_authority.map(|authority| {
+                CommittedInteractionSubjectIssuer { authority }
+            }),
         ))
     }
 
@@ -1610,9 +1711,10 @@ impl AuthoritativeUnixSubjectResolver {
             .subjects
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
-        let index = subjects
+        let matches = subjects
             .iter()
-            .position(|subject| {
+            .enumerate()
+            .filter(|(_, subject)| {
                 let peer_matches = subject
                     .expected_peer
                     .is_some_and(|expected| expected == peer)
@@ -1625,11 +1727,16 @@ impl AuthoritativeUnixSubjectResolver {
                         .as_ref()
                         .is_none_or(|expected| expected == service)
             })
-            .ok_or_else(|| {
+            .map(|(index, _)| index)
+            .collect::<Vec<_>>();
+        if matches.len() != 1 {
+            return Err(
                 d2b_session::SessionError::new(
                     d2b_session::contract::SessionErrorCode::SubjectConfigurationMismatch,
-                )
-            })?;
+                ),
+            );
+        }
+        let index = matches[0];
         #[cfg(test)]
         {
             let mut subjects = subjects;
@@ -1641,8 +1748,20 @@ impl AuthoritativeUnixSubjectResolver {
         }
     }
 
+    #[cfg(test)]
     fn install(&self, subject: UnixSubjectRecord, zone: &ZoneId) -> d2b_session::Result<()> {
-        if subject.zone_ref.name().as_str() != zone.as_str() {
+        self.install_many(vec![subject], zone)
+    }
+
+    fn install_many(
+        &self,
+        new_subjects: Vec<UnixSubjectRecord>,
+        zone: &ZoneId,
+    ) -> d2b_session::Result<()> {
+        if new_subjects
+            .iter()
+            .any(|subject| subject.zone_ref.name().as_str() != zone.as_str())
+        {
             return Err(d2b_session::SessionError::new(
                 d2b_session::contract::SessionErrorCode::SubjectConfigurationMismatch,
             ));
@@ -1651,12 +1770,12 @@ impl AuthoritativeUnixSubjectResolver {
             .subjects
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
-        if subjects.len() >= self.max_subjects {
+        if subjects.len().saturating_add(new_subjects.len()) > self.max_subjects {
             return Err(d2b_session::SessionError::new(
                 d2b_session::contract::SessionErrorCode::SubjectConfigurationMismatch,
             ));
         }
-        subjects.push(subject);
+        subjects.extend(new_subjects);
         Ok(())
     }
 }
@@ -1667,24 +1786,191 @@ impl core::fmt::Debug for AuthoritativeUnixSubjectResolver {
     }
 }
 
-/// Trusted committed state used to install daemon-owned interaction and
-/// Process/Shell attach subjects.
-pub struct CommittedInteractionSubjectInput {
-    /// The Guest identity committed by the display WaylandSession.
-    pub display_subject_ref: ResourceRef,
-    /// The UID committed for the display WaylandSession Guest.
-    pub display_subject_uid: ResourceUid,
-    pub zone_ref: ResourceRef,
-    pub expected_peer_uid: u32,
-    pub execution_ref: ResourceRef,
-    pub display_generation: ResourceGeneration,
-    pub clipboard_generation: Option<ResourceGeneration>,
-    pub notification_generation: Option<ResourceGeneration>,
-    /// The committed Provider UID used for clipboard service routes.
-    pub clipboard_provider_uid: Option<ResourceUid>,
-    /// The committed Provider UID used for notification service routes.
-    pub notification_provider_uid: Option<ResourceUid>,
-    pub controller_generation: ControllerGeneration,
+struct InteractionSubjectAuthority {
+    zone: ZoneId,
+    controller_generation: ControllerGeneration,
+}
+
+struct InteractionSubjectRegistrar {
+    authority: Arc<InteractionSubjectAuthority>,
+}
+
+struct CommittedInteractionSubjectInstallBody {
+    zone: ZoneId,
+    display_subject_ref: ResourceRef,
+    display_subject_uid: ResourceUid,
+    expected_peer_uid: u32,
+    execution_ref: ResourceRef,
+    display_generation: ResourceGeneration,
+    clipboard_generation: Option<ResourceGeneration>,
+    notification_generation: Option<ResourceGeneration>,
+    clipboard_provider_uid: Option<ResourceUid>,
+    notification_provider_uid: Option<ResourceUid>,
+}
+
+/// Opaque issuer for one Zone's committed interaction subject projection.
+///
+/// The issuer is returned only by the opt-in Zone-runtime bus constructor.
+/// It is consumed when the Zone runtime seals its private committed identity.
+///
+/// ```compile_fail
+/// use d2b_bus::CommittedInteractionSubjectIssuer;
+///
+/// fn clone(value: CommittedInteractionSubjectIssuer) {
+///     let _ = value.clone();
+/// }
+/// ```
+///
+/// ```compile_fail
+/// use d2b_bus::CommittedInteractionSubjectIssuer;
+///
+/// fn requires_default<T: Default>() {}
+/// requires_default::<CommittedInteractionSubjectIssuer>();
+/// ```
+///
+/// ```compile_fail
+/// use d2b_bus::CommittedInteractionSubjectIssuer;
+///
+/// fn format(value: &CommittedInteractionSubjectIssuer) {
+///     let _ = format!("{value:?}");
+/// }
+/// ```
+pub struct CommittedInteractionSubjectIssuer {
+    authority: Arc<InteractionSubjectAuthority>,
+}
+
+/// Opaque, single-use committed interaction subject installation capability.
+///
+/// The capability cannot be constructed, inspected, cloned, defaulted,
+/// serialized, or formatted by downstream crates:
+///
+/// ```compile_fail
+/// use d2b_bus::CommittedInteractionSubjectInstall;
+///
+/// let _ = CommittedInteractionSubjectInstall {};
+/// ```
+///
+/// ```compile_fail
+/// use d2b_bus::CommittedInteractionSubjectInstall;
+///
+/// fn inspect(value: &CommittedInteractionSubjectInstall) {
+///     let _ = &value.body;
+/// }
+/// ```
+///
+/// ```compile_fail
+/// use d2b_bus::CommittedInteractionSubjectInstall;
+///
+/// fn clone(value: CommittedInteractionSubjectInstall) {
+///     let _ = value.clone();
+/// }
+/// ```
+///
+/// ```compile_fail
+/// use d2b_bus::CommittedInteractionSubjectInstall;
+///
+/// fn requires_default<T: Default>() {}
+/// requires_default::<CommittedInteractionSubjectInstall>();
+/// ```
+///
+/// ```compile_fail
+/// use d2b_bus::CommittedInteractionSubjectInstall;
+///
+/// fn serialize(value: &CommittedInteractionSubjectInstall) {
+///     let _ = serde_json::to_string(value);
+/// }
+/// ```
+///
+/// ```compile_fail
+/// use d2b_bus::CommittedInteractionSubjectInstall;
+///
+/// fn format(value: &CommittedInteractionSubjectInstall) {
+///     let _ = format!("{value:?}");
+///     let _ = format!("{value}");
+/// }
+/// ```
+pub struct CommittedInteractionSubjectInstall {
+    authority: Arc<InteractionSubjectAuthority>,
+    body: CommittedInteractionSubjectInstallBody,
+}
+
+impl CommittedInteractionSubjectIssuer {
+    /// Seal one verified Zone-runtime projection for this registrar instance.
+    ///
+    /// The controller generation is captured from the bus authorizer when the
+    /// issuer is created and is deliberately absent from this API.
+    pub fn seal(
+        self,
+        zone: ZoneId,
+        display_subject_ref: ResourceRef,
+        display_subject_uid: ResourceUid,
+        expected_peer_uid: u32,
+        execution_ref: ResourceRef,
+        display_generation: ResourceGeneration,
+        clipboard_generation: Option<ResourceGeneration>,
+        notification_generation: Option<ResourceGeneration>,
+        clipboard_provider_uid: Option<ResourceUid>,
+        notification_provider_uid: Option<ResourceUid>,
+    ) -> d2b_session::Result<CommittedInteractionSubjectInstall> {
+        if self.authority.zone != zone {
+            return Err(subject_configuration_mismatch());
+        }
+        Ok(CommittedInteractionSubjectInstall {
+            authority: self.authority,
+            body: CommittedInteractionSubjectInstallBody {
+                zone,
+                display_subject_ref,
+                display_subject_uid,
+                expected_peer_uid,
+                execution_ref,
+                display_generation,
+                clipboard_generation,
+                notification_generation,
+                clipboard_provider_uid,
+                notification_provider_uid,
+            },
+        })
+    }
+}
+
+impl CommittedInteractionSubjectInstall {
+    fn open(
+        self,
+        registrar: &InteractionSubjectRegistrar,
+        expected_zone: &ZoneId,
+    ) -> d2b_session::Result<CommittedInteractionSubjectInstallBody> {
+        if !Arc::ptr_eq(&self.authority, &registrar.authority)
+            || &self.body.zone != expected_zone
+            || &registrar.authority.zone != expected_zone
+        {
+            return Err(subject_configuration_mismatch());
+        }
+        Ok(self.body)
+    }
+}
+
+const _: fn() = || {
+    trait CapabilityMustNotImplementCloneCopyDefaultDebugOrFrom<A> {
+        fn some_item() {}
+    }
+    impl<T: ?Sized> CapabilityMustNotImplementCloneCopyDefaultDebugOrFrom<()> for T {}
+    impl<T: Clone> CapabilityMustNotImplementCloneCopyDefaultDebugOrFrom<u8> for T {}
+    impl<T: Copy> CapabilityMustNotImplementCloneCopyDefaultDebugOrFrom<u16> for T {}
+    impl<T: Default> CapabilityMustNotImplementCloneCopyDefaultDebugOrFrom<u32> for T {}
+    impl<T: core::fmt::Debug> CapabilityMustNotImplementCloneCopyDefaultDebugOrFrom<u64> for T {}
+    impl<T: From<()>> CapabilityMustNotImplementCloneCopyDefaultDebugOrFrom<u128> for T {}
+    let _ = <CommittedInteractionSubjectIssuer as CapabilityMustNotImplementCloneCopyDefaultDebugOrFrom<
+        _,
+    >>::some_item;
+    let _ = <CommittedInteractionSubjectInstall as CapabilityMustNotImplementCloneCopyDefaultDebugOrFrom<
+        _,
+    >>::some_item;
+};
+
+fn subject_configuration_mismatch() -> d2b_session::SessionError {
+    d2b_session::SessionError::new(
+        d2b_session::contract::SessionErrorCode::SubjectConfigurationMismatch,
+    )
 }
 
 /// Single, non-cloneable authority that consumes authenticated registrations.
@@ -1692,6 +1978,7 @@ pub struct ZoneRegistrar {
     core: Arc<BusCore>,
     component_admission: ComponentSessionRegistrar,
     unix_subjects: AuthoritativeUnixSubjectResolver,
+    interaction_subjects: Option<InteractionSubjectRegistrar>,
 }
 
 struct ComponentSessionAdmissionIdentity;
@@ -2596,19 +2883,20 @@ impl ZoneRegistrar {
         )
     }
 
-    /// Install the daemon-owned interaction and Process/Shell subject
-    /// projection from the committed resource snapshot. The Unix peer UID
-    /// authenticates the transport only; the Guest/Host refs, resource
-    /// generations, and controller generation are all supplied by trusted
-    /// committed state.
+    /// Install a sealed daemon-owned interaction and Process/Shell subject
+    /// projection from the Zone runtime.
     pub fn install_committed_interaction_subject(
         &self,
-        committed: CommittedInteractionSubjectInput,
+        committed: CommittedInteractionSubjectInstall,
     ) -> d2b_session::Result<()> {
-        let CommittedInteractionSubjectInput {
+        let interaction_subjects = self
+            .interaction_subjects
+            .as_ref()
+            .ok_or_else(subject_configuration_mismatch)?;
+        let CommittedInteractionSubjectInstallBody {
+            zone,
             display_subject_ref,
             display_subject_uid,
-            zone_ref,
             expected_peer_uid,
             execution_ref,
             display_generation,
@@ -2616,8 +2904,10 @@ impl ZoneRegistrar {
             notification_generation,
             clipboard_provider_uid,
             notification_provider_uid,
-            controller_generation,
-        } = committed;
+        } = committed.open(interaction_subjects, &self.core.zone)?;
+        let zone_ref = ResourceRef::parse(&format!("Zone/{}", zone.as_str()))
+            .map_err(|_| subject_configuration_mismatch())?;
+        let controller_generation = interaction_subjects.authority.controller_generation;
         let services = [(
             ServicePackage::DisplayV3,
             ResourceRef::parse("Provider/display-wayland").expect("fixed display Provider ref"),
@@ -2739,9 +3029,7 @@ impl ZoneRegistrar {
                 .for_service(ServicePackage::NotificationV3),
             );
         }
-        for subject in subjects {
-            self.unix_subjects.install(subject, &self.core.zone)?;
-        }
+        self.unix_subjects.install_many(subjects, &self.core.zone)?;
         Ok(())
     }
 
@@ -4601,6 +4889,100 @@ use d2b_contracts_resource::v3::identity::{
             bootstrap_phase: BootstrapPhase::Disabled,
             now_tick: revision,
         }
+    }
+
+    fn subject_issuer_bus() -> (
+        ZoneBus,
+        ZoneRegistrar,
+        CommittedInteractionSubjectIssuer,
+    ) {
+        ZoneBus::with_interaction_subject_issuer(
+            ZoneId::parse("dev").unwrap(),
+            BusAuthorizer::new(
+                NativeAuthorizer::new(ApiCatalog::standard(), None).unwrap(),
+                state(1),
+            )
+            .unwrap(),
+            BusConfig::default(),
+        )
+        .unwrap()
+    }
+
+    fn subject_install(
+        issuer: CommittedInteractionSubjectIssuer,
+    ) -> CommittedInteractionSubjectInstall {
+        issuer
+            .seal(
+                ZoneId::parse("dev").unwrap(),
+                ResourceRef::parse("Guest/guest").unwrap(),
+                ResourceUid::parse(CALLER_UID).unwrap(),
+                42,
+                ResourceRef::parse("Host/host-system").unwrap(),
+                ResourceGeneration::new(2).unwrap(),
+                None,
+                None,
+                None,
+                None,
+            )
+            .unwrap()
+    }
+
+    #[test]
+    fn committed_subject_install_is_instance_bound_and_default_deny() {
+        let (_bus_a, registrar_a, issuer_a) = subject_issuer_bus();
+        let (_bus_b, registrar_b, issuer_b) = subject_issuer_bus();
+
+        assert_eq!(
+            registrar_a
+                .interaction_subjects
+                .as_ref()
+                .expect("opt-in subject registrar")
+                .authority
+                .controller_generation
+                .get(),
+            3
+        );
+        assert!(
+            registrar_b
+                .install_committed_interaction_subject(subject_install(issuer_a))
+                .is_err(),
+            "an install token must be rejected by another registrar"
+        );
+        assert!(
+            registrar_b
+                .unix_subjects
+                .subjects
+                .lock()
+                .unwrap()
+                .is_empty(),
+            "cross-registrar rejection must precede subject mutation"
+        );
+
+        let (_default_bus, default_registrar) = ZoneBus::new(
+            ZoneId::parse("dev").unwrap(),
+            BusAuthorizer::new(
+                NativeAuthorizer::new(ApiCatalog::standard(), None).unwrap(),
+                state(1),
+            )
+            .unwrap(),
+            BusConfig::default(),
+        )
+        .unwrap();
+        assert!(
+            default_registrar
+                .install_committed_interaction_subject(subject_install(issuer_b))
+                .is_err(),
+            "default constructors must not expose committed subject installation"
+        );
+        assert!(
+            default_registrar
+                .unix_subjects
+                .subjects
+                .lock()
+                .unwrap()
+                .is_empty(),
+            "default-deny rejection must precede subject mutation"
+        );
     }
 
     fn operation(id: &str) -> OperationSpec {

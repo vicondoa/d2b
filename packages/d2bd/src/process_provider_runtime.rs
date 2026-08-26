@@ -1458,7 +1458,8 @@ fn caller_uid(caller: &BrokerCallerRole) -> u32 {
     match caller {
         BrokerCallerRole::AdminUid { uid }
         | BrokerCallerRole::LauncherUid { uid }
-        | BrokerCallerRole::RootUid { uid } => *uid,
+        | BrokerCallerRole::RootUid { uid }
+        | BrokerCallerRole::HostShutdownUid { uid } => *uid,
         BrokerCallerRole::NotAuthorized => 0,
     }
 }

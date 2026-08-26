@@ -66,6 +66,10 @@ not read the private bundle or root-owned runtime state.
 | Successful reply | `type: "helloOk"` with `serverVersion`, `selectedVersion`, and the negotiated `capabilities`. |
 | Rejected reply | `type: "helloRejected"` with a typed error and a reason such as version mismatch or capability negotiation failure. |
 
+The `--zone` option changes the request's `zoneRef` routing target; it never
+selects a different socket. `D2B_PUBLIC_SOCKET` is reserved for hermetic test
+or development transport overrides and does not provide Zone identity.
+
 The client must use the `selectedVersion` and returned feature list from
 `helloOk`. It must not infer support from a package version or assume that a
 missing capability will fall back to an older transport. A client that cannot

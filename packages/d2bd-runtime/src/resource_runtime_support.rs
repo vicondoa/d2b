@@ -18,6 +18,8 @@ use d2b_contracts_resource::v3::identity::STANDARD_RESOURCE_TYPES;
 use d2b_contracts_zone_session::v3::{
     component_session::{AttachmentPolicy, EndpointPolicy, EndpointPurpose, EndpointRole, IdentityEvidenceRequirement, LimitProfile, Locality, NoiseProfile, PurposeClass, ServicePackage, TransportBinding as ComponentTransportBinding, TransportClass},
     resource_bundle::ResourceBundle,
+    role::RoleSpec,
+    role_binding::RoleBindingSpec,
     zone::validate_self_resource,
 };
 use d2b_contracts_resource::v3::{
@@ -29,6 +31,7 @@ use d2b_contracts_resource::v3::{
     ResourceEnvelope,
     ResourceError,
     ResourceErrorKind,
+    ResourceGeneration,
     ResourceErrorReason,
     ResourceName,
     ResourcePhase,
@@ -42,6 +45,7 @@ use d2b_contracts_resource::v3::{
     ZoneRevision,
     ManagedBy,
     host::HOST_PROVIDER_REF,
+    user::UserSpec,
 };
 use d2b_contracts_resource::v3::identity::{
     AuthenticatedSubjectContext,
@@ -128,6 +132,7 @@ use d2b_resource_store::{
     StoreSlot, StoredResource,
 };
 use d2b_resource_store_redb::{RedbResourceStore, StoreIdentity, StoreRuntimeMetadata};
+use nix::unistd::{Uid, User};
 use d2b_session::{
     HandshakeCredentials, SessionEngine, SessionServerError, TransportEvidence,
     serve_ttrpc_services,
@@ -140,8 +145,22 @@ use protobuf;
 use serde_json::{Map, Value, json};
 use sha2::{Digest, Sha256};
 
-const OPERATOR_SUBJECT_REF: &str = "User/d2bd-operator";
-const OPERATOR_SUBJECT_UID: &str = "22222222-2222-4222-8222-222222222222";
+#[cfg(feature = "test-support")]
+const TEST_OPERATOR_SUBJECT_REF: &str = "User/d2bd-operator";
+#[cfg(feature = "test-support")]
+const TEST_OPERATOR_SUBJECT_UID: &str = "22222222-2222-4222-8222-222222222222";
+const COMMITTED_POLICY_RESOURCE_TYPES: [&str; 8] = [
+    "Role",
+    "RoleBinding",
+    "Zone",
+    "User",
+    "Provider",
+    "Host",
+    "Guest",
+    "Process",
+];
+const ROLE_BINDING_SUBJECT_RESOURCE_TYPES: [&str; 6] =
+    ["Zone", "User", "Provider", "Host", "Guest", "Process"];
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ZoneRuntimeReadiness {
@@ -224,19 +243,14 @@ pub fn mark_core_handlers(
     Ok(())
 }
 
-pub fn operator_subject_identity() -> (ResourceRef, ResourceUid) {
-    (
-        ResourceRef::parse(OPERATOR_SUBJECT_REF).expect("stable operator subject ref"),
-        ResourceUid::parse(OPERATOR_SUBJECT_UID).expect("stable operator subject uid"),
-    )
-}
-
-pub fn local_operator_subject_context(
+pub fn local_user_subject_context(
     zone: &ZoneId,
-    peer_uid: u32,
+    resolved_user: &ResolvedZoneUser,
     operation_id: &str,
 ) -> Result<AuthenticatedSubjectContext, ResourceRuntimeError> {
-    let (subject_ref, subject_uid) = operator_subject_identity();
+    if resolved_user.zone != *zone {
+        return Err(ResourceRuntimeError::IdentityUnbound);
+    }
     let zone_ref = ResourceRef::parse(&format!("Zone/{}", zone.as_str()))
         .map_err(|_| ResourceRuntimeError::AuthenticationUnavailable)?;
     let schema_fingerprint = SchemaFingerprint::parse(format!("sha256:{}", "1".repeat(64)))
@@ -244,16 +258,20 @@ pub fn local_operator_subject_context(
 
     let mut transport_digest = Sha256::new();
     transport_digest.update(b"d2bd-public-resource-transport\0");
-    transport_digest.update(peer_uid.to_le_bytes());
+    transport_digest.update(resolved_user.peer_uid.to_le_bytes());
     transport_digest.update(zone.as_str().as_bytes());
+    transport_digest.update(resolved_user.generation.get().to_le_bytes());
+    transport_digest.update(resolved_user.revision.get().to_le_bytes());
     let transport_digest =
         BindingDigest::parse(format!("sha256:{:x}", transport_digest.finalize()))
             .map_err(|_| ResourceRuntimeError::AuthenticationUnavailable)?;
 
     let mut transcript_digest = Sha256::new();
     transcript_digest.update(b"d2bd-public-resource-transcript\0");
-    transcript_digest.update(peer_uid.to_le_bytes());
+    transcript_digest.update(resolved_user.peer_uid.to_le_bytes());
     transcript_digest.update(zone.as_str().as_bytes());
+    transcript_digest.update(resolved_user.generation.get().to_le_bytes());
+    transcript_digest.update(resolved_user.revision.get().to_le_bytes());
     transcript_digest.update(operation_id.as_bytes());
     let transcript_digest = TranscriptHash::from_bytes(transcript_digest.finalize().into());
 
@@ -264,8 +282,8 @@ pub fn local_operator_subject_context(
         transcript_digest,
     );
     Ok(AuthenticatedSubjectContext::new(
-        subject_ref,
-        subject_uid,
+        resolved_user.subject_ref.clone(),
+        resolved_user.subject_uid.clone(),
         zone_ref,
         EvidenceClass::UnixPeer,
         SessionPurpose::parse("zone-bus")
@@ -316,6 +334,24 @@ pub fn runtime_policy(
     current_revision: ZoneRevision,
     bundle_resource_types: &[ResourceTypeName],
 ) -> Result<(PolicySet, AuthorizationState), ResourceRuntimeError> {
+    compile_committed_policy(
+        zone,
+        *snapshot,
+        current_revision,
+        bundle_resource_types,
+        &[],
+    )
+}
+
+/// Compile the complete native policy from committed Role and RoleBinding
+/// resources, retaining only the fixed internal system-core grant.
+pub fn compile_committed_policy(
+    zone: &ZoneId,
+    snapshot: PolicySnapshot,
+    current_revision: ZoneRevision,
+    bundle_resource_types: &[ResourceTypeName],
+    resources: &[StoredResource],
+) -> Result<(PolicySet, AuthorizationState), ResourceRuntimeError> {
     if snapshot.policy_revision == 0
         || snapshot.api_catalog_revision == 0
         || snapshot.active_configuration_revision.get() == 0
@@ -356,9 +392,9 @@ pub fn runtime_policy(
         SessionVerb::OpenStream,
         SessionVerb::Cancel,
     ];
-    let mut rules = Vec::new();
+    let mut system_core_rules = Vec::new();
     for chunk in resource_types.chunks(16) {
-        rules.push(
+        system_core_rules.push(
             PolicyRule::new(
                 &catalog,
                 chunk.iter().cloned(),
@@ -374,46 +410,179 @@ pub fn runtime_policy(
     }
     let role_ref = ResourceRef::parse("Role/system-core-runtime")
         .map_err(|_| ResourceRuntimeError::AuthorizationUnavailable)?;
-    let role = CompiledRole::new(role_ref.clone(), rules)
+    let system_core_role = CompiledRole::new(role_ref.clone(), system_core_rules)
         .map_err(|_| ResourceRuntimeError::AuthorizationUnavailable)?;
     let binding_scope = BindingScope {
         zones: [zone.clone()].into_iter().collect(),
         ..BindingScope::default()
     };
+    #[allow(unused_mut)]
+    let mut system_core_subjects = vec![BoundSubject {
+        subject_ref: ResourceRef::parse("Provider/system-core")
+            .map_err(|_| ResourceRuntimeError::AuthorizationUnavailable)?,
+        subject_uid: ResourceUid::parse("11111111-1111-4111-8111-111111111111")
+            .map_err(|_| ResourceRuntimeError::AuthorizationUnavailable)?,
+    }];
+    #[cfg(feature = "test-support")]
+    system_core_subjects.push(BoundSubject {
+        subject_ref: ResourceRef::parse(TEST_OPERATOR_SUBJECT_REF)
+            .map_err(|_| ResourceRuntimeError::AuthorizationUnavailable)?,
+        subject_uid: ResourceUid::parse(TEST_OPERATOR_SUBJECT_UID)
+            .map_err(|_| ResourceRuntimeError::AuthorizationUnavailable)?,
+    });
     let binding = CompiledRoleBinding::new(
         role_ref.clone(),
-        [
-            BoundSubject {
-                subject_ref: ResourceRef::parse("Provider/system-core")
-                    .map_err(|_| ResourceRuntimeError::AuthorizationUnavailable)?,
-                subject_uid: ResourceUid::parse("11111111-1111-4111-8111-111111111111")
-                    .map_err(|_| ResourceRuntimeError::AuthorizationUnavailable)?,
-            },
-            BoundSubject {
-                subject_ref: ResourceRef::parse(OPERATOR_SUBJECT_REF)
-                    .map_err(|_| ResourceRuntimeError::AuthorizationUnavailable)?,
-                subject_uid: ResourceUid::parse(OPERATOR_SUBJECT_UID)
-                    .map_err(|_| ResourceRuntimeError::AuthorizationUnavailable)?,
-            },
-        ],
+        system_core_subjects,
         binding_scope,
         RelayGrantAuthority::None,
     )
     .map_err(|_| ResourceRuntimeError::AuthorizationUnavailable)?;
+    let mut roles = vec![system_core_role];
+    let mut bindings = vec![binding];
+    let mut subject_evidence = BTreeMap::new();
+    for resource in resources {
+        let envelope = validated_stored_resource_envelope(resource, zone)?;
+        if ROLE_BINDING_SUBJECT_RESOURCE_TYPES
+            .contains(&resource.resource_ref.resource_type().as_str())
+        {
+            if subject_evidence
+                .insert(
+                    resource.resource_ref.clone(),
+                    (
+                        resource.uid.clone(),
+                        resource_is_current(resource, &envelope),
+                    ),
+                )
+                .is_some()
+            {
+                return Err(ResourceRuntimeError::AuthorizationUnavailable);
+            }
+        }
+    }
+    for resource in resources {
+        let envelope = validated_stored_resource_envelope(resource, zone)?;
+        if matches!(
+            envelope.status().phase(),
+            ResourcePhase::Deleted | ResourcePhase::Failed
+        ) {
+            continue;
+        }
+        let spec = envelope.spec().base().to_canonical_bytes();
+        match resource.resource_ref.resource_type().as_str() {
+            "Role" => {
+                if resource.resource_ref == role_ref {
+                    return Err(ResourceRuntimeError::AuthorizationUnavailable);
+                }
+                let role_spec = serde_json::from_slice::<RoleSpec>(&spec)
+                    .map_err(|_| ResourceRuntimeError::AuthorizationUnavailable)?;
+                roles.push(
+                    CompiledRole::from_spec(
+                        resource.resource_ref.clone(),
+                        &role_spec,
+                        &catalog,
+                        false,
+                    )
+                    .map_err(|_| ResourceRuntimeError::AuthorizationUnavailable)?,
+                );
+            }
+            "RoleBinding" => {
+                let binding_spec = serde_json::from_slice::<RoleBindingSpec>(&spec)
+                    .map_err(|_| ResourceRuntimeError::AuthorizationUnavailable)?;
+                binding_spec
+                    .validate_zone(zone)
+                    .map_err(|_| ResourceRuntimeError::AuthorizationUnavailable)?;
+                let role = resources
+                    .iter()
+                    .find(|candidate| candidate.resource_ref == *binding_spec.role_ref())
+                    .and_then(|candidate| {
+                        let envelope =
+                            ResourceEnvelope::from_json(&candidate.canonical_json).ok()?;
+                        if matches!(
+                            envelope.status().phase(),
+                            ResourcePhase::Deleted | ResourcePhase::Failed
+                        ) {
+                            return None;
+                        }
+                        let spec = envelope.spec().base().to_canonical_bytes();
+                        serde_json::from_slice::<RoleSpec>(&spec).ok()
+                    })
+                    .ok_or(ResourceRuntimeError::AuthorizationUnavailable)?;
+                binding_spec
+                    .validate_scope_against_role(&role)
+                    .map_err(|_| ResourceRuntimeError::AuthorizationUnavailable)?;
+                let resolved_subjects = binding_spec
+                    .subjects()
+                    .iter()
+                    .filter_map(|subject_ref| {
+                        subject_evidence
+                            .get(subject_ref)
+                            .and_then(|(subject_uid, current)| {
+                                current.then(|| BoundSubject {
+                                    subject_ref: subject_ref.clone(),
+                                    subject_uid: subject_uid.clone(),
+                                })
+                            })
+                    })
+                    .collect::<Vec<_>>();
+                if resolved_subjects.is_empty() {
+                    continue;
+                }
+                bindings.push(
+                    CompiledRoleBinding::from_spec_with_resolved_subjects(
+                        &binding_spec,
+                        resolved_subjects,
+                        RelayGrantAuthority::None,
+                    )
+                    .map_err(|_| ResourceRuntimeError::AuthorizationUnavailable)?,
+                );
+            }
+            _ => {}
+        }
+    }
     let policy = PolicySet::new(
         &catalog,
         snapshot.policy_revision,
-        vec![role],
-        vec![binding],
+        roles,
+        bindings,
     )
     .map_err(|_| ResourceRuntimeError::AuthorizationUnavailable)?;
     let state = AuthorizationState {
-        snapshot: *snapshot,
+        snapshot,
         zone_policy_revision: current_revision,
         bootstrap_phase: BootstrapPhase::Disabled,
         now_tick: 1,
     };
     Ok((policy, state))
+}
+
+fn validated_stored_resource_envelope(
+    resource: &StoredResource,
+    zone: &ZoneId,
+) -> Result<ResourceEnvelope, ResourceRuntimeError> {
+    if resource.zone != *zone {
+        return Err(ResourceRuntimeError::AuthorizationUnavailable);
+    }
+    let envelope = ResourceEnvelope::from_json(&resource.canonical_json)
+        .map_err(|_| ResourceRuntimeError::AuthorizationUnavailable)?;
+    if envelope.resource_type() != resource.resource_ref.resource_type()
+        || envelope.metadata().zone() != zone
+        || envelope.metadata().name() != resource.resource_ref.name()
+        || envelope.metadata().uid() != &resource.uid
+        || envelope.metadata().generation() != resource.generation
+        || envelope.metadata().revision() != resource.revision
+        || envelope
+            .digest()
+            .map_err(|_| ResourceRuntimeError::AuthorizationUnavailable)?
+            != resource.payload_digest
+    {
+        return Err(ResourceRuntimeError::AuthorizationUnavailable);
+    }
+    Ok(envelope)
+}
+
+fn resource_is_current(resource: &StoredResource, envelope: &ResourceEnvelope) -> bool {
+    envelope.status().phase() == ResourcePhase::Ready
+        && envelope.status().observed_generation().get() == resource.generation.get()
 }
 
 pub fn system_core_endpoint_policy() -> EndpointPolicy {
@@ -661,6 +830,354 @@ pub fn runtime_authorizer(
     )
     .map_err(|_| ResourceRuntimeError::AuthorizationUnavailable)?;
     NativeAuthorizer::new(catalog, None).map_err(|_| ResourceRuntimeError::AuthorizationUnavailable)
+}
+
+/// Immutable User identity resolved from one Zone store and the host NSS
+/// database. The OS uid is admission evidence only and is not retained.
+pub struct ResolvedZoneUser {
+    zone: ZoneId,
+    peer_uid: u32,
+    subject_ref: ResourceRef,
+    subject_uid: ResourceUid,
+    generation: ResourceGeneration,
+    revision: ZoneRevision,
+}
+
+impl ResolvedZoneUser {
+    pub const fn subject_ref(&self) -> &ResourceRef {
+        &self.subject_ref
+    }
+
+    pub const fn subject_uid(&self) -> &ResourceUid {
+        &self.subject_uid
+    }
+
+    pub const fn generation(&self) -> ResourceGeneration {
+        self.generation
+    }
+
+    pub const fn revision(&self) -> ZoneRevision {
+        self.revision
+    }
+}
+
+impl core::fmt::Debug for ResolvedZoneUser {
+    fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        formatter
+            .debug_struct("ResolvedZoneUser")
+            .field("generation", &self.generation)
+            .field("revision", &self.revision)
+            .finish_non_exhaustive()
+    }
+}
+
+/// Resolve a public peer uid to exactly one Ready User in one Zone.
+///
+/// The NSS callback keeps owner tests hermetic. Production uses the host NSS
+/// database; no caller-supplied subject ref, resource uid, or username enters
+/// the result.
+pub(crate) fn resolve_zone_user_from_resources(
+    zone: &ZoneId,
+    peer_uid: u32,
+    resources: &[StoredResource],
+    nss_uid: impl Fn(&str) -> Option<u32>,
+) -> Result<ResolvedZoneUser, ResourceRuntimeError> {
+    let mut matches = Vec::new();
+    for resource in resources {
+        if resource.resource_ref.resource_type().as_str() != "User" {
+            continue;
+        }
+        if resource.zone != *zone {
+            return Err(ResourceRuntimeError::IdentityUnbound);
+        }
+        let envelope = ResourceEnvelope::from_json(&resource.canonical_json)
+            .map_err(|_| ResourceRuntimeError::IdentityUnbound)?;
+        if envelope.resource_type().as_str() != "User"
+            || envelope.metadata().zone() != zone
+            || envelope.metadata().name() != resource.resource_ref.name()
+            || envelope.metadata().uid() != &resource.uid
+            || envelope.metadata().generation() != resource.generation
+            || envelope.metadata().revision() != resource.revision
+        {
+            return Err(ResourceRuntimeError::IdentityUnbound);
+        }
+        let user_spec = serde_json::from_slice::<UserSpec>(
+            &envelope.spec().base().to_canonical_bytes(),
+        )
+        .map_err(|_| ResourceRuntimeError::IdentityUnbound)?;
+        if nss_uid(user_spec.os_username().as_str()) != Some(peer_uid) {
+            continue;
+        }
+        if envelope.status().phase() != ResourcePhase::Ready
+            || envelope.status().observed_generation().get() != resource.generation.get()
+        {
+            return Err(ResourceRuntimeError::IdentityUnbound);
+        }
+        matches.push(ResolvedZoneUser {
+            zone: zone.clone(),
+            peer_uid,
+            subject_ref: resource.resource_ref.clone(),
+            subject_uid: resource.uid.clone(),
+            generation: resource.generation,
+            revision: resource.revision,
+        });
+    }
+    if matches.len() == 1 {
+        return Ok(matches
+            .pop()
+            .expect("one resolved User match is present"));
+    }
+    Err(ResourceRuntimeError::IdentityUnbound)
+}
+
+/// Resolve a public peer uid from the complete User index of one Zone store.
+pub async fn resolve_zone_user(
+    store: &RedbResourceStore,
+    zone: &ZoneId,
+    peer_uid: u32,
+    operation_id: &str,
+) -> Result<ResolvedZoneUser, ResourceRuntimeError> {
+    let user_type =
+        ResourceTypeName::parse("User").map_err(|_| ResourceRuntimeError::IdentityUnbound)?;
+    let mut resources = Vec::new();
+    let mut cursor = None;
+    loop {
+        let page = store
+            .list(StoreListRequest {
+                operation: StoreOperationContext {
+                    operation_id: operation_id.to_owned(),
+                    idempotency_key: None,
+                    correlation_id: operation_id.to_owned(),
+                    trace_id: None,
+                    deadline_ms: 30_000,
+                },
+                zone: zone.clone(),
+                resource_types: vec![user_type.clone()],
+                resource_names: Vec::new(),
+                filters: Vec::new(),
+                page_size: 500,
+                cursor,
+                projection: StoreProjection::Full,
+            })
+            .await
+            .map_err(|_| ResourceRuntimeError::IdentityUnbound)?;
+        resources.extend(page.resources);
+        cursor = page.next_cursor;
+        if cursor.is_none() {
+            break;
+        }
+    }
+    let canonical_name = User::from_uid(Uid::from_raw(peer_uid))
+        .ok()
+        .flatten()
+        .map(|user| user.name);
+    resolve_zone_user_from_resources(zone, peer_uid, &resources, |username| {
+        let user = User::from_name(username).ok().flatten()?;
+        (user.uid.as_raw() == peer_uid
+            && canonical_name
+                .as_deref()
+                .is_some_and(|name| name == user.name.as_str()))
+        .then_some(user.uid.as_raw())
+    })
+}
+
+/// Read the committed policy and local RoleBinding subject rows for one Zone
+/// in bounded pages.
+pub async fn load_committed_policy_resources(
+    store: &RedbResourceStore,
+    zone: &ZoneId,
+    operation_id: &str,
+) -> Result<Vec<StoredResource>, ResourceRuntimeError> {
+    let resource_types = COMMITTED_POLICY_RESOURCE_TYPES
+        .into_iter()
+        .map(|name| ResourceTypeName::parse(name))
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|_| ResourceRuntimeError::AuthorizationUnavailable)?;
+    let mut resources = Vec::new();
+    for resource_type in resource_types {
+        let mut cursor = None;
+        loop {
+            let page = store
+                .list(StoreListRequest {
+                    operation: StoreOperationContext {
+                        operation_id: operation_id.to_owned(),
+                        idempotency_key: None,
+                        correlation_id: operation_id.to_owned(),
+                        trace_id: None,
+                        deadline_ms: 30_000,
+                    },
+                    zone: zone.clone(),
+                    resource_types: vec![resource_type.clone()],
+                    resource_names: Vec::new(),
+                    filters: Vec::new(),
+                    page_size: 500,
+                    cursor,
+                    projection: StoreProjection::Full,
+                })
+                .await
+                .map_err(|_| ResourceRuntimeError::AuthorizationUnavailable)?;
+            resources.extend(page.resources);
+            cursor = page.next_cursor;
+            if cursor.is_none() {
+                break;
+            }
+        }
+    }
+    Ok(resources)
+}
+
+/// Immutable subject identity captured for a committed RoleBinding.
+#[derive(Clone, PartialEq, Eq)]
+pub struct PolicySubjectFingerprint {
+    binding_uid: ResourceUid,
+    binding_generation: ResourceGeneration,
+    subject_uid: ResourceUid,
+    subject_generation: ResourceGeneration,
+}
+
+impl PolicySubjectFingerprint {
+    pub const fn binding_uid(&self) -> &ResourceUid {
+        &self.binding_uid
+    }
+
+    pub const fn binding_generation(&self) -> ResourceGeneration {
+        self.binding_generation
+    }
+
+    pub const fn subject_uid(&self) -> &ResourceUid {
+        &self.subject_uid
+    }
+
+    pub const fn subject_generation(&self) -> ResourceGeneration {
+        self.subject_generation
+    }
+}
+
+/// Return whether a RoleBinding may refresh without silently inheriting a
+/// recreated subject. A changed binding generation is the explicit rebind
+/// ceremony that permits a new subject UID or generation.
+pub fn policy_subject_fingerprint_allows_refresh(
+    previous: Option<&PolicySubjectFingerprint>,
+    current: &PolicySubjectFingerprint,
+) -> bool {
+    let Some(previous) = previous else {
+        return true;
+    };
+    previous.binding_uid != current.binding_uid
+        || previous.binding_generation != current.binding_generation
+        || (previous.subject_uid == current.subject_uid
+            && previous.subject_generation == current.subject_generation)
+}
+
+/// Capture RoleBinding-to-subject UID/generation pairs from one committed
+/// policy snapshot. A same-name User recreation therefore changes the
+/// fingerprint and must be accompanied by a new RoleBinding generation before
+/// its grant can be installed again.
+pub fn committed_policy_subject_fingerprints(
+    resources: &[StoredResource],
+) -> Result<
+    BTreeMap<(ResourceRef, ResourceRef), PolicySubjectFingerprint>,
+    ResourceRuntimeError,
+> {
+    committed_policy_subject_fingerprints_with_retained(resources, &BTreeMap::new())
+}
+
+/// Refresh RoleBinding subject fingerprints while retaining evidence for
+/// subjects that are still authored but currently missing or unready.
+///
+/// Retained evidence is scoped to the binding UID/generation and to the
+/// binding's current subject list. A changed binding identity therefore drops
+/// the old evidence, while a subject removal or deleted binding cannot leave a
+/// tombstone behind.
+pub fn committed_policy_subject_fingerprints_with_retained(
+    resources: &[StoredResource],
+    previous: &BTreeMap<(ResourceRef, ResourceRef), PolicySubjectFingerprint>,
+) -> Result<
+    BTreeMap<(ResourceRef, ResourceRef), PolicySubjectFingerprint>,
+    ResourceRuntimeError,
+> {
+    let mut by_ref = BTreeMap::new();
+    for resource in resources {
+        if by_ref
+            .insert(resource.resource_ref.clone(), resource)
+            .is_some()
+        {
+            return Err(ResourceRuntimeError::AuthorizationUnavailable);
+        }
+    }
+    let mut authored_subjects = BTreeMap::new();
+    let mut current_fingerprints = BTreeMap::new();
+    for binding in resources.iter().filter(|resource| {
+        resource.resource_ref.resource_type().as_str() == "RoleBinding"
+    }) {
+        let envelope = validated_stored_resource_envelope(binding, &binding.zone)?;
+        if matches!(
+            envelope.status().phase(),
+            ResourcePhase::Deleted | ResourcePhase::Failed
+        ) {
+            continue;
+        }
+        let spec = serde_json::from_slice::<RoleBindingSpec>(
+            &envelope.spec().base().to_canonical_bytes(),
+        )
+        .map_err(|_| ResourceRuntimeError::AuthorizationUnavailable)?;
+        spec.validate_zone(envelope.metadata().zone())
+            .map_err(|_| ResourceRuntimeError::AuthorizationUnavailable)?;
+        for subject_ref in spec.subjects() {
+            let key = (binding.resource_ref.clone(), subject_ref.clone());
+            authored_subjects.insert(
+                key.clone(),
+                (binding.uid.clone(), binding.generation),
+            );
+            let Some(subject) = by_ref.get(subject_ref) else {
+                continue;
+            };
+            let subject_envelope =
+                validated_stored_resource_envelope(subject, envelope.metadata().zone())?;
+            if !resource_is_current(subject, &subject_envelope) {
+                continue;
+            }
+            current_fingerprints.insert(
+                key,
+                PolicySubjectFingerprint {
+                    binding_uid: binding.uid.clone(),
+                    binding_generation: binding.generation,
+                    subject_uid: subject.uid.clone(),
+                    subject_generation: subject.generation,
+                },
+            );
+        }
+    }
+    let mut fingerprints = BTreeMap::new();
+    for (key, (binding_uid, binding_generation)) in authored_subjects {
+        if let Some(current) = current_fingerprints.remove(&key) {
+            fingerprints.insert(key, current);
+        } else if let Some(previous) = previous.get(&key).filter(|previous| {
+            previous.binding_uid == binding_uid
+                && previous.binding_generation == binding_generation
+        }) {
+            fingerprints.insert(key, previous.clone());
+        }
+    }
+    Ok(fingerprints)
+}
+
+/// Refresh RoleBinding subject fingerprints and reject a changed subject
+/// identity unless the binding identity/generation also changed.
+pub fn refreshed_policy_subject_fingerprints(
+    resources: &[StoredResource],
+    previous: &BTreeMap<(ResourceRef, ResourceRef), PolicySubjectFingerprint>,
+) -> Result<
+    BTreeMap<(ResourceRef, ResourceRef), PolicySubjectFingerprint>,
+    ResourceRuntimeError,
+> {
+    let fingerprints = committed_policy_subject_fingerprints_with_retained(resources, previous)?;
+    for (key, current) in &fingerprints {
+        if !policy_subject_fingerprint_allows_refresh(previous.get(key), current) {
+            return Err(ResourceRuntimeError::IdentityUnbound);
+        }
+    }
+    Ok(fingerprints)
 }
 
 pub fn initial_policy_snapshot() -> Result<PolicySnapshot, ResourceRuntimeError> {
@@ -2062,7 +2579,1178 @@ fn select_resource_projection(
 mod tests {
     use super::*;
     use crate::resource_api::parse_list_request;
+    use d2b_resource_api::authz::{
+        ApiMethod, AuthorizationDenial, AuthorizationRequest, AuthorizationTarget,
+    };
     use d2b_contracts_resource::v3::ResourceGeneration;
+
+    fn user_resource(
+        name: &str,
+        uid: &str,
+        os_username: &str,
+        phase: &str,
+    ) -> StoredResource {
+        let zone = ZoneId::parse("work").unwrap();
+        let value = json!({
+            "apiVersion": "resources.d2bus.org/v3",
+            "type": "User",
+            "metadata": {
+                "name": name,
+                "zone": zone.as_str(),
+                "uid": uid,
+                "generation": 1,
+                "revision": 1,
+                "ownerRef": null,
+                "finalizers": [],
+                "deletionRequestedAt": null,
+                "createdAt": "2026-08-26T00:00:00.000Z",
+                "updatedAt": "2026-08-26T00:00:00.000Z",
+                "managedBy": "configuration",
+                "configurationGeneration": 1,
+            },
+            "spec": {
+                "displayName": "",
+                "groups": [],
+                "osUsername": os_username,
+            },
+            "status": {
+                "completedAt": null,
+                "conditions": [],
+                "lastReconciledAt": null,
+                "observedGeneration": 1,
+                "outcome": null,
+                "phase": phase,
+                "resource": {},
+                "startedAt": null,
+                "update": {
+                    "dependencies": {"count": 0, "refs": []},
+                    "disruption": "None",
+                    "lastAssessedAt": null,
+                    "observedGeneration": 1,
+                    "operationId": null,
+                    "owned": {"count": 0, "refs": []},
+                    "preserveState": true,
+                    "reasons": [],
+                    "state": "Current",
+                    "targetGeneration": 1,
+                },
+            },
+        });
+        let canonical_json = d2b_contracts_resource::v3::canonical_json_bytes(&value).unwrap();
+        let envelope = ResourceEnvelope::from_json(&canonical_json).unwrap();
+        StoredResource {
+            resource_ref: ResourceRef::parse(&format!("User/{name}")).unwrap(),
+            zone,
+            uid: ResourceUid::parse(uid).unwrap(),
+            generation: ResourceGeneration::new(1).unwrap(),
+            revision: ZoneRevision::new(1),
+            canonical_json,
+            payload_digest: envelope.digest().unwrap(),
+        }
+    }
+
+    fn policy_resource(
+        resource_type: &str,
+        name: &str,
+        uid: &str,
+        spec: Value,
+    ) -> StoredResource {
+        let zone = ZoneId::parse("work").unwrap();
+        let value = json!({
+            "apiVersion": "resources.d2bus.org/v3",
+            "type": resource_type,
+            "metadata": {
+                "name": name,
+                "zone": zone.as_str(),
+                "uid": uid,
+                "generation": 1,
+                "revision": 1,
+                "ownerRef": null,
+                "finalizers": [],
+                "deletionRequestedAt": null,
+                "createdAt": "2026-08-26T00:00:00.000Z",
+                "updatedAt": "2026-08-26T00:00:00.000Z",
+                "managedBy": "configuration",
+                "configurationGeneration": 1,
+            },
+            "spec": spec,
+            "status": {
+                "completedAt": null,
+                "conditions": [],
+                "lastReconciledAt": null,
+                "observedGeneration": 1,
+                "outcome": null,
+                "phase": "Ready",
+                "resource": {},
+                "startedAt": null,
+                "update": {
+                    "dependencies": {"count": 0, "refs": []},
+                    "disruption": "None",
+                    "lastAssessedAt": null,
+                    "observedGeneration": 1,
+                    "operationId": null,
+                    "owned": {"count": 0, "refs": []},
+                    "preserveState": true,
+                    "reasons": [],
+                    "state": "Current",
+                    "targetGeneration": 1,
+                },
+            },
+        });
+        let canonical_json = d2b_contracts_resource::v3::canonical_json_bytes(&value).unwrap();
+        let envelope = ResourceEnvelope::from_json(&canonical_json).unwrap();
+        StoredResource {
+            resource_ref: ResourceRef::parse(&format!("{resource_type}/{name}")).unwrap(),
+            zone,
+            uid: ResourceUid::parse(uid).unwrap(),
+            generation: ResourceGeneration::new(1).unwrap(),
+            revision: ZoneRevision::new(1),
+            canonical_json,
+            payload_digest: envelope.digest().unwrap(),
+        }
+    }
+
+    fn set_status(resource: &mut StoredResource, phase: &str, observed_generation: u64) {
+        let mut value: Value = serde_json::from_slice(&resource.canonical_json).unwrap();
+        value["status"]["phase"] = json!(phase);
+        value["status"]["observedGeneration"] = json!(observed_generation);
+        value["status"]["update"]["observedGeneration"] = json!(observed_generation);
+        resource.canonical_json =
+            d2b_contracts_resource::v3::canonical_json_bytes(&value).unwrap();
+        resource.payload_digest = ResourceEnvelope::from_json(&resource.canonical_json)
+            .unwrap()
+            .digest()
+            .unwrap();
+    }
+
+    fn set_identity(resource: &mut StoredResource, uid: &str, generation: u64) {
+        let mut value: Value = serde_json::from_slice(&resource.canonical_json).unwrap();
+        value["metadata"]["uid"] = json!(uid);
+        value["metadata"]["generation"] = json!(generation);
+        value["status"]["observedGeneration"] = json!(generation);
+        value["status"]["update"]["observedGeneration"] = json!(generation);
+        resource.uid = ResourceUid::parse(uid).unwrap();
+        resource.generation = ResourceGeneration::new(generation).unwrap();
+        resource.canonical_json =
+            d2b_contracts_resource::v3::canonical_json_bytes(&value).unwrap();
+        resource.payload_digest = ResourceEnvelope::from_json(&resource.canonical_json)
+            .unwrap()
+            .digest()
+            .unwrap();
+    }
+
+    fn set_binding_subjects(resource: &mut StoredResource, subjects: &[&str]) {
+        let mut value: Value = serde_json::from_slice(&resource.canonical_json).unwrap();
+        value["spec"]["subjects"] = json!(subjects);
+        resource.canonical_json =
+            d2b_contracts_resource::v3::canonical_json_bytes(&value).unwrap();
+        resource.payload_digest = ResourceEnvelope::from_json(&resource.canonical_json)
+            .unwrap()
+            .digest()
+            .unwrap();
+    }
+
+    fn subject_context(subject_ref: &str, subject_uid: &str) -> AuthenticatedSubjectContext {
+        AuthenticatedSubjectContext::new(
+            ResourceRef::parse(subject_ref).unwrap(),
+            ResourceUid::parse(subject_uid).unwrap(),
+            ResourceRef::parse("Zone/work").unwrap(),
+            EvidenceClass::UnixPeer,
+            SessionPurpose::parse("resource-api").unwrap(),
+            ServiceName::parse("d2b.resource.v3").unwrap(),
+            SessionBinding::new(
+                SchemaFingerprint::parse(format!("sha256:{}", "1".repeat(64))).unwrap(),
+                TransportBinding::new(
+                    IdentityLocality::Local,
+                    BindingDigest::parse(format!("sha256:{}", "2".repeat(64))).unwrap(),
+                ),
+                ReconnectGeneration::new(1).unwrap(),
+                TranscriptHash::from_bytes([3; 32]),
+            ),
+        )
+    }
+
+    fn policy_request(zone: &ZoneId) -> AuthorizationRequest {
+        AuthorizationRequest {
+            method: ApiMethod::Get,
+            zone: zone.clone(),
+            targets: vec![AuthorizationTarget {
+                resource_type: ResourceTypeName::parse("Guest").unwrap(),
+                resource_name: Some(ResourceName::parse("workstation").unwrap()),
+                verb: ResourceVerb::Get,
+                subresource: None,
+                execution_ref: None,
+            }],
+        }
+    }
+
+    #[test]
+    fn committed_policy_loader_uses_the_closed_local_subject_resource_set() {
+        assert_eq!(
+            ROLE_BINDING_SUBJECT_RESOURCE_TYPES,
+            ["Zone", "User", "Provider", "Host", "Guest", "Process"]
+        );
+        assert_eq!(
+            COMMITTED_POLICY_RESOURCE_TYPES,
+            [
+                "Role",
+                "RoleBinding",
+                "Zone",
+                "User",
+                "Provider",
+                "Host",
+                "Guest",
+                "Process",
+            ]
+        );
+    }
+
+    #[test]
+    fn public_peer_uid_resolves_to_one_ready_zone_local_user() {
+        let zone = ZoneId::parse("work").unwrap();
+        let user = user_resource(
+            "alice",
+            "123e4567-e89b-42d3-a456-426614174000",
+            "alice",
+            "Ready",
+        );
+        let resolved =
+            resolve_zone_user_from_resources(&zone, 1000, &[user], |name| {
+                (name == "alice").then_some(1000)
+            })
+            .unwrap();
+        assert_eq!(resolved.subject_ref().to_canonical_string(), "User/alice");
+        assert_eq!(
+            resolved.subject_uid().as_str(),
+            "123e4567-e89b-42d3-a456-426614174000"
+        );
+        assert_eq!(resolved.generation(), ResourceGeneration::new(1).unwrap());
+        assert_eq!(resolved.revision(), ZoneRevision::new(1));
+    }
+
+    #[test]
+    fn public_peer_uid_rejects_duplicate_or_stale_user_matches() {
+        let zone = ZoneId::parse("work").unwrap();
+        let first = user_resource(
+            "alice",
+            "123e4567-e89b-42d3-a456-426614174000",
+            "alice",
+            "Ready",
+        );
+        let second = user_resource(
+            "alice-copy",
+            "223e4567-e89b-42d3-a456-426614174000",
+            "alice",
+            "Ready",
+        );
+        assert!(
+            resolve_zone_user_from_resources(
+                &zone,
+                1000,
+                &[first.clone(), second],
+                |name| (name == "alice").then_some(1000),
+            )
+            .is_err()
+        );
+        assert!(
+            resolve_zone_user_from_resources(
+                &zone,
+                1000,
+                &[user_resource(
+                    "alice",
+                    "323e4567-e89b-42d3-a456-426614174000",
+                    "alice",
+                    "Pending",
+                )],
+                |name| (name == "alice").then_some(1000),
+            )
+            .is_err()
+        );
+        assert!(
+            resolve_zone_user_from_resources(&zone, 1001, &[first], |name| {
+                (name == "alice").then_some(1000)
+            })
+            .is_err()
+        );
+        let mut stale = user_resource(
+            "alice",
+            "423e4567-e89b-42d3-a456-426614174000",
+            "alice",
+            "Ready",
+        );
+        let mut stale_value: Value = serde_json::from_slice(&stale.canonical_json).unwrap();
+        stale_value["status"]["observedGeneration"] = json!(0);
+        stale.canonical_json = d2b_contracts_resource::v3::canonical_json_bytes(&stale_value)
+            .unwrap();
+        assert!(
+            resolve_zone_user_from_resources(&zone, 1000, &[stale], |name| {
+                (name == "alice").then_some(1000)
+            })
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn committed_roles_and_bindings_compile_into_distinct_user_grants() {
+        let zone = ZoneId::parse("work").unwrap();
+        let users = [
+            user_resource(
+                "alice",
+                "123e4567-e89b-42d3-a456-426614174000",
+                "alice",
+                "Ready",
+            ),
+            user_resource(
+                "bob",
+                "223e4567-e89b-42d3-a456-426614174000",
+                "bob",
+                "Ready",
+            ),
+        ];
+        let alice_role = policy_resource(
+            "Role",
+            "alice-reader",
+            "323e4567-e89b-42d3-a456-426614174000",
+            json!({
+                "rules": [{
+                    "resourceTypes": ["Guest"],
+                    "verbs": ["get"],
+                    "subresources": [],
+                    "resourceNames": ["workstation"],
+                    "zones": ["work"],
+                    "executionRefs": [],
+                    "sessionVerbs": ["connect", "invoke"],
+                }],
+            }),
+        );
+        let bob_role = policy_resource(
+            "Role",
+            "bob-reader",
+            "423e4567-e89b-42d3-a456-426614174000",
+            json!({
+                "rules": [{
+                    "resourceTypes": ["Process"],
+                    "verbs": ["get"],
+                    "subresources": [],
+                    "resourceNames": ["agent"],
+                    "zones": ["work"],
+                    "executionRefs": [],
+                    "sessionVerbs": ["connect", "invoke"],
+                }],
+            }),
+        );
+        let alice_binding = policy_resource(
+            "RoleBinding",
+            "alice-binding",
+            "523e4567-e89b-42d3-a456-426614174000",
+            json!({
+                "roleRef": "Role/alice-reader",
+                "subjects": ["User/alice"],
+                "externalPrincipalSelector": null,
+                "scopeNarrowing": null,
+            }),
+        );
+        let bob_binding = policy_resource(
+            "RoleBinding",
+            "bob-binding",
+            "623e4567-e89b-42d3-a456-426614174000",
+            json!({
+                "roleRef": "Role/bob-reader",
+                "subjects": ["User/bob"],
+                "externalPrincipalSelector": null,
+                "scopeNarrowing": null,
+            }),
+        );
+        let mut resources = users.to_vec();
+        resources.extend([alice_role, bob_role, alice_binding, bob_binding]);
+        let (policy, state) = compile_committed_policy(
+            &zone,
+            initial_policy_snapshot().unwrap(),
+            ZoneRevision::new(7),
+            &[],
+            &resources,
+        )
+        .unwrap();
+        let authorizer =
+            NativeAuthorizer::new(ApiCatalog::standard(), Some(policy)).unwrap();
+        let alice_user = resolve_zone_user_from_resources(&zone, 1000, &resources, |name| {
+            (name == "alice").then_some(1000)
+        })
+        .unwrap();
+        let bob_user = resolve_zone_user_from_resources(&zone, 1001, &resources, |name| {
+            (name == "bob").then_some(1001)
+        })
+        .unwrap();
+        let alice_context =
+            local_user_subject_context(&zone, &alice_user, "alice-op").unwrap();
+        let bob_context = local_user_subject_context(&zone, &bob_user, "bob-op").unwrap();
+        let alice_caps = authorizer
+            .positive_capabilities(&alice_context, &zone, &state)
+            .unwrap();
+        let bob_caps = authorizer
+            .positive_capabilities(&bob_context, &zone, &state)
+            .unwrap();
+        assert!(alice_caps.resources.iter().any(|target| {
+            target.resource_type.as_str() == "Guest"
+                && target.resource_name.as_ref().is_some_and(|name| name.as_str() == "workstation")
+        }));
+        assert!(!alice_caps.resources.iter().any(|target| {
+            target.resource_type.as_str() == "Process"
+                && target.resource_name.as_ref().is_some_and(|name| name.as_str() == "agent")
+        }));
+        assert!(bob_caps.resources.iter().any(|target| {
+            target.resource_type.as_str() == "Process"
+                && target.resource_name.as_ref().is_some_and(|name| name.as_str() == "agent")
+        }));
+        assert!(!bob_caps.resources.iter().any(|target| {
+            target.resource_type.as_str() == "Guest"
+                && target.resource_name.as_ref().is_some_and(|name| name.as_str() == "workstation")
+        }));
+    }
+
+    #[test]
+    fn committed_policy_compiles_all_closed_role_binding_subject_types() {
+        let zone = ZoneId::parse("work").unwrap();
+        let role = policy_resource(
+                "Role",
+                "all-subjects-reader",
+                "733e4567-e89b-42d3-a456-426614174000",
+                json!({
+                    "rules": [{
+                        "resourceTypes": ["Guest"],
+                        "verbs": ["get"],
+                        "subresources": [],
+                        "resourceNames": ["workstation"],
+                        "zones": ["work"],
+                        "executionRefs": [],
+                        "sessionVerbs": ["connect", "invoke"],
+                    }],
+                }),
+        );
+        let subjects = [
+                ("Zone/work", "133e4567-e89b-42d3-a456-426614174000"),
+                ("User/alice", "233e4567-e89b-42d3-a456-426614174000"),
+                ("Provider/test-provider", "333e4567-e89b-42d3-a456-426614174000"),
+                ("Host/test-host", "433e4567-e89b-42d3-a456-426614174000"),
+                ("Guest/test-guest", "533e4567-e89b-42d3-a456-426614174000"),
+                ("Process/test-process", "633e4567-e89b-42d3-a456-426614174000"),
+        ];
+        let binding = policy_resource(
+                "RoleBinding",
+                "all-subjects-binding",
+                "833e4567-e89b-42d3-a456-426614174000",
+                json!({
+                    "roleRef": "Role/all-subjects-reader",
+                    "subjects": subjects.iter().map(|(subject, _)| *subject).collect::<Vec<_>>(),
+                    "externalPrincipalSelector": null,
+                    "scopeNarrowing": null,
+                }),
+        );
+        let mut resources = vec![role, binding];
+        resources.extend(subjects.iter().map(|(subject, uid)| {
+                let (resource_type, name) = subject.split_once('/').unwrap();
+                policy_resource(resource_type, name, uid, json!({}))
+        }));
+
+        let (policy, state) = compile_committed_policy(
+                &zone,
+                initial_policy_snapshot().unwrap(),
+                ZoneRevision::new(7),
+                &[],
+                &resources,
+        )
+        .unwrap();
+        let authorizer =
+                NativeAuthorizer::new(ApiCatalog::standard(), Some(policy)).unwrap();
+        for (subject_ref, subject_uid) in subjects {
+                let capabilities = authorizer
+                    .positive_capabilities(
+                        &subject_context(subject_ref, subject_uid),
+                        &zone,
+                        &state,
+                    )
+                    .unwrap();
+                assert!(
+                    capabilities.resources.iter().any(|target| {
+                        target.resource_type.as_str() == "Guest"
+                            && target
+                                .resource_name
+                                .as_ref()
+                                .is_some_and(|name| name.as_str() == "workstation")
+                    }),
+                    "{subject_ref} should receive the RoleBinding grant"
+                );
+        }
+    }
+
+    #[test]
+    fn missing_subject_does_not_invalidate_other_grants_or_authorize_missing_subject() {
+        let zone = ZoneId::parse("work").unwrap();
+        let role = policy_resource(
+                "Role",
+                "mixed-reader",
+                "933e4567-e89b-42d3-a456-426614174000",
+                json!({
+                    "rules": [{
+                        "resourceTypes": ["Guest"],
+                        "verbs": ["get"],
+                        "subresources": [],
+                        "resourceNames": ["workstation"],
+                        "zones": ["work"],
+                        "executionRefs": [],
+                        "sessionVerbs": ["connect", "invoke"],
+                    }],
+                }),
+        );
+        let binding = policy_resource(
+                "RoleBinding",
+                "mixed-binding",
+                "a33e4567-e89b-42d3-a456-426614174000",
+                json!({
+                    "roleRef": "Role/mixed-reader",
+                    "subjects": ["Host/valid-host", "Host/missing-host"],
+                    "externalPrincipalSelector": null,
+                    "scopeNarrowing": null,
+                }),
+        );
+        let valid_subject = policy_resource(
+                "Host",
+                "valid-host",
+                "b33e4567-e89b-42d3-a456-426614174000",
+                json!({}),
+        );
+        let (policy, state) = compile_committed_policy(
+                &zone,
+                initial_policy_snapshot().unwrap(),
+                ZoneRevision::new(7),
+                &[],
+                &[role, binding, valid_subject],
+        )
+        .unwrap();
+        let authorizer =
+                NativeAuthorizer::new(ApiCatalog::standard(), Some(policy)).unwrap();
+        let valid_context =
+                subject_context("Host/valid-host", "b33e4567-e89b-42d3-a456-426614174000");
+        assert!(
+                !authorizer
+                    .positive_capabilities(&valid_context, &zone, &state)
+                    .unwrap()
+                    .resources
+                    .is_empty()
+        );
+        let missing_context =
+                subject_context("Host/missing-host", "c33e4567-e89b-42d3-a456-426614174000");
+        assert!(
+                authorizer
+                    .positive_capabilities(&missing_context, &zone, &state)
+                    .unwrap()
+                    .resources
+                    .is_empty()
+        );
+        assert_eq!(
+                authorizer
+                    .authorize(&missing_context, &policy_request(&zone), &state)
+                    .unwrap_err(),
+                AuthorizationDenial::NoMatchingGrant
+        );
+    }
+
+    #[test]
+    fn deleted_unready_or_stale_subjects_receive_no_grant() {
+        for (phase, observed_generation) in [("Deleted", 1), ("Pending", 1), ("Ready", 0)] {
+                let zone = ZoneId::parse("work").unwrap();
+                let role = policy_resource(
+                    "Role",
+                    "subject-state-reader",
+                    "d33e4567-e89b-42d3-a456-426614174000",
+                    json!({
+                        "rules": [{
+                            "resourceTypes": ["Guest"],
+                            "verbs": ["get"],
+                            "subresources": [],
+                            "resourceNames": ["workstation"],
+                            "zones": ["work"],
+                            "executionRefs": [],
+                            "sessionVerbs": ["connect", "invoke"],
+                        }],
+                    }),
+                );
+                let binding = policy_resource(
+                    "RoleBinding",
+                    "subject-state-binding",
+                    "e33e4567-e89b-42d3-a456-426614174000",
+                    json!({
+                        "roleRef": "Role/subject-state-reader",
+                        "subjects": ["Provider/stateful-subject"],
+                        "externalPrincipalSelector": null,
+                        "scopeNarrowing": null,
+                    }),
+                );
+                let mut subject = policy_resource(
+                    "Provider",
+                    "stateful-subject",
+                    "f33e4567-e89b-42d3-a456-426614174000",
+                    json!({}),
+                );
+                set_status(&mut subject, phase, observed_generation);
+                let (policy, state) = compile_committed_policy(
+                    &zone,
+                    initial_policy_snapshot().unwrap(),
+                    ZoneRevision::new(7),
+                    &[],
+                    &[role, binding, subject],
+                )
+                .unwrap();
+                let authorizer =
+                    NativeAuthorizer::new(ApiCatalog::standard(), Some(policy)).unwrap();
+                let capabilities = authorizer
+                    .positive_capabilities(
+                        &subject_context(
+                            "Provider/stateful-subject",
+                            "f33e4567-e89b-42d3-a456-426614174000",
+                        ),
+                        &zone,
+                        &state,
+                    )
+                    .unwrap();
+                assert!(
+                    capabilities.resources.is_empty(),
+                    "{phase} subject must not receive a grant"
+                );
+        }
+    }
+
+    #[test]
+    fn missing_or_unready_subjects_do_not_create_policy_fingerprints() {
+        let role = policy_resource(
+                "Role",
+                "fingerprint-reader",
+                "033e4567-e89b-42d3-a456-426614174000",
+                json!({
+                    "rules": [{
+                        "resourceTypes": ["Guest"],
+                        "verbs": ["get"],
+                        "subresources": [],
+                        "resourceNames": ["workstation"],
+                        "zones": ["work"],
+                        "executionRefs": [],
+                        "sessionVerbs": ["connect", "invoke"],
+                    }],
+                }),
+        );
+        let binding = policy_resource(
+                "RoleBinding",
+                "fingerprint-binding",
+                "143e4567-e89b-42d3-a456-426614174000",
+                json!({
+                    "roleRef": "Role/fingerprint-reader",
+                    "subjects": ["Provider/missing-subject", "Provider/unready-subject"],
+                    "externalPrincipalSelector": null,
+                    "scopeNarrowing": null,
+                }),
+        );
+        let mut unready = policy_resource(
+                "Provider",
+                "unready-subject",
+                "243e4567-e89b-42d3-a456-426614174000",
+                json!({}),
+        );
+        set_status(&mut unready, "Pending", 1);
+        assert!(
+                committed_policy_subject_fingerprints(&[role, binding, unready])
+                    .unwrap()
+                    .is_empty()
+        );
+    }
+
+    #[test]
+    fn recreated_subject_uid_is_fenced_until_binding_changes() {
+        let binding = policy_resource(
+                "RoleBinding",
+                "provider-binding",
+                "353e4567-e89b-42d3-a456-426614174000",
+                json!({
+                    "roleRef": "Role/provider-reader",
+                    "subjects": ["Provider/system-provider"],
+                    "externalPrincipalSelector": null,
+                    "scopeNarrowing": null,
+                }),
+        );
+        let role = policy_resource(
+                "Role",
+                "provider-reader",
+                "463e4567-e89b-42d3-a456-426614174000",
+                json!({
+                    "rules": [{
+                        "resourceTypes": ["Guest"],
+                        "verbs": ["get"],
+                        "subresources": [],
+                        "resourceNames": ["workstation"],
+                        "zones": ["work"],
+                        "executionRefs": [],
+                        "sessionVerbs": ["connect", "invoke"],
+                    }],
+                }),
+        );
+        let first_subject = policy_resource(
+                "Provider",
+                "system-provider",
+                "573e4567-e89b-42d3-a456-426614174000",
+                json!({}),
+        );
+        let recreated_subject = policy_resource(
+                "Provider",
+                "system-provider",
+                "683e4567-e89b-42d3-a456-426614174000",
+                json!({}),
+        );
+        let first = committed_policy_subject_fingerprints(&[
+                role.clone(),
+                binding.clone(),
+                first_subject,
+        ])
+        .unwrap();
+        let recreated =
+                committed_policy_subject_fingerprints(&[role, binding, recreated_subject]).unwrap();
+        let key = (
+                ResourceRef::parse("RoleBinding/provider-binding").unwrap(),
+                ResourceRef::parse("Provider/system-provider").unwrap(),
+        );
+        assert_ne!(first[&key].subject_uid(), recreated[&key].subject_uid());
+        assert!(!policy_subject_fingerprint_allows_refresh(
+                Some(&first[&key]),
+                &recreated[&key],
+        ));
+    }
+
+    #[test]
+    fn unknown_or_cross_zone_role_binding_subjects_are_refused() {
+        let zone = ZoneId::parse("work").unwrap();
+        let role = policy_resource(
+                "Role",
+                "refusal-reader",
+                "793e4567-e89b-42d3-a456-426614174000",
+                json!({
+                    "rules": [{
+                        "resourceTypes": ["Guest"],
+                        "verbs": ["get"],
+                        "subresources": [],
+                        "resourceNames": ["workstation"],
+                        "zones": ["work"],
+                        "executionRefs": [],
+                        "sessionVerbs": ["connect", "invoke"],
+                    }],
+                }),
+        );
+        for subject in ["Quota/not-allowed", "Zone/other"] {
+                let binding = policy_resource(
+                    "RoleBinding",
+                    "refusal-binding",
+                    "8a3e4567-e89b-42d3-a456-426614174000",
+                    json!({
+                        "roleRef": "Role/refusal-reader",
+                        "subjects": [subject],
+                        "externalPrincipalSelector": null,
+                        "scopeNarrowing": null,
+                    }),
+                );
+                assert_eq!(
+                    compile_committed_policy(
+                        &zone,
+                        initial_policy_snapshot().unwrap(),
+                        ZoneRevision::new(7),
+                        &[],
+                        &[role.clone(), binding],
+                    )
+                    .unwrap_err(),
+                    ResourceRuntimeError::AuthorizationUnavailable
+                );
+        }
+    }
+
+    #[test]
+    fn subject_store_evidence_must_match_uid_generation_and_revision() {
+        let zone = ZoneId::parse("work").unwrap();
+        let role = policy_resource(
+                "Role",
+                "evidence-reader",
+                "9b3e4567-e89b-42d3-a456-426614174000",
+                json!({
+                    "rules": [{
+                        "resourceTypes": ["Guest"],
+                        "verbs": ["get"],
+                        "subresources": [],
+                        "resourceNames": ["workstation"],
+                        "zones": ["work"],
+                        "executionRefs": [],
+                        "sessionVerbs": ["connect", "invoke"],
+                    }],
+                }),
+        );
+        let binding = policy_resource(
+                "RoleBinding",
+                "evidence-binding",
+                "aa3e4567-e89b-42d3-a456-426614174000",
+                json!({
+                    "roleRef": "Role/evidence-reader",
+                    "subjects": ["Host/evidence-host"],
+                    "externalPrincipalSelector": null,
+                    "scopeNarrowing": null,
+                }),
+        );
+        let mut subject = policy_resource(
+                "Host",
+                "evidence-host",
+                "ab3e4567-e89b-42d3-a456-426614174000",
+                json!({}),
+        );
+        subject.revision = ZoneRevision::new(2);
+        assert_eq!(
+                compile_committed_policy(
+                    &zone,
+                    initial_policy_snapshot().unwrap(),
+                    ZoneRevision::new(7),
+                    &[],
+                    &[role, binding, subject],
+                )
+                .unwrap_err(),
+                ResourceRuntimeError::AuthorizationUnavailable
+        );
+    }
+
+    #[test]
+    fn role_binding_fingerprint_changes_for_same_name_user_recreation() {
+        let binding = policy_resource(
+                "RoleBinding",
+            "alice-binding",
+            "523e4567-e89b-42d3-a456-426614174000",
+            json!({
+                "roleRef": "Role/alice-reader",
+                "subjects": ["User/alice"],
+                "externalPrincipalSelector": null,
+                "scopeNarrowing": null,
+            }),
+        );
+        let role = policy_resource(
+            "Role",
+            "alice-reader",
+            "323e4567-e89b-42d3-a456-426614174000",
+            json!({
+                "rules": [{
+                    "resourceTypes": ["Guest"],
+                    "verbs": ["get"],
+                    "subresources": [],
+                    "resourceNames": ["workstation"],
+                    "zones": ["work"],
+                    "executionRefs": [],
+                    "sessionVerbs": ["connect", "invoke"],
+                }],
+            }),
+        );
+        let first_user = user_resource(
+            "alice",
+            "123e4567-e89b-42d3-a456-426614174000",
+            "alice",
+            "Ready",
+        );
+        let second_user = user_resource(
+            "alice",
+            "223e4567-e89b-42d3-a456-426614174000",
+            "alice",
+            "Ready",
+        );
+        let first = committed_policy_subject_fingerprints(&[
+            first_user,
+            role.clone(),
+            binding.clone(),
+        ])
+        .unwrap();
+        let second = committed_policy_subject_fingerprints(&[
+            second_user,
+            role,
+            binding,
+        ])
+        .unwrap();
+        let key = (
+            ResourceRef::parse("RoleBinding/alice-binding").unwrap(),
+            ResourceRef::parse("User/alice").unwrap(),
+        );
+        assert_ne!(first[&key].subject_uid(), second[&key].subject_uid());
+        assert!(!policy_subject_fingerprint_allows_refresh(
+            Some(&first[&key]),
+            &second[&key],
+        ));
+        assert!(policy_subject_fingerprint_allows_refresh(
+            Some(&first[&key]),
+            &first[&key],
+        ));
+    }
+
+    #[test]
+    fn multi_revision_subject_refresh_retains_fences_and_requires_rebinding() {
+        let zone = ZoneId::parse("work").unwrap();
+        let role = policy_resource(
+            "Role",
+            "fence-reader",
+            "313e4567-e89b-42d3-a456-426614174000",
+            json!({
+                "rules": [{
+                    "resourceTypes": ["Guest"],
+                    "verbs": ["get"],
+                    "subresources": [],
+                    "resourceNames": ["workstation"],
+                    "zones": ["work"],
+                    "executionRefs": [],
+                    "sessionVerbs": ["connect", "invoke"],
+                }],
+            }),
+        );
+        let binding = policy_resource(
+            "RoleBinding",
+            "fence-binding",
+            "323e4567-e89b-42d3-a456-426614174000",
+            json!({
+                "roleRef": "Role/fence-reader",
+                "subjects": ["Provider/fenced-subject"],
+                "externalPrincipalSelector": null,
+                "scopeNarrowing": null,
+            }),
+        );
+        let subject_v1 = policy_resource(
+            "Provider",
+            "fenced-subject",
+            "333e4567-e89b-42d3-a456-426614174000",
+            json!({}),
+        );
+        let key = (
+            ResourceRef::parse("RoleBinding/fence-binding").unwrap(),
+            ResourceRef::parse("Provider/fenced-subject").unwrap(),
+        );
+        let first_resources = vec![role.clone(), binding.clone(), subject_v1.clone()];
+        let first = refreshed_policy_subject_fingerprints(&first_resources, &BTreeMap::new())
+            .unwrap();
+        assert_eq!(
+            first[&key].subject_uid().as_str(),
+            "333e4567-e89b-42d3-a456-426614174000"
+        );
+        let (policy, state) = compile_committed_policy(
+            &zone,
+            initial_policy_snapshot().unwrap(),
+            ZoneRevision::new(1),
+            &[],
+            &first_resources,
+        )
+        .unwrap();
+        let authorizer = NativeAuthorizer::new(ApiCatalog::standard(), Some(policy)).unwrap();
+        assert!(
+            !authorizer
+                .positive_capabilities(
+                    &subject_context(
+                        "Provider/fenced-subject",
+                        "333e4567-e89b-42d3-a456-426614174000",
+                    ),
+                    &zone,
+                    &state,
+                )
+                .unwrap()
+                .resources
+                .is_empty()
+        );
+
+        let missing_resources = vec![role.clone(), binding.clone()];
+        let retained =
+            refreshed_policy_subject_fingerprints(&missing_resources, &first).unwrap();
+        assert_eq!(retained[&key].subject_uid(), first[&key].subject_uid());
+
+        for phase in ["Pending", "Deleted"] {
+            let mut absent_subject = subject_v1.clone();
+            set_status(&mut absent_subject, phase, 1);
+            let resources = vec![role.clone(), binding.clone(), absent_subject];
+            let retained = refreshed_policy_subject_fingerprints(&resources, &first).unwrap();
+            assert_eq!(retained[&key].subject_uid(), first[&key].subject_uid());
+            let (policy, state) = compile_committed_policy(
+                &zone,
+                initial_policy_snapshot().unwrap(),
+                ZoneRevision::new(2),
+                &[],
+                &resources,
+            )
+            .unwrap();
+            let authorizer =
+                NativeAuthorizer::new(ApiCatalog::standard(), Some(policy)).unwrap();
+            assert!(
+                authorizer
+                    .positive_capabilities(
+                        &subject_context(
+                            "Provider/fenced-subject",
+                            "333e4567-e89b-42d3-a456-426614174000",
+                        ),
+                        &zone,
+                        &state,
+                    )
+                    .unwrap()
+                    .resources
+                    .is_empty(),
+                "{phase} subject must lose its grant"
+            );
+        }
+
+        let unrelated_role = policy_resource(
+            "Role",
+            "unrelated-reader",
+            "343e4567-e89b-42d3-a456-426614174000",
+            json!({
+                "rules": [{
+                    "resourceTypes": ["Guest"],
+                    "verbs": ["get"],
+                    "subresources": [],
+                    "resourceNames": ["workstation"],
+                    "zones": ["work"],
+                    "executionRefs": [],
+                    "sessionVerbs": ["connect", "invoke"],
+                }],
+            }),
+        );
+        let unrelated_binding = policy_resource(
+            "RoleBinding",
+            "unrelated-binding",
+            "353e4567-e89b-42d3-a456-426614174000",
+            json!({
+                "roleRef": "Role/unrelated-reader",
+                "subjects": ["Provider/unrelated-subject"],
+                "externalPrincipalSelector": null,
+                "scopeNarrowing": null,
+            }),
+        );
+        let unrelated_subject = policy_resource(
+            "Provider",
+            "unrelated-subject",
+            "363e4567-e89b-42d3-a456-426614174000",
+            json!({}),
+        );
+        let unrelated_key = (
+            ResourceRef::parse("RoleBinding/unrelated-binding").unwrap(),
+            ResourceRef::parse("Provider/unrelated-subject").unwrap(),
+        );
+        let mut unrelated_resources = vec![
+            role.clone(),
+            binding.clone(),
+            unrelated_role,
+            unrelated_binding,
+            unrelated_subject,
+        ];
+        let mut absent_subject = subject_v1.clone();
+        set_status(&mut absent_subject, "Pending", 1);
+        unrelated_resources.push(absent_subject);
+        let refreshed =
+            refreshed_policy_subject_fingerprints(&unrelated_resources, &first).unwrap();
+        assert_eq!(refreshed[&key].subject_uid(), first[&key].subject_uid());
+        assert_eq!(
+            refreshed[&unrelated_key].subject_uid().as_str(),
+            "363e4567-e89b-42d3-a456-426614174000"
+        );
+        let (policy, state) = compile_committed_policy(
+            &zone,
+            initial_policy_snapshot().unwrap(),
+            ZoneRevision::new(3),
+            &[],
+            &unrelated_resources,
+        )
+        .unwrap();
+        let authorizer = NativeAuthorizer::new(ApiCatalog::standard(), Some(policy)).unwrap();
+        assert!(
+            !authorizer
+                .positive_capabilities(
+                    &subject_context(
+                        "Provider/unrelated-subject",
+                        "363e4567-e89b-42d3-a456-426614174000",
+                    ),
+                    &zone,
+                    &state,
+                )
+                .unwrap()
+                .resources
+                .is_empty()
+        );
+        assert!(
+            authorizer
+                .positive_capabilities(
+                    &subject_context(
+                        "Provider/fenced-subject",
+                        "333e4567-e89b-42d3-a456-426614174000",
+                    ),
+                    &zone,
+                    &state,
+                )
+                .unwrap()
+                .resources
+                .is_empty()
+        );
+
+        let subject_v2 = policy_resource(
+            "Provider",
+            "fenced-subject",
+            "373e4567-e89b-42d3-a456-426614174000",
+            json!({}),
+        );
+        assert!(matches!(
+            refreshed_policy_subject_fingerprints(
+                &[role.clone(), binding.clone(), subject_v2.clone()],
+                &refreshed,
+            ),
+            Err(ResourceRuntimeError::IdentityUnbound)
+        ));
+
+        let mut rebound = binding.clone();
+        set_identity(
+            &mut rebound,
+            "383e4567-e89b-42d3-a456-426614174000",
+            2,
+        );
+        let rebound_resources = vec![role.clone(), rebound.clone(), subject_v2.clone()];
+        let rebound_fingerprints =
+            refreshed_policy_subject_fingerprints(&rebound_resources, &refreshed).unwrap();
+        assert_eq!(
+            rebound_fingerprints[&key].subject_uid().as_str(),
+            "373e4567-e89b-42d3-a456-426614174000"
+        );
+        let (policy, state) = compile_committed_policy(
+            &zone,
+            initial_policy_snapshot().unwrap(),
+            ZoneRevision::new(4),
+            &[],
+            &rebound_resources,
+        )
+        .unwrap();
+        let authorizer = NativeAuthorizer::new(ApiCatalog::standard(), Some(policy)).unwrap();
+        assert!(
+            !authorizer
+                .positive_capabilities(
+                    &subject_context(
+                        "Provider/fenced-subject",
+                        "373e4567-e89b-42d3-a456-426614174000",
+                    ),
+                    &zone,
+                    &state,
+                )
+                .unwrap()
+                .resources
+                .is_empty()
+        );
+
+        let mut removed = rebound;
+        set_binding_subjects(&mut removed, &["Provider/other-subject"]);
+        let removed_fingerprints = refreshed_policy_subject_fingerprints(
+            &[role.clone(), removed, subject_v2],
+            &rebound_fingerprints,
+        )
+        .unwrap();
+        assert!(!removed_fingerprints.contains_key(&key));
+        assert!(removed_fingerprints.is_empty());
+        let deleted_fingerprints =
+            refreshed_policy_subject_fingerprints(&[role], &rebound_fingerprints).unwrap();
+        assert!(deleted_fingerprints.is_empty());
+    }
 
     #[test]
     fn phase_only_status_preserves_existing_resource_projection() {

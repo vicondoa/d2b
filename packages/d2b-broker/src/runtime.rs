@@ -209,6 +209,7 @@ enum BrokerError {
         operation: &'static str,
     },
     AuditRequiresAdmin,
+    HostShutdownRestricted,
     #[cfg_attr(not(feature = "layer1-bootstrap"), allow(dead_code))]
     ValidateBundle(String),
     /// Broker started without a loadable bundle at
@@ -2095,6 +2096,19 @@ fn dispatch_request_with_backend_and_request_fds<B: DispatchBackend>(
         return Err(BrokerError::Protocol(
             "unexpected request SCM_RIGHTS descriptor".to_owned(),
         ));
+    }
+    if matches!(caller_role, CallerRole::HostShutdownUid { .. })
+        && !matches!(
+            request,
+            RealBrokerRequest::Hello(_)
+                | RealBrokerRequest::SignalRunner(_)
+                | RealBrokerRequest::PollChildReaped
+                | RealBrokerRequest::DeregisterRunnerPidfd(_)
+                | RealBrokerRequest::CgroupKill(_)
+                | RealBrokerRequest::StopSystemdUnit(_)
+        )
+    {
+        return Err(BrokerError::HostShutdownRestricted);
     }
     match request {
         RealBrokerRequest::Hello(req) => {
@@ -5848,6 +5862,7 @@ fn caller_role_authz_result(caller_role: &CallerRole) -> &'static str {
     match caller_role {
         CallerRole::AdminUid { .. } | CallerRole::RootUid { .. } => "admin",
         CallerRole::LauncherUid { .. } => "launcher",
+        CallerRole::HostShutdownUid { .. } => "host-shutdown",
         CallerRole::NotAuthorized => "deny",
     }
 }
@@ -10975,6 +10990,13 @@ impl BrokerError {
                 "USBIP live-device-routing is not yet implemented; only `UsbipBindFirewallRule` skeleton support ships today.",
             ),
             Self::AuditRequiresAdmin => authz_audit_requires_admin_response(),
+            Self::HostShutdownRestricted => error_response(
+                "host-shutdown-restricted",
+                "HostShutdown",
+                None,
+                "host shutdown capability permits only stop",
+                "retry only the stop operation during host shutdown",
+            ),
             Self::MinijailValidation { reason } => error_response(
                 "Broker.MinijailValidation",
                 "SpawnRunner",

@@ -114,7 +114,13 @@ whose acceptor it does not hold.
 
 **Where:** `packages/d2b-bus/src/router.rs` (`ZoneRegistrar`), `packages/d2b-session-unix/src/subject.rs`
 
-`ZoneRegistrar` **exclusively owns and consumes** subject resolution: a peer is mapped to a subject from registrar-private state using verified peer evidence. No public subject-configuration type and no raw-claim registration path, and there must not be one - caller-supplied `subject_ref`/`subject_uid` are exactly how a component would name itself something it is not. Production currently fails closed because no authoritative resolver is wired, which is the intended state until the Zone runtime supplies one; do not "fix" that by accepting claims from the caller. This boundary moved several times before it closed, each time by reappearing as a public constructor or registrar mutator somewhere the guard was not looking, so it is enforced by defining-crate compiler assertions and compile-fail fixtures rather than by convention.
+`ZoneRegistrar` **exclusively owns and consumes** subject resolution: a peer is mapped to a subject from registrar-private state using verified peer evidence. The default `ZoneBus` constructors remain deny-all for committed subject installation; only the opt-in Zone-runtime composition path receives an opaque, registrar-bound issuer. The Zone runtime seals its verified Zone, refs, UIDs, execution ref, and Provider generations into a non-cloneable install capability, while the bus captures controller generation from its private authorizer state. No public subject-configuration type or raw-claim registration path may be reintroduced - caller-supplied `subject_ref`/`subject_uid` are exactly how a component would name itself something it is not. This boundary moved several times before it closed, each time by reappearing as a public constructor or registrar mutator somewhere the guard was not looking, so it is enforced by defining-crate compiler assertions and compile-fail fixtures rather than by convention.
+
+The root public listener applies the same rule to local operators: it maps the
+kernel peer UID through exactly one Ready Zone-local `User` resource and NSS
+record before issuing a Resource API session. A fixed operator subject,
+caller-supplied identity field, duplicate match, or stale User/RoleBinding
+generation fails closed.
 
 ## Capability mint surface allowlist
 

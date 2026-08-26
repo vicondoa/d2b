@@ -25,9 +25,9 @@ use crate::resource_runtime::{
     CommittedInteractionProviderConfiguration, CommittedNotificationProviderConfiguration,
 };
 use d2b_bus::{
-    BusAuthorizer, BusConfig, BusError, BusIngress, CommittedInteractionSubjectInput,
-    ComponentRequestReceiver, ComponentSessionAdmission, NoopBusObserver, OperationId,
-    OperationSpec, RouteGenerations, RouteKey, RouteMember, RouteTarget, ZoneBus, ZoneRegistrar,
+    BusAuthorizer, BusConfig, BusError, BusIngress, ComponentRequestReceiver,
+    ComponentSessionAdmission, OperationId, OperationSpec, RouteGenerations, RouteKey, RouteMember,
+    RouteTarget, ZoneBus, ZoneRegistrar,
 };
 use d2b_contracts_resource::resource_proto as wire;
 use d2b_contracts_resource::v3::identity::{EvidenceClass, ServiceName};
@@ -4907,7 +4907,8 @@ fn validate_production_interaction_resource_state<'b>(
     resource: &ProductionInteractionResourceState<'b>,
 ) -> Result<&'b CommittedInteractionIdentity, BusError> {
     let identity = resource.identity.ok_or(BusError::InvalidConfig)?;
-    if identity.wayland_session_ref().resource_type().as_str()
+    if identity.zone() != &resource.zone
+        || identity.wayland_session_ref().resource_type().as_str()
         != "display-wayland.d2bus.org.WaylandSession"
         || identity.wayland_session_uid().as_str().is_empty()
         || identity.subject_ref().resource_type().as_str() != "Guest"
@@ -4936,10 +4937,6 @@ pub(crate) fn production_interaction_composition(
     let system_core_client = resource
         .system_core_client
         .clone()
-        .ok_or(BusError::InvalidConfig)?;
-    let controller_generation = resource
-        .committed_policy
-        .controller_generation
         .ok_or(BusError::InvalidConfig)?;
     let catalog = ApiCatalog::standard();
     let rule = PolicyRule::new(
@@ -5008,12 +5005,10 @@ pub(crate) fn production_interaction_composition(
     };
     let committed_policy = state.snapshot;
     let authorizer = BusAuthorizer::new(native, state).map_err(|_| BusError::InvalidConfig)?;
-    let (_bus, registrar) = ZoneBus::with_observer_and_metrics(
+    let (_bus, registrar, issuer) = ZoneBus::with_interaction_subject_issuer(
         resource.zone.clone(),
         authorizer,
         BusConfig::default(),
-        std::sync::Arc::new(NoopBusObserver),
-        std::sync::Arc::new(d2b_bus::metrics::NoopBusTelemetry),
     )?;
     let mut composition = InteractionComposition::new_with_notification_port(
         registrar,
@@ -5023,20 +5018,11 @@ pub(crate) fn production_interaction_composition(
     composition.bind_display_resource_client(system_core_client);
     composition
         .registrar
-        .install_committed_interaction_subject(CommittedInteractionSubjectInput {
-            display_subject_ref: identity.subject_ref().clone(),
-            display_subject_uid: identity.subject_uid().clone(),
-            zone_ref: ResourceRef::parse(&format!("Zone/{}", resource.zone.as_str()))
+        .install_committed_interaction_subject(
+            identity
+                .seal_interaction_subject_install(issuer, daemon_uid)
                 .map_err(|_| BusError::InvalidConfig)?,
-            expected_peer_uid: daemon_uid,
-            execution_ref: identity.host_execution_ref().clone(),
-            display_generation: identity.display_provider_generation(),
-            clipboard_generation: identity.clipboard_provider_generation(),
-            notification_generation: identity.notification_provider_generation(),
-            clipboard_provider_uid: identity.clipboard_provider_uid().cloned(),
-            notification_provider_uid: identity.notification_provider_uid().cloned(),
-            controller_generation,
-        })
+        )
         .map_err(|_| BusError::InvalidConfig)?;
     composition.bind_interaction_identity(identity);
     if let Some(configuration) = resource.configuration {
@@ -6314,7 +6300,7 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
-    use d2b_contracts_resource::v3::{ControllerGeneration, ResourceGeneration};
+    use d2b_contracts_resource::v3::ResourceGeneration;
     use d2b_contracts_zone_session::v3::component_session::RequestId;
     use d2b_process::{
         BackendLaunch, BackendObservation, ObservedIdentity, ProcessEffectBackend,
@@ -6984,31 +6970,35 @@ mod tests {
             },
         )
         .unwrap();
-        let (_bus, registrar) = ZoneBus::with_clock_observer_and_metrics(
+        let (_bus, registrar, issuer) =
+            ZoneBus::with_clock_observer_and_metrics_and_interaction_subject_issuer(
+                zone.clone(),
+                authorizer,
+                BusConfig::default(),
+                Arc::new(d2b_bus::ManualClock::new(1)),
+                Arc::new(d2b_bus::NoopBusObserver),
+                Arc::new(d2b_bus::metrics::NoopBusTelemetry),
+            )
+            .unwrap();
+        let interaction_identity = CommittedInteractionIdentity::for_test(
             zone.clone(),
-            authorizer,
-            BusConfig::default(),
-            Arc::new(d2b_bus::ManualClock::new(1)),
-            Arc::new(NoopBusObserver),
-            Arc::new(d2b_bus::metrics::NoopBusTelemetry),
-        )
-        .unwrap();
+            subject_ref.clone(),
+            subject_uid.clone(),
+            host_execution_ref.clone(),
+            observer_user_ref.clone(),
+            BTreeMap::from([(subject_ref.clone(), subject_uid.clone())]),
+            ResourceGeneration::new(display_generation).unwrap(),
+            clipboard_generation.map(|generation| ResourceGeneration::new(generation).unwrap()),
+            clipboard_provider_uid.clone(),
+            notification_generation.map(|generation| ResourceGeneration::new(generation).unwrap()),
+            notification_provider_uid.clone(),
+        );
         registrar
-            .install_committed_interaction_subject(CommittedInteractionSubjectInput {
-                display_subject_ref: subject_ref.clone(),
-                display_subject_uid: subject_uid.clone(),
-                zone_ref: ResourceRef::parse(&format!("Zone/{}", zone.as_str())).unwrap(),
-                expected_peer_uid: transport_uid,
-                execution_ref: host_execution_ref.clone(),
-                display_generation: ResourceGeneration::new(display_generation).unwrap(),
-                clipboard_generation: clipboard_generation
-                    .map(|generation| ResourceGeneration::new(generation).unwrap()),
-                notification_generation: notification_generation
-                    .map(|generation| ResourceGeneration::new(generation).unwrap()),
-                clipboard_provider_uid: clipboard_provider_uid.clone(),
-                notification_provider_uid: notification_provider_uid.clone(),
-                controller_generation: ControllerGeneration::new(controller_generation).unwrap(),
-            })
+            .install_committed_interaction_subject(
+                interaction_identity
+                    .seal_interaction_subject_install(issuer, transport_uid)
+                    .unwrap(),
+            )
             .unwrap();
         let mut composition =
             InteractionComposition::new(registrar, ProviderSupervisor::new(Backend::default()));
@@ -7039,18 +7029,7 @@ mod tests {
             )
             .unwrap(),
         );
-        composition.bind_interaction_identity(&CommittedInteractionIdentity::for_test(
-            subject_ref.clone(),
-            subject_uid.clone(),
-            host_execution_ref.clone(),
-            observer_user_ref.clone(),
-            BTreeMap::from([(subject_ref, subject_uid)]),
-            ResourceGeneration::new(display_generation).unwrap(),
-            clipboard_generation.map(|generation| ResourceGeneration::new(generation).unwrap()),
-            clipboard_provider_uid,
-            notification_generation.map(|generation| ResourceGeneration::new(generation).unwrap()),
-            notification_provider_uid,
-        ));
+        composition.bind_interaction_identity(&interaction_identity);
         composition
     }
 
@@ -7237,6 +7216,7 @@ mod tests {
             })
             .collect();
         composition.bind_interaction_identity(&CommittedInteractionIdentity::for_test(
+            zone.clone(),
             first_guest,
             first_uid,
             ResourceRef::parse("Host/host").unwrap(),
@@ -8127,6 +8107,7 @@ mod tests {
         let guest_uid = ResourceUid::parse("aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa").unwrap();
         let wrong_uid = ResourceUid::parse("bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb").unwrap();
         let wrong = CommittedInteractionIdentity::for_test(
+            zone.clone(),
             guest_ref.clone(),
             guest_uid.clone(),
             ResourceRef::parse("Host/host").unwrap(),

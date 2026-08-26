@@ -4939,11 +4939,10 @@ fn dispatch_config_nixos_service_request(
         "method": "Get",
         "resourceRef": guest_ref.to_canonical_string(),
     });
-    let guest = block_on_future(runtime.dispatch_cli_request(&guest_lookup)).map_err(|_| {
-        TypedError::InternalConfig {
+    let guest = block_on_future(runtime.dispatch_public_cli_request(&guest_lookup, peer.uid))
+        .map_err(|_| TypedError::InternalConfig {
             detail: "config-nixos Guest lookup failed".to_owned(),
-        }
-    })?;
+        })?;
     if guest.get("kind").is_some() {
         return Err(TypedError::AuthzNotAdmin {
             verb: "config-nixos Guest is not in the requested Zone".to_owned(),
@@ -5108,6 +5107,39 @@ fn dispatch_resource_request(
         return Ok(resource_runtime_error_frame(
             resource_runtime::ResourceRuntimeError::AuthenticationUnavailable,
         ));
+    }
+    if [
+        "subject",
+        "subjectRef",
+        "subjectUid",
+        "principal",
+        "principalRef",
+        "role",
+        "uid",
+        "user",
+        "userRef",
+    ]
+    .iter()
+    .any(|field| request.value().get(*field).is_some())
+    {
+        return Ok(resource_runtime_error_frame(
+            resource_runtime::ResourceRuntimeError::RequestInvalid,
+        ));
+    }
+    let method = request.method().unwrap_or("Resource");
+    let runtime = match resolve_resource_runtime(state, &request.value()) {
+        Ok(runtime) => runtime,
+        Err(error) => return Ok(resource_runtime_error_frame(error)),
+    };
+    if let Err(error) = block_on_future(runtime.authenticate_public_peer(
+        peer.uid,
+        &d2bd_runtime::resource_runtime_support::public_operation_id(
+            &request.value(),
+            peer.uid,
+            method,
+        ),
+    )) {
+        return Ok(resource_runtime_error_frame(error));
     }
     if request.value().get("service").and_then(Value::as_str)
         == Some(d2b_provider_config_nixos::SERVICE_PACKAGE)
@@ -6628,7 +6660,13 @@ fn resolve_resource_runtime(
         .ok()
         .and_then(|plane| plane.clone())
         .ok_or(resource_runtime::ResourceRuntimeError::PlaneUnavailable)?;
-    plane.zone(&zone)
+    plane.zone(&zone).map_err(|error| {
+        if error == resource_runtime::ResourceRuntimeError::PlaneUnavailable {
+            resource_runtime::ResourceRuntimeError::RouteMismatch
+        } else {
+            error
+        }
+    })
 }
 
 fn resolve_typed_shell_runtime(
@@ -16106,7 +16144,8 @@ fn broker_caller_uid(caller_role: &BrokerCallerRole) -> u32 {
     match caller_role {
         BrokerCallerRole::AdminUid { uid }
         | BrokerCallerRole::LauncherUid { uid }
-        | BrokerCallerRole::RootUid { uid } => *uid,
+        | BrokerCallerRole::RootUid { uid }
+        | BrokerCallerRole::HostShutdownUid { uid } => *uid,
         BrokerCallerRole::NotAuthorized => 0,
     }
 }
@@ -20155,8 +20194,13 @@ fn dispatch_broker_activation(
         );
     }
 
-    let _ = caller_role;
-    dispatch_live_guest_activation_resource(state, request, verb, mode)
+    dispatch_live_guest_activation_resource(
+        state,
+        request,
+        verb,
+        mode,
+        broker_caller_uid(&caller_role),
+    )
 }
 
 fn dispatch_live_guest_activation_resource(
@@ -20164,6 +20208,7 @@ fn dispatch_live_guest_activation_resource(
     request: public_wire::ActivationRequest,
     verb: &'static str,
     mode: BrokerActivationMode,
+    peer_uid: u32,
 ) -> Result<Value, TypedError> {
     if mode != BrokerActivationMode::Rollback && request.to_generation.is_some() {
         return Ok(invalid_request_response_with_summary(
@@ -20206,11 +20251,12 @@ fn dispatch_live_guest_activation_resource(
         "method": "Get",
         "resourceRef": guest_ref_canonical,
     });
-    let guest = block_on_future(runtime.dispatch_cli_request(&get_guest)).map_err(|_| {
-        TypedError::InternalConfig {
-            detail: "activation Guest resource unavailable".to_owned(),
-        }
-    })?;
+    let guest =
+        block_on_future(runtime.dispatch_public_cli_request(&get_guest, peer_uid)).map_err(
+            |_| TypedError::InternalConfig {
+                detail: "activation Guest resource unavailable".to_owned(),
+            },
+        )?;
     if guest.get("kind").is_some() {
         return Err(TypedError::InternalConfig {
             detail: "activation Guest resource unavailable".to_owned(),
@@ -20230,11 +20276,12 @@ fn dispatch_live_guest_activation_resource(
             "executionRef": guest_ref.to_canonical_string(),
             "limit": 256,
         });
-        let resources = block_on_future(runtime.dispatch_cli_request(&list)).map_err(|_| {
-            TypedError::InternalConfig {
-                detail: "rollback generations unavailable".to_owned(),
-            }
-        })?;
+        let resources =
+            block_on_future(runtime.dispatch_public_cli_request(&list, peer_uid)).map_err(
+                |_| TypedError::InternalConfig {
+                    detail: "rollback generations unavailable".to_owned(),
+                },
+            )?;
         let artifact = resources
             .get("resources")
             .and_then(Value::as_array)
@@ -20299,11 +20346,12 @@ fn dispatch_live_guest_activation_resource(
         "spec": spec,
         "waitForReconcile": false,
     });
-    let created = block_on_future(runtime.dispatch_cli_request(&create)).map_err(|_| {
-        TypedError::InternalConfig {
-            detail: "activation resource create failed".to_owned(),
-        }
-    })?;
+    let created =
+        block_on_future(runtime.dispatch_public_cli_request(&create, peer_uid)).map_err(
+            |_| TypedError::InternalConfig {
+                detail: "activation resource create failed".to_owned(),
+            },
+        )?;
     if created
         .get("kind")
         .and_then(Value::as_str)
@@ -20329,11 +20377,12 @@ fn dispatch_live_guest_activation_resource(
             "method": "Get",
             "resourceRef": generation_ref,
         });
-        let current = block_on_future(runtime.dispatch_cli_request(&get)).map_err(|_| {
-            TypedError::InternalConfig {
-                detail: "activation resource status unavailable".to_owned(),
-            }
-        })?;
+        let current =
+            block_on_future(runtime.dispatch_public_cli_request(&get, peer_uid)).map_err(
+                |_| TypedError::InternalConfig {
+                    detail: "activation resource status unavailable".to_owned(),
+                },
+            )?;
         let current_spec = current.get("spec");
         if current_spec
             .and_then(|spec| spec.get("executionRef"))

@@ -166,6 +166,7 @@ rust_library(
     name = "d2bd_lib_test_support",
     srcs = d2bd_srcs,
     compile_data = d2bd_compile_data,
+    crate_features = ["test-support"],
     crate_name = "d2bd",
     proc_macro_deps = [
         "@crates//:async-trait",

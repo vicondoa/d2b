@@ -167,16 +167,8 @@ impl ZoneContext {
         context
     }
 
-    /// Discover the nearest reachable Zone socket.
+    /// Select the root public listener and an optional Zone routing target.
     pub(crate) fn discover(zone_arg: Option<&str>) -> Result<Self, CliFailure> {
-        Self::discover_for_domain(zone_arg, false)
-    }
-
-    /// Discover the nearest socket for either the system or user runtime.
-    pub(crate) fn discover_for_domain(
-        zone_arg: Option<&str>,
-        user_domain: bool,
-    ) -> Result<Self, CliFailure> {
         let requested_zone = zone_arg
             .map(str::to_owned)
             .or_else(|| env::var("D2B_ZONE").ok().filter(|value| !value.is_empty()));
@@ -184,28 +176,15 @@ impl ZoneContext {
         let zone_name = requested_zone.as_deref().unwrap_or("local-root").to_owned();
         validate_zone_name(&zone_name)?;
 
-        let candidates = socket_candidates_for_domain(requested_zone.as_deref(), user_domain);
         let direct_override = env::var_os("D2B_PUBLIC_SOCKET").is_some();
-        let socket_path = if direct_override {
-            candidates.first().cloned()
-        } else {
-            candidates
-                .iter()
-                .find(|candidate| socket_reachable(candidate))
-                .cloned()
+        let socket_path = env::var_os("D2B_PUBLIC_SOCKET")
+            .map(PathBuf::from)
+            .unwrap_or_else(|| PathBuf::from("/run/d2b/public.sock"));
+        if !direct_override && !socket_reachable(&socket_path) {
+            return Err(CliFailure::new(1, "zone-unavailable"));
         }
-        .ok_or_else(|| CliFailure::new(1, "zone-unavailable"))?;
 
-        let selected_zone = requested_zone.unwrap_or_else(|| {
-            socket_path
-                .parent()
-                .filter(|parent| parent.parent().is_some_and(|root| root.ends_with("zones")))
-                .and_then(Path::file_name)
-                .and_then(|name| name.to_str())
-                .filter(|name| !name.is_empty())
-                .unwrap_or("local-root")
-                .to_owned()
-        });
+        let selected_zone = requested_zone.unwrap_or_else(|| "local-root".to_owned());
         validate_zone_name(&selected_zone)?;
 
         let zone_path = zone_path(&selected_zone)
@@ -2039,44 +2018,6 @@ pub(crate) fn bounded_message(message: &str) -> String {
     bounded
 }
 
-fn socket_candidates(requested_zone: Option<&str>) -> Vec<PathBuf> {
-    socket_candidates_for_domain(requested_zone, false)
-}
-
-fn socket_candidates_for_domain(requested_zone: Option<&str>, user_domain: bool) -> Vec<PathBuf> {
-    if let Some(path) = env::var_os("D2B_PUBLIC_SOCKET") {
-        return vec![PathBuf::from(path)];
-    }
-
-    let runtime_root = if user_domain {
-        env::var_os("XDG_RUNTIME_DIR")
-            .map(PathBuf::from)
-            .map(|path| path.join("d2b"))
-    } else {
-        Some(PathBuf::from("/run/d2b"))
-    };
-    let Some(runtime_root) = runtime_root else {
-        return socket_candidates_for_domain(requested_zone, false);
-    };
-
-    if let Some(zone) = requested_zone {
-        return vec![runtime_root.join("zones").join(zone).join("public.sock")];
-    }
-
-    let mut candidates = Vec::new();
-    let zone_root = runtime_root.join("zones");
-    if let Ok(entries) = fs::read_dir(zone_root) {
-        let mut zone_paths: Vec<PathBuf> = entries
-            .filter_map(Result::ok)
-            .map(|entry| entry.path().join("public.sock"))
-            .collect();
-        zone_paths.sort();
-        candidates.extend(zone_paths);
-    }
-    candidates.push(runtime_root.join("public.sock"));
-    candidates
-}
-
 fn validate_zone_name(value: &str) -> Result<(), CliFailure> {
     ZoneId::parse(value.to_owned())
         .map(|_| ())
@@ -2368,7 +2309,7 @@ mod tests {
             response: br#"{"items":[]}"#.to_vec(),
         });
         let context =
-            ZoneContext::with_client("dev", "/run/d2b/zones/dev/public.sock", client.clone())
+            ZoneContext::with_client("dev", "/run/d2b/public.sock", client.clone())
                 .unwrap();
         let response = context
             .invoke(
@@ -2388,13 +2329,35 @@ mod tests {
     }
 
     #[test]
+    fn explicit_zone_changes_the_request_target_but_keeps_the_root_listener() {
+        let client = Arc::new(MockClient {
+            requests: Mutex::new(Vec::new()),
+            response: br#"{"items":[]}"#.to_vec(),
+        });
+        let context =
+            ZoneContext::with_client("child", "/run/d2b/public.sock", client.clone()).unwrap();
+        context
+            .invoke(
+                "List",
+                json!({"resourceType":"Guest"}),
+                ZoneContext::deadline(None).unwrap(),
+                OutputMode::Json,
+            )
+            .unwrap();
+        assert_eq!(context.socket_path(), Path::new("/run/d2b/public.sock"));
+        let requests = client.requests.lock().unwrap();
+        let request: Value = serde_json::from_slice(&requests[0]).unwrap();
+        assert_eq!(request["zoneRef"], "Zone/child");
+    }
+
+    #[test]
     fn injected_process_attach_uses_the_typed_zone_attach_operation() {
         let client = Arc::new(MockClient {
             requests: Mutex::new(Vec::new()),
             response: br#"{"ok":true}"#.to_vec(),
         });
         let context =
-            ZoneContext::with_client("dev", "/run/d2b/zones/dev/public.sock", client.clone())
+            ZoneContext::with_client("dev", "/run/d2b/public.sock", client.clone())
                 .unwrap();
         let response = context
             .attach_process(
@@ -2647,7 +2610,7 @@ mod tests {
                     .to_vec(),
         });
         let context =
-            ZoneContext::with_client("dev", "/run/d2b/zones/dev/public.sock", client).unwrap();
+            ZoneContext::with_client("dev", "/run/d2b/public.sock", client).unwrap();
         let error = context
             .attach_process(
                 ResourceRef::parse("EphemeralProcess/command").unwrap(),
@@ -2693,18 +2656,10 @@ mod tests {
     }
 
     #[test]
-    fn direct_socket_overrides_do_not_infer_a_zone_from_an_arbitrary_temp_path() {
-        let candidates = socket_candidates(Some("dev"));
-        assert_eq!(
-            candidates,
-            vec![PathBuf::from("/run/d2b/zones/dev/public.sock")]
-        );
-        let socket = PathBuf::from("/tmp/test-public.sock");
-        let inferred = socket
-            .parent()
-            .filter(|parent| parent.parent().is_some_and(|root| root.ends_with("zones")))
-            .and_then(Path::file_name);
-        assert!(inferred.is_none());
+    fn root_listener_selection_does_not_infer_a_zone_from_socket_paths() {
+        let context = ZoneContext::local_only();
+        assert_eq!(context.socket_path(), Path::new("/run/d2b/public.sock"));
+        assert_eq!(context.zone_ref(), "Zone/local-root");
     }
 
     #[test]

@@ -24,7 +24,7 @@ pub use adapter::{
     reject_scoped_commit_frame,
 };
 pub use admission::{AdmissionError, AdmittedMutation};
-pub use authz::StoreSealHandoffError;
+pub use authz::{AuthorizationLease, StoreSealHandoffError};
 pub use client::ResourceApiClient;
 pub use d2b_resource_store::PreparedStoreMutation;
 pub use identity::AuthenticatedSubjectContext;

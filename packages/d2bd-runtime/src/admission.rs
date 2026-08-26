@@ -217,13 +217,14 @@ pub fn broker_caller_role_for_peer(peer: &PeerIdentity) -> BrokerCallerRole {
     match peer.role {
         PeerRole::Admin => BrokerCallerRole::AdminUid { uid: peer.uid },
         PeerRole::Launcher => BrokerCallerRole::LauncherUid { uid: peer.uid },
-        PeerRole::HostShutdown => BrokerCallerRole::AdminUid { uid: peer.uid },
+        PeerRole::HostShutdown => BrokerCallerRole::HostShutdownUid { uid: peer.uid },
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::lifecycle_group_member;
+    use super::{PeerIdentity, PeerRole, broker_caller_role_for_peer, lifecycle_group_member};
+    use d2b_contracts_broker::broker_wire::BrokerCallerRole;
 
     #[test]
     fn only_the_configured_lifecycle_group_grants_group_authority() {
@@ -233,6 +234,17 @@ mod tests {
         assert!(!lifecycle_group_member("d2b", &["wheel".to_owned()]));
         assert!(!lifecycle_group_member("missing", &groups));
         assert!(!lifecycle_group_member("", &groups));
+    }
+
+    #[test]
+    fn host_shutdown_is_not_encoded_as_admin() {
+        assert!(matches!(
+            broker_caller_role_for_peer(&PeerIdentity {
+                role: PeerRole::HostShutdown,
+                uid: 0,
+            }),
+            BrokerCallerRole::HostShutdownUid { uid: 0 }
+        ));
     }
 
 }

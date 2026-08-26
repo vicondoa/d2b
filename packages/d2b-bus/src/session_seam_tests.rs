@@ -486,6 +486,46 @@ async fn verified_peer_evidence_cannot_author_a_subject_without_registrar_state(
 }
 
 #[tokio::test]
+async fn registrar_rejects_ambiguous_same_peer_subject_registration() {
+    let (_bus, registrar) = bus();
+    let (proof_fd, _peer_fd) = prearmed_seqpacket_pair().unwrap();
+    let proof_socket = SeqpacketSocket::from_parent_prearmed(proof_fd).unwrap();
+    let expected_peer = proof_socket.acceptor_peer_credentials().unwrap();
+    for subject in [
+        ("Provider/system-core", "11111111-1111-4111-8111-111111111111"),
+        ("Provider/system-minijail", "22222222-2222-4222-8222-222222222222"),
+    ] {
+        registrar
+            .install_test_unix_subject(
+                UnixSubjectRecord::provider(
+                    ResourceRef::parse(subject.0).unwrap(),
+                    ResourceUid::parse(subject.1).unwrap(),
+                    ResourceRef::parse("Zone/dev").unwrap(),
+                    expected_peer,
+                    ResourceGeneration::new(PROVIDER_GENERATION).unwrap(),
+                )
+                .unwrap(),
+            )
+            .unwrap();
+    }
+    let error = match registrar.component_session_acceptor(
+        policy(
+            ServicePackage::ResourceV3,
+            EndpointPurpose::ResourceService,
+            1,
+        ),
+        VerifiedUnixPeer::verify_seqpacket(&proof_socket).unwrap(),
+    ) {
+        Ok(_) => panic!("ambiguous peer evidence must not mint a session acceptor"),
+        Err(error) => error,
+    };
+    assert_eq!(
+        error.code(),
+        d2b_session::contract::SessionErrorCode::SubjectConfigurationMismatch
+    );
+}
+
+#[tokio::test]
 async fn registrar_rejects_a_session_minted_for_another_bus_instance() {
     let (_first_bus, first_registrar) = bus();
     let (_second_bus, mut second_registrar) = bus();

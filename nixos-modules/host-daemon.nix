@@ -61,18 +61,6 @@ let
   unsafeLocalHelperUsers = lib.sort lib.lessThan
     (lib.unique (lib.concatMap (realm: realm.allowedUsers) unsafeLocalRealms));
   unsafeLocalHelperEnabled = unsafeLocalHelperUsers != [ ];
-  brokerMaterializedFor = realm:
-    realm.controller.broker.materializedSocket && realm.controller.broker.materializedService;
-  serviceAttrName = unitName: lib.removeSuffix ".service" unitName;
-  parentDaemonUnitFor = realm:
-    if realm.parentPath == null || !(builtins.hasAttr realm.parentPath cfg._index.realms.enabledByPath)
-    then null
-    else
-      let parent = cfg._index.realms.enabledByPath.${realm.parentPath};
-      in
-      if parent.placement == "host-local"
-      then parent.controller.daemon.serviceName
-      else null;
   forceFallbackTimeoutSeconds = 30;
   sidecarCleanupGraceSeconds = 120;
   d2bdStopTimeoutSeconds = lib.max 90 (
@@ -218,71 +206,6 @@ let
     "f ${realm.controller.daemon.stateLockPath} 0640 ${realm.controller.daemon.user} ${realm.controller.daemon.group} -"
     "d ${realm.controller.daemon.locksDir} 0700 ${realm.controller.daemon.user} ${realm.controller.daemon.group} -"
   ];
-  realmDaemonService = realm:
-    let
-      parentDaemonUnit = parentDaemonUnitFor realm;
-      brokerSocketUnit =
-        if brokerMaterializedFor realm
-        then realm.controller.broker.socketUnitName
-        else null;
-      brokerServiceUnit =
-        if brokerMaterializedFor realm
-        then realm.controller.broker.serviceUnitName
-        else null;
-    in
-    {
-      description = "d2b host-local realm daemon";
-      wantedBy = [ "multi-user.target" ];
-      wants =
-        [
-          "systemd-tmpfiles-setup.service"
-          "d2b-broker.socket"
-        ]
-        ++ lib.optional (brokerSocketUnit != null) brokerSocketUnit;
-      after =
-        [
-          "systemd-tmpfiles-setup.service"
-          "d2b-broker.socket"
-          "d2b-broker.service"
-          "network.target"
-          "dbus.socket"
-          "dbus.service"
-          "d2b.slice"
-        ]
-        ++ lib.optional (parentDaemonUnit != null) parentDaemonUnit
-        ++ lib.optional (brokerSocketUnit != null) brokerSocketUnit
-        ++ lib.optional (brokerServiceUnit != null) brokerServiceUnit;
-      serviceConfig = {
-        Type = "notify";
-        NotifyAccess = "main";
-        TimeoutStartSec = "5min";
-        KillMode = "process";
-        User = realm.controller.daemon.user;
-        Group = realm.controller.daemon.group;
-        ExecStart =
-          "${d2bdPackage}/bin/d2bd host " +
-          "--config ${realm.controller.daemon.configPath} " +
-          "--daemon-state-dir ${realm.paths.stateDir}";
-        TimeoutStopSec = lib.mkDefault "${toString d2bdStopTimeoutSeconds}s";
-        Restart = "on-failure";
-        RestartSec = "2s";
-        NoNewPrivileges = true;
-        CapabilityBoundingSet = [ "" ];
-        AmbientCapabilities = [ "" ];
-        PrivateTmp = true;
-        ProtectHome = true;
-        RestrictAddressFamilies = [ "AF_UNIX" "AF_INET" "AF_INET6" ];
-        UMask = "0027";
-        SupplementaryGroups = [ realm.controller.daemon.publicSocketGroup "d2bd" ];
-        Slice = "d2b.slice";
-      };
-    };
-  realmDaemonServices = lib.listToAttrs (map
-    (realm: {
-      name = serviceAttrName realm.controller.daemon.serviceName;
-      value = realmDaemonService realm;
-    })
-    hostLocalRealms);
   enabledGateways = lib.mapAttrsToList
     (name: gw: { inherit name gw; })
     (lib.filterAttrs (_: gw: gw.enable) cfg.gateways);
@@ -539,6 +462,6 @@ in
           [ "d2b" ] ++ lib.optional unsafeLocalHelperEnabled "d2b-unsafe-local";
       };
       };
-    } // realmDaemonServices;
+    };
   };
 }
