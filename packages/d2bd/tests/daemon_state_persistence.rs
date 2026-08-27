@@ -49,6 +49,12 @@ mod daemon_state_persistence {
                 "vm": "corp-vm",
                 "roleId": "ch",
                 "role": "cloud-hypervisor",
+                "zoneUid": "11111111-1111-4111-8111-111111111111",
+                "guestUid": "22222222-2222-4222-8222-222222222222",
+                "guestGeneration": 1,
+                "providerAssignmentGeneration": 1,
+                "policyRevision": 1,
+                "operationId": "state-restore-operation",
                 "pid": runner_pid,
                 "startTimeTicks": start_time_ticks,
                 "snapshottedAt": "2026-01-01T00:00:00Z"

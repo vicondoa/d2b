@@ -9,7 +9,11 @@
 use std::{
     collections::BTreeMap,
     path::PathBuf,
-    sync::{Arc, RwLock},
+    sync::{
+        Arc, RwLock,
+        atomic::{AtomicU64, Ordering},
+    },
+    time::{SystemTime, UNIX_EPOCH},
 };
 
 use d2b_contracts_broker::broker_wire::BrokerCallerRole;
@@ -33,8 +37,8 @@ use crate::process_provider_runtime::{
     ProductionProcessProviders, ProviderAdoption, ProviderLaunch,
 };
 use crate::provider_effects::{
-    EffectDispatch, GuestLifecycleOperation, GuestLifecycleRequest, ProviderEffectError,
-    ProviderLifecycleDispatch, ProviderLifecycleEffectPort,
+    EffectDispatch, GuestLifecycleOperation, GuestLifecycleRequest, LifecycleAuthorization,
+    ProviderEffectError, ProviderLifecycleDispatch, ProviderLifecycleEffectPort,
 };
 use d2b_process_conformance::ConfigurationDigest;
 use d2bd_runtime::target_runtime::{
@@ -50,17 +54,32 @@ pub const PROVIDER_BUNDLE_SCHEMA_VERSION: &str = "v3";
 /// Registry limits and snapshots are owned by the shared Provider crate.
 pub use d2b_provider::{MAX_PROVIDER_REGISTRY_ENTRIES, ProviderRegistrySnapshot};
 
-/// Derive a stable idempotency key for one lifecycle request. The key is
-/// intentionally independent of an in-process ordinal so a retry after a
-/// daemon restart reaches the same Provider deduplication identity.
+/// Mint a unique operation identity for one lifecycle attempt. The immutable
+/// Guest identity is carried by the sealed authorization lease; the nonce
+/// keeps a fresh attempt distinct from a previously consumed broker lease.
 pub(crate) fn next_lifecycle_operation_id(
     operation: &str,
     guest: &str,
     request_fingerprint: &str,
 ) -> String {
+    static NEXT_ATTEMPT: AtomicU64 = AtomicU64::new(1);
+    let attempt = NEXT_ATTEMPT.fetch_add(1, Ordering::Relaxed);
+    let now_ns = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_nanos();
+    let mut random = [0_u8; 16];
+    let nonce = if getrandom::getrandom(&mut random).is_ok() {
+        random
+            .iter()
+            .map(|byte| format!("{byte:02x}"))
+            .collect::<String>()
+    } else {
+        format!("{}:{now_ns}:{attempt}", std::process::id())
+    };
     d2b_contracts_resource::v3::canonical_digest(
-        "d2bd:provider-lifecycle:v1",
-        format!("{operation}:{guest}:{request_fingerprint}").as_bytes(),
+        "d2bd:provider-lifecycle:v2",
+        format!("{operation}:{guest}:{request_fingerprint}:{nonce}").as_bytes(),
     )
 }
 
@@ -154,6 +173,7 @@ pub struct ProviderBinding {
     resource: ResourceRef,
     artifact_id: ResourceName,
     schema_fingerprint: SchemaFingerprint,
+    capability_methods: Option<Vec<String>>,
 }
 
 impl ProviderBinding {
@@ -174,7 +194,17 @@ impl ProviderBinding {
             resource,
             artifact_id,
             schema_fingerprint,
+            capability_methods: None,
         })
+    }
+
+    /// Narrow the methods exposed by this trusted Provider descriptor.
+    pub fn with_capability_methods(
+        mut self,
+        methods: impl IntoIterator<Item = impl Into<String>>,
+    ) -> Self {
+        self.capability_methods = Some(methods.into_iter().map(Into::into).collect());
+        self
     }
 
     /// Borrow the binding Zone.
@@ -210,7 +240,13 @@ impl ProviderBinding {
             .map_err(|_| ProviderCompositionError::BundleSchemaMismatch)?;
         let service = ServiceName::parse("d2b.provider.v3")
             .map_err(|_| ProviderCompositionError::BundleSchemaMismatch)?;
-        let methods = ["start", "stop"]
+        let methods = self.capability_methods.clone().unwrap_or_else(|| {
+            ["start", "stop", "restart"]
+                .into_iter()
+                .map(str::to_owned)
+                .collect()
+        });
+        let methods = methods
             .into_iter()
             .map(|method| {
                 ProviderMethodName::parse(method)
@@ -509,9 +545,6 @@ fn identity_commitment(identity: d2b_process_conformance::ProcessIdentityDigest)
 /// runtime.
 #[derive(Debug, PartialEq, Eq)]
 pub enum ProviderRuntimeDispatch<T> {
-    /// No v3 catalog is present, so the caller may use the existing daemon
-    /// lifecycle path for a legacy bundle.
-    Legacy,
     /// The v3 registry admitted the request and the typed effect ran, or the
     /// exact idempotency key was already accepted.
     Active(EffectDispatch<T>),
@@ -527,12 +560,9 @@ struct ActiveProviderRuntime {
 
 #[derive(Debug)]
 enum ProviderRuntimeState {
-    /// A pre-v3 bundle has no Provider catalog and retains the existing
-    /// daemon lifecycle path.
-    Legacy,
     /// A validated v3 Provider registry and Guest route index.
     Active(ActiveProviderRuntime),
-    /// A catalog was present but failed validation; all lifecycle effects
+    /// The catalog is absent or failed validation; all lifecycle effects
     /// refuse until the daemon is rebuilt with a valid catalog.
     Refused(ProviderCompositionError),
 }
@@ -546,11 +576,12 @@ pub struct ProviderRuntime {
 }
 
 impl ProviderRuntime {
-    /// Start in compatibility mode until a trusted bundle supplies a v3
-    /// Provider catalog.
+    /// Start unavailable until a trusted Provider catalog is supplied.
     pub fn new() -> Self {
         Self {
-            state: RwLock::new(ProviderRuntimeState::Legacy),
+            state: RwLock::new(ProviderRuntimeState::Refused(
+                ProviderCompositionError::ProviderNotRegistered,
+            )),
             lifecycle_state_path: None,
             process_providers: RwLock::new(None),
         }
@@ -570,7 +601,9 @@ impl ProviderRuntime {
                 .map_err(|_| ProviderCompositionError::StateUnavailable)?;
         }
         Ok(Self {
-            state: RwLock::new(ProviderRuntimeState::Legacy),
+            state: RwLock::new(ProviderRuntimeState::Refused(
+                ProviderCompositionError::ProviderNotRegistered,
+            )),
             lifecycle_state_path: Some(state_path),
             process_providers: RwLock::new(None),
         })
@@ -578,22 +611,27 @@ impl ProviderRuntime {
 
     /// Compose the v3 catalog from the trusted host artifact.
     ///
-    /// An absent catalog is an explicit compatibility state.  A present but
-    /// malformed catalog is stored as refused and never silently falls back.
+    /// An absent or malformed catalog is stored as refused; lifecycle
+    /// dispatch remains unavailable until a valid catalog is installed.
     pub fn configure_from_host(&self, host: &HostJson) -> Result<(), ProviderCompositionError> {
-        let next = if host.runtime_providers.is_empty() {
-            ProviderRuntimeState::Legacy
-        } else {
-            match self.compose_host_runtime(host) {
-                Ok(active) => ProviderRuntimeState::Active(active),
-                Err(error) => {
-                    let mut state = self
-                        .state
-                        .write()
-                        .map_err(|_| ProviderCompositionError::StateUnavailable)?;
-                    *state = ProviderRuntimeState::Refused(error);
-                    return Err(error);
-                }
+        if host.runtime_providers.is_empty() {
+            let error = ProviderCompositionError::ProviderNotRegistered;
+            let mut state = self
+                .state
+                .write()
+                .map_err(|_| ProviderCompositionError::StateUnavailable)?;
+            *state = ProviderRuntimeState::Refused(error);
+            return Err(error);
+        }
+        let next = match self.compose_host_runtime(host) {
+            Ok(active) => ProviderRuntimeState::Active(active),
+            Err(error) => {
+                let mut state = self
+                    .state
+                    .write()
+                    .map_err(|_| ProviderCompositionError::StateUnavailable)?;
+                *state = ProviderRuntimeState::Refused(error);
+                return Err(error);
             }
         };
         let mut state = self
@@ -669,14 +707,6 @@ impl ProviderRuntime {
             .and_then(|providers| providers.clone())
     }
 
-    /// Whether no v3 catalog has been supplied yet.
-    pub fn is_legacy(&self) -> bool {
-        self.state
-            .read()
-            .map(|state| matches!(*state, ProviderRuntimeState::Legacy))
-            .unwrap_or(false)
-    }
-
     /// Number of Provider descriptors in the active registry.
     pub fn registered_provider_count(&self) -> usize {
         self.state
@@ -686,32 +716,9 @@ impl ProviderRuntime {
                 ProviderRuntimeState::Active(active) => {
                     Some(active.registry.current().snapshot().descriptors().len())
                 }
-                ProviderRuntimeState::Legacy | ProviderRuntimeState::Refused(_) => None,
+                ProviderRuntimeState::Refused(_) => None,
             })
             .unwrap_or(0)
-    }
-
-    /// Whether the current catalog owns a Guest route.
-    ///
-    /// Legacy lifecycle requests remain on the existing daemon path when no
-    /// v3 route exists.  A refused catalog returns an error instead of
-    /// silently taking that compatibility path.
-    pub(crate) fn lifecycle_route_available(
-        &self,
-        guest_name: &str,
-    ) -> Result<bool, ProviderEffectError> {
-        let state = self
-            .state
-            .read()
-            .map_err(|_| ProviderEffectError::StateUnavailable)?;
-        match &*state {
-            ProviderRuntimeState::Legacy => Ok(false),
-            ProviderRuntimeState::Active(active) => Ok(active.routes.contains_key(guest_name)),
-            ProviderRuntimeState::Refused(error) => {
-                let _ = error.code();
-                Err(ProviderEffectError::RegistryUnavailable)
-            }
-        }
     }
 
     /// Route one Guest lifecycle request through registry admission and a
@@ -722,6 +729,7 @@ impl ProviderRuntime {
         guest_name: &str,
         operation: GuestLifecycleOperation,
         idempotency_key: impl Into<String>,
+        authorization: LifecycleAuthorization,
         effect: &P,
     ) -> Result<ProviderRuntimeDispatch<P::Output>, ProviderEffectError> {
         let state = self
@@ -730,7 +738,6 @@ impl ProviderRuntime {
             .map_err(|_| ProviderEffectError::StateUnavailable)?;
         let ProviderRuntimeState::Active(active) = &*state else {
             return match &*state {
-                ProviderRuntimeState::Legacy => Ok(ProviderRuntimeDispatch::Legacy),
                 ProviderRuntimeState::Refused(error) => {
                     let _ = error.code();
                     Err(ProviderEffectError::RegistryUnavailable)
@@ -753,13 +760,53 @@ impl ProviderRuntime {
         }
         let guest = ResourceRef::parse(&format!("Guest/{guest_name}"))
             .map_err(|_| ProviderEffectError::GuestRefInvalid)?;
-        let request =
-            GuestLifecycleRequest::new(active.zone.clone(), guest, operation, idempotency_key)
-                .map_err(|_| ProviderEffectError::GuestRefInvalid)?;
+        let request = GuestLifecycleRequest::new(
+            active.zone.clone(),
+            guest,
+            operation,
+            idempotency_key,
+            authorization,
+        )?;
         active
             .lifecycle
             .dispatch(caller, &request, effect)
             .map(ProviderRuntimeDispatch::Active)
+    }
+
+    pub(crate) fn lifecycle_admission_is_latest(
+        &self,
+        caller: &BrokerCallerRole,
+        operation: GuestLifecycleOperation,
+        authorization: &LifecycleAuthorization,
+    ) -> Result<bool, ProviderEffectError> {
+        let state = self
+            .state
+            .read()
+            .map_err(|_| ProviderEffectError::StateUnavailable)?;
+        let ProviderRuntimeState::Active(active) = &*state else {
+            return Err(ProviderEffectError::RegistryUnavailable);
+        };
+        let provider_ref = active
+            .routes
+            .get(authorization.guest_ref().name().as_str())
+            .ok_or(ProviderEffectError::ProviderNotRegistered)?;
+        let registry = active.registry.current();
+        let descriptor = registry
+            .descriptor(provider_ref)
+            .ok_or(ProviderEffectError::ProviderNotRegistered)?;
+        let method = ProviderMethodName::parse(operation.as_str())
+            .map_err(|_| ProviderEffectError::ProviderCapabilityDenied)?;
+        if !descriptor.capabilities().contains_method(&method) {
+            return Err(ProviderEffectError::ProviderCapabilityDenied);
+        }
+        let request = GuestLifecycleRequest::new(
+            active.zone.clone(),
+            authorization.guest_ref().clone(),
+            operation,
+            authorization.operation_id().to_owned(),
+            authorization.clone(),
+        )?;
+        active.lifecycle.is_latest(caller, &request)
     }
 
     fn compose_host_runtime(
@@ -869,6 +916,17 @@ mod tests {
             FINGERPRINT,
         )
         .expect("binding")
+    }
+
+    fn authorization(operation_id: &str) -> LifecycleAuthorization {
+        LifecycleAuthorization::for_test(
+            "11111111-1111-4111-8111-111111111111",
+            "22222222-2222-4222-8222-222222222222",
+            1,
+            1,
+            1,
+            operation_id,
+        )
     }
 
     fn controller_manifest() -> ProviderManifest {
@@ -1032,6 +1090,7 @@ mod tests {
                 "workstation",
                 GuestLifecycleOperation::Start,
                 "operation-1",
+                authorization("operation-1"),
                 &effect,
             )
             .expect("lifecycle dispatch");
@@ -1045,6 +1104,7 @@ mod tests {
                 "unknown",
                 GuestLifecycleOperation::Start,
                 "operation-2",
+                authorization("operation-2"),
                 &effect
             ),
             Err(ProviderEffectError::ProviderNotRegistered)
@@ -1055,9 +1115,62 @@ mod tests {
                 "workstation",
                 GuestLifecycleOperation::Stop,
                 "operation-3",
+                authorization("operation-3"),
                 &effect
             ),
             Err(ProviderEffectError::CallerRoleDenied)
+        );
+    }
+
+    #[test]
+    fn lifecycle_operation_ids_are_unique_per_attempt() {
+        let first = next_lifecycle_operation_id("start", "workstation", "same-request");
+        let second = next_lifecycle_operation_id("start", "workstation", "same-request");
+        assert_ne!(first, second);
+        assert!(first.len() <= 128);
+        assert!(second.len() <= 128);
+    }
+
+    #[test]
+    fn unconfigured_runtime_refuses_without_a_legacy_lifecycle_path() {
+        let runtime = ProviderRuntime::new();
+        let effect = RecordingEffect;
+        assert_eq!(
+            runtime.dispatch_lifecycle(
+                &BrokerCallerRole::AdminUid { uid: 1000 },
+                "workstation",
+                GuestLifecycleOperation::Start,
+                "unconfigured",
+                authorization("unconfigured"),
+                &effect,
+            ),
+            Err(ProviderEffectError::RegistryUnavailable)
+        );
+    }
+
+    #[test]
+    fn missing_restart_capability_refuses_before_the_effect_port() {
+        let runtime = ProviderRuntime::from_bindings(
+            zone(),
+            1,
+            [binding("runtime").with_capability_methods(["start", "stop"])],
+            [(
+                "workstation".to_owned(),
+                ResourceRef::parse("Provider/runtime").expect("Provider ref"),
+            )],
+        )
+        .expect("runtime composition");
+        let effect = RecordingEffect;
+        assert_eq!(
+            runtime.dispatch_lifecycle(
+                &BrokerCallerRole::AdminUid { uid: 1000 },
+                "workstation",
+                GuestLifecycleOperation::Restart,
+                "operation-restart",
+                authorization("operation-restart"),
+                &effect,
+            ),
+            Err(ProviderEffectError::ProviderCapabilityDenied)
         );
     }
 

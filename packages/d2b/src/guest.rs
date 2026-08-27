@@ -258,21 +258,34 @@ fn lifecycle(
         ));
     }
     let resource_ref = parse_resource_ref(&format!("{resource_type}/{}", args.name), None)?;
-    let value = context.invoke(
-        "UpdateSpec",
+    let (method, mut payload) = lifecycle_request_payload(resource_type, action, args);
+    payload["resourceRef"] = Value::String(resource_ref.to_canonical_string());
+    let value = context.invoke_mutating(method, payload, deadline, mode)?;
+    context.emit(&value, mode)?;
+    Ok(0)
+}
+
+fn lifecycle_request_payload(
+    resource_type: &str,
+    action: &str,
+    args: &LifecycleArgs,
+) -> (&'static str, Value) {
+    let method = match action {
+        "start" => "Start",
+        "stop" => "Stop",
+        "restart" => "Restart",
+        _ => unreachable!("lifecycle action is closed by the CLI enum"),
+    };
+    (
+        method,
         json!({
-            "resourceRef": resource_ref.to_canonical_string(),
-            "lifecycle": action,
+            "resourceRef": format!("{resource_type}/{}", args.name),
             "force": args.force,
             "dryRun": args.dry_run,
             "apply": args.apply,
             "waitForReady": !args.no_wait_ready,
         }),
-        deadline,
-        mode,
-    )?;
-    context.emit(&value, mode)?;
-    Ok(0)
+    )
 }
 
 fn filter_unsafe_local(mut value: Value) -> Value {
@@ -332,6 +345,26 @@ fn reject_unsafe_local(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn guest_lifecycle_requests_use_typed_methods() {
+        let args = LifecycleArgs {
+            name: "workstation".to_owned(),
+            dry_run: false,
+            apply: true,
+            no_wait_ready: true,
+            force: true,
+        };
+        let (method, payload) = lifecycle_request_payload("Guest", "start", &args);
+        assert_eq!(method, "Start");
+        assert_eq!(payload["resourceRef"], "Guest/workstation");
+        assert_eq!(payload["force"], true);
+        assert_eq!(payload["dryRun"], false);
+        assert_eq!(payload["apply"], true);
+        assert_eq!(payload["waitForReady"], false);
+        assert!(payload.get("lifecycle").is_none());
+        assert!(payload.get("spec").is_none());
+    }
 
     #[test]
     fn unsafe_local_entries_never_appear_in_guest_lists() {

@@ -105,7 +105,13 @@ name and its arguments are closed, camel-case JSON DTOs:
 Responses use the matching response discriminator, operation name, and
 `result`. Errors use `type: "error"` and a typed error envelope. Unknown
 fields and malformed frames are refusals, not an invitation to guess a
-legacy shape.
+retired shape.
+
+Guest lifecycle commands use the typed Resource API methods `Start`, `Stop`,
+and `Restart` with a canonical `Guest/<name>` `resourceRef`. Their payload
+contains only `force`, `dryRun`, `apply`, and `waitForReady`; lifecycle is
+never encoded as a fake `UpdateSpec` body. Apply dispatch is Provider-owned
+and bound to the current Zone and Guest identity.
 
 ## Persistent shell replacement
 

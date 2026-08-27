@@ -6,7 +6,7 @@
 //! trusted bundle. No Provider receives a broker socket or a bundle resolver.
 
 use std::{
-    collections::BTreeMap,
+    collections::{BTreeMap, BTreeSet},
     fs::OpenOptions,
     path::PathBuf,
     sync::{Arc, Mutex},
@@ -144,6 +144,9 @@ pub(crate) struct ProcessResourceContext<'a> {
     pub(crate) provider_ref: &'a ResourceRef,
     pub(crate) controller_generation: ControllerGeneration,
     pub(crate) guest_execution: Option<GuestExecutionBinding>,
+    pub(crate) zone_uid: Option<ResourceUid>,
+    pub(crate) policy_revision: Option<u64>,
+    pub(crate) provider_assignment_generation: Option<ResourceGeneration>,
     /// Optional Guest selector for a shared Host execution reference.
     pub(crate) target_ref: Option<ResourceRef>,
 }
@@ -166,6 +169,9 @@ impl<'a> ProcessResourceContext<'a> {
             provider_ref,
             controller_generation,
             guest_execution: None,
+            zone_uid: None,
+            policy_revision: None,
+            provider_assignment_generation: None,
             target_ref,
         }
     }
@@ -175,6 +181,18 @@ impl<'a> ProcessResourceContext<'a> {
         binding: Option<&GuestExecutionBinding>,
     ) -> Self {
         self.guest_execution = binding.cloned();
+        self
+    }
+
+    pub(crate) fn with_lifecycle_identity(
+        mut self,
+        zone_uid: Option<ResourceUid>,
+        policy_revision: Option<u64>,
+        provider_assignment_generation: Option<ResourceGeneration>,
+    ) -> Self {
+        self.zone_uid = zone_uid;
+        self.policy_revision = policy_revision;
+        self.provider_assignment_generation = provider_assignment_generation;
         self
     }
 }
@@ -1312,12 +1330,22 @@ impl ProductionProcessProviders {
         }
     }
 
-    /// Adopt every long-lived process declared for one VM.
-    pub async fn adopt_vm(&self, vm: &str) -> Result<(), String> {
+    /// Adopt only the long-lived process roles authorized by durable
+    /// lifecycle snapshots for one VM.
+    pub async fn adopt_vm(
+        &self,
+        vm: &str,
+        eligible_roles: &BTreeSet<String>,
+    ) -> Result<(), String> {
         let Some(dag) = self.bundle.find_process_vm(vm) else {
             return Ok(());
         };
-        for node in dag.nodes.iter().filter(|node| Self::is_long_lived(node)) {
+        for node in dag
+            .nodes
+            .iter()
+            .filter(|node| Self::is_long_lived(node))
+            .filter(|node| eligible_roles.contains(&Self::tracked_role_id(node)))
+        {
             match self.adopt_node(vm, node).await? {
                 ProviderAdoption::Absent => {
                     self.forget(vm, node);
@@ -1679,10 +1707,26 @@ fn resource_ticket(
     let component = BoundedToken::parse("process-controller")
         .map_err(|_| "provider-ticket:invalid-component")?;
     let generation = context.resource_generation.get();
+    let lifecycle_scope = format!(
+        "{}:{}:{}",
+        context
+            .zone_uid
+            .as_ref()
+            .map(ResourceUid::as_str)
+            .unwrap_or("unbound"),
+        context
+            .policy_revision
+            .map(|value| value.to_string())
+            .unwrap_or_else(|| "unbound".to_owned()),
+        context
+            .provider_assignment_generation
+            .map(|value| value.get().to_string())
+            .unwrap_or_else(|| "unbound".to_owned()),
+    );
     let operation_uid = stable_uid(
         "operation",
         &context.resource_ref.to_canonical_string(),
-        context.resource_uid.as_str(),
+        &format!("{}:{lifecycle_scope}", context.resource_uid.as_str()),
         generation,
     );
     let deadline_ms = timeout.as_millis().clamp(1, 900_000) as u32;

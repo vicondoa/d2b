@@ -121,6 +121,25 @@ where
         self.service.upgrade(self.trusted(request)).await
     }
 
+    /// Issue a sealed Guest lifecycle lease using this client's already
+    /// authenticated ComponentSession subject.
+    pub async fn admit_guest_lifecycle(
+        &self,
+        target: d2b_contracts_resource::v3::ResourceRef,
+        operation_id: impl Into<String>,
+    ) -> Result<
+        crate::GuestLifecycleAdmission,
+        d2b_contracts_resource::v3::ResourceError,
+    > {
+        let subject = crate::identity::AuthenticatedSubjectContext::issue(
+            Arc::clone(&self.subject),
+            self.state.clone(),
+        );
+        self.service
+            .admit_guest_lifecycle(&subject, target, operation_id)
+            .await
+    }
+
     fn trusted<T>(&self, request: T) -> TrustedRequest<T> {
         TrustedRequest::from_session_capability(
             Arc::clone(&self.subject),

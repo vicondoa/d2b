@@ -13,8 +13,8 @@ use std::{
 
 use d2b_contracts_resource::resource_proto as wire;
 use d2b_contracts_resource::v3::{
-    CanonicalJsonValue, ControllerGeneration, ResourceEnvelope, ResourcePhase, ResourceRef,
-    ResourceTypeName, ZoneId, ZoneRevision,
+    CanonicalJsonValue, ControllerGeneration, ResourceEnvelope, ResourceGeneration, ResourcePhase,
+    ResourceRef, ResourceTypeName, ResourceUid, ZoneId, ZoneRevision,
     process::{EphemeralProcessSpec, ProcessSpec, RestartClass},
 };
 use d2b_process_conformance::GuestExecutionBinding;
@@ -128,6 +128,9 @@ struct DesiredRecord {
     resource: StoredResource,
     provider_ref: ResourceRef,
     process: DesiredProcess,
+    zone_uid: Option<ResourceUid>,
+    policy_revision: Option<u64>,
+    provider_assignment_generation: Option<ResourceGeneration>,
 }
 
 impl DesiredRecord {
@@ -150,6 +153,9 @@ impl DesiredRecord {
             && self.resource.resource_ref == other.resource.resource_ref
             && self.resource.uid == other.resource.uid
             && self.resource.generation == other.resource.generation
+            && self.zone_uid == other.zone_uid
+            && self.policy_revision == other.policy_revision
+            && self.provider_assignment_generation == other.provider_assignment_generation
             && restart_annotation(&self.resource) == restart_annotation(&other.resource)
             && self.provider_ref == other.provider_ref
             && self.process == other.process
@@ -202,6 +208,8 @@ pub(crate) struct ProcessResourceRuntime {
     next_restart_at: BTreeMap<ResourceRef, Instant>,
     controller_generation: ControllerGeneration,
     guest_execution: Option<GuestExecutionBinding>,
+    zone_uid: Option<ResourceUid>,
+    policy_revision: Option<u64>,
     /// Optional owner and target selector for resources using a shared Host
     /// execution reference, retained across relist/watch passes.
     target_owner_ref: Option<ResourceRef>,
@@ -257,6 +265,8 @@ impl ProcessResourceRuntime {
             controller_generation: ControllerGeneration::new(1)
                 .expect("controller generation one is valid"),
             guest_execution: None,
+            zone_uid: None,
+            policy_revision: None,
             target_owner_ref: None,
             target_ref: None,
             status_client: None,
@@ -269,6 +279,15 @@ impl ProcessResourceRuntime {
 
     pub(crate) fn set_guest_execution_binding(&mut self, binding: GuestExecutionBinding) {
         self.guest_execution = Some(binding);
+    }
+
+    pub(crate) fn set_lifecycle_identity(
+        &mut self,
+        zone_uid: ResourceUid,
+        policy_revision: u64,
+    ) {
+        self.zone_uid = Some(zone_uid);
+        self.policy_revision = Some(policy_revision);
     }
 
     pub(crate) fn set_target_scope(
@@ -300,6 +319,13 @@ impl ProcessResourceRuntime {
             target_ref,
         )
         .with_guest_execution(self.guest_execution.as_ref())
+        .with_lifecycle_identity(
+            self.zone_uid.clone(),
+            self.policy_revision,
+            self.guest_execution
+                .as_ref()
+                .map(GuestExecutionBinding::provider_generation),
+        )
     }
 
     /// Reconcile a complete durable Process/EphemeralProcess snapshot.
@@ -307,7 +333,17 @@ impl ProcessResourceRuntime {
         &mut self,
         snapshot: Vec<StoredResource>,
     ) -> Result<(), ProcessResourceRuntimeError> {
-        let desired = decode_snapshot(&self.zone, self.target.as_ref(), snapshot, self.providers.mode())?;
+        let mut desired =
+            decode_snapshot(&self.zone, self.target.as_ref(), snapshot, self.providers.mode())?;
+        let provider_assignment_generation = self
+            .guest_execution
+            .as_ref()
+            .map(GuestExecutionBinding::provider_generation);
+        for record in desired.values_mut() {
+            record.zone_uid = self.zone_uid.clone();
+            record.policy_revision = self.policy_revision;
+            record.provider_assignment_generation = provider_assignment_generation;
+        }
         let desired_keys = desired.keys().cloned().collect::<BTreeSet<_>>();
         let removed = self
             .records
@@ -1065,11 +1101,7 @@ async fn update_status(
     mutation.target = protobuf::MessageField::some(resource_identity(record));
     mutation.precondition = protobuf::MessageField::some(exact_precondition(record));
     mutation.resource = protobuf::MessageField::some(resource);
-    let operation = format!(
-        "process-runtime-status-{}-{}",
-        record.key().to_canonical_string(),
-        record.resource.revision.get()
-    );
+    let operation = process_operation_id(record, "status");
     let mut request = wire::UpdateStatusRequest::new();
     request.meta = protobuf::MessageField::some(request_meta(&operation));
     request.mutation = protobuf::MessageField::some(mutation);
@@ -1179,6 +1211,12 @@ fn status_payload(
     }
     if let Some(CanonicalJsonValue::Object(update)) = status.get_mut("update") {
         update.insert(
+            "operationId".to_owned(),
+            CanonicalJsonValue::String(process_operation_id(record, "status")),
+        );
+    }
+    if let Some(CanonicalJsonValue::Object(update)) = status.get_mut("update") {
+        update.insert(
             "observedGeneration".to_owned(),
             CanonicalJsonValue::Integer(record.resource.generation.get() as i64),
         );
@@ -1209,11 +1247,9 @@ async fn update_finalizers(
             .remove_finalizers
             .push(PROCESS_RUNTIME_FINALIZER.to_owned());
     }
-    let operation = format!(
-        "process-runtime-finalizer-{}-{}-{}",
-        record.key().to_canonical_string(),
-        record.resource.revision.get(),
-        if add { "add" } else { "remove" }
+    let operation = process_operation_id(
+        record,
+        if add { "finalizer-add" } else { "finalizer-remove" },
     );
     let mut request = wire::UpdateFinalizersRequest::new();
     request.meta = protobuf::MessageField::some(request_meta(&operation));
@@ -1241,11 +1277,7 @@ async fn delete_resource(
     mutation.kind = protobuf::EnumOrUnknown::new(wire::MutationKind::MUTATION_KIND_DELETE);
     mutation.target = protobuf::MessageField::some(resource_identity(record));
     mutation.precondition = protobuf::MessageField::some(exact_precondition(record));
-    let operation = format!(
-        "process-runtime-delete-{}-{}",
-        record.key().to_canonical_string(),
-        record.resource.revision.get()
-    );
+    let operation = process_operation_id(record, "delete");
     let mut request = wire::DeleteRequest::new();
     request.meta = protobuf::MessageField::some(request_meta(&operation));
     request.mutation = protobuf::MessageField::some(mutation);
@@ -1288,6 +1320,35 @@ fn request_meta(operation: &str) -> wire::RequestMeta {
     meta.trace_id = operation.to_owned();
     meta.deadline_ms = 10_000;
     meta
+}
+
+fn process_operation_id(record: &DesiredRecord, action: &str) -> String {
+    let digest = Sha256::digest(
+        format!(
+            "d2bd:process-lifecycle:v2:{action}:{}:{}:{}:{}:{}:{}:{}:{}:{}",
+            record.resource.zone.as_str(),
+            record.key().to_canonical_string(),
+            record.resource.uid.as_str(),
+            record.resource.generation.get(),
+            record.resource.revision.get(),
+            record.provider_ref.to_canonical_string(),
+            record
+                .zone_uid
+                .as_ref()
+                .map(ResourceUid::as_str)
+                .unwrap_or("unbound"),
+            record
+                .policy_revision
+                .map(|value| value.to_string())
+                .unwrap_or_else(|| "unbound".to_owned()),
+            record
+                .provider_assignment_generation
+                .map(|value| value.get().to_string())
+                .unwrap_or_else(|| "unbound".to_owned()),
+        )
+        .as_bytes(),
+    );
+    format!("process-lifecycle-{digest:x}")
 }
 
 fn map_provider_error(error: String) -> ProcessResourceRuntimeError {
@@ -1389,6 +1450,9 @@ fn decode_snapshot(
             resource: resource.clone(),
             provider_ref,
             process,
+            zone_uid: None,
+            policy_revision: None,
+            provider_assignment_generation: None,
         };
         if desired.insert(record.key(), record).is_some() {
             return Err(ProcessResourceRuntimeError::InvalidResource);
@@ -1940,6 +2004,9 @@ mod tests {
             resource,
             provider_ref: ResourceRef::parse("Provider/system-minijail").expect("provider ref"),
             process: DesiredProcess::Process(process),
+            zone_uid: None,
+            policy_revision: None,
+            provider_assignment_generation: None,
         };
         let canonical = status_payload(
             &record,
@@ -1963,6 +2030,23 @@ mod tests {
         );
         assert!(d2b_contracts_resource::v3::Timestamp::parse(now_timestamp()).is_ok());
         assert_eq!(record.key(), resource_ref);
+        let operation_id = process_operation_id(&record, "status");
+        assert!(operation_id.starts_with("process-lifecycle-"));
+        let mut recreated = record.clone();
+        recreated.resource.uid =
+            ResourceUid::parse("223e4567-e89b-42d3-a456-426614174000").expect("new UID");
+        assert_ne!(
+            operation_id,
+            process_operation_id(&recreated, "status"),
+            "recreated Process resources must not reuse lifecycle operation identity"
+        );
+        let mut policy_changed = record.clone();
+        policy_changed.policy_revision = Some(2);
+        assert_ne!(
+            operation_id,
+            process_operation_id(&policy_changed, "status"),
+            "policy revision must fence Process lifecycle operations"
+        );
     }
 
     #[test]
@@ -2012,6 +2096,9 @@ mod tests {
             },
             provider_ref: provider_ref.clone(),
             process: DesiredProcess::Process(process.clone()),
+            zone_uid: None,
+            policy_revision: None,
+            provider_assignment_generation: None,
         };
 
         assert_eq!(

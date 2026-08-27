@@ -480,6 +480,7 @@ rust_test(
     visibility = ["//visibility:public"],
     deps = [
         "//packages/d2b-contracts-broker:d2b_contracts_broker",
+        "//packages/d2b-contracts-resource:d2b_contracts_resource",
         ":d2b_broker_test_support",
     ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
 )

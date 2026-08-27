@@ -139,6 +139,8 @@ pub enum BrokerRequest {
     /// SCM_RIGHTS; if start-time drifted the broker closes the fd and
     /// surfaces a typed pidfd-race error.
     OpenPidfd(OpenPidfdRequest),
+    /// Consume one sealed Guest lifecycle lease before any host effect.
+    ConsumeLifecycleLease(ConsumeLifecycleLeaseRequest),
     /// Obtain a pidfd for the peer of exactly one accepted Unix socket.
     ///
     /// The accepted socket is the sole SCM_RIGHTS request attachment. The
@@ -370,6 +372,7 @@ impl BrokerRequest {
             Self::QemuMediaAttach(_) => "QemuMediaAttach",
             Self::QemuMediaDetach(_) => "QemuMediaDetach",
             Self::OpenPidfd(_) => "OpenPidfd",
+            Self::ConsumeLifecycleLease(_) => "ConsumeLifecycleLease",
             Self::OpenPeerPidfdFromAcceptedSocket(_) => "OpenPeerPidfdFromAcceptedSocket",
             Self::ObserveRunner(_) => "ObserveRunner",
             Self::PipeWireAudio(_) => "PipeWireAudio",
@@ -449,6 +452,7 @@ impl BrokerRequest {
             Self::PollChildReaped => "pidfd-reap-buffer",
             Self::OpenZoneStore(_) => "zone-store",
             Self::OpenPeerPidfdFromAcceptedSocket(_) => "accepted-socket",
+            Self::ConsumeLifecycleLease(_) => "guest-lifecycle",
             _ => "operation",
         }
     }
@@ -908,6 +912,16 @@ impl BrokerRequest {
                 request.bundle_udev_intent_ref.clone(),
                 format!("{}:{}", self.op_name(), request.bundle_udev_intent_ref),
             ),
+            Self::ConsumeLifecycleLease(request) => (
+                request.zone_uid.as_str().to_owned(),
+                format!(
+                    "{}:{}:{}:{:?}",
+                    self.op_name(),
+                    request.guest_uid.as_str(),
+                    request.operation_id,
+                    request.operation
+                ),
+            ),
             Self::ValidateBundle
             | Self::ExportBrokerAudit(_)
             | Self::Hello(_)
@@ -996,6 +1010,7 @@ impl BrokerProfile {
         match self {
             Self::Host => !Self::request_targets_guest(request),
             Self::Guest => match request {
+                BrokerRequest::ConsumeLifecycleLease(_) => false,
                 BrokerRequest::SpawnRunner(request) => {
                     request
                         .execution_ref
@@ -1130,6 +1145,7 @@ pub const HOST_OPERATION_CATALOG: &[&str] = &[
     "QemuMediaAttach",
     "QemuMediaDetach",
     "OpenPidfd",
+    "ConsumeLifecycleLease",
     "OpenPeerPidfdFromAcceptedSocket",
     "ObserveRunner",
     "PipeWireAudio",
@@ -1431,6 +1447,8 @@ pub enum BrokerResponse {
     /// on the same frame; the JSON body confirms which `(pid,
     /// start_time_ticks)` the broker verified.
     OpenPidfd(OpenPidfdResponse),
+    /// Confirmation that one lifecycle lease was consumed.
+    ConsumeLifecycleLease(ConsumeLifecycleLeaseResponse),
     /// Response for [`BrokerRequest::OpenPeerPidfdFromAcceptedSocket`].
     /// The only attachment is the returned close-on-exec pidfd.
     OpenPeerPidfdFromAcceptedSocket(OpenPeerPidfdFromAcceptedSocketResponse),
@@ -2054,6 +2072,40 @@ impl GuestExecutionBinding {
             && self.provider_generation > 0
             && self.controller_generation > 0
     }
+}
+
+/// Operation named by a sealed Guest lifecycle lease.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "lowercase")]
+pub enum LifecycleLeaseOperation {
+    Start,
+    Stop,
+    Restart,
+}
+
+/// Broker-side consumption of one daemon-issued Guest lifecycle lease.
+///
+/// The broker validates the complete immutable identity and records this
+/// unique lease identity as consumed before allowing the daemon to request
+/// effects. Replay retention is bounded by the broker's lease expiry.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ConsumeLifecycleLeaseRequest {
+    pub zone_uid: ResourceUid,
+    pub guest_uid: ResourceUid,
+    pub guest_generation: u64,
+    pub provider_assignment_generation: u64,
+    pub policy_revision: u64,
+    pub operation_id: String,
+    pub operation: LifecycleLeaseOperation,
+    #[serde(default)]
+    pub stop_only: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ConsumeLifecycleLeaseResponse {
+    pub consumed: bool,
 }
 
 /// OpenPidfd daemon-side reconcile-and-adopt support. The daemon's

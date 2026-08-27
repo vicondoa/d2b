@@ -192,6 +192,20 @@ rust_binary(
     ] + all_crate_deps(normal = True, cargo_only = True),
 )
 
+rust_binary(
+    name = "d2bd_test_support",
+    srcs = ["src/main.rs"],
+    compile_data = ["Cargo.toml"],
+    crate_features = ["test-support"],
+    visibility = ["//visibility:public"],
+    deps = [
+        "//packages/d2b-contracts-provider:d2b_contracts_provider",
+        "//packages/d2b-contracts-resource:d2b_contracts_resource",
+        "//packages/d2b-contracts-zone-session:d2b_contracts_zone_session",
+        ":d2bd_lib_test_support",
+    ] + all_crate_deps(normal = True, cargo_only = True),
+)
+
 rust_test(
     name = "bundle_tampered_envelope",
     srcs = [
@@ -286,14 +300,14 @@ rust_test(
     compile_data = ["Cargo.toml"],
     crate_root = "tests/daemon_state_persistence.rs",
     data = [
-        ":d2bd",
+        ":d2bd_test_support",
         "//:tests/tools/scrub-shell-environment",
     ],
     env = {
-        "CARGO_BIN_EXE_d2bd": "$(rootpath :d2bd)",
+        "CARGO_BIN_EXE_d2bd": "$(rootpath :d2bd_test_support)",
         "D2B_TEST_SCRUB_SHELL_ENVIRONMENT": "$(rootpath //:tests/tools/scrub-shell-environment)",
     },
-    rustc_env = {"CARGO_BIN_EXE_d2bd": "$(rootpath :d2bd)"},
+    rustc_env = {"CARGO_BIN_EXE_d2bd": "$(rootpath :d2bd_test_support)"},
     tags = ["no-remote-cache"],
     visibility = ["//visibility:public"],
     deps = [

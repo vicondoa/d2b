@@ -12,7 +12,7 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 #[cfg(not(feature = "layer1-bootstrap"))]
 use std::{
-    collections::HashMap,
+    collections::{BTreeMap, HashMap},
     sync::OnceLock,
     time::{SystemTime, UNIX_EPOCH},
 };
@@ -99,6 +99,7 @@ const CAPABILITIES: &[&str] = &[
     "Hello",
     "ValidateBundle",
     "ExportBrokerAudit",
+    "ConsumeLifecycleLease",
     "MigrateLegacySwtpmState",
     "ApplyHostGenerationHandoff",
 ];
@@ -2531,7 +2532,8 @@ fn dispatch_request_with_backend_and_request_fds<B: DispatchBackend>(
         && !matches!(
             request,
             RealBrokerRequest::Hello(_)
-                | RealBrokerRequest::SignalRunner(_)
+            | RealBrokerRequest::ConsumeLifecycleLease(_)
+            | RealBrokerRequest::SignalRunner(_)
                 | RealBrokerRequest::PollChildReaped
                 | RealBrokerRequest::DeregisterRunnerPidfd(_)
                 | RealBrokerRequest::CgroupKill(_)
@@ -3077,6 +3079,37 @@ fn dispatch_request_with_backend_and_request_fds<B: DispatchBackend>(
                     pidfd_index: 0,
                 });
             Ok(DispatchResult::with_fd(response, outcome.pidfd))
+        }
+        RealBrokerRequest::ConsumeLifecycleLease(req) => {
+            consume_lifecycle_lease(&req, &caller_role)?;
+            write_success_op_record!(
+                audit_log,
+                bundle_metadata,
+                "ConsumeLifecycleLease",
+                "guest-lifecycle",
+                caller_uid,
+                caller_gid,
+                &caller_role,
+                "guest-lifecycle",
+                "broker",
+                None,
+                OperationFields::ConsumeLifecycleLease {
+                    operation_id: req.operation_id.clone(),
+                    operation: format!("{:?}", req.operation),
+                    policy_revision: req.policy_revision,
+                    guest_generation: req.guest_generation,
+                    provider_assignment_generation: req.provider_assignment_generation,
+                    stop_only: req.stop_only,
+                },
+            )?;
+            complete_lifecycle_lease(&req)?;
+            Ok(DispatchResult::no_fds(
+                BrokerResponse::ConsumeLifecycleLease(
+                    d2b_contracts_broker::broker_wire::ConsumeLifecycleLeaseResponse {
+                        consumed: true,
+                    },
+                ),
+            ))
         }
         RealBrokerRequest::OpenPeerPidfdFromAcceptedSocket(_) => {
             if request_fds.len() != 1 {
@@ -6617,6 +6650,144 @@ fn runner_signal_number(signal: d2b_contracts_broker::broker_wire::RunnerSignal)
         d2b_contracts_broker::broker_wire::RunnerSignal::Kill => libc::SIGKILL,
         d2b_contracts_broker::broker_wire::RunnerSignal::Quit => libc::SIGQUIT,
     }
+}
+
+#[cfg(not(feature = "layer1-bootstrap"))]
+const LIFECYCLE_LEASE_TTL_MS: u64 = 300_000;
+
+#[cfg(not(feature = "layer1-bootstrap"))]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+struct LifecycleLeaseIdentity {
+    zone_uid: String,
+    guest_uid: String,
+    guest_generation: u64,
+    provider_assignment_generation: u64,
+    policy_revision: u64,
+    operation_id: String,
+    operation: String,
+    stop_only: bool,
+}
+
+#[cfg(not(feature = "layer1-bootstrap"))]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum LifecycleLeaseState {
+    Consumed,
+    Completed,
+}
+
+#[cfg(not(feature = "layer1-bootstrap"))]
+#[derive(Debug, Clone, Copy)]
+struct LifecycleLeaseRecord {
+    state: LifecycleLeaseState,
+    expires_at_ms: u64,
+    completed_at_ms: Option<u64>,
+}
+
+#[cfg(not(feature = "layer1-bootstrap"))]
+fn lifecycle_leases() -> &'static Mutex<BTreeMap<LifecycleLeaseIdentity, LifecycleLeaseRecord>> {
+    static LEASES: OnceLock<Mutex<BTreeMap<LifecycleLeaseIdentity, LifecycleLeaseRecord>>> =
+        OnceLock::new();
+    LEASES.get_or_init(|| Mutex::new(BTreeMap::new()))
+}
+
+#[cfg(not(feature = "layer1-bootstrap"))]
+fn lifecycle_lease_identity(
+    request: &d2b_contracts_broker::broker_wire::ConsumeLifecycleLeaseRequest,
+) -> LifecycleLeaseIdentity {
+    LifecycleLeaseIdentity {
+        zone_uid: request.zone_uid.as_str().to_owned(),
+        guest_uid: request.guest_uid.as_str().to_owned(),
+        guest_generation: request.guest_generation,
+        provider_assignment_generation: request.provider_assignment_generation,
+        policy_revision: request.policy_revision,
+        operation_id: request.operation_id.clone(),
+        operation: format!("{:?}", request.operation),
+        stop_only: request.stop_only,
+    }
+}
+
+#[cfg(not(feature = "layer1-bootstrap"))]
+fn lifecycle_lease_now_ms() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis()
+        .min(u128::from(u64::MAX)) as u64
+}
+
+#[cfg(not(feature = "layer1-bootstrap"))]
+fn consume_lifecycle_lease(
+    request: &d2b_contracts_broker::broker_wire::ConsumeLifecycleLeaseRequest,
+    caller_role: &CallerRole,
+) -> Result<(), BrokerError> {
+    if request.guest_generation == 0
+        || request.provider_assignment_generation == 0
+        || request.policy_revision == 0
+        || request.operation_id.is_empty()
+        || request.operation_id.len() > 128
+        || request.operation_id.chars().any(char::is_control)
+    {
+        return Err(BrokerError::LiveHandler(
+            "lifecycle-lease-invalid".to_owned(),
+        ));
+    }
+    let is_shutdown = matches!(caller_role, CallerRole::HostShutdownUid { .. });
+    if request.stop_only != is_shutdown
+        || (is_shutdown
+            && !matches!(
+                request.operation,
+                d2b_contracts_broker::broker_wire::LifecycleLeaseOperation::Stop
+            ))
+    {
+        return Err(BrokerError::HostShutdownRestricted);
+    }
+    if matches!(caller_role, CallerRole::NotAuthorized) {
+        return Err(BrokerError::LiveHandler(
+            "lifecycle-lease-caller-denied".to_owned(),
+        ));
+    }
+    let now = lifecycle_lease_now_ms();
+    let identity = lifecycle_lease_identity(request);
+    let mut leases = lifecycle_leases()
+        .lock()
+        .map_err(|_| BrokerError::Protocol("lifecycle lease registry poisoned".to_owned()))?;
+    leases.retain(|_, record| record.expires_at_ms > now);
+    if let Some(record) = leases.get(&identity) {
+        let detail = match record.state {
+            LifecycleLeaseState::Consumed => "lifecycle-lease-in-progress",
+            LifecycleLeaseState::Completed => "lifecycle-lease-replayed",
+        };
+        return Err(BrokerError::LiveHandler(detail.to_owned()));
+    }
+    leases.insert(
+        identity,
+        LifecycleLeaseRecord {
+            state: LifecycleLeaseState::Consumed,
+            expires_at_ms: now.saturating_add(LIFECYCLE_LEASE_TTL_MS),
+            completed_at_ms: None,
+        },
+    );
+    Ok(())
+}
+
+#[cfg(not(feature = "layer1-bootstrap"))]
+fn complete_lifecycle_lease(
+    request: &d2b_contracts_broker::broker_wire::ConsumeLifecycleLeaseRequest,
+) -> Result<(), BrokerError> {
+    let now = lifecycle_lease_now_ms();
+    let identity = lifecycle_lease_identity(request);
+    let mut leases = lifecycle_leases()
+        .lock()
+        .map_err(|_| BrokerError::Protocol("lifecycle lease registry poisoned".to_owned()))?;
+    let Some(record) = leases.get_mut(&identity) else {
+        return Err(BrokerError::Protocol(
+            "lifecycle lease completion record missing".to_owned(),
+        ));
+    };
+    record.state = LifecycleLeaseState::Completed;
+    record.completed_at_ms = Some(now);
+    record.expires_at_ms = now.saturating_add(LIFECYCLE_LEASE_TTL_MS);
+    Ok(())
 }
 
 #[cfg(not(feature = "layer1-bootstrap"))]
@@ -12601,6 +12772,65 @@ mod tests {
             }
         }));
         assert!(request.is_err());
+    }
+
+    #[cfg(not(feature = "layer1-bootstrap"))]
+    #[test]
+    fn lifecycle_lease_registry_tracks_completion_and_expiry() {
+        use d2b_contracts_broker::broker_wire::{
+            ConsumeLifecycleLeaseRequest, LifecycleLeaseOperation,
+        };
+
+        let uid = |value: &str| {
+            d2b_contracts_resource::v3::ResourceUid::parse(value).expect("valid lifecycle UID")
+        };
+        let request = ConsumeLifecycleLeaseRequest {
+            zone_uid: uid("11111111-1111-4111-8111-111111111111"),
+            guest_uid: uid("22222222-2222-4222-8222-222222222222"),
+            guest_generation: 1,
+            provider_assignment_generation: 1,
+            policy_revision: 1,
+            operation_id: format!("runtime-lease-{}", std::process::id()),
+            operation: LifecycleLeaseOperation::Start,
+            stop_only: false,
+        };
+        let caller = CallerRole::AdminUid { uid: 1000 };
+        consume_lifecycle_lease(&request, &caller).expect("consume lifecycle lease");
+        let identity = lifecycle_lease_identity(&request);
+        assert_eq!(
+            lifecycle_leases()
+                .lock()
+                .expect("lifecycle lease lock")
+                .get(&identity)
+                .map(|record| record.state),
+            Some(LifecycleLeaseState::Consumed)
+        );
+        complete_lifecycle_lease(&request).expect("complete lifecycle lease");
+        assert_eq!(
+            lifecycle_leases()
+                .lock()
+                .expect("lifecycle lease lock")
+                .get(&identity)
+                .map(|record| record.state),
+            Some(LifecycleLeaseState::Completed)
+        );
+
+        let expired = ConsumeLifecycleLeaseRequest {
+            operation_id: format!("runtime-expired-{}", std::process::id()),
+            ..request
+        };
+        lifecycle_leases()
+            .lock()
+            .expect("lifecycle lease lock")
+            .insert(
+                lifecycle_lease_identity(&expired),
+                LifecycleLeaseRecord {
+                    state: LifecycleLeaseState::Completed,
+                    expires_at_ms: 0,
+                    completed_at_ms: Some(0),
+                },
+            );
+        consume_lifecycle_lease(&expired, &caller).expect("expired lease can be reissued");
     }
 
     #[test]

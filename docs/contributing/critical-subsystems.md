@@ -178,6 +178,9 @@ closed local operation set and rejects host-only effects before bundle
 dispatch or mutation, while the Host profile retains the complete host
 operation catalog. Keep these checks in the owner-local broker tests and
 broker profile Nix cases; do not restore the retired central policy package.
+Guest lifecycle leases are consumed only by the Host profile after the daemon
+has admitted the exact identity tuple; a HostShutdown caller may consume only
+the stop-only form.
 
 ## Unsafe-local provider, launcher, and persistent-shell helper
 
@@ -208,6 +211,11 @@ The **only** persistent root surfaces the framework declares. `d2b-broker.socket
 **Where:** Planned generated contracts in `d2b-core::{storage,process_restart,sync}` + Nix emitters, broker storage/sync ops, daemon lifecycle DAG integration, and docs [ADR 0034](../adr/0034-storage-lifecycle-restart-and-synchronization.md) / [`docs/explanation/storage-lifecycle.md`](../explanation/storage-lifecycle.md)
 
 Managed paths, restart adoption, locks, leases, cleanup, and degraded-state reporting are control-plane contracts. Normal daemon restarts are continuation events: do not broad-sweep `/run/d2b`; first re-discover adoptable runners from declared cgroup leaves, open fresh pidfds, verify identity, and quarantine/degrade ambiguity. Pidfds are not persisted. New advisory locks use OFD locks with `O_CLOEXEC`, explicit fd transfer only, and total acquisition order. The broker resolves storage/lock mutations from opaque bundle ids through anchored `openat2`/fd-relative path walking; daemon-owned ledgers are diagnostics, never repair authority.
+Guest lifecycle rows and runner snapshots additionally bind the immutable Zone
+UID, Guest UID and generation, Provider assignment generation, policy
+revision, and operation identity. UID-less or mismatched records remain
+quarantined for forensics and receive no replay, signal, adoption, cleanup, or
+deletion.
 
 ## Eval-time assertions
 

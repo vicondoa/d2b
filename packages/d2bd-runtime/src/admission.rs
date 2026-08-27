@@ -223,7 +223,10 @@ pub fn broker_caller_role_for_peer(peer: &PeerIdentity) -> BrokerCallerRole {
 
 #[cfg(test)]
 mod tests {
-    use super::{PeerIdentity, PeerRole, broker_caller_role_for_peer, lifecycle_group_member};
+    use super::{
+        PeerIdentity, PeerRole, broker_caller_role_for_peer, lifecycle_group_member,
+        verb_allowed_for_host_shutdown,
+    };
     use d2b_contracts_broker::broker_wire::BrokerCallerRole;
 
     #[test]
@@ -245,6 +248,14 @@ mod tests {
             }),
             BrokerCallerRole::HostShutdownUid { uid: 0 }
         ));
+    }
+
+    #[test]
+    fn host_shutdown_allowlist_is_stop_only() {
+        assert!(verb_allowed_for_host_shutdown("vmStop"));
+        for verb in ["vmStart", "vmRestart", "exec", "hostPrepare", "usbipBind"] {
+            assert!(!verb_allowed_for_host_shutdown(verb));
+        }
     }
 
 }

@@ -2054,6 +2054,25 @@
           }
         },
         {
+          "description": "Consume one sealed Guest lifecycle lease before any host effect.",
+          "type": "object",
+          "required": [
+            "kind",
+            "payload"
+          ],
+          "properties": {
+            "kind": {
+              "type": "string",
+              "enum": [
+                "ConsumeLifecycleLease"
+              ]
+            },
+            "payload": {
+              "$ref": "#/definitions/ConsumeLifecycleLeaseRequest"
+            }
+          }
+        },
+        {
           "description": "Obtain a pidfd for the peer of exactly one accepted Unix socket.\n\nThe accepted socket is the sole SCM_RIGHTS request attachment. The request body deliberately contains no descriptor number, PID, credential tuple, path, or subject claim.",
           "type": "object",
           "required": [
@@ -3461,6 +3480,25 @@
           }
         },
         {
+          "description": "Confirmation that one lifecycle lease was consumed.",
+          "type": "object",
+          "required": [
+            "kind",
+            "payload"
+          ],
+          "properties": {
+            "kind": {
+              "type": "string",
+              "enum": [
+                "ConsumeLifecycleLease"
+              ]
+            },
+            "payload": {
+              "$ref": "#/definitions/ConsumeLifecycleLeaseResponse"
+            }
+          }
+        },
+        {
           "description": "Response for [`BrokerRequest::OpenPeerPidfdFromAcceptedSocket`]. The only attachment is the returned close-on-exec pidfd.",
           "type": "object",
           "required": [
@@ -4569,6 +4607,65 @@
         "session": {
           "description": "Opaque console session handle (never logged or audited).",
           "type": "string"
+        }
+      },
+      "additionalProperties": false
+    },
+    "ConsumeLifecycleLeaseRequest": {
+      "description": "Broker-side consumption of one daemon-issued Guest lifecycle lease.\n\nThe broker validates the complete immutable identity and records this unique lease identity as consumed before allowing the daemon to request effects. Replay retention is bounded by the broker's lease expiry.",
+      "type": "object",
+      "required": [
+        "guestGeneration",
+        "guestUid",
+        "operation",
+        "operationId",
+        "policyRevision",
+        "providerAssignmentGeneration",
+        "zoneUid"
+      ],
+      "properties": {
+        "guestGeneration": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0.0
+        },
+        "guestUid": {
+          "$ref": "#/definitions/ResourceUid"
+        },
+        "operation": {
+          "$ref": "#/definitions/LifecycleLeaseOperation"
+        },
+        "operationId": {
+          "type": "string"
+        },
+        "policyRevision": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0.0
+        },
+        "providerAssignmentGeneration": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0.0
+        },
+        "stopOnly": {
+          "default": false,
+          "type": "boolean"
+        },
+        "zoneUid": {
+          "$ref": "#/definitions/ResourceUid"
+        }
+      },
+      "additionalProperties": false
+    },
+    "ConsumeLifecycleLeaseResponse": {
+      "type": "object",
+      "required": [
+        "consumed"
+      ],
+      "properties": {
+        "consumed": {
+          "type": "boolean"
         }
       },
       "additionalProperties": false
@@ -7917,6 +8014,15 @@
       "type": "integer",
       "maximum": 100.0,
       "minimum": 0.0
+    },
+    "LifecycleLeaseOperation": {
+      "description": "Operation named by a sealed Guest lifecycle lease.",
+      "type": "string",
+      "enum": [
+        "start",
+        "stop",
+        "restart"
+      ]
     },
     "ListEntry": {
       "type": "object",

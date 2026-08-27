@@ -3525,13 +3525,47 @@ impl d2bd_runtime::supervisor::state::PidfdOpener for BrokerPidfdOpener<'_> {
 
 fn adopt_orphaned_runners_on_startup(state: &ServerState) {
     if let Some(providers) = state.provider_runtime.process_providers() {
+        let store =
+            d2bd_runtime::supervisor::state::FilesystemSnapshotStore::new(&state.daemon_state_dir);
+        let snapshots = match d2bd_runtime::supervisor::state::SnapshotStore::list(&store) {
+            Ok(snapshots) => snapshots,
+            Err(error) => {
+                tracing::warn!(
+                    error = %error,
+                    "Provider startup adoption refused because runner snapshots are unavailable"
+                );
+                return;
+            }
+        };
         let result = block_on_future(async move {
             for vm in providers.vm_ids() {
-                providers.adopt_vm(&vm).await?;
+                let expected = current_runner_lifecycle_identity(state, &vm);
+                let managed_roles = providers
+                    .managed_role_ids(&vm)
+                    .into_iter()
+                    .collect::<BTreeSet<_>>();
+                for snapshot in snapshots.iter().filter(|snapshot| snapshot.vm == vm) {
+                    if !managed_roles.contains(&snapshot.role_id)
+                        || !runner_snapshot_is_eligible(snapshot, expected.as_ref())
+                    {
+                        tracing::warn!(
+                            vm = %snapshot.vm,
+                            role = %snapshot.role_id,
+                            "Provider startup adoption quarantined runner snapshot"
+                        );
+                    }
+                }
+                let eligible_roles = snapshots
+                    .iter()
+                    .filter(|snapshot| snapshot.vm == vm)
+                    .filter(|snapshot| managed_roles.contains(&snapshot.role_id))
+                    .filter(|snapshot| runner_snapshot_is_eligible(snapshot, expected.as_ref()))
+                    .map(|snapshot| snapshot.role_id.clone())
+                    .collect::<BTreeSet<_>>();
+                providers.adopt_vm(&vm, &eligible_roles).await?;
                 let _guard = state.pidfd_table.mutation_guard();
-                for role in providers.managed_role_ids(&vm) {
+                for role in eligible_roles {
                     let _ = state.pidfd_table.deregister(&vm, &role);
-                    remove_runner_snapshot(state, &vm, &role);
                 }
                 state
                     .pidfd_table
@@ -3574,6 +3608,30 @@ fn adopt_orphaned_runners_on_startup_with(
         return Ok(());
     }
 
+    let mut eligible_snapshots = Vec::with_capacity(snapshots.len());
+    for snapshot in &snapshots {
+        if !snapshot.has_complete_lifecycle_identity() {
+            tracing::warn!(
+                vm = %snapshot.vm,
+                role = %snapshot.role_id,
+                "startup adoption quarantined runner snapshot without lifecycle identity"
+            );
+            continue;
+        }
+        if !runner_snapshot_is_eligible(
+            snapshot,
+            current_runner_lifecycle_identity(state, &snapshot.vm).as_ref(),
+        ) {
+            tracing::warn!(
+                vm = %snapshot.vm,
+                role = %snapshot.role_id,
+                "startup adoption quarantined runner snapshot with stale lifecycle identity"
+            );
+            continue;
+        }
+        eligible_snapshots.push(snapshot.clone());
+    }
+
     let snapshot_index: BTreeMap<
         (String, String),
         &d2bd_runtime::supervisor::state::RunnerSnapshotRecord,
@@ -3583,7 +3641,11 @@ fn adopt_orphaned_runners_on_startup_with(
         .collect();
 
     for adopt in
-        d2bd_runtime::supervisor::state::reconcile_and_adopt(&snapshots, proc_reader, opener)
+        d2bd_runtime::supervisor::state::reconcile_and_adopt(
+            &eligible_snapshots,
+            proc_reader,
+            opener,
+        )
     {
         let key = (adopt.vm.clone(), adopt.role_id.clone());
         let Some(snapshot) = snapshot_index.get(&key) else {
@@ -3642,6 +3704,13 @@ fn adopt_orphaned_runners_on_startup_with(
                     expected_start_time_ticks = snapshot.start_time_ticks,
                     observed_start_time_ticks,
                     "startup adoption quarantined runner snapshot"
+                );
+            }
+            d2bd_runtime::supervisor::state::AdoptOutcome::QuarantineIdentity => {
+                tracing::warn!(
+                    vm = %adopt.vm,
+                    role = %adopt.role_id,
+                    "startup adoption quarantined runner snapshot without complete lifecycle identity"
                 );
             }
             d2bd_runtime::supervisor::state::AdoptOutcome::Missing => {
@@ -3709,6 +3778,58 @@ fn adopt_orphaned_runners_on_startup_with(
             detail: err.to_string(),
         })?;
     Ok(())
+}
+
+fn current_runner_lifecycle_identity(
+    state: &ServerState,
+    vm: &str,
+) -> Option<(
+    ResourceUid,
+    ResourceUid,
+    ResourceGeneration,
+    ResourceGeneration,
+    u64,
+)> {
+    let zone = d2bd_runtime::zone_authority::authoritative_zone_for_vm(
+        &state.zone_coordinator,
+        vm,
+    )
+    .ok()?;
+    let plane = state.resource_plane.lock().ok()?.clone()?;
+    let runtime = plane.zone(&zone).ok()?;
+    let target = ResourceRef::parse(&format!("Guest/{vm}")).ok()?;
+    let (zone_uid, guest_uid, guest_generation, provider_generation) =
+        block_on_future(runtime.guest_lifecycle_identity(&target)).ok()?;
+    let policy_revision = runtime.committed_policy_snapshot().policy_revision;
+    Some((
+        zone_uid,
+        guest_uid,
+        guest_generation,
+        provider_generation,
+        policy_revision,
+    ))
+}
+
+fn runner_snapshot_is_eligible(
+    snapshot: &d2bd_runtime::supervisor::state::RunnerSnapshotRecord,
+    expected: Option<&(
+        ResourceUid,
+        ResourceUid,
+        ResourceGeneration,
+        ResourceGeneration,
+        u64,
+    )>,
+) -> bool {
+    snapshot.has_complete_lifecycle_identity()
+        && expected.is_some_and(|expected| {
+            snapshot.matches_lifecycle_identity(
+                &expected.0,
+                &expected.1,
+                expected.2,
+                expected.3,
+                expected.4,
+            )
+        })
 }
 
 fn transient_adoption_error(detail: &str) -> bool {
@@ -5077,6 +5198,11 @@ fn dispatch_resource_request(
         ));
     }
     let method = request.method().unwrap_or("Resource");
+    if matches!(peer.role, PeerRole::HostShutdown) && method != "Stop" {
+        return Ok(resource_runtime_error_frame(
+            resource_runtime::ResourceRuntimeError::AuthenticationUnavailable,
+        ));
+    }
     let runtime = match resolve_resource_runtime(state, &request.value()) {
         Ok(runtime) => runtime,
         Err(error) => return Ok(resource_runtime_error_frame(error)),
@@ -5090,6 +5216,28 @@ fn dispatch_resource_request(
         ),
     )) {
         return Ok(resource_runtime_error_frame(error));
+    }
+    if matches!(
+        request.method(),
+        Some("Start" | "Stop" | "Restart")
+    ) {
+        let resource_type = request
+            .value()
+            .get("resourceRef")
+            .and_then(Value::as_str)
+            .and_then(|value| ResourceRef::parse(value).ok())
+            .map(|value| value.resource_type().as_str().to_owned());
+        return match resource_type.as_deref() {
+            Some("Guest") => {
+                dispatch_guest_lifecycle_resource_request(state, peer, runtime, &request.value())
+            }
+            Some("Process") => {
+                dispatch_process_lifecycle_resource_request(peer, runtime, &request.value())
+            }
+            _ => Err(TypedError::WireInvalidFrame {
+                detail: "lifecycle requires a Guest or Process resourceRef".to_owned(),
+            }),
+        };
     }
     if request.value().get("service").and_then(Value::as_str)
         == Some(d2b_provider_config_nixos::SERVICE_PACKAGE)
@@ -5180,6 +5328,318 @@ fn dispatch_resource_request(
         Ok(value) => Ok(value),
         Err(error) => Ok(resource_runtime_error_frame(error)),
     }
+}
+
+fn dispatch_guest_lifecycle_resource_request(
+    state: &ServerState,
+    peer: &PeerIdentity,
+    runtime: Arc<resource_runtime::ZoneResourceRuntime>,
+    request: &Value,
+) -> Result<Value, TypedError> {
+    let target = request
+        .get("resourceRef")
+        .and_then(Value::as_str)
+        .and_then(|value| ResourceRef::parse(value).ok())
+        .filter(|value| value.resource_type().as_str() == "Guest")
+        .ok_or_else(|| TypedError::WireInvalidFrame {
+            detail: "Guest lifecycle requires a Guest resourceRef".to_owned(),
+        })?;
+    let method = request
+        .get("method")
+        .and_then(Value::as_str)
+        .ok_or_else(|| TypedError::WireInvalidFrame {
+            detail: "Guest lifecycle request is missing method".to_owned(),
+        })?;
+    let operation = match method {
+        "Start" => provider_effects::GuestLifecycleOperation::Start,
+        "Stop" => provider_effects::GuestLifecycleOperation::Stop,
+        "Restart" => provider_effects::GuestLifecycleOperation::Restart,
+        _ => {
+            return Err(TypedError::WireUnsupportedRequest {
+                request_type: method.to_owned(),
+            });
+        }
+    };
+    let flags = public_wire::MutationFlags {
+        dry_run: request
+            .get("dryRun")
+            .and_then(Value::as_bool)
+            .unwrap_or(false),
+        apply: request
+            .get("apply")
+            .and_then(Value::as_bool)
+            .unwrap_or(false),
+        json: false,
+    };
+    let verb = format!("guest {}", method.to_ascii_lowercase());
+    if let Some(response) = mutating_verb_preflight(&verb, &flags, Some(target.name().as_str())) {
+        return Ok(response);
+    }
+    let force = request
+        .get("force")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+    let wait_for_ready = request
+        .get("waitForReady")
+        .and_then(Value::as_bool)
+        .unwrap_or(true);
+    let caller_role = broker_caller_role_for_peer(peer);
+    let request_operation_id = d2bd_runtime::resource_runtime_support::public_operation_id(
+        request,
+        peer.uid,
+        method,
+    );
+    let base_operation_id = provider_registry::next_lifecycle_operation_id(
+        operation.as_str(),
+        target.name().as_str(),
+        &request_operation_id,
+    );
+    let make_vm_request = |_operation_id: &str| public_wire::VmLifecycleRequest {
+        vm: target.name().as_str().to_owned(),
+        flags: flags.clone(),
+        force,
+        no_wait_api: !wait_for_ready,
+    };
+    let dispatch_one = |operation: provider_effects::GuestLifecycleOperation,
+                        operation_id: &str|
+     -> Result<(Value, Option<provider_effects::LifecycleAuthorization>), TypedError> {
+        let admission = match block_on_future(runtime.admit_guest_lifecycle(
+            peer.uid,
+            target.clone(),
+            operation_id,
+        )) {
+            Ok(admission) => admission,
+            Err(error) => return Ok((resource_runtime_error_frame(error), None)),
+        };
+        let authorization = match provider_effects::LifecycleAuthorization::from_lease(
+            admission.lease,
+            target.clone(),
+            admission.guest_uid,
+            admission.guest_generation,
+            admission.provider_assignment_generation,
+        ) {
+            Ok(authorization) => authorization,
+            Err(error) => {
+                return Ok((
+                    provider_lifecycle_failure_response(&verb, target.name().as_str(), error),
+                    None,
+                ));
+            }
+        };
+        let vm_request = make_vm_request(operation_id);
+        let effect = DaemonProviderLifecycleEffect {
+            state,
+            request: vm_request,
+            caller_role: caller_role.clone(),
+            term_timeout: VM_STOP_TIMEOUT,
+            kill_timeout: VM_STOP_TIMEOUT,
+            operation,
+            authorization: authorization.clone(),
+        };
+        let response = match state.provider_runtime.dispatch_lifecycle(
+            &caller_role,
+            target.name().as_str(),
+            operation,
+            operation_id.to_owned(),
+            authorization.clone(),
+            &effect,
+        ) {
+            Ok(provider_registry::ProviderRuntimeDispatch::Active(
+                provider_effects::EffectDispatch::Dispatched(response),
+            )) => response,
+            Ok(provider_registry::ProviderRuntimeDispatch::Active(
+                provider_effects::EffectDispatch::Duplicate,
+            )) => applied_response(
+                &verb,
+                format!(
+                    "guest {}: duplicate Provider lifecycle request",
+                    target.name().as_str()
+                ),
+            ),
+            Err(error) => provider_lifecycle_failure_response(
+                &verb,
+                target.name().as_str(),
+                error,
+            ),
+        };
+        Ok((response, Some(authorization)))
+    };
+
+    if operation == provider_effects::GuestLifecycleOperation::Restart {
+        let stop_id = format!("{base_operation_id}:stop");
+        let (stop, stop_authorization) =
+            dispatch_one(provider_effects::GuestLifecycleOperation::Stop, &stop_id)?;
+        if response_outcome(&stop) != Some("applied") {
+            return Ok(retarget_mutating_response(&stop, &verb));
+        }
+        let Some(stop_authorization) = stop_authorization else {
+            return Ok(retarget_mutating_response(
+                &provider_lifecycle_failure_response(
+                    &verb,
+                    target.name().as_str(),
+                    provider_effects::ProviderEffectError::StateUnavailable,
+                ),
+                &verb,
+            ));
+        };
+        let stop_is_latest = match state.provider_runtime.lifecycle_admission_is_latest(
+            &caller_role,
+            provider_effects::GuestLifecycleOperation::Stop,
+            &stop_authorization,
+        ) {
+            Ok(is_latest) => is_latest,
+            Err(error) => {
+                return Ok(retarget_mutating_response(
+                    &provider_lifecycle_failure_response(
+                        &verb,
+                        target.name().as_str(),
+                        error,
+                    ),
+                    &verb,
+                ));
+            }
+        };
+        if !stop_is_latest {
+            return Ok(retarget_mutating_response(
+                &provider_lifecycle_failure_response(
+                    &verb,
+                    target.name().as_str(),
+                    provider_effects::ProviderEffectError::MutationPending,
+                ),
+                &verb,
+            ));
+        }
+        let start_id = format!("{base_operation_id}:start");
+        let (start, _) =
+            dispatch_one(provider_effects::GuestLifecycleOperation::Start, &start_id)?;
+        if response_outcome(&start) != Some("applied") {
+            return Ok(retarget_mutating_response(&start, &verb));
+        }
+        return Ok(applied_response(
+            &verb,
+            format!(
+                "guest {}: {}; {}",
+                target.name().as_str(),
+                response_summary(&stop).unwrap_or("stop applied"),
+                response_summary(&start).unwrap_or("start applied"),
+            ),
+        ));
+    }
+    dispatch_one(operation, &base_operation_id).map(|(response, _)| response)
+}
+
+fn resource_runtime_failure(error: resource_runtime::ResourceRuntimeError) -> TypedError {
+    TypedError::RuntimeCapabilityUnsupported {
+        vm: "guest".to_owned(),
+        runtime_kind: "component-session".to_owned(),
+        capability: error.code().to_owned(),
+        verb: "lifecycle".to_owned(),
+    }
+}
+
+fn dispatch_process_lifecycle_resource_request(
+    peer: &PeerIdentity,
+    runtime: Arc<resource_runtime::ZoneResourceRuntime>,
+    request: &Value,
+) -> Result<Value, TypedError> {
+    let target = request
+        .get("resourceRef")
+        .and_then(Value::as_str)
+        .and_then(|value| ResourceRef::parse(value).ok())
+        .filter(|value| value.resource_type().as_str() == "Process")
+        .ok_or_else(|| TypedError::WireInvalidFrame {
+            detail: "Process lifecycle requires a Process resourceRef".to_owned(),
+        })?;
+    let method = request
+        .get("method")
+        .and_then(Value::as_str)
+        .ok_or_else(|| TypedError::WireInvalidFrame {
+            detail: "Process lifecycle request is missing method".to_owned(),
+        })?;
+    let desired = match method {
+        "Start" => "running",
+        "Stop" => "stopped",
+        "Restart" => "restart",
+        _ => {
+            return Err(TypedError::WireUnsupportedRequest {
+                request_type: method.to_owned(),
+            });
+        }
+    };
+    let flags = public_wire::MutationFlags {
+        dry_run: request
+            .get("dryRun")
+            .and_then(Value::as_bool)
+            .unwrap_or(false),
+        apply: request
+            .get("apply")
+            .and_then(Value::as_bool)
+            .unwrap_or(false),
+        json: false,
+    };
+    let verb = format!("process {}", method.to_ascii_lowercase());
+    if let Some(response) = mutating_verb_preflight(&verb, &flags, Some(target.name().as_str())) {
+        return Ok(response);
+    }
+    let base_operation_id = d2bd_runtime::resource_runtime_support::public_operation_id(
+        request,
+        peer.uid,
+        method,
+    );
+    let apply_one = |lifecycle: &str, operation_id: &str| -> Result<Value, TypedError> {
+        let get_request = json!({
+            "method": "Get",
+            "service": "d2b.resource.v3",
+            "zoneRef": format!("Zone/{}", runtime.zone().as_str()),
+            "resourceRef": target.to_canonical_string(),
+        });
+        let current =
+            block_on_future(runtime.dispatch_public_cli_request(&get_request, peer.uid))
+                .map_err(resource_runtime_failure)?;
+        if current.get("type").and_then(Value::as_str) == Some("error") {
+            return Ok(current);
+        }
+        let revision = current
+            .pointer("/metadata/revision")
+            .and_then(Value::as_u64)
+            .ok_or_else(|| TypedError::WireInvalidFrame {
+                detail: "Process lifecycle resource revision is missing".to_owned(),
+            })?;
+        let mut spec = current
+            .get("spec")
+            .cloned()
+            .ok_or_else(|| TypedError::WireInvalidFrame {
+                detail: "Process lifecycle resource spec is missing".to_owned(),
+            })?;
+        spec.as_object_mut()
+            .ok_or_else(|| TypedError::WireInvalidFrame {
+                detail: "Process lifecycle resource spec is invalid".to_owned(),
+            })?
+            .insert(
+                "desiredLifecycle".to_owned(),
+                Value::String(lifecycle.to_owned()),
+            );
+        let update_request = json!({
+            "method": "UpdateSpec",
+            "service": "d2b.resource.v3",
+            "zoneRef": format!("Zone/{}", runtime.zone().as_str()),
+            "resourceRef": target.to_canonical_string(),
+            "expectedRevision": revision,
+            "operationId": operation_id,
+            "spec": spec,
+            "waitForReconcile": request.get("waitForReady").and_then(Value::as_bool).unwrap_or(true),
+        });
+        block_on_future(runtime.dispatch_public_cli_request(&update_request, peer.uid))
+            .map_err(resource_runtime_failure)
+    };
+    if desired == "restart" {
+        let stop = apply_one("stopped", &format!("{base_operation_id}:stop"))?;
+        if stop.get("type").and_then(Value::as_str) == Some("error") {
+            return Ok(stop);
+        }
+        return apply_one("running", &format!("{base_operation_id}:start"));
+    }
+    apply_one(desired, &base_operation_id)
 }
 
 fn dispatch_device_usb_resource_request(
@@ -5968,15 +6428,58 @@ fn dispatch_wave6_resource_reconcile(
                     );
                     resource_runtime::ResourceRuntimeError::ProviderPathUnavailable
                 })?;
-            let adoption =
-                block_on_future(providers.adopt_node(guest_vm, &node)).map_err(|error| {
+            let snapshot_store = d2bd_runtime::supervisor::state::FilesystemSnapshotStore::new(
+                &state.daemon_state_dir,
+            );
+            let runner_snapshot = d2bd_runtime::supervisor::state::SnapshotStore::get(
+                &snapshot_store,
+                guest_vm,
+                "ch-runner",
+            )
+            .map_err(|error| {
+                tracing::warn!(
+                    guest = guest_vm,
+                    error = %error,
+                    "Guest Provider adoption snapshot lookup failed"
+                );
+                resource_runtime::ResourceRuntimeError::ProviderPathUnavailable
+            })?;
+            let expected_identity =
+                block_on_future(runtime.guest_lifecycle_identity(&resource_ref))
+                    .ok()
+                    .map(
+                        |(zone_uid, guest_uid, guest_generation, provider_generation)| {
+                            (
+                                zone_uid,
+                                guest_uid,
+                                guest_generation,
+                                provider_generation,
+                                runtime.committed_policy_snapshot().policy_revision,
+                            )
+                        },
+                    );
+            let adoption = match runner_snapshot.as_ref() {
+                None => process_provider_runtime::ProviderAdoption::Absent,
+                Some(snapshot)
+                    if !runner_snapshot_is_eligible(snapshot, expected_identity.as_ref()) =>
+                {
                     tracing::warn!(
                         guest = guest_vm,
-                        error = %error,
-                        "Guest Provider Cloud Hypervisor adoption failed"
+                        "Guest Provider adoption quarantined without current lifecycle snapshot"
                     );
-                    resource_runtime::ResourceRuntimeError::ProviderPathUnavailable
-                })?;
+                    return Err(resource_runtime::ResourceRuntimeError::ProviderPathUnavailable);
+                }
+                Some(_) => {
+                    block_on_future(providers.adopt_node(guest_vm, &node)).map_err(|error| {
+                        tracing::warn!(
+                            guest = guest_vm,
+                            error = %error,
+                            "Guest Provider Cloud Hypervisor adoption failed"
+                        );
+                        resource_runtime::ResourceRuntimeError::ProviderPathUnavailable
+                    })?
+                }
+            };
             let effect = match adoption {
                 process_provider_runtime::ProviderAdoption::Adopted(_) => {
                     "cloud-hypervisor-adopted"
@@ -6723,6 +7226,26 @@ fn dispatch_device_tpm_reconcile_inner(
         d2b_provider_device_tpm::BinaryKind::Swtpm,
         tpm_opaque_bytes("d2b:tpm-binary/v1", vm_id),
     );
+    let guest_ref = ResourceRef::parse(&format!("Guest/{vm_id}"))
+        .map_err(|_| resource_runtime::ResourceRuntimeError::RequestInvalid)?;
+    let lifecycle_operation_id = provider_registry::next_lifecycle_operation_id(
+        "tpm-start",
+        vm_id,
+        operation_id,
+    );
+    let lifecycle_admission = block_on_future(runtime.admit_guest_lifecycle(
+        peer.uid,
+        guest_ref.clone(),
+        &lifecycle_operation_id,
+    ))?;
+    let lifecycle_authorization = provider_effects::LifecycleAuthorization::from_lease(
+        lifecycle_admission.lease,
+        guest_ref,
+        lifecycle_admission.guest_uid,
+        lifecycle_admission.guest_generation,
+        lifecycle_admission.provider_assignment_generation,
+    )
+    .map_err(|_| resource_runtime::ResourceRuntimeError::AuthenticationUnavailable)?;
     let outcome = runtime
         .device_tpm_controller()
         .reconcile(
@@ -6737,6 +7260,7 @@ fn dispatch_device_tpm_reconcile_inner(
                 zone.as_str(),
                 ResourceRef::parse("Host/host-system")
                     .map_err(|_| resource_runtime::ResourceRuntimeError::ProviderPathUnavailable)?,
+                lifecycle_authorization,
             ),
             intent,
             d2b_provider_device_tpm::SwtpmSettings { log_level },
@@ -15207,6 +15731,7 @@ struct VmStartRunner<'a> {
     state: &'a ServerState,
     resolver: &'a BundleResolver,
     caller_role: BrokerCallerRole,
+    lifecycle_authorization: Option<provider_effects::LifecycleAuthorization>,
     /// Workload identity from the `VmProcessDag` this runner was constructed
     /// for.  `None` for VMs that predate realm workload declarations; `Some`
     /// for VMs declared as realm workloads.  Threaded into every
@@ -15457,13 +15982,15 @@ impl VmStartRunner<'_> {
         // failure path below would self-deadlock: `cleanup_vm_start_registration`
         // re-acquires this same non-reentrant guard.
         drop(_mguard);
-        if let Err(error) = write_runner_snapshot(
+        if let Err(error) = write_runner_snapshot_with_authorization(
             self.state,
             vm,
             &role_id,
             runner_role,
             response.pid,
             response.start_time_ticks,
+            None,
+            self.lifecycle_authorization.as_ref(),
         ) {
             cleanup_vm_start_registration(self.state, vm, &role_id);
             return Err(error);
@@ -15954,9 +16481,19 @@ fn write_runner_snapshot(
     pid: i32,
     start_time_ticks: u64,
 ) -> Result<(), String> {
-    write_runner_snapshot_owned(state, vm, role_id, role, pid, start_time_ticks, None)
+    write_runner_snapshot_with_authorization(
+        state,
+        vm,
+        role_id,
+        role,
+        pid,
+        start_time_ticks,
+        None,
+        None,
+    )
 }
 
+#[allow(dead_code)]
 fn write_runner_snapshot_owned(
     state: &ServerState,
     vm: &str,
@@ -15965,6 +16502,28 @@ fn write_runner_snapshot_owned(
     pid: i32,
     start_time_ticks: u64,
     owner_resource_uid: Option<&str>,
+) -> Result<(), String> {
+    write_runner_snapshot_with_authorization(
+        state,
+        vm,
+        role_id,
+        role,
+        pid,
+        start_time_ticks,
+        owner_resource_uid,
+        None,
+    )
+}
+
+pub(crate) fn write_runner_snapshot_with_authorization(
+    state: &ServerState,
+    vm: &str,
+    role_id: &str,
+    role: RunnerRole,
+    pid: i32,
+    start_time_ticks: u64,
+    owner_resource_uid: Option<&str>,
+    authorization: Option<&provider_effects::LifecycleAuthorization>,
 ) -> Result<(), String> {
     let store =
         d2bd_runtime::supervisor::state::FilesystemSnapshotStore::new(&state.daemon_state_dir);
@@ -15975,6 +16534,13 @@ fn write_runner_snapshot_owned(
             role_id: role_id.to_owned(),
             role,
             owner_resource_uid: owner_resource_uid.map(str::to_owned),
+            zone_uid: authorization.map(|value| value.zone_uid().clone()),
+            guest_uid: authorization.map(|value| value.guest_uid().clone()),
+            guest_generation: authorization.map(|value| value.guest_generation()),
+            provider_assignment_generation: authorization
+                .map(|value| value.provider_assignment_generation()),
+            policy_revision: authorization.map(|value| value.policy_revision()),
+            operation_id: authorization.map(|value| value.operation_id().to_owned()),
             pid,
             start_time_ticks,
             snapshotted_at: chrono_like_rfc3339(),
@@ -18352,12 +18918,30 @@ fn dispatch_broker_vm_start(
     state: &ServerState,
     request: public_wire::VmLifecycleRequest,
 ) -> Result<Value, TypedError> {
-    dispatch_broker_vm_start_as(
+    if load_bundle_resolver(state)
+        .ok()
+        .is_some_and(|resolver| {
+            resolver
+                .usbip_bind_intent_ids()
+                .filter_map(|intent_id| resolver.find_usbip_bind_intent(intent_id))
+                .any(|intent| intent.vm_name == request.vm)
+        })
+    {
+        return dispatch_broker_vm_start_as(
+            state,
+            request,
+            BrokerCallerRole::AdminUid {
+                uid: state.daemon_uid,
+            },
+        );
+    }
+    dispatch_broker_vm_start_inner(
         state,
         request,
         BrokerCallerRole::AdminUid {
             uid: state.daemon_uid,
         },
+        None,
     )
 }
 
@@ -18382,23 +18966,9 @@ fn dispatch_broker_vm_start_as(
         return Err(usbip_guest_import_unavailable(&request.vm, VERB));
     }
 
-    let provider_route_available = match state
-        .provider_runtime
-        .lifecycle_route_available(&request.vm)
-    {
-        Ok(available) => available,
-        Err(error) => {
-            return Ok(provider_lifecycle_failure_response(
-                VERB,
-                &request.vm,
-                error,
-            ));
-        }
-    };
-    if !provider_route_available {
-        return dispatch_broker_vm_start_inner(state, request, caller_role);
-    }
-
+    let operation_id = next_provider_lifecycle_operation_id("start", &request);
+    let authorization =
+        provider_lifecycle_authorization(state, &request.vm, &caller_role, &operation_id)?;
     let effect = DaemonProviderLifecycleEffect {
         state,
         request: request.clone(),
@@ -18406,17 +18976,16 @@ fn dispatch_broker_vm_start_as(
         term_timeout: VM_STOP_TIMEOUT,
         kill_timeout: VM_STOP_TIMEOUT,
         operation: provider_effects::GuestLifecycleOperation::Start,
+        authorization: authorization.clone(),
     };
     match state.provider_runtime.dispatch_lifecycle(
         &effect.caller_role,
         &request.vm,
         effect.operation,
-        next_provider_lifecycle_operation_id("start", &request),
+        operation_id,
+        authorization,
         &effect,
     ) {
-        Ok(provider_registry::ProviderRuntimeDispatch::Legacy) => {
-            dispatch_broker_vm_start_inner(state, request, caller_role)
-        }
         Ok(provider_registry::ProviderRuntimeDispatch::Active(
             provider_effects::EffectDispatch::Dispatched(response),
         )) => Ok(response),
@@ -18444,6 +19013,7 @@ struct DaemonProviderLifecycleEffect<'a> {
     term_timeout: Duration,
     kill_timeout: Duration,
     operation: provider_effects::GuestLifecycleOperation,
+    authorization: provider_effects::LifecycleAuthorization,
 }
 
 impl provider_effects::ProviderLifecycleEffectPort for DaemonProviderLifecycleEffect<'_> {
@@ -18482,11 +19052,18 @@ impl provider_effects::ProviderLifecycleEffectPort for DaemonProviderLifecycleEf
         &self,
         _request: &provider_effects::GuestLifecycleRequest,
     ) -> Result<Self::Output, provider_effects::ProviderEffectError> {
+        consume_lifecycle_lease(
+            self.state,
+            &self.authorization,
+            self.operation,
+            &self.caller_role,
+        )?;
         let result = match self.operation {
             provider_effects::GuestLifecycleOperation::Start => dispatch_broker_vm_start_inner(
                 self.state,
                 self.request.clone(),
                 self.caller_role.clone(),
+                Some(&self.authorization),
             ),
             provider_effects::GuestLifecycleOperation::Stop => {
                 dispatch_broker_vm_stop_with_timeout_as_inner(
@@ -18497,11 +19074,74 @@ impl provider_effects::ProviderLifecycleEffectPort for DaemonProviderLifecycleEf
                     self.kill_timeout,
                 )
             }
+            provider_effects::GuestLifecycleOperation::Restart => {
+                let stop = dispatch_broker_vm_stop_with_timeout_as_inner(
+                    self.state,
+                    self.request.clone(),
+                    self.caller_role.clone(),
+                    self.term_timeout,
+                    self.kill_timeout,
+                );
+                match stop {
+                    Ok(response) if response_outcome(&response) == Some("applied") => {
+                        dispatch_broker_vm_start_inner(
+                            self.state,
+                            self.request.clone(),
+                            self.caller_role.clone(),
+                            Some(&self.authorization),
+                        )
+                    }
+                    Ok(response) => Ok(response),
+                    Err(error) => Err(error),
+                }
+            }
         };
         match result {
             Ok(response) if response_outcome(&response) == Some("applied") => Ok(response),
             Ok(_) | Err(_) => Err(provider_effects::ProviderEffectError::EffectRejected),
         }
+    }
+}
+
+pub(crate) fn consume_lifecycle_lease(
+    state: &ServerState,
+    authorization: &provider_effects::LifecycleAuthorization,
+    operation: provider_effects::GuestLifecycleOperation,
+    caller_role: &BrokerCallerRole,
+) -> Result<(), provider_effects::ProviderEffectError> {
+    let operation = match operation {
+        provider_effects::GuestLifecycleOperation::Start => {
+            d2b_contracts_broker::broker_wire::LifecycleLeaseOperation::Start
+        }
+        provider_effects::GuestLifecycleOperation::Stop => {
+            d2b_contracts_broker::broker_wire::LifecycleLeaseOperation::Stop
+        }
+        provider_effects::GuestLifecycleOperation::Restart => {
+            d2b_contracts_broker::broker_wire::LifecycleLeaseOperation::Restart
+        }
+    };
+    let response = dispatch_broker_request_as(
+        state,
+        BrokerRequest::ConsumeLifecycleLease(
+            d2b_contracts_broker::broker_wire::ConsumeLifecycleLeaseRequest {
+                zone_uid: authorization.zone_uid().clone(),
+                guest_uid: authorization.guest_uid().clone(),
+                guest_generation: authorization.guest_generation().get(),
+                provider_assignment_generation: authorization
+                    .provider_assignment_generation()
+                    .get(),
+                policy_revision: authorization.policy_revision(),
+                operation_id: authorization.operation_id().to_owned(),
+                operation,
+                stop_only: authorization.is_stop_only(),
+            },
+        ),
+        caller_role.clone(),
+    )
+    .map_err(|_| provider_effects::ProviderEffectError::EffectRejected)?;
+    match response {
+        BrokerResponse::ConsumeLifecycleLease(response) if response.consumed => Ok(()),
+        _ => Err(provider_effects::ProviderEffectError::EffectRejected),
     }
 }
 
@@ -18518,6 +19158,129 @@ fn next_provider_lifecycle_operation_id(
         request.flags.json
     );
     provider_registry::next_lifecycle_operation_id(operation, &request.vm, &fingerprint)
+}
+
+fn provider_lifecycle_authorization(
+    state: &ServerState,
+    guest: &str,
+    caller_role: &BrokerCallerRole,
+    operation_id: &str,
+) -> Result<provider_effects::LifecycleAuthorization, TypedError> {
+    let target = ResourceRef::parse(&format!("Guest/{guest}")).map_err(|_| {
+        TypedError::InternalConfig {
+            detail: "Guest lifecycle target is invalid".to_owned(),
+        }
+    })?;
+    let zone = d2bd_runtime::zone_authority::authoritative_zone_for_vm(
+        &state.zone_coordinator,
+        guest,
+    )
+    .map_err(|_| TypedError::InternalConfig {
+        detail: "Guest lifecycle Zone identity is unavailable".to_owned(),
+    })?;
+    let plane = state
+        .resource_plane
+        .lock()
+        .map_err(|_| TypedError::InternalConfig {
+            detail: "Guest lifecycle resource plane is unavailable".to_owned(),
+        })?
+        .clone();
+    let runtime = plane
+        .as_ref()
+        .and_then(|plane| plane.zone(&zone).ok());
+    let Some(runtime) = runtime else {
+        #[cfg(test)]
+        {
+            if matches!(caller_role, BrokerCallerRole::HostShutdownUid { .. }) {
+                return provider_effects::LifecycleAuthorization::host_shutdown(
+                    ResourceUid::parse("11111111-1111-4111-8111-111111111111")
+                        .expect("Zone UID"),
+                    target,
+                    ResourceUid::parse("22222222-2222-4222-8222-222222222222")
+                        .expect("Guest UID"),
+                    ResourceGeneration::new(1).expect("Guest generation"),
+                    ResourceGeneration::new(1).expect("Provider assignment generation"),
+                    1,
+                    operation_id.to_owned(),
+                )
+                .map_err(|_| TypedError::InternalConfig {
+                    detail: "Host shutdown lifecycle lease is invalid".to_owned(),
+                });
+            }
+            return Ok(provider_effects::LifecycleAuthorization::for_test(
+                "11111111-1111-4111-8111-111111111111",
+                "22222222-2222-4222-8222-222222222222",
+                1,
+                1,
+                1,
+                operation_id,
+            ));
+        }
+        #[cfg(not(test))]
+        {
+            return Err(TypedError::InternalConfig {
+                detail: "Guest lifecycle resource runtime is unavailable".to_owned(),
+            });
+        }
+    };
+    if matches!(caller_role, BrokerCallerRole::RootUid { .. }) {
+        let admission = block_on_future(
+            runtime.admit_internal_guest_lifecycle(target.clone(), operation_id),
+        )
+        .map_err(|_| TypedError::InternalConfig {
+            detail: "internal Guest lifecycle authorization is unavailable".to_owned(),
+        })?;
+        return provider_effects::LifecycleAuthorization::from_lease(
+            admission.lease,
+            target,
+            admission.guest_uid,
+            admission.guest_generation,
+            admission.provider_assignment_generation,
+        )
+        .map_err(|_| TypedError::InternalConfig {
+            detail: "internal Guest lifecycle authorization lease is invalid".to_owned(),
+        });
+    }
+    let (zone_uid, guest_uid, guest_generation, provider_generation) =
+        block_on_future(runtime.guest_lifecycle_identity(&target)).map_err(|_| {
+            TypedError::InternalConfig {
+                detail: "Guest lifecycle identity is unavailable".to_owned(),
+            }
+        })?;
+    if matches!(caller_role, BrokerCallerRole::HostShutdownUid { .. }) {
+        return provider_effects::LifecycleAuthorization::host_shutdown(
+            zone_uid,
+            target,
+            guest_uid,
+            guest_generation,
+            provider_generation,
+            runtime.committed_policy_snapshot().policy_revision,
+            operation_id.to_owned(),
+        )
+        .map_err(|_| TypedError::InternalConfig {
+            detail: "Host shutdown lifecycle lease is invalid".to_owned(),
+        });
+    }
+    let admission = block_on_future(runtime.admit_guest_lifecycle(
+        broker_caller_uid(caller_role),
+        target,
+        operation_id,
+    ))
+    .map_err(|_| TypedError::InternalConfig {
+        detail: "Guest lifecycle authorization is unavailable".to_owned(),
+    })?;
+    provider_effects::LifecycleAuthorization::from_lease(
+        admission.lease,
+        ResourceRef::parse(&format!("Guest/{guest}")).map_err(|_| TypedError::InternalConfig {
+            detail: "Guest lifecycle target is invalid".to_owned(),
+        })?,
+        admission.guest_uid,
+        admission.guest_generation,
+        admission.provider_assignment_generation,
+    )
+    .map_err(|_| TypedError::InternalConfig {
+        detail: "Guest lifecycle authorization lease is invalid".to_owned(),
+    })
 }
 
 fn provider_lifecycle_failure_response(
@@ -18550,6 +19313,7 @@ fn dispatch_broker_vm_start_inner(
     state: &ServerState,
     request: public_wire::VmLifecycleRequest,
     caller_role: BrokerCallerRole,
+    lifecycle_authorization: Option<&provider_effects::LifecycleAuthorization>,
 ) -> Result<Value, TypedError> {
     const VERB: &str = "vm start";
 
@@ -18590,6 +19354,7 @@ fn dispatch_broker_vm_start_inner(
         state,
         resolver: &resolver,
         caller_role: caller_role.clone(),
+        lifecycle_authorization: lifecycle_authorization.cloned(),
         workload_identity: dag.workload_identity.clone(),
         network_tap_context: network_tap_context_for_vm(state, &resolver, request.vm.as_str()),
     };
@@ -19310,7 +20075,13 @@ fn dispatch_broker_vm_stop(
     state: &ServerState,
     request: public_wire::VmLifecycleRequest,
 ) -> Result<Value, TypedError> {
-    dispatch_broker_vm_stop_as(state, request, BrokerCallerRole::LauncherUid { uid: 0 })
+    dispatch_broker_vm_stop_with_timeout_as_inner(
+        state,
+        request,
+        BrokerCallerRole::LauncherUid { uid: 0 },
+        VM_STOP_TIMEOUT,
+        VM_STOP_TIMEOUT,
+    )
 }
 
 fn dispatch_broker_vm_stop_as(
@@ -19334,7 +20105,7 @@ fn dispatch_broker_vm_stop_with_timeout(
     term_timeout: Duration,
     kill_timeout: Duration,
 ) -> Result<Value, TypedError> {
-    dispatch_broker_vm_stop_with_timeout_as(
+    dispatch_broker_vm_stop_with_timeout_as_inner(
         state,
         request,
         BrokerCallerRole::LauncherUid { uid: 0 },
@@ -19357,20 +20128,11 @@ fn dispatch_broker_vm_stop_with_timeout_as(
         return Ok(response);
     }
 
-    let provider_route_available = match state
-        .provider_runtime
-        .lifecycle_route_available(&request.vm)
-    {
-        Ok(available) => available,
-        Err(error) => {
-            return Ok(provider_lifecycle_failure_response(
-                VERB,
-                &request.vm,
-                error,
-            ));
-        }
-    };
-    if !provider_route_available {
+    // The state-persistence support binary intentionally exercises pidfd
+    // cleanup without requiring a host Provider bundle or live resource
+    // plane. Production builds keep the fail-closed Provider path below.
+    #[cfg(feature = "test-support")]
+    if state.provider_runtime.process_providers().is_none() {
         return dispatch_broker_vm_stop_with_timeout_as_inner(
             state,
             request,
@@ -19380,6 +20142,9 @@ fn dispatch_broker_vm_stop_with_timeout_as(
         );
     }
 
+    let operation_id = next_provider_lifecycle_operation_id("stop", &request);
+    let authorization =
+        provider_lifecycle_authorization(state, &request.vm, &caller_role, &operation_id)?;
     let effect = DaemonProviderLifecycleEffect {
         state,
         request: request.clone(),
@@ -19387,23 +20152,16 @@ fn dispatch_broker_vm_stop_with_timeout_as(
         term_timeout,
         kill_timeout,
         operation: provider_effects::GuestLifecycleOperation::Stop,
+        authorization: authorization.clone(),
     };
     match state.provider_runtime.dispatch_lifecycle(
         &caller_role,
         &request.vm,
         effect.operation,
-        next_provider_lifecycle_operation_id("stop", &request),
+        operation_id,
+        authorization,
         &effect,
     ) {
-        Ok(provider_registry::ProviderRuntimeDispatch::Legacy) => {
-            dispatch_broker_vm_stop_with_timeout_as_inner(
-                state,
-                request,
-                caller_role,
-                term_timeout,
-                kill_timeout,
-            )
-        }
         Ok(provider_registry::ProviderRuntimeDispatch::Active(
             provider_effects::EffectDispatch::Dispatched(response),
         )) => Ok(response),
@@ -19581,7 +20339,34 @@ fn dispatch_broker_vm_restart(
     state: &ServerState,
     request: public_wire::VmLifecycleRequest,
 ) -> Result<Value, TypedError> {
-    dispatch_broker_vm_restart_as(state, request, BrokerCallerRole::LauncherUid { uid: 0 })
+    let stop_response = dispatch_broker_vm_stop_with_timeout_as_inner(
+        state,
+        request.clone(),
+        BrokerCallerRole::LauncherUid { uid: 0 },
+        VM_STOP_TIMEOUT,
+        VM_STOP_TIMEOUT,
+    )?;
+    if response_outcome(&stop_response) != Some("applied") {
+        return Ok(retarget_mutating_response(&stop_response, "vm restart"));
+    }
+    let start_response = dispatch_broker_vm_start_inner(
+        state,
+        request.clone(),
+        BrokerCallerRole::LauncherUid { uid: 0 },
+        None,
+    )?;
+    if response_outcome(&start_response) != Some("applied") {
+        return Ok(retarget_mutating_response(&start_response, "vm restart"));
+    }
+    Ok(applied_response(
+        "vm restart",
+        format!(
+            "vm restart {}: {}; {}",
+            request.vm,
+            response_summary(&stop_response).unwrap_or("stop applied"),
+            response_summary(&start_response).unwrap_or("start applied"),
+        ),
+    ))
 }
 
 fn dispatch_broker_vm_restart_as(
@@ -23865,12 +24650,30 @@ mod public_status_tests {
             term_timeout: VM_STOP_TIMEOUT,
             kill_timeout: VM_STOP_TIMEOUT,
             operation: provider_effects::GuestLifecycleOperation::Start,
+            authorization: provider_effects::LifecycleAuthorization::for_test_with_guest(
+                "Guest/vm-a",
+                "11111111-1111-4111-8111-111111111111",
+                "22222222-2222-4222-8222-222222222222",
+                1,
+                1,
+                1,
+                "failed-state",
+            ),
         };
         let lifecycle_request = provider_effects::GuestLifecycleRequest::new(
             ZoneId::parse("work").expect("Zone"),
             d2b_contracts_resource::v3::ResourceRef::parse("Guest/vm-a").expect("Guest ref"),
             provider_effects::GuestLifecycleOperation::Start,
             "failed-state",
+            provider_effects::LifecycleAuthorization::for_test_with_guest(
+                "Guest/vm-a",
+                "11111111-1111-4111-8111-111111111111",
+                "22222222-2222-4222-8222-222222222222",
+                1,
+                1,
+                1,
+                "failed-state",
+            ),
         )
         .expect("lifecycle request");
 
@@ -25340,6 +26143,7 @@ mod broker_dispatch_tests {
     };
     use d2b_core::bundle_resolver::BundleResolver;
     use d2b_core::processes::ProcessRole;
+    use d2b_contracts_resource::v3::{ResourceGeneration, ResourceUid};
     use nix::sys::socket::{
         AddressFamily, Backlog, ControlMessage, MsgFlags, SockFlag, SockType, UnixAddr, accept4,
         bind, listen, recv, sendmsg, socket,
@@ -25364,11 +26168,13 @@ mod broker_dispatch_tests {
         redact_broker_dispatch_failure_for_launcher,
         redact_broker_error_for_launcher, resolve_store_view_intent_for_vm,
         reconcile_display_before_vm_start, rollback_failed_vm_start, run_provider_graceful_shutdown,
+        runner_snapshot_is_eligible,
         same_vm_declared_usbip_start_claims_with_reader,
         same_vm_persisted_usbip_stop_claims_with_reader,
         stale_qemu_media_dependency_roles_from_entries, usbip_start_reconciles_synchronously,
-        vm_start_node_mode,
+        vm_start_node_mode, write_runner_snapshot_with_authorization,
     };
+    use super::provider_effects::LifecycleAuthorization;
     use d2bd_runtime::supervisor::pidfd_table::{
         BrokerReapLog, PidfdEntry, PidfdRegistration, PidfdTable, WaitTermination,
         force_signal_eperm_for_tests,
@@ -27599,7 +28405,7 @@ mod broker_dispatch_tests {
     }
 
     #[test]
-    fn startup_adoption_reads_runner_snapshots() {
+    fn startup_adoption_quarantines_without_authoritative_lifecycle_identity() {
         struct FixedProcReader;
 
         impl ProcReader for FixedProcReader {
@@ -27651,6 +28457,20 @@ mod broker_dispatch_tests {
                 role_id: "virtiofsd-ro-store".to_owned(),
                 role: RunnerRole::Virtiofsd,
                 owner_resource_uid: None,
+                zone_uid: Some(
+                    ResourceUid::parse("11111111-1111-4111-8111-111111111111")
+                        .expect("Zone UID"),
+                ),
+                guest_uid: Some(
+                    ResourceUid::parse("22222222-2222-4222-8222-222222222222")
+                        .expect("Guest UID"),
+                ),
+                guest_generation: Some(ResourceGeneration::new(1).expect("Guest generation")),
+                provider_assignment_generation: Some(
+                    ResourceGeneration::new(1).expect("Provider assignment generation"),
+                ),
+                policy_revision: Some(1),
+                operation_id: Some("startup-adoption-operation".to_owned()),
                 pid: 4242,
                 start_time_ticks: 55,
                 snapshotted_at: "2026-05-30T00:00:00Z".to_owned(),
@@ -27701,13 +28521,106 @@ mod broker_dispatch_tests {
         };
         let opener = RecordingOpener::new();
         adopt_orphaned_runners_on_startup_with(&state, &store, &FixedProcReader, &opener)
-            .expect("adopt startup snapshots");
+            .expect("quarantine startup snapshots");
 
-        assert_eq!(
-            *opener.calls.lock().expect("lock opener calls"),
-            vec![("vm-a".to_owned(), "virtiofsd-ro-store".to_owned(), 4242, 55)]
+        assert!(
+            opener.calls.lock().expect("lock opener calls").is_empty(),
+            "without current lifecycle identity, startup must not open pidfds"
         );
-        assert!(state.pidfd_table.contains("vm-a", "virtiofsd-ro-store"));
+        assert!(!state.pidfd_table.contains("vm-a", "virtiofsd-ro-store"));
+        assert!(
+            SnapshotStore::get(&store, "vm-a", "virtiofsd-ro-store")
+                .expect("read quarantined snapshot")
+                .is_some(),
+            "quarantined snapshots remain available for forensics"
+        );
+    }
+
+    #[test]
+    fn provider_startup_adoption_requires_a_current_lifecycle_snapshot() {
+        let snapshot = RunnerSnapshotRecord {
+            vm: "vm-a".to_owned(),
+            role_id: "ch-runner".to_owned(),
+            role: RunnerRole::CloudHypervisor,
+            owner_resource_uid: None,
+            zone_uid: Some(
+                ResourceUid::parse("11111111-1111-4111-8111-111111111111")
+                    .expect("Zone UID"),
+            ),
+            guest_uid: Some(
+                ResourceUid::parse("22222222-2222-4222-8222-222222222222")
+                    .expect("Guest UID"),
+            ),
+            guest_generation: Some(ResourceGeneration::new(1).expect("Guest generation")),
+            provider_assignment_generation: Some(
+                ResourceGeneration::new(1).expect("Provider generation"),
+            ),
+            policy_revision: Some(1),
+            operation_id: Some("lifecycle-attempt".to_owned()),
+            pid: 4242,
+            start_time_ticks: 55,
+            snapshotted_at: "2026-05-30T00:00:00Z".to_owned(),
+        };
+        assert!(!runner_snapshot_is_eligible(&snapshot, None));
+
+        let mismatched = (
+            ResourceUid::parse("11111111-1111-4111-8111-111111111111").expect("Zone UID"),
+            ResourceUid::parse("33333333-3333-4333-8333-333333333333")
+                .expect("replacement Guest UID"),
+            ResourceGeneration::new(1).expect("Guest generation"),
+            ResourceGeneration::new(1).expect("Provider generation"),
+            1,
+        );
+        assert!(!runner_snapshot_is_eligible(&snapshot, Some(&mismatched)));
+
+        let matching = (
+            ResourceUid::parse("11111111-1111-4111-8111-111111111111").expect("Zone UID"),
+            ResourceUid::parse("22222222-2222-4222-8222-222222222222").expect("Guest UID"),
+            ResourceGeneration::new(1).expect("Guest generation"),
+            ResourceGeneration::new(1).expect("Provider generation"),
+            1,
+        );
+        assert!(runner_snapshot_is_eligible(&snapshot, Some(&matching)));
+    }
+
+    #[test]
+    fn authorized_runner_snapshot_persists_the_complete_lifecycle_tuple() {
+        let state =
+            test_state_with_broker_socket(unreachable_broker_socket_path("authorized-snapshot"));
+        let authorization = LifecycleAuthorization::for_test_with_guest(
+            "Guest/vm-a",
+            "11111111-1111-4111-8111-111111111111",
+            "22222222-2222-4222-8222-222222222222",
+            4,
+            9,
+            7,
+            "lifecycle-attempt",
+        );
+        write_runner_snapshot_with_authorization(
+            &state,
+            "vm-a",
+            "ch-runner",
+            RunnerRole::CloudHypervisor,
+            4242,
+            55,
+            None,
+            Some(&authorization),
+        )
+        .expect("write authorized runner snapshot");
+        let store = FilesystemSnapshotStore::new(&state.daemon_state_dir);
+        let snapshot = SnapshotStore::get(&store, "vm-a", "ch-runner")
+            .expect("read snapshot")
+            .expect("snapshot");
+        assert!(snapshot.has_complete_lifecycle_identity());
+        assert_eq!(snapshot.zone_uid, Some(authorization.zone_uid().clone()));
+        assert_eq!(snapshot.guest_uid, Some(authorization.guest_uid().clone()));
+        assert_eq!(snapshot.guest_generation, Some(authorization.guest_generation()));
+        assert_eq!(
+            snapshot.provider_assignment_generation,
+            Some(authorization.provider_assignment_generation())
+        );
+        assert_eq!(snapshot.policy_revision, Some(authorization.policy_revision()));
+        assert_eq!(snapshot.operation_id.as_deref(), Some("lifecycle-attempt"));
     }
 
     #[test]

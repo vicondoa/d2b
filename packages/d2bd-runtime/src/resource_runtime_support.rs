@@ -2056,7 +2056,18 @@ pub fn public_operation_id(request: &Value, peer_uid: u32, method: &str) -> Stri
                 .get("resourceType")
                 .and_then(Value::as_str)
                 .unwrap_or("resource");
-            format!("public-{peer_uid}-{method}-{resource_type}")
+            let target = request
+                .get("resourceRef")
+                .or_else(|| request.get("executionRef"))
+                .and_then(Value::as_str)
+                .unwrap_or("unaddressed");
+            let digest = Sha256::digest(format!("{method}:{resource_type}:{target}").as_bytes());
+            let suffix = digest
+                .iter()
+                .take(8)
+                .map(|byte| format!("{byte:02x}"))
+                .collect::<String>();
+            format!("public-{peer_uid}-{method}-{resource_type}-{suffix}")
         })
 }
 
@@ -4073,5 +4084,27 @@ mod tests {
             public_api_error(&unavailable)["error"]["kind"],
             "resource-plane-unavailable"
         );
+    }
+
+    #[test]
+    fn public_operation_identity_includes_the_exact_target() {
+        let first = public_operation_id(
+            &json!({
+                "resourceType": "Guest",
+                "resourceRef": "Guest/workstation",
+            }),
+            1000,
+            "Start",
+        );
+        let second = public_operation_id(
+            &json!({
+                "resourceType": "Guest",
+                "resourceRef": "Guest/personal",
+            }),
+            1000,
+            "Start",
+        );
+        assert_ne!(first, second);
+        assert!(first.starts_with("public-1000-Start-Guest-"));
     }
 }

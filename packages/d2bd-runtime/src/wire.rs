@@ -183,6 +183,26 @@ impl Request {
                 OpLockClass::PerVm(target)
             }
             Self::Resource(request)
+                if matches!(request.method(), Some("Start" | "Stop" | "Restart")) =>
+            {
+                let target = request
+                    .fields
+                    .get("resourceRef")
+                    .and_then(Value::as_str)
+                    .and_then(|value| ResourceRef::parse(value).ok())
+                    .filter(|value| matches!(value.resource_type().as_str(), "Guest" | "Process"))
+                    .map(|value| {
+                        if value.resource_type().as_str() == "Guest" {
+                            value.name().to_canonical_string()
+                        } else {
+                            value.to_canonical_string()
+                        }
+                    });
+                target
+                    .map(OpLockClass::PerVm)
+                    .unwrap_or(OpLockClass::ReadOnly)
+            }
+            Self::Resource(request)
                 if matches!(
                     request.method(),
                     Some(
@@ -703,6 +723,31 @@ mod tests {
             request.lock_class(),
             crate::concurrency::OpLockClass::Global
         );
+    }
+
+    #[test]
+    fn typed_guest_and_process_lifecycle_requests_lock_the_target() {
+        for (resource_ref, expected) in [
+            (
+                "Guest/corp-vm",
+                crate::concurrency::OpLockClass::PerVm("corp-vm".to_owned()),
+            ),
+            (
+                "Process/worker",
+                crate::concurrency::OpLockClass::PerVm("Process/worker".to_owned()),
+            ),
+        ] {
+            for method in ["Start", "Stop", "Restart"] {
+                let request = parse_request(
+                    format!(
+                        r#"{{"type":"resourceRequest","service":"d2b.resource.v3","method":"{method}","zoneRef":"Zone/work","resourceRef":"{resource_ref}","apply":true}}"#
+                    )
+                    .as_bytes(),
+                )
+                .expect("typed lifecycle request");
+                assert_eq!(request.lock_class(), expected);
+            }
+        }
     }
 
     #[test]

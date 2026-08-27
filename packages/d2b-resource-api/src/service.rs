@@ -23,6 +23,7 @@ use d2b_contracts_resource::v3::{
     MAX_WATCH_FILTERS,
     MAX_WATCH_RESOURCE_TYPES,
     RESOURCE_ENVELOPE_DOMAIN_TAG,
+    ResourceGeneration,
     ResourceEnvelope,
     ResourceError,
     ResourceErrorKind,
@@ -174,6 +175,27 @@ pub struct ResourceService<S, U = UnavailableUpgradeDispatcher> {
     zone_uid: Option<ResourceUid>,
 }
 
+/// Store-derived identity and sealed authorization for one Guest lifecycle
+/// effect.
+pub struct GuestLifecycleAdmission {
+    pub lease: crate::AuthorizationLease,
+    pub guest_uid: ResourceUid,
+    pub guest_generation: ResourceGeneration,
+    pub provider_assignment_generation: ResourceGeneration,
+}
+
+impl core::fmt::Debug for GuestLifecycleAdmission {
+    fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        formatter
+            .debug_struct("GuestLifecycleAdmission")
+            .field("lease", &self.lease)
+            .field("guest_uid", &"<redacted>")
+            .field("guest_generation", &"<redacted>")
+            .field("provider_assignment_generation", &"<redacted>")
+            .finish()
+    }
+}
+
 impl<S, U> core::fmt::Debug for ResourceService<S, U> {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         f.write_str("ResourceService(<redacted>)")
@@ -214,6 +236,153 @@ where
     S: ResourceStoreBackend,
     U: UpgradeDispatcher,
 {
+    /// Authenticate and authorize a Guest lifecycle operation against the
+    /// current store row, returning the one-use downstream lease.
+    pub async fn admit_guest_lifecycle(
+        &self,
+        subject: &crate::AuthenticatedSubjectContext,
+        target: ResourceRef,
+        operation_id: impl Into<String>,
+    ) -> Result<GuestLifecycleAdmission, ResourceError> {
+        if target.resource_type().as_str() != "Guest" {
+            return Err(ResourceError::terminal(
+                ResourceErrorKind::AuthorizationDenied,
+                "Guest lifecycle target is invalid",
+            ));
+        }
+        let operation_id = operation_id.into();
+        let zone = ZoneId::parse(subject.claims().zone_ref().name().as_str()).map_err(|_| {
+            ResourceError::terminal(
+                ResourceErrorKind::AuthorizationDenied,
+                "Guest lifecycle Zone is invalid",
+            )
+        })?;
+        let trusted = TrustedRequest::from_session_capability(
+            subject.claims().clone(),
+            subject.authorization_state().clone(),
+            (),
+        );
+        let current = self
+            .store
+            .get(StoreGetRequest {
+                operation: runtime_operation(operation_id.clone()),
+                zone: zone.clone(),
+                target: target.clone(),
+                expected_uid: None,
+                projection: d2b_resource_store::StoreProjection::Full,
+            })
+            .await
+            .map_err(map_store_error)?;
+        if current.zone != zone || current.resource_ref != target {
+            return Err(ResourceError::terminal(
+                ResourceErrorKind::AuthorizationDenied,
+                "Guest lifecycle identity does not match the current Zone",
+            ));
+        }
+        let envelope = ResourceEnvelope::from_json(&current.canonical_json)
+            .map_err(|_| schema_error("Guest lifecycle resource is invalid"))?;
+        if envelope.resource_type().as_str() != "Guest"
+            || envelope.metadata().zone() != &zone
+            || envelope.metadata().uid() != &current.uid
+            || envelope.metadata().generation() != current.generation
+            || envelope.metadata().revision() != current.revision
+            || envelope
+                .digest()
+                .map_err(|_| schema_error("Guest lifecycle resource digest is invalid"))?
+                != current.payload_digest
+        {
+            return Err(ResourceError::terminal(
+                ResourceErrorKind::AuthorizationDenied,
+                "Guest lifecycle identity is not current",
+            ));
+        }
+        let provider_ref = envelope
+            .spec()
+            .provider_ref()
+            .cloned()
+            .ok_or_else(|| schema_error("Guest lifecycle Provider is missing"))?;
+        if provider_ref.resource_type().as_str() != "Provider" {
+            return Err(schema_error("Guest lifecycle Provider is invalid"));
+        }
+        let provider = self
+            .store
+            .get(StoreGetRequest {
+                operation: runtime_operation(format!("{operation_id}:provider")),
+                zone: zone.clone(),
+                target: provider_ref,
+                expected_uid: None,
+                projection: d2b_resource_store::StoreProjection::Full,
+            })
+            .await
+            .map_err(map_store_error)?;
+        if provider.zone != zone
+            || provider.resource_ref.resource_type().as_str() != "Provider"
+            || provider.generation.get() == 0
+        {
+            return Err(ResourceError::terminal(
+                ResourceErrorKind::AuthorizationDenied,
+                "Guest lifecycle Provider identity is not current",
+            ));
+        }
+        let provider_envelope = ResourceEnvelope::from_json(&provider.canonical_json)
+            .map_err(|_| schema_error("Guest lifecycle Provider resource is invalid"))?;
+        if provider_envelope.resource_type().as_str() != "Provider"
+            || provider_envelope.metadata().zone() != &zone
+            || provider_envelope.metadata().uid() != &provider.uid
+            || provider_envelope.metadata().generation() != provider.generation
+            || provider_envelope.metadata().revision() != provider.revision
+            || provider_envelope
+                .digest()
+                .map_err(|_| schema_error("Guest lifecycle Provider digest is invalid"))?
+                != provider.payload_digest
+        {
+            return Err(ResourceError::terminal(
+                ResourceErrorKind::AuthorizationDenied,
+                "Guest lifecycle Provider identity is not current",
+            ));
+        }
+        let grant = self.authorize(
+            &trusted,
+            AuthorizationRequest {
+                method: ApiMethod::UpdateSpec,
+                zone: zone.clone(),
+                targets: vec![AuthorizationTarget {
+                    resource_type: target.resource_type().clone(),
+                    resource_name: Some(target.name().clone()),
+                    verb: ResourceVerb::UpdateSpec,
+                    subresource: None,
+                    execution_ref: None,
+                }],
+            },
+        )?;
+        let zone_uid = self.zone_uid.clone().ok_or_else(|| {
+            ResourceError::terminal(
+                ResourceErrorKind::InternalIntegrityFailure,
+                "Guest lifecycle Zone identity is unavailable",
+            )
+        })?;
+        let lease = grant
+            .issue_lifecycle_lease(
+                zone_uid,
+                current.uid.clone(),
+                current.generation,
+                provider.generation,
+                operation_id,
+            )
+            .map_err(|_| {
+                ResourceError::terminal(
+                    ResourceErrorKind::InternalIntegrityFailure,
+                    "Guest lifecycle lease admission failed",
+                )
+            })?;
+        Ok(GuestLifecycleAdmission {
+            lease,
+            guest_uid: current.uid,
+            guest_generation: current.generation,
+            provider_assignment_generation: provider.generation,
+        })
+    }
+
     pub fn with_upgrade(
         store: Arc<S>,
         authorizer: Arc<NativeAuthorizer>,

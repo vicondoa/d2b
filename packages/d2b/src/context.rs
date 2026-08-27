@@ -1725,7 +1725,7 @@ fn canonical_verb(method: &str) -> ResourceVerb {
         "Create" | "DeviceUsbAttach" | "DeviceUsbDetach" | "SecurityKeyCancel" | "Apply" => {
             ResourceVerb::Create
         }
-        "UpdateSpec" => ResourceVerb::UpdateSpec,
+        "UpdateSpec" | "Start" | "Stop" | "Restart" => ResourceVerb::UpdateSpec,
         "Delete" => ResourceVerb::Delete,
         "Upgrade" => ResourceVerb::Upgrade,
         _ => ResourceVerb::Get,
@@ -1733,7 +1733,9 @@ fn canonical_verb(method: &str) -> ResourceVerb {
 }
 
 fn resource_verb(method: &str, mutating: bool) -> ResourceVerb {
-    if mutating {
+    if mutating && matches!(method, "Start" | "Stop" | "Restart") {
+        ResourceVerb::UpdateSpec
+    } else if mutating {
         ResourceVerb::Create
     } else {
         canonical_verb(method)

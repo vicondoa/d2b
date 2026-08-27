@@ -2033,6 +2033,164 @@ impl ZoneResourceRuntime {
         self.bind_operator_resource_client(subject).map(|_| ())
     }
 
+    /// Issue one sealed Guest lifecycle lease from the authenticated local
+    /// peer and the current store identities.
+    pub(crate) async fn admit_guest_lifecycle(
+        &self,
+        peer_uid: u32,
+        target: ResourceRef,
+        operation_id: &str,
+    ) -> Result<d2b_resource_api::service::GuestLifecycleAdmission, ResourceRuntimeError> {
+        self.refresh_authorization_policy().await?;
+        let resolved_user = d2bd_runtime::resource_runtime_support::resolve_zone_user(
+            &self.store,
+            &self.zone,
+            peer_uid,
+            &format!("{operation_id}:user"),
+        )
+        .await?;
+        let context = d2bd_runtime::resource_runtime_support::local_user_subject_context(
+            &self.zone,
+            &resolved_user,
+            operation_id,
+        )?;
+        let state = self
+            .authorization_state
+            .lock()
+            .map_err(|_| ResourceRuntimeError::AuthenticationUnavailable)?
+            .clone()
+            .ok_or(ResourceRuntimeError::AuthenticationUnavailable)?;
+        let subject = self
+            .authorizer
+            .issue_authenticated_subject(context, state)
+            .map_err(|_| ResourceRuntimeError::AuthorizationUnavailable)?;
+        self.api
+            .admit_guest_lifecycle(&subject, target, operation_id.to_owned())
+            .await
+            .map_err(|_| ResourceRuntimeError::AuthorizationUnavailable)
+    }
+
+    /// Issue a lifecycle lease through the already enrolled system-core
+    /// ComponentSession for daemon-owned autostart.
+    pub(crate) async fn admit_internal_guest_lifecycle(
+        &self,
+        target: ResourceRef,
+        operation_id: &str,
+    ) -> Result<d2b_resource_api::service::GuestLifecycleAdmission, ResourceRuntimeError> {
+        let client = self
+            .process_resource_client()
+            .ok_or(ResourceRuntimeError::AuthenticationUnavailable)?;
+        client
+            .admit_guest_lifecycle(target, operation_id.to_owned())
+            .await
+            .map_err(|_| ResourceRuntimeError::AuthorizationUnavailable)
+    }
+
+    /// Read the immutable Guest and Provider identities needed by the
+    /// guarded host-shutdown stop capability.
+    pub(crate) async fn guest_lifecycle_identity(
+        &self,
+        target: &ResourceRef,
+    ) -> Result<
+        (
+            ResourceUid,
+            ResourceUid,
+            ResourceGeneration,
+            ResourceGeneration,
+        ),
+        ResourceRuntimeError,
+    > {
+        if target.resource_type().as_str() != "Guest" {
+            return Err(ResourceRuntimeError::RequestInvalid);
+        }
+        let guest = self
+            .store
+            .get(StoreGetRequest {
+                operation: StoreOperationContext {
+                    operation_id: "guest-lifecycle-identity".to_owned(),
+                    idempotency_key: None,
+                    correlation_id: "guest-lifecycle-identity".to_owned(),
+                    trace_id: None,
+                    deadline_ms: 10_000,
+                },
+                zone: self.zone.clone(),
+                target: target.clone(),
+                expected_uid: None,
+                projection: StoreProjection::Full,
+            })
+            .await
+            .map_err(|_| ResourceRuntimeError::StoreReadFailed)?;
+        if guest.zone != self.zone
+            || guest.resource_ref != *target
+            || guest.uid.as_str().is_empty()
+            || guest.generation.get() == 0
+        {
+            return Err(ResourceRuntimeError::RequestInvalid);
+        }
+        let envelope = ResourceEnvelope::from_json(&guest.canonical_json)
+            .map_err(|_| ResourceRuntimeError::RequestInvalid)?;
+        if envelope.resource_type().as_str() != "Guest"
+            || envelope.metadata().zone() != &self.zone
+            || envelope.metadata().uid() != &guest.uid
+            || envelope.metadata().generation() != guest.generation
+            || envelope.metadata().revision() != guest.revision
+            || envelope
+                .digest()
+                .map_err(|_| ResourceRuntimeError::RequestInvalid)?
+                != guest.payload_digest
+        {
+            return Err(ResourceRuntimeError::RequestInvalid);
+        }
+        let provider_ref = envelope
+            .spec()
+            .provider_ref()
+            .cloned()
+            .ok_or(ResourceRuntimeError::RequestInvalid)?;
+        let provider = self
+            .store
+            .get(StoreGetRequest {
+                operation: StoreOperationContext {
+                    operation_id: "guest-lifecycle-provider-identity".to_owned(),
+                    idempotency_key: None,
+                    correlation_id: "guest-lifecycle-provider-identity".to_owned(),
+                    trace_id: None,
+                    deadline_ms: 10_000,
+                },
+                zone: self.zone.clone(),
+                target: provider_ref,
+                expected_uid: None,
+                projection: StoreProjection::Full,
+            })
+            .await
+            .map_err(|_| ResourceRuntimeError::StoreReadFailed)?;
+        if provider.zone != self.zone
+            || provider.resource_ref.resource_type().as_str() != "Provider"
+            || provider.generation.get() == 0
+        {
+            return Err(ResourceRuntimeError::RequestInvalid);
+        }
+        let provider_envelope = ResourceEnvelope::from_json(&provider.canonical_json)
+            .map_err(|_| ResourceRuntimeError::RequestInvalid)?;
+        if provider_envelope.resource_type().as_str() != "Provider"
+            || provider_envelope.metadata().zone() != &self.zone
+            || provider_envelope.metadata().uid() != &provider.uid
+            || provider_envelope.metadata().generation() != provider.generation
+            || provider_envelope.metadata().revision() != provider.revision
+            || provider_envelope
+                .digest()
+                .map_err(|_| ResourceRuntimeError::RequestInvalid)?
+                != provider.payload_digest
+        {
+            return Err(ResourceRuntimeError::RequestInvalid);
+        }
+        Ok((
+            self.store_metadata.zone_uid.clone(),
+            guest.uid,
+            guest.generation,
+            provider.generation,
+        ))
+    }
+
     /// Bind a Resource API client to a sealed Resource API session subject.
     ///
     /// The wrapper is issued only after ComponentSession or root-listener
@@ -2705,6 +2863,10 @@ impl ZoneResourceRuntime {
         {
             runtime.set_controller_generation(controller_generation);
         }
+        runtime.set_lifecycle_identity(
+            self.store_metadata.zone_uid.clone(),
+            self.store_metadata.policy_snapshot.policy_revision,
+        );
         if let Some(identity) = &self.interaction_identity {
             runtime.set_target_scope(
                 Some(identity.wayland_session_ref().clone()),

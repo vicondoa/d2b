@@ -28,7 +28,7 @@ pub use authz::{AuthorizationLease, StoreSealHandoffError};
 pub use client::ResourceApiClient;
 pub use d2b_resource_store::PreparedStoreMutation;
 pub use identity::AuthenticatedSubjectContext;
-pub use service::ResourceService;
+pub use service::{GuestLifecycleAdmission, ResourceService};
 pub use store::{RedbBackend, ResourceStoreBackend, StoreBindingError};
 pub use zone_service::{
     StrictWireMessage, ZoneCallContext, ZoneMethod, ZoneService, ZoneServiceError,

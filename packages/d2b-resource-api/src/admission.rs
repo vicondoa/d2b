@@ -157,6 +157,31 @@ impl core::fmt::Display for AdmissionError {
 impl std::error::Error for AdmissionError {}
 
 impl AdmissionPermit {
+    pub(crate) fn issue_lifecycle_lease(
+        self,
+        zone_uid: d2b_contracts_resource::v3::ResourceUid,
+        object_uid: d2b_contracts_resource::v3::ResourceUid,
+        object_generation: d2b_contracts_resource::v3::ResourceGeneration,
+        provider_assignment_generation: d2b_contracts_resource::v3::ResourceGeneration,
+        operation_id: String,
+    ) -> Result<AuthorizationLease, AdmissionError> {
+        let target = self
+            .authorization
+            .targets
+            .first()
+            .ok_or(AdmissionError::LeaseInvalid)?;
+        AuthorizationLease::issue(
+            self.authorization.subject_uid,
+            zone_uid,
+            Some(object_uid),
+            Some(object_generation),
+            target.verb,
+            self.zone_policy_revision.max(self.policy_snapshot.policy_revision),
+            Some(provider_assignment_generation),
+            operation_id,
+        )
+    }
+
     /// Bind parsed mutations to this exact positive evaluation result.
     pub fn admit(
         self,

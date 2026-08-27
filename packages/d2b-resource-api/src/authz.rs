@@ -1121,6 +1121,26 @@ impl AuthorizationLease {
 }
 
 impl AuthorizationGrant {
+    /// Consume this positive authorization result into one exact Guest
+    /// lifecycle lease. The caller must supply the current object and
+    /// Provider assignment identity obtained from the trusted Zone store.
+    pub(crate) fn issue_lifecycle_lease(
+        self,
+        zone_uid: ResourceUid,
+        object_uid: ResourceUid,
+        object_generation: ResourceGeneration,
+        provider_assignment_generation: ResourceGeneration,
+        operation_id: String,
+    ) -> Result<AuthorizationLease, AdmissionError> {
+        self.permit.issue_lifecycle_lease(
+            zone_uid,
+            object_uid,
+            object_generation,
+            provider_assignment_generation,
+            operation_id,
+        )
+    }
+
     pub(crate) fn admit(
         self,
         mutations: Vec<StoreMutation>,
@@ -2078,6 +2098,50 @@ mod tests {
         assert!(!rendered.contains("operation-lease"));
         assert!(!rendered.contains(subject_uid.as_str()));
         assert!(!rendered.contains(zone_uid.as_str()));
+    }
+
+    #[test]
+    fn lifecycle_lease_is_issued_only_from_a_consumed_authorization_grant() {
+        let zone = ZoneId::parse("dev").unwrap();
+        let request = AuthorizationRequest {
+            method: ApiMethod::UpdateSpec,
+            zone: zone.clone(),
+            targets: vec![AuthorizationTarget {
+                resource_type: ResourceTypeName::parse("Guest").unwrap(),
+                resource_name: Some(ResourceName::parse("workstation").unwrap()),
+                verb: ResourceVerb::UpdateSpec,
+                subresource: None,
+                execution_ref: None,
+            }],
+        };
+        let snapshot = state(7).snapshot;
+        let grant = grant(
+            &test_issuer(),
+            &subject(Locality::Local, EvidenceClass::UnixPeer, "User/alice"),
+            &request,
+            snapshot,
+            7,
+        );
+        let lease = grant
+            .issue_lifecycle_lease(
+                ResourceUid::parse("223e4567-e89b-42d3-a456-426614174000").unwrap(),
+                ResourceUid::parse("323e4567-e89b-42d3-a456-426614174000").unwrap(),
+                ResourceGeneration::new(4).unwrap(),
+                ResourceGeneration::new(9).unwrap(),
+                "guest-start".to_owned(),
+            )
+            .unwrap();
+        assert_eq!(lease.operation(), AdmittedVerb::UpdateSpec);
+        assert_eq!(lease.policy_revision(), 7);
+        assert_eq!(lease.operation_id(), "guest-start");
+        assert_eq!(
+            lease.object_generation(),
+            Some(ResourceGeneration::new(4).unwrap())
+        );
+        assert_eq!(
+            lease.provider_assignment_generation(),
+            Some(ResourceGeneration::new(9).unwrap())
+        );
     }
 
     #[test]

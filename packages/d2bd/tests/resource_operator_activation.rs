@@ -64,7 +64,8 @@ use d2b_resource_store_redb::{
 };
 use d2bd::provider_effects::{
     EffectDispatch, GuestLifecycleOperation, GuestLifecycleRequest, GuestLifecycleState,
-    ProviderEffectError, ProviderLifecycleDispatch, ProviderLifecycleEffectPort,
+    LifecycleAuthorization, ProviderEffectError, ProviderLifecycleDispatch,
+    ProviderLifecycleEffectPort,
 };
 use d2bd::provider_registry::{ProviderBinding, ProviderRuntime, ProviderRuntimeDispatch};
 use d2bd::resource_runtime::ZoneResourceRuntime;
@@ -133,6 +134,7 @@ impl ProviderLifecycleEffectPort for FilesystemLifecycle {
         let state = match request.operation() {
             GuestLifecycleOperation::Start => ("started", GuestLifecycleState::Started),
             GuestLifecycleOperation::Stop => ("stopped", GuestLifecycleState::Stopped),
+            GuestLifecycleOperation::Restart => ("started", GuestLifecycleState::Started),
         };
         self.write_state(request, state.0);
         Ok(state.1)
@@ -159,8 +161,27 @@ fn request(operation: GuestLifecycleOperation, key: &str) -> GuestLifecycleReque
         ResourceRef::parse("Guest/workstation").expect("valid Guest ref"),
         operation,
         key,
+        LifecycleAuthorization::for_test(
+            "11111111-1111-4111-8111-111111111111",
+            "22222222-2222-4222-8222-222222222222",
+            1,
+            1,
+            1,
+            key,
+        ),
     )
     .expect("valid lifecycle request")
+}
+
+fn authorization(operation_id: &str) -> LifecycleAuthorization {
+    LifecycleAuthorization::for_test(
+        "11111111-1111-4111-8111-111111111111",
+        "22222222-2222-4222-8222-222222222222",
+        1,
+        1,
+        1,
+        operation_id,
+    )
 }
 
 #[test]
@@ -186,6 +207,7 @@ fn activation_refusal_and_removal_cross_the_provider_boundary() {
                 "workstation",
                 GuestLifecycleOperation::Start,
                 "activate-workstation",
+                authorization("activate-workstation"),
                 &effect,
             )
             .expect("activate Guest"),
@@ -202,6 +224,7 @@ fn activation_refusal_and_removal_cross_the_provider_boundary() {
             "workstation",
             GuestLifecycleOperation::Stop,
             "refused-stop",
+            authorization("refused-stop"),
             &effect,
         ),
         Err(ProviderEffectError::CallerRoleDenied)
@@ -219,6 +242,7 @@ fn activation_refusal_and_removal_cross_the_provider_boundary() {
                 "workstation",
                 GuestLifecycleOperation::Stop,
                 "remove-workstation",
+                authorization("remove-workstation"),
                 &effect,
             )
             .expect("remove Guest"),
