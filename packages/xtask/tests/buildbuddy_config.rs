@@ -1875,19 +1875,19 @@ fn bazel_facade_owns_public_make_composition() {
         );
     }
     assert!(
-        makefile.contains(
-            "$(BAZEL_BIN) test --config=$(D2B_BAZEL_PROFILE) --test_tag_filters=\"$(D2B_BAZEL_TEST_TAG_FILTERS)\" //bazel/checks:$@"
-        ),
+        makefile.contains("$(D2B_BAZEL_TEST) //bazel/checks:$@")
+            && makefile.contains("$(BAZEL_BIN) test")
+            && makefile.contains("--test_env=D2B_REPO_ROOT=\"$(CURDIR)\""),
         "Make must dispatch every public Bazel target through a direct bazel test of its facade suite"
     );
     assert!(
         !makefile.contains("tests/tools/bazel-check") && !makefile.contains("$(BAZEL_RUN)"),
         "Make must not wrap public Bazel aliases with tests/tools/bazel-check"
     );
-    let generic_recipe = "$(BAZEL_BIN) test --config=$(D2B_BAZEL_PROFILE) --test_tag_filters=\"$(D2B_BAZEL_TEST_TAG_FILTERS)\" //bazel/checks:$@";
+    let generic_recipe = "$(D2B_BAZEL_TEST) //bazel/checks:$@";
     let make_without_generic_recipe = makefile.replace(generic_recipe, "");
     assert!(
-        !make_without_generic_recipe.contains("$(BAZEL_BIN) test")
+        !make_without_generic_recipe.contains("$(D2B_BAZEL_TEST) //")
             || make_without_generic_recipe
                 .lines()
                 .filter_map(|line| line.split_once("//bazel/checks:"))
@@ -2038,7 +2038,8 @@ fn make_dispatch_classification_covers_bazel_and_recursive_validation_targets() 
         }
         let invokes_bazel = executable_lines.contains("tests/tools/bazel-check")
             || executable_lines.contains("$(BAZEL_RUN)")
-            || executable_lines.contains("$(BAZEL_BIN)");
+            || executable_lines.contains("$(BAZEL_BIN)")
+            || executable_lines.contains("$(D2B_BAZEL_TEST)");
         if invokes_bazel {
             assert!(
                 owners.contains_key(target),
