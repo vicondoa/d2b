@@ -8,11 +8,15 @@ structure: it answers "why is d2b shaped this way?" rather than
 the CLI contract ([`../reference/cli-contract.md`](../reference/cli-contract.md)),
 and the [`CHANGELOG.md`](../../CHANGELOG.md) - describe the *what*.
 
-The doc tracks the implementation as it exists today (pre-v0.1.0).
-Where a defense is incomplete, or where a design tradeoff has known
-holes, that is called out explicitly. Concrete file paths under
-`nixos-modules/` and the owning Provider packages are cited so the
-reader can verify a claim against the code.
+The active architecture described here is the v3 Zone control plane defined
+by [ADR 0046](../adr/0046-d2b-3-provider-control-plane.md).
+The document tracks committed implementation as the source of truth and
+calls out incomplete defenses or known design tradeoffs explicitly.
+Lower-level v1 and v2 material remains only as historical or superseded
+detail when it helps explain a preserved invariant; it does not define the
+active product hierarchy. Concrete file paths under `nixos-modules/` and the
+owning Provider packages are cited so the reader can verify a claim against
+the code.
 
 [d2b]: https://github.com/vicondoa/d2b
 [Diataxis]: https://diataxis.fr/
@@ -39,6 +43,14 @@ be able to observe or interfere with another. The Wayland session
 on the host is the one trusted surface the human actually
 interacts with; everything else should be containable.
 
+The active d2b model is Zone and Zone-owned resources. A Zone is the
+isolation, policy, routing, resource, state, and audit boundary. Its
+resource graph describes Guests, Hosts, Networks, identities, devices,
+processes, and policy, while an isolated per-Zone runtime keeps the
+resource store, core controller, and Provider sessions separate from
+other Zones. Generic environment names can describe workload context,
+but they are not a second product or control-plane hierarchy.
+
 [microvm.nix] is the obvious building block: KVM-based isolation,
 declarative per-VM NixOS config, no Xen-grade complexity. But
 microvm.nix is deliberately a primitive. It does not opine on
@@ -49,10 +61,10 @@ behaves like a unit-of-work boundary, and its sidecar processes
 whatever the consumer's NixOS config sets - typically a shared
 user with broader permissions than necessary.
 
-D2b is an **opinionated workspace framework that owns its
-microVM substrate end-to-end**: declare an env, declare some
-workloads in it, get a fully isolated network + key management +
-hardened sidecars + a `d2b` CLI for daily ops. v1.1 dropped
+D2b is an **opinionated Zone and resource framework that owns its
+execution substrate end-to-end**: declare Zone-owned resources, get
+isolated runtime state, network and key management, hardened sidecars,
+and a `d2b` CLI for daily ops. v1.1 dropped
 the historical [microvm.nix] flake input (per ADR 0018); the
 d2b-owned per-VM evaluator at
 [`nixos-modules/vm-evaluator.nix`](../../nixos-modules/vm-evaluator.nix)
@@ -73,6 +85,26 @@ upstream microvm.nix flake input is no longer in `inputs`.
 
 ## 2. Threat model
 
+The current threat model follows Zone boundaries. The host is the trusted
+operator context; `d2bd` and `d2b-broker` are the daemon-only control plane;
+and each Zone runtime isolates its resource store, core controller, Provider
+sessions, and Guest execution state from other Zones. Authorization is
+object-scoped inside the Zone resource model and is carried through
+authenticated sessions and typed effects.
+
+Real Unix users and authorization groups, including the `d2b` group, remain
+host admission and access-control mechanisms. They are not a product
+grouping model. Generic environment terminology can describe a network or
+execution context, while Network resources retain their gateway fields.
+The intended gateway-backed isolation model will use a Gateway Guest and
+authenticated ZoneLink transport. Once that path is implemented, gateway
+credentials, remote registries, and gateway audit stay inside the Guest
+execution context rather than the host daemon or broker.
+
+The following conceptual network illustration uses env-scoped bridge and
+net-VM labels retained by the committed implementation. Those mechanics
+remain non-authoritative implementation state, not an active product hierarchy.
+
 ### Trust boundaries
 
 ```mermaid
@@ -80,7 +112,7 @@ flowchart TD
     subgraph host["HOST"]
         direction TD
         wayland["Wayland user (trusted UI principal)<br/>compositor + d2b CLI invocations"]
-        sidecars["d2b per-VM runners (semi-trusted)<br/>broker-spawned via d2b.slice/&lt;vm&gt;/&lt;role&gt; in v1.0:<br/>wlproxy (per-VM uid, Wayland proxy; holds real compositor socket)<br/>gpu (per-VM uid; connects to wlproxy proxy socket, not compositor)<br/>video (shares gpu uid)<br/>snd (per-VM uid)<br/>swtpm (per-VM uid)<br/>microvm-virtiofsd@&lt;vm&gt; (per-VM uid)<br/>per-env usbipd backend+proxy (d2b.slice/sys-&lt;env&gt;/usbipd-*)<br/>legacy systemd templates retired per ADR 0015"]
+        sidecars["d2b per-VM runners (semi-trusted)<br/>broker-spawned via d2b.slice/&lt;vm&gt;/&lt;role&gt; in v1.0:<br/>wlproxy (per-VM uid, Wayland proxy; holds real compositor socket)<br/>gpu (per-VM uid; connects to wlproxy proxy socket, not compositor)<br/>video (shares gpu uid)<br/>snd (per-VM uid)<br/>swtpm (per-VM uid)<br/>microvm-virtiofsd@&lt;vm&gt; (per-VM uid)<br/>network-scoped USBIP backend+proxy (implementation detail)<br/>legacy systemd templates retired per ADR 0015"]
     end
     subgraph kvm["KVM boundary"]
         direction TD
@@ -122,7 +154,7 @@ flowchart TD
           │   │   d2b.slice/<vm>/swtpm  (per-VM uid)    │    │
           │   │   microvm-virtiofsd@<vm>    (per-VM uid)    │    │
           │   │   d2b.slice/sys-<env>/usbipd-{backend,proxy} │
-          │   │   (per-env USBIP, v1.0 broker-spawned;      │    │
+          │   │   (network-scoped USBIP, implementation detail; │    │
           │   │    legacy systemd templates retired)        │    │
           │   └──────────────────┬───────────────────────────┘   │
           │                      │ vsock / virtio-* / ACL'd       │
@@ -141,26 +173,26 @@ flowchart TD
 
 ```mermaid
 flowchart LR
-    subgraph per_env["per-env LAN (point-to-point only)"]
+    subgraph network_path["Conceptual network path (current env/net-VM implementation detail)"]
         direction LR
-        tap["workload VM tap"] --> lan["br-&lt;env&gt;-lan<br/>(isolated)"] --> net["sys-&lt;env&gt;-net"] --> uplink["br-&lt;env&gt;-up"]
+        tap["Workload attachment"] --> lan["LAN bridge<br/>(implementation detail)"] --> net["net VM<br/>(implementation detail)"] --> uplink["uplink bridge"]
     end
 
-    uplink --> host_lan["host"] --> primary["primary LAN<br/>(host's hostLanCidrs)"]
+    uplink --> host_lan["host"] --> primary["primary LAN<br/>(host LAN inventory)"]
 ```
 
 <details>
 <summary>ASCII version (for terminal viewers)</summary>
 
 ```
-                    ─── per-env LAN ───────  (point-to-point only)
-   workload VM tap ─┤
-                    └── br-<env>-lan ── sys-<env>-net ── br-<env>-up ── host
-                       (isolated)                                       │
+                    ─── Conceptual network path ───────  (current env/net-VM implementation detail)
+   Workload attachment ─┤
+                    └── LAN bridge ── net VM (implementation detail) ── uplink bridge ── host
+                       (implementation detail)                                │
                                                                         │
                                                                   primary LAN
-                                                                  (host's
-                                                                  hostLanCidrs)
+                                                                  (host LAN
+                                                                  inventory)
 ```
 </details>
 
@@ -180,34 +212,30 @@ Five distinct boundaries:
    the virtio-fs share). The guest cannot reach back through
    any other path; bind-mounts in the sidecar's mount namespace
    are exactly the file paths it needs.
-4. **VM ↔ VM (intra-host).** By default, two workload VMs in the
-   same env cannot exchange frames directly. The LAN bridge sets
-   `Isolated = true` on every workload tap unless the operator opts
-   into `d2b.envs.<env>.lan.allowEastWest = true`
-   ([`packages/d2b-provider-network-local/nix/network.nix`](../../packages/d2b-provider-network-local/nix/network.nix));
-   the only un-isolated port is `<env>-l1`, which belongs to the
-   env's net VM. Across envs there is no shared bridge at all.
-5. **Net VM ↔ outside world.** Each env's net VM is the sole
-   egress point for the workloads in that env. The net VM runs
-   nftables with a default-deny forward chain, a documented
-   carve-out for USBIP to the host's uplink IP, and a
-   `hostBlocklist` DROP rule
-   ([`packages/d2b-provider-network-local/nix/net.nix:140-156`](../../packages/d2b-provider-network-local/nix/net.nix))
-   that includes the host's primary LAN CIDRs.
+4. **Guest ↔ Guest (intra-Zone).** The Zone model assigns per-attachment
+   isolation to Zone-owned Network resources. The committed implementation
+   still uses env-scoped bridge state and host LAN inventory for this policy;
+   those names and details are non-authoritative implementation state.
+   Across Zones, the intended model keeps Network resources and gateways
+   separate.
+5. **Zone Network ↔ outside world.** The Zone model preserves Network
+   gateway fields and egress policy. The committed implementation realizes
+   those semantics through a net VM and env-scoped bridge state; these are
+   implementation details rather than a second product hierarchy.
 
 ### Threats addressed
 
 **Compromised guest userspace.** A browser RCE, a malicious
 container, an exploited package manager - anything that gets
 code execution inside the guest - is bounded by the KVM
-boundary. Within its env, the workload cannot reach peer
-workloads by default (bridge isolation), cannot reach the
-host's primary LAN (hostBlocklist), and cannot reach a
-different env at all (distinct bridges + distinct net VMs). If
-`d2b.envs.<env>.lan.allowEastWest = true`, that peer-
-isolation guarantee is intentionally relaxed and a compromised
-workload can scan or attack its same-env peers. It *can* reach
-the public internet, NAT'd through its env's net VM; that is
+boundary. The committed network path retains bridge isolation, host-LAN
+blocking, and gateway egress policy in env-scoped implementation state.
+Those env and bridge names are non-authoritative; the Zone model is intended
+to preserve the same boundaries through Zone-owned Network resources. If
+Network policy allows east-west traffic, that peer-isolation guarantee is
+intentionally relaxed and a compromised workload can scan or attack its
+same-Network peers. It *can* reach the public internet, NAT'd through its
+current net VM; that is
 intentional - a workspace VM without internet is rarely useful.
 
 **Compromised sidecar.** The GPU sidecar in particular runs
@@ -230,22 +258,23 @@ the host kernel is unaffected, and the guest's `/nix/store`
 view is still restricted to the VM's own closure (see *Per-VM
 nix store* below).
 
-**Cross-VM lateral movement.** A workload in env A cannot reach
-a workload in env B. There is no shared bridge - `br-A-lan` and
-`br-B-lan` are distinct interfaces, each net VM is a separate
-sandbox, and CIDR overlap is rejected at eval time
-([`packages/d2b-provider-network-local/nix/network.nix:220-275`](../../packages/d2b-provider-network-local/nix/network.nix)
-uses pure-Nix prefix arithmetic to detect e.g. `10.0.0.0/16 ⊃
-10.0.1.0/24`). The per-VM `/nix/store` farm means even if a
-workload chains a hypothetical microvm.nix host-side bug, it
-cannot enumerate store paths it never had a closure entry for.
+**Cross-Zone lateral movement.** The intended Zone model keeps a workload in
+Zone A from reaching a workload in Zone B through separate Network resources,
+gateways, and store views. The committed implementation retains separate
+env-scoped network state and rejects overlapping network ranges; those
+details are non-authoritative implementation state, not a competing product
+model. The per-Guest `/nix/store` view means even if a workload chains a
+hypothetical host-side bug, it cannot enumerate store paths it never had a
+closure entry for.
 
 **Network sniffing on the shared LAN.** The host's primary LAN
 (the wire the host's `eno*` interface sits on) is declared via
-`d2b.hostLanCidrs`. Every env's net VM merges that list
-into its `hostBlocklist`, so a workload cannot reach the host's
-neighbours (NAS, printer, other workstations) even if the env's
-default-deny chain were bypassed.
+the host's network inventory in the committed implementation. Each network
+gateway applies that inventory to its blocklist; these env-scoped details are
+non-authoritative implementation state. The Zone model retains the same
+protection as Network gateway policy, so a workload cannot reach the host's
+neighbours (NAS, printer, other workstations) even if the default-deny chain
+were bypassed.
 
 **DHCP preemption on net VMs.** A net VM has two NICs
 matched by MAC. The guest baseline in
@@ -254,7 +283,7 @@ defines a catch-all `10-eth-dhcp` systemd-networkd network for
 *workload* VMs; on a net VM that catch-all would sort
 lex-first against the per-MAC `10-uplink` / `10-lan`
 definitions, DHCP both NICs, and preempt the static config.
-[`packages/d2b-provider-network-local/nix/net.nix:55-57`](../../packages/d2b-provider-network-local/nix/net.nix)
+[`packages/d2b-provider-network-local/nix/net.nix`](../../packages/d2b-provider-network-local/nix/net.nix)
 neutralises this by `lib.mkForce`-ing the catch-all's match to
 a sentinel MAC (`00:00:00:00:00:00`) that no interface will
 ever expose. Workload VMs continue to inherit the base.nix
@@ -362,7 +391,12 @@ unchanged once the host boots again. If the host cannot boot at
 all, that is a Lanzaboote / `sbctl` recovery procedure rather
 than a d2b one.
 
-### Constellation realm gateway (v2, ADR 0032)
+### Historical constellation realm gateway (v2, ADR 0032)
+
+> Historical/superseded design: this section records the former
+> realm/constellation hierarchy. It is retained for context and for the
+> gateway-backed isolation invariants carried into the Zone model; it is not
+> the active product or control-plane model.
 
 [ADR 0032](../adr/0032-d2b-v2-constellation-control-plane.md)
 adds a v2 constellation layer on top of the existing v1 substrate.
@@ -417,7 +451,11 @@ with no cross-realm bridge membership, L3 forwarding, or
 transitive route unless an explicit named operation or named
 stream is authorised.
 
-### Constellation design constraints
+### Historical constellation design constraints
+
+> Historical/superseded v2 constraints retained for context; the intended
+> gateway-backed isolation is Zone-owned and will use the daemon-only control
+> plane once its ZoneLink path lands.
 
 The following constraints follow from the reasoning in
 [ADR 0032](../adr/0032-d2b-v2-constellation-control-plane.md).
@@ -462,11 +500,20 @@ undermine the threat-model properties above.
 
 ## 3. Architecture
 
-D2b is a set of NixOS modules under `nixos-modules/`, aggregated
-through `nixos-modules/default.nix`. The consumer imports
-`nixos-modules/default.nix` from a top-level flake and populates
-`d2b.site.*`, `d2b.envs.<env>.*`, and `d2b.vms.<vm>.*`.
-Everything else is derived.
+D2b is a Zone resource plane compiled from NixOS declarations under
+`nixos-modules/`. Zone-owned resources and sealed artifact inputs are
+validated before publication. The daemon-only control plane uses one
+authenticated public listener, supervised per-Zone runtimes, and the
+privileged broker for host mutations. Each Zone runtime owns its resource
+store, core controller, and Provider sessions, so runtime state and
+authorization stay isolated between Zones.
+
+The lower-level subsections retain implementation details and explicitly
+historical v1 or v2 names where those names are needed to explain the
+current code. Env-scoped network and VM names in those details are
+non-authoritative implementation state, not current product ownership or
+configuration. They describe runtime mechanisms, not an additional product
+or control-plane hierarchy.
 
 ### `d2b@<vm>.service` - the legacy per-VM wrapper (retired in v1.0)
 
@@ -507,15 +554,18 @@ start bugs that would otherwise appear when both templates have
 
 ### microvm.nix integration
 
+> Historical pre-v1.1 implementation detail: this subsection describes the
+> former VM-oriented evaluator and projection. It is retained for code-as-canon
+> context, not as current Zone authoring or control-plane authority.
+
 D2b does not fork microvm.nix. `nixos-modules/host.nix:153-221`
 walks `config.d2b.vms`, validates the platform gate
 (graphics/audio components are `x86_64-linux`-only via
 `meta.platforms`), derives per-VM network metadata from the env
 (MAC, IP, tap name, vsock CID), and emits a matching
 `microvm.vms.<vm>` entry layered with `./base.nix` plus the
-appropriate component modules. Net VMs are auto-declared the same
-way ([`packages/d2b-provider-network-local/nix/network.nix:659-678`](../../packages/d2b-provider-network-local/nix/network.nix)),
-just from `d2b.envs.<env>` metadata instead of an operator-
+appropriate component modules. Net VMs were auto-declared the same
+way, just from former environment metadata instead of an operator-
 supplied module.
 
 The `microvm.stateDir` override at
@@ -633,6 +683,9 @@ store paths plus the remediation command. A first-boot VM has
 no `booted` yet - that's not "pending" - and a stopped VM has
 nothing to apply.
 
+> The env-scoped runner names in this list are retained implementation
+> state, not the active Zone product model.
+
 Per-env sidecars (one set per declared env, not per VM):
 
 - (legacy only) `d2b-sys-<env>-usbipd-backend.service` and
@@ -655,6 +708,9 @@ Per-env sidecars (one set per declared env, not per VM):
   flow.
 
 ### Per-env net VMs
+
+> This env-scoped network realization is retained implementation state,
+> not the active Zone product or control-plane model.
 
 Each `d2b.envs.<env>` causes
 [`packages/d2b-provider-network-local/nix/network.nix`](../../packages/d2b-provider-network-local/nix/network.nix) to
@@ -977,20 +1033,25 @@ directly through the supervisor DAG.
 
 ### CIDR overlap validation (eval-time, fail-closed)
 
+> Retained implementation detail: this validation describes the committed
+> env-scoped network path, not the active Zone product configuration.
+
 **Threat:** two envs with overlapping LAN subnets, an env LAN that
 collides with the host's primary LAN, or a misconfigured
 `uplinkSubnet` produce silent routing-table conflicts that
 re-route traffic the operator believed isolated.
 
-**Control:** [`packages/d2b-provider-network-local/nix/network.nix:213-275`](../../packages/d2b-provider-network-local/nix/network.nix)
-runs pure-Nix IPv4 prefix arithmetic (via `lib.nix`'s
-`cidrOverlaps`) over every pair of `{env, kind, cidr}` tuples,
-including the host's `d2b.hostLanCidrs`. Any overlap aborts
-evaluation with a message naming both sides. Exact-string-equality
-was the previous check and missed real overlaps like `10.0.0.0/16
-⊃ 10.0.1.0/24`.
+**Control:** The Zone Network compiler checks each Zone Network's own
+`lanCidr` and `uplinkCidr` pair in
+[`packages/d2b-provider-network-local/nix/resources-network.nix`](../../packages/d2b-provider-network-local/nix/resources-network.nix).
+The former environment/host-LAN overlap behavior is not attributed to that
+compiler; current code makes no positive ownership claim for that legacy
+protection. A Zone Network pair overlap fails the compiler's validation.
 
 ### Route preflight, fail-closed
+
+> Retained implementation detail: this env-scoped route check is documented
+> for code-as-canon context, not as current Zone product configuration.
 
 **Threat:** a stale or operator-added static route on the host
 sends an env's LAN traffic via the wrong interface - typically
@@ -1015,6 +1076,9 @@ flow.
 
 #### `ConfigureWithoutCarrier` on the per-env uplink bridge
 
+> Historical implementation detail retained for context; this bootstrap
+> sequence is not current Zone product or control-plane authority.
+
 A subtler bootstrap deadlock surfaces if the per-env uplink bridge
 (`br-<env>-up`) is configured WITHOUT
 `ConfigureWithoutCarrier = true`. The chain:
@@ -1029,20 +1093,22 @@ A subtler bootstrap deadlock surfaces if the per-env uplink bridge
 
 Without `ConfigureWithoutCarrier = true`, no carrier → no route →
 preflight fails → net VM can't start → no carrier. v0.1.2 sets
-this flag on `br-<env>-up`
-([`packages/d2b-provider-network-local/nix/network.nix:330-352`](../../packages/d2b-provider-network-local/nix/network.nix));
+this flag on `br-<env>-up`;
 the LAN bridge `br-<env>-lan` already had it. The route is
 installed without waiting for carrier; once the net VM attaches,
 traffic flows.
 
 ### Per-env USBIP, no host-wide singleton
 
+> These env-scoped runner details are retained implementation state, not
+> the active Zone product or control-plane model.
+
 **Threat:** a single host-wide `d2b-sys-usbipd.service`
 binding to `127.0.0.1:3241` would be one misconfigured firewall
 rule away from leaking USB device export to *every* env.
 
-**Control:** [`packages/d2b-provider-network-local/nix/network.nix:484-587`](../../packages/d2b-provider-network-local/nix/network.nix)
-declares one backend + one proxy per env, on distinct loopback
+**Control:** The retained per-environment projection declares one backend +
+one proxy per env, on distinct loopback
 ports (`3241 + alphabetical-index-of-env`). The proxy socket
 binds the env's `hostUplinkIp:3240` only. Three iptables rules
 per env enforce this at the firewall layer too: an ACCEPT for
@@ -1062,7 +1128,7 @@ invariant; documented in cli.nix's exclusive-export block).
 preempting the static `10-uplink` / `10-lan` definitions, and the
 env's whole addressing plan dies silently.
 
-**Control:** [`packages/d2b-provider-network-local/nix/net.nix:55-57`](../../packages/d2b-provider-network-local/nix/net.nix)
+**Control:** [`packages/d2b-provider-network-local/nix/net.nix`](../../packages/d2b-provider-network-local/nix/net.nix)
 uses `lib.mkForce` to replace the catch-all's `matchConfig`
 with a sentinel MAC (`00:00:00:00:00:00`) that no interface ever
 exposes. systemd-networkd writes a harmless `.network` file that
@@ -1367,7 +1433,7 @@ future overlays compose), leaves the original intent visible
 same base), and produces an unambiguous "this matches nothing"
 signal at the systemd-networkd level. It is the minimum
 mechanical change that fixes the lex-sort preemption
-([`packages/d2b-provider-network-local/nix/net.nix:47-57`](../../packages/d2b-provider-network-local/nix/net.nix)).
+([`packages/d2b-provider-network-local/nix/net.nix`](../../packages/d2b-provider-network-local/nix/net.nix)).
 
 ### Why doesn't `nixos-rebuild switch` restart VMs?
 
