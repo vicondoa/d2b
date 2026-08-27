@@ -31,14 +31,31 @@
     let
       systems = [ "x86_64-linux" "aarch64-linux" ];
       forAllSystems = nixpkgs.lib.genAttrs systems;
-      nixpkgsFor = forAllSystems (system: import nixpkgs { inherit system; });
       # crates.io's /api/v1/crates/.../download endpoint 403s from GitHub
-      # Actions IPs (WAF / rate limit). importCargoLock defaults to that
-      # API URL on this nixpkgs pin; extraRegistries overrides it to the
-      # CDN. See https://github.com/rust-lang/crates.io/issues/13482
-      cratesIoExtraRegistries = {
-        "https://github.com/rust-lang/crates.io-index" = "https://static.crates.io/crates";
-      };
+      # Actions IPs (WAF / rate limit). Rewrite fetchurl only so Cargo still
+      # sees the crates-io source (extraRegistries duplicates it and cargo
+      # 1.77+ errors). See https://github.com/rust-lang/crates.io/issues/13482
+      cratesIoApiPrefix = "https://crates.io/api/v1/crates/";
+      cratesIoCdnPrefix = "https://static.crates.io/crates/";
+      nixpkgsFor = forAllSystems (system: import nixpkgs {
+        inherit system;
+        overlays = [
+          (final: prev: {
+            fetchurl = args:
+              let
+                url = args.url or null;
+              in
+              prev.fetchurl (
+                if url != null && prev.lib.hasPrefix cratesIoApiPrefix url then
+                  args // {
+                    url = cratesIoCdnPrefix + prev.lib.removePrefix cratesIoApiPrefix url;
+                  }
+                else
+                  args
+              );
+          })
+        ];
+      });
       bazel920For = system:
         import ./pkgs/bazel-9.2.0 {
           pkgs = nixpkgsFor.${system};
@@ -291,7 +308,6 @@
           cargoLock = {
             lockFile = ./Cargo.lock;
             outputHashes."wl-proxy-0.1.2" = "sha256-1yO1zgzSyzQ2DnDMpVxcnI5BsTNvXfzIUS+RNlPj4A8=";
-            extraRegistries = cratesIoExtraRegistries;
           };
           RUSTC_WRAPPER = "";
           SCCACHE_DIR = "";
@@ -299,7 +315,6 @@
         guestRustPackagesSrc = mkGuestRustPackagesSrc pkgs;
         cargoLock = {
           lockFile = ./packages/Cargo.guest.lock;
-          extraRegistries = cratesIoExtraRegistries;
         };
         guestStaticPackage = packageName: binName:
           pkgs.pkgsStatic.rustPlatform.buildRustPackage {
@@ -310,7 +325,6 @@
             cargoLock = {
               lockFile = ./packages/Cargo.guest.lock;
               outputHashes."wl-proxy-0.1.2" = "sha256-1yO1zgzSyzQ2DnDMpVxcnI5BsTNvXfzIUS+RNlPj4A8=";
-              extraRegistries = cratesIoExtraRegistries;
             };
             cargoBuildFlags = [ "--package" packageName "--bin" binName ];
             doCheck = false;
@@ -349,7 +363,6 @@
             cargoLock = {
               lockFile = ./Cargo.lock;
               outputHashes."wl-proxy-0.1.2" = "sha256-1yO1zgzSyzQ2DnDMpVxcnI5BsTNvXfzIUS+RNlPj4A8=";
-              extraRegistries = cratesIoExtraRegistries;
             };
             sourceRoot = "d2b-rust-src";
             cargoBuildFlags = [
@@ -1067,7 +1080,6 @@
           cargoLock = {
             lockFile = ./Cargo.lock;
             outputHashes."wl-proxy-0.1.2" = "sha256-1yO1zgzSyzQ2DnDMpVxcnI5BsTNvXfzIUS+RNlPj4A8=";
-            extraRegistries = cratesIoExtraRegistries;
           };
           # Repo-local .cargo/config.toml files set
           # `rustc-wrapper = "sccache"`, but the Nix sandbox doesn't
@@ -1278,7 +1290,6 @@
           mainVendor = pkgs.rustPlatform.importCargoLock {
             lockFile = ./Cargo.lock;
             outputHashes."wl-proxy-0.1.2" = "sha256-1yO1zgzSyzQ2DnDMpVxcnI5BsTNvXfzIUS+RNlPj4A8=";
-            extraRegistries = cratesIoExtraRegistries;
           };
           cargoConfig = vendorDir: ''
             [source.crates-io]
@@ -1325,7 +1336,6 @@
           guestVendor = pkgs.rustPlatform.importCargoLock {
             lockFile = ./packages/Cargo.guest.lock;
             outputHashes."wl-proxy-0.1.2" = "sha256-1yO1zgzSyzQ2DnDMpVxcnI5BsTNvXfzIUS+RNlPj4A8=";
-            extraRegistries = cratesIoExtraRegistries;
           };
           cargoConfig = ''
             [source.crates-io]
