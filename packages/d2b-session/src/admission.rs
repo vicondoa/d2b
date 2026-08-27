@@ -1,8 +1,21 @@
-use std::{fmt, future::Future, pin::Pin, sync::Arc};
+use std::{
+    fmt,
+    future::Future,
+    pin::Pin,
+    sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+    },
+};
 
 use async_trait::async_trait;
 use d2b_contracts_zone_session::v3::{
-    component_session::{AuthorizationLease, BootstrapIdentityBinding, ChannelClass, EndpointPolicy, HandshakeOffer, HealthState, MetricLabels, MetricReason, MetricResult, NoiseProfile, OperationClass, RequestId, SessionErrorCode, TransportClass},
+    component_session::{
+        AuthorizationLease, BootstrapIdentityBinding, ChannelClass, EndpointPolicy, EndpointPurpose,
+        EndpointRole, HandshakeOffer, HealthState, Locality as ComponentLocality, MetricLabels,
+        MetricReason, MetricResult, NoiseProfile, OperationClass, PurposeClass, RequestId,
+        SessionErrorCode, TransportClass,
+    },
 };
 use d2b_contracts_resource::v3::{
     ControllerGeneration,
@@ -66,10 +79,69 @@ impl fmt::Debug for TransportEvidence {
     }
 }
 
+/// Liveness marker shared by an authenticated session and its route metadata.
+///
+/// The marker has no public constructor or revocation method. It becomes
+/// inactive when the owning authenticated session is dropped, so a retained
+/// route snapshot cannot outlive that session's owner.
+#[derive(Clone)]
+pub struct SessionLiveness(Arc<AtomicBool>);
+
+impl SessionLiveness {
+    fn new() -> Self {
+        Self(Arc::new(AtomicBool::new(true)))
+    }
+
+    /// Whether the authenticated session owner is still live.
+    pub fn is_live(&self) -> bool {
+        self.0.load(Ordering::Acquire)
+    }
+
+    fn invalidate(&self) {
+        self.0.store(false, Ordering::Release);
+    }
+}
+
+impl fmt::Debug for SessionLiveness {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str("SessionLiveness(<redacted>)")
+    }
+}
+
+impl PartialEq for SessionLiveness {
+    fn eq(&self, other: &Self) -> bool {
+        Arc::ptr_eq(&self.0, &other.0)
+    }
+}
+
+impl Eq for SessionLiveness {}
+
+struct SessionLivenessOwner(SessionLiveness);
+
+impl SessionLivenessOwner {
+    fn new() -> Self {
+        Self(SessionLiveness::new())
+    }
+
+    fn marker(&self) -> SessionLiveness {
+        self.0.clone()
+    }
+}
+
+impl Drop for SessionLivenessOwner {
+    fn drop(&mut self) {
+        self.0.invalidate();
+    }
+}
+
 /// Immutable handshake values supplied to the trusted authority.
 pub struct SessionAuthenticationBinding {
     evidence_class: EvidenceClass,
     purpose: SessionPurpose,
+    purpose_class: PurposeClass,
+    initiator_role: EndpointRole,
+    responder_role: EndpointRole,
+    endpoint_locality: ComponentLocality,
     service: ServiceName,
     schema_fingerprint: SchemaFingerprint,
     transport_class: TransportClass,
@@ -89,6 +161,26 @@ impl SessionAuthenticationBinding {
     /// Borrow the endpoint purpose.
     pub fn purpose(&self) -> &SessionPurpose {
         &self.purpose
+    }
+
+    /// Return the authenticated purpose class.
+    pub const fn purpose_class(&self) -> PurposeClass {
+        self.purpose_class
+    }
+
+    /// Return the authenticated initiator role.
+    pub const fn initiator_role(&self) -> EndpointRole {
+        self.initiator_role
+    }
+
+    /// Return the authenticated responder role.
+    pub const fn responder_role(&self) -> EndpointRole {
+        self.responder_role
+    }
+
+    /// Return the exact authenticated ComponentSession locality.
+    pub const fn endpoint_locality(&self) -> ComponentLocality {
+        self.endpoint_locality
     }
 
     /// Borrow the exact service name.
@@ -596,6 +688,13 @@ impl<C> SessionAcceptor<C> {
             expected_zone: self.expected_zone,
             subject,
             lease,
+            purpose_class: binding.purpose_class,
+            initiator_role: binding.initiator_role,
+            responder_role: binding.responder_role,
+            endpoint_locality: binding.endpoint_locality,
+            transport_class: binding.transport_class,
+            transport_binding: binding.transport_binding.clone(),
+            liveness: SessionLivenessOwner::new(),
             authority: self.authority,
             driver: engine.into_driver(),
             cleanup_observer,
@@ -641,6 +740,13 @@ pub struct AuthenticatedComponentSession<C> {
     expected_zone: ZoneId,
     subject: AuthenticatedSubjectContext,
     lease: AuthorizationLease,
+    purpose_class: PurposeClass,
+    initiator_role: EndpointRole,
+    responder_role: EndpointRole,
+    endpoint_locality: ComponentLocality,
+    transport_class: TransportClass,
+    transport_binding: IdentityTransportBinding,
+    liveness: SessionLivenessOwner,
     authority: Box<dyn SessionAuthority>,
     driver: SessionDriverHandle,
     cleanup_observer: SessionCleanupObserver,
@@ -915,6 +1021,13 @@ pub struct AuthenticatedSessionRouteBinding {
     subject_uid: ResourceUid,
     evidence_class: EvidenceClass,
     locality: Locality,
+    endpoint_locality: ComponentLocality,
+    purpose_class: PurposeClass,
+    initiator_role: EndpointRole,
+    responder_role: EndpointRole,
+    transport_class: TransportClass,
+    transport_binding: IdentityTransportBinding,
+    liveness: SessionLiveness,
     service: ServiceName,
     schema: SchemaFingerprint,
     reconnect_generation: ReconnectGeneration,
@@ -947,6 +1060,41 @@ impl AuthenticatedSessionRouteBinding {
 
     pub const fn locality(&self) -> Locality {
         self.locality
+    }
+
+    /// Return the exact authenticated ComponentSession locality.
+    pub const fn endpoint_locality(&self) -> ComponentLocality {
+        self.endpoint_locality
+    }
+
+    /// Return the authenticated endpoint purpose class.
+    pub const fn purpose_class(&self) -> PurposeClass {
+        self.purpose_class
+    }
+
+    /// Return the authenticated endpoint initiator role.
+    pub const fn initiator_role(&self) -> EndpointRole {
+        self.initiator_role
+    }
+
+    /// Return the authenticated endpoint responder role.
+    pub const fn responder_role(&self) -> EndpointRole {
+        self.responder_role
+    }
+
+    /// Return the exact authenticated transport class.
+    pub const fn transport_class(&self) -> TransportClass {
+        self.transport_class
+    }
+
+    /// Borrow the exact authenticated transport binding.
+    pub fn transport_binding(&self) -> &IdentityTransportBinding {
+        &self.transport_binding
+    }
+
+    /// Borrow a shared liveness marker for a trusted route owner.
+    pub fn liveness(&self) -> SessionLiveness {
+        self.liveness.clone()
     }
 
     pub fn service(&self) -> &ServiceName {
@@ -1026,6 +1174,7 @@ impl AuthenticatedSessionRouteBinding {
             );
         }
         let schema = context.schema_fingerprint().clone();
+        let transport_binding = context.transport_binding().clone();
         Self {
             context,
             zone,
@@ -1033,10 +1182,17 @@ impl AuthenticatedSessionRouteBinding {
             subject_uid,
             evidence_class: EvidenceClass::UnixPeer,
             locality: Locality::Local,
+            endpoint_locality: ComponentLocality::HostLocal,
             service: service_name,
             schema,
             reconnect_generation: ReconnectGeneration::new(reconnect_generation)
                 .expect("test reconnect is valid"),
+            purpose_class: PurposeClass::Local,
+            initiator_role: EndpointRole::ZoneController,
+            responder_role: EndpointRole::Component,
+            transport_class: TransportClass::UnixSeqpacket,
+            transport_binding,
+            liveness: SessionLiveness::new(),
             provider_ref,
             provider_generation: provider_generation
                 .map(|generation| ResourceGeneration::new(generation).expect("test generation")),
@@ -1084,6 +1240,13 @@ impl<C> AuthenticatedComponentSession<C> {
             expected_zone,
             subject,
             lease,
+            purpose_class,
+            initiator_role,
+            responder_role,
+            endpoint_locality,
+            transport_class,
+            transport_binding,
+            liveness,
             authority,
             driver,
             cleanup_observer,
@@ -1099,6 +1262,13 @@ impl<C> AuthenticatedComponentSession<C> {
                 expected_zone,
                 subject,
                 lease,
+                purpose_class,
+                initiator_role,
+                responder_role,
+                endpoint_locality,
+                transport_class,
+                transport_binding,
+                liveness,
                 authority,
                 driver,
                 cleanup_observer,
@@ -1129,6 +1299,13 @@ impl<C> AuthenticatedComponentSession<C> {
             subject_uid: self.subject.subject_uid().clone(),
             evidence_class: self.subject.evidence_class(),
             locality: self.subject.transport_binding().locality(),
+            endpoint_locality: self.endpoint_locality,
+            purpose_class: self.purpose_class,
+            initiator_role: self.initiator_role,
+            responder_role: self.responder_role,
+            transport_class: self.transport_class,
+            transport_binding: self.transport_binding.clone(),
+            liveness: self.liveness.marker(),
             service: self.subject.service().clone(),
             schema: self.subject.schema_fingerprint().clone(),
             reconnect_generation: self.subject.reconnect_generation(),
@@ -1283,16 +1460,24 @@ fn authentication_binding(
         SchemaFingerprint::parse(format!("sha256:{}", hex(&policy.schema_fingerprint)))
             .map_err(|_| SessionError::new(SessionErrorCode::SchemaMismatch))?;
     let binding_digest = binding_digest(policy.transport_binding.channel_binding)?;
-    let locality = match policy.transport_binding.locality {
-        crate::contract::Locality::ProcessLocal
-        | crate::contract::Locality::HostLocal
-        | crate::contract::Locality::GuestLocal => Locality::Local,
-        crate::contract::Locality::Remote => Locality::Remote,
+    let locality = match (policy.purpose, policy.transport_binding.locality) {
+        (EndpointPurpose::ZoneLink, ComponentLocality::Remote) => Locality::AdjacentZone,
+        (
+            _,
+            ComponentLocality::ProcessLocal
+            | ComponentLocality::HostLocal
+            | ComponentLocality::GuestLocal,
+        ) => Locality::Local,
+        (_, ComponentLocality::Remote) => Locality::Remote,
     };
     Ok(SessionAuthenticationBinding {
         evidence_class: evidence_class(policy.noise_profile),
         purpose: SessionPurpose::parse(policy.purpose.as_str())
             .map_err(|_| SessionError::new(SessionErrorCode::PurposeMismatch))?,
+        purpose_class: policy.purpose_class,
+        initiator_role: policy.initiator_role,
+        responder_role: policy.responder_role,
+        endpoint_locality: policy.transport_binding.locality,
         service: ServiceName::parse(policy.service.as_str())
             .map_err(|_| SessionError::new(SessionErrorCode::ServiceMismatch))?,
         schema_fingerprint,
