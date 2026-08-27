@@ -4697,7 +4697,7 @@ mod tests {
     }
 
     #[test]
-    fn live_apply_nm_unmanaged_adopts_legacy_owned_file() {
+    fn live_apply_nm_unmanaged_refuses_legacy_owned_file() {
         let exec = FakeReconcileExecutor::new();
         let root = TestDir::new("nm-unmanaged-legacy");
         let intent = sample_nm_unmanaged_intent(&root);
@@ -4707,18 +4707,11 @@ mod tests {
         )
         .unwrap();
 
-        assert_eq!(
-            live_apply_nm_unmanaged_with_reloaders(&exec, &intent, || Ok(()), |_| Ok(())).unwrap(),
-            Some(NmReloadMethod::Dbus)
-        );
-        assert_eq!(
-            exec.take_log(),
-            vec![ReconcileOp::WriteAtomicFile {
-                path: intent.file_path,
-                mode: intent.mode,
-                contents: intent.contents.into_bytes(),
-            }]
-        );
+        assert!(matches!(
+            live_apply_nm_unmanaged_with_reloaders(&exec, &intent, || Ok(()), |_| Ok(())),
+            Err(LiveHandlerError::NmOwnershipConflict)
+        ));
+        assert!(exec.take_log().is_empty());
     }
 
     #[test]

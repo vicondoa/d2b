@@ -7,7 +7,6 @@ exports_files(
         "BUILD.bazel",
         "nix/artifacts.nix",
         "nix/default.nix",
-        "nix/net-mdns.nix",
         "nix/net.nix",
         "nix/network.nix",
         "nix/resources-network.nix",

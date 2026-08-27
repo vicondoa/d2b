@@ -30,13 +30,12 @@
 //! | Intent          | `BundleOpId` format                                       | Source data                                                       |
 //! | --------------- | --------------------------------------------------------- | ----------------------------------------------------------------- |
 //! | nft             | `nft:host`                                                | [`crate::host::HostJson::nftables`] (whole-host table)            |
-//! | nft per-env     | `nft:env:<env>`                                           | [`crate::host::NetEnv`] subset of the global table                |
-//! | nft projection  | `nft-projection:env:<env>`                                | per-env rule set + trusted ownership-marker row                   |
-//! | ownership marker| `ownership-marker:env:<env>`                               | bundle-derived marker for one environment projection              |
-//! | bridge          | `bridge:env:<env>`                                         | [`crate::host::NetEnv`] bridge, MTU, and fixed hardening policy    |
-//! | route           | `route:env:<env>:<idx>`                                   | derived from [`crate::host::NetEnv`] (gateway + default route)    |
-//! | sysctl          | `sysctl:env:<env>:if:<if>:<key>`                          | [`crate::host::Ipv6SysctlEntry`]                                  |
-//! | hosts file      | `hosts:host`                                              | [`crate::host::HostsFileOwnership`] + per-env LAN entries         |
+//! | Network projection | `network-bridge:<zone-uid>:<network-uid>:<name-token>:<role>` | committed Zone Network resource and derived bridge policy      |
+//! | Network firewall  | `network-firewall:<zone-uid>:<network-uid>:<name-token>` | committed Network projection + ownership-marker row              |
+//! | Network route     | `network-route:<zone-uid>:<network-uid>:<name-token>:<idx>` | committed Network routing policy and derived gateway          |
+//! | Network sysctl    | `network-sysctl:<zone-uid>:<network-uid>:<name-token>:<if-role>:<key>` | committed Network bridge hardening policy                 |
+//! | Network hosts     | `network-hosts:<zone-uid>:<network-uid>:<name-token>` | committed Network resource projection                           |
+//! | Network TAP       | `network-tap:<sha256>`                                      | complete Zone/Network/attachment/generation TAP identity      |
 //! | NM unmanaged    | `nm-unmanaged:host`                                       | [`crate::host::NetworkManagerUnmanaged`]                          |
 //! | USBIP firewall  | `usbip-fw:env:<env>:bus:<bus_id>`                         | [`crate::host::UsbipBusidLock`] + nft chain template              |
 //! | USBIP bind      | `usbip-bind:env:<env>:vm:<vm>:bus:<bus_id>`               | [`crate::host::UsbipBusidLock`]                                   |
@@ -86,7 +85,15 @@ use crate::realm_workloads_launcher::RealmWorkloadsLauncherV2Json;
 use crate::storage::StorageJson;
 use crate::sync::SyncJson;
 use crate::unsafe_local_workloads::{UnsafeLocalWorkload, UnsafeLocalWorkloadsJson};
-use d2b_contracts_resource::v3::{IfName, storage::ZoneStoreStorageRow};
+use d2b_contracts_resource::v3::{
+    IfName,
+    NetworkIfRole,
+    NetworkProvenance,
+    ResourceUid,
+    derive_network_ifname, derive_network_route_name, network::NetworkSpec,
+    storage::ZoneStoreStorageRow,
+};
+use d2b_contracts_zone_session::v3::resource_bundle::ResourceBundle;
 use d2b_realm_core::RealmIdentityConfigJson;
 use sha2::Digest as _;
 use std::collections::{BTreeMap, BTreeSet};
@@ -178,6 +185,8 @@ pub struct ResolvedBridgeIntent {
     pub stp_disabled: bool,
     pub multicast_snooping_disabled: bool,
     pub ipv6_suppressed: bool,
+    pub provenance: Option<NetworkProvenance>,
+    pub ownership_marker: Option<String>,
 }
 
 /// Trusted ownership marker resolved separately from a projection request.
@@ -185,6 +194,8 @@ pub struct ResolvedBridgeIntent {
 pub struct ResolvedOwnershipMarkerIntent {
     pub intent_id: String,
     pub marker: String,
+    /// Network identity that authorized this marker, when applicable.
+    pub provenance: Option<NetworkProvenance>,
 }
 
 /// Trusted rule set for one ownership-scoped nftables projection.
@@ -195,6 +206,7 @@ pub struct ResolvedNftablesProjectionIntent {
     pub script_body: String,
     pub desired_hash: String,
     pub ownership_marker_intent_ref: String,
+    pub provenance: Option<NetworkProvenance>,
 }
 
 /// Immutable identity of the installed private configuration bundle.
@@ -221,7 +233,12 @@ pub struct ResolvedRouteIntent {
     pub via: Option<String>,
     pub device: Option<String>,
     pub table: Option<String>,
+    /// Legacy projection metadata; live route ownership is proven by the
+    /// durable UID-bound marker record, never by this flag.
     pub owned: bool,
+    pub route_name: Option<String>,
+    pub provenance: Option<NetworkProvenance>,
+    pub ownership_marker: Option<String>,
 }
 
 /// Resolved per-link sysctl pair ready for `live_apply_sysctl`.
@@ -230,6 +247,8 @@ pub struct ResolvedSysctlIntent {
     pub intent_id: String,
     pub key: String,
     pub value: String,
+    pub provenance: Option<NetworkProvenance>,
+    pub ownership_marker: Option<String>,
 }
 
 /// Resolved /etc/hosts managed block ready for `live_update_hosts_file`.
@@ -241,6 +260,8 @@ pub struct ResolvedHostsIntent {
     pub start_marker: String,
     pub end_marker: String,
     pub mode: u32,
+    pub provenance: Option<NetworkProvenance>,
+    pub ownership_marker: Option<String>,
 }
 
 /// Resolved NetworkManager unmanaged drop-in file.
@@ -645,15 +666,25 @@ pub struct ResolvedRotateKnownHostIntent {
 /// Bundle-resolved TAP / bridge plan for one VM role.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ResolvedTapIntent {
+    pub intent_id: String,
     pub vm_name: String,
     pub role_id: String,
-    pub env: String,
     pub bridge_ifname: IfName,
     pub tap_ifname: IfName,
     pub tap_role: TapRoleW3,
     pub net_handoff_mode: ChNetHandoffMode,
     pub owner_uid: u32,
     pub owner_gid: u32,
+    pub provenance: NetworkProvenance,
+    pub ownership_marker: String,
+}
+
+/// Normalize the stable TAP role key shared by host-prep and runner paths.
+pub fn canonical_tap_role_id(role_id: &str) -> &str {
+    match role_id {
+        "ch-runner" => "ch",
+        other => other,
+    }
 }
 
 /// Bundle-resolved macvtap interface for a VMM runner.
@@ -1089,8 +1120,8 @@ impl BundleResolver {
         )
     }
 
-    /// Variant for tests / the live broker load path that also accepts
-    /// parsed `closures/<vm>.json` artifacts.
+    /// Variant for test fixtures that also accepts parsed
+    /// `closures/<vm>.json` artifacts.
     pub fn from_artifacts_with_closures(
         bundle: Bundle,
         bundle_hash: String,
@@ -1116,6 +1147,7 @@ impl BundleResolver {
                 manifest,
                 closures,
             },
+            true,
         )
     }
 
@@ -1123,6 +1155,7 @@ impl BundleResolver {
         bundle: Bundle,
         bundle_hash: String,
         artifacts: ParsedBundleArtifacts,
+        include_fixture_network_intents: bool,
     ) -> Self {
         let ParsedBundleArtifacts {
             host,
@@ -1139,13 +1172,64 @@ impl BundleResolver {
             closures,
         } = artifacts;
         let installed_generation_identity = build_installed_generation_identity(&bundle);
-        let nft_intents = build_nft_intents(&host);
-        let nft_projection_intents = build_nft_projection_intents(&host);
-        let ownership_marker_intents = build_ownership_marker_intents(&host);
-        let bridge_intents = build_bridge_intents(&host);
-        let route_intents = build_route_intents(&host);
-        let sysctl_intents = build_sysctl_intents(&host);
-        let hosts_intents = build_hosts_intents(&host);
+        let nft_intents = if include_fixture_network_intents {
+            build_nft_intents(&host)
+        } else {
+            build_host_nft_intents(&host)
+        };
+        let nft_projection_intents = if include_fixture_network_intents {
+            build_nft_projection_intents(&host)
+        } else {
+            BTreeMap::new()
+        };
+        let ownership_marker_intents = if include_fixture_network_intents {
+            build_ownership_marker_intents(&host)
+        } else {
+            BTreeMap::new()
+        };
+        let bridge_intents = if include_fixture_network_intents {
+            build_bridge_intents(&host)
+        } else {
+            BTreeMap::new()
+        };
+        let route_intents = if include_fixture_network_intents {
+            build_route_intents(&host)
+        } else {
+            BTreeMap::new()
+        };
+        let sysctl_intents = if include_fixture_network_intents {
+            build_sysctl_intents(&host)
+        } else {
+            BTreeMap::new()
+        };
+        let hosts_intents = if include_fixture_network_intents {
+            build_hosts_intents(&host)
+        } else {
+            BTreeMap::new()
+        };
+        let (
+            resource_nft_projection_intents,
+            resource_ownership_marker_intents,
+            resource_bridge_intents,
+            resource_route_intents,
+            resource_sysctl_intents,
+            resource_hosts_intents,
+        ) = build_resource_network_intents(
+            &zone_resource_bundles,
+            include_fixture_network_intents,
+        );
+        let mut nft_projection_intents = nft_projection_intents;
+        nft_projection_intents.extend(resource_nft_projection_intents);
+        let mut ownership_marker_intents = ownership_marker_intents;
+        ownership_marker_intents.extend(resource_ownership_marker_intents);
+        let mut bridge_intents = bridge_intents;
+        bridge_intents.extend(resource_bridge_intents);
+        let mut route_intents = route_intents;
+        route_intents.extend(resource_route_intents);
+        let mut sysctl_intents = sysctl_intents;
+        sysctl_intents.extend(resource_sysctl_intents);
+        let mut hosts_intents = hosts_intents;
+        hosts_intents.extend(resource_hosts_intents);
         let nm_unmanaged_intents = build_nm_unmanaged_intents(&host);
         let usbip_firewall_intents = build_usbip_firewall_intents(&host);
         let usbip_bind_intents = build_usbip_bind_intents(&host);
@@ -1236,6 +1320,7 @@ impl BundleResolver {
                 manifest,
                 closures: Vec::new(),
             },
+            true,
         )
     }
 
@@ -1300,6 +1385,7 @@ impl BundleResolver {
                 manifest,
                 closures,
             },
+            false,
         ))
     }
 
@@ -1327,6 +1413,17 @@ impl BundleResolver {
                     .map_err(|_| "bundle Zone resource bundle index invalid")
             })
             .collect()
+    }
+
+    /// Check that a supplied Zone UID is present in a verified private bundle.
+    pub fn has_zone_uid(&self, zone_uid: &d2b_contracts_resource::v3::ResourceUid) -> bool {
+        self.zone_resource_bundles.values().any(|bytes| {
+            ResourceBundle::from_json(bytes)
+                .ok()
+                .and_then(|bundle| bundle.zone_uid)
+                .as_ref()
+                == Some(zone_uid)
+        })
     }
 
     /// Return the verified broker-owned storage row for one Zone.
@@ -1379,6 +1476,296 @@ impl BundleResolver {
 
     pub fn find_hosts_intent(&self, id: &str) -> Option<&ResolvedHostsIntent> {
         self.hosts_intents.get(id)
+    }
+
+    /// Resolve a Network bridge row from an admitted UID-bound reference.
+    pub fn resolve_network_bridge_intent(
+        &self,
+        id: &str,
+        provenance: &NetworkProvenance,
+    ) -> Option<ResolvedBridgeIntent> {
+        let parts = parse_network_intent_ref(id)?;
+        if parts.kind != NetworkIntentKind::Bridge
+            || parts.zone_uid != *provenance.zone_uid()
+            || parts.network_uid != *provenance.network_uid()
+        {
+            return None;
+        }
+        let spec = self.find_network_spec(&parts)?;
+        let role = match parts.variant.as_deref() {
+            Some("uplink") => NetworkIfRole::UplinkBridge,
+            Some("lan") => NetworkIfRole::LanBridge,
+            _ => return None,
+        };
+        let bridge_ifname =
+            derive_network_ifname(provenance.zone_uid(), provenance.network_uid(), role, None)
+                .ok()?;
+        let variant = parts.variant.as_deref()?;
+        let ownership_marker = format!(
+            "d2b managed: {}",
+            d2b_contracts_resource::v3::derive_network_ownership_marker(
+                provenance,
+                &format!("bridge:{variant}"),
+            )
+        );
+        Some(ResolvedBridgeIntent {
+            intent_id: id.to_owned(),
+            scope_label: network_scope(provenance),
+            bridge_ifname,
+            mtu: spec.mtu().unwrap_or(1500) as u16,
+            stp_disabled: true,
+            multicast_snooping_disabled: true,
+            ipv6_suppressed: true,
+            provenance: Some(provenance.clone()),
+            ownership_marker: Some(ownership_marker),
+        })
+    }
+
+    /// Resolve a Network ownership marker row from an admitted reference.
+    pub fn resolve_network_marker_intent(
+        &self,
+        id: &str,
+        provenance: &NetworkProvenance,
+    ) -> Option<ResolvedOwnershipMarkerIntent> {
+        let parts = parse_network_intent_ref(id)?;
+        if parts.kind != NetworkIntentKind::Marker
+            || parts.zone_uid != *provenance.zone_uid()
+            || parts.network_uid != *provenance.network_uid()
+        {
+            return None;
+        }
+        self.find_network_spec(&parts)?;
+        let marker = d2b_contracts_resource::v3::derive_network_ownership_marker(
+            provenance,
+            "firewall",
+        );
+        Some(ResolvedOwnershipMarkerIntent {
+            intent_id: id.to_owned(),
+            marker,
+            provenance: Some(provenance.clone()),
+        })
+    }
+
+    /// Resolve a Network firewall projection from an admitted reference.
+    pub fn resolve_network_projection_intent(
+        &self,
+        id: &str,
+        provenance: &NetworkProvenance,
+    ) -> Option<ResolvedNftablesProjectionIntent> {
+        let parts = parse_network_intent_ref(id)?;
+        if parts.kind != NetworkIntentKind::Firewall
+            || parts.zone_uid != *provenance.zone_uid()
+            || parts.network_uid != *provenance.network_uid()
+        {
+            return None;
+        }
+        let spec = self.find_network_spec(&parts)?;
+        let uplink = derive_network_ifname(
+            provenance.zone_uid(),
+            provenance.network_uid(),
+            NetworkIfRole::UplinkBridge,
+            None,
+        )
+        .ok()?;
+        let marker_id = format!(
+            "network-marker:{}:{}:{}",
+            provenance.zone_uid().as_str(),
+            provenance.network_uid().as_str(),
+            parts.network_name
+        );
+        let marker = d2b_contracts_resource::v3::derive_network_ownership_marker(
+            provenance,
+            "firewall",
+        );
+        let chain = network_firewall_chain_name(provenance.network_uid());
+        let script_body = format!(
+            "table inet d2b {{\n  chain \"{chain}\" {{ comment \"d2b managed: {marker}\";\n    ct state established,related accept comment \"d2b managed: {marker}\";\n    iifname \"{}\" ct state new accept comment \"d2b managed: {marker}\";\n  }}\n}}\n",
+            uplink.as_str()
+        );
+        let _ = spec;
+        Some(ResolvedNftablesProjectionIntent {
+            intent_id: id.to_owned(),
+            scope_label: network_scope(provenance),
+            desired_hash: stable_digest(&script_body),
+            script_body,
+            ownership_marker_intent_ref: marker_id,
+            provenance: Some(provenance.clone()),
+        })
+    }
+
+    /// Resolve a Network route row from an admitted UID-bound reference.
+    pub fn resolve_network_route_intent(
+        &self,
+        id: &str,
+        provenance: &NetworkProvenance,
+    ) -> Option<ResolvedRouteIntent> {
+        let parts = parse_network_intent_ref(id)?;
+        if parts.kind != NetworkIntentKind::Route
+            || parts.zone_uid != *provenance.zone_uid()
+            || parts.network_uid != *provenance.network_uid()
+        {
+            return None;
+        }
+        let spec = self.find_network_spec(&parts)?;
+        let index = parts.index?;
+        let destinations = if spec.routing().host_blocklist().is_empty() {
+            vec![spec.lan_cidr().as_str().to_owned()]
+        } else {
+            spec.routing()
+                .host_blocklist()
+                .iter()
+                .map(|cidr| cidr.as_str().to_owned())
+                .collect::<Vec<_>>()
+        };
+        let destination = destinations.get(index)?.clone();
+        let bridge = derive_network_ifname(
+            provenance.zone_uid(),
+            provenance.network_uid(),
+            NetworkIfRole::UplinkBridge,
+            None,
+        )
+        .ok()?;
+        let via = network_cidr_host_address(spec.uplink_cidr().as_str(), 2);
+        let route_spec = format!(
+            "{destination}{} dev {} table main",
+            via.as_deref()
+                .map(|gateway| format!(" via {gateway}"))
+                .unwrap_or_default(),
+            bridge.as_str()
+        );
+        let route_name =
+            derive_network_route_name(provenance.zone_uid(), provenance.network_uid(), index);
+        let marker = format!(
+            "d2b managed: {}",
+            d2b_contracts_resource::v3::derive_network_ownership_marker(
+                provenance,
+                &format!("route:{route_name}"),
+            )
+        );
+        Some(ResolvedRouteIntent {
+            intent_id: id.to_owned(),
+            route_spec,
+            destination,
+            via,
+            device: Some(bridge.as_str().to_owned()),
+            table: Some("main".to_owned()),
+            owned: true,
+            route_name: Some(route_name),
+            provenance: Some(provenance.clone()),
+            ownership_marker: Some(marker),
+        })
+    }
+
+    /// Resolve a Network sysctl row from an admitted UID-bound reference.
+    pub fn resolve_network_sysctl_intent(
+        &self,
+        id: &str,
+        provenance: &NetworkProvenance,
+    ) -> Option<ResolvedSysctlIntent> {
+        let parts = parse_network_intent_ref(id)?;
+        if parts.kind != NetworkIntentKind::Sysctl
+            || parts.zone_uid != *provenance.zone_uid()
+            || parts.network_uid != *provenance.network_uid()
+        {
+            return None;
+        }
+        let spec = self.find_network_spec(&parts)?;
+        let role = match parts.variant.as_deref() {
+            Some("lan") => NetworkIfRole::LanBridge,
+            Some("uplink") => NetworkIfRole::UplinkBridge,
+            _ => return None,
+        };
+        let ifname =
+            derive_network_ifname(provenance.zone_uid(), provenance.network_uid(), role, None)
+                .ok()?;
+        let key = parts.key.as_deref()?;
+        let value = match key {
+            "disable-ipv6" => "1",
+            "accept-ra" | "autoconf" => "0",
+            _ => return None,
+        };
+        let marker = d2b_contracts_resource::v3::derive_network_ownership_marker(
+            provenance,
+            &format!("sysctl:{key}"),
+        );
+        let _ = spec;
+        Some(ResolvedSysctlIntent {
+            intent_id: id.to_owned(),
+            key: format!(
+                "net.ipv6.conf.{}.{}",
+                ifname.as_str(),
+                key.replace('-', "_")
+            ),
+            value: value.to_owned(),
+            provenance: Some(provenance.clone()),
+            ownership_marker: Some(marker),
+        })
+    }
+
+    /// Resolve a Network hosts projection from an admitted reference.
+    pub fn resolve_network_hosts_intent(
+        &self,
+        id: &str,
+        provenance: &NetworkProvenance,
+    ) -> Option<ResolvedHostsIntent> {
+        let parts = parse_network_intent_ref(id)?;
+        if parts.kind != NetworkIntentKind::Hosts
+            || parts.zone_uid != *provenance.zone_uid()
+            || parts.network_uid != *provenance.network_uid()
+        {
+            return None;
+        }
+        let spec = self.find_network_spec(&parts)?;
+        let marker = d2b_contracts_resource::v3::derive_network_ownership_marker(
+            provenance,
+            "hosts",
+        );
+        let managed_block = format!(
+            "# d2b-managed begin\n# d2b managed: {marker}\n# network {} lan {} uplink {}\n# d2b-managed end\n",
+            parts.network_name,
+            spec.lan_cidr().as_str(),
+            spec.uplink_cidr().as_str()
+        );
+        Some(ResolvedHostsIntent {
+            intent_id: id.to_owned(),
+            path: PathBuf::from("/etc/hosts"),
+            managed_block,
+            start_marker: "# d2b-managed begin".to_owned(),
+            end_marker: "# d2b-managed end".to_owned(),
+            mode: 0o644,
+            provenance: Some(provenance.clone()),
+            ownership_marker: Some(marker),
+        })
+    }
+
+    fn find_network_spec(&self, parts: &ParsedNetworkIntentRef) -> Option<NetworkSpec> {
+        self.zone_resource_bundles.values().find_map(|bytes| {
+            let bundle = ResourceBundle::from_json(bytes).ok()?;
+            if bundle.zone_uid.as_ref() != Some(&parts.zone_uid) {
+                return None;
+            }
+            let resource = bundle.resources.iter().find(|resource| {
+                resource.resource_type().as_str() == "Network"
+                    && network_name_token(resource.metadata().name().as_str())
+                        == parts.network_name
+                    && resource
+                        .metadata()
+                        .annotations()
+                        .get("networkUid")
+                        .is_none_or(|value| {
+                            d2b_contracts_resource::v3::ResourceUid::parse(value.clone())
+                                .ok()
+                                == Some(parts.network_uid.clone())
+                        })
+            })?;
+            let mut value =
+                serde_json::to_value(resource.spec()).ok()?;
+            let object = value.as_object_mut()?;
+            for field in ["providerRef", "updatePolicy", "provider"] {
+                object.remove(field);
+            }
+            serde_json::from_value(value).ok()
+        })
     }
 
     pub fn find_nm_unmanaged_intent(&self, id: &str) -> Option<&ResolvedNmUnmanagedIntent> {
@@ -1635,19 +2022,101 @@ impl BundleResolver {
             .find(|mapping| mapping.vm.as_deref() == Some(vm_id))
     }
 
-    pub fn resolve_tap_intent(&self, vm_id: &str, role_id: &str) -> Option<ResolvedTapIntent> {
-        let vm = self.find_manifest_vm(vm_id)?;
-        let env_name = vm.env.as_deref()?;
-        let env = self.find_host_env(env_name)?;
-        let mapping = self.find_if_name_mapping_for_vm(vm_id)?;
-        let node = self.find_process_node(vm_id, role_id)?;
+    pub fn resolve_tap_intent(
+        &self,
+        vm_id: &str,
+        role_id: &str,
+        provenance: NetworkProvenance,
+        attachment_id: ResourceUid,
+    ) -> Option<ResolvedTapIntent> {
+        let node = self
+            .find_process_node(vm_id, role_id)
+            .or_else(|| {
+                if matches!(role_id, "ch" | "ch-runner") {
+                    self.find_process_vm(vm_id).and_then(|vm| {
+                        vm.nodes.iter().find(|node| {
+                            matches!(node.role, ProcessRole::CloudHypervisorRunner)
+                        })
+                    })
+                } else {
+                    None
+                }
+            })?;
+        let canonical_role_id = canonical_tap_role_id(role_id);
+        let is_net_vm = vm_id
+            == d2b_contracts_resource::v3::derive_network_child_name(
+                provenance.network_uid(),
+                "vm",
+            );
+        if is_net_vm && canonical_role_id != "ch" {
+            return None;
+        }
+        let (bridge_role, tap_role, tap_class) = if is_net_vm {
+            (
+                NetworkIfRole::LanBridge,
+                NetworkIfRole::NetVmLanTap,
+                TapRoleW3::NetVmLan,
+            )
+        } else {
+            match canonical_role_id {
+            "net-vm-lan" => (
+                NetworkIfRole::LanBridge,
+                NetworkIfRole::NetVmLanTap,
+                TapRoleW3::NetVmLan,
+            ),
+            "uplink" => (
+                NetworkIfRole::UplinkBridge,
+                NetworkIfRole::NetVmUplinkTap,
+                TapRoleW3::UplinkP2P,
+            ),
+            "ch" | "qemu-media" | "workload-lan" | "network-attachment" | "runner-lan" => (
+                NetworkIfRole::LanBridge,
+                NetworkIfRole::WorkloadGuestTap,
+                TapRoleW3::WorkloadLanIsolated,
+            ),
+            _ => return None,
+            }
+        };
+        let bridge_ifname = derive_network_ifname(
+            provenance.zone_uid(),
+            provenance.network_uid(),
+            bridge_role,
+            None,
+        )
+        .ok()?;
+        let tap_ifname = derive_network_ifname(
+            provenance.zone_uid(),
+            provenance.network_uid(),
+            tap_role,
+            match tap_role {
+                NetworkIfRole::NetVmLanTap | NetworkIfRole::NetVmUplinkTap => None,
+                NetworkIfRole::WorkloadGuestTap | NetworkIfRole::ExternalMacvtap => {
+                    Some(&attachment_id)
+                }
+                NetworkIfRole::LanBridge | NetworkIfRole::UplinkBridge => None,
+            },
+        )
+        .ok()?;
+        let ownership_marker = d2b_contracts_resource::v3::derive_network_ownership_marker(
+            &provenance,
+            &format!("tap:{}", attachment_id.as_str()),
+        );
         Some(ResolvedTapIntent {
+            intent_id: intent_id_network_tap(
+                provenance.zone_uid(),
+                provenance.network_uid(),
+                &attachment_id,
+                provenance.network_generation(),
+                provenance.attachment_generation(),
+                provenance.bundle_generation(),
+                canonical_role_id,
+                vm_id,
+            ),
             vm_name: vm_id.to_owned(),
-            role_id: role_id.to_owned(),
-            env: env.env.clone(),
-            bridge_ifname: env.bridge.clone(),
-            tap_ifname: mapping.derived_ifname.clone(),
-            tap_role: resolve_tap_role(&mapping.role, env),
+            role_id: canonical_role_id.to_owned(),
+            bridge_ifname,
+            tap_ifname,
+            tap_role: tap_class,
             net_handoff_mode: self
                 .host
                 .ch
@@ -1656,6 +2125,8 @@ impl BundleResolver {
                 .unwrap_or(ChNetHandoffMode::PersistentTap),
             owner_uid: node.profile.uid,
             owner_gid: node.profile.gid,
+            provenance,
+            ownership_marker,
         })
     }
 
@@ -2074,20 +2545,6 @@ impl std::fmt::Display for MinijailProfileViolation {
 
 impl std::error::Error for MinijailProfileViolation {}
 
-fn resolve_tap_role(role: &TapRole, env: &NetEnv) -> TapRoleW3 {
-    match role {
-        TapRole::NetVmLan => TapRoleW3::NetVmLan,
-        TapRole::WorkloadLan => {
-            if env.lan.effective_east_west {
-                TapRoleW3::WorkloadLanEastWest
-            } else {
-                TapRoleW3::WorkloadLanIsolated
-            }
-        }
-        TapRole::Uplink => TapRoleW3::UplinkP2P,
-    }
-}
-
 fn module_requirement_w3(requirement: &ModuleRequirement) -> ModuleRequirementW3 {
     match requirement {
         ModuleRequirement::Required => ModuleRequirementW3::Required,
@@ -2213,6 +2670,169 @@ pub fn intent_id_nft_projection_env(env: &str) -> String {
     format!("nft-projection:env:{env}")
 }
 
+/// Build a UID-bound Network effect reference.
+///
+/// The resource name is retained only as a bundle lookup hint. Admission and
+/// effect authorization use the Zone and Network UIDs encoded before it.
+pub fn intent_id_network_bridge_uids(
+    zone_uid: &d2b_contracts_resource::v3::ResourceUid,
+    network_uid: &d2b_contracts_resource::v3::ResourceUid,
+    network_name: &str,
+    uplink: bool,
+) -> String {
+    format!(
+        "network-bridge:{}:{}:{}:{}",
+        zone_uid.as_str(),
+        network_uid.as_str(),
+        network_name_token(network_name),
+        if uplink { "uplink" } else { "lan" }
+    )
+}
+
+/// Build a UID-bound Network firewall projection reference.
+pub fn intent_id_network_projection_uids(
+    zone_uid: &d2b_contracts_resource::v3::ResourceUid,
+    network_uid: &d2b_contracts_resource::v3::ResourceUid,
+    network_name: &str,
+) -> String {
+    format!(
+        "network-firewall:{}:{}:{}",
+        zone_uid.as_str(),
+        network_uid.as_str(),
+        network_name_token(network_name)
+    )
+}
+
+/// Build a UID-bound Network ownership-marker reference.
+pub fn intent_id_network_ownership_marker_uids(
+    zone_uid: &d2b_contracts_resource::v3::ResourceUid,
+    network_uid: &d2b_contracts_resource::v3::ResourceUid,
+    network_name: &str,
+) -> String {
+    format!(
+        "network-marker:{}:{}:{}",
+        zone_uid.as_str(),
+        network_uid.as_str(),
+        network_name_token(network_name)
+    )
+}
+
+/// Build a UID-bound Network route reference.
+pub fn intent_id_network_route_uids(
+    zone_uid: &d2b_contracts_resource::v3::ResourceUid,
+    network_uid: &d2b_contracts_resource::v3::ResourceUid,
+    network_name: &str,
+    idx: usize,
+) -> String {
+    format!(
+        "network-route:{}:{}:{}:{}",
+        zone_uid.as_str(),
+        network_uid.as_str(),
+        network_name_token(network_name),
+        idx
+    )
+}
+
+/// Build the exact opaque TAP intent reference for one admitted provenance.
+pub fn intent_id_network_tap(
+    zone_uid: &d2b_contracts_resource::v3::ResourceUid,
+    network_uid: &d2b_contracts_resource::v3::ResourceUid,
+    attachment_uid: &d2b_contracts_resource::v3::ResourceUid,
+    network_generation: d2b_contracts_resource::v3::ResourceGeneration,
+    attachment_generation: d2b_contracts_resource::v3::ResourceGeneration,
+    bundle_generation: &d2b_contracts_resource::v3::ResourceBundleGenerationId,
+    role_id: &str,
+    vm_id: &str,
+) -> String {
+    format!(
+        "network-tap:{}",
+        tap_identity_digest(
+            zone_uid,
+            network_uid,
+            attachment_uid,
+            network_generation,
+            attachment_generation,
+            bundle_generation,
+            role_id,
+            vm_id,
+        )
+    )
+}
+
+fn tap_identity_digest(
+    zone_uid: &d2b_contracts_resource::v3::ResourceUid,
+    network_uid: &d2b_contracts_resource::v3::ResourceUid,
+    attachment_uid: &d2b_contracts_resource::v3::ResourceUid,
+    network_generation: d2b_contracts_resource::v3::ResourceGeneration,
+    attachment_generation: d2b_contracts_resource::v3::ResourceGeneration,
+    bundle_generation: &d2b_contracts_resource::v3::ResourceBundleGenerationId,
+    role_id: &str,
+    vm_id: &str,
+) -> String {
+    let mut hasher = sha2::Sha256::new();
+    hasher.update(b"d2b:v3:network-tap-identity\0");
+    for value in [
+        zone_uid.as_str(),
+        network_uid.as_str(),
+        attachment_uid.as_str(),
+        role_id,
+        vm_id,
+    ] {
+        hasher.update((value.len() as u64).to_be_bytes());
+        hasher.update(value.as_bytes());
+    }
+    for value in [
+        network_generation.get(),
+        attachment_generation.get(),
+    ] {
+        hasher.update(value.to_be_bytes());
+    }
+    let bundle = bundle_generation.as_str();
+    hasher.update((bundle.len() as u64).to_be_bytes());
+    hasher.update(bundle.as_bytes());
+    format!("{:x}", hasher.finalize())
+}
+
+/// Build a UID-bound Network sysctl reference.
+pub fn intent_id_network_sysctl_uids(
+    zone_uid: &d2b_contracts_resource::v3::ResourceUid,
+    network_uid: &d2b_contracts_resource::v3::ResourceUid,
+    network_name: &str,
+    if_role: &str,
+    key: &str,
+) -> String {
+    format!(
+        "network-sysctl:{}:{}:{}:{}:{}",
+        zone_uid.as_str(),
+        network_uid.as_str(),
+        network_name_token(network_name),
+        if_role,
+        key
+    )
+}
+
+/// Build a UID-bound Network hosts reference.
+pub fn intent_id_network_hosts_uids(
+    zone_uid: &d2b_contracts_resource::v3::ResourceUid,
+    network_uid: &d2b_contracts_resource::v3::ResourceUid,
+    network_name: &str,
+) -> String {
+    format!(
+        "network-hosts:{}:{}:{}",
+        zone_uid.as_str(),
+        network_uid.as_str(),
+        network_name_token(network_name)
+    )
+}
+
+/// Bound the human-readable Network lookup hint inside an opaque id.
+pub fn network_name_token(network_name: &str) -> String {
+    stable_digest(network_name)
+        .strip_prefix("fnv1a64:")
+        .unwrap_or_default()
+        .to_owned()
+}
+
 pub fn intent_id_ownership_marker_env(env: &str) -> String {
     format!("ownership-marker:env:{env}")
 }
@@ -2245,12 +2865,422 @@ pub fn intent_id_usbip_bind(env: &str, vm: &str, bus_id: &str) -> String {
     format!("usbip-bind:env:{env}:vm:{vm}:bus:{bus_id}")
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum NetworkIntentKind {
+    Bridge,
+    Firewall,
+    Marker,
+    Route,
+    Sysctl,
+    Hosts,
+}
+
+struct ParsedNetworkIntentRef {
+    kind: NetworkIntentKind,
+    zone_uid: d2b_contracts_resource::v3::ResourceUid,
+    network_uid: d2b_contracts_resource::v3::ResourceUid,
+    network_name: String,
+    variant: Option<String>,
+    index: Option<usize>,
+    key: Option<String>,
+}
+
+fn parse_network_intent_ref(id: &str) -> Option<ParsedNetworkIntentRef> {
+    let fields = id.split(':').collect::<Vec<_>>();
+    let (kind, required_len) = match fields.first().copied()? {
+        "network-bridge" => (NetworkIntentKind::Bridge, 5),
+        "network-firewall" => (NetworkIntentKind::Firewall, 4),
+        "network-marker" => (NetworkIntentKind::Marker, 4),
+        "network-route" => (NetworkIntentKind::Route, 5),
+        "network-sysctl" => (NetworkIntentKind::Sysctl, 6),
+        "network-hosts" => (NetworkIntentKind::Hosts, 4),
+        _ => return None,
+    };
+    if fields.len() != required_len
+        || fields[1].is_empty()
+        || fields[2].is_empty()
+        || fields[3].is_empty()
+    {
+        return None;
+    }
+    let zone_uid = d2b_contracts_resource::v3::ResourceUid::parse(fields[1].to_owned()).ok()?;
+    let network_uid = d2b_contracts_resource::v3::ResourceUid::parse(fields[2].to_owned()).ok()?;
+    let network_name = fields[3].to_owned();
+    if !network_name
+        .bytes()
+        .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'-')
+    {
+        return None;
+    }
+    let (variant, index, key) = match kind {
+        NetworkIntentKind::Bridge => (Some(fields[4].to_owned()), None, None),
+        NetworkIntentKind::Route => (None, Some(fields[4].parse().ok()?), None),
+        NetworkIntentKind::Sysctl => (
+            Some(fields[4].to_owned()),
+            None,
+            Some(fields[5].to_owned()),
+        ),
+        NetworkIntentKind::Firewall
+        | NetworkIntentKind::Marker
+        | NetworkIntentKind::Hosts => (None, None, None),
+    };
+    Some(ParsedNetworkIntentRef {
+        kind,
+        zone_uid,
+        network_uid,
+        network_name,
+        variant,
+        index,
+        key,
+    })
+}
+
+fn network_scope(provenance: &NetworkProvenance) -> String {
+    format!(
+        "network:{}:{}",
+        provenance.zone_uid().as_str(),
+        provenance.network_uid().as_str()
+    )
+}
+
+fn network_firewall_chain_name(network_uid: &d2b_contracts_resource::v3::ResourceUid) -> String {
+    let compact = network_uid.as_str().replace('-', "");
+    format!("forward-{}", &compact[..8])
+}
+
 pub fn intent_id_runner(vm: &str, role_id: &str) -> String {
     format!("runner:vm:{vm}:role:{role_id}")
 }
 
 pub fn intent_id_socket(vm: &str, role_id: &str) -> String {
     format!("socket:vm:{vm}:role:{role_id}")
+}
+
+fn network_cidr_host_address(cidr: &str, host: u8) -> Option<String> {
+    let address = cidr.split_once('/')?.0;
+    let mut octets = address
+        .split('.')
+        .map(|octet| octet.parse::<u8>().ok())
+        .collect::<Option<Vec<_>>>()?;
+    if octets.len() != 4 {
+        return None;
+    }
+    let last = octets.last_mut()?;
+    *last = last.checked_add(host)?;
+    Some(
+        octets
+            .into_iter()
+            .map(|octet| octet.to_string())
+            .collect::<Vec<_>>()
+            .join("."),
+    )
+}
+
+fn build_resource_network_intents(
+    bundles: &BTreeMap<String, Vec<u8>>,
+    include_fixture_network_intents: bool,
+) -> (
+    BTreeMap<String, ResolvedNftablesProjectionIntent>,
+    BTreeMap<String, ResolvedOwnershipMarkerIntent>,
+    BTreeMap<String, ResolvedBridgeIntent>,
+    BTreeMap<String, ResolvedRouteIntent>,
+    BTreeMap<String, ResolvedSysctlIntent>,
+    BTreeMap<String, ResolvedHostsIntent>,
+) {
+    // Live bundle loading resolves Network rows only after d2bd supplies the
+    // committed resource UID and generation. Test-only parsed fixtures may
+    // carry a `networkUid` annotation for exercising the row builder.
+    if !include_fixture_network_intents {
+        return (
+            BTreeMap::new(),
+            BTreeMap::new(),
+            BTreeMap::new(),
+            BTreeMap::new(),
+            BTreeMap::new(),
+            BTreeMap::new(),
+        );
+    }
+    let mut nft_projections = BTreeMap::new();
+    let mut markers = BTreeMap::new();
+    let mut bridges = BTreeMap::new();
+    let mut routes = BTreeMap::new();
+    let mut sysctls = BTreeMap::new();
+    let mut hosts = BTreeMap::new();
+
+    for bytes in bundles.values() {
+        let Ok(bundle) = ResourceBundle::from_json(bytes) else {
+            continue;
+        };
+        for resource in &bundle.resources {
+            if resource.resource_type().as_str() != "Network" {
+                continue;
+            }
+            let Some(zone_uid) = bundle.zone_uid.clone() else {
+                continue;
+            };
+            let Some(network_uid) = resource
+                .metadata()
+                .annotations()
+                .get("networkUid")
+                .and_then(|value| {
+                    d2b_contracts_resource::v3::ResourceUid::parse(value.clone()).ok()
+                })
+            else {
+                continue;
+            };
+            let name = resource.metadata().name().as_str();
+            let mut spec_value =
+                serde_json::to_value(resource.spec()).unwrap_or_else(|_| serde_json::json!({}));
+            let Some(spec_object) = spec_value.as_object_mut() else {
+                continue;
+            };
+            for field in ["providerRef", "updatePolicy", "provider"] {
+                spec_object.remove(field);
+            }
+            let Ok(spec) = serde_json::from_value::<NetworkSpec>(spec_value) else {
+                continue;
+            };
+            let Some(lan_bridge) = derive_network_ifname(
+                &zone_uid,
+                &network_uid,
+                NetworkIfRole::LanBridge,
+                None,
+            )
+            .ok()
+            else {
+                continue;
+            };
+            let Some(uplink_bridge) = derive_network_ifname(
+                &zone_uid,
+                &network_uid,
+                NetworkIfRole::UplinkBridge,
+                None,
+            )
+            .ok()
+            else {
+                continue;
+            };
+            let scope = format!(
+                "network:{}:{}",
+                zone_uid.as_str(),
+                network_uid.as_str()
+            );
+            let marker = format!(
+                "network:bundle:zone:{}:network:{}",
+                zone_uid.as_str(),
+                network_uid.as_str()
+            );
+            let marker_id =
+                intent_id_network_ownership_marker_uids(&zone_uid, &network_uid, name);
+            markers.insert(
+                marker_id.clone(),
+                ResolvedOwnershipMarkerIntent {
+                    intent_id: marker_id.clone(),
+                    marker: marker.clone(),
+                    provenance: None,
+                },
+            );
+
+            let bridge_id =
+                intent_id_network_bridge_uids(&zone_uid, &network_uid, name, false);
+            bridges.insert(
+                bridge_id.clone(),
+                ResolvedBridgeIntent {
+                    intent_id: bridge_id,
+                    scope_label: scope.clone(),
+                    bridge_ifname: lan_bridge.clone(),
+                    mtu: spec.mtu().unwrap_or(1500) as u16,
+                    stp_disabled: true,
+                    multicast_snooping_disabled: true,
+                    ipv6_suppressed: true,
+                    provenance: None,
+                    ownership_marker: None,
+                },
+            );
+            let uplink_bridge_id =
+                intent_id_network_bridge_uids(&zone_uid, &network_uid, name, true);
+            bridges.insert(
+                uplink_bridge_id.clone(),
+                ResolvedBridgeIntent {
+                    intent_id: uplink_bridge_id,
+                    scope_label: scope.clone(),
+                    bridge_ifname: uplink_bridge.clone(),
+                    mtu: spec.mtu().unwrap_or(1500) as u16,
+                    stp_disabled: true,
+                    multicast_snooping_disabled: true,
+                    ipv6_suppressed: true,
+                    provenance: None,
+                    ownership_marker: None,
+                },
+            );
+
+            let projection_id =
+                intent_id_network_projection_uids(&zone_uid, &network_uid, name);
+            let chain = network_firewall_chain_name(&network_uid);
+            let script_body = format!(
+                "table inet d2b {{\n  chain \"{chain}\" {{ comment \"d2b managed: {marker}\";\n    ct state established,related accept comment \"d2b managed: {marker}\";\n    iifname \"{}\" ct state new accept comment \"d2b managed: {marker}\";\n  }}\n}}\n",
+                uplink_bridge.as_str()
+            );
+            nft_projections.insert(
+                projection_id.clone(),
+                ResolvedNftablesProjectionIntent {
+                    intent_id: projection_id,
+                    scope_label: scope.clone(),
+                    desired_hash: stable_digest(&script_body),
+                    script_body,
+                    ownership_marker_intent_ref: marker_id,
+                    provenance: None,
+                },
+            );
+
+            let mut route_index = 0usize;
+            let uplink_gateway = network_cidr_host_address(spec.uplink_cidr().as_str(), 2);
+            for destination in spec.routing().host_blocklist() {
+                let route_id =
+                    intent_id_network_route_uids(&zone_uid, &network_uid, name, route_index);
+                let route_spec = format!(
+                    "{}{} dev {} table main",
+                    destination.as_str(),
+                    uplink_gateway
+                        .as_deref()
+                        .map(|gateway| format!(" via {gateway}"))
+                        .unwrap_or_default(),
+                    uplink_bridge.as_str()
+                );
+                routes.insert(
+                    route_id.clone(),
+                    ResolvedRouteIntent {
+                        intent_id: route_id,
+                        route_spec,
+                        destination: destination.as_str().to_owned(),
+                        via: uplink_gateway.clone(),
+                        device: Some(uplink_bridge.as_str().to_owned()),
+                        table: Some("main".to_owned()),
+                        owned: true,
+                        route_name: Some(derive_network_route_name(
+                            &zone_uid,
+                            &network_uid,
+                            route_index,
+                        )),
+                        provenance: None,
+                        ownership_marker: Some(format!("route:{marker}:{route_index}")),
+                    },
+                );
+                route_index += 1;
+            }
+            if route_index == 0 {
+                let route_id = intent_id_network_route_uids(&zone_uid, &network_uid, name, 0);
+                routes.insert(
+                    route_id.clone(),
+                    ResolvedRouteIntent {
+                        intent_id: route_id,
+                        route_spec: format!(
+                            "{}{} dev {} table main",
+                            spec.lan_cidr().as_str(),
+                            uplink_gateway
+                                .as_deref()
+                                .map(|gateway| format!(" via {gateway}"))
+                                .unwrap_or_default(),
+                            uplink_bridge.as_str()
+                        ),
+                        destination: spec.lan_cidr().as_str().to_owned(),
+                        via: uplink_gateway,
+                        device: Some(uplink_bridge.as_str().to_owned()),
+                        table: Some("main".to_owned()),
+                        owned: true,
+                        route_name: Some(derive_network_route_name(
+                            &zone_uid,
+                            &network_uid,
+                            0,
+                        )),
+                        provenance: None,
+                        ownership_marker: Some(format!("route:{marker}:0")),
+                    },
+                );
+            }
+
+            for (if_name, role) in [
+                (&lan_bridge, "lan"),
+                (&uplink_bridge, "uplink"),
+            ] {
+                let key = "disable-ipv6";
+                let id = intent_id_network_sysctl_uids(
+                    &zone_uid,
+                    &network_uid,
+                    name,
+                    role,
+                    key,
+                );
+                sysctls.insert(
+                    id.clone(),
+                    ResolvedSysctlIntent {
+                        intent_id: id,
+                        key: format!("net.ipv6.conf.{}.disable_ipv6", if_name.as_str()),
+                        value: "1".to_owned(),
+                        provenance: None,
+                        ownership_marker: None,
+                    },
+                );
+                let key = "accept-ra";
+                let id = intent_id_network_sysctl_uids(
+                    &zone_uid,
+                    &network_uid,
+                    name,
+                    role,
+                    key,
+                );
+                sysctls.insert(
+                    id.clone(),
+                    ResolvedSysctlIntent {
+                        intent_id: id,
+                        key: format!("net.ipv6.conf.{}.accept_ra", if_name.as_str()),
+                        value: "0".to_owned(),
+                        provenance: None,
+                        ownership_marker: None,
+                    },
+                );
+                let key = "autoconf";
+                let id = intent_id_network_sysctl_uids(
+                    &zone_uid,
+                    &network_uid,
+                    name,
+                    role,
+                    key,
+                );
+                sysctls.insert(
+                    id.clone(),
+                    ResolvedSysctlIntent {
+                        intent_id: id,
+                        key: format!("net.ipv6.conf.{}.autoconf", if_name.as_str()),
+                        value: "0".to_owned(),
+                        provenance: None,
+                        ownership_marker: None,
+                    },
+                );
+            }
+
+            let hosts_id = intent_id_network_hosts_uids(&zone_uid, &network_uid, name);
+            hosts.insert(
+                hosts_id.clone(),
+                ResolvedHostsIntent {
+                    intent_id: hosts_id,
+                    path: PathBuf::from("/etc/hosts"),
+                    managed_block: format!(
+                        "# d2b-managed begin\n# d2b managed: {marker}\n# network {name} lan {} uplink {}\n# d2b-managed end\n",
+                        spec.lan_cidr().as_str(),
+                        spec.uplink_cidr().as_str()
+                    ),
+                    start_marker: "# d2b-managed begin".to_owned(),
+                    end_marker: "# d2b-managed end".to_owned(),
+                    mode: 0o644,
+                    provenance: None,
+                    ownership_marker: None,
+                },
+            );
+        }
+    }
+
+    (nft_projections, markers, bridges, routes, sysctls, hosts)
 }
 
 // ---------------------------------------------------------------
@@ -2288,6 +3318,21 @@ fn build_nft_intents(host: &HostJson) -> BTreeMap<String, ResolvedNftIntent> {
     out
 }
 
+fn build_host_nft_intents(host: &HostJson) -> BTreeMap<String, ResolvedNftIntent> {
+    let script = render_host_nft_script(host);
+    let intent_id = intent_id_nft_host();
+    BTreeMap::from([(
+        intent_id.clone(),
+        ResolvedNftIntent {
+            intent_id,
+            scope_label: "host".to_owned(),
+            desired_hash: stable_digest(&script),
+            ownership_id: host.nftables.ownership_id.clone(),
+            script_body: script,
+        },
+    )])
+}
+
 fn build_bridge_intents(host: &HostJson) -> BTreeMap<String, ResolvedBridgeIntent> {
     host.environments
         .iter()
@@ -2307,6 +3352,8 @@ fn build_bridge_intents(host: &HostJson) -> BTreeMap<String, ResolvedBridgeInten
                     stp_disabled: true,
                     multicast_snooping_disabled: true,
                     ipv6_suppressed: true,
+                    provenance: None,
+                    ownership_marker: None,
                 },
             )
         })
@@ -2325,6 +3372,7 @@ fn build_ownership_marker_intents(
                 ResolvedOwnershipMarkerIntent {
                     intent_id,
                     marker: format!("{}:env:{}", host.nftables.ownership_id, env.env),
+                    provenance: None,
                 },
             )
         })
@@ -2347,6 +3395,7 @@ fn build_nft_projection_intents(
                     desired_hash: stable_digest(&script_body),
                     script_body,
                     ownership_marker_intent_ref: intent_id_ownership_marker_env(&env.env),
+                    provenance: None,
                 },
             )
         })
@@ -2489,6 +3538,9 @@ fn build_route_intents(host: &HostJson) -> BTreeMap<String, ResolvedRouteIntent>
                     device: Some(bridge_ifname.clone()),
                     table: None,
                     owned: true,
+                    route_name: None,
+                    provenance: None,
+                    ownership_marker: None,
                 },
             );
         }
@@ -2610,6 +3662,8 @@ fn insert_sysctl_pair(
             intent_id,
             key: full_key.dotted_path(if_name.as_str()),
             value: value.to_string(),
+            provenance: None,
+            ownership_marker: None,
         },
     );
 }
@@ -2626,6 +3680,8 @@ fn build_hosts_intents(host: &HostJson) -> BTreeMap<String, ResolvedHostsIntent>
             start_marker: host.hosts_file.start_marker.clone(),
             end_marker: host.hosts_file.end_marker.clone(),
             mode: 0o644,
+            provenance: None,
+            ownership_marker: None,
         },
     );
     out
@@ -3527,7 +4583,15 @@ mod tests {
         VmProcessDag, VmProcessInvariants,
     };
     use crate::runtime::RuntimeMetadata;
-    use d2b_contracts_resource::v3::IfName;
+    use d2b_contracts_resource::v3::{
+        CanonicalJsonObject, IfName, ResourceName, ResourceTypeName, ResourceUid, Timestamp,
+        ZoneId,
+        execution_policy::BoundedToken,
+        network::{Ipv4Cidr, NetworkSpec},
+    };
+    use d2b_contracts_zone_session::v3::resource_bundle::{
+        BundleResource, BundleResourceMetadata, ResourceBundle,
+    };
     use serde::Serialize;
     use std::collections::BTreeMap;
     use std::fs;
@@ -3616,20 +4680,27 @@ mod tests {
     }
 
     #[test]
-    fn nft_projection_uses_existing_forward_hook_and_preserves_uplink_rules() {
+    fn production_bundle_does_not_load_legacy_env_nft_projection() {
         let root = test_root("nft-projection");
         let resolver = build_personal_dev_bundle(&root);
-        let intent = resolver
+        assert!(resolver
             .find_nft_projection_intent(&intent_id_nft_projection_env("personal"))
-            .expect("personal nft projection intent");
-        let script = &intent.script_body;
-
-        assert!(script.contains("chain \"forward-personal\" { comment"));
-        assert!(script.contains("ct state established,related accept"));
-        assert!(script.contains("iifname \"br-personal-up\" ct state new accept"));
-        assert!(!script.contains("hook forward"));
-        assert!(!script.contains("policy drop"));
-        assert_eq!(script.matches("priority -5").count(), 0);
+            .is_none());
+        assert!(
+            resolver
+                .find_bridge_intent(&intent_id_bridge_env("personal"))
+                .is_none()
+        );
+        assert!(
+            resolver
+                .find_route_intent(&intent_id_route_env("personal", 0))
+                .is_none()
+        );
+        assert!(
+            resolver
+                .find_sysctl_intent(&intent_id_sysctl("personal", "d2b-b", "disable_ipv6"))
+                .is_none()
+        );
 
         let _ = fs::remove_dir_all(root);
     }
@@ -4386,6 +5457,346 @@ mod tests {
         assert_eq!(intents[0].fd, 10);
 
         let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn network_tap_intent_ref_binds_full_provenance_and_role() {
+        let zone_uid =
+            ResourceUid::parse("223e4567-e89b-42d3-a456-426614174001").expect("zone uid");
+        let network_uid =
+            ResourceUid::parse("323e4567-e89b-42d3-a456-426614174002").expect("network uid");
+        let attachment_uid =
+            ResourceUid::parse("123e4567-e89b-42d3-a456-426614174000")
+                .expect("attachment uid");
+        let bundle_generation = d2b_contracts_resource::v3::ResourceBundleGenerationId::parse(
+            "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+        )
+        .expect("bundle generation");
+        let intent = intent_id_network_tap(
+            &zone_uid,
+            &network_uid,
+            &attachment_uid,
+            d2b_contracts_resource::v3::ResourceGeneration::new(4).unwrap(),
+            d2b_contracts_resource::v3::ResourceGeneration::new(7).unwrap(),
+            &bundle_generation,
+            "runner-lan",
+            "corp-vm",
+        );
+
+        assert!(intent.starts_with("network-tap:"));
+        assert!(intent.len() <= 192);
+        assert_ne!(
+            intent,
+            intent_id_network_tap(
+                &zone_uid,
+                &network_uid,
+                &attachment_uid,
+                d2b_contracts_resource::v3::ResourceGeneration::new(5).unwrap(),
+                d2b_contracts_resource::v3::ResourceGeneration::new(7).unwrap(),
+                &bundle_generation,
+                "runner-lan",
+                "corp-vm",
+            )
+        );
+        assert_ne!(
+            intent,
+            intent_id_network_tap(
+                &zone_uid,
+                &network_uid,
+                &attachment_uid,
+                d2b_contracts_resource::v3::ResourceGeneration::new(4).unwrap(),
+                d2b_contracts_resource::v3::ResourceGeneration::new(7).unwrap(),
+                &bundle_generation,
+                "runner-uplink",
+                "corp-vm",
+            )
+        );
+        let bridge =
+            derive_network_ifname(&zone_uid, &network_uid, NetworkIfRole::LanBridge, None)
+                .expect("bridge name");
+        let tap = derive_network_ifname(
+            &zone_uid,
+            &network_uid,
+            NetworkIfRole::WorkloadGuestTap,
+            Some(&attachment_uid),
+        )
+        .expect("tap name");
+        assert_ne!(bridge, tap);
+    }
+
+    #[test]
+    fn v3_tap_resolution_ignores_legacy_env_and_manifest_names() {
+        let root = test_root("tap-resolution-uid-authority");
+        let mut resolver = build_personal_dev_bundle(&root);
+        resolver.processes.vms[0].nodes.push(ProcessNode {
+            execution_ref: None,
+            execution_domain: None,
+            user_ref: None,
+            id: NodeId("cloud-hypervisor".to_owned()),
+            role: ProcessRole::CloudHypervisorRunner,
+            unit: None,
+            binary_path: Some("/run/current-system/sw/bin/cloud-hypervisor".to_owned()),
+            argv: Vec::new(),
+            env: vec!["D2B_NETWORK=attacker".to_owned()],
+            profile: role_profile(
+                1200,
+                1200,
+                &["/var/lib/d2b/vms/personal-dev"],
+                "d2b.slice/personal-dev/cloud-hypervisor",
+            ),
+            readiness: Vec::new(),
+            plan_ops: Vec::new(),
+            network_interfaces: Vec::new(),
+        });
+        let zone_uid =
+            ResourceUid::parse("223e4567-e89b-42d3-a456-426614174001").expect("zone uid");
+        let network_uid =
+            ResourceUid::parse("323e4567-e89b-42d3-a456-426614174002").expect("network uid");
+        let attachment_uid =
+            ResourceUid::parse("123e4567-e89b-42d3-a456-426614174000")
+                .expect("attachment uid");
+        let provenance = NetworkProvenance::new(
+            zone_uid.clone(),
+            network_uid.clone(),
+            d2b_contracts_resource::v3::ResourceGeneration::new(4).unwrap(),
+            d2b_contracts_resource::v3::ResourceGeneration::new(7).unwrap(),
+            d2b_contracts_resource::v3::ResourceBundleGenerationId::parse(
+                "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+            )
+            .unwrap(),
+        );
+        let first = resolver
+            .resolve_tap_intent(
+                "personal-dev",
+                "ch",
+                provenance.clone(),
+                attachment_uid.clone(),
+            )
+            .expect("v3 TAP intent");
+        resolver.host.environments[0].env = "attacker".to_owned();
+        resolver.manifest.vms.get_mut("personal-dev").unwrap().env =
+            Some("attacker".to_owned());
+        let second = resolver
+            .resolve_tap_intent("personal-dev", "ch", provenance, attachment_uid)
+            .expect("v3 TAP intent after legacy mutation");
+        assert_eq!(first, second);
+        assert_eq!(
+            first.bridge_ifname,
+            derive_network_ifname(&zone_uid, &network_uid, NetworkIfRole::LanBridge, None)
+                .unwrap()
+        );
+        assert_eq!(
+            first.tap_ifname,
+            derive_network_ifname(
+                &zone_uid,
+                &network_uid,
+                NetworkIfRole::WorkloadGuestTap,
+                Some(&ResourceUid::parse("123e4567-e89b-42d3-a456-426614174000").unwrap()),
+            )
+            .unwrap()
+        );
+        let _ = fs::remove_dir_all(root);
+    }
+
+    fn network_resource_bundle_bytes(
+        zone: &str,
+        zone_uid: &ResourceUid,
+        network_uid: &ResourceUid,
+        network_name: &str,
+        lan_cidr: &str,
+        uplink_cidr: &str,
+    ) -> Vec<u8> {
+        let spec = NetworkSpec::minimal(
+            Ipv4Cidr::parse(lan_cidr).unwrap(),
+            Ipv4Cidr::parse(uplink_cidr).unwrap(),
+            BoundedToken::parse("net-vm-base").unwrap(),
+        )
+        .unwrap();
+        let mut annotations = BTreeMap::new();
+        annotations.insert("networkUid".to_owned(), network_uid.as_str().to_owned());
+        let resource = BundleResource::new(
+            ResourceTypeName::parse("Network").unwrap(),
+            BundleResourceMetadata::new(
+                ResourceName::parse(network_name).unwrap(),
+                ZoneId::parse(zone).unwrap(),
+                None,
+                BTreeMap::new(),
+                annotations,
+            ),
+            CanonicalJsonObject::parse(&serde_json::to_vec(&spec).unwrap()).unwrap(),
+        )
+        .unwrap();
+        let bundle = ResourceBundle::new(
+            ZoneId::parse(zone).unwrap(),
+            vec![resource],
+            "sha256:".to_owned() + &"0".repeat(64),
+            BTreeMap::new(),
+            BTreeMap::new(),
+            Timestamp::parse("2026-08-26T00:00:00.000Z").unwrap(),
+        )
+        .unwrap()
+        .with_zone_uid(zone_uid.clone());
+        d2b_contracts_resource::v3::canonical_json_bytes(&bundle).unwrap()
+    }
+
+    #[test]
+    fn resource_network_intents_use_uid_derived_kernel_names() {
+        let zone_a =
+            ResourceUid::parse("323e4567-e89b-42d3-a456-426614174002").expect("zone uid");
+        let zone_b =
+            ResourceUid::parse("423e4567-e89b-42d3-a456-426614174003").expect("zone uid");
+        let network_a =
+            ResourceUid::parse("123e4567-e89b-42d3-a456-426614174000").expect("network uid");
+        let network_b =
+            ResourceUid::parse("223e4567-e89b-42d3-a456-426614174001").expect("network uid");
+        let bundles = BTreeMap::from([
+            (
+                "work".to_owned(),
+                network_resource_bundle_bytes(
+                    "work",
+                    &zone_a,
+                    &network_a,
+                    "same-name",
+                    "10.20.0.0/24",
+                    "192.0.2.0/30",
+                ),
+            ),
+            (
+                "personal".to_owned(),
+                network_resource_bundle_bytes(
+                    "personal",
+                    &zone_b,
+                    &network_b,
+                    "same-name",
+                    "10.30.0.0/24",
+                    "198.51.100.0/30",
+                ),
+            ),
+        ]);
+        let (_, _, bridges, routes, _, _) = build_resource_network_intents(&bundles, true);
+        let first_bridge_id = intent_id_network_bridge_uids(&zone_a, &network_a, "same-name", false);
+        let second_bridge_id =
+            intent_id_network_bridge_uids(&zone_b, &network_b, "same-name", false);
+        let first_bridge = bridges.get(&first_bridge_id).expect("first bridge");
+        let second_bridge = bridges.get(&second_bridge_id).expect("second bridge");
+        assert_eq!(
+            first_bridge.bridge_ifname,
+            derive_network_ifname(&zone_a, &network_a, NetworkIfRole::LanBridge, None).unwrap()
+        );
+        assert_eq!(
+            second_bridge.bridge_ifname,
+            derive_network_ifname(&zone_b, &network_b, NetworkIfRole::LanBridge, None).unwrap()
+        );
+        assert_ne!(first_bridge.bridge_ifname, second_bridge.bridge_ifname);
+        let first_route_id = intent_id_network_route_uids(&zone_a, &network_a, "same-name", 0);
+        let second_route_id = intent_id_network_route_uids(&zone_b, &network_b, "same-name", 0);
+        assert_eq!(
+            routes
+                .get(&first_route_id)
+                .and_then(|intent| intent.route_name.as_deref()),
+            Some(derive_network_route_name(&zone_a, &network_a, 0).as_str())
+        );
+        assert_eq!(
+            routes
+                .get(&second_route_id)
+                .and_then(|intent| intent.route_name.as_deref()),
+            Some(derive_network_route_name(&zone_b, &network_b, 0).as_str())
+        );
+        assert_ne!(
+            routes
+                .get(&first_route_id)
+                .and_then(|intent| intent.route_name.as_deref()),
+            routes
+                .get(&second_route_id)
+                .and_then(|intent| intent.route_name.as_deref())
+        );
+    }
+
+    #[test]
+    fn resolved_network_effects_bind_complete_provenance_and_markers() {
+        let root = test_root("network-effect-provenance");
+        let zone_uid =
+            ResourceUid::parse("323e4567-e89b-42d3-a456-426614174002").expect("zone uid");
+        let network_uid =
+            ResourceUid::parse("123e4567-e89b-42d3-a456-426614174000").expect("network uid");
+        let provenance = NetworkProvenance::new(
+            zone_uid.clone(),
+            network_uid.clone(),
+            d2b_contracts_resource::v3::ResourceGeneration::new(4).unwrap(),
+            d2b_contracts_resource::v3::ResourceGeneration::new(7).unwrap(),
+            d2b_contracts_resource::v3::ResourceBundleGenerationId::parse(
+                "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+            )
+            .unwrap(),
+        );
+        let mut resolver = build_personal_dev_bundle(&root);
+        resolver.zone_resource_bundles.insert(
+            "work".to_owned(),
+            network_resource_bundle_bytes(
+                "work",
+                &zone_uid,
+                &network_uid,
+                "work-net",
+                "10.20.0.0/24",
+                "192.0.2.0/30",
+            ),
+        );
+
+        let bridge_id = intent_id_network_bridge_uids(&zone_uid, &network_uid, "work-net", false);
+        let bridge = resolver
+            .resolve_network_bridge_intent(&bridge_id, &provenance)
+            .expect("resolved Network bridge");
+        assert_eq!(bridge.provenance.as_ref(), Some(&provenance));
+        assert_eq!(
+            bridge.ownership_marker.as_deref(),
+            Some(
+                format!(
+                    "d2b managed: {}",
+                    d2b_contracts_resource::v3::derive_network_ownership_marker(
+                        &provenance,
+                        "bridge:lan",
+                    )
+                )
+                .as_str()
+            )
+        );
+
+        let route_id = intent_id_network_route_uids(&zone_uid, &network_uid, "work-net", 0);
+        let route = resolver
+            .resolve_network_route_intent(&route_id, &provenance)
+            .expect("resolved Network route");
+        assert_eq!(route.provenance.as_ref(), Some(&provenance));
+        assert_eq!(
+            route.ownership_marker.as_deref(),
+            Some(
+                format!(
+                    "d2b managed: {}",
+                    d2b_contracts_resource::v3::derive_network_ownership_marker(
+                        &provenance,
+                        &format!(
+                            "route:{}",
+                            route.route_name.as_deref().expect("route name"),
+                        ),
+                    )
+                )
+                .as_str()
+            )
+        );
+
+        let marker_id =
+            intent_id_network_ownership_marker_uids(&zone_uid, &network_uid, "work-net");
+        let marker = resolver
+            .resolve_network_marker_intent(&marker_id, &provenance)
+            .expect("resolved Network ownership marker");
+        assert_eq!(marker.provenance.as_ref(), Some(&provenance));
+        assert_eq!(
+            marker.marker,
+            d2b_contracts_resource::v3::derive_network_ownership_marker(
+                &provenance,
+                "firewall",
+            )
+        );
+        let _ = fs::remove_dir_all(root);
     }
 
     // W3: negative-case coverage for BundleResolver::validate_minijail_profiles.

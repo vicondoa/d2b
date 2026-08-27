@@ -3,14 +3,20 @@ use d2b_contracts_broker::broker_wire::{
     DeletePersistentTapRequest, NftablesProjectionAction,
 };
 use d2b_contracts_resource::v3::{
-    ResourceName,
-    ResourceUid,
+    NetworkProvenance, ResourceName,
+    ResourceBundleGenerationId, ResourceGeneration, ResourceUid,
 };
 use d2b_provider_network_local::{
     ExternalNicAdmissionError, ExternalNicClaim, MacvtapMode, SharingPolicy,
     admit_external_nic_claims,
     bridge_port::{BridgePortFlagSet, TapRole, validate_readback},
-    ifname::{IfName, IfNameMapping, NetworkIfRole, derive_ifname, detect_collisions},
+    ifname::{
+        IfName, IfNameMapping, NetworkIfRole, derive_ifname, derive_network_ifname,
+        derive_network_route_name_for, detect_collisions,
+    },
+    controller::{
+        NetworkAdmissionIntent, NetworkAdmissionKey, render_config, render_config_with_provenance,
+    },
     netlink::{LinkKind, LinkSpec, NetlinkError},
     nftables::{
         NetworkNftProjection, NftablesError, SharedNftTable, SharedTableEntry, apply_projection,
@@ -195,4 +201,176 @@ fn diagnostics_redact_interface_address_uid_and_payload_canaries() {
     for canary in [interface, address, payload, owner.as_str()] {
         assert!(!diagnostics.contains(canary));
     }
+}
+
+#[test]
+fn network_private_names_are_derived_from_immutable_uids() {
+    let first_network = uid("123e4567-e89b-42d3-a456-426614174000");
+    let second_network = uid("223e4567-e89b-42d3-a456-426614174001");
+    let zone = uid("323e4567-e89b-42d3-a456-426614174002");
+    let first_bridge =
+        derive_network_ifname(&zone, &first_network, NetworkIfRole::LanBridge, None).unwrap();
+    let second_bridge =
+        derive_network_ifname(&zone, &second_network, NetworkIfRole::LanBridge, None).unwrap();
+    assert_ne!(first_bridge, second_bridge);
+    assert_ne!(
+        derive_network_route_name_for(&zone, &first_network, 0),
+        derive_network_route_name_for(&zone, &second_network, 0)
+    );
+}
+
+#[test]
+fn same_named_networks_in_different_zones_have_distinct_admitted_kernel_names() {
+    let zone_a = uid("323e4567-e89b-42d3-a456-426614174002");
+    let zone_b = uid("423e4567-e89b-42d3-a456-426614174003");
+    let network_a = uid("123e4567-e89b-42d3-a456-426614174000");
+    let network_b = uid("223e4567-e89b-42d3-a456-426614174001");
+    let attachment = uid("523e4567-e89b-42d3-a456-426614174004");
+    let spec = d2b_contracts_resource::v3::network::NetworkSpec::minimal(
+        d2b_contracts_resource::v3::network::Ipv4Cidr::parse("10.20.0.0/24").unwrap(),
+        d2b_contracts_resource::v3::network::Ipv4Cidr::parse("192.0.2.0/30").unwrap(),
+        d2b_contracts_resource::v3::execution_policy::BoundedToken::parse("net-vm-base")
+            .unwrap(),
+    )
+    .unwrap();
+    let first = NetworkAdmissionIntent::new(
+        NetworkAdmissionKey::new(
+            zone_a.clone(),
+            network_a.clone(),
+            ResourceGeneration::new(4).unwrap(),
+            ResourceGeneration::new(7).unwrap(),
+            ResourceBundleGenerationId::parse(
+                "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+            )
+            .unwrap(),
+        ),
+        spec.clone(),
+        vec![attachment.clone()],
+    )
+    .unwrap();
+    let second = NetworkAdmissionIntent::new(
+        NetworkAdmissionKey::new(
+            zone_b.clone(),
+            network_b.clone(),
+            ResourceGeneration::new(4).unwrap(),
+            ResourceGeneration::new(7).unwrap(),
+            ResourceBundleGenerationId::parse(
+                "sha256:1123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+            )
+            .unwrap(),
+        ),
+        spec,
+        vec![attachment.clone()],
+    )
+    .unwrap();
+    let first_bridge =
+        derive_network_ifname(&zone_a, &network_a, NetworkIfRole::LanBridge, None).unwrap();
+    let second_bridge =
+        derive_network_ifname(&zone_b, &network_b, NetworkIfRole::LanBridge, None).unwrap();
+    let first_tap = derive_network_ifname(
+        &zone_a,
+        &network_a,
+        NetworkIfRole::WorkloadGuestTap,
+        Some(&attachment),
+    )
+    .unwrap();
+    let second_tap = derive_network_ifname(
+        &zone_b,
+        &network_b,
+        NetworkIfRole::WorkloadGuestTap,
+        Some(&attachment),
+    )
+    .unwrap();
+    assert!(first.interface_names().contains(&first_bridge));
+    assert!(first.interface_names().contains(&first_tap));
+    assert!(second.interface_names().contains(&second_bridge));
+    assert!(second.interface_names().contains(&second_tap));
+    assert_ne!(first_bridge, second_bridge);
+    assert_ne!(first_tap, second_tap);
+    assert_ne!(
+        first.route_names()[0],
+        second.route_names()[0],
+        "route names must include Zone and Network identity, not human names alone"
+    );
+}
+
+#[test]
+fn admission_intent_binds_zone_network_generations_and_bundle() {
+    let key = NetworkAdmissionKey::new(
+        uid("123e4567-e89b-42d3-a456-426614174000"),
+        uid("223e4567-e89b-42d3-a456-426614174001"),
+        ResourceGeneration::new(4).unwrap(),
+        ResourceGeneration::new(7).unwrap(),
+        ResourceBundleGenerationId::parse(
+            "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+        )
+        .unwrap(),
+    );
+    let spec = d2b_contracts_resource::v3::network::NetworkSpec::minimal(
+        d2b_contracts_resource::v3::network::Ipv4Cidr::parse("10.20.0.0/24").unwrap(),
+        d2b_contracts_resource::v3::network::Ipv4Cidr::parse("192.0.2.0/30").unwrap(),
+        d2b_contracts_resource::v3::execution_policy::BoundedToken::parse("net-vm-base")
+            .unwrap(),
+    )
+    .unwrap();
+    let intent = NetworkAdmissionIntent::new(key.clone(), spec, Vec::new()).unwrap();
+    assert_eq!(intent.key(), &key);
+    assert_eq!(intent.cidrs().len(), 2);
+    assert!(!intent.ownership_marker().is_empty());
+    assert_eq!(
+        intent.route_names()[0],
+        derive_network_route_name_for(key.zone_uid(), key.network_uid(), 0)
+    );
+}
+
+#[test]
+fn rendered_network_config_binds_complete_provenance() {
+    let provenance = NetworkProvenance::new(
+        uid("123e4567-e89b-42d3-a456-426614174000"),
+        uid("223e4567-e89b-42d3-a456-426614174001"),
+        ResourceGeneration::new(4).unwrap(),
+        ResourceGeneration::new(7).unwrap(),
+        ResourceBundleGenerationId::parse(
+            "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+        )
+        .unwrap(),
+    );
+    let spec = d2b_contracts_resource::v3::network::NetworkSpec::minimal(
+        d2b_contracts_resource::v3::network::Ipv4Cidr::parse("10.20.0.0/24").unwrap(),
+        d2b_contracts_resource::v3::network::Ipv4Cidr::parse("192.0.2.0/30").unwrap(),
+        d2b_contracts_resource::v3::execution_policy::BoundedToken::parse("net-vm-base")
+            .unwrap(),
+    )
+    .unwrap();
+    let content = render_config_with_provenance(&spec, &provenance).unwrap();
+    assert_eq!(content.provenance(), Some(&provenance));
+    assert_ne!(
+        content.digest(),
+        render_config(&spec).unwrap().digest(),
+        "the content digest must include the authorizing provenance"
+    );
+}
+
+#[test]
+fn rendered_network_config_preserves_gateway_backed_routing() {
+    let spec: d2b_contracts_resource::v3::network::NetworkSpec = serde_json::from_value(
+        serde_json::json!({
+            "lanCidr": "10.20.0.0/24",
+            "uplinkCidr": "192.0.2.0/30",
+            "netVmSystemArtifactId": "net-vm-base",
+            "externalAttachment": {
+                "parentInterface": "eno1",
+                "ipv4": {
+                    "method": "static",
+                    "address": "203.0.113.2/24",
+                    "gateway": "203.0.113.1",
+                    "dns": ["203.0.113.53"]
+                }
+            }
+        }),
+    )
+    .unwrap();
+    let routing = String::from_utf8(render_config(&spec).unwrap().routing).unwrap();
+    assert!(routing.contains("gateway=192.0.2.2"));
+    assert!(routing.contains("externalGateway=203.0.113.1"));
 }

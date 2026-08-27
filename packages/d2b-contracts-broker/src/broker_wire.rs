@@ -3,7 +3,8 @@
 //! Every mutating variant carries **only opaque identifiers** +
 //! bundle-resolved intent refs. The daemon never names a raw path, a
 //! raw nft rule text, a raw route spec, a raw sysctl key/value, a raw
-//! ifname set, a raw `/etc/hosts` entry list, a raw uid/gid, raw argv
+//! ifname set outside the exact Network admission proof, a raw `/etc/hosts`
+//! entry list, a raw uid/gid, raw argv
 //! or env, raw caps, or a raw seccomp profile path. The broker uses
 //! the opaque IDs to look up the typed intent in its own trusted bundle
 //! copy. See `d2b_contracts::types` for the newtype set.
@@ -1557,6 +1558,10 @@ pub struct ApplyNftablesProjectionRequest {
     pub bundle_nft_projection_intent_ref: BundleOpId,
     pub scope_id: ScopeId,
     pub action: NftablesProjectionAction,
+    pub zone_uid: ResourceUid,
+    pub network_uid: ResourceUid,
+    pub network_generation: ResourceGeneration,
+    pub attachment_generation: ResourceGeneration,
     /// Immutable installed bundle generation the projection was resolved from.
     pub expected_generation_id: ResourceBundleGenerationId,
     #[serde(default)]
@@ -1581,6 +1586,11 @@ pub struct ApplyNmUnmanagedRequest {
 pub struct ApplyRouteRequest {
     pub bundle_route_intent_ref: BundleOpId,
     pub scope_id: ScopeId,
+    pub zone_uid: ResourceUid,
+    pub network_uid: ResourceUid,
+    pub network_generation: ResourceGeneration,
+    pub attachment_generation: ResourceGeneration,
+    pub bundle_generation: ResourceBundleGenerationId,
     #[serde(default)]
     pub destroy: bool,
     #[serde(default)]
@@ -1592,6 +1602,11 @@ pub struct ApplyRouteRequest {
 pub struct ApplySysctlRequest {
     pub bundle_sysctl_intent_ref: BundleOpId,
     pub scope_id: ScopeId,
+    pub zone_uid: ResourceUid,
+    pub network_uid: ResourceUid,
+    pub network_generation: ResourceGeneration,
+    pub attachment_generation: ResourceGeneration,
+    pub bundle_generation: ResourceBundleGenerationId,
     #[serde(default)]
     pub destroy: bool,
     #[serde(default)]
@@ -1617,25 +1632,24 @@ pub struct CreateOrReconcileUsersGroupsRequest {
 }
 
 /// The broker derives the bridge ifname, owner uid/gid, and TAP
-/// attributes from the trusted bundle row anchored by `role_id` +
-/// `vm_id`. The legacy wire carried a caller-supplied
-/// `ifname_derived: IfName`; that preserved a future bypass of
-/// broker-side trusted-bundle resolution, so the field was removed. The
-/// broker emits the observed ifname only in the audit record / response.
+/// attributes from the admitted Network identity. Every field in the
+/// provenance tuple and the exact admitted interface set is mandatory; there
+/// is no legacy env/manifest path.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct CreatePersistentTapRequest {
     pub role_id: RoleId,
     pub vm_id: VmId,
-    /// Optional v3 attachment realization identity. Legacy host-prep callers
-    /// omit these fields; Network Provider callers supply all three so the
-    /// broker can adopt and generation-fence the persistent TAP on restart.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub attachment_id: Option<ResourceUid>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub network_generation: Option<ResourceGeneration>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub attachment_generation: Option<ResourceGeneration>,
+    /// Opaque TAP identity bound to the complete Network tuple below.
+    pub bundle_tap_intent_ref: BundleOpId,
+    pub attachment_id: ResourceUid,
+    pub network_generation: ResourceGeneration,
+    pub attachment_generation: ResourceGeneration,
+    pub zone_uid: ResourceUid,
+    pub network_uid: ResourceUid,
+    pub bundle_generation: ResourceBundleGenerationId,
+    /// Exact interface set copied from the live Network admission proof.
+    pub admitted_interface_names: Vec<IfName>,
     #[serde(default)]
     pub tracing_span_id: Option<TracingSpanId>,
 }
@@ -1646,8 +1660,13 @@ pub struct CreatePersistentTapRequest {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct DeletePersistentTapRequest {
     pub attachment_id: ResourceUid,
+    /// Exact Zone/Network identity and installed bundle generation required
+    /// for deletion; none are accepted from a caller as a wildcard.
+    pub expected_zone_uid: ResourceUid,
+    pub expected_network_uid: ResourceUid,
     pub expected_network_generation: ResourceGeneration,
     pub expected_attachment_generation: ResourceGeneration,
+    pub expected_bundle_generation: ResourceBundleGenerationId,
     #[serde(default)]
     pub tracing_span_id: Option<TracingSpanId>,
 }
@@ -1661,6 +1680,11 @@ pub struct DeletePersistentTapRequest {
 pub struct CreateBridgeRequest {
     pub bundle_bridge_intent_ref: BundleOpId,
     pub scope_id: ScopeId,
+    pub zone_uid: ResourceUid,
+    pub network_uid: ResourceUid,
+    pub network_generation: ResourceGeneration,
+    pub attachment_generation: ResourceGeneration,
+    pub bundle_generation: ResourceBundleGenerationId,
     #[serde(default)]
     pub tracing_span_id: Option<TracingSpanId>,
 }
@@ -1672,17 +1696,32 @@ pub struct CreateBridgeRequest {
 pub struct DeleteBridgeRequest {
     pub bundle_bridge_intent_ref: BundleOpId,
     pub scope_id: ScopeId,
+    pub zone_uid: ResourceUid,
+    pub network_uid: ResourceUid,
+    pub network_generation: ResourceGeneration,
+    pub attachment_generation: ResourceGeneration,
+    pub bundle_generation: ResourceBundleGenerationId,
     #[serde(default)]
     pub tracing_span_id: Option<TracingSpanId>,
 }
 
-/// See [`CreatePersistentTapRequest`] for the opaque-ID rationale;
-/// `CreateTapFd` follows the same contract.
+/// See [`CreatePersistentTapRequest`] for the provenance contract;
+/// `CreateTapFd` carries the same complete identity tuple and interface proof.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct CreateTapFdRequest {
     pub role_id: RoleId,
     pub vm_id: VmId,
+    /// Opaque TAP identity bound to the complete Network tuple below.
+    pub bundle_tap_intent_ref: BundleOpId,
+    pub attachment_id: ResourceUid,
+    pub network_generation: ResourceGeneration,
+    pub attachment_generation: ResourceGeneration,
+    pub zone_uid: ResourceUid,
+    pub network_uid: ResourceUid,
+    pub bundle_generation: ResourceBundleGenerationId,
+    /// Exact interface set copied from the live Network admission proof.
+    pub admitted_interface_names: Vec<IfName>,
     #[serde(default)]
     pub tracing_span_id: Option<TracingSpanId>,
 }
@@ -2575,21 +2614,17 @@ pub struct StoreSyncResponse {
     pub cleanup_deferred: bool,
 }
 
-/// The broker derives the bridge, port,
-/// isolated/neigh_suppress/learning/unicast_flood flags, and matching
-/// rule rationale from the trusted bundle row anchored by `vm_id` +
-/// `role_id`. The legacy wire carried caller-supplied `bridge: IfName`,
-/// `port: IfName`, `isolated: bool`, `neigh_suppress: bool`; these
-/// violated the broker's own "daemon never names raw ifnames or raw
-/// intent" invariant, so the fields were removed. The broker reads the
-/// per-role `BridgePortFlags` row from
-/// `bundle.host.environments[*].bridgePortFlags` keyed by `role_id` and
-/// applies the documented flag set.
+/// The broker derives the bridge, port, and flag set from the complete
+/// admitted Network identity. Legacy callers without that context are
+/// refused before any link mutation.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct SetBridgePortFlagsRequest {
     pub vm_id: VmId,
     pub role_id: RoleId,
+    /// Complete admitted Network identity for a Network-owned port.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub network_tap_context: Option<NetworkTapContext>,
     #[serde(default)]
     pub tracing_span_id: Option<TracingSpanId>,
 }
@@ -2619,6 +2654,16 @@ pub struct SetupMountNamespaceRequest {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct UpdateHostsFileRequest {
     pub bundle_hosts_intent_ref: BundleOpId,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub zone_uid: Option<ResourceUid>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub network_uid: Option<ResourceUid>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub network_generation: Option<ResourceGeneration>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub attachment_generation: Option<ResourceGeneration>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub bundle_generation: Option<ResourceBundleGenerationId>,
     #[serde(default)]
     pub destroy: bool,
     #[serde(default)]
@@ -3069,6 +3114,24 @@ pub struct SpawnRunnerRequest {
     /// carried in the existing typed fields, never inside this identity.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub workload_identity: Option<WorkloadIdentity>,
+    /// Complete admitted Network context required when this runner opens a
+    /// VMM TAP through `CreateTapFd`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub network_tap_context: Option<NetworkTapContext>,
+}
+
+/// Admitted Network identity passed through a VMM runner launch.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct NetworkTapContext {
+    pub zone_uid: ResourceUid,
+    pub network_uid: ResourceUid,
+    pub attachment_id: ResourceUid,
+    pub network_generation: ResourceGeneration,
+    pub attachment_generation: ResourceGeneration,
+    pub bundle_generation: ResourceBundleGenerationId,
+    /// Exact interface set copied from the live Network admission proof.
+    pub admitted_interface_names: Vec<IfName>,
 }
 
 /// Per-runner runtime allocation tuple. Each entry pairs a typed slot
@@ -3278,6 +3341,11 @@ impl BrokerCallerRole {
 pub struct SeedDnsmasqLeaseRequest {
     pub vm_id: VmId,
     pub scope_id: ScopeId,
+    pub zone_uid: ResourceUid,
+    pub network_uid: ResourceUid,
+    pub network_generation: ResourceGeneration,
+    pub attachment_generation: ResourceGeneration,
+    pub bundle_generation: ResourceBundleGenerationId,
     #[serde(default)]
     pub tracing_span_id: Option<TracingSpanId>,
 }
@@ -3798,18 +3866,23 @@ mod tests {
         }
     }
 
-    /// CreatePersistentTap and CreateTapFd carry only opaque
-    /// (role_id, vm_id) on the wire; the broker derives
-    /// ifname/owner/attrs from the trusted bundle. The v3 attachment
-    /// identity and generation fences are optional typed fields used only
-    /// for broker-owned restart adoption and finalization.
+    /// CreatePersistentTap and CreateTapFd carry opaque runner identity plus
+    /// the complete admitted Network provenance. Kernel names and attributes
+    /// remain broker-derived.
     #[test]
-    fn create_persistent_tap_request_is_opaque_only() {
+    fn create_persistent_tap_request_requires_admitted_provenance() {
         let frame = encode_frame(&serde_json::json!({
             "kind": "CreatePersistentTap",
             "payload": {
                 "roleId": "runner-lan",
-                "vmId": "corp-vm"
+                "vmId": "corp-vm",
+                "bundleTapIntentRef": "network-tap:716a354d3a6a651a0ad54d65cf0a72b764b91b3ed4167c6af551a4949d591019",
+                "attachmentId": "123e4567-e89b-42d3-a456-426614174000",
+                "networkGeneration": 4,
+                "attachmentGeneration": 7,
+                "zoneUid": "223e4567-e89b-42d3-a456-426614174001",
+                "networkUid": "323e4567-e89b-42d3-a456-426614174002",
+                "bundleGeneration": "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
             }
         }))
         .expect("encodes");
@@ -3824,12 +3897,19 @@ mod tests {
     }
 
     #[test]
-    fn create_tap_fd_request_is_opaque_only() {
+    fn create_tap_fd_request_requires_admitted_provenance() {
         let frame = encode_frame(&serde_json::json!({
             "kind": "CreateTapFd",
             "payload": {
                 "roleId": "runner-lan",
-                "vmId": "corp-vm"
+                "vmId": "corp-vm",
+                "bundleTapIntentRef": "network-tap:716a354d3a6a651a0ad54d65cf0a72b764b91b3ed4167c6af551a4949d591019",
+                "attachmentId": "123e4567-e89b-42d3-a456-426614174000",
+                "networkGeneration": 4,
+                "attachmentGeneration": 7,
+                "zoneUid": "223e4567-e89b-42d3-a456-426614174001",
+                "networkUid": "323e4567-e89b-42d3-a456-426614174002",
+                "bundleGeneration": "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
             }
         }))
         .expect("encodes");
@@ -3840,6 +3920,63 @@ mod tests {
                 assert_eq!(req.vm_id.as_str(), "corp-vm");
             }
             other => panic!("expected CreateTapFd, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn tap_create_rejects_missing_provenance_fields() {
+        for kind in ["CreatePersistentTap", "CreateTapFd"] {
+            for field in [
+                "attachmentId",
+                "attachmentGeneration",
+                "bundleTapIntentRef",
+                "networkGeneration",
+                "networkUid",
+                "zoneUid",
+                "bundleGeneration",
+            ] {
+                let mut payload = opaque_create_tap_payload();
+                payload.as_object_mut().unwrap().remove(field);
+                let frame = encode_frame(&serde_json::json!({
+                    "kind": kind,
+                    "payload": payload,
+                }))
+                .expect("encodes");
+                assert!(
+                    decode_frame::<BrokerRequest>("BrokerRequest", &frame).is_err(),
+                    "{kind} must reject missing {field}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn tap_create_rejects_null_provenance_fields() {
+        for kind in ["CreatePersistentTap", "CreateTapFd"] {
+            for field in [
+                "attachmentId",
+                "attachmentGeneration",
+                "bundleTapIntentRef",
+                "networkGeneration",
+                "networkUid",
+                "zoneUid",
+                "bundleGeneration",
+            ] {
+                let mut payload = opaque_create_tap_payload();
+                payload
+                    .as_object_mut()
+                    .unwrap()
+                    .insert(field.to_owned(), serde_json::Value::Null);
+                let frame = encode_frame(&serde_json::json!({
+                    "kind": kind,
+                    "payload": payload,
+                }))
+                .expect("encodes");
+                assert!(
+                    decode_frame::<BrokerRequest>("BrokerRequest", &frame).is_err(),
+                    "{kind} must reject null {field}"
+                );
+            }
         }
     }
 
@@ -3967,7 +4104,17 @@ mod tests {
     }
 
     fn opaque_create_tap_payload() -> serde_json::Value {
-        serde_json::json!({ "roleId": "runner-lan", "vmId": "corp-vm" })
+        serde_json::json!({
+            "roleId": "runner-lan",
+            "vmId": "corp-vm",
+            "bundleTapIntentRef": "network-tap:716a354d3a6a651a0ad54d65cf0a72b764b91b3ed4167c6af551a4949d591019",
+            "attachmentId": "123e4567-e89b-42d3-a456-426614174000",
+            "networkGeneration": 4,
+            "attachmentGeneration": 7,
+            "zoneUid": "223e4567-e89b-42d3-a456-426614174001",
+            "networkUid": "323e4567-e89b-42d3-a456-426614174002",
+            "bundleGeneration": "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+        })
     }
 
     fn opaque_set_bridge_port_flags_payload() -> serde_json::Value {
@@ -4083,9 +4230,13 @@ mod tests {
     fn apply_nftables_projection_requires_installed_generation_fence() {
         let generation_id = format!("sha256:{}", "1".repeat(64));
         let mut payload = serde_json::json!({
-            "bundleNftProjectionIntentRef": "nft-projection:work",
-            "scopeId": "scope:work",
+            "bundleNftProjectionIntentRef": "network-firewall:223e4567-e89b-42d3-a456-426614174001:323e4567-e89b-42d3-a456-426614174002:work",
+            "scopeId": "network:223e4567-e89b-42d3-a456-426614174001:323e4567-e89b-42d3-a456-426614174002",
             "action": "apply",
+            "zoneUid": "223e4567-e89b-42d3-a456-426614174001",
+            "networkUid": "323e4567-e89b-42d3-a456-426614174002",
+            "networkGeneration": 4,
+            "attachmentGeneration": 7,
             "expectedGenerationId": generation_id,
         });
         let request: ApplyNftablesProjectionRequest =
@@ -4104,8 +4255,11 @@ mod tests {
     fn delete_persistent_tap_requires_opaque_id_and_both_generation_fences() {
         let mut payload = serde_json::json!({
             "attachmentId": "123e4567-e89b-42d3-a456-426614174000",
+            "expectedZoneUid": "223e4567-e89b-42d3-a456-426614174001",
+            "expectedNetworkUid": "323e4567-e89b-42d3-a456-426614174002",
             "expectedNetworkGeneration": 7,
             "expectedAttachmentGeneration": 11,
+            "expectedBundleGeneration": format!("sha256:{}", "1".repeat(64)),
         });
         let request: DeletePersistentTapRequest =
             serde_json::from_value(payload.clone()).expect("valid fenced tap deletion request");
@@ -4115,11 +4269,18 @@ mod tests {
         );
         assert_eq!(request.expected_network_generation.get(), 7);
         assert_eq!(request.expected_attachment_generation.get(), 11);
+        assert_eq!(
+            request.expected_network_uid.as_str(),
+            "323e4567-e89b-42d3-a456-426614174002"
+        );
 
         for required in [
             "attachmentId",
+            "expectedZoneUid",
+            "expectedNetworkUid",
             "expectedNetworkGeneration",
             "expectedAttachmentGeneration",
+            "expectedBundleGeneration",
         ] {
             let mut missing = payload.clone();
             missing.as_object_mut().unwrap().remove(required);
@@ -4268,6 +4429,7 @@ mod tests {
             runtime_allocations: Vec::new(),
             tracing_span_id: None,
             workload_identity: None,
+            network_tap_context: None,
         })
     }
 

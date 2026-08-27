@@ -49,13 +49,22 @@ _SURFACES = {
         "cases": ["net-vm-network"],
         "package": "packages/d2b-provider-network-local",
         "files": [
-            "packages/d2b-provider-network-local/nix/net-mdns.nix",
             "packages/d2b-provider-network-local/nix/net.nix",
+            "nixos-modules/resources.nix",
+            "nixos-modules/resources-bundle.nix",
+            "nixos-modules/generated/provider-catalog-shape.nix",
         ],
         "modules": [
             "packages/d2b-provider-network-local/nix/network.nix",
-            "nixos-modules/options-envs.nix",
             "packages/d2b-provider-network-local/nix/resources-network.nix",
+            "nixos-modules/options-artifacts.nix",
+            "nixos-modules/provider-catalog.nix",
+            "nixos-modules/options-envs.nix",
+            "nixos-modules/options-site.nix",
+            "nixos-modules/options-vms.nix",
+            "nixos-modules/options-zones.nix",
+            "nixos-modules/options-zones-resources.nix",
+            "nixos-modules/options-resources.nix",
         ],
     },
     "storage-volume": {
@@ -186,6 +195,8 @@ nix_surface_test(
         "expression": "//packages/d2b-provider-network-local:nix/tests/default.nix",
         "files": [
             "packages/d2b-provider-network-local/nix/artifacts.nix",
+            "packages/d2b-provider-network-local/nix/network.nix",
+            "packages/d2b-provider-network-local/nix/net.nix",
         ],
         "modules": [
             "packages/d2b-provider-network-local/nix/default.nix",

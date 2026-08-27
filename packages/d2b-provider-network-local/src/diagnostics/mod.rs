@@ -1,6 +1,7 @@
-//! Network-local startup and bundle diagnostics.
+//! Network-local diagnostic exports.
 
 #![allow(missing_docs)]
 
-pub mod net_route_preflight;
-pub mod net_vm_bundle_gate;
+pub use crate::observe::{
+    HostNetworkObservationError, HostNetworkOccupancy, observe_host_network,
+};

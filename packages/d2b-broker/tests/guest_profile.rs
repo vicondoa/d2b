@@ -126,6 +126,7 @@ fn guest_binary_rejects_spawn_runner_before_bundle_mutation() {
                 runtime_allocations: Vec::new(),
                 tracing_span_id: None,
                 workload_identity: None,
+                network_tap_context: None,
             }),
             caller_role: BrokerCallerRole::AdminUid { uid: D2BD_UID },
             test_peer_uid: Some(D2BD_UID),

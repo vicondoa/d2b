@@ -193,6 +193,7 @@ impl<'a> LiveTpmEffectExecutor<'a> {
                 runtime_allocations: Vec::new(),
                 tracing_span_id: None,
                 workload_identity: None,
+                network_tap_context: None,
             }),
             self.caller_role.clone(),
             timeout,

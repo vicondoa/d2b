@@ -627,6 +627,7 @@ impl<R: BrokerLaunchResolver> ProcessEffectBackend for BrokerProcessBackend<R> {
             runtime_allocations: Vec::new(),
             tracing_span_id: None,
             workload_identity: None,
+            network_tap_context: None,
         }))?;
         let BrokerResponse::SpawnRunner(ref response) = frame.response else {
             return Err(response_error(&frame.response, BrokerOperation::Other));

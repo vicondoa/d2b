@@ -127,6 +127,12 @@ ownership transitions differ.
 
 Broker op: `BrokerRequest::CreateTapFd`.
 
+The request carries the complete Zone/Network/attachment generation tuple, the
+exact admitted interface set, and the opaque `bundleTapIntentRef` derived from
+that tuple. The broker recomputes the UID-derived bridge and TAP names from its
+trusted resolver and requires both names in that admitted set; VM environment,
+manifest names, and caller-supplied interface names are not authority.
+
 1. Broker opens `/dev/net/tun` and runs `TUNSETIFF` against the
    derived ifname.
 2. Broker applies the per-link IPv6-off sysctl sequence
@@ -154,6 +160,10 @@ cannot create, rename, or delete taps.
 Broker op: `BrokerRequest::CreatePersistentTap`. Used when the
 packaged CH binary lacks the `tap-fd` capability (probed at
 bundle build via `host.json::chConfig`).
+
+The persistent request uses the same complete identity and
+`bundleTapIntentRef` contract as `CreateTapFd`; missing or mixed identity is
+refused before the TAP is created or persisted.
 
 1. Broker performs steps 1-4 of the `TapFd` flow above.
 2. Broker calls `TUNSETPERSIST = 1` so the tap survives broker

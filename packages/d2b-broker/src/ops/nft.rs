@@ -41,6 +41,56 @@ pub struct ApplyNftablesAudit {
     pub manager_detected: FirewallManager,
 }
 
+fn live_table_has_foreign_entries(
+    live_json: &[u8],
+    ownership_id: &str,
+    desired: &NftBatch,
+) -> bool {
+    let Ok(value) = serde_json::from_slice::<serde_json::Value>(live_json) else {
+        return true;
+    };
+    let Some(entries) = value.get("nftables").and_then(serde_json::Value::as_array) else {
+        return true;
+    };
+    let expected_comment = format!("d2b managed: {ownership_id}");
+    let desired_chains = desired
+        .chains
+        .iter()
+        .map(|chain| chain.name.as_str())
+        .collect::<std::collections::BTreeSet<_>>();
+    entries.iter().any(|entry| {
+        if let Some(chain) = entry.get("chain") {
+            if chain.get("family").and_then(serde_json::Value::as_str) != Some(desired.table_family)
+                || chain.get("table").and_then(serde_json::Value::as_str)
+                    != Some(desired.table_name)
+            {
+                return false;
+            }
+            let Some(name) = chain.get("name").and_then(serde_json::Value::as_str) else {
+                return true;
+            };
+            let comment = chain
+                .get("comment")
+                .and_then(serde_json::Value::as_str);
+            return !desired_chains.contains(name)
+                || comment.is_some_and(|value| value != expected_comment);
+        }
+        if let Some(rule) = entry.get("rule") {
+            if rule.get("family").and_then(serde_json::Value::as_str) != Some(desired.table_family)
+                || rule.get("table").and_then(serde_json::Value::as_str)
+                    != Some(desired.table_name)
+            {
+                return false;
+            }
+            return rule
+                .get("comment")
+                .and_then(serde_json::Value::as_str)
+                != Some(expected_comment.as_str());
+        }
+        false
+    })
+}
+
 /// Decision returned by [`apply_nftables`] after the typed reconcile
 /// loop, before the broker hands off to `nft -f -`.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -209,6 +259,7 @@ pub enum ApplyWithCoexistenceError {
         expected: String,
         observed: String,
     },
+    ForeignOwnership,
     ReconcileExec(ReconcileExecError),
 }
 
@@ -232,6 +283,7 @@ impl std::fmt::Display for ApplyWithCoexistenceError {
                 f,
                 "apply-nftables: canonical inet d2b hash drift detected (expected={expected}, observed={observed})"
             ),
+            Self::ForeignOwnership => write!(f, "apply-nftables: foreign ownership marker"),
             Self::ReconcileExec(err) => write!(f, "apply-nftables: {err}"),
         }
     }
@@ -260,6 +312,11 @@ pub fn apply_with_coexistence(
     let live_table_json =
         read_live_table_json_optional(nft_binary, batch.table_family, batch.table_name)
             .map_err(ApplyWithCoexistenceError::ReconcileExec)?;
+    if let Some(live_table_json) = live_table_json.as_deref()
+        && live_table_has_foreign_entries(live_table_json, ownership_id, &batch)
+    {
+        return Err(ApplyWithCoexistenceError::ForeignOwnership);
+    }
     let (drift_expected_hash, observed_table_hash) = if let Some(json) = live_table_json {
         (
             select_drift_expected_hash(
@@ -1164,6 +1221,16 @@ mod tests {
             ),
             scope_id: d2b_contracts::types::ScopeId::new("scope:opaque"),
             action: d2b_contracts_broker::broker_wire::NftablesProjectionAction::Apply,
+            zone_uid: d2b_contracts_resource::v3::ResourceUid::parse(
+                "223e4567-e89b-42d3-a456-426614174001",
+            )
+            .unwrap(),
+            network_uid: d2b_contracts_resource::v3::ResourceUid::parse(
+                "323e4567-e89b-42d3-a456-426614174002",
+            )
+            .unwrap(),
+            network_generation: d2b_contracts_resource::v3::ResourceGeneration::new(4).unwrap(),
+            attachment_generation: d2b_contracts_resource::v3::ResourceGeneration::new(7).unwrap(),
             expected_generation_id: d2b_contracts_resource::v3::ResourceBundleGenerationId::parse(
                 "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
             )

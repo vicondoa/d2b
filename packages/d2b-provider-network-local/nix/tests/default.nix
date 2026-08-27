@@ -2,6 +2,8 @@
 
 let
   module = builtins.head modules;
+  networkSource = builtins.readFile ../network.nix;
+  netSource = builtins.readFile ../net.nix;
   evaluated = lib.evalModules {
     modules = [
       {
@@ -38,6 +40,27 @@ in
         let value = (import ../default.nix { inherit lib; });
         in value.networking.networkmanager.unmanaged._type;
       expected = "order";
+    };
+
+    "network-local/host-module-has-no-retired-authority" = {
+      expr =
+        lib.all
+          (needle: !(lib.hasInfix needle networkSource))
+          [ "cfg.envs" "host.environments" "manifest" "route:env:" "netVmName" ];
+      expected = true;
+    };
+
+    "network-local/net-guest-keeps-dhcp-neutralizer" = {
+      expr = lib.hasInfix "\"10-eth-dhcp\" = lib.mkForce" netSource;
+      expected = true;
+    };
+
+    "network-local/net-guest-has-no-network-desired-data" = {
+      expr =
+        lib.all
+          (needle: !(lib.hasInfix needle netSource))
+          [ "services.dnsmasq" "hostBlocklist" "attachments.json" "route:env:" ];
+      expected = true;
     };
   };
 }

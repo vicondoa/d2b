@@ -271,9 +271,13 @@
       "type": "object",
       "required": [
         "action",
+        "attachmentGeneration",
         "bundleNftProjectionIntentRef",
         "expectedGenerationId",
-        "scopeId"
+        "networkGeneration",
+        "networkUid",
+        "scopeId",
+        "zoneUid"
       ],
       "properties": {
         "action": {
@@ -294,6 +298,34 @@
           "allOf": [
             {
               "$ref": "#/definitions/ResourceBundleGenerationId"
+            }
+          ]
+        },
+        "attachmentGeneration": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/ResourceGeneration"
+            }
+          ]
+        },
+        "networkGeneration": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/ResourceGeneration"
+            }
+          ]
+        },
+        "networkUid": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/ResourceUid"
+            }
+          ]
+        },
+        "zoneUid": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/ResourceUid"
             }
           ]
         },
@@ -375,16 +407,57 @@
     "ApplyRouteRequest": {
       "type": "object",
       "required": [
+        "admittedInterfaceNames",
+        "attachmentGeneration",
+        "bundleGeneration",
         "bundleRouteIntentRef",
-        "scopeId"
+        "networkGeneration",
+        "networkUid",
+        "scopeId",
+        "zoneUid"
       ],
       "properties": {
         "bundleRouteIntentRef": {
           "type": "string"
         },
+        "attachmentGeneration": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/ResourceGeneration"
+            }
+          ]
+        },
+        "bundleGeneration": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/ResourceBundleGenerationId"
+            }
+          ]
+        },
         "destroy": {
           "default": false,
           "type": "boolean"
+        },
+        "networkGeneration": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/ResourceGeneration"
+            }
+          ]
+        },
+        "networkUid": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/ResourceUid"
+            }
+          ]
+        },
+        "zoneUid": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/ResourceUid"
+            }
+          ]
         },
         "scopeId": {
           "type": "string"
@@ -402,16 +475,56 @@
     "ApplySysctlRequest": {
       "type": "object",
       "required": [
+        "attachmentGeneration",
+        "bundleGeneration",
         "bundleSysctlIntentRef",
-        "scopeId"
+        "networkGeneration",
+        "networkUid",
+        "scopeId",
+        "zoneUid"
       ],
       "properties": {
         "bundleSysctlIntentRef": {
           "type": "string"
         },
+        "attachmentGeneration": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/ResourceGeneration"
+            }
+          ]
+        },
+        "bundleGeneration": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/ResourceBundleGenerationId"
+            }
+          ]
+        },
         "destroy": {
           "default": false,
           "type": "boolean"
+        },
+        "networkGeneration": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/ResourceGeneration"
+            }
+          ]
+        },
+        "networkUid": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/ResourceUid"
+            }
+          ]
+        },
+        "zoneUid": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/ResourceUid"
+            }
+          ]
         },
         "scopeId": {
           "type": "string"
@@ -4528,12 +4641,45 @@
       "description": "The broker derives the bridge ifname and its attributes from the trusted bundle row anchored by `bundle_bridge_intent_ref` + `scope_id`. As with the TAP ops, no caller-supplied ifname crosses the wire; the observed ifname appears only in the audit record.",
       "type": "object",
       "required": [
+        "attachmentGeneration",
+        "bundleGeneration",
         "bundleBridgeIntentRef",
-        "scopeId"
+        "networkGeneration",
+        "networkUid",
+        "scopeId",
+        "zoneUid"
       ],
       "properties": {
+        "attachmentGeneration": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/ResourceGeneration"
+            }
+          ]
+        },
+        "bundleGeneration": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/ResourceBundleGenerationId"
+            }
+          ]
+        },
         "bundleBridgeIntentRef": {
           "type": "string"
+        },
+        "networkGeneration": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/ResourceGeneration"
+            }
+          ]
+        },
+        "networkUid": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/ResourceUid"
+            }
+          ]
         },
         "scopeId": {
           "type": "string"
@@ -4543,6 +4689,13 @@
           "type": [
             "string",
             "null"
+          ]
+        },
+        "zoneUid": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/ResourceUid"
+            }
           ]
         }
       },
@@ -4571,43 +4724,44 @@
       "additionalProperties": false
     },
     "CreatePersistentTapRequest": {
-      "description": "The broker derives the bridge ifname, owner uid/gid, and TAP attributes from the trusted bundle row anchored by `role_id` + `vm_id`. The legacy wire carried a caller-supplied `ifname_derived: IfName`; that preserved a future bypass of broker-side trusted-bundle resolution, so the field was removed. The broker emits the observed ifname only in the audit record / response.",
+      "description": "The broker derives the bridge ifname, owner uid/gid, and TAP attributes from the admitted Network identity. Every provenance field is mandatory; there is no legacy env/manifest path.",
       "type": "object",
       "required": [
+        "admittedInterfaceNames",
+        "attachmentGeneration",
+        "attachmentId",
+        "bundleGeneration",
+        "bundleTapIntentRef",
+        "networkGeneration",
+        "networkUid",
         "roleId",
-        "vmId"
+        "vmId",
+        "zoneUid"
       ],
       "properties": {
+        "admittedInterfaceNames": {
+          "items": {
+            "$ref": "#/definitions/IfName"
+          },
+          "type": "array"
+        },
         "attachmentGeneration": {
-          "anyOf": [
-            {
-              "$ref": "#/definitions/ResourceGeneration"
-            },
-            {
-              "type": "null"
-            }
-          ]
+          "$ref": "#/definitions/ResourceGeneration"
         },
         "attachmentId": {
-          "description": "Optional v3 attachment realization identity. Legacy host-prep callers omit these fields; Network Provider callers supply all three so the broker can adopt and generation-fence the persistent TAP on restart.",
-          "anyOf": [
-            {
-              "$ref": "#/definitions/ResourceUid"
-            },
-            {
-              "type": "null"
-            }
-          ]
+          "$ref": "#/definitions/ResourceUid"
+        },
+        "bundleGeneration": {
+          "$ref": "#/definitions/ResourceBundleGenerationId"
+        },
+        "bundleTapIntentRef": {
+          "type": "string"
         },
         "networkGeneration": {
-          "anyOf": [
-            {
-              "$ref": "#/definitions/ResourceGeneration"
-            },
-            {
-              "type": "null"
-            }
-          ]
+          "$ref": "#/definitions/ResourceGeneration"
+        },
+        "networkUid": {
+          "$ref": "#/definitions/ResourceUid"
         },
         "roleId": {
           "type": "string"
@@ -4621,18 +4775,53 @@
         },
         "vmId": {
           "type": "string"
+        },
+        "zoneUid": {
+          "$ref": "#/definitions/ResourceUid"
         }
       },
       "additionalProperties": false
     },
     "CreateTapFdRequest": {
-      "description": "See [`CreatePersistentTapRequest`] for the opaque-ID rationale; `CreateTapFd` follows the same contract.",
+      "description": "See [`CreatePersistentTapRequest`] for the provenance contract; `CreateTapFd` carries the same complete identity tuple.",
       "type": "object",
       "required": [
+        "admittedInterfaceNames",
+        "attachmentGeneration",
+        "attachmentId",
+        "bundleGeneration",
+        "bundleTapIntentRef",
+        "networkGeneration",
+        "networkUid",
         "roleId",
-        "vmId"
+        "vmId",
+        "zoneUid"
       ],
       "properties": {
+        "admittedInterfaceNames": {
+          "items": {
+            "$ref": "#/definitions/IfName"
+          },
+          "type": "array"
+        },
+        "attachmentGeneration": {
+          "$ref": "#/definitions/ResourceGeneration"
+        },
+        "attachmentId": {
+          "$ref": "#/definitions/ResourceUid"
+        },
+        "bundleGeneration": {
+          "$ref": "#/definitions/ResourceBundleGenerationId"
+        },
+        "bundleTapIntentRef": {
+          "type": "string"
+        },
+        "networkGeneration": {
+          "$ref": "#/definitions/ResourceGeneration"
+        },
+        "networkUid": {
+          "$ref": "#/definitions/ResourceUid"
+        },
         "roleId": {
           "type": "string"
         },
@@ -4645,6 +4834,9 @@
         },
         "vmId": {
           "type": "string"
+        },
+        "zoneUid": {
+          "$ref": "#/definitions/ResourceUid"
         }
       },
       "additionalProperties": false
@@ -4673,12 +4865,29 @@
       "description": "See [`CreateBridgeRequest`] for the opaque-ID rationale; `DeleteBridge` follows the same contract.",
       "type": "object",
       "required": [
+        "attachmentGeneration",
+        "bundleGeneration",
         "bundleBridgeIntentRef",
-        "scopeId"
+        "networkGeneration",
+        "networkUid",
+        "scopeId",
+        "zoneUid"
       ],
       "properties": {
+        "attachmentGeneration": {
+          "$ref": "#/definitions/ResourceGeneration"
+        },
+        "bundleGeneration": {
+          "$ref": "#/definitions/ResourceBundleGenerationId"
+        },
         "bundleBridgeIntentRef": {
           "type": "string"
+        },
+        "networkGeneration": {
+          "$ref": "#/definitions/ResourceGeneration"
+        },
+        "networkUid": {
+          "$ref": "#/definitions/ResourceUid"
         },
         "scopeId": {
           "type": "string"
@@ -4689,6 +4898,9 @@
             "string",
             "null"
           ]
+        },
+        "zoneUid": {
+          "$ref": "#/definitions/ResourceUid"
         }
       },
       "additionalProperties": false
@@ -4699,7 +4911,10 @@
       "required": [
         "attachmentId",
         "expectedAttachmentGeneration",
-        "expectedNetworkGeneration"
+        "expectedBundleGeneration",
+        "expectedNetworkGeneration",
+        "expectedNetworkUid",
+        "expectedZoneUid"
       ],
       "properties": {
         "attachmentId": {
@@ -4708,8 +4923,22 @@
         "expectedAttachmentGeneration": {
           "$ref": "#/definitions/ResourceGeneration"
         },
+        "expectedBundleGeneration": {
+          "$ref": "#/definitions/ResourceBundleGenerationId"
+        },
         "expectedNetworkGeneration": {
           "$ref": "#/definitions/ResourceGeneration"
+        },
+        "expectedNetworkUid": {
+          "$ref": "#/definitions/ResourceUid"
+        },
+        "expectedZoneUid": {
+          "description": "Exact Zone/Network identity and installed bundle generation required for deletion; none are accepted from a caller as a wildcard.",
+          "allOf": [
+            {
+              "$ref": "#/definitions/ResourceUid"
+            }
+          ]
         },
         "tracingSpanId": {
           "default": null,
@@ -8076,6 +8305,46 @@
         "cgroup",
         "time"
       ]
+    },
+    "NetworkTapContext": {
+      "description": "Complete admitted Network identity required for a VMM TAP effect.",
+      "type": "object",
+      "required": [
+        "admittedInterfaceNames",
+        "attachmentGeneration",
+        "attachmentId",
+        "bundleGeneration",
+        "networkGeneration",
+        "networkUid",
+        "zoneUid"
+      ],
+      "properties": {
+        "admittedInterfaceNames": {
+          "items": {
+            "$ref": "#/definitions/IfName"
+          },
+          "type": "array"
+        },
+        "attachmentGeneration": {
+          "$ref": "#/definitions/ResourceGeneration"
+        },
+        "attachmentId": {
+          "$ref": "#/definitions/ResourceUid"
+        },
+        "bundleGeneration": {
+          "$ref": "#/definitions/ResourceBundleGenerationId"
+        },
+        "networkGeneration": {
+          "$ref": "#/definitions/ResourceGeneration"
+        },
+        "networkUid": {
+          "$ref": "#/definitions/ResourceUid"
+        },
+        "zoneUid": {
+          "$ref": "#/definitions/ResourceUid"
+        }
+      },
+      "additionalProperties": false
     },
     "NftablesProjectionAction": {
       "description": "The action an [`ApplyNftablesProjectionRequest`] carries.\n\nClosed on purpose: the framework's own nftables op spells its two directions as a `destroy` boolean, which leaves \"neither\" and \"both\" expressible in a future field pair. A projection names exactly one of two directions and nothing else.",
@@ -11901,13 +12170,30 @@
       "additionalProperties": false
     },
     "SeedDnsmasqLeaseRequest": {
-      "description": "SeedDnsmasqLease request. The broker resolves the per-VM dnsmasq lease intent from the bundle (using `vm_id`) and writes `/var/lib/d2b/dnsmasq/<vm>.leases` with the correct owner / mode.",
+      "description": "SeedDnsmasqLease request bound to the admitted Network identity. The broker resolves the per-VM lease artifact from its trusted bundle.",
       "type": "object",
       "required": [
+        "attachmentGeneration",
+        "bundleGeneration",
+        "networkGeneration",
+        "networkUid",
         "scopeId",
-        "vmId"
+        "vmId",
+        "zoneUid"
       ],
       "properties": {
+        "attachmentGeneration": {
+          "$ref": "#/definitions/ResourceGeneration"
+        },
+        "bundleGeneration": {
+          "$ref": "#/definitions/ResourceBundleGenerationId"
+        },
+        "networkGeneration": {
+          "$ref": "#/definitions/ResourceGeneration"
+        },
+        "networkUid": {
+          "$ref": "#/definitions/ResourceUid"
+        },
         "scopeId": {
           "type": "string"
         },
@@ -11920,6 +12206,9 @@
         },
         "vmId": {
           "type": "string"
+        },
+        "zoneUid": {
+          "$ref": "#/definitions/ResourceUid"
         }
       },
       "additionalProperties": false
@@ -11948,13 +12237,23 @@
       ]
     },
     "SetBridgePortFlagsRequest": {
-      "description": "The broker derives the bridge, port, isolated/neigh_suppress/learning/unicast_flood flags, and matching rule rationale from the trusted bundle row anchored by `vm_id` + `role_id`. The legacy wire carried caller-supplied `bridge: IfName`, `port: IfName`, `isolated: bool`, `neigh_suppress: bool`; these violated the broker's own \"daemon never names raw ifnames or raw intent\" invariant, so the fields were removed. The broker reads the per-role `BridgePortFlags` row from `bundle.host.environments[*].bridgePortFlags` keyed by `role_id` and applies the documented flag set.",
+      "description": "The broker derives the bridge, port, and flag set from the admitted Network identity. Legacy callers without Network provenance are refused.",
       "type": "object",
       "required": [
         "roleId",
         "vmId"
       ],
       "properties": {
+        "networkTapContext": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/NetworkTapContext"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
         "roleId": {
           "type": "string"
         },
@@ -12253,6 +12552,16 @@
           "anyOf": [
             {
               "$ref": "#/definitions/GuestExecutionBinding"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "networkTapContext": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/NetworkTapContext"
             },
             {
               "type": "null"
@@ -13362,6 +13671,26 @@
         "bundleHostsIntentRef"
       ],
       "properties": {
+        "attachmentGeneration": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/ResourceGeneration"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "bundleGeneration": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/ResourceBundleGenerationId"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
         "bundleHostsIntentRef": {
           "type": "string"
         },
@@ -13369,11 +13698,41 @@
           "default": false,
           "type": "boolean"
         },
+        "networkGeneration": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/ResourceGeneration"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "networkUid": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/ResourceUid"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
         "tracingSpanId": {
           "default": null,
           "type": [
             "string",
             "null"
+          ]
+        },
+        "zoneUid": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/ResourceUid"
+            },
+            {
+              "type": "null"
+            }
           ]
         }
       },

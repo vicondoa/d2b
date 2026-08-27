@@ -64,19 +64,37 @@ pub(crate) fn production_port<'a>(
 
 impl NetworkBroker for DaemonNetworkBroker<'_> {
     fn create_bridge(&self, context: &NetworkEffectContext) -> Result<(), NetworkBrokerError> {
-        self.dispatch(BrokerRequest::CreateBridge(CreateBridgeRequest {
-            bundle_bridge_intent_ref: context.bridge_intent_ref().clone(),
-            scope_id: context.scope_id().clone(),
-            tracing_span_id: None,
-        }))
+        let provenance = context.provenance()?;
+        for intent_ref in context.bridge_intent_refs() {
+            self.dispatch(BrokerRequest::CreateBridge(CreateBridgeRequest {
+                bundle_bridge_intent_ref: intent_ref.clone(),
+                scope_id: context.scope_id().clone(),
+                zone_uid: provenance.zone_uid().clone(),
+                network_uid: provenance.network_uid().clone(),
+                network_generation: provenance.network_generation(),
+                attachment_generation: provenance.attachment_generation(),
+                bundle_generation: provenance.bundle_generation().clone(),
+                tracing_span_id: None,
+            }))?;
+        }
+        Ok(())
     }
 
     fn delete_bridge(&self, context: &NetworkEffectContext) -> Result<(), NetworkBrokerError> {
-        self.dispatch(BrokerRequest::DeleteBridge(DeleteBridgeRequest {
-            bundle_bridge_intent_ref: context.bridge_intent_ref().clone(),
-            scope_id: context.scope_id().clone(),
-            tracing_span_id: None,
-        }))
+        let provenance = context.provenance()?;
+        for intent_ref in context.bridge_intent_refs() {
+            self.dispatch(BrokerRequest::DeleteBridge(DeleteBridgeRequest {
+                bundle_bridge_intent_ref: intent_ref.clone(),
+                scope_id: context.scope_id().clone(),
+                zone_uid: provenance.zone_uid().clone(),
+                network_uid: provenance.network_uid().clone(),
+                network_generation: provenance.network_generation(),
+                attachment_generation: provenance.attachment_generation(),
+                bundle_generation: provenance.bundle_generation().clone(),
+                tracing_span_id: None,
+            }))?;
+        }
+        Ok(())
     }
 
     fn apply_projection(
@@ -84,11 +102,16 @@ impl NetworkBroker for DaemonNetworkBroker<'_> {
         context: &NetworkEffectContext,
         action: NftablesProjectionAction,
     ) -> Result<FirewallDigest, NetworkBrokerError> {
+        let provenance = context.provenance()?;
         self.dispatch(BrokerRequest::ApplyNftablesProjection(
             ApplyNftablesProjectionRequest {
                 bundle_nft_projection_intent_ref: context.projection_intent_ref().clone(),
                 scope_id: context.scope_id().clone(),
                 action,
+                zone_uid: provenance.zone_uid().clone(),
+                network_uid: provenance.network_uid().clone(),
+                network_generation: provenance.network_generation(),
+                attachment_generation: provenance.attachment_generation(),
                 expected_generation_id: context.expected_generation_id().clone(),
                 desired_hash: None,
                 tracing_span_id: None,
@@ -107,10 +130,16 @@ impl NetworkBroker for DaemonNetworkBroker<'_> {
     }
 
     fn apply_routes(&self, context: &NetworkEffectContext) -> Result<(), NetworkBrokerError> {
+        let provenance = context.provenance()?;
         for intent_ref in context.route_intent_refs() {
             self.dispatch(BrokerRequest::ApplyRoute(ApplyRouteRequest {
                 bundle_route_intent_ref: intent_ref.clone(),
                 scope_id: context.scope_id().clone(),
+                zone_uid: provenance.zone_uid().clone(),
+                network_uid: provenance.network_uid().clone(),
+                network_generation: provenance.network_generation(),
+                attachment_generation: provenance.attachment_generation(),
+                bundle_generation: provenance.bundle_generation().clone(),
                 destroy: false,
                 tracing_span_id: None,
             }))?;
@@ -119,10 +148,16 @@ impl NetworkBroker for DaemonNetworkBroker<'_> {
     }
 
     fn remove_routes(&self, context: &NetworkEffectContext) -> Result<(), NetworkBrokerError> {
+        let provenance = context.provenance()?;
         for intent_ref in context.route_intent_refs() {
             self.dispatch(BrokerRequest::ApplyRoute(ApplyRouteRequest {
                 bundle_route_intent_ref: intent_ref.clone(),
                 scope_id: context.scope_id().clone(),
+                zone_uid: provenance.zone_uid().clone(),
+                network_uid: provenance.network_uid().clone(),
+                network_generation: provenance.network_generation(),
+                attachment_generation: provenance.attachment_generation(),
+                bundle_generation: provenance.bundle_generation().clone(),
                 destroy: true,
                 tracing_span_id: None,
             }))?;
@@ -131,10 +166,16 @@ impl NetworkBroker for DaemonNetworkBroker<'_> {
     }
 
     fn apply_sysctls(&self, context: &NetworkEffectContext) -> Result<(), NetworkBrokerError> {
+        let provenance = context.provenance()?;
         for intent_ref in context.sysctl_intent_refs() {
             self.dispatch(BrokerRequest::ApplySysctl(ApplySysctlRequest {
                 bundle_sysctl_intent_ref: intent_ref.clone(),
                 scope_id: context.scope_id().clone(),
+                zone_uid: provenance.zone_uid().clone(),
+                network_uid: provenance.network_uid().clone(),
+                network_generation: provenance.network_generation(),
+                attachment_generation: provenance.attachment_generation(),
+                bundle_generation: provenance.bundle_generation().clone(),
                 destroy: false,
                 tracing_span_id: None,
             }))?;
@@ -143,31 +184,50 @@ impl NetworkBroker for DaemonNetworkBroker<'_> {
     }
 
     fn update_hosts(&self, context: &NetworkEffectContext) -> Result<(), NetworkBrokerError> {
+        let provenance = context.provenance()?;
         self.dispatch(BrokerRequest::UpdateHostsFile(UpdateHostsFileRequest {
             bundle_hosts_intent_ref: context.hosts_intent_ref().clone(),
+            zone_uid: Some(provenance.zone_uid().clone()),
+            network_uid: Some(provenance.network_uid().clone()),
+            network_generation: Some(provenance.network_generation()),
+            attachment_generation: Some(provenance.attachment_generation()),
+            bundle_generation: Some(provenance.bundle_generation().clone()),
             destroy: false,
             tracing_span_id: None,
         }))
     }
 
     fn seed_dhcp(&self, context: &NetworkEffectContext) -> Result<(), NetworkBrokerError> {
+        let provenance = context.provenance()?;
         self.dispatch(BrokerRequest::SeedDnsmasqLease(SeedDnsmasqLeaseRequest {
             vm_id: context.dnsmasq_vm_id().clone(),
             scope_id: context.scope_id().clone(),
+            zone_uid: provenance.zone_uid().clone(),
+            network_uid: provenance.network_uid().clone(),
+            network_generation: provenance.network_generation(),
+            attachment_generation: provenance.attachment_generation(),
+            bundle_generation: provenance.bundle_generation().clone(),
             tracing_span_id: None,
         }))
     }
 
     fn delete_persistent_tap(
         &self,
+        context: &NetworkEffectContext,
         handle: &d2b_contracts_resource::v3::network::AttachmentHandle,
         fence: &d2b_contracts_resource::v3::network::AttachmentGenerationFence,
     ) -> Result<(), NetworkBrokerError> {
+        let proof = context
+            .network_admission()
+            .ok_or(NetworkBrokerError::NetworkAdmissionRequired)?;
         self.dispatch(BrokerRequest::DeletePersistentTap(
             DeletePersistentTapRequest {
                 attachment_id: handle.opaque_id().clone(),
+                expected_zone_uid: proof.key().zone_uid().clone(),
+                expected_network_uid: proof.key().network_uid().clone(),
                 expected_network_generation: fence.network_generation(),
                 expected_attachment_generation: fence.attachment_generation(),
+                expected_bundle_generation: proof.key().bundle_generation().clone(),
                 tracing_span_id: None,
             },
         ))
@@ -176,12 +236,24 @@ impl NetworkBroker for DaemonNetworkBroker<'_> {
 
 #[allow(dead_code)]
 fn map_broker_error(kind: &str, message: &str) -> NetworkBrokerError {
-    if message.contains("nm-managed-foreign-conflict") {
+    if message.contains("nm-managed-foreign-conflict")
+        || message.contains("foreign route")
+        || message.contains("foreign-bridge-ownership-marker")
+        || message.contains("foreign-tap-ownership-marker")
+        || message.contains("foreign-nft-ownership")
+        || message.contains("foreign ownership marker")
+    {
         return NetworkBrokerError::ForeignOwnership;
     }
     let reason = message
         .split_once("failed: ")
         .map_or(message, |(_, reason)| reason);
+    if reason.contains("stale-bundle-generation") {
+        return NetworkBrokerError::StaleGeneration;
+    }
+    if reason.contains("network-zone-unknown") {
+        return NetworkBrokerError::NetworkAdmissionMismatch;
+    }
     match (kind, reason) {
         ("Broker.NftablesDriftDetected", _)
         | ("Broker.StaleProjectionGeneration", _)
@@ -197,6 +269,25 @@ fn map_broker_error(kind: &str, message: &str) -> NetworkBrokerError {
         }
         ("Broker.RequestValidation", "stale-attachment-generation") => {
             NetworkBrokerError::StaleAttachmentGeneration
+        }
+        ("Broker.RequestValidation", "network-admission-required") => {
+            NetworkBrokerError::NetworkAdmissionRequired
+        }
+        ("Broker.RequestValidation", "network-admission-mismatch")
+        | ("Broker.RequestValidation", "network-scope-invalid")
+        | ("Broker.RequestValidation", "network-scope-required")
+        | ("Broker.RequestValidation", "network-scope-mismatch") => {
+            NetworkBrokerError::NetworkAdmissionMismatch
+        }
+        ("Broker.RequestValidation", "network-interface-collision") => {
+            NetworkBrokerError::NetworkInterfaceCollision
+        }
+        ("Broker.RequestValidation", "network-route-collision") => {
+            NetworkBrokerError::NetworkRouteCollision
+        }
+        ("Broker.RequestValidation", "network-admission-conflict")
+        | ("Broker.RequestValidation", "legacy-network-authority") => {
+            NetworkBrokerError::NetworkAdmissionConflict
         }
         ("Broker.RequestValidation", "attachment-delete-failed")
         | ("Broker.RequestValidation", "network-broker-transient") => NetworkBrokerError::Transient,

@@ -143,19 +143,6 @@ fn has_owned_markers(contents: &str) -> bool {
             == 1
 }
 
-fn has_legacy_owned_header(contents: &str) -> bool {
-    let mut lines = contents.lines();
-    lines.next() == Some("# managed by d2b broker - do not edit by hand")
-        && contents.contains("[keyfile]\n")
-        && contents
-            .lines()
-            .filter(|line| line.starts_with("unmanaged-devices="))
-            .count()
-            == 1
-        && !contents.contains("# d2b-managed begin")
-        && !contents.contains("# d2b-managed end")
-}
-
 /// Refuse to overwrite a foreign or ambiguous d2b NetworkManager file.
 ///
 /// A matching marker-id set proves that the existing file is the prior d2b
@@ -163,9 +150,6 @@ fn has_legacy_owned_header(contents: &str) -> bool {
 /// closed before the atomic write.
 pub fn validate_existing_managed_conf(existing: &str, expected: &str) -> Result<(), ApplyNmError> {
     if existing.trim().is_empty() {
-        return Ok(());
-    }
-    if has_legacy_owned_header(existing) {
         return Ok(());
     }
     if !has_owned_markers(existing) || marker_ids(existing) != marker_ids(expected) {
@@ -457,14 +441,17 @@ mod tests {
     }
 
     #[test]
-    fn legacy_networkmanager_projection_is_adoptable() {
+    fn legacy_networkmanager_projection_is_foreign() {
         let legacy = concat!(
             "# managed by d2b broker - do not edit by hand\n",
             "[keyfile]\n",
             "unmanaged-devices=interface-name:d2b-*\n",
         );
         let expected = render_nm_conf(&[entry("d2b-b12345678")]);
-        assert_eq!(validate_existing_managed_conf(legacy, &expected), Ok(()));
+        assert_eq!(
+            validate_existing_managed_conf(legacy, &expected),
+            Err(ApplyNmError::ForeignMarkerConflict)
+        );
     }
 
     #[test]

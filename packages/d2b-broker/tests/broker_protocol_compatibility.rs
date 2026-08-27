@@ -46,6 +46,10 @@ fn current_only_requests() -> [BrokerRequest; 4] {
             bundle_nft_projection_intent_ref: BundleOpId::new("nft-projection:test"),
             scope_id: ScopeId::new("scope:test"),
             action: NftablesProjectionAction::Apply,
+            zone_uid: ResourceUid::parse("223e4567-e89b-42d3-a456-426614174001").unwrap(),
+            network_uid: ResourceUid::parse("323e4567-e89b-42d3-a456-426614174002").unwrap(),
+            network_generation: ResourceGeneration::new(7).unwrap(),
+            attachment_generation: ResourceGeneration::new(11).unwrap(),
             expected_generation_id: generation_id,
             desired_hash: None,
             tracing_span_id: None,
@@ -53,20 +57,38 @@ fn current_only_requests() -> [BrokerRequest; 4] {
         BrokerRequest::CreateBridge(CreateBridgeRequest {
             bundle_bridge_intent_ref: BundleOpId::new("bridge:test"),
             scope_id: ScopeId::new("scope:test"),
+            zone_uid: ResourceUid::parse("223e4567-e89b-42d3-a456-426614174001").unwrap(),
+            network_uid: ResourceUid::parse("323e4567-e89b-42d3-a456-426614174002").unwrap(),
+            network_generation: ResourceGeneration::new(7).unwrap(),
+            attachment_generation: ResourceGeneration::new(11).unwrap(),
+            bundle_generation: ResourceBundleGenerationId::parse(format!("sha256:{}", "1".repeat(64))).unwrap(),
             tracing_span_id: None,
         }),
         BrokerRequest::DeleteBridge(DeleteBridgeRequest {
             bundle_bridge_intent_ref: BundleOpId::new("bridge:test"),
             scope_id: ScopeId::new("scope:test"),
+            zone_uid: ResourceUid::parse("223e4567-e89b-42d3-a456-426614174001").unwrap(),
+            network_uid: ResourceUid::parse("323e4567-e89b-42d3-a456-426614174002").unwrap(),
+            network_generation: ResourceGeneration::new(7).unwrap(),
+            attachment_generation: ResourceGeneration::new(11).unwrap(),
+            bundle_generation: ResourceBundleGenerationId::parse(format!("sha256:{}", "1".repeat(64))).unwrap(),
             tracing_span_id: None,
         }),
         BrokerRequest::DeletePersistentTap(DeletePersistentTapRequest {
             attachment_id: ResourceUid::parse("123e4567-e89b-42d3-a456-426614174000")
                 .expect("valid attachment id"),
+            expected_zone_uid: ResourceUid::parse("223e4567-e89b-42d3-a456-426614174001")
+                .expect("valid zone id"),
+            expected_network_uid: ResourceUid::parse("323e4567-e89b-42d3-a456-426614174002")
+                .expect("valid network id"),
             expected_network_generation: ResourceGeneration::new(7)
                 .expect("valid network generation"),
             expected_attachment_generation: ResourceGeneration::new(11)
                 .expect("valid attachment generation"),
+            expected_bundle_generation: ResourceBundleGenerationId::parse(
+                "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+            )
+            .expect("valid bundle generation"),
             tracing_span_id: None,
         }),
     ]
@@ -75,7 +97,7 @@ fn current_only_requests() -> [BrokerRequest; 4] {
 #[test]
 fn previous_client_request_decodes_under_current_protocol() {
     assert_eq!(PREVIOUS_PROTOCOL_VERSION, 3);
-    assert_eq!(PROTOCOL_VERSION, 5);
+    assert_eq!(PROTOCOL_VERSION, 6);
 
     let encoded = serde_json::to_vec(&PreviousBrokerRequestEnvelope {
         request: PreviousBrokerRequest::ValidateBundle,
@@ -90,7 +112,7 @@ fn previous_client_request_decodes_under_current_protocol() {
 #[test]
 fn current_only_requests_are_rejected_by_previous_decoder() {
     assert_eq!(PREVIOUS_PROTOCOL_VERSION, 3);
-    assert_eq!(PROTOCOL_VERSION, 5);
+    assert_eq!(PROTOCOL_VERSION, 6);
 
     for request in current_only_requests() {
         let operation = request.op_name();

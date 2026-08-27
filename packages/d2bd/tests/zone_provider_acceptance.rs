@@ -38,8 +38,9 @@ use d2b_provider_network_local::{
     artifact::{ArtifactCatalogEntry, ArtifactKind},
     controller::{
         AttachmentRealization, FinalizerStage, FirewallDigest, FirewallIntent,
-        NetworkConfigContent, NetworkEffectError, NetworkEffectPort, NetworkReconciler,
-        NetworkResourcePort, ReconcileInput, ReconcileProgress,
+        NetworkAdmissionIntent, NetworkAdmissionKey, NetworkConfigContent, NetworkEffectError,
+        NetworkEffectPort, NetworkReconciler, NetworkResourcePort, ReconcileInput,
+        ReconcileProgress,
     },
 };
 use d2b_provider_runtime_cloud_hypervisor::{
@@ -481,20 +482,35 @@ fn network_input(
 ) -> ReconcileInput {
     let network_uid = ResourceUid::parse("123e4567-e89b-42d3-a456-426614174000").unwrap();
     let attachment_uid = ResourceUid::parse("223e4567-e89b-42d3-a456-426614174001").unwrap();
+    let installed_generation = ResourceBundleGenerationId::parse(
+        "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+    )
+    .unwrap();
+    let admission = NetworkAdmissionIntent::new(
+        NetworkAdmissionKey::new(
+            ResourceUid::parse("323e4567-e89b-42d3-a456-426614174002").unwrap(),
+            network_uid.clone(),
+            ResourceGeneration::new(4).unwrap(),
+            ResourceGeneration::new(7).unwrap(),
+            installed_generation.clone(),
+        ),
+        spec.clone(),
+        Vec::new(),
+    )
+    .unwrap()
+    .proof();
     ReconcileInput {
         spec,
         mdns_enabled: false,
         network_uid: network_uid.clone(),
         network_generation: ResourceGeneration::new(4).unwrap(),
-        installed_generation: ResourceBundleGenerationId::parse(
-            "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
-        )
-        .unwrap(),
+        attachment_generation: ResourceGeneration::new(7).unwrap(),
+        installed_generation,
+        admission,
         artifact_catalog: vec![ArtifactCatalogEntry::new(
             BoundedToken::parse("net-vm-base").unwrap(),
             ArtifactKind::NixosSystem,
         )],
-        peer_networks: Vec::new(),
         user_ready: true,
         host_memory_budget_available: 8 * 1024 * 1024,
         volume_ready,

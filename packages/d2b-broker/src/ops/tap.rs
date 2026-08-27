@@ -22,15 +22,15 @@
 
 use crate::ops::exec_reconcile::{ReconcileExecError, ReconcileExecutor, SystemLiveExec};
 use d2b_core::bundle_resolver::{BundleResolver, ResolvedMacvtapIntent};
-use d2b_core::host::{HostJson, TapRole};
 use d2b_core::host_w3::TapRoleW3;
-use d2b_core::manifest_v04::VmEntry;
+use d2b_contracts_resource::v3::NetworkIfRole;
 use d2b_host::bridge_port::BridgePortFlagSet;
-use d2b_host::ifname::{DerivedRole, IfName, derive_from_env_vm};
+use d2b_host::ifname::IfName;
 use d2b_host::netlink::{
-    LinkKind, LinkSpec, NetlinkBackend, NetlinkError, TapOwner, fake::FakeBackend,
-    ipv6_off_sequence, readback_bridge_port_flags,
+    NetlinkBackend, NetlinkError, readback_bridge_port_flags,
 };
+#[cfg(test)]
+use d2b_host::netlink::{LinkKind, LinkSpec, TapOwner, fake::FakeBackend, ipv6_off_sequence};
 use std::io::ErrorKind;
 use std::os::fd::{AsFd, OwnedFd};
 use std::path::{Path, PathBuf};
@@ -43,6 +43,7 @@ use std::time::Duration;
 /// request never carries this directly - the runtime fetches it from
 /// the bundle session state (per H1 wire-refactor) and supplies it
 /// alongside [`CreateTapRequest`].
+#[cfg(test)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum NmUnmanagedOutcome {
     /// `ApplyNmUnmanaged` ran successfully and every declared ifname
@@ -59,6 +60,7 @@ pub enum NmUnmanagedOutcome {
     NotApplied,
 }
 
+#[cfg(test)]
 impl NmUnmanagedOutcome {
     pub fn satisfied(self) -> bool {
         matches!(
@@ -72,11 +74,13 @@ impl NmUnmanagedOutcome {
 /// Gate carried by every TAP-create operation so the runtime can
 /// thread the prior `ApplyNmUnmanaged` outcome from the bundle
 /// session state without round-tripping it over the wire request.
+#[cfg(test)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct TapCreateGate {
     pub nm_unmanaged_applied: NmUnmanagedOutcome,
 }
 
+#[cfg(test)]
 impl TapCreateGate {
     /// Convenience constructor for the no-NM-detected coexist case.
     pub const fn nm_absent_coexist() -> Self {
@@ -96,10 +100,10 @@ impl TapCreateGate {
     }
 }
 
+#[cfg(test)]
 #[derive(Debug, Clone)]
 pub struct CreateTapRequest {
-    pub env: String,
-    pub vm: Option<String>,
+    pub ifname: IfName,
     pub mtu: Option<u32>,
     pub mac: Option<[u8; 6]>,
     /// Persistent mode: bind `TUNSETOWNER`/`TUNSETGROUP` to this
@@ -107,6 +111,7 @@ pub struct CreateTapRequest {
     pub persistent_owner: Option<TapOwner>,
 }
 
+#[cfg(test)]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CreateTapAudit {
     pub ifname_derived: String,
@@ -118,11 +123,7 @@ pub struct CreateTapAudit {
     pub nm_unmanaged_outcome: NmUnmanagedOutcome,
 }
 
-pub fn derive_tap_ifname(req: &CreateTapRequest) -> Result<IfName, NetlinkError> {
-    derive_from_env_vm(&req.env, req.vm.as_deref(), DerivedRole::Tap, None)
-        .map_err(|e| NetlinkError::Backend(e.to_string()))
-}
-
+#[cfg(test)]
 pub fn create_tap<B: NetlinkBackend>(
     backend: &mut B,
     req: &CreateTapRequest,
@@ -133,7 +134,7 @@ pub fn create_tap<B: NetlinkBackend>(
             "nm-unmanaged-pre-create-required".to_owned(),
         ));
     }
-    let ifname = derive_tap_ifname(req)?;
+    let ifname = req.ifname.clone();
     let spec = LinkSpec {
         ifname: ifname.clone(),
         kind: LinkKind::Tap,
@@ -194,12 +195,29 @@ pub fn live_create_tap_fd(
     req: &d2b_contracts_broker::broker_wire::CreateTapFdRequest,
     _audit_log: &crate::audit::AuditLog,
 ) -> Result<LiveCreateTapOutcome, super::OpError> {
+    let provenance = network_provenance_fd(req);
+    require_installed_generation(resolver, &provenance)?;
     let intent = resolver
-        .resolve_tap_intent(req.vm_id.as_str(), req.role_id.as_str())
+        .resolve_tap_intent(
+            req.vm_id.as_str(),
+            req.role_id.as_str(),
+            provenance.clone(),
+            req.attachment_id.clone(),
+        )
         .ok_or_else(|| super::OpError::UnknownSubject {
             operation: "CreateTapFd",
             subject: req.vm_id.as_str().to_owned(),
         })?;
+    verify_tap_intent(
+        &intent,
+        &req.bundle_tap_intent_ref,
+        &req.vm_id,
+        &req.role_id,
+        &provenance,
+        &req.attachment_id,
+        &req.admitted_interface_names,
+    )?;
+    ensure_bridge_owned(&intent)?;
     let dev_net =
         crate::sys::path_safe::open_dir_path_safe(Path::new("/dev/net")).map_err(|e| {
             super::OpError::Io {
@@ -219,6 +237,13 @@ pub fn live_create_tap_fd(
             detail: e.to_string(),
         }
     })?;
+    if let Err(error) = set_tap_ownership_marker(&intent) {
+        let _ = run_ip_link(
+            &ip_binary_path(),
+            &["link", "delete", "dev", intent.tap_ifname.as_str()],
+        );
+        return Err(error);
+    }
     attach_tap_to_bridge(&intent.tap_ifname, &intent.bridge_ifname)?;
     Ok(LiveCreateTapOutcome {
         bridge_ifname: Some(intent.bridge_ifname),
@@ -233,12 +258,29 @@ pub fn live_create_persistent_tap(
     req: &d2b_contracts_broker::broker_wire::CreatePersistentTapRequest,
     _audit_log: &crate::audit::AuditLog,
 ) -> Result<LiveCreateTapOutcome, super::OpError> {
+    let provenance = network_provenance(req);
+    require_installed_generation(resolver, &provenance)?;
     let intent = resolver
-        .resolve_tap_intent(req.vm_id.as_str(), req.role_id.as_str())
+        .resolve_tap_intent(
+            req.vm_id.as_str(),
+            req.role_id.as_str(),
+            provenance.clone(),
+            req.attachment_id.clone(),
+        )
         .ok_or_else(|| super::OpError::UnknownSubject {
             operation: "CreatePersistentTap",
             subject: req.vm_id.as_str().to_owned(),
         })?;
+    verify_tap_intent(
+        &intent,
+        &req.bundle_tap_intent_ref,
+        &req.vm_id,
+        &req.role_id,
+        &provenance,
+        &req.attachment_id,
+        &req.admitted_interface_names,
+    )?;
+    ensure_bridge_owned(&intent)?;
     if let Some(existing) = existing_persistent_tap(&intent)? {
         return Ok(existing);
     }
@@ -273,6 +315,13 @@ pub fn live_create_persistent_tap(
         path: PathBuf::from("/dev/net/tun"),
         detail: e.to_string(),
     })?;
+    if let Err(error) = set_tap_ownership_marker(&intent) {
+        let _ = run_ip_link(
+            &ip_binary_path(),
+            &["link", "delete", "dev", intent.tap_ifname.as_str()],
+        );
+        return Err(error);
+    }
     if let Err(error) = attach_tap_to_bridge(&intent.tap_ifname, &intent.bridge_ifname) {
         return match run_ip_link(
             &ip_binary_path(),
@@ -329,7 +378,30 @@ fn existing_persistent_tap(
         .pointer("/linkinfo/info_kind")
         .and_then(serde_json::Value::as_str);
     let master = link.get("master").and_then(serde_json::Value::as_str);
-    if !matches!(kind, Some("tun" | "tap")) || master != Some(intent.bridge_ifname.as_str()) {
+    let marker = link
+        .get("ifalias")
+        .and_then(serde_json::Value::as_str)
+        .map(str::to_owned)
+        .or_else(|| {
+            std::fs::read_to_string(
+                PathBuf::from("/sys/class/net")
+                    .join(intent.tap_ifname.as_str())
+                    .join("ifalias"),
+            )
+            .ok()
+            .map(|value| value.trim().to_owned())
+        });
+    let expected_marker = expected_tap_marker(intent);
+    if !matches!(kind, Some("tun" | "tap"))
+        || master != Some(intent.bridge_ifname.as_str())
+        || marker.as_deref() != Some(expected_marker.as_str())
+    {
+        if marker.as_deref() != Some(expected_marker.as_str()) {
+            return Err(super::OpError::Refused {
+                operation: "CreatePersistentTap",
+                reason: "foreign-tap-ownership-marker".to_owned(),
+            });
+        }
         return Err(super::OpError::InvalidInput {
             detail: "existing persistent TAP does not match trusted bridge intent".to_owned(),
         });
@@ -343,6 +415,187 @@ fn existing_persistent_tap(
         tap_ifname: intent.tap_ifname.clone(),
         fd: None,
     }))
+}
+
+fn network_provenance(
+    req: &d2b_contracts_broker::broker_wire::CreatePersistentTapRequest,
+) -> d2b_contracts_resource::v3::NetworkProvenance {
+    d2b_contracts_resource::v3::NetworkProvenance::new(
+        req.zone_uid.clone(),
+        req.network_uid.clone(),
+        req.network_generation,
+        req.attachment_generation,
+        req.bundle_generation.clone(),
+    )
+}
+
+fn network_provenance_fd(
+    req: &d2b_contracts_broker::broker_wire::CreateTapFdRequest,
+) -> d2b_contracts_resource::v3::NetworkProvenance {
+    d2b_contracts_resource::v3::NetworkProvenance::new(
+        req.zone_uid.clone(),
+        req.network_uid.clone(),
+        req.network_generation,
+        req.attachment_generation,
+        req.bundle_generation.clone(),
+    )
+}
+
+fn verify_tap_intent(
+    intent: &d2b_core::bundle_resolver::ResolvedTapIntent,
+    bundle_tap_intent_ref: &d2b_contracts::types::BundleOpId,
+    vm_id: &d2b_contracts::types::VmId,
+    role_id: &d2b_contracts::types::RoleId,
+    provenance: &d2b_contracts_resource::v3::NetworkProvenance,
+    attachment_id: &d2b_contracts_resource::v3::ResourceUid,
+    admitted_interface_names: &[d2b_contracts_resource::v3::IfName],
+) -> Result<(), super::OpError> {
+    let canonical_role_id = d2b_core::bundle_resolver::canonical_tap_role_id(role_id.as_str());
+    let expected_intent = d2b_core::bundle_resolver::intent_id_network_tap(
+        provenance.zone_uid(),
+        provenance.network_uid(),
+        attachment_id,
+        provenance.network_generation(),
+        provenance.attachment_generation(),
+        provenance.bundle_generation(),
+        canonical_role_id,
+        vm_id.as_str(),
+    );
+    if bundle_tap_intent_ref.as_str() != expected_intent
+        || intent.intent_id != expected_intent
+        || intent.vm_name != vm_id.as_str()
+        || intent.role_id != canonical_role_id
+        || intent.provenance != *provenance
+    {
+        return Err(super::OpError::Refused {
+            operation: "CreateTap",
+            reason: "network-admission-mismatch".to_owned(),
+        });
+    }
+    let (bridge_role, tap_role, attachment) = match intent.tap_role {
+        TapRoleW3::NetVmLan => (NetworkIfRole::LanBridge, NetworkIfRole::NetVmLanTap, None),
+        TapRoleW3::UplinkP2P => {
+            (NetworkIfRole::UplinkBridge, NetworkIfRole::NetVmUplinkTap, None)
+        }
+        TapRoleW3::WorkloadLanIsolated | TapRoleW3::WorkloadLanEastWest => (
+            NetworkIfRole::LanBridge,
+            NetworkIfRole::WorkloadGuestTap,
+            Some(attachment_id),
+        ),
+    };
+    let expected_bridge = d2b_contracts_resource::v3::derive_network_ifname(
+        provenance.zone_uid(),
+        provenance.network_uid(),
+        bridge_role,
+        None,
+    )
+    .map_err(|_| super::OpError::Refused {
+        operation: "CreateTap",
+        reason: "network-admission-mismatch".to_owned(),
+    })?;
+    let expected_tap = d2b_contracts_resource::v3::derive_network_ifname(
+        provenance.zone_uid(),
+        provenance.network_uid(),
+        tap_role,
+        attachment,
+    )
+    .map_err(|_| super::OpError::Refused {
+        operation: "CreateTap",
+        reason: "network-admission-mismatch".to_owned(),
+    })?;
+    if intent.bridge_ifname != expected_bridge || intent.tap_ifname != expected_tap {
+        return Err(super::OpError::Refused {
+            operation: "CreateTap",
+            reason: "network-admission-mismatch".to_owned(),
+        });
+    }
+    if !admitted_interface_names.iter().any(|ifname| ifname == &expected_bridge)
+        || !admitted_interface_names.iter().any(|ifname| ifname == &expected_tap)
+    {
+        return Err(super::OpError::Refused {
+            operation: "CreateTap",
+            reason: "network-admission-mismatch".to_owned(),
+        });
+    }
+    Ok(())
+}
+
+fn require_installed_generation(
+    resolver: &BundleResolver,
+    provenance: &d2b_contracts_resource::v3::NetworkProvenance,
+) -> Result<(), super::OpError> {
+    let Some(installed) = resolver.installed_generation_identity() else {
+        return Err(super::OpError::Refused {
+            operation: "CreateTap",
+            reason: "stale-bundle-generation".to_owned(),
+        });
+    };
+    if installed.as_str() != provenance.bundle_generation().as_str() {
+        return Err(super::OpError::Refused {
+            operation: "CreateTap",
+            reason: "stale-bundle-generation".to_owned(),
+        });
+    }
+    if !resolver.has_zone_uid(provenance.zone_uid()) {
+        return Err(super::OpError::Refused {
+            operation: "CreateTap",
+            reason: "network-zone-unknown".to_owned(),
+        });
+    }
+    Ok(())
+}
+
+fn expected_bridge_marker(intent: &d2b_core::bundle_resolver::ResolvedTapIntent) -> String {
+    let variant = if intent.tap_role == TapRoleW3::UplinkP2P {
+        "uplink"
+    } else {
+        "lan"
+    };
+    let provenance = &intent.provenance;
+    format!(
+        "d2b managed: {}",
+        d2b_contracts_resource::v3::derive_network_ownership_marker(
+            provenance,
+            &format!("bridge:{variant}"),
+        )
+    )
+}
+
+fn expected_tap_marker(intent: &d2b_core::bundle_resolver::ResolvedTapIntent) -> String {
+    format!("d2b managed: {}", intent.ownership_marker)
+}
+
+fn ensure_bridge_owned(
+    intent: &d2b_core::bundle_resolver::ResolvedTapIntent,
+) -> Result<(), super::OpError> {
+    let marker_path = PathBuf::from("/sys/class/net")
+        .join(intent.bridge_ifname.as_str())
+        .join("ifalias");
+    let marker = std::fs::read_to_string(marker_path).ok();
+    if marker.as_deref().map(str::trim) != Some(expected_bridge_marker(intent).as_str()) {
+        return Err(super::OpError::Refused {
+            operation: "CreateTap",
+            reason: "foreign-bridge-ownership-marker".to_owned(),
+        });
+    }
+    Ok(())
+}
+
+fn set_tap_ownership_marker(
+    intent: &d2b_core::bundle_resolver::ResolvedTapIntent,
+) -> Result<(), super::OpError> {
+    let marker = expected_tap_marker(intent);
+    run_ip_link(
+        &ip_binary_path(),
+        &[
+            "link",
+            "set",
+            "dev",
+            intent.tap_ifname.as_str(),
+            "alias",
+            marker.as_str(),
+        ],
+    )
 }
 
 pub fn live_create_macvtap_fd(intent: &ResolvedMacvtapIntent) -> Result<OwnedFd, super::OpError> {
@@ -551,6 +804,7 @@ fn run_ip_link(ip: &Path, args: &[&str]) -> Result<(), super::OpError> {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum LiveSetBridgePortFlagsError {
     Resolve(String),
+    ForeignOwnership,
     ReconcileExec(ReconcileExecError),
     ReadbackMismatch {
         path: PathBuf,
@@ -563,6 +817,7 @@ impl std::fmt::Display for LiveSetBridgePortFlagsError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::Resolve(detail) => write!(f, "set-bridge-port-flags resolve: {detail}"),
+            Self::ForeignOwnership => f.write_str("set-bridge-port-flags foreign ownership marker"),
             Self::ReconcileExec(err) => write!(f, "set-bridge-port-flags: {err}"),
             Self::ReadbackMismatch {
                 path,
@@ -585,15 +840,27 @@ struct LiveBridgePortTarget {
     bridge: String,
     port: String,
     role: TapRoleW3,
+    bridge_marker: Option<String>,
 }
 
 pub fn live_set_bridge_port_flags(
     _executor: &dyn ReconcileExecutor,
-    resolver: &BundleResolver,
+    _resolver: &BundleResolver,
     req: &d2b_contracts_broker::broker_wire::SetBridgePortFlagsRequest,
 ) -> Result<d2b_contracts_broker::broker_wire::BridgePortFlagsResponse, LiveSetBridgePortFlagsError>
 {
-    let target = resolve_live_bridge_port_target(resolver, req)?;
+    let target = resolve_live_bridge_port_target(req)?;
+    let marker_path = PathBuf::from("/sys/class/net")
+        .join(target.bridge.as_str())
+        .join("ifalias");
+    if target.bridge_marker.as_deref()
+        != std::fs::read_to_string(marker_path)
+            .ok()
+            .map(|value| value.trim().to_owned())
+            .as_deref()
+    {
+        return Err(LiveSetBridgePortFlagsError::ForeignOwnership);
+    }
     let ip_binary = ip_binary_path();
     live_set_bridge_port_flags_with_ops(
         &target,
@@ -639,145 +906,118 @@ where
 }
 
 fn resolve_live_bridge_port_target(
-    resolver: &BundleResolver,
     req: &d2b_contracts_broker::broker_wire::SetBridgePortFlagsRequest,
 ) -> Result<LiveBridgePortTarget, LiveSetBridgePortFlagsError> {
-    let vm_name = req.vm_id.as_str();
-    let manifest_vm =
-        resolver.manifest.vms.get(vm_name).ok_or_else(|| {
-            LiveSetBridgePortFlagsError::Resolve(format!("unknown vm_id {vm_name}"))
-        })?;
-    let env_name = manifest_vm.env.as_deref().ok_or_else(|| {
-        LiveSetBridgePortFlagsError::Resolve(format!("vm {vm_name} is not attached to an env"))
-    })?;
-    let env = resolver
-        .host
-        .environments
-        .iter()
-        .find(|env| env.env == env_name)
-        .ok_or_else(|| {
-            LiveSetBridgePortFlagsError::Resolve(format!("host.json missing env {env_name}"))
-        })?;
-    let role = tap_role_from_role_id(req.role_id.as_str())?;
-    let row = env
-        .bridge_port_flags
-        .iter()
-        .find(|row| row.role == role)
-        .ok_or_else(|| {
-            LiveSetBridgePortFlagsError::Resolve(format!(
-                "host.json missing bridgePortFlags row for env {env_name} role {}",
-                req.role_id.as_str()
-            ))
-        })?;
-    let (bridge, port) = match role {
-        TapRole::WorkloadLan => (
-            resolved_bundle_ifname(
-                &resolver.host,
-                env_name,
-                None,
-                TapRole::NetVmLan,
-                env.bridge.as_str(),
-            ),
-            resolved_bundle_ifname(
-                &resolver.host,
-                env_name,
-                Some(vm_name),
-                TapRole::WorkloadLan,
-                &manifest_vm.tap,
-            ),
+    if let Some(context) = req.network_tap_context.as_ref() {
+        return resolve_uid_bridge_port_target(context, req.vm_id.as_str(), req.role_id.as_str());
+    }
+    Err(LiveSetBridgePortFlagsError::Resolve(
+        "network admission context is required".to_owned(),
+    ))
+}
+
+fn resolve_uid_bridge_port_target(
+    context: &d2b_contracts_broker::broker_wire::NetworkTapContext,
+    vm_id: &str,
+    role_id: &str,
+) -> Result<LiveBridgePortTarget, LiveSetBridgePortFlagsError> {
+    let provenance = d2b_contracts_resource::v3::NetworkProvenance::new(
+        context.zone_uid.clone(),
+        context.network_uid.clone(),
+        context.network_generation,
+        context.attachment_generation,
+        context.bundle_generation.clone(),
+    );
+    let is_net_vm = vm_id
+        == d2b_contracts_resource::v3::derive_network_child_name(
+            &context.network_uid,
+            "vm",
+        );
+    let (bridge_role, tap_role, port_role) = if is_net_vm {
+        (
+            d2b_contracts_resource::v3::NetworkIfRole::LanBridge,
+            d2b_contracts_resource::v3::NetworkIfRole::NetVmLanTap,
+            TapRoleW3::NetVmLan,
+        )
+    } else {
+        match role_id {
+        "net-vm-lan" => (
+            d2b_contracts_resource::v3::NetworkIfRole::LanBridge,
+            d2b_contracts_resource::v3::NetworkIfRole::NetVmLanTap,
+            TapRoleW3::NetVmLan,
         ),
-        TapRole::NetVmLan => (
-            resolved_bundle_ifname(
-                &resolver.host,
-                env_name,
-                None,
-                TapRole::NetVmLan,
-                env.bridge.as_str(),
-            ),
-            resolved_bundle_ifname(
-                &resolver.host,
-                env_name,
-                Some(vm_name),
-                TapRole::NetVmLan,
-                &format!("{env_name}-l1"),
-            ),
+        "uplink" => (
+            d2b_contracts_resource::v3::NetworkIfRole::UplinkBridge,
+            d2b_contracts_resource::v3::NetworkIfRole::NetVmUplinkTap,
+            TapRoleW3::UplinkP2P,
         ),
-        TapRole::Uplink => {
-            let net_vm = net_vm_for_env(resolver, env_name)?;
-            let uplink_bridge = net_vm.bridge.as_deref().ok_or_else(|| {
-                LiveSetBridgePortFlagsError::Resolve(format!(
-                    "net VM for env {env_name} has no bridge field"
-                ))
-            })?;
-            (
-                resolved_bundle_ifname(
-                    &resolver.host,
-                    env_name,
-                    None,
-                    TapRole::Uplink,
-                    uplink_bridge,
-                ),
-                resolved_bundle_ifname(
-                    &resolver.host,
-                    env_name,
-                    Some(&net_vm.name),
-                    TapRole::Uplink,
-                    &net_vm.tap,
-                ),
-            )
+        "workload-lan" => (
+            d2b_contracts_resource::v3::NetworkIfRole::LanBridge,
+            d2b_contracts_resource::v3::NetworkIfRole::WorkloadGuestTap,
+            TapRoleW3::WorkloadLanIsolated,
+        ),
+        other => {
+            return Err(LiveSetBridgePortFlagsError::Resolve(format!(
+                "unsupported bridge-port role_id {other}"
+            )));
+        }
         }
     };
-    let role = match role {
-        TapRole::NetVmLan => TapRoleW3::NetVmLan,
-        TapRole::Uplink => TapRoleW3::UplinkP2P,
-        TapRole::WorkloadLan if row.isolated => TapRoleW3::WorkloadLanIsolated,
-        TapRole::WorkloadLan => TapRoleW3::WorkloadLanEastWest,
-    };
-    Ok(LiveBridgePortTarget { bridge, port, role })
-}
-
-fn tap_role_from_role_id(role_id: &str) -> Result<TapRole, LiveSetBridgePortFlagsError> {
-    match role_id {
-        "workload-lan" => Ok(TapRole::WorkloadLan),
-        "net-vm-lan" => Ok(TapRole::NetVmLan),
-        "uplink" => Ok(TapRole::Uplink),
-        other => Err(LiveSetBridgePortFlagsError::Resolve(format!(
-            "unsupported bridge-port role_id {other}"
-        ))),
-    }
-}
-
-fn resolved_bundle_ifname(
-    host: &HostJson,
-    env: &str,
-    vm: Option<&str>,
-    role: TapRole,
-    fallback: &str,
-) -> String {
-    host.if_name_mappings
+    let bridge = d2b_contracts_resource::v3::derive_network_ifname(
+        provenance.zone_uid(),
+        provenance.network_uid(),
+        bridge_role,
+        None,
+    )
+    .map_err(|_| LiveSetBridgePortFlagsError::Resolve("derived bridge name invalid".to_owned()))?;
+    let port = d2b_contracts_resource::v3::derive_network_ifname(
+        provenance.zone_uid(),
+        provenance.network_uid(),
+        tap_role,
+        match tap_role {
+            d2b_contracts_resource::v3::NetworkIfRole::NetVmLanTap
+            | d2b_contracts_resource::v3::NetworkIfRole::NetVmUplinkTap => None,
+            d2b_contracts_resource::v3::NetworkIfRole::WorkloadGuestTap
+            | d2b_contracts_resource::v3::NetworkIfRole::ExternalMacvtap => {
+                Some(&context.attachment_id)
+            }
+            d2b_contracts_resource::v3::NetworkIfRole::LanBridge
+            | d2b_contracts_resource::v3::NetworkIfRole::UplinkBridge => None,
+        },
+    )
+    .map_err(|_| LiveSetBridgePortFlagsError::Resolve("derived port name invalid".to_owned()))?;
+    if !context
+        .admitted_interface_names
         .iter()
-        .find(|mapping| {
-            mapping.env == env
-                && mapping.vm.as_deref() == vm
-                && mapping.role == role
-                && mapping.user_visible_name == fallback
-        })
-        .map(|mapping| mapping.derived_ifname.as_str().to_owned())
-        .unwrap_or_else(|| fallback.to_owned())
-}
-
-fn net_vm_for_env<'a>(
-    resolver: &'a BundleResolver,
-    env: &str,
-) -> Result<&'a VmEntry, LiveSetBridgePortFlagsError> {
-    resolver
-        .manifest
-        .vms
-        .values()
-        .find(|vm| vm.is_net_vm && vm.env.as_deref() == Some(env))
-        .ok_or_else(|| {
-            LiveSetBridgePortFlagsError::Resolve(format!("manifest missing net VM for env {env}"))
-        })
+        .any(|ifname| ifname == &bridge)
+        || !context
+            .admitted_interface_names
+            .iter()
+            .any(|ifname| ifname == &port)
+    {
+        return Err(LiveSetBridgePortFlagsError::Resolve(
+            "network admission mismatch".to_owned(),
+        ));
+    }
+    Ok(LiveBridgePortTarget {
+        bridge: bridge.as_str().to_owned(),
+        port: port.as_str().to_owned(),
+        role: port_role.clone(),
+        bridge_marker: Some(format!(
+            "d2b managed: {}",
+            d2b_contracts_resource::v3::derive_network_ownership_marker(
+                &provenance,
+                &format!(
+                    "bridge:{}",
+                    if port_role == TapRoleW3::UplinkP2P {
+                        "uplink"
+                    } else {
+                        "lan"
+                    }
+                ),
+            )
+        )),
+    })
 }
 
 fn ip_binary_path() -> PathBuf {
@@ -962,6 +1202,7 @@ const fn bool_to_ip_value(value: bool) -> &'static str {
 }
 
 /// Convenience constructor used by tests / fuzzers.
+#[cfg(test)]
 pub fn fake_backend() -> FakeBackend {
     FakeBackend::new()
 }
@@ -978,6 +1219,59 @@ mod tests {
     };
     use d2b_core::manifest_v04::ManifestV04;
     use d2b_core::processes::ProcessesJson;
+
+    fn network_tap_context() -> d2b_contracts_broker::broker_wire::NetworkTapContext {
+        let zone_uid = d2b_contracts_resource::v3::ResourceUid::parse(
+            "223e4567-e89b-42d3-a456-426614174001",
+        )
+        .unwrap();
+        let network_uid = d2b_contracts_resource::v3::ResourceUid::parse(
+            "323e4567-e89b-42d3-a456-426614174002",
+        )
+        .unwrap();
+        let attachment_id = d2b_contracts_resource::v3::ResourceUid::parse(
+            "423e4567-e89b-42d3-a456-426614174003",
+        )
+        .unwrap();
+        let admitted_interface_names = [
+            (NetworkIfRole::LanBridge, None),
+            (NetworkIfRole::UplinkBridge, None),
+            (NetworkIfRole::NetVmLanTap, None),
+            (NetworkIfRole::NetVmUplinkTap, None),
+        ]
+        .into_iter()
+        .filter_map(|(role, attachment)| {
+            d2b_contracts_resource::v3::derive_network_ifname(
+                &zone_uid,
+                &network_uid,
+                role,
+                attachment,
+            )
+            .ok()
+        })
+        .chain(
+            d2b_contracts_resource::v3::derive_network_ifname(
+                &zone_uid,
+                &network_uid,
+                NetworkIfRole::WorkloadGuestTap,
+                Some(&attachment_id),
+            )
+            .ok(),
+        )
+        .collect();
+        d2b_contracts_broker::broker_wire::NetworkTapContext {
+            zone_uid,
+            network_uid,
+            attachment_id,
+            network_generation: d2b_contracts_resource::v3::ResourceGeneration::new(4).unwrap(),
+            attachment_generation: d2b_contracts_resource::v3::ResourceGeneration::new(7).unwrap(),
+            bundle_generation: d2b_contracts_resource::v3::ResourceBundleGenerationId::parse(
+                "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+            )
+            .unwrap(),
+            admitted_interface_names,
+        }
+    }
 
     fn live_bridge_flag_resolver() -> BundleResolver {
         let bundle = Bundle {
@@ -1113,8 +1407,7 @@ mod tests {
     fn create_tap_fd_runs_ipv6_off_sequence() {
         let mut be = fake_backend();
         let req = CreateTapRequest {
-            env: "e".into(),
-            vm: Some("v".into()),
+            ifname: IfName::new("d2b-t-test0").unwrap(),
             mtu: Some(1500),
             mac: None,
             persistent_owner: None,
@@ -1129,8 +1422,7 @@ mod tests {
     fn create_persistent_tap_sets_owner() {
         let mut be = fake_backend();
         let req = CreateTapRequest {
-            env: "e".into(),
-            vm: Some("v".into()),
+            ifname: IfName::new("d2b-t-test0").unwrap(),
             mtu: None,
             mac: None,
             persistent_owner: Some(TapOwner {
@@ -1151,8 +1443,7 @@ mod tests {
     fn create_tap_refuses_without_nm_unmanaged_gate() {
         let mut be = fake_backend();
         let req = CreateTapRequest {
-            env: "e".into(),
-            vm: Some("v".into()),
+            ifname: IfName::new("d2b-t-test0").unwrap(),
             mtu: None,
             mac: None,
             persistent_owner: None,
@@ -1256,14 +1547,13 @@ mod tests {
     fn set_bridge_port_flags_readback_matches() {
         let mut be = fake_backend();
         let req = CreateTapRequest {
-            env: "e".into(),
-            vm: Some("v".into()),
+            ifname: IfName::new("d2b-t-test0").unwrap(),
             mtu: None,
             mac: None,
             persistent_owner: None,
         };
         let _ = create_tap(&mut be, &req, TapCreateGate::applied()).unwrap();
-        let ifname = derive_tap_ifname(&req).unwrap();
+        let ifname = req.ifname.clone();
         let audit = set_bridge_port_flags(
             &mut be,
             &SetBridgePortFlagsRequest {
@@ -1279,8 +1569,7 @@ mod tests {
     fn set_bridge_port_flags_readback_drift_fails_closed() {
         let mut be = fake_backend();
         let req = CreateTapRequest {
-            env: "e".into(),
-            vm: Some("v".into()),
+            ifname: IfName::new("d2b-t-test0").unwrap(),
             mtu: None,
             mac: None,
             persistent_owner: None,
@@ -1288,7 +1577,7 @@ mod tests {
         let _ = create_tap(&mut be, &req, TapCreateGate::applied()).unwrap();
         // Force a foreign actor to flip the flags on readback.
         be.force_bridge_port_flags = Some(BridgePortFlagSet::ALL_OFF);
-        let ifname = derive_tap_ifname(&req).unwrap();
+        let ifname = req.ifname.clone();
         let err = set_bridge_port_flags(
             &mut be,
             &SetBridgePortFlagsRequest {
@@ -1355,13 +1644,13 @@ mod tests {
 
     #[test]
     fn live_set_bridge_port_flags_uses_netlink_apply_and_readback() {
-        let resolver = live_bridge_flag_resolver();
         let req = d2b_contracts_broker::broker_wire::SetBridgePortFlagsRequest {
             vm_id: d2b_contracts::types::VmId::new("corp-vm"),
             role_id: d2b_contracts::types::RoleId::new("workload-lan"),
+            network_tap_context: Some(network_tap_context()),
             tracing_span_id: None,
         };
-        let target = resolve_live_bridge_port_target(&resolver, &req).expect("resolve bridge port");
+        let target = resolve_live_bridge_port_target(&req).expect("resolve bridge port");
         let applied = std::cell::RefCell::new(Vec::new());
 
         let response = live_set_bridge_port_flags_with_ops(
@@ -1371,7 +1660,7 @@ mod tests {
                 Ok(())
             },
             |port| {
-                assert_eq!(port, "d2b-tWORK010");
+                assert!(port.starts_with("d2b-t"));
                 Ok(BridgePortFlagSet::defaults_for(
                     TapRoleW3::WorkloadLanIsolated,
                 ))
@@ -1379,14 +1668,14 @@ mod tests {
         )
         .expect("live bridge flags");
 
-        assert_eq!(response.bridge.as_str(), "d2b-bWORK000");
-        assert_eq!(response.port.as_str(), "d2b-tWORK010");
+        assert!(response.bridge.as_str().starts_with("d2b-b"));
+        assert!(response.port.as_str().starts_with("d2b-t"));
         assert!(response.isolated);
         assert!(response.neigh_suppress);
         assert_eq!(
             applied.into_inner(),
             vec![(
-                "d2b-tWORK010".to_owned(),
+                target.port.clone(),
                 BridgePortFlagSet::defaults_for(TapRoleW3::WorkloadLanIsolated),
             )]
         );
@@ -1394,13 +1683,13 @@ mod tests {
 
     #[test]
     fn live_set_bridge_port_flags_fails_closed_on_readback_drift() {
-        let resolver = live_bridge_flag_resolver();
         let req = d2b_contracts_broker::broker_wire::SetBridgePortFlagsRequest {
             vm_id: d2b_contracts::types::VmId::new("corp-vm"),
             role_id: d2b_contracts::types::RoleId::new("workload-lan"),
+            network_tap_context: Some(network_tap_context()),
             tracing_span_id: None,
         };
-        let target = resolve_live_bridge_port_target(&resolver, &req).expect("resolve bridge port");
+        let target = resolve_live_bridge_port_target(&req).expect("resolve bridge port");
         let err = live_set_bridge_port_flags_with_ops(
             &target,
             |_port, _flags| Ok(()),
@@ -1410,7 +1699,37 @@ mod tests {
         assert!(matches!(
             err,
             LiveSetBridgePortFlagsError::ReadbackMismatch { path, .. }
-                if path == PathBuf::from("bridge-port:d2b-tWORK010:isolated")
+                if path == PathBuf::from(format!("bridge-port:{}:isolated", target.port))
+        ));
+    }
+
+    #[test]
+    fn live_bridge_port_resolution_rejects_missing_network_context() {
+        let request = d2b_contracts_broker::broker_wire::SetBridgePortFlagsRequest {
+            vm_id: d2b_contracts::types::VmId::new("corp-vm"),
+            role_id: d2b_contracts::types::RoleId::new("workload-lan"),
+            network_tap_context: None,
+            tracing_span_id: None,
+        };
+        assert!(matches!(
+            resolve_live_bridge_port_target(&request),
+            Err(LiveSetBridgePortFlagsError::Resolve(_))
+        ));
+    }
+
+    #[test]
+    fn live_bridge_port_resolution_rejects_a_non_admitted_tap_pair() {
+        let mut context = network_tap_context();
+        context.admitted_interface_names.pop();
+        let request = d2b_contracts_broker::broker_wire::SetBridgePortFlagsRequest {
+            vm_id: d2b_contracts::types::VmId::new("corp-vm"),
+            role_id: d2b_contracts::types::RoleId::new("workload-lan"),
+            network_tap_context: Some(context),
+            tracing_span_id: None,
+        };
+        assert!(matches!(
+            resolve_live_bridge_port_target(&request),
+            Err(LiveSetBridgePortFlagsError::Resolve(_))
         ));
     }
 }

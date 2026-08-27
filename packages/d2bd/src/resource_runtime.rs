@@ -79,6 +79,14 @@ use d2b_core_controller::zone_status::{
 use d2b_provider_clipboard_wayland::Policy as ClipboardPolicy;
 use d2b_provider_display_wayland::WaylandSessionSpec;
 use d2b_provider_notification_desktop::{Category, GuestSourceConfig, NotificationProviderConfig};
+use d2b_provider_network_local::{
+    controller::{
+        NetworkAdmissionIntent, NetworkAdmissionKey, NetworkAdmissionProof, NetworkEffectError,
+    },
+    observe::HostNetworkOccupancy,
+    routes::RouteTuple,
+    admit_external_nic_claims, ExternalNicAdmissionError, ExternalNicClaim,
+};
 use d2b_provider_system_core::{
     HostCapabilityClass, HostObservationReport, HostProbeEffectPort, HostProbeMetadata,
     HostReconciler, MinijailPlatformGate, UserBinding, UserDiscoveryEffectPort, UserIdentityDigest,
@@ -2395,6 +2403,54 @@ impl ZoneResourceRuntime {
             .lock()
             .map(|status| status.clone())
             .map_err(|_| ResourceRuntimeError::HandlerNotReady)
+    }
+
+    /// Read committed resources for a root-owned Provider admission scan.
+    ///
+    /// This bypasses caller authorization intentionally: the result is used
+    /// only by the root supervisor to resolve same-Zone attachment
+    /// relationships before host effects. It never crosses the public API.
+    pub(crate) async fn committed_resources_of_type(
+        &self,
+        resource_type: &str,
+    ) -> Result<Vec<Value>, ResourceRuntimeError> {
+        let resource_type = ResourceTypeName::parse(resource_type.to_owned())
+            .map_err(|_| ResourceRuntimeError::RequestInvalid)?;
+        let mut cursor = None;
+        let mut out = Vec::new();
+        loop {
+            let page = self
+                .store
+                .list(StoreListRequest {
+                    operation: StoreOperationContext {
+                        operation_id: "network-admission-scan".to_owned(),
+                        idempotency_key: None,
+                        correlation_id: "network-admission-scan".to_owned(),
+                        trace_id: None,
+                        deadline_ms: 10_000,
+                    },
+                    zone: self.zone.clone(),
+                    resource_types: vec![resource_type.clone()],
+                    resource_names: Vec::new(),
+                    filters: Vec::new(),
+                    page_size: 512,
+                    cursor,
+                    projection: StoreProjection::Full,
+                })
+                .await
+                .map_err(|_| ResourceRuntimeError::StoreReadFailed)?;
+            for resource in page.resources {
+                out.push(
+                    serde_json::from_slice(&resource.canonical_json)
+                        .map_err(|_| ResourceRuntimeError::StoreReadFailed)?,
+                );
+            }
+            cursor = page.next_cursor;
+            if cursor.is_none() {
+                break;
+            }
+        }
+        Ok(out)
     }
 
     /// Publish a validated status projection from the real system-core
@@ -5174,10 +5230,424 @@ fn encode_public_mutation_response(
     Ok(Value::Object(body))
 }
 
+/// Root-supervisor ownership index for all local Network host effects.
+///
+/// The index is shared by every Zone runtime in one daemon. Callers must
+/// observe the host before admission; the index itself only commits a
+/// candidate after every CIDR, interface, and route collision check passes.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+struct NetworkAdmissionOwnerKey {
+    zone_uid: ResourceUid,
+    network_uid: ResourceUid,
+}
+
+impl NetworkAdmissionOwnerKey {
+    fn from_key(key: &NetworkAdmissionKey) -> Self {
+        Self {
+            zone_uid: key.zone_uid().clone(),
+            network_uid: key.network_uid().clone(),
+        }
+    }
+}
+
+#[derive(Default)]
+pub struct HostNetworkAdmissionIndex {
+    entries: BTreeMap<NetworkAdmissionOwnerKey, NetworkAdmissionIntent>,
+    retired: BTreeMap<NetworkAdmissionOwnerKey, BTreeSet<NetworkAdmissionKey>>,
+    released_floors: BTreeMap<NetworkAdmissionOwnerKey, (u64, u64)>,
+}
+
+fn route_conflicts(desired: &RouteTuple, occupied: &RouteTuple) -> bool {
+    if desired.table() != occupied.table() {
+        return false;
+    }
+    if desired.destination() == occupied.destination() {
+        return true;
+    }
+    let Some(desired_cidr) =
+        d2b_contracts_resource::v3::network::Ipv4Cidr::parse(desired.destination().to_owned())
+            .ok()
+    else {
+        return false;
+    };
+    let Some(occupied_cidr) =
+        d2b_contracts_resource::v3::network::Ipv4Cidr::parse(occupied.destination().to_owned())
+            .ok()
+    else {
+        return false;
+    };
+    d2b_contracts_resource::v3::network::cidr_overlaps(&desired_cidr, &occupied_cidr)
+}
+
+impl core::fmt::Debug for HostNetworkAdmissionIndex {
+    fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        formatter
+            .debug_struct("HostNetworkAdmissionIndex")
+            .field("entry_count", &self.entries.len())
+            .finish()
+    }
+}
+
+impl HostNetworkAdmissionIndex {
+    /// Admit one Network atomically against the observed host and siblings.
+    pub fn admit(
+        &mut self,
+        intent: NetworkAdmissionIntent,
+        occupancy: &HostNetworkOccupancy,
+    ) -> Result<NetworkAdmissionProof, NetworkEffectError> {
+        let key = intent.key().clone();
+        let owner = NetworkAdmissionOwnerKey::from_key(&key);
+        if self
+            .retired
+            .get(&owner)
+            .is_some_and(|retired| retired.contains(&key))
+        {
+            return Err(NetworkEffectError::NetworkAdmissionMismatch);
+        }
+        if !self.entries.contains_key(&owner)
+            && self.released_floors.get(&owner).is_some_and(|floor| {
+                key.network_generation().get() < floor.0
+                    || key.attachment_generation().get() < floor.1
+            })
+        {
+            return Err(NetworkEffectError::NetworkAdmissionMismatch);
+        }
+        let existing = self.entries.get(&owner).cloned();
+        if let Some(current) = existing.as_ref() {
+            if current.key() == &key {
+                if current != &intent {
+                    return Err(NetworkEffectError::NetworkAdmissionMismatch);
+                }
+                return Ok(current.proof());
+            }
+            if current.key() != &key && !is_current_or_newer_admission(current.key(), &key) {
+                return Err(NetworkEffectError::NetworkAdmissionMismatch);
+            }
+        }
+        let owner_intents = existing
+            .as_ref()
+            .into_iter()
+            .chain(std::iter::once(&intent))
+            .collect::<Vec<_>>();
+
+        if self.entries.iter().any(|(candidate, existing)| {
+            if candidate == &owner {
+                return false;
+            }
+            intent.cidrs().iter().any(|cidr| {
+                existing
+                    .cidrs()
+                    .iter()
+                    .any(|peer| d2b_contracts_resource::v3::network::cidr_overlaps(cidr, peer))
+            })
+        }) || intent.cidrs().iter().any(|cidr| {
+            occupancy
+                .cidrs()
+                .iter()
+                .any(|peer| {
+                    d2b_contracts_resource::v3::network::cidr_overlaps(cidr, peer)
+                        && !cidr_is_self_owned(&owner_intents, occupancy, peer)
+                })
+        }) {
+            return Err(NetworkEffectError::CidrConflict);
+        }
+
+        if intent.interface_names().iter().any(|ifname| {
+            occupancy
+                .interface_names()
+                .iter()
+                .any(|occupied| {
+                    occupied == ifname
+                        && !interface_is_self_owned(&owner_intents, occupancy, occupied)
+                })
+                || self.entries.iter().any(|(candidate, existing)| {
+                    if candidate == &owner {
+                        return false;
+                    }
+                    existing
+                        .interface_names()
+                        .iter()
+                        .any(|candidate| candidate == ifname)
+                })
+        }) {
+            return Err(NetworkEffectError::NetworkInterfaceCollision);
+        }
+        if let Some((parent, mode, sharing)) = intent.external_nic() {
+            let mut claims = Vec::new();
+            for (candidate, existing) in &self.entries {
+                if candidate == &owner {
+                    continue;
+                }
+                let Some((existing_parent, existing_mode, existing_sharing)) =
+                    existing.external_nic()
+                else {
+                    continue;
+                };
+                if existing_parent != parent {
+                    continue;
+                }
+                claims.push(ExternalNicClaim::new(
+                    existing.key().zone_uid().clone(),
+                    existing_mode,
+                    existing_sharing,
+                ));
+            }
+            claims.push(ExternalNicClaim::new(key.zone_uid().clone(), mode, sharing));
+            match admit_external_nic_claims(&claims, 64) {
+                Ok(()) => {}
+                Err(ExternalNicAdmissionError::ExternalPhysicalNicCrossZoneL2) => {
+                    return Err(NetworkEffectError::CrossZoneL2);
+                }
+                Err(ExternalNicAdmissionError::ExternalPhysicalNicConflict) => {
+                    return Err(NetworkEffectError::NetworkAdmissionConflict);
+                }
+            }
+        }
+
+        if intent
+            .routes()
+            .iter()
+            .any(|route| {
+                occupancy.routes().iter().any(|occupied| {
+                    route_conflicts(route, occupied)
+                        && !route_is_self_owned(&owner_intents, occupancy, occupied)
+                })
+            })
+            || intent.routes().iter().any(|route| {
+                self.entries.iter().any(|(candidate, existing)| {
+                    if candidate == &owner {
+                        return false;
+                    }
+                    existing
+                        .routes()
+                        .iter()
+                        .any(|candidate| route_conflicts(route, candidate))
+                })
+            })
+        {
+            return Err(NetworkEffectError::NetworkRouteCollision);
+        }
+
+        let proof = intent.proof();
+        if let Some(current) = existing {
+            self.retired
+                .entry(owner.clone())
+                .or_default()
+                .insert(current.key().clone());
+        }
+        self.entries.insert(owner, intent);
+        Ok(proof)
+    }
+
+    /// Release only the exact admitted identity tuple after finalizer
+    /// completion has been confirmed by the Network resource owner.
+    pub fn release_after_finalizer(
+        &mut self,
+        key: &NetworkAdmissionKey,
+        finalizer_complete: bool,
+    ) -> bool {
+        if !finalizer_complete {
+            return false;
+        }
+        let owner = NetworkAdmissionOwnerKey::from_key(key);
+        if !self
+            .entries
+            .get(&owner)
+            .is_some_and(|intent| intent.key() == key)
+        {
+            return false;
+        }
+        self.entries.remove(&owner);
+        self.retired.entry(owner).or_default().insert(key.clone());
+        let floor = self
+            .released_floors
+            .entry(NetworkAdmissionOwnerKey::from_key(key))
+            .or_insert((0, 0));
+        floor.0 = floor.0.max(key.network_generation().get());
+        floor.1 = floor.1.max(key.attachment_generation().get());
+        true
+    }
+
+    /// Return the live proof for one Zone/Network owner.
+    pub fn proof_for(
+        &self,
+        zone_uid: &ResourceUid,
+        network_uid: &ResourceUid,
+    ) -> Option<NetworkAdmissionProof> {
+        self.entries
+            .get(&NetworkAdmissionOwnerKey {
+                zone_uid: zone_uid.clone(),
+                network_uid: network_uid.clone(),
+            })
+            .map(NetworkAdmissionIntent::proof)
+    }
+
+    /// Release the current owner only after its finalizer has completed.
+    pub fn release_owner_after_finalizer(
+        &mut self,
+        zone_uid: &ResourceUid,
+        network_uid: &ResourceUid,
+        finalizer_complete: bool,
+    ) -> bool {
+        let owner = NetworkAdmissionOwnerKey {
+            zone_uid: zone_uid.clone(),
+            network_uid: network_uid.clone(),
+        };
+        let Some(key) = self.entries.get(&owner).map(|intent| intent.key().clone()) else {
+            return false;
+        };
+        self.release_after_finalizer(&key, finalizer_complete)
+    }
+
+    /// Return the number of admitted Network projections.
+    pub fn len(&self) -> usize {
+        self.entries.len()
+    }
+
+    /// Whether no Network projection is currently admitted.
+    pub fn is_empty(&self) -> bool {
+        self.entries.is_empty()
+    }
+}
+
+fn is_current_or_newer_admission(
+    current: &NetworkAdmissionKey,
+    candidate: &NetworkAdmissionKey,
+) -> bool {
+    candidate.network_generation().get() >= current.network_generation().get()
+        && candidate.attachment_generation().get() >= current.attachment_generation().get()
+}
+
+fn interface_is_self_owned(
+    owner_intents: &[&NetworkAdmissionIntent],
+    occupancy: &HostNetworkOccupancy,
+    ifname: &d2b_contracts_resource::v3::IfName,
+) -> bool {
+    let actual_markers = occupancy.interface_ownership_markers(ifname);
+    !actual_markers.is_empty()
+        && actual_markers.iter().all(|actual_marker| {
+            owner_intents.iter().any(|intent| {
+                intent.interface_ownership_marker(ifname).is_some_and(|expected| {
+                    network_marker_matches(expected, actual_marker, intent.key())
+                })
+            })
+        })
+}
+
+fn cidr_is_self_owned(
+    owner_intents: &[&NetworkAdmissionIntent],
+    occupancy: &HostNetworkOccupancy,
+    cidr: &d2b_contracts_resource::v3::network::Ipv4Cidr,
+) -> bool {
+    let actual_markers = occupancy.cidr_ownership_markers(cidr);
+    !actual_markers.is_empty()
+        && actual_markers.iter().all(|actual_marker| {
+            owner_intents.iter().any(|intent| {
+                if !intent.cidrs().iter().any(|owned| {
+                    d2b_contracts_resource::v3::network::cidr_overlaps(owned, cidr)
+                }) && !intent.routes().iter().any(|route| {
+                    d2b_contracts_resource::v3::network::Ipv4Cidr::parse(
+                        route.destination().to_owned(),
+                    )
+                    .ok()
+                    .is_some_and(|route_cidr| {
+                        d2b_contracts_resource::v3::network::cidr_overlaps(&route_cidr, cidr)
+                    })
+                }) {
+                    return false;
+                }
+                network_marker_matches(intent.ownership_marker(), actual_marker, intent.key())
+                    || intent.interface_names().iter().any(|ifname| {
+                        intent
+                            .interface_ownership_marker(ifname)
+                            .is_some_and(|expected| {
+                                network_marker_matches(expected, actual_marker, intent.key())
+                            })
+                    })
+                    || intent.routes().iter().any(|route| {
+                        d2b_contracts_resource::v3::network::Ipv4Cidr::parse(
+                            route.destination().to_owned(),
+                        )
+                        .ok()
+                        .is_some_and(|route_cidr| {
+                            d2b_contracts_resource::v3::network::cidr_overlaps(&route_cidr, cidr)
+                                && intent.route_ownership_marker(route).is_some_and(|expected| {
+                                    network_marker_matches(expected, actual_marker, intent.key())
+                                })
+                        })
+                    })
+            })
+        })
+}
+
+fn route_is_self_owned(
+    owner_intents: &[&NetworkAdmissionIntent],
+    occupancy: &HostNetworkOccupancy,
+    route: &RouteTuple,
+) -> bool {
+    let actual_markers = occupancy.route_ownership_markers(route);
+    !actual_markers.is_empty()
+        && actual_markers.iter().all(|actual_marker| {
+            owner_intents.iter().any(|intent| {
+                intent.routes().contains(route)
+                    && intent.route_ownership_marker(route).is_some_and(|expected| {
+                        network_marker_matches(expected, actual_marker, intent.key())
+                    })
+            })
+        })
+}
+
+fn network_marker_matches(
+    expected: &str,
+    actual: &str,
+    key: &NetworkAdmissionKey,
+) -> bool {
+    let Some((expected_key, expected_object)) = parse_network_marker(expected)
+    else {
+        return false;
+    };
+    let Some((actual_key, actual_object)) = parse_network_marker(actual) else {
+        return false;
+    };
+    expected_key == actual_key
+        && expected_object == actual_object
+        && expected_key.zone_uid() == key.zone_uid()
+        && expected_key.network_uid() == key.network_uid()
+}
+
+fn parse_network_marker(marker: &str) -> Option<(NetworkAdmissionKey, String)> {
+    let marker = marker
+        .strip_prefix("d2b managed: ")
+        .unwrap_or(marker)
+        .trim();
+    let (object, rest) = marker.split_once(":zone:")?;
+    let object = object.strip_prefix("network:")?.to_owned();
+    let (zone, rest) = rest.split_once(":network:")?;
+    let (network, rest) = rest.split_once(":generation:")?;
+    let (generation, rest) = rest.split_once(":attachment:")?;
+    let (attachment, bundle) = rest.split_once(":bundle:")?;
+    let zone_uid = ResourceUid::parse(zone.to_owned()).ok()?;
+    let network_uid = ResourceUid::parse(network.to_owned()).ok()?;
+    let network_generation = ResourceGeneration::new(generation.parse().ok()?).ok()?;
+    let attachment_generation = ResourceGeneration::new(attachment.parse().ok()?).ok()?;
+    let bundle_generation = ResourceBundleGenerationId::parse(bundle.to_owned()).ok()?;
+    Some((
+        NetworkAdmissionKey::new(
+            zone_uid,
+            network_uid,
+            network_generation,
+            attachment_generation,
+            bundle_generation,
+        ),
+        object,
+    ))
+}
+
 /// All Zone runtimes owned by one daemon.
 #[derive(Default)]
 pub struct ResourcePlane {
     zones: BTreeMap<ZoneId, Arc<ZoneResourceRuntime>>,
+    network_admission_index: Arc<tokio::sync::Mutex<HostNetworkAdmissionIndex>>,
 }
 
 impl core::fmt::Debug for ResourcePlane {
@@ -5191,10 +5661,20 @@ impl core::fmt::Debug for ResourcePlane {
 
 impl ResourcePlane {
     /// Create an empty daemon-owned plane.
-    pub const fn new() -> Self {
+    pub fn new() -> Self {
         Self {
             zones: BTreeMap::new(),
+            network_admission_index: Arc::new(tokio::sync::Mutex::new(
+                HostNetworkAdmissionIndex::default(),
+            )),
         }
+    }
+
+    /// Borrow the one root-owned Host-global Network admission index.
+    pub fn network_admission_index(
+        &self,
+    ) -> Arc<tokio::sync::Mutex<HostNetworkAdmissionIndex>> {
+        Arc::clone(&self.network_admission_index)
     }
 
     /// Insert a freshly opened Zone runtime.
@@ -6383,5 +6863,632 @@ mod tests {
             .unwrap_err();
         assert_eq!(peer_route.code(), "resource-runtime-identity-unbound");
         runtime.shutdown().await.unwrap();
+    }
+
+    fn network_admission_intent(
+        zone: &str,
+        network: &str,
+        lan: &str,
+        uplink: &str,
+    ) -> NetworkAdmissionIntent {
+        let zone_uid = ResourceUid::parse(zone).unwrap();
+        let network_uid = ResourceUid::parse(network).unwrap();
+        let spec = d2b_contracts_resource::v3::network::NetworkSpec::minimal(
+            d2b_contracts_resource::v3::network::Ipv4Cidr::parse(lan).unwrap(),
+            d2b_contracts_resource::v3::network::Ipv4Cidr::parse(uplink).unwrap(),
+            d2b_contracts_resource::v3::execution_policy::BoundedToken::parse("net-vm-base")
+                .unwrap(),
+        )
+        .unwrap();
+        NetworkAdmissionIntent::new(
+            NetworkAdmissionKey::new(
+                zone_uid,
+                network_uid,
+                ResourceGeneration::new(1).unwrap(),
+                ResourceGeneration::new(1).unwrap(),
+                ResourceBundleGenerationId::parse(
+                    "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+                )
+                .unwrap(),
+            ),
+            spec,
+            Vec::new(),
+        )
+        .unwrap()
+    }
+
+    fn external_network_admission_intent(
+        zone: &str,
+        network: &str,
+        lan: &str,
+        uplink: &str,
+        sharing: d2b_contracts_resource::v3::network::SharingPolicy,
+    ) -> NetworkAdmissionIntent {
+        let zone_uid = ResourceUid::parse(zone).unwrap();
+        let network_uid = ResourceUid::parse(network).unwrap();
+        let external =
+            d2b_contracts_resource::v3::network::ExternalAttachmentSpec::new(
+                d2b_contracts_resource::v3::network::ExternalAttachmentMode::Macvtap,
+                d2b_contracts_resource::v3::IfName::parse("eno1").unwrap(),
+                d2b_contracts_resource::v3::network::MacvtapMode::Bridge,
+                sharing,
+                None,
+                d2b_contracts_resource::v3::network::ExternalIpv4Spec::default(),
+                d2b_contracts_resource::v3::network::EgressSpec::default(),
+                Vec::new(),
+            )
+            .unwrap();
+        let spec = d2b_contracts_resource::v3::network::NetworkSpec::new(
+            d2b_contracts_resource::v3::network::Ipv4Cidr::parse(lan).unwrap(),
+            d2b_contracts_resource::v3::network::Ipv4Cidr::parse(uplink).unwrap(),
+            None,
+            false,
+            d2b_contracts_resource::v3::network::IsolationSpec::default(),
+            d2b_contracts_resource::v3::network::RoutingSpec::default(),
+            d2b_contracts_resource::v3::network::DhcpSpec::default(),
+            d2b_contracts_resource::v3::network::DnsSpec::default(),
+            Some(external),
+            d2b_contracts_resource::v3::network::MdnsSpec::default(),
+            None,
+            d2b_contracts_resource::v3::execution_policy::BoundedToken::parse("net-vm-base")
+                .unwrap(),
+            Vec::new(),
+        )
+        .unwrap();
+        NetworkAdmissionIntent::new(
+            NetworkAdmissionKey::new(
+                zone_uid,
+                network_uid,
+                ResourceGeneration::new(1).unwrap(),
+                ResourceGeneration::new(1).unwrap(),
+                ResourceBundleGenerationId::parse(
+                    "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+                )
+                .unwrap(),
+            ),
+            spec,
+            Vec::new(),
+        )
+        .unwrap()
+    }
+
+    fn newer_network_admission_intent(
+        current: &NetworkAdmissionIntent,
+    ) -> NetworkAdmissionIntent {
+        let key = NetworkAdmissionKey::new(
+            current.key().zone_uid().clone(),
+            current.key().network_uid().clone(),
+            ResourceGeneration::new(current.key().network_generation().get() + 1).unwrap(),
+            ResourceGeneration::new(current.key().attachment_generation().get() + 1).unwrap(),
+            ResourceBundleGenerationId::parse(
+                "sha256:abcdefabcdefabcdefabcdefabcdefabcdefabcdefabcdefabcdefabcdefabcd",
+            )
+            .unwrap(),
+        );
+        let spec = d2b_contracts_resource::v3::network::NetworkSpec::minimal(
+            d2b_contracts_resource::v3::network::Ipv4Cidr::parse("10.20.0.0/24").unwrap(),
+            d2b_contracts_resource::v3::network::Ipv4Cidr::parse("192.0.2.0/30").unwrap(),
+            d2b_contracts_resource::v3::execution_policy::BoundedToken::parse("net-vm-base")
+                .unwrap(),
+        )
+        .unwrap();
+        NetworkAdmissionIntent::new(key, spec, Vec::new()).unwrap()
+    }
+
+    fn self_owned_occupancy(intent: &NetworkAdmissionIntent) -> HostNetworkOccupancy {
+        let interface_markers = intent
+            .interface_names()
+            .iter()
+            .filter_map(|ifname| {
+                intent
+                    .interface_ownership_marker(ifname)
+                    .map(|marker| (ifname.clone(), marker.to_owned()))
+            })
+            .collect::<Vec<_>>();
+        let route_markers = intent
+            .routes()
+            .iter()
+            .filter_map(|route| {
+                intent
+                    .route_ownership_marker(route)
+                    .map(|marker| (route.clone(), marker.to_owned()))
+            })
+            .collect::<Vec<_>>();
+        let cidr_markers = intent
+            .cidrs()
+            .iter()
+            .map(|cidr| (cidr.clone(), intent.ownership_marker().to_owned()))
+            .collect::<Vec<_>>();
+        HostNetworkOccupancy::from_route_tuples(
+            intent.interface_names().to_vec(),
+            intent.route_names().to_vec(),
+            intent.routes().to_vec(),
+            intent.cidrs().to_vec(),
+        )
+        .with_interface_ownership(interface_markers)
+        .with_route_ownership(route_markers)
+        .with_cidr_ownership(cidr_markers)
+    }
+
+    fn self_owned_kernel_occupancy(intent: &NetworkAdmissionIntent) -> HostNetworkOccupancy {
+        let interface_markers = intent
+            .interface_names()
+            .iter()
+            .filter_map(|ifname| {
+                intent
+                    .interface_ownership_marker(ifname)
+                    .map(|marker| (ifname.clone(), marker.to_owned()))
+            })
+            .collect::<Vec<_>>();
+        let route_markers = intent
+            .routes()
+            .iter()
+            .filter_map(|route| {
+                intent
+                    .route_ownership_marker(route)
+                    .map(|marker| (route.clone(), marker.to_owned()))
+            })
+            .collect::<Vec<_>>();
+        let cidrs = vec![
+            d2b_contracts_resource::v3::network::Ipv4Cidr::parse("10.20.0.1/24").unwrap(),
+            d2b_contracts_resource::v3::network::Ipv4Cidr::parse("192.0.2.1/30").unwrap(),
+        ];
+        let cidr_markers = cidrs
+            .iter()
+            .map(|cidr| (cidr.clone(), intent.ownership_marker().to_owned()))
+            .collect::<Vec<_>>();
+        HostNetworkOccupancy::from_route_tuples(
+            intent.interface_names().to_vec(),
+            intent.route_names().to_vec(),
+            intent.routes().to_vec(),
+            cidrs,
+        )
+        .with_interface_ownership(interface_markers)
+        .with_route_ownership(route_markers)
+        .with_cidr_ownership(cidr_markers)
+    }
+
+    #[test]
+    fn host_network_admission_rejects_overlapping_sibling_cidrs_atomically() {
+        let mut index = HostNetworkAdmissionIndex::default();
+        let first = network_admission_intent(
+            "123e4567-e89b-42d3-a456-426614174000",
+            "223e4567-e89b-42d3-a456-426614174001",
+            "10.20.0.0/24",
+            "192.0.2.0/30",
+        );
+        let second = network_admission_intent(
+            "323e4567-e89b-42d3-a456-426614174002",
+            "423e4567-e89b-42d3-a456-426614174003",
+            "10.20.0.0/24",
+            "198.51.100.0/30",
+        );
+        let occupancy = HostNetworkOccupancy::from_parts(Vec::new(), Vec::new(), Vec::new());
+        index.admit(first, &occupancy).unwrap();
+        assert_eq!(
+            index.admit(second, &occupancy),
+            Err(NetworkEffectError::CidrConflict)
+        );
+        assert_eq!(index.len(), 1);
+    }
+
+    #[test]
+    fn host_network_admission_names_same_named_networks_by_uid() {
+        let first = network_admission_intent(
+            "123e4567-e89b-42d3-a456-426614174000",
+            "223e4567-e89b-42d3-a456-426614174001",
+            "10.20.0.0/24",
+            "192.0.2.0/30",
+        );
+        let second = network_admission_intent(
+            "323e4567-e89b-42d3-a456-426614174002",
+            "423e4567-e89b-42d3-a456-426614174003",
+            "10.30.0.0/24",
+            "198.51.100.0/30",
+        );
+        assert_ne!(first.interface_names(), second.interface_names());
+        assert_ne!(first.route_names(), second.route_names());
+    }
+
+    #[test]
+    fn host_network_admission_counts_foreign_and_uidless_occupancy() {
+        let mut index = HostNetworkAdmissionIndex::default();
+        let intent = network_admission_intent(
+            "123e4567-e89b-42d3-a456-426614174000",
+            "223e4567-e89b-42d3-a456-426614174001",
+            "10.20.0.0/24",
+            "192.0.2.0/30",
+        );
+        let occupied = HostNetworkOccupancy::from_parts(
+            vec![intent.interface_names()[0].clone()],
+            vec![intent.route_names()[0].clone()],
+            Vec::new(),
+        );
+        assert_eq!(
+            index.admit(intent, &occupied),
+            Err(NetworkEffectError::NetworkInterfaceCollision)
+        );
+        assert!(index.is_empty());
+    }
+
+    #[test]
+    fn host_network_admission_counts_foreign_cidr_occupancy() {
+        let mut index = HostNetworkAdmissionIndex::default();
+        let intent = network_admission_intent(
+            "123e4567-e89b-42d3-a456-426614174000",
+            "223e4567-e89b-42d3-a456-426614174001",
+            "10.20.0.0/24",
+            "192.0.2.0/30",
+        );
+        let occupied = HostNetworkOccupancy::from_parts(
+            Vec::new(),
+            Vec::new(),
+            vec![d2b_contracts_resource::v3::network::Ipv4Cidr::parse(
+                "10.20.1.0/23",
+            )
+            .unwrap()],
+        );
+        assert_eq!(
+            index.admit(intent, &occupied),
+            Err(NetworkEffectError::CidrConflict)
+        );
+        assert!(index.is_empty());
+    }
+
+    #[test]
+    fn host_network_admission_counts_actual_route_tuple_occupancy() {
+        let mut index = HostNetworkAdmissionIndex::default();
+        let intent = network_admission_intent(
+            "123e4567-e89b-42d3-a456-426614174000",
+            "223e4567-e89b-42d3-a456-426614174001",
+            "10.20.0.0/24",
+            "192.0.2.0/30",
+        );
+        let occupied = HostNetworkOccupancy::from_route_tuples(
+            Vec::new(),
+            Vec::new(),
+            vec![RouteTuple::new(
+                "10.0.0.0/8",
+                Some("192.0.2.1".to_owned()),
+                Some(intent.routes()[0].device().unwrap_or("-").to_owned()),
+                "254",
+            )],
+            Vec::new(),
+        );
+        assert_eq!(
+            index.admit(intent, &occupied),
+            Err(NetworkEffectError::NetworkRouteCollision)
+        );
+        assert!(index.is_empty());
+    }
+
+    #[test]
+    fn host_network_admission_ignores_synthetic_route_ids_without_observed_tuple() {
+        let mut index = HostNetworkAdmissionIndex::default();
+        let intent = network_admission_intent(
+            "123e4567-e89b-42d3-a456-426614174000",
+            "223e4567-e89b-42d3-a456-426614174001",
+            "10.20.0.0/24",
+            "192.0.2.0/30",
+        );
+        let occupancy = HostNetworkOccupancy::from_parts(
+            Vec::new(),
+            vec![intent.route_names()[0].clone()],
+            Vec::new(),
+        );
+        assert!(
+            occupancy.routes().is_empty(),
+            "a synthetic route name is not an observed kernel route tuple"
+        );
+        assert!(index.admit(intent, &occupancy).is_ok());
+    }
+
+    #[test]
+    fn host_network_admission_scopes_route_collisions_by_actual_table() {
+        let mut index = HostNetworkAdmissionIndex::default();
+        let intent = network_admission_intent(
+            "123e4567-e89b-42d3-a456-426614174000",
+            "223e4567-e89b-42d3-a456-426614174001",
+            "10.20.0.0/24",
+            "192.0.2.0/30",
+        );
+        let occupied = HostNetworkOccupancy::from_route_tuples(
+            Vec::new(),
+            Vec::new(),
+            vec![RouteTuple::new(
+                "10.0.0.0/8",
+                Some("192.0.2.1".to_owned()),
+                Some("foreign0".to_owned()),
+                "100",
+            )],
+            Vec::new(),
+        );
+        assert!(index.admit(intent, &occupied).is_ok());
+    }
+
+    #[test]
+    fn host_network_admission_rejects_stale_network_generation() {
+        let mut index = HostNetworkAdmissionIndex::default();
+        let stale = network_admission_intent(
+            "123e4567-e89b-42d3-a456-426614174000",
+            "223e4567-e89b-42d3-a456-426614174001",
+            "10.20.0.0/24",
+            "192.0.2.0/30",
+        );
+        let current = newer_network_admission_intent(&stale);
+        let occupancy = HostNetworkOccupancy::from_parts(Vec::new(), Vec::new(), Vec::new());
+        index.admit(current, &occupancy).unwrap();
+        assert_eq!(
+            index.admit(stale, &occupancy),
+            Err(NetworkEffectError::NetworkAdmissionMismatch)
+        );
+    }
+
+    #[test]
+    fn host_network_admission_replaces_owner_and_ignores_self_owned_occupancy() {
+        let mut index = HostNetworkAdmissionIndex::default();
+        let first = network_admission_intent(
+            "123e4567-e89b-42d3-a456-426614174000",
+            "223e4567-e89b-42d3-a456-426614174001",
+            "10.20.0.0/24",
+            "192.0.2.0/30",
+        );
+        let occupancy = self_owned_kernel_occupancy(&first);
+        let newer = newer_network_admission_intent(&first);
+
+        index.admit(first, &occupancy).unwrap();
+        let proof = index.admit(newer.clone(), &occupancy).unwrap();
+
+        assert_eq!(proof.key(), newer.key());
+        assert_eq!(index.len(), 1);
+        assert_eq!(
+            index
+                .proof_for(newer.key().zone_uid(), newer.key().network_uid())
+                .unwrap()
+                .key(),
+            newer.key()
+        );
+        assert_eq!(
+            index.admit(newer.clone(), &occupancy).unwrap().key(),
+            newer.key()
+        );
+        assert_eq!(
+            index.admit(newer.clone(), &occupancy).unwrap().key(),
+            newer.key()
+        );
+    }
+
+    #[test]
+    fn host_network_admission_rejects_stale_replacement_and_sibling_overlap_atomically() {
+        let mut index = HostNetworkAdmissionIndex::default();
+        let first = network_admission_intent(
+            "123e4567-e89b-42d3-a456-426614174000",
+            "223e4567-e89b-42d3-a456-426614174001",
+            "10.20.0.0/24",
+            "192.0.2.0/30",
+        );
+        let newer = newer_network_admission_intent(&first);
+        let sibling = network_admission_intent(
+            "323e4567-e89b-42d3-a456-426614174002",
+            "423e4567-e89b-42d3-a456-426614174003",
+            "10.20.0.0/24",
+            "198.51.100.0/30",
+        );
+        let occupancy = self_owned_occupancy(&first);
+
+        index.admit(first.clone(), &occupancy).unwrap();
+        index.admit(newer.clone(), &occupancy).unwrap();
+        assert_eq!(
+            index.admit(first, &occupancy),
+            Err(NetworkEffectError::NetworkAdmissionMismatch)
+        );
+        assert_eq!(
+            index.admit(
+                sibling,
+                &HostNetworkOccupancy::from_parts(Vec::new(), Vec::new(), Vec::new()),
+            ),
+            Err(NetworkEffectError::CidrConflict)
+        );
+        assert_eq!(index.len(), 1);
+        assert_eq!(
+            index
+                .proof_for(newer.key().zone_uid(), newer.key().network_uid())
+                .unwrap()
+                .key(),
+            newer.key()
+        );
+    }
+
+    #[tokio::test]
+    async fn host_network_admission_serializes_replacement_and_sibling_conflicts() {
+        let first = network_admission_intent(
+            "123e4567-e89b-42d3-a456-426614174000",
+            "223e4567-e89b-42d3-a456-426614174001",
+            "10.20.0.0/24",
+            "192.0.2.0/30",
+        );
+        let newer = newer_network_admission_intent(&first);
+        let sibling = network_admission_intent(
+            "323e4567-e89b-42d3-a456-426614174002",
+            "423e4567-e89b-42d3-a456-426614174003",
+            "10.20.0.0/24",
+            "198.51.100.0/30",
+        );
+        let mut initial = HostNetworkAdmissionIndex::default();
+        initial
+            .admit(
+                first.clone(),
+                &HostNetworkOccupancy::from_parts(Vec::new(), Vec::new(), Vec::new()),
+            )
+            .unwrap();
+        let index = Arc::new(tokio::sync::Mutex::new(initial));
+        let replacement_index = Arc::clone(&index);
+        let sibling_index = Arc::clone(&index);
+        let replacement_occupancy = self_owned_kernel_occupancy(&first);
+        let sibling_occupancy =
+            HostNetworkOccupancy::from_parts(Vec::new(), Vec::new(), Vec::new());
+        let (replacement, sibling) = tokio::join!(
+            async move {
+                replacement_index
+                    .lock()
+                    .await
+                    .admit(newer, &replacement_occupancy)
+            },
+            async move { sibling_index.lock().await.admit(sibling, &sibling_occupancy) },
+        );
+        assert!(replacement.is_ok());
+        assert_eq!(sibling, Err(NetworkEffectError::CidrConflict));
+        assert_eq!(index.lock().await.len(), 1);
+    }
+
+    #[test]
+    fn host_network_admission_releases_only_after_confirmed_finalizer_completion() {
+        let mut index = HostNetworkAdmissionIndex::default();
+        let first = network_admission_intent(
+            "123e4567-e89b-42d3-a456-426614174000",
+            "223e4567-e89b-42d3-a456-426614174001",
+            "10.20.0.0/24",
+            "192.0.2.0/30",
+        );
+        let newer = newer_network_admission_intent(&first);
+        let successor = newer_network_admission_intent(&newer);
+        let occupancy = self_owned_occupancy(&first);
+        index.admit(first.clone(), &occupancy).unwrap();
+
+        assert!(!index.release_after_finalizer(first.key(), false));
+        assert_eq!(index.len(), 1);
+        assert!(index.admit(newer.clone(), &occupancy).is_ok());
+        assert_eq!(index.len(), 1);
+        assert!(!index.release_after_finalizer(first.key(), true));
+        assert!(index.release_after_finalizer(newer.key(), true));
+        assert!(index.is_empty());
+        assert_eq!(
+            index.admit(
+                first,
+                &HostNetworkOccupancy::from_parts(Vec::new(), Vec::new(), Vec::new()),
+            ),
+            Err(NetworkEffectError::NetworkAdmissionMismatch)
+        );
+        assert!(
+            index
+                .admit(
+                    successor,
+                    &HostNetworkOccupancy::from_parts(Vec::new(), Vec::new(), Vec::new()),
+                )
+                .is_ok()
+        );
+    }
+
+    #[test]
+    fn host_network_admission_rejects_unmarked_or_mismatched_identical_occupancy() {
+        let first = network_admission_intent(
+            "123e4567-e89b-42d3-a456-426614174000",
+            "223e4567-e89b-42d3-a456-426614174001",
+            "10.20.0.0/24",
+            "192.0.2.0/30",
+        );
+        let newer = newer_network_admission_intent(&first);
+        let unmarked = HostNetworkOccupancy::from_route_tuples(
+            first.interface_names().to_vec(),
+            first.route_names().to_vec(),
+            first.routes().to_vec(),
+            first.cidrs().to_vec(),
+        );
+        let mut index = HostNetworkAdmissionIndex::default();
+        index
+            .admit(
+                first.clone(),
+                &HostNetworkOccupancy::from_parts(Vec::new(), Vec::new(), Vec::new()),
+            )
+            .unwrap();
+        assert_eq!(
+            index.admit(newer.clone(), &unmarked),
+            Err(NetworkEffectError::CidrConflict)
+        );
+
+        let mut mismatched = self_owned_occupancy(&first);
+        mismatched = mismatched.with_interface_ownership(vec![(
+            first.interface_names()[0].clone(),
+            "d2b managed: network:bridge:lan:zone:123e4567-e89b-42d3-a456-426614174000:network:223e4567-e89b-42d3-a456-426614174001:generation:99:attachment:99:bundle:sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef".to_owned(),
+        )]);
+        let mut index = HostNetworkAdmissionIndex::default();
+        index
+            .admit(
+                first.clone(),
+                &HostNetworkOccupancy::from_parts(Vec::new(), Vec::new(), Vec::new()),
+            )
+            .unwrap();
+        assert_eq!(
+            index.admit(newer.clone(), &mismatched),
+            Err(NetworkEffectError::NetworkInterfaceCollision)
+        );
+
+        let mut mismatched_route = self_owned_occupancy(&first);
+        mismatched_route = mismatched_route.with_route_ownership(vec![(
+            first.routes()[0].clone(),
+            "d2b managed: foreign".to_owned(),
+        )]);
+        let mut index = HostNetworkAdmissionIndex::default();
+        index
+            .admit(
+                first,
+                &HostNetworkOccupancy::from_parts(Vec::new(), Vec::new(), Vec::new()),
+            )
+            .unwrap();
+        let route_candidate = newer_network_admission_intent(&newer);
+        assert_eq!(
+            index.admit(route_candidate, &mismatched_route),
+            Err(NetworkEffectError::NetworkRouteCollision)
+        );
+    }
+
+    #[test]
+    fn host_network_admission_rejects_cross_zone_external_bridge_multiplex() {
+        let mut index = HostNetworkAdmissionIndex::default();
+        let first = external_network_admission_intent(
+            "123e4567-e89b-42d3-a456-426614174000",
+            "223e4567-e89b-42d3-a456-426614174001",
+            "10.20.0.0/24",
+            "192.0.2.0/30",
+            d2b_contracts_resource::v3::network::SharingPolicy::Multiplexed,
+        );
+        let second = external_network_admission_intent(
+            "323e4567-e89b-42d3-a456-426614174002",
+            "423e4567-e89b-42d3-a456-426614174003",
+            "10.30.0.0/24",
+            "198.51.100.0/30",
+            d2b_contracts_resource::v3::network::SharingPolicy::Multiplexed,
+        );
+        let occupancy = HostNetworkOccupancy::from_parts(Vec::new(), Vec::new(), Vec::new());
+        index.admit(first, &occupancy).unwrap();
+        assert_eq!(
+            index.admit(second, &occupancy),
+            Err(NetworkEffectError::CrossZoneL2)
+        );
+    }
+
+    #[test]
+    fn host_network_admission_rejects_same_zone_exclusive_external_reuse() {
+        let mut index = HostNetworkAdmissionIndex::default();
+        let first = external_network_admission_intent(
+            "123e4567-e89b-42d3-a456-426614174000",
+            "223e4567-e89b-42d3-a456-426614174001",
+            "10.20.0.0/24",
+            "192.0.2.0/30",
+            d2b_contracts_resource::v3::network::SharingPolicy::Exclusive,
+        );
+        let second = external_network_admission_intent(
+            "123e4567-e89b-42d3-a456-426614174000",
+            "423e4567-e89b-42d3-a456-426614174003",
+            "10.30.0.0/24",
+            "198.51.100.0/30",
+            d2b_contracts_resource::v3::network::SharingPolicy::Exclusive,
+        );
+        let occupancy = HostNetworkOccupancy::from_parts(Vec::new(), Vec::new(), Vec::new());
+        index.admit(first, &occupancy).unwrap();
+        assert_eq!(
+            index.admit(second, &occupancy),
+            Err(NetworkEffectError::NetworkAdmissionConflict)
+        );
     }
 }

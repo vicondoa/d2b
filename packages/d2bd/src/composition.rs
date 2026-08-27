@@ -36,7 +36,6 @@ use d2b_contracts_broker::broker_wire::{
     ActivationMode as BrokerActivationMode, ActivationPhase as BrokerActivationPhase,
     ApplyNftablesRequest as BrokerApplyNftablesRequest,
     ApplyNmUnmanagedRequest as BrokerApplyNmUnmanagedRequest,
-    ApplyRouteRequest as BrokerApplyRouteRequest, ApplySysctlRequest as BrokerApplySysctlRequest,
     AuditJoinContext, BrokerCallerRole, BrokerErrorResponse, BrokerRequest, BrokerRequestEnvelope,
     BrokerResponse, CanonicalAuditDigest, DeregisterRunnerPidfdRequest, ExportBrokerAuditRequest,
     HelloRequest, LegacySwtpmMigrationOutcome, MigrateLegacySwtpmStateRequest,
@@ -54,7 +53,6 @@ use d2b_contracts_broker::broker_wire::{
     RunRotateKnownHostRequest as BrokerRunRotateKnownHostRequest, RunnerRole, RunnerSignal,
     SignalRunnerRequest, SpawnRunnerRequest as BrokerSpawnRunnerRequest,
     StoreVerifyRequest as BrokerStoreVerifyRequest,
-    UpdateHostsFileRequest as BrokerUpdateHostsFileRequest,
     UsbipBindFirewallRuleRequest as BrokerUsbipBindFirewallRuleRequest,
     UsbipBindRequest as BrokerUsbipBindRequest,
     UsbipProxyReconcileRequest as BrokerUsbipProxyReconcileRequest,
@@ -67,8 +65,8 @@ use d2b_contracts_resource::resource_proto as resource_wire;
 use d2b_contracts_resource::v3::identity::ReconnectGeneration;
 use d2b_contracts_resource::v3::storage::ZoneStoreId;
 use d2b_contracts_resource::v3::{
-    ResourceBundleGenerationId, ResourceErrorKind, ResourceGeneration, ResourceRef, ResourceUid,
-    SchemaFingerprint, ZoneId,
+    NetworkProvenance, ResourceBundleGenerationId, ResourceErrorKind, ResourceGeneration,
+    ResourceRef, ResourceUid, SchemaFingerprint, ZoneId,
     guest::GuestSpec,
     network::NetworkSpec,
     process::ProcessSpec,
@@ -81,15 +79,19 @@ use d2b_contracts_resource::v3::{
 use d2b_contracts_zone_session::v3::resource_bundle::ResourceBundle;
 use d2b_core::bundle::Bundle;
 use d2b_core::bundle_resolver::{
-    BundleResolver, intent_id_activation, intent_id_bridge_env, intent_id_gc_host,
-    intent_id_hosts_host, intent_id_installer_host, intent_id_keys_rotate, intent_id_migrate_host,
-    intent_id_nft_host, intent_id_nft_projection_env, intent_id_nm_unmanaged_host,
-    intent_id_rotate_known_host, intent_id_route_env, intent_id_runner, intent_id_sysctl,
-    intent_id_trust, intent_id_usbip_bind, intent_id_usbip_firewall,
+    BundleResolver, intent_id_activation, intent_id_gc_host,
+    intent_id_installer_host, intent_id_keys_rotate, intent_id_migrate_host,
+    intent_id_nft_host, intent_id_nm_unmanaged_host,
+    intent_id_network_bridge_uids, intent_id_network_hosts_uids,
+    intent_id_network_projection_uids,
+    intent_id_network_route_uids, intent_id_network_sysctl_uids,
+    intent_id_rotate_known_host,
+    intent_id_runner, intent_id_trust,
+    intent_id_usbip_bind, intent_id_usbip_firewall,
 };
 use d2b_core::closures::ClosureMetadata;
 use d2b_core::error::BundleError;
-use d2b_core::host::{HostJson, Ipv6SysctlEntry, QemuMediaSourceIntent};
+use d2b_core::host::{HostJson, QemuMediaSourceIntent};
 use d2b_core::host_check;
 use d2b_core::manifest_v04::{ManifestV04, VmEntry as ManifestVmEntry};
 use d2b_core::processes::{ProcessNode, ProcessRole, ProcessesJson, ReadinessPredicate};
@@ -108,14 +110,16 @@ use d2b_gateway_runtime::{
     system_now_unix,
 };
 use d2b_host::ssh_keygen;
-use d2b_provider_network_local::diagnostics::{net_route_preflight, net_vm_bundle_gate};
 use d2b_provider_network_local::{
     artifact::{ArtifactCatalogEntry, ArtifactKind},
-    broker::NetworkEffectContext,
+    broker::{NetworkEffectContext, resolve_tap_identity},
     controller::{
-        CONFIG_VOLUME_MAX_BYTES, NetworkConfigContent, NetworkEffectError, NetworkReconciler,
+        CONFIG_VOLUME_MAX_BYTES, NetworkAdmissionIntent, NetworkAdmissionKey,
+        NetworkAdmissionProof, NetworkConfigContent, NetworkEffectError, NetworkReconciler,
         NetworkResourcePort, ReconcileInput, ReconcileProgress,
     },
+    ifname::derive_network_child_name,
+    observe::observe_host_network,
 };
 use d2b_provider_runtime_azure_container_apps::gateway::{
     AcaConfig, AcaDiskImageSource, AcaSandboxDefaults, AcaWorkloadProvider,
@@ -2855,62 +2859,7 @@ pub async fn serve(options: ServeOptions) -> Result<(), TypedError> {
             BTreeSet::new()
         }
     };
-    // Daemon-side net-route preflight (replaces
-    // `d2b-net-route-preflight.service`). For each env in the host
-    // artifact, probe its LAN bridge.
-    //
-    // The startup pass is diagnostic only: cold boots can legitimately
-    // begin with no env bridges because the autostarted net VMs own the
-    // host-prep DAG that materializes them. Do not feed failed envs into
-    // autostart pre-degradation here, or the daemon deadlocks by skipping
-    // the very net VMs that would repair the bridge state. Workloads are
-    // still protected by the autostart net-VM phase: if an env net VM
-    // actually fails to start, its workloads are degraded by that direct
-    // dependency outcome.
-    let mut net_failed_envs: BTreeSet<String> = BTreeSet::new();
-    let net_history = net_route_preflight::PreflightHistory::new(&state.daemon_state_dir);
-    match load_host_artifact(&state) {
-        Ok(host) => {
-            let probe = net_route_preflight::SysClassNetProbe;
-            let report = net_route_preflight::run_net_route_preflight(&host, &probe);
-            let failed_envs = report.failed_envs();
-            let record = net_route_preflight::PreflightHistoryRecord {
-                ts: net_route_preflight::now_epoch_seconds(),
-                ok: report.is_ok(),
-                failed_envs: failed_envs.iter().cloned().collect(),
-                source: "startup".to_owned(),
-            };
-            if let Err(err) = net_history.record(&record) {
-                tracing::warn!(
-                    path = %net_history.path().display(),
-                    error = %err,
-                    "net-route-preflight: failed to persist history record (continuing)",
-                );
-            }
-            if !report.is_ok() {
-                net_failed_envs = failed_envs.clone();
-                tracing::error!(
-                    failed_envs = ?failed_envs,
-                    summary = %report.summary(),
-                    "net-route-preflight: one or more env bridges unhealthy before autostart; net VM autostart will attempt host reconciliation",
-                );
-            } else {
-                tracing::info!(
-                    summary = %report.summary(),
-                    "net-route-preflight: all env bridges healthy",
-                );
-            }
-        }
-        Err(error) => {
-            tracing::warn!(
-                error = %error.message(),
-                "net-route-preflight: skipped (host artifact unavailable)",
-            );
-        }
-    }
-
-    let combined_pre_degraded =
-        startup_autostart_pre_degraded_vms(&module_degraded_vms, &net_failed_envs);
+    let combined_pre_degraded = startup_autostart_pre_degraded_vms(&module_degraded_vms, &BTreeSet::new());
 
     sd_notify_status(
         notify_socket.as_deref(),
@@ -4033,6 +3982,7 @@ impl d2bd_runtime::usbipd_perenv_autostart::PerEnvUsbipdSpawner for BrokerPerEnv
             bundle_runner_intent_ref: BundleOpId::new(spec.intent_id()),
             runtime_allocations: vec![],
             tracing_span_id: self.tracing_span_id.clone(),
+            network_tap_context: None,
         });
         match dispatch_broker_request_with_fds_timeout(
             &self.state,
@@ -5402,6 +5352,7 @@ fn resolve_volume_storage_ref(
 fn resolve_network_effect_context(
     resource: &Value,
     resolver: &BundleResolver,
+    admission: &NetworkAdmissionProof,
 ) -> Result<NetworkEffectContext, resource_runtime::ResourceRuntimeError> {
     let spec = resource
         .get("spec")
@@ -5413,62 +5364,104 @@ fn resolve_network_effect_context(
     if provider_ref != "Provider/network-local" {
         return Err(resource_runtime::ResourceRuntimeError::ProviderPathUnavailable);
     }
-    let env_name = resolve_network_env_name(spec, resolver)?;
-    let net_vm_name = resolve_network_vm_name(spec, &env_name)?;
-    let bridge_id = intent_id_bridge_env(&env_name);
-    let projection_id = intent_id_nft_projection_env(&env_name);
-    if resolver.find_bridge_intent(&bridge_id).is_none() {
-        return Err(resource_runtime::ResourceRuntimeError::ProviderPathUnavailable);
-    }
-    let projection = resolver
-        .find_nft_projection_intent(&projection_id)
-        .ok_or(resource_runtime::ResourceRuntimeError::ProviderPathUnavailable)?;
-    let nm_id = intent_id_nm_unmanaged_host();
-    if resolver.find_nm_unmanaged_intent(&nm_id).is_none()
+    let network_name = resource
+        .get("metadata")
+        .and_then(|metadata| metadata.get("name"))
+        .and_then(Value::as_str)
+        .ok_or(resource_runtime::ResourceRuntimeError::RequestInvalid)?;
+    let provenance = d2b_contracts_resource::v3::NetworkProvenance::new(
+        admission.key().zone_uid().clone(),
+        admission.key().network_uid().clone(),
+        admission.key().network_generation(),
+        admission.key().attachment_generation(),
+        admission.key().bundle_generation().clone(),
+    );
+    let bridge_id = intent_id_network_bridge_uids(
+        provenance.zone_uid(),
+        provenance.network_uid(),
+        network_name,
+        false,
+    );
+    let uplink_bridge_id = intent_id_network_bridge_uids(
+        provenance.zone_uid(),
+        provenance.network_uid(),
+        network_name,
+        true,
+    );
+    let projection_id = intent_id_network_projection_uids(
+        provenance.zone_uid(),
+        provenance.network_uid(),
+        network_name,
+    );
+    if resolver
+        .resolve_network_bridge_intent(&bridge_id, &provenance)
+        .is_none()
         || resolver
-            .find_hosts_intent(&intent_id_hosts_host())
+            .resolve_network_bridge_intent(&uplink_bridge_id, &provenance)
             .is_none()
     {
         return Err(resource_runtime::ResourceRuntimeError::ProviderPathUnavailable);
     }
-    let route_ids = resolver
-        .route_intent_ids()
-        .filter(|id| id.starts_with(&format!("route:env:{env_name}:")))
-        .map(|id| BundleOpId::new(id.to_owned()))
-        .collect::<Vec<_>>();
-    if route_ids
-        .iter()
-        .any(|id| resolver.find_route_intent(id.as_str()).is_none())
+    let projection = resolver
+        .resolve_network_projection_intent(&projection_id, &provenance)
+        .ok_or(resource_runtime::ResourceRuntimeError::ProviderPathUnavailable)?;
+    let nm_id = intent_id_nm_unmanaged_host();
+    if resolver.find_nm_unmanaged_intent(&nm_id).is_none() {
+        return Err(resource_runtime::ResourceRuntimeError::ProviderPathUnavailable);
+    }
+    let hosts_id = intent_id_network_hosts_uids(
+        provenance.zone_uid(),
+        provenance.network_uid(),
+        network_name,
+    );
+    if resolver
+        .resolve_network_hosts_intent(&hosts_id, &provenance)
+        .is_none()
     {
         return Err(resource_runtime::ResourceRuntimeError::ProviderPathUnavailable);
     }
-    let bridge_names = resolver
-        .host
-        .environments
-        .iter()
-        .find(|environment| environment.env == env_name)
-        .into_iter()
-        .flat_map(|environment| {
-            std::iter::once(environment.bridge.as_str().to_owned()).chain(
-                resolver
-                    .find_manifest_vm(&net_vm_name)
-                    .and_then(|vm| vm.bridge.clone()),
-            )
+    let route_ids = (0..admission.intent().routes().len())
+        .map(|index| {
+            BundleOpId::new(intent_id_network_route_uids(
+                provenance.zone_uid(),
+                provenance.network_uid(),
+                network_name,
+                index,
+            ))
         })
-        .collect::<BTreeSet<_>>();
-    let sysctl_ids = resolver
-        .sysctl_intent_ids()
-        .filter(|id| {
-            bridge_names
-                .iter()
-                .any(|bridge| id.starts_with(&format!("sysctl:env:{env_name}:if:{bridge}:")))
-        })
-        .map(|id| BundleOpId::new(id.to_owned()))
         .collect::<Vec<_>>();
-    if sysctl_ids
+    if route_ids
         .iter()
-        .any(|id| resolver.find_sysctl_intent(id.as_str()).is_none())
+        .any(|id| {
+            resolver
+                .resolve_network_route_intent(id.as_str(), &provenance)
+                .is_none()
+        })
     {
+        return Err(resource_runtime::ResourceRuntimeError::ProviderPathUnavailable);
+    }
+    let sysctl_ids = ["lan", "uplink"]
+        .into_iter()
+        .flat_map(|role| {
+            let zone_uid = provenance.zone_uid().clone();
+            let network_uid = provenance.network_uid().clone();
+            let network_name = network_name.to_owned();
+            ["disable-ipv6", "accept-ra", "autoconf"].into_iter().map(move |key| {
+                BundleOpId::new(intent_id_network_sysctl_uids(
+                    &zone_uid,
+                    &network_uid,
+                    &network_name,
+                    role,
+                    key,
+                ))
+            })
+        })
+        .collect::<Vec<_>>();
+    if sysctl_ids.iter().any(|id| {
+        resolver
+            .resolve_network_sysctl_intent(id.as_str(), &provenance)
+            .is_none()
+    }) {
         return Err(resource_runtime::ResourceRuntimeError::ProviderPathUnavailable);
     }
     let generation = resolver
@@ -5477,63 +5470,21 @@ fn resolve_network_effect_context(
         .ok_or(resource_runtime::ResourceRuntimeError::ProviderPathUnavailable)?;
     let projection_digest = projection_digest_bytes(&projection.script_body)
         .ok_or(resource_runtime::ResourceRuntimeError::ProviderPathUnavailable)?;
-    Ok(NetworkEffectContext::new(
-        ScopeId::new(format!("env:{env_name}")),
+    let net_vm_name = derive_network_child_name(admission.key().network_uid(), "vm");
+    Ok(NetworkEffectContext::for_network(
+        admission.clone(),
         VmId::new(net_vm_name),
         BundleOpId::new(bridge_id),
         BundleOpId::new(projection_id),
         BundleOpId::new(nm_id),
-        BundleOpId::new(intent_id_hosts_host()),
+        BundleOpId::new(hosts_id),
         route_ids,
         sysctl_ids,
         generation,
         projection_digest,
         resolver.host.site.allow_unsafe_east_west,
-    ))
-}
-
-fn resolve_network_env_name(
-    spec: &Value,
-    resolver: &BundleResolver,
-) -> Result<String, resource_runtime::ResourceRuntimeError> {
-    let attachments = spec
-        .get("attachments")
-        .and_then(Value::as_array)
-        .ok_or(resource_runtime::ResourceRuntimeError::RequestInvalid)?;
-    let mut env_name = None;
-    for attachment in attachments {
-        let execution_ref = attachment
-            .get("executionRef")
-            .and_then(Value::as_str)
-            .and_then(|value| value.strip_prefix("Guest/"))
-            .ok_or(resource_runtime::ResourceRuntimeError::RequestInvalid)?;
-        let env = resolver
-            .find_manifest_vm(execution_ref)
-            .and_then(|vm| vm.env.as_deref())
-            .ok_or(resource_runtime::ResourceRuntimeError::ProviderPathUnavailable)?;
-        if env_name.as_deref().is_some_and(|selected| selected != env) {
-            return Err(resource_runtime::ResourceRuntimeError::RequestInvalid);
-        }
-        env_name = Some(env.to_owned());
-    }
-    let env_name = env_name.ok_or(resource_runtime::ResourceRuntimeError::RequestInvalid)?;
-    if resolver.find_host_env(&env_name).is_none() {
-        return Err(resource_runtime::ResourceRuntimeError::ProviderPathUnavailable);
-    }
-    Ok(env_name)
-}
-
-fn resolve_network_vm_name(
-    spec: &Value,
-    env_name: &str,
-) -> Result<String, resource_runtime::ResourceRuntimeError> {
-    match spec.get("netVmNameOverride") {
-        Some(value) if !value.is_null() => value
-            .as_str()
-            .map(ToOwned::to_owned)
-            .ok_or(resource_runtime::ResourceRuntimeError::RequestInvalid),
-        _ => Ok(format!("sys-{env_name}-net")),
-    }
+    )
+    .with_additional_bridge_intent(BundleOpId::new(uplink_bridge_id)))
 }
 
 #[derive(Clone)]
@@ -5765,6 +5716,9 @@ impl NetworkResourcePort for PublicNetworkResourceBoundary {
         &self,
         content: &NetworkConfigContent,
     ) -> Result<(), NetworkEffectError> {
+        if content.provenance().is_none() {
+            return Err(NetworkEffectError::NetworkAdmissionMismatch);
+        }
         let bytes = content
             .dnsmasq
             .len()
@@ -5899,6 +5853,18 @@ fn dispatch_wave6_resource_reconcile(
         .get("operationId")
         .and_then(Value::as_str)
         .unwrap_or("wave6-public-reconcile");
+    if resource_type == "Network" && network_deletion_completed(&resource) {
+        release_completed_network_admission(state, runtime, peer, &resource)?;
+        return Ok(json!({
+            "authenticated": true,
+            "effect": "network-admission-released",
+            "operationId": operation_id,
+            "providerRef": provider_ref,
+            "ready": true,
+            "resourceRef": resource_ref.to_canonical_string(),
+            "resources": [resource],
+        }));
+    }
     let resolver = load_bundle_resolver(state)
         .map_err(|_| resource_runtime::ResourceRuntimeError::ProviderPathUnavailable)?;
 
@@ -6209,6 +6175,216 @@ struct Wave6NetworkEffectRequest<'a> {
     ensure_host_base: bool,
 }
 
+fn parse_committed_network_spec(
+    resource: &Value,
+) -> Result<NetworkSpec, resource_runtime::ResourceRuntimeError> {
+    let mut spec = resource
+        .get("spec")
+        .cloned()
+        .ok_or(resource_runtime::ResourceRuntimeError::RequestInvalid)?;
+    let object = spec
+        .as_object_mut()
+        .ok_or(resource_runtime::ResourceRuntimeError::RequestInvalid)?;
+    for field in ["providerRef", "updatePolicy", "provider"] {
+        object.remove(field);
+    }
+    serde_json::from_value(spec)
+        .map_err(|_| resource_runtime::ResourceRuntimeError::RequestInvalid)
+}
+
+fn committed_resource_uid(
+    resource: &Value,
+) -> Result<ResourceUid, resource_runtime::ResourceRuntimeError> {
+    resource
+        .get("metadata")
+        .and_then(|metadata| metadata.get("uid"))
+        .and_then(Value::as_str)
+        .and_then(|value| ResourceUid::parse(value.to_owned()).ok())
+        .ok_or(resource_runtime::ResourceRuntimeError::RequestInvalid)
+}
+
+fn committed_resource_generation(
+    resource: &Value,
+) -> Result<ResourceGeneration, resource_runtime::ResourceRuntimeError> {
+    resource
+        .get("metadata")
+        .and_then(|metadata| metadata.get("generation"))
+        .and_then(Value::as_u64)
+        .and_then(|value| ResourceGeneration::new(value).ok())
+        .ok_or(resource_runtime::ResourceRuntimeError::RequestInvalid)
+}
+
+fn network_deletion_completed(resource: &Value) -> bool {
+    resource
+        .get("status")
+        .and_then(|status| status.get("phase"))
+        .and_then(Value::as_str)
+        == Some("Deleted")
+        && resource
+            .get("metadata")
+            .and_then(|metadata| metadata.get("finalizers"))
+            .and_then(Value::as_array)
+            .is_some_and(Vec::is_empty)
+}
+
+fn release_completed_network_admission(
+    state: &ServerState,
+    runtime: &resource_runtime::ZoneResourceRuntime,
+    peer: &PeerIdentity,
+    resource: &Value,
+) -> Result<(), resource_runtime::ResourceRuntimeError> {
+    let network_uid = committed_resource_uid(resource)?;
+    let zone_ref = ResourceRef::parse(&format!("Zone/{}", runtime.zone().as_str()))
+        .map_err(|_| resource_runtime::ResourceRuntimeError::RequestInvalid)?;
+    let zone = fetch_public_resource(runtime, peer, &zone_ref)?;
+    let zone_uid = committed_resource_uid(&zone)?;
+    let plane = state
+        .resource_plane
+        .lock()
+        .map_err(|_| resource_runtime::ResourceRuntimeError::ProviderPathUnavailable)?
+        .clone()
+        .ok_or(resource_runtime::ResourceRuntimeError::ProviderPathUnavailable)?;
+    let index = plane.network_admission_index();
+    block_on_future(async move {
+        index
+            .lock()
+            .await
+            .release_owner_after_finalizer(&zone_uid, &network_uid, true);
+    });
+    Ok(())
+}
+
+fn resolve_network_admission(
+    state: &ServerState,
+    runtime: &resource_runtime::ZoneResourceRuntime,
+    peer: &PeerIdentity,
+    resource: &Value,
+    resolver: &BundleResolver,
+    network_uid: &ResourceUid,
+    network_generation: ResourceGeneration,
+) -> Result<NetworkAdmissionProof, resource_runtime::ResourceRuntimeError> {
+    let spec = parse_committed_network_spec(resource)?;
+    let zone_ref_text = format!("Zone/{}", runtime.zone().as_str());
+    let zone_ref = ResourceRef::parse(&zone_ref_text)
+        .map_err(|_| resource_runtime::ResourceRuntimeError::RequestInvalid)?;
+    let zone = fetch_public_resource(runtime, peer, &zone_ref)?;
+    let zone_uid = committed_resource_uid(&zone)?;
+    let network_ref_text = format!(
+        "Network/{}",
+        resource
+            .get("metadata")
+            .and_then(|metadata| metadata.get("name"))
+            .and_then(Value::as_str)
+            .ok_or(resource_runtime::ResourceRuntimeError::RequestInvalid)?
+    );
+    let network_ref = ResourceRef::parse(&network_ref_text)
+    .map_err(|_| resource_runtime::ResourceRuntimeError::RequestInvalid)?;
+    let network_ref_string = network_ref.to_canonical_string();
+
+    let mut guest_uids = Vec::new();
+    let mut attachment_generation = network_generation.get();
+    for attachment in spec.attachments() {
+        let attached = fetch_public_resource(runtime, peer, attachment.execution_ref())?;
+        let attached_zone = attached
+            .get("metadata")
+            .and_then(|metadata| metadata.get("zone"))
+            .and_then(Value::as_str);
+        if attached_zone != Some(runtime.zone().as_str()) {
+            return Err(resource_runtime::ResourceRuntimeError::RouteMismatch);
+        }
+        let attached_uid = committed_resource_uid(&attached)?;
+        attachment_generation = attachment_generation.max(
+            committed_resource_generation(&attached)?
+                .get(),
+        );
+        if attachment.execution_ref().resource_type().as_str() == "Guest" {
+            guest_uids.push(attached_uid);
+        }
+        let reciprocal = attached
+            .get("spec")
+            .and_then(|value| value.get("networkAttachments"))
+            .and_then(Value::as_array)
+            .is_some_and(|attachments| {
+                attachments.iter().any(|candidate| {
+                    candidate
+                        .get("networkRef")
+                        .and_then(Value::as_str)
+                        == Some(network_ref_string.as_str())
+                })
+            });
+        if !reciprocal {
+            return Err(resource_runtime::ResourceRuntimeError::RequestInvalid);
+        }
+    }
+    let committed_guests = block_on_future(runtime.committed_resources_of_type("Guest"))?;
+    for guest in committed_guests {
+        let attached = guest
+            .get("spec")
+            .and_then(|value| value.get("networkAttachments"))
+            .and_then(Value::as_array)
+            .is_some_and(|attachments| {
+                attachments.iter().any(|candidate| {
+                    candidate
+                        .get("networkRef")
+                        .and_then(Value::as_str)
+                        == Some(network_ref_string.as_str())
+                })
+            });
+        if !attached {
+            continue;
+        }
+        let guest_zone = guest
+            .get("metadata")
+            .and_then(|metadata| metadata.get("zone"))
+            .and_then(Value::as_str);
+        if guest_zone != Some(runtime.zone().as_str()) {
+            return Err(resource_runtime::ResourceRuntimeError::RouteMismatch);
+        }
+        guest_uids.push(committed_resource_uid(&guest)?);
+        attachment_generation = attachment_generation.max(
+            committed_resource_generation(&guest)?
+                .get(),
+        );
+    }
+    let attachment_generation = ResourceGeneration::new(attachment_generation)
+        .map_err(|_| resource_runtime::ResourceRuntimeError::RequestInvalid)?;
+    let installed_generation = resolver
+        .installed_generation_identity()
+        .and_then(|identity| ResourceBundleGenerationId::parse(identity.as_str().to_owned()).ok())
+        .ok_or(resource_runtime::ResourceRuntimeError::ProviderPathUnavailable)?;
+    if committed_resource_uid(resource)? != *network_uid {
+        return Err(resource_runtime::ResourceRuntimeError::RequestInvalid);
+    }
+    let key = NetworkAdmissionKey::new(
+        zone_uid,
+        network_uid.clone(),
+        network_generation,
+        attachment_generation,
+        installed_generation,
+    );
+    NetworkAdmissionIntent::new(key, spec, guest_uids)
+        .map_err(|_| resource_runtime::ResourceRuntimeError::ProviderPathUnavailable)
+        .and_then(|intent| {
+            let plane = state
+                .resource_plane
+                .lock()
+                .map_err(|_| resource_runtime::ResourceRuntimeError::ProviderPathUnavailable)?
+                .clone()
+                .ok_or(resource_runtime::ResourceRuntimeError::ProviderPathUnavailable)?;
+            let occupancy = observe_host_network().map_err(|_| {
+                resource_runtime::ResourceRuntimeError::ProviderPathUnavailable
+            })?;
+            let index = plane.network_admission_index();
+            block_on_future(async move {
+                index
+                    .lock()
+                    .await
+                    .admit(intent, &occupancy)
+                    .map_err(|_| resource_runtime::ResourceRuntimeError::ProviderPathUnavailable)
+            })
+        })
+}
+
 fn reconcile_wave6_network_effect(
     request: Wave6NetworkEffectRequest<'_>,
 ) -> Result<bool, resource_runtime::ResourceRuntimeError> {
@@ -6224,6 +6400,45 @@ fn reconcile_wave6_network_effect(
         ensure_host_base,
     } = request;
     let caller_role = broker_caller_role_for_peer(peer);
+    let spec = parse_committed_network_spec(resource).map_err(|_| {
+        tracing::warn!(
+            stage = "parse-network-spec",
+            "Network Provider spec is not a valid NetworkSpec"
+        );
+        resource_runtime::ResourceRuntimeError::RequestInvalid
+    })?;
+    if spec.isolation().allow_east_west && !resolver.host.site.allow_unsafe_east_west {
+        return Err(resource_runtime::ResourceRuntimeError::ProviderPathUnavailable);
+    }
+    let generation = resource
+        .get("metadata")
+        .and_then(|metadata| metadata.get("generation"))
+        .and_then(Value::as_u64)
+        .and_then(|value| ResourceGeneration::new(value).ok())
+        .ok_or(resource_runtime::ResourceRuntimeError::RequestInvalid)?;
+    let installed_generation = resolver
+        .installed_generation_identity()
+        .and_then(|identity| ResourceBundleGenerationId::parse(identity.as_str().to_owned()).ok())
+        .ok_or(resource_runtime::ResourceRuntimeError::ProviderPathUnavailable)?;
+    let admission = resolve_network_admission(
+        state,
+        runtime,
+        peer,
+        resource,
+        resolver,
+        uid,
+        generation,
+    )?;
+    let context = resolve_network_effect_context(resource, resolver, &admission).inspect_err(
+        |error| {
+            tracing::warn!(
+                stage = "resolve-network-effect-context",
+                error = error.code(),
+                "Network Provider path resolution failed"
+            );
+        },
+    )?;
+    let attachment_generation = admission.key().attachment_generation();
     if ensure_host_base {
         let base_response = dispatch_broker_request_as(
             state,
@@ -6250,67 +6465,6 @@ fn reconcile_wave6_network_effect(
             _ => return Err(resource_runtime::ResourceRuntimeError::ProviderPathUnavailable),
         }
     }
-    let context = resolve_network_effect_context(resource, resolver).inspect_err(|error| {
-        tracing::warn!(
-            stage = "resolve-network-effect-context",
-            error = error.code(),
-            "Network Provider path resolution failed"
-        );
-    })?;
-    let mut spec_value = resource
-        .get("spec")
-        .cloned()
-        .ok_or(resource_runtime::ResourceRuntimeError::RequestInvalid)?;
-    spec_value
-        .as_object_mut()
-        .ok_or(resource_runtime::ResourceRuntimeError::RequestInvalid)?
-        .remove("providerRef");
-    let spec = serde_json::from_value::<NetworkSpec>(spec_value).map_err(|_| {
-        tracing::warn!(
-            stage = "parse-network-spec",
-            "Network Provider spec is not a valid NetworkSpec"
-        );
-        resource_runtime::ResourceRuntimeError::RequestInvalid
-    })?;
-    let env_name = resolve_network_env_name(
-        resource
-            .get("spec")
-            .ok_or(resource_runtime::ResourceRuntimeError::RequestInvalid)?,
-        resolver,
-    )
-    .inspect_err(|error| {
-        tracing::warn!(
-            stage = "resolve-network-environment",
-            error = error.code(),
-            "Network Provider environment resolution failed"
-        );
-    })?;
-    let generation = resource
-        .get("metadata")
-        .and_then(|metadata| metadata.get("generation"))
-        .and_then(Value::as_u64)
-        .and_then(|value| ResourceGeneration::new(value).ok())
-        .ok_or(resource_runtime::ResourceRuntimeError::RequestInvalid)?;
-    let installed_generation = resolver
-        .installed_generation_identity()
-        .and_then(|identity| ResourceBundleGenerationId::parse(identity.as_str().to_owned()).ok())
-        .ok_or(resource_runtime::ResourceRuntimeError::ProviderPathUnavailable)?;
-    let net_vm_name = resolve_network_vm_name(
-        resource
-            .get("spec")
-            .ok_or(resource_runtime::ResourceRuntimeError::RequestInvalid)?,
-        &env_name,
-    )?;
-    if !resolver
-        .find_manifest_vm(&net_vm_name)
-        .is_some_and(|vm| vm.is_net_vm)
-    {
-        tracing::warn!(
-            stage = "resolve-network-net-vm",
-            "Network Provider net VM is absent from the trusted manifest"
-        );
-        return Err(resource_runtime::ResourceRuntimeError::ProviderPathUnavailable);
-    }
     let mdns_enabled = resource
         .get("spec")
         .and_then(|value| value.get("mdns"))
@@ -6324,12 +6478,13 @@ fn reconcile_wave6_network_effect(
         mdns_enabled,
         network_uid: uid.clone(),
         network_generation: generation,
+        attachment_generation,
         installed_generation,
+        admission,
         artifact_catalog: vec![ArtifactCatalogEntry::new(
             spec.net_vm_system_artifact_id().clone(),
             ArtifactKind::NixosSystem,
         )],
-        peer_networks: Vec::new(),
         user_ready: true,
         host_memory_budget_available: CONFIG_VOLUME_MAX_BYTES * 2,
         volume_ready: false,
@@ -6343,7 +6498,11 @@ fn reconcile_wave6_network_effect(
         volume_deleted: true,
         attachments: Vec::new(),
     };
-    let effects = network_effect_port::production_port(state, caller_role, context);
+    let effects = network_effect_port::production_port(
+        state,
+        caller_role,
+        context.with_host_global_nic_admission(),
+    );
     let reconciler = NetworkReconciler::new(effects, resources);
     let mut durable_resource = resource.clone();
     for pass in 0..MAX_NETWORK_CHILD_READINESS_PASSES {
@@ -7484,6 +7643,85 @@ fn record_workload_launch_result(
             context: "authoritative workload audit".to_owned(),
             detail: "daemon audit unavailable".to_owned(),
         })
+}
+
+#[cfg(test)]
+mod network_tap_provenance_tests {
+    use super::*;
+    use d2b_provider_network_local::controller::{
+        NetworkAdmissionIntent, NetworkAdmissionKey,
+    };
+
+    #[test]
+    fn tap_context_copies_live_admission_tuple_and_all_interfaces() {
+        let zone_uid =
+            ResourceUid::parse("123e4567-e89b-42d3-a456-426614174000").unwrap();
+        let network_uid =
+            ResourceUid::parse("223e4567-e89b-42d3-a456-426614174001").unwrap();
+        let first_guest =
+            ResourceUid::parse("323e4567-e89b-42d3-a456-426614174002").unwrap();
+        let second_guest =
+            ResourceUid::parse("423e4567-e89b-42d3-a456-426614174003").unwrap();
+        let bundle_generation = ResourceBundleGenerationId::parse(
+            "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+        )
+        .unwrap();
+        let spec = d2b_contracts_resource::v3::network::NetworkSpec::minimal(
+            d2b_contracts_resource::v3::network::Ipv4Cidr::parse("10.20.0.0/24").unwrap(),
+            d2b_contracts_resource::v3::network::Ipv4Cidr::parse("192.0.2.0/30").unwrap(),
+            d2b_contracts_resource::v3::execution_policy::BoundedToken::parse("net-vm-base")
+                .unwrap(),
+        )
+        .unwrap();
+        let proof = NetworkAdmissionIntent::new(
+            NetworkAdmissionKey::new(
+                zone_uid,
+                network_uid,
+                ResourceGeneration::new(4).unwrap(),
+                ResourceGeneration::new(9).unwrap(),
+                bundle_generation,
+            ),
+            spec,
+            vec![first_guest.clone(), second_guest.clone()],
+        )
+        .unwrap()
+        .proof();
+
+        let first = network_tap_context_from_admission(&proof, first_guest);
+        let second = network_tap_context_from_admission(&proof, second_guest);
+        assert_eq!(first.zone_uid, second.zone_uid);
+        assert_eq!(first.network_uid, second.network_uid);
+        assert_eq!(first.network_generation, ResourceGeneration::new(4).unwrap());
+        assert_eq!(
+            first.attachment_generation,
+            ResourceGeneration::new(9).unwrap()
+        );
+        assert_eq!(
+            first.admitted_interface_names,
+            proof.intent().interface_names()
+        );
+        assert_ne!(first.attachment_id, second.attachment_id);
+        assert_eq!(
+            second.admitted_interface_names,
+            proof.intent().interface_names()
+        );
+    }
+
+    #[test]
+    fn network_admission_release_requires_deleted_resource_without_finalizers() {
+        assert!(!network_deletion_completed(&json!({
+            "metadata": {"finalizers": ["network.d2bus.org/cleanup"]},
+            "status": {"phase": "Deleted"}
+        })));
+        assert!(!network_deletion_completed(&json!({
+            "metadata": {"finalizers": []},
+            "status": {"phase": "Ready"}
+        })));
+        assert!(network_deletion_completed(&json!({
+            "metadata": {"finalizers": []},
+            "status": {"phase": "Deleted"}
+        })));
+    }
 }
 
 #[cfg(test)]
@@ -14066,20 +14304,6 @@ fn dispatch_broker_request_with_optional_request_fds(
     Ok((decoded, received_fds))
 }
 
-fn load_host_artifact(state: &ServerState) -> Result<HostJson, TypedError> {
-    load_json(&state.config.artifacts.host_path)
-}
-
-fn ipv6_sysctl_short_keys(_entry: &Ipv6SysctlEntry) -> [&'static str; 5] {
-    [
-        "disable_ipv6",
-        "accept_ra",
-        "autoconf",
-        "addr_gen_mode",
-        "arp_ignore",
-    ]
-}
-
 fn dispatch_broker_ack_request(
     state: &ServerState,
     verb: &str,
@@ -14852,6 +15076,133 @@ enum VmRunnerLaunch {
     Provider,
 }
 
+fn network_tap_context_from_admission(
+    admission: &NetworkAdmissionProof,
+    attachment_id: ResourceUid,
+) -> d2b_contracts_broker::broker_wire::NetworkTapContext {
+    let key = admission.key();
+    d2b_contracts_broker::broker_wire::NetworkTapContext {
+        zone_uid: key.zone_uid().clone(),
+        network_uid: key.network_uid().clone(),
+        attachment_id,
+        network_generation: key.network_generation(),
+        attachment_generation: key.attachment_generation(),
+        bundle_generation: key.bundle_generation().clone(),
+        admitted_interface_names: admission.intent().interface_names().to_vec(),
+    }
+}
+
+fn network_tap_context_for_vm(
+    state: &ServerState,
+    resolver: &BundleResolver,
+    vm_name: &str,
+) -> Option<d2b_contracts_broker::broker_wire::NetworkTapContext> {
+    let plane = state.resource_plane.lock().ok()?.clone()?;
+    let mut resolved = None;
+    for zone in plane.zone_ids() {
+        let Ok(runtime) = plane.zone(&zone) else {
+            continue;
+        };
+        let Ok(guests) = block_on_future(runtime.committed_resources_of_type("Guest")) else {
+            continue;
+        };
+        let Some(guest) = guests.into_iter().find(|guest| {
+            guest
+                .get("metadata")
+                .and_then(|metadata| metadata.get("name"))
+                .and_then(Value::as_str)
+                == Some(vm_name)
+        }) else {
+            continue;
+        };
+        let guest_uid = guest
+            .get("metadata")
+            .and_then(|metadata| metadata.get("uid"))
+            .and_then(Value::as_str)
+            .and_then(|value| ResourceUid::parse(value.to_owned()).ok())?;
+        let Some(attachment) = guest
+            .get("spec")
+            .and_then(|spec| spec.get("networkAttachments"))
+            .and_then(Value::as_array)
+            .and_then(|attachments| attachments.first())
+        else {
+            continue;
+        };
+        let Some(network_ref) = attachment
+            .get("networkRef")
+            .and_then(Value::as_str)
+            .and_then(|value| ResourceRef::parse(value).ok())
+        else {
+            continue;
+        };
+        let Ok(networks) = block_on_future(runtime.committed_resources_of_type("Network")) else {
+            continue;
+        };
+        let Some(network) = networks.into_iter().find(|network| {
+            network
+                .get("metadata")
+                .and_then(|metadata| metadata.get("name"))
+                .and_then(Value::as_str)
+                == Some(network_ref.name().as_str())
+        }) else {
+            continue;
+        };
+        let network_uid = network
+            .get("metadata")
+            .and_then(|metadata| metadata.get("uid"))
+            .and_then(Value::as_str)
+            .and_then(|value| ResourceUid::parse(value.to_owned()).ok())?;
+        let network_generation = network
+            .get("metadata")
+            .and_then(|metadata| metadata.get("generation"))
+            .and_then(Value::as_u64)
+            .and_then(|value| ResourceGeneration::new(value).ok())?;
+        let Ok(zone_resources) = block_on_future(runtime.committed_resources_of_type("Zone")) else {
+            continue;
+        };
+        let Some(zone_resource) = zone_resources.first() else {
+            continue;
+        };
+        let zone_uid = zone_resource
+            .get("metadata")
+            .and_then(|metadata| metadata.get("uid"))
+            .and_then(Value::as_str)
+            .and_then(|value| ResourceUid::parse(value.to_owned()).ok())?;
+        let admission_index = plane.network_admission_index();
+        let admission_zone_uid = zone_uid.clone();
+        let admission_network_uid = network_uid.clone();
+        let Some(admission) = block_on_future(async move {
+            admission_index
+                .lock()
+                .await
+                .proof_for(&admission_zone_uid, &admission_network_uid)
+        }) else {
+            continue;
+        };
+        if admission.key().network_generation() != network_generation
+            || resolver
+                .installed_generation_identity()
+                .is_none_or(|identity| identity.as_str() != admission.key().bundle_generation().as_str())
+        {
+            continue;
+        }
+        let Some(bundle_bytes) = resolver.zone_resource_bundle_bytes(zone.as_str()) else {
+            continue;
+        };
+        let Ok(bundle) = ResourceBundle::from_json(bundle_bytes) else {
+            continue;
+        };
+        if bundle.zone_uid.as_ref() != Some(&zone_uid) {
+            continue;
+        }
+        if resolved.is_some() {
+            return None;
+        }
+        resolved = Some(network_tap_context_from_admission(&admission, guest_uid));
+    }
+    resolved
+}
+
 struct VmStartRunner<'a> {
     state: &'a ServerState,
     resolver: &'a BundleResolver,
@@ -14862,6 +15213,7 @@ struct VmStartRunner<'a> {
     /// `SpawnRunner` request so the broker can record the identity in the
     /// audit trail and privilege metadata without re-reading the process DAG.
     workload_identity: Option<WorkloadIdentity>,
+    network_tap_context: Option<d2b_contracts_broker::broker_wire::NetworkTapContext>,
 }
 
 impl VmStartRunner<'_> {
@@ -15007,6 +15359,7 @@ impl VmStartRunner<'_> {
                 bundle_runner_intent_ref: BundleOpId::new(intent.intent_id.clone()),
                 runtime_allocations: vec![],
                 tracing_span_id: None,
+                network_tap_context: self.network_tap_context.clone(),
             }),
             self.caller_role.clone(),
             timeout,
@@ -17706,6 +18059,9 @@ fn execute_host_prep_dag(
     let per_vm_state_dir: Option<PathBuf> = load_bundle_resolver(state)
         .ok()
         .and_then(|r| r.manifest.vms.get(vm).map(|m| PathBuf::from(&m.state_dir)));
+    let network_tap_context = load_bundle_resolver(state)
+        .ok()
+        .and_then(|resolver| network_tap_context_for_vm(state, &resolver, vm));
     for step in steps {
         let op_name = step.kind.broker_op_name();
         let request = match step.kind {
@@ -17720,6 +18076,15 @@ fn execute_host_prep_dag(
                     .scope_id
                     .clone()
                     .unwrap_or_else(|| ScopeId::new("host"));
+                if scope_id.as_str().starts_with("env:") {
+                    tracing::warn!(
+                        vm = %vm,
+                        step_id = %step.id,
+                        op_kind = op_name,
+                        "host-prep env firewall application refused: Network admission context is required"
+                    );
+                    continue;
+                }
                 BrokerRequest::ApplyNftables(BrokerApplyNftablesRequest {
                     bundle_nft_intent_ref: nft_ref,
                     scope_id,
@@ -17728,17 +18093,15 @@ fn execute_host_prep_dag(
                     tracing_span_id: None,
                 })
             }
-            HostPrepStepKind::SeedDnsmasqLease => BrokerRequest::SeedDnsmasqLease(
-                d2b_contracts_broker::broker_wire::SeedDnsmasqLeaseRequest {
-                    vm_id: step.bundle_ref.vm_id.clone(),
-                    scope_id: step
-                        .bundle_ref
-                        .scope_id
-                        .clone()
-                        .unwrap_or_else(|| ScopeId::new("host")),
-                    tracing_span_id: None,
-                },
-            ),
+            HostPrepStepKind::SeedDnsmasqLease => {
+                tracing::warn!(
+                    vm = %vm,
+                    step_id = %step.id,
+                    op_kind = op_name,
+                    "host-prep DHCP seeding refused: Network admission context is required"
+                );
+                continue;
+            }
             HostPrepStepKind::BindMountFromHardlinkFarm => {
                 BrokerRequest::BindMountFromHardlinkFarm(
                     d2b_contracts_broker::broker_wire::BindMountFromHardlinkFarmRequest {
@@ -17805,24 +18168,65 @@ fn execute_host_prep_dag(
             // Live broker dispatch for the step kinds that previously
             // skipped-with-log. Each arm composes an existing broker op.
             HostPrepStepKind::BringUpTapInterface => {
-                // Compose CreatePersistentTap. The DAG anchors tap ownership via
-                // `runner:vm:<vm>:role:ch`; the host-prep DAG is
-                // about the persistent-side setup (ifname pinned,
-                // bridge port flags eventually applied), so we use
-                // CreatePersistentTap rather than CreateTapFd.
-                // CreateTapFd is the per-launch op that ships an
-                // SCM_RIGHTS fd back; the runner re-opens it at
-                // spawn time. Skipping in unit-test contexts is
-                // controlled by `D2B_HOST_PREP_DAG_EXECUTE`
-                // upstream; here we always issue the request.
+                let Some(context) = network_tap_context.as_ref() else {
+                    tracing::warn!(
+                        vm = %vm,
+                        step_id = %step.id,
+                        op_kind = op_name,
+                        "host-prep TAP creation refused: Network admission context is required"
+                    );
+                    return Err(broker_failure_response(
+                        VERB,
+                        "Network admission context is required for TAP creation".to_owned(),
+                        "Refresh the committed Network and attachment state before retrying VM start."
+                            .to_owned(),
+                        None,
+                    ));
+                };
                 let role_id = host_prep_role_id_from_bundle_ref(&step.bundle_ref, "ch");
+                let provenance = NetworkProvenance::new(
+                    context.zone_uid.clone(),
+                    context.network_uid.clone(),
+                    context.network_generation,
+                    context.attachment_generation,
+                    context.bundle_generation.clone(),
+                );
+                let tap_identity = match resolve_tap_identity(
+                    &provenance,
+                    &step.bundle_ref.vm_id,
+                    role_id.as_str(),
+                    &context.attachment_id,
+                ) {
+                    Ok(identity) => identity,
+                    Err(error) => {
+                        tracing::warn!(
+                            vm = %vm,
+                            step_id = %step.id,
+                            op_kind = op_name,
+                            error = error.code(),
+                            "host-prep TAP identity resolution refused"
+                        );
+                        return Err(broker_failure_response(
+                            VERB,
+                            "Network TAP identity resolution was refused".to_owned(),
+                            "Refresh the committed Network admission before retrying VM start."
+                                .to_owned(),
+                            None,
+                        ));
+                    }
+                };
                 let req = BrokerRequest::CreatePersistentTap(
                     d2b_contracts_broker::broker_wire::CreatePersistentTapRequest {
-                        role_id,
+                        role_id: role_id.clone(),
                         vm_id: step.bundle_ref.vm_id.clone(),
-                        attachment_id: None,
-                        network_generation: None,
-                        attachment_generation: None,
+                        bundle_tap_intent_ref: tap_identity.intent_ref,
+                        attachment_id: context.attachment_id.clone(),
+                        network_generation: context.network_generation,
+                        attachment_generation: context.attachment_generation,
+                        zone_uid: context.zone_uid.clone(),
+                        network_uid: context.network_uid.clone(),
+                        bundle_generation: context.bundle_generation.clone(),
+                        admitted_interface_names: context.admitted_interface_names.clone(),
                         tracing_span_id: None,
                     },
                 );
@@ -17833,7 +18237,7 @@ fn execute_host_prep_dag(
                         vm = %vm,
                         step_id = %step.id,
                         op_kind = op_name,
-                        "host-prep DAG step failed"
+                        "host-prep step failed"
                     );
                     return Err(response);
                 }
@@ -17896,107 +18300,21 @@ fn execute_host_prep_dag(
                 continue;
             }
             HostPrepStepKind::ApplySysctl => {
-                // Iterate the resolver's sysctl intent ids for this VM's env
-                // and dispatch ApplySysctl per key. The bundle's per-iface entries (bridges + TAPs)
-                // are keyed by `sysctl:env:<env>:if:<if>:<key>`; we
-                // filter by the env-scoped prefix so a single
-                // workload VM start doesn't apply sysctls for the
-                // entire host. If the bundle has no env scope on
-                // this step, we skip with a log (a host-prep DAG
-                // never emits ApplySysctl for env-less VMs today).
-                let env_scope = match step.bundle_ref.scope_id.clone() {
-                    Some(scope) => scope,
-                    None => {
-                        tracing::warn!(
-                            vm = %vm,
-                            step_id = %step.id,
-                            "ApplySysctl step has no env scope; skipping",
-                        );
-                        continue;
-                    }
-                };
-                let env_prefix = format!(
-                    "{}:if:",
-                    env_scope.as_str().replacen("env:", "sysctl:env:", 1)
+                tracing::warn!(
+                    vm = %vm,
+                    step_id = %step.id,
+                    op_kind = op_name,
+                    "host-prep sysctl application refused: Network admission context is required"
                 );
-                let resolver_for_sysctls = match load_bundle_resolver(state) {
-                    Ok(r) => r,
-                    Err(_) => {
-                        tracing::warn!(
-                            vm = %vm,
-                            step_id = %step.id,
-                            "ApplySysctl: bundle resolver unavailable; skipping",
-                        );
-                        continue;
-                    }
-                };
-                let intent_ids: Vec<String> = resolver_for_sysctls
-                    .sysctl_intent_ids()
-                    .filter(|id| id.starts_with(env_prefix.as_str()))
-                    .map(ToOwned::to_owned)
-                    .collect();
-                for intent_id in intent_ids {
-                    let req = BrokerRequest::ApplySysctl(BrokerApplySysctlRequest {
-                        bundle_sysctl_intent_ref: BundleOpId::new(intent_id.clone()),
-                        scope_id: env_scope.clone(),
-                        destroy: false,
-                        tracing_span_id: None,
-                    });
-                    if let Err(response) = dispatch_broker_ack_request_as(
-                        state,
-                        VERB,
-                        op_name,
-                        req,
-                        caller_role.clone(),
-                    ) {
-                        tracing::warn!(
-                            vm = %vm,
-                            step_id = %step.id,
-                            op_kind = op_name,
-                            intent_id = %intent_id,
-                            "host-prep DAG step failed"
-                        );
-                        return Err(response);
-                    }
-                }
                 continue;
             }
             HostPrepStepKind::SetBridgePortFlags => {
-                // Dispatch SetBridgePortFlags for the workload LAN port. The broker
-                // returns a typed
-                // BridgePortFlagsResponse, not an Ack; the host-prep
-                // dispatcher accepts any non-Error response.
-                let role_id = load_bundle_resolver(state)
-                    .ok()
-                    .and_then(|resolver| {
-                        resolver.find_manifest_vm(vm).map(|manifest_vm| {
-                            if manifest_vm.is_net_vm {
-                                "net-vm-lan"
-                            } else {
-                                "workload-lan"
-                            }
-                        })
-                    })
-                    .unwrap_or("workload-lan");
-                let role_id = RoleId::new(role_id);
-                let req = BrokerRequest::SetBridgePortFlags(
-                    d2b_contracts_broker::broker_wire::SetBridgePortFlagsRequest {
-                        vm_id: step.bundle_ref.vm_id.clone(),
-                        role_id,
-                        tracing_span_id: None,
-                    },
+                tracing::warn!(
+                    vm = %vm,
+                    step_id = %step.id,
+                    op_kind = op_name,
+                    "host-prep bridge-port mutation refused: Network admission context is required"
                 );
-                if let Err(response) =
-                    dispatch_broker_host_prep_step(state, VERB, op_name, req, caller_role.clone())
-                {
-                    tracing::warn!(
-                        vm = %vm,
-                        step_id = %step.id,
-                        op_kind = op_name,
-                        "host-prep DAG step failed"
-                    );
-                    return Err(response);
-                }
                 continue;
             }
             // HostNetRoutePreflight is host-scope and is executed inline
@@ -18237,85 +18555,6 @@ fn dispatch_broker_vm_start_inner(
 
     let resolver = load_bundle_resolver(state)?;
 
-    // For net VMs (`sys-<env>-net`), refuse start if the on-disk
-    // dnsmasq.conf hash diverges from
-    // the bundle's nft/route/hosts intent hash for the same env.
-    // This catches the case where the bundle was updated but the
-    // dnsmasq render step (host singleton or systemd unit) did not
-    // rerun. Workload VMs short-circuit with no I/O. Default
-    // dnsmasq parent dir is `/var/lib/d2b/dnsmasq`; the
-    // `D2B_DNSMASQ_DIR` env var overrides it for hermetic
-    // tests. Runs BEFORE the host-prep DAG so the failure surfaces
-    // early and no host mutations are attempted on a stale net VM.
-    {
-        let dnsmasq_dir = std::env::var_os("D2B_DNSMASQ_DIR")
-            .map(std::path::PathBuf::from)
-            .unwrap_or_else(|| std::path::PathBuf::from(net_vm_bundle_gate::DEFAULT_DNSMASQ_DIR));
-        match net_vm_bundle_gate::check_net_vm_bundle_gate(&resolver, &request.vm, &dnsmasq_dir) {
-            net_vm_bundle_gate::BundleGateOutcome::NotANetVm
-            | net_vm_bundle_gate::BundleGateOutcome::Ok => {}
-            net_vm_bundle_gate::BundleGateOutcome::Drift(drift) => {
-                let path = drift.path();
-                let reason = drift.reason();
-                // ConfigMissing is a SOFT-DEFER, not a hard fail. The
-                // dnsmasq config render is owned by a v1.1.1 daemon
-                // host-prep DAG op
-                // (`RenderDnsmasqEnvConf{env}`) that has not landed
-                // yet; until it does, a fresh-install net-VM start
-                // can legitimately hit ConfigMissing on the first
-                // run. Soft-deferring lets the VM come up; the
-                // operator sees a stderr warning explaining the
-                // gap. HashMismatch / ConfigReadFailed / EnvMissing
-                // remain hard fails because they indicate a real
-                // contract violation (bundle vs disk drift, or a
-                // malformed env declaration).
-                if matches!(
-                    drift,
-                    net_vm_bundle_gate::BundleGateDrift::ConfigMissing { .. }
-                ) {
-                    tracing::warn!(
-                        vm = %request.vm,
-                        env = drift.env(),
-                        path = %path.display(),
-                        "net VM start: dnsmasq.conf missing (soft-defer per v1.1-final; v1.1.1 RenderDnsmasqEnvConf host-prep op will render before first start)",
-                    );
-                    // Fall through to normal start path.
-                } else {
-                    tracing::warn!(
-                        vm = %request.vm,
-                        env = drift.env(),
-                        path = %path.display(),
-                        "net VM start refused: bundle/dnsmasq drift",
-                    );
-                    let (env, expected, actual) = match &drift {
-                        net_vm_bundle_gate::BundleGateDrift::HashMismatch {
-                            env,
-                            expected,
-                            actual,
-                            ..
-                        } => (env.clone(), expected.clone(), actual.clone()),
-                        net_vm_bundle_gate::BundleGateDrift::ConfigMissing { env, .. }
-                        | net_vm_bundle_gate::BundleGateDrift::ConfigReadFailed { env, .. } => {
-                            (env.clone(), String::new(), String::new())
-                        }
-                        net_vm_bundle_gate::BundleGateDrift::EnvMissing { .. } => {
-                            (String::new(), String::new(), String::new())
-                        }
-                    };
-                    return Ok(TypedError::BundleDnsmasqDrift {
-                        vm: request.vm.clone(),
-                        env,
-                        path,
-                        expected,
-                        actual,
-                        reason,
-                    }
-                    .to_envelope_value());
-                }
-            }
-        }
-    }
-
     // Build the host-prep DAG for this VM and (optionally) execute it
     // before driving the per-VM process DAG. The DAG is logged
     // unconditionally so operators and gates can observe the planned step
@@ -18352,6 +18591,7 @@ fn dispatch_broker_vm_start_inner(
         resolver: &resolver,
         caller_role: caller_role.clone(),
         workload_identity: dag.workload_identity.clone(),
+        network_tap_context: network_tap_context_for_vm(state, &resolver, request.vm.as_str()),
     };
 
     // StoreSync owns the guest-served live marker
@@ -19404,7 +19644,6 @@ fn dispatch_broker_host_prepare_as(
             dispatch_broker_ack_request_as(state, verb, op_name, request, caller_role.clone())
         };
 
-    let host = load_host_artifact(state)?;
     if let Err(response) = dispatch_broker_ack_request(
         state,
         VERB,
@@ -19420,61 +19659,6 @@ fn dispatch_broker_host_prepare_as(
         return Ok(response);
     }
 
-    let mut route_ops = 0usize;
-    let mut sysctl_ops = 0usize;
-    for env in &host.environments {
-        let scope_id = ScopeId::new(format!("env:{}", env.env));
-        for (idx, _) in env.net_vm_forward_blocklist.iter().enumerate() {
-            route_ops += 1;
-            if let Err(response) = dispatch_broker_ack_request(
-                state,
-                VERB,
-                "ApplyRoute",
-                BrokerRequest::ApplyRoute(BrokerApplyRouteRequest {
-                    bundle_route_intent_ref: BundleOpId::new(intent_id_route_env(&env.env, idx)),
-                    scope_id: scope_id.clone(),
-                    destroy: false,
-                    tracing_span_id: None,
-                }),
-            ) {
-                return Ok(response);
-            }
-        }
-        for entry in &env.ipv6_sysctls {
-            for key in ipv6_sysctl_short_keys(entry) {
-                sysctl_ops += 1;
-                if let Err(response) = dispatch_broker_ack_request(
-                    state,
-                    VERB,
-                    "ApplySysctl",
-                    BrokerRequest::ApplySysctl(BrokerApplySysctlRequest {
-                        bundle_sysctl_intent_ref: BundleOpId::new(intent_id_sysctl(
-                            &env.env,
-                            entry.if_name.as_str(),
-                            key,
-                        )),
-                        scope_id: scope_id.clone(),
-                        destroy: false,
-                        tracing_span_id: None,
-                    }),
-                ) {
-                    return Ok(response);
-                }
-            }
-        }
-    }
-    if let Err(response) = dispatch_broker_ack_request(
-        state,
-        VERB,
-        "UpdateHostsFile",
-        BrokerRequest::UpdateHostsFile(BrokerUpdateHostsFileRequest {
-            bundle_hosts_intent_ref: BundleOpId::new(intent_id_hosts_host()),
-            destroy: false,
-            tracing_span_id: None,
-        }),
-    ) {
-        return Ok(response);
-    }
     let resolver = load_bundle_resolver(state)?;
     let generation =
         resolver
@@ -19508,7 +19692,7 @@ fn dispatch_broker_host_prepare_as(
     Ok(applied_response(
         VERB,
         format!(
-            "host prepare: applied 1 nft + {route_ops} route + {sysctl_ops} sysctl + 1 hosts + 1 nm-unmanaged ops"
+            "host prepare: applied 1 host nft + 1 hosts + 1 nm-unmanaged op; Network resources own per-Network effects"
         ),
     ))
 }
@@ -19542,10 +19726,6 @@ fn dispatch_broker_host_destroy_as(
             dispatch_broker_ack_request_as(state, verb, op_name, request, caller_role.clone())
         };
 
-    let host = load_host_artifact(state)?;
-    let mut route_ops = 0usize;
-    let mut sysctl_ops = 0usize;
-
     if let Err(response) = dispatch_broker_ack_request(
         state,
         VERB,
@@ -19553,62 +19733,6 @@ fn dispatch_broker_host_destroy_as(
         BrokerRequest::ApplyNmUnmanaged(BrokerApplyNmUnmanagedRequest {
             bundle_nm_intent_ref: BundleOpId::new(intent_id_nm_unmanaged_host()),
             scope_id: ScopeId::new("host"),
-            destroy: true,
-            tracing_span_id: None,
-        }),
-    ) {
-        return Ok(response);
-    }
-    for env in &host.environments {
-        let scope_id = ScopeId::new(format!("env:{}", env.env));
-        for (idx, _) in env.net_vm_forward_blocklist.iter().enumerate() {
-            route_ops += 1;
-            if let Err(response) = dispatch_broker_ack_request(
-                state,
-                VERB,
-                "ApplyRoute",
-                BrokerRequest::ApplyRoute(BrokerApplyRouteRequest {
-                    bundle_route_intent_ref: BundleOpId::new(intent_id_route_env(&env.env, idx)),
-                    scope_id: scope_id.clone(),
-                    destroy: true,
-                    tracing_span_id: None,
-                }),
-            ) {
-                return Ok(response);
-            }
-        }
-    }
-    for env in &host.environments {
-        let scope_id = ScopeId::new(format!("env:{}", env.env));
-        for entry in &env.ipv6_sysctls {
-            for key in ipv6_sysctl_short_keys(entry) {
-                sysctl_ops += 1;
-                if let Err(response) = dispatch_broker_ack_request(
-                    state,
-                    VERB,
-                    "ApplySysctl",
-                    BrokerRequest::ApplySysctl(BrokerApplySysctlRequest {
-                        bundle_sysctl_intent_ref: BundleOpId::new(intent_id_sysctl(
-                            &env.env,
-                            entry.if_name.as_str(),
-                            key,
-                        )),
-                        scope_id: scope_id.clone(),
-                        destroy: true,
-                        tracing_span_id: None,
-                    }),
-                ) {
-                    return Ok(response);
-                }
-            }
-        }
-    }
-    if let Err(response) = dispatch_broker_ack_request(
-        state,
-        VERB,
-        "UpdateHostsFile",
-        BrokerRequest::UpdateHostsFile(BrokerUpdateHostsFileRequest {
-            bundle_hosts_intent_ref: BundleOpId::new(intent_id_hosts_host()),
             destroy: true,
             tracing_span_id: None,
         }),
@@ -19633,14 +19757,13 @@ fn dispatch_broker_host_destroy_as(
     Ok(applied_response(
         VERB,
         format!(
-            "host destroy: applied 1 nm-unmanaged-remove + {route_ops} route-del + {sysctl_ops} sysctl-revert + 1 hosts-remove + 1 nft-flush ops"
+            "host destroy: applied host-owned nm-unmanaged-remove + hosts-remove + nft-flush ops; Network resources own per-Network teardown"
         ),
     ))
 }
 
 /// Focused mutating recovery verb for network host-prep drift. Re-applies
-/// the network slice of `host prepare` (host-scope nftables +
-/// per-env routes + per-env ipv6 sysctls) - explicitly NOT the
+/// the host-owned firewall slice of `host prepare` - explicitly NOT the
 /// `/etc/hosts` mutation or NetworkManager unmanaged file: those
 /// are scoped to full `host prepare`. On success the persistent
 /// preflight history is reset so the next daemon startup begins with
@@ -19680,7 +19803,6 @@ fn dispatch_broker_host_reconcile_as(
         });
     }
 
-    let host = load_host_artifact(state)?;
     if let Err(response) = dispatch_broker_ack_request(
         state,
         VERB,
@@ -19696,63 +19818,10 @@ fn dispatch_broker_host_reconcile_as(
         return Ok(response);
     }
 
-    let mut route_ops = 0usize;
-    let mut sysctl_ops = 0usize;
-    for env in &host.environments {
-        let scope_id = ScopeId::new(format!("env:{}", env.env));
-        for (idx, _) in env.net_vm_forward_blocklist.iter().enumerate() {
-            route_ops += 1;
-            if let Err(response) = dispatch_broker_ack_request(
-                state,
-                VERB,
-                "ApplyRoute",
-                BrokerRequest::ApplyRoute(BrokerApplyRouteRequest {
-                    bundle_route_intent_ref: BundleOpId::new(intent_id_route_env(&env.env, idx)),
-                    scope_id: scope_id.clone(),
-                    destroy: false,
-                    tracing_span_id: None,
-                }),
-            ) {
-                return Ok(response);
-            }
-        }
-        for entry in &env.ipv6_sysctls {
-            for key in ipv6_sysctl_short_keys(entry) {
-                sysctl_ops += 1;
-                if let Err(response) = dispatch_broker_ack_request(
-                    state,
-                    VERB,
-                    "ApplySysctl",
-                    BrokerRequest::ApplySysctl(BrokerApplySysctlRequest {
-                        bundle_sysctl_intent_ref: BundleOpId::new(intent_id_sysctl(
-                            &env.env,
-                            entry.if_name.as_str(),
-                            key,
-                        )),
-                        scope_id: scope_id.clone(),
-                        destroy: false,
-                        tracing_span_id: None,
-                    }),
-                ) {
-                    return Ok(response);
-                }
-            }
-        }
-    }
-
-    let history = net_route_preflight::PreflightHistory::new(&state.daemon_state_dir);
-    if let Err(err) = history.reset_after_reconcile() {
-        tracing::warn!(
-            path = %history.path().display(),
-            error = %err,
-            "host reconcile: failed to reset net-route preflight history (apply succeeded; counter will clear on next successful startup pass)",
-        );
-    }
-
     Ok(applied_response(
         VERB,
         format!(
-            "host reconcile --network: applied 1 nft + {route_ops} route + {sysctl_ops} sysctl ops; net-route preflight counter reset"
+            "host reconcile --network: applied host-owned firewall projection; Network resources own per-Network effects"
         ),
     ))
 }
