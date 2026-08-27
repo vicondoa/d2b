@@ -140,12 +140,10 @@ make check
 
 Local aliases use the BuildBuddy `remote` profile when credentials and trust
 permit it. CI invokes the same public Make aliases after installing Nix and
-sets `D2B_BAZEL_PROFILE=local` and `D2B_BAZEL_UNTRUSTED=1`; it does not wrap
-each target in a separate `nix develop` command.
-The credential helper, trust partition, redaction, and typed one-retry
-pre-dispatch fallback live in `tests/tools/bazel-check`; do not duplicate
-those behaviors in Make or workflow code. Post-dispatch, analysis, policy,
-build, and test failures fail closed.
+sets `D2B_BAZEL_PROFILE=local`; public Make aliases run `bazel test
+--config=$(D2B_BAZEL_PROFILE)` directly with no `tests/tools/bazel-check`
+wrapper. `tests/tools/bazel-check` remains the BuildBuddy credential helper
+only. Post-dispatch, analysis, policy, build, and test failures fail closed.
 
 The committed fixed workflow exposes one stable required `check` result. A
 guarded performance skip is advisory and is not validation evidence.
