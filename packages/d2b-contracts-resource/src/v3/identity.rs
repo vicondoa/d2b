@@ -890,6 +890,98 @@ impl core::fmt::Debug for AuthenticatedSubjectContext {
     }
 }
 
+/// Immutable identity for a resource in one Zone generation.
+///
+/// The Zone UID and resource UID are both required because a name or a Zone
+/// label alone can be reused after deletion or across independent Zones.
+/// `generation` fences desired-state changes and `revision` fences the
+/// committed Zone view that authorized the identity.
+#[derive(Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ZoneResourceIdentity {
+    zone: ZoneId,
+    zone_uid: ResourceUid,
+    resource_ref: crate::v3::ResourceRef,
+    resource_uid: ResourceUid,
+    generation: ResourceGeneration,
+    revision: ZoneRevision,
+}
+
+impl ZoneResourceIdentity {
+    /// Construct an immutable Zone/resource identity tuple.
+    pub const fn new(
+        zone: ZoneId,
+        zone_uid: ResourceUid,
+        resource_ref: crate::v3::ResourceRef,
+        resource_uid: ResourceUid,
+        generation: ResourceGeneration,
+        revision: ZoneRevision,
+    ) -> Self {
+        Self {
+            zone,
+            zone_uid,
+            resource_ref,
+            resource_uid,
+            generation,
+            revision,
+        }
+    }
+
+    /// Borrow the Zone label.
+    pub const fn zone(&self) -> &ZoneId {
+        &self.zone
+    }
+
+    /// Borrow the immutable Zone UID.
+    pub const fn zone_uid(&self) -> &ResourceUid {
+        &self.zone_uid
+    }
+
+    /// Borrow the canonical resource reference.
+    pub const fn resource_ref(&self) -> &crate::v3::ResourceRef {
+        &self.resource_ref
+    }
+
+    /// Borrow the immutable resource UID.
+    pub const fn resource_uid(&self) -> &ResourceUid {
+        &self.resource_uid
+    }
+
+    /// Return the desired-state generation.
+    pub const fn generation(&self) -> ResourceGeneration {
+        self.generation
+    }
+
+    /// Return the committed Zone revision.
+    pub const fn revision(&self) -> ZoneRevision {
+        self.revision
+    }
+
+    /// Compare every component of the identity fence.
+    pub fn matches(
+        &self,
+        zone: &ZoneId,
+        zone_uid: &ResourceUid,
+        resource_ref: &crate::v3::ResourceRef,
+        resource_uid: &ResourceUid,
+        generation: ResourceGeneration,
+        revision: ZoneRevision,
+    ) -> bool {
+        self.zone == *zone
+            && self.zone_uid == *zone_uid
+            && self.resource_ref == *resource_ref
+            && self.resource_uid == *resource_uid
+            && self.generation == generation
+            && self.revision == revision
+    }
+}
+
+impl core::fmt::Debug for ZoneResourceIdentity {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.write_str("ZoneResourceIdentity(<redacted>)")
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

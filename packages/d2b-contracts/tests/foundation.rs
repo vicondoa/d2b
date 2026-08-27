@@ -1,7 +1,10 @@
 use d2b_contracts::{
-    Error, FeatureFlag, Hello, SemverRange, Version, decode_json_body,
-    ids::{OperationId, RealmId, WorkloadId},
-    token::{ProtocolToken, TokenError},
+    CapabilitySet, DisplayEnvironmentPosture, EnvironmentPosture, Error, ExecutionIdentityPosture,
+    FeatureFlag, Hello, IsolationPosture, LauncherIcon, LauncherItemKind, LauncherItemSummary,
+    OperationId, ProtocolToken, SemverRange, SessionPersistencePosture, Version,
+    WorkloadExecutionPosture, WorkloadProviderKind, WorkloadState, decode_json_body,
+    ids::{RealmId, WorkloadId},
+    token::TokenError,
     workload_identity::{WorkloadIdentity, WorkloadTarget},
 };
 
@@ -14,6 +17,34 @@ fn foundational_values_keep_validation_and_redaction_contracts() {
     let version = Version::new("0.4.0").expect("valid version");
     let range = SemverRange::new(">=0.4.0, <0.5.0").expect("valid range");
     assert!(range.allows(&version));
+}
+
+#[test]
+fn neutral_contracts_are_available_from_the_canonical_root() {
+    let operation = OperationId::parse("operation-1").expect("valid operation id");
+    let item_id = ProtocolToken::parse("browser").expect("valid item id");
+    let item = LauncherItemSummary {
+        id: item_id.clone(),
+        name: "Browser".to_owned(),
+        icon: LauncherIcon::default(),
+        kind: LauncherItemKind::Exec,
+        graphical: true,
+        capabilities: CapabilitySet::empty(),
+    };
+    let posture = WorkloadExecutionPosture {
+        isolation: IsolationPosture::VirtualMachine,
+        environment: EnvironmentPosture::RuntimeManaged,
+        display_environment: DisplayEnvironmentPosture::NotApplicable,
+        execution_identity: ExecutionIdentityPosture::ProviderManaged,
+        session_persistence: SessionPersistencePosture::RuntimeManaged,
+    };
+
+    assert_eq!(operation.as_str(), "operation-1");
+    assert_eq!(item.id, item_id);
+    assert_eq!(item.kind, LauncherItemKind::Exec);
+    assert_eq!(posture.isolation, IsolationPosture::VirtualMachine);
+    assert_eq!(WorkloadProviderKind::LocalVm, WorkloadProviderKind::LocalVm);
+    assert_eq!(WorkloadState::Running, WorkloadState::Running);
 }
 
 #[test]
