@@ -283,6 +283,9 @@
         "action": {
           "$ref": "#/definitions/NftablesProjectionAction"
         },
+        "attachmentGeneration": {
+          "$ref": "#/definitions/ResourceGeneration"
+        },
         "bundleNftProjectionIntentRef": {
           "type": "string"
         },
@@ -301,33 +304,11 @@
             }
           ]
         },
-        "attachmentGeneration": {
-          "allOf": [
-            {
-              "$ref": "#/definitions/ResourceGeneration"
-            }
-          ]
-        },
         "networkGeneration": {
-          "allOf": [
-            {
-              "$ref": "#/definitions/ResourceGeneration"
-            }
-          ]
+          "$ref": "#/definitions/ResourceGeneration"
         },
         "networkUid": {
-          "allOf": [
-            {
-              "$ref": "#/definitions/ResourceUid"
-            }
-          ]
-        },
-        "zoneUid": {
-          "allOf": [
-            {
-              "$ref": "#/definitions/ResourceUid"
-            }
-          ]
+          "$ref": "#/definitions/ResourceUid"
         },
         "scopeId": {
           "type": "string"
@@ -338,6 +319,9 @@
             "string",
             "null"
           ]
+        },
+        "zoneUid": {
+          "$ref": "#/definitions/ResourceUid"
         }
       },
       "additionalProperties": false
@@ -407,7 +391,6 @@
     "ApplyRouteRequest": {
       "type": "object",
       "required": [
-        "admittedInterfaceNames",
         "attachmentGeneration",
         "bundleGeneration",
         "bundleRouteIntentRef",
@@ -417,47 +400,24 @@
         "zoneUid"
       ],
       "properties": {
-        "bundleRouteIntentRef": {
-          "type": "string"
-        },
         "attachmentGeneration": {
-          "allOf": [
-            {
-              "$ref": "#/definitions/ResourceGeneration"
-            }
-          ]
+          "$ref": "#/definitions/ResourceGeneration"
         },
         "bundleGeneration": {
-          "allOf": [
-            {
-              "$ref": "#/definitions/ResourceBundleGenerationId"
-            }
-          ]
+          "$ref": "#/definitions/ResourceBundleGenerationId"
+        },
+        "bundleRouteIntentRef": {
+          "type": "string"
         },
         "destroy": {
           "default": false,
           "type": "boolean"
         },
         "networkGeneration": {
-          "allOf": [
-            {
-              "$ref": "#/definitions/ResourceGeneration"
-            }
-          ]
+          "$ref": "#/definitions/ResourceGeneration"
         },
         "networkUid": {
-          "allOf": [
-            {
-              "$ref": "#/definitions/ResourceUid"
-            }
-          ]
-        },
-        "zoneUid": {
-          "allOf": [
-            {
-              "$ref": "#/definitions/ResourceUid"
-            }
-          ]
+          "$ref": "#/definitions/ResourceUid"
         },
         "scopeId": {
           "type": "string"
@@ -468,6 +428,9 @@
             "string",
             "null"
           ]
+        },
+        "zoneUid": {
+          "$ref": "#/definitions/ResourceUid"
         }
       },
       "additionalProperties": false
@@ -484,47 +447,24 @@
         "zoneUid"
       ],
       "properties": {
-        "bundleSysctlIntentRef": {
-          "type": "string"
-        },
         "attachmentGeneration": {
-          "allOf": [
-            {
-              "$ref": "#/definitions/ResourceGeneration"
-            }
-          ]
+          "$ref": "#/definitions/ResourceGeneration"
         },
         "bundleGeneration": {
-          "allOf": [
-            {
-              "$ref": "#/definitions/ResourceBundleGenerationId"
-            }
-          ]
+          "$ref": "#/definitions/ResourceBundleGenerationId"
+        },
+        "bundleSysctlIntentRef": {
+          "type": "string"
         },
         "destroy": {
           "default": false,
           "type": "boolean"
         },
         "networkGeneration": {
-          "allOf": [
-            {
-              "$ref": "#/definitions/ResourceGeneration"
-            }
-          ]
+          "$ref": "#/definitions/ResourceGeneration"
         },
         "networkUid": {
-          "allOf": [
-            {
-              "$ref": "#/definitions/ResourceUid"
-            }
-          ]
-        },
-        "zoneUid": {
-          "allOf": [
-            {
-              "$ref": "#/definitions/ResourceUid"
-            }
-          ]
+          "$ref": "#/definitions/ResourceUid"
         },
         "scopeId": {
           "type": "string"
@@ -535,6 +475,9 @@
             "string",
             "null"
           ]
+        },
+        "zoneUid": {
+          "$ref": "#/definitions/ResourceUid"
         }
       },
       "additionalProperties": false
@@ -4642,8 +4585,8 @@
       "type": "object",
       "required": [
         "attachmentGeneration",
-        "bundleGeneration",
         "bundleBridgeIntentRef",
+        "bundleGeneration",
         "networkGeneration",
         "networkUid",
         "scopeId",
@@ -4651,35 +4594,19 @@
       ],
       "properties": {
         "attachmentGeneration": {
-          "allOf": [
-            {
-              "$ref": "#/definitions/ResourceGeneration"
-            }
-          ]
-        },
-        "bundleGeneration": {
-          "allOf": [
-            {
-              "$ref": "#/definitions/ResourceBundleGenerationId"
-            }
-          ]
+          "$ref": "#/definitions/ResourceGeneration"
         },
         "bundleBridgeIntentRef": {
           "type": "string"
         },
+        "bundleGeneration": {
+          "$ref": "#/definitions/ResourceBundleGenerationId"
+        },
         "networkGeneration": {
-          "allOf": [
-            {
-              "$ref": "#/definitions/ResourceGeneration"
-            }
-          ]
+          "$ref": "#/definitions/ResourceGeneration"
         },
         "networkUid": {
-          "allOf": [
-            {
-              "$ref": "#/definitions/ResourceUid"
-            }
-          ]
+          "$ref": "#/definitions/ResourceUid"
         },
         "scopeId": {
           "type": "string"
@@ -4692,11 +4619,7 @@
           ]
         },
         "zoneUid": {
-          "allOf": [
-            {
-              "$ref": "#/definitions/ResourceUid"
-            }
-          ]
+          "$ref": "#/definitions/ResourceUid"
         }
       },
       "additionalProperties": false
@@ -4724,7 +4647,7 @@
       "additionalProperties": false
     },
     "CreatePersistentTapRequest": {
-      "description": "The broker derives the bridge ifname, owner uid/gid, and TAP attributes from the admitted Network identity. Every provenance field is mandatory; there is no legacy env/manifest path.",
+      "description": "The broker derives the bridge ifname, owner uid/gid, and TAP attributes from the admitted Network identity. Every field in the provenance tuple and the exact admitted interface set is mandatory; there is no legacy env/manifest path.",
       "type": "object",
       "required": [
         "admittedInterfaceNames",
@@ -4740,10 +4663,11 @@
       ],
       "properties": {
         "admittedInterfaceNames": {
+          "description": "Exact interface set copied from the live Network admission proof.",
+          "type": "array",
           "items": {
             "$ref": "#/definitions/IfName"
-          },
-          "type": "array"
+          }
         },
         "attachmentGeneration": {
           "$ref": "#/definitions/ResourceGeneration"
@@ -4755,6 +4679,7 @@
           "$ref": "#/definitions/ResourceBundleGenerationId"
         },
         "bundleTapIntentRef": {
+          "description": "Opaque TAP identity bound to the complete Network tuple below.",
           "type": "string"
         },
         "networkGeneration": {
@@ -4783,7 +4708,7 @@
       "additionalProperties": false
     },
     "CreateTapFdRequest": {
-      "description": "See [`CreatePersistentTapRequest`] for the provenance contract; `CreateTapFd` carries the same complete identity tuple.",
+      "description": "See [`CreatePersistentTapRequest`] for the provenance contract; `CreateTapFd` carries the same complete identity tuple and interface proof.",
       "type": "object",
       "required": [
         "admittedInterfaceNames",
@@ -4799,10 +4724,11 @@
       ],
       "properties": {
         "admittedInterfaceNames": {
+          "description": "Exact interface set copied from the live Network admission proof.",
+          "type": "array",
           "items": {
             "$ref": "#/definitions/IfName"
-          },
-          "type": "array"
+          }
         },
         "attachmentGeneration": {
           "$ref": "#/definitions/ResourceGeneration"
@@ -4814,6 +4740,7 @@
           "$ref": "#/definitions/ResourceBundleGenerationId"
         },
         "bundleTapIntentRef": {
+          "description": "Opaque TAP identity bound to the complete Network tuple below.",
           "type": "string"
         },
         "networkGeneration": {
@@ -4866,8 +4793,8 @@
       "type": "object",
       "required": [
         "attachmentGeneration",
-        "bundleGeneration",
         "bundleBridgeIntentRef",
+        "bundleGeneration",
         "networkGeneration",
         "networkUid",
         "scopeId",
@@ -4877,11 +4804,11 @@
         "attachmentGeneration": {
           "$ref": "#/definitions/ResourceGeneration"
         },
-        "bundleGeneration": {
-          "$ref": "#/definitions/ResourceBundleGenerationId"
-        },
         "bundleBridgeIntentRef": {
           "type": "string"
+        },
+        "bundleGeneration": {
+          "$ref": "#/definitions/ResourceBundleGenerationId"
         },
         "networkGeneration": {
           "$ref": "#/definitions/ResourceGeneration"
@@ -8307,7 +8234,7 @@
       ]
     },
     "NetworkTapContext": {
-      "description": "Complete admitted Network identity required for a VMM TAP effect.",
+      "description": "Admitted Network identity passed through a VMM runner launch.",
       "type": "object",
       "required": [
         "admittedInterfaceNames",
@@ -8320,10 +8247,11 @@
       ],
       "properties": {
         "admittedInterfaceNames": {
+          "description": "Exact interface set copied from the live Network admission proof.",
+          "type": "array",
           "items": {
             "$ref": "#/definitions/IfName"
-          },
-          "type": "array"
+          }
         },
         "attachmentGeneration": {
           "$ref": "#/definitions/ResourceGeneration"
@@ -12170,7 +12098,7 @@
       "additionalProperties": false
     },
     "SeedDnsmasqLeaseRequest": {
-      "description": "SeedDnsmasqLease request bound to the admitted Network identity. The broker resolves the per-VM lease artifact from its trusted bundle.",
+      "description": "SeedDnsmasqLease request. The broker resolves the per-VM dnsmasq lease intent from the bundle (using `vm_id`) and writes `/var/lib/d2b/dnsmasq/<vm>.leases` with the correct owner / mode.",
       "type": "object",
       "required": [
         "attachmentGeneration",
@@ -12237,7 +12165,7 @@
       ]
     },
     "SetBridgePortFlagsRequest": {
-      "description": "The broker derives the bridge, port, and flag set from the admitted Network identity. Legacy callers without Network provenance are refused.",
+      "description": "The broker derives the bridge, port, and flag set from the complete admitted Network identity. Legacy callers without that context are refused before any link mutation.",
       "type": "object",
       "required": [
         "roleId",
@@ -12245,6 +12173,7 @@
       ],
       "properties": {
         "networkTapContext": {
+          "description": "Complete admitted Network identity for a Network-owned port.",
           "anyOf": [
             {
               "$ref": "#/definitions/NetworkTapContext"
@@ -12559,6 +12488,7 @@
           ]
         },
         "networkTapContext": {
+          "description": "Complete admitted Network context required when this runner opens a VMM TAP through `CreateTapFd`.",
           "anyOf": [
             {
               "$ref": "#/definitions/NetworkTapContext"

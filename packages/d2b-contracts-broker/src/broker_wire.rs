@@ -3882,6 +3882,7 @@ mod tests {
                 "attachmentGeneration": 7,
                 "zoneUid": "223e4567-e89b-42d3-a456-426614174001",
                 "networkUid": "323e4567-e89b-42d3-a456-426614174002",
+                "admittedInterfaceNames": ["d2b-tap0", "d2b-br0"],
                 "bundleGeneration": "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
             }
         }))
@@ -3909,6 +3910,7 @@ mod tests {
                 "attachmentGeneration": 7,
                 "zoneUid": "223e4567-e89b-42d3-a456-426614174001",
                 "networkUid": "323e4567-e89b-42d3-a456-426614174002",
+                "admittedInterfaceNames": ["d2b-tap0", "d2b-br0"],
                 "bundleGeneration": "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
             }
         }))
@@ -3929,6 +3931,7 @@ mod tests {
             for field in [
                 "attachmentId",
                 "attachmentGeneration",
+                "admittedInterfaceNames",
                 "bundleTapIntentRef",
                 "networkGeneration",
                 "networkUid",
@@ -3956,6 +3959,7 @@ mod tests {
             for field in [
                 "attachmentId",
                 "attachmentGeneration",
+                "admittedInterfaceNames",
                 "bundleTapIntentRef",
                 "networkGeneration",
                 "networkUid",
@@ -4113,6 +4117,7 @@ mod tests {
             "attachmentGeneration": 7,
             "zoneUid": "223e4567-e89b-42d3-a456-426614174001",
             "networkUid": "323e4567-e89b-42d3-a456-426614174002",
+            "admittedInterfaceNames": ["d2b-tap0", "d2b-br0"],
             "bundleGeneration": "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
         })
     }
