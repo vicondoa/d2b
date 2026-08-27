@@ -19757,7 +19757,7 @@ fn dispatch_broker_host_destroy_as(
     Ok(applied_response(
         VERB,
         format!(
-            "host destroy: applied host-owned nm-unmanaged-remove + hosts-remove + nft-flush ops; Network resources own per-Network teardown"
+            "host destroy: applied host-owned nm-unmanaged-remove + nft-flush ops; Network resources own per-Network teardown"
         ),
     ))
 }
@@ -29398,7 +29398,7 @@ mod broker_dispatch_tests {
     }
 
     #[test]
-    fn host_destroy_deletes_routes_before_restoring_sysctls_and_flushing_nft() {
+    fn host_destroy_removes_only_host_owned_network_state() {
         use d2b_contracts_broker::broker_wire::{
             AckResponse, BrokerRequestEnvelope, BrokerResponse,
         };
@@ -29478,7 +29478,7 @@ mod broker_dispatch_tests {
         let server_socket_path = socket_path.clone();
         let broker = thread::spawn(move || {
             let mut operations = Vec::new();
-            for _ in 0..9 {
+            for _ in 0..2 {
                 let accepted_fd = accept4(listener.as_raw_fd(), SockFlag::SOCK_CLOEXEC)
                     .expect("accept broker peer");
                 let frame = read_test_frame(accepted_fd).expect("read broker request frame");
@@ -29515,13 +29515,6 @@ mod broker_dispatch_tests {
             broker.join().expect("join broker thread"),
             vec![
                 "ApplyNmUnmanaged",
-                "ApplyRoute",
-                "ApplySysctl",
-                "ApplySysctl",
-                "ApplySysctl",
-                "ApplySysctl",
-                "ApplySysctl",
-                "UpdateHostsFile",
                 "ApplyNftables",
             ]
         );
@@ -29540,7 +29533,7 @@ mod broker_dispatch_tests {
         assert_eq!(
             response.get("summary").and_then(serde_json::Value::as_str),
             Some(
-                "host destroy: applied 1 nm-unmanaged-remove + 1 route-del + 5 sysctl-revert + 1 hosts-remove + 1 nft-flush ops"
+                "host destroy: applied host-owned nm-unmanaged-remove + nft-flush ops; Network resources own per-Network teardown"
             )
         );
 
