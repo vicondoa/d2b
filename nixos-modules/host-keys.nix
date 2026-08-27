@@ -38,7 +38,7 @@
 let
   cfg = config.d2b;
   d2bLib = import ./lib.nix { inherit lib; };
-  normalNixosVms = d2bLib.normalNixosVms cfg.vms;
+  normalNixosVms = d2bLib.normalNixosVms (d2bLib.gatewayVms cfg);
 
   # Resolve a `userAuthorizedKeys` entry (path | string) to its raw
   # text. Paths get read into the Nix store at eval time and surfaced

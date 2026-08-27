@@ -213,6 +213,61 @@ rec {
   normalNixosVms = vms: lib.filterAttrs (_: vm: vm.enable && isNixosVm vm) vms;
   qemuMediaVms = vms: lib.filterAttrs (_: vm: vm.enable && isQemuMediaVm vm) vms;
 
+  # Keep transitional VM/env projections only for explicit legacy VM
+  # references owned by enabled gateway-vm realms.
+  gatewayRealms = cfg:
+    lib.filterAttrs
+      (_: realm:
+        (realm.enable or false)
+        && (realm.placement or null) == "gateway-vm")
+      (cfg.realms or { });
+  gatewayRealmMappings = cfg:
+    let
+      vms = cfg.vms or { };
+      mappingFor = realm:
+        let
+          envNames = lib.unique (lib.filter (envName: envName != null)
+            ([ (realm.env or null) ] ++ (realm.network.envs or [ ])));
+          workloadVmNames = lib.unique (lib.filter
+            (vmName: vmName != null)
+            (map (workload: workload.legacyVmName or null)
+              (lib.filter (workload: workload.enable or false)
+                (lib.attrValues (realm.workloads or { })))));
+          acceptedVms = lib.filterAttrs
+            (name: vm:
+              (vm.enable or false)
+              && builtins.elem name workloadVmNames
+              && builtins.elem (vm.env or null) envNames)
+            vms;
+          acceptedEnvNames = lib.sort lib.lessThan (lib.unique (lib.filter
+            (envName: envName != null)
+            (map (vm: vm.env or null) (lib.attrValues acceptedVms))));
+        in {
+          inherit acceptedVms acceptedEnvNames;
+        };
+    in
+    map mappingFor (lib.attrValues (gatewayRealms cfg));
+  gatewayEnvNames = cfg:
+    lib.sort lib.lessThan (lib.unique (lib.concatLists
+      (map (mapping: mapping.acceptedEnvNames)
+        (gatewayRealmMappings cfg))));
+  gatewayVmNames = cfg:
+    lib.sort lib.lessThan (lib.attrNames (gatewayVms cfg));
+  gatewayVms = cfg:
+    lib.foldl'
+      (result: mapping: result // mapping.acceptedVms)
+      { }
+      (gatewayRealmMappings cfg);
+  gatewayEnvs = cfg:
+    let envNames = gatewayEnvNames cfg;
+    in lib.filterAttrs
+      (name: _: builtins.elem name envNames)
+      (cfg.envs or { });
+  gatewayEnvMeta = cfg: envMeta:
+    lib.filterAttrs
+      (name: _: builtins.elem name (gatewayEnvNames cfg))
+      envMeta;
+
   localRuntimeProvider = { id, driver }: {
     inherit id driver;
     type = "local";

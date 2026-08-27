@@ -21,7 +21,8 @@
 let
   legacyCfg = config.d2b.site.niriVmBorders;
   cfg = config.d2b.site.ui.compositors.niri;
-  vmsCfg = config.d2b.vms;
+  d2bLib = import ../../../nixos-modules/lib.nix { inherit lib; };
+  vmsCfg = d2bLib.gatewayVms config.d2b;
   colors = config.d2b._uiColors;
 
   isQemuMediaVm = vm: (vm.runtime.kind or "nixos") == "qemu-media";

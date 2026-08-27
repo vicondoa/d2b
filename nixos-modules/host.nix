@@ -19,7 +19,8 @@ let
 
   cfg = config.d2b;
   index = cfg._index;
-  envMeta = index.envMeta;
+  gatewayVms = d2bLib.gatewayVms cfg;
+  envMeta = d2bLib.gatewayEnvMeta cfg index.envMeta;
   obsCfg = cfg.observability;
   # graphics + audio components both
   # transitively depend on x86_64-only packages (crosvm-patched,
@@ -95,8 +96,8 @@ let
     };
   };
 
-  enabledVms = index.enabledVms;
-  normalNixosVms' = index.normalNixosVms;
+  enabledVms = d2bLib.enabledVms gatewayVms;
+  normalNixosVms' = d2bLib.normalNixosVms gatewayVms;
   # `d2b.vms.<vm>.supervisor` was removed per ADR 0015.
   # Every enabled VM is now daemon-supervised; the systemd-template
   # path is retired. The empty `systemdSupervisedVms` set keeps
@@ -104,16 +105,21 @@ let
   # template instances; the v1.1- phase deletes those sites
   # outright when the template definitions themselves go.
   systemdSupervisedVms = { };
-  daemonSupervisedVmNames = index.normalNixosVmNames;
+  daemonSupervisedVmNames = lib.attrNames normalNixosVms';
 
-  usbipYubikeyVmEnabled = index.usbip.vmNames != [ ];
+  usbipYubikeyVmEnabled =
+    lib.any (vm: vm.usbip.yubikey) (lib.attrValues gatewayVms);
 
-  workloadObsVmNames = index.components.observability.vmNames;
+  workloadObsVmNames = lib.filter
+    (name: builtins.hasAttr name gatewayVms)
+    index.components.observability.vmNames;
 
   # `transport-vsock` lands before `observability-vm.nix`, so don't
   # auto-start relay instances until the auto-declared obs VM actually
   # exists in `cfg.vms`.
-  obsVmEnabled = index.observability.stackVmEnabled;
+  obsVmEnabled =
+    index.observability.stackVmEnabled
+    && builtins.hasAttr index.observability.stackVmName gatewayVms;
 
   relayVmNames =
     if obsVmEnabled
@@ -127,7 +133,7 @@ let
   # per-instance BindsTo/Wants, so we wire per-VM `wants` on each
   # graphics gpu sidecar separately below.
   graphicsRelayVmNames =
-    lib.filter (name: (cfg.vms.${name}.graphics.enable or false)) relayVmNames;
+    lib.filter (name: (gatewayVms.${name}.graphics.enable or false)) relayVmNames;
 
   relayEligibilityScript = pkgs.writeShellScript "d2b-otel-relay-eligible" ''
     case " ${lib.concatStringsSep " " relayVmNames} " in

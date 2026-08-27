@@ -14,6 +14,9 @@
 
 let
   cfg = config.d2b.observability;
+  d2bLib = import ../../../nixos-modules/lib.nix { inherit lib; };
+  legacyGatewayVms = d2bLib.gatewayVms config.d2b;
+  stackAvailable = builtins.hasAttr cfg.vmName legacyGatewayVms;
   hostCfg = cfg.host;
   identityName = hostCfg.identityName;
   scrapeJournal = hostCfg.scrapeJournal;
@@ -270,7 +273,7 @@ let
     lib.generators.toYAML { } collectorAttrs
   );
 in
-lib.mkIf cfg.enable {
+lib.mkIf (cfg.enable && stackAvailable) {
   users.users."d2b-host-otel-collector" = {
     isSystemUser = true;
     group = "d2b-host-otel-collector";

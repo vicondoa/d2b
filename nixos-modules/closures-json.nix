@@ -4,7 +4,7 @@ let
   cfg = config.d2b;
   # d2b-owned access helpers (see lib.nix).
   d2bLib = import ./lib.nix { inherit lib pkgs; };
-  normalNixosVms = d2bLib.normalNixosVms cfg.vms;
+  normalNixosVms = d2bLib.normalNixosVms (d2bLib.gatewayVms cfg);
 
   privateEtc = source: {
     inherit source;

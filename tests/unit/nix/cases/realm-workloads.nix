@@ -130,6 +130,95 @@ let
   wlCfg = (mkEval [ workloadFixture ]).config;
   wlIndex = wlCfg.d2b._index;
   workRealm = wlIndex.realms.byPath."work.home";
+  gatewayProjectionFixture = lib.recursiveUpdate workloadFixture {
+    d2b.envs.personal = {
+      lanSubnet = "10.40.0.0/24";
+      uplinkSubnet = "198.51.100.0/30";
+    };
+    d2b.envs.lab = {
+      lanSubnet = "10.50.0.0/24";
+      uplinkSubnet = "203.0.113.0/30";
+    };
+    d2b.vms.personalbox = {
+      env = "personal";
+      index = 10;
+      ssh.user = "alice";
+      config.users.users.alice = { isNormalUser = true; uid = 1000; };
+    };
+    d2b.vms.labbox = {
+      env = "lab";
+      index = 10;
+      ssh.user = "alice";
+      config.users.users.alice = { isNormalUser = true; uid = 1000; };
+    };
+    d2b.vms.wrongbox = {
+      env = "lab";
+      index = 11;
+      ssh.user = "alice";
+      config.users.users.alice = { isNormalUser = true; uid = 1000; };
+    };
+    d2b.realms.work.workloads.cross-pair = {
+      kind = "local-vm";
+      legacyVmName = "wrongbox";
+    };
+    d2b.realms.lab = {
+      placement = "gateway-vm";
+      env = "lab";
+      network.envs = [ "lab" ];
+      workloads.lab-laptop = {
+        kind = "local-vm";
+        legacyVmName = "labbox";
+      };
+    };
+    d2b.realms.personal = {
+      path = "personal";
+      env = "personal";
+      network.envs = [ "personal" ];
+      workloads.personalbox = {
+        kind = "local-vm";
+        legacyVmName = "personalbox";
+      };
+    };
+  };
+  gatewayProjectionCfg = (mkEval [ gatewayProjectionFixture ]).config;
+  gatewayProjectionLauncher =
+    gatewayProjectionCfg.d2b._bundle.realmWorkloadsLauncherJson.data;
+  gatewayProjectionControllers =
+    gatewayProjectionCfg.d2b._bundle.realmControllersJson.data.controllers;
+  gatewayProjectionHostEnvironments =
+    gatewayProjectionCfg.d2b._bundle.hostJson.data.environments;
+  gatewayProjectionProcessVms =
+    gatewayProjectionCfg.d2b._bundle.processesJson.data.vms;
+  gatewayProjectionClosures =
+    gatewayProjectionCfg.d2b._bundle.closures;
+  gatewayProjectionCorpLauncher = lib.findFirst
+    (row: row.workloadName == "corp-laptop")
+    null
+    gatewayProjectionLauncher.workloads;
+  gatewayProjectionPersonalLauncher = lib.findFirst
+    (row: row.workloadName == "personalbox")
+    null
+    gatewayProjectionLauncher.workloads;
+  gatewayProjectionCrossPairLauncher = lib.findFirst
+    (row: row.workloadName == "cross-pair")
+    null
+    gatewayProjectionLauncher.workloads;
+  gatewayProjectionLabLauncher = lib.findFirst
+    (row: row.workloadName == "lab-laptop")
+    null
+    gatewayProjectionLauncher.workloads;
+  gatewayProjectionWorkController = lib.findFirst
+    (row: row.realmName == "work")
+    null
+    gatewayProjectionControllers;
+  gatewayProjectionLabController = lib.findFirst
+    (row: row.realmName == "lab")
+    null
+    gatewayProjectionControllers;
+  gatewayProjectionPersonalController = lib.findFirst
+    (row: row.realmName == "personal")
+    null
+    gatewayProjectionControllers;
   firstClassLocalVmFixture = lib.recursiveUpdate workloadFixture {
     d2b.realms.work.workloads.first-class = {
       enable = true;
@@ -891,6 +980,88 @@ in
       corpLaptopPresent = true;
       archivedAbsent = true;
       nullRefNotInByVm = true;
+    };
+  };
+
+  "realm-workloads/gateway-scoped-legacy-projections" = {
+    expr = {
+      manifestNames = lib.sort lib.lessThan
+        (builtins.attrNames gatewayProjectionCfg.d2b.manifest);
+      corpManifestPresent =
+        builtins.hasAttr "corpbox" gatewayProjectionCfg.d2b.manifest;
+      labManifestPresent =
+        builtins.hasAttr "labbox" gatewayProjectionCfg.d2b.manifest;
+      nonGatewayManifestAbsent =
+        !(builtins.hasAttr "personalbox" gatewayProjectionCfg.d2b.manifest);
+      crossPairManifestAbsent =
+        !(builtins.hasAttr "wrongbox" gatewayProjectionCfg.d2b.manifest);
+      hostEnvironmentNames =
+        lib.sort lib.lessThan
+          (map (environment: environment.env) gatewayProjectionHostEnvironments);
+      processVmNames = lib.sort lib.lessThan
+        (map (process: process.vm) gatewayProjectionProcessVms);
+      nonGatewayProcessAbsent =
+        !(builtins.elem "personalbox"
+          (map (process: process.vm) gatewayProjectionProcessVms));
+      crossPairProcessAbsent =
+        !(builtins.elem "wrongbox"
+          (map (process: process.vm) gatewayProjectionProcessVms));
+      closureNames = lib.sort lib.lessThan
+        (builtins.attrNames gatewayProjectionClosures);
+      nonGatewayClosureAbsent =
+        !(builtins.hasAttr "personalbox" gatewayProjectionClosures);
+      crossPairClosureAbsent =
+        !(builtins.hasAttr "wrongbox" gatewayProjectionClosures);
+      launcherSchema = gatewayProjectionLauncher.schemaVersion;
+      corpLauncherVsockIsInt =
+        builtins.isInt gatewayProjectionCorpLauncher.vsockCid;
+      labLauncherVsockIsInt =
+        builtins.isInt gatewayProjectionLabLauncher.vsockCid;
+      nonGatewayLauncherVsock = gatewayProjectionPersonalLauncher.vsockCid;
+      crossPairLauncherVsock = gatewayProjectionCrossPairLauncher.vsockCid;
+      workControllerHasRuntime =
+        gatewayProjectionWorkController.localRuntime != null;
+      workControllerHasCorpbox =
+        builtins.elem "corpbox"
+          (map (workload: workload.vmName)
+            gatewayProjectionWorkController.localRuntime.workloads);
+      workControllerExcludesWrongbox =
+        !(builtins.elem "wrongbox"
+          (map (workload: workload.vmName)
+            gatewayProjectionWorkController.localRuntime.workloads));
+      labControllerHasRuntime =
+        gatewayProjectionLabController.localRuntime != null;
+      labControllerHasLabbox =
+        builtins.elem "labbox"
+          (map (workload: workload.vmName)
+            gatewayProjectionLabController.localRuntime.workloads);
+      nonGatewayControllerRuntime =
+        gatewayProjectionPersonalController.localRuntime;
+    };
+    expected = {
+      manifestNames = [ "corpbox" "labbox" ];
+      corpManifestPresent = true;
+      labManifestPresent = true;
+      nonGatewayManifestAbsent = true;
+      crossPairManifestAbsent = true;
+      hostEnvironmentNames = [ "lab" "work" ];
+      processVmNames = [ "corpbox" "labbox" ];
+      nonGatewayProcessAbsent = true;
+      crossPairProcessAbsent = true;
+      closureNames = [ "corpbox" "labbox" ];
+      nonGatewayClosureAbsent = true;
+      crossPairClosureAbsent = true;
+      launcherSchema = "v1";
+      corpLauncherVsockIsInt = true;
+      labLauncherVsockIsInt = true;
+      nonGatewayLauncherVsock = null;
+      crossPairLauncherVsock = null;
+      workControllerHasRuntime = true;
+      workControllerHasCorpbox = true;
+      workControllerExcludesWrongbox = true;
+      labControllerHasRuntime = true;
+      labControllerHasLabbox = true;
+      nonGatewayControllerRuntime = null;
     };
   };
 

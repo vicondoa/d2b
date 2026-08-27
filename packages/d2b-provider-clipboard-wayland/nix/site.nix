@@ -5,6 +5,7 @@ let
   cfg = config.d2b.site.clipboard;
   site = config.d2b.site;
   d2bLib = import ../../../nixos-modules/lib.nix { inherit lib; };
+  gatewayVms = d2bLib.gatewayVms config.d2b;
 
   mib = n: n * 1024 * 1024;
   nonNegativeInt = lib.types.ints.unsigned;
@@ -33,8 +34,8 @@ let
   bridgeVmSet =
     (lib.filterAttrs (_name: vm:
       vm.enable && vm.graphics.enable && vm.graphics.crossDomainTrusted && vm.graphics.waylandProxy.enable
-    ) (d2bLib.normalNixosVms config.d2b.vms))
-    // (d2bLib.qemuMediaVms config.d2b.vms);
+    ) (d2bLib.normalNixosVms gatewayVms))
+    // (d2bLib.qemuMediaVms gatewayVms);
   bridgeVms = lib.attrNames bridgeVmSet;
   indexedWorkloads = config.d2b._index.realms.workloads.enabled;
   indexedWorkloadForVm = vm:

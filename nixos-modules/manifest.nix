@@ -51,26 +51,28 @@ let
   d2bLib = import ./lib.nix { inherit lib pkgs; };
   inherit (d2bLib) subnetIp;
 
-  envMeta = config.d2b._envMeta;
-  enabledVms = lib.filterAttrs (_: vm: vm.enable) config.d2b.vms;
+  gatewayVms = d2bLib.gatewayVms config.d2b;
+  gatewayEnvs = d2bLib.gatewayEnvs config.d2b;
+  envMeta = d2bLib.gatewayEnvMeta config.d2b config.d2b._envMeta;
+  enabledVms = d2bLib.enabledVms gatewayVms;
   obsCfg = config.d2b.observability;
 
   # `lib.attrNames` returns names sorted lexicographically, so the
   # env-index assignment is deterministic and stable across evals.
-  envNames = lib.attrNames config.d2b.envs;
+  envNames = lib.attrNames gatewayEnvs;
   envIndexMap = lib.listToAttrs (
     lib.imap0 (i: name: { inherit name; value = i; }) envNames
   );
 
   netVmOfEnv = envName:
-    let n = config.d2b.envs.${envName}.netName or "sys-${envName}-net";
+    let n = gatewayEnvs.${envName}.netName or "sys-${envName}-net";
     in n;
 
   envOfNetVm = name:
     lib.findFirst
       (e: netVmOfEnv e == name)
       null
-      (lib.attrNames config.d2b.envs);
+      (lib.attrNames gatewayEnvs);
 
   vmMeta = name: vm:
     let

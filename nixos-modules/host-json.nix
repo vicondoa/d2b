@@ -3,8 +3,9 @@
 let
   cfg = config.d2b;
   d2bLib = import ./lib.nix { inherit lib; };
-  envMeta = cfg._envMeta;
-  enabledVms = lib.filterAttrs (_: vm: vm.enable) cfg.vms;
+  gatewayVms = d2bLib.gatewayVms cfg;
+  envMeta = d2bLib.gatewayEnvMeta cfg cfg._envMeta;
+  enabledVms = d2bLib.enabledVms gatewayVms;
   anyGraphics = builtins.any (vm: vm.graphics.enable) (lib.attrValues enabledVms);
   anyAudio = builtins.any (vm: vm.audio.enable) (lib.attrValues enabledVms);
   anyTpm = builtins.any (vm: vm.tpm.enable) (lib.attrValues enabledVms);
@@ -32,12 +33,12 @@ let
   workloadTapNames = envName:
     lib.sort lib.lessThan (lib.mapAttrsToList
       (vmName: _: cfg.manifest.${vmName}.tap)
-      (lib.filterAttrs (_: vm: vm.enable && vm.env == envName) cfg.vms));
+      (lib.filterAttrs (_: vm: vm.enable && vm.env == envName) gatewayVms));
 
   workloadTapByVm = envName:
     lib.mapAttrsToList
       (vmName: _: { vm = vmName; tap = cfg.manifest.${vmName}.tap; })
-      (lib.filterAttrs (_: vm: vm.enable && vm.env == envName) cfg.vms);
+      (lib.filterAttrs (_: vm: vm.enable && vm.env == envName) gatewayVms);
 
   usbipVendorProductAllowlist = map (entry: {
     vendor = lib.fromHexString (lib.removePrefix "0x" entry.vendor);
@@ -190,7 +191,8 @@ let
     in bootRows ++ slotRows;
 
   qemuMediaSources = lib.sortOn (row: "${row.vm}/${row.mediaRef}/${row.slot}")
-    (lib.concatLists (lib.mapAttrsToList qemuMediaSourceRowsForVm (d2bLib.qemuMediaVms cfg.vms)));
+    (lib.concatLists (lib.mapAttrsToList qemuMediaSourceRowsForVm
+      (d2bLib.qemuMediaVms gatewayVms)));
 
   vmRuntimeRows = lib.sortOn (row: row.vm) (lib.mapAttrsToList
     (name: vm:

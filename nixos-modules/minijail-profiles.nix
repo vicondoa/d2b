@@ -4,11 +4,12 @@ let
   cfg = config.d2b;
   # d2b-owned access helpers (see lib.nix).
   d2bLib = import ./lib.nix { inherit lib pkgs; };
-  normalNixosVms = d2bLib.normalNixosVms cfg.vms;
-  qemuMediaVms = d2bLib.qemuMediaVms cfg.vms;
+  gatewayVms = d2bLib.gatewayVms cfg;
+  normalNixosVms = d2bLib.normalNixosVms gatewayVms;
+  qemuMediaVms = d2bLib.qemuMediaVms gatewayVms;
   usbipEnvNames = lib.sort lib.lessThan (lib.unique (lib.concatMap
     (vm: lib.optional (cfg.site.yubikey.enable && vm.enable && vm.usbip.yubikey && vm.env != null) vm.env)
-    (lib.attrValues cfg.vms)));
+    (lib.attrValues gatewayVms)));
   obsOtlpPort = 14317;
   serviceControllers = [ "cpu" "memory" "pids" ];
 
@@ -851,7 +852,10 @@ let
     };
   };
 
-  hostProfiles = otelHostBridgeProfile;
+  hostProfiles =
+    if builtins.hasAttr obsCfg.vmName gatewayVms
+    then otelHostBridgeProfile
+    else { };
 
   fullProfileTable = profileTable // qemuMediaProfileTable // usbipdProfiles // hostProfiles;
 

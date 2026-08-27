@@ -4,8 +4,9 @@
 let
   cfg = config.d2b.site.ui;
   legacyNiri = config.d2b.site.niriVmBorders;
-  vmsCfg = config.d2b.vms;
-  envsCfg = config.d2b.envs;
+  d2bLib = import ../../../nixos-modules/lib.nix { inherit lib; };
+  vmsCfg = d2bLib.gatewayVms config.d2b;
+  envsCfg = d2bLib.gatewayEnvs config.d2b;
   realmsCfg = config.d2b.realms;
 
   colorPalette = [

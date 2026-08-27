@@ -12,7 +12,8 @@ let
   }) (config.d2b._bundle.minijailProfiles or { }));
 
   d2bLib = import ./lib.nix { inherit lib; };
-  normalNixosVms = d2bLib.normalNixosVms config.d2b.vms;
+  normalNixosVms = d2bLib.normalNixosVms
+    (d2bLib.gatewayVms config.d2b);
   managedKeyOverrides = lib.sortOn (entry: entry.vm) (lib.filter (entry: entry != null)
     (lib.mapAttrsToList (name: vm:
       if vm.ssh.keyPath == null
