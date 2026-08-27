@@ -2,6 +2,7 @@
 
 pub mod activation_nixos;
 pub mod artifact;
+pub mod bridge;
 pub mod device;
 pub mod endpoint;
 pub mod error;
@@ -24,6 +25,7 @@ pub mod volume_state;
 
 pub use activation_nixos::*;
 pub use artifact::*;
+pub use bridge::*;
 pub use device::*;
 pub use endpoint::*;
 pub use error::{
@@ -36,7 +38,8 @@ pub use host::*;
 pub use identity::{
     ConfigurationGeneration, ControllerGeneration, IdentityClass, IdentityError,
     ObservedGeneration, ResourceBundleGenerationId, ResourceGeneration, ResourceName,
-    ResourceTypeName, ResourceUid, SchemaFingerprint, Timestamp, ZoneId, ZoneRevision,
+    ResourceTypeName, ResourceUid, SchemaFingerprint, Timestamp, ZoneId, ZoneResourceIdentity,
+    ZoneRevision,
 };
 pub mod ifname {
     pub use d2b_contracts::v3::ifname::*;

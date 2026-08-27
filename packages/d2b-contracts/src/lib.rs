@@ -29,6 +29,7 @@ pub mod usbip_effect_port;
 pub mod workload;
 pub mod workload_identity;
 
+pub use capability::{Capability, CapabilityNegotiation, CapabilitySet};
 pub use error::{Error, SemverRange, Version};
 pub use foundation_effects::{
     CredentialContractError, CredentialLeaseHandle, MAX_AZURE_REF_BYTES,
@@ -38,7 +39,17 @@ pub use identity::{
     IdentityClass, IdentityError, ResourceBundleGenerationId, ResourceName, ResourceRef,
     ResourceTypeName, ResourceUid,
 };
+pub use ids::{
+    AllocatorLeaseId, CorrelationId, ExecutionId, HostResourceId, IdempotencyKey, OperationId,
+    PrincipalId, StreamCursor, StreamId,
+};
 pub use privileges_w3::W3BrokerOperation;
+pub use token::{ProtocolToken, TokenError};
+pub use workload::{
+    DisplayEnvironmentPosture, EnvironmentPosture, ExecutionIdentityPosture, IsolationPosture,
+    LauncherIcon, LauncherItemKind, LauncherItemSummary, SessionPersistencePosture,
+    WorkloadExecutionPosture, WorkloadProviderKind, WorkloadState,
+};
 
 pub const MAX_FRAME_SIZE: usize = 1024 * 1024;
 pub const PUBLIC_SOCKET_PATH: &str = "/run/d2b/public.sock";
