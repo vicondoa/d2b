@@ -1039,6 +1039,18 @@
               };
             };
           };
+
+          d2b.realms.work = {
+            placement = "gateway-vm";
+            env = "work";
+            network.envs = [ "work" ];
+            workloads.corp-full = {
+              enable = true;
+              kind = "local-vm";
+              legacyVmName = "corp-full";
+              launcher.label = "Corp Full";
+            };
+          };
         };
         fullEval = mkEval [
           fullConfigModule
