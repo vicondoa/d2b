@@ -3,13 +3,12 @@ use d2b_contracts_control::unsafe_local_wire::{
     HelperScopeKind, HelperScopeState, HelperShellPolicy, HelperShellRequest,
     HelperTerminalChunkBase64, HelperTerminalControl, HelperTerminalReadOutput,
     HelperTerminalRequest, HelperTerminalResize, HelperTerminalResponse, HelperTerminalWriteStdin,
-    UnsafeLocalHelperToDaemon, decode_unsafe_local_terminal_frame,
+    OperationId, UnsafeLocalHelperToDaemon, decode_unsafe_local_terminal_frame,
     encode_unsafe_local_terminal_frame,
 };
 use d2b_contracts_control::{public_wire::ShellName, terminal_wire::TerminalSize};
 use d2b_core::base64_codec;
-use d2b_core::workload_identity::WorkloadIdentity;
-use d2b_realm_core::ids::OperationId;
+use d2b_core::unsafe_local_workloads::UnsafeLocalWorkloadIdentity;
 use d2b_unsafe_local_helper::environment::ManagerEnvironment;
 use d2b_unsafe_local_helper::runtime::ScopeRuntime;
 use d2b_unsafe_local_helper::systemd::{
@@ -39,7 +38,9 @@ struct Scratch {
 
 impl Scratch {
     fn new() -> Self {
-        let root = PathBuf::from("/tmp");
+        let relative_root = PathBuf::from(".scratch").join("usi");
+        fs::create_dir_all(&relative_root).unwrap();
+        let root = PathBuf::from("/proc/self/cwd").join(relative_root);
         let pid = std::process::id();
         for _ in 0..32 {
             let mut random = [0u8; 4];
@@ -402,10 +403,7 @@ fn exercise_helper_runtime_reconstruction(scratch: &Scratch, operation_suffix: &
             "PATH".to_owned(),
             std::env::var("PATH").unwrap_or_else(|_| "/usr/bin:/bin".to_owned()),
         ),
-        (
-            "HOME".to_owned(),
-            scratch.path.display().to_string(),
-        ),
+        ("HOME".to_owned(), scratch.path.display().to_string()),
     ]);
     environment.insert(
         "XDG_RUNTIME_DIR".to_owned(),
@@ -526,12 +524,14 @@ fn exercise_helper_runtime_reconstruction(scratch: &Scratch, operation_suffix: &
     );
 }
 
-fn workload() -> WorkloadIdentity {
+fn workload() -> UnsafeLocalWorkloadIdentity {
     serde_json::from_value(json!({
-        "workloadId": "tools",
-        "realmId": "host",
-        "realmPath": ["host"],
-        "canonicalTarget": "tools.host.d2b"
+        "zone": "host",
+        "zoneUid": "123e4567-e89b-42d3-a456-426614174000",
+        "resourceRef": "Process/tools",
+        "resourceUid": "323e4567-e89b-42d3-a456-426614174002",
+        "generation": 1,
+        "revision": 1
     }))
     .unwrap()
 }
@@ -545,7 +545,7 @@ fn shell_policy() -> HelperShellPolicy {
 
 fn attach_request(
     operation_id: &str,
-    workload: WorkloadIdentity,
+    workload: UnsafeLocalWorkloadIdentity,
     force: bool,
 ) -> HelperShellRequest {
     HelperShellRequest::Attach {

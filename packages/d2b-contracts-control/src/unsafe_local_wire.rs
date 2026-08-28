@@ -13,16 +13,18 @@ use crate::{
         TerminalStream, TerminalWaitResult, TerminalWriteStdinResult,
     },
 };
-use d2b_contracts::{
+use d2b_contracts::unsafe_local_workloads::MAX_UNSAFE_LOCAL_SHELL_SESSIONS;
+pub use d2b_contracts::{
     configured_argv::ConfiguredArgv, ids::OperationId, token::ProtocolToken,
-    unsafe_local_workloads::MAX_UNSAFE_LOCAL_SHELL_SESSIONS, workload_identity::WorkloadIdentity,
+    workload_identity::WorkloadTarget,
 };
+pub use d2b_contracts_resource::v3::ZoneResourceIdentity;
 use schemars::{
     JsonSchema,
     r#gen::SchemaGenerator,
     schema::{InstanceType, Metadata, Schema, SchemaObject, SingleOrVec, StringValidation},
 };
-use serde::{Deserialize, Serialize, de::DeserializeOwned};
+use serde::{Deserialize, Deserializer, Serialize, de::DeserializeOwned};
 use std::fmt;
 
 pub const UNSAFE_LOCAL_HELPER_PROTOCOL_VERSION: u32 = 3;
@@ -235,26 +237,71 @@ impl fmt::Debug for HelperPersistentShellSnapshot {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct HelperScopeSnapshot {
     pub operation_id: OperationId,
-    pub workload: WorkloadIdentity,
+    pub workload: ZoneResourceIdentity,
     pub scope: ScopeIdentity,
     pub state: HelperScopeState,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub persistent_shell: Option<HelperPersistentShellSnapshot>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct HelperSnapshot {
     pub generation: u64,
     pub scopes: Vec<HelperScopeSnapshot>,
 }
 
-#[derive(Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+impl HelperSnapshot {
+    pub fn validate(&self) -> Result<(), HelperFailureCode> {
+        if self.generation == 0 {
+            return Err(HelperFailureCode::InvalidRequest);
+        }
+        if self.scopes.len() > MAX_HELPER_SNAPSHOT_SCOPES {
+            return Err(HelperFailureCode::InvalidRequest);
+        }
+        self.scopes.iter().try_for_each(|scope| {
+            validate_unsafe_local_resource_identity(&scope.workload)?;
+            if (scope.scope.kind == HelperScopeKind::PersistentShell)
+                != scope.persistent_shell.is_some()
+            {
+                return Err(HelperFailureCode::InvalidRequest);
+            }
+            Ok(())
+        })
+    }
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct HelperSnapshotWire {
+    generation: u64,
+    scopes: Vec<HelperScopeSnapshot>,
+}
+
+impl<'de> Deserialize<'de> for HelperSnapshot {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let wire = HelperSnapshotWire::deserialize(deserializer)?;
+        let snapshot = Self {
+            generation: wire.generation,
+            scopes: wire.scopes,
+        };
+        snapshot
+            .validate()
+            .map_err(|_| serde::de::Error::custom("invalid helper snapshot"))?;
+        Ok(snapshot)
+    }
+}
+
+#[derive(Clone, PartialEq, Eq, Serialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct HelperLaunchRequest {
     pub request_id: u64,
     pub operation_id: OperationId,
-    pub workload: WorkloadIdentity,
+    pub workload: ZoneResourceIdentity,
+    pub target: WorkloadTarget,
     pub item_id: ProtocolToken,
     pub argv: ConfiguredArgv,
     pub graphical: bool,
@@ -267,11 +314,54 @@ impl fmt::Debug for HelperLaunchRequest {
             .field("request_id", &self.request_id)
             .field("operation_id", &self.operation_id)
             .field("workload", &self.workload)
+            .field("target", &"<redacted>")
             .field("item_id", &self.item_id)
             .field("argv_count", &self.argv.as_slice().len())
             .field("graphical", &self.graphical)
             .field("realm_accent_color", &self.realm_accent_color)
             .finish()
+    }
+}
+
+impl HelperLaunchRequest {
+    pub fn validate_bounds(&self) -> Result<(), HelperFailureCode> {
+        validate_unsafe_local_resource_identity(&self.workload)
+    }
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct HelperLaunchRequestWire {
+    request_id: u64,
+    operation_id: OperationId,
+    workload: ZoneResourceIdentity,
+    target: WorkloadTarget,
+    item_id: ProtocolToken,
+    argv: ConfiguredArgv,
+    graphical: bool,
+    realm_accent_color: RealmAccentColor,
+}
+
+impl<'de> Deserialize<'de> for HelperLaunchRequest {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let wire = HelperLaunchRequestWire::deserialize(deserializer)?;
+        let request = Self {
+            request_id: wire.request_id,
+            operation_id: wire.operation_id,
+            workload: wire.workload,
+            target: wire.target,
+            item_id: wire.item_id,
+            argv: wire.argv,
+            graphical: wire.graphical,
+            realm_accent_color: wire.realm_accent_color,
+        };
+        request
+            .validate_bounds()
+            .map_err(|_| serde::de::Error::custom("invalid helper launch request"))?;
+        Ok(request)
     }
 }
 
@@ -353,7 +443,7 @@ pub enum HelperShellRequest {
         request_id: u64,
         #[schemars(rename = "operationId")]
         operation_id: OperationId,
-        workload: WorkloadIdentity,
+        workload: ZoneResourceIdentity,
         policy: HelperShellPolicy,
     },
     Attach {
@@ -361,7 +451,7 @@ pub enum HelperShellRequest {
         request_id: u64,
         #[schemars(rename = "operationId")]
         operation_id: OperationId,
-        workload: WorkloadIdentity,
+        workload: ZoneResourceIdentity,
         policy: HelperShellPolicy,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         name: Option<ShellName>,
@@ -378,7 +468,7 @@ pub enum HelperShellRequest {
         request_id: u64,
         #[schemars(rename = "operationId")]
         operation_id: OperationId,
-        workload: WorkloadIdentity,
+        workload: ZoneResourceIdentity,
         policy: HelperShellPolicy,
         name: ShellName,
     },
@@ -387,7 +477,7 @@ pub enum HelperShellRequest {
         request_id: u64,
         #[schemars(rename = "operationId")]
         operation_id: OperationId,
-        workload: WorkloadIdentity,
+        workload: ZoneResourceIdentity,
         policy: HelperShellPolicy,
         name: ShellName,
     },
@@ -478,12 +568,21 @@ impl HelperShellRequest {
     }
 
     pub fn validate_bounds(&self) -> Result<(), HelperFailureCode> {
-        let policy = match self {
-            Self::List { policy, .. }
-            | Self::Attach { policy, .. }
-            | Self::Detach { policy, .. }
-            | Self::Kill { policy, .. } => policy,
+        let (workload, policy) = match self {
+            Self::List {
+                workload, policy, ..
+            }
+            | Self::Attach {
+                workload, policy, ..
+            }
+            | Self::Detach {
+                workload, policy, ..
+            }
+            | Self::Kill {
+                workload, policy, ..
+            } => (workload, policy),
         };
+        validate_unsafe_local_resource_identity(workload)?;
         policy.validate_bounds()?;
         match self {
             Self::Attach {
@@ -495,6 +594,17 @@ impl HelperShellRequest {
             _ => Ok(()),
         }
     }
+}
+
+pub fn validate_unsafe_local_resource_identity(
+    identity: &ZoneResourceIdentity,
+) -> Result<(), HelperFailureCode> {
+    matches!(
+        identity.resource_ref().resource_type().as_str(),
+        "Host" | "Guest" | "Process" | "EphemeralProcess"
+    )
+    .then_some(())
+    .ok_or(HelperFailureCode::InvalidRequest)
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
@@ -1077,16 +1187,35 @@ fn bounded_string_schema(
 mod tests {
     use super::*;
     use crate::public_wire::{ShellKillResult, ShellListEntry, ShellSessionState};
+    use d2b_contracts::{configured_argv::ConfiguredArgv, workload_identity::WorkloadTarget};
+    use d2b_contracts_resource::v3::{
+        ResourceGeneration, ResourceRef, ResourceUid, ZoneId, ZoneResourceIdentity, ZoneRevision,
+    };
     use serde::de::DeserializeOwned;
 
-    fn workload() -> WorkloadIdentity {
-        serde_json::from_value(serde_json::json!({
-            "workloadId": "tools",
-            "realmId": "host",
-            "realmPath": ["host"],
-            "canonicalTarget": "tools.host.d2b"
-        }))
-        .unwrap()
+    fn workload() -> ZoneResourceIdentity {
+        zone_identity(
+            "work",
+            "123e4567-e89b-42d3-a456-426614174000",
+            "323e4567-e89b-42d3-a456-426614174002",
+            1,
+        )
+    }
+
+    fn zone_identity(
+        zone: &str,
+        zone_uid: &str,
+        resource_uid: &str,
+        generation: u64,
+    ) -> ZoneResourceIdentity {
+        ZoneResourceIdentity::new(
+            ZoneId::parse(zone).unwrap(),
+            ResourceUid::parse(zone_uid).unwrap(),
+            ResourceRef::parse("Process/tools").unwrap(),
+            ResourceUid::parse(resource_uid).unwrap(),
+            ResourceGeneration::new(generation).unwrap(),
+            ZoneRevision::new(1),
+        )
     }
 
     fn operation(value: &str) -> OperationId {
@@ -1102,6 +1231,132 @@ mod tests {
             default_name: shell_name("primary"),
             max_sessions: 8,
         }
+    }
+
+    #[test]
+    fn zone_identity_fences_same_name_requests_and_excludes_realm_fields() {
+        let work = zone_identity(
+            "work",
+            "123e4567-e89b-42d3-a456-426614174000",
+            "323e4567-e89b-42d3-a456-426614174002",
+            3,
+        );
+        let personal = zone_identity(
+            "personal",
+            "223e4567-e89b-42d3-a456-426614174001",
+            "423e4567-e89b-42d3-a456-426614174003",
+            3,
+        );
+        assert_ne!(work, personal);
+        let encoded = serde_json::to_value(&work).unwrap();
+        assert_eq!(encoded["zone"], "work");
+        assert_eq!(encoded["resourceRef"], "Process/tools");
+        assert_eq!(encoded["generation"], 3);
+        assert!(encoded.get("realmId").is_none());
+        assert!(encoded.get("realmPath").is_none());
+        assert!(encoded.get("canonicalTarget").is_none());
+        assert_eq!(format!("{work:?}"), "ZoneResourceIdentity(<redacted>)");
+        let mut legacy = encoded.clone();
+        legacy["realmId"] = serde_json::json!("work");
+        assert!(serde_json::from_value::<ZoneResourceIdentity>(legacy).is_err());
+
+        let shell = HelperShellRequest::List {
+            request_id: 1,
+            operation_id: operation("op-zone"),
+            workload: work.clone(),
+            policy: shell_policy(),
+        };
+        round_trip(&shell);
+
+        let launch = HelperLaunchRequest {
+            request_id: 2,
+            operation_id: operation("op-zone-launch"),
+            workload: work,
+            target: WorkloadTarget::parse("tools.work.d2b").unwrap(),
+            item_id: ProtocolToken::parse("browser").unwrap(),
+            argv: ConfiguredArgv::new(vec!["private-argv-canary".to_owned()]).unwrap(),
+            graphical: false,
+            realm_accent_color: RealmAccentColor::new("#cc3344").unwrap(),
+        };
+        round_trip(&launch);
+        assert!(!format!("{launch:?}").contains("tools.work.d2b"));
+        assert!(!format!("{launch:?}").contains("private-argv-canary"));
+    }
+
+    #[test]
+    fn zone_identity_changes_are_not_accepted_as_the_same_resource() {
+        let current = zone_identity(
+            "work",
+            "123e4567-e89b-42d3-a456-426614174000",
+            "323e4567-e89b-42d3-a456-426614174002",
+            3,
+        );
+        let stale_uid = zone_identity(
+            "work",
+            "123e4567-e89b-42d3-a456-426614174000",
+            "423e4567-e89b-42d3-a456-426614174003",
+            3,
+        );
+        let stale_generation = zone_identity(
+            "work",
+            "123e4567-e89b-42d3-a456-426614174000",
+            "323e4567-e89b-42d3-a456-426614174002",
+            4,
+        );
+        assert_ne!(current, stale_uid);
+        assert_ne!(current, stale_generation);
+        assert_eq!(current.resource_ref(), stale_uid.resource_ref());
+        assert_eq!(current.resource_ref(), stale_generation.resource_ref());
+    }
+
+    #[test]
+    fn helper_requests_reject_non_execution_resource_identities() {
+        let invalid = ZoneResourceIdentity::new(
+            ZoneId::parse("work").unwrap(),
+            ResourceUid::parse("123e4567-e89b-42d3-a456-426614174000").unwrap(),
+            ResourceRef::parse("Volume/secret").unwrap(),
+            ResourceUid::parse("323e4567-e89b-42d3-a456-426614174002").unwrap(),
+            ResourceGeneration::new(1).unwrap(),
+            ZoneRevision::new(1),
+        );
+        let request = HelperShellRequest::List {
+            request_id: 1,
+            operation_id: operation("op-invalid-resource"),
+            workload: invalid.clone(),
+            policy: shell_policy(),
+        };
+        assert_eq!(
+            request.validate_bounds(),
+            Err(HelperFailureCode::InvalidRequest)
+        );
+
+        let mut launch = serde_json::to_value(HelperLaunchRequest {
+            request_id: 2,
+            operation_id: operation("op-invalid-launch"),
+            workload: workload(),
+            target: WorkloadTarget::parse("tools.work.d2b").unwrap(),
+            item_id: ProtocolToken::parse("browser").unwrap(),
+            argv: ConfiguredArgv::new(vec!["browser".to_owned()]).unwrap(),
+            graphical: false,
+            realm_accent_color: RealmAccentColor::new("#cc3344").unwrap(),
+        })
+        .unwrap();
+        launch["workload"] = serde_json::to_value(&invalid).unwrap();
+        assert!(serde_json::from_value::<HelperLaunchRequest>(launch).is_err());
+
+        let snapshot = serde_json::json!({
+            "generation": 1,
+            "scopes": [{
+                "operationId": "op-invalid-snapshot",
+                "workload": serde_json::to_value(invalid).unwrap(),
+                "scope": {
+                    "invocationId": "00112233445566778899aabbccddeeff",
+                    "kind": "launcher-app"
+                },
+                "state": "active"
+            }]
+        });
+        assert!(serde_json::from_value::<HelperSnapshot>(snapshot).is_err());
     }
 
     fn round_trip<T>(value: &T)

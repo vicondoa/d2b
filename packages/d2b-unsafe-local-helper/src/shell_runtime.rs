@@ -1,6 +1,6 @@
 use crate::runtime::{
     LaunchReservation, PersistedScope, PersistedShellMetadata, RuntimeError, ScopeRuntime,
-    ShellOperationBegin, persist_ledger,
+    ShellOperationBegin, persist_ledger, workload_identity_key,
 };
 use crate::shell_socket::{
     connect_owned_stream, supervisor_socket_path, validate_runtime_directory,
@@ -22,10 +22,10 @@ use d2b_contracts_control::unsafe_local_wire::{
     HelperPersistentShellSnapshot, HelperScopeKind, HelperScopeState, HelperShellAttachResult,
     HelperShellDetachResponse, HelperShellKillResponse, HelperShellListResponse, HelperShellPolicy,
     HelperShellRequest, HelperShellResponse, HelperSupervisorId, HelperTerminalReady,
-    HelperTerminalTransport, UNSAFE_LOCAL_TERMINAL_PROTOCOL_VERSION, UnsafeLocalHelperToDaemon,
+    HelperTerminalTransport, OperationId, UNSAFE_LOCAL_TERMINAL_PROTOCOL_VERSION,
+    UnsafeLocalHelperToDaemon,
 };
-use d2b_core::workload_identity::WorkloadIdentity;
-use d2b_realm_core::ids::OperationId;
+use d2b_core::unsafe_local_workloads::UnsafeLocalWorkloadIdentity;
 use nix::libc;
 use serde::Serialize;
 use sha2::{Digest, Sha256};
@@ -229,7 +229,7 @@ fn dispatch_started<M: UserScopeManager>(
 struct AttachOperation {
     request_id: u64,
     operation_id: OperationId,
-    workload: WorkloadIdentity,
+    workload: UnsafeLocalWorkloadIdentity,
     policy: HelperShellPolicy,
     name: Option<ShellName>,
     force: bool,
@@ -256,22 +256,25 @@ fn list<M: UserScopeManager>(
     runtime: &ScopeRuntime<M>,
     request_id: u64,
     operation_id: OperationId,
-    workload: WorkloadIdentity,
+    workload: UnsafeLocalWorkloadIdentity,
     policy: HelperShellPolicy,
     reservation: LaunchReservation,
 ) -> Result<ShellDispatch, RuntimeError> {
-    let entries = runtime
-        .ledger
-        .lock()
-        .map_err(|_| RuntimeError::Internal)?
-        .persisted
-        .scopes
-        .iter()
-        .filter(|scope| {
-            same_workload(&scope.workload, &workload) && scope.persistent_shell.is_some()
-        })
-        .cloned()
-        .collect::<Vec<_>>();
+    let entries = {
+        let ledger = runtime.ledger.lock().map_err(|_| RuntimeError::Internal)?;
+        if has_stale_workload(&ledger.persisted.scopes, &workload) {
+            return Err(RuntimeError::ScopeIdentityMismatch);
+        }
+        ledger
+            .persisted
+            .scopes
+            .iter()
+            .filter(|scope| {
+                same_workload(&scope.workload, &workload) && scope.persistent_shell.is_some()
+            })
+            .cloned()
+            .collect::<Vec<_>>()
+    };
     let mut sessions = Vec::with_capacity(entries.len());
     let deadline = Instant::now() + SHELL_LIST_RECONCILE_TIMEOUT;
     for entry in entries {
@@ -328,6 +331,8 @@ fn attach<M: UserScopeManager>(
             &resolved_name,
         ) {
             Some(scope.clone())
+        } else if has_stale_workload(&ledger.persisted.scopes, &operation.workload) {
+            return Err(RuntimeError::ScopeIdentityMismatch);
         } else {
             let workload_count = ledger
                 .persisted
@@ -338,7 +343,7 @@ fn attach<M: UserScopeManager>(
                         && scope.persistent_shell.is_some()
                 })
                 .count();
-            let workload_prefix = format!("{}\u{1f}", operation.workload.target().to_canonical());
+            let workload_prefix = format!("{}\u{1f}", workload_identity_key(&operation.workload));
             let workload_reserved = ledger
                 .shell_name_reservations
                 .keys()
@@ -496,7 +501,7 @@ fn detach<M: UserScopeManager>(
     runtime: &ScopeRuntime<M>,
     request_id: u64,
     operation_id: OperationId,
-    workload: WorkloadIdentity,
+    workload: UnsafeLocalWorkloadIdentity,
     name: ShellName,
     reservation: LaunchReservation,
 ) -> Result<ShellDispatch, RuntimeError> {
@@ -554,7 +559,7 @@ fn kill<M: UserScopeManager>(
     runtime: &ScopeRuntime<M>,
     request_id: u64,
     operation_id: OperationId,
-    workload: WorkloadIdentity,
+    workload: UnsafeLocalWorkloadIdentity,
     name: ShellName,
     reservation: LaunchReservation,
 ) -> Result<ShellDispatch, RuntimeError> {
@@ -941,30 +946,22 @@ fn remove_shell_scope<M: UserScopeManager>(
 
 fn persisted_shell<M: UserScopeManager>(
     runtime: &ScopeRuntime<M>,
-    workload: &WorkloadIdentity,
+    workload: &UnsafeLocalWorkloadIdentity,
     name: &ShellName,
 ) -> Result<PersistedScope, RuntimeError> {
-    runtime
-        .ledger
-        .lock()
-        .map_err(|_| RuntimeError::Internal)?
-        .persisted
-        .scopes
-        .iter()
-        .find(|scope| {
-            same_workload(&scope.workload, workload)
-                && scope
-                    .persistent_shell
-                    .as_ref()
-                    .is_some_and(|shell| shell.name == *name)
-        })
-        .cloned()
-        .ok_or(RuntimeError::ShellNotFound)
+    let ledger = runtime.ledger.lock().map_err(|_| RuntimeError::Internal)?;
+    if let Some(scope) = find_shell(&ledger.persisted.scopes, workload, name) {
+        return Ok(scope.clone());
+    }
+    if has_stale_shell(&ledger.persisted.scopes, workload, name) {
+        return Err(RuntimeError::ScopeIdentityMismatch);
+    }
+    Err(RuntimeError::ShellNotFound)
 }
 
 fn find_shell<'a>(
     scopes: &'a [PersistedScope],
-    workload: &WorkloadIdentity,
+    workload: &UnsafeLocalWorkloadIdentity,
     name: &ShellName,
 ) -> Option<&'a PersistedScope> {
     scopes.iter().find(|scope| {
@@ -976,16 +973,41 @@ fn find_shell<'a>(
     })
 }
 
-fn shell_name_key(workload: &WorkloadIdentity, name: &ShellName) -> String {
-    format!(
-        "{}\u{1f}{}",
-        workload.target().to_canonical(),
-        name.as_str()
-    )
+fn has_stale_shell(
+    scopes: &[PersistedScope],
+    workload: &UnsafeLocalWorkloadIdentity,
+    name: &ShellName,
+) -> bool {
+    scopes.iter().any(|scope| {
+        scope.persistent_shell.as_ref().is_some_and(|shell| {
+            shell.name == *name
+                && same_resource_slot(&scope.workload, workload)
+                && !same_workload(&scope.workload, workload)
+        })
+    })
 }
 
-fn same_workload(left: &WorkloadIdentity, right: &WorkloadIdentity) -> bool {
-    left.target() == right.target()
+fn has_stale_workload(scopes: &[PersistedScope], workload: &UnsafeLocalWorkloadIdentity) -> bool {
+    scopes.iter().any(|scope| {
+        scope.persistent_shell.is_some()
+            && same_resource_slot(&scope.workload, workload)
+            && !same_workload(&scope.workload, workload)
+    })
+}
+
+fn same_resource_slot(
+    left: &UnsafeLocalWorkloadIdentity,
+    right: &UnsafeLocalWorkloadIdentity,
+) -> bool {
+    left.zone() == right.zone() && left.resource_ref() == right.resource_ref()
+}
+
+fn shell_name_key(workload: &UnsafeLocalWorkloadIdentity, name: &ShellName) -> String {
+    format!("{}\u{1f}{}", workload_identity_key(workload), name.as_str())
+}
+
+fn same_workload(left: &UnsafeLocalWorkloadIdentity, right: &UnsafeLocalWorkloadIdentity) -> bool {
+    left == right
 }
 
 fn shell_state(running: bool, attached: bool) -> ShellSessionState {
@@ -1035,11 +1057,11 @@ fn shell_fingerprint(request: &HelperShellRequest) -> Result<[u8; 32], RuntimeEr
     #[serde(rename_all = "camelCase")]
     enum Fingerprint<'a> {
         List {
-            workload: &'a WorkloadIdentity,
+            workload: &'a UnsafeLocalWorkloadIdentity,
             policy: &'a HelperShellPolicy,
         },
         Attach {
-            workload: &'a WorkloadIdentity,
+            workload: &'a UnsafeLocalWorkloadIdentity,
             policy: &'a HelperShellPolicy,
             name: &'a Option<ShellName>,
             force: bool,
@@ -1047,12 +1069,12 @@ fn shell_fingerprint(request: &HelperShellRequest) -> Result<[u8; 32], RuntimeEr
             cols: u32,
         },
         Detach {
-            workload: &'a WorkloadIdentity,
+            workload: &'a UnsafeLocalWorkloadIdentity,
             policy: &'a HelperShellPolicy,
             name: &'a ShellName,
         },
         Kill {
-            workload: &'a WorkloadIdentity,
+            workload: &'a UnsafeLocalWorkloadIdentity,
             policy: &'a HelperShellPolicy,
             name: &'a ShellName,
         },
@@ -1157,14 +1179,30 @@ mod tests {
     use std::sync::{Arc, Barrier, Mutex};
     use uzers::get_current_uid;
 
-    fn workload() -> WorkloadIdentity {
+    fn workload_for(
+        zone: &str,
+        zone_uid: &str,
+        resource_uid: &str,
+        generation: u64,
+    ) -> UnsafeLocalWorkloadIdentity {
         serde_json::from_value(serde_json::json!({
-            "workloadId": "tools",
-            "realmId": "host",
-            "realmPath": ["host"],
-            "canonicalTarget": "tools.host.d2b"
+            "zone": zone,
+            "zoneUid": zone_uid,
+            "resourceRef": "Process/tools",
+            "resourceUid": resource_uid,
+            "generation": generation,
+            "revision": 1
         }))
         .unwrap()
+    }
+
+    fn workload() -> UnsafeLocalWorkloadIdentity {
+        workload_for(
+            "work",
+            "123e4567-e89b-42d3-a456-426614174000",
+            "323e4567-e89b-42d3-a456-426614174002",
+            1,
+        )
     }
 
     fn policy() -> HelperShellPolicy {
@@ -1178,6 +1216,7 @@ mod tests {
     struct FakeManager {
         environment: ManagerEnvironment,
         stop_calls: Arc<AtomicUsize>,
+        identity_matches: bool,
     }
 
     impl UserScopeManager for FakeManager {
@@ -1196,7 +1235,7 @@ mod tests {
         fn inspect_scope(&self, _scope: &VerifiedScope) -> Result<ScopeInspection, ScopeError> {
             Ok(ScopeInspection {
                 state: HelperScopeState::Active,
-                identity_matches: true,
+                identity_matches: self.identity_matches,
             })
         }
 
@@ -1215,7 +1254,9 @@ mod tests {
 
     impl Scratch {
         fn new() -> Self {
-            let root = std::env::temp_dir();
+            let relative_root = PathBuf::from(".scratch").join("usr");
+            fs::create_dir_all(&relative_root).unwrap();
+            let root = PathBuf::from("/proc/self/cwd").join(relative_root);
             for _ in 0..32 {
                 let mut random = [0u8; 2];
                 getrandom::getrandom(&mut random).unwrap();
@@ -1352,6 +1393,184 @@ mod tests {
     }
 
     #[test]
+    fn shell_keys_bind_zone_uid_resource_uid_and_generation() {
+        let name = ShellName::new("host").unwrap();
+        let work = workload();
+        let personal = workload_for(
+            "personal",
+            "223e4567-e89b-42d3-a456-426614174001",
+            "423e4567-e89b-42d3-a456-426614174003",
+            1,
+        );
+        let stale_uid = workload_for(
+            "work",
+            "123e4567-e89b-42d3-a456-426614174000",
+            "423e4567-e89b-42d3-a456-426614174003",
+            1,
+        );
+        let stale_generation = workload_for(
+            "work",
+            "123e4567-e89b-42d3-a456-426614174000",
+            "323e4567-e89b-42d3-a456-426614174002",
+            2,
+        );
+
+        assert_ne!(
+            shell_name_key(&work, &name),
+            shell_name_key(&personal, &name)
+        );
+        assert_ne!(
+            shell_name_key(&work, &name),
+            shell_name_key(&stale_uid, &name)
+        );
+        assert_ne!(
+            shell_name_key(&work, &name),
+            shell_name_key(&stale_generation, &name)
+        );
+
+        let persisted = PersistedScope {
+            operation_id: OperationId::parse("op-stale-shell").unwrap(),
+            fingerprint: Some([7; 32]),
+            workload: work.clone(),
+            unit_name: "shell.scope".to_owned(),
+            invocation_id: "shell-invocation".to_owned(),
+            control_group: "/user/shell.scope".to_owned(),
+            kind: HelperScopeKind::PersistentShell,
+            persistent_shell: Some(PersistedShellMetadata {
+                name: name.clone(),
+                supervisor_id: HelperSupervisorId::new("supervisor").unwrap(),
+            }),
+        };
+        assert!(has_stale_shell(
+            std::slice::from_ref(&persisted),
+            &stale_uid,
+            &name
+        ));
+        assert!(has_stale_shell(
+            std::slice::from_ref(&persisted),
+            &stale_generation,
+            &name
+        ));
+        assert!(!has_stale_shell(
+            std::slice::from_ref(&persisted),
+            &personal,
+            &name
+        ));
+    }
+
+    #[test]
+    fn stale_identity_refuses_management_without_cleanup() {
+        if get_current_uid() == 0 {
+            return;
+        }
+        let scratch = Scratch::new();
+        let current = workload();
+        let stale = workload_for(
+            "work",
+            "123e4567-e89b-42d3-a456-426614174000",
+            "423e4567-e89b-42d3-a456-426614174003",
+            1,
+        );
+        let name = ShellName::new("host").unwrap();
+        let persisted = PersistedScope {
+            operation_id: OperationId::parse("op-stale-management").unwrap(),
+            fingerprint: Some([3; 32]),
+            workload: current,
+            unit_name: "shell.scope".to_owned(),
+            invocation_id: "shell-invocation".to_owned(),
+            control_group: "/user/shell.scope".to_owned(),
+            kind: HelperScopeKind::PersistentShell,
+            persistent_shell: Some(PersistedShellMetadata {
+                name: name.clone(),
+                supervisor_id: HelperSupervisorId::new("supervisor").unwrap(),
+            }),
+        };
+        let ledger_path = scratch.0.join("ledger.json");
+        persist_ledger(
+            &ledger_path,
+            &PersistedScopeLedger {
+                schema_version: 1,
+                scopes: vec![persisted],
+            },
+        )
+        .unwrap();
+        let manager = FakeManager {
+            environment: ManagerEnvironment::parse(vec![
+                "PATH=/bin".to_owned(),
+                format!("XDG_RUNTIME_DIR={}", scratch.0.display()),
+            ])
+            .unwrap(),
+            stop_calls: Arc::new(AtomicUsize::new(0)),
+            identity_matches: true,
+        };
+        let runtime = ScopeRuntime::with_paths_and_executable(
+            manager,
+            scratch.0.clone(),
+            ledger_path,
+            std::env::current_exe().unwrap(),
+        )
+        .unwrap();
+
+        let result = runtime.shell(HelperShellRequest::Kill {
+            request_id: 1,
+            operation_id: OperationId::parse("op-stale-kill").unwrap(),
+            workload: stale,
+            policy: policy(),
+            name,
+        });
+        assert!(matches!(result, Err(RuntimeError::ScopeIdentityMismatch)));
+        assert_eq!(runtime.ledger.lock().unwrap().persisted.scopes.len(), 1);
+    }
+
+    #[test]
+    fn ambiguous_adoption_degrades_without_scope_cleanup() {
+        if get_current_uid() == 0 {
+            return;
+        }
+        let scratch = Scratch::new();
+        let ledger_path = scratch.0.join("ledger.json");
+        persist_ledger(
+            &ledger_path,
+            &PersistedScopeLedger {
+                schema_version: 1,
+                scopes: vec![PersistedScope {
+                    operation_id: OperationId::parse("op-ambiguous-adoption").unwrap(),
+                    fingerprint: Some([4; 32]),
+                    workload: workload(),
+                    unit_name: "shell.scope".to_owned(),
+                    invocation_id: "shell-invocation".to_owned(),
+                    control_group: "/user/shell.scope".to_owned(),
+                    kind: HelperScopeKind::LauncherApp,
+                    persistent_shell: None,
+                }],
+            },
+        )
+        .unwrap();
+        let stops = Arc::new(AtomicUsize::new(0));
+        let manager = FakeManager {
+            environment: ManagerEnvironment::parse(vec![
+                "PATH=/bin".to_owned(),
+                format!("XDG_RUNTIME_DIR={}", scratch.0.display()),
+            ])
+            .unwrap(),
+            stop_calls: Arc::clone(&stops),
+            identity_matches: false,
+        };
+        let runtime = ScopeRuntime::with_paths_and_executable(
+            manager,
+            scratch.0.clone(),
+            ledger_path,
+            std::env::current_exe().unwrap(),
+        )
+        .unwrap();
+
+        let snapshot = runtime.snapshot(7).unwrap();
+        assert_eq!(snapshot.scopes[0].state, HelperScopeState::Degraded);
+        assert_eq!(stops.load(Ordering::Acquire), 0);
+        assert_eq!(runtime.ledger.lock().unwrap().persisted.scopes.len(), 1);
+    }
+
+    #[test]
     fn helper_wide_ring_reservation_is_bounded() {
         assert!(shell_quota_allows(1, 0, 2, 63));
         assert!(!shell_quota_allows(2, 0, 2, 2));
@@ -1424,6 +1643,7 @@ mod tests {
             ])
             .unwrap(),
             stop_calls: Arc::clone(&stops),
+            identity_matches: true,
         };
         let runtime = ScopeRuntime::with_paths_and_executable(
             manager,
