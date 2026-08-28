@@ -120,14 +120,6 @@ use d2b_gateway::{
     IdSource, LedgerLimits, ListenerHandle, NoopGatewayAudit, OpenSession, SECRET_LEN,
     SessionBinding, SessionSecret, TargetKey,
 };
-#[cfg(test)]
-use d2b_gateway_runtime::relay_bridge::LocalTarget;
-#[cfg(test)]
-use d2b_gateway_runtime::{
-    AcaGatewayWorkload, AgentBinaries, CredentialFilePolicy, GatewayCredential, RelayCoords,
-    RelayDisplayListener, SealingKey, production_deps, relay_sas_token_snippet, system_now_fn,
-    system_now_unix,
-};
 use d2b_host::ssh_keygen;
 use d2b_provider_network_local::{
     artifact::{ArtifactCatalogEntry, ArtifactKind},
@@ -140,10 +132,6 @@ use d2b_provider_network_local::{
     ifname::derive_network_child_name,
     observe::observe_host_network,
 };
-#[cfg(test)]
-use d2b_provider_runtime_azure_container_apps::gateway::{
-    AcaConfig, AcaDiskImageSource, AcaSandboxDefaults, AcaWorkloadProvider,
-};
 use d2b_provider_shell_terminal::{
     DEFAULT_OUTPUT_RING_CAPACITY, ExecutionTarget, PoolSpec, ShellAuthorityLedger,
     ShellAuthorityPort, ShellPool, ShellSession, ShellTerminalError, SupervisorProcessResource,
@@ -154,8 +142,6 @@ use d2b_zone_routing::engine::{
 };
 use d2b_zone_routing::resolver::{SealedZoneTopology, ZoneEntrypointResolver};
 use d2b_zone_routing::engine::ZoneRouteRequest;
-#[cfg(test)]
-use d2b_provider_transport_azure_relay::auth::{DEFAULT_SAS_TTL_SECS, RelayEndpoint};
 use d2b_provider_volume_local::diagnostics::storage_lifecycle;
 #[cfg(test)]
 use d2b_realm_core::TargetName;
@@ -3378,10 +3364,7 @@ struct GatewayDisplayPreflight {
 
 #[cfg(test)]
 #[derive(Debug, Clone)]
-struct ValidatedWaypipeSocket {
-    uid: u32,
-    mode: u32,
-}
+struct ValidatedWaypipeSocket;
 
 #[cfg(test)]
 #[async_trait]
@@ -3412,38 +3395,6 @@ fn new_gateway_display_runtime_for_tests() -> Arc<GatewayDisplayRuntime> {
         lifecycle: Box::new(DaemonGatewayLifecycle),
         preflight: None,
     })
-}
-
-#[cfg(test)]
-fn load_gateway_file_config(path: &Path) -> Result<Option<GatewayFileConfig>, TypedError> {
-    if !path.exists() {
-        return Ok(None);
-    }
-    let bytes = fs::read(path).map_err(|err| TypedError::InternalIo {
-        context: format!("read gateway config {}", path.display()),
-        detail: err.to_string(),
-    })?;
-    serde_json::from_slice(&bytes)
-        .map(Some)
-        .map_err(|err| TypedError::InternalConfig {
-            detail: format!("{}: {err}", path.display()),
-        })
-}
-
-#[cfg(test)]
-fn new_gateway_display_runtime_from_config(
-    config: GatewayFileConfig,
-) -> Result<Arc<GatewayDisplayRuntime>, TypedError> {
-    let preflight = gateway_display_preflight_from_config(&config)?;
-    let deps = gateway_deps_from_config(&config)?;
-    let provider =
-        Arc::new(aca_provider_from_gateway_config(&config).map_err(gateway_error_to_typed)?);
-    Ok(Arc::new(GatewayDisplayRuntime {
-        orchestrator: GatewayOrchestrator::new(deps, 1, LedgerLimits::default()),
-        sessions: Mutex::new(HashMap::new()),
-        lifecycle: Box::new(AcaGatewayLifecycle { provider }),
-        preflight: Some(preflight),
-    }))
 }
 
 #[cfg(test)]
@@ -3516,7 +3467,7 @@ fn validate_waypipe_receiver_socket(path: &Path) -> Result<ValidatedWaypipeSocke
             path.display()
         )));
     }
-    Ok(ValidatedWaypipeSocket { uid, mode })
+    Ok(ValidatedWaypipeSocket)
 }
 
 #[cfg(test)]
@@ -11222,192 +11173,6 @@ fn gateway_display_gc(state: &ServerState) {
 }
 
 #[cfg(test)]
-fn gateway_deps_from_config(config: &GatewayFileConfig) -> Result<GatewayDeps, TypedError> {
-    Ok(production_deps(
-        Box::new(ConfiguredGatewayWorkload {
-            config: config.clone(),
-        }),
-        Box::new(ConfiguredDisplayListener {
-            config: config.clone(),
-            listeners: Mutex::new(HashMap::new()),
-        }),
-    ))
-}
-
-#[cfg(test)]
-struct ConfiguredGatewayWorkload {
-    config: GatewayFileConfig,
-}
-
-#[cfg(test)]
-#[async_trait]
-impl GatewayWorkload for ConfiguredGatewayWorkload {
-    async fn spawn_agent(&self, req: &AgentSpawnRequest) -> Result<AgentHandle, GatewayError> {
-        let provider = aca_provider_from_gateway_config(&self.config)?;
-        let workload = AcaGatewayWorkload::for_workload_labels(
-            provider,
-            relay_coords_from_config(&self.config)?,
-        )
-        .with_binaries(agent_bins_from_config(&self.config))
-        .with_relay_auth_snippet(relay_auth_snippet_from_config(&self.config)?);
-        workload.spawn_agent(req).await
-    }
-
-    async fn cleanup(&self, handle: &AgentHandle) -> Result<(), GatewayError> {
-        let provider = aca_provider_from_gateway_config(&self.config)?;
-        let workload = AcaGatewayWorkload::for_workload_labels(
-            provider,
-            relay_coords_from_config(&self.config)?,
-        )
-        .with_binaries(agent_bins_from_config(&self.config));
-        workload.cleanup(handle).await
-    }
-}
-
-#[cfg(test)]
-struct ConfiguredDisplayListener {
-    config: GatewayFileConfig,
-    listeners: Mutex<HashMap<String, Arc<RelayDisplayListener>>>,
-}
-
-#[cfg(test)]
-#[async_trait]
-impl DisplayListener for ConfiguredDisplayListener {
-    async fn arm(
-        &self,
-        ctx: &DisplaySessionContext,
-        binding: &SessionBinding,
-        secret: &SessionSecret,
-    ) -> Result<ListenerHandle, GatewayError> {
-        let listener = Arc::new(display_listener_from_config(&self.config)?);
-        let handle = listener.arm(ctx, binding, secret).await?;
-        // Azure Relay listener registration is asynchronous after the control
-        // channel is spawned. Give the listener a short head start before the
-        // sandbox sender dials; otherwise the service can reset the sender
-        // rendezvous instead of returning the retryable 404.
-        tokio::time::sleep(Duration::from_secs(2)).await;
-        self.listeners
-            .lock()
-            .map_err(|_| GatewayError::ProviderAllocationFailed)?
-            .insert(handle.0.clone(), listener);
-        Ok(handle)
-    }
-
-    async fn await_handshake(&self, handle: &ListenerHandle) -> Result<(), GatewayError> {
-        let listener = self
-            .listeners
-            .lock()
-            .map_err(|_| GatewayError::ProviderAllocationFailed)?
-            .get(&handle.0)
-            .cloned()
-            .ok_or(GatewayError::ProviderAllocationFailed)?;
-        listener.await_handshake(handle).await
-    }
-
-    async fn close(&self, handle: &ListenerHandle) -> Result<(), GatewayError> {
-        let listener = self
-            .listeners
-            .lock()
-            .map_err(|_| GatewayError::ProviderAllocationFailed)?
-            .remove(&handle.0);
-        if let Some(listener) = listener {
-            listener.close(handle).await?;
-        }
-        Ok(())
-    }
-}
-
-#[cfg(test)]
-fn relay_coords_from_config(config: &GatewayFileConfig) -> Result<RelayCoords, GatewayError> {
-    Ok(RelayCoords {
-        namespace: required_gateway_field(&config.relay.namespace)?,
-        entity: required_gateway_field(&config.relay.entity)?,
-        ca_file: Some("/etc/ssl/certs/adc-egress-proxy-ca.crt".to_owned()),
-        managed_identity_client_id: config.aca.managed_identity_client_id.clone(),
-    })
-}
-
-#[cfg(test)]
-fn relay_endpoint_from_config(config: &GatewayFileConfig) -> Result<RelayEndpoint, GatewayError> {
-    Ok(RelayEndpoint {
-        namespace: required_gateway_field(&config.relay.namespace)?,
-        entity: required_gateway_field(&config.relay.entity)?,
-    })
-}
-
-#[cfg(test)]
-fn agent_bins_from_config(config: &GatewayFileConfig) -> AgentBinaries {
-    let mut bins = AgentBinaries::default();
-    if let Some(compression) = config
-        .display
-        .waypipe_compression
-        .as_ref()
-        .filter(|value| !value.trim().is_empty())
-    {
-        bins.compression = compression.clone();
-    }
-    bins
-}
-
-#[cfg(test)]
-fn gateway_credential_from_config(
-    config: &GatewayFileConfig,
-) -> Result<GatewayCredential, GatewayError> {
-    let credential_path = config
-        .credential_path
-        .as_ref()
-        .ok_or(GatewayError::ProviderAllocationFailed)?;
-    let seal_key_path = config
-        .seal_key_path
-        .as_ref()
-        .ok_or(GatewayError::ProviderAllocationFailed)?;
-    let policy = CredentialFilePolicy::default();
-    let key = SealingKey::load(seal_key_path, &policy)
-        .map_err(|_| GatewayError::ProviderAllocationFailed)?;
-    GatewayCredential::load_sealed(credential_path, &key, &policy, system_now_unix())
-        .map_err(|_| GatewayError::ProviderAllocationFailed)
-}
-
-#[cfg(test)]
-fn relay_auth_snippet_from_config(config: &GatewayFileConfig) -> Result<String, GatewayError> {
-    let credential = gateway_credential_from_config(config)?;
-    let token = credential
-        .mint_send_token(&relay_endpoint_from_config(config)?, DEFAULT_SAS_TTL_SECS)
-        .map_err(|_| GatewayError::ProviderAllocationFailed)?;
-    Ok(relay_sas_token_snippet(token.expose()))
-}
-
-#[cfg(test)]
-fn display_listener_from_config(
-    config: &GatewayFileConfig,
-) -> Result<RelayDisplayListener, GatewayError> {
-    let credential = gateway_credential_from_config(config)?;
-    let waypipe_socket = required_gateway_field(&config.display.waypipe_socket)?;
-    let validated = match validate_waypipe_receiver_socket(Path::new(&waypipe_socket)) {
-        Ok(validated) => validated,
-        Err(error) => {
-            tracing::warn!(
-                error = %error.message(),
-                "gateway display waypipe receiver socket rejected",
-            );
-            return Err(GatewayError::ProviderAllocationFailed);
-        }
-    };
-    Ok(RelayDisplayListener::new(
-        relay_endpoint_from_config(config)?,
-        credential.listener_credential(),
-        LocalTarget::UnixConnectChecked {
-            path: waypipe_socket,
-            uid: validated.uid,
-            mode: validated.mode,
-        },
-        DEFAULT_SAS_TTL_SECS,
-        None,
-        system_now_fn(),
-    ))
-}
-
-#[cfg(test)]
 fn unavailable_gateway_deps() -> GatewayDeps {
     GatewayDeps {
         workload: Box::new(UnavailableGatewayWorkload),
@@ -11496,95 +11261,6 @@ impl GatewayLifecycle for DaemonGatewayLifecycle {
     async fn stop(&self, _target: &TargetName) -> Result<String, GatewayError> {
         Ok("stopped".to_owned())
     }
-}
-
-#[cfg(test)]
-struct AcaGatewayLifecycle {
-    provider: Arc<AcaWorkloadProvider>,
-}
-
-#[cfg(test)]
-#[async_trait]
-impl GatewayLifecycle for AcaGatewayLifecycle {
-    async fn start(&self, target: &TargetName) -> Result<String, GatewayError> {
-        self.provider
-            .start(target.workload.clone())
-            .await
-            .map_err(|err| {
-                tracing::warn!(error = %err, target = %target, "aca gateway lifecycle start failed");
-                GatewayError::ProviderAllocationFailed
-            })?;
-        Ok("running".to_owned())
-    }
-
-    async fn stop(&self, target: &TargetName) -> Result<String, GatewayError> {
-        self.provider
-            .stop(target.workload.clone())
-            .await
-            .map_err(|err| {
-                tracing::warn!(error = %err, target = %target, "aca gateway lifecycle stop failed");
-                GatewayError::ProviderAllocationFailed
-            })?;
-        Ok("stopped".to_owned())
-    }
-}
-
-#[cfg(test)]
-fn required_gateway_field(value: &Option<String>) -> Result<String, GatewayError> {
-    value
-        .as_ref()
-        .filter(|s| !s.trim().is_empty())
-        .cloned()
-        .ok_or(GatewayError::ProviderAllocationFailed)
-}
-
-#[cfg(test)]
-fn aca_provider_from_gateway_config(
-    config: &GatewayFileConfig,
-) -> Result<AcaWorkloadProvider, GatewayError> {
-    let aca = &config.aca;
-    let provider_config = AcaConfig {
-        subscription: required_gateway_field(&aca.subscription)?,
-        resource_group: required_gateway_field(&aca.resource_group)?,
-        sandbox_group: required_gateway_field(&aca.sandbox_group)?,
-        region: required_gateway_field(&aca.region)?,
-        endpoint: aca.endpoint.clone(),
-        managed_identity_client_id: aca.managed_identity_client_id.clone(),
-    };
-    let disk_image = if let Some(id) = aca.disk_image_id.as_ref().filter(|s| !s.trim().is_empty()) {
-        AcaDiskImageSource::ExistingDiskId(id.clone())
-    } else {
-        AcaDiskImageSource::ContainerImage {
-            image: required_gateway_field(&aca.image)?,
-            name: aca
-                .disk_name
-                .as_ref()
-                .filter(|s| !s.trim().is_empty())
-                .cloned()
-                .unwrap_or_else(|| format!("d2b-{}-wayland", config.gateway)),
-            managed_identity_resource_id: aca.managed_identity_resource_id.clone(),
-            labels: BTreeMap::new(),
-        }
-    };
-    let mut defaults = AcaSandboxDefaults::new(disk_image);
-    defaults.cpu = aca.cpu.clone().unwrap_or_else(|| "1000m".to_owned());
-    defaults.memory = aca.memory.clone().unwrap_or_else(|| "2048Mi".to_owned());
-    defaults.auto_suspend_interval_secs = aca.auto_suspend_interval_secs.unwrap_or(600);
-    defaults.managed_identity_resource_id = aca.managed_identity_resource_id.clone();
-    defaults
-        .labels
-        .insert("d2b-realm".to_owned(), config.realm.clone());
-    let provider = AcaWorkloadProvider::new(
-        provider_config,
-        d2b_realm_core::NodeId::parse("gateway")
-            .map_err(|_| GatewayError::ProviderAllocationFailed)?,
-    )
-    .map_err(|err| {
-        tracing::warn!(error = %err, "aca gateway provider initialization failed");
-        GatewayError::ProviderAllocationFailed
-    })?
-    .with_sandbox_defaults(defaults);
-    Ok(provider)
 }
 
 #[cfg(test)]
