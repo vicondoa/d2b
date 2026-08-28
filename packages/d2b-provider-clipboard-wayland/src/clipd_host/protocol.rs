@@ -1,5 +1,5 @@
-use d2b_core::workload_identity::WorkloadTarget;
-use d2b_realm_core::WorkloadProviderKind;
+use d2b_contracts::workload_identity::WorkloadTarget;
+use d2b_contracts_resource::v3::WorkloadProviderKind;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
