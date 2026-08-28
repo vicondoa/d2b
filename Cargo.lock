@@ -1307,6 +1307,7 @@ dependencies = [
 name = "d2b-provider"
 version = "0.0.0-bootstrap"
 dependencies = [
+ "d2b-bus",
  "d2b-contracts-provider",
  "d2b-contracts-resource",
  "d2b-contracts-zone-session",
@@ -1910,6 +1911,7 @@ dependencies = [
 name = "d2b-zone-routing"
 version = "0.0.0-bootstrap"
 dependencies = [
+ "d2b-bus",
  "d2b-contracts",
  "d2b-contracts-resource",
  "d2b-contracts-zone-session",

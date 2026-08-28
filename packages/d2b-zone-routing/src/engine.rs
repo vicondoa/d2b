@@ -8,16 +8,37 @@
 //! questions.
 //!
 //! What the engine deliberately does not do: it performs no I/O, opens no
-//! socket, verifies no signature, and mints, holds, or presents no authority.
-//! Signature metadata is treated as opaque replay bookkeeping. Every decision
-//! is either a typed allow carrying immutable route metadata or a typed
-//! refusal carrying one closed [`ZoneRouteFailClosedReason`]; there is no
-//! permissive default anywhere in this file. Nothing here accepts or returns a
-//! uid, gid, host path, socket path, store path, credential, or key material.
+//! socket, and verifies no advertisement signature. Advertisement signature
+//! metadata is treated as opaque replay bookkeeping; runtime route-admission
+//! evidence is consumed through its paired verifier. Every decision is either
+//! a typed allow carrying immutable route metadata or a typed refusal carrying
+//! one closed [`ZoneRouteFailClosedReason`]; there is no permissive default
+//! anywhere in this file. Nothing here accepts or returns a uid, gid, host
+//! path, socket path, store path, credential, or key material.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    sync::Mutex,
+    time::{SystemTime, UNIX_EPOCH},
+};
+#[cfg(any(test, feature = "test-support"))]
+use std::sync::{
+    Arc,
+    atomic::{AtomicBool, AtomicU64, Ordering},
+};
 
+use d2b_bus::session::{
+    RouteAdmissionError, RouteAdmissionEvidence, RouteAdmissionVerifier, VerifiedRouteAdmission,
+};
+use d2b_contracts_resource::v3::{
+    ResourceUid, ZoneRevision,
+    identity::ReconnectGeneration,
+};
 use d2b_contracts_zone_session::v3::{
+    component_session::{
+        EndpointPurpose, EndpointRole, OperationClass, OperationId, PurposeClass, ServicePackage,
+        TransportClass,
+    },
     zone_routing::{
     MAX_ZONE_PARENT_ENTRIES, MAX_ZONE_ROUTE_ENTRIES, ZONE_ROUTE_INITIAL_HOP_BUDGET, ZoneLabelId,
     ZoneLinkControllerGeneration, ZoneLinkNamespaceAllocation, ZoneLinkRouteAdvertisement,
@@ -129,48 +150,487 @@ impl ZoneWithdrawalAdmission {
     }
 }
 
+/// The exact runtime identity and policy a route admission must carry.
+///
+/// These values are comparison inputs, not authority. The authority is the
+/// paired runtime-issued admission consumed by [`ZoneRouteAdmission::verify`].
+/// Keeping the expected tuple separate makes target substitution and stale
+/// controller, reconnect, or policy state fail closed before the route walk.
+#[derive(Clone, PartialEq, Eq)]
+pub struct ZoneRouteAdmissionExpectation {
+    source_zone: Option<ZonePath>,
+    target_zone: Option<ZonePath>,
+    zone_link_uid: ResourceUid,
+    edge: ZoneTreeEdge,
+    controller_generation: ZoneLinkControllerGeneration,
+    reconnect_generation: ReconnectGeneration,
+    source_zone_uid: ResourceUid,
+    target_zone_uid: ResourceUid,
+    operation_id: OperationId,
+    verb: OperationClass,
+    required_capability: ZoneRouteCapability,
+    policy_revision: ZoneRevision,
+}
+
+impl ZoneRouteAdmissionExpectation {
+    /// Construct the exact tuple the runtime expects to consume.
+    #[allow(clippy::too_many_arguments)]
+    pub fn new(
+        zone_link_uid: ResourceUid,
+        edge: ZoneTreeEdge,
+        controller_generation: ZoneLinkControllerGeneration,
+        reconnect_generation: ReconnectGeneration,
+        source_zone_uid: ResourceUid,
+        target_zone_uid: ResourceUid,
+        operation_id: OperationId,
+        verb: OperationClass,
+        required_capability: ZoneRouteCapability,
+        policy_revision: ZoneRevision,
+    ) -> Result<Self, ZoneRouteFailClosedReason> {
+        if source_zone_uid == target_zone_uid
+            || policy_revision.get() == 0
+            || verb == OperationClass::Attach
+        {
+            return Err(ZoneRouteFailClosedReason::PolicyDenial);
+        }
+        Ok(Self {
+            source_zone: None,
+            target_zone: None,
+            zone_link_uid,
+            edge,
+            controller_generation,
+            reconnect_generation,
+            source_zone_uid,
+            target_zone_uid,
+            operation_id,
+            verb,
+            required_capability,
+            policy_revision,
+        })
+    }
+
+    /// Bind the expected immutable source and target Zone paths.
+    pub fn for_zones(mut self, source_zone: ZonePath, target_zone: ZonePath) -> Self {
+        self.source_zone = Some(source_zone);
+        self.target_zone = Some(target_zone);
+        self
+    }
+}
+
+impl std::fmt::Debug for ZoneRouteAdmissionExpectation {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str("ZoneRouteAdmissionExpectation(<redacted>)")
+    }
+}
+
+#[derive(Clone, PartialEq, Eq)]
+struct RouteAdmissionSnapshot {
+    source_zone: Option<ZonePath>,
+    target_zone: Option<ZonePath>,
+    zone_link_uid: ResourceUid,
+    edge: ZoneTreeEdge,
+    controller_generation: ZoneLinkControllerGeneration,
+    reconnect_generation: ReconnectGeneration,
+    source_zone_uid: ResourceUid,
+    target_zone_uid: ResourceUid,
+    operation_id: OperationId,
+    verb: OperationClass,
+    required_capability: ZoneRouteCapability,
+    policy_revision: ZoneRevision,
+    issued_at_unix_ms: u64,
+    expires_at_unix_ms: u64,
+    verified_at_unix_seconds: u64,
+}
+
+/// A verified, immutable runtime-issued route admission.
+///
+/// The production constructor takes ownership of the paired verifier and
+/// evidence. The verifier is invoked when the admission is consumed by a
+/// route, relay, or topology-watch decision, so daemon time, revocation, and
+/// session generation are checked at the point of use. Consumption is
+/// single-use and therefore cannot be replayed after a successful use.
+pub struct ZoneRouteAdmission {
+    state: Mutex<Option<RouteAdmissionState>>,
+}
+
+#[allow(clippy::large_enum_variant)]
+enum RouteAdmissionState {
+    Runtime {
+        verifier: RouteAdmissionVerifier,
+        evidence: RouteAdmissionEvidence,
+        expected: ZoneRouteAdmissionExpectation,
+    },
+    #[cfg(any(test, feature = "test-support"))]
+    Test(RouteAdmissionSnapshot),
+    #[cfg(any(test, feature = "test-support"))]
+    TestLive {
+        snapshot: RouteAdmissionSnapshot,
+        now_unix_seconds: Arc<AtomicU64>,
+        revoked: Arc<AtomicBool>,
+    },
+}
+
+impl std::fmt::Debug for ZoneRouteAdmission {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str("ZoneRouteAdmission(<redacted>)")
+    }
+}
+
+impl ZoneRouteAdmission {
+    /// Hold runtime-issued evidence for one current, single-use decision.
+    pub fn verify(
+        verifier: RouteAdmissionVerifier,
+        evidence: RouteAdmissionEvidence,
+        expected: &ZoneRouteAdmissionExpectation,
+    ) -> Result<Self, ZoneRouteFailClosedReason> {
+        if expected.source_zone.is_none() || expected.target_zone.is_none() {
+            return Err(ZoneRouteFailClosedReason::PolicyDenial);
+        }
+        Ok(Self {
+            state: Mutex::new(Some(RouteAdmissionState::Runtime {
+                verifier,
+                evidence,
+                expected: expected.clone(),
+            })),
+        })
+    }
+
+    /// Consume and verify the admission at the current daemon time.
+    fn consume(&self) -> Result<RouteAdmissionSnapshot, ZoneRouteFailClosedReason> {
+        let mut state_guard = self
+            .state
+            .lock()
+            .map_err(|_| ZoneRouteFailClosedReason::PolicyDenial)?;
+        #[cfg(any(test, feature = "test-support"))]
+        if let Some(RouteAdmissionState::TestLive {
+            snapshot,
+            now_unix_seconds,
+            revoked,
+        }) = state_guard.as_ref()
+        {
+            if revoked.load(Ordering::Acquire) {
+                state_guard.take();
+                return Err(ZoneRouteFailClosedReason::ZoneLinkDisconnected);
+            }
+            let now = now_unix_seconds.load(Ordering::Acquire);
+            let issued = snapshot.issued_at_unix_ms / 1_000;
+            let expires = snapshot.expires_at_unix_ms / 1_000;
+            if now < issued {
+                state_guard.take();
+                return Err(ZoneRouteFailClosedReason::PolicyDenial);
+            }
+            if now >= expires {
+                state_guard.take();
+                return Err(ZoneRouteFailClosedReason::Expired);
+            }
+            let mut current = snapshot.clone();
+            current.verified_at_unix_seconds = now;
+            return Ok(current);
+        }
+        let state = state_guard
+            .take()
+            .ok_or(ZoneRouteFailClosedReason::ZoneLinkDisconnected)?;
+        match state {
+            RouteAdmissionState::Runtime {
+                verifier,
+                evidence,
+                expected,
+            } => {
+                let verified = verifier.verify(evidence).map_err(map_admission_error)?;
+                validate_session_binding(&verified)?;
+                let now = daemon_now_unix_seconds()?;
+                let mut snapshot = snapshot_verified_admission(&verified, now);
+                let now_ms = now
+                    .checked_mul(1_000)
+                    .ok_or(ZoneRouteFailClosedReason::Expired)?;
+                if now_ms < snapshot.issued_at_unix_ms
+                    || now_ms >= snapshot.expires_at_unix_ms
+                {
+                    return Err(ZoneRouteFailClosedReason::Expired);
+                }
+                snapshot.source_zone = expected.source_zone.clone();
+                snapshot.target_zone = expected.target_zone.clone();
+                validate_snapshot(&snapshot, &expected)?;
+                Ok(snapshot)
+            }
+            #[cfg(any(test, feature = "test-support"))]
+            RouteAdmissionState::Test(snapshot) => {
+                if snapshot.expires_at_unix_ms <= snapshot.issued_at_unix_ms {
+                    return Err(ZoneRouteFailClosedReason::Expired);
+                }
+                Ok(snapshot)
+            }
+            #[cfg(any(test, feature = "test-support"))]
+            RouteAdmissionState::TestLive { .. } => {
+                unreachable!("test-live admissions are handled without consumption")
+            }
+        }
+    }
+
+    /// Build a synthetic admission only for owner-local vector tests.
+    #[cfg(any(test, feature = "test-support"))]
+    #[allow(clippy::too_many_arguments)]
+    pub fn for_test(
+        expectation: ZoneRouteAdmissionExpectation,
+        issued_at_unix_seconds: u64,
+        expires_at_unix_seconds: u64,
+    ) -> Self {
+        Self {
+            state: Mutex::new(Some(RouteAdmissionState::Test(RouteAdmissionSnapshot {
+                source_zone: expectation.source_zone,
+                target_zone: expectation.target_zone,
+                zone_link_uid: expectation.zone_link_uid,
+                edge: expectation.edge,
+                controller_generation: expectation.controller_generation,
+                reconnect_generation: expectation.reconnect_generation,
+                source_zone_uid: expectation.source_zone_uid,
+                target_zone_uid: expectation.target_zone_uid,
+                operation_id: expectation.operation_id,
+                verb: expectation.verb,
+                required_capability: expectation.required_capability,
+                policy_revision: expectation.policy_revision,
+                issued_at_unix_ms: issued_at_unix_seconds.saturating_mul(1_000),
+                expires_at_unix_ms: expires_at_unix_seconds.saturating_mul(1_000),
+                verified_at_unix_seconds: issued_at_unix_seconds,
+            }))),
+        }
+    }
+
+    /// Build a reusable synthetic admission with a controllable runtime clock.
+    ///
+    /// This models the live verifier handle for owner-local expiry and
+    /// revocation tests. Production admissions use the single-use runtime
+    /// verifier path above.
+    #[cfg(any(test, feature = "test-support"))]
+    pub fn for_test_live(
+        expectation: ZoneRouteAdmissionExpectation,
+        issued_at_unix_seconds: u64,
+        expires_at_unix_seconds: u64,
+        now_unix_seconds: u64,
+    ) -> (Self, Arc<AtomicU64>, Arc<AtomicBool>) {
+        let now = Arc::new(AtomicU64::new(now_unix_seconds));
+        let revoked = Arc::new(AtomicBool::new(false));
+        (
+            Self {
+                state: Mutex::new(Some(RouteAdmissionState::TestLive {
+                    snapshot: RouteAdmissionSnapshot {
+                        source_zone: expectation.source_zone,
+                        target_zone: expectation.target_zone,
+                        zone_link_uid: expectation.zone_link_uid,
+                        edge: expectation.edge,
+                        controller_generation: expectation.controller_generation,
+                        reconnect_generation: expectation.reconnect_generation,
+                        source_zone_uid: expectation.source_zone_uid,
+                        target_zone_uid: expectation.target_zone_uid,
+                        operation_id: expectation.operation_id,
+                        verb: expectation.verb,
+                        required_capability: expectation.required_capability,
+                        policy_revision: expectation.policy_revision,
+                        issued_at_unix_ms: issued_at_unix_seconds.saturating_mul(1_000),
+                        expires_at_unix_ms: expires_at_unix_seconds.saturating_mul(1_000),
+                        verified_at_unix_seconds: issued_at_unix_seconds,
+                    },
+                    now_unix_seconds: Arc::clone(&now),
+                    revoked: Arc::clone(&revoked),
+                })),
+            },
+            now,
+            revoked,
+        )
+    }
+
+    #[cfg(test)]
+    fn test_snapshot_mut(&mut self) -> &mut RouteAdmissionSnapshot {
+        let state = self
+            .state
+            .get_mut()
+            .expect("test admission mutex is not poisoned")
+            .as_mut()
+            .expect("test admission is present");
+        match state {
+            RouteAdmissionState::Test(snapshot) => snapshot,
+            RouteAdmissionState::Runtime { .. } => {
+                panic!("test snapshot mutation requires a synthetic admission")
+            }
+            RouteAdmissionState::TestLive { snapshot, .. } => snapshot,
+        }
+    }
+}
+
+fn snapshot_verified_admission(
+    verified: &VerifiedRouteAdmission,
+    verified_at_unix_seconds: u64,
+) -> RouteAdmissionSnapshot {
+    RouteAdmissionSnapshot {
+        source_zone: None,
+        target_zone: None,
+        zone_link_uid: verified.zone_link_uid().clone(),
+        edge: verified.edge().clone(),
+        controller_generation: verified.controller_generation().clone(),
+        reconnect_generation: verified.reconnect_generation(),
+        source_zone_uid: verified.source_zone_uid().clone(),
+        target_zone_uid: verified.target_zone_uid().clone(),
+        operation_id: verified.operation_id().clone(),
+        verb: verified.verb(),
+        required_capability: verified.required_capability().clone(),
+        policy_revision: verified.policy_revision(),
+        issued_at_unix_ms: verified.issued_at_unix_ms(),
+        expires_at_unix_ms: verified.expires_at_unix_ms(),
+        verified_at_unix_seconds,
+    }
+}
+
+fn daemon_now_unix_seconds() -> Result<u64, ZoneRouteFailClosedReason> {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| duration.as_secs())
+        .map_err(|_| ZoneRouteFailClosedReason::PolicyDenial)
+}
+
+fn validate_snapshot(
+    snapshot: &RouteAdmissionSnapshot,
+    expected: &ZoneRouteAdmissionExpectation,
+) -> Result<(), ZoneRouteFailClosedReason> {
+    if snapshot.source_zone.is_none()
+        || snapshot.target_zone.is_none()
+        || snapshot.source_zone != expected.source_zone
+        || snapshot.target_zone != expected.target_zone
+    {
+        return Err(ZoneRouteFailClosedReason::PolicyDenial);
+    }
+    if snapshot.zone_link_uid != expected.zone_link_uid
+        || snapshot.edge != expected.edge
+        || snapshot.source_zone_uid != expected.source_zone_uid
+        || snapshot.target_zone_uid != expected.target_zone_uid
+        || snapshot.operation_id != expected.operation_id
+        || snapshot.verb != expected.verb
+        || snapshot.policy_revision != expected.policy_revision
+    {
+        return Err(ZoneRouteFailClosedReason::PolicyDenial);
+    }
+    if snapshot.controller_generation != expected.controller_generation
+        || snapshot.reconnect_generation != expected.reconnect_generation
+    {
+        return Err(ZoneRouteFailClosedReason::ZoneLinkDisconnected);
+    }
+    if snapshot.required_capability != expected.required_capability {
+        return Err(ZoneRouteFailClosedReason::MissingCapability);
+    }
+    if snapshot.expires_at_unix_ms <= snapshot.issued_at_unix_ms {
+        return Err(ZoneRouteFailClosedReason::Expired);
+    }
+    Ok(())
+}
+
+fn validate_session_binding(
+    verified: &VerifiedRouteAdmission,
+) -> Result<(), ZoneRouteFailClosedReason> {
+    let binding = verified.session_binding();
+    if binding.purpose() != EndpointPurpose::ZoneLink
+        || binding.purpose_class() != PurposeClass::Enrolled
+        || binding.initiator_role() != EndpointRole::ZoneController
+        || binding.responder_role() != EndpointRole::ZoneController
+        || binding.service() != ServicePackage::ResourceV3
+        || binding.endpoint_locality() != d2b_contracts_zone_session::v3::component_session::Locality::Remote
+        || binding.transport_class() != TransportClass::ProviderStream
+        || binding.transport_binding().locality()
+            != d2b_contracts_resource::v3::identity::Locality::AdjacentZone
+    {
+        return Err(ZoneRouteFailClosedReason::PolicyDenial);
+    }
+    Ok(())
+}
+
+fn map_admission_error(error: RouteAdmissionError) -> ZoneRouteFailClosedReason {
+    match error {
+        RouteAdmissionError::Expired => ZoneRouteFailClosedReason::Expired,
+        RouteAdmissionError::Revoked
+        | RouteAdmissionError::ControllerGenerationMismatch
+        | RouteAdmissionError::ReconnectGenerationMismatch
+        | RouteAdmissionError::SessionNotLive
+        | RouteAdmissionError::ZoneLinkMismatch
+        | RouteAdmissionError::EdgeMismatch => ZoneRouteFailClosedReason::ZoneLinkDisconnected,
+        RouteAdmissionError::CapabilityMismatch => ZoneRouteFailClosedReason::MissingCapability,
+        _ => ZoneRouteFailClosedReason::PolicyDenial,
+    }
+}
+
 /// One route question posed to the engine.
 ///
-/// Every field that could weaken the answer defaults to its refusing value in
-/// [`ZoneRouteRequest::new`], so a caller that forgets to supply an input gets
-/// a typed refusal rather than a permissive answer. `policy_allows` and
-/// `zone_link_connected` are inputs from the authorizer and the link
-/// controller; the engine never infers either.
-#[derive(Debug, Clone, PartialEq, Eq)]
+/// A remote request is admitted only when it owns a verified runtime-issued
+/// route admission. Source and target paths are routing addresses; all
+/// authorization, connectivity, capability, policy, session, and time state
+/// comes from the sealed admission.
+#[derive(Debug)]
 pub struct ZoneRouteRequest {
     /// The Zone the call originates in.
-    pub source_zone: ZonePath,
+    source_zone: ZonePath,
     /// The Zone the call targets.
-    pub target_zone: ZonePath,
-    /// The verifier-supplied decision time in Unix seconds.
-    pub current_time_unix_seconds: u64,
-    /// The capability the requested operation needs at the target Zone.
-    pub required_capability: Option<ZoneRouteCapability>,
+    target_zone: ZonePath,
     /// Hops still available to this call.
-    pub remaining_hops: u32,
-    /// Whether the caller's authorizer allowed the operation.
-    pub policy_allows: bool,
-    /// Whether the uplink toward the target is established.
-    pub zone_link_connected: bool,
+    remaining_hops: u32,
+    admission: Option<ZoneRouteAdmission>,
 }
 
 impl ZoneRouteRequest {
-    /// A request with the protocol-wide initial hop budget and refusing
-    /// defaults for every authorization and connectivity input.
-    pub const fn new(
-        source_zone: ZonePath,
-        target_zone: ZonePath,
-        current_time_unix_seconds: u64,
-    ) -> Self {
+    /// A request with no runtime admission.
+    ///
+    /// This shape is useful for local-root dispatch and for proving that an
+    /// omitted admission cannot reach a remote route.
+    pub const fn new(source_zone: ZonePath, target_zone: ZonePath) -> Self {
         Self {
             source_zone,
             target_zone,
-            current_time_unix_seconds,
-            required_capability: None,
             remaining_hops: ZONE_ROUTE_INITIAL_HOP_BUDGET,
-            policy_allows: false,
-            zone_link_connected: false,
+            admission: None,
         }
+    }
+
+    /// Build a request by consuming one runtime-issued admission.
+    pub fn from_runtime_admission(
+        source_zone: ZonePath,
+        target_zone: ZonePath,
+        remaining_hops: u32,
+        verifier: RouteAdmissionVerifier,
+        evidence: RouteAdmissionEvidence,
+        expected: &ZoneRouteAdmissionExpectation,
+    ) -> Result<Self, ZoneRouteFailClosedReason> {
+        let admission = ZoneRouteAdmission::verify(verifier, evidence, expected)?;
+        Ok(Self::new(source_zone, target_zone)
+            .with_remaining_hops(remaining_hops)
+            .with_admission(admission))
+    }
+
+    /// Attach a verified runtime-issued admission.
+    pub fn with_admission(mut self, admission: ZoneRouteAdmission) -> Self {
+        self.admission = Some(admission);
+        self
+    }
+
+    /// Set a bounded remaining hop budget.
+    pub const fn with_remaining_hops(mut self, remaining_hops: u32) -> Self {
+        self.remaining_hops = remaining_hops;
+        self
+    }
+
+    /// Borrow the source Zone path.
+    pub const fn source_zone(&self) -> &ZonePath {
+        &self.source_zone
+    }
+
+    /// Borrow the target Zone path.
+    pub const fn target_zone(&self) -> &ZonePath {
+        &self.target_zone
+    }
+
+    /// Return the remaining hop budget.
+    pub const fn remaining_hops(&self) -> u32 {
+        self.remaining_hops
+    }
+
+    /// Borrow the verified admission, when one was attached.
+    pub const fn admission(&self) -> Option<&ZoneRouteAdmission> {
+        self.admission.as_ref()
     }
 }
 
@@ -182,7 +642,7 @@ pub enum ZoneRouteDecision {
         /// Immutable route metadata; it carries no transport or credential.
         path: ZoneRoutePath,
         /// The capability ceiling surviving every advertised hop, or `None`
-        /// when the target is the local root and no advertised ceiling applies.
+        /// only for exact local-root dispatch.
         effective_capabilities: Option<ZoneRouteCapabilitySet>,
         /// Hops left after paying for this path.
         remaining_hops_after: u32,
@@ -214,34 +674,99 @@ impl ZoneRouteDecision {
 
 /// One forwarding question posed at an intermediate Zone.
 ///
-/// Both grant flags default to refusing in [`ZoneRelayRequest::new`]. A relay
-/// grant never supplies the target-verb grant and a target-verb grant never
-/// supplies the relay grant; the engine requires both independently.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// A forwarding hop consumes two independently verified runtime admissions:
+/// one for the immutable target operation and one for the `relay` operation.
+/// Neither admission can supply the other. The optional form exists only so
+/// omitted evidence has a representable, fail-closed request value.
+#[derive(Debug)]
 pub struct ZoneRelayRequest {
     /// Hops the inbound frame arrived with.
-    pub arrived_remaining_hops: u32,
-    /// Whether local policy granted the `relay` verb for this next hop.
-    pub relay_granted: bool,
-    /// Whether local policy granted the immutable target verb.
-    pub target_verb_granted: bool,
-    /// Whether the outbound uplink is established.
-    pub zone_link_connected: bool,
+    arrived_remaining_hops: u32,
+    /// The local source Zone, when the relay owner supplies it.
+    source_zone: Option<ZonePath>,
+    /// The next-hop child label, when the relay owner supplies it.
+    next_hop: Option<ZoneLabelId>,
+    /// The immutable target-operation admission.
+    target_admission: Option<ZoneRouteAdmission>,
+    /// The independent relay-operation admission.
+    relay_admission: Option<ZoneRouteAdmission>,
     /// Whether the inbound frame offered a descriptor attachment.
-    pub offers_attachment: bool,
+    offers_attachment: bool,
 }
 
 impl ZoneRelayRequest {
-    /// A relay request with refusing defaults for every grant and for
-    /// connectivity.
+    /// A relay request with no runtime admissions.
     pub const fn new(arrived_remaining_hops: u32) -> Self {
         Self {
             arrived_remaining_hops,
-            relay_granted: false,
-            target_verb_granted: false,
-            zone_link_connected: false,
+            source_zone: None,
+            next_hop: None,
+            target_admission: None,
+            relay_admission: None,
             offers_attachment: false,
         }
+    }
+
+    /// Bind the relay frame to the local Zone and selected next hop.
+    pub fn with_forward_binding(
+        mut self,
+        source_zone: ZonePath,
+        next_hop: ZoneLabelId,
+    ) -> Self {
+        self.source_zone = Some(source_zone);
+        self.next_hop = Some(next_hop);
+        self
+    }
+
+    /// Attach the independently verified target and relay admissions.
+    pub fn with_admissions(
+        mut self,
+        target_admission: ZoneRouteAdmission,
+        relay_admission: ZoneRouteAdmission,
+    ) -> Self {
+        self.target_admission = Some(target_admission);
+        self.relay_admission = Some(relay_admission);
+        self
+    }
+
+    /// Consume and verify the two runtime-issued admissions for one hop.
+    pub fn with_runtime_admissions(
+        self,
+        target_verifier: RouteAdmissionVerifier,
+        target_evidence: RouteAdmissionEvidence,
+        target_expected: &ZoneRouteAdmissionExpectation,
+        relay_verifier: RouteAdmissionVerifier,
+        relay_evidence: RouteAdmissionEvidence,
+        relay_expected: &ZoneRouteAdmissionExpectation,
+    ) -> Result<Self, ZoneRouteFailClosedReason> {
+        let target_admission =
+            ZoneRouteAdmission::verify(target_verifier, target_evidence, target_expected)?;
+        let relay_admission =
+            ZoneRouteAdmission::verify(relay_verifier, relay_evidence, relay_expected)?;
+        Ok(self.with_admissions(target_admission, relay_admission))
+    }
+
+    /// Attach only the immutable target admission.
+    pub fn with_target_admission(mut self, admission: ZoneRouteAdmission) -> Self {
+        self.target_admission = Some(admission);
+        self
+    }
+
+    /// Attach only the independent relay admission.
+    pub fn with_relay_admission(mut self, admission: ZoneRouteAdmission) -> Self {
+        self.relay_admission = Some(admission);
+        self
+    }
+
+    /// Record that the inbound frame offered a descriptor attachment.
+    pub const fn with_attachment_offer(mut self, offers_attachment: bool) -> Self {
+        self.offers_attachment = offers_attachment;
+        self
+    }
+
+    /// The hop budget the inbound frame arrived with.
+    pub const fn arrived_remaining_hops(&self) -> u32 {
+        self.arrived_remaining_hops
     }
 }
 
@@ -642,26 +1167,103 @@ impl ZoneRouteEngine {
 
     /// Decide the route for one operation.
     ///
-    /// The order is: connectivity, caller authorization, the hop budget, the
-    /// nearest-common-ancestor walk, and finally the capability ceiling
-    /// surviving the walk. Every stage refuses with a closed reason.
+    /// The order is: sealed admission presence and lifetime, the hop budget,
+    /// the nearest-common-ancestor walk, the admission's exact edge, and
+    /// finally the capability ceiling surviving the walk. Every stage refuses
+    /// with a closed reason.
     pub fn decide_route(&self, request: &ZoneRouteRequest) -> ZoneRouteDecision {
-        let denied = |reason| ZoneRouteDecision::Denied { reason };
-        if !request.zone_link_connected {
-            return denied(ZoneRouteFailClosedReason::ZoneLinkDisconnected);
-        }
-        if !request.policy_allows {
-            return denied(ZoneRouteFailClosedReason::PolicyDenial);
-        }
-        if request.remaining_hops == 0 {
-            return denied(ZoneRouteFailClosedReason::HopLimitExceeded);
-        }
-
-        let path = match self.build_path_at(
+        self.decide_route_parts(
             &request.source_zone,
             &request.target_zone,
-            request.current_time_unix_seconds,
-        ) {
+            request.remaining_hops,
+            request.admission.as_ref(),
+            Some(&request.target_zone),
+        )
+    }
+
+    /// Decide a route using an admission borrowed from a larger request.
+    ///
+    /// This keeps the admission non-cloneable while allowing topology
+    /// projections to evaluate several sealed rows without moving their
+    /// evidence out of the request.
+    pub fn decide_route_with_admission(
+        &self,
+        source_zone: &ZonePath,
+        target_zone: &ZonePath,
+        remaining_hops: u32,
+        admission: &ZoneRouteAdmission,
+    ) -> ZoneRouteDecision {
+        self.decide_route_parts(
+            source_zone,
+            target_zone,
+            remaining_hops,
+            Some(admission),
+            Some(target_zone),
+        )
+    }
+
+    /// Decide a route after a resolver substituted a sealed entrypoint.
+    ///
+    /// The resolver has already compared the admission's exact target Zone
+    /// with the requested target. The engine therefore keeps the source and
+    /// edge checks while allowing the route destination to be the resolver's
+    /// selected sealed entrypoint.
+    pub fn decide_route_via_entrypoint(
+        &self,
+        source_zone: &ZonePath,
+        entrypoint_zone: &ZonePath,
+        requested_target_zone: &ZonePath,
+        remaining_hops: u32,
+        admission: &ZoneRouteAdmission,
+    ) -> ZoneRouteDecision {
+        self.decide_route_parts(
+            source_zone,
+            entrypoint_zone,
+            remaining_hops,
+            Some(admission),
+            Some(requested_target_zone),
+        )
+    }
+
+    fn decide_route_parts(
+        &self,
+        source_zone: &ZonePath,
+        target_zone: &ZonePath,
+        remaining_hops: u32,
+        admission: Option<&ZoneRouteAdmission>,
+        admission_target_zone: Option<&ZonePath>,
+    ) -> ZoneRouteDecision {
+        let denied = |reason| ZoneRouteDecision::Denied { reason };
+        let local_dispatch =
+            source_zone == &self.local_root && target_zone == &self.local_root;
+        if !local_dispatch && admission.is_none() {
+            return denied(ZoneRouteFailClosedReason::PolicyDenial);
+        }
+        let admission = match admission {
+            Some(admission) => match admission.consume() {
+                Ok(snapshot) => Some(snapshot),
+                Err(reason) => return denied(reason),
+            },
+            None => None,
+        };
+        if remaining_hops == 0 {
+            return denied(ZoneRouteFailClosedReason::HopLimitExceeded);
+        }
+        if remaining_hops > ZONE_ROUTE_INITIAL_HOP_BUDGET {
+            return denied(ZoneRouteFailClosedReason::HopLimitExceeded);
+        }
+        if admission
+            .as_ref()
+            .is_some_and(|admission| admission.verb == OperationClass::Relay)
+        {
+            return denied(ZoneRouteFailClosedReason::PolicyDenial);
+        }
+
+        let now = admission
+            .as_ref()
+            .map_or(0, |admission| admission.verified_at_unix_seconds);
+
+        let path = match self.build_path_at(source_zone, target_zone, now) {
             Ok(path) => path,
             Err(reason) => return denied(reason),
         };
@@ -670,13 +1272,35 @@ impl ZoneRouteEngine {
             Ok(hops) => hops,
             Err(_) => return denied(ZoneRouteFailClosedReason::HopLimitExceeded),
         };
-        if hop_count > request.remaining_hops {
+        if hop_count > remaining_hops {
             return denied(ZoneRouteFailClosedReason::HopLimitExceeded);
         }
 
-        let effective_capabilities =
-            self.effective_capabilities_at(&path, request.current_time_unix_seconds);
-        if let Some(required) = request.required_capability.as_ref() {
+        if let Some(admission) = admission.as_ref() {
+            if admission.source_zone.as_ref() != Some(source_zone)
+                || admission.target_zone.as_ref() != admission_target_zone
+            {
+                return denied(ZoneRouteFailClosedReason::PolicyDenial);
+            }
+            let edge_child = admission.edge.child();
+            let edge_is_on_path = path.source_zone() == edge_child
+                || path.target_zone() == edge_child
+                || path.hops().iter().any(|hop| {
+                    hop.from() == edge_child || hop.to() == edge_child
+                });
+            if !edge_is_on_path {
+                return denied(ZoneRouteFailClosedReason::ZoneLinkDisconnected);
+            }
+            if admission.expires_at_unix_ms <= admission.issued_at_unix_ms {
+                return denied(ZoneRouteFailClosedReason::Expired);
+            }
+        }
+
+        let effective_capabilities = self.effective_capabilities_at(&path, now);
+        if let Some(required) = admission
+            .as_ref()
+            .map(|admission| &admission.required_capability)
+        {
             let satisfied = effective_capabilities
                 .as_ref()
                 .is_none_or(|set| set.contains(required));
@@ -688,7 +1312,7 @@ impl ZoneRouteEngine {
         ZoneRouteDecision::Allowed {
             path,
             effective_capabilities,
-            remaining_hops_after: request.remaining_hops - hop_count,
+            remaining_hops_after: remaining_hops - hop_count,
         }
     }
 
@@ -696,23 +1320,57 @@ impl ZoneRouteEngine {
     /// remaining budget.
     ///
     /// This is an associated function because forwarding admission depends only
-    /// on the inbound frame and the local grants; it consults no projection
-    /// state.
+    /// on the inbound frame and the two sealed grants; it consults no
+    /// projection state.
     pub fn admit_relay_hop(request: &ZoneRelayRequest) -> ZoneRelayAdmission {
         let denied = |reason| ZoneRelayAdmission::Denied { reason };
+        let (Some(target), Some(relay)) = (
+            request.target_admission.as_ref(),
+            request.relay_admission.as_ref(),
+        ) else {
+            return denied(ZoneRouteFailClosedReason::ZoneLinkDisconnected);
+        };
+        let target = match target.consume() {
+            Ok(snapshot) => snapshot,
+            Err(reason) => return denied(reason),
+        };
+        let relay = match relay.consume() {
+            Ok(snapshot) => snapshot,
+            Err(reason) => return denied(reason),
+        };
         if request.offers_attachment {
             return denied(ZoneRouteFailClosedReason::AttachmentNotPermittedOverZoneLink);
         }
         if request.arrived_remaining_hops == 0 {
             return denied(ZoneRouteFailClosedReason::HopLimitExceeded);
         }
-        if !request.zone_link_connected {
-            return denied(ZoneRouteFailClosedReason::ZoneLinkDisconnected);
+        if target.operation_id != relay.operation_id
+            || target.zone_link_uid != relay.zone_link_uid
+            || target.edge != relay.edge
+            || target.controller_generation != relay.controller_generation
+            || target.reconnect_generation != relay.reconnect_generation
+            || target.source_zone != relay.source_zone
+            || target.target_zone != relay.target_zone
+            || target.source_zone_uid != relay.source_zone_uid
+            || target.target_zone_uid != relay.target_zone_uid
+            || target.policy_revision != relay.policy_revision
+        {
+            return denied(ZoneRouteFailClosedReason::PolicyDenial);
         }
-        if !request.relay_granted {
+        if request
+            .source_zone
+            .as_ref()
+            .is_some_and(|source| target.source_zone.as_ref() != Some(source))
+            || request.next_hop.as_ref().is_some_and(|next_hop| {
+                target.edge.child().labels().first() != Some(next_hop)
+            })
+        {
+            return denied(ZoneRouteFailClosedReason::PolicyDenial);
+        }
+        if relay.required_capability.as_str() != "relay" {
             return denied(ZoneRouteFailClosedReason::RelayDenied);
         }
-        if !request.target_verb_granted {
+        if target.verb == OperationClass::Relay {
             return denied(ZoneRouteFailClosedReason::PolicyDenial);
         }
         ZoneRelayAdmission::Admitted {
@@ -862,36 +1520,59 @@ impl ZoneRouteEngine {
 
     /// The capability ceiling that survives every advertised hop of a path.
     ///
-    /// Only a Zone that carries a route entry has asserted a capability
-    /// ceiling; a parent edge staged as a bare intermediate asserts nothing and
-    /// therefore narrows nothing. `None` means the target is the local root,
-    /// where the call is dispatched locally and no advertised ceiling applies.
+    /// A parent edge or route entry may assert a capability ceiling. Bare
+    /// intermediate edges assert nothing and therefore narrow nothing.
+    /// `None` means no advertised ceiling applies, including local dispatch.
     fn effective_capabilities_at(
         &self,
         path: &ZoneRoutePath,
         now: u64,
     ) -> Option<ZoneRouteCapabilitySet> {
-        if path.target_zone() == &self.local_root {
+        if path.source_zone() == &self.local_root && path.target_zone() == &self.local_root {
             return None;
         }
         let mut effective: Option<ZoneRouteCapabilitySet> = None;
         for hop in path.hops() {
-            if hop.direction() != ZoneRouteHopDirection::DownToChild {
-                continue;
-            }
-            let Some(entry) = self.route_entry_at(hop.to(), now) else {
-                continue;
+            let zone = match hop.direction() {
+                ZoneRouteHopDirection::DownToChild => hop.to(),
+                ZoneRouteHopDirection::UpToParent => hop.from(),
             };
-            effective = Some(match effective {
-                Some(current) => intersect_capabilities(&current, &entry.capabilities),
-                None => entry.capabilities.clone(),
-            });
+            if let Some(entry) = self.parent_entry_at(zone, now)
+                && let Some(capabilities) = entry.capabilities.as_ref()
+            {
+                effective = Some(match effective {
+                    Some(current) => intersect_capabilities(&current, capabilities),
+                    None => capabilities.clone(),
+                });
+            }
+            if let Some(entry) = self.route_entry_at(zone, now) {
+                effective = Some(match effective {
+                    Some(current) => intersect_capabilities(&current, &entry.capabilities),
+                    None => entry.capabilities.clone(),
+                });
+            }
         }
-        Some(effective.unwrap_or_else(|| {
-            self.route_entry_at(path.target_zone(), now)
-                .map(|entry| entry.capabilities.clone())
-                .unwrap_or_default()
-        }))
+        if path.hops().is_empty() {
+            if let Some(entry) = self.parent_entry_at(path.source_zone(), now)
+                && let Some(capabilities) = entry.capabilities.as_ref()
+            {
+                effective = Some(capabilities.clone());
+            }
+            if let Some(entry) = self.route_entry_at(path.source_zone(), now) {
+                effective = Some(match effective {
+                    Some(current) => intersect_capabilities(&current, &entry.capabilities),
+                    None => entry.capabilities.clone(),
+                });
+            }
+        }
+        Some(
+            effective
+                .or_else(|| {
+                    self.route_entry_at(path.target_zone(), now)
+                        .map(|entry| entry.capabilities.clone())
+                })
+                .unwrap_or_default(),
+        )
     }
 
     fn is_known_zone_at(&self, zone: &ZonePath, now: u64) -> bool {
@@ -997,7 +1678,11 @@ fn stage_parent_edge(
             existing.route_id = Some(candidate);
         }
         if let Some(capabilities) = capabilities {
-            existing.capabilities = Some(bound_capabilities(capabilities, ceiling));
+            let capabilities = bound_capabilities(capabilities, ceiling);
+            existing.capabilities = Some(match existing.capabilities.as_ref() {
+                Some(current) => intersect_capabilities(current, &capabilities),
+                None => capabilities,
+            });
         } else if let (Some(current), Some(ceiling)) = (existing.capabilities.as_ref(), ceiling) {
             existing.capabilities = Some(intersect_capabilities(current, ceiling));
         }
@@ -1020,9 +1705,15 @@ fn stage_parent_edge(
         if next_route_id.is_none() {
             next_route_id = existing.route_id.clone();
         }
-        if next_capabilities.is_none() {
-            next_capabilities = existing.capabilities.clone();
-        }
+        next_capabilities = match (existing.capabilities.as_ref(), next_capabilities.take()) {
+            (Some(current), Some(candidate)) => {
+                let candidate = bound_capabilities(candidate, ceiling);
+                Some(intersect_capabilities(current, &candidate))
+            }
+            (Some(current), None) => Some(current.clone()),
+            (None, Some(candidate)) => Some(bound_capabilities(candidate, ceiling)),
+            (None, None) => None,
+        };
     }
 
     parent_updates.insert(
@@ -1125,7 +1816,12 @@ fn would_form_loop(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use d2b_contracts_resource::v3::{
+        ResourceUid, ZoneRevision,
+        identity::ReconnectGeneration,
+    };
     use d2b_contracts_zone_session::v3::{
+    component_session::{OperationClass, OperationId},
     zone_routing::{
         ZONE_ROUTING_SCHEMA_VERSION, ZoneDescendantRoute, ZoneRouteKeyRole, ZoneRouteSignature,
         ZoneRouteSignatureAlgorithm, ZoneRouteSignatureRef, ZoneSigningKeyFingerprint,
@@ -1152,10 +1848,6 @@ mod tests {
         .expect("valid capability set")
     }
 
-    fn capability(code: &str) -> ZoneRouteCapability {
-        ZoneRouteCapability::parse(code).expect("valid capability")
-    }
-
     fn signature(signature_ref: &str) -> ZoneRouteSignature {
         ZoneRouteSignature::new(
             ZoneRouteSignatureAlgorithm::Ed25519Blake3,
@@ -1172,6 +1864,360 @@ mod tests {
 
     fn route_id(value: &str) -> ZoneRouteId {
         ZoneRouteId::parse(value).expect("valid route id")
+    }
+
+    fn uid(marker: char) -> ResourceUid {
+        let value = match marker {
+            '1' => "11111111-1111-4111-8111-111111111111",
+            '2' => "22222222-2222-4222-8222-222222222222",
+            '3' => "33333333-3333-4333-8333-333333333333",
+            '4' => "44444444-4444-4444-8444-444444444444",
+            _ => panic!("test UID marker must be one of 1..=4"),
+        };
+        ResourceUid::parse(value).expect("valid resource UID")
+    }
+
+    fn operation_id() -> OperationId {
+        OperationId::new(vec![0x11; 16]).expect("valid operation ID")
+    }
+
+    fn admission_expectation(
+        edge: ZoneTreeEdge,
+        source: ZonePath,
+        target: ZonePath,
+        verb: OperationClass,
+        capability: &str,
+    ) -> ZoneRouteAdmissionExpectation {
+        ZoneRouteAdmissionExpectation::new(
+            uid('1'),
+            edge,
+            generation("controller-1"),
+            ReconnectGeneration::new(7).expect("valid reconnect generation"),
+            uid('2'),
+            uid('3'),
+            operation_id(),
+            verb,
+            ZoneRouteCapability::parse(capability).expect("valid capability"),
+            ZoneRevision::new(9),
+        )
+        .expect("valid route admission expectation")
+        .for_zones(source, target)
+    }
+
+    fn test_admission(
+        edge: ZoneTreeEdge,
+        source: ZonePath,
+        target: ZonePath,
+        verb: OperationClass,
+        capability: &str,
+        issued_at: u64,
+        expires_at: u64,
+    ) -> ZoneRouteAdmission {
+        ZoneRouteAdmission::for_test(
+            admission_expectation(edge, source, target, verb, capability),
+            issued_at,
+            expires_at,
+        )
+    }
+
+    fn standard_admission(capability: &str) -> ZoneRouteAdmission {
+        test_admission(
+            ZoneTreeEdge::new(zone(&["k0"]), zone(&["k1", "k0"])).expect("direct edge"),
+            zone(&["k0"]),
+            zone(&["k2", "k1", "k0"]),
+            OperationClass::Invoke,
+            capability,
+            1_500,
+            4_000,
+        )
+    }
+
+    fn relay_admission(verb: OperationClass, capability: &str) -> ZoneRouteAdmission {
+        test_admission(
+            ZoneTreeEdge::new(zone(&["k0"]), zone(&["k1", "k0"])).expect("direct edge"),
+            zone(&["k0"]),
+            zone(&["k2", "k1", "k0"]),
+            verb,
+            capability,
+            1_500,
+            4_000,
+        )
+    }
+
+    fn admission_for_route(
+        source: &ZonePath,
+        target: &ZonePath,
+        capability: &str,
+    ) -> ZoneRouteAdmission {
+        let k1_path = zone(&["k1", "k0"]);
+        let k2_path = zone(&["k2", "k1", "k0"]);
+        let edge = if (source == &k1_path || source.is_descendant_of(&k1_path))
+            && (target == &k1_path || target.is_descendant_of(&k1_path))
+        {
+            ZoneTreeEdge::new(k1_path, k2_path).expect("direct edge")
+        } else {
+            ZoneTreeEdge::new(zone(&["k0"]), zone(&["k1", "k0"])).expect("direct edge")
+        };
+        test_admission(
+            edge,
+            source.clone(),
+            target.clone(),
+            OperationClass::Invoke,
+            capability,
+            1_500,
+            4_000,
+        )
+    }
+
+    #[test]
+    fn remote_route_without_runtime_admission_is_refused() {
+        let engine = ZoneRouteEngine::new(zone(&["k0"]));
+        let request = ZoneRouteRequest::new(zone(&["k0"]), zone(&["k1", "k0"]));
+        assert_eq!(
+            engine.decide_route(&request).denial_reason(),
+            Some(ZoneRouteFailClosedReason::PolicyDenial)
+        );
+    }
+
+    #[test]
+    fn admission_tuple_substitution_fails_closed_before_route_walk() {
+        let expected = admission_expectation(
+            ZoneTreeEdge::new(zone(&["k0"]), zone(&["k1", "k0"])).expect("direct edge"),
+            zone(&["k0"]),
+            zone(&["k2", "k1", "k0"]),
+            OperationClass::Invoke,
+            "get",
+        );
+        let mut substituted = standard_admission("get");
+        substituted.test_snapshot_mut().target_zone_uid = uid('4');
+        assert_eq!(
+            validate_snapshot(substituted.test_snapshot_mut(), &expected),
+            Err(ZoneRouteFailClosedReason::PolicyDenial)
+        );
+
+        let mut wrong_capability = standard_admission("get");
+        wrong_capability
+            .test_snapshot_mut()
+            .required_capability =
+            ZoneRouteCapability::parse("watch").expect("valid capability");
+        assert_eq!(
+            validate_snapshot(wrong_capability.test_snapshot_mut(), &expected),
+            Err(ZoneRouteFailClosedReason::MissingCapability)
+        );
+
+        let mut stale_generation = standard_admission("get");
+        stale_generation
+            .test_snapshot_mut()
+            .controller_generation = generation("controller-2");
+        assert_eq!(
+            validate_snapshot(stale_generation.test_snapshot_mut(), &expected),
+            Err(ZoneRouteFailClosedReason::ZoneLinkDisconnected)
+        );
+
+        let mut stale_reconnect = standard_admission("get");
+        stale_reconnect
+            .test_snapshot_mut()
+            .reconnect_generation =
+            ReconnectGeneration::new(8).expect("valid reconnect generation");
+        assert_eq!(
+            validate_snapshot(stale_reconnect.test_snapshot_mut(), &expected),
+            Err(ZoneRouteFailClosedReason::ZoneLinkDisconnected)
+        );
+
+        let mut wrong_verb = standard_admission("get");
+        wrong_verb.test_snapshot_mut().verb = OperationClass::Cancel;
+        assert_eq!(
+            validate_snapshot(wrong_verb.test_snapshot_mut(), &expected),
+            Err(ZoneRouteFailClosedReason::PolicyDenial)
+        );
+
+        let mut stale_policy = standard_admission("get");
+        stale_policy.test_snapshot_mut().policy_revision = ZoneRevision::new(10);
+        assert_eq!(
+            validate_snapshot(stale_policy.test_snapshot_mut(), &expected),
+            Err(ZoneRouteFailClosedReason::PolicyDenial)
+        );
+
+        let mut wrong_edge = standard_admission("get");
+        wrong_edge.test_snapshot_mut().edge =
+            ZoneTreeEdge::new(zone(&["k0"]), zone(&["k9", "k0"])).expect("direct edge");
+        assert_eq!(
+            validate_snapshot(wrong_edge.test_snapshot_mut(), &expected),
+            Err(ZoneRouteFailClosedReason::PolicyDenial)
+        );
+
+        let mut wrong_link = standard_admission("get");
+        wrong_link.test_snapshot_mut().zone_link_uid = uid('4');
+        assert_eq!(
+            validate_snapshot(wrong_link.test_snapshot_mut(), &expected),
+            Err(ZoneRouteFailClosedReason::PolicyDenial)
+        );
+
+        let mut forged_time = standard_admission("get");
+        let snapshot = forged_time.test_snapshot_mut();
+        snapshot.expires_at_unix_ms = snapshot.issued_at_unix_ms;
+        assert_eq!(
+            validate_snapshot(forged_time.test_snapshot_mut(), &expected),
+            Err(ZoneRouteFailClosedReason::Expired)
+        );
+    }
+
+    #[test]
+    fn route_target_substitution_fails_closed_after_admission_consumption() {
+        let engine = seeded_engine();
+        let request = ZoneRouteRequest::new(zone(&["k0"]), zone(&["k1", "k0"]))
+            .with_admission(standard_admission("get"));
+        assert_eq!(
+            engine.decide_route(&request).denial_reason(),
+            Some(ZoneRouteFailClosedReason::PolicyDenial)
+        );
+    }
+
+    #[test]
+    fn remote_paths_without_a_capability_ceiling_fail_closed() {
+        let mut engine = ZoneRouteEngine::new(zone(&["k0"]));
+        for (zone_path, parent) in [
+            (zone(&["k1", "k0"]), zone(&["k0"])),
+            (zone(&["k2", "k1", "k0"]), zone(&["k1", "k0"])),
+            (zone(&["k3", "k0"]), zone(&["k0"])),
+        ] {
+            engine.parents.insert(
+                zone_path,
+                ParentEntry {
+                    parent,
+                    route_id: None,
+                    capabilities: None,
+                    issued_at_unix_seconds: 1_000,
+                    expires_at_unix_seconds: 4_000,
+                },
+            );
+        }
+
+        let cases = [
+            (
+                zone(&["k0"]),
+                zone(&["k1", "k0"]),
+                ZoneTreeEdge::new(zone(&["k0"]), zone(&["k1", "k0"]))
+                    .expect("direct edge"),
+            ),
+            (
+                zone(&["k1", "k0"]),
+                zone(&["k0"]),
+                ZoneTreeEdge::new(zone(&["k0"]), zone(&["k1", "k0"]))
+                    .expect("direct edge"),
+            ),
+            (
+                zone(&["k2", "k1", "k0"]),
+                zone(&["k3", "k0"]),
+                ZoneTreeEdge::new(zone(&["k0"]), zone(&["k1", "k0"]))
+                    .expect("direct edge"),
+            ),
+            (
+                zone(&["k1", "k0"]),
+                zone(&["k1", "k0"]),
+                ZoneTreeEdge::new(zone(&["k0"]), zone(&["k1", "k0"]))
+                    .expect("direct edge"),
+            ),
+        ];
+
+        for (source, target, edge) in cases {
+            let request = ZoneRouteRequest::new(source.clone(), target.clone())
+                .with_admission(test_admission(
+                    edge,
+                    source,
+                    target,
+                    OperationClass::Invoke,
+                    "get",
+                    1_500,
+                    4_000,
+                ));
+            assert_eq!(
+                engine.decide_route(&request).denial_reason(),
+                Some(ZoneRouteFailClosedReason::MissingCapability)
+            );
+        }
+    }
+
+    #[test]
+    fn a_route_admission_cannot_be_reused_after_a_successful_route() {
+        let engine = seeded_engine();
+        let request = ZoneRouteRequest::new(
+            zone(&["k0"]),
+            zone(&["k2", "k1", "k0"]),
+        )
+        .with_admission(standard_admission("get"));
+        assert!(matches!(
+            engine.decide_route(&request),
+            ZoneRouteDecision::Allowed { .. }
+        ));
+        assert_eq!(
+            engine.decide_route(&request).denial_reason(),
+            Some(ZoneRouteFailClosedReason::ZoneLinkDisconnected)
+        );
+    }
+
+    #[test]
+    fn admission_expiry_is_checked_after_an_initial_success() {
+        let expectation = admission_expectation(
+            ZoneTreeEdge::new(zone(&["k0"]), zone(&["k1", "k0"])).expect("direct edge"),
+            zone(&["k0"]),
+            zone(&["k2", "k1", "k0"]),
+            OperationClass::Invoke,
+            "get",
+        );
+        let (admission, now, _) = ZoneRouteAdmission::for_test_live(
+            expectation,
+            1_500,
+            4_000,
+            1_500,
+        );
+        let request = ZoneRouteRequest::new(
+            zone(&["k0"]),
+            zone(&["k2", "k1", "k0"]),
+        )
+        .with_admission(admission);
+        let engine = seeded_engine();
+        assert!(matches!(
+            engine.decide_route(&request),
+            ZoneRouteDecision::Allowed { .. }
+        ));
+        now.store(4_000, Ordering::Release);
+        assert_eq!(
+            engine.decide_route(&request).denial_reason(),
+            Some(ZoneRouteFailClosedReason::Expired)
+        );
+    }
+
+    #[test]
+    fn admission_revocation_is_checked_after_an_initial_success() {
+        let expectation = admission_expectation(
+            ZoneTreeEdge::new(zone(&["k0"]), zone(&["k1", "k0"])).expect("direct edge"),
+            zone(&["k0"]),
+            zone(&["k2", "k1", "k0"]),
+            OperationClass::Invoke,
+            "get",
+        );
+        let (admission, _, revoked) = ZoneRouteAdmission::for_test_live(
+            expectation,
+            1_500,
+            4_000,
+            1_500,
+        );
+        let request = ZoneRouteRequest::new(
+            zone(&["k0"]),
+            zone(&["k2", "k1", "k0"]),
+        )
+        .with_admission(admission);
+        let engine = seeded_engine();
+        assert!(matches!(
+            engine.decide_route(&request),
+            ZoneRouteDecision::Allowed { .. }
+        ));
+        revoked.store(true, Ordering::Release);
+        assert_eq!(
+            engine.decide_route(&request).denial_reason(),
+            Some(ZoneRouteFailClosedReason::ZoneLinkDisconnected)
+        );
     }
 
     struct Advert {
@@ -1284,22 +2330,33 @@ mod tests {
         engine
     }
 
-    fn allowed_request(source: ZonePath, target: ZonePath, now: u64) -> ZoneRouteRequest {
-        let mut request = ZoneRouteRequest::new(source, target, now);
-        request.policy_allows = true;
-        request.zone_link_connected = true;
-        request
+    fn allowed_request(source: ZonePath, target: ZonePath, _now: u64) -> ZoneRouteRequest {
+        ZoneRouteRequest::new(source.clone(), target.clone())
+            .with_admission(admission_for_route(&source, &target, "get"))
+    }
+
+    fn request_with_capability(
+        source: ZonePath,
+        target: ZonePath,
+        capability: &str,
+    ) -> ZoneRouteRequest {
+        if source == zone(&["k0"]) && target == zone(&["k0"]) {
+            ZoneRouteRequest::new(source, target)
+        } else {
+            ZoneRouteRequest::new(source.clone(), target.clone())
+                .with_admission(admission_for_route(&source, &target, capability))
+        }
     }
 
     #[test]
     fn request_defaults_refuse_before_any_projection_is_consulted() {
         let engine = seeded_engine();
-        let request = ZoneRouteRequest::new(zone(&["k0"]), zone(&["k2", "k1", "k0"]), 1_500);
+        let request = ZoneRouteRequest::new(zone(&["k0"]), zone(&["k2", "k1", "k0"]));
         assert_eq!(request.remaining_hops, ZONE_ROUTE_INITIAL_HOP_BUDGET);
         let decision = engine.decide_route(&request);
         assert_eq!(
             decision.denial_reason(),
-            Some(ZoneRouteFailClosedReason::ZoneLinkDisconnected)
+            Some(ZoneRouteFailClosedReason::PolicyDenial)
         );
         assert_eq!(
             decision.audit_event(),
@@ -1310,8 +2367,7 @@ mod tests {
     #[test]
     fn policy_denial_is_reported_before_the_tree_walk() {
         let engine = seeded_engine();
-        let mut request = ZoneRouteRequest::new(zone(&["k0"]), zone(&["k2", "k1", "k0"]), 1_500);
-        request.zone_link_connected = true;
+        let request = ZoneRouteRequest::new(zone(&["k0"]), zone(&["k2", "k1", "k0"]));
         assert_eq!(
             engine.decide_route(&request).denial_reason(),
             Some(ZoneRouteFailClosedReason::PolicyDenial)
@@ -1362,9 +2418,19 @@ mod tests {
             ZoneAdvertisementAdmission::Accepted { .. }
         ));
 
-        let mut request =
-            allowed_request(zone(&["k2", "k1", "k0"]), zone(&["k4", "k3", "k0"]), 1_500);
-        request.required_capability = Some(capability("get"));
+        let request = ZoneRouteRequest::new(
+            zone(&["k2", "k1", "k0"]),
+            zone(&["k4", "k3", "k0"]),
+        )
+        .with_admission(test_admission(
+            ZoneTreeEdge::new(zone(&["k0"]), zone(&["k3", "k0"])).expect("direct edge"),
+            zone(&["k2", "k1", "k0"]),
+            zone(&["k4", "k3", "k0"]),
+            OperationClass::Invoke,
+            "get",
+            1_500,
+            4_000,
+        ));
         let ZoneRouteDecision::Allowed { path, .. } = engine.decide_route(&request) else {
             panic!("expected an allowed route");
         };
@@ -1810,8 +2876,8 @@ mod tests {
             ZoneAdvertisementAdmission::Accepted { .. }
         ));
 
-        let mut request = allowed_request(zone(&["k0"]), zone(&["k3", "k2", "k1", "k0"]), 2_400);
-        request.required_capability = Some(capability("get"));
+        let request =
+            request_with_capability(zone(&["k0"]), zone(&["k3", "k2", "k1", "k0"]), "get");
         let ZoneRouteDecision::Allowed {
             effective_capabilities,
             ..
@@ -1823,7 +2889,8 @@ mod tests {
 
         // `list` is advertised at the deepest route but not by the narrower
         // intermediate hop, so the narrowed scope refuses it.
-        request.required_capability = Some(capability("list"));
+        let request =
+            request_with_capability(zone(&["k0"]), zone(&["k3", "k2", "k1", "k0"]), "list");
         assert_eq!(
             engine.decide_route(&request).denial_reason(),
             Some(ZoneRouteFailClosedReason::MissingCapability)
@@ -1833,8 +2900,8 @@ mod tests {
     #[test]
     fn a_capability_the_target_never_advertised_is_refused() {
         let engine = seeded_engine();
-        let mut request = allowed_request(zone(&["k0"]), zone(&["k2", "k1", "k0"]), 1_500);
-        request.required_capability = Some(capability("watch"));
+        let request =
+            request_with_capability(zone(&["k0"]), zone(&["k2", "k1", "k0"]), "watch");
         assert_eq!(
             engine.decide_route(&request).denial_reason(),
             Some(ZoneRouteFailClosedReason::MissingCapability)
@@ -1844,8 +2911,7 @@ mod tests {
     #[test]
     fn the_local_root_target_asserts_no_advertised_ceiling() {
         let engine = seeded_engine();
-        let mut request = allowed_request(zone(&["k0"]), zone(&["k0"]), 1_500);
-        request.required_capability = Some(capability("watch"));
+        let request = ZoneRouteRequest::new(zone(&["k0"]), zone(&["k0"]));
         let ZoneRouteDecision::Allowed {
             effective_capabilities,
             path,
@@ -1862,14 +2928,15 @@ mod tests {
     #[test]
     fn a_hop_budget_smaller_than_the_path_is_refused() {
         let engine = seeded_engine();
-        let mut request = allowed_request(zone(&["k0"]), zone(&["k2", "k1", "k0"]), 1_500);
-        request.remaining_hops = 1;
+        let request = allowed_request(zone(&["k0"]), zone(&["k2", "k1", "k0"]), 1_500)
+            .with_remaining_hops(1);
         assert_eq!(
             engine.decide_route(&request).denial_reason(),
             Some(ZoneRouteFailClosedReason::HopLimitExceeded)
         );
 
-        request.remaining_hops = 2;
+        let request = allowed_request(zone(&["k0"]), zone(&["k2", "k1", "k0"]), 1_500)
+            .with_remaining_hops(2);
         let ZoneRouteDecision::Allowed {
             remaining_hops_after,
             ..
@@ -1883,8 +2950,8 @@ mod tests {
     #[test]
     fn an_exhausted_hop_budget_is_refused_before_the_walk() {
         let engine = seeded_engine();
-        let mut request = allowed_request(zone(&["k0"]), zone(&["k9", "k9"]), 1_500);
-        request.remaining_hops = 0;
+        let request = allowed_request(zone(&["k0"]), zone(&["k9", "k9"]), 1_500)
+            .with_remaining_hops(0);
         assert_eq!(
             engine.decide_route(&request).denial_reason(),
             Some(ZoneRouteFailClosedReason::HopLimitExceeded)
@@ -1893,22 +2960,27 @@ mod tests {
 
     #[test]
     fn a_relay_hop_decrements_the_budget_only_with_both_independent_grants() {
-        let mut request = ZoneRelayRequest::new(4);
-        request.zone_link_connected = true;
-        request.target_verb_granted = true;
+        let request = ZoneRelayRequest::new(4);
+        assert_eq!(
+            ZoneRouteEngine::admit_relay_hop(&request).denial_reason(),
+            Some(ZoneRouteFailClosedReason::ZoneLinkDisconnected)
+        );
+
+        let request = ZoneRelayRequest::new(4)
+            .with_admissions(
+                standard_admission("get"),
+                relay_admission(OperationClass::Relay, "not-relay"),
+            );
         assert_eq!(
             ZoneRouteEngine::admit_relay_hop(&request).denial_reason(),
             Some(ZoneRouteFailClosedReason::RelayDenied)
         );
 
-        request.relay_granted = true;
-        request.target_verb_granted = false;
-        assert_eq!(
-            ZoneRouteEngine::admit_relay_hop(&request).denial_reason(),
-            Some(ZoneRouteFailClosedReason::PolicyDenial)
-        );
-
-        request.target_verb_granted = true;
+        let request = ZoneRelayRequest::new(4)
+            .with_admissions(
+                standard_admission("get"),
+                relay_admission(OperationClass::Relay, "relay"),
+            );
         let admission = ZoneRouteEngine::admit_relay_hop(&request);
         assert_eq!(
             admission,
@@ -1923,25 +2995,48 @@ mod tests {
     }
 
     #[test]
+    fn a_relay_admission_cannot_be_reused_after_a_successful_hop() {
+        let request = ZoneRelayRequest::new(4)
+            .with_admissions(
+                standard_admission("get"),
+                relay_admission(OperationClass::Relay, "relay"),
+            );
+        assert_eq!(
+            ZoneRouteEngine::admit_relay_hop(&request),
+            ZoneRelayAdmission::Admitted {
+                forwarded_remaining_hops: 3
+            }
+        );
+        assert_eq!(
+            ZoneRouteEngine::admit_relay_hop(&request).denial_reason(),
+            Some(ZoneRouteFailClosedReason::ZoneLinkDisconnected)
+        );
+    }
+
+    #[test]
     fn a_relay_hop_refuses_an_exhausted_budget_a_dead_link_and_an_attachment() {
-        let mut request = ZoneRelayRequest::new(0);
-        request.relay_granted = true;
-        request.target_verb_granted = true;
-        request.zone_link_connected = true;
+        let request = ZoneRelayRequest::new(0)
+            .with_admissions(
+                standard_admission("get"),
+                relay_admission(OperationClass::Relay, "relay"),
+            );
         assert_eq!(
             ZoneRouteEngine::admit_relay_hop(&request).denial_reason(),
             Some(ZoneRouteFailClosedReason::HopLimitExceeded)
         );
 
-        request.arrived_remaining_hops = 4;
-        request.zone_link_connected = false;
+        let request = ZoneRelayRequest::new(4);
         assert_eq!(
             ZoneRouteEngine::admit_relay_hop(&request).denial_reason(),
             Some(ZoneRouteFailClosedReason::ZoneLinkDisconnected)
         );
 
-        request.zone_link_connected = true;
-        request.offers_attachment = true;
+        let request = ZoneRelayRequest::new(4)
+            .with_admissions(
+                standard_admission("get"),
+                relay_admission(OperationClass::Relay, "relay"),
+            )
+            .with_attachment_offer(true);
         assert_eq!(
             ZoneRouteEngine::admit_relay_hop(&request).denial_reason(),
             Some(ZoneRouteFailClosedReason::AttachmentNotPermittedOverZoneLink)
@@ -1950,22 +3045,30 @@ mod tests {
 
     #[test]
     fn relay_forwarding_never_exceeds_the_initial_protocol_budget() {
-        let mut request = ZoneRelayRequest::new(ZONE_ROUTE_INITIAL_HOP_BUDGET);
-        request.relay_granted = true;
-        request.target_verb_granted = true;
-        request.zone_link_connected = true;
         let mut remaining = ZONE_ROUTE_INITIAL_HOP_BUDGET;
         let mut hops = 0_u32;
-        while let ZoneRelayAdmission::Admitted {
-            forwarded_remaining_hops,
-        } = ZoneRouteEngine::admit_relay_hop(&request)
-        {
+        loop {
+            let request = ZoneRelayRequest::new(remaining)
+                .with_admissions(
+                    standard_admission("get"),
+                    relay_admission(OperationClass::Relay, "relay"),
+                );
+            let ZoneRelayAdmission::Admitted {
+                forwarded_remaining_hops,
+            } = ZoneRouteEngine::admit_relay_hop(&request)
+            else {
+                break;
+            };
             remaining = forwarded_remaining_hops;
-            request.arrived_remaining_hops = forwarded_remaining_hops;
             hops += 1;
         }
         assert_eq!(remaining, 0);
         assert_eq!(hops, ZONE_ROUTE_INITIAL_HOP_BUDGET);
+        let request = ZoneRelayRequest::new(remaining)
+            .with_admissions(
+                standard_admission("get"),
+                relay_admission(OperationClass::Relay, "relay"),
+            );
         assert_eq!(
             ZoneRouteEngine::admit_relay_hop(&request).denial_reason(),
             Some(ZoneRouteFailClosedReason::HopLimitExceeded)

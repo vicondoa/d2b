@@ -15,6 +15,7 @@ rust_library(
     compile_data = ["Cargo.toml"],
     visibility = ["//visibility:public"],
     deps = [
+        "//packages/d2b-bus:d2b_bus",
         "//packages/d2b-contracts-resource:d2b_contracts_resource",
         "//packages/d2b-contracts-provider:d2b_contracts_provider",
         "//packages/d2b-contracts-zone-session:d2b_contracts_zone_session",
@@ -29,6 +30,7 @@ rust_library(
     crate_name = "d2b_provider",
     visibility = ["//visibility:public"],
     deps = [
+        "//packages/d2b-bus:d2b_bus",
         "//packages/d2b-contracts-resource:d2b_contracts_resource",
         "//packages/d2b-contracts-provider:d2b_contracts_provider",
         "//packages/d2b-contracts-zone-session:d2b_contracts_zone_session",
@@ -45,7 +47,8 @@ rust_test(
         "//packages/d2b-contracts-resource:d2b_contracts_resource",
         "//packages/d2b-contracts-provider:d2b_contracts_provider",
         "//packages/d2b-contracts-zone-session:d2b_contracts_zone_session",
-        ":d2b_provider",
+        "//packages/d2b-zone-routing:d2b_zone_routing_test_support",
+        ":d2b_provider_test_support",
     ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
 )
 

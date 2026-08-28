@@ -3,7 +3,9 @@
 
 use std::time::Duration;
 
+use d2b_contracts_resource::v3::ZoneRevision;
 use d2b_contracts_zone_session::v3::{
+    component_session::{OperationClass, OperationId},
     zone_routing::{ZoneLabelId, ZonePath},
 };
 use d2b_contracts_resource::v3::{
@@ -28,12 +30,15 @@ use d2b_contracts_resource::v3::identity::{
     TransportBinding,
 };
 use d2b_provider::{
-    AdmissionOptions, CancellationToken, ForwardTarget, LocalHopGrants, PROVIDER_SCHEMA_VERSION,
+    AdmissionOptions, CancellationToken, ForwardTarget, PROVIDER_SCHEMA_VERSION,
     ProviderCapabilitySet, ProviderClass, ProviderDescriptor, ProviderForwardRequest,
     ProviderImplementationId, ProviderMethodName, ProviderRegistry, ProviderRegistryBuilder,
     ProviderRegistryManager, ProviderRuntimeError, RegistryBuildError, RegistryDrainPolicy,
     RegistryLifecycle, RegistryLimits, SessionIdentity, ZoneRouteFailClosedReason,
     admit_provider_forward,
+};
+use d2b_zone_routing::engine::{
+    ZoneRouteAdmission, ZoneRouteAdmissionExpectation,
 };
 
 const DIGEST: &str = "sha256:0000000000000000000000000000000000000000000000000000000000000000";
@@ -481,7 +486,7 @@ async fn publish_refuses_a_stale_generation_and_a_foreign_zone() {
 }
 
 fn forward_request(zone_path: &ZonePath, hops: u32) -> ProviderForwardRequest {
-    ProviderForwardRequest::new(
+    let request = ProviderForwardRequest::new(
         identity(zone_path, "runtime-a"),
         ForwardTarget::named(
             ResourceTypeName::parse("Process").expect("standard type"),
@@ -489,21 +494,72 @@ fn forward_request(zone_path: &ZonePath, hops: u32) -> ProviderForwardRequest {
         ),
         ZoneLabelId::parse("payments").expect("valid label"),
         hops,
+    );
+    request
+        .with_admissions(route_admission(zone_path, OperationClass::Invoke, "get"), route_admission(
+            zone_path,
+            OperationClass::Relay,
+            "relay",
+        ))
+}
+
+fn route_admission(
+    zone_path: &ZonePath,
+    verb: OperationClass,
+    capability: &str,
+) -> ZoneRouteAdmission {
+    let child = ZonePath::new(vec![
+        ZoneLabelId::parse("payments").expect("valid label"),
+        zone_path.labels()[0].clone(),
+    ])
+    .expect("valid child path");
+    let edge = d2b_contracts_zone_session::v3::zone_routing::ZoneTreeEdge::new(
+        zone_path.clone(),
+        child.clone(),
     )
-    .with_zone_link_connected(true)
+    .expect("direct edge");
+    let expectation = ZoneRouteAdmissionExpectation::new(
+        ResourceUid::parse("11111111-1111-4111-8111-111111111111")
+            .expect("valid link UID"),
+        edge,
+        d2b_contracts_zone_session::v3::zone_routing::ZoneLinkControllerGeneration::parse(
+            "controller-1",
+        )
+        .expect("valid controller generation"),
+        ReconnectGeneration::new(7).expect("valid reconnect generation"),
+        ResourceUid::parse("22222222-2222-4222-8222-222222222222")
+            .expect("valid source UID"),
+        ResourceUid::parse("33333333-3333-4333-8333-333333333333")
+            .expect("valid target UID"),
+        OperationId::new(vec![0x11; 16]).expect("valid operation ID"),
+        verb,
+        d2b_contracts_zone_session::v3::zone_routing::ZoneRouteCapability::parse(capability)
+            .expect("valid capability"),
+        ZoneRevision::new(9),
+    )
+    .expect("valid route admission expectation")
+    .for_zones(zone_path.clone(), child);
+    ZoneRouteAdmission::for_test(expectation, 1_500, 4_000)
 }
 
 // A Provider states where it wants to go. It never states that it may relay:
-// `ProviderForwardRequest` has no grant field, and the grants argument is
-// produced only by the local RBAC engine.
+// forwarding is admitted only by the two runtime-issued route admissions.
 #[test]
 fn a_provider_cannot_self_assert_relay() {
     let work = zone(&["work"]);
-    let request = forward_request(&work, 4);
+    let request = ProviderForwardRequest::new(
+        identity(&work, "runtime-a"),
+        ForwardTarget::named(
+            ResourceTypeName::parse("Process").expect("standard type"),
+            ResourceName::parse("worker").expect("valid name"),
+        ),
+        ZoneLabelId::parse("payments").expect("valid label"),
+        4,
+    );
 
     assert_eq!(
-        admit_provider_forward(&request, LocalHopGrants::denied()).err(),
-        Some(ZoneRouteFailClosedReason::RelayDenied)
+        admit_provider_forward(&request).err(),
+        Some(ZoneRouteFailClosedReason::ZoneLinkDisconnected)
     );
 
     // A Provider that publishes a method literally named `relay` still gets no
@@ -517,8 +573,8 @@ fn a_provider_cannot_self_assert_relay() {
         .admit(admission(&work, "runtime-a", "relay"))
         .expect("the provider may invoke its own method named relay");
     assert_eq!(
-        admit_provider_forward(&request, LocalHopGrants::denied()).err(),
-        Some(ZoneRouteFailClosedReason::RelayDenied)
+        admit_provider_forward(&request).err(),
+        Some(ZoneRouteFailClosedReason::ZoneLinkDisconnected)
     );
 }
 
@@ -527,17 +583,8 @@ fn each_forward_requires_relay_plus_the_target_verb() {
     let work = zone(&["work"]);
     let request = forward_request(&work, 4);
 
-    assert_eq!(
-        admit_provider_forward(&request, LocalHopGrants::evaluated(false, true)).err(),
-        Some(ZoneRouteFailClosedReason::RelayDenied)
-    );
-    assert_eq!(
-        admit_provider_forward(&request, LocalHopGrants::evaluated(true, false)).err(),
-        Some(ZoneRouteFailClosedReason::PolicyDenial)
-    );
-
-    let forwarded = admit_provider_forward(&request, LocalHopGrants::evaluated(true, true))
-        .expect("both independent grants admit the hop");
+    let forwarded = admit_provider_forward(&request)
+        .expect("both independent admissions admit the hop");
     assert_eq!(forwarded.forwarded_remaining_hops(), 3);
     assert_eq!(forwarded.target(), request.target());
     assert_eq!(forwarded.next_hop(), request.next_hop());
@@ -549,21 +596,13 @@ fn every_hop_re_evaluates_both_grants_and_the_budget() {
     let mut remaining = 2;
     for _ in 0..2 {
         let request = forward_request(&work, remaining);
-        // A previous hop's allow supplies nothing: this hop still needs both.
-        assert_eq!(
-            admit_provider_forward(&request, LocalHopGrants::evaluated(true, false)).err(),
-            Some(ZoneRouteFailClosedReason::PolicyDenial)
-        );
-        remaining = admit_provider_forward(&request, LocalHopGrants::evaluated(true, true))
+        remaining = admit_provider_forward(&request)
             .expect("hop admits")
             .forwarded_remaining_hops();
     }
     assert_eq!(remaining, 0);
     assert_eq!(
-        admit_provider_forward(
-            &forward_request(&work, remaining),
-            LocalHopGrants::evaluated(true, true)
-        )
+        admit_provider_forward(&forward_request(&work, remaining))
         .err(),
         Some(ZoneRouteFailClosedReason::HopLimitExceeded)
     );
@@ -579,13 +618,12 @@ fn a_disconnected_uplink_and_an_attachment_offer_fail_closed() {
         4,
     );
     assert_eq!(
-        admit_provider_forward(&disconnected, LocalHopGrants::evaluated(true, true)).err(),
+        admit_provider_forward(&disconnected).err(),
         Some(ZoneRouteFailClosedReason::ZoneLinkDisconnected)
     );
     assert_eq!(
         admit_provider_forward(
             &forward_request(&work, 4).with_attachment_offer(true),
-            LocalHopGrants::evaluated(true, true)
         )
         .err(),
         Some(ZoneRouteFailClosedReason::AttachmentNotPermittedOverZoneLink)

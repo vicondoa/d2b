@@ -29,16 +29,17 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
+use d2b_bus::session::{RouteAdmissionEvidence, RouteAdmissionVerifier};
 use d2b_contracts_resource::v3::execution_policy::PrimitiveSpecError;
-use d2b_contracts_zone_session::v3::{
-    zone_routing::{
+use d2b_contracts_zone_session::v3::zone_routing::{
     MAX_ZONE_PARENT_ENTRIES, ZONE_ROUTE_INITIAL_HOP_BUDGET, ZonePath, ZoneRouteAuditEventKind,
-    ZoneRouteCapability, ZoneRouteCapabilitySet, ZoneRouteFailClosedReason, ZoneRoutePath,
-    ZoneTreeEdge,
-},
+    ZoneRouteCapabilitySet, ZoneRouteFailClosedReason, ZoneRoutePath, ZoneTreeEdge,
 };
 
-use crate::engine::{ZoneRouteDecision, ZoneRouteEngine, ZoneRouteRequest};
+use crate::engine::{
+    ZoneRouteAdmission, ZoneRouteAdmissionExpectation, ZoneRouteDecision, ZoneRouteEngine,
+    ZoneRouteRequest,
+};
 
 /// Render a type's `Debug` as its bare type name.
 ///
@@ -173,46 +174,70 @@ redacted_topology_debug!(SealedZoneTopology);
 
 /// One entrypoint question posed to the resolver.
 ///
-/// Every field that could weaken the answer defaults to its refusing value in
-/// [`ZoneEntrypointRequest::new`], matching [`ZoneRouteRequest`], so a caller
-/// that forgets to supply an input gets a typed refusal rather than a
-/// permissive answer. `policy_allows`, `zone_link_connected`, and
-/// `route_projection_authenticated` are inputs from the authorizer, the link
-/// controller, and the projection admitter; the resolver never infers any of
-/// them.
-#[derive(Clone, PartialEq, Eq)]
+/// A remote entrypoint carries a verified runtime-issued admission. There is
+/// no caller-populated time, policy, connectivity, capability, or
+/// authentication claim on this request.
 pub struct ZoneEntrypointRequest {
     /// The Zone the call targets.
-    pub target_zone: ZonePath,
-    /// The caller-supplied decision time in Unix seconds.
-    pub current_time_unix_seconds: u64,
-    /// The capability the requested operation needs at the entrypoint Zone.
-    pub required_capability: Option<ZoneRouteCapability>,
+    target_zone: ZonePath,
     /// Hops still available to this call.
-    pub remaining_hops: u32,
-    /// Whether the caller's authorizer allowed the operation.
-    pub policy_allows: bool,
-    /// Whether the uplink toward the entrypoint is established.
-    pub zone_link_connected: bool,
-    /// Whether the route projection backing a remote entrypoint was admitted
-    /// from an authenticated advertisement.
-    pub route_projection_authenticated: bool,
+    remaining_hops: u32,
+    /// The verified runtime-issued route admission.
+    admission: Option<ZoneRouteAdmission>,
 }
 
 impl ZoneEntrypointRequest {
-    /// A request with the protocol-wide initial hop budget and refusing
-    /// defaults for every authorization, connectivity, and authentication
-    /// input.
-    pub const fn new(target_zone: ZonePath, current_time_unix_seconds: u64) -> Self {
+    /// A request with no runtime admission.
+    ///
+    /// Local-root resolution remains representable; remote resolution refuses
+    /// until a verified admission is attached.
+    pub const fn new(target_zone: ZonePath) -> Self {
         Self {
             target_zone,
-            current_time_unix_seconds,
-            required_capability: None,
             remaining_hops: ZONE_ROUTE_INITIAL_HOP_BUDGET,
-            policy_allows: false,
-            zone_link_connected: false,
-            route_projection_authenticated: false,
+            admission: None,
         }
+    }
+
+    /// Build an entrypoint request by consuming one runtime-issued admission.
+    pub fn from_runtime_admission(
+        target_zone: ZonePath,
+        remaining_hops: u32,
+        verifier: RouteAdmissionVerifier,
+        evidence: RouteAdmissionEvidence,
+        expected: &ZoneRouteAdmissionExpectation,
+    ) -> Result<Self, ZoneRouteFailClosedReason> {
+        let admission = ZoneRouteAdmission::verify(verifier, evidence, expected)?;
+        Ok(Self::new(target_zone)
+            .with_remaining_hops(remaining_hops)
+            .with_admission(admission))
+    }
+
+    /// Attach a verified runtime-issued admission.
+    pub fn with_admission(mut self, admission: ZoneRouteAdmission) -> Self {
+        self.admission = Some(admission);
+        self
+    }
+
+    /// Set a bounded remaining hop budget.
+    pub const fn with_remaining_hops(mut self, remaining_hops: u32) -> Self {
+        self.remaining_hops = remaining_hops;
+        self
+    }
+
+    /// Borrow the target Zone path.
+    pub const fn target_zone(&self) -> &ZonePath {
+        &self.target_zone
+    }
+
+    /// Return the remaining hop budget.
+    pub const fn remaining_hops(&self) -> u32 {
+        self.remaining_hops
+    }
+
+    /// Borrow the verified admission, when one was attached.
+    pub const fn admission(&self) -> Option<&ZoneRouteAdmission> {
+        self.admission.as_ref()
     }
 }
 
@@ -231,8 +256,7 @@ pub enum ZoneEntrypointResolution {
         /// endpoint, or credential.
         path: ZoneRoutePath,
         /// The capability ceiling surviving every advertised hop, or `None`
-        /// when the entrypoint is the local root and no advertised ceiling
-        /// applies.
+        /// only for exact local-root dispatch.
         effective_capabilities: Option<ZoneRouteCapabilitySet>,
         /// Hops left after paying for this path.
         remaining_hops_after: u32,
@@ -290,14 +314,40 @@ impl ZoneEntrypointResolver {
     /// route projection.
     ///
     /// The order is: engine agreement, local scope, the longest-suffix match,
-    /// the unknown-Zone guard below the local root, projection authentication,
-    /// and finally the engine's own route decision. Every stage before the
-    /// engine refuses with a closed reason; the engine's refusal is reported
+    /// the unknown-Zone guard below the local root, admission presence, and
+    /// finally the engine's own route decision. Every stage before the engine
+    /// refuses with a closed reason; the engine's refusal is reported
     /// unchanged.
     pub fn resolve(
         &self,
         engine: &ZoneRouteEngine,
         request: &ZoneEntrypointRequest,
+    ) -> ZoneEntrypointResolution {
+        self.resolve_parts(
+            engine,
+            &request.target_zone,
+            request.remaining_hops,
+            request.admission.as_ref(),
+        )
+    }
+
+    /// Resolve a target using an admission borrowed from a larger projection.
+    pub fn resolve_with_admission(
+        &self,
+        engine: &ZoneRouteEngine,
+        target_zone: &ZonePath,
+        remaining_hops: u32,
+        admission: &ZoneRouteAdmission,
+    ) -> ZoneEntrypointResolution {
+        self.resolve_parts(engine, target_zone, remaining_hops, Some(admission))
+    }
+
+    fn resolve_parts(
+        &self,
+        engine: &ZoneRouteEngine,
+        target_zone: &ZonePath,
+        remaining_hops: u32,
+        admission: Option<&ZoneRouteAdmission>,
     ) -> ZoneEntrypointResolution {
         let refused = |reason| ZoneEntrypointResolution::Refused { reason };
         let local_root = self.topology.local_root();
@@ -311,16 +361,16 @@ impl ZoneEntrypointResolver {
 
         // Scope violation: a target that is neither the local root nor below
         // it is outside this runtime's authority entirely.
-        if &request.target_zone != local_root && !request.target_zone.is_descendant_of(local_root) {
+        if target_zone != local_root && !target_zone.is_descendant_of(local_root) {
             return refused(ZoneRouteFailClosedReason::PolicyDenial);
         }
 
-        let Some(entrypoint_zone) = self.topology.longest_suffix_match(&request.target_zone) else {
+        let Some(entrypoint_zone) = self.topology.longest_suffix_match(target_zone) else {
             return refused(ZoneRouteFailClosedReason::UnknownParent);
         };
         let entrypoint_zone = entrypoint_zone.clone();
 
-        let exact = entrypoint_zone == request.target_zone;
+        let exact = entrypoint_zone == *target_zone;
 
         // The local root is the suffix of every in-scope path, so letting it
         // absorb an unmatched target would make the resolver unconditionally
@@ -332,24 +382,31 @@ impl ZoneEntrypointResolver {
             return refused(ZoneRouteFailClosedReason::UnknownParent);
         }
 
-        // A remote entrypoint is reachable only through an admitted route
-        // projection, and only when that projection came from an
-        // authenticated advertisement. Local dispatch consults no projection.
-        if &entrypoint_zone != local_root && !request.route_projection_authenticated {
+        // A remote entrypoint is reachable only with a verified runtime-issued
+        // admission. Local dispatch consults no ZoneLink projection.
+        if &entrypoint_zone != local_root && admission.is_none() {
             return refused(ZoneRouteFailClosedReason::PolicyDenial);
         }
 
-        let mut route_request = ZoneRouteRequest::new(
-            local_root.clone(),
-            entrypoint_zone.clone(),
-            request.current_time_unix_seconds,
-        );
-        route_request.required_capability = request.required_capability.clone();
-        route_request.remaining_hops = request.remaining_hops;
-        route_request.policy_allows = request.policy_allows;
-        route_request.zone_link_connected = request.zone_link_connected;
+        let decision = match admission {
+            Some(admission) => {
+                engine.decide_route_via_entrypoint(
+                    local_root,
+                    &entrypoint_zone,
+                    target_zone,
+                    remaining_hops,
+                    admission,
+                )
+            }
+            None => {
+                let route_request =
+                    ZoneRouteRequest::new(local_root.clone(), entrypoint_zone.clone())
+                        .with_remaining_hops(remaining_hops);
+                engine.decide_route(&route_request)
+            }
+        };
 
-        match engine.decide_route(&route_request) {
+        match decision {
             ZoneRouteDecision::Allowed {
                 path,
                 effective_capabilities,
@@ -370,16 +427,23 @@ redacted_topology_debug!(ZoneEntrypointResolver);
 #[cfg(test)]
 mod tests {
     use super::*;
+    use d2b_contracts_resource::v3::{
+        ResourceUid, ZoneRevision,
+        identity::ReconnectGeneration,
+    };
     use d2b_contracts_zone_session::v3::{
+    component_session::{OperationClass, OperationId},
     zone_routing::{
         ZONE_ROUTING_SCHEMA_VERSION, ZoneDescendantRoute, ZoneLabelId,
         ZoneLinkControllerGeneration, ZoneLinkNamespaceAllocation, ZoneLinkRouteAdvertisement,
-        ZoneRouteId, ZoneRouteKeyRole, ZoneRouteSignature, ZoneRouteSignatureAlgorithm,
-        ZoneRouteSignatureRef, ZoneSigningKeyFingerprint,
+        ZoneRouteCapability, ZoneRouteId, ZoneRouteKeyRole, ZoneRouteSignature,
+        ZoneRouteSignatureAlgorithm, ZoneRouteSignatureRef, ZoneSigningKeyFingerprint,
     },
 };
 
-    use crate::engine::ZoneAdvertisementAdmission;
+    use crate::engine::{
+        ZoneAdvertisementAdmission, ZoneRouteAdmission, ZoneRouteAdmissionExpectation,
+    };
 
     fn zone(labels: &[&str]) -> ZonePath {
         ZonePath::new(
@@ -403,6 +467,48 @@ mod tests {
 
     fn edge(parent: &[&str], child: &[&str]) -> ZoneTreeEdge {
         ZoneTreeEdge::new(zone(parent), zone(child)).expect("direct child edge")
+    }
+
+    fn uid(marker: char) -> ResourceUid {
+        let value = match marker {
+            '1' => "11111111-1111-4111-8111-111111111111",
+            '2' => "22222222-2222-4222-8222-222222222222",
+            '3' => "33333333-3333-4333-8333-333333333333",
+            _ => panic!("test UID marker must be one of 1..=3"),
+        };
+        ResourceUid::parse(value).expect("valid resource UID")
+    }
+
+    fn admission(capability: &str, issued_at: u64, expires_at: u64) -> ZoneRouteAdmission {
+        admission_for_target(
+            &zone(&["k2", "k1", "k0"]),
+            capability,
+            issued_at,
+            expires_at,
+        )
+    }
+
+    fn admission_for_target(
+        target: &ZonePath,
+        capability: &str,
+        issued_at: u64,
+        expires_at: u64,
+    ) -> ZoneRouteAdmission {
+        let expectation = ZoneRouteAdmissionExpectation::new(
+            uid('1'),
+            edge(&["k0"], &["k1", "k0"]),
+            ZoneLinkControllerGeneration::parse("controller-1").expect("valid generation"),
+            ReconnectGeneration::new(7).expect("valid reconnect generation"),
+            uid('2'),
+            uid('3'),
+            OperationId::new(vec![0x11; 16]).expect("valid operation ID"),
+            OperationClass::Invoke,
+            ZoneRouteCapability::parse(capability).expect("valid capability"),
+            ZoneRevision::new(9),
+        )
+        .expect("valid route admission expectation")
+        .for_zones(zone(&["k0"]), target.clone());
+        ZoneRouteAdmission::for_test(expectation, issued_at, expires_at)
     }
 
     /// Sealed topology: root k0, child k1, grandchild k2 under k1.
@@ -459,11 +565,8 @@ mod tests {
     }
 
     fn allowed_request(target: ZonePath) -> ZoneEntrypointRequest {
-        let mut request = ZoneEntrypointRequest::new(target, 1_500);
-        request.policy_allows = true;
-        request.zone_link_connected = true;
-        request.route_projection_authenticated = true;
-        request
+        ZoneEntrypointRequest::new(target.clone())
+            .with_admission(admission_for_target(&target, "get", 1_500, 4_000))
     }
 
     // -- sealing ----------------------------------------------------------
@@ -567,10 +670,10 @@ mod tests {
     fn request_defaults_refuse_before_any_topology_is_consulted() {
         let resolver = ZoneEntrypointResolver::new(sealed());
         let engine = seeded_engine();
-        let request = ZoneEntrypointRequest::new(zone(&["k2", "k1", "k0"]), 1_500);
+        let request = ZoneEntrypointRequest::new(zone(&["k2", "k1", "k0"]));
         assert_eq!(request.remaining_hops, ZONE_ROUTE_INITIAL_HOP_BUDGET);
         let resolution = resolver.resolve(&engine, &request);
-        // The projection-authentication input defaults to refusing.
+        // Missing runtime admission defaults to refusing.
         assert_eq!(
             resolution.denial_reason(),
             Some(ZoneRouteFailClosedReason::PolicyDenial)
@@ -585,11 +688,9 @@ mod tests {
     fn the_local_root_resolves_to_itself_with_a_zero_hop_path() {
         let resolver = ZoneEntrypointResolver::new(sealed());
         let engine = seeded_engine();
-        let mut request = ZoneEntrypointRequest::new(zone(&["k0"]), 1_500);
-        request.policy_allows = true;
-        request.zone_link_connected = true;
         // Local dispatch consults no projection, so it needs no authenticated
         // projection input.
+        let request = ZoneEntrypointRequest::new(zone(&["k0"]));
         let ZoneEntrypointResolution::Resolved {
             entrypoint_zone,
             path,
@@ -683,8 +784,7 @@ mod tests {
     fn an_unauthenticated_route_projection_refuses_a_remote_entrypoint() {
         let resolver = ZoneEntrypointResolver::new(sealed());
         let engine = seeded_engine();
-        let mut request = allowed_request(zone(&["k2", "k1", "k0"]));
-        request.route_projection_authenticated = false;
+        let request = ZoneEntrypointRequest::new(zone(&["k2", "k1", "k0"]));
         assert_eq!(
             resolver.resolve(&engine, &request).denial_reason(),
             Some(ZoneRouteFailClosedReason::PolicyDenial)
@@ -708,8 +808,8 @@ mod tests {
         let resolver = ZoneEntrypointResolver::new(sealed());
         let engine = seeded_engine();
         // The seeded advertisement expires at 4000.
-        let mut request = allowed_request(zone(&["k2", "k1", "k0"]));
-        request.current_time_unix_seconds = 9_000;
+        let request = ZoneEntrypointRequest::new(zone(&["k2", "k1", "k0"]))
+            .with_admission(admission("get", 9_000, 10_000));
         assert_eq!(
             resolver.resolve(&engine, &request).denial_reason(),
             Some(ZoneRouteFailClosedReason::UnknownParent)
@@ -720,9 +820,8 @@ mod tests {
     fn a_missing_capability_at_the_entrypoint_is_reported_unchanged() {
         let resolver = ZoneEntrypointResolver::new(sealed());
         let engine = seeded_engine();
-        let mut request = allowed_request(zone(&["k2", "k1", "k0"]));
-        request.required_capability =
-            Some(ZoneRouteCapability::parse("watch").expect("valid capability"));
+        let request = ZoneEntrypointRequest::new(zone(&["k2", "k1", "k0"]))
+            .with_admission(admission("watch", 1_500, 4_000));
         assert_eq!(
             resolver.resolve(&engine, &request).denial_reason(),
             Some(ZoneRouteFailClosedReason::MissingCapability)
@@ -732,7 +831,7 @@ mod tests {
     #[test]
     fn public_debug_renders_no_zone_path() {
         let resolver = ZoneEntrypointResolver::new(sealed());
-        let request = ZoneEntrypointRequest::new(zone(&["k2", "k1", "k0"]), 1_500);
+        let request = ZoneEntrypointRequest::new(zone(&["k2", "k1", "k0"]));
         for rendered in [
             format!("{resolver:?}"),
             format!("{:?}", resolver.topology()),
