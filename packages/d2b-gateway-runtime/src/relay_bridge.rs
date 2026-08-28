@@ -19,6 +19,7 @@ use rustls_pki_types::{CertificateDer, pem::PemObject};
 use tokio::sync::{Semaphore, watch};
 use tokio::task::JoinSet;
 use tokio::time::{Duration, timeout};
+use zeroize::Zeroize;
 
 pub type RelayStream =
     tokio_tungstenite::WebSocketStream<tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>>;
@@ -71,11 +72,11 @@ pub async fn connect_with_ca(
 
     let connect =
         build_connect(endpoint, role, credential, ttl_secs).map_err(RelayConnectError::Auth)?;
-    let mut request = connect
-        .url
+    let (url, auth_header) = connect.into_parts();
+    let mut request = url
         .into_client_request()
         .map_err(|_| RelayConnectError::BadRequest)?;
-    if let Some(value) = &connect.auth_header {
+    if let Some(value) = auth_header.as_deref() {
         request.headers_mut().insert(
             HeaderName::from_static("servicebusauthorization"),
             HeaderValue::from_str(value).map_err(|_| RelayConnectError::BadRequest)?,
@@ -134,7 +135,6 @@ fn tls_connector(ca_pem: Option<&[u8]>) -> Result<tokio_tungstenite::Connector, 
 }
 
 /// Errors connecting the relay WebSocket.
-#[derive(Debug)]
 pub enum RelayConnectError {
     /// Building the auth (SAS mint / header) failed.
     Auth(RelayError),
@@ -154,8 +154,28 @@ impl fmt::Display for RelayConnectError {
         match self {
             RelayConnectError::Auth(e) => write!(f, "relay auth: {e}"),
             RelayConnectError::BadRequest => write!(f, "relay connect request was malformed"),
-            RelayConnectError::Handshake(m) => write!(f, "relay websocket handshake failed: {m}"),
-            RelayConnectError::Bridge(m) => write!(f, "relay bridge ended: {m}"),
+            RelayConnectError::Handshake(_) => write!(f, "relay websocket handshake failed"),
+            RelayConnectError::Bridge(_) => write!(f, "relay bridge ended"),
+        }
+    }
+}
+
+impl fmt::Debug for RelayConnectError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Auth(error) => formatter.debug_tuple("Auth").field(error).finish(),
+            Self::BadRequest => formatter.write_str("BadRequest"),
+            Self::Handshake(_) => formatter.write_str("Handshake(<redacted>)"),
+            Self::Bridge(_) => formatter.write_str("Bridge(<redacted>)"),
+        }
+    }
+}
+
+impl Drop for RelayConnectError {
+    fn drop(&mut self) {
+        match self {
+            Self::Handshake(message) | Self::Bridge(message) => message.zeroize(),
+            Self::Auth(_) | Self::BadRequest => {}
         }
     }
 }

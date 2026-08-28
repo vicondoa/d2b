@@ -31,7 +31,8 @@ pub use audit_jsonl::{DEFAULT_GATEWAY_AUDIT_RETENTION_DAYS, JsonlGatewayAudit};
 pub use credential::{
     CredentialEnvelopeMeta, CredentialError, CredentialFilePolicy, GATEWAY_CREDENTIAL_MODE,
     GATEWAY_CREDENTIAL_SCHEMA_VERSION, GATEWAY_SEAL_KEY_LEN, GATEWAY_SEAL_KEY_MODE,
-    GatewayCredential, GatewayCredentialMaterial, MintedRelaySendToken, SealingKey,
+    GatewayCredential, GatewayCredentialMaterial, GatewayGuestCredentialPort,
+    MintedRelaySendToken, SealingKey,
 };
 pub use display_listener::{RelayDisplayListener, notifying_verifier};
 pub use production::production_deps_with_audit;

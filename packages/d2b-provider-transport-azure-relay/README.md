@@ -21,14 +21,17 @@ the Provider returns only an opaque carriage connection.
 ## Controllers / services / workers / binaries
 
 `AzureRelayTransportProvider` opens bounded sender or listener connections
-through `RelayCredentialPort` and `RelaySocketConnector`. Reconnect and
-backpressure are explicit typed helpers.
+through `RelayCredentialPort` and `RelaySocketConnector`. Binding-aware opens
+fence every lease to one ZoneLink, session, and reconnect generation;
+`AzureRelaySocketConnector` keeps WebSocket/TLS state in the Guest. Reconnect
+and backpressure are explicit typed helpers.
 
 ## Placement and dependencies
 
-Relay credentials and endpoint coordinates remain inside the gateway Guest.
-The Host is an opaque intermediary and never terminates the enrolled KK
-ComponentSession.
+Relay credentials, endpoint coordinates, and lease state remain inside the
+Gateway Guest. The Host is an opaque intermediary and never terminates the
+enrolled KK ComponentSession. Credential and transport diagnostics are
+redacted, and a lease is revoked before a connected socket is returned.
 
 ## RBAC requirements
 
