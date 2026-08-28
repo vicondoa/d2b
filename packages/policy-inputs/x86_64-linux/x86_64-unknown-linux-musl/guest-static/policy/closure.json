@@ -11,7 +11,7 @@
   "features": [],
   "default_features": false,
   "source_authority": "packages/Cargo.guest.lock",
-  "lock_sha256": "ab18305b3c1e79c1f13b29eb0002e8afa9bdc4c70e6b69a48a36e5d85cea304d",
+  "lock_sha256": "c09c13cd4c9e796e329bc940f279bf1a21319eacef8939ac85184cee3e925620",
   "packages": [
     {
       "id": "adler2@2.0.1#registry+https://github.com/rust-lang/crates.io-index",
@@ -6371,19 +6371,13 @@
     },
     {
       "from": "d2b-provider-clipboard-wayland@0.0.0-bootstrap#path",
-      "to": "d2b-core@0.0.0-bootstrap#path",
+      "to": "d2b-contracts@0.0.0-bootstrap#path",
       "kind": "normal",
       "target": null
     },
     {
       "from": "d2b-provider-clipboard-wayland@0.0.0-bootstrap#path",
       "to": "d2b-provider-toolkit@0.0.0-bootstrap#path",
-      "kind": "normal",
-      "target": null
-    },
-    {
-      "from": "d2b-provider-clipboard-wayland@0.0.0-bootstrap#path",
-      "to": "d2b-realm-core@0.0.0-bootstrap#path",
       "kind": "normal",
       "target": null
     },
@@ -6689,19 +6683,7 @@
     },
     {
       "from": "d2b-provider-display-wayland@0.0.0-bootstrap#path",
-      "to": "d2b-core@0.0.0-bootstrap#path",
-      "kind": "normal",
-      "target": null
-    },
-    {
-      "from": "d2b-provider-display-wayland@0.0.0-bootstrap#path",
       "to": "d2b-provider-toolkit@0.0.0-bootstrap#path",
-      "kind": "normal",
-      "target": null
-    },
-    {
-      "from": "d2b-provider-display-wayland@0.0.0-bootstrap#path",
-      "to": "d2b-realm-core@0.0.0-bootstrap#path",
       "kind": "normal",
       "target": null
     },

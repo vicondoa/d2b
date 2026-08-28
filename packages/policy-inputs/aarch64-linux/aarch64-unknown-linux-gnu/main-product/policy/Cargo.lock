@@ -1308,11 +1308,10 @@ name = "d2b-provider-clipboard-wayland"
 version = "0.0.0-bootstrap"
 dependencies = [
  "command-fds",
+ "d2b-contracts",
  "d2b-contracts-resource",
  "d2b-contracts-zone-session",
- "d2b-core",
  "d2b-provider-toolkit",
- "d2b-realm-core",
  "env_logger",
  "html2text",
  "log",
@@ -1438,9 +1437,7 @@ dependencies = [
  "d2b-contracts",
  "d2b-contracts-control",
  "d2b-contracts-resource",
- "d2b-core",
  "d2b-provider-toolkit",
- "d2b-realm-core",
  "d2b-session",
  "env_logger",
  "libc",
