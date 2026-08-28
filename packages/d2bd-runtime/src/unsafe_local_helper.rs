@@ -1342,6 +1342,7 @@ impl OperationLedger {
 fn launch_fingerprint(request: &HelperLaunchRequest) -> Result<[u8; 32], HelperRegistryError> {
     let encoded = serde_json::to_vec(&(
         &request.workload,
+        &request.target,
         &request.item_id,
         &request.argv,
         request.graphical,
@@ -1365,10 +1366,13 @@ mod tests {
         ShellDetachResult, ShellListResult, ShellName, ShellSessionState,
     };
     use d2b_contracts_control::unsafe_local_wire::{
-        HelperShellDetachResponse, HelperShellListResponse, HelperShellPolicy,
+        HelperShellDetachResponse, HelperShellListResponse, HelperShellPolicy, OperationId,
+        ProtocolToken, WorkloadTarget,
+    };
+    use d2b_contracts_resource::v3::{
+        ResourceGeneration, ResourceRef, ResourceUid, ZoneId, ZoneResourceIdentity, ZoneRevision,
     };
     use d2b_core::configured_argv::ConfiguredArgv;
-    use d2b_realm_core::{ids::OperationId, token::ProtocolToken};
     use nix::sys::socket::{AddressFamily, SockFlag, socketpair};
     use std::os::fd::OwnedFd;
 
@@ -1376,13 +1380,15 @@ mod tests {
         HelperLaunchRequest {
             request_id,
             operation_id: OperationId::parse(operation_id).unwrap(),
-            workload: serde_json::from_value(serde_json::json!({
-                "workloadId": "tools",
-                "realmId": "host",
-                "realmPath": ["host"],
-                "canonicalTarget": "tools.host.d2b"
-            }))
-            .unwrap(),
+            workload: ZoneResourceIdentity::new(
+                ZoneId::parse("host").unwrap(),
+                ResourceUid::parse("123e4567-e89b-42d3-a456-426614174000").unwrap(),
+                ResourceRef::parse("Process/tools").unwrap(),
+                ResourceUid::parse("323e4567-e89b-42d3-a456-426614174002").unwrap(),
+                ResourceGeneration::new(1).unwrap(),
+                ZoneRevision::new(1),
+            ),
+            target: WorkloadTarget::parse("tools.host.d2b").unwrap(),
             item_id: ProtocolToken::parse("browser").unwrap(),
             argv: ConfiguredArgv::new(vec![arg.to_owned()]).unwrap(),
             graphical: false,
@@ -1530,6 +1536,32 @@ mod tests {
             ledger.begin(
                 1000,
                 "accent-op".to_owned(),
+                launch_fingerprint(&changed).unwrap(),
+                3
+            ),
+            Err(HelperRegistryError::OperationIdConflict)
+        ));
+    }
+
+    #[test]
+    fn operation_ledger_rejects_reuse_with_changed_target() {
+        let mut ledger = OperationLedger::default();
+        let first = launch(1, "target-op", "program");
+        let fingerprint = launch_fingerprint(&first).unwrap();
+        assert!(matches!(
+            ledger
+                .begin(1000, "target-op".to_owned(), fingerprint, 1)
+                .unwrap(),
+            LedgerBegin::Started
+        ));
+        ledger.complete(1000, "target-op", completed(&first), 2);
+
+        let mut changed = first;
+        changed.target = WorkloadTarget::parse("other.host.d2b").unwrap();
+        assert!(matches!(
+            ledger.begin(
+                1000,
+                "target-op".to_owned(),
                 launch_fingerprint(&changed).unwrap(),
                 3
             ),
