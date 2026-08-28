@@ -60,10 +60,10 @@ pub use transport::{
 };
 
 pub use admission::{
-    AuthenticatedComponentSession, AuthenticatedSessionRouteBinding, AuthenticatedTtrpcHandle,
-    AuthorizedSessionOperation, SessionAcceptor, SessionAuthenticationBinding,
-    SessionAuthorizationRequest, SessionCancellationHandle, SessionLiveness,
-    SessionRegistrationCapability, TransportEvidence,
+    AuthenticatedComponentSession, AuthenticatedSessionDriver, AuthenticatedSessionRouteBinding,
+    AuthenticatedTtrpcHandle, AuthorizedSessionOperation, SessionAcceptor,
+    SessionAuthenticationBinding, SessionAuthorizationRequest, SessionCancellationHandle,
+    SessionLiveness, SessionRegistrationCapability, TransportEvidence,
 };
 pub use attachment::{AttachmentPayload, AttachmentValidationError, OwnedAttachment};
 pub use d2b_contracts_zone_session::v3::{

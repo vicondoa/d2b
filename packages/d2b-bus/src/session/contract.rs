@@ -52,7 +52,7 @@ use std::sync::{Arc, Mutex};
 
 use d2b_contracts_resource::v3::{ResourceUid, SchemaFingerprint, ZoneRevision};
 use d2b_contracts_resource::v3::identity::{
-    BindingDigest, Locality as IdentityLocality, ReconnectGeneration,
+    BindingDigest, EvidenceClass, Locality as IdentityLocality, ReconnectGeneration,
     TransportBinding as IdentityTransportBinding,
 };
 use d2b_contracts_resource::v3::resource_schema::canonical_json_bytes;
@@ -476,6 +476,46 @@ impl RouteAdmissionSessionBinding {
     pub const fn transport_binding(&self) -> &IdentityTransportBinding {
         &self.transport_binding
     }
+
+    /// Verify that this sealed route profile belongs to one exact
+    /// authenticated ComponentSession.
+    ///
+    /// The liveness marker is compared by identity, not merely by value, so a
+    /// second session with the same public profile cannot substitute for the
+    /// owner that established the route admission.
+    pub(crate) fn matches_authenticated_session(
+        &self,
+        session: &d2b_session::AuthenticatedSessionRouteBinding,
+    ) -> Result<(), ZonePolicyError> {
+        let session_liveness = session.liveness();
+        let context = session.context();
+        if self.liveness.as_ref() != Some(&session_liveness)
+            || session.evidence_class()
+                != d2b_contracts_resource::v3::identity::EvidenceClass::EnrolledKk
+            || context.subject_ref() != session.subject_ref()
+            || context.subject_uid() != session.subject_uid()
+            || context.zone_ref().resource_type().as_str() != "Zone"
+            || context.zone_ref().name().as_str() != session.zone().as_str()
+            || context.evidence_class() != EvidenceClass::EnrolledKk
+            || context.session_purpose().as_str() != self.purpose.as_str()
+            || session.purpose_class() != self.purpose_class
+            || session.initiator_role() != self.initiator_role
+            || session.responder_role() != self.responder_role
+            || session.endpoint_locality() != self.endpoint_locality
+            || session.service().as_str() != self.service.as_str()
+            || session.schema() != &self.schema_fingerprint
+            || context.schema_fingerprint() != &self.schema_fingerprint
+            || session.reconnect_generation() != self.reconnect_generation
+            || context.reconnect_generation() != self.reconnect_generation
+            || session.transport_class() != self.transport_class
+            || session.transport_binding() != &self.transport_binding
+            || context.transport_binding() != &self.transport_binding
+            || session.locality() != self.transport_binding.locality()
+        {
+            return Err(ZonePolicyError::ZoneLinkNotAdmissible);
+        }
+        Ok(())
+    }
 }
 
 /// Maximum lifetime of one runtime-issued route admission.
@@ -648,6 +688,7 @@ pub struct RouteAdmissionEvidence {
 
 /// Verified, immutable route-admission claims for one downstream consumer.
 pub struct VerifiedRouteAdmission {
+    authority: Arc<RouteAdmissionAuthority>,
     body: RouteAdmissionBody,
 }
 
@@ -872,6 +913,7 @@ impl RouteAdmissionVerifier {
             return Err(RouteAdmissionError::SessionBindingMismatch);
         }
         Ok(VerifiedRouteAdmission {
+            authority: Arc::clone(&self.authority),
             body: evidence.body,
         })
     }
@@ -912,6 +954,20 @@ impl RouteAdmissionVerifier {
 }
 
 impl VerifiedRouteAdmission {
+    /// Re-check the runtime-owned authority before using this admission.
+    pub(crate) fn revalidate(&self) -> Result<(), RouteAdmissionError> {
+        let verifier = RouteAdmissionVerifier {
+            authority: Arc::clone(&self.authority),
+        };
+        verifier
+            .verify(RouteAdmissionEvidence {
+                authority: Arc::clone(&self.authority),
+                seal: route_admission_digest(&self.body),
+                body: self.body.clone(),
+            })
+            .map(|_| ())
+    }
+
     pub const fn zone_link_uid(&self) -> &ResourceUid {
         &self.body.zone_link_uid
     }

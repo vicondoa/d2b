@@ -60,7 +60,9 @@ pub struct GuestComponentSessionDescriptor {
 
 impl GuestComponentSessionDescriptor {
     /// Read and validate a host-published descriptor from one state root.
-    pub fn read_from_state_root(state_root: impl AsRef<Path>) -> Result<Self, GuestComponentSessionError> {
+    pub fn read_from_state_root(
+        state_root: impl AsRef<Path>,
+    ) -> Result<Self, GuestComponentSessionError> {
         let state_root = state_root.as_ref();
         let path = state_root.join(GUEST_COMPONENT_SESSION_DESCRIPTOR);
         let metadata = fs::symlink_metadata(&path)
@@ -149,6 +151,13 @@ impl GuestComponentSessionConfig {
         endpoint: GuestComponentSessionEndpoint,
     ) -> Result<Self, GuestComponentSessionError> {
         let state_root = state_root.as_ref();
+        let endpoint_root = fs::canonicalize(&endpoint.state_root)
+            .map_err(|_| GuestComponentSessionError::DescriptorUnavailable)?;
+        let supplied_root = fs::canonicalize(state_root)
+            .map_err(|_| GuestComponentSessionError::DescriptorUnavailable)?;
+        if endpoint_root != supplied_root {
+            return Err(GuestComponentSessionError::DescriptorInvalid);
+        }
         let descriptor = GuestComponentSessionDescriptor::read_from_state_root(state_root)?;
         let identity = descriptor.identity()?;
         let private_path = state_root.join(GUEST_COMPONENT_SESSION_PRIVATE_KEY);
@@ -235,13 +244,10 @@ impl GuestComponentSessionClient {
         if generation < identity.reconnect_generation().get() {
             return Err(GuestComponentSessionClientError::StaleSession);
         }
-
         fn connected_stream_to_transport(
             connected: crate::component_session_vsock::ComponentSessionConnectedStream,
-        ) -> Result<
-            FramedVsockTransport<tokio::net::UnixStream>,
-            GuestComponentSessionClientError,
-        > {
+        ) -> Result<FramedVsockTransport<tokio::net::UnixStream>, GuestComponentSessionClientError>
+        {
             let socket = connected.into_socket();
             socket
                 .set_read_timeout(None)
@@ -394,6 +400,57 @@ mod tests {
         assert_eq!(
             GuestComponentSessionDescriptor::read_from_state_root(&root),
             Err(GuestComponentSessionError::DescriptorUnavailable)
+        );
+        fs::remove_dir_all(root).expect("cleanup");
+    }
+
+    #[test]
+    fn config_rejects_a_state_root_that_differs_from_the_endpoint_root() {
+        let root = std::env::current_dir()
+            .expect("test working directory")
+            .join("target")
+            .join(format!("component-session-roots-{}", std::process::id()));
+        let state_root = root.join("state");
+        let endpoint_root = root.join("endpoint");
+        let component_dir = state_root.join("component-session");
+        fs::create_dir_all(&component_dir).expect("component-session directory");
+        fs::create_dir_all(&endpoint_root).expect("endpoint directory");
+        let descriptor = GuestComponentSessionDescriptor {
+            guest_ref: "Guest/workload".to_owned(),
+            guest_uid: "123e4567-e89b-42d3-a456-426614174000".to_owned(),
+            zone: "work".to_owned(),
+            boot_identity_digest:
+                "sha256:0000000000000000000000000000000000000000000000000000000000000001".to_owned(),
+            purpose: crate::guest_mode::GUEST_COMPONENT_SESSION_PURPOSE.to_owned(),
+            schema_fingerprint:
+                "sha256:0000000000000000000000000000000000000000000000000000000000000001".to_owned(),
+            reconnect_generation: 1,
+            provider_generation: 1,
+            controller_generation: 1,
+            assignment_epoch: 1,
+        };
+        fs::write(
+            component_dir.join(
+                GUEST_COMPONENT_SESSION_DESCRIPTOR
+                    .rsplit('/')
+                    .next()
+                    .unwrap(),
+            ),
+            serde_json::to_vec(&descriptor).expect("descriptor JSON"),
+        )
+        .expect("write descriptor");
+        let endpoint = GuestComponentSessionEndpoint {
+            socket_path: endpoint_root.join("vsock.sock"),
+            state_root: endpoint_root.clone(),
+            expected_state_root_uid: 0,
+            expected_state_root_gid: 0,
+            expected_peer_uid: 0,
+            expected_peer_gid: 0,
+            setup_timeout: COMPONENT_SESSION_ATTEMPT_CAP,
+        };
+        assert_eq!(
+            GuestComponentSessionConfig::from_state_root(&state_root, endpoint).err(),
+            Some(GuestComponentSessionError::DescriptorInvalid)
         );
         fs::remove_dir_all(root).expect("cleanup");
     }

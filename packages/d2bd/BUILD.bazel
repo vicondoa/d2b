@@ -498,6 +498,7 @@ rust_test(
     visibility = ["//visibility:public"],
     deps = [
         "//packages/d2b-contracts-resource:d2b_contracts_resource",
+        "//packages/d2b-contracts-zone-session:d2b_contracts_zone_session",
         "//packages/d2b-session:d2b_session_test_support",
         "//packages/d2b-session-unix:d2b_session_unix_test_support",
         "//packages/d2bd-runtime:d2bd_runtime_test_support",

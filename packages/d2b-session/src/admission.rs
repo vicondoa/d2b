@@ -39,8 +39,9 @@ use d2b_contracts_resource::v3::identity::{
 use d2b_resource_api::authz::SessionVerb;
 
 use crate::{
-    ComponentSessionDriver, MetricEvent, MetricsSink, NoopMetrics, OwnedTransport, Result,
-    SessionDriverHandle, SessionEngine, SessionError, SessionOperation,
+    Cancellation, ComponentSessionDriver, MetricEvent, MetricsSink, NoopMetrics, OwnedAttachment,
+    OwnedTransport, Result, SessionDriverHandle, SessionEngine, SessionError, SessionEvent,
+    SessionOperation, StreamEvent, StreamId,
     handshake::EstablishedAuthentication, metrics::reason_for_error,
 };
 
@@ -752,6 +753,143 @@ pub struct AuthenticatedComponentSession<C> {
     cleanup_observer: SessionCleanupObserver,
 }
 
+/// Non-cloneable ComponentSession driver that retains its authenticated
+/// session owner for the lifetime of the transport lane.
+///
+/// The driver handle is only an internal transport implementation detail. The
+/// owning session remains in this value so its liveness and single-owner
+/// authority cannot be detached by extracting a cloneable handle.
+pub struct AuthenticatedSessionDriver {
+    _owner: std::sync::Mutex<AuthenticatedComponentSession<()>>,
+    driver: SessionDriverHandle,
+}
+
+impl fmt::Debug for AuthenticatedSessionDriver {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str("AuthenticatedSessionDriver(<redacted>)")
+    }
+}
+
+#[async_trait]
+impl ComponentSessionDriver for AuthenticatedSessionDriver {
+    fn generation(&self) -> u64 {
+        ComponentSessionDriver::generation(&self.driver)
+    }
+
+    async fn start_ttrpc(&self, request_id: RequestId, frame: Vec<u8>) -> Result<()> {
+        self.driver.start_ttrpc(request_id, frame).await
+    }
+
+    async fn complete_ttrpc(&self, request_id: RequestId) -> Result<bool> {
+        self.driver.complete_ttrpc(request_id).await
+    }
+
+    async fn cancel(&self, generation: u64, request_id: RequestId) -> Result<()> {
+        ComponentSessionDriver::cancel(&self.driver, generation, request_id).await
+    }
+
+    async fn send_ttrpc(&self, frame: Vec<u8>) -> Result<()> {
+        self.driver.send_ttrpc(frame).await
+    }
+
+    async fn send_ttrpc_cancellable(
+        &self,
+        frame: Vec<u8>,
+        cancellation: Cancellation,
+    ) -> Result<()> {
+        self.driver
+            .send_ttrpc_cancellable(frame, cancellation)
+            .await
+    }
+
+    async fn receive_ttrpc(&self) -> Result<Vec<u8>> {
+        self.driver.receive_ttrpc().await
+    }
+
+    async fn register_inbound_call(&self, request_id: RequestId) -> Result<Cancellation> {
+        self.driver.register_inbound_call(request_id).await
+    }
+
+    async fn mark_inbound_dispatched(&self, request_id: RequestId) -> Result<()> {
+        self.driver.mark_inbound_dispatched(request_id).await
+    }
+
+    async fn complete_inbound_call(&self, request_id: RequestId) -> Result<bool> {
+        self.driver.complete_inbound_call(request_id).await
+    }
+
+    async fn remove_inbound_call(&self, request_id: RequestId) -> Result<bool> {
+        self.driver.remove_inbound_call(request_id).await
+    }
+
+    async fn send_attachments(&self, attachments: Vec<OwnedAttachment>) -> Result<()> {
+        self.driver.send_attachments(attachments).await
+    }
+
+    async fn receive_attachments(&self) -> Result<Vec<OwnedAttachment>> {
+        self.driver.receive_attachments().await
+    }
+
+    async fn open_named_stream(
+        &self,
+        stream: StreamId,
+        send_credit: u32,
+        receive_credit: u32,
+    ) -> Result<()> {
+        self.driver
+            .open_named_stream(stream, send_credit, receive_credit)
+            .await
+    }
+
+    async fn send_named_stream(&self, stream: StreamId, bytes: Vec<u8>) -> Result<()> {
+        self.driver.send_named_stream(stream, bytes).await
+    }
+
+    async fn receive_named_stream(&self) -> Result<StreamEvent> {
+        self.driver.receive_named_stream().await
+    }
+
+    async fn grant_named_stream_credit(&self, stream: StreamId, bytes: u32) -> Result<()> {
+        self.driver.grant_named_stream_credit(stream, bytes).await
+    }
+
+    async fn close_named_stream(&self, stream: StreamId) -> Result<()> {
+        self.driver.close_named_stream(stream).await
+    }
+
+    async fn reset_named_stream(&self, stream: StreamId) -> Result<()> {
+        self.driver.reset_named_stream(stream).await
+    }
+
+    async fn drive_keepalive(&self, now: std::time::Instant) -> Result<()> {
+        self.driver.drive_keepalive(now).await
+    }
+
+    async fn receive_control(&self) -> Result<SessionEvent> {
+        self.driver.receive_control().await
+    }
+
+    async fn close(
+        &self,
+        reason: d2b_contracts_zone_session::v3::component_session::CloseReason,
+        remediation: d2b_contracts_zone_session::v3::component_session::Remediation,
+    ) -> Result<()> {
+        self.driver.close(reason, remediation).await
+    }
+}
+
+const _: fn() = || {
+    trait CapabilityMustNotImplementCloneCopyDefaultOrFrom<A> {
+        fn some_item() {}
+    }
+    impl<T: ?Sized> CapabilityMustNotImplementCloneCopyDefaultOrFrom<()> for T {}
+    impl<T: Clone> CapabilityMustNotImplementCloneCopyDefaultOrFrom<u8> for T {}
+    impl<T: Copy> CapabilityMustNotImplementCloneCopyDefaultOrFrom<u16> for T {}
+    impl<T: Default> CapabilityMustNotImplementCloneCopyDefaultOrFrom<u32> for T {}
+    impl<T: From<()>> CapabilityMustNotImplementCloneCopyDefaultOrFrom<u64> for T {}
+    let _ = <AuthenticatedSessionDriver as CapabilityMustNotImplementCloneCopyDefaultOrFrom<_>>::some_item;
+};
+
 fn assert_authenticated_session_has_no_minting_traits<C>() {
     // Any guarded impl makes this assertion ambiguous. Remove the capability
     // trait impl instead of weakening this construction boundary.
@@ -1398,6 +1536,20 @@ impl<C> AuthenticatedComponentSession<C> {
 }
 
 impl AuthenticatedComponentSession<()> {
+    /// Consume this registered authenticated session into a non-cloneable
+    /// driver owner.
+    ///
+    /// The returned driver retains the session, including its liveness and
+    /// single-owner authority, while exposing only the transport operations
+    /// required by a bound lane.
+    pub fn into_authenticated_driver(self) -> AuthenticatedSessionDriver {
+        let driver = self.driver.clone();
+        AuthenticatedSessionDriver {
+            _owner: std::sync::Mutex::new(self),
+            driver,
+        }
+    }
+
     /// Split the transport plane after a session admitted without a
     /// registration capability, such as a Guest target's parent session.
     pub fn into_ttrpc_handle(self) -> AuthenticatedTtrpcHandle {
