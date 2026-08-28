@@ -1594,7 +1594,15 @@ impl ZoneResourceRuntime {
         &self,
         bundle: &ResourceBundle,
     ) -> Result<(), ResourceRuntimeError> {
-        self.materialize_desired_bundle(bundle).await?;
+        self.materialize_desired_bundle(bundle)
+            .await
+            .inspect_err(|error| {
+                tracing::error!(
+                    zone = %self.zone.as_str(),
+                    error = ?error,
+                    "resource runtime desired bundle materialization failed"
+                );
+            })?;
         if self.bootstrap_provisioned_store {
             let client = self.status_client()?;
             if let Some(authority) = self.authority_identity.as_ref() {
@@ -1604,9 +1612,24 @@ impl ZoneResourceRuntime {
                     &self.store,
                     &client,
                 )
-                .await?;
+                .await
+                .inspect_err(|error| {
+                    tracing::error!(
+                        zone = %self.zone.as_str(),
+                        error = ?error,
+                        "resource runtime Zone self bootstrap failed"
+                    );
+                })?;
             }
-            ensure_bootstrap_host_resource(&self.zone, &self.store, &client).await?;
+            ensure_bootstrap_host_resource(&self.zone, &self.store, &client)
+                .await
+                .inspect_err(|error| {
+                    tracing::error!(
+                        zone = %self.zone.as_str(),
+                        error = ?error,
+                        "resource runtime Host bootstrap failed"
+                    );
+                })?;
         }
         Ok(())
     }

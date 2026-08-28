@@ -1417,7 +1417,14 @@ pub async fn ensure_bootstrap_zone_resource(
     request.meta = protobuf::MessageField::some(meta);
     request.mutation = protobuf::MessageField::some(mutation);
     let response = client.create(request).await;
-    if response.error.is_some() {
+    if let Some(error) = response.error.as_ref() {
+        tracing::error!(
+            zone = %zone.as_str(),
+            error_kind = ?error.kind,
+            reason = %error.reason.as_str(),
+            retry_class = ?error.retry_class,
+            "bootstrap Zone create failed",
+        );
         return Err(ResourceRuntimeError::HandlerNotReady);
     }
     validate_zone_self_resource(store, zone, zone_uid, store.identity().store_uid()).await
