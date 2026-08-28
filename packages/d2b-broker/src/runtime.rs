@@ -65,8 +65,6 @@ type AuditJoinContext = ();
 
 #[cfg(not(feature = "layer1-bootstrap"))]
 use d2b_core::bundle_resolver::BundleResolver;
-use d2b_core::realm_controller_config::{RealmControllerMetadataSummary, RealmControllersJson};
-use d2b_realm_core::{RealmIdentityConfigJson, RealmIdentityConfigSummary};
 
 /// Default socket path.  When `LISTEN_FDS=1` (socket activation) this path
 /// is informational only; the broker adopts fd 3 from systemd and MUST NOT
@@ -124,12 +122,11 @@ pub struct ServerConfig {
     /// `/var/lib/d2b/current-bundle/manifest.json`; the NixOS module's
     /// `d2b.site.bundle.currentManifest` option overrides.
     pub bundle_path: PathBuf,
-    /// Optional metadata-only realm-controller artifact. Loading it is
-    /// validation/logging only; the broker still uses direct
-    /// SO_PEERCRED/SCM_RIGHTS Unix-socket semantics for every request.
+    /// Legacy metadata path retained until U11 removes the retired argument
+    /// surface. The broker does not load this path.
     pub realm_controllers_path: PathBuf,
-    /// Optional metadata-only realm identity artifact. It carries refs and
-    /// fingerprints only; loading it does not enable trust sessions.
+    /// Legacy metadata path retained until U11 removes the retired argument
+    /// surface. The broker does not load this path.
     pub realm_identity_path: PathBuf,
     pub state_dir: PathBuf,
     /// Trusted target-local activation helper. The daemon never supplies
@@ -732,84 +729,7 @@ fn sd_notify_ready() {
     }
 }
 
-#[derive(Debug, Clone)]
-pub struct LoadedRealmControllersConfig {
-    pub config: RealmControllersJson,
-    pub summary: RealmControllerMetadataSummary,
-}
-
-pub fn load_realm_controllers_config(
-    path: &Path,
-) -> Result<Option<LoadedRealmControllersConfig>, RunError> {
-    if !path.exists() {
-        return Ok(None);
-    }
-    let bytes = fs::read(path).map_err(RunError::Io)?;
-    let config: RealmControllersJson = serde_json::from_slice(&bytes)
-        .map_err(|err| RunError::Protocol(format!("invalid realm controller config: {err}")))?;
-    let summary = config
-        .validate_metadata_only()
-        .map_err(|err| RunError::Protocol(format!("invalid realm controller config: {err}")))?;
-    Ok(Some(LoadedRealmControllersConfig { config, summary }))
-}
-
-#[derive(Debug, Clone)]
-pub struct LoadedRealmIdentityConfig {
-    pub config: RealmIdentityConfigJson,
-    pub summary: RealmIdentityConfigSummary,
-}
-
-pub fn load_realm_identity_config(
-    path: &Path,
-) -> Result<Option<LoadedRealmIdentityConfig>, RunError> {
-    if !path.exists() {
-        return Ok(None);
-    }
-    let bytes = fs::read(path).map_err(RunError::Io)?;
-    let config: RealmIdentityConfigJson = serde_json::from_slice(&bytes)
-        .map_err(|err| RunError::Protocol(format!("invalid realm identity config: {err}")))?;
-    let summary = config
-        .validate_metadata_only()
-        .map_err(|err| RunError::Protocol(format!("invalid realm identity config: {err}")))?;
-    Ok(Some(LoadedRealmIdentityConfig { config, summary }))
-}
-
 fn run_server(config: ServerConfig) -> Result<(), RunError> {
-    if let Some(realm_controllers) = load_realm_controllers_config(&config.realm_controllers_path)?
-    {
-        tracing::info!(
-            config_source = "realm-controllers",
-            config_present = true,
-            controller_count = realm_controllers.summary.controller_count,
-            host_local_controller_count = realm_controllers.summary.host_local_controller_count,
-            broker_enabled_count = realm_controllers.summary.broker_enabled_count,
-            "realm-controller metadata loaded; broker runtime remains direct-socket only",
-        );
-    } else {
-        tracing::debug!(
-            config_source = "realm-controllers",
-            config_present = false,
-            "realm-controller metadata not present; broker keeps single-root config defaults",
-        );
-    }
-    if let Some(realm_identity) = load_realm_identity_config(&config.realm_identity_path)? {
-        tracing::info!(
-            config_source = "realm-identity",
-            config_present = true,
-            realm_count = realm_identity.summary.realm_count,
-            identity_ref_count = realm_identity.summary.identity_ref_count,
-            controller_credential_ref_count =
-                realm_identity.summary.controller_credential_ref_count,
-            "realm identity metadata loaded; broker trust enforcement remains inert",
-        );
-    } else {
-        tracing::debug!(
-            config_source = "realm-identity",
-            config_present = false,
-            "realm identity metadata not present; broker trust enforcement remains inert",
-        );
-    }
-
     let listener = match adopt_listen_fd() {
         Some(Ok(fd)) => {
             // Socket-activated: systemd owns bind+listen+ACL.
@@ -13160,93 +13080,6 @@ mod tests {
         root.join(format!("{test_name}-{}-{unique}", std::process::id()))
     }
 
-    fn realm_controllers_json() -> &'static str {
-        r#"{
-          "schemaVersion": "v2",
-          "runtimeState": "metadata-only",
-          "controllers": [
-            {
-              "realmName": "Work",
-              "realmId": "work",
-              "realmPath": "corp.work",
-              "placement": "host-local",
-              "daemon": {
-                "user": "d2br-0123456789abcdef",
-                "group": "d2br-0123456789abcdef",
-                "publicSocketGroup": "d2br-0123456789abcdef",
-                "serviceName": "d2b-realm-work-daemon.service",
-                "configPath": "/etc/d2b/realms/work/daemon-config.json",
-                "stateLockPath": "/run/d2b/realms/work/daemon.lock",
-                "locksDir": "/run/d2b/realms/work/locks",
-                "socketActivated": false,
-                "materializedService": false
-              },
-              "broker": {
-                "enabled": true,
-                "hostMutation": false,
-                "user": "root",
-                "group": "d2br-0123456789abcdef",
-                "socketPath": "/run/d2b/realms/work/priv.sock",
-                "socketUnitName": "d2b-realm-work-priv-broker.socket",
-                "serviceUnitName": "d2b-realm-work-priv-broker.service",
-                "auditDir": "/var/lib/d2b/realms/work/audit",
-                "materializedSocket": false,
-                "materializedService": false
-              },
-              "paths": {
-                "runDir": "/run/d2b/realms/work",
-                "stateDir": "/var/lib/d2b/realms/work",
-                "auditDir": "/var/lib/d2b/realms/work/audit"
-              },
-              "sockets": {
-                "publicSocketPath": "/run/d2b/realms/work/public.sock",
-                "brokerSocketPath": "/run/d2b/realms/work/priv.sock"
-              },
-              "allocator": {
-                "kind": "local-root-metadata",
-                "configPath": "/etc/d2b/allocator.json",
-                "rootSocket": "/run/d2b/allocator.sock"
-              },
-              "access": {
-                "allowedUsers": ["alice"],
-                "allowedGroups": ["d2b"],
-                "inheritedAdminUsers": ["admin"]
-              }
-            }
-          ],
-          "invariants": {
-            "metadataOnly": true,
-            "noSystemdUnitsMaterialized": true,
-            "preservesGlobalDaemonBehavior": true,
-            "preservesDirectUnixSocketSemantics": true
-          }
-        }"#
-    }
-
-    fn realm_identity_json() -> &'static str {
-        r#"{
-          "schemaVersion": "v2",
-          "runtimeState": "metadata-only",
-          "realms": [
-            {
-              "realm": ["work"],
-              "realmIdentityRef": "idref-work",
-              "realmIdentityFingerprint": "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
-              "controllerCredentialRef": "cgref-work",
-              "controllerCredentialFingerprint": "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
-              "trustBundleRef": "trust-work",
-              "enrollmentRef": "enroll-work",
-              "rotationPolicyRef": "rotate-work"
-            }
-          ],
-          "invariants": {
-            "metadataOnly": true,
-            "noSecretMaterial": true,
-            "preservesRuntimeBehavior": true
-          }
-        }"#
-    }
-
     #[test]
     // BrokerMode has additional variants only under layer1-bootstrap, so this
     // match is refutable in that configuration and irrefutable without it.
@@ -13301,123 +13134,6 @@ mod tests {
             config.realm_identity_path,
             PathBuf::from(DEFAULT_REALM_IDENTITY_PATH)
         );
-    }
-
-    #[test]
-    fn broker_realm_controller_loader_handles_missing_and_strict_metadata() {
-        let root = test_audit_dir("realm-controller-loader");
-        fs::create_dir_all(&root).expect("create realm controller test root");
-        let missing_path = root.join("missing-realm-controllers.json");
-        assert!(
-            load_realm_controllers_config(&missing_path)
-                .expect("missing realm controllers is optional")
-                .is_none()
-        );
-
-        let config_path = root.join("realm-controllers.json");
-        fs::write(&config_path, realm_controllers_json()).expect("write realm controllers");
-        let loaded = load_realm_controllers_config(&config_path)
-            .expect("realm controllers parse")
-            .expect("realm controllers present");
-        assert_eq!(loaded.summary.controller_count, 1);
-        let controller = &loaded.config.controllers[0];
-        assert_eq!(controller.daemon.user.as_str(), "d2br-0123456789abcdef");
-        assert_eq!(controller.broker.user.as_str(), "root");
-        assert_eq!(
-            controller.sockets.broker_socket_path.as_str(),
-            "/run/d2b/realms/work/priv.sock"
-        );
-
-        let bad_path = root.join("bad-realm-controllers.json");
-        fs::write(
-            &bad_path,
-            realm_controllers_json().replace(
-                r#""preservesDirectUnixSocketSemantics": true"#,
-                r#""preservesDirectUnixSocketSemantics": false"#,
-            ),
-        )
-        .expect("write invalid realm controllers");
-        assert!(load_realm_controllers_config(&bad_path).is_err());
-
-        let materialized_path = root.join("materialized-realm-controllers.json");
-        let materialized = realm_controllers_json()
-            .replace(
-                r#""materializedService": false"#,
-                r#""materializedService": true"#,
-            )
-            .replace(
-                r#""materializedSocket": false"#,
-                r#""materializedSocket": true"#,
-            )
-            .replace(
-                r#""noSystemdUnitsMaterialized": true"#,
-                r#""noSystemdUnitsMaterialized": false"#,
-            );
-        fs::write(&materialized_path, materialized).expect("write materialized realm controllers");
-        let materialized_loaded = load_realm_controllers_config(&materialized_path)
-            .expect("materialized host-local unit metadata remains loadable")
-            .expect("realm controllers present");
-        assert_eq!(materialized_loaded.summary.host_local_controller_count, 1);
-    }
-
-    #[test]
-    fn broker_realm_identity_loader_handles_missing_and_strict_metadata_only() {
-        let root = test_audit_dir("realm-identity-loader");
-        fs::create_dir_all(&root).expect("create realm identity test root");
-        let missing_path = root.join("missing-realm-identity.json");
-        assert!(
-            load_realm_identity_config(&missing_path)
-                .expect("missing realm identity is optional")
-                .is_none()
-        );
-
-        let config_path = root.join("realm-identity.json");
-        fs::write(&config_path, realm_identity_json()).expect("write realm identity");
-        let loaded = load_realm_identity_config(&config_path)
-            .expect("realm identity parses")
-            .expect("realm identity present");
-        assert_eq!(loaded.summary.realm_count, 1);
-        assert_eq!(loaded.summary.identity_ref_count, 1);
-        assert_eq!(loaded.summary.controller_credential_ref_count, 1);
-
-        let secret_path = root.join("secret-realm-identity.json");
-        fs::write(
-            &secret_path,
-            realm_identity_json().replace(
-                r#""rotationPolicyRef": "rotate-work""#,
-                r#""rotationPolicyRef": "rotate-work", "privateKey": "nope""#,
-            ),
-        )
-        .expect("write invalid realm identity");
-        let err = load_realm_identity_config(&secret_path)
-            .expect_err("secret material field is rejected");
-        let err_text = format!("{err:?}");
-        assert!(
-            !err_text.contains(secret_path.to_string_lossy().as_ref()),
-            "identity parse errors must not log config paths: {err_text}"
-        );
-
-        let secret_ref_path = root.join("secret-ref-realm-identity.json");
-        fs::write(
-            &secret_ref_path,
-            realm_identity_json().replace("idref-work", "secret-identity"),
-        )
-        .expect("write invalid realm identity ref");
-        let err = load_realm_identity_config(&secret_ref_path)
-            .expect_err("secret-shaped identity refs are rejected");
-        let err_text = format!("{err:?}");
-        assert!(
-            !err_text.contains(secret_ref_path.to_string_lossy().as_ref()),
-            "identity ref parse errors must not log config paths: {err_text}"
-        );
-
-        let invariant_path = root.join("bad-realm-identity.json");
-        fs::write(
-            &invariant_path,
-            realm_identity_json().replace(r#""metadataOnly": true"#, r#""metadataOnly": false"#),
-        )
-        .expect("write invalid realm identity invariant");
-        assert!(load_realm_identity_config(&invariant_path).is_err());
     }
 
     #[cfg(not(feature = "layer1-bootstrap"))]

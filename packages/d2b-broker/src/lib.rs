@@ -46,6 +46,7 @@ pub mod ops;
 pub mod protocol;
 pub mod runtime;
 pub mod sys;
+pub mod zone_identity;
 
 pub use d2b_contracts_broker::broker_wire::BrokerProfile;
 
