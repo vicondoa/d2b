@@ -1313,6 +1313,52 @@ pub async fn ensure_bootstrap_host_resource(
     Ok(())
 }
 
+fn bootstrap_zone_resource_payload(zone: &ZoneId) -> Result<Vec<u8>, ResourceRuntimeError> {
+    let bytes = serde_json::to_vec(&json!({
+        "apiVersion": "resources.d2bus.org/v3",
+        "metadata": {
+            "name": zone.as_str(),
+            "zone": zone.as_str(),
+            "generation": 1,
+            "revision": 1,
+            "ownerRef": null,
+            "finalizers": [],
+            "deletionRequestedAt": null,
+            "createdAt": "1970-01-01T00:00:00.000Z",
+            "updatedAt": "1970-01-01T00:00:00.000Z",
+            "managedBy": "controller"
+        },
+        "spec": {},
+        "status": {
+            "completedAt": null,
+            "conditions": [],
+            "lastReconciledAt": null,
+            "observedGeneration": 0,
+            "outcome": null,
+            "phase": "Pending",
+            "resource": {},
+            "startedAt": null,
+            "update": {
+                "dependencies": {"count": 0, "refs": []},
+                "disruption": "None",
+                "lastAssessedAt": null,
+                "observedGeneration": 0,
+                "operationId": null,
+                "owned": {"count": 0, "refs": []},
+                "preserveState": true,
+                "reasons": [],
+                "state": "Unknown",
+                "targetGeneration": 1
+            }
+        },
+        "type": "Zone"
+    }))
+    .map_err(|_| ResourceRuntimeError::HandlerNotReady)?;
+    let value =
+        CanonicalJsonValue::parse(&bytes).map_err(|_| ResourceRuntimeError::HandlerNotReady)?;
+    Ok(value.to_canonical_bytes())
+}
+
 /// Ensure the store-owned Zone self-resource exists before publishing a
 /// provisioned runtime.
 pub async fn ensure_bootstrap_zone_resource(
@@ -1350,43 +1396,7 @@ pub async fn ensure_bootstrap_zone_resource(
         );
     }
 
-    let payload = CanonicalJsonValue::parse(
-        &serde_json::to_vec(&json!({
-            "apiVersion": "resources.d2bus.org/v3",
-            "metadata": {
-                "ownerRef": null,
-                "finalizers": [],
-                "deletionRequestedAt": null
-            },
-            "spec": {},
-            "status": {
-                "completedAt": null,
-                "conditions": [],
-                "lastReconciledAt": null,
-                "observedGeneration": 0,
-                "outcome": null,
-                "phase": "Pending",
-                "resource": {},
-                "startedAt": null,
-                "update": {
-                    "dependencies": {"count": 0, "refs": []},
-                    "disruption": "None",
-                    "lastAssessedAt": null,
-                    "observedGeneration": 0,
-                    "operationId": null,
-                    "owned": {"count": 0, "refs": []},
-                    "preserveState": true,
-                    "reasons": [],
-                    "state": "Unknown",
-                    "targetGeneration": 1
-                }
-            },
-            "type": "Zone"
-        }))
-        .map_err(|_| ResourceRuntimeError::HandlerNotReady)?,
-    )
-    .map_err(|_| ResourceRuntimeError::HandlerNotReady)?
-    .to_canonical_bytes();
+    let payload = bootstrap_zone_resource_payload(zone)?;
     let identity = resource_identity(
         zone,
         &zone_type,
@@ -2613,6 +2623,40 @@ mod tests {
         ApiMethod, AuthorizationDenial, AuthorizationRequest, AuthorizationTarget,
     };
     use d2b_contracts_resource::v3::ResourceGeneration;
+
+    #[test]
+    fn bootstrap_zone_create_body_is_complete_after_uid_placeholder() {
+        let zone = ZoneId::parse("work").unwrap();
+        let mut payload =
+            CanonicalJsonValue::parse(&bootstrap_zone_resource_payload(&zone).unwrap()).unwrap();
+        let CanonicalJsonValue::Object(root) = &mut payload else {
+            unreachable!();
+        };
+        let CanonicalJsonValue::Object(metadata) = root.get_mut("metadata").unwrap() else {
+            unreachable!();
+        };
+        assert!(!metadata.contains_key("uid"));
+        metadata.insert(
+            "uid".to_owned(),
+            CanonicalJsonValue::String("00000000-0000-4000-8000-000000000000".to_owned()),
+        );
+
+        let envelope = ResourceEnvelope::from_json(&payload.to_canonical_bytes())
+            .expect("bootstrap Zone create body must be a complete resource envelope");
+        assert_eq!(envelope.resource_type().as_str(), "Zone");
+        assert_eq!(envelope.metadata().name().as_str(), zone.as_str());
+        assert_eq!(envelope.metadata().zone(), &zone);
+        assert_eq!(
+            envelope.metadata().generation(),
+            ResourceGeneration::new(1).unwrap()
+        );
+        assert_eq!(envelope.metadata().revision(), ZoneRevision::new(1));
+        assert_eq!(
+            envelope.metadata().uid().as_str(),
+            "00000000-0000-4000-8000-000000000000"
+        );
+        assert_eq!(envelope.metadata().managed_by(), ManagedBy::Controller);
+    }
 
     fn user_resource(
         name: &str,
