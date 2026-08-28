@@ -86,6 +86,12 @@ The committed `.bazelrc` defines:
 | `remote` | Developer BuildBuddy execution and cache |
 | `trusted-seed` | Protected `v3` cache seeding with synchronous uploads |
 
+Bare Bazel build and test commands, along with public Make aliases, select the
+`remote` profile by default through `.bazelrc`. Set
+`D2B_BAZEL_PROFILE=local` to opt into local execution; Make passes an explicit
+profile only when that variable is set. GitHub Layer-1 jobs set the local
+profile themselves.
+
 Remote profiles use the BuildBuddy Linux worker contract, Ubuntu GCC
 toolchain, minimal output downloads, compressed cache blobs, zero Bazel remote
 retries, and a bounded job count. Nix, fixture, hardware, and other local-only actions are tagged `local` or
