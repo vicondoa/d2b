@@ -504,8 +504,18 @@ fn developer_defaults_and_local_opt_out_are_explicit() {
         "Make must pass a profile only when the caller sets one"
     );
     assert!(
-        makefile.contains("D2B_BAZEL_TEST = $(BAZEL_BIN) test $(D2B_BAZEL_PROFILE_ARG)"),
-        "public Make aliases must use the conditional profile argument"
+        makefile
+            .lines()
+            .any(|line| line.trim()
+                == "D2B_BAZEL_TEST = $(BAZEL_BIN) test $(D2B_BAZEL_PROFILE_ARG)"),
+        "public Make aliases must use only the conditional profile argument"
+    );
+    assert!(
+        !makefile.contains("D2B_BAZEL_TEST_TAG_FILTERS")
+            && !makefile.contains("--test_tag_filters")
+            && !makefile.contains("--test_env=")
+            && !makefile.contains("--test_output="),
+        "public Make aliases must not add test-specific command-line arguments"
     );
     assert!(
         !makefile.contains("D2B_BAZEL_TEST = $(BAZEL_BIN) test --config=remote"),
@@ -1563,8 +1573,10 @@ fn make_dispatches_multiple_goals_once_and_preserves_bazel_variables() {
             && line.contains(repo_root().to_str().expect("repository root path"))
             && line.contains("|/bin/bash|1|")
             && line.contains("-j2")
-            && line.contains("--test_tag_filters=dispatcher-filter")
             && line.contains("test --config=local")
+            && !line.contains("--test_tag_filters")
+            && !line.contains("--test_env=")
+            && !line.contains("--test_output=")
     }));
     assert_eq!(
         bazel_output
@@ -1592,7 +1604,6 @@ fn make_dispatches_multiple_goals_once_and_preserves_bazel_variables() {
         .env("D2B_BAZEL_PROFILE", "local")
         .env("D2B_BAZEL_UNTRUSTED", "1")
         .env("BAZEL_SH", "/bin/bash")
-        .env("D2B_BAZEL_TEST_TAG_FILTERS", "direct-filter")
         .env(
             "D2B_BAZEL_CHECK_SCRATCH",
             scratch.join("direct-bazel-check-evidence"),
@@ -1622,7 +1633,11 @@ fn make_dispatches_multiple_goals_once_and_preserves_bazel_variables() {
         direct_bazel_output
             .lines()
             .last()
-            .is_some_and(|line| line.contains("--test_tag_filters=direct-filter"))
+            .is_some_and(|line| {
+                !line.contains("--test_tag_filters")
+                    && !line.contains("--test_env=")
+                    && !line.contains("--test_output=")
+            })
     );
     let _ = std::fs::remove_dir_all(scratch);
 }
@@ -1956,7 +1971,9 @@ fn bazel_facade_owns_public_make_composition() {
     assert!(
         makefile.contains("$(D2B_BAZEL_TEST) //bazel/checks:$@")
             && makefile.contains("$(BAZEL_BIN) test")
-            && makefile.contains("--test_env=D2B_REPO_ROOT=\"$(CURDIR)\""),
+            && makefile.lines().any(|line| {
+                line.trim() == "D2B_BAZEL_TEST = $(BAZEL_BIN) test $(D2B_BAZEL_PROFILE_ARG)"
+            }),
         "Make must dispatch every public Bazel target through a direct bazel test of its facade suite"
     );
     assert!(
