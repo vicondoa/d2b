@@ -315,6 +315,7 @@ const PROVIDER_SHUTDOWN_POLL_INTERVAL: Duration = Duration::from_millis(250);
 const PUBLIC_STATUS_PROVIDER_PROBE_TIMEOUT: Duration = Duration::from_millis(100);
 const EMPTY_VMM_CLEANUP_GRACE: Duration = Duration::from_secs(5);
 const CGROUP_EMPTY_POST_KILL_WAIT: Duration = Duration::from_secs(5);
+#[cfg(test)]
 const GATEWAY_DISPLAY_SESSION_TTL: Duration = Duration::from_secs(3600);
 
 /// The static composition root is one artifact for both process-start modes.
@@ -735,7 +736,6 @@ impl CommittedZoneTopology {
 /// metadata.
 pub(crate) struct ZoneLinkGatewayComposition {
     zone: ZoneId,
-    link_ref: ResourceRef,
     link_uid: ResourceUid,
     parent_path: ZonePath,
     child_path: ZonePath,
@@ -746,8 +746,6 @@ pub(crate) struct ZoneLinkGatewayComposition {
     reconnect_generation: Mutex<ReconnectGeneration>,
     required_capability: ZoneRouteCapability,
     policy_revision: ZoneRevision,
-    transport_provider_ref: ResourceRef,
-    transport_settings: RelayTransportSettings,
     cursor_owner: ZoneLinkOwnerProof,
     controller: Mutex<ZoneLinkController>,
     route_engine: Mutex<ZoneRouteEngine>,
@@ -798,7 +796,7 @@ impl ZoneLinkGatewayComposition {
         {
             return Err(ZoneLinkGatewayCompositionError::InvalidResource);
         }
-        let link_ref = ResourceRef::parse(&format!("ZoneLink/{link_name}"))
+        ResourceRef::parse(&format!("ZoneLink/{link_name}"))
             .map_err(|_| ZoneLinkGatewayCompositionError::InvalidResource)?;
         let link_uid = link
             .get("metadata")
@@ -820,7 +818,7 @@ impl ZoneLinkGatewayComposition {
         {
             return Err(ZoneLinkGatewayCompositionError::InvalidTransportSettings);
         }
-        let transport_settings = serde_json::from_slice::<RelayTransportSettings>(
+        serde_json::from_slice::<RelayTransportSettings>(
             &spec.transport_settings().to_canonical_bytes(),
         )
         .map_err(|_| ZoneLinkGatewayCompositionError::InvalidTransportSettings)?;
@@ -879,7 +877,6 @@ impl ZoneLinkGatewayComposition {
             .map_err(|_| ZoneLinkGatewayCompositionError::InvalidTopology)?;
         Ok(Self {
             zone,
-            link_ref,
             link_uid,
             parent_path: parent_path.clone(),
             child_path: child_path_for_route,
@@ -890,8 +887,6 @@ impl ZoneLinkGatewayComposition {
             reconnect_generation: Mutex::new(reconnect_generation),
             required_capability,
             policy_revision,
-            transport_provider_ref: spec.transport_provider_ref().clone(),
-            transport_settings,
             cursor_owner: owner.clone(),
             controller: Mutex::new(controller),
             route_engine: Mutex::new(ZoneRouteEngine::new(parent_path)),
@@ -906,20 +901,9 @@ impl ZoneLinkGatewayComposition {
         &self.zone
     }
 
-    const fn link_ref(&self) -> &ResourceRef {
-        &self.link_ref
-    }
-
+    #[cfg(test)]
     const fn link_uid(&self) -> &ResourceUid {
         &self.link_uid
-    }
-
-    const fn transport_provider_ref(&self) -> &ResourceRef {
-        &self.transport_provider_ref
-    }
-
-    const fn transport_settings(&self) -> &RelayTransportSettings {
-        &self.transport_settings
     }
 
     const fn child_path(&self) -> &ZonePath {
@@ -963,6 +947,7 @@ impl ZoneLinkGatewayComposition {
     }
 
     /// Adopt the single durable cursor observation owned by this link.
+    #[cfg(test)]
     fn adopt_cursor(
         &self,
         observation: d2b_core_controller::zonelink::ZoneLinkCursorRecord,
@@ -1433,19 +1418,7 @@ mod zone_link_gateway_composition_tests {
     fn composition_keeps_gateway_provider_and_route_state_together() {
         let composition = composition();
         assert_eq!(composition.zone().as_str(), "child");
-        assert_eq!(
-            composition.link_ref().to_canonical_string(),
-            "ZoneLink/uplink"
-        );
         assert_eq!(composition.link_uid(), &uid('1'));
-        assert_eq!(
-            composition.transport_provider_ref().to_canonical_string(),
-            "Provider/transport-azure-relay"
-        );
-        assert_eq!(
-            composition.transport_settings().relay_entity_id,
-            "hc-d2b-child"
-        );
         assert_eq!(composition.session_state(), ZoneLinkSessionState::Unenrolled);
         assert_eq!(
             format!("{composition:?}"),
