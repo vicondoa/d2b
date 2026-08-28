@@ -884,6 +884,7 @@ in
         echo "d2bStoreSync: refusing non-directory runtime parent /run/d2b" >&2
         exit 1
       else
+        :
         ${lib.concatStringsSep "\n" (lib.mapAttrsToList
           (name: gen: ''
             if [ -L /run/d2b/${name} ]; then
