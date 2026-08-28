@@ -29,7 +29,9 @@ build:local --remote_executor=
 build:local --remote_cache=
 build:local --bes_backend=
 build:local --bes_results_url=
-build:local --credential_helper=
+# Bazel rejects an empty credential-helper path; override the remote scope
+# with a helper that cannot provide credentials.
+build:local --credential_helper=d2b.buildbuddy.io=/bin/false
 build:local --remote_instance_name=
 build:local --platforms=
 build:local --extra_execution_platforms=

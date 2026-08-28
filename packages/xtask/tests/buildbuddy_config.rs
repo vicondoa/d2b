@@ -475,7 +475,7 @@ fn developer_defaults_and_local_opt_out_are_explicit() {
         "--remote_cache=",
         "--bes_backend=",
         "--bes_results_url=",
-        "--credential_helper=",
+        "--credential_helper=d2b.buildbuddy.io=/bin/false",
         "--remote_instance_name=",
         "--platforms=",
         "--extra_execution_platforms=",
