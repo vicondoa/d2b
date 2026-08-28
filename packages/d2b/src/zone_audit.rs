@@ -827,7 +827,7 @@ fn valid_route_component(value: &str) -> bool {
 }
 
 fn valid_code(value: &str) -> bool {
-    safe_public_text(value, false) && d2b_realm_core::OperationId::parse(value.to_owned()).is_ok()
+    safe_public_text(value, false) && d2b_contracts::OperationId::parse(value.to_owned()).is_ok()
 }
 
 fn valid_digest(value: &str) -> bool {

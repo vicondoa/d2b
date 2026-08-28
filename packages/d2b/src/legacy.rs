@@ -9,10 +9,9 @@ use std::{
     ffi::OsString,
     fmt::Write as _,
     fs,
-    io::{self, IoSliceMut, IsTerminal as _, Read as _, Write as _},
-    os::fd::{AsRawFd as _, OwnedFd},
+    io::{self, IsTerminal as _, Read as _, Write as _},
     path::{Path, PathBuf},
-    process::{Command, Stdio},
+    process::Stdio,
     thread,
     time::Duration,
 };
@@ -20,18 +19,16 @@ use std::{
 #[allow(unused_imports)]
 use clap::{Args, Parser, Subcommand, ValueEnum};
 use d2b_contracts::{
-    Hello as IpcHello, HelloOk as IpcHelloOk, HelloRejected as IpcHelloRejected, KnownFeatureFlag,
-    SemverRange,
+    KnownFeatureFlag,
     types::{MediaRef, validate_usb_bus_id},
 };
 use d2b_contracts_broker::broker_wire::{
-    AuditExportCursor, StoreVerifyResponse as IpcStoreVerifyResponse,
-    StoreVerifyStatus as IpcStoreVerifyStatus,
+    StoreVerifyResponse as IpcStoreVerifyResponse, StoreVerifyStatus as IpcStoreVerifyStatus,
 };
 use d2b_contracts_control::{
     cli_output::*,
     public_wire::{
-        self, AuditFormat as IpcAuditFormat, AuditRequest as IpcAuditRequest,
+        self,
         KeyEntry as IpcKeyEntry, KeysShowRequest as IpcKeysShowRequest,
         KeysShowResponse as IpcKeysShowResponse, ListEntry as IpcListEntry,
         ListRequest as IpcListRequest, StatusRequest as IpcStatusRequest,
@@ -42,16 +39,10 @@ use d2b_contracts_control::{
 };
 use d2b_core::{
     bundle::Bundle, bundle_resolver::HostRuntime, closures::ClosureMetadata,
-    error::Error as CoreError, host::HostJson, host_check, processes::ProcessesJson,
+    host::HostJson, host_check, processes::ProcessesJson,
     realm_controller_config::RealmControllersJson,
 };
-use nix::sys::socket::{
-    AddressFamily, MsgFlags, SockFlag, SockType, UnixAddr, connect, send, socket,
-};
 use nix::unistd::Uid;
-use rustix::net::sockopt::{Timeout as SocketTimeout, set_socket_timeout};
-use rustix::net::{RecvAncillaryBuffer, RecvFlags, recvmsg};
-use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
@@ -62,38 +53,36 @@ use super::status_read_model::{
 };
 use super::terminal_client::TerminalTransport as _;
 use super::{
-    EXIT_API_TIMEOUT, MAX_FRAME_BYTES, doctor, exec_client, host_validate, target_routing,
-    terminal_client,
+    CliFailure, EXIT_API_TIMEOUT, doctor, exec_client, host_validate,
+    print_json, print_stderr, print_stdout, stdout_is_tty, target_routing, terminal_client,
+    write_stderr_bytes, write_stdout_bytes,
+    dispatch::{
+        AuditSocketOutcome, HostErrorEnvelope, all_known_subcommands, allowed_subcommands,
+        daemon_down_envelope, denied_reason, emit_host_error, host_error_envelope,
+        effective_uid, missing_mutation_flag_envelope, not_yet_implemented_envelope,
+        parse_uid_env, render_auth_status_human, render_daemon_audit_lines, try_audit_via_socket,
+    },
+    host::{map_host_check_report, render_host_check_human},
+    activation::{
+        warn_all_pending_staged_configs, warn_pending_staged_config,
+    },
+    context::{
+        AuthStatusFixture, BundleContext, CliContext, ErrorFrame, ManifestDocument, ManifestVm,
+        RUNTIME_UNKNOWN, SocketProbe, SystemStateFixture, daemon_hello_frame,
+        decode_daemon_frame, encode_type_tagged_message,
+        env_path, is_daemon_unreachable, maybe_load_json_env, parse_hello_reply,
+        probe_socket, read_bundle_json, read_json_file, system_tool_command, SeqpacketUnixSocket,
+        cli_failure_from_daemon_error,
+    },
+};
+#[cfg(test)]
+use super::{
+    activation::set_test_staging_base, with_test_output_capture, with_test_stdout_capture,
 };
 
-pub(super) const DEFAULT_MANIFEST_PATH: &str = "/run/current-system/sw/share/d2b/vms.json";
 #[cfg(not(test))]
 pub(super) const DEFAULT_REALM_ENTRYPOINTS_PATH: &str =
     "/run/current-system/sw/share/d2b/realm-entrypoints.json";
-pub(super) const DEFAULT_BUNDLE_PATH: &str = "/etc/d2b/bundle.json";
-pub(super) const DEFAULT_PUBLIC_SOCKET: &str = "/run/d2b/public.sock";
-pub(super) const DEFAULT_BROKER_SOCKET: &str = "/run/d2b/priv.sock";
-pub(super) const DEFAULT_HOST_RUNTIME_PATH: &str = "/var/lib/d2b/runtime/host-runtime.json";
-pub(super) const DEFAULT_CLIENT_VERSION_RANGE: &str = ">=0.4.0, <0.5.0";
-pub(super) const RUNTIME_UNKNOWN: &str = "unknown";
-pub(super) const SYSTEM_TOOL_PATH: &str =
-    "/run/current-system/sw/bin:/usr/bin:/usr/sbin:/bin:/sbin";
-
-pub(super) fn system_tool_command(program: &str) -> Command {
-    let mut command = Command::new(program);
-    command.env("PATH", SYSTEM_TOOL_PATH);
-    command
-}
-
-/// Location of daemon-persisted state files (`pidfd-table.json`,
-/// `kernel-module-report.json`, `autostart-report.json`,
-/// `storage-lifecycle-report.json`) that
-/// `d2b host doctor --read-only` inspects. Mirrors
-/// `d2bd::DEFAULT_DAEMON_STATE_DIR`.
-pub(super) const DEFAULT_DAEMON_STATE_DIR: &str = "/var/lib/d2b/daemon-state";
-/// No default URL: d2bd does not serve an HTTP metrics endpoint.
-/// Set `D2B_METRICS_URL` when an external collector is available.
-pub(super) const DEFAULT_METRICS_URL: &str = "";
 pub(super) const MAX_REALM_ENTRYPOINTS_BYTES: u64 = 1024 * 1024;
 
 #[derive(Debug, Parser)]
@@ -1083,35 +1072,6 @@ pub(super) struct AuthStatusArgs {
     pub(crate) test_uid: Option<u32>,
 }
 
-#[derive(Debug)]
-pub(crate) struct CliFailure {
-    pub(crate) exit_code: i32,
-    pub(crate) message: String,
-    pub(crate) rendered_stderr: Option<String>,
-    pub(crate) admission_recovery: bool,
-}
-
-impl CliFailure {
-    pub(crate) fn new(exit_code: i32, message: impl Into<String>) -> Self {
-        Self {
-            exit_code,
-            message: message.into(),
-            rendered_stderr: None,
-            admission_recovery: false,
-        }
-    }
-
-    pub(crate) fn host_check_probe_error(error: host_check::ProbeError) -> Self {
-        let operator_error = CoreError::internal_io(error.opaque_reason);
-        Self {
-            exit_code: 1,
-            message: operator_error.message(),
-            rendered_stderr: render_operator_error(&operator_error, Some("host check")),
-            admission_recovery: false,
-        }
-    }
-}
-
 #[derive(Debug, Clone)]
 pub(super) struct LegacyContext {
     pub(crate) manifest_path: PathBuf,
@@ -1122,33 +1082,36 @@ pub(super) struct LegacyContext {
     pub(crate) host_runtime_path: PathBuf,
     pub(crate) system_state_fixture: Option<SystemStateFixture>,
     pub(crate) auth_status_fixture: Option<AuthStatusFixture>,
-    /// Daemon-persisted state dir (pidfd-table.json,
-    /// kernel-module-report.json, autostart-report.json).
-    /// Override via `D2B_DAEMON_STATE_DIR`.
     pub(crate) daemon_state_dir: PathBuf,
-    /// Prometheus scrape URL the doctor probes for reachability.
-    /// Override via `D2B_METRICS_URL`.
     pub(crate) metrics_url: String,
 }
-
-// The old helper modules still import this private alias for their pure
-// fixtures. Runtime command dispatch uses `context::ZoneContext`.
-pub(super) type Context = LegacyContext;
 
 impl LegacyContext {
     pub(crate) fn from_env() -> Result<Self, CliFailure> {
         Ok(Self {
-            manifest_path: env_path("D2B_MANIFEST_PATH", DEFAULT_MANIFEST_PATH),
-            bundle_path: env_path("D2B_BUNDLE_PATH", DEFAULT_BUNDLE_PATH),
-            public_socket: env_path("D2B_PUBLIC_SOCKET", DEFAULT_PUBLIC_SOCKET),
-            broker_socket: env_path("D2B_BROKER_SOCKET", DEFAULT_BROKER_SOCKET),
+            manifest_path: env_path("D2B_MANIFEST_PATH", super::context::DEFAULT_MANIFEST_PATH),
+            bundle_path: env_path("D2B_BUNDLE_PATH", super::context::DEFAULT_BUNDLE_PATH),
+            public_socket: env_path(
+                "D2B_PUBLIC_SOCKET",
+                super::context::DEFAULT_PUBLIC_SOCKET,
+            ),
+            broker_socket: env_path(
+                "D2B_BROKER_SOCKET",
+                super::context::DEFAULT_BROKER_SOCKET,
+            ),
             state_root: env::var_os("D2B_STATE_ROOT").map(PathBuf::from),
-            host_runtime_path: env_path("D2B_HOST_RUNTIME_PATH", DEFAULT_HOST_RUNTIME_PATH),
+            host_runtime_path: env_path(
+                "D2B_HOST_RUNTIME_PATH",
+                super::context::DEFAULT_HOST_RUNTIME_PATH,
+            ),
             system_state_fixture: maybe_load_json_env("D2B_TEST_SYSTEM_STATE_JSON")?,
             auth_status_fixture: maybe_load_json_env("D2B_AUTH_STATUS_FIXTURE")?,
-            daemon_state_dir: env_path("D2B_DAEMON_STATE_DIR", DEFAULT_DAEMON_STATE_DIR),
+            daemon_state_dir: env_path(
+                "D2B_DAEMON_STATE_DIR",
+                super::context::DEFAULT_DAEMON_STATE_DIR,
+            ),
             metrics_url: env::var("D2B_METRICS_URL")
-                .unwrap_or_else(|_| DEFAULT_METRICS_URL.to_owned()),
+                .unwrap_or_else(|_| super::context::DEFAULT_METRICS_URL.to_owned()),
         })
     }
 
@@ -1207,95 +1170,6 @@ impl LegacyContext {
     }
 }
 
-#[derive(Debug)]
-pub(super) struct BundleContext {
-    pub(crate) host: Option<HostJson>,
-    pub(crate) processes: Option<ProcessesJson>,
-    pub(crate) closures: BTreeMap<String, ClosureMetadata>,
-    pub(crate) host_runtime: Option<HostRuntime>,
-}
-
-#[derive(Debug, Deserialize)]
-pub(super) struct ManifestDocument {
-    #[serde(rename = "_manifest", default)]
-    _manifest: Option<Value>,
-    #[serde(rename = "_observability", default)]
-    _observability: Option<Value>,
-    #[serde(flatten)]
-    pub(crate) entries: BTreeMap<String, ManifestVm>,
-}
-
-impl ManifestDocument {
-    pub(crate) fn vms(&self) -> Vec<&ManifestVm> {
-        self.entries
-            .iter()
-            .filter(|(name, _)| !name.starts_with('_'))
-            .map(|(_, vm)| vm)
-            .collect()
-    }
-
-    pub(crate) fn get_vm(&self, name: &str) -> Option<&ManifestVm> {
-        self.entries.get(name).filter(|_| !name.starts_with('_'))
-    }
-
-    pub(crate) fn bridge_names(&self) -> BTreeSet<String> {
-        self.vms()
-            .iter()
-            .map(|vm| vm.bridge.clone())
-            .collect::<BTreeSet<_>>()
-    }
-}
-
-#[derive(Debug, Clone, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub(super) struct ManifestVm {
-    pub(crate) name: String,
-    pub(crate) env: Option<String>,
-    pub(crate) graphics: bool,
-    pub(crate) tpm: bool,
-    pub(crate) audio: bool,
-    pub(crate) usbip_yubikey: bool,
-    pub(crate) static_ip: Option<String>,
-    pub(crate) is_net_vm: bool,
-    pub(crate) state_dir: String,
-    pub(crate) bridge: String,
-    pub(crate) ssh_user: Option<String>,
-    pub(crate) runtime: Option<ManifestRuntime>,
-}
-
-#[derive(Debug, Clone, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub(super) struct ManifestRuntime {
-    pub(crate) kind: String,
-    #[serde(default)]
-    pub(crate) capabilities: BTreeMap<String, bool>,
-}
-
-#[derive(Debug, Clone, Default, Deserialize)]
-#[serde(rename_all = "camelCase", default, deny_unknown_fields)]
-pub(super) struct SystemStateFixture {
-    units: BTreeMap<String, String>,
-    bridges: BTreeMap<String, BridgeHealthFixture>,
-}
-
-#[derive(Debug, Clone, Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub(super) struct BridgeHealthFixture {
-    state: String,
-    admin: String,
-    expected_carrier: String,
-    result: String,
-}
-
-#[derive(Debug, Clone, Default, Deserialize)]
-#[serde(rename_all = "camelCase", default, deny_unknown_fields)]
-pub(super) struct AuthStatusFixture {
-    public_reachable: Option<bool>,
-    public_version: Option<String>,
-    broker_reachable: Option<bool>,
-    broker_version: Option<String>,
-}
-
 #[derive(Debug, Clone)]
 pub(super) struct BridgeHealthRow {
     pub(crate) name: String,
@@ -1305,39 +1179,6 @@ pub(super) struct BridgeHealthRow {
     pub(crate) result: String,
 }
 
-#[derive(Debug, Clone)]
-pub(super) struct SocketProbe {
-    reachable: bool,
-    version: Option<String>,
-}
-
-#[derive(Debug, Clone, Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub(super) struct HelloOkFrame {
-    #[serde(rename = "type")]
-    _type_name: String,
-    #[serde(flatten)]
-    payload: IpcHelloOk,
-}
-
-#[derive(Debug, Clone, Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub(super) struct HelloRejectedFrame {
-    #[serde(rename = "type")]
-    _type_name: String,
-    #[serde(flatten)]
-    _payload: IpcHelloRejected,
-    error: DaemonErrorEnvelope,
-}
-
-#[derive(Debug, Clone, Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub(super) struct ErrorFrame {
-    #[serde(rename = "type")]
-    _type_name: String,
-    error: DaemonErrorEnvelope,
-}
-
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub(super) struct AuditResponseFrame {
@@ -1345,16 +1186,6 @@ pub(super) struct AuditResponseFrame {
     _type_name: String,
     #[serde(flatten)]
     payload: public_wire::AuditResponse,
-}
-
-#[derive(Debug, Clone, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub(super) struct DaemonErrorEnvelope {
-    kind: String,
-    #[serde(alias = "exitCode", alias = "code")]
-    exit_code: u8,
-    message: String,
-    remediation: String,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -1436,12 +1267,6 @@ pub(super) struct WorkloadResponseFrame {
 }
 
 #[derive(Debug, Clone)]
-pub(super) enum AuditSocketOutcome {
-    Unreachable,
-    Lines(Vec<String>),
-}
-
-#[derive(Debug, Clone)]
 pub(super) enum KeysSocketOutcome {
     Unavailable,
     List(Vec<IpcKeyEntry>),
@@ -1483,202 +1308,6 @@ pub(super) enum PublicSocketOutcome {
     Unavailable,
     Unsupported,
     Reply(Vec<u8>),
-}
-
-pub(super) fn encode_type_tagged_message<T>(
-    type_name: &str,
-    message: &T,
-    context: &str,
-) -> Result<Vec<u8>, CliFailure>
-where
-    T: Serialize,
-{
-    let mut value = serde_json::to_value(message)
-        .map_err(|err| CliFailure::new(1, format!("failed to encode {context}: {err}")))?;
-    value
-        .as_object_mut()
-        .ok_or_else(|| {
-            CliFailure::new(
-                1,
-                format!("failed to encode {context}: JSON object required"),
-            )
-        })?
-        .insert("type".to_owned(), Value::String(type_name.to_owned()));
-    serde_json::to_vec(&value)
-        .map_err(|err| CliFailure::new(1, format!("failed to encode {context}: {err}")))
-}
-
-pub(super) fn daemon_supported_features() -> Vec<d2b_contracts::FeatureFlag> {
-    vec![
-        KnownFeatureFlag::TypedErrors.wire_value(),
-        KnownFeatureFlag::StatusCheckBridges.wire_value(),
-        KnownFeatureFlag::ExportBrokerAudit.wire_value(),
-        KnownFeatureFlag::ConfiguredLaunchV1.wire_value(),
-        KnownFeatureFlag::UnsafeLocalProviderV1.wire_value(),
-    ]
-}
-
-pub(super) fn daemon_hello_frame(type_name: &str) -> Result<Vec<u8>, CliFailure> {
-    let hello = IpcHello {
-        client_version: SemverRange::new(DEFAULT_CLIENT_VERSION_RANGE).map_err(|err| {
-            CliFailure::new(1, format!("failed to build hello version range: {err}"))
-        })?,
-        supported_features: daemon_supported_features(),
-    };
-    encode_type_tagged_message(type_name, &hello, "hello request")
-}
-
-pub(super) fn daemon_audit_frame(type_name: &str, json_mode: bool) -> Result<Vec<u8>, CliFailure> {
-    daemon_audit_frame_with_cursor(type_name, json_mode, None)
-}
-
-fn daemon_audit_frame_with_cursor(
-    type_name: &str,
-    json_mode: bool,
-    cursor: Option<AuditExportCursor>,
-) -> Result<Vec<u8>, CliFailure> {
-    let request = IpcAuditRequest {
-        filter: None,
-        format: if json_mode {
-            IpcAuditFormat::Json
-        } else {
-            IpcAuditFormat::Human
-        },
-        since: None,
-        cursor,
-        limit: 1024,
-    };
-    encode_type_tagged_message(type_name, &request, "audit request")
-}
-
-pub(super) fn is_daemon_unreachable(err: &io::Error) -> bool {
-    matches!(
-        err.kind(),
-        io::ErrorKind::NotFound | io::ErrorKind::ConnectionRefused
-    )
-}
-
-pub(super) fn cli_failure_from_daemon_error(error: DaemonErrorEnvelope) -> CliFailure {
-    let message = if error.remediation.is_empty() {
-        format!("{}: {}", error.kind, error.message)
-    } else {
-        format!("{}: {} ({})", error.kind, error.message, error.remediation)
-    };
-    CliFailure::new(i32::from(error.exit_code), message)
-}
-
-pub(super) fn decode_daemon_frame(response: &[u8], context: &str) -> Result<Value, CliFailure> {
-    serde_json::from_slice(response)
-        .map_err(|err| CliFailure::new(1, format!("failed to decode {context}: {err}")))
-}
-
-pub(super) fn parse_hello_reply(response: &[u8]) -> Result<IpcHelloOk, CliFailure> {
-    let value = decode_daemon_frame(response, "hello reply")?;
-    let Some(type_name) = value.get("type").and_then(Value::as_str) else {
-        return Err(CliFailure::new(
-            1,
-            "daemon hello reply was missing a type discriminator",
-        ));
-    };
-    match type_name {
-        "helloOk" => serde_json::from_value::<HelloOkFrame>(value)
-            .map(|frame| frame.payload)
-            .map_err(|err| CliFailure::new(1, format!("failed to decode helloOk reply: {err}"))),
-        "helloRejected" => {
-            let frame: HelloRejectedFrame = serde_json::from_value(value).map_err(|err| {
-                CliFailure::new(1, format!("failed to decode helloRejected reply: {err}"))
-            })?;
-            Err(cli_failure_from_daemon_error(frame.error))
-        }
-        "error" => {
-            let frame: ErrorFrame = serde_json::from_value(value).map_err(|err| {
-                CliFailure::new(1, format!("failed to decode error reply: {err}"))
-            })?;
-            Err(cli_failure_from_daemon_error(frame.error))
-        }
-        other => Err(CliFailure::new(
-            1,
-            format!("unexpected hello reply type {other}"),
-        )),
-    }
-}
-
-fn parse_audit_page(
-    response: &[u8],
-) -> Result<(Vec<String>, Option<AuditExportCursor>, bool), CliFailure> {
-    let value = decode_daemon_frame(response, "audit reply")?;
-    let Some(type_name) = value.get("type").and_then(Value::as_str) else {
-        return Err(CliFailure::new(
-            1,
-            "daemon audit reply was missing a type discriminator",
-        ));
-    };
-    match type_name {
-        "auditResponse" => serde_json::from_value::<AuditResponseFrame>(value)
-            .map(|frame| {
-                let lines = frame
-                    .payload
-                    .entries
-                    .into_iter()
-                    .map(|entry| {
-                        entry
-                            .record
-                            .map(|record| match record {
-                                Value::String(line) => line,
-                                record => record.to_string(),
-                            })
-                            .unwrap_or_else(|| {
-                                serde_json::json!({
-                                    "export_error": entry.error,
-                                    "sequence": entry.sequence,
-                                })
-                                .to_string()
-                            })
-                    })
-                    .collect();
-                (lines, frame.payload.next_cursor, frame.payload.complete)
-            })
-            .map_err(|err| CliFailure::new(1, format!("failed to decode auditResponse: {err}"))),
-        "error" => {
-            let frame: ErrorFrame = serde_json::from_value(value).map_err(|err| {
-                CliFailure::new(1, format!("failed to decode error reply: {err}"))
-            })?;
-            Err(cli_failure_from_daemon_error(frame.error))
-        }
-        other => Err(CliFailure::new(
-            1,
-            format!("unexpected audit reply type {other}"),
-        )),
-    }
-}
-
-pub(super) fn parse_audit_reply(response: &[u8]) -> Result<Vec<String>, CliFailure> {
-    parse_audit_page(response).map(|(lines, _, _)| lines)
-}
-
-pub(super) fn render_daemon_audit_lines(
-    lines: &[String],
-    json_mode: bool,
-) -> Result<(), CliFailure> {
-    if json_mode {
-        if let [line] = lines {
-            let trimmed = line.trim_start();
-            if trimmed.starts_with('{') || trimmed.starts_with('[') {
-                if line.ends_with('\n') {
-                    print_stdout(line);
-                } else {
-                    print_stdout(&(line.to_owned() + "\n"));
-                }
-                return Ok(());
-            }
-        }
-        print_json(&serde_json::json!({ "lines": lines }))?;
-    } else if lines.is_empty() {
-        print_stdout("");
-    } else {
-        print_stdout(&(lines.join("\n") + "\n"));
-    }
-    Ok(())
 }
 
 pub(super) fn is_host_shutdown_hook_invocation(raw_args: &[OsString]) -> bool {
@@ -1854,257 +1483,6 @@ mod clipboard_arm_tests {
             Some(CLIPBOARD_ARM_CONTROL_TIMEOUT)
         );
     }
-}
-
-/// Base directory for host-side config staging. User-local by default
-/// (no privileged surface), from `XDG_STATE_HOME` (or `HOME`). Tests
-/// override it per-thread via `set_test_staging_base` rather than mutating
-/// process-global env.
-pub(crate) fn config_staging_base() -> PathBuf {
-    #[cfg(test)]
-    if let Some(base) = TEST_STAGING_BASE.with(|b| b.borrow().clone()) {
-        return base;
-    }
-    let base = std::env::var_os("XDG_STATE_HOME")
-        .map(PathBuf::from)
-        .filter(|p| !p.as_os_str().is_empty())
-        .or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".local/state")))
-        .unwrap_or_else(|| PathBuf::from(".d2b-state"));
-    base.join("d2b/config-staging")
-}
-
-#[cfg(test)]
-thread_local! {
-    /// Per-thread test override of the config-staging base (replaces the old
-    /// process-global `D2B_CONFIG_STAGING_DIR` env hook).
-    static TEST_STAGING_BASE: std::cell::RefCell<Option<PathBuf>> =
-        const { std::cell::RefCell::new(None) };
-}
-
-/// Set (or clear) the calling thread's config-staging base override.
-#[cfg(test)]
-pub(super) fn set_test_staging_base(base: Option<PathBuf>) {
-    TEST_STAGING_BASE.with(|b| *b.borrow_mut() = base);
-}
-
-pub(crate) fn config_staging_path_in(base: &Path, vm: &str) -> PathBuf {
-    base.join(format!("{vm}.guest.nix"))
-}
-
-pub(crate) fn config_staging_path(vm: &str) -> PathBuf {
-    config_staging_path_in(&config_staging_base(), vm)
-}
-
-/// Reject VM names that are not the framework's `^[a-z][a-z0-9-]*$`
-/// shape, so a VM arg can never traverse out of the staging dir.
-pub(crate) fn config_validate_vm_name(vm: &str) -> Result<(), CliFailure> {
-    let ok = !vm.is_empty()
-        && vm.chars().next().is_some_and(|c| c.is_ascii_lowercase())
-        && vm
-            .chars()
-            .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-');
-    if ok {
-        Ok(())
-    } else {
-        Err(CliFailure::new(
-            1,
-            format!("config: invalid vm name '{vm}' (expected ^[a-z][a-z0-9-]*$)"),
-        ))
-    }
-}
-
-/// Validate the bytes of a staging file before approval. Kept
-/// deliberately light - the authoritative eval + containment gate is
-/// the per-VM `guestConfigFile` assertion on `d2b switch`. Here we
-/// only refuse an empty / non-UTF-8 file so approve cannot silently
-/// land a truncated sync.
-pub(super) fn config_validate_staging_bytes(bytes: &[u8]) -> Result<(), CliFailure> {
-    if bytes.is_empty() {
-        return Err(CliFailure::new(
-            1,
-            "config approve: staged file is empty; re-run `d2b config sync`".to_owned(),
-        ));
-    }
-    if std::str::from_utf8(bytes).is_err() {
-        return Err(CliFailure::new(
-            1,
-            "config approve: staged file is not valid UTF-8".to_owned(),
-        ));
-    }
-    if bytes.iter().all(|b| b.is_ascii_whitespace()) {
-        return Err(CliFailure::new(
-            1,
-            "config approve: staged file is blank".to_owned(),
-        ));
-    }
-    Ok(())
-}
-
-/// Core (testable) approve: validate the staging file, atomically write
-/// it onto `target`, then remove the staging file. Returns the byte
-/// count written.
-pub(crate) fn config_approve_core(staging: &Path, target: &Path) -> Result<usize, CliFailure> {
-    config_approve_core_with_digest(staging, target, None)
-}
-
-pub(crate) fn config_approve_core_with_digest(
-    staging: &Path,
-    target: &Path,
-    expected_sha256: Option<&str>,
-) -> Result<usize, CliFailure> {
-    if !staging.exists() {
-        return Err(CliFailure::new(
-            1,
-            format!(
-                "config approve: nothing staged at {} (run `d2b config sync` first)",
-                staging.display()
-            ),
-        ));
-    }
-    let bytes = std::fs::read(staging)
-        .map_err(|e| CliFailure::new(1, format!("config approve: read staging: {e}")))?;
-    config_validate_staging_bytes(&bytes)?;
-    if let Some(expected_sha256) = expected_sha256 {
-        let actual_sha256 = sha256_hex(&bytes);
-        if actual_sha256 != expected_sha256 {
-            return Err(CliFailure::new(
-                1,
-                "config approve: staged content changed after service approval; re-run `d2b config sync`"
-                    .to_owned(),
-            ));
-        }
-    }
-    let parent = target.parent().filter(|p| !p.as_os_str().is_empty());
-    if let Some(parent) = parent
-        && !parent.exists()
-    {
-        return Err(CliFailure::new(
-            1,
-            format!(
-                "config approve: target dir {} does not exist",
-                parent.display()
-            ),
-        ));
-    }
-    // Atomic, collision-safe publish (unique O_EXCL temp + fsync +
-    // rename); staging is only consumed after a successful publish.
-    config_atomic_write(target, &bytes)?;
-    let _ = std::fs::remove_file(staging);
-    Ok(bytes.len())
-}
-
-/// Core (testable) reject: remove the staging file if present. Returns
-/// whether anything was removed.
-pub(crate) fn config_reject_core(staging: &Path) -> Result<bool, CliFailure> {
-    if staging.exists() {
-        std::fs::remove_file(staging)
-            .map_err(|e| CliFailure::new(1, format!("config reject: {e}")))?;
-        Ok(true)
-    } else {
-        Ok(false)
-    }
-}
-
-/// Emit a human-output (stderr) note when a VM has a pending,
-/// un-approved staged guest config. Kept on stderr + gated by the
-/// caller on `!json` so it never perturbs a JSON stdout envelope.
-pub(super) fn warn_pending_staged_config(vm: &str) {
-    if config_staging_path(vm).exists() {
-        eprintln!(
-            "note: vm '{vm}' has a pending un-approved guest config edit \
-             (`d2b config diff {vm} --against <live>` to review, \
-             `d2b config approve {vm} --to <live>` to land, or \
-             `d2b config reject {vm}` to discard)"
-        );
-    }
-}
-
-/// Emit a human-output (stderr) note listing every VM with a pending,
-/// un-approved staged guest config.
-pub(super) fn warn_all_pending_staged_configs() {
-    let base = config_staging_base();
-    let mut pending: Vec<String> = Vec::new();
-    if let Ok(rd) = std::fs::read_dir(&base) {
-        for entry in rd.flatten() {
-            if let Some(name) = entry.file_name().to_str()
-                && let Some(vm) = name.strip_suffix(".guest.nix")
-            {
-                pending.push(vm.to_owned());
-            }
-        }
-    }
-    pending.sort();
-    if !pending.is_empty() {
-        eprintln!(
-            "note: pending un-approved guest config edit(s) for: {} \
-             (`d2b config status --all`)",
-            pending.join(", ")
-        );
-    }
-}
-
-/// Atomically publish `bytes` to `target`: write a UNIQUE sibling temp
-/// (O_CREAT|O_EXCL so it never clobbers a concurrent writer's temp or a
-/// stale leftover), fsync it, then rename over `target`. The rename is
-/// atomic on the same filesystem, so a crash never leaves a partially
-/// written file (and never a non-empty truncated one that `approve`
-/// might later accept).
-pub(crate) fn config_atomic_write(target: &Path, bytes: &[u8]) -> Result<(), CliFailure> {
-    use std::io::Write as _;
-    let parent = target.parent().filter(|p| !p.as_os_str().is_empty());
-    let base = target
-        .file_name()
-        .and_then(|n| n.to_str())
-        .unwrap_or("d2b-config");
-    let nanos = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_nanos())
-        .unwrap_or(0);
-    let tmp_name = format!(".{base}.d2b-tmp.{}.{nanos}", std::process::id());
-    let tmp = match parent {
-        Some(p) => p.join(tmp_name),
-        None => PathBuf::from(tmp_name),
-    };
-    let mut file = std::fs::OpenOptions::new()
-        .write(true)
-        .create_new(true)
-        .open(&tmp)
-        .map_err(|e| CliFailure::new(1, format!("config: create temp {}: {e}", tmp.display())))?;
-    let write_result = file.write_all(bytes).and_then(|()| file.sync_all());
-    drop(file);
-    if let Err(e) = write_result {
-        let _ = std::fs::remove_file(&tmp);
-        return Err(CliFailure::new(1, format!("config: write temp: {e}")));
-    }
-    std::fs::rename(&tmp, target).map_err(|e| {
-        let _ = std::fs::remove_file(&tmp);
-        CliFailure::new(1, format!("config: publish to {}: {e}", target.display()))
-    })?;
-    // fsync the parent directory so the rename (the directory-entry
-    // update that publishes the new file) is itself durable. Without
-    // this a power loss right after the rename can lose the approved
-    // target update even though the staging file has already been
-    // consumed.
-    if let Some(p) = parent
-        && let Ok(dir) = std::fs::File::open(p)
-    {
-        let _ = dir.sync_all();
-    }
-    Ok(())
-}
-
-/// Standard `sha256:<64-hex>` digest over `data`. Computed by the host from the
-/// RECEIVED bytes; the guest-reported size/hash is never trusted.
-pub(super) fn sha256_hex(data: &[u8]) -> String {
-    use sha2::Digest as _;
-    use std::fmt::Write as _;
-    let digest: [u8; 32] = sha2::Sha256::digest(data).into();
-    let mut hex = String::with_capacity("sha256:".len() + 64);
-    hex.push_str("sha256:");
-    for byte in digest {
-        let _ = write!(hex, "{byte:02x}");
-    }
-    hex
 }
 
 pub(super) fn cmd_launch(context: &LegacyContext, args: &LaunchArgs) -> Result<i32, CliFailure> {
@@ -2602,7 +1980,7 @@ pub(super) fn cmd_audit(
     if args.strict {
         return emit_host_error(&not_yet_implemented_envelope("audit --strict"), json_mode);
     }
-    match try_audit_via_socket(context, json_mode)? {
+    match try_audit_via_socket(&context.public_socket, json_mode)? {
         AuditSocketOutcome::Lines(lines) => {
             render_daemon_audit_lines(&lines, json_mode)?;
             Ok(0)
@@ -3215,135 +2593,6 @@ pub(super) fn cmd_host_check(
     Ok(i32::from(output.exit_code))
 }
 
-pub(super) fn map_host_check_report(report: host_check::HostCheckReport) -> HostCheckOutputV2 {
-    HostCheckOutputV2 {
-        mode: "read-only".to_owned(),
-        strict: report.strict,
-        summary: HostCheckSummaryV2 {
-            pass: report.summary.pass,
-            warn: report.summary.warn,
-            fail: report.summary.fail,
-        },
-        exit_code: report.exit_code(),
-        findings: report
-            .findings
-            .into_iter()
-            .map(map_host_check_finding)
-            .collect(),
-    }
-}
-
-pub(super) fn map_host_check_finding(finding: host_check::HostCheckFinding) -> HostCheckFindingV2 {
-    HostCheckFindingV2 {
-        id: finding.id,
-        severity: map_host_check_severity(finding.severity),
-        message: finding.message,
-        remediation: finding.remediation,
-        vm: finding.vm,
-        detail: finding.detail,
-        details: finding.details,
-    }
-}
-
-pub(super) fn map_host_check_severity(
-    severity: host_check::HostCheckSeverity,
-) -> HostCheckSeverityV2 {
-    match severity {
-        host_check::HostCheckSeverity::Pass => HostCheckSeverityV2::Pass,
-        host_check::HostCheckSeverity::Warn => HostCheckSeverityV2::Warn,
-        host_check::HostCheckSeverity::Fail => HostCheckSeverityV2::Fail,
-    }
-}
-
-/// Standard JSON error envelope. Every native host-verb refusal
-/// emits this shape on stdout (JSON mode) or as a human-readable
-/// summary on stderr (default mode).
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub(super) struct HostErrorEnvelope {
-    kind: String,
-    code: String,
-    exit_code: i32,
-    what_was_checked: String,
-    observed_state: String,
-    remediation: String,
-    docs_anchor: String,
-}
-
-pub(super) fn host_error_envelope(
-    kind: &str,
-    code: &str,
-    exit_code: i32,
-    what_was_checked: &str,
-    observed_state: &str,
-    remediation: &str,
-    docs_anchor: &str,
-) -> HostErrorEnvelope {
-    HostErrorEnvelope {
-        kind: kind.to_owned(),
-        code: code.to_owned(),
-        exit_code,
-        what_was_checked: what_was_checked.to_owned(),
-        observed_state: observed_state.to_owned(),
-        remediation: remediation.to_owned(),
-        docs_anchor: docs_anchor.to_owned(),
-    }
-}
-
-pub(super) fn emit_host_error(env: &HostErrorEnvelope, json: bool) -> Result<i32, CliFailure> {
-    if json {
-        let mut rendered = serde_json::to_string_pretty(env).map_err(|err| {
-            CliFailure::new(1, format!("failed to serialize host error envelope: {err}"))
-        })?;
-        rendered.push('\n');
-        print_stdout(&rendered);
-    } else {
-        let _ = writeln!(
-            io::stderr().lock(),
-            "d2b: {} (code: {}, exit {})\n  what was checked : {}\n  observed         : {}\n  remediation      : {}\n  docs             : {}",
-            env.kind,
-            env.code,
-            env.exit_code,
-            env.what_was_checked,
-            env.observed_state,
-            env.remediation,
-            env.docs_anchor,
-        );
-    }
-    Ok(env.exit_code)
-}
-
-/// Typed `daemon-down` envelope (exit 1) for verbs whose
-/// daemon-backed path cannot be reached. The Rust CLI never executes
-/// bash; verbs surface this envelope when the daemon is unreachable.
-pub(super) fn daemon_down_envelope(verb: &str) -> HostErrorEnvelope {
-    host_error_envelope(
-        &format!("d2b {verb} requires d2bd"),
-        "daemon-down",
-        1,
-        "Daemon connectivity at /run/d2b/public.sock.",
-        "d2bd is unreachable; the daemon is the only operator surface for mutating verbs.",
-        "Start d2bd (systemctl start d2bd d2b-broker.socket) and re-run the same command. See docs/how-to/migrate-d2b-v1-0-to-v1-1.md#recovery-broker-bring-up-troubleshooting for the full bring-up checklist.",
-        "docs/reference/error-codes.md#daemon-down",
-    )
-}
-
-/// Typed `not-yet-implemented` envelope (exit 78) for verbs whose
-/// daemon-native handler has not landed yet. No bash fallback ever
-/// satisfies these - operators receive the typed envelope and the
-/// migration-guide cross-link.
-pub(super) fn not_yet_implemented_envelope(verb: &str) -> HostErrorEnvelope {
-    host_error_envelope(
-        &format!("d2b {verb} has no daemon-native handler yet"),
-        "not-yet-implemented",
-        78,
-        &format!("Native daemon dispatch for `d2b {verb}`"),
-        "The daemon-native handler has not landed yet; the typed envelope contract is the only operator path until the native handler ships.",
-        "Track the surface schedule in CHANGELOG.md \"Unreleased\"; the typed envelope is the only operator path until the native handler ships.",
-        "docs/reference/error-codes.md#not-yet-implemented",
-    )
-}
-
 /// Bundle-derived deployment shape used by the `host prepare` /
 /// `host destroy` per-tier routing logic.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -3701,7 +2950,19 @@ pub(super) fn cmd_host_doctor(
         );
     }
 
-    let report = doctor::run_doctor(context);
+    let local_context = CliContext {
+        manifest_path: context.manifest_path.clone(),
+        bundle_path: context.bundle_path.clone(),
+        public_socket: context.public_socket.clone(),
+        broker_socket: context.broker_socket.clone(),
+        state_root: context.state_root.clone(),
+        host_runtime_path: context.host_runtime_path.clone(),
+        system_state_fixture: context.system_state_fixture.clone(),
+        auth_status_fixture: context.auth_status_fixture.clone(),
+        daemon_state_dir: context.daemon_state_dir.clone(),
+        metrics_url: context.metrics_url.clone(),
+    };
+    let report = doctor::run_doctor(&local_context);
     let summary = doctor::render_summary(&report);
     let exit_code = report.exit_code();
 
@@ -8301,18 +7562,6 @@ pub(super) fn require_mutation_flag_impl(
     ))
 }
 
-pub(super) fn missing_mutation_flag_envelope(verb: &str) -> HostErrorEnvelope {
-    host_error_envelope(
-        &format!("{verb} requires either --dry-run or --apply"),
-        "--apply-or-dry-run-required",
-        78,
-        &format!("{verb} invocation flags."),
-        "Neither --dry-run nor --apply was provided.",
-        &format!("Re-run as `d2b {verb} --dry-run` to plan or `d2b {verb} --apply` to mutate.",),
-        "docs/reference/error-codes.md#--apply-or-dry-run-required",
-    )
-}
-
 pub(super) fn cmd_auth_status(
     context: &LegacyContext,
     args: &AuthStatusArgs,
@@ -8914,94 +8163,6 @@ pub(super) fn render_status_inventory_human(
     text
 }
 
-pub(super) fn render_host_check_human(output: &HostCheckOutputV2) -> String {
-    let mut text = String::new();
-    let _ = writeln!(
-        text,
-        "mode: {}\nstrict: {}\nsummary: pass={} warn={} fail={}\nexit-code: {}\n",
-        output.mode,
-        output.strict,
-        output.summary.pass,
-        output.summary.warn,
-        output.summary.fail,
-        output.exit_code
-    );
-    for severity in [
-        HostCheckSeverityV2::Pass,
-        HostCheckSeverityV2::Warn,
-        HostCheckSeverityV2::Fail,
-    ] {
-        let label = match severity {
-            HostCheckSeverityV2::Pass => "PASS",
-            HostCheckSeverityV2::Warn => "WARN",
-            HostCheckSeverityV2::Fail => "FAIL",
-        };
-        let matching = output
-            .findings
-            .iter()
-            .filter(|finding| finding.severity == severity)
-            .collect::<Vec<_>>();
-        if matching.is_empty() {
-            continue;
-        }
-        let _ = writeln!(text, "{label}");
-        for finding in matching {
-            if let Some(vm) = &finding.vm {
-                let _ = writeln!(text, "- [{}] {}: {}", vm, finding.id, finding.message);
-            } else {
-                let _ = writeln!(text, "- {}: {}", finding.id, finding.message);
-            }
-            let _ = writeln!(text, "  hint: {}", finding.remediation);
-        }
-        text.push('\n');
-    }
-    text
-}
-
-pub(super) fn render_auth_status_human(output: &AuthStatusOutputV2) -> String {
-    let mut text = String::new();
-    let _ = writeln!(
-        text,
-        "role: {}",
-        match output.role {
-            AuthRoleV2::None => "none",
-            AuthRoleV2::Launcher => "launcher",
-            AuthRoleV2::Admin => "admin",
-        }
-    );
-    let _ = writeln!(text, "effective uid: {}", output.effective_uid);
-    text.push_str("sockets:\n");
-    for socket in &output.sockets {
-        let _ = writeln!(
-            text,
-            "- {}: {}{}",
-            socket.name,
-            if socket.reachable {
-                "reachable"
-            } else {
-                "unreachable"
-            },
-            socket
-                .version
-                .as_ref()
-                .map(|version| format!(" (version {version})"))
-                .unwrap_or_default(),
-        );
-    }
-    let _ = writeln!(
-        text,
-        "allowed subcommands: {}",
-        output.allowed_subcommands.join(", ")
-    );
-    if !output.denied_subcommands.is_empty() {
-        text.push_str("denied subcommands:\n");
-        for denied in &output.denied_subcommands {
-            let _ = writeln!(text, "- {}: {}", denied.name, denied.reason);
-        }
-    }
-    text
-}
-
 pub(super) fn collect_bridge_rows(
     context: &LegacyContext,
     manifest: &ManifestDocument,
@@ -9122,138 +8283,6 @@ pub(super) fn systemctl_state(context: &LegacyContext, unit: &str) -> String {
     }
 }
 
-pub(super) fn effective_uid() -> u32 {
-    Uid::effective().as_raw()
-}
-
-pub(super) fn all_known_subcommands() -> Vec<String> {
-    vec![
-        "list",
-        "status",
-        "launch",
-        "audit",
-        "host check",
-        "auth status",
-        "op inspect",
-        "realm list",
-        "realm inspect",
-        "realm enter",
-        "realm run",
-        "up",
-        "down",
-        "restart",
-        "boot",
-        "build",
-        "switch",
-        "test",
-        "rollback",
-        "generations",
-        "gc",
-        "usb",
-        "console",
-        "audio",
-        "keys list",
-        "rotate-known-host",
-        "trust",
-    ]
-    .into_iter()
-    .map(str::to_owned)
-    .collect()
-}
-
-pub(super) fn allowed_subcommands(role: AuthRoleV2) -> BTreeSet<String> {
-    match role {
-        AuthRoleV2::Admin => all_known_subcommands().into_iter().collect(),
-        AuthRoleV2::Launcher => all_known_subcommands()
-            .into_iter()
-            .filter(|command| command != "audit")
-            .collect(),
-        AuthRoleV2::None => [
-            "list",
-            "status",
-            "host check",
-            "auth status",
-            "op inspect",
-            "realm list",
-            "realm inspect",
-        ]
-        .into_iter()
-        .map(str::to_owned)
-        .collect(),
-    }
-}
-
-pub(super) fn denied_reason(role: AuthRoleV2, command: &str) -> &'static str {
-    match (role, command) {
-        (AuthRoleV2::Admin, _) => "allowed",
-        (_, "audit") => "audit requires admin role in `d2b.site.adminUsers`.",
-        (AuthRoleV2::Launcher, _) => "allowed",
-        (AuthRoleV2::None, _) => {
-            "this subcommand requires launcher membership or daemon-admin privileges."
-        }
-    }
-}
-
-pub(super) fn parse_uid_env(name: &str) -> BTreeSet<u32> {
-    env::var(name)
-        .ok()
-        .map(|value| {
-            value
-                .split(',')
-                .filter_map(|part| part.trim().parse::<u32>().ok())
-                .collect()
-        })
-        .unwrap_or_default()
-}
-
-pub(super) fn env_path(name: &str, default: &str) -> PathBuf {
-    env::var_os(name)
-        .map(PathBuf::from)
-        .unwrap_or_else(|| PathBuf::from(default))
-}
-
-pub(super) fn maybe_load_json_env<T>(name: &str) -> Result<Option<T>, CliFailure>
-where
-    T: for<'de> Deserialize<'de>,
-{
-    match env::var_os(name) {
-        Some(path) => read_json_file::<T>(&PathBuf::from(path))
-            .map(Some)
-            .map_err(|err| CliFailure::new(1, format!("failed to read {name}: {err}"))),
-        None => Ok(None),
-    }
-}
-
-pub(super) fn read_json_file<T>(path: &Path) -> Result<T, io::Error>
-where
-    T: for<'de> Deserialize<'de>,
-{
-    let data = fs::read(path)?;
-    serde_json::from_slice(&data).map_err(|err| io::Error::new(io::ErrorKind::InvalidData, err))
-}
-
-pub(super) fn read_bundle_json<T>(base_dir: &Path, raw_path: &str) -> Result<Option<T>, CliFailure>
-where
-    T: for<'de> Deserialize<'de>,
-{
-    let raw = Path::new(raw_path);
-    let path = if raw.is_absolute() && raw.exists() {
-        raw.to_path_buf()
-    } else if raw.is_absolute() {
-        raw.file_name()
-            .map(|name| base_dir.join(name))
-            .unwrap_or_else(|| raw.to_path_buf())
-    } else {
-        base_dir.join(raw)
-    };
-    if !path.exists() {
-        return Ok(None);
-    }
-    read_json_file(&path)
-        .map(Some)
-        .map_err(|err| CliFailure::new(1, format!("failed to read {}: {err}", path.display())))
-}
-
 /// Look up the canonical workload target address for a VM by its VM name.
 /// Reads the bundle.json and, if it references a realm-controllers artifact,
 /// parses it to find the workload's `identity.canonicalTarget`. Returns `None`
@@ -9319,153 +8348,6 @@ pub(super) fn try_vm_for_canonical_target(bundle_path: &Path, raw_target: &str) 
 pub(super) fn resolve_vm_selector_from_bundle(context: &LegacyContext, selector: &str) -> String {
     try_vm_for_canonical_target(&context.bundle_path, selector)
         .unwrap_or_else(|| selector.to_owned())
-}
-
-pub(super) fn print_json<T>(value: &T) -> Result<(), CliFailure>
-where
-    T: Serialize,
-{
-    let mut data = serde_json::to_string_pretty(value)
-        .map_err(|err| CliFailure::new(1, format!("failed to render JSON: {err}")))?;
-    data.push('\n');
-    print_stdout(&data);
-    Ok(())
-}
-
-// Per-thread stdout capture for tests: a thread-local buffer so concurrently
-// running tests never pollute one another's captured output. A prior global
-// `Mutex<Option<Vec<u8>>>` let any parallel test's `print_stdout` append into
-// whichever test currently had capture active, racing the `--json` envelope
-// assertions.
-#[cfg(test)]
-thread_local! {
-    static TEST_STDOUT_CAPTURE: std::cell::RefCell<Option<Vec<u8>>> =
-        const { std::cell::RefCell::new(None) };
-    static TEST_STDERR_CAPTURE: std::cell::RefCell<Option<Vec<u8>>> =
-        const { std::cell::RefCell::new(None) };
-}
-// Process-wide serialization for `with_test_stdout_capture`. The thread-local
-// buffer above isolates captured BYTES; this lock serializes the capturing
-// tests so their stdout capture cannot interleave under cargo's parallel
-// harness. (Staging-base and peer overrides are now per-thread, so they no
-// longer need process-global serialization.)
-#[cfg(test)]
-pub(super) static TEST_STDOUT_CAPTURE_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
-
-#[cfg(test)]
-pub(super) fn with_test_stdout_capture<T>(f: impl FnOnce() -> T) -> (T, Vec<u8>) {
-    // Recover a poisoned lock: a panicking capturing test must not cascade into
-    // every later test failing to acquire the serialization lock.
-    let _guard = TEST_STDOUT_CAPTURE_LOCK
-        .lock()
-        .unwrap_or_else(|poison| poison.into_inner());
-    TEST_STDOUT_CAPTURE.with(|capture| {
-        *capture.borrow_mut() = Some(Vec::new());
-    });
-    let result = f();
-    let stdout = TEST_STDOUT_CAPTURE
-        .with(|capture| capture.borrow_mut().take())
-        .expect("stdout capture active");
-    (result, stdout)
-}
-
-#[cfg(test)]
-pub(super) fn with_test_output_capture<T>(f: impl FnOnce() -> T) -> (T, Vec<u8>, Vec<u8>) {
-    let _guard = TEST_STDOUT_CAPTURE_LOCK
-        .lock()
-        .unwrap_or_else(|poison| poison.into_inner());
-    TEST_STDOUT_CAPTURE.with(|capture| {
-        *capture.borrow_mut() = Some(Vec::new());
-    });
-    TEST_STDERR_CAPTURE.with(|capture| {
-        *capture.borrow_mut() = Some(Vec::new());
-    });
-    let result = f();
-    let stdout = TEST_STDOUT_CAPTURE
-        .with(|capture| capture.borrow_mut().take())
-        .expect("stdout capture active");
-    let stderr = TEST_STDERR_CAPTURE
-        .with(|capture| capture.borrow_mut().take())
-        .expect("stderr capture active");
-    (result, stdout, stderr)
-}
-
-pub(super) fn print_stdout(text: &str) {
-    let _ = write_stdout_bytes(text.as_bytes());
-}
-
-pub(super) fn print_stderr(text: &str) {
-    let _ = write_stderr_bytes(text.as_bytes());
-}
-
-pub(super) fn write_stdout_bytes(bytes: &[u8]) -> io::Result<()> {
-    #[cfg(test)]
-    {
-        let captured = TEST_STDOUT_CAPTURE.with(|capture| {
-            if let Some(buffer) = capture.borrow_mut().as_mut() {
-                buffer.extend_from_slice(bytes);
-                true
-            } else {
-                false
-            }
-        });
-        if captured {
-            return Ok(());
-        }
-    }
-    let mut stdout = io::stdout().lock();
-    stdout.write_all(bytes)?;
-    stdout.flush()
-}
-
-pub(super) fn write_stderr_bytes(bytes: &[u8]) -> io::Result<()> {
-    #[cfg(test)]
-    {
-        let captured = TEST_STDERR_CAPTURE.with(|capture| {
-            if let Some(buffer) = capture.borrow_mut().as_mut() {
-                buffer.extend_from_slice(bytes);
-                true
-            } else {
-                false
-            }
-        });
-        if captured {
-            return Ok(());
-        }
-    }
-    let mut stderr = io::stderr().lock();
-    stderr.write_all(bytes)?;
-    stderr.flush()
-}
-
-pub(super) fn report_failure(err: CliFailure) -> i32 {
-    let mut stderr = io::stderr().lock();
-    if let Some(rendered_stderr) = err.rendered_stderr {
-        let _ = stderr.write_all(rendered_stderr.as_bytes());
-    } else {
-        let _ = writeln!(stderr, "d2b: {}", err.message);
-    }
-    err.exit_code
-}
-
-pub(super) fn render_operator_error(
-    error: &CoreError,
-    owning_command: Option<&str>,
-) -> Option<String> {
-    let mut value = serde_json::to_value(error).ok()?;
-    if let Some(owning_command) = owning_command {
-        value.as_object_mut()?.insert(
-            "owningCommand".to_owned(),
-            Value::String(owning_command.to_owned()),
-        );
-    }
-    let mut rendered = serde_json::to_string_pretty(&value).ok()?;
-    rendered.push('\n');
-    Some(rendered)
-}
-
-pub(super) fn stdout_is_tty() -> bool {
-    io::stdout().is_terminal()
 }
 
 // ADR 0017: the `should_fallback_to_legacy` /
@@ -9912,81 +8794,6 @@ pub(super) fn dispatch_mutating_verb(
     emit_daemon_mutating_outcome(outcome, json)
 }
 
-pub(super) fn probe_socket(path: &Path) -> Result<SocketProbe, CliFailure> {
-    let mut socket = SeqpacketUnixSocket::connect(path).map_err(|err| {
-        CliFailure::new(1, format!("failed to connect to {}: {err}", path.display()))
-    })?;
-    let payload = daemon_hello_frame("hello")?;
-    socket
-        .send_frame(&payload)
-        .map_err(|err| CliFailure::new(1, format!("failed to send hello frame: {err}")))?;
-    let response = socket
-        .recv_frame()
-        .map_err(|err| CliFailure::new(1, format!("failed to receive hello reply: {err}")))?;
-    let hello = parse_hello_reply(&response)?;
-    Ok(SocketProbe {
-        reachable: true,
-        version: Some(hello.selected_version.as_str().to_owned()),
-    })
-}
-
-pub(super) fn try_audit_via_socket(
-    context: &LegacyContext,
-    json_mode: bool,
-) -> Result<AuditSocketOutcome, CliFailure> {
-    if !context.public_socket.exists() {
-        return Ok(AuditSocketOutcome::Unreachable);
-    }
-    let mut socket = match SeqpacketUnixSocket::connect(&context.public_socket) {
-        Ok(socket) => socket,
-        Err(err) if is_daemon_unreachable(&err) => return Ok(AuditSocketOutcome::Unreachable),
-        Err(err) => {
-            return Err(CliFailure::new(
-                1,
-                format!(
-                    "failed to connect to {}: {err}",
-                    context.public_socket.display()
-                ),
-            ));
-        }
-    };
-    let hello = daemon_hello_frame("hello")?;
-    socket
-        .send_frame(&hello)
-        .map_err(|err| CliFailure::new(1, format!("failed to send hello frame: {err}")))?;
-    let hello_response = socket
-        .recv_frame()
-        .map_err(|err| CliFailure::new(1, format!("failed to receive hello reply: {err}")))?;
-    let _ = parse_hello_reply(&hello_response)?;
-    let mut cursor = None;
-    let mut lines = Vec::new();
-    for _ in 0..1024 {
-        let request = daemon_audit_frame_with_cursor("audit", json_mode, cursor.clone())?;
-        socket
-            .send_frame(&request)
-            .map_err(|err| CliFailure::new(1, format!("failed to send audit request: {err}")))?;
-        let response = socket
-            .recv_frame()
-            .map_err(|err| CliFailure::new(1, format!("failed to receive audit reply: {err}")))?;
-        let (page, next_cursor, complete) = parse_audit_page(&response)?;
-        lines.extend(page);
-        if complete {
-            return Ok(AuditSocketOutcome::Lines(lines));
-        }
-        cursor = next_cursor;
-        if cursor.is_none() {
-            return Err(CliFailure::new(
-                1,
-                "audit export pagination omitted continuation metadata",
-            ));
-        }
-    }
-    Err(CliFailure::new(
-        1,
-        "audit export exceeded the bounded pagination limit",
-    ))
-}
-
 pub(super) fn try_keys_list_via_socket(
     context: &LegacyContext,
 ) -> Result<KeysSocketOutcome, CliFailure> {
@@ -10291,168 +9098,6 @@ pub(super) fn parse_gateway_display_reply(
         .map_err(|err| CliFailure::new(1, format!("failed to decode gatewayDisplay reply: {err}")))
 }
 
-pub(crate) struct SeqpacketUnixSocket {
-    fd: OwnedFd,
-}
-
-impl SeqpacketUnixSocket {
-    #[cfg(test)]
-    pub(crate) fn from_owned_fd(fd: OwnedFd) -> Self {
-        Self { fd }
-    }
-
-    pub(crate) fn connect(path: &Path) -> io::Result<Self> {
-        let fd = socket(
-            AddressFamily::Unix,
-            SockType::SeqPacket,
-            SockFlag::SOCK_CLOEXEC,
-            None,
-        )
-        .map_err(nix_err_to_io)?;
-        let addr = UnixAddr::new(path).map_err(nix_err_to_io)?;
-        connect(fd.as_raw_fd(), &addr).map_err(nix_err_to_io)?;
-        Ok(Self { fd })
-    }
-
-    pub(crate) fn send_frame(&mut self, payload: &[u8]) -> io::Result<()> {
-        if payload.len() > MAX_FRAME_BYTES {
-            return Err(io::Error::new(
-                io::ErrorKind::InvalidInput,
-                "frame exceeds 1 MiB limit",
-            ));
-        }
-        let mut frame = Vec::with_capacity(payload.len() + 4);
-        frame.extend_from_slice(&(payload.len() as u32).to_le_bytes());
-        frame.extend_from_slice(payload);
-        let sent = send(self.fd.as_raw_fd(), &frame, MsgFlags::empty()).map_err(nix_err_to_io)?;
-        if sent != frame.len() {
-            return Err(io::Error::new(
-                io::ErrorKind::WriteZero,
-                "short write on seqpacket socket",
-            ));
-        }
-        Ok(())
-    }
-
-    pub(crate) fn set_io_timeout(&self, timeout: Duration) -> io::Result<()> {
-        set_socket_timeout(&self.fd, SocketTimeout::Recv, Some(timeout))
-            .map_err(io::Error::from)?;
-        set_socket_timeout(&self.fd, SocketTimeout::Send, Some(timeout))
-            .map_err(io::Error::from)?;
-        Ok(())
-    }
-
-    pub(crate) fn recv_frame(&mut self) -> io::Result<Vec<u8>> {
-        let mut buffer = vec![0_u8; MAX_FRAME_BYTES + 4];
-        let mut iov = [IoSliceMut::new(&mut buffer)];
-        // The resource and legacy daemon protocols never carry descriptors.
-        // Allocate enough ancillary space to observe the bounded descriptor
-        // range, then reject every recognized control message instead of
-        // silently discarding it.
-        let mut ancillary_bytes = [0_u8; rustix::cmsg_space!(ScmRights(32))];
-        let mut ancillary = RecvAncillaryBuffer::new(&mut ancillary_bytes);
-        let received = recvmsg(&self.fd, &mut iov, &mut ancillary, RecvFlags::empty())
-            .map_err(io::Error::from)?;
-        if received.flags.contains(RecvFlags::TRUNC) {
-            return Err(io::Error::new(
-                io::ErrorKind::InvalidData,
-                "oversized seqpacket frame",
-            ));
-        }
-        if received.bytes < 4 {
-            return Err(io::Error::new(
-                io::ErrorKind::UnexpectedEof,
-                "short frame from seqpacket socket",
-            ));
-        }
-        let expected = u32::from_le_bytes(buffer[..4].try_into().expect("frame prefix")) as usize;
-        if expected > MAX_FRAME_BYTES || expected + 4 != received.bytes {
-            return Err(io::Error::new(
-                io::ErrorKind::InvalidData,
-                "malformed seqpacket frame",
-            ));
-        }
-        if ancillary.drain().next().is_some() {
-            return Err(io::Error::new(
-                io::ErrorKind::InvalidData,
-                "ancillary data is not permitted on the CLI transport",
-            ));
-        }
-        Ok(buffer[4..4 + expected].to_vec())
-    }
-}
-
-#[cfg(test)]
-mod cli_transport_contract_tests {
-    use super::{MAX_FRAME_BYTES, SeqpacketUnixSocket};
-    use nix::sys::socket::{AddressFamily, MsgFlags, SockFlag, SockType, send, socketpair};
-    use rustix::net::{SendAncillaryBuffer, SendAncillaryMessage, SendFlags, sendmsg};
-    use std::{
-        io::IoSlice,
-        os::fd::{AsFd as _, AsRawFd as _},
-    };
-
-    #[test]
-    fn legacy_seqpacket_client_rejects_oversized_declared_packets() {
-        let (client, server) = socketpair(
-            AddressFamily::Unix,
-            SockType::SeqPacket,
-            None,
-            SockFlag::SOCK_CLOEXEC,
-        )
-        .expect("create seqpacket pair");
-        let mut socket = SeqpacketUnixSocket { fd: client };
-        let outbound = socket
-            .send_frame(&vec![0_u8; MAX_FRAME_BYTES + 1])
-            .expect_err("outbound oversized frame must fail closed");
-        assert_eq!(outbound.kind(), std::io::ErrorKind::InvalidInput);
-        let payload_len = MAX_FRAME_BYTES + 1;
-        let mut frame = Vec::with_capacity(4);
-        frame.extend_from_slice(&(payload_len as u32).to_le_bytes());
-        send(server.as_raw_fd(), &frame, MsgFlags::empty()).expect("send oversized declaration");
-        let error = socket
-            .recv_frame()
-            .expect_err("oversized declaration must fail closed");
-        assert_eq!(error.kind(), std::io::ErrorKind::InvalidData);
-        assert!(error.to_string().contains("malformed"));
-    }
-
-    #[test]
-    fn legacy_seqpacket_client_rejects_ancillary_file_descriptors() {
-        let (client, server) = socketpair(
-            AddressFamily::Unix,
-            SockType::SeqPacket,
-            None,
-            SockFlag::SOCK_CLOEXEC,
-        )
-        .expect("create seqpacket pair");
-        let file = std::fs::File::open("/dev/null").expect("open descriptor fixture");
-        let rights = [file.as_fd()];
-        let mut control_bytes = [0_u8; rustix::cmsg_space!(ScmRights(1))];
-        let mut control = SendAncillaryBuffer::new(&mut control_bytes);
-        assert!(control.push(SendAncillaryMessage::ScmRights(&rights)));
-        let frame = 0_u32.to_le_bytes();
-        let iov = [IoSlice::new(&frame)];
-        sendmsg(&server, &iov, &mut control, SendFlags::empty()).expect("send ancillary frame");
-        let mut socket = SeqpacketUnixSocket { fd: client };
-        let error = socket
-            .recv_frame()
-            .expect_err("ancillary data must fail closed");
-        assert_eq!(error.kind(), std::io::ErrorKind::InvalidData);
-        assert!(error.to_string().contains("ancillary"));
-    }
-}
-
-pub(super) fn read_symlink_target(path: &Path) -> Option<String> {
-    fs::read_link(path)
-        .ok()
-        .map(|target| target.display().to_string())
-}
-
-pub(super) fn nix_err_to_io(err: nix::errno::Errno) -> io::Error {
-    io::Error::from_raw_os_error(err as i32)
-}
-
 #[cfg(test)]
 mod host_install_dispatch_tests {
     use clap::Parser;
@@ -10471,18 +9116,23 @@ mod host_install_dispatch_tests {
     };
 
     use nix::{
-        sys::socket::{Backlog, accept4, bind, listen},
+        sys::socket::{
+            AddressFamily, Backlog, MsgFlags, SockFlag, SockType, UnixAddr, accept4, bind, listen,
+            send, socket,
+        },
         unistd::close,
+    };
+    use d2b_contracts_control::public_wire;
+    use crate::{
+        MAX_FRAME_BYTES,
+        context::{daemon_supported_features, encode_type_tagged_message, nix_err_to_io},
     };
     use serde_json::{Value, json};
 
     use super::{
-        AddressFamily, HostInstallArgs, IpcHelloOk, LegacyContext, MAX_FRAME_BYTES, MsgFlags,
-        NativeCli, SockFlag, SockType, UnixAddr, VmStartArgs, cmd_vm_start,
-        daemon_supported_features, encode_type_tagged_message, nix_err_to_io, public_wire, send,
-        socket,
+        HostInstallArgs, LegacyContext, NativeCli, VmStartArgs, cmd_vm_start,
     };
-    use d2b_contracts::Version;
+    use d2b_contracts::{HelloOk as IpcHelloOk, Version};
 
     static ENV_MUTEX: Mutex<()> = Mutex::new(());
     static TEST_SOCKET_COUNTER: AtomicUsize = AtomicUsize::new(0);
@@ -12162,15 +10812,18 @@ mod console_fsm_tests {
     //! Unit tests for the console FSM detach-char scanning logic and the
     //! QEMU blank-console warning message content.
 
-    use super::{
-        AddressFamily, DetachScan, IpcHelloOk, LegacyContext, MAX_FRAME_BYTES, MsgFlags, SockFlag,
-        SockType, UnixAddr, daemon_supported_features, encode_type_tagged_message, nix_err_to_io,
-        scan_chunk_for_detach, send, socket,
+    use super::{DetachScan, LegacyContext, scan_chunk_for_detach};
+    use crate::{
+        MAX_FRAME_BYTES,
+        context::{daemon_supported_features, encode_type_tagged_message, nix_err_to_io},
     };
-    use d2b_contracts::Version;
+    use d2b_contracts::{HelloOk as IpcHelloOk, Version};
     use d2b_contracts_control::public_wire;
     use nix::{
-        sys::socket::{Backlog, accept4, bind, listen},
+        sys::socket::{
+            AddressFamily, Backlog, MsgFlags, SockFlag, SockType, UnixAddr, accept4, bind, listen,
+            send, socket,
+        },
         unistd::close,
     };
     use serde_json::Value;
