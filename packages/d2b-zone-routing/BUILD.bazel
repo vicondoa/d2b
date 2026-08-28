@@ -31,7 +31,7 @@ rust_library(
     crate_name = "d2b_zone_routing",
     visibility = ["//visibility:public"],
     deps = [
-        "//packages/d2b-bus:d2b_bus",
+        "//packages/d2b-bus:d2b_bus_test_support",
         "//packages/d2b-contracts:d2b_contracts_test_support",
         "//packages/d2b-contracts-resource:d2b_contracts_resource",
         "//packages/d2b-contracts-zone-session:d2b_contracts_zone_session",
