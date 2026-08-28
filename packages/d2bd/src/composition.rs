@@ -16772,8 +16772,17 @@ async fn open_resource_plane(
 
     for index in 0..prepared_runtimes.len() {
         let validation = {
-            let (_, runtime, bundle) = &prepared_runtimes[index];
-            runtime.validate_desired_bundle(bundle).await
+            let (zone, runtime, bundle) = &prepared_runtimes[index];
+            runtime
+                .validate_desired_bundle(bundle)
+                .await
+                .inspect_err(|error| {
+                    tracing::error!(
+                        zone = %zone.as_str(),
+                        error = ?error,
+                        "resource plane Zone bundle validation failed"
+                    );
+                })
         };
         if let Err(error) = validation {
             shutdown_unpublished_runtimes(&mut prepared_runtimes).await;
@@ -16790,7 +16799,14 @@ async fn open_resource_plane(
     let prepare_result = prepared_runtimes[coordinator_index]
         .1
         .prepare_generation_publication(&set_generation, &prepared_generations)
-        .await;
+        .await
+        .inspect_err(|error| {
+            tracing::error!(
+                zone = %topology.root.as_str(),
+                error = ?error,
+                "resource plane generation publication prepare failed"
+            );
+        });
     if let Err(error) = prepare_result {
         shutdown_unpublished_runtimes(&mut prepared_runtimes).await;
         return Err(error);
@@ -16798,8 +16814,17 @@ async fn open_resource_plane(
 
     for index in 0..prepared_runtimes.len() {
         let preparation = {
-            let (_, runtime, bundle) = &prepared_runtimes[index];
-            runtime.prepare_published_bundle(bundle).await
+            let (zone, runtime, bundle) = &prepared_runtimes[index];
+            runtime
+                .prepare_published_bundle(bundle)
+                .await
+                .inspect_err(|error| {
+                    tracing::error!(
+                        zone = %zone.as_str(),
+                        error = ?error,
+                        "resource plane Zone bundle preparation failed"
+                    );
+                })
         };
         if let Err(error) = preparation {
             shutdown_unpublished_runtimes(&mut prepared_runtimes).await;
@@ -16809,7 +16834,14 @@ async fn open_resource_plane(
     let commit_result = prepared_runtimes[coordinator_index]
         .1
         .commit_generation_publication(&set_generation, &prepared_generations)
-        .await;
+        .await
+        .inspect_err(|error| {
+            tracing::error!(
+                zone = %topology.root.as_str(),
+                error = ?error,
+                "resource plane generation publication commit failed"
+            );
+        });
     if let Err(error) = commit_result {
         shutdown_unpublished_runtimes(&mut prepared_runtimes).await;
         return Err(error);
