@@ -1482,7 +1482,14 @@ async fn plan_zone_resource_bundle(
 ) -> Result<Vec<wire::Mutation>, ResourceRuntimeError> {
     bundle
         .verify()
-        .map_err(|_| ResourceRuntimeError::HandlerNotReady)?;
+        .map_err(|error| {
+            tracing::error!(
+                zone = %zone,
+                error = ?error,
+                "resource bundle verification failed",
+            );
+            ResourceRuntimeError::HandlerNotReady
+        })?;
     let bundle_zone_uid = bundle
         .zone_uid()
         .ok_or(ResourceRuntimeError::IdentityUnbound)?;
@@ -1535,6 +1542,11 @@ async fn plan_zone_resource_bundle(
                 .owner_ref()
                 .is_none_or(|owner| admitted_refs.contains(owner))
         }) else {
+            tracing::error!(
+                zone = %zone,
+                pending_resource_count = pending.len(),
+                "resource bundle owner graph could not be ordered",
+            );
             return Err(ResourceRuntimeError::HandlerNotReady);
         };
         let resource = pending.remove(index);
