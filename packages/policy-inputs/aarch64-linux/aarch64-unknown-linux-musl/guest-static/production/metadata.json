@@ -2,7 +2,7 @@
   "authority": "cargo-locked-metadata",
   "defaultFeatures": false,
   "features": [],
-  "lockSha256": "56980792e9971765c489a7285aba3e3353e911bcfbbe1e82ff80599336a6e35d",
+  "lockSha256": "ab18305b3c1e79c1f13b29eb0002e8afa9bdc4c70e6b69a48a36e5d85cea304d",
   "policyPackageCount": 498,
   "policyPackageIds": [
     "adler2@2.0.1#registry+https://github.com/rust-lang/crates.io-index",

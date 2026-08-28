@@ -1089,6 +1089,7 @@ dependencies = [
  "tracing",
  "tracing-subscriber",
  "webpki-roots 0.26.11",
+ "zeroize",
 ]
 
 
@@ -1466,13 +1467,18 @@ dependencies = [
  "async-trait",
  "base64",
  "d2b-contracts",
+ "futures-util",
  "hmac",
+ "rustls",
+ "rustls-pki-types",
  "serde",
  "serde_json",
  "sha2",
  "tempfile",
  "tokio",
+ "tokio-tungstenite",
  "urlencoding",
+ "webpki-roots 0.26.11",
  "zeroize",
 ]
 
