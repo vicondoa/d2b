@@ -120,8 +120,9 @@ __pycache__/
 # state below /var/lib/gascity* or /run/gascity*.
 .gc/
 
-# Beads / Dolt files (added by bd init)
+# Beads / Dolt files (added by bd init). Live Gas City issue state belongs
+# to the standalone city and a dedicated rig clone, not this product tree.
 .dolt/
 *.db
+.beads/
 .beads-credential-key
-.beads/proxieddb/
