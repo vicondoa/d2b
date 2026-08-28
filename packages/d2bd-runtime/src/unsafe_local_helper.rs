@@ -362,7 +362,7 @@ impl HelperRegistry {
     ) -> Result<HelperOperationResult, HelperRegistryError> {
         let fingerprint = launch_fingerprint(&request)?;
         let operation_key = request.operation_id.to_string();
-        let workload_target = request.workload.canonical_target.to_canonical();
+        let workload_target = request.target.to_canonical();
         let request_id = request.request_id;
         match self.operations.lock().begin(
             requester_uid,

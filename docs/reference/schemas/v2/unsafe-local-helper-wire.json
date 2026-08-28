@@ -36,13 +36,6 @@
   },
   "additionalProperties": false,
   "definitions": {
-    "ContractId": {
-      "description": "Bounded storage/synchronization contract identifier.",
-      "type": "string",
-      "maxLength": 160,
-      "minLength": 1,
-      "pattern": "^[A-Za-z0-9][A-Za-z0-9._:/@+-]*$"
-    },
     "DaemonToUnsafeLocalHelper": {
       "oneOf": [
         {
@@ -233,6 +226,7 @@
         "operationId",
         "realmAccentColor",
         "requestId",
+        "target",
         "workload"
       ],
       "properties": {
@@ -259,8 +253,11 @@
           "format": "uint64",
           "minimum": 0.0
         },
+        "target": {
+          "$ref": "#/definitions/RealmTarget"
+        },
         "workload": {
-          "$ref": "#/definitions/WorkloadIdentity"
+          "$ref": "#/definitions/ZoneResourceIdentity"
         }
       },
       "additionalProperties": false
@@ -388,7 +385,7 @@
           "$ref": "#/definitions/HelperScopeState"
         },
         "workload": {
-          "$ref": "#/definitions/WorkloadIdentity"
+          "$ref": "#/definitions/ZoneResourceIdentity"
         }
       },
       "additionalProperties": false
@@ -538,7 +535,7 @@
                   "minimum": 0.0
                 },
                 "workload": {
-                  "$ref": "#/definitions/WorkloadIdentity"
+                  "$ref": "#/definitions/ZoneResourceIdentity"
                 }
               },
               "additionalProperties": false
@@ -617,7 +614,7 @@
                   "minimum": 0.0
                 },
                 "workload": {
-                  "$ref": "#/definitions/WorkloadIdentity"
+                  "$ref": "#/definitions/ZoneResourceIdentity"
                 }
               },
               "additionalProperties": false
@@ -663,7 +660,7 @@
                   "minimum": 0.0
                 },
                 "workload": {
-                  "$ref": "#/definitions/WorkloadIdentity"
+                  "$ref": "#/definitions/ZoneResourceIdentity"
                 }
               },
               "additionalProperties": false
@@ -709,7 +706,7 @@
                   "minimum": 0.0
                 },
                 "workload": {
-                  "$ref": "#/definitions/WorkloadIdentity"
+                  "$ref": "#/definitions/ZoneResourceIdentity"
                 }
               },
               "additionalProperties": false
@@ -1483,17 +1480,37 @@
       "minLength": 1,
       "pattern": "^[\\x21-\\x7e]+$"
     },
-    "RealmId": {
-      "type": "string",
-      "maxLength": 128,
-      "minLength": 1,
-      "pattern": "^[a-z][a-z0-9-]*$"
-    },
     "RealmTarget": {
       "type": "string",
       "maxLength": 388,
       "minLength": 1,
       "pattern": "^[a-z][a-z0-9-]*(\\.[a-z][a-z0-9-]*)+\\.d2b$"
+    },
+    "ResourceGeneration": {
+      "type": "integer",
+      "minimum": 1.0
+    },
+    "ResourceRef": {
+      "oneOf": [
+        {
+          "type": "string",
+          "maxLength": 80,
+          "minLength": 6,
+          "pattern": "^(Zone|ZoneLink|Provider|Role|RoleBinding|Quota|EmergencyPolicy|Host|Guest|Process|EphemeralProcess|Volume|Network|Device|User|Credential|Endpoint|ResourceExport|ResourceImport)/[a-z][a-z0-9-]{0,62}$"
+        },
+        {
+          "type": "string",
+          "maxLength": 201,
+          "minLength": 15,
+          "pattern": "^[a-z][a-z0-9-]{0,62}\\.d2bus\\.org\\.[A-Z][A-Za-z0-9]{0,62}/[a-z][a-z0-9-]{0,62}$"
+        }
+      ]
+    },
+    "ResourceUid": {
+      "type": "string",
+      "maxLength": 36,
+      "minLength": 36,
+      "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
     },
     "ScopeIdentity": {
       "type": "object",
@@ -1919,92 +1936,43 @@
         }
       ]
     },
-    "WorkloadId": {
+    "ZoneId": {
       "type": "string",
-      "maxLength": 128,
+      "maxLength": 63,
       "minLength": 1,
-      "pattern": "^[a-z][a-z0-9-]*$"
+      "pattern": "^[a-z][a-z0-9-]{0,62}$"
     },
-    "WorkloadIdentity": {
-      "description": "Universal workload identity, independent of any runtime or provider backend.\n\nSeparates the stable, realm-scoped identity of a workload from the backend configuration in [`WorkloadBackend`]. Any code that routes, logs, or audits a workload should carry a `WorkloadIdentity` rather than raw VM-name strings so the realm context is always available.\n\n# DTO version policy\n\nSee the [module-level note][crate::workload_identity] on additive vs. breaking changes. Adding new `Option<T>` fields here is additive; renaming or removing fields requires a `bundleVersion` + `schemaVersion` bump.",
+    "ZoneResourceIdentity": {
+      "description": "Immutable identity for a resource in one Zone generation.\n\nThe Zone UID and resource UID are both required because a name or a Zone label alone can be reused after deletion or across independent Zones. `generation` fences desired-state changes and `revision` fences the committed Zone view that authorized the identity.",
       "type": "object",
       "required": [
-        "canonicalTarget",
-        "realmId",
-        "realmPath",
-        "workloadId"
+        "generation",
+        "resourceRef",
+        "resourceUid",
+        "revision",
+        "zone",
+        "zoneUid"
       ],
       "properties": {
-        "canonicalTarget": {
-          "description": "Fully-qualified canonical target address, kept pre-rendered to avoid repeated formatting and to make it audit-log safe.",
-          "allOf": [
-            {
-              "$ref": "#/definitions/RealmTarget"
-            }
-          ]
+        "generation": {
+          "$ref": "#/definitions/ResourceGeneration"
         },
-        "legacyVmName": {
-          "description": "Legacy `d2b.vms.<vm>` name for workloads that exist as a classical VM entry while the realm-native model is being adopted. `None` for workloads declared directly inside a realm without a legacy VM entry.",
-          "anyOf": [
-            {
-              "$ref": "#/definitions/ContractId"
-            },
-            {
-              "type": "null"
-            }
-          ]
+        "resourceRef": {
+          "$ref": "#/definitions/ResourceRef"
         },
-        "providerId": {
-          "description": "Stable provider identifier within the realm (e.g. `local-cloud-hypervisor`).",
-          "anyOf": [
-            {
-              "$ref": "#/definitions/ContractId"
-            },
-            {
-              "type": "null"
-            }
-          ]
+        "resourceUid": {
+          "$ref": "#/definitions/ResourceUid"
         },
-        "realmId": {
-          "description": "Realm identifier of the owning realm controller.",
-          "allOf": [
-            {
-              "$ref": "#/definitions/RealmId"
-            }
-          ]
+        "revision": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0.0
         },
-        "realmPath": {
-          "description": "Realm path (most-specific first) - the label sequence after the workload in the canonical target address.",
-          "type": "array",
-          "items": {
-            "$ref": "#/definitions/RealmId"
-          }
+        "zone": {
+          "$ref": "#/definitions/ZoneId"
         },
-        "runtimeKind": {
-          "description": "Opaque runtime kind identifier (e.g. `nixos`, `qemu-media`).",
-          "anyOf": [
-            {
-              "$ref": "#/definitions/ContractId"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        },
-        "workloadId": {
-          "description": "Stable operator-facing workload identifier (the leading label of the canonical target address).",
-          "allOf": [
-            {
-              "$ref": "#/definitions/WorkloadId"
-            }
-          ]
-        },
-        "workloadName": {
-          "description": "Human-readable workload name if it differs from the id. Omitted when the workload name and id are identical.",
-          "type": [
-            "string",
-            "null"
-          ]
+        "zoneUid": {
+          "$ref": "#/definitions/ResourceUid"
         }
       },
       "additionalProperties": false
